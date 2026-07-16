@@ -1,0 +1,20 @@
+{
+  "name": "@firmlab/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "start": "node dist/index.js",
+    "dev": "node --watch dist/index.js"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^8.3.0",
+    "@fastify/static": "^7.0.4",
+    "@firmlab/core": "workspace:*",
+    "fastify": "^4.29.0"
+  }
+}

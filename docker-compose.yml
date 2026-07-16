@@ -1,0 +1,27 @@
+# FirmLab — local-only deployment.
+#
+# The API port is published ONLY to the host loopback (127.0.0.1), so the workbench and the firmware images it
+# holds are never reachable from the network. To use the full toolchain (extraction, decompilation, SBOM,
+# emulation), build the firmware image and set `image: firmlab-firmware` below.
+
+services:
+  firmlab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: firmlab:latest
+    # Bind to loopback only — do NOT change to 0.0.0.0 unless you intend to expose the workbench.
+    ports:
+      - '127.0.0.1:8799:8799'
+    environment:
+      FIRMLAB_HOST: '0.0.0.0'
+      FIRMLAB_PORT: '8799'
+      FIRMLAB_DATA_DIR: '/data'
+      FIRMLAB_LOOPBACK_PUBLISH: '1'
+      FIRMLAB_MAX_UPLOAD: '524288000'
+    volumes:
+      - firmlab-data:/data
+    restart: unless-stopped
+
+volumes:
+  firmlab-data:

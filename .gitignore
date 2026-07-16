@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+*.log
+.env
+.DS_Store
+apps/web/dist/
+samples/*.bin
+samples/*.img
+!samples/.gitkeep

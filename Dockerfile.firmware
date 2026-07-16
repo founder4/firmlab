@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+#
+# FirmLab firmware image — the full-capability workbench. Layers the reverse-engineering toolchain on top of
+# the base image so extraction, binary analysis, SBOM/CVEs, secret scanning, and emulation all light up. The
+# API auto-detects each tool (see apps/api/src/tools.ts) and the UI Capabilities panel reflects what's present.
+#
+# Unlike Galert's Wolfi base (which needed multi-stage gymnastics for MIPS/ARM), this base is Debian, so apt
+# provides binwalk, all-arch static QEMU, qemu-system, radare2, and the extractors directly.
+#
+# Build:  docker build -f Dockerfile.firmware -t firmlab-firmware .   (builds the base stage first)
+
+FROM firmlab:latest AS base
+# If firmlab:latest isn't built yet, build inline from the base Dockerfile instead:
+#   docker build -t firmlab:latest . && docker build -f Dockerfile.firmware -t firmlab-firmware .
+
+FROM base AS firmware
+USER root
+
+# === Core RE + extraction + emulation toolchain (apt) ===
+# binwalk (carve), squashfs-tools + sasquatch deps, cpio, e2fsprogs, radare2 (binary triage),
+# qemu-user-static (ALL guest arches incl. MIPS/ARM), qemu-system-{mips,arm} (full-system boot).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      binwalk \
+      squashfs-tools \
+      cpio \
+      e2fsprogs \
+      radare2 \
+      qemu-user-static \
+      qemu-system-mips \
+      qemu-system-arm \
+      python3 python3-pip python3-venv \
+      curl ca-certificates unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# === JFFS2 / UBIFS extractors (pip, isolated venv) ===
+RUN python3 -m venv /opt/fw-py \
+    && /opt/fw-py/bin/pip install --no-cache-dir jefferson ubi_reader \
+    && ln -sf /opt/fw-py/bin/jefferson /usr/local/bin/jefferson \
+    && ln -sf /opt/fw-py/bin/ubireader_extract_files /usr/local/bin/ubireader_extract_files
+
+# === SBOM + CVEs + secrets (syft / grype / gitleaks via official installers) ===
+RUN curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin \
+    && curl -fsSL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin \
+    && curl -fsSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep -oP '"tag_name":\s*"v\K[0-9.]+')_linux_x64.tar.gz \
+       -o /tmp/gitleaks.tgz && tar xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks && rm /tmp/gitleaks.tgz
+
+# === (Optional, heavy) Ghidra headless + Renode ===
+# Uncomment to bake the deep decompiler and RTOS emulator. Adds ~1.5 GB; skip for a lean image.
+# RUN apt-get update && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
+#     && GHIDRA_URL="$(curl -fsSL https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest \
+#        | grep -o 'https://[^"]*_PUBLIC_[0-9]*\.zip' | head -1)" \
+#     && curl -fsSL "$GHIDRA_URL" -o /tmp/ghidra.zip && unzip -q /tmp/ghidra.zip -d /opt && rm /tmp/ghidra.zip \
+#     && mv /opt/ghidra_* /opt/ghidra && ln -sf /opt/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless \
+#     && rm -rf /var/lib/apt/lists/*
+# ENV GHIDRA_INSTALL_DIR=/opt/ghidra
+# ARG RENODE_VER=1.16.1
+# RUN curl -fsSL "https://github.com/renode/renode/releases/download/v${RENODE_VER}/renode-${RENODE_VER}.linux-portable.tar.gz" \
+#      -o /tmp/renode.tgz && mkdir -p /opt/renode && tar xzf /tmp/renode.tgz -C /opt/renode --strip-components=1 \
+#      && rm /tmp/renode.tgz && ln -sf /opt/renode/renode /usr/local/bin/renode
+
+CMD ["node", "apps/api/dist/index.js"]
