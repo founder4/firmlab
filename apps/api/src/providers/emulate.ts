@@ -48,6 +48,14 @@ const QEMU_SYSTEM_BY_ARCH: Partial<Record<Architecture, ToolId>> = {
   arm: 'qemu-system-arm',
 };
 
+/** A sensible default qemu-system `-M` machine per arch for the guided full-system boot command. */
+const QEMU_MACHINE_BY_ARCH: Partial<Record<Architecture, string>> = {
+  mips: 'malta',
+  mipsel: 'malta',
+  arm: 'virt',
+  arm64: 'virt',
+};
+
 export interface PlanContext {
   identity: ImageIdentity;
   /** Absolute path to an extracted rootfs, if extraction already ran. */
@@ -92,6 +100,7 @@ export async function planEmulation(ctx: PlanContext): Promise<EmulationRecipe[]
   if (firmwareClass === 'embedded-linux') {
     const rootfs = ctx.rootfsPath ?? '<rootfs>';
     const emulator = sysBin ?? 'qemu-system-<arch>';
+    const machine = QEMU_MACHINE_BY_ARCH[arch] ?? '<machine>';
     recipes.push({
       id: 'system-qemu-boot',
       mode: 'system-qemu',
@@ -102,7 +111,7 @@ export async function planEmulation(ctx: PlanContext): Promise<EmulationRecipe[]
       requires: sysBin ? [sysBin] : [],
       runnable: false,
       command:
-        `${emulator} -M malta -kernel /opt/firmae/kernels/vmlinux.${arch}.4 ` +
+        `${emulator} -M ${machine} -kernel /opt/firmae/kernels/vmlinux.${arch}.4 ` +
         `-drive file=${rootfs}.img,format=raw -netdev user,id=n0,hostfwd=tcp::8080-:80 -device e1000,netdev=n0 -nographic`,
       rank: 2,
       notes: 'Assemble a rootfs image (mkfs) first; port-forward 8080→80 to reach the emulated web UI.',

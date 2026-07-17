@@ -53,9 +53,13 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
     return { extractor: 'none', outputDir, rootfsPath: null, tree: null, summary: null };
   }
 
-  handle.log(`Running: binwalk -Me -C ${outputDir} ${imagePath}`);
+  // binwalk refuses to run its (third-party) extraction utilities as root unless explicitly told to; the Docker
+  // image runs as root, so pass --run-as=root there. Harmless to omit when running unprivileged (local dev).
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  const args = isRoot ? ['-Me', '--run-as=root', '-C', outputDir, imagePath] : ['-Me', '-C', outputDir, imagePath];
+  handle.log(`Running: binwalk ${args.join(' ')}`);
   try {
-    const { stdout } = await execFileAsync('binwalk', ['-Me', '-C', outputDir, imagePath], {
+    const { stdout } = await execFileAsync('binwalk', args, {
       timeout: 10 * 60 * 1000,
       maxBuffer: 32 * 1024 * 1024,
     });

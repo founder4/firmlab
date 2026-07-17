@@ -40,6 +40,8 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/api/package.json ./apps/api/
 # Ghidra headless post-script (used only when the optional Ghidra layer is present; harmless otherwise).
 COPY --from=build /app/apps/api/ghidra-scripts ./apps/api/ghidra-scripts
+# Integration test harness (run in the firmware image: node apps/api/scripts/integration.mjs).
+COPY --from=build /app/apps/api/scripts ./apps/api/scripts
 # pnpm workspace: the API's runtime deps live in apps/api/node_modules (symlinks into the root .pnpm store),
 # not the hoisted root node_modules — copy them so @fastify/* et al. resolve at runtime.
 COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules

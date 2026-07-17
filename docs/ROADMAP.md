@@ -57,32 +57,41 @@ long work session, grounded in a precise review of the current tree (file refere
 - [x] **Bounded job queue (F2).** `FIRMLAB_MAX_CONCURRENT_JOBS` (default 2); overflow persists as `queued`. *(wave 2)*
 - [x] **Data retention & quota (F3).** `FIRMLAB_MAX_IMAGE_AGE_DAYS` + `FIRMLAB_MAX_DATA_BYTES` (oldest-first eviction);
   swept at startup, on a timer, and after upload; `/storage` usage on the Dashboard. *(wave 2)*
-- [x] **Multi-image management — search.** Filter by filename/arch/class on the Dashboard. *(wave 2)*
-- [ ] **Multi-image management — tags & bulk delete.** *Next.*
+- [x] **Multi-image management — search + tags + bulk delete.** Filter by filename/arch/class/tag; per-row tag
+  chips; row checkboxes + "Delete selected". *(waves 2, 5)*
 - [x] **Signature pack expansion (F6).** +12 magics (ext/f2fs/erofs/cramfs-be, IKCFG/bzImage/arm64 Image,
   lzop/7z/rar/android-sparse/cpio-odc), offset-anchored, each tested. *(wave 2)*
-- [ ] **Interactive emulation (F9).** Console/shell into the emulated rootfs; guided full-system QEMU boot
-  (kernel/dtb assembly) making the system-qemu recipes runnable. *Deferred — large, per-image platform assembly.*
+- [x] **Ghidra decompilation (F5).** `analyzeHeadless` post-script job behind the capability probe; Binaries tab
+  pseudocode viewer; degrades to `available:false` (image ships without the ~1.5 GB Ghidra layer). *(wave 4)*
+- [~] **Full-system emulation (F9).** Guided per-arch qemu-system recipe (correct machine/binary from the refined
+  arch). *Auto-boot + interactive shell deferred by design* — the planner deliberately surfaces guided recipes
+  rather than one-click boots that would silently fail; a true interactive console needs a websocket/PTY transport.
 
 ## Phase 5 — Quality, testing & hardening
 
 - [x] **Web component/interaction tests (F7).** jsdom + @testing-library; cover the Dashboard filter, the mobile
   drawer toggle, and the auth-gated health pill. *(wave 3)*
 - [x] **Mobile polish.** PWA manifest + icon + theme-color (add-to-home-screen); touch tooltips on the entropy chart. *(wave 3)*
-- [ ] **E2E fixture & integration test (F8).** Commit a synthetic firmware (or build script) + an integration test that
-  runs extract → sbom → triage in the firmware image. *Next.*
-- [ ] **API defense-in-depth (F10).** Optional in-process token/rate-limit + security headers. *Next.*
-- [ ] **Structured errors & toasts.** Replace ad-hoc `String(err)` panels with a consistent error surface + retry. *Next.*
+- [x] **API defense-in-depth (F10).** Always-on security headers; opt-in `FIRMLAB_API_TOKEN` / `FIRMLAB_RATE_LIMIT`
+  / `FIRMLAB_STRICT_CSP`. *(wave 4)*
+- [x] **Structured errors & toasts.** Global toast surface; job failures + upload/tag errors raise toasts. *(wave 4)*
+- [x] **Content-hash file diff.** Extractor hashes files (≤8 MB); diff flags content changes, not just size. *(wave 6)*
+- [x] **E2E fixture & integration test (F8).** `apps/api/scripts/integration.mjs` builds a synthetic SquashFS
+  firmware and runs extract → arch → sbom → gitleaks → decompile in the firmware image (12 assertions). It caught a
+  real bug: binwalk refuses to extract as root without `--run-as=root` (the container runs as root), so real
+  extraction was silently failing in the deployed image — now fixed. *(wave 6)*
 
 ---
 
-## Shipped this session (waves 1–3)
+## Shipped this session (waves 1–6)
 
-Arch refinement · gitleaks deep-scan · firmware diff · report export · bounded job queue · data retention/quota ·
-image search · +12 signatures · web component tests · PWA + entropy touch. All verified against real tools in the
+Arch refinement · gitleaks deep-scan · firmware diff (with content hashes) · report export · bounded job queue ·
+data retention/quota · image search/tags/bulk-delete · +12 signatures · Ghidra decompile · API defense-in-depth ·
+toasts · web component tests · PWA + entropy touch · per-arch emulation recipes. Verified against real tools in the
 firmware image where applicable; 70+ tests; biome clean; committed in slices.
 
-## Remaining backlog (next session)
+## Remaining backlog
 
-Ghidra (F5) · interactive/full-system emulation (F9) · e2e Docker fixture (F8) · API defense-in-depth (F10) ·
-structured errors/toasts · image tags & bulk delete · content-hash file diff.
+A true interactive/full-system emulation console — auto-booting arbitrary firmware needs per-image kernel/dtb
+assembly, and a live shell needs a websocket/PTY transport the API doesn't have yet. This is a project of its own;
+the planner deliberately ships guided per-arch recipes instead of one-click boots that would silently fail.
