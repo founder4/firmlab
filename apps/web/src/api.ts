@@ -32,6 +32,7 @@ export interface ImageSummary {
   uploadedAt: number;
   status: 'analyzing' | 'ready' | 'error';
   identity: ImageIdentity | null;
+  tags: string[];
 }
 
 export interface ToolStatus {
@@ -210,6 +211,9 @@ export const api = {
   listImages: () => get<{ images: ImageSummary[] }>('/api/images').then((r) => r.images),
   getImage: (id: string) => get<{ image: ImageSummary }>(`/api/images/${id}`).then((r) => r.image),
   deleteImage: (id: string) => fetch(`/api/images/${id}`, { method: 'DELETE' }).then(() => undefined),
+  deleteImages: (ids: string[]) => post<{ deleted: string[] }>('/api/images/delete', { ids }).then((r) => r.deleted),
+  setTags: (id: string, tags: string[]) =>
+    post<{ image: ImageSummary }>(`/api/images/${id}/tags`, { tags }).then((r) => r.image),
   analysis: (id: string) => get<{ analysis: StaticAnalysis }>(`/api/images/${id}/analysis`).then((r) => r.analysis),
   entropy: (id: string) => get<{ size: number; entropy: EntropyProfile }>(`/api/images/${id}/entropy`),
   structure: (id: string) =>

@@ -25,6 +25,8 @@ export function Dashboard(): JSX.Element {
   }, []);
   useEffect(refresh, [refresh]);
 
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return images;
@@ -32,9 +34,44 @@ export function Dashboard(): JSX.Element {
       (im) =>
         im.filename.toLowerCase().includes(q) ||
         (im.identity?.arch ?? '').toLowerCase().includes(q) ||
-        (im.identity?.firmwareClass ?? '').toLowerCase().includes(q),
+        (im.identity?.firmwareClass ?? '').toLowerCase().includes(q) ||
+        im.tags.some((t) => t.toLowerCase().includes(q)),
     );
   }, [images, query]);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const deleteSelected = useCallback(async () => {
+    const ids = [...selected];
+    try {
+      await api.deleteImages(ids);
+      toast.success(`Deleted ${ids.length} image${ids.length === 1 ? '' : 's'}`);
+    } catch (e) {
+      toast.error(e);
+    }
+    setSelected(new Set());
+    refresh();
+  }, [selected, refresh]);
+
+  const editTags = useCallback(
+    async (img: ImageSummary, action: 'add' | 'remove', tag: string) => {
+      const next = action === 'add' ? [...new Set([...img.tags, tag])] : img.tags.filter((t) => t !== tag);
+      try {
+        await api.setTags(img.id, next);
+        refresh();
+      } catch (e) {
+        toast.error(e);
+      }
+    },
+    [refresh],
+  );
 
   const upload = useCallback(
     async (file: File) => {
@@ -120,13 +157,20 @@ export function Dashboard(): JSX.Element {
           {images.length} analyzed image{images.length === 1 ? '' : 's'}
         </div>
         {images.length > 0 && (
-          <input
-            className="input"
-            placeholder="Filter by filename, arch, or class…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            style={{ width: '100%', marginBottom: 14 }}
-          />
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              className="input"
+              placeholder="Filter by filename, arch, class, or tag…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              style={{ flex: '1 1 220px', minWidth: 0 }}
+            />
+            {selected.size > 0 && (
+              <button className="btn btn-sm" onClick={deleteSelected}>
+                Delete selected ({selected.size})
+              </button>
+            )}
+          </div>
         )}
         {images.length === 0 ? (
           <div className="empty">No images yet — upload one above to begin.</div>
@@ -137,10 +181,11 @@ export function Dashboard(): JSX.Element {
             <table className="data">
               <thead>
                 <tr>
+                  <th />
                   <th>Filename</th>
                   <th>Class</th>
                   <th>Arch</th>
-                  <th>Filesystems</th>
+                  <th>Tags</th>
                   <th>Size</th>
                   <th>Status</th>
                   <th />
@@ -149,10 +194,43 @@ export function Dashboard(): JSX.Element {
               <tbody>
                 {shown.map((img) => (
                   <tr key={img.id} style={{ cursor: 'pointer' }} onClick={() => nav(`/image/${img.id}`)}>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${img.filename}`}
+                        checked={selected.has(img.id)}
+                        onChange={() => toggleSelect(img.id)}
+                      />
+                    </td>
                     <td className="mono">{img.filename}</td>
                     <td>{img.identity?.firmwareClass ?? '—'}</td>
                     <td className="mono">{img.identity?.arch ?? '—'}</td>
-                    <td className="mono">{img.identity?.filesystems.join(', ') || '—'}</td>
+                    <td onClick={(e) => e.stopPropagation()} style={{ maxWidth: 220 }}>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                        {img.tags.map((t) => (
+                          <button
+                            type="button"
+                            key={t}
+                            className="badge badge-info"
+                            title="Remove tag"
+                            onClick={() => editTags(img, 'remove', t)}
+                          >
+                            {t} ✕
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          style={{ padding: '2px 7px' }}
+                          onClick={() => {
+                            const t = window.prompt(`Add tag to ${img.filename}`)?.trim();
+                            if (t) editTags(img, 'add', t);
+                          }}
+                        >
+                          ＋
+                        </button>
+                      </div>
+                    </td>
                     <td className="mono">{fmtBytes(img.size)}</td>
                     <td>
                       <span
@@ -161,11 +239,10 @@ export function Dashboard(): JSX.Element {
                         {img.status}
                       </span>
                     </td>
-                    <td>
+                    <td onClick={(e) => e.stopPropagation()}>
                       <button
                         className="btn btn-sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        onClick={() => {
                           api.deleteImage(img.id).then(refresh);
                         }}
                       >

@@ -10,7 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import { analyzeImageBuffer } from '../analysis.js';
 import { EXTRACT_DIR, IMAGES_DIR } from '../paths.js';
 import { sweepRetention } from '../retention.js';
-import { deleteImage, getImage, insertImage, listImages, updateImageAnalysis } from '../store.js';
+import { deleteImage, getImage, insertImage, listImages, updateImageAnalysis, updateImageTags } from '../store.js';
 
 const ALLOWED_EXT = new Set([
   '.bin',
@@ -48,6 +48,7 @@ function toSummary(row: ReturnType<typeof getImage>): unknown {
     uploadedAt: row.uploadedAt,
     status: row.status,
     identity: row.identityJson ? JSON.parse(row.identityJson) : null,
+    tags: row.tags ? (JSON.parse(row.tags) as string[]) : [],
   };
 }
 
@@ -103,6 +104,7 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
       status: 'analyzing',
       identityJson: null,
       analysisJson: null,
+      tags: null,
     });
 
     try {
@@ -124,9 +126,40 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const row = getImage(id);
     if (!row) return reply.status(404).send({ error: 'Image not found' });
-    fs.rmSync(path.join(IMAGES_DIR, id), { recursive: true, force: true });
-    fs.rmSync(path.join(EXTRACT_DIR, id), { recursive: true, force: true });
-    deleteImage(id);
+    purgeImage(id);
     return { deleted: id };
   });
+
+  // Set the tag list for an image (replaces existing tags).
+  app.post('/images/:id/tags', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
+    const body = (req.body ?? {}) as { tags?: unknown };
+    const tags = Array.isArray(body.tags)
+      ? [...new Set(body.tags.map((t) => String(t).trim()).filter(Boolean))].slice(0, 32)
+      : [];
+    updateImageTags(id, tags.length > 0 ? JSON.stringify(tags) : null);
+    return { image: toSummary(getImage(id)) };
+  });
+
+  // Bulk delete.
+  app.post('/images/delete', async (req) => {
+    const body = (req.body ?? {}) as { ids?: unknown };
+    const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+    const deleted: string[] = [];
+    for (const id of ids) {
+      if (getImage(id)) {
+        purgeImage(id);
+        deleted.push(id);
+      }
+    }
+    return { deleted };
+  });
+}
+
+/** Remove an image row and its on-disk image + extract directories. */
+function purgeImage(id: string): void {
+  fs.rmSync(path.join(IMAGES_DIR, id), { recursive: true, force: true });
+  fs.rmSync(path.join(EXTRACT_DIR, id), { recursive: true, force: true });
+  deleteImage(id);
 }

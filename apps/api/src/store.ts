@@ -19,6 +19,8 @@ export interface ImageRow {
   status: 'analyzing' | 'ready' | 'error';
   identityJson: string | null;
   analysisJson: string | null;
+  /** JSON array of user tags, or null. */
+  tags: string | null;
 }
 
 export interface JobRow {
@@ -74,6 +76,12 @@ export function getDb(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_image ON jobs(imageId);
   `);
+  // Migration: add the tags column to databases created before it existed.
+  try {
+    db.exec('ALTER TABLE images ADD COLUMN tags TEXT');
+  } catch {
+    // Column already present — nothing to do.
+  }
   return db;
 }
 
@@ -82,8 +90,8 @@ export function getDb(): DatabaseSync {
 export function insertImage(row: ImageRow): void {
   getDb()
     .prepare(
-      `INSERT INTO images (id, filename, path, size, sha256, uploadedAt, status, identityJson, analysisJson)
-       VALUES (@id, @filename, @path, @size, @sha256, @uploadedAt, @status, @identityJson, @analysisJson)`,
+      `INSERT INTO images (id, filename, path, size, sha256, uploadedAt, status, identityJson, analysisJson, tags)
+       VALUES (@id, @filename, @path, @size, @sha256, @uploadedAt, @status, @identityJson, @analysisJson, @tags)`,
     )
     .run(asParams(row));
 }
@@ -102,6 +110,11 @@ export function updateImageAnalysis(
 /** Persist a refined identity (e.g. arch recovered post-extraction) without touching the cached analysis. */
 export function updateImageIdentity(id: string, identityJson: string): void {
   getDb().prepare('UPDATE images SET identityJson = ? WHERE id = ?').run(identityJson, id);
+}
+
+/** Persist the user tags (a JSON array string, or null to clear). */
+export function updateImageTags(id: string, tagsJson: string | null): void {
+  getDb().prepare('UPDATE images SET tags = ? WHERE id = ?').run(tagsJson, id);
 }
 
 export function getImage(id: string): ImageRow | undefined {

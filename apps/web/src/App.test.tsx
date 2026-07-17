@@ -33,6 +33,7 @@ const image = (id: string, filename: string, arch: string) => ({
   uploadedAt: 1,
   status: 'ready' as const,
   identity: { firmwareClass: 'embedded-linux', arch, endianness: 'little', filesystems: ['squashfs'] },
+  tags: [],
 });
 
 const emptyUsage = { imageCount: 0, imagesBytes: 0, extractsBytes: 0, totalBytes: 0, quotaBytes: 0, maxAgeDays: 0 };
