@@ -1,0 +1,10 @@
+{
+  "name": "FirmLab — Firmware Analysis Workbench",
+  "short_name": "FirmLab",
+  "description": "Local-only firmware analysis: structure, entropy, secrets, SBOM/CVEs, emulation.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0e14",
+  "theme_color": "#0b0e14",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

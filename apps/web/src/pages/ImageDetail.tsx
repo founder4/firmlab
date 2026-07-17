@@ -67,16 +67,21 @@ export function ImageDetail(): JSX.Element {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <Link to="/" className="hint">
-          ← Dashboard
-        </Link>
-        <h2 className="mono" style={{ margin: '6px 0 2px', fontSize: 20 }}>
-          {image.filename}
-        </h2>
-        <div className="hint mono">
-          {image.sha256.slice(0, 32)}… · {fmtBytes(image.size)}
+      <div style={{ marginBottom: 16, display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+          <Link to="/" className="hint">
+            ← Dashboard
+          </Link>
+          <h2 className="mono" style={{ margin: '6px 0 2px', fontSize: 20, wordBreak: 'break-word' }}>
+            {image.filename}
+          </h2>
+          <div className="hint mono">
+            {image.sha256.slice(0, 32)}… · {fmtBytes(image.size)}
+          </div>
         </div>
+        <a className="btn btn-sm" href={`/api/images/${id}/report`} download>
+          ⭳ Report
+        </a>
       </div>
 
       <div className="tabs">

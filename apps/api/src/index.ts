@@ -18,6 +18,7 @@ import { emulateRoutes } from './routes/emulate.js';
 import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
+import { reportRoutes } from './routes/report.js';
 import { sbomRoutes } from './routes/sbom.js';
 import { storageRoutes } from './routes/storage.js';
 import { toolRoutes } from './routes/tools.js';
@@ -72,6 +73,7 @@ async function main(): Promise<void> {
       await api.register(decompileRoutes);
       await api.register(gitleaksRoutes);
       await api.register(diffRoutes);
+      await api.register(reportRoutes);
       await api.register(storageRoutes);
       await api.register(toolRoutes);
     },

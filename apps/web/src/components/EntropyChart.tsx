@@ -38,9 +38,9 @@ export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Elemen
 
   const thresholdY = PAD.top + (1 - 7.2 / 8) * plotH;
 
-  function onMove(e: React.MouseEvent<SVGSVGElement>): void {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const px = ((e.clientX - rect.left) / rect.width) * width;
+  function updateHover(clientX: number, target: SVGSVGElement): void {
+    const rect = target.getBoundingClientRect();
+    const px = ((clientX - rect.left) / rect.width) * width;
     if (px < PAD.left || px > PAD.left + plotW || points.length === 0) {
       setHover(null);
       return;
@@ -55,9 +55,18 @@ export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Elemen
     <div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        style={{ width: '100%', height: 'auto', display: 'block' }}
-        onMouseMove={onMove}
+        style={{ width: '100%', height: 'auto', display: 'block', touchAction: 'pan-y' }}
+        onMouseMove={(e) => updateHover(e.clientX, e.currentTarget)}
         onMouseLeave={() => setHover(null)}
+        onTouchStart={(e) => {
+          const t = e.touches[0];
+          if (t) updateHover(t.clientX, e.currentTarget);
+        }}
+        onTouchMove={(e) => {
+          const t = e.touches[0];
+          if (t) updateHover(t.clientX, e.currentTarget);
+        }}
+        onTouchEnd={() => setHover(null)}
         role="img"
         aria-label="Entropy across image offset"
       >

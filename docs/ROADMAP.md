@@ -39,53 +39,50 @@ long work session, grounded in a precise review of the current tree (file refere
 
 ---
 
-## Phase 3 — Analysis depth & trustworthy identity (start here)
+## Phase 3 — Analysis depth & trustworthy identity
 
-- [ ] **F1 — Arch/endianness refinement.** Add a uImage `ih_arch` decoder (U-Boot header byte 29) to `inferArch`;
-  after extraction, decode the first rootfs ELF's `e_machine` and persist a refined identity. *Where:*
-  `packages/core/src/structure.ts`, `apps/api/src/providers/extract.ts`, image identity persistence in `store.ts`.
-  *Accept:* a uImage+squashfs sample resolves a concrete arch; emulation menu marks the matching QEMU recipe runnable.
-- [ ] **gitleaks deep scan (F4).** New `providers/gitleaks.ts` + `routes/secrets` job; fold results into the Secrets tab
-  alongside the core heuristic (source file + rule + line). *Accept:* verified in the firmware image against a rootfs
-  with a planted key; degrades gracefully when absent.
-- [ ] **Firmware diff.** Compare two images: package/CVE deltas, added/removed/changed rootfs files (by hash),
-  structure & identity changes. New API route + a diff view. *Accept:* two versions of one firmware produce a readable delta.
-- [ ] **Findings report export.** Per-image HTML (self-contained) summarizing identity, structure, secrets, SBOM/CVEs,
-  triage. *Accept:* one-click download; opens standalone.
-- [ ] **Ghidra decompilation (F5, optional heavy).** Wire `analyzeHeadless` as a decompile job behind a capability flag;
-  keep it opt-in (image ships without Ghidra by default).
+- [x] **F1 — Arch/endianness refinement.** uImage `ih_arch` decoder in `inferArch`; post-extraction rootfs ELF
+  probing (modal vote) persists an authoritative arch/endianness. *(wave 1)*
+- [x] **gitleaks deep scan (F4).** `providers/gitleaks.ts` + route as a job, folded into the Secrets tab; matches
+  redacted; verified in the firmware image (2 findings on a planted key). *(wave 1)*
+- [x] **Firmware diff.** `providers/diff.ts` + route + Diff tab: identity, SBOM package/CVE deltas, rootfs file
+  add/remove/change (by path+size). *(wave 1)*
+- [x] **Findings report export.** `providers/report.ts` + route: self-contained HTML (identity, secrets, SBOM/CVEs,
+  triage) as a download. *(wave 3)*
+- [ ] **Ghidra decompilation (F5, optional heavy).** Wire `analyzeHeadless` as a decompile job behind a capability
+  flag; opt-in (image ships without Ghidra). *Deferred — heavy, low marginal value over r2 triage.*
 
 ## Phase 4 — Reliability & platform
 
-- [ ] **Bounded job queue (F2).** Cap concurrent jobs (env-configurable), queue the rest, surface queued state in the UI.
-  *Where:* `apps/api/src/providers/jobs.ts` + jobs route/UI. *Accept:* N+1 heavy jobs run at most N at once.
-- [ ] **Data retention & quota (F3).** Configurable max age / max total size for images+extracts; a sweep on startup and
-  on a timer; show volume usage in the UI. *Accept:* old artifacts pruned; usage visible.
-- [ ] **Multi-image management.** Tags, search/filter, sort on the Dashboard; bulk delete. *Where:* `pages/Dashboard.tsx`,
-  images route.
-- [ ] **Signature pack expansion (F6).** Add device tree (DTB), kernel config (`IKCFG`), more vendor/bootloader and
-  key/cert magics, each with a unit test. *Where:* `packages/core/src/signatures.ts` + tests.
-- [ ] **Interactive emulation.** Beyond user-mode auto-run: a console/shell into the emulated rootfs; guided full-system
-  QEMU boot (kernel/dtb assembly) making F9 recipes actually runnable.
+- [x] **Bounded job queue (F2).** `FIRMLAB_MAX_CONCURRENT_JOBS` (default 2); overflow persists as `queued`. *(wave 2)*
+- [x] **Data retention & quota (F3).** `FIRMLAB_MAX_IMAGE_AGE_DAYS` + `FIRMLAB_MAX_DATA_BYTES` (oldest-first eviction);
+  swept at startup, on a timer, and after upload; `/storage` usage on the Dashboard. *(wave 2)*
+- [x] **Multi-image management — search.** Filter by filename/arch/class on the Dashboard. *(wave 2)*
+- [ ] **Multi-image management — tags & bulk delete.** *Next.*
+- [x] **Signature pack expansion (F6).** +12 magics (ext/f2fs/erofs/cramfs-be, IKCFG/bzImage/arm64 Image,
+  lzop/7z/rar/android-sparse/cpio-odc), offset-anchored, each tested. *(wave 2)*
+- [ ] **Interactive emulation (F9).** Console/shell into the emulated rootfs; guided full-system QEMU boot
+  (kernel/dtb assembly) making the system-qemu recipes runnable. *Deferred — large, per-image platform assembly.*
 
 ## Phase 5 — Quality, testing & hardening
 
-- [ ] **Web component/interaction tests (F7).** Add jsdom + @testing-library; cover the tab router, the drawer toggle,
-  and job-polling panels (mocked API). *Accept:* CI-meaningful coverage of the interactive surface.
-- [ ] **E2E fixture & integration test (F8).** Commit a small, license-clean synthetic firmware (or a build script) and an
-  integration test that runs extract → sbom → triage in the firmware image. *Accept:* one command proves the chain.
-- [ ] **API defense-in-depth (F10).** Optional in-process token/rate-limit + security headers, so a misconfigured proxy
-  isn't the only guard. *Accept:* opt-in, off by default for pure-local use.
-- [ ] **Structured errors & toasts.** Replace ad-hoc `String(err)` panels with consistent error surfaces and retry.
+- [x] **Web component/interaction tests (F7).** jsdom + @testing-library; cover the Dashboard filter, the mobile
+  drawer toggle, and the auth-gated health pill. *(wave 3)*
+- [x] **Mobile polish.** PWA manifest + icon + theme-color (add-to-home-screen); touch tooltips on the entropy chart. *(wave 3)*
+- [ ] **E2E fixture & integration test (F8).** Commit a synthetic firmware (or build script) + an integration test that
+  runs extract → sbom → triage in the firmware image. *Next.*
+- [ ] **API defense-in-depth (F10).** Optional in-process token/rate-limit + security headers. *Next.*
+- [ ] **Structured errors & toasts.** Replace ad-hoc `String(err)` panels with a consistent error surface + retry. *Next.*
 
 ---
 
-## Suggested execution order for the long session
+## Shipped this session (waves 1–3)
 
-1. **F1 arch refinement** (unblocks emulation UX; touches core+api, well-contained).
-2. **gitleaks deep scan** (completes the Secrets story; mirrors the SBOM/triage job pattern).
-3. **Bounded job queue (F2)** + **retention/quota (F3)** (reliability before piling on features).
-4. **Firmware diff** (headline analysis feature).
-5. **Web tests + e2e fixture (F7/F8)** (lock in everything above).
+Arch refinement · gitleaks deep-scan · firmware diff · report export · bounded job queue · data retention/quota ·
+image search · +12 signatures · web component tests · PWA + entropy touch. All verified against real tools in the
+firmware image where applicable; 70+ tests; biome clean; committed in slices.
 
-Each item is independently shippable and verifiable in the firmware image, so the session can commit in slices.
+## Remaining backlog (next session)
+
+Ghidra (F5) · interactive/full-system emulation (F9) · e2e Docker fixture (F8) · API defense-in-depth (F10) ·
+structured errors/toasts · image tags & bulk delete · content-hash file diff.
