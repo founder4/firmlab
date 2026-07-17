@@ -15,6 +15,7 @@ import { analysisRoutes } from './routes/analysis.js';
 import { decompileRoutes } from './routes/decompile.js';
 import { diffRoutes } from './routes/diff.js';
 import { emulateRoutes } from './routes/emulate.js';
+import { ghidraRoutes } from './routes/ghidra.js';
 import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
@@ -22,6 +23,7 @@ import { reportRoutes } from './routes/report.js';
 import { sbomRoutes } from './routes/sbom.js';
 import { storageRoutes } from './routes/storage.js';
 import { toolRoutes } from './routes/tools.js';
+import { registerSecurity } from './security.js';
 import { getDb } from './store.js';
 
 const HOST = process.env.FIRMLAB_HOST ?? '127.0.0.1';
@@ -40,6 +42,8 @@ async function main(): Promise<void> {
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
     bodyLimit: 8 * 1024 * 1024,
   });
+
+  registerSecurity(app);
 
   await app.register(fastifyMultipart, { limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 } });
 
@@ -72,6 +76,7 @@ async function main(): Promise<void> {
       await api.register(sbomRoutes);
       await api.register(decompileRoutes);
       await api.register(gitleaksRoutes);
+      await api.register(ghidraRoutes);
       await api.register(diffRoutes);
       await api.register(reportRoutes);
       await api.register(storageRoutes);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { type ImageSummary, type StorageUsage, api, fmtBytes } from '../api';
+import { toast } from '../toast';
 
 export function Dashboard(): JSX.Element {
   const [images, setImages] = useState<ImageSummary[]>([]);
@@ -45,6 +46,7 @@ export function Dashboard(): JSX.Element {
         nav(`/image/${img.id}`);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
+        toast.error(e);
       } finally {
         setUploading(false);
       }

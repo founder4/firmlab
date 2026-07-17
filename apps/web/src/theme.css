@@ -474,6 +474,51 @@ table.data tr:hover td {
   -webkit-overflow-scrolling: touch;
 }
 
+/* === Toasts === */
+.toaster {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 200;
+  max-width: min(380px, calc(100vw - 32px));
+}
+.toast {
+  text-align: left;
+  padding: 10px 14px;
+  border-radius: 9px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  animation: toast-in 0.18s ease;
+}
+.toast-error {
+  border-color: rgba(255, 93, 108, 0.5);
+  background: rgba(255, 93, 108, 0.12);
+  color: var(--danger);
+}
+.toast-success {
+  border-color: rgba(55, 209, 154, 0.5);
+  background: rgba(55, 209, 154, 0.12);
+  color: var(--ok);
+}
+.toast-info {
+  border-color: rgba(77, 181, 255, 0.5);
+  background: rgba(77, 181, 255, 0.1);
+  color: var(--accent);
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
 /* === Responsive: tablet === */
 @media (max-width: 860px) {
   .content {

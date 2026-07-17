@@ -5,6 +5,7 @@ import {
   type FirmwareDiffResult,
   type FsNode,
   type FsSummary,
+  type GhidraResult,
   type GitleaksResult,
   type ImageSummary,
   type Job,
@@ -19,6 +20,7 @@ import { EntropyChart } from '../components/EntropyChart';
 import { FilesystemTree } from '../components/FilesystemTree';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StructureMap } from '../components/StructureMap';
+import { toast } from '../toast';
 
 type TabId =
   | 'overview'
@@ -403,10 +405,12 @@ function pollJob(jobId: string, onLog: (log: string) => void): Promise<Job> {
         onLog(j.log);
         if (j.status === 'done' || j.status === 'error') {
           window.clearInterval(timer);
+          if (j.status === 'error') toast.error(j.error ?? 'Job failed');
           resolve(j);
         }
       } catch (err) {
         window.clearInterval(timer);
+        toast.error(err);
         reject(err);
       }
     }, 900);
@@ -720,6 +724,93 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
             </div>
           )}
         </>
+      )}
+
+      <GhidraDecompile imageId={imageId} binary={binary} />
+    </div>
+  );
+}
+
+function GhidraDecompile({ imageId, binary }: { imageId: string; binary: string }): JSX.Element {
+  const [result, setResult] = useState<GhidraResult | null>(null);
+  const [running, setRunning] = useState(false);
+  const [log, setLog] = useState('');
+  const [open, setOpen] = useState<number | null>(null);
+
+  useEffect(() => {
+    api
+      .ghidraResult(imageId)
+      .then(setResult)
+      .catch(() => setResult(null));
+  }, [imageId]);
+
+  const run = useCallback(async () => {
+    if (!binary.trim()) return;
+    setRunning(true);
+    setLog('');
+    try {
+      const { jobId } = await api.ghidra(imageId, binary.trim());
+      const job = await pollJob(jobId, setLog);
+      if (job.status === 'done') setResult(job.result as GhidraResult);
+    } catch (err) {
+      setLog(String(err instanceof Error ? err.message : err));
+    } finally {
+      setRunning(false);
+    }
+  }, [imageId, binary]);
+
+  return (
+    <div className="panel">
+      <div className="panel-title">Decompilation (Ghidra)</div>
+      <div className="panel-sub">Full pseudocode via Ghidra headless — needs the optional Ghidra image layer.</div>
+      <button className="btn" disabled={running || !binary.trim()} onClick={run}>
+        {running ? (
+          <>
+            <span className="spinner" /> Decompiling…
+          </>
+        ) : (
+          'Decompile with Ghidra'
+        )}
+      </button>
+      {result && !result.available && (
+        <div className="banner banner-info" style={{ marginTop: 14 }}>
+          {result.reason ?? 'Ghidra not installed — build the image with the optional Ghidra layer.'}
+        </div>
+      )}
+      {result?.available && (
+        <div style={{ marginTop: 12 }}>
+          <div className="hint" style={{ marginBottom: 8 }}>
+            {result.functionCount} functions decompiled from {result.binary}.
+          </div>
+          {result.functions.map((fn, i) => (
+            <div key={`${fn.name}-${i}`} style={{ marginBottom: 6 }}>
+              <button
+                type="button"
+                className="btn btn-sm mono"
+                style={{ width: '100%', textAlign: 'left' }}
+                onClick={() => setOpen(open === i ? null : i)}
+              >
+                {open === i ? '▾' : '▸'} {fn.signature || fn.name}
+              </button>
+              {open === i && (
+                <pre
+                  className="mono"
+                  style={{ fontSize: 11.5, color: 'var(--text-dim)', whiteSpace: 'pre-wrap', margin: '4px 0 0' }}
+                >
+                  {fn.pseudocode}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {log && (
+        <pre
+          className="mono"
+          style={{ fontSize: 11.5, color: 'var(--text-dim)', whiteSpace: 'pre-wrap', marginTop: 14 }}
+        >
+          {log}
+        </pre>
       )}
     </div>
   );

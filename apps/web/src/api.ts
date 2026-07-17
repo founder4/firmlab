@@ -150,6 +150,20 @@ export interface FirmwareDiffResult {
   };
 }
 
+export interface GhidraFunction {
+  name: string;
+  signature: string;
+  pseudocode: string;
+}
+
+export interface GhidraResult {
+  available: boolean;
+  reason?: string;
+  binary: string;
+  functionCount: number;
+  functions: GhidraFunction[];
+}
+
 export interface StorageUsage {
   imageCount: number;
   imagesBytes: number;
@@ -214,6 +228,8 @@ export const api = {
   decompileResult: (id: string) =>
     get<{ result: DecompileResult | null }>(`/api/images/${id}/decompile`).then((r) => r.result),
   decompile: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/decompile`, { binary }),
+  ghidraResult: (id: string) => get<{ result: GhidraResult | null }>(`/api/images/${id}/ghidra`).then((r) => r.result),
+  ghidra: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/ghidra`, { binary }),
   gitleaks: (id: string) => get<{ result: GitleaksResult | null }>(`/api/images/${id}/gitleaks`).then((r) => r.result),
   runGitleaks: (id: string) => post<{ jobId: string }>(`/api/images/${id}/gitleaks`),
   diffResult: (id: string, against: string) =>

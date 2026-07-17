@@ -4,6 +4,7 @@ import { api } from './api';
 import { Capabilities } from './pages/Capabilities';
 import { Dashboard } from './pages/Dashboard';
 import { ImageDetail } from './pages/ImageDetail';
+import { Toaster } from './toast';
 
 type HealthState = 'ok' | 'proxied' | 'exposed' | 'down';
 
@@ -110,6 +111,7 @@ export function App(): JSX.Element {
   return (
     <HashRouter>
       <Shell />
+      <Toaster />
     </HashRouter>
   );
 }
