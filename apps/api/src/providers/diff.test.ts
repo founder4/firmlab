@@ -87,7 +87,13 @@ describe('flattenFiles / diffFiles', () => {
     ]);
     const flat = flattenFiles(tree);
     expect([...flat.keys()].sort()).toEqual(['bin/ls', 'etc/passwd']);
-    expect(flat.get('etc/passwd')).toBe(42);
+    expect(flat.get('etc/passwd')).toEqual({ size: 42 });
+  });
+
+  it('marks a file changed when content hashes differ (size equal)', () => {
+    const a = node('', 'dir', 0, [{ ...node('f', 'file', 10), sha1: 'aaa' }]);
+    const b = node('', 'dir', 0, [{ ...node('f', 'file', 10), sha1: 'bbb' }]);
+    expect(diffFiles(a, b).changed).toEqual(['f']);
   });
 
   it('classifies added, removed, and size-changed files', () => {

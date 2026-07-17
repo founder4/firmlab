@@ -111,6 +111,8 @@ export interface FsNode {
   setuid?: boolean;
   setgid?: boolean;
   symlinkTarget?: string;
+  /** SHA-1 of file contents when the extractor hashed it (files under a size cap), for content-level diffing. */
+  sha1?: string;
   children?: FsNode[];
 }
 

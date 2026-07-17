@@ -126,19 +126,28 @@ export function diffCves(aVulns: SbomVuln[], bVulns: SbomVuln[]): FirmwareDiffRe
 }
 
 /** Flatten a rootfs tree into a path→size map of files (dirs/symlinks ignored for the file diff). */
-export function flattenFiles(tree: FsNode | null): Map<string, number> {
-  const out = new Map<string, number>();
+interface FileFingerprint {
+  size: number;
+  sha1?: string;
+}
+
+export function flattenFiles(tree: FsNode | null): Map<string, FileFingerprint> {
+  const out = new Map<string, FileFingerprint>();
   if (!tree) return out;
   const stack: FsNode[] = [tree];
   while (stack.length > 0) {
     const node = stack.pop() as FsNode;
-    if (node.type === 'file') out.set(node.path, node.size);
+    if (node.type === 'file') out.set(node.path, { size: node.size, ...(node.sha1 ? { sha1: node.sha1 } : {}) });
     if (node.children) for (const c of node.children) stack.push(c);
   }
   return out;
 }
 
-/** Diff two rootfs file maps: added (B-only), removed (A-only), changed (same path, different size). */
+/**
+ * Diff two rootfs file maps: added (B-only), removed (A-only), changed. A file is "changed" when both sides
+ * carry a content hash and the hashes differ; when a hash is missing (file over the extractor's hash cap) it
+ * falls back to a size comparison.
+ */
 export function diffFiles(aTree: FsNode | null, bTree: FsNode | null): FirmwareDiffResult['files'] {
   const aFiles = flattenFiles(aTree);
   const bFiles = flattenFiles(bTree);
@@ -146,9 +155,15 @@ export function diffFiles(aTree: FsNode | null, bTree: FsNode | null): FirmwareD
   const removed: string[] = [];
   const changed: string[] = [];
   for (const p of bFiles.keys()) if (!aFiles.has(p)) added.push(p);
-  for (const [p, size] of aFiles) {
-    if (!bFiles.has(p)) removed.push(p);
-    else if (bFiles.get(p) !== size) changed.push(p);
+  for (const [p, a] of aFiles) {
+    const b = bFiles.get(p);
+    if (!b) {
+      removed.push(p);
+    } else if (a.sha1 && b.sha1) {
+      if (a.sha1 !== b.sha1) changed.push(p);
+    } else if (a.size !== b.size) {
+      changed.push(p);
+    }
   }
   added.sort();
   removed.sort();

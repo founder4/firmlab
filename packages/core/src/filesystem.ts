@@ -13,6 +13,8 @@ export interface FsEntry {
   size: number;
   mode?: number;
   symlinkTarget?: string;
+  /** SHA-1 of file contents when hashed (files under a size cap). */
+  sha1?: string;
 }
 
 const S_ISUID = 0o4000;
@@ -67,6 +69,7 @@ function applyAttrs(node: FsNode, entry: FsEntry): void {
     if (entry.mode & S_ISGID) node.setgid = true;
   }
   if (entry.symlinkTarget !== undefined) node.symlinkTarget = entry.symlinkTarget;
+  if (entry.sha1 !== undefined) node.sha1 = entry.sha1;
 }
 
 /** Compute the audit summary from flat entries (independent of the tree, for direct use). */

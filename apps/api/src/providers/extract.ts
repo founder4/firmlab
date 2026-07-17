@@ -5,6 +5,7 @@
  * analysis (structure/entropy/strings) already gives value without a real rootfs.
  */
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -166,6 +167,18 @@ function persistRefinedIdentity(imageId: string, detected: { arch: Architecture;
   }
 }
 
+/** Files larger than this are not hashed during the walk (keeps extraction bounded); size-diff still applies. */
+const HASH_CAP_BYTES = 8 * 1024 * 1024;
+
+/** SHA-1 of a file's contents, or undefined if it can't be read. */
+function hashFile(abs: string): string | undefined {
+  try {
+    return createHash('sha1').update(fs.readFileSync(abs)).digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
 /** Depth-first search for a directory that looks like a rootfs (has >=2 of bin/etc/sbin/lib). */
 function findRootfs(root: string, depth = 0): string | null {
   if (depth > 8) return null;
@@ -210,7 +223,8 @@ function walkRootfs(rootfsPath: string, maxEntries = 100000): FsEntry[] {
           out.push({ path: rel, type: 'dir', size: 0, mode: stat.mode });
           stack.push(abs);
         } else if (dirent.isFile()) {
-          out.push({ path: rel, type: 'file', size: stat.size, mode: stat.mode });
+          const sha1 = stat.size <= HASH_CAP_BYTES ? hashFile(abs) : undefined;
+          out.push({ path: rel, type: 'file', size: stat.size, mode: stat.mode, ...(sha1 ? { sha1 } : {}) });
         } else {
           out.push({ path: rel, type: 'other', size: 0, mode: stat.mode });
         }
