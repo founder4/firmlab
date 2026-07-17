@@ -8,8 +8,19 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { type FsEntry, type FsNode, type FsSummary, buildFsTree, summarizeFs } from '@firmlab/core';
+import {
+  type Architecture,
+  type Endianness,
+  type FsEntry,
+  type FsNode,
+  type FsSummary,
+  type ImageIdentity,
+  buildFsTree,
+  decodeElfArch,
+  summarizeFs,
+} from '@firmlab/core';
 import { EXTRACT_DIR } from '../paths.js';
+import { getImage, updateImageIdentity } from '../store.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 
@@ -23,6 +34,9 @@ export interface ExtractResult {
   summary: FsSummary | null;
   /** A representative network-facing binary to seed emulation, if one was found. */
   suggestedBinary?: string;
+  /** Architecture recovered by probing rootfs ELF headers (authoritative), when it could be determined. */
+  detectedArch?: Architecture;
+  detectedEndianness?: Endianness;
 }
 
 /** Directory names that mark the root of an extracted Linux rootfs. */
@@ -63,6 +77,12 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
   const tree = buildFsTree(entries);
   const suggestedBinary = pickNetworkBinary(entries);
 
+  const detected = detectRootfsArch(rootfsPath, entries);
+  if (detected) {
+    handle.log(`Detected architecture from rootfs ELFs: ${detected.arch} (${detected.endianness})`);
+    persistRefinedIdentity(imageId, detected);
+  }
+
   return {
     extractor: 'binwalk',
     outputDir,
@@ -70,7 +90,80 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
     tree,
     summary,
     ...(suggestedBinary ? { suggestedBinary } : {}),
+    ...(detected ? { detectedArch: detected.arch, detectedEndianness: detected.endianness } : {}),
   };
+}
+
+/**
+ * Probe the extracted rootfs for its real architecture by reading ELF headers. A firmware rootfs can hold a
+ * stray foreign-arch helper, so we sample several binaries (preferring the base dirs) and take the modal
+ * e_machine — authoritative where the static header scan only saw packed/compressed data.
+ */
+function detectRootfsArch(
+  rootfsPath: string,
+  entries: FsEntry[],
+): { arch: Architecture; endianness: Endianness } | null {
+  const rank = (p: string): number => {
+    if (/^(bin|sbin)\//.test(p)) return 0;
+    if (/^usr\/(bin|sbin)\//.test(p)) return 1;
+    if (/^lib(64)?\//.test(p) || /^usr\/lib(64)?\//.test(p)) return 2;
+    return 3;
+  };
+  const candidates = entries
+    .filter((e) => e.type === 'file' && e.size > 0)
+    .sort((a, b) => rank(a.path) - rank(b.path))
+    .slice(0, 400);
+
+  const tally = new Map<string, { arch: Architecture; endianness: Endianness; n: number }>();
+  let sampled = 0;
+  for (const entry of candidates) {
+    if (sampled >= 24) break;
+    const decoded = readElfArch(path.join(rootfsPath, entry.path));
+    if (!decoded || decoded.arch === 'unknown') continue;
+    sampled++;
+    const key = `${decoded.arch}:${decoded.endianness}`;
+    const cur = tally.get(key);
+    if (cur) cur.n++;
+    else tally.set(key, { ...decoded, n: 1 });
+  }
+  let best: { arch: Architecture; endianness: Endianness; n: number } | null = null;
+  for (const v of tally.values()) if (!best || v.n > best.n) best = v;
+  return best ? { arch: best.arch, endianness: best.endianness } : null;
+}
+
+/** Read just the ELF identification bytes of a file and decode its architecture, or null if not an ELF. */
+function readElfArch(abs: string): { arch: Architecture; endianness: Endianness } | null {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(abs, 'r');
+    const head = Buffer.alloc(20);
+    const read = fs.readSync(fd, head, 0, 20, 0);
+    if (read < 20) return null;
+    if (head[0] !== 0x7f || head[1] !== 0x45 || head[2] !== 0x4c || head[3] !== 0x46) return null; // \x7fELF
+    const bits = head[4] === 2 ? 64 : 32;
+    const endianBig = head[5] === 2;
+    const machine = endianBig ? head.readUInt16BE(18) : head.readUInt16LE(18);
+    return decodeElfArch(machine, endianBig, bits);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+/** Merge a rootfs-probed arch into the stored identity (rootfs ELF headers are authoritative). */
+function persistRefinedIdentity(imageId: string, detected: { arch: Architecture; endianness: Endianness }): void {
+  const row = getImage(imageId);
+  if (!row?.identityJson) return;
+  try {
+    const identity = JSON.parse(row.identityJson) as ImageIdentity;
+    if (identity.arch === detected.arch && identity.endianness === detected.endianness) return;
+    identity.arch = detected.arch;
+    identity.endianness = detected.endianness;
+    updateImageIdentity(imageId, JSON.stringify(identity));
+  } catch {
+    // Leave the cached identity untouched on any parse error.
+  }
 }
 
 /** Depth-first search for a directory that looks like a rootfs (has >=2 of bin/etc/sbin/lib). */

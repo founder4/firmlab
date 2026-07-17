@@ -6,7 +6,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { DB_PATH, ensureDataDirs } from './paths.js';
 
-export type JobKind = 'extract' | 'binwalk' | 'sbom' | 'emulate' | 'decompile';
+export type JobKind = 'extract' | 'binwalk' | 'sbom' | 'emulate' | 'decompile' | 'gitleaks' | 'diff';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {
@@ -97,6 +97,11 @@ export function updateImageAnalysis(
   getDb()
     .prepare('UPDATE images SET status = ?, identityJson = ?, analysisJson = ? WHERE id = ?')
     .run(status, identityJson, analysisJson, id);
+}
+
+/** Persist a refined identity (e.g. arch recovered post-extraction) without touching the cached analysis. */
+export function updateImageIdentity(id: string, identityJson: string): void {
+  getDb().prepare('UPDATE images SET identityJson = ? WHERE id = ?').run(identityJson, id);
 }
 
 export function getImage(id: string): ImageRow | undefined {

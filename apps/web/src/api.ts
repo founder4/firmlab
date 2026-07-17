@@ -103,6 +103,53 @@ export interface DecompileResult {
   strings: { addr: string; value: string }[];
 }
 
+export interface GitleaksFinding {
+  rule: string;
+  description: string;
+  file: string;
+  line: number;
+  match: string;
+}
+
+export interface GitleaksResult {
+  available: boolean;
+  reason?: string;
+  target: string;
+  findingCount: number;
+  findings: GitleaksFinding[];
+}
+
+export interface IdentityChange {
+  field: string;
+  a: string;
+  b: string;
+}
+
+export interface FirmwareDiffResult {
+  a: { id: string; filename: string };
+  b: { id: string; filename: string };
+  identity: IdentityChange[];
+  packages: {
+    hasData: boolean;
+    added: { name: string; version: string }[];
+    removed: { name: string; version: string }[];
+    changed: { name: string; a: string; b: string }[];
+  };
+  cves: {
+    hasData: boolean;
+    addedIds: string[];
+    removedIds: string[];
+    addedBySeverity: Record<Severity, number>;
+  };
+  files: {
+    hasData: boolean;
+    added: string[];
+    removed: string[];
+    changed: string[];
+    counts: { added: number; removed: number; changed: number };
+  };
+}
+
 export interface Job {
   id: string;
   imageId: string;
@@ -157,6 +204,13 @@ export const api = {
   decompileResult: (id: string) =>
     get<{ result: DecompileResult | null }>(`/api/images/${id}/decompile`).then((r) => r.result),
   decompile: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/decompile`, { binary }),
+  gitleaks: (id: string) => get<{ result: GitleaksResult | null }>(`/api/images/${id}/gitleaks`).then((r) => r.result),
+  runGitleaks: (id: string) => post<{ jobId: string }>(`/api/images/${id}/gitleaks`),
+  diffResult: (id: string, against: string) =>
+    get<{ result: FirmwareDiffResult | null }>(`/api/images/${id}/diff?against=${encodeURIComponent(against)}`).then(
+      (r) => r.result,
+    ),
+  runDiff: (id: string, against: string) => post<{ jobId: string }>(`/api/images/${id}/diff`, { against }),
 
   async upload(file: File): Promise<ImageSummary> {
     const form = new FormData();

@@ -2,8 +2,10 @@ import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   type DecompileResult,
+  type FirmwareDiffResult,
   type FsNode,
   type FsSummary,
+  type GitleaksResult,
   type ImageSummary,
   type Job,
   type SbomResult,
@@ -18,7 +20,16 @@ import { FilesystemTree } from '../components/FilesystemTree';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StructureMap } from '../components/StructureMap';
 
-type TabId = 'overview' | 'structure' | 'entropy' | 'filesystem' | 'secrets' | 'sbom' | 'binaries' | 'simulate';
+type TabId =
+  | 'overview'
+  | 'structure'
+  | 'entropy'
+  | 'filesystem'
+  | 'secrets'
+  | 'sbom'
+  | 'binaries'
+  | 'diff'
+  | 'simulate';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -28,11 +39,12 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'secrets', label: 'Secrets' },
   { id: 'sbom', label: 'SBOM & CVEs' },
   { id: 'binaries', label: 'Binaries' },
+  { id: 'diff', label: 'Diff' },
   { id: 'simulate', label: 'Simulation' },
 ];
 
 /** Tabs that operate on the extracted rootfs / tools rather than the cached static analysis. */
-const NO_ANALYSIS_TABS = new Set<TabId>(['filesystem', 'sbom', 'binaries', 'simulate']);
+const NO_ANALYSIS_TABS = new Set<TabId>(['filesystem', 'secrets', 'sbom', 'binaries', 'diff', 'simulate']);
 
 export function ImageDetail(): JSX.Element {
   const { id = '' } = useParams();
@@ -79,9 +91,10 @@ export function ImageDetail(): JSX.Element {
       {tab === 'structure' && analysis && <StructurePanel analysis={analysis} />}
       {tab === 'entropy' && analysis && <EntropyPanel analysis={analysis} />}
       {tab === 'filesystem' && <FilesystemPanel imageId={id} />}
-      {tab === 'secrets' && analysis && <SecretsPanel analysis={analysis} />}
+      {tab === 'secrets' && <SecretsPanel analysis={analysis} imageId={id} />}
       {tab === 'sbom' && <SbomPanel imageId={id} />}
       {tab === 'binaries' && <BinariesPanel imageId={id} />}
+      {tab === 'diff' && <DiffPanel imageId={id} />}
       {tab === 'simulate' && <SimulationMenu imageId={id} />}
       {!analysis && !NO_ANALYSIS_TABS.has(tab) && <div className="empty">No analysis available.</div>}
     </div>
@@ -158,42 +171,137 @@ function EntropyPanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element {
   );
 }
 
-function SecretsPanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element {
-  if (analysis.secrets.length === 0)
-    return <div className="empty">No secret-like strings detected in the raw image.</div>;
+function SecretsPanel({ analysis, imageId }: { analysis: StaticAnalysis | null; imageId: string }): JSX.Element {
+  const secrets = analysis?.secrets ?? [];
+  return (
+    <div>
+      <div className="panel">
+        <div className="panel-title">Secrets & credentials</div>
+        <div className="panel-sub">Heuristic matches in the raw image (values shown are pre-extraction)</div>
+        {secrets.length === 0 ? (
+          <div className="hint">No secret-like strings detected in the raw image.</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Severity</th>
+                  <th>Kind</th>
+                  <th>Offset</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {secrets.map((s, i) => (
+                  <tr key={i}>
+                    <td>
+                      <span className={`badge badge-${s.severity}`}>{s.severity}</span>
+                    </td>
+                    <td>{s.secretKind}</td>
+                    <td className="mono">{fmtHex(s.offset)}</td>
+                    <td
+                      className="mono"
+                      style={{ maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >
+                      {s.value}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <GitleaksSection imageId={imageId} />
+    </div>
+  );
+}
+
+function GitleaksSection({ imageId }: { imageId: string }): JSX.Element {
+  const [result, setResult] = useState<GitleaksResult | null>(null);
+  const [running, setRunning] = useState(false);
+  const [log, setLog] = useState('');
+
+  useEffect(() => {
+    api
+      .gitleaks(imageId)
+      .then(setResult)
+      .catch(() => setResult(null));
+  }, [imageId]);
+
+  const run = useCallback(async () => {
+    setRunning(true);
+    setLog('');
+    try {
+      const { jobId } = await api.runGitleaks(imageId);
+      const job = await pollJob(jobId, setLog);
+      if (job.status === 'done') setResult(job.result as GitleaksResult);
+    } catch (err) {
+      setLog(String(err instanceof Error ? err.message : err));
+    } finally {
+      setRunning(false);
+    }
+  }, [imageId]);
+
   return (
     <div className="panel">
-      <div className="panel-title">Secrets & credentials</div>
-      <div className="panel-sub">Heuristic matches in the raw image (values shown are pre-extraction)</div>
-      <div className="table-wrap">
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Severity</th>
-              <th>Kind</th>
-              <th>Offset</th>
-              <th>Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            {analysis.secrets.map((s, i) => (
-              <tr key={i}>
-                <td>
-                  <span className={`badge badge-${s.severity}`}>{s.severity}</span>
-                </td>
-                <td>{s.secretKind}</td>
-                <td className="mono">{fmtHex(s.offset)}</td>
-                <td
-                  className="mono"
-                  style={{ maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                >
-                  {s.value}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <div className="panel-title">Deep secret scan (gitleaks)</div>
+      <div className="panel-sub">Scans the extracted rootfs for keys, tokens, and credentials in files.</div>
+      <button className="btn btn-primary" disabled={running} onClick={run}>
+        {running ? (
+          <>
+            <span className="spinner" /> Scanning…
+          </>
+        ) : result?.available ? (
+          'Re-scan rootfs'
+        ) : (
+          'Scan rootfs'
+        )}
+      </button>
+      {result && !result.available && (
+        <div className="banner banner-warn" style={{ marginTop: 14 }}>
+          {result.reason ?? 'gitleaks unavailable — run extraction first, or install gitleaks.'}
+        </div>
+      )}
+      {result?.available && (
+        <div style={{ marginTop: 14 }}>
+          <div className="hint" style={{ marginBottom: 10 }}>
+            {result.findingCount} finding{result.findingCount === 1 ? '' : 's'} in the rootfs.
+          </div>
+          {result.findings.length > 0 && (
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Rule</th>
+                    <th>File</th>
+                    <th>Line</th>
+                    <th>Match</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.findings.slice(0, 300).map((f, i) => (
+                    <tr key={`${f.file}-${f.line}-${i}`}>
+                      <td>{f.rule}</td>
+                      <td className="mono">{f.file}</td>
+                      <td className="mono">{f.line}</td>
+                      <td className="mono">{f.match}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+      {log && (
+        <pre
+          className="mono"
+          style={{ fontSize: 11.5, color: 'var(--text-dim)', whiteSpace: 'pre-wrap', marginTop: 14 }}
+        >
+          {log}
+        </pre>
+      )}
     </div>
   );
 }
@@ -635,6 +743,197 @@ function TriageTable({
           <tbody>{children}</tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
+  const [images, setImages] = useState<ImageSummary[]>([]);
+  const [against, setAgainst] = useState('');
+  const [result, setResult] = useState<FirmwareDiffResult | null>(null);
+  const [running, setRunning] = useState(false);
+  const [log, setLog] = useState('');
+
+  useEffect(() => {
+    api
+      .listImages()
+      .then((all) => setImages(all.filter((im) => im.id !== imageId)))
+      .catch(() => setImages([]));
+  }, [imageId]);
+
+  // Load any previously computed diff when the target changes.
+  useEffect(() => {
+    setResult(null);
+    if (!against) return;
+    api
+      .diffResult(imageId, against)
+      .then(setResult)
+      .catch(() => setResult(null));
+  }, [imageId, against]);
+
+  const run = useCallback(async () => {
+    if (!against) return;
+    setRunning(true);
+    setLog('');
+    try {
+      const { jobId } = await api.runDiff(imageId, against);
+      const job = await pollJob(jobId, setLog);
+      if (job.status === 'done') setResult(job.result as FirmwareDiffResult);
+    } catch (err) {
+      setLog(String(err instanceof Error ? err.message : err));
+    } finally {
+      setRunning(false);
+    }
+  }, [imageId, against]);
+
+  return (
+    <div>
+      <div className="panel">
+        <div className="panel-title">Compare firmware</div>
+        <div className="panel-sub">
+          Diff identity, packages/CVEs (needs SBOM on both), and rootfs files (needs extraction).
+        </div>
+        {images.length === 0 ? (
+          <div className="hint">Upload a second image to compare against.</div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select
+              className="input"
+              value={against}
+              onChange={(e) => setAgainst(e.target.value)}
+              style={{ flex: '1 1 240px', minWidth: 0 }}
+            >
+              <option value="">Select an image to compare against…</option>
+              {images.map((im) => (
+                <option key={im.id} value={im.id}>
+                  {im.filename}
+                </option>
+              ))}
+            </select>
+            <button className="btn btn-primary" disabled={running || !against} onClick={run}>
+              {running ? (
+                <>
+                  <span className="spinner" /> Comparing…
+                </>
+              ) : (
+                'Compare'
+              )}
+            </button>
+          </div>
+        )}
+        {log && (
+          <pre
+            className="mono"
+            style={{ fontSize: 11.5, color: 'var(--text-dim)', whiteSpace: 'pre-wrap', marginTop: 14 }}
+          >
+            {log}
+          </pre>
+        )}
+      </div>
+
+      {result && (
+        <>
+          <div className="panel">
+            <div className="panel-title">Identity</div>
+            {result.identity.length === 0 ? (
+              <div className="hint">No identity differences.</div>
+            ) : (
+              <div className="table-wrap">
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>Field</th>
+                      <th className="mono">{result.a.filename}</th>
+                      <th className="mono">{result.b.filename}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.identity.map((c) => (
+                      <tr key={c.field}>
+                        <td>{c.field}</td>
+                        <td className="mono">{c.a || '—'}</td>
+                        <td className="mono">{c.b || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="panel-title">Packages</div>
+            {!result.packages.hasData ? (
+              <div className="hint">Run SBOM on both images to diff packages.</div>
+            ) : (
+              <>
+                <div className="grid grid-3" style={{ marginBottom: 12 }}>
+                  <Stat label="Added" value={String(result.packages.added.length)} />
+                  <Stat label="Removed" value={String(result.packages.removed.length)} />
+                  <Stat label="Version-changed" value={String(result.packages.changed.length)} />
+                </div>
+                {result.packages.changed.length > 0 && (
+                  <div className="table-wrap">
+                    <table className="data">
+                      <thead>
+                        <tr>
+                          <th>Package</th>
+                          <th>{result.a.filename}</th>
+                          <th>{result.b.filename}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.packages.changed.slice(0, 300).map((c) => (
+                          <tr key={c.name}>
+                            <td>{c.name}</td>
+                            <td className="mono">{c.a}</td>
+                            <td className="mono">{c.b}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="panel-title">CVEs</div>
+            {!result.cves.hasData ? (
+              <div className="hint">Run SBOM on both images to diff CVEs.</div>
+            ) : (
+              <>
+                <div className="legend" style={{ marginBottom: 10 }}>
+                  <span className="badge badge-ok">+{result.cves.addedIds.length} added</span>
+                  <span className="badge badge-info">−{result.cves.removedIds.length} removed</span>
+                  {SEVERITY_ORDER.filter((s) => result.cves.addedBySeverity[s] > 0).map((s) => (
+                    <span key={s} className={`badge ${SEVERITY_BADGE[s]}`}>
+                      +{result.cves.addedBySeverity[s]} {s}
+                    </span>
+                  ))}
+                </div>
+                <div className="hint mono" style={{ wordBreak: 'break-word' }}>
+                  {result.cves.addedIds.slice(0, 60).join(', ') || 'No newly-introduced CVEs.'}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="panel-title">Root filesystem</div>
+            {!result.files.hasData ? (
+              <div className="hint">Run extraction on both images to diff files.</div>
+            ) : (
+              <div className="grid grid-3">
+                <Stat label="Added" value={String(result.files.counts.added)} />
+                <Stat label="Removed" value={String(result.files.counts.removed)} />
+                <Stat label="Changed (size)" value={String(result.files.counts.changed)} />
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

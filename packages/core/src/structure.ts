@@ -25,6 +25,44 @@ const ELF_MACHINE: Record<number, { arch: Architecture }> = {
   2: { arch: 'sparc' },
 };
 
+/** U-Boot uImage `ih_arch` code → architecture (subset; see U-Boot image.h IH_ARCH_*). */
+const UBOOT_ARCH: Record<number, Architecture> = {
+  2: 'arm',
+  3: 'x86',
+  5: 'mips',
+  6: 'mips64',
+  7: 'ppc',
+  10: 'sparc',
+  22: 'arm64',
+  24: 'x86_64',
+  26: 'riscv',
+};
+
+/**
+ * Resolve an ELF `e_machine` (+ endianness/bit-width) into a concrete architecture. Shared so both static
+ * signature inference and post-extraction rootfs probing agree on the mapping. Returns `unknown` arch for
+ * machines outside the firmware-common set.
+ */
+export function decodeElfArch(
+  machine: number,
+  endianBig: boolean,
+  bits: number,
+): {
+  arch: Architecture;
+  endianness: Endianness;
+} {
+  const endianness: Endianness = endianBig ? 'big' : 'little';
+  let arch = ELF_MACHINE[machine]?.arch ?? 'unknown';
+  if (arch === 'mips' && !endianBig) arch = 'mipsel';
+  if (arch === 'x86_64' && bits === 32) arch = 'x86';
+  return { arch, endianness };
+}
+
+/** Map a U-Boot uImage arch code to our architecture, or `unknown`. uImage carries no endianness. */
+export function ubootArch(code: number): Architecture {
+  return UBOOT_ARCH[code] ?? 'unknown';
+}
+
 /**
  * Build ordered, non-overlapping-ish segments from signature hits. Each high-confidence structural hit opens
  * a segment that runs until the next structural hit (or a decoded size when available). Entropy fills the
@@ -159,17 +197,20 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[]): ImageIdent
   };
 }
 
-/** Derive arch + endianness from the first decoded ELF header, else unknown. */
+/**
+ * Derive arch + endianness statically: prefer a decoded ELF header (authoritative on both fields), else fall
+ * back to a U-Boot uImage `ih_arch` code (arch only — uImage carries no endianness). Post-extraction probing
+ * of the rootfs (see the API extract provider) can refine this further.
+ */
 function inferArch(_buf: Uint8Array, hits: SignatureHit[]): { arch: Architecture; endianness: Endianness } {
   const elf = hits.find((h) => h.id === 'elf' && h.meta);
   if (elf?.meta) {
-    const machine = Number(elf.meta.machine);
-    const mapped = ELF_MACHINE[machine];
-    const endian: Endianness = elf.meta.endian === 'big' ? 'big' : 'little';
-    let arch = mapped?.arch ?? 'unknown';
-    if (arch === 'mips' && endian === 'little') arch = 'mipsel';
-    if (arch === 'x86_64' && elf.meta.bits === 32) arch = 'x86';
-    return { arch, endianness: endian };
+    return decodeElfArch(Number(elf.meta.machine), elf.meta.endian === 'big', Number(elf.meta.bits) || 32);
+  }
+  const uimage = hits.find((h) => h.id === 'uimage' && h.meta);
+  if (uimage?.meta && typeof uimage.meta.archCode === 'number') {
+    const arch = ubootArch(uimage.meta.archCode);
+    if (arch !== 'unknown') return { arch, endianness: 'unknown' };
   }
   return { arch: 'unknown', endianness: 'unknown' };
 }

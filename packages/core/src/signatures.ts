@@ -158,7 +158,13 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     category: 'bootloader',
     confidence: 'high',
     magic: [0x27, 0x05, 0x19, 0x56],
-    decode: (buf, off) => ({ dataSize: u32be(buf, off + 12), loadAddr: u32be(buf, off + 16).toString(16) }),
+    // U-Boot legacy header: ih_size@12, ih_load@16, ih_os@28, ih_arch@29 (see U-Boot image.h).
+    decode: (buf, off) => ({
+      dataSize: u32be(buf, off + 12),
+      loadAddr: u32be(buf, off + 16).toString(16),
+      osCode: buf[off + 28] ?? 0,
+      archCode: buf[off + 29] ?? 0,
+    }),
   },
   {
     id: 'trx',

@@ -12,7 +12,9 @@ import Fastify from 'fastify';
 import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
 import { analysisRoutes } from './routes/analysis.js';
 import { decompileRoutes } from './routes/decompile.js';
+import { diffRoutes } from './routes/diff.js';
 import { emulateRoutes } from './routes/emulate.js';
+import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
 import { sbomRoutes } from './routes/sbom.js';
@@ -62,6 +64,8 @@ async function main(): Promise<void> {
       await api.register(emulateRoutes);
       await api.register(sbomRoutes);
       await api.register(decompileRoutes);
+      await api.register(gitleaksRoutes);
+      await api.register(diffRoutes);
       await api.register(toolRoutes);
     },
     { prefix: '/api' },
