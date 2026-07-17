@@ -289,6 +289,104 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     confidence: 'low',
     magic: [0xff, 0xd8, 0xff],
   },
+
+  // === Extended pack: offset-anchored filesystems ===
+  {
+    id: 'ext',
+    description: 'ext2/3/4 filesystem superblock',
+    category: 'filesystem',
+    confidence: 'high',
+    // s_magic 0xEF53 lives at byte 0x38 of the superblock, which starts at 0x400 → absolute 0x438.
+    magic: [0x53, 0xef],
+    atOffset: 0x438,
+  },
+  {
+    id: 'f2fs',
+    description: 'F2FS filesystem superblock',
+    category: 'filesystem',
+    confidence: 'high',
+    magic: [0x10, 0x20, 0xf5, 0xf2],
+    atOffset: 0x400,
+  },
+  {
+    id: 'erofs',
+    description: 'EROFS filesystem superblock',
+    category: 'filesystem',
+    confidence: 'high',
+    magic: [0xe2, 0xe1, 0xf5, 0xe0],
+    atOffset: 0x400,
+  },
+  {
+    id: 'cramfs-be',
+    description: 'CramFS filesystem (big-endian)',
+    category: 'filesystem',
+    confidence: 'high',
+    magic: [0x28, 0xcd, 0x3d, 0x45],
+  },
+
+  // === Extended pack: kernels ===
+  {
+    id: 'linux-ikcfg',
+    description: 'Embedded Linux kernel config (IKCFG)',
+    category: 'kernel',
+    confidence: 'high',
+    magic: ascii('IKCFG_ST'),
+  },
+  {
+    id: 'bzimage',
+    description: 'Linux x86 kernel bzImage',
+    category: 'kernel',
+    confidence: 'high',
+    // Setup-header 'HdrS' magic sits at a fixed offset in the boot sector.
+    magic: ascii('HdrS'),
+    atOffset: 0x202,
+  },
+  {
+    id: 'arm64-linux',
+    description: 'Linux ARM64 kernel Image',
+    category: 'kernel',
+    confidence: 'high',
+    // "ARM\x64" magic at offset 56 of the arm64 Image header.
+    magic: ascii('ARMd'),
+    atOffset: 0x38,
+  },
+
+  // === Extended pack: compression / archives ===
+  {
+    id: 'lzop',
+    description: 'lzop compressed stream',
+    category: 'compression',
+    confidence: 'high',
+    magic: [0x89, 0x4c, 0x5a, 0x4f, 0x00, 0x0d, 0x0a, 0x1a, 0x0a],
+  },
+  {
+    id: '7zip',
+    description: '7-Zip archive',
+    category: 'container',
+    confidence: 'high',
+    magic: [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c],
+  },
+  {
+    id: 'rar',
+    description: 'RAR archive',
+    category: 'container',
+    confidence: 'high',
+    magic: [...ascii('Rar!'), 0x1a, 0x07],
+  },
+  {
+    id: 'android-sparse',
+    description: 'Android sparse image',
+    category: 'container',
+    confidence: 'high',
+    magic: [0x3a, 0xff, 0x26, 0xed],
+  },
+  {
+    id: 'cpio-odc',
+    description: 'CPIO archive (odc / portable ASCII)',
+    category: 'container',
+    confidence: 'medium',
+    magic: ascii('070707'),
+  },
 ];
 
 /** True when `magic` matches `buf` starting at `off`. */

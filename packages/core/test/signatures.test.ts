@@ -65,6 +65,48 @@ describe('scanSignatures', () => {
   });
 });
 
+describe('extended signature pack', () => {
+  it('finds an ext superblock only at its 0x438 offset', () => {
+    const buf = planted(4096, 0x438, [0x53, 0xef]);
+    const hits = scanSignatures(buf);
+    const ext = hits.find((h) => h.id === 'ext');
+    expect(ext?.offset).toBe(0x438);
+    expect(ext?.category).toBe('filesystem');
+    // The same magic elsewhere must NOT fire (offset-anchored).
+    expect(scanSignatures(planted(4096, 0x100, [0x53, 0xef])).some((h) => h.id === 'ext')).toBe(false);
+  });
+
+  it('finds F2FS and EROFS superblocks at 0x400', () => {
+    expect(scanSignatures(planted(4096, 0x400, [0x10, 0x20, 0xf5, 0xf2])).some((h) => h.id === 'f2fs')).toBe(true);
+    expect(scanSignatures(planted(4096, 0x400, [0xe2, 0xe1, 0xf5, 0xe0])).some((h) => h.id === 'erofs')).toBe(true);
+  });
+
+  it('finds a big-endian CramFS', () => {
+    const hits = scanSignatures(planted(512, 0, [0x28, 0xcd, 0x3d, 0x45]));
+    expect(hits.find((h) => h.id === 'cramfs-be')?.category).toBe('filesystem');
+  });
+
+  it('finds kernel markers: IKCFG, bzImage, arm64 Image', () => {
+    expect(scanSignatures(new TextEncoder().encode('..IKCFG_ST..')).some((h) => h.id === 'linux-ikcfg')).toBe(true);
+    expect(scanSignatures(planted(1024, 0x202, ascii('HdrS'))).some((h) => h.id === 'bzimage')).toBe(true);
+    expect(scanSignatures(planted(128, 0x38, ascii('ARMd'))).some((h) => h.id === 'arm64-linux')).toBe(true);
+  });
+
+  it('finds archives and lzop: 7-Zip, RAR, android-sparse, lzop, cpio-odc', () => {
+    expect(scanSignatures(planted(64, 0, [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c])).some((h) => h.id === '7zip')).toBe(
+      true,
+    );
+    expect(scanSignatures(planted(64, 0, [...ascii('Rar!'), 0x1a, 0x07])).some((h) => h.id === 'rar')).toBe(true);
+    expect(scanSignatures(planted(64, 0, [0x3a, 0xff, 0x26, 0xed])).some((h) => h.id === 'android-sparse')).toBe(true);
+    expect(
+      scanSignatures(planted(64, 0, [0x89, 0x4c, 0x5a, 0x4f, 0x00, 0x0d, 0x0a, 0x1a, 0x0a])).some(
+        (h) => h.id === 'lzop',
+      ),
+    ).toBe(true);
+    expect(scanSignatures(planted(64, 0, ascii('070707'))).some((h) => h.id === 'cpio-odc')).toBe(true);
+  });
+});
+
 describe('structure + identity', () => {
   it('classifies an image with a SquashFS as embedded-linux', () => {
     const buf = planted(16384, 8192, ascii('hsqs'));

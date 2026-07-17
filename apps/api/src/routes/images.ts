@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
 import { analyzeImageBuffer } from '../analysis.js';
 import { EXTRACT_DIR, IMAGES_DIR } from '../paths.js';
+import { sweepRetention } from '../retention.js';
 import { deleteImage, getImage, insertImage, listImages, updateImageAnalysis } from '../store.js';
 
 const ALLOWED_EXT = new Set([
@@ -111,6 +112,10 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
       req.log.error({ err }, 'static analysis failed');
       updateImageAnalysis(id, 'error', null, null);
     }
+
+    // Enforce the size quota as data grows (no-op unless FIRMLAB_MAX_DATA_BYTES is set); never evicts this
+    // upload since eviction is oldest-first.
+    sweepRetention((line) => req.log.info(line));
 
     return reply.status(201).send({ image: toSummary(getImage(id)) });
   });

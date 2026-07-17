@@ -10,6 +10,7 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
+import { SWEEP_INTERVAL_MS, sweepRetention } from './retention.js';
 import { analysisRoutes } from './routes/analysis.js';
 import { decompileRoutes } from './routes/decompile.js';
 import { diffRoutes } from './routes/diff.js';
@@ -18,6 +19,7 @@ import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
 import { sbomRoutes } from './routes/sbom.js';
+import { storageRoutes } from './routes/storage.js';
 import { toolRoutes } from './routes/tools.js';
 import { getDb } from './store.js';
 
@@ -28,6 +30,10 @@ const MAX_UPLOAD_BYTES = Number(process.env.FIRMLAB_MAX_UPLOAD ?? 500 * 1024 * 1
 async function main(): Promise<void> {
   ensureDataDirs();
   getDb(); // initialize schema early so a bad data dir fails fast
+
+  // Enforce data-retention limits at startup and on a timer (no-op unless a limit is configured).
+  sweepRetention((line) => console.log(line));
+  setInterval(() => sweepRetention((line) => console.log(line)), SWEEP_INTERVAL_MS).unref();
 
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
@@ -66,6 +72,7 @@ async function main(): Promise<void> {
       await api.register(decompileRoutes);
       await api.register(gitleaksRoutes);
       await api.register(diffRoutes);
+      await api.register(storageRoutes);
       await api.register(toolRoutes);
     },
     { prefix: '/api' },

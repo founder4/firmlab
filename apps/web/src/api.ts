@@ -150,6 +150,15 @@ export interface FirmwareDiffResult {
   };
 }
 
+export interface StorageUsage {
+  imageCount: number;
+  imagesBytes: number;
+  extractsBytes: number;
+  totalBytes: number;
+  quotaBytes: number;
+  maxAgeDays: number;
+}
+
 export interface Job {
   id: string;
   imageId: string;
@@ -193,6 +202,7 @@ export const api = {
     get<{ size: number; structure: StructureSegment[]; signatures: SignatureHit[] }>(`/api/images/${id}/structure`),
   secrets: (id: string) => get<{ secrets: StringHit[] }>(`/api/images/${id}/secrets`).then((r) => r.secrets),
   tools: () => get<{ tools: ToolStatus[]; groups: Record<string, { available: number; total: number }> }>('/api/tools'),
+  storage: () => get<{ usage: StorageUsage }>('/api/storage').then((r) => r.usage),
   emulation: (id: string) => get<EmulationMenu>(`/api/images/${id}/emulation`),
   emulate: (id: string, binary?: string) =>
     post<{ jobId: string }>(`/api/images/${id}/emulate`, binary ? { binary } : {}),
