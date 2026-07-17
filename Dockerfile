@@ -10,6 +10,8 @@
 # === Stage 1: build the monorepo ===
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
+# Non-interactive: pnpm 11 otherwise aborts a modules-dir purge for lack of a TTY during the build step.
+ENV CI=true
 RUN corepack enable
 COPY pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
@@ -36,6 +38,9 @@ COPY --from=build /app/packages/core/dist ./packages/core/dist
 COPY --from=build /app/packages/core/package.json ./packages/core/
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/api/package.json ./apps/api/
+# pnpm workspace: the API's runtime deps live in apps/api/node_modules (symlinks into the root .pnpm store),
+# not the hoisted root node_modules — copy them so @fastify/* et al. resolve at runtime.
+COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 
 VOLUME /data

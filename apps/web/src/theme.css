@@ -71,6 +71,7 @@ code,
 .app-shell {
   display: flex;
   height: 100vh;
+  height: 100dvh; /* dvh tracks the mobile browser's shrinking/growing URL bar */
   overflow: hidden;
 }
 
@@ -320,6 +321,23 @@ table.data tr:hover td {
   font-size: 12px;
 }
 
+/* === Inputs === */
+.input {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel-2);
+  color: var(--text);
+  font-size: 13px;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.input::placeholder {
+  color: var(--text-faint);
+}
+
 /* === Legend === */
 .legend {
   display: flex;
@@ -402,4 +420,122 @@ table.data tr:hover td {
   background: rgba(77, 181, 255, 0.07);
   border-color: rgba(77, 181, 255, 0.3);
   color: var(--accent);
+}
+
+/* === Topbar layout + mobile nav toggle === */
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.topbar-title {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-toggle {
+  display: none; /* desktop: sidebar is always visible */
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.nav-toggle:hover {
+  border-color: var(--accent);
+}
+/* Backdrop behind the mobile drawer; a <button> so it's keyboard/AT reachable. */
+.scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(4, 6, 10, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 40;
+  cursor: default;
+}
+
+/* Horizontal-scroll wrapper for wide tables so the page body never scrolls sideways. */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* === Responsive: tablet === */
+@media (max-width: 860px) {
+  .content {
+    padding: 16px;
+  }
+  .nav-toggle {
+    display: inline-flex;
+  }
+  /* Sidebar becomes an off-canvas drawer. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 264px;
+    max-width: 82vw;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    z-index: 50;
+    box-shadow: 2px 0 24px rgba(0, 0, 0, 0.4);
+  }
+  .app-shell.nav-open .sidebar {
+    transform: translateX(0);
+  }
+  .app-shell.nav-open .scrim {
+    display: block;
+  }
+  /* Larger touch targets in the drawer. */
+  .nav-item {
+    padding: 11px 12px;
+    font-size: 14px;
+  }
+  .tab {
+    padding: 11px 14px;
+  }
+}
+
+/* === Responsive: phone === */
+@media (max-width: 520px) {
+  .content {
+    padding: 12px;
+  }
+  .topbar {
+    padding: 0 12px;
+  }
+  .topbar-title {
+    font-size: 12.5px;
+  }
+  .panel {
+    padding: 14px 12px;
+    border-radius: 10px;
+  }
+  /* Single-column stat/grid stacks on a phone. */
+  .grid-2,
+  .grid-3 {
+    grid-template-columns: 1fr;
+  }
+  .stat-value {
+    font-size: 19px;
+  }
+  /* Comfortable tap targets for primary actions. */
+  .btn {
+    padding: 10px 14px;
+  }
 }

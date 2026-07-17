@@ -11,9 +11,11 @@ import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
 import { analysisRoutes } from './routes/analysis.js';
+import { decompileRoutes } from './routes/decompile.js';
 import { emulateRoutes } from './routes/emulate.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
+import { sbomRoutes } from './routes/sbom.js';
 import { toolRoutes } from './routes/tools.js';
 import { getDb } from './store.js';
 
@@ -37,8 +39,18 @@ async function main(): Promise<void> {
   // the UI's local-only indicator stays accurate inside a container.
   const loopbackPublish = process.env.FIRMLAB_LOOPBACK_PUBLISH === '1';
   const boundLocally = HOST === '127.0.0.1' || HOST === 'localhost';
+  // FIRMLAB_TRUSTED_PROXY=1 asserts the workbench sits behind an authenticating reverse proxy (e.g. Traefik +
+  // forward-auth). It's still not loopback, but reaching it requires passing that proxy's auth — so the UI shows
+  // an "auth-gated" state instead of the bare "exposed to network" warning.
+  const trustedProxy = process.env.FIRMLAB_TRUSTED_PROXY === '1';
   app.get('/health', async () => {
-    return { status: 'ok', host: HOST, port: PORT, exposedToNetwork: !boundLocally && !loopbackPublish };
+    return {
+      status: 'ok',
+      host: HOST,
+      port: PORT,
+      exposedToNetwork: !boundLocally && !loopbackPublish,
+      trustedProxy,
+    };
   });
 
   // API surface under /api.
@@ -48,6 +60,8 @@ async function main(): Promise<void> {
       await api.register(analysisRoutes);
       await api.register(jobRoutes);
       await api.register(emulateRoutes);
+      await api.register(sbomRoutes);
+      await api.register(decompileRoutes);
       await api.register(toolRoutes);
     },
     { prefix: '/api' },

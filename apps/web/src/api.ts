@@ -62,6 +62,47 @@ export interface EmulationMenu {
   recipes: EmulationRecipe[];
 }
 
+export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Negligible' | 'Unknown';
+
+export interface SbomVuln {
+  id: string;
+  severity: Severity;
+  packageName: string;
+  packageVersion: string;
+  fixedIn: string | null;
+}
+
+export interface SbomResult {
+  available: boolean;
+  reason?: string;
+  target: string;
+  packageCount: number;
+  packages: { name: string; version: string; type: string }[];
+  grypeAvailable: boolean;
+  vulnerabilities: SbomVuln[];
+  counts: Record<Severity, number>;
+}
+
+export interface DecompileResult {
+  available: boolean;
+  reason?: string;
+  binary: string;
+  info: {
+    arch?: string;
+    bits?: number;
+    bintype?: string;
+    os?: string;
+    endian?: string;
+    canary?: boolean;
+    nx?: boolean;
+    pic?: boolean;
+  };
+  functionCount: number;
+  symbols: { name: string; type: string; addr: string }[];
+  imports: { name: string; libname?: string }[];
+  strings: { addr: string; value: string }[];
+}
+
 export interface Job {
   id: string;
   imageId: string;
@@ -95,7 +136,7 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
 }
 
 export const api = {
-  health: () => get<{ status: string; exposedToNetwork: boolean }>('/health'),
+  health: () => get<{ status: string; exposedToNetwork: boolean; trustedProxy?: boolean }>('/health'),
   listImages: () => get<{ images: ImageSummary[] }>('/api/images').then((r) => r.images),
   getImage: (id: string) => get<{ image: ImageSummary }>(`/api/images/${id}`).then((r) => r.image),
   deleteImage: (id: string) => fetch(`/api/images/${id}`, { method: 'DELETE' }).then(() => undefined),
@@ -111,6 +152,11 @@ export const api = {
   extract: (id: string) => post<{ jobId: string }>(`/api/images/${id}/extract`),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),
   job: (jobId: string) => get<{ job: Job }>(`/api/jobs/${jobId}`).then((r) => r.job),
+  sbom: (id: string) => get<{ result: SbomResult | null }>(`/api/images/${id}/sbom`).then((r) => r.result),
+  runSbom: (id: string) => post<{ jobId: string }>(`/api/images/${id}/sbom`),
+  decompileResult: (id: string) =>
+    get<{ result: DecompileResult | null }>(`/api/images/${id}/decompile`).then((r) => r.result),
+  decompile: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/decompile`, { binary }),
 
   async upload(file: File): Promise<ImageSummary> {
     const form = new FormData();

@@ -24,13 +24,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       squashfs-tools \
       cpio \
       e2fsprogs \
-      radare2 \
       qemu-user-static \
       qemu-system-mips \
       qemu-system-arm \
       python3 python3-pip python3-venv \
       curl ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# === radare2 (binary triage) — dropped from Debian bookworm repos; use the official .deb for the build arch ===
+RUN R2_VER="$(curl -fsSL https://api.github.com/repos/radareorg/radare2/releases/latest | grep -oP '"tag_name":\s*"\K[0-9.]+')" \
+    && ARCH="$(dpkg --print-architecture)" \
+    && curl -fsSL "https://github.com/radareorg/radare2/releases/download/${R2_VER}/radare2_${R2_VER}_${ARCH}.deb" -o /tmp/r2.deb \
+    && apt-get update && apt-get install -y --no-install-recommends /tmp/r2.deb \
+    && rm -f /tmp/r2.deb && rm -rf /var/lib/apt/lists/*
 
 # === JFFS2 / UBIFS extractors (pip, isolated venv) ===
 RUN python3 -m venv /opt/fw-py \
@@ -41,7 +47,8 @@ RUN python3 -m venv /opt/fw-py \
 # === SBOM + CVEs + secrets (syft / grype / gitleaks via official installers) ===
 RUN curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin \
-    && curl -fsSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep -oP '"tag_name":\s*"v\K[0-9.]+')_linux_x64.tar.gz \
+    && GL_ARCH="$(dpkg --print-architecture | sed 's/amd64/x64/;s/arm64/arm64/')" \
+    && curl -fsSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep -oP '"tag_name":\s*"v\K[0-9.]+')_linux_${GL_ARCH}.tar.gz \
        -o /tmp/gitleaks.tgz && tar xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks && rm /tmp/gitleaks.tgz
 
 # === (Optional, heavy) Ghidra headless + Renode ===
