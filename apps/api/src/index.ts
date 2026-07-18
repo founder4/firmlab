@@ -12,6 +12,7 @@ import Fastify from 'fastify';
 import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
 import { SWEEP_INTERVAL_MS, sweepRetention } from './retention.js';
 import { analysisRoutes } from './routes/analysis.js';
+import { corpusRoutes } from './routes/corpus.js';
 import { decompileRoutes } from './routes/decompile.js';
 import { diffRoutes } from './routes/diff.js';
 import { emulateRoutes } from './routes/emulate.js';
@@ -78,6 +79,7 @@ async function main(): Promise<void> {
       await api.register(gitleaksRoutes);
       await api.register(ghidraRoutes);
       await api.register(diffRoutes);
+      await api.register(corpusRoutes);
       await api.register(reportRoutes);
       await api.register(storageRoutes);
       await api.register(toolRoutes);
