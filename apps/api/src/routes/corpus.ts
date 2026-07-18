@@ -3,10 +3,15 @@
  * images (occurrences), never a new asserted finding: the corpus enriches, it does not conclude.
  */
 import type { FastifyInstance } from 'fastify';
-import { corpusRefs, deleteRule, listRules, promoteRule } from '../corpus.js';
+import { corpusOverview, corpusRefs, deleteRule, listRules, promoteRule } from '../corpus.js';
 import { getImage } from '../store.js';
 
 export async function corpusRoutes(app: FastifyInstance): Promise<void> {
+  // The corpus as a whole: credential reuse, component prevalence, device families.
+  app.get('/corpus/overview', async () => {
+    return { overview: corpusOverview() };
+  });
+
   // For one image: which of its credentials / components / binaries also appear in other images.
   app.get('/images/:id/corpus-refs', async (req, reply) => {
     const { id } = req.params as { id: string };

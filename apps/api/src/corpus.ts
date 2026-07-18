@@ -12,8 +12,8 @@
  * exists or not, and re-running a provider produces identical rows. Deleting an image cascades its occurrences.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import type { Architecture, FirmwareClass } from '@firmlab/core';
-import { elevateFinding, getDb, listFindings } from './store.js';
+import type { Architecture, FirmwareClass, ImageIdentity } from '@firmlab/core';
+import { elevateFinding, getDb, listFindings, listImages } from './store.js';
 
 /** Content hash of a secret value — the cross-image key for credential reuse. */
 export function hashSecret(value: string): string {
@@ -177,6 +177,61 @@ export interface CorpusRefs {
   credentials: { hash: string; kind: string | null; otherImages: ImageRef[] }[];
   components: { name: string; version: string; cveCount: number; otherImages: ImageRef[] }[];
   artifacts: { sha1: string; path: string; otherImages: ImageRef[] }[];
+}
+
+// === Corpus overview (the cross-image knowledge base as a whole) ===
+
+export interface CorpusOverview {
+  imageCount: number;
+  ruleCount: number;
+  /** Credentials shared across more than one image (the reuse signal), watchlist label attached if promoted. */
+  credentialReuse: { hash: string; kind: string | null; imageCount: number; watchlistLabel: string | null }[];
+  /** Component versions ordered by how many images carry them (and their known CVE count). */
+  componentPrevalence: { name: string; version: string; cveCount: number; imageCount: number }[];
+  /** Images grouped by device family (vendor:class:arch), each list ordered oldest→newest for a version timeline. */
+  deviceFamilies: { familyKey: string; images: ImageRef[] }[];
+}
+
+export function corpusOverview(): CorpusOverview {
+  const db = getDb();
+  const watchlist = knownCredentialRules();
+
+  const credentialReuse = (
+    db
+      .prepare(
+        `SELECT hash, MAX(kind) AS kind, COUNT(*) AS imageCount FROM credential_occurrence
+         GROUP BY hash HAVING imageCount > 1 ORDER BY imageCount DESC LIMIT 200`,
+      )
+      .all() as unknown as { hash: string; kind: string | null; imageCount: number }[]
+  ).map((r) => ({ ...r, watchlistLabel: watchlist.get(r.hash) ?? null }));
+
+  const componentPrevalence = db
+    .prepare(
+      `SELECT name, version, MAX(cveCount) AS cveCount, COUNT(*) AS imageCount FROM component_occurrence
+       GROUP BY name, version ORDER BY imageCount DESC, cveCount DESC LIMIT 200`,
+    )
+    .all() as unknown as { name: string; version: string; cveCount: number; imageCount: number }[];
+
+  // Device families are computed from each image's identity (no stored family column — always fresh).
+  const families = new Map<string, ImageRef[]>();
+  for (const img of [...listImages()].reverse()) {
+    if (!img.identityJson) continue;
+    const key = deviceFamilyKey(JSON.parse(img.identityJson) as ImageIdentity);
+    const list = families.get(key) ?? [];
+    list.push({ id: img.id, filename: img.filename });
+    families.set(key, list);
+  }
+  const deviceFamilies = [...families.entries()]
+    .map(([familyKey, images]) => ({ familyKey, images }))
+    .sort((a, b) => b.images.length - a.images.length);
+
+  return {
+    imageCount: listImages().length,
+    ruleCount: listRules().length,
+    credentialReuse,
+    componentPrevalence,
+    deviceFamilies,
+  };
 }
 
 /**

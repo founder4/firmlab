@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { HashRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from './api';
 import { Capabilities } from './pages/Capabilities';
+import { Corpus } from './pages/Corpus';
 import { Dashboard } from './pages/Dashboard';
 import { ImageDetail } from './pages/ImageDetail';
 import { Toaster } from './toast';
@@ -42,6 +43,9 @@ function SidebarNav({ onNavigate }: { onNavigate: () => void }): JSX.Element {
       <div className="nav-section">Analysis</div>
       <NavLink to="/" end onClick={onNavigate} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
         <span className="nav-ico">▤</span> Dashboard
+      </NavLink>
+      <NavLink to="/corpus" onClick={onNavigate} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+        <span className="nav-ico">◈</span> Corpus
       </NavLink>
       <NavLink
         to="/capabilities"
@@ -99,6 +103,7 @@ function Shell(): JSX.Element {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/image/:id" element={<ImageDetail />} />
+            <Route path="/corpus" element={<Corpus />} />
             <Route path="/capabilities" element={<Capabilities />} />
           </Routes>
         </div>

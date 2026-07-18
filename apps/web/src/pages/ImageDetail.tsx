@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   type BinaryEntry,
+  type CorpusRefs,
   type DecompileResult,
   type Finding,
   type FirmwareDiffResult,
@@ -158,12 +159,36 @@ function CoverageItem({ label, done, detail }: { label: string; done: boolean; d
   );
 }
 
+/** One corpus cross-reference line: a recurring item + links to the other images it appears in. */
+function CorpusRefRow({
+  icon,
+  label,
+  images,
+}: {
+  icon: string;
+  label: string;
+  images: { id: string; filename: string }[];
+}): JSX.Element {
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'baseline' }}>
+      <span>{icon}</span>
+      <span>{label}</span>
+      {images.map((img) => (
+        <Link key={img.id} to={`/image/${img.id}`} className="mono" style={{ fontSize: 11.5 }}>
+          {img.filename}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
 function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
   const id = image.id;
   const [findings, setFindings] = useState<Finding[]>([]);
   const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [caps, setCaps] = useState<RuntimeCapabilities | null>(null);
+  const [refs, setRefs] = useState<CorpusRefs | null>(null);
 
   useEffect(() => {
     api
@@ -182,7 +207,13 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
       .emulation(id)
       .then((m) => setCaps(m.capabilities))
       .catch(() => setCaps(null));
+    api
+      .corpusRefs(id)
+      .then(setRefs)
+      .catch(() => setRefs(null));
   }, [id]);
+
+  const refCount = refs ? refs.credentials.length + refs.components.length + refs.artifacts.length : 0;
 
   const ranKind = (kind: string): boolean => jobs.some((j) => j.kind === kind && j.status === 'done');
   const triagedBinaries = binaries.filter((b) => b.triaged).length;
@@ -224,6 +255,36 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
           </div>
         )}
       </div>
+
+      {refCount > 0 && refs && (
+        <div className="panel">
+          <div className="panel-title">Corpus cross-references ({refCount})</div>
+          <div className="panel-sub">
+            Things in this image the corpus has seen elsewhere — priors worth checking, not conclusions.
+          </div>
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5 }}>
+            {refs.credentials.map((c) => (
+              <CorpusRefRow
+                key={`c-${c.hash}`}
+                icon="🔑"
+                label={`${c.kind ?? 'credential'} — also in`}
+                images={c.otherImages}
+              />
+            ))}
+            {refs.components.map((c) => (
+              <CorpusRefRow
+                key={`p-${c.name}-${c.version}`}
+                icon="📦"
+                label={`${c.name} ${c.version}${c.cveCount > 0 ? ` (${c.cveCount} CVE)` : ''} — also in`}
+                images={c.otherImages}
+              />
+            ))}
+            {refs.artifacts.map((a) => (
+              <CorpusRefRow key={`a-${a.sha1}`} icon="⚙" label={`${a.path} — same binary in`} images={a.otherImages} />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="panel">
         <div className="panel-title">Findings ({findings.length})</div>

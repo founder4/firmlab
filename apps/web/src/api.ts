@@ -230,6 +230,34 @@ export interface Finding {
   createdAt: number;
 }
 
+export interface ImageRef {
+  id: string;
+  filename: string;
+}
+
+export interface CorpusRefs {
+  credentials: { hash: string; kind: string | null; otherImages: ImageRef[] }[];
+  components: { name: string; version: string; cveCount: number; otherImages: ImageRef[] }[];
+  artifacts: { sha1: string; path: string; otherImages: ImageRef[] }[];
+}
+
+export interface CorpusRule {
+  id: string;
+  type: string;
+  key: string;
+  label: string;
+  note: string | null;
+  createdAt: number;
+}
+
+export interface CorpusOverview {
+  imageCount: number;
+  ruleCount: number;
+  credentialReuse: { hash: string; kind: string | null; imageCount: number; watchlistLabel: string | null }[];
+  componentPrevalence: { name: string; version: string; cveCount: number; imageCount: number }[];
+  deviceFamilies: { familyKey: string; images: ImageRef[] }[];
+}
+
 /** A binary from the extracted rootfs (0/1/null columns preserved as returned by the API). */
 export interface BinaryEntry {
   imageId: string;
@@ -295,6 +323,12 @@ export const api = {
   decompile: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/decompile`, { binary }),
   binaries: (id: string) => get<{ binaries: BinaryEntry[] }>(`/api/images/${id}/binaries`).then((r) => r.binaries),
   findings: (id: string) => get<{ findings: Finding[] }>(`/api/images/${id}/findings`).then((r) => r.findings),
+  corpusRefs: (id: string) => get<{ refs: CorpusRefs }>(`/api/images/${id}/corpus-refs`).then((r) => r.refs),
+  corpusOverview: () => get<{ overview: CorpusOverview }>('/api/corpus/overview').then((r) => r.overview),
+  corpusRules: () => get<{ rules: CorpusRule[] }>('/api/corpus/rules').then((r) => r.rules),
+  promoteRule: (type: string, key: string, label: string, note?: string) =>
+    post<{ rule: CorpusRule }>('/api/corpus/rules', { type, key, label, note }).then((r) => r.rule),
+  deleteRule: (id: string) => fetch(`/api/corpus/rules/${id}`, { method: 'DELETE' }).then(() => undefined),
   ghidraResult: (id: string) => get<{ result: GhidraResult | null }>(`/api/images/${id}/ghidra`).then((r) => r.result),
   ghidra: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/ghidra`, { binary }),
   gitleaks: (id: string) => get<{ result: GitleaksResult | null }>(`/api/images/${id}/gitleaks`).then((r) => r.result),
