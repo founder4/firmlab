@@ -187,6 +187,46 @@ export interface Job {
   error: string | null;
 }
 
+export type ProofState =
+  | 'needs_runtime_reproduction'
+  | 'static_confirmed'
+  | 'confirmed_in_emulation'
+  | 'confirmed_full_system'
+  | 'blocked_by_platform'
+  | 'blocked_by_security'
+  | 'false_positive';
+
+export interface Finding {
+  id: string;
+  imageId: string;
+  source: string;
+  kind: string;
+  title: string;
+  severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
+  proofState: ProofState;
+  evidence?: Record<string, unknown>;
+  rationale?: string;
+  createdAt: number;
+}
+
+/** A binary from the extracted rootfs (0/1/null columns preserved as returned by the API). */
+export interface BinaryEntry {
+  imageId: string;
+  path: string;
+  sha1: string | null;
+  size: number;
+  arch: string | null;
+  bits: number | null;
+  endianness: string | null;
+  nx: number | null;
+  canary: number | null;
+  pic: number | null;
+  networkFacing: number;
+  importsSummary: string | null;
+  triaged: number;
+  emulationStatus: string | null;
+}
+
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -232,6 +272,8 @@ export const api = {
   decompileResult: (id: string) =>
     get<{ result: DecompileResult | null }>(`/api/images/${id}/decompile`).then((r) => r.result),
   decompile: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/decompile`, { binary }),
+  binaries: (id: string) => get<{ binaries: BinaryEntry[] }>(`/api/images/${id}/binaries`).then((r) => r.binaries),
+  findings: (id: string) => get<{ findings: Finding[] }>(`/api/images/${id}/findings`).then((r) => r.findings),
   ghidraResult: (id: string) => get<{ result: GhidraResult | null }>(`/api/images/${id}/ghidra`).then((r) => r.result),
   ghidra: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/ghidra`, { binary }),
   gitleaks: (id: string) => get<{ result: GitleaksResult | null }>(`/api/images/${id}/gitleaks`).then((r) => r.result),

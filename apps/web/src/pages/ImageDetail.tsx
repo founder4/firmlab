@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
+  type BinaryEntry,
   type DecompileResult,
   type FirmwareDiffResult,
   type FsNode,
@@ -572,12 +573,44 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
   );
 }
 
+/** Compact NX / stack-canary / PIC indicators. 1 = present (good), 0 = missing (weak), null = unknown. */
+function HardeningBadges({
+  nx,
+  canary,
+  pic,
+}: { nx: number | null; canary: number | null; pic: number | null }): JSX.Element {
+  const chip = (label: string, v: number | null): JSX.Element => {
+    const color = v === 1 ? 'var(--ok, #4caf7d)' : v === 0 ? 'var(--sev-high, #e06c4f)' : 'var(--text-dim)';
+    return (
+      <span key={label} style={{ color, marginRight: 6 }}>
+        {v === 1 ? '✓' : v === 0 ? '✗' : '?'}
+        {label}
+      </span>
+    );
+  };
+  return (
+    <>
+      {chip('NX', nx)}
+      {chip('CAN', canary)}
+      {chip('PIC', pic)}
+    </>
+  );
+}
+
 function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
   const [result, setResult] = useState<DecompileResult | null>(null);
   const [binary, setBinary] = useState('');
   const [rootfsReady, setRootfsReady] = useState<boolean | null>(null);
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState('');
+  const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
+
+  const refreshBinaries = useCallback(() => {
+    api
+      .binaries(imageId)
+      .then(setBinaries)
+      .catch(() => setBinaries([]));
+  }, [imageId]);
 
   useEffect(() => {
     api
@@ -594,7 +627,8 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
         setBinary((b) => b || m.suggestedBinary || '');
       })
       .catch(() => setRootfsReady(false));
-  }, [imageId]);
+    refreshBinaries();
+  }, [imageId, refreshBinaries]);
 
   const run = useCallback(async () => {
     if (!binary.trim()) return;
@@ -603,18 +637,67 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
     try {
       const { jobId } = await api.decompile(imageId, binary.trim());
       const job = await pollJob(jobId, setLog);
-      if (job.status === 'done') setResult(job.result as DecompileResult);
+      if (job.status === 'done') {
+        setResult(job.result as DecompileResult);
+        refreshBinaries();
+      }
     } catch (err) {
       setLog(String(err instanceof Error ? err.message : err));
     } finally {
       setRunning(false);
     }
-  }, [imageId, binary]);
+  }, [imageId, binary, refreshBinaries]);
 
   const info = result?.info;
 
   return (
     <div>
+      {binaries.length > 0 && (
+        <div className="panel">
+          <div className="panel-title">Binaries ({binaries.length})</div>
+          <div className="panel-sub">
+            Every ELF from the extracted rootfs, with architecture from its header. Select one to triage it.
+          </div>
+          <div className="table-wrap" style={{ marginTop: 12 }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Path</th>
+                  <th>Arch</th>
+                  <th>Hardening</th>
+                  <th>Notable imports</th>
+                  <th>Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {binaries.map((b) => (
+                  <tr
+                    key={b.path}
+                    onClick={() => setBinary(b.path)}
+                    style={{ cursor: 'pointer', background: b.path === binary ? 'var(--surface-2)' : undefined }}
+                  >
+                    <td className="mono" style={{ fontSize: 11.5 }}>
+                      {b.path}
+                    </td>
+                    <td className="mono" style={{ fontSize: 11.5 }}>
+                      {b.arch ?? '—'}
+                      {b.bits ? ` ${b.bits}` : ''}
+                      {b.endianness ? ` ${b.endianness === 'big' ? 'BE' : 'LE'}` : ''}
+                    </td>
+                    <td className="mono" style={{ fontSize: 11.5 }}>
+                      {b.triaged ? <HardeningBadges nx={b.nx} canary={b.canary} pic={b.pic} /> : '—'}
+                    </td>
+                    <td className="mono" style={{ fontSize: 11, color: 'var(--sev-high, #e6a15c)' }}>
+                      {b.importsSummary ?? ''}
+                    </td>
+                    <td>{b.networkFacing ? '🌐' : ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       <div className="panel">
         <div className="panel-title">Binary triage (radare2)</div>
         <div className="panel-sub">

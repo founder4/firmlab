@@ -21,7 +21,7 @@ import {
   summarizeFs,
 } from '@firmlab/core';
 import { EXTRACT_DIR } from '../paths.js';
-import { getImage, updateImageIdentity } from '../store.js';
+import { getImage, registerBinary, updateImageIdentity } from '../store.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 
@@ -88,6 +88,9 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
     persistRefinedIdentity(imageId, detected);
   }
 
+  const registered = registerRootfsBinaries(imageId, rootfsPath, entries, suggestedBinary);
+  if (registered > 0) handle.log(`Registered ${registered} ELF binary/binaries.`);
+
   return {
     extractor: 'binwalk',
     outputDir,
@@ -123,7 +126,7 @@ function detectRootfsArch(
   let sampled = 0;
   for (const entry of candidates) {
     if (sampled >= 24) break;
-    const decoded = readElfArch(path.join(rootfsPath, entry.path));
+    const decoded = readElfIdentity(path.join(rootfsPath, entry.path));
     if (!decoded || decoded.arch === 'unknown') continue;
     sampled++;
     const key = `${decoded.arch}:${decoded.endianness}`;
@@ -134,26 +137,6 @@ function detectRootfsArch(
   let best: { arch: Architecture; endianness: Endianness; n: number } | null = null;
   for (const v of tally.values()) if (!best || v.n > best.n) best = v;
   return best ? { arch: best.arch, endianness: best.endianness } : null;
-}
-
-/** Read just the ELF identification bytes of a file and decode its architecture, or null if not an ELF. */
-function readElfArch(abs: string): { arch: Architecture; endianness: Endianness } | null {
-  let fd: number | null = null;
-  try {
-    fd = fs.openSync(abs, 'r');
-    const head = Buffer.alloc(20);
-    const read = fs.readSync(fd, head, 0, 20, 0);
-    if (read < 20) return null;
-    if (head[0] !== 0x7f || head[1] !== 0x45 || head[2] !== 0x4c || head[3] !== 0x46) return null; // \x7fELF
-    const bits = head[4] === 2 ? 64 : 32;
-    const endianBig = head[5] === 2;
-    const machine = endianBig ? head.readUInt16BE(18) : head.readUInt16LE(18);
-    return decodeElfArch(machine, endianBig, bits);
-  } catch {
-    return null;
-  } finally {
-    if (fd !== null) fs.closeSync(fd);
-  }
 }
 
 /** Merge a rootfs-probed arch into the stored identity (rootfs ELF headers are authoritative). */
@@ -248,13 +231,86 @@ function safeReadlink(abs: string): string {
   }
 }
 
+/** Well-known network-facing daemon/CGI basenames — the highest-value emulation + audit targets. */
+const NETWORK_BINARY_NAMES = [
+  'httpd',
+  'lighttpd',
+  'uhttpd',
+  'goahead',
+  'boa',
+  'mini_httpd',
+  'dropbear',
+  'telnetd',
+  'upnpd',
+];
+
+/** Heuristic: is this rootfs path a likely network-facing service (daemon or CGI)? */
+function isNetworkFacingPath(p: string): boolean {
+  const base = p.split('/').pop() ?? '';
+  return NETWORK_BINARY_NAMES.includes(base) || p.endsWith('.cgi');
+}
+
 /** Heuristic: pick a likely network-facing daemon/CGI to seed the emulation menu. */
 function pickNetworkBinary(entries: FsEntry[]): string | undefined {
-  const candidates = ['httpd', 'lighttpd', 'uhttpd', 'goahead', 'boa', 'mini_httpd', 'dropbear', 'telnetd', 'upnpd'];
-  for (const name of candidates) {
+  for (const name of NETWORK_BINARY_NAMES) {
     const hit = entries.find((e) => e.type === 'file' && e.path.split('/').pop() === name);
     if (hit) return hit.path;
   }
   const anyCgi = entries.find((e) => e.type === 'file' && e.path.endsWith('.cgi'));
   return anyCgi?.path;
+}
+
+/** Read an ELF file's identification bytes and decode arch/endianness/bit-width, or null if not an ELF. */
+function readElfIdentity(abs: string): { arch: Architecture; endianness: Endianness; bits: number } | null {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(abs, 'r');
+    const head = Buffer.alloc(20);
+    const read = fs.readSync(fd, head, 0, 20, 0);
+    if (read < 20) return null;
+    if (head[0] !== 0x7f || head[1] !== 0x45 || head[2] !== 0x4c || head[3] !== 0x46) return null; // \x7fELF
+    const bits = head[4] === 2 ? 64 : 32;
+    const endianBig = head[5] === 2;
+    const machine = endianBig ? head.readUInt16BE(18) : head.readUInt16LE(18);
+    return { ...decodeElfArch(machine, endianBig, bits), bits };
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+/** Cap on binaries persisted per image, so a pathological rootfs can't flood the table. */
+const MAX_BINARIES = 2000;
+
+/**
+ * Persist every ELF file in the rootfs as a first-class binary, decoding arch/endianness/bits from its header
+ * (free — one header read per file) and flagging network-facing services. Triage fields (nx/canary/imports)
+ * are filled later when radare2 runs. Bounded by MAX_BINARIES.
+ */
+function registerRootfsBinaries(
+  imageId: string,
+  rootfsPath: string,
+  entries: FsEntry[],
+  suggestedBinary: string | undefined,
+): number {
+  let count = 0;
+  for (const entry of entries) {
+    if (count >= MAX_BINARIES) break;
+    if (entry.type !== 'file' || entry.size <= 0) continue;
+    const id = readElfIdentity(path.join(rootfsPath, entry.path));
+    if (!id) continue;
+    registerBinary({
+      imageId,
+      path: entry.path,
+      sha1: entry.sha1 ?? null,
+      size: entry.size,
+      arch: id.arch === 'unknown' ? null : id.arch,
+      bits: id.bits,
+      endianness: id.endianness === 'unknown' ? null : id.endianness,
+      networkFacing: isNetworkFacingPath(entry.path) || entry.path === suggestedBinary,
+    });
+    count++;
+  }
+  return count;
 }

@@ -36,6 +36,30 @@ export interface JobRow {
   error: string | null;
 }
 
+/**
+ * A binary discovered in an extracted rootfs, persisted as a first-class entity. Identity fields (arch/sha1)
+ * are filled at extraction from the ELF header; triage fields (nx/canary/pic/imports) are filled when radare2
+ * runs over it. Boolean-ish columns are 0/1/null (SQLite has no bool).
+ */
+export interface BinaryRow {
+  imageId: string;
+  path: string;
+  sha1: string | null;
+  size: number;
+  arch: string | null;
+  bits: number | null;
+  endianness: string | null;
+  nx: number | null;
+  canary: number | null;
+  pic: number | null;
+  networkFacing: number;
+  importsSummary: string | null;
+  triaged: number;
+  emulationStatus: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 /** Storage shape of a normalized finding (evidence held as a JSON string). Mirrors the core `Finding` type. */
 export interface FindingRow {
   id: string;
@@ -105,6 +129,27 @@ export function getDb(): DatabaseSync {
       FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_findings_image ON findings(imageId);
+    CREATE TABLE IF NOT EXISTS binaries (
+      imageId TEXT NOT NULL,
+      path TEXT NOT NULL,
+      sha1 TEXT,
+      size INTEGER NOT NULL DEFAULT 0,
+      arch TEXT,
+      bits INTEGER,
+      endianness TEXT,
+      nx INTEGER,
+      canary INTEGER,
+      pic INTEGER,
+      networkFacing INTEGER NOT NULL DEFAULT 0,
+      importsSummary TEXT,
+      triaged INTEGER NOT NULL DEFAULT 0,
+      emulationStatus TEXT,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL,
+      PRIMARY KEY (imageId, path),
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_binaries_image ON binaries(imageId);
   `);
   // Migration: add the tags column to databases created before it existed.
   try {
@@ -216,4 +261,84 @@ export function listFindings(imageId: string): FindingRow[] {
 /** Update a finding's proof state (and optional rationale) — used when emulation confirms or downgrades it. */
 export function updateFindingProofState(id: string, proofState: string, rationale: string | null): void {
   getDb().prepare('UPDATE findings SET proofState = ?, rationale = ? WHERE id = ?').run(proofState, rationale, id);
+}
+
+// === Binaries ===
+
+/** Identity fields set at extraction time (from the ELF header). Preserves triage fields on re-extraction. */
+export interface BinaryIdentity {
+  imageId: string;
+  path: string;
+  sha1: string | null;
+  size: number;
+  arch: string | null;
+  bits: number | null;
+  endianness: string | null;
+  networkFacing: boolean;
+}
+
+export function registerBinary(b: BinaryIdentity): void {
+  const now = Date.now();
+  getDb()
+    .prepare(
+      `INSERT INTO binaries
+         (imageId, path, sha1, size, arch, bits, endianness, networkFacing, triaged, createdAt, updatedAt)
+       VALUES (@imageId, @path, @sha1, @size, @arch, @bits, @endianness, @networkFacing, 0, @now, @now)
+       ON CONFLICT(imageId, path) DO UPDATE SET
+         sha1 = excluded.sha1, size = excluded.size, arch = excluded.arch, bits = excluded.bits,
+         endianness = excluded.endianness, networkFacing = excluded.networkFacing, updatedAt = excluded.updatedAt`,
+    )
+    .run({
+      imageId: b.imageId,
+      path: b.path,
+      sha1: b.sha1,
+      size: b.size,
+      arch: b.arch,
+      bits: b.bits,
+      endianness: b.endianness,
+      networkFacing: b.networkFacing ? 1 : 0,
+      now,
+    });
+}
+
+/** Triage fields set when radare2 runs over a binary. Upserts so a manually-triaged path still lands a row. */
+export interface BinaryTriage {
+  imageId: string;
+  path: string;
+  arch: string | null;
+  bits: number | null;
+  endianness: string | null;
+  nx: number | null;
+  canary: number | null;
+  pic: number | null;
+  importsSummary: string | null;
+}
+
+export function upsertBinaryTriage(t: BinaryTriage): void {
+  const now = Date.now();
+  getDb()
+    .prepare(
+      `INSERT INTO binaries
+         (imageId, path, size, arch, bits, endianness, nx, canary, pic, importsSummary, triaged, createdAt, updatedAt)
+       VALUES (@imageId, @path, 0, @arch, @bits, @endianness, @nx, @canary, @pic, @importsSummary, 1, @now, @now)
+       ON CONFLICT(imageId, path) DO UPDATE SET
+         arch = COALESCE(binaries.arch, excluded.arch), bits = COALESCE(binaries.bits, excluded.bits),
+         endianness = COALESCE(binaries.endianness, excluded.endianness),
+         nx = excluded.nx, canary = excluded.canary, pic = excluded.pic,
+         importsSummary = excluded.importsSummary, triaged = 1, updatedAt = excluded.updatedAt`,
+    )
+    .run({ ...t, now });
+}
+
+/** Record the outcome of an emulation attempt against a binary (Phase-0 tasks 5/6 write this). */
+export function updateBinaryEmulationStatus(imageId: string, path: string, status: string): void {
+  getDb()
+    .prepare('UPDATE binaries SET emulationStatus = ?, updatedAt = ? WHERE imageId = ? AND path = ?')
+    .run(status, Date.now(), imageId, path);
+}
+
+export function listBinaries(imageId: string): BinaryRow[] {
+  return getDb()
+    .prepare('SELECT * FROM binaries WHERE imageId = ? ORDER BY networkFacing DESC, path ASC')
+    .all(imageId) as unknown as BinaryRow[];
 }
