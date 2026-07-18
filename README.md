@@ -78,8 +78,10 @@ apps/web        @firmlab/web  — Vite + React; the visual workbench
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the deeper design, and
-[`docs/AGENT-DESIGN.md`](docs/AGENT-DESIGN.md) for the planned autonomous-orchestration layer (an optional,
-flag-gated agent that drives the providers as tools while the deterministic core stays the source of truth).
+[`docs/AGENT-DESIGN.md`](docs/AGENT-DESIGN.md) for the full plan to grow FirmLab into a specialized firmware
+engine with *conscious autonomy* — a deterministic skeleton the agent reasons within (never a blank agent
+loop), a persistent cross-image corpus, and a hardened emulation ladder, all flag-gated so the deterministic
+core stays the source of truth.
 
 ## Safety
 

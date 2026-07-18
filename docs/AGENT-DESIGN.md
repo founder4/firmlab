@@ -1,205 +1,263 @@
-# FirmLab — orquestación autónoma (diseño)
+# FirmLab — plan de trabajo: motor de firmware con autonomía consciente
 
-Plan para llevar FirmLab de un banco de herramientas operado por clics a un sistema que ejecute sesiones de
-pentest de firmware con criterio autónomo: reporta lo que encuentra estáticamente, pero además reconduce,
-reconfigura y ejecuta en función de las conclusiones que va sacando.
+Plan completo para llevar FirmLab de un banco de análisis operado por clics a un **motor de firmware
+especializado**: aísla un solo dominio y lo perfecciona al máximo — más datos, más control, más profundidad, y
+autonomía igual o mayor que un generalista pero **con consciencia** (razonamiento acotado, auditable y
+determinista por debajo).
 
-Este documento fija la arquitectura, el principio rector y las fases. Es un plan, no código; cada fase se
-envía por separado.
-
----
-
-## Principio rector: el agente orquesta, nunca es la fuente de un hallazgo
-
-La identidad actual de FirmLab —local-only, sin red, determinista, reproducible (ver `ARCHITECTURE.md`,
-"Deterministic core, optional tools")— **no se sacrifica**. La capa autónoma se añade *encima* y va detrás de
-un flag; con el flag apagado, FirmLab sigue siendo exactamente lo que es hoy.
-
-La regla que hace esto viable:
-
-> El núcleo determinista (`@firmlab/core`) y los providers son la **verdad de base**. El agente lee sus
-> resultados, razona sobre ellos, decide la siguiente acción y redacta la narrativa — pero **todo hallazgo
-> tiene su evidencia en la salida de una herramienta**. El agente no emite un CVE, un secreto o una
-> arquitectura por su cuenta: los cita.
-
-Consecuencia directa: **no hay hallazgos alucinados**. Un informe siempre contiene los hechos deterministas y
-reproducibles, más una capa de análisis y priorización escrita por el agente sobre esos hechos. Si el agente
-se equivoca, se equivoca *interpretando datos reales que quedan a la vista*, no inventándolos.
-
-Esto también resuelve la tensión de la no-determinismo: los datos son reproducibles; lo que varía entre
-ejecuciones es el camino que el agente eligió recorrerlos, y ese camino queda registrado en el transcript de
-la sesión.
+Este documento reemplaza el borrador anterior, cuya premisa —un agente LLM que decide libremente el siguiente
+paso— quedó desmentida por la evidencia: la plataforma madre (Galert, ver §1) eligió lo contrario, y por buenas
+razones. Es un plan; cada fase se envía por separado.
 
 ---
 
-## Por qué el código ya está a un 80%
+## 1. Encuadre: por qué firmware-only, y qué aprendemos de Galert
 
-`apps/api/src/providers/` **ya es un registro de herramientas**. Cada provider es lo que un modelo llama
-"tool": una función con parámetros claros y salida estructurada tipada.
+FirmLab se talló del dominio firmware de **Galert**, una plataforma de pentest autónomo de siete dominios
+(Claude Agent SDK + Temporal). Compartir capacidades con Galert de entrada no es duplicar por error: es el punto
+de partida para **superarlo en firmware**, algo que un generalista no puede permitirse. El dominio firmware de
+Galert es un v1 naciente (8 agentes que comparten maquinaria genérica, emulación frágil, sin memoria entre
+scans). Un dominio aislado y perfeccionado gana en profundidad, robustez y datos.
 
-| Provider | Herramienta | Salida (en `resultJson`) |
+Lecciones de Galert, incorporadas a este plan:
+
+- **Su orquestador no es un LLM autónomo, es código determinista** (un DAG de Temporal). La IA solo razona
+  *dentro* de cada nodo. Es la decisión correcta: la autonomía ciega es frágil e inauditable.
+- **Su emulación la conduce el LLM a mano → es su mayor fragilidad** (los shims de NVRAM son "el bloqueador
+  #1"; un qemu colgado "ha parado un scan entero"). La convertimos en providers deterministas.
+- **Su disciplina de prueba es excelente**: `audita → preflight → reproduce → prueba o degrada honestamente`,
+  con una máquina de proof-states que se niega a llamar "RCE en el dispositivo" a una shell de qemu-user. La
+  adoptamos como ciudadano de primera clase.
+- **Es stateless**: cada scan empieza de cero. Nuestro diferenciador estructural es lo contrario — un **corpus
+  persistente** que aprende del dominio.
+
+Diferenciadores de FirmLab que se preservan y amplían: determinista, local, sin coste y sin red en su base;
+**visual e interactivo** (Galert produce markdown); entropía y firmas como primitivas de primera clase.
+
+---
+
+## 2. Principio rector: autonomía con consciencia
+
+> **El agente razona sobre un esqueleto determinista, no sobre un lienzo en blanco.** Su libertad está en la
+> interpretación, la priorización y la elección de rama — nunca en la mecánica. Extracción, bring-up de
+> emulación y captura de prueba son *providers deterministas*. El agente decide **qué** hacer y **qué
+> significa** el resultado; no teclea el `mknod` ni el `LD_PRELOAD`.
+
+Dos corolarios que no se violan:
+
+- **La verdad de base es determinista.** `@firmlab/core` y los providers producen los hechos; el agente los
+  cita, no los inventa. Cada hallazgo se sostiene en su propia evidencia per-imagen.
+- **El corpus da priors y referencias cruzadas, nunca conclusiones.** Una clave vista antes *levanta una
+  bandera para comprobar*, no afirma el hallazgo. Si el corpus concluyera, reintroduciríamos la alucinación a
+  nivel de base de datos y mataríamos la reproducibilidad.
+
+Todo lo que sea LLM va detrás de `FIRMLAB_AGENT`. Con el flag apagado: sin red, sin coste, comportamiento
+determinista idéntico al actual. La "consciencia" es que cada decisión de agente tiene entradas estructuradas,
+salida registrada y justificación auditable — y la máquina de proof-states como conciencia moral.
+
+---
+
+## 3. Arquitectura: el esqueleto y los nodos de agente
+
+Todo el flujo mecánico es determinista. El agente vive en cinco puntos de juicio.
+
+```
+DETERMINISTA (código)              NODO DE AGENTE (juicio, registrado)
+─────────────────────              ──────────────────────────────────
+intake + análisis estático
+  (entropía/firmas/estructura/id)
+        │
+        ▼
+                              ①  Triaje: clase ambigua, ¿merece extracción?,
+                                 qué cascada, prioriza superficie de ataque
+        │
+        ▼
+extracción + walk + arch modal
+        │
+        ▼
+preflight de capacidades
+  (qué es emulable — determinista)
+        │
+        ▼
+SBOM · secrets · triaje binario
+        │
+        ▼
+                              ②  Selección de objetivo: qué binarios/servicios
+                                 valen profundidad; qué rung de emulación
+                                 (acotado por el preflight)
+        │
+        ▼
+escalera de emulación
+  (providers robustos, scriptados)
+        │
+        ▼
+                              ③  Interpretación + proof-state: ¿prueba o
+                                 downgrade? — la conciencia
+        │
+        ▼
+                              ④  Zero-day: sink decompilado + source
+                                 alcanzable → ¿vuln?, construye el trigger
+        │
+        ▼
+captura de prueba (determinista)
+        │
+        ▼
+                              ⑤  Síntesis: narrativa sobre hallazgos citados
+```
+
+Cada nodo consume datos estructurados de las etapas deterministas y emite una decisión + rationale a la tabla
+de sesión. Entre nodos, todo es código que no falla de formas creativas.
+
+---
+
+## 4. La escalera de emulación como providers deterministas
+
+El punto donde más superamos a Galert. Su escalera la conduce el LLM a mano; aquí es código robusto con panel
+de control. El agente elige el peldaño (nodo ②) e interpreta el resultado (nodo ③); la mecánica es determinista.
+
+| Rung | Provider determinista | El agente decide |
 |---|---|---|
-| `extract` | binwalk `-Me` | rootfs, árbol, arch modal, binario de red sugerido |
-| `sbom` | syft + grype | paquetes + CVEs |
-| `gitleaks` | gitleaks | secretos (redactados) |
-| `decompile` | radare2 | triaje: hardening, imports, símbolos, strings |
-| `ghidra` | analyzeHeadless | pseudocódigo C |
-| `emulate` | qemu-*-static | stdout/stderr/exitCode de la ejecución user-mode |
-| `diff` | (puro, sin red) | deltas de identidad / paquetes / ficheros |
+| 1 · qemu-user binario | `qemu-<arch>-static -L rootfs`, env CGI, captura canary/SIGSEGV | qué binario, qué input |
+| 2 · servicio en chroot | qemu-static copiado al rootfs, `mknod /dev/{nvram,mtd,watchdog}`, `LD_PRELOAD=libnvram-<arch>.so`, arranque como el init | qué servicio, cuándo escalar |
+| 3 · full-system | `qemu-system-<arch>` + kernels firmadyne, rootfs→ext2, `hostfwd` | cuándo el rung-2 no basta |
+| fuzz · AFL++ | `afl-qemu-trace-<arch>`, dict de `rabin2 -z`, desock | qué target, cuándo vale la pena |
+| RTOS · Renode | boot Cortex-M en la plataforma MCU | clase rtos/baremetal |
 
-Hoy quien encadena esto es el usuario haciendo clic: extraer → ver un `dropbear` + un `.cgi` → decompilar el
-CGI → buscar inyección → emular. **Un agente ejecuta ese mismo bucle decidiendo él según lo que encuentra.**
-El salto no es construir capacidad nueva — está construida y probada— sino añadir la capa que decide.
-
-Lo que hay que añadir:
-
-1. **Esquemas de herramienta** — cada provider expuesto como definición JSON-schema (nombre, descripción,
-   params, forma del retorno). Los tipos en `packages/core/src/types.ts` y los `*Result` de cada provider ya
-   son casi eso.
-2. **Runner del agente** — el bucle que llama al modelo con el set de tools, ejecuta la elegida a través del
-   sistema de jobs actual (`startJob`), y le devuelve el resultado estructurado. El **Claude Agent SDK** está
-   hecho para exactamente este bucle sobre tools propias; la alternativa es un bucle manual de tool-use sobre
-   la Messages API.
-3. **Tabla de sesiones** — como `jobs` pero un nivel arriba: objetivo, plan, transcript, hallazgos acumulados,
-   presupuesto gastado, estado (`planning` → `running` → `done`/`error`/`stopped`).
-4. **Gobernador de límites** — tope de pasos, de tokens, de dinero y de tiempo por sesión; política de qué
-   tools se auto-aprueban y cuáles exigen confirmación humana.
+El bloqueador NVRAM de Galert se resuelve **una vez, en código**, y no vuelve. El teardown (que a ellos les
+rompe scans) es determinista y garantizado. La captura de prueba es un provider, no un prompt.
 
 ---
 
-## Arquitectura objetivo
+## 5. La máquina de proof-states (la conciencia)
+
+Cada hallazgo lleva un estado de prueba explícito, calculado con disciplina, no asumido:
+
+- `needs_runtime_reproduction` — plausible, sin reproducir. El default de todo lo estático.
+- `static_confirmed` — reproducible desde los bytes del firmware (p.ej. taint sink→source decompilado).
+- `confirmed_in_emulation` — probado bajo qemu-user/chroot. **Prueba el sandbox, no el dispositivo.**
+- `confirmed_full_system` — probado en boot completo.
+- `blocked_by_platform` — la arch/blob no es emulable aquí; necesita hardware.
+- `blocked_by_security` — un control válido lo detiene.
+- `false_positive` — la evidencia lo contradice, o pura especulación por clase de dispositivo.
+
+El **preflight determinista** (§3) pone un suelo honesto: si la arch no es emulable en contenedor, el nodo ③ no
+puede fabricar una ejecución — se le fuerza a `static_confirmed`/`blocked_by_platform`. Nunca se sube qemu-user
+a "RCE en el dispositivo". Todo downgrade queda registrado con su rationale.
+
+---
+
+## 6. El corpus persistente: el diferenciador estructural
+
+Galert es stateless. FirmLab acumula conocimiento del dominio. El modelo pasa de por-imagen a un grafo
+cross-imagen que **referencia**, nunca concluye.
 
 ```
-┌─ apps/web ─────────────────────────────────────────────────────────┐
-│  + vista de Sesión: plan en vivo, transcript, hallazgos, presupuesto │
-└───────────────▲────────────────────────────────────────────────────┘
-                │ /api  (polling de sesión, como jobs hoy)
-┌─ apps/api ─────┴───────────────────────────────────────────────────┐
-│  NUEVO  capa de orquestación (detrás de FIRMLAB_AGENT=1)            │
-│    session store      objetivo · plan · transcript · hallazgos      │
-│    agent runner       bucle LLM ↔ tools ↔ resultados                │
-│    governor           presupuesto · política de aprobación          │
-│    tool registry      providers expuestos como JSON-schema          │
-│         │ startJob(...)  ← reutiliza el runner y el cap actual       │
-│  providers  extract · sbom · gitleaks · decompile · ghidra · emulate │
-│  store      images · analysis · jobs · (NUEVO) sessions              │
-└───────────────▲────────────────────────────────────────────────────┘
-                │ funciones puras (bytes → datos estructurados)
-┌─ packages/core┴────────────────────────────────────────────────────┐
-│  entropy · signatures · structure · strings · filesystem            │
-│  VERDAD DE BASE — el agente cita esto, no lo sustituye              │
-└────────────────────────────────────────────────────────────────────┘
+POR-IMAGEN (existe)          CROSS-IMAGEN (nuevo — índices consultables)
+images ──────────────────►   device_family    agrupa imágenes por identidad
+binaries ────────────────►   artifact          hash → en qué imágenes aparece
+secrets ─────────────────►   credential        hash → seen-in set
+sbom components ─────────►   component_obs      versión → imágenes + CVEs alcanzables
+findings ────────────────►   reachability_prior componente+sink+familia → confirmado antes
 ```
 
-El agente no reemplaza nada por debajo de `providers`. Se inserta como un cliente más de `startJob`.
+Son unas tablas más en el SQLite actual, con índices — no infraestructura nueva. Ninguna decide nada; el
+finding vive en la imagen.
+
+Tres niveles de "aprendizaje", de menor a mayor riesgo:
+
+- **Nivel 0 — Acumulación determinista (el 80% del valor).** Sin ML. Matching por hash: mismo BusyBox entre
+  imágenes, misma clave, memoria de alcanzabilidad de CVEs, diff cross-versión (regresiones). Puro y
+  reproducible.
+- **Nivel 1 — Promoción de reglas (curada por humano).** Un patrón recurrente (layout de vendor, credencial
+  por defecto) se promueve a firma de primera clase tras N observaciones o confirmación humana. Aprendizaje
+  como curación auditable. Ej.: el SquashFS Broadcom que a Galert le tocó parchear a mano → aquí se aprende y
+  se promueve a receta try-first.
+- **Nivel 2 — Priors asistidos por el agente (después, acotado).** El nodo LLM usa estadísticas del corpus para
+  priorizar e hipotetizar, pero sigue obligado a producir evidencia per-imagen.
+
+**Advertencia de diseño**: entrenar un modelo sobre el corpus (aprendizaje continuo en sentido ML) es lo que NO
+queremos de entrada — pelea contra la identidad determinista y los corpus de firmware son pequeños y
+heterogéneos. El win es una base de conocimiento disciplinada con matching determinista + reglas curadas.
 
 ---
 
-## Los cuatro problemas reales (dónde está el trabajo)
+## 7. Superficies nuevas: el dossier y los paneles
 
-No están donde la intuición dice. Enchufar un LLM es lo fácil; esto es lo difícil.
+El dossier por-imagen y las vistas de corpus son el mismo dato a dos zooms.
 
-### 1. Radio de daño — el crítico
+**Panel-dossier** — vista única que se rellena en vivo conforme completan los jobs (aprovecha el polling
+actual). Secciones que se encienden por etapa: identidad · entropía · estructura · árbol de extracción · **tabla
+de binarios** (ruta, arch, hardening NX/canary/PIC, imports, network-facing, estado de emulación, hallazgos) ·
+componentes/SBOM · secretos · runs de emulación · hallazgos. Dos reglas de honestidad:
 
-Un agente autónomo que decide "voy a emular todos los binarios" está ejecutando código de firmware
-potencialmente malicioso, elegido por un controlador no determinista. Hoy `runUserModeEmulation`
-(`providers/emulate.ts`) tiene SIGKILL a 20 s y confinamiento al rootfs (`resolveInsideRootfs`) — suficiente
-para un humano que pulsa *un* binario, insuficiente para un bucle que itera "prueba a ejecutar esto otro".
+1. **Indicador de cobertura**: dice qué se corrió y qué falta; nunca aparenta completitud.
+2. **Cada dato lleva su proof-state**: no es "lo encontrado" sino "lo encontrado y cuánto lo creemos".
 
-Pasamos de una app que **analiza** a una que **actúa**. Las acciones necesitan una frontera de contención dura:
+Los badges de corpus aparecen inline ("esta clave vista en 3 imágenes", "este BusyBox tiene CVE alcanzable en
+esta familia") y enlazan a las vistas de corpus.
 
-- Contenedor **aislado por sesión**, efímero, sin montajes del host más allá del rootfs de esa imagen.
-- **Sin red de salida** desde el sandbox de ejecución (nota: hoy `grype` sí descarga su BD de CVEs al correr —
-  esa descarga se hace en una fase de *análisis* controlada, separada de la fase de *ejecución* del agente).
-- seccomp / caps mínimas; la emulación nunca comparte kernel-surface con el orquestador.
-- La emulación es la única tool que *ejecuta código del target*; se mantiene en la lista de **aprobación
-  humana** hasta que el sandbox de la Fase C esté cerrado.
-
-### 2. La ruptura de las tres promesas, contenida por diseño
-
-Un controlador LLM es nube, no determinista y cuesta dinero por ejecución — lo contrario de local/determinista/
-gratis. El principio rector (§1) lo contiene: el agente va detrás de `FIRMLAB_AGENT=1`; apagado, cero red y
-cero coste; encendido, los *datos* siguen siendo reproducibles y solo el *recorrido* varía. La postura de red
-elegida es **núcleo determinista intacto + agente opcional encima** (no cloud-first, no modelo autoalojado como
-default).
-
-### 3. Coste y fuga
-
-Una sesión autónoma puede iterar sin fin y quemar tokens. Presupuesto **duro** por sesión, no consejo:
-máximo de pasos, de tokens, de dinero y de tiempo de pared; y condición de parada por rendimientos
-decrecientes (K acciones seguidas sin hallazgo nuevo → cerrar). El governor corta la sesión al alcanzar
-cualquier límite y deja el estado en `stopped` con lo acumulado hasta ese punto.
-
-### 4. Workers y aislamiento — sin sobre-ingeniería
-
-El runner in-process con cap 2 (`providers/jobs.ts`) no aguanta N sesiones autónomas concurrentes, cada una
-abriendo tool-calls en abanico. Pero **no se salta a Kubernetes**. Progresión:
-
-- **Corto plazo:** una sesión *es* un job largo; las herramientas pesadas siguen como sub-jobs del runner
-  actual, respetando el cap. Una sola imagen de contenedor.
-- **Largo plazo (Fase C):** cada sesión recibe su propio contenedor efímero, orquestado por un dispatcher;
-  varias sesiones en paralelo, cada una aislada. Ese es el "desplegar workers" del objetivo — el destino, no
-  el paso 1.
+**Otros paneles**: control de emulación (rungs como controles, harness visible, traza en vivo) · tablero de
+proof-states · vistas de corpus (timeline por device-family, grafo de reutilización de credenciales, diff
+cross-firmware) · vista de sesión del agente (qué eligió en cada nodo y por qué — la auditabilidad en pantalla).
 
 ---
 
-## Camino incremental: gatear → andar → correr
+## 8. Roadmap por fases
 
-Cada fase se envía sola, es útil por sí misma y desriesga la siguiente. Empezar por la C es cómo no se termina
-ninguna.
+Las Fases 0–1 entregan valor **sin ningún LLM** — respetan la identidad determinista y baten a Galert antes de
+introducir riesgo de agente. Las Fases 2–4 añaden la autonomía consciente sobre esa base sólida.
 
-### Fase A — Copiloto / analista (riesgo nuevo: cero)
+### Fase 0 — Fundaciones deterministas (sin agente)
+- **Tabla de binarios de primera clase**: persistir el triaje r2/ghidra (hoy en jobs sueltos) como entidad.
+- **Panel-dossier**: la vista única compuesta, con indicador de cobertura y proof-state por dato.
+- **Escalera de emulación endurecida**: rung-2 (chroot + libnvram + `/dev`) y rung-3 (qemu-system+firmadyne)
+  como providers robustos; teardown garantizado. Arregla el bloqueador NVRAM de Galert de una vez.
+- **Preflight de capacidades** determinista (`runtime_capabilities`).
+- **Esquema de proof-states** como ciudadano de primera clase en el modelo de datos.
 
-El agente lee resultados **ya calculados** (estático + extracción + los jobs que existan) y escribe: análisis,
-priorización de hallazgos por severidad/explotabilidad, y recomendaciones de siguientes pasos. **Solo lectura**
-sobre datos existentes — no ejecuta ninguna tool.
+### Fase 1 — Corpus persistente (sin agente)
+- Las 5 tablas cross-imagen + índices.
+- **Nivel 0** de aprendizaje: matching determinista (huellas, credenciales seen-in, component_obs, diff
+  cross-versión).
+- Badges de corpus en el dossier + vistas de corpus.
+- **Nivel 1**: promoción de reglas curada por humano.
 
-- Es esencialmente `providers/report.ts` con cabeza: hoy el informe agrega secciones; aquí el agente las
-  interpreta y las ordena por lo que importa.
-- Cumple ya "reporta lo que encuentra con inteligencia".
-- Barato, seguro, entregable desde el primer día. Endpoint nuevo + una llamada al modelo con los datos ya en
-  SQLite. Sin sandbox, sin sesiones, sin governor todavía.
+### Fase 2 — Copiloto (primer LLM, solo lectura)
+- Nodos **③** (interpretación/proof-state) y **⑤** (síntesis) — los de menor riesgo.
+- Lee dossier + corpus, produce análisis, priorización y siguientes pasos con la disciplina de proof-states.
+- Detrás de `FIRMLAB_AGENT`; Claude Agent SDK; tiers de modelo (small/medium/large).
 
-### Fase B — Orquestación supervisada (riesgo: acotado)
+### Fase 3 — Nodos de decisión (agente en el esqueleto)
+- Nodos **①** (triaje) y **②** (selección de objetivo): el agente elige rama e interpreta; la mecánica sigue
+  determinista.
+- Governor (presupuesto de pasos/tokens/dinero/tiempo), tabla de sesiones, transcript auditable.
+- Emulación con aprobación humana (aún sin aislamiento de Fase 4).
 
-El agente ya *llama* a los providers como tools, dentro de una **sesión**, con presupuesto y política de
-aprobación. Aquí aparece el "reconduce y reconfigura": el agente extrae, ve el rootfs, decide qué escanear y
-qué decompilar según lo que hay, y encadena.
-
-- Introduce: session store, agent runner, governor, tool registry.
-- Emulación **con aprobación humana** (aún no hay sandbox de la Fase C).
-- Un solo contenedor; concurrencia limitada por el cap actual.
-- Entregable: "lanza una sesión sobre esta imagen" → el agente conduce extract → sbom/gitleaks/decompile según
-  criterio → informe redactado por él con hallazgos citados.
-
-### Fase C — Workers autónomos (riesgo: el grande, ya con red de seguridad)
-
-Contenedor aislado por sesión, sesiones en paralelo, sandbox de ejecución cerrado, control de egress. Aquí sí
-es "desplegar workers ejecutando sesiones autónomas completas", incluida emulación sin aprobación manual
-porque el radio de daño ya está contenido.
-
-- Introduce: dispatcher de workers, contenedores efímeros, sandbox seccomp/no-egress, límites de recursos por
-  worker.
-- Es un proyecto en sí mismo; depende de que A y B hayan estabilizado el contrato de tools y el governor.
-
----
-
-## Decisiones abiertas (para resolver antes de construir cada fase)
-
-- **Modelo y SDK.** Claude vía Agent SDK (bucle gestionado) vs bucle manual sobre la Messages API. Requiere
-  fijar IDs de modelo y coste — pendiente de consultar la referencia de la API cuando se aborde la Fase A.
-- **Frontera de aprobación exacta.** Qué tools son auto-aprobables en Fase B. Propuesta inicial: extract /
-  sbom / gitleaks / decompile / ghidra / diff auto; **emulate** con confirmación hasta Fase C.
-- **Formato del transcript de sesión.** Qué se persiste para que una sesión sea auditable y reanudable.
-- **Coordinación retención ↔ sesiones.** `retention.ts` hoy puede borrar una imagen y su rootfs por debajo de
-  un job en curso (ver ROADMAP / providers) — con sesiones largas esto se agrava. Una sesión activa debe
-  marcar su imagen como no-desalojable.
+### Fase 4 — Zero-day + profundidad + aislamiento
+- Nodo **④**: razonamiento sink→source, construcción de trigger.
+- Fuzzing AFL++ como provider; RTOS/Renode; UEFI/chipsec — cobertura de clases que Galert tiene nacientes.
+- **Aislamiento por sesión**: contenedor efímero (como Galert, pero firmware-only y con límites de CPU/RAM que
+  a ellos les faltan). Emulación sin aprobación manual porque el radio de daño ya está contenido.
+- **Nivel 2** de aprendizaje (priors asistidos).
 
 ---
 
-## Qué NO cambia
+## 9. Qué no cambia · riesgos · decisiones abiertas
 
-- `@firmlab/core` permanece con `dependencies: {}`, puro y determinista.
-- Con `FIRMLAB_AGENT` sin activar: sin red, sin coste, comportamiento idéntico al actual.
-- Los providers no se reescriben; se envuelven como tools.
-- El binding loopback y el modo local-only siguen siendo el default.
+**No cambia**: `@firmlab/core` permanece puro y determinista; con `FIRMLAB_AGENT` apagado, sin red y sin coste;
+los providers no se reescriben, se envuelven; binding loopback por defecto.
+
+**Riesgos reconocidos**:
+- La emulación es intrínsecamente frágil (Galert lo demuestra). Mitigación: providers deterministas +
+  preflight honesto + degradar a `static_confirmed` sin vergüenza. No prometemos que todo firmware arranque.
+- El corpus podría tentar a "concluir". Mitigación: el principio priors-no-conclusiones, aplicado en revisión.
+- Coste de agente. Mitigación: governor con topes duros; Fases 0–1 no cuestan nada.
+- Aislamiento (Fase 4) es el trabajo grande y donde Galert tiene grietas (socket Docker, `seccomp=unconfined`,
+  sin límites de recursos). Lo abordamos con esas grietas ya identificadas.
+
+**Decisiones abiertas** (a cerrar al empezar cada fase):
+- Modelo/SDK exactos y coste — consultar la referencia de la API al abordar la Fase 2.
+- Modelo de datos exacto de las 5 tablas cross-imagen (claves, qué indexa, qué dispara un badge).
+- Contrato preciso de entrada/salida de cada nodo de agente.
+- Formato del transcript de sesión (auditable y reanudable).
+- Coordinación retención↔sesiones: una imagen con sesión activa no debe ser desalojable (bug latente actual).

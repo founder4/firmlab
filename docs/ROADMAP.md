@@ -98,16 +98,17 @@ the planner deliberately ships guided per-arch recipes instead of one-click boot
 
 ---
 
-## Phase 6 — Autonomous orchestration (next direction)
+## Phase 6+ — Firmware engine with conscious autonomy (next direction)
 
-Evolve the click-driven workbench into a system that runs autonomous firmware-pentest sessions: an agent layer
-that reads the deterministic findings, reasons, and drives the existing providers as tools — redirecting and
-reconfiguring based on what it finds, never inventing findings. Gated behind `FIRMLAB_AGENT`; with it off,
-FirmLab stays local-only, no-network, deterministic.
+Perfect a single domain: turn the click-driven workbench into a specialized firmware engine — more data, more
+control, more depth, and autonomy *with consciousness* (a deterministic skeleton the agent reasons within, not
+a blank agent loop). Carved from the parent platform (Galert), FirmLab's edge is being deterministic, local,
+visual, and — uniquely — stateful: a persistent corpus that learns the domain across images. Gated behind
+`FIRMLAB_AGENT`; with it off, FirmLab stays local-only, no-network, deterministic.
 
-The `providers/` directory is already a tool registry, so the capability exists — what's added is the layer
-that decides. Phased crawl → walk → run: **A** read-only copilot (interprets existing results), **B**
-supervised orchestration (agent calls providers within a budgeted session), **C** isolated per-session workers.
+Phased so Phases 0–1 ship value with **no LLM at all** (first-class binaries table, live-building dossier
+panel, hardened emulation ladder as deterministic providers, the persistent corpus), then Phases 2–4 layer the
+agent onto that base: copilot → decision nodes → zero-day + per-session isolation.
 
-Full design, the four hard problems (blast radius, the network/determinism break, cost control, worker
-isolation), and the phase plan: [`docs/AGENT-DESIGN.md`](AGENT-DESIGN.md).
+Full plan — the deterministic-skeleton architecture, the five agent nodes, the emulation ladder, the
+proof-state machine, the persistent corpus, and the phase roadmap: [`docs/AGENT-DESIGN.md`](AGENT-DESIGN.md).
