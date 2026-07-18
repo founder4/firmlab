@@ -256,8 +256,55 @@ los providers no se reescriben, se envuelven; binding loopback por defecto.
   sin límites de recursos). Lo abordamos con esas grietas ya identificadas.
 
 **Decisiones abiertas** (a cerrar al empezar cada fase):
-- Modelo/SDK exactos y coste — consultar la referencia de la API al abordar la Fase 2.
-- Modelo de datos exacto de las 5 tablas cross-imagen (claves, qué indexa, qué dispara un badge).
+- Modelo de datos exacto de las 5 tablas cross-imagen (claves, qué indexa, qué dispara un badge). *(Cerrado en
+  Fase 1.)*
 - Contrato preciso de entrada/salida de cada nodo de agente.
 - Formato del transcript de sesión (auditable y reanudable).
 - Coordinación retención↔sesiones: una imagen con sesión activa no debe ser desalojable (bug latente actual).
+
+---
+
+## 10. Fase 2 — El copiloto (implementado): configuración de proveedores
+
+La Fase 2 (nodos ③ interpretación y ⑤ síntesis, solo lectura) está construida: el **copiloto** lee los
+resultados deterministas ya calculados de una imagen y devuelve un análisis priorizado y citado, con la
+disciplina de proof-states codificada en el system prompt. No ejecuta nada y no inventa nada.
+
+**Orientación DeepSeek-first, multi-proveedor.** La capa LLM (`apps/api/src/llm.ts`) usa `fetch` crudo (sin
+SDK, coherente con el zero-dep del core). Toda ella va detrás de `FIRMLAB_AGENT`: con el flag apagado,
+`loadLlmConfig()` devuelve `null` y **nada toca la red** — el workbench sigue local-only, sin coste.
+
+Variables de entorno:
+
+| Variable | Default | Qué hace |
+|---|---|---|
+| `FIRMLAB_AGENT` | (sin poner) | Gate maestro. `=1` habilita el copiloto; ausente = sin red, sin coste. |
+| `FIRMLAB_LLM_PROVIDER` | `deepseek` | `deepseek` \| `openai` \| `anthropic`. |
+| `FIRMLAB_LLM_API_KEY` | — | Clave genérica. Fallbacks: `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`. |
+| `FIRMLAB_LLM_MODEL` | según proveedor | deepseek→`deepseek-v4-flash`; anthropic→`claude-opus-4-8`; openai→**obligatorio**. |
+| `FIRMLAB_LLM_BASE_URL` | según proveedor | Override. Apunta aquí un servidor OpenAI-compatible local (Ollama/vLLM). |
+| `FIRMLAB_LLM_MAX_TOKENS` | `4096` | Tope de salida. |
+
+Ejemplos:
+
+```bash
+# DeepSeek (por defecto)
+FIRMLAB_AGENT=1 DEEPSEEK_API_KEY=sk-...              node apps/api/dist/index.js
+
+# Anthropic (Claude)
+FIRMLAB_AGENT=1 FIRMLAB_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... node apps/api/dist/index.js
+
+# Servidor local OpenAI-compatible (Ollama), sin salir a internet
+FIRMLAB_AGENT=1 FIRMLAB_LLM_PROVIDER=openai FIRMLAB_LLM_BASE_URL=http://127.0.0.1:11434/v1 \
+  FIRMLAB_LLM_MODEL=llama3 OPENAI_API_KEY=ollama                      node apps/api/dist/index.js
+```
+
+Notas de implementación: DeepSeek/OpenAI comparten el adaptador `/chat/completions` (Bearer, `temperature`
+0.2); Anthropic usa `/v1/messages` (`x-api-key` + `anthropic-version`, **sin** `temperature` — los modelos 4.x
+lo rechazan con 400). El `reasoning_content` de los modelos thinking de DeepSeek se descarta: solo se toma la
+respuesta final, nunca la cadena de pensamiento. El copiloto corre como job (las llamadas LLM son lentas); la
+web muestra el panel solo si `/api/agent/status` reporta `enabled`.
+
+**Principio, reafirmado**: el copiloto es la capa que *interpreta*, nunca la fuente de un hallazgo. Cada
+afirmación se cita de un finding con su proof-state; los cross-refs de corpus son priors, no conclusiones. Es
+el nodo ③/⑤ del esqueleto, no un agente que conduce el pipeline (eso es Fase 3).

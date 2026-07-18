@@ -110,5 +110,11 @@ Phased so Phases 0–1 ship value with **no LLM at all** (first-class binaries t
 panel, hardened emulation ladder as deterministic providers, the persistent corpus), then Phases 2–4 layer the
 agent onto that base: copilot → decision nodes → zero-day + per-session isolation.
 
+Shipped: **Phase 0** (proof-states + findings, binaries table, deterministic preflight, dossier, emulation
+ladder providers), **Phase 1** (persistent cross-image corpus, cross-refs, Level-1 rule watchlist, corpus web
+views), **Phase 2** (the read-only copilot: DeepSeek-first multi-provider LLM layer, proof-state discipline,
+dossier panel — all flag-gated). Next: Phase 3 (decision nodes ①②).
+
 Full plan — the deterministic-skeleton architecture, the five agent nodes, the emulation ladder, the
-proof-state machine, the persistent corpus, and the phase roadmap: [`docs/AGENT-DESIGN.md`](AGENT-DESIGN.md).
+proof-state machine, the persistent corpus, the copilot provider config (§10), and the phase roadmap:
+[`docs/AGENT-DESIGN.md`](AGENT-DESIGN.md).
