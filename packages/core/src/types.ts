@@ -135,6 +135,45 @@ export interface StringHit {
   severity?: 'info' | 'low' | 'medium' | 'high' | 'critical';
 }
 
+/**
+ * How well a security finding has been proven — the honest audit→reproduce→prove-or-downgrade discipline made
+ * explicit. Static analysis surfaces leads; emulation upgrades them; a target that cannot be emulated here is
+ * downgraded honestly rather than overstated. Emulated proof is never conflated with device compromise: a
+ * shell under qemu-user proves the sandbox, not the device.
+ */
+export type ProofState =
+  | 'needs_runtime_reproduction' // plausible lead, not reproduced — the default for a static finding
+  | 'static_confirmed' // reproducible from the firmware bytes alone (the secret/property is literally present)
+  | 'confirmed_in_emulation' // reproduced under qemu-user / chroot service — proves the sandbox, NOT the device
+  | 'confirmed_full_system' // reproduced in a full-system boot
+  | 'blocked_by_platform' // the arch/blob cannot be emulated here; a dynamic claim would need hardware
+  | 'blocked_by_security' // a valid control (validator/ACL) stops it
+  | 'false_positive'; // evidence contradicts it, or pure device-class speculation with no artifact behind it
+
+export type FindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
+
+/**
+ * A normalized security finding for an image, surfaced by any analysis provider and carrying an explicit proof
+ * state. A finding always lives with its image and is backed by the provider evidence that produced it; the
+ * corpus and (later) agent layers reference findings, never fabricate them.
+ */
+export interface Finding {
+  id: string;
+  imageId: string;
+  /** The analysis that surfaced it: 'secrets' | 'gitleaks' | 'sbom' | 'binary' | 'emulation'. */
+  source: string;
+  /** Stable kind within the source, e.g. 'hardcoded-credential', 'cve', 'weak-hardening'. */
+  kind: string;
+  title: string;
+  severity: FindingSeverity;
+  proofState: ProofState;
+  /** Structured evidence (the raw hit, CVE id, file path, emulation output…). */
+  evidence?: Record<string, unknown>;
+  /** Why it sits at this proof state — especially for downgrades. */
+  rationale?: string;
+  createdAt: number;
+}
+
 /** Top-level identity of an analyzed image. */
 export interface ImageIdentity {
   firmwareClass: FirmwareClass;

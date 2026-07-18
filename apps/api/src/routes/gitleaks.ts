@@ -3,6 +3,7 @@
  * recent completed result. Like SBOM and emulation, this depends on a prior successful extraction for a rootfs.
  */
 import type { FastifyInstance } from 'fastify';
+import { normalizeGitleaks, syncFindings } from '../findings.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { type GitleaksResult, runGitleaks } from '../providers/gitleaks.js';
 import { startJob } from '../providers/jobs.js';
@@ -29,7 +30,12 @@ export async function gitleaksRoutes(app: FastifyInstance): Promise<void> {
     if (!rootfsPath) {
       return reply.status(400).send({ error: 'Run extraction first — the deep scan needs an extracted rootfs' });
     }
-    const jobId = startJob(id, 'gitleaks', {}, (handle) => runGitleaks(rootfsPath, handle));
+    const jobId = startJob(id, 'gitleaks', {}, (handle) =>
+      runGitleaks(rootfsPath, handle).then((r) => {
+        syncFindings(id, 'gitleaks', normalizeGitleaks(r));
+        return r;
+      }),
+    );
     return reply.status(202).send({ jobId });
   });
 

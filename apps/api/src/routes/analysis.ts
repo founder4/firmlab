@@ -5,7 +5,8 @@
  */
 import type { StaticAnalysis } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
-import { getImage } from '../store.js';
+import { rowToFinding } from '../findings.js';
+import { getImage, listFindings } from '../store.js';
 
 function loadAnalysis(id: string): StaticAnalysis | null {
   const row = getImage(id);
@@ -40,5 +41,12 @@ export async function analysisRoutes(app: FastifyInstance): Promise<void> {
     const analysis = loadAnalysis(id);
     if (!analysis) return reply.status(404).send({ error: 'No analysis for this image' });
     return { secrets: analysis.secrets };
+  });
+
+  // The normalized findings ledger across all providers, each carrying an explicit proof state.
+  app.get('/images/:id/findings', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
+    return { findings: listFindings(id).map(rowToFinding) };
   });
 }

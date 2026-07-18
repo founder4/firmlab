@@ -3,6 +3,7 @@
  * recent completed SBOM result. Like emulation, this depends on a prior successful extraction for a rootfs.
  */
 import type { FastifyInstance } from 'fastify';
+import { normalizeSbom, syncFindings } from '../findings.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
 import { type SbomResult, runSbom } from '../providers/sbom.js';
@@ -29,7 +30,12 @@ export async function sbomRoutes(app: FastifyInstance): Promise<void> {
     if (!rootfsPath) {
       return reply.status(400).send({ error: 'Run extraction first — SBOM scanning needs an extracted rootfs' });
     }
-    const jobId = startJob(id, 'sbom', {}, (handle) => runSbom(id, rootfsPath, handle));
+    const jobId = startJob(id, 'sbom', {}, (handle) =>
+      runSbom(id, rootfsPath, handle).then((r) => {
+        syncFindings(id, 'sbom', normalizeSbom(r));
+        return r;
+      }),
+    );
     return reply.status(202).send({ jobId });
   });
 

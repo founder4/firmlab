@@ -36,6 +36,20 @@ export interface JobRow {
   error: string | null;
 }
 
+/** Storage shape of a normalized finding (evidence held as a JSON string). Mirrors the core `Finding` type. */
+export interface FindingRow {
+  id: string;
+  imageId: string;
+  source: string;
+  kind: string;
+  title: string;
+  severity: string;
+  proofState: string;
+  evidenceJson: string | null;
+  rationale: string | null;
+  createdAt: number;
+}
+
 /** node:sqlite binds named parameters from a plain record; our typed rows are cast through this. */
 type SqlParams = Record<string, string | number | null>;
 function asParams(row: object): SqlParams {
@@ -49,6 +63,8 @@ export function getDb(): DatabaseSync {
   ensureDataDirs();
   db = new DatabaseSync(DB_PATH);
   db.exec('PRAGMA journal_mode = WAL');
+  // Enforce the declared ON DELETE CASCADE so deleting an image also drops its jobs and findings.
+  db.exec('PRAGMA foreign_keys = ON');
   db.exec(`
     CREATE TABLE IF NOT EXISTS images (
       id TEXT PRIMARY KEY,
@@ -75,6 +91,20 @@ export function getDb(): DatabaseSync {
       FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_image ON jobs(imageId);
+    CREATE TABLE IF NOT EXISTS findings (
+      id TEXT PRIMARY KEY,
+      imageId TEXT NOT NULL,
+      source TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      proofState TEXT NOT NULL,
+      evidenceJson TEXT,
+      rationale TEXT,
+      createdAt INTEGER NOT NULL,
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_findings_image ON findings(imageId);
   `);
   // Migration: add the tags column to databases created before it existed.
   try {
@@ -158,4 +188,32 @@ export function listJobs(imageId: string): JobRow[] {
   return getDb()
     .prepare('SELECT * FROM jobs WHERE imageId = ? ORDER BY createdAt DESC')
     .all(imageId) as unknown as JobRow[];
+}
+
+// === Findings ===
+
+export function insertFindings(rows: FindingRow[]): void {
+  if (rows.length === 0) return;
+  const stmt = getDb().prepare(
+    `INSERT OR REPLACE INTO findings
+       (id, imageId, source, kind, title, severity, proofState, evidenceJson, rationale, createdAt)
+     VALUES (@id, @imageId, @source, @kind, @title, @severity, @proofState, @evidenceJson, @rationale, @createdAt)`,
+  );
+  for (const row of rows) stmt.run(asParams(row));
+}
+
+/** Replace the finding set contributed by one source for an image (idempotent re-normalization). */
+export function deleteFindingsBySource(imageId: string, source: string): void {
+  getDb().prepare('DELETE FROM findings WHERE imageId = ? AND source = ?').run(imageId, source);
+}
+
+export function listFindings(imageId: string): FindingRow[] {
+  return getDb()
+    .prepare('SELECT * FROM findings WHERE imageId = ? ORDER BY createdAt DESC')
+    .all(imageId) as unknown as FindingRow[];
+}
+
+/** Update a finding's proof state (and optional rationale) — used when emulation confirms or downgrades it. */
+export function updateFindingProofState(id: string, proofState: string, rationale: string | null): void {
+  getDb().prepare('UPDATE findings SET proofState = ?, rationale = ? WHERE id = ?').run(proofState, rationale, id);
 }

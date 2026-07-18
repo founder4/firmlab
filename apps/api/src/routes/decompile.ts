@@ -3,6 +3,7 @@
  * returns the most recent completed triage. Needs a prior successful extraction to supply the rootfs.
  */
 import type { FastifyInstance } from 'fastify';
+import { normalizeBinaryHardening, syncFindings } from '../findings.js';
 import { type DecompileResult, runDecompile } from '../providers/decompile.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
@@ -33,7 +34,12 @@ export async function decompileRoutes(app: FastifyInstance): Promise<void> {
     const binary = typeof body.binary === 'string' ? body.binary : '';
     if (!binary) return reply.status(400).send({ error: 'No target binary specified' });
 
-    const jobId = startJob(id, 'decompile', { binary }, (handle) => runDecompile(rootfsPath, binary, handle));
+    const jobId = startJob(id, 'decompile', { binary }, (handle) =>
+      runDecompile(rootfsPath, binary, handle).then((r) => {
+        syncFindings(id, `binary:${binary}`, normalizeBinaryHardening(r));
+        return r;
+      }),
+    );
     return reply.status(202).send({ jobId });
   });
 
