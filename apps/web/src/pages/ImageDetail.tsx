@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import {
   type BinaryEntry,
   type DecompileResult,
+  type Finding,
   type FirmwareDiffResult,
   type FsNode,
   type FsSummary,
@@ -10,6 +11,8 @@ import {
   type GitleaksResult,
   type ImageSummary,
   type Job,
+  type ProofState,
+  type RuntimeCapabilities,
   type SbomResult,
   type Severity,
   type StaticAnalysis,
@@ -24,6 +27,7 @@ import { StructureMap } from '../components/StructureMap';
 import { toast } from '../toast';
 
 type TabId =
+  | 'dossier'
   | 'overview'
   | 'structure'
   | 'entropy'
@@ -35,6 +39,7 @@ type TabId =
   | 'simulate';
 
 const TABS: { id: TabId; label: string }[] = [
+  { id: 'dossier', label: 'Dossier' },
   { id: 'overview', label: 'Overview' },
   { id: 'structure', label: 'Structure' },
   { id: 'entropy', label: 'Entropy' },
@@ -47,13 +52,13 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 /** Tabs that operate on the extracted rootfs / tools rather than the cached static analysis. */
-const NO_ANALYSIS_TABS = new Set<TabId>(['filesystem', 'secrets', 'sbom', 'binaries', 'diff', 'simulate']);
+const NO_ANALYSIS_TABS = new Set<TabId>(['dossier', 'filesystem', 'secrets', 'sbom', 'binaries', 'diff', 'simulate']);
 
 export function ImageDetail(): JSX.Element {
   const { id = '' } = useParams();
   const [image, setImage] = useState<ImageSummary | null>(null);
   const [analysis, setAnalysis] = useState<StaticAnalysis | null>(null);
-  const [tab, setTab] = useState<TabId>('overview');
+  const [tab, setTab] = useState<TabId>('dossier');
 
   useEffect(() => {
     api
@@ -95,6 +100,7 @@ export function ImageDetail(): JSX.Element {
         ))}
       </div>
 
+      {tab === 'dossier' && <DossierPanel image={image} />}
       {tab === 'overview' && <Overview image={image} analysis={analysis} />}
       {tab === 'structure' && analysis && <StructurePanel analysis={analysis} />}
       {tab === 'entropy' && analysis && <EntropyPanel analysis={analysis} />}
@@ -105,6 +111,158 @@ export function ImageDetail(): JSX.Element {
       {tab === 'diff' && <DiffPanel imageId={id} />}
       {tab === 'simulate' && <SimulationMenu imageId={id} />}
       {!analysis && !NO_ANALYSIS_TABS.has(tab) && <div className="empty">No analysis available.</div>}
+    </div>
+  );
+}
+
+// === Dossier: the single view that builds up everything known about an image, honestly. ===
+
+const PROOF_STATE_META: Record<ProofState, { label: string; color: string }> = {
+  confirmed_full_system: { label: 'confirmed (full-system)', color: 'var(--ok, #4caf7d)' },
+  confirmed_in_emulation: { label: 'confirmed (emulated)', color: 'var(--ok, #4caf7d)' },
+  static_confirmed: { label: 'static-confirmed', color: 'var(--info, #4db5ff)' },
+  needs_runtime_reproduction: { label: 'needs reproduction', color: 'var(--sev-medium, #e6b45c)' },
+  blocked_by_platform: { label: 'blocked (platform)', color: 'var(--text-dim)' },
+  blocked_by_security: { label: 'blocked (control)', color: 'var(--text-dim)' },
+  false_positive: { label: 'false positive', color: 'var(--text-dim)' },
+};
+
+function ProofStateBadge({ state }: { state: ProofState }): JSX.Element {
+  const m = PROOF_STATE_META[state];
+  return (
+    <span
+      className="mono"
+      style={{ color: m.color, border: `1px solid ${m.color}`, borderRadius: 4, padding: '1px 6px', fontSize: 10.5 }}
+    >
+      {m.label}
+    </span>
+  );
+}
+
+const SEV_COLOR: Record<string, string> = {
+  critical: 'var(--sev-critical, #e0524f)',
+  high: 'var(--sev-high, #e06c4f)',
+  medium: 'var(--sev-medium, #e6b45c)',
+  low: 'var(--text-dim)',
+  info: 'var(--text-dim)',
+};
+
+/** One row of the coverage strip: says whether an analysis stage ran, so the dossier never fakes completeness. */
+function CoverageItem({ label, done, detail }: { label: string; done: boolean; detail?: string }): JSX.Element {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+      <span style={{ color: done ? 'var(--ok, #4caf7d)' : 'var(--text-dim)' }}>{done ? '✓' : '○'}</span>
+      <span style={{ color: done ? 'var(--text)' : 'var(--text-dim)' }}>{label}</span>
+      {detail && <span className="hint mono">{detail}</span>}
+    </div>
+  );
+}
+
+function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
+  const id = image.id;
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [caps, setCaps] = useState<RuntimeCapabilities | null>(null);
+
+  useEffect(() => {
+    api
+      .findings(id)
+      .then(setFindings)
+      .catch(() => setFindings([]));
+    api
+      .binaries(id)
+      .then(setBinaries)
+      .catch(() => setBinaries([]));
+    api
+      .jobs(id)
+      .then(setJobs)
+      .catch(() => setJobs([]));
+    api
+      .emulation(id)
+      .then((m) => setCaps(m.capabilities))
+      .catch(() => setCaps(null));
+  }, [id]);
+
+  const ranKind = (kind: string): boolean => jobs.some((j) => j.kind === kind && j.status === 'done');
+  const triagedBinaries = binaries.filter((b) => b.triaged).length;
+
+  const idn = image.identity;
+  const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const sortedFindings = [...findings].sort((a, b) => (sevRank[a.severity] ?? 9) - (sevRank[b.severity] ?? 9));
+
+  return (
+    <div>
+      <div className="grid grid-3" style={{ marginBottom: 16 }}>
+        <Stat label="Class" value={idn?.firmwareClass ?? '—'} />
+        <Stat label="Architecture" value={`${idn?.arch ?? '—'} / ${idn?.endianness ?? '—'}`} mono />
+        <Stat label="Filesystems" value={idn?.filesystems.join(', ') || '—'} mono />
+        <Stat label="Binaries" value={`${binaries.length} (${triagedBinaries} triaged)`} />
+        <Stat label="Findings" value={String(findings.length)} />
+        <Stat label="Runtime strategy" value={caps?.strategy ?? '—'} mono />
+      </div>
+
+      <div className="panel">
+        <div className="panel-title">Coverage</div>
+        <div className="panel-sub">What has run so far — the dossier never implies completeness it doesn't have.</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 24px', marginTop: 10 }}>
+          <CoverageItem label="Static analysis" done={image.status === 'ready'} />
+          <CoverageItem label="Extraction" done={ranKind('extract')} />
+          <CoverageItem label="SBOM & CVEs" done={ranKind('sbom')} />
+          <CoverageItem label="Deep secrets (gitleaks)" done={ranKind('gitleaks')} />
+          <CoverageItem
+            label="Binary triage"
+            done={triagedBinaries > 0}
+            detail={binaries.length ? `${triagedBinaries}/${binaries.length}` : ''}
+          />
+          <CoverageItem label="Emulation" done={ranKind('emulate')} />
+        </div>
+        {caps && (
+          <div className="hint" style={{ marginTop: 12 }}>
+            Runtime preflight: <strong>{caps.strategy}</strong> — {caps.reason} (proof ceiling:{' '}
+            <span className="mono">{caps.proofCeiling}</span>)
+          </div>
+        )}
+      </div>
+
+      <div className="panel">
+        <div className="panel-title">Findings ({findings.length})</div>
+        <div className="panel-sub">
+          Each carries an explicit proof state — not just what was found, but how much it is proven.
+        </div>
+        {sortedFindings.length === 0 ? (
+          <div className="hint">No findings yet. Run extraction, SBOM and the deep scans to populate the ledger.</div>
+        ) : (
+          <div className="table-wrap" style={{ marginTop: 10 }}>
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Sev</th>
+                  <th>Finding</th>
+                  <th>Source</th>
+                  <th>Proof state</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedFindings.slice(0, 300).map((f) => (
+                  <tr key={f.id}>
+                    <td>
+                      <span style={{ color: SEV_COLOR[f.severity] ?? 'var(--text-dim)' }}>●</span>
+                    </td>
+                    <td style={{ fontSize: 12.5 }}>{f.title}</td>
+                    <td className="mono hint" style={{ fontSize: 11 }}>
+                      {f.source}
+                    </td>
+                    <td>
+                      <ProofStateBadge state={f.proofState} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
