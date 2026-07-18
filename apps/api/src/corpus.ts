@@ -11,9 +11,9 @@
  * Recording is additive (INSERT OR IGNORE): firmware images are immutable, so a given (key, imageId) either
  * exists or not, and re-running a provider produces identical rows. Deleting an image cascades its occurrences.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Architecture, FirmwareClass } from '@firmlab/core';
-import { getDb } from './store.js';
+import { elevateFinding, getDb, listFindings } from './store.js';
 
 /** Content hash of a secret value — the cross-image key for credential reuse. */
 export function hashSecret(value: string): string {
@@ -105,6 +105,72 @@ export function componentOtherImages(name: string, version: string, excludeId: s
        WHERE c.name = ? AND c.version = ? AND c.imageId != ? ORDER BY i.uploadedAt DESC`,
     )
     .all(name, version, excludeId) as unknown as ImageRef[];
+}
+
+// === Level 1: human-curated rule promotion (known-bad credential watchlist) ===
+
+export interface CorpusRule {
+  id: string;
+  type: string;
+  key: string;
+  label: string;
+  note: string | null;
+  createdAt: number;
+}
+
+/** Promote something recurring to a first-class rule (e.g. a credential hash → known-bad watchlist entry). */
+export function promoteRule(type: string, key: string, label: string, note: string | null): CorpusRule {
+  const rule: CorpusRule = { id: randomUUID().slice(0, 12), type, key, label, note, createdAt: Date.now() };
+  getDb()
+    .prepare('INSERT OR REPLACE INTO corpus_rule (id, type, key, label, note, createdAt) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(rule.id, rule.type, rule.key, rule.label, rule.note, rule.createdAt);
+  return rule;
+}
+
+export function listRules(type?: string): CorpusRule[] {
+  const db = getDb();
+  const rows = type
+    ? db.prepare('SELECT * FROM corpus_rule WHERE type = ? ORDER BY createdAt DESC').all(type)
+    : db.prepare('SELECT * FROM corpus_rule ORDER BY createdAt DESC').all();
+  return rows as unknown as CorpusRule[];
+}
+
+export function deleteRule(id: string): void {
+  getDb().prepare('DELETE FROM corpus_rule WHERE id = ?').run(id);
+}
+
+/** The set of credential hashes currently on the known-bad watchlist, mapped to their label. */
+export function knownCredentialRules(): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const r of listRules('known-credential')) map.set(r.key, r.label);
+  return map;
+}
+
+/**
+ * Cross-check an image's secret findings against the known-bad credential watchlist and elevate any match to
+ * critical, with a rationale that cites the rule and cross-image prevalence. Still deterministic and still
+ * evidence-backed: the finding already proved the secret is in this image; the rule only re-prioritizes it.
+ * Returns the number of findings elevated.
+ */
+export function flagKnownCredentials(imageId: string): number {
+  const rules = knownCredentialRules();
+  if (rules.size === 0) return 0;
+  let flagged = 0;
+  for (const f of listFindings(imageId)) {
+    if (f.source !== 'secrets' || !f.evidenceJson) continue;
+    const value = (JSON.parse(f.evidenceJson) as { value?: string }).value;
+    if (!value) continue;
+    const label = rules.get(hashSecret(value));
+    if (!label) continue;
+    const seenIn = credentialOtherImages(hashSecret(value), imageId).length;
+    elevateFinding(
+      f.id,
+      'critical',
+      `Known-bad credential on the watchlist ("${label}")${seenIn > 0 ? `; also seen in ${seenIn} other image(s)` : ''}.`,
+    );
+    flagged++;
+  }
+  return flagged;
 }
 
 export interface CorpusRefs {

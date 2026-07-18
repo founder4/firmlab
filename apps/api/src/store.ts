@@ -321,6 +321,11 @@ export function updateFindingProofState(id: string, proofState: string, rational
   getDb().prepare('UPDATE findings SET proofState = ?, rationale = ? WHERE id = ?').run(proofState, rationale, id);
 }
 
+/** Raise a finding's severity + rationale — used when a corpus watchlist rule matches (Phase 1, Level 1). */
+export function elevateFinding(id: string, severity: string, rationale: string): void {
+  getDb().prepare('UPDATE findings SET severity = ?, rationale = ? WHERE id = ?').run(severity, rationale, id);
+}
+
 // === Binaries ===
 
 /** Identity fields set at extraction time (from the ELF header). Preserves triage fields on re-extraction. */

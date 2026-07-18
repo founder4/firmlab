@@ -8,7 +8,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
 import { analyzeImageBuffer } from '../analysis.js';
-import { recordCredentials } from '../corpus.js';
+import { flagKnownCredentials, recordCredentials } from '../corpus.js';
 import { normalizeSecrets, syncFindings } from '../findings.js';
 import { EXTRACT_DIR, IMAGES_DIR } from '../paths.js';
 import { sweepRetention } from '../retention.js';
@@ -121,6 +121,9 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
           .filter((s) => s.secretKind)
           .map((s) => ({ value: s.value, kind: s.secretKind ?? null, severity: s.severity ?? null })),
       );
+      // Level 1: elevate any secret that matches the known-bad credential watchlist.
+      const flagged = flagKnownCredentials(id);
+      if (flagged > 0) req.log.info(`Elevated ${flagged} finding(s) via the credential watchlist`);
     } catch (err) {
       req.log.error({ err }, 'static analysis failed');
       updateImageAnalysis(id, 'error', null, null);
