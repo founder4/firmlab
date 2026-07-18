@@ -51,6 +51,31 @@ RUN curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh  |
     && curl -fsSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep -oP '"tag_name":\s*"v\K[0-9.]+')_linux_${GL_ARCH}.tar.gz \
        -o /tmp/gitleaks.tgz && tar xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks && rm /tmp/gitleaks.tgz
 
+# === (Optional) Emulation bring-up assets — libnvram shim + firmadyne kernels ===
+# These unlock the deeper emulation rungs the preflight gates on (apps/api/src/providers/preflight.ts):
+#   - /opt/libnvram/libnvram-<arch>.so  → rung-2 "chroot service" (LD_PRELOAD emulates NVRAM access, the
+#                                          single biggest router-daemon bring-up blocker)
+#   - /opt/firmae/kernels/              → rung-3 "full-system" qemu-system boot
+# Without them the ladder degrades honestly to qemu-user / static-only — nothing is faked. They are opt-in
+# because they are heavy (cross-compilers + multi-MB prebuilt kernels) and, unlike the toolchain above, are
+# NOT yet build-verified in this tree. The paths below are the ones preflight checks; keep them in sync.
+#
+# libnvram — build the firmadyne shim from source, one .so per guest arch we emulate:
+# RUN apt-get update && apt-get install -y --no-install-recommends \
+#       git build-essential gcc-mipsel-linux-gnu gcc-mips-linux-gnu gcc-arm-linux-gnueabi gcc-aarch64-linux-gnu \
+#     && git clone --depth 1 https://github.com/firmadyne/libnvram /tmp/libnvram && mkdir -p /opt/libnvram \
+#     && make -C /tmp/libnvram CC=mipsel-linux-gnu-gcc   && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-mipsel.so \
+#     && make -C /tmp/libnvram clean && make -C /tmp/libnvram CC=mips-linux-gnu-gcc     && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-mips.so \
+#     && make -C /tmp/libnvram clean && make -C /tmp/libnvram CC=arm-linux-gnueabi-gcc  && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-arm.so \
+#     && make -C /tmp/libnvram clean && make -C /tmp/libnvram CC=aarch64-linux-gnu-gcc  && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-arm64.so \
+#     && rm -rf /tmp/libnvram /var/lib/apt/lists/*
+#
+# firmadyne kernels — prebuilt guest kernels for full-system boot (multi-MB each; sourced via FirmAE):
+# RUN mkdir -p /opt/firmae/kernels \
+#     && for a in vmlinux.mipsel.4 vmlinux.mipseb.4 zImage.armel.4; do \
+#          curl -fsSL "https://github.com/pr0v3rbs/FirmAE/raw/master/binaries/$a" -o "/opt/firmae/kernels/$a"; \
+#        done
+#
 # === (Optional, heavy) Ghidra headless + Renode ===
 # Uncomment to bake the deep decompiler and RTOS emulator. Adds ~1.5 GB; skip for a lean image.
 # RUN apt-get update && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \

@@ -46,7 +46,7 @@ export interface ToolStatus {
 
 export interface EmulationRecipe {
   id: string;
-  mode: 'user-qemu' | 'system-qemu' | 'renode';
+  mode: 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode';
   title: string;
   description: string;
   requires: string[];

@@ -13,12 +13,13 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Architecture, ImageIdentity } from '@firmlab/core';
 import { type ToolId, detectTools } from '../tools.js';
+import { libnvramHostPath } from './emulate-system.js';
 import type { JobHandle } from './jobs.js';
-import { QEMU_MACHINE_BY_ARCH, QEMU_SYSTEM_BY_ARCH, QEMU_USER_BY_ARCH } from './preflight.js';
+import { FIRMADYNE_KERNELS_DIR, QEMU_MACHINE_BY_ARCH, QEMU_SYSTEM_BY_ARCH, QEMU_USER_BY_ARCH } from './preflight.js';
 
 const execFileAsync = promisify(execFile);
 
-export type EmulationMode = 'user-qemu' | 'system-qemu' | 'renode';
+export type EmulationMode = 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode';
 
 export interface EmulationRecipe {
   id: string;
@@ -74,12 +75,36 @@ export async function planEmulation(ctx: PlanContext): Promise<EmulationRecipe[]
     });
   }
 
-  // === Full-system QEMU (boot the rootfs under a kernel) ===
+  // === rung-2: chroot service under qemu-user + NVRAM shim ===
+  if ((firmwareClass === 'embedded-linux' || firmwareClass === 'unknown') && userBin) {
+    const rootfs = ctx.rootfsPath ?? '<rootfs>';
+    const target = ctx.suggestedBinary ?? 'usr/sbin/httpd';
+    const shimPresent = fs.existsSync(libnvramHostPath(arch));
+    recipes.push({
+      id: 'chroot-service',
+      mode: 'chroot-qemu',
+      title: `Chroot service — run a daemon with NVRAM emulation (${arch})`,
+      description:
+        'Start a network daemon (httpd/upnpd/…) under qemu-user inside the rootfs chroot, with the libnvram ' +
+        'shim satisfying NVRAM reads — the workhorse for reproducing router web-UI bugs. Deterministic bring-up ' +
+        'with guaranteed teardown.',
+      requires: [userBin],
+      runnable: Boolean(has(userBin) && ctx.rootfsPath && shimPresent),
+      command: `chroot ${rootfs} ./qemu-${arch}-static -E LD_PRELOAD=/libnvram.so /${target}`,
+      rank: 2,
+      notes: shimPresent
+        ? 'Deterministic bring-up with guaranteed teardown.'
+        : 'Needs the libnvram shim — enable the emulation-assets section in Dockerfile.firmware.',
+    });
+  }
+
+  // === rung-3: Full-system QEMU (boot the rootfs under a kernel) ===
   const sysBin = QEMU_SYSTEM_BY_ARCH[arch];
   if (firmwareClass === 'embedded-linux') {
     const rootfs = ctx.rootfsPath ?? '<rootfs>';
     const emulator = sysBin ?? 'qemu-system-<arch>';
     const machine = QEMU_MACHINE_BY_ARCH[arch] ?? '<machine>';
+    const kernelsPresent = fs.existsSync(FIRMADYNE_KERNELS_DIR);
     recipes.push({
       id: 'system-qemu-boot',
       mode: 'system-qemu',
@@ -88,12 +113,14 @@ export async function planEmulation(ctx: PlanContext): Promise<EmulationRecipe[]
         'Boot the extracted rootfs under a matched guest kernel with user-mode networking, so the real web ' +
         'UI / services come up and can be scanned end-to-end. Needs a FirmAE guest kernel for the arch.',
       requires: sysBin ? [sysBin] : [],
-      runnable: false,
+      runnable: Boolean(sysBin && has(sysBin) && ctx.rootfsPath && kernelsPresent),
       command:
         `${emulator} -M ${machine} -kernel /opt/firmae/kernels/vmlinux.${arch}.4 ` +
         `-drive file=${rootfs}.img,format=raw -netdev user,id=n0,hostfwd=tcp::8080-:80 -device e1000,netdev=n0 -nographic`,
-      rank: 2,
-      notes: 'Assemble a rootfs image (mkfs) first; port-forward 8080→80 to reach the emulated web UI.',
+      rank: 3,
+      notes: kernelsPresent
+        ? 'Assemble a rootfs image (mkfs) first; port-forward 8080→80 to reach the emulated web UI.'
+        : 'Needs firmadyne kernels — enable the emulation-assets section in Dockerfile.firmware.',
     });
   }
 
