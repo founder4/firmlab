@@ -6,7 +6,16 @@
 import { DatabaseSync } from 'node:sqlite';
 import { DB_PATH, ensureDataDirs } from './paths.js';
 
-export type JobKind = 'extract' | 'binwalk' | 'sbom' | 'emulate' | 'decompile' | 'gitleaks' | 'diff' | 'ghidra';
+export type JobKind =
+  | 'extract'
+  | 'binwalk'
+  | 'sbom'
+  | 'emulate'
+  | 'decompile'
+  | 'gitleaks'
+  | 'diff'
+  | 'ghidra'
+  | 'copilot';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {
