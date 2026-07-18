@@ -42,6 +42,9 @@ docker build -f Dockerfile.firmware -t firmlab-firmware .
 # then set `image: firmlab-firmware` in docker-compose.yml and `docker compose up`
 ```
 
+For the homelab rollout (build + tag + deploy + verify in one step), use `scripts/deploy.sh` — see
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), which also documents how to tell which commit is running.
+
 ## Quick start (local dev)
 
 ```bash
