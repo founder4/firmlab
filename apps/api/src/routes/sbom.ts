@@ -3,6 +3,7 @@
  * recent completed SBOM result. Like emulation, this depends on a prior successful extraction for a rootfs.
  */
 import type { FastifyInstance } from 'fastify';
+import { recordComponents } from '../corpus.js';
 import { normalizeSbom, syncFindings } from '../findings.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
@@ -33,6 +34,15 @@ export async function sbomRoutes(app: FastifyInstance): Promise<void> {
     const jobId = startJob(id, 'sbom', {}, (handle) =>
       runSbom(id, rootfsPath, handle).then((r) => {
         syncFindings(id, 'sbom', normalizeSbom(r));
+        if (r.available) {
+          // Cross-image component occurrences, each carrying how many CVEs grype matched to it.
+          const cveCount = (name: string, version: string): number =>
+            r.vulnerabilities.filter((v) => v.packageName === name && v.packageVersion === version).length;
+          recordComponents(
+            id,
+            r.packages.map((p) => ({ name: p.name, version: p.version, cveCount: cveCount(p.name, p.version) })),
+          );
+        }
         return r;
       }),
     );

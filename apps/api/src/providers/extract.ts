@@ -20,8 +20,9 @@ import {
   decodeElfArch,
   summarizeFs,
 } from '@firmlab/core';
+import { recordArtifacts } from '../corpus.js';
 import { EXTRACT_DIR } from '../paths.js';
-import { getImage, registerBinary, updateImageIdentity } from '../store.js';
+import { getImage, listBinaries, registerBinary, updateImageIdentity } from '../store.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 
@@ -90,6 +91,12 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
 
   const registered = registerRootfsBinaries(imageId, rootfsPath, entries, suggestedBinary);
   if (registered > 0) handle.log(`Registered ${registered} ELF binary/binaries.`);
+
+  // Feed the corpus: every hashed binary becomes a cross-image artifact occurrence.
+  const artifacts = listBinaries(imageId)
+    .filter((b) => b.sha1)
+    .map((b) => ({ sha1: b.sha1 as string, path: b.path, arch: b.arch }));
+  recordArtifacts(imageId, artifacts);
 
   return {
     extractor: 'binwalk',

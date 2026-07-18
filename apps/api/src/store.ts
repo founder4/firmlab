@@ -150,6 +150,64 @@ export function getDb(): DatabaseSync {
       FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_binaries_image ON binaries(imageId);
+
+    -- === Corpus: cross-image occurrence tables (Phase 1). They record WHERE things appear, never conclusions. ===
+    CREATE TABLE IF NOT EXISTS artifact_occurrence (
+      sha1 TEXT NOT NULL,
+      imageId TEXT NOT NULL,
+      path TEXT NOT NULL,
+      arch TEXT,
+      PRIMARY KEY (sha1, imageId, path),
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_artifact_sha1 ON artifact_occurrence(sha1);
+    CREATE INDEX IF NOT EXISTS idx_artifact_image ON artifact_occurrence(imageId);
+
+    CREATE TABLE IF NOT EXISTS credential_occurrence (
+      hash TEXT NOT NULL,
+      imageId TEXT NOT NULL,
+      kind TEXT,
+      severity TEXT,
+      PRIMARY KEY (hash, imageId),
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_credential_hash ON credential_occurrence(hash);
+    CREATE INDEX IF NOT EXISTS idx_credential_image ON credential_occurrence(imageId);
+
+    CREATE TABLE IF NOT EXISTS component_occurrence (
+      name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      imageId TEXT NOT NULL,
+      cveCount INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (name, version, imageId),
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_component_nv ON component_occurrence(name, version);
+    CREATE INDEX IF NOT EXISTS idx_component_image ON component_occurrence(imageId);
+
+    -- Reachability priors: recorded only when a finding is actually confirmed by emulation (mostly empty until
+    -- the emulation ladder is validated — the mechanism, not fabricated data).
+    CREATE TABLE IF NOT EXISTS reachability_prior (
+      familyKey TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      proofState TEXT NOT NULL,
+      imageId TEXT NOT NULL,
+      createdAt INTEGER NOT NULL,
+      PRIMARY KEY (familyKey, subject, imageId),
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_reach_family ON reachability_prior(familyKey, subject);
+
+    -- Level 1: human-curated promoted rules (e.g. a known-bad credential watchlist).
+    CREATE TABLE IF NOT EXISTS corpus_rule (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      note TEXT,
+      createdAt INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_corpus_rule_key ON corpus_rule(type, key);
   `);
   // Migration: add the tags column to databases created before it existed.
   try {

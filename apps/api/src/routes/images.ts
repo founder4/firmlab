@@ -8,6 +8,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
 import { analyzeImageBuffer } from '../analysis.js';
+import { recordCredentials } from '../corpus.js';
 import { normalizeSecrets, syncFindings } from '../findings.js';
 import { EXTRACT_DIR, IMAGES_DIR } from '../paths.js';
 import { sweepRetention } from '../retention.js';
@@ -113,6 +114,13 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
       updateImageAnalysis(id, 'ready', JSON.stringify(analysis.identity), JSON.stringify(analysis));
       // Seed the findings ledger from the static secret hits (extraction-backed sources sync later, per job).
       syncFindings(id, 'secrets', normalizeSecrets(analysis.secrets));
+      // Feed the corpus: classified secrets become cross-image credential occurrences.
+      recordCredentials(
+        id,
+        analysis.secrets
+          .filter((s) => s.secretKind)
+          .map((s) => ({ value: s.value, kind: s.secretKind ?? null, severity: s.severity ?? null })),
+      );
     } catch (err) {
       req.log.error({ err }, 'static analysis failed');
       updateImageAnalysis(id, 'error', null, null);

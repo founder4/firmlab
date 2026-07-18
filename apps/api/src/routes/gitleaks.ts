@@ -3,6 +3,7 @@
  * recent completed result. Like SBOM and emulation, this depends on a prior successful extraction for a rootfs.
  */
 import type { FastifyInstance } from 'fastify';
+import { recordCredentials } from '../corpus.js';
 import { normalizeGitleaks, syncFindings } from '../findings.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { type GitleaksResult, runGitleaks } from '../providers/gitleaks.js';
@@ -33,6 +34,12 @@ export async function gitleaksRoutes(app: FastifyInstance): Promise<void> {
     const jobId = startJob(id, 'gitleaks', {}, (handle) =>
       runGitleaks(rootfsPath, handle).then((r) => {
         syncFindings(id, 'gitleaks', normalizeGitleaks(r));
+        if (r.available) {
+          recordCredentials(
+            id,
+            r.findings.map((f) => ({ value: f.match, kind: f.rule, severity: 'high' })),
+          );
+        }
         return r;
       }),
     );
