@@ -1,7 +1,9 @@
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
+  type AgentStatus,
   type BinaryEntry,
+  type CopilotResult,
   type CorpusRefs,
   type DecompileResult,
   type Finding,
@@ -189,12 +191,38 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [caps, setCaps] = useState<RuntimeCapabilities | null>(null);
   const [refs, setRefs] = useState<CorpusRefs | null>(null);
+  const [agent, setAgent] = useState<AgentStatus | null>(null);
+  const [copilot, setCopilot] = useState<CopilotResult | null>(null);
+  const [copilotRunning, setCopilotRunning] = useState(false);
+  const [copilotLog, setCopilotLog] = useState('');
+
+  const runCopilot = useCallback(async () => {
+    setCopilotRunning(true);
+    setCopilotLog('');
+    try {
+      const { jobId } = await api.runCopilot(id);
+      const job = await pollJob(jobId, setCopilotLog);
+      if (job.status === 'done') setCopilot(job.result as CopilotResult);
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setCopilotRunning(false);
+    }
+  }, [id]);
 
   useEffect(() => {
     api
       .findings(id)
       .then(setFindings)
       .catch(() => setFindings([]));
+    api
+      .agentStatus()
+      .then(setAgent)
+      .catch(() => setAgent(null));
+    api
+      .copilotResult(id)
+      .then(setCopilot)
+      .catch(() => setCopilot(null));
     api
       .binaries(id)
       .then(setBinaries)
@@ -232,6 +260,48 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
         <Stat label="Findings" value={String(findings.length)} />
         <Stat label="Runtime strategy" value={caps?.strategy ?? '—'} mono />
       </div>
+
+      {agent?.enabled && (
+        <div className="panel">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div className="panel-title" style={{ margin: 0 }}>
+              Copilot analysis
+            </div>
+            <span className="badge" title="LLM backing the copilot">
+              {agent.provider} · {agent.model}
+            </span>
+            <div style={{ flex: 1 }} />
+            <button type="button" className="btn btn-sm btn-primary" disabled={copilotRunning} onClick={runCopilot}>
+              {copilotRunning ? (
+                <>
+                  <span className="spinner" /> Analyzing…
+                </>
+              ) : copilot ? (
+                'Re-run'
+              ) : (
+                'Analyze'
+              )}
+            </button>
+          </div>
+          <div className="panel-sub">
+            Interpretation over the cited findings — priors and proof-states, not new truth. The copilot runs nothing
+            and invents nothing.
+          </div>
+          {copilotLog && !copilot && (
+            <pre className="mono" style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 10 }}>
+              {copilotLog}
+            </pre>
+          )}
+          {copilot && (
+            <div
+              style={{ marginTop: 12, whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.5 }}
+              className="copilot-output"
+            >
+              {copilot.text}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="panel">
         <div className="panel-title">Coverage</div>

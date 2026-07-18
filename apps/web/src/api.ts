@@ -230,6 +230,21 @@ export interface Finding {
   createdAt: number;
 }
 
+/** Whether the flag-gated copilot is enabled, and which provider/model backs it (no secrets). */
+export interface AgentStatus {
+  enabled: boolean;
+  provider?: string;
+  model?: string;
+}
+
+export interface CopilotResult {
+  text: string;
+  model: string;
+  provider: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
 export interface ImageRef {
   id: string;
   filename: string;
@@ -324,6 +339,10 @@ export const api = {
   binaries: (id: string) => get<{ binaries: BinaryEntry[] }>(`/api/images/${id}/binaries`).then((r) => r.binaries),
   findings: (id: string) => get<{ findings: Finding[] }>(`/api/images/${id}/findings`).then((r) => r.findings),
   corpusRefs: (id: string) => get<{ refs: CorpusRefs }>(`/api/images/${id}/corpus-refs`).then((r) => r.refs),
+  agentStatus: () => get<AgentStatus>('/api/agent/status'),
+  runCopilot: (id: string) => post<{ jobId: string }>(`/api/images/${id}/copilot`),
+  copilotResult: (id: string) =>
+    get<{ result: CopilotResult | null }>(`/api/images/${id}/copilot`).then((r) => r.result),
   corpusOverview: () => get<{ overview: CorpusOverview }>('/api/corpus/overview').then((r) => r.overview),
   corpusRules: () => get<{ rules: CorpusRule[] }>('/api/corpus/rules').then((r) => r.rules),
   promoteRule: (type: string, key: string, label: string, note?: string) =>
