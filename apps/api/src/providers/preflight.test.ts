@@ -1,0 +1,64 @@
+import { describe, expect, it } from 'vitest';
+import { type PreflightInputs, chooseRuntimeStrategy } from './preflight.js';
+
+const base: PreflightInputs = {
+  arch: 'mipsel',
+  firmwareClass: 'embedded-linux',
+  hasRootfs: true,
+  userEmulatorAvailable: true,
+  systemEmulatorAvailable: false,
+  renodeAvailable: false,
+  hasNvramShim: false,
+  hasSystemKernel: false,
+};
+
+describe('chooseRuntimeStrategy', () => {
+  it('an unmapped arch is unsupported → blocked_by_platform (never fabricated)', () => {
+    const out = chooseRuntimeStrategy({ ...base, arch: 'sparc' });
+    expect(out.strategy).toBe('unsupported-arch');
+    expect(out.proofCeiling).toBe('blocked_by_platform');
+  });
+
+  it('no rootfs → static-only, ceiling static_confirmed', () => {
+    const out = chooseRuntimeStrategy({ ...base, hasRootfs: false });
+    expect(out.strategy).toBe('static-only');
+    expect(out.proofCeiling).toBe('static_confirmed');
+  });
+
+  it('mapped arch but emulator not installed → static-only', () => {
+    const out = chooseRuntimeStrategy({ ...base, userEmulatorAvailable: false });
+    expect(out.strategy).toBe('static-only');
+  });
+
+  it('rootfs + qemu-user only → qemu-user, ceiling confirmed_in_emulation', () => {
+    const out = chooseRuntimeStrategy(base);
+    expect(out.strategy).toBe('qemu-user');
+    expect(out.proofCeiling).toBe('confirmed_in_emulation');
+  });
+
+  it('libnvram shim present → chroot-service', () => {
+    const out = chooseRuntimeStrategy({ ...base, hasNvramShim: true });
+    expect(out.strategy).toBe('chroot-service');
+    expect(out.proofCeiling).toBe('confirmed_in_emulation');
+  });
+
+  it('system emulator + kernel wins over chroot → full-system, ceiling confirmed_full_system', () => {
+    const out = chooseRuntimeStrategy({
+      ...base,
+      systemEmulatorAvailable: true,
+      hasSystemKernel: true,
+      hasNvramShim: true,
+    });
+    expect(out.strategy).toBe('full-system');
+    expect(out.proofCeiling).toBe('confirmed_full_system');
+  });
+
+  it('RTOS with Renode → rtos-renode; without → static-only', () => {
+    expect(chooseRuntimeStrategy({ ...base, firmwareClass: 'rtos', renodeAvailable: true }).strategy).toBe(
+      'rtos-renode',
+    );
+    expect(chooseRuntimeStrategy({ ...base, firmwareClass: 'rtos', renodeAvailable: false }).strategy).toBe(
+      'static-only',
+    );
+  });
+});

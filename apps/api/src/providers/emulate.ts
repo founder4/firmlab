@@ -14,6 +14,7 @@ import { promisify } from 'node:util';
 import type { Architecture, ImageIdentity } from '@firmlab/core';
 import { type ToolId, detectTools } from '../tools.js';
 import type { JobHandle } from './jobs.js';
+import { QEMU_MACHINE_BY_ARCH, QEMU_SYSTEM_BY_ARCH, QEMU_USER_BY_ARCH } from './preflight.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -33,28 +34,6 @@ export interface EmulationRecipe {
   rank: number;
   notes?: string;
 }
-
-/** Map an architecture to its qemu-user-static binary. */
-const QEMU_USER_BY_ARCH: Partial<Record<Architecture, ToolId>> = {
-  mipsel: 'qemu-mipsel-static',
-  mips: 'qemu-mipsel-static',
-  arm: 'qemu-arm-static',
-  arm64: 'qemu-aarch64-static',
-};
-
-const QEMU_SYSTEM_BY_ARCH: Partial<Record<Architecture, ToolId>> = {
-  mipsel: 'qemu-system-mipsel',
-  mips: 'qemu-system-mipsel',
-  arm: 'qemu-system-arm',
-};
-
-/** A sensible default qemu-system `-M` machine per arch for the guided full-system boot command. */
-const QEMU_MACHINE_BY_ARCH: Partial<Record<Architecture, string>> = {
-  mips: 'malta',
-  mipsel: 'malta',
-  arm: 'virt',
-  arm64: 'virt',
-};
 
 export interface PlanContext {
   identity: ImageIdentity;

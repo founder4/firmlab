@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { type PlanContext, planEmulation, runUserModeEmulation } from '../providers/emulate.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
+import { computeRuntimeCapabilities } from '../providers/preflight.js';
 import { getImage, listJobs } from '../store.js';
 
 /** Find the most recent successful extraction result for an image, if any. */
@@ -39,7 +40,16 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
       rootfsReady: Boolean(extract?.rootfsPath),
       suggestedBinary: extract?.suggestedBinary ?? null,
       recipes,
+      capabilities: await computeRuntimeCapabilities(id),
     };
+  });
+
+  // The deterministic runtime-capability preflight on its own — the honest floor for the proof-state machine.
+  app.get('/images/:id/runtime-capabilities', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const caps = await computeRuntimeCapabilities(id);
+    if (!caps) return reply.status(404).send({ error: 'No analysis for this image' });
+    return { capabilities: caps };
   });
 
   app.post('/images/:id/emulate', async (req, reply) => {

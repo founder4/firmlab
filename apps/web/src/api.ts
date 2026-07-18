@@ -56,11 +56,32 @@ export interface EmulationRecipe {
   notes?: string;
 }
 
+export type RuntimeStrategy =
+  | 'qemu-user'
+  | 'chroot-service'
+  | 'full-system'
+  | 'rtos-renode'
+  | 'static-only'
+  | 'unsupported-arch';
+
+/** The deterministic runtime-capability preflight for an image (the honest floor for the proof-state machine). */
+export interface RuntimeCapabilities {
+  arch: string;
+  firmwareClass: string;
+  hasRootfs: boolean;
+  userEmulator: string | null;
+  systemEmulator: string | null;
+  strategy: RuntimeStrategy;
+  proofCeiling: ProofState;
+  reason: string;
+}
+
 export interface EmulationMenu {
   identity: ImageIdentity;
   rootfsReady: boolean;
   suggestedBinary: string | null;
   recipes: EmulationRecipe[];
+  capabilities: RuntimeCapabilities | null;
 }
 
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Negligible' | 'Unknown';
