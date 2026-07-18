@@ -77,7 +77,9 @@ apps/api        @firmlab/api  — Fastify + node:sqlite; intake, cached analysis
 apps/web        @firmlab/web  — Vite + React; the visual workbench
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the deeper design.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the deeper design, and
+[`docs/AGENT-DESIGN.md`](docs/AGENT-DESIGN.md) for the planned autonomous-orchestration layer (an optional,
+flag-gated agent that drives the providers as tools while the deterministic core stays the source of truth).
 
 ## Safety
 

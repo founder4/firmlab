@@ -95,3 +95,19 @@ firmware image where applicable; 70+ tests; biome clean; committed in slices.
 A true interactive/full-system emulation console — auto-booting arbitrary firmware needs per-image kernel/dtb
 assembly, and a live shell needs a websocket/PTY transport the API doesn't have yet. This is a project of its own;
 the planner deliberately ships guided per-arch recipes instead of one-click boots that would silently fail.
+
+---
+
+## Phase 6 — Autonomous orchestration (next direction)
+
+Evolve the click-driven workbench into a system that runs autonomous firmware-pentest sessions: an agent layer
+that reads the deterministic findings, reasons, and drives the existing providers as tools — redirecting and
+reconfiguring based on what it finds, never inventing findings. Gated behind `FIRMLAB_AGENT`; with it off,
+FirmLab stays local-only, no-network, deterministic.
+
+The `providers/` directory is already a tool registry, so the capability exists — what's added is the layer
+that decides. Phased crawl → walk → run: **A** read-only copilot (interprets existing results), **B**
+supervised orchestration (agent calls providers within a budgeted session), **C** isolated per-session workers.
+
+Full design, the four hard problems (blast radius, the network/determinism break, cost control, worker
+isolation), and the phase plan: [`docs/AGENT-DESIGN.md`](AGENT-DESIGN.md).
