@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EXTRACT_DIR, IMAGES_DIR } from './paths.js';
-import { deleteImage, listImages } from './store.js';
+import { deleteImage, imagesWithActiveSessions, listImages } from './store.js';
 
 const MAX_AGE_DAYS = Math.max(0, Number(process.env.FIRMLAB_MAX_IMAGE_AGE_DAYS ?? 0));
 const MAX_DATA_BYTES = Math.max(0, Number(process.env.FIRMLAB_MAX_DATA_BYTES ?? 0));
@@ -81,11 +81,14 @@ function purge(id: string): void {
 export function sweepRetention(log: (line: string) => void = () => {}): string[] {
   if (MAX_AGE_DAYS === 0 && MAX_DATA_BYTES === 0) return [];
   const removed: string[] = [];
+  // An image with a live agent session is pinned: evicting it would pull the ground truth out from under a
+  // running/awaiting-approval session and break its (auditable, resumable) transcript. Skip these entirely.
+  const pinned = imagesWithActiveSessions();
 
   if (MAX_AGE_DAYS > 0) {
     const cutoff = Date.now() - MAX_AGE_DAYS * 24 * 3600 * 1000;
     for (const img of listImages()) {
-      if (img.uploadedAt < cutoff) {
+      if (img.uploadedAt < cutoff && !pinned.has(img.id)) {
         purge(img.id);
         removed.push(img.id);
         log(`retention: pruned ${img.id} (${img.filename}) — older than ${MAX_AGE_DAYS}d`);
@@ -99,6 +102,7 @@ export function sweepRetention(log: (line: string) => void = () => {}): string[]
     const oldestFirst = [...listImages()].sort((a, b) => a.uploadedAt - b.uploadedAt);
     for (const img of oldestFirst) {
       if (total <= MAX_DATA_BYTES) break;
+      if (pinned.has(img.id)) continue; // pinned by an active session — never evict
       const before = dirSize(path.join(IMAGES_DIR, img.id)) + dirSize(path.join(EXTRACT_DIR, img.id));
       purge(img.id);
       removed.push(img.id);

@@ -308,3 +308,55 @@ web muestra el panel solo si `/api/agent/status` reporta `enabled`.
 **Principio, reafirmado**: el copiloto es la capa que *interpreta*, nunca la fuente de un hallazgo. Cada
 afirmación se cita de un finding con su proof-state; los cross-refs de corpus son priors, no conclusiones. Es
 el nodo ③/⑤ del esqueleto, no un agente que conduce el pipeline (eso es Fase 3).
+
+---
+
+## 11. Fase 3 — Los nodos de decisión (implementado)
+
+La Fase 3 pone al agente **a elegir rama** sobre el esqueleto determinista. Cierra los contratos abiertos del §9
+(entrada/salida de cada nodo, formato del transcript, coordinación retención↔sesiones). Todo tras `FIRMLAB_AGENT`.
+
+**El orquestador es código, no el LLM** (`apps/api/src/agent/session.ts`). Conduce el flujo determinista:
+
+```
+triaje ①  →  extracción determinista (si el agente la eligió, vía el MISMO job que pulsa el usuario)
+          →  preflight determinista (el techo honesto)
+          →  selección de objetivo ②  →  pausa para APROBACIÓN HUMANA antes de cualquier emulación
+```
+
+El LLM solo actúa dentro de los dos nodos, y devuelve **JSON estructurado** (no prosa) que se valida y coacciona
+con defaults seguros (`nodes.ts`). Contratos:
+
+- **Nodo ① Triaje** — entrada: identidad, resumen de entropía, firmas, conteo de secretos por tipo, priors de
+  corpus (familia vista, credenciales reusadas). Salida: `{resolvedClass, classConfidence, shouldExtract,
+  extractionCascade, attackSurface, rationale}`.
+- **Nodo ② Selección de objetivo** — entrada: tabla de binarios (hardening, network-facing, imports), findings, y
+  **el preflight** (la cota dura). Salida: `{targets:[{path, rung, priority, reason}], emulationPlan, rationale}`.
+  Cada `rung` solicitado se **recorta** (`clampRung`) al techo del preflight: un despliegue `static-only` baja todo
+  a `none`; un techo `qemu-user` no se puede subir a `full-system` por decisión del agente. La honestidad se
+  impone en código, no en la buena voluntad del modelo.
+
+**El governor** (`agent/governor.ts`) es la correa: topes duros de pasos/tokens/dinero/tiempo, evaluados como
+función pura antes de cada nodo; el primer techo alcanzado detiene la sesión y su razón queda registrada. Env:
+`FIRMLAB_AGENT_MAX_STEPS` (8), `FIRMLAB_AGENT_MAX_TOKENS` (120000), `FIRMLAB_AGENT_MAX_USD` (0.5),
+`FIRMLAB_AGENT_MAX_SECONDS` (300). El coste USD se estima por modelo (tabla de precios; fallback conservador).
+
+**El transcript** (tablas `agent_session` + `agent_step`) es la auditabilidad: cada paso guarda la entrada
+estructurada que vio el nodo, la decisión, el rationale, el modelo y los tokens — reproducible y reanudable. Al
+arranque, `reconcileSessions()` marca como `error` cualquier sesión `running` interrumpida por un reinicio;
+las `awaiting_approval` son una pausa durable legítima y sobreviven.
+
+**Aprobación humana + retención.** La emulación propuesta por ② espera una aprobación explícita
+(`POST /agent/sessions/:id/approve|decline`); al aprobar, la mecánica es el provider de emulación determinista
+existente, corrido vía el sistema de jobs, y su proof-state queda acotado por el techo del preflight. Una sesión
+activa (`running`/`awaiting_approval`) **fija** su imagen: `sweepRetention` la salta (cierra el bug latente del
+§9). Sin aislamiento por sesión todavía — eso es Fase 4.
+
+**Web**: la pestaña **Agent** muestra el transcript en vivo (cada nodo, su decisión y su porqué, con un expander
+de auditoría del JSON de entrada/salida), el medidor del governor, y el gate de aprobar/rechazar emulación.
+
+**Validado de extremo a extremo** en la imagen firmware (un mock LLM OpenAI-compatible sustituye la clave ausente,
+así se ejercita toda la maquinaria determinista de forma reproducible): flag apagado inerte; ciclo completo de
+sesión; recorte de rung en vivo (el `full-system` pedido cae a `qemu-user`); extracción real con binwalk y
+emulación real con qemu-user; y la guarda de retención. Los tests unitarios cubren el governor y las funciones
+puras de los nodos (parseo, clamping) sin tocar `node:sqlite`, coherente con la convención del repo.

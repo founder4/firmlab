@@ -113,7 +113,22 @@ agent onto that base: copilot → decision nodes → zero-day + per-session isol
 Shipped: **Phase 0** (proof-states + findings, binaries table, deterministic preflight, dossier, emulation
 ladder providers), **Phase 1** (persistent cross-image corpus, cross-refs, Level-1 rule watchlist, corpus web
 views), **Phase 2** (the read-only copilot: DeepSeek-first multi-provider LLM layer, proof-state discipline,
-dossier panel — all flag-gated). Next: Phase 3 (decision nodes ①②).
+dossier panel — all flag-gated), **Phase 3** (the decision nodes: ① triage + ② target-selection as
+structured-output LLM nodes on a deterministic orchestrator, a governor with hard step/token/USD/time caps, an
+auditable+resumable session transcript, emulation gated behind human approval, and the retention↔session guard
+so a live session pins its image — all flag-gated). Next: Phase 4 (zero-day node ④ + per-session isolation).
+
+**Phase 3 — decision nodes (implemented).** The agent now *chooses branches* on top of the deterministic
+skeleton, never the mechanics. The orchestrator (`agent/session.ts`) drives triage ① → deterministic extraction
+(if the agent chose it, via the same job the user clicks) → deterministic preflight → target-selection ② →
+pause for human approval before any emulation. Each node writes an `agent_step` (structured input, decision,
+rationale, tokens) to an auditable transcript; the governor (`agent/governor.ts`) halts the run at the first
+cap hit. Node ② is hard-bounded by the preflight: a requested emulation rung is *clamped* down to what the
+deployment can actually run (`clampRung`), so the honesty ceiling is enforced in code. Env: `FIRMLAB_AGENT_MAX_STEPS`
+(8), `FIRMLAB_AGENT_MAX_TOKENS` (120000), `FIRMLAB_AGENT_MAX_USD` (0.5), `FIRMLAB_AGENT_MAX_SECONDS` (300). Web:
+the **Agent** tab shows the live transcript, the governor gauge, and the approve/decline emulation gate.
+Validated end-to-end in the firmware image (a mock LLM stands in for the key-less environment): flag-off inert,
+full session lifecycle, live rung clamping, real binwalk extraction + qemu-user emulation, and the retention guard.
 
 Full plan — the deterministic-skeleton architecture, the five agent nodes, the emulation ladder, the
 proof-state machine, the persistent corpus, the copilot provider config (§10), and the phase roadmap:

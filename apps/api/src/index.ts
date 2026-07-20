@@ -9,8 +9,10 @@ import fs from 'node:fs';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
+import { reconcileSessions } from './agent/session.js';
 import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
 import { SWEEP_INTERVAL_MS, sweepRetention } from './retention.js';
+import { agentRoutes } from './routes/agent.js';
 import { analysisRoutes } from './routes/analysis.js';
 import { copilotRoutes } from './routes/copilot.js';
 import { corpusRoutes } from './routes/corpus.js';
@@ -35,6 +37,10 @@ const MAX_UPLOAD_BYTES = Number(process.env.FIRMLAB_MAX_UPLOAD ?? 500 * 1024 * 1
 async function main(): Promise<void> {
   ensureDataDirs();
   getDb(); // initialize schema early so a bad data dir fails fast
+
+  // Any agent session left 'running' by a previous process was interrupted — mark it errored so the transcript
+  // stays honest (awaiting_approval sessions are a legitimate durable pause and survive the restart).
+  reconcileSessions();
 
   // Enforce data-retention limits at startup and on a timer (no-op unless a limit is configured).
   sweepRetention((line) => console.log(line));
@@ -82,6 +88,7 @@ async function main(): Promise<void> {
       await api.register(diffRoutes);
       await api.register(corpusRoutes);
       await api.register(copilotRoutes);
+      await api.register(agentRoutes);
       await api.register(reportRoutes);
       await api.register(storageRoutes);
       await api.register(toolRoutes);

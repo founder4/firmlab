@@ -83,6 +83,40 @@ export interface FindingRow {
   createdAt: number;
 }
 
+/** Lifecycle of an agent session. `running`/`awaiting_approval` are the *active* states that pin the image. */
+export type AgentSessionStatus = 'running' | 'awaiting_approval' | 'done' | 'error' | 'halted';
+
+/** A conscious-autonomy run over one image: its budget, what it has consumed, and its terminal reason. */
+export interface AgentSessionRow {
+  id: string;
+  imageId: string;
+  status: AgentSessionStatus;
+  goal: string | null;
+  /** Governor budget snapshot: { maxSteps, maxTokens, maxUsd, maxWallMs }. */
+  budgetJson: string;
+  /** Running tally: { steps, inputTokens, outputTokens, usd, elapsedMs }. */
+  consumedJson: string;
+  haltReason: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** One entry in the auditable transcript: a decision node's structured input, output, and rationale. */
+export interface AgentStepRow {
+  id: string;
+  sessionId: string;
+  seq: number;
+  node: string;
+  status: string;
+  inputJson: string | null;
+  outputJson: string | null;
+  rationale: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  createdAt: number;
+}
+
 /** node:sqlite binds named parameters from a plain record; our typed rows are cast through this. */
 type SqlParams = Record<string, string | number | null>;
 function asParams(row: object): SqlParams {
@@ -217,6 +251,41 @@ export function getDb(): DatabaseSync {
       createdAt INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_corpus_rule_key ON corpus_rule(type, key);
+
+    -- === Phase 3: agent sessions. The auditable transcript of a conscious-autonomy run. The mechanics stay
+    -- deterministic; each agent_step records the structured input a decision node saw, the decision it made, and
+    -- its rationale, so every branch choice is reproducible and reviewable. An active session pins its image
+    -- against retention eviction. ===
+    CREATE TABLE IF NOT EXISTS agent_session (
+      id TEXT PRIMARY KEY,
+      imageId TEXT NOT NULL,
+      status TEXT NOT NULL,
+      goal TEXT,
+      budgetJson TEXT NOT NULL,
+      consumedJson TEXT NOT NULL,
+      haltReason TEXT,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL,
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_image ON agent_session(imageId);
+
+    CREATE TABLE IF NOT EXISTS agent_step (
+      id TEXT PRIMARY KEY,
+      sessionId TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      node TEXT NOT NULL,
+      status TEXT NOT NULL,
+      inputJson TEXT,
+      outputJson TEXT,
+      rationale TEXT,
+      model TEXT,
+      inputTokens INTEGER NOT NULL DEFAULT 0,
+      outputTokens INTEGER NOT NULL DEFAULT 0,
+      createdAt INTEGER NOT NULL,
+      FOREIGN KEY (sessionId) REFERENCES agent_session(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_step_session ON agent_step(sessionId);
   `);
   // Migration: add the tags column to databases created before it existed.
   try {
@@ -413,4 +482,77 @@ export function listBinaries(imageId: string): BinaryRow[] {
   return getDb()
     .prepare('SELECT * FROM binaries WHERE imageId = ? ORDER BY networkFacing DESC, path ASC')
     .all(imageId) as unknown as BinaryRow[];
+}
+
+// === Agent sessions (Phase 3) ===
+
+/** The active states — a session in one of these pins its image against retention eviction. */
+const ACTIVE_SESSION_STATES = "('running', 'awaiting_approval')";
+
+export function insertSession(row: AgentSessionRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO agent_session (id, imageId, status, goal, budgetJson, consumedJson, haltReason, createdAt, updatedAt)
+       VALUES (@id, @imageId, @status, @goal, @budgetJson, @consumedJson, @haltReason, @createdAt, @updatedAt)`,
+    )
+    .run(asParams(row));
+}
+
+export function updateSession(
+  id: string,
+  status: AgentSessionStatus,
+  consumedJson: string,
+  haltReason: string | null,
+): void {
+  getDb()
+    .prepare('UPDATE agent_session SET status = ?, consumedJson = ?, haltReason = ?, updatedAt = ? WHERE id = ?')
+    .run(status, consumedJson, haltReason, Date.now(), id);
+}
+
+export function getSession(id: string): AgentSessionRow | undefined {
+  return getDb().prepare('SELECT * FROM agent_session WHERE id = ?').get(id) as unknown as AgentSessionRow | undefined;
+}
+
+export function listSessions(imageId: string): AgentSessionRow[] {
+  return getDb()
+    .prepare('SELECT * FROM agent_session WHERE imageId = ? ORDER BY createdAt DESC')
+    .all(imageId) as unknown as AgentSessionRow[];
+}
+
+export function latestSession(imageId: string): AgentSessionRow | undefined {
+  return getDb()
+    .prepare('SELECT * FROM agent_session WHERE imageId = ? ORDER BY createdAt DESC LIMIT 1')
+    .get(imageId) as unknown as AgentSessionRow | undefined;
+}
+
+/** Whether an image has a session that is still running or waiting for approval (used by the retention guard). */
+export function hasActiveSession(imageId: string): boolean {
+  const row = getDb()
+    .prepare(`SELECT 1 FROM agent_session WHERE imageId = ? AND status IN ${ACTIVE_SESSION_STATES} LIMIT 1`)
+    .get(imageId) as unknown as { 1: number } | undefined;
+  return row !== undefined;
+}
+
+/** The set of image ids with an active session — retention consults this so it never evicts a pinned image. */
+export function imagesWithActiveSessions(): Set<string> {
+  const rows = getDb()
+    .prepare(`SELECT DISTINCT imageId FROM agent_session WHERE status IN ${ACTIVE_SESSION_STATES}`)
+    .all() as unknown as { imageId: string }[];
+  return new Set(rows.map((r) => r.imageId));
+}
+
+export function insertStep(row: AgentStepRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO agent_step
+         (id, sessionId, seq, node, status, inputJson, outputJson, rationale, model, inputTokens, outputTokens, createdAt)
+       VALUES (@id, @sessionId, @seq, @node, @status, @inputJson, @outputJson, @rationale, @model, @inputTokens, @outputTokens, @createdAt)`,
+    )
+    .run(asParams(row));
+}
+
+export function listSteps(sessionId: string): AgentStepRow[] {
+  return getDb()
+    .prepare('SELECT * FROM agent_step WHERE sessionId = ? ORDER BY seq ASC')
+    .all(sessionId) as unknown as AgentStepRow[];
 }
