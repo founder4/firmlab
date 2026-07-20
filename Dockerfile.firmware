@@ -85,14 +85,29 @@ RUN curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh  |
 #     && mv /opt/ghidra_* /opt/ghidra && ln -sf /opt/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless \
 #     && rm -rf /var/lib/apt/lists/*
 # ENV GHIDRA_INSTALL_DIR=/opt/ghidra
-# ARG RENODE_VER=1.16.1
-# RUN curl -fsSL "https://github.com/renode/renode/releases/download/v${RENODE_VER}/renode-${RENODE_VER}.linux-portable.tar.gz" \
-#      -o /tmp/renode.tgz && mkdir -p /opt/renode && tar xzf /tmp/renode.tgz -C /opt/renode --strip-components=1 \
-#      && rm /tmp/renode.tgz && ln -sf /opt/renode/renode /usr/local/bin/renode
 #
-# === (Optional) AFL++ — coverage-guided fuzzing (Phase 4). ===
-# Wired in apps/api/src/providers/fuzz.ts (qemu mode, run under the isolation sandbox). Opt-in like Ghidra: with
-# it absent the fuzz job returns available:false honestly. The Debian package ships afl-fuzz + afl-qemu-trace.
-# RUN apt-get update && apt-get install -y --no-install-recommends aflplusplus && rm -rf /var/lib/apt/lists/*
+# === (Optional, heavy) Renode — RTOS / Cortex-M boot (Phase 4, providers/renode.ts). ===
+# VALIDATED recipe (real Contiki boot on an emulated STM32F4). Use the arch-matched portable-dotnet build — it is
+# self-contained except for .NET's ICU + OpenSSL — and drop it at /opt/renode so RENODE_PLATFORMS_DIR resolves.
+# On x86_64 swap arm64→x64 in the asset name. platforms/ ship inside the tarball; no per-MCU setup needed.
+# ARG RENODE_VER=1.16.1
+# RUN apt-get update && apt-get install -y --no-install-recommends libicu72 libssl3 ca-certificates && rm -rf /var/lib/apt/lists/* \
+#     && curl -fsSL "https://github.com/renode/renode/releases/download/v${RENODE_VER}/renode-${RENODE_VER}.linux-arm64-portable-dotnet.tar.gz" \
+#        -o /tmp/renode.tgz && mkdir -p /opt/renode && tar xzf /tmp/renode.tgz -C /opt/renode --strip-components=1 \
+#     && rm /tmp/renode.tgz && ln -sf /opt/renode/renode /usr/local/bin/renode && renode --version | head -1
+#
+# === (Optional) AFL++ — coverage-guided fuzzing (Phase 4, providers/fuzz.ts, qemu mode under the sandbox). ===
+# Opt-in like Ghidra: absent afl-fuzz → available:false honestly. Build BOTH afl-fuzz AND afl-qemu-trace from source
+# so their fork-server protocols match — the Debian `afl++` package (v4.x) pairs with a source-built afl-qemu-trace
+# (v5.x) only by luck and its child dies on first spawn ("Unable to request new process"). Set CPU_TARGET to the
+# guest arch you fuzz (aarch64 here; e.g. arm/mips for other firmware). Put the matched pair ahead of apt in PATH.
+# RUN apt-get update && apt-get install -y --no-install-recommends git ninja-build meson pkg-config libglib2.0-dev \
+#        libpixman-1-dev python3 flex bison make gcc g++ && rm -rf /var/lib/apt/lists/* \
+#     && git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /afl \
+#     && make -C /afl source-only NO_NYX=1 \
+#     && (cd /afl/qemu_mode && CPU_TARGET=aarch64 ./build_qemu_support.sh) \
+#     && cp /afl/afl-fuzz /afl/afl-qemu-trace /afl/afl-showmap /afl/afl-tmin /usr/local/bin/ \
+#     && afl-fuzz --version && afl-qemu-trace --version | head -1
+# ENV AFL_PATH=/afl
 
 CMD ["node", "apps/api/dist/index.js"]

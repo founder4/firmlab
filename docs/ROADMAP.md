@@ -134,8 +134,9 @@ opt-in AFL++ provider (`providers/fuzz.ts`) fuzzes under the sandbox, degrading 
 like Ghidra. Env: `FIRMLAB_ISOLATE_CPU/_MEM_MB/_FSIZE_MB/_WALL_SECONDS`. `/api/agent/config` reports
 `phase4: {isolation, fuzzing, autoRun}`. Validated end-to-end in the firmware image (mock LLM for ①②④): full
 transcript through node ④, a command-injection candidate from the real radare2 scaffold, and a real qemu-user run
-auto-executed under netns+rlimits with no approval — proof-state honest. RTOS/Renode and UEFI/chipsec are
-recognized (preflight detects Renode) but not yet integrated — no faked coverage.
+auto-executed under netns+rlimits with no approval — proof-state honest. AFL++ and Renode are both integrated and
+validated against real firmware (a real coverage-guided crash; a real Contiki boot on an emulated STM32F4); UEFI/chipsec
+remains recognized but not integrated — no faked coverage.
 
 **Phase 5.0/5.1 — external intelligence (implemented).** The first internet-touching capability, behind its OWN
 flag `FIRMLAB_RESEARCH` (separate from `FIRMLAB_AGENT`; unset → zero external egress, local-only preserved). A
@@ -174,17 +175,27 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
   mapping to root, then a fresh netns), so `full` isolation works WITHOUT `CAP_SYS_ADMIN` on hosts that allow
   unprivileged user namespaces. Caveat: some container runtimes (e.g. Docker/OrbStack default) block `unshare`
   entirely, so there it still needs `--cap-add=SYS_ADMIN` or degrades honestly to `partial` (approval kept).
-- **~ AFL++ fuzzing** (debt #1) — the opt-in AFL++ Docker layer is added (commented, like Ghidra) and a `/images/:id/fuzz`
-  route + isolation-run provider are wired; a real reproduced crash still needs the layer present + a target (the
-  command/detection/route are validated, not an actual AFL crash).
-- **~ RTOS/Renode** (debt #4) — `providers/renode.ts` builds the headless `.resc` and degrades honestly to
-  `blocked_by_platform` without Renode or a per-MCU platform description. Auto-selecting a platform per detected MCU,
-  and UEFI/chipsec, are still not integrated.
+- **✅ AFL++ fuzzing** (debt #1) — `providers/fuzz.ts` runs coverage-guided qemu-mode AFL++ under isolation, with a
+  seed corpus + a `rabin2`-mined dictionary, and records a `fuzz-crash` finding (`confirmed_in_emulation`) for each
+  reproduced crash. Validated end-to-end **twice** against a real AFL++ (built `afl-qemu-trace`): (1) a planted
+  magic-prefix NULL-deref was discovered by coverage feedback in ~4k execs → SIGSEGV → confirmed finding; (2) a real
+  known firmware — OpenWrt 23.05.5 aarch64 `busybox` — was instrumented for 257k execs with an honest 0-crash result.
+  Two fixes the real binary forced: `-m none` (a qemu-mode fork dies under an `--as` cap) and `QEMU_LD_PREFIX=<rootfs>`
+  (dynamically-linked firmware binaries need their own loader/libs, which static test targets masked). Still opt-in:
+  no `afl-fuzz` → honest `available:false`.
+- **✅ RTOS/Renode** (debt #4) — `providers/renode.ts` boots a real MCU firmware under Renode and decides "booted" from
+  the actual UART bytes (per-UART file backend), never assumption; it discovers the right UART by following the
+  platform `.repl`'s `using` include graph, and degrades honestly to `blocked_by_platform` without Renode or a
+  matching platform. Validated end-to-end with a real known sample — Contiki OS on an emulated STM32F4 Discovery
+  (Renode's canonical demo ELF) booted and printed `Contiki 3.x started` on uart4 → `confirmed_in_emulation`. Runs
+  under `full` isolation (netns + cpu + wall-clock caps); the `--as`/`--fsize` caps are skipped because .NET's GC and
+  Renode's mmap'd emulation files abort under them. Auto-selecting a platform per detected MCU is wired for the common
+  families (STM32/nRF/cortex-m); broader auto-identification and UEFI/chipsec are still not integrated.
 
 ### Remaining backlog
 
-- AFL++: bake the opt-in layer + a per-class fuzz harness and validate a real crash upgrade.
-- Renode platform auto-selection per MCU; UEFI/chipsec integration.
+- Renode: broaden per-MCU auto-identification beyond the common families; UEFI/chipsec integration.
+- Fuzzing: per-class trigger harnesses (stdin/desock network daemons) beyond file-input (`@@`) targets.
 - External-intelligence: sources beyond OSV/security.txt (NVD/PSIRT/CNA), a downloadable disclosure-report generator,
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.

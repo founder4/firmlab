@@ -30,6 +30,14 @@ describe('buildIsolatedInvocation', () => {
     expect(args).toContain('--core=0');
   });
 
+  it('omits the address-space cap when addressSpaceBytes <= 0 (managed runtimes abort under --as)', () => {
+    const { args } = buildIsolatedInvocation(argv, { ...limits, addressSpaceBytes: 0 }, 'full');
+    expect(args.some((a) => a.startsWith('--as='))).toBe(false);
+    // the other caps still apply
+    expect(args).toContain('--cpu=30');
+    expect(args).toContain('--nofile=256');
+  });
+
   it('full: uses the rootless netns flag (-rn) when the probe found that works, no CAP_SYS_ADMIN needed', () => {
     const { file, args } = buildIsolatedInvocation(argv, limits, 'full', ['-rn']);
     expect(file).toBe('unshare');

@@ -388,17 +388,25 @@ sin aprobación humana**, porque el radio ya está contenido; `partial` (solo rl
 de aprobación de la Fase 3. Degradación honesta: `unshare -n` necesita `CAP_SYS_ADMIN`; sin él, `partial`.
 
 **Fuzzing AFL++ (`providers/fuzz.ts`, opt-in).** Fuzz qemu-mode acotado en tiempo, ejecutado *dentro* del sandbox
-de aislamiento; un crash reproducido es evidencia dinámica real. Como Ghidra, la capa AFL++ no se hornea en la
-imagen: sin `afl-fuzz` presente, `available:false` honesto — nunca finge haber fuzzeado.
+de aislamiento, con corpus semilla + diccionario minado de `rabin2`; un crash reproducido registra un finding
+`fuzz-crash` (`confirmed_in_emulation`). Como Ghidra, la capa AFL++ no se hornea en la imagen: sin `afl-fuzz`
+presente, `available:false` honesto — nunca finge haber fuzzeado. Validado con AFL++ real dos veces: un NULL-deref
+plantado hallado por cobertura (→ SIGSEGV → finding confirmado) y el `busybox` aarch64 real de OpenWrt instrumentado
+257k execs (0 crashes honestos). Para binarios de firmware reales (enlazados dinámicamente) se pasa
+`QEMU_LD_PREFIX=<rootfs>` y `-m none` (un fork qemu-mode muere bajo cap `--as`).
 
 **El flujo (`agent/session.ts`).** Tras el nodo ②, el orquestador corre node ④ sobre el objetivo top (garantizando
 su triage), registra los candidatos como findings + priors de reachability (write-back de Nivel-2), y decide la
 emulación por nivel de aislamiento: `full` → auto-run bajo sandbox sin aprobación; si no → `awaiting_approval`.
 `/api/agent/config` expone `phase4: { isolation, fuzzing, autoRun }`.
 
-**Cobertura de clases (RTOS/Renode, UEFI/chipsec).** El preflight ya detecta Renode y surface la receta RTOS; la
-integración plena de Renode/UEFI/chipsec queda reconocida pero **no integrada** (tooling de escala propia), con
-degradación honesta — no se finge cobertura que no existe.
+**RTOS/Renode (`providers/renode.ts`, opt-in).** Arranca un firmware MCU real bajo Renode y decide "booted" desde los
+bytes UART reales (file-backend por UART), nunca por asunción; descubre el UART correcto siguiendo el grafo de
+includes `using` del `.repl` de la plataforma, y degrada honestamente a `blocked_by_platform` sin Renode o sin
+plataforma. Validado con muestra real: Contiki OS sobre un STM32F4 Discovery emulado (ELF demo canónico de Renode)
+arrancó e imprimió `Contiki 3.x started` en uart4 → `confirmed_in_emulation`. Corre bajo aislamiento `full` (netns +
+cpu + wall-clock); los caps `--as`/`--fsize` se omiten porque el GC de .NET y los ficheros mmap de Renode abortan bajo
+ellos. **UEFI/chipsec** queda reconocido pero **no integrado** — degradación honesta, sin fingir cobertura.
 
 **Validado de extremo a extremo** en la imagen firmware (mock LLM para ①②④): config Fase-4 con `isolation:full`;
 sesión completa `triaje → extracción → preflight → ② → ④ → emulación`; node ④ produce un candidato de

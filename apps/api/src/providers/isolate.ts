@@ -68,8 +68,13 @@ export function buildIsolatedInvocation(
   const prlimit = [
     'prlimit',
     `--cpu=${limits.cpuSeconds}`,
-    `--as=${asBytes}`,
-    `--fsize=${fsizeBytes}`,
+    // An address-space cap is skipped when addressSpaceBytes <= 0. Managed runtimes (Renode's .NET GC on arm64)
+    // reserve a huge virtual region up front and abort under any --as ceiling; the cpu/fsize/nofile/netns caps
+    // still apply, so isolation is preserved without breaking those workloads.
+    ...(asBytes > 0 ? [`--as=${asBytes}`] : []),
+    // Likewise skipped when <= 0: Renode's memory-mapped emulation files trip a --fsize ceiling (SIGXFSZ). The
+    // wall-clock + cpu caps still bound a runaway, and sparse mmaps don't actually consume disk.
+    ...(fsizeBytes > 0 ? [`--fsize=${fsizeBytes}`] : []),
     `--nofile=${limits.openFiles}`,
     '--core=0',
     '--',

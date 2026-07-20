@@ -24,6 +24,7 @@ import { ghidraRoutes } from './routes/ghidra.js';
 import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
+import { renodeRoutes } from './routes/renode.js';
 import { reportRoutes } from './routes/report.js';
 import { researchRoutes } from './routes/research.js';
 import { sbomRoutes } from './routes/sbom.js';
@@ -92,6 +93,7 @@ async function main(): Promise<void> {
       await api.register(copilotRoutes);
       await api.register(agentRoutes);
       await api.register(fuzzRoutes);
+      await api.register(renodeRoutes);
       await api.register(researchRoutes);
       await api.register(reportRoutes);
       await api.register(storageRoutes);

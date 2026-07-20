@@ -4,6 +4,7 @@
  * returns available:false honestly. A reproduced crash is real dynamic evidence.
  */
 import type { FastifyInstance } from 'fastify';
+import { type FindingDraft, syncFindings } from '../findings.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { runFuzz } from '../providers/fuzz.js';
 import { startJob } from '../providers/jobs.js';
@@ -23,9 +24,24 @@ export async function fuzzRoutes(app: FastifyInstance): Promise<void> {
     const body = (req.body ?? {}) as { binary?: string; seconds?: number };
     if (!body.binary) return reply.status(400).send({ error: 'No target binary specified' });
     const seconds = Math.min(600, Math.max(10, Number(body.seconds ?? 60)));
-    const jobId = startJob(id, 'fuzz', { binary: body.binary, seconds }, (h) =>
-      runFuzz(rootfs, body.binary as string, h, seconds),
-    );
+    const binary = body.binary;
+    const jobId = startJob(id, 'fuzz', { binary, seconds }, async (h) => {
+      const result = await runFuzz(rootfs, binary, h, seconds);
+      // A reproduced crash is real dynamic evidence — record it as a confirmed finding tied to the binary.
+      if (result.crashes > 0) {
+        const draft: FindingDraft = {
+          kind: 'fuzz-crash',
+          title: `Fuzzing crashed ${binary} (${result.crashes} unique crash${result.crashes === 1 ? '' : 'es'})`,
+          severity: 'high',
+          proofState: 'confirmed_in_emulation',
+          evidence: { binary, crashes: result.crashes, samples: result.crashSamples },
+          rationale:
+            'AFL++ reproduced a crash under isolation — memory-unsafety confirmed in the sandbox (not the device).',
+        };
+        syncFindings(id, `fuzz:${binary}`, [draft]);
+      }
+      return result;
+    });
     return reply.status(202).send({ jobId });
   });
 
