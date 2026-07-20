@@ -1552,6 +1552,60 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
             </div>
           )}
 
+          {result.keyMaterial.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div className="eyebrow" style={{ marginBottom: 6 }}>
+                Key material · embedded keys are effectively public
+              </div>
+              {result.keyMaterial.map((k) => (
+                <div
+                  key={k.kind + k.redacted}
+                  style={{
+                    display: 'flex',
+                    gap: 8,
+                    alignItems: 'baseline',
+                    fontSize: 12.5,
+                    marginBottom: 3,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span className="badge">{k.kind}</span>
+                  <span className="mono hint">{k.redacted}</span>
+                  {k.effectivelyPublic && (
+                    <span className="badge badge-high" title="Extractable from any device running this firmware">
+                      effectively public
+                    </span>
+                  )}
+                  {(k.sharedInImages ?? 0) > 0 && (
+                    <span className="badge badge-medium">reused in {k.sharedInImages} other image(s)</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {result.securityContacts.some((c) => c.checked) && (
+            <div style={{ marginBottom: 12 }}>
+              <div className="eyebrow" style={{ marginBottom: 6 }}>
+                Responsible disclosure · security.txt
+              </div>
+              {result.securityContacts.map((c) => (
+                <div key={c.domain} style={{ fontSize: 12.5, marginBottom: 3 }}>
+                  <span className="mono">{c.domain}</span>{' '}
+                  {c.found ? (
+                    c.contact.map((x) => (
+                      <span key={x} className="badge badge-ok" style={{ marginRight: 4 }}>
+                        {x}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="hint">{c.reason ?? 'no security.txt'}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {result.synthesis && (
             <>
               <div className="eyebrow" style={{ marginBottom: 6 }}>

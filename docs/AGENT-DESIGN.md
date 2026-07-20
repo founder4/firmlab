@@ -490,6 +490,17 @@ Validado en el contenedor: flag-off inerte (status disabled, POST 400); flag-on 
 (`acme-networks`/`v1.2.3` de `/etc/issue`) → **brief real de DeepSeek**. Tests puros: OSV, provenance, config-gate,
 egress — sin tocar `node:sqlite`.
 
-**Pendiente en este track** (deuda, `docs/ROADMAP.md`): más fuentes que OSV (NVD/PSIRT/security.txt); **5.2**
-(procedencia de claves publicadas) y **5.3** (asistencia a disclosure: descubrir contacto + redactar reporte) aún no
-construidas; mecanismo de egress-allowlist reforzado (proxy/netns) y caché OSV en el corpus.
+**5.2/5.3 — procedencia de claves + disclosure (implementado).**
+- **5.2** (`providers/keys.ts`): resume material de claves del análisis **y de un escaneo acotado del rootfs
+  extraído** (las claves viven comprimidas dentro del FS, invisibles a nivel de imagen). Una clave privada embebida
+  es **efectivamente pública** (extraíble de cualquier dispositivo); `sharedInImages` (cross-ref del corpus) lo
+  prueba directamente. Valores redactados; nunca es un servicio de cracking.
+- **5.3** (`providers/securitytxt.ts`): descubre el contacto de disclosure vía RFC 9116
+  (`/.well-known/security.txt`), pero **solo para dominios que el operador metió en el allowlist**; los demás se
+  reportan como "no comprobado — añádelo al allowlist" (sin egress sorpresa). El brief de intel redacta el reporte
+  con ese contacto; lo envía el humano. Validado con `security.txt` real (cloudflare → contacto hackerone) y la rama
+  no-allowlisted honesta.
+
+**Pendiente en este track** (deuda, `docs/ROADMAP.md`): más fuentes que OSV/security.txt (NVD/PSIRT/CNA); un
+generador de reporte de disclosure descargable; mecanismo de egress-allowlist reforzado (proxy/netns) y caché OSV en
+el corpus.

@@ -147,8 +147,17 @@ by default). Every fetch passes an allowlist choke point (`research/config.ts`) 
 is a lead, not a confirmed bug — reachability is decided per-image. Web: an "External intelligence" panel in the
 dossier. Validated end-to-end in the container with REAL services: syft SBOM (194 pkgs) → real OSV (70 published
 advisories, e.g. apt 2.6.1 → DEBIAN-CVE-2011-3374) → provenance (acme-networks/v1.2.3 from /etc/issue) → real
-DeepSeek brief. Env: `FIRMLAB_RESEARCH`, `FIRMLAB_RESEARCH_ALLOWLIST`, `FIRMLAB_RESEARCH_TIMEOUT_MS`. Not yet:
-5.2 (published key provenance), 5.3 (disclosure contact discovery + report draft), sources beyond OSV.
+DeepSeek brief. Env: `FIRMLAB_RESEARCH`, `FIRMLAB_RESEARCH_ALLOWLIST`, `FIRMLAB_RESEARCH_TIMEOUT_MS`.
+
+**Phase 5.2/5.3 — key provenance + responsible disclosure (implemented).** 5.2 (`providers/keys.ts`) surfaces
+embedded key material from the analysis AND a bounded rootfs scan (keys live compressed inside the FS, invisible at
+image level): an embedded private key is effectively public (extractable), and corpus reuse (`sharedInImages`)
+proves it directly — values redacted, never a cracking service. 5.3 (`providers/securitytxt.ts`) discovers the
+vendor disclosure contact via RFC 9116 (/.well-known/security.txt) but ONLY for domains the operator allowlisted
+(others are reported "not checked — add to allowlist", no surprise egress); the intel brief drafts the report with
+that contact — the human sends it. Validated with a real security.txt (cloudflare → hackerone contact) and an
+embedded dropbear key flagged effectively-public. Not yet: sources beyond OSV/security.txt (NVD/PSIRT/CNA), a
+downloadable disclosure-report generator, hardened egress (proxy/netns), corpus OSV cache.
 
 ### Known limitations & tech debt (pay down gradually)
 

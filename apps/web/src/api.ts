@@ -333,6 +333,8 @@ export interface ResearchResult {
     totalAdvisories: number;
     components: { name: string; version: string; ecosystem: string | null; advisories: OsvAdvisory[] }[];
   };
+  keyMaterial: { kind: string; redacted: string; effectivelyPublic: boolean; sharedInImages?: number }[];
+  securityContacts: { domain: string; checked: boolean; found: boolean; reason?: string; contact: string[] }[];
   synthesis?: { text: string; model: string; provider: string };
 }
 
