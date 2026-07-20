@@ -111,6 +111,17 @@ export class Governor {
     this.consumed.usd += estimateUsd(model, inputTokens, outputTokens);
   }
 
+  /** Restore a persisted tally without counting a phantom step (for a governor resumed outside the main loop). */
+  seed(consumed: GovernorConsumed): void {
+    this.consumed = {
+      steps: consumed.steps,
+      inputTokens: consumed.inputTokens,
+      outputTokens: consumed.outputTokens,
+      usd: consumed.usd,
+      elapsedMs: 0, // recomputed by snapshot() from the clock
+    };
+  }
+
   /** Snapshot of consumption, with wall-clock filled from the clock, for persisting or checking. */
   snapshot(): GovernorConsumed {
     return { ...this.consumed, elapsedMs: this.now() - this.startMs };

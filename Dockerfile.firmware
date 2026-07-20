@@ -89,5 +89,10 @@ RUN curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh  |
 # RUN curl -fsSL "https://github.com/renode/renode/releases/download/v${RENODE_VER}/renode-${RENODE_VER}.linux-portable.tar.gz" \
 #      -o /tmp/renode.tgz && mkdir -p /opt/renode && tar xzf /tmp/renode.tgz -C /opt/renode --strip-components=1 \
 #      && rm /tmp/renode.tgz && ln -sf /opt/renode/renode /usr/local/bin/renode
+#
+# === (Optional) AFL++ — coverage-guided fuzzing (Phase 4). ===
+# Wired in apps/api/src/providers/fuzz.ts (qemu mode, run under the isolation sandbox). Opt-in like Ghidra: with
+# it absent the fuzz job returns available:false honestly. The Debian package ships afl-fuzz + afl-qemu-trace.
+# RUN apt-get update && apt-get install -y --no-install-recommends aflplusplus && rm -rf /var/lib/apt/lists/*
 
 CMD ["node", "apps/api/dist/index.js"]

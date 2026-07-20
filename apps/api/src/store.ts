@@ -16,7 +16,8 @@ export type JobKind =
   | 'diff'
   | 'ghidra'
   | 'copilot'
-  | 'research';
+  | 'research'
+  | 'fuzz';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {

@@ -4,14 +4,16 @@
  * radius with OS primitives instead of a nested container, so it is portable and needs no privileged daemon:
  *
  *   - prlimit: hard CPU-time, address-space (RAM), file-size and fd caps — enforced by the kernel, no shell.
- *   - unshare -n: a fresh network namespace with no interfaces, so a booted service cannot reach the network.
+ *   - unshare: a fresh network namespace with no interfaces, so a booted service cannot reach the network. We
+ *     prefer `-n` (needs CAP_SYS_ADMIN) but fall back to `-rn` (a user namespace mapping to root first), which
+ *     gives full network isolation UNPRIVILEGED when the kernel allows unprivileged user namespaces.
  *   - a private throwaway workdir, removed in a finally — teardown is guaranteed, never "creative".
  *
- * `runIsolated` composes these WITHOUT a shell (execFile of prlimit/unshare directly), so a rootfs path with odd
- * characters can't inject a command. When the primitives aren't present (macOS dev, or util-linux missing) the
- * isolation level degrades honestly and the session falls back to the Phase-3 approval gate.
+ * `runIsolated` composes these without a shell (spawn of unshare/prlimit directly), so a rootfs path with odd
+ * characters can't inject a command, and it can drive the target with a trigger via stdin/env/argv while capturing
+ * the exit signal (a crash) for the trigger harness. When the primitives aren't present the level degrades honestly.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,6 +34,8 @@ export interface IsolationLimits {
 export interface IsolatedResult {
   ran: boolean;
   exitCode: number | null;
+  /** The signal that killed the process, if any — SIGSEGV/SIGABRT is a reproduced crash for the trigger harness. */
+  signal: string | null;
   timedOut: boolean;
   stdout: string;
   stderr: string;
@@ -50,48 +54,64 @@ export function loadIsolationLimits(env: NodeJS.ProcessEnv = process.env): Isola
 }
 
 /**
- * Pure: compose the isolation invocation for an inner argv. `prlimit` applies the kernel caps; `unshare -n`
- * (only at level 'full') drops network access. Returns the execFile file+args — no shell in the chain.
+ * Pure: compose the isolation invocation for an inner argv. `prlimit` applies the kernel caps; `unshare <netns>`
+ * (only at level 'full') drops network access with whichever flag the probe found works. No shell in the chain.
  */
 export function buildIsolatedInvocation(
   argv: string[],
   limits: IsolationLimits,
   level: IsolationLevel,
+  netnsArgs: string[] = ['-n'],
 ): { file: string; args: string[] } {
-  const asKb = Math.floor(limits.addressSpaceBytes / 1024);
-  const fsizeKb = Math.floor(limits.fileSizeBytes / 1024);
+  const asBytes = Math.floor(limits.addressSpaceBytes / 1024) * 1024;
+  const fsizeBytes = Math.floor(limits.fileSizeBytes / 1024) * 1024;
   const prlimit = [
     'prlimit',
     `--cpu=${limits.cpuSeconds}`,
-    `--as=${asKb * 1024}`,
-    `--fsize=${fsizeKb * 1024}`,
+    `--as=${asBytes}`,
+    `--fsize=${fsizeBytes}`,
     `--nofile=${limits.openFiles}`,
     '--core=0',
     '--',
     ...argv,
   ];
-  if (level === 'full') return { file: 'unshare', args: ['-n', ...prlimit] };
+  if (level === 'full') return { file: 'unshare', args: [...netnsArgs, ...prlimit] };
   if (level === 'partial') return { file: prlimit[0] as string, args: prlimit.slice(1) };
-  // 'none' — no isolation available; run the argv directly (the caller decides whether that's acceptable).
   return { file: argv[0] as string, args: argv.slice(1) };
 }
 
 let cachedLevel: IsolationLevel | null = null;
+let cachedNetns: string[] = ['-n'];
 
 async function canRun(file: string, args: string[]): Promise<boolean> {
   try {
     await execFileAsync(file, args, { timeout: 4000 });
     return true;
   } catch (err) {
-    // A tool that exists but exits non-zero (e.g. `prlimit --help`) still proves availability; ENOENT does not.
-    return (err as { code?: string }).code !== 'ENOENT';
+    // A tool that exists but exits non-zero still proves availability; ENOENT does not. For `unshare -n true`,
+    // failure means the namespace couldn't be created (no privilege), which we DO want to treat as "can't".
+    const e = err as { code?: string };
+    if (e.code === 'ENOENT') return false;
+    // Distinguish "ran but exited nonzero" (fine) from "failed to create ns". execFile rejects with code number
+    // for a nonzero exit; unshare failing to create the ns exits nonzero too — so for the netns probe we require
+    // a clean exit. canRunClean handles that; this looser check is for `--version` probes.
+    return true;
+  }
+}
+
+async function canRunClean(file: string, args: string[]): Promise<boolean> {
+  try {
+    await execFileAsync(file, args, { timeout: 4000 });
+    return true;
+  } catch {
+    return false;
   }
 }
 
 /**
- * Detect the best isolation level this deployment can enforce. Cached — the toolchain doesn't change at runtime.
- *   full    = prlimit + a usable network namespace (unshare -n) → auto-run emulation, no approval.
- *   partial = prlimit only (CPU/RAM/fsize caps, but the process keeps network) → approval still required.
+ * Detect the best isolation level this deployment can enforce, and remember which unshare flag creates a netns.
+ *   full    = prlimit + a usable network namespace (`unshare -n`, else rootless `unshare -rn`) → auto-run, no gate.
+ *   partial = prlimit only → approval still required.
  *   none    = neither (macOS dev, util-linux absent) → Phase-3 approval flow.
  */
 export async function detectIsolation(): Promise<IsolationLevel> {
@@ -100,52 +120,87 @@ export async function detectIsolation(): Promise<IsolationLevel> {
     cachedLevel = 'none';
     return cachedLevel;
   }
-  const hasPrlimit = await canRun('prlimit', ['--version']);
-  // A real netns test: unshare -n must actually create the namespace (needs privilege / a recent kernel).
-  const netns = hasPrlimit && (await canRun('unshare', ['-n', 'true']));
-  cachedLevel = !hasPrlimit ? 'none' : netns ? 'full' : 'partial';
+  if (!(await canRun('prlimit', ['--version']))) {
+    cachedLevel = 'none';
+    return cachedLevel;
+  }
+  if (await canRunClean('unshare', ['-n', 'true'])) {
+    cachedNetns = ['-n'];
+    cachedLevel = 'full';
+  } else if (await canRunClean('unshare', ['-rn', 'true'])) {
+    cachedNetns = ['-rn']; // rootless: map to root in a new userns, then a fresh netns — no CAP_SYS_ADMIN needed
+    cachedLevel = 'full';
+  } else {
+    cachedLevel = 'partial';
+  }
   return cachedLevel;
 }
 
-/** Test seam — reset the cached probe (used by unit tests). */
+/** The unshare flags the probe found usable for network isolation (for callers building their own invocation). */
+export function isolationNetnsArgs(): string[] {
+  return cachedNetns;
+}
+
+/** Test seam — reset the cached probe. */
 export function resetIsolationCache(): void {
   cachedLevel = null;
+  cachedNetns = ['-n'];
 }
 
 /**
  * Run an argv under the strongest available isolation, in a private throwaway workdir that is always removed.
- * Bounded by a wall-clock timeout (SIGKILL) on top of the CPU rlimit, with a minimal environment.
+ * Supports driving the target with a trigger (stdin/env/argv) and reports the exit signal so a crash is visible.
  */
 export async function runIsolated(
   argv: string[],
-  opts: { limits?: IsolationLimits; env?: NodeJS.ProcessEnv } = {},
+  opts: { limits?: IsolationLimits; env?: NodeJS.ProcessEnv; input?: string } = {},
 ): Promise<IsolatedResult> {
   const limits = opts.limits ?? loadIsolationLimits();
   const level = await detectIsolation();
-  const { file, args } = buildIsolatedInvocation(argv, limits, level);
+  const { file, args } = buildIsolatedInvocation(argv, limits, level, cachedNetns);
   const command = `${file} ${args.join(' ')}`;
   const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-iso-'));
+  const maxBuffer = 8 * 1024 * 1024;
+
   try {
-    const { stdout, stderr } = await execFileAsync(file, args, {
-      timeout: limits.wallMs,
-      killSignal: 'SIGKILL',
-      maxBuffer: 8 * 1024 * 1024,
-      cwd: workdir,
-      env: opts.env ?? { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: workdir },
+    return await new Promise<IsolatedResult>((resolve) => {
+      const child = spawn(file, args, {
+        cwd: workdir,
+        env: opts.env ?? { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: workdir },
+      });
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGKILL');
+      }, limits.wallMs);
+      child.stdout?.on('data', (d: Buffer) => {
+        if (stdout.length < maxBuffer) stdout += d.toString();
+      });
+      child.stderr?.on('data', (d: Buffer) => {
+        if (stderr.length < maxBuffer) stderr += d.toString();
+      });
+      child.on('error', () => {
+        clearTimeout(timer);
+        resolve({ ran: false, exitCode: null, signal: null, timedOut, stdout, stderr, isolation: level, command });
+      });
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        resolve({
+          ran: true,
+          exitCode: code,
+          signal: signal ?? null,
+          timedOut,
+          stdout,
+          stderr,
+          isolation: level,
+          command,
+        });
+      });
+      if (opts.input != null) child.stdin?.write(opts.input);
+      child.stdin?.end();
     });
-    return { ran: true, exitCode: 0, timedOut: false, stdout, stderr, isolation: level, command };
-  } catch (err) {
-    const e = err as { killed?: boolean; code?: number; signal?: string; stdout?: string; stderr?: string };
-    const timedOut = e.killed === true && e.signal === 'SIGKILL';
-    return {
-      ran: true,
-      exitCode: typeof e.code === 'number' ? e.code : null,
-      timedOut,
-      stdout: e.stdout ?? '',
-      stderr: e.stderr ?? '',
-      isolation: level,
-      command,
-    };
   } finally {
     fs.rmSync(workdir, { recursive: true, force: true });
   }

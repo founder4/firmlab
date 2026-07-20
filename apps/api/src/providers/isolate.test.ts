@@ -30,6 +30,14 @@ describe('buildIsolatedInvocation', () => {
     expect(args).toContain('--core=0');
   });
 
+  it('full: uses the rootless netns flag (-rn) when the probe found that works, no CAP_SYS_ADMIN needed', () => {
+    const { file, args } = buildIsolatedInvocation(argv, limits, 'full', ['-rn']);
+    expect(file).toBe('unshare');
+    expect(args[0]).toBe('-rn');
+    expect(args).toContain('prlimit');
+    expect(args.slice(-4)).toEqual(argv);
+  });
+
   it('partial: prlimit only, no unshare', () => {
     const { file, args } = buildIsolatedInvocation(argv, limits, 'partial');
     expect(file).toBe('prlimit');

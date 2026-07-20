@@ -10,8 +10,10 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Architecture } from '@firmlab/core';
+import { runCopilot } from '../copilot.js';
 import { deviceFamilyKey, recordReachabilityPrior } from '../corpus.js';
 import { type FindingDraft, syncFindings } from '../findings.js';
+import { loadLlmConfig } from '../llm.js';
 import type { LlmConfig } from '../llm.js';
 import { type DecompileResult, resolveInsideRootfs, runDecompile } from '../providers/decompile.js';
 import { runChrootService, runFullSystem } from '../providers/emulate-system.js';
@@ -20,6 +22,7 @@ import { type ExtractResult, runExtraction } from '../providers/extract.js';
 import { detectIsolation, runIsolated } from '../providers/isolate.js';
 import { startJob } from '../providers/jobs.js';
 import { QEMU_USER_BY_ARCH, type RuntimeCapabilities, computeRuntimeCapabilities } from '../providers/preflight.js';
+import { interpretTriggerRun, planDelivery } from '../providers/trigger.js';
 import {
   type AgentSessionRow,
   type AgentSessionStatus,
@@ -32,9 +35,11 @@ import {
   insertSession,
   insertStep,
   listBinaries,
+  listFindings,
   listJobs,
   listSteps,
   updateBinaryEmulationStatus,
+  updateFindingProofState,
   updateSession,
 } from '../store.js';
 import { Governor, ZERO_CONSUMED, loadGovernorBudget } from './governor.js';
@@ -220,6 +225,55 @@ async function orchestrate(session: AgentSessionRow, cfg: LlmConfig): Promise<vo
 
   // --- Node ④ Zero-day + Phase-4 emulation gate (auto-run under isolation, or human approval) ---
   await runPhase4(session, gov, caps, selection.decision.emulationPlan, cfg);
+
+  // --- Node ⑤ Synthesis: a cited narrative over the session's findings, when the run actually completed ---
+  if (getSession(session.id)?.status === 'done') await runClosingSynthesis(session, cfg, gov);
+}
+
+/**
+ * Node ⑤ (debt #5) — the session's closing synthesis: a cited narrative over the confirmed findings (zero-day
+ * candidates, emulation proof-states). Reuses the read-only copilot, which now sees the session's outputs. Skipped
+ * silently if out of budget or unavailable — it never fails the run.
+ */
+async function runClosingSynthesis(session: AgentSessionRow, cfg: LlmConfig, gov?: Governor): Promise<void> {
+  const governor = gov ?? seededGovernor(session);
+  if (!governor.check().ok) return;
+  try {
+    const result = await runCopilot(session.imageId, cfg);
+    if (!result) return;
+    governor.record(result.model, result.inputTokens ?? 0, result.outputTokens ?? 0);
+    recordStep(
+      session.id,
+      'synthesis',
+      'ok',
+      undefined,
+      { model: result.model, provider: result.provider },
+      result.text,
+      result.model,
+      result.inputTokens ?? 0,
+      result.outputTokens ?? 0,
+    );
+    persist(session, 'done', governor, null);
+  } catch (err) {
+    recordStep(
+      session.id,
+      'synthesis',
+      'skipped',
+      undefined,
+      undefined,
+      `Synthesis skipped: ${err instanceof Error ? err.message : String(err)}`,
+      null,
+      0,
+      0,
+    );
+  }
+}
+
+/** Rebuild a governor from a session's persisted budget + consumed (for steps that run outside orchestrate). */
+function seededGovernor(session: AgentSessionRow): Governor {
+  const gov = new Governor(JSON.parse(session.budgetJson));
+  gov.seed(JSON.parse(session.consumedJson));
+  return gov;
 }
 
 /**
@@ -236,6 +290,7 @@ async function runPhase4(
 ): Promise<void> {
   const imageId = session.imageId;
   const target = plan[0]?.binary ?? topNetworkBinary(imageId);
+  let topCandidate: ZerodayCandidate | undefined;
 
   // Node ④ needs a binary triage; run/reuse one for the top target.
   if (target && gov.check().ok) {
@@ -256,6 +311,7 @@ async function runPhase4(
         z.result.outputTokens ?? 0,
       );
       recordZerodayFindings(imageId, target, z.decision.candidates);
+      topCandidate = z.decision.candidates[0];
     } else {
       recordStep(
         session.id,
@@ -273,10 +329,12 @@ async function runPhase4(
   }
 
   const isolation = await detectIsolation();
-  if (plan.length === 0) return void persist(session, 'done', gov, null);
-  if (isolation === 'full') {
+  // Best path: drive node ④'s top candidate's TRIGGER into the sink under isolation and confirm it (debt #3).
+  if (topCandidate && target && isolation === 'full') {
+    await confirmTrigger(session, gov, caps, target, topCandidate);
+  } else if (plan.length > 0 && isolation === 'full') {
     await autoRunIsolated(session, gov, caps, plan[0] as TargetSelectionDecision['emulationPlan'][number]);
-  } else {
+  } else if (plan.length > 0) {
     recordStep(
       session.id,
       'isolation',
@@ -289,7 +347,89 @@ async function runPhase4(
       0,
     );
     persist(session, 'awaiting_approval', gov, null);
+  } else {
+    persist(session, 'done', gov, null);
   }
+}
+
+/**
+ * Debt #3 — deliver a candidate's constructed trigger into the sink under FULL isolation, then upgrade the
+ * SPECIFIC finding honestly: a command-injection marker in output, or a crash signal, is confirmed_in_emulation
+ * (proves the sandbox, never the device); anything else leaves the candidate needs_runtime_reproduction.
+ */
+async function confirmTrigger(
+  session: AgentSessionRow,
+  gov: Governor,
+  caps: RuntimeCapabilities,
+  target: string,
+  candidate: ZerodayCandidate,
+): Promise<void> {
+  const imageId = session.imageId;
+  const rootfs = latestRootfs(imageId)?.rootfsPath;
+  const emulator = QEMU_USER_BY_ARCH[caps.arch];
+  const abs = rootfs ? resolveInsideRootfs(rootfs, target) : null;
+  if (!rootfs || !emulator || !abs) {
+    recordStep(
+      session.id,
+      'emulation',
+      'skipped',
+      { binary: target },
+      { isolation: 'full' },
+      'No rootfs/emulator for this arch — cannot deliver the trigger.',
+      null,
+      0,
+      0,
+    );
+    return void persist(session, 'done', gov, null);
+  }
+
+  const marker = `FIRMLABTRIG${randomUUID().slice(0, 8)}`;
+  const delivery = planDelivery(candidate, marker);
+  const argv = [emulator, '-L', rootfs, abs, ...(delivery.args ?? [])];
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: '/tmp', ...(delivery.env ?? {}) };
+  const res = await runIsolated(argv, { env, ...(delivery.input != null ? { input: delivery.input } : {}) });
+  const verdict = interpretTriggerRun(delivery, {
+    stdout: res.stdout,
+    signal: res.signal,
+    exitCode: res.exitCode,
+    timedOut: res.timedOut,
+  });
+
+  if (verdict.confirmed) {
+    const finding = listFindings(imageId).find(
+      (f) => f.source === `zeroday:${target}` && f.evidenceJson?.includes(`"sink":${JSON.stringify(candidate.sink)}`),
+    );
+    if (finding) updateFindingProofState(finding.id, verdict.proofState, verdict.note);
+    updateBinaryEmulationStatus(imageId, target, verdict.proofState);
+    const row = getImage(imageId);
+    if (row?.identityJson) {
+      recordReachabilityPrior(
+        deviceFamilyKey(JSON.parse(row.identityJson)),
+        `${target}:${candidate.sink}`,
+        verdict.proofState,
+        imageId,
+      );
+    }
+  }
+
+  recordStep(
+    session.id,
+    'emulation',
+    'ok',
+    {
+      binary: target,
+      candidate: { sink: candidate.sink, vulnClass: candidate.vulnClass },
+      delivery: delivery.mode,
+      isolation: res.isolation,
+      autoApproved: true,
+    },
+    { confirmed: verdict.confirmed, proofState: verdict.proofState, signal: res.signal, exitCode: res.exitCode },
+    verdict.note,
+    null,
+    0,
+    0,
+  );
+  persist(session, 'done', gov, null);
 }
 
 /** When the plan is empty, the best target for node ④ is a network-facing binary, else the first. */
@@ -408,7 +548,11 @@ export async function approveEmulation(sessionId: string, binary: string | null)
   updateSession(sessionId, 'running', session.consumedJson, null);
 
   try {
-    return await runApprovedEmulation(session, chosen);
+    const done = await runApprovedEmulation(session, chosen);
+    // Node ⑤ — close with a cited synthesis over the (now emulation-confirmed) findings.
+    const cfg = loadLlmConfig();
+    if (cfg) await runClosingSynthesis(done, cfg);
+    return getSession(sessionId) as AgentSessionRow;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     recordStep(

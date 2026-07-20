@@ -19,6 +19,7 @@ import { corpusRoutes } from './routes/corpus.js';
 import { decompileRoutes } from './routes/decompile.js';
 import { diffRoutes } from './routes/diff.js';
 import { emulateRoutes } from './routes/emulate.js';
+import { fuzzRoutes } from './routes/fuzz.js';
 import { ghidraRoutes } from './routes/ghidra.js';
 import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
@@ -90,6 +91,7 @@ async function main(): Promise<void> {
       await api.register(corpusRoutes);
       await api.register(copilotRoutes);
       await api.register(agentRoutes);
+      await api.register(fuzzRoutes);
       await api.register(researchRoutes);
       await api.register(reportRoutes);
       await api.register(storageRoutes);

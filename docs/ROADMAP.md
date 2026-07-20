@@ -159,26 +159,35 @@ that contact — the human sends it. Validated with a real security.txt (cloudfl
 embedded dropbear key flagged effectively-public. Not yet: sources beyond OSV/security.txt (NVD/PSIRT/CNA), a
 downloadable disclosure-report generator, hardened egress (proxy/netns), corpus OSV cache.
 
-### Known limitations & tech debt (pay down gradually)
+### Phase-4 tech debt — paid down
 
-Recorded so they're solved piece by piece, not forgotten:
+- **✅ Node ④'s trigger is now delivered to the target** (debt #3, the big one). `providers/trigger.ts` plans a
+  delivery from the candidate's source class (CGI env / stdin / argv): command-injection appends a `;echo <marker>;`
+  payload (the marker in stdout = injection reproduced), overflow sends an oversized input (a crash signal =
+  memory-unsafety reproduced). The session runs it under isolation and upgrades the SPECIFIC finding honestly.
+  Validated end-to-end: a real overflow target crashed under the delivered trigger (SIGSEGV) → the candidate went
+  `needs_runtime_reproduction` → `confirmed_in_emulation`.
+- **✅ Node ⑤ (synthesis) wired into the session** (debt #5) — a cited narrative over the confirmed findings runs as
+  the session's closing step (governor-bounded), recorded in the transcript, after both the auto-run and the
+  approval paths.
+- **✅ Rootless network namespace** (debt #2) — `detectIsolation` now falls back to `unshare -rn` (a user namespace
+  mapping to root, then a fresh netns), so `full` isolation works WITHOUT `CAP_SYS_ADMIN` on hosts that allow
+  unprivileged user namespaces. Caveat: some container runtimes (e.g. Docker/OrbStack default) block `unshare`
+  entirely, so there it still needs `--cap-add=SYS_ADMIN` or degrades honestly to `partial` (approval kept).
+- **~ AFL++ fuzzing** (debt #1) — the opt-in AFL++ Docker layer is added (commented, like Ghidra) and a `/images/:id/fuzz`
+  route + isolation-run provider are wired; a real reproduced crash still needs the layer present + a target (the
+  command/detection/route are validated, not an actual AFL crash).
+- **~ RTOS/Renode** (debt #4) — `providers/renode.ts` builds the headless `.resc` and degrades honestly to
+  `blocked_by_platform` without Renode or a per-MCU platform description. Auto-selecting a platform per detected MCU,
+  and UEFI/chipsec, are still not integrated.
 
-- **AFL++ fuzzing is wired but unexercised.** `providers/fuzz.ts` builds the command and runs under isolation, but
-  the heavy AFL++ layer isn't baked into the image, so no reproduced crash has actually upgraded a candidate.
-  *Next:* an opt-in AFL++ Docker layer + per-class harness; validate that a real crash → `confirmed_in_emulation`.
-- **Isolation needs `CAP_SYS_ADMIN` for the network namespace.** Without it, `unshare -n` fails and isolation
-  degrades to `partial` (rlimits only) → the approval gate is kept. *Next:* rootless netns (`unshare -rn` /
-  slirp4netns) so `full` isolation works without the broad cap; decide the homelab compose capability posture.
-- **Node ④'s trigger isn't delivered to the target.** The isolated auto-run executes the binary generically
-  (runs/crashes) rather than driving the constructed trigger into the sink, so confirmation is coarse. *Next:*
-  per-class harnesses (CGI env, stdin, socket) that actually deliver the trigger, enabling an honest
-  `static_confirmed` → `confirmed_in_emulation` upgrade tied to the specific candidate.
-- **RTOS/Renode and UEFI/chipsec not integrated** — only detected. *Next:* a Renode provider for Cortex-M and a
-  chipsec pass for UEFI images.
-- **Node ⑤ (synthesis) not wired into the session.** The Phase-2 copilot covers ③/⑤ read-only, but the session
-  doesn't yet close with a cited narrative over the confirmed findings. *Next:* run ⑤ as the session's final step.
-- **The local `firmlab-firmware:latest` image is one fix behind** (Phase 4 validated via a mounted fresh dist); a
-  rebuild/deploy bakes it.
+### Remaining backlog
+
+- AFL++: bake the opt-in layer + a per-class fuzz harness and validate a real crash upgrade.
+- Renode platform auto-selection per MCU; UEFI/chipsec integration.
+- External-intelligence: sources beyond OSV/security.txt (NVD/PSIRT/CNA), a downloadable disclosure-report generator,
+  hardened egress (proxy/slirp4netns), corpus OSV cache.
+- Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
 
 **Phase 3 — decision nodes (implemented).** The agent now *chooses branches* on top of the deterministic
 skeleton, never the mechanics. The orchestrator (`agent/session.ts`) drives triage ① → deterministic extraction

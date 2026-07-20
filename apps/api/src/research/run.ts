@@ -44,7 +44,9 @@ const PROVENANCE_FILES = [
 
 function latestRootfs(imageId: string): string | null {
   const extractJob = listJobs(imageId).find((j) => j.kind === 'extract' && j.status === 'done' && j.resultJson);
-  return extractJob?.resultJson ? ((JSON.parse(extractJob.resultJson) as { rootfsPath?: string }).rootfsPath ?? null) : null;
+  return extractJob?.resultJson
+    ? ((JSON.parse(extractJob.resultJson) as { rootfsPath?: string }).rootfsPath ?? null)
+    : null;
 }
 
 /** Key material lives inside the (compressed) filesystem, so it's only visible after extraction — scan the rootfs. */
