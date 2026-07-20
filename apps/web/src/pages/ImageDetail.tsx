@@ -1,7 +1,10 @@
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
+  type AgentConfig,
+  type AgentSession,
   type AgentStatus,
+  type AgentStep,
   type BinaryEntry,
   type CopilotResult,
   type CorpusRefs,
@@ -39,29 +42,46 @@ type TabId =
   | 'sbom'
   | 'binaries'
   | 'diff'
-  | 'simulate';
+  | 'simulate'
+  | 'agent';
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'dossier', label: 'Dossier' },
-  { id: 'overview', label: 'Overview' },
-  { id: 'structure', label: 'Structure' },
-  { id: 'entropy', label: 'Entropy' },
-  { id: 'filesystem', label: 'Filesystem' },
-  { id: 'secrets', label: 'Secrets' },
-  { id: 'sbom', label: 'SBOM & CVEs' },
-  { id: 'binaries', label: 'Binaries' },
-  { id: 'diff', label: 'Diff' },
-  { id: 'simulate', label: 'Simulation' },
-];
+/** Sections that operate on the extracted rootfs / tools rather than the cached static analysis. */
+const NO_ANALYSIS_TABS = new Set<TabId>([
+  'dossier',
+  'filesystem',
+  'secrets',
+  'sbom',
+  'binaries',
+  'diff',
+  'simulate',
+  'agent',
+]);
 
-/** Tabs that operate on the extracted rootfs / tools rather than the cached static analysis. */
-const NO_ANALYSIS_TABS = new Set<TabId>(['dossier', 'filesystem', 'secrets', 'sbom', 'binaries', 'diff', 'simulate']);
+/** URL section → internal panel id. The sidebar drives these; `overview` is the composite dossier. */
+const SECTION_TITLES: Record<TabId, string> = {
+  dossier: 'Overview',
+  overview: 'Overview',
+  structure: 'Structure',
+  entropy: 'Entropy',
+  filesystem: 'Filesystem',
+  secrets: 'Secrets',
+  sbom: 'SBOM & CVEs',
+  binaries: 'Binaries',
+  diff: 'Diff',
+  simulate: 'Simulation',
+  agent: 'Agent',
+};
+
+function resolveSection(section: string | undefined): TabId {
+  if (!section || section === 'overview') return 'dossier';
+  return section in SECTION_TITLES ? (section as TabId) : 'dossier';
+}
 
 export function ImageDetail(): JSX.Element {
-  const { id = '' } = useParams();
+  const { id = '', section } = useParams();
   const [image, setImage] = useState<ImageSummary | null>(null);
   const [analysis, setAnalysis] = useState<StaticAnalysis | null>(null);
-  const [tab, setTab] = useState<TabId>('dossier');
+  const tab = resolveSection(section);
 
   useEffect(() => {
     api
@@ -74,37 +94,31 @@ export function ImageDetail(): JSX.Element {
       .catch(() => setAnalysis(null));
   }, [id]);
 
-  if (!image) return <div className="empty">Loading image…</div>;
+  if (!image) {
+    return (
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div className="skeleton" style={{ height: 60 }} />
+        <div className="skeleton" style={{ height: 220 }} />
+      </div>
+    );
+  }
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-          <Link to="/" className="hint">
-            ← Dashboard
-          </Link>
-          <h2 className="mono" style={{ margin: '6px 0 2px', fontSize: 20, wordBreak: 'break-word' }}>
-            {image.filename}
-          </h2>
-          <div className="hint mono">
-            {image.sha256.slice(0, 32)}… · {fmtBytes(image.size)}
+      <div className="page-head">
+        <div style={{ minWidth: 0 }}>
+          <div className="eyebrow">Firmware · {image.identity?.arch ?? 'unknown arch'}</div>
+          <h1 className="page-title">{SECTION_TITLES[tab]}</h1>
+          <div className="hint mono" style={{ wordBreak: 'break-all' }}>
+            {image.sha256.slice(0, 24)}… · {fmtBytes(image.size)}
           </div>
         </div>
         <a className="btn btn-sm" href={`/api/images/${id}/report`} download>
-          ⭳ Report
+          <span aria-hidden="true">⭳</span> Report
         </a>
       </div>
 
-      <div className="tabs">
-        {TABS.map((t) => (
-          <div key={t.id} className={`tab ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
-            {t.label}
-          </div>
-        ))}
-      </div>
-
       {tab === 'dossier' && <DossierPanel image={image} />}
-      {tab === 'overview' && <Overview image={image} analysis={analysis} />}
       {tab === 'structure' && analysis && <StructurePanel analysis={analysis} />}
       {tab === 'entropy' && analysis && <EntropyPanel analysis={analysis} />}
       {tab === 'filesystem' && <FilesystemPanel imageId={id} />}
@@ -113,7 +127,16 @@ export function ImageDetail(): JSX.Element {
       {tab === 'binaries' && <BinariesPanel imageId={id} />}
       {tab === 'diff' && <DiffPanel imageId={id} />}
       {tab === 'simulate' && <SimulationMenu imageId={id} />}
-      {!analysis && !NO_ANALYSIS_TABS.has(tab) && <div className="empty">No analysis available.</div>}
+      {tab === 'agent' && <AgentPanel imageId={id} />}
+      {!analysis && !NO_ANALYSIS_TABS.has(tab) && (
+        <div className="empty">
+          <div className="empty-mark">0x—</div>
+          <div className="empty-title">No static analysis</div>
+          <div className="empty-body">
+            This image hasn’t been analyzed yet, or analysis failed. Re-upload it from the Dashboard.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -394,32 +417,6 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function Overview({ image, analysis }: { image: ImageSummary; analysis: StaticAnalysis | null }): JSX.Element {
-  const id = image.identity;
-  return (
-    <div>
-      <div className="grid grid-3" style={{ marginBottom: 18 }}>
-        <Stat label="Class" value={id?.firmwareClass ?? '—'} />
-        <Stat label="Architecture" value={`${id?.arch ?? '—'} / ${id?.endianness ?? '—'}`} mono />
-        <Stat label="Filesystems" value={id?.filesystems.join(', ') || '—'} mono />
-        <Stat label="Bootloader" value={id?.bootloader ?? '—'} />
-        <Stat label="Signatures" value={String(analysis?.signatures.length ?? 0)} />
-        <Stat label="Secrets" value={String(analysis?.secrets.length ?? 0)} />
-      </div>
-      {analysis && (
-        <div className="panel">
-          <div className="panel-title">Entropy signal</div>
-          <div className="grid grid-3">
-            <Stat label="Mean H" value={analysis.entropy.mean.toFixed(2)} mono />
-            <Stat label="Likely encrypted" value={analysis.entropy.likelyEncrypted ? 'yes' : 'no'} />
-            <Stat label="Likely compressed" value={analysis.entropy.likelyCompressed ? 'yes' : 'no'} />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1411,6 +1408,323 @@ function Stat({ label, value, mono }: { label: string; value: string; mono?: boo
     <div className="stat">
       <div className="stat-label">{label}</div>
       <div className={`stat-value ${mono ? 'mono' : ''}`}>{value}</div>
+    </div>
+  );
+}
+
+// === Agent: the conscious-autonomy session view — what the agent chose at each node, and why (Phase 3). ===
+
+const SESSION_META: Record<AgentSession['status'], { label: string; color: string }> = {
+  running: { label: 'running', color: 'var(--info, #4db5ff)' },
+  awaiting_approval: { label: 'awaiting approval', color: 'var(--sev-medium, #e6b45c)' },
+  done: { label: 'done', color: 'var(--ok, #4caf7d)' },
+  error: { label: 'error', color: 'var(--sev-critical, #e0524f)' },
+  halted: { label: 'halted (governor)', color: 'var(--text-dim)' },
+};
+
+const NODE_LABEL: Record<string, string> = {
+  triage: '① Triage',
+  extraction: 'Extraction (deterministic)',
+  preflight: 'Preflight (deterministic)',
+  'target-selection': '② Target selection',
+  emulation: 'Emulation',
+  error: 'Error',
+};
+
+/** The emulation plan the target-selection node produced, read from the latest such step. */
+function emulationPlanOf(steps: AgentStep[]): { binary: string; rung: string }[] {
+  const step = [...steps].reverse().find((s) => s.node === 'target-selection' && s.output);
+  const out = step?.output as { emulationPlan?: { binary: string; rung: string }[] } | undefined;
+  return out?.emulationPlan ?? [];
+}
+
+function StepCard({ step }: { step: AgentStep }): JSX.Element {
+  const out = step.output as Record<string, unknown> | null;
+  const highlights: ReactNode[] = [];
+  if (step.node === 'triage' && out) {
+    highlights.push(
+      <div key="h">
+        class <b>{String(out.resolvedClass)}</b> ({String(out.classConfidence)}) · extract:{' '}
+        <b>{out.shouldExtract ? 'yes' : 'no'}</b>
+        {Array.isArray(out.extractionCascade) && out.extractionCascade.length > 0 && (
+          <> · cascade {(out.extractionCascade as string[]).join(' → ')}</>
+        )}
+      </div>,
+    );
+    if (Array.isArray(out.attackSurface) && out.attackSurface.length > 0)
+      highlights.push(<div key="a">attack surface: {(out.attackSurface as string[]).join(', ')}</div>);
+  } else if (step.node === 'preflight' && out) {
+    highlights.push(
+      <div key="p">
+        strategy <b>{String(out.strategy)}</b> · ceiling <b>{String(out.proofCeiling)}</b>
+      </div>,
+    );
+  } else if (step.node === 'extraction' && out) {
+    highlights.push(
+      <div key="e">
+        {out.rootfs ? '✓ rootfs' : '○ no rootfs'} · {String(out.extractor ?? '—')} · arch{' '}
+        {String(out.detectedArch ?? '—')} · {String(out.files ?? '?')} files
+      </div>,
+    );
+  } else if (step.node === 'target-selection' && out) {
+    const targets = (out.targets as { path: string; rung: string; priority: string; reason: string }[]) ?? [];
+    highlights.push(
+      <div key="t" style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {targets.map((t) => (
+          <div key={t.path} className="mono" style={{ fontSize: 12 }}>
+            <span style={{ color: 'var(--text)' }}>{t.path}</span> <span className="badge">{t.rung}</span>{' '}
+            <span className="hint">{t.priority}</span> — {t.reason}
+          </div>
+        ))}
+        {targets.length === 0 && <span className="hint">no targets selected</span>}
+      </div>,
+    );
+  } else if (step.node === 'emulation' && out) {
+    highlights.push(
+      <div key="m">
+        ran <b>{out.ran ? 'yes' : 'no'}</b> · exit {String(out.exitCode ?? '—')} · proof-state{' '}
+        {typeof out.proofState === 'string' && (PROOF_STATE_META as Record<string, unknown>)[out.proofState] ? (
+          <ProofStateBadge state={out.proofState as ProofState} />
+        ) : (
+          <b>{String(out.proofState)}</b>
+        )}
+      </div>,
+    );
+  }
+
+  const dot =
+    step.status === 'ok'
+      ? 'var(--ok, #4caf7d)'
+      : step.status === 'error'
+        ? 'var(--sev-critical, #e0524f)'
+        : 'var(--text-dim)';
+  return (
+    <div className="panel" style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ color: dot }}>●</span>
+        <b>{NODE_LABEL[step.node] ?? step.node}</b>
+        {step.model && <span className="badge">{step.model}</span>}
+        {step.inputTokens + step.outputTokens > 0 && (
+          <span className="hint mono">{step.inputTokens + step.outputTokens} tok</span>
+        )}
+      </div>
+      <div
+        style={{ marginTop: 6, fontSize: 12.5, color: 'var(--text)', display: 'flex', flexDirection: 'column', gap: 4 }}
+      >
+        {highlights}
+      </div>
+      {step.rationale && (
+        <div style={{ marginTop: 6, fontSize: 12.5, fontStyle: 'italic', color: 'var(--text-dim)' }}>
+          {step.rationale}
+        </div>
+      )}
+      {(step.input != null || step.output != null) && (
+        <details style={{ marginTop: 6 }}>
+          <summary className="hint" style={{ cursor: 'pointer' }}>
+            audit: inputs & decision
+          </summary>
+          <pre className="mono" style={{ fontSize: 10.5, color: 'var(--text-dim)', overflowX: 'auto' }}>
+            {JSON.stringify({ input: step.input, output: step.output }, null, 2)}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function BudgetGauge({ session }: { session: AgentSession }): JSX.Element {
+  const b = session.budget;
+  const c = session.consumed;
+  const row = (label: string, used: string, cap: string) => (
+    <div style={{ display: 'flex', gap: 6, fontSize: 12 }}>
+      <span className="hint" style={{ minWidth: 56 }}>
+        {label}
+      </span>
+      <span className="mono">
+        {used} / {cap}
+      </span>
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 24px', marginTop: 8 }}>
+      {row('steps', String(c.steps), String(b.maxSteps))}
+      {row('tokens', String(c.inputTokens + c.outputTokens), String(b.maxTokens))}
+      {row('cost', `$${c.usd.toFixed(4)}`, b.maxUsd > 0 ? `$${b.maxUsd}` : '∞')}
+      {row('time', `${Math.round(c.elapsedMs / 1000)}s`, `${Math.round(b.maxWallMs / 1000)}s`)}
+    </div>
+  );
+}
+
+function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
+  const [config, setConfig] = useState<AgentConfig | null>(null);
+  const [session, setSession] = useState<AgentSession | null>(null);
+  const [steps, setSteps] = useState<AgentStep[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const view = await api.agentSession(imageId);
+    setSession(view.session);
+    setSteps(view.steps);
+    return view.session;
+  }, [imageId]);
+
+  useEffect(() => {
+    api
+      .agentConfig()
+      .then(setConfig)
+      .catch(() => setConfig({ enabled: false }));
+    load().catch(() => undefined);
+  }, [load]);
+
+  // Poll while a session is actively running (not while awaiting approval or terminal).
+  useEffect(() => {
+    if (session?.status !== 'running') return;
+    const timer = window.setInterval(() => {
+      load().catch(() => undefined);
+    }, 1200);
+    return () => window.clearInterval(timer);
+  }, [session?.status, load]);
+
+  const start = useCallback(async () => {
+    setBusy(true);
+    try {
+      await api.startAgentSession(imageId);
+      await load();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  }, [imageId, load]);
+
+  const approve = useCallback(
+    async (binary: string) => {
+      if (!session) return;
+      setBusy(true);
+      try {
+        const view = await api.approveEmulation(session.id, binary);
+        setSession(view.session);
+        setSteps(view.steps);
+      } catch (err) {
+        toast.error(err);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [session],
+  );
+
+  const decline = useCallback(async () => {
+    if (!session) return;
+    setBusy(true);
+    try {
+      const view = await api.declineEmulation(session.id);
+      setSession(view.session);
+      setSteps(view.steps);
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  }, [session]);
+
+  if (config && !config.enabled) {
+    return (
+      <div className="panel">
+        <div className="panel-title">Agent — conscious autonomy</div>
+        <div className="panel-sub">
+          Disabled. Set <span className="mono">FIRMLAB_AGENT=1</span> and an LLM API key to enable the decision nodes.
+          With the flag off, FirmLab stays local-only, deterministic, no-network, no-cost.
+        </div>
+      </div>
+    );
+  }
+
+  const running = session?.status === 'running';
+  const awaiting = session?.status === 'awaiting_approval';
+  const plan = emulationPlanOf(steps);
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div className="panel-title" style={{ margin: 0 }}>
+            Agent session
+          </div>
+          {config?.model && (
+            <span className="badge">
+              {config.provider} · {config.model}
+            </span>
+          )}
+          {session && (
+            <span className="mono" style={{ color: SESSION_META[session.status].color, fontSize: 12 }}>
+              {SESSION_META[session.status].label}
+            </span>
+          )}
+          <div style={{ flex: 1 }} />
+          <button type="button" className="btn btn-sm btn-primary" disabled={busy || running} onClick={start}>
+            {running ? (
+              <>
+                <span className="spinner" /> Running…
+              </>
+            ) : session ? (
+              'New session'
+            ) : (
+              'Start session'
+            )}
+          </button>
+        </div>
+        <div className="panel-sub">
+          The agent reasons within a deterministic skeleton: it chooses branches (triage ①, target selection ②) and
+          interprets — every mechanical step is deterministic, and emulation waits for your approval. A governor caps
+          the run.
+        </div>
+        {session && <BudgetGauge session={session} />}
+        {session?.haltReason && (
+          <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--sev-medium, #e6b45c)' }}>
+            ⚠ {session.haltReason}
+          </div>
+        )}
+      </div>
+
+      {awaiting && plan.length > 0 && (
+        <div className="panel" style={{ borderColor: 'var(--sev-medium, #e6b45c)' }}>
+          <div className="panel-title">Approval required — proposed emulation</div>
+          <div className="panel-sub">
+            The agent proposes running these under emulation. Emulation proves the sandbox, not the device; nothing runs
+            without your approval.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+            {plan.map((p) => (
+              <div key={p.binary} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span className="mono">{p.binary}</span>
+                <span className="badge">{p.rung}</span>
+                <div style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={busy}
+                  onClick={() => approve(p.binary)}
+                >
+                  Approve & run
+                </button>
+              </div>
+            ))}
+            <div>
+              <button type="button" className="btn btn-sm" disabled={busy} onClick={decline}>
+                Decline all
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {steps.length === 0 && !session && (
+        <div className="empty">No agent session yet. Start one to have the agent triage and select targets.</div>
+      )}
+      {steps.map((s) => (
+        <StepCard key={s.seq} step={s} />
+      ))}
     </div>
   );
 }

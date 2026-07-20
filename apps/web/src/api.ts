@@ -245,6 +245,64 @@ export interface CopilotResult {
   outputTokens?: number;
 }
 
+// === Phase 3: agent sessions (conscious autonomy — decision nodes ①/② under a governor) ===
+
+export interface GovernorBudget {
+  maxSteps: number;
+  maxTokens: number;
+  maxUsd: number;
+  maxWallMs: number;
+}
+
+export interface GovernorConsumed {
+  steps: number;
+  inputTokens: number;
+  outputTokens: number;
+  usd: number;
+  elapsedMs: number;
+}
+
+/** Agent config: whether the agent is enabled, the backing model, and the governor's hard caps. */
+export interface AgentConfig {
+  enabled: boolean;
+  provider?: string;
+  model?: string;
+  budget?: GovernorBudget;
+}
+
+export type AgentSessionStatus = 'running' | 'awaiting_approval' | 'done' | 'error' | 'halted';
+
+export interface AgentSession {
+  id: string;
+  imageId: string;
+  status: AgentSessionStatus;
+  goal: string | null;
+  budget: GovernorBudget;
+  consumed: GovernorConsumed;
+  haltReason: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** One transcript entry: a node's structured input, its decision output, and the rationale — the audit trail. */
+export interface AgentStep {
+  seq: number;
+  node: string;
+  status: string;
+  input: unknown;
+  output: unknown;
+  rationale: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  createdAt: number;
+}
+
+export interface AgentSessionView {
+  session: AgentSession | null;
+  steps: AgentStep[];
+}
+
 export interface ImageRef {
   id: string;
   filename: string;
@@ -311,7 +369,8 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
 }
 
 export const api = {
-  health: () => get<{ status: string; exposedToNetwork: boolean; trustedProxy?: boolean }>('/health'),
+  health: () =>
+    get<{ status: string; exposedToNetwork: boolean; trustedProxy?: boolean; host?: string; port?: number }>('/health'),
   listImages: () => get<{ images: ImageSummary[] }>('/api/images').then((r) => r.images),
   getImage: (id: string) => get<{ image: ImageSummary }>(`/api/images/${id}`).then((r) => r.image),
   deleteImage: (id: string) => fetch(`/api/images/${id}`, { method: 'DELETE' }).then(() => undefined),
@@ -343,6 +402,13 @@ export const api = {
   runCopilot: (id: string) => post<{ jobId: string }>(`/api/images/${id}/copilot`),
   copilotResult: (id: string) =>
     get<{ result: CopilotResult | null }>(`/api/images/${id}/copilot`).then((r) => r.result),
+  agentConfig: () => get<AgentConfig>('/api/agent/config'),
+  startAgentSession: (id: string, goal?: string) =>
+    post<{ session: AgentSession }>(`/api/images/${id}/agent/session`, goal ? { goal } : {}).then((r) => r.session),
+  agentSession: (id: string) => get<AgentSessionView>(`/api/images/${id}/agent/session`),
+  approveEmulation: (sid: string, binary?: string) =>
+    post<AgentSessionView>(`/api/agent/sessions/${sid}/approve`, binary ? { binary } : {}),
+  declineEmulation: (sid: string) => post<AgentSessionView>(`/api/agent/sessions/${sid}/decline`),
   corpusOverview: () => get<{ overview: CorpusOverview }>('/api/corpus/overview').then((r) => r.overview),
   corpusRules: () => get<{ rules: CorpusRule[] }>('/api/corpus/rules').then((r) => r.rules),
   promoteRule: (type: string, key: string, label: string, note?: string) =>
