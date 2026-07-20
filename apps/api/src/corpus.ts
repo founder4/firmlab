@@ -71,6 +71,15 @@ export function recordReachabilityPrior(familyKey: string, subject: string, proo
 
 // === Cross-reference queries (priors — enrich existing per-image data, never assert new claims) ===
 
+/** Reachability priors recorded for a device family — subjects proven reachable before (Level-2 input to node ④). */
+export function listReachabilityPriors(familyKey: string): { subject: string; proofState: string; imageId: string }[] {
+  return getDb()
+    .prepare(
+      'SELECT subject, proofState, imageId FROM reachability_prior WHERE familyKey = ? ORDER BY createdAt DESC LIMIT 200',
+    )
+    .all(familyKey) as unknown as { subject: string; proofState: string; imageId: string }[];
+}
+
 /** A live image referenced by a corpus cross-reference. */
 export interface ImageRef {
   id: string;

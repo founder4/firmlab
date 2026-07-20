@@ -8,6 +8,8 @@ import type { FastifyInstance } from 'fastify';
 import { loadGovernorBudget } from '../agent/governor.js';
 import { approveEmulation, declineEmulation, startAgentSession } from '../agent/session.js';
 import { loadLlmConfig } from '../llm.js';
+import { detectFuzzing } from '../providers/fuzz.js';
+import { detectIsolation } from '../providers/isolate.js';
 import { type AgentSessionRow, type AgentStepRow, getImage, getSession, latestSession, listSteps } from '../store.js';
 
 function sessionView(row: AgentSessionRow): unknown {
@@ -44,11 +46,19 @@ function withSteps(row: AgentSessionRow): unknown {
 }
 
 export async function agentRoutes(app: FastifyInstance): Promise<void> {
-  // The governor budget (and whether the agent is enabled) — lets the UI render the leash.
+  // The governor budget, model, and Phase-4 runtime posture — lets the UI render the leash and the isolation
+  // status. `autoRun` means emulation runs without a human gate because the blast radius is fully contained.
   app.get('/agent/config', async () => {
     const cfg = loadLlmConfig();
     if (!cfg) return { enabled: false };
-    return { enabled: true, provider: cfg.provider, model: cfg.model, budget: loadGovernorBudget() };
+    const isolation = await detectIsolation();
+    return {
+      enabled: true,
+      provider: cfg.provider,
+      model: cfg.model,
+      budget: loadGovernorBudget(),
+      phase4: { isolation, fuzzing: await detectFuzzing(), autoRun: isolation === 'full' },
+    };
   });
 
   // Start a conscious-autonomy session over an image.

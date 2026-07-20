@@ -10,12 +10,16 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Architecture } from '@firmlab/core';
+import { deviceFamilyKey, recordReachabilityPrior } from '../corpus.js';
+import { type FindingDraft, syncFindings } from '../findings.js';
 import type { LlmConfig } from '../llm.js';
+import { type DecompileResult, resolveInsideRootfs, runDecompile } from '../providers/decompile.js';
 import { runChrootService, runFullSystem } from '../providers/emulate-system.js';
 import { runUserModeEmulation } from '../providers/emulate.js';
 import { type ExtractResult, runExtraction } from '../providers/extract.js';
+import { detectIsolation, runIsolated } from '../providers/isolate.js';
 import { startJob } from '../providers/jobs.js';
-import { type RuntimeCapabilities, computeRuntimeCapabilities } from '../providers/preflight.js';
+import { QEMU_USER_BY_ARCH, type RuntimeCapabilities, computeRuntimeCapabilities } from '../providers/preflight.js';
 import {
   type AgentSessionRow,
   type AgentSessionStatus,
@@ -27,6 +31,7 @@ import {
   hasActiveSession,
   insertSession,
   insertStep,
+  listBinaries,
   listJobs,
   listSteps,
   updateBinaryEmulationStatus,
@@ -41,6 +46,7 @@ import {
   runTargetSelectionNode,
   runTriageNode,
 } from './nodes.js';
+import { type ZerodayCandidate, gatherZerodayContext, runZerodayNode } from './zeroday.js';
 
 /** Poll a fire-and-forget job to a terminal state. Jobs are in-process, so a short poll is enough. */
 async function waitForJob(
@@ -212,12 +218,162 @@ async function orchestrate(session: AgentSessionRow, cfg: LlmConfig): Promise<vo
     selection.result.outputTokens ?? 0,
   );
 
-  // --- Pause for human approval if emulation is proposed; otherwise the session is complete ---
-  if (selection.decision.emulationPlan.length > 0) {
-    persist(session, 'awaiting_approval', gov, null);
-  } else {
-    persist(session, 'done', gov, null);
+  // --- Node ④ Zero-day + Phase-4 emulation gate (auto-run under isolation, or human approval) ---
+  await runPhase4(session, gov, caps, selection.decision.emulationPlan, cfg);
+}
+
+/**
+ * Phase 4 — node ④ (zero-day) on the top target, then the emulation gate. When the deployment can FULLY isolate a
+ * run (network namespace + rlimits + guaranteed teardown) the run happens automatically, without a human approval,
+ * because the blast radius is contained. Otherwise the Phase-3 approval gate is kept, honestly.
+ */
+async function runPhase4(
+  session: AgentSessionRow,
+  gov: Governor,
+  caps: RuntimeCapabilities,
+  plan: TargetSelectionDecision['emulationPlan'],
+  cfg: LlmConfig,
+): Promise<void> {
+  const imageId = session.imageId;
+  const target = plan[0]?.binary ?? topNetworkBinary(imageId);
+
+  // Node ④ needs a binary triage; run/reuse one for the top target.
+  if (target && gov.check().ok) {
+    const decompile = await ensureDecompile(imageId, target);
+    if (decompile?.available) {
+      const zctx = await gatherZerodayContext(imageId, decompile);
+      const z = await runZerodayNode(zctx, cfg);
+      gov.record(z.result.model, z.result.inputTokens ?? 0, z.result.outputTokens ?? 0);
+      recordStep(
+        session.id,
+        'zero-day',
+        'ok',
+        zctx,
+        z.decision,
+        z.decision.rationale,
+        z.result.model,
+        z.result.inputTokens ?? 0,
+        z.result.outputTokens ?? 0,
+      );
+      recordZerodayFindings(imageId, target, z.decision.candidates);
+    } else {
+      recordStep(
+        session.id,
+        'zero-day',
+        'skipped',
+        { binary: target },
+        { available: false },
+        'No binary triage (radare2 absent or no rootfs) — cannot reason about sinks; nothing invented.',
+        null,
+        0,
+        0,
+      );
+    }
+    persist(session, 'running', gov, null);
   }
+
+  const isolation = await detectIsolation();
+  if (plan.length === 0) return void persist(session, 'done', gov, null);
+  if (isolation === 'full') {
+    await autoRunIsolated(session, gov, caps, plan[0] as TargetSelectionDecision['emulationPlan'][number]);
+  } else {
+    recordStep(
+      session.id,
+      'isolation',
+      'skipped',
+      { isolation },
+      { isolation },
+      `Isolation level '${isolation}' can't fully contain a run here — emulation still needs your approval.`,
+      null,
+      0,
+      0,
+    );
+    persist(session, 'awaiting_approval', gov, null);
+  }
+}
+
+/** When the plan is empty, the best target for node ④ is a network-facing binary, else the first. */
+function topNetworkBinary(imageId: string): string | null {
+  const bins = listBinaries(imageId);
+  return (bins.find((b) => b.networkFacing === 1) ?? bins[0])?.path ?? null;
+}
+
+/** Reuse the latest completed decompile for a binary, or run one now. Null if there is no extracted rootfs. */
+async function ensureDecompile(imageId: string, binary: string): Promise<DecompileResult | null> {
+  const existing = listJobs(imageId).find(
+    (j) =>
+      j.kind === 'decompile' && j.status === 'done' && j.resultJson?.includes(`"binary":${JSON.stringify(binary)}`),
+  );
+  if (existing?.resultJson) return JSON.parse(existing.resultJson) as DecompileResult;
+  const rootfs = latestRootfs(imageId)?.rootfsPath;
+  if (!rootfs) return null;
+  const jobId = startJob(imageId, 'decompile', { by: 'agent', binary }, (h) => runDecompile(rootfs, binary, h));
+  const job = await waitForJob(jobId);
+  return (job.result as DecompileResult | null) ?? null;
+}
+
+/** Persist node ④'s candidates as findings — every one a hypothesis to test, never a proven bug. */
+function recordZerodayFindings(imageId: string, binary: string, candidates: ZerodayCandidate[]): void {
+  const drafts: FindingDraft[] = candidates.map((c) => ({
+    kind: 'zeroday-candidate',
+    title: `${c.vulnClass} via ${c.sink} in ${binary} (${c.reachability})`,
+    severity: c.severity,
+    proofState: 'needs_runtime_reproduction',
+    evidence: { binary, sink: c.sink, source: c.source, trigger: c.trigger, reachability: c.reachability },
+    rationale: c.rationale,
+  }));
+  syncFindings(imageId, `zeroday:${binary}`, drafts);
+}
+
+/**
+ * Auto-run the top emulation target under FULL isolation (fresh network namespace + rlimits + guaranteed
+ * teardown) — no human approval needed because the blast radius is contained. The proof state is capped at
+ * emulation-level (proves the sandbox, never the device) and a Level-2 reachability prior is recorded.
+ */
+async function autoRunIsolated(
+  session: AgentSessionRow,
+  gov: Governor,
+  caps: RuntimeCapabilities,
+  entry: TargetSelectionDecision['emulationPlan'][number],
+): Promise<void> {
+  const imageId = session.imageId;
+  const rootfs = latestRootfs(imageId)?.rootfsPath;
+  const emulator = QEMU_USER_BY_ARCH[caps.arch];
+  const abs = rootfs ? resolveInsideRootfs(rootfs, entry.binary) : null;
+  if (!rootfs || !emulator || !abs) {
+    recordStep(
+      session.id,
+      'emulation',
+      'skipped',
+      { binary: entry.binary },
+      { isolation: 'full' },
+      'No rootfs/emulator for this arch — cannot auto-run even under isolation.',
+      null,
+      0,
+      0,
+    );
+    persist(session, 'done', gov, null);
+    return;
+  }
+  const res = await runIsolated([emulator, '-L', rootfs, abs]);
+  const proofState = res.ran ? 'confirmed_in_emulation' : 'blocked_by_platform';
+  updateBinaryEmulationStatus(imageId, entry.binary, proofState);
+  const row = getImage(imageId);
+  if (row?.identityJson) {
+    recordReachabilityPrior(deviceFamilyKey(JSON.parse(row.identityJson)), entry.binary, proofState, imageId);
+  }
+  recordStep(
+    session.id,
+    'emulation',
+    res.ran ? 'ok' : 'error',
+    { binary: entry.binary, rung: entry.rung, isolation: res.isolation, autoApproved: true },
+    { ran: res.ran, exitCode: res.exitCode, timedOut: res.timedOut, proofState },
+    `Auto-ran ${entry.binary} under ${res.isolation} isolation (no approval — network-namespaced + rlimited) → ${proofState}. Proves the sandbox, not the device.`,
+    null,
+    0,
+    0,
+  );
+  persist(session, 'done', gov, null);
 }
 
 /** Look up the emulation plan the target-selection node produced for a session. */
