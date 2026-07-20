@@ -6,8 +6,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "check": "pnpm --filter @firmlab/core build && tsc -p tsconfig.json --noEmit",
+    "test": "pnpm --filter @firmlab/core build && vitest run --passWithNoTests",
     "start": "node dist/index.js",
     "dev": "node --watch dist/index.js"
   },
