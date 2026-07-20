@@ -360,3 +360,136 @@ así se ejercita toda la maquinaria determinista de forma reproducible): flag ap
 sesión; recorte de rung en vivo (el `full-system` pedido cae a `qemu-user`); extracción real con binwalk y
 emulación real con qemu-user; y la guarda de retención. Los tests unitarios cubren el governor y las funciones
 puras de los nodos (parseo, clamping) sin tocar `node:sqlite`, coherente con la convención del repo.
+
+---
+
+## 12. Fase 4 — Zero-day, aislamiento y profundidad (implementado)
+
+La Fase 4 añade el nodo de mayor valor y el trabajo grande (el aislamiento), sobre el esqueleto de las Fases 3.
+Todo sigue tras `FIRMLAB_AGENT`; los tooling pesados (AFL++) son opt-in con degradación honesta.
+
+**Nodo ④ — zero-day (`agent/zeroday.ts`).** Razona sink→source sobre un **scaffold de taint determinista**
+(`providers/taint.ts`): de la triage de radare2 de un binario, se listan los *sinks* peligrosos que importa
+(`system`/`popen`/`strcpy`/`sprintf`/`printf`…), las *fuentes* controlables (`recv`/`getenv`/`nvram_get`…) y las
+pistas CGI/HTTP en sus strings. El agente hipotetiza un camino, clasifica la vuln y construye un **trigger** — pero
+está atado por la máquina de proof-states: node ④ **solo produce candidatos** (`needs_runtime_reproduction`);
+nunca declara un hallazgo confirmado. Solo la ejecución determinista del trigger (emulación aislada) puede subir un
+candidato, y esa decisión es de código. **Nivel-2 de aprendizaje**: el contexto de ④ se enriquece con priors del
+corpus (componentes vulnerables vistos en la familia, reachability confirmada antes) — banderas a comprobar, no
+conclusiones.
+
+**Aislamiento por sesión (`providers/isolate.ts`) — el trabajo grande, donde Galert falla.** En vez de un
+contenedor anidado (socket Docker, seccomp abierto, sin límites — las grietas de Galert), FirmLab acota el radio de
+daño con **primitivas del SO**: `prlimit` (topes duros de CPU/RAM/tamaño-de-fichero/FDs, aplicados por el kernel,
+sin shell), `unshare -n` (namespace de red vacío, sin salida a internet) y un workdir efímero con teardown
+garantizado en un `finally`. Se componen **sin shell** (execFile directo de `unshare`/`prlimit`), así una ruta de
+rootfs con caracteres raros no puede inyectar. Niveles: `full` (netns + rlimits) → **la emulación se auto-ejecuta
+sin aprobación humana**, porque el radio ya está contenido; `partial` (solo rlimits) o `none` → se conserva el gate
+de aprobación de la Fase 3. Degradación honesta: `unshare -n` necesita `CAP_SYS_ADMIN`; sin él, `partial`.
+
+**Fuzzing AFL++ (`providers/fuzz.ts`, opt-in).** Fuzz qemu-mode acotado en tiempo, ejecutado *dentro* del sandbox
+de aislamiento; un crash reproducido es evidencia dinámica real. Como Ghidra, la capa AFL++ no se hornea en la
+imagen: sin `afl-fuzz` presente, `available:false` honesto — nunca finge haber fuzzeado.
+
+**El flujo (`agent/session.ts`).** Tras el nodo ②, el orquestador corre node ④ sobre el objetivo top (garantizando
+su triage), registra los candidatos como findings + priors de reachability (write-back de Nivel-2), y decide la
+emulación por nivel de aislamiento: `full` → auto-run bajo sandbox sin aprobación; si no → `awaiting_approval`.
+`/api/agent/config` expone `phase4: { isolation, fuzzing, autoRun }`.
+
+**Cobertura de clases (RTOS/Renode, UEFI/chipsec).** El preflight ya detecta Renode y surface la receta RTOS; la
+integración plena de Renode/UEFI/chipsec queda reconocida pero **no integrada** (tooling de escala propia), con
+degradación honesta — no se finge cobertura que no existe.
+
+**Validado de extremo a extremo** en la imagen firmware (mock LLM para ①②④): config Fase-4 con `isolation:full`;
+sesión completa `triaje → extracción → preflight → ② → ④ → emulación`; node ④ produce un candidato de
+command-injection desde el scaffold real de radare2; **la emulación qemu-user real se auto-ejecuta bajo netns +
+prlimit SIN aprobación**; proof-state honesto; el candidato queda como `needs_runtime_reproduction`. Tests unitarios
+cubren el scaffold de taint, el parseo de ④, el constructor de invocación aislada y el de fuzzing — sin tocar
+`node:sqlite`.
+
+---
+
+## 13. Dirección propuesta — Fase 5: inteligencia externa (OSINT + disclosure)
+
+**Idea (a acordar antes de construir).** Añadir un track donde uno o varios agentes **conectados a internet**
+investiguen el firmware en profundidad: procedencia y fabricante, productos que lo usan, vulnerabilidades ya
+publicadas, material de claves cuando sea público, y la vía de reporte responsable al fabricante. Es la extensión
+natural del análisis, pero **rompe la identidad local-only de FirmLab**, así que su diseño gira alrededor de esa
+tensión: el modo local, determinista y sin red sigue siendo el DEFAULT; internet es un opt-in aparte, explícito y
+auditable.
+
+### Principios no negociables (heredados y reforzados)
+
+- **Flag separado, no `FIRMLAB_AGENT`.** Un `FIRMLAB_RESEARCH` (o `FIRMLAB_NET`) distinto, porque cambia la
+  postura de privacidad de forma fundamental. Con él apagado, cero red externa — comportamiento actual intacto.
+- **Egress mínimo y con ledger.** Nunca salen bytes de firmware. Solo salen derivados: hashes, nombres+versiones
+  de componentes (SBOM), strings de identidad (vendor/modelo), CN de certificados. Antes de cada sesión de
+  research se muestra un **"qué sale de esta máquina"** explícito y se pide consentimiento.
+- **Determinista primero, también aquí.** Las consultas (NVD/OSV, security.txt, FCC ID, mirrors GPL, PSIRT) son
+  *providers deterministas* con **fuentes allowlisted**; el agente interpreta, prioriza y sintetiza — no navega
+  libre. Cada afirmación externa se **cita a su fuente** y lleva su propio estado (`needs_correlation`), nunca se
+  auto-confirma contra el binario.
+- **La reachability manda.** Un CVE publicado para un componente es una *pista*, no un hallazgo: solo el corpus
+  de reachability / la reproducción per-imagen decide si aplica AQUÍ. Priors, no conclusiones (regla del §2/§6).
+- **Solo defensivo.** Disclosure responsable, no armamentización: se descubre el contacto de seguridad y se
+  **redacta** un reporte; el humano lo envía. Sin exploición de objetivos vivos, sin publicación, sin auto-send.
+- **Aislamiento del track.** El agente de red corre en su propio sandbox con egress allowlisted (DNS/HTTP a
+  dominios permitidos), reutilizando `providers/isolate.ts` endurecido para *permitir* solo esas salidas.
+
+### Cómo encaja en el esqueleto
+
+Es un track paralelo a los nodos ①–⑤, no un sustituto: consume los datos deterministas (identidad, SBOM, strings,
+secretos, findings con proof-state) y produce **inteligencia citada** que enriquece el dossier y la síntesis ⑤.
+Cada agente de red es un nodo con entrada estructurada, salida registrada y rationale — misma disciplina.
+
+### Fases (una o varias, incrementales)
+
+- **5.0 · Procedencia e identidad.** De strings/identidad (vendor, modelo, versión, banners de bootloader, CN de
+  certs) → fabricante + producto + familia de firmware, vía fuentes allowlisted (FCC ID, páginas de vendor,
+  mirrors GPL). Mayormente determinista; el agente desambigua. Salida: ficha de procedencia citada.
+- **5.1 · Inteligencia de vulnerabilidades.** Correlaciona el SBOM (componente+versión) con avisos publicados
+  (NVD/OSV/GitHub advisories/PSIRT) → CVEs conocidos; cruza con los priors de reachability del corpus para marcar
+  cuáles son *plausiblemente* alcanzables aquí (nunca auto-confirmados). El nodo ranquea y explica, citando.
+- **5.2 · Procedencia de claves y artefactos.** Cuando aplique, investiga si claves de cifrado/firma o
+  decryptors del firmware están **publicados** (releases GPL, documentación de vendor, investigación previa) —
+  solo procedencia y cita; jamás un servicio de cracking. Marca si la imagen usa una clave conocida/por defecto.
+- **5.3 · Asistencia a disclosure responsable.** Descubre el contacto de seguridad del fabricante (security.txt,
+  CNA/PSIRT, coordinación CERT) y **redacta** un reporte desde los hallazgos confirmados (con sus proof-states).
+  Lo envía el humano. Sin auto-send, sin publicación.
+
+### Decisiones abiertas (a cerrar al empezar 5.0)
+
+- Motor del agente de red: ¿Claude Agent SDK con herramientas allowlisted, o providers deterministas + un nodo
+  LLM de síntesis (más barato, más auditable)? Preferencia inicial: lo segundo, escalando a lo primero si hace
+  falta.
+- Mecanismo de egress-allowlist (proxy con lista de dominios vs. netns + resolvedor restringido).
+- Formato del ledger de datos-que-salen y del consentimiento por sesión.
+- Caché local de resultados OSINT en el corpus (para reproducibilidad y para no reconsultar), respetando ToS.
+
+### Estado — 5.0/5.1 implementado
+
+Construido y validado con servicios reales. Todo tras `FIRMLAB_RESEARCH` (separado de `FIRMLAB_AGENT`); con el
+flag apagado, cero red externa.
+
+- **Config + choke point** (`research/config.ts`): gate por `FIRMLAB_RESEARCH`, allowlist de hosts, y un
+  `allowlistedFetch` que **rechaza cualquier host fuera de la lista** antes de abrir socket.
+- **Procedencia** (`providers/provenance.ts`, determinista): extrae vendor/modelo/versión/URLs/dominios/CN/banners
+  de los strings del análisis **y de ficheros de banner del rootfs** (`/etc/issue`, `/etc/os-release`…). Puro.
+- **Ledger de egress** (`research/egress.ts`): declara qué sale (nombres+versiones → api.osv.dev) y **qué nunca
+  sale** (bytes de firmware, secretos, claves). Se muestra antes y con el resultado.
+- **OSV** (`providers/osv.ts`): correlaciona el SBOM (mapa syft→ecosistema OSV) con avisos **publicados** en
+  api.osv.dev; egress = solo nombre+versión+ecosistema. Un aviso para un componente presente es una *pista*, no un
+  bug confirmado — la reachability la decide la imagen. Constructor/parser puros y testeados.
+- **Síntesis** (`agent/intel.ts`): brief **citado** vía el LLM (DeepSeek por defecto), con priors de reachability
+  del corpus; disciplina de disclosure responsable (localizar contacto, *redactar* — nunca enviar).
+- **Ruta + job** (`routes/research.ts`): `/research/status`, `POST/GET /images/:id/research`. Web: panel "External
+  intelligence" en el dossier (gated; run + ledger + tabla de avisos citados + brief).
+
+Validado en el contenedor: flag-off inerte (status disabled, POST 400); flag-on → SBOM syft real (194 paquetes)
+→ **OSV.dev real** (80 consultados, 70 avisos; p.ej. `apt 2.6.1 → DEBIAN-CVE-2011-3374`) → procedencia
+(`acme-networks`/`v1.2.3` de `/etc/issue`) → **brief real de DeepSeek**. Tests puros: OSV, provenance, config-gate,
+egress — sin tocar `node:sqlite`.
+
+**Pendiente en este track** (deuda, `docs/ROADMAP.md`): más fuentes que OSV (NVD/PSIRT/security.txt); **5.2**
+(procedencia de claves publicadas) y **5.3** (asistencia a disclosure: descubrir contacto + redactar reporte) aún no
+construidas; mecanismo de egress-allowlist reforzado (proxy/netns) y caché OSV en el corpus.

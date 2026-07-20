@@ -116,7 +116,60 @@ views), **Phase 2** (the read-only copilot: DeepSeek-first multi-provider LLM la
 dossier panel — all flag-gated), **Phase 3** (the decision nodes: ① triage + ② target-selection as
 structured-output LLM nodes on a deterministic orchestrator, a governor with hard step/token/USD/time caps, an
 auditable+resumable session transcript, emulation gated behind human approval, and the retention↔session guard
-so a live session pins its image — all flag-gated). Next: Phase 4 (zero-day node ④ + per-session isolation).
+so a live session pins its image — all flag-gated), **Phase 4** (the zero-day node ④ reasoning sink→source over a
+deterministic taint scaffold and constructing a trigger — candidates only, never a proven bug; per-session
+isolation via OS primitives — prlimit + unshare -n network namespace + guaranteed teardown — so emulation
+auto-runs WITHOUT a human gate when the blast radius is fully contained; Level-2 corpus priors into node ④; an
+opt-in AFL++ fuzzing provider). Next: broaden class coverage (Renode/RTOS, UEFI/chipsec) and node ⑤ synthesis.
+
+**Phase 4 — zero-day + isolation (implemented).** Node ④ (`agent/zeroday.ts`) reasons about a reachable vuln from
+a deterministic taint scaffold (`providers/taint.ts`: the dangerous sinks a binary imports, the attacker sources,
+CGI hints) plus Level-2 corpus priors, and constructs a trigger — but the proof-state machine binds it to
+CANDIDATES (`needs_runtime_reproduction`); only a real trigger run upgrades, and that is code's call. Per-session
+isolation (`providers/isolate.ts`) bounds the blast radius with OS primitives instead of a nested container —
+`prlimit` (CPU/RAM/fsize/fd caps), `unshare -n` (empty network namespace), a throwaway workdir with guaranteed
+teardown, composed without a shell. At isolation level `full` emulation auto-runs with no approval (contained
+radius); otherwise the Phase-3 approval gate is kept — honest degradation (`unshare -n` needs CAP_SYS_ADMIN). An
+opt-in AFL++ provider (`providers/fuzz.ts`) fuzzes under the sandbox, degrading to `available:false` when absent,
+like Ghidra. Env: `FIRMLAB_ISOLATE_CPU/_MEM_MB/_FSIZE_MB/_WALL_SECONDS`. `/api/agent/config` reports
+`phase4: {isolation, fuzzing, autoRun}`. Validated end-to-end in the firmware image (mock LLM for ①②④): full
+transcript through node ④, a command-injection candidate from the real radare2 scaffold, and a real qemu-user run
+auto-executed under netns+rlimits with no approval — proof-state honest. RTOS/Renode and UEFI/chipsec are
+recognized (preflight detects Renode) but not yet integrated — no faked coverage.
+
+**Phase 5.0/5.1 — external intelligence (implemented).** The first internet-touching capability, behind its OWN
+flag `FIRMLAB_RESEARCH` (separate from `FIRMLAB_AGENT`; unset → zero external egress, local-only preserved). A
+deterministic provenance fingerprint (`providers/provenance.ts`: vendor/model/version/URLs/CN/banners from analysis
+strings + rootfs banner files) + an allowlisted OSV.dev correlation (`providers/osv.ts`: SBOM component+version →
+published advisories; only names+versions leave, never bytes) + a cited synthesis brief (`agent/intel.ts`, DeepSeek
+by default). Every fetch passes an allowlist choke point (`research/config.ts`) and an egress ledger
+(`research/egress.ts`) states exactly what leaves and what never does. A published advisory for a present component
+is a lead, not a confirmed bug — reachability is decided per-image. Web: an "External intelligence" panel in the
+dossier. Validated end-to-end in the container with REAL services: syft SBOM (194 pkgs) → real OSV (70 published
+advisories, e.g. apt 2.6.1 → DEBIAN-CVE-2011-3374) → provenance (acme-networks/v1.2.3 from /etc/issue) → real
+DeepSeek brief. Env: `FIRMLAB_RESEARCH`, `FIRMLAB_RESEARCH_ALLOWLIST`, `FIRMLAB_RESEARCH_TIMEOUT_MS`. Not yet:
+5.2 (published key provenance), 5.3 (disclosure contact discovery + report draft), sources beyond OSV.
+
+### Known limitations & tech debt (pay down gradually)
+
+Recorded so they're solved piece by piece, not forgotten:
+
+- **AFL++ fuzzing is wired but unexercised.** `providers/fuzz.ts` builds the command and runs under isolation, but
+  the heavy AFL++ layer isn't baked into the image, so no reproduced crash has actually upgraded a candidate.
+  *Next:* an opt-in AFL++ Docker layer + per-class harness; validate that a real crash → `confirmed_in_emulation`.
+- **Isolation needs `CAP_SYS_ADMIN` for the network namespace.** Without it, `unshare -n` fails and isolation
+  degrades to `partial` (rlimits only) → the approval gate is kept. *Next:* rootless netns (`unshare -rn` /
+  slirp4netns) so `full` isolation works without the broad cap; decide the homelab compose capability posture.
+- **Node ④'s trigger isn't delivered to the target.** The isolated auto-run executes the binary generically
+  (runs/crashes) rather than driving the constructed trigger into the sink, so confirmation is coarse. *Next:*
+  per-class harnesses (CGI env, stdin, socket) that actually deliver the trigger, enabling an honest
+  `static_confirmed` → `confirmed_in_emulation` upgrade tied to the specific candidate.
+- **RTOS/Renode and UEFI/chipsec not integrated** — only detected. *Next:* a Renode provider for Cortex-M and a
+  chipsec pass for UEFI images.
+- **Node ⑤ (synthesis) not wired into the session.** The Phase-2 copilot covers ③/⑤ read-only, but the session
+  doesn't yet close with a cited narrative over the confirmed findings. *Next:* run ⑤ as the session's final step.
+- **The local `firmlab-firmware:latest` image is one fix behind** (Phase 4 validated via a mounted fresh dist); a
+  rebuild/deploy bakes it.
 
 **Phase 3 — decision nodes (implemented).** The agent now *chooses branches* on top of the deterministic
 skeleton, never the mechanics. The orchestrator (`agent/session.ts`) drives triage ① → deterministic extraction

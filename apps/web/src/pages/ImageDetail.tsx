@@ -18,6 +18,8 @@ import {
   type ImageSummary,
   type Job,
   type ProofState,
+  type ResearchResult,
+  type ResearchStatus,
   type RuntimeCapabilities,
   type SbomResult,
   type Severity,
@@ -325,6 +327,8 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
           )}
         </div>
       )}
+
+      <ResearchPanel imageId={id} />
 
       <div className="panel">
         <div className="panel-title">Coverage</div>
@@ -1408,6 +1412,156 @@ function Stat({ label, value, mono }: { label: string; value: string; mono?: boo
     <div className="stat">
       <div className="stat-label">{label}</div>
       <div className={`stat-value ${mono ? 'mono' : ''}`}>{value}</div>
+    </div>
+  );
+}
+
+// === External intelligence (Phase 5): OSINT + published-vuln correlation, the only network-touching surface. ===
+
+function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
+  const [status, setStatus] = useState<ResearchStatus | null>(null);
+  const [result, setResult] = useState<ResearchResult | null>(null);
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    api
+      .researchStatus()
+      .then(setStatus)
+      .catch(() => setStatus({ enabled: false }));
+    api
+      .researchResult(imageId)
+      .then(setResult)
+      .catch(() => setResult(null));
+  }, [imageId]);
+
+  const run = useCallback(async () => {
+    setRunning(true);
+    try {
+      const { jobId } = await api.runResearch(imageId);
+      const job = await pollJob(jobId, () => undefined);
+      if (job.status === 'done') setResult(job.result as ResearchResult);
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setRunning(false);
+    }
+  }, [imageId]);
+
+  if (!status) return null;
+
+  if (!status.enabled) {
+    return (
+      <div className="panel" style={{ borderStyle: 'dashed' }}>
+        <div className="panel-title">
+          External intelligence <span className="badge">off</span>
+        </div>
+        <div className="panel-sub" style={{ margin: 0 }}>
+          The only feature that leaves this machine. Enable with <span className="mono">FIRMLAB_RESEARCH=1</span> to
+          correlate the SBOM against public advisories (OSV) and draft responsible-disclosure notes. Off by default —
+          FirmLab stays local-only.
+        </div>
+      </div>
+    );
+  }
+
+  const osv = result?.osv;
+  return (
+    <div className="panel">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div className="panel-title" style={{ margin: 0 }}>
+          External intelligence
+        </div>
+        <span className="prov prov-heuristic" title="Correlated from public sources; reachability unverified">
+          public sources
+        </span>
+        <div style={{ flex: 1 }} />
+        <button type="button" className="btn btn-sm btn-primary" disabled={running} onClick={run}>
+          {running ? (
+            <>
+              <span className="spinner" /> Researching…
+            </>
+          ) : result ? (
+            'Re-run'
+          ) : (
+            'Run research'
+          )}
+        </button>
+      </div>
+      <div className="panel-sub">
+        Sends component names + versions to {(status.allowlist ?? ['api.osv.dev']).join(', ')} — never firmware bytes,
+        secrets, or keys. A published advisory for a present component is a lead, not a confirmed bug (reachability is
+        decided per-image).
+      </div>
+
+      {result && osv && (
+        <div style={{ marginTop: 4 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+            <span className="badge">{osv.queried} queried</span>
+            <span className="badge">{osv.withAdvisories} components with advisories</span>
+            <span className="badge badge-high">{osv.totalAdvisories} published advisories</span>
+            {result.provenance.vendors.slice(0, 4).map((v) => (
+              <span key={v} className="badge badge-accent" title="Provenance hint (vendor)">
+                {v}
+              </span>
+            ))}
+          </div>
+
+          {osv.components.length > 0 && (
+            <div className="table-wrap" style={{ marginBottom: 12 }}>
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Component</th>
+                    <th>Advisories (reachability unverified)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {osv.components.slice(0, 12).map((c) => (
+                    <tr key={`${c.name}@${c.version}`}>
+                      <td className="mono">
+                        {c.name} {c.version}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                          {c.advisories.slice(0, 8).map((a) => {
+                            const label = a.aliases.find((x) => x.startsWith('CVE-')) ?? a.id;
+                            const href = a.references[0];
+                            return href ? (
+                              <a
+                                key={a.id}
+                                href={href}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="badge mono"
+                                title={a.summary}
+                              >
+                                {label}
+                              </a>
+                            ) : (
+                              <span key={a.id} className="badge mono" title={a.summary}>
+                                {label}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {result.synthesis && (
+            <>
+              <div className="eyebrow" style={{ marginBottom: 6 }}>
+                Brief · {result.synthesis.provider} · {result.synthesis.model}
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.5 }}>{result.synthesis.text}</div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

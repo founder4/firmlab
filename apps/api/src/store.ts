@@ -15,7 +15,8 @@ export type JobKind =
   | 'gitleaks'
   | 'diff'
   | 'ghidra'
-  | 'copilot';
+  | 'copilot'
+  | 'research';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {

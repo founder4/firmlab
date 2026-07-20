@@ -24,6 +24,7 @@ import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
 import { reportRoutes } from './routes/report.js';
+import { researchRoutes } from './routes/research.js';
 import { sbomRoutes } from './routes/sbom.js';
 import { storageRoutes } from './routes/storage.js';
 import { toolRoutes } from './routes/tools.js';
@@ -89,6 +90,7 @@ async function main(): Promise<void> {
       await api.register(corpusRoutes);
       await api.register(copilotRoutes);
       await api.register(agentRoutes);
+      await api.register(researchRoutes);
       await api.register(reportRoutes);
       await api.register(storageRoutes);
       await api.register(toolRoutes);

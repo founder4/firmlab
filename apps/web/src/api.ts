@@ -298,6 +298,44 @@ export interface AgentStep {
   createdAt: number;
 }
 
+// === Phase 5: external-intelligence track (OSINT / published-vuln correlation) ===
+
+export interface ResearchStatus {
+  enabled: boolean;
+  allowlist?: string[];
+}
+
+export interface OsvAdvisory {
+  id: string;
+  aliases: string[];
+  summary: string;
+  severity: string | null;
+  references: string[];
+}
+
+export interface ResearchResult {
+  enabled: true;
+  provenance: {
+    identity: { firmwareClass: string; arch: string; bootloader: string | null };
+    vendors: string[];
+    models: string[];
+    versions: string[];
+    urls: string[];
+    domains: string[];
+    certCNs: string[];
+    banners: string[];
+  };
+  egress: { destinations: { host: string; sends: string; count: number }[]; neverSent: string[] };
+  osv: {
+    queried: number;
+    skipped: number;
+    withAdvisories: number;
+    totalAdvisories: number;
+    components: { name: string; version: string; ecosystem: string | null; advisories: OsvAdvisory[] }[];
+  };
+  synthesis?: { text: string; model: string; provider: string };
+}
+
 export interface AgentSessionView {
   session: AgentSession | null;
   steps: AgentStep[];
@@ -409,6 +447,10 @@ export const api = {
   approveEmulation: (sid: string, binary?: string) =>
     post<AgentSessionView>(`/api/agent/sessions/${sid}/approve`, binary ? { binary } : {}),
   declineEmulation: (sid: string) => post<AgentSessionView>(`/api/agent/sessions/${sid}/decline`),
+  researchStatus: () => get<ResearchStatus>('/api/research/status'),
+  runResearch: (id: string) => post<{ jobId: string }>(`/api/images/${id}/research`),
+  researchResult: (id: string) =>
+    get<{ result: ResearchResult | null }>(`/api/images/${id}/research`).then((r) => r.result),
   corpusOverview: () => get<{ overview: CorpusOverview }>('/api/corpus/overview').then((r) => r.overview),
   corpusRules: () => get<{ rules: CorpusRule[] }>('/api/corpus/rules').then((r) => r.rules),
   promoteRule: (type: string, key: string, label: string, note?: string) =>
