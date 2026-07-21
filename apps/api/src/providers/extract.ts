@@ -24,12 +24,13 @@ import { recordArtifacts } from '../corpus.js';
 import { EXTRACT_DIR } from '../paths.js';
 import { getImage, listBinaries, registerBinary, updateImageIdentity } from '../store.js';
 import { isToolAvailable } from '../tools.js';
+import { type CarveStep, runRecursiveCarve } from './carve.js';
 import type { JobHandle } from './jobs.js';
 
 const execFileAsync = promisify(execFile);
 
 export interface ExtractResult {
-  extractor: 'binwalk' | 'none';
+  extractor: 'binwalk' | 'recursive-carve' | 'none';
   outputDir: string;
   rootfsPath: string | null;
   tree: FsNode | null;
@@ -39,6 +40,8 @@ export interface ExtractResult {
   /** Architecture recovered by probing rootfs ELF headers (authoritative), when it could be determined. */
   detectedArch?: Architecture;
   detectedEndianness?: Endianness;
+  /** The recursive-carve chain-of-evidence (FIT→UBI→SquashFS), when the multi-stage carver ran. */
+  carveTrace?: CarveStep[];
 }
 
 /** Directory names that mark the root of an extracted Linux rootfs. */
@@ -48,10 +51,19 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
   const outputDir = path.join(EXTRACT_DIR, imageId);
   fs.mkdirSync(outputDir, { recursive: true });
 
+  // An OpenWrt-style FIT/UBI container returns 0 files from binwalk (`-Me` refuses without root; ubireader aborts
+  // on the empty overlay), so route it straight to the recursive carver (W1). See docs/AUTONOMOUS-WORKERS.md §3.2(1).
+  if (readFirmwareClass(imageId) === 'openwrt-fit-ubi') {
+    const carved = await tryCarve(imageId, imagePath, outputDir, handle);
+    if (carved) return carved;
+  }
+
   const haveBinwalk = await isToolAvailable('binwalk');
   if (!haveBinwalk) {
     handle.log('binwalk not available on PATH — build the firmware Docker image to enable real extraction.');
-    return { extractor: 'none', outputDir, rootfsPath: null, tree: null, summary: null };
+    // The recursive carver is pure TS for the FIT/UBI split, so a container image can still be carved here.
+    const carved = await tryCarve(imageId, imagePath, outputDir, handle);
+    return carved ?? { extractor: 'none', outputDir, rootfsPath: null, tree: null, summary: null };
   }
 
   // binwalk refuses to run its (third-party) extraction utilities as root unless explicitly told to; the Docker
@@ -73,10 +85,70 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
   const rootfsPath = findRootfs(outputDir);
   if (!rootfsPath) {
     handle.log('No Linux rootfs located in the carve output.');
-    return { extractor: 'binwalk', outputDir, rootfsPath: null, tree: null, summary: null };
+    // binwalk could not open the container (e.g. a raw UBI it declines to split) — try the recursive carver.
+    const carved = await tryCarve(imageId, imagePath, outputDir, handle);
+    return carved ?? { extractor: 'binwalk', outputDir, rootfsPath: null, tree: null, summary: null };
   }
 
   handle.log(`Rootfs located: ${rootfsPath}`);
+  return finalizeRootfs(imageId, outputDir, rootfsPath, 'binwalk', handle);
+}
+
+/** The stored coarse class (W0), used to route FIT/UBI images to the recursive carver. Null if not analyzed yet. */
+function readFirmwareClass(imageId: string): string | null {
+  const row = getImage(imageId);
+  if (!row?.identityJson) return null;
+  try {
+    return (JSON.parse(row.identityJson) as ImageIdentity).firmwareClass;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run the recursive FIT→UBI→SquashFS carver and turn its outcome into an ExtractResult. Returns:
+ *  • a finalized rootfs result when a rootfs directory was extracted;
+ *  • an honest carve-trace result (rootfsPath null) when the chain reached/parsed a container but could go no
+ *    further (e.g. the SquashFS tool is absent, or no SquashFS volume exists) — never a silent empty;
+ *  • null when the blob was not a carvable container at all, so the caller can fall back to binwalk.
+ */
+async function tryCarve(
+  imageId: string,
+  imagePath: string,
+  outputDir: string,
+  handle: JobHandle,
+): Promise<ExtractResult | null> {
+  const result = await runRecursiveCarve(imagePath, path.join(outputDir, 'carve'), handle);
+  if (result.rootfsDir) {
+    const rootfsPath = findRootfs(result.rootfsDir) ?? result.rootfsDir;
+    handle.log(`Recursive carve recovered a rootfs: ${rootfsPath}`);
+    return finalizeRootfs(imageId, outputDir, rootfsPath, 'recursive-carve', handle, result.trace);
+  }
+  const carvedAContainer =
+    result.squashfsPath !== null || result.trace.some((s) => s.format === 'fit' || s.format === 'ubi');
+  if (carvedAContainer) {
+    if (result.terminalReason) handle.log(`Recursive carve stopped honestly: ${result.terminalReason}`);
+    return {
+      extractor: 'recursive-carve',
+      outputDir,
+      rootfsPath: null,
+      tree: null,
+      summary: null,
+      carveTrace: result.trace,
+    };
+  }
+  return null;
+}
+
+/** Walk an extracted rootfs, model it, register its binaries + arch, and feed the corpus. Shared by both paths. */
+function finalizeRootfs(
+  imageId: string,
+  outputDir: string,
+  rootfsPath: string,
+  extractor: ExtractResult['extractor'],
+  handle: JobHandle,
+  carveTrace?: CarveStep[],
+): ExtractResult {
   const entries = walkRootfs(rootfsPath);
   handle.log(`Walked ${entries.length} filesystem entries.`);
   const summary = summarizeFs(entries);
@@ -99,13 +171,14 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
   recordArtifacts(imageId, artifacts);
 
   return {
-    extractor: 'binwalk',
+    extractor,
     outputDir,
     rootfsPath,
     tree,
     summary,
     ...(suggestedBinary ? { suggestedBinary } : {}),
     ...(detected ? { detectedArch: detected.arch, detectedEndianness: detected.endianness } : {}),
+    ...(carveTrace ? { carveTrace } : {}),
   };
 }
 

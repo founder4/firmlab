@@ -156,7 +156,7 @@ describe('W0 device-class identity (entropy-gated, non-Linux classes)', () => {
   it('classifies an ESP32 flash dump as esp-soc (xtensa), NOT jffs2 — even with coincidental jffs2 magics', () => {
     const buf = new Uint8Array(0x9000);
     buf.set([0xaa, 0x50], 0x8000); // partition table entry @ 0x8000
-    buf.set(ascii('ESP-IDF v5.5 esp32 build'), 0x100);
+    buf[0x1000] = 0xe9; // ESP bootloader image header magic; chip_id @ 0x100c is 0x0000 (ESP32) → xtensa
     buf.set([0x85, 0x19], 0x200); // coincidental JFFS2 magics (the historical false-positive)
     buf.set([0x85, 0x19], 0x300);
     const id = inferIdentity(buf, scanSignatures(buf));
@@ -166,10 +166,11 @@ describe('W0 device-class identity (entropy-gated, non-Linux classes)', () => {
     expect(id.classRationale).toMatch(/ESP SoC/);
   });
 
-  it('routes an ESP32-C/H/P target to RISC-V', () => {
+  it('reads the ESP arch from the image header chip_id (ESP32-C3 → RISC-V), not from strings', () => {
     const buf = new Uint8Array(0x9000);
     buf.set([0xaa, 0x50], 0x8000);
-    buf.set(ascii('target esp32-c3 riscv'), 0x100);
+    buf[0x1000] = 0xe9; // image header magic
+    buf[0x100c] = 0x05; // chip_id = 0x0005 (ESP32-C3) → RISC-V
     expect(inferIdentity(buf, scanSignatures(buf)).arch).toBe('riscv');
   });
 

@@ -208,21 +208,36 @@ function isFitUbi(hits: SignatureHit[]): boolean {
   return dtb !== undefined && ubi !== undefined && ubi.offset > dtb.offset;
 }
 
-/** Decode a bounded prefix of the image as lowercased latin1 for coarse target-string matching. */
-function asciiPrefix(buf: Uint8Array, cap: number): string {
-  const end = Math.min(buf.length, cap);
-  let out = '';
-  for (let i = 0; i < end; i += 0x8000) {
-    out += String.fromCharCode(...buf.subarray(i, Math.min(end, i + 0x8000)));
-  }
-  return out.toLowerCase();
-}
+/**
+ * ESP chip-id → CPU arch, read from the image header (the authoritative source). The Xtensa classics (ESP32/-S2/
+ * -S3) vs the RISC-V parts (C2/C3/C6/H2/P4) cannot be told apart by string-grep — a stock ESP-IDF build embeds
+ * references to every target — so we read the actual `chip_id` from a bootloader/app `esp_image_header_t`.
+ */
+const ESP_CHIP_ARCH = new Map<number, Architecture>([
+  [0x0000, 'xtensa'], // ESP32
+  [0x0002, 'xtensa'], // ESP32-S2
+  [0x0009, 'xtensa'], // ESP32-S3
+  [0x0005, 'riscv'], // ESP32-C3
+  [0x000c, 'riscv'], // ESP32-C2
+  [0x000d, 'riscv'], // ESP32-C6
+  [0x0010, 'riscv'], // ESP32-H2
+  [0x0012, 'riscv'], // ESP32-P4
+]);
 
-/** ESP cores split by target: the C/H/P families are RISC-V, the rest (ESP32/-S2/-S3, ESP8266) are Xtensa. */
+/**
+ * Read the ESP SoC arch from an image header: `esp_image_header_t` is `magic(0xE9) @0 … chip_id(u16 LE) @12`.
+ * Probe the canonical bootloader offsets (ESP32 @ 0x1000, newer parts @ 0x0); the chip id is authoritative for
+ * Xtensa-vs-RISC-V. Returns `unknown` honestly when no header is found (precise arch is refined later by W6).
+ */
 function espArch(buf: Uint8Array): { arch: Architecture; endianness: Endianness } {
-  const text = asciiPrefix(buf, 512 * 1024);
-  if (/esp32-?[chp]\d/.test(text)) return { arch: 'riscv', endianness: 'little' };
-  return { arch: 'xtensa', endianness: 'little' };
+  for (const base of [0x1000, 0x0]) {
+    if (buf[base] === 0xe9) {
+      const chipId = (buf[base + 12] ?? 0) | ((buf[base + 13] ?? 0) << 8);
+      const arch = ESP_CHIP_ARCH.get(chipId);
+      if (arch) return { arch, endianness: 'little' };
+    }
+  }
+  return { arch: 'unknown', endianness: 'little' };
 }
 
 /**
