@@ -117,6 +117,23 @@ export interface ChipsecResult {
   isolation?: string;
 }
 
+/** Active web-probe result — a reproduced hit against the emulated service is confirmed_in_emulation. */
+export interface WebProbeResult {
+  available: boolean;
+  reason: string;
+  target: string;
+  requests: number;
+  points: number;
+  findings: {
+    kind: string;
+    title: string;
+    severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
+    proofState: ProofState;
+    evidence: Record<string, unknown>;
+    rationale: string;
+  }[];
+}
+
 /** Renode RTOS/Cortex-M boot result — "booted" is decided from real UART bytes, never assumed. */
 export interface RenodeResult {
   available: boolean;
@@ -527,6 +544,9 @@ export const api = {
     post<{ jobId: string }>(`/api/images/${id}/chipsec`, seconds ? { seconds } : {}),
   chipsecResult: (id: string) =>
     get<{ result: ChipsecResult | null }>(`/api/images/${id}/chipsec`).then((r) => r.result),
+  runWebProbe: (id: string, url: string) => post<{ jobId: string }>(`/api/images/${id}/webprobe`, { url }),
+  webprobeResult: (id: string) =>
+    get<{ result: WebProbeResult | null }>(`/api/images/${id}/webprobe`).then((r) => r.result),
   fuzzStatus: () => get<{ available: boolean }>('/api/fuzz/status'),
   runFuzz: (id: string, binary: string, seconds?: number, harness?: HarnessClass | 'auto') =>
     post<{ jobId: string }>(`/api/images/${id}/fuzz`, {

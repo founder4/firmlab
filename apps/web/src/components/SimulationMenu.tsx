@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type ChipsecResult, type EmulationMenu, type EmulationRecipe, type Job, type RenodeResult, api } from '../api';
+import { WebProbePanel } from './WebProbePanel';
 
 const MODE_ICON: Record<string, string> = {
   'user-qemu': '▶',
@@ -328,6 +329,8 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
           )}
         </div>
       )}
+
+      <WebProbePanel imageId={imageId} />
     </div>
   );
 }

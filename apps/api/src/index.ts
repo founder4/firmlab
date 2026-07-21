@@ -31,6 +31,7 @@ import { researchRoutes } from './routes/research.js';
 import { sbomRoutes } from './routes/sbom.js';
 import { storageRoutes } from './routes/storage.js';
 import { toolRoutes } from './routes/tools.js';
+import { webprobeRoutes } from './routes/webprobe.js';
 import { registerSecurity } from './security.js';
 import { getDb } from './store.js';
 
@@ -96,6 +97,7 @@ async function main(): Promise<void> {
       await api.register(fuzzRoutes);
       await api.register(renodeRoutes);
       await api.register(chipsecRoutes);
+      await api.register(webprobeRoutes);
       await api.register(researchRoutes);
       await api.register(reportRoutes);
       await api.register(storageRoutes);

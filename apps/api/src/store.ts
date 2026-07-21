@@ -19,7 +19,8 @@ export type JobKind =
   | 'research'
   | 'fuzz'
   | 'renode'
-  | 'chipsec';
+  | 'chipsec'
+  | 'webprobe';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {
