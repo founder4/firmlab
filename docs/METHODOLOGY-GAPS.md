@@ -129,6 +129,40 @@ assessment.
 
 ---
 
+## 6. Ideas from peer tooling (wairz review)
+
+Reviewing **wairz** (a mature MCP-first firmware workbench: 90+ AI tools, PostgreSQL, Ghidra/QEMU/AFL++) surfaced
+concrete mechanisms worth adopting — most reinforce the gaps above, a few are new:
+
+- **MCP tool surface.** wairz exposes its analysis as ~90 MCP tools any external agent (Claude Code/Desktop, Cursor,
+  Codex…) can drive, with dynamic project switching and `notifications/tools/list_changed` on context change.
+  FirmLab has a strong *internal* agent but no *external* MCP surface — exposing the providers as MCP tools would let
+  any agent operate the workbench. Strategic, and cheap given the providers are already clean seams.
+- **Library/function-level fuzz harness.** Beyond whole-binary fuzzing, wairz **cross-compiles a harness linked
+  against an extracted `.so`** to fuzz a specific exported function, plus `patch_function_return` to stub a blocking
+  check (checksum/auth gate) so the fuzzer reaches the target. Deeper than our current per-class harnesses.
+- **Concrete RTOS deep-analysis tools** (sharpens §3): `detect_rtos_kernel`, `enumerate_rtos_tasks`,
+  `analyze_vector_table`, `recover_base_address`, `analyze_memory_map` — pyelftools/heuristics on the raw blob. This
+  is the "task enumeration / base-address / memory-map" gap, made concrete.
+- **Interactive emulation + self-diagnostics.** `run_command_in_emulation`, `enumerate_emulation_services`,
+  `run_gdb_command`, and `diagnose_emulation_environment` / `troubleshoot_emulation` — the emulation isn't just
+  booted, it's *driven and introspected*. Pairs with the FSTM-7/8 gaps (webprobe, GDB runtime).
+- **Deeper filesystem security analyzers**: `analyze_init_scripts`, `analyze_config_security`,
+  `check_filesystem_permissions`, `analyze_certificate`, `extract_bootloader_env`, `get_component_map` — the
+  firmwalker/FACT-class heuristics + a bins/libs/scripts dependency graph. Several are cheap, high-signal static wins.
+- **Cross-binary dataflow** (`trace_dataflow`, `cross_binary_dataflow`, `get_stack_layout`, `get_global_layout`) —
+  extends our single-binary taint scaffold to follow data across binaries.
+- **Live-device UART bridge.** A host-side serial bridge (TCP:9999) lets the containerized backend reach a physical
+  device's UART console — a pragmatic, software-side foothold into hardware that fits Phase-6 Capture.
+- **Kind-aware tool visibility.** Tools tagged `applies_to=(linux|rtos|unknown)`; the UI hides irrelevant ones. We
+  gate recipes by class already — formalizing per-kind capability visibility (incl. the coverage checklist) is tidy.
+
+Not adopting wholesale (different identity): wairz is MCP-first + Postgres/Redis + cloud (Fargate/Batch); FirmLab
+stays local-first with its own proof-state agent and OS-primitive isolation. The *techniques* above transfer; the
+architecture doesn't need to.
+
+---
+
 _Sources: OWASP FSTM & ISTG (owasp.org / scriptingxss.gitbook.io), Payatu ISTG guide, Binarly FwHunt & efiXplorer,
 NorthSec UART/SPI/JTAG extraction, bare-metal firmware-fuzzing surveys (Fuzzware/µEmu/P2IM, STAFF). Retrieved
 2026-07-21._
