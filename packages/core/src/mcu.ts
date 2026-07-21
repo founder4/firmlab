@@ -216,6 +216,75 @@ function normalizeCore(sub: string): string {
   return `cortex-m${s}`;
 }
 
+/** The RP2350 PICOBIN block start marker (u32 0xFFFFDED3, stored little-endian → D3 DE FF FF). */
+const PICOBIN_START_MARKER = [0xd3, 0xde, 0xff, 0xff];
+/** PICOBIN item type that declares the image kind + CPU + chip (see the RP2350 datasheet §5.9.5). */
+const PICOBIN_IMAGE_TYPE_ITEM = 0x42;
+
+export interface PicobinInfo {
+  /** Offset of the start marker in the buffer. */
+  markerOffset: number;
+  /** CPU the image was built for — the field that decides Arm-vs-RISC-V disassembly. `varmulet` runs Arm code. */
+  cpu: McuArch;
+  /** Target chip token when the IMAGE_TYPE item declared it. */
+  chip: 'rp2040' | 'rp2350' | null;
+  /** Whether the block declares an executable image (vs a data/packaged image). */
+  isExecutable: boolean;
+}
+
+/**
+ * Detect and decode an RP2350 PICOBIN boot block. Bare-metal RP2350 images are the one class where guessing the
+ * ISA by chip *name* is catastrophic: the RP2350 ships both an Arm Cortex-M33 and a RISC-V Hazard3 core, and the
+ * only authoritative source of which one a given image targets is the IMAGE_TYPE item's CPU field. We walk the
+ * block's TLV items to read it, so the classifier picks `riscv` vs `arm` from the bytes, never from a label.
+ *
+ * Returns null when no PICOBIN block is present. Pure; scans a bounded prefix (boot blocks live near the start).
+ */
+export function parsePicobin(buf: Uint8Array): PicobinInfo | null {
+  const scanEnd = Math.min(buf.length - 4, 256 * 1024);
+  let markerOffset = -1;
+  for (let o = 0; o <= scanEnd; o++) {
+    if (
+      buf[o] === PICOBIN_START_MARKER[0] &&
+      buf[o + 1] === PICOBIN_START_MARKER[1] &&
+      buf[o + 2] === PICOBIN_START_MARKER[2] &&
+      buf[o + 3] === PICOBIN_START_MARKER[3]
+    ) {
+      markerOffset = o;
+      break;
+    }
+  }
+  if (markerOffset < 0) return null;
+
+  // Walk the block's items (each item's byte 1 carries its size in 32-bit words) until IMAGE_TYPE or the end.
+  let cpu: McuArch = 'unknown';
+  let chip: PicobinInfo['chip'] = null;
+  let isExecutable = false;
+  let pos = markerOffset + 4;
+  for (let n = 0; n < 32 && pos + 4 <= buf.length; n++) {
+    const itemType = buf[pos] ?? 0;
+    if (itemType === 0) break;
+    if (itemType === PICOBIN_IMAGE_TYPE_ITEM) {
+      const flags = u16(buf, pos + 2, true);
+      isExecutable = (flags & 0x000f) === 0x1; // IMAGE_TYPE_EXE
+      cpu =
+        ((flags >> 8) & 0x7) === 0x1
+          ? 'riscv'
+          : ((flags >> 8) & 0x7) === 0x0
+            ? 'arm'
+            : ((flags >> 8) & 0x7) === 0x2
+              ? 'arm' // varmulet: emulated Arm code running on the RISC-V core → the image is Arm
+              : 'unknown';
+      chip = ((flags >> 12) & 0x7) === 0x1 ? 'rp2350' : ((flags >> 12) & 0x7) === 0x0 ? 'rp2040' : null;
+      break;
+    }
+    const sizeWords = buf[pos + 1] ?? 0;
+    if (sizeWords <= 0) break;
+    pos += sizeWords * 4;
+  }
+  return { markerOffset, cpu, chip, isExecutable };
+}
+
 /** Build the fingerprint. `buf` should be the firmware bytes (the caller may cap very large buffers). */
 export function fingerprintMcu(buf: Uint8Array): McuFingerprint {
   const layout = parseElfLayout(buf);

@@ -228,6 +228,29 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     magic: ascii('_FVH'),
   },
 
+  // === SoC / bare-metal boot images ===
+  {
+    // ESP-IDF partition table lives at the default flash offset 0x8000; each 32-byte entry starts with the
+    // magic 0x50AA (little-endian → bytes AA 50). Anchoring at 0x8000 keeps this specific — it is the reliable
+    // "this is an ESP SoC flash dump" landmark that a Linux/JFFS2 signature lens completely misses.
+    id: 'esp-parttable',
+    description: 'ESP-IDF partition table (entry magic @ 0x8000)',
+    category: 'container',
+    confidence: 'high',
+    magic: [0xaa, 0x50],
+    atOffset: 0x8000,
+  },
+  {
+    // RP2350 (Raspberry Pi Pico 2) firmware carries a PICOBIN boot block whose start marker is the u32
+    // 0xFFFFDED3 (little-endian → D3 DE FF FF). Its IMAGE_TYPE item then declares the CPU (Arm Cortex-M33 vs
+    // RISC-V Hazard3) — decode that separately (parsePicobin) so we never disassemble RISC-V as Arm garbage.
+    id: 'picobin',
+    description: 'RP2350 PICOBIN boot block (start marker)',
+    category: 'bootloader',
+    confidence: 'high',
+    magic: [0xd3, 0xde, 0xff, 0xff],
+  },
+
   // === Containers / archives ===
   {
     id: 'cpio-newc',

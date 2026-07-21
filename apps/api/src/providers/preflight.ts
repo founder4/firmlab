@@ -110,6 +110,33 @@ export function chooseRuntimeStrategy(i: PreflightInputs): {
         };
   }
 
+  // ESP SoC dumps and bare-metal MCU images have no Linux rootfs and no qemu-user path; their analysis is static
+  // (partition table / NVS for ESP, ISA-aware disassembly for bare-metal). Honest ceiling = static_confirmed.
+  if (i.firmwareClass === 'esp-soc') {
+    return {
+      strategy: 'static-only',
+      proofCeiling: 'static_confirmed',
+      reason: 'ESP SoC flash dump — partition table / app / NVS analysis is offline; no Linux emulation applies.',
+    };
+  }
+  if (i.firmwareClass === 'baremetal') {
+    return {
+      strategy: 'static-only',
+      proofCeiling: 'static_confirmed',
+      reason: 'Bare-metal MCU image — no filesystem to emulate; ISA-aware static analysis only (dynamic = W7).',
+    };
+  }
+
+  // An encrypted whole-image blob cannot be extracted or emulated without the key; the honest output is the
+  // cipher diagnosis, not an empty result. Cap at static_confirmed (facts about the bytes: entropy/header).
+  if (i.firmwareClass === 'encrypted') {
+    return {
+      strategy: 'static-only',
+      proofCeiling: 'static_confirmed',
+      reason: 'Encrypted image — extraction needs the key; only the entropy/cipher diagnosis is available (W8).',
+    };
+  }
+
   if (!hasUserEmulatorMapping(i.arch)) {
     return {
       strategy: 'unsupported-arch',

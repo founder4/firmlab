@@ -139,3 +139,84 @@ describe('structure + identity', () => {
     expect(identity.endianness).toBe('little');
   });
 });
+
+describe('W0 device-class identity (entropy-gated, non-Linux classes)', () => {
+  it('finds the ESP partition-table magic anchored at 0x8000', () => {
+    const buf = new Uint8Array(0x9000);
+    buf.set([0xaa, 0x50], 0x8000);
+    expect(scanSignatures(buf).some((h) => h.id === 'esp-parttable')).toBe(true);
+    // The same magic elsewhere must NOT fire (offset-anchored).
+    expect(scanSignatures(planted(0x9000, 0x100, [0xaa, 0x50])).some((h) => h.id === 'esp-parttable')).toBe(false);
+  });
+
+  it('finds the RP2350 PICOBIN start marker', () => {
+    expect(scanSignatures(planted(0x100, 0x14, [0xd3, 0xde, 0xff, 0xff])).some((h) => h.id === 'picobin')).toBe(true);
+  });
+
+  it('classifies an ESP32 flash dump as esp-soc (xtensa), NOT jffs2 — even with coincidental jffs2 magics', () => {
+    const buf = new Uint8Array(0x9000);
+    buf.set([0xaa, 0x50], 0x8000); // partition table entry @ 0x8000
+    buf.set(ascii('ESP-IDF v5.5 esp32 build'), 0x100);
+    buf.set([0x85, 0x19], 0x200); // coincidental JFFS2 magics (the historical false-positive)
+    buf.set([0x85, 0x19], 0x300);
+    const id = inferIdentity(buf, scanSignatures(buf));
+    expect(id.firmwareClass).toBe('esp-soc');
+    expect(id.arch).toBe('xtensa');
+    expect(id.filesystems).toEqual([]);
+    expect(id.classRationale).toMatch(/ESP SoC/);
+  });
+
+  it('routes an ESP32-C/H/P target to RISC-V', () => {
+    const buf = new Uint8Array(0x9000);
+    buf.set([0xaa, 0x50], 0x8000);
+    buf.set(ascii('target esp32-c3 riscv'), 0x100);
+    expect(inferIdentity(buf, scanSignatures(buf)).arch).toBe('riscv');
+  });
+
+  it('classifies an RP2350 PICOBIN image as baremetal with the ISA read from IMAGE_TYPE (RISC-V)', () => {
+    const buf = new Uint8Array(0x1000);
+    buf.set([0xd3, 0xde, 0xff, 0xff], 0x14); // start marker
+    buf.set([0x42, 0x01, 0x01, 0x11], 0x18); // IMAGE_TYPE: EXE | CPU_RISCV | CHIP_RP2350 (flags 0x1101 LE)
+    const id = inferIdentity(buf, scanSignatures(buf));
+    expect(id.firmwareClass).toBe('baremetal');
+    expect(id.arch).toBe('riscv'); // must NOT be Arm-by-name
+    expect(id.classRationale).toMatch(/RISC-V/);
+  });
+
+  it('classifies a FIT container wrapping a UBI image as openwrt-fit-ubi (beats a SquashFS inside it)', () => {
+    const buf = new Uint8Array(0x2000);
+    buf.set([0xd0, 0x0d, 0xfe, 0xed], 0); // FIT (device-tree) header at offset 0
+    buf.set([0x00, 0x10, 0x00, 0x00], 4); // totalsize
+    buf.set(ascii('UBI#'), 420); // UBI sub-image
+    buf.set(ascii('hsqs'), 1000); // a SquashFS inside — must not win over the container class
+    const id = inferIdentity(buf, scanSignatures(buf));
+    expect(id.firmwareClass).toBe('openwrt-fit-ubi');
+    expect(id.classRationale).toMatch(/FIT/);
+  });
+
+  it('classifies a whole-image high-entropy blob with no header as encrypted (not jffs2)', () => {
+    const buf = new Uint8Array(256 * 1024);
+    for (let i = 0; i < buf.length; i++) buf[i] = i & 0xff; // uniform histogram → H≈8, no container magic
+    const entropy = computeEntropyProfile(buf);
+    expect(entropy.likelyEncrypted).toBe(true);
+    const id = inferIdentity(buf, scanSignatures(buf), entropy);
+    expect(id.firmwareClass).toBe('encrypted');
+    expect(id.filesystems).toEqual([]);
+    expect(id.classRationale).toMatch(/encrypted/i);
+  });
+
+  it('a lone coincidental JFFS2 magic (invalid node type) does NOT become embedded-linux', () => {
+    const buf = planted(4096, 100, [0x85, 0x19, 0x00, 0x00]); // magic, but 0x0000 is not a real JFFS2 node type
+    const id = inferIdentity(buf, scanSignatures(buf));
+    expect(id.firmwareClass).not.toBe('embedded-linux');
+    expect(id.filesystems).toEqual([]);
+  });
+
+  it('a real JFFS2 node stream (valid node types) IS embedded-linux', () => {
+    const buf = new Uint8Array(8192);
+    for (const off of [100, 300, 600, 900]) buf.set([0x85, 0x19, 0x02, 0xe0], off); // magic + node type 0xe002 (INODE)
+    const id = inferIdentity(buf, scanSignatures(buf));
+    expect(id.firmwareClass).toBe('embedded-linux');
+    expect(id.filesystems).toContain('jffs2');
+  });
+});

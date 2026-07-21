@@ -83,4 +83,24 @@ describe('chooseRuntimeStrategy', () => {
     // A UEFI image must not be routed to a qemu rung; chipsec's offline decode is the only track.
     expect(out.strategy).toBe('uefi-chipsec');
   });
+
+  it('ESP-SoC / bare-metal / encrypted classes degrade to static-only (honest ceiling), never a qemu rung', () => {
+    for (const fc of ['esp-soc', 'baremetal', 'encrypted'] as const) {
+      const out = chooseRuntimeStrategy({
+        ...base,
+        firmwareClass: fc,
+        systemEmulatorAvailable: true,
+        hasSystemKernel: true,
+        hasNvramShim: true,
+      });
+      expect(out.strategy).toBe('static-only');
+      expect(out.proofCeiling).toBe('static_confirmed');
+    }
+  });
+
+  it('openwrt-fit-ubi routes like a Linux image once a rootfs is present (arm64 → qemu-user)', () => {
+    const out = chooseRuntimeStrategy({ ...base, firmwareClass: 'openwrt-fit-ubi', arch: 'arm64' });
+    expect(out.strategy).toBe('qemu-user');
+    expect(out.proofCeiling).toBe('confirmed_in_emulation');
+  });
 });

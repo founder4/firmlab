@@ -6,8 +6,25 @@
  * output, emulation) reference these via ids but live in the API layer.
  */
 
-/** A coarse classification of what kind of firmware an image is, steering downstream analysis. */
-export type FirmwareClass = 'embedded-linux' | 'rtos' | 'uefi-bios' | 'bootloader' | 'unknown';
+/**
+ * A coarse classification of what kind of firmware an image is, steering downstream analysis.
+ *
+ * The non-`embedded-linux` classes exist because a Linux/JFFS2 lens is actively wrong for them: an ESP SoC
+ * flash dump, a bare-metal MCU image, a whole-image-encrypted OTA, and a FIT/UBI container each need a
+ * different extractor and a different reasoning model. Collapsing them all to `embedded-linux` (the historical
+ * behaviour of a looser-than-binwalk signature layer with no entropy gate) is the single most damaging
+ * misclassification the workbench made — see docs/AUTONOMOUS-WORKERS.md §3.1.
+ */
+export type FirmwareClass =
+  | 'embedded-linux' // a Linux rootfs is present or directly extractable (SquashFS/CramFS/ext/UBIFS/…)
+  | 'openwrt-fit-ubi' // an OpenWrt-style FIT container wrapping a UBI image — needs a multi-stage carve first
+  | 'esp-soc' // an Espressif ESP32/ESP8266 SoC flash dump (partition table + NVS + app images), not Linux
+  | 'baremetal' // a bare-metal MCU image (e.g. RP2350 PICOBIN) — no filesystem, ISA-aware disassembly required
+  | 'rtos' // an RTOS / Cortex-M blob emulable under Renode
+  | 'uefi-bios' // a UEFI/BIOS platform firmware (firmware volumes), analyzed offline by chipsec
+  | 'bootloader'
+  | 'encrypted' // whole-image high entropy with no container header — not extractable without the key
+  | 'unknown';
 
 /** CPU architecture guessed from headers / embedded ELFs. */
 export type Architecture =
@@ -21,6 +38,7 @@ export type Architecture =
   | 'ppc'
   | 'riscv'
   | 'sparc'
+  | 'xtensa' // ESP32/ESP8266 classic cores
   | 'unknown';
 
 export type Endianness = 'big' | 'little' | 'unknown';
@@ -184,4 +202,10 @@ export interface ImageIdentity {
   filesystems: string[];
   bootloader?: string;
   kernel?: string;
+  /**
+   * A one-line, honest explanation of why this class was chosen and what it implies for the operator —
+   * especially "this is not Linux, so the standard rootfs pipeline does not apply". Powers the UI's
+   * honest-degradation banner so "0 findings" is never confused with "clean" (docs/AUTONOMOUS-WORKERS.md §4).
+   */
+  classRationale?: string;
 }

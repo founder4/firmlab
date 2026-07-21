@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fingerprintMcu } from '../src/mcu.js';
+import { fingerprintMcu, parsePicobin } from '../src/mcu.js';
 
 /** Minimal ELF32 builder: header + N PT_LOAD program headers, little-endian, plus optional trailing strings. */
 function elf32(machine: number, loads: { vaddr: number; paddr: number; filesz: number }[], trailer = ''): Uint8Array {
@@ -126,5 +126,38 @@ describe('fingerprintMcu — vendor/family string markers', () => {
     expect(fp.tokens).toContain('nrf52840');
     expect(fp.tokens).toContain('nordic');
     expect(fp.tokens).toContain('cortex-m4');
+  });
+});
+
+describe('parsePicobin — RP2350 boot block ISA', () => {
+  /** A minimal PICOBIN block: start marker at `markerAt`, then a single-word IMAGE_TYPE item carrying `flags`. */
+  function picobinBlock(flags: number, markerAt = 0x10): Uint8Array {
+    const buf = new Uint8Array(markerAt + 16);
+    buf.set([0xd3, 0xde, 0xff, 0xff], markerAt); // start marker (u32 LE 0xFFFFDED3)
+    buf[markerAt + 4] = 0x42; // IMAGE_TYPE item type
+    buf[markerAt + 5] = 0x01; // size = 1 word
+    buf[markerAt + 6] = flags & 0xff; // flags low
+    buf[markerAt + 7] = (flags >> 8) & 0xff; // flags high
+    return buf;
+  }
+
+  it('reads a RISC-V RP2350 executable image (CPU field, not the chip name)', () => {
+    const info = parsePicobin(picobinBlock(0x1101)); // EXE | CPU_RISCV(0x100) | CHIP_RP2350(0x1000)
+    expect(info).not.toBeNull();
+    expect(info?.cpu).toBe('riscv');
+    expect(info?.chip).toBe('rp2350');
+    expect(info?.isExecutable).toBe(true);
+  });
+
+  it('reads an Arm RP2350 image', () => {
+    expect(parsePicobin(picobinBlock(0x1001))?.cpu).toBe('arm'); // CPU_ARM(0x0)
+  });
+
+  it('maps a varmulet image to Arm (emulated Arm code on the RISC-V core)', () => {
+    expect(parsePicobin(picobinBlock(0x1201))?.cpu).toBe('arm'); // CPU_VARMULET(0x2) → the image is Arm code
+  });
+
+  it('returns null when there is no PICOBIN block', () => {
+    expect(parsePicobin(new Uint8Array(64))).toBeNull();
   });
 });

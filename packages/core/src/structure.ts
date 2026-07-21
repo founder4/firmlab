@@ -3,6 +3,7 @@
  * identity. This is the deterministic backbone of the "binwalk graphical view" the workbench renders: a
  * ribbon of labeled, colored segments across the image, plus an inferred class/arch/endianness.
  */
+import { parsePicobin } from './mcu.js';
 import type {
   Architecture,
   Endianness,
@@ -158,34 +159,149 @@ function meanEntropyOver(entropy: EntropyProfile, start: number, end: number): n
   return count > 0 ? sum / count : entropy.mean;
 }
 
+/** High-confidence filesystem signatures — one of these is unambiguous proof of an extractable rootfs. */
+const STRONG_FS_IDS = [
+  'squashfs-le',
+  'squashfs-be',
+  'cramfs',
+  'cramfs-be',
+  'ubifs',
+  'ubi',
+  'romfs',
+  'ext',
+  'f2fs',
+  'erofs',
+];
+
 /**
- * Best-effort image identity from the signature hits. Deliberately cautious: we only assert a class when the
- * evidence is unambiguous (a real filesystem/bootloader/UEFI-volume), else `unknown`.
+ * Valid JFFS2 node types — the 16-bit word that follows the 2-byte magic in every real node header. A genuine
+ * JFFS2 image is a dense stream of these; a handful of coincidental 2-byte magic matches (the false-positive
+ * that misclassified ESP32 SoC dumps and encrypted blobs as `embedded-linux`) will not have valid node types
+ * behind them. See docs/AUTONOMOUS-WORKERS.md §3.1(1).
  */
-export function inferIdentity(buf: Uint8Array, hits: SignatureHit[]): ImageIdentity {
-  const ids = new Set(hits.map((h) => h.id));
-  const filesystems: string[] = [];
-  for (const fs of [
-    'squashfs-le',
-    'squashfs-be',
-    'jffs2-le',
-    'jffs2-be',
-    'cramfs',
-    'ubifs',
-    'ubi',
-    'yaffs2',
-    'romfs',
-  ]) {
-    if (ids.has(fs)) filesystems.push(fs.replace(/-(le|be)$/, ''));
+const JFFS2_NODETYPES = new Set([0xe001, 0xe002, 0x2003, 0x2004, 0x2006, 0xe008, 0xe009]);
+
+/** Count JFFS2 signature hits whose following 2 bytes form a valid node type (endianness matches the magic). */
+function corroboratedJffs2Nodes(buf: Uint8Array, hits: SignatureHit[]): number {
+  let count = 0;
+  for (const h of hits) {
+    if (h.id !== 'jffs2-le' && h.id !== 'jffs2-be') continue;
+    const off = h.offset;
+    if (off + 3 >= buf.length) continue;
+    const nodetype =
+      h.id === 'jffs2-le'
+        ? (buf[off + 2] ?? 0) | ((buf[off + 3] ?? 0) << 8)
+        : ((buf[off + 2] ?? 0) << 8) | (buf[off + 3] ?? 0);
+    if (JFFS2_NODETYPES.has(nodetype)) count++;
   }
+  return count;
+}
+
+/**
+ * An OpenWrt-style FIT container wrapping a UBI image: a device-tree (FIT) header at (or very near) offset 0 and
+ * a UBI magic somewhere after it. A single-pass extractor returns 0 files on these — the rootfs only appears
+ * after a FIT→UBI→volume→SquashFS carve — so the class must be distinct from `embedded-linux` to route to W1.
+ */
+function isFitUbi(hits: SignatureHit[]): boolean {
+  const dtb = hits.find((h) => h.id === 'dtb' && h.offset <= 4096);
+  const ubi = hits.find((h) => h.id === 'ubi');
+  return dtb !== undefined && ubi !== undefined && ubi.offset > dtb.offset;
+}
+
+/** Decode a bounded prefix of the image as lowercased latin1 for coarse target-string matching. */
+function asciiPrefix(buf: Uint8Array, cap: number): string {
+  const end = Math.min(buf.length, cap);
+  let out = '';
+  for (let i = 0; i < end; i += 0x8000) {
+    out += String.fromCharCode(...buf.subarray(i, Math.min(end, i + 0x8000)));
+  }
+  return out.toLowerCase();
+}
+
+/** ESP cores split by target: the C/H/P families are RISC-V, the rest (ESP32/-S2/-S3, ESP8266) are Xtensa. */
+function espArch(buf: Uint8Array): { arch: Architecture; endianness: Endianness } {
+  const text = asciiPrefix(buf, 512 * 1024);
+  if (/esp32-?[chp]\d/.test(text)) return { arch: 'riscv', endianness: 'little' };
+  return { arch: 'xtensa', endianness: 'little' };
+}
+
+/**
+ * Best-effort image identity from the signature hits + entropy. The class decision is ordered so that a
+ * device-family landmark (ESP partition table, PICOBIN block, UEFI volume, FIT/UBI container) wins over a
+ * coincidental short filesystem magic, and the whole-image encrypted gate is consulted before a weak (2-byte)
+ * JFFS2 magic may assert a Linux rootfs. This is what stops ESP32 / RP2350 / encrypted-OTA / FIT-UBI images all
+ * collapsing to `embedded-linux` / `jffs2` (docs/AUTONOMOUS-WORKERS.md §3.1). `entropy` is optional; when
+ * omitted the encrypted gate is simply skipped.
+ */
+export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: EntropyProfile | null): ImageIdentity {
+  const ids = new Set(hits.map((h) => h.id));
+  const strongFs = STRONG_FS_IDS.filter((f) => ids.has(f));
+  const jffs2Nodes = corroboratedJffs2Nodes(buf, hits);
+  const picobin = parsePicobin(buf);
 
   let firmwareClass: FirmwareClass = 'unknown';
-  if (ids.has('uefi-fv')) firmwareClass = 'uefi-bios';
-  else if (filesystems.length > 0) firmwareClass = 'embedded-linux';
-  else if (ids.has('uimage') || ids.has('trx') || ids.has('android-boot')) firmwareClass = 'embedded-linux';
-  else if (ids.has('arm-zimage') || (ids.has('elf') && !filesystems.length)) firmwareClass = 'rtos';
+  let classRationale: string | undefined;
+  let arch: Architecture;
+  let endianness: Endianness;
+  // Whether the resolved class is a genuine filesystem-bearing image (so the detected fs list is meaningful).
+  let filesystemClass = false;
 
-  const { arch, endianness } = inferArch(buf, hits);
+  if (ids.has('esp-parttable')) {
+    firmwareClass = 'esp-soc';
+    ({ arch, endianness } = espArch(buf));
+    classRationale =
+      'ESP SoC flash dump (partition table @ 0x8000). Not a Linux image — the rootfs pipeline does not apply; ' +
+      'analyze the partition table, app images and the NVS key/value store (worker W6).';
+  } else if (picobin) {
+    firmwareClass = 'baremetal';
+    arch = picobin.cpu === 'riscv' ? 'riscv' : picobin.cpu === 'arm' ? 'arm' : 'unknown';
+    endianness = arch === 'unknown' ? 'unknown' : 'little';
+    const cpuLabel = picobin.cpu === 'riscv' ? 'RISC-V' : picobin.cpu === 'arm' ? 'Arm Cortex-M' : 'an undeclared CPU';
+    const chipLabel = picobin.chip ? `${picobin.chip.toUpperCase()} ` : '';
+    classRationale = `Bare-metal ${chipLabel}image (PICOBIN, ${cpuLabel}). No filesystem; disassembly must target the declared ISA — reading RISC-V as Arm (or vice-versa) yields garbage (worker W7).`;
+  } else if (ids.has('uefi-fv')) {
+    firmwareClass = 'uefi-bios';
+    ({ arch, endianness } = inferArch(buf, hits));
+    classRationale = 'UEFI/BIOS platform firmware (firmware volumes) — analyzed offline by chipsec, not emulated.';
+  } else if (isFitUbi(hits)) {
+    firmwareClass = 'openwrt-fit-ubi';
+    ({ arch, endianness } = inferArch(buf, hits));
+    filesystemClass = true;
+    classRationale =
+      'OpenWrt-style FIT container wrapping a UBI image. A single-pass extractor returns 0 files here — a rootfs ' +
+      'only appears after the FIT→UBI→volume→SquashFS carve (worker W1).';
+  } else if (strongFs.length > 0) {
+    firmwareClass = 'embedded-linux';
+    filesystemClass = true;
+    ({ arch, endianness } = inferArch(buf, hits));
+  } else if (ids.has('uimage') || ids.has('trx') || ids.has('android-boot')) {
+    firmwareClass = 'embedded-linux';
+    filesystemClass = true;
+    ({ arch, endianness } = inferArch(buf, hits));
+  } else if (entropy?.likelyEncrypted) {
+    firmwareClass = 'encrypted';
+    ({ arch, endianness } = inferArch(buf, hits));
+    classRationale = `Whole-image high entropy (mean ${entropy.mean.toFixed(2)} bits/byte) with no recognizable container header — the image is likely encrypted and cannot be extracted without the key (worker W8).`;
+  } else if (jffs2Nodes >= 4) {
+    firmwareClass = 'embedded-linux';
+    filesystemClass = true;
+    ({ arch, endianness } = inferArch(buf, hits));
+  } else if (ids.has('arm-zimage') || ids.has('elf')) {
+    firmwareClass = 'rtos';
+    ({ arch, endianness } = inferArch(buf, hits));
+  } else {
+    ({ arch, endianness } = inferArch(buf, hits));
+  }
+
+  // Only report a filesystem inventory for classes that actually carry one — never surface the coincidental
+  // JFFS2 magics that led an ESP/encrypted/bare-metal blob to look like a Linux rootfs.
+  const filesystems: string[] = [];
+  if (filesystemClass) {
+    for (const f of strongFs) filesystems.push(f.replace(/-(le|be)$/, ''));
+    if (jffs2Nodes >= 4) filesystems.push('jffs2');
+    if (ids.has('yaffs2')) filesystems.push('yaffs2');
+  }
+
   const bootloader = ids.has('uimage') ? 'U-Boot (uImage)' : undefined;
 
   return {
@@ -194,6 +310,7 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[]): ImageIdent
     endianness,
     filesystems: [...new Set(filesystems)],
     ...(bootloader ? { bootloader } : {}),
+    ...(classRationale ? { classRationale } : {}),
   };
 }
 

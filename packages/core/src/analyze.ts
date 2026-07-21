@@ -28,7 +28,7 @@ export function analyzeBuffer(buf: Uint8Array, options: AnalyzeOptions = {}): St
   const entropy = computeEntropyProfile(buf, options.entropy);
   const signatures = scanSignatures(buf);
   const structure = buildStructureSegments(buf.length, signatures, entropy);
-  const identity = inferIdentity(buf, signatures);
+  const identity = inferIdentity(buf, signatures, entropy);
   const secrets = extractSecrets(buf, { minLength: options.secretMinLength ?? 6 }).slice(0, 500);
   return { size: buf.length, identity, entropy, signatures, structure, secrets };
 }
