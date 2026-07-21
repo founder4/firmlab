@@ -51,74 +51,59 @@ RUN curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh  |
     && curl -fsSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep -oP '"tag_name":\s*"v\K[0-9.]+')_linux_${GL_ARCH}.tar.gz \
        -o /tmp/gitleaks.tgz && tar xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks && rm /tmp/gitleaks.tgz
 
-# === (Optional) Emulation bring-up assets — libnvram shim + firmadyne kernels ===
-# These unlock the deeper emulation rungs the preflight gates on (apps/api/src/providers/preflight.ts):
-#   - /opt/libnvram/libnvram-<arch>.so  → rung-2 "chroot service" (LD_PRELOAD emulates NVRAM access, the
-#                                          single biggest router-daemon bring-up blocker)
-#   - /opt/firmae/kernels/              → rung-3 "full-system" qemu-system boot
-# Without them the ladder degrades honestly to qemu-user / static-only — nothing is faked. They are opt-in
-# because they are heavy (cross-compilers + multi-MB prebuilt kernels) and, unlike the toolchain above, are
-# NOT yet build-verified in this tree. The paths below are the ones preflight checks; keep them in sync.
-#
-# libnvram — build the firmadyne shim from source, one .so per guest arch we emulate:
-# RUN apt-get update && apt-get install -y --no-install-recommends \
-#       git build-essential gcc-mipsel-linux-gnu gcc-mips-linux-gnu gcc-arm-linux-gnueabi gcc-aarch64-linux-gnu \
-#     && git clone --depth 1 https://github.com/firmadyne/libnvram /tmp/libnvram && mkdir -p /opt/libnvram \
-#     && make -C /tmp/libnvram CC=mipsel-linux-gnu-gcc   && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-mipsel.so \
-#     && make -C /tmp/libnvram clean && make -C /tmp/libnvram CC=mips-linux-gnu-gcc     && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-mips.so \
-#     && make -C /tmp/libnvram clean && make -C /tmp/libnvram CC=arm-linux-gnueabi-gcc  && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-arm.so \
-#     && make -C /tmp/libnvram clean && make -C /tmp/libnvram CC=aarch64-linux-gnu-gcc  && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-arm64.so \
-#     && rm -rf /tmp/libnvram /var/lib/apt/lists/*
-#
-# firmadyne kernels — prebuilt guest kernels for full-system boot (multi-MB each; sourced via FirmAE):
-# RUN mkdir -p /opt/firmae/kernels \
-#     && for a in vmlinux.mipsel.4 vmlinux.mipseb.4 zImage.armel.4; do \
-#          curl -fsSL "https://github.com/pr0v3rbs/FirmAE/raw/master/binaries/$a" -o "/opt/firmae/kernels/$a"; \
-#        done
-#
-# === (Optional, heavy) Ghidra headless + Renode ===
-# Uncomment to bake the deep decompiler and RTOS emulator. Adds ~1.5 GB; skip for a lean image.
-# RUN apt-get update && apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
-#     && GHIDRA_URL="$(curl -fsSL https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest \
-#        | grep -o 'https://[^"]*_PUBLIC_[0-9]*\.zip' | head -1)" \
-#     && curl -fsSL "$GHIDRA_URL" -o /tmp/ghidra.zip && unzip -q /tmp/ghidra.zip -d /opt && rm /tmp/ghidra.zip \
-#     && mv /opt/ghidra_* /opt/ghidra && ln -sf /opt/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless \
-#     && rm -rf /var/lib/apt/lists/*
-# ENV GHIDRA_INSTALL_DIR=/opt/ghidra
-#
-# === (Optional, heavy) Renode — RTOS / Cortex-M boot (Phase 4, providers/renode.ts). ===
-# VALIDATED recipe (real Contiki boot on an emulated STM32F4). Use the arch-matched portable-dotnet build — it is
-# self-contained except for .NET's ICU + OpenSSL — and drop it at /opt/renode so RENODE_PLATFORMS_DIR resolves.
-# On x86_64 swap arm64→x64 in the asset name. platforms/ ship inside the tarball; no per-MCU setup needed.
-# ARG RENODE_VER=1.16.1
-# RUN apt-get update && apt-get install -y --no-install-recommends libicu72 libssl3 ca-certificates && rm -rf /var/lib/apt/lists/* \
-#     && curl -fsSL "https://github.com/renode/renode/releases/download/v${RENODE_VER}/renode-${RENODE_VER}.linux-arm64-portable-dotnet.tar.gz" \
-#        -o /tmp/renode.tgz && mkdir -p /opt/renode && tar xzf /tmp/renode.tgz -C /opt/renode --strip-components=1 \
-#     && rm /tmp/renode.tgz && ln -sf /opt/renode/renode /usr/local/bin/renode && renode --version | head -1
-#
-# === (Optional) AFL++ — coverage-guided fuzzing (Phase 4, providers/fuzz.ts, qemu mode under the sandbox). ===
-# Opt-in like Ghidra: absent afl-fuzz → available:false honestly. Build BOTH afl-fuzz AND afl-qemu-trace from source
-# so their fork-server protocols match — the Debian `afl++` package (v4.x) pairs with a source-built afl-qemu-trace
-# (v5.x) only by luck and its child dies on first spawn ("Unable to request new process"). Set CPU_TARGET to the
-# guest arch you fuzz (aarch64 here; e.g. arm/mips for other firmware). Put the matched pair ahead of apt in PATH.
-# RUN apt-get update && apt-get install -y --no-install-recommends git ninja-build meson pkg-config libglib2.0-dev \
-#        libpixman-1-dev python3 flex bison make gcc g++ && rm -rf /var/lib/apt/lists/* \
-#     && git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /afl \
-#     && make -C /afl source-only NO_NYX=1 \
-#     && (cd /afl/qemu_mode && CPU_TARGET=aarch64 ./build_qemu_support.sh) \
-#     && cp /afl/afl-fuzz /afl/afl-qemu-trace /afl/afl-showmap /afl/afl-tmin /usr/local/bin/ \
-#     && afl-fuzz --version && afl-qemu-trace --version | head -1
-# ENV AFL_PATH=/afl
-#
-# === (Optional) chipsec — UEFI/BIOS offline analysis (providers/chipsec.ts). ===
-# VALIDATED recipe (real OVMF decode: 2 firmware volumes, 131 EFI modules, exact type histogram). chipsec runs the
-# `uefi decode` command fully OFFLINE (NoneHelper, no kernel driver, no network) so no privileged access is needed —
-# the pip build only needs a C toolchain + nasm for its helper. Opt-in like the others: absent chipsec_util →
-# available:false honestly. Point FIRMLAB_UEFI_IOC at a known-bad-module JSON feed to enable GUID/name IOC matching.
-# RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3-dev nasm \
-#     && rm -rf /var/lib/apt/lists/* \
-#     && pip3 install --no-cache-dir --break-system-packages chipsec \
-#     && chipsec_util --help >/dev/null 2>&1 || true
-# ENV FIRMLAB_UEFI_IOC=/opt/firmlab/uefi-iocs.json
+# =============================================================================
+# Heavy analysis tools — ACTIVATED. Each block is fault-tolerant (`|| echo …`): a failed optional install must
+# NEVER abort the image build — the corresponding provider already degrades honestly when its tool is absent
+# (available:false / blocked_by_platform), which is the project's core discipline. So the deploy always builds;
+# whatever tool installed, works; whatever didn't, degrades. Rebuild is heavy (~several GB); that is intended here.
+# =============================================================================
+
+# === chipsec — UEFI/BIOS offline analysis (providers/chipsec.ts) — VALIDATED (real OVMF decode). ===
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3-dev nasm \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --no-cache-dir --break-system-packages chipsec \
+    && chipsec_util --help >/dev/null 2>&1 \
+    ; command -v chipsec_util >/dev/null && echo "chipsec OK" || echo "chipsec optional install failed — UEFI provider degrades honestly"
+
+# === Renode — RTOS / Cortex-M boot (providers/renode.ts) — VALIDATED (real Contiki on emulated STM32F4). ===
+# arm64 portable-dotnet build (self-contained bar .NET's ICU + OpenSSL); platforms/ ship inside the tarball.
+ARG RENODE_VER=1.16.1
+RUN bash -c 'set -o pipefail; apt-get update && apt-get install -y --no-install-recommends libicu72 libssl3 ca-certificates && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL "https://github.com/renode/renode/releases/download/v${RENODE_VER}/renode-${RENODE_VER}.linux-arm64-portable-dotnet.tar.gz" -o /tmp/renode.tgz \
+    && mkdir -p /opt/renode && tar xzf /tmp/renode.tgz -C /opt/renode --strip-components=1 && rm /tmp/renode.tgz \
+    && ln -sf /opt/renode/renode /usr/local/bin/renode && renode --version | head -1' \
+    || echo "Renode optional install failed — RTOS provider degrades honestly"
+
+# === Ghidra headless — deep decompilation (providers/ghidra.ts). Adds ~1.5 GB (openjdk + Ghidra). ===
+RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends openjdk-21-jdk-headless && rm -rf /var/lib/apt/lists/* \
+    && GHIDRA_URL="$(curl -fsSL https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest | grep -o "https://[^\"]*_PUBLIC_[0-9]*\.zip" | head -1)" \
+    && curl -fsSL "$GHIDRA_URL" -o /tmp/ghidra.zip && unzip -q /tmp/ghidra.zip -d /opt && rm /tmp/ghidra.zip \
+    && mv /opt/ghidra_* /opt/ghidra && ln -sf /opt/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless' \
+    || echo "Ghidra optional install failed — decompiler degrades honestly"
+ENV GHIDRA_INSTALL_DIR=/opt/ghidra
+
+# === Emulation bring-up assets — libnvram shim (rung-2 chroot service) + firmadyne kernels (rung-3 full-system). ===
+# Paths here are exactly what preflight (providers/preflight.ts) checks: /opt/libnvram/libnvram-<arch>.so, /opt/firmae/kernels/.
+RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git build-essential gcc-mipsel-linux-gnu gcc-mips-linux-gnu gcc-arm-linux-gnueabi gcc-aarch64-linux-gnu \
+    && git clone --depth 1 https://github.com/firmadyne/libnvram /tmp/libnvram && mkdir -p /opt/libnvram \
+    && make -C /tmp/libnvram CC=mipsel-linux-gnu-gcc  && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-mipsel.so && make -C /tmp/libnvram clean \
+    && make -C /tmp/libnvram CC=mips-linux-gnu-gcc    && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-mips.so   && make -C /tmp/libnvram clean \
+    && make -C /tmp/libnvram CC=arm-linux-gnueabi-gcc && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-arm.so    && make -C /tmp/libnvram clean \
+    && make -C /tmp/libnvram CC=aarch64-linux-gnu-gcc && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-arm64.so \
+    && rm -rf /tmp/libnvram /var/lib/apt/lists/*' \
+    || echo "libnvram optional build failed — chroot-service rung degrades honestly"
+RUN bash -c 'mkdir -p /opt/firmae/kernels && for a in vmlinux.mipsel.4 vmlinux.mipseb.4 zImage.armel.4; do curl -fsSL "https://github.com/pr0v3rbs/FirmAE/raw/master/binaries/$a" -o "/opt/firmae/kernels/$a"; done' \
+    || echo "firmadyne kernels optional download failed — full-system rung degrades honestly"
+
+# === AFL++ — coverage-guided fuzzing (providers/fuzz.ts, qemu mode). Heavy source build (compiles QEMU). ===
+# CPU_TARGET=aarch64 → fuzzes aarch64 guests here; rebuild with a different CPU_TARGET for arm/mips firmware.
+RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev python3 flex bison make gcc g++ && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /afl \
+    && make -C /afl source-only NO_NYX=1 \
+    && (cd /afl/qemu_mode && CPU_TARGET=aarch64 ./build_qemu_support.sh) \
+    && cp /afl/afl-fuzz /afl/afl-qemu-trace /afl/afl-showmap /afl/afl-tmin /usr/local/bin/ \
+    && afl-fuzz --version && afl-qemu-trace --version | head -1' \
+    || echo "AFL++ optional build failed — fuzzing provider degrades honestly"
+ENV AFL_PATH=/afl
 
 CMD ["node", "apps/api/dist/index.js"]
