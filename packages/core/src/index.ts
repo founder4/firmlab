@@ -12,5 +12,6 @@ export * from './structure.js';
 export * from './strings.js';
 export * from './binwalk.js';
 export * from './filesystem.js';
+export * from './mcu.js';
 export { analyzeBuffer } from './analyze.js';
 export type { StaticAnalysis } from './analyze.js';

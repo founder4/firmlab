@@ -1,8 +1,27 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fingerprintMcu } from '@firmlab/core';
 import { afterAll, describe, expect, it } from 'vitest';
-import { buildRenodeScript, discoverUarts, selectPlatform } from './renode.js';
+import { buildRenodeScript, discoverUarts, listPlatformCatalog, selectPlatform } from './renode.js';
+
+/** A stand-in Renode catalog covering common + less-common families, mirroring real `.repl` filenames. */
+const CATALOG = [
+  'boards/stm32f4_discovery-kit.repl',
+  'boards/stm32f072b_discovery.repl',
+  'boards/stm32l072.repl',
+  'cpus/stm32f4.repl',
+  'cpus/nrf52840.repl',
+  'cpus/efr32mg.repl',
+  'cpus/cc2538.repl',
+  'boards/sifive_fe310.repl',
+  'cpus/samd51.repl',
+];
+
+/** Build a fingerprint straight from a marker string, the way the real firmware bytes would produce one. */
+function fpFrom(marker: string) {
+  return fingerprintMcu(new TextEncoder().encode(`padding ${marker} padding`));
+}
 
 describe('buildRenodeScript', () => {
   it('loads the platform + ELF and surfaces every discovered UART, ending on start', () => {
@@ -52,14 +71,62 @@ describe('discoverUarts', () => {
 });
 
 describe('selectPlatform', () => {
-  it('maps MCU/vendor hints to a bundled board platform', () => {
-    // A custom dir bypasses the on-disk existence check, so mapping is unit-testable without Renode.
-    expect(selectPlatform(['STM32F407 Discovery'], '/plat')).toContain('stm32f4');
-    expect(selectPlatform(['Nordic nRF52840 SoftDevice'], '/plat')).toContain('nrf52840');
-    expect(selectPlatform(['generic cortex-m4 rtos'], '/plat')).toContain('cortex-m4');
+  it('steers a fingerprinted STM32F4 to the known-good Discovery board, not a bare cpu', () => {
+    const sel = selectPlatform(fpFrom('STM32F407VG'), [], CATALOG);
+    expect(sel?.repl).toBe('boards/stm32f4_discovery-kit.repl');
+    expect(sel?.via).toBe('family');
+  });
+
+  it('matches families beyond the common three from the real catalog (RISC-V FE310, SAMD51)', () => {
+    expect(selectPlatform(fpFrom('SiFive FE310-G002'), [], CATALOG)?.repl).toBe('boards/sifive_fe310.repl');
+    expect(selectPlatform(fpFrom('Microchip ATSAMD51J20'), [], CATALOG)?.repl).toBe('cpus/samd51.repl');
+  });
+
+  it('picks the exact part when the catalog names it (nRF52840 → cpus/nrf52840)', () => {
+    const sel = selectPlatform(fpFrom('Nordic nRF52840 SoftDevice'), [], CATALOG);
+    expect(sel?.repl).toBe('cpus/nrf52840.repl');
+    expect(sel?.via).toBe('part');
+  });
+
+  it('blocks honestly on a bare Cortex-M with no vendor identity (real Renode ships no generic core .repl)', () => {
+    // A raw vector table (valid Cortex-M memory map) but no vendor family string → cannot pick a real board.
+    const buf = new Uint8Array(0x40);
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(0, 0x2000_5000, true);
+    dv.setUint32(4, 0x0800_0abd, true);
+    buf.set(new TextEncoder().encode('Cortex-M0 bare metal'), 0x20);
+    const fp = fingerprintMcu(buf);
+    expect(fp.arch).toBe('arm'); // it IS recognized as Cortex-M…
+    expect(selectPlatform(fp, [], CATALOG)).toBeNull(); // …but without a vendor family we honestly block
+  });
+
+  it('mines the free-text hints too (a "discovery" hint reinforces the board)', () => {
+    expect(selectPlatform(fpFrom('STM32F072'), ['STM32F072B Discovery kit'], CATALOG)?.repl).toBe(
+      'boards/stm32f072b_discovery.repl',
+    );
   });
 
   it('returns null when nothing matches (→ honest blocked_by_platform)', () => {
-    expect(selectPlatform(['some x86 linux server'], '/plat')).toBeNull();
+    expect(selectPlatform(fpFrom('some x86 linux server'), [], CATALOG)).toBeNull();
+    expect(selectPlatform(fingerprintMcu(new Uint8Array()), [], CATALOG)).toBeNull();
+  });
+});
+
+describe('listPlatformCatalog', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'renode-cat-'));
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('recursively lists .repl files as paths relative to the platforms dir', () => {
+    fs.mkdirSync(path.join(root, 'boards'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'cpus'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'boards/stm32f4_discovery-kit.repl'), '');
+    fs.writeFileSync(path.join(root, 'cpus/nrf52840.repl'), '');
+    fs.writeFileSync(path.join(root, 'cpus/notes.txt'), 'ignored');
+    const cat = listPlatformCatalog(root).sort();
+    expect(cat).toEqual(['boards/stm32f4_discovery-kit.repl', 'cpus/nrf52840.repl']);
+  });
+
+  it('returns [] for a missing platforms dir (→ selection blocks honestly)', () => {
+    expect(listPlatformCatalog(path.join(root, 'nope'))).toEqual([]);
   });
 });

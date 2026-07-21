@@ -189,12 +189,24 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
   matching platform. Validated end-to-end with a real known sample — Contiki OS on an emulated STM32F4 Discovery
   (Renode's canonical demo ELF) booted and printed `Contiki 3.x started` on uart4 → `confirmed_in_emulation`. Runs
   under `full` isolation (netns + cpu + wall-clock caps); the `--as`/`--fsize` caps are skipped because .NET's GC and
-  Renode's mmap'd emulation files abort under them. Auto-selecting a platform per detected MCU is wired for the common
-  families (STM32/nRF/cortex-m); broader auto-identification and UEFI/chipsec are still not integrated.
+  Renode's mmap'd emulation files abort under them.
+- **✅ Renode per-MCU auto-identification — broadened** (was a hardcoded 7-family regex map). A pure MCU fingerprint
+  (`@firmlab/core` `fingerprintMcu`, unit-tested) reads the evidence static analysis never mined: the memory map
+  (ELF load LMAs / SRAM, or a raw image's ARM Cortex-M vector table → flash+RAM bases) and the plain strings the
+  credential scan drops (vendor/SDK/CMSIS/RTOS markers → STM32F*/L*/G*/H*, nRF5x, EFR32/EFM32, TI CC13xx/26xx, SAMD,
+  Kinetis, LPC, i.MX RT, GD32(V), CH32(V), ESP32(-C/-H), SiFive/RISC-V, PIC32, MSP430; the Cortex-M core; Zephyr/
+  FreeRTOS/Contiki/RIOT/…). Selection is now **catalog-aware** (`selectPlatform` scores every `.repl` Renode actually
+  ships by token specificity, board-over-cpu, and a curated known-good tie-break), so coverage tracks the install,
+  not a family list. Honest: no vendor family match → `blocked_by_platform` (naming the detected MCU) — and NO
+  generic-core fallback, because real Renode ships no bare `cortex-mN.repl` and a core without the SoC's peripherals
+  could never boot. Validated **in-container against real Renode v1.16.1 (216 bundled platforms)**: the real STM32F4
+  Discovery demo ELF fingerprints to `stm32f4`/cortex-m4/contiki and boots for real (`Contiki 3.x started` on uart4 →
+  `confirmed_in_emulation`); seven families (incl. EFR32MG, ATSAMD51, SiFive FE310 — beyond the old three) each
+  auto-map to a real bundled `.repl`; an unknown MCU blocks honestly. UEFI/chipsec still not integrated.
 
 ### Remaining backlog
 
-- Renode: broaden per-MCU auto-identification beyond the common families; UEFI/chipsec integration.
+- Renode: UEFI/chipsec integration; optional finer sub-family precision (e.g. STM32F429 → its exact cpu repl vs the F4 board).
 - Fuzzing: per-class trigger harnesses (stdin/desock network daemons) beyond file-input (`@@`) targets.
 - External-intelligence: sources beyond OSV/security.txt (NVD/PSIRT/CNA), a downloadable disclosure-report generator,
   hardened egress (proxy/slirp4netns), corpus OSV cache.

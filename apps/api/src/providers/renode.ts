@@ -1,18 +1,18 @@
 /**
  * Renode provider (Phase 4, debt #4) — the RTOS / Cortex-M rung of the emulation ladder. Booting a bare-metal MCU
- * firmware needs a per-MCU platform description (.repl). This provider selects a bundled Renode platform from
- * hints in the firmware, builds a headless script that boots the ELF and shows the UART, and decides success from
- * real guest output. Without Renode, or with no platform match, it degrades HONESTLY to blocked_by_platform — it
- * never fakes an RTOS boot. The platform-selection map + script builder are pure and unit-tested.
- *
- * Full auto-identification of arbitrary MCUs is future work; this wires a real boot for the common families.
+ * firmware needs a per-MCU platform description (.repl). This provider fingerprints the MCU from the real bytes
+ * (`@firmlab/core` fingerprintMcu: ELF/vector-table memory map + vendor/SDK/RTOS strings), then picks the best
+ * match from Renode's ACTUAL bundled catalog — so coverage tracks whatever the install ships, not a hardcoded
+ * family list — builds a headless script that boots the ELF and shows the UART, and decides success from real
+ * guest output. Without Renode, or with no platform match, it degrades HONESTLY to blocked_by_platform (naming the
+ * detected MCU) — it never fakes an RTOS boot. The fingerprint, catalog scan, and selection are pure/unit-tested.
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { ProofState, StaticAnalysis } from '@firmlab/core';
+import { type McuFingerprint, type ProofState, type StaticAnalysis, fingerprintMcu } from '@firmlab/core';
 import { type IsolationLevel, loadIsolationLimits, runIsolated } from './isolate.js';
 
 const execFileAsync = promisify(execFile);
@@ -45,36 +45,118 @@ export const RENODE_PLATFORMS_DIR = '/opt/renode/platforms';
 /** The Renode install root — `using "platforms/…"` includes in a .repl resolve against this. */
 const RENODE_ROOT = path.dirname(RENODE_PLATFORMS_DIR);
 
-/** Hints (MCU/vendor markers) → a bundled Renode board .repl (relative to the platforms dir). Common families. */
-const PLATFORM_MAP: { match: RegExp; repl: string }[] = [
-  { match: /stm32f4|stm32f407|discovery/i, repl: 'boards/stm32f4_discovery-kit.repl' },
-  { match: /stm32f0|stm32f072/i, repl: 'boards/stm32f072b_discovery.repl' },
-  { match: /stm32l0|stm32l07/i, repl: 'boards/stm32l072.repl' },
-  { match: /nrf52|nordic/i, repl: 'cpus/nrf52840.repl' },
-  { match: /cc2538|cc26|ti\b/i, repl: 'cpus/cc2538.repl' },
-  { match: /efr32|silabs|gecko/i, repl: 'cpus/efr32mg.repl' },
-  { match: /cortex-?m4|cortex-?m3|arm.*mcu/i, repl: 'cpus/cortex-m4.repl' },
-];
+/**
+ * Curated tie-breakers: a detected family → a substring of its preferred board .repl basename. When several
+ * bundled platforms match a family, this steers selection to the known-good board (e.g. an STM32F4 firmware →
+ * the Discovery board rather than a bare cortex-m core). Not exhaustive: unlisted families fall through to plain
+ * token scoring against whatever this Renode actually ships, so coverage tracks the real catalog, not this map.
+ */
+const FAMILY_PREF: Record<string, string> = {
+  stm32f4: 'stm32f4_discovery',
+  stm32f0: 'stm32f072',
+  stm32l0: 'stm32l0',
+  nrf52: 'nrf52840',
+  nrf53: 'nrf5340',
+  cc2538: 'cc2538',
+  cc2650: 'cc2650',
+  efr32mg: 'efr32mg',
+  fe310: 'sifive_fe310',
+};
 
-/** Pure: choose a bundled platform for a firmware from its hints, or null if nothing matches (→ honest block). */
-export function selectPlatform(hints: string[], platformsDir = RENODE_PLATFORMS_DIR): string | null {
-  const hay = hints.join(' ');
-  for (const { match, repl } of PLATFORM_MAP) {
-    if (match.test(hay)) {
-      const full = path.join(platformsDir, repl);
-      // Prefer a platform that actually ships in this Renode; fall back to the mapped path regardless in tests.
-      if (platformsDir === RENODE_PLATFORMS_DIR && !safeExists(full)) continue;
-      return full;
-    }
-  }
-  return null;
+export interface PlatformSelection {
+  /** Chosen platform, relative to the platforms dir (e.g. `boards/stm32f4_discovery-kit.repl`). */
+  repl: string;
+  /** How it was chosen — surfaced in the honest boot reason. */
+  via: 'part' | 'family' | 'catalog';
 }
 
-function safeExists(p: string): boolean {
+/** Recursively list the `.repl` platform descriptions this Renode ships, as paths relative to `platformsDir`. */
+export function listPlatformCatalog(platformsDir = RENODE_PLATFORMS_DIR): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 3) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full, depth + 1);
+      else if (e.isFile() && e.name.endsWith('.repl')) out.push(path.relative(platformsDir, full));
+    }
+  };
+  walk(platformsDir, 0);
+  return out;
+}
+
+/** Lowercased alphanumeric tokens (length ≥ 4) mined from the free-text hints, for catalog matching. */
+function hintTokens(hints: string[]): string[] {
+  const toks = new Set<string>();
+  for (const h of hints
+    .join(' ')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)) {
+    if (h.length >= 4) toks.add(h);
+  }
+  return [...toks];
+}
+
+/**
+ * Pure: choose the best-matching bundled platform for a fingerprinted MCU. Every catalog entry is scored by how
+ * specifically its filename overlaps the firmware's tokens (a longer token — a full part number — outweighs a
+ * bare family), with a small board-over-cpu bonus and a curated tie-break toward the known-good board. Returns
+ * null — an honest `blocked_by_platform` — when no vendor family matches. No I/O: the catalog is injected, so
+ * this is unit-testable without Renode installed.
+ *
+ * Deliberately NO generic-core fallback: real Renode ships no bare `cortex-mN.repl`, and a core without the
+ * SoC's peripherals could never produce UART output (never "boots") — so a bare Cortex-M with no vendor
+ * identity is blocked honestly rather than pointed at a platform that cannot run it.
+ */
+export function selectPlatform(fp: McuFingerprint, hints: string[], catalog: string[]): PlatformSelection | null {
+  // Short vendor tokens (st, ti) are excluded to avoid spurious substring hits inside unrelated filenames.
+  const tokens = [...new Set([...fp.tokens, ...hintTokens(hints)])].filter((t) => t.length >= 4);
+  const pref = fp.family ? FAMILY_PREF[fp.family] : undefined;
+
+  let best: { repl: string; score: number; baseLen: number } | null = null;
+  for (const repl of catalog) {
+    const base = path.basename(repl, '.repl').toLowerCase();
+    const isBoard = repl.replace(/\\/g, '/').startsWith('boards/');
+    let score = 0;
+    for (const t of tokens) if (base.includes(t)) score += t.length;
+    if (score === 0) continue;
+    if (isBoard) score += 2; // a full board is more complete than a bare SoC/cpu for a bare-metal blob
+    if (pref && base.includes(pref)) score += 8; // curated known-good board wins ties within a family
+    // Deterministic: higher score, then the shorter (more exact) basename.
+    if (!best || score > best.score || (score === best.score && base.length < best.baseLen)) {
+      best = { repl, score, baseLen: base.length };
+    }
+  }
+  if (!best) return null;
+
+  const base = path.basename(best.repl, '.repl').toLowerCase();
+  const via = fp.part && base.includes(fp.part) ? 'part' : fp.family && base.includes(fp.family) ? 'family' : 'catalog';
+  return { repl: best.repl, via };
+}
+
+/** A short human label for the detected MCU, for the honest boot/block reason. */
+function describeMcu(fp: McuFingerprint): string {
+  const label = fp.part ?? fp.family ?? (fp.cortexM ? `${fp.arch} ${fp.cortexM}` : fp.arch);
+  return label === 'unknown' ? 'unrecognized MCU' : label;
+}
+
+const FIRMWARE_READ_CAP = 16 * 1024 * 1024;
+/** Read a bounded prefix of the firmware for fingerprinting — MCU blobs are tiny; this caps a mis-routed image. */
+function readFirmwareBounded(p: string, cap = FIRMWARE_READ_CAP): Uint8Array {
+  const fd = fs.openSync(p, 'r');
   try {
-    return fs.existsSync(p);
-  } catch {
-    return false;
+    const len = Math.min(fs.fstatSync(fd).size, cap);
+    const b = Buffer.allocUnsafe(len);
+    fs.readSync(fd, b, 0, len, 0);
+    return b;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -174,13 +256,33 @@ export async function runRenode(
   });
 
   if (!(await detectRenode())) return blocked('Renode not installed (opt-in layer).');
-  const platform = opts.platform ?? selectPlatform(hints);
+
+  // Fingerprint the MCU from the real bytes (ELF/vector-table memory map + vendor/SDK strings), then pick the
+  // best bundled platform from Renode's actual catalog — far broader than a hardcoded family list.
+  let fp: McuFingerprint;
+  try {
+    fp = fingerprintMcu(readFirmwareBounded(firmwarePath));
+  } catch {
+    fp = fingerprintMcu(new Uint8Array());
+  }
+  let platform = opts.platform ?? null;
+  let via: PlatformSelection['via'] | 'explicit' = 'explicit';
+  if (!platform) {
+    const sel = selectPlatform(fp, hints, listPlatformCatalog());
+    if (sel) {
+      platform = path.join(RENODE_PLATFORMS_DIR, sel.repl);
+      via = sel.via;
+    }
+  }
   if (!platform) {
     return {
-      ...blocked('No matching Renode platform (.repl) for this MCU — RTOS boot needs one; not fabricating a run.'),
+      ...blocked(
+        `No bundled Renode platform for the detected MCU (${describeMcu(fp)}). RTOS boot needs a matching .repl; not fabricating a run.`,
+      ),
       available: true,
     };
   }
+  const detected = `Detected ${describeMcu(fp)} → ${path.basename(platform)}${via === 'explicit' ? ' (explicit)' : ''}. `;
 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-renode-'));
   try {
@@ -228,11 +330,13 @@ export async function runRenode(
       available: true,
       ran: res.ran,
       booted,
-      reason: booted
-        ? `Guest booted and produced UART output on ${captures.map((c) => c.uart).join(', ')}.`
-        : res.timedOut
-          ? 'Ran to the time bound with no UART output captured.'
-          : 'Renode session ended without UART output.',
+      reason:
+        detected +
+        (booted
+          ? `Guest booted and produced UART output on ${captures.map((c) => c.uart).join(', ')}.`
+          : res.timedOut
+            ? 'Ran to the time bound with no UART output captured.'
+            : 'Renode session ended without UART output.'),
       proofState: booted ? 'confirmed_in_emulation' : 'blocked_by_platform',
       platform,
       uartExcerpt: excerpt,
