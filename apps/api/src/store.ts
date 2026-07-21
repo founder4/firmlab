@@ -25,7 +25,9 @@ export type JobKind =
   | 'fsaudit'
   | 'certs'
   | 'rtos'
-  | 'compmap';
+  | 'compmap'
+  | 'services'
+  | 'fcc';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {
@@ -296,6 +298,18 @@ export function getDb(): DatabaseSync {
       FOREIGN KEY (sessionId) REFERENCES agent_session(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_step_session ON agent_step(sessionId);
+
+    CREATE TABLE IF NOT EXISTS emulation_preset (
+      id TEXT PRIMARY KEY,
+      imageId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      binary TEXT,
+      argsJson TEXT,
+      createdAt INTEGER NOT NULL,
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_preset_image ON emulation_preset(imageId);
   `);
   // Migration: add the tags column to databases created before it existed.
   try {
@@ -412,6 +426,38 @@ export function updateFindingProofState(id: string, proofState: string, rational
 /** Raise a finding's severity + rationale — used when a corpus watchlist rule matches (Phase 1, Level 1). */
 export function elevateFinding(id: string, severity: string, rationale: string): void {
   getDb().prepare('UPDATE findings SET severity = ?, rationale = ? WHERE id = ?').run(severity, rationale, id);
+}
+
+// === Saved emulation presets ===
+
+/** A stored emulation preset: a named, reusable recipe config (mode + optional binary/args) for an image. */
+export interface PresetRow {
+  id: string;
+  imageId: string;
+  name: string;
+  mode: string;
+  binary: string | null;
+  argsJson: string | null;
+  createdAt: number;
+}
+
+export function insertPreset(row: PresetRow): void {
+  getDb()
+    .prepare(
+      `INSERT OR REPLACE INTO emulation_preset (id, imageId, name, mode, binary, argsJson, createdAt)
+       VALUES (@id, @imageId, @name, @mode, @binary, @argsJson, @createdAt)`,
+    )
+    .run(asParams(row));
+}
+
+export function listPresets(imageId: string): PresetRow[] {
+  return getDb()
+    .prepare('SELECT * FROM emulation_preset WHERE imageId = ? ORDER BY createdAt DESC')
+    .all(imageId) as unknown as PresetRow[];
+}
+
+export function deletePreset(id: string): void {
+  getDb().prepare('DELETE FROM emulation_preset WHERE id = ?').run(id);
 }
 
 // === Binaries ===

@@ -529,9 +529,24 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
   }
   return (await res.json()) as T;
 }
+async function del<T>(url: string): Promise<T> {
+  const res = await fetch(url, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return (await res.json()) as T;
+}
 
 /** The deep static-analysis providers runnable per image; their findings appear in the dossier. */
-export type AnalysisKind = 'uboot' | 'fsaudit' | 'certs' | 'rtos' | 'compmap';
+export type AnalysisKind = 'uboot' | 'fsaudit' | 'certs' | 'rtos' | 'compmap' | 'services' | 'fcc';
+
+/** A saved emulation preset — a named, reusable recipe config for an image. */
+export interface EmulationPreset {
+  id: string;
+  name: string;
+  mode: 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode' | 'uefi-chipsec';
+  binary: string | null;
+  args: string[];
+  createdAt: number;
+}
 
 export const api = {
   health: () =>
@@ -581,6 +596,10 @@ export const api = {
     get<{ result: { reason?: string; findings?: unknown[] } | null }>(`/api/images/${id}/${kind}`).then(
       (r) => r.result,
     ),
+  listPresets: (id: string) => get<{ presets: EmulationPreset[] }>(`/api/images/${id}/presets`).then((r) => r.presets),
+  savePreset: (id: string, p: { name: string; mode: EmulationPreset['mode']; binary?: string; args?: string[] }) =>
+    post<{ preset: EmulationPreset }>(`/api/images/${id}/presets`, p).then((r) => r.preset),
+  deletePreset: (presetId: string) => del<{ deleted: string }>(`/api/presets/${presetId}`),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),
   job: (jobId: string) => get<{ job: Job }>(`/api/jobs/${jobId}`).then((r) => r.job),
   sbom: (id: string) => get<{ result: SbomResult | null }>(`/api/images/${id}/sbom`).then((r) => r.result),

@@ -38,6 +38,18 @@ const PROVIDERS: { kind: AnalysisKind; icon: string; title: string; desc: string
     title: 'Component map',
     desc: 'Map each rootfs ELF to its shared-library dependencies (needs radare2).',
   },
+  {
+    kind: 'services',
+    icon: '🌐',
+    title: 'Service enumeration',
+    desc: 'Map the network daemons the rootfs is configured to start (init scripts, inetd, systemd) — the attack surface.',
+  },
+  {
+    kind: 'fcc',
+    icon: '📡',
+    title: 'FCC ID lookup',
+    desc: "Extract FCC IDs and link to the device's public filings (photos, manuals, internal photos, test reports).",
+  },
 ];
 
 type RunState = { status: 'idle' | 'running' | 'done' | 'error'; reason?: string; findings?: number; error?: string };
