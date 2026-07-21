@@ -17,8 +17,8 @@ describe('TechniqueCoverage', () => {
     render(<TechniqueCoverage />);
     // A shipped technique.
     expect(screen.getByText('chipsec (UEFI/BIOS offline decode)')).toBeInTheDocument();
-    // The flagged top gap.
-    expect(screen.getByText('Drive the emulated web UI (cmd-inj / authz / traversal)')).toBeInTheDocument();
+    // A still-open gap.
+    expect(screen.getByText('Symbolic reachability of taint leads (angr)')).toBeInTheDocument();
     // Weaponization is explicitly out of scope, not claimed.
     expect(screen.getByText('Weaponized exploitation (ROP / shellcode / PoC)')).toBeInTheDocument();
   });
