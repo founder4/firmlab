@@ -20,7 +20,12 @@ export type JobKind =
   | 'fuzz'
   | 'renode'
   | 'chipsec'
-  | 'webprobe';
+  | 'webprobe'
+  | 'uboot'
+  | 'fsaudit'
+  | 'certs'
+  | 'rtos'
+  | 'compmap';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {
