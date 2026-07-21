@@ -28,6 +28,7 @@ import {
   fmtBytes,
   fmtHex,
 } from '../api';
+import { AnalysisActionsPanel } from '../components/AnalysisActionsPanel';
 import { EntropyChart } from '../components/EntropyChart';
 import { FilesystemTree } from '../components/FilesystemTree';
 import { FuzzPanel } from '../components/FuzzPanel';
@@ -141,6 +142,7 @@ export function ImageDetail(): JSX.Element {
         <>
           <SimulationMenu imageId={id} />
           <FuzzPanel imageId={id} />
+          <AnalysisActionsPanel imageId={id} />
         </>
       )}
       {tab === 'agent' && <AgentPanel imageId={id} />}

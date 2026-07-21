@@ -530,6 +530,9 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** The deep static-analysis providers runnable per image; their findings appear in the dossier. */
+export type AnalysisKind = 'uboot' | 'fsaudit' | 'certs' | 'rtos' | 'compmap';
+
 export const api = {
   health: () =>
     get<{ status: string; exposedToNetwork: boolean; trustedProxy?: boolean; host?: string; port?: number }>('/health'),
@@ -572,6 +575,12 @@ export const api = {
     }),
   fuzzResult: (id: string) => get<{ result: FuzzResult | null }>(`/api/images/${id}/fuzz`).then((r) => r.result),
   extract: (id: string) => post<{ jobId: string }>(`/api/images/${id}/extract`),
+  /** Run one of the deep static-analysis providers; findings land in the dossier. */
+  runAnalysis: (id: string, kind: AnalysisKind) => post<{ jobId: string }>(`/api/images/${id}/${kind}`, {}),
+  analysisResult: (id: string, kind: AnalysisKind) =>
+    get<{ result: { reason?: string; findings?: unknown[] } | null }>(`/api/images/${id}/${kind}`).then(
+      (r) => r.result,
+    ),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),
   job: (jobId: string) => get<{ job: Job }>(`/api/jobs/${jobId}`).then((r) => r.job),
   sbom: (id: string) => get<{ result: SbomResult | null }>(`/api/images/${id}/sbom`).then((r) => r.result),
