@@ -21,18 +21,19 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ▢ **SPI protected-range / BIOS-lock posture.**
 
 ## Static analysis (FSTM 3–5)
-- ▢ **Init-script / config-security heuristics** (firmwalker/FACT-class): `analyze_init_scripts`, `analyze_config_security`, `check_filesystem_permissions`.
-- ▢ **Certificate-chain analysis** (keys done; cert validation/expiry/self-signed gap).
-- ▢ **Component dependency map** — bins/libs/scripts graph (wairz `get_component_map`).
-- ▢ **Bootloader / U-Boot env** — parse env, default `bootargs`, unlocked consoles (`init=/bin/sh`). Cheap, high-value.
+- ✅ **Rootfs security audit** (firmwalker/FACT-class) — `providers/fsaudit.ts`: weak/empty/legacy creds, extra UID-0, init-spawned root shells / telnetd, permissive ssh/telnet/ftp, notable key material (hashes redacted).
+- ✅ **Certificate analysis** — `providers/certs.ts`: embedded X.509 via Node crypto — expired, weak RSA, test/self-signed, embedded CA.
+- ✅ **Component dependency map** — `providers/compmap.ts`: rootfs ELF → DT_NEEDED graph (rabin2; unresolved + orphans surfaced).
+- ✅ **U-Boot / bootloader** — `providers/uboot.ts`: decode the env + audit posture (init=/bin/sh, interruptible autoboot, net-boot, serial console).
 
 ## Comparison / n-day
 - ▢ **Function-level decompilation diff** (BinDiff/Diaphora-style) to localize a patched vuln (wairz `diff_decompilation`).
 - ▢ **Kernel module (.ko) CVE surface** — correlate kernel/modules to CVEs beyond userland SBOM.
 
 ## RTOS / bare-metal
-- ▢ **RTOS blob tools** — `detect_rtos_kernel`, `enumerate_rtos_tasks`, `analyze_vector_table`, `recover_base_address`, `analyze_memory_map` (pyelftools/heuristics on the raw blob).
+- ✅ **RTOS blob analysis** — `providers/rtos.ts`: Cortex-M vector table, base-address recovery, flash/RAM memory map, RTOS-kernel detection. (Task enumeration = a deeper follow-up.)
 - ▢ **Peripheral / MMIO fuzzing** (Fuzzware / µEmu / P2IM) — exercise the HAL, not just boot.
+- ▢ **RTOS task enumeration** — walk pxCurrentTCB/thread lists (deeper than the current static blob analysis).
 
 ## Emulation UX
 - ▢ **Interactive/introspectable emulation** — `run_command_in_emulation`, `enumerate_emulation_services`, self-diagnostics (`diagnose_emulation_environment`).

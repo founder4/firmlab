@@ -40,10 +40,14 @@ const COVERAGE: CovGroup[] = [
       { name: 'SBOM + CVE (syft → OSV/NVD/grype)', status: 'done', note: 'providers/sbom + research' },
       { name: 'Binary hardening (NX / canary / PIC / RELRO)', status: 'done', note: 'radare2 checksec' },
       { name: 'Ghidra / radare2 triage + taint scaffold', status: 'done', note: 'providers/decompile + zeroday' },
-      { name: 'Init-script / config-security heuristics (firmwalker-style)', status: 'planned', note: 'config gap' },
-      { name: 'Certificate / key artifact analysis', status: 'partial', note: 'keys done; cert chain gap' },
-      { name: 'Component dependency map (bins/libs/scripts)', status: 'planned', note: 'graph idea' },
-      { name: 'Bootloader / U-Boot env + default bootargs', status: 'planned', note: 'high-value, cheap' },
+      {
+        name: 'Init-script / config-security heuristics (firmwalker-style)',
+        status: 'done',
+        note: 'providers/fsaudit',
+      },
+      { name: 'Certificate / key artifact analysis', status: 'done', note: 'providers/certs (X.509)' },
+      { name: 'Component dependency map (bins/libs/scripts)', status: 'done', note: 'providers/compmap' },
+      { name: 'Bootloader / U-Boot env + default bootargs', status: 'done', note: 'providers/uboot' },
     ],
   },
   {
@@ -99,7 +103,7 @@ const COVERAGE: CovGroup[] = [
     items: [
       { name: 'MCU fingerprint + real-catalog platform select', status: 'done', note: 'core/mcu + renode' },
       { name: 'Boot liveness (UART decides success)', status: 'done', note: 'renode' },
-      { name: 'Task enumeration / base-address / memory-map recovery', status: 'planned', note: 'raw blob tools' },
+      { name: 'Vector-table / base-address / memory-map + RTOS-kernel detect', status: 'done', note: 'providers/rtos' },
       { name: 'Peripheral / MMIO fuzzing (Fuzzware / µEmu)', status: 'planned', note: 'exercise the HAL' },
     ],
   },
