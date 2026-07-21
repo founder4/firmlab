@@ -53,6 +53,12 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ▢ **PDF export** of reports.
 - ▢ **External MCP tool surface** — expose FirmLab's providers as MCP tools so any agent (Claude Code/Desktop, Cursor…) can drive the workbench (wairz is MCP-first). Strategic; providers are already clean seams.
 
+## Deployment — tool-recipe fixes (activated 2026-07-21; these 3 failed to install, degrade honestly)
+- ▢ **Ghidra install** — the `api.github.com/releases/latest` grep for the download URL came back empty in the build (unauthenticated API rate-limit / asset-name drift). Pin a known Ghidra version URL or pass a GITHUB_TOKEN build-arg. (radare2 covers triage meanwhile.)
+- ▢ **libnvram cross-build** — the firmadyne libnvram Makefile build failed under the arm64 host cross-compilers. Fix the CC/flags (or vendor a prebuilt per-arch `.so`). Unlocks the chroot-service rung.
+- ▢ **firmadyne kernels** — the `pr0v3rbs/FirmAE/raw/master/binaries/<k>` URLs 404'd (repo layout changed). Find the current kernel asset URLs. Unlocks full-system boot.
+- Note: chipsec + Renode + AFL++ DID activate successfully in the deploy.
+
 ## Out of scope (by design / hardware)
 - — Weaponized exploitation (ROP / shellcode / PoC) — FirmLab proves reachability + drafts disclosure, no PoCs.
 - — JTAG/SWD/SPI extraction, chip-off, side-channel/glitching, BLE/ZigBee/Wi-Fi/SDR — hardware lab / Phase-6 dongle.
