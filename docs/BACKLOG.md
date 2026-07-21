@@ -54,6 +54,19 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ▢ **PDF export** of reports.
 - ▢ **External MCP tool surface** — expose FirmLab's providers as MCP tools so any agent (Claude Code/Desktop, Cursor…) can drive the workbench (wairz is MCP-first). Strategic; providers are already clean seams.
 
+## Autonomous workers — the *opacidad* section (see [`AUTONOMOUS-WORKERS.md`](AUTONOMOUS-WORKERS.md))
+Surfaced by the two-pass app-vs-autonomous experiment (15 firmwares). Ordered by payoff; §refs into the design doc.
+- ▢ **W0 · Triage/identity worker** — **entropy gate + arch/class detection**. Fixes the jffs2 false-positive (2-byte magic, no entropy gate) that misclassifies ESP32 / RP2040 / encrypted-OTA / FIT-UBI all as `embedded-linux`. Highest-leverage single fix.
+- ▢ **W1 · Extraction worker** — recursive, format-graph-driven: **FIT→UBI→per-volume LEB-reassembly→unsquashfs**, sasquatch fallback, ESP partition table; loop until real rootfs or terminal blob. (GL.iNet returned 0 files without this.)
+- ▢ **W9 · Orchestrator (opacity controller)** — class-routed AI loop that chains existing providers in the right order, feeds output→next worker, **composes findings into an attack path + narrative**. Phase-2 skeleton = big UX win with no new analysis code.
+- ▢ **W6 · ESP/IoT-SoC worker** — parse ESP partition table + **NVS key-value store** (extract signing keys!), Flash-Encryption/Secure-Boot eFuse posture, recover erased NVS entries. (ESP32 trust-anchor key was invisible to the app.)
+- ▢ **W7 · Bare-metal/RTOS worker** — vector table + **load-base recovery** + decode-routine/flag extraction (solved the RP2040 CTF; app saw 0 findings).
+- ▢ **W8 · Encrypted-blob worker** — entropy/header analysis → identify cipher/mode/IV, name the key-recovery path, honest "unrecoverable without key" (GE800 AES-128 CBC/CTR verdict vs app silent failure).
+- ▢ **W4 · Web attack-surface worker** — enumerate rpcd/oui-httpd/luci/cgi handlers, resolve validators/ACLs/`no-auth-methods`, **taint web-param→uci→`os.execute`/`io.popen`/`sed` sinks**, model config-restore→uci bypass. (Found the GL.iNet Tor root-RCE + WR940N httpd cmdi.)
+- ▢ **W2 component-fingerprint CVE** — SBOM over **bundled/statically-linked components** (pppd, Go modules) not just the package manifest → the pppd CVE-2020-8597 pre-auth RCE the app missed on WR940N (0 CVEs).
+- ▢ **W3 secret extraction + offline cracking** — parse device stores (NVS/nvram/shadow) + FP-triage (minisign pubkeys, placeholders) + hashcat on `/etc/shadow`. (root:sohoadmin, nvram admin/admin.)
+- ▢ **UI: honest-degradation banner** — "0 findings" must be distinguishable from "pipeline never reached rootfs / class not applicable"; per-class "what can I even run" up front.
+
 ## Deployment — build architecture
 - ▢ **Invert the image layering** — `Dockerfile.firmware` is `FROM firmlab:latest` (tools layered ON TOP of the app), so ANY app-code change rebuilds ALL heavy tool layers (incl. the ~20-min AFL++ QEMU compile). Restructure to a `firmlab-tools` base (tools only) + the app copied on top, so app changes are a fast final layer. Big win for iteration speed.
 
