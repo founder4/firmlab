@@ -212,6 +212,18 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
 
+## Phase 6 — Capture & acquisition (designed, not yet built)
+
+Close the loop *before* analysis: acquire firmware from a **live device** in-flight (intercept an OTA update the
+moment you press "Update" in the vendor app), carve the blob out of the traffic, and auto-ingest it into the
+workbench. FirmLab's second network-touching lane (after `FIRMLAB_RESEARCH`), gated behind **`FIRMLAB_CAPTURE`**.
+Built on the patterns already here: **capture backends** auto-detected like tools (network proxy, ARP/DNS spoof,
+BLE/Zigbee radios — plug a dongle, gain a transport), a **capturability ladder + preflight** with honest
+acquisition proof-states, a **guided, human-triggered, time-boxed session** with guaranteed teardown (mirrors the
+agent session + isolation), and a **learning loop** — captured versions accumulate in the corpus into an OTA
+timeline with cross-version diff and per-vendor priors. Full plan (backends, ladder, on-path/Docker reality,
+transports HTTP/HTTPS/BLE/Zigbee, data model, web UX, phased 6.0–6.6): [`docs/CAPTURE-DESIGN.md`](CAPTURE-DESIGN.md).
+
 **Phase 3 — decision nodes (implemented).** The agent now *chooses branches* on top of the deterministic
 skeleton, never the mechanics. The orchestrator (`agent/session.ts`) drives triage ① → deterministic extraction
 (if the agent chose it, via the same job the user clicks) → deterministic preflight → target-selection ② →
