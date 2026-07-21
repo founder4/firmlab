@@ -26,7 +26,8 @@ export type ToolId =
   | 'qemu-aarch64-static'
   | 'qemu-system-mipsel'
   | 'qemu-system-arm'
-  | 'renode';
+  | 'renode'
+  | 'chipsec';
 
 interface ToolSpec {
   id: ToolId;
@@ -100,6 +101,13 @@ const TOOLS: readonly ToolSpec[] = [
     group: 'emulate',
   },
   { id: 'renode', bin: 'renode', probe: ['--version'], unlocks: 'RTOS / Cortex-M emulation', group: 'emulate' },
+  {
+    id: 'chipsec',
+    bin: 'chipsec_util',
+    probe: ['--help'],
+    unlocks: 'UEFI/BIOS firmware analysis (offline decode + IOC scan)',
+    group: 'analyze',
+  },
 ];
 
 export interface ToolStatus {

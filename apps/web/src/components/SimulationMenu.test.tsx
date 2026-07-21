@@ -14,20 +14,21 @@ vi.mock('../api', async (importOriginal) => {
       emulate: vi.fn(),
       emulateSystem: vi.fn(),
       runRenode: vi.fn(),
+      runChipsec: vi.fn(),
       extract: vi.fn(),
     },
   };
 });
 
 const mockApi = api as unknown as Record<
-  'emulation' | 'job' | 'emulate' | 'emulateSystem' | 'runRenode' | 'extract',
+  'emulation' | 'job' | 'emulate' | 'emulateSystem' | 'runRenode' | 'runChipsec' | 'extract',
   ReturnType<typeof vi.fn>
 >;
 
 const identity = { firmwareClass: 'embedded-linux', arch: 'mips', endianness: 'big', filesystems: ['squashfs'] };
 type Recipe = {
   id: string;
-  mode: 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode';
+  mode: 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode' | 'uefi-chipsec';
   title: string;
   description: string;
   requires: string[];
@@ -60,6 +61,7 @@ beforeEach(() => {
   mockApi.emulate.mockResolvedValue({ jobId: 'j1' });
   mockApi.emulateSystem.mockResolvedValue({ jobId: 'j1' });
   mockApi.runRenode.mockResolvedValue({ jobId: 'j1' });
+  mockApi.runChipsec.mockResolvedValue({ jobId: 'j1' });
   mockApi.extract.mockResolvedValue({ jobId: 'j1' });
 });
 
@@ -101,6 +103,48 @@ describe('SimulationMenu', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Boot under Renode' }));
     await waitFor(() => expect(mockApi.runRenode).toHaveBeenCalledWith('img1'));
     expect(mockApi.emulate).not.toHaveBeenCalled();
+  });
+
+  it('dispatches a UEFI image to chipsec and renders its offline decode result (not an emulator)', async () => {
+    mockApi.emulation.mockResolvedValue(
+      menu({
+        identity: { firmwareClass: 'uefi-bios', arch: 'x86_64', endianness: 'little', filesystems: [] },
+        recipes: [recipe({ mode: 'uefi-chipsec', title: 'chipsec UEFI decode' })],
+      }),
+    );
+    mockApi.job.mockResolvedValue({
+      id: 'j1',
+      status: 'done',
+      log: '',
+      result: {
+        available: true,
+        ran: true,
+        reason: 'Decoded 2 firmware volumes and 130 EFI modules offline with chipsec.',
+        proofState: 'static_confirmed',
+        volumes: 2,
+        moduleCount: 130,
+        byType: { DXE_DRIVER: 109, PEIM: 13, APPLICATION: 2 },
+        modules: [],
+        findings: [
+          {
+            kind: 'uefi-embedded-app',
+            title: '2 UEFI applications embedded in firmware',
+            severity: 'info',
+            proofState: 'needs_runtime_reproduction',
+            evidence: {},
+            rationale: 'A planted UEFI app is a bootkit vector — verify each is expected.',
+          },
+        ],
+        command: 'chipsec_util uefi decode image.fd',
+      },
+    });
+    render(<SimulationMenu imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
+    await waitFor(() => expect(mockApi.runChipsec).toHaveBeenCalledWith('img1'));
+    expect(mockApi.emulate).not.toHaveBeenCalled();
+    expect(await screen.findByText('130 modules')).toBeInTheDocument();
+    expect(screen.getByText('static_confirmed')).toBeInTheDocument();
+    expect(screen.getByText('2 UEFI applications embedded in firmware')).toBeInTheDocument();
   });
 
   it('runs a user-mode proof against the entered binary', async () => {

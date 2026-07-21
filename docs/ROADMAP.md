@@ -135,8 +135,8 @@ like Ghidra. Env: `FIRMLAB_ISOLATE_CPU/_MEM_MB/_FSIZE_MB/_WALL_SECONDS`. `/api/a
 `phase4: {isolation, fuzzing, autoRun}`. Validated end-to-end in the firmware image (mock LLM for ①②④): full
 transcript through node ④, a command-injection candidate from the real radare2 scaffold, and a real qemu-user run
 auto-executed under netns+rlimits with no approval — proof-state honest. AFL++ and Renode are both integrated and
-validated against real firmware (a real coverage-guided crash; a real Contiki boot on an emulated STM32F4); UEFI/chipsec
-remains recognized but not integrated — no faked coverage.
+validated against real firmware (a real coverage-guided crash; a real Contiki boot on an emulated STM32F4). The
+`uefi-bios` class now has its own offline analysis track too (chipsec `providers/chipsec.ts`) — no faked coverage.
 
 **Phase 5.0/5.1 — external intelligence (implemented).** The first internet-touching capability, behind its OWN
 flag `FIRMLAB_RESEARCH` (separate from `FIRMLAB_AGENT`; unset → zero external egress, local-only preserved). A
@@ -211,7 +211,7 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
   could never boot. Validated **in-container against real Renode v1.16.1 (216 bundled platforms)**: the real STM32F4
   Discovery demo ELF fingerprints to `stm32f4`/cortex-m4/contiki and boots for real (`Contiki 3.x started` on uart4 →
   `confirmed_in_emulation`); seven families (incl. EFR32MG, ATSAMD51, SiFive FE310 — beyond the old three) each
-  auto-map to a real bundled `.repl`; an unknown MCU blocks honestly. UEFI/chipsec still not integrated.
+  auto-map to a real bundled `.repl`; an unknown MCU blocks honestly.
   Sub-family precision: a **part-specific board** now wins over a family board or a bare cpu — the fingerprint exposes
   the STM32 part core with the `stm32` prefix stripped (`stm32h753zi` → `h753`) since Renode's boards name themselves
   inconsistently, so `STM32H753` → `boards/nucleo_h753zi.repl` (the exact SoC + peripherals) instead of a generic

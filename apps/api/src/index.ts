@@ -14,6 +14,7 @@ import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
 import { SWEEP_INTERVAL_MS, sweepRetention } from './retention.js';
 import { agentRoutes } from './routes/agent.js';
 import { analysisRoutes } from './routes/analysis.js';
+import { chipsecRoutes } from './routes/chipsec.js';
 import { copilotRoutes } from './routes/copilot.js';
 import { corpusRoutes } from './routes/corpus.js';
 import { decompileRoutes } from './routes/decompile.js';
@@ -94,6 +95,7 @@ async function main(): Promise<void> {
       await api.register(agentRoutes);
       await api.register(fuzzRoutes);
       await api.register(renodeRoutes);
+      await api.register(chipsecRoutes);
       await api.register(researchRoutes);
       await api.register(reportRoutes);
       await api.register(storageRoutes);

@@ -45,6 +45,7 @@ export type RuntimeStrategy =
   | 'chroot-service' // start a network service in a chroot with libnvram + /dev shims
   | 'full-system' // boot the rootfs under qemu-system + a firmadyne kernel
   | 'rtos-renode' // emulate an RTOS/Cortex-M blob under Renode
+  | 'uefi-chipsec' // decode + scan a UEFI/BIOS image offline with chipsec (no emulation)
   | 'static-only' // nothing can run here — analyze from the bytes only
   | 'unsupported-arch'; // no emulator maps this arch at all
 
@@ -68,6 +69,7 @@ export interface PreflightInputs {
   userEmulatorAvailable: boolean;
   systemEmulatorAvailable: boolean;
   renodeAvailable: boolean;
+  chipsecAvailable: boolean;
   hasNvramShim: boolean;
   hasSystemKernel: boolean;
 }
@@ -80,6 +82,23 @@ export function chooseRuntimeStrategy(i: PreflightInputs): {
   proofCeiling: ProofState;
   reason: string;
 } {
+  // UEFI/BIOS has no Linux rootfs and no MCU to emulate; its analysis path is chipsec's offline decode + scan.
+  // That is static analysis (facts about the bytes), so the honest ceiling is static_confirmed, not an emulation
+  // proof — no device claim is ever made from a decode.
+  if (i.firmwareClass === 'uefi-bios') {
+    return i.chipsecAvailable
+      ? {
+          strategy: 'uefi-chipsec',
+          proofCeiling: 'static_confirmed',
+          reason: 'UEFI/BIOS image — chipsec can decode the firmware volumes and scan modules offline.',
+        }
+      : {
+          strategy: 'static-only',
+          proofCeiling: 'static_confirmed',
+          reason: 'UEFI/BIOS: chipsec not installed — static analysis only.',
+        };
+  }
+
   // RTOS / baremetal never has a Linux rootfs; its only dynamic path is Renode.
   if (i.firmwareClass === 'rtos') {
     return i.renodeAvailable
@@ -166,6 +185,7 @@ export async function computeRuntimeCapabilities(imageId: string): Promise<Runti
     userEmulatorAvailable: available(userEmulator ?? undefined),
     systemEmulatorAvailable: available(systemEmulator ?? undefined),
     renodeAvailable: available('renode'),
+    chipsecAvailable: available('chipsec'),
     hasNvramShim: userEmulator ? fs.existsSync(`${LIBNVRAM_DIR}/libnvram-${arch}.so`) : false,
     hasSystemKernel: fs.existsSync(FIRMADYNE_KERNELS_DIR),
   };

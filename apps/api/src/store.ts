@@ -18,7 +18,8 @@ export type JobKind =
   | 'copilot'
   | 'research'
   | 'fuzz'
-  | 'renode';
+  | 'renode'
+  | 'chipsec';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {

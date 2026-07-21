@@ -4,13 +4,14 @@
  * proof against the extracted rootfs, streaming the job log/result.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type EmulationMenu, type EmulationRecipe, type Job, type RenodeResult, api } from '../api';
+import { type ChipsecResult, type EmulationMenu, type EmulationRecipe, type Job, type RenodeResult, api } from '../api';
 
 const MODE_ICON: Record<string, string> = {
   'user-qemu': '▶',
   'chroot-qemu': '🧩',
   'system-qemu': '🖥',
   renode: '🔬',
+  'uefi-chipsec': '🛡',
 };
 
 /** Recipes that take a rootfs binary argument (the others boot the whole image). */
@@ -64,6 +65,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
         else if (recipe.mode === 'chroot-qemu')
           ({ jobId } = await api.emulateSystem(imageId, 'chroot-service', binary || undefined));
         else if (recipe.mode === 'system-qemu') ({ jobId } = await api.emulateSystem(imageId, 'full-system'));
+        else if (recipe.mode === 'uefi-chipsec') ({ jobId } = await api.runChipsec(imageId));
         else ({ jobId } = await api.runRenode(imageId));
         pollJob(jobId);
       } catch (e) {
@@ -89,9 +91,11 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
   if (!menu) return <div className="empty">Loading emulation plan…</div>;
 
   const result = job?.result as
-    | ({ command?: string; stdout?: string; stderr?: string; timedOut?: boolean } & Partial<RenodeResult>)
+    | ({ command?: string; stdout?: string; stderr?: string; timedOut?: boolean } & Partial<RenodeResult> &
+        Partial<ChipsecResult>)
     | null;
   const isRenode = Boolean(result && 'booted' in result);
+  const isChipsec = Boolean(result && 'moduleCount' in result);
 
   return (
     <div>
@@ -169,7 +173,15 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                   onClick={() => runRecipe(r)}
                   style={NEEDS_BINARY.has(r.mode) ? undefined : { marginLeft: 'auto' }}
                 >
-                  {busy ? <span className="spinner" /> : r.mode === 'renode' ? 'Boot under Renode' : 'Run proof'}
+                  {busy ? (
+                    <span className="spinner" />
+                  ) : r.mode === 'renode' ? (
+                    'Boot under Renode'
+                  ) : r.mode === 'uefi-chipsec' ? (
+                    'Decode & scan'
+                  ) : (
+                    'Run proof'
+                  )}
                 </button>
               </div>
             )}
@@ -234,7 +246,59 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
               )}
             </div>
           )}
-          {result?.command && !isRenode && (
+          {isChipsec && result && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span className={`badge ${result.moduleCount ? 'badge-ok' : 'badge-medium'}`}>
+                  {result.moduleCount ? `${result.moduleCount} modules` : 'no UEFI volume'}
+                </span>
+                {Boolean(result.volumes) && <span className="badge">{result.volumes} FV</span>}
+                <span className="badge">{result.proofState}</span>
+              </div>
+              <div className="hint" style={{ marginTop: 6 }}>
+                {result.reason}
+              </div>
+              {result.byType && Object.keys(result.byType).length > 0 && (
+                <div className="mono" style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>
+                  {Object.entries(result.byType)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([t, n]) => `${t}: ${n}`)
+                    .join('  ·  ')}
+                </div>
+              )}
+              {result.findings && result.findings.length > 0 && (
+                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {result.findings.map((f) => (
+                    <div
+                      key={f.kind + f.title}
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'baseline',
+                        background: 'var(--bg)',
+                        border: '1px solid var(--border-soft)',
+                        borderRadius: 6,
+                        padding: '6px 10px',
+                      }}
+                    >
+                      <span
+                        className={`badge ${f.severity === 'critical' || f.severity === 'high' ? 'badge-high' : ''}`}
+                      >
+                        {f.severity}
+                      </span>
+                      <div>
+                        <div style={{ fontSize: 12.5 }}>{f.title}</div>
+                        <div className="hint" style={{ marginTop: 2 }}>
+                          {f.rationale}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {result?.command && !isRenode && !isChipsec && (
             <>
               {result.timedOut && <div className="badge badge-medium">timed out (likely a long-running daemon)</div>}
               {result.stdout && (

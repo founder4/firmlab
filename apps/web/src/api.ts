@@ -46,7 +46,7 @@ export interface ToolStatus {
 
 export interface EmulationRecipe {
   id: string;
-  mode: 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode';
+  mode: 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode' | 'uefi-chipsec';
   title: string;
   description: string;
   requires: string[];
@@ -61,6 +61,7 @@ export type RuntimeStrategy =
   | 'chroot-service'
   | 'full-system'
   | 'rtos-renode'
+  | 'uefi-chipsec'
   | 'static-only'
   | 'unsupported-arch';
 
@@ -82,6 +83,38 @@ export interface EmulationMenu {
   suggestedBinary: string | null;
   recipes: EmulationRecipe[];
   capabilities: RuntimeCapabilities | null;
+}
+
+/** One EFI module carved from a UEFI firmware volume by chipsec. */
+export interface UefiModule {
+  guid: string;
+  name?: string;
+  type?: string;
+}
+
+/** A UEFI-specific finding from the chipsec decode (inventory, IOC match, or an embedded-app review lead). */
+export interface UefiSecurityFinding {
+  kind: string;
+  title: string;
+  severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
+  proofState: ProofState;
+  evidence: Record<string, unknown>;
+  rationale: string;
+}
+
+/** chipsec offline UEFI decode result — proof tops out at static_confirmed (facts about the bytes). */
+export interface ChipsecResult {
+  available: boolean;
+  ran: boolean;
+  reason: string;
+  proofState: ProofState;
+  volumes: number;
+  moduleCount: number;
+  byType: Record<string, number>;
+  modules: UefiModule[];
+  findings: UefiSecurityFinding[];
+  command: string;
+  isolation?: string;
 }
 
 /** Renode RTOS/Cortex-M boot result — "booted" is decided from real UART bytes, never assumed. */
@@ -463,6 +496,11 @@ export const api = {
   runRenode: (id: string, opts?: { platform?: string; seconds?: number }) =>
     post<{ jobId: string }>(`/api/images/${id}/renode`, opts ?? {}),
   renodeResult: (id: string) => get<{ result: RenodeResult | null }>(`/api/images/${id}/renode`).then((r) => r.result),
+  chipsecStatus: () => get<{ available: boolean }>('/api/chipsec/status'),
+  runChipsec: (id: string, seconds?: number) =>
+    post<{ jobId: string }>(`/api/images/${id}/chipsec`, seconds ? { seconds } : {}),
+  chipsecResult: (id: string) =>
+    get<{ result: ChipsecResult | null }>(`/api/images/${id}/chipsec`).then((r) => r.result),
   fuzzStatus: () => get<{ available: boolean }>('/api/fuzz/status'),
   runFuzz: (id: string, binary: string, seconds?: number, harness?: HarnessClass | 'auto') =>
     post<{ jobId: string }>(`/api/images/${id}/fuzz`, {

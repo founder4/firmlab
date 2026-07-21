@@ -8,6 +8,7 @@ const base: PreflightInputs = {
   userEmulatorAvailable: true,
   systemEmulatorAvailable: false,
   renodeAvailable: false,
+  chipsecAvailable: false,
   hasNvramShim: false,
   hasSystemKernel: false,
 };
@@ -60,5 +61,26 @@ describe('chooseRuntimeStrategy', () => {
     expect(chooseRuntimeStrategy({ ...base, firmwareClass: 'rtos', renodeAvailable: false }).strategy).toBe(
       'static-only',
     );
+  });
+
+  it('UEFI/BIOS with chipsec → uefi-chipsec (static ceiling); without → static-only', () => {
+    const withChipsec = chooseRuntimeStrategy({ ...base, firmwareClass: 'uefi-bios', chipsecAvailable: true });
+    expect(withChipsec.strategy).toBe('uefi-chipsec');
+    expect(withChipsec.proofCeiling).toBe('static_confirmed');
+    expect(chooseRuntimeStrategy({ ...base, firmwareClass: 'uefi-bios', chipsecAvailable: false }).strategy).toBe(
+      'static-only',
+    );
+  });
+
+  it('UEFI/BIOS never fabricates an emulation path even with emulators present', () => {
+    const out = chooseRuntimeStrategy({
+      ...base,
+      firmwareClass: 'uefi-bios',
+      chipsecAvailable: true,
+      systemEmulatorAvailable: true,
+      hasSystemKernel: true,
+    });
+    // A UEFI image must not be routed to a qemu rung; chipsec's offline decode is the only track.
+    expect(out.strategy).toBe('uefi-chipsec');
   });
 });

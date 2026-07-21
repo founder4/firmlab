@@ -109,5 +109,16 @@ RUN curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh  |
 #     && cp /afl/afl-fuzz /afl/afl-qemu-trace /afl/afl-showmap /afl/afl-tmin /usr/local/bin/ \
 #     && afl-fuzz --version && afl-qemu-trace --version | head -1
 # ENV AFL_PATH=/afl
+#
+# === (Optional) chipsec — UEFI/BIOS offline analysis (providers/chipsec.ts). ===
+# VALIDATED recipe (real OVMF decode: 2 firmware volumes, 131 EFI modules, exact type histogram). chipsec runs the
+# `uefi decode` command fully OFFLINE (NoneHelper, no kernel driver, no network) so no privileged access is needed —
+# the pip build only needs a C toolchain + nasm for its helper. Opt-in like the others: absent chipsec_util →
+# available:false honestly. Point FIRMLAB_UEFI_IOC at a known-bad-module JSON feed to enable GUID/name IOC matching.
+# RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3-dev nasm \
+#     && rm -rf /var/lib/apt/lists/* \
+#     && pip3 install --no-cache-dir --break-system-packages chipsec \
+#     && chipsec_util --help >/dev/null 2>&1 || true
+# ENV FIRMLAB_UEFI_IOC=/opt/firmlab/uefi-iocs.json
 
 CMD ["node", "apps/api/dist/index.js"]

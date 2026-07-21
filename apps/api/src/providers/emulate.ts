@@ -19,7 +19,7 @@ import { FIRMADYNE_KERNELS_DIR, QEMU_MACHINE_BY_ARCH, QEMU_SYSTEM_BY_ARCH, QEMU_
 
 const execFileAsync = promisify(execFile);
 
-export type EmulationMode = 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode';
+export type EmulationMode = 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode' | 'uefi-chipsec';
 
 export interface EmulationRecipe {
   id: string;
@@ -139,6 +139,28 @@ export async function planEmulation(ctx: PlanContext): Promise<EmulationRecipe[]
         'renode --disable-xwt --console -e "mach create; machine LoadPlatformDescription @platform.repl; sysbus LoadELF @firmware.elf; start"',
       rank: firmwareClass === 'rtos' ? 1 : 3,
       notes: 'Provide or generate a .repl platform matching the MCU; load the raw blob at its base address.',
+    });
+  }
+
+  // === UEFI / BIOS (chipsec, offline) ===
+  // Not emulation: chipsec parses the firmware volumes and carves EFI modules from the bytes. Surfaced in the
+  // same control surface as the emulators because it is this class's dynamic-analysis track, but its proof tops
+  // out at static_confirmed — a fact about the image, never a device claim.
+  if (firmwareClass === 'uefi-bios') {
+    recipes.push({
+      id: 'uefi-chipsec',
+      mode: 'uefi-chipsec',
+      title: 'chipsec — decode & scan the UEFI/BIOS image (offline)',
+      description:
+        'Parse the UEFI firmware volumes, carve every EFI module (PEI/DXE/SMM/applications), and scan the ' +
+        'inventory for known-bad modules and bootkit-vector leads. Fully offline — no hardware, no emulation.',
+      requires: ['chipsec'],
+      runnable: has('chipsec'),
+      command: 'chipsec_util uefi decode <image.fd>',
+      rank: 1,
+      notes: has('chipsec')
+        ? 'Offline structural analysis; findings are static_confirmed. Point FIRMLAB_UEFI_IOC at a feed to match implant GUIDs.'
+        : 'Needs chipsec — enable the UEFI-analysis section in Dockerfile.firmware.',
     });
   }
 
