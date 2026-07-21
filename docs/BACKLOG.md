@@ -53,11 +53,14 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ▢ **PDF export** of reports.
 - ▢ **External MCP tool surface** — expose FirmLab's providers as MCP tools so any agent (Claude Code/Desktop, Cursor…) can drive the workbench (wairz is MCP-first). Strategic; providers are already clean seams.
 
-## Deployment — tool-recipe fixes (activated 2026-07-21; these 3 failed to install, degrade honestly)
-- ▢ **Ghidra install** — the `api.github.com/releases/latest` grep for the download URL came back empty in the build (unauthenticated API rate-limit / asset-name drift). Pin a known Ghidra version URL or pass a GITHUB_TOKEN build-arg. (radare2 covers triage meanwhile.)
-- ▢ **libnvram cross-build** — the firmadyne libnvram Makefile build failed under the arm64 host cross-compilers. Fix the CC/flags (or vendor a prebuilt per-arch `.so`). Unlocks the chroot-service rung.
-- ▢ **firmadyne kernels** — the `pr0v3rbs/FirmAE/raw/master/binaries/<k>` URLs 404'd (repo layout changed). Find the current kernel asset URLs. Unlocks full-system boot.
-- Note: chipsec + Renode + AFL++ DID activate successfully in the deploy.
+## Deployment — build architecture
+- ▢ **Invert the image layering** — `Dockerfile.firmware` is `FROM firmlab:latest` (tools layered ON TOP of the app), so ANY app-code change rebuilds ALL heavy tool layers (incl. the ~20-min AFL++ QEMU compile). Restructure to a `firmlab-tools` base (tools only) + the app copied on top, so app changes are a fast final layer. Big win for iteration speed.
+
+## Deployment — tool-recipe fixes (ALL RESOLVED 2026-07-21)
+- ✅ **libnvram cross-build** — missing target libc headers; add `libc6-dev-{mipsel,mips,armel,arm64}-cross`. All 4 guest `.so` build + present in deploy. Unlocks chroot-service.
+- ✅ **firmadyne kernels** — the raw-repo path 404s; kernels live in GitHub Releases (`pr0v3rbs/FirmAE_kernel-v4.1` v1.0). 4 kernels present in deploy. Unlocks full-system.
+- ✅ **Ghidra** — two bugs: (a) `api.github.com/releases/latest` was rate-limited mid-build → pin a DIRECT release URL; (b) Debian bookworm has no JDK 21 (Ghidra 12.x needs it) → fetch a portable Temurin JDK 21 from Adoptium. Also fixed the app detection (`tools.ts` ran the JVM with a 4s probe timeout → reported absent → refused to run; now detected by PATH existence).
+- All six heavy tools (chipsec, Renode, AFL++, libnvram, firmadyne kernels, Ghidra) now install + activate in the deploy.
 
 ## Out of scope (by design / hardware)
 - — Weaponized exploitation (ROP / shellcode / PoC) — FirmLab proves reachability + drafts disclosure, no PoCs.
