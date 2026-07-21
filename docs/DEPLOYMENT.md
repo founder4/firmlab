@@ -17,21 +17,24 @@ detrás de dos middlewares de Traefik: `tinyauth` (SSO Google, solo la cuenta wh
 > Que el bind interno sea `0.0.0.0` es necesario para que Traefik lo alcance por `proxy_net`; la exposición
 > real la controla el router, no el bind.
 
-## La cadena de imágenes
+## La cadena de imágenes (capas invertidas)
 
 ```
-Dockerfile            → firmlab:latest            (base: API + web, ~356 MB)
-Dockerfile.firmware   → firmlab-firmware:latest   (FROM firmlab:latest + toolchain, ~1.3 GB)
+Dockerfile.tools      → firmlab-tools:latest       (base pesada: toolchain RE/emulación, ~varios GB)
+Dockerfile.firmware   → firmlab-firmware:latest    (FROM firmlab-tools + la app copiada encima)  ← el que se despliega
+Dockerfile            → firmlab:latest             (variante lean sin tools, para dev local)
 ```
 
-`Dockerfile.firmware` hace `FROM firmlab:latest`, así que **la base se construye siempre primero**. El compose
-del homelab consume `firmlab-firmware:latest`. Construir la base y olvidar reconstruir la de firmware deja la
-segunda montada sobre una base vieja sin que nada lo avise.
+**Los tools van en la BASE, la app ENCIMA.** Así un cambio de código de la app reconstruye solo la capa fina de la
+app (recompila rápido) — las capas de tools (multi-GB, incl. el compile de ~20 min de AFL++) quedan cacheadas. La
+base `firmlab-tools` se reconstruye solo cuando cambia una receta de tool (`deploy.sh --tools`). El compose del
+homelab consume `firmlab-firmware:latest`.
 
 ## Cómo desplegar
 
 ```bash
-scripts/deploy.sh              # construye, etiqueta, despliega y verifica
+scripts/deploy.sh              # construye la app sobre la base de tools existente, despliega y verifica
+scripts/deploy.sh --tools      # ADEMÁS reconstruye la base de tools (cuando cambió una receta de tool; pesado)
 scripts/deploy.sh --check      # solo informa de desfase, no cambia nada
 scripts/deploy.sh --build-only # construye y etiqueta sin tocar el contenedor
 ```

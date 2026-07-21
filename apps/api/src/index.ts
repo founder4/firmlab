@@ -79,6 +79,9 @@ async function main(): Promise<void> {
       status: 'ok',
       host: HOST,
       port: PORT,
+      // The git commit this image was built from (FIRMLAB_BUILD, baked at image build) — lets a deploy confirm it
+      // is serving the latest build rather than a stale container.
+      build: process.env.FIRMLAB_BUILD ?? 'dev',
       exposedToNetwork: !boundLocally && !loopbackPublish,
       trustedProxy,
     };

@@ -1,124 +1,51 @@
 # syntax=docker/dockerfile:1
 #
-# FirmLab firmware image — the full-capability workbench. Layers the reverse-engineering toolchain on top of
-# the base image so extraction, binary analysis, SBOM/CVEs, secret scanning, and emulation all light up. The
-# API auto-detects each tool (see apps/api/src/tools.ts) and the UI Capabilities panel reflects what's present.
+# FirmLab firmware image = the built app layered ON TOP of the firmlab-tools base (Dockerfile.tools). Because the
+# heavy toolchain lives in the base, an app-code change rebuilds ONLY the thin copy layers here (a fast recompile),
+# never the multi-GB tool layers. This is the inverted layering — the previous `FROM firmlab:latest` rebuilt every
+# tool on any app change.
 #
-# Unlike Galert's Wolfi base (which needed multi-stage gymnastics for MIPS/ARM), this base is Debian, so apt
-# provides binwalk, all-arch static QEMU, qemu-system, radare2, and the extractors directly.
-#
-# Build:  docker build -f Dockerfile.firmware -t firmlab-firmware .   (builds the base stage first)
+# Build (via scripts/deploy.sh, which also recreates the running container):
+#   docker build -f Dockerfile.tools -t firmlab-tools:latest .              # only when a tool recipe changes
+#   docker build -f Dockerfile.firmware --build-arg GIT_SHA=$(git rev-parse --short HEAD) -t firmlab-firmware:latest .
 
-FROM firmlab:latest AS base
-# If firmlab:latest isn't built yet, build inline from the base Dockerfile instead:
-#   docker build -t firmlab:latest . && docker build -f Dockerfile.firmware -t firmlab-firmware .
+# === Stage 1: build the monorepo ===
+FROM node:22-bookworm-slim AS build
+WORKDIR /app
+ENV CI=true
+RUN corepack enable
+COPY pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY packages/core/package.json packages/core/
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+RUN pnpm install --frozen-lockfile=false
+COPY . .
+RUN pnpm --filter @firmlab/core run build \
+  && pnpm --filter @firmlab/api run build \
+  && pnpm --filter @firmlab/web run build
 
-FROM base AS firmware
-USER root
+# === Stage 2: the app on the tools base ===
+FROM firmlab-tools:latest AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV FIRMLAB_HOST=0.0.0.0
+ENV FIRMLAB_PORT=8799
+ENV FIRMLAB_DATA_DIR=/data
+ENV FIRMLAB_WEB_DIST=/app/apps/web/dist
+# The git commit this image was built from — surfaced at /health so a deploy's freshness is verifiable.
+ARG GIT_SHA=unknown
+ENV FIRMLAB_BUILD=$GIT_SHA
 
-# === Core RE + extraction + emulation toolchain (apt) ===
-# binwalk (carve), squashfs-tools + sasquatch deps, cpio, e2fsprogs, radare2 (binary triage),
-# qemu-user-static (ALL guest arches incl. MIPS/ARM), qemu-system-{mips,arm} (full-system boot).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      binwalk \
-      squashfs-tools \
-      cpio \
-      e2fsprogs \
-      qemu-user-static \
-      qemu-system-mips \
-      qemu-system-arm \
-      python3 python3-pip python3-venv \
-      curl ca-certificates unzip \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages/core/dist ./packages/core/dist
+COPY --from=build /app/packages/core/package.json ./packages/core/
+COPY --from=build /app/apps/api/dist ./apps/api/dist
+COPY --from=build /app/apps/api/package.json ./apps/api/
+COPY --from=build /app/apps/api/ghidra-scripts ./apps/api/ghidra-scripts
+COPY --from=build /app/apps/api/scripts ./apps/api/scripts
+COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=build /app/apps/web/dist ./apps/web/dist
 
-# === radare2 (binary triage) — dropped from Debian bookworm repos; use the official .deb for the build arch ===
-RUN R2_VER="$(curl -fsSL https://api.github.com/repos/radareorg/radare2/releases/latest | grep -oP '"tag_name":\s*"\K[0-9.]+')" \
-    && ARCH="$(dpkg --print-architecture)" \
-    && curl -fsSL "https://github.com/radareorg/radare2/releases/download/${R2_VER}/radare2_${R2_VER}_${ARCH}.deb" -o /tmp/r2.deb \
-    && apt-get update && apt-get install -y --no-install-recommends /tmp/r2.deb \
-    && rm -f /tmp/r2.deb && rm -rf /var/lib/apt/lists/*
-
-# === JFFS2 / UBIFS extractors (pip, isolated venv) ===
-RUN python3 -m venv /opt/fw-py \
-    && /opt/fw-py/bin/pip install --no-cache-dir jefferson ubi_reader \
-    && ln -sf /opt/fw-py/bin/jefferson /usr/local/bin/jefferson \
-    && ln -sf /opt/fw-py/bin/ubireader_extract_files /usr/local/bin/ubireader_extract_files
-
-# === SBOM + CVEs + secrets (syft / grype / gitleaks via official installers) ===
-RUN curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin \
-    && curl -fsSL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin \
-    && GL_ARCH="$(dpkg --print-architecture | sed 's/amd64/x64/;s/arm64/arm64/')" \
-    && curl -fsSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep -oP '"tag_name":\s*"v\K[0-9.]+')_linux_${GL_ARCH}.tar.gz \
-       -o /tmp/gitleaks.tgz && tar xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks && rm /tmp/gitleaks.tgz
-
-# =============================================================================
-# Heavy analysis tools — ACTIVATED. Each block is fault-tolerant (`|| echo …`): a failed optional install must
-# NEVER abort the image build — the corresponding provider already degrades honestly when its tool is absent
-# (available:false / blocked_by_platform), which is the project's core discipline. So the deploy always builds;
-# whatever tool installed, works; whatever didn't, degrades. Rebuild is heavy (~several GB); that is intended here.
-# =============================================================================
-
-# === chipsec — UEFI/BIOS offline analysis (providers/chipsec.ts) — VALIDATED (real OVMF decode). ===
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3-dev nasm \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --no-cache-dir --break-system-packages chipsec \
-    && chipsec_util --help >/dev/null 2>&1 \
-    ; command -v chipsec_util >/dev/null && echo "chipsec OK" || echo "chipsec optional install failed — UEFI provider degrades honestly"
-
-# === Renode — RTOS / Cortex-M boot (providers/renode.ts) — VALIDATED (real Contiki on emulated STM32F4). ===
-# arm64 portable-dotnet build (self-contained bar .NET's ICU + OpenSSL); platforms/ ship inside the tarball.
-ARG RENODE_VER=1.16.1
-RUN bash -c 'set -o pipefail; apt-get update && apt-get install -y --no-install-recommends libicu72 libssl3 ca-certificates && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL "https://github.com/renode/renode/releases/download/v${RENODE_VER}/renode-${RENODE_VER}.linux-arm64-portable-dotnet.tar.gz" -o /tmp/renode.tgz \
-    && mkdir -p /opt/renode && tar xzf /tmp/renode.tgz -C /opt/renode --strip-components=1 && rm /tmp/renode.tgz \
-    && ln -sf /opt/renode/renode /usr/local/bin/renode && renode --version | head -1' \
-    || echo "Renode optional install failed — RTOS provider degrades honestly"
-
-# === AFL++ — coverage-guided fuzzing (providers/fuzz.ts, qemu mode). Heavy source build (compiles QEMU). ===
-# Placed BEFORE the download-based tools below: it is the slowest/most-stable layer, so ordering it early keeps its
-# cache from being invalidated whenever a faster download layer (Ghidra/kernels) is tweaked.
-# CPU_TARGET=aarch64 → fuzzes aarch64 guests here; rebuild with a different CPU_TARGET for arm/mips firmware.
-RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev python3 flex bison make gcc g++ && rm -rf /var/lib/apt/lists/* \
-    && git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /afl \
-    && make -C /afl source-only NO_NYX=1 \
-    && (cd /afl/qemu_mode && CPU_TARGET=aarch64 ./build_qemu_support.sh) \
-    && cp /afl/afl-fuzz /afl/afl-qemu-trace /afl/afl-showmap /afl/afl-tmin /usr/local/bin/ \
-    && afl-fuzz --version && afl-qemu-trace --version | head -1' \
-    || echo "AFL++ optional build failed — fuzzing provider degrades honestly"
-ENV AFL_PATH=/afl
-
-# === Emulation bring-up assets — libnvram shim (rung-2 chroot service) + firmadyne kernels (rung-3 full-system). ===
-# Paths here are exactly what preflight (providers/preflight.ts) checks: /opt/libnvram/libnvram-<arch>.so, /opt/firmae/kernels/.
-RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git build-essential \
-       gcc-mipsel-linux-gnu gcc-mips-linux-gnu gcc-arm-linux-gnueabi gcc-aarch64-linux-gnu \
-       libc6-dev-mipsel-cross libc6-dev-mips-cross libc6-dev-armel-cross libc6-dev-arm64-cross \
-    && git clone --depth 1 https://github.com/firmadyne/libnvram /tmp/libnvram && mkdir -p /opt/libnvram \
-    && make -C /tmp/libnvram CC=mipsel-linux-gnu-gcc  && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-mipsel.so && make -C /tmp/libnvram clean \
-    && make -C /tmp/libnvram CC=mips-linux-gnu-gcc    && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-mips.so   && make -C /tmp/libnvram clean \
-    && make -C /tmp/libnvram CC=arm-linux-gnueabi-gcc && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-arm.so    && make -C /tmp/libnvram clean \
-    && make -C /tmp/libnvram CC=aarch64-linux-gnu-gcc && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-arm64.so \
-    && rm -rf /tmp/libnvram /var/lib/apt/lists/*' \
-    || echo "libnvram optional build failed — chroot-service rung degrades honestly"
-# Kernels live in GitHub RELEASES (the old raw-repo path 404s). Asset names: vmlinux.mipsel.4 / vmlinux.mipseb.4 /
-# zImage.armel / vmlinux.armel under FirmAE_kernel-v4.1 v1.0.
-RUN bash -c 'mkdir -p /opt/firmae/kernels && cd /opt/firmae/kernels \
-    && for a in vmlinux.mipsel.4 vmlinux.mipseb.4 zImage.armel vmlinux.armel; do \
-         curl -fsSL "https://github.com/pr0v3rbs/FirmAE_kernel-v4.1/releases/download/v1.0/$a" -o "$a"; done' \
-    || echo "firmadyne kernels optional download failed — full-system rung degrades honestly"
-
-# === Ghidra headless — deep decompilation (providers/ghidra.ts). Adds ~1.5 GB (JDK 21 + Ghidra). ===
-# Debian bookworm ships no JDK 21 (Ghidra 12.x needs it) — not even in backports — so fetch a portable Temurin JDK 21
-# from the Adoptium binary API (stable, not GitHub-rate-limited), and pin a DIRECT Ghidra release URL (an
-# unauthenticated api.github.com "releases/latest" call was the earlier failure). Placed LAST: most-volatile layer.
-ARG GHIDRA_URL=https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.2_build/ghidra_12.1.2_PUBLIC_20260605.zip
-ENV JAVA_HOME=/opt/jdk
-ENV PATH=/opt/jdk/bin:$PATH
-ENV GHIDRA_INSTALL_DIR=/opt/ghidra
-RUN bash -c 'mkdir -p /opt/jdk \
-    && curl -fsSL "https://api.adoptium.net/v3/binary/latest/21/ga/linux/aarch64/jdk/hotspot/normal/eclipse?project=jdk" | tar xz -C /opt/jdk --strip-components=1 \
-    && curl -fsSL "$GHIDRA_URL" -o /tmp/ghidra.zip && unzip -q /tmp/ghidra.zip -d /opt && rm /tmp/ghidra.zip \
-    && mv /opt/ghidra_* /opt/ghidra && ln -sf /opt/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless \
-    && /opt/jdk/bin/java -version' \
-    || echo "Ghidra optional install failed — decompiler degrades honestly"
-
+VOLUME /data
+EXPOSE 8799
 CMD ["node", "apps/api/dist/index.js"]
