@@ -37,6 +37,14 @@ RUN python3 -m venv /opt/fw-py \
     && ln -sf /opt/fw-py/bin/jefferson /usr/local/bin/jefferson \
     && ln -sf /opt/fw-py/bin/ubireader_extract_files /usr/local/bin/ubireader_extract_files
 
+# === sasquatch — patched unsquashfs for VENDOR/non-standard SquashFS (providers/extract.ts). Maintained onekey-sec
+# .deb (no source build). `latest/download/<asset>` is a stable redirect — no api.github.com call to rate-limit. ===
+RUN bash -c 'ARCH="$(dpkg --print-architecture)" \
+    && curl -fsSL "https://github.com/onekey-sec/sasquatch/releases/latest/download/sasquatch_1.0_${ARCH}.deb" -o /tmp/sasquatch.deb \
+    && apt-get update && apt-get install -y --no-install-recommends /tmp/sasquatch.deb \
+    && rm -f /tmp/sasquatch.deb && rm -rf /var/lib/apt/lists/* && command -v sasquatch' \
+    || echo "sasquatch optional install failed — vendor-SquashFS extraction degrades to unsquashfs"
+
 # === SBOM + CVEs + secrets (syft / grype / gitleaks via official installers) ===
 RUN curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin \
