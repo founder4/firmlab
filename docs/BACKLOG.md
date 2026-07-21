@@ -15,8 +15,8 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ▢ **Prebuilt guest-arch libdesock** — so the network fuzz harness works out-of-the-box, not only with `FIRMLAB_DESOCK`.
 
 ## UEFI / BIOS deep analysis
-- ▢ **chipsec++ Secure Boot posture** — offline NVRAM SecureBoot/SetupMode/PK test-key parsing (`chipsec_util uefi nvram`). Needs a var-store-bearing image (OVMF_VARS) to validate honestly.
-- ▢ **Curated `FIRMLAB_UEFI_IOC` feed** — must be sourced from real public data (Binarly FwHunt rule GUIDs / documented families: LoJax, MosaicRegressor, MoonBounce, CosmicStrand, BlackLotus), NOT hand-guessed GUIDs. Do it by ingesting/parsing FwHunt, not by fabricating IOCs.
+- ✅ **chipsec Secure Boot / NVRAM posture** — offline NVRAM variable enumeration + SecureBoot/SetupMode/CustomMode reading + documented test-key detection (DO NOT TRUST / Snakeoil / AMI Test), all from `uefi decode`'s `nvram_*.nvram.lst`. Honest degradation: a state not among the extractable vars → `unknown`, never assumed secure. Validated in-container on real OVMF VARS (chipsec 1.13.16 surfaces only CustomMode from the OVMF auth-store, so the posture honestly reports the rest `unknown`; real vendor firmware extracts the full set). `providers/chipsec.ts` (`parseNvramVariables` / `interpretSecureBoot` / `detectTestKey` / `secureBootFindings`, unit-tested).
+- ▢ **Curated `FIRMLAB_UEFI_IOC` feed / FwHunt integration** — advanced implants (LoJax/MoonBounce/CosmicStrand/BlackLotus) are NOT reliably GUID-detectable; FwHunt deliberately uses code-pattern (esil/hex_strings) rules to avoid false positives, and there are no stable public file-GUIDs for these families. So do NOT ship a hand-guessed GUID feed — the honest path is integrating `fwhunt-scan` (opt-in, like Ghidra/AFL++) to run real FwHunt rules against carved modules. The existing `FIRMLAB_UEFI_IOC` GUID/name hook stays for operator-supplied IOCs.
 - ▢ **LogoFAIL image-parser bug class** + SMM callout analysis (efiXplorer-class).
 - ▢ **SPI protected-range / BIOS-lock posture.**
 

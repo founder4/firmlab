@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   type UefiIoc,
   type UefiModule,
+  detectTestKey,
+  interpretSecureBoot,
   loadUefiIocs,
+  parseNvramVariables,
   parseUefiDecode,
   runChipsec,
   scanUefi,
+  secureBootFindings,
   summarizeByType,
 } from './chipsec.js';
 
@@ -128,6 +132,91 @@ describe('loadUefiIocs', () => {
 
   it('ignores a malformed / missing feed file honestly', () => {
     expect(loadUefiIocs({ FIRMLAB_UEFI_IOC: '/nonexistent/iocs.json' })).toEqual([]);
+  });
+});
+
+// A faithful excerpt of chipsec's nvram_*.nvram.lst (real format from `uefi decode`), synthetic values.
+const NVRAM_LST = `
+[uefi] Found EFI NVRAM at offset 0x00000048
+--------------------------------
+EFI Variable (offset = 0x100):
+--------------------------------
+Name      : SecureBoot
+Guid      : 8BE4DF61-93CA-11D2-AA0D-00E098032B8C
+State     : ADDED +
+Attributes: 0x6 ( BS+RT )
+Data:
+00                                              |  .
+
+--------------------------------
+EFI Variable (offset = 0x200):
+--------------------------------
+Name      : SetupMode
+Guid      : 8BE4DF61-93CA-11D2-AA0D-00E098032B8C
+Attributes: 0x6 ( BS+RT )
+Data:
+01                                              |  .
+
+--------------------------------
+EFI Variable (offset = 0x300):
+--------------------------------
+Name      : PK
+Guid      : 8BE4DF61-93CA-11D2-AA0D-00E098032B8C
+Attributes: 0x27 ( NV+BS+RT+AT )
+Data:
+a1 59 c0 30                                     |  .Y.0
+`;
+
+describe('parseNvramVariables', () => {
+  const vars = parseNvramVariables(NVRAM_LST);
+  it('enumerates variables with name, guid and the first data byte', () => {
+    expect(vars.map((v) => v.name)).toEqual(['SecureBoot', 'SetupMode', 'PK']);
+    expect(vars.find((v) => v.name === 'SecureBoot')?.firstByte).toBe(0x00);
+    expect(vars.find((v) => v.name === 'SetupMode')?.firstByte).toBe(0x01);
+  });
+  it('returns nothing for a store with no variables', () => {
+    expect(parseNvramVariables('[uefi] no variables here')).toEqual([]);
+  });
+});
+
+describe('interpretSecureBoot', () => {
+  it('reads SecureBoot=0 as disabled and SetupMode=1 as setup, honestly', () => {
+    const sb = interpretSecureBoot(parseNvramVariables(NVRAM_LST), '');
+    expect(sb.secureBoot).toBe('disabled');
+    expect(sb.setupMode).toBe('setup');
+    expect(sb.hasPK).toBe(true);
+    expect(sb.testKey).toBeNull();
+  });
+  it('leaves a state unknown when the variable was not extracted (never assumes secure)', () => {
+    const sb = interpretSecureBoot([{ name: 'CustomMode', guid: 'x', attributes: 'NV+BS', firstByte: 0 }], '');
+    expect(sb.secureBoot).toBe('unknown');
+    expect(sb.note).toMatch(/not among the offline-extractable/i);
+  });
+  it('flags a documented TEST platform key from the key bytes', () => {
+    const sb = interpretSecureBoot(parseNvramVariables(NVRAM_LST), 'CN=DO NOT TRUST - AMI Test PK');
+    expect(sb.testKey).toMatch(/DO NOT TRUST/i);
+  });
+});
+
+describe('detectTestKey', () => {
+  it('matches documented test/self-signed markers only', () => {
+    expect(detectTestKey('... Snakeoil ...')).toMatch(/Snakeoil/i);
+    expect(detectTestKey('DO NOT SHIP')).toMatch(/DO NOT SHIP/i);
+    expect(detectTestKey('CN=Microsoft Corporation UEFI CA 2011')).toBeNull();
+  });
+});
+
+describe('secureBootFindings', () => {
+  it('emits static_confirmed findings for disabled + setup-mode + test key', () => {
+    const sb = interpretSecureBoot(parseNvramVariables(NVRAM_LST), 'DO NOT TRUST');
+    const kinds = secureBootFindings(sb).map((f) => f.kind);
+    expect(kinds).toContain('uefi-test-key');
+    expect(kinds).toContain('uefi-secure-boot');
+    expect(secureBootFindings(sb).every((f) => f.proofState === 'static_confirmed')).toBe(true);
+  });
+  it('emits nothing when posture is unknown (no overclaim)', () => {
+    const sb = interpretSecureBoot([{ name: 'CustomMode', guid: 'x', attributes: '', firstByte: 0 }], '');
+    expect(secureBootFindings(sb)).toHaveLength(0);
   });
 });
 

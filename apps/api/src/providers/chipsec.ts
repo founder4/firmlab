@@ -69,6 +69,8 @@ export interface ChipsecResult {
   byType: Record<string, number>;
   /** A capped sample of the modules (the full count/byType are always exact). */
   modules: UefiModule[];
+  /** Secure Boot / NVRAM posture from the offline variable store, or null when none was extractable. */
+  secureBoot: SecureBootPosture | null;
   findings: UefiSecurityFinding[];
   command: string;
   isolation?: IsolationLevel;
@@ -224,6 +226,226 @@ export function scanUefi(volumes: number, modules: UefiModule[], iocs: UefiIoc[]
   return findings;
 }
 
+/** A UEFI NVRAM variable enumerated from chipsec's decode (`nvram_*.nvram.lst`). */
+export interface UefiVariable {
+  name: string;
+  guid: string;
+  /** Raw attribute string chipsec printed, e.g. `0x3 ( NV+BS )`. */
+  attributes: string;
+  /** First data byte, decoded for single-byte state vars (SecureBoot / SetupMode / CustomMode). */
+  firstByte?: number;
+}
+
+/** Secure Boot posture derived from the offline NVRAM variable set. Honest: `unknown` when a var isn't extractable. */
+export interface SecureBootPosture {
+  variableCount: number;
+  secureBoot: 'enabled' | 'disabled' | 'unknown';
+  setupMode: 'setup' | 'user' | 'unknown';
+  customMode: 'enabled' | 'disabled' | 'unknown';
+  hasPK: boolean;
+  hasKEK: boolean;
+  hasDb: boolean;
+  hasDbx: boolean;
+  /** A documented TEST/self-signed platform-key marker found in a key variable, if any (a real supply-chain IOC). */
+  testKey: string | null;
+  /** Enumerated variable names (capped). */
+  variables: string[];
+  note: string;
+}
+
+/**
+ * Pure: parse chipsec's `nvram_*.nvram.lst` into the UEFI variable list. Each `Name : X / Guid : Y / Attributes :
+ * … / Data:` block is one variable; the first data byte is decoded for the single-byte Secure Boot state vars.
+ */
+export function parseNvramVariables(lst: string): UefiVariable[] {
+  const out: UefiVariable[] = [];
+  let cur: Partial<UefiVariable> | null = null;
+  let expectData = false;
+  const flush = (): void => {
+    if (cur?.name)
+      out.push({
+        name: cur.name,
+        guid: cur.guid ?? '',
+        attributes: cur.attributes ?? '',
+        ...(cur.firstByte !== undefined ? { firstByte: cur.firstByte } : {}),
+      });
+  };
+  for (const line of lst.split('\n')) {
+    const nameM = /^Name\s*:\s*(.+?)\s*$/.exec(line);
+    if (nameM) {
+      flush();
+      cur = { name: nameM[1] as string };
+      expectData = false;
+      continue;
+    }
+    if (!cur) continue;
+    const guidM = /^Guid\s*:\s*(\S+)/.exec(line);
+    if (guidM) {
+      cur.guid = guidM[1] ?? '';
+      continue;
+    }
+    const attrM = /^Attributes:\s*(.+?)\s*$/.exec(line);
+    if (attrM) {
+      cur.attributes = attrM[1] ?? '';
+      continue;
+    }
+    if (/^Data:/.test(line)) {
+      expectData = true;
+      continue;
+    }
+    if (expectData) {
+      const hexM = /^\s*([0-9A-Fa-f]{2})\b/.exec(line);
+      if (hexM) {
+        cur.firstByte = Number.parseInt(hexM[1] as string, 16);
+        expectData = false;
+      }
+    }
+  }
+  flush();
+  return out;
+}
+
+// Documented markers for a TEST / self-signed platform key — none of these belong in shipping firmware.
+const TEST_KEY_MARKERS: RegExp[] = [
+  /DO NOT TRUST/i,
+  /DO_NOT_TRUST/i,
+  /DO NOT SHIP/i,
+  /Snakeoil/i,
+  /AMI Test/i,
+  /Test(?:ing)? Only/i,
+  /TestPlatformKey/i,
+];
+
+/** Pure: a documented TEST/self-signed key marker in the key-variable bytes, or null. */
+export function detectTestKey(text: string): string | null {
+  for (const re of TEST_KEY_MARKERS) {
+    const m = re.exec(text);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+/**
+ * Pure: derive the Secure Boot posture from the NVRAM variables (+ the key-variable bytes for test-key detection).
+ * Honest: a state we can't read from the extracted variables is `unknown`, never assumed secure.
+ */
+export function interpretSecureBoot(vars: UefiVariable[], keyBytes: string): SecureBootPosture {
+  const byName = (n: string): UefiVariable | undefined => vars.find((v) => v.name.toLowerCase() === n.toLowerCase());
+  const has = (n: string): boolean => byName(n) !== undefined;
+  const sb = byName('SecureBoot');
+  const setup = byName('SetupMode');
+  const custom = byName('CustomMode');
+  const secureBoot = sb?.firstByte === 1 ? 'enabled' : sb?.firstByte === 0 ? 'disabled' : 'unknown';
+  const setupMode = setup?.firstByte === 1 ? 'setup' : setup?.firstByte === 0 ? 'user' : 'unknown';
+  const customMode = custom?.firstByte === 1 ? 'enabled' : custom?.firstByte === 0 ? 'disabled' : 'unknown';
+  const testKey = detectTestKey(keyBytes);
+  const note =
+    secureBoot === 'unknown'
+      ? 'Secure Boot state not among the offline-extractable variables for this store — enumerated what chipsec surfaced.'
+      : `Secure Boot ${secureBoot}.`;
+  return {
+    variableCount: vars.length,
+    secureBoot,
+    setupMode,
+    customMode,
+    hasPK: has('PK') || has('PlatformKey'),
+    hasKEK: has('KEK'),
+    hasDb: has('db'),
+    hasDbx: has('dbx'),
+    testKey,
+    variables: vars.map((v) => v.name).slice(0, 40),
+    note,
+  };
+}
+
+/** Pure: the honest Secure Boot findings for a posture (only asserts what the variables actually show). */
+export function secureBootFindings(sb: SecureBootPosture): UefiSecurityFinding[] {
+  const out: UefiSecurityFinding[] = [];
+  if (sb.testKey) {
+    out.push({
+      kind: 'uefi-test-key',
+      title: `Secure Boot uses a TEST / self-signed platform key (${sb.testKey})`,
+      severity: 'high',
+      proofState: 'static_confirmed',
+      evidence: { marker: sb.testKey },
+      rationale:
+        'A test / "DO NOT TRUST" platform key shipped in production firmware means Secure Boot trusts a publicly ' +
+        'known key — a documented supply-chain weakness. Present in the image bytes.',
+    });
+  }
+  if (sb.secureBoot === 'disabled') {
+    out.push({
+      kind: 'uefi-secure-boot',
+      title: 'Secure Boot is disabled',
+      severity: 'high',
+      proofState: 'static_confirmed',
+      evidence: { secureBoot: 'disabled', setupMode: sb.setupMode },
+      rationale: 'The SecureBoot NVRAM variable is 0 — unsigned bootloaders/OS will run. Bootkit exposure.',
+    });
+  }
+  if (sb.setupMode === 'setup') {
+    out.push({
+      kind: 'uefi-secure-boot',
+      title: 'Platform is in Secure Boot Setup Mode (no PK enrolled)',
+      severity: 'high',
+      proofState: 'static_confirmed',
+      evidence: { setupMode: 'setup' },
+      rationale: 'SetupMode=1 means no Platform Key is enrolled — anyone can enroll keys and defeat Secure Boot.',
+    });
+  }
+  if (sb.secureBoot !== 'unknown' && sb.hasPK && !sb.hasDbx) {
+    out.push({
+      kind: 'uefi-secure-boot',
+      title: 'No dbx revocation list present',
+      severity: 'medium',
+      proofState: 'static_confirmed',
+      evidence: { hasDbx: false },
+      rationale: 'Without a dbx, known-revoked bootloaders (e.g. BootHole-class) are not blocked.',
+    });
+  }
+  return out;
+}
+
+/** Read + interpret the Secure Boot posture from the decode output, or null when no NVRAM store was extracted. */
+function readNvramPosture(imgCopy: string): SecureBootPosture | null {
+  const dir = `${imgCopy}.dir`;
+  const lstFiles = findFilesMatching(dir, (n) => /nvram.*\.nvram\.lst$/i.test(n));
+  if (lstFiles.length === 0) return null;
+  const lst = lstFiles.map((f) => safeRead(f, 'utf8')).join('\n');
+  const vars = parseNvramVariables(lst);
+  if (vars.length === 0) return null;
+  // Key-variable blobs (PK/KEK/db/dbx) carry the certs — read them as latin1 so marker strings survive for the scan.
+  const keyBins = findFilesMatching(dir, (n) => /^(pk|platformkey|kek|db|dbx)\b.*\.bin$/i.test(n));
+  const keyBytes = keyBins.map((f) => safeRead(f, 'latin1')).join('\n');
+  return interpretSecureBoot(vars, keyBytes);
+}
+
+/** Recursively collect files under `dir` whose basename matches `pred` (bounded depth). */
+function findFilesMatching(dir: string, pred: (basename: string) => boolean, depth = 0): string[] {
+  if (depth > 6) return [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...findFilesMatching(full, pred, depth + 1));
+    else if (e.isFile() && pred(e.name)) out.push(full);
+  }
+  return out;
+}
+
+function safeRead(p: string, enc: BufferEncoding): string {
+  try {
+    return fs.readFileSync(p, enc);
+  } catch {
+    return '';
+  }
+}
+
 export async function detectChipsec(): Promise<boolean> {
   try {
     await execFileAsync('chipsec_util', ['--help'], { timeout: 8000 });
@@ -247,6 +469,7 @@ function blocked(reason: string): ChipsecResult {
     moduleCount: 0,
     byType: {},
     modules: [],
+    secureBoot: null,
     findings: [],
     command: '',
   };
@@ -309,9 +532,12 @@ export async function runChipsec(
     }
 
     const { volumes, modules } = parseUefiDecode(lst);
-    if (modules.length === 0) {
+    // A VARS-only image has an NVRAM store but no firmware volumes; a full BIOS image has both. Parse the Secure
+    // Boot posture regardless, and only block when NEITHER modules nor NVRAM variables were extracted.
+    const secureBoot = readNvramPosture(imgCopy);
+    if (modules.length === 0 && (!secureBoot || secureBoot.variableCount === 0)) {
       return {
-        ...blocked('chipsec parsed the image but found no EFI modules — not a UEFI firmware image.'),
+        ...blocked('chipsec parsed the image but found no EFI modules or NVRAM variables — not a UEFI firmware image.'),
         available: true,
         ran: res.ran,
         volumes,
@@ -320,16 +546,21 @@ export async function runChipsec(
       };
     }
 
-    const findings = scanUefi(volumes, modules, loadUefiIocs(env));
+    const findings = [
+      ...scanUefi(volumes, modules, loadUefiIocs(env)),
+      ...(secureBoot ? secureBootFindings(secureBoot) : []),
+    ];
+    const nvramNote = secureBoot ? ` NVRAM: ${secureBoot.variableCount} variable(s), ${secureBoot.note}` : '';
     return {
       available: true,
       ran: res.ran,
-      reason: `Decoded ${volumes} firmware volume${volumes === 1 ? '' : 's'} and ${modules.length} EFI modules offline with chipsec. Static analysis of the image bytes — proves image contents, not device behavior.`,
+      reason: `Decoded ${volumes} firmware volume${volumes === 1 ? '' : 's'} and ${modules.length} EFI module${modules.length === 1 ? '' : 's'} offline with chipsec.${nvramNote} Static analysis of the image bytes — proves image contents, not device behavior.`,
       proofState: 'static_confirmed',
       volumes,
       moduleCount: modules.length,
       byType: summarizeByType(modules),
       modules: modules.slice(0, MODULE_SAMPLE_CAP),
+      secureBoot,
       findings,
       command: res.command,
       isolation: res.isolation,

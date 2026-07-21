@@ -267,6 +267,29 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                     .join('  ·  ')}
                 </div>
               )}
+              {result.secureBoot && (
+                <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span className="hint" style={{ fontSize: 11 }}>
+                    Secure Boot:
+                  </span>
+                  <span
+                    className={`badge ${result.secureBoot.secureBoot === 'enabled' ? 'badge-ok' : result.secureBoot.secureBoot === 'disabled' ? 'badge-high' : ''}`}
+                  >
+                    {result.secureBoot.secureBoot}
+                  </span>
+                  {result.secureBoot.setupMode !== 'unknown' && (
+                    <span className={`badge ${result.secureBoot.setupMode === 'setup' ? 'badge-high' : ''}`}>
+                      {result.secureBoot.setupMode} mode
+                    </span>
+                  )}
+                  {result.secureBoot.testKey && (
+                    <span className="badge badge-high">test key: {result.secureBoot.testKey}</span>
+                  )}
+                  <span className="hint mono" style={{ fontSize: 10.5 }}>
+                    {result.secureBoot.variableCount} NVRAM var(s)
+                  </span>
+                </div>
+              )}
               {result.findings && result.findings.length > 0 && (
                 <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {result.findings.map((f) => (

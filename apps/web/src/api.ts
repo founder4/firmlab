@@ -102,6 +102,21 @@ export interface UefiSecurityFinding {
   rationale: string;
 }
 
+/** Secure Boot / NVRAM posture from chipsec's offline variable store (honest: `unknown` when not extractable). */
+export interface SecureBootPosture {
+  variableCount: number;
+  secureBoot: 'enabled' | 'disabled' | 'unknown';
+  setupMode: 'setup' | 'user' | 'unknown';
+  customMode: 'enabled' | 'disabled' | 'unknown';
+  hasPK: boolean;
+  hasKEK: boolean;
+  hasDb: boolean;
+  hasDbx: boolean;
+  testKey: string | null;
+  variables: string[];
+  note: string;
+}
+
 /** chipsec offline UEFI decode result — proof tops out at static_confirmed (facts about the bytes). */
 export interface ChipsecResult {
   available: boolean;
@@ -112,6 +127,7 @@ export interface ChipsecResult {
   moduleCount: number;
   byType: Record<string, number>;
   modules: UefiModule[];
+  secureBoot: SecureBootPosture | null;
   findings: UefiSecurityFinding[];
   command: string;
   isolation?: string;

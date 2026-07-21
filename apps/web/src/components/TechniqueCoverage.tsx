@@ -88,9 +88,9 @@ const COVERAGE: CovGroup[] = [
     items: [
       { name: 'Firmware-volume + EFI module inventory', status: 'done', note: 'chipsec' },
       { name: 'Embedded-application bootkit lead', status: 'done', note: 'chipsec scan' },
-      { name: 'IOC feed hook (FIRMLAB_UEFI_IOC)', status: 'done', note: 'mechanism; feed content planned' },
-      { name: 'Threat-rule scanning (FwHunt / known implant families)', status: 'planned', note: 'LoJax/MoonBounce/…' },
-      { name: 'Secure Boot / NVRAM posture + test-key detection', status: 'planned', note: 'offline via chipsec' },
+      { name: 'IOC feed hook (FIRMLAB_UEFI_IOC)', status: 'done', note: 'operator-supplied GUID/name IOCs' },
+      { name: 'Secure Boot / NVRAM posture + test-key detection', status: 'done', note: 'providers/chipsec (offline)' },
+      { name: 'Threat-rule scanning (FwHunt code-pattern rules)', status: 'planned', note: 'integrate fwhunt-scan' },
       { name: 'LogoFAIL parsers / SMM callout analysis', status: 'planned', note: 'efiXplorer-class' },
     ],
   },
