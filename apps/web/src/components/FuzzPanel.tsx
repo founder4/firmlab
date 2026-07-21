@@ -4,7 +4,7 @@
  * evidence and is recorded as a confirmed finding in the ledger; a 0-crash run is a valid, honest outcome.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type FuzzResult, type Job, api } from '../api';
+import { type FuzzResult, type HarnessClass, type Job, api } from '../api';
 
 export function FuzzPanel({
   imageId,
@@ -14,6 +14,7 @@ export function FuzzPanel({
   const [prior, setPrior] = useState<FuzzResult | null>(null);
   const [binary, setBinary] = useState('');
   const [seconds, setSeconds] = useState(60);
+  const [harness, setHarness] = useState<HarnessClass | 'auto'>('auto');
   const [job, setJob] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +48,7 @@ export function FuzzPanel({
     setError(null);
     setJob(null);
     try {
-      const { jobId } = await api.runFuzz(imageId, target, seconds);
+      const { jobId } = await api.runFuzz(imageId, target, seconds, harness);
       poll.current = window.setInterval(async () => {
         const j = await api.job(jobId);
         setJob(j);
@@ -61,7 +62,7 @@ export function FuzzPanel({
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
-  }, [imageId, binary, suggestedBinary, seconds]);
+  }, [imageId, binary, suggestedBinary, seconds, harness]);
 
   const result = (job?.result as FuzzResult | undefined) ?? prior;
 
@@ -124,6 +125,26 @@ export function FuzzPanel({
             />
             s
           </label>
+          <select
+            aria-label="Harness"
+            className="mono"
+            value={harness}
+            onChange={(e) => setHarness(e.target.value as HarnessClass | 'auto')}
+            title="How the fuzzed input reaches the target"
+            style={{
+              background: 'var(--bg)',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              color: 'var(--text)',
+              padding: '6px 8px',
+              fontSize: 12,
+            }}
+          >
+            <option value="auto">auto</option>
+            <option value="file">file (@@)</option>
+            <option value="stdin">stdin</option>
+            <option value="network">network (desock)</option>
+          </select>
           <button className="btn btn-primary btn-sm" disabled={busy || available === null} onClick={run}>
             {busy ? <span className="spinner" /> : 'Fuzz'}
           </button>
@@ -140,10 +161,16 @@ export function FuzzPanel({
         <div style={{ marginTop: 12 }}>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <Stat label="Binary" value={result.binary} mono />
+            <Stat label="Harness" value={result.harness} />
             <Stat label="Execs" value={result.execsDone != null ? result.execsDone.toLocaleString() : '—'} />
             <Stat label="Crashes" value={String(result.crashes)} severity={result.crashes > 0 ? 'high' : 'ok'} />
             <Stat label="Isolation" value={result.isolation} />
           </div>
+          {result.harnessNote && (
+            <div className="hint" style={{ marginTop: 8 }}>
+              ℹ {result.harnessNote}
+            </div>
+          )}
           {result.crashes > 0 && result.crashSamples.length > 0 && (
             <div style={{ marginTop: 10 }}>
               <div className="hint" style={{ marginBottom: 4 }}>

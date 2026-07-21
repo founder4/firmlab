@@ -6,7 +6,14 @@
  * fuzzed. A reproduced crash is real dynamic evidence (the caller records it as confirmed_in_emulation); no crash
  * is reported as no crash, not as "secure". AFL's qemu mode is host-arch: a cross-arch target is reported honestly.
  *
- * The command + dictionary builders are pure and unit-tested; the runner composes them with runIsolated.
+ * Per-class harnesses (debt): the input-delivery method is chosen for the target, not fixed to file input.
+ *   - `file`    — a parser that reads a path from argv: AFL substitutes the testcase file for `@@` (the default).
+ *   - `stdin`   — a filter/CLI that reads stdin: no `@@`, AFL feeds the testcase on stdin.
+ *   - `network` — a socket daemon (httpd/telnetd/…): a desock preload redirects the daemon's socket I/O to the
+ *                 fuzzed stdin. desock is opt-in (FIRMLAB_DESOCK → a guest-arch libdesock); without it the network
+ *                 harness degrades honestly to raw stdin with a note, rather than pretending the socket was fuzzed.
+ *
+ * The command/dictionary builders and the harness picker are pure and unit-tested; the runner composes them.
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -19,10 +26,17 @@ import type { JobHandle } from './jobs.js';
 
 const execFileAsync = promisify(execFile);
 
+/** How the fuzzed testcase reaches the target. */
+export type HarnessClass = 'file' | 'stdin' | 'network';
+
 export interface FuzzResult {
   available: boolean;
   reason?: string;
   binary: string;
+  /** The input-delivery harness actually used. */
+  harness: HarnessClass;
+  /** An honest caveat when the harness degraded (e.g. a network daemon fuzzed without a desock preload). */
+  harnessNote?: string;
   seconds: number;
   execsDone: number | null;
   crashes: number;
@@ -31,13 +45,54 @@ export interface FuzzResult {
   command: string;
 }
 
-/** Pure: the AFL++ qemu-mode invocation for a target binary. File input is delivered via the `@@` placeholder. */
+/** Common firmware network-daemon / CGI names — the signal for auto-selecting the desock (network) harness. */
+const NETWORK_DAEMON_NAMES = [
+  'httpd',
+  'lighttpd',
+  'uhttpd',
+  'mini_httpd',
+  'goahead',
+  'boa',
+  'thttpd',
+  'telnetd',
+  'utelnetd',
+  'dropbear',
+  'sshd',
+  'upnpd',
+  'miniupnpd',
+  'wscd',
+  'dnsmasq',
+  'ftpd',
+  'vsftpd',
+  'tr069',
+  'cwmpd',
+];
+
+/** Pure: is this target a network daemon / CGI (so the network/desock harness fits)? */
+export function isNetworkDaemon(binaryPath: string): boolean {
+  const base = binaryPath.split('/').pop() ?? '';
+  return NETWORK_DAEMON_NAMES.includes(base) || binaryPath.endsWith('.cgi');
+}
+
+/**
+ * Pure: pick the input-delivery harness for a target from its path. A network daemon/CGI → the desock `network`
+ * harness; everything else → a `file` (`@@`) parser (the safe default, and what most standalone fuzz targets are).
+ * `stdin` is never auto-selected from a path alone — a caller who knows the tool reads stdin selects it explicitly.
+ */
+export function chooseHarness(binaryPath: string): HarnessClass {
+  return isNetworkDaemon(binaryPath) ? 'network' : 'file';
+}
+
+/**
+ * Pure: the AFL++ qemu-mode invocation for a target. File input is delivered via the `@@` placeholder; the
+ * `stdin` option drops `@@` so AFL feeds each testcase on stdin (also how the network/desock harness runs).
+ */
 export function buildFuzzCommand(
   target: string,
   seedsDir: string,
   outDir: string,
   seconds: number,
-  dictPath?: string,
+  opts: { dictPath?: string; stdin?: boolean } = {},
 ): string[] {
   return [
     'afl-fuzz',
@@ -52,10 +107,10 @@ export function buildFuzzCommand(
     outDir,
     '-V',
     String(seconds),
-    ...(dictPath ? ['-x', dictPath] : []),
+    ...(opts.dictPath ? ['-x', opts.dictPath] : []),
     '--',
     target,
-    '@@',
+    ...(opts.stdin ? [] : ['@@']),
   ];
 }
 
@@ -86,6 +141,24 @@ export async function detectFuzzing(): Promise<boolean> {
   return (await canRun('afl-fuzz')) && (await canRun('afl-qemu-trace'));
 }
 
+/**
+ * A desock preload for the network harness — a compiled libdesock/libaflppdesock that redirects a daemon's
+ * socket syscalls to stdin/stdout so AFL can fuzz "the network". Opt-in and arch-specific: `FIRMLAB_DESOCK`
+ * points at a `.so` built for the TARGET arch. Absent → the network harness degrades honestly to raw stdin.
+ */
+export function detectDesockPreload(env: NodeJS.ProcessEnv = process.env): string | null {
+  const p = env.FIRMLAB_DESOCK;
+  return p && safeExists(p) ? p : null;
+}
+
+function safeExists(p: string): boolean {
+  try {
+    return fs.existsSync(p);
+  } catch {
+    return false;
+  }
+}
+
 /** Mine the target's strings with rabin2 for the AFL dictionary (empty if radare2 is absent). */
 async function rabin2Strings(target: string): Promise<string[]> {
   try {
@@ -107,6 +180,7 @@ function unavailable(binary: string, reason: string): FuzzResult {
     available: false,
     reason,
     binary,
+    harness: 'file',
     seconds: 0,
     execsDone: null,
     crashes: 0,
@@ -116,13 +190,23 @@ function unavailable(binary: string, reason: string): FuzzResult {
   };
 }
 
+/** A varied seed corpus per harness — protocol-shaped inputs for network daemons, generic bytes otherwise. */
+const GENERIC_SEEDS = ['A', '0000', 'admin=1&x=2', '\x7fELF', '\x00\x01\x02\x03'];
+const NETWORK_SEEDS = [
+  'GET / HTTP/1.0\r\n\r\n',
+  'POST /cgi-bin/test HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nabc',
+  'USER admin\r\n',
+  'M-SEARCH * HTTP/1.1\r\n\r\n',
+];
+
 /** Fuzz one rootfs binary for a bounded time under isolation, then report reproduced crashes (honest, no guess). */
 export async function runFuzz(
   rootfsPath: string,
   binary: string,
   handle: JobHandle,
-  seconds = 60,
+  opts: { seconds?: number; harness?: HarnessClass | 'auto' } = {},
 ): Promise<FuzzResult> {
+  const seconds = opts.seconds ?? 60;
   if (!(await detectFuzzing())) {
     handle.log('AFL++ not installed — coverage-guided fuzzing unavailable (opt-in layer, like Ghidra).');
     return unavailable(binary, 'AFL++ not installed');
@@ -130,13 +214,42 @@ export async function runFuzz(
   const abs = resolveInsideRootfs(rootfsPath, binary);
   if (!abs) return unavailable(binary, 'binary not found in rootfs');
 
+  const harness: HarnessClass = !opts.harness || opts.harness === 'auto' ? chooseHarness(binary) : opts.harness;
+  const stdinDelivery = harness !== 'file';
+
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-fuzz-'));
   const seeds = path.join(work, 'seeds');
   const out = path.join(work, 'out');
   fs.mkdirSync(seeds, { recursive: true });
-  // A small, varied seed corpus so AFL has something to mutate from.
-  for (const [i, s] of ['A', 'GET / HTTP/1.0\n', '0000', 'admin=1&x=2'].entries())
-    fs.writeFileSync(path.join(seeds, `seed${i}`), s);
+  const corpus = harness === 'network' ? NETWORK_SEEDS : GENERIC_SEEDS;
+  for (const [i, s] of corpus.entries()) fs.writeFileSync(path.join(seeds, `seed${i}`), s);
+
+  // Real firmware binaries are dynamically linked (musl/uClibc). Point qemu-user at the rootfs so it resolves the
+  // guest's own loader + libraries; without this, only static binaries run (execs stays 0).
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    AFL_SKIP_CPUFREQ: '1',
+    AFL_NO_AFFINITY: '1',
+    AFL_BENCH_UNTIL_CRASH: '1',
+    AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: '1',
+    QEMU_LD_PREFIX: rootfsPath,
+  };
+
+  // The network harness needs a desock preload to turn the daemon's socket I/O into the fuzzed stdin.
+  let harnessNote: string | undefined;
+  if (harness === 'network') {
+    const desock = detectDesockPreload();
+    if (desock) {
+      env.AFL_PRELOAD = desock;
+      env.QEMU_SET_ENV = `LD_PRELOAD=${desock}`; // qemu-user passes this into the guest
+      handle.log(`Network harness: desock preload ${desock} — socket I/O redirected to the fuzzed stdin.`);
+    } else {
+      harnessNote =
+        'No desock preload (set FIRMLAB_DESOCK to a guest-arch libdesock) — fuzzing the daemon on raw stdin ' +
+        'instead of its socket; a socket-only daemon may not consume the input. Honest degradation.';
+      handle.log(harnessNote);
+    }
+  }
 
   // Dictionary from the binary's own strings — big fuzzing win for text protocols/parsers.
   const dictStrings = await rabin2Strings(abs);
@@ -147,24 +260,17 @@ export async function runFuzz(
     handle.log(`Dictionary: ${dictStrings.length} strings from rabin2.`);
   }
 
-  const argv = buildFuzzCommand(abs, seeds, out, seconds, dictPath);
-  handle.log(`Fuzzing ${binary} for ${seconds}s under isolation: ${argv.join(' ')}`);
+  const argv = buildFuzzCommand(abs, seeds, out, seconds, {
+    ...(dictPath ? { dictPath } : {}),
+    stdin: stdinDelivery,
+  });
+  handle.log(`Fuzzing ${binary} for ${seconds}s under isolation [${harness} harness]: ${argv.join(' ')}`);
 
   try {
     const res = await runIsolated(argv, {
       // Fuzzing is memory-hungry (AFL's qemu maps a lot of virtual address space) — raise the AS cap for it.
       limits: { ...loadIsolationLimits(), addressSpaceBytes: 4096 * 1024 * 1024, wallMs: (seconds + 30) * 1000 },
-      env: {
-        ...process.env,
-        AFL_SKIP_CPUFREQ: '1',
-        AFL_NO_AFFINITY: '1',
-        AFL_BENCH_UNTIL_CRASH: '1',
-        // In a container we can't rewrite /proc/sys/kernel/core_pattern — tell AFL to proceed anyway.
-        AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: '1',
-        // Real firmware binaries are dynamically linked (musl/uClibc). Point qemu-user at the rootfs so it
-        // resolves the guest's own loader + libraries; without this, only static binaries run (execs stays 0).
-        QEMU_LD_PREFIX: rootfsPath,
-      },
+      env,
     });
     const crashDir = path.join(out, 'default', 'crashes');
     let crashSamples: { name: string; hexPreview: string }[] = [];
@@ -191,6 +297,8 @@ export async function runFuzz(
     return {
       available: true,
       binary,
+      harness,
+      ...(harnessNote ? { harnessNote } : {}),
       seconds,
       execsDone,
       crashes,

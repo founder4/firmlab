@@ -21,6 +21,7 @@ const mockApi = api as unknown as {
 const fuzzResult = (o: Record<string, unknown> = {}) => ({
   available: true,
   binary: 'bin/busybox',
+  harness: 'file',
   seconds: 60,
   execsDone: 12000,
   crashes: 0,
@@ -58,11 +59,19 @@ describe('FuzzPanel — AFL++ honesty', () => {
     expect(mockApi.runFuzz).not.toHaveBeenCalled();
   });
 
-  it('runs the fuzzer against the entered binary', async () => {
+  it('runs the fuzzer against the entered binary (auto harness by default)', async () => {
     render(<FuzzPanel imageId="img1" />);
     fireEvent.change(await screen.findByPlaceholderText('bin/busybox'), { target: { value: 'sbin/httpd' } });
     fireEvent.click(screen.getByRole('button', { name: 'Fuzz' }));
-    await waitFor(() => expect(mockApi.runFuzz).toHaveBeenCalledWith('img1', 'sbin/httpd', 60));
+    await waitFor(() => expect(mockApi.runFuzz).toHaveBeenCalledWith('img1', 'sbin/httpd', 60, 'auto'));
+  });
+
+  it('lets you pick the network (desock) harness for a daemon', async () => {
+    render(<FuzzPanel imageId="img1" />);
+    fireEvent.change(await screen.findByPlaceholderText('bin/busybox'), { target: { value: 'sbin/httpd' } });
+    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'network' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Fuzz' }));
+    await waitFor(() => expect(mockApi.runFuzz).toHaveBeenCalledWith('img1', 'sbin/httpd', 60, 'network'));
   });
 
   it('surfaces a reproduced crash as a recorded fuzz-crash finding', async () => {

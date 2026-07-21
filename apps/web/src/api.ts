@@ -98,10 +98,14 @@ export interface RenodeResult {
 }
 
 /** AFL++ coverage-guided fuzz result — honest crash count (0 is a real, valid outcome for hardened binaries). */
+export type HarnessClass = 'file' | 'stdin' | 'network';
+
 export interface FuzzResult {
   available: boolean;
   reason?: string;
   binary: string;
+  harness: HarnessClass;
+  harnessNote?: string;
   seconds: number;
   execsDone: number | null;
   crashes: number;
@@ -460,8 +464,12 @@ export const api = {
     post<{ jobId: string }>(`/api/images/${id}/renode`, opts ?? {}),
   renodeResult: (id: string) => get<{ result: RenodeResult | null }>(`/api/images/${id}/renode`).then((r) => r.result),
   fuzzStatus: () => get<{ available: boolean }>('/api/fuzz/status'),
-  runFuzz: (id: string, binary: string, seconds?: number) =>
-    post<{ jobId: string }>(`/api/images/${id}/fuzz`, { binary, ...(seconds ? { seconds } : {}) }),
+  runFuzz: (id: string, binary: string, seconds?: number, harness?: HarnessClass | 'auto') =>
+    post<{ jobId: string }>(`/api/images/${id}/fuzz`, {
+      binary,
+      ...(seconds ? { seconds } : {}),
+      ...(harness && harness !== 'auto' ? { harness } : {}),
+    }),
   fuzzResult: (id: string) => get<{ result: FuzzResult | null }>(`/api/images/${id}/fuzz`).then((r) => r.result),
   extract: (id: string) => post<{ jobId: string }>(`/api/images/${id}/extract`),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),

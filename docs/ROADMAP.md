@@ -183,6 +183,15 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
   Two fixes the real binary forced: `-m none` (a qemu-mode fork dies under an `--as` cap) and `QEMU_LD_PREFIX=<rootfs>`
   (dynamically-linked firmware binaries need their own loader/libs, which static test targets masked). Still opt-in:
   no `afl-fuzz` → honest `available:false`.
+- **✅ Fuzzing — per-class harnesses** (beyond file-input `@@`). The input-delivery method is now chosen for the
+  target, not fixed: `file` (parser reads a path via `@@`), `stdin` (filter/CLI reads stdin — AFL feeds it, no `@@`),
+  and `network` (socket daemon — a desock preload redirects the daemon's socket I/O to the fuzzed stdin). Auto-selects
+  the network harness for daemon/CGI names, else `file`; the caller/UI can override. desock is opt-in and arch-specific
+  (`FIRMLAB_DESOCK` → a guest-arch libdesock); absent → the network harness degrades honestly to raw stdin with a note,
+  never pretending the socket was fuzzed. `FuzzResult` carries the `harness` used. Validated against a real AFL++: a
+  stdin-reading crasher is reproduced under the `stdin` harness (input delivered on stdin) but NOT under `file`
+  (stdin left empty) — the harness distinction, proven. Command builder + harness picker + desock detection are pure
+  and unit-tested; a `harness` selector is wired through the `/fuzz` route and the web `FuzzPanel`.
 - **✅ RTOS/Renode** (debt #4) — `providers/renode.ts` boots a real MCU firmware under Renode and decides "booted" from
   the actual UART bytes (per-UART file backend), never assumption; it discovers the right UART by following the
   platform `.repl`'s `using` include graph, and degrades honestly to `blocked_by_platform` without Renode or a
@@ -214,7 +223,8 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
 ### Remaining backlog
 
 - Renode: UEFI/chipsec integration; optional finer sub-family precision (e.g. STM32F429 → its exact cpu repl vs the F4 board).
-- Fuzzing: per-class trigger harnesses (stdin/desock network daemons) beyond file-input (`@@`) targets.
+- Fuzzing: ship a prebuilt guest-arch libdesock (per common arch) so the network harness works out-of-the-box, not
+  only when `FIRMLAB_DESOCK` is provided; cmplog/compcov for magic-byte solving.
 - External-intelligence: sources beyond OSV/security.txt (NVD/PSIRT/CNA), a downloadable disclosure-report generator,
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.

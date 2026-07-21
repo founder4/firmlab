@@ -23,12 +23,16 @@ export async function fuzzRoutes(app: FastifyInstance): Promise<void> {
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
     const rootfs = latestRootfs(id);
     if (!rootfs) return reply.status(400).send({ error: 'Run extraction first — fuzzing needs an extracted rootfs' });
-    const body = (req.body ?? {}) as { binary?: string; seconds?: number };
+    const body = (req.body ?? {}) as { binary?: string; seconds?: number; harness?: string };
     if (!body.binary) return reply.status(400).send({ error: 'No target binary specified' });
     const seconds = Math.min(600, Math.max(10, Number(body.seconds ?? 60)));
     const binary = body.binary;
-    const jobId = startJob(id, 'fuzz', { binary, seconds }, async (h) => {
-      const result = await runFuzz(rootfs, binary, h, seconds);
+    const HARNESSES = ['auto', 'file', 'stdin', 'network'] as const;
+    const harness = (HARNESSES as readonly string[]).includes(body.harness ?? '')
+      ? (body.harness as (typeof HARNESSES)[number])
+      : 'auto';
+    const jobId = startJob(id, 'fuzz', { binary, seconds, harness }, async (h) => {
+      const result = await runFuzz(rootfs, binary, h, { seconds, harness });
       // A reproduced crash is real dynamic evidence — record it as a confirmed finding tied to the binary.
       if (result.crashes > 0) {
         const draft: FindingDraft = {
