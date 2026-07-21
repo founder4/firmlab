@@ -5,9 +5,24 @@
  * for SBOM+CVEs, and the QEMU/Renode family for emulation. This module answers "what can this deployment do?"
  */
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+
+/** Resolve a binary on PATH (executable), for tools whose --version probe is too slow/costly to run (e.g. a JVM). */
+function resolveOnPath(bin: string): string | null {
+  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+    if (!dir) continue;
+    const p = path.join(dir, bin);
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      return p;
+    } catch {}
+  }
+  return null;
+}
 
 export type ToolId =
   | 'binwalk'
@@ -39,6 +54,9 @@ interface ToolSpec {
   unlocks: string;
   /** Feature group for the UI capabilities panel. */
   group: 'extract' | 'analyze' | 'sbom' | 'emulate' | 'secrets';
+  /** Detect by PATH existence instead of executing — for tools whose probe is too slow (Ghidra's JVM startup > the
+   *  probe timeout) or exits non-zero on --help. */
+  detectByExistence?: boolean;
 }
 
 const TOOLS: readonly ToolSpec[] = [
@@ -61,6 +79,9 @@ const TOOLS: readonly ToolSpec[] = [
     probe: ['-help'],
     unlocks: 'Ghidra headless decompilation',
     group: 'analyze',
+    // Ghidra's analyzeHeadless spins a JVM + Ghidra init on every call — far longer than the probe timeout, and
+    // `-help` exits non-zero. Detect by existence so an installed Ghidra is reported (and thus usable), not "absent".
+    detectByExistence: true,
   },
   { id: 'syft', bin: 'syft', probe: ['version'], unlocks: 'SBOM generation', group: 'sbom' },
   { id: 'grype', bin: 'grype', probe: ['version'], unlocks: 'CVE matching (N-day)', group: 'sbom' },
@@ -122,6 +143,17 @@ export interface ToolStatus {
 let cache: ToolStatus[] | null = null;
 
 async function probe(spec: ToolSpec): Promise<ToolStatus> {
+  if (spec.detectByExistence) {
+    const resolved = resolveOnPath(spec.bin);
+    return {
+      id: spec.id,
+      bin: spec.bin,
+      available: resolved !== null,
+      ...(resolved ? { version: 'installed' } : {}),
+      unlocks: spec.unlocks,
+      group: spec.group,
+    };
+  }
   try {
     const { stdout, stderr } = await execFileAsync(spec.bin, spec.probe, { timeout: 4000 });
     const out = `${stdout}${stderr}`.split('\n')[0]?.trim().slice(0, 120) ?? '';
