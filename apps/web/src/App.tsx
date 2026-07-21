@@ -53,7 +53,13 @@ const SECTION_GROUPS: { label: string; items: { id: string; label: string; icon:
   { label: 'Components', items: [{ id: 'sbom', label: 'SBOM & CVEs', icon: 'sbom' }] },
   { label: 'Execution', items: [{ id: 'simulate', label: 'Simulation', icon: 'simulate' }] },
   { label: 'Comparison', items: [{ id: 'diff', label: 'Diff', icon: 'diff' }] },
-  { label: 'Assistance', items: [{ id: 'agent', label: 'Agent', icon: 'agent' }] },
+  {
+    label: 'Assistance',
+    items: [
+      { id: 'opacidad', label: 'Autonomous scan', icon: 'shield' },
+      { id: 'agent', label: 'Agent', icon: 'agent' },
+    ],
+  },
 ];
 
 export const SECTION_LABEL: Record<string, string> = Object.fromEntries(

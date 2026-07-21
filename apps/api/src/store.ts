@@ -27,7 +27,8 @@ export type JobKind =
   | 'rtos'
   | 'compmap'
   | 'services'
-  | 'fcc';
+  | 'fcc'
+  | 'opacidad';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {

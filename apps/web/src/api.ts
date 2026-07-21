@@ -538,6 +538,32 @@ async function del<T>(url: string): Promise<T> {
 /** The deep static-analysis providers runnable per image; their findings appear in the dossier. */
 export type AnalysisKind = 'uboot' | 'fsaudit' | 'certs' | 'rtos' | 'compmap' | 'services' | 'fcc';
 
+/** The result of a W9 autonomous scan (opacidad): the class-routed plan, per-worker outcomes, and the narrative. */
+export interface OpacidadResult {
+  firmwareClass: string;
+  arch: string;
+  classRationale?: string;
+  plan: { worker: string; reason: string }[];
+  steps: {
+    worker: string;
+    status: 'ran' | 'degraded' | 'skipped' | 'not-built';
+    summary: string;
+    note?: string;
+    findingCount?: number;
+  }[];
+  findings: {
+    total: number;
+    bySeverity: Record<string, number>;
+    byProofState: Record<string, number>;
+    top: { title: string; severity: string; proofState: string; source: string }[];
+  };
+  attackPath: string[];
+  narrative: string;
+  narrativeSource: 'llm' | 'deterministic';
+  honestGaps: string[];
+  llm?: { provider: string; model: string };
+}
+
 /** A saved emulation preset — a named, reusable recipe config for an image. */
 export interface EmulationPreset {
   id: string;
@@ -600,6 +626,10 @@ export const api = {
   savePreset: (id: string, p: { name: string; mode: EmulationPreset['mode']; binary?: string; args?: string[] }) =>
     post<{ preset: EmulationPreset }>(`/api/images/${id}/presets`, p).then((r) => r.preset),
   deletePreset: (presetId: string) => del<{ deleted: string }>(`/api/presets/${presetId}`),
+  /** W9 autonomous scan: plan the class-routed worker chain, run it, compose the narrative. */
+  runOpacidad: (id: string) => post<{ jobId: string }>(`/api/images/${id}/opacidad`),
+  opacidadResult: (id: string) =>
+    get<{ result: OpacidadResult | null }>(`/api/images/${id}/opacidad`).then((r) => r.result),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),
   job: (jobId: string) => get<{ job: Job }>(`/api/jobs/${jobId}`).then((r) => r.job),
   sbom: (id: string) => get<{ result: SbomResult | null }>(`/api/images/${id}/sbom`).then((r) => r.result),

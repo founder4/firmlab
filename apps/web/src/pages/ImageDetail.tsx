@@ -32,6 +32,7 @@ import { AnalysisActionsPanel } from '../components/AnalysisActionsPanel';
 import { EntropyChart } from '../components/EntropyChart';
 import { FilesystemTree } from '../components/FilesystemTree';
 import { FuzzPanel } from '../components/FuzzPanel';
+import { OpacidadPanel } from '../components/OpacidadPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StructureMap } from '../components/StructureMap';
@@ -48,6 +49,7 @@ type TabId =
   | 'binaries'
   | 'diff'
   | 'simulate'
+  | 'opacidad'
   | 'agent';
 
 /** Sections that operate on the extracted rootfs / tools rather than the cached static analysis. */
@@ -59,6 +61,7 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'binaries',
   'diff',
   'simulate',
+  'opacidad',
   'agent',
 ]);
 
@@ -74,6 +77,7 @@ const SECTION_TITLES: Record<TabId, string> = {
   binaries: 'Binaries',
   diff: 'Diff',
   simulate: 'Simulation',
+  opacidad: 'Autonomous scan',
   agent: 'Agent',
 };
 
@@ -147,6 +151,7 @@ export function ImageDetail(): JSX.Element {
           <AnalysisActionsPanel imageId={id} />
         </>
       )}
+      {tab === 'opacidad' && <OpacidadPanel imageId={id} />}
       {tab === 'agent' && <AgentPanel imageId={id} />}
       {!analysis && !NO_ANALYSIS_TABS.has(tab) && (
         <div className="empty">

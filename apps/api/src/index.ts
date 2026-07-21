@@ -29,6 +29,7 @@ import { ghidraRoutes } from './routes/ghidra.js';
 import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
+import { opacidadRoutes } from './routes/opacidad.js';
 import { presetsRoutes } from './routes/presets.js';
 import { renodeRoutes } from './routes/renode.js';
 import { reportRoutes } from './routes/report.js';
@@ -116,6 +117,7 @@ async function main(): Promise<void> {
       await api.register(compmapRoutes);
       await api.register(servicemapRoutes);
       await api.register(fccRoutes);
+      await api.register(opacidadRoutes);
       await api.register(presetsRoutes);
       await api.register(researchRoutes);
       await api.register(reportRoutes);
