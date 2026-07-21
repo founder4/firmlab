@@ -1471,6 +1471,8 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
   }
 
   const osv = result?.osv;
+  const nvd = result?.nvd;
+  const kev = result?.kev;
   return (
     <div className="panel">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -1494,23 +1496,78 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
         </button>
       </div>
       <div className="panel-sub">
-        Sends component names + versions to {(status.allowlist ?? ['api.osv.dev']).join(', ')} — never firmware bytes,
-        secrets, or keys. A published advisory for a present component is a lead, not a confirmed bug (reachability is
-        decided per-image).
+        Sends only component names + versions to the vuln databases (OSV, NVD); downloads the CISA KEV catalog to flag
+        known-exploited CVEs locally. Never firmware bytes, secrets, or keys. A published advisory for a present
+        component is a lead, not a confirmed bug (reachability is decided per-image).
       </div>
 
       {result && osv && (
         <div style={{ marginTop: 4 }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-            <span className="badge">{osv.queried} queried</span>
-            <span className="badge">{osv.withAdvisories} components with advisories</span>
-            <span className="badge badge-high">{osv.totalAdvisories} published advisories</span>
+            <span className="badge" title="OSV: ecosystem-mapped SBOM components queried">
+              OSV {osv.queried} queried
+            </span>
+            <span className="badge badge-high">{osv.totalAdvisories} OSV advisories</span>
+            {nvd && (nvd.queried > 0 || nvd.totalAdvisories > 0) && (
+              <span className="badge" title="NVD: keyword search for components OSV could not map">
+                NVD {nvd.queried} queried · {nvd.totalAdvisories} advisories
+              </span>
+            )}
+            {kev?.checked && (
+              <span
+                className={`badge ${kev.matches.length > 0 ? 'badge-high' : 'badge-ok'}`}
+                title="CISA Known Exploited Vulnerabilities — exploited in the wild"
+              >
+                KEV {kev.matches.length} known-exploited
+              </span>
+            )}
             {result.provenance.vendors.slice(0, 4).map((v) => (
               <span key={v} className="badge badge-accent" title="Provenance hint (vendor)">
                 {v}
               </span>
             ))}
           </div>
+
+          {kev?.checked && kev.matches.length > 0 && (
+            <div
+              style={{
+                marginBottom: 12,
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                padding: '10px 12px',
+                background: 'var(--bg)',
+              }}
+            >
+              <div className="eyebrow" style={{ marginBottom: 6 }}>
+                ⚠ Known-exploited in the wild (CISA KEV) · reachability here still unverified
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {kev.matches.slice(0, 10).map((m) => (
+                  <div key={m.cveID} style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                    <a
+                      href={`https://nvd.nist.gov/vuln/detail/${m.cveID}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="badge badge-high mono"
+                    >
+                      {m.cveID}
+                    </a>
+                    <span className="mono hint">
+                      {m.vendorProject} {m.product}
+                    </span>
+                    {m.knownRansomware === 'Known' && (
+                      <span className="badge badge-high" title="Used in known ransomware campaigns">
+                        ransomware
+                      </span>
+                    )}
+                    <span className="hint" title={m.shortDescription}>
+                      added {m.dateAdded}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {osv.components.length > 0 && (
             <div className="table-wrap" style={{ marginBottom: 12 }}>
@@ -1547,6 +1604,51 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                               <span key={a.id} className="badge mono" title={a.summary}>
                                 {label}
                               </span>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {nvd && nvd.components.length > 0 && (
+            <div className="table-wrap" style={{ marginBottom: 12 }}>
+              <div className="eyebrow" style={{ marginBottom: 6 }}>
+                NVD · keyword matches for components OSV couldn't map (reachability unverified)
+              </div>
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Component</th>
+                    <th>CVEs (NVD keyword)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nvd.components.slice(0, 12).map((c) => (
+                    <tr key={`nvd-${c.name}@${c.version}`}>
+                      <td className="mono">
+                        {c.name} {c.version}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                          {c.advisories.slice(0, 8).map((a) => {
+                            const href = a.references[0] ?? `https://nvd.nist.gov/vuln/detail/${a.id}`;
+                            const sev = a.severity ? ` · ${a.severity}` : '';
+                            return (
+                              <a
+                                key={a.id}
+                                href={href}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="badge mono"
+                                title={`${a.summary}${sev}`}
+                              >
+                                {a.id}
+                              </a>
                             );
                           })}
                         </div>

@@ -14,9 +14,13 @@ export interface ResearchConfig {
   allowlist: string[];
   /** Per-request timeout for external calls. */
   timeoutMs: number;
+  /** Optional NVD API key (env `NVD_API_KEY`) — lifts NVD's anonymous rate limit; unset → conservative caps. */
+  nvdApiKey?: string;
 }
 
-const DEFAULT_ALLOWLIST = ['api.osv.dev'];
+// The published-vulnerability + exploited-in-the-wild sources FirmLab correlates against. Each is a free,
+// no-auth, authoritative aggregator; nothing else is contacted unless the operator extends the allowlist.
+const DEFAULT_ALLOWLIST = ['api.osv.dev', 'services.nvd.nist.gov', 'www.cisa.gov'];
 
 /**
  * Resolve the research config, or null when the track is off. Gated by FIRMLAB_RESEARCH so the deterministic,
@@ -31,6 +35,7 @@ export function loadResearchConfig(env: NodeJS.ProcessEnv = process.env): Resear
   return {
     allowlist: [...new Set([...DEFAULT_ALLOWLIST, ...extra])],
     timeoutMs: Math.max(1000, Number(env.FIRMLAB_RESEARCH_TIMEOUT_MS ?? 15000)),
+    ...(env.NVD_API_KEY ? { nvdApiKey: env.NVD_API_KEY } : {}),
   };
 }
 

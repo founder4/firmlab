@@ -18,6 +18,7 @@ export interface EgressLedger {
 export function buildEgressLedger(
   components: { name: string; version: string }[],
   provenance: ProvenanceFingerprint,
+  opts: { nvdCandidates?: number } = {},
 ): EgressLedger {
   const destinations: EgressLedger['destinations'] = [];
   if (components.length > 0) {
@@ -27,6 +28,19 @@ export function buildEgressLedger(
       count: components.length,
     });
   }
+  if (opts.nvdCandidates && opts.nvdCandidates > 0) {
+    destinations.push({
+      host: 'services.nvd.nist.gov',
+      sends: 'component name + version as a keyword, for the components OSV could not map (no bytes)',
+      count: opts.nvdCandidates,
+    });
+  }
+  // KEV is a one-way download: the public catalog comes IN, nothing about the firmware goes OUT.
+  destinations.push({
+    host: 'www.cisa.gov',
+    sends: 'nothing about your firmware — downloads the public KEV catalog; CVEs are cross-referenced locally',
+    count: 0,
+  });
   return {
     destinations,
     neverSent: [

@@ -11,8 +11,10 @@ import { type IntelContext, runIntelSynthesis } from '../agent/intel.js';
 import { credentialOtherImages, deviceFamilyKey, hashSecret, listReachabilityPriors } from '../corpus.js';
 import { loadLlmConfig } from '../llm.js';
 import type { JobHandle } from '../providers/jobs.js';
+import { type KevResult, collectCveIds, fetchAndMatchKev } from '../providers/kev.js';
 import { type KeyMaterial, summarizeKeyMaterial } from '../providers/keys.js';
-import { type OsvBatchResult, queryOsvBatch } from '../providers/osv.js';
+import { type NvdBatchResult, queryNvdBatch } from '../providers/nvd.js';
+import { type OsvBatchResult, osvEcosystem, queryOsvBatch } from '../providers/osv.js';
 import { type ProvenanceFingerprint, buildProvenanceFingerprint } from '../providers/provenance.js';
 import type { SbomResult } from '../providers/sbom.js';
 import { type SecurityTxt, fetchSecurityTxt } from '../providers/securitytxt.js';
@@ -25,6 +27,8 @@ export interface ResearchResult {
   provenance: ProvenanceFingerprint;
   egress: EgressLedger;
   osv: OsvBatchResult;
+  nvd: NvdBatchResult;
+  kev: KevResult;
   keyMaterial: KeyMaterial[];
   securityContacts: SecurityTxt[];
   synthesis?: { text: string; model: string; provider: string };
@@ -130,12 +134,31 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
 
   const sbomJob = listJobs(imageId).find((j) => j.kind === 'sbom' && j.status === 'done' && j.resultJson);
   const packages = sbomJob?.resultJson ? (JSON.parse(sbomJob.resultJson) as SbomResult).packages : [];
-  const egress = buildEgressLedger(packages, provenance);
+  // NVD covers exactly OSV's gap: the components OSV can't map to an ecosystem. Compute that set up front so the
+  // egress ledger can declare precisely how many names go to NVD before anything leaves.
+  const nvdCandidates = packages.filter((p) => !osvEcosystem(p.type));
+  const egress = buildEgressLedger(packages, provenance, { nvdCandidates: nvdCandidates.length });
 
   handle.log(`Egress: ${packages.length} component names+versions → api.osv.dev (no firmware bytes leave).`);
   const osv = await queryOsvBatch(packages, cfg);
   handle.log(
     `OSV: ${osv.queried} queried, ${osv.skipped} unmapped, ${osv.withAdvisories} with advisories (${osv.totalAdvisories} total).`,
+  );
+
+  // Source #2 — NVD by keyword for the OSV-unmapped components (rate-limit capped; honest about what it skipped).
+  const nvd = await queryNvdBatch(nvdCandidates, cfg);
+  handle.log(
+    `NVD: ${nvd.queried} queried${nvd.notQueried > 0 ? ` (${nvd.notQueried} more skipped — rate-limit cap)` : ''}, ${nvd.withAdvisories} with advisories (${nvd.totalAdvisories} total).`,
+  );
+
+  // Source #3 — CISA KEV: which of the discovered CVEs are known-exploited in the wild. Downloads the public
+  // catalog and cross-references locally, so nothing about the firmware leaves for this step.
+  const cveIds = collectCveIds(osv.components, nvd.components);
+  const kev = await fetchAndMatchKev(cveIds, cfg);
+  handle.log(
+    kev.checked
+      ? `KEV: ${cveIds.length} discovered CVEs cross-referenced → ${kev.matches.length} known-exploited (catalog: ${kev.catalogSize}).`
+      : `KEV: not checked (${kev.reason}).`,
   );
 
   // 5.2 — embedded key material from the image (corpus-cross-referenced) + a scan of the extracted rootfs, where
@@ -166,11 +189,21 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
       .filter((p) => p.proofState === 'confirmed_in_emulation' || p.proofState === 'confirmed_full_system')
       .slice(0, 10)
       .map((p) => ({ subject: p.subject, proofState: p.proofState }));
-    const ctx: IntelContext = { provenance, osv, reachablePriors, keyMaterial, securityContacts };
+    const ctx: IntelContext = { provenance, osv, nvd, kev, reachablePriors, keyMaterial, securityContacts };
     handle.log(`Synthesizing cited intelligence brief via ${llm.provider} (${llm.model})…`);
     const r = await runIntelSynthesis(ctx, llm);
     synthesis = { text: r.text, model: r.model, provider: r.provider };
   }
 
-  return { enabled: true, provenance, egress, osv, keyMaterial, securityContacts, ...(synthesis ? { synthesis } : {}) };
+  return {
+    enabled: true,
+    provenance,
+    egress,
+    osv,
+    nvd,
+    kev,
+    keyMaterial,
+    securityContacts,
+    ...(synthesis ? { synthesis } : {}),
+  };
 }

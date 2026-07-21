@@ -509,6 +509,22 @@ egress — sin tocar `node:sqlite`.
   con ese contacto; lo envía el humano. Validado con `security.txt` real (cloudflare → contacto hackerone) y la rama
   no-allowlisted honesta.
 
-**Pendiente en este track** (deuda, `docs/ROADMAP.md`): más fuentes que OSV/security.txt (NVD/PSIRT/CNA); un
-generador de reporte de disclosure descargable; mecanismo de egress-allowlist reforzado (proxy/netns) y caché OSV en
-el corpus.
+**Fuentes OSINT #2 y #3 — NVD + CISA KEV (implementado).** Dos agentes de red más, con la misma disciplina
+allowlisted/citada/honesta:
+- **NVD** (`providers/nvd.ts`): cubre exactamente el hueco de OSV — busca por *keyword* (`name version`) en la
+  National Vulnerability Database los componentes que OSV **no puede mapear** a un ecosistema (busybox, dropbear,
+  kernel, daemons de vendor). Egress mínimo (nombre+versión como keyword, nunca bytes). Rate-limit anónimo estricto
+  → cap de consultas + reporte honesto de lo NO consultado (nunca truncado en silencio); `NVD_API_KEY` opcional
+  levanta el cap. Un hit es una *pista* (`needs_correlation`), no un bug confirmado.
+- **CISA KEV** (`providers/kev.ts`): descarga el catálogo público de Known Exploited Vulnerabilities y cruza los
+  CVEs hallados (OSV+NVD) **localmente** → marca cuáles están *explotados en real*. Cero egress sobre el firmware
+  (solo baja el catálogo). KEV sube prioridad, **no** confirma reachability aquí (sigue siendo per-imagen). La
+  síntesis prioriza los KEV primero, citados, marcados "reachability unverified".
+- Allowlist por defecto ampliada (`api.osv.dev`, `services.nvd.nist.gov`, `www.cisa.gov`); ledger de egress declara
+  NVD (keywords) y KEV (descarga, nada sale). Constructores/parsers/cross-ref puros y testeados. **Validado con
+  servicios reales**: NVD real (HTTP 200, CVE con severidad CVSS parseada) y KEV real (catálogo de ~1650 entradas,
+  cruce correcto de Log4Shell `CVE-2021-44228` → producto Log4j2, ransomware=Known).
+
+**Pendiente en este track** (deuda, `docs/ROADMAP.md`): fuentes de vendor-PSIRT/CNA (sin API única gratuita); un
+generador de reporte de disclosure descargable; mecanismo de egress-allowlist reforzado (proxy/netns) y caché OSV/
+KEV en el corpus.

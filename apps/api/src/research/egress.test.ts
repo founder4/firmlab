@@ -27,9 +27,20 @@ describe('buildEgressLedger', () => {
     expect(osv?.sends).toMatch(/no bytes/i);
   });
 
-  it('always enumerates what is NEVER sent (bytes, secrets, keys)', () => {
+  it('declares NVD only for the OSV-unmapped candidates, and KEV as a firmware-free download', () => {
+    const l = buildEgressLedger([{ name: 'busybox', version: '1.35' }], provenance, { nvdCandidates: 3 });
+    const nvd = l.destinations.find((d) => d.host === 'services.nvd.nist.gov');
+    expect(nvd?.count).toBe(3);
+    expect(nvd?.sends).toMatch(/no bytes/i);
+    const kev = l.destinations.find((d) => d.host === 'www.cisa.gov');
+    expect(kev?.count).toBe(0); // a one-way download: nothing about the firmware leaves
+    expect(kev?.sends).toMatch(/nothing about your firmware/i);
+  });
+
+  it('always enumerates what is NEVER sent (bytes, secrets, keys); KEV download is the only always-on destination', () => {
     const l = buildEgressLedger([], provenance);
-    expect(l.destinations).toHaveLength(0); // nothing to query → no destinations
+    // No components → no OSV/NVD egress, but KEV still downloads the public catalog (count 0, firmware-free).
+    expect(l.destinations.map((d) => d.host)).toEqual(['www.cisa.gov']);
     expect(l.neverSent.join(' ')).toMatch(/firmware bytes/i);
     expect(l.neverSent.join(' ')).toMatch(/secret|key|credential/i);
   });

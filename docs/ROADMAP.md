@@ -157,8 +157,20 @@ proves it directly — values redacted, never a cracking service. 5.3 (`provider
 vendor disclosure contact via RFC 9116 (/.well-known/security.txt) but ONLY for domains the operator allowlisted
 (others are reported "not checked — add to allowlist", no surprise egress); the intel brief drafts the report with
 that contact — the human sends it. Validated with a real security.txt (cloudflare → hackerone contact) and an
-embedded dropbear key flagged effectively-public. Not yet: sources beyond OSV/security.txt (NVD/PSIRT/CNA), a
-downloadable disclosure-report generator, hardened egress (proxy/netns), corpus OSV cache.
+embedded dropbear key flagged effectively-public.
+
+**OSINT sources #2 + #3 — NVD + CISA KEV (implemented, validated with real services).** Two more allowlisted
+research agents with the same discipline. **NVD** (`providers/nvd.ts`) fills OSV's gap: a keyword search of the
+National Vulnerability Database for the components OSV can't map to an ecosystem (busybox, dropbear, kernel, vendor
+daemons) — only a name+version leave, capped for NVD's anonymous rate limit with an honest count of what wasn't
+queried (`NVD_API_KEY` lifts the cap). **CISA KEV** (`providers/kev.ts`) downloads the public Known-Exploited-
+Vulnerabilities catalog and cross-references the discovered CVEs LOCALLY — nothing about the firmware leaves — to
+flag which are exploited in the wild; the brief surfaces KEV CVEs first, still marked reachability-unverified.
+Default allowlist widened to `api.osv.dev` + `services.nvd.nist.gov` + `www.cisa.gov`; the egress ledger declares
+NVD (keywords) and KEV (download-only). Validated live: real NVD (HTTP 200, CVSS severity parsed) + real KEV
+(~1650-entry catalog, Log4Shell `CVE-2021-44228` matched → Log4j2, ransomware=Known). Not yet: vendor-PSIRT/CNA
+sources (no single free API), a downloadable disclosure-report generator, hardened egress (proxy/netns), corpus
+OSV/KEV cache.
 
 ### Phase-4 tech debt — paid down
 
@@ -223,14 +235,27 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
   Asserts the transcript, including that the executor dispatches the RTOS rung to Renode and not the user-mode
   emulator (agent-level guard for the split-brain fix). This closes the deferred F7-adjacent hardening (paired with
   the new `FuzzPanel`/`SimulationMenu` web component tests).
+- **✅ UEFI/chipsec — the `uefi-bios` analysis track (`providers/chipsec.ts`).** A `uefi-bios` image has no Linux
+  rootfs and no MCU to emulate, so its track is chipsec's OFFLINE decode: parse the firmware volumes, carve every
+  EFI module, and reason about the inventory from the real bytes. A separate provider from Renode (not emulation);
+  proof tops out at `static_confirmed` — a fact about the image, never a device claim. The preflight routes
+  `uefi-bios` → the `uefi-chipsec` strategy (or `static-only` if chipsec is absent, degrading honestly), never to a
+  qemu rung; it surfaces as a recipe in the Simulation menu and its own `/chipsec` route + status. Findings: an
+  `info`/`static_confirmed` module inventory, an `info`/`needs_runtime_reproduction` embedded-application lead
+  (bootkit vector — a review lead, not a verdict), and a `critical` IOC match against a `FIRMLAB_UEFI_IOC`-pointed
+  known-bad-module feed (opt-in like `FIRMLAB_DESOCK`; empty built-in — no fabricated detections). The `.UEFI.lst`
+  parser, the type summary, and the scan are pure + unit-tested. Validated **in-container against real chipsec
+  1.13.16 on a real OVMF image**: 2 firmware volumes, 131 EFI modules with an exact type histogram (109 DXE_DRIVER,
+  13 PEIM, 2 APPLICATION…), the embedded-app lead firing on UiApp + Shell, and a non-UEFI blob blocking honestly
+  (`blocked_by_platform`, no fabricated tree).
 
 ### Remaining backlog
 
-- Renode / other classes: UEFI/chipsec integration — the `uefi-bios` class is detected but has no dynamic-analysis
-  track yet (a separate provider, not Renode itself).
+- chipsec follow-ups: parse Secure Boot posture from offline NVRAM (SecureBoot/SetupMode/test-key PK) when the
+  image carries the variable store; ship a curated `FIRMLAB_UEFI_IOC` feed of public UEFI-implant GUIDs.
 - Fuzzing: ship a prebuilt guest-arch libdesock (per common arch) so the network harness works out-of-the-box, not
   only when `FIRMLAB_DESOCK` is provided; cmplog/compcov for magic-byte solving.
-- External-intelligence: sources beyond OSV/security.txt (NVD/PSIRT/CNA), a downloadable disclosure-report generator,
+- External-intelligence: vendor-PSIRT/CNA sources (OSV + NVD + CISA KEV now integrated), a downloadable disclosure-report generator,
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
 

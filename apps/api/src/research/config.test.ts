@@ -7,9 +7,15 @@ describe('loadResearchConfig — the local-only gate', () => {
     expect(loadResearchConfig({ FIRMLAB_RESEARCH: '0' } as unknown as NodeJS.ProcessEnv)).toBeNull();
   });
 
-  it('enables with the default allowlist when the flag is set', () => {
+  it('enables with the default allowlist (OSV + NVD + CISA KEV) when the flag is set', () => {
     const c = loadResearchConfig({ FIRMLAB_RESEARCH: '1' } as unknown as NodeJS.ProcessEnv);
-    expect(c?.allowlist).toContain('api.osv.dev');
+    expect(c?.allowlist).toEqual(expect.arrayContaining(['api.osv.dev', 'services.nvd.nist.gov', 'www.cisa.gov']));
+    expect(c?.nvdApiKey).toBeUndefined();
+  });
+
+  it('picks up an optional NVD API key from the environment', () => {
+    const c = loadResearchConfig({ FIRMLAB_RESEARCH: '1', NVD_API_KEY: 'abc-123' } as unknown as NodeJS.ProcessEnv);
+    expect(c?.nvdApiKey).toBe('abc-123');
   });
 
   it('merges extra allowlist hosts without duplicating', () => {

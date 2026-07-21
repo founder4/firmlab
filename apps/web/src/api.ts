@@ -376,6 +376,24 @@ export interface OsvAdvisory {
   references: string[];
 }
 
+export interface NvdAdvisory {
+  id: string;
+  summary: string;
+  severity: string | null;
+  score: number | null;
+  references: string[];
+}
+
+export interface KevMatch {
+  cveID: string;
+  vendorProject: string;
+  product: string;
+  vulnerabilityName: string;
+  dateAdded: string;
+  shortDescription: string;
+  knownRansomware: string;
+}
+
 export interface ResearchResult {
   enabled: true;
   provenance: {
@@ -396,6 +414,14 @@ export interface ResearchResult {
     totalAdvisories: number;
     components: { name: string; version: string; ecosystem: string | null; advisories: OsvAdvisory[] }[];
   };
+  nvd: {
+    queried: number;
+    notQueried: number;
+    withAdvisories: number;
+    totalAdvisories: number;
+    components: { name: string; version: string; advisories: NvdAdvisory[] }[];
+  };
+  kev: { checked: boolean; catalogSize: number; matches: KevMatch[]; reason?: string };
   keyMaterial: { kind: string; redacted: string; effectivelyPublic: boolean; sharedInImages?: number }[];
   securityContacts: { domain: string; checked: boolean; found: boolean; reason?: string; contact: string[] }[];
   synthesis?: { text: string; model: string; provider: string };
