@@ -203,6 +203,13 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
   Discovery demo ELF fingerprints to `stm32f4`/cortex-m4/contiki and boots for real (`Contiki 3.x started` on uart4 →
   `confirmed_in_emulation`); seven families (incl. EFR32MG, ATSAMD51, SiFive FE310 — beyond the old three) each
   auto-map to a real bundled `.repl`; an unknown MCU blocks honestly. UEFI/chipsec still not integrated.
+- **✅ Agent RTOS/Renode path — validated end-to-end.** A mock-LLM driver (`apps/api/scripts/mock-llm.mjs` +
+  `apps/api/scripts/agent-renode-e2e.mjs`) drives a full conscious-autonomy session over a real RTOS ELF against a
+  real Renode: node ① triage → preflight → node ② picks the `rtos-renode` rung → zero-day skipped (no rootfs) →
+  the Phase-4 executor auto-runs under full isolation and **boots Contiki under Renode** → `confirmed_in_emulation`.
+  Asserts the transcript, including that the executor dispatches the RTOS rung to Renode and not the user-mode
+  emulator (agent-level guard for the split-brain fix). This closes the deferred F7-adjacent hardening (paired with
+  the new `FuzzPanel`/`SimulationMenu` web component tests).
 
 ### Remaining backlog
 
