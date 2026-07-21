@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { type ToolStatus, api } from '../api';
+import { TechniqueCoverage } from '../components/TechniqueCoverage';
 
 const GROUP_LABELS: Record<string, string> = {
   extract: 'Extraction',
@@ -66,6 +67,8 @@ export function Capabilities(): JSX.Element {
           </div>
         ))}
       </div>
+
+      <TechniqueCoverage />
     </div>
   );
 }
