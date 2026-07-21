@@ -128,6 +128,9 @@ export function selectPlatform(fp: McuFingerprint, hints: string[], catalog: str
     if (score === 0) continue;
     if (isBoard) score += 2; // a full board is more complete than a bare SoC/cpu for a bare-metal blob
     if (pref && base.includes(pref)) score += 8; // curated known-good board wins ties within a family
+    // A part-specific board (its filename names the exact MCU part, e.g. nucleo_h753zi) is the best match — the
+    // right SoC peripherals AND the right variant. Prefer it decisively over a family board or a bare cpu.
+    if (isBoard && ((fp.part && base.includes(fp.part)) || (fp.partCore && base.includes(fp.partCore)))) score += 8;
     // Deterministic: higher score, then the shorter (more exact) basename.
     if (!best || score > best.score || (score === best.score && base.length < best.baseLen)) {
       best = { repl, score, baseLen: base.length };

@@ -212,6 +212,10 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
   Discovery demo ELF fingerprints to `stm32f4`/cortex-m4/contiki and boots for real (`Contiki 3.x started` on uart4 →
   `confirmed_in_emulation`); seven families (incl. EFR32MG, ATSAMD51, SiFive FE310 — beyond the old three) each
   auto-map to a real bundled `.repl`; an unknown MCU blocks honestly. UEFI/chipsec still not integrated.
+  Sub-family precision: a **part-specific board** now wins over a family board or a bare cpu — the fingerprint exposes
+  the STM32 part core with the `stm32` prefix stripped (`stm32h753zi` → `h753`) since Renode's boards name themselves
+  inconsistently, so `STM32H753` → `boards/nucleo_h753zi.repl` (the exact SoC + peripherals) instead of a generic
+  cpu. Validated against the real 216-platform catalog with no regression to the STM32F4 Contiki boot.
 - **✅ Agent RTOS/Renode path — validated end-to-end.** A mock-LLM driver (`apps/api/scripts/mock-llm.mjs` +
   `apps/api/scripts/agent-renode-e2e.mjs`) drives a full conscious-autonomy session over a real RTOS ELF against a
   real Renode: node ① triage → preflight → node ② picks the `rtos-renode` rung → zero-day skipped (no rootfs) →
@@ -222,7 +226,8 @@ downloadable disclosure-report generator, hardened egress (proxy/netns), corpus 
 
 ### Remaining backlog
 
-- Renode: UEFI/chipsec integration; optional finer sub-family precision (e.g. STM32F429 → its exact cpu repl vs the F4 board).
+- Renode / other classes: UEFI/chipsec integration — the `uefi-bios` class is detected but has no dynamic-analysis
+  track yet (a separate provider, not Renode itself).
 - Fuzzing: ship a prebuilt guest-arch libdesock (per common arch) so the network harness works out-of-the-box, not
   only when `FIRMLAB_DESOCK` is provided; cmplog/compcov for magic-byte solving.
 - External-intelligence: sources beyond OSV/security.txt (NVD/PSIRT/CNA), a downloadable disclosure-report generator,

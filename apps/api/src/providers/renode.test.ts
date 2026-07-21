@@ -15,6 +15,8 @@ const CATALOG = [
   'cpus/efr32mg.repl',
   'cpus/cc2538.repl',
   'boards/sifive_fe310.repl',
+  'boards/nucleo_h753zi.repl',
+  'cpus/stm32h743.repl',
   'cpus/samd51.repl',
 ];
 
@@ -80,6 +82,11 @@ describe('selectPlatform', () => {
   it('matches families beyond the common three from the real catalog (RISC-V FE310, SAMD51)', () => {
     expect(selectPlatform(fpFrom('SiFive FE310-G002'), [], CATALOG)?.repl).toBe('boards/sifive_fe310.repl');
     expect(selectPlatform(fpFrom('Microchip ATSAMD51J20'), [], CATALOG)?.repl).toBe('cpus/samd51.repl');
+  });
+
+  it('prefers a part-specific board over a bare cpu (STM32H753 → nucleo_h753zi, not cpus/stm32h743)', () => {
+    // The board names the exact part (via its stripped core `h753`) and carries the SoC peripherals.
+    expect(selectPlatform(fpFrom('STM32H753ZI'), [], CATALOG)?.repl).toBe('boards/nucleo_h753zi.repl');
   });
 
   it('picks the exact part when the catalog names it (nRF52840 → cpus/nrf52840)', () => {

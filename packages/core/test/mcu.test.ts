@@ -98,6 +98,14 @@ describe('fingerprintMcu — vendor/family string markers', () => {
     });
   }
 
+  it('exposes the bare STM32 part core (prefix stripped) to match boards that drop it', () => {
+    const fp = fingerprintMcu(ascii('STM32H753ZI on a Nucleo-144 board'));
+    expect(fp.family).toBe('stm32h7');
+    expect(fp.part).toBe('stm32h753zi');
+    expect(fp.partCore).toBe('h753');
+    expect(fp.tokens).toContain('h753');
+  });
+
   it('normalizes the Cortex-M core and RTOS banner', () => {
     const fp = fingerprintMcu(ascii('Zephyr OS running on Cortex-M0+ core'));
     expect(fp.cortexM).toBe('cortex-m0plus');

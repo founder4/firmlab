@@ -30,6 +30,8 @@ export interface McuFingerprint {
   family: string | null;
   /** Most-specific part token seen in the strings, e.g. `stm32f407`, `nrf52840`, `efr32mg12`. */
   part: string | null;
+  /** The bare STM32 part core with the `stm32` prefix stripped (e.g. `h753`, `f429`) — matches boards that drop it. */
+  partCore: string | null;
   /** Silicon vendor, e.g. `st`, `nordic`, `silabs`, `ti`, `nxp`, `microchip`, `espressif`, `sifive`. */
   vendor: string | null;
   /** RTOS / SDK banner when present, e.g. `zephyr`, `freertos`, `contiki`, `riot`, `mbed`, `nuttx`. */
@@ -268,12 +270,17 @@ export function fingerprintMcu(buf: Uint8Array): McuFingerprint {
   if (map.flashBase !== null) evidence.push(`flash base 0x${map.flashBase.toString(16)}`);
   if (map.flashBase === 0x0800_0000 && arch === 'unknown') arch = 'arm';
 
-  const tokens = [...new Set([part, family, vendor, cortexM, rtos].filter((t): t is string => !!t))];
+  // STM32 boards name themselves inconsistently — `stm32f4_discovery` keeps the prefix, `nucleo_h753zi` drops it —
+  // so expose the bare core (letter + digits, e.g. `h753`, `f429`) as a token too, to match either style of board.
+  const partCore = part?.match(/stm32([a-z]\d{2,3})/)?.[1] ?? null;
+
+  const tokens = [...new Set([part, partCore, family, vendor, cortexM, rtos].filter((t): t is string => !!t))];
   return {
     arch,
     cortexM,
     family,
     part,
+    partCore,
     vendor,
     rtos,
     flashBase: map.flashBase,
