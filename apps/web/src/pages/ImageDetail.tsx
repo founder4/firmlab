@@ -119,6 +119,14 @@ export function ImageDetail(): JSX.Element {
         <a className="btn btn-sm" href={`/api/images/${id}/report`} download>
           <span aria-hidden="true">⭳</span> Report
         </a>
+        <a
+          className="btn btn-sm"
+          href={`/api/images/${id}/disclosure-report`}
+          download
+          title="Coordinated-disclosure draft (Markdown) — review before sending"
+        >
+          <span aria-hidden="true">⭳</span> Disclosure
+        </a>
       </div>
 
       {tab === 'dossier' && <DossierPanel image={image} />}
