@@ -22,6 +22,7 @@ import { type ExtractResult, runExtraction } from '../providers/extract.js';
 import { detectIsolation, runIsolated } from '../providers/isolate.js';
 import { startJob } from '../providers/jobs.js';
 import { QEMU_USER_BY_ARCH, type RuntimeCapabilities, computeRuntimeCapabilities } from '../providers/preflight.js';
+import { type RenodeResult, renodeHintsFrom, runRenode } from '../providers/renode.js';
 import { interpretTriggerRun, planDelivery } from '../providers/trigger.js';
 import {
   type AgentSessionRow,
@@ -470,6 +471,14 @@ function recordZerodayFindings(imageId: string, binary: string, candidates: Zero
  * teardown) — no human approval needed because the blast radius is contained. The proof state is capped at
  * emulation-level (proves the sandbox, never the device) and a Level-2 reachability prior is recorded.
  */
+/** Boot an RTOS/Cortex-M image under Renode for the agent: the raw firmware + MCU hints, no rootfs needed. */
+async function runRenodeForImage(imageId: string): Promise<RenodeResult> {
+  const row = getImage(imageId);
+  if (!row) throw new Error('Image not found');
+  const hints = renodeHintsFrom(row.identityJson ?? null, row.analysisJson ?? null);
+  return runRenode(row.path, hints);
+}
+
 async function autoRunIsolated(
   session: AgentSessionRow,
   gov: Governor,
@@ -477,6 +486,30 @@ async function autoRunIsolated(
   entry: TargetSelectionDecision['emulationPlan'][number],
 ): Promise<void> {
   const imageId = session.imageId;
+
+  // The RTOS track boots the whole firmware under Renode (its own isolation) — a different emulator, no rootfs.
+  if (entry.rung === 'rtos-renode') {
+    const rn = await runRenodeForImage(imageId);
+    updateBinaryEmulationStatus(imageId, entry.binary, rn.proofState);
+    const row = getImage(imageId);
+    if (row?.identityJson) {
+      recordReachabilityPrior(deviceFamilyKey(JSON.parse(row.identityJson)), entry.binary, rn.proofState, imageId);
+    }
+    recordStep(
+      session.id,
+      'emulation',
+      rn.booted ? 'ok' : rn.available ? 'error' : 'skipped',
+      { binary: entry.binary, rung: entry.rung, isolation: rn.isolation ?? 'full', autoApproved: true },
+      { booted: rn.booted, proofState: rn.proofState, platform: rn.platform, uartExcerpt: rn.uartExcerpt },
+      `Auto-booted the firmware under Renode → ${rn.proofState}. ${rn.reason} Proves the sandbox, not the device.`,
+      null,
+      0,
+      0,
+    );
+    persist(session, 'done', gov, null);
+    return;
+  }
+
   const rootfs = latestRootfs(imageId)?.rootfsPath;
   const emulator = QEMU_USER_BY_ARCH[caps.arch];
   const abs = rootfs ? resolveInsideRootfs(rootfs, entry.binary) : null;
@@ -580,13 +613,16 @@ async function runApprovedEmulation(
   const arch = (caps?.arch ?? 'unknown') as Architecture;
   const extractJobResult = latestRootfs(session.imageId);
   const rootfsPath = extractJobResult?.rootfsPath ?? null;
-  if (!rootfsPath) throw new Error('No extracted rootfs — cannot emulate');
+  // The RTOS rung boots the whole firmware under Renode and needs no rootfs; every qemu rung does.
+  if (chosen.rung !== 'rtos-renode' && !rootfsPath) throw new Error('No extracted rootfs — cannot emulate');
 
   const jobId = startJob(
     session.imageId,
-    'emulate',
+    chosen.rung === 'rtos-renode' ? 'renode' : 'emulate',
     { by: 'agent', session: sessionId, binary: chosen.binary, rung: chosen.rung },
     async (h) => {
+      if (chosen.rung === 'rtos-renode') return runRenodeForImage(session.imageId);
+      if (!rootfsPath) throw new Error('No extracted rootfs — cannot emulate');
       if (chosen.rung === 'chroot-service') return runChrootService(arch, rootfsPath, chosen.binary, h);
       if (chosen.rung === 'full-system') return runFullSystem(arch, rootfsPath, 8080, h);
       return runUserModeEmulation(arch, rootfsPath, chosen.binary, h);

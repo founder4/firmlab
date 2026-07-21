@@ -12,10 +12,32 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { ProofState } from '@firmlab/core';
+import type { ProofState, StaticAnalysis } from '@firmlab/core';
 import { type IsolationLevel, loadIsolationLimits, runIsolated } from './isolate.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Build the MCU/vendor hints that drive platform selection, from an image's stored identity + analysis JSON. Kept
+ * here (not in a route) so the emulation ladder, the /renode route, and the agent executor all select the same
+ * platform from the same evidence. Tolerates missing/garbled JSON — a bad blob just yields fewer hints.
+ */
+export function renodeHintsFrom(identityJson: string | null, analysisJson: string | null): string[] {
+  const hints: string[] = [];
+  try {
+    if (identityJson) {
+      const id = JSON.parse(identityJson) as { firmwareClass?: string; arch?: string; bootloader?: string | null };
+      hints.push(id.firmwareClass ?? '', id.arch ?? '', id.bootloader ?? '');
+    }
+  } catch {}
+  try {
+    if (analysisJson) {
+      const a = JSON.parse(analysisJson) as StaticAnalysis;
+      hints.push(...a.secrets.slice(0, 40).map((s) => s.value), ...a.signatures.map((s) => s.description));
+    }
+  } catch {}
+  return hints.filter(Boolean);
+}
 
 /** Where Renode installs its bundled platform descriptions (portable release / package). */
 export const RENODE_PLATFORMS_DIR = '/opt/renode/platforms';

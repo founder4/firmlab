@@ -30,6 +30,7 @@ import {
 } from '../api';
 import { EntropyChart } from '../components/EntropyChart';
 import { FilesystemTree } from '../components/FilesystemTree';
+import { FuzzPanel } from '../components/FuzzPanel';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StructureMap } from '../components/StructureMap';
 import { toast } from '../toast';
@@ -128,7 +129,12 @@ export function ImageDetail(): JSX.Element {
       {tab === 'sbom' && <SbomPanel imageId={id} />}
       {tab === 'binaries' && <BinariesPanel imageId={id} />}
       {tab === 'diff' && <DiffPanel imageId={id} />}
-      {tab === 'simulate' && <SimulationMenu imageId={id} />}
+      {tab === 'simulate' && (
+        <>
+          <SimulationMenu imageId={id} />
+          <FuzzPanel imageId={id} />
+        </>
+      )}
       {tab === 'agent' && <AgentPanel imageId={id} />}
       {!analysis && !NO_ANALYSIS_TABS.has(tab) && (
         <div className="empty">

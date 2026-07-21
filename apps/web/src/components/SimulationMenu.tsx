@@ -4,9 +4,17 @@
  * proof against the extracted rootfs, streaming the job log/result.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type EmulationMenu, type Job, api } from '../api';
+import { type EmulationMenu, type EmulationRecipe, type Job, type RenodeResult, api } from '../api';
 
-const MODE_ICON: Record<string, string> = { 'user-qemu': '▶', 'system-qemu': '🖥', renode: '🔬' };
+const MODE_ICON: Record<string, string> = {
+  'user-qemu': '▶',
+  'chroot-qemu': '🧩',
+  'system-qemu': '🖥',
+  renode: '🔬',
+};
+
+/** Recipes that take a rootfs binary argument (the others boot the whole image). */
+const NEEDS_BINARY = new Set(['user-qemu', 'chroot-qemu']);
 
 export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
   const [menu, setMenu] = useState<EmulationMenu | null>(null);
@@ -31,48 +39,59 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
     [],
   );
 
-  const runUser = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const { jobId } = await api.emulate(imageId, binary || undefined);
-      poll.current = window.setInterval(async () => {
-        const j = await api.job(jobId);
-        setJob(j);
-        if (j.status === 'done' || j.status === 'error') {
-          if (poll.current) window.clearInterval(poll.current);
-          setBusy(false);
-        }
-      }, 700);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
-  }, [imageId, binary]);
+  const pollJob = useCallback((jobId: string, after?: () => void) => {
+    poll.current = window.setInterval(async () => {
+      const j = await api.job(jobId);
+      setJob(j);
+      if (j.status === 'done' || j.status === 'error') {
+        if (poll.current) window.clearInterval(poll.current);
+        setBusy(false);
+        after?.();
+      }
+    }, 700);
+  }, []);
+
+  // Launch the deterministic mechanics for a recipe: user-mode qemu, chroot service, full-system boot, or a
+  // real Renode RTOS boot — each through its own job endpoint, then stream the result.
+  const runRecipe = useCallback(
+    async (recipe: EmulationRecipe) => {
+      setBusy(true);
+      setError(null);
+      setJob(null);
+      try {
+        let jobId: string;
+        if (recipe.mode === 'user-qemu') ({ jobId } = await api.emulate(imageId, binary || undefined));
+        else if (recipe.mode === 'chroot-qemu')
+          ({ jobId } = await api.emulateSystem(imageId, 'chroot-service', binary || undefined));
+        else if (recipe.mode === 'system-qemu') ({ jobId } = await api.emulateSystem(imageId, 'full-system'));
+        else ({ jobId } = await api.runRenode(imageId));
+        pollJob(jobId);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setBusy(false);
+      }
+    },
+    [imageId, binary, pollJob],
+  );
 
   const extractFirst = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
       const { jobId } = await api.extract(imageId);
-      poll.current = window.setInterval(async () => {
-        const j = await api.job(jobId);
-        setJob(j);
-        if (j.status === 'done' || j.status === 'error') {
-          if (poll.current) window.clearInterval(poll.current);
-          setBusy(false);
-          load();
-        }
-      }, 800);
+      pollJob(jobId, load);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
-  }, [imageId, load]);
+  }, [imageId, load, pollJob]);
 
   if (!menu) return <div className="empty">Loading emulation plan…</div>;
 
-  const result = job?.result as { command?: string; stdout?: string; stderr?: string; timedOut?: boolean } | null;
+  const result = job?.result as
+    | ({ command?: string; stdout?: string; stderr?: string; timedOut?: boolean } & Partial<RenodeResult>)
+    | null;
+  const isRenode = Boolean(result && 'booted' in result);
 
   return (
     <div>
@@ -125,25 +144,32 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                 ℹ {r.notes}
               </div>
             )}
-            {r.mode === 'user-qemu' && r.runnable && (
+            {r.runnable && (
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                <input
-                  className="mono"
-                  placeholder={menu.suggestedBinary ?? 'bin/busybox'}
-                  value={binary}
-                  onChange={(e) => setBinary(e.target.value)}
-                  style={{
-                    flex: 1,
-                    background: 'var(--bg)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 6,
-                    color: 'var(--text)',
-                    padding: '6px 10px',
-                    fontSize: 12,
-                  }}
-                />
-                <button className="btn btn-primary btn-sm" disabled={busy} onClick={runUser}>
-                  {busy ? <span className="spinner" /> : 'Run proof'}
+                {NEEDS_BINARY.has(r.mode) && (
+                  <input
+                    className="mono"
+                    placeholder={menu.suggestedBinary ?? 'bin/busybox'}
+                    value={binary}
+                    onChange={(e) => setBinary(e.target.value)}
+                    style={{
+                      flex: 1,
+                      background: 'var(--bg)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 6,
+                      color: 'var(--text)',
+                      padding: '6px 10px',
+                      fontSize: 12,
+                    }}
+                  />
+                )}
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={busy}
+                  onClick={() => runRecipe(r)}
+                  style={NEEDS_BINARY.has(r.mode) ? undefined : { marginLeft: 'auto' }}
+                >
+                  {busy ? <span className="spinner" /> : r.mode === 'renode' ? 'Boot under Renode' : 'Run proof'}
                 </button>
               </div>
             )}
@@ -175,7 +201,40 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
               {job.log}
             </pre>
           )}
-          {result?.command && (
+          {isRenode && result && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span className={`badge ${result.booted ? 'badge-ok' : 'badge-medium'}`}>
+                  {result.booted ? 'booted' : 'no UART output'}
+                </span>
+                <span className="badge">{result.proofState}</span>
+                {result.platform && (
+                  <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                    {result.platform.split('/').pop()}
+                  </span>
+                )}
+              </div>
+              <div className="hint" style={{ marginTop: 6 }}>
+                {result.reason}
+              </div>
+              {result.uartExcerpt && (
+                <pre
+                  className="mono"
+                  style={{
+                    fontSize: 11.5,
+                    whiteSpace: 'pre-wrap',
+                    background: 'var(--bg)',
+                    padding: 10,
+                    borderRadius: 6,
+                    marginTop: 8,
+                  }}
+                >
+                  {result.uartExcerpt}
+                </pre>
+              )}
+            </div>
+          )}
+          {result?.command && !isRenode && (
             <>
               {result.timedOut && <div className="badge badge-medium">timed out (likely a long-running daemon)</div>}
               {result.stdout && (

@@ -84,6 +84,32 @@ export interface EmulationMenu {
   capabilities: RuntimeCapabilities | null;
 }
 
+/** Renode RTOS/Cortex-M boot result — "booted" is decided from real UART bytes, never assumed. */
+export interface RenodeResult {
+  available: boolean;
+  ran: boolean;
+  booted: boolean;
+  reason: string;
+  proofState: ProofState;
+  platform: string | null;
+  uartExcerpt: string;
+  command: string;
+  isolation?: string;
+}
+
+/** AFL++ coverage-guided fuzz result — honest crash count (0 is a real, valid outcome for hardened binaries). */
+export interface FuzzResult {
+  available: boolean;
+  reason?: string;
+  binary: string;
+  seconds: number;
+  execsDone: number | null;
+  crashes: number;
+  crashSamples: { name: string; hexPreview: string }[];
+  isolation: string;
+  command: string;
+}
+
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Negligible' | 'Unknown';
 
 export interface SbomVuln {
@@ -427,6 +453,16 @@ export const api = {
   emulation: (id: string) => get<EmulationMenu>(`/api/images/${id}/emulation`),
   emulate: (id: string, binary?: string) =>
     post<{ jobId: string }>(`/api/images/${id}/emulate`, binary ? { binary } : {}),
+  emulateSystem: (id: string, rung: 'chroot-service' | 'full-system', binary?: string) =>
+    post<{ jobId: string }>(`/api/images/${id}/emulate-system`, { rung, ...(binary ? { binary } : {}) }),
+  renodeStatus: () => get<{ available: boolean }>('/api/renode/status'),
+  runRenode: (id: string, opts?: { platform?: string; seconds?: number }) =>
+    post<{ jobId: string }>(`/api/images/${id}/renode`, opts ?? {}),
+  renodeResult: (id: string) => get<{ result: RenodeResult | null }>(`/api/images/${id}/renode`).then((r) => r.result),
+  fuzzStatus: () => get<{ available: boolean }>('/api/fuzz/status'),
+  runFuzz: (id: string, binary: string, seconds?: number) =>
+    post<{ jobId: string }>(`/api/images/${id}/fuzz`, { binary, ...(seconds ? { seconds } : {}) }),
+  fuzzResult: (id: string) => get<{ result: FuzzResult | null }>(`/api/images/${id}/fuzz`).then((r) => r.result),
   extract: (id: string) => post<{ jobId: string }>(`/api/images/${id}/extract`),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),
   job: (jobId: string) => get<{ job: Job }>(`/api/jobs/${jobId}`).then((r) => r.job),

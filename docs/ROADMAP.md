@@ -34,7 +34,7 @@ long work session, grounded in a precise review of the current tree (file refere
 | F6 | Only **31 signature rules**, thin crypto/cert/dtb coverage | `packages/core/src/signatures.ts` | Misses device trees, kernel configs, vendor headers, key material |
 | F7 | Web tests cover **only pure helpers**; no component/interaction tests | `apps/web` (no jsdom setup) | Regressions in panels/drawer/job-polling go uncaught |
 | F8 | `samples/` empty — **no e2e fixture** exercising extract→sbom→triage | `samples/.gitkeep` | No integration guard for the provider chain |
-| F9 | Full-system QEMU & Renode recipes are **non-runnable placeholders** | `apps/api/src/providers/emulate.ts:96,115` | Only user-mode emulation actually runs |
+| ~~F9~~ | ~~Full-system QEMU & Renode recipes are non-runnable placeholders~~ — **resolved**: Renode boots for real (route + web "Boot under Renode" button + agent executor), and chroot/full-system are launchable from the web too | `routes/renode.ts`, `agent/session.ts`, `components/SimulationMenu.tsx` | Every ladder rung the deployment supports is now runnable, not just user-mode |
 | F10 | API has **no auth/rate-limit of its own** | `apps/api/src/index.ts` | Defense-in-depth relies entirely on the external proxy |
 
 ---

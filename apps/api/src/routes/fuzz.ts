@@ -6,7 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import { type FindingDraft, syncFindings } from '../findings.js';
 import type { ExtractResult } from '../providers/extract.js';
-import { runFuzz } from '../providers/fuzz.js';
+import { detectFuzzing, runFuzz } from '../providers/fuzz.js';
 import { startJob } from '../providers/jobs.js';
 import { getImage, listJobs } from '../store.js';
 
@@ -16,6 +16,8 @@ function latestRootfs(imageId: string): string | null {
 }
 
 export async function fuzzRoutes(app: FastifyInstance): Promise<void> {
+  app.get('/fuzz/status', async () => ({ available: await detectFuzzing() }));
+
   app.post('/images/:id/fuzz', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
