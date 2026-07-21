@@ -36,11 +36,12 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ▢ **RTOS task enumeration** — walk pxCurrentTCB/thread lists (deeper than the current static blob analysis).
 
 ## Emulation UX
-- ▢ **Interactive/introspectable emulation** — `run_command_in_emulation`, `enumerate_emulation_services`, self-diagnostics (`diagnose_emulation_environment`).
-- ▢ **Saved emulation presets.**
+- ✅ **Service enumeration** — `providers/servicemap.ts`: statically map the network daemons the rootfs starts (inittab/inetd/SysV/systemd) = boot-time attack surface.
+- ✅ **Saved emulation presets** — `routes/presets.ts` + `emulation_preset` store table + `PresetsPanel`: save/run/delete named emulation configs.
+- ▢ **Interactive/introspectable emulation** — `run_command_in_emulation`, self-diagnostics (`diagnose_emulation_environment`) on a LIVE boot (service-enum above is static).
 
 ## Recon & acquisition
-- ▢ **FCC-ID / schematics / changelog lookup** (recon enrichment).
+- ✅ **FCC-ID lookup** — `providers/fcc.ts`: extract FCC IDs + link to public filings (fccid.io + FCC OET). Schematics/changelog lookup still open.
 - ▢ **Phase-6 Capture** — OTA interception & carving from a live update (designed, `CAPTURE-DESIGN.md`).
 - ▢ **Live-device UART bridge** — host-side serial → containerized backend (wairz UART bridge). Software foothold into hardware.
 
