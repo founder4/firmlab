@@ -423,7 +423,10 @@ without an autonomous agent):
 4. **W5 binary-vuln sweep** (`providers/binvuln.ts`) — every rootfs ELF scanned for unbounded-copy + no-canary
    stack-overflow candidates (the DVRF pwnables).
 5. **W3 embedded-private-key by content** (`fsaudit.ts`) — a PEM key inside any file is flagged regardless of
-   filename (Tenda's `O=Tenda` RSA key). _The BeanView aux-partition EXTRACTION half remains open — see BACKLOG._
+   filename. **Extended (`auxsecrets.ts`) to scan sibling (non-rootfs) partitions** — Tenda's 1024-bit RSA key in
+   `jffs2-root-0/-1/version/privkey.pem` now surfaces (validated in-container). Honesty correction: **BeanView's
+   `private_key.pem`/`devinfo` are PUBLIC keys, not a cloud secret** — the autonomous "cleartext cloud pairing
+   secret" headline was an overstatement; the scan correctly leaves public keys alone.
 6. **Corrupt/decoy verdict** (`providers/decoy.ts`) — a hollow image (claimed fs + no rootfs + mostly zeros)
    emits a `corrupt-decoy` finding instead of a silent 0 (Asus).
 
