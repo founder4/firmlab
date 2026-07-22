@@ -43,6 +43,7 @@ import {
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
+import { runComponentCve } from './providers/component-cve.js';
 import { runDecompile } from './providers/decompile.js';
 import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
@@ -114,6 +115,17 @@ async function sbomRun(c: RunCtx): Promise<StepOutcome> {
   return {
     summary: `${r.packageCount} packages · ${r.vulnerabilities.length} CVEs (Crit ${r.counts.Critical}, High ${r.counts.High})`,
     findingCount: drafts.length,
+  };
+}
+
+async function compcveRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runComponentCve(c.rootfsPath);
+  syncFindings(c.imageId, 'compcve', r.findings);
+  const cves = r.findings.filter((f) => f.kind === 'component-cve').length;
+  return {
+    summary: `bundled-component fingerprint: ${r.hits.length} component(s), ${cves} n-day CVE(s) a manifest SBOM misses`,
+    findingCount: r.findings.length,
+    ...(r.hits.length === 0 ? { degraded: true, note: r.reason } : {}),
   };
 }
 
@@ -230,6 +242,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   extract: extractRun,
   fsaudit: fsauditRun,
   sbom: sbomRun,
+  compcve: compcveRun,
   servicemap: servicemapRun,
   certs: certsRun,
   compmap: compmapRun,

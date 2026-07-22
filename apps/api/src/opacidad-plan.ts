@@ -11,6 +11,7 @@ export type ProviderId =
   | 'extract'
   | 'fsaudit'
   | 'sbom'
+  | 'compcve'
   | 'servicemap'
   | 'certs'
   | 'compmap'
@@ -74,6 +75,13 @@ const LINUX_CHAIN: PlanSpec[] = [
     needsRootfs: true,
     built: true,
     provider: 'sbom',
+  },
+  {
+    worker: 'W2 · Component fingerprint (bundled n-days)',
+    reason: 'bundled binaries (pppd, openssl) → CVEs a manifest-only SBOM misses',
+    needsRootfs: true,
+    built: true,
+    provider: 'compcve',
   },
   {
     worker: 'Recon · Service enumeration',
