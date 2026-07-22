@@ -13,6 +13,19 @@ import {
   versionInRange,
 } from './component-cve.js';
 
+/** Parse or throw — keeps the comparison tests free of non-null assertions. */
+function pv(s: string) {
+  const v = parseVersion(s);
+  if (!v) throw new Error(`unparseable version in test: ${s}`);
+  return v;
+}
+/** Look up a component rule or throw. */
+function ruleFor(component: string) {
+  const r = COMPONENT_RULES.find((x) => x.component === component);
+  if (!r) throw new Error(`no rule for ${component}`);
+  return r;
+}
+
 describe('version parsing + comparison', () => {
   it('parses dotted versions with an optional trailing letter', () => {
     expect(parseVersion('2.4.3')).toEqual({ nums: [2, 4, 3], letter: '', raw: '2.4.3' });
@@ -21,10 +34,10 @@ describe('version parsing + comparison', () => {
   });
 
   it('compares numerically, then by trailing letter', () => {
-    expect(compareVersion(parseVersion('2.4.3')!, parseVersion('2.4.8')!)).toBe(-1);
-    expect(compareVersion(parseVersion('1.0.1f')!, parseVersion('1.0.1')!)).toBe(1);
-    expect(compareVersion(parseVersion('1.0.1g')!, parseVersion('1.0.1f')!)).toBe(1);
-    expect(compareVersion(parseVersion('2.4.8')!, parseVersion('2.4.8')!)).toBe(0);
+    expect(compareVersion(pv('2.4.3'), pv('2.4.8'))).toBe(-1);
+    expect(compareVersion(pv('1.0.1f'), pv('1.0.1'))).toBe(1);
+    expect(compareVersion(pv('1.0.1g'), pv('1.0.1f'))).toBe(1);
+    expect(compareVersion(pv('2.4.8'), pv('2.4.8'))).toBe(0);
   });
 
   it('range check is inclusive and letter-aware', () => {
@@ -37,8 +50,8 @@ describe('version parsing + comparison', () => {
 });
 
 describe('component version extraction', () => {
-  const pppdRule = COMPONENT_RULES.find((r) => r.component === 'pppd')!;
-  const opensslRule = COMPONENT_RULES.find((r) => r.component === 'openssl')!;
+  const pppdRule = ruleFor('pppd');
+  const opensslRule = ruleFor('openssl');
 
   it('extracts pppd version from its banner string', () => {
     expect(extractComponentVersion('local IP address\npppd version 2.4.3\nRemote message', pppdRule)).toBe('2.4.3');
@@ -54,7 +67,7 @@ describe('component version extraction', () => {
 });
 
 describe('CVE matching + findings', () => {
-  const pppdRule = COMPONENT_RULES.find((r) => r.component === 'pppd')!;
+  const pppdRule = ruleFor('pppd');
 
   it('matches CVE-2020-8597 for a vulnerable pppd and not for a fixed one', () => {
     expect(matchCves(pppdRule, '2.4.3').map((c) => c.id)).toEqual(['CVE-2020-8597']);

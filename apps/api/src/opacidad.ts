@@ -14,6 +14,7 @@
  * sync them), so this orchestrator syncs each provider's findings under the SAME source the manual route uses —
  * re-running opacidad re-syncs idempotently rather than duplicating.
  */
+import fs from 'node:fs';
 import type { ImageIdentity } from '@firmlab/core';
 import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } from './findings.js';
 import type { LlmConfig } from './llm.js';
@@ -46,6 +47,7 @@ import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
 import { runComponentCve } from './providers/component-cve.js';
 import { runDecompile } from './providers/decompile.js';
+import { assessDecoy, decoyFinding } from './providers/decoy.js';
 import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
@@ -81,6 +83,40 @@ interface StepOutcome {
 
 // === Per-provider executors (call the pure runner, then sync findings under the route's source) ===
 
+/** Did W0 claim this image carries a filesystem (a strong fs signature fired, or a Linux/FIT-UBI class)? */
+function fsClaimed(analysisJson: string | null): boolean {
+  if (!analysisJson) return false;
+  try {
+    const a = JSON.parse(analysisJson) as { identity?: ImageIdentity };
+    const id = a.identity;
+    if (!id) return false;
+    return (
+      (Array.isArray(id.filesystems) && id.filesystems.length > 0) ||
+      id.firmwareClass === 'embedded-linux' ||
+      id.firmwareClass === 'openwrt-fit-ubi'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Read a bounded prefix of the image for the zero-density (decoy) check — representative for a hollow image. */
+function readImagePrefix(imagePath: string, cap = 64 * 1024 * 1024): Uint8Array {
+  try {
+    const fd = fs.openSync(imagePath, 'r');
+    try {
+      const size = Math.min(fs.fstatSync(fd).size, cap);
+      const b = Buffer.allocUnsafe(size);
+      fs.readSync(fd, b, 0, size, 0);
+      return b;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return new Uint8Array(0);
+  }
+}
+
 async function extractRun(c: RunCtx): Promise<StepOutcome> {
   if (c.rootfsPath) return { summary: 'reused the already-extracted rootfs', findingCount: 0 };
   const ex = await runExtraction(c.imageId, c.imagePath, c.handle);
@@ -92,7 +128,23 @@ async function extractRun(c: RunCtx): Promise<StepOutcome> {
       findingCount: 0,
     };
   }
+  // No rootfs. Before reporting a bare "no rootfs", check for a hollow/decoy image (a claimed filesystem whose
+  // payload is mostly zeros) so "0 findings" is not mistaken for "clean" (docs/AUTONOMOUS-WORKERS.md §9 gap #6).
+  const decoy = assessDecoy(readImagePrefix(c.imagePath), {
+    fsClaimed: fsClaimed(c.analysisJson),
+    rootfsRecovered: false,
+  });
+  const decoyDrafts = decoyFinding(decoy);
+  syncFindings(c.imageId, 'triage', decoyDrafts);
   const last = ex.carveTrace?.[ex.carveTrace.length - 1];
+  if (decoy.isDecoy) {
+    return {
+      summary: `corrupt/decoy image — ${decoy.reason}`,
+      findingCount: decoyDrafts.length,
+      degraded: true,
+      note: 'payload unextractable (hollow image), not a clean scan',
+    };
+  }
   return {
     summary: `no rootfs (${ex.extractor})`,
     findingCount: 0,

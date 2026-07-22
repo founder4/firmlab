@@ -166,10 +166,7 @@ export function buildComponentFindings(hits: ComponentHit[]): FindingDraft[] {
           affected: `${cve.low}–${cve.high}`,
           path: hit.path,
         },
-        rationale:
-          `The bundled ${hit.component} binary reports version ${hit.version}, inside the published affected range ` +
-          `${cve.low}–${cve.high} for ${cve.id}. Version + CVE range are both static facts; runtime reachability ` +
-          'of the flaw is a separate confirmation step. Found by binary fingerprinting — a manifest-only SBOM returns 0 CVEs here.',
+        rationale: `The bundled ${hit.component} binary reports version ${hit.version}, inside the published affected range ${cve.low}–${cve.high} for ${cve.id}. Version + CVE range are both static facts; runtime reachability of the flaw is a separate confirmation step. Found by binary fingerprinting — a manifest-only SBOM returns 0 CVEs here.`,
       });
     }
   }

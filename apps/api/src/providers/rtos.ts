@@ -327,6 +327,9 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
   if (!a.isCortexM) {
     const ecosNote = a.ecos ? ` eCos monolith detected (${a.ecos.version ?? 'version unknown'}).` : '';
     const flagNote = a.flags.length ? ` ${a.flags.length} plaintext flag/credential token(s) recovered.` : '';
+    const emptyNote = a.findings.length
+      ? ''
+      : ' No eCos/flag markers either — static analysis found nothing to assert.';
     return {
       available: true,
       isCortexM: false,
@@ -334,9 +337,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
       memoryMap: null,
       rtosKernel: a.rtosKernel,
       findings: a.findings,
-      reason:
-        `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${ecosNote}${flagNote}` +
-        (a.findings.length ? '' : ' No eCos/flag markers either — static analysis found nothing to assert.'),
+      reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${ecosNote}${flagNote}${emptyNote}`,
     };
   }
 
