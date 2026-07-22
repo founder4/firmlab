@@ -6,6 +6,7 @@ import {
   type CaptureFlow,
   type CaptureSession,
   type CaptureStatus,
+  type LearningSurface,
   api,
 } from '../api';
 
@@ -105,6 +106,9 @@ export function Capture(): JSX.Element {
   // 6.3 capturability preflight, per device.
   const [preflight, setPreflight] = useState<Record<string, CapturabilityPlan>>({});
 
+  // 6.6 learning surface (OTA timeline + per-vendor priors + CDN graph).
+  const [learning, setLearning] = useState<LearningSurface | null>(null);
+
   const runPreflight = useCallback(async (deviceId: string) => {
     const plan = await api.capturePreflight(deviceId).catch(() => null);
     if (plan) setPreflight((m) => ({ ...m, [deviceId]: plan }));
@@ -126,6 +130,10 @@ export function Capture(): JSX.Element {
       .captureDevices()
       .then(setDevices)
       .catch(() => setDevices([]));
+    api
+      .captureFamilies()
+      .then(setLearning)
+      .catch(() => setLearning(null));
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
       if (capPollRef.current) window.clearInterval(capPollRef.current);
@@ -483,6 +491,67 @@ export function Capture(): JSX.Element {
           )}
         </div>
       )}
+
+      <div className="panel">
+        <div className="panel-title">OTA learning</div>
+        <div className="panel-sub">
+          What the corpus has learned across captured versions — a per-family OTA timeline, how each vendor ships, and
+          which CDN serves whom. Capture the same device twice to unlock a cross-version diff.
+        </div>
+        {!learning || learning.families.length === 0 ? (
+          <div className="empty">
+            <div className="empty-title">No captured versions yet</div>
+            <div className="empty-body">Ingest a capture (above) — its provenance seeds the OTA timeline here.</div>
+          </div>
+        ) : (
+          <>
+            {learning.vendorPriors.length > 0 && (
+              <div className="hint" style={{ marginBottom: 10 }}>
+                Vendor priors:{' '}
+                {learning.vendorPriors.map((p) => (
+                  <span key={p.vendor} style={{ marginRight: 10 }}>
+                    <strong>{p.vendor}</strong> ships <span className="badge mono">{p.ships}</span>
+                    {p.cdns.length ? ` from ${p.cdns.join(', ')}` : ''} ({p.captureCount})
+                  </span>
+                ))}
+              </div>
+            )}
+            {learning.families.map((fam) => (
+              <div key={fam.key} style={{ marginBottom: 14 }}>
+                <div className="eyebrow">
+                  {fam.key} · {fam.captures.length} version(s) · {fam.transports.join(', ') || '—'}
+                </div>
+                <div className="table-wrap">
+                  <table className="data">
+                    <tbody>
+                      {fam.captures.map((c, i) => (
+                        <tr key={c.imageId}>
+                          <td className="mono" style={{ width: 160 }}>
+                            {c.filename}
+                          </td>
+                          <td className="hint mono">{c.firmwareClass ?? '—'}</td>
+                          <td className="hint mono">{c.transport ?? '—'}</td>
+                          <td className="hint mono">{(c.size / 1024).toFixed(0)} KB</td>
+                          <td style={{ width: 130 }}>
+                            <a className="badge" href={`#/image/${c.imageId}`}>
+                              open →
+                            </a>{' '}
+                            {i > 0 && (
+                              <a className="badge badge-accent" href={`#/image/${c.imageId}/diff`}>
+                                diff prev
+                              </a>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,9 +1,10 @@
 # FirmLab — Capture & Acquisition (Phase 6 design)
 
-> Status: **6.0–6.3 shipped; 6.4+ designed.** The design below is the full plan. **6.0** (discovery + backend
-> detection + provenance schema), **6.1** (network capture via proxy + firmware-aware carving + auto-ingest),
-> **6.2** (active ARP-spoof positioning + the token-authed LAN capture agent), and **6.3** (capturability ladder +
-> preflight + pinning metadata + Frida unpin template) are built and validated — `apps/api/src/capture/` (config, backend registry, discovery scan, the mitmproxy
+> Status: **6.0–6.4 + 6.6 shipped; 6.5 (Zigbee) deferred.** The design below is the full plan. **6.0** (discovery +
+> backend detection + provenance schema), **6.1** (network capture via proxy + firmware-aware carving + auto-ingest),
+> **6.2** (active ARP-spoof positioning + the token-authed LAN capture agent), **6.3** (capturability ladder +
+> preflight + pinning metadata + Frida unpin template), **6.4** (Nordic-style BLE DFU reassembly), and **6.6** (the
+> learning surface — OTA timeline + per-vendor priors + CDN graph) are built and validated — `apps/api/src/capture/` (config, backend registry, discovery scan, the mitmproxy
 > interception runner `proxy.ts`, the pure `flow-manifest.ts`, the `ingest.ts` acquire→analyze bridge),
 > `providers/discover.ts` + `providers/flowscore.ts`, the non-image-scoped `capture_sessions`/`devices`/
 > `capture_flows` tables + the `capture_provenance` record, the `/capture/*` routes, and the top-level **Capture**
@@ -348,9 +349,14 @@ the lab**, matching the project's existing validation discipline (real-tool, in-
   from a session's actual flows, so pinning is observed not guessed — the proxy addon logs `tls-pinned` on a CA
   refusal); `capture/frida.ts` + `GET /capture/frida-unpin` ship the unpin template; `GET /capture/preflight/:id`
   is the capturability card. Web renders the ladder + a pinned-session Frida download. Validated vs the real API.
-- **6.4 — BLE backend** (nRF52840): GATT/DFU reassembly for the common stacks.
-- **6.5 — Zigbee backend**: OTA Upgrade cluster capture.
+- **6.4 — BLE backend** (nRF52840): GATT/DFU reassembly for the common stacks. **✅ SHIPPED** — `capture/dfu.ts`
+  (pure `reassembleDfu` + `parseDfuInitSize`) + `capture/ble.ts` stage a captured DFU write-stream as a carved
+  `ble-gatt` flow; `POST /capture/ble/{session,dfu}`. Reassembly needs no dongle; the live nRF sniff is the
+  radio-specific DATA-write adapter (deploy). Validated vs the real API.
+- **6.5 — Zigbee backend**: OTA Upgrade cluster capture. **Deferred** (skipped this pass) — same shape as 6.4.
 - **6.6 — Learning surface**: OTA timeline, cross-version diff, per-vendor priors, CDN graph in the corpus.
+  **✅ SHIPPED** — `capture/learning.ts` aggregates `capture_provenance` into families + priors + a CDN graph;
+  `GET /capture/families`; a Capture "OTA learning" panel with a cross-version diff link. Validated vs the real API.
 
 ## 18. Open questions / known-hard parts
 

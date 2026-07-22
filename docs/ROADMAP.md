@@ -259,7 +259,7 @@ OSV/KEV cache.
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
 
-## Phase 6 — Capture & acquisition (6.0–6.3 shipped; 6.4+ designed)
+## Phase 6 — Capture & acquisition (6.0–6.4 + 6.6 shipped; 6.5 Zigbee deferred)
 
 Close the loop *before* analysis: acquire firmware from a **live device** in-flight (intercept an OTA update the
 moment you press "Update" in the vendor app), carve the blob out of the traffic, and auto-ingest it into the
@@ -320,8 +320,23 @@ transports HTTP/HTTPS/BLE/Zigbee, data model, web UX, phased 6.0–6.6): [`docs/
   pinned session surfaces the Frida download. **Validated vs the real API:** the preflight honestly returns
   `metadata_only` + "Install mitmproxy" on a host with no proxy/positioning; the Frida template downloads (3 hooks:
   SSLContext / OkHttp CertificatePinner / Conscrypt TrustManagerImpl).
-- [ ] **6.4–6.6** — BLE backend (nRF52840 DFU) · Zigbee backend (OTA cluster) · learning surface (OTA timeline +
-  cross-version diff + per-vendor priors).
+- [x] **6.4 — BLE backend (Nordic-style DFU reassembly).** A Bluetooth OTA sends the firmware as writes to a DFU
+  DATA characteristic; `capture/dfu.ts` (pure, unit-tested) reassembles the ordered payloads back into the image
+  (+ a best-effort init-packet size sanity check), and `capture/ble.ts` stages it as a carved `ble-gatt` flow that
+  ingests by the exact normal path — a DFU transfer is firmware by construction, so it's always carved. Routes
+  `POST /capture/ble/{session,dfu}` (the DFU stream arrives as base64 DATA-write chunks). Reassembling a *provided*
+  capture needs no dongle (validates anywhere); the live nRF52840 over-the-air sniff → the DATA-write stream is the
+  radio-specific adapter, deploy/hardware-validated. **Validated vs the real API:** a 60 KB SquashFS image split
+  into 20-byte DATA writes reassembled byte-exact → carved → ingested as a workbench image.
+- [ ] **6.5 — Zigbee backend (OTA Upgrade cluster 0x0019).** Deferred (skipped this pass) — same shape as BLE: a
+  sniffer + a cluster-payload reassembler → a carved `zigbee-ota` flow. The `zigbee` backend already auto-detects.
+- [x] **6.6 — Learning surface.** `capture/learning.ts` (pure, unit-tested) aggregates the `capture_provenance`
+  history (enriched with each linked image + device) into a per-device-family **OTA timeline** (versions ordered
+  over time; cross-version diff reuses the existing `diff` provider between any two), **per-vendor priors** (how a
+  vendor was observed to ship — plaintext-http / https / mixed / ble-gatt, and from which CDN), and a **CDN→families
+  graph**. `GET /capture/families`; a new "OTA learning" panel in the Capture section renders the families +
+  timelines + priors with a "diff prev" link between versions. **Validated vs the real API:** two captured versions
+  from one CDN → one family with both versions ordered + the CDN edge.
 
 **Phase 3 — decision nodes (implemented).** The agent now *chooses branches* on top of the deterministic
 skeleton, never the mechanics. The orchestrator (`agent/session.ts`) drives triage ① → deterministic extraction

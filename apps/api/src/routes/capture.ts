@@ -6,12 +6,14 @@
 import type { FastifyInstance } from 'fastify';
 import { type AgentFlowInput, createAgentSession, ingestAgentFlow, loadAgentToken, tokenOk } from '../capture/agent.js';
 import { availableTransports, detectCaptureBackends } from '../capture/backends.js';
+import { createBleSession, stageBleDfu } from '../capture/ble.js';
 import { loadCaptureConfig } from '../capture/config.js';
 import { FRIDA_UNPIN } from '../capture/frida.js';
+import { type EnrichedProvenance, buildLearningSurface } from '../capture/learning.js';
 import { planCapture, realizedCeiling } from '../capture/preflight.js';
 import { ingestFlow, refreshCaptureFlows, startCaptureSession, teardownCaptureSession } from '../capture/proxy.js';
 import { startDiscoveryScan } from '../capture/scan.js';
-import { getCaptureSession, getDevice, listDevices } from '../store.js';
+import { getCaptureSession, getDevice, getImage, listCaptureProvenance, listDevices } from '../store.js';
 
 export async function captureRoutes(app: FastifyInstance): Promise<void> {
   // Is the capture lane enabled? (parity with /agent/status, /research/status — never leaks secrets.)
@@ -44,6 +46,32 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
       detectCaptureBackends(),
     );
     return { device, plan };
+  });
+
+  // === Phase 6.6: the learning surface. Aggregate the captured-image history into families + priors + a CDN graph. ===
+  app.get('/capture/families', async () => {
+    const rows: EnrichedProvenance[] = listCaptureProvenance().map((p) => {
+      const image = getImage(p.imageId);
+      const device = p.deviceId ? getDevice(p.deviceId) : undefined;
+      let firmwareClass: string | null = null;
+      if (image?.identityJson) {
+        try {
+          firmwareClass = (JSON.parse(image.identityJson) as { firmwareClass?: string }).firmwareClass ?? null;
+        } catch {}
+      }
+      return {
+        imageId: p.imageId,
+        capturedAt: p.capturedAt,
+        endpoint: p.endpoint,
+        transport: p.transport,
+        tlsPosture: p.tlsPosture,
+        vendor: device?.ouiVendor ?? null,
+        filename: image?.filename ?? p.imageId,
+        size: image?.size ?? 0,
+        firmwareClass,
+      };
+    });
+    return buildLearningSurface(rows);
   });
 
   // The Frida TLS-unpinning template (operator runs it on a rooted phone when a device pins). Plain-text download.
@@ -128,6 +156,35 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
     if (!getCaptureSession(id)) return reply.status(404).send({ error: 'Session not found' });
     teardownCaptureSession(id);
     return { session: getCaptureSession(id) };
+  });
+
+  // === Phase 6.4: BLE DFU capture. Reassemble a captured DFU write-stream → a carved ble-gatt flow (ingestable). ===
+
+  app.post('/capture/ble/session', async (req, reply) => {
+    const cfg = loadCaptureConfig();
+    if (!cfg) return reply.status(400).send({ error: 'Capture disabled — set FIRMLAB_CAPTURE=1' });
+    const body = (req.body ?? {}) as { deviceId?: string; acknowledged?: boolean };
+    if (body.acknowledged !== true) {
+      return reply.status(400).send({ error: 'Operator acknowledgement required' });
+    }
+    return reply.status(201).send({ sessionId: createBleSession(body.deviceId ?? null) });
+  });
+
+  // Reassemble the DATA-characteristic writes (base64 chunks) of a captured Nordic-style DFU into an image.
+  app.post('/capture/ble/dfu', async (req, reply) => {
+    const cfg = loadCaptureConfig();
+    if (!cfg) return reply.status(400).send({ error: 'Capture disabled — set FIRMLAB_CAPTURE=1' });
+    const body = (req.body ?? {}) as { sessionId?: string; name?: string; chunks?: string[] };
+    if (!body.sessionId || !Array.isArray(body.chunks) || body.chunks.length === 0) {
+      return reply.status(400).send({ error: 'sessionId and a non-empty chunks[] (base64 DATA writes) are required' });
+    }
+    try {
+      const chunks = body.chunks.map((c) => new Uint8Array(Buffer.from(c, 'base64')));
+      const result = stageBleDfu(body.sessionId, body.name ?? 'ble-dfu.bin', chunks);
+      return reply.status(201).send(result);
+    } catch (e) {
+      return reply.status(400).send({ error: e instanceof Error ? e.message : String(e) });
+    }
   });
 
   // === Phase 6.2: remote LAN capture agent (the Docker answer). Token-authed; off unless a token is configured. ===

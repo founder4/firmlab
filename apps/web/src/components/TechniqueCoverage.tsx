@@ -127,7 +127,12 @@ const COVERAGE: CovGroup[] = [
     items: [
       { name: 'Live-device UART console bridge (host-side)', status: 'planned', note: 'Phase-6 transport' },
       { name: 'JTAG / SWD / SPI extraction · chip-off', status: 'out-of-scope', note: 'hardware lab' },
-      { name: 'BLE / ZigBee / Wi-Fi / SDR capture', status: 'out-of-scope', note: 'Phase-6 dongle' },
+      {
+        name: 'BLE DFU reassembly (Nordic)',
+        status: 'partial',
+        note: 'Phase 6.4: reassembly done; live sniff = nRF dongle',
+      },
+      { name: 'ZigBee / Wi-Fi / SDR capture', status: 'out-of-scope', note: 'Phase-6 dongle (6.5 Zigbee deferred)' },
       { name: 'Side-channel / fault injection (glitching)', status: 'out-of-scope', note: 'lab hardware' },
       { name: 'Weaponized exploitation (ROP / shellcode / PoC)', status: 'out-of-scope', note: 'defensive by design' },
     ],

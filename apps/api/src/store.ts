@@ -883,3 +883,10 @@ export function provenanceForImage(imageId: string): CaptureProvenanceRow | unde
     | CaptureProvenanceRow
     | undefined;
 }
+
+/** All capture-provenance rows (the acquired-image history the learning surface aggregates). Newest first. */
+export function listCaptureProvenance(): CaptureProvenanceRow[] {
+  return getDb()
+    .prepare('SELECT * FROM capture_provenance ORDER BY capturedAt DESC')
+    .all() as unknown as CaptureProvenanceRow[];
+}

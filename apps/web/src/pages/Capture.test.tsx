@@ -19,6 +19,7 @@ vi.mock('../api', async (importOriginal) => {
       ingestCaptureFlow: vi.fn(),
       teardownCapture: vi.fn(),
       capturePreflight: vi.fn(),
+      captureFamilies: vi.fn(),
     },
   };
 });
@@ -34,6 +35,7 @@ const mockApi = api as unknown as {
   ingestCaptureFlow: ReturnType<typeof vi.fn>;
   teardownCapture: ReturnType<typeof vi.fn>;
   capturePreflight: ReturnType<typeof vi.fn>;
+  captureFamilies: ReturnType<typeof vi.fn>;
 };
 
 const backend = (over: Partial<CaptureBackend>): CaptureBackend => ({
@@ -71,6 +73,7 @@ beforeEach(() => {
   });
   mockApi.ingestCaptureFlow.mockResolvedValue({ imageId: 'img99', filename: 'fw.bin' });
   mockApi.teardownCapture.mockResolvedValue({ session: null });
+  mockApi.captureFamilies.mockResolvedValue({ families: [], vendorPriors: [], cdnGraph: [] });
 });
 
 const device = {
@@ -187,5 +190,50 @@ describe('Capture — Phase 6.3 capturability preflight', () => {
     await waitFor(() => expect(mockApi.capturePreflight).toHaveBeenCalledWith('dev1'));
     expect(await screen.findByText('captured_plaintext')).toBeInTheDocument();
     expect(screen.getByText(/Best path: http via gateway/)).toBeInTheDocument();
+  });
+});
+
+describe('Capture — Phase 6.6 OTA learning', () => {
+  it('renders a per-family OTA timeline + vendor priors from the corpus', async () => {
+    mockApi.captureFamilies.mockResolvedValue({
+      families: [
+        {
+          key: 'Acme',
+          vendor: 'Acme',
+          transports: ['http'],
+          endpoints: ['http://cdn.acme.com/a'],
+          captures: [
+            {
+              imageId: 'v1',
+              filename: 'fw-1.2.bin',
+              capturedAt: 1,
+              endpoint: null,
+              transport: 'http',
+              tlsPosture: null,
+              size: 100000,
+              firmwareClass: 'embedded-linux',
+            },
+            {
+              imageId: 'v2',
+              filename: 'fw-1.3.bin',
+              capturedAt: 2,
+              endpoint: null,
+              transport: 'http',
+              tlsPosture: null,
+              size: 110000,
+              firmwareClass: 'embedded-linux',
+            },
+          ],
+        },
+      ],
+      vendorPriors: [{ vendor: 'Acme', ships: 'plaintext-http', cdns: ['cdn.acme.com'], captureCount: 2 }],
+      cdnGraph: [{ host: 'cdn.acme.com', families: ['Acme'] }],
+    });
+    render(<Capture />);
+    expect(await screen.findByText('fw-1.2.bin')).toBeInTheDocument();
+    expect(screen.getByText('fw-1.3.bin')).toBeInTheDocument();
+    expect(screen.getByText('plaintext-http')).toBeInTheDocument();
+    // The newer version offers a cross-version diff link.
+    expect(screen.getByRole('link', { name: /diff prev/i })).toBeInTheDocument();
   });
 });

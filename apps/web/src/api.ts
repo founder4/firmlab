@@ -668,6 +668,38 @@ export interface CapturabilityPlan {
   unlockHint: string | null;
 }
 
+export interface OtaVersion {
+  imageId: string;
+  filename: string;
+  capturedAt: number;
+  endpoint: string | null;
+  transport: string | null;
+  tlsPosture: string | null;
+  size: number;
+  firmwareClass: string | null;
+}
+
+export interface DeviceFamily {
+  key: string;
+  vendor: string | null;
+  captures: OtaVersion[];
+  transports: string[];
+  endpoints: string[];
+}
+
+export interface VendorPrior {
+  vendor: string;
+  ships: string;
+  cdns: string[];
+  captureCount: number;
+}
+
+export interface LearningSurface {
+  families: DeviceFamily[];
+  vendorPriors: VendorPrior[];
+  cdnGraph: { host: string; families: string[] }[];
+}
+
 export interface StartCaptureResult {
   sessionId: string;
   watching: boolean;
@@ -779,6 +811,7 @@ export const api = {
   captureScan: (scanId: string) => get<CaptureScanView>(`/api/capture/discover/${scanId}`),
   capturePreflight: (deviceId: string) =>
     get<{ device: CaptureDevice; plan: CapturabilityPlan }>(`/api/capture/preflight/${deviceId}`).then((r) => r.plan),
+  captureFamilies: () => get<LearningSurface>('/api/capture/families'),
   // Phase 6.1 interception sessions.
   startCaptureSession: (deviceId: string | null, acknowledged: boolean) =>
     post<StartCaptureResult>('/api/capture/session', { ...(deviceId ? { deviceId } : {}), acknowledged }),
