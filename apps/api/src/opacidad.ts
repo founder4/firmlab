@@ -15,9 +15,10 @@
  * re-running opacidad re-syncs idempotently rather than duplicating.
  */
 import type { ImageIdentity } from '@firmlab/core';
-import { normalizeSbom, rowToFinding, syncFindings } from './findings.js';
+import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } from './findings.js';
 import type { LlmConfig } from './llm.js';
 import { complete } from './llm.js';
+import { daemonLeads, handlerLeads } from './opacidad-leads.js';
 import {
   type FindingsSummary,
   type OpacidadContext,
@@ -29,10 +30,20 @@ import {
   honestGaps,
   summarizeFindings,
 } from './opacidad-narrative.js';
-import { type ProviderId, planEntries, specsForClass } from './opacidad-plan.js';
+import {
+  type Lead,
+  type PlanSpec,
+  type ProviderId,
+  type ScheduleState,
+  planEntries,
+  scheduleLeads,
+  specKey,
+  specsForClass,
+} from './opacidad-plan.js';
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
+import { runDecompile } from './providers/decompile.js';
 import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
@@ -42,6 +53,7 @@ import type { JobHandle } from './providers/jobs.js';
 import { runRtosAnalysis } from './providers/rtos.js';
 import { runSbom } from './providers/sbom.js';
 import { runServiceMap } from './providers/servicemap.js';
+import { buildTaintScaffold } from './providers/taint.js';
 import { runUbootAnalysis } from './providers/uboot.js';
 import { runWebTaint } from './providers/webtaint.js';
 import { getImage, listFindings, listJobs } from './store.js';
@@ -61,6 +73,8 @@ interface StepOutcome {
   findingCount: number;
   degraded?: boolean;
   note?: string;
+  /** Leads this worker surfaced — W9 re-plans the agenda to schedule the follow-up workers they name. */
+  leads?: Lead[];
 }
 
 // === Per-provider executors (call the pure runner, then sync findings under the route's source) ===
@@ -106,7 +120,12 @@ async function sbomRun(c: RunCtx): Promise<StepOutcome> {
 async function servicemapRun(c: RunCtx): Promise<StepOutcome> {
   const r = runServiceMap(c.rootfsPath as string);
   syncFindings(c.imageId, 'services', r.findings);
-  return { summary: `network-service attack surface: ${r.findings.length} findings`, findingCount: r.findings.length };
+  const leads = daemonLeads(r.services, c.rootfsPath as string);
+  return {
+    summary: `network-service attack surface: ${r.findings.length} findings${leads.length ? `, ${leads.length} daemon(s) to decompile` : ''}`,
+    findingCount: r.findings.length,
+    ...(leads.length ? { leads } : {}),
+  };
 }
 
 async function certsRun(c: RunCtx): Promise<StepOutcome> {
@@ -170,15 +189,38 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
   const r = runWebTaint(c.rootfsPath);
   syncFindings(c.imageId, 'webtaint', r.findings);
   const tainted = r.handlers.filter((h) => h.tainted).length;
+  const leads = handlerLeads(r.handlers, c.rootfsPath as string);
   return {
     summary: `web attack-surface: ${r.handlers.length} handlers, ${tainted} tainted → ${r.findings.length} findings`,
     findingCount: r.findings.length,
+    ...(leads.length ? { leads } : {}),
     ...(r.handlers.length === 0 ? { degraded: true, note: r.reason } : {}),
   };
 }
 
+/** W5 — targeted binary-vuln, scheduled by W9's re-planning. Decompile one daemon, sync its hardening findings. */
+async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
+  const binary = spec.target;
+  if (!binary) return { summary: 'no target binary', findingCount: 0, degraded: true, note: 'decompile spec missing target' };
+  const r = await runDecompile(c.rootfsPath as string, binary, c.handle);
+  if (!r.available) {
+    return { summary: `decompile ${binary}: unavailable`, findingCount: 0, degraded: true, note: r.reason ?? 'unavailable' };
+  }
+  const hardening = normalizeBinaryHardening(r);
+  // Same idempotent source the manual decompile route uses (routes/decompile.ts) → re-runs re-sync, not duplicate.
+  syncFindings(c.imageId, `binary:${binary}`, hardening);
+  const scaffold = buildTaintScaffold(r);
+  const surface = scaffold.hasTaintSurface
+    ? `, taint surface (${scaffold.sinks.length} sinks / ${scaffold.sources.length} sources)`
+    : '';
+  return {
+    summary: `decompiled ${binary}: ${r.functionCount} fns, ${hardening.length} hardening findings${surface}`,
+    findingCount: hardening.length,
+  };
+}
+
 /** Bind each plan `provider` tag to its concrete executor. Tags with no executor are the not-built workers. */
-const EXECUTORS: Record<ProviderId, (c: RunCtx) => Promise<StepOutcome>> = {
+const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepOutcome>> = {
   extract: extractRun,
   fsaudit: fsauditRun,
   sbom: sbomRun,
@@ -192,6 +234,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx) => Promise<StepOutcome>> = {
   esp: espRun,
   encrypted: encryptedRun,
   webtaint: webtaintRun,
+  decompile: decompileRun,
 };
 
 // === The orchestrator ===
@@ -231,9 +274,9 @@ export async function runOpacidad(
   if (!row?.identityJson) throw new Error('No identity for this image — analyze it first');
   const identity = JSON.parse(row.identityJson) as ImageIdentity;
 
-  const specs = specsForClass(identity.firmwareClass);
-  const plan = planEntries(specs);
-  handle.log(`Class '${identity.firmwareClass}' → plan: ${specs.map((s) => s.worker).join(' → ')}`);
+  const seed = specsForClass(identity.firmwareClass);
+  const plan = planEntries(seed);
+  handle.log(`Class '${identity.firmwareClass}' → seed plan: ${seed.map((s) => s.worker).join(' → ')}`);
 
   const prior = latestExtract(imageId);
   const ctx: RunCtx = {
@@ -245,45 +288,63 @@ export async function runOpacidad(
     handle,
   };
 
+  // W9 re-planning: the class DAG is only the SEED. A worker can surface a lead mid-run (a network daemon, the
+  // httpd serving a tainted handler) that schedules a follow-up worker — so the fixed plan becomes a dynamic
+  // worklist. Growth is deduped + capped so re-planning always terminates; a lead past the cap is surfaced, not
+  // silently dropped.
+  const MAX_DYNAMIC_STEPS = 8;
+  const agenda: PlanSpec[] = [...seed];
+  const sched: ScheduleState = { planned: new Set(seed.map(specKey)), dynamicCount: 0, capped: 0 };
+
   const steps: OpacidadStep[] = [];
-  for (const spec of specs) {
+  for (let i = 0; i < agenda.length; i++) {
+    const spec = agenda[i];
+    if (!spec) continue;
+    const meta = {
+      ...(spec.origin ? { origin: spec.origin } : {}),
+      ...(spec.trigger ? { trigger: spec.trigger } : {}),
+    };
     const executor = spec.provider ? EXECUTORS[spec.provider] : undefined;
     if (!spec.built || !executor) {
-      steps.push({
-        worker: spec.worker,
-        status: 'not-built',
-        summary: spec.reason,
-        ...(spec.note ? { note: spec.note } : {}),
-      });
+      steps.push({ worker: spec.worker, status: 'not-built', summary: spec.reason, ...(spec.note ? { note: spec.note } : {}), ...meta });
       handle.log(`▢ ${spec.worker}: not built`);
       continue;
     }
     if (spec.needsRootfs && !ctx.rootfsPath) {
-      steps.push({
-        worker: spec.worker,
-        status: 'skipped',
-        summary: spec.reason,
-        note: 'no extracted rootfs available',
-      });
+      steps.push({ worker: spec.worker, status: 'skipped', summary: spec.reason, note: 'no extracted rootfs available', ...meta });
       handle.log(`⚠ ${spec.worker}: skipped (no rootfs)`);
       continue;
     }
     try {
-      handle.log(`▶ ${spec.worker}`);
-      const out = await executor(ctx);
+      handle.log(`${spec.origin === 'replan' ? '↳ ▶' : '▶'} ${spec.worker}`);
+      const out = await executor(ctx, spec);
       steps.push({
         worker: spec.worker,
         status: out.degraded ? 'degraded' : 'ran',
         summary: out.summary,
         findingCount: out.findingCount,
         ...(out.note ? { note: out.note } : {}),
+        ...meta,
       });
       handle.log(`✓ ${spec.worker}: ${out.summary}`);
+      if (out.leads?.length) {
+        const added = scheduleLeads(out.leads, sched, MAX_DYNAMIC_STEPS);
+        for (const ns of added) handle.log(`↳ re-plan: scheduled ${ns.worker} — ${ns.trigger}`);
+        agenda.push(...added);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      steps.push({ worker: spec.worker, status: 'degraded', summary: spec.reason, note: `error: ${msg}` });
+      steps.push({ worker: spec.worker, status: 'degraded', summary: spec.reason, note: `error: ${msg}`, ...meta });
       handle.log(`⚠ ${spec.worker}: ${msg}`);
     }
+  }
+  if (sched.capped > 0) {
+    steps.push({
+      worker: 'W9 · Re-plan (cap reached)',
+      status: 'degraded',
+      summary: `${sched.capped} further daemon lead(s) not scheduled — dynamic step cap ${MAX_DYNAMIC_STEPS} reached`,
+      note: 'honest bound: raise the cap or triage the remaining daemons manually',
+    });
   }
 
   const findings = listFindings(imageId).map(rowToFinding);

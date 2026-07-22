@@ -550,6 +550,9 @@ export interface OpacidadResult {
     summary: string;
     note?: string;
     findingCount?: number;
+    /** `replan` = W9 scheduled this worker dynamically in response to a lead (not a seed of the class DAG). */
+    origin?: 'replan';
+    trigger?: string;
   }[];
   findings: {
     total: number;

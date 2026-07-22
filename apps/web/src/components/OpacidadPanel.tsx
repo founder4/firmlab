@@ -112,11 +112,16 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
               {result.steps.map((s) => {
                 const meta = STATUS_META[s.status];
                 return (
-                  <div key={s.worker} style={rowStyle}>
+                  <div key={s.worker} style={{ ...rowStyle, ...(s.origin === 'replan' ? { marginLeft: 16 } : {}) }}>
                     <span className={`badge ${meta.cls}`} style={{ minWidth: 22, textAlign: 'center' }}>
-                      {meta.mark}
+                      {s.origin === 'replan' ? '↳' : meta.mark}
                     </span>
                     <strong style={{ fontSize: 12.5 }}>{s.worker}</strong>
+                    {s.origin === 'replan' && (
+                      <span className="badge" style={{ fontSize: 10 }} title={s.trigger}>
+                        re-planned
+                      </span>
+                    )}
                     <span className="hint" style={{ flex: 1 }}>
                       {s.summary}
                       {s.note ? ` — ${s.note}` : ''}

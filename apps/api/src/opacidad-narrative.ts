@@ -19,6 +19,10 @@ export interface OpacidadStep {
   summary: string;
   note?: string;
   findingCount?: number;
+  /** `replan` = this worker was scheduled dynamically by W9 in response to a lead (not a seed of the class DAG). */
+  origin?: 'replan';
+  /** The lead that scheduled a re-planned worker. */
+  trigger?: string;
 }
 
 /** A planned worker and why the class routed to it (shown before/independent of execution). */
@@ -147,7 +151,14 @@ export function composeDeterministicNarrative(ctx: OpacidadContext): string {
   for (const s of ctx.steps) {
     const tag = s.status === 'ran' ? '✓' : s.status === 'not-built' ? '▢' : '⚠';
     const count = s.findingCount ? ` (${s.findingCount} findings)` : '';
-    L.push(`- ${tag} **${s.worker}** — ${s.summary}${count}${s.note ? ` _(${s.note})_` : ''}`);
+    const replan = s.origin === 'replan' ? '↳ ' : '';
+    L.push(`- ${replan}${tag} **${s.worker}** — ${s.summary}${count}${s.note ? ` _(${s.note})_` : ''}`);
+  }
+  if (ctx.steps.some((s) => s.origin === 'replan')) {
+    L.push(
+      '\n_↳ marks a worker W9 scheduled dynamically in response to a lead a prior worker surfaced (re-planning), ' +
+        'not a fixed step of the class plan._',
+    );
   }
 
   L.push('\n## Findings');
@@ -188,7 +199,14 @@ export function buildLlmPrompt(ctx: OpacidadContext): { system: string; user: st
     arch: ctx.arch,
     classRationale: ctx.classRationale ?? null,
     extractionChain: ctx.carveTrace?.map((s) => `${s.format}:${s.action}:${s.detail}`) ?? [],
-    workers: ctx.steps.map((s) => ({ worker: s.worker, status: s.status, summary: s.summary, note: s.note ?? null })),
+    workers: ctx.steps.map((s) => ({
+      worker: s.worker,
+      status: s.status,
+      summary: s.summary,
+      note: s.note ?? null,
+      scheduledByReplan: s.origin === 'replan',
+      trigger: s.trigger ?? null,
+    })),
     findingsBySeverity: summary.bySeverity,
     findingsByProofState: summary.byProofState,
     topFindings: summary.top,

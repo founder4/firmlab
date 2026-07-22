@@ -20,7 +20,8 @@ export type ProviderId =
   | 'chipsec'
   | 'esp'
   | 'encrypted'
-  | 'webtaint';
+  | 'webtaint'
+  | 'decompile';
 
 export interface PlanSpec {
   worker: string;
@@ -29,6 +30,24 @@ export interface PlanSpec {
   built: boolean;
   provider?: ProviderId;
   note?: string;
+  /** A concrete target for the executor (e.g. the rootfs-relative binary path for a `decompile` spec). */
+  target?: string;
+  /** `replan` = dynamically scheduled by W9 in response to a lead (vs a seed spec from the class DAG). */
+  origin?: 'replan';
+  /** The lead that caused this spec to be scheduled (shown in the trace). */
+  trigger?: string;
+}
+
+/**
+ * A lead a worker surfaces mid-run that should re-plan the agenda — the thing that turns W9's fixed per-class DAG
+ * into a dynamic worklist. Today the one kind is "decompile this specific binary" (a network daemon a scan found,
+ * or the httpd that serves a tainted handler).
+ */
+export interface Lead {
+  kind: 'decompile-binary';
+  /** The rootfs-relative binary to analyze. */
+  target: string;
+  reason: string;
 }
 
 const EXTRACT: PlanSpec = {
@@ -149,4 +168,73 @@ export function specsForClass(cls: string): PlanSpec[] {
 /** Turn a plan into the pre-execution plan list shown to the operator. */
 export function planEntries(specs: PlanSpec[]): OpacidadPlanEntry[] {
   return specs.map((s) => ({ worker: s.worker, reason: s.reason }));
+}
+
+/** The base name of a rootfs-relative path (no `node:path` dependency in this pure module). */
+function baseName(p: string): string {
+  const parts = p.split('/');
+  return parts[parts.length - 1] || p;
+}
+
+/**
+ * A spec's stable dedup key: a `decompile` spec keys on its target binary (so the same daemon is scheduled once),
+ * every other spec keys on its provider tag or worker name. Used to seed the "already planned" set and to keep
+ * re-planning idempotent.
+ */
+export function specKey(spec: PlanSpec): string {
+  if (spec.provider === 'decompile' && spec.target) return `decompile:${spec.target}`;
+  return spec.provider ?? spec.worker;
+}
+
+/**
+ * Pure: map one lead to the follow-up spec(s) to schedule. A `decompile-binary` lead becomes a W5 targeted
+ * binary-vuln spec (origin `replan`), unless that binary is already planned — then it is dropped (idempotent).
+ */
+export function replan(lead: Lead, planned: ReadonlySet<string>): PlanSpec[] {
+  if (lead.kind === 'decompile-binary') {
+    const spec: PlanSpec = {
+      worker: `W5 · Binary-vuln (${baseName(lead.target)})`,
+      reason: lead.reason,
+      needsRootfs: true,
+      built: true,
+      provider: 'decompile',
+      target: lead.target,
+      origin: 'replan',
+      trigger: lead.reason,
+    };
+    return planned.has(specKey(spec)) ? [] : [spec];
+  }
+  return [];
+}
+
+/** Mutable bookkeeping for dynamic scheduling across a run: what's planned, how many dynamic steps, how many capped. */
+export interface ScheduleState {
+  planned: Set<string>;
+  dynamicCount: number;
+  capped: number;
+}
+
+/**
+ * Pure (given the state it mutates): turn a batch of leads into the new specs to append to the agenda, respecting
+ * the already-planned set and a hard cap on dynamically-scheduled steps (so re-planning can never loop). Leads
+ * beyond the cap are counted in `state.capped` and surfaced honestly as a gap — never silently dropped.
+ */
+export function scheduleLeads(leads: Lead[], state: ScheduleState, cap: number): PlanSpec[] {
+  const added: PlanSpec[] = [];
+  for (const lead of leads) {
+    for (const spec of replan(lead, state.planned)) {
+      const key = specKey(spec);
+      if (state.dynamicCount >= cap) {
+        if (!state.planned.has(key)) {
+          state.planned.add(key);
+          state.capped++;
+        }
+        continue;
+      }
+      state.planned.add(key);
+      state.dynamicCount++;
+      added.push(spec);
+    }
+  }
+  return added;
 }
