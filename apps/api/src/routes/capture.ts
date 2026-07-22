@@ -7,9 +7,11 @@ import type { FastifyInstance } from 'fastify';
 import { type AgentFlowInput, createAgentSession, ingestAgentFlow, loadAgentToken, tokenOk } from '../capture/agent.js';
 import { availableTransports, detectCaptureBackends } from '../capture/backends.js';
 import { loadCaptureConfig } from '../capture/config.js';
+import { FRIDA_UNPIN } from '../capture/frida.js';
+import { planCapture, realizedCeiling } from '../capture/preflight.js';
 import { ingestFlow, refreshCaptureFlows, startCaptureSession, teardownCaptureSession } from '../capture/proxy.js';
 import { startDiscoveryScan } from '../capture/scan.js';
-import { getCaptureSession, listDevices } from '../store.js';
+import { getCaptureSession, getDevice, listDevices } from '../store.js';
 
 export async function captureRoutes(app: FastifyInstance): Promise<void> {
   // Is the capture lane enabled? (parity with /agent/status, /research/status — never leaks secrets.)
@@ -30,6 +32,26 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
   // The persistent LAN device inventory (the radar table), freshest first.
   app.get('/capture/devices', async () => {
     return { devices: listDevices() };
+  });
+
+  // Capturability preflight for a chosen target: the ranked strategy ladder + the honest acquisition ceiling.
+  app.get('/capture/preflight/:deviceId', async (req, reply) => {
+    const { deviceId } = req.params as { deviceId: string };
+    const device = getDevice(deviceId);
+    if (!device) return reply.status(404).send({ error: 'Device not found' });
+    const plan = planCapture(
+      { typeGuess: device.typeGuess, mdnsIdentity: device.mdnsIdentity },
+      detectCaptureBackends(),
+    );
+    return { device, plan };
+  });
+
+  // The Frida TLS-unpinning template (operator runs it on a rooted phone when a device pins). Plain-text download.
+  app.get('/capture/frida-unpin', async (_req, reply) => {
+    return reply
+      .header('content-type', 'text/plain; charset=utf-8')
+      .header('content-disposition', 'attachment; filename="firmlab-unpin.js"')
+      .send(FRIDA_UNPIN);
   });
 
   // Arm + run a passive discovery scan. Gated by the flag AND a per-request operator acknowledgement.
@@ -77,13 +99,13 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(202).send(result);
   });
 
-  // Poll a capture session: status + transcript + the live (re-scored) flow feed.
+  // Poll a capture session: status + transcript + the live (re-scored) flow feed + the realized acquisition ceiling.
   app.get('/capture/session/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
     const session = getCaptureSession(id);
     if (!session) return reply.status(404).send({ error: 'Session not found' });
     const flows = refreshCaptureFlows(id);
-    return { session: getCaptureSession(id) ?? session, flows };
+    return { session: getCaptureSession(id) ?? session, flows, ceiling: realizedCeiling(flows) };
   });
 
   // Ingest a carved firmware candidate into the workbench (→ a normal image + capture provenance).

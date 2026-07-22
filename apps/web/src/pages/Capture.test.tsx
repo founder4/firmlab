@@ -18,6 +18,7 @@ vi.mock('../api', async (importOriginal) => {
       captureSession: vi.fn(),
       ingestCaptureFlow: vi.fn(),
       teardownCapture: vi.fn(),
+      capturePreflight: vi.fn(),
     },
   };
 });
@@ -32,6 +33,7 @@ const mockApi = api as unknown as {
   captureSession: ReturnType<typeof vi.fn>;
   ingestCaptureFlow: ReturnType<typeof vi.fn>;
   teardownCapture: ReturnType<typeof vi.fn>;
+  capturePreflight: ReturnType<typeof vi.fn>;
 };
 
 const backend = (over: Partial<CaptureBackend>): CaptureBackend => ({
@@ -156,5 +158,34 @@ describe('Capture — Phase 6.1 interception', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Ingest' }));
     await waitFor(() => expect(mockApi.ingestCaptureFlow).toHaveBeenCalledWith('cap1', 'flowA'));
     expect(await screen.findByRole('link', { name: /ingested/i })).toBeInTheDocument();
+  });
+});
+
+describe('Capture — Phase 6.3 capturability preflight', () => {
+  beforeEach(() => {
+    mockApi.captureDevices.mockResolvedValue([device]);
+    mockApi.capturePreflight.mockResolvedValue({
+      strategies: [
+        { transport: 'http', positioning: 'gateway', viable: true, ceiling: 'captured_plaintext', reason: 'ready' },
+        {
+          transport: 'https',
+          positioning: 'gateway',
+          viable: true,
+          ceiling: 'captured_plaintext',
+          reason: 'unless pinned',
+        },
+      ],
+      ceiling: 'captured_plaintext',
+      reason: 'Best path: http via gateway.',
+      unlockHint: null,
+    });
+  });
+
+  it('shows the capturability ladder + honest ceiling for a target on demand', async () => {
+    render(<Capture />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preflight' }));
+    await waitFor(() => expect(mockApi.capturePreflight).toHaveBeenCalledWith('dev1'));
+    expect(await screen.findByText('captured_plaintext')).toBeInTheDocument();
+    expect(screen.getByText(/Best path: http via gateway/)).toBeInTheDocument();
   });
 });

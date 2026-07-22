@@ -58,6 +58,23 @@ def load(loader):
     loader.add_option("capdir", str, "", "FirmLab capture dir")
     loader.add_option("fwmin", int, 262144, "min body bytes to save")
 
+def tls_failed_client(data):
+    # A client that refuses FirmLab's CA (certificate pinning) fails the handshake here and never produces a
+    # response — record it as a tls-pinned flow so the session's ceiling is honestly blocked_by_pinning.
+    try:
+        capdir = _capdir()
+        if not capdir:
+            return
+        client = getattr(getattr(data, "context", None), "client", None)
+        host = getattr(client, "sni", None) or "unknown"
+        rec = {"id": "tls-pinned:" + str(host), "host": host, "url": "https://" + str(host) + "/",
+               "method": "CONNECT", "status": None, "contentType": None, "contentLength": 0,
+               "tls": "tls-pinned", "body": None}
+        with open(os.path.join(capdir, "flows.jsonl"), "a") as f:
+            f.write(json.dumps(rec) + "\\n")
+    except Exception:
+        pass
+
 def response(flow: http.HTTPFlow):
     capdir = _capdir()
     if not capdir:

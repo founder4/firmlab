@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
+  type CapturabilityPlan,
   type CaptureBackend,
   type CaptureDevice,
   type CaptureFlow,
@@ -7,6 +8,51 @@ import {
   type CaptureStatus,
   api,
 } from '../api';
+
+function ceilingClass(c: string | null | undefined): string {
+  if (c === 'captured_plaintext' || c === 'captured_encrypted') return 'badge-ok';
+  if (c === 'blocked_by_pinning' || c === 'blocked_needs_hardware') return 'badge-high';
+  return 'badge-medium';
+}
+
+/** The capturability ladder for a target: the honest ceiling, the ranked strategies, and what would unlock more. */
+function PreflightCard({ plan }: { plan: CapturabilityPlan }): JSX.Element {
+  return (
+    <div style={{ padding: '4px 2px' }}>
+      <div style={{ marginBottom: 6 }}>
+        Ceiling: <span className={`badge ${ceilingClass(plan.ceiling)} mono`}>{plan.ceiling}</span>{' '}
+        <span className="hint">{plan.reason}</span>
+      </div>
+      <table className="data">
+        <tbody>
+          {plan.strategies.map((s) => (
+            <tr key={s.transport}>
+              <td style={{ width: 24 }}>
+                <span className={`badge ${s.viable ? 'badge-ok' : ''}`}>{s.viable ? '●' : '○'}</span>
+              </td>
+              <td className="mono" style={{ width: 110 }}>
+                {s.transport}
+                {s.positioning ? ` · ${s.positioning}` : ''}
+              </td>
+              <td className="hint">{s.reason}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {plan.unlockHint && (
+        <div className="hint" style={{ marginTop: 6 }}>
+          ↑ {plan.unlockHint}
+          {/pin|frida/i.test(plan.unlockHint) && (
+            <>
+              {' '}
+              <a href="/api/capture/frida-unpin">download Frida unpin →</a>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const ROLE_LABEL: Record<string, string> = {
   positioning: 'Positioning',
@@ -29,10 +75,11 @@ function fmtWhen(ms: number): string {
 }
 
 /**
- * The Capture section (Phase 6.0 + 6.1). Shows what this deployment could capture (auto-detected backends + the
- * honest transport ceiling), runs a passive LAN discovery sweep to build the device inventory (the radar), and —
- * 6.1 — arms an on-path proxy to intercept a target's OTA, scores the flows for firmware, and ingests a carved
- * blob into the workbench. Gated by FIRMLAB_CAPTURE + a per-action operator acknowledgement.
+ * The Capture section (Phase 6.0–6.3). Shows what this deployment could capture (auto-detected backends + the
+ * honest transport ceiling), runs a passive LAN discovery sweep to build the device inventory (the radar), gives a
+ * per-target capturability preflight (the ranked strategy ladder + the honest acquisition ceiling + a Frida unpin
+ * download when pinned), and arms an on-path proxy to intercept a target's OTA — scoring the flows for firmware and
+ * ingesting a carved blob into the workbench. Gated by FIRMLAB_CAPTURE + a per-action operator acknowledgement.
  */
 export function Capture(): JSX.Element {
   const [status, setStatus] = useState<CaptureStatus | null>(null);
@@ -51,8 +98,17 @@ export function Capture(): JSX.Element {
   const [capSession, setCapSession] = useState<CaptureSession | null>(null);
   const [capFlows, setCapFlows] = useState<CaptureFlow[]>([]);
   const [capReason, setCapReason] = useState<string | null>(null);
+  const [capCeiling, setCapCeiling] = useState<string | null>(null);
   const [ingested, setIngested] = useState<Record<string, string>>({});
   const capPollRef = useRef<number | null>(null);
+
+  // 6.3 capturability preflight, per device.
+  const [preflight, setPreflight] = useState<Record<string, CapturabilityPlan>>({});
+
+  const runPreflight = useCallback(async (deviceId: string) => {
+    const plan = await api.capturePreflight(deviceId).catch(() => null);
+    if (plan) setPreflight((m) => ({ ...m, [deviceId]: plan }));
+  }, []);
 
   useEffect(() => {
     api
@@ -90,6 +146,7 @@ export function Capture(): JSX.Element {
           if (!v) return;
           setCapSession(v.session);
           setCapFlows(v.flows);
+          setCapCeiling(v.ceiling);
           if (v.session.status === 'ingested' || v.session.status === 'torn_down' || v.session.status === 'error') {
             if (capPollRef.current) window.clearInterval(capPollRef.current);
           }
@@ -98,6 +155,7 @@ export function Capture(): JSX.Element {
         if (v) {
           setCapSession(v.session);
           setCapFlows(v.flows);
+          setCapCeiling(v.ceiling);
         }
       } catch (e) {
         setCapReason(e instanceof Error ? e.message : String(e));
@@ -295,35 +353,47 @@ export function Capture(): JSX.Element {
               </thead>
               <tbody>
                 {devices.map((d) => (
-                  <tr key={d.id}>
-                    <td className="mono">{d.mac}</td>
-                    <td className="mono hint">{d.ip ?? '—'}</td>
-                    <td>{d.ouiVendor ?? <span className="hint">unknown</span>}</td>
-                    <td>
-                      {d.typeGuess ? (
-                        <span className={`badge ${confidenceClass(d.typeConfidence)}`}>
-                          {d.typeGuess} · {d.typeConfidence}
-                        </span>
-                      ) : (
-                        <span className="hint">—</span>
-                      )}
-                    </td>
-                    <td className="hint mono" style={{ fontSize: 11 }}>
-                      {d.mdnsIdentity ?? '—'}
-                    </td>
-                    <td className="hint">{fmtWhen(d.lastSeen)}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        disabled={!enabled || !ack}
-                        title={ack ? 'Arm an OTA capture for this device' : 'Acknowledge authorization first'}
-                        onClick={() => armCapture(d)}
-                      >
-                        Capture
-                      </button>
-                    </td>
-                  </tr>
+                  <Fragment key={d.id}>
+                    <tr>
+                      <td className="mono">{d.mac}</td>
+                      <td className="mono hint">{d.ip ?? '—'}</td>
+                      <td>{d.ouiVendor ?? <span className="hint">unknown</span>}</td>
+                      <td>
+                        {d.typeGuess ? (
+                          <span className={`badge ${confidenceClass(d.typeConfidence)}`}>
+                            {d.typeGuess} · {d.typeConfidence}
+                          </span>
+                        ) : (
+                          <span className="hint">—</span>
+                        )}
+                      </td>
+                      <td className="hint mono" style={{ fontSize: 11 }}>
+                        {d.mdnsIdentity ?? '—'}
+                      </td>
+                      <td className="hint">{fmtWhen(d.lastSeen)}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => runPreflight(d.id)}>
+                          Preflight
+                        </button>{' '}
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          disabled={!enabled || !ack}
+                          title={ack ? 'Arm an OTA capture for this device' : 'Acknowledge authorization first'}
+                          onClick={() => armCapture(d)}
+                        >
+                          Capture
+                        </button>
+                      </td>
+                    </tr>
+                    {preflight[d.id] && (
+                      <tr>
+                        <td colSpan={7} style={{ background: 'var(--bg-inset)' }}>
+                          <PreflightCard plan={preflight[d.id] as CapturabilityPlan} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -339,8 +409,20 @@ export function Capture(): JSX.Element {
             <span className={`badge ${capSession.status === 'ingested' ? 'badge-ok' : 'badge-accent'}`}>
               {capSession.status}
             </span>
+            {capCeiling && (
+              <>
+                {' '}
+                · ceiling <span className={`badge ${ceilingClass(capCeiling)} mono`}>{capCeiling}</span>
+              </>
+            )}
             . Trigger the device's OTA now; firmware-looking flows are highlighted and can be ingested.
           </div>
+          {capCeiling === 'blocked_by_pinning' && (
+            <div className="banner banner-warn">
+              The device pins TLS — the OTA can't be decrypted through the proxy. Run the bundled unpin script on a
+              rooted phone: <a href="/api/capture/frida-unpin">download Frida unpin →</a>
+            </div>
+          )}
           {capReason && (
             <div className={`banner ${capSession.status === 'error' ? 'banner-warn' : 'banner-info'}`}>{capReason}</div>
           )}

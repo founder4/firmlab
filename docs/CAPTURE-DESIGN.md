@@ -1,8 +1,9 @@
 # FirmLab — Capture & Acquisition (Phase 6 design)
 
-> Status: **6.0–6.2 shipped; 6.3+ designed.** The design below is the full plan. **6.0** (discovery + backend
-> detection + provenance schema), **6.1** (network capture via proxy + firmware-aware carving + auto-ingest), and
-> **6.2** (active ARP-spoof positioning + the token-authed LAN capture agent) are built and validated — `apps/api/src/capture/` (config, backend registry, discovery scan, the mitmproxy
+> Status: **6.0–6.3 shipped; 6.4+ designed.** The design below is the full plan. **6.0** (discovery + backend
+> detection + provenance schema), **6.1** (network capture via proxy + firmware-aware carving + auto-ingest),
+> **6.2** (active ARP-spoof positioning + the token-authed LAN capture agent), and **6.3** (capturability ladder +
+> preflight + pinning metadata + Frida unpin template) are built and validated — `apps/api/src/capture/` (config, backend registry, discovery scan, the mitmproxy
 > interception runner `proxy.ts`, the pure `flow-manifest.ts`, the `ingest.ts` acquire→analyze bridge),
 > `providers/discover.ts` + `providers/flowscore.ts`, the non-image-scoped `capture_sessions`/`devices`/
 > `capture_flows` tables + the `capture_provenance` record, the `/capture/*` routes, and the top-level **Capture**
@@ -342,7 +343,11 @@ the lab**, matching the project's existing validation discipline (real-tool, in-
   degradation, guaranteed ARP restore). The LAN agent — `capture/agent.ts` + token-authed `POST /capture/agent/*`
   + `scripts/capture-agent.mjs` — is the durable Docker answer: a privileged LAN box streams carved flows to the
   workbench, which scores + ingests them by the same path. Validated vs the real API.
-- **6.3 — Capturability ladder + preflight + pinning metadata + Frida unpin templates.**
+- **6.3 — Capturability ladder + preflight + pinning metadata + Frida unpin templates. ✅ SHIPPED.**
+  `capture/preflight.ts` ranks the viable strategies + states the honest acquisition ceiling (with `realizedCeiling`
+  from a session's actual flows, so pinning is observed not guessed — the proxy addon logs `tls-pinned` on a CA
+  refusal); `capture/frida.ts` + `GET /capture/frida-unpin` ship the unpin template; `GET /capture/preflight/:id`
+  is the capturability card. Web renders the ladder + a pinned-session Frida download. Validated vs the real API.
 - **6.4 — BLE backend** (nRF52840): GATT/DFU reassembly for the common stacks.
 - **6.5 — Zigbee backend**: OTA Upgrade cluster capture.
 - **6.6 — Learning surface**: OTA timeline, cross-version diff, per-vendor priors, CDN graph in the corpus.

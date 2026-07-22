@@ -650,6 +650,22 @@ export interface CaptureFlow {
 export interface CaptureSessionView {
   session: CaptureSession;
   flows: CaptureFlow[];
+  ceiling: string | null;
+}
+
+export interface CaptureStrategy {
+  transport: string;
+  positioning: string | null;
+  viable: boolean;
+  ceiling: string;
+  reason: string;
+}
+
+export interface CapturabilityPlan {
+  strategies: CaptureStrategy[];
+  ceiling: string;
+  reason: string;
+  unlockHint: string | null;
 }
 
 export interface StartCaptureResult {
@@ -761,6 +777,8 @@ export const api = {
   runCaptureDiscover: (subnet: string | null, acknowledged: boolean) =>
     post<{ scanId: string }>('/api/capture/discover', { ...(subnet ? { subnet } : {}), acknowledged }),
   captureScan: (scanId: string) => get<CaptureScanView>(`/api/capture/discover/${scanId}`),
+  capturePreflight: (deviceId: string) =>
+    get<{ device: CaptureDevice; plan: CapturabilityPlan }>(`/api/capture/preflight/${deviceId}`).then((r) => r.plan),
   // Phase 6.1 interception sessions.
   startCaptureSession: (deviceId: string | null, acknowledged: boolean) =>
     post<StartCaptureResult>('/api/capture/session', { ...(deviceId ? { deviceId } : {}), acknowledged }),

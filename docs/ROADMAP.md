@@ -259,7 +259,7 @@ OSV/KEV cache.
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
 
-## Phase 6 — Capture & acquisition (6.0–6.2 shipped; 6.3+ designed)
+## Phase 6 — Capture & acquisition (6.0–6.3 shipped; 6.4+ designed)
 
 Close the loop *before* analysis: acquire firmware from a **live device** in-flight (intercept an OTA update the
 moment you press "Update" in the vendor app), carve the blob out of the traffic, and auto-ingest it into the
@@ -308,8 +308,20 @@ transports HTTP/HTTPS/BLE/Zigbee, data model, web UX, phased 6.0–6.6): [`docs/
   Off unless `FIRMLAB_CAPTURE_AGENT_TOKEN` is set. **Validated vs the real API:** an agent session + a streamed
   SquashFS OTA scored 100 → carved → ingested; a tokenless request → 401; positioning honestly degraded to `manual`
   on a host without spoof caps.
-- [ ] **6.3–6.6** — capturability ladder/preflight + pinning/Frida · BLE backend · Zigbee backend · learning
-  surface (OTA timeline + cross-version diff + per-vendor priors).
+- [x] **6.3 — Capturability ladder + preflight + pinning metadata + Frida unpin template.** `capture/preflight.ts`
+  (pure, unit-tested): for a chosen target it ranks the viable capture strategies cheapest-and-most-complete first
+  (network http/https need positioning + proxy; a radio transport needs its dongle and is its own position) and
+  states the honest **acquisition proof-state** ceiling — `captured_plaintext` / `metadata_only` /
+  `blocked_by_pinning` / `blocked_needs_hardware` — with what would unlock more. `realizedCeiling` computes a live
+  session's ceiling from its ACTUAL flows, so "pinned" is a fact observed on the wire (the proxy addon now logs a
+  `tls-pinned` flow when a client refuses the CA), not a guess. `capture/frida.ts` ships a universal Android
+  TLS-unpinning Frida template, served at `GET /capture/frida-unpin`; `GET /capture/preflight/:deviceId` returns
+  the capturability card. Web: a per-device **Preflight** button renders the ladder + ceiling + unlock hint, and a
+  pinned session surfaces the Frida download. **Validated vs the real API:** the preflight honestly returns
+  `metadata_only` + "Install mitmproxy" on a host with no proxy/positioning; the Frida template downloads (3 hooks:
+  SSLContext / OkHttp CertificatePinner / Conscrypt TrustManagerImpl).
+- [ ] **6.4–6.6** — BLE backend (nRF52840 DFU) · Zigbee backend (OTA cluster) · learning surface (OTA timeline +
+  cross-version diff + per-vendor priors).
 
 **Phase 3 — decision nodes (implemented).** The agent now *chooses branches* on top of the deterministic
 skeleton, never the mechanics. The orchestrator (`agent/session.ts`) drives triage ① → deterministic extraction
