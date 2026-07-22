@@ -4,7 +4,9 @@ import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   analyzeRtos,
+  detectEcos,
   detectRtosKernel,
+  extractFlags,
   inferMemoryMap,
   parseVectorTable,
   recoverBaseAddress,
@@ -116,8 +118,46 @@ describe('analyzeRtos', () => {
     expect(lead?.title).toMatch(/needs Renode/i);
   });
 
-  it('produces no findings for a non-Cortex-M blob', () => {
+  it('produces no findings for a non-Cortex-M blob with no eCos/flag markers', () => {
     expect(analyzeRtos(Buffer.from([0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00])).findings).toHaveLength(0);
+  });
+});
+
+describe('detectEcos + extractFlags (non-Cortex-M RTOS / bare-metal lens)', () => {
+  it('detects an eCos monolith with version, RedBoot and the vendor app', () => {
+    const buf = Buffer.from('boot: RedBoot(tm) ... eCos 3.6.10 ... cyg_scheduler_start ... zxrouter main', 'latin1');
+    const e = detectEcos(buf);
+    expect(e).not.toBeNull();
+    expect(e?.version).toBe('eCos 3.6.10');
+    expect(e?.redboot).toBe(true);
+    expect(e?.app).toBe('zxrouter');
+  });
+
+  it('returns null for an image with no eCos markers', () => {
+    expect(detectEcos(Buffer.from('just some linux busybox strings', 'latin1'))).toBeNull();
+  });
+
+  it('analyzeRtos emits an rtos-ecos finding for a non-Cortex-M eCos image (not a silent empty)', () => {
+    const a = analyzeRtos(Buffer.from('cyg_thread_create eCos 3.6.10 zxrouter', 'latin1'));
+    expect(a.isCortexM).toBe(false);
+    const f = a.findings.find((x) => x.kind === 'rtos-ecos');
+    expect(f?.proofState).toBe('static_confirmed');
+    expect(f?.title).toMatch(/eCos 3\.6\.10/);
+  });
+
+  it('extracts plaintext flag-format tokens and emits a static_confirmed finding', () => {
+    const buf = Buffer.from('...garbage...flag{cR4p_1n_pl41nt3xt}...more...CTF{second_one}...', 'latin1');
+    const flags = extractFlags(buf);
+    expect(flags).toContain('flag{cR4p_1n_pl41nt3xt}');
+    expect(flags).toContain('CTF{second_one}');
+    const a = analyzeRtos(buf);
+    const ff = a.findings.filter((x) => x.kind === 'baremetal-flag');
+    expect(ff.length).toBe(2);
+    expect(ff[0]?.proofState).toBe('static_confirmed');
+  });
+
+  it('finds no flags in an image without flag-format tokens', () => {
+    expect(extractFlags(Buffer.from('nothing here but ordinary strings', 'latin1'))).toHaveLength(0);
   });
 });
 

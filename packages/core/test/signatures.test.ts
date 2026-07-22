@@ -220,4 +220,31 @@ describe('W0 device-class identity (entropy-gated, non-Linux classes)', () => {
     expect(id.firmwareClass).toBe('embedded-linux');
     expect(id.filesystems).toContain('jffs2');
   });
+
+  it('classifies an eCos monolith (uImage says Linux, payload is eCos) as rtos, NOT embedded-linux', () => {
+    const buf = new Uint8Array(0x4000);
+    // U-Boot uImage header whose ih_os byte @28 says Linux (5), ih_arch @29 says MIPS (5) — the OS byte lies.
+    buf.set([0x27, 0x05, 0x19, 0x56], 0);
+    buf[28] = 5; // ih_os = IH_OS_LINUX
+    buf[29] = 5; // ih_arch = IH_ARCH_MIPS
+    // eCos payload markers — the truth.
+    buf.set(ascii('RedBoot> '), 0x800);
+    buf.set(ascii('cyg_scheduler_start'), 0x900);
+    buf.set(ascii('zxrouter'), 0xa00);
+    const id = inferIdentity(buf, scanSignatures(buf));
+    expect(id.firmwareClass).toBe('rtos');
+    expect(id.arch).toBe('mipsel'); // refined from the uImage's endian-less mips
+    expect(id.endianness).toBe('little');
+    expect(id.filesystems).toEqual([]);
+    expect(id.classRationale).toMatch(/eCos/i);
+  });
+
+  it('does NOT call a real Linux image eCos just because its bootloader mentions RedBoot', () => {
+    // A genuine SquashFS rootfs present → embedded-linux wins; the RedBoot string must not divert it to rtos.
+    const buf = new Uint8Array(0x4000);
+    buf.set(ascii('hsqs'), 0x100); // SquashFS LE magic
+    buf.set(ascii('RedBoot bootloader'), 0x800);
+    const id = inferIdentity(buf, scanSignatures(buf));
+    expect(id.firmwareClass).toBe('embedded-linux');
+  });
 });
