@@ -408,3 +408,25 @@ wrong class*. This run, those 4 are fixed — the app now reproduces the pass-1 
 Net: the gap moved from "the app is blind on modern/non-Linux classes" to "the app matches a budget-limited agent,
 minus six specific depth features." On the closed images the app now *equals or exceeds* what a 34k-token agent
 recovers (e.g. GL.iNet 641 findings / 486 CVEs vs the agent's budget-limited 4).
+
+### 9.1 Gaps addressed (2026-07-22, same session)
+
+All six re-run gaps were then implemented (each a self-contained, unit-tested commit; the app now closes them
+without an autonomous agent):
+
+1. **W2 component-fingerprint CVE** (`providers/component-cve.ts`) — fingerprints bundled pppd/openssl by the
+   version string in the binary → **pppd 2.4.2–2.4.8 → CVE-2020-8597** (WR940N + WDR3600) + openssl Heartbleed.
+2. **W0 eCos/RTOS classification** (`core/structure.ts` + `rtos.ts`) — eCos monoliths (both Xiaomi) now classify
+   as `rtos`, not `embedded-linux`, with the version/RedBoot/app surfaced.
+3. **W7 plaintext flag/credential extraction** (`rtos.ts`) — bare-metal images emit `baremetal-flag` findings for
+   cleartext tokens (obfuscated flags still need manual reversing — stated honestly).
+4. **W5 binary-vuln sweep** (`providers/binvuln.ts`) — every rootfs ELF scanned for unbounded-copy + no-canary
+   stack-overflow candidates (the DVRF pwnables).
+5. **W3 embedded-private-key by content** (`fsaudit.ts`) — a PEM key inside any file is flagged regardless of
+   filename (Tenda's `O=Tenda` RSA key). _The BeanView aux-partition EXTRACTION half remains open — see BACKLOG._
+6. **Corrupt/decoy verdict** (`providers/decoy.ts`) — a hollow image (claimed fs + no rootfs + mostly zeros)
+   emits a `corrupt-decoy` finding instead of a silent 0 (Asus).
+
+Deferred remainders (in `BACKLOG.md`): aux-partition *extraction* (BeanView cloud secret), on-device
+decode-routine reversing (Pico flags), nvram parser + `/etc/shadow` cracking, and angr symbolic reachability to
+upgrade W5 candidates to confirmed.
