@@ -40,6 +40,7 @@ import {
   specKey,
   specsForClass,
 } from './opacidad-plan.js';
+import { runBinVuln } from './providers/binvuln.js';
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
@@ -210,6 +211,17 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
   };
 }
 
+/** W5 breadth — sweep every rootfs ELF for stack-overflow candidates (unbounded-copy + no canary). */
+async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runBinVuln(c.rootfsPath);
+  syncFindings(c.imageId, 'binvuln', r.findings);
+  return {
+    summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)`,
+    findingCount: r.findings.length,
+    ...(r.binariesScanned === 0 ? { degraded: true, note: r.reason } : {}),
+  };
+}
+
 /** W5 — targeted binary-vuln, scheduled by W9's re-planning. Decompile one daemon, sync its hardening findings. */
 async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   const binary = spec.target;
@@ -253,6 +265,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   esp: espRun,
   encrypted: encryptedRun,
   webtaint: webtaintRun,
+  binvuln: binvulnRun,
   decompile: decompileRun,
 };
 

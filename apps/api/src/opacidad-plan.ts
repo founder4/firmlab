@@ -22,6 +22,7 @@ export type ProviderId =
   | 'esp'
   | 'encrypted'
   | 'webtaint'
+  | 'binvuln'
   | 'decompile';
 
 export interface PlanSpec {
@@ -118,6 +119,13 @@ const LINUX_CHAIN: PlanSpec[] = [
     needsRootfs: true,
     built: true,
     provider: 'webtaint',
+  },
+  {
+    worker: 'W5 · Binary-vuln sweep',
+    reason: 'rootfs ELFs → unbounded-copy + no-canary stack-overflow candidates (DVRF pwnables)',
+    needsRootfs: true,
+    built: true,
+    provider: 'binvuln',
   },
 ];
 
