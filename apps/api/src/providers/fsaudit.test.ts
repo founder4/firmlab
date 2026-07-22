@@ -2,7 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { auditCredentials, auditInittab, auditServiceConfigs, notableFiles, runFsAudit } from './fsaudit.js';
+import {
+  auditCredentials,
+  auditInittab,
+  auditServiceConfigs,
+  notableFiles,
+  runFsAudit,
+  scanContentSecrets,
+} from './fsaudit.js';
 
 // A UID-0 root that defers its password to /etc/shadow, plus a normal daemon account.
 const PASSWD = 'root:x:0:0:root:/root:/bin/sh\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n';
@@ -150,6 +157,59 @@ describe('runFsAudit', () => {
       expect(kinds).toContain('inittab-root-shell');
       expect(kinds).toContain('notable-private-key');
       expect(kinds).toContain('notable-authorized-keys');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('scanContentSecrets (private key by content, not filename)', () => {
+  it('flags an embedded RSA private key regardless of filename', () => {
+    const files = [
+      {
+        path: 'etc/config/device.conf',
+        content: 'foo=bar\n-----BEGIN RSA PRIVATE KEY-----\nMIIC...\n-----END RSA PRIVATE KEY-----\n',
+      },
+    ];
+    const drafts = scanContentSecrets(files);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.kind).toBe('embedded-private-key');
+    expect(drafts[0]?.severity).toBe('high');
+    expect(drafts[0]?.proofState).toBe('static_confirmed');
+    expect(drafts[0]?.title).toContain('etc/config/device.conf');
+    // The key body must NOT leak into evidence.
+    expect(JSON.stringify(drafts[0]?.evidence)).not.toContain('MIIC');
+  });
+
+  it('detects OpenSSH/EC/PKCS#8 key headers and dedupes per file', () => {
+    expect(scanContentSecrets([{ path: 'a', content: '-----BEGIN OPENSSH PRIVATE KEY-----' }])[0]?.title).toContain(
+      'OpenSSH private key',
+    );
+    expect(scanContentSecrets([{ path: 'b', content: '-----BEGIN EC PRIVATE KEY-----' }])[0]?.title).toContain(
+      'EC private key',
+    );
+    // Two key blocks in one file → one finding.
+    const multi = scanContentSecrets([
+      { path: 'c', content: '-----BEGIN RSA PRIVATE KEY-----\n...\n-----BEGIN RSA PRIVATE KEY-----' },
+    ]);
+    expect(multi).toHaveLength(1);
+  });
+
+  it('does not flag a public key or certificate', () => {
+    expect(scanContentSecrets([{ path: 'x', content: '-----BEGIN PUBLIC KEY-----' }])).toHaveLength(0);
+    expect(scanContentSecrets([{ path: 'y', content: '-----BEGIN CERTIFICATE-----' }])).toHaveLength(0);
+  });
+
+  it('runFsAudit surfaces an embedded key in an innocuously-named file under etc/', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsaudit-key-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'etc'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'etc', 'server.pem'),
+        '-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n',
+      );
+      const r = runFsAudit(dir);
+      expect(r.findings.some((f) => f.kind === 'embedded-private-key')).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

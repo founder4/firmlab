@@ -289,6 +289,50 @@ export function auditServiceConfigs(files: { path: string; content: string }[]):
 }
 
 // ============================================================================
+// content secret scan (a private key by CONTENT, not just by filename)
+// ============================================================================
+
+/** PEM private-key block headers → a human label for the key type. The block itself is unambiguous. */
+const PEM_PRIVATE_KEYS: { re: RegExp; label: string }[] = [
+  { re: /-----BEGIN RSA PRIVATE KEY-----/, label: 'RSA private key' },
+  { re: /-----BEGIN DSA PRIVATE KEY-----/, label: 'DSA private key' },
+  { re: /-----BEGIN EC PRIVATE KEY-----/, label: 'EC private key' },
+  { re: /-----BEGIN OPENSSH PRIVATE KEY-----/, label: 'OpenSSH private key' },
+  { re: /-----BEGIN PGP PRIVATE KEY BLOCK-----/, label: 'PGP private key' },
+  { re: /-----BEGIN (?:ENCRYPTED )?PRIVATE KEY-----/, label: 'PKCS#8 private key' },
+];
+
+/**
+ * Pure: scan file CONTENTS for an embedded private key. Where `notableFiles` flags a key by *filename*, this
+ * catches the case the re-run exposed — a device-wide TLS private key shipped inside a file whose name gives no
+ * hint (Tenda-Camera's `O=Tenda` RSA key). A PEM private-key block is unambiguous, so this is HIGH /
+ * `static_confirmed`; the key body is NEVER included in evidence, only its type and the path. Dedupes by path so
+ * a multi-key bundle is one finding per file.
+ */
+export function scanContentSecrets(files: { path: string; content: string }[]): FindingDraft[] {
+  const drafts: FindingDraft[] = [];
+  const seen = new Set<string>();
+  for (const { path: p, content } of files) {
+    if (seen.has(p)) continue;
+    const hit = PEM_PRIVATE_KEYS.find((k) => k.re.test(content));
+    if (!hit) continue;
+    seen.add(p);
+    drafts.push({
+      kind: 'embedded-private-key',
+      title: `Embedded ${hit.label} in firmware: ${p}`,
+      severity: 'high',
+      proofState: 'static_confirmed',
+      evidence: { path: p, keyType: hit.label },
+      rationale:
+        'A PEM private-key block is literally present in this file — a device-wide/shared private key baked into ' +
+        'the firmware (e.g. a TLS server key identical on every unit) enables impersonation/decryption. The key ' +
+        'body is redacted; its presence is a static fact about the rootfs. Found by content, not filename.',
+    });
+  }
+  return drafts;
+}
+
+// ============================================================================
 // notable files (path-convention leads)
 // ============================================================================
 
@@ -443,6 +487,50 @@ function collectServiceConfigs(root: string): { path: string; content: string }[
   return out;
 }
 
+// Extensions worth reading for an embedded private key (PEM is text; binary DER/p12 is out of scope here).
+const CONTENT_SCAN_EXT = new Set([
+  '.pem',
+  '.key',
+  '.crt',
+  '.cer',
+  '.conf',
+  '.cfg',
+  '.config',
+  '.xml',
+  '.json',
+  '.ini',
+  '.txt',
+  '.sh',
+  '.lua',
+  '.js',
+]);
+const CONTENT_SCAN_FILE_CAP = 500;
+const CONTENT_SCAN_BYTES = 512 * 1024;
+
+/** Is this rootfs-relative path a candidate for a content secret scan (key-ish extension, or extensionless under etc/)? */
+function isContentScanCandidate(rel: string): boolean {
+  const lower = rel.toLowerCase();
+  const base = lower.split('/').pop() ?? lower;
+  const dot = base.lastIndexOf('.');
+  const ext = dot > 0 ? base.slice(dot) : '';
+  if (CONTENT_SCAN_EXT.has(ext)) return true;
+  // Extensionless files under etc/ (many embedded keys/configs have no extension).
+  return ext === '' && lower.startsWith('etc/');
+}
+
+/** Read a bounded set of candidate files' contents for the content secret scan. */
+function collectContentScanFiles(root: string, relPaths: string[]): { path: string; content: string }[] {
+  const out: { path: string; content: string }[] = [];
+  for (const rel of relPaths) {
+    if (out.length >= CONTENT_SCAN_FILE_CAP) break;
+    if (!isContentScanCandidate(rel)) continue;
+    const abs = safeJoin(root, rel);
+    if (!abs) continue;
+    out.push({ path: rel, content: readBounded(abs, CONTENT_SCAN_BYTES) });
+  }
+  return out;
+}
+
 /** Bounded, symlink-safe walk collecting rootfs-relative file paths (never follows a link out of the rootfs). */
 function walkRootfs(root: string): { relPaths: string[]; entriesWalked: number } {
   const relPaths: string[] = [];
@@ -490,12 +578,14 @@ export function runFsAudit(rootfsPath: string): FsAuditResult {
   const inittab = readInside(root, 'etc/inittab');
   const serviceFiles = collectServiceConfigs(root);
   const { relPaths, entriesWalked } = walkRootfs(root);
+  const contentScanFiles = collectContentScanFiles(root, relPaths);
 
   const findings: FindingDraft[] = [
     ...auditCredentials(passwd, shadow),
     ...auditInittab(inittab),
     ...auditServiceConfigs(serviceFiles),
     ...notableFiles(relPaths),
+    ...scanContentSecrets(contentScanFiles),
   ];
 
   const reason = `Static rootfs audit: ${findings.length} finding(s) across ${entriesWalked} path(s) (${serviceFiles.length} service config(s) read). Credential/private-key facts are static_confirmed; service exposures (init shell, telnetd, anon ftp) need runtime reproduction.`;
