@@ -10,6 +10,7 @@ import type { OpacidadPlanEntry } from './opacidad-narrative.js';
 export type ProviderId =
   | 'extract'
   | 'fsaudit'
+  | 'auxsecrets'
   | 'sbom'
   | 'compcve'
   | 'servicemap'
@@ -69,6 +70,13 @@ const LINUX_CHAIN: PlanSpec[] = [
     needsRootfs: true,
     built: true,
     provider: 'fsaudit',
+  },
+  {
+    worker: 'W3 · Auxiliary-partition secrets',
+    reason: 'embedded private keys in sibling (non-rootfs) partitions the rootfs audit never sees',
+    needsRootfs: false,
+    built: true,
+    provider: 'auxsecrets',
   },
   {
     worker: 'W2 · SBOM / CVE',

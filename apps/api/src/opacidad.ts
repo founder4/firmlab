@@ -41,6 +41,7 @@ import {
   specKey,
   specsForClass,
 } from './opacidad-plan.js';
+import { runAuxSecrets } from './providers/auxsecrets.js';
 import { runBinVuln } from './providers/binvuln.js';
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
@@ -62,12 +63,14 @@ import { runUbootAnalysis } from './providers/uboot.js';
 import { runWebTaint } from './providers/webtaint.js';
 import { getImage, listFindings, listJobs } from './store.js';
 
-/** Mutable run context threaded through the plan — extraction fills `rootfsPath`/`carveTrace` for later stages. */
+/** Mutable run context threaded through the plan — extraction fills `rootfsPath`/`outputDir`/`carveTrace` for later stages. */
 interface RunCtx {
   imageId: string;
   imagePath: string;
   analysisJson: string | null;
   rootfsPath: string | null;
+  /** The extraction output dir (all carved partitions) — the aux-secret scan reads sibling partitions from here. */
+  outputDir: string | null;
   carveTrace?: ExtractResult['carveTrace'];
   handle: JobHandle;
 }
@@ -121,6 +124,7 @@ async function extractRun(c: RunCtx): Promise<StepOutcome> {
   if (c.rootfsPath) return { summary: 'reused the already-extracted rootfs', findingCount: 0 };
   const ex = await runExtraction(c.imageId, c.imagePath, c.handle);
   c.rootfsPath = ex.rootfsPath;
+  c.outputDir = ex.outputDir;
   c.carveTrace = ex.carveTrace;
   if (ex.rootfsPath) {
     return {
@@ -157,6 +161,16 @@ async function fsauditRun(c: RunCtx): Promise<StepOutcome> {
   const r = runFsAudit(c.rootfsPath as string);
   syncFindings(c.imageId, 'fsaudit', r.findings);
   return { summary: `rootfs security audit: ${r.findings.length} findings`, findingCount: r.findings.length };
+}
+
+async function auxsecretsRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runAuxSecrets(c.outputDir, c.rootfsPath);
+  syncFindings(c.imageId, 'auxsecrets', r.findings);
+  return {
+    summary: `sibling-partition secrets: ${r.findings.length} embedded private key(s) in ${r.filesScanned} key-ish file(s)`,
+    findingCount: r.findings.length,
+    ...(r.available ? {} : { degraded: true, note: r.reason }),
+  };
 }
 
 async function sbomRun(c: RunCtx): Promise<StepOutcome> {
@@ -305,6 +319,7 @@ async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
 const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepOutcome>> = {
   extract: extractRun,
   fsaudit: fsauditRun,
+  auxsecrets: auxsecretsRun,
   sbom: sbomRun,
   compcve: compcveRun,
   servicemap: servicemapRun,
@@ -368,6 +383,7 @@ export async function runOpacidad(
     imagePath,
     analysisJson: row.analysisJson,
     rootfsPath: prior?.rootfsPath ?? null,
+    outputDir: prior?.outputDir ?? null,
     ...(prior?.carveTrace ? { carveTrace: prior.carveTrace } : {}),
     handle,
   };
