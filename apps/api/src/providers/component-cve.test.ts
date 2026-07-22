@@ -64,6 +64,17 @@ describe('component version extraction', () => {
   it('returns null when no version string is present', () => {
     expect(extractComponentVersion('just some unrelated strings', pppdRule)).toBeNull();
   });
+
+  it('extracts pppd version via the marker-gated fallback when the label is a format string (real WR940N shape)', () => {
+    // The real pppd binary stores `pppd version %s` and `2.4.3` as SEPARATE strings.
+    const realShape = 'lcp_reqci\npppd version %s\nManufacturer\n2.4.3\nremote IP address';
+    expect(extractComponentVersion(realShape, pppdRule)).toBe('2.4.3');
+  });
+
+  it('does NOT use the bare-version fallback without the pppd marker', () => {
+    // A bare 2.4.3 with no `pppd version` label must not be picked up (avoids grabbing an unrelated number).
+    expect(extractComponentVersion('some lib 2.4.3 build', pppdRule)).toBeNull();
+  });
 });
 
 describe('CVE matching + findings', () => {

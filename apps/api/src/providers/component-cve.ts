@@ -71,6 +71,15 @@ export interface ComponentRule {
   binNames: string[];
   /** Ordered version-extraction patterns (first match wins); capture group 1 is the version. */
   versionRes: RegExp[];
+  /**
+   * Marker-gated bare-version fallback. Many binaries print their version through a FORMAT STRING — the real
+   * WR940N `pppd` embeds `pppd version %s` (the label) and `2.4.3` (the value) as SEPARATE string constants, so a
+   * `pppd version (\d+\.\d+\.\d+)` pattern never matches. When `marker` is present in the strings we know the
+   * component is here, so we accept the first bare version matching `bareVersionRe`. Kept component-specific
+   * (e.g. pppd's 2.x series) so it cannot grab an unrelated number.
+   */
+  marker?: string;
+  bareVersionRe?: RegExp;
   cves: CveRule[];
 }
 
@@ -83,6 +92,9 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     component: 'pppd',
     binNames: ['pppd'],
     versionRes: [/pppd version (\d+\.\d+\.\d+)/i, /\bppp[- ]?(\d+\.\d+\.\d+)/i],
+    // The real binary stores `pppd version %s` + a bare `2.4.3` — gate a 2.x bare-version pickup on that label.
+    marker: 'pppd version',
+    bareVersionRe: /\b(2\.\d+\.\d+)\b/,
     cves: [
       {
         id: 'CVE-2020-8597',
@@ -119,6 +131,11 @@ export interface ComponentHit {
 export function extractComponentVersion(strings: string, rule: ComponentRule): string | null {
   for (const re of rule.versionRes) {
     const m = strings.match(re);
+    if (m?.[1]) return m[1];
+  }
+  // Marker-gated bare-version fallback (format-string binaries — see ComponentRule.marker).
+  if (rule.marker && rule.bareVersionRe && strings.includes(rule.marker)) {
+    const m = strings.match(rule.bareVersionRe);
     if (m?.[1]) return m[1];
   }
   return null;
