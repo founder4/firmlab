@@ -132,7 +132,12 @@ const COVERAGE: CovGroup[] = [
         status: 'partial',
         note: 'Phase 6.4: reassembly done; live sniff = nRF dongle',
       },
-      { name: 'ZigBee / Wi-Fi / SDR capture', status: 'out-of-scope', note: 'Phase-6 dongle (6.5 Zigbee deferred)' },
+      {
+        name: 'Zigbee OTA-cluster reassembly (0x0019)',
+        status: 'partial',
+        note: 'Phase 6.5: reassembly + unwrap done; live sniff = CC2531/ConBee',
+      },
+      { name: 'Wi-Fi / SDR capture', status: 'out-of-scope', note: 'Phase-6 dongle' },
       { name: 'Side-channel / fault injection (glitching)', status: 'out-of-scope', note: 'lab hardware' },
       { name: 'Weaponized exploitation (ROP / shellcode / PoC)', status: 'out-of-scope', note: 'defensive by design' },
     ],

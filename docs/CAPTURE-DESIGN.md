@@ -1,10 +1,10 @@
 # FirmLab — Capture & Acquisition (Phase 6 design)
 
-> Status: **6.0–6.4 + 6.6 shipped; 6.5 (Zigbee) deferred.** The design below is the full plan. **6.0** (discovery +
-> backend detection + provenance schema), **6.1** (network capture via proxy + firmware-aware carving + auto-ingest),
-> **6.2** (active ARP-spoof positioning + the token-authed LAN capture agent), **6.3** (capturability ladder +
-> preflight + pinning metadata + Frida unpin template), **6.4** (Nordic-style BLE DFU reassembly), and **6.6** (the
-> learning surface — OTA timeline + per-vendor priors + CDN graph) are built and validated — `apps/api/src/capture/` (config, backend registry, discovery scan, the mitmproxy
+> Status: **COMPLETE — 6.0–6.6 all shipped + validated.** **6.0** (discovery + backend detection + provenance
+> schema), **6.1** (network capture via proxy + firmware-aware carving + auto-ingest), **6.2** (active ARP-spoof
+> positioning + the token-authed LAN capture agent), **6.3** (capturability ladder + preflight + pinning metadata +
+> Frida unpin template), **6.4** (Nordic-style BLE DFU reassembly), **6.5** (Zigbee OTA-cluster reassembly + header
+> unwrap), and **6.6** (the learning surface — OTA timeline + per-vendor priors + CDN graph) are built and validated — `apps/api/src/capture/` (config, backend registry, discovery scan, the mitmproxy
 > interception runner `proxy.ts`, the pure `flow-manifest.ts`, the `ingest.ts` acquire→analyze bridge),
 > `providers/discover.ts` + `providers/flowscore.ts`, the non-image-scoped `capture_sessions`/`devices`/
 > `capture_flows` tables + the `capture_provenance` record, the `/capture/*` routes, and the top-level **Capture**
@@ -353,7 +353,10 @@ the lab**, matching the project's existing validation discipline (real-tool, in-
   (pure `reassembleDfu` + `parseDfuInitSize`) + `capture/ble.ts` stage a captured DFU write-stream as a carved
   `ble-gatt` flow; `POST /capture/ble/{session,dfu}`. Reassembly needs no dongle; the live nRF sniff is the
   radio-specific DATA-write adapter (deploy). Validated vs the real API.
-- **6.5 — Zigbee backend**: OTA Upgrade cluster capture. **Deferred** (skipped this pass) — same shape as 6.4.
+- **6.5 — Zigbee backend**: OTA Upgrade cluster capture. **✅ SHIPPED** — `capture/zigbee-ota.ts` (pure:
+  `reassembleOtaBlocks` + `parseZigbeeOtaHeader` [magic 0x0BEEF11E] + `extractOtaImage` unwraps the tag-0x0000
+  upgrade image) + `capture/zigbee.ts` stage a captured OTA transfer as a carved `zigbee-ota` flow;
+  `POST /capture/zigbee/{session,ota}`. Rejects a non-OTA stream honestly. Validated vs the real API.
 - **6.6 — Learning surface**: OTA timeline, cross-version diff, per-vendor priors, CDN graph in the corpus.
   **✅ SHIPPED** — `capture/learning.ts` aggregates `capture_provenance` into families + priors + a CDN graph;
   `GET /capture/families`; a Capture "OTA learning" panel with a cross-version diff link. Validated vs the real API.

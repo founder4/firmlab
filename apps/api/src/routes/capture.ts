@@ -13,6 +13,7 @@ import { type EnrichedProvenance, buildLearningSurface } from '../capture/learni
 import { planCapture, realizedCeiling } from '../capture/preflight.js';
 import { ingestFlow, refreshCaptureFlows, startCaptureSession, teardownCaptureSession } from '../capture/proxy.js';
 import { startDiscoveryScan } from '../capture/scan.js';
+import { createZigbeeSession, stageZigbeeOta } from '../capture/zigbee.js';
 import { getCaptureSession, getDevice, getImage, listCaptureProvenance, listDevices } from '../store.js';
 
 export async function captureRoutes(app: FastifyInstance): Promise<void> {
@@ -181,6 +182,37 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
     try {
       const chunks = body.chunks.map((c) => new Uint8Array(Buffer.from(c, 'base64')));
       const result = stageBleDfu(body.sessionId, body.name ?? 'ble-dfu.bin', chunks);
+      return reply.status(201).send(result);
+    } catch (e) {
+      return reply.status(400).send({ error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // === Phase 6.5: Zigbee OTA capture. Reassemble Image-Block payloads → unwrap the OTA container → a carved flow. ===
+
+  app.post('/capture/zigbee/session', async (req, reply) => {
+    const cfg = loadCaptureConfig();
+    if (!cfg) return reply.status(400).send({ error: 'Capture disabled — set FIRMLAB_CAPTURE=1' });
+    const body = (req.body ?? {}) as { deviceId?: string; acknowledged?: boolean };
+    if (body.acknowledged !== true) {
+      return reply.status(400).send({ error: 'Operator acknowledgement required' });
+    }
+    return reply.status(201).send({ sessionId: createZigbeeSession(body.deviceId ?? null) });
+  });
+
+  // Reassemble the captured Image-Block payloads (base64 chunks) of a Zigbee OTA and unwrap it to the firmware.
+  app.post('/capture/zigbee/ota', async (req, reply) => {
+    const cfg = loadCaptureConfig();
+    if (!cfg) return reply.status(400).send({ error: 'Capture disabled — set FIRMLAB_CAPTURE=1' });
+    const body = (req.body ?? {}) as { sessionId?: string; name?: string; blocks?: string[] };
+    if (!body.sessionId || !Array.isArray(body.blocks) || body.blocks.length === 0) {
+      return reply
+        .status(400)
+        .send({ error: 'sessionId and a non-empty blocks[] (base64 Image-Block data) are required' });
+    }
+    try {
+      const blocks = body.blocks.map((b) => new Uint8Array(Buffer.from(b, 'base64')));
+      const result = stageZigbeeOta(body.sessionId, body.name ?? 'zigbee-ota.bin', blocks);
       return reply.status(201).send(result);
     } catch (e) {
       return reply.status(400).send({ error: e instanceof Error ? e.message : String(e) });

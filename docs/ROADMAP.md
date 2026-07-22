@@ -259,7 +259,7 @@ OSV/KEV cache.
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
 
-## Phase 6 — Capture & acquisition (6.0–6.4 + 6.6 shipped; 6.5 Zigbee deferred)
+## Phase 6 — Capture & acquisition (COMPLETE — 6.0–6.6 all shipped)
 
 Close the loop *before* analysis: acquire firmware from a **live device** in-flight (intercept an OTA update the
 moment you press "Update" in the vendor app), carve the blob out of the traffic, and auto-ingest it into the
@@ -328,8 +328,16 @@ transports HTTP/HTTPS/BLE/Zigbee, data model, web UX, phased 6.0–6.6): [`docs/
   capture needs no dongle (validates anywhere); the live nRF52840 over-the-air sniff → the DATA-write stream is the
   radio-specific adapter, deploy/hardware-validated. **Validated vs the real API:** a 60 KB SquashFS image split
   into 20-byte DATA writes reassembled byte-exact → carved → ingested as a workbench image.
-- [ ] **6.5 — Zigbee backend (OTA Upgrade cluster 0x0019).** Deferred (skipped this pass) — same shape as BLE: a
-  sniffer + a cluster-payload reassembler → a carved `zigbee-ota` flow. The `zigbee` backend already auto-detects.
+- [x] **6.5 — Zigbee backend (OTA Upgrade cluster 0x0019).** Same shape as BLE, plus the standardized OTA file
+  format is the value-add: `capture/zigbee-ota.ts` (pure, unit-tested) reassembles the captured Image-Block
+  payloads into the OTA file, parses the standard header (magic `0x0BEEF11E` → manufacturer / image type / file
+  version), and UNWRAPS the tag-0x0000 upgrade-image sub-element to the actual firmware the device flashes;
+  `capture/zigbee.ts` stages it as a carved `zigbee-ota` flow (ingestable by the normal path). Routes
+  `POST /capture/zigbee/{session,ota}` (base64 Image-Block chunks). Honest: a stream that isn't a valid OTA file is
+  rejected, never a fabricated blob. Reassembling a *provided* capture needs no dongle; the live CC2531/ConBee
+  sniff is the radio-specific adapter (deploy). **Validated vs the real API:** a synthetic OTA wrapping a 40 KB
+  SquashFS → reassembled → header parsed → unwrapped to the exact inner firmware → carved → ingested; a non-OTA
+  stream → 400 with the honest reason.
 - [x] **6.6 — Learning surface.** `capture/learning.ts` (pure, unit-tested) aggregates the `capture_provenance`
   history (enriched with each linked image + device) into a per-device-family **OTA timeline** (versions ordered
   over time; cross-version diff reuses the existing `diff` provider between any two), **per-vendor priors** (how a
