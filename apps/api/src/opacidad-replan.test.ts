@@ -23,9 +23,9 @@ describe('replan + specKey', () => {
   });
 
   it('keys a decompile spec on its target, other specs on provider/worker', () => {
-    expect(specKey({ worker: 'x', reason: '', needsRootfs: true, built: true, provider: 'decompile', target: 'a/b' })).toBe(
-      'decompile:a/b',
-    );
+    expect(
+      specKey({ worker: 'x', reason: '', needsRootfs: true, built: true, provider: 'decompile', target: 'a/b' }),
+    ).toBe('decompile:a/b');
     expect(specKey({ worker: 'W2', reason: '', needsRootfs: true, built: true, provider: 'sbom' })).toBe('sbom');
   });
 });

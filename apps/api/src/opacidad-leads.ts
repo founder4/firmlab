@@ -1,3 +1,4 @@
+import type { Lead } from './opacidad-plan.js';
 /**
  * W9 re-planning — lead resolution. Turns a completed worker's output into `Lead`s that re-plan the agenda. Two
  * sources produce leads today: service enumeration (each autostart network daemon → decompile it) and web-taint
@@ -5,7 +6,6 @@
  * to a regular file inside the rootfs — so W9 never schedules a decompile of a daemon that isn't really there.
  */
 import { resolveInsideRootfs } from './providers/decompile.js';
-import type { Lead } from './opacidad-plan.js';
 import type { Service } from './providers/servicemap.js';
 import type { HandlerAnalysis } from './providers/webtaint.js';
 

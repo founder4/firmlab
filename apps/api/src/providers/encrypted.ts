@@ -210,7 +210,8 @@ export function analyzeEncrypted(buf: Uint8Array, fileSize: number): EncryptedAn
       severity: 'info',
       proofState: 'static_confirmed',
       evidence: { tags: header.plaintextTags, lengthField: header.lengthField },
-      rationale: 'The OTA header leaks unencrypted metadata (firmware type / length) even though the body is encrypted.',
+      rationale:
+        'The OTA header leaks unencrypted metadata (firmware type / length) even though the body is encrypted.',
     });
   }
 

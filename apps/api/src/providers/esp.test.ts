@@ -2,13 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import {
-  analyzeEsp,
-  assessSecurePosture,
-  parseNvsRegion,
-  parsePartitionTable,
-  runEspAnalysis,
-} from './esp.js';
+import { analyzeEsp, assessSecurePosture, parseNvsRegion, parsePartitionTable, runEspAnalysis } from './esp.js';
 
 /** Little-endian encodings. */
 function u32le(n: number): number[] {
@@ -43,7 +37,8 @@ describe('parsePartitionTable', () => {
       ...partEntry(0x01, 0x02, 0x9000, 0x5000, 'nvs'),
       ...partEntry(0x00, 0x10, 0x10000, 0x140000, 'app0'),
       ...partEntry(0x01, 0x82, 0x290000, 0x160000, 'spiffs'),
-      0xeb, 0xeb, // md5 marker → table ends
+      0xeb,
+      0xeb, // md5 marker → table ends
     ];
     Buffer.from(table).copy(buf, 0x8000);
     const parts = parsePartitionTable(buf);
@@ -144,13 +139,11 @@ function buildEspImage(): Buffer {
   const table = [
     ...partEntry(0x01, 0x02, 0x9000, 0x1000, 'nvs'),
     ...partEntry(0x00, 0x00, 0x10000, 0x8000, 'factory'),
-    0xeb, 0xeb,
+    0xeb,
+    0xeb,
   ];
   Buffer.from(table).copy(buf, 0x8000);
-  const page = nvsPage(
-    [0xaa, 0xff],
-    [nvsEntry(0x04, 0x42, 2, 'privkey', u16le(32)), new Array(32).fill(0xcd)],
-  );
+  const page = nvsPage([0xaa, 0xff], [nvsEntry(0x04, 0x42, 2, 'privkey', u16le(32)), new Array(32).fill(0xcd)]);
   page.copy(buf, 0x9000);
   buf[0x10000] = 0xe9; // plaintext app image → posture OFF
   return buf;

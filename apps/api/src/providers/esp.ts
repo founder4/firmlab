@@ -47,25 +47,30 @@ export interface PartitionEntry {
   label: string;
 }
 
-const APP_SUBTYPES: Record<number, string> = { 0x00: 'factory', 0x20: 'test' };
-const DATA_SUBTYPES: Record<number, string> = {
-  0x00: 'ota', // the otadata partition
-  0x01: 'phy',
-  0x02: 'nvs',
-  0x03: 'coredump',
-  0x04: 'nvs_keys',
-  0x05: 'efuse_em',
-  0x06: 'undefined',
-  0x80: 'esphttpd',
-  0x81: 'fat',
-  0x82: 'spiffs',
-  0x83: 'littlefs',
-};
+// Keyed by the on-disk ESP-IDF subtype byte (hex is the canonical representation) — a Map so the meaningful
+// hex literals survive without tripping biome's number-key rule.
+const APP_SUBTYPES = new Map<number, string>([
+  [0x00, 'factory'],
+  [0x20, 'test'],
+]);
+const DATA_SUBTYPES = new Map<number, string>([
+  [0x00, 'ota'], // the otadata partition
+  [0x01, 'phy'],
+  [0x02, 'nvs'],
+  [0x03, 'coredump'],
+  [0x04, 'nvs_keys'],
+  [0x05, 'efuse_em'],
+  [0x06, 'undefined'],
+  [0x80, 'esphttpd'],
+  [0x81, 'fat'],
+  [0x82, 'spiffs'],
+  [0x83, 'littlefs'],
+]);
 
 /** Name an (app-subtype) code: 0x10..0x1f are ota_0..ota_15. */
 function appSubtypeName(sub: number): string {
   if (sub >= 0x10 && sub <= 0x1f) return `ota_${sub - 0x10}`;
-  return APP_SUBTYPES[sub] ?? `subtype:0x${sub.toString(16)}`;
+  return APP_SUBTYPES.get(sub) ?? `subtype:0x${sub.toString(16)}`;
 }
 
 /**
@@ -89,7 +94,7 @@ export function parsePartitionTable(buf: Uint8Array, base = PARTTABLE_OFFSET): P
       typeByte === 0x00
         ? appSubtypeName(subByte)
         : typeByte === 0x01
-          ? (DATA_SUBTYPES[subByte] ?? `subtype:0x${subByte.toString(16)}`)
+          ? (DATA_SUBTYPES.get(subByte) ?? `subtype:0x${subByte.toString(16)}`)
           : `subtype:0x${subByte.toString(16)}`;
     entries.push({ type, subtype, offset, size, label });
   }
@@ -125,21 +130,21 @@ export interface NvsEntry {
   sensitive: boolean;
 }
 
-/** NVS value type codes → a friendly name. */
-const NVS_TYPES: Record<number, string> = {
-  0x01: 'u8',
-  0x11: 'i8',
-  0x02: 'u16',
-  0x12: 'i16',
-  0x04: 'u32',
-  0x14: 'i32',
-  0x08: 'u64',
-  0x18: 'i64',
-  0x21: 'string',
-  0x41: 'blob',
-  0x42: 'blob_data',
-  0x48: 'blob_idx',
-};
+/** NVS value type codes (the on-disk ESP-IDF type byte) → a friendly name. */
+const NVS_TYPES = new Map<number, string>([
+  [0x01, 'u8'],
+  [0x11, 'i8'],
+  [0x02, 'u16'],
+  [0x12, 'i16'],
+  [0x04, 'u32'],
+  [0x14, 'i32'],
+  [0x08, 'u64'],
+  [0x18, 'i64'],
+  [0x21, 'string'],
+  [0x41, 'blob'],
+  [0x42, 'blob_data'],
+  [0x48, 'blob_idx'],
+]);
 
 /** A key name that looks like key material / a credential worth surfacing. */
 const SENSITIVE_KEY = /priv|secret|sign|token|passw?d?|pass|cred|apikey|api_key|_key$|^key$|cert|seed|mnemonic/i;
@@ -179,7 +184,7 @@ export function parseNvsRegion(buf: Uint8Array, off: number, size: number): NvsE
       const st = entryState(bitmap, si);
       if (st === 'empty') continue;
       const typeByte = buf[eo + 1] ?? 0xff;
-      const typeName = NVS_TYPES[typeByte];
+      const typeName = NVS_TYPES.get(typeByte);
       if (!typeName) continue; // not a live entry slot (continuation data / padding)
       const key = decodeCString(buf, eo + 8, 16);
       if (!key) continue;
@@ -288,10 +293,7 @@ export function assessSecurePosture(buf: Uint8Array, appOffset: number | null): 
     flashEncryption: 'off',
     secureBoot: 'off',
     antiRollback: 'off',
-    evidence:
-      `app partition @0x${appOffset.toString(16)} is a plaintext esp_image (magic 0xE9) → Flash-Encryption OFF; ` +
-      'no appended secure-boot signature block → Secure-Boot OFF; without secure boot there is no rollback ' +
-      'enforcement. (Definitive posture would need live eFuse reads.)',
+    evidence: `app partition @0x${appOffset.toString(16)} is a plaintext esp_image (magic 0xE9) → Flash-Encryption OFF; no appended secure-boot signature block → Secure-Boot OFF; without secure boot there is no rollback enforcement. (Definitive posture would need live eFuse reads.)`,
   };
 }
 

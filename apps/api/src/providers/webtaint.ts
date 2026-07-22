@@ -201,13 +201,11 @@ export function buildTaintFindings(
           ? `default valid_rpc_args ${validator.pattern}${newlineInjectable ? ' (permits newline → directive injection)' : ''}`
           : 'no validator found (input unconstrained)',
     },
-    rationale:
-      'An exec sink is built by string-concatenation with attacker-controlled input; the resolved validator does ' +
-      (newlineInjectable
+    rationale: `An exec sink is built by string-concatenation with attacker-controlled input; the resolved validator does ${
+      newlineInjectable
         ? 'not block the shell/newline metacharacters, so the concatenated command is injectable. '
-        : 'constrain the input — verify it blocks every metacharacter before relying on it. ') +
-      'The source→sink→privilege chain is derived statically from the handler bytes; on-device reproduction is ' +
-      'the dynamic webprobe step, not claimed here.',
+        : 'constrain the input — verify it blocks every metacharacter before relying on it. '
+    }The source→sink→privilege chain is derived statically from the handler bytes; on-device reproduction is the dynamic webprobe step, not claimed here.`,
   });
 
   if (h.fromUci) {
@@ -273,7 +271,10 @@ function listHandlers(root: string): string[] {
       const childAbs = path.join(abs, e.name);
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) walk(childAbs, childRel);
-      else if (e.isFile() && (HANDLER_EXT.test(e.name) || rel.includes('oui-httpd/rpc') || rel.includes('libexec/rpcd')))
+      else if (
+        e.isFile() &&
+        (HANDLER_EXT.test(e.name) || rel.includes('oui-httpd/rpc') || rel.includes('libexec/rpcd'))
+      )
         out.push(childRel);
     }
   };
@@ -340,7 +341,13 @@ function perObjectValidator(root: string, object: string): string | null {
  */
 export function runWebTaint(rootfsPath: string | null): WebTaintResult {
   if (!rootfsPath) {
-    return { available: false, handlers: [], validator: { path: null, pattern: null, permitsNewline: true }, findings: [], reason: 'no extracted rootfs' };
+    return {
+      available: false,
+      handlers: [],
+      validator: { path: null, pattern: null, permitsNewline: true },
+      findings: [],
+      reason: 'no extracted rootfs',
+    };
   }
   const rels = listHandlers(rootfsPath);
   if (rels.length === 0) {
@@ -380,9 +387,6 @@ export function runWebTaint(rootfsPath: string | null): WebTaintResult {
     handlers,
     validator,
     findings,
-    reason:
-      `Scanned ${handlers.length} web handlers, ${tainted} tainted (web-param → shell). ` +
-      `Validator: ${validator.pattern ?? 'none found'}${validator.permitsNewline ? ' (permits newline)' : ''}. ` +
-      'Static taint over the handler bytes — on-device reproduction is the dynamic webprobe step.',
+    reason: `Scanned ${handlers.length} web handlers, ${tainted} tainted (web-param → shell). Validator: ${validator.pattern ?? 'none found'}${validator.permitsNewline ? ' (permits newline)' : ''}. Static taint over the handler bytes — on-device reproduction is the dynamic webprobe step.`,
   };
 }

@@ -201,10 +201,16 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
 /** W5 — targeted binary-vuln, scheduled by W9's re-planning. Decompile one daemon, sync its hardening findings. */
 async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   const binary = spec.target;
-  if (!binary) return { summary: 'no target binary', findingCount: 0, degraded: true, note: 'decompile spec missing target' };
+  if (!binary)
+    return { summary: 'no target binary', findingCount: 0, degraded: true, note: 'decompile spec missing target' };
   const r = await runDecompile(c.rootfsPath as string, binary, c.handle);
   if (!r.available) {
-    return { summary: `decompile ${binary}: unavailable`, findingCount: 0, degraded: true, note: r.reason ?? 'unavailable' };
+    return {
+      summary: `decompile ${binary}: unavailable`,
+      findingCount: 0,
+      degraded: true,
+      note: r.reason ?? 'unavailable',
+    };
   }
   const hardening = normalizeBinaryHardening(r);
   // Same idempotent source the manual decompile route uses (routes/decompile.ts) → re-runs re-sync, not duplicate.
@@ -306,12 +312,24 @@ export async function runOpacidad(
     };
     const executor = spec.provider ? EXECUTORS[spec.provider] : undefined;
     if (!spec.built || !executor) {
-      steps.push({ worker: spec.worker, status: 'not-built', summary: spec.reason, ...(spec.note ? { note: spec.note } : {}), ...meta });
+      steps.push({
+        worker: spec.worker,
+        status: 'not-built',
+        summary: spec.reason,
+        ...(spec.note ? { note: spec.note } : {}),
+        ...meta,
+      });
       handle.log(`▢ ${spec.worker}: not built`);
       continue;
     }
     if (spec.needsRootfs && !ctx.rootfsPath) {
-      steps.push({ worker: spec.worker, status: 'skipped', summary: spec.reason, note: 'no extracted rootfs available', ...meta });
+      steps.push({
+        worker: spec.worker,
+        status: 'skipped',
+        summary: spec.reason,
+        note: 'no extracted rootfs available',
+        ...meta,
+      });
       handle.log(`⚠ ${spec.worker}: skipped (no rootfs)`);
       continue;
     }
