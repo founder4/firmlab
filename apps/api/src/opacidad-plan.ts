@@ -17,7 +17,8 @@ export type ProviderId =
   | 'uboot'
   | 'fcc'
   | 'rtos'
-  | 'chipsec';
+  | 'chipsec'
+  | 'esp';
 
 export interface PlanSpec {
   worker: string;
@@ -122,10 +123,10 @@ export function specsForClass(cls: string): PlanSpec[] {
       return [
         {
           worker: 'W6 · ESP / IoT-SoC',
-          reason: 'partition table + NVS key store (signing keys!) + Flash-Enc/Secure-Boot eFuse posture',
+          reason: 'partition table + NVS key store (signing keys!) + Flash-Enc/Secure-Boot posture',
           needsRootfs: false,
-          built: false,
-          note: 'ESP worker not built yet — class + arch are identified; NVS/eFuse parsing is the next build (§8 W6)',
+          built: true,
+          provider: 'esp',
         },
       ];
     case 'encrypted':

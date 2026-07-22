@@ -24,8 +24,9 @@ describe('specsForClass — class-routed worker plan', () => {
     expect(specsForClass('uefi-bios')[0]?.worker).toContain('chipsec');
     expect(specsForClass('baremetal')[0]?.worker).toContain('Bare-metal');
     expect(specsForClass('rtos')[0]?.worker).toContain('Bare-metal');
-    // ESP and encrypted deep workers are not built yet — reported honestly, never silently.
-    expect(specsForClass('esp-soc')[0]?.built).toBe(false);
+    // The ESP deep worker (W6) is built; the encrypted deep worker is not yet — reported honestly, never silently.
+    expect(specsForClass('esp-soc')[0]?.built).toBe(true);
+    expect(specsForClass('esp-soc')[0]?.provider).toBe('esp');
     expect(specsForClass('encrypted')[0]?.built).toBe(false);
   });
 

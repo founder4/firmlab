@@ -33,6 +33,7 @@ import { type ProviderId, planEntries, specsForClass } from './opacidad-plan.js'
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
+import { runEspAnalysis } from './providers/esp.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
 import { runFccLookup } from './providers/fcc.js';
 import { runFsAudit } from './providers/fsaudit.js';
@@ -142,6 +143,17 @@ async function chipsecRun(c: RunCtx): Promise<StepOutcome> {
   return { summary: `UEFI offline decode + posture: ${r.findings.length} findings`, findingCount: r.findings.length };
 }
 
+async function espRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runEspAnalysis(c.imagePath);
+  syncFindings(c.imageId, 'esp', r.findings);
+  if (!r.isEsp) return { summary: 'not an ESP dump', findingCount: 0, degraded: true, note: r.reason };
+  const keys = r.findings.filter((f) => f.kind === 'esp-nvs-key').length;
+  return {
+    summary: `ESP SoC: ${r.partitions.length} partitions, ${r.nvsEntries.length} NVS entries${keys ? `, ${keys} key(s) recovered` : ''}; Flash-Enc ${r.posture.flashEncryption}/Secure-Boot ${r.posture.secureBoot}`,
+    findingCount: r.findings.length,
+  };
+}
+
 /** Bind each plan `provider` tag to its concrete executor. Tags with no executor are the not-built workers. */
 const EXECUTORS: Record<ProviderId, (c: RunCtx) => Promise<StepOutcome>> = {
   extract: extractRun,
@@ -154,6 +166,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx) => Promise<StepOutcome>> = {
   fcc: fccRun,
   rtos: rtosRun,
   chipsec: chipsecRun,
+  esp: espRun,
 };
 
 // === The orchestrator ===
