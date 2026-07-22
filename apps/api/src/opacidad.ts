@@ -33,6 +33,7 @@ import { type ProviderId, planEntries, specsForClass } from './opacidad-plan.js'
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
+import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
 import { runFccLookup } from './providers/fcc.js';
@@ -154,6 +155,16 @@ async function espRun(c: RunCtx): Promise<StepOutcome> {
   };
 }
 
+async function encryptedRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runEncryptedAnalysis(c.imagePath);
+  syncFindings(c.imageId, 'encrypted', r.findings);
+  const iv = r.header.ivBlock ? `, IV @ 0x${r.header.ivBlock.offset.toString(16)}` : '';
+  return {
+    summary: `encrypted body: ${r.verdict.cipher} ${r.verdict.mode}${iv} — unrecoverable without the key`,
+    findingCount: r.findings.length,
+  };
+}
+
 /** Bind each plan `provider` tag to its concrete executor. Tags with no executor are the not-built workers. */
 const EXECUTORS: Record<ProviderId, (c: RunCtx) => Promise<StepOutcome>> = {
   extract: extractRun,
@@ -167,6 +178,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx) => Promise<StepOutcome>> = {
   rtos: rtosRun,
   chipsec: chipsecRun,
   esp: espRun,
+  encrypted: encryptedRun,
 };
 
 // === The orchestrator ===

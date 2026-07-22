@@ -18,7 +18,8 @@ export type ProviderId =
   | 'fcc'
   | 'rtos'
   | 'chipsec'
-  | 'esp';
+  | 'esp'
+  | 'encrypted';
 
 export interface PlanSpec {
   worker: string;
@@ -133,10 +134,10 @@ export function specsForClass(cls: string): PlanSpec[] {
       return [
         {
           worker: 'W8 · Encrypted-blob',
-          reason: 'identify cipher/mode/IV and name the key-recovery path',
+          reason: 'identify cipher/mode/IV and name the key-recovery path (honest verdict, never a silent empty)',
           needsRootfs: false,
-          built: false,
-          note: 'encrypted worker not built; extraction is impossible without the key — the honest verdict, not an empty result',
+          built: true,
+          provider: 'encrypted',
         },
       ];
     default:

@@ -24,10 +24,11 @@ describe('specsForClass — class-routed worker plan', () => {
     expect(specsForClass('uefi-bios')[0]?.worker).toContain('chipsec');
     expect(specsForClass('baremetal')[0]?.worker).toContain('Bare-metal');
     expect(specsForClass('rtos')[0]?.worker).toContain('Bare-metal');
-    // The ESP deep worker (W6) is built; the encrypted deep worker is not yet — reported honestly, never silently.
+    // The ESP (W6) and encrypted (W8) deep workers are built.
     expect(specsForClass('esp-soc')[0]?.built).toBe(true);
     expect(specsForClass('esp-soc')[0]?.provider).toBe('esp');
-    expect(specsForClass('encrypted')[0]?.built).toBe(false);
+    expect(specsForClass('encrypted')[0]?.built).toBe(true);
+    expect(specsForClass('encrypted')[0]?.provider).toBe('encrypted');
   });
 
   it('falls back to an extraction probe for an unknown class', () => {
