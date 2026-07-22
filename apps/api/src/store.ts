@@ -311,6 +311,53 @@ export function getDb(): DatabaseSync {
       FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_preset_image ON emulation_preset(imageId);
+
+    -- === Phase 6: capture & acquisition. Deliberately NOT image-scoped — a capture PRECEDES an image and may
+    -- produce one, so these tables stand on their own (the first non-image-scoped state in the store). A
+    -- capture_session is the auditable lifecycle anchor (armed to discovering to torn_down); the devices table is
+    -- a persistent LAN inventory that accumulates across scans; capture_provenance links an ingested image back to
+    -- how it was acquired — its schema lands now (a 6.0 deliverable), rows are written when interception ships. ===
+    CREATE TABLE IF NOT EXISTS capture_sessions (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      subnet TEXT,
+      targetDeviceId TEXT,
+      strategyJson TEXT,
+      transcript TEXT NOT NULL DEFAULT '',
+      deviceCount INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_capture_sessions_created ON capture_sessions(createdAt);
+
+    CREATE TABLE IF NOT EXISTS devices (
+      id TEXT PRIMARY KEY,
+      mac TEXT NOT NULL UNIQUE,
+      ouiVendor TEXT,
+      ip TEXT,
+      mdnsIdentity TEXT,
+      openPorts TEXT,
+      typeGuess TEXT,
+      typeConfidence TEXT,
+      firstSeen INTEGER NOT NULL,
+      lastSeen INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_devices_lastseen ON devices(lastSeen);
+
+    CREATE TABLE IF NOT EXISTS capture_provenance (
+      id TEXT PRIMARY KEY,
+      imageId TEXT NOT NULL,
+      deviceId TEXT,
+      sessionId TEXT,
+      endpoint TEXT,
+      version TEXT,
+      transport TEXT,
+      tlsPosture TEXT,
+      capturedAt INTEGER NOT NULL,
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_capture_provenance_image ON capture_provenance(imageId);
   `);
   // Migration: add the tags column to databases created before it existed.
   try {
@@ -612,4 +659,131 @@ export function listSteps(sessionId: string): AgentStepRow[] {
   return getDb()
     .prepare('SELECT * FROM agent_step WHERE sessionId = ? ORDER BY seq ASC')
     .all(sessionId) as unknown as AgentStepRow[];
+}
+
+// === Phase 6: capture & acquisition ===
+
+/**
+ * A capture session's lifecycle (design §9). NOT image-scoped — a capture runs BEFORE any image exists and may
+ * produce one. Phase 6.0 exercises only `armed → discovering → done | error`; the later states are the ladder the
+ * interception phases (6.1+) drive the same row through.
+ */
+export type CaptureSessionStatus =
+  | 'armed'
+  | 'discovering'
+  | 'target_selected'
+  | 'preflight'
+  | 'positioning'
+  | 'watching'
+  | 'carving'
+  | 'captured'
+  | 'ingested'
+  | 'timed_out'
+  | 'torn_down'
+  | 'done'
+  | 'error';
+
+export interface CaptureSessionRow {
+  id: string;
+  status: CaptureSessionStatus;
+  /** The subnet a discovery scan swept (CIDR), or null. */
+  subnet: string | null;
+  /** The device chosen for capture (6.1+), or null during discovery-only. */
+  targetDeviceId: string | null;
+  /** The chosen capture strategy as JSON (6.1+), or null. */
+  strategyJson: string | null;
+  /** Human-readable transcript, appended step by step (mirrors the agent transcript). */
+  transcript: string;
+  deviceCount: number;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * A device seen on the LAN — a persistent inventory keyed by MAC that accumulates across scans (design §6/§11).
+ * Nothing here is intercepted: discovery is passive. typeGuess/typeConfidence are heuristic, never asserted fact.
+ */
+export interface DeviceRow {
+  id: string;
+  mac: string;
+  ouiVendor: string | null;
+  ip: string | null;
+  /** mDNS/SSDP identity (advertised service types / name) as a JSON string, or null. */
+  mdnsIdentity: string | null;
+  /** Observed open ports as a CSV string, or null. */
+  openPorts: string | null;
+  typeGuess: string | null;
+  typeConfidence: string | null;
+  firstSeen: number;
+  lastSeen: number;
+}
+
+export function insertCaptureSession(row: CaptureSessionRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO capture_sessions
+         (id, status, subnet, targetDeviceId, strategyJson, transcript, deviceCount, error, createdAt, updatedAt)
+       VALUES (@id, @status, @subnet, @targetDeviceId, @strategyJson, @transcript, @deviceCount, @error, @createdAt, @updatedAt)`,
+    )
+    .run(asParams(row));
+}
+
+export function updateCaptureSession(
+  id: string,
+  status: CaptureSessionStatus,
+  transcript: string,
+  deviceCount: number,
+  error: string | null,
+): void {
+  getDb()
+    .prepare(
+      'UPDATE capture_sessions SET status = ?, transcript = ?, deviceCount = ?, error = ?, updatedAt = ? WHERE id = ?',
+    )
+    .run(status, transcript, deviceCount, error, Date.now(), id);
+}
+
+export function getCaptureSession(id: string): CaptureSessionRow | undefined {
+  return getDb().prepare('SELECT * FROM capture_sessions WHERE id = ?').get(id) as unknown as
+    | CaptureSessionRow
+    | undefined;
+}
+
+export function listCaptureSessions(limit = 20): CaptureSessionRow[] {
+  return getDb()
+    .prepare('SELECT * FROM capture_sessions ORDER BY createdAt DESC LIMIT ?')
+    .all(limit) as unknown as CaptureSessionRow[];
+}
+
+export function latestCaptureSession(): CaptureSessionRow | undefined {
+  return getDb().prepare('SELECT * FROM capture_sessions ORDER BY createdAt DESC LIMIT 1').get() as unknown as
+    | CaptureSessionRow
+    | undefined;
+}
+
+/** Upsert a discovered device into the persistent inventory, keyed by MAC. Preserves firstSeen + the row id. */
+export function upsertDevice(row: DeviceRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO devices
+         (id, mac, ouiVendor, ip, mdnsIdentity, openPorts, typeGuess, typeConfidence, firstSeen, lastSeen)
+       VALUES (@id, @mac, @ouiVendor, @ip, @mdnsIdentity, @openPorts, @typeGuess, @typeConfidence, @firstSeen, @lastSeen)
+       ON CONFLICT(mac) DO UPDATE SET
+         ip = excluded.ip,
+         ouiVendor = COALESCE(excluded.ouiVendor, devices.ouiVendor),
+         mdnsIdentity = COALESCE(excluded.mdnsIdentity, devices.mdnsIdentity),
+         openPorts = COALESCE(excluded.openPorts, devices.openPorts),
+         typeGuess = COALESCE(excluded.typeGuess, devices.typeGuess),
+         typeConfidence = COALESCE(excluded.typeConfidence, devices.typeConfidence),
+         lastSeen = excluded.lastSeen`,
+    )
+    .run(asParams(row));
+}
+
+export function listDevices(): DeviceRow[] {
+  return getDb().prepare('SELECT * FROM devices ORDER BY lastSeen DESC').all() as unknown as DeviceRow[];
+}
+
+export function getDevice(id: string): DeviceRow | undefined {
+  return getDb().prepare('SELECT * FROM devices WHERE id = ?').get(id) as unknown as DeviceRow | undefined;
 }

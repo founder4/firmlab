@@ -42,7 +42,10 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 
 ## Recon & acquisition
 - ✅ **FCC-ID lookup** — `providers/fcc.ts`: extract FCC IDs + link to public filings (fccid.io + FCC OET). Schematics/changelog lookup still open.
-- ▢ **Phase-6 Capture** — OTA interception & carving from a live update (designed, `CAPTURE-DESIGN.md`).
+- ◐ **Phase-6 Capture** — acquire firmware from a live device (OTA MITM), gated `FIRMLAB_CAPTURE` (`CAPTURE-DESIGN.md`).
+  - ✅ **6.0 — discovery + backend detection + provenance schema.** `capture/backends.ts` (registry of 6 backends auto-detected like `tools.ts`: PATH/Linux-caps/USB/serial probes, honest `available/reason`), `providers/discover.ts` (pure arp-scan/nmap/avahi/OUI/subnet/type-guess parsers + a passive sweep runner that degrades honestly), non-image-scoped `capture_sessions`/`devices` tables + `capture_provenance` schema, `capture/scan.ts` fire-and-forget scan anchor, routes `GET /capture/{status,backends,devices}` + `POST /capture/discover` (flag + per-scan operator ack) + `GET /capture/discover/:scanId`, a top-level **Capture** web section (backend table + honest transport ceiling + device radar). Discovery is passive — nothing intercepted. Dockerfile.tools gains nmap/arp-scan/iproute2/avahi-utils. Validated end-to-end (backends probe honestly; ack/flag gates 400; a scan with no sweep tool degrades to a session `error` with zero fabricated devices). Gate: core 73 + api 396 + web 29.
+  - ▢ **6.1** network capture (mitmproxy) + firmware-aware carving + auto-ingest → `capture_provenance` rows + `capture_flows`.
+  - ▢ **6.2–6.6** active on-path spoof + LAN agent · capturability ladder/preflight + TLS-pinning/Frida · BLE backend · Zigbee backend · learning surface (OTA timeline + cross-version diff + per-vendor priors).
 - ▢ **Live-device UART bridge** — host-side serial → containerized backend (wairz UART bridge). Software foothold into hardware.
 
 ## External intelligence

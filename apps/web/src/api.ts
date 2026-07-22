@@ -577,6 +577,61 @@ export interface EmulationPreset {
   createdAt: number;
 }
 
+// === Phase 6: capture & acquisition ===
+
+export interface CaptureBackend {
+  id: string;
+  role: 'positioning' | 'interception' | 'radio' | 'physical';
+  transports: string[];
+  unlocks: string;
+  available: boolean;
+  reason: string;
+  capabilities: { decrypt?: boolean; needsHardware?: string; needsCaps?: string[] };
+  detail?: Record<string, unknown>;
+}
+
+export interface CaptureBackendsView {
+  enabled: boolean;
+  backends: CaptureBackend[];
+  transports: string[];
+}
+
+export interface CaptureDevice {
+  id: string;
+  mac: string;
+  ouiVendor: string | null;
+  ip: string | null;
+  mdnsIdentity: string | null;
+  openPorts: string | null;
+  typeGuess: string | null;
+  typeConfidence: string | null;
+  firstSeen: number;
+  lastSeen: number;
+}
+
+export interface CaptureSession {
+  id: string;
+  status: string;
+  subnet: string | null;
+  targetDeviceId: string | null;
+  transcript: string;
+  deviceCount: number;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CaptureStatus {
+  enabled: boolean;
+  gatewayDeclared?: boolean;
+  defaultSubnet?: string | null;
+}
+
+export interface CaptureScanView {
+  session: CaptureSession;
+  devices: CaptureDevice[];
+}
+
 export const api = {
   health: () =>
     get<{ status: string; exposedToNetwork: boolean; trustedProxy?: boolean; host?: string; port?: number }>('/health'),
@@ -672,6 +727,13 @@ export const api = {
       (r) => r.result,
     ),
   runDiff: (id: string, against: string) => post<{ jobId: string }>(`/api/images/${id}/diff`, { against }),
+  /** Phase 6 capture lane — all top-level (a capture precedes any image), gated by FIRMLAB_CAPTURE. */
+  captureStatus: () => get<CaptureStatus>('/api/capture/status'),
+  captureBackends: () => get<CaptureBackendsView>('/api/capture/backends'),
+  captureDevices: () => get<{ devices: CaptureDevice[] }>('/api/capture/devices').then((r) => r.devices),
+  runCaptureDiscover: (subnet: string | null, acknowledged: boolean) =>
+    post<{ scanId: string }>('/api/capture/discover', { ...(subnet ? { subnet } : {}), acknowledged }),
+  captureScan: (scanId: string) => get<CaptureScanView>(`/api/capture/discover/${scanId}`),
 
   async upload(file: File): Promise<ImageSummary> {
     const form = new FormData();

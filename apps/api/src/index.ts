@@ -14,6 +14,7 @@ import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
 import { SWEEP_INTERVAL_MS, sweepRetention } from './retention.js';
 import { agentRoutes } from './routes/agent.js';
 import { analysisRoutes } from './routes/analysis.js';
+import { captureRoutes } from './routes/capture.js';
 import { certsRoutes } from './routes/certs.js';
 import { chipsecRoutes } from './routes/chipsec.js';
 import { compmapRoutes } from './routes/compmap.js';
@@ -123,6 +124,7 @@ async function main(): Promise<void> {
       await api.register(reportRoutes);
       await api.register(storageRoutes);
       await api.register(toolRoutes);
+      await api.register(captureRoutes);
     },
     { prefix: '/api' },
   );

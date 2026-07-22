@@ -4,6 +4,7 @@ import { type ImageSummary, api } from './api';
 import { Icon, type IconName } from './icons';
 import { Onboarding, startTour } from './onboarding';
 import { Capabilities } from './pages/Capabilities';
+import { Capture } from './pages/Capture';
 import { Corpus } from './pages/Corpus';
 import { Dashboard } from './pages/Dashboard';
 import { ImageDetail } from './pages/ImageDetail';
@@ -124,6 +125,7 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
 
       <div className="nav-section">Workspace</div>
       <NavRow to="/" end icon="dashboard" label="Dashboard" onNavigate={onNavigate} />
+      <NavRow to="/capture" icon="capture" label="Capture" onNavigate={onNavigate} />
       <NavRow to="/corpus" icon="corpus" label="Corpus" onNavigate={onNavigate} />
       <NavRow to="/capabilities" icon="capabilities" label="Capabilities" onNavigate={onNavigate} />
 
@@ -243,13 +245,15 @@ function ContextHeader(): JSX.Element {
   }, []);
 
   if (!id) {
-    const title = pathname.startsWith('/corpus')
-      ? 'Corpus'
-      : pathname.startsWith('/capabilities')
-        ? 'Capabilities'
-        : pathname.startsWith('/settings')
-          ? 'Settings'
-          : 'Dashboard';
+    const title = pathname.startsWith('/capture')
+      ? 'Capture'
+      : pathname.startsWith('/corpus')
+        ? 'Corpus'
+        : pathname.startsWith('/capabilities')
+          ? 'Capabilities'
+          : pathname.startsWith('/settings')
+            ? 'Settings'
+            : 'Dashboard';
     return <strong className="topbar-title">{title}</strong>;
   }
 
@@ -322,6 +326,7 @@ function Shell(): JSX.Element {
             <Route path="/" element={<Dashboard />} />
             <Route path="/image/:id" element={<ImageDetail />} />
             <Route path="/image/:id/:section" element={<ImageDetail />} />
+            <Route path="/capture" element={<Capture />} />
             <Route path="/corpus" element={<Corpus />} />
             <Route path="/capabilities" element={<Capabilities />} />
             <Route path="/settings" element={<Settings />} />

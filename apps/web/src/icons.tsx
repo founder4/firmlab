@@ -168,6 +168,13 @@ export const Icon = {
       <path d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6Z" />
     </S>
   ),
+  capture: (p: P) => (
+    <S {...p}>
+      <circle cx="12" cy="12" r="1.5" />
+      <path d="M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7" />
+      <path d="M6 18a9 9 0 0 1 0-12M18 6a9 9 0 0 1 0 12" />
+    </S>
+  ),
 };
 
 export type IconName = keyof typeof Icon;

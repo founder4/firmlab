@@ -259,7 +259,7 @@ OSV/KEV cache.
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
 
-## Phase 6 — Capture & acquisition (designed, not yet built)
+## Phase 6 — Capture & acquisition (6.0 shipped; 6.1+ designed)
 
 Close the loop *before* analysis: acquire firmware from a **live device** in-flight (intercept an OTA update the
 moment you press "Update" in the vendor app), carve the blob out of the traffic, and auto-ingest it into the
@@ -270,6 +270,24 @@ acquisition proof-states, a **guided, human-triggered, time-boxed session** with
 agent session + isolation), and a **learning loop** — captured versions accumulate in the corpus into an OTA
 timeline with cross-version diff and per-vendor priors. Full plan (backends, ladder, on-path/Docker reality,
 transports HTTP/HTTPS/BLE/Zigbee, data model, web UX, phased 6.0–6.6): [`docs/CAPTURE-DESIGN.md`](CAPTURE-DESIGN.md).
+
+- [x] **6.0 — Discovery + backend detection + provenance schema.** The capture lane's foundation, gated by
+  `FIRMLAB_CAPTURE` (off → nothing touches the wire). A **backend registry** (`capture/backends.ts`) auto-detects
+  the six backends the way `tools.ts` detects tools — read-only probes of PATH (mitmproxy/bettercap), this
+  process's Linux capabilities (NET_ADMIN/NET_RAW for spoof positioning), attached USB (BLE/Zigbee sniffer VID/PIDs),
+  and serial adapters — each degrading honestly with the reason and what would unlock it, never a fabricated
+  capability. A **discovery provider** (`providers/discover.ts`, pure parsers + a runner) sweeps the LAN passively
+  (arp-scan preferred, nmap fallback), maps MAC → vendor by OUI, enriches with mDNS (avahi-browse), and makes a
+  never-asserted device-type guess with a confidence. New non-image-scoped tables (`capture_sessions`, `devices`)
+  + the `capture_provenance` schema; routes `GET /capture/{status,backends,devices}` + `POST /capture/discover`
+  (gated by the flag AND a per-scan operator acknowledgement) + `GET /capture/discover/:scanId`; a top-level
+  **Capture** web section (backend table + honest transport ceiling + device radar). Discovery is passive —
+  nothing is intercepted. Validated end-to-end: backends probe honestly, the ack/flag gates return 400, and a
+  scan with no arp-scan/nmap degrades to a session `error` with the reason (zero fabricated devices).
+- [ ] **6.1 — Network capture (proxy) + auto-ingest.** HTTP + HTTPS-without-pinning via gateway mode;
+  firmware-aware carving; one-click ingest; `capture_provenance` rows + `capture_flows`.
+- [ ] **6.2–6.6** — active on-path (spoof) + LAN agent · capturability ladder/preflight + pinning/Frida · BLE
+  backend · Zigbee backend · learning surface (OTA timeline + cross-version diff + per-vendor priors).
 
 **Phase 3 — decision nodes (implemented).** The agent now *chooses branches* on top of the deterministic
 skeleton, never the mechanics. The orchestrator (`agent/session.ts`) drives triage ① → deterministic extraction

@@ -28,7 +28,12 @@ const COVERAGE: CovGroup[] = [
       { name: 'Disclosure contact discovery (RFC 9116 security.txt)', status: 'done', note: 'providers/securitytxt' },
       { name: 'FCC-ID lookup (public filings)', status: 'done', note: 'providers/fcc' },
       { name: 'Firmware upload', status: 'done', note: 'manual ingest' },
-      { name: 'OTA interception & carving from live update', status: 'planned', note: 'Phase-6 Capture (designed)' },
+      { name: 'LAN device discovery + capture-backend detection', status: 'done', note: 'Phase 6.0 (capture/)' },
+      {
+        name: 'OTA interception & carving from live update',
+        status: 'partial',
+        note: 'Phase 6.0 shipped; interception 6.1',
+      },
     ],
   },
   {

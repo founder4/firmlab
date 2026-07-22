@@ -1,7 +1,11 @@
 # FirmLab — Capture & Acquisition (Phase 6 design)
 
-> Status: **design, not yet built.** This is the plan we iterate on before touching code — the same way
-> [`AGENT-DESIGN.md`](AGENT-DESIGN.md) preceded the agent. Gated behind a new flag `FIRMLAB_CAPTURE`.
+> Status: **6.0 shipped; 6.1+ designed.** The design below is the full plan; **Phase 6.0 (discovery + backend
+> detection + provenance schema) is now built and validated** — `apps/api/src/capture/` (config + backend
+> registry + scan orchestrator), `providers/discover.ts`, the non-image-scoped `capture_sessions`/`devices`
+> tables + `capture_provenance` schema, the `/capture/*` routes, and the top-level **Capture** web section.
+> Gated behind `FIRMLAB_CAPTURE` (off → nothing touches the wire). Interception (6.1+) is still design. This
+> doc preceded the code the same way [`AGENT-DESIGN.md`](AGENT-DESIGN.md) preceded the agent.
 
 ## 1. Why — closing the loop
 
@@ -319,9 +323,12 @@ The whole design is built so there's "room to grow in everything":
 Additive, each phase shippable, most-complete-first where it's cheap. Validated against **real devices/tools in
 the lab**, matching the project's existing validation discipline (real-tool, in-container/on-host).
 
-- **6.0 — Discovery + backend detection + provenance schema.** Scan the network, identify devices, report *what
-  could be captured* per target. No interception yet. Immediate value, minimal risk. New: `devices`, backend
-  registry, `/capture/backends`, `/capture/discover`, the Capture radar UI.
+- **6.0 — Discovery + backend detection + provenance schema. ✅ SHIPPED.** Scan the network, identify devices,
+  report *what could be captured* per target. No interception. New: `devices` + `capture_sessions` tables +
+  `capture_provenance` schema, the backend registry (`capture/backends.ts`), `providers/discover.ts`,
+  `GET /capture/{status,backends,devices}` + `POST /capture/discover` (flag + per-scan operator ack) +
+  `GET /capture/discover/:scanId`, the top-level Capture radar UI. Honest by construction: every backend probe
+  and the sweep degrade with a reason, never a fabricated device/capability. Validated end-to-end.
 - **6.1 — Network capture (proxy) + auto-ingest.** HTTP + HTTPS-without-pinning via gateway mode; firmware-aware
   carving; one-click ingest; `capture_provenance`. The core acquire→analyze loop.
 - **6.2 — Active on-path (spoof)** so it works without router config; the capture-agent option for Docker.
