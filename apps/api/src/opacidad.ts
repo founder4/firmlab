@@ -43,6 +43,7 @@ import { runRtosAnalysis } from './providers/rtos.js';
 import { runSbom } from './providers/sbom.js';
 import { runServiceMap } from './providers/servicemap.js';
 import { runUbootAnalysis } from './providers/uboot.js';
+import { runWebTaint } from './providers/webtaint.js';
 import { getImage, listFindings, listJobs } from './store.js';
 
 /** Mutable run context threaded through the plan — extraction fills `rootfsPath`/`carveTrace` for later stages. */
@@ -165,6 +166,17 @@ async function encryptedRun(c: RunCtx): Promise<StepOutcome> {
   };
 }
 
+async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runWebTaint(c.rootfsPath);
+  syncFindings(c.imageId, 'webtaint', r.findings);
+  const tainted = r.handlers.filter((h) => h.tainted).length;
+  return {
+    summary: `web attack-surface: ${r.handlers.length} handlers, ${tainted} tainted → ${r.findings.length} findings`,
+    findingCount: r.findings.length,
+    ...(r.handlers.length === 0 ? { degraded: true, note: r.reason } : {}),
+  };
+}
+
 /** Bind each plan `provider` tag to its concrete executor. Tags with no executor are the not-built workers. */
 const EXECUTORS: Record<ProviderId, (c: RunCtx) => Promise<StepOutcome>> = {
   extract: extractRun,
@@ -179,6 +191,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx) => Promise<StepOutcome>> = {
   chipsec: chipsecRun,
   esp: espRun,
   encrypted: encryptedRun,
+  webtaint: webtaintRun,
 };
 
 // === The orchestrator ===

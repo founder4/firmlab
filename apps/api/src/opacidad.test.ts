@@ -9,9 +9,10 @@ describe('specsForClass — class-routed worker plan', () => {
     expect(workers.some((w) => w.includes('SBOM'))).toBe(true);
     expect(workers.some((w) => w.includes('Credentials'))).toBe(true);
     expect(workers.some((w) => w.includes('Service enumeration'))).toBe(true);
-    // The web-taint deep worker is honestly marked not-built (not silently omitted).
+    // The web-taint deep worker (W4) is built.
     const w4 = specs.find((s) => s.worker.includes('Web attack-surface'));
-    expect(w4?.built).toBe(false);
+    expect(w4?.built).toBe(true);
+    expect(w4?.provider).toBe('webtaint');
   });
 
   it('routes a FIT/UBI container through the same Linux chain (its rootfs appears after the W1 carve)', () => {

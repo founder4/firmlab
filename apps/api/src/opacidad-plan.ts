@@ -19,7 +19,8 @@ export type ProviderId =
   | 'rtos'
   | 'chipsec'
   | 'esp'
-  | 'encrypted';
+  | 'encrypted'
+  | 'webtaint';
 
 export interface PlanSpec {
   worker: string;
@@ -88,8 +89,8 @@ const LINUX_CHAIN: PlanSpec[] = [
     worker: 'W4 · Web attack-surface (taint)',
     reason: 'web-param → uci → os.execute/io.popen sinks (the GL.iNet Tor root-RCE class)',
     needsRootfs: true,
-    built: false,
-    note: 'static web-taint worker not built yet; the dynamic web probe needs an approved emulation run',
+    built: true,
+    provider: 'webtaint',
   },
 ];
 
