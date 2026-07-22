@@ -15,6 +15,9 @@ export const IMAGES_DIR = path.join(DATA_DIR, 'images');
 /** Extracted rootfs / carve output, one directory per image id. */
 export const EXTRACT_DIR = path.join(DATA_DIR, 'extract');
 
+/** Capture-session working dirs (Phase 6), one per capture session: the proxy manifest + carved bodies. */
+export const CAPTURE_DIR = path.join(DATA_DIR, 'capture');
+
 /** SQLite database file. */
 export const DB_PATH = path.join(DATA_DIR, 'firmlab.db');
 
@@ -24,7 +27,7 @@ export const WEB_DIST_DIR = process.env.FIRMLAB_WEB_DIST
   : path.resolve(process.cwd(), '../web/dist');
 
 export function ensureDataDirs(): void {
-  for (const dir of [DATA_DIR, IMAGES_DIR, EXTRACT_DIR]) {
+  for (const dir of [DATA_DIR, IMAGES_DIR, EXTRACT_DIR, CAPTURE_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }

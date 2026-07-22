@@ -1,11 +1,12 @@
 /**
- * Capture-lane routes (Phase 6.0, design §14). The second network-touching lane, gated by `FIRMLAB_CAPTURE`.
- * Backend detection is a harmless read-only probe (runs regardless of the flag, parity with `/tools`); actually
- * arming a scan requires both the flag AND a per-request operator acknowledgement, and is bounded + observational.
+ * Capture-lane routes (Phase 6.0/6.1, design §14). The second network-touching lane, gated by `FIRMLAB_CAPTURE`.
+ * Backend detection is a harmless read-only probe (runs regardless of the flag, parity with `/tools`); arming a
+ * scan or a capture requires both the flag AND a per-request operator acknowledgement, and is bounded + honest.
  */
 import type { FastifyInstance } from 'fastify';
 import { availableTransports, detectCaptureBackends } from '../capture/backends.js';
 import { loadCaptureConfig } from '../capture/config.js';
+import { ingestFlow, refreshCaptureFlows, startCaptureSession, teardownCaptureSession } from '../capture/proxy.js';
 import { startDiscoveryScan } from '../capture/scan.js';
 import { getCaptureSession, listDevices } from '../store.js';
 
@@ -54,5 +55,55 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
     const session = getCaptureSession(scanId);
     if (!session) return reply.status(404).send({ error: 'Scan not found' });
     return { session, devices: listDevices() };
+  });
+
+  // === Phase 6.1: interception sessions ===
+
+  // Arm a capture session for a chosen target: spawn the on-path proxy, watch for the OTA. Flag + operator ack.
+  app.post('/capture/session', async (req, reply) => {
+    const cfg = loadCaptureConfig();
+    if (!cfg) {
+      return reply.status(400).send({ error: 'Capture disabled — set FIRMLAB_CAPTURE=1 to enable the capture lane' });
+    }
+    const body = (req.body ?? {}) as { deviceId?: string; acknowledged?: boolean };
+    if (body.acknowledged !== true) {
+      return reply.status(400).send({
+        error:
+          'Operator acknowledgement required — confirm these are devices/networks you own or are authorized to test',
+      });
+    }
+    const result = startCaptureSession(body.deviceId ?? null);
+    return reply.status(202).send(result);
+  });
+
+  // Poll a capture session: status + transcript + the live (re-scored) flow feed.
+  app.get('/capture/session/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const session = getCaptureSession(id);
+    if (!session) return reply.status(404).send({ error: 'Session not found' });
+    const flows = refreshCaptureFlows(id);
+    return { session: getCaptureSession(id) ?? session, flows };
+  });
+
+  // Ingest a carved firmware candidate into the workbench (→ a normal image + capture provenance).
+  app.post('/capture/session/:id/ingest', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!getCaptureSession(id)) return reply.status(404).send({ error: 'Session not found' });
+    const { flowId } = (req.body ?? {}) as { flowId?: string };
+    if (!flowId) return reply.status(400).send({ error: 'flowId is required' });
+    try {
+      const result = ingestFlow(id, flowId);
+      return reply.status(201).send(result);
+    } catch (e) {
+      return reply.status(400).send({ error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // Explicit teardown (also runs automatically on the time-box). Restores positioning, stops the proxy.
+  app.post('/capture/session/:id/teardown', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!getCaptureSession(id)) return reply.status(404).send({ error: 'Session not found' });
+    teardownCaptureSession(id);
+    return { session: getCaptureSession(id) };
   });
 }

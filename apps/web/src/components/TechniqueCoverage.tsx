@@ -30,9 +30,9 @@ const COVERAGE: CovGroup[] = [
       { name: 'Firmware upload', status: 'done', note: 'manual ingest' },
       { name: 'LAN device discovery + capture-backend detection', status: 'done', note: 'Phase 6.0 (capture/)' },
       {
-        name: 'OTA interception & carving from live update',
+        name: 'OTA interception + firmware-flow carving + auto-ingest',
         status: 'partial',
-        note: 'Phase 6.0 shipped; interception 6.1',
+        note: 'Phase 6.1: proxy→score→carve→ingest (live capture on deploy)',
       },
     ],
   },

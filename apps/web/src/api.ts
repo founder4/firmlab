@@ -632,6 +632,33 @@ export interface CaptureScanView {
   devices: CaptureDevice[];
 }
 
+export interface CaptureFlow {
+  id: string;
+  sessionId: string;
+  host: string | null;
+  url: string | null;
+  method: string | null;
+  contentType: string | null;
+  size: number;
+  tlsPosture: string | null;
+  firmwareScore: number;
+  carved: number;
+  bodyPath: string | null;
+  createdAt: number;
+}
+
+export interface CaptureSessionView {
+  session: CaptureSession;
+  flows: CaptureFlow[];
+}
+
+export interface StartCaptureResult {
+  sessionId: string;
+  watching: boolean;
+  reason: string;
+  port: number;
+}
+
 export const api = {
   health: () =>
     get<{ status: string; exposedToNetwork: boolean; trustedProxy?: boolean; host?: string; port?: number }>('/health'),
@@ -734,6 +761,14 @@ export const api = {
   runCaptureDiscover: (subnet: string | null, acknowledged: boolean) =>
     post<{ scanId: string }>('/api/capture/discover', { ...(subnet ? { subnet } : {}), acknowledged }),
   captureScan: (scanId: string) => get<CaptureScanView>(`/api/capture/discover/${scanId}`),
+  // Phase 6.1 interception sessions.
+  startCaptureSession: (deviceId: string | null, acknowledged: boolean) =>
+    post<StartCaptureResult>('/api/capture/session', { ...(deviceId ? { deviceId } : {}), acknowledged }),
+  captureSession: (sessionId: string) => get<CaptureSessionView>(`/api/capture/session/${sessionId}`),
+  ingestCaptureFlow: (sessionId: string, flowId: string) =>
+    post<{ imageId: string; filename: string }>(`/api/capture/session/${sessionId}/ingest`, { flowId }),
+  teardownCapture: (sessionId: string) =>
+    post<{ session: CaptureSession | null }>(`/api/capture/session/${sessionId}/teardown`),
 
   async upload(file: File): Promise<ImageSummary> {
     const form = new FormData();

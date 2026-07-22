@@ -1,11 +1,13 @@
 # FirmLab — Capture & Acquisition (Phase 6 design)
 
-> Status: **6.0 shipped; 6.1+ designed.** The design below is the full plan; **Phase 6.0 (discovery + backend
-> detection + provenance schema) is now built and validated** — `apps/api/src/capture/` (config + backend
-> registry + scan orchestrator), `providers/discover.ts`, the non-image-scoped `capture_sessions`/`devices`
-> tables + `capture_provenance` schema, the `/capture/*` routes, and the top-level **Capture** web section.
-> Gated behind `FIRMLAB_CAPTURE` (off → nothing touches the wire). Interception (6.1+) is still design. This
-> doc preceded the code the same way [`AGENT-DESIGN.md`](AGENT-DESIGN.md) preceded the agent.
+> Status: **6.0 + 6.1 shipped; 6.2+ designed.** The design below is the full plan. **6.0** (discovery + backend
+> detection + provenance schema) and **6.1** (network capture via proxy + firmware-aware carving + auto-ingest)
+> are built and validated — `apps/api/src/capture/` (config, backend registry, discovery scan, the mitmproxy
+> interception runner `proxy.ts`, the pure `flow-manifest.ts`, the `ingest.ts` acquire→analyze bridge),
+> `providers/discover.ts` + `providers/flowscore.ts`, the non-image-scoped `capture_sessions`/`devices`/
+> `capture_flows` tables + the `capture_provenance` record, the `/capture/*` routes, and the top-level **Capture**
+> web section (radar + scored flow feed + one-click ingest). Gated behind `FIRMLAB_CAPTURE` (off → nothing touches
+> the wire). This doc preceded the code the same way [`AGENT-DESIGN.md`](AGENT-DESIGN.md) preceded the agent.
 
 ## 1. Why — closing the loop
 
@@ -329,8 +331,12 @@ the lab**, matching the project's existing validation discipline (real-tool, in-
   `GET /capture/{status,backends,devices}` + `POST /capture/discover` (flag + per-scan operator ack) +
   `GET /capture/discover/:scanId`, the top-level Capture radar UI. Honest by construction: every backend probe
   and the sweep degrade with a reason, never a fabricated device/capability. Validated end-to-end.
-- **6.1 — Network capture (proxy) + auto-ingest.** HTTP + HTTPS-without-pinning via gateway mode; firmware-aware
-  carving; one-click ingest; `capture_provenance`. The core acquire→analyze loop.
+- **6.1 — Network capture (proxy) + auto-ingest. ✅ SHIPPED.** The core acquire→analyze loop. mitmproxy on-path
+  (`proxy.ts` + an embedded addon), firmware-flow scoring (`flowscore.ts`: core signatures + entropy + CT + size +
+  URL), `capture_flows`, and `ingest.ts` carving a candidate through the exact upload intake → an image +
+  `capture_provenance`. Routes `POST /capture/session` + `GET /capture/session/:id` (scored feed) + `…/ingest` +
+  `…/teardown` (time-boxed, guaranteed). Validated end-to-end vs the real API; the live mitmdump-over-positioned-
+  proxy leg is validated on the deploy.
 - **6.2 — Active on-path (spoof)** so it works without router config; the capture-agent option for Docker.
 - **6.3 — Capturability ladder + preflight + pinning metadata + Frida unpin templates.**
 - **6.4 — BLE backend** (nRF52840): GATT/DFU reassembly for the common stacks.

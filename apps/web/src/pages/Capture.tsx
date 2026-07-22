@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type CaptureBackend, type CaptureDevice, type CaptureSession, type CaptureStatus, api } from '../api';
+import {
+  type CaptureBackend,
+  type CaptureDevice,
+  type CaptureFlow,
+  type CaptureSession,
+  type CaptureStatus,
+  api,
+} from '../api';
 
 const ROLE_LABEL: Record<string, string> = {
   positioning: 'Positioning',
@@ -22,9 +29,10 @@ function fmtWhen(ms: number): string {
 }
 
 /**
- * The Capture section (Phase 6.0). Shows what this deployment could capture (auto-detected backends + the honest
- * transport ceiling) and runs a passive LAN discovery sweep to build the device inventory (the radar). No
- * interception here — that lands in 6.1. Gated by FIRMLAB_CAPTURE + a per-scan operator acknowledgement.
+ * The Capture section (Phase 6.0 + 6.1). Shows what this deployment could capture (auto-detected backends + the
+ * honest transport ceiling), runs a passive LAN discovery sweep to build the device inventory (the radar), and —
+ * 6.1 — arms an on-path proxy to intercept a target's OTA, scores the flows for firmware, and ingests a carved
+ * blob into the workbench. Gated by FIRMLAB_CAPTURE + a per-action operator acknowledgement.
  */
 export function Capture(): JSX.Element {
   const [status, setStatus] = useState<CaptureStatus | null>(null);
@@ -38,6 +46,13 @@ export function Capture(): JSX.Element {
   const [scanned, setScanned] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
+
+  // 6.1 interception session state.
+  const [capSession, setCapSession] = useState<CaptureSession | null>(null);
+  const [capFlows, setCapFlows] = useState<CaptureFlow[]>([]);
+  const [capReason, setCapReason] = useState<string | null>(null);
+  const [ingested, setIngested] = useState<Record<string, string>>({});
+  const capPollRef = useRef<number | null>(null);
 
   useEffect(() => {
     api
@@ -57,8 +72,62 @@ export function Capture(): JSX.Element {
       .catch(() => setDevices([]));
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
+      if (capPollRef.current) window.clearInterval(capPollRef.current);
     };
   }, []);
+
+  const armCapture = useCallback(
+    async (device: CaptureDevice) => {
+      setCapReason(null);
+      setCapFlows([]);
+      setIngested({});
+      try {
+        const r = await api.startCaptureSession(device.id, ack);
+        setCapReason(r.reason);
+        if (capPollRef.current) window.clearInterval(capPollRef.current);
+        capPollRef.current = window.setInterval(async () => {
+          const v = await api.captureSession(r.sessionId).catch(() => null);
+          if (!v) return;
+          setCapSession(v.session);
+          setCapFlows(v.flows);
+          if (v.session.status === 'ingested' || v.session.status === 'torn_down' || v.session.status === 'error') {
+            if (capPollRef.current) window.clearInterval(capPollRef.current);
+          }
+        }, 1000);
+        const v = await api.captureSession(r.sessionId).catch(() => null);
+        if (v) {
+          setCapSession(v.session);
+          setCapFlows(v.flows);
+        }
+      } catch (e) {
+        setCapReason(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [ack],
+  );
+
+  const ingest = useCallback(
+    async (flowId: string) => {
+      if (!capSession) return;
+      try {
+        const r = await api.ingestCaptureFlow(capSession.id, flowId);
+        setIngested((m) => ({ ...m, [flowId]: r.imageId }));
+        const v = await api.captureSession(capSession.id).catch(() => null);
+        if (v) setCapSession(v.session);
+      } catch (e) {
+        setCapReason(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [capSession],
+  );
+
+  const stopCapture = useCallback(async () => {
+    if (!capSession) return;
+    if (capPollRef.current) window.clearInterval(capPollRef.current);
+    await api.teardownCapture(capSession.id).catch(() => undefined);
+    const v = await api.captureSession(capSession.id).catch(() => null);
+    if (v) setCapSession(v.session);
+  }, [capSession]);
 
   const runScan = useCallback(async () => {
     setErr(null);
@@ -90,9 +159,9 @@ export function Capture(): JSX.Element {
       {enabled ? (
         <div className="banner banner-info">
           The <strong>capture lane</strong> acquires firmware from a live device — intercept an OTA update, carve the
-          blob from the traffic, and ingest it into the workbench. This is FirmLab's second network-touching lane. Phase
-          6.0 covers <strong>discovery</strong> (a passive LAN sweep) and reports what each device could be captured
-          over; interception itself lands in 6.1.
+          blob from the traffic, and ingest it into the workbench. This is FirmLab's second network-touching lane.
+          <strong> Discover</strong> devices below, then <strong>Capture</strong> arms an on-path proxy for one target:
+          trigger its OTA, and FirmLab scores the flows for firmware and offers the carved blob for one-click ingest.
         </div>
       ) : (
         <div className="banner banner-warn">
@@ -221,6 +290,7 @@ export function Capture(): JSX.Element {
                   <th>Type guess</th>
                   <th>mDNS</th>
                   <th style={{ width: 90 }}>Seen</th>
+                  <th style={{ width: 90 }} />
                 </tr>
               </thead>
               <tbody>
@@ -242,6 +312,17 @@ export function Capture(): JSX.Element {
                       {d.mdnsIdentity ?? '—'}
                     </td>
                     <td className="hint">{fmtWhen(d.lastSeen)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        disabled={!enabled || !ack}
+                        title={ack ? 'Arm an OTA capture for this device' : 'Acknowledge authorization first'}
+                        onClick={() => armCapture(d)}
+                      >
+                        Capture
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -249,6 +330,77 @@ export function Capture(): JSX.Element {
           </div>
         )}
       </div>
+
+      {capSession && (
+        <div className="panel">
+          <div className="panel-title">Capture session</div>
+          <div className="panel-sub">
+            Target {capSession.targetDeviceId ?? '—'} · status{' '}
+            <span className={`badge ${capSession.status === 'ingested' ? 'badge-ok' : 'badge-accent'}`}>
+              {capSession.status}
+            </span>
+            . Trigger the device's OTA now; firmware-looking flows are highlighted and can be ingested.
+          </div>
+          {capReason && (
+            <div className={`banner ${capSession.status === 'error' ? 'banner-warn' : 'banner-info'}`}>{capReason}</div>
+          )}
+          <div style={{ display: 'flex', gap: 8, margin: '8px 0' }}>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={stopCapture}>
+              Stop &amp; teardown
+            </button>
+          </div>
+          {capFlows.length === 0 ? (
+            <div className="hint">No flows yet — waiting for traffic through the proxy.</div>
+          ) : (
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th style={{ width: 70 }}>Score</th>
+                    <th>URL</th>
+                    <th style={{ width: 130 }}>Type</th>
+                    <th style={{ width: 90 }}>Size</th>
+                    <th style={{ width: 120 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {capFlows.map((f) => (
+                    <tr key={f.id}>
+                      <td>
+                        <span
+                          className={`badge ${f.carved ? 'badge-crit' : f.firmwareScore >= 30 ? 'badge-medium' : ''}`}
+                        >
+                          {f.firmwareScore}
+                        </span>
+                      </td>
+                      <td className="mono" style={{ fontSize: 11, wordBreak: 'break-all' }}>
+                        {f.url ?? '—'}
+                      </td>
+                      <td className="hint mono" style={{ fontSize: 11 }}>
+                        {f.contentType ?? '—'}
+                      </td>
+                      <td className="hint mono">{(f.size / 1024).toFixed(0)} KB</td>
+                      <td>
+                        {ingested[f.id] ? (
+                          <a className="badge badge-ok" href={`#/image/${ingested[f.id]}`}>
+                            ingested →
+                          </a>
+                        ) : f.carved ? (
+                          <button type="button" className="btn btn-primary btn-sm" onClick={() => ingest(f.id)}>
+                            Ingest
+                          </button>
+                        ) : (
+                          <span className="hint">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

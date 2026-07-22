@@ -24,14 +24,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# === Phase 6 capture — device discovery (passive LAN sweep) ===
+# === Phase 6 capture — discovery (passive LAN sweep) + interception (proxy) ===
 # nmap + arp-scan power the host sweep, iproute2 (`ip`) reports the primary subnet, avahi-utils (`avahi-browse`)
-# adds mDNS/DNS-SD enrichment. Fault-tolerant: if this fails the `discover` provider degrades honestly (the
-# capture backends report the tool absent). The lane still does nothing on the wire unless FIRMLAB_CAPTURE=1.
+# adds mDNS/DNS-SD enrichment (6.0); mitmproxy (`mitmdump`) is the on-path interception proxy for OTA capture (6.1).
+# Fault-tolerant: if this fails the `discover`/proxy providers degrade honestly (the capture backends report the
+# tool absent). The lane still does nothing on the wire unless FIRMLAB_CAPTURE=1 and the operator arms an action.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      nmap arp-scan iproute2 avahi-utils \
+      nmap arp-scan iproute2 avahi-utils mitmproxy \
     && rm -rf /var/lib/apt/lists/* \
-    || echo "capture discovery tools unavailable — discover degrades honestly"
+    || echo "capture tools unavailable — discover/proxy degrade honestly"
 
 # === radare2 (binary triage) — dropped from Debian bookworm repos; use the official .deb for the build arch ===
 RUN R2_VER="$(curl -fsSL https://api.github.com/repos/radareorg/radare2/releases/latest | grep -oP '"tag_name":\s*"\K[0-9.]+')" \

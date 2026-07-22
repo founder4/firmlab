@@ -358,6 +358,26 @@ export function getDb(): DatabaseSync {
       FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_capture_provenance_image ON capture_provenance(imageId);
+
+    -- Phase 6.1: the observed HTTP(S) flows of a capture session — the live flow feed, with each scored for
+    -- "is this an OTA firmware blob?" (@firmlab/core signatures + entropy). Keyed by a deterministic flow id so
+    -- re-reading the proxy's growing manifest is idempotent. Cascades with its session.
+    CREATE TABLE IF NOT EXISTS capture_flows (
+      id TEXT PRIMARY KEY,
+      sessionId TEXT NOT NULL,
+      host TEXT,
+      url TEXT,
+      method TEXT,
+      contentType TEXT,
+      size INTEGER NOT NULL DEFAULT 0,
+      tlsPosture TEXT,
+      firmwareScore INTEGER NOT NULL DEFAULT 0,
+      carved INTEGER NOT NULL DEFAULT 0,
+      bodyPath TEXT,
+      createdAt INTEGER NOT NULL,
+      FOREIGN KEY (sessionId) REFERENCES capture_sessions(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_capture_flows_session ON capture_flows(sessionId);
   `);
   // Migration: add the tags column to databases created before it existed.
   try {
@@ -786,4 +806,80 @@ export function listDevices(): DeviceRow[] {
 
 export function getDevice(id: string): DeviceRow | undefined {
   return getDb().prepare('SELECT * FROM devices WHERE id = ?').get(id) as unknown as DeviceRow | undefined;
+}
+
+// === Phase 6.1: capture flows + provenance ===
+
+/** One observed HTTP(S) flow in a capture session, scored for whether it carries an OTA firmware blob. */
+export interface CaptureFlowRow {
+  id: string;
+  sessionId: string;
+  host: string | null;
+  url: string | null;
+  method: string | null;
+  contentType: string | null;
+  size: number;
+  /** 'plaintext' | 'tls-unpinned' | 'tls-pinned' | null. */
+  tlsPosture: string | null;
+  /** 0..100 firmware-likelihood from @firmlab/core signatures + entropy. */
+  firmwareScore: number;
+  /** 1 when the body was staged as an ingestable candidate. */
+  carved: number;
+  /** Absolute path to the saved body on disk (for carved flows), or null. */
+  bodyPath: string | null;
+  createdAt: number;
+}
+
+/** How an ingested image was acquired — links an `images` row back to the device/session/endpoint/transport. */
+export interface CaptureProvenanceRow {
+  id: string;
+  imageId: string;
+  deviceId: string | null;
+  sessionId: string | null;
+  endpoint: string | null;
+  version: string | null;
+  transport: string | null;
+  tlsPosture: string | null;
+  capturedAt: number;
+}
+
+/** Idempotent per flow id — re-reading the proxy's growing manifest upserts each flow without duplicating. */
+export function upsertCaptureFlow(row: CaptureFlowRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO capture_flows
+         (id, sessionId, host, url, method, contentType, size, tlsPosture, firmwareScore, carved, bodyPath, createdAt)
+       VALUES (@id, @sessionId, @host, @url, @method, @contentType, @size, @tlsPosture, @firmwareScore, @carved, @bodyPath, @createdAt)
+       ON CONFLICT(id) DO UPDATE SET
+         host = excluded.host, url = excluded.url, method = excluded.method, contentType = excluded.contentType,
+         size = excluded.size, tlsPosture = excluded.tlsPosture, firmwareScore = excluded.firmwareScore,
+         carved = excluded.carved, bodyPath = excluded.bodyPath`,
+    )
+    .run(asParams(row));
+}
+
+export function listCaptureFlows(sessionId: string): CaptureFlowRow[] {
+  return getDb()
+    .prepare('SELECT * FROM capture_flows WHERE sessionId = ? ORDER BY firmwareScore DESC, createdAt ASC')
+    .all(sessionId) as unknown as CaptureFlowRow[];
+}
+
+export function getCaptureFlow(id: string): CaptureFlowRow | undefined {
+  return getDb().prepare('SELECT * FROM capture_flows WHERE id = ?').get(id) as unknown as CaptureFlowRow | undefined;
+}
+
+export function insertCaptureProvenance(row: CaptureProvenanceRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO capture_provenance
+         (id, imageId, deviceId, sessionId, endpoint, version, transport, tlsPosture, capturedAt)
+       VALUES (@id, @imageId, @deviceId, @sessionId, @endpoint, @version, @transport, @tlsPosture, @capturedAt)`,
+    )
+    .run(asParams(row));
+}
+
+export function provenanceForImage(imageId: string): CaptureProvenanceRow | undefined {
+  return getDb().prepare('SELECT * FROM capture_provenance WHERE imageId = ? LIMIT 1').get(imageId) as unknown as
+    | CaptureProvenanceRow
+    | undefined;
 }

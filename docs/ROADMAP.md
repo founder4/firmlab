@@ -259,7 +259,7 @@ OSV/KEV cache.
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
 
-## Phase 6 — Capture & acquisition (6.0 shipped; 6.1+ designed)
+## Phase 6 — Capture & acquisition (6.0 + 6.1 shipped; 6.2+ designed)
 
 Close the loop *before* analysis: acquire firmware from a **live device** in-flight (intercept an OTA update the
 moment you press "Update" in the vendor app), carve the blob out of the traffic, and auto-ingest it into the
@@ -284,8 +284,19 @@ transports HTTP/HTTPS/BLE/Zigbee, data model, web UX, phased 6.0–6.6): [`docs/
   **Capture** web section (backend table + honest transport ceiling + device radar). Discovery is passive —
   nothing is intercepted. Validated end-to-end: backends probe honestly, the ack/flag gates return 400, and a
   scan with no arp-scan/nmap degrades to a session `error` with the reason (zero fabricated devices).
-- [ ] **6.1 — Network capture (proxy) + auto-ingest.** HTTP + HTTPS-without-pinning via gateway mode;
-  firmware-aware carving; one-click ingest; `capture_provenance` rows + `capture_flows`.
+- [x] **6.1 — Network capture (proxy) + auto-ingest.** The core acquire→analyze loop. `providers/flowscore.ts`
+  scores each intercepted response 0..100 for "is this an OTA blob?" from `@firmlab/core` magic signatures +
+  entropy + Content-Type + size + URL heuristics (pure, unit-tested). `capture/proxy.ts` runs mitmproxy (mitmdump)
+  on-path with an embedded addon that logs flow metadata to a manifest + saves plausibly-firmware bodies; FirmLab
+  does the authoritative scoring, persists each flow (`capture_flows`), and stages the candidates as carved.
+  `capture/ingest.ts` feeds a carved blob through the EXACT upload intake (`analyzeImageBuffer` → an `images` row →
+  structure/secrets/corpus) and writes a `capture_provenance` row linking the image to how it was acquired. Routes
+  `POST /capture/session` (arm, flag + ack) + `GET /capture/session/:id` (status + live scored flow feed) +
+  `POST …/ingest` + `POST …/teardown` (guaranteed, time-boxed). The Capture web section gains a per-device Capture
+  button, a scored flow feed, and one-click ingest. Dockerfile.tools adds mitmproxy. **Validated end-to-end against
+  the real API:** a synthetic captured SquashFS OTA scored 100 → carved → ingested → a normal analyzed workbench
+  image + a `capture_provenance` row (endpoint/transport/tls); an HTML flow scored 0 and was rejected. The live
+  mitmdump spawn over a positioned proxy is validated on the deploy (like the emulation ladder).
 - [ ] **6.2–6.6** — active on-path (spoof) + LAN agent · capturability ladder/preflight + pinning/Frida · BLE
   backend · Zigbee backend · learning surface (OTA timeline + cross-version diff + per-vendor priors).
 
