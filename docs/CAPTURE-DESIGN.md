@@ -1,8 +1,8 @@
 # FirmLab — Capture & Acquisition (Phase 6 design)
 
-> Status: **6.0 + 6.1 shipped; 6.2+ designed.** The design below is the full plan. **6.0** (discovery + backend
-> detection + provenance schema) and **6.1** (network capture via proxy + firmware-aware carving + auto-ingest)
-> are built and validated — `apps/api/src/capture/` (config, backend registry, discovery scan, the mitmproxy
+> Status: **6.0–6.2 shipped; 6.3+ designed.** The design below is the full plan. **6.0** (discovery + backend
+> detection + provenance schema), **6.1** (network capture via proxy + firmware-aware carving + auto-ingest), and
+> **6.2** (active ARP-spoof positioning + the token-authed LAN capture agent) are built and validated — `apps/api/src/capture/` (config, backend registry, discovery scan, the mitmproxy
 > interception runner `proxy.ts`, the pure `flow-manifest.ts`, the `ingest.ts` acquire→analyze bridge),
 > `providers/discover.ts` + `providers/flowscore.ts`, the non-image-scoped `capture_sessions`/`devices`/
 > `capture_flows` tables + the `capture_provenance` record, the `/capture/*` routes, and the top-level **Capture**
@@ -337,7 +337,11 @@ the lab**, matching the project's existing validation discipline (real-tool, in-
   `capture_provenance`. Routes `POST /capture/session` + `GET /capture/session/:id` (scored feed) + `…/ingest` +
   `…/teardown` (time-boxed, guaranteed). Validated end-to-end vs the real API; the live mitmdump-over-positioned-
   proxy leg is validated on the deploy.
-- **6.2 — Active on-path (spoof)** so it works without router config; the capture-agent option for Docker.
+- **6.2 — Active on-path (spoof) + LAN capture agent. ✅ SHIPPED.** `capture/spoof.ts` ARP-spoofs one target
+  (bettercap) onto FirmLab, composed into the capture session's positioning choice (gateway/spoof/manual, honest
+  degradation, guaranteed ARP restore). The LAN agent — `capture/agent.ts` + token-authed `POST /capture/agent/*`
+  + `scripts/capture-agent.mjs` — is the durable Docker answer: a privileged LAN box streams carved flows to the
+  workbench, which scores + ingests them by the same path. Validated vs the real API.
 - **6.3 — Capturability ladder + preflight + pinning metadata + Frida unpin templates.**
 - **6.4 — BLE backend** (nRF52840): GATT/DFU reassembly for the common stacks.
 - **6.5 — Zigbee backend**: OTA Upgrade cluster capture.

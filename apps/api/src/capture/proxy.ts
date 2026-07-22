@@ -22,6 +22,7 @@ import {
   type CaptureSessionRow,
   getCaptureFlow,
   getCaptureSession,
+  getDevice,
   insertCaptureSession,
   listCaptureFlows,
   updateCaptureSession,
@@ -29,6 +30,7 @@ import {
 } from '../store.js';
 import { parseFlowManifest } from './flow-manifest.js';
 import { ingestCapturedBlob } from './ingest.js';
+import { armPositioning, stopPositioning } from './spoof.js';
 
 const PROXY_PORT = Math.max(1, Number(process.env.FIRMLAB_CAPTURE_PROXY_PORT ?? 8788));
 const WINDOW_MS = Math.max(30, Number(process.env.FIRMLAB_CAPTURE_WINDOW_SECONDS ?? 300)) * 1000;
@@ -120,6 +122,11 @@ export function startCaptureSession(deviceId: string | null): StartResult {
   fs.writeFileSync(path.join(capdir, 'flows.jsonl'), '');
 
   const now = Date.now();
+
+  // Positioning (6.2): get the target's traffic to the proxy — operator gateway, active ARP spoof, or manual.
+  const targetIp = deviceId ? (getDevice(deviceId)?.ip ?? null) : null;
+  const positioning = armPositioning(sessionId, targetIp);
+
   const available = mitmdumpOnPath();
   let watching = false;
   let reason: string;
@@ -149,7 +156,7 @@ export function startCaptureSession(deviceId: string | null): StartResult {
       proxies.set(sessionId, { proc, timer });
       watching = true;
       status = 'watching';
-      reason = `Proxy watching on :${PROXY_PORT} (transparent). Position the target through FirmLab, then trigger the OTA. Auto-teardown in ${Math.round(WINDOW_MS / 1000)}s.`;
+      reason = `Proxy watching on :${PROXY_PORT} (transparent), positioning: ${positioning.strategy}. Trigger the OTA now. Auto-teardown in ${Math.round(WINDOW_MS / 1000)}s.`;
     } catch (e) {
       status = 'error';
       error = e instanceof Error ? e.message : String(e);
@@ -166,13 +173,19 @@ export function startCaptureSession(deviceId: string | null): StartResult {
     status,
     subnet: null,
     targetDeviceId: deviceId,
-    strategyJson: JSON.stringify({ proxy: { port: PROXY_PORT, transport: 'network-proxy', available } }),
-    transcript: `[armed] capture session for ${deviceId ?? 'a target'} — ${reason}\n`,
+    strategyJson: JSON.stringify({
+      proxy: { port: PROXY_PORT, transport: 'network-proxy', available },
+      positioning: { strategy: positioning.strategy, active: positioning.active },
+    }),
+    transcript: `[positioning] ${positioning.reason}\n[armed] capture session for ${deviceId ?? 'a target'} — ${reason}\n`,
     deviceCount: 0,
     error,
     createdAt: now,
     updatedAt: now,
   });
+
+  // If the proxy never came up, don't leave a spoof running with nothing to intercept.
+  if (status === 'error') stopPositioning(sessionId);
 
   return { sessionId, watching, reason, port: PROXY_PORT };
 }
@@ -290,6 +303,7 @@ export function teardownCaptureSession(sessionId: string, finalStatus: 'torn_dow
     } catch {}
     proxies.delete(sessionId);
   }
+  stopPositioning(sessionId); // restore ARP — guaranteed on every teardown path
   const session = getCaptureSession(sessionId);
   if (session && session.status !== 'ingested' && session.status !== 'torn_down') {
     updateCaptureSession(

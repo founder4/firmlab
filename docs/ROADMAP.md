@@ -259,7 +259,7 @@ OSV/KEV cache.
   hardened egress (proxy/slirp4netns), corpus OSV cache.
 - Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
 
-## Phase 6 — Capture & acquisition (6.0 + 6.1 shipped; 6.2+ designed)
+## Phase 6 — Capture & acquisition (6.0–6.2 shipped; 6.3+ designed)
 
 Close the loop *before* analysis: acquire firmware from a **live device** in-flight (intercept an OTA update the
 moment you press "Update" in the vendor app), carve the blob out of the traffic, and auto-ingest it into the
@@ -297,8 +297,19 @@ transports HTTP/HTTPS/BLE/Zigbee, data model, web UX, phased 6.0–6.6): [`docs/
   the real API:** a synthetic captured SquashFS OTA scored 100 → carved → ingested → a normal analyzed workbench
   image + a `capture_provenance` row (endpoint/transport/tls); an HTML flow scored 0 and was rejected. The live
   mitmdump spawn over a positioned proxy is validated on the deploy (like the emulation ladder).
-- [ ] **6.2–6.6** — active on-path (spoof) + LAN agent · capturability ladder/preflight + pinning/Frida · BLE
-  backend · Zigbee backend · learning surface (OTA timeline + cross-version diff + per-vendor priors).
+- [x] **6.2 — Active on-path (spoof) + LAN capture agent.** So capture works without router config, and so it
+  works from Docker. `capture/spoof.ts` arms bettercap to ARP-spoof a SINGLE target onto FirmLab (availability =
+  the on-path-spoof backend probe; pure `buildBettercapArgs`), composed with the 6.1 proxy — a session now chooses
+  positioning (operator gateway → nothing spawned · active spoof · honest `manual` when neither is available) and
+  teardown restores ARP on every path. The LAN capture agent (design §5c, the durable Docker answer):
+  `capture/agent.ts` + token-authed `POST /capture/agent/{session,flow}` land a remote agent's carved flows into a
+  session (scored by the same `flowscore`, ingestable by the same path); `apps/api/scripts/capture-agent.mjs` is
+  the reference agent that runs mitmproxy + bettercap on a LAN box and streams candidates over the token channel.
+  Off unless `FIRMLAB_CAPTURE_AGENT_TOKEN` is set. **Validated vs the real API:** an agent session + a streamed
+  SquashFS OTA scored 100 → carved → ingested; a tokenless request → 401; positioning honestly degraded to `manual`
+  on a host without spoof caps.
+- [ ] **6.3–6.6** — capturability ladder/preflight + pinning/Frida · BLE backend · Zigbee backend · learning
+  surface (OTA timeline + cross-version diff + per-vendor priors).
 
 **Phase 3 — decision nodes (implemented).** The agent now *chooses branches* on top of the deterministic
 skeleton, never the mechanics. The orchestrator (`agent/session.ts`) drives triage ① → deterministic extraction

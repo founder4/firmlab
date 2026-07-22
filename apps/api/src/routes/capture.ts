@@ -4,6 +4,7 @@
  * scan or a capture requires both the flag AND a per-request operator acknowledgement, and is bounded + honest.
  */
 import type { FastifyInstance } from 'fastify';
+import { type AgentFlowInput, createAgentSession, ingestAgentFlow, loadAgentToken, tokenOk } from '../capture/agent.js';
 import { availableTransports, detectCaptureBackends } from '../capture/backends.js';
 import { loadCaptureConfig } from '../capture/config.js';
 import { ingestFlow, refreshCaptureFlows, startCaptureSession, teardownCaptureSession } from '../capture/proxy.js';
@@ -105,5 +106,37 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
     if (!getCaptureSession(id)) return reply.status(404).send({ error: 'Session not found' });
     teardownCaptureSession(id);
     return { session: getCaptureSession(id) };
+  });
+
+  // === Phase 6.2: remote LAN capture agent (the Docker answer). Token-authed; off unless a token is configured. ===
+
+  app.get('/capture/agent/status', async () => {
+    return { enabled: loadAgentToken() !== null };
+  });
+
+  // A remote agent opens a session it will stream carved flows into.
+  app.post('/capture/agent/session', async (req, reply) => {
+    const token = (req.headers['x-capture-token'] as string | undefined) ?? (req.body as { token?: string })?.token;
+    if (!tokenOk(token)) return reply.status(401).send({ error: 'Invalid or missing capture-agent token' });
+    const { agentId } = (req.body ?? {}) as { agentId?: string };
+    const sessionId = createAgentSession(agentId ?? 'agent');
+    return reply.status(201).send({ sessionId });
+  });
+
+  // A remote agent streams one carved flow (metadata + optional base64 body) into its session.
+  app.post('/capture/agent/flow', async (req, reply) => {
+    const token = (req.headers['x-capture-token'] as string | undefined) ?? (req.body as { token?: string })?.token;
+    if (!tokenOk(token)) return reply.status(401).send({ error: 'Invalid or missing capture-agent token' });
+    const body = (req.body ?? {}) as { sessionId?: string; flow?: AgentFlowInput; bodyBase64?: string };
+    if (!body.sessionId || !body.flow?.url) {
+      return reply.status(400).send({ error: 'sessionId and flow.url are required' });
+    }
+    const blob = body.bodyBase64 ? Buffer.from(body.bodyBase64, 'base64') : null;
+    try {
+      const result = ingestAgentFlow(body.sessionId, body.flow, blob);
+      return reply.status(201).send(result);
+    } catch (e) {
+      return reply.status(400).send({ error: e instanceof Error ? e.message : String(e) });
+    }
   });
 }
