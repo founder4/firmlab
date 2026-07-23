@@ -9,7 +9,16 @@ import path from 'node:path';
 import type { StaticAnalysis } from '@firmlab/core';
 import { type IntelContext, runIntelSynthesis } from '../agent/intel.js';
 import { credentialOtherImages, deviceFamilyKey, hashSecret, listReachabilityPriors } from '../corpus.js';
+import { syncFindings } from '../findings.js';
 import { loadLlmConfig } from '../llm.js';
+import { parseShadow } from '../providers/fsaudit.js';
+import {
+  type HashCandidate,
+  type HashLookupResult,
+  classifyHash,
+  normalizeHashLookup,
+  runHashLookup,
+} from '../providers/hashlookup.js';
 import type { JobHandle } from '../providers/jobs.js';
 import { type KevResult, collectCveIds, fetchAndMatchKev } from '../providers/kev.js';
 import { type KeyMaterial, summarizeKeyMaterial } from '../providers/keys.js';
@@ -31,6 +40,7 @@ export interface ResearchResult {
   kev: KevResult;
   keyMaterial: KeyMaterial[];
   securityContacts: SecurityTxt[];
+  hashLookup: HashLookupResult;
   synthesis?: { text: string; model: string; provider: string };
 }
 
@@ -51,6 +61,29 @@ function latestRootfs(imageId: string): string | null {
   return extractJob?.resultJson
     ? ((JSON.parse(extractJob.resultJson) as { rootfsPath?: string }).rootfsPath ?? null)
     : null;
+}
+
+/**
+ * Collect the password-hash candidates for the online lookup from the extracted rootfs's /etc/shadow (parsed with
+ * the same pure parser fsaudit uses). Bounded read; missing/oversized shadow → no candidates. The lookup provider
+ * itself decides which are resolvable — this only gathers account+hash pairs.
+ */
+function collectShadowCandidates(imageId: string): HashCandidate[] {
+  const rootfs = latestRootfs(imageId);
+  if (!rootfs) return [];
+  const shadowPath = path.join(rootfs, 'etc/shadow');
+  try {
+    if (!fs.existsSync(shadowPath) || !fs.statSync(shadowPath).isFile() || fs.statSync(shadowPath).size > 65536) {
+      return [];
+    }
+    return parseShadow(fs.readFileSync(shadowPath, 'utf8')).map((s) => ({
+      account: s.name,
+      hash: s.hash,
+      source: '/etc/shadow',
+    }));
+  } catch {
+    return [];
+  }
 }
 
 /** Key material lives inside the (compressed) filesystem, so it's only visible after extraction — scan the rootfs. */
@@ -137,7 +170,14 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   // NVD covers exactly OSV's gap: the components OSV can't map to an ecosystem. Compute that set up front so the
   // egress ledger can declare precisely how many names go to NVD before anything leaves.
   const nvdCandidates = packages.filter((p) => !osvEcosystem(p.type));
-  const egress = buildEgressLedger(packages, provenance, { nvdCandidates: nvdCandidates.length });
+  // Hash-lookup candidates (from /etc/shadow) — gathered up front so the egress ledger can declare exactly how many
+  // UNSALTED hashes would leave before anything does. Salted hashes are counted out here and never sent.
+  const hashCandidates = cfg.hashLookup ? collectShadowCandidates(imageId) : [];
+  const unsaltedCount = hashCandidates.filter((c) => classifyHash(c.hash).resolvable).length;
+  const egress = buildEgressLedger(packages, provenance, {
+    nvdCandidates: nvdCandidates.length,
+    hashLookup: { enabled: cfg.hashLookup, unsaltedCount },
+  });
 
   handle.log(`Egress: ${packages.length} component names+versions → api.osv.dev (no firmware bytes leave).`);
   const osv = await queryOsvBatch(packages, cfg);
@@ -182,6 +222,16 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     `Keys: ${keyMaterial.length} embedded. Disclosure: ${checked}/${securityContacts.length} domains checked.`,
   );
 
+  // Source #5 — online password-hash lookup (opt-in on top of the track, FIRMLAB_HASH_LOOKUP). Sends only unsalted
+  // digests to public reverse-hash DBs, verifies any recovery locally, and never cracks. A verified recovery is a
+  // durable, critical finding; misses/salted-skips are reported but are not findings.
+  if (cfg.hashLookup && hashCandidates.length > 0) {
+    handle.log(`Hash lookup: ${unsaltedCount} unsalted hash(es) → nitrxgen/weakpass (salted hashes are not sent).`);
+  }
+  const hashLookup = await runHashLookup(hashCandidates, cfg);
+  syncFindings(imageId, 'hashlookup', normalizeHashLookup(hashLookup));
+  if (hashLookup.enabled) handle.log(hashLookup.reason);
+
   let synthesis: ResearchResult['synthesis'];
   const llm = loadLlmConfig();
   if (llm) {
@@ -204,6 +254,7 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     kev,
     keyMaterial,
     securityContacts,
+    hashLookup,
     ...(synthesis ? { synthesis } : {}),
   };
 }
