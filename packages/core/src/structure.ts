@@ -209,6 +209,33 @@ function isFitUbi(hits: SignatureHit[]): boolean {
 }
 
 /**
+ * eCos-monolith markers — strings that are effectively unique to an eCos RTOS build (its kernel-symbol prefix
+ * `cyg_*`, the RedBoot bootloader, the HAL, or the ZTE/Xiaomi `zxrouter` application). A repeater/router shipped
+ * as an eCos monolith is frequently *repacked in a U-Boot uImage whose ih_os byte still says Linux*, so the
+ * uImage OS field lies — only the payload strings tell the truth. Matched against a bounded lowercased prefix.
+ * See docs/AUTONOMOUS-WORKERS.md §9 (both Xiaomi repeaters are eCos 3.6.10 on MT7628, misread as embedded-linux).
+ */
+const ECOS_MARKERS = ['redboot', 'cyg_scheduler', 'cyg_thread', 'cyg_kernel', 'ecos_hal', 'zxrouter', '<<< ecos'];
+
+/** Cap the eCos marker scan — these images are small (≤ a few MB); this bounds work on a mis-routed large image. */
+const ECOS_SCAN_CAP = 4 * 1024 * 1024;
+
+/**
+ * Does the image carry eCos-monolith marker strings? Decodes a bounded latin1 prefix and looks for any
+ * `ECOS_MARKERS` token. Used only when no genuine Linux filesystem is present, so a real Linux image that merely
+ * mentions RedBoot in its bootloader is never mistaken for a standalone eCos blob.
+ */
+function looksLikeEcos(buf: Uint8Array): boolean {
+  const end = Math.min(buf.length, ECOS_SCAN_CAP);
+  let text = '';
+  for (let i = 0; i < end; i += 0x8000) {
+    text += String.fromCharCode(...buf.subarray(i, Math.min(end, i + 0x8000)));
+  }
+  const lower = text.toLowerCase();
+  return ECOS_MARKERS.some((m) => lower.includes(m));
+}
+
+/**
  * ESP chip-id → CPU arch, read from the image header (the authoritative source). The Xtensa classics (ESP32/-S2/
  * -S3) vs the RISC-V parts (C2/C3/C6/H2/P4) cannot be told apart by string-grep — a stock ESP-IDF build embeds
  * references to every target — so we read the actual `chip_id` from a bootloader/app `esp_image_header_t`.
@@ -289,6 +316,20 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
     firmwareClass = 'embedded-linux';
     filesystemClass = true;
     ({ arch, endianness } = inferArch(buf, hits));
+  } else if (looksLikeEcos(buf)) {
+    // An eCos monolith (no Linux rootfs) — often repacked in a uImage whose ih_os still says Linux. Classify as
+    // rtos so the Linux rootfs pipeline (which would return 0 files) is not run; W7 does the static RTOS lens.
+    firmwareClass = 'rtos';
+    ({ arch, endianness } = inferArch(buf, hits));
+    // eCos on these MediaTek/Ralink SoCs (MT7628 etc.) is little-endian MIPS; refine the uImage's endian-less
+    // `mips` to `mipsel` so downstream disassembly targets the right byte order.
+    if (arch === 'mips') {
+      arch = 'mipsel';
+      endianness = 'little';
+    }
+    classRationale =
+      'eCos RTOS monolith (RedBoot/cyg_* kernel markers present, no Linux filesystem) — NOT embedded Linux even ' +
+      'if the uImage OS byte says so. The rootfs pipeline does not apply; analyze it as a standalone RTOS blob (worker W7).';
   } else if (ids.has('uimage') || ids.has('trx') || ids.has('android-boot')) {
     firmwareClass = 'embedded-linux';
     filesystemClass = true;

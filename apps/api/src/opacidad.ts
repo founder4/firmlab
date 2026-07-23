@@ -14,6 +14,7 @@
  * sync them), so this orchestrator syncs each provider's findings under the SAME source the manual route uses —
  * re-running opacidad re-syncs idempotently rather than duplicating.
  */
+import fs from 'node:fs';
 import type { ImageIdentity } from '@firmlab/core';
 import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } from './findings.js';
 import type { LlmConfig } from './llm.js';
@@ -40,10 +41,14 @@ import {
   specKey,
   specsForClass,
 } from './opacidad-plan.js';
+import { runAuxSecrets } from './providers/auxsecrets.js';
+import { runBinVuln } from './providers/binvuln.js';
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
+import { runComponentCve } from './providers/component-cve.js';
 import { runDecompile } from './providers/decompile.js';
+import { assessDecoy, decoyFinding } from './providers/decoy.js';
 import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
@@ -58,12 +63,14 @@ import { runUbootAnalysis } from './providers/uboot.js';
 import { runWebTaint } from './providers/webtaint.js';
 import { getImage, listFindings, listJobs } from './store.js';
 
-/** Mutable run context threaded through the plan — extraction fills `rootfsPath`/`carveTrace` for later stages. */
+/** Mutable run context threaded through the plan — extraction fills `rootfsPath`/`outputDir`/`carveTrace` for later stages. */
 interface RunCtx {
   imageId: string;
   imagePath: string;
   analysisJson: string | null;
   rootfsPath: string | null;
+  /** The extraction output dir (all carved partitions) — the aux-secret scan reads sibling partitions from here. */
+  outputDir: string | null;
   carveTrace?: ExtractResult['carveTrace'];
   handle: JobHandle;
 }
@@ -79,10 +86,45 @@ interface StepOutcome {
 
 // === Per-provider executors (call the pure runner, then sync findings under the route's source) ===
 
+/** Did W0 claim this image carries a filesystem (a strong fs signature fired, or a Linux/FIT-UBI class)? */
+function fsClaimed(analysisJson: string | null): boolean {
+  if (!analysisJson) return false;
+  try {
+    const a = JSON.parse(analysisJson) as { identity?: ImageIdentity };
+    const id = a.identity;
+    if (!id) return false;
+    return (
+      (Array.isArray(id.filesystems) && id.filesystems.length > 0) ||
+      id.firmwareClass === 'embedded-linux' ||
+      id.firmwareClass === 'openwrt-fit-ubi'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Read a bounded prefix of the image for the zero-density (decoy) check — representative for a hollow image. */
+function readImagePrefix(imagePath: string, cap = 64 * 1024 * 1024): Uint8Array {
+  try {
+    const fd = fs.openSync(imagePath, 'r');
+    try {
+      const size = Math.min(fs.fstatSync(fd).size, cap);
+      const b = Buffer.allocUnsafe(size);
+      fs.readSync(fd, b, 0, size, 0);
+      return b;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return new Uint8Array(0);
+  }
+}
+
 async function extractRun(c: RunCtx): Promise<StepOutcome> {
   if (c.rootfsPath) return { summary: 'reused the already-extracted rootfs', findingCount: 0 };
   const ex = await runExtraction(c.imageId, c.imagePath, c.handle);
   c.rootfsPath = ex.rootfsPath;
+  c.outputDir = ex.outputDir;
   c.carveTrace = ex.carveTrace;
   if (ex.rootfsPath) {
     return {
@@ -90,7 +132,23 @@ async function extractRun(c: RunCtx): Promise<StepOutcome> {
       findingCount: 0,
     };
   }
+  // No rootfs. Before reporting a bare "no rootfs", check for a hollow/decoy image (a claimed filesystem whose
+  // payload is mostly zeros) so "0 findings" is not mistaken for "clean" (docs/AUTONOMOUS-WORKERS.md §9 gap #6).
+  const decoy = assessDecoy(readImagePrefix(c.imagePath), {
+    fsClaimed: fsClaimed(c.analysisJson),
+    rootfsRecovered: false,
+  });
+  const decoyDrafts = decoyFinding(decoy);
+  syncFindings(c.imageId, 'triage', decoyDrafts);
   const last = ex.carveTrace?.[ex.carveTrace.length - 1];
+  if (decoy.isDecoy) {
+    return {
+      summary: `corrupt/decoy image — ${decoy.reason}`,
+      findingCount: decoyDrafts.length,
+      degraded: true,
+      note: 'payload unextractable (hollow image), not a clean scan',
+    };
+  }
   return {
     summary: `no rootfs (${ex.extractor})`,
     findingCount: 0,
@@ -105,6 +163,16 @@ async function fsauditRun(c: RunCtx): Promise<StepOutcome> {
   return { summary: `rootfs security audit: ${r.findings.length} findings`, findingCount: r.findings.length };
 }
 
+async function auxsecretsRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runAuxSecrets(c.outputDir, c.rootfsPath);
+  syncFindings(c.imageId, 'auxsecrets', r.findings);
+  return {
+    summary: `sibling-partition secrets: ${r.findings.length} embedded private key(s) in ${r.filesScanned} key-ish file(s)`,
+    findingCount: r.findings.length,
+    ...(r.available ? {} : { degraded: true, note: r.reason }),
+  };
+}
+
 async function sbomRun(c: RunCtx): Promise<StepOutcome> {
   const r = await runSbom(c.imageId, c.rootfsPath as string, c.handle);
   const drafts = normalizeSbom(r);
@@ -114,6 +182,17 @@ async function sbomRun(c: RunCtx): Promise<StepOutcome> {
   return {
     summary: `${r.packageCount} packages · ${r.vulnerabilities.length} CVEs (Crit ${r.counts.Critical}, High ${r.counts.High})`,
     findingCount: drafts.length,
+  };
+}
+
+async function compcveRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runComponentCve(c.rootfsPath);
+  syncFindings(c.imageId, 'compcve', r.findings);
+  const cves = r.findings.filter((f) => f.kind === 'component-cve').length;
+  return {
+    summary: `bundled-component fingerprint: ${r.hits.length} component(s), ${cves} n-day CVE(s) a manifest SBOM misses`,
+    findingCount: r.findings.length,
+    ...(r.hits.length === 0 ? { degraded: true, note: r.reason } : {}),
   };
 }
 
@@ -198,6 +277,17 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
   };
 }
 
+/** W5 breadth — sweep every rootfs ELF for stack-overflow candidates (unbounded-copy + no canary). */
+async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runBinVuln(c.rootfsPath);
+  syncFindings(c.imageId, 'binvuln', r.findings);
+  return {
+    summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)`,
+    findingCount: r.findings.length,
+    ...(r.binariesScanned === 0 ? { degraded: true, note: r.reason } : {}),
+  };
+}
+
 /** W5 — targeted binary-vuln, scheduled by W9's re-planning. Decompile one daemon, sync its hardening findings. */
 async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   const binary = spec.target;
@@ -229,7 +319,9 @@ async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
 const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepOutcome>> = {
   extract: extractRun,
   fsaudit: fsauditRun,
+  auxsecrets: auxsecretsRun,
   sbom: sbomRun,
+  compcve: compcveRun,
   servicemap: servicemapRun,
   certs: certsRun,
   compmap: compmapRun,
@@ -240,6 +332,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   esp: espRun,
   encrypted: encryptedRun,
   webtaint: webtaintRun,
+  binvuln: binvulnRun,
   decompile: decompileRun,
 };
 
@@ -290,6 +383,7 @@ export async function runOpacidad(
     imagePath,
     analysisJson: row.analysisJson,
     rootfsPath: prior?.rootfsPath ?? null,
+    outputDir: prior?.outputDir ?? null,
     ...(prior?.carveTrace ? { carveTrace: prior.carveTrace } : {}),
     handle,
   };

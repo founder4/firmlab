@@ -10,7 +10,9 @@ import type { OpacidadPlanEntry } from './opacidad-narrative.js';
 export type ProviderId =
   | 'extract'
   | 'fsaudit'
+  | 'auxsecrets'
   | 'sbom'
+  | 'compcve'
   | 'servicemap'
   | 'certs'
   | 'compmap'
@@ -21,6 +23,7 @@ export type ProviderId =
   | 'esp'
   | 'encrypted'
   | 'webtaint'
+  | 'binvuln'
   | 'decompile';
 
 export interface PlanSpec {
@@ -69,11 +72,25 @@ const LINUX_CHAIN: PlanSpec[] = [
     provider: 'fsaudit',
   },
   {
+    worker: 'W3 · Auxiliary-partition secrets',
+    reason: 'embedded private keys in sibling (non-rootfs) partitions the rootfs audit never sees',
+    needsRootfs: false,
+    built: true,
+    provider: 'auxsecrets',
+  },
+  {
     worker: 'W2 · SBOM / CVE',
     reason: 'components → known CVEs (the n-day surface)',
     needsRootfs: true,
     built: true,
     provider: 'sbom',
+  },
+  {
+    worker: 'W2 · Component fingerprint (bundled n-days)',
+    reason: 'bundled binaries (pppd, openssl) → CVEs a manifest-only SBOM misses',
+    needsRootfs: true,
+    built: true,
+    provider: 'compcve',
   },
   {
     worker: 'Recon · Service enumeration',
@@ -110,6 +127,13 @@ const LINUX_CHAIN: PlanSpec[] = [
     needsRootfs: true,
     built: true,
     provider: 'webtaint',
+  },
+  {
+    worker: 'W5 · Binary-vuln sweep',
+    reason: 'rootfs ELFs → unbounded-copy + no-canary stack-overflow candidates (DVRF pwnables)',
+    needsRootfs: true,
+    built: true,
+    provider: 'binvuln',
   },
 ];
 

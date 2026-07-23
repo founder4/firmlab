@@ -372,3 +372,64 @@ build → where in the code → tool/dependency → the exact bug it corrects �
 - **Build:** distinguish "0 findings" from "pipeline never reached rootfs / class not applicable"; show per-class
   "what can I even run" up front; surface the W9 reasoning trace (source→sink→privilege→path), not flat rows.
 - **Corrects:** §4 — empty == "clean" is dangerously misleading (GL.iNet/GE800/ESP32/Pico all read "clean").
+
+---
+
+## 9. Re-run — app vs autonomous, second pass (2026-07-22)
+
+The experiment was re-run after W0–W9 shipped, to measure whether *opacidad* closed the pass-1 delta. **App pass:**
+all 15 firmwares driven as a normal operator (upload → one-click Autonomous scan) on the deployed `firmlab`
+(build `028ca16`, all workers). **Autonomous pass:** 15 blind free-form agents, one per image, raw `firmlab-auton`
+toolchain, no preset, ~100k-token budget each (actual: 15/15 done, 0 errors, 516,747 tokens total ≈ 34k/agent —
+all finished under the cap, so nothing was truncated by it).
+
+**Verdict: substantial improvement.** In pass 1, on 4 of 6 ground-truth images the app returned *nothing or the
+wrong class*. This run, those 4 are fixed — the app now reproduces the pass-1 autonomous headlines directly:
+
+| Image | Pass-1 app | App now (opacidad) | Status |
+|---|---|---|---|
+| GL.iNet BE3600 | 0 files / 0 findings | `openwrt-fit-ubi`, 641 findings; **tor `os.execute`→uci→root** (`web-taint-cmdi`) + restore-bypass; 486 CVEs (55 crit); empty root shadow | **CLOSED** |
+| ESP32 dump | `embedded-linux`/jffs2/0 | `esp-soc`/xtensa; NVS privkey `98a39f0b…`; stale lineage; Flash-Enc/Secure-Boot OFF | **CLOSED** |
+| GE800 OTA | silent extract failure | `encrypted`; cipher diagnosis + honest "unrecoverable without key" | **CLOSED** |
+| Pico "RP2040" | `embedded-linux`/jffs2/0 (ARM) | `baremetal`/**riscv** (correct class + ISA) | **Identity CLOSED**; flag extraction still open (W7-deeper) |
+| WR940N | 3 findings / 0 CVEs | 7 findings: root md5 hash, telnet/httpd autostart, hardening — **still 0 CVEs** | **PARTIAL** — pppd component-CVE missed |
+| DVRF | 24 findings | 25 findings (18 CVEs) | **UNCHANGED** — no binary pwnables (W5 shallow) |
+
+**Remaining gaps, pinned by this run (all now in `BACKLOG.md`):**
+1. **Component-fingerprint CVE (W2)** — 0 CVEs on WR940N *and* WDR3600; agent finds pppd CVE-2020-8597 on both.
+2. **eCos/RTOS classification (W0)** — both Xiaomi repeaters are eCos 3.6.10 on MT7628 but the app calls them
+   `embedded-linux`.
+3. **Deep bare-metal solve (W7)** — Pico class/ISA now correct, but no decode-routine / flag extraction.
+4. **Binary pwnables (W5)** — DVRF still yields no memory-corruption findings.
+5. **Auxiliary-partition secrets (W1/W3)** — BeanView cloud pairing secret (plaintext JFFS2), Tenda RSA private
+   key both missed; the carve only scans the rootfs volume.
+6. **Corrupt/decoy honest verdict** — Asus hollow image (93% zeros): agent diagnosed it, app returned a silent 0.
+
+Net: the gap moved from "the app is blind on modern/non-Linux classes" to "the app matches a budget-limited agent,
+minus six specific depth features." On the closed images the app now *equals or exceeds* what a 34k-token agent
+recovers (e.g. GL.iNet 641 findings / 486 CVEs vs the agent's budget-limited 4).
+
+### 9.1 Gaps addressed (2026-07-22, same session)
+
+All six re-run gaps were then implemented (each a self-contained, unit-tested commit; the app now closes them
+without an autonomous agent):
+
+1. **W2 component-fingerprint CVE** (`providers/component-cve.ts`) — fingerprints bundled pppd/openssl by the
+   version string in the binary → **pppd 2.4.2–2.4.8 → CVE-2020-8597** (WR940N + WDR3600) + openssl Heartbleed.
+2. **W0 eCos/RTOS classification** (`core/structure.ts` + `rtos.ts`) — eCos monoliths (both Xiaomi) now classify
+   as `rtos`, not `embedded-linux`, with the version/RedBoot/app surfaced.
+3. **W7 plaintext flag/credential extraction** (`rtos.ts`) — bare-metal images emit `baremetal-flag` findings for
+   cleartext tokens (obfuscated flags still need manual reversing — stated honestly).
+4. **W5 binary-vuln sweep** (`providers/binvuln.ts`) — every rootfs ELF scanned for unbounded-copy + no-canary
+   stack-overflow candidates (the DVRF pwnables).
+5. **W3 embedded-private-key by content** (`fsaudit.ts`) — a PEM key inside any file is flagged regardless of
+   filename. **Extended (`auxsecrets.ts`) to scan sibling (non-rootfs) partitions** — Tenda's 1024-bit RSA key in
+   `jffs2-root-0/-1/version/privkey.pem` now surfaces (validated in-container). Honesty correction: **BeanView's
+   `private_key.pem`/`devinfo` are PUBLIC keys, not a cloud secret** — the autonomous "cleartext cloud pairing
+   secret" headline was an overstatement; the scan correctly leaves public keys alone.
+6. **Corrupt/decoy verdict** (`providers/decoy.ts`) — a hollow image (claimed fs + no rootfs + mostly zeros)
+   emits a `corrupt-decoy` finding instead of a silent 0 (Asus).
+
+Deferred remainders (in `BACKLOG.md`): aux-partition *extraction* (BeanView cloud secret), on-device
+decode-routine reversing (Pico flags), nvram parser + `/etc/shadow` cracking, and angr symbolic reachability to
+upgrade W5 candidates to confirmed.

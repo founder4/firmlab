@@ -128,11 +128,52 @@ export function detectRtosKernel(bytes: Uint8Array): string | null {
   return null;
 }
 
+/**
+ * Pure: detect an eCos RTOS monolith and pull out what the bytes disclose — the kernel version (`eCos 3.6.10`),
+ * whether a RedBoot bootloader is bundled, and the vendor application name (e.g. `zxrouter`). eCos images are
+ * routinely repacked inside a U-Boot uImage whose OS byte still says Linux, so W0 classifies them by these same
+ * markers (see structure.ts); this surfaces the concrete version/posture as a finding. Returns null when the
+ * image carries no eCos markers.
+ */
+export function detectEcos(buf: Uint8Array): { version: string | null; redboot: boolean; app: string | null } | null {
+  const text = decodeAscii(buf); // lowercased
+  const hasMarker = ['cyg_scheduler', 'cyg_thread', 'cyg_kernel', 'ecos_hal', 'redboot', 'zxrouter', '<<< ecos'].some(
+    (m) => text.includes(m),
+  );
+  if (!hasMarker) return null;
+  const version = text.match(/ecos[\s-]?v?(\d+\.\d+(?:\.\d+)?)/)?.[1] ?? null;
+  const redboot = text.includes('redboot');
+  const app = text.includes('zxrouter') ? 'zxrouter' : null;
+  return { version: version ? `eCos ${version}` : null, redboot, app };
+}
+
+/**
+ * A CTF/flag-format token literally present in the bytes: `flag{…}`, `CTF{…}`, `key{…}`. Bare-metal challenge
+ * firmware often carries the flag (or a plaintext UART credential) in cleartext; when it does, extracting it is
+ * the headline. A flag hidden behind a decode routine will NOT appear here — that needs manual reversing, which
+ * this provider states honestly rather than pretending the image is flag-free.
+ */
+const FLAG_RE = /\b(?:flag|ctf|key)\{[\x20-\x7e]{3,80}?\}/gi;
+
+/** Pure: extract plaintext flag-format tokens from the (case-preserving) ASCII of a bare-metal image. */
+export function extractFlags(buf: Uint8Array): string[] {
+  const end = Math.min(buf.length, SCAN_CAP);
+  let text = '';
+  for (let i = 0; i < end; i += 0x8000) {
+    text += String.fromCharCode(...buf.subarray(i, Math.min(end, i + 0x8000)));
+  }
+  const out = new Set<string>();
+  for (const m of text.matchAll(FLAG_RE)) out.add(m[0]);
+  return [...out].slice(0, 20);
+}
+
 export interface RtosAnalysis {
   isCortexM: boolean;
   vectorTable: { initialSP: number; resetHandler: number } | null;
   memoryMap: { flashBase: number; ramBase: number } | null;
   rtosKernel: string | null;
+  ecos: { version: string | null; redboot: boolean; app: string | null } | null;
+  flags: string[];
   findings: FindingDraft[];
 }
 
@@ -147,6 +188,8 @@ export function analyzeRtos(buf: Uint8Array): RtosAnalysis {
   const rtosKernel = detectRtosKernel(buf);
   const isCortexM = vectorTable !== null;
   const memoryMap = vectorTable ? inferMemoryMap(vectorTable.initialSP, vectorTable.resetHandler) : null;
+  const ecos = detectEcos(buf);
+  const flags = extractFlags(buf);
   const findings: FindingDraft[] = [];
 
   if (vectorTable && memoryMap) {
@@ -196,7 +239,41 @@ export function analyzeRtos(buf: Uint8Array): RtosAnalysis {
     });
   }
 
-  return { isCortexM, vectorTable, memoryMap, rtosKernel, findings };
+  // eCos monolith (MIPS/ARM, no Cortex-M vector table) — surface its version + posture so the non-Cortex path
+  // is not a silent empty. This is the finding W0 routes both Xiaomi repeaters here to produce.
+  if (ecos) {
+    const parts = [
+      ecos.version ?? 'eCos RTOS',
+      ecos.app ? `app "${ecos.app}"` : null,
+      ecos.redboot ? 'RedBoot bootloader' : null,
+    ].filter(Boolean);
+    findings.push({
+      kind: 'rtos-ecos',
+      title: `eCos RTOS monolith: ${parts.join(', ')}`,
+      severity: 'info',
+      proofState: 'static_confirmed',
+      evidence: { version: ecos.version, app: ecos.app, redboot: ecos.redboot },
+      rationale:
+        'eCos kernel/RedBoot markers are literally present in the image — this is a standalone RTOS, NOT embedded ' +
+        'Linux (the uImage OS byte often lies). There is no rootfs; analyze it as a monolith. A static fact about the bytes.',
+    });
+  }
+
+  // Plaintext CTF/flag tokens (bare-metal challenge firmware) — the headline when the flag is not obfuscated.
+  for (const flag of flags) {
+    findings.push({
+      kind: 'baremetal-flag',
+      title: `Plaintext flag/credential token in image: ${flag}`,
+      severity: 'medium',
+      proofState: 'static_confirmed',
+      evidence: { token: flag },
+      rationale:
+        'A flag-format token is present in cleartext in the firmware bytes — recoverable without running the ' +
+        'device. Flags hidden behind an on-device decode routine will not appear here and need manual reversing.',
+    });
+  }
+
+  return { isCortexM, vectorTable, memoryMap, rtosKernel, ecos, flags, findings };
 }
 
 export interface RtosResult {
@@ -248,6 +325,11 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
 
   const a = analyzeRtos(buf);
   if (!a.isCortexM) {
+    const ecosNote = a.ecos ? ` eCos monolith detected (${a.ecos.version ?? 'version unknown'}).` : '';
+    const flagNote = a.flags.length ? ` ${a.flags.length} plaintext flag/credential token(s) recovered.` : '';
+    const emptyNote = a.findings.length
+      ? ''
+      : ' No eCos/flag markers either — static analysis found nothing to assert.';
     return {
       available: true,
       isCortexM: false,
@@ -255,7 +337,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
       memoryMap: null,
       rtosKernel: a.rtosKernel,
       findings: a.findings,
-      reason: 'No ARM Cortex-M vector table at offset 0 — not a raw baremetal image (or an ELF/Linux image).',
+      reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${ecosNote}${flagNote}${emptyNote}`,
     };
   }
 
