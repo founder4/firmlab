@@ -457,6 +457,22 @@ export interface ResearchResult {
   kev: { checked: boolean; catalogSize: number; matches: KevMatch[]; reason?: string };
   keyMaterial: { kind: string; redacted: string; effectivelyPublic: boolean; sharedInImages?: number }[];
   securityContacts: { domain: string; checked: boolean; found: boolean; reason?: string; contact: string[] }[];
+  hashLookup: {
+    enabled: boolean;
+    reason: string;
+    attempted: number;
+    resolved: number;
+    notQueried: number;
+    entries: {
+      account: string;
+      source: string;
+      scheme: string;
+      outcome: 'resolved' | 'unverified' | 'miss' | 'skipped_salted' | 'skipped_other';
+      verifiedAs?: string;
+      passwordMasked?: string;
+      manualLookupUrl?: string;
+    }[];
+  };
   synthesis?: { text: string; model: string; provider: string };
 }
 

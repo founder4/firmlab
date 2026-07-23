@@ -18,6 +18,26 @@ describe('loadResearchConfig — the local-only gate', () => {
     expect(c?.nvdApiKey).toBe('abc-123');
   });
 
+  it('keeps hash lookup OFF (and its hosts off the allowlist) unless FIRMLAB_HASH_LOOKUP is set', () => {
+    const c = loadResearchConfig({ FIRMLAB_RESEARCH: '1' } as unknown as NodeJS.ProcessEnv);
+    expect(c?.hashLookup).toBe(false);
+    expect(c?.allowlist).not.toContain('www.nitrxgen.net');
+    expect(c?.allowlist).not.toContain('weakpass.com');
+  });
+
+  it('arms hash lookup and allowlists its hosts only under the second opt-in FIRMLAB_HASH_LOOKUP', () => {
+    const c = loadResearchConfig({
+      FIRMLAB_RESEARCH: '1',
+      FIRMLAB_HASH_LOOKUP: '1',
+    } as unknown as NodeJS.ProcessEnv);
+    expect(c?.hashLookup).toBe(true);
+    expect(c?.allowlist).toEqual(expect.arrayContaining(['www.nitrxgen.net', 'weakpass.com']));
+  });
+
+  it('does not arm hash lookup when the research track itself is off', () => {
+    expect(loadResearchConfig({ FIRMLAB_HASH_LOOKUP: '1' } as unknown as NodeJS.ProcessEnv)).toBeNull();
+  });
+
   it('merges extra allowlist hosts without duplicating', () => {
     const c = loadResearchConfig({
       FIRMLAB_RESEARCH: '1',
