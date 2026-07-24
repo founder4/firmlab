@@ -72,8 +72,8 @@ export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Elemen
       >
         <defs>
           <linearGradient id="entGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#4db5ff" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#4db5ff" stopOpacity="0.02" />
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
           </linearGradient>
         </defs>
 
@@ -82,7 +82,15 @@ export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Elemen
           const x1 = PAD.left + (r.start / (size || 1)) * plotW;
           const x2 = PAD.left + (r.end / (size || 1)) * plotW;
           return (
-            <rect key={i} x={x1} y={PAD.top} width={Math.max(1, x2 - x1)} height={plotH} fill="#f5b642" opacity={0.1} />
+            <rect
+              key={i}
+              x={x1}
+              y={PAD.top}
+              width={Math.max(1, x2 - x1)}
+              height={plotH}
+              fill="var(--warn)"
+              opacity={0.1}
+            />
           );
         })}
 
@@ -91,8 +99,8 @@ export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Elemen
           const y = PAD.top + (1 - v / 8) * plotH;
           return (
             <g key={v}>
-              <line x1={PAD.left} y1={y} x2={PAD.left + plotW} y2={y} stroke="#202839" strokeWidth={1} />
-              <text x={PAD.left - 6} y={y + 3} fontSize={10} fill="#5b6577" textAnchor="end">
+              <line x1={PAD.left} y1={y} x2={PAD.left + plotW} y2={y} stroke="var(--border)" strokeWidth={1} />
+              <text x={PAD.left - 6} y={y + 3} fontSize={10} fill="var(--text-faint)" textAnchor="end">
                 {v}
               </text>
             </g>
@@ -105,20 +113,20 @@ export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Elemen
           y1={thresholdY}
           x2={PAD.left + plotW}
           y2={thresholdY}
-          stroke="#f5b642"
+          stroke="var(--warn)"
           strokeWidth={1}
           strokeDasharray="4 4"
           opacity={0.6}
         />
 
         {area && <path d={area} fill="url(#entGrad)" />}
-        {path && <path d={path} fill="none" stroke="#4db5ff" strokeWidth={1.2} />}
+        {path && <path d={path} fill="none" stroke="var(--accent)" strokeWidth={1.2} />}
 
         {/* X offset labels */}
         {[0, 0.25, 0.5, 0.75, 1].map((f) => {
           const x = PAD.left + f * plotW;
           return (
-            <text key={f} x={x} y={height - 8} fontSize={10} fill="#5b6577" textAnchor="middle">
+            <text key={f} x={x} y={height - 8} fontSize={10} fill="var(--text-faint)" textAnchor="middle">
               {fmtHex(Math.round(f * size))}
             </text>
           );
@@ -131,11 +139,11 @@ export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Elemen
               y1={PAD.top}
               x2={hover.x}
               y2={PAD.top + plotH}
-              stroke="#d7dce6"
+              stroke="var(--text-dim)"
               strokeWidth={0.6}
               opacity={0.4}
             />
-            <circle cx={hover.x} cy={PAD.top + (1 - hover.value / 8) * plotH} r={3} fill="#4db5ff" />
+            <circle cx={hover.x} cy={PAD.top + (1 - hover.value / 8) * plotH} r={3} fill="var(--accent)" />
           </g>
         )}
       </svg>

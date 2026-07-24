@@ -16,65 +16,71 @@
  * TOKENS — dark (default)
  * ========================================================================================================== */
 :root,
-:root[data-theme='dark'] {
+:root[data-theme="dark"] {
   color-scheme: dark;
 
-  /* Surfaces — a graphite ramp, cool, never pure black. */
-  --bg: #0a0e14;
-  --bg-panel: #10151d;
-  --bg-panel-2: #151c26;
-  --bg-inset: #0b1017;
-  --bg-elev: #18212d;
-  --surface-2: #151c26;
+  /*
+   * DUOTONE: warm ink + one electric signal (lime). The two colours carry the whole surface — the signal is
+   * accent, trace, current selection, links and highlights; everything else is an ink-scale neutral. Severity
+   * and structure categories stay a small FUNCTIONAL exception (they encode data, not chrome).
+   */
+
+  /* Surfaces — a warm near-black ink ramp. */
+  --bg: #08090b;
+  --bg-panel: #0e1013;
+  --bg-panel-2: #14171b;
+  --bg-inset: #0a0c0e;
+  --bg-elev: #181c21;
+  --surface-2: #14171b;
 
   /* Hairlines. */
-  --border: #202a36;
-  --border-soft: #19212b;
-  --border-strong: #2c3947;
+  --border: #23262c;
+  --border-soft: #1a1d22;
+  --border-strong: #33373f;
 
-  /* Text — cool-tinted, not flat gray; all ≥4.5:1 on --bg-panel. */
-  --text: #dde5ee;
-  --text-dim: #97a5b4;
-  --text-faint: #626f7e;
+  /* Text — near-white, a hair warm; all ≥4.5:1 on --bg-panel. */
+  --text: #e9ebe4;
+  --text-dim: #9aa09a;
+  --text-faint: #61666a;
 
-  /* Interaction accent — calibrated cyan, orthogonal to the severity axis. No glow. */
-  --accent: #37a8cf;
-  --accent-hover: #52c0e6;
-  --accent-fg: #04121a;
-  --accent-soft: rgba(55, 168, 207, 0.13);
-  --accent-line: rgba(55, 168, 207, 0.42);
-  --focus: rgba(82, 192, 230, 0.55);
+  /* THE SIGNAL — electric lime. Does the work of the whole accent system. */
+  --accent: #c9f23a;
+  --accent-hover: #dcff5c;
+  --accent-fg: #0a0c05;
+  --accent-soft: rgba(201, 242, 58, 0.12);
+  --accent-line: rgba(201, 242, 58, 0.42);
+  --focus: rgba(201, 242, 58, 0.55);
 
   /* Status. */
-  --ok: #46c08a;
-  --warn: #e6b64d;
-  --danger: #ef6d78;
-  --info: #6bb2e2;
-  --scrim: rgba(4, 7, 11, 0.66);
+  --ok: #7ddc5a;
+  --warn: #ffbb3d;
+  --danger: #ff5147;
+  --info: #7fb8ff;
+  --scrim: rgba(3, 4, 6, 0.7);
 
-  /* Severity ramp — data encoding for FindingSeverity. */
-  --sev-critical: #f36a76;
-  --sev-high: #f0954f;
-  --sev-medium: #e6c052;
-  --sev-low: #64a9e0;
-  --sev-info: #808e9c;
+  /* Severity ramp — data encoding for FindingSeverity (a small functional exception to the duotone). */
+  --sev-critical: #ff5147;
+  --sev-high: #ff8f3d;
+  --sev-medium: #ffca3d;
+  --sev-low: #7fb8ff;
+  --sev-info: #7f857f;
 
   /* Provenance / trust — how a claim was produced. */
-  --trust-deterministic: #6bb2e2;
-  --trust-heuristic: #e6b64d;
-  --trust-agent: #b98cf0;
+  --trust-deterministic: #7fb8ff;
+  --trust-heuristic: #ffbb3d;
+  --trust-agent: #c58cff;
 
-  /* Structure-map categories — qualitative, muted, distinct from the severity hues. */
-  --cat-filesystem: #4fb2c6;
-  --cat-compression: #8098f0;
-  --cat-executable: #e08a5b;
+  /* Structure-map categories — muted, kept below the lime signal in intensity. */
+  --cat-filesystem: #57c6a4;
+  --cat-compression: #7f9cf0;
+  --cat-executable: #e59158;
   --cat-bootloader: #d98cc4;
-  --cat-kernel: #5cc08a;
+  --cat-kernel: #9bd15a;
   --cat-container: #cbb25e;
-  --cat-crypto: #e0687a;
-  --cat-certificate: #59b6e0;
-  --cat-image: #9d7fe0;
-  --cat-other: #78858f;
+  --cat-crypto: #e56d80;
+  --cat-certificate: #62b0e0;
+  --cat-image: #a37fe0;
+  --cat-other: #767c7a;
 
   /* Radii — tight and technical. */
   --r-sm: 3px;
@@ -83,8 +89,8 @@
   --r-pill: 999px;
 
   /* Type. */
-  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Menlo', 'Cascadia Code', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Cascadia Code", monospace;
   --data-fs: 0.8125rem;
 
   /* Elevation — offset + soft blur, tinted. Panels lean on borders, not shadow. */
@@ -105,7 +111,7 @@
 /* ============================================================================================================
  * TOKENS — light (cool technical white; a coherent variant, not a warm-paper inversion)
  * ========================================================================================================== */
-:root[data-theme='light'] {
+:root[data-theme="light"] {
   color-scheme: light;
 
   --bg: #eceff4;
@@ -164,7 +170,7 @@
 }
 
 /* Density. */
-:root[data-density='compact'] {
+:root[data-density="compact"] {
   --panel-pad: 12px;
   --row-y: 5px;
   --tap: 30px;
@@ -252,11 +258,11 @@ a:hover {
 .mono {
   font-family: var(--mono);
   font-variant-ligatures: none;
-  font-feature-settings: 'tnum' 1;
+  font-feature-settings: "tnum" 1;
 }
 .num {
   font-family: var(--mono);
-  font-feature-settings: 'tnum' 1;
+  font-feature-settings: "tnum" 1;
 }
 
 .hint {
@@ -796,7 +802,7 @@ a:hover {
   color: var(--text-dim);
 }
 .prov::before {
-  content: '';
+  content: "";
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1036,7 +1042,7 @@ th.sortable:hover {
   background: var(--bg-inset);
 }
 .health::before {
-  content: '';
+  content: "";
   width: 7px;
   height: 7px;
   border-radius: 50%;

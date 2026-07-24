@@ -34,6 +34,7 @@ import { FilesystemTree } from '../components/FilesystemTree';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { OpacidadPanel } from '../components/OpacidadPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
+import { SignalCanvas } from '../components/SignalCanvas';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StructureMap } from '../components/StructureMap';
 import { toast } from '../toast';
@@ -300,10 +301,31 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
 
   return (
     <div>
-      <div className="grid grid-3" style={{ marginBottom: 16 }}>
-        <Stat label="Class" value={idn?.firmwareClass ?? '—'} />
-        <Stat label="Architecture" value={`${idn?.arch ?? '—'} / ${idn?.endianness ?? '—'}`} mono />
-        <Stat label="Filesystems" value={idn?.filesystems.join(', ') || '—'} mono />
+      {/* The signal tape — the image read as signal along its byte axis; every panel below is a lens over it. */}
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <div className="panel-title">Signal tape</div>
+            <div className="panel-sub">
+              Entropy trace over the structure carve, findings pinned to their offset. Scrub to read any byte range.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <span className="badge badge-accent">{idn?.firmwareClass ?? 'unknown'}</span>
+            <span className="badge mono">
+              {idn?.arch ?? '—'}/{idn?.endianness ?? '—'}
+            </span>
+            {(idn?.filesystems ?? []).map((fs) => (
+              <span key={fs} className="badge mono">
+                {fs}
+              </span>
+            ))}
+          </div>
+        </div>
+        <SignalCanvas imageId={id} size={image.size} findings={findings} />
+      </div>
+
+      <div className="grid grid-3" style={{ margin: '16px 0' }}>
         <Stat label="Binaries" value={`${binaries.length} (${triagedBinaries} triaged)`} />
         <Stat label="Findings" value={String(findings.length)} />
         <Stat label="Runtime strategy" value={caps?.strategy ?? '—'} mono />
