@@ -4,15 +4,17 @@ import { type AgentConfig, type StorageUsage, api, fmtBytes } from '../api';
 import { Icon } from '../icons';
 import { startTour } from '../onboarding';
 import { type Density, type ThemePref, setDensity, setTheme, useAppearance } from '../theme';
+import { Capabilities } from './Capabilities';
 
 type Health = { exposedToNetwork: boolean; trustedProxy?: boolean; host?: string; port?: number };
-type SettingsTab = 'appearance' | 'analysis' | 'privacy' | 'agent' | 'storage' | 'help';
+type SettingsTab = 'appearance' | 'analysis' | 'tools' | 'privacy' | 'agent' | 'storage' | 'help';
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'analysis', label: 'Analysis' },
+  { id: 'tools', label: 'Tools' },
+  { id: 'agent', label: 'AI & Agent' },
   { id: 'privacy', label: 'Privacy' },
-  { id: 'agent', label: 'Agent' },
   { id: 'storage', label: 'Storage' },
   { id: 'help', label: 'Help' },
 ];
@@ -138,9 +140,9 @@ export function Settings(): JSX.Element {
             from deployment limits, which are set on the server.
           </div>
           <Row label="External tools">
-            <Link to="/capabilities" className="btn btn-sm">
+            <button type="button" className="btn btn-sm" onClick={() => setTab('tools')}>
               <Icon.capabilities size={14} /> View detected tools
-            </Link>
+            </button>
             <div className="hint" style={{ marginTop: 6 }}>
               binwalk, radare2/Ghidra, syft/grype, gitleaks and QEMU unlock extraction, triage, SBOM/CVEs, deep secret
               scans and emulation when present.
@@ -163,6 +165,8 @@ export function Settings(): JSX.Element {
           </div>
         </div>
       )}
+
+      {tab === 'tools' && <Capabilities />}
 
       {tab === 'privacy' && (
         <div className="panel" style={{ maxWidth: 720 }}>
@@ -212,7 +216,37 @@ export function Settings(): JSX.Element {
 
       {tab === 'agent' && (
         <div className="panel" style={{ maxWidth: 720 }}>
-          <div className="panel-title">Agent (conscious autonomy)</div>
+          <div className="panel-title">AI provider</div>
+          <div className="panel-sub">
+            An LLM powers the copilot and the conscious agent's decision nodes. It is optional — with no key configured
+            FirmLab stays fully deterministic and local. Provider and key are set on the server; this mirrors them.
+          </div>
+          <Row label="Active provider">
+            {agent?.enabled ? (
+              <span className="mono">
+                {agent.provider} · {agent.model}
+              </span>
+            ) : (
+              <span className="badge">none configured</span>
+            )}
+          </Row>
+          <Row label="Select provider">
+            <span className="hint">
+              <span className="mono">FIRMLAB_LLM_PROVIDER</span> = <span className="mono">deepseek</span> ·{' '}
+              <span className="mono">anthropic</span> · <span className="mono">ollama</span>
+            </span>
+          </Row>
+          <Row label="Provider key">
+            <span className="hint">
+              Set the matching key: <span className="mono">DEEPSEEK_API_KEY</span>,{' '}
+              <span className="mono">ANTHROPIC_API_KEY</span>, or point <span className="mono">OLLAMA_HOST</span> at a
+              local server. Keys live in the server environment, never in the browser.
+            </span>
+          </Row>
+
+          <div className="panel-title" style={{ marginTop: 22 }}>
+            Agent governor
+          </div>
           <div className="panel-sub">
             The agent reasons within a deterministic skeleton and pauses for approval before emulation. These limits are
             enforced by the governor and set via environment variables.
@@ -298,7 +332,8 @@ export function Settings(): JSX.Element {
             </span>
           </Row>
           <div className="hint" style={{ marginTop: 12 }}>
-            Manage or bulk-delete images from the <Link to="/">Dashboard</Link>. Retention limits are configured with
+            Manage or bulk-delete images from <Link to="/analyze">Local analysis</Link>. Retention limits are configured
+            with
             <span className="mono"> FIRMLAB_MAX_IMAGE_AGE_DAYS</span> and{' '}
             <span className="mono">FIRMLAB_MAX_DATA_BYTES</span>.
           </div>

@@ -902,17 +902,21 @@ th.sortable:hover {
 /* ============================================================================================================
  * BANNERS / EMPTY / SKELETON / METER / LEGEND
  * ========================================================================================================== */
+/* Block flow (not flex) so banners with rich inline prose — <strong>, <span class="mono">, links — read as one
+ * paragraph. An optional leading icon sits inline at the start via the svg rule below. */
 .banner {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
+  display: flow-root;
   padding: 11px 13px;
   border-radius: var(--r-md);
   border: 1px solid var(--border);
   background: var(--bg-inset);
   color: var(--text-dim);
   font-size: 0.8125rem;
-  line-height: 1.5;
+  line-height: 1.55;
+}
+.banner > svg:first-child {
+  float: left;
+  margin: 1px 9px 0 0;
 }
 .banner-info {
   border-color: color-mix(in srgb, var(--info) 34%, transparent);

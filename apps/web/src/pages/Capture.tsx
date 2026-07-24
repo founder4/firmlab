@@ -222,12 +222,21 @@ export function Capture(): JSX.Element {
 
   return (
     <div>
+      <div className="page-head">
+        <div className="eyebrow">Acquisition</div>
+        <h1 className="page-title">Proxy / Updates</h1>
+        <div className="page-desc">
+          Get on-path of a device, intercept its OTA update, carve the firmware from the captured traffic and ingest it
+          — and track how its firmware versions change over time. FirmLab's second network-touching lane.
+        </div>
+      </div>
+
       {enabled ? (
         <div className="banner banner-info">
-          The <strong>capture lane</strong> acquires firmware from a live device — intercept an OTA update, carve the
-          blob from the traffic, and ingest it into the workbench. This is FirmLab's second network-touching lane.
-          <strong> Discover</strong> devices below, then <strong>Capture</strong> arms an on-path proxy for one target:
-          trigger its OTA, and FirmLab scores the flows for firmware and offers the carved blob for one-click ingest.
+          <strong>Discover</strong> devices below, then <strong>Capture</strong> arms an on-path proxy for one target:
+          trigger its OTA and FirmLab scores the captured flows for firmware and offers the carved blob for one-click
+          ingest. Interactive request replay (a full HTTP repeater) is on the roadmap — it needs a server-side replay
+          endpoint.
         </div>
       ) : (
         <div className="banner banner-warn">
