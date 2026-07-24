@@ -65,9 +65,14 @@ const SECTION_GROUPS: { label: string; items: { id: string; label: string; icon:
   },
 ];
 
-export const SECTION_LABEL: Record<string, string> = Object.fromEntries(
-  SECTION_GROUPS.flatMap((g) => g.items.map((i) => [i.id, i.label])),
-);
+export const SECTION_LABEL: Record<string, string> = {
+  ...Object.fromEntries(SECTION_GROUPS.flatMap((g) => g.items.map((i) => [i.id, i.label]))),
+  overview: 'General',
+  filesystem: 'Extraction',
+  bootloader: 'Bootloader',
+  findings: 'Findings & report',
+  simulate: 'Emulation',
+};
 
 /** Parse the active firmware id + section out of the route (/image/:id/:section?). */
 function useActiveImage(): { id: string | null; section: string } {
@@ -101,7 +106,7 @@ function NavRow({
 }
 
 function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
-  const { id, section } = useActiveImage();
+  const { id } = useActiveImage();
   const nav = useNavigate();
   const [activeName, setActiveName] = useState<string | null>(null);
 
@@ -150,23 +155,10 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
             >
               <Icon.back size={13} /> All images
             </button>
-          </div>
-          {SECTION_GROUPS.map((group) => (
-            <div key={group.label}>
-              <div className="nav-section">{group.label}</div>
-              {group.items.map((item) => (
-                <NavLink
-                  key={item.id}
-                  to={`/image/${id}/${item.id}`}
-                  onClick={onNavigate}
-                  className={`nav-item ${section === item.id ? 'active' : ''}`}
-                >
-                  <span className="nav-ico">{Icon[item.icon]({})}</span>
-                  {item.label}
-                </NavLink>
-              ))}
+            <div className="hint" style={{ marginTop: 8, fontSize: '0.72rem' }}>
+              Navigate the analysis from the step timeline at the top of the page.
             </div>
-          ))}
+          </div>
         </>
       )}
 

@@ -1227,3 +1227,119 @@ th.sortable:hover {
     display: grid;
   }
 }
+
+/* ============================================================================================================
+ * STEP TIMELINE — the persistent analysis pipeline (Local analysis / image detail)
+ * ========================================================================================================== */
+.steptl {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 15;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  backdrop-filter: saturate(1.1) blur(8px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow-x: auto;
+}
+.steptl-step {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-family: inherit;
+}
+/* connector line between nodes */
+.steptl-step::before,
+.steptl-step::after {
+  content: "";
+  position: absolute;
+  top: 15px;
+  height: 2px;
+  background: var(--border-strong);
+  width: 50%;
+}
+.steptl-step::before {
+  left: 0;
+}
+.steptl-step::after {
+  right: 0;
+}
+.steptl-step:first-child::before,
+.steptl-step:last-child::after {
+  display: none;
+}
+.steptl-step.done::before,
+.steptl-step.done::after,
+.steptl-step.active::before {
+  background: var(--accent);
+}
+.steptl-node {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--bg-inset);
+  border: 2px solid var(--border-strong);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: all 0.14s;
+}
+.steptl-step:hover .steptl-node {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+.steptl-step.done .steptl-node {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+.steptl-step.running .steptl-node {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.steptl-step.blocked .steptl-node {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  color: var(--warn);
+}
+.steptl-step.active .steptl-node {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  color: var(--accent);
+}
+.steptl-step.active.done .steptl-node {
+  color: var(--accent-fg);
+}
+.steptl-label {
+  font-size: 0.74rem;
+  font-weight: 550;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.steptl-step.active .steptl-label {
+  color: var(--text);
+}
+.steptl-meta {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--text-faint);
+  white-space: nowrap;
+}

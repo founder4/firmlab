@@ -36,7 +36,9 @@ import { OpacidadPanel } from '../components/OpacidadPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
 import { SignalCanvas } from '../components/SignalCanvas';
 import { SimulationMenu } from '../components/SimulationMenu';
+import { StepTimeline } from '../components/StepTimeline';
 import { StructureMap } from '../components/StructureMap';
+import { Icon } from '../icons';
 import { toast } from '../toast';
 
 type TabId =
@@ -46,8 +48,10 @@ type TabId =
   | 'entropy'
   | 'filesystem'
   | 'secrets'
+  | 'bootloader'
   | 'sbom'
   | 'binaries'
+  | 'findings'
   | 'diff'
   | 'simulate'
   | 'opacidad'
@@ -58,26 +62,30 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'dossier',
   'filesystem',
   'secrets',
+  'bootloader',
   'sbom',
   'binaries',
+  'findings',
   'diff',
   'simulate',
   'opacidad',
   'agent',
 ]);
 
-/** URL section → internal panel id. The sidebar drives these; `overview` is the composite dossier. */
+/** URL section → internal panel id. The step timeline drives these; `overview` is the composite dossier. */
 const SECTION_TITLES: Record<TabId, string> = {
-  dossier: 'Overview',
-  overview: 'Overview',
+  dossier: 'General',
+  overview: 'General',
   structure: 'Structure',
   entropy: 'Entropy',
-  filesystem: 'Filesystem',
+  filesystem: 'Extraction',
   secrets: 'Secrets',
+  bootloader: 'Bootloader',
   sbom: 'SBOM & CVEs',
   binaries: 'Binaries',
+  findings: 'Findings & report',
   diff: 'Diff',
-  simulate: 'Simulation',
+  simulate: 'Emulation',
   opacidad: 'Autonomous scan',
   agent: 'Agent',
 };
@@ -136,22 +144,33 @@ export function ImageDetail(): JSX.Element {
         </a>
       </div>
 
+      <StepTimeline imageId={id} active={tab} ready={image.status === 'ready'} />
+
       {tab === 'dossier' && <DossierPanel image={image} />}
       {tab === 'structure' && analysis && <StructurePanel analysis={analysis} />}
       {tab === 'entropy' && analysis && <EntropyPanel analysis={analysis} />}
-      {tab === 'filesystem' && <FilesystemPanel imageId={id} />}
+      {/* Extraction: the carved rootfs and what it exposes — files + secrets in one place. */}
+      {tab === 'filesystem' && (
+        <>
+          <FilesystemPanel imageId={id} />
+          <SecretsPanel analysis={analysis} imageId={id} />
+        </>
+      )}
       {tab === 'secrets' && <SecretsPanel analysis={analysis} imageId={id} />}
+      {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}
+      {tab === 'bootloader' && <AnalysisActionsPanel imageId={id} />}
       {tab === 'sbom' && <SbomPanel imageId={id} />}
       {tab === 'binaries' && <BinariesPanel imageId={id} />}
-      {tab === 'diff' && <DiffPanel imageId={id} />}
+      {/* Emulation: dynamic reproduction only — the deep static providers moved to Bootloader. */}
       {tab === 'simulate' && (
         <>
           <SimulationMenu imageId={id} />
           <FuzzPanel imageId={id} />
           <PresetsPanel imageId={id} />
-          <AnalysisActionsPanel imageId={id} />
         </>
       )}
+      {tab === 'findings' && <FindingsPanel imageId={id} />}
+      {tab === 'diff' && <DiffPanel imageId={id} />}
       {tab === 'opacidad' && <OpacidadPanel imageId={id} />}
       {tab === 'agent' && <AgentPanel imageId={id} />}
       {!analysis && !NO_ANALYSIS_TABS.has(tab) && (
@@ -229,6 +248,110 @@ function CorpusRefRow({
           {img.filename}
         </Link>
       ))}
+    </div>
+  );
+}
+
+// === Findings & report: the whole ledger in one place, plus the report exit points. ===
+
+function FindingsPanel({ imageId }: { imageId: string }): JSX.Element {
+  const [findings, setFindings] = useState<Finding[] | null>(null);
+
+  useEffect(() => {
+    api
+      .findings(imageId)
+      .then(setFindings)
+      .catch(() => setFindings([]));
+  }, [imageId]);
+
+  const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const sorted = [...(findings ?? [])].sort((a, b) => (sevRank[a.severity] ?? 9) - (sevRank[b.severity] ?? 9));
+  const offsetOf = (f: Finding): number | null => {
+    const o = (f.evidence as Record<string, unknown> | undefined)?.offset;
+    return typeof o === 'number' ? o : null;
+  };
+
+  return (
+    <div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <div className="panel-title">Findings ledger</div>
+            <div className="panel-sub">
+              Every finding across every stage, each carrying an explicit proof state — what was found, and how much it
+              is proven. Findings with a byte offset are pinned on the General signal tape.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <a className="btn btn-sm btn-primary" href={`/api/images/${imageId}/report`} download>
+              <span aria-hidden="true">⭳</span> Report (HTML)
+            </a>
+            <a className="btn btn-sm" href={`/api/images/${imageId}/disclosure-report`} download>
+              <span aria-hidden="true">⭳</span> Disclosure (MD)
+            </a>
+          </div>
+        </div>
+
+        {findings === null ? (
+          <div style={{ display: 'grid', gap: 8 }}>
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="skeleton" style={{ height: 34 }} />
+            ))}
+          </div>
+        ) : sorted.length === 0 ? (
+          <div className="empty">
+            <div className="empty-title">No findings yet</div>
+            <div className="empty-body">
+              Run extraction, SBOM and the deep static providers to populate the ledger. Zero findings is not the same
+              as clean — the pipeline tells you what has actually run.
+            </div>
+          </div>
+        ) : (
+          <div className="table-wrap" style={{ marginTop: 4 }}>
+            <table className="data">
+              <thead>
+                <tr>
+                  <th style={{ width: 40 }}>Sev</th>
+                  <th>Finding</th>
+                  <th>Offset</th>
+                  <th>Source</th>
+                  <th>Proof state</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((f) => {
+                  const off = offsetOf(f);
+                  return (
+                    <tr key={f.id}>
+                      <td>
+                        <span className={`sev-dot ${f.severity}`} title={f.severity} />
+                      </td>
+                      <td style={{ color: 'var(--text)' }}>{f.title}</td>
+                      <td className="mono" style={{ color: off !== null ? 'var(--accent)' : 'var(--text-faint)' }}>
+                        {off !== null ? `0x${off.toString(16)}` : '—'}
+                      </td>
+                      <td className="mono" style={{ color: 'var(--text-dim)' }}>
+                        {f.source}
+                      </td>
+                      <td>
+                        <ProofStateBadge state={f.proofState} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="banner banner-info">
+        <Icon.overview size={15} />
+        <span>
+          A full report builder — toggle sections, reorder, add a cover, live preview, and export to HTML / PDF /
+          Markdown — is landing here next. For now the buttons above export the ready-made report and disclosure draft.
+        </span>
+      </div>
     </div>
   );
 }
