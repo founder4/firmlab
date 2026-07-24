@@ -1343,3 +1343,175 @@ th.sortable:hover {
   color: var(--text-faint);
   white-space: nowrap;
 }
+
+/* ============================================================================================================
+ * REPORT BUILDER — the Findings & report stage: configure left, live paper preview right, export HTML/PDF/MD
+ * ========================================================================================================== */
+.report-builder {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1040px) {
+  .report-builder {
+    grid-template-columns: 1fr;
+  }
+}
+.report-config {
+  position: sticky;
+  top: calc(var(--topbar-h) + 12px);
+}
+.report-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+}
+.report-toggle:hover {
+  background: var(--bg-panel-2);
+}
+.report-toggle input {
+  accent-color: var(--accent);
+}
+.report-toggle .rt-label {
+  flex: 1;
+  font-size: 0.83rem;
+}
+.report-toggle.off .rt-label {
+  color: var(--text-faint);
+}
+.report-move {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: 0.7rem;
+}
+.report-move:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.report-move:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* The document itself — always a light "paper", so the export reads as a real report regardless of app theme. */
+.report-doc {
+  background: #ffffff;
+  color: #1b1d21;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-2);
+  padding: 46px 52px;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.62;
+}
+.report-doc h1 {
+  font-size: 26px;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+.report-doc .rd-cover-meta {
+  color: #5b616b;
+  font-size: 13px;
+  border-bottom: 2px solid #1b1d21;
+  padding-bottom: 18px;
+  margin-bottom: 26px;
+}
+.report-doc h2 {
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #0a0c0f;
+  margin: 30px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #d9dce1;
+}
+.report-doc h2:first-of-type {
+  margin-top: 0;
+}
+.report-doc p {
+  margin: 0 0 12px;
+}
+.report-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin: 6px 0 14px;
+}
+.report-doc th {
+  text-align: left;
+  border-bottom: 1.5px solid #1b1d21;
+  padding: 6px 8px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #4a505a;
+}
+.report-doc td {
+  border-bottom: 1px solid #e6e8ec;
+  padding: 6px 8px;
+  vertical-align: top;
+}
+.report-doc .rd-kv {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 4px 16px;
+  margin-bottom: 14px;
+}
+.report-doc .rd-kv dt {
+  color: #5b616b;
+  font-size: 12.5px;
+}
+.report-doc .rd-kv dd {
+  margin: 0;
+  font-weight: 500;
+}
+.report-doc .rd-mono {
+  font-family: var(--mono);
+}
+.report-doc .rd-sev {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.report-doc ul {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+
+/* Print / Save-as-PDF: show only the document. */
+@media print {
+  body {
+    background: #fff !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  .report-doc,
+  .report-doc * {
+    visibility: visible;
+  }
+  .report-doc {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 0;
+  }
+}
