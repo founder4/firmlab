@@ -34,7 +34,11 @@ import { FilesystemTree } from '../components/FilesystemTree';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { OpacidadPanel } from '../components/OpacidadPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
+import { ReportBuilder } from '../components/ReportBuilder';
+import { SbomGraph } from '../components/SbomGraph';
+import { SignalCanvas } from '../components/SignalCanvas';
 import { SimulationMenu } from '../components/SimulationMenu';
+import { StepTimeline } from '../components/StepTimeline';
 import { StructureMap } from '../components/StructureMap';
 import { toast } from '../toast';
 
@@ -45,8 +49,10 @@ type TabId =
   | 'entropy'
   | 'filesystem'
   | 'secrets'
+  | 'bootloader'
   | 'sbom'
   | 'binaries'
+  | 'findings'
   | 'diff'
   | 'simulate'
   | 'opacidad'
@@ -57,26 +63,30 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'dossier',
   'filesystem',
   'secrets',
+  'bootloader',
   'sbom',
   'binaries',
+  'findings',
   'diff',
   'simulate',
   'opacidad',
   'agent',
 ]);
 
-/** URL section → internal panel id. The sidebar drives these; `overview` is the composite dossier. */
+/** URL section → internal panel id. The step timeline drives these; `overview` is the composite dossier. */
 const SECTION_TITLES: Record<TabId, string> = {
-  dossier: 'Overview',
-  overview: 'Overview',
+  dossier: 'General',
+  overview: 'General',
   structure: 'Structure',
   entropy: 'Entropy',
-  filesystem: 'Filesystem',
+  filesystem: 'Extraction',
   secrets: 'Secrets',
+  bootloader: 'Bootloader',
   sbom: 'SBOM & CVEs',
   binaries: 'Binaries',
+  findings: 'Findings & report',
   diff: 'Diff',
-  simulate: 'Simulation',
+  simulate: 'Emulation',
   opacidad: 'Autonomous scan',
   agent: 'Agent',
 };
@@ -135,22 +145,33 @@ export function ImageDetail(): JSX.Element {
         </a>
       </div>
 
+      <StepTimeline imageId={id} active={tab} ready={image.status === 'ready'} />
+
       {tab === 'dossier' && <DossierPanel image={image} />}
       {tab === 'structure' && analysis && <StructurePanel analysis={analysis} />}
       {tab === 'entropy' && analysis && <EntropyPanel analysis={analysis} />}
-      {tab === 'filesystem' && <FilesystemPanel imageId={id} />}
+      {/* Extraction: the carved rootfs and what it exposes — files + secrets in one place. */}
+      {tab === 'filesystem' && (
+        <>
+          <FilesystemPanel imageId={id} />
+          <SecretsPanel analysis={analysis} imageId={id} />
+        </>
+      )}
       {tab === 'secrets' && <SecretsPanel analysis={analysis} imageId={id} />}
+      {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}
+      {tab === 'bootloader' && <AnalysisActionsPanel imageId={id} />}
       {tab === 'sbom' && <SbomPanel imageId={id} />}
       {tab === 'binaries' && <BinariesPanel imageId={id} />}
-      {tab === 'diff' && <DiffPanel imageId={id} />}
+      {/* Emulation: dynamic reproduction only — the deep static providers moved to Bootloader. */}
       {tab === 'simulate' && (
         <>
           <SimulationMenu imageId={id} />
           <FuzzPanel imageId={id} />
           <PresetsPanel imageId={id} />
-          <AnalysisActionsPanel imageId={id} />
         </>
       )}
+      {tab === 'findings' && <ReportBuilder imageId={id} image={image} analysis={analysis} />}
+      {tab === 'diff' && <DiffPanel imageId={id} />}
       {tab === 'opacidad' && <OpacidadPanel imageId={id} />}
       {tab === 'agent' && <AgentPanel imageId={id} />}
       {!analysis && !NO_ANALYSIS_TABS.has(tab) && (
@@ -300,10 +321,31 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
 
   return (
     <div>
-      <div className="grid grid-3" style={{ marginBottom: 16 }}>
-        <Stat label="Class" value={idn?.firmwareClass ?? '—'} />
-        <Stat label="Architecture" value={`${idn?.arch ?? '—'} / ${idn?.endianness ?? '—'}`} mono />
-        <Stat label="Filesystems" value={idn?.filesystems.join(', ') || '—'} mono />
+      {/* The signal tape — the image read as signal along its byte axis; every panel below is a lens over it. */}
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <div className="panel-title">Signal tape</div>
+            <div className="panel-sub">
+              Entropy trace over the structure carve, findings pinned to their offset. Scrub to read any byte range.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <span className="badge badge-accent">{idn?.firmwareClass ?? 'unknown'}</span>
+            <span className="badge mono">
+              {idn?.arch ?? '—'}/{idn?.endianness ?? '—'}
+            </span>
+            {(idn?.filesystems ?? []).map((fs) => (
+              <span key={fs} className="badge mono">
+                {fs}
+              </span>
+            ))}
+          </div>
+        </div>
+        <SignalCanvas imageId={id} size={image.size} findings={findings} />
+      </div>
+
+      <div className="grid grid-3" style={{ margin: '16px 0' }}>
         <Stat label="Binaries" value={`${binaries.length} (${triagedBinaries} triaged)`} />
         <Stat label="Findings" value={String(findings.length)} />
         <Stat label="Runtime strategy" value={caps?.strategy ?? '—'} mono />
@@ -812,6 +854,21 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
 
           {!result.grypeAvailable && (
             <div className="banner banner-info">grype not present — SBOM generated, but CVE matching was skipped.</div>
+          )}
+
+          {result.packages.length > 0 && (
+            <div className="panel">
+              <div className="panel-head" style={{ marginBottom: 4 }}>
+                <div>
+                  <div className="panel-title">Component graph</div>
+                  <div className="panel-sub">
+                    The rootfs and its components, grouped by ecosystem around the ring and coloured by the worst CVE
+                    affecting each. Hover a node for its version and CVEs.
+                  </div>
+                </div>
+              </div>
+              <SbomGraph sbom={result} />
+            </div>
           )}
 
           {result.vulnerabilities.length > 0 && (

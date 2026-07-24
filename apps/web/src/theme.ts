@@ -23,7 +23,7 @@ const listeners = new Set<() => void>();
 let state: Appearance = load();
 
 function load(): Appearance {
-  let theme: ThemePref = 'system';
+  let theme: ThemePref = 'dark';
   let density: Density = 'comfortable';
   try {
     const t = localStorage.getItem(THEME_KEY);
