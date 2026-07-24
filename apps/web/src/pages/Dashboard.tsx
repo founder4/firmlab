@@ -277,7 +277,7 @@ export function Dashboard(): JSX.Element {
     <div>
       <div className="page-head">
         <div className="eyebrow">Workspace</div>
-        <h1 className="page-title">Firmware workspace</h1>
+        <h1 className="page-title">Local analysis</h1>
         <div className="page-desc">
           Upload an image to analyze it locally, then read it as signal, deepen with tool-backed jobs, and compare
           across your corpus.

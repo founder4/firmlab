@@ -3,11 +3,13 @@ import { HashRouter, NavLink, Route, Routes, useLocation, useNavigate } from 're
 import { type ImageSummary, api } from './api';
 import { Icon, type IconName } from './icons';
 import { Onboarding, startTour } from './onboarding';
+import { Agents } from './pages/Agents';
 import { Capabilities } from './pages/Capabilities';
 import { Capture } from './pages/Capture';
 import { Corpus } from './pages/Corpus';
 import { Dashboard } from './pages/Dashboard';
 import { ImageDetail } from './pages/ImageDetail';
+import { Overview } from './pages/Overview';
 import { Settings } from './pages/Settings';
 import { type ThemePref, setDensity, setTheme, useAppearance } from './theme';
 import { Toaster } from './toast';
@@ -123,11 +125,11 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
         </div>
       </div>
 
-      <div className="nav-section">Workspace</div>
       <NavRow to="/" end icon="dashboard" label="Dashboard" onNavigate={onNavigate} />
-      <NavRow to="/capture" icon="capture" label="Capture" onNavigate={onNavigate} />
+      <NavRow to="/analyze" icon="overview" label="Local analysis" onNavigate={onNavigate} />
+      <NavRow to="/agents" icon="agent" label="Agents" onNavigate={onNavigate} />
+      <NavRow to="/updates" icon="capture" label="Proxy / Updates" onNavigate={onNavigate} />
       <NavRow to="/corpus" icon="corpus" label="Corpus" onNavigate={onNavigate} />
-      <NavRow to="/capabilities" icon="capabilities" label="Capabilities" onNavigate={onNavigate} />
 
       {id && (
         <>
@@ -142,7 +144,7 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
               className="btn btn-sm btn-ghost"
               style={{ marginTop: 6, paddingLeft: 0 }}
               onClick={() => {
-                nav('/');
+                nav('/analyze');
                 onNavigate();
               }}
             >
@@ -245,15 +247,19 @@ function ContextHeader(): JSX.Element {
   }, []);
 
   if (!id) {
-    const title = pathname.startsWith('/capture')
-      ? 'Capture'
-      : pathname.startsWith('/corpus')
-        ? 'Corpus'
-        : pathname.startsWith('/capabilities')
-          ? 'Capabilities'
-          : pathname.startsWith('/settings')
-            ? 'Settings'
-            : 'Dashboard';
+    const title = pathname.startsWith('/analyze')
+      ? 'Local analysis'
+      : pathname.startsWith('/agents')
+        ? 'Agents'
+        : pathname.startsWith('/updates') || pathname.startsWith('/capture')
+          ? 'Proxy / Updates'
+          : pathname.startsWith('/corpus')
+            ? 'Corpus'
+            : pathname.startsWith('/capabilities')
+              ? 'Capabilities'
+              : pathname.startsWith('/settings')
+                ? 'Settings'
+                : 'Dashboard';
     return <strong className="topbar-title">{title}</strong>;
   }
 
@@ -323,9 +329,12 @@ function Shell(): JSX.Element {
         </div>
         <div className="content">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<Overview />} />
+            <Route path="/analyze" element={<Dashboard />} />
             <Route path="/image/:id" element={<ImageDetail />} />
             <Route path="/image/:id/:section" element={<ImageDetail />} />
+            <Route path="/agents" element={<Agents />} />
+            <Route path="/updates" element={<Capture />} />
             <Route path="/capture" element={<Capture />} />
             <Route path="/corpus" element={<Corpus />} />
             <Route path="/capabilities" element={<Capabilities />} />
