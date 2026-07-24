@@ -35,6 +35,7 @@ import { FuzzPanel } from '../components/FuzzPanel';
 import { OpacidadPanel } from '../components/OpacidadPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
 import { ReportBuilder } from '../components/ReportBuilder';
+import { SbomGraph } from '../components/SbomGraph';
 import { SignalCanvas } from '../components/SignalCanvas';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StepTimeline } from '../components/StepTimeline';
@@ -853,6 +854,21 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
 
           {!result.grypeAvailable && (
             <div className="banner banner-info">grype not present — SBOM generated, but CVE matching was skipped.</div>
+          )}
+
+          {result.packages.length > 0 && (
+            <div className="panel">
+              <div className="panel-head" style={{ marginBottom: 4 }}>
+                <div>
+                  <div className="panel-title">Component graph</div>
+                  <div className="panel-sub">
+                    The rootfs and its components, grouped by ecosystem around the ring and coloured by the worst CVE
+                    affecting each. Hover a node for its version and CVEs.
+                  </div>
+                </div>
+              </div>
+              <SbomGraph sbom={result} />
+            </div>
           )}
 
           {result.vulnerabilities.length > 0 && (
