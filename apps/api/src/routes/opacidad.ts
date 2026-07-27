@@ -10,9 +10,9 @@ import { loadLlmConfig } from '../llm.js';
 import type { OpacidadStep } from '../opacidad-narrative.js';
 import { specsForClass } from '../opacidad-plan.js';
 import { runOpacidad } from '../opacidad.js';
-import { buildCoverage } from '../providers/coverage.js';
+import { type CoverageReport, buildCoverage } from '../providers/coverage.js';
 import { startJob } from '../providers/jobs.js';
-import { getImage, listFindings, listJobs } from '../store.js';
+import { type ImageRow, getImage, listFindings, listImages, listJobs } from '../store.js';
 
 export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
   app.post('/images/:id/opacidad', async (req, reply) => {
@@ -50,29 +50,58 @@ export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const row = getImage(id);
     if (!row) return reply.status(404).send({ error: 'Image not found' });
+    return coverageFor(row);
+  });
 
-    let identity: ImageIdentity | null = null;
-    try {
-      identity = row.identityJson ? (JSON.parse(row.identityJson) as ImageIdentity) : null;
-    } catch {
-      identity = null;
-    }
-    const firmwareClass = identity?.firmwareClass ?? 'unknown';
+  /**
+   * Corpus-wide coverage — the same report, one row per image, so "what has actually been examined?" is answerable
+   * without opening sixteen images one at a time. That question is the whole point of the banner: a dashboard that
+   * lists images with no coverage column silently presents an unscanned image and a fully-scanned one identically,
+   * which is the exact conflation the per-image banner exists to prevent. Same `buildCoverage`, so a row and the
+   * image's own banner can never disagree.
+   */
+  app.get('/coverage', async () => {
+    return {
+      images: listImages().map((row) => {
+        const c = coverageFor(row);
+        return {
+          imageId: row.id,
+          filename: row.filename,
+          firmwareClass: c.firmwareClass,
+          applicable: c.applicable,
+          executed: c.executed,
+          findingCount: c.findingCount,
+          ambiguous: c.ambiguous,
+          verdict: c.verdict,
+        };
+      }),
+    };
+  });
+}
 
-    const done = listJobs(id).find((j) => j.kind === 'opacidad' && j.status === 'done' && j.resultJson);
-    let steps: OpacidadStep[] | null = null;
-    try {
-      steps = done?.resultJson ? ((JSON.parse(done.resultJson) as { steps?: OpacidadStep[] }).steps ?? null) : null;
-    } catch {
-      steps = null;
-    }
+/** Build one image's coverage report from its stored identity, its last opacidad run and its finding count. */
+function coverageFor(row: ImageRow): CoverageReport {
+  let identity: ImageIdentity | null = null;
+  try {
+    identity = row.identityJson ? (JSON.parse(row.identityJson) as ImageIdentity) : null;
+  } catch {
+    identity = null;
+  }
+  const firmwareClass = identity?.firmwareClass ?? 'unknown';
 
-    return buildCoverage({
-      firmwareClass,
-      ...(identity?.classRationale ? { classRationale: identity.classRationale } : {}),
-      specs: specsForClass(firmwareClass),
-      steps,
-      findingCount: listFindings(id).length,
-    });
+  const done = listJobs(row.id).find((j) => j.kind === 'opacidad' && j.status === 'done' && j.resultJson);
+  let steps: OpacidadStep[] | null = null;
+  try {
+    steps = done?.resultJson ? ((JSON.parse(done.resultJson) as { steps?: OpacidadStep[] }).steps ?? null) : null;
+  } catch {
+    steps = null;
+  }
+
+  return buildCoverage({
+    firmwareClass,
+    ...(identity?.classRationale ? { classRationale: identity.classRationale } : {}),
+    specs: specsForClass(firmwareClass),
+    steps,
+    findingCount: listFindings(row.id).length,
   });
 }

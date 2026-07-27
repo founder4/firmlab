@@ -256,6 +256,17 @@ export function replan(lead: Lead, planned: ReadonlySet<string>): PlanSpec[] {
   return planned.has(specKey(spec)) ? [] : [spec];
 }
 
+/**
+ * How many symbolic-reachability probes are already on the agenda. The angr budget is a PER-RUN cost (tens of
+ * seconds of wall-clock each), so it has to be counted globally rather than per lead source — otherwise W4 and the
+ * binvuln sweep would each spend the full cap and a scan would quietly take twice as long as designed.
+ */
+export function countReachabilityProbes(planned: ReadonlySet<string>): number {
+  let n = 0;
+  for (const key of planned) if (key.startsWith('symreach:')) n++;
+  return n;
+}
+
 /** Mutable bookkeeping for dynamic scheduling across a run: what's planned, how many dynamic steps, how many capped. */
 export interface ScheduleState {
   planned: Set<string>;

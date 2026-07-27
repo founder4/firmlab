@@ -15,6 +15,7 @@ vi.mock('./api', async (importOriginal) => {
       listImages: vi.fn(),
       storage: vi.fn(),
       deleteImage: vi.fn(),
+      coverageAll: vi.fn(),
     },
   };
 });
@@ -23,6 +24,7 @@ const mockApi = api as unknown as {
   health: ReturnType<typeof vi.fn>;
   listImages: ReturnType<typeof vi.fn>;
   storage: ReturnType<typeof vi.fn>;
+  coverageAll: ReturnType<typeof vi.fn>;
 };
 
 const image = (id: string, filename: string, arch: string) => ({
@@ -38,10 +40,22 @@ const image = (id: string, filename: string, arch: string) => ({
 
 const emptyUsage = { imageCount: 0, imagesBytes: 0, extractsBytes: 0, totalBytes: 0, quotaBytes: 0, maxAgeDays: 0 };
 
+const coverage = (imageId: string, executed: number, applicable: number) => ({
+  imageId,
+  filename: imageId,
+  firmwareClass: 'embedded-linux',
+  applicable,
+  executed,
+  findingCount: executed ? 4 : 0,
+  ambiguous: executed < applicable,
+  verdict: executed === 0 ? 'Nothing has analyzed this image yet' : `${executed} of ${applicable} stages ran`,
+});
+
 beforeEach(() => {
   mockApi.health.mockResolvedValue({ status: 'ok', exposedToNetwork: true, trustedProxy: true });
   mockApi.listImages.mockResolvedValue([]);
   mockApi.storage.mockResolvedValue(emptyUsage);
+  mockApi.coverageAll.mockResolvedValue([]);
 });
 
 describe('Dashboard image filter', () => {
@@ -58,6 +72,35 @@ describe('Dashboard image filter', () => {
     fireEvent.change(screen.getByPlaceholderText(/Filter by filename/i), { target: { value: 'camera' } });
     expect(screen.queryByText('router-v1.bin')).not.toBeInTheDocument();
     expect(screen.getByText('camera.img')).toBeInTheDocument();
+  });
+});
+
+describe('Dashboard coverage column', () => {
+  // Without this, an image nothing has ever analyzed and a fully-scanned one render identically in the listing —
+  // the same conflation the per-image coverage banner exists to prevent, reintroduced at corpus scale.
+  it('distinguishes an unexamined image from a scanned one, and totals the unexamined', async () => {
+    mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips'), image('b', 'camera.img', 'arm')]);
+    mockApi.coverageAll.mockResolvedValue([coverage('a', 0, 12), coverage('b', 12, 12)]);
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('unexamined')).toBeInTheDocument();
+    expect(screen.getByText('12/12 stages')).toBeInTheDocument();
+    expect(screen.getByText('1 of 2 unexamined')).toBeInTheDocument();
+  });
+
+  it('says nothing about coverage rather than implying it when the corpus report is unavailable', async () => {
+    mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips')]);
+    mockApi.coverageAll.mockRejectedValue(new Error('offline'));
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+    await screen.findByText('router-v1.bin');
+    expect(screen.queryByText(/unexamined/)).not.toBeInTheDocument();
   });
 });
 

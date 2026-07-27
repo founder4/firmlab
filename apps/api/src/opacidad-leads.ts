@@ -1,15 +1,17 @@
 /**
- * W9 re-planning — lead resolution. Turns a completed worker's output into `Lead`s that re-plan the agenda. Three
+ * W9 re-planning — lead resolution. Turns a completed worker's output into `Lead`s that re-plan the agenda. Four
  * sources produce leads today: service enumeration (each autostart network daemon → decompile it), web-taint (the
- * httpd that serves a tainted handler → decompile it), and the binary-vuln sweep (each stack-overflow candidate →
- * ask angr whether its sinks are actually reachable). A lead only survives if its binary actually resolves to a
+ * httpd that serves a tainted handler → decompile it, AND the native helpers a tainted handler execs → ask angr
+ * whether their unsafe sinks are reachable), and the binary-vuln sweep (each stack-overflow candidate → the same
+ * reachability question, from a much weaker premise). A lead only survives if its binary actually resolves to a
  * regular file inside the rootfs — so W9 never schedules work on a daemon that isn't really there.
  */
 import type { FindingDraft } from './findings-normalize.js';
 import type { Lead } from './opacidad-plan.js';
+import { isElfFile } from './providers/binvuln.js';
 import { resolveInsideRootfs } from './providers/decompile.js';
 import type { Service } from './providers/servicemap.js';
-import type { HandlerAnalysis } from './providers/webtaint.js';
+import { type HandlerAnalysis, describeSource } from './providers/webtaint.js';
 
 /**
  * Resolve a service's binary token to a rootfs-relative path that exists as a regular file, or null. Handles the
@@ -59,9 +61,14 @@ export const REACHABILITY_LEAD_CAP = 3;
  * finding already carries the binary path and the unbounded-copy functions it imports, which is exactly the input
  * the symbolic probe needs — so this reads the drafts rather than re-walking the rootfs.
  */
-export function reachabilityLeads(candidates: FindingDraft[], rootfsPath: string): Lead[] {
+export function reachabilityLeads(
+  candidates: FindingDraft[],
+  rootfsPath: string,
+  budget = REACHABILITY_LEAD_CAP,
+): Lead[] {
   const leads: Lead[] = [];
   const seen = new Set<string>();
+  if (budget <= 0) return leads;
   for (const f of candidates) {
     if (f.kind !== 'binary-pwnable-candidate') continue;
     const ev = (f.evidence ?? {}) as Record<string, unknown>;
@@ -76,7 +83,100 @@ export function reachabilityLeads(candidates: FindingDraft[], rootfsPath: string
       sinks,
       reason: `stack-overflow candidate (${sinks.join('/')}, no canary) — prove whether the sink is on a live path`,
     });
-    if (leads.length >= REACHABILITY_LEAD_CAP) break;
+    if (leads.length >= budget) break;
+  }
+  return leads;
+}
+
+// === W4 → reachability: the good questions ===
+
+/** Shell wrappers that prefix the real program in an exec string — step past them to the actual binary. */
+const SHELL_WRAPPERS = new Set(['sh', 'bash', 'ash', 'dash', 'env', 'sudo', 'busybox', 'nohup', 'exec']);
+
+/**
+ * Pure: the program a shell/exec sink actually runs, read off the literal prefix of its argument.
+ *
+ * A tainted handler's sink looks like `os.execute("/usr/sbin/gl-tor " .. params.enable)`. The part BEFORE the
+ * concatenation is a constant, so the program name is statically known even though its arguments are not — which
+ * is precisely the shape worth extracting: a native binary receiving attacker-controlled argv. Returns null when
+ * the command itself is interpolated (`os.execute(cmd .. " x")`), because then the program is not statically
+ * known and guessing one would be fabrication.
+ */
+export function execTargetFromSnippet(snippet: string): string | null {
+  // The first string literal in the call — the constant head of the command. Each quote style is matched
+  // independently so a nested shell quote (`os.execute("sh -c '/usr/bin/x " .. v)`) does not defeat the match.
+  const lit = /"([^"]*)"|'([^']*)'/.exec(snippet);
+  if (!lit) return null;
+  const literal = (lit[1] ?? lit[2]) as string;
+  // A literal that does not start the command (the sink's arg begins with a variable) tells us nothing reliable.
+  const beforeLiteral = snippet.slice(0, lit.index);
+  if (!/[({,]\s*$/.test(beforeLiteral)) return null;
+
+  const tokens = literal
+    .trim()
+    .split(/[\s;|&><]+/)
+    // A shell quote around the inner command is punctuation, not part of the program name.
+    .map((t) => t.replace(/^["']+|["']+$/g, ''))
+    .filter(Boolean);
+  for (const tok of tokens) {
+    if (tok.startsWith('-')) continue; // an option, e.g. `sh -c`
+    if (tok.includes('=')) continue; // a leading `VAR=value` assignment
+    // Interpolation, a format specifier or a glob means the program name is not statically known — say nothing.
+    if (/[$`*?~%]/.test(tok)) return null;
+    if (!/^[A-Za-z0-9._/-]+$/.test(tok) || !/[A-Za-z]/.test(tok)) return null;
+    const base = tok.split('/').pop() as string;
+    if (SHELL_WRAPPERS.has(base)) continue; // step past `sh -c`, `sudo`, `busybox foo`
+    return tok;
+  }
+  return null;
+}
+
+/**
+ * Leads from W4: for each tainted handler, ask angr about the NATIVE binary that handler execs.
+ *
+ * This is a strictly better question than the binvuln sweep's. That sweep's premise is syntactic — "imports strcpy,
+ * has no canary" — and says nothing about whether input ever gets there; that is exactly why its candidates stay
+ * `needs_runtime_reproduction`. W4's premise is a resolved chain: web param → (uci) → shell → this program, running
+ * as root. The prober seeds symbolic argv, which is precisely the channel the handler taints, so a `reached` verdict
+ * here lands on a path an attacker actually controls the input to.
+ *
+ * Note what is deliberately NOT scheduled: the httpd binary that serves the handler. Its attacker input arrives on
+ * a socket, and the probe models argv/stdin — a "reached" under an input model that does not match the real channel
+ * would be a reachability claim about the wrong thing. The httpd keeps its decompile lead (`handlerLeads`), which
+ * makes no claim the evidence cannot carry.
+ */
+export function taintReachabilityLeads(
+  handlers: HandlerAnalysis[],
+  rootfsPath: string,
+  budget = REACHABILITY_LEAD_CAP,
+): Lead[] {
+  const leads: Lead[] = [];
+  const seen = new Set<string>();
+  if (budget <= 0) return leads;
+
+  for (const h of handlers) {
+    if (!h.tainted) continue;
+    for (const sink of h.sinks) {
+      if (!sink.concat || sink.argvArray) continue;
+      const token = execTargetFromSnippet(sink.snippet);
+      if (!token) continue;
+      const bin = resolveDaemonBinary(rootfsPath, token);
+      if (!bin || seen.has(bin)) continue;
+      // A shell script cannot be loaded symbolically. Skipping it is honest — the chain is still reported by W4.
+      const abs = resolveInsideRootfs(rootfsPath, bin);
+      if (!abs || !isElfFile(abs)) continue;
+      seen.add(bin);
+      leads.push({
+        kind: 'prove-reachability',
+        target: bin,
+        // Empty = derive the sinks from the binary's own unbounded-copy imports (runSymReach does this).
+        sinks: [],
+        reason: `tainted handler ${h.object} execs it with web input in argv (${describeSource(h)} → ${sink.sink}${
+          h.runsAsRoot ? ' as root' : ''
+        }) — prove whether an unsafe copy is on a live path`,
+      });
+      if (leads.length >= budget) return leads;
+    }
   }
   return leads;
 }

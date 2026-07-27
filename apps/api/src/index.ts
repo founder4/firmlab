@@ -39,6 +39,7 @@ import { rtosRoutes } from './routes/rtos.js';
 import { sbomRoutes } from './routes/sbom.js';
 import { servicemapRoutes } from './routes/servicemap.js';
 import { storageRoutes } from './routes/storage.js';
+import { symreachRoutes } from './routes/symreach.js';
 import { toolRoutes } from './routes/tools.js';
 import { ubootRoutes } from './routes/uboot.js';
 import { webprobeRoutes } from './routes/webprobe.js';
@@ -119,6 +120,7 @@ async function main(): Promise<void> {
       await api.register(servicemapRoutes);
       await api.register(fccRoutes);
       await api.register(opacidadRoutes);
+      await api.register(symreachRoutes);
       await api.register(presetsRoutes);
       await api.register(researchRoutes);
       await api.register(reportRoutes);

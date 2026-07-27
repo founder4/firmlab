@@ -28,7 +28,8 @@ export type JobKind =
   | 'compmap'
   | 'services'
   | 'fcc'
-  | 'opacidad';
+  | 'opacidad'
+  | 'symreach';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {

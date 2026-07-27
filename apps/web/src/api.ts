@@ -221,6 +221,38 @@ export interface DecompileResult {
   strings: { addr: string; value: string }[];
 }
 
+/**
+ * One sink's symbolic-reachability outcome. `reached` is the only one that upgrades a claim, and it claims
+ * REACHABILITY — never exploitability. `not_reached_in_budget` is an honest inconclusive (the search stopped), so
+ * the UI must never render it as "safe"; `absent` means the symbol is not in this binary at all.
+ */
+export interface SinkResult {
+  sink: string;
+  outcome: 'reached' | 'not_reached_in_budget' | 'absent' | 'skipped';
+  addresses: string[];
+  steps: number;
+  pruned: boolean;
+  errors: number;
+  reason?: string;
+  argv1?: string;
+  stdin?: string;
+  path?: string[];
+}
+
+export interface SymReachResult {
+  available: boolean;
+  reason: string;
+  binary: string;
+  arch?: string;
+  entry?: string;
+  sinks: SinkResult[];
+  asked?: string[];
+  dropped?: string[];
+  /** The sinks were read off the binary's own unbounded-copy imports rather than named by the operator. */
+  derivedSinks?: boolean;
+  budgetSeconds?: number;
+}
+
 export interface GitleaksFinding {
   rule: string;
   description: string;
@@ -607,6 +639,21 @@ export interface CoverageReport {
   ambiguous: boolean;
 }
 
+/**
+ * One image's coverage, compact enough for a corpus listing. Same computation as the per-image banner, so a
+ * dashboard row and the image's own banner can never tell different stories about what was examined.
+ */
+export interface CoverageSummary {
+  imageId: string;
+  filename: string;
+  firmwareClass: string;
+  applicable: number;
+  executed: number;
+  findingCount: number;
+  ambiguous: boolean;
+  verdict: string;
+}
+
 /** A saved emulation preset — a named, reusable recipe config for an image. */
 export interface EmulationPreset {
   id: string;
@@ -804,6 +851,8 @@ export const api = {
   opacidadResult: (id: string) =>
     get<{ result: OpacidadResult | null }>(`/api/images/${id}/opacidad`).then((r) => r.result),
   coverage: (id: string) => get<CoverageReport>(`/api/images/${id}/coverage`),
+  /** Corpus-wide coverage — one row per image, so the dashboard can say what was actually examined. */
+  coverageAll: () => get<{ images: CoverageSummary[] }>('/api/coverage').then((r) => r.images),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),
   job: (jobId: string) => get<{ job: Job }>(`/api/jobs/${jobId}`).then((r) => r.job),
   sbom: (id: string) => get<{ result: SbomResult | null }>(`/api/images/${id}/sbom`).then((r) => r.result),
@@ -812,6 +861,11 @@ export const api = {
     get<{ result: DecompileResult | null }>(`/api/images/${id}/decompile`).then((r) => r.result),
   decompile: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/decompile`, { binary }),
   binaries: (id: string) => get<{ binaries: BinaryEntry[] }>(`/api/images/${id}/binaries`).then((r) => r.binaries),
+  /** Ask angr about ANY rootfs binary and ANY sink — not only what the W5 sweep happened to flag. */
+  symreach: (id: string, body: { binary: string; sinks?: string[]; budgetSeconds?: number }) =>
+    post<{ jobId: string }>(`/api/images/${id}/symreach`, body),
+  symreachResult: (id: string) =>
+    get<{ result: SymReachResult | null }>(`/api/images/${id}/symreach`).then((r) => r.result),
   findings: (id: string) => get<{ findings: Finding[] }>(`/api/images/${id}/findings`).then((r) => r.findings),
   corpusRefs: (id: string) => get<{ refs: CorpusRefs }>(`/api/images/${id}/corpus-refs`).then((r) => r.refs),
   agentStatus: () => get<AgentStatus>('/api/agent/status'),

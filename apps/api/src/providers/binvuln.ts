@@ -156,6 +156,22 @@ function isElf(abs: string): boolean {
 }
 
 /**
+ * Assess ONE already-located binary — the sweep's per-file step, exposed for callers that already know their
+ * target and only need its symbol facts (the symbolic prober deriving which sinks are worth asking about, and the
+ * W4 lead resolver checking that a handler's exec target is a real ELF). `abs` is the absolute path on disk, `rel`
+ * the rootfs-relative path that names it in findings. A file that cannot be read yields an empty assessment, so
+ * the caller sees "no sinks", never a crash.
+ */
+export function assessBinaryFile(abs: string, rel: string): BinAssessment {
+  return assessBinary(rel, extractSymbols(binaryStrings(readBounded(abs))));
+}
+
+/** Is this file an ELF? Exposed so a caller can reject a shell script before treating it as a binary target. */
+export function isElfFile(abs: string): boolean {
+  return isElf(abs);
+}
+
+/**
  * Sweep an extracted rootfs for memory-corruption candidates. Walks for ELF binaries, extracts each one's symbol
  * tokens from its strings, and applies the pure assessor. Honest: no rootfs → available:false; hardened binaries
  * are not flagged; the candidate list is capped and the overflow is reported in the reason, never silently dropped.

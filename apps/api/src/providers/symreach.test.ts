@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_SINKS, buildReachFindings, buildSpec, parseReachOutput, pickSinks } from './symreach.js';
+import {
+  MAX_SINKS,
+  buildReachFindings,
+  buildSpec,
+  parseReachOutput,
+  pickSinks,
+  validateSinkNames,
+} from './symreach.js';
 
 describe('pickSinks — which questions are worth asking', () => {
   it('keeps only real unbounded-copy imports and orders them by directness', () => {
@@ -15,6 +22,30 @@ describe('pickSinks — which questions are worth asking', () => {
 
   it('asks nothing when the binary imports no unbounded-copy function', () => {
     expect(pickSinks(['memcpy', 'snprintf']).asked).toEqual([]);
+  });
+
+  // The autonomous path is settling a W5 candidate, so it filters. The manual route is an operator asking a
+  // question of their own — "is system reachable in this CGI?" is the same question, and refusing it would be the
+  // prober protecting its own framing rather than answering.
+  it('keeps an operator’s own sink names verbatim under the as-given policy', () => {
+    const { asked } = pickSinks(['system', 'memcpy', 'doSystem'], 'as-given');
+    expect(asked).toEqual(['system', 'memcpy', 'doSystem']);
+  });
+
+  it('still spends the budget on the sharpest sink first in a mixed manual list', () => {
+    expect(pickSinks(['memcpy', 'gets', 'system'], 'as-given').asked).toEqual(['gets', 'memcpy', 'system']);
+  });
+
+  it('dedupes a repeated manual sink instead of asking the same question twice', () => {
+    expect(pickSinks(['system', 'system', ' system '], 'as-given').asked).toEqual(['system']);
+  });
+});
+
+describe('validateSinkNames — a typo is reported, never silently answered as a smaller question', () => {
+  it('separates symbol names from things that are not', () => {
+    const { valid, rejected } = validateSinkNames(['strcpy', 'os.execute', '', '  system ', 'rm -rf']);
+    expect(valid).toEqual(['strcpy', 'system']);
+    expect(rejected).toEqual(['os.execute', 'rm -rf']);
   });
 });
 

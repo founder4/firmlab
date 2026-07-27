@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { FindingDraft } from '../findings-normalize.js';
 import { angrPython, isToolAvailable } from '../tools.js';
-import { UNSAFE_COPY_FNS } from './binvuln.js';
+import { UNSAFE_COPY_FNS, assessBinaryFile } from './binvuln.js';
 import { resolveInsideRootfs } from './decompile.js';
 import type { JobHandle } from './jobs.js';
 
@@ -41,6 +41,26 @@ export const DEFAULT_MAX_STEPS = 400;
 export const DEFAULT_MAX_ACTIVE = 24;
 /** Asking about more than a handful of sinks splits the budget until every slice is useless. */
 export const MAX_SINKS = 4;
+/** A manual probe is an operator sitting in front of it, not a background scan — let them spend more wall-clock. */
+export const MIN_BUDGET_SECONDS = 15;
+export const MAX_BUDGET_SECONDS = 600;
+
+/**
+ * Which sink names are legitimate questions.
+ *
+ *  - `unsafe-copy` (the autonomous path): only the unbounded-copy functions W5 flags, because the lead being
+ *    settled is specifically "this binary imports an unbounded copy and has no canary".
+ *  - `as-given` (the manual route): whatever the operator named. The reachability question is not intrinsically
+ *    about `strcpy` — "is `system` reachable in this CGI?" is the same question and the probe answers it the same
+ *    way. A symbol the binary does not actually import comes back `absent` from the probe, so a wrong guess is
+ *    reported as a wrong guess rather than silently dropped.
+ */
+export type SinkPolicy = 'unsafe-copy' | 'as-given';
+
+export interface SymReachOptions {
+  budgetSeconds?: number;
+  policy?: SinkPolicy;
+}
 
 export interface ReachSpec {
   binary: string;
@@ -78,19 +98,61 @@ export interface SymReachResult {
   entry?: string;
   sinks: SinkResult[];
   findings: FindingDraft[];
+  /** The sinks actually sent to the probe, and the ones the per-run cap left unasked (never silently dropped). */
+  asked?: string[];
+  dropped?: string[];
+  /** True when the caller named no sinks and they were derived from the binary's own unbounded-copy imports. */
+  derivedSinks?: boolean;
+  budgetSeconds?: number;
 }
 
 /**
- * Pure: choose which sinks to ask about. Only the unbounded-copy functions the candidate actually imports are worth
- * a question, ordered by how directly they overflow (`gets` takes no bound at all), and capped so each sink gets a
- * usable slice of the shared budget. Sinks dropped by the cap are returned separately so the caller can say so.
+ * Pure: choose which sinks to ask about, ordered by how directly they overflow (`gets` takes no bound at all) and
+ * capped so each sink gets a usable slice of the shared budget. Sinks dropped by the cap are returned separately so
+ * the caller can say so rather than pretending they were answered.
+ *
+ * Under the default `unsafe-copy` policy only the unbounded-copy functions survive — the autonomous path is
+ * settling a W5 candidate, and asking about `malloc` would answer a question nobody posed. Under `as-given` the
+ * operator's list is kept verbatim (deduped): a manual probe gets to ask about `system`, `memcpy` or a
+ * vendor-specific `doSystem` too. Known-unsafe names still sort first, so a mixed list spends the budget on the
+ * sharpest question available.
  */
-export function pickSinks(importedUnsafeFns: string[]): { asked: string[]; dropped: string[] } {
+export function pickSinks(
+  requestedSinks: string[],
+  policy: SinkPolicy = 'unsafe-copy',
+): { asked: string[]; dropped: string[] } {
   const priority = ['gets', 'strcpy', 'strcat', 'sprintf', 'vsprintf', 'scanf', 'sscanf', 'vscanf'];
-  const ordered = importedUnsafeFns
-    .filter((f) => UNSAFE_COPY_FNS.includes(f))
-    .sort((a, b) => priority.indexOf(a) - priority.indexOf(b));
+  const rank = (f: string): number => (priority.includes(f) ? priority.indexOf(f) : priority.length);
+  const kept =
+    policy === 'as-given'
+      ? [...new Set(requestedSinks.map((f) => f.trim()).filter(Boolean))]
+      : requestedSinks.filter((f) => UNSAFE_COPY_FNS.includes(f));
+  // Stable within a rank: an operator's ordering is a preference, so preserve it among equally-ranked names.
+  const ordered = kept
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)
+    .map((e) => e.f);
   return { asked: ordered.slice(0, MAX_SINKS), dropped: ordered.slice(MAX_SINKS) };
+}
+
+/** A symbol name the probe can actually look up — anything else is a typo, not a question. */
+const SINK_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+/**
+ * Pure: split an operator-supplied sink list into the names worth sending to the probe and the ones that are not
+ * symbol names at all. Rejected entries are returned rather than filtered away, so the route can say which of the
+ * operator's words it refused instead of silently answering a smaller question than the one that was asked.
+ */
+export function validateSinkNames(sinks: string[]): { valid: string[]; rejected: string[] } {
+  const valid: string[] = [];
+  const rejected: string[] = [];
+  for (const raw of sinks) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (SINK_NAME_RE.test(s)) valid.push(s);
+    else rejected.push(s);
+  }
+  return { valid: [...new Set(valid)], rejected: [...new Set(rejected)] };
 }
 
 /** Pure: the JSON spec handed to the python probe. */
@@ -257,17 +319,27 @@ function probeScript(): string {
 }
 
 /**
- * Ask angr whether the named unsafe-copy sinks are reachable inside one rootfs binary. Degrades honestly at every
- * step: angr absent, binary outside the rootfs, probe crash and unparsable output each produce a `blocked` finding
- * with the reason rather than an empty result.
+ * Ask angr whether the named sinks are reachable inside one rootfs binary. Degrades honestly at every step: angr
+ * absent, binary outside the rootfs, probe crash and unparsable output each produce a `blocked` finding with the
+ * reason rather than an empty result.
+ *
+ * `sinks` may be empty — then they are DERIVED from the binary's own unbounded-copy imports, which is what a lead
+ * that names a target but not its symbols (a W4 taint chain pointing at a native helper) and a manual probe with
+ * no sink specified both need. A binary that imports none of them is reported as having nothing to ask about,
+ * which is a real answer, not a failure.
  */
 export async function runSymReach(
   rootfsPath: string | null,
   binary: string,
-  unsafeFns: string[],
+  sinks: string[],
   handle: JobHandle,
-  budgetSeconds = DEFAULT_BUDGET_SECONDS,
+  opts: SymReachOptions = {},
 ): Promise<SymReachResult> {
+  const policy = opts.policy ?? 'unsafe-copy';
+  const budgetSeconds = Math.min(
+    MAX_BUDGET_SECONDS,
+    Math.max(MIN_BUDGET_SECONDS, opts.budgetSeconds ?? DEFAULT_BUDGET_SECONDS),
+  );
   if (!rootfsPath) return unavailable(binary, 'No extracted rootfs.');
   if (!(await isToolAvailable('angr'))) {
     handle.log('angr not available — rebuild the tools base with the optional angr layer to answer reachability.');
@@ -277,8 +349,19 @@ export async function runSymReach(
   const abs = resolveInsideRootfs(rootfsPath, binary);
   if (!abs) return unavailable(binary, 'binary not found inside the rootfs');
 
-  const { asked, dropped } = pickSinks(unsafeFns);
-  if (asked.length === 0) return unavailable(binary, 'no unbounded-copy sink to ask about');
+  // No sinks named → read them off the binary itself. This is the same symbol extraction the W5 sweep uses, so a
+  // derived question asks exactly what the sweep would have flagged.
+  const derivedSinks = sinks.length === 0;
+  const requested = derivedSinks ? assessBinaryFile(abs, binary).unsafeCopy : sinks;
+  const { asked, dropped } = pickSinks(requested, derivedSinks ? 'unsafe-copy' : policy);
+  if (asked.length === 0) {
+    return unavailable(
+      binary,
+      derivedSinks
+        ? 'binary imports no unbounded-copy function — name a sink explicitly to ask about something else'
+        : 'no sink to ask about',
+    );
+  }
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-angr-'));
   const specPath = path.join(workDir, 'spec.json');
@@ -326,6 +409,10 @@ export async function runSymReach(
       ...(parsed.entry ? { entry: parsed.entry } : {}),
       sinks: parsed.sinks,
       findings: buildReachFindings(binary, parsed.sinks),
+      asked,
+      dropped,
+      derivedSinks,
+      budgetSeconds,
     };
   } finally {
     fs.rmSync(workDir, { recursive: true, force: true });

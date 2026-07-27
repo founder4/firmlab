@@ -41,6 +41,7 @@ import { SignalCanvas } from '../components/SignalCanvas';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StepTimeline } from '../components/StepTimeline';
 import { StructureMap } from '../components/StructureMap';
+import { SymReachPanel } from '../components/SymReachPanel';
 import { toast } from '../toast';
 
 type TabId =
@@ -1075,6 +1076,8 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
           </div>
         </div>
       )}
+      {/* Same selection, two questions: what the binary IS (radare2) and whether its sinks are live (angr). */}
+      <SymReachPanel imageId={imageId} binary={binary} onBinary={setBinary} />
       <div className="panel">
         <div className="panel-title">Binary triage (radare2)</div>
         <div className="panel-sub">

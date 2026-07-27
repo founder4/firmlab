@@ -1,13 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { type ImageSummary, api, fmtBytes } from '../api';
+import { type CoverageSummary, type ImageSummary, api, fmtBytes } from '../api';
 import { Icon } from '../icons';
 import { toast } from '../toast';
 
-type SortKey = 'filename' | 'firmwareClass' | 'arch' | 'size' | 'status';
+type SortKey = 'filename' | 'firmwareClass' | 'arch' | 'size' | 'status' | 'coverage';
 type SortDir = 'asc' | 'desc';
 
 const STATUS_BADGE: Record<string, string> = { ready: 'badge-ok', error: 'badge-crit', analyzing: 'badge-medium' };
+
+/**
+ * One image's coverage as a table cell. A corpus listing that shows only filename/class/size presents an image
+ * nothing has ever analyzed and a fully-scanned one identically — which is the exact conflation the per-image
+ * coverage banner exists to prevent, reintroduced at corpus scale. So the cell states it: nothing run at all is
+ * called `unexamined` and is never dressed as a neutral zero; a partial run shows how much of the applicable plan
+ * actually executed. The full sentence is on the title, one hover away.
+ */
+function CoverageCell({ c }: { c: CoverageSummary | undefined }): JSX.Element {
+  if (!c) return <span className="hint">—</span>;
+  if (c.executed === 0) {
+    return (
+      <span className="badge badge-medium mono" title={c.verdict}>
+        unexamined
+      </span>
+    );
+  }
+  const complete = c.executed >= c.applicable;
+  return (
+    <span className={`badge ${complete ? 'badge-ok' : ''} mono`} title={c.verdict}>
+      {c.executed}/{c.applicable} stages
+    </span>
+  );
+}
 
 /** A small confirm dialog that escapes its container (replaces window.confirm). */
 function Confirm({
@@ -56,6 +80,7 @@ function Confirm({
 
 export function Dashboard(): JSX.Element {
   const [images, setImages] = useState<ImageSummary[]>([]);
+  const [coverage, setCoverage] = useState<Map<string, CoverageSummary>>(new Map());
   const [usage, setUsage] = useState<Awaited<ReturnType<typeof api.storage>> | null>(null);
   const [query, setQuery] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -86,8 +111,22 @@ export function Dashboard(): JSX.Element {
       .storage()
       .then(setUsage)
       .catch(() => setUsage(null));
+    api
+      .coverageAll()
+      .then((rows) => setCoverage(new Map(rows.map((r) => [r.imageId, r]))))
+      .catch(() => setCoverage(new Map()));
   }, []);
   useEffect(refresh, [refresh]);
+
+  /**
+   * How much of the corpus has never been touched — the one number a listing of 16 images otherwise hides. Counted
+   * only over images whose coverage actually loaded: a failed report means we do not KNOW, and claiming those are
+   * unexamined would be the same fabrication in the opposite direction.
+   */
+  const unexamined = useMemo(
+    () => images.filter((im) => coverage.get(im.id)?.executed === 0).length,
+    [images, coverage],
+  );
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -107,14 +146,17 @@ export function Dashboard(): JSX.Element {
           ? im.filename.toLowerCase()
           : sort.key === 'status'
             ? im.status
-            : (im.identity?.[sort.key] ?? '').toString().toLowerCase();
+            : // Sorted by how much of the applicable plan ran, so "show me what nobody has looked at" is one click.
+              sort.key === 'coverage'
+              ? (coverage.get(im.id)?.executed ?? -1)
+              : (im.identity?.[sort.key] ?? '').toString().toLowerCase();
     return [...filtered].sort((a, b) => {
       const av = val(a);
       const bv = val(b);
       const cmp = av < bv ? -1 : av > bv ? 1 : 0;
       return sort.dir === 'asc' ? cmp : -cmp;
     });
-  }, [images, query, sort]);
+  }, [images, query, sort, coverage]);
 
   const toggleSort = useCallback((key: SortKey) => {
     setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
@@ -306,6 +348,13 @@ export function Dashboard(): JSX.Element {
                   {images.length}
                 </span>
               </div>
+              {/* The corpus-level reading of the same coverage the rows show — "0 findings" across an unscanned
+                  workspace is not a quiet corpus, and this is where that would otherwise go unsaid. */}
+              {unexamined > 0 && (
+                <span className="badge badge-medium" title="Run the autonomous scan on these to actually examine them">
+                  {unexamined} of {images.length} unexamined
+                </span>
+              )}
               <div style={{ flex: 1 }} />
               {selected.size > 0 && (
                 <button
@@ -390,6 +439,7 @@ export function Dashboard(): JSX.Element {
                       <Th k="size" num>
                         Size
                       </Th>
+                      <Th k="coverage">Coverage</Th>
                       <Th k="status">Status</Th>
                       <th style={{ width: 40 }} />
                     </tr>
@@ -474,6 +524,9 @@ export function Dashboard(): JSX.Element {
                         </td>
                         <td className="num" style={{ textAlign: 'right' }}>
                           {fmtBytes(img.size)}
+                        </td>
+                        <td>
+                          <CoverageCell c={coverage.get(img.id)} />
                         </td>
                         <td>
                           <span className={`badge ${STATUS_BADGE[img.status] ?? ''}`}>{img.status}</span>

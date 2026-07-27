@@ -19,7 +19,13 @@ import type { ImageIdentity } from '@firmlab/core';
 import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } from './findings.js';
 import type { LlmConfig } from './llm.js';
 import { complete } from './llm.js';
-import { daemonLeads, handlerLeads, reachabilityLeads } from './opacidad-leads.js';
+import {
+  REACHABILITY_LEAD_CAP,
+  daemonLeads,
+  handlerLeads,
+  reachabilityLeads,
+  taintReachabilityLeads,
+} from './opacidad-leads.js';
 import {
   type FindingsSummary,
   type OpacidadContext,
@@ -36,6 +42,7 @@ import {
   type PlanSpec,
   type ProviderId,
   type ScheduleState,
+  countReachabilityProbes,
   planEntries,
   scheduleLeads,
   specKey,
@@ -73,7 +80,17 @@ interface RunCtx {
   /** The extraction output dir (all carved partitions) — the aux-secret scan reads sibling partitions from here. */
   outputDir: string | null;
   carveTrace?: ExtractResult['carveTrace'];
+  /**
+   * The live set of spec keys already on the agenda. Executors read it to size the shared, per-run angr budget:
+   * symbolic reachability costs real wall-clock, so the cap is global across lead sources, not per source.
+   */
+  planned: ReadonlySet<string>;
   handle: JobHandle;
+}
+
+/** Reachability probes still affordable this run — W4's chains run first, so they claim the slots they deserve. */
+function reachabilityBudget(c: RunCtx): number {
+  return REACHABILITY_LEAD_CAP - countReachabilityProbes(c.planned);
 }
 
 interface StepOutcome {
@@ -269,9 +286,15 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
   const r = runWebTaint(c.rootfsPath);
   syncFindings(c.imageId, 'webtaint', r.findings);
   const tainted = r.handlers.filter((h) => h.tainted).length;
-  const leads = handlerLeads(r.handlers, c.rootfsPath as string);
+  // Two lead kinds from one worker: decompile the httpd that SERVES the tainted handler, and ask angr about the
+  // native helpers that handler EXECS. The second is the sharpest reachability question the pipeline can pose —
+  // the argv the prober makes symbolic is literally the channel W4 just proved is attacker-controlled — so it is
+  // scheduled before the binvuln sweep gets to spend the shared budget on syntactic candidates.
+  const probes = taintReachabilityLeads(r.handlers, c.rootfsPath as string, reachabilityBudget(c));
+  const leads = [...handlerLeads(r.handlers, c.rootfsPath as string), ...probes];
+  const probeNote = probes.length ? `, ${probes.length} exec'd helper(s) queued for reachability` : '';
   return {
-    summary: `web attack-surface: ${r.handlers.length} handlers, ${tainted} tainted → ${r.findings.length} findings`,
+    summary: `web attack-surface: ${r.handlers.length} handlers, ${tainted} tainted → ${r.findings.length} findings${probeNote}`,
     findingCount: r.findings.length,
     ...(leads.length ? { leads } : {}),
     ...(r.handlers.length === 0 ? { degraded: true, note: r.reason } : {}),
@@ -282,11 +305,18 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
 async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
   const r = runBinVuln(c.rootfsPath);
   syncFindings(c.imageId, 'binvuln', r.findings);
-  // Each candidate is a precondition, not a bug. Hand the top few to the symbolic prober so the run can settle
-  // whether the sink is actually on a live path instead of leaving a list of maybes.
-  const leads = c.rootfsPath ? reachabilityLeads(r.findings, c.rootfsPath) : [];
+  // Each candidate is a precondition, not a bug. Hand as many as the run's remaining angr budget allows to the
+  // symbolic prober so it can settle whether the sink is on a live path instead of leaving a list of maybes. The
+  // budget may already be spent by W4's better-founded questions — that is the intent, not a shortfall, but the
+  // unasked candidates must still be visible as unasked.
+  const budget = reachabilityBudget(c);
+  const leads = c.rootfsPath ? reachabilityLeads(r.findings, c.rootfsPath, budget) : [];
+  const unasked = Math.max(0, r.candidates - leads.length);
+  const probeNote = r.candidates
+    ? ` — ${leads.length} queued for reachability${unasked ? `, ${unasked} left as unproven candidate(s)` : ''}`
+    : '';
   return {
-    summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)`,
+    summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)${probeNote}`,
     findingCount: r.findings.length,
     ...(leads.length ? { leads } : {}),
     ...(r.binariesScanned === 0 ? { degraded: true, note: r.reason } : {}),
@@ -314,9 +344,11 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
     };
   }
   const reached = r.sinks.filter((s) => s.outcome === 'reached');
+  // Name the sinks that were asked about: a bare "no sink reached" hides whether one question or four were posed.
+  const askedNote = r.asked?.length ? ` [asked: ${r.asked.join('/')}${r.derivedSinks ? ', derived' : ''}]` : '';
   const summary = reached.length
-    ? `reachability ${binary}: ${reached.map((s) => s.sink).join('/')} reachable from entry`
-    : `reachability ${binary}: no sink reached inside the budget (inconclusive, not clean)`;
+    ? `reachability ${binary}: ${reached.map((s) => s.sink).join('/')} reachable from entry${askedNote}`
+    : `reachability ${binary}: no sink reached inside the budget (inconclusive, not clean)${askedNote}`;
   return {
     summary,
     findingCount: r.findings.length,
@@ -414,6 +446,14 @@ export async function runOpacidad(
   const plan = planEntries(seed);
   handle.log(`Class '${identity.firmwareClass}' → seed plan: ${seed.map((s) => s.worker).join(' → ')}`);
 
+  // W9 re-planning: the class DAG is only the SEED. A worker can surface a lead mid-run (a network daemon, the
+  // httpd serving a tainted handler, a native helper a tainted handler execs) that schedules a follow-up worker —
+  // so the fixed plan becomes a dynamic worklist. Growth is deduped + capped so re-planning always terminates; a
+  // lead past the cap is surfaced, not silently dropped.
+  const MAX_DYNAMIC_STEPS = 8;
+  const agenda: PlanSpec[] = [...seed];
+  const sched: ScheduleState = { planned: new Set(seed.map(specKey)), dynamicCount: 0, capped: 0 };
+
   const prior = latestExtract(imageId);
   const ctx: RunCtx = {
     imageId,
@@ -422,16 +462,10 @@ export async function runOpacidad(
     rootfsPath: prior?.rootfsPath ?? null,
     outputDir: prior?.outputDir ?? null,
     ...(prior?.carveTrace ? { carveTrace: prior.carveTrace } : {}),
+    // Live view of the agenda — executors size the shared reachability budget off it as the run grows.
+    planned: sched.planned,
     handle,
   };
-
-  // W9 re-planning: the class DAG is only the SEED. A worker can surface a lead mid-run (a network daemon, the
-  // httpd serving a tainted handler) that schedules a follow-up worker — so the fixed plan becomes a dynamic
-  // worklist. Growth is deduped + capped so re-planning always terminates; a lead past the cap is surfaced, not
-  // silently dropped.
-  const MAX_DYNAMIC_STEPS = 8;
-  const agenda: PlanSpec[] = [...seed];
-  const sched: ScheduleState = { planned: new Set(seed.map(specKey)), dynamicCount: 0, capped: 0 };
 
   const steps: OpacidadStep[] = [];
   for (let i = 0; i < agenda.length; i++) {

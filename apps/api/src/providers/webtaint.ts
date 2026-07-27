@@ -152,7 +152,7 @@ export function patternPermitsNewline(pattern: string | null): boolean {
 // === Findings (pure) ===
 
 /** Describe the source of a handler's taint for the attack-path chain. */
-function describeSource(h: HandlerAnalysis): string {
+export function describeSource(h: HandlerAnalysis): string {
   const param = h.sources.find((s) => s.kind === 'param');
   if (h.fromUci && param) return `params.${param.name} → uci`;
   if (param) return `params.${param.name} (web RPC param)`;
