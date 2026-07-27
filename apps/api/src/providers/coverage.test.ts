@@ -32,6 +32,22 @@ describe('buildCoverage — zero findings is never the same sentence twice', () 
     expect(r.ambiguous).toBe(true);
   });
 
+  // Seen on the real DVRF_v03: 28 findings from individually-run stages and manual symreach probes, but no
+  // autonomous run — so the row showed "Nothing has analyzed this image yet" beside its own finding count.
+  it('does not claim nothing has run when findings exist from individually-run stages', () => {
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs: [spec('W1 · Extraction'), spec('W3 · Credentials')],
+      steps: null,
+      findingCount: 28,
+    });
+    expect(r.executed).toBe(0);
+    expect(r.verdict).not.toContain('Nothing has analyzed');
+    expect(r.verdict).toContain('UNKNOWN');
+    expect(r.verdict).toContain('28 finding(s)');
+    expect(r.ambiguous).toBe(true);
+  });
+
   it('with every stage run and empty, it is a real negative — and says it is not proof of security', () => {
     const r = buildCoverage({
       firmwareClass: 'embedded-linux',

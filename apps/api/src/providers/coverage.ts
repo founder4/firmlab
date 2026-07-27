@@ -77,6 +77,12 @@ function verdictFor(findingCount: number, executed: number, applicable: number, 
     : '';
 
   if (executed === 0) {
+    // Coverage is measured off the autonomous scan's per-worker outcomes, so a stage run on its own from a manual
+    // route is invisible here. Saying "nothing has analyzed this image" next to a non-zero finding count would be
+    // contradicted by the very row it annotates — which is the same conflation this banner exists to prevent.
+    if (findingCount > 0) {
+      return `No autonomous scan has run, so coverage of the ${applicable} applicable stage(s) is UNKNOWN. The ${findingCount} finding(s) here come from individually-run stages — real results, but no basis for reading the rest as clean.`;
+    }
     return `Nothing has analyzed this image yet — ${applicable} applicable stage(s) are unexecuted. An empty findings list here means UNEXAMINED, not clean.`;
   }
   if (findingCount === 0 && missing > 0) {
