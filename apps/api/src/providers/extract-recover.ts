@@ -211,9 +211,24 @@ export async function recoverFromCompressedBlobs(outputDir: string, handle: JobH
         await execFileAsync(spec.tool, args, { timeout: 5 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 });
       }
     } catch (err) {
-      // A decompressor that dies partway still leaves what it produced, and a truncated payload is itself the
-      // finding — AliExpress's kernel LZMA stops at 384 KB of a declared 7.6 MB, which says the image is damaged.
-      const message = err instanceof Error ? err.message.split('\n')[0] : String(err);
+      // A decompressor that dies partway still produced something, and a truncated payload is itself the finding —
+      // AliExpress's kernel LZMA stops at 384 KB of a declared 7.6 MB, which says the image is damaged rather than
+      // unreadable. On the `-c` path those bytes are on the failed process's STDOUT and are lost unless taken from
+      // the error, which is the same rescue dynprobe-run.ts does with gdb's output.
+      const e = err as { stdout?: Buffer | string; stderr?: Buffer | string; message?: string };
+      const partial = e.stdout ? Buffer.from(e.stdout as Buffer) : null;
+      if (partial && partial.length > 0 && !fs.existsSync(out)) {
+        fs.mkdirSync(producedDir, { recursive: true });
+        fs.writeFileSync(out, partial);
+      }
+      // The tool's own first line of stderr says what happened; the reconstructed command line does not.
+      const stderr = e.stderr
+        ? Buffer.from(e.stderr as Buffer)
+            .toString('utf8')
+            .trim()
+            .split('\n')[0]
+        : '';
+      const message = stderr || (e.message ?? String(err)).split('\n')[0];
       const bytes = fs.existsSync(out) ? fs.statSync(out).size : 0;
       attempts.push({
         blob,
