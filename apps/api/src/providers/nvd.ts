@@ -121,6 +121,35 @@ export interface NvdBatchResult {
  * requests (NVD asks for ~6 s between anonymous calls); it is 0 when an API key is present. The caller passes the
  * components OSV could not map, so NVD fills exactly OSV's coverage gap without re-querying what OSV already found.
  */
+/** A name+version pair headed for NVD's keyword search — all the batch query needs. */
+export interface NvdCandidate {
+  name: string;
+  version: string;
+}
+
+/**
+ * Pure: merge the two sources of NVD candidates into the exact list that will leave the machine.
+ *
+ * De-duplication has to happen HERE rather than inside `queryNvdBatch`, which does its own: the egress ledger is a
+ * promise shown to the operator about how many names go out, and a promise computed from a list that is quietly
+ * shortened afterwards is not a promise. It also reports how many candidates the fingerprint contributed that the
+ * SBOM did not already have, because the ledger declares that split — a name out of an opkg database is something
+ * the operator installed, a name read from the strings of a bundled binary is something the analysis derived.
+ */
+export function mergeNvdCandidates(
+  manifest: NvdCandidate[],
+  fingerprinted: NvdCandidate[],
+): { candidates: NvdCandidate[]; fingerprintedOnly: NvdCandidate[] } {
+  const seen = new Set(manifest.map((c) => `${c.name}@${c.version}`));
+  const fingerprintedOnly = fingerprinted.filter((c) => {
+    const key = `${c.name}@${c.version}`;
+    if (!c.name || !c.version || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { candidates: [...manifest, ...fingerprintedOnly], fingerprintedOnly };
+}
+
 export async function queryNvdBatch(
   components: { name: string; version: string }[],
   cfg: ResearchConfig,

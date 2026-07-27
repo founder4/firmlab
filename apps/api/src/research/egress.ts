@@ -18,7 +18,17 @@ export interface EgressLedger {
 export function buildEgressLedger(
   components: { name: string; version: string }[],
   provenance: ProvenanceFingerprint,
-  opts: { nvdCandidates?: number; hashLookup?: { enabled: boolean; unsaltedCount: number } } = {},
+  opts: {
+    nvdCandidates?: number;
+    /**
+     * How many of `nvdCandidates` were fingerprinted out of bundled binaries rather than read from a package
+     * manifest. Declared separately because the operator's expectation differs: a name from an opkg database is
+     * something they installed, while a name read out of the strings of a binary is something the analysis
+     * derived from their firmware. Same shape of data either way — a name and a version, never bytes.
+     */
+    fingerprinted?: number;
+    hashLookup?: { enabled: boolean; unsaltedCount: number };
+  } = {},
 ): EgressLedger {
   const destinations: EgressLedger['destinations'] = [];
   if (components.length > 0) {
@@ -29,9 +39,14 @@ export function buildEgressLedger(
     });
   }
   if (opts.nvdCandidates && opts.nvdCandidates > 0) {
+    const fp = opts.fingerprinted ?? 0;
+    const split =
+      fp > 0
+        ? `, for the components OSV could not map — ${opts.nvdCandidates - fp} from package manifests and ${fp} fingerprinted from bundled binaries that have no manifest`
+        : ', for the components OSV could not map';
     destinations.push({
       host: 'services.nvd.nist.gov',
-      sends: 'component name + version as a keyword, for the components OSV could not map (no bytes)',
+      sends: `component name + version as a keyword${split} (no bytes)`,
       count: opts.nvdCandidates,
     });
   }

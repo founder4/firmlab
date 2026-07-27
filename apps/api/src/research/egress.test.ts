@@ -45,3 +45,24 @@ describe('buildEgressLedger', () => {
     expect(l.neverSent.join(' ')).toMatch(/secret|key|credential/i);
   });
 });
+
+describe('the ledger declares fingerprinted components as their own class', () => {
+  const nvdLine = (opts: Parameters<typeof buildEgressLedger>[2]) =>
+    buildEgressLedger([{ name: 'busybox', version: '1.35' }], provenance, opts).destinations.find(
+      (d) => d.host === 'services.nvd.nist.gov',
+    );
+
+  it('splits the count between package manifests and bundled binaries', () => {
+    const d = nvdLine({ nvdCandidates: 5, fingerprinted: 3 });
+    expect(d?.count).toBe(5);
+    expect(d?.sends).toContain('2 from package manifests');
+    expect(d?.sends).toContain('3 fingerprinted from bundled binaries');
+    expect(d?.sends).toContain('no bytes');
+  });
+
+  it('says nothing about fingerprinting when none was contributed', () => {
+    const d = nvdLine({ nvdCandidates: 5 });
+    expect(d?.count).toBe(5);
+    expect(d?.sends).not.toContain('fingerprinted');
+  });
+});

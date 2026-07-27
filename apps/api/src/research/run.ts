@@ -11,6 +11,7 @@ import { type IntelContext, runIntelSynthesis } from '../agent/intel.js';
 import { credentialOtherImages, deviceFamilyKey, hashSecret, listReachabilityPriors } from '../corpus.js';
 import { syncFindings } from '../findings.js';
 import { loadLlmConfig } from '../llm.js';
+import { runComponentCve } from '../providers/component-cve.js';
 import { parseShadow } from '../providers/fsaudit.js';
 import {
   type HashCandidate,
@@ -22,7 +23,7 @@ import {
 import type { JobHandle } from '../providers/jobs.js';
 import { type KevResult, collectCveIds, fetchAndMatchKev } from '../providers/kev.js';
 import { type KeyMaterial, summarizeKeyMaterial } from '../providers/keys.js';
-import { type NvdBatchResult, queryNvdBatch } from '../providers/nvd.js';
+import { type NvdBatchResult, mergeNvdCandidates, queryNvdBatch } from '../providers/nvd.js';
 import { type OsvBatchResult, osvEcosystem, queryOsvBatch } from '../providers/osv.js';
 import { type ProvenanceFingerprint, buildProvenanceFingerprint } from '../providers/provenance.js';
 import type { SbomResult } from '../providers/sbom.js';
@@ -169,17 +170,35 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   const packages = sbomJob?.resultJson ? (JSON.parse(sbomJob.resultJson) as SbomResult).packages : [];
   // NVD covers exactly OSV's gap: the components OSV can't map to an ecosystem. Compute that set up front so the
   // egress ledger can declare precisely how many names go to NVD before anything leaves.
-  const nvdCandidates = packages.filter((p) => !osvEcosystem(p.type));
+  const manifestCandidates = packages.filter((p) => !osvEcosystem(p.type));
+  // The components a manifest-only SBOM structurally cannot see: bundled binaries fingerprinted straight out of
+  // their own strings. NVD's keyword search exists for exactly these — its module doc names busybox, dropbear, the
+  // kernel and vendor daemons — and until now they never reached it, because the candidate set came only from
+  // syft. A TP-Link WR940N catalogues ONE package while shipping pppd 2.4.3, BusyBox 1.01 and Dropbear 2012.55,
+  // so the source built to answer this question was being asked nothing.
+  const fingerprinted = runComponentCve(latestRootfs(imageId)).hits.map((h) => ({
+    name: h.component,
+    version: h.version,
+  }));
+  const { candidates: nvdCandidates, fingerprintedOnly } = mergeNvdCandidates(manifestCandidates, fingerprinted);
   // Hash-lookup candidates (from /etc/shadow) — gathered up front so the egress ledger can declare exactly how many
   // UNSALTED hashes would leave before anything does. Salted hashes are counted out here and never sent.
   const hashCandidates = cfg.hashLookup ? collectShadowCandidates(imageId) : [];
   const unsaltedCount = hashCandidates.filter((c) => classifyHash(c.hash).resolvable).length;
   const egress = buildEgressLedger(packages, provenance, {
     nvdCandidates: nvdCandidates.length,
+    fingerprinted: fingerprintedOnly.length,
     hashLookup: { enabled: cfg.hashLookup, unsaltedCount },
   });
 
   handle.log(`Egress: ${packages.length} component names+versions → api.osv.dev (no firmware bytes leave).`);
+  if (fingerprintedOnly.length > 0) {
+    handle.log(
+      `Egress: ${fingerprintedOnly.length} component(s) fingerprinted from bundled binaries (no package manifest) join the NVD queue: ${fingerprintedOnly
+        .map((c) => `${c.name} ${c.version}`)
+        .join(', ')}.`,
+    );
+  }
   const osv = await queryOsvBatch(packages, cfg);
   handle.log(
     `OSV: ${osv.queried} queried, ${osv.skipped} unmapped, ${osv.withAdvisories} with advisories (${osv.totalAdvisories} total).`,
