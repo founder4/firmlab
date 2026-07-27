@@ -65,6 +65,7 @@ import { runFccLookup } from './providers/fcc.js';
 import { runFsAudit } from './providers/fsaudit.js';
 import { runFwHunt } from './providers/fwhunt.js';
 import type { JobHandle } from './providers/jobs.js';
+import { runNvramScan } from './providers/nvram.js';
 import { runRtosAnalysis } from './providers/rtos.js';
 import { runSbom } from './providers/sbom.js';
 import { runServiceMap } from './providers/servicemap.js';
@@ -185,6 +186,25 @@ async function fsauditRun(c: RunCtx): Promise<StepOutcome> {
   const r = runFsAudit(c.rootfsPath as string);
   syncFindings(c.imageId, 'fsaudit', r.findings);
   return { summary: `rootfs security audit: ${r.findings.length} findings`, findingCount: r.findings.length };
+}
+
+/**
+ * W3 breadth — the flash key-value store, read from the RAW image.
+ *
+ * The only stage here that deliberately ignores `rootfsPath`: an nvram partition sits in the upload's flash
+ * layout, outside any filesystem, which is exactly why every rootfs-walking scan has missed it.
+ */
+async function nvramRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runNvramScan(c.imagePath);
+  syncFindings(c.imageId, 'nvram', r.findings);
+  const creds = r.findings.filter((f) => f.kind === 'nvram-credential' || f.kind === 'nvram-wifi-key').length;
+  return {
+    summary: `nvram store: ${r.stores.length} store(s), ${r.stores.reduce((n, s) => n + s.recordCount, 0)} record(s)${creds ? `, ${creds} credential/key finding(s)` : ''}`,
+    findingCount: r.findings.length,
+    // No store is a real negative for this image only — most firmware keeps its environment elsewhere — so it is
+    // reported rather than treated as a stage that failed.
+    ...(r.stores.length === 0 ? { note: r.reason } : {}),
+  };
 }
 
 async function auxsecretsRun(c: RunCtx): Promise<StepOutcome> {
@@ -466,6 +486,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   extract: extractRun,
   fsaudit: fsauditRun,
   auxsecrets: auxsecretsRun,
+  nvram: nvramRun,
   sbom: sbomRun,
   compcve: compcveRun,
   servicemap: servicemapRun,

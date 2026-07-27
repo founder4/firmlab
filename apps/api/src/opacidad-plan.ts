@@ -17,6 +17,7 @@ export type ProviderId =
   | 'certs'
   | 'compmap'
   | 'uboot'
+  | 'nvram'
   | 'fcc'
   | 'rtos'
   | 'chipsec'
@@ -149,6 +150,15 @@ const LINUX_CHAIN: PlanSpec[] = [
   },
   { worker: 'Recon · FCC-ID', reason: 'FCC IDs → public filings', needsRootfs: false, built: true, provider: 'fcc' },
   {
+    // Listed here as well as in RECON_ANY_CLASS: the Linux chain enumerates its rootfs-free workers explicitly so
+    // the shared group does not duplicate them, which means an addition there does not reach this chain.
+    worker: 'W3 · NVRAM store',
+    reason: 'flash key-value store in the raw image — credentials and wifi keys no rootfs scan can reach',
+    needsRootfs: false,
+    built: true,
+    provider: 'nvram',
+  },
+  {
     worker: 'W4 · Web attack-surface (taint)',
     reason: 'web-param → uci → os.execute/io.popen sinks (the GL.iNet Tor root-RCE class)',
     needsRootfs: true,
@@ -192,6 +202,17 @@ const RECON_ANY_CLASS: PlanSpec[] = [
     provider: 'uboot',
   },
   { worker: 'Recon · FCC-ID', reason: 'FCC IDs → public filings', needsRootfs: false, built: true, provider: 'fcc' },
+  {
+    // Every other W3 stage walks extraction output, which is why no provider had ever seen one of these: the
+    // stores live in the RAW upload's flash environment partition, not in the rootfs. Nine of the sixteen images
+    // in the corpus carry one — routers, cameras and both eCos Xiaomis — so it belongs to every class, and it can
+    // never be skipped for want of a rootfs.
+    worker: 'W3 · NVRAM store',
+    reason: 'flash key-value store in the raw image — credentials and wifi keys no rootfs scan can reach',
+    needsRootfs: false,
+    built: true,
+    provider: 'nvram',
+  },
 ];
 
 /** Given W0's class, the ordered plan of workers. Pure — the routing itself is unit-tested. */

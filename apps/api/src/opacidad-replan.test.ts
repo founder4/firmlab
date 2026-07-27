@@ -348,3 +348,20 @@ describe('reproductionLeads — a proven-reachable sink is the one worth running
     expect(specKey(a[0] as never)).toBe('dynprobe:pwnable/bof#strcpy');
   });
 });
+
+describe('the nvram store reaches every class, because it needs no rootfs', () => {
+  /**
+   * Nine of the sixteen images in the corpus carry a flash key-value store, and they span routers, cameras and
+   * both eCos Xiaomis. It reads the RAW upload rather than extraction output — which is why no rootfs-walking
+   * provider had ever seen one — so withholding it from any class would be withholding it for no reason, and it
+   * can never be reported `skipped` for want of a rootfs.
+   */
+  for (const cls of ['embedded-linux', 'rtos', 'baremetal', 'esp-soc', 'encrypted', 'unknown']) {
+    it(`routes ${cls} to the nvram store scan`, () => {
+      const spec = specsForClass(cls).find((s) => s.provider === 'nvram');
+      expect(spec).toBeDefined();
+      expect(spec?.needsRootfs).toBe(false);
+      expect(spec?.built).toBe(true);
+    });
+  }
+});

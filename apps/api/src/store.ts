@@ -32,7 +32,8 @@ export type JobKind =
   | 'symreach'
   | 'fwhunt'
   | 'funcdiff'
-  | 'dynprobe';
+  | 'dynprobe'
+  | 'nvram';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {
