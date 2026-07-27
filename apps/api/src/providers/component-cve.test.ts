@@ -107,13 +107,19 @@ describe('component version extraction', () => {
 });
 
 describe('the ranges are the advisories, not the era around them', () => {
-  it('claims the udhcpc RCE for both BusyBox builds this corpus ships', () => {
+  it('claims the udhcpc command injection for both BusyBox builds this corpus ships', () => {
     const rule = ruleFor('busybox');
+    // NVD enumerates `busybox:1.01` and `busybox:1.7.2` individually for this CVE — an assertion about these
+    // exact versions, which is why it is claimable where an open-below range would not be.
     for (const v of ['1.7.2', '1.01']) {
-      expect(matchCves(rule, v).map((c) => c.id)).toContain('CVE-2016-2148');
+      expect(matchCves(rule, v).map((c) => c.id)).toEqual(['CVE-2011-2716']);
     }
-    // Fixed series: 1.25.0 is where udhcpc was patched, so nothing is claimed above it.
     expect(matchCves(rule, '1.36.1')).toEqual([]);
+  });
+
+  it('does not carry CVE-2016-2148, whose NVD range has no lower bound to stand on', () => {
+    const rule = ruleFor('busybox');
+    expect(rule.cves.map((c) => c.id)).not.toContain('CVE-2016-2148');
   });
 
   it('claims the dropbear format-string RCE for the shipped 2012.55 and not for a patched build', () => {

@@ -139,14 +139,16 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     versionRes: [/BusyBox v(\d+\.\d+(?:\.\d+)?(?:\.\d+)?)/],
     cves: [
       {
-        // udhcpc is running on every one of these routers, and the attacker is whatever answers DHCP.
-        id: 'CVE-2016-2148',
-        title: 'BusyBox udhcpc heap buffer overflow — remote code execution from a malicious DHCP server',
-        severity: 'critical',
-        low: '1.0.0',
-        high: '1.24.2',
-      },
-      {
+        // udhcpc runs on every one of these routers and the attacker is whatever answers DHCP, so this is a
+        // reachable primitive rather than a paper finding.
+        //
+        // This entry is here and CVE-2016-2148 — a CRITICAL udhcpc heap overflow, "before 1.25.0", which would
+        // also match both builds — is NOT, and the difference is the whole discipline of this table. NVD backs
+        // CVE-2011-2716 with 90 individually enumerated CPEs, `busybox:1.01` and `busybox:1.7.2` among them: an
+        // analyst asserted these exact versions. CVE-2016-2148 carries zero enumerated CPEs and one range with no
+        // lower bound — the same shape refused two rules down for dnsmasq 1.10, and refusing it there while
+        // inheriting it here would make the principle decorative. A 2005 BusyBox is probably vulnerable to it;
+        // probably is not what `static_confirmed` means.
         id: 'CVE-2011-2716',
         title: 'BusyBox udhcpc passes DHCP option values to the shell — command injection from a DHCP server',
         severity: 'medium',
