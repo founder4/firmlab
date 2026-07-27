@@ -5,6 +5,7 @@ data/
 .env
 .env.*
 .DS_Store
+.claude/
 apps/web/dist/
 samples/*.bin
 samples/*.img
