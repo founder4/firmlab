@@ -103,24 +103,55 @@ export function looksLikeHostNetns(ifaces: string[]): boolean {
 }
 
 /**
+ * Pure: is this kernel a VM-backed container runtime (OrbStack, Docker Desktop's LinuxKit, Lima/Colima, WSL2)?
+ *
+ * These run Linux inside a VM on a macOS/Windows host, and the VM is itself NATed behind that host. `--network
+ * host` there shares the **VM's** namespace, not the operator's LAN — so its interfaces look exactly like a real
+ * Linux Docker host's (docker0, veth pairs) while still being one NAT away from any LAN device. Without this,
+ * `--network host` on a Mac would be reported as spoof-capable and would silently reach nothing.
+ */
+export function looksLikeVmBackedRuntime(procVersion: string): boolean {
+  return /orbstack|linuxkit|\blima\b|microsoft.*wsl|wsl2/i.test(procVersion);
+}
+
+/**
  * Pure: is this process on the LAN's own layer-2 segment — the precondition ARP spoofing cannot do without?
  *
  * This is the check that keeps the spoof backend from over-claiming once `bettercap` is actually in the image.
- * ARP poisoning works by answering for the gateway's MAC on the segment the target is on. A container attached to
- * a Docker bridge is NOT on that segment: its `eth0` lives on a private, NATed Docker subnet, and its ARP frames
- * never reach the LAN. So on a bridge-networked deployment the spoof is impossible no matter how many
- * capabilities it is granted or whether the binary is installed — and reporting "missing NET_ADMIN" there would
- * point the operator at a fix that cannot work. docs/CAPTURE-DESIGN.md §5c states this as prose; this makes it a
- * machine-checked precondition, with the LAN capture agent named as the path that does work.
+ * ARP poisoning works by answering for the gateway's MAC on the segment the target is on, so it needs the process
+ * to sit on that segment. Two ways it does not:
+ *
+ *  - A container attached to a Docker bridge: its `eth0` lives on a private, NATed Docker subnet and its ARP
+ *    frames never leave it.
+ *  - A container under a VM-backed runtime, even with `--network host`: it shares the VM's namespace, and the VM
+ *    is NATed behind the macOS/Windows host.
+ *
+ * In both cases the spoof is impossible no matter how many capabilities are granted or whether the binary is
+ * installed — and reporting "missing NET_ADMIN" would point the operator at a fix that cannot work.
+ * docs/CAPTURE-DESIGN.md §5b/§5c states this as prose; this makes it a machine-checked precondition, with the LAN
+ * capture agent named as the path that does work.
  */
-export function assessL2Reach(input: { containerized: boolean; hostNetns: boolean }): {
+export function assessL2Reach(input: { containerized: boolean; hostNetns: boolean; vmBackedHost?: boolean }): {
   onLanSegment: boolean;
   reason: string;
 } {
   if (!input.containerized) {
     return { onLanSegment: true, reason: 'running directly on the host — its interfaces are the LAN segment' };
   }
+  // The remedy differs by WHY the segment is out of reach, and naming the wrong one is the same failure as
+  // naming a missing capability: it sends the operator after something that cannot work. Under a VM-backed
+  // runtime `--network host` is not a fix at any layer, so it is never offered as one.
+  const remedy = input.vmBackedHost
+    ? 'Run FirmLab on a real Linux host on the LAN, or deploy the LAN capture agent (CAPTURE-DESIGN §5c)'
+    : 'Re-run with --network host, or deploy the LAN capture agent (CAPTURE-DESIGN §5c), which holds the privileges on the LAN and streams flows back';
+
   if (input.hostNetns) {
+    if (input.vmBackedHost) {
+      return {
+        onLanSegment: false,
+        reason: `container shares the host network namespace, but that host is a Linux VM (OrbStack / Docker Desktop / Lima / WSL) NATed behind macOS or Windows — --network host reaches the VM segment, not your LAN, so a spoof would poison nothing. ${remedy}`,
+      };
+    }
     return {
       onLanSegment: true,
       reason: 'container shares the host network namespace (--network host) — on the LAN segment',
@@ -128,10 +159,7 @@ export function assessL2Reach(input: { containerized: boolean; hostNetns: boolea
   }
   return {
     onLanSegment: false,
-    reason:
-      'container is on a Docker bridge network, not the LAN segment — its ARP frames never reach a LAN device, ' +
-      'so spoof positioning is impossible here regardless of caps. Re-run with --network host, or deploy the LAN ' +
-      'capture agent (CAPTURE-DESIGN §5c), which holds the privileges on the LAN and streams flows back',
+    reason: `container is on a Docker bridge network, not the LAN segment — its ARP frames never reach a LAN device, so spoof positioning is impossible here regardless of caps. ${remedy}`,
   };
 }
 
@@ -207,9 +235,22 @@ function interfaceNames(): string[] {
   }
 }
 
+/** The running kernel's version string — how a VM-backed container runtime identifies itself. */
+function procVersion(): string {
+  try {
+    return fs.readFileSync('/proc/version', 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 /** Whether this process can reach the LAN at layer 2 at all — the spoof backend's binding precondition. */
 function l2Reach(): { onLanSegment: boolean; reason: string } {
-  return assessL2Reach({ containerized: containerized(), hostNetns: looksLikeHostNetns(interfaceNames()) });
+  return assessL2Reach({
+    containerized: containerized(),
+    hostNetns: looksLikeHostNetns(interfaceNames()),
+    vmBackedHost: looksLikeVmBackedRuntime(procVersion()),
+  });
 }
 
 /** Serial adapters present as character devices (Linux naming). [] where none / not a Linux host. */

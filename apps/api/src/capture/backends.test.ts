@@ -8,6 +8,7 @@ import {
   capHeld,
   detectCaptureBackends,
   looksLikeHostNetns,
+  looksLikeVmBackedRuntime,
   matchRadio,
   parseCapEff,
 } from './backends.js';
@@ -45,8 +46,26 @@ describe('looksLikeHostNetns / assessL2Reach — the precondition no capability 
     expect(assessL2Reach({ containerized: false, hostNetns: false }).onLanSegment).toBe(true);
   });
 
-  it('a host-networked container is on the LAN segment', () => {
+  it('a host-networked container on a real Linux host is on the LAN segment', () => {
     expect(assessL2Reach({ containerized: true, hostNetns: true }).onLanSegment).toBe(true);
+  });
+
+  // Found while validating the positive branch on this machine: OrbStack's --network host shares the Linux VM's
+  // namespace, which has docker0 and veth pairs and so looks exactly like a real Docker host — while still being
+  // one NAT away from the Mac's LAN. Reporting it spoof-capable would be an over-claim that silently reaches
+  // nothing, which is the failure this whole gate exists to prevent.
+  it('recognises the VM-backed runtimes whose host namespace is still not the LAN', () => {
+    expect(looksLikeVmBackedRuntime('Linux version 7.0.11-orbstack-00360 (orbstack@builder)')).toBe(true);
+    expect(looksLikeVmBackedRuntime('Linux version 6.10.14-linuxkit (docker@buildkitsandbox)')).toBe(true);
+    expect(looksLikeVmBackedRuntime('Linux version 5.15.0-microsoft-standard-WSL2')).toBe(true);
+    expect(looksLikeVmBackedRuntime('Linux version 6.1.0-18-amd64 (debian-kernel@lists.debian.org)')).toBe(false);
+  });
+
+  it('refuses --network host under a VM-backed runtime, and says a real Linux host is what is needed', () => {
+    const r = assessL2Reach({ containerized: true, hostNetns: true, vmBackedHost: true });
+    expect(r.onLanSegment).toBe(false);
+    expect(r.reason).toContain('real Linux host');
+    expect(r.reason).not.toContain('NET_ADMIN');
   });
 
   // The whole point of the gate: bettercap being installed and NET_ADMIN being granted still would not make ARP
@@ -57,6 +76,15 @@ describe('looksLikeHostNetns / assessL2Reach — the precondition no capability 
     expect(r.reason).toContain('--network host');
     expect(r.reason).toContain('LAN');
     expect(r.reason).not.toContain('NET_ADMIN');
+  });
+
+  // Naming the wrong remedy is the same failure as naming a missing capability. On a Mac, `--network host` only
+  // gets you the VM's namespace, so a bridge-networked container there must not be told to try it.
+  it('does not offer --network host as the escape when it cannot possibly be one', () => {
+    const r = assessL2Reach({ containerized: true, hostNetns: false, vmBackedHost: true });
+    expect(r.onLanSegment).toBe(false);
+    expect(r.reason).not.toContain('--network host');
+    expect(r.reason).toContain('real Linux host');
   });
 });
 

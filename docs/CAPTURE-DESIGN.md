@@ -146,7 +146,14 @@ strictly scoped to a single target, with **guaranteed restore** on teardown.
 > `on-path-spoof` backend on layer-2 reach BEFORE it looks at the binary or the capabilities, and a
 > bridge-networked deployment is told the spoof is *impossible here* — not that it is "missing NET_ADMIN", which
 > would send the operator after a fix that cannot work. Spoof is genuinely available only under
-> `--network host` + `--cap-add=NET_ADMIN --cap-add=NET_RAW` on a Linux host.
+> `--network host` + `--cap-add=NET_ADMIN --cap-add=NET_RAW` on a **real Linux host on the LAN**.
+>
+> "Real" is load-bearing. Under a VM-backed runtime (OrbStack, Docker Desktop's LinuxKit, Lima/Colima, WSL2)
+> `--network host` shares the *Linux VM's* namespace — which carries `docker0` and `veth` pairs and so is
+> indistinguishable from a Docker host by interfaces alone — while the VM is itself NATed behind macOS/Windows.
+> `looksLikeVmBackedRuntime` reads `/proc/version` for that case, and the remedy the operator is given is chosen
+> by *why* the segment is out of reach: a VM-backed host is never told to try `--network host`, because there it
+> is not a fix at any layer.
 >
 > **The deployed FirmLab is bridge-networked on purpose** (`proxy_net`, fronted by Traefik + tinyauth + CrowdSec),
 > and host networking would break that routing and the auth gate with it. That deployment's answer to active
