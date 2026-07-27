@@ -38,6 +38,18 @@ describe('coverageHeadline — the sentence a model is about to skim into its an
     expect(h).toContain('Do not characterise this image as clean');
   });
 
+  // Caught driving the real bench over MCP: DVRF has 28 findings from individually-run stages and no autonomous
+  // run, so it read "UNEXAMINED — … The 28 finding(s) here are real results" — a headline contradicting the
+  // verdict it introduces, which is the same defect the coverage verdict itself was fixed for one layer up.
+  it('does not call an image unexamined when it is holding real findings', () => {
+    const h = coverageHeadline(
+      coverage({ executed: 0, findingCount: 28, verdict: 'No autonomous scan has run, so coverage is UNKNOWN.' }),
+    );
+    expect(h).not.toContain('UNEXAMINED');
+    expect(h).toContain('COVERAGE UNKNOWN');
+    expect(h).toContain('do not present this as a complete analysis');
+  });
+
   it('scopes the conclusion when only some stages ran', () => {
     const h = coverageHeadline(coverage({ executed: 5, verdict: '5 of 12 ran.' }));
     expect(h).toContain('PARTIAL COVERAGE');

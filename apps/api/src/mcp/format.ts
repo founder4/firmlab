@@ -81,6 +81,12 @@ export const HONESTY_INSTRUCTIONS = [
  */
 export function coverageHeadline(c: McpCoverage): string {
   if (c.executed === 0) {
+    // Coverage counts the autonomous scan's workers, so an image analyzed a stage at a time reads as executed:0
+    // while holding real findings. Labelling that UNEXAMINED would contradict the verdict it introduces — the
+    // same self-contradiction the coverage verdict itself was fixed for, one layer up.
+    if (c.findingCount > 0) {
+      return `COVERAGE UNKNOWN — ${c.verdict} The findings are real; what has NOT been examined is unknown, so do not present this as a complete analysis.`;
+    }
     return `UNEXAMINED — ${c.verdict} Do not characterise this image as clean or as analyzed.`;
   }
   if (c.executed < c.applicable) {
