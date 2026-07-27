@@ -86,6 +86,18 @@ export interface ComponentRule {
 /**
  * Curated component table. SMALL BY DESIGN — each CVE is a famous, individually-verified embedded n-day that a
  * manifest-only SBOM cannot see because the component is a bundled binary with no package database entry.
+ *
+ * Every `versionRes` below was read off a REAL binary in this corpus, not guessed from what the string ought to
+ * look like — that is how `dropbearmulti` got into `binNames` (TP-Link ships the multi-call build, and the
+ * basename match is exact, so a rule naming only `dropbear` would have found nothing), and how the SSH banner
+ * turned out to be the only place dropbear's version appears as literal text rather than through `%s`.
+ *
+ * Every range was read from the NVD CVE API (2026-07-27, `virtualMatchString` against the version this corpus
+ * actually ships), never from recall. Where NVD's CPE range is open below — "dnsmasq before 2.78" matches a 2001
+ * build of 1.10 as readily as a 2017 build of 2.77 — the rule sets its OWN floor at the series the advisory is
+ * about. An unbounded-below range is a modelling artifact of CPE, not evidence that a decade-older codebase
+ * contains the bug, and inheriting it would be the "this era is probably vulnerable" guess this table exists to
+ * refuse. The cost is under-claiming on genuinely ancient builds; they still surface as inventory facts.
  */
 export const COMPONENT_RULES: readonly ComponentRule[] = [
   {
@@ -116,6 +128,71 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
         severity: 'high',
         low: '1.0.1',
         high: '1.0.1f',
+      },
+    ],
+  },
+  {
+    component: 'busybox',
+    binNames: ['busybox'],
+    // Verbatim from both rootfs in this corpus: `BusyBox v1.7.2 (2016-03-09 22:33:37 CST)` on DVRF and
+    // `BusyBox v1.01 (2026.05.28-02:39+0000) multi-call binary` on the WR940N. Literal text, no format string.
+    versionRes: [/BusyBox v(\d+\.\d+(?:\.\d+)?(?:\.\d+)?)/],
+    cves: [
+      {
+        // udhcpc is running on every one of these routers, and the attacker is whatever answers DHCP.
+        id: 'CVE-2016-2148',
+        title: 'BusyBox udhcpc heap buffer overflow — remote code execution from a malicious DHCP server',
+        severity: 'critical',
+        low: '1.0.0',
+        high: '1.24.2',
+      },
+      {
+        id: 'CVE-2011-2716',
+        title: 'BusyBox udhcpc passes DHCP option values to the shell — command injection from a DHCP server',
+        severity: 'medium',
+        low: '1.0.0',
+        high: '1.19.4',
+      },
+    ],
+  },
+  {
+    component: 'dropbear',
+    // TP-Link ships the multi-call build, so the basename is `dropbearmulti`; `dbclient` is the same binary again.
+    binNames: ['dropbear', 'dropbearmulti', 'dbclient'],
+    // The version reaches the strings ONLY through the SSH identification banner — `SSH-2.0-dropbear_2012.55` on
+    // the WR940N. Every human-readable mention (`Dropbear sshd v%s`, `Dropbear multi-purpose version %s`) is a
+    // format string, so the obvious pattern matches nothing. The banner is also what the daemon puts on the wire.
+    versionRes: [/SSH-2\.0-dropbear_(\d+\.\d+)/],
+    cves: [
+      {
+        id: 'CVE-2016-7406',
+        title: 'Dropbear SSH server format-string vulnerability — remote arbitrary code execution',
+        severity: 'high',
+        // Floored at the year-versioned series NVD itself bounds CVE-2019-12953 with. The advisory ("before
+        // 2016.74") also covers the older 0.5x scheme, but this table will not claim a range it cannot bound from
+        // below: a 0.5x Dropbear falls through to the inventory fact instead.
+        low: '2011.54',
+        high: '2016.73',
+      },
+    ],
+  },
+  {
+    component: 'dnsmasq',
+    binNames: ['dnsmasq'],
+    // Same shape as pppd: `dnsmasq version %s` is a format string and the value sits beside it as a bare string
+    // (DVRF's build carries `1.10`). Both real series are 1.x and 2.x, so the bare pattern is gated on the label.
+    versionRes: [/dnsmasq[- ]?(?:version )?(2\.\d+)\b/],
+    marker: 'dnsmasq version',
+    bareVersionRe: /\b([12]\.\d+)\b/,
+    cves: [
+      {
+        id: 'CVE-2017-14491',
+        title: 'dnsmasq heap buffer overflow in DNS reply parsing — remote code execution',
+        severity: 'critical',
+        // NVD's CPE match for this is open below and therefore "affects" a 2001 build of 1.10. It is about the
+        // 2.x codebase, so the floor is 2.0 and DVRF's 1.10 is reported as a version, not as a critical CVE.
+        low: '2.0',
+        high: '2.77',
       },
     ],
   },

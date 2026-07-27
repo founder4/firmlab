@@ -75,6 +75,69 @@ describe('component version extraction', () => {
     // A bare 2.4.3 with no `pppd version` label must not be picked up (avoids grabbing an unrelated number).
     expect(extractComponentVersion('some lib 2.4.3 build', pppdRule)).toBeNull();
   });
+
+  // === Patterns read off the real binaries in this corpus, not from what the string ought to look like ===
+
+  it('reads BusyBox out of the banner both corpus builds actually carry', () => {
+    // DVRF's bin/busybox and the WR940N's, verbatim.
+    const rule = ruleFor('busybox');
+    expect(extractComponentVersion('BusyBox v1.7.2 (2016-03-09 22:33:37 CST)\nsh', rule)).toBe('1.7.2');
+    expect(extractComponentVersion('BusyBox v1.01 (2026.05.28-02:39+0000) multi-call binary', rule)).toBe('1.01');
+  });
+
+  it('reads dropbear from the SSH banner, the one place it is not a format string', () => {
+    // Every human-readable mention in the real dropbearmulti is `Dropbear sshd v%s` / `... version %s`; the
+    // literal version survives only in the identification banner the daemon puts on the wire.
+    const rule = ruleFor('dropbear');
+    expect(extractComponentVersion('Dropbear sshd v%s\nSSH-2.0-dropbear_2012.55\n/var/run/dropbear.pid', rule)).toBe(
+      '2012.55',
+    );
+    expect(extractComponentVersion('Dropbear multi-purpose version %s\ndropbear_close', rule)).toBeNull();
+  });
+
+  it('reads dnsmasq through the marker gate, where the value sits beside the format string', () => {
+    // Verbatim adjacency from DVRF's usr/sbin/dnsmasq: the label, then the bare value on the next string.
+    const rule = ruleFor('dnsmasq');
+    expect(extractComponentVersion('Usage: dnsmasq [options]\ndnsmasq version %s\n1.10\n-v, --version', rule)).toBe(
+      '1.10',
+    );
+    // A build that embeds the version literally takes the strict pattern instead of the gated fallback.
+    expect(extractComponentVersion('/etc/dnsmasq.conf\ndnsmasq-2.78\n', rule)).toBe('2.78');
+  });
+});
+
+describe('the ranges are the advisories, not the era around them', () => {
+  it('claims the udhcpc RCE for both BusyBox builds this corpus ships', () => {
+    const rule = ruleFor('busybox');
+    for (const v of ['1.7.2', '1.01']) {
+      expect(matchCves(rule, v).map((c) => c.id)).toContain('CVE-2016-2148');
+    }
+    // Fixed series: 1.25.0 is where udhcpc was patched, so nothing is claimed above it.
+    expect(matchCves(rule, '1.36.1')).toEqual([]);
+  });
+
+  it('claims the dropbear format-string RCE for the shipped 2012.55 and not for a patched build', () => {
+    const rule = ruleFor('dropbear');
+    expect(matchCves(rule, '2012.55').map((c) => c.id)).toEqual(['CVE-2016-7406']);
+    expect(matchCves(rule, '2016.74')).toEqual([]);
+  });
+
+  /**
+   * The honesty case, and the reason this table sets its own floors. NVD's CPE match for CVE-2017-14491 is open
+   * below, so it "affects" dnsmasq 1.10 — a 2001 codebase — exactly as much as 2.77. Inheriting that would
+   * manufacture a critical finding on DVRF out of a modelling artifact. Reported as a version instead.
+   */
+  it('refuses to claim a 2017 dnsmasq CVE against the 1.x build NVD would happily match', () => {
+    const rule = ruleFor('dnsmasq');
+    expect(matchCves(rule, '1.10')).toEqual([]);
+    expect(matchCves(rule, '2.55').map((c) => c.id)).toEqual(['CVE-2017-14491']);
+    expect(matchCves(rule, '2.78')).toEqual([]);
+
+    const drafts = buildComponentFindings([{ component: 'dnsmasq', version: '1.10', path: 'usr/sbin/dnsmasq' }]);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.kind).toBe('component-version');
+    expect(drafts[0]?.severity).toBe('info');
+  });
 });
 
 describe('CVE matching + findings', () => {
