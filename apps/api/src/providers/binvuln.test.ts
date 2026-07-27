@@ -2,7 +2,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { assessBinary, buildBinFindings, extractSymbols, parseDynamicSymbols, runBinVuln } from './binvuln.js';
+import type { FindingDraft } from '../findings-normalize.js';
+import {
+  assessBinary,
+  buildBinFindings,
+  extractSymbols,
+  parseDynamicSymbols,
+  runBinVuln,
+  selectFindings,
+} from './binvuln.js';
 
 describe('symbol extraction + assessment', () => {
   it('extracts C-identifier tokens from strings', () => {
@@ -46,6 +54,14 @@ describe('runBinVuln (rootfs sweep)', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'binvuln-'));
   afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
+  /** An ELF-magic file whose strings carry `syms`, padded to a chosen size so the ranking has something to rank. */
+  const fakeElf = (syms: string[], pad: number): Buffer =>
+    Buffer.concat([
+      Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+      Buffer.from(`\x00${syms.join('\x00')}\x00`, 'latin1'),
+      Buffer.alloc(pad, 0x20),
+    ]);
+
   it('degrades honestly with no rootfs', () => {
     expect(runBinVuln(null).available).toBe(false);
   });
@@ -68,6 +84,95 @@ describe('runBinVuln (rootfs sweep)', () => {
     expect(r.candidates).toBe(1);
     expect(r.findings.some((f) => f.kind === 'binary-pwnable-candidate')).toBe(true);
     expect(r.findings.some((f) => f.kind === 'binary-cmdexec-sink')).toBe(true);
+    // The size is what ranks a candidate downstream, so it has to reach the finding.
+    const candidate = r.findings.find((f) => f.kind === 'binary-pwnable-candidate');
+    expect((candidate?.evidence as Record<string, unknown>).size).toBe(elf.length);
+  });
+
+  /**
+   * The regression that motivated the ranked cap, reproduced in miniature.
+   *
+   * On the real DVRF rootfs the sweep reported 43 candidates, all from `usr/sbin`, `usr/local/samba` and
+   * `usr/lib` — because the walk is a LIFO stack that descends `usr/` first, and `FINDING_CAP` then truncated by
+   * arrival. `bin/`, `sbin/` and the whole `pwnable/` tree overflowed unexamined, which excluded
+   * `pwnable/Intro/stack_bof_01`: a 7 KB binary that angr proves reachable and gdb reproduces a SIGSEGV in, i.e.
+   * the single most probe-worthy candidate in the image. Nothing reported was false; the SET was an artifact of
+   * directory order.
+   */
+  it('lists the small candidate an early directory holds instead of a prefix of the walk', () => {
+    const root = path.join(tmp, 'capped');
+    fs.mkdirSync(path.join(root, 'usr', 'sbin'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'pwnable', 'Intro'), { recursive: true });
+    // 65 fat candidates in the directory the LIFO walk descends into FIRST (`usr` sorts after `pwnable`)…
+    for (let i = 0; i < 65; i++) {
+      fs.writeFileSync(path.join(root, 'usr', 'sbin', `daemon${i}`), fakeElf(['strcpy', 'main'], 8192));
+    }
+    // …and the one small candidate that the old arrival-order cap dropped.
+    fs.writeFileSync(path.join(root, 'pwnable', 'Intro', 'stack_bof_01'), fakeElf(['strcpy', 'main'], 16));
+
+    const r = runBinVuln(root);
+    expect(r.binariesScanned).toBe(66);
+    expect(r.candidates).toBe(66); // every candidate FOUND is counted…
+    expect(r.findings).toHaveLength(60); // …even though the cap lists fewer
+    const listed = r.findings.map((f) => (f.evidence as Record<string, unknown>).path);
+    expect(listed).toContain(path.join('pwnable', 'Intro', 'stack_bof_01'));
+    // Smallest-first, so the listed set is a ranking rather than a prefix.
+    const sizes = r.findings.map((f) => (f.evidence as Record<string, unknown>).size as number);
+    expect([...sizes].sort((a, b) => a - b)).toEqual(sizes);
+    // The bound is stated, not implied by a short list.
+    expect(r.reason).toMatch(/drops 6 further finding/);
+  });
+
+  it('states an exhausted examination budget instead of passing it off as a clean sweep', () => {
+    const root = path.join(tmp, 'budget');
+    fs.mkdirSync(root, { recursive: true });
+    for (let i = 0; i < 401; i++) {
+      fs.writeFileSync(path.join(root, `b${String(i).padStart(3, '0')}`), fakeElf(['strcpy'], 8));
+    }
+    const r = runBinVuln(root);
+    expect(r.binariesScanned).toBe(400);
+    expect(r.reason).toMatch(/examination budget was exhausted/);
+  });
+});
+
+describe('selectFindings — which leads survive the cap is a decision, not an accident', () => {
+  const draft = (kind: string, p: string, size: number): FindingDraft => ({
+    kind,
+    title: `${kind} ${p}`,
+    severity: 'medium',
+    proofState: 'needs_runtime_reproduction',
+    evidence: { path: p, size },
+    rationale: '',
+  });
+
+  it('keeps everything when the set fits, and reports nothing dropped', () => {
+    const drafts = [draft('a', 'x', 3), draft('a', 'y', 1)];
+    const { kept, dropped } = selectFindings(drafts, 10);
+    expect(kept).toHaveLength(2);
+    expect(dropped).toBe(0);
+  });
+
+  it('keeps the smallest binaries of each kind when it does not', () => {
+    const drafts = [draft('a', 'big', 900), draft('a', 'small', 1), draft('a', 'mid', 50)];
+    const { kept, dropped } = selectFindings(drafts, 2);
+    expect(kept.map((f) => (f.evidence as Record<string, unknown>).path)).toEqual(['small', 'mid']);
+    expect(dropped).toBe(1);
+  });
+
+  it('round-robins across kinds so a high-volume kind cannot evict another entirely', () => {
+    const many = Array.from({ length: 20 }, (_, i) => draft('candidate', `c${i}`, i));
+    const few = [draft('sink', 's0', 5), draft('sink', 's1', 6)];
+    const { kept } = selectFindings([...many, ...few], 6);
+    const kinds = kept.map((f) => f.kind);
+    expect(kinds.filter((k) => k === 'sink')).toHaveLength(2);
+    expect(kinds.filter((k) => k === 'candidate')).toHaveLength(4);
+  });
+
+  it('gives the same answer whatever order the walk produced', () => {
+    const drafts = [draft('a', 'x', 9), draft('b', 'y', 2), draft('a', 'z', 4)];
+    const forward = selectFindings(drafts, 2).kept.map((f) => f.title);
+    const reversed = selectFindings([...drafts].reverse(), 2).kept.map((f) => f.title);
+    expect(forward).toEqual(reversed);
   });
 });
 

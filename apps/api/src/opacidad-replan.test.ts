@@ -215,6 +215,42 @@ describe('the reachability budget is global across lead sources', () => {
   });
 });
 
+describe('reachabilityLeads spends the probe budget smallest-first', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-order-'));
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+  for (const rel of ['bin/a', 'bin/b', 'bin/c', 'bin/d']) fs.writeFileSync(path.join(root, rel), '\x7fELF');
+
+  const sized = (p: string, size: number): FindingDraft => ({
+    kind: 'binary-pwnable-candidate',
+    title: p,
+    severity: 'medium',
+    proofState: 'needs_runtime_reproduction',
+    evidence: { path: p, size, unsafeFns: ['strcpy'] },
+    rationale: '',
+  });
+
+  // The defect this pins, measured on the real DVRF rootfs: the sweep hands over candidates in walk order, so the
+  // three probes a run can afford went to usr/sbin daemons and never reached the 7 KB pwnable that actually
+  // crashes. Angr converges on small binaries and times out on large ones, so walk order spends the whole
+  // allowance on the questions least likely to return an answer.
+  it('asks about the smallest binaries, not the ones the walk happened to reach first', () => {
+    const candidates = [sized('bin/d', 900_000), sized('bin/a', 7_016), sized('bin/c', 120_000), sized('bin/b', 42)];
+    expect(reachabilityLeads(candidates, root, 3).map((l) => l.target)).toEqual(['bin/b', 'bin/a', 'bin/c']);
+  });
+
+  it('does not mutate the caller’s candidate list while ordering it', () => {
+    const candidates = [sized('bin/d', 900_000), sized('bin/b', 42)];
+    reachabilityLeads(candidates, root, 2);
+    expect(candidates.map((f) => f.title)).toEqual(['bin/d', 'bin/b']);
+  });
+
+  it('sorts a candidate carrying no size last rather than letting it jump the queue', () => {
+    const noSize: FindingDraft = { ...sized('bin/d', 0), evidence: { path: 'bin/d', unsafeFns: ['strcpy'] } };
+    expect(reachabilityLeads([noSize, sized('bin/a', 500)], root, 2).map((l) => l.target)).toEqual(['bin/a', 'bin/d']);
+  });
+});
+
 describe('specsForClass — rootfs-free recon reaches every class', () => {
   // The third experimental pass caught this: driving the providers directly over an eCos `rtos` image, the U-Boot
   // worker flagged `bootcmd` booting over tftp — a real exposure the fixed class plan could not reach, on an image

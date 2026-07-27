@@ -56,10 +56,22 @@ export function daemonLeads(services: Service[], rootfsPath: string): Lead[] {
  */
 export const REACHABILITY_LEAD_CAP = 3;
 
+/** Size of the binary a candidate names; one that does not carry it sorts last rather than jumping the queue. */
+function leadSize(f: FindingDraft): number {
+  const ev = (f.evidence ?? {}) as Record<string, unknown>;
+  return typeof ev.size === 'number' ? ev.size : Number.MAX_SAFE_INTEGER;
+}
+
+/** Path of the binary a candidate names — the deterministic tiebreak between equal-sized binaries. */
+function leadPath(f: FindingDraft): string {
+  const ev = (f.evidence ?? {}) as Record<string, unknown>;
+  return typeof ev.path === 'string' ? ev.path : '';
+}
+
 /**
  * Leads from the binary-vuln sweep: each stack-overflow candidate becomes one reachability question. The candidate
- * finding already carries the binary path and the unbounded-copy functions it imports, which is exactly the input
- * the symbolic probe needs — so this reads the drafts rather than re-walking the rootfs.
+ * finding already carries the binary path, its size and the unbounded-copy functions it imports, which is exactly
+ * the input the symbolic probe needs — so this reads the drafts rather than re-walking the rootfs.
  */
 export function reachabilityLeads(
   candidates: FindingDraft[],
@@ -69,8 +81,16 @@ export function reachabilityLeads(
   const leads: Lead[] = [];
   const seen = new Set<string>();
   if (budget <= 0) return leads;
-  for (const f of candidates) {
-    if (f.kind !== 'binary-pwnable-candidate') continue;
+  // Smallest binary first, and explicitly — not inherited from the sweep's ordering, so this holds however the
+  // caller assembled the list. The budget buys a handful of probes; bounded symbolic execution converges on small
+  // binaries and reliably times out on large ones, so spending the allowance in the order the filesystem happened
+  // to be walked spends it on the questions least likely to come back with an answer. Measured on the real DVRF
+  // rootfs: that order put all three probes into usr/sbin daemons and never reached the 7 KB pwnable that does
+  // crash. Ties break on path so a re-run schedules the same probes.
+  const ordered = candidates
+    .filter((f) => f.kind === 'binary-pwnable-candidate')
+    .sort((a, b) => leadSize(a) - leadSize(b) || leadPath(a).localeCompare(leadPath(b)));
+  for (const f of ordered) {
     const ev = (f.evidence ?? {}) as Record<string, unknown>;
     const target = typeof ev.path === 'string' ? ev.path : '';
     const sinks = Array.isArray(ev.unsafeFns) ? ev.unsafeFns.filter((s): s is string => typeof s === 'string') : [];

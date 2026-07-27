@@ -130,6 +130,12 @@ export function parseDynamicSymbols(buf: Uint8Array): Set<string> | null {
 
 export interface BinAssessment {
   path: string;
+  /**
+   * Size of the file on disk in bytes (0 when it could not be read, and 0 from the pure symbol-only assessor,
+   * which never touches a file). Carried because it RANKS a candidate: bounded symbolic execution converges on
+   * small binaries and reliably times out on large ones, so size decides which leads are worth the probe budget.
+   */
+  size: number;
   unsafeCopy: string[];
   cmdExec: string[];
   hasCanary: boolean;
@@ -145,6 +151,7 @@ export function assessBinary(
 ): BinAssessment {
   return {
     path: binPath,
+    size: 0, // a symbol set carries no file facts; assessBinaryFile fills this from the stat it already takes.
     unsafeCopy: UNSAFE_COPY_FNS.filter((f) => importsSymbol(symbols, f)),
     cmdExec: CMD_EXEC_FNS.filter((f) => importsSymbol(symbols, f)),
     hasCanary: importsSymbol(symbols, CANARY_SYMBOL),
@@ -175,7 +182,7 @@ export function buildBinFindings(a: BinAssessment): FindingDraft[] {
       title: `Stack-overflow candidate: ${a.path} ${verb} ${a.unsafeCopy.join('/')} with no stack canary`,
       severity: 'medium',
       proofState: 'needs_runtime_reproduction',
-      evidence: { path: a.path, unsafeFns: a.unsafeCopy, canary: false, symbolSource: a.symbolSource },
+      evidence: { path: a.path, size: a.size, unsafeFns: a.unsafeCopy, canary: false, symbolSource: a.symbolSource },
       rationale: `The binary ${verb} unbounded-copy libc function(s) and was built without a stack canary — the classic stack-buffer-overflow precondition. ${provenance} Whether an attacker reaches one with oversized input needs reversing/fuzzing, so this is a candidate lead, not a proven overflow.`,
     });
   }
@@ -185,7 +192,7 @@ export function buildBinFindings(a: BinAssessment): FindingDraft[] {
       title: `Command-exec sink: ${a.path} ${verb} ${a.cmdExec.join('/')}`,
       severity: 'info',
       proofState: 'needs_runtime_reproduction',
-      evidence: { path: a.path, execFns: a.cmdExec, symbolSource: a.symbolSource },
+      evidence: { path: a.path, size: a.size, execFns: a.cmdExec, symbolSource: a.symbolSource },
       rationale: `The binary ${verb} a command-execution function — a command-injection sink if any argument is attacker-influenced. ${provenance} A lead to taint the callers, not a verdict.`,
     });
   }
@@ -195,6 +202,10 @@ export function buildBinFindings(a: BinAssessment): FindingDraft[] {
 export interface BinVulnResult {
   available: boolean;
   binariesScanned: number;
+  /**
+   * Stack-overflow candidates FOUND — not necessarily listed. `findings` holds what survived FINDING_CAP, so on a
+   * busy rootfs this is the larger number; the difference is stated in `reason` rather than left to be inferred.
+   */
   candidates: number;
   findings: FindingDraft[];
   reason: string;
@@ -221,20 +232,24 @@ function binaryStrings(buf: Uint8Array): string {
   return out.join('\n');
 }
 
-/** Read a bounded prefix of a file (missing/unreadable → empty). */
-function readBounded(abs: string): Uint8Array {
+/**
+ * Read a bounded prefix of a file, reporting its TRUE size alongside (missing/unreadable → empty, size 0). The
+ * size is the whole file's, not the prefix's — a 40 MB binary and a 4 MB one both read `BIN_READ_CAP` bytes, and
+ * ranking them as equal would defeat the point of ranking.
+ */
+function readBounded(abs: string): { bytes: Uint8Array; size: number } {
   try {
     const fd = fs.openSync(abs, 'r');
     try {
-      const size = Math.min(fs.fstatSync(fd).size, BIN_READ_CAP);
-      const b = Buffer.allocUnsafe(size);
-      fs.readSync(fd, b, 0, size, 0);
-      return b;
+      const size = fs.fstatSync(fd).size;
+      const b = Buffer.allocUnsafe(Math.min(size, BIN_READ_CAP));
+      fs.readSync(fd, b, 0, b.length, 0);
+      return { bytes: b, size };
     } finally {
       fs.closeSync(fd);
     }
   } catch {
-    return new Uint8Array(0);
+    return { bytes: new Uint8Array(0), size: 0 };
   }
 }
 
@@ -262,11 +277,14 @@ function isElf(abs: string): boolean {
  * the caller sees "no sinks", never a crash.
  */
 export function assessBinaryFile(abs: string, rel: string): BinAssessment {
-  const buf = readBounded(abs);
+  const { bytes, size } = readBounded(abs);
   // Real symbol table first; the string superset only when there is none to read (a truly static binary, or a
   // prefix that stopped short of the section headers). The assessment records which, so the finding can say so.
-  const dyn = parseDynamicSymbols(buf);
-  return dyn ? assessBinary(rel, dyn, 'dynsym') : assessBinary(rel, extractSymbols(binaryStrings(buf)), 'strings');
+  const dyn = parseDynamicSymbols(bytes);
+  const assessed = dyn
+    ? assessBinary(rel, dyn, 'dynsym')
+    : assessBinary(rel, extractSymbols(binaryStrings(bytes)), 'strings');
+  return { ...assessed, size };
 }
 
 /** Is this file an ELF? Exposed so a caller can reject a shell script before treating it as a binary target. */
@@ -274,10 +292,71 @@ export function isElfFile(abs: string): boolean {
   return isElf(abs);
 }
 
+/** Read the file size a draft carries; a draft without one sorts last rather than first. */
+function draftSize(d: FindingDraft): number {
+  const s = (d.evidence as Record<string, unknown> | undefined)?.size;
+  return typeof s === 'number' ? s : Number.MAX_SAFE_INTEGER;
+}
+
+/** Read the rootfs-relative path a draft carries — the deterministic tiebreak between equal-sized binaries. */
+function draftPath(d: FindingDraft): string {
+  const p = (d.evidence as Record<string, unknown> | undefined)?.path;
+  return typeof p === 'string' ? p : '';
+}
+
+/**
+ * Pure: choose which findings survive `FINDING_CAP`.
+ *
+ * The cap has to exist — a busy rootfs yields hundreds of leads and a flooded ledger is unreadable. But WHICH ones
+ * it keeps must not be an accident of directory order, and it was. The walk is a LIFO stack, so it descended
+ * `usr/` first, filled the cap there, and every directory reached later overflowed. On the real DVRF corpus that
+ * silently excluded `bin/`, `sbin/` and the entire `pwnable/` tree — including `pwnable/Intro/stack_bof_01`, the
+ * one binary this workbench has ever reproduced a crash in. The list read as "43 candidates" and was in fact the
+ * prefix of a reverse-alphabetical walk. Nothing in it was false; it was the *set* that was an artifact.
+ *
+ * So the selection is explicit and stated. Round-robin across kinds, so a high-volume kind cannot crowd out
+ * another (43 pwnable candidates evicted every command-exec sink found after them). Within a kind, SMALLEST
+ * FIRST: bounded symbolic execution converges on small binaries and reliably times out on large ones, so the
+ * small candidates are the ones the downstream prober can actually settle — and a lead nobody can settle is worth
+ * less shelf space than one somebody can. Ties break on path, so the same rootfs yields the same list on any
+ * filesystem, which walk order never guaranteed.
+ */
+export function selectFindings(drafts: FindingDraft[], cap: number): { kept: FindingDraft[]; dropped: number } {
+  if (cap <= 0) return { kept: [], dropped: drafts.length };
+  const byKind = new Map<string, FindingDraft[]>();
+  for (const d of drafts) {
+    const list = byKind.get(d.kind);
+    if (list) list.push(d);
+    else byKind.set(d.kind, [d]);
+  }
+  const order = (a: FindingDraft, b: FindingDraft): number =>
+    draftSize(a) - draftSize(b) || draftPath(a).localeCompare(draftPath(b));
+  const kinds = [...byKind.keys()].sort();
+  for (const k of kinds) (byKind.get(k) as FindingDraft[]).sort(order);
+
+  const kept: FindingDraft[] = [];
+  let progress = true;
+  while (kept.length < cap && progress) {
+    progress = false;
+    for (const k of kinds) {
+      if (kept.length >= cap) break;
+      const next = (byKind.get(k) as FindingDraft[]).shift();
+      if (next) {
+        kept.push(next);
+        progress = true;
+      }
+    }
+  }
+  // Round-robin interleaves the kinds; regroup so the emitted list reads as a list rather than as the draw order.
+  kept.sort((a, b) => a.kind.localeCompare(b.kind) || order(a, b));
+  return { kept, dropped: drafts.length - kept.length };
+}
+
 /**
  * Sweep an extracted rootfs for memory-corruption candidates. Walks for ELF binaries, extracts each one's symbol
  * tokens from its strings, and applies the pure assessor. Honest: no rootfs → available:false; hardened binaries
- * are not flagged; the candidate list is capped and the overflow is reported in the reason, never silently dropped.
+ * are not flagged; the candidate list is capped by `selectFindings` (smallest-first, not walk order) and both the
+ * cap and an exhausted ELF budget are reported in the reason, never silently dropped.
  */
 export function runBinVuln(rootfsPath: string | null): BinVulnResult {
   if (!rootfsPath) {
@@ -290,10 +369,11 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
     return { available: false, binariesScanned: 0, candidates: 0, findings: [], reason: 'No extracted rootfs.' };
   }
 
-  const findings: FindingDraft[] = [];
+  // Every draft the walk produces, capped only at the END. Bounded by ELF_SCAN_CAP binaries × 2 kinds, so this
+  // cannot grow large — and collecting first is what lets the cap choose on merit instead of on arrival order.
+  const all: FindingDraft[] = [];
   let scanned = 0;
   let walked = 0;
-  let overflow = 0;
   const stack: string[] = [root];
   while (stack.length > 0 && walked < WALK_CAP && scanned < ELF_SCAN_CAP) {
     const dir = stack.pop() as string;
@@ -303,33 +383,45 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
     } catch {
       continue;
     }
+    // readdir order is filesystem-defined, so an unsorted walk makes WHICH binaries fit under ELF_SCAN_CAP differ
+    // between machines for the same image. Sort, and push directories in reverse so the LIFO stack pops them in
+    // alphabetical order — the sweep is a reproducible fact about the rootfs, not about the disk that holds it.
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    const subdirs: string[] = [];
     for (const e of entries) {
       if (walked >= WALK_CAP || scanned >= ELF_SCAN_CAP) break;
       walked++;
       if (e.isSymbolicLink()) continue;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
-        stack.push(abs);
+        subdirs.push(abs);
         continue;
       }
       if (!e.isFile() || !isElf(abs)) continue;
       scanned++;
       const rel = path.relative(root, abs);
-      const assessment = assessBinaryFile(abs, rel);
-      for (const f of buildBinFindings(assessment)) {
-        if (findings.length < FINDING_CAP) findings.push(f);
-        else overflow++;
-      }
+      all.push(...buildBinFindings(assessBinaryFile(abs, rel)));
     }
+    for (let i = subdirs.length - 1; i >= 0; i--) stack.push(subdirs[i] as string);
   }
 
-  const candidates = findings.filter((f) => f.kind === 'binary-pwnable-candidate').length;
-  const overflowNote = overflow > 0 ? ` (${overflow} further finding(s) beyond the ${FINDING_CAP} cap not listed)` : '';
+  const { kept, dropped } = selectFindings(all, FINDING_CAP);
+  const candidates = all.filter((f) => f.kind === 'binary-pwnable-candidate').length;
+  const listed = kept.filter((f) => f.kind === 'binary-pwnable-candidate').length;
+  // Both bounds are stated, because either one silently makes a partial answer look like a complete one.
+  const capNote =
+    dropped > 0
+      ? ` The ${FINDING_CAP}-finding cap lists the ${listed} smallest candidate(s) and drops ${dropped} further finding(s) — selected by binary size (what a bounded symbolic probe can settle), not by directory order.`
+      : '';
+  const budgetNote =
+    scanned >= ELF_SCAN_CAP
+      ? ` The ${ELF_SCAN_CAP}-binary examination budget was exhausted, so ELFs beyond it were never opened and are absent from these counts, not cleared by them.`
+      : '';
   return {
     available: true,
     binariesScanned: scanned,
     candidates,
-    findings,
-    reason: `Binary-vuln sweep: ${scanned} ELF binaries, ${candidates} stack-overflow candidate(s)${overflowNote}. Candidates are unbounded-copy + no-canary leads for reversing/fuzzing, not proven overflows.`,
+    findings: kept,
+    reason: `Binary-vuln sweep: ${scanned} ELF binaries, ${candidates} stack-overflow candidate(s).${capNote}${budgetNote} Candidates are unbounded-copy + no-canary leads for reversing/fuzzing, not proven overflows.`,
   };
 }

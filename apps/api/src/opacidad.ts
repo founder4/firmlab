@@ -347,8 +347,12 @@ async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
   const probeNote = r.candidates
     ? ` — ${leads.length} queued for reachability${unasked ? `, ${unasked} left as unproven candidate(s)` : ''}`
     : '';
+  // The sweep counts every candidate it found but lists only what fits its finding cap, so when the two differ the
+  // summary has to say which number the ledger below it actually holds.
+  const listed = r.findings.filter((f) => f.kind === 'binary-pwnable-candidate').length;
+  const listedNote = listed < r.candidates ? ` (${listed} smallest listed)` : '';
   return {
-    summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)${probeNote}`,
+    summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)${listedNote}${probeNote}`,
     findingCount: r.findings.length,
     ...(leads.length ? { leads } : {}),
     ...(r.binariesScanned === 0 ? { degraded: true, note: r.reason } : {}),
