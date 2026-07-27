@@ -11,10 +11,20 @@
  * Honesty: KEV membership means the CVE is exploited SOMEWHERE globally — it does NOT mean it is reachable in THIS
  * image. It raises priority; it never confirms reachability (that stays per-image). The parser + cross-reference
  * are pure and unit-tested; only fetchKevCatalog touches the network.
+ *
+ * The catalog goes through the on-disk cache (research/cache.ts): it is a single multi-megabyte file that every
+ * image in the corpus needs, so downloading it once a day instead of once a scan is the whole point. It is also
+ * where staleness bites hardest — KEV grows by CVEs attackers started using THIS week, so a catalog served without
+ * its age would answer "not known-exploited" on evidence that had since changed its mind. Hence `freshness` on the
+ * result: whichever way the answer came, it states when the catalog behind it was pulled from CISA.
  */
+import { type CacheOptions, type Freshness, cachedFetch } from '../research/cache.js';
 import { type ResearchConfig, allowlistedFetch } from '../research/config.js';
 
 export const KEV_ENDPOINT = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
+
+/** Cache namespace for the KEV catalog — one entry, keyed by the feed URL, shared by every image. */
+export const KEV_CACHE_SOURCE = 'kev';
 
 export interface KevEntry {
   cveID: string;
@@ -74,20 +84,56 @@ export interface KevResult {
   catalogSize: number;
   /** The discovered CVEs that are in KEV — known exploited in the wild. */
   matches: KevMatch[];
+  /** When the catalog behind this verdict was fetched from CISA, and whether it came off the wire or the disk. */
+  freshness: Freshness | null;
   reason?: string;
 }
 
-/** Download the KEV catalog (allowlisted) and cross-reference the discovered CVEs locally. */
-export async function fetchAndMatchKev(cveIds: Iterable<string>, cfg: ResearchConfig): Promise<KevResult> {
+/**
+ * Download the KEV catalog (allowlisted, cached) and cross-reference the discovered CVEs locally. A fresh cached
+ * catalog is used as-is; past the TTL it is downloaded again rather than served, and an HTTP error is reported the
+ * way it always was — never stored, never substituted with the previous catalog, because "no known-exploited CVEs"
+ * read out of a catalog we could not refresh is a claim nobody made.
+ */
+export async function fetchAndMatchKev(
+  cveIds: Iterable<string>,
+  cfg: ResearchConfig,
+  cache: CacheOptions = {},
+): Promise<KevResult> {
   const ids = [...cveIds];
-  if (ids.length === 0) return { checked: false, catalogSize: 0, matches: [], reason: 'no CVEs discovered to check' };
+  if (ids.length === 0) {
+    return { checked: false, catalogSize: 0, matches: [], freshness: null, reason: 'no CVEs discovered to check' };
+  }
   try {
-    const res = await allowlistedFetch(KEV_ENDPOINT, cfg);
-    if (!res.ok) return { checked: false, catalogSize: 0, matches: [], reason: `KEV feed HTTP ${res.status}` };
-    const catalog = parseKevCatalog(await res.json());
-    return { checked: true, catalogSize: catalog.length, matches: crossReferenceKev(ids, catalog) };
+    const answer = await cachedFetch(
+      KEV_CACHE_SOURCE,
+      KEV_ENDPOINT,
+      async () => {
+        const res = await allowlistedFetch(KEV_ENDPOINT, cfg);
+        // Thrown, not returned as a non-answer, so the reason reaches the caller verbatim — as it did before.
+        if (!res.ok) throw new Error(`KEV feed HTTP ${res.status}`);
+        return await res.json();
+      },
+      cache,
+    );
+    if (!answer.freshness) {
+      return { checked: false, catalogSize: 0, matches: [], freshness: null, reason: 'KEV feed returned no catalog' };
+    }
+    const catalog = parseKevCatalog(answer.payload);
+    return {
+      checked: true,
+      catalogSize: catalog.length,
+      matches: crossReferenceKev(ids, catalog),
+      freshness: answer.freshness,
+    };
   } catch (err) {
-    return { checked: false, catalogSize: 0, matches: [], reason: err instanceof Error ? err.message : String(err) };
+    return {
+      checked: false,
+      catalogSize: 0,
+      matches: [],
+      freshness: null,
+      reason: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 

@@ -9,10 +9,27 @@
  * a keyword hit is a LEAD, not a confirmed vulnerability of THIS image — reachability is decided per-image. NVD
  * rate-limits hard without an API key (5 req / 30 s), so the batch caps the query count and reports honestly what
  * it did NOT query rather than silently truncating. The query builder and response parser are pure + unit-tested.
+ *
+ * That rate limit is also why the on-disk cache (research/cache.ts) matters most here: six components at 6.5 s
+ * apart is over half a minute of waiting for answers we may already have, and the delay exists to be polite to
+ * NVD, so it is skipped for an answer that never leaves the machine (`shouldPauseForRateLimit`, pure). Cached
+ * answers carry their `freshness` — origin and age — because a CVE list that cannot say when it was true is a
+ * finding that cannot be checked.
  */
+import {
+  type CacheOptions,
+  type CacheSummary,
+  type Freshness,
+  cachedFetch,
+  readCache,
+  summarizeFreshness,
+} from '../research/cache.js';
 import { type ResearchConfig, allowlistedFetch } from '../research/config.js';
 
 export const NVD_ENDPOINT = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
+
+/** Cache namespace for NVD answers — also the subdirectory they live in under the data root. */
+export const NVD_CACHE_SOURCE = 'nvd';
 
 /**
  * Pure: the NVD CVE-API query string for a component. `keywordSearch` matches CVEs whose description contains ALL
@@ -26,6 +43,26 @@ export function buildNvdQuery(name: string, version: string, resultsPerPage = 20
     resultsPerPage: String(resultsPerPage),
   });
   return `${NVD_ENDPOINT}?${params.toString()}`;
+}
+
+/**
+ * Pure: the cache key for one NVD question — the request URL itself, which is exactly what is asked and nothing
+ * more (the API key travels in a header, so it never lands in a key or a filename). Keying on the URL means a
+ * change to the query, `resultsPerPage` included, invalidates the entry rather than reusing the answer to a
+ * different question.
+ */
+export function nvdCacheKey(name: string, version: string): string {
+  return buildNvdQuery(name, version);
+}
+
+/**
+ * Pure: does the next component in a batch have to wait? The delay exists to respect NVD's 5-req/30-s anonymous
+ * limit, so it is owed only when a request is actually going out: pausing before a cache hit would pay a
+ * rate-limit toll for a request that never happens, and a fully cached batch of six would sit idle for 32 s. It is
+ * also not owed before the FIRST request of a run, which is what `networkCalls` tracks.
+ */
+export function shouldPauseForRateLimit(networkCalls: number, willFetch: boolean, delayMs: number): boolean {
+  return willFetch && networkCalls > 0 && delayMs > 0;
 }
 
 export interface NvdAdvisory {
@@ -92,28 +129,49 @@ export interface NvdComponentResult {
   name: string;
   version: string;
   advisories: NvdAdvisory[];
+  /** Where this answer came from and when NVD actually produced it. Null when the request failed. */
+  freshness: Freshness | null;
 }
 
-/** Query NVD for one component by keyword. An NVD API key (env, passed via cfg) lifts the rate limit but is optional. */
+/**
+ * Query NVD for one component by keyword. An NVD API key (env, passed via cfg) lifts the rate limit but is optional.
+ * Read-through the cache: a fresh entry answers without touching NVD, a stale one is re-queried, and a rate-limit
+ * rejection (HTTP 403/429) is never stored — caching one would turn a throttle into a durable "no CVEs".
+ */
 export async function queryNvd(
   component: { name: string; version: string },
   cfg: ResearchConfig,
+  cache: CacheOptions = {},
 ): Promise<NvdComponentResult> {
-  const url = buildNvdQuery(component.name, component.version);
-  const headers: Record<string, string> = {};
-  if (cfg.nvdApiKey) headers.apiKey = cfg.nvdApiKey;
-  const res = await allowlistedFetch(url, cfg, { headers });
-  if (!res.ok) return { name: component.name, version: component.version, advisories: [] };
-  return { name: component.name, version: component.version, advisories: parseNvdResponse(await res.json()) };
+  const answer = await cachedFetch(
+    NVD_CACHE_SOURCE,
+    nvdCacheKey(component.name, component.version),
+    async () => {
+      const headers: Record<string, string> = {};
+      if (cfg.nvdApiKey) headers.apiKey = cfg.nvdApiKey;
+      const res = await allowlistedFetch(buildNvdQuery(component.name, component.version), cfg, { headers });
+      return res.ok ? await res.json() : null;
+    },
+    cache,
+  );
+  return {
+    name: component.name,
+    version: component.version,
+    advisories: answer.freshness ? parseNvdResponse(answer.payload) : [],
+    freshness: answer.freshness,
+  };
 }
 
 export interface NvdBatchResult {
+  /** Components an answer was obtained for. `cache.hits` of them never left the machine. */
   queried: number;
   /** Candidate components not queried because of the rate-limit cap — reported, never silently dropped. */
   notQueried: number;
   withAdvisories: number;
   totalAdvisories: number;
   components: NvdComponentResult[];
+  /** How many of the `queried` answers came off the disk, and how old the oldest one was. */
+  cache: CacheSummary;
 }
 
 /**
@@ -153,7 +211,7 @@ export function mergeNvdCandidates(
 export async function queryNvdBatch(
   components: { name: string; version: string }[],
   cfg: ResearchConfig,
-  opts: { cap?: number; delayMs?: number } = {},
+  opts: { cap?: number; delayMs?: number; cache?: CacheOptions } = {},
 ): Promise<NvdBatchResult> {
   const cap = opts.cap ?? (cfg.nvdApiKey ? 40 : 6);
   const delayMs = opts.delayMs ?? (cfg.nvdApiKey ? 0 : 6500);
@@ -165,13 +223,23 @@ export async function queryNvdBatch(
     return true;
   });
 
+  const cache = opts.cache ?? {};
   const results: NvdComponentResult[] = [];
+  // Freshness is collected for every component, not only the ones with advisories: `components` keeps only the
+  // latter, so this is the sole place the age of a clean answer survives.
+  const freshness: (Freshness | null)[] = [];
   let queried = 0;
+  let networkCalls = 0;
   const toQuery = unique.slice(0, cap);
-  for (const [i, c] of toQuery.entries()) {
-    if (i > 0 && delayMs > 0) await sleep(delayMs);
-    const r = await queryNvd(c, cfg);
+  for (const c of toQuery) {
+    // Peek before deciding to wait. `queryNvd` reads the cache again a moment later, which costs one small file
+    // read and keeps it self-contained; the alternative is a batch that sleeps through requests it never makes.
+    const willFetch = readCache(NVD_CACHE_SOURCE, nvdCacheKey(c.name, c.version), cache).status !== 'fresh';
+    if (shouldPauseForRateLimit(networkCalls, willFetch, delayMs)) await sleep(delayMs);
+    const r = await queryNvd(c, cfg, cache);
+    if (r.freshness?.origin === 'network') networkCalls += 1;
     queried += 1;
+    freshness.push(r.freshness);
     if (r.advisories.length > 0) results.push(r);
   }
   return {
@@ -180,6 +248,7 @@ export async function queryNvdBatch(
     withAdvisories: results.length,
     totalAdvisories: results.reduce((n, r) => n + r.advisories.length, 0),
     components: results,
+    cache: summarizeFreshness(freshness),
   };
 }
 

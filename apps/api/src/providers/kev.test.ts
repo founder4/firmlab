@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { collectCveIds, crossReferenceKev, parseKevCatalog } from './kev.js';
+import type { ResearchConfig } from '../research/config.js';
+import { collectCveIds, crossReferenceKev, fetchAndMatchKev, parseKevCatalog } from './kev.js';
 
 const CATALOG = {
   title: 'CISA Catalog of Known Exploited Vulnerabilities',
@@ -54,6 +55,19 @@ describe('crossReferenceKev', () => {
 
   it('returns nothing when no discovered CVE is exploited', () => {
     expect(crossReferenceKev(['CVE-2000-1234'], catalog)).toHaveLength(0);
+  });
+});
+
+describe('fetchAndMatchKev with nothing to check', () => {
+  // No CVEs → the catalog is never requested, so this exercises the result shape without any network or cache I/O.
+  const cfg: ResearchConfig = { allowlist: ['www.cisa.gov'], timeoutMs: 1000, hashLookup: false };
+
+  it('is not-checked with no freshness — there is no catalog behind the verdict', async () => {
+    const r = await fetchAndMatchKev([], cfg);
+    expect(r.checked).toBe(false);
+    expect(r.matches).toEqual([]);
+    expect(r.freshness).toBeNull();
+    expect(r.reason).toBe('no CVEs discovered to check');
   });
 });
 

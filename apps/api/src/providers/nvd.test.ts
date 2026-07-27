@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NVD_ENDPOINT, buildNvdQuery, parseNvdResponse } from './nvd.js';
+import { NVD_ENDPOINT, buildNvdQuery, nvdCacheKey, parseNvdResponse, shouldPauseForRateLimit } from './nvd.js';
 
 describe('buildNvdQuery', () => {
   it('builds a keyword search of name + version, capped', () => {
@@ -17,6 +17,35 @@ describe('buildNvdQuery', () => {
   it('URL-encodes the keyword safely', () => {
     const url = new URL(buildNvdQuery('lib c++', '1.0'));
     expect(url.searchParams.get('keywordSearch')).toBe('lib c++ 1.0');
+  });
+});
+
+describe('nvdCacheKey', () => {
+  it('is the exact request, so a different component or version is a different entry', () => {
+    expect(nvdCacheKey('dropbear', '2019.78')).toBe(buildNvdQuery('dropbear', '2019.78'));
+    expect(nvdCacheKey('dropbear', '2019.78')).not.toBe(nvdCacheKey('dropbear', '2020.81'));
+    expect(nvdCacheKey('dropbear', '')).not.toBe(nvdCacheKey('dropbear', '2019.78'));
+  });
+
+  it('carries no API key — the key travels in a header and must never land in a cache filename', () => {
+    expect(nvdCacheKey('busybox', '1.01')).not.toMatch(/apikey/i);
+  });
+});
+
+describe('shouldPauseForRateLimit', () => {
+  it('waits between real requests, which is what NVD asks for', () => {
+    expect(shouldPauseForRateLimit(1, true, 6500)).toBe(true);
+    expect(shouldPauseForRateLimit(3, true, 6500)).toBe(true);
+  });
+
+  it('never waits before a cache hit — nothing goes out, so no rate-limit toll is owed', () => {
+    expect(shouldPauseForRateLimit(1, false, 6500)).toBe(false);
+    expect(shouldPauseForRateLimit(5, false, 6500)).toBe(false);
+  });
+
+  it('never waits before the first request, or when an API key removed the delay', () => {
+    expect(shouldPauseForRateLimit(0, true, 6500)).toBe(false);
+    expect(shouldPauseForRateLimit(2, true, 0)).toBe(false);
   });
 });
 

@@ -210,6 +210,18 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     `NVD: ${nvd.queried} queried${nvd.notQueried > 0 ? ` (${nvd.notQueried} more skipped — rate-limit cap)` : ''}, ${nvd.withAdvisories} with advisories (${nvd.totalAdvisories} total).`,
   );
 
+  // Reconcile the ledger against what actually happened. It is shown BEFORE any request goes out, so it can only
+  // promise a ceiling; an answer served from the advisory cache contacted nobody. Saying so afterwards is what
+  // keeps the declaration a bound rather than a claim — and an operator reading "12 names left this machine" when
+  // 9 came off disk would have been told something untrue by a feature built to tell the truth.
+  const cachedAnswers = osv.cache.hits + nvd.cache.hits;
+  if (cachedAnswers > 0) {
+    const oldestMs = Math.max(osv.cache.oldestAgeMs, nvd.cache.oldestAgeMs);
+    handle.log(
+      `Egress reconciled: ${cachedAnswers} of ${osv.cache.hits + osv.cache.misses + nvd.cache.hits + nvd.cache.misses} advisory answer(s) came from the local cache and sent nothing; oldest served was ${Math.round(oldestMs / 3_600_000)}h old.`,
+    );
+  }
+
   // Source #3 — CISA KEV: which of the discovered CVEs are known-exploited in the wild. Downloads the public
   // catalog and cross-references locally, so nothing about the firmware leaves for this step.
   const cveIds = collectCveIds(osv.components, nvd.components);

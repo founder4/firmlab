@@ -14,6 +14,13 @@ export interface EgressLedger {
 /**
  * Compute the ledger for a run over these components + provenance. Only names/versions and coarse provenance hints
  * leave; raw bytes, secret values and keys never do.
+ *
+ * The counts are an UPPER BOUND, and since the advisory cache landed that distinction is load-bearing: an answer
+ * served from disk contacts nobody, so a run can legitimately send fewer names than declared here — but never
+ * more, and never anything of a different kind. The ledger is shown before a single request goes out, so it can
+ * only promise a ceiling; what actually left is reconciled after the run (see `runResearch`, which logs the
+ * cache hits). Declaring the ceiling and then reporting the truth is honest in a way that declaring an
+ * optimistic number would not be.
  */
 export function buildEgressLedger(
   components: { name: string; version: string }[],
@@ -34,7 +41,8 @@ export function buildEgressLedger(
   if (components.length > 0) {
     destinations.push({
       host: 'api.osv.dev',
-      sends: 'SBOM component names + versions + ecosystem (no bytes)',
+      sends:
+        'SBOM component names + versions + ecosystem (no bytes) — at most this many; a cached answer sends nothing',
       count: components.length,
     });
   }
@@ -46,7 +54,7 @@ export function buildEgressLedger(
         : ', for the components OSV could not map';
     destinations.push({
       host: 'services.nvd.nist.gov',
-      sends: `component name + version as a keyword${split} (no bytes)`,
+      sends: `component name + version as a keyword${split} (no bytes) — at most this many; a cached answer sends nothing`,
       count: opts.nvdCandidates,
     });
   }

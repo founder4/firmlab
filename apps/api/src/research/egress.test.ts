@@ -66,3 +66,14 @@ describe('the ledger declares fingerprinted components as their own class', () =
     expect(d?.sends).not.toContain('fingerprinted');
   });
 });
+
+describe('the declared counts are a ceiling, not a claim', () => {
+  it('says a cached answer sends nothing, on both advisory destinations', () => {
+    const l = buildEgressLedger([{ name: 'busybox', version: '1.35' }], provenance, { nvdCandidates: 3 });
+    const osv = l.destinations.find((d) => d.host === 'api.osv.dev');
+    const nvd = l.destinations.find((d) => d.host === 'services.nvd.nist.gov');
+    expect(osv?.sends).toContain('at most this many');
+    expect(osv?.sends).toContain('a cached answer sends nothing');
+    expect(nvd?.sends).toContain('at most this many');
+  });
+});
