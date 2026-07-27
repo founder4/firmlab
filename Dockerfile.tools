@@ -148,6 +148,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends gdb-multiarch \
     && rm -rf /var/lib/apt/lists/* && gdb-multiarch --version | head -1 \
     || echo "gdb-multiarch optional install failed — dynamic reproduction degrades honestly"
 
+# === lzop — the one compression family the second-pass recovery could not open (providers/extract-recover.ts). ===
+# binwalk carves an lzop payload out of a flash dump and does not recurse into it, so the blob sat in the output
+# directory as bytes nobody had looked at. xz-utils (unlzma/xz) and gzip are already here and cover the other
+# formats; lzop was the gap. Measured on BeanView-Camera it opens a 3.2 MB blob to 225 KB that is NOT a filesystem —
+# which is the point: the gain is turning "unexamined" into "examined and not a filesystem", not rescuing an image.
+RUN apt-get update && apt-get install -y --no-install-recommends lzop \
+    && rm -rf /var/lib/apt/lists/* && lzop --version | head -1 \
+    || echo "lzop optional install failed — lzop payloads stay reported as unexamined"
+
 # === bettercap — active on-path positioning (capture/spoof.ts, Phase 6.2). ===
 # It ships here because the 6.2 spoof leg was written against a toolchain that never carried it: the backend had
 # been honestly reporting itself absent since the day it was written, which made active positioning a documented

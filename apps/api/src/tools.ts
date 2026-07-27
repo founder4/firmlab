@@ -56,6 +56,7 @@ export type ToolId =
   | 'unsquashfs'
   | 'sasquatch'
   | 'jefferson'
+  | 'lzop'
   | 'ubireader_extract_files'
   | 'cpio'
   | 'radare2'
@@ -100,6 +101,7 @@ const TOOLS: readonly ToolSpec[] = [
   { id: 'unsquashfs', bin: 'unsquashfs', probe: ['-help'], unlocks: 'SquashFS extraction', group: 'extract' },
   { id: 'sasquatch', bin: 'sasquatch', probe: ['-help'], unlocks: 'Vendor SquashFS extraction', group: 'extract' },
   { id: 'jefferson', bin: 'jefferson', probe: ['--help'], unlocks: 'JFFS2 extraction', group: 'extract' },
+  { id: 'lzop', bin: 'lzop', probe: ['--version'], unlocks: 'lzop payload decompression', group: 'extract' },
   {
     id: 'ubireader_extract_files',
     bin: 'ubireader_extract_files',

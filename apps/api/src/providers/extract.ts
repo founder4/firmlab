@@ -26,6 +26,7 @@ import { getImage, listBinaries, registerBinary, updateImageIdentity } from '../
 import { isToolAvailable } from '../tools.js';
 import { type CarveStep, runRecursiveCarve } from './carve.js';
 import { type NoRootfsDiagnosis, diagnoseNoRootfs } from './extract-diagnose.js';
+import { type BlobAttempt, recoverFromCompressedBlobs } from './extract-recover.js';
 import type { JobHandle } from './jobs.js';
 
 const execFileAsync = promisify(execFile);
@@ -48,6 +49,11 @@ export interface ExtractResult {
    * provider can say and it covered three situations needing three different responses — see extract-diagnose.ts.
    */
   noRootfsDiagnosis?: NoRootfsDiagnosis;
+  /**
+   * What the second pass made of the compressed blobs binwalk carved and never opened. Present whenever that pass
+   * ran, including when it opened everything and found no filesystem — that is a result, not a non-event.
+   */
+  recoveryAttempts?: BlobAttempt[];
 }
 
 /** Directory names that mark the root of an extracted Linux rootfs. */
@@ -94,6 +100,31 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
     // binwalk could not open the container (e.g. a raw UBI it declines to split) — try the recursive carver.
     const carved = await tryCarve(imageId, imagePath, outputDir, handle);
     if (carved) return carved;
+    // Before giving up: binwalk carves compressed payloads it does not recurse into, and a rootfs inside one of
+    // them reads exactly like no rootfs at all. Open what can be opened and look again.
+    const recovery = await recoverFromCompressedBlobs(outputDir, handle);
+    if (recovery.producedDir) {
+      const args2 = isRoot
+        ? ['-Me', '--run-as=root', '-C', recovery.producedDir, recovery.producedDir]
+        : ['-Me', '-C', recovery.producedDir, recovery.producedDir];
+      for (const file of fs.readdirSync(recovery.producedDir).filter((f) => f.endsWith('.out'))) {
+        try {
+          await execFileAsync('binwalk', [...args2.slice(0, -1), path.join(recovery.producedDir, file)], {
+            timeout: 5 * 60 * 1000,
+            maxBuffer: 32 * 1024 * 1024,
+          });
+        } catch {
+          // A rescan that fails leaves the decompressed bytes on disk; the diagnosis below still reports them.
+        }
+      }
+      const recovered = findRootfs(recovery.producedDir);
+      if (recovered) {
+        handle.log(`Rootfs recovered from a compressed blob binwalk had left unopened: ${recovered}`);
+        const done = finalizeRootfs(imageId, outputDir, recovered, 'binwalk', handle);
+        return { ...done, recoveryAttempts: recovery.attempts };
+      }
+    }
+
     // Still nothing. Say WHY, from what is on disk: a `rootfsPath: null` with no verdict is the silent-empty
     // failure docs/AUTONOMOUS-WORKERS.md §3.1(3) blames for the GL.iNet and GE800 misses.
     const diagnosis = diagnoseNoRootfs(outputDir);
@@ -108,6 +139,7 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
       tree: null,
       summary: null,
       noRootfsDiagnosis: diagnosis,
+      ...(recovery.attempts.length ? { recoveryAttempts: recovery.attempts } : {}),
     };
   }
 
