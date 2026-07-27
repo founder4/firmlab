@@ -78,26 +78,25 @@ async function allocatePort(): Promise<number> {
 }
 
 /**
- * Wait until the gdbstub actually accepts a connection.
+ * Wait until the emulator has actually taken the port — WITHOUT connecting to it.
  *
- * The old code slept 1500 ms and hoped. A fixed sleep is wrong in both directions — it wastes time on a stub that
- * was ready immediately, and gives up on a loaded machine where qemu needed longer, which reads downstream as
- * "gdb produced no output" and gets reported as a platform block rather than as the timing artefact it is.
+ * The obvious readiness check is to connect and hang up, and it is wrong here in a way that only a real run shows:
+ * qemu's gdbstub accepts exactly ONE client. Probing it by connecting consumes that accept, qemu sees its debugger
+ * attach and immediately drop, and the gdb that follows finds nothing — which reported as "gdb produced no output"
+ * and turned a fix for the port collision into a harness that failed BOTH concurrent probes instead of one.
+ *
+ * So readiness is tested by trying to bind the port ourselves. While qemu holds it the bind fails with EADDRINUSE,
+ * which is the signal; while it does not, the bind succeeds and we hand the port straight back and wait again.
  */
 async function waitForStub(port: number, timeoutMs = STUB_WAIT_MS): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const open = await new Promise<boolean>((resolve) => {
-      const sock = net.connect({ port, host: '127.0.0.1' });
-      const done = (ok: boolean) => {
-        sock.destroy();
-        resolve(ok);
-      };
-      sock.once('connect', () => done(true));
-      sock.once('error', () => done(false));
-      sock.setTimeout(500, () => done(false));
+    const taken = await new Promise<boolean>((resolve) => {
+      const srv = net.createServer();
+      srv.once('error', (err: NodeJS.ErrnoException) => resolve(err.code === 'EADDRINUSE'));
+      srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(false)));
     });
-    if (open) return true;
+    if (taken) return true;
     await new Promise((r) => setTimeout(r, 150));
   }
   return false;
