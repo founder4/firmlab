@@ -6,6 +6,8 @@ data/
 .env.*
 .DS_Store
 .claude/
+__pycache__/
+*.pyc
 apps/web/dist/
 samples/*.bin
 samples/*.img
