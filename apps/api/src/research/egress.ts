@@ -18,7 +18,7 @@ export interface EgressLedger {
 export function buildEgressLedger(
   components: { name: string; version: string }[],
   provenance: ProvenanceFingerprint,
-  opts: { nvdCandidates?: number } = {},
+  opts: { nvdCandidates?: number; hashLookup?: { enabled: boolean; unsaltedCount: number } } = {},
 ): EgressLedger {
   const destinations: EgressLedger['destinations'] = [];
   if (components.length > 0) {
@@ -41,13 +41,28 @@ export function buildEgressLedger(
     sends: 'nothing about your firmware — downloads the public KEV catalog; CVEs are cross-referenced locally',
     count: 0,
   });
-  return {
-    destinations,
-    neverSent: [
-      'raw firmware bytes / the image file',
-      'extracted filesystem contents',
-      'secret values, private keys, credentials',
-      `provenance strings are used locally only (${provenance.vendors.length} vendor hints, ${provenance.domains.length} domains)`,
-    ],
-  };
+  const neverSent = [
+    'raw firmware bytes / the image file',
+    'extracted filesystem contents',
+    'secret values, private keys, recovered plaintext credentials',
+    `provenance strings are used locally only (${provenance.vendors.length} vendor hints, ${provenance.domains.length} domains)`,
+  ];
+
+  // Online hash lookup (opt-in on top of the track): only UNSALTED digests leave, and only to be reversed against
+  // public tables. Salted crypt hashes never leave, and a recovered plaintext stays on-box (masked in results).
+  if (opts.hashLookup?.enabled) {
+    if (opts.hashLookup.unsaltedCount > 0) {
+      destinations.push({
+        host: 'www.nitrxgen.net, weakpass.com',
+        sends:
+          'unsalted password hash digests (MD5/SHA1/SHA256/NTLM) for reverse-lookup — never the plaintext, ' +
+          'never salted crypt hashes, never bytes',
+        count: opts.hashLookup.unsaltedCount,
+      });
+    }
+    neverSent.push('salted password hashes ($1$/$5$/$6$/bcrypt/yescrypt/DES) — a miss on them would prove nothing');
+    neverSent.push('any recovered plaintext password — kept local and masked in results');
+  }
+
+  return { destinations, neverSent };
 }
