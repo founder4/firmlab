@@ -239,3 +239,50 @@ export function handlerLeads(handlers: HandlerAnalysis[], rootfsPath: string): L
   }
   return [];
 }
+
+/**
+ * Leads from symbolic reachability: a sink PROVEN reachable is the one worth actually running.
+ *
+ * This is the rung that was missing. `symreach` establishes that the call site is on a live path and stops there,
+ * correctly — reachability is not a bug, and its finding says so. But a reachable sink is exactly the candidate
+ * where running the binary is cheap and decisive, and where a crash would move the claim from an assertion about
+ * bytes to an observed fault. The `sink-reachable` finding already carries the binary, the sink and the call-site
+ * ADDRESSES angr resolved, which is precisely what a breakpoint needs, so this reads the drafts rather than
+ * re-deriving anything.
+ *
+ * Only `reached` sinks qualify. An inconclusive one has no address worth breaking on and no reason to expect the
+ * path to be taken.
+ */
+export function reproductionLeads(drafts: FindingDraft[], rootfsPath: string, budget = REPRODUCTION_LEAD_CAP): Lead[] {
+  const leads: Lead[] = [];
+  const seen = new Set<string>();
+  if (budget <= 0) return leads;
+  for (const f of drafts) {
+    if (f.kind !== 'sink-reachable') continue;
+    const ev = (f.evidence ?? {}) as Record<string, unknown>;
+    const target = typeof ev.binary === 'string' ? ev.binary : '';
+    const sink = typeof ev.sink === 'string' ? ev.sink : '';
+    const addresses = Array.isArray(ev.addresses)
+      ? ev.addresses.filter((a): a is string => typeof a === 'string' && /^0x[0-9a-fA-F]+$/.test(a))
+      : [];
+    const key = `${target}#${sink}`;
+    if (!target || !sink || addresses.length === 0 || seen.has(key)) continue;
+    if (!resolveInsideRootfs(rootfsPath, target)) continue;
+    seen.add(key);
+    leads.push({
+      kind: 'reproduce-crash',
+      target,
+      sink,
+      addresses,
+      reason: `${sink} proven reachable from the entry point — run it and see whether it actually faults`,
+    });
+    if (leads.length >= budget) break;
+  }
+  return leads;
+}
+
+/**
+ * How many binaries get run per scan. Each is an emulator plus a debugger under a timeout, so it is bounded the
+ * same way the angr budget is — and, like that one, the unattempted candidates stay visible as candidates.
+ */
+export const REPRODUCTION_LEAD_CAP = 3;

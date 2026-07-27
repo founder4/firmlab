@@ -8,6 +8,7 @@ import {
   execTargetFromSnippet,
   handlerLeads,
   reachabilityLeads,
+  reproductionLeads,
   resolveDaemonBinary,
   taintReachabilityLeads,
 } from './opacidad-leads.js';
@@ -237,5 +238,62 @@ describe('specsForClass — rootfs-free recon reaches every class', () => {
   it('does not duplicate them in the Linux chain, which already had them', () => {
     const providers = specsForClass('embedded-linux').map((s) => s.provider);
     for (const p of ROOTFS_FREE) expect(providers.filter((x) => x === p)).toHaveLength(1);
+  });
+});
+
+describe('reproductionLeads — a proven-reachable sink is the one worth running', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-repro-'));
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'pwnable'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'pwnable/bof'), '\x7fELF');
+
+  const reached = (binary: string, sink: string, addresses: string[]): FindingDraft => ({
+    kind: 'sink-reachable',
+    title: `${sink} in ${binary} is reachable`,
+    severity: 'high',
+    proofState: 'static_confirmed',
+    evidence: { binary, sink, addresses },
+    rationale: '',
+  });
+
+  it('turns a reached sink into a reproduction lead carrying the call-site addresses', () => {
+    const leads = reproductionLeads([reached('pwnable/bof', 'strcpy', ['0x400a30'])], root);
+    expect(leads).toHaveLength(1);
+    expect(leads[0]).toMatchObject({
+      kind: 'reproduce-crash',
+      target: 'pwnable/bof',
+      sink: 'strcpy',
+      addresses: ['0x400a30'],
+    });
+  });
+
+  // An inconclusive has no address to break on and no reason to expect the path is taken.
+  it('ignores anything that is not a proven-reachable sink', () => {
+    const inconclusive: FindingDraft = {
+      kind: 'sink-reachability-inconclusive',
+      title: 'x',
+      severity: 'info',
+      proofState: 'needs_runtime_reproduction',
+      evidence: { binary: 'pwnable/bof', sinks: ['gets'] },
+      rationale: '',
+    };
+    expect(reproductionLeads([inconclusive], root)).toEqual([]);
+  });
+
+  it('drops a reached sink with no usable address rather than guessing one', () => {
+    expect(reproductionLeads([reached('pwnable/bof', 'strcpy', [])], root)).toEqual([]);
+  });
+
+  it('respects the per-run budget', () => {
+    const many = [reached('pwnable/bof', 'strcpy', ['0x1']), reached('pwnable/bof', 'gets', ['0x2'])];
+    expect(reproductionLeads(many, root, 1)).toHaveLength(1);
+    expect(reproductionLeads(many, root, 0)).toEqual([]);
+  });
+
+  it('keys the follow-up spec per binary AND sink, so two sinks are two probes', () => {
+    const a = replan(reproductionLeads([reached('pwnable/bof', 'strcpy', ['0x1'])], root)[0] as Lead, new Set());
+    const b = replan(reproductionLeads([reached('pwnable/bof', 'gets', ['0x2'])], root)[0] as Lead, new Set());
+    expect(specKey(a[0] as never)).not.toBe(specKey(b[0] as never));
+    expect(specKey(a[0] as never)).toBe('dynprobe:pwnable/bof#strcpy');
   });
 });

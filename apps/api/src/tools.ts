@@ -71,7 +71,8 @@ export type ToolId =
   | 'renode'
   | 'chipsec'
   | 'angr'
-  | 'fwhunt';
+  | 'fwhunt'
+  | 'gdb-multiarch';
 
 interface ToolSpec {
   id: ToolId;
@@ -173,6 +174,13 @@ const TOOLS: readonly ToolSpec[] = [
     unlocks: 'Symbolic reachability (is a dangerous sink on a live path?)',
     group: 'analyze',
     timeoutMs: 30000,
+  },
+  {
+    id: 'gdb-multiarch',
+    bin: 'gdb-multiarch',
+    probe: ['--version'],
+    unlocks: 'Dynamic reproduction of a memory-safety candidate (does it actually crash?)',
+    group: 'emulate',
   },
   {
     id: 'fwhunt',

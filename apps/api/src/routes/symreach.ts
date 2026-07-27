@@ -12,10 +12,12 @@
  * and angr missing is `blocked_by_platform`. Findings sync under the SAME `symreach:<path>` source W9 uses, so a
  * manual probe and an autonomous one re-sync the same rows instead of duplicating them.
  */
+import type { ImageIdentity } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
 import { assessBinaryFile, isElfFile } from '../providers/binvuln.js';
 import { resolveInsideRootfs } from '../providers/decompile.js';
+import { runDynProbe } from '../providers/dynprobe-run.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
 import {
@@ -99,6 +101,62 @@ export async function symreachRoutes(app: FastifyInstance): Promise<void> {
       return result;
     });
     return reply.status(202).send({ jobId });
+  });
+
+  /**
+   * Dynamic reproduction. `symreach` proves a sink is reachable and stops at a static claim; this runs the binary
+   * under qemu-user with a cyclic input and a breakpoint on that exact call site, so the lead can finally be
+   * settled instead of staying a lead. Addresses default to the ones the symreach run already recorded.
+   */
+  app.post('/images/:id/dynprobe', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const row = getImage(id);
+    if (!row) return reply.status(404).send({ error: 'Image not found' });
+    const rootfsPath = latestRootfs(id);
+    if (!rootfsPath) {
+      return reply.status(400).send({ error: 'Run extraction first — dynamic reproduction needs an extracted rootfs' });
+    }
+    const body = (req.body ?? {}) as {
+      binary?: string;
+      sink?: string;
+      addresses?: unknown;
+      patternLength?: unknown;
+    };
+    const binary = typeof body.binary === 'string' ? body.binary.trim() : '';
+    const sink = typeof body.sink === 'string' ? body.sink.trim() : '';
+    if (!binary || !sink) return reply.status(400).send({ error: 'Body must include { binary, sink }' });
+
+    const addresses = Array.isArray(body.addresses)
+      ? body.addresses.filter((a): a is string => typeof a === 'string' && /^0x[0-9a-fA-F]+$/.test(a))
+      : [];
+    if (addresses.length === 0) {
+      return reply.status(400).send({
+        error: `No sink address to break on. Run POST /images/${id}/symreach on ${binary} first — its result carries the addresses — or pass { addresses: ["0x…"] }.`,
+      });
+    }
+    const identity = row.identityJson ? (JSON.parse(row.identityJson) as ImageIdentity) : null;
+    const arch = identity?.arch;
+    if (!arch || arch === 'unknown') {
+      return reply.status(400).send({ error: 'Image architecture is unknown — cannot pick a user-mode emulator' });
+    }
+    const patternLength =
+      typeof body.patternLength === 'number' && Number.isFinite(body.patternLength)
+        ? Math.round(body.patternLength)
+        : undefined;
+
+    const jobId = startJob(id, 'dynprobe', { binary, sink, addresses, patternLength }, async (handle) => {
+      const result = await runDynProbe(rootfsPath, binary, sink, addresses, arch, handle, patternLength);
+      // Keyed per binary+sink so probing a different sink adds rows rather than replacing the previous answer.
+      syncFindings(id, `dynprobe:${binary}#${sink}`, result.findings);
+      return result;
+    });
+    return reply.status(202).send({ jobId });
+  });
+
+  app.get('/images/:id/dynprobe', async (req) => {
+    const { id } = req.params as { id: string };
+    const done = listJobs(id).find((j) => j.kind === 'dynprobe' && j.status === 'done' && j.resultJson);
+    return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
   });
 
   /** The latest completed probe for this image (whichever binary it asked about). */

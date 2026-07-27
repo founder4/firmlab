@@ -31,7 +31,8 @@ export type JobKind =
   | 'opacidad'
   | 'symreach'
   | 'fwhunt'
-  | 'funcdiff';
+  | 'funcdiff'
+  | 'dynprobe';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {

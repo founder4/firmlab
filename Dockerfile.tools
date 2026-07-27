@@ -138,6 +138,16 @@ RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends python
     && rm -rf /var/lib/apt/lists/*' \
     || echo "angr optional install failed — symbolic reachability degrades honestly"
 
+# === gdb-multiarch — dynamic reproduction of a memory-safety candidate (providers/dynprobe.ts). ===
+# The missing rung of the proof ladder. `binvuln` finds a precondition, `symreach` proves the sink is on a live
+# path — and both stop at `needs_runtime_reproduction`, which across this corpus is 75% of every finding the
+# workbench produces. qemu-user already ships here and exposes a gdbstub (`-g PORT`); gdb-multiarch is the client
+# that can breakpoint the sink, watch it execute with the real input, and read the registers when it faults.
+# Small apt layer, placed with the other volatile ones, fault-tolerant like the rest.
+RUN apt-get update && apt-get install -y --no-install-recommends gdb-multiarch \
+    && rm -rf /var/lib/apt/lists/* && gdb-multiarch --version | head -1 \
+    || echo "gdb-multiarch optional install failed — dynamic reproduction degrades honestly"
+
 # === bettercap — active on-path positioning (capture/spoof.ts, Phase 6.2). ===
 # It ships here because the 6.2 spoof leg was written against a toolchain that never carried it: the backend had
 # been honestly reporting itself absent since the day it was written, which made active positioning a documented

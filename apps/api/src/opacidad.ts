@@ -24,6 +24,7 @@ import {
   daemonLeads,
   handlerLeads,
   reachabilityLeads,
+  reproductionLeads,
   taintReachabilityLeads,
 } from './opacidad-leads.js';
 import {
@@ -56,6 +57,7 @@ import { runComponentMap } from './providers/compmap.js';
 import { runComponentCve } from './providers/component-cve.js';
 import { runDecompile } from './providers/decompile.js';
 import { assessDecoy, decoyFinding } from './providers/decoy.js';
+import { runDynProbe } from './providers/dynprobe-run.js';
 import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
@@ -371,6 +373,8 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
     };
   }
   const reached = r.sinks.filter((s) => s.outcome === 'reached');
+  // A proven-reachable sink is the best possible candidate for actually running the thing.
+  const leads = c.rootfsPath ? reproductionLeads(r.findings, c.rootfsPath) : [];
   // Name the sinks that were asked about: a bare "no sink reached" hides whether one question or four were posed.
   const askedNote = r.asked?.length ? ` [asked: ${r.asked.join('/')}${r.derivedSinks ? ', derived' : ''}]` : '';
   const summary = reached.length
@@ -379,7 +383,36 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   return {
     summary,
     findingCount: r.findings.length,
+    ...(leads.length ? { leads } : {}),
     ...(reached.length === 0 ? { degraded: true, note: r.reason } : {}),
+  };
+}
+
+/**
+ * W5 depth — dynamic reproduction, scheduled off a sink `symreach` proved reachable. Runs the binary under
+ * qemu-user with a breakpoint on that call site and a cyclic input, so a lead that static analysis can only
+ * establish as *reachable* gets a chance to be settled as *faulting* — the one step that moves a finding off
+ * `needs_runtime_reproduction`.
+ */
+async function dynprobeRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
+  const binary = spec.target;
+  const sink = spec.sink;
+  if (!binary || !sink) {
+    return { summary: 'no target', findingCount: 0, degraded: true, note: 'dynprobe spec missing binary/sink' };
+  }
+  const identity = c.analysisJson ? (JSON.parse(c.analysisJson) as { identity?: ImageIdentity }).identity : undefined;
+  const arch = identity?.arch;
+  if (!arch || arch === 'unknown') {
+    return { summary: `reproduce ${binary}:${sink}`, findingCount: 0, degraded: true, note: 'unknown architecture' };
+  }
+  const r = await runDynProbe(c.rootfsPath, binary, sink, spec.addresses ?? [], arch, c.handle);
+  syncFindings(c.imageId, `dynprobe:${binary}#${sink}`, r.findings);
+  const settled = r.probe?.verdict === 'crash_input_controlled' || r.probe?.verdict === 'crash';
+  return {
+    summary: `reproduce ${binary}:${sink} → ${r.probe?.verdict ?? 'unavailable'}`,
+    findingCount: r.findings.length,
+    // Anything short of an observed fault leaves the candidate exactly where it was, and says so.
+    ...(settled ? {} : { degraded: true, note: r.reason }),
   };
 }
 
@@ -430,6 +463,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   webtaint: webtaintRun,
   binvuln: binvulnRun,
   symreach: symreachRun,
+  dynprobe: dynprobeRun,
   decompile: decompileRun,
 };
 

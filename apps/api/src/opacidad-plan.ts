@@ -26,6 +26,7 @@ export type ProviderId =
   | 'webtaint'
   | 'binvuln'
   | 'symreach'
+  | 'dynprobe'
   | 'decompile';
 
 export interface PlanSpec {
@@ -39,6 +40,9 @@ export interface PlanSpec {
   target?: string;
   /** For a `symreach` spec: the unbounded-copy sinks to ask about inside `target`. */
   sinks?: string[];
+  /** For a `dynprobe` spec: the single sink to reproduce and the call-site addresses to break on. */
+  sink?: string;
+  addresses?: string[];
   /** `replan` = dynamically scheduled by W9 in response to a lead (vs a seed spec from the class DAG). */
   origin?: 'replan';
   /** The lead that caused this spec to be scheduled (shown in the trace). */
@@ -57,6 +61,15 @@ export type Lead =
       /** The rootfs-relative binary to analyze. */
       target: string;
       reason: string;
+    }
+  | {
+      kind: 'reproduce-crash';
+      /** The rootfs-relative binary whose sink was proven reachable. */
+      target: string;
+      reason: string;
+      /** The one sink to reproduce, and the call-site addresses symreach already resolved for it. */
+      sink: string;
+      addresses: string[];
     }
   | {
       kind: 'prove-reachability';
@@ -263,6 +276,7 @@ function baseName(p: string): string {
 export function specKey(spec: PlanSpec): string {
   if (spec.provider === 'decompile' && spec.target) return `decompile:${spec.target}`;
   if (spec.provider === 'symreach' && spec.target) return `symreach:${spec.target}`;
+  if (spec.provider === 'dynprobe' && spec.target) return `dynprobe:${spec.target}#${spec.sink ?? ''}`;
   return spec.provider ?? spec.worker;
 }
 
@@ -272,6 +286,21 @@ export function specKey(spec: PlanSpec): string {
  * Both carry origin `replan`, and both are dropped when the same target is already planned (idempotent).
  */
 export function replan(lead: Lead, planned: ReadonlySet<string>): PlanSpec[] {
+  if (lead.kind === 'reproduce-crash') {
+    const spec: PlanSpec = {
+      worker: `W5 · Reproduce (${baseName(lead.target)}:${lead.sink})`,
+      reason: lead.reason,
+      needsRootfs: true,
+      built: true,
+      provider: 'dynprobe',
+      target: lead.target,
+      sink: lead.sink,
+      addresses: lead.addresses,
+      origin: 'replan',
+      trigger: lead.reason,
+    };
+    return planned.has(specKey(spec)) ? [] : [spec];
+  }
   const spec: PlanSpec =
     lead.kind === 'decompile-binary'
       ? {
