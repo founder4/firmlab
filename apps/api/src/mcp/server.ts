@@ -329,9 +329,9 @@ export function buildServer(fl: FirmLabClient): McpServer {
       try {
         bytes = await readFile(filePath);
       } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
         return toolError(
-          `Cannot read ${filePath} from the FirmLab server: ${err instanceof Error ? err.message : String(err)}. ` +
-            'If the file is on your host and the server is in a container, `docker cp` it in first.',
+          `Cannot read ${filePath} from the FirmLab server: ${why}. If the file is on your host and the server is in a container, \`docker cp\` it in first.`,
         );
       }
       const image = await fl.upload(basename(filePath), bytes);

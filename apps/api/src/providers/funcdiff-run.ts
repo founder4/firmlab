@@ -18,6 +18,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type { FindingDraft } from '../findings-normalize.js';
 import { isToolAvailable } from '../tools.js';
+import { type TextDiff, diffLines, renderUnified, summarizeTextDiff } from './funcdiff-text.js';
 import { type BinaryDiff, buildFuncDiffFindings, classifyDiff, matchFunctions, parseFunctions } from './funcdiff.js';
 import type { JobHandle } from './jobs.js';
 
@@ -25,8 +26,22 @@ const execFileAsync = promisify(execFile);
 
 /** Binaries analyzed per run. Each is a full radare2 analysis pass, so this bounds a job to minutes. */
 export const MAX_PAIRS = 20;
+/** Changed functions decompiled per binary. Two radare2 runs each, so this stays small and deliberate. */
+export const MAX_TEXT_FUNCS = 3;
 const R2_TIMEOUT_MS = 180 * 1000;
 const WALK_CAP = 20000;
+
+/** A decompiled before/after for one changed function — the readable end of the localization chain. */
+export interface FuncTextDiff {
+  binary: string;
+  function: string;
+  /** Which reconstruction produced the text: `pdg` is r2ghidra's C, `pdc` radare2's pseudo-C. */
+  decompiler: 'pdg' | 'pdc';
+  headline: string;
+  looksTargeted: boolean;
+  unified: string;
+  stats: Pick<TextDiff, 'added' | 'removed' | 'unchanged' | 'truncated'>;
+}
 
 export interface FuncDiffResult {
   available: boolean;
@@ -42,6 +57,8 @@ export interface FuncDiffResult {
   /** Pairs that differ and were NOT analyzed because the per-run cap was reached. */
   notAnalyzed: number;
   diffs: BinaryDiff[];
+  /** Before/after decompilation of the tightest changed functions, when `withText` was requested. */
+  textDiffs: FuncTextDiff[];
   findings: FindingDraft[];
 }
 
@@ -93,6 +110,41 @@ function listElves(root: string): Map<string, string> {
   return out;
 }
 
+/**
+ * Which decompiler this radare2 has, cached per process.
+ *
+ * `pdg` (r2ghidra) produces real C and is the better read; stock radare2 ships only `pdc`, a pseudo-C rendering
+ * inferred from the disassembly. Both are RECONSTRUCTIONS, and which one produced the text is carried into the
+ * result — a reader comparing two `pdc` renderings is looking at something considerably further from source than
+ * one comparing two Ghidra outputs, and should weight the hunks accordingly.
+ */
+let decompilerCmd: 'pdg' | 'pdc' | null = null;
+async function detectDecompiler(sample: string): Promise<'pdg' | 'pdc'> {
+  if (decompilerCmd) return decompilerCmd;
+  try {
+    const { stdout } = await execFileAsync('radare2', ['-q', '-2', '-c', 'pdg?', sample], { timeout: 20000 });
+    decompilerCmd = /r2ghidra|need|install/i.test(stdout) ? 'pdc' : 'pdg';
+  } catch {
+    decompilerCmd = 'pdc';
+  }
+  return decompilerCmd;
+}
+
+/** Decompiled text for one function, or null. Colour is disabled so two renderings compare as text. */
+async function decompileFunction(abs: string, fnName: string, cmd: 'pdg' | 'pdc'): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'radare2',
+      ['-q', '-2', '-A', '-e', 'scr.color=0', '-c', `s ${fnName}; ${cmd}`, abs],
+      { timeout: 90 * 1000, maxBuffer: 8 * 1024 * 1024 },
+    );
+    const text = stdout.trim();
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
 /** radare2's function list for one binary, or null when it cannot analyze it. */
 async function functionsOf(abs: string): Promise<ReturnType<typeof parseFunctions> | null> {
   try {
@@ -116,6 +168,7 @@ export async function runFuncDiff(
   labels: { older: string; newer: string },
   handle: JobHandle,
   maxPairs = MAX_PAIRS,
+  withText = true,
 ): Promise<FuncDiffResult> {
   const empty = (reason: string): FuncDiffResult => ({
     available: false,
@@ -127,6 +180,7 @@ export async function runFuncDiff(
     analyzed: 0,
     notAnalyzed: 0,
     diffs: [],
+    textDiffs: [],
     findings: [
       {
         kind: 'function-diff-blocked',
@@ -167,6 +221,7 @@ export async function runFuncDiff(
   const toAnalyze = changedPaths.slice(0, maxPairs);
   const notAnalyzed = changedPaths.length - toAnalyze.length;
   const diffs: BinaryDiff[] = [];
+  const textDiffs: FuncTextDiff[] = [];
   const findings: FindingDraft[] = [];
 
   for (const p of toAnalyze) {
@@ -190,9 +245,55 @@ export async function runFuncDiff(
     diffs.push(diff);
     findings.push(...buildFuncDiffFindings(diff, labels.older, labels.newer));
     handle.log(`  ${p}: ${diff.verdict} (${diff.changed}/${diff.matched} changed)`);
+
+    // Only a `patched` verdict earns the expensive step. On a `recompiled` binary the candidate list is withheld
+    // precisely because it means nothing, so decompiling from it would be rendering noise at greater cost.
+    if (!withText || diff.verdict !== 'patched') continue;
+    const cmd = await detectDecompiler(b.get(p) as string);
+    const targets = diff.functions.filter((f) => f.status === 'changed').slice(0, MAX_TEXT_FUNCS);
+    for (const t of targets) {
+      // Match on the OLDER side by its own name: a stripped pair is matched structurally, so the two sides can
+      // legitimately carry different `fcn.*` names, and seeking the new name in the old binary would miss.
+      const oldName = t.a?.name ?? t.name;
+      const [oldText, newText] = await Promise.all([
+        decompileFunction(a.get(p) as string, oldName, cmd),
+        decompileFunction(b.get(p) as string, t.name, cmd),
+      ]);
+      if (!oldText || !newText) {
+        handle.log(`  ${p}:${t.name}: could not decompile both sides — no text diff for this function.`);
+        continue;
+      }
+      const td = diffLines(oldText, newText);
+      const { headline, looksTargeted } = summarizeTextDiff(td);
+      textDiffs.push({
+        binary: p,
+        function: t.name,
+        decompiler: cmd,
+        headline,
+        looksTargeted,
+        unified: renderUnified(td, t.name),
+        stats: { added: td.added, removed: td.removed, unchanged: td.unchanged, truncated: td.truncated },
+      });
+      handle.log(`  ${p}:${t.name}: ${headline}`);
+    }
   }
 
   const patched = diffs.filter((d) => d.verdict === 'patched');
+  // The readable end of the chain, attached to the finding that named the function.
+  for (const td of textDiffs) {
+    const target = findings.find(
+      (f) => f.kind === 'function-diff-candidate' && (f.evidence as { binary?: string })?.binary === td.binary,
+    );
+    if (!target?.evidence) continue;
+    const list = ((target.evidence as { decompiledDiffs?: unknown[] }).decompiledDiffs ??= []) as unknown[];
+    list.push({
+      function: td.function,
+      decompiler: td.decompiler,
+      headline: td.headline,
+      looksTargeted: td.looksTargeted,
+      unified: td.unified,
+    });
+  }
   const capNote = notAnalyzed
     ? ` ${notAnalyzed} further changed binar(ies) were NOT compared — the per-run cap of ${maxPairs} was reached, so this comparison is incomplete.`
     : '';
@@ -225,6 +326,7 @@ export async function runFuncDiff(
     analyzed: toAnalyze.length,
     notAnalyzed,
     diffs,
+    textDiffs,
     findings,
   };
 }

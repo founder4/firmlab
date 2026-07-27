@@ -37,7 +37,7 @@ export async function diffRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post('/images/:id/funcdiff', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = (req.body ?? {}) as { against?: string; maxPairs?: number };
+    const body = (req.body ?? {}) as { against?: string; maxPairs?: number; withText?: boolean };
     const against = body.against;
     if (!against) return reply.status(400).send({ error: 'Body must include { against: <older imageId> }' });
     const newer = getImage(id);
@@ -58,13 +58,16 @@ export async function diffRoutes(app: FastifyInstance): Promise<void> {
         ? Math.min(200, Math.max(1, Math.round(body.maxPairs)))
         : undefined;
 
-    const jobId = startJob(id, 'funcdiff', { against, maxPairs }, async (handle) => {
+    // Decompiling the changed functions costs two more radare2 runs each, so it is opt-out rather than implicit.
+    const withText = body.withText !== false;
+    const jobId = startJob(id, 'funcdiff', { against, maxPairs, withText }, async (handle) => {
       const result = await runFuncDiff(
         olderRootfs,
         newerRootfs,
         { older: older.filename, newer: newer.filename },
         handle,
         maxPairs,
+        withText,
       );
       // Keyed by the comparison, so diffing against a different build adds rows instead of replacing them.
       syncFindings(id, `funcdiff:${against}`, result.findings);
