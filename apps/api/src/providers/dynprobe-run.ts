@@ -8,6 +8,7 @@
  */
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Architecture } from '@firmlab/core';
@@ -51,8 +52,56 @@ const ABI: Partial<Record<Architecture, { args: string[]; stringArg?: string }>>
 };
 
 const GDB_TIMEOUT_MS = 120 * 1000;
-/** A high, fixed-ish port. Randomising it would need Math.random, and one probe runs at a time per job anyway. */
-const BASE_PORT = 14500;
+/** How long to wait for the emulator's gdbstub to accept connections before giving up on it. */
+const STUB_WAIT_MS = 8000;
+
+/**
+ * Ask the OS for a free port.
+ *
+ * This used to be a constant, 14500, justified by "one probe runs at a time per job anyway" — true per job, and
+ * false the moment W9 schedules reproductions in two scans at once, which the job runner happily does at its
+ * default concurrency of 2. Reproduced deliberately: two probes launched together, the first returns a verdict and
+ * the second reports "gdb produced no output" even when its target is the binary this workbench crashes most
+ * reliably. The blocked probe was the GOOD outcome. The bad one is available on the same constant: gdb connecting
+ * to the other probe's stub and returning a verdict about a different binary entirely, attributed to this one.
+ */
+async function allocatePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      srv.close(() => (port ? resolve(port) : reject(new Error('could not allocate a port'))));
+    });
+  });
+}
+
+/**
+ * Wait until the gdbstub actually accepts a connection.
+ *
+ * The old code slept 1500 ms and hoped. A fixed sleep is wrong in both directions — it wastes time on a stub that
+ * was ready immediately, and gives up on a loaded machine where qemu needed longer, which reads downstream as
+ * "gdb produced no output" and gets reported as a platform block rather than as the timing artefact it is.
+ */
+async function waitForStub(port: number, timeoutMs = STUB_WAIT_MS): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const open = await new Promise<boolean>((resolve) => {
+      const sock = net.connect({ port, host: '127.0.0.1' });
+      const done = (ok: boolean) => {
+        sock.destroy();
+        resolve(ok);
+      };
+      sock.once('connect', () => done(true));
+      sock.once('error', () => done(false));
+      sock.setTimeout(500, () => done(false));
+    });
+    if (open) return true;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return false;
+}
 
 export interface DynProbeResult {
   available: boolean;
@@ -123,7 +172,7 @@ export async function runDynProbe(
   const len = Math.min(MAX_PATTERN_LEN, Math.max(16, patternLength));
   const pattern = cyclicPattern(len);
   const abi = ABI[arch] ?? { args: ['sp'] };
-  const port = BASE_PORT;
+  const port = await allocatePort();
 
   const script = buildGdbScript({
     sysroot: rootfsAbs,
@@ -138,11 +187,19 @@ export async function runDynProbe(
 
   let qemu: ChildProcess | null = null;
   try {
-    handle.log(`${emulator}: running ${binary} under a gdbstub with a ${len}-byte cyclic input.`);
+    handle.log(`${emulator}: running ${binary} under a gdbstub on port ${port} with a ${len}-byte cyclic input.`);
     qemu = spawn(emulator, ['-L', rootfsAbs, '-g', String(port), absTarget, pattern], { stdio: 'ignore' });
     qemu.on('error', () => undefined);
-    // The stub listens before executing anything, but the process still needs a moment to bind.
-    await new Promise((r) => setTimeout(r, 1500));
+    // The stub listens before executing anything, but the process still needs a moment to bind — so wait for the
+    // socket rather than for a guessed interval, and say so when it never comes up.
+    if (!(await waitForStub(port))) {
+      return unavailable(
+        binary,
+        sink,
+        arch,
+        `the emulator's gdbstub never accepted a connection on port ${port} within ${STUB_WAIT_MS}ms — the target may have failed to load under ${emulator}`,
+      );
+    }
 
     let stdout = '';
     try {

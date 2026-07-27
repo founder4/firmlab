@@ -221,7 +221,39 @@ export interface ProbeResult {
   stop: ProbeStop | null;
   /** Where the faulting PC's bytes sat in the input, when the crash is input-controlled. */
   controlOffset?: { offset: number; bytes: string; endian: 'little' | 'big' };
+  /**
+   * Whether the sink was observed receiving bytes from the supplied input. `true` = it did, `false` = it was handed
+   * something else (a constant), and ABSENT = no argument was readable, which is a third state and not a `false`.
+   */
+  argumentFromInput?: boolean;
   emulationWarnings: string[];
+}
+
+/** Shortest run of input bytes that is distinctive enough to say the sink was handed OUR data, not a coincidence. */
+const INPUT_MATCH_WINDOW = 8;
+
+/**
+ * Pure: did the sink actually receive bytes from the input we supplied?
+ *
+ * The distinction the WDR3600 run forced. `sbin/pktlogconf` executes `strcpy` under the probe, and the string it
+ * copies is `/proc/sys/ath_pktlog/system/enable` — a constant path, not one byte of the cyclic pattern. "The sink
+ * ran" and "the sink ran on attacker-controlled data" are different claims and the second is the one a reader acts
+ * on, so it has to be earned from the observed argument rather than assumed from the fact that the probe fed input.
+ */
+export function argumentCarriesInput(hits: SinkHit[], pattern: string): boolean | null {
+  let sawArgument = false;
+  for (const hit of hits) {
+    const arg = hit.argument;
+    if (!arg || arg.length < INPUT_MATCH_WINDOW) continue;
+    sawArgument = true;
+    for (let i = 0; i + INPUT_MATCH_WINDOW <= arg.length; i++) {
+      if (pattern.includes(arg.slice(i, i + INPUT_MATCH_WINDOW))) return true;
+    }
+  }
+  // No argument was readable — on some architectures the ABI gives no string register to snapshot, and a short
+  // string tells nothing either way. `null` rather than `false`: "we did not read it" is not "it was not our
+  // input", and collapsing the two would be the same overclaim in the opposite direction.
+  return sawArgument ? false : null;
 }
 
 /**
@@ -271,10 +303,22 @@ export function classifyRun(parse: GdbParse, pattern: string): ProbeResult {
   }
 
   if (parse.hits.length > 0) {
+    const fromInput = argumentCarriesInput(parse.hits, pattern);
+    const sample = parse.hits.find((h) => h.argument)?.argument;
+    const ran = `The sink executed ${parse.hits.length} time(s) and the program did not fault, so nothing here shows it misbehaving.`;
+    let reason: string;
+    if (fromInput === true) {
+      reason = `${ran} The argument it received carries bytes from the supplied input, so the call site really does run on attacker-controlled data — a runtime fact, stronger than static reachability.`;
+    } else if (fromInput === false) {
+      reason = `${ran} But the data it was handed did NOT come from the supplied input${sample ? ` (it copied ${JSON.stringify(sample.slice(0, 60))})` : ''}. That the call site runs is a runtime fact; that an attacker can reach it with their own bytes is NOT shown by this run, and reading it that way would be the overclaim this rung exists to avoid.`;
+    } else {
+      reason = `${ran} No argument was readable at the breakpoint, so whether the sink ran on the supplied input or on a constant is UNKNOWN — the run shows the call site executes and says nothing about whose bytes reach it.`;
+    }
     return {
       ...base,
       verdict: 'sink_executed',
-      reason: `The sink executed ${parse.hits.length} time(s) under this input and the program did not fault. The call site really does run with attacker-supplied data — a runtime fact, stronger than static reachability — but nothing here shows it misbehaving.`,
+      ...(fromInput === null ? {} : { argumentFromInput: fromInput }),
+      reason,
     };
   }
 
@@ -382,8 +426,13 @@ export function buildDynFindings(binary: string, sink: string, r: ProbeResult): 
     return [
       {
         kind: 'sink-executed-at-runtime',
-        title: `${binary}: ${sink} executed at runtime with the supplied input`,
-        severity: 'medium',
+        title:
+          r.argumentFromInput === true
+            ? `${binary}: ${sink} executed at runtime on the supplied input`
+            : r.argumentFromInput === false
+              ? `${binary}: ${sink} executed at runtime, but on constant data rather than the supplied input`
+              : `${binary}: ${sink} executed at runtime`,
+        severity: r.argumentFromInput === false ? 'low' : 'medium',
         proofState: 'confirmed_in_emulation',
         evidence: { ...shared, hits: r.hits.length, sample: r.hits[0]?.argument },
         rationale: `${r.reason} This upgrades the static reachability claim to an observed execution, and no further: the copy was not shown to overflow anything.`,

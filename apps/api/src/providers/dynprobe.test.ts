@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  argumentCarriesInput,
   buildDynFindings,
   buildGdbScript,
   classifyRun,
@@ -243,5 +244,57 @@ describe('buildDynFindings — confirmed_in_emulation is the ceiling, and nothin
     expect(f?.proofState).toBe('needs_runtime_reproduction');
     expect(f?.title).toContain('not a clean result');
     expect(f?.rationale).toContain('nowhere near enough to call the binary sound');
+  });
+});
+
+describe('argumentCarriesInput — "the sink ran" is not "the sink ran on our bytes"', () => {
+  const pattern = cyclicPattern(400);
+
+  /**
+   * The distinction WDR3600 forced. `sbin/pktlogconf` executes strcpy under the probe and copies
+   * `/proc/sys/ath_pktlog/system/enable` — a constant path, not one byte of the pattern. The verdict was
+   * `confirmed_in_emulation` with a reason asserting the call site "really does run with attacker-supplied data",
+   * which the finding's own evidence contradicted.
+   */
+  it('says no when the sink copied a constant, as the real pktlogconf did', () => {
+    const hits = [{ address: '0x401390', registers: {}, argument: '/proc/sys/ath_pktlog/system/enable' }];
+    expect(argumentCarriesInput(hits, pattern)).toBe(false);
+    const r = classifyRun({ attached: true, hits, stop: null, exited: true, emulationWarnings: [] }, pattern);
+    expect(r.verdict).toBe('sink_executed');
+    expect(r.argumentFromInput).toBe(false);
+    expect(r.reason).toContain('did NOT come from the supplied input');
+    const f = buildDynFindings('sbin/pktlogconf', 'strcpy', r);
+    expect(f[0]?.title).toContain('on constant data');
+    expect(f[0]?.severity).toBe('low');
+  });
+
+  it('says yes when the argument carries the pattern, and keeps the stronger wording', () => {
+    const hits = [{ address: '0x400a30', registers: {}, argument: pattern.slice(40, 90) }];
+    expect(argumentCarriesInput(hits, pattern)).toBe(true);
+    const r = classifyRun({ attached: true, hits, stop: null, exited: true, emulationWarnings: [] }, pattern);
+    expect(r.argumentFromInput).toBe(true);
+    expect(r.reason).toContain('attacker-controlled data');
+    const f = buildDynFindings('bin/x', 'strcpy', r);
+    expect(f[0]?.title).toContain('on the supplied input');
+    expect(f[0]?.severity).toBe('medium');
+  });
+
+  it('does not call a short coincidental overlap a match', () => {
+    expect(argumentCarriesInput([{ address: '0x1', registers: {}, argument: 'Aa0' }], pattern)).toBeNull();
+  });
+
+  /**
+   * The third state, which the existing "a sink that executed" test caught the first version collapsing: when no
+   * argument was readable at the breakpoint, "we did not read it" is not "it was not our input". Claiming the
+   * latter is the same overclaim as the one this change removes, pointing the other way.
+   */
+  it('says UNKNOWN when no argument was readable, rather than assuming it was not our input', () => {
+    expect(argumentCarriesInput([{ address: '0x1', registers: {} }], pattern)).toBeNull();
+    const r = classifyRun(parseGdbOutput('FIRMLAB_HIT addr=0x400a30 pc=0x400a30'), pattern);
+    expect(r.argumentFromInput).toBeUndefined();
+    expect(r.reason).toContain('UNKNOWN');
+    const f = buildDynFindings('bin/x', 'strcpy', r);
+    expect(f[0]?.title).toBe('bin/x: strcpy executed at runtime');
+    expect(f[0]?.severity).toBe('medium');
   });
 });
