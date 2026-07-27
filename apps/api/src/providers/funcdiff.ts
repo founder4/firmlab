@@ -73,6 +73,17 @@ export const RECOMPILE_THRESHOLD = 0.4;
 /** Below this many matched functions, the ratio is statistical noise and the verdict cannot be trusted either way. */
 export const MIN_MATCHED_FOR_RATIO = 10;
 
+/**
+ * Render a changed-fraction for a human. Rounding 4/873 to "0%" prints a number that contradicts the count
+ * standing next to it — and a tiny fraction is exactly the interesting case here, so it gets `<1%` instead.
+ */
+export function formatRatio(changed: number, matched: number): string {
+  if (matched === 0) return '—';
+  const pct = (changed / matched) * 100;
+  if (changed > 0 && pct < 1) return '<1%';
+  return `${Math.round(pct)}%`;
+}
+
 /** Only the top few changed functions are worth carrying into a finding; the rest stay in the structured result. */
 export const FINDING_FUNC_CAP = 12;
 
@@ -275,7 +286,7 @@ export function classifyDiff(path: string, m: MatchResult): BinaryDiff {
       // Withheld deliberately: a list this large has no localizing power, and showing it with a caveat invites
       // exactly the reading the caveat forbids.
       functions: [],
-      reason: `${changedPairs.length} of ${matched} matched functions (${Math.round(ratio * 100)}%) changed — that is a REBUILD, not a patch. A different compiler or flags moves nearly every function, so no candidate set is offered: it would be noise presented as analysis. Diff a closer pair of versions to localize a change.`,
+      reason: `${changedPairs.length} of ${matched} matched functions (${formatRatio(changedPairs.length, matched)}) changed — that is a REBUILD, not a patch. A different compiler or flags moves nearly every function, so no candidate set is offered: it would be noise presented as analysis. Diff a closer pair of versions to localize a change.`,
     };
   }
 
@@ -283,7 +294,7 @@ export function classifyDiff(path: string, m: MatchResult): BinaryDiff {
     ...base,
     verdict: 'patched',
     functions,
-    reason: `${changedPairs.length} of ${matched} matched functions (${Math.round(ratio * 100)}%) changed, with ${m.onlyB.length} added and ${m.onlyA.length} removed — a small, localized delta against an otherwise stable build. These are the functions to read; which one (if any) is a security fix is not something this diff can tell you.`,
+    reason: `${changedPairs.length} of ${matched} matched functions (${formatRatio(changedPairs.length, matched)}) changed, with ${m.onlyB.length} added and ${m.onlyA.length} removed — a small, localized delta against an otherwise stable build. These are the functions to read; which one (if any) is a security fix is not something this diff can tell you.`,
   };
 }
 

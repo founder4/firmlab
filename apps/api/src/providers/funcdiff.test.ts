@@ -4,6 +4,7 @@ import {
   RECOMPILE_THRESHOLD,
   buildFuncDiffFindings,
   classifyDiff,
+  formatRatio,
   isSyntheticName,
   matchFunctions,
   parseFunctions,
@@ -155,5 +156,18 @@ describe('buildFuncDiffFindings — a changed function is a fact, not a fix', ()
     expect(drafts[0]?.kind).toBe('function-diff-inconclusive');
     expect(drafts[0]?.proofState).toBe('needs_runtime_reproduction');
     expect(drafts[0]?.rationale).toContain('rather than as "no change found"');
+  });
+});
+
+describe('formatRatio — a percentage must not contradict the count beside it', () => {
+  // Seen on a real build pair: "4 of 873 matched functions (0%) changed" — the 0% reads as "nothing changed"
+  // standing next to the 4 that did, and a tiny fraction is exactly the interesting case here.
+  it('renders a sub-1% change as <1%, never as 0%', () => {
+    expect(formatRatio(4, 873)).toBe('<1%');
+  });
+  it('renders a genuine zero and ordinary fractions plainly', () => {
+    expect(formatRatio(0, 873)).toBe('0%');
+    expect(formatRatio(31, 39)).toBe('79%');
+    expect(formatRatio(1, 0)).toBe('—');
   });
 });
