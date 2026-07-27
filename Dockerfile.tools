@@ -175,17 +175,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends bettercap \
 # `blocked_by_platform`, never fail the image.
 ENV FIRMLAB_FWHUNT_PYTHON=/opt/fwhunt-venv/bin/python3
 ENV FIRMLAB_FWHUNT_RULES=/opt/fwhunt-rules/rules
+
+# Split in two so a failure is attributable: rizin is a long source build, fwhunt is a fast pip+clone. Keeping
+# them in ONE layer already cost a silent half-install — `rm -rf /tmp/rz` deleted the shell's own working
+# directory, and the pip that followed failed inside a cwd that no longer existed, which the `|| echo` then
+# swallowed. Hence the `cd /` below: never leave the shell standing in a directory this recipe is about to remove.
 RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates xz-utils git meson ninja-build pkg-config gcc g++ python3-venv libc6-dev \
+        curl ca-certificates xz-utils meson ninja-build pkg-config gcc g++ libc6-dev \
     && curl -fsSL https://github.com/rizinorg/rizin/releases/download/v0.9.1/rizin-src-v0.9.1.tar.xz -o /tmp/rz.tar.xz \
     && mkdir -p /tmp/rz && tar xf /tmp/rz.tar.xz -C /tmp/rz --strip-components=1 \
     && cd /tmp/rz && meson setup build --prefix=/usr/local --buildtype=release >/dev/null \
     && ninja -C build >/dev/null && ninja -C build install >/dev/null && ldconfig \
-    && rm -rf /tmp/rz /tmp/rz.tar.xz \
+    && cd / && rm -rf /tmp/rz /tmp/rz.tar.xz \
+    && rizin -v | head -1 \
+    && rm -rf /var/lib/apt/lists/*' \
+    || echo "rizin build failed — UEFI implant scanning degrades honestly"
+
+RUN bash -c 'cd / && apt-get update && apt-get install -y --no-install-recommends git python3-venv \
     && python3 -m venv /opt/fwhunt-venv \
     && /opt/fwhunt-venv/bin/pip install --no-cache-dir fwhunt-scan \
     && git clone --depth 1 https://github.com/binarly-io/FwHunt /opt/fwhunt-rules \
-    && rizin -v | head -1 \
     && /opt/fwhunt-venv/bin/python3 -c "import fwhunt_scan, rzpipe; print(\"fwhunt-scan ok\")" \
+    && test -f /opt/fwhunt-venv/bin/fwhunt_scan_analyzer.py \
+    && echo "FwHunt rules: $(find /opt/fwhunt-rules/rules -name \"*.yml\" | wc -l)" \
     && rm -rf /var/lib/apt/lists/*' \
     || echo "fwhunt-scan optional install failed — UEFI implant scanning degrades honestly"

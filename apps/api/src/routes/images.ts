@@ -27,6 +27,9 @@ const ALLOWED_EXT = new Set([
   '.elf',
   '.cap',
   '.rom',
+  // `.fd` is the standard UEFI firmware-volume extension (OVMF_CODE.fd and every vendor BIOS dump) — the exact
+  // input the chipsec + FwHunt track exists for, and it was missing from this list.
+  '.fd',
   '.squashfs',
   '.ubi',
   '.ubifs',
