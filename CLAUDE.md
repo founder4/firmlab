@@ -151,6 +151,11 @@ With every flag off: no network, no cost, deterministic behaviour.
   reported a platform block. `parseGdbOutput` inferred "attached" from a `Remote debugging using` line that
   `gdb -batch` never prints, so an attached-and-clean run was reported as a harness failure. Both passed their
   tests, because the fixtures were written from the same assumption as the code.
+- **A literal NUL byte in a source file passes every gate.** `tsc`, `biome` and `vitest` all accept it silently;
+  what it breaks is everything else — `file` reports the source as `data`, and **grep skips the file without
+  saying so**, which is how a large, correct change can look like it was never made. It arrives naturally: a NUL
+  is a good composite-map-key separator because it cannot occur in the fields being joined. Write it as `\u0000`,
+  never as the byte. Check with `tr -d -c '\000' < file | wc -c`.
 - **Validating against real bytes finds what tests do not.** Every defect above surfaced by running the thing
   in-container against a real image, and several were introduced *by the fix for the previous one* (a readiness
   check that connected to a gdbstub consumed the single accept it was checking for). Run it, read the output, and
