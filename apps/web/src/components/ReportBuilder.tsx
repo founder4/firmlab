@@ -102,6 +102,8 @@ export function ReportBuilder({
   const sections = useMemo<Section[]>(() => {
     const idn = image.identity;
     const ent = analysis?.entropy;
+    const sevNote =
+      sevCount('critical') || sevCount('high') ? ` — ${sevCount('critical')} critical, ${sevCount('high')} high` : '';
     const build: Record<string, Section> = {
       summary: {
         id: 'summary',
@@ -109,13 +111,13 @@ export function ReportBuilder({
         blocks: [
           {
             kind: 'p',
-            text:
-              `This report covers the static firmware analysis of ${image.filename} ` +
-              `(${fmtBytes(image.size)}), classified as ${idn?.firmwareClass ?? 'unknown'} on ` +
-              `${idn?.arch ?? 'unknown'}/${idn?.endianness ?? 'unknown'}. ` +
-              `${findings.length} finding${findings.length === 1 ? '' : 's'} were recorded` +
-              `${sevCount('critical') || sevCount('high') ? ` — ${sevCount('critical')} critical, ${sevCount('high')} high` : ''}. ` +
+            // Sentences joined rather than concatenated so each stays on one readable line.
+            text: [
+              `This report covers the static firmware analysis of ${image.filename} (${fmtBytes(image.size)}),`,
+              `classified as ${idn?.firmwareClass ?? 'unknown'} on ${idn?.arch ?? 'unknown'}/${idn?.endianness ?? 'unknown'}.`,
+              `${findings.length} finding${findings.length === 1 ? '' : 's'} were recorded${sevNote}.`,
               'Each finding carries an explicit proof state; a stage that has not run is reported as such rather than implied clean.',
+            ].join(' '),
           },
         ],
       },

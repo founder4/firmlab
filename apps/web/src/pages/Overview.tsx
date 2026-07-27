@@ -120,7 +120,9 @@ export function Overview(): JSX.Element {
                         <tr
                           key={im.id}
                           className="row-link"
-                          onClick={() => (window.location.hash = `#/image/${im.id}/overview`)}
+                          onClick={() => {
+                            window.location.hash = `#/image/${im.id}/overview`;
+                          }}
                         >
                           <td className="mono" style={{ color: 'var(--text)' }}>
                             {im.filename}
