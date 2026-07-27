@@ -33,6 +33,9 @@ function importsSymbol(symbols: Set<string>, name: string): boolean {
  * Pure: extract candidate symbol tokens from an ELF's printable strings. `.dynstr` stores imported symbol names as
  * NUL-separated ASCII, so the C-identifier tokens in the strings are a superset of the imports. Returns a set of
  * bare identifiers (letters/digits/underscore, length 3..40).
+ *
+ * This is the FALLBACK, not the primary path: a superset is not an import list. `parseDynamicSymbols` below reads
+ * the real symbol table and is tried first.
  */
 export function extractSymbols(strings: string): Set<string> {
   const out = new Set<string>();
@@ -40,20 +43,112 @@ export function extractSymbols(strings: string): Set<string> {
   return out;
 }
 
+/** Where a binary's symbol set came from — it decides what the finding is entitled to claim. */
+export type SymbolSource = 'dynsym' | 'strings';
+
+/** A little-endian/big-endian aware reader over the ELF bytes. */
+function reader(buf: Uint8Array, little: boolean) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  return {
+    u16: (o: number) => dv.getUint16(o, little),
+    u32: (o: number) => dv.getUint32(o, little),
+    u64: (o: number) => Number(dv.getBigUint64(o, little)),
+  };
+}
+
+/**
+ * Pure: read an ELF's DYNAMIC SYMBOL table and return the names it actually references.
+ *
+ * The string-token heuristic above cannot tell an import from a help string, a format specifier or a mention in a
+ * usage banner — it flagged `sbin/chkntfs` as importing `system` when angr could resolve no PLT or symbol entry at
+ * all. This walks the section headers to `.dynsym` + `.dynstr` and reads the names out of the symbol entries, so
+ * "imports" means the loader really does have to resolve it.
+ *
+ * Returns null when the file is not an ELF, is truncated, or has no dynamic symbol table (a fully static binary
+ * legitimately has none) — the caller then falls back to the string scan and SAYS it did, rather than silently
+ * reporting a weaker fact under a stronger word. No `readelf` dependency: this module stays pure and unit-tested.
+ */
+export function parseDynamicSymbols(buf: Uint8Array): Set<string> | null {
+  if (buf.length < 64) return null;
+  if (!(buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46)) return null;
+  const is64 = buf[4] === 2;
+  const little = buf[5] === 1;
+  if (buf[4] !== 1 && buf[4] !== 2) return null;
+  if (buf[5] !== 1 && buf[5] !== 2) return null;
+
+  try {
+    const r = reader(buf, little);
+    // e_shoff / e_shentsize / e_shnum / e_shstrndx differ in offset and width between ELF32 and ELF64.
+    const shoff = is64 ? r.u64(0x28) : r.u32(0x20);
+    const shentsize = r.u16(is64 ? 0x3a : 0x2e);
+    const shnum = r.u16(is64 ? 0x3c : 0x30);
+    if (!shoff || !shentsize || !shnum) return null;
+    if (shoff + shnum * shentsize > buf.length) return null;
+
+    // Locate .dynsym (sh_type SHT_DYNSYM = 11) and take its linked string table (sh_link).
+    const SHT_DYNSYM = 11;
+    let symOff = 0;
+    let symSize = 0;
+    let symEntSize = 0;
+    let strIdx = -1;
+    for (let i = 0; i < shnum; i++) {
+      const sh = shoff + i * shentsize;
+      const type = r.u32(sh + 4);
+      if (type !== SHT_DYNSYM) continue;
+      symOff = is64 ? r.u64(sh + 0x18) : r.u32(sh + 0x10);
+      symSize = is64 ? r.u64(sh + 0x20) : r.u32(sh + 0x14);
+      symEntSize = is64 ? r.u64(sh + 0x38) : r.u32(sh + 0x24);
+      // sh_link sits at a DIFFERENT offset in the two widths (0x18 in ELF32, 0x28 in ELF64) — and ELF32 is the
+      // overwhelmingly common case in firmware (mips/arm), so getting this wrong would have broken the majority.
+      strIdx = r.u32(sh + (is64 ? 0x28 : 0x18));
+      break;
+    }
+    if (!symOff || !symSize || !symEntSize || strIdx < 0 || strIdx >= shnum) return null;
+
+    const strSh = shoff + strIdx * shentsize;
+    const strOff = is64 ? r.u64(strSh + 0x18) : r.u32(strSh + 0x10);
+    const strSize = is64 ? r.u64(strSh + 0x20) : r.u32(strSh + 0x14);
+    if (!strOff || strOff + strSize > buf.length) return null;
+    if (symOff + symSize > buf.length) return null;
+
+    const names = new Set<string>();
+    const count = Math.floor(symSize / symEntSize);
+    for (let i = 0; i < count; i++) {
+      const nameOff = r.u32(symOff + i * symEntSize); // st_name is the first u32 in both widths
+      if (nameOff === 0 || nameOff >= strSize) continue;
+      let end = strOff + nameOff;
+      while (end < strOff + strSize && buf[end] !== 0) end++;
+      const name = Buffer.from(buf.subarray(strOff + nameOff, end)).toString('latin1');
+      // Versioned imports arrive as `memcpy@GLIBC_2.14`; the base name is the symbol being resolved.
+      if (name) names.add(name.split('@')[0] as string);
+    }
+    return names.size > 0 ? names : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface BinAssessment {
   path: string;
   unsafeCopy: string[];
   cmdExec: string[];
   hasCanary: boolean;
+  /** `dynsym` = read from the real symbol table; `strings` = the token superset, so a MENTION, not an import. */
+  symbolSource: SymbolSource;
 }
 
 /** Pure: assess one binary's symbol set for unsafe-copy / cmd-exec imports and stack-canary presence. */
-export function assessBinary(binPath: string, symbols: Set<string>): BinAssessment {
+export function assessBinary(
+  binPath: string,
+  symbols: Set<string>,
+  symbolSource: SymbolSource = 'strings',
+): BinAssessment {
   return {
     path: binPath,
     unsafeCopy: UNSAFE_COPY_FNS.filter((f) => importsSymbol(symbols, f)),
     cmdExec: CMD_EXEC_FNS.filter((f) => importsSymbol(symbols, f)),
     hasCanary: importsSymbol(symbols, CANARY_SYMBOL),
+    symbolSource,
   };
 }
 
@@ -65,29 +160,33 @@ export function assessBinary(binPath: string, symbols: Set<string>): BinAssessme
  */
 export function buildBinFindings(a: BinAssessment): FindingDraft[] {
   const drafts: FindingDraft[] = [];
+  // The verb has to match the evidence. A dynamic-symbol entry means the loader really must resolve the name, so
+  // "imports" is earned; a token lifted out of the binary's strings is a MENTION, and calling that an import
+  // promises more than the bytes carry (`sbin/chkntfs` "importing" system, where angr found no PLT entry at all).
+  const fromDynsym = a.symbolSource === 'dynsym';
+  const verb = fromDynsym ? 'imports' : 'references';
+  const provenance = fromDynsym
+    ? 'Read from the ELF dynamic symbol table, so the loader does resolve these names.'
+    : 'This binary has no readable dynamic symbol table, so the names were read from its printable strings — a MENTION of the symbol, not proof that it is imported. Treat the lead as weaker accordingly.';
+
   if (a.unsafeCopy.length > 0 && !a.hasCanary) {
     drafts.push({
       kind: 'binary-pwnable-candidate',
-      title: `Stack-overflow candidate: ${a.path} calls ${a.unsafeCopy.join('/')} with no stack canary`,
+      title: `Stack-overflow candidate: ${a.path} ${verb} ${a.unsafeCopy.join('/')} with no stack canary`,
       severity: 'medium',
       proofState: 'needs_runtime_reproduction',
-      evidence: { path: a.path, unsafeFns: a.unsafeCopy, canary: false },
-      rationale:
-        'The binary imports unbounded-copy libc function(s) and was built without a stack canary — the classic ' +
-        'stack-buffer-overflow precondition. Whether an attacker reaches one with oversized input needs reversing/' +
-        'fuzzing, so this is a candidate lead, not a proven overflow.',
+      evidence: { path: a.path, unsafeFns: a.unsafeCopy, canary: false, symbolSource: a.symbolSource },
+      rationale: `The binary ${verb} unbounded-copy libc function(s) and was built without a stack canary — the classic stack-buffer-overflow precondition. ${provenance} Whether an attacker reaches one with oversized input needs reversing/fuzzing, so this is a candidate lead, not a proven overflow.`,
     });
   }
   if (a.cmdExec.length > 0) {
     drafts.push({
       kind: 'binary-cmdexec-sink',
-      title: `Command-exec sink: ${a.path} imports ${a.cmdExec.join('/')}`,
+      title: `Command-exec sink: ${a.path} ${verb} ${a.cmdExec.join('/')}`,
       severity: 'info',
       proofState: 'needs_runtime_reproduction',
-      evidence: { path: a.path, execFns: a.cmdExec },
-      rationale:
-        'The binary imports a command-execution function — a command-injection sink if any argument is ' +
-        'attacker-influenced. A lead to taint the callers, not a verdict.',
+      evidence: { path: a.path, execFns: a.cmdExec, symbolSource: a.symbolSource },
+      rationale: `The binary ${verb} a command-execution function — a command-injection sink if any argument is attacker-influenced. ${provenance} A lead to taint the callers, not a verdict.`,
     });
   }
   return drafts;
@@ -163,7 +262,11 @@ function isElf(abs: string): boolean {
  * the caller sees "no sinks", never a crash.
  */
 export function assessBinaryFile(abs: string, rel: string): BinAssessment {
-  return assessBinary(rel, extractSymbols(binaryStrings(readBounded(abs))));
+  const buf = readBounded(abs);
+  // Real symbol table first; the string superset only when there is none to read (a truly static binary, or a
+  // prefix that stopped short of the section headers). The assessment records which, so the finding can say so.
+  const dyn = parseDynamicSymbols(buf);
+  return dyn ? assessBinary(rel, dyn, 'dynsym') : assessBinary(rel, extractSymbols(binaryStrings(buf)), 'strings');
 }
 
 /** Is this file an ELF? Exposed so a caller can reject a shell script before treating it as a binary target. */
@@ -212,7 +315,7 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
       if (!e.isFile() || !isElf(abs)) continue;
       scanned++;
       const rel = path.relative(root, abs);
-      const assessment = assessBinary(rel, extractSymbols(binaryStrings(readBounded(abs))));
+      const assessment = assessBinaryFile(abs, rel);
       for (const f of buildBinFindings(assessment)) {
         if (findings.length < FINDING_CAP) findings.push(f);
         else overflow++;

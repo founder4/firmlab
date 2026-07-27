@@ -80,6 +80,28 @@ export class FirmLabClient {
   async job(jobId: string): Promise<JobView> {
     return (await this.get<{ job: JobView }>(`/api/jobs/${jobId}`)).job;
   }
+
+  /** A raw text/markdown document (report, disclosure draft) rather than JSON. */
+  async getText(p: string): Promise<string> {
+    const res = await fetch(this.url(p), { headers: this.headers });
+    if (!res.ok) throw new Error(`GET ${p} → ${res.status} ${res.statusText}`);
+    return await res.text();
+  }
+
+  /**
+   * Put a firmware image on the bench. The intake is multipart, so this builds the body from the file's bytes —
+   * `FormData`/`Blob` are global on Node 22, so no multipart dependency is needed.
+   */
+  async upload(filename: string, bytes: Buffer): Promise<{ id: string; filename: string }> {
+    const form = new FormData();
+    form.append('file', new Blob([bytes]), filename);
+    const res = await fetch(this.url('/api/images'), { method: 'POST', body: form, headers: this.headers });
+    if (!res.ok) {
+      const detail = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(detail.error ?? `upload → ${res.status} ${res.statusText}`);
+    }
+    return ((await res.json()) as { image: { id: string; filename: string } }).image;
+  }
 }
 
 /**

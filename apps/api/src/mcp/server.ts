@@ -23,7 +23,9 @@
  *   # against a local dev API
  *   FIRMLAB_API=http://127.0.0.1:8799 node apps/api/dist/mcp/server.js
  */
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { type FirmLabClient, clientFromEnv } from './client.js';
@@ -90,7 +92,7 @@ function jobPayload(job: { status: string; error: string | null; log: string; re
 export function buildServer(fl: FirmLabClient): McpServer {
   const server = new McpServer(
     { name: 'firmlab', version: '0.1.0' },
-    { instructions: HONESTY_INSTRUCTIONS, capabilities: { tools: {} } },
+    { instructions: HONESTY_INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } },
   );
 
   // === Read the bench ===
@@ -310,6 +312,34 @@ export function buildServer(fl: FirmLabClient): McpServer {
   );
 
   server.registerTool(
+    'firmlab_add_image',
+    {
+      title: 'Put a firmware image on the bench',
+      description:
+        'Ingest a firmware file so it can be analyzed. The path must be readable by the FirmLab SERVER, not by ' +
+        'you — when the server runs inside the container and your file is on the host, copy it in first ' +
+        '(`docker cp <file> firmlab:/tmp/`) and pass the container path. Analysis of identity/class happens at ' +
+        'intake; everything else is a separate call.',
+      inputSchema: {
+        path: z.string().describe('Absolute path to the firmware file, as the FirmLab server sees it'),
+      },
+    },
+    async ({ path: filePath }) => {
+      let bytes: Buffer;
+      try {
+        bytes = await readFile(filePath);
+      } catch (err) {
+        return toolError(
+          `Cannot read ${filePath} from the FirmLab server: ${err instanceof Error ? err.message : String(err)}. ` +
+            'If the file is on your host and the server is in a container, `docker cp` it in first.',
+        );
+      }
+      const image = await fl.upload(basename(filePath), bytes);
+      return toolResult({ ingested: true, ...image, next: 'Run firmlab_extract, then firmlab_autonomous_scan.' });
+    },
+  );
+
+  server.registerTool(
     'firmlab_job_status',
     {
       title: 'Poll a job that outlived its tool call',
@@ -323,6 +353,154 @@ export function buildServer(fl: FirmLabClient): McpServer {
       const job = await fl.job(jobId);
       return toolResult(jobPayload(job));
     },
+  );
+
+  // === Resources: document-shaped content the agent attaches as context rather than calls for ===
+
+  server.registerResource(
+    'proof-states',
+    'firmlab://guide/proof-states',
+    {
+      title: 'How to read a FirmLab result',
+      description: 'The proof-state ladder and the inferences that are always wrong here. Read before reporting.',
+      mimeType: 'text/plain',
+    },
+    async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'text/plain', text: HONESTY_INSTRUCTIONS }] }),
+  );
+
+  server.registerResource(
+    'report',
+    new ResourceTemplate('firmlab://images/{imageId}/report', { list: undefined }),
+    {
+      title: 'Analysis report (Markdown)',
+      description: "FirmLab's own written report for an image — the findings with their evidence and proof states.",
+      mimeType: 'text/markdown',
+    },
+    async (uri, { imageId }) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: 'text/markdown',
+          text: await fl.getText(`/api/images/${imageId}/report`),
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    'disclosure',
+    new ResourceTemplate('firmlab://images/{imageId}/disclosure', { list: undefined }),
+    {
+      title: 'Coordinated-disclosure draft (Markdown)',
+      description:
+        'A disclosure draft built from the ledger. A DRAFT: it must be reviewed against the proof states before ' +
+        'anything is sent to a vendor, and it deliberately contains no exploit.',
+      mimeType: 'text/markdown',
+    },
+    async (uri, { imageId }) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: 'text/markdown',
+          text: await fl.getText(`/api/images/${imageId}/disclosure-report`),
+        },
+      ],
+    }),
+  );
+
+  // === Prompts: the methodology, so the agent does not have to reinvent it each session ===
+
+  server.registerPrompt(
+    'triage_image',
+    {
+      title: 'Triage a firmware image honestly',
+      description: 'Analyze one image end to end and report what was examined AND what was not.',
+      argsSchema: { imageId: z.string() },
+    },
+    ({ imageId }) => ({
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: [
+              `Triage FirmLab image ${imageId}.`,
+              '',
+              "1. Read firmlab_coverage FIRST, so you know which stages this image's class even routes to.",
+              '2. Run firmlab_extract, then firmlab_autonomous_scan.',
+              '3. Read firmlab_findings and group by proof state, not by severity — a critical CVE at',
+              '   needs_runtime_reproduction is a lead, and a static_confirmed medium is a fact.',
+              '4. Report in two parts: what was established, and what was NOT examined (name the stages, and the',
+              '   workers that degraded and why). If a stage could not run, say what would unlock it.',
+              '',
+              'Do not describe the image as clean or secure. The strongest honest claim available is "the stages',
+              'that ran found nothing", and it is only worth writing next to the list of stages that did not run.',
+            ].join('\n'),
+          },
+        },
+      ],
+    }),
+  );
+
+  server.registerPrompt(
+    'hunt_memory_safety',
+    {
+      title: 'Hunt memory-safety bugs and settle the leads',
+      description: 'Turn the binary sweep’s candidates into reachability questions instead of leaving a maybe-list.',
+      argsSchema: { imageId: z.string() },
+    },
+    ({ imageId }) => ({
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: [
+              `Hunt memory-safety issues in FirmLab image ${imageId}.`,
+              '',
+              'The binary sweep flags a precondition (unbounded copy + no canary), which is a lead, not a bug.',
+              'Your job is to settle the promising ones rather than hand back the list:',
+              '',
+              '1. firmlab_extract, then firmlab_list_binaries. Prefer network-facing daemons and setuid binaries —',
+              '   reachability of a sink in a binary nothing untrusted talks to is a much weaker result.',
+              '2. For each chosen target, firmlab_symbolic_reachability. Omit sinks to derive them from the',
+              '   binary, or name the ones you actually care about (system, memcpy, a vendor doSystem…).',
+              '3. Report per sink. "reached" = the call site is on a live path from the entry point, with the input',
+              '   that walks it — that is REACHABILITY, not an overflow and not exploitability. "not reached" is',
+              '   NOT a negative result: the search is bounded, so say the question is unresolved and why.',
+            ].join('\n'),
+          },
+        },
+      ],
+    }),
+  );
+
+  server.registerPrompt(
+    'compare_versions',
+    {
+      title: 'Compare two firmware versions',
+      description: 'Read what changed between two images of the same device — the n-day framing.',
+      argsSchema: { olderImageId: z.string(), newerImageId: z.string() },
+    },
+    ({ olderImageId, newerImageId }) => ({
+      messages: [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text: [
+              `Compare FirmLab images ${olderImageId} (older) and ${newerImageId} (newer).`,
+              '',
+              '1. firmlab_coverage on BOTH first. If the two were examined to different depths, a difference in',
+              '   their findings may be a difference in coverage rather than in the firmware — say so if it is.',
+              '2. Ensure both are scanned, then diff the findings: what was fixed, what persists, what is new.',
+              '3. A finding that disappeared is only "fixed" if the stage that would have found it actually ran on',
+              '   the newer image. Check that before claiming a fix.',
+            ].join('\n'),
+          },
+        },
+      ],
+    }),
   );
 
   return server;
