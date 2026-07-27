@@ -91,7 +91,9 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ▢ **`parseVersion` collapses zero-padded components**: BusyBox `1.01` parses to `[1, 1]` and compares equal to `1.1`, because each dotted field is `parseInt`-ed. Harmless for every range currently in the table (both sit far inside CVE-2016-2148's `1.0.0–1.24.2`), and wrong at a boundary that fell between the two. BusyBox is the only component in the corpus that versions this way.
 - ▢ **Vendor-PSIRT / CNA sources** — no single free API; per-vendor adapters.
 - ▢ **Hardened egress** — proxy / slirp4netns for the research allowlist.
-- ▢ **Corpus OSV/NVD/KEV cache** — reproducibility + ToS-friendly, avoid re-querying.
+- ✅ **Corpus OSV/NVD/KEV cache** (2026-07-28) — `research/cache.ts`, read-through, on-disk under the data root, keyed on the QUESTION (request body/URL) not the image, so every image asking about BusyBox 1.01 asks once. TTL `FIRMLAB_RESEARCH_CACHE_TTL_HOURS` (default 24). A stale entry is re-queried rather than served, a failed lookup is never stored (a cached 429 would become a durable "no CVEs"), and the RAW payload is cached rather than our parse of it so a later parser fix applies to old answers. NVD's 6.5 s courtesy delay is no longer paid for a request that does not go out. _It also made the egress ledger untrue — declared before any request, while a cache hit contacts nobody — so the ledger now states a ceiling and the run reconciles it afterwards._
+- ▢ **The advisory cache never evicts.** Entries are deliberately kept past expiry (the record is the reproducibility half), so the directory grows slowly and unboundedly. Needs either a size/age sweep in `retention.ts` alongside the existing data-retention limits, or a documented decision that a corpus snapshot is worth the disk.
+- ▢ **`FIRMLAB_RESEARCH_CACHE_DIR` override** — pinning a corpus snapshot to a specific directory (for reproducing a scan months later, or shipping the evidence with a report) was skipped to keep the env surface small. Cheap if it turns out to be wanted.
 
 ## Deploy & operations
 - ✅ **`deploy.sh` port-squatter check** (2026-07-27) — the compose publishes NO host port (Traefik reaches the container over `proxy_net`), so anything listening on host `8799` is by definition not the deployment. A leftover `pnpm dev:api` there is the worst kind of stale: it serves a plausible FirmLab from an old tree and an old DB, so you verify against the wrong process and believe it — which already cost real debugging time once. `check_port_squatter` runs on every invocation (including `--check`), uses `lsof` or `ss`, exempts Docker's own forwarder (`docker-proxy`/`com.docker`/`vpnkit`, which would mean the compose was changed to publish a port), and stays silent when it has no way to look rather than implying the port is clean. **Caught the ghost on its first run**: `node dist/index.js` (pid 46986, started 2026-07-23) serving `{"build":"dev"}` on 127.0.0.1:8799.
@@ -106,7 +108,7 @@ of "known-incomplete semantics" exists without hunting through the sections abov
   cracking (`root:sohoadmin`) is still unrun. See *W3 secret extraction + offline cracking*.
 - ▢ **W7 RP2350 `decode()` reversing** — the CTF's `ror+sub+xor` obfuscator hides the flags; plaintext extraction
   honestly will not recover them, so this needs real on-device routine reversing. See *W7 Bare-metal/RTOS worker*.
-- ▢ **Corpus OSV/NVD/KEV cache** — reproducibility + ToS-friendliness; avoid re-querying. See *External intelligence*.
+- ✅ **Corpus OSV/NVD/KEV cache** — done 2026-07-28; see *External intelligence*.
 
 ## Reporting & integration
 - ▢ **PDF export** of reports.
