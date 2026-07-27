@@ -43,6 +43,36 @@ describe('patternOffset', () => {
 });
 
 describe('parseGdbOutput — against gdb 13.1 batch output', () => {
+  // Verbatim from the real DVRF run. gdb reports a fault across two lines and the address is on the SECOND.
+  // The first real run of this probe read `info program`'s later wording instead and reported 0x0, because by
+  // then the script had continued past the fault.
+  it('takes the faulting PC from the frame line that follows the signal', () => {
+    const p = parseGdbOutput(
+      [
+        'Breakpoint 1, 0x00400a30 in strcpy ()',
+        'FIRMLAB_HIT addr=0x400a30 pc=0x400a30 ra=0x4008e0',
+        '',
+        'Program received signal SIGSEGV, Segmentation fault.',
+        '0x41386741 in ?? ()',
+      ].join('\n'),
+    );
+    expect(p.hits).toHaveLength(1);
+    expect(p.stop).toEqual({ pc: 0x41386741, signal: 'SIGSEGV' });
+  });
+
+  it('keeps the FIRST fault — re-delivering the signal must not overwrite the answer', () => {
+    const p = parseGdbOutput(
+      [
+        'Program received signal SIGSEGV, Segmentation fault.',
+        '0x41386741 in ?? ()',
+        'Program received signal SIGSEGV, Segmentation fault.',
+        '0x0 in ?? ()',
+        'Program stopped at 0x0.',
+      ].join('\n'),
+    );
+    expect(p.stop?.pc).toBe(0x41386741);
+  });
+
   it('reads a crash: gdb prints the address and the signal on separate lines', () => {
     const p = parseGdbOutput(
       [

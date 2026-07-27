@@ -130,6 +130,7 @@ export function parseGdbOutput(text: string): GdbParse {
   let exited = false;
   let exitCode: number | undefined;
   let attached = false;
+  let awaitingFaultFrame = false;
 
   for (const raw of text.split('\n')) {
     const line = raw.trim();
@@ -155,11 +156,30 @@ export function parseGdbOutput(text: string): GdbParse {
       continue;
     }
 
-    // gdb's own words, verbatim from a real run: `Program stopped at 0x41386741.` / `It stopped with signal SIGSEGV, …`
+    // gdb reports a fault across TWO lines, verbatim from a real DVRF run under qemu-mipsel:
+    //     Program received signal SIGSEGV, Segmentation fault.
+    //     0x41386741 in ?? ()
+    // The address on the SECOND line is the faulting PC. `info program`'s later `Program stopped at …` is a
+    // different, weaker source: by the time it runs the script has continued past the fault, and the first real
+    // run of this probe reported 0x0 from it while the actual fault was at 0x41386741. So the frame line wins,
+    // and the FIRST fault is kept — re-delivering the signal moves the state and would overwrite the answer.
+    const sig = /received signal (SIG\w+)/.exec(line) ?? /stopped with signal (SIG\w+)/.exec(line);
+    if (sig && stopSignal === null) {
+      stopSignal = sig[1] as string;
+      awaitingFaultFrame = true;
+      continue;
+    }
+    if (awaitingFaultFrame) {
+      const frame = /^(0x[0-9a-fA-F]+)\s+in\b/.exec(line);
+      if (frame) {
+        stopPc = HEX((frame[1] as string).slice(2));
+        awaitingFaultFrame = false;
+        continue;
+      }
+    }
+    // Fallback for the `info program` phrasing, only when the frame line never appeared.
     const at = /Program stopped at (0x[0-9a-fA-F]+)/.exec(line);
-    if (at) stopPc = HEX((at[1] as string).slice(2));
-    const sig = /stopped with signal (SIG\w+)/.exec(line) ?? /received signal (SIG\w+)/.exec(line);
-    if (sig) stopSignal = sig[1] as string;
+    if (at && stopPc === null) stopPc = HEX((at[1] as string).slice(2));
 
     const ex = /exited (?:normally|with code (\d+))/.exec(line);
     if (ex) {
