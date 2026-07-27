@@ -42,6 +42,7 @@ describe('parseReachOutput', () => {
           addresses: ['0x4008a0'],
           steps: 12,
           pruned: false,
+          errors: 0,
           argv1: 'AAAA',
           path: ['0x400700', '0x4008a0'],
         },
@@ -72,7 +73,15 @@ describe('parseReachOutput', () => {
 describe('buildReachFindings — the honesty contract', () => {
   it('a reached sink is static_confirmed and phrased as reachability, not exploitability', () => {
     const drafts = buildReachFindings('bin/pwn', [
-      { sink: 'strcpy', outcome: 'reached', addresses: ['0x4008a0'], steps: 9, pruned: false, argv1: 'AAAA' },
+      {
+        sink: 'strcpy',
+        outcome: 'reached',
+        addresses: ['0x4008a0'],
+        steps: 9,
+        pruned: false,
+        errors: 0,
+        argv1: 'AAAA',
+      },
     ]);
     expect(drafts).toHaveLength(1);
     expect(drafts[0]?.kind).toBe('sink-reachable');
@@ -89,6 +98,7 @@ describe('buildReachFindings — the honesty contract', () => {
         addresses: ['0x400900'],
         steps: 400,
         pruned: true,
+        errors: 0,
         reason: 'step budget (400 steps) reached',
       },
     ]);
@@ -99,17 +109,45 @@ describe('buildReachFindings — the honesty contract', () => {
     expect(drafts[0]?.evidence?.statesPruned).toBe(true);
   });
 
+  it('attributes angr-internal crashes to the tool, not to the firmware', () => {
+    // angr 9.2's sscanf SimProcedure raises a raw TypeError on a symbolic position. Those are paths never walked,
+    // and the report must say so rather than let a reader infer the binary is quiet.
+    const drafts = buildReachFindings('usr/sbin/bpalogin', [
+      {
+        sink: 'strcpy',
+        outcome: 'not_reached_in_budget',
+        addresses: ['0x5000c0'],
+        steps: 40,
+        pruned: false,
+        errors: 13,
+        reason: 'angr-internal errors dominated the search (13)',
+      },
+    ]);
+    expect(drafts[0]?.title).not.toContain('budget ran out');
+    expect(drafts[0]?.evidence?.toolErrors).toBe(13);
+    expect(drafts[0]?.rationale).toContain('lost to angr-internal errors');
+    expect(drafts[0]?.proofState).toBe('needs_runtime_reproduction');
+  });
+
   it('a sink whose symbol is absent produces no claim at all', () => {
     const drafts = buildReachFindings('bin/pwn', [
-      { sink: 'gets', outcome: 'absent', addresses: [], steps: 0, pruned: false, reason: 'no PLT/symbol address' },
+      {
+        sink: 'gets',
+        outcome: 'absent',
+        addresses: [],
+        steps: 0,
+        pruned: false,
+        errors: 0,
+        reason: 'no PLT/symbol address',
+      },
     ]);
     expect(drafts).toEqual([]);
   });
 
   it('mixes a confirmed reachability with an inconclusive note in one run', () => {
     const drafts = buildReachFindings('bin/pwn', [
-      { sink: 'strcpy', outcome: 'reached', addresses: ['0x1'], steps: 5, pruned: false },
-      { sink: 'gets', outcome: 'not_reached_in_budget', addresses: ['0x2'], steps: 400, pruned: false },
+      { sink: 'strcpy', outcome: 'reached', addresses: ['0x1'], steps: 5, pruned: false, errors: 0 },
+      { sink: 'gets', outcome: 'not_reached_in_budget', addresses: ['0x2'], steps: 400, pruned: false, errors: 0 },
     ]);
     expect(drafts.map((d) => d.kind)).toEqual(['sink-reachable', 'sink-reachability-inconclusive']);
   });

@@ -583,6 +583,30 @@ export interface OpacidadResult {
   llm?: { provider: string; model: string };
 }
 
+/**
+ * Analysis coverage — what the image's class routes to, what actually ran, and the one honest sentence about what
+ * its finding count covers. Computed server-side from the same class plan W9 executes, so the banner and the
+ * autonomous scan cannot disagree.
+ */
+export interface CoverageStage {
+  worker: string;
+  reason: string;
+  status: 'found' | 'ran-empty' | 'no-input' | 'degraded' | 'not-built' | 'not-run';
+  detail?: string;
+  findingCount?: number;
+}
+export interface CoverageReport {
+  firmwareClass: string;
+  classRationale?: string;
+  applicable: number;
+  executed: number;
+  findingCount: number;
+  stages: CoverageStage[];
+  verdict: string;
+  /** The finding count alone would mislead — show the banner prominently. */
+  ambiguous: boolean;
+}
+
 /** A saved emulation preset — a named, reusable recipe config for an image. */
 export interface EmulationPreset {
   id: string;
@@ -779,6 +803,7 @@ export const api = {
   runOpacidad: (id: string) => post<{ jobId: string }>(`/api/images/${id}/opacidad`),
   opacidadResult: (id: string) =>
     get<{ result: OpacidadResult | null }>(`/api/images/${id}/opacidad`).then((r) => r.result),
+  coverage: (id: string) => get<CoverageReport>(`/api/images/${id}/coverage`),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),
   job: (jobId: string) => get<{ job: Job }>(`/api/jobs/${jobId}`).then((r) => r.job),
   sbom: (id: string) => get<{ result: SbomResult | null }>(`/api/images/${id}/sbom`).then((r) => r.result),

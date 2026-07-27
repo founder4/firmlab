@@ -4,11 +4,15 @@
  * with the agent off, opacidad still runs and composes a deterministic narrative, so this route is never gated
  * behind an API key — only the *phrasing* of the report changes when a model is configured.
  */
+import type { ImageIdentity } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
 import { loadLlmConfig } from '../llm.js';
+import type { OpacidadStep } from '../opacidad-narrative.js';
+import { specsForClass } from '../opacidad-plan.js';
 import { runOpacidad } from '../opacidad.js';
+import { buildCoverage } from '../providers/coverage.js';
 import { startJob } from '../providers/jobs.js';
-import { getImage, listJobs } from '../store.js';
+import { getImage, listFindings, listJobs } from '../store.js';
 
 export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
   app.post('/images/:id/opacidad', async (req, reply) => {
@@ -34,5 +38,41 @@ export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const done = listJobs(id).find((j) => j.kind === 'opacidad' && j.status === 'done' && j.resultJson);
     return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
+  });
+
+  /**
+   * Analysis coverage — what this image's class routes to, what actually executed, and what its finding count does
+   * and does not cover. Served next to opacidad because it reads the same class plan and the same run outcomes;
+   * computing it here (rather than in the UI) keeps the banner from ever disagreeing with the autonomous scan.
+   * Answers before any scan has run too — that is precisely the case the banner exists for.
+   */
+  app.get('/images/:id/coverage', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const row = getImage(id);
+    if (!row) return reply.status(404).send({ error: 'Image not found' });
+
+    let identity: ImageIdentity | null = null;
+    try {
+      identity = row.identityJson ? (JSON.parse(row.identityJson) as ImageIdentity) : null;
+    } catch {
+      identity = null;
+    }
+    const firmwareClass = identity?.firmwareClass ?? 'unknown';
+
+    const done = listJobs(id).find((j) => j.kind === 'opacidad' && j.status === 'done' && j.resultJson);
+    let steps: OpacidadStep[] | null = null;
+    try {
+      steps = done?.resultJson ? ((JSON.parse(done.resultJson) as { steps?: OpacidadStep[] }).steps ?? null) : null;
+    } catch {
+      steps = null;
+    }
+
+    return buildCoverage({
+      firmwareClass,
+      ...(identity?.classRationale ? { classRationale: identity.classRationale } : {}),
+      specs: specsForClass(firmwareClass),
+      steps,
+      findingCount: listFindings(id).length,
+    });
   });
 }

@@ -88,17 +88,36 @@ def explore_one(angr, claripy, proj, name, addrs, budget_s, max_steps, max_activ
     deadline = time.time() + budget_s
     steps = 0
     pruned = False
+    errors = 0
+    first_error = ""
     exhausted_reason = "search space exhausted"
+    # angr's libc SimProcedure models are imperfect on real firmware (its `sscanf` model raises a raw TypeError on a
+    # symbolic position, for one). Such a crash belongs to ONE state, so tolerate a handful: drop the offending
+    # state and let the search continue down the other paths. Only give up when they dominate the run.
+    max_errors = 12
 
-    while simgr.active and steps < max_steps:
+    def has_work():
+        """DFS parks everything but the head state in `deferred`; an empty active stash is not an empty search."""
+        return bool(simgr.active) or bool(simgr.stashes.get("deferred"))
+
+    while has_work() and steps < max_steps:
         if time.time() >= deadline:
             exhausted_reason = f"wall-clock budget ({budget_s}s) reached"
             break
+        if not simgr.active:
+            simgr.active.append(simgr.stashes["deferred"].pop())
         try:
             simgr.explore(find=addrs, n=1)
-        except Exception as exc:  # a single bad step must not lose the whole sink
-            exhausted_reason = f"exploration error: {type(exc).__name__}"
-            break
+        except Exception as exc:
+            errors += 1
+            if not first_error:
+                first_error = f"{type(exc).__name__}: {exc}"
+            if simgr.active:
+                simgr.active = simgr.active[1:]  # discard the state angr choked on, keep the rest
+            if errors > max_errors:
+                exhausted_reason = f"angr-internal errors dominated the search ({errors}); first was {first_error}"
+                break
+            continue
         steps += 1
         if simgr.found:
             break
@@ -109,11 +128,16 @@ def explore_one(angr, claripy, proj, name, addrs, budget_s, max_steps, max_activ
         if steps >= max_steps:
             exhausted_reason = f"step budget ({max_steps} steps) reached"
 
+    if errors and "angr-internal errors" not in exhausted_reason:
+        # The budget is still the headline reason, but a reader must know the search also lost paths to tool bugs.
+        exhausted_reason = f"{exhausted_reason}; {errors} state(s) also lost to angr-internal errors ({first_error})"
+
     result = {
         "sink": name,
         "addresses": [hex(a) for a in addrs],
         "steps": steps,
         "pruned": pruned,
+        "errors": errors,
     }
 
     if simgr.found:

@@ -29,6 +29,7 @@ import {
   fmtHex,
 } from '../api';
 import { AnalysisActionsPanel } from '../components/AnalysisActionsPanel';
+import { CoverageBanner } from '../components/CoverageBanner';
 import { EntropyChart } from '../components/EntropyChart';
 import { FilesystemTree } from '../components/FilesystemTree';
 import { FuzzPanel } from '../components/FuzzPanel';
@@ -170,7 +171,13 @@ export function ImageDetail(): JSX.Element {
           <PresetsPanel imageId={id} />
         </>
       )}
-      {tab === 'findings' && <ReportBuilder imageId={id} image={image} analysis={analysis} />}
+      {/* Coverage first: a findings list is unreadable until you know which stages produced it. */}
+      {tab === 'findings' && (
+        <>
+          <CoverageBanner imageId={id} />
+          <ReportBuilder imageId={id} image={image} analysis={analysis} />
+        </>
+      )}
       {tab === 'diff' && <DiffPanel imageId={id} />}
       {tab === 'opacidad' && <OpacidadPanel imageId={id} />}
       {tab === 'agent' && <AgentPanel imageId={id} />}

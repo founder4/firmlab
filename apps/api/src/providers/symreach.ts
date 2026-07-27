@@ -60,6 +60,8 @@ export interface SinkResult {
   steps: number;
   /** Active states were dropped to stay inside the memory bound — a not-reached under pruning is weaker still. */
   pruned: boolean;
+  /** States lost to angr-internal crashes (its libc models are imperfect on real firmware) — paths never explored. */
+  errors: number;
   reason?: string;
   /** Concrete inputs that walk the path (bounded previews, never a full payload). */
   argv1?: string;
@@ -132,6 +134,7 @@ export function parseReachOutput(raw: unknown): {
       addresses: Array.isArray(e.addresses) ? e.addresses.map((a) => str(a)) : [],
       steps: typeof e.steps === 'number' ? e.steps : 0,
       pruned: e.pruned === true,
+      errors: typeof e.errors === 'number' ? e.errors : 0,
     };
     if (!(known as string[]).includes(outcome)) {
       result.reason = `unrecognised probe outcome '${outcome}' — treated as inconclusive`;
@@ -193,19 +196,26 @@ export function buildReachFindings(binary: string, sinks: SinkResult[]): Finding
   const inconclusive = sinks.filter((s) => s.outcome === 'not_reached_in_budget');
   if (inconclusive.length > 0) {
     const pruned = inconclusive.some((s) => s.pruned);
+    const toolErrors = inconclusive.reduce((n, s) => n + s.errors, 0);
     const detail = inconclusive.map((s) => `${s.sink} (${s.reason ?? 'budget spent'})`).join('; ');
     const prunedNote = pruned
       ? 'Active states were pruned to stay inside the memory bound, so the search was narrower still.'
       : '';
+    // Naming the tool's own failures matters: a reader must not attribute to the firmware what is angr's model
+    // breaking on it. angr's libc SimProcedures crash on real firmware inputs, and each crash is a path never walked.
+    const errorNote = toolErrors
+      ? `${toolErrors} state(s) were lost to angr-internal errors, so those paths were never explored at all.`
+      : '';
     drafts.push({
       kind: 'sink-reachability-inconclusive',
-      title: `Reachability of ${inconclusive.length} sink(s) in ${binary} is unresolved — the search budget ran out`,
+      title: `Reachability of ${inconclusive.length} sink(s) in ${binary} is unresolved — the bounded search did not settle it`,
       severity: 'info',
       proofState: 'needs_runtime_reproduction',
-      evidence: { binary, sinks: inconclusive.map((s) => s.sink), detail, statesPruned: pruned },
+      evidence: { binary, sinks: inconclusive.map((s) => s.sink), detail, statesPruned: pruned, toolErrors },
       rationale: [
-        'The bounded symbolic search did not reach these sinks before its budget was spent.',
+        'The bounded symbolic search did not reach these sinks before it stopped.',
         prunedNote,
+        errorNote,
         'That is NOT evidence they are unreachable — indirect jumps and unmodelled syscalls routinely hide real',
         'paths from a bounded search. The corresponding candidates keep their needs-reproduction state; raising the',
         'budget or fuzzing the binary is the next rung.',
