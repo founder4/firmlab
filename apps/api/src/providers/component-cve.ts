@@ -24,6 +24,11 @@ import type { FindingDraft } from '../findings-normalize.js';
 /** A dotted version, optionally with a single trailing letter (OpenSSL-style `1.0.1f`). */
 export interface ParsedVersion {
   nums: number[];
+  /**
+   * The raw text of each numeric field, kept because the number alone loses information: `1.01` and `1.1` both
+   * parse to `[1, 1]` and they are different releases. See `compareVersion`.
+   */
+  fields: string[];
   letter: string; // '' when absent
   raw: string;
 }
@@ -32,16 +37,35 @@ export interface ParsedVersion {
 export function parseVersion(raw: string): ParsedVersion | null {
   const m = raw.match(/^(\d+(?:\.\d+)*)([a-z])?$/);
   if (!m) return null;
-  const nums = (m[1] as string).split('.').map((n) => Number.parseInt(n, 10));
-  return { nums, letter: m[2] ?? '', raw };
+  const fields = (m[1] as string).split('.');
+  return { nums: fields.map((n) => Number.parseInt(n, 10)), fields, letter: m[2] ?? '', raw };
 }
 
-/** Pure: compare two parsed versions (numeric fields first, then the trailing letter). -1 / 0 / 1. */
+/** Is this field zero-padded (`01`) rather than plain (`1`)? A single `0` is the number zero, not padding. */
+function isPadded(field: string): boolean {
+  return field.length > 1 && field.startsWith('0');
+}
+
+/**
+ * Pure: compare two parsed versions — numeric fields first, then zero-padding, then the trailing letter. -1/0/1.
+ *
+ * The padding tiebreak exists because parsing each field as a number silently merged two real, different releases.
+ * BusyBox 1.01 shipped in 2005 and BusyBox 1.1 in 2006; both parse to `[1, 1]`, so a range boundary that fell
+ * between them would have answered the same for either, and the WR940N in this corpus ships exactly `1.01`. A
+ * padded field is ordered BEFORE the unpadded one of the same value, which is the order those releases actually
+ * came in. BusyBox is the only component here that versions this way, and the distinction is preserved rather
+ * than resolved by guesswork: `1.01` stays a version this code can tell apart from `1.1`.
+ */
 export function compareVersion(a: ParsedVersion, b: ParsedVersion): number {
   const len = Math.max(a.nums.length, b.nums.length);
   for (let i = 0; i < len; i++) {
     const d = (a.nums[i] ?? 0) - (b.nums[i] ?? 0);
     if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  for (let i = 0; i < len; i++) {
+    const pa = isPadded(a.fields[i] ?? '');
+    const pb = isPadded(b.fields[i] ?? '');
+    if (pa !== pb) return pa ? -1 : 1;
   }
   if (a.letter === b.letter) return 0;
   return a.letter < b.letter ? -1 : 1;

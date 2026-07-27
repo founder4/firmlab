@@ -28,8 +28,13 @@ function ruleFor(component: string) {
 
 describe('version parsing + comparison', () => {
   it('parses dotted versions with an optional trailing letter', () => {
-    expect(parseVersion('2.4.3')).toEqual({ nums: [2, 4, 3], letter: '', raw: '2.4.3' });
-    expect(parseVersion('1.0.1f')).toEqual({ nums: [1, 0, 1], letter: 'f', raw: '1.0.1f' });
+    expect(parseVersion('2.4.3')).toEqual({ nums: [2, 4, 3], fields: ['2', '4', '3'], letter: '', raw: '2.4.3' });
+    expect(parseVersion('1.0.1f')).toEqual({
+      nums: [1, 0, 1],
+      fields: ['1', '0', '1'],
+      letter: 'f',
+      raw: '1.0.1f',
+    });
     expect(parseVersion('not-a-version')).toBeNull();
   });
 
@@ -196,5 +201,39 @@ describe('runComponentCve (rootfs walk)', () => {
     expect(r.hits).toEqual([{ component: 'pppd', version: '2.4.3', path: 'usr/sbin/pppd' }]);
     const cve = r.findings.find((f) => f.kind === 'component-cve');
     expect(cve?.title).toContain('CVE-2020-8597');
+  });
+});
+
+describe('zero-padded versions are different releases, not the same one', () => {
+  /**
+   * BusyBox 1.01 (2005) and BusyBox 1.1 (2006) both parsed to `[1, 1]`, so the comparator called them equal. The
+   * WR940N in this corpus ships exactly `1.01`, so the collapse was live, not theoretical — harmless only because
+   * no range boundary happened to fall between the two.
+   */
+  it('tells 1.01 apart from 1.1, in the order they shipped', () => {
+    const a = pv('1.01');
+    const b = pv('1.1');
+    expect(a.nums).toEqual(b.nums); // the collapse: identical numerically
+    expect(compareVersion(a, b)).toBe(-1);
+    expect(compareVersion(b, a)).toBe(1);
+  });
+
+  it('puts a boundary between them where the collapse used to answer the same for both', () => {
+    expect(versionInRange('1.01', '1.0', '1.0.9')).toBe(false);
+    expect(versionInRange('1.01', '1.1', '1.20')).toBe(false); // 1.01 predates the 1.1 series
+    expect(versionInRange('1.1', '1.1', '1.20')).toBe(true);
+  });
+
+  it('does not treat a bare 0 as padding', () => {
+    expect(compareVersion(pv('1.0'), pv('1.0'))).toBe(0);
+    expect(versionInRange('1.0.0', '1.0.0', '1.24.2')).toBe(true);
+  });
+
+  it('leaves the corpus ranges answering as before', () => {
+    // Both BusyBox builds still sit inside CVE-2011-2716, and pppd/openssl are unaffected.
+    expect(versionInRange('1.01', '1.0.0', '1.19.4')).toBe(true);
+    expect(versionInRange('1.7.2', '1.0.0', '1.19.4')).toBe(true);
+    expect(versionInRange('2.4.3', '2.4.2', '2.4.8')).toBe(true);
+    expect(versionInRange('1.0.1e', '1.0.1', '1.0.1f')).toBe(true);
   });
 });
