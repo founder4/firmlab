@@ -25,6 +25,7 @@ import { EXTRACT_DIR } from '../paths.js';
 import { getImage, listBinaries, registerBinary, updateImageIdentity } from '../store.js';
 import { isToolAvailable } from '../tools.js';
 import { type CarveStep, runRecursiveCarve } from './carve.js';
+import { type NoRootfsDiagnosis, diagnoseNoRootfs } from './extract-diagnose.js';
 import type { JobHandle } from './jobs.js';
 
 const execFileAsync = promisify(execFile);
@@ -42,6 +43,11 @@ export interface ExtractResult {
   detectedEndianness?: Endianness;
   /** The recursive-carve chain-of-evidence (FIT→UBI→SquashFS), when the multi-stage carver ran. */
   carveTrace?: CarveStep[];
+  /**
+   * Why there is no rootfs, when there is none. `rootfsPath: null` on its own is the least informative thing this
+   * provider can say and it covered three situations needing three different responses — see extract-diagnose.ts.
+   */
+  noRootfsDiagnosis?: NoRootfsDiagnosis;
 }
 
 /** Directory names that mark the root of an extracted Linux rootfs. */
@@ -87,7 +93,22 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
     handle.log('No Linux rootfs located in the carve output.');
     // binwalk could not open the container (e.g. a raw UBI it declines to split) — try the recursive carver.
     const carved = await tryCarve(imageId, imagePath, outputDir, handle);
-    return carved ?? { extractor: 'binwalk', outputDir, rootfsPath: null, tree: null, summary: null };
+    if (carved) return carved;
+    // Still nothing. Say WHY, from what is on disk: a `rootfsPath: null` with no verdict is the silent-empty
+    // failure docs/AUTONOMOUS-WORKERS.md §3.1(3) blames for the GL.iNet and GE800 misses.
+    const diagnosis = diagnoseNoRootfs(outputDir);
+    handle.log(`No rootfs — diagnosis: ${diagnosis.verdict}`);
+    for (const v of diagnosis.volumes.slice(0, 8)) {
+      handle.log(`  volume ${path.relative(outputDir, v.dir)}: ${v.files} file(s) — ${v.topLevel.join(', ')}`);
+    }
+    return {
+      extractor: 'binwalk',
+      outputDir,
+      rootfsPath: null,
+      tree: null,
+      summary: null,
+      noRootfsDiagnosis: diagnosis,
+    };
   }
 
   handle.log(`Rootfs located: ${rootfsPath}`);

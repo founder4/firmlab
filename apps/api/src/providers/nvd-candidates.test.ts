@@ -21,10 +21,7 @@ describe('mergeNvdCandidates — what actually leaves, counted before it leaves'
   });
 
   it('does not send a component twice because both sources found it', () => {
-    const { candidates, fingerprintedOnly } = mergeNvdCandidates(
-      [{ name: 'busybox', version: '1.01' }],
-      fingerprinted,
-    );
+    const { candidates, fingerprintedOnly } = mergeNvdCandidates([{ name: 'busybox', version: '1.01' }], fingerprinted);
     expect(candidates.filter((c) => c.name === 'busybox')).toHaveLength(1);
     expect(fingerprintedOnly.map((c) => c.name)).toEqual(['pppd', 'dropbear']);
   });
