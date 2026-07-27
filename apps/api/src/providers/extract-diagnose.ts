@@ -111,6 +111,28 @@ export function diagnoseSquashfs(blob: Uint8Array): SquashfsDiagnosis | null {
   return { superblock, blobSize, short, idTableInZeroFill, verdict };
 }
 
+/**
+ * Pure: read a raw ("alone" format) LZMA header — the shape binwalk carves out of a uImage and names `.7z`.
+ *
+ * The header is 13 bytes: a properties byte, a 4-byte dictionary size, and an 8-byte uncompressed size. That last
+ * field is the useful one: it says how much payload is supposed to be in there, which turns "a blob we did not
+ * open" into "3.8 MB of compressed data that claims to hold 7.6 MB, unexamined". Returns null when the bytes are
+ * not a plausible LZMA-alone stream — the properties byte encodes lc/lp/pb and cannot exceed 224.
+ */
+export function parseLzmaHeader(buf: Uint8Array): { dictSize: number; uncompressedSize: number } | null {
+  if (buf.length < 13) return null;
+  const props = buf[0] as number;
+  if (props > 224) return null;
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const dictSize = dv.getUint32(1, true);
+  // Power-of-two-ish dictionaries only; a random blob rarely lands on one.
+  if (dictSize === 0 || (dictSize & (dictSize - 1)) !== 0) return null;
+  const uncompressedSize = Number(dv.getBigUint64(5, true));
+  // 0xFFFFFFFFFFFFFFFF means "unknown", which is legal but tells us nothing; anything absurd is not a real stream.
+  if (uncompressedSize === 0 || uncompressedSize > 0x1_0000_0000) return null;
+  return { dictSize, uncompressedSize };
+}
+
 export interface ExtractedVolume {
   dir: string;
   files: number;
@@ -198,7 +220,7 @@ function collectBlobs(root: string, maxDepth = 4): string[] {
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         if (depth < maxDepth) stack.push({ dir: abs, depth: depth + 1 });
-      } else if (e.isFile() && /\.(squashfs|sqfs)$/i.test(e.name)) {
+      } else if (e.isFile() && /\.(squashfs|sqfs|7z|lzma|xz|lzo|gz|jffs2|cramfs|ubifs)$/i.test(e.name)) {
         out.push(abs);
       }
     }
@@ -249,8 +271,26 @@ export function diagnoseNoRootfs(outputDir: string): NoRootfsDiagnosis {
     if (size === 0 || size > BLOB_DIAGNOSE_CAP) continue;
     const bytes = readHeadAndTail(blobPath);
     if (!bytes) continue;
-    const d = diagnoseSquashfs(bytes);
-    if (d) blobs.push({ path: blobPath, diagnosis: d.verdict });
+    const squash = diagnoseSquashfs(bytes);
+    if (squash) {
+      blobs.push({ path: blobPath, diagnosis: squash.verdict });
+      continue;
+    }
+    // Not a SquashFS. A carved COMPRESSED blob still has to be reported: it is payload nobody opened, and calling
+    // that "nothing was extracted" was the first thing this diagnosis got wrong on real bytes (AliExpress carries a
+    // 3.8 MB raw-LZMA kernel blob and the verdict said the output was empty).
+    const lzma = parseLzmaHeader(bytes);
+    if (lzma) {
+      blobs.push({
+        path: blobPath,
+        diagnosis: `A raw LZMA stream of ${size} bytes, declaring ${lzma.uncompressedSize} bytes uncompressed, was carved and never unpacked — binwalk names these \`.7z\` and does not always recurse into them. The payload is UNEXAMINED, which is not the same as absent: whatever filesystem it holds has not been looked at.`,
+      });
+      continue;
+    }
+    blobs.push({
+      path: blobPath,
+      diagnosis: `A ${size}-byte blob was carved and no extractor here opened it. Unexamined, not clean.`,
+    });
   }
 
   const parts: string[] = [];

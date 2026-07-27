@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { diagnoseNoRootfs, diagnoseSquashfs, parseSquashfsSuperblock } from './extract-diagnose.js';
+import { diagnoseNoRootfs, diagnoseSquashfs, parseLzmaHeader, parseSquashfsSuperblock } from './extract-diagnose.js';
 
 /** Build a SquashFS 4.0 little-endian superblock with chosen fields, padded to `size`. */
 function squashfs(opts: { inodes: number; comp: number; bytesUsed: number; idTable: number; size: number }): Buffer {
@@ -125,5 +125,39 @@ describe('diagnoseNoRootfs — three empties that need three different next move
     const d = diagnoseNoRootfs(root);
     expect(d.verdict).toContain('Nothing was extracted');
     expect(d.verdict).toContain('not a clean result');
+  });
+});
+
+describe('parseLzmaHeader — a carved blob nobody opened is not an empty result', () => {
+  /** Raw LZMA "alone" header, verbatim shape from AliExpress-Repeater's carved kernel blob. */
+  const lzma = (uncompressed: number, size = 64): Buffer => {
+    const b = Buffer.alloc(size);
+    b[0] = 0x5d; // lc=3 lp=0 pb=2
+    b.writeUInt32LE(33554432, 1); // 32 MB dictionary
+    b.writeBigUInt64LE(BigInt(uncompressed), 5);
+    return b;
+  };
+
+  it('reads the declared uncompressed size, which is what makes the blob worth reporting', () => {
+    expect(parseLzmaHeader(lzma(7660784))).toEqual({ dictSize: 33554432, uncompressedSize: 7660784 });
+  });
+
+  it('rejects bytes that are not a plausible stream rather than inventing a payload size', () => {
+    expect(parseLzmaHeader(Buffer.alloc(64, 0xff))).toBeNull(); // props byte out of range
+    const badDict = lzma(1000);
+    badDict.writeUInt32LE(12345, 1); // not a power of two
+    expect(parseLzmaHeader(badDict)).toBeNull();
+    expect(parseLzmaHeader(Buffer.alloc(4))).toBeNull();
+  });
+
+  it('reports a carved LZMA blob as unexamined instead of calling the output empty', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'diagnose-lzma-'));
+    fs.writeFileSync(path.join(root, '50040.7z'), lzma(7660784, 4096));
+    const d = diagnoseNoRootfs(root);
+    expect(d.verdict).toContain('50040.7z');
+    expect(d.verdict).toContain('7660784');
+    expect(d.verdict).toContain('UNEXAMINED');
+    expect(d.verdict).not.toContain('Nothing was extracted');
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });
