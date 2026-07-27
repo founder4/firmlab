@@ -11,6 +11,16 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * The interpreter that owns angr. angr drags in z3/unicorn/pyvex/capstone, so the image installs it into its OWN
+ * virtualenv rather than the system python3 that chipsec also uses — `FIRMLAB_ANGR_PYTHON` points at that venv's
+ * interpreter. Falling back to `python3` keeps a plain host install (or a dev machine with angr on the system
+ * python) working without configuration.
+ */
+export function angrPython(): string {
+  return process.env.FIRMLAB_ANGR_PYTHON || 'python3';
+}
+
 /** Resolve a binary on PATH (executable), for tools whose --version probe is too slow/costly to run (e.g. a JVM). */
 function resolveOnPath(bin: string): string | null {
   for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
@@ -42,7 +52,8 @@ export type ToolId =
   | 'qemu-system-mipsel'
   | 'qemu-system-arm'
   | 'renode'
-  | 'chipsec';
+  | 'chipsec'
+  | 'angr';
 
 interface ToolSpec {
   id: ToolId;
@@ -57,7 +68,13 @@ interface ToolSpec {
   /** Detect by PATH existence instead of executing — for tools whose probe is too slow (Ghidra's JVM startup > the
    *  probe timeout) or exits non-zero on --help. */
   detectByExistence?: boolean;
+  /** Override the probe timeout. Only for a tool that is genuinely slow to answer (importing angr pulls in z3,
+   *  unicorn and pyvex — seconds, not milliseconds) and would otherwise be misreported as absent. */
+  timeoutMs?: number;
 }
+
+/** Probe timeout for a tool that answers promptly. */
+const DEFAULT_PROBE_TIMEOUT_MS = 4000;
 
 const TOOLS: readonly ToolSpec[] = [
   { id: 'binwalk', bin: 'binwalk', probe: ['--help'], unlocks: 'Format-aware signature carving', group: 'extract' },
@@ -129,6 +146,16 @@ const TOOLS: readonly ToolSpec[] = [
     unlocks: 'UEFI/BIOS firmware analysis (offline decode + IOC scan)',
     group: 'analyze',
   },
+  {
+    id: 'angr',
+    // angr is a Python library, not a command — the honest probe is "can this interpreter import it?", so the
+    // reported bin is the interpreter and the version line is angr's own.
+    bin: angrPython(),
+    probe: ['-c', 'import angr; print("angr", angr.__version__)'],
+    unlocks: 'Symbolic reachability (is a dangerous sink on a live path?)',
+    group: 'analyze',
+    timeoutMs: 30000,
+  },
 ];
 
 export interface ToolStatus {
@@ -155,7 +182,9 @@ async function probe(spec: ToolSpec): Promise<ToolStatus> {
     };
   }
   try {
-    const { stdout, stderr } = await execFileAsync(spec.bin, spec.probe, { timeout: 4000 });
+    const { stdout, stderr } = await execFileAsync(spec.bin, spec.probe, {
+      timeout: spec.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+    });
     const out = `${stdout}${stderr}`.split('\n')[0]?.trim().slice(0, 120) ?? '';
     return { id: spec.id, bin: spec.bin, available: true, version: out, unlocks: spec.unlocks, group: spec.group };
   } catch {

@@ -24,6 +24,7 @@ export type ProviderId =
   | 'encrypted'
   | 'webtaint'
   | 'binvuln'
+  | 'symreach'
   | 'decompile';
 
 export interface PlanSpec {
@@ -35,6 +36,8 @@ export interface PlanSpec {
   note?: string;
   /** A concrete target for the executor (e.g. the rootfs-relative binary path for a `decompile` spec). */
   target?: string;
+  /** For a `symreach` spec: the unbounded-copy sinks to ask about inside `target`. */
+  sinks?: string[];
   /** `replan` = dynamically scheduled by W9 in response to a lead (vs a seed spec from the class DAG). */
   origin?: 'replan';
   /** The lead that caused this spec to be scheduled (shown in the trace). */
@@ -43,15 +46,25 @@ export interface PlanSpec {
 
 /**
  * A lead a worker surfaces mid-run that should re-plan the agenda — the thing that turns W9's fixed per-class DAG
- * into a dynamic worklist. Today the one kind is "decompile this specific binary" (a network daemon a scan found,
- * or the httpd that serves a tainted handler).
+ * into a dynamic worklist. Two kinds today: "decompile this specific binary" (a network daemon a scan found, or the
+ * httpd that serves a tainted handler), and "prove whether this binary's unsafe sinks are actually reachable" (a
+ * binvuln candidate, whose imports-plus-no-canary precondition is exactly the thing symbolic execution can settle).
  */
-export interface Lead {
-  kind: 'decompile-binary';
-  /** The rootfs-relative binary to analyze. */
-  target: string;
-  reason: string;
-}
+export type Lead =
+  | {
+      kind: 'decompile-binary';
+      /** The rootfs-relative binary to analyze. */
+      target: string;
+      reason: string;
+    }
+  | {
+      kind: 'prove-reachability';
+      /** The rootfs-relative binary whose sinks are in question. */
+      target: string;
+      reason: string;
+      /** The unbounded-copy functions this binary imports — the sinks to ask angr about. */
+      sinks: string[];
+    };
 
 const EXTRACT: PlanSpec = {
   worker: 'W1 · Extraction',
@@ -207,28 +220,40 @@ function baseName(p: string): string {
  */
 export function specKey(spec: PlanSpec): string {
   if (spec.provider === 'decompile' && spec.target) return `decompile:${spec.target}`;
+  if (spec.provider === 'symreach' && spec.target) return `symreach:${spec.target}`;
   return spec.provider ?? spec.worker;
 }
 
 /**
  * Pure: map one lead to the follow-up spec(s) to schedule. A `decompile-binary` lead becomes a W5 targeted
- * binary-vuln spec (origin `replan`), unless that binary is already planned — then it is dropped (idempotent).
+ * binary-vuln spec; a `prove-reachability` lead becomes a W5 symbolic-reachability spec over that binary's sinks.
+ * Both carry origin `replan`, and both are dropped when the same target is already planned (idempotent).
  */
 export function replan(lead: Lead, planned: ReadonlySet<string>): PlanSpec[] {
-  if (lead.kind === 'decompile-binary') {
-    const spec: PlanSpec = {
-      worker: `W5 · Binary-vuln (${baseName(lead.target)})`,
-      reason: lead.reason,
-      needsRootfs: true,
-      built: true,
-      provider: 'decompile',
-      target: lead.target,
-      origin: 'replan',
-      trigger: lead.reason,
-    };
-    return planned.has(specKey(spec)) ? [] : [spec];
-  }
-  return [];
+  const spec: PlanSpec =
+    lead.kind === 'decompile-binary'
+      ? {
+          worker: `W5 · Binary-vuln (${baseName(lead.target)})`,
+          reason: lead.reason,
+          needsRootfs: true,
+          built: true,
+          provider: 'decompile',
+          target: lead.target,
+          origin: 'replan',
+          trigger: lead.reason,
+        }
+      : {
+          worker: `W5 · Reachability (${baseName(lead.target)})`,
+          reason: lead.reason,
+          needsRootfs: true,
+          built: true,
+          provider: 'symreach',
+          target: lead.target,
+          sinks: lead.sinks,
+          origin: 'replan',
+          trigger: lead.reason,
+        };
+  return planned.has(specKey(spec)) ? [] : [spec];
 }
 
 /** Mutable bookkeeping for dynamic scheduling across a run: what's planned, how many dynamic steps, how many capped. */

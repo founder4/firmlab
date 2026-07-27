@@ -19,7 +19,7 @@ import type { ImageIdentity } from '@firmlab/core';
 import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } from './findings.js';
 import type { LlmConfig } from './llm.js';
 import { complete } from './llm.js';
-import { daemonLeads, handlerLeads } from './opacidad-leads.js';
+import { daemonLeads, handlerLeads, reachabilityLeads } from './opacidad-leads.js';
 import {
   type FindingsSummary,
   type OpacidadContext,
@@ -58,6 +58,7 @@ import type { JobHandle } from './providers/jobs.js';
 import { runRtosAnalysis } from './providers/rtos.js';
 import { runSbom } from './providers/sbom.js';
 import { runServiceMap } from './providers/servicemap.js';
+import { runSymReach } from './providers/symreach.js';
 import { buildTaintScaffold } from './providers/taint.js';
 import { runUbootAnalysis } from './providers/uboot.js';
 import { runWebTaint } from './providers/webtaint.js';
@@ -281,10 +282,45 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
 async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
   const r = runBinVuln(c.rootfsPath);
   syncFindings(c.imageId, 'binvuln', r.findings);
+  // Each candidate is a precondition, not a bug. Hand the top few to the symbolic prober so the run can settle
+  // whether the sink is actually on a live path instead of leaving a list of maybes.
+  const leads = c.rootfsPath ? reachabilityLeads(r.findings, c.rootfsPath) : [];
   return {
     summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)`,
     findingCount: r.findings.length,
+    ...(leads.length ? { leads } : {}),
     ...(r.binariesScanned === 0 ? { degraded: true, note: r.reason } : {}),
+  };
+}
+
+/**
+ * W5 depth — symbolic reachability, scheduled by W9's re-planning off a binvuln candidate. Answers one question per
+ * sink: is the call site reachable from the entry point under symbolic input? A reached sink is a `static_confirmed`
+ * reachability claim; a sink not reached inside the budget stays inconclusive and is recorded as such.
+ */
+async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
+  const binary = spec.target;
+  if (!binary)
+    return { summary: 'no target binary', findingCount: 0, degraded: true, note: 'symreach spec missing target' };
+  const r = await runSymReach(c.rootfsPath, binary, spec.sinks ?? [], c.handle);
+  // Per-binary idempotent source, mirroring `binary:<path>` — a re-run re-syncs rather than duplicating.
+  syncFindings(c.imageId, `symreach:${binary}`, r.findings);
+  if (!r.available) {
+    return {
+      summary: `reachability ${binary}: unavailable`,
+      findingCount: r.findings.length,
+      degraded: true,
+      note: r.reason,
+    };
+  }
+  const reached = r.sinks.filter((s) => s.outcome === 'reached');
+  const summary = reached.length
+    ? `reachability ${binary}: ${reached.map((s) => s.sink).join('/')} reachable from entry`
+    : `reachability ${binary}: no sink reached inside the budget (inconclusive, not clean)`;
+  return {
+    summary,
+    findingCount: r.findings.length,
+    ...(reached.length === 0 ? { degraded: true, note: r.reason } : {}),
   };
 }
 
@@ -333,6 +369,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   encrypted: encryptedRun,
   webtaint: webtaintRun,
   binvuln: binvulnRun,
+  symreach: symreachRun,
   decompile: decompileRun,
 };
 

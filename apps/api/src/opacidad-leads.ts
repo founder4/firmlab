@@ -1,10 +1,12 @@
-import type { Lead } from './opacidad-plan.js';
 /**
- * W9 re-planning — lead resolution. Turns a completed worker's output into `Lead`s that re-plan the agenda. Two
- * sources produce leads today: service enumeration (each autostart network daemon → decompile it) and web-taint
- * (the httpd that serves a tainted handler → decompile it). A lead only survives if its binary actually resolves
- * to a regular file inside the rootfs — so W9 never schedules a decompile of a daemon that isn't really there.
+ * W9 re-planning — lead resolution. Turns a completed worker's output into `Lead`s that re-plan the agenda. Three
+ * sources produce leads today: service enumeration (each autostart network daemon → decompile it), web-taint (the
+ * httpd that serves a tainted handler → decompile it), and the binary-vuln sweep (each stack-overflow candidate →
+ * ask angr whether its sinks are actually reachable). A lead only survives if its binary actually resolves to a
+ * regular file inside the rootfs — so W9 never schedules work on a daemon that isn't really there.
  */
+import type { FindingDraft } from './findings-normalize.js';
+import type { Lead } from './opacidad-plan.js';
 import { resolveInsideRootfs } from './providers/decompile.js';
 import type { Service } from './providers/servicemap.js';
 import type { HandlerAnalysis } from './providers/webtaint.js';
@@ -40,6 +42,41 @@ export function daemonLeads(services: Service[], rootfsPath: string): Lead[] {
       target: bin,
       reason: `network daemon ${s.name} (autostart) — decompile for memory-safety sinks`,
     });
+  }
+  return leads;
+}
+
+/**
+ * How many candidates get the expensive treatment. Symbolic execution costs real wall-clock per binary, and a busy
+ * rootfs yields dozens of candidates; asking about the first few keeps an autonomous scan bounded. The overflow is
+ * NOT silently dropped — `runBinVuln`'s candidate count stays in the findings, so the unasked ones remain visible
+ * as candidates, they simply keep their needs-reproduction state.
+ */
+export const REACHABILITY_LEAD_CAP = 3;
+
+/**
+ * Leads from the binary-vuln sweep: each stack-overflow candidate becomes one reachability question. The candidate
+ * finding already carries the binary path and the unbounded-copy functions it imports, which is exactly the input
+ * the symbolic probe needs — so this reads the drafts rather than re-walking the rootfs.
+ */
+export function reachabilityLeads(candidates: FindingDraft[], rootfsPath: string): Lead[] {
+  const leads: Lead[] = [];
+  const seen = new Set<string>();
+  for (const f of candidates) {
+    if (f.kind !== 'binary-pwnable-candidate') continue;
+    const ev = (f.evidence ?? {}) as Record<string, unknown>;
+    const target = typeof ev.path === 'string' ? ev.path : '';
+    const sinks = Array.isArray(ev.unsafeFns) ? ev.unsafeFns.filter((s): s is string => typeof s === 'string') : [];
+    if (!target || sinks.length === 0 || seen.has(target)) continue;
+    if (!resolveInsideRootfs(rootfsPath, target)) continue;
+    seen.add(target);
+    leads.push({
+      kind: 'prove-reachability',
+      target,
+      sinks,
+      reason: `stack-overflow candidate (${sinks.join('/')}, no canary) — prove whether the sink is on a live path`,
+    });
+    if (leads.length >= REACHABILITY_LEAD_CAP) break;
   }
   return leads;
 }

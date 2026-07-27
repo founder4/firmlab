@@ -122,3 +122,17 @@ RUN bash -c 'ARCH="$(dpkg --print-architecture)" \
     && apt-get update && apt-get install -y --no-install-recommends /tmp/sasquatch.deb \
     && rm -f /tmp/sasquatch.deb && rm -rf /var/lib/apt/lists/* && command -v sasquatch' \
     || echo "sasquatch optional install failed — vendor-SquashFS extraction degrades to unsquashfs"
+
+# === angr — symbolic reachability (providers/symreach.ts). Adds ~1 GB (z3 + unicorn + pyvex + capstone). ===
+# Installed into its OWN virtualenv, not the system python3: chipsec lives on the system interpreter and angr's
+# dependency closure is large enough that sharing it invites a version conflict between two optional tools.
+# `FIRMLAB_ANGR_PYTHON` is what tools.ts probes and what the provider executes, so the isolation is explicit
+# rather than a PATH accident. Placed last — a failed install must degrade honestly, never fail the image.
+ENV FIRMLAB_ANGR_PYTHON=/opt/angr-venv/bin/python3
+RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends python3-venv \
+    && python3 -m venv /opt/angr-venv \
+    && /opt/angr-venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/angr-venv/bin/pip install --no-cache-dir angr \
+    && /opt/angr-venv/bin/python3 -c "import angr; print(\"angr\", angr.__version__)" \
+    && rm -rf /var/lib/apt/lists/*' \
+    || echo "angr optional install failed — symbolic reachability degrades honestly"
