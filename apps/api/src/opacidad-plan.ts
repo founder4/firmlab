@@ -151,6 +151,36 @@ const LINUX_CHAIN: PlanSpec[] = [
   },
 ];
 
+/**
+ * Recon workers that read the RAW IMAGE and need no rootfs, so they apply to every device class.
+ *
+ * They used to hang off the Linux chain alone, which made them unreachable for an `rtos`, `baremetal`, `esp-soc`
+ * or `encrypted` image — classes whose plan is one worker wide. The third experimental pass caught it: driving
+ * the providers directly over Xiaomi-Repeater_2018 (an eCos monolith, `rtos`), the U-Boot worker parsed 6
+ * environment variables and flagged `bootcmd` booting over **tftp** — a real network-boot exposure that the fixed
+ * class plan structurally could not reach, on an image its own coverage report was calling fully covered.
+ *
+ * They are cheap and they degrade to nothing honestly (no U-Boot env / no X.509 / no FCC ID each report zero),
+ * and a stage that ran and found nothing is strictly more information than a stage that was never planned.
+ */
+const RECON_ANY_CLASS: PlanSpec[] = [
+  {
+    worker: 'Static · Certificates',
+    reason: 'embedded X.509 posture (reads the raw image — no rootfs needed)',
+    needsRootfs: false,
+    built: true,
+    provider: 'certs',
+  },
+  {
+    worker: 'Static · U-Boot env',
+    reason: 'boot posture (init=/bin/sh, interruptible autoboot, net-boot, console)',
+    needsRootfs: false,
+    built: true,
+    provider: 'uboot',
+  },
+  { worker: 'Recon · FCC-ID', reason: 'FCC IDs → public filings', needsRootfs: false, built: true, provider: 'fcc' },
+];
+
 /** Given W0's class, the ordered plan of workers. Pure — the routing itself is unit-tested. */
 export function specsForClass(cls: string): PlanSpec[] {
   switch (cls) {
@@ -173,6 +203,7 @@ export function specsForClass(cls: string): PlanSpec[] {
           built: true,
           provider: 'fwhunt',
         },
+        ...RECON_ANY_CLASS,
       ];
     case 'baremetal':
     case 'rtos':
@@ -184,6 +215,7 @@ export function specsForClass(cls: string): PlanSpec[] {
           built: true,
           provider: 'rtos',
         },
+        ...RECON_ANY_CLASS,
       ];
     case 'esp-soc':
       return [
@@ -194,6 +226,7 @@ export function specsForClass(cls: string): PlanSpec[] {
           built: true,
           provider: 'esp',
         },
+        ...RECON_ANY_CLASS,
       ];
     case 'encrypted':
       return [
@@ -204,9 +237,10 @@ export function specsForClass(cls: string): PlanSpec[] {
           built: true,
           provider: 'encrypted',
         },
+        ...RECON_ANY_CLASS,
       ];
     default:
-      return [EXTRACT];
+      return [EXTRACT, ...RECON_ANY_CLASS];
   }
 }
 

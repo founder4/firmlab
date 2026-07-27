@@ -18,6 +18,7 @@ import {
   replan,
   scheduleLeads,
   specKey,
+  specsForClass,
 } from './opacidad-plan.js';
 import type { Service } from './providers/servicemap.js';
 import type { SinkHit } from './providers/webtaint.js';
@@ -210,5 +211,31 @@ describe('the reachability budget is global across lead sources', () => {
     const candidates = [candidate('bin/a'), candidate('bin/b'), candidate('bin/c')];
     expect(reachabilityLeads(candidates, root, 1).map((l) => l.target)).toEqual(['bin/a']);
     expect(reachabilityLeads(candidates, root, 0)).toEqual([]);
+  });
+});
+
+describe('specsForClass — rootfs-free recon reaches every class', () => {
+  // The third experimental pass caught this: driving the providers directly over an eCos `rtos` image, the U-Boot
+  // worker flagged `bootcmd` booting over tftp — a real exposure the fixed class plan could not reach, on an image
+  // whose own coverage report called it fully covered. Those workers read the raw image and need no rootfs.
+  const ROOTFS_FREE = ['certs', 'uboot', 'fcc'];
+
+  for (const cls of ['rtos', 'baremetal', 'esp-soc', 'encrypted', 'uefi-bios', 'something-unknown']) {
+    it(`routes ${cls} to the rootfs-free recon workers`, () => {
+      const providers = specsForClass(cls).map((s) => s.provider);
+      for (const p of ROOTFS_FREE) expect(providers).toContain(p);
+    });
+  }
+
+  it('keeps each class its own deep worker rather than replacing it', () => {
+    expect(specsForClass('esp-soc').map((s) => s.provider)).toContain('esp');
+    expect(specsForClass('encrypted').map((s) => s.provider)).toContain('encrypted');
+    expect(specsForClass('rtos').map((s) => s.provider)).toContain('rtos');
+    expect(specsForClass('uefi-bios').map((s) => s.provider)).toContain('fwhunt');
+  });
+
+  it('does not duplicate them in the Linux chain, which already had them', () => {
+    const providers = specsForClass('embedded-linux').map((s) => s.provider);
+    for (const p of ROOTFS_FREE) expect(providers.filter((x) => x === p)).toHaveLength(1);
   });
 });
