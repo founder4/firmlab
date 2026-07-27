@@ -191,10 +191,16 @@ RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*' \
     || echo "rizin build failed — UEFI implant scanning degrades honestly"
 
+# The rule corpus is DATA this analysis depends on, so it is pinned: tracking `main` would silently change what a
+# scan covers between two rebuilds, and "17 of 108 rules ran" would stop being a reproducible statement. Bump
+# deliberately, and expect the covered-rule count to move when you do.
+ARG FWHUNT_RULES_REF=a2e3be630e407a49c8076178c712bcf6cccda1bf
 RUN bash -c 'cd / && apt-get update && apt-get install -y --no-install-recommends git python3-venv \
     && python3 -m venv /opt/fwhunt-venv \
     && /opt/fwhunt-venv/bin/pip install --no-cache-dir fwhunt-scan \
-    && git clone --depth 1 https://github.com/binarly-io/FwHunt /opt/fwhunt-rules \
+    && git clone https://github.com/binarly-io/FwHunt /opt/fwhunt-rules \
+    && git -C /opt/fwhunt-rules checkout --quiet "${FWHUNT_RULES_REF}" \
+    && git -C /opt/fwhunt-rules log -1 --format="FwHunt rules @ %H (%ad)" --date=short \
     && /opt/fwhunt-venv/bin/python3 -c "import fwhunt_scan, rzpipe; print(\"fwhunt-scan ok\")" \
     && test -f /opt/fwhunt-venv/bin/fwhunt_scan_analyzer.py \
     && echo "FwHunt rules: $(find /opt/fwhunt-rules/rules -name \"*.yml\" | wc -l)" \

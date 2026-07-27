@@ -30,7 +30,8 @@ export type JobKind =
   | 'fcc'
   | 'opacidad'
   | 'symreach'
-  | 'fwhunt';
+  | 'fwhunt'
+  | 'funcdiff';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {
