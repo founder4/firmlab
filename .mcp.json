@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "firmlab": {
+      "command": "docker",
+      "args": ["exec", "-i", "firmlab", "node", "/app/apps/api/dist/mcp/server.js"],
+      "env": {}
+    }
+  }
+}

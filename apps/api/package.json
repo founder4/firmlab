@@ -15,6 +15,8 @@
     "@fastify/multipart": "^8.3.0",
     "@fastify/static": "^7.0.4",
     "@firmlab/core": "workspace:*",
-    "fastify": "^4.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "fastify": "^4.29.0",
+    "zod": "^4.4.3"
   }
 }

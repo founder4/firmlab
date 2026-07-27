@@ -433,3 +433,60 @@ without an autonomous agent):
 Deferred remainders (in `BACKLOG.md`): aux-partition *extraction* (BeanView cloud secret), on-device
 decode-routine reversing (Pico flags), nvram parser + `/etc/shadow` cracking, and angr symbolic reachability to
 upgrade W5 candidates to confirmed.
+
+## 10. The third arrangement — an agent driving the app's providers (2026-07-27)
+
+§2 measured two arrangements and treated them as the whole space:
+
+| | adapts to what it finds | reproducible | honest about what it did not do |
+|---|---|---|---|
+| **App pass** (fixed pipeline) | no — runs the class DAG | yes | yes, structurally |
+| **Autonomous pass** (agent + raw toolchain) | yes | no | no — §7.5/§9 record real overstatements |
+
+There is a third, and it was never run: **an agent driving the app's providers.** The agent keeps the adaptivity —
+it decides what to ask, in what order, and when to stop — while every answer it receives is one FirmLab is willing
+to defend, carrying its proof state and the record of what did not run. It is the synthesis the head-to-head was
+implicitly arguing towards, and the providers were already clean seams, so it is mostly façade.
+
+`apps/api/src/mcp/` is that façade: a stdio MCP server exposing ten tools over the existing HTTP API. It talks to
+the API rather than importing the providers, deliberately — the routes are where findings get synced under their
+idempotent sources and where the honest guards live, and the API process holds the SQLite database open, so a
+second in-process writer would be a lock conflict waiting to happen.
+
+### The part that is not façade
+
+Handing FirmLab's output to a language model reintroduces, at a layer where nobody is watching, exactly the
+failure this document is about. The UI answers it with a banner: a findings list is meaningless until you know
+which stages produced it. An agent has no banner. It calls a tool, receives `{"findings": []}`, and writes "no
+vulnerabilities were found" — a sentence the data cannot support, because an empty list is produced identically by
+"every applicable stage ran and found nothing" and by "extraction never recovered a rootfs, so eight of twelve
+stages never ran". Those are opposite conclusions, and §9's own overstatements are what happens when that
+distinction is left to inference.
+
+So `mcp/format.ts` holds the rule, and it is unit-tested rather than documented: **a result that could be read as
+a negative carries its own verdict inline** — not in a companion tool the agent might not call, but in the same
+payload, in the first field. `findingsPayload` will not emit a list without the coverage sentence attached.
+`scanPayload` lifts the workers that did NOT complete out of the fifteen-entry trace, above the narrative, because
+buried in an array a model reads them as noise and they are precisely what bounds the narrative.
+`reachabilityPayload` restates each sink outcome in words that cannot be collapsed, since `not_reached_in_budget`
+*looks* like a negative result and is the absence of one. And the server's `initialize` instructions brief the
+model on the proof-state ladder and name the two inferences that are always wrong here.
+
+Where the fixed pipeline is honest by construction and the raw-toolchain agent is honest only when it happens to
+be, this arrangement makes honesty the shape of the data the agent is handed.
+
+### Running it
+
+```
+claude mcp add firmlab -- docker exec -i firmlab node /app/apps/api/dist/mcp/server.js
+```
+
+The repo ships a project-scoped `.mcp.json` with the same command (the deployed container publishes no host port,
+so the exec channel *is* the transport). Against a local dev API instead: `FIRMLAB_API=http://127.0.0.1:8799 node
+apps/api/dist/mcp/server.js`. `FIRMLAB_MCP_HEADERS` carries a JSON header object for an instance behind SSO.
+
+### Still unmeasured
+
+The arrangement now exists; the **head-to-head has not been re-run with it**. That is the experiment §2 is missing
+and the reason this section is short: claiming the synthesis wins without running the third pass over the same 15
+firmwares would be exactly the kind of unearned conclusion the rest of this document catalogues.
