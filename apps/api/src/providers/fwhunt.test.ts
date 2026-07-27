@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { buildFwHuntFindings, parseFwHuntOutput, ruleCategory } from './fwhunt.js';
+import {
+  type CarvedModule,
+  type CorpusRule,
+  type ModulePass,
+  buildFwHuntFindings,
+  describeCarvedModule,
+  parseFwHuntOutput,
+  parseRuleMeta,
+  rankModulesForScan,
+  ruleCategory,
+  selectModuleRules,
+} from './fwhunt.js';
 
-// Verbatim from a real run against Debian's OVMF_CODE.fd, 108-rule corpus, inside the tools image.
+// Verbatim from a real `scan-firmware` run against the OVMF build shipped with this deployment's QEMU
+// (edk2-x86_64-code.fd), 108-rule corpus, inside the tools image. 17 rules ran; they touched 6 of 125 modules.
 const REAL_OUTPUT = `
 Scanner result IntelAlderLakeLeak (variant: default) No threat detected
 Scanner result BRLY-MsiLeakBootGuardKeys (variant: default) No threat detected
@@ -10,6 +22,58 @@ Scanner result BRLY-2021-010 (variant: variant1) No threat detected (NvmExpressD
 Scanner result BRLY-2021-010 (variant: variant2) No threat detected (NvmExpressDxe)
 Scanner result CVE-2023-45230 (variant: variant1) No threat detected (Dhcp6Dxe)
 `.trim();
+
+// Verbatim from a real `scan-module` run against one carved module. Both interpolations carry the delimiters:
+// the rule name has a space AND parentheses, the variant label has parentheses, and the trailer is the path we
+// passed rather than a bare module name.
+const REAL_MODULE_OUTPUT = `
+Scanner result BlackLotusBootkit (variant: lightweight scan) No threat detected (mods/VariableRuntimeDxe-cbd2e4d5-7068-4ff5-b462-9822b4ad8d60.dxe)
+Scanner result BRLY-2022-028 (RsbStuffingCheck) (variant: informational (the patch from EDK2 is missing)) FwHunt rule has been triggered and threat detected! (mods/VariableRuntimeDxe-cbd2e4d5-7068-4ff5-b462-9822b4ad8d60.dxe)
+Scanner result BRLY-2022-028 (RsbStuffingCheck) (variant: vulnerability (RSB Stuffing before RSM skipped in SMI Entry code)) No threat detected (mods/VariableRuntimeDxe-cbd2e4d5-7068-4ff5-b462-9822b4ad8d60.dxe)
+`.trim();
+
+// The head of a real corpus rule — the one whose printed name is not its filename and whose variant labels are
+// prose. Indentation is load-bearing: `parseRuleMeta` reads the `meta:` block by it.
+const REAL_RULE_YAML = `RsbStuffingCheck:
+  meta:
+    author: Binarly (https://github.com/binarly-io/FwHunt)
+    license: CC0-1.0
+    name: BRLY-2022-028 (RsbStuffingCheck)
+    namespace: MitigationFailures
+    description: Check if StuffRsb used before RSM
+    url: https://binarly.io/posts/FirmwareBleed
+    volume guids:
+      - a3ff0ef5-0c28-42f5-b544-8c7de1e80014
+      - 7a9354d9-0468-444a-81ce-0bf617d890df
+  variants:
+    informational (the patch from EDK2 is missing):
+      hex_strings:
+        not-any:
+          - f3900faee8eb..48ffc875..4881c4........0faa
+`;
+
+function carved(name: string): CarvedModule {
+  return { path: `/tmp/mods/${name}.dxe`, name };
+}
+
+function modulePassFixture(over: Partial<ModulePass> = {}): ModulePass {
+  return {
+    ran: true,
+    reason: '',
+    verdicts: [],
+    unreadableLines: 0,
+    modulesCarved: 125,
+    modulesScanned: [carved('SecMain'), carved('BdsDxe')],
+    modulesSkipped: [],
+    modulesFailed: [],
+    skipReason: '',
+    rulesOffered: 102,
+    rulesExcluded: [],
+    scopedRuleNames: [],
+    deepDirsSkipped: 0,
+    ...over,
+  };
+}
 
 describe('parseFwHuntOutput — against the analyzer’s real output shape', () => {
   it('reads rule, variant and module out of a clean run', () => {
@@ -30,7 +94,12 @@ describe('parseFwHuntOutput — against the analyzer’s real output shape', () 
   });
 
   it('survives the ANSI colour click emits on a terminal', () => {
-    const colored = `Scanner result [32mBlackLotusBootkit[0m (variant: default) [31mFwHunt rule has been triggered and threat detected![0m`;
+    // Written as escapes, not literal ESC bytes: the fixture has to survive being copied through tooling that
+    // eats control characters, and a fixture that silently loses them tests the wrong thing.
+    const g = '\u001b[32m';
+    const r = '\u001b[31m';
+    const off = '\u001b[0m';
+    const colored = `Scanner result ${g}BlackLotusBootkit${off} (variant: default) ${r}FwHunt rule has been triggered and threat detected!${off}`;
     expect(parseFwHuntOutput(colored).verdicts[0]).toMatchObject({ rule: 'BlackLotusBootkit', matched: true });
   });
 
@@ -45,6 +114,31 @@ describe('parseFwHuntOutput — against the analyzer’s real output shape', () 
   it('ignores banner and progress noise entirely', () => {
     expect(parseFwHuntOutput('loading rules...\n[*] analyzing\n').verdicts).toHaveLength(0);
   });
+
+  // The line the previous regex dropped. Its rule is the only one that TRIGGERED on real OVMF bytes, so treating
+  // it as unparseable meant the scanner's single positive never reached the ledger.
+  it('reads a rule name and a variant label that both contain parentheses', () => {
+    const { verdicts, unreadableLines } = parseFwHuntOutput(REAL_MODULE_OUTPUT);
+    expect(unreadableLines).toBe(0);
+    expect(verdicts).toHaveLength(3);
+    expect(verdicts[1]).toMatchObject({
+      rule: 'BRLY-2022-028 (RsbStuffingCheck)',
+      variant: 'informational (the patch from EDK2 is missing)',
+      matched: true,
+    });
+    expect(verdicts[2]?.variant).toBe('vulnerability (RSB Stuffing before RSM skipped in SMI Entry code)');
+  });
+
+  it('keeps the path scan-module echoes back as the module trailer', () => {
+    const { verdicts } = parseFwHuntOutput(REAL_MODULE_OUTPUT);
+    expect(verdicts[0]?.module).toBe('mods/VariableRuntimeDxe-cbd2e4d5-7068-4ff5-b462-9822b4ad8d60.dxe');
+  });
+
+  it('treats an unterminated variant group as unknown instead of guessing where it ends', () => {
+    const { verdicts, unreadableLines } = parseFwHuntOutput('Scanner result X (variant: never closed');
+    expect(verdicts).toHaveLength(0);
+    expect(unreadableLines).toBe(1);
+  });
 });
 
 describe('ruleCategory', () => {
@@ -52,6 +146,108 @@ describe('ruleCategory', () => {
     expect(ruleCategory('Threats/BlackLotusBootkit.yml')).toBe('Threats');
     expect(ruleCategory('Vulnerabilities/BRLY-2021-010.yml')).toBe('Vulnerabilities');
     expect(ruleCategory('SomethingElse/x.yml')).toBeUndefined();
+  });
+});
+
+describe('parseRuleMeta — the three fields that decide what a rule may be asked to do', () => {
+  it('reads the printed name, which is not the filename', () => {
+    expect(parseRuleMeta(REAL_RULE_YAML).name).toBe('BRLY-2022-028 (RsbStuffingCheck)');
+  });
+
+  it('counts the volume GUIDs the author scoped the rule to', () => {
+    expect(parseRuleMeta(REAL_RULE_YAML).volumeGuids).toBe(2);
+  });
+
+  it('reads a target when the rule declares one, and leaves it absent when it does not', () => {
+    expect(parseRuleMeta(REAL_RULE_YAML).target).toBeUndefined();
+    expect(parseRuleMeta('R:\n  meta:\n    name: X\n    target: firmware\n').target).toBe('firmware');
+  });
+
+  it('stops at the end of the meta block, so variant keys cannot be mistaken for meta', () => {
+    // `variants:` sits at the same indent as `meta:` and its children carry prose containing colons.
+    expect(parseRuleMeta(REAL_RULE_YAML).target).toBeUndefined();
+    expect(parseRuleMeta('R:\n  variants:\n    v:\n      name: not-meta\n').name).toBeUndefined();
+  });
+
+  it('returns an empty read rather than throwing on a file with no meta block', () => {
+    expect(parseRuleMeta('nonsense')).toEqual({ volumeGuids: 0 });
+  });
+});
+
+describe('selectModuleRules — a rule no pass can offer is a hole, not a pass', () => {
+  const corpus: CorpusRule[] = [
+    { path: 'Threats/A.yml', name: 'A', volumeGuids: 1 },
+    { path: 'Threats/B.yml', name: 'B', target: 'module', volumeGuids: 0 },
+    { path: 'SupplyChain/C.yml', name: 'C', target: 'firmware', volumeGuids: 0 },
+    { path: 'Threats/D.yml', name: 'D', target: 'bootloader', volumeGuids: 0 },
+  ];
+
+  it('offers module rules and refuses firmware/bootloader rules', () => {
+    const { rules } = selectModuleRules(corpus);
+    expect(rules.map((r) => r.name)).toEqual(['A', 'B']);
+  });
+
+  it('returns the refused rules with the target that disqualified them, instead of dropping them', () => {
+    const { excluded } = selectModuleRules(corpus);
+    expect(excluded).toEqual([
+      { rule: 'C', target: 'firmware' },
+      { rule: 'D', target: 'bootloader' },
+    ]);
+  });
+});
+
+describe('describeCarvedModule — two carvers, two layouts, one label', () => {
+  it('reads the analyzer’s own flat `<Name>-<guid><ext>` output', () => {
+    expect(describeCarvedModule('/t/mods/VariableRuntimeDxe-cbd2e4d5-7068-4ff5-b462-9822b4ad8d60.dxe')).toEqual({
+      path: '/t/mods/VariableRuntimeDxe-cbd2e4d5-7068-4ff5-b462-9822b4ad8d60.dxe',
+      name: 'VariableRuntimeDxe',
+      guid: 'cbd2e4d5-7068-4ff5-b462-9822b4ad8d60',
+    });
+  });
+
+  it('reads chipsec’s nested `<Name>.efi` under a GUID-named directory', () => {
+    const p = '/t/img.fd.dir/FV/00_x.dir/04_52c05b14-0b98-496c-bc3b-04b50211d680.FV_PEI_CORE.dir/PeiCore.efi';
+    expect(describeCarvedModule(p)).toEqual({ path: p, name: 'PeiCore', guid: '52c05b14-0b98-496c-bc3b-04b50211d680' });
+  });
+
+  it('still labels a file that follows neither convention, rather than dropping it', () => {
+    expect(describeCarvedModule('/t/blob.bin')).toEqual({ path: '/t/blob.bin', name: 'blob' });
+  });
+});
+
+describe('rankModulesForScan — coverage debt, not carve order', () => {
+  const modules = [carved('Zeta'), carved('Alpha'), carved('NvmExpressDxe'), carved('Beta')];
+
+  it('puts modules the whole-image pass never reached first — those had zero rules run', () => {
+    const { selected } = rankModulesForScan({ modules, coveredByImageScan: ['NvmExpressDxe'], cap: 4 });
+    expect(selected.map((m) => m.name)).toEqual(['Alpha', 'Beta', 'Zeta', 'NvmExpressDxe']);
+  });
+
+  it('is stable, so two runs over the same image scan the same modules', () => {
+    const a = rankModulesForScan({ modules, coveredByImageScan: [], cap: 2 });
+    const b = rankModulesForScan({ modules: [...modules].reverse(), coveredByImageScan: [], cap: 2 });
+    expect(a.selected.map((m) => m.name)).toEqual(b.selected.map((m) => m.name));
+  });
+
+  it('hands back what the cap dropped instead of silently shortening the list', () => {
+    const { selected, skipped } = rankModulesForScan({ modules, coveredByImageScan: [], cap: 2 });
+    expect(selected).toHaveLength(2);
+    expect(skipped.map((m) => m.name)).toEqual(['NvmExpressDxe', 'Zeta']);
+  });
+
+  it('a cap of zero scans nothing and reports every module as skipped', () => {
+    const { selected, skipped } = rankModulesForScan({ modules, coveredByImageScan: [], cap: 0 });
+    expect(selected).toEqual([]);
+    expect(skipped).toHaveLength(4);
+  });
+
+  it('matches the image pass’s module label even when it echoed a path', () => {
+    const { selected } = rankModulesForScan({
+      modules: [carved('Alpha'), carved('NvmExpressDxe')],
+      coveredByImageScan: ['mods/NvmExpressDxe-cbd2e4d5.dxe', 'NvmExpressDxe'],
+      cap: 1,
+    });
+    expect(selected[0]?.name).toBe('Alpha');
   });
 });
 
@@ -63,12 +259,30 @@ describe('buildFwHuntFindings — the denominator matters more than the numerato
     const note = drafts[0] as (typeof drafts)[number];
     expect(note.kind).toBe('uefi-fwhunt-coverage');
     expect(note.title).toContain('not "no implant"');
+    expect(note.title).toContain('5/108 rule(s) ran');
     // 5 distinct rules ran out of 108 — reporting "no matches" without that ratio would present a ~5%-coverage
     // scan as a clean bill of health.
     expect(note.evidence?.rulesRun).toBe(5);
     expect(note.evidence?.rulesNotApplicable).toBe(103);
-    expect(note.rationale).toContain('never applied to this image');
+    expect(note.rationale).toContain('examined nothing');
     expect(note.rationale).toContain('unexamined by construction');
+  });
+
+  it('says the per-module pass was never attempted rather than letting its absence read as coverage', () => {
+    const { verdicts } = parseFwHuntOutput(REAL_OUTPUT);
+    const note = buildFwHuntFindings({ verdicts, rulesInCorpus: 108 })[0] as { evidence?: Record<string, unknown> };
+    expect(note.evidence?.modulePass).toBe('not attempted');
+  });
+
+  it('names the reason when the pass was attempted and did not run', () => {
+    const { verdicts } = parseFwHuntOutput(REAL_OUTPUT);
+    const pass = modulePassFixture({ ran: false, reason: 'the per-module cap is 0 (FIRMLAB_FWHUNT_MODULE_CAP)' });
+    const drafts = buildFwHuntFindings({ verdicts, rulesInCorpus: 108, modulePass: pass });
+    const note = drafts[drafts.length - 1] as (typeof drafts)[number];
+    expect(note.evidence?.modulePass).toBe('did not run');
+    expect(note.rationale).toContain('FIRMLAB_FWHUNT_MODULE_CAP');
+    // A pass that did not run contributes no rules, so the union must not quietly grow.
+    expect(note.evidence?.rulesRun).toBe(5);
   });
 
   it('attributes a match to the rule, not to FirmLab, and grades it by corpus category', () => {
@@ -98,5 +312,111 @@ describe('buildFwHuntFindings — the denominator matters more than the numerato
     const note = drafts[drafts.length - 1] as (typeof drafts)[number];
     expect(note.evidence?.unreadableLines).toBe(3);
     expect(note.rationale).toContain('unknown rather than negative');
+  });
+});
+
+describe('buildFwHuntFindings — folding the per-module pass in', () => {
+  const imageVerdicts = parseFwHuntOutput(REAL_OUTPUT).verdicts;
+
+  it('counts the union of both passes as the rules that examined these bytes', () => {
+    const pass = modulePassFixture({
+      verdicts: [
+        { rule: 'Lojax-SecDxe', matched: false, module: 'SecMain' },
+        { rule: 'CosmicStrand', matched: false, module: 'SecMain' },
+        // A rule the whole-image pass already ran must not be double-counted.
+        { rule: 'BRLY-2021-010', matched: false, module: 'SecMain' },
+      ],
+    });
+    const drafts = buildFwHuntFindings({ verdicts: imageVerdicts, rulesInCorpus: 108, modulePass: pass });
+    const note = drafts[drafts.length - 1] as (typeof drafts)[number];
+    expect(note.evidence?.rulesRunWholeImage).toBe(5);
+    expect(note.evidence?.rulesRun).toBe(7);
+    expect(note.evidence?.rulesNotApplicable).toBe(101);
+    expect(note.rationale).toContain('lifting the rules that examined something from 5 to 7');
+  });
+
+  it('groups a rule that fired on many modules into one finding rather than flooding the ledger', () => {
+    const pass = modulePassFixture({
+      modulesScanned: [carved('SecMain'), carved('BdsDxe'), carved('CpuDxe')],
+      verdicts: [
+        { rule: 'BRLY-2022-028 (RsbStuffingCheck)', variant: 'informational', matched: true, module: 'SecMain' },
+        { rule: 'BRLY-2022-028 (RsbStuffingCheck)', variant: 'informational', matched: true, module: 'BdsDxe' },
+        { rule: 'BRLY-2022-028 (RsbStuffingCheck)', variant: 'informational', matched: true, module: 'CpuDxe' },
+      ],
+    });
+    const drafts = buildFwHuntFindings({ verdicts: imageVerdicts, rulesInCorpus: 108, modulePass: pass });
+    const hits = drafts.filter((d) => d.kind === 'uefi-fwhunt-module-match');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence?.modulesMatched).toBe(3);
+    expect(hits[0]?.evidence?.modules).toEqual(['SecMain', 'BdsDxe', 'CpuDxe']);
+    expect(hits[0]?.title).toContain('matched 3 carved EFI module(s)');
+  });
+
+  it('keeps a rule’s variants apart, because they assert different things', () => {
+    const pass = modulePassFixture({
+      verdicts: [
+        { rule: 'R', variant: 'informational', matched: true, module: 'SecMain' },
+        { rule: 'R', variant: 'vulnerability', matched: true, module: 'SecMain' },
+      ],
+    });
+    const drafts = buildFwHuntFindings({ verdicts: imageVerdicts, modulePass: pass });
+    expect(drafts.filter((d) => d.kind === 'uefi-fwhunt-module-match')).toHaveLength(2);
+  });
+
+  it('grades a match found outside the rule’s declared volume scope one step lower, and says why', () => {
+    const verdict = { rule: 'BlackLotusBootkit', variant: 'default', matched: true, module: 'SecMain' };
+    const build = (pass: ModulePass) =>
+      buildFwHuntFindings({
+        verdicts: [],
+        rulePaths: { BlackLotusBootkit: 'Threats/BlackLotusBootkit.yml' },
+        modulePass: pass,
+      })[0] as NonNullable<ReturnType<typeof buildFwHuntFindings>[number]>;
+    const scoped = build(modulePassFixture({ verdicts: [verdict], scopedRuleNames: ['BlackLotusBootkit'] }));
+    const unscoped = build(modulePassFixture({ verdicts: [verdict] }));
+    expect(unscoped.severity).toBe('critical');
+    expect(scoped.severity).toBe('high');
+    expect(scoped.evidence?.ranOutsideDeclaredVolumeScope).toBe(true);
+    expect(scoped.rationale).toContain('the author never intended it against these modules');
+  });
+
+  it('names the module list cap instead of silently shortening it', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ rule: 'R', matched: true, module: `Mod${i}` }));
+    const drafts = buildFwHuntFindings({ verdicts: [], modulePass: modulePassFixture({ verdicts: many }) });
+    const hit = drafts[0] as (typeof drafts)[number];
+    expect((hit.evidence?.modules as string[]).length).toBe(12);
+    expect(hit.evidence?.modulesNotListed).toBe(8);
+    expect(hit.evidence?.modulesMatched).toBe(20);
+  });
+
+  it('states every module the bounds dropped, and that failures are unknown rather than clean', () => {
+    const pass = modulePassFixture({
+      modulesSkipped: [carved('A'), carved('B')],
+      modulesFailed: [carved('C')],
+      skipReason: 'a cap of 12 module(s), taken in order of coverage debt rather than carve order',
+      rulesExcluded: [{ rule: 'IntelAlderLakeLeak', target: 'firmware' }],
+      scopedRuleNames: ['BRLY-2021-010'],
+      deepDirsSkipped: 1,
+    });
+    const drafts = buildFwHuntFindings({ verdicts: imageVerdicts, rulesInCorpus: 108, modulePass: pass });
+    const note = drafts[drafts.length - 1] as (typeof drafts)[number];
+    expect(note.evidence?.modulesSkipped).toBe(2);
+    expect(note.evidence?.modulesFailed).toBe(1);
+    expect(note.evidence?.carveDirsTooDeepToWalk).toBe(1);
+    expect(note.rationale).toContain('2 module(s) were never scanned');
+    expect(note.rationale).toContain('coverage debt');
+    expect(note.rationale).toContain('unknown, not clean');
+    expect(note.rationale).toContain('target: firmware');
+    expect(note.rationale).toContain('graded one step lower');
+    expect(note.rationale).toContain('too deeply nested');
+  });
+
+  it('folds module matches into the headline count so the title cannot read as clean', () => {
+    const pass = modulePassFixture({ verdicts: [{ rule: 'R', matched: true, module: 'SecMain' }] });
+    const drafts = buildFwHuntFindings({ verdicts: imageVerdicts, rulesInCorpus: 108, modulePass: pass });
+    const note = drafts[drafts.length - 1] as (typeof drafts)[number];
+    expect(note.title).toContain('1 rule match(es)');
+    // The headline must never state the rule fraction without the module fraction beside it.
+    expect(note.title).toContain('over 2/125 carved module(s)');
+    expect(note.evidence?.rulesMatched).toBe(1);
   });
 });

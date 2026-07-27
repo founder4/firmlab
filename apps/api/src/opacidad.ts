@@ -279,17 +279,21 @@ async function fwhuntRun(c: RunCtx): Promise<StepOutcome> {
       note: r.reason,
     };
   }
+  // Coverage is now TWO fractions and the step has to degrade on the weaker one. `rulesRun` used to mean the rules
+  // the whole-image pass exercised, and a low count meant thin coverage; since the per-module pass landed it is the
+  // union of both passes and runs near the whole corpus, so the old `rulesRun * 2 < rulesInCorpus` test can no
+  // longer trip — a scan that ran 106 of 108 rules over 2 of 125 carved modules would have reported as a clean
+  // stage. Module coverage is the fraction that can still be thin, so that is the one that decides.
+  const mp = r.modulePass;
+  const moduleCoverageThin = !!mp && mp.ran && mp.modulesCarved > 0 && mp.modulesScanned.length * 2 < mp.modulesCarved;
+  const modulePassBlocked = !mp || !mp.ran;
+  const moduleNote = mp?.ran
+    ? `${mp.modulesScanned.length}/${mp.modulesCarved} carved module(s) scanned — ${mp.modulesSkipped.length} dropped by a bound (${mp.skipReason}); the rest is coverage you did not get`
+    : `the per-module pass did not run: ${mp?.reason || 'no module pass'} — only the whole-image rules were exercised`;
   return {
-    summary: `FwHunt implant scan: ${r.matches.length} match(es), ${r.rulesRun}/${r.rulesInCorpus} rule(s) applied to this image`,
+    summary: `FwHunt implant scan: ${r.matches.length} match(es), ${r.rulesRun}/${r.rulesInCorpus} rule(s) over ${mp?.ran ? `${mp.modulesScanned.length}/${mp.modulesCarved}` : '0'} carved module(s)`,
     findingCount: r.findings.length,
-    // Most of a rule corpus never applies to any one image; a scan where the bulk of it sat out is real coverage
-    // information, so it reads as degraded rather than as a clean pass.
-    ...(r.rulesInCorpus > 0 && r.rulesRun * 2 < r.rulesInCorpus
-      ? {
-          degraded: true,
-          note: `${r.rulesNotApplicable} rule(s) never applied to this image — that is coverage you did not get`,
-        }
-      : {}),
+    ...(moduleCoverageThin || modulePassBlocked ? { degraded: true, note: moduleNote } : {}),
   };
 }
 
