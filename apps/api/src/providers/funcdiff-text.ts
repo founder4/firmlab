@@ -53,8 +53,25 @@ export function normalizeDecompiled(text: string): string[] {
       .split('\n')
       // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping the ESC of an ANSI SGR sequence is the point.
       .map((l) => l.replace(/\[[0-9;]*m/g, '').replace(/\s+$/, ''))
+      .map(maskCommentAddresses)
       .map((l) => (l.length > MAX_LINE_LEN ? `${l.slice(0, MAX_LINE_LEN)}…` : l))
   );
+}
+
+/**
+ * Collapse hex addresses that appear inside a `//` comment.
+ *
+ * Every address in a binary shifts when anything before it moves — the same fact that makes `fcn.00400abc` useless
+ * as an identity. radare2's comments are full of them (`// CALL XREFS from main @ 0x40083c`), so an insertion
+ * early in a function rewrites the comment on every later line and buries the actual edit under noise guaranteed
+ * to appear in every diff. Masked inside comments ONLY: an address in code is meaning — `v0 < 0x40` IS the bounds
+ * check — and erasing that would defeat the purpose. A change in the NUMBER of xrefs still shows, since only the
+ * digits are masked.
+ */
+export function maskCommentAddresses(line: string): string {
+  const idx = line.indexOf('//');
+  if (idx < 0) return line;
+  return line.slice(0, idx) + line.slice(idx).replace(/0x[0-9a-fA-F]{4,}/g, '0x…');
 }
 
 /**

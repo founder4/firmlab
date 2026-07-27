@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { diffLines, normalizeDecompiled, renderUnified, summarizeTextDiff } from './funcdiff-text.js';
+import {
+  diffLines,
+  maskCommentAddresses,
+  normalizeDecompiled,
+  renderUnified,
+  summarizeTextDiff,
+} from './funcdiff-text.js';
 
 const V1 = `int set_name(char *in) {
     char *dst;
@@ -95,5 +101,30 @@ describe('renderUnified', () => {
     expect(out).toContain('+++ sym.set_name (newer)');
     expect(out).toMatch(/@@ -\d+ \+\d+ @@/);
     expect(out).toContain('+    if (strlen(in) < 64) {');
+  });
+});
+
+describe('maskCommentAddresses — an address that shifted is not a change', () => {
+  // Seen on the real mipsel validation pair: inserting a guard early in set_name rewrote the XREF comment on
+  // every later line, burying the actual edit under noise that is guaranteed to appear in every diff.
+  it('masks hex addresses inside comments', () => {
+    expect(maskCommentAddresses('   // CALL XREFS from main @ 0x40083c(r), 0x400840(x)')).toBe(
+      '   // CALL XREFS from main @ 0x…(r), 0x…(x)',
+    );
+    expect(maskCommentAddresses('        call t9       // 0x4006fc(0x49edc0, 0x0, 0x0, 0x0)')).toBe(
+      '        call t9       // 0x…(0x…, 0x0, 0x0, 0x0)',
+    );
+  });
+
+  // An address in CODE carries meaning: 0x40 IS `sizeof(buf)`, and masking it would erase the bounds check.
+  it('leaves addresses in code untouched', () => {
+    const code = '        v0 = (unsigned) (v0 < 0x40)';
+    expect(maskCommentAddresses(code)).toBe(code);
+  });
+
+  it('keeps the diff sensitive to a change in the NUMBER of xrefs', () => {
+    const one = maskCommentAddresses('// CALL XREFS from main @ 0x400100(r)');
+    const two = maskCommentAddresses('// CALL XREFS from main @ 0x400100(r), 0x400200(x)');
+    expect(one).not.toBe(two);
   });
 });
