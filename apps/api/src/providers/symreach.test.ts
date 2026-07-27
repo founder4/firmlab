@@ -3,6 +3,7 @@ import {
   MAX_SINKS,
   buildReachFindings,
   buildSpec,
+  manualSource,
   parseReachOutput,
   pickSinks,
   validateSinkNames,
@@ -46,6 +47,25 @@ describe('validateSinkNames — a typo is reported, never silently answered as a
     const { valid, rejected } = validateSinkNames(['strcpy', 'os.execute', '', '  system ', 'rm -rf']);
     expect(valid).toEqual(['strcpy', 'system']);
     expect(rejected).toEqual(['os.execute', 'rm -rf']);
+  });
+});
+
+describe('manualSource — a second question must not delete the first answer', () => {
+  // Caught in in-container validation on the real DVRF_v03: `system` proven reachable in usr/sbin/generate_pin
+  // disappeared from the ledger when a later probe on the same binary asked about `sprintf` instead, because
+  // findings sync by source and the source was the binary alone.
+  it('keys a manual probe by the question, so different sinks accumulate', () => {
+    expect(manualSource('usr/sbin/generate_pin', ['system'])).not.toBe(
+      manualSource('usr/sbin/generate_pin', ['sprintf']),
+    );
+  });
+
+  it('re-asking the same question re-syncs rather than duplicating, whatever the order', () => {
+    expect(manualSource('bin/x', ['strcpy', 'system'])).toBe(manualSource('bin/x', ['system', 'strcpy']));
+  });
+
+  it('keeps the bare per-binary key when sinks are derived — that is the question W9 asks', () => {
+    expect(manualSource('bin/x', [])).toBe('symreach:bin/x');
   });
 });
 

@@ -135,6 +135,24 @@ export function pickSinks(
   return { asked: ordered.slice(0, MAX_SINKS), dropped: ordered.slice(MAX_SINKS) };
 }
 
+/**
+ * The findings source for a MANUAL probe — keyed by the question, not just by the binary.
+ *
+ * W9's re-planned probe keys on `symreach:<path>` alone, which is right for it: it always derives the same sinks
+ * from the same candidate, so re-running a scan re-syncs the same rows instead of duplicating them. A manual probe
+ * is different — the operator asks a *different question* about the same binary, and a per-binary key makes the
+ * second question silently delete the first question's answer. Observed in validation on the real DVRF_v03:
+ * `system` proven reachable in `usr/sbin/generate_pin` vanished from the ledger when a later probe on the same
+ * binary asked about `sprintf` instead. A confirmed reachability result must not evaporate because a different one
+ * was asked for, so the sink set is part of the key; re-asking the SAME question still re-syncs, never duplicates.
+ *
+ * A derived-sink probe (no sinks named) keeps the bare per-binary key, since that is the same question W9 asks.
+ */
+export function manualSource(binary: string, sinks: string[]): string {
+  if (sinks.length === 0) return `symreach:${binary}`;
+  return `symreach:${binary}#${[...sinks].sort().join(',')}`;
+}
+
 /** A symbol name the probe can actually look up — anything else is a typo, not a question. */
 const SINK_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 

@@ -120,6 +120,16 @@ describe('execTargetFromSnippet — the program a tainted handler actually runs'
     expect(execTargetFromSnippet('os.execute("$TOOL " .. x)')).toBeNull();
     expect(execTargetFromSnippet('os.execute(v)')).toBeNull();
   });
+
+  // The real GL.iNet BE3600 4.9.0 tor handler. `echo` is resolved by /bin/sh as a BUILTIN, so the coreutil ELF
+  // never runs — and the injection is into the shell command line (the concat and the `>>`), not into any argv the
+  // symbolic prober models. Naming bin/echo would be a reachability question about a program that did not execute.
+  it('drops a bare shell builtin, but keeps it when an absolute path really names the binary', () => {
+    expect(
+      execTargetFromSnippet('os.execute("echo \\"ExitNodes " .. countries .. "\\" >> /etc/tor/torrc")'),
+    ).toBeNull();
+    expect(execTargetFromSnippet('os.execute("/bin/echo " .. v)')).toBe('/bin/echo');
+  });
 });
 
 describe('taintReachabilityLeads — W4 chains become the reachability questions', () => {

@@ -22,6 +22,7 @@ import {
   MAX_BUDGET_SECONDS,
   MIN_BUDGET_SECONDS,
   type SymReachResult,
+  manualSource,
   runSymReach,
   validateSinkNames,
 } from '../providers/symreach.js';
@@ -90,8 +91,7 @@ export async function symreachRoutes(app: FastifyInstance): Promise<void> {
         policy: 'as-given',
         ...(budgetSeconds ? { budgetSeconds } : {}),
       });
-      // Same idempotent per-binary source as W9's re-planned probe — re-asking re-syncs rather than duplicating.
-      syncFindings(id, `symreach:${binary}`, result.findings);
+      syncFindings(id, manualSource(binary, sinks), result.findings);
       return result;
     });
     return reply.status(202).send({ jobId });

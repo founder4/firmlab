@@ -94,13 +94,48 @@ export function reachabilityLeads(
 const SHELL_WRAPPERS = new Set(['sh', 'bash', 'ash', 'dash', 'env', 'sudo', 'busybox', 'nohup', 'exec']);
 
 /**
+ * Commands the shell resolves as BUILTINS, not as the ELF of the same name.
+ *
+ * Caught validating on the real GL.iNet BE3600 4.9.0: the tainted `tor` handler's injection primitive is
+ * `os.execute("echo \"ExitNodes " .. countries .. "\" >> /etc/tor/torrc")`. Reading `echo` as the program is a
+ * correct parse, but `os.execute` runs through `/bin/sh`, which executes its own `echo` builtin — the coreutil at
+ * `bin/echo` never runs. Asking angr whether `strcpy` is reachable in that ELF answers a question about a program
+ * that was not executed, and the injection there is into the shell command line (the concatenation and the `>>`
+ * redirect), not into any argv the prober models. So these are dropped: the taint chain is still reported by W4,
+ * it simply does not become a reachability question it cannot honestly answer.
+ */
+const SHELL_BUILTINS = new Set([
+  'echo',
+  'printf',
+  'cd',
+  'export',
+  'eval',
+  'set',
+  'unset',
+  'read',
+  'test',
+  'true',
+  'false',
+  'pwd',
+  'umask',
+  'wait',
+  'shift',
+  'source',
+  'local',
+  'return',
+  ':',
+  '.',
+]);
+
+/**
  * Pure: the program a shell/exec sink actually runs, read off the literal prefix of its argument.
  *
  * A tainted handler's sink looks like `os.execute("/usr/sbin/gl-tor " .. params.enable)`. The part BEFORE the
  * concatenation is a constant, so the program name is statically known even though its arguments are not — which
  * is precisely the shape worth extracting: a native binary receiving attacker-controlled argv. Returns null when
  * the command itself is interpolated (`os.execute(cmd .. " x")`), because then the program is not statically
- * known and guessing one would be fabrication.
+ * known and guessing one would be fabrication — and when it resolves to a shell builtin, where the named ELF is
+ * not the thing that runs at all.
  */
 export function execTargetFromSnippet(snippet: string): string | null {
   // The first string literal in the call — the constant head of the command. Each quote style is matched
@@ -126,6 +161,9 @@ export function execTargetFromSnippet(snippet: string): string | null {
     if (!/^[A-Za-z0-9._/-]+$/.test(tok) || !/[A-Za-z]/.test(tok)) return null;
     const base = tok.split('/').pop() as string;
     if (SHELL_WRAPPERS.has(base)) continue; // step past `sh -c`, `sudo`, `busybox foo`
+    // A bare builtin is the shell's, not the ELF's. An ABSOLUTE path does name the binary (`/bin/echo x` really
+    // does exec the coreutil), so only the unqualified form is dropped.
+    if (!tok.includes('/') && SHELL_BUILTINS.has(base)) return null;
     return tok;
   }
   return null;
