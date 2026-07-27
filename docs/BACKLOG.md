@@ -111,7 +111,11 @@ of "known-incomplete semantics" exists without hunting through the sections abov
 
 - ◐ **W2 component table** — dropbear, dnsmasq and busybox landed (2026-07-27); lighttpd/goahead remain, for want of a sample (see *External intelligence*). Original scope: extend beyond pppd/openssl to dropbear, lighttpd/goahead, dnsmasq (+ Go-module
   fingerprints inside static binaries). See *W2 component-fingerprint CVE*.
-- ▢ **W3 nvram store parser** — device NVS is done (W6); the Linux `nvram` store is not, and `/etc/shadow`
+- ✅ **W3 nvram store parser** (2026-07-28) — `providers/nvram.ts` + `POST/GET /images/:id/nvram`, wired into every class (it reads the RAW image, so it can never be skipped for want of a rootfs). 9 stores across 16 images, 0 false positives against 10,712 extracted files. Values are redacted in evidence; only key, offset, length and well-known-default status are kept.
+- ▢ **DVRF's credentials are NOT in an nvram store** — `AUTONOMOUS-WORKERS.md` §3.2(5)/§9 says they "lived in an nvram blob"; there is no store in that image. They sit in the Broadcom `router_defaults[]` string pool in `usr/lib/libshared.so` (`http_passwd\0admin\0` at 0xa7dcc), a pointer array whose name→value pairing lives in RELOCATIONS, not adjacency — `http_username\0` is followed by alignment padding, not its value. Recovering it needs relocation-aware ELF parsing. The doc should be corrected either way, since it currently sends a reader looking for the wrong thing.
+- ▢ **U-Boot redundant environment** (CRC + a 1-byte active flag) is unsupported — no sample in the corpus to ground it.
+- ▢ **Cross-image nvram correlation** — "the same WPA PSK on every unit of this model" is the finding operators care about, and it needs a value digest in the corpus. Deliberately not done: a truncated hash of a short password is a crackable oracle, so it needs thought rather than a hash.
+- ▢ **~~W3 nvram store parser~~** — original entry: device NVS is done (W6); the Linux `nvram` store is not, and `/etc/shadow`
   cracking (`root:sohoadmin`) is still unrun. See *W3 secret extraction + offline cracking*.
 - ▢ **W7 RP2350 `decode()` reversing** — the CTF's `ror+sub+xor` obfuscator hides the flags; plaintext extraction
   honestly will not recover them, so this needs real on-device routine reversing. See *W7 Bare-metal/RTOS worker*.
