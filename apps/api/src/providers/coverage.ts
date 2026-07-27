@@ -67,13 +67,28 @@ function statusOfStep(step: OpacidadStep): StageStatus {
  * Compose the honest reading of the finding count. The cases are deliberately distinct: "nothing has run" and
  * "everything ran and found nothing" must never produce the same sentence, because they are opposite conclusions.
  */
-function verdictFor(findingCount: number, executed: number, applicable: number, blocked: CoverageStage[]): string {
+function verdictFor(
+  findingCount: number,
+  executed: number,
+  applicable: number,
+  blocked: CoverageStage[],
+  degraded: CoverageStage[] = [],
+): string {
   const missing = applicable - executed;
   const blockedNote = blocked.length
     ? ` Not covered: ${blocked
         .slice(0, 4)
         .map((s) => s.worker)
         .join(', ')}${blocked.length > 4 ? `, +${blocked.length - 4} more` : ''}.`
+    : '';
+  // A degraded stage RAN, so it counts as executed — but saying "all applicable stages" while one of them only
+  // half-worked lets the headline absorb the caveat its own table is showing. Seen on a real OVMF scan: FwHunt
+  // ran 17 of 108 rules, and the verdict still read "across all 2 applicable stages".
+  const degradedNote = degraded.length
+    ? ` ${degraded.length} stage(s) ran DEGRADED and cover less than their name suggests: ${degraded
+        .slice(0, 3)
+        .map((s) => s.worker)
+        .join(', ')}${degraded.length > 3 ? `, +${degraded.length - 3} more` : ''}.`
     : '';
 
   if (executed === 0) {
@@ -86,15 +101,15 @@ function verdictFor(findingCount: number, executed: number, applicable: number, 
     return `Nothing has analyzed this image yet — ${applicable} applicable stage(s) are unexecuted. An empty findings list here means UNEXAMINED, not clean.`;
   }
   if (findingCount === 0 && missing > 0) {
-    return `${executed} of ${applicable} stages ran and recorded nothing; ${missing} never ran. Zero findings covers only the stages that ran — it is not a clean bill for this firmware.${blockedNote}`;
+    return `${executed} of ${applicable} stages ran and recorded nothing; ${missing} never ran. Zero findings covers only the stages that ran — it is not a clean bill for this firmware.${blockedNote}${degradedNote}`;
   }
   if (findingCount === 0) {
-    return `All ${applicable} applicable stages ran and recorded nothing. That is a real negative for what this deployment can check statically — it is not proof the firmware is secure.`;
+    return `All ${applicable} applicable stages ran and recorded nothing. That is a real negative for what this deployment can check statically — it is not proof the firmware is secure.${degradedNote}`;
   }
   if (missing > 0) {
-    return `${findingCount} finding(s) from ${executed} of ${applicable} stages; ${missing} never ran, so the picture is incomplete.${blockedNote}`;
+    return `${findingCount} finding(s) from ${executed} of ${applicable} stages; ${missing} never ran, so the picture is incomplete.${blockedNote}${degradedNote}`;
   }
-  return `${findingCount} finding(s) across all ${applicable} applicable stages.`;
+  return `${findingCount} finding(s) across all ${applicable} applicable stages.${degradedNote}`;
 }
 
 /**
@@ -154,7 +169,15 @@ export function buildCoverage(input: {
     executed,
     findingCount,
     stages,
-    verdict: verdictFor(findingCount, executed, applicable, blocked),
-    ambiguous: findingCount === 0 || executed < applicable,
+    verdict: verdictFor(
+      findingCount,
+      executed,
+      applicable,
+      blocked,
+      stages.filter((s) => s.status === 'degraded'),
+    ),
+    // A degraded stage covers less than its name suggests, so the count alone still misleads even at full
+    // execution — the banner must stay prominent.
+    ambiguous: findingCount === 0 || executed < applicable || stages.some((s) => s.status === 'degraded'),
   };
 }

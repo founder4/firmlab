@@ -133,3 +133,35 @@ describe('buildCoverage — findings present', () => {
     expect(r.stages[1]?.reason).toBe('stack-overflow candidate');
   });
 });
+
+describe('buildCoverage — a degraded stage must not be absorbed by "all stages ran"', () => {
+  // Seen on a real OVMF scan: FwHunt ran 17 of 108 rules and reported itself degraded, yet the verdict read
+  // "3 finding(s) across all 2 applicable stages" — the headline quietly absorbing the caveat its own table shows.
+  it('names the degraded stages even when every applicable stage executed', () => {
+    const r = buildCoverage({
+      firmwareClass: 'uefi-bios',
+      specs: [spec('UEFI · chipsec'), spec('UEFI · FwHunt implant scan')],
+      steps: [
+        step('UEFI · chipsec', 'ran', 2),
+        step('UEFI · FwHunt implant scan', 'degraded', 1, '91 rule(s) never applied to this image'),
+      ],
+      findingCount: 3,
+    });
+    expect(r.executed).toBe(2);
+    expect(r.verdict).toContain('DEGRADED');
+    expect(r.verdict).toContain('UEFI · FwHunt implant scan');
+    // The count alone still misleads, so the banner must stay prominent.
+    expect(r.ambiguous).toBe(true);
+  });
+
+  it('says nothing about degradation when there is none', () => {
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs: [spec('A'), spec('B')],
+      steps: [step('A', 'ran', 1), step('B', 'ran', 2)],
+      findingCount: 3,
+    });
+    expect(r.verdict).not.toContain('DEGRADED');
+    expect(r.ambiguous).toBe(false);
+  });
+});
