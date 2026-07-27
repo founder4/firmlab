@@ -12,7 +12,7 @@
  * and angr missing is `blocked_by_platform`. Findings sync under the SAME `symreach:<path>` source W9 uses, so a
  * manual probe and an autonomous one re-sync the same rows instead of duplicating them.
  */
-import type { ImageIdentity } from '@firmlab/core';
+import type { Architecture, ImageIdentity } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
 import { assessBinaryFile, isElfFile } from '../providers/binvuln.js';
@@ -30,11 +30,30 @@ import {
 } from '../providers/symreach.js';
 import { getImage, listJobs } from '../store.js';
 
+/** The most recent successful extraction, if any. */
+function latestExtract(imageId: string): ExtractResult | null {
+  const done = listJobs(imageId).find((j) => j.kind === 'extract' && j.status === 'done' && j.resultJson);
+  return done?.resultJson ? (JSON.parse(done.resultJson) as ExtractResult) : null;
+}
+
 /** The most recent successful extraction's rootfs, if any — the probe needs a real file to load. */
 function latestRootfs(imageId: string): string | null {
-  const done = listJobs(imageId).find((j) => j.kind === 'extract' && j.status === 'done' && j.resultJson);
-  if (!done?.resultJson) return null;
-  return (JSON.parse(done.resultJson) as ExtractResult).rootfsPath;
+  return latestExtract(imageId)?.rootfsPath ?? null;
+}
+
+/**
+ * The architecture to emulate a ROOTFS BINARY with.
+ *
+ * The image-level `identity.arch` is a guess made from the raw firmware bytes and is routinely `unknown` — DVRF's
+ * is. Extraction, by contrast, reads the ELF headers of the very binaries about to be run and takes the modal
+ * answer (`mipsel` there, across 218 of them). Preferring the guess over the measurement was backwards, and it
+ * refused a probe that had everything it needed.
+ */
+export function rootfsArch(imageId: string, identity: ImageIdentity | null): Architecture | null {
+  const detected = latestExtract(imageId)?.detectedArch;
+  if (detected && detected !== 'unknown') return detected;
+  const fromIdentity = identity?.arch;
+  return fromIdentity && fromIdentity !== 'unknown' ? fromIdentity : null;
 }
 
 export async function symreachRoutes(app: FastifyInstance): Promise<void> {
@@ -135,9 +154,12 @@ export async function symreachRoutes(app: FastifyInstance): Promise<void> {
       });
     }
     const identity = row.identityJson ? (JSON.parse(row.identityJson) as ImageIdentity) : null;
-    const arch = identity?.arch;
-    if (!arch || arch === 'unknown') {
-      return reply.status(400).send({ error: 'Image architecture is unknown — cannot pick a user-mode emulator' });
+    const arch = rootfsArch(id, identity);
+    if (!arch) {
+      return reply.status(400).send({
+        error:
+          'No architecture is known for this rootfs — neither the extraction nor the image identity resolved one, so no user-mode emulator can be chosen.',
+      });
     }
     const patternLength =
       typeof body.patternLength === 'number' && Number.isFinite(body.patternLength)

@@ -15,7 +15,7 @@
  * re-running opacidad re-syncs idempotently rather than duplicating.
  */
 import fs from 'node:fs';
-import type { ImageIdentity } from '@firmlab/core';
+import type { Architecture, ImageIdentity } from '@firmlab/core';
 import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } from './findings.js';
 import type { LlmConfig } from './llm.js';
 import { complete } from './llm.js';
@@ -83,6 +83,8 @@ interface RunCtx {
   /** The extraction output dir (all carved partitions) — the aux-secret scan reads sibling partitions from here. */
   outputDir: string | null;
   carveTrace?: ExtractResult['carveTrace'];
+  /** Architecture read from the rootfs ELF headers — authoritative for emulating a binary out of it. */
+  detectedArch?: Architecture;
   /**
    * The live set of spec keys already on the agenda. Executors read it to size the shared, per-run angr budget:
    * symbolic reachability costs real wall-clock, so the cap is global across lead sources, not per source.
@@ -147,6 +149,7 @@ async function extractRun(c: RunCtx): Promise<StepOutcome> {
   c.rootfsPath = ex.rootfsPath;
   c.outputDir = ex.outputDir;
   c.carveTrace = ex.carveTrace;
+  if (ex.detectedArch) c.detectedArch = ex.detectedArch;
   if (ex.rootfsPath) {
     return {
       summary: `rootfs recovered via ${ex.extractor} (${ex.summary?.totalFiles ?? '?'} files)`,
@@ -400,10 +403,17 @@ async function dynprobeRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   if (!binary || !sink) {
     return { summary: 'no target', findingCount: 0, degraded: true, note: 'dynprobe spec missing binary/sink' };
   }
+  // Prefer the arch measured from the rootfs ELF headers over the whole-image guess: the guess is routinely
+  // `unknown` (DVRF's is) while the measurement is the actual class of the binary about to be emulated.
   const identity = c.analysisJson ? (JSON.parse(c.analysisJson) as { identity?: ImageIdentity }).identity : undefined;
-  const arch = identity?.arch;
-  if (!arch || arch === 'unknown') {
-    return { summary: `reproduce ${binary}:${sink}`, findingCount: 0, degraded: true, note: 'unknown architecture' };
+  const arch = c.detectedArch ?? (identity?.arch !== 'unknown' ? identity?.arch : undefined);
+  if (!arch) {
+    return {
+      summary: `reproduce ${binary}:${sink}`,
+      findingCount: 0,
+      degraded: true,
+      note: 'no architecture known for this rootfs — cannot choose a user-mode emulator',
+    };
   }
   const r = await runDynProbe(c.rootfsPath, binary, sink, spec.addresses ?? [], arch, c.handle);
   syncFindings(c.imageId, `dynprobe:${binary}#${sink}`, r.findings);
@@ -524,6 +534,7 @@ export async function runOpacidad(
     rootfsPath: prior?.rootfsPath ?? null,
     outputDir: prior?.outputDir ?? null,
     ...(prior?.carveTrace ? { carveTrace: prior.carveTrace } : {}),
+    ...(prior?.detectedArch ? { detectedArch: prior.detectedArch } : {}),
     // Live view of the agenda — executors size the shared reachability budget off it as the run grows.
     planned: sched.planned,
     handle,
