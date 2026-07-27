@@ -4,7 +4,15 @@
  * proof against the extracted rootfs, streaming the job log/result.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type ChipsecResult, type EmulationMenu, type EmulationRecipe, type Job, type RenodeResult, api } from '../api';
+import {
+  type BinaryEntry,
+  type ChipsecResult,
+  type EmulationMenu,
+  type EmulationRecipe,
+  type Job,
+  type RenodeResult,
+  api,
+} from '../api';
 import { WebProbePanel } from './WebProbePanel';
 
 const MODE_ICON: Record<string, string> = {
@@ -22,9 +30,18 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
   const [menu, setMenu] = useState<EmulationMenu | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [binary, setBinary] = useState('');
+  const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const poll = useRef<number | null>(null);
+
+  // Continuity: the binaries discovered by Extraction feed the emulator's target selector — no retyping paths.
+  useEffect(() => {
+    api
+      .binaries(imageId)
+      .then(setBinaries)
+      .catch(() => setBinaries([]));
+  }, [imageId]);
 
   const load = useCallback(() => {
     api
@@ -151,23 +168,35 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
             )}
             {r.runnable && (
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                {NEEDS_BINARY.has(r.mode) && (
-                  <input
-                    className="mono"
-                    placeholder={menu.suggestedBinary ?? 'bin/busybox'}
-                    value={binary}
-                    onChange={(e) => setBinary(e.target.value)}
-                    style={{
-                      flex: 1,
-                      background: 'var(--bg)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 6,
-                      color: 'var(--text)',
-                      padding: '6px 10px',
-                      fontSize: 12,
-                    }}
-                  />
-                )}
+                {NEEDS_BINARY.has(r.mode) &&
+                  (binaries.length > 0 ? (
+                    <select
+                      className="select mono"
+                      aria-label="Target binary"
+                      value={binary}
+                      onChange={(e) => setBinary(e.target.value)}
+                      style={{ flex: 1, fontSize: 12 }}
+                    >
+                      <option value="">
+                        {menu.suggestedBinary ? `suggested: ${menu.suggestedBinary}` : 'Select a binary…'}
+                      </option>
+                      {binaries.map((b) => (
+                        <option key={b.path} value={b.path}>
+                          {b.path}
+                          {b.arch ? ` · ${b.arch}` : ''}
+                          {b.networkFacing ? ' · net' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className="input mono"
+                      placeholder={menu.suggestedBinary ?? 'run Extraction to list binaries'}
+                      value={binary}
+                      onChange={(e) => setBinary(e.target.value)}
+                      style={{ flex: 1, fontSize: 12 }}
+                    />
+                  ))}
                 <button
                   className="btn btn-primary btn-sm"
                   disabled={busy}

@@ -175,6 +175,40 @@ export const Icon = {
       <path d="M6 18a9 9 0 0 1 0-12M18 6a9 9 0 0 1 0 12" />
     </S>
   ),
+  plus: (p: P) => (
+    <S {...p}>
+      <path d="M12 5v14M5 12h14" />
+    </S>
+  ),
+  close: (p: P) => (
+    <S {...p}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </S>
+  ),
+  trash: (p: P) => (
+    <S {...p}>
+      <path d="M4 7h16M10 11v6M14 11v6" />
+      <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
+      <path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+    </S>
+  ),
+  download: (p: P) => (
+    <S {...p}>
+      <path d="M12 4v11M8 11l4 4 4-4" />
+      <path d="M5 19h14" />
+    </S>
+  ),
+  play: (p: P) => (
+    <S {...p}>
+      <path d="M7 5l12 7-12 7Z" />
+    </S>
+  ),
+  refresh: (p: P) => (
+    <S {...p}>
+      <path d="M4 12a8 8 0 0 1 14-5l2 2M20 12a8 8 0 0 1-14 5l-2-2" />
+      <path d="M18 4v5h-5M6 20v-5h5" />
+    </S>
+  ),
 };
 
 export type IconName = keyof typeof Icon;
