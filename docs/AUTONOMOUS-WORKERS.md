@@ -485,8 +485,43 @@ The repo ships a project-scoped `.mcp.json` with the same command (the deployed 
 so the exec channel *is* the transport). Against a local dev API instead: `FIRMLAB_API=http://127.0.0.1:8799 node
 apps/api/dist/mcp/server.js`. `FIRMLAB_MCP_HEADERS` carries a JSON header object for an instance behind SSO.
 
-### Still unmeasured
+### Pass 3, instalment 1 — four images, one per device class (2026-07-27, deploy `6ee6cf5`)
 
-The arrangement now exists; the **head-to-head has not been re-run with it**. That is the experiment §2 is missing
-and the reason this section is short: claiming the synthesis wins without running the third pass over the same 15
-firmwares would be exactly the kind of unearned conclusion the rest of this document catalogues.
+Run over `DVRF_v03` (embedded-linux), `ESP32-DevBoard` (esp-soc), `GE800v1` (encrypted) and
+`Xiaomi-Repeater_2018` (rtos), driving the MCP server over `docker exec -i`. Protocol per image: read coverage →
+extract → autonomous scan → targeted probes at the agent's discretion → report what was established and what was
+not. **Four images, not fifteen** — this is an instalment, and nothing below is a corpus-wide claim.
+
+| | adapts | reproducible | honest about what it did not do |
+|---|---|---|---|
+| **Pass 1** — app, fixed pipeline | no | yes | yes, structurally |
+| **Pass 2** — agent + raw toolchain | yes | no | no (§7.5, §9) |
+| **Pass 3** — agent driving the providers | yes | yes (every step is a recorded job) | yes, and it *acts* on it |
+
+**What the third arrangement did that neither other could.**
+
+Reading coverage first — which the server's instructions require before characterising anything — surfaced a fact
+about the *app* within the first tool call: three of the four classes route to a plan **one worker wide**. Pass 1
+cannot notice this; it *is* the plan. Pass 2 cannot notice it either, having no notion of a plan at all.
+
+Acting on that, the agent ran `uboot`, `certs` and `fcc` against the eCos `rtos` image — workers the `rtos` class
+DAG never routes to, chosen because they read the raw image and need no rootfs. `uboot` parsed six environment
+variables and flagged **`bootcmd` booting over tftp**, a network-boot exposure on a consumer repeater. Pass 1
+structurally could not reach it. The image's own coverage report had been calling itself *fully covered*.
+
+**The app learned from the pass, which is the point.** Two defects followed directly and are now fixed and
+unit-pinned: `RECON_ANY_CLASS` routes the three rootfs-free recon workers to every class (the non-Linux plans went
+from 1 worker to 4, and the tftp finding is now *inside* the plan rather than a manual afterthought), and the
+coverage verdict was counting findings produced outside its own plan while still reporting full coverage.
+
+**No confabulation to report.** Every claim the agent made carried a proof state it did not choose — the ESP32's
+NVS signing key as `static_confirmed`, the GE800's AES body as `blocked_by_security`, DVRF's reachability probes
+as honest inconclusives. That is the arrangement working as designed rather than a virtue of the agent: it never
+held a fact the bench had not already stamped. Set against pass 2's "cleartext cloud pairing secret" (a public
+key, §7.5), the difference is structural, not a matter of care.
+
+**What this does NOT establish.** Four images of sixteen, one run each, one operator. The advantage demonstrated
+is **plan adaptivity** — the agent runs workers the class DAG does not name — not better analysis: the providers
+underneath are byte-identical across passes 1 and 3, so any finding one produces the other produces too *once it
+is asked*. Whether the arrangement also wins on the twelve remaining images, and whether an agent left unattended
+degrades over a longer run, are open.
