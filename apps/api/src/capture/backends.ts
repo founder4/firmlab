@@ -90,6 +90,51 @@ const KNOWN_ZIGBEE: { vid: string; pid?: string; label: string }[] = [
   { vid: '1cf1', label: 'dresden elektronik ConBee / RaspBee' },
 ];
 
+/**
+ * Pure: does this interface list belong to the HOST's network namespace rather than a container's own?
+ *
+ * A container on a Docker bridge network sees only `lo` and its own `eth0`. A container started with
+ * `--network host` shares the host's namespace, so it sees the artefacts that only exist there: the `docker0`
+ * bridge, the `br-<12 hex>` bridges of user-defined networks, and the `veth*` halves of other containers' pairs.
+ * Any of those is proof the process is looking at the host's own interfaces.
+ */
+export function looksLikeHostNetns(ifaces: string[]): boolean {
+  return ifaces.some((n) => n === 'docker0' || /^br-[0-9a-f]{12}$/.test(n) || n.startsWith('veth'));
+}
+
+/**
+ * Pure: is this process on the LAN's own layer-2 segment — the precondition ARP spoofing cannot do without?
+ *
+ * This is the check that keeps the spoof backend from over-claiming once `bettercap` is actually in the image.
+ * ARP poisoning works by answering for the gateway's MAC on the segment the target is on. A container attached to
+ * a Docker bridge is NOT on that segment: its `eth0` lives on a private, NATed Docker subnet, and its ARP frames
+ * never reach the LAN. So on a bridge-networked deployment the spoof is impossible no matter how many
+ * capabilities it is granted or whether the binary is installed — and reporting "missing NET_ADMIN" there would
+ * point the operator at a fix that cannot work. docs/CAPTURE-DESIGN.md §5c states this as prose; this makes it a
+ * machine-checked precondition, with the LAN capture agent named as the path that does work.
+ */
+export function assessL2Reach(input: { containerized: boolean; hostNetns: boolean }): {
+  onLanSegment: boolean;
+  reason: string;
+} {
+  if (!input.containerized) {
+    return { onLanSegment: true, reason: 'running directly on the host — its interfaces are the LAN segment' };
+  }
+  if (input.hostNetns) {
+    return {
+      onLanSegment: true,
+      reason: 'container shares the host network namespace (--network host) — on the LAN segment',
+    };
+  }
+  return {
+    onLanSegment: false,
+    reason:
+      'container is on a Docker bridge network, not the LAN segment — its ARP frames never reach a LAN device, ' +
+      'so spoof positioning is impossible here regardless of caps. Re-run with --network host, or deploy the LAN ' +
+      'capture agent (CAPTURE-DESIGN §5c), which holds the privileges on the LAN and streams flows back',
+  };
+}
+
 /** Pure: match attached USB ids against the known-radio tables. Returns the matched dongle label, or null. */
 export function matchRadio(usbIds: UsbId[], table: { vid: string; pid?: string; label: string }[]): string | null {
   for (const known of table) {
@@ -141,6 +186,32 @@ function usbIds(): UsbId[] {
   return out;
 }
 
+/** Is this process inside a container? `/.dockerenv` plus the cgroup path cover Docker, containerd and k8s. */
+function containerized(): boolean {
+  try {
+    if (fs.existsSync('/.dockerenv')) return true;
+  } catch {}
+  try {
+    return /docker|containerd|kubepods|libpod/.test(fs.readFileSync('/proc/1/cgroup', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+/** Network interface names visible to this process. [] where sysfs isn't available (e.g. macOS). */
+function interfaceNames(): string[] {
+  try {
+    return fs.readdirSync('/sys/class/net');
+  } catch {
+    return [];
+  }
+}
+
+/** Whether this process can reach the LAN at layer 2 at all — the spoof backend's binding precondition. */
+function l2Reach(): { onLanSegment: boolean; reason: string } {
+  return assessL2Reach({ containerized: containerized(), hostNetns: looksLikeHostNetns(interfaceNames()) });
+}
+
 /** Serial adapters present as character devices (Linux naming). [] where none / not a Linux host. */
 function serialPorts(): string[] {
   try {
@@ -182,10 +253,24 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
       const caps = effectiveCaps();
       const netAdmin = caps !== null && capHeld(caps, CAP_NET_ADMIN);
       const netRaw = caps !== null && capHeld(caps, CAP_NET_RAW);
+      const l2 = l2Reach();
+      const detail = { bettercap: haveBin, netAdmin, netRaw, onLanSegment: l2.onLanSegment, l2: l2.reason };
+
+      // Layer-2 reach is reported FIRST and on its own, because it is the one precondition no amount of tooling or
+      // privilege can substitute for. Telling a bridge-networked deployment to add NET_ADMIN would send the
+      // operator after a fix that cannot work — the honest answer names host networking or the LAN agent instead.
+      if (!l2.onLanSegment) {
+        return {
+          available: false,
+          reason: `Spoof positioning is not possible in this deployment: ${l2.reason}.`,
+          detail,
+        };
+      }
       if (haveBin && netAdmin && netRaw) {
         return {
           available: true,
-          reason: 'bettercap present with NET_ADMIN + NET_RAW — ARP/DNS spoof positioning available.',
+          reason: `bettercap present with NET_ADMIN + NET_RAW, and ${l2.reason} — ARP/DNS spoof positioning available.`,
+          detail,
         };
       }
       const missing: string[] = [];
@@ -197,7 +282,8 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
       }
       return {
         available: false,
-        reason: `${missing.join('; ')} — run with --cap-add=NET_ADMIN --cap-add=NET_RAW (and --network host on Docker) to enable spoof positioning.`,
+        reason: `${missing.join('; ')} — run with --cap-add=NET_ADMIN --cap-add=NET_RAW to enable spoof positioning (this process IS on the LAN segment: ${l2.reason}).`,
+        detail,
       };
     },
   },

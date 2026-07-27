@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # adds mDNS/DNS-SD enrichment (6.0); mitmproxy (`mitmdump`) is the on-path interception proxy for OTA capture (6.1).
 # Fault-tolerant: if this fails the `discover`/proxy providers degrade honestly (the capture backends report the
 # tool absent). The lane still does nothing on the wire unless FIRMLAB_CAPTURE=1 and the operator arms an action.
+# (bettercap — 6.2 active positioning — is deliberately NOT here; see the last layer for why.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       nmap arp-scan iproute2 avahi-utils mitmproxy \
     && rm -rf /var/lib/apt/lists/* \
@@ -136,3 +137,22 @@ RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends python
     && /opt/angr-venv/bin/python3 -c "import angr; print(\"angr\", angr.__version__)" \
     && rm -rf /var/lib/apt/lists/*' \
     || echo "angr optional install failed — symbolic reachability degrades honestly"
+
+# === bettercap — active on-path positioning (capture/spoof.ts, Phase 6.2). ===
+# It ships here because the 6.2 spoof leg was written against a toolchain that never carried it: the backend had
+# been honestly reporting itself absent since the day it was written, which made active positioning a documented
+# capability that did not exist. Installing it makes the capability real.
+#
+# Installing it does NOT make it usable everywhere, and `assessL2Reach` (capture/backends.ts, unit-tested) is what
+# keeps that honest: ARP poisoning has to answer for the gateway on the TARGET's layer-2 segment, and a container
+# on a Docker bridge network is not on it — its ARP frames never leave the private Docker subnet. So the backend
+# gates on layer-2 reach BEFORE the binary or the caps, and a bridge-networked deployment is told the spoof is
+# impossible there rather than being sent after a `--cap-add` that cannot help. Genuinely spoof-capable only under
+# `--network host` + `--cap-add=NET_ADMIN --cap-add=NET_RAW`; the Traefik-fronted deploy is bridge-networked by
+# design and its answer is the LAN capture agent (docs/CAPTURE-DESIGN.md §5b/§5c).
+#
+# Placed LAST, next to sasquatch/angr: a small, volatile apt layer must not invalidate the multi-GB tool builds
+# above it — which is exactly what adding it to the capture block near the top of this file would have done.
+RUN apt-get update && apt-get install -y --no-install-recommends bettercap \
+    && rm -rf /var/lib/apt/lists/* && command -v bettercap \
+    || echo "bettercap optional install failed — spoof positioning degrades honestly (LAN agent still works)"

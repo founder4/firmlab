@@ -17,7 +17,7 @@
 # Usage:
 #   scripts/deploy.sh                 build app image + deploy + verify (uses the existing tools base)
 #   scripts/deploy.sh --tools         ALSO rebuild the firmlab-tools base first (heavy; when a tool recipe changed)
-#   scripts/deploy.sh --check         report drift only, change nothing
+#   scripts/deploy.sh --check         report drift + port squatters only, change nothing
 #   scripts/deploy.sh --build-only    build and tag, do not touch the running container
 #   scripts/deploy.sh --allow-dirty   permit building from a dirty working tree (stamped -dirty)
 #
@@ -98,6 +98,34 @@ if [ -n "$RUNNING_REV" ]; then
 else
   warn "el contenedor '$CONTAINER' no está sellado (imagen anterior a este script) o no existe"
 fi
+
+# --- port squatter: something OTHER than the container answering on 8799 -------------------------
+# The compose publishes NO host port (Traefik reaches the container over proxy_net), so anything listening on
+# host:8799 is by definition not this deployment. A leftover `pnpm dev:api` there is the worst kind of stale: it
+# serves a plausible-looking FirmLab from an old tree and an old DB, so you verify a deploy against the wrong
+# process and believe it. Docker's own forwarder (docker-proxy / com.docker.backend) is exempt — that IS a
+# published container port, which only means the compose was changed to publish one.
+check_port_squatter() {
+  local port="${1:-8799}" listeners=""
+  if command -v lsof >/dev/null 2>&1; then
+    listeners="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $1" (pid "$2", user "$3")"}' | sort -u)"
+  elif command -v ss >/dev/null 2>&1; then
+    listeners="$(ss -lptnH "sport = :$port" 2>/dev/null | sed 's/.*users:((//; s/)).*//' | tr -d '"' | sort -u)"
+  else
+    return 0  # no way to look: say nothing rather than imply the port is clean
+  fi
+  [ -n "$listeners" ] || return 0
+
+  local foreign
+  foreign="$(printf '%s\n' "$listeners" | grep -viE 'docker-proxy|com\.docker|vpnkit' || true)"
+  if [ -n "$foreign" ]; then
+    warn "algo AJENO al contenedor escucha en el puerto $port:"
+    printf '%s\n' "$foreign" | sed 's/^/    /' >&2
+    warn "el compose no publica puertos, así que eso NO es este deploy — un 'pnpm dev:api' zombi sirve un"
+    warn "FirmLab creíble desde otro árbol y otra DB. Mátalo antes de verificar nada contra localhost:$port."
+  fi
+}
+check_port_squatter 8799
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
   exit 0

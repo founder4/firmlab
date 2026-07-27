@@ -74,7 +74,7 @@ Backends split into two roles that compose:
 | Backend | Role | Detected by | Unlocks |
 |---|---|---|---|
 | `network-proxy` (mitmproxy + generated CA) | interception | always present in the image | HTTP; HTTPS when the device doesn't pin/validate |
-| `on-path-spoof` (bettercap ARP/DNS) | positioning | `NET_ADMIN`+`NET_RAW` caps & a usable L2 iface | gets you on-path without router config |
+| `on-path-spoof` (bettercap ARP/DNS) | positioning | **layer-2 reach to the LAN segment first** (bare host, or `--network host`), then bettercap + `NET_ADMIN`/`NET_RAW` | gets you on-path without router config — **host-only, see §5b** |
 | `on-path-gateway` (routing / SPAN / FirmLab-as-default-route) | positioning | operator-declared, confirmed by seeing target traffic | cleanest capture, no spoofing |
 | `ble` (nRF52840 sniffer: nRF Sniffer / Sniffle) | radio | USB VID/PID probe | `ble-gatt` OTA (Nordic DFU & friends) |
 | `zigbee` (CC2531 / nRF Zigbee sniffer) | radio | USB probe | `zigbee-ota` (standard OTA Upgrade cluster 0x0019) |
@@ -137,6 +137,20 @@ are three positioning models; FirmLab supports all three, detects which are avai
 **(b) Active on-path via ARP/DNS spoof (no router config).** `bettercap` poisons the target↔gateway ARP for that
 one device and/or answers its DNS, so its traffic detours through FirmLab. Plug-and-play, but noisy at L2 and
 strictly scoped to a single target, with **guaranteed restore** on teardown.
+
+> **This path is HOST-ONLY by design, and the code enforces it.** `bettercap` ships in `Dockerfile.tools`, so the
+> capability is real rather than documented-but-absent — but installing it changes nothing about where the
+> process sits on the wire. ARP poisoning answers for the gateway's MAC *on the target's layer-2 segment*, and a
+> container attached to a Docker bridge is not on that segment: its `eth0` lives on a private NATed Docker subnet
+> and its ARP frames never reach a LAN device. So `assessL2Reach` (backends.ts, unit-tested) gates the
+> `on-path-spoof` backend on layer-2 reach BEFORE it looks at the binary or the capabilities, and a
+> bridge-networked deployment is told the spoof is *impossible here* — not that it is "missing NET_ADMIN", which
+> would send the operator after a fix that cannot work. Spoof is genuinely available only under
+> `--network host` + `--cap-add=NET_ADMIN --cap-add=NET_RAW` on a Linux host.
+>
+> **The deployed FirmLab is bridge-networked on purpose** (`proxy_net`, fronted by Traefik + tinyauth + CrowdSec),
+> and host networking would break that routing and the auth gate with it. That deployment's answer to active
+> positioning is therefore **(c) the LAN capture agent** — which is precisely why (c) exists.
 
 **(c) LAN capture agent (the robust answer to Docker).** A **hard truth**: the API runs in Docker, and a
 NAT-bridged container **cannot** ARP-spoof or transparently proxy the LAN. Two ways out:
@@ -344,6 +358,11 @@ the lab**, matching the project's existing validation discipline (real-tool, in-
   degradation, guaranteed ARP restore). The LAN agent — `capture/agent.ts` + token-authed `POST /capture/agent/*`
   + `scripts/capture-agent.mjs` — is the durable Docker answer: a privileged LAN box streams carved flows to the
   workbench, which scores + ingests them by the same path. Validated vs the real API.
+  **Closed 2026-07-27:** the spoof leg was shipped against a toolchain that never carried `bettercap`, so it had
+  been honestly reporting itself absent since the day it was written — a capability documented but not present.
+  `bettercap` now ships in `Dockerfile.tools`, and the backend gained the layer-2 reach gate (`assessL2Reach`)
+  that keeps installing it from turning into an over-claim on the bridge-networked deploy. Spoof is **host-only by
+  design**; the deployed instance's answer stays the LAN agent (see §5b).
 - **6.3 — Capturability ladder + preflight + pinning metadata + Frida unpin templates. ✅ SHIPPED.**
   `capture/preflight.ts` ranks the viable strategies + states the honest acquisition ceiling (with `realizedCeiling`
   from a session's actual flows, so pinning is observed not guessed — the proxy addon logs `tls-pinned` on a CA
