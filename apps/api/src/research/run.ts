@@ -229,8 +229,13 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     handle.log(`Hash lookup: ${unsaltedCount} unsalted hash(es) → nitrxgen/weakpass (salted hashes are not sent).`);
   }
   const hashLookup = await runHashLookup(hashCandidates, cfg);
-  syncFindings(imageId, 'hashlookup', normalizeHashLookup(hashLookup));
-  if (hashLookup.enabled) handle.log(hashLookup.reason);
+  // Only re-sync this source when the lookup actually ran. `syncFindings` clears the source before inserting, so
+  // syncing an empty set on a flag-off run would DELETE a `recovered-password` finding a previous, armed run had
+  // confirmed — turning the flag off would erase durable evidence rather than just stop producing new evidence.
+  if (hashLookup.enabled) {
+    syncFindings(imageId, 'hashlookup', normalizeHashLookup(hashLookup));
+    handle.log(hashLookup.reason);
+  }
 
   let synthesis: ResearchResult['synthesis'];
   const llm = loadLlmConfig();

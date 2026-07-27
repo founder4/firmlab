@@ -467,7 +467,7 @@ export interface ResearchResult {
       account: string;
       source: string;
       scheme: string;
-      outcome: 'resolved' | 'unverified' | 'miss' | 'skipped_salted' | 'skipped_other';
+      outcome: 'resolved' | 'unverified' | 'miss' | 'skipped_salted' | 'skipped_cap' | 'skipped_other';
       verifiedAs?: string;
       passwordMasked?: string;
       manualLookupUrl?: string;

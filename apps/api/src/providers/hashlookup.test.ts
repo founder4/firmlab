@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { ResearchConfig } from '../research/config.js';
 import {
+  CRACKSTATION_URL,
   classifyHash,
   maskSecret,
   normalizeHashLookup,
@@ -135,6 +136,23 @@ describe('runHashLookup — gating and no-network paths', () => {
     expect(r.attempted).toBe(0);
     expect(r.resolved).toBe(0);
     expect(r.entries.map((e) => e.outcome)).toEqual(['skipped_salted', 'skipped_other', 'skipped_other']);
+  });
+
+  it('reports a capped-out hash as skipped_cap, never as a miss (it was never queried)', async () => {
+    // cap 0 ⇒ nothing is ever sent, so this exercises the cap branch without touching the network.
+    const r = await runHashLookup(
+      [
+        { account: 'root', hash: md5('admin'), source: '/etc/shadow' },
+        { account: 'admin', hash: md5('pass'), source: '/etc/shadow' },
+      ],
+      cfg(true),
+      { cap: 0 },
+    );
+    expect(r.attempted).toBe(0);
+    expect(r.notQueried).toBe(2);
+    expect(r.entries.map((e) => e.outcome)).toEqual(['skipped_cap', 'skipped_cap']);
+    expect(r.entries.every((e) => e.manualLookupUrl === CRACKSTATION_URL)).toBe(true);
+    expect(r.reason).toContain('2 more skipped');
   });
 });
 

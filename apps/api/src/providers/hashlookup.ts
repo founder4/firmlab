@@ -270,6 +270,7 @@ export type LookupOutcome =
   | 'unverified' // a candidate came back but did not verify — discarded as noise, not a hit
   | 'miss' // resolvable type, queried, nothing came back
   | 'skipped_salted' // salted crypt — never sent (a miss would prove nothing)
+  | 'skipped_cap' // resolvable, but the per-run cap was already spent — NEVER queried, so not a miss
   | 'skipped_other'; // locked / empty / unknown — nothing to look up
 
 export interface HashLookupEntry {
@@ -346,8 +347,11 @@ export async function runHashLookup(
       continue;
     }
     if (attempted >= cap) {
+      // Resolvable, but the cap is spent — this hash was never sent, so it is NOT a miss. Reporting it as one
+      // would claim a lookup that never happened; `skipped_cap` keeps the distinction the rest of the pipeline
+      // makes between "asked and got nothing" and "never asked".
       notQueried += 1;
-      entries.push({ ...base, outcome: 'miss', manualLookupUrl: CRACKSTATION_URL });
+      entries.push({ ...base, outcome: 'skipped_cap', manualLookupUrl: CRACKSTATION_URL });
       continue;
     }
 
