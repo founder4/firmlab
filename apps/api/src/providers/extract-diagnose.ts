@@ -228,8 +228,8 @@ function collectBlobs(root: string, maxDepth = 4): string[] {
   return out;
 }
 
-/** Read the first `n` bytes of a file plus its size — enough for a superblock without loading a whole volume. */
-function readHeadAndTail(abs: string): Uint8Array | null {
+/** Read a carved blob whole (they are bounded by BLOB_DIAGNOSE_CAP) so both its header and tail are readable. */
+function readBlob(abs: string): Uint8Array | null {
   try {
     const size = fs.statSync(abs).size;
     if (size <= 0) return null;
@@ -260,8 +260,17 @@ export function diagnoseNoRootfs(outputDir: string): NoRootfsDiagnosis {
   const volumes = collectVolumes(outputDir).filter((v) => v.files > 0);
   const totalFiles = volumes.reduce((n, v) => n + v.files, 0);
 
+  // Which blobs are worth reporting, and this is where the first version got it backwards. A carved `.jffs2` whose
+  // volume DID come out is not an unopened payload — BeanView's 666 files came from exactly those blobs, and
+  // listing all 29 of them as "no extractor opened it" was both false and a wall of text that buried the one line
+  // that mattered. Filesystem blobs are only news when nothing was extracted at all; a COMPRESSED payload is news
+  // either way, because binwalk never turns one into a volume directory.
+  const anyVolume = volumes.length > 0;
   const blobs: NoRootfsDiagnosis['blobs'] = [];
+  const seenBlob = new Set<string>();
   for (const blobPath of collectBlobs(outputDir)) {
+    const isCompressed = /\.(7z|lzma|xz|lzo|gz)$/i.test(blobPath);
+    if (anyVolume && !isCompressed) continue;
     let size = 0;
     try {
       size = fs.statSync(blobPath).size;
@@ -269,21 +278,23 @@ export function diagnoseNoRootfs(outputDir: string): NoRootfsDiagnosis {
       continue;
     }
     if (size === 0 || size > BLOB_DIAGNOSE_CAP) continue;
-    const bytes = readHeadAndTail(blobPath);
+    // binwalk re-run leaves `_img.extracted` AND `_img-0.extracted` holding the same carve, so the same blob is
+    // found twice. Key on name+size: the second copy is the same fact, not a second finding.
+    const key = `${path.basename(blobPath)}@${size}`;
+    if (seenBlob.has(key)) continue;
+    seenBlob.add(key);
+    const bytes = readBlob(blobPath);
     if (!bytes) continue;
     const squash = diagnoseSquashfs(bytes);
     if (squash) {
       blobs.push({ path: blobPath, diagnosis: squash.verdict });
       continue;
     }
-    // Not a SquashFS. A carved COMPRESSED blob still has to be reported: it is payload nobody opened, and calling
-    // that "nothing was extracted" was the first thing this diagnosis got wrong on real bytes (AliExpress carries a
-    // 3.8 MB raw-LZMA kernel blob and the verdict said the output was empty).
     const lzma = parseLzmaHeader(bytes);
     if (lzma) {
       blobs.push({
         path: blobPath,
-        diagnosis: `A raw LZMA stream of ${size} bytes, declaring ${lzma.uncompressedSize} bytes uncompressed, was carved and never unpacked — binwalk names these \`.7z\` and does not always recurse into them. The payload is UNEXAMINED, which is not the same as absent: whatever filesystem it holds has not been looked at.`,
+        diagnosis: `A raw LZMA stream of ${size} bytes, declaring ${lzma.uncompressedSize} bytes uncompressed, was carved and never unpacked — binwalk names these \`.7z\` and does not always recurse into them. The payload is UNEXAMINED, which is not the same as absent.`,
       });
       continue;
     }
@@ -300,7 +311,11 @@ export function diagnoseNoRootfs(outputDir: string): NoRootfsDiagnosis {
       `${volumes.length} volume(s) were extracted holding ${totalFiles} file(s), and none is a Linux rootfs — no bin/etc/lib among them. They look like data partitions${names.length ? ` (${names.join(', ')})` : ''}. The contents are on disk and worth reading even though no rootfs exists.`,
     );
   }
-  for (const b of blobs) parts.push(`${path.basename(b.path)}: ${b.diagnosis}`);
+  const SHOWN = 4;
+  for (const b of blobs.slice(0, SHOWN)) parts.push(`${path.basename(b.path)}: ${b.diagnosis}`);
+  if (blobs.length > SHOWN) {
+    parts.push(`${blobs.length - SHOWN} further carved blob(s) are unexamined for the same reason.`);
+  }
   if (parts.length === 0) {
     parts.push(
       'Nothing was extracted: no filesystem volume and no carvable container. The image may be encrypted, may use a container no extractor here understands, or may not contain a filesystem at all — this is an unanswered question, not a clean result.',

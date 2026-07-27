@@ -161,3 +161,62 @@ describe('parseLzmaHeader — a carved blob nobody opened is not an empty result
     fs.rmSync(root, { recursive: true, force: true });
   });
 });
+
+describe('the verdict stays readable, and does not accuse an extractor that succeeded', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diagnose-noise-'));
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  /**
+   * BeanView again, and the mistake the first version made on it: 29 `.jffs2` blobs were listed as "no extractor
+   * opened it" while their volumes were sitting right there holding the 666 files those blobs produced. False, and
+   * it buried the one sentence that mattered under a wall of repetition.
+   */
+  it('does not report filesystem blobs whose volumes did come out', () => {
+    const root = path.join(tmp, 'opened');
+    fs.mkdirSync(path.join(root, 'jffs2-root'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'jffs2-root', 'private_key.pem'), 'x');
+    for (const n of ['520000.jffs2', '71442C.jffs2', '722A14.jffs2']) {
+      fs.writeFileSync(path.join(root, n), Buffer.alloc(64, 0x11));
+    }
+    const d = diagnoseNoRootfs(root);
+    expect(d.blobs).toHaveLength(0);
+    expect(d.verdict).toContain('private_key.pem');
+    expect(d.verdict).not.toContain('.jffs2');
+  });
+
+  it('still reports a compressed payload, which never becomes a volume directory', () => {
+    const root = path.join(tmp, 'compressed');
+    fs.mkdirSync(path.join(root, 'jffs2-root'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'jffs2-root', 'voice'), 'x');
+    const b = Buffer.alloc(4096);
+    b[0] = 0x5d;
+    b.writeUInt32LE(33554432, 1);
+    b.writeBigUInt64LE(BigInt(1305600), 5);
+    fs.writeFileSync(path.join(root, 'persondet.lzma'), b);
+    const d = diagnoseNoRootfs(root);
+    expect(d.blobs).toHaveLength(1);
+    expect(d.verdict).toContain('persondet.lzma');
+  });
+
+  it('counts a blob once when binwalk re-ran and carved it twice', () => {
+    const root = path.join(tmp, 'twice');
+    const blob = Buffer.alloc(4096);
+    blob[0] = 0x5d;
+    blob.writeUInt32LE(33554432, 1);
+    blob.writeBigUInt64LE(BigInt(999), 5);
+    for (const dir of ['_img.extracted', '_img-0.extracted']) {
+      fs.mkdirSync(path.join(root, dir), { recursive: true });
+      fs.writeFileSync(path.join(root, dir, '50040.7z'), blob);
+    }
+    expect(diagnoseNoRootfs(root).blobs).toHaveLength(1);
+  });
+
+  it('folds a long blob list instead of printing every line', () => {
+    const root = path.join(tmp, 'many');
+    fs.mkdirSync(root, { recursive: true });
+    for (let i = 0; i < 9; i++) fs.writeFileSync(path.join(root, `b${i}.squashfs`), Buffer.alloc(128 + i, 0x22));
+    const d = diagnoseNoRootfs(root);
+    expect(d.blobs).toHaveLength(9);
+    expect(d.verdict).toContain('5 further carved blob(s) are unexamined');
+  });
+});
