@@ -76,9 +76,13 @@ export async function symreachRoutes(app: FastifyInstance): Promise<void> {
     if (sinks.length === 0) {
       const a = assessBinaryFile(abs, binary);
       if (a.unsafeCopy.length === 0) {
+        // Deliberately "mentions", not "imports": the sweep reads symbol tokens out of the binary's printable
+        // strings, which is a SUPERSET of the real imports. Validating over MCP, `sbin/chkntfs` was suggested for
+        // `system` on that basis and angr then resolved no PLT/symbol entry at all — an honest `absent`, but the
+        // suggestion had promised more than the evidence carries.
         const hint = a.cmdExec.length
-          ? ` It does import ${a.cmdExec.join(', ')} — command-exec sinks worth asking about.`
-          : ' Nothing obviously dangerous is imported, but any symbol this binary calls can still be asked about.';
+          ? ` Its symbols mention ${a.cmdExec.join(', ')} — command-exec sinks worth asking about (read from the binary's strings, so a mention is not proof of a real import).`
+          : ' Nothing obviously dangerous is mentioned, but any symbol this binary calls can still be asked about.';
         return reply.status(400).send({
           error: `${binary} imports no unbounded-copy function — name the sink you want asked about.${hint}`,
           execImports: a.cmdExec,
