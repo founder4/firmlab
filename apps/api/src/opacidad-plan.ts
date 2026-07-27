@@ -20,6 +20,7 @@ export type ProviderId =
   | 'fcc'
   | 'rtos'
   | 'chipsec'
+  | 'fwhunt'
   | 'esp'
   | 'encrypted'
   | 'webtaint'
@@ -164,6 +165,13 @@ export function specsForClass(cls: string): PlanSpec[] {
           needsRootfs: false,
           built: true,
           provider: 'chipsec',
+        },
+        {
+          worker: 'UEFI · FwHunt implant scan',
+          reason: 'upstream FwHunt code-pattern rules → known implant / vulnerable-module families',
+          needsRootfs: false,
+          built: true,
+          provider: 'fwhunt',
         },
       ];
     case 'baremetal':

@@ -156,3 +156,36 @@ RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends python
 RUN apt-get update && apt-get install -y --no-install-recommends bettercap \
     && rm -rf /var/lib/apt/lists/* && command -v bettercap \
     || echo "bettercap optional install failed — spoof positioning degrades honestly (LAN agent still works)"
+
+# === fwhunt-scan — real UEFI implant detection (providers/fwhunt.ts). ===
+# The ONLY honest route to implant detection here. Advanced implants (LoJax, MoonBounce, CosmicStrand, BlackLotus)
+# are not reliably GUID-detectable and have no stable public file-GUIDs, which is exactly why FwHunt uses
+# code-pattern rules (esil / hex strings / nvram) instead. Shipping a hand-curated GUID feed would have been
+# fabrication dressed as intelligence, so FirmLab ships the SCANNER and the upstream RULES as data, and authors
+# neither (docs/BACKLOG.md, UEFI section).
+#
+# Three parts, one layer:
+#  - rizin, built from source: fwhunt-scan drives it through rzpipe, Debian bookworm has no `rizin` package, and
+#    upstream publishes a Linux binary for x86_64 only — this deployment is arm64, so source is the only route.
+#  - fwhunt-scan in its OWN venv (`FIRMLAB_FWHUNT_PYTHON`), because chipsec lives on the system interpreter and
+#    runs against the SAME UEFI images; two optional tools sharing a dependency closure invites a version clash.
+#  - the rule corpus, cloned from binarly-io/FwHunt (`FIRMLAB_FWHUNT_RULES`).
+#
+# Placed last with the other volatile layers, and fault-tolerant: a failed build must degrade the provider to
+# `blocked_by_platform`, never fail the image.
+ENV FIRMLAB_FWHUNT_PYTHON=/opt/fwhunt-venv/bin/python3
+ENV FIRMLAB_FWHUNT_RULES=/opt/fwhunt-rules/rules
+RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates xz-utils git meson ninja-build pkg-config gcc g++ python3-venv libc6-dev \
+    && curl -fsSL https://github.com/rizinorg/rizin/releases/download/v0.9.1/rizin-src-v0.9.1.tar.xz -o /tmp/rz.tar.xz \
+    && mkdir -p /tmp/rz && tar xf /tmp/rz.tar.xz -C /tmp/rz --strip-components=1 \
+    && cd /tmp/rz && meson setup build --prefix=/usr/local --buildtype=release >/dev/null \
+    && ninja -C build >/dev/null && ninja -C build install >/dev/null && ldconfig \
+    && rm -rf /tmp/rz /tmp/rz.tar.xz \
+    && python3 -m venv /opt/fwhunt-venv \
+    && /opt/fwhunt-venv/bin/pip install --no-cache-dir fwhunt-scan \
+    && git clone --depth 1 https://github.com/binarly-io/FwHunt /opt/fwhunt-rules \
+    && rizin -v | head -1 \
+    && /opt/fwhunt-venv/bin/python3 -c "import fwhunt_scan, rzpipe; print(\"fwhunt-scan ok\")" \
+    && rm -rf /var/lib/apt/lists/*' \
+    || echo "fwhunt-scan optional install failed — UEFI implant scanning degrades honestly"

@@ -21,6 +21,23 @@ export function angrPython(): string {
   return process.env.FIRMLAB_ANGR_PYTHON || 'python3';
 }
 
+/**
+ * The interpreter that owns fwhunt-scan. Same isolation reasoning as angr: it pulls in `rzpipe` and drives a
+ * separately-built rizin, and it must not share an interpreter with chipsec (which the UEFI path already uses on
+ * the SAME images). Falling back to `python3` keeps a host install working without configuration.
+ */
+export function fwhuntPython(): string {
+  return process.env.FIRMLAB_FWHUNT_PYTHON || 'python3';
+}
+
+/**
+ * Where the FwHunt rule corpus lives. The rules are DATA, fetched from binarly-io/FwHunt, not something FirmLab
+ * authors — that separation is the entire point (docs/BACKLOG.md: a hand-guessed GUID feed would be fabrication).
+ */
+export function fwhuntRulesDir(): string {
+  return process.env.FIRMLAB_FWHUNT_RULES || '/opt/fwhunt-rules/rules';
+}
+
 /** Resolve a binary on PATH (executable), for tools whose --version probe is too slow/costly to run (e.g. a JVM). */
 function resolveOnPath(bin: string): string | null {
   for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
@@ -53,7 +70,8 @@ export type ToolId =
   | 'qemu-system-arm'
   | 'renode'
   | 'chipsec'
-  | 'angr';
+  | 'angr'
+  | 'fwhunt';
 
 interface ToolSpec {
   id: ToolId;
@@ -155,6 +173,15 @@ const TOOLS: readonly ToolSpec[] = [
     unlocks: 'Symbolic reachability (is a dangerous sink on a live path?)',
     group: 'analyze',
     timeoutMs: 30000,
+  },
+  {
+    id: 'fwhunt',
+    // Like angr, a Python package rather than a command — probe by importing it, and report the interpreter.
+    bin: fwhuntPython(),
+    probe: ['-c', 'import fwhunt_scan, rzpipe; print("fwhunt-scan ok")'],
+    unlocks: 'UEFI implant detection with real FwHunt code-pattern rules',
+    group: 'analyze',
+    timeoutMs: 15000,
   },
 ];
 

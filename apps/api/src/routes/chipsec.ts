@@ -7,6 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 import { type FindingDraft, syncFindings } from '../findings.js';
 import { type ChipsecResult, detectChipsec, runChipsec } from '../providers/chipsec.js';
+import { runFwHunt } from '../providers/fwhunt.js';
 import { startJob } from '../providers/jobs.js';
 import { getImage, listJobs } from '../store.js';
 
@@ -44,6 +45,29 @@ export async function chipsecRoutes(app: FastifyInstance): Promise<void> {
   app.get('/images/:id/chipsec', async (req) => {
     const { id } = req.params as { id: string };
     const done = listJobs(id).find((j) => j.kind === 'chipsec' && j.status === 'done' && j.resultJson);
+    return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
+  });
+
+  /**
+   * FwHunt implant scan. Served next to chipsec because it answers the question chipsec's module inventory raises
+   * and cannot settle — "is any of this a known implant?" — using the upstream rule corpus rather than a GUID list
+   * FirmLab would have had to invent.
+   */
+  app.post('/images/:id/fwhunt', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const row = getImage(id);
+    if (!row) return reply.status(404).send({ error: 'Image not found' });
+    const jobId = startJob(id, 'fwhunt', {}, async (handle) => {
+      const result = await runFwHunt(row.path, handle);
+      syncFindings(id, 'fwhunt', result.findings);
+      return result;
+    });
+    return reply.status(202).send({ jobId });
+  });
+
+  app.get('/images/:id/fwhunt', async (req) => {
+    const { id } = req.params as { id: string };
+    const done = listJobs(id).find((j) => j.kind === 'fwhunt' && j.status === 'done' && j.resultJson);
     return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
   });
 }

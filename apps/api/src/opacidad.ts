@@ -61,6 +61,7 @@ import { runEspAnalysis } from './providers/esp.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
 import { runFccLookup } from './providers/fcc.js';
 import { runFsAudit } from './providers/fsaudit.js';
+import { runFwHunt } from './providers/fwhunt.js';
 import type { JobHandle } from './providers/jobs.js';
 import { runRtosAnalysis } from './providers/rtos.js';
 import { runSbom } from './providers/sbom.js';
@@ -261,6 +262,32 @@ async function chipsecRun(c: RunCtx): Promise<StepOutcome> {
   return { summary: `UEFI offline decode + posture: ${r.findings.length} findings`, findingCount: r.findings.length };
 }
 
+/** UEFI depth — run the upstream FwHunt rule corpus. A clean scan is never an empty result (see the provider). */
+async function fwhuntRun(c: RunCtx): Promise<StepOutcome> {
+  const r = await runFwHunt(c.imagePath, c.handle);
+  syncFindings(c.imageId, 'fwhunt', r.findings);
+  if (!r.available) {
+    return {
+      summary: 'FwHunt implant scan: unavailable',
+      findingCount: r.findings.length,
+      degraded: true,
+      note: r.reason,
+    };
+  }
+  return {
+    summary: `FwHunt implant scan: ${r.matches.length} match(es), ${r.rulesRun}/${r.rulesInCorpus} rule(s) applied to this image`,
+    findingCount: r.findings.length,
+    // Most of a rule corpus never applies to any one image; a scan where the bulk of it sat out is real coverage
+    // information, so it reads as degraded rather than as a clean pass.
+    ...(r.rulesInCorpus > 0 && r.rulesRun * 2 < r.rulesInCorpus
+      ? {
+          degraded: true,
+          note: `${r.rulesNotApplicable} rule(s) never applied to this image — that is coverage you did not get`,
+        }
+      : {}),
+  };
+}
+
 async function espRun(c: RunCtx): Promise<StepOutcome> {
   const r = runEspAnalysis(c.imagePath);
   syncFindings(c.imageId, 'esp', r.findings);
@@ -397,6 +424,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   fcc: fccRun,
   rtos: rtosRun,
   chipsec: chipsecRun,
+  fwhunt: fwhuntRun,
   esp: espRun,
   encrypted: encryptedRun,
   webtaint: webtaintRun,
