@@ -68,6 +68,12 @@ function leadPath(f: FindingDraft): string {
   return typeof ev.path === 'string' ? ev.path : '';
 }
 
+/** Is the candidate a program the probes can actually run? Absent flag ⇒ assume yes, never disqualify on silence. */
+function leadRunnable(f: FindingDraft): boolean {
+  const ev = (f.evidence ?? {}) as Record<string, unknown>;
+  return ev.runnable !== false;
+}
+
 /**
  * Leads from the binary-vuln sweep: each stack-overflow candidate becomes one reachability question. The candidate
  * finding already carries the binary path, its size and the unbounded-copy functions it imports, which is exactly
@@ -87,8 +93,12 @@ export function reachabilityLeads(
   // to be walked spends it on the questions least likely to come back with an answer. Measured on the real DVRF
   // rootfs: that order put all three probes into usr/sbin daemons and never reached the 7 KB pwnable that does
   // crash. Ties break on path so a re-run schedules the same probes.
+  // Shared libraries are dropped, not because they are uninteresting but because the question cannot be put to
+  // them: there is no entry point to be reachable FROM, and the reproduction rung cannot execute a .so either.
+  // They stay in the ledger as candidates — unasked, which is what they are — rather than being cleared by a probe
+  // that never happened. (A candidate carrying no `runnable` flag predates the field; unknown must not disqualify.)
   const ordered = candidates
-    .filter((f) => f.kind === 'binary-pwnable-candidate')
+    .filter((f) => f.kind === 'binary-pwnable-candidate' && leadRunnable(f))
     .sort((a, b) => leadSize(a) - leadSize(b) || leadPath(a).localeCompare(leadPath(b)));
   for (const f of ordered) {
     const ev = (f.evidence ?? {}) as Record<string, unknown>;

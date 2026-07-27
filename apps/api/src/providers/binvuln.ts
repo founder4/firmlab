@@ -128,6 +128,52 @@ export function parseDynamicSymbols(buf: Uint8Array): Set<string> | null {
   }
 }
 
+const ET_EXEC = 2;
+const ET_DYN = 3;
+const PT_INTERP = 3;
+
+/**
+ * Pure: is this ELF a program you can RUN, as opposed to a shared library?
+ *
+ * Both are ELFs and both can import `strcpy` without a canary, so both are legitimate entries in the ledger. But
+ * the two questions downstream — "is this sink reachable from the entry point" and "run it and see whether it
+ * faults" — are ill-posed for a library: it has no entry point to reach from, and qemu cannot execute it. Asking
+ * anyway spends a probe that structurally cannot answer.
+ *
+ * That is not hypothetical. Ranking candidates by ascending size (so the prober gets the binaries it can settle)
+ * promoted DVRF's iptables plugins straight to the front: 15 of the 30 listed candidates are `usr/lib/iptables/*.so`
+ * at ~6 KB each, just above the three executables that took the budget. On a rootfs with slightly smaller plugins
+ * the entire allowance would have gone to libraries.
+ *
+ * ET_EXEC is a program. ET_DYN is ambiguous — a PIE executable and a library share it — and what separates them is
+ * that a PIE names an interpreter to load it, so PT_INTERP is the discriminator rather than the filename.
+ */
+export function isRunnableElf(buf: Uint8Array): boolean {
+  if (buf.length < 64) return false;
+  if (!(buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46)) return false;
+  const is64 = buf[4] === 2;
+  const little = buf[5] === 1;
+  if (buf[4] !== 1 && buf[4] !== 2) return false;
+  if (buf[5] !== 1 && buf[5] !== 2) return false;
+  try {
+    const r = reader(buf, little);
+    const type = r.u16(0x10);
+    if (type === ET_EXEC) return true;
+    if (type !== ET_DYN) return false;
+    const phoff = is64 ? r.u64(0x20) : r.u32(0x1c);
+    const phentsize = r.u16(is64 ? 0x36 : 0x2a);
+    const phnum = r.u16(is64 ? 0x38 : 0x2c);
+    if (!phoff || !phentsize || !phnum) return false;
+    if (phoff + phnum * phentsize > buf.length) return false;
+    for (let i = 0; i < phnum; i++) {
+      if (r.u32(phoff + i * phentsize) === PT_INTERP) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export interface BinAssessment {
   path: string;
   /**
@@ -136,6 +182,12 @@ export interface BinAssessment {
    * small binaries and reliably times out on large ones, so size decides which leads are worth the probe budget.
    */
   size: number;
+  /**
+   * Can this ELF be executed (a program), or is it a shared library? A library is a real candidate for the ledger
+   * and a dead end for the probe budget — see `isRunnableElf`. True from the symbol-only assessor, which has no
+   * file to inspect: unknown must not silently disqualify a binary.
+   */
+  runnable: boolean;
   unsafeCopy: string[];
   cmdExec: string[];
   hasCanary: boolean;
@@ -151,7 +203,8 @@ export function assessBinary(
 ): BinAssessment {
   return {
     path: binPath,
-    size: 0, // a symbol set carries no file facts; assessBinaryFile fills this from the stat it already takes.
+    size: 0, // a symbol set carries no file facts; assessBinaryFile fills these from the bytes it already read.
+    runnable: true,
     unsafeCopy: UNSAFE_COPY_FNS.filter((f) => importsSymbol(symbols, f)),
     cmdExec: CMD_EXEC_FNS.filter((f) => importsSymbol(symbols, f)),
     hasCanary: importsSymbol(symbols, CANARY_SYMBOL),
@@ -182,7 +235,14 @@ export function buildBinFindings(a: BinAssessment): FindingDraft[] {
       title: `Stack-overflow candidate: ${a.path} ${verb} ${a.unsafeCopy.join('/')} with no stack canary`,
       severity: 'medium',
       proofState: 'needs_runtime_reproduction',
-      evidence: { path: a.path, size: a.size, unsafeFns: a.unsafeCopy, canary: false, symbolSource: a.symbolSource },
+      evidence: {
+        path: a.path,
+        size: a.size,
+        runnable: a.runnable,
+        unsafeFns: a.unsafeCopy,
+        canary: false,
+        symbolSource: a.symbolSource,
+      },
       rationale: `The binary ${verb} unbounded-copy libc function(s) and was built without a stack canary — the classic stack-buffer-overflow precondition. ${provenance} Whether an attacker reaches one with oversized input needs reversing/fuzzing, so this is a candidate lead, not a proven overflow.`,
     });
   }
@@ -284,7 +344,7 @@ export function assessBinaryFile(abs: string, rel: string): BinAssessment {
   const assessed = dyn
     ? assessBinary(rel, dyn, 'dynsym')
     : assessBinary(rel, extractSymbols(binaryStrings(bytes)), 'strings');
-  return { ...assessed, size };
+  return { ...assessed, size, runnable: isRunnableElf(bytes) };
 }
 
 /** Is this file an ELF? Exposed so a caller can reject a shell script before treating it as a binary target. */

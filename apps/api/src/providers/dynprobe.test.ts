@@ -165,6 +165,30 @@ describe('classifyRun — what may be claimed, in order of strength', () => {
     expect(r.verdict).toBe('not_attached');
     expect(r.reason).toContain('failure of the harness');
   });
+
+  /**
+   * Verbatim stdout from the first autonomous run of the whole W9 chain (deploy 8700bdd, DVRF_v03,
+   * sbin/diag_tracertbutton, sprintf at 0x500010 — the sink angr had just proven reachable). Every fixture above
+   * was written by hand and carries a "Remote debugging using" line that gdb -batch never actually prints, so all
+   * of them passed while the real thing was misread. It attached, set the breakpoint, and the target ran to
+   * completion without reaching the sink — and that was reported as a harness failure.
+   */
+  it('reads a real batch session that attached and exited, rather than calling it a failed attach', () => {
+    const real = [
+      '0x3ffbaa80 in _start () from /rootfs/lib/ld-uClibc.so.0',
+      'Breakpoint 1 at 0x500010',
+      '[Inferior 1 (process 1) exited normally]',
+    ].join('\n');
+    const p = parseGdbOutput(real);
+    expect(p.attached).toBe(true);
+    expect(p.exited).toBe(true);
+    expect(p.hits).toHaveLength(0);
+    expect(p.stop).toBeNull();
+
+    const r = classifyRun(p, pattern);
+    expect(r.verdict).toBe('ran_clean');
+    expect(r.reason).toContain('not about the binary');
+  });
 });
 
 describe('buildGdbScript', () => {

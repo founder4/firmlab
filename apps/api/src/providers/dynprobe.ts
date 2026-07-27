@@ -184,6 +184,14 @@ export function parseGdbOutput(text: string): GdbParse {
     const ex = /exited (?:normally|with code (\d+))/.exec(line);
     if (ex) {
       exited = true;
+      // An inferior that exited is an inferior that EXISTED, so the session was live. This has to be read as an
+      // attach signal because the obvious one is not there: gdb -batch does not echo the script's `target remote`,
+      // and gdb-multiarch prints no "Remote debugging using" on stdout. Caught on the first autonomous run of the
+      // W9 chain — sbin/diag_tracertbutton attached fine, set its breakpoint, ran to completion without reaching
+      // the sink, and was reported as `not_attached`: "a failure of the harness, not a result about the binary".
+      // Exactly backwards. It was a result about the binary, weak but real, and blaming the harness for it is the
+      // same overclaim as blaming the binary for a harness failure — in the other direction.
+      attached = true;
       if (ex[1]) exitCode = Number.parseInt(ex[1], 10);
     }
 

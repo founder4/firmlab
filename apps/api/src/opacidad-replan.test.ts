@@ -245,6 +245,21 @@ describe('reachabilityLeads spends the probe budget smallest-first', () => {
     expect(candidates.map((f) => f.title)).toEqual(['bin/d', 'bin/b']);
   });
 
+  // Caught by the first autonomous run: ranking by size promoted DVRF's ~6 KB iptables plugins to the front of the
+  // queue, and a .so has no entry point to be reachable from and cannot be run under gdb either.
+  it('skips a shared library, whose entry point the question presupposes and which has none', () => {
+    const lib: FindingDraft = {
+      ...sized('bin/b', 10),
+      evidence: { path: 'bin/b', size: 10, runnable: false, unsafeFns: ['strcpy'] },
+    };
+    expect(reachabilityLeads([lib, sized('bin/a', 9000)], root, 3).map((l) => l.target)).toEqual(['bin/a']);
+  });
+
+  it('treats a candidate predating the runnable flag as askable rather than disqualifying it on silence', () => {
+    const old: FindingDraft = { ...sized('bin/a', 5), evidence: { path: 'bin/a', size: 5, unsafeFns: ['strcpy'] } };
+    expect(reachabilityLeads([old], root, 3).map((l) => l.target)).toEqual(['bin/a']);
+  });
+
   it('sorts a candidate carrying no size last rather than letting it jump the queue', () => {
     const noSize: FindingDraft = { ...sized('bin/d', 0), evidence: { path: 'bin/d', unsafeFns: ['strcpy'] } };
     expect(reachabilityLeads([noSize, sized('bin/a', 500)], root, 2).map((l) => l.target)).toEqual(['bin/a', 'bin/d']);

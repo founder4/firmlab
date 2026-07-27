@@ -7,6 +7,7 @@ import {
   assessBinary,
   buildBinFindings,
   extractSymbols,
+  isRunnableElf,
   parseDynamicSymbols,
   runBinVuln,
   selectFindings,
@@ -132,6 +133,43 @@ describe('runBinVuln (rootfs sweep)', () => {
     const r = runBinVuln(root);
     expect(r.binariesScanned).toBe(400);
     expect(r.reason).toMatch(/examination budget was exhausted/);
+  });
+});
+
+describe('isRunnableElf — a library is a candidate the probes cannot question', () => {
+  /** Minimal ELF32-LE header with a chosen e_type and program-header table. */
+  const elfWith = (type: number, phTypes: number[]): Uint8Array => {
+    const PH_OFF = 0x40;
+    const PH_ENT = 32;
+    const buf = Buffer.alloc(PH_OFF + PH_ENT * Math.max(1, phTypes.length));
+    buf[0] = 0x7f;
+    buf[1] = 0x45;
+    buf[2] = 0x4c;
+    buf[3] = 0x46;
+    buf[4] = 1; // ELF32
+    buf[5] = 1; // little-endian
+    buf.writeUInt16LE(type, 0x10); // e_type
+    buf.writeUInt32LE(PH_OFF, 0x1c); // e_phoff
+    buf.writeUInt16LE(PH_ENT, 0x2a); // e_phentsize
+    buf.writeUInt16LE(phTypes.length, 0x2c); // e_phnum
+    phTypes.forEach((t, i) => buf.writeUInt32LE(t, PH_OFF + i * PH_ENT));
+    return buf;
+  };
+
+  it('accepts a plain executable', () => {
+    expect(isRunnableElf(elfWith(2, []))).toBe(true);
+  });
+
+  it('accepts a PIE, which is ET_DYN but names an interpreter', () => {
+    expect(isRunnableElf(elfWith(3, [1, 3]))).toBe(true); // PT_LOAD, PT_INTERP
+  });
+
+  it('rejects a shared library — ET_DYN with no interpreter to load it', () => {
+    expect(isRunnableElf(elfWith(3, [1, 2]))).toBe(false); // PT_LOAD, PT_DYNAMIC
+  });
+
+  it('rejects something that is not an ELF at all', () => {
+    expect(isRunnableElf(Buffer.alloc(80, 0x41))).toBe(false);
   });
 });
 
