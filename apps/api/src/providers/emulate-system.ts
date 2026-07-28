@@ -94,6 +94,15 @@ export function buildFullSystemArgs(
     machine,
     '-kernel',
     kernelPath,
+    // `-nodefaults` and an explicit serial are not tidiness — without them qemu instantiates its default VGA and
+    // dies with `failed to find romfile "vgabios-cirrus.bin"` before executing a single guest instruction, which
+    // is what this deployment did every time. A headless firmware boot wants no display at all, and the console
+    // has to be a serial we can read: the whole boot verdict is drawn from what this stream prints.
+    '-nodefaults',
+    '-serial',
+    'mon:stdio',
+    '-append',
+    'console=ttyS0 root=/dev/sda rootfstype=ext2 rw',
     '-drive',
     `file=${rootfsImage},format=raw`,
     '-netdev',

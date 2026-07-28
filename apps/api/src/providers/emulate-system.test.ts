@@ -47,6 +47,16 @@ describe('buildFullSystemArgs', () => {
   it('still produces a valid netdev when there is nothing to forward', () => {
     expect(buildFullSystemArgs('malta', '/k', '/r.img', []).join(' ')).toContain('user,id=n0 ');
   });
+
+  it('boots headless with a readable serial console, which qemu needs to start at all', () => {
+    // Measured in-container: without these qemu instantiates its default VGA and dies with
+    // `failed to find romfile "vgabios-cirrus.bin"` before executing one guest instruction. The serial is also
+    // the only stream the boot verdict can be read from.
+    const args = buildFullSystemArgs('malta', '/k', '/r.img', [{ host: 8080, guest: 80 }]).join(' ');
+    expect(args).toContain('-nodefaults');
+    expect(args).toContain('-serial mon:stdio');
+    expect(args).toContain('console=ttyS0');
+  });
 });
 
 describe('looksBooted — a boot is read from the console, never from survival', () => {
