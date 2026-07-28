@@ -15,12 +15,16 @@
     "dev:web": "pnpm --filter @firmlab/web run dev",
     "biome": "bash scripts/check-nul.sh && biome check .",
     "biome:fix": "biome check --write .",
-    "check:nul": "bash scripts/check-nul.sh"
+    "check:nul": "bash scripts/check-nul.sh",
+    "ui:up": "bash scripts/ui-expose.sh up",
+    "ui:down": "bash scripts/ui-expose.sh down",
+    "ui:shot": "node scripts/ui-drive.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "playwright": "^1.57.0"
   }
 }

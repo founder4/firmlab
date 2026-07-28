@@ -34,6 +34,26 @@ Tests live beside the code in `apps/api/src/**/*.test.ts` and `apps/web/src/**/*
 `packages/core/test/`. There are no vitest config files except `apps/web/vite.config.ts` (jsdom + Testing
 Library).
 
+**Looking at the UI.** A green web suite proves the components behave, not that a screen reads. The deployed
+container publishes no host port, so put a socat sidecar in front of it and drive the REAL build against the REAL
+corpus — no data copy, no second SQLite writer:
+
+```bash
+pnpm ui:up                                                   # → http://127.0.0.1:8899 (loopback, never 8799)
+pnpm ui:shot /image/447719f7/hardware shot.png               # screenshot + console errors + failed requests + text
+pnpm ui:shot /image/447719f7/files f.png --click "busybox"   # --theme light · --wait <ms> · --tour to test the tour
+pnpm ui:down
+```
+
+`scripts/ui-drive.mjs` reports console exceptions, 4xx/5xx responses and the visible text alongside the image,
+because a React subtree that threw renders as *blank*, and a panel over a failing endpoint looks exactly like one
+with no data. It suppresses the onboarding tour by default (it opens over every fresh profile). The `playwright`
+MCP server in `.mcp.json` is the interactive counterpart. **Two real defects were found this way within minutes of
+first rendering a page, and neither was reachable from a test:** prose running at 155 characters a line against the
+shell's established 72ch, and — worse — three panels reporting *"no device tree has been read"* for an image whose
+device-tree run had completed and found nothing, contradicting the banner beside them. That is the codebase's
+central conflation, committed in the UI layer, and only looking at it caught it.
+
 **Real-tool validation.** Unit tests deliberately never require the actual tool. Anything tool-backed is
 validated in-container instead:
 
