@@ -18,9 +18,12 @@
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
+import type { Architecture } from '@firmlab/core';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
+import { LIBNVRAM_DIR } from './preflight.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -75,7 +78,39 @@ export function imageIsCurrent(imageMtimeMs: number, rootfsMtimeMs: number): boo
  * Build (or reuse) the raw image for a rootfs. Never throws: a missing tool or a failed mkfs is reported as an
  * unavailable result, so the caller blocks honestly instead of booting something that is not there.
  */
-export async function ensureRootfsImage(rootfsPath: string, handle?: JobHandle): Promise<RootfsImageResult> {
+/**
+ * Stage the NVRAM shim inside the tree that is about to become the image.
+ *
+ * The firmadyne kernels are patched to preload `/firmadyne/libnvram.so` into every process, and a rootfs that
+ * does not carry it kills init immediately: the real WR940N boot reached userspace, printed
+ * `/sbin/init: can't load library '/firmadyne/libnvram.so'` and panicked with `Attempted to kill init`. The shim
+ * ships with this deployment already — the chroot rung uses it — so the only thing missing was putting it where
+ * the kernel looks. Copied into a COPY of the extraction, never into the extraction itself: the rootfs is
+ * evidence and other providers read it.
+ */
+async function stageFirmadyneShim(rootfsPath: string, arch: Architecture, log: (m: string) => void): Promise<void> {
+  const shim = `${LIBNVRAM_DIR}/libnvram-${arch}.so`;
+  if (!fs.existsSync(shim)) {
+    log(
+      `No libnvram shim for ${arch} at ${shim}. The firmadyne kernel preloads /firmadyne/libnvram.so into every process, so init will fail to start — the boot will report that honestly rather than look like a firmware fault.`,
+    );
+    return;
+  }
+  const dir = path.join(rootfsPath, 'firmadyne');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(shim, path.join(dir, 'libnvram.so'));
+    log(`Staged the ${arch} NVRAM shim at /firmadyne/libnvram.so, which the firmadyne kernel preloads.`);
+  } catch (err) {
+    log(`Could not stage the NVRAM shim: ${(err as Error).message}. init will very likely fail to start.`);
+  }
+}
+
+export async function ensureRootfsImage(
+  rootfsPath: string,
+  arch: Architecture,
+  handle?: JobHandle,
+): Promise<RootfsImageResult> {
   const log = (m: string): void => handle?.log(m);
   const imagePath = `${rootfsPath}.img`;
 
@@ -131,6 +166,7 @@ export async function ensureRootfsImage(rootfsPath: string, handle?: JobHandle):
   }
   const sizeBytes = planImageSize(kb);
   log(`Assembling a ${(sizeBytes / 1024 / 1024).toFixed(0)} MB ext2 image from ${kb} KiB of extracted files.`);
+  await stageFirmadyneShim(rootfsPath, arch, log);
 
   try {
     // Sparse: the file reports its full size while occupying only what is written.

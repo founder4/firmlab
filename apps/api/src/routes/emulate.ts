@@ -116,7 +116,7 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
       const jobId = startJob(id, 'emulate', { rung: 'full-system' }, async (handle) => {
         // Assemble the disk image first. Nothing used to: the rung was handed `${rootfsPath}.img` and every run
         // died on a file no code path created, which the guided recipe expected an operator to build by hand.
-        const image = await ensureRootfsImage(rootfsPath, handle);
+        const image = await ensureRootfsImage(rootfsPath, arch, handle);
         if (!image.available || !image.imagePath) {
           const blocked: SystemEmulationResult = {
             ran: false,
