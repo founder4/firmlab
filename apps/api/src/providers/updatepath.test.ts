@@ -8,12 +8,14 @@ import {
   assessRollback,
   assessScript,
   assessSymbols,
+  buildEnforcementFindings,
   buildUpdatePathFindings,
   classifyFitStrings,
   classifyKeyMaterial,
   classifySiblings,
   classifyUpdaterPath,
   findArmoredSignatures,
+  findEnforcementFlags,
   findPkcs7SignedData,
   isUpdaterSymbol,
   parseFdtHeader,
@@ -605,5 +607,71 @@ describe('buildUpdatePathFindings', () => {
     expect(d?.severity).toBe('high');
     expect(d?.proofState).toBe('static_confirmed');
     expect(d?.title).toContain('authenticates nothing');
+  });
+});
+
+describe('findEnforcementFlags — a guard that fails open unless nobody-sets-it is set', () => {
+  // The literal shape of the real GL.iNet BE3600 `lib/upgrade/fwtool.sh`, which is why this pass exists: a missing
+  // verifier makes the signature check RETURN 0, and only $REQUIRE_IMAGE_SIGNATURE would make it fail closed.
+  const fwtool = {
+    path: 'lib/upgrade/fwtool.sh',
+    text: [
+      'fwtool_check_signature() {',
+      '\t[ $# -gt 1 ] && return 1',
+      '\t[ ! -x /usr/bin/ucert ] && {',
+      '\t\tif [ "$REQUIRE_IMAGE_SIGNATURE" = 1 ]; then',
+      '\t\t\treturn 1',
+      '\t\telse',
+      '\t\t\treturn 0',
+      '\t\tfi',
+      '\t}',
+      '\t[ "$REQUIRE_IMAGE_METADATA" = 1 -a "$FORCE" != 1 ] && {',
+      '\t\tv "Image metadata not present"',
+      '\t}',
+      '}',
+    ].join('\n'),
+  };
+  // The real sibling that DOES set one of the two — the discrimination that makes the pass trustworthy.
+  const platform = {
+    path: 'lib/upgrade/platform.sh',
+    text: 'REQUIRE_IMAGE_METADATA=1\nplatform_check_image() { return 0; }\n',
+  };
+
+  it('reports the flag nobody assigns and clears the one a sibling script sets', () => {
+    const flags = findEnforcementFlags([fwtool], [fwtool, platform]);
+    const sig = flags.find((f) => f.name === 'REQUIRE_IMAGE_SIGNATURE');
+    const meta = flags.find((f) => f.name === 'REQUIRE_IMAGE_METADATA');
+    expect(sig?.assignedIn).toEqual([]);
+    expect(meta?.assignedIn).toEqual(['lib/upgrade/platform.sh']);
+    // Only the unassigned one becomes a finding.
+    expect(buildEnforcementFindings(flags).map((f) => f.evidence as { flag: string })).toEqual([
+      expect.objectContaining({ flag: 'REQUIRE_IMAGE_SIGNATURE' }),
+    ]);
+  });
+
+  it('needs the name in a TEST, not merely mentioned in a comment or a message', () => {
+    const mention = {
+      path: 'sbin/sysupgrade',
+      text: 'echo "set REQUIRE_IMAGE_SIGNATURE=1 to enforce"\n# REQUIRE_IMAGE_SIGNATURE is documented here\n',
+    };
+    expect(findEnforcementFlags([mention], [mention])).toEqual([]);
+  });
+
+  it('does not count an assignment that lives inside a commented-out block', () => {
+    const dead = {
+      path: 'etc/init.d/x',
+      text: "# REQUIRE_IMAGE_SIGNATURE=1\n: <<'OFF'\nREQUIRE_IMAGE_SIGNATURE=1\nOFF\n",
+    };
+    const flags = findEnforcementFlags([fwtool], [fwtool, dead]);
+    expect(flags.find((f) => f.name === 'REQUIRE_IMAGE_SIGNATURE')?.assignedIn).toEqual([]);
+  });
+
+  it('states the fact and marks the consequence as an inference, not a certainty', () => {
+    const [f] = buildEnforcementFindings([
+      { name: 'REQUIRE_IMAGE_SIGNATURE', guardPath: 'lib/upgrade/fwtool.sh', evidence: '[ "$X" = 1 ]', assignedIn: [] },
+    ]);
+    expect(f?.proofState).toBe('static_confirmed');
+    expect(f?.rationale).toMatch(/strong inference and not a certainty/i);
+    expect(f?.rationale).toMatch(/SKIPPED and one that was DISABLED/);
   });
 });

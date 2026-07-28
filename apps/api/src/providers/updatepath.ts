@@ -593,6 +593,102 @@ export function assessScript(text: string): ScriptAssessment {
   return { verifyCommands, verifierBinaries, signatureCommands, flashWrites, rollbackMarkers };
 }
 
+// === Enforcement flags: a guard that fails open unless a variable nobody sets is set ========================
+
+/** A shell variable that decides whether a verification failure is fatal, and whether anything ever sets it. */
+export interface EnforcementFlag {
+  name: string;
+  /** The script the guard was read in, rootfs-relative. */
+  guardPath: string;
+  /** The test expression it appears in, quoted so a reader can check the parse rather than trust it. */
+  evidence: string;
+  /** Every script that ASSIGNS it, rootfs-relative. Empty is the finding. */
+  assignedIn: string[];
+}
+
+/**
+ * Names worth asking about. Deliberately a curated list rather than "every variable in a conditional": the
+ * generic form drowns in `$FORCE`, `$DEBUG`, `$1` and every ordinary option flag, and a detector whose output
+ * needs hand-filtering is one nobody reads. These are the variables that decide whether a FAILED verification
+ * aborts, across the update frameworks the corpus actually ships.
+ */
+const ENFORCEMENT_FLAG_RE =
+  /\b(REQUIRE_[A-Z0-9_]*(?:SIGNATURE|METADATA|VERIFY|CERT)|[A-Z0-9_]*(?:SIGNATURE|SECUREBOOT|SECURE_BOOT|VERIFY)_(?:REQUIRED|ENFORCE[D]?|MANDATORY)|ENFORCE_[A-Z0-9_]+)\b/g;
+
+/** An assignment of NAME anywhere a shell could make one: `NAME=`, `export NAME=`, `read NAME`, `local NAME=`. */
+function assignsVariable(text: string, name: string): boolean {
+  const n = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    `(?:^|[;&|(]|\\b(?:export|local|readonly|declare|set)\\s+)\\s*${n}\\s*=|\\bread\\s+[^\\n]*\\b${n}\\b`,
+    'm',
+  ).test(text);
+}
+
+/**
+ * Pure: find enforcement flags that gate a verification and that NOTHING in the filesystem assigns.
+ *
+ * The GL.iNet BE3600 is the worked example and the reason this exists. `lib/upgrade/fwtool.sh` opens
+ * `fwtool_check_signature` with `[ ! -x /usr/bin/ucert ] && { if [ "$REQUIRE_IMAGE_SIGNATURE" = 1 ]; then return 1;
+ * else return 0; fi; }` — so a missing verifier makes the signature check *pass*, and the only thing that would
+ * make it fail closed is a variable that appears nowhere in that rootfs except in the three lines reading it.
+ * `ucert` is not packaged either, so the check returns 0 unconditionally on a shipped device: a guard that fails
+ * open because a dependency was dropped and the fail-closed switch was never thrown.
+ *
+ * **The generalisation is the point.** "A security check whose enforcement is opt-in, and the opt-in never
+ * happens" is a shape, not an OpenWrt quirk, and it is the difference between a check that was SKIPPED and one
+ * that was DISABLED — which no amount of counting verify-symbols can tell apart.
+ *
+ * `allScripts` must be every script read, not just the updaters: a flag legitimately set by an unrelated init
+ * script or a build-time config fragment is not this defect, and looking only at the guard's own file would
+ * report one whenever the assignment lives elsewhere.
+ */
+export function findEnforcementFlags(
+  guards: ReadonlyArray<{ path: string; text: string }>,
+  allScripts: ReadonlyArray<{ path: string; text: string }>,
+): EnforcementFlag[] {
+  const out = new Map<string, EnforcementFlag>();
+  for (const g of guards) {
+    const live = stripInertText(g.text);
+    for (const m of live.matchAll(ENFORCEMENT_FLAG_RE)) {
+      const name = m[0];
+      // Only count it as a GUARD when it is read in a test, not merely mentioned. `$` before the name, inside a
+      // `[ … ]`/`[[ … ]]`/`test` expression on the same line.
+      const line = live.slice(live.lastIndexOf('\n', m.index) + 1, live.indexOf('\n', m.index) + 1 || undefined);
+      if (!new RegExp(`\\$\\{?${name}\\b`).test(line)) continue;
+      if (!/\[\[?[^\]]*\]|(?:^|\s)test\s/.test(line)) continue;
+      const prev = out.get(name);
+      if (prev) continue;
+      out.set(name, { name, guardPath: g.path, evidence: line.trim().slice(0, 200), assignedIn: [] });
+    }
+  }
+  for (const flag of out.values()) {
+    flag.assignedIn = allScripts.filter((s) => assignsVariable(stripInertText(s.text), flag.name)).map((s) => s.path);
+  }
+  return [...out.values()];
+}
+
+/**
+ * Pure: turn an unassigned enforcement flag into a finding.
+ *
+ * The FACT is `static_confirmed` and is stated as the fact: the variable gates a check in this script, and nothing
+ * in this filesystem assigns it. The CONSEQUENCE — that the check is therefore disabled on a shipped device — is
+ * one step weaker and is written as such: the value could arrive from the environment of whatever invokes the
+ * script, from a bootloader variable, or from a binary's `setenv`, none of which this pass reads. Overstating that
+ * step would make this the same kind of confident-but-unearned claim the provider's negative findings avoid.
+ */
+export function buildEnforcementFindings(flags: ReadonlyArray<EnforcementFlag>): FindingDraft[] {
+  return flags
+    .filter((f) => f.assignedIn.length === 0)
+    .map((f) => ({
+      kind: 'update-enforcement-flag-never-set',
+      title: `\`$${f.name}\` decides whether a failed check aborts in ${f.guardPath}, and nothing in this filesystem sets it`,
+      severity: 'high' as const,
+      proofState: 'static_confirmed' as const,
+      evidence: { flag: f.name, guard: f.guardPath, expression: f.evidence, assignedIn: f.assignedIn },
+      rationale: `The guard reads \`${f.evidence}\`, so the failure path is fatal only when \`${f.name}\` is set — and no script in this rootfs assigns it. That the variable is read and never assigned here is a fact about the bytes; that the check is consequently inert on a shipped device is a strong inference and not a certainty, because the value could still arrive from the environment of whatever invokes this script, a bootloader variable, or a binary calling setenv. This is the difference between a check that was SKIPPED and one that was DISABLED, which counting verification symbols cannot tell apart.`,
+    }));
+}
+
 /**
  * Pure: drop `#` comments and `<<'HEREDOC'` blocks used to comment code out, so a disabled check is not counted.
  * Deliberately simple and conservative — it only removes text that cannot execute in a POSIX shell.
@@ -756,6 +852,11 @@ export interface UpdatePathResult {
   /** The ELF examination budget ran out, so binaries beyond it were never opened — stated, never left implicit. */
   elfBudgetExhausted: boolean;
   truncated: boolean;
+  /**
+   * Enforcement flags that gate a verification and that nothing in the filesystem assigns. Optional forever:
+   * absent on every result stored before this pass existed, and `[]` would claim a search that never ran.
+   */
+  enforcementFlags?: EnforcementFlag[];
   findings: FindingDraft[];
   reason: string;
 }
@@ -1326,6 +1427,7 @@ export function findUpdaters(rootfsPath: string): {
   elfsExamined: number;
   elfBudgetExhausted: boolean;
   truncated: boolean;
+  enforcementFlags: EnforcementFlag[];
 } {
   const root = path.resolve(rootfsPath);
   const { files, walked, truncated } = walkRootfs(root);
@@ -1334,6 +1436,9 @@ export function findUpdaters(rootfsPath: string): {
   const keyMaterial: KeyMaterial[] = [];
   const claimed = new Set<string>();
   let elfsExamined = 0;
+  // Every script text the walk reads, kept so the enforcement-flag pass can ask "does ANYTHING assign this",
+  // not merely "does the guard's own file assign it" — a flag set by an unrelated init script is not the defect.
+  const scriptTexts: { path: string; text: string }[] = [];
 
   // Route 1: the path says so.
   for (const f of files) {
@@ -1353,6 +1458,7 @@ export function findUpdaters(rootfsPath: string): {
     const text = Buffer.from(readAt(f.abs, 0, size)).toString('latin1');
     if (!/^(?:#!|--|\s*local\s|\s*function\s)/.test(text) && !/\n/.test(text.slice(0, 4096))) continue;
     const a = assessScript(text);
+    scriptTexts.push({ path: f.rel, text });
     // Only a file whose own NAME is an update entry point gets in on the name alone. Anything reached through the
     // helper directory or a generic mention has to show verification or a flash write in its content: on the real
     // GL.iNet, `lib/upgrade/keep.d/` holds 30 one-line package manifests that are data, and counting them as
@@ -1413,6 +1519,9 @@ export function findUpdaters(rootfsPath: string): {
   }
 
   const { kept, dropped } = selectUpdaters(found, CANDIDATE_CAP);
+  // Guards are looked for only in the scripts that ARE part of the update path; assignments are looked for in
+  // every script read, which is the asymmetry that keeps the answer honest.
+  const guardTexts = scriptTexts.filter((t) => kept.some((u) => u.path === t.path));
   return {
     updaters: kept,
     droppedUpdaters: dropped,
@@ -1421,6 +1530,7 @@ export function findUpdaters(rootfsPath: string): {
     elfsExamined,
     elfBudgetExhausted: elfsExamined >= ELF_SCAN_CAP,
     truncated,
+    enforcementFlags: findEnforcementFlags(guardTexts, scriptTexts),
   };
 }
 
@@ -1439,6 +1549,7 @@ export function runUpdatePath(imagePath: string, rootfsPath: string | null): Upd
   let elfsExamined = 0;
   let elfBudgetExhausted = false;
   let truncated = false;
+  let enforcementFlags: EnforcementFlag[] = [];
   let rootfsUsable = false;
   if (rootfsPath) {
     try {
@@ -1456,13 +1567,17 @@ export function runUpdatePath(imagePath: string, rootfsPath: string | null): Upd
     elfsExamined = found.elfsExamined;
     elfBudgetExhausted = found.elfBudgetExhausted;
     truncated = found.truncated;
+    enforcementFlags = found.enforcementFlags;
   }
 
   const rollback = assessRollback(updaters);
-  const findings = buildUpdatePathFindings(imageIntegrity, updaters, keyMaterial, rollback, rootfsUsable, {
-    elfBudgetExhausted,
-    walkTruncated: truncated,
-  });
+  const findings = [
+    ...buildUpdatePathFindings(imageIntegrity, updaters, keyMaterial, rollback, rootfsUsable, {
+      elfBudgetExhausted,
+      walkTruncated: truncated,
+    }),
+    ...buildEnforcementFindings(enforcementFlags),
+  ];
 
   const sigCount = imageIntegrity.items.filter((i) => i.strength === 'signature').length;
   const sumCount = imageIntegrity.items.filter((i) => i.strength === 'checksum').length;
@@ -1488,6 +1603,7 @@ export function runUpdatePath(imagePath: string, rootfsPath: string | null): Upd
     elfsExamined,
     elfBudgetExhausted,
     truncated,
+    ...(rootfsUsable ? { enforcementFlags } : {}),
     findings,
     reason:
       `Update-path integrity: container ${imageIntegrity.container} (${sigCount} signature structure(s), ${sumCount} checksum structure(s)); ` +
