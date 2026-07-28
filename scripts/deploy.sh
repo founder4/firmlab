@@ -107,10 +107,15 @@ fi
 # published container port, which only means the compose was changed to publish one.
 check_port_squatter() {
   local port="${1:-8799}" listeners=""
+  # `|| true` is load-bearing: lsof exits 1 when NOTHING matches, and under `set -euo pipefail` that status
+  # propagates out of the assignment and aborts the script — so a CLEAN port killed the deploy while a squatted
+  # one sailed through. The guard was only ever exercised against the zombie it was written for, so it shipped
+  # with its success path inverted and stayed invisible until the zombie was killed. "No listeners" is the normal
+  # answer here, not a failure.
   if command -v lsof >/dev/null 2>&1; then
-    listeners="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $1" (pid "$2", user "$3")"}' | sort -u)"
+    listeners="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $1" (pid "$2", user "$3")"}' | sort -u || true)"
   elif command -v ss >/dev/null 2>&1; then
-    listeners="$(ss -lptnH "sport = :$port" 2>/dev/null | sed 's/.*users:((//; s/)).*//' | tr -d '"' | sort -u)"
+    listeners="$(ss -lptnH "sport = :$port" 2>/dev/null | sed 's/.*users:((//; s/)).*//' | tr -d '"' | sort -u || true)"
   else
     return 0  # no way to look: say nothing rather than imply the port is clean
   fi
