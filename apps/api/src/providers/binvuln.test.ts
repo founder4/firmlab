@@ -301,6 +301,126 @@ describe('parseDynamicSymbols — "imports" must mean the loader resolves it', (
   });
 });
 
+/**
+ * Build an ELF with NO section headers at all (`e_shoff == 0`, `e_shnum == 0`) whose dynamic symbols are reachable
+ * only through PT_DYNAMIC — the shape OpenWrt ships. PT_LOAD maps the file identically (vaddr == offset) so the
+ * virtual addresses in the dynamic array resolve back to file offsets the way a real loader resolves them.
+ */
+function buildStrippedElf(names: string[], opts: { bits: 32 | 64; little: boolean }): Uint8Array {
+  const { bits, little } = opts;
+  const is64 = bits === 64;
+  const phent = is64 ? 56 : 32;
+  const syment = is64 ? 24 : 16;
+  const dynent = is64 ? 16 : 8;
+  const PH_OFF = 0x40;
+  const STR_OFF = 0x100;
+  const SYM_OFF = 0x200;
+  const HASH_OFF = 0x300;
+  const DYN_OFF = 0x340;
+  const SIZE = 0x600;
+  const buf = Buffer.alloc(SIZE);
+
+  const w32 = (o: number, v: number) => (little ? buf.writeUInt32LE(v, o) : buf.writeUInt32BE(v, o));
+  const w16 = (o: number, v: number) => (little ? buf.writeUInt16LE(v, o) : buf.writeUInt16BE(v, o));
+  const wN = (o: number, v: number) =>
+    is64 ? (little ? buf.writeBigUInt64LE(BigInt(v), o) : buf.writeBigUInt64BE(BigInt(v), o)) : w32(o, v);
+
+  const offsets: number[] = [];
+  let cur = 1;
+  for (const n of names) {
+    offsets.push(cur);
+    buf.write(n, STR_OFF + cur, 'latin1');
+    cur += n.length + 1;
+  }
+  const strSize = cur;
+  for (let i = 0; i < names.length; i++) w32(SYM_OFF + (i + 1) * syment, offsets[i] as number);
+
+  buf.write('\x7fELF', 0, 'latin1');
+  buf[4] = is64 ? 2 : 1;
+  buf[5] = little ? 1 : 2;
+  buf[6] = 1;
+  w16(0x10, 2); // e_type = ET_EXEC
+  wN(is64 ? 0x20 : 0x1c, PH_OFF); // e_phoff
+  w16(is64 ? 0x36 : 0x2a, phent); // e_phentsize
+  w16(is64 ? 0x38 : 0x2c, 2); // e_phnum
+  // e_shoff / e_shentsize / e_shnum are left at zero — this is the whole point of the fixture.
+
+  // [0] PT_LOAD covering the file, mapped identically so vaddr === file offset.
+  w32(PH_OFF, 1);
+  if (is64) {
+    wN(PH_OFF + 0x08, 0);
+    wN(PH_OFF + 0x10, 0);
+    wN(PH_OFF + 0x20, SIZE);
+  } else {
+    w32(PH_OFF + 0x04, 0);
+    w32(PH_OFF + 0x08, 0);
+    w32(PH_OFF + 0x10, SIZE);
+  }
+
+  // [1] PT_DYNAMIC.
+  const ph1 = PH_OFF + phent;
+  const dynSize = 6 * dynent;
+  w32(ph1, 2);
+  if (is64) {
+    wN(ph1 + 0x08, DYN_OFF);
+    wN(ph1 + 0x10, DYN_OFF);
+    wN(ph1 + 0x20, dynSize);
+  } else {
+    w32(ph1 + 0x04, DYN_OFF);
+    w32(ph1 + 0x08, DYN_OFF);
+    w32(ph1 + 0x10, dynSize);
+  }
+
+  // DT_HASH's second word is nchain — one slot per dynamic symbol, so it carries the count.
+  w32(HASH_OFF, 1);
+  w32(HASH_OFF + 4, names.length + 1);
+
+  const entries: Array<[number, number]> = [
+    [4, HASH_OFF], // DT_HASH
+    [5, STR_OFF], // DT_STRTAB
+    [6, SYM_OFF], // DT_SYMTAB
+    [10, strSize], // DT_STRSZ
+    [11, syment], // DT_SYMENT
+    [0, 0], // DT_NULL
+  ];
+  entries.forEach(([tag, val], i) => {
+    const o = DYN_OFF + i * dynent;
+    if (is64) {
+      wN(o, tag);
+      wN(o + 8, val);
+    } else {
+      w32(o, tag);
+      w32(o + 4, val);
+    }
+  });
+
+  return new Uint8Array(buf);
+}
+
+describe('parseDynamicSymbols — section headers are optional at run time', () => {
+  // Measured, not assumed: every binary in the GL.iNet BE3600 rootfs (usign, fwtool, upgraded, …) reports
+  // "Start of section headers: 0 / Number of section headers: 0". The section-header walk returns null for all of
+  // them, so before this fallback the richest image in the corpus fell to the string superset everywhere — and
+  // "usign mentions edsign_verify" is a materially weaker claim than "the loader must resolve edsign_verify".
+  for (const opts of [
+    { bits: 64 as const, little: true },
+    { bits: 32 as const, little: true },
+    { bits: 32 as const, little: false },
+  ]) {
+    it(`reads PT_DYNAMIC when the section headers are stripped (ELF${opts.bits} ${opts.little ? 'LE' : 'BE'})`, () => {
+      const syms = parseDynamicSymbols(buildStrippedElf(['edsign_verify', 'strcpy', '__stack_chk_fail'], opts));
+      expect(syms).not.toBeNull();
+      expect([...(syms as Set<string>)].sort()).toEqual(['__stack_chk_fail', 'edsign_verify', 'strcpy']);
+    });
+  }
+
+  it('still returns null when neither route has a table to read, so the caller degrades honestly', () => {
+    const stripped = Buffer.from(buildStrippedElf(['strcpy'], { bits: 64, little: true }));
+    stripped.writeUInt16LE(0, 0x38); // e_phnum = 0 — no program headers either
+    expect(parseDynamicSymbols(new Uint8Array(stripped))).toBeNull();
+  });
+});
+
 describe('buildBinFindings — the verb has to match the evidence', () => {
   // sbin/chkntfs was reported as "imports system" off the string scan, and angr then resolved no PLT or symbol
   // entry for it at all. A token in the binary's strings is a MENTION; only a symbol-table entry is an import.

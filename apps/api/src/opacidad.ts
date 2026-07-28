@@ -73,6 +73,7 @@ import { runServiceMap } from './providers/servicemap.js';
 import { runSymReach } from './providers/symreach.js';
 import { buildTaintScaffold } from './providers/taint.js';
 import { runUbootAnalysis } from './providers/uboot.js';
+import { runUpdatePath } from './providers/updatepath.js';
 import { runWebTaint } from './providers/webtaint.js';
 import { getImage, listFindings, listJobs } from './store.js';
 
@@ -292,6 +293,23 @@ async function ubootRun(c: RunCtx): Promise<StepOutcome> {
   const r = runUbootAnalysis(c.imagePath);
   syncFindings(c.imageId, 'uboot', r.findings);
   return { summary: `U-Boot / boot posture: ${r.findings.length} findings`, findingCount: r.findings.length };
+}
+
+/**
+ * ISTG-FW update-path integrity. Runs with or without a rootfs — without one only the image container is read, and
+ * the step reports itself degraded rather than letting the unasked half read as a clean pass.
+ */
+async function updatepathRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runUpdatePath(c.imagePath, c.rootfsPath);
+  syncFindings(c.imageId, 'updatepath', r.findings);
+  const sig = r.imageIntegrity.items.filter((i) => i.strength === 'signature').length;
+  return {
+    summary: `update-path integrity: ${r.updaters.length} updater(s), ${sig} image signature structure(s), rollback ${r.rollback.state}`,
+    findingCount: r.findings.length,
+    ...(c.rootfsPath
+      ? {}
+      : { degraded: true, note: 'no rootfs — only the image container was read, so the updater half is unanswered' }),
+  };
 }
 
 async function fccRun(c: RunCtx): Promise<StepOutcome> {
@@ -519,6 +537,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   certs: certsRun,
   compmap: compmapRun,
   uboot: ubootRun,
+  updatepath: updatepathRun,
   fcc: fccRun,
   rtos: rtosRun,
   chipsec: chipsecRun,

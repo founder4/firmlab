@@ -34,7 +34,8 @@ export type JobKind =
   | 'funcdiff'
   | 'dynprobe'
   | 'nvram'
-  | 'kernel';
+  | 'kernel'
+  | 'updatepath';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {

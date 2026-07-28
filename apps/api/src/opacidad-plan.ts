@@ -18,6 +18,7 @@ export type ProviderId =
   | 'certs'
   | 'compmap'
   | 'uboot'
+  | 'updatepath'
   | 'nvram'
   | 'fcc'
   | 'rtos'
@@ -182,6 +183,17 @@ const LINUX_CHAIN: PlanSpec[] = [
     needsRootfs: true,
     built: true,
     provider: 'binvuln',
+  },
+  {
+    // Deliberately `needsRootfs: false`: half the question (what integrity metadata the shipped image carries) is
+    // answerable from the raw bytes, and skipping the stage for want of a rootfs would turn "we never looked" into
+    // a silent absence on precisely the images where the answer matters. The provider records the updater half as
+    // blocked when there is no rootfs to search.
+    worker: 'ISTG-FW · Update-path integrity',
+    reason: 'is the image signed, does the updater verify anything, is a downgrade bounded',
+    needsRootfs: false,
+    built: true,
+    provider: 'updatepath',
   },
 ];
 

@@ -56,17 +56,123 @@ function reader(buf: Uint8Array, little: boolean) {
   };
 }
 
+// Program-header and dynamic-array constants for the segment fallback below.
+const PT_LOAD = 1;
+const PT_DYNAMIC = 2;
+const DT_NULL = 0;
+const DT_HASH = 4;
+const DT_STRTAB = 5;
+const DT_SYMTAB = 6;
+const DT_STRSZ = 10;
+const DT_SYMENT = 11;
+/** A sane ceiling on a dynamic symbol table, so a corrupt DT_HASH cannot make the reader loop for minutes. */
+const MAX_DYNSYMS = 200000;
+
+/**
+ * Pure: read an ELF's dynamic symbols through the PT_DYNAMIC **segment** rather than the section headers.
+ *
+ * Section headers are optional at run time — the loader never reads them — so a build that strips them still runs.
+ * OpenWrt does exactly that, and the whole GL.iNet BE3600 rootfs arrives with `e_shoff == 0` and `e_shnum == 0`:
+ * the section-header walk above returns null for every single binary on the corpus's richest image, and callers
+ * silently drop to the string superset. That is honest but much weaker — and on `usr/bin/usign` the difference is
+ * between "mentions edsign_verify" and "the loader must resolve edsign_verify", which is the whole question the
+ * update-path provider asks.
+ *
+ * The dynamic linker's own route survives stripping: PT_DYNAMIC gives DT_SYMTAB / DT_STRTAB / DT_STRSZ as VIRTUAL
+ * addresses, which the PT_LOAD segments map back to file offsets. The entry count comes from DT_HASH's `nchain`
+ * (the hash chain has exactly one slot per symbol); when only DT_GNU_HASH is present we fall back to the standard
+ * layout where `.dynstr` immediately follows `.dynsym`. Anything that does not add up returns null, so a caller
+ * still degrades to the string scan rather than reading garbage as an import list.
+ */
+function parseDynamicSymbolsFromSegments(buf: Uint8Array, is64: boolean, little: boolean): Set<string> | null {
+  const r = reader(buf, little);
+  const phoff = is64 ? r.u64(0x20) : r.u32(0x1c);
+  const phentsize = r.u16(is64 ? 0x36 : 0x2a);
+  const phnum = r.u16(is64 ? 0x38 : 0x2c);
+  if (!phoff || !phentsize || !phnum) return null;
+  if (phoff + phnum * phentsize > buf.length) return null;
+
+  const loads: Array<{ vaddr: number; offset: number; filesz: number }> = [];
+  let dynOff = 0;
+  let dynSize = 0;
+  for (let i = 0; i < phnum; i++) {
+    const ph = phoff + i * phentsize;
+    const type = r.u32(ph);
+    const p_offset = is64 ? r.u64(ph + 0x08) : r.u32(ph + 0x04);
+    const p_vaddr = is64 ? r.u64(ph + 0x10) : r.u32(ph + 0x08);
+    const p_filesz = is64 ? r.u64(ph + 0x20) : r.u32(ph + 0x10);
+    if (type === PT_LOAD) loads.push({ vaddr: p_vaddr, offset: p_offset, filesz: p_filesz });
+    else if (type === PT_DYNAMIC) {
+      dynOff = p_offset;
+      dynSize = p_filesz;
+    }
+  }
+  if (!dynOff || !dynSize || dynOff + dynSize > buf.length) return null;
+
+  /** Map a virtual address back to a file offset through the PT_LOAD segments; null when nothing covers it. */
+  const toOffset = (vaddr: number): number | null => {
+    for (const l of loads) {
+      if (vaddr >= l.vaddr && vaddr < l.vaddr + l.filesz) return l.offset + (vaddr - l.vaddr);
+    }
+    return null;
+  };
+
+  const step = is64 ? 16 : 8;
+  const tags = new Map<number, number>();
+  for (let o = dynOff; o + step <= dynOff + dynSize; o += step) {
+    const tag = is64 ? r.u64(o) : r.u32(o);
+    const val = is64 ? r.u64(o + 8) : r.u32(o + 4);
+    if (tag === DT_NULL) break;
+    if (!tags.has(tag)) tags.set(tag, val);
+  }
+
+  const symVa = tags.get(DT_SYMTAB);
+  const strVa = tags.get(DT_STRTAB);
+  const strSize = tags.get(DT_STRSZ);
+  const symEntSize = tags.get(DT_SYMENT) ?? (is64 ? 24 : 16);
+  if (symVa === undefined || strVa === undefined || !strSize || !symEntSize) return null;
+
+  const symOff = toOffset(symVa);
+  const strOff = toOffset(strVa);
+  if (symOff === null || strOff === null) return null;
+  if (strOff + strSize > buf.length) return null;
+
+  // DT_HASH's second word is nchain — one chain slot per dynamic symbol, so it IS the count. Without it, rely on
+  // the conventional adjacency of .dynsym and .dynstr rather than guessing.
+  let count = 0;
+  const hashVa = tags.get(DT_HASH);
+  const hashOff = hashVa === undefined ? null : toOffset(hashVa);
+  if (hashOff !== null && hashOff + 8 <= buf.length) count = r.u32(hashOff + 4);
+  else if (strOff > symOff) count = Math.floor((strOff - symOff) / symEntSize);
+  if (count <= 0 || count > MAX_DYNSYMS) return null;
+  if (symOff + count * symEntSize > buf.length) return null;
+
+  const names = new Set<string>();
+  for (let i = 0; i < count; i++) {
+    const nameOff = r.u32(symOff + i * symEntSize); // st_name is the first u32 in both widths
+    if (nameOff === 0 || nameOff >= strSize) continue;
+    let end = strOff + nameOff;
+    while (end < strOff + strSize && buf[end] !== 0) end++;
+    const name = Buffer.from(buf.subarray(strOff + nameOff, end)).toString('latin1');
+    if (name) names.add(name.split('@')[0] as string);
+  }
+  return names.size > 0 ? names : null;
+}
+
 /**
  * Pure: read an ELF's DYNAMIC SYMBOL table and return the names it actually references.
  *
  * The string-token heuristic above cannot tell an import from a help string, a format specifier or a mention in a
  * usage banner — it flagged `sbin/chkntfs` as importing `system` when angr could resolve no PLT or symbol entry at
  * all. This walks the section headers to `.dynsym` + `.dynstr` and reads the names out of the symbol entries, so
- * "imports" means the loader really does have to resolve it.
+ * "imports" means the loader really does have to resolve it. When the section headers were stripped (they are
+ * optional at run time, and OpenWrt strips them) it falls through to the PT_DYNAMIC segment, which the loader
+ * itself uses and which therefore survives — see `parseDynamicSymbolsFromSegments`.
  *
- * Returns null when the file is not an ELF, is truncated, or has no dynamic symbol table (a fully static binary
- * legitimately has none) — the caller then falls back to the string scan and SAYS it did, rather than silently
- * reporting a weaker fact under a stronger word. No `readelf` dependency: this module stays pure and unit-tested.
+ * Returns null when the file is not an ELF, is truncated, or has no dynamic symbol table by either route (a fully
+ * static binary legitimately has none) — the caller then falls back to the string scan and SAYS it did, rather
+ * than silently reporting a weaker fact under a stronger word. No `readelf` dependency: this module stays pure and
+ * unit-tested.
  */
 export function parseDynamicSymbols(buf: Uint8Array): Set<string> | null {
   if (buf.length < 64) return null;
@@ -76,14 +182,23 @@ export function parseDynamicSymbols(buf: Uint8Array): Set<string> | null {
   if (buf[4] !== 1 && buf[4] !== 2) return null;
   if (buf[5] !== 1 && buf[5] !== 2) return null;
 
+  const fromSegments = (): Set<string> | null => {
+    try {
+      return parseDynamicSymbolsFromSegments(buf, is64, little);
+    } catch {
+      return null;
+    }
+  };
+
   try {
     const r = reader(buf, little);
     // e_shoff / e_shentsize / e_shnum / e_shstrndx differ in offset and width between ELF32 and ELF64.
     const shoff = is64 ? r.u64(0x28) : r.u32(0x20);
     const shentsize = r.u16(is64 ? 0x3a : 0x2e);
     const shnum = r.u16(is64 ? 0x3c : 0x30);
-    if (!shoff || !shentsize || !shnum) return null;
-    if (shoff + shnum * shentsize > buf.length) return null;
+    // No section headers at all — the stripped case the segment reader exists for.
+    if (!shoff || !shentsize || !shnum) return fromSegments();
+    if (shoff + shnum * shentsize > buf.length) return fromSegments();
 
     // Locate .dynsym (sh_type SHT_DYNSYM = 11) and take its linked string table (sh_link).
     const SHT_DYNSYM = 11;
@@ -103,13 +218,13 @@ export function parseDynamicSymbols(buf: Uint8Array): Set<string> | null {
       strIdx = r.u32(sh + (is64 ? 0x28 : 0x18));
       break;
     }
-    if (!symOff || !symSize || !symEntSize || strIdx < 0 || strIdx >= shnum) return null;
+    if (!symOff || !symSize || !symEntSize || strIdx < 0 || strIdx >= shnum) return fromSegments();
 
     const strSh = shoff + strIdx * shentsize;
     const strOff = is64 ? r.u64(strSh + 0x18) : r.u32(strSh + 0x10);
     const strSize = is64 ? r.u64(strSh + 0x20) : r.u32(strSh + 0x14);
-    if (!strOff || strOff + strSize > buf.length) return null;
-    if (symOff + symSize > buf.length) return null;
+    if (!strOff || strOff + strSize > buf.length) return fromSegments();
+    if (symOff + symSize > buf.length) return fromSegments();
 
     const names = new Set<string>();
     const count = Math.floor(symSize / symEntSize);
@@ -122,9 +237,9 @@ export function parseDynamicSymbols(buf: Uint8Array): Set<string> | null {
       // Versioned imports arrive as `memcpy@GLIBC_2.14`; the base name is the symbol being resolved.
       if (name) names.add(name.split('@')[0] as string);
     }
-    return names.size > 0 ? names : null;
+    return names.size > 0 ? names : fromSegments();
   } catch {
-    return null;
+    return fromSegments();
   }
 }
 
