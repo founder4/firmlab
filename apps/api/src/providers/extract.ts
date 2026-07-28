@@ -26,7 +26,12 @@ import { getImage, listBinaries, registerBinary, updateImageIdentity } from '../
 import { isToolAvailable } from '../tools.js';
 import { type CarveStep, runRecursiveCarve } from './carve.js';
 import { type NoRootfsDiagnosis, diagnoseNoRootfs } from './extract-diagnose.js';
-import { type BlobAttempt, recoverFromCompressedBlobs } from './extract-recover.js';
+import {
+  type BlobAttempt,
+  type PayloadSurvey,
+  recoverFromCompressedBlobs,
+  surveyUnopenedPayloads,
+} from './extract-recover.js';
 import type { JobHandle } from './jobs.js';
 
 const execFileAsync = promisify(execFile);
@@ -54,6 +59,12 @@ export interface ExtractResult {
    * ran, including when it opened everything and found no filesystem — that is a result, not a non-event.
    */
   recoveryAttempts?: BlobAttempt[];
+  /**
+   * Compressed payloads carved out of the image and left unopened BESIDE a rootfs that was recovered. Present only
+   * when there are any, and optional forever — every extraction stored before this field existed carries none, and
+   * an absent value means "not surveyed", never "nothing was left".
+   */
+  unopenedPayloads?: PayloadSurvey;
 }
 
 /** Directory names that mark the root of an extracted Linux rootfs. */
@@ -217,6 +228,16 @@ function finalizeRootfs(
   const registered = registerRootfsBinaries(imageId, rootfsPath, entries, suggestedBinary);
   if (registered > 0) handle.log(`Registered ${registered} ELF binary/binaries.`);
 
+  // A recovered rootfs is not the same claim as a fully-opened image. Survey (never decompress) what else came out
+  // and was left unopened, so a small rootfs beside 16 MB of untouched payload cannot read as "we found everything".
+  const unopened = surveyUnopenedPayloads(outputDir, rootfsPath);
+  if (unopened.payloads.length > 0) {
+    handle.log(`Unopened payloads beside the rootfs: ${unopened.note}`);
+    for (const p of unopened.payloads.slice(0, 6)) {
+      handle.log(`  ${p.path}: ${(p.bytes / (1024 * 1024)).toFixed(1)} MB (${p.format ?? 'unrecognised magic'})`);
+    }
+  }
+
   // Feed the corpus: every hashed binary becomes a cross-image artifact occurrence.
   const artifacts = listBinaries(imageId)
     .filter((b) => b.sha1)
@@ -232,6 +253,7 @@ function finalizeRootfs(
     ...(suggestedBinary ? { suggestedBinary } : {}),
     ...(detected ? { detectedArch: detected.arch, detectedEndianness: detected.endianness } : {}),
     ...(carveTrace ? { carveTrace } : {}),
+    ...(unopened.payloads.length > 0 ? { unopenedPayloads: unopened } : {}),
   };
 }
 

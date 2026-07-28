@@ -152,6 +152,62 @@ function collectCompressedBlobs(root: string, maxDepth = 4): string[] {
   return out;
 }
 
+/** One carved payload that came out of the image and was never opened. A size, not a claim about its contents. */
+export interface UnopenedPayload {
+  /** Path relative to the extraction output dir. */
+  path: string;
+  format: BlobFormat | null;
+  bytes: number;
+}
+
+export interface PayloadSurvey {
+  payloads: UnopenedPayload[];
+  totalBytes: number;
+  /** The sentence a successful extraction owes: what came out of the image that nobody looked inside. */
+  note: string;
+}
+
+/**
+ * Survey — never decompress — the compressed payloads sitting beside a rootfs that WAS recovered.
+ *
+ * The recovery pass above runs only when no rootfs was found, which leaves a real gap: an image that yields a small
+ * rootfs *and* leaves multi-MB payloads unopened reports the rootfs and says nothing about the rest, so "we found a
+ * rootfs" gets read as "we found everything". Measured on the corpus: the Tenda camera's extract dir holds two
+ * **16.4 MB `.xz`** blobs and ~40 `.gz` beside a 97-file tree; the IMOU holds two 8.3 MB `.xz` and an 8 MB raw-LZMA
+ * beside a 113-file tree. Both were invisible.
+ *
+ * The fix is deliberately NOT to decompress everything on every image — that is expensive, and the corpus already
+ * showed those particular blobs are a kernel and two corrupt streams rather than a hidden rootfs. It is to STATE the
+ * unopened bytes, the same way `diagnoseNoRootfs` states them after a failed extraction. So this reads sizes and
+ * magic only.
+ *
+ * Payloads **inside** the recovered rootfs are excluded: a compressed file the firmware legitimately ships is part
+ * of the filesystem and is already browsable, and counting it here would inflate the number with things nobody
+ * expected to be opened.
+ */
+export function surveyUnopenedPayloads(outputDir: string, rootfsPath: string | null): PayloadSurvey {
+  const inRootfs = rootfsPath ? path.resolve(rootfsPath) + path.sep : null;
+  const payloads: UnopenedPayload[] = [];
+  for (const abs of collectCompressedBlobs(outputDir)) {
+    if (inRootfs && path.resolve(abs).startsWith(inRootfs)) continue;
+    let bytes = 0;
+    try {
+      bytes = fs.statSync(abs).size;
+    } catch {
+      continue;
+    }
+    const head = readHead(abs);
+    payloads.push({ path: path.relative(outputDir, abs), format: head ? identifyBlob(head) : null, bytes });
+  }
+  payloads.sort((a, b) => b.bytes - a.bytes);
+  const totalBytes = payloads.reduce((n, p) => n + p.bytes, 0);
+  const note =
+    payloads.length === 0
+      ? 'No compressed payload was left unopened beside the recovered rootfs.'
+      : `${payloads.length} compressed payload(s) totalling ${(totalBytes / (1024 * 1024)).toFixed(1)} MB were carved out of this image and NOT opened. The rootfs above is a real result; it is not the whole image, and nothing here says what these contain — only that nobody looked.`;
+  return { payloads, totalBytes, note };
+}
+
 /**
  * Decompress the carved blobs a binwalk pass left unopened, into `<outputDir>/recovered`.
  *

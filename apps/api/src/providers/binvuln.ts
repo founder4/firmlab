@@ -243,8 +243,40 @@ export function parseDynamicSymbols(buf: Uint8Array): Set<string> | null {
   }
 }
 
+const ET_REL = 1;
 const ET_EXEC = 2;
 const ET_DYN = 3;
+
+/**
+ * Pure: is this ELF a RELOCATABLE OBJECT (ET_REL) — a `.ko` kernel module or a `.o`?
+ *
+ * This sweep asks a userland question: does the binary import an unbounded-copy libc function without a canary,
+ * or a command-execution function an attacker's input might reach. A relocatable object is not in that universe.
+ * It is linked into the kernel, has no `PT_DYNAMIC` and therefore no dynamic symbol table, and never calls
+ * userland `system(3)` at all — so it falls to the string superset by construction and every token it happens to
+ * carry becomes a "sink" nothing can settle.
+ *
+ * **Measured, not assumed.** On the deployed GL.iNet BE3600 carve, 14 of the sweep's 22 findings were
+ * `lib/modules/5.4.213/*.ko` reported as *"Command-exec sink: … references system"* — 64% of that image's
+ * findings asserting a userland call a kernel module cannot make. It is the same defect already fixed once for
+ * DVRF's iptables `.so` plugins, and `isRunnableElf` did not catch it: that predicate answers "can a probe run
+ * this", which is correctly false for a library too, and a vulnerable `.so` IS a candidate worth listing. The
+ * axis that separates them is the object type, not runnability.
+ *
+ * A kernel module is not thereby uninteresting — it is a different question (kernel `.ko` CVE surface, its own
+ * backlog item) that deserves its own provider rather than a userland sweep's vocabulary.
+ */
+export function isRelocatableObject(buf: Uint8Array): boolean {
+  if (buf.length < 20) return false;
+  if (!(buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46)) return false;
+  if (buf[4] !== 1 && buf[4] !== 2) return false;
+  if (buf[5] !== 1 && buf[5] !== 2) return false;
+  try {
+    return reader(buf, buf[5] === 1).u16(0x10) === ET_REL;
+  } catch {
+    return false;
+  }
+}
 const PT_INTERP = 3;
 
 /**
@@ -383,6 +415,12 @@ export interface BinVulnResult {
    */
   candidates: number;
   findings: FindingDraft[];
+  /**
+   * ET_REL objects (`.ko`/`.o`) the walk passed over because this sweep's question does not apply to them. Optional
+   * forever: results stored before this field existed carry no value for it, and 0 would be a claim about a walk
+   * that never counted.
+   */
+  relocatableSkipped?: number;
   reason: string;
 }
 
@@ -549,6 +587,8 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
   const all: FindingDraft[] = [];
   let scanned = 0;
   let walked = 0;
+  /** ET_REL objects passed over — counted so the exclusion is a stated rule, never a silent gap. */
+  let relocatable = 0;
   const stack: string[] = [root];
   while (stack.length > 0 && walked < WALK_CAP && scanned < ELF_SCAN_CAP) {
     const dir = stack.pop() as string;
@@ -573,6 +613,12 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
         continue;
       }
       if (!e.isFile() || !isElf(abs)) continue;
+      // A relocatable object is outside this sweep's question — see `isRelocatableObject`. Skipped BEFORE it is
+      // counted as scanned, because reporting it among "N ELFs examined" would claim it was asked something.
+      if (isRelocatableObject(readBounded(abs).bytes)) {
+        relocatable++;
+        continue;
+      }
       scanned++;
       const rel = path.relative(root, abs);
       all.push(...buildBinFindings(assessBinaryFile(abs, rel)));
@@ -588,6 +634,12 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
     dropped > 0
       ? ` The ${FINDING_CAP}-finding cap lists the ${listed} smallest candidate(s) and drops ${dropped} further finding(s) — selected by binary size (what a bounded symbolic probe can settle), not by directory order.`
       : '';
+  // Not a bound but an exclusion, and it owes the same sentence: a reader comparing "400 ELFs" against a rootfs
+  // they know holds 375 modules must be able to see where the difference went.
+  const relocNote =
+    relocatable > 0
+      ? ` ${relocatable} relocatable object(s) (.ko/.o) were passed over: they link into the kernel, carry no dynamic symbol table and cannot call userland exec functions, so this sweep's question does not apply to them.`
+      : '';
   const budgetNote =
     scanned >= ELF_SCAN_CAP
       ? ` The ${ELF_SCAN_CAP}-binary examination budget was exhausted, so ELFs beyond it were never opened and are absent from these counts, not cleared by them.`
@@ -597,6 +649,7 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
     binariesScanned: scanned,
     candidates,
     findings: kept,
-    reason: `Binary-vuln sweep: ${scanned} ELF binaries, ${candidates} stack-overflow candidate(s).${capNote}${budgetNote} Candidates are unbounded-copy + no-canary leads for reversing/fuzzing, not proven overflows.`,
+    relocatableSkipped: relocatable,
+    reason: `Binary-vuln sweep: ${scanned} ELF binaries, ${candidates} stack-overflow candidate(s).${capNote}${relocNote}${budgetNote} Candidates are unbounded-copy + no-canary leads for reversing/fuzzing, not proven overflows.`,
   };
 }

@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { identifyBlob } from './extract-recover.js';
+import { identifyBlob, surveyUnopenedPayloads } from './extract-recover.js';
 
 /** A raw LZMA "alone" header: properties byte, 4-byte dictionary size, 8-byte uncompressed size. */
 function lzmaAlone(props = 0x5d, dictSize = 33554432): Buffer {
@@ -50,5 +53,50 @@ describe('identifyBlob — the extension lies, the magic does not', () => {
     short[0] = 0x5d;
     short.writeUInt32LE(33554432, 1);
     expect(identifyBlob(short)).toBeNull();
+  });
+});
+
+describe('surveyUnopenedPayloads', () => {
+  const mk = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'survey-'));
+
+  it('reports payloads carved beside a rootfs, largest first, without opening them', () => {
+    const out = mk();
+    fs.mkdirSync(path.join(out, 'squashfs-root', 'etc'), { recursive: true });
+    // Two carved siblings: an xz and a gzip, both above the minimum blob size.
+    fs.writeFileSync(
+      path.join(out, 'big.xz'),
+      Buffer.concat([Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]), Buffer.alloc(40000)]),
+    );
+    fs.writeFileSync(path.join(out, 'small.gz'), Buffer.concat([Buffer.from([0x1f, 0x8b, 0x08]), Buffer.alloc(9000)]));
+
+    const s = surveyUnopenedPayloads(out, path.join(out, 'squashfs-root'));
+    expect(s.payloads.map((p) => p.path)).toEqual(['big.xz', 'small.gz']);
+    expect(s.payloads[0]?.format).toBe('xz');
+    expect(s.totalBytes).toBeGreaterThan(49000);
+    // The sentence must not let a recovered rootfs read as a fully-opened image.
+    expect(s.note).toMatch(/not the whole image/);
+    expect(s.note).toMatch(/only that nobody looked/);
+  });
+
+  it('excludes payloads INSIDE the rootfs — those are shipped files, already browsable', () => {
+    const out = mk();
+    const root = path.join(out, 'squashfs-root', 'usr', 'share');
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'locale.gz'),
+      Buffer.concat([Buffer.from([0x1f, 0x8b, 0x08]), Buffer.alloc(9000)]),
+    );
+
+    const s = surveyUnopenedPayloads(out, path.join(out, 'squashfs-root'));
+    expect(s.payloads).toEqual([]);
+    expect(s.note).toMatch(/No compressed payload was left unopened/);
+  });
+
+  it('says so plainly when nothing was left over, rather than returning a bare empty list', () => {
+    const out = mk();
+    fs.mkdirSync(path.join(out, 'squashfs-root'), { recursive: true });
+    const s = surveyUnopenedPayloads(out, path.join(out, 'squashfs-root'));
+    expect(s.totalBytes).toBe(0);
+    expect(s.note).toMatch(/No compressed payload/);
   });
 });

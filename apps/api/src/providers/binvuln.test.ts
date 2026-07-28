@@ -67,6 +67,52 @@ describe('runBinVuln (rootfs sweep)', () => {
     expect(runBinVuln(null).available).toBe(false);
   });
 
+  /**
+   * A relocatable object is outside this sweep's question, and the corpus proved it the expensive way.
+   *
+   * On the deployed GL.iNet BE3600 carve, 14 of the sweep's 22 findings were `lib/modules/5.4.213/*.ko` reported
+   * as "Command-exec sink: … references system" — 64% of that image's findings asserting a userland call a kernel
+   * module cannot make. `isRunnableElf` did not catch it, because that predicate answers "can a probe run this",
+   * which is also false for a `.so` that IS worth listing. The axis is the object type.
+   */
+  const elfOfType = (type: number, syms: string[]): Buffer => {
+    const b = Buffer.alloc(64 + syms.join('\u0000').length + 2, 0);
+    b.set([0x7f, 0x45, 0x4c, 0x46, 1, 1], 0); // ELF32, little-endian
+    b.writeUInt16LE(type, 0x10);
+    b.write(`\u0000${syms.join('\u0000')}\u0000`, 64, 'latin1');
+    return b;
+  };
+
+  it('passes over a .ko instead of claiming it is a userland command-exec sink', () => {
+    const root = path.join(tmp, 'ko-rootfs');
+    fs.mkdirSync(path.join(root, 'lib', 'modules'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'sbin'), { recursive: true });
+    // ET_REL: a kernel module whose strings carry the very tokens the sweep hunts for.
+    fs.writeFileSync(path.join(root, 'lib/modules/ath_pktlog.ko'), elfOfType(1, ['system', 'strcpy', 'sprintf']));
+    // ET_EXEC beside it: the real target, which must still be found.
+    fs.writeFileSync(path.join(root, 'sbin/httpd'), elfOfType(2, ['system', 'strcpy']));
+
+    const r = runBinVuln(root);
+    expect(r.binariesScanned).toBe(1); // the .ko is not counted as examined — it was never asked anything
+    expect(r.relocatableSkipped).toBe(1);
+    expect(r.findings.every((f) => !JSON.stringify(f.evidence).includes('.ko'))).toBe(true);
+    expect(r.findings.some((f) => (f.evidence as Record<string, unknown>).path === 'sbin/httpd')).toBe(true);
+    // The exclusion is a stated rule, not a silent gap.
+    expect(r.reason).toMatch(/relocatable object\(s\)/);
+  });
+
+  it('still lists a shared library, which is a different case from a relocatable object', () => {
+    const root = path.join(tmp, 'so-rootfs', 'lib');
+    fs.mkdirSync(root, { recursive: true });
+    // ET_DYN with no PT_INTERP: not runnable, but a genuine candidate this sweep should keep reporting.
+    fs.writeFileSync(path.join(root, 'libfstools.so'), elfOfType(3, ['system', 'strcpy']));
+
+    const r = runBinVuln(path.join(tmp, 'so-rootfs'));
+    expect(r.binariesScanned).toBe(1);
+    expect(r.relocatableSkipped).toBe(0);
+    expect(r.findings.length).toBeGreaterThan(0);
+  });
+
   it('finds a vulnerable ELF and ignores a non-ELF file', () => {
     const root = path.join(tmp, 'rootfs', 'bin');
     fs.mkdirSync(root, { recursive: true });
