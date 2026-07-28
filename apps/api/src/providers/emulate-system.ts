@@ -147,6 +147,32 @@ export function looksBooted(consoleOutput: string): { booted: boolean; marker: s
 }
 
 /**
+ * Pure: which interfaces the GUEST's own init actually configured, read from the console.
+ *
+ * The firmadyne kernels trace every `execve`, so the firmware's own network setup is right there in the boot log.
+ * On the real WR940N it runs `ifconfig lo 127.0.0.1 up` and nothing else — the vendor's init brings up its LAN
+ * through the Atheros switch path, which does not exist under `-M malta` with an e1000. So `eth0` has no address,
+ * and NO forwarded port can answer however many daemons are listening.
+ *
+ * That distinction is worth stating rather than leaving inside "or they listen somewhere this run did not
+ * forward": one reading sends an operator hunting for a port, the other tells them the guest has no network at
+ * all and that this is a limit of the emulated hardware, not of the firmware.
+ */
+export function guestNetwork(consoleOutput: string): { configured: string[]; loopbackOnly: boolean } {
+  const found = new Set<string>();
+  // `ifconfig <iface> <addr> up`, `ip addr add … dev <iface>`, `ifup <iface>`.
+  for (const m of consoleOutput.matchAll(/\bifconfig\s+([a-z][a-z0-9._:-]*)\s+(?:\d{1,3}\.){3}\d{1,3}/gi)) {
+    found.add((m[1] as string).toLowerCase());
+  }
+  for (const m of consoleOutput.matchAll(/\bip\s+addr\s+add\b[^\n]*?\bdev\s+([a-z][a-z0-9._:-]*)/gi)) {
+    found.add((m[1] as string).toLowerCase());
+  }
+  const configured = [...found].sort();
+  const nonLoopback = configured.filter((i) => i !== 'lo' && !i.startsWith('lo:'));
+  return { configured, loopbackOnly: configured.length > 0 && nonLoopback.length === 0 };
+}
+
+/**
  * Pure: the verdict for a full-system run, given what was actually observed.
  *
  * The ordering is the claim ladder. A port that accepted a TCP connection is the strongest evidence available
@@ -158,6 +184,7 @@ export function classifyFullSystem(
   open: { host: number; guest: number }[],
   console: { booted: boolean; marker: string | null; panicked: boolean },
   timedOut: boolean,
+  net?: { configured: string[]; loopbackOnly: boolean },
 ): { proofState: ProofState; reason: string } {
   if (open.length > 0) {
     const list = open.map((p) => `guest ${p.guest}`).join(', ');
@@ -175,7 +202,9 @@ export function classifyFullSystem(
   if (console.booted) {
     return {
       proofState: 'confirmed_full_system',
-      reason: `The kernel booted (${console.marker}) but no forwarded port accepted a connection. The system came up; its network services did not, or they listen somewhere this run did not forward.`,
+      reason: net?.loopbackOnly
+        ? `The kernel booted (${console.marker}) and the firmware's own init configured ONLY loopback (${net.configured.join(', ')}), so no forwarded port could answer however many daemons are listening. Vendor init brings its LAN up through switch hardware this machine model does not emulate — a limit of the emulated hardware, not a result about the firmware.`
+        : `The kernel booted (${console.marker}) but no forwarded port accepted a connection. The system came up; its network services did not, or they listen somewhere this run did not forward.`,
     };
   }
   return {
@@ -425,7 +454,8 @@ export async function runFullSystem(
     }
     const timedOut = !exited;
     const consoleState = looksBooted(`${stdout}\n${stderr}`);
-    const { proofState, reason } = classifyFullSystem(open, consoleState, timedOut);
+    const net = guestNetwork(`${stdout}\n${stderr}`);
+    const { proofState, reason } = classifyFullSystem(open, consoleState, timedOut, net);
     handle.log(reason);
     if (open.length === 0 && portMap.declared.length > 0) {
       handle.log(

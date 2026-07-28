@@ -5,6 +5,7 @@ import {
   buildChrootServiceArgs,
   buildFullSystemArgs,
   classifyFullSystem,
+  guestNetwork,
   isTlsSpeaker,
   libnvramHostPath,
   looksBooted,
@@ -182,5 +183,42 @@ describe('isTlsSpeaker — a bad TLS answer is still an answer', () => {
     expect(isTlsSpeaker({ code: 'ECONNREFUSED', message: 'connect ECONNREFUSED' })).toBe(false);
     expect(isTlsSpeaker({ code: 'ECONNRESET', message: 'socket hang up' })).toBe(false);
     expect(isTlsSpeaker({ code: 'ETIMEDOUT', message: 'timeout' })).toBe(false);
+  });
+});
+
+describe('guestNetwork — read the firmware’s own network setup out of the boot log', () => {
+  it('sees loopback-only, which is why no forwarded port can ever answer', () => {
+    // Verbatim shape from the real WR940N: firmadyne kernels trace every execve, and its rcS runs exactly this.
+    const log = 'firmadyne: do_execve[PID: 55 (rcS)]: argv: ifconfig lo 127.0.0.1 up, envp: USER=root';
+    const net = guestNetwork(log);
+    expect(net.configured).toEqual(['lo']);
+    expect(net.loopbackOnly).toBe(true);
+  });
+
+  it('does not call it loopback-only when a real interface was configured too', () => {
+    const net = guestNetwork('ifconfig lo 127.0.0.1 up\nifconfig eth0 192.168.1.1 up\n');
+    expect(net.configured).toEqual(['eth0', 'lo']);
+    expect(net.loopbackOnly).toBe(false);
+  });
+
+  it('reads the iproute2 form as well as busybox ifconfig', () => {
+    expect(guestNetwork('ip addr add 10.0.0.1/24 dev br0').configured).toEqual(['br0']);
+  });
+
+  it('claims nothing when the console shows no network setup at all', () => {
+    // Silence is not "loopback only" — it is not knowing, and the verdict must not read a diagnosis into it.
+    expect(guestNetwork('[ 0.0 ] booting').loopbackOnly).toBe(false);
+  });
+});
+
+describe('classifyFullSystem — a loopback-only guest is diagnosed, not left ambiguous', () => {
+  it('names the real reason nothing answered instead of offering two possibilities', () => {
+    const r = classifyFullSystem([], { booted: true, marker: 'Freeing unused kernel memory', panicked: false }, true, {
+      configured: ['lo'],
+      loopbackOnly: true,
+    });
+    expect(r.proofState).toBe('confirmed_full_system');
+    expect(r.reason).toContain('ONLY loopback');
+    expect(r.reason).toContain('not a result about the firmware');
   });
 });
