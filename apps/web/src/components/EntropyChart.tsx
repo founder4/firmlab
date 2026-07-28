@@ -1,11 +1,19 @@
 /**
- * Entropy graph — Shannon entropy (bits/byte, 0..8) across the image offset. High-entropy bands
- * (compressed/encrypted) are shaded so the eye lands on them immediately; the 7.2 threshold line marks the
- * compressed/encrypted floor. Pure SVG, no chart library, so it stays fast and self-contained.
+ * Entropy graph — Shannon entropy (bits/byte, 0..8) across the image offset. High-entropy bands are shaded so the
+ * eye lands on them immediately, and the dashed 7.2 line marks where bytes stop being distinguishable from random.
+ * Pure SVG, no chart library, so it stays fast and self-contained.
+ *
+ * **What the shading is allowed to say.** Above 7.2 bits/byte the bytes are near-random, and compression, packing,
+ * encryption, an embedded JPEG and a certificate blob all look identical from here. So the band is a HYPOTHESIS to
+ * check against the structure map, and the caveat under the chart is part of the chart — a picture that shades a
+ * region in warning colour and says nothing else has already made the claim. The axis units, the `0x…` offsets and
+ * the entropy values are notation: they are formatted here and handed to the catalogue as strings, so no
+ * translation can restyle a number.
  */
 import { useMemo, useState } from 'react';
 import type { EntropyProfile } from '../api';
 import { fmtHex } from '../api';
+import { useMessages } from '../i18n';
 
 interface Props {
   entropy: EntropyProfile;
@@ -16,6 +24,7 @@ interface Props {
 const PAD = { top: 12, right: 12, bottom: 26, left: 34 };
 
 export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Element {
+  const t = useMessages();
   const [hover, setHover] = useState<{ x: number; offset: number; value: number } | null>(null);
   const width = 900;
   const plotW = width - PAD.left - PAD.right;
@@ -68,7 +77,7 @@ export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Elemen
         }}
         onTouchEnd={() => setHover(null)}
         role="img"
-        aria-label="Entropy across image offset"
+        aria-label={t.visuals.entropy.ariaLabel}
       >
         <defs>
           <linearGradient id="entGrad" x1="0" y1="0" x2="0" y2="1">
@@ -149,15 +158,17 @@ export function EntropyChart({ entropy, size, height = 220 }: Props): JSX.Elemen
       </svg>
       <div className="hint" style={{ minHeight: 18, marginTop: 4 }}>
         {hover ? (
-          <span className="mono">
-            offset {fmtHex(hover.offset)} · H = {hover.value.toFixed(2)} bits/byte
-          </span>
+          <span className="mono">{t.visuals.entropy.readout(fmtHex(hover.offset), hover.value.toFixed(2))}</span>
         ) : (
-          <span>
-            Mean {entropy.mean.toFixed(2)} · Max {entropy.max.toFixed(2)} · dashed line = 7.2 compressed/encrypted floor
-          </span>
+          <span>{t.visuals.entropy.summary(entropy.mean.toFixed(2), entropy.max.toFixed(2))}</span>
         )}
       </div>
+      {/* Rendered always, not only over a shaded band: a caveat that appears with the warning colour teaches the
+          reader to read the colour as the verdict and the sentence as an apology for it. 72ch is the shell's
+          measure — prose here once ran at ~155 characters a line and it was invisible to every test. */}
+      <p className="hint" style={{ margin: '6px 0 0', maxWidth: '72ch' }}>
+        {t.visuals.entropy.caveat}
+      </p>
     </div>
   );
 }

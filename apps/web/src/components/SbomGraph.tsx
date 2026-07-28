@@ -4,9 +4,18 @@
  * by the worst CVE that affects it. Vulnerable components pull toward the centre with a hotter edge, so a glance
  * shows where the risk clusters. Hover a node to read its version and CVEs. Pure: it renders whatever SBOM it is
  * given.
+ *
+ * **What grey means, and the reason it is written down.** A grey node is a component nothing MATCHED. That is not a
+ * component that was checked and cleared: the match is worth exactly as much as the version the SBOM fingerprinted
+ * and the vulnerability data this deployment had to query against it. Colour reads as a verdict — most of this ring
+ * is grey on a typical rootfs — so the caveat under the legend is part of the picture, not a footnote to it.
+ *
+ * Package names, versions, ecosystem names, CVE ids and grype's severity words are DATA: they cross the API from
+ * the tool that produced them and render verbatim in every language. Only the chrome around them is localised.
  */
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { SbomResult } from '../api';
+import { useMessages } from '../i18n';
 
 type Sev = 'critical' | 'high' | 'medium' | 'low' | 'info' | 'none';
 const SEV_ORDER: Sev[] = ['critical', 'high', 'medium', 'low', 'info', 'none'];
@@ -33,6 +42,7 @@ function normSev(s: string): Sev {
 }
 
 export function SbomGraph({ sbom }: { sbom: SbomResult }): JSX.Element {
+  const t = useMessages();
   const [w, setW] = useState(760);
   const [hover, setHover] = useState<Node | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -87,8 +97,8 @@ export function SbomGraph({ sbom }: { sbom: SbomResult }): JSX.Element {
   return (
     <div>
       <div ref={wrapRef} style={{ position: 'relative', width: '100%' }}>
-        <svg width={w} height={height} style={{ display: 'block' }} aria-label="SBOM component graph">
-          <title>SBOM component graph</title>
+        <svg width={w} height={height} style={{ display: 'block' }} aria-label={t.visuals.sbom.ariaLabel}>
+          <title>{t.visuals.sbom.title}</title>
           {/* edges */}
           {ordered.map((n, i) => {
             const vuln = n.worst !== 'none';
@@ -153,7 +163,7 @@ export function SbomGraph({ sbom }: { sbom: SbomResult }): JSX.Element {
             rootfs
           </text>
           <text x={cx} y={cy + 11} fontSize={9} fontFamily="var(--mono)" fill="var(--text-dim)" textAnchor="middle">
-            {nodes.length} pkgs
+            {t.visuals.sbom.pkgCount(nodes.length)}
           </text>
         </svg>
 
@@ -187,13 +197,15 @@ export function SbomGraph({ sbom }: { sbom: SbomResult }): JSX.Element {
                 {hover.cves.length > 6 ? ` +${hover.cves.length - 6}` : ''}
               </div>
             ) : (
-              <div style={{ marginTop: 4, color: 'var(--text-faint)' }}>no known CVEs</div>
+              <div style={{ marginTop: 4, color: 'var(--text-faint)' }}>{t.visuals.sbom.noKnownCves}</div>
             )}
           </div>
         )}
       </div>
 
       <div className="legend" style={{ marginTop: 10 }}>
+        {/* grype's severity names are its own vocabulary and travel with the data — rendered verbatim, like the
+            package names and the CVE ids in the tooltip. */}
         {(['critical', 'high', 'medium', 'low'] as Sev[]).map((s) => (
           <span key={s} className="legend-item">
             <span className="legend-swatch" style={{ background: SEV_VAR[s], borderRadius: '50%' }} />
@@ -202,12 +214,17 @@ export function SbomGraph({ sbom }: { sbom: SbomResult }): JSX.Element {
         ))}
         <span className="legend-item">
           <span className="legend-swatch" style={{ background: SEV_VAR.none, borderRadius: '50%' }} />
-          no CVE
+          {t.visuals.sbom.legendNoCve}
         </span>
         <span className="legend-item" style={{ marginLeft: 'auto', color: 'var(--text-faint)' }}>
-          {vulnCount} of {nodes.length} components affected · node size = CVE count
+          {t.visuals.sbom.affected(vulnCount, nodes.length)}
         </span>
       </div>
+
+      {/* The legend gives grey a name; only this says what the name does not mean. */}
+      <p className="hint" style={{ margin: '8px 0 0', maxWidth: '72ch' }}>
+        {t.visuals.sbom.caveat}
+      </p>
     </div>
   );
 }

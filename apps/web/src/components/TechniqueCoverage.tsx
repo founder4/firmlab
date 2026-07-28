@@ -4,191 +4,214 @@
  * done (a provider/agent does it), partial (manual or half-covered), planned (a real gap we intend to build), or
  * out-of-scope (hardware/radio/weaponization that a software workbench shouldn't claim). Kept in sync with
  * docs/METHODOLOGY-GAPS.md. Curated data (the workbench's capability design, not per-deployment tool detection).
+ *
+ * **What stays here and what moved to the catalogue.** The table below is structure only — an id, a status, the
+ * order they are read in, and the pointer into this repository that backs the row. Every word a reader is asked to
+ * trust (the technique's name, the area heading, the four status words and the notes that are sentences) lives in
+ * the `techniques` namespace, because this screen is a claim about the workbench and a translation that overstates
+ * it is the workbench lying about itself. The ids are typed off the catalogue, so a row added here without wording
+ * there is a compile error rather than a blank cell.
+ *
+ * **The methodology's own names are not prose.** `OWASP FSTM`, `ISTG` and the stage numbers in the headings are the
+ * published names of an external standard, and the point of this screen is that it can be laid beside the published
+ * methodology and lined up row for row — so they render verbatim in every language, exactly like the tool names in
+ * the technique titles and the `providers/…` pointers in the note column.
+ *
+ * **Why a row carries either a `ref` or a `note`.** The note column is two different things wearing one column.
+ * `providers/report` and `core/mcu + renode` are pointers into this repository: identifiers, `mono`, and identical
+ * in every language, so they belong beside the data. `defensive by design` and `proves reachability` are sentences
+ * and belong in the catalogue. The split is a type, not a convention, and the catalogue-integrity test enforces the
+ * same rule from the other side by refusing a Spanish string identical to its English source.
+ *
+ * `out-of-scope` is the status this screen exists to state, and the one a careless rendering would lose. It is a
+ * deliberate boundary — weaponised exploitation, chip-off, radio work are refused by design — and it must read as
+ * neither a finished item nor a gap someone forgot. That is why it keeps a badge and a symbol of its own instead of
+ * being left blank, and why its summary label is spelled out where the row's is short.
  */
+import { type Messages, useMessages } from '../i18n';
 
 type CovStatus = 'done' | 'partial' | 'planned' | 'out-of-scope';
 
-interface Technique {
-  name: string;
+/** All three ids come from the catalogue, so the checklist cannot name an area, a technique or a note that has no
+ * wording behind it. */
+type AreaId = keyof Messages['techniques']['areas'];
+type TechniqueId = keyof Messages['techniques']['items'];
+type NoteId = keyof Messages['techniques']['notes'];
+
+interface TechniqueBase {
+  id: TechniqueId;
   status: CovStatus;
-  note: string;
 }
 
+/** The note is a pointer into this repository — an identifier, verbatim in every language, never translated. */
+interface RefTechnique extends TechniqueBase {
+  ref: string;
+}
+
+/** The note is a sentence, so it comes from the catalogue and each language writes its own. */
+interface NotedTechnique extends TechniqueBase {
+  note: NoteId;
+}
+
+type Technique = RefTechnique | NotedTechnique;
+
 interface CovGroup {
-  area: string;
+  area: AreaId;
   items: Technique[];
 }
 
 const COVERAGE: CovGroup[] = [
   {
-    area: 'Recon & acquisition (FSTM 1–2)',
+    area: 'recon',
     items: [
-      { name: 'Provenance fingerprint (vendor / model / version)', status: 'done', note: 'providers/provenance' },
-      { name: 'OSINT vuln correlation — OSV + NVD + CISA KEV', status: 'done', note: 'research/ (allowlisted, cited)' },
-      { name: 'Disclosure contact discovery (RFC 9116 security.txt)', status: 'done', note: 'providers/securitytxt' },
-      { name: 'FCC-ID lookup (public filings)', status: 'done', note: 'providers/fcc' },
-      { name: 'Firmware upload', status: 'done', note: 'manual ingest' },
-      { name: 'LAN device discovery + capture-backend detection', status: 'done', note: 'Phase 6.0 (capture/)' },
-      {
-        name: 'OTA interception + firmware-flow carving + auto-ingest',
-        status: 'partial',
-        note: 'Phase 6.1: proxy→score→carve→ingest (live capture on deploy)',
-      },
+      { id: 'provenance', status: 'done', ref: 'providers/provenance' },
+      { id: 'osint', status: 'done', note: 'osint' },
+      { id: 'securityTxt', status: 'done', ref: 'providers/securitytxt' },
+      { id: 'fccId', status: 'done', ref: 'providers/fcc' },
+      { id: 'upload', status: 'done', note: 'upload' },
+      { id: 'lanDiscovery', status: 'done', note: 'lanDiscovery' },
+      { id: 'otaIntercept', status: 'partial', note: 'otaIntercept' },
     ],
   },
   {
-    area: 'Static analysis (FSTM 3–5)',
+    area: 'static',
     items: [
-      { name: 'Entropy / structure map / class + arch identity', status: 'done', note: '@firmlab/core' },
-      { name: 'Filesystem extraction (squashfs/jffs2/ubifs/cramfs/cpio)', status: 'done', note: 'providers/extract' },
-      { name: 'Secret & credential scan (+ gitleaks deep scan)', status: 'done', note: 'core + gitleaks' },
-      { name: 'SBOM + CVE (syft → OSV/NVD/grype)', status: 'done', note: 'providers/sbom + research' },
-      { name: 'Binary hardening (NX / canary / PIC / RELRO)', status: 'done', note: 'radare2 checksec' },
-      { name: 'Ghidra / radare2 triage + taint scaffold', status: 'done', note: 'providers/decompile + zeroday' },
-      {
-        name: 'Init-script / config-security heuristics (firmwalker-style)',
-        status: 'done',
-        note: 'providers/fsaudit',
-      },
-      { name: 'Certificate / key artifact analysis', status: 'done', note: 'providers/certs (X.509)' },
-      { name: 'Component dependency map (bins/libs/scripts)', status: 'done', note: 'providers/compmap' },
-      { name: 'Bootloader / U-Boot env + default bootargs', status: 'done', note: 'providers/uboot' },
+      { id: 'identity', status: 'done', ref: '@firmlab/core' },
+      { id: 'extraction', status: 'done', ref: 'providers/extract' },
+      { id: 'secrets', status: 'done', ref: 'core + gitleaks' },
+      { id: 'sbom', status: 'done', ref: 'providers/sbom + research' },
+      { id: 'hardening', status: 'done', ref: 'radare2 checksec' },
+      { id: 'decompile', status: 'done', ref: 'providers/decompile + zeroday' },
+      { id: 'fsaudit', status: 'done', ref: 'providers/fsaudit' },
+      { id: 'certs', status: 'done', ref: 'providers/certs (X.509)' },
+      { id: 'compmap', status: 'done', ref: 'providers/compmap' },
+      { id: 'uboot', status: 'done', ref: 'providers/uboot' },
     ],
   },
   {
-    area: 'Emulation (FSTM 6)',
+    area: 'emulation',
     items: [
-      { name: 'User-mode QEMU (single binary)', status: 'done', note: 'providers/emulate' },
-      { name: 'Chroot service + libnvram shim', status: 'done', note: 'providers/emulate-system' },
-      { name: 'Full-system boot (firmadyne kernel)', status: 'done', note: 'providers/emulate-system' },
-      { name: 'Renode (RTOS / Cortex-M)', status: 'done', note: 'providers/renode' },
-      { name: 'chipsec (UEFI/BIOS offline decode)', status: 'done', note: 'providers/chipsec' },
-      { name: 'Service enumeration (boot-time attack surface)', status: 'done', note: 'providers/servicemap' },
-      { name: 'Saved emulation presets', status: 'done', note: 'routes/presets + PresetsPanel' },
-      { name: 'Run-command-in-emulation / interactive shell', status: 'planned', note: 'live introspection' },
+      { id: 'qemuUser', status: 'done', ref: 'providers/emulate' },
+      { id: 'chroot', status: 'done', ref: 'providers/emulate-system' },
+      { id: 'fullSystem', status: 'done', ref: 'providers/emulate-system' },
+      { id: 'renode', status: 'done', ref: 'providers/renode' },
+      { id: 'chipsec', status: 'done', ref: 'providers/chipsec' },
+      { id: 'servicemap', status: 'done', ref: 'providers/servicemap' },
+      { id: 'presets', status: 'done', ref: 'routes/presets + PresetsPanel' },
+      { id: 'interactiveShell', status: 'planned', note: 'interactiveShell' },
     ],
   },
   {
-    area: 'Dynamic & runtime (FSTM 7–8)',
+    area: 'dynamic',
     items: [
-      { name: 'Coverage-guided fuzzing (AFL++ file/stdin/network)', status: 'done', note: 'providers/fuzz' },
-      { name: 'Auto-run under OS-primitive isolation', status: 'done', note: 'providers/isolate' },
-      {
-        name: 'Drive the emulated service — command injection + path traversal',
-        status: 'done',
-        note: 'providers/webprobe',
-      },
-      { name: 'Web auth-bypass / default-creds / POST-body injection', status: 'planned', note: 'webprobe follow-up' },
-      { name: 'Interactive GDB in emulation (breakpoints on unsafe fns)', status: 'planned', note: 'runtime gap' },
-      { name: 'Symbolic reachability of taint leads (angr)', status: 'planned', note: 'proves reachability' },
-      { name: 'Cross-binary dataflow / stack-global layout', status: 'planned', note: 'taint extension' },
-      { name: 'cmplog / compcov + auto harness generation', status: 'planned', note: 'fuzzing depth' },
+      { id: 'fuzzing', status: 'done', ref: 'providers/fuzz' },
+      { id: 'isolation', status: 'done', ref: 'providers/isolate' },
+      { id: 'webprobe', status: 'done', ref: 'providers/webprobe' },
+      { id: 'webAuthBypass', status: 'planned', note: 'webAuthBypass' },
+      { id: 'interactiveGdb', status: 'planned', note: 'interactiveGdb' },
+      { id: 'symreach', status: 'planned', note: 'symreach' },
+      { id: 'crossBinary', status: 'planned', note: 'crossBinary' },
+      { id: 'cmplog', status: 'planned', note: 'cmplog' },
     ],
   },
   {
-    area: 'Comparison / n-day localization',
+    area: 'comparison',
     items: [
-      { name: 'Firmware tree + binary diff across versions', status: 'done', note: 'providers/diff' },
-      { name: 'Function-level decompilation diff (BinDiff-style)', status: 'planned', note: 'localize the patch' },
-      { name: 'Kernel module (.ko) CVE surface correlation', status: 'planned', note: 'beyond userland SBOM' },
+      { id: 'treeDiff', status: 'done', ref: 'providers/diff' },
+      { id: 'functionDiff', status: 'planned', note: 'functionDiff' },
+      { id: 'kernelModuleCve', status: 'planned', note: 'kernelModuleCve' },
     ],
   },
   {
-    area: 'UEFI / BIOS deep analysis',
+    area: 'uefi',
     items: [
-      { name: 'Firmware-volume + EFI module inventory', status: 'done', note: 'chipsec' },
-      { name: 'Embedded-application bootkit lead', status: 'done', note: 'chipsec scan' },
-      { name: 'IOC feed hook (FIRMLAB_UEFI_IOC)', status: 'done', note: 'operator-supplied GUID/name IOCs' },
-      { name: 'Secure Boot / NVRAM posture + test-key detection', status: 'done', note: 'providers/chipsec (offline)' },
-      { name: 'Threat-rule scanning (FwHunt code-pattern rules)', status: 'planned', note: 'integrate fwhunt-scan' },
-      { name: 'LogoFAIL parsers / SMM callout analysis', status: 'planned', note: 'efiXplorer-class' },
+      { id: 'efiInventory', status: 'done', ref: 'chipsec' },
+      { id: 'bootkitLead', status: 'done', note: 'bootkitLead' },
+      { id: 'iocFeed', status: 'done', note: 'iocFeed' },
+      { id: 'secureBoot', status: 'done', note: 'secureBoot' },
+      { id: 'fwhunt', status: 'planned', note: 'fwhunt' },
+      { id: 'logofail', status: 'planned', note: 'logofail' },
     ],
   },
   {
-    area: 'RTOS / bare-metal deep analysis',
+    area: 'rtos',
     items: [
-      { name: 'MCU fingerprint + real-catalog platform select', status: 'done', note: 'core/mcu + renode' },
-      { name: 'Boot liveness (UART decides success)', status: 'done', note: 'renode' },
-      { name: 'Vector-table / base-address / memory-map + RTOS-kernel detect', status: 'done', note: 'providers/rtos' },
-      { name: 'Peripheral / MMIO fuzzing (Fuzzware / µEmu)', status: 'planned', note: 'exercise the HAL' },
+      { id: 'mcuFingerprint', status: 'done', ref: 'core/mcu + renode' },
+      { id: 'bootLiveness', status: 'done', ref: 'renode' },
+      { id: 'vectorTable', status: 'done', ref: 'providers/rtos' },
+      { id: 'mmioFuzzing', status: 'planned', note: 'mmioFuzzing' },
     ],
   },
   {
-    area: 'Reporting & disclosure',
+    area: 'reporting',
     items: [
-      { name: 'Self-contained HTML analysis report', status: 'done', note: 'providers/report' },
-      { name: 'Coordinated-disclosure Markdown draft', status: 'done', note: 'providers/disclosure' },
-      { name: 'Cited external-intelligence brief (LLM)', status: 'done', note: 'agent/intel' },
-      { name: 'PDF export', status: 'planned', note: 'convenience' },
+      { id: 'htmlReport', status: 'done', ref: 'providers/report' },
+      { id: 'disclosureDraft', status: 'done', ref: 'providers/disclosure' },
+      { id: 'intelBrief', status: 'done', ref: 'agent/intel' },
+      { id: 'pdfExport', status: 'planned', note: 'pdfExport' },
     ],
   },
   {
-    area: 'Hardware / radio & exploitation',
+    area: 'hardware',
     items: [
-      { name: 'Live-device UART console bridge (host-side)', status: 'planned', note: 'Phase-6 transport' },
-      { name: 'JTAG / SWD / SPI extraction · chip-off', status: 'out-of-scope', note: 'hardware lab' },
-      {
-        name: 'BLE DFU reassembly (Nordic)',
-        status: 'partial',
-        note: 'Phase 6.4: reassembly done; live sniff = nRF dongle',
-      },
-      {
-        name: 'Zigbee OTA-cluster reassembly (0x0019)',
-        status: 'partial',
-        note: 'Phase 6.5: reassembly + unwrap done; live sniff = CC2531/ConBee',
-      },
-      { name: 'Wi-Fi / SDR capture', status: 'out-of-scope', note: 'Phase-6 dongle' },
-      { name: 'Side-channel / fault injection (glitching)', status: 'out-of-scope', note: 'lab hardware' },
-      { name: 'Weaponized exploitation (ROP / shellcode / PoC)', status: 'out-of-scope', note: 'defensive by design' },
+      { id: 'uartBridge', status: 'planned', note: 'uartBridge' },
+      { id: 'jtag', status: 'out-of-scope', note: 'jtag' },
+      { id: 'bleDfu', status: 'partial', note: 'bleDfu' },
+      { id: 'zigbeeOta', status: 'partial', note: 'zigbeeOta' },
+      { id: 'wifiSdr', status: 'out-of-scope', note: 'wifiSdr' },
+      { id: 'sideChannel', status: 'out-of-scope', note: 'sideChannel' },
+      { id: 'weaponization', status: 'out-of-scope', note: 'weaponization' },
     ],
   },
 ];
 
-const STATUS_META: Record<CovStatus, { label: string; badge: string; symbol: string }> = {
-  done: { label: 'done', badge: 'badge-ok', symbol: '✓' },
-  partial: { label: 'partial', badge: 'badge-medium', symbol: '◐' },
-  planned: { label: 'planned', badge: 'badge-accent', symbol: '▢' },
-  'out-of-scope': { label: 'n/a', badge: '', symbol: '—' },
+/** Presentation only — the label itself comes from the catalogue, because it is prose and it is translated. */
+const STATUS_META: Record<CovStatus, { badge: string; symbol: string }> = {
+  done: { badge: 'badge-ok', symbol: '✓' },
+  partial: { badge: 'badge-medium', symbol: '◐' },
+  planned: { badge: 'badge-accent', symbol: '▢' },
+  'out-of-scope': { badge: '', symbol: '—' },
 };
 
 export function TechniqueCoverage(): JSX.Element {
+  const t = useMessages();
   const all = COVERAGE.flatMap((g) => g.items);
-  const count = (s: CovStatus): number => all.filter((t) => t.status === s).length;
+  const count = (s: CovStatus): number => all.filter((x) => x.status === s).length;
 
   return (
     <div className="panel" style={{ marginTop: 20 }}>
-      <div className="panel-title">Technique coverage</div>
+      <div className="panel-title">{t.techniques.title}</div>
       <div className="panel-sub">
-        Firmware / IoT pentest techniques (OWASP FSTM + ISTG) mapped against what FirmLab does. See{' '}
-        <span className="mono">docs/METHODOLOGY-GAPS.md</span> for the full analysis.
+        {t.techniques.sub.beforeDoc} <span className="mono">docs/METHODOLOGY-GAPS.md</span> {t.techniques.sub.afterDoc}
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '4px 0 16px' }}>
-        <span className="badge badge-ok">{count('done')} done</span>
-        <span className="badge badge-medium">{count('partial')} partial</span>
-        <span className="badge badge-accent">{count('planned')} planned</span>
-        <span className="badge">{count('out-of-scope')} out of scope</span>
+        <span className="badge badge-ok">{t.techniques.summary.done(count('done'))}</span>
+        <span className="badge badge-medium">{t.techniques.summary.partial(count('partial'))}</span>
+        <span className="badge badge-accent">{t.techniques.summary.planned(count('planned'))}</span>
+        <span className="badge">{t.techniques.summary.outOfScope(count('out-of-scope'))}</span>
       </div>
 
       {COVERAGE.map((group) => (
         <div key={group.area} style={{ marginBottom: 18 }}>
           <div className="nav-section" style={{ margin: '0 0 8px' }}>
-            {group.area}
+            {t.techniques.areas[group.area]}
           </div>
           <table className="data">
             <tbody>
-              {group.items.map((t) => {
-                const meta = STATUS_META[t.status];
+              {group.items.map((item) => {
+                const meta = STATUS_META[item.status];
+                const note = 'ref' in item ? item.ref : t.techniques.notes[item.note];
                 return (
-                  <tr key={t.name} style={t.status === 'out-of-scope' ? { opacity: 0.62 } : undefined}>
+                  <tr key={item.id} style={item.status === 'out-of-scope' ? { opacity: 0.62 } : undefined}>
                     <td style={{ width: 92 }}>
                       <span className={`badge ${meta.badge}`}>
-                        {meta.symbol} {meta.label}
+                        {meta.symbol} {t.techniques.status[item.status]}
                       </span>
                     </td>
-                    <td>{t.name}</td>
+                    <td>{t.techniques.items[item.id].name}</td>
                     <td className="hint mono" style={{ width: 190 }}>
-                      {t.note}
+                      {note}
                     </td>
                   </tr>
                 );

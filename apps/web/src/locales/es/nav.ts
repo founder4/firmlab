@@ -9,6 +9,7 @@ export const nav: Messages['nav'] = {
   proxyUpdates: 'Proxy / Actualizaciones',
   corpus: 'Corpus',
   settings: 'Ajustes',
+  capabilities: 'Capacidades',
   system: 'Sistema',
   firmware: 'Firmware',
   activeImage: 'Imagen activa',
@@ -16,6 +17,8 @@ export const nav: Messages['nav'] = {
   navigateHint: 'Navega el análisis desde la línea de pasos en la parte superior de la página.',
   localOnly: 'Sólo local. No lo expongas nunca a internet.',
   toggleNav: 'Mostrar u ocultar la navegación',
+  help: 'Ayuda y visita guiada',
+  helpAria: 'Ayuda y visita guiada',
   health: {
     unreachable: 'API inaccesible',
     exposed: '⚠ expuesto a la red',

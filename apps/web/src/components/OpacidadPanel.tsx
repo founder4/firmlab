@@ -3,9 +3,16 @@
  * plans the class-routed worker chain, runs it, and shows the reasoning trace — the plan, each worker's honest
  * outcome, the findings, the attack path, and (crucially) the honest gaps, so "few findings" is never mistaken
  * for "clean". The narrative is composed server-side (deterministically, or via the LLM when configured).
+ *
+ * Everything the SERVER decided renders as it was sent: the worker ids, the step statuses, the severities, the
+ * proof states, the narrative and the honest gaps are data, and translating any of them would be inventing a
+ * value the workbench does not use. What comes from the catalogue is the prose around them — including the gloss
+ * on each status mark, which is where the panel says out loud that a `skipped` or `not-built` stage is one
+ * nothing was asked of, and therefore never a stage that passed.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type OpacidadResult, api } from '../api';
+import { useMessages } from '../i18n';
 import { RunHistory } from './RunHistory';
 
 const STATUS_META: Record<OpacidadResult['steps'][number]['status'], { mark: string; cls: string }> = {
@@ -23,6 +30,7 @@ function sevClass(sev: string): string {
 }
 
 export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [result, setResult] = useState<OpacidadResult | null>(null);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -55,7 +63,7 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
           setRunning(false);
         } else if (job.status === 'error') {
           if (pollRef.current) window.clearInterval(pollRef.current);
-          setErr(job.error ?? 'Autonomous scan failed');
+          setErr(job.error ?? t.panels.opacidad.failed);
           setRunning(false);
         }
       }, 800);
@@ -63,23 +71,25 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
       setErr(e instanceof Error ? e.message : String(e));
       setRunning(false);
     }
-  }, [imageId]);
+  }, [imageId, t]);
+
+  // The gloss for a proof state lives in the shared `proofState` namespace and is never restated here. A state this
+  // build does not know still renders its CODE — only the tooltip goes missing, which is the honest degradation.
+  const proofMeaning = (state: string): string | undefined =>
+    (t.proofState.meaning as Record<string, string | undefined>)[state];
 
   return (
     <div className="panel">
-      <div className="panel-title">Autonomous scan (opacidad)</div>
-      <div className="panel-sub">
-        Plan the class-appropriate worker chain, run it end-to-end, and compose the reasoning trace — one action instead
-        of clicking each provider by hand. Honest by design: skipped and not-yet-built workers are shown, never hidden.
-      </div>
+      <div className="panel-title">{t.panels.opacidad.title}</div>
+      <div className="panel-sub">{t.panels.opacidad.sub}</div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <button className="btn btn-primary btn-sm" disabled={running} onClick={run}>
-          {running ? 'Scanning…' : result ? 'Re-run autonomous scan' : 'Run autonomous scan'}
+          {running ? t.panels.opacidad.running : result ? t.panels.opacidad.rerun : t.panels.opacidad.run}
         </button>
         {result && (
-          <span className="badge prov-agent" title="How the narrative was written">
-            narrative: {result.narrativeSource}
+          <span className="badge prov-agent" title={t.panels.opacidad.narrativeTitle}>
+            {t.panels.opacidad.narrativeLabel} {result.narrativeSource}
             {result.llm ? ` (${result.llm.provider}/${result.llm.model})` : ''}
           </span>
         )}
@@ -108,19 +118,23 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
             )}
           </div>
 
-          <Section title="Workers">
+          <Section title={t.panels.opacidad.workers}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               {result.steps.map((s) => {
                 const meta = STATUS_META[s.status];
                 return (
                   <div key={s.worker} style={{ ...rowStyle, ...(s.origin === 'replan' ? { marginLeft: 16 } : {}) }}>
-                    <span className={`badge ${meta.cls}`} style={{ minWidth: 22, textAlign: 'center' }}>
+                    <span
+                      className={`badge ${meta.cls}`}
+                      style={{ minWidth: 22, textAlign: 'center' }}
+                      title={t.panels.opacidad.status[s.status]}
+                    >
                       {s.origin === 'replan' ? '↳' : meta.mark}
                     </span>
                     <strong style={{ fontSize: 12.5 }}>{s.worker}</strong>
                     {s.origin === 'replan' && (
                       <span className="badge" style={{ fontSize: 10 }} title={s.trigger}>
-                        re-planned
+                        {t.panels.opacidad.replanned}
                       </span>
                     )}
                     <span className="hint" style={{ flex: 1 }}>
@@ -136,16 +150,18 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
             </div>
           </Section>
 
-          <Section title={`Findings (${result.findings.total})`}>
+          <Section title={t.panels.opacidad.findings(result.findings.total)}>
             {result.findings.top.length === 0 ? (
-              <div className="hint">No findings surfaced by the workers that ran.</div>
+              <div className="hint">{t.panels.opacidad.noFindings}</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {result.findings.top.map((f) => (
                   <div key={`${f.source}:${f.title}`} style={rowStyle}>
                     <span className={`badge ${sevClass(f.severity)}`}>{f.severity}</span>
                     <span style={{ flex: 1, fontSize: 12.5 }}>{f.title}</span>
-                    <span className="hint mono">{f.proofState}</span>
+                    <span className="hint mono" title={proofMeaning(f.proofState)}>
+                      {f.proofState}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -153,7 +169,7 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
           </Section>
 
           {result.attackPath.length > 0 && (
-            <Section title="Attack path (chain of evidence)">
+            <Section title={t.panels.opacidad.attackPath}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {result.attackPath.map((p) => (
                   <div key={p} className="mono" style={{ fontSize: 12 }}>
@@ -164,14 +180,14 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
             </Section>
           )}
 
-          <Section title="Narrative">
+          <Section title={t.panels.opacidad.narrative}>
             <pre className="narrative" style={narrativeStyle}>
               {result.narrative}
             </pre>
           </Section>
 
           {result.honestGaps.length > 0 && (
-            <Section title="Honest gaps — what did NOT run">
+            <Section title={t.panels.opacidad.honestGaps}>
               <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {result.honestGaps.map((g) => (
                   <li key={g} className="hint" style={{ fontSize: 12 }}>
@@ -183,7 +199,7 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
           )}
         </div>
       )}
-      <RunHistory imageId={imageId} kinds={['opacidad']} label="autonomous-scan" />
+      <RunHistory imageId={imageId} kinds={['opacidad']} label={t.panels.opacidad.runLabel} />
     </div>
   );
 }

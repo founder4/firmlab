@@ -2,8 +2,25 @@
  * Guided tour — an optional, resettable onboarding that spotlights real interface elements (by data-tour
  * attribute) rather than a wall of text. It auto-runs once on first visit, never again unless the user starts
  * it from the header (?) or Settings. A module store drives a single <Onboarding/> mounted in the shell.
+ *
+ * **Why the steps are not a module constant any more.** They used to be a `STEPS` array of literal English, built
+ * once when the module was imported. A tour whose text is frozen at import time opens in the language that happened
+ * to be active when the bundle loaded, which is the wrong one for anybody who switches afterwards — and the tour is
+ * the only screen you cannot re-read to check. So the module now holds the SHAPE (the order, and which element each
+ * step spotlights) and the catalogue holds the words: `buildSteps` maps one onto the other, the mounted component
+ * calls it through `useMessages()` on every render, and `startTour` carries no text at all — it flips a flag. The
+ * language is therefore resolved at render, so switching locale with the tour open re-renders the open card.
+ *
+ * `tourSteps()` is the same thing for a caller outside React — module scope, an event handler, a test — and reads
+ * the active catalogue through `messages()`, the non-hook accessor, for the same reason.
+ *
+ * The step this tour exists for is `proof`. It is where an operator meets the proof-state discipline, before they
+ * have seen a single finding, and it names the states verbatim because they are identifiers the API and SQLite
+ * share. What it must never be softened into is a reassurance: `blocked_by_platform` means the question was asked
+ * and could not be answered here, and an empty findings list is not a clean image.
  */
-import { type CSSProperties, useEffect, useState, useSyncExternalStore } from 'react';
+import { type CSSProperties, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { type Messages, messages, useMessages } from './i18n';
 
 const DONE_KEY = 'firmlab.tour.done';
 
@@ -13,36 +30,36 @@ interface Step {
   body: string;
 }
 
-const STEPS: Step[] = [
-  {
-    title: 'Welcome to FirmLab',
-    body: 'A local, private firmware workbench. Everything is analyzed on this machine — nothing is uploaded. Here is a 20-second tour; you can skip it any time.',
-  },
-  {
-    selector: '[data-tour="sidebar"]',
-    title: 'Navigate here',
-    body: 'The sidebar holds your workspace (Dashboard, Corpus, Capabilities) and, once a firmware image is open, its analysis sections grouped by purpose.',
-  },
-  {
-    selector: '[data-tour="health"]',
-    title: 'Security posture, always visible',
-    body: 'This tells you whether the API is bound to loopback (local-only) or reachable over the network. FirmLab is meant to stay local.',
-  },
-  {
-    selector: '[data-tour="appearance"]',
-    title: 'Make it yours',
-    body: 'Switch between light, dark, and system themes, and toggle comfortable/compact density for long analysis sessions. Full controls live in Settings.',
-  },
-  {
-    selector: '[data-tour="upload"]',
-    title: 'Start an analysis',
-    body: 'Drop a firmware image (or browse) to analyze it instantly with the deterministic engine — no toolchain required. External tools add depth when present.',
-  },
-  {
-    title: 'That’s it',
-    body: 'Restart this tour any time from the ? button in the header or from Settings → Help. Happy hunting.',
-  },
+/** A step's entry in the catalogue. Naming them keeps the shape below readable against `locales/en/onboarding`. */
+type StepKey = 'welcome' | 'sidebar' | 'health' | 'appearance' | 'upload' | 'proof' | 'end';
+
+/**
+ * The tour's shape: the order of the steps and the element each one spotlights. A step with no selector is a
+ * concept rather than a control, and its card is centred — which is why `proof` has none.
+ */
+const ANCHORS: { key: StepKey; selector?: string }[] = [
+  { key: 'welcome' },
+  { key: 'sidebar', selector: '[data-tour="sidebar"]' },
+  { key: 'health', selector: '[data-tour="health"]' },
+  { key: 'appearance', selector: '[data-tour="appearance"]' },
+  { key: 'upload', selector: '[data-tour="upload"]' },
+  { key: 'proof' },
+  { key: 'end' },
 ];
+
+/** Pure: the shape plus a catalogue is the tour. Exported so a test can hold the two to each other. */
+export function buildSteps(m: Messages['onboarding']): Step[] {
+  return ANCHORS.map(({ key, selector }) => ({
+    ...(selector ? { selector } : {}),
+    title: m[key].title,
+    body: m[key].body,
+  }));
+}
+
+/** The steps in the language selected right now, for a caller that is not a React component. */
+export function tourSteps(): Step[] {
+  return buildSteps(messages().onboarding);
+}
 
 const listeners = new Set<() => void>();
 let active = false;
@@ -75,8 +92,12 @@ const subscribe = (cb: () => void): (() => void) => {
 };
 
 export function Onboarding(): JSX.Element | null {
+  const t = useMessages();
   useSyncExternalStore(subscribe, snap, snap);
   const [rect, setRect] = useState<DOMRect | null>(null);
+  // `t` is the dependency that matters: it is what makes a locale switch re-word an open tour rather than leaving
+  // it in the language the reader just turned off.
+  const steps = useMemo(() => buildSteps(t.onboarding), [t]);
 
   // Auto-run once on first visit.
   useEffect(() => {
@@ -87,12 +108,12 @@ export function Onboarding(): JSX.Element | null {
       done = true;
     }
     if (!done) {
-      const t = setTimeout(startTour, 600);
-      return () => clearTimeout(t);
+      const timer = setTimeout(startTour, 600);
+      return () => clearTimeout(timer);
     }
   }, []);
 
-  const step = active ? STEPS[index] : undefined;
+  const step = active ? steps[index] : undefined;
 
   // Track the spotlighted element's position (and follow scroll/resize). `step` changes with the index, so it's
   // the only dependency needed.
@@ -136,11 +157,16 @@ export function Onboarding(): JSX.Element | null {
         }
     : { top: '50%', left: '50%', transform: 'translate(-50%, -50%)' };
 
-  const last = index === STEPS.length - 1;
+  const last = index === steps.length - 1;
 
   return (
-    // biome-ignore lint/a11y/useSemanticElements: a custom tour overlay; a native <dialog> would need showModal() + imperative focus handling.
-    <div style={{ position: 'fixed', inset: 0, zIndex: 300 }} role="dialog" aria-modal="true" aria-label="Product tour">
+    <div
+      style={{ position: 'fixed', inset: 0, zIndex: 300 }}
+      // biome-ignore lint/a11y/useSemanticElements: a custom tour overlay; a native <dialog> would need showModal() + imperative focus handling.
+      role="dialog"
+      aria-modal="true"
+      aria-label={t.onboarding.ariaLabel}
+    >
       {/* Dim + spotlight (a box-shadow cutout). Clicking the dim area does nothing; controls are on the card. */}
       {spotlight ? (
         <div
@@ -163,7 +189,7 @@ export function Onboarding(): JSX.Element | null {
 
       <div className="dialog" style={{ position: 'fixed', width: 320, padding: 18, ...cardStyle }}>
         <div className="eyebrow" style={{ marginBottom: 6 }}>
-          Step {index + 1} / {STEPS.length}
+          {t.onboarding.progress(index + 1, steps.length)}
         </div>
         <div className="dialog-title" style={{ fontSize: 15 }}>
           {step.title}
@@ -171,7 +197,7 @@ export function Onboarding(): JSX.Element | null {
         <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.5 }}>{step.body}</p>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button type="button" className="btn btn-sm btn-ghost" onClick={endTour}>
-            Skip
+            {t.onboarding.skip}
           </button>
           <div style={{ flex: 1 }} />
           {index > 0 && (
@@ -183,7 +209,7 @@ export function Onboarding(): JSX.Element | null {
                 emit();
               }}
             >
-              Back
+              {t.onboarding.back}
             </button>
           )}
           <button
@@ -197,7 +223,7 @@ export function Onboarding(): JSX.Element | null {
               }
             }}
           >
-            {last ? 'Done' : 'Next'}
+            {last ? t.onboarding.done : t.onboarding.next}
           </button>
         </div>
       </div>

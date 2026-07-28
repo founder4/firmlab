@@ -84,7 +84,7 @@ export const imageDetail: Messages['imageDetail'] = {
 
   entropy: {
     title: 'Perfil de entropía',
-    sub: 'Entropía de Shannon a lo largo de la imagen — las bandas altas están comprimidas o cifradas',
+    sub: 'Entropía de Shannon a lo largo de la imagen — una banda alta es una pista que comprobar, no un veredicto sobre lo que contiene',
     colRegion: 'Región de entropía alta',
     colMeanH: 'H media',
     colSize: 'Tamaño',

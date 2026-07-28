@@ -7,6 +7,7 @@ export const nav = {
   proxyUpdates: 'Proxy / Updates',
   corpus: 'Corpus',
   settings: 'Settings',
+  capabilities: 'Capabilities',
   system: 'System',
   firmware: 'Firmware',
   activeImage: 'Active image',
@@ -14,6 +15,8 @@ export const nav = {
   navigateHint: 'Navigate the analysis from the step timeline at the top of the page.',
   localOnly: 'Local-only. Never expose to the internet.',
   toggleNav: 'Toggle navigation',
+  help: 'Help & tour',
+  helpAria: 'Help and tour',
   health: {
     unreachable: 'API unreachable',
     exposed: '⚠ bound to network',

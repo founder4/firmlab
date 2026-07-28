@@ -1,6 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type OpacidadResult, api } from '../api';
+import { setLocale } from '../i18n';
+import { en } from '../locales/en';
+import { es } from '../locales/es';
 import { mockedApi } from '../test-api-mock';
 import { OpacidadPanel } from './OpacidadPanel';
 
@@ -37,6 +40,9 @@ const result = (o: Partial<OpacidadResult> = {}): OpacidadResult => ({
 });
 
 beforeEach(() => {
+  // Reset BEFORE the render, never after it: the locale store notifies live subscribers, so switching back in an
+  // `afterEach` re-renders a still-mounted tree and fills the suite with act(…) warnings.
+  setLocale('en');
   // The panel drops a RunHistory under its result, which reads the run ledger. Before the shared mock this call
   // was left pointing at the real client and fetched over the network in every test in this file.
   mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
@@ -48,12 +54,12 @@ beforeEach(() => {
 describe('OpacidadPanel — autonomous scan', () => {
   it('offers a run control when there is no prior scan', async () => {
     render(<OpacidadPanel imageId="img1" />);
-    expect(await screen.findByRole('button', { name: 'Run autonomous scan' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: en.panels.opacidad.run })).toBeInTheDocument();
   });
 
   it('kicks off the scan on click', async () => {
     render(<OpacidadPanel imageId="img1" />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Run autonomous scan' }));
+    fireEvent.click(await screen.findByRole('button', { name: en.panels.opacidad.run }));
     await waitFor(() => expect(mockApi.runOpacidad).toHaveBeenCalledWith('img1'));
   });
 
@@ -62,9 +68,46 @@ describe('OpacidadPanel — autonomous scan', () => {
     render(<OpacidadPanel imageId="img1" />);
     expect(await screen.findByText('esp-soc')).toBeInTheDocument();
     expect(screen.getByText('W6 · ESP / IoT-SoC')).toBeInTheDocument();
-    expect(screen.getByText(/Honest gaps/i)).toBeInTheDocument();
+    expect(screen.getByText(en.panels.opacidad.honestGaps)).toBeInTheDocument();
+    // The gap sentences are the server's own words and are rendered as it wrote them.
     expect(screen.getByText(/does NOT mean/i)).toBeInTheDocument();
     // The narrative provenance is labelled (deterministic vs LLM) so the operator knows how it was written.
-    expect(screen.getByText(/narrative: deterministic/i)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`${en.panels.opacidad.narrativeLabel} deterministic`, 'i'))).toBeInTheDocument();
+  });
+});
+
+/**
+ * The scan's coverage claim, in Spanish. A stage reported `not-built` or `skipped` is a stage nothing was asked of,
+ * and the panel has to keep saying so in every language — a translation in which the status mark reads as "correcto"
+ * would turn an unbuilt worker into a passed one, which is exactly the conflation the honest-gaps list exists to
+ * prevent. The class, the worker id, the status codes and the narrative stay as the scan sent them.
+ */
+describe('OpacidadPanel — the honest gaps in Spanish', () => {
+  it('shows an unbuilt worker as a stage nothing was asked of, never as one that passed', async () => {
+    setLocale('es');
+    mockApi.opacidadResult.mockResolvedValue(result());
+    render(<OpacidadPanel imageId="img1" />);
+
+    expect(await screen.findByText(es.panels.opacidad.honestGaps)).toBeInTheDocument();
+    expect(es.panels.opacidad.honestGaps).toMatch(/lo que NO se ejecutó/);
+    // The status gloss on the mark: the code opens it verbatim, the sentence refuses to call it a pass.
+    expect(screen.getByTitle(es.panels.opacidad.status['not-built'])).toBeInTheDocument();
+    expect(es.panels.opacidad.status['not-built']).toMatch(/^not-built —/);
+    expect(es.panels.opacidad.status['not-built']).toMatch(/no es una etapa superada/i);
+    expect(es.panels.opacidad.status.skipped).toMatch(/no es una etapa superada/i);
+    // The class, the worker id and the narrative source are data — identical in either language.
+    expect(screen.getByText('esp-soc')).toBeInTheDocument();
+    expect(screen.getByText('W6 · ESP / IoT-SoC')).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`${es.panels.opacidad.narrativeLabel} deterministic`, 'i'))).toBeInTheDocument();
+  });
+
+  it('never lets an empty findings list read as a clean firmware', async () => {
+    setLocale('es');
+    mockApi.opacidadResult.mockResolvedValue(result());
+    render(<OpacidadPanel imageId="img1" />);
+
+    expect(await screen.findByText(es.panels.opacidad.noFindings)).toBeInTheDocument();
+    expect(es.panels.opacidad.noFindings).toMatch(/nunca un certificado de limpieza/i);
+    expect(screen.getByText(es.panels.opacidad.findings(0))).toBeInTheDocument();
   });
 });

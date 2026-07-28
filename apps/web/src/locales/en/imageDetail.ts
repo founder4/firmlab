@@ -88,7 +88,7 @@ export const imageDetail = {
 
   entropy: {
     title: 'Entropy profile',
-    sub: 'Shannon entropy across the image — high bands are compressed or encrypted',
+    sub: 'Shannon entropy across the image — a high band is a lead to check, not a verdict on what it holds',
     colRegion: 'High-entropy region',
     colMeanH: 'Mean H',
     colSize: 'Size',

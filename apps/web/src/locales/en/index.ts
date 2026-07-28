@@ -28,9 +28,12 @@ import { proofState } from './proofState';
 import { report } from './report';
 import { sections } from './sections';
 import { settings } from './settings';
+import { shell } from './shell';
 import { simulation } from './simulation';
+import { techniques } from './techniques';
 import { testbench } from './testbench';
 import { updatepath } from './updatepath';
+import { visuals } from './visuals';
 
 export const en = {
   common,
@@ -56,6 +59,9 @@ export const en = {
   coverage,
   onboarding,
   panels,
+  techniques,
+  visuals,
+  shell,
 };
 
 export type Messages = typeof en;

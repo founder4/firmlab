@@ -2,10 +2,18 @@
  * Structure map — the "binwalk graphical view": a proportional horizontal ribbon of the image, each segment
  * colored by its signature category (filesystem, compression, bootloader, executable…). Hovering a segment
  * shows its offset range, label, and any decoded header fields. This is the at-a-glance layout of the image.
+ *
+ * **What a band claims.** A segment is a signature match: a magic number saying what it believes starts at that
+ * offset. It is not a verdict on what the bytes are, and the stretch between two matches is unclaimed rather than
+ * empty — a ribbon drawn edge to edge invites the opposite reading, so the caveat under it is part of the picture.
+ *
+ * Only the two sentences are localised. Segment labels, categories, confidences and the decoded header fields are
+ * what the carve recorded, and the `0x…` ruler and byte counts are notation; all of them render as produced.
  */
 import { useState } from 'react';
 import type { StructureSegment } from '../api';
 import { categoryColor, fmtBytes, fmtHex } from '../api';
+import { useMessages } from '../i18n';
 
 interface Props {
   segments: StructureSegment[];
@@ -13,6 +21,7 @@ interface Props {
 }
 
 export function StructureMap({ segments, size }: Props): JSX.Element {
+  const t = useMessages();
   const [active, setActive] = useState<number | null>(null);
   const total = size || 1;
 
@@ -62,7 +71,7 @@ export function StructureMap({ segments, size }: Props): JSX.Element {
       <div className="panel" style={{ marginTop: 14, marginBottom: 0, background: 'var(--bg-panel-2)' }}>
         {(() => {
           const seg = active !== null ? segments[active] : null;
-          if (!seg) return <span className="hint">Hover a segment to inspect it.</span>;
+          if (!seg) return <span className="hint">{t.visuals.structure.hoverPrompt}</span>;
           return (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
@@ -92,6 +101,11 @@ export function StructureMap({ segments, size }: Props): JSX.Element {
       </div>
 
       <Legend segments={segments} />
+
+      {/* The ribbon fills the width whatever the carve found, so what it does NOT claim has to be written down. */}
+      <p className="hint" style={{ margin: '10px 0 0', maxWidth: '72ch' }}>
+        {t.visuals.structure.caveat}
+      </p>
     </div>
   );
 }

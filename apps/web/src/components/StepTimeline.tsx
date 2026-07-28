@@ -3,20 +3,35 @@
  * the analysis actually flows (General → Entropy → Extraction → Bootloader → SBOM → Binaries → Emulation →
  * Findings), and each node carries HONEST state derived from what has actually run: done, running, blocked (e.g.
  * an arch that can't be emulated here), or pending. It stays pinned under the top bar as you move between stages.
+ *
+ * **Where the labels come from, and why not from here.** A step id IS a section id — it is the URL segment the
+ * click navigates to — and the sections catalogue already names every one of them for the shell's context header.
+ * This file used to carry a second copy of those names, in English, which is how the strip came to read
+ * `Entropy · Extraction · Bootloader · Binaries` across the top of fully Spanish panels. It now reads the shared
+ * catalogue, so the timeline and the heading of the page it lands on cannot disagree, in any language, and a stage
+ * added to one is named by the other for free.
+ *
+ * The node STATE is a different kind of word and lives in the shell namespace: `blocked` here means this deployment
+ * cannot run that stage. It is not `blocked_by_platform`, which is a proof state, an identifier, and never
+ * translated.
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { type Messages, useMessages } from '../i18n';
 
-export const ANALYSIS_STEPS: { id: string; label: string }[] = [
-  { id: 'overview', label: 'General' },
-  { id: 'entropy', label: 'Entropy' },
-  { id: 'filesystem', label: 'Extraction' },
-  { id: 'bootloader', label: 'Bootloader' },
-  { id: 'sbom', label: 'SBOM' },
-  { id: 'binaries', label: 'Binaries' },
-  { id: 'simulate', label: 'Emulation' },
-  { id: 'findings', label: 'Findings' },
+/** A step is a section: the catalogue owns the word, this file owns the order. */
+type StepId = keyof Messages['sections'];
+
+export const ANALYSIS_STEPS: StepId[] = [
+  'overview',
+  'entropy',
+  'filesystem',
+  'bootloader',
+  'sbom',
+  'binaries',
+  'simulate',
+  'findings',
 ];
 
 type State = 'done' | 'running' | 'blocked' | 'pending';
@@ -45,6 +60,7 @@ export function StepTimeline({
   active: string;
   ready: boolean;
 }): JSX.Element {
+  const t = useMessages();
   const nav = useNavigate();
   const [jobs, setJobs] = useState<{ kind: string; status: string }[]>([]);
   const [strategy, setStrategy] = useState<string | null>(null);
@@ -79,7 +95,7 @@ export function StepTimeline({
   const anyRunning = (kinds: string[]): boolean =>
     jobs.some((j) => kinds.includes(j.kind) && (j.status === 'running' || j.status === 'queued'));
 
-  const stateOf = (id: string): State => {
+  const stateOf = (id: StepId): State => {
     switch (id) {
       case 'overview':
       case 'entropy':
@@ -102,9 +118,11 @@ export function StepTimeline({
     }
   };
 
-  const metaOf = (id: string): string | null => {
+  const metaOf = (id: StepId): string | null => {
+    // A count is a number in every language; only the word beside the Emulation node is prose.
     if (id === 'findings' && findingCount !== null) return `${findingCount}`;
-    if (id === 'simulate' && (strategy === 'static-only' || strategy === 'unsupported-arch')) return 'blocked';
+    if (id === 'simulate' && (strategy === 'static-only' || strategy === 'unsupported-arch'))
+      return t.shell.timeline.blocked;
     return null;
   };
 
@@ -116,22 +134,24 @@ export function StepTimeline({
   };
 
   return (
-    <nav className="steptl" aria-label="Analysis pipeline">
+    <nav className="steptl" aria-label={t.shell.timeline.label}>
       {ANALYSIS_STEPS.map((step, i) => {
-        const state = stateOf(step.id);
-        const isActive = active === step.id || (active === 'dossier' && step.id === 'overview');
-        const meta = metaOf(step.id);
+        const state = stateOf(step);
+        const isActive = active === step || (active === 'dossier' && step === 'overview');
+        const meta = metaOf(step);
+        // The section's own name, from the one catalogue that holds it — never a second copy kept here.
+        const label = t.sections[step];
         return (
           <button
-            key={step.id}
+            key={step}
             type="button"
             className={`steptl-step ${state} ${isActive ? 'active' : ''}`}
             aria-current={isActive ? 'step' : undefined}
-            title={`${step.label} — ${state}`}
-            onClick={() => nav(`/image/${imageId}/${step.id}`)}
+            title={t.shell.timeline.stepTitle(label, t.shell.timeline.state[state])}
+            onClick={() => nav(`/image/${imageId}/${step}`)}
           >
             <span className="steptl-node">{node(state, i)}</span>
-            <span className="steptl-label">{step.label}</span>
+            <span className="steptl-label">{label}</span>
             <span className="steptl-meta">{meta ?? ' '}</span>
           </button>
         );

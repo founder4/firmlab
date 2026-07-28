@@ -4,9 +4,19 @@
  * the SAME 0x0…size axis, and findings are markers pinned at their byte offset. Scrub it to read the exact offset,
  * local entropy, the segment you're over, and any finding there. Everything else in the image view is a lens over
  * this one anchor.
+ *
+ * **Two things the tape must not be read as saying.** The dashed 7.2 line is where bytes stop being distinguishable
+ * from random, and packing, compression, encryption and an embedded JPEG all sit above it — so a peak is a lead to
+ * check against the structure band under it, never a verdict. And a marker is drawn only where a finding recorded
+ * an offset: a finding without one is not on the tape at all, so a clean-looking stretch is not a cleared one. Both
+ * are stated under the tape rather than in this comment, because the reader is the one who needs them.
+ *
+ * The scrub readout is notation — `0x…`, `H`, `bits` — and stays as produced in every language; the sentences, the
+ * accessible name and the marker count are the only prose here.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type EntropyProfile, type Finding, type StructureSegment, api } from '../api';
+import { useMessages } from '../i18n';
 
 interface Props {
   imageId: string;
@@ -32,6 +42,7 @@ function findingOffset(f: Finding): number | null {
 }
 
 export function SignalCanvas({ imageId, size, findings, onScrub }: Props): JSX.Element {
+  const t = useMessages();
   const [profile, setProfile] = useState<EntropyProfile | null>(null);
   const [segments, setSegments] = useState<StructureSegment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -125,8 +136,8 @@ export function SignalCanvas({ imageId, size, findings, onScrub }: Props): JSX.E
         {loading ? (
           <div className="skeleton" style={{ height: HEIGHT, borderRadius: 8 }} />
         ) : (
-          <svg width={w} height={HEIGHT} style={{ display: 'block' }} aria-label="Signal tape">
-            <title>Firmware signal tape</title>
+          <svg width={w} height={HEIGHT} style={{ display: 'block' }} aria-label={t.visuals.signal.ariaLabel}>
+            <title>{t.visuals.signal.title}</title>
             <defs>
               <linearGradient id="sigGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.5" />
@@ -251,10 +262,18 @@ export function SignalCanvas({ imageId, size, findings, onScrub }: Props): JSX.E
           ))}
           {marks.length > 0 && (
             <span className="legend-item" style={{ marginLeft: 'auto', color: 'var(--text-faint)' }}>
-              ▲ {marks.length} finding{marks.length === 1 ? '' : 's'} pinned to offsets
+              {t.visuals.signal.marksPinned(marks.length)}
             </span>
           )}
         </div>
+      )}
+
+      {/* Outside the legend, which only exists once the carve found a category: the two things the tape refuses to
+          claim are true of an image with no segments at all — and that is exactly the image a reader over-reads. */}
+      {!loading && (
+        <p className="hint" style={{ margin: '10px 0 0', maxWidth: '72ch' }}>
+          {t.visuals.signal.caveat}
+        </p>
       )}
     </div>
   );

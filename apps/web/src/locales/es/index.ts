@@ -23,9 +23,12 @@ import { proofState } from './proofState';
 import { report } from './report';
 import { sections } from './sections';
 import { settings } from './settings';
+import { shell } from './shell';
 import { simulation } from './simulation';
+import { techniques } from './techniques';
 import { testbench } from './testbench';
 import { updatepath } from './updatepath';
+import { visuals } from './visuals';
 
 export const es: Messages = {
   common,
@@ -51,4 +54,7 @@ export const es: Messages = {
   coverage,
   onboarding,
   panels,
+  techniques,
+  visuals,
+  shell,
 };

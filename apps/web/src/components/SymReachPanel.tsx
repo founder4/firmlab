@@ -11,17 +11,26 @@
  *  - `not reached` is an inconclusive, NOT a clean bill: the search was bounded, and it says which budget stopped
  *    it, whether states were pruned, and how many paths were lost to angr's own crashes. It is never styled as OK.
  *  - `absent` means the symbol is not in this binary — the question did not apply, and nothing was learned.
+ *
+ * The outcome codes, the sink names, the addresses and the arch are identifiers and render as the prober sent them;
+ * only the prose is localised. The one sentence that must survive that in every language is the bounded-search
+ * caveat under the table: it names the two proof states it keeps apart — the sinks stay at
+ * `needs_runtime_reproduction`, and a search that ran out of budget never demotes one to `false_positive`.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type SinkResult, type SymReachResult, api } from '../api';
+import { useMessages } from '../i18n';
 import { RunHistory } from './RunHistory';
 
-/** How each outcome is allowed to look. Nothing but `reached` earns an affirmative colour. */
-const OUTCOME_META: Record<SinkResult['outcome'], { label: string; cls: string }> = {
-  reached: { label: 'reachable from entry', cls: 'badge-crit' },
-  not_reached_in_budget: { label: 'inconclusive — search bounded', cls: 'badge-medium' },
-  absent: { label: 'symbol not in this binary', cls: 'badge' },
-  skipped: { label: 'not asked — run budget spent', cls: 'badge' },
+/**
+ * How each outcome is allowed to look. Nothing but `reached` earns an affirmative colour, and the labels live in
+ * the catalogue keyed by the same codes, so no language can invent a fifth outcome or restyle a bounded search.
+ */
+const OUTCOME_CLASS: Record<SinkResult['outcome'], string> = {
+  reached: 'badge-crit',
+  not_reached_in_budget: 'badge-medium',
+  absent: 'badge',
+  skipped: 'badge',
 };
 
 export function SymReachPanel({
@@ -33,6 +42,7 @@ export function SymReachPanel({
   binary: string;
   onBinary: (b: string) => void;
 }): JSX.Element {
+  const t = useMessages();
   const [sinks, setSinks] = useState('');
   const [budget, setBudget] = useState(90);
   const [busy, setBusy] = useState(false);
@@ -74,45 +84,44 @@ export function SymReachPanel({
           if (timer.current) window.clearInterval(timer.current);
           setBusy(false);
           if (j.status === 'done') setResult(j.result as SymReachResult);
-          else setError(j.error ?? 'probe failed');
+          else setError(j.error ?? t.panels.symreach.probeFailed);
         }
       }, 900);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
-  }, [imageId, binary, sinks, budget]);
+  }, [imageId, binary, sinks, budget, t]);
 
   const reached = result?.sinks.filter((s) => s.outcome === 'reached') ?? [];
 
   return (
     <div className="panel">
-      <div className="panel-title">Symbolic reachability (angr)</div>
+      <div className="panel-title">{t.panels.symreach.title}</div>
       <div className="panel-sub">
-        One checkable question per sink:{' '}
-        <em>is that call site reachable from the entry point under symbolic argv/stdin?</em> A reached sink proves{' '}
-        <strong>reachability</strong>, not exploitability. A sink not reached proves nothing at all — the search is
-        bounded, so it stays a lead.
+        {t.panels.symreach.sub.lead} <em>{t.panels.symreach.sub.question}</em> {t.panels.symreach.sub.provesLead}{' '}
+        <strong>{t.panels.symreach.sub.reachability}</strong>
+        {t.panels.symreach.sub.provesTail}
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 12 }}>
         <input
           className="input mono"
-          placeholder="rootfs-relative binary, e.g. usr/sbin/bpalogin"
+          placeholder={t.panels.symreach.binaryPlaceholder}
           value={binary}
           onChange={(e) => onBinary(e.target.value)}
           style={{ flex: '1 1 240px', minWidth: 0 }}
         />
         <input
           className="input mono"
-          placeholder="sinks (blank = derive from imports)"
+          placeholder={t.panels.symreach.sinksPlaceholder}
           value={sinks}
           onChange={(e) => setSinks(e.target.value)}
           style={{ flex: '1 1 200px', minWidth: 0 }}
-          aria-label="Sink symbols to ask about"
+          aria-label={t.panels.symreach.sinksLabel}
         />
         <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          budget
+          {t.panels.symreach.budget}
           <input
             className="input mono"
             type="number"
@@ -121,24 +130,25 @@ export function SymReachPanel({
             value={budget}
             onChange={(e) => setBudget(Number(e.target.value))}
             style={{ width: 74 }}
-            aria-label="Budget in seconds"
+            aria-label={t.panels.symreach.budgetLabel}
           />
           s
         </label>
         <button type="button" className="btn btn-primary" disabled={busy || !binary.trim()} onClick={run}>
           {busy ? (
             <>
-              <span className="spinner" /> Probing…
+              <span className="spinner" /> {t.panels.symreach.probing}
             </>
           ) : (
-            'Ask'
+            t.panels.symreach.ask
           )}
         </button>
       </div>
       <div className="hint" style={{ marginTop: 6 }}>
-        Sinks are function symbols — <span className="mono">strcpy</span>, <span className="mono">system</span>,{' '}
-        <span className="mono">sscanf</span>. Leave blank to ask about whichever unbounded-copy functions this binary
-        imports. A symbol the binary does not import comes back as <em>absent</em>, not as a clean result.
+        {t.panels.symreach.hint.lead} <span className="mono">strcpy</span>, <span className="mono">system</span>,{' '}
+        <span className="mono">sscanf</span>
+        {t.panels.symreach.hint.beforeAbsent} <em>{t.panels.symreach.hint.absentWord}</em>
+        {t.panels.symreach.hint.afterAbsent}
       </div>
 
       {error && (
@@ -155,10 +165,10 @@ export function SymReachPanel({
 
       {result && !result.available && (
         <div className="banner banner-warn" style={{ marginTop: 12 }}>
-          <span className="eyebrow">Not answered</span>
+          <span className="eyebrow">{t.panels.symreach.notAnswered}</span>
           <p style={{ margin: '4px 0 0' }}>{result.reason}</p>
           <p className="hint" style={{ margin: '4px 0 0' }}>
-            This is a missing capability, not a clean result — nothing about {result.binary} was ruled out.
+            {t.panels.symreach.notAnsweredHint(result.binary)}
           </p>
         </div>
       )}
@@ -166,24 +176,25 @@ export function SymReachPanel({
       {result?.available && (
         <div style={{ marginTop: 14 }}>
           <div className="hint mono" style={{ marginBottom: 8 }}>
-            {result.binary} · {result.arch ?? 'unknown arch'} · entry {result.entry ?? '—'} · {reached.length}/
-            {result.sinks.length} reachable
-            {result.derivedSinks ? ' · sinks derived from imports' : ''}
-            {result.dropped?.length ? ` · ${result.dropped.length} sink(s) not asked (per-run cap)` : ''}
+            {result.binary} · {result.arch ?? t.panels.symreach.unknownArch} · {t.panels.symreach.entry}{' '}
+            {result.entry ?? '—'} · {t.panels.symreach.reachableCount(reached.length, result.sinks.length)}
+            {result.derivedSinks ? ` · ${t.panels.symreach.derivedSinks}` : ''}
+            {result.dropped?.length ? ` · ${t.panels.symreach.dropped(result.dropped.length)}` : ''}
           </div>
 
           <div className="table-wrap">
             <table className="data">
               <tbody>
                 {result.sinks.map((s) => {
-                  const meta = OUTCOME_META[s.outcome];
                   const input = [s.argv1 ? `argv[1]="${s.argv1}"` : '', s.stdin ? `stdin="${s.stdin}"` : '']
                     .filter(Boolean)
                     .join(' · ');
                   return (
                     <tr key={s.sink}>
                       <td style={{ width: '1%', whiteSpace: 'nowrap' }}>
-                        <span className={`badge ${meta.cls} mono`}>{meta.label}</span>
+                        <span className={`badge ${OUTCOME_CLASS[s.outcome]} mono`}>
+                          {t.panels.symreach.outcome[s.outcome]}
+                        </span>
                       </td>
                       <td>
                         <div className="mono">
@@ -192,18 +203,18 @@ export function SymReachPanel({
                         </div>
                         {s.outcome === 'reached' ? (
                           <div className="hint">
-                            {input || 'path found'} · {s.steps} steps
+                            {input || t.panels.symreach.pathFound} · {t.panels.symreach.steps(s.steps)}
                             {s.path?.length ? (
                               <div className="mono" style={{ fontSize: 11, opacity: 0.8 }}>
-                                path tail: {s.path.join(' → ')}
+                                {t.panels.symreach.pathTail} {s.path.join(' → ')}
                               </div>
                             ) : null}
                           </div>
                         ) : (
                           <div className="hint">
-                            {s.reason ?? 'no reason recorded'}
-                            {s.pruned ? ' · states pruned to stay in the memory bound' : ''}
-                            {s.errors ? ` · ${s.errors} state(s) lost to angr-internal errors` : ''}
+                            {s.reason ?? t.panels.symreach.noReason}
+                            {s.pruned ? ` · ${t.panels.symreach.pruned}` : ''}
+                            {s.errors ? ` · ${t.panels.symreach.errors(s.errors)}` : ''}
                           </div>
                         )}
                       </td>
@@ -214,14 +225,22 @@ export function SymReachPanel({
             </table>
           </div>
 
+          {/* The proof states are printed as the codes they are, with the sentence that keeps them apart around
+              them: a bounded search that reached nothing leaves every sink a lead, and demotes none of them. */}
           <p className="hint" style={{ marginTop: 10 }}>
-            {reached.length > 0
-              ? 'A reached sink means the call site is on a feasible path from the entry point with an input that walks it. Whether the copy overflows, and whether that is exploitable, are separate questions this does not answer.'
-              : 'Nothing was reached inside the budget. That is not evidence of unreachability — indirect jumps and unmodelled syscalls routinely hide real paths from a bounded search. Raise the budget or fuzz the binary.'}
+            {reached.length > 0 ? (
+              t.panels.symreach.reachedNote
+            ) : (
+              <>
+                {t.panels.symreach.notReached.lead} <span className="mono">needs_runtime_reproduction</span>{' '}
+                {t.panels.symreach.notReached.beforeFalsePositive} <span className="mono">false_positive</span>
+                {t.panels.symreach.notReached.tail}
+              </>
+            )}
           </p>
         </div>
       )}
-      <RunHistory imageId={imageId} kinds={['symreach']} label="reachability" />
+      <RunHistory imageId={imageId} kinds={['symreach']} label={t.panels.symreach.runLabel} />
     </div>
   );
 }

@@ -2,16 +2,21 @@
  * Saved emulation presets — persist a named bring-up config (mode + optional target binary) so a known-good
  * emulation can be re-run in one click instead of re-entering it. Running a preset dispatches to the same
  * /emulate + /emulate-system + /renode + /chipsec endpoints the Simulation menu uses.
+ *
+ * The MODE is an identifier: `user-qemu` and the rest are what `dispatchPreset` switches on and what the API stores,
+ * so the table below carries the value and whether it needs a binary, and the human label comes from the catalogue
+ * keyed by that same value. A mode the catalogue does not gloss would be a compile error, not a blank row.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { type EmulationPreset, api } from '../api';
+import { useMessages } from '../i18n';
 
-const MODES: { value: EmulationPreset['mode']; label: string; needsBinary: boolean }[] = [
-  { value: 'user-qemu', label: 'User-mode QEMU', needsBinary: true },
-  { value: 'chroot-qemu', label: 'Chroot service', needsBinary: true },
-  { value: 'system-qemu', label: 'Full-system QEMU', needsBinary: false },
-  { value: 'renode', label: 'Renode (RTOS)', needsBinary: false },
-  { value: 'uefi-chipsec', label: 'chipsec (UEFI)', needsBinary: false },
+const MODES: { value: EmulationPreset['mode']; needsBinary: boolean }[] = [
+  { value: 'user-qemu', needsBinary: true },
+  { value: 'chroot-qemu', needsBinary: true },
+  { value: 'system-qemu', needsBinary: false },
+  { value: 'renode', needsBinary: false },
+  { value: 'uefi-chipsec', needsBinary: false },
 ];
 
 async function dispatchPreset(imageId: string, p: EmulationPreset): Promise<string> {
@@ -24,6 +29,7 @@ async function dispatchPreset(imageId: string, p: EmulationPreset): Promise<stri
 }
 
 export function PresetsPanel({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [presets, setPresets] = useState<EmulationPreset[]>([]);
   const [name, setName] = useState('');
   const [mode, setMode] = useState<EmulationPreset['mode']>('user-qemu');
@@ -62,12 +68,12 @@ export function PresetsPanel({ imageId }: { imageId: string }): JSX.Element {
       setMsg(null);
       try {
         const jobId = await dispatchPreset(imageId, p);
-        setMsg(`Started "${p.name}" (job ${jobId}) — see the job log in the panels above.`);
+        setMsg(t.panels.presets.started(p.name, jobId));
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
       }
     },
-    [imageId],
+    [imageId, t],
   );
 
   const remove = useCallback(
@@ -78,17 +84,19 @@ export function PresetsPanel({ imageId }: { imageId: string }): JSX.Element {
     [load],
   );
 
-  const modeLabel = (m: string): string => MODES.find((x) => x.value === m)?.label ?? m;
+  // A mode this build does not know still shows its CODE rather than an empty pill — the identifier is the truth
+  // about the row, and a stored preset can name a mode written by an older build.
+  const modeLabel = (m: string): string => (t.panels.presets.mode as Record<string, string | undefined>)[m] ?? m;
   const needsBinary = MODES.find((m) => m.value === mode)?.needsBinary ?? false;
 
   return (
     <div className="panel" style={{ marginTop: 16 }}>
-      <div className="panel-title">Saved presets</div>
-      <div className="panel-sub">Save a named emulation config and re-run it in one click.</div>
+      <div className="panel-title">{t.panels.presets.title}</div>
+      <div className="panel-sub">{t.panels.presets.sub}</div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <input
-          placeholder="preset name"
+          placeholder={t.panels.presets.namePlaceholder}
           value={name}
           onChange={(e) => setName(e.target.value)}
           style={inputStyle(160)}
@@ -100,21 +108,21 @@ export function PresetsPanel({ imageId }: { imageId: string }): JSX.Element {
         >
           {MODES.map((m) => (
             <option key={m.value} value={m.value}>
-              {m.label}
+              {t.panels.presets.mode[m.value]}
             </option>
           ))}
         </select>
         {needsBinary && (
           <input
             className="mono"
-            placeholder="bin/httpd (optional)"
+            placeholder={t.panels.presets.binaryPlaceholder}
             value={binary}
             onChange={(e) => setBinary(e.target.value)}
             style={inputStyle(180)}
           />
         )}
         <button className="btn btn-sm" disabled={!name.trim()} onClick={save}>
-          Save preset
+          {t.panels.presets.save}
         </button>
       </div>
 
@@ -148,9 +156,9 @@ export function PresetsPanel({ imageId }: { imageId: string }): JSX.Element {
               <span className="badge">{modeLabel(p.mode)}</span>
               {p.binary && <span className="mono hint">{p.binary}</span>}
               <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => run(p)}>
-                Run
+                {t.common.run}
               </button>
-              <button className="btn btn-sm" onClick={() => remove(p.id)}>
+              <button className="btn btn-sm" title={t.panels.presets.remove} onClick={() => remove(p.id)}>
                 ✕
               </button>
             </div>

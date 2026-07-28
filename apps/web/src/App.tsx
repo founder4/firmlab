@@ -157,6 +157,7 @@ const THEME_OPTS: { value: ThemePref; icon: IconName; label: string }[] = [
 /** Theme + density controls, mirrored in Settings but always reachable from the header. */
 function AppearanceControls(): JSX.Element {
   const { theme, density } = useAppearance();
+  const t = useMessages();
   return (
     <>
       {/* biome-ignore lint/a11y/useSemanticElements: a segmented button group; a <fieldset> would impose UA styling. */}
@@ -190,8 +191,8 @@ function AppearanceControls(): JSX.Element {
       <button
         type="button"
         className="icon-btn"
-        title="Help & tour"
-        aria-label="Help and tour"
+        title={t.nav.help}
+        aria-label={t.nav.helpAria}
         onClick={() => startTour()}
       >
         <Icon.help size={15} />
@@ -216,19 +217,18 @@ function ContextHeader(): JSX.Element {
   }, []);
 
   if (!id) {
-    const title = pathname.startsWith('/analyze')
-      ? 'Local analysis'
-      : pathname.startsWith('/agents')
-        ? 'Agents'
-        : pathname.startsWith('/updates') || pathname.startsWith('/capture')
-          ? 'Proxy / Updates'
-          : pathname.startsWith('/corpus')
-            ? 'Corpus'
-            : pathname.startsWith('/capabilities')
-              ? 'Capabilities'
-              : pathname.startsWith('/settings')
-                ? 'Settings'
-                : 'Dashboard';
+    // Route prefix → the same label the sidebar shows for it. A table rather than a ternary chain so the two
+    // cannot drift: every entry is the nav word, and a page with no entry falls back to the Dashboard title.
+    const TITLE_BY_PREFIX: [string, string][] = [
+      ['/analyze', t.nav.localAnalysis],
+      ['/agents', t.nav.agents],
+      ['/updates', t.nav.proxyUpdates],
+      ['/capture', t.nav.proxyUpdates],
+      ['/corpus', t.nav.corpus],
+      ['/capabilities', t.nav.capabilities],
+      ['/settings', t.nav.settings],
+    ];
+    const title = TITLE_BY_PREFIX.find(([prefix]) => pathname.startsWith(prefix))?.[1] ?? t.nav.dashboard;
     return <strong className="topbar-title">{title}</strong>;
   }
 
