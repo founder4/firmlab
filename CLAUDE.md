@@ -144,7 +144,7 @@ With every flag off: no network, no cost, deterministic behaviour.
 - **New analysis view** → an endpoint plus a section in `apps/web/src/pages/ImageDetail.tsx` and the nav group in
   `App.tsx`.
 
-## Two traps this codebase has already paid for
+## Traps this codebase has already paid for
 
 - **A comment that was true when written.** `dynprobe-run.ts` pinned one gdb port because "one probe runs at a
   time per job" — true per job, false once W9 scheduled probes in two concurrent scans, and the second probe then
@@ -155,11 +155,45 @@ With every flag off: no network, no cost, deterministic behaviour.
   what it breaks is everything else — `file` reports the source as `data`, and **grep skips the file without
   saying so**, which is how a large, correct change can look like it was never made. It arrives naturally: a NUL
   is a good composite-map-key separator because it cannot occur in the fields being joined. Write it as `\u0000`,
-  never as the byte. Check with `tr -d -c '\000' < file | wc -c`.
+  never as the byte. `pnpm biome` now runs `scripts/check-nul.sh` first, which refuses one and names the line via
+  `cat -v` (grep cannot). It caught three instances on 2026-07-28 alone, one of them shipped since `8b159f6` and
+  one inside the guard's own comment block — a file is at its most dangerous *before* its first commit, which is
+  why the check scans untracked files too.
+
+- **A guard is only as good as its SUCCESS path, and that is the path nobody runs.** Four instances in one day.
+  `deploy.sh`'s anti-squatter check assigned an `lsof` pipeline under `set -euo pipefail`, and lsof exits 1 when
+  it matches nothing — so a *clean* port aborted every deploy while a squatted one sailed through; it stayed
+  invisible because the zombie it was written for was always listening. The `ERR` trap added to surface that was
+  itself not inherited into functions or subshells without `set -E`, so it printed nothing for the very bug it
+  existed for. `teardown()` in `emulate-system.ts` shells out to `pkill`, **which is not installed in the
+  container**, and caught the ENOENT in the same branch as "matched nothing" — logging *"Teardown complete
+  (emulators killed)"* while sweeping nothing, for as long as the module has existed. Exercise the branch where
+  the guard finds nothing wrong, and check that a tool you shell out to is actually there.
+
+- **A required field is a claim about data you may not own.** Provider results are JSON persisted on a job row and
+  re-read for as long as the image exists, so a stored result is data written by an OLDER build. Declaring a
+  newly-added field required made the web types assert something they could not know; `nvd.uncheckedIdentities.map`
+  threw on a result stored two commits earlier and took down the whole image view for 3 of 4 images. **A field
+  added to a persisted result type is optional forever** — which turns the crash into a compile error and, in
+  that instance, located it immediately.
+
+- **A fixed port is a shared resource pretending to be a local one.** Paid for twice: `dynprobe-run.ts` pinned gdb
+  port 14500, and `emulate-system.ts` based its qemu forwards on 8080. In both cases a survivor from another run
+  owned the port, and in the second the probe connected to *it* and returned `confirmed_full_system` for a boot
+  that had reached `NR_IRQS`. Ask the OS for a free port per run.
 - **Validating against real bytes finds what tests do not.** Every defect above surfaced by running the thing
   in-container against a real image, and several were introduced *by the fix for the previous one* (a readiness
   check that connected to a gdbstub consumed the single accept it was checking for). Run it, read the output, and
   treat the first result as a hypothesis.
+
+- **A green suite proves the code is consistent with its fixtures, not that it can run.** The full-system rung had
+  passing unit tests while being unable to boot anything at all: no code path built the disk image it was handed,
+  the kernel filename was `vmlinux.${arch}.4` where firmadyne ships `vmlinux.mipseb.4`, big-endian MIPS was given
+  the little-endian emulator, and `-device e1000` demanded a ROM the Debian packages do not ship. **Four wrong
+  assumptions stacked, each hidden behind the one in front**, and each surfaced only when the one before it was
+  fixed — so the first error message you get is rarely the only thing wrong. The same run then exposed three
+  defects in the fix itself, including a console cap that evicted the very boot markers the verdict is read from.
+  Budget for the second, third and fourth failure, and re-run after every fix.
 
 ## Data & deployment
 

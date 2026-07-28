@@ -79,6 +79,34 @@ además avisa si existe alguna rama por delante de `HEAD`, que es la señal que 
 **Lección general.** Al verificar un despliegue, la cadena imagen→contenedor solo prueba consistencia interna.
 La pregunta que importa es si el *fuente* desplegado es el más reciente, y esa hay que hacerla explícitamente.
 
+## Lo que el contenedor NO tiene (y cuesta horas descubrir)
+
+La imagen de herramientas es enorme y eso engaña: lo que falta suele ser lo pequeño y omnipresente.
+
+| Ausente | Qué rompió, y cómo se manifestó |
+|---|---|
+| `pkill`, `pgrep`, `ps`, `killall` | `teardown()` en `emulate-system.ts` hace `pkill -f`, capturaba el ENOENT en la misma rama que "no encontró nada" y registraba **"Teardown complete (emulators killed)"** sin barrer nada. Los qemu supervivientes se acumulaban entre ejecuciones reteniendo sus puertos reenviados. Para inspeccionar procesos aquí: recorrer `/proc/[0-9]*/cmdline`. |
+| ROMs de opción de qemu (`vgabios-cirrus.bin`, `efi-e1000.rom`) | `qemu-system-*` **no arranca en absoluto** sin `-nodefaults` (VGA por defecto) y sin `romfile=` vacío en la NIC. Muere antes de ejecutar una instrucción del invitado, con un mensaje que no menciona ninguna de las dos causas. |
+| `genext2fs`, `qemu-img` | La imagen de disco se ensambla con `mkfs.ext2 -d` (e2fsprogs 1.47), que puebla desde un directorio **sin root** — la única vía en un contenedor sin privilegios. |
+
+Los kernels firmadyne **no se llaman como nuestras arquitecturas**: `vmlinux.mipseb.4` para MIPS big-endian,
+`vmlinux.armel` sin sufijo `.4`. Solo `mipsel` coincide, que es exactamente por qué el desajuste sobrevivió tanto.
+
+## Variables de entorno poco documentadas
+
+| Variable | Efecto |
+|---|---|
+| `FIRMLAB_FWHUNT_MODULE_CAP` | Cuántos módulos EFI escanea el pase por módulo de FwHunt (por defecto 12). Lo que recorta se declara en el resultado. |
+| `FIRMLAB_RESEARCH_CACHE_TTL_HOURS` | Frescura de la caché de advisories (por defecto 24). Una entrada caduca se vuelve a consultar, nunca se sirve. |
+| `FIRMLAB_ANGR_PYTHON` · `FIRMLAB_FWHUNT_PYTHON` | Intérpretes de sus venv propios. angr y fwhunt-scan **no** pueden compartir cierre de dependencias con chipsec. |
+| `FIRMLAB_UEFI_IOC` · `FIRMLAB_DESOCK` | Feeds/preloads opcionales. Vacíos por defecto a propósito: nada fabricado. |
+| `FIRMLAB_CAPTURE_AGENT_TOKEN` | Sin él, el canal del agente LAN está cerrado (401). |
+| `NVD_API_KEY` | Sube el tope de consultas NVD de 6 a 40 y elimina la espera de cortesía de 6,5 s. |
+
+Nota: desde 2026-07-28 los flags de las lanes de red (`FIRMLAB_AGENT`, `FIRMLAB_RESEARCH`, `FIRMLAB_CAPTURE`…)
+se **persisten en la base de datos** desde Ajustes › Privacidad. Que la variable no esté en el entorno ya no
+significa que la lane esté apagada — consulta `/api/settings/flags` o `/api/research/status`.
+
 ## Limpieza
 
 Las builds sucesivas dejan imágenes dangling (cada rebuild desreferencia la anterior; en un día de iteración
