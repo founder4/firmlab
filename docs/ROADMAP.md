@@ -160,14 +160,18 @@ that contact — the human sends it. Validated with a real security.txt (cloudfl
 embedded dropbear key flagged effectively-public.
 
 **OSINT sources #2 + #3 — NVD + CISA KEV (implemented, validated with real services).** Two more allowlisted
-research agents with the same discipline. **NVD** (`providers/nvd.ts`) fills OSV's gap: a keyword search of the
-National Vulnerability Database for the components OSV can't map to an ecosystem (busybox, dropbear, kernel, vendor
+research agents with the same discipline. **NVD** (`providers/nvd.ts`) fills OSV's gap: it queries the National
+Vulnerability Database for the components OSV can't map to an ecosystem (busybox, dropbear, kernel, vendor
 daemons) — only a name+version leave, capped for NVD's anonymous rate limit with an honest count of what wasn't
-queried (`NVD_API_KEY` lifts the cap). **CISA KEV** (`providers/kev.ts`) downloads the public Known-Exploited-
+queried (`NVD_API_KEY` lifts the cap). It asks by **CPE affected-version match** for the five components the
+fingerprint table names, and falls back to the original keyword search for anything unmapped, reporting which of
+the two answered. The keyword form was the only one until 2026-07-28 and is nearly unanswerable on its own —
+keyword matches CVE *descriptions*, which name the fixed release rather than the vulnerable one (`dropbear
+2012.55` → 0 results; the CPE match for the same pair → 15). **CISA KEV** (`providers/kev.ts`) downloads the public Known-Exploited-
 Vulnerabilities catalog and cross-references the discovered CVEs LOCALLY — nothing about the firmware leaves — to
 flag which are exploited in the wild; the brief surfaces KEV CVEs first, still marked reachability-unverified.
 Default allowlist widened to `api.osv.dev` + `services.nvd.nist.gov` + `www.cisa.gov`; the egress ledger declares
-NVD (keywords) and KEV (download-only). Validated live: real NVD (HTTP 200, CVSS severity parsed) + real KEV
+NVD (a CPE match string or a keyword) and KEV (download-only). Validated live: real NVD (HTTP 200, CVSS severity parsed) + real KEV
 (~1650-entry catalog, Log4Shell `CVE-2021-44228` matched → Log4j2, ransomware=Known). Not yet: vendor-PSIRT/CNA
 sources (no single free API), a downloadable disclosure-report generator, hardened egress (proxy/netns), corpus
 OSV/KEV cache.

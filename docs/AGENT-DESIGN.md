@@ -511,9 +511,14 @@ egress — sin tocar `node:sqlite`.
 
 **Fuentes OSINT #2 y #3 — NVD + CISA KEV (implementado).** Dos agentes de red más, con la misma disciplina
 allowlisted/citada/honesta:
-- **NVD** (`providers/nvd.ts`): cubre exactamente el hueco de OSV — busca por *keyword* (`name version`) en la
-  National Vulnerability Database los componentes que OSV **no puede mapear** a un ecosistema (busybox, dropbear,
-  kernel, daemons de vendor). Egress mínimo (nombre+versión como keyword, nunca bytes). Rate-limit anónimo estricto
+- **NVD** (`providers/nvd.ts`): cubre exactamente el hueco de OSV — consulta en la National Vulnerability Database
+  los componentes que OSV **no puede mapear** a un ecosistema (busybox, dropbear, kernel, daemons de vendor).
+  Pregunta por **CPE con la versión** (`virtualMatchString`) para los cinco componentes que la tabla de fingerprint
+  nombra, y cae al *keyword* original para lo no mapeado, declarando cuál de los dos respondió. Hasta 2026-07-28
+  solo existía el keyword, que es casi incontestable: matchea la *descripción* del CVE, y una descripción nombra la
+  release CORREGIDA, nunca la vulnerable (`dropbear 2012.55` → 0 resultados; el CPE de ese mismo par → 15). El mapa
+  es curado y MEDIDO, no derivado: `pppd` no existe en el diccionario CPE, y dropbear y openssl tienen varias
+  identidades competidoras de las que solo una responde. Egress mínimo (nombre+versión, nunca bytes). Rate-limit anónimo estricto
   → cap de consultas + reporte honesto de lo NO consultado (nunca truncado en silencio); `NVD_API_KEY` opcional
   levanta el cap. Un hit es una *pista* (`needs_correlation`), no un bug confirmado.
 - **CISA KEV** (`providers/kev.ts`): descarga el catálogo público de Known Exploited Vulnerabilities y cruza los

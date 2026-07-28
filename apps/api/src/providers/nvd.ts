@@ -2,13 +2,30 @@
  * NVD provider (Phase 5, external-intelligence source #2) — correlate firmware components against the NIST National
  * Vulnerability Database. NVD is the canonical, free, no-auth CVE catalog; it COMPLEMENTS OSV, which only covers
  * components it can map to a package ecosystem. Firmware is full of components OSV can't map (busybox, dropbear,
- * the kernel, vendor daemons); NVD's keyword search reaches those by matching the CVE corpus itself.
+ * the kernel, vendor daemons), and reaching those is this module's whole reason to exist.
  *
- * Same non-negotiables as OSV: egress is minimal (only a component name + version leave, as a keyword — never
- * firmware bytes), every request goes through the allowlisted fetch (only services.nvd.nist.gov is contacted), and
- * a keyword hit is a LEAD, not a confirmed vulnerability of THIS image — reachability is decided per-image. NVD
- * rate-limits hard without an API key (5 req / 30 s), so the batch caps the query count and reports honestly what
- * it did NOT query rather than silently truncating. The query builder and response parser are pure + unit-tested.
+ * **How it asks, and why it changed.** It asked by `keywordSearch=<name> <version>` until 2026-07-28, and that
+ * question is nearly unanswerable: keyword matches the CVE *description*, and a description reads "Dropbear SSH
+ * before 2016.74" — it names the fixed release, never the vulnerable one someone actually shipped. Searching for
+ * the version in hand therefore matches almost nothing. Measured live against the API: `dropbear 2012.55` → **0
+ * results**, while the CPE match for the same component and version → **15**. The first real research run on a
+ * WR940N queried all three fingerprinted components and returned zero advisories — a lane that worked end to end
+ * and asked a question that could not be answered. So a mapped component is now asked by `virtualMatchString`,
+ * against NVD's own CPE product identity, which is the field that actually encodes affected version RANGES.
+ *
+ * The map is CURATED and MEASURED rather than derived, because a CPE vendor string cannot be guessed from a
+ * component name — `pppd` does not appear in the CPE dictionary at all, and `openssl` and `dropbear` each carry
+ * several competing identities of which only one answers at the versions this corpus ships. Guessing one would be
+ * the fabrication this codebase refuses elsewhere. Anything unmapped keeps the keyword query: a weak question is
+ * still better than no question, and `matchedBy` records which of the two produced the answer so a caller can
+ * weigh it.
+ *
+ * Same non-negotiables as OSV: egress is minimal (only a component name + version leave, as a keyword or a CPE
+ * match string — never firmware bytes), every request goes through the allowlisted fetch (only
+ * services.nvd.nist.gov is contacted), and a hit is a LEAD, not a confirmed vulnerability of THIS image — NVD
+ * asserts that a version is affected, never that the code is reachable here. NVD rate-limits hard without an API
+ * key (5 req / 30 s), so the batch caps the query count and reports honestly what it did NOT query rather than
+ * silently truncating. The query builder and response parser are pure + unit-tested.
  *
  * That rate limit is also why the on-disk cache (research/cache.ts) matters most here: six components at 6.5 s
  * apart is over half a minute of waiting for answers we may already have, and the delay exists to be polite to
@@ -32,17 +49,70 @@ export const NVD_ENDPOINT = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
 export const NVD_CACHE_SOURCE = 'nvd';
 
 /**
- * Pure: the NVD CVE-API query string for a component. `keywordSearch` matches CVEs whose description contains ALL
- * the words, so a name + a concrete version narrows to genuinely relevant advisories (a bare name would return
- * thousands of noise hits). `resultsPerPage` caps the response. No version → a name-only (broader) keyword lead.
+ * The CPE product identity of each component the fingerprint table (`component-cve.ts`) can name. Every entry was
+ * read out of NVD's own CPE dictionary and then MEASURED against the CVE API at a version this corpus actually
+ * ships, on 2026-07-28 — counts below are that measurement, not an estimate:
+ *
+ *   busybox 1.01     → busybox:busybox                                            17 CVEs
+ *   dropbear 2012.55 → dropbear_ssh_project:dropbear_ssh                          15
+ *   dnsmasq 2.78     → thekelleys:dnsmasq                                         15
+ *   pppd 2.4.3       → point-to-point_protocol_project:point-to-point_protocol     5
+ *   openssl 1.0.1    → openssl:openssl                                            78
+ *
+ * Two of these are not guessable, which is why the table is curated. `pppd` returns ZERO entries from the CPE
+ * dictionary — the daemon's binary name is not its product identity, and the mapping above came from reading the
+ * CPEs attached to CVE-2020-8597, the pppd CVE the curated table already claims. And a component can carry several
+ * competing identities: dropbear also exists as `matt_johnston:dropbear_ssh_server` (40 dictionary entries) and
+ * `dropbear_project:dropbear` (28), openssl also as `openssl_project:openssl` (89) — and at the versions this
+ * corpus ships, each of those alternates returned **0**. They are recorded here as measured-empty rather than
+ * omitted, because "we chose one of three" is a decision a later reader must be able to see and re-check; picking
+ * the alternate silently is how a lane returns nothing and looks healthy doing it.
  */
-export function buildNvdQuery(name: string, version: string, resultsPerPage = 20): string {
-  const keyword = version ? `${name} ${version}` : name;
-  const params = new URLSearchParams({
-    keywordSearch: keyword,
-    resultsPerPage: String(resultsPerPage),
-  });
-  return `${NVD_ENDPOINT}?${params.toString()}`;
+export const COMPONENT_CPE: Readonly<Record<string, string>> = {
+  busybox: 'busybox:busybox',
+  dropbear: 'dropbear_ssh_project:dropbear_ssh',
+  dnsmasq: 'thekelleys:dnsmasq',
+  pppd: 'point-to-point_protocol_project:point-to-point_protocol',
+  openssl: 'openssl:openssl',
+};
+
+/** Which question NVD was actually asked. A CPE answer is version-scoped; a keyword answer is a description match. */
+export type NvdMatchStrategy = 'cpe' | 'keyword';
+
+/** Pure: the curated CPE identity for a component name, or null when nothing verified covers it. */
+export function nvdCpeFor(name: string): string | null {
+  return COMPONENT_CPE[name.trim().toLowerCase()] ?? null;
+}
+
+/**
+ * Pure: the NVD CVE-API query string for a component, and which of the two questions it asks.
+ *
+ * Mapped → `virtualMatchString=cpe:2.3:a:<vendor>:<product>:<version>`, which NVD resolves against the affected
+ * version RANGES attached to each CVE. That is the only form that can answer "is the version I am holding
+ * affected"; the keyword form asks whether the description happens to contain the version, which for a vulnerable
+ * release it essentially never does. With no version the CPE is sent without one — still correctly scoped to the
+ * product, just unconstrained (busybox: 46 CVEs against 17 for 1.01), which beats a name-only keyword.
+ *
+ * Unmapped → the original `keywordSearch`, which matches CVEs whose description contains ALL the words. It is the
+ * weak question, kept deliberately: an unverified vendor guess would be worse than a weak answer, and `strategy`
+ * tells the caller which one it got. `resultsPerPage` caps the response.
+ */
+export function buildNvdQuery(
+  name: string,
+  version: string,
+  resultsPerPage = 20,
+): { url: string; strategy: NvdMatchStrategy } {
+  const cpe = nvdCpeFor(name);
+  const params = cpe
+    ? new URLSearchParams({
+        virtualMatchString: `cpe:2.3:a:${cpe}${version ? `:${version}` : ''}`,
+        resultsPerPage: String(resultsPerPage),
+      })
+    : new URLSearchParams({
+        keywordSearch: version ? `${name} ${version}` : name,
+        resultsPerPage: String(resultsPerPage),
+      });
+  return { url: `${NVD_ENDPOINT}?${params.toString()}`, strategy: cpe ? 'cpe' : 'keyword' };
 }
 
 /**
@@ -52,7 +122,7 @@ export function buildNvdQuery(name: string, version: string, resultsPerPage = 20
  * different question.
  */
 export function nvdCacheKey(name: string, version: string): string {
-  return buildNvdQuery(name, version);
+  return buildNvdQuery(name, version).url;
 }
 
 /**
@@ -131,6 +201,12 @@ export interface NvdComponentResult {
   advisories: NvdAdvisory[];
   /** Where this answer came from and when NVD actually produced it. Null when the request failed. */
   freshness: Freshness | null;
+  /**
+   * Which question produced this answer. `cpe` is version-scoped against NVD's affected ranges; `keyword` only
+   * matched description text and is the weaker of the two — an empty `keyword` result says considerably less than
+   * an empty `cpe` one, and the caller must be able to tell them apart.
+   */
+  matchedBy: NvdMatchStrategy;
 }
 
 /**
@@ -143,13 +219,14 @@ export async function queryNvd(
   cfg: ResearchConfig,
   cache: CacheOptions = {},
 ): Promise<NvdComponentResult> {
+  const query = buildNvdQuery(component.name, component.version);
   const answer = await cachedFetch(
     NVD_CACHE_SOURCE,
     nvdCacheKey(component.name, component.version),
     async () => {
       const headers: Record<string, string> = {};
       if (cfg.nvdApiKey) headers.apiKey = cfg.nvdApiKey;
-      const res = await allowlistedFetch(buildNvdQuery(component.name, component.version), cfg, { headers });
+      const res = await allowlistedFetch(query.url, cfg, { headers });
       return res.ok ? await res.json() : null;
     },
     cache,
@@ -159,6 +236,7 @@ export async function queryNvd(
     version: component.version,
     advisories: answer.freshness ? parseNvdResponse(answer.payload) : [],
     freshness: answer.freshness,
+    matchedBy: query.strategy,
   };
 }
 
@@ -172,6 +250,13 @@ export interface NvdBatchResult {
   components: NvdComponentResult[];
   /** How many of the `queried` answers came off the disk, and how old the oldest one was. */
   cache: CacheSummary;
+  /**
+   * How the batch split between the two questions. Counted over everything QUERIED, not over what came back with
+   * advisories, because the interesting case is the silent one: a run that asked entirely by keyword and returned
+   * nothing has not established that the components are unaffected, and only this number shows it.
+   */
+  askedByCpe: number;
+  askedByKeyword: number;
 }
 
 /**
@@ -230,6 +315,7 @@ export async function queryNvdBatch(
   const freshness: (Freshness | null)[] = [];
   let queried = 0;
   let networkCalls = 0;
+  let askedByCpe = 0;
   const toQuery = unique.slice(0, cap);
   for (const c of toQuery) {
     // Peek before deciding to wait. `queryNvd` reads the cache again a moment later, which costs one small file
@@ -238,6 +324,7 @@ export async function queryNvdBatch(
     if (shouldPauseForRateLimit(networkCalls, willFetch, delayMs)) await sleep(delayMs);
     const r = await queryNvd(c, cfg, cache);
     if (r.freshness?.origin === 'network') networkCalls += 1;
+    if (r.matchedBy === 'cpe') askedByCpe += 1;
     queried += 1;
     freshness.push(r.freshness);
     if (r.advisories.length > 0) results.push(r);
@@ -249,6 +336,8 @@ export async function queryNvdBatch(
     totalAdvisories: results.reduce((n, r) => n + r.advisories.length, 0),
     components: results,
     cache: summarizeFreshness(freshness),
+    askedByCpe,
+    askedByKeyword: queried - askedByCpe,
   };
 }
 

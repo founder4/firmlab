@@ -484,7 +484,10 @@ export interface ResearchResult {
     notQueried: number;
     withAdvisories: number;
     totalAdvisories: number;
-    components: { name: string; version: string; advisories: NvdAdvisory[] }[];
+    components: { name: string; version: string; advisories: NvdAdvisory[]; matchedBy: 'cpe' | 'keyword' }[];
+    /** How the run split between the version-scoped CPE question and the weaker description-text keyword one. */
+    askedByCpe: number;
+    askedByKeyword: number;
   };
   kev: { checked: boolean; catalogSize: number; matches: KevMatch[]; reason?: string };
   keyMaterial: { kind: string; redacted: string; effectivelyPublic: boolean; sharedInImages?: number }[];

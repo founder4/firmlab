@@ -1,30 +1,83 @@
 import { describe, expect, it } from 'vitest';
-import { NVD_ENDPOINT, buildNvdQuery, nvdCacheKey, parseNvdResponse, shouldPauseForRateLimit } from './nvd.js';
+import {
+  COMPONENT_CPE,
+  NVD_ENDPOINT,
+  buildNvdQuery,
+  nvdCacheKey,
+  nvdCpeFor,
+  parseNvdResponse,
+  shouldPauseForRateLimit,
+} from './nvd.js';
 
 describe('buildNvdQuery', () => {
-  it('builds a keyword search of name + version, capped', () => {
-    const url = new URL(buildNvdQuery('dropbear', '2019.78'));
+  it('asks a mapped component by CPE version match, not by keyword', () => {
+    const q = buildNvdQuery('dropbear', '2019.78');
+    const url = new URL(q.url);
     expect(`${url.origin}${url.pathname}`).toBe(NVD_ENDPOINT);
-    expect(url.searchParams.get('keywordSearch')).toBe('dropbear 2019.78');
+    expect(q.strategy).toBe('cpe');
+    expect(url.searchParams.get('virtualMatchString')).toBe('cpe:2.3:a:dropbear_ssh_project:dropbear_ssh:2019.78');
     expect(url.searchParams.get('resultsPerPage')).toBe('20');
+    // The whole defect: the keyword form matched CVE DESCRIPTIONS, which name the fixed release and never the
+    // vulnerable one someone shipped, so asking for the installed version could not be answered.
+    expect(url.searchParams.get('keywordSearch')).toBeNull();
   });
 
-  it('falls back to a name-only keyword when the version is unknown', () => {
-    const url = new URL(buildNvdQuery('busybox', ''));
-    expect(url.searchParams.get('keywordSearch')).toBe('busybox');
+  it('drops only the version constraint when the version is unknown — still scoped to the product', () => {
+    const q = buildNvdQuery('busybox', '');
+    expect(q.strategy).toBe('cpe');
+    expect(new URL(q.url).searchParams.get('virtualMatchString')).toBe('cpe:2.3:a:busybox:busybox');
+  });
+
+  it('falls back to a keyword for an unmapped component rather than guessing a CPE vendor', () => {
+    const q = buildNvdQuery('vendor-httpd', '1.2');
+    expect(q.strategy).toBe('keyword');
+    const url = new URL(q.url);
+    expect(url.searchParams.get('keywordSearch')).toBe('vendor-httpd 1.2');
+    expect(url.searchParams.get('virtualMatchString')).toBeNull();
+  });
+
+  it('falls back to a name-only keyword when an unmapped component has no version', () => {
+    expect(new URL(buildNvdQuery('vendor-httpd', '').url).searchParams.get('keywordSearch')).toBe('vendor-httpd');
   });
 
   it('URL-encodes the keyword safely', () => {
-    const url = new URL(buildNvdQuery('lib c++', '1.0'));
-    expect(url.searchParams.get('keywordSearch')).toBe('lib c++ 1.0');
+    expect(new URL(buildNvdQuery('lib c++', '1.0').url).searchParams.get('keywordSearch')).toBe('lib c++ 1.0');
+  });
+});
+
+describe('nvdCpeFor', () => {
+  it('covers every component the fingerprint table can name', () => {
+    for (const name of ['busybox', 'dropbear', 'dnsmasq', 'pppd', 'openssl']) {
+      expect(nvdCpeFor(name)).toBe(COMPONENT_CPE[name]);
+    }
+  });
+
+  it('pins pppd, which is the one that cannot be derived from the name', () => {
+    // `pppd` returns ZERO entries from NVD's CPE dictionary; this identity was read off the CPEs attached to
+    // CVE-2020-8597 — the pppd CVE the curated table already claims. A plausible-looking guess would query a
+    // product that does not exist and return nothing, indistinguishably from "no CVEs".
+    expect(nvdCpeFor('pppd')).toBe('point-to-point_protocol_project:point-to-point_protocol');
+  });
+
+  it('matches on the normalized name, and refuses anything unverified', () => {
+    expect(nvdCpeFor('  BusyBox ')).toBe('busybox:busybox');
+    expect(nvdCpeFor('busybox-w32')).toBeNull();
+    expect(nvdCpeFor('')).toBeNull();
   });
 });
 
 describe('nvdCacheKey', () => {
   it('is the exact request, so a different component or version is a different entry', () => {
-    expect(nvdCacheKey('dropbear', '2019.78')).toBe(buildNvdQuery('dropbear', '2019.78'));
+    expect(nvdCacheKey('dropbear', '2019.78')).toBe(buildNvdQuery('dropbear', '2019.78').url);
     expect(nvdCacheKey('dropbear', '2019.78')).not.toBe(nvdCacheKey('dropbear', '2020.81'));
     expect(nvdCacheKey('dropbear', '')).not.toBe(nvdCacheKey('dropbear', '2019.78'));
+  });
+
+  it('changed with the query form, so keyword-era answers are not served to CPE-era questions', () => {
+    // The cache is keyed on the URL precisely so a changed question invalidates rather than reuses. Without this
+    // the first run after the fix would replay the empty keyword answers it was meant to replace.
+    expect(nvdCacheKey('dropbear', '2012.55')).toContain('virtualMatchString');
+    expect(nvdCacheKey('dropbear', '2012.55')).not.toContain('keywordSearch');
   });
 
   it('carries no API key — the key travels in a header and must never land in a cache filename', () => {

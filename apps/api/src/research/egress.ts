@@ -54,7 +54,10 @@ export function buildEgressLedger(
         : ', for the components OSV could not map';
     destinations.push({
       host: 'services.nvd.nist.gov',
-      sends: `component name + version as a keyword${split} (no bytes) — at most this many; a cached answer sends nothing`,
+      // "as a keyword" was true until the CPE match landed; a mapped component now leaves as a CPE product
+      // identity + version instead. Same class of data either way — a derived name and a number, never bytes —
+      // but the ledger states what actually goes on the wire, so it names both forms.
+      sends: `component name + version, as a CPE match string or a keyword${split} (no bytes) — at most this many; a cached answer sends nothing`,
       count: opts.nvdCandidates,
     });
   }

@@ -19,7 +19,11 @@ import type { SecurityTxt } from '../providers/securitytxt.js';
 export interface IntelContext {
   provenance: ProvenanceFingerprint;
   osv: OsvBatchResult;
-  /** NVD advisories (by keyword) for the components OSV could not map to an ecosystem — same lead discipline. */
+  /**
+   * NVD advisories for the components OSV could not map to an ecosystem — same lead discipline. Each carries
+   * `matchedBy`: a `cpe` answer resolved the version against each CVE's affected range, a `keyword` one only
+   * matched description text and is much weaker, so an empty keyword result must not be read as "unaffected".
+   */
   nvd: NvdBatchResult;
   /** CISA KEV cross-reference: which discovered CVEs are known-exploited in the wild (priority, not reachability). */
   kev: KevResult;

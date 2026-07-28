@@ -172,10 +172,11 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   // egress ledger can declare precisely how many names go to NVD before anything leaves.
   const manifestCandidates = packages.filter((p) => !osvEcosystem(p.type));
   // The components a manifest-only SBOM structurally cannot see: bundled binaries fingerprinted straight out of
-  // their own strings. NVD's keyword search exists for exactly these — its module doc names busybox, dropbear, the
-  // kernel and vendor daemons — and until now they never reached it, because the candidate set came only from
-  // syft. A TP-Link WR940N catalogues ONE package while shipping pppd 2.4.3, BusyBox 1.01 and Dropbear 2012.55,
-  // so the source built to answer this question was being asked nothing.
+  // their own strings. NVD exists for exactly these — its module doc names busybox, dropbear, the kernel and
+  // vendor daemons — and until now they never reached it, because the candidate set came only from syft. A TP-Link
+  // WR940N catalogues ONE package while shipping pppd 2.4.3, BusyBox 1.01 and Dropbear 2012.55, so the source
+  // built to answer this question was being asked nothing. These five are also exactly the names `COMPONENT_CPE`
+  // maps, so they get the version-scoped CPE question rather than the keyword fallback.
   const fingerprinted = runComponentCve(latestRootfs(imageId)).hits.map((h) => ({
     name: h.component,
     version: h.version,
@@ -204,11 +205,24 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     `OSV: ${osv.queried} queried, ${osv.skipped} unmapped, ${osv.withAdvisories} with advisories (${osv.totalAdvisories} total).`,
   );
 
-  // Source #2 — NVD by keyword for the OSV-unmapped components (rate-limit capped; honest about what it skipped).
+  // Source #2 — NVD for the OSV-unmapped components: a CPE version match where the component is mapped, keyword
+  // otherwise (rate-limit capped; honest about what it skipped, and about which question it got an answer from).
   const nvd = await queryNvdBatch(nvdCandidates, cfg);
   handle.log(
     `NVD: ${nvd.queried} queried${nvd.notQueried > 0 ? ` (${nvd.notQueried} more skipped — rate-limit cap)` : ''}, ${nvd.withAdvisories} with advisories (${nvd.totalAdvisories} total).`,
   );
+  // Which question was asked matters as much as the answer: a keyword query matches CVE descriptions, which name
+  // the FIXED release rather than the vulnerable one, so an empty keyword result is close to no result at all.
+  // Saying so here keeps a quiet run from reading as a clean one.
+  if (nvd.queried > 0) {
+    handle.log(
+      `NVD: ${nvd.askedByCpe} asked by CPE version match, ${nvd.askedByKeyword} by keyword${
+        nvd.askedByKeyword > 0
+          ? ' — a keyword answer matches description text only, so an empty one is not evidence the component is unaffected'
+          : ''
+      }.`,
+    );
+  }
 
   // Reconcile the ledger against what actually happened. It is shown BEFORE any request goes out, so it can only
   // promise a ceiling; an answer served from the advisory cache contacted nobody. Saying so afterwards is what

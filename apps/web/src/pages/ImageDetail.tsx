@@ -1593,7 +1593,10 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
             </span>
             <span className="badge badge-high">{osv.totalAdvisories} OSV advisories</span>
             {nvd && (nvd.queried > 0 || nvd.totalAdvisories > 0) && (
-              <span className="badge" title="NVD: keyword search for components OSV could not map">
+              <span
+                className="badge"
+                title={`NVD, for components OSV could not map: ${nvd.askedByCpe} asked by CPE version match, ${nvd.askedByKeyword} by keyword. A keyword answer matches CVE description text only — an empty one is not evidence the component is unaffected.`}
+              >
                 NVD {nvd.queried} queried · {nvd.totalAdvisories} advisories
               </span>
             )}
@@ -1702,13 +1705,14 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
           {nvd && nvd.components.length > 0 && (
             <div className="table-wrap" style={{ marginBottom: 12 }}>
               <div className="eyebrow" style={{ marginBottom: 6 }}>
-                NVD · keyword matches for components OSV couldn't map (reachability unverified)
+                NVD · components OSV couldn't map (affected-version match; reachability unverified)
               </div>
               <table className="data">
                 <thead>
                   <tr>
                     <th>Component</th>
-                    <th>CVEs (NVD keyword)</th>
+                    <th>Asked by</th>
+                    <th>CVEs (NVD)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1716,6 +1720,18 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                     <tr key={`nvd-${c.name}@${c.version}`}>
                       <td className="mono">
                         {c.name} {c.version}
+                      </td>
+                      <td>
+                        <span
+                          className={`badge ${c.matchedBy === 'cpe' ? 'badge-ok' : ''}`}
+                          title={
+                            c.matchedBy === 'cpe'
+                              ? "CPE version match — NVD resolved this version against each CVE's affected range."
+                              : 'Keyword — matched CVE description text, which names the FIXED release rather than the vulnerable one. The weaker of the two questions.'
+                          }
+                        >
+                          {c.matchedBy === 'cpe' ? 'CPE version' : 'keyword'}
+                        </span>
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
