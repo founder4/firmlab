@@ -26,6 +26,12 @@
  *  - **The strongest positive available is the conjunction** — a signature/verifiable-integrity structure in the
  *    image AND a verify routine in the update path AND key material on the device — and it is stated as a
  *    conjunction with each part attributed to the bytes it came from (`update-verify-chain`).
+ *  - **A `source` edge is not a call.** A script is credited with what the files it sources verify, because the
+ *    OpenWrt entry point `sbin/sysupgrade` verifies nothing itself and reaches `ucert -V` through
+ *    `lib/upgrade/fwtool.sh` — read one file at a time, the false negative comes from the unit of analysis rather
+ *    than from the bytes. But the credit is STATIC and stays static: it never raises a proof state, and every
+ *    credited item is stored with the file its line physically lives in, so no reader is ever told `sysupgrade`
+ *    contains a line it does not contain. See the section header above `parseSourceDirectives`.
  *
  * Everything that decides is pure and unit-tested; the runner only walks the rootfs, reads bounded prefixes and
  * composes. Absence of an extractor or of a rootfs degrades honestly and says which question went unanswered.
@@ -457,12 +463,23 @@ export interface UpdaterCandidate {
   symbolSource?: SymbolSource;
   signatureFns: string[];
   digestFns: string[];
-  /** For a script: verification commands it invokes. */
+  /** For a script: verification commands it invokes. Its OWN lines only — sourced ones live in `sourced`. */
   verifyCommands: string[];
   /** Verification executables the script invokes that are NOT present in the rootfs. */
   missingVerifiers: string[];
   flashWrites: string[];
   rollbackMarkers: string[];
+  /**
+   * Evidence credited to this candidate from files it `source`s, each labelled with the file the line physically
+   * lives in. Deliberately NOT merged into the fields above: `sbin/sysupgrade` invokes no verifier, it reaches
+   * one, and a reader must be able to tell those apart. Optional forever — a result stored before this pass
+   * existed has no such field, and `[]` there would claim a search that never ran.
+   */
+  sourced?: SourcedEvidence[];
+  /** `source` directives that could not be resolved statically, with why. An honest unknown, not a silent drop. */
+  unresolvedSources?: UnresolvedSource[];
+  /** Where following `source` edges stopped short — depth, cycle or file bound. A bound is not an answer. */
+  sourceBounds?: string[];
 }
 
 /** Paths whose `update`/`upgrade` is about something other than firmware — the glob's own false positives. */
@@ -591,6 +608,528 @@ export function assessScript(text: string): ScriptAssessment {
   const flashWrites = FLASH_WRITE_PATTERNS.filter((p) => p.re.test(live)).map((p) => p.label);
   const rollbackMarkers = ROLLBACK_PATTERNS.filter((p) => p.re.test(live)).map((p) => p.label);
   return { verifyCommands, verifierBinaries, signatureCommands, flashWrites, rollbackMarkers };
+}
+
+// === Reaching past the file that was read: shell `source` / `.` / `include` resolution ======================
+
+/**
+ * Why this exists. `sbin/sysupgrade` is the OpenWrt update entry point and it verifies nothing in its own text:
+ * it opens with `. /lib/functions.sh` and `include /lib/upgrade`, and the `ucert -V` that authenticates the image
+ * lives in `lib/upgrade/fwtool.sh`. Analysed a file at a time, the two surface as unrelated candidates and the
+ * entry point is reported as invoking no verification at all — a false negative manufactured by the unit of
+ * analysis, which is exactly the class of mistake this provider exists to refuse.
+ *
+ * ## What a resolved source edge proves, and what it does not
+ *
+ * It proves ONE static fact: this file names that file at a command position where a POSIX shell would read it.
+ * It does NOT prove the sourced verification is reached at runtime. Sourcing a file defines its functions; it does
+ * not call them. The call may sit behind a branch, behind a flag nobody sets (see `findEnforcementFlags`, whose
+ * worked example is this very `fwtool.sh`), or — the GL.iNet case — inside a function that returns 0 without
+ * verifying anything. So crediting NEVER raises a proof state and never converts an absence into a positive. All
+ * it does is stop the provider from reporting "nothing here verifies" about a file whose whole job is to delegate.
+ *
+ * Two consequences run through the types below. Credited evidence is kept in its own `sourced` field with the
+ * file and the chain that reached it attached, never merged into the candidate's own `verifyCommands`. And a
+ * directive that cannot be followed — an interpolated path, a path leaving the rootfs, a depth or cycle bound —
+ * is recorded with its reason and travels into the negative findings, because an absence measured across a
+ * partially-followed graph is weaker than one measured across a fully-followed one and the reader cannot tell
+ * which without being told.
+ *
+ * ## What it refuses to resolve
+ *
+ * A path built out of a variable (`. "$LIB_DIR/foo.sh"`) is not knowable from the bytes; guessing one would be
+ * the fabrication this file is otherwise careful about, and dropping it silently would hide that the graph is
+ * incomplete, so it becomes an `unresolvedSources` entry naming the spec and the reason. A path that leaves the
+ * extracted rootfs is refused the same way — `resolveInsideRootfs` in decompile.ts is the containment pattern,
+ * and here it is done on the STRING so the answer is pure and the test can reach it.
+ */
+
+/** The three ways the corpus's shell updaters pull in another file. */
+export type SourceDirective = '.' | 'source' | 'include';
+
+/** One `source`/`.`/`include` word as it was written, before anything tries to turn it into a path. */
+export interface SourceMention {
+  directive: SourceDirective;
+  /** The operand, surrounding quotes stripped. Kept verbatim otherwise, so a reason can quote it back. */
+  spec: string;
+}
+
+/**
+ * A directive only counts at COMMAND POSITION — line start, or after `;`, `&`, `|`, `(`, or one of the shell
+ * keywords that open a command list. Without that anchor, `source` matched inside `datasource=` and a bare `.`
+ * matched inside ordinary prose, and the resolver then spent its budget on paths that were never directives.
+ */
+const SOURCE_DIRECTIVE_RE =
+  /(?:^|[;&|(]|\b(?:then|else|elif|do)[ \t])[ \t]*(\.|source|include)[ \t]+("[^"\n]*"|'[^'\n]*'|[^\s;&|()<>]+)/gm;
+
+/** Bound on how many directives one file contributes, so a pathological script cannot swell the edge list. */
+export const SOURCE_MENTION_CAP = 64;
+
+/**
+ * Pure: the `source`/`.`/`include` directives a script contains. Inert text is stripped first for the same reason
+ * `assessScript` strips it — a directive inside a `#` comment or a commented-out heredoc does not execute, and
+ * crediting a script with a file it only mentions in a comment is the mirror image of the bug this pass fixes.
+ */
+export function parseSourceDirectives(text: string): SourceMention[] {
+  const live = stripInertText(text);
+  const out: SourceMention[] = [];
+  SOURCE_DIRECTIVE_RE.lastIndex = 0;
+  for (let m = SOURCE_DIRECTIVE_RE.exec(live); m !== null; m = SOURCE_DIRECTIVE_RE.exec(live)) {
+    const directive = m[1] as SourceDirective;
+    const raw = m[2] ?? '';
+    const quoted = (raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"));
+    out.push({ directive, spec: quoted ? raw.slice(1, -1) : raw });
+  }
+  return out;
+}
+
+/**
+ * Read-only view of the extracted rootfs, by ROOTFS-RELATIVE path. An interface rather than direct `fs` calls so
+ * every decision below stays pure and unit-testable — the runner passes a walk-backed implementation, a test
+ * passes a map. `read` returns null for anything that is not a readable regular file inside the rootfs, which is
+ * the same answer a symlink pointing outside gets: the walk never records one, so it is simply not there.
+ */
+export interface ShellFileReader {
+  read(rel: string): string | null;
+  /** Regular-file names directly inside a rootfs-relative directory (`''` is the root), or null if there is none. */
+  list(dir: string): string[] | null;
+}
+
+/** How a spec was turned into a path — recorded so a reader can check the assumption instead of trusting it. */
+export type SourceBasis = 'absolute' | 'relative-to-script-directory' | 'directory-expansion' | 'none';
+
+export interface ResolvedSpec {
+  /** Rootfs-relative targets. Empty means unresolved, and then `reason` says why. */
+  targets: string[];
+  reason: string | null;
+  basis: SourceBasis;
+}
+
+/** A `$`, `${`, backtick or `$(` anywhere in the operand: the path is composed at runtime and cannot be read here. */
+const INTERPOLATION_RE = /[$`]/;
+
+/**
+ * Normalise `spec` to a rootfs-relative path, or null when it would leave the rootfs.
+ *
+ * A leading `/` is rootfs-absolute, because that is what it means to a process running on the device: `/etc/passwd`
+ * is the image's own file, not the analysis host's. `..` that pops above the root is the escape this refuses —
+ * the same containment `resolveInsideRootfs` performs with `path.resolve`, done on the string so it stays pure.
+ */
+export function normalizeInsideRootfs(baseDir: string, spec: string): string | null {
+  const joined = spec.startsWith('/') ? spec.slice(1) : baseDir ? `${baseDir}/${spec}` : spec;
+  const out: string[] = [];
+  for (const part of joined.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      if (out.length === 0) return null;
+      out.pop();
+      continue;
+    }
+    out.push(part);
+  }
+  return out.length > 0 ? out.join('/') : null;
+}
+
+/** Translate a shell glob (only `*` and `?`, which is all a source line realistically carries) into a matcher. */
+function globToRegExp(pattern: string): RegExp {
+  let body = '';
+  for (const ch of pattern) {
+    if (ch === '*') body += '[^/]*';
+    else if (ch === '?') body += '[^/]';
+    else body += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${body}$`);
+}
+
+function dirnameOf(rel: string): string {
+  const cut = rel.lastIndexOf('/');
+  return cut < 0 ? '' : rel.slice(0, cut);
+}
+
+function expandGlob(parent: string, pattern: string, spec: string, reader: ShellFileReader): ResolvedSpec {
+  const listed = reader.list(parent);
+  if (!listed) {
+    return {
+      targets: [],
+      reason: `no directory "${parent || '/'}" in the walked rootfs to expand "${spec}" against`,
+      basis: 'none',
+    };
+  }
+  const re = globToRegExp(pattern);
+  const targets = listed
+    .filter((n) => re.test(n))
+    .sort()
+    .map((n) => (parent ? `${parent}/${n}` : n));
+  if (targets.length === 0) {
+    return { targets: [], reason: `nothing in "${parent || '/'}" matches "${pattern}"`, basis: 'none' };
+  }
+  return { targets, reason: null, basis: 'directory-expansion' };
+}
+
+/**
+ * Pure: turn one directive into the rootfs-relative file(s) it would read, or into a stated reason it could not
+ * be followed. Every branch that returns no target returns a REASON with it; nothing is dropped silently.
+ *
+ * Three interpretations are assumptions rather than facts, and each is labelled in `basis` so the finding can
+ * carry the assumption instead of hiding it: a relative spec is resolved against the referencing script's own
+ * directory (a shell resolves it against the runtime CWD, which no static pass knows); a slash-less operand is
+ * refused outright, because POSIX `.` looks such a name up on `$PATH`; and `include DIR` is read as OpenWrt's
+ * `include()` helper, which sources every `*.sh` in the directory — that is precisely the edge by which
+ * `sbin/sysupgrade` reaches `lib/upgrade/fwtool.sh`.
+ */
+export function resolveSourceSpec(fromRel: string, mention: SourceMention, reader: ShellFileReader): ResolvedSpec {
+  const { spec, directive } = mention;
+  if (spec.length === 0) return { targets: [], reason: 'the directive names no operand', basis: 'none' };
+  if (INTERPOLATION_RE.test(spec)) {
+    return {
+      targets: [],
+      reason: `"${spec}" is built from a variable or a command substitution, so the path exists only at runtime — recorded as unresolved rather than guessed`,
+      basis: 'none',
+    };
+  }
+  const absolute = spec.startsWith('/');
+  if (!absolute && !spec.includes('/')) {
+    return {
+      targets: [],
+      reason: `"${spec}" contains no slash, so a POSIX shell resolves it through $PATH — which is not knowable from these bytes`,
+      basis: 'none',
+    };
+  }
+  const rel = normalizeInsideRootfs(absolute ? '' : dirnameOf(fromRel), spec);
+  if (rel === null) {
+    return {
+      targets: [],
+      reason: `"${spec}" resolves outside the extracted rootfs, so it was refused rather than followed`,
+      basis: 'none',
+    };
+  }
+  const base = rel.slice(rel.lastIndexOf('/') + 1);
+  const parent = dirnameOf(rel);
+  if (/[*?]/.test(parent)) {
+    return {
+      targets: [],
+      reason: `"${spec}" globs a directory component, which this pass does not expand`,
+      basis: 'none',
+    };
+  }
+  if (/[*?]/.test(base)) return expandGlob(parent, base, spec, reader);
+
+  const basis: SourceBasis = absolute ? 'absolute' : 'relative-to-script-directory';
+  if (directive === 'include') {
+    const listed = reader.list(rel);
+    if (listed) {
+      const targets = listed
+        .filter((n) => n.endsWith('.sh'))
+        .sort()
+        .map((n) => `${rel}/${n}`);
+      if (targets.length === 0) {
+        return {
+          targets: [],
+          reason: `include "${spec}" names a directory holding no *.sh file`,
+          basis: 'directory-expansion',
+        };
+      }
+      return { targets, reason: null, basis: 'directory-expansion' };
+    }
+  }
+  if (reader.read(rel) === null) {
+    return {
+      targets: [],
+      reason: `no readable regular file at "${rel}" in the walked rootfs (symlinks are not followed), so the directive names something this image does not ship where it says`,
+      basis,
+    };
+  }
+  return { targets: [rel], reason: null, basis };
+}
+
+/** One directive and what became of it, kept whether it resolved or not. */
+export interface SourceEdge {
+  /** The file the directive is written in — NOT necessarily the candidate the closure started from. */
+  from: string;
+  directive: SourceDirective;
+  spec: string;
+  targets: string[];
+  reason: string | null;
+  basis: SourceBasis;
+}
+
+/** A file reached through source edges, with the chain that reached it so the credit stays traceable. */
+export interface ReachedScript {
+  path: string;
+  /** From the starting script to this file inclusive — what a finding prints so the reader can retrace it. */
+  via: string[];
+  depth: number;
+}
+
+export interface SourceClosure {
+  root: string;
+  reached: ReachedScript[];
+  edges: SourceEdge[];
+  /** The subset of `edges` that resolved to nothing — each carries its own reason. */
+  unresolved: SourceEdge[];
+  /** Every place the walk stopped short, in prose. Empty means the graph below `root` was followed whole. */
+  bounds: string[];
+  depthLimit: number;
+}
+
+/**
+ * How many hops to follow. Two, not one: OpenWrt's entry point reaches `fwtool.sh` through `include /lib/upgrade`
+ * at hop one, and the helper it lands on may pull in one more before the verification appears. Deeper than that
+ * and a rootfs's shell library graph is being walked rather than its update path, which is a different question.
+ */
+export const SOURCE_DEPTH_LIMIT = 2;
+
+/** How many distinct files one closure may read, whatever the depth allows. */
+export const SOURCE_FILE_CAP = 32;
+
+/**
+ * Pure: follow `source` edges out of one script, bounded and cycle-safe.
+ *
+ * Shell libraries source each other in cycles as a matter of course (`functions.sh` pulls in a helper that pulls
+ * `functions.sh` back), so an unbounded walk does not merely go slow — it does not terminate. Three bounds hold
+ * it: a target already on the CURRENT chain is a cycle and is reported by name; a target already read on another
+ * branch is a diamond, read once and not re-read; and depth and file caps stop the rest. Every one of the three
+ * states what it did not follow in `bounds`, which the findings then carry, because a graph followed part-way is
+ * a weaker basis for "nothing here verifies" than one followed whole.
+ */
+export function resolveSourceClosure(
+  root: string,
+  text: string,
+  reader: ShellFileReader,
+  opts: { depthLimit?: number; fileCap?: number } = {},
+): SourceClosure {
+  const depthLimit = opts.depthLimit ?? SOURCE_DEPTH_LIMIT;
+  const fileCap = opts.fileCap ?? SOURCE_FILE_CAP;
+  const edges: SourceEdge[] = [];
+  const reached: ReachedScript[] = [];
+  const bounds: string[] = [];
+  const seen = new Set<string>([root]);
+
+  const visit = (from: string, fromText: string, depth: number, chain: string[]): void => {
+    const mentions = parseSourceDirectives(fromText);
+    const followed = mentions.slice(0, SOURCE_MENTION_CAP);
+    if (mentions.length > followed.length) {
+      bounds.push(
+        `${from} contains ${mentions.length} source directives; only the first ${SOURCE_MENTION_CAP} were followed`,
+      );
+    }
+    for (const mention of followed) {
+      const r = resolveSourceSpec(from, mention, reader);
+      edges.push({ from, directive: mention.directive, spec: mention.spec, ...r });
+      for (const target of r.targets) {
+        if (chain.includes(target)) {
+          bounds.push(`a source cycle was not followed: ${[...chain, target].join(' → ')}`);
+          continue;
+        }
+        if (seen.has(target)) continue;
+        if (reached.length >= fileCap) {
+          bounds.push(
+            `the ${fileCap}-file source-closure bound was reached, so ${target} (sourced by ${from}) was not read`,
+          );
+          continue;
+        }
+        const targetText = reader.read(target);
+        if (targetText === null) continue;
+        seen.add(target);
+        reached.push({ path: target, via: [...chain, target], depth: depth + 1 });
+        if (depth + 1 >= depthLimit) {
+          // Only a bound that actually DROPPED something is worth stating. A leaf reached at the depth limit has
+          // nothing below it, and announcing a truncation there would weaken every negative finding it touches
+          // for no reason — the "guard reports on the branch where it found nothing wrong" failure, again.
+          const further = parseSourceDirectives(targetText).length;
+          if (further > 0) {
+            bounds.push(
+              `the ${depthLimit}-hop source-depth bound was reached, so the ${further} further source directive(s) in ${target} were not followed`,
+            );
+          }
+          continue;
+        }
+        visit(target, targetText, depth + 1, [...chain, target]);
+      }
+    }
+  };
+  visit(root, text, 0, [root]);
+
+  return { root, reached, edges, unresolved: edges.filter((e) => e.targets.length === 0), bounds, depthLimit };
+}
+
+/** Verification/flash evidence found in a file another script sources, with where it physically lives. */
+export interface SourcedEvidence {
+  /** The file the lines are IN. Every title and rationale that quotes them names this, never the candidate. */
+  file: string;
+  via: string[];
+  verifyCommands: string[];
+  signatureCommands: string[];
+  missingVerifiers: string[];
+  flashWrites: string[];
+  rollbackMarkers: string[];
+}
+
+/** A directive that named something this pass could not turn into a file, and the reason it could not. */
+export interface UnresolvedSource {
+  from: string;
+  directive: SourceDirective;
+  spec: string;
+  reason: string;
+}
+
+/**
+ * Pure: credit a candidate with what the files it sources do.
+ *
+ * Returns the SAME object when there is nothing to add, so a script that sources nothing behaves exactly as it
+ * did before this pass existed — including the identity of the value, which is the cheapest possible proof that
+ * the old path is untouched.
+ *
+ * `verifierMissing` is injected rather than read from the filesystem here for the usual reason in this codebase:
+ * the decision has to be reachable from a unit test, and anything that touches the rootfs is the runner's job.
+ */
+export function creditSourcedEvidence(
+  candidate: UpdaterCandidate,
+  closure: SourceClosure,
+  readScript: (rel: string) => string | null,
+  verifierMissing: (binary: string) => boolean,
+): UpdaterCandidate {
+  const sourced: SourcedEvidence[] = [];
+  for (const r of closure.reached) {
+    const text = readScript(r.path);
+    if (text === null) continue;
+    const a = assessScript(text);
+    if (a.verifyCommands.length === 0 && a.flashWrites.length === 0 && a.rollbackMarkers.length === 0) continue;
+    sourced.push({
+      file: r.path,
+      via: r.via,
+      verifyCommands: a.verifyCommands,
+      signatureCommands: a.signatureCommands,
+      missingVerifiers: a.verifierBinaries.filter(verifierMissing),
+      flashWrites: a.flashWrites,
+      rollbackMarkers: a.rollbackMarkers,
+    });
+  }
+  const unresolvedSources: UnresolvedSource[] = closure.unresolved.map((e) => ({
+    from: e.from,
+    directive: e.directive,
+    spec: e.spec,
+    reason: e.reason ?? 'unresolved',
+  }));
+  if (sourced.length === 0 && unresolvedSources.length === 0 && closure.bounds.length === 0) return candidate;
+  return {
+    ...candidate,
+    ...(sourced.length > 0 ? { sourced } : {}),
+    ...(unresolvedSources.length > 0 ? { unresolvedSources } : {}),
+    ...(closure.bounds.length > 0 ? { sourceBounds: [...closure.bounds] } : {}),
+  };
+}
+
+/** One credited item and the file it came from. `own` distinguishes "this file does it" from "it reaches it". */
+export interface CreditedItem {
+  item: string;
+  file: string;
+  via: string[];
+  own: boolean;
+}
+
+/** Which verification commands count as authenticating an ORIGIN rather than detecting corruption. */
+const SIGNATURE_COMMAND_RE = /ucert|usign|signify|gpg|openssl/;
+
+/** Pure: verification commands credited to this candidate, each labelled with the file the line lives in. */
+export function creditedVerifyCommands(c: UpdaterCandidate): CreditedItem[] {
+  const out: CreditedItem[] = c.verifyCommands.map((item) => ({ item, file: c.path, via: [c.path], own: true }));
+  for (const s of c.sourced ?? []) {
+    for (const item of s.verifyCommands) out.push({ item, file: s.file, via: s.via, own: false });
+  }
+  return out;
+}
+
+/** Pure: the credited commands that authenticate an origin, own and sourced, each attributed. */
+export function creditedSignatureCommands(c: UpdaterCandidate): CreditedItem[] {
+  const out: CreditedItem[] = c.verifyCommands
+    .filter((v) => SIGNATURE_COMMAND_RE.test(v))
+    .map((item) => ({ item, file: c.path, via: [c.path], own: true }));
+  for (const s of c.sourced ?? []) {
+    for (const item of s.signatureCommands) out.push({ item, file: s.file, via: s.via, own: false });
+  }
+  return out;
+}
+
+/** Pure: flash writes credited to this candidate, each attributed to the file that commits the image. */
+export function creditedFlashWrites(c: UpdaterCandidate): CreditedItem[] {
+  const out: CreditedItem[] = c.flashWrites.map((item) => ({ item, file: c.path, via: [c.path], own: true }));
+  for (const s of c.sourced ?? []) {
+    for (const item of s.flashWrites) out.push({ item, file: s.file, via: s.via, own: false });
+  }
+  return out;
+}
+
+/**
+ * Pure: rollback markers credited to this candidate. Names only, because the rollback finding is scoped to "the
+ * update path" as a whole rather than to any one file, so there is nothing here to misattribute.
+ */
+export function creditedRollbackMarkers(c: UpdaterCandidate): string[] {
+  return [...c.rollbackMarkers, ...(c.sourced ?? []).flatMap((s) => s.rollbackMarkers)];
+}
+
+/** A verification command whose executable is not in the rootfs, keyed by the file that actually invokes it. */
+export interface VerifierAbsence {
+  /** The file containing the invocation. The finding's title names THIS, whatever candidate reached it. */
+  file: string;
+  missing: string[];
+  commands: string[];
+  /** Update-path candidates that reach `file` through a source edge, with the chain. */
+  reachedFrom: { candidate: string; via: string[] }[];
+}
+
+/**
+ * Pure: gather invoked-but-absent verifiers, keyed by the file the invocation is IN.
+ *
+ * Keying by that file rather than by the candidate is what keeps the credit honest in both directions: the same
+ * `fwtool.sh` fact reached from `sbin/sysupgrade` and found again when `fwtool.sh` is itself a candidate produces
+ * one finding, not two, and its title names `fwtool.sh` — the file that contains the line — in both cases.
+ */
+export function collectVerifierAbsences(updaters: ReadonlyArray<UpdaterCandidate>): VerifierAbsence[] {
+  const byFile = new Map<string, VerifierAbsence>();
+  const at = (file: string): VerifierAbsence => {
+    const prev = byFile.get(file);
+    if (prev) return prev;
+    const next: VerifierAbsence = { file, missing: [], commands: [], reachedFrom: [] };
+    byFile.set(file, next);
+    return next;
+  };
+  const union = (into: string[], from: ReadonlyArray<string>): void => {
+    for (const v of from) if (!into.includes(v)) into.push(v);
+  };
+  for (const u of updaters) {
+    if (u.missingVerifiers.length > 0) {
+      const e = at(u.path);
+      union(e.missing, u.missingVerifiers);
+      union(e.commands, u.verifyCommands);
+    }
+    for (const s of u.sourced ?? []) {
+      if (s.missingVerifiers.length === 0) continue;
+      const e = at(s.file);
+      union(e.missing, s.missingVerifiers);
+      union(e.commands, s.verifyCommands);
+      if (!e.reachedFrom.some((r) => r.candidate === u.path)) e.reachedFrom.push({ candidate: u.path, via: s.via });
+    }
+  }
+  return [...byFile.values()];
+}
+
+/**
+ * Pure: everything the source-following pass could NOT follow, as prose for a negative finding's bounds list.
+ *
+ * A negative ("the updaters located invoke no signature verification") measured over a partially-followed source
+ * graph is weaker than one measured over a fully-followed one, and only saying so lets a reader tell them apart.
+ */
+export function sourceFollowingNotes(updaters: ReadonlyArray<UpdaterCandidate>): string[] {
+  const notes: string[] = [];
+  for (const u of updaters) {
+    for (const b of u.sourceBounds ?? []) if (!notes.includes(b)) notes.push(b);
+    for (const s of u.unresolvedSources ?? []) {
+      const note = `${s.from} runs \`${s.directive} ${s.spec}\` and it was not followed: ${s.reason}`;
+      if (!notes.includes(note)) notes.push(note);
+    }
+  }
+  return notes;
 }
 
 // === Enforcement flags: a guard that fails open unless a variable nobody sets is set ========================
@@ -781,7 +1320,7 @@ export interface RollbackPosture {
  * No updater examined at all is `unknown` too: nothing was measured, so nothing is claimed.
  */
 export function assessRollback(candidates: UpdaterCandidate[]): RollbackPosture {
-  const markers = [...new Set(candidates.flatMap((c) => c.rollbackMarkers))].sort();
+  const markers = [...new Set(candidates.flatMap(creditedRollbackMarkers))].sort();
   if (candidates.length === 0) {
     return {
       state: 'unknown',
@@ -887,8 +1426,8 @@ export function selectUpdaters(
   const score = (c: UpdaterCandidate): number => {
     let s = 0;
     if (c.why.startsWith('entry point')) s += 8;
-    if (c.signatureFns.length > 0 || c.verifyCommands.length > 0) s += 4;
-    if (c.flashWrites.length > 0) s += 2;
+    if (c.signatureFns.length > 0 || creditedVerifyCommands(c).length > 0) s += 4;
+    if (creditedFlashWrites(c).length > 0) s += 2;
     if (c.discoveredBy === 'symbol') s += 1;
     return s;
   };
@@ -919,6 +1458,9 @@ export function buildUpdatePathFindings(
       ? `the ${ELF_SCAN_CAP}-binary examination budget was exhausted, so some ELFs were never opened`
       : '',
     bounds.walkTruncated ? `the ${WALK_CAP}-entry walk bound was reached, so part of the rootfs was never visited` : '',
+    // A source edge that could not be followed bounds the search exactly the way a cap does: part of the update
+    // path was never read, so an absence measured here does not cover it.
+    ...sourceFollowingNotes(updaters),
   ].filter(Boolean);
   const drafts: FindingDraft[] = [];
   const signatureItems = integrity.items.filter((i) => i.strength === 'signature');
@@ -993,25 +1535,44 @@ export function buildUpdatePathFindings(
     });
   }
 
-  const verifying = updaters.filter((u) => u.signatureFns.length > 0 || u.verifyCommands.length > 0);
+  // "Verifies" now means "verifies, or reaches a file that does" — the OpenWrt entry point verifies nothing in
+  // its own text. Every credited item keeps the file it came from, so nothing below can attribute it wrongly.
+  const verifying = updaters.filter((u) => u.signatureFns.length > 0 || creditedVerifyCommands(u).length > 0);
   const signatureCapable = updaters.filter(
     (u) =>
       u.signatureFns.length > 0 ||
       u.missingVerifiers.length > 0 ||
-      u.verifyCommands.some((c) => /ucert|usign|signify|gpg|openssl/.test(c)),
+      creditedSignatureCommands(u).length > 0 ||
+      (u.sourced ?? []).some((s) => s.missingVerifiers.length > 0),
   );
 
-  for (const u of updaters.filter((c) => c.missingVerifiers.length > 0)) {
+  const candidatePaths = new Set(updaters.map((u) => u.path));
+  for (const a of collectVerifierAbsences(updaters)) {
+    // The title names the file that CONTAINS the invocation. When that file is only reached through a source
+    // edge, the chain is appended — a reader must never be told `sbin/sysupgrade` runs a line it does not run.
+    const reach = candidatePaths.has(a.file) ? null : a.reachedFrom[0];
+    const reachNote = reach ? ` (reached from ${reach.candidate} via ${reach.via.join(' → ')})` : '';
     drafts.push({
       kind: 'update-verifier-binary-absent',
-      title: `${u.path} invokes ${short(u.missingVerifiers)} to verify an update, and that executable is not in this rootfs`,
+      title: `${a.file} invokes ${short(a.missing)} to verify an update, and that executable is not in this rootfs${reachNote}`,
       severity: 'high',
       proofState: 'static_confirmed',
-      evidence: { path: u.path, missing: u.missingVerifiers, commands: u.verifyCommands },
-      rationale:
-        'The verification command and the absence of the program it runs are both facts about these bytes: the ' +
-        'check as written cannot execute from this filesystem. Shell updaters commonly treat a missing verifier ' +
+      evidence: {
+        path: a.file,
+        missing: a.missing,
+        commands: a.commands,
+        ...(a.reachedFrom.length > 0 ? { reachedFrom: a.reachedFrom } : {}),
+      },
+      rationale: [
+        'The verification command and the absence of the program it runs are both facts about these bytes: the',
+        'check as written cannot execute from this filesystem. Shell updaters commonly treat a missing verifier',
         'as a pass rather than a failure, so read this as a disabled check unless the caller is shown to fail closed.',
+        reach
+          ? `The invocation is in ${a.file}, not in ${reach.candidate}; the link between them is a static source edge, which shows the file would be READ, not that the check is reached at runtime.`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
     });
   }
 
@@ -1030,6 +1591,11 @@ export function buildUpdatePathFindings(
           symbolSource: u.symbolSource ?? null,
           digestFns: u.digestFns,
           verifyCommands: u.verifyCommands,
+          ...((u.sourced ?? []).length > 0
+            ? {
+                sourced: (u.sourced ?? []).map((s) => ({ file: s.file, via: s.via, verifyCommands: s.verifyCommands })),
+              }
+            : {}),
         })),
         unexamined: [...UNEXAMINED_PLACES],
         ...(boundNotes.length > 0 ? { boundsThatTruncatedTheSearch: boundNotes } : {}),
@@ -1053,8 +1619,9 @@ export function buildUpdatePathFindings(
   // Only when NOTHING in the update path verifies. An OpenWrt rootfs splits one update path across five files, so
   // per-file reporting would have printed four HIGH "flashes without checking" findings for `nand.sh`,
   // `platform.sh`, `stage2` and `common.sh` while `fwtool.sh` — the sibling they are invoked alongside — was
-  // calling `ucert -V`. The unverified-write claim is about the path as a whole or it is misleading.
-  const flashers = updaters.filter((c) => c.flashWrites.length > 0);
+  // calling `ucert -V`. The unverified-write claim is about the path as a whole or it is misleading. Following
+  // source edges makes that whole larger in BOTH directions, which is why `verifying` is credited above.
+  const flashers = updaters.filter((c) => creditedFlashWrites(c).length > 0);
   if (flashers.length > 0 && verifying.length === 0) {
     drafts.push({
       kind: 'update-flash-write-without-check',
@@ -1120,6 +1687,18 @@ export function buildUpdatePathFindings(
   // --- The conjunction ------------------------------------------------------------------------------------
   if (signatureItems.length > 0 && verifying.length > 0 && keyMaterial.length > 0) {
     const verifier = verifying[0] as UpdaterCandidate;
+    const credited = creditedVerifyCommands(verifier);
+    const ownCommands = credited.filter((v) => v.own);
+    const sourcedCommands = credited.filter((v) => !v.own);
+    const reached = sourcedCommands[0];
+    // Part (2) has to name the file the call is written in. Where that file is not the candidate itself, the
+    // wording says "reaches … in <file>" and prints the chain, because "sysupgrade invokes ucert -V" is false.
+    const part2 =
+      verifier.signatureFns.length > 0
+        ? `${verifier.path} imports ${short(verifier.signatureFns)}`
+        : ownCommands.length > 0
+          ? `${verifier.path} invokes ${short(ownCommands.map((v) => v.item))}`
+          : `${verifier.path} reaches ${short(sourcedCommands.map((v) => v.item))} in ${reached?.file ?? '(unknown)'} through ${reached?.via.join(' → ') ?? '(unknown)'}`;
     drafts.push({
       kind: 'update-verify-chain',
       title: 'All three elements of an authenticated update are present in this image',
@@ -1132,20 +1711,24 @@ export function buildUpdatePathFindings(
           symbols: verifier.signatureFns,
           commands: verifier.verifyCommands,
           symbolSource: verifier.symbolSource ?? null,
+          ...(sourcedCommands.length > 0
+            ? { creditedFrom: sourcedCommands.map((v) => ({ command: v.item, file: v.file, via: v.via })) }
+            : {}),
         },
         keyOnDevice: keyMaterial.map((k) => k.path),
       },
       rationale: [
         `Stated as the conjunction it is, with each part attributed: (1) the image carries ${short(signatureItems.map((i) => i.kind))};`,
-        `(2) ${verifier.path} ${
-          verifier.signatureFns.length > 0
-            ? `imports ${short(verifier.signatureFns)}`
-            : `invokes ${short(verifier.verifyCommands)}`
-        };`,
+        `(2) ${part2};`,
         `(3) ${short(keyMaterial.map((k) => k.path))} is on the device.`,
         'Each is a fact about the bytes. Together they show the mechanism is BUILT — they do not show it is reached',
         'on the real update path, that the key is the one used, or that a failure is fatal rather than logged.',
-      ].join(' '),
+        reached
+          ? `Part (2) rests on a static source edge: ${verifier.path} would READ ${reached.file}, which is not the same as calling what it defines.`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
     });
   }
 
@@ -1350,6 +1933,47 @@ interface WalkHit {
   abs: string;
 }
 
+/**
+ * A `ShellFileReader` over the walked rootfs, by rootfs-relative path.
+ *
+ * Containment holds three times over, which is deliberate: the walk only ever produces paths under `root` and
+ * skips symlinks outright (so one pointing at `/etc/passwd` on the analysis host is simply not in the map),
+ * `normalizeInsideRootfs` refuses a spec that climbs above the root, and the prefix check below refuses anything
+ * that somehow got past both. A containment rule that rests on a caller's invariant is the kind that stops
+ * holding the day the caller changes.
+ */
+function rootfsShellReader(root: string, files: ReadonlyArray<WalkHit>): ShellFileReader {
+  const byPath = new Map<string, string>();
+  const dirs = new Map<string, string[]>();
+  for (const f of files) {
+    byPath.set(f.rel, f.abs);
+    const cut = f.rel.lastIndexOf('/');
+    const dir = cut < 0 ? '' : f.rel.slice(0, cut);
+    const name = f.rel.slice(cut + 1);
+    const list = dirs.get(dir);
+    if (list) list.push(name);
+    else dirs.set(dir, [name]);
+  }
+  const cache = new Map<string, string | null>();
+  return {
+    read(rel: string): string | null {
+      const hit = cache.get(rel);
+      if (hit !== undefined) return hit;
+      let text: string | null = null;
+      const abs = byPath.get(rel);
+      if (abs && (abs === root || abs.startsWith(root + path.sep))) {
+        const size = fileSizeOf(abs);
+        if (size > 0 && size <= SCRIPT_READ_CAP) text = Buffer.from(readAt(abs, 0, size)).toString('latin1');
+      }
+      cache.set(rel, text);
+      return text;
+    },
+    list(dir: string): string[] | null {
+      return dirs.get(dir) ?? null;
+    },
+  };
+}
+
 /** Bounded, order-stable walk of the rootfs. Sorted so the same rootfs yields the same candidate set anywhere. */
 function walkRootfs(root: string): { files: WalkHit[]; walked: number; truncated: boolean } {
   const files: WalkHit[] = [];
@@ -1519,11 +2143,40 @@ export function findUpdaters(rootfsPath: string): {
   }
 
   const { kept, dropped } = selectUpdaters(found, CANDIDATE_CAP);
+
+  // Credit each surviving script with what the files it sources do. Done AFTER the cap so the work is bounded by
+  // the cap rather than by however many candidates the walk turned up; the entry point that most needs crediting
+  // scores 8 for being an entry point and is never the one the cap drops.
+  const reader = rootfsShellReader(root, files);
+  const credited = kept.map((u) => {
+    if (u.kind !== 'script') return u; // an ELF sources nothing
+    const text = reader.read(u.path);
+    if (text === null) return u;
+    const closure = resolveSourceClosure(u.path, text, reader);
+    return creditSourcedEvidence(
+      u,
+      closure,
+      (rel) => reader.read(rel),
+      (b) => !verifierPresent(root, b),
+    );
+  });
+
+  // A file the update path sources IS part of the update path, so it may hold an enforcement guard too — and its
+  // text is a place an assignment could legitimately live. Both sides of `findEnforcementFlags` grow by it.
+  for (const u of credited) {
+    for (const s of u.sourced ?? []) {
+      if (scriptTexts.some((t) => t.path === s.file)) continue;
+      const text = reader.read(s.file);
+      if (text !== null) scriptTexts.push({ path: s.file, text });
+    }
+  }
+
   // Guards are looked for only in the scripts that ARE part of the update path; assignments are looked for in
   // every script read, which is the asymmetry that keeps the answer honest.
-  const guardTexts = scriptTexts.filter((t) => kept.some((u) => u.path === t.path));
+  const updatePathFiles = new Set(credited.flatMap((u) => [u.path, ...(u.sourced ?? []).map((s) => s.file)]));
+  const guardTexts = scriptTexts.filter((t) => updatePathFiles.has(t.path));
   return {
-    updaters: kept,
+    updaters: credited,
     droppedUpdaters: dropped,
     keyMaterial,
     filesWalked: walked,
@@ -1591,6 +2244,14 @@ export function runUpdatePath(imagePath: string, rootfsPath: string | null): Upd
   const elfNote = elfBudgetExhausted
     ? ` The ${ELF_SCAN_CAP}-binary examination budget was exhausted, so ELFs beyond it were never opened for update symbols and are absent from these counts, not cleared by them.`
     : '';
+  const creditedFiles = [...new Set(updaters.flatMap((u) => (u.sourced ?? []).map((s) => s.file)))];
+  const followNotes = sourceFollowingNotes(updaters);
+  const sourceNote =
+    creditedFiles.length > 0
+      ? ` ${creditedFiles.length} sourced file(s) (${short(creditedFiles)}) were credited to the script that sources them — a static edge showing the file would be READ, not that its check runs.`
+      : '';
+  const unfollowedNote =
+    followNotes.length > 0 ? ` Source edges not followed: ${followNotes.length} — ${short(followNotes, 2)}` : '';
 
   return {
     available: true,
@@ -1608,6 +2269,6 @@ export function runUpdatePath(imagePath: string, rootfsPath: string | null): Upd
     reason:
       `Update-path integrity: container ${imageIntegrity.container} (${sigCount} signature structure(s), ${sumCount} checksum structure(s)); ` +
       `${updaters.length} updater(s) located across ${filesWalked} rootfs entries; ${keyMaterial.length} trust anchor(s); ` +
-      `rollback ${rollback.state}.${capNote}${walkNote}${elfNote} A missing verify routine is a lead about what was read, never a verdict that the firmware is unsigned.`,
+      `rollback ${rollback.state}.${capNote}${walkNote}${elfNote}${sourceNote}${unfollowedNote} A missing verify routine is a lead about what was read, never a verdict that the firmware is unsigned.`,
   };
 }

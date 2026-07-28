@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DIGEST_SYMBOLS,
   SIGNATURE_VERIFY_SYMBOLS,
+  type ShellFileReader,
   TPLINK_MD5_SALTS,
   type UpdaterCandidate,
   assessRollback,
@@ -14,14 +15,22 @@ import {
   classifyKeyMaterial,
   classifySiblings,
   classifyUpdaterPath,
+  collectVerifierAbsences,
+  creditSourcedEvidence,
+  creditedVerifyCommands,
   findArmoredSignatures,
   findEnforcementFlags,
   findPkcs7SignedData,
   isUpdaterSymbol,
+  normalizeInsideRootfs,
   parseFdtHeader,
+  parseSourceDirectives,
   parseTpLinkHeader,
   parseUImageHeader,
+  resolveSourceClosure,
+  resolveSourceSpec,
   selectUpdaters,
+  sourceFollowingNotes,
   stripInertText,
   verifyTpLinkChecksum,
 } from './updatepath.js';
@@ -400,6 +409,317 @@ describe('stripInertText / assessScript', () => {
 
   it('drops trailing # comments without eating a URL fragment mid-token', () => {
     expect(stripInertText('gpg --verify a.sig # legacy path')).toBe('gpg --verify a.sig ');
+  });
+});
+
+// ===========================================================================================================
+// Reaching past the file that was read — shell `source` resolution and crediting
+// ===========================================================================================================
+
+/** An in-memory rootfs. The runner's reader is walk-backed; the decisions under test never touch a filesystem. */
+function fakeRootfs(files: Record<string, string>): ShellFileReader {
+  return {
+    read: (rel) => files[rel] ?? null,
+    list: (dir) => {
+      const prefix = dir === '' ? '' : `${dir}/`;
+      const names = Object.keys(files)
+        .filter((p) => p.startsWith(prefix) && !p.slice(prefix.length).includes('/'))
+        .map((p) => p.slice(prefix.length));
+      return names.length > 0 ? names : null;
+    },
+  };
+}
+
+/**
+ * The shape of the real OpenWrt update path, and the whole reason this pass exists: `sbin/sysupgrade` verifies
+ * nothing in its own text and reaches `ucert -V` through `include /lib/upgrade` → `lib/upgrade/fwtool.sh`.
+ * `lib/functions.sh` carries the honest unknown for free — its `include()` helper sources `$file`.
+ */
+const OPENWRT: Record<string, string> = {
+  'sbin/sysupgrade': ['#!/bin/sh', '. /lib/functions.sh', 'include /lib/upgrade', 'mtd write "$1" firmware'].join('\n'),
+  'lib/functions.sh': ['include() {', '\tlocal file', '\tfor file in $1/*.sh; do . $file; done', '}'].join('\n'),
+  'lib/upgrade/fwtool.sh': [
+    'fwtool_check_signature() {',
+    '\t[ ! -x /usr/bin/ucert ] && return 0',
+    '\tfwtool -q -T -s /dev/null "$1" | \\',
+    '\t\tucert -V -m - -c "/tmp/sysupgrade.ucert" -P /etc/opkg/keys',
+    '}',
+  ].join('\n'),
+  'lib/upgrade/common.sh': 'v() { echo "$@"; }\n',
+};
+
+describe('parseSourceDirectives', () => {
+  it('reads the three forms a shell updater uses to pull in another file', () => {
+    const script = ['#!/bin/sh', '. /lib/functions.sh', 'source /lib/helper.sh', 'include /lib/upgrade'].join('\n');
+    expect(parseSourceDirectives(script)).toEqual([
+      { directive: '.', spec: '/lib/functions.sh' },
+      { directive: 'source', spec: '/lib/helper.sh' },
+      { directive: 'include', spec: '/lib/upgrade' },
+    ]);
+  });
+
+  it('reads a directive that is not at the start of a line', () => {
+    const script = '[ -f /lib/fw.sh ] && . /lib/fw.sh\nif true; then source "/lib/b.sh"; fi\n';
+    expect(parseSourceDirectives(script).map((m) => m.spec)).toEqual(['/lib/fw.sh', '/lib/b.sh']);
+  });
+
+  it('does not read a directive out of a comment or a commented-out heredoc', () => {
+    // The mirror image of the bug this pass fixes: crediting a script with a file it only mentions.
+    const script = ['# . /lib/old.sh', ": <<'OFF'", '. /lib/disabled.sh', 'OFF', '. /lib/live.sh'].join('\n');
+    expect(parseSourceDirectives(script).map((m) => m.spec)).toEqual(['/lib/live.sh']);
+  });
+
+  it('needs command position, so `datasource=` and a mid-line word are not directives', () => {
+    expect(parseSourceDirectives('datasource=/lib/x.sh\necho source /lib/evil.sh\n')).toEqual([]);
+  });
+});
+
+describe('normalizeInsideRootfs / resolveSourceSpec — containment', () => {
+  const reader = fakeRootfs(OPENWRT);
+
+  it('treats a leading slash as rootfs-absolute, because that is what it means on the device', () => {
+    expect(normalizeInsideRootfs('sbin', '/lib/functions.sh')).toBe('lib/functions.sh');
+  });
+
+  it('refuses a path that climbs out of the extracted rootfs', () => {
+    expect(normalizeInsideRootfs('sbin', '../../etc/passwd')).toBeNull();
+    const r = resolveSourceSpec('sbin/sysupgrade', { directive: '.', spec: '../../etc/passwd' }, reader);
+    expect(r.targets).toEqual([]);
+    expect(r.reason).toContain('outside the extracted rootfs');
+  });
+
+  it('records a variable-interpolated source as an unresolved unknown rather than guessing a path', () => {
+    const r = resolveSourceSpec('sbin/sysupgrade', { directive: '.', spec: '$LIB_DIR/verify.sh' }, reader);
+    expect(r.targets).toEqual([]);
+    expect(r.reason).toContain('only at runtime');
+    expect(r.basis).toBe('none');
+  });
+
+  it('refuses a slash-less operand, which a POSIX shell resolves through $PATH', () => {
+    expect(resolveSourceSpec('sbin/sysupgrade', { directive: '.', spec: 'functions.sh' }, reader).reason).toContain(
+      '$PATH',
+    );
+  });
+
+  it('resolves a relative spec against the script directory, and labels that as the assumption it is', () => {
+    const rootfs = fakeRootfs({ 'usr/lib/ota/main.sh': '. ./verify.sh', 'usr/lib/ota/verify.sh': 'gpgv fw.sig' });
+    const r = resolveSourceSpec('usr/lib/ota/main.sh', { directive: '.', spec: './verify.sh' }, rootfs);
+    expect(r.targets).toEqual(['usr/lib/ota/verify.sh']);
+    expect(r.basis).toBe('relative-to-script-directory');
+  });
+
+  it('expands `include DIR` the way OpenWrt does — every *.sh in the directory', () => {
+    const r = resolveSourceSpec('sbin/sysupgrade', { directive: 'include', spec: '/lib/upgrade' }, reader);
+    expect(r.targets).toEqual(['lib/upgrade/common.sh', 'lib/upgrade/fwtool.sh']);
+    expect(r.basis).toBe('directory-expansion');
+  });
+
+  it('says so when the directive names a file this image does not ship', () => {
+    const r = resolveSourceSpec('sbin/sysupgrade', { directive: '.', spec: '/lib/missing.sh' }, reader);
+    expect(r.targets).toEqual([]);
+    expect(r.reason).toContain('no readable regular file');
+  });
+});
+
+describe('resolveSourceClosure — bounded and cycle-safe', () => {
+  it('reaches fwtool.sh from sysupgrade and records the chain that got there', () => {
+    const closure = resolveSourceClosure('sbin/sysupgrade', OPENWRT['sbin/sysupgrade'] as string, fakeRootfs(OPENWRT));
+    expect(closure.reached.map((r) => r.path)).toEqual([
+      'lib/functions.sh',
+      'lib/upgrade/common.sh',
+      'lib/upgrade/fwtool.sh',
+    ]);
+    const fwtool = closure.reached.find((r) => r.path === 'lib/upgrade/fwtool.sh');
+    expect(fwtool?.via).toEqual(['sbin/sysupgrade', 'lib/upgrade/fwtool.sh']);
+  });
+
+  it('terminates on a cycle and names it instead of following it', () => {
+    const rootfs = fakeRootfs({ 'lib/a.sh': '. /lib/b.sh', 'lib/b.sh': '. /lib/a.sh' });
+    const closure = resolveSourceClosure('lib/a.sh', '. /lib/b.sh', rootfs);
+    expect(closure.reached.map((r) => r.path)).toEqual(['lib/b.sh']);
+    expect(closure.bounds).toEqual([expect.stringContaining('lib/a.sh → lib/b.sh → lib/a.sh')]);
+  });
+
+  it('terminates on a script that sources itself', () => {
+    const rootfs = fakeRootfs({ 'lib/a.sh': '. /lib/a.sh' });
+    const closure = resolveSourceClosure('lib/a.sh', '. /lib/a.sh', rootfs);
+    expect(closure.reached).toEqual([]);
+    expect(closure.bounds[0]).toContain('cycle');
+  });
+
+  it('states what the depth bound did NOT follow — a bound is not an answer', () => {
+    const rootfs = fakeRootfs({ 'lib/a.sh': '. /lib/b.sh', 'lib/b.sh': '. /lib/c.sh', 'lib/c.sh': 'gpgv fw.sig' });
+    const closure = resolveSourceClosure('lib/a.sh', '. /lib/b.sh', rootfs, { depthLimit: 1 });
+    expect(closure.reached.map((r) => r.path)).toEqual(['lib/b.sh']);
+    expect(closure.bounds).toEqual([
+      expect.stringContaining('the 1 further source directive(s) in lib/b.sh were not followed'),
+    ]);
+  });
+
+  it('does not announce a truncation at a leaf that sources nothing', () => {
+    // The bound's SUCCESS path. Reporting "anything lib/b.sh sources was not followed" about a file with no
+    // source directives at all would weaken every negative finding it reaches, for nothing.
+    const rootfs = fakeRootfs({ 'lib/b.sh': 'gpgv fw.sig' });
+    expect(resolveSourceClosure('lib/a.sh', '. /lib/b.sh', rootfs, { depthLimit: 1 }).bounds).toEqual([]);
+  });
+
+  it('states what the file bound did NOT read', () => {
+    const rootfs = fakeRootfs({ 'lib/a.sh': 'x', 'lib/b.sh': 'x', 'lib/c.sh': 'x' });
+    const closure = resolveSourceClosure('sbin/s', '. /lib/a.sh\n. /lib/b.sh\n. /lib/c.sh', rootfs, { fileCap: 2 });
+    expect(closure.reached.map((r) => r.path)).toEqual(['lib/a.sh', 'lib/b.sh']);
+    expect(closure.bounds).toEqual([expect.stringContaining('lib/c.sh (sourced by sbin/s) was not read')]);
+  });
+
+  it('reads a file reached down two branches once, and does not call that a cycle', () => {
+    const rootfs = fakeRootfs({ 'lib/a.sh': '. /lib/c.sh', 'lib/b.sh': '. /lib/c.sh', 'lib/c.sh': 'gpgv fw.sig' });
+    const closure = resolveSourceClosure('sbin/s', '. /lib/a.sh\n. /lib/b.sh', rootfs);
+    expect(closure.reached.map((r) => r.path)).toEqual(['lib/a.sh', 'lib/c.sh', 'lib/b.sh']);
+    expect(closure.bounds).toEqual([]);
+  });
+
+  it('reports a directive it could not follow, with the reason, and keeps walking the ones it can', () => {
+    const closure = resolveSourceClosure('sbin/sysupgrade', OPENWRT['sbin/sysupgrade'] as string, fakeRootfs(OPENWRT));
+    // `lib/functions.sh` does `. $file` inside its own include() helper: a path that exists only at runtime.
+    expect(closure.unresolved).toEqual([
+      expect.objectContaining({ from: 'lib/functions.sh', spec: '$file', directive: '.' }),
+    ]);
+    expect(closure.unresolved[0]?.reason).toContain('only at runtime');
+  });
+});
+
+describe('creditSourcedEvidence — the credit, and what it refuses to claim', () => {
+  const rootfs = fakeRootfs(OPENWRT);
+  const missingUcert = (b: string): boolean => b === 'ucert';
+  const sysupgrade = (): UpdaterCandidate =>
+    candidate({
+      path: 'sbin/sysupgrade',
+      kind: 'script',
+      why: 'entry point — file name "sysupgrade" is a firmware-update entry point',
+      flashWrites: ['mtd write'],
+    });
+  const credit = (c: UpdaterCandidate): UpdaterCandidate =>
+    creditSourcedEvidence(
+      c,
+      resolveSourceClosure(c.path, OPENWRT[c.path] as string, rootfs),
+      (rel) => rootfs.read(rel),
+      missingUcert,
+    );
+
+  it('credits sysupgrade with fwtool.sh’s ucert -V, attributed to the file the line is IN', () => {
+    const c = credit(sysupgrade());
+    // The credit is real…
+    expect(creditedVerifyCommands(c).map((v) => v.item)).toEqual(['ucert -V (OpenWrt Ed25519 cert)']);
+    // …and it never becomes a claim about sysupgrade's own text.
+    expect(c.verifyCommands).toEqual([]);
+    const [sourced] = c.sourced ?? [];
+    expect(sourced?.file).toBe('lib/upgrade/fwtool.sh');
+    expect(sourced?.via).toEqual(['sbin/sysupgrade', 'lib/upgrade/fwtool.sh']);
+    expect(sourced?.missingVerifiers).toEqual(['ucert']);
+    expect(creditedVerifyCommands(c).every((v) => v.file === 'lib/upgrade/fwtool.sh' && !v.own)).toBe(true);
+  });
+
+  it('carries the unresolved directive along, so the credit never reads as a complete graph', () => {
+    const c = credit(sysupgrade());
+    expect(c.unresolvedSources).toEqual([
+      expect.objectContaining({ from: 'lib/functions.sh', spec: '$file', reason: expect.stringContaining('runtime') }),
+    ]);
+    expect(sourceFollowingNotes([c])[0]).toContain('`. $file`');
+  });
+
+  it('leaves a script that sources nothing exactly as it was — the same object, not a rebuilt one', () => {
+    const plain = candidate({ path: 'usr/bin/force_upgrade', flashWrites: ['dd of=/dev/…'] });
+    const closure = resolveSourceClosure(plain.path, 'dd if=fw.bin of=/dev/mtdblock8\n', fakeRootfs({}));
+    expect(closure.reached).toEqual([]);
+    expect(creditSourcedEvidence(plain, closure, () => null, missingUcert)).toBe(plain);
+  });
+
+  it('does not credit a sourced file that verifies, flashes and bounds nothing', () => {
+    const c = credit(sysupgrade());
+    expect((c.sourced ?? []).map((s) => s.file)).toEqual(['lib/upgrade/fwtool.sh']);
+  });
+});
+
+describe('crediting inside the findings — traceability of the composed claim', () => {
+  const noIntegrity = { container: 'unknown' as const, containerNote: 'n/a', items: [], siblings: [] };
+  const rollbackUnknown = { state: 'unknown' as const, evidence: 'not measured', markers: [] };
+  const rootfs = fakeRootfs(OPENWRT);
+  const credited = creditSourcedEvidence(
+    candidate({ path: 'sbin/sysupgrade', kind: 'script', flashWrites: ['mtd write'] }),
+    resolveSourceClosure('sbin/sysupgrade', OPENWRT['sbin/sysupgrade'] as string, rootfs),
+    (rel) => rootfs.read(rel),
+    (b) => b === 'ucert',
+  );
+
+  it('stops reporting the entry point as invoking no verification, and as flashing unverified', () => {
+    // Both findings were false about the GL.iNet for the same reason: the verification is one `include` away.
+    const f = buildUpdatePathFindings(noIntegrity, [credited], [], rollbackUnknown, true);
+    expect(f.find((d) => d.kind === 'update-no-signature-verification-found')).toBeUndefined();
+    expect(f.find((d) => d.kind === 'update-flash-write-without-check')).toBeUndefined();
+  });
+
+  it('names the file that contains the ucert invocation, never the file that only reaches it', () => {
+    const d = buildUpdatePathFindings(noIntegrity, [credited], [], rollbackUnknown, true).find(
+      (x) => x.kind === 'update-verifier-binary-absent',
+    );
+    expect(d?.title).toContain('lib/upgrade/fwtool.sh invokes ucert');
+    expect(d?.title).toContain('reached from sbin/sysupgrade');
+    expect(d?.title).not.toMatch(/^sbin\/sysupgrade invokes/);
+    expect((d?.evidence as { path: string }).path).toBe('lib/upgrade/fwtool.sh');
+    expect(d?.rationale).toContain('not that the check is reached at runtime');
+  });
+
+  it('reports the fact once when the sourced file is a candidate in its own right', () => {
+    const fwtool = candidate({
+      path: 'lib/upgrade/fwtool.sh',
+      verifyCommands: ['ucert -V (OpenWrt Ed25519 cert)'],
+      missingVerifiers: ['ucert'],
+    });
+    const absences = collectVerifierAbsences([credited, fwtool]);
+    expect(absences).toHaveLength(1);
+    expect(absences[0]?.file).toBe('lib/upgrade/fwtool.sh');
+    // And then the title drops the "reached from" clause, because the file is being reported as itself.
+    const d = buildUpdatePathFindings(noIntegrity, [credited, fwtool], [], rollbackUnknown, true).find(
+      (x) => x.kind === 'update-verifier-binary-absent',
+    );
+    expect(d?.title).not.toContain('reached from');
+  });
+
+  it('attributes part (2) of the conjunction to the file the call is written in', () => {
+    const integrity = {
+      container: 'fit' as const,
+      containerNote: 'n/a',
+      items: [{ strength: 'signature' as const, kind: 'FIT signature node', detail: 'declared' }],
+      siblings: [],
+    };
+    const chain = buildUpdatePathFindings(
+      integrity,
+      [credited],
+      [{ path: 'etc/opkg/keys/06a6bf2ad909388f', kind: 'usign Ed25519 public key (OpenWrt)' }],
+      rollbackUnknown,
+      true,
+    ).find((x) => x.kind === 'update-verify-chain');
+    expect(chain?.rationale).toContain('sbin/sysupgrade reaches ucert -V');
+    expect(chain?.rationale).toContain('in lib/upgrade/fwtool.sh');
+    // The rung a source edge must never be allowed to climb.
+    expect(chain?.rationale).toContain('would READ');
+    expect(chain?.proofState).toBe('static_confirmed');
+  });
+
+  it('carries an unfollowable source edge into the negative finding as a bound on the search', () => {
+    const opaque = creditSourcedEvidence(
+      candidate({ path: 'sbin/sysupgrade', kind: 'script', flashWrites: ['mtd write'] }),
+      resolveSourceClosure('sbin/sysupgrade', '#!/bin/sh\n. "$LIB_DIR/verify.sh"\nmtd write fw firmware\n', rootfs),
+      (rel) => rootfs.read(rel),
+      (b) => b === 'ucert',
+    );
+    const d = buildUpdatePathFindings(noIntegrity, [opaque], [], rollbackUnknown, true).find(
+      (x) => x.kind === 'update-no-signature-verification-found',
+    );
+    expect(d?.proofState).toBe('needs_runtime_reproduction');
+    expect(d?.rationale).toContain('The search was itself bounded');
+    expect((d?.evidence as { boundsThatTruncatedTheSearch?: string[] }).boundsThatTruncatedTheSearch).toEqual([
+      expect.stringContaining('$LIB_DIR/verify.sh'),
+    ]);
   });
 });
 
