@@ -85,6 +85,58 @@ export function nvdCpeFor(name: string): string | null {
 }
 
 /**
+ * Pure: the version to ask with, or '' when there is nothing usable. syft writes the literal string `UNKNOWN` for
+ * a component whose version it could not read — 66 of the GL.iNet's kernel modules come back that way — and
+ * passing it through produced `keywordSearch=act_connmark UNKNOWN`, a question that spends a rate-limit slot to
+ * ask NVD about a word. A placeholder is the ABSENCE of a version, so it is treated as one.
+ */
+export function nvdVersion(raw: string): string {
+  const v = raw.trim();
+  return !v || /^(unknown|none|n\/a|null|undefined)$/i.test(v) ? '' : v;
+}
+
+/**
+ * How answerable a candidate's question is. The order of this union IS the priority order.
+ *
+ * `cpe-versioned` resolves a concrete version against each CVE's affected range — the only combination that can
+ * actually answer "is what I am holding affected". `cpe-unversioned` is still scoped to the right product.
+ * `keyword-versioned` matches description text, which names the FIXED release, so it rarely matches. And
+ * `keyword-unversioned` asks NVD whether any CVE description happens to contain a bare word — for a name like
+ * `act_connmark` that is not a question at all.
+ */
+export const NVD_TIERS = ['cpe-versioned', 'cpe-unversioned', 'keyword-versioned', 'keyword-unversioned'] as const;
+export type NvdTier = (typeof NVD_TIERS)[number];
+
+/** Pure: which tier a candidate falls in. */
+export function nvdCandidateTier(c: NvdCandidate): NvdTier {
+  const mapped = nvdCpeFor(c.name) !== null;
+  const versioned = nvdVersion(c.version) !== '';
+  if (mapped) return versioned ? 'cpe-versioned' : 'cpe-unversioned';
+  return versioned ? 'keyword-versioned' : 'keyword-unversioned';
+}
+
+/**
+ * Pure: order candidates by answerability BEFORE the rate-limit cap truncates.
+ *
+ * This exists because the cap used to take the first `cap` in arrival order, and arrival order is syft's — which
+ * is alphabetical. Measured on the real GL.iNet BE3600: 72 candidates, an anonymous budget of 6, and all six went
+ * to `act_connmark`/`act_csum`/`act_gact`/… — kernel modules with no version — while `dnsmasq 2.92`, `pppd 2.4.9`
+ * and `openssl 3.0.13`, the three components carrying a curated CPE identity and a real version, were never asked
+ * anything. The budget bought nothing and the answerable questions were the ones dropped. That is the same defect
+ * `selectFindings` was written for in binvuln.ts: a bound must not make its own result an artifact of scan order.
+ *
+ * Ranking is stable within a tier, so a component's position never depends on anything but the tier rule and the
+ * order it arrived in — deterministic, and re-derivable by a reader looking at the same inputs.
+ */
+export function rankNvdCandidates(candidates: NvdCandidate[]): NvdCandidate[] {
+  const rank = new Map<NvdTier, number>(NVD_TIERS.map((t, i) => [t, i]));
+  return candidates
+    .map((c, i) => ({ c, i, t: rank.get(nvdCandidateTier(c)) ?? NVD_TIERS.length }))
+    .sort((a, b) => a.t - b.t || a.i - b.i)
+    .map((x) => x.c);
+}
+
+/**
  * Pure: the NVD CVE-API query string for a component, and which of the two questions it asks.
  *
  * Mapped → `virtualMatchString=cpe:2.3:a:<vendor>:<product>:<version>`, which NVD resolves against the affected
@@ -103,13 +155,14 @@ export function buildNvdQuery(
   resultsPerPage = 20,
 ): { url: string; strategy: NvdMatchStrategy } {
   const cpe = nvdCpeFor(name);
+  const v = nvdVersion(version);
   const params = cpe
     ? new URLSearchParams({
-        virtualMatchString: `cpe:2.3:a:${cpe}${version ? `:${version}` : ''}`,
+        virtualMatchString: `cpe:2.3:a:${cpe}${v ? `:${v}` : ''}`,
         resultsPerPage: String(resultsPerPage),
       })
     : new URLSearchParams({
-        keywordSearch: version ? `${name} ${version}` : name,
+        keywordSearch: v ? `${name} ${v}` : name,
         resultsPerPage: String(resultsPerPage),
       });
   return { url: `${NVD_ENDPOINT}?${params.toString()}`, strategy: cpe ? 'cpe' : 'keyword' };
@@ -257,6 +310,13 @@ export interface NvdBatchResult {
    */
   askedByCpe: number;
   askedByKeyword: number;
+  /**
+   * What the cap dropped, and by what rule — a bound that truncates has to say so in its own result, or the set it
+   * returns reads as the set that existed. Empty when nothing was dropped.
+   */
+  notQueriedRule: string;
+  /** How many candidates sat in each answerability tier, before the cap. */
+  tiers: Record<NvdTier, number>;
 }
 
 /**
@@ -308,6 +368,13 @@ export async function queryNvdBatch(
     return true;
   });
 
+  // Rank BEFORE capping. Taking the first `cap` in arrival order spent the whole anonymous budget on whatever syft
+  // happened to list first, which on a real OpenWRT rootfs is 66 alphabetically-early kernel modules with no
+  // version, while the components that carry a CPE identity and a real version went unasked.
+  const ranked = rankNvdCandidates(unique);
+  const tiers = Object.fromEntries(NVD_TIERS.map((t) => [t, 0])) as Record<NvdTier, number>;
+  for (const c of ranked) tiers[nvdCandidateTier(c)] += 1;
+
   const cache = opts.cache ?? {};
   const results: NvdComponentResult[] = [];
   // Freshness is collected for every component, not only the ones with advisories: `components` keeps only the
@@ -316,7 +383,8 @@ export async function queryNvdBatch(
   let queried = 0;
   let networkCalls = 0;
   let askedByCpe = 0;
-  const toQuery = unique.slice(0, cap);
+  const toQuery = ranked.slice(0, cap);
+  const dropped = ranked.slice(cap);
   for (const c of toQuery) {
     // Peek before deciding to wait. `queryNvd` reads the cache again a moment later, which costs one small file
     // read and keeps it self-contained; the alternative is a batch that sleeps through requests it never makes.
@@ -331,14 +399,37 @@ export async function queryNvdBatch(
   }
   return {
     queried,
-    notQueried: Math.max(0, unique.length - toQuery.length),
+    notQueried: dropped.length,
     withAdvisories: results.length,
     totalAdvisories: results.reduce((n, r) => n + r.advisories.length, 0),
     components: results,
     cache: summarizeFreshness(freshness),
     askedByCpe,
     askedByKeyword: queried - askedByCpe,
+    notQueriedRule: describeNvdDrop(dropped, cap),
+    tiers,
   };
+}
+
+/**
+ * Pure: state what the cap dropped and by which rule. Naming the tiers matters more than the number: dropping 66
+ * unversioned kernel-module names is a bound working as intended, and dropping a `cpe-versioned` component is the
+ * budget being genuinely too small for the image — the same count means opposite things.
+ */
+export function describeNvdDrop(dropped: NvdCandidate[], cap: number): string {
+  if (dropped.length === 0) return '';
+  const byTier = new Map<NvdTier, number>();
+  for (const c of dropped) {
+    const t = nvdCandidateTier(c);
+    byTier.set(t, (byTier.get(t) ?? 0) + 1);
+  }
+  const parts = NVD_TIERS.filter((t) => byTier.has(t)).map((t) => `${byTier.get(t)} ${t}`);
+  const answerableLost = (byTier.get('cpe-versioned') ?? 0) + (byTier.get('cpe-unversioned') ?? 0);
+  const tail =
+    answerableLost > 0
+      ? ` ${answerableLost} of them carry a CPE identity, so the cap is genuinely too small for this image.`
+      : ' All of them were keyword-only questions, which NVD can rarely answer anyway.';
+  return `${dropped.length} candidate(s) went unqueried: the rate-limit cap of ${cap} was reached, and candidates are ranked most-answerable first (${parts.join(', ')}).${tail}`;
 }
 
 function sleep(ms: number): Promise<void> {

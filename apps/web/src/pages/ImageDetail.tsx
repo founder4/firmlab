@@ -1707,6 +1707,11 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
               <div className="eyebrow" style={{ marginBottom: 6 }}>
                 NVD · components OSV couldn't map (affected-version match; reachability unverified)
               </div>
+              {nvd.notQueriedRule && (
+                <div className="note" style={{ marginBottom: 8 }}>
+                  {nvd.notQueriedRule}
+                </div>
+              )}
               <table className="data">
                 <thead>
                   <tr>

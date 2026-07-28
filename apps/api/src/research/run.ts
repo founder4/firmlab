@@ -208,9 +208,8 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   // Source #2 — NVD for the OSV-unmapped components: a CPE version match where the component is mapped, keyword
   // otherwise (rate-limit capped; honest about what it skipped, and about which question it got an answer from).
   const nvd = await queryNvdBatch(nvdCandidates, cfg);
-  handle.log(
-    `NVD: ${nvd.queried} queried${nvd.notQueried > 0 ? ` (${nvd.notQueried} more skipped — rate-limit cap)` : ''}, ${nvd.withAdvisories} with advisories (${nvd.totalAdvisories} total).`,
-  );
+  handle.log(`NVD: ${nvd.queried} queried, ${nvd.withAdvisories} with advisories (${nvd.totalAdvisories} total).`);
+  if (nvd.notQueriedRule) handle.log(`NVD: ${nvd.notQueriedRule}`);
   // Which question was asked matters as much as the answer: a keyword query matches CVE descriptions, which name
   // the FIXED release rather than the vulnerable one, so an empty keyword result is close to no result at all.
   // Saying so here keeps a quiet run from reading as a clean one.

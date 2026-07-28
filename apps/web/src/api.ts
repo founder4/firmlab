@@ -488,6 +488,8 @@ export interface ResearchResult {
     /** How the run split between the version-scoped CPE question and the weaker description-text keyword one. */
     askedByCpe: number;
     askedByKeyword: number;
+    /** What the rate-limit cap dropped and by what rule — empty when it dropped nothing. */
+    notQueriedRule: string;
   };
   kev: { checked: boolean; catalogSize: number; matches: KevMatch[]; reason?: string };
   keyMaterial: { kind: string; redacted: string; effectivelyPublic: boolean; sharedInImages?: number }[];

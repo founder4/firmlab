@@ -3,9 +3,13 @@ import {
   COMPONENT_CPE,
   NVD_ENDPOINT,
   buildNvdQuery,
+  describeNvdDrop,
   nvdCacheKey,
+  nvdCandidateTier,
   nvdCpeFor,
+  nvdVersion,
   parseNvdResponse,
+  rankNvdCandidates,
   shouldPauseForRateLimit,
 } from './nvd.js';
 
@@ -63,6 +67,82 @@ describe('nvdCpeFor', () => {
     expect(nvdCpeFor('  BusyBox ')).toBe('busybox:busybox');
     expect(nvdCpeFor('busybox-w32')).toBeNull();
     expect(nvdCpeFor('')).toBeNull();
+  });
+});
+
+describe('nvdVersion', () => {
+  it("treats syft's UNKNOWN placeholder as the absence of a version, not as one", () => {
+    // 66 of the GL.iNet's kernel modules come back versioned `UNKNOWN`, and passing it through built
+    // `keywordSearch=act_connmark UNKNOWN` — a rate-limit slot spent asking NVD about a word.
+    expect(nvdVersion('UNKNOWN')).toBe('');
+    expect(nvdVersion('unknown')).toBe('');
+    expect(nvdVersion('  ')).toBe('');
+    expect(nvdVersion('N/A')).toBe('');
+    expect(nvdVersion(' 1.01 ')).toBe('1.01');
+  });
+
+  it('keeps a real version that merely looks odd', () => {
+    expect(nvdVersion('2012.55')).toBe('2012.55');
+    expect(nvdVersion('0.107.73-2')).toBe('0.107.73-2');
+  });
+});
+
+describe('rankNvdCandidates', () => {
+  // The real GL.iNet BE3600 shape: syft lists kernel modules alphabetically first, so arrival order handed the
+  // whole 6-slot anonymous budget to unversioned names and never asked the three answerable ones anything.
+  const glinet = [
+    { name: 'act_connmark', version: 'UNKNOWN' },
+    { name: 'act_csum', version: 'UNKNOWN' },
+    { name: 'act_gact', version: 'UNKNOWN' },
+    { name: 'dnsmasq', version: '2.92' },
+    { name: 'pppd', version: '2.4.9' },
+    { name: 'openssl', version: '3.0.13' },
+  ];
+
+  it('puts the answerable questions ahead of the cap, not behind it', () => {
+    const top3 = rankNvdCandidates(glinet)
+      .slice(0, 3)
+      .map((c) => c.name);
+    expect(top3.sort()).toEqual(['dnsmasq', 'openssl', 'pppd']);
+  });
+
+  it('orders by tier: cpe+version, cpe, keyword+version, keyword alone', () => {
+    const ranked = rankNvdCandidates([
+      { name: 'act_connmark', version: 'UNKNOWN' },
+      { name: 'vendor-httpd', version: '1.2' },
+      { name: 'busybox', version: '' },
+      { name: 'busybox', version: '1.01' },
+    ]);
+    expect(ranked.map((c) => nvdCandidateTier(c))).toEqual([
+      'cpe-versioned',
+      'cpe-unversioned',
+      'keyword-versioned',
+      'keyword-unversioned',
+    ]);
+  });
+
+  it('is stable within a tier, so the order is never an artifact of the sort', () => {
+    const same = [
+      { name: 'openssl', version: '3.0.13' },
+      { name: 'dnsmasq', version: '2.92' },
+      { name: 'pppd', version: '2.4.9' },
+    ];
+    expect(rankNvdCandidates(same).map((c) => c.name)).toEqual(['openssl', 'dnsmasq', 'pppd']);
+  });
+});
+
+describe('describeNvdDrop', () => {
+  it('says nothing when the cap dropped nothing', () => {
+    expect(describeNvdDrop([], 6)).toBe('');
+  });
+
+  it('distinguishes a bound working as intended from a budget that is too small', () => {
+    // Same count, opposite meanings — which is the whole reason the rule is stated rather than just the number.
+    const junk = describeNvdDrop([{ name: 'act_csum', version: 'UNKNOWN' }], 6);
+    expect(junk).toContain('keyword-only questions');
+    const real = describeNvdDrop([{ name: 'busybox', version: '1.01' }], 6);
+    expect(real).toContain('the cap is genuinely too small');
+    expect(real).toContain('1 cpe-versioned');
   });
 });
 
