@@ -178,6 +178,104 @@ Surfaced by the two-pass app-vs-autonomous experiment (15 firmwares). Ordered by
 - ✅ **Ghidra** — two bugs: (a) `api.github.com/releases/latest` was rate-limited mid-build → pin a DIRECT release URL; (b) Debian bookworm has no JDK 21 (Ghidra 12.x needs it) → fetch a portable Temurin JDK 21 from Adoptium. Also fixed the app detection (`tools.ts` ran the JVM with a 4s probe timeout → reported absent → refused to run; now detected by PATH existence).
 - All six heavy tools (chipsec, Renode, AFL++, libnvram, firmadyne kernels, Ghidra) now install + activate in the deploy.
 
+## Peer-tooling cross-check (wairz + the installed tool set, 2026-07-28)
+Second pass over wairz, this time against the local checkout (**110 AI tools**, enumerated from
+`backend/app/ai/tools/`) rather than its docs, crossed with what `tools.ts` actually probes for (23 specs).
+Most of what it surfaces is already on this ledger — interactive emulation, the UART bridge, cross-binary
+dataflow, the library fuzz harness, cmplog, RTOS task enumeration, PDF export, `.ko` CVEs — and is not repeated
+here. What follows is what was **not**, each verified absent from this file, from `METHODOLOGY-GAPS.md` and from
+the code, ordered by value ÷ effort. The bookkeeping item is last and is the one worth reading first.
+
+- ▢ **The extracted filesystem cannot be opened — not in the UI, not over MCP.** wairz spends 9 of its 110 tools
+  here (`list_directory`, `read_file`, `hexdump_data`, `file_info`, `search_files`, `search_binary_content`,
+  `search_strings`, `extract_strings`, `find_files_by_type`); FirmLab has **none**, and no route serves a file
+  out of `extract/`. The GL.iNet carve produces 6497 files that nobody can look at. **This is not a convenience
+  gap, it is the structural cause of a defect class this ledger already records:** the withdrawn BeanView entry
+  above was "written from a filename without opening the file", and there was no way to open it. Every finding
+  cites evidence the operator cannot check, so the ledger asks to be trusted at exactly the point this workbench
+  says nothing should be. Cheap — routes + a tree panel + the same tools on the MCP surface — and the one piece
+  of real work is the path guard, which already has its worked example (`symreach` refusing `etc/passwd →
+  /dev/null`, a symlink escaping the rootfs).
+- ▢ **Nothing an operator concludes can enter the ledger.** wairz has `add_finding` / `update_finding`;
+  FirmLab's findings are 100% code-authored, so a hand-confirmed result, an agent's verdict over MCP, and
+  anything learned outside a provider all live nowhere and never reach a report. The proof-state discipline
+  makes this *easier*, not harder: the honest shape is a distinct `operator:<who>` source that `syncFindings`
+  never deletes, a proof state rendered as **asserted** rather than borrowed from the code-decided rungs, and a
+  coverage sentence that counts operator rows separately — because "a human says so" is a different evidentiary
+  standard from "the property is in the bytes", which is the same split `sbom`-vs-`compcve` already labels.
+  Adjacent and smaller: per-image notes / scratchpad (`save_document`, `read_scratchpad`), which is where an
+  agent driving the MCP surface across sessions has nowhere to put its intermediate reasoning today.
+- ▢ **A measured fact cannot be corrected by an operator who knows better.** wairz has `set_firmware_arch`,
+  `set_rootfs`, `set_kernel`, `redetect`. FirmLab has `POST /images/:id/analysis`, which re-derives — it cannot
+  be told anything. The corpus is full of cases where that costs: DVRF's `identity.arch` is `unknown` (the
+  dynprobe route had to learn to prefer extraction's measurement over it), Asus-Router carves a SquashFS whose
+  id table is inside trailing zeros, and the two camera rootfs are "suspiciously small" with nothing able to
+  settle it. **The class is the expensive one** — it drives `specsForClass`, so a wrong class means the whole
+  plan was wrong, and re-uploading is the only remedy while it discards findings and job history. Fits the
+  vocabulary already spoken here: an override is a claim with different provenance (`measured` vs
+  `operator-asserted`), and coverage must say the plan ran against an asserted class.
+- ▢ **No rule-based scan of a Linux rootfs.** FwHunt is the UEFI-only instance of this workbench's best import
+  pattern — ship the scanner and the rules as DATA, attribute the match to the rule and never restate it as
+  FirmLab's own verdict, and do the honesty work on the *denominator*. The embedded-Linux path, which is where
+  the corpus lives, has no equivalent: nothing asks whether a rootfs contains a known implant, webshell, Mirai
+  variant or backdoor account. YARA + a public rule corpus is the same recipe at a different layer, including
+  "N of M rules applied to this image" and a clean scan titled *which is not "no implant"*.
+- ▢ **capa — capability inventory, which is a different question from vulnerability.** `capa` reports what a
+  binary *can do* ("spawns a shell", "reads /dev/mem", "communicates over raw sockets", "implements XOR crypto")
+  with evidence at addresses. That is `static_confirmed` in the strictest sense — a code fact, no exploitability
+  claim attached — and it answers "what does this vendor daemon actually do", which today is answered only by
+  hand through decompile triage. **Measure before promising:** capa's rule corpus is x86-centric and this corpus
+  is mipsel/arm/arm64, so the honest first step is running it against DVRF and the GL.iNet and reporting the
+  coverage, exactly as the FwHunt rule count was measured before it was claimed.
+- ▢ **The non-ELF attack surface has one vendor-specific parser and no general lane.** `webtaint` reads
+  GL.iNet's `oui-httpd` Lua RPC shape and found the crown jewel there — and it structurally cannot read
+  WR940N's C httpd, a busybox-ash CGI, a PHP admin panel or a Python service, which is most of what the corpus
+  actually ships. A generic pass over shell/lua/php/python with a small hand-written ruleset (unquoted
+  `$QUERY_STRING` reaching `eval`/backticks, `system()` on a CGI env var) generalizes the W4 *result* instead of
+  duplicating the W4 *parser*. The existing "WR940N httpd C-source cmdi" follow-up is one image; this is the lane.
+- ▢ **The kernel's own posture is unexamined.** `.ko` CVE correlation is already on this ledger; the *config* is
+  not. A shipped `/proc/config.gz`, or the version string plus `CONFIG_*` strings in the image, answers whether
+  KASLR, `CONFIG_STRICT_DEVMEM`, module signing or `kptr_restrict` are on — a durable, fully static, honest
+  finding, and the exact counterpart to the per-binary hardening check FirmLab already runs. It is the layer
+  underneath everything else that gets analyzed, and nothing looks at it.
+- ▢ **The device tree is parsed and thrown away.** `core` walks FDT to find FIT sub-images to carve; the tree
+  itself never becomes a result. It names the SoC, the flash partition layout with offsets, sizes and read-only
+  flags, the peripherals, and `bootargs` — the same finding class `uboot.ts` already produces from the U-Boot
+  environment, from bytes that are already parsed. Low effort, and it lands on `openwrt-fit-ubi`, a class this
+  workbench otherwise handles well.
+- ▢ **The fuzzer has no input side.** The ledger carries cmplog and libdesock — both about the *harness*. wairz
+  carries `generate_fuzzing_dictionary`, `generate_seed_corpus`, `analyze_fuzzing_target`, `triage_fuzzing_crash`
+  and `diagnose_fuzzing_campaign`. AFL++ pointed at a firmware parser with an empty corpus and no dictionary
+  mostly measures the harness, and both inputs are straight deterministic derivations from bytes already on
+  disk: the dictionary from the target's own strings, the seeds from the rootfs's own config/data files matching
+  the format the target parses. **Crash triage is the ledger half** — N crashes that are one bug must not become
+  N findings, which is the `syncFindings` idempotence argument applied to fuzzing output.
+- ▢ **`qemu-*-static -strace` on a probe run, for free.** `sandboxShortfalls` currently infers what the sandbox
+  failed to provide by pattern-matching the target's stderr — real work, and an indirect measurement. The
+  syscall trace of the same run says directly what the binary tried to open (`/dev/nvram`, a missing config, a
+  socket) and would turn that inference into evidence. No new tool: the flag is on a binary already installed
+  and already invoked by `dynprobe-run.ts`.
+- ▢ **The MCP surface cannot navigate a binary.** 10 tools against wairz's 110, and the asymmetry is not
+  uniform: FirmLab's tools are *better* where they overlap, because `format.ts` refuses to emit a list without
+  its coverage verdict, which is precisely what wairz does not do. What is missing is the exploratory half —
+  `xrefs_to`/`xrefs_from`, `find_callers`, `find_string_refs`, `list_imports`/`list_exports`/`list_functions`,
+  `resolve_import`, `hexdump_data` — i.e. every question that sits *between* "here is a lead" and "here is a
+  verdict". radare2 already answers all of them for `compmap` and `binvuln`; nothing exposes them. **The third
+  app-vs-autonomous pass is still unrun, and this is the change most likely to move it.**
+- ▢ **binwalk v2 is the only carver — and the diagnosis module makes a second one cheap to evaluate honestly.**
+  `extract-diagnose.ts` established that two of the three empty extractions are damaged input rather than a
+  missing extractor, which is a real result and not a hedge. `unblob` has materially wider format coverage and
+  sandboxed per-format extractors, so running it over the same three images is a **measurement, not a promise**:
+  if it opens what binwalk did not, the diagnosis was wrong and we learn where; if it does not, the diagnosis is
+  independently confirmed. Either outcome is worth the run, which is not true of most tool additions.
+- ▢ **Bookkeeping: update-mechanism integrity fell off this ledger entirely.** `METHODOLOGY-GAPS.md` §4 ranks it
+  **#4 of 7** ("high-signal, fully static, no new heavy deps") and ISTG scores it the top FW-category gap — is
+  the image signed, does the updater binary import signature-verification routines, is there downgrade/rollback
+  protection — and it appears **nowhere in BACKLOG.md** and in no provider. Everything else on that priority
+  list shipped (webprobe #1, FwHunt+SecureBoot #2, angr #3, funcdiff #5, uboot #6, fuzzing debt #7 partial).
+  It is the only one of the seven that was never built *and* never recorded, which is how it went 7 days without
+  being looked at. The gap is the ledger, not the judgement — file it before deciding whether to build it.
+
 ## Out of scope (by design / hardware)
 - — Weaponized exploitation (ROP / shellcode / PoC) — FirmLab proves reachability + drafts disclosure, no PoCs.
 - — JTAG/SWD/SPI extraction, chip-off, side-channel/glitching, BLE/ZigBee/Wi-Fi/SDR — hardware lab / Phase-6 dongle.
