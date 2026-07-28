@@ -141,17 +141,6 @@ export async function detectIsolation(): Promise<IsolationLevel> {
   return cachedLevel;
 }
 
-/** The unshare flags the probe found usable for network isolation (for callers building their own invocation). */
-export function isolationNetnsArgs(): string[] {
-  return cachedNetns;
-}
-
-/** Test seam — reset the cached probe. */
-export function resetIsolationCache(): void {
-  cachedLevel = null;
-  cachedNetns = ['-n'];
-}
-
 /**
  * Run an argv under the strongest available isolation, in a private throwaway workdir that is always removed.
  * Supports driving the target with a trigger (stdin/env/argv) and reports the exit signal so a crash is visible.

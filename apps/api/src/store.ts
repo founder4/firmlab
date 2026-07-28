@@ -763,12 +763,6 @@ export function getSession(id: string): AgentSessionRow | undefined {
   return getDb().prepare('SELECT * FROM agent_session WHERE id = ?').get(id) as unknown as AgentSessionRow | undefined;
 }
 
-export function listSessions(imageId: string): AgentSessionRow[] {
-  return getDb()
-    .prepare('SELECT * FROM agent_session WHERE imageId = ? ORDER BY createdAt DESC')
-    .all(imageId) as unknown as AgentSessionRow[];
-}
-
 export function latestSession(imageId: string): AgentSessionRow | undefined {
   return getDb()
     .prepare('SELECT * FROM agent_session WHERE imageId = ? ORDER BY createdAt DESC LIMIT 1')
@@ -895,18 +889,6 @@ export function getCaptureSession(id: string): CaptureSessionRow | undefined {
     | undefined;
 }
 
-export function listCaptureSessions(limit = 20): CaptureSessionRow[] {
-  return getDb()
-    .prepare('SELECT * FROM capture_sessions ORDER BY createdAt DESC LIMIT ?')
-    .all(limit) as unknown as CaptureSessionRow[];
-}
-
-export function latestCaptureSession(): CaptureSessionRow | undefined {
-  return getDb().prepare('SELECT * FROM capture_sessions ORDER BY createdAt DESC LIMIT 1').get() as unknown as
-    | CaptureSessionRow
-    | undefined;
-}
-
 /** Upsert a discovered device into the persistent inventory, keyed by MAC. Preserves firstSeen + the row id. */
 export function upsertDevice(row: DeviceRow): void {
   getDb()
@@ -1002,12 +984,6 @@ export function insertCaptureProvenance(row: CaptureProvenanceRow): void {
        VALUES (@id, @imageId, @deviceId, @sessionId, @endpoint, @version, @transport, @tlsPosture, @capturedAt)`,
     )
     .run(asParams(row));
-}
-
-export function provenanceForImage(imageId: string): CaptureProvenanceRow | undefined {
-  return getDb().prepare('SELECT * FROM capture_provenance WHERE imageId = ? LIMIT 1').get(imageId) as unknown as
-    | CaptureProvenanceRow
-    | undefined;
 }
 
 /** All capture-provenance rows (the acquired-image history the learning surface aggregates). Newest first. */
