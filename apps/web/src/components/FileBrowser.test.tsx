@@ -1,14 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type FilesListing, type FilesRead, api } from '../api';
+import { mockedApi } from '../test-api-mock';
 import { FileBrowser } from './FileBrowser';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return { ...actual, api: { ...actual.api, files: vi.fn(), readFile: vi.fn() } };
+  const { buildApiMock } = await import('../test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
 
-const mockApi = api as unknown as { files: ReturnType<typeof vi.fn>; readFile: ReturnType<typeof vi.fn> };
+const mockApi = mockedApi(api);
 
 const listing = (o: Partial<FilesListing> = {}): FilesListing => ({
   claim: 'These bytes are what the extractor wrote to disk for this image.',

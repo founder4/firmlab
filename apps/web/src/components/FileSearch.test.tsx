@@ -1,13 +1,15 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type FilesSearch, api } from '../api';
+import { mockedApi } from '../test-api-mock';
 import { FileSearch, isCompleteSearch } from './FileSearch';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return { ...actual, api: { ...actual.api, searchFiles: vi.fn() } };
+  const { buildApiMock } = await import('../test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
-const mockApi = api as unknown as { searchFiles: ReturnType<typeof vi.fn> };
+const mockApi = mockedApi(api);
 
 const clean: FilesSearch = {
   query: 'nope',

@@ -1,33 +1,19 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
+import { mockedApi } from '../test-api-mock';
 import { SimulationMenu } from './SimulationMenu';
 
+// The whole surface, throwing by default. This file is where the omission was found — `binaries` (the target
+// selector) was left real and every test here fetched into jsdom — and it was found by luck, so the list is no
+// longer hand-written. Anything this file forgets now names itself instead of reaching the network.
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return {
-    ...actual,
-    api: {
-      ...actual.api,
-      emulation: vi.fn(),
-      job: vi.fn(),
-      emulate: vi.fn(),
-      emulateSystem: vi.fn(),
-      runRenode: vi.fn(),
-      runChipsec: vi.fn(),
-      extract: vi.fn(),
-      // The component also loads the extracted binaries to populate the target selector. Leaving it real
-      // meant every test in this file made an unmocked fetch into jsdom, and its rejection then updated
-      // state after the test had finished — a live network call is not something a unit test should own.
-      binaries: vi.fn(),
-    },
-  };
+  const { buildApiMock } = await import('../test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
 
-const mockApi = api as unknown as Record<
-  'emulation' | 'job' | 'emulate' | 'emulateSystem' | 'runRenode' | 'runChipsec' | 'extract' | 'binaries',
-  ReturnType<typeof vi.fn>
->;
+const mockApi = mockedApi(api);
 
 const identity = { firmwareClass: 'embedded-linux', arch: 'mips', endianness: 'big', filesystems: ['squashfs'] };
 type Recipe = {
@@ -68,6 +54,9 @@ beforeEach(() => {
   mockApi.runChipsec.mockResolvedValue({ jobId: 'j1' });
   mockApi.extract.mockResolvedValue({ jobId: 'j1' });
   mockApi.binaries.mockResolvedValue([]);
+  // The menu drops a RunHistory under the rungs, which reads the run ledger — the second live fetch this file
+  // was making, and the one the hand-written list still missed after `binaries` was fixed.
+  mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
 });
 
 describe('SimulationMenu', () => {

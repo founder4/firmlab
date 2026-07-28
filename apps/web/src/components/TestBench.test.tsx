@@ -1,25 +1,19 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type BinaryEntry, type RunSummary, api } from '../api';
+import { mockedApi } from '../test-api-mock';
 import { TestBench } from './TestBench';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return {
-    ...actual,
-    api: { ...actual.api, binaries: vi.fn(), emulation: vi.fn(), runs: vi.fn(), runDetail: vi.fn(), dynprobe: vi.fn() },
-  };
+  const { buildApiMock } = await import('../test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
 
-// Named explicitly rather than as a Record: under `noUncheckedIndexedAccess` an index signature makes every
-// lookup possibly-undefined, which the web build (unlike `check`) compiles and rejects.
-const mockApi = api as unknown as {
-  binaries: ReturnType<typeof vi.fn>;
-  emulation: ReturnType<typeof vi.fn>;
-  runs: ReturnType<typeof vi.fn>;
-  runDetail: ReturnType<typeof vi.fn>;
-  dynprobe: ReturnType<typeof vi.fn>;
-};
+// A mapped type over the real client, not a hand-written Record: the names stay checked against `api.ts`, and
+// under `noUncheckedIndexedAccess` an index signature would make every lookup possibly-undefined, which the web
+// build (unlike `check`) compiles and rejects.
+const mockApi = mockedApi(api);
 
 const bin = (path: string): BinaryEntry => ({
   imageId: 'img',

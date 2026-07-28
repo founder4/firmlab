@@ -1,21 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type OpacidadResult, api } from '../api';
+import { mockedApi } from '../test-api-mock';
 import { OpacidadPanel } from './OpacidadPanel';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return {
-    ...actual,
-    api: { ...actual.api, opacidadResult: vi.fn(), runOpacidad: vi.fn(), job: vi.fn() },
-  };
+  const { buildApiMock } = await import('../test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
 
-const mockApi = api as unknown as {
-  opacidadResult: ReturnType<typeof vi.fn>;
-  runOpacidad: ReturnType<typeof vi.fn>;
-  job: ReturnType<typeof vi.fn>;
-};
+const mockApi = mockedApi(api);
 
 const result = (o: Partial<OpacidadResult> = {}): OpacidadResult => ({
   firmwareClass: 'esp-soc',
@@ -42,6 +37,9 @@ const result = (o: Partial<OpacidadResult> = {}): OpacidadResult => ({
 });
 
 beforeEach(() => {
+  // The panel drops a RunHistory under its result, which reads the run ledger. Before the shared mock this call
+  // was left pointing at the real client and fetched over the network in every test in this file.
+  mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
   mockApi.opacidadResult.mockResolvedValue(null);
   mockApi.runOpacidad.mockResolvedValue({ jobId: 'j1' });
   mockApi.job.mockResolvedValue({ id: 'j1', status: 'done', result: result(), log: '' });

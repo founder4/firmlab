@@ -1,32 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type AssertedFinding, type OperatorLedger, api } from '../api';
+import { mockedApi } from '../test-api-mock';
 import { OperatorPanel } from './OperatorPanel';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return {
-    ...actual,
-    api: {
-      ...actual.api,
-      operatorLedger: vi.fn(),
-      notes: vi.fn(),
-      addAssertion: vi.fn(),
-      withdrawAssertion: vi.fn(),
-      addNote: vi.fn(),
-      deleteNote: vi.fn(),
-    },
-  };
+  const { buildApiMock } = await import('../test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
 
-const mockApi = api as unknown as {
-  operatorLedger: ReturnType<typeof vi.fn>;
-  notes: ReturnType<typeof vi.fn>;
-  addAssertion: ReturnType<typeof vi.fn>;
-  withdrawAssertion: ReturnType<typeof vi.fn>;
-  addNote: ReturnType<typeof vi.fn>;
-  deleteNote: ReturnType<typeof vi.fn>;
-};
+const mockApi = mockedApi(api);
 
 const asserted = (o: Partial<AssertedFinding> = {}): AssertedFinding => ({
   id: 'a1',

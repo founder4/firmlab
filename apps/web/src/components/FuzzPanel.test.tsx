@@ -1,22 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
+import { mockedApi } from '../test-api-mock';
 import { FuzzPanel } from './FuzzPanel';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return {
-    ...actual,
-    api: { ...actual.api, fuzzStatus: vi.fn(), fuzzResult: vi.fn(), runFuzz: vi.fn(), job: vi.fn() },
-  };
+  const { buildApiMock } = await import('../test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
 
-const mockApi = api as unknown as {
-  fuzzStatus: ReturnType<typeof vi.fn>;
-  fuzzResult: ReturnType<typeof vi.fn>;
-  runFuzz: ReturnType<typeof vi.fn>;
-  job: ReturnType<typeof vi.fn>;
-};
+const mockApi = mockedApi(api);
 
 const fuzzResult = (o: Record<string, unknown> = {}) => ({
   available: true,
@@ -32,6 +26,9 @@ const fuzzResult = (o: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  // The panel drops a RunHistory under its result, which reads the run ledger. Before the shared mock this call
+  // was left pointing at the real client and fetched over the network in every test in this file.
+  mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
   mockApi.fuzzStatus.mockResolvedValue({ available: true });
   mockApi.fuzzResult.mockResolvedValue(null);
   mockApi.runFuzz.mockResolvedValue({ jobId: 'j1' });

@@ -1,42 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CaptureBackend, api } from '../api';
+import { mockedApi } from '../test-api-mock';
 import { Capture } from './Capture';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return {
-    ...actual,
-    api: {
-      ...actual.api,
-      captureStatus: vi.fn(),
-      captureBackends: vi.fn(),
-      captureDevices: vi.fn(),
-      runCaptureDiscover: vi.fn(),
-      captureScan: vi.fn(),
-      startCaptureSession: vi.fn(),
-      captureSession: vi.fn(),
-      ingestCaptureFlow: vi.fn(),
-      teardownCapture: vi.fn(),
-      capturePreflight: vi.fn(),
-      captureFamilies: vi.fn(),
-    },
-  };
+  const { buildApiMock } = await import('../test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
 
-const mockApi = api as unknown as {
-  captureStatus: ReturnType<typeof vi.fn>;
-  captureBackends: ReturnType<typeof vi.fn>;
-  captureDevices: ReturnType<typeof vi.fn>;
-  runCaptureDiscover: ReturnType<typeof vi.fn>;
-  captureScan: ReturnType<typeof vi.fn>;
-  startCaptureSession: ReturnType<typeof vi.fn>;
-  captureSession: ReturnType<typeof vi.fn>;
-  ingestCaptureFlow: ReturnType<typeof vi.fn>;
-  teardownCapture: ReturnType<typeof vi.fn>;
-  capturePreflight: ReturnType<typeof vi.fn>;
-  captureFamilies: ReturnType<typeof vi.fn>;
-};
+const mockApi = mockedApi(api);
 
 const backend = (over: Partial<CaptureBackend>): CaptureBackend => ({
   id: 'network-proxy',

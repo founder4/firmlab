@@ -4,28 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { api } from './api';
 import { Dashboard } from './pages/Dashboard';
+import { mockedApi } from './test-api-mock';
 
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>();
-  return {
-    ...actual,
-    api: {
-      ...actual.api,
-      health: vi.fn(),
-      listImages: vi.fn(),
-      storage: vi.fn(),
-      deleteImage: vi.fn(),
-      coverageAll: vi.fn(),
-    },
-  };
+  const { buildApiMock } = await import('./test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
 
-const mockApi = api as unknown as {
-  health: ReturnType<typeof vi.fn>;
-  listImages: ReturnType<typeof vi.fn>;
-  storage: ReturnType<typeof vi.fn>;
-  coverageAll: ReturnType<typeof vi.fn>;
-};
+const mockApi = mockedApi(api);
 
 const image = (id: string, filename: string, arch: string) => ({
   id,
@@ -56,6 +43,9 @@ beforeEach(() => {
   mockApi.listImages.mockResolvedValue([]);
   mockApi.storage.mockResolvedValue(emptyUsage);
   mockApi.coverageAll.mockResolvedValue([]);
+  // Overview is the default route and reads the tool inventory for its capability tile. The hand-written mock
+  // list never named it, so rendering `<App />` here made a live fetch for `/api/tools` in every test.
+  mockApi.tools.mockResolvedValue({ tools: [], groups: {} });
 });
 
 describe('Dashboard image filter', () => {

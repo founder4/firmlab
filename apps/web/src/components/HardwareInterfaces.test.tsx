@@ -1,20 +1,16 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type DeviceTreeResult, type UbootResult, api } from '../api';
+import { mockedApi } from '../test-api-mock';
 import { HardwareInterfaces, bootPromptWindow, parseConsoleArg } from './HardwareInterfaces';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
-  return {
-    ...actual,
-    api: { ...actual.api, deviceTree: vi.fn(), ubootEnv: vi.fn(), runAnalysis: vi.fn(), job: vi.fn() },
-  };
+  const { buildApiMock } = await import('../test-api-mock');
+  return { ...actual, api: buildApiMock(actual.api) };
 });
 
-const mockApi = api as unknown as {
-  deviceTree: ReturnType<typeof vi.fn>;
-  ubootEnv: ReturnType<typeof vi.fn>;
-};
+const mockApi = mockedApi(api);
 
 describe('parseConsoleArg', () => {
   it('reads the tty and baud out of a real Tenda command line', () => {
