@@ -22,12 +22,19 @@
  *
  * Every one of those fields is read defensively: `supersedes` and a revision's `title` were added late, so an
  * assertion stored by an older build simply has no history, which is the correct thing to say about it.
+ *
+ * **Language.** The draft composes in English or Spanish; the locale is a parameter with an English default, and
+ * every sentence comes from `../i18n`. What is NOT translated is everything the vendor may need to match against
+ * something else: proof states, assertion claims, finding ids, CVE ids, severities, package and file names, and
+ * the findings' own titles and rationales — a vendor grepping the draft for `needs_runtime_reproduction` or
+ * `CVE-2021-44228` must find the same token in either language. Only the document's scaffolding and the draft
+ * email are localised.
  */
 import type { Finding, ImageIdentity, ProofState } from '@firmlab/core';
+import { type Locale, type Messages, formatTimestamp, messages } from '../i18n/index.js';
 import {
   type AssertionRevision,
   assertionDay,
-  describeAssertion,
   indexDisputes,
   partitionByProvenance,
   revisionsOf,
@@ -83,40 +90,55 @@ function evidenceHint(f: Finding): string {
  * perform; a vendor reading only the proof state is being shown a claim the reporting side does not fully stand
  * behind, presented as though it did.
  */
-function disputeBlock(target: Finding, disputes: readonly Finding[]): string {
+function disputeBlock(target: Finding, disputes: readonly Finding[], t: Messages): string {
   return disputes
     .map((d) => {
       const a = d.assertion;
-      const who = a ? (a.authorKind === 'agent' ? `${a.assertedBy} (agent)` : a.assertedBy) : 'an unrecorded author';
-      const when = a ? assertionDay(a.assertedAt) : 'an unrecorded date';
-      const basis = d.rationale ? ` Stated basis: ${d.rationale}` : '';
-      return [
-        `> **CONTESTED BY AN OPERATOR** — ${who} asserts on ${when} that this finding is wrong: “${d.title}”.${basis}`,
-        '>',
-        `> This is testimony about a measurement, not a measurement: the proof state above is still \`${target.proofState}\`, decided by code from the evidence, and the dispute neither changes it, downgrades it nor removes the finding. Both stand — the assertion is listed in full under "Operator assertions" below.`,
-        '',
-      ].join('\n');
+      const who = a
+        ? a.authorKind === 'agent'
+          ? t.ledger.agentAuthor(a.assertedBy)
+          : a.assertedBy
+        : t.ledger.unrecordedAuthor;
+      const when = a ? assertionDay(a.assertedAt) : t.ledger.unrecordedDate;
+      return t.disclosure.dispute({
+        who,
+        when,
+        title: d.title,
+        rationale: d.rationale,
+        proofState: target.proofState,
+      });
     })
     .join('\n');
 }
 
-function findingBlock(f: Finding, disputes: readonly Finding[] = []): string {
-  const lines = [`#### ${f.title}`, '', `- **Severity:** ${f.severity}`, `- **Proof state:** \`${f.proofState}\``];
+function findingBlock(f: Finding, disputes: readonly Finding[], t: Messages): string {
+  const lines = [
+    `#### ${f.title}`,
+    '',
+    `- **${t.disclosure.findingLabels.severity}:** ${f.severity}`,
+    `- **${t.disclosure.findingLabels.proofState}:** \`${f.proofState}\``,
+  ];
   const hint = evidenceHint(f);
-  if (hint) lines.push(`- **Evidence:** ${hint}`);
-  if (f.rationale) lines.push(`- **Rationale:** ${f.rationale}`);
+  if (hint) lines.push(`- **${t.disclosure.findingLabels.evidence}:** ${hint}`);
+  if (f.rationale) lines.push(`- **${t.disclosure.findingLabels.rationale}:** ${f.rationale}`);
   lines.push('');
-  if (disputes.length > 0) lines.push(disputeBlock(f, disputes));
+  if (disputes.length > 0) lines.push(disputeBlock(f, disputes, t));
   return lines.join('\n');
 }
 
 /** One superseded claim, printed with the window it stood in — "they said X, then narrowed it to Y" needs both. */
-function revisionLine(r: AssertionRevision, n: number): string {
-  const title = r.title ? ` — “${r.title}”` : '';
-  const target = r.disputesFindingId ? ` (contested \`${r.disputesFindingId}\`)` : '';
-  return `  ${n}. \`${r.claim}\`, stood from ${assertionDay(r.from)} to ${assertionDay(
-    r.supersededAt,
-  )}${title}${target}. Basis given at the time: ${r.rationale}`;
+function revisionLine(r: AssertionRevision, n: number, t: Messages): string {
+  return t.disclosure.revision({
+    n,
+    revision: {
+      claim: r.claim,
+      from: assertionDay(r.from),
+      to: assertionDay(r.supersededAt),
+      rationale: r.rationale,
+      title: r.title,
+      disputesFindingId: r.disputesFindingId,
+    },
+  });
 }
 
 /**
@@ -127,21 +149,16 @@ function revisionLine(r: AssertionRevision, n: number): string {
  * sent. Returns nothing at all for a claim that was never amended, which is every assertion stored before the
  * history existed.
  */
-function historyLines(f: Finding): string[] {
+function historyLines(f: Finding, t: Messages): string[] {
   const a = f.assertion;
   if (!a) return [];
   const revisions = revisionsOf(a);
   if (a.amendedAt === undefined && revisions.length === 0) return [];
   const when = assertionDay(a.amendedAt ?? a.assertedAt);
-  if (revisions.length === 0) {
-    return [
-      `- **Amended ${when}:** the claim it replaced was not preserved — this row was amended by a build that overwrote its predecessor. What stands above is the current claim only; it is not necessarily the original one.`,
-    ];
-  }
-  const plural = revisions.length === 1 ? 'claim' : 'claims';
+  if (revisions.length === 0) return [t.disclosure.amendedLost(when)];
   return [
-    `- **Amended ${when}, superseding ${revisions.length} earlier ${plural}.** An amendment appends; it never overwrites. What the author previously stated, and on what basis — superseded, and quoted here only as history:`,
-    ...revisions.map((r, i) => revisionLine(r, i + 1)),
+    t.disclosure.amendedSuperseding({ when, count: revisions.length }),
+    ...revisions.map((r, i) => revisionLine(r, i + 1, t)),
   ];
 }
 
@@ -153,30 +170,30 @@ function historyLines(f: Finding): string[] {
  * the annotation was deliberately withheld, and the document would have been sending the vendor to look for a
  * block that is not there.
  */
-function contestedTargetLine(f: Finding, ledger: readonly Finding[]): string | null {
+function contestedTargetLine(f: Finding, ledger: readonly Finding[], t: Messages): string | null {
   const targetId = f.assertion?.disputesFindingId;
   if (!targetId) return null;
   const retracted = f.assertion?.status === 'withdrawn';
   const target = ledger.find((r) => r.id === targetId);
-  if (!target) {
-    return `- **Contested:** finding \`${targetId}\`, which is no longer in this image's ledger. Re-running an analysis replaces its rows with new ids, so a dispute can outlive the row it was recorded against: the claim is kept, and what it pointed at cannot be shown here.`;
-  }
+  if (!target) return t.disclosure.contestedGone(targetId);
   if (retracted) {
-    return `- **Contested until withdrawn:** “${target.title}” (\`${target.proofState}\`). The objection has been retracted, so that finding carries no contest annotation above; it stands as code decided it, and always did.`;
+    return t.disclosure.contestedUntilWithdrawn({ title: target.title, proofState: target.proofState });
   }
-  return `- **Contests:** “${target.title}” (\`${target.proofState}\`), annotated where it appears above. That row stands exactly as code decided it; this assertion is recorded beside it, not over it.`;
+  return t.disclosure.contests({ title: target.title, proofState: target.proofState });
 }
 
 /** One asserted row, in the shape an assertion earns: an author, a basis, and no proof state anywhere. */
-function assertionBlock(f: Finding, ledger: readonly Finding[], severityLabel: string): string {
+function assertionBlock(f: Finding, ledger: readonly Finding[], severityLabel: string, t: Messages): string {
   const lines = [`#### ${f.title}`, '', `- **${severityLabel}:** ${f.severity}`];
-  if (f.assertion) lines.push(`- **Attribution:** ${describeAssertion(f.assertion)}`);
+  if (f.assertion) {
+    lines.push(`- **${t.disclosure.assertionLabels.attribution}:** ${t.ledger.describeAssertion(f.assertion)}`);
+  }
   const hint = evidenceHint(f);
-  if (hint) lines.push(`- **Referenced:** ${hint}`);
-  if (f.rationale) lines.push(`- **Stated basis:** ${f.rationale}`);
-  const contested = contestedTargetLine(f, ledger);
+  if (hint) lines.push(`- **${t.disclosure.assertionLabels.referenced}:** ${hint}`);
+  if (f.rationale) lines.push(`- **${t.disclosure.assertionLabels.statedBasis}:** ${f.rationale}`);
+  const contested = contestedTargetLine(f, ledger, t);
   if (contested) lines.push(contested);
-  lines.push(...historyLines(f));
+  lines.push(...historyLines(f, t));
   lines.push('');
   return lines.join('\n');
 }
@@ -185,8 +202,12 @@ function assertionBlock(f: Finding, ledger: readonly Finding[], severityLabel: s
  * Pure: build the coordinated-disclosure Markdown draft. Structure: coordinated-disclosure preamble → device
  * identity/provenance → who to contact → confirmed issues (severity-ordered) → unverified leads (clearly
  * separated) → known-exploited context (KEV) → a DRAFT email body. Returns the full document.
+ *
+ * `locale` defaults to English — what every caller got before the parameter existed, and what an unrecognised
+ * `?lang` resolves to. It is a parameter and not a global: two requests in two languages can be in flight at once.
  */
-export function buildDisclosureReport(ctx: DisclosureContext): string {
+export function buildDisclosureReport(ctx: DisclosureContext, locale: Locale = 'en'): string {
+  const t = messages(locale);
   // Assertions are separated first. They match neither bucket's filter, so without this they would simply vanish
   // from the draft — and an operator's observation on the physical device is often the strongest thing in the
   // ledger. Silent omission and silent promotion are both failures; a section that names the author is neither.
@@ -203,152 +224,126 @@ export function buildDisclosureReport(ctx: DisclosureContext): string {
   const contactLines: string[] = [];
   for (const c of ctx.securityContacts ?? []) {
     if (c.found && c.contact.length > 0) contactLines.push(`- **${c.domain}:** ${c.contact.join(', ')}`);
-    else if (c.checked) contactLines.push(`- **${c.domain}:** no security.txt found — try a vendor PSIRT / CERT/CC.`);
-    else
-      contactLines.push(
-        `- **${c.domain}:** not checked — add it to \`FIRMLAB_RESEARCH_ALLOWLIST\` to discover a contact.`,
-      );
+    else if (c.checked) contactLines.push(`- **${c.domain}:** ${t.disclosure.contactNoSecurityTxt}`);
+    else contactLines.push(`- **${c.domain}:** ${t.disclosure.contactNotChecked}`);
   }
 
   const out: string[] = [];
-  out.push('# Coordinated vulnerability disclosure — draft');
+  out.push(`# ${t.disclosure.title}`);
   out.push('');
-  out.push(
-    '> **This is a DRAFT for you to review and send yourself.** FirmLab does not contact anyone. Disclose ' +
-      'responsibly: give the vendor reasonable time to remediate before any public discussion, and only assess ' +
-      'firmware you are authorized to test.',
-  );
+  out.push(`> ${t.disclosure.draftNotice}`);
   out.push('');
-  out.push(`**Image:** \`${ctx.image.filename}\``);
-  out.push(`**SHA-256:** \`${ctx.image.sha256}\``);
-  out.push(`**Prepared:** ${ctx.generatedAt}`);
+  out.push(`**${t.disclosure.imageLabel}:** \`${ctx.image.filename}\``);
+  out.push(`**${t.disclosure.shaLabel}:** \`${ctx.image.sha256}\``);
+  // The localised date is what a reader parses at a glance; the ISO stamp stays beside it because a disclosure is
+  // correlated against logs and other reports, and a date written one way in one language is not a key.
+  out.push(`**${t.disclosure.preparedLabel}:** ${formatTimestamp(ctx.generatedAt, locale)} (${ctx.generatedAt})`);
   out.push('');
 
-  out.push('## Device / firmware');
+  out.push(`## ${t.disclosure.deviceHeading}`);
   out.push('');
   if (vendor || product)
-    out.push(`- **Vendor / product (inferred):** ${[vendor, product].filter(Boolean).join(' / ')}`);
+    out.push(`- **${t.disclosure.vendorProduct}:** ${[vendor, product].filter(Boolean).join(' / ')}`);
   if (ctx.provenance?.versions?.length)
-    out.push(`- **Version hints:** ${ctx.provenance.versions.slice(0, 5).join(', ')}`);
+    out.push(`- **${t.disclosure.versionHints}:** ${ctx.provenance.versions.slice(0, 5).join(', ')}`);
   if (ctx.identity) {
-    out.push(`- **Class / arch:** ${ctx.identity.firmwareClass} / ${ctx.identity.arch} (${ctx.identity.endianness})`);
-    if (ctx.identity.filesystems.length) out.push(`- **Filesystems:** ${ctx.identity.filesystems.join(', ')}`);
+    out.push(
+      `- **${t.disclosure.classArch}:** ${ctx.identity.firmwareClass} / ${ctx.identity.arch} (${ctx.identity.endianness})`,
+    );
+    if (ctx.identity.filesystems.length)
+      out.push(`- **${t.disclosure.filesystems}:** ${ctx.identity.filesystems.join(', ')}`);
   }
   out.push('');
 
-  out.push('## Who to contact');
+  out.push(`## ${t.disclosure.contactHeading}`);
   out.push('');
-  out.push(
-    contactLines.length > 0
-      ? contactLines.join('\n')
-      : '- No contact discovered yet — run the research track (RFC 9116 security.txt), or use a national CERT/CC as a coordinator.',
-  );
+  out.push(contactLines.length > 0 ? contactLines.join('\n') : `- ${t.disclosure.contactNone}`);
   out.push('');
 
-  out.push(`## Confirmed issues (${confirmed.length})`);
+  out.push(`## ${t.disclosure.confirmedHeading(confirmed.length)}`);
   out.push('');
   if (confirmed.length === 0) {
-    out.push(
-      '_No confirmed issues. Nothing here is proven from the bytes or reproduced in the sandbox — do not report leads as confirmed._',
-    );
+    out.push(`_${t.disclosure.confirmedEmpty}_`);
     out.push('');
   } else {
-    out.push(
-      'These are present in the firmware bytes or were reproduced under isolation. Proof states are stated per finding; emulated reproduction proves the sandbox, not the deployed device.',
-    );
+    out.push(t.disclosure.confirmedIntro);
     out.push('');
-    for (const f of confirmed) out.push(findingBlock(f, disputesFor(f)));
+    for (const f of confirmed) out.push(findingBlock(f, disputesFor(f), t));
   }
 
   if (leads.length > 0) {
-    out.push(`## Unverified leads (${leads.length}) — reachability unverified`);
+    out.push(`## ${t.disclosure.leadsHeading(leads.length)}`);
     out.push('');
-    out.push(
-      `> These are **not confirmed**. They need runtime reproduction on the target before they belong in a report. Listed for the vendor's own triage; do not present them as vulnerabilities.`,
-    );
+    out.push(`> ${t.disclosure.leadsNotice}`);
     out.push('');
-    for (const f of leads) out.push(findingBlock(f, disputesFor(f)));
+    for (const f of leads) out.push(findingBlock(f, disputesFor(f), t));
   }
 
   if (asserted.length > 0) {
-    out.push(`## Operator assertions (${asserted.length}) — asserted by a person, not measured here`);
+    out.push(`## ${t.disclosure.assertionsHeading(asserted.length)}`);
     out.push('');
-    out.push(
-      '> FirmLab did not measure any of these. Each is a claim by the named author, on the stated basis, and it ' +
-        'carries no proof state. They are included because an observation made on the physical device is ' +
-        'knowledge this workbench structurally cannot produce — but a vendor reading this must be able to see, ' +
-        'without asking, which lines are measurements and which are testimony.',
-    );
+    out.push(`> ${t.disclosure.assertionsNotice}`);
     out.push('');
-    for (const f of sortBySeverity(asserted)) out.push(assertionBlock(f, ctx.findings, 'Severity (asserted)'));
+    for (const f of sortBySeverity(asserted))
+      out.push(assertionBlock(f, ctx.findings, t.disclosure.assertionLabels.severityAsserted, t));
   }
 
   // A retraction is an update the recipient needs more than the original claim: if an earlier draft cited it, the
   // vendor is still working from it. Kept apart from the standing assertions, counted nowhere, contesting nothing.
   if (withdrawn.length > 0) {
-    out.push(`## Withdrawn assertions (${withdrawn.length}) — retracted, and kept`);
+    out.push(`## ${t.disclosure.withdrawnHeading(withdrawn.length)}`);
     out.push('');
-    out.push(
-      '> Each of these was asserted and then withdrawn by a named author, with the reason recorded. None of them ' +
-        'is a claim any longer and none contests anything; they are printed rather than deleted so that a claim ' +
-        'which may already have been communicated is not silently dropped. "This was wrong, and here is why" is ' +
-        'the most useful line a ledger holds.',
-    );
+    out.push(`> ${t.disclosure.withdrawnNotice}`);
     out.push('');
-    for (const f of sortBySeverity(withdrawn)) out.push(assertionBlock(f, ctx.findings, 'Severity (as asserted)'));
+    for (const f of sortBySeverity(withdrawn))
+      out.push(assertionBlock(f, ctx.findings, t.disclosure.assertionLabels.severityAsAsserted, t));
   }
 
   if (ctx.kevMatches && ctx.kevMatches.length > 0) {
-    out.push('## Known-exploited context (CISA KEV)');
+    out.push(`## ${t.disclosure.kevHeading}`);
     out.push('');
-    out.push(
-      `Published CVEs for components present in this image that are on CISA's Known Exploited Vulnerabilities list. This raises priority; it does **not** confirm the CVE is reachable in this build.`,
-    );
+    out.push(t.disclosure.kevIntro);
     out.push('');
     for (const m of ctx.kevMatches.slice(0, 20))
-      out.push(`- \`${m.cveID}\` — ${m.product} (known-exploited; reachability unverified)`);
+      out.push(`- ${t.disclosure.kevItem({ cve: m.cveID, product: m.product })}`);
     out.push('');
   }
 
-  out.push('## Draft email');
+  out.push(`## ${t.disclosure.emailHeading}`);
   out.push('');
   out.push('```text');
-  out.push(`Subject: Security disclosure — ${[vendor, product].filter(Boolean).join(' ') || ctx.image.filename}`);
+  out.push(t.disclosure.emailSubject([vendor, product].filter(Boolean).join(' ') || ctx.image.filename));
   out.push('');
-  out.push('Hello,');
+  out.push(t.disclosure.emailGreeting);
   out.push('');
   out.push(
-    `I am reporting ${confirmed.length} security ${confirmed.length === 1 ? 'issue' : 'issues'} I found while ` +
-      `analyzing the firmware image ${ctx.image.filename} (SHA-256 ${ctx.image.sha256.slice(0, 16)}…).`,
+    t.disclosure.emailIntro({
+      count: confirmed.length,
+      filename: ctx.image.filename,
+      shaPrefix: ctx.image.sha256.slice(0, 16),
+    }),
   );
   out.push('');
   // The email is the part that gets read; a contested issue that is flagged only in the attachment is flagged in
   // the document the vendor may never open.
   for (const f of confirmed.slice(0, 10)) {
-    const contested = disputesFor(f).length > 0 ? ' — CONTESTED on my side, see the attached details' : '';
+    const contested = disputesFor(f).length > 0 ? t.disclosure.emailContestedSuffix : '';
     out.push(`- [${f.severity}] ${f.title}${contested}`);
   }
   const contestedInEmail = confirmed.slice(0, 10).filter((f) => disputesFor(f).length > 0).length;
   if (contestedInEmail > 0) {
     out.push('');
-    out.push(
-      `${contestedInEmail === 1 ? 'One issue above is' : `${contestedInEmail} issues above are`} marked CONTESTED: someone on my side has recorded that the finding is wrong, and their objection is in the attached details alongside the measurement. I have not removed or downgraded the finding — you have both, and I would value your reading of it.`,
-    );
+    out.push(t.disclosure.emailContestedNote(contestedInEmail));
   }
   out.push('');
-  out.push(
-    'Full technical details are attached. I am disclosing this privately and will coordinate on a timeline before ' +
-      `any public discussion. Please let me know the right contact if this isn't it.`,
-  );
+  out.push(t.disclosure.emailClosing);
   out.push('');
-  out.push('Thank you,');
-  out.push('[your name]');
+  out.push(t.disclosure.emailThanks);
+  out.push(t.disclosure.emailSignature);
   out.push('```');
   out.push('');
   out.push('---');
-  out.push(
-    '_Generated by FirmLab. Draft only — review before sending. Assess only firmware you are authorized to test._',
-  );
+  out.push(`_${t.disclosure.footer}_`);
 
   return out.join('\n');
 }

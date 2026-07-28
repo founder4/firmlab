@@ -217,6 +217,133 @@ describe('buildDisclosureReport — a contested finding says so where the vendor
   });
 });
 
+/**
+ * The Spanish draft. This is the document that leaves the building, so the test is mostly about what did NOT
+ * change: a vendor grepping for `static_confirmed`, `CVE-2021-44228` or a finding's exact title has to find the
+ * same token in either language, and the caveats that stop a lead being read as a vulnerability have to survive.
+ */
+describe('buildDisclosureReport — the draft composes in Spanish without translating the evidence', () => {
+  const ctx: DisclosureContext = {
+    ...base,
+    findings: [
+      finding({ id: 'a', title: 'Confirmed hardcoded key', proofState: 'static_confirmed', severity: 'critical' }),
+      finding({
+        id: 'b',
+        title: 'Possible command injection',
+        proofState: 'needs_runtime_reproduction',
+        severity: 'high',
+        rationale: 'A sink is reachable from a parsed parameter; reachability from the network is unproven.',
+      }),
+    ],
+    kevMatches: [{ cveID: 'CVE-2021-44228', product: 'Log4j2' }],
+  };
+
+  it('defaults to English when no locale is given', () => {
+    expect(buildDisclosureReport(ctx)).toBe(buildDisclosureReport(ctx, 'en'));
+    expect(buildDisclosureReport(ctx)).toMatch(/## Confirmed issues \(1\)/);
+  });
+
+  it('translates the scaffolding and the draft email', () => {
+    const md = buildDisclosureReport(ctx, 'es');
+    expect(md).toMatch(/# Divulgación coordinada de vulnerabilidades — borrador/);
+    expect(md).toMatch(/## Problemas confirmados \(1\)/);
+    expect(md).toMatch(/## Pistas sin verificar \(1\) — alcanzabilidad no verificada/);
+    expect(md).toMatch(/## Borrador de correo/);
+    expect(md).toContain('Asunto: Divulgación de seguridad');
+    expect(md).not.toMatch(/## Confirmed issues/);
+    expect(md).not.toMatch(/Subject: Security disclosure/);
+  });
+
+  it('keeps it a DRAFT nobody sends, in Spanish', () => {
+    const md = buildDisclosureReport(ctx, 'es');
+    expect(md).toMatch(/BORRADOR/);
+    expect(md).toMatch(/FirmLab no contacta con nadie/);
+    expect(md).toMatch(/Sólo un borrador — revísalo antes de enviarlo/);
+  });
+
+  it('prints proof states, CVE ids, severities and finding titles verbatim', () => {
+    const md = buildDisclosureReport(ctx, 'es');
+    expect(md).toContain('- **Estado de prueba:** `static_confirmed`');
+    expect(md).toContain('- **Estado de prueba:** `needs_runtime_reproduction`');
+    expect(md).toContain('#### Confirmed hardcoded key');
+    expect(md).toContain('#### Possible command injection');
+    expect(md).toContain('A sink is reachable from a parsed parameter');
+    expect(md).toContain('- **Gravedad:** critical');
+    expect(md).toContain('`CVE-2021-44228`');
+    expect(md).toContain('[critical] Confirmed hardcoded key');
+    expect(md).not.toContain('confirmado_estático');
+  });
+
+  it('still refuses to present a lead as a vulnerability, in Spanish', () => {
+    const md = buildDisclosureReport(ctx, 'es');
+    expect(md).toMatch(/Esto \*\*no está confirmado\*\*/);
+    expect(md).toMatch(/no las presentes como vulnerabilidades/);
+    // The lead is listed after the confirmed section and never inside it.
+    expect(md.indexOf('Confirmed hardcoded key')).toBeLessThan(md.indexOf('Possible command injection'));
+  });
+
+  it('states plainly, in Spanish, when there is nothing confirmed', () => {
+    const md = buildDisclosureReport(
+      { ...base, findings: [finding({ proofState: 'needs_runtime_reproduction' })] },
+      'es',
+    );
+    expect(md).toMatch(/## Problemas confirmados \(0\)/);
+    expect(md).toMatch(/Ningún problema confirmado/);
+  });
+
+  it('keeps KEV as priority, not confirmation, in Spanish', () => {
+    const md = buildDisclosureReport(ctx, 'es');
+    expect(md).toMatch(/## Contexto de explotación conocida \(CISA KEV\)/);
+    expect(md).toMatch(/\*\*no\*\* confirma que el CVE sea alcanzable/);
+    expect(md).toContain('alcanzabilidad no verificada');
+  });
+
+  it('separates the operator ledger in Spanish, with no proof state anywhere in it', () => {
+    const md = buildDisclosureReport({ ...base, findings: [measured(), asserted()] }, 'es');
+    expect(md).toMatch(/## Afirmaciones de operador \(1\) — afirmadas por una persona, no medidas aquí/);
+    expect(md).toContain('- **Gravedad (afirmada):** high');
+    expect(md).toContain('Afirmado por aaron el 2023-11-14 (asserted_from_device)');
+    expect(md).toMatch(/no lleva estado de prueba/);
+    // The assertion block never prints one, and the measured finding still does.
+    expect(md).toContain('- **Estado de prueba:** `static_confirmed`');
+    expect((md.match(/\*\*Estado de prueba:\*\*/g) ?? []).length).toBe(1);
+  });
+
+  it('carries a contest into the Spanish draft, into the email, and moves nothing', () => {
+    const md = buildDisclosureReport({ ...base, findings: [measured(), contesting()] }, 'es');
+    expect(md).toMatch(/IMPUGNADO POR UN OPERADOR/);
+    expect(md).toContain('aaron afirma el 2023-11-14 que este hallazgo es incorrecto');
+    expect(md).toMatch(/el estado de prueba de arriba sigue siendo `static_confirmed`/);
+    expect(md).toMatch(/ni lo cambia, ni lo rebaja, ni elimina el hallazgo/);
+    const email = md.slice(md.indexOf('## Borrador de correo'));
+    expect(email).toContain('IMPUGNADO en mi lado');
+    expect(email).toMatch(/No he eliminado ni rebajado el hallazgo/);
+  });
+
+  it('keeps a withdrawn assertion visible as withdrawn, in Spanish', () => {
+    const md = buildDisclosureReport(
+      {
+        ...base,
+        findings: [
+          measured(),
+          contesting({ status: 'withdrawn', withdrawnBy: 'aaron', withdrawnReason: 'I was reading the wrong build' }),
+        ],
+      },
+      'es',
+    );
+    expect(md).not.toMatch(/IMPUGNADO POR UN OPERADOR/);
+    expect(md).toMatch(/## Afirmaciones retiradas \(1\) — retractadas, y conservadas/);
+    expect(md).toMatch(/RETIRADA por aaron: I was reading the wrong build/);
+    expect(md).toMatch(/\*\*Impugnado hasta su retirada:\*\* “Hardcoded root password in \/etc\/shadow”/);
+  });
+
+  it('formats the preparation date for the locale while keeping the ISO stamp beside it', () => {
+    const md = buildDisclosureReport(ctx, 'es');
+    expect(md).toMatch(/\*\*Preparado:\*\* .*julio.*2026.*\(2026-07-21T00:00:00\.000Z\)/);
+    expect(buildDisclosureReport(ctx, 'en')).toContain('(2026-07-21T00:00:00.000Z)');
+  });
+});
+
 describe('buildDisclosureReport — an amendment reaches the vendor with what it replaced', () => {
   const amended = (): Finding =>
     asserted({

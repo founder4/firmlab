@@ -29,18 +29,25 @@
  * Pure string building over plain data: no store import, no I/O, so every rule above is reachable from a unit test.
  * `report.ts` binds it to the database. Everything interpolated goes through `escapeHtml` — an assertion is a
  * sentence a human typed, and this document is opened in a browser.
+ *
+ * **Language.** Every sentence above lives in `../i18n`, not here, and the locale arrives as a parameter — there is
+ * no global to read, because two requests for two languages can be in flight at once. What is NOT localised is
+ * anything a reader may need to match against the API, the database or another document: proof states, sources,
+ * kinds, severities, assertion claims and ids all print verbatim in both languages, and a finding's title and
+ * rationale print as the provider recorded them. Only the document's own scaffolding is translated. The proof-state
+ * gloss under the table exists so a code that stays verbatim is still readable in the reader's language.
  */
 import type { OperatorAssertion } from '@firmlab/core';
+import { type Locale, type Messages, escapeHtml, messages } from '../i18n/index.js';
 import {
   type AssertionRevision,
-  CLAIM_MEANING,
-  NOT_A_MEASUREMENT,
   assertionDay,
-  describeAssertion,
   indexDisputes,
   partitionByProvenance,
   revisionsOf,
 } from '../operator-findings.js';
+
+export { escapeHtml };
 
 /**
  * A ledger row, structurally typed so `Finding` from core satisfies it without this module importing the store.
@@ -69,10 +76,6 @@ const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2,
  */
 export const MAX_MEASURED_ROWS = 300;
 
-export function escapeHtml(s: unknown): string {
-  return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
-}
-
 /**
  * Styles for both sections. They ship with the markup rather than in the report's stylesheet because the visual
  * distinction between a measurement and a claim is part of this module's contract, not a theme detail: the operator
@@ -95,6 +98,10 @@ export const LEDGER_CSS = `
   .dispute { border-left: 3px solid #b08948; background: #b0894814; padding: 6px 10px; margin-top: 6px; font-size: 12px; }
   tr.contested td { background: #b089480a; }
   .rationale { font-size: 11.5px; margin-top: 3px; }
+  .gloss { font-size: 12px; margin: 12px 0 0; }
+  .gloss dl { margin: 6px 0 0; }
+  .gloss dt { font-family: ui-monospace, monospace; font-size: 11.5px; margin-top: 6px; }
+  .gloss dd { margin: 1px 0 0 18px; }
   /* The report's base rule is word-break: break-word, and the annotation makes the last column wide enough that
      the first three collapse to one character per line ("needs_runt / ime_reprodu / ction") — which is what
      rendering the page showed and no assertion about the HTML would have. */
@@ -124,31 +131,35 @@ function bySeverityThenName(a: ReportFinding, b: ReportFinding): number {
  * that the proof state beside it is unchanged. The two sentences have to travel together: an annotation reading
  * only "DISPUTED" invites the reader to discount the measurement, which is precisely the override this refuses.
  */
-function disputeBlock(target: ReportFinding, disputes: readonly ReportFinding[]): string {
+function disputeBlock(target: ReportFinding, disputes: readonly ReportFinding[], t: Messages): string {
   const blocks = disputes.map((d) => {
     const a = d.assertion;
-    const who = a ? (a.authorKind === 'agent' ? `${a.assertedBy} (agent)` : a.assertedBy) : 'an unrecorded author';
-    const when = a ? assertionDay(a.assertedAt) : 'an unrecorded date';
-    const basis = d.rationale ? ` ${escapeHtml(d.rationale)}` : '';
-    return `<div class="dispute"><strong>CONTESTED BY AN OPERATOR</strong> — ${escapeHtml(who)} asserts on ${escapeHtml(
+    const who = a
+      ? a.authorKind === 'agent'
+        ? t.ledger.agentAuthor(a.assertedBy)
+        : a.assertedBy
+      : t.ledger.unrecordedAuthor;
+    const when = a ? assertionDay(a.assertedAt) : t.ledger.unrecordedDate;
+    return t.ledger.dispute({
+      who,
       when,
-    )} that this finding is wrong: “${escapeHtml(d.title)}”.${basis}<div class="muted">Recorded as operator assertion <code>${escapeHtml(
-      d.id,
-    )}</code>, and listed in full in the operator section. This is testimony about a measurement, not a measurement: the proof state of this row is still <code>${escapeHtml(
-      target.proofState,
-    )}</code>, decided by code from the evidence, and the dispute neither changes it, downgrades it nor removes the row. Both stand; a reader weighs them.</div></div>`;
+      title: d.title,
+      rationale: d.rationale,
+      assertionId: d.id,
+      proofState: target.proofState,
+    });
   });
   return blocks.join('');
 }
 
-function measuredRow(f: ReportFinding, disputes: readonly ReportFinding[]): string {
+function measuredRow(f: ReportFinding, disputes: readonly ReportFinding[], t: Messages): string {
   const rationale = f.rationale ? `<div class="muted rationale">${escapeHtml(f.rationale)}</div>` : '';
   const contested = disputes.length > 0;
   const cells: [string, string][] = [
     ['narrow', sevCell(f.severity)],
     ['narrow', `<code class="proof">${escapeHtml(f.proofState)}</code>`],
     ['narrow', `<code>${escapeHtml(f.source)}</code>`],
-    ['', `${escapeHtml(f.title)}${rationale}${contested ? disputeBlock(f, disputes) : ''}`],
+    ['', `${escapeHtml(f.title)}${rationale}${contested ? disputeBlock(f, disputes, t) : ''}`],
   ];
   const tds = cells.map(([cls, c]) => (cls ? `<td class="${cls}">${c}</td>` : `<td>${c}</td>`)).join('');
   return `<tr${contested ? ' class="contested"' : ''}>${tds}</tr>`;
@@ -158,10 +169,17 @@ function measuredRow(f: ReportFinding, disputes: readonly ReportFinding[]): stri
  * The measured half. Rendered even when it is empty, with the sentence that an empty ledger is not a clean image —
  * an omitted section reads as "nothing to say here", which is the single inference this workbench exists to refuse.
  */
-function renderMeasured(measured: ReportFinding[], disputesByTarget: Map<string, ReportFinding[]>): string {
-  const head = `<section><h2>Findings — measured (${measured.length})</h2>`;
+function renderMeasured(
+  measured: ReportFinding[],
+  disputesByTarget: Map<string, ReportFinding[]>,
+  t: Messages,
+): string {
+  // Catalogue prose is inserted raw and only DATA is escaped — the same rule the module had before it was
+  // localised. Every sentence here is written in this repository; escaping them would render the quotation marks
+  // in "this was wrong, and here is why" as entities for no gain.
+  const head = `<section><h2>${t.ledger.measuredHeading(measured.length)}</h2>`;
   if (measured.length === 0) {
-    return `${head}<p class="muted">No measured findings are recorded for this image. That is a count of rows in the ledger, not a verdict: a stage that never ran contributes nothing to it, and an empty list here is not evidence that the image is clean. Check which analyses were executed before reading this as a negative.</p></section>`;
+    return `${head}<p class="muted">${t.ledger.measuredEmpty}</p></section>`;
   }
 
   // Contested rows are selected first and exempt from the cap: the annotation is the reason this section exists,
@@ -174,37 +192,70 @@ function renderMeasured(measured: ReportFinding[], disputesByTarget: Map<string,
 
   const rule =
     omitted > 0
-      ? `<p class="muted">Showing ${shown.length} of ${measured.length}. Rows are ordered by severity (highest first, then proof state and title) and the ${omitted} lowest-ranked are omitted — the cut is by that rule, never by the order the rows were written. Every contested row is shown regardless of the cap.</p>`
+      ? `<p class="muted">${t.ledger.cutRule({ shown: shown.length, total: measured.length, omitted })}</p>`
       : '';
-  const rows = shown.map((f) => measuredRow(f, disputesByTarget.get(f.id) ?? []));
+  const rows = shown.map((f) => measuredRow(f, disputesByTarget.get(f.id) ?? [], t));
   const header = [
-    ['narrow', 'Severity'],
-    ['narrow', 'Proof state'],
-    ['narrow', 'Source'],
-    ['', 'Finding'],
+    ['narrow', t.ledger.columns.severity],
+    ['narrow', t.ledger.columns.proofState],
+    ['narrow', t.ledger.columns.source],
+    ['', t.ledger.columns.finding],
   ]
     .map(([cls, h]) => (cls ? `<th class="${cls}">${escapeHtml(h)}</th>` : `<th>${escapeHtml(h)}</th>`))
     .join('');
-  return `${head}<p class="muted">Every row below was decided by code, and its proof state says what was actually established. This count excludes operator assertions entirely — those are recorded further down and are not measurements.</p>${rule}<table class="ledger"><thead><tr>${header}</tr></thead><tbody>${rows.join(
+  return `${head}<p class="muted">${t.ledger.measuredIntro}</p>${rule}<table class="ledger"><thead><tr>${header}</tr></thead><tbody>${rows.join(
     '',
-  )}</tbody></table></section>`;
+  )}</tbody></table>${proofStateGloss(shown, t)}</section>`;
+}
+
+/**
+ * The gloss under the table: every proof state that actually appears above it, code first and explanation after.
+ *
+ * The code is an identifier and prints verbatim in every language — a reader who greps the ledger, the API or the
+ * database for `blocked_by_platform` has to find the same token here. That is exactly why the gloss exists: a
+ * Spanish reader gets the sentence saying the question WAS asked and could not be answered, without the token
+ * being translated out from under them. Only the states present are listed, so the legend is about this image
+ * rather than a standing table of everything the ladder can hold. A code this build does not recognise is printed
+ * with the "written by another version" sentence rather than dropped or guessed at.
+ */
+function proofStateGloss(shown: readonly ReportFinding[], t: Messages): string {
+  const order = Object.keys(t.proofState.meaning);
+  const rank = (code: string): number => {
+    const i = order.indexOf(code);
+    return i < 0 ? order.length : i;
+  };
+  const present = [...new Set(shown.map((f) => f.proofState))].sort(
+    (a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0),
+  );
+  if (present.length === 0) return '';
+  const meanings: Record<string, string | undefined> = t.proofState.meaning;
+  const items = present
+    .map(
+      (code) =>
+        `<dt><code>${escapeHtml(code)}</code></dt><dd class="muted">${meanings[code] ?? t.proofState.unknown}</dd>`,
+    )
+    .join('');
+  return `<div class="gloss"><strong>${t.ledger.glossHeading}</strong> <span class="muted">${t.ledger.glossNote}</span><dl>${items}</dl></div>`;
 }
 
 /** The references an author cited, if any survived onto the row's evidence. */
-function referenceList(f: ReportFinding): string {
+function referenceList(f: ReportFinding, t: Messages): string {
   const raw = f.evidence?.references;
   if (!Array.isArray(raw)) return '';
   const refs = raw.filter((r): r is string => typeof r === 'string' && r.trim().length > 0);
   if (refs.length === 0) return '';
-  return `<div class="basis"><strong>Cited:</strong> ${refs.map((r) => `<code>${escapeHtml(r)}</code>`).join(' · ')}</div>`;
+  return `<div class="basis"><strong>${t.ledger.cited}</strong> ${refs.map((r) => `<code>${escapeHtml(r)}</code>`).join(' · ')}</div>`;
 }
 
-function revisionLine(r: AssertionRevision): string {
-  const title = r.title ? ` — “${escapeHtml(r.title)}”` : '';
-  const target = r.disputesFindingId ? ` (contested <code>${escapeHtml(r.disputesFindingId)}</code>)` : '';
-  return `<li><code>${escapeHtml(r.claim)}</code>, stood from ${escapeHtml(assertionDay(r.from))} to ${escapeHtml(
-    assertionDay(r.supersededAt),
-  )}${title}${target}<div class="muted">${escapeHtml(r.rationale)}</div></li>`;
+function revisionLine(r: AssertionRevision, t: Messages): string {
+  return t.ledger.revision({
+    claim: r.claim,
+    from: assertionDay(r.from),
+    to: assertionDay(r.supersededAt),
+    rationale: r.rationale,
+    title: r.title,
+    disputesFindingId: r.disputesFindingId,
+  });
 }
 
 /**
@@ -212,37 +263,26 @@ function revisionLine(r: AssertionRevision): string {
  * a weak one with no trace, which is the same erasure a delete performs — so the predecessors are printed, oldest
  * first, each with the window it stood in.
  */
-function historyBlock(a: OperatorAssertion): string {
+function historyBlock(a: OperatorAssertion, t: Messages): string {
   const revisions = revisionsOf(a);
   if (a.amendedAt === undefined && revisions.length === 0) return '';
-  if (revisions.length === 0) {
-    return `<div class="history"><strong>Amended ${escapeHtml(
-      assertionDay(a.amendedAt ?? a.assertedAt),
-    )}.</strong> The claim it replaced was not preserved — this row was amended by a build that overwrote its predecessor. What stands here is the current claim only.</div>`;
-  }
-  const plural = revisions.length === 1 ? 'claim' : 'claims';
-  return `<div class="history"><strong>Amended ${escapeHtml(assertionDay(a.amendedAt ?? a.assertedAt))}, superseding ${
-    revisions.length
-  } earlier ${plural}.</strong> An amendment appends; it never overwrites. What the author previously stated, and on what basis:<ol>${revisions
-    .map(revisionLine)
-    .join('')}</ol></div>`;
+  const when = assertionDay(a.amendedAt ?? a.assertedAt);
+  if (revisions.length === 0) return t.ledger.historyLost(when);
+  return t.ledger.history({ when, items: revisions.map((r) => revisionLine(r, t)) });
 }
 
 /** The finding a dispute names, or an honest statement that it can no longer be shown. */
-function disputeTargetLine(f: ReportFinding, ledger: readonly ReportFinding[]): string {
+function disputeTargetLine(f: ReportFinding, ledger: readonly ReportFinding[], t: Messages): string {
   const targetId = f.assertion?.disputesFindingId;
   if (!targetId) return '';
   const target = ledger.find((r) => r.id === targetId);
-  if (!target) {
-    return `<div class="basis">Contests finding <code>${escapeHtml(
-      targetId,
-    )}</code>, which is no longer in this image's ledger. Re-running a provider replaces its rows with new ids, so a dispute can outlive the row it was recorded against: the claim is kept, and what it pointed at cannot be shown here.</div>`;
-  }
-  return `<div class="basis">Contests finding <code>${escapeHtml(targetId)}</code> — “${escapeHtml(
-    target.title,
-  )}” (<code>${escapeHtml(target.proofState)}</code>, source <code>${escapeHtml(
-    target.source,
-  )}</code>). That row stands exactly as code decided it; this assertion is recorded beside it, not over it.</div>`;
+  if (!target) return t.ledger.disputeTargetGone(targetId);
+  return t.ledger.disputeTarget({
+    targetId,
+    title: target.title,
+    proofState: target.proofState,
+    source: target.source,
+  });
 }
 
 /**
@@ -250,36 +290,35 @@ function disputeTargetLine(f: ReportFinding, ledger: readonly ReportFinding[]): 
  * basis that is a paragraph, so giving it the findings table's columns would force it into the shape of a
  * measurement and leave a reader comparing the two by column position.
  */
-function assertionBlock(f: ReportFinding, ledger: readonly ReportFinding[]): string {
+function assertionBlock(f: ReportFinding, ledger: readonly ReportFinding[], t: Messages): string {
   const a = f.assertion;
   const retracted = a?.status === 'withdrawn';
   const cls = retracted ? 'assert retracted' : 'assert';
-  const badge = retracted ? 'withdrawn · not measured' : 'asserted · not measured';
-  const meaning = a ? (CLAIM_MEANING[a.claim] ?? 'Unrecognised claim — read it as an unverified assertion.') : '';
-  const attribution = a
-    ? escapeHtml(describeAssertion(a))
-    : `This row carries the operator-assertion provenance but no author record. Treat it as an unattributed claim; ${escapeHtml(
-        NOT_A_MEASUREMENT,
-      )}`;
-  const basis = f.rationale ? `<div class="basis"><strong>Stated basis:</strong> ${escapeHtml(f.rationale)}</div>` : '';
+  const badge = retracted ? t.ledger.badgeWithdrawn : t.ledger.badgeAsserted;
+  const meaning = a ? (t.ledger.claimMeaning[a.claim] ?? t.ledger.unrecognisedClaim) : '';
+  const attribution = a ? escapeHtml(t.ledger.describeAssertion(a)) : t.ledger.noAuthorRecord;
+  const basis = f.rationale
+    ? `<div class="basis"><strong>${t.ledger.statedBasis}</strong> ${escapeHtml(f.rationale)}</div>`
+    : '';
   // The meaning appears once per block, not twice. `describeAssertion` already carries it for a standing claim, and
   // a caveat printed twice two lines apart is one a reader learns to skip — the skipped paragraph being the caveat.
   // A withdrawn row's attribution states the retraction instead, so this is where its meaning gets said.
   const claimLine = a
-    ? `<div class="basis"><strong>Claim:</strong> <code>${escapeHtml(a.claim)}</code>${
-        retracted ? ` — ${escapeHtml(meaning)}` : ''
+    ? `<div class="basis"><strong>${t.ledger.claim}</strong> <code>${escapeHtml(a.claim)}</code>${
+        retracted ? ` — ${meaning}` : ''
       }</div>`
     : '';
   return `<div class="${cls}"><span class="badge-asserted${
     retracted ? ' retracted' : ''
-  }">${badge}</span> <span class="muted mono">severity asserted: ${escapeHtml(
+  }">${badge}</span> <span class="muted mono">${t.ledger.assertedSeverity(
     f.severity,
   )}</span><div class="assert-title">${escapeHtml(
     f.title,
-  )}</div><div class="attribution">${attribution}</div>${claimLine}${basis}${referenceList(f)}${disputeTargetLine(
+  )}</div><div class="attribution">${attribution}</div>${claimLine}${basis}${referenceList(f, t)}${disputeTargetLine(
     f,
     ledger,
-  )}${a ? historyBlock(a) : ''}</div>`;
+    t,
+  )}${a ? historyBlock(a, t) : ''}</div>`;
 }
 
 /**
@@ -290,39 +329,51 @@ function renderOperator(
   asserted: ReportFinding[],
   withdrawn: ReportFinding[],
   ledger: readonly ReportFinding[],
+  t: Messages,
 ): string {
   if (asserted.length === 0 && withdrawn.length === 0) return '';
   const active =
     asserted.length > 0
       ? `${asserted
           .sort(bySeverityThenName)
-          .map((f) => assertionBlock(f, ledger))
+          .map((f) => assertionBlock(f, ledger, t))
           .join('')}`
-      : '<p class="muted">No assertion currently stands on this image; the retracted ones below are kept as part of the record.</p>';
+      : `<p class="muted">${t.ledger.noAssertionStands}</p>`;
   const retracted =
     withdrawn.length > 0
-      ? `<h3>Withdrawn assertions (${withdrawn.length}) — retracted, and kept</h3><p class="muted">A retraction is part of the record, so it is shown rather than deleted: "this was wrong, and here is why" is often the most useful row a ledger holds. A withdrawn claim is counted nowhere and contests nothing.</p>${withdrawn
+      ? `<h3>${t.ledger.withdrawnHeading(withdrawn.length)}</h3><p class="muted">${
+          t.ledger.withdrawnIntro
+        }</p>${withdrawn
           .sort(bySeverityThenName)
-          .map((f) => assertionBlock(f, ledger))
+          .map((f) => assertionBlock(f, ledger, t))
           .join('')}`
       : '';
-  return `<section class="operator"><h2>Operator assertions (${asserted.length}) — asserted by a named author, not measured</h2><p class="notice">${escapeHtml(
-    NOT_A_MEASUREMENT,
-  )}</p><p class="muted">Nothing in this section was produced by an analysis. Each block is a claim recorded by the named author on the basis they state, and it is kept apart from the findings above for that reason: none of it carries a proof state, none of it counts towards any analysis stage, and none of it is included in the measured count. Where an author disputes a computed finding, that finding is annotated where it appears above and its proof state is left exactly as code decided it.</p>${active}${retracted}</section>`;
+  return `<section class="operator"><h2>${t.ledger.operatorHeading(
+    asserted.length,
+  )}</h2><p class="notice">${t.ledger.notAMeasurement}</p><p class="muted">${
+    t.ledger.operatorIntro
+  }</p>${active}${retracted}</section>`;
 }
 
 /**
- * Pure: render the whole ledger as two independent sections.
+ * Pure: render the whole ledger as two independent sections, in one language.
  *
  * Takes the complete ledger and does the partition itself — the caller never receives the pieces, so it cannot
  * interleave the populations or hand the wrong one to the wrong renderer. Partitioning is by the
  * `operator_assertion` sentinel, so a row whose source was hand-edited still lands where its provenance says.
+ *
+ * The locale is a parameter with an English default, never a module global: `report.ts` passes what the request
+ * asked for, and two requests in two languages cannot interfere.
  */
-export function renderLedgerSections(findings: readonly ReportFinding[]): { measured: string; operator: string } {
+export function renderLedgerSections(
+  findings: readonly ReportFinding[],
+  locale: Locale = 'en',
+): { measured: string; operator: string } {
+  const t = messages(locale);
   const { measured, asserted, withdrawn } = partitionByProvenance(findings);
   const disputesByTarget = indexDisputes(findings);
   return {
-    measured: renderMeasured(measured, disputesByTarget),
-    operator: renderOperator(asserted, withdrawn, findings),
+    measured: renderMeasured(measured, disputesByTarget, t),
+    operator: renderOperator(asserted, withdrawn, findings, t),
   };
 }
