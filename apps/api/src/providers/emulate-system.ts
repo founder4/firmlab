@@ -107,8 +107,11 @@ export function buildFullSystemArgs(
     `file=${rootfsImage},format=raw`,
     '-netdev',
     `user,id=n0${fwd ? `,${fwd}` : ''}`,
+    // `romfile=` (empty) disables the NIC's PXE option ROM. Without it qemu demands `efi-e1000.rom`, which the
+    // Debian qemu packages do not ship, and refuses to start — the third romfile this rung tripped over. Nothing
+    // is lost: the guest boots from `-kernel`, so a network boot ROM has no job here.
     '-device',
-    'e1000,netdev=n0',
+    'e1000,netdev=n0,romfile=',
     '-nographic',
   ];
 }

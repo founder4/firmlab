@@ -57,6 +57,9 @@ describe('buildFullSystemArgs', () => {
     expect(args).toContain('-nodefaults');
     expect(args).toContain('-serial mon:stdio');
     expect(args).toContain('console=ttyS0');
+    // And the NIC's PXE option ROM is disabled: qemu otherwise demands `efi-e1000.rom`, which the Debian
+    // packages do not ship. The guest boots from -kernel, so a network boot ROM has no job here.
+    expect(args).toContain('e1000,netdev=n0,romfile=');
   });
 });
 
