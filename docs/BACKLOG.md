@@ -383,6 +383,29 @@ tree: `pnpm check` 3/3, **1307 tests** (75 core / 1160 api / 72 web), biome clea
   OpenWrt update path produced four separate HIGH "flashes without checking" findings across five files._
 
 ### Follow-ups from the five
+- ✅ **The modules the sweep stopped asking about got their own question** (2026-07-28, deploy `ab7f9bf`) —
+  excluding ET_REL from `binvuln` was right and left 375 `.ko` files with nothing to say about them. `kernelposture`
+  now reads each module's `.modinfo` for `intree=`, `license=` and `name=`, and reports **attack surface, never
+  defects**: an out-of-tree module runs with full kernel privilege outside the process that reviews and patches the
+  kernel, so an upstream fix does not reach it and no distribution security team tracks it — a test asserts the
+  title never says "vulnerable", because nothing here opened a module and looked.
+  **Provenance is decided from the SET, never from a remembered kernel version.** `intree=Y` postdates the oldest
+  kernels in this corpus (DVRF ships 2.6.22), and hard-coding the release it arrived in would be the recall-based
+  claim `component-cve.ts` refuses to make about CVE ranges. So: if not one inspected module carries the tag, the
+  build does not use it and the question is unanswerable here — `blocked_by_platform`, never "all in-tree".
+  **Measured on the deploy: 375 of 375 modules, 307 in-tree, 68 out-of-tree, 3 declaring `Proprietary`.**
+  _Three defects, each found only because a measurement disagreed with another:_
+  (1) *the licence regex ran to the next space*, so `Dual BSD/GPL` and `GPL v2` — the licences that matter most —
+  would have been truncated; the space-separated test fixture hid it, and NUL-separated fixtures exposed it.
+  (2) *the sample cap made the count an artifact of the alphabet*: 200 of 375 modules opened, sorted by name,
+  reported "25 of 200 out of tree" as though 200 were the total, and all three proprietary modules sort past the
+  cap so they vanished from a result presented as a measurement. The cap now covers the corpus and the finding
+  states what it opened either way.
+  (3) *the record-boundary rule dropped the FIRST record of every module*: it demanded a NUL before a key, but
+  the first `.modinfo` record is preceded by whatever the previous section ended with — 0x08 on the real
+  `ath_pktlog.ko`, which cost the corpus a tainting module. A printable predecessor is still rejected, so
+  `filename=` is not read as `name=`.
+
 Surfaced while building the above and deliberately not built. Ordered roughly by value.
 
 - ✅ **A guard whose enabling variable nobody sets is DISABLED, not skipped** (2026-07-28, deploy `d30350c`) —
