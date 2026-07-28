@@ -36,6 +36,15 @@ const DEFAULT_ALLOWLIST = ['api.osv.dev', 'services.nvd.nist.gov', 'www.cisa.gov
 export const HASH_LOOKUP_HOSTS = ['www.nitrxgen.net', 'weakpass.com'];
 
 /**
+ * What every caller says when the track is off. It lives here, beside the gate itself, because both the route and
+ * the runner have to say it and they had already drifted apart into two different sentences. It names the lane as
+ * the Settings toggle names it, so the message points at a switch the operator can actually find, and keeps the
+ * env var for the deployment that has no UI.
+ */
+export const RESEARCH_DISABLED =
+  'External intelligence is off — turn it on in Settings › Privacy, or set FIRMLAB_RESEARCH=1';
+
+/**
  * Resolve the research config, or null when the track is off. Gated by FIRMLAB_RESEARCH so the deterministic,
  * local-only workbench is the default and no external host is contacted unless the operator opts in.
  */

@@ -6,7 +6,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { startJob } from '../providers/jobs.js';
-import { loadResearchConfig } from '../research/config.js';
+import { RESEARCH_DISABLED, loadResearchConfig } from '../research/config.js';
 import { runResearch } from '../research/run.js';
 import { getImage, listJobs } from '../store.js';
 
@@ -22,7 +22,7 @@ export async function researchRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
     if (!loadResearchConfig()) {
-      const error = 'External research disabled — External intelligence is off — turn it on in Settings › Privacy, or set FIRMLAB_RESEARCH=1';
+      const error = RESEARCH_DISABLED;
       return reply.status(400).send({ error });
     }
     const jobId = startJob(id, 'research', {}, (h) => runResearch(id, h));

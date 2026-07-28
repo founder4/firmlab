@@ -29,7 +29,7 @@ import { type ProvenanceFingerprint, buildProvenanceFingerprint } from '../provi
 import type { SbomResult } from '../providers/sbom.js';
 import { type SecurityTxt, fetchSecurityTxt } from '../providers/securitytxt.js';
 import { getImage, listJobs } from '../store.js';
-import { loadResearchConfig } from './config.js';
+import { RESEARCH_DISABLED, loadResearchConfig } from './config.js';
 import { type EgressLedger, buildEgressLedger } from './egress.js';
 
 export interface ResearchResult {
@@ -152,7 +152,7 @@ function rootfsProvenanceStrings(imageId: string): string[] {
 
 export async function runResearch(imageId: string, handle: JobHandle): Promise<ResearchResult> {
   const cfg = loadResearchConfig();
-  if (!cfg) throw new Error('External research disabled — turn it on in Settings › Privacy, or set FIRMLAB_RESEARCH=1');
+  if (!cfg) throw new Error(RESEARCH_DISABLED);
   const row = getImage(imageId);
   if (!row?.analysisJson || !row.identityJson) throw new Error('No analysis for this image');
 
