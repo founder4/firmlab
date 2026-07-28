@@ -206,6 +206,45 @@ export function parseGdbOutput(text: string): GdbParse {
   return { attached, hits, stop, exited, ...(exitCode !== undefined ? { exitCode } : {}), emulationWarnings };
 }
 
+/**
+ * Pure: split the emulated process's OWN stderr into the lines that mean THE SANDBOX FAILED IT, and everything
+ * else the program happened to print.
+ *
+ * This exists because qemu was spawned with `stdio: 'ignore'`, so the target's own failure output never reached
+ * the classifier and a program that died for want of the emulator was graded identically to one that ran cleanly.
+ * The worked example is DVRF's `sbin/diag_tracertbutton`: it exits immediately printing `/dev/nvram: No such file
+ * or directory` — qemu-user provides no such device — and that came back `ran_clean`, i.e. "this input did
+ * nothing", when the truth was "the sandbox lacks the device the program needs". Opposite meanings, same verdict.
+ *
+ * The separation is the honest part, and it is why this is not a keyword grep. The probe feeds a cyclic pattern as
+ * argv, so a program printing `Aa0Aa1…: No such file or directory` is behaving CORRECTLY on garbage input — that is
+ * the program working, not the sandbox failing, and counting it would invent an emulation problem out of a
+ * successful run. So ENOENT only counts against the sandbox when the missing path is under `/dev`, `/proc` or
+ * `/sys`: kernel-provided interfaces that qemu-user genuinely does not implement, and that no argv of ours can
+ * name. Everything else is kept as `output` — visible in evidence, never used to downgrade a verdict.
+ */
+export function parseTargetStderr(text: string): { deficiencies: string[]; output: string[] } {
+  const deficiencies: string[] = [];
+  const output: string[] = [];
+  // Each pattern is a way the SANDBOX comes up short, not a way the program misbehaves.
+  const SANDBOX = [
+    /qemu:\s*(unsupported syscall|uncaught target signal|unhandled cpu exception|could not open)/i,
+    /error while loading shared libraries/i,
+    /cannot open shared object file/i,
+    /function not implemented/i,
+    // A kernel interface qemu-user does not provide. Anchored to the three pseudo-filesystems on purpose.
+    /(^|[\s'"`:(])\/(dev|proc|sys)\/\S+.*(no such file or directory|no such device|permission denied)/i,
+  ];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (SANDBOX.some((re) => re.test(line))) deficiencies.push(line.slice(0, 200));
+    else output.push(line.slice(0, 200));
+    if (deficiencies.length + output.length >= 200) break;
+  }
+  return { deficiencies, output };
+}
+
 export type ProbeVerdict =
   | 'crash_input_controlled'
   | 'crash'
@@ -227,6 +266,10 @@ export interface ProbeResult {
    */
   argumentFromInput?: boolean;
   emulationWarnings: string[];
+  /** Lines from the TARGET's own stderr showing the sandbox failed it (missing /dev node, unsupported syscall). */
+  environmentFailures: string[];
+  /** The rest of the target's stderr — kept as evidence, never used to decide a verdict. */
+  targetOutput: string[];
 }
 
 /** Shortest run of input bytes that is distinctive enough to say the sink was handed OUR data, not a coincidence. */
@@ -264,8 +307,20 @@ export function argumentCarriesInput(hits: SinkHit[], pattern: string): boolean 
  * counted as a reproduction. A run that neither hit nor crashed says only that THIS input did nothing — which is
  * not a statement about the binary.
  */
-export function classifyRun(parse: GdbParse, pattern: string): ProbeResult {
-  const base = { hits: parse.hits, stop: parse.stop, emulationWarnings: parse.emulationWarnings };
+export function classifyRun(parse: GdbParse, pattern: string, targetStderr = ''): ProbeResult {
+  const { deficiencies, output } = parseTargetStderr(targetStderr);
+  const base = {
+    hits: parse.hits,
+    stop: parse.stop,
+    emulationWarnings: parse.emulationWarnings,
+    environmentFailures: deficiencies,
+    targetOutput: output,
+  };
+  // gdb's own warnings and the target's stderr are two windows on the same question — did the sandbox hold up? —
+  // so the artifact branches consider both. They stay separate in the result because they are different evidence:
+  // one is the debugger noticing, the other is the program itself saying what it could not find.
+  const sandboxFailed = parse.emulationWarnings.length > 0 || deficiencies.length > 0;
+  const sandboxNote = deficiencies[0] ?? parse.emulationWarnings[0] ?? '';
 
   if (!parse.attached && parse.hits.length === 0 && !parse.stop) {
     return {
@@ -287,12 +342,12 @@ export function classifyRun(parse: GdbParse, pattern: string): ProbeResult {
         reason: `The program faulted with ${parse.stop.signal} at 0x${parse.stop.pc.toString(16)}, and those four bytes are "${control.bytes}" from the input pattern at offset ${control.offset}. The input reached the saved return address: this is a memory-safety bug reproduced under emulation, not an inference.`,
       };
     }
-    // A fault with no sink hit and the emulator complaining is most likely the emulator.
-    if (parse.hits.length === 0 && parse.emulationWarnings.length > 0) {
+    // A fault with no sink hit and the sandbox complaining is most likely the sandbox.
+    if (parse.hits.length === 0 && sandboxFailed) {
       return {
         ...base,
         verdict: 'emulation_artifact',
-        reason: `The process died with ${parse.stop.signal} without ever reaching the sink, and the emulator reported problems of its own (${parse.emulationWarnings[0]}). That is the emulation failing, not a reproduced bug — and it is not evidence the binary is sound either.`,
+        reason: `The process died with ${parse.stop.signal} without ever reaching the sink, and the sandbox came up short of what it needed (${sandboxNote}). That is the emulation failing, not a reproduced bug — and it is not evidence the binary is sound either.`,
       };
     }
     return {
@@ -322,11 +377,17 @@ export function classifyRun(parse: GdbParse, pattern: string): ProbeResult {
     };
   }
 
-  if (parse.emulationWarnings.length > 0) {
+  if (sandboxFailed) {
+    // The DVRF case: exits at once for want of /dev/nvram, never reaches the sink, never faults. Without the
+    // target's stderr this fell through to `ran_clean` below — "this input did nothing" — which is the opposite
+    // of what happened. The program was not exercised at all.
+    const bySelf = deficiencies.length > 0;
     return {
       ...base,
       verdict: 'emulation_artifact',
-      reason: `The sink was never reached and the emulator reported problems (${parse.emulationWarnings[0]}). Nothing was learned about the binary.`,
+      reason: bySelf
+        ? `The sink was never reached because the sandbox does not provide something the program requires — it reported "${sandboxNote}" and stopped. Nothing was learned about the binary: this is a limit of qemu-user (no NVRAM, no device nodes, no peripherals), not a result about the code, and it is not evidence the binary is sound.`
+        : `The sink was never reached and the emulator reported problems (${sandboxNote}). Nothing was learned about the binary.`,
     };
   }
 
@@ -334,9 +395,9 @@ export function classifyRun(parse: GdbParse, pattern: string): ProbeResult {
     ...base,
     verdict: 'ran_clean',
     reason:
-      'The program ran to completion without reaching the sink and without faulting. That is a statement about ' +
-      'THIS ONE input under an emulator, not about the binary: a different input, or the real device, may behave ' +
-      'differently.',
+      'The program ran to completion without reaching the sink and without faulting, and neither gdb nor the ' +
+      'program itself reported the sandbox coming up short. That is a statement about THIS ONE input under an ' +
+      'emulator, not about the binary: a different input, or the real device, may behave differently.',
   };
 }
 
@@ -394,6 +455,10 @@ export function buildDynFindings(binary: string, sink: string, r: ProbeResult): 
     verdict: r.verdict,
     ...(r.stop ? { signal: r.stop.signal, faultPc: `0x${r.stop.pc.toString(16)}` } : {}),
     ...(r.emulationWarnings.length ? { emulationWarnings: r.emulationWarnings.slice(0, 3) } : {}),
+    // What the program itself said it could not find. This is the difference between "the input did nothing" and
+    // "the sandbox lacks the device the program needs", so it belongs in the evidence of every verdict, not just
+    // the artifact one — a `crash` whose run also missed /dev/nvram is weaker than one whose run did not.
+    ...(r.environmentFailures.length ? { sandboxShortfalls: r.environmentFailures.slice(0, 3) } : {}),
   };
 
   if (r.verdict === 'crash_input_controlled') {

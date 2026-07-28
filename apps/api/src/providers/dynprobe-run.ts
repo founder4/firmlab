@@ -54,6 +54,8 @@ const ABI: Partial<Record<Architecture, { args: string[]; stringArg?: string }>>
 const GDB_TIMEOUT_MS = 120 * 1000;
 /** How long to wait for the emulator's gdbstub to accept connections before giving up on it. */
 const STUB_WAIT_MS = 8000;
+/** Ceiling on the target's captured stderr. A program in a loop must not be able to grow this without bound. */
+const TARGET_STDERR_CAP = 64 * 1024;
 
 /**
  * Ask the OS for a free port.
@@ -185,10 +187,29 @@ export async function runDynProbe(
   fs.writeFileSync(scriptPath, script);
 
   let qemu: ChildProcess | null = null;
+  let targetStderr = '';
+  let stderrTruncated = false;
   try {
     handle.log(`${emulator}: running ${binary} under a gdbstub on port ${port} with a ${len}-byte cyclic input.`);
-    qemu = spawn(emulator, ['-L', rootfsAbs, '-g', String(port), absTarget, pattern], { stdio: 'ignore' });
+    // stderr is PIPED, not ignored. It was ignored, and that discarded the target's own account of why it died:
+    // DVRF's `diag_tracertbutton` exits printing `/dev/nvram: No such file or directory` and was graded
+    // `ran_clean`, identical to a genuinely uneventful run. Bounded, because a chatty target must not be able to
+    // grow this without limit, and truncation is recorded rather than silent.
+    qemu = spawn(emulator, ['-L', rootfsAbs, '-g', String(port), absTarget, pattern], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
     qemu.on('error', () => undefined);
+    qemu.stderr?.on('error', () => undefined);
+    qemu.stderr?.on('data', (chunk: Buffer) => {
+      if (targetStderr.length >= TARGET_STDERR_CAP) {
+        if (!stderrTruncated) {
+          stderrTruncated = true;
+          targetStderr += `\n[FirmLab: the target's stderr passed ${TARGET_STDERR_CAP} bytes and the rest was dropped]`;
+        }
+        return;
+      }
+      targetStderr += chunk.toString('utf8');
+    });
     // The stub listens before executing anything, but the process still needs a moment to bind — so wait for the
     // socket rather than for a guessed interval, and say so when it never comes up.
     if (!(await waitForStub(port))) {
@@ -217,9 +238,10 @@ export async function runDynProbe(
       }
     }
 
-    const probe = classifyRun(parseGdbOutput(stdout), pattern);
+    const probe = classifyRun(parseGdbOutput(stdout), pattern, targetStderr);
     handle.log(`${binary}:${sink} → ${probe.verdict}`);
     handle.log(probe.reason);
+    for (const d of probe.environmentFailures.slice(0, 5)) handle.log(`  target stderr (sandbox): ${d}`);
 
     return {
       available: true,

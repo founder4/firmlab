@@ -6,6 +6,7 @@ import {
   classifyRun,
   cyclicPattern,
   parseGdbOutput,
+  parseTargetStderr,
   patternOffset,
 } from './dynprobe.js';
 
@@ -101,6 +102,44 @@ describe('parseGdbOutput — against gdb 13.1 batch output', () => {
     // reported it twice would render the sink's own address as though the target had loaded it into a register.
     expect(p.hits[0]?.registers.addr).toBeUndefined();
     expect(p.hits[0]?.registers.pc).toBe('0x400a30');
+  });
+
+  it("reads the sandbox's shortcomings out of the target's OWN stderr, not just gdb's", () => {
+    // Verbatim from DVRF's sbin/diag_tracertbutton under qemu-mipsel: it exits at once because qemu-user has no
+    // /dev/nvram. gdb sees a clean, uneventful run; only the target's stderr says what actually happened.
+    const clean = parseGdbOutput('warning: nothing here\nProgram exited normally.');
+    const withStderr = classifyRun(clean, 'Aa0Aa1Aa2', '/dev/nvram: No such file or directory\n');
+    expect(withStderr.verdict).toBe('emulation_artifact');
+    expect(withStderr.environmentFailures).toEqual(['/dev/nvram: No such file or directory']);
+    expect(withStderr.reason).toContain('does not provide something the program requires');
+    // Same gdb output, nothing on stderr: an uneventful run really is uneventful.
+    expect(classifyRun(clean, 'Aa0Aa1Aa2', '').verdict).toBe('ran_clean');
+  });
+
+  it('does not read the program rejecting our garbage argv as the sandbox failing', () => {
+    // The probe feeds a cyclic pattern as argv, so a target printing `Aa0Aa1…: No such file or directory` is
+    // behaving CORRECTLY. Counting that would invent an emulation problem out of a successful run.
+    const p = parseTargetStderr('Aa0Aa1Aa2Aa3: No such file or directory\nusage: tracert [-n] host\n');
+    expect(p.deficiencies).toEqual([]);
+    expect(p.output).toHaveLength(2);
+    expect(
+      classifyRun(parseGdbOutput('Program exited normally.'), 'Aa0Aa1Aa2Aa3', 'Aa0Aa1Aa2Aa3: No such file or directory')
+        .verdict,
+    ).toBe('ran_clean');
+  });
+
+  it('recognises the ways qemu-user itself comes up short', () => {
+    const p = parseTargetStderr(
+      [
+        'qemu: Unsupported syscall: 4288',
+        'error while loading shared libraries: libfoo.so.0: cannot open shared object file',
+        'ioctl(SIOCGIFCONF): Function not implemented',
+        '/proc/mtd: No such file or directory',
+        'Starting daemon…',
+      ].join('\n'),
+    );
+    expect(p.deficiencies).toHaveLength(4);
+    expect(p.output).toEqual(['Starting daemon…']);
   });
 
   it('separates the EMULATOR failing from the target misbehaving', () => {
