@@ -6,6 +6,7 @@ import {
   describeNvdDrop,
   nvdCacheKey,
   nvdCandidateTier,
+  nvdCpeAlternates,
   nvdCpeFor,
   nvdVersion,
   parseNvdResponse,
@@ -50,10 +51,26 @@ describe('buildNvdQuery', () => {
 });
 
 describe('nvdCpeFor', () => {
-  it('covers every component the fingerprint table can name', () => {
-    for (const name of ['busybox', 'dropbear', 'dnsmasq', 'pppd', 'openssl']) {
-      expect(nvdCpeFor(name)).toBe(COMPONENT_CPE[name]);
+  it('queries the first identity of every mapped component, and every entry has one', () => {
+    for (const name of ['busybox', 'dropbear', 'dnsmasq', 'pppd', 'openssl', 'curl', 'ffmpeg']) {
+      expect(nvdCpeFor(name)).toBe(COMPONENT_CPE[name]?.[0]);
+      expect(nvdCpeFor(name)).toBeTruthy();
     }
+  });
+
+  it('pins curl, where the obvious guess is the wrong one', () => {
+    // Measured against the live API: `curl:curl` at 8.6.0 returns 0, `haxx:curl` returns 35. A guessed vendor
+    // string does not fail loudly — it queries a product that does not exist and returns nothing, which reads
+    // exactly like "no CVEs".
+    expect(nvdCpeFor('curl')).toBe('haxx:curl');
+  });
+
+  it('carries the alternate identities without querying them', () => {
+    expect(nvdCpeAlternates('dropbear')).toEqual(['matt_johnston:dropbear_ssh_server', 'dropbear_project:dropbear']);
+    expect(nvdCpeAlternates('curl')).toEqual(['haxx:libcurl']);
+    // A component with a single known identity has nothing unchecked to declare.
+    expect(nvdCpeAlternates('busybox')).toEqual([]);
+    expect(nvdCpeAlternates('vendor-httpd')).toEqual([]);
   });
 
   it('pins pppd, which is the one that cannot be derived from the name', () => {

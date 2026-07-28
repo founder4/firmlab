@@ -49,39 +49,61 @@ export const NVD_ENDPOINT = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
 export const NVD_CACHE_SOURCE = 'nvd';
 
 /**
- * The CPE product identity of each component the fingerprint table (`component-cve.ts`) can name. Every entry was
- * read out of NVD's own CPE dictionary and then MEASURED against the CVE API at a version this corpus actually
- * ships, on 2026-07-28 — counts below are that measurement, not an estimate:
+ * The CPE product identities of each component this workbench can name — the fingerprint table's five, plus the
+ * ones a real rootfs SBOM surfaces that OSV cannot map. **The first entry is the one queried**; the rest are the
+ * other identities NVD carries for the same software, kept as data (see `uncheckedIdentities`).
+ *
+ * Every entry was read out of NVD's own CPE dictionary and then MEASURED against the CVE API at a version some
+ * image in this corpus actually ships, on 2026-07-28. The counts are that measurement, not an estimate:
  *
  *   busybox 1.01     → busybox:busybox                                            17 CVEs
  *   dropbear 2012.55 → dropbear_ssh_project:dropbear_ssh                          15
  *   dnsmasq 2.78     → thekelleys:dnsmasq                                         15
  *   pppd 2.4.3       → point-to-point_protocol_project:point-to-point_protocol     5
  *   openssl 1.0.1    → openssl:openssl                                            78
+ *   curl 8.6.0       → haxx:curl                                                  35
+ *   ffmpeg 6.1.2     → ffmpeg:ffmpeg                                              18
  *
- * Two of these are not guessable, which is why the table is curated. `pppd` returns ZERO entries from the CPE
- * dictionary — the daemon's binary name is not its product identity, and the mapping above came from reading the
- * CPEs attached to CVE-2020-8597, the pppd CVE the curated table already claims. And a component can carry several
- * competing identities: dropbear also exists as `matt_johnston:dropbear_ssh_server` (40 dictionary entries) and
- * `dropbear_project:dropbear` (28), openssl also as `openssl_project:openssl` (89) — and at the versions this
- * corpus ships, each of those alternates returned **0**. They are recorded here as measured-empty rather than
- * omitted, because "we chose one of three" is a decision a later reader must be able to see and re-check; picking
- * the alternate silently is how a lane returns nothing and looks healthy doing it.
+ * **Nothing here is guessable, which is the entire reason it is a hand-measured table.** `pppd` returns ZERO
+ * entries from the CPE dictionary — the daemon's binary name is not its product identity — so that mapping was
+ * read off the CPEs attached to CVE-2020-8597, the pppd CVE the curated table already claims. And `curl` is the
+ * clearest case: the obvious `curl:curl` returns **0**, while the real identity `haxx:curl` returns 35. A guessed
+ * vendor string does not fail loudly; it queries a product that does not exist and returns nothing, which is
+ * indistinguishable from "this component has no CVEs".
+ *
+ * The alternates were measured too, and at the versions this corpus ships each returned **0** — dropbear also
+ * exists as `matt_johnston:dropbear_ssh_server` (40 dictionary entries) and `dropbear_project:dropbear` (28),
+ * openssl as `openssl_project:openssl` (89), curl as `haxx:libcurl` (3 CVEs at 8.6.0). That is a statement about
+ * these versions, not about the products, so they are carried rather than discarded: a component whose primary
+ * identity comes back empty says which identities went unchecked instead of presenting the zero as settled.
  */
-export const COMPONENT_CPE: Readonly<Record<string, string>> = {
-  busybox: 'busybox:busybox',
-  dropbear: 'dropbear_ssh_project:dropbear_ssh',
-  dnsmasq: 'thekelleys:dnsmasq',
-  pppd: 'point-to-point_protocol_project:point-to-point_protocol',
-  openssl: 'openssl:openssl',
+export const COMPONENT_CPE: Readonly<Record<string, readonly string[]>> = {
+  busybox: ['busybox:busybox'],
+  dropbear: ['dropbear_ssh_project:dropbear_ssh', 'matt_johnston:dropbear_ssh_server', 'dropbear_project:dropbear'],
+  dnsmasq: ['thekelleys:dnsmasq'],
+  pppd: ['point-to-point_protocol_project:point-to-point_protocol'],
+  openssl: ['openssl:openssl', 'openssl_project:openssl'],
+  curl: ['haxx:curl', 'haxx:libcurl'],
+  ffmpeg: ['ffmpeg:ffmpeg'],
 };
 
 /** Which question NVD was actually asked. A CPE answer is version-scoped; a keyword answer is a description match. */
 export type NvdMatchStrategy = 'cpe' | 'keyword';
 
-/** Pure: the curated CPE identity for a component name, or null when nothing verified covers it. */
+/** Pure: the CPE identity actually queried for a component name, or null when nothing verified covers it. */
 export function nvdCpeFor(name: string): string | null {
-  return COMPONENT_CPE[name.trim().toLowerCase()] ?? null;
+  return COMPONENT_CPE[name.trim().toLowerCase()]?.[0] ?? null;
+}
+
+/**
+ * Pure: the other CPE identities NVD carries for the same software — measured empty at the versions in this
+ * corpus, and NOT queried. They exist so an empty answer can name what it did not look at: `dropbear` under
+ * `dropbear_ssh_project` returning nothing is a different claim from `dropbear` having no CVEs anywhere in NVD,
+ * and only the second reading is wrong. Querying them too would cost a rate-limit slot per identity against an
+ * anonymous budget of six, so it stays a labelling fix rather than an extra request.
+ */
+export function nvdCpeAlternates(name: string): string[] {
+  return [...(COMPONENT_CPE[name.trim().toLowerCase()] ?? [])].slice(1);
 }
 
 /**
@@ -260,6 +282,12 @@ export interface NvdComponentResult {
    * an empty `cpe` one, and the caller must be able to tell them apart.
    */
   matchedBy: NvdMatchStrategy;
+  /**
+   * Other CPE identities NVD carries for this software that were NOT queried. Populated only when a CPE question
+   * came back EMPTY and alternates exist — the one case where the zero could be an artifact of which identity was
+   * asked rather than a fact about the version. Empty otherwise, including when advisories were found.
+   */
+  uncheckedIdentities: string[];
 }
 
 /**
@@ -284,12 +312,16 @@ export async function queryNvd(
     },
     cache,
   );
+  const advisories = answer.freshness ? parseNvdResponse(answer.payload) : [];
+  // Only an EMPTY cpe answer can be an artifact of which identity was asked; a populated one already answered.
+  const unchecked = query.strategy === 'cpe' && advisories.length === 0 ? nvdCpeAlternates(component.name) : [];
   return {
     name: component.name,
     version: component.version,
-    advisories: answer.freshness ? parseNvdResponse(answer.payload) : [],
+    advisories,
     freshness: answer.freshness,
     matchedBy: query.strategy,
+    uncheckedIdentities: unchecked,
   };
 }
 
@@ -317,6 +349,13 @@ export interface NvdBatchResult {
   notQueriedRule: string;
   /** How many candidates sat in each answerability tier, before the cap. */
   tiers: Record<NvdTier, number>;
+  /**
+   * Components whose CPE question came back EMPTY while NVD carries other identities for the same software that
+   * were not asked. This has to live on the batch, not only on the component result: `components` keeps only the
+   * entries that found advisories, so an empty answer — the exact case this label describes — would otherwise be
+   * dropped before anyone could read it.
+   */
+  uncheckedIdentities: { name: string; version: string; identities: string[] }[];
 }
 
 /**
@@ -377,6 +416,7 @@ export async function queryNvdBatch(
 
   const cache = opts.cache ?? {};
   const results: NvdComponentResult[] = [];
+  const unchecked: { name: string; version: string; identities: string[] }[] = [];
   // Freshness is collected for every component, not only the ones with advisories: `components` keeps only the
   // latter, so this is the sole place the age of a clean answer survives.
   const freshness: (Freshness | null)[] = [];
@@ -396,6 +436,9 @@ export async function queryNvdBatch(
     queried += 1;
     freshness.push(r.freshness);
     if (r.advisories.length > 0) results.push(r);
+    if (r.uncheckedIdentities.length > 0) {
+      unchecked.push({ name: r.name, version: r.version, identities: r.uncheckedIdentities });
+    }
   }
   return {
     queried,
@@ -408,6 +451,7 @@ export async function queryNvdBatch(
     askedByKeyword: queried - askedByCpe,
     notQueriedRule: describeNvdDrop(dropped, cap),
     tiers,
+    uncheckedIdentities: unchecked,
   };
 }
 

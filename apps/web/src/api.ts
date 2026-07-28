@@ -490,6 +490,8 @@ export interface ResearchResult {
     askedByKeyword: number;
     /** What the rate-limit cap dropped and by what rule — empty when it dropped nothing. */
     notQueriedRule: string;
+    /** Components whose CPE answer was empty while other NVD identities for the same software went unqueried. */
+    uncheckedIdentities: { name: string; version: string; identities: string[] }[];
   };
   kev: { checked: boolean; catalogSize: number; matches: KevMatch[]; reason?: string };
   keyMaterial: { kind: string; redacted: string; effectivelyPublic: boolean; sharedInImages?: number }[];

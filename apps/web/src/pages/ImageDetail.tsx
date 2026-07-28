@@ -1712,6 +1712,13 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                   {nvd.notQueriedRule}
                 </div>
               )}
+              {nvd.uncheckedIdentities.map((u) => (
+                <div className="note" style={{ marginBottom: 8 }} key={`nvd-alt-${u.name}@${u.version}`}>
+                  {u.name} {u.version} came back empty under its primary CPE identity. NVD also carries it as{' '}
+                  <span className="mono">{u.identities.join(', ')}</span>, not queried — the zero is scoped to the
+                  identity asked, not to the component.
+                </div>
+              ))}
               <table className="data">
                 <thead>
                   <tr>

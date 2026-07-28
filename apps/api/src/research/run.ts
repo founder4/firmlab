@@ -210,6 +210,11 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   const nvd = await queryNvdBatch(nvdCandidates, cfg);
   handle.log(`NVD: ${nvd.queried} queried, ${nvd.withAdvisories} with advisories (${nvd.totalAdvisories} total).`);
   if (nvd.notQueriedRule) handle.log(`NVD: ${nvd.notQueriedRule}`);
+  for (const u of nvd.uncheckedIdentities) {
+    handle.log(
+      `NVD: ${u.name} ${u.version} came back empty under its primary CPE identity; NVD also carries it as ${u.identities.join(', ')}, not queried — the zero is scoped to the identity asked.`,
+    );
+  }
   // Which question was asked matters as much as the answer: a keyword query matches CVE descriptions, which name
   // the FIXED release rather than the vulnerable one, so an empty keyword result is close to no result at all.
   // Saying so here keeps a quiet run from reading as a clean one.
