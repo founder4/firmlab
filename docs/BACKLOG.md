@@ -466,8 +466,17 @@ Surfaced while building the above and deliberately not built. Ordered roughly by
   strings including "Failed to find /dev/nvram", 454 files searched of 880 walked in 29 ms — and `sohoadmin` → 0
   hits under a COMPLETE verdict**, which corroborates from a second direction that this image's credentials are
   not in its rootfs (its account database is symlinked to `/dev/null`, closed above).
-  _Not yet deployed: `deploy.sh` correctly refuses a dirty tree and another session had an uncommitted doc edit
-  in flight at the time. The code is on `main` and gated; the container still runs `d30350c`._
+  **Deployed and measured on the GL.iNet (deploy `861aa20`), which is where the design earned itself:**
+  `updates.gl-inet.com` returns 0 hits — and the default answer refuses to call that a negative, because 10 files
+  exceed the per-file cap. A plain grep would have printed "0 matches" and been read as "this firmware does not
+  phone that host". `BEGIN CERTIFICATE` hits the 200-cap and says so.
+  _That measurement also showed the default makes a COMPLETE search impossible on that image, so `deep=1` buys
+  one. Its FIRST version made things worse and the tool reported it: using the whole byte budget as the per-file
+  cap opened the 106 MB `.ubi` and the 92.6 MB `carved_rootfs.squashfs` first, spent the budget on them and
+  skipped **4385** files — trading 10 holes for 4385. Those two are also precisely the files not worth reading: a
+  raw UBI volume and a SquashFS image are containers whose contents are already searched one extracted file at a
+  time beside them. Deep now caps at 64 MB (clearing every real binary — the largest is `AdGuardHome` at 32.9 MB)
+  with a 1 GB budget: **6469 files searched, 2 skipped, both containers.** Pinned by a regression test._
 - ▢ **Update-path: reach past the file that was read.** (a) resolve shell `source`/`include` so `sbin/sysupgrade`
   is credited with `fwtool.sh`'s `ucert -V` instead of the two being separate candidates; (b) decode OpenWrt's
   `FWx0` fwtool trailer so the appended ucert/metadata blobs are parsed rather than recognised by their armor —
