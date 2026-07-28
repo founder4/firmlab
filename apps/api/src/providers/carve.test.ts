@@ -114,15 +114,24 @@ function buildFit(images: { name: string; type: string; data: number[] }[]): Uin
   endNode(); // root
   struct.push(...be32bytes(FDT_END));
 
+  // A COMPLETE v17 header. It used to leave version/last_comp_version/off_mem_rsvmap at zero, which the old
+  // walk never looked at — so the fixture was not actually a flattened device tree, and it agreed with the code
+  // only because both ignored the same fields. The shared reader in fdt.ts validates the whole header (that is
+  // what keeps four coincidental magic bytes in a compressed payload from being read as a tree), so the fixture
+  // has to be the real thing.
   const HEADER = 40;
-  const offStruct = HEADER;
-  const offStrings = HEADER + struct.length;
+  const offMemRsv = HEADER; // 8-aligned, as the spec requires
+  const offStruct = offMemRsv + 16; // one terminating all-zero reserve entry
+  const offStrings = offStruct + struct.length;
   const total = offStrings + strBlock.length;
   const out = new Uint8Array(total);
   writeBE32(out, 0, 0xd00dfeed); // magic
   writeBE32(out, 4, total);
   writeBE32(out, 8, offStruct);
   writeBE32(out, 12, offStrings);
+  writeBE32(out, 16, offMemRsv);
+  writeBE32(out, 20, 17); // version
+  writeBE32(out, 24, 16); // last_comp_version
   writeBE32(out, 32, strBlock.length); // size_dt_strings
   writeBE32(out, 36, struct.length); // size_dt_struct
   out.set(struct, offStruct);

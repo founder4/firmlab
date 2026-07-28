@@ -22,6 +22,7 @@ export type JobKind =
   | 'chipsec'
   | 'webprobe'
   | 'uboot'
+  | 'devicetree'
   | 'fsaudit'
   | 'certs'
   | 'rtos'

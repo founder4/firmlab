@@ -37,7 +37,7 @@ describe('specsForClass — class-routed worker plan', () => {
     expect(specs[0]?.worker).toContain('Extraction');
     // An unrecognised class still gets the workers that read the raw image — they need no rootfs, so there is no
     // reason to withhold them from the one class we know least about.
-    expect(specs.map((s) => s.provider)).toEqual(['extract', 'certs', 'uboot', 'fcc', 'nvram']);
+    expect(specs.map((s) => s.provider)).toEqual(['extract', 'certs', 'uboot', 'devicetree', 'fcc', 'nvram']);
   });
 
   it('planEntries exposes worker + reason for the pre-run plan', () => {

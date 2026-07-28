@@ -19,6 +19,7 @@ export type ProviderId =
   | 'compmap'
   | 'uboot'
   | 'updatepath'
+  | 'devicetree'
   | 'nvram'
   | 'fcc'
   | 'rtos'
@@ -160,6 +161,13 @@ const LINUX_CHAIN: PlanSpec[] = [
     built: true,
     provider: 'uboot',
   },
+  {
+    worker: 'Static · Device tree',
+    reason: 'board/SoC identity, declared flash map, /chosen bootargs, enabled debug UART',
+    needsRootfs: false,
+    built: true,
+    provider: 'devicetree',
+  },
   { worker: 'Recon · FCC-ID', reason: 'FCC IDs → public filings', needsRootfs: false, built: true, provider: 'fcc' },
   {
     // Listed here as well as in RECON_ANY_CLASS: the Linux chain enumerates its rootfs-free workers explicitly so
@@ -223,6 +231,16 @@ const RECON_ANY_CLASS: PlanSpec[] = [
     needsRootfs: false,
     built: true,
     provider: 'uboot',
+  },
+  {
+    // Reads the RAW image (and the FIT/UBI carve chain inside it), so it needs no rootfs and belongs to every
+    // class. It also degrades to nothing honestly: an image with no FDT reports `blocked_by_platform` naming
+    // where it looked, which is strictly more information than a stage that was never planned.
+    worker: 'Static · Device tree',
+    reason: 'board/SoC identity, declared flash map, /chosen bootargs, enabled debug UART',
+    needsRootfs: false,
+    built: true,
+    provider: 'devicetree',
   },
   { worker: 'Recon · FCC-ID', reason: 'FCC IDs → public filings', needsRootfs: false, built: true, provider: 'fcc' },
   {

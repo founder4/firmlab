@@ -57,6 +57,7 @@ import { runComponentMap } from './providers/compmap.js';
 import { runComponentCve } from './providers/component-cve.js';
 import { runDecompile } from './providers/decompile.js';
 import { assessDecoy, decoyFinding } from './providers/decoy.js';
+import { runDeviceTreeAnalysis } from './providers/devicetree.js';
 import { runDynProbe } from './providers/dynprobe-run.js';
 import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
@@ -312,6 +313,29 @@ async function updatepathRun(c: RunCtx): Promise<StepOutcome> {
   };
 }
 
+/**
+ * The board description the image carries. Reads the raw image (and the FIT/UBI chain inside it) plus, when W1 has
+ * already run, the extraction output — so a `*.dtb` written out by the carve is picked up too. A degraded step when
+ * no tree could be read: that is `blocked_by_platform` naming where it looked, never a clean stage.
+ */
+async function devicetreeRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runDeviceTreeAnalysis(c.imagePath, c.outputDir);
+  syncFindings(c.imageId, 'devicetree', r.findings);
+  const models = r.blobs.map((b) => b.model ?? b.compatible[0] ?? b.origin).join(', ');
+  if (!r.found) {
+    return {
+      summary: 'device tree: none readable in this image',
+      findingCount: r.findings.length,
+      degraded: true,
+      note: r.reason,
+    };
+  }
+  return {
+    summary: `device tree (${models}): ${r.findings.length} findings`,
+    findingCount: r.findings.length,
+  };
+}
+
 async function fccRun(c: RunCtx): Promise<StepOutcome> {
   const r = runFccLookup(c.imagePath, c.analysisJson);
   syncFindings(c.imageId, 'fcc', r.findings);
@@ -538,6 +562,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   compmap: compmapRun,
   uboot: ubootRun,
   updatepath: updatepathRun,
+  devicetree: devicetreeRun,
   fcc: fccRun,
   rtos: rtosRun,
   chipsec: chipsecRun,
