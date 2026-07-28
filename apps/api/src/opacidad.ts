@@ -52,6 +52,7 @@ import {
 import { partitionByProvenance } from './operator-findings.js';
 import { runAuxSecrets } from './providers/auxsecrets.js';
 import { runBinVuln } from './providers/binvuln.js';
+import { type CmdlineSource, crossCheckBootCmdlines } from './providers/boot-cmdline.js';
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
@@ -79,6 +80,24 @@ import { runUpdatePath } from './providers/updatepath.js';
 import { runWebTaint } from './providers/webtaint.js';
 import { getImage, listFindings, listJobs } from './store.js';
 
+/**
+ * The two halves of the kernel-command-line question, and whether each provider has run at all.
+ *
+ * Neither provider can see the interesting case on its own: the device tree holds what the build expects and the
+ * U-Boot environment holds what the board would pass, and only a run that has both in hand can notice they
+ * disagree. So each executor deposits its half here and asks for the cross-check; the one that runs LAST is the
+ * one that can actually make it. `ubootRan` / `deviceTreeRan` exist so "ran and found no command line" is never
+ * read as "has not run yet" — the difference decides whether the check is due.
+ */
+interface BootCmdlineState {
+  ubootRan: boolean;
+  /** The env's `bootargs`, when the stored environment declared a non-empty one. */
+  uboot: CmdlineSource | null;
+  deviceTreeRan: boolean;
+  /** One per device tree whose `/chosen` declared a command line — a FIT ships one tree per board variant. */
+  deviceTree: CmdlineSource[];
+}
+
 /** Mutable run context threaded through the plan — extraction fills `rootfsPath`/`outputDir`/`carveTrace` for later stages. */
 interface RunCtx {
   imageId: string;
@@ -95,6 +114,8 @@ interface RunCtx {
    * symbolic reachability costs real wall-clock, so the cap is global across lead sources, not per source.
    */
   planned: ReadonlySet<string>;
+  /** Both halves of the kernel command line, filled by `ubootRun` / `devicetreeRun` and cross-checked by them. */
+  bootCmdlines: BootCmdlineState;
   handle: JobHandle;
 }
 
@@ -291,10 +312,62 @@ async function compmapRun(c: RunCtx): Promise<StepOutcome> {
   return { summary: `component dependency map: ${r.findings.length} findings`, findingCount: r.findings.length };
 }
 
+/** What the cross-check contributed to the step that was able to perform it. */
+interface CrossCheckOutcome {
+  /** A clause for the step summary. */
+  summary: string;
+  /** The full honest sentence, including the case where the check could NOT be made. */
+  note: string;
+  findingCount: number;
+}
+
+/**
+ * Cross-check the device tree's `/chosen` command line against the stored U-Boot environment's `bootargs`.
+ *
+ * Called by BOTH boot-config executors right after each deposits its half, and it does nothing until both have
+ * run — which is what keeps it independent of the order the class plan happens to list them in. (`uboot` precedes
+ * `devicetree` in every plan today; a comment that is true when written is exactly the thing this codebase has
+ * paid for before, so the check does not rely on it.) It syncs under its own source, always — including with no
+ * drafts, so a disagreement recorded by an earlier run cannot outlive a re-run that no longer sees one.
+ *
+ * A class plan that routes to only ONE of the two providers gets no cross-check at all, and that is honest: the
+ * question needs both halves. Both are in `LINUX_CHAIN` and in `RECON_ANY_CLASS`, so today every class has them.
+ */
+function bootCmdlineCrossCheck(c: RunCtx): CrossCheckOutcome | null {
+  const state = c.bootCmdlines;
+  if (!state.ubootRan || !state.deviceTreeRan) return null;
+  const r = crossCheckBootCmdlines({ deviceTree: state.deviceTree, ubootEnv: state.uboot });
+  syncFindings(c.imageId, 'boot-cmdline', r.findings);
+  c.handle.log(`↔ kernel cmdline cross-check: ${r.verdict} — ${r.reason}`);
+  return {
+    summary: `cmdline cross-check: ${r.verdict}`,
+    note: r.reason,
+    findingCount: r.findings.length,
+  };
+}
+
 async function ubootRun(c: RunCtx): Promise<StepOutcome> {
   const r = runUbootAnalysis(c.imagePath);
   syncFindings(c.imageId, 'uboot', r.findings);
-  return { summary: `U-Boot / boot posture: ${r.findings.length} findings`, findingCount: r.findings.length };
+  c.bootCmdlines.ubootRan = true;
+  const bootargs = r.vars.bootargs;
+  // `capVars` keeps `bootargs` first whatever the cap, so the audit input is never the thing that gets dropped.
+  // The whole variable map goes with it: a real `bootargs` is routinely a template of `${…}` references (the
+  // Tenda camera's is nothing else), and without the store the cross-check cannot tell a differing value from an
+  // unexpanded one. What the cap DID drop shows up as an unresolved reference, which refuses the comparison.
+  c.bootCmdlines.uboot = bootargs
+    ? {
+        value: bootargs,
+        origin: { where: 'the stored U-Boot environment', evidence: { var: 'bootargs' } },
+        variables: r.vars,
+      }
+    : null;
+  const cross = bootCmdlineCrossCheck(c);
+  return {
+    summary: `U-Boot / boot posture: ${r.findings.length} findings${cross ? ` · ${cross.summary}` : ''}`,
+    findingCount: r.findings.length + (cross?.findingCount ?? 0),
+    ...(cross ? { note: cross.note } : {}),
+  };
 }
 
 /**
@@ -322,18 +395,35 @@ async function updatepathRun(c: RunCtx): Promise<StepOutcome> {
 async function devicetreeRun(c: RunCtx): Promise<StepOutcome> {
   const r = runDeviceTreeAnalysis(c.imagePath, c.outputDir);
   syncFindings(c.imageId, 'devicetree', r.findings);
+  // The tree's half of the cross-check. `where`/`evidence` are byte-identical to what `deviceTreeFindings` hands
+  // `auditKernelCommandLine`, so a reader sees one provenance dialect across both findings; `bootargs` is already
+  // the ASSEMBLED line (`bootargs` + the OpenWrt `bootargs-append`), which is what a board would boot with. Set
+  // before the not-found branch: "the tree declared none" is an input to the cross-check, not a reason to skip it.
+  c.bootCmdlines.deviceTreeRan = true;
+  c.bootCmdlines.deviceTree = r.blobs
+    .filter((b) => b.bootargs)
+    .map((b) => ({
+      value: b.bootargs as string,
+      origin: {
+        where: `the device tree's /chosen node (${b.origin})`,
+        evidence: { origin: b.origin, node: '/chosen', properties: b.bootargsFrom },
+      },
+    }));
+  const cross = bootCmdlineCrossCheck(c);
+  const crossClause = cross ? ` · ${cross.summary}` : '';
   const models = r.blobs.map((b) => b.model ?? b.compatible[0] ?? b.origin).join(', ');
   if (!r.found) {
     return {
-      summary: 'device tree: none readable in this image',
-      findingCount: r.findings.length,
+      summary: `device tree: none readable in this image${crossClause}`,
+      findingCount: r.findings.length + (cross?.findingCount ?? 0),
       degraded: true,
-      note: r.reason,
+      note: cross ? `${r.reason} ${cross.note}` : r.reason,
     };
   }
   return {
-    summary: `device tree (${models}): ${r.findings.length} findings`,
-    findingCount: r.findings.length,
+    summary: `device tree (${models}): ${r.findings.length} findings${crossClause}`,
+    findingCount: r.findings.length + (cross?.findingCount ?? 0),
+    ...(cross ? { note: cross.note } : {}),
   };
 }
 
@@ -637,6 +727,7 @@ export async function runOpacidad(
     ...(prior?.detectedArch ? { detectedArch: prior.detectedArch } : {}),
     // Live view of the agenda — executors size the shared reachability budget off it as the run grows.
     planned: sched.planned,
+    bootCmdlines: { ubootRan: false, uboot: null, deviceTreeRan: false, deviceTree: [] },
     handle,
   };
 
