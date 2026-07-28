@@ -386,10 +386,15 @@ export async function runFullSystem(
   const proc = spawn(qemu, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
   let stderr = '';
+  // Keep the HEAD as well as the tail. Capping with `slice(-CAP)` evicted the earliest output first — which is
+  // exactly where a kernel prints the markers the boot verdict is read from. The real WR940N boot proved it: the
+  // firmware came all the way up (its own init printing `OPEN ALL PHY ETH!!`, its HTTPS daemon loading a
+  // certificate) and was graded "no recognisable boot", because 262 KB of vendor chatter had pushed
+  // `Freeing unused kernel memory` out of the window.
   const cap = (chunk: Buffer, which: 'o' | 'e'): void => {
     const s = chunk.toString('utf8');
-    if (which === 'o') stdout = (stdout + s).slice(-CONSOLE_CAP);
-    else stderr = (stderr + s).slice(-CONSOLE_CAP);
+    if (which === 'o') stdout = keepEnds(stdout + s);
+    else stderr = keepEnds(stderr + s);
   };
   proc.stdout?.on('data', (c: Buffer) => cap(c, 'o'));
   proc.stderr?.on('data', (c: Buffer) => cap(c, 'e'));
@@ -444,6 +449,17 @@ export async function runFullSystem(
     } catch {}
     await teardown(handle);
   }
+}
+
+/**
+ * Keep both ends of a long console: the head carries the boot markers, the tail carries what it is doing now.
+ * The elision is stated in the text rather than silently swallowing the middle.
+ */
+export function keepEnds(text: string, cap = CONSOLE_CAP): string {
+  if (text.length <= cap) return text;
+  const half = Math.floor(cap / 2);
+  const dropped = text.length - cap;
+  return `${text.slice(0, half)}\n… [FirmLab: ${dropped} bytes of console elided here] …\n${text.slice(-half)}`;
 }
 
 /** Ask the OS for a free host port to base the forwards on, so no two runs can share one. */

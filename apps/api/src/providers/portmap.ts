@@ -232,6 +232,12 @@ export function buildPortMap(
  * and declare nothing at all, which is exactly the WR940N/DVRF case in this corpus, and dropping it would trade
  * one blind spot for another. Host ports are allocated from a base so two concurrent boots do not collide.
  */
+/** Ports forwarded even when the firmware declares nothing — see the rationale in `planForwards`. */
+const DEFAULT_FLOOR: [number, PortProtocol][] = [
+  [443, 'https'],
+  [80, 'http'],
+];
+
 export function planForwards(
   map: PortMap,
   basePort = 8080,
@@ -244,6 +250,16 @@ export function planForwards(
     seen.add(h.port);
     guests.push({ guest: h.port, protocol: h.protocol });
   }
-  if (!seen.has(80)) guests.unshift({ guest: 80, protocol: 'http' });
+  // A floor of well-known firmware service ports, forwarded whether or not anything declares them. Most vendor
+  // daemons carry their port in the binary and declare nothing at all — and the WR940N proved the cost: it boots,
+  // its own console shows an HTTPS daemon loading a certificate and key, and its rootfs has no config file
+  // anywhere that says 443. Forwarding a port nobody answers costs nothing; not forwarding one that would have
+  // answered loses the result entirely.
+  for (const [port, protocol] of DEFAULT_FLOOR) {
+    if (!seen.has(port)) {
+      seen.add(port);
+      guests.unshift({ guest: port, protocol });
+    }
+  }
   return guests.slice(0, cap).map((g, i) => ({ host: basePort + i, guest: g.guest, protocol: g.protocol }));
 }

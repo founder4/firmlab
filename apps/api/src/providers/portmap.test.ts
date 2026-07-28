@@ -140,11 +140,20 @@ describe('planForwards', () => {
     expect(fwd.map((f) => `${f.host}->${f.guest}`)).toEqual(['8080->22', '8081->80', '8082->443']);
   });
 
-  it('always forwards 80 even when nothing declares it', () => {
-    // The WR940N and DVRF case: a vendor httpd carries the default in the binary and declares nothing, so
-    // dropping 80 would trade one blind spot for another.
+  it('forwards the well-known floor even when the firmware declares nothing', () => {
+    // Measured on a real WR940N boot: it comes all the way up, its own console shows an HTTPS daemon loading a
+    // certificate and key, and its rootfs contains no config file anywhere that mentions 443. A vendor daemon
+    // carries its port in the binary. Forwarding one nobody answers costs nothing; missing one that would have
+    // answered loses the result.
     const fwd = planForwards(buildPortMap([]), 8080);
-    expect(fwd).toEqual([{ host: 8080, guest: 80, protocol: 'http' }]);
+    expect(fwd.map((f) => f.guest).sort((a, b) => a - b)).toEqual([80, 443]);
+  });
+
+  it('does not duplicate a floor port the firmware also declares', () => {
+    const map = buildPortMap([{ path: 'etc/config/uhttpd', text: UHTTPD }]);
+    const guests = planForwards(map, 8080).map((f) => f.guest);
+    expect(guests.filter((g) => g === 443)).toHaveLength(1);
+    expect(guests.filter((g) => g === 80)).toHaveLength(1);
   });
 
   it('bounds the forward list rather than handing qemu an unbounded set', () => {
