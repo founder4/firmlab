@@ -236,6 +236,10 @@ describe('HardwareInterfaces', () => {
 
     expect(await screen.findByText(/no valid FDT completed a walk/i)).toBeTruthy();
     expect(screen.getByText(/raw image, extraction/)).toBeTruthy();
+    // A provider that ran and came back empty must NOT read as one that never ran — the DVRF page said exactly
+    // that in three places while the banner beside it said the opposite.
+    expect(screen.getAllByText(/was read for this image and none could be parsed/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/has been read for this image yet/i)).toBeNull();
   });
 
   it('an image nobody has analysed says so, and never renders an empty table as "no interfaces"', async () => {

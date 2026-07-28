@@ -99,6 +99,21 @@ function primaryBlob(result: DeviceTreeResult | null): DeviceTreeBlob | null {
   return blobs.find((b) => b.selected) ?? blobs[0] ?? null;
 }
 
+/**
+ * The sentence an empty section owes, and it has THREE cases, not two.
+ *
+ * The first version had two, and a real image caught it: DVRF's device-tree run completed and found nothing, and
+ * all three sections below still read "No device tree has been read for this image" — the exact conflation this
+ * workbench exists to prevent, written into the UI layer. `treeRan && !treeFound` is a provider that looked and
+ * came back empty, which is a different claim from one that never ran, and the banner further down was already
+ * saying so while these three contradicted it.
+ */
+function absenceReason(treeRan: boolean, treeFound: boolean, whenFound: string): string {
+  if (treeFound) return whenFound;
+  if (treeRan) return 'The device tree was read for this image and none could be parsed — see the reason below.';
+  return 'No device tree has been read for this image yet, so nothing is declared either way.';
+}
+
 type Load = 'loading' | 'ready' | 'error';
 
 export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Element {
@@ -243,7 +258,9 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
           <p className="hint hw-prose" style={{ margin: 0 }}>
             {treeFound
               ? 'Neither the kernel command line nor the device tree names a console for this image.'
-              : 'No console known yet — the device tree has not been read.'}
+              : treeRan
+                ? 'The device tree was read and none could be parsed, so no console is known from it.'
+                : 'No console known yet — the device tree has not been read.'}
           </p>
         )}
 
@@ -337,9 +354,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
           </div>
         ) : (
           <p className="hint hw-prose" style={{ margin: 0 }}>
-            {treeFound
-              ? 'The device tree declares no bus nodes this reader recognises.'
-              : 'No device tree has been read for this image, so no interface is declared either way.'}
+            {absenceReason(treeRan, treeFound, 'The device tree declares no bus nodes this reader recognises.')}
           </p>
         )}
         {(blob?.peripheralsDropped ?? 0) > 0 && (
@@ -415,10 +430,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
           </>
         ) : (
           <p className="hint hw-prose" style={{ margin: 0 }}>
-            {blob?.partitionNote ??
-              (treeFound
-                ? 'This device tree declares no partition map.'
-                : 'No device tree has been read for this image.')}
+            {blob?.partitionNote ?? absenceReason(treeRan, treeFound, 'This device tree declares no partition map.')}
           </p>
         )}
       </section>
