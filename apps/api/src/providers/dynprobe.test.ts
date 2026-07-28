@@ -97,6 +97,10 @@ describe('parseGdbOutput — against gdb 13.1 batch output', () => {
     expect(p.hits[0]?.address).toBe('0x400a30');
     expect(p.hits[0]?.registers.ra).toBe('0x400820');
     expect(p.hits[0]?.argument).toBe('Aa0Aa1Aa2Aa3');
+    // `addr` IS the hit, so it is lifted into `address` and must not also sit among the registers — a hit that
+    // reported it twice would render the sink's own address as though the target had loaded it into a register.
+    expect(p.hits[0]?.registers.addr).toBeUndefined();
+    expect(p.hits[0]?.registers.pc).toBe('0x400a30');
   });
 
   it('separates the EMULATOR failing from the target misbehaving', () => {

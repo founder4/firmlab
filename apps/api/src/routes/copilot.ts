@@ -22,7 +22,9 @@ export async function copilotRoutes(app: FastifyInstance): Promise<void> {
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
     const cfg = loadLlmConfig();
     if (!cfg) {
-      return reply.status(400).send({ error: 'Copilot disabled — turn it on in Settings › Privacy (and configure an LLM API key)' });
+      return reply
+        .status(400)
+        .send({ error: 'Copilot disabled — turn it on in Settings › Privacy (and configure an LLM API key)' });
     }
     const jobId = startJob(id, 'copilot', { provider: cfg.provider, model: cfg.model }, async (handle) => {
       handle.log(`Running copilot via ${cfg.provider} (${cfg.model})…`);

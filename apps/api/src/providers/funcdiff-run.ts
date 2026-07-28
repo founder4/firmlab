@@ -285,8 +285,9 @@ export async function runFuncDiff(
       (f) => f.kind === 'function-diff-candidate' && (f.evidence as { binary?: string })?.binary === td.binary,
     );
     if (!target?.evidence) continue;
-    const list = ((target.evidence as { decompiledDiffs?: unknown[] }).decompiledDiffs ??= []) as unknown[];
-    list.push({
+    const evidence = target.evidence as { decompiledDiffs?: unknown[] };
+    if (!evidence.decompiledDiffs) evidence.decompiledDiffs = [];
+    evidence.decompiledDiffs.push({
       function: td.function,
       decompiler: td.decompiler,
       headline: td.headline,

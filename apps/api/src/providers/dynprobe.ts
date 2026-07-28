@@ -143,9 +143,9 @@ export function parseGdbOutput(text: string): GdbParse {
     if (hit) {
       const kv: Record<string, string> = {};
       for (const m of (hit[1] as string).matchAll(/(\w+)=(\S+)/g)) kv[m[1] as string] = m[2] as string;
-      const address = kv.addr ?? kv.pc ?? '?';
-      delete kv.addr;
-      hits.push({ address, registers: kv });
+      // `addr` names the hit itself, so it is lifted out rather than repeated among the registers.
+      const { addr, ...registers } = kv;
+      hits.push({ address: addr ?? registers.pc ?? '?', registers });
       attached = true;
       continue;
     }
