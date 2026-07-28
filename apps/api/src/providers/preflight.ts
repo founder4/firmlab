@@ -23,7 +23,11 @@ export const QEMU_USER_BY_ARCH: Partial<Record<Architecture, ToolId>> = {
 
 export const QEMU_SYSTEM_BY_ARCH: Partial<Record<Architecture, ToolId>> = {
   mipsel: 'qemu-system-mipsel',
-  mips: 'qemu-system-mipsel',
+  // Big-endian MIPS gets the big-endian emulator. It used to point at `qemu-system-mipsel`, which refuses a
+  // big-endian kernel outright — "The image has incorrect endianness" — so every full-system boot of a
+  // big-endian image (a TP-Link WR940N among them) died before executing one instruction, on a machine where
+  // qemu-system-mips was installed the whole time.
+  mips: 'qemu-system-mips',
   arm: 'qemu-system-arm',
 };
 

@@ -53,6 +53,7 @@ function resolveOnPath(bin: string): string | null {
 
 export type ToolId =
   | 'binwalk'
+  | 'qemu-system-mips'
   | 'mkfs.ext2'
   | 'unsquashfs'
   | 'sasquatch'
@@ -144,6 +145,15 @@ const TOOLS: readonly ToolSpec[] = [
     bin: 'qemu-aarch64-static',
     probe: ['-version'],
     unlocks: 'ARM64 user-mode emulation',
+    group: 'emulate',
+  },
+  {
+    // Big-endian MIPS. Distinct from qemu-system-mipsel and NOT interchangeable: handed a big-endian kernel, the
+    // little-endian emulator refuses with "The image has incorrect endianness" before executing anything.
+    id: 'qemu-system-mips',
+    bin: 'qemu-system-mips',
+    probe: ['-version'],
+    unlocks: 'Full-system big-endian MIPS boot',
     group: 'emulate',
   },
   {
