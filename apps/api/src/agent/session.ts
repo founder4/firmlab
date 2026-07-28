@@ -624,7 +624,7 @@ async function runApprovedEmulation(
       if (chosen.rung === 'rtos-renode') return runRenodeForImage(session.imageId);
       if (!rootfsPath) throw new Error('No extracted rootfs — cannot emulate');
       if (chosen.rung === 'chroot-service') return runChrootService(arch, rootfsPath, chosen.binary, h);
-      if (chosen.rung === 'full-system') return runFullSystem(arch, rootfsPath, 8080, h);
+      if (chosen.rung === 'full-system') return runFullSystem(arch, rootfsPath, 8080, h, rootfsPath);
       return runUserModeEmulation(arch, rootfsPath, chosen.binary, h);
     },
   );

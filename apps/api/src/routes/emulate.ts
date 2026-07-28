@@ -106,7 +106,7 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
 
     if (body.rung === 'full-system') {
       const jobId = startJob(id, 'emulate', { rung: 'full-system' }, (handle) =>
-        runFullSystem(identity.arch, `${rootfsPath}.img`, 8080, handle).then((r) =>
+        runFullSystem(identity.arch, `${rootfsPath}.img`, 8080, handle, rootfsPath).then((r) =>
           onSystemEmulationResult(id, identity, 'system-boot', r),
         ),
       );

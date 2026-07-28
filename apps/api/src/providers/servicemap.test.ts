@@ -8,6 +8,7 @@ import {
   isNetworkDaemon,
   parseInetd,
   parseInittab,
+  parseProcdScript,
   parseRcScript,
   parseSystemdUnit,
   runServiceMap,
@@ -205,5 +206,53 @@ describe('runServiceMap', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('parseProcdScript — the OpenWRT shape parseRcScript cannot see', () => {
+  // Verbatim from the real GL.iNet BE3600 /etc/init.d/uhttpd, which the classic parser scored as zero services
+  // on an image demonstrably serving on 80 and 443.
+  const UHTTPD = `#!/bin/sh /etc/rc.common
+# Copyright (C) 2010 Jo-Philipp Wich
+
+START=50
+
+USE_PROCD=1
+
+UHTTPD_BIN="/usr/sbin/uhttpd"
+PX5G_BIN="/usr/sbin/px5g"
+
+start_service() {
+	procd_open_instance
+	procd_set_param command "$UHTTPD_BIN" -f
+	procd_close_instance
+}
+`;
+
+  it('resolves the binary through the shell variable procd launches it with', () => {
+    const svcs = parseProcdScript('etc/init.d/uhttpd', UHTTPD);
+    expect(svcs).toHaveLength(1);
+    expect(svcs[0]?.name).toBe('uhttpd');
+    expect(svcs[0]?.binary).toBe('/usr/sbin/uhttpd');
+    expect(svcs[0]?.network).toBe(true);
+    expect(svcs[0]?.autostart).toBe(true);
+  });
+
+  it('ignores a script that is not procd at all', () => {
+    expect(
+      parseProcdScript('etc/init.d/x', 'UHTTPD_BIN=/usr/sbin/uhttpd\nprocd_set_param command $UHTTPD_BIN'),
+    ).toEqual([]);
+  });
+
+  it('skips a command it cannot resolve rather than inventing a daemon name', () => {
+    const s = `USE_PROCD=1\nSTART=50\nprocd_set_param command "$NOT_DEFINED_ANYWHERE"\n`;
+    expect(parseProcdScript('etc/init.d/y', s)).toEqual([]);
+  });
+
+  it('takes a direct path too, and does not double-count repeats', () => {
+    const s = `USE_PROCD=1\nSTART=50\nprocd_set_param command /usr/sbin/dropbear -p 22\nprocd_set_param command /usr/sbin/dropbear\n`;
+    const svcs = parseProcdScript('etc/init.d/dropbear', s);
+    expect(svcs).toHaveLength(1);
+    expect(svcs[0]?.name).toBe('dropbear');
   });
 });

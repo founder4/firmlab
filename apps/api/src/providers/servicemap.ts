@@ -249,6 +249,57 @@ export function parseRcScript(scriptPath: string, text: string): Service[] {
   return out;
 }
 
+/**
+ * Pure: parse an OpenWRT procd init script, which `parseRcScript` structurally cannot see.
+ *
+ * `parseRcScript` needs a start indicator and a daemon name on the SAME line. A procd script has neither: the
+ * binary is bound to a shell variable at the top and the launch is `procd_set_param command "$UHTTPD_BIN" -f`
+ * inside a `start_service()` function. Measured on the real GL.iNet BE3600 — an OpenWRT rootfs demonstrably
+ * running uhttpd on 80 and 443 — the service map came back with **zero network daemons**, which read as "this
+ * image starts nothing" when it actually meant "this parser does not know this format".
+ *
+ * Verbatim from that image:
+ *
+ *     USE_PROCD=1
+ *     UHTTPD_BIN="/usr/sbin/uhttpd"
+ *     …
+ *     procd_set_param command "$UHTTPD_BIN" -f
+ *
+ * So: collect the assignments, then resolve `$VAR` / `${VAR}` in the command. A command that resolves to nothing
+ * is skipped rather than guessed at — an unresolved variable is not a daemon name.
+ */
+export function parseProcdScript(scriptPath: string, text: string): Service[] {
+  if (!/^\s*USE_PROCD\s*=\s*1\s*$/m.test(text)) return [];
+
+  const vars = new Map<string, string>();
+  for (const raw of text.split('\n')) {
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(['"]?)([^'"\s]+)\2\s*$/.exec(raw);
+    if (m) vars.set(m[1] as string, m[3] as string);
+  }
+
+  const resolve = (token: string): string => {
+    const bare = token.replace(/^['"]|['"]$/g, '');
+    const v = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(bare);
+    return v ? (vars.get(v[1] as string) ?? '') : bare;
+  };
+
+  // An rc.common script carrying START= is one init intends to run; procd scripts without it are helpers.
+  const autostart = /^\s*START\s*=\s*\d+/m.test(text);
+  const out: Service[] = [];
+  const seen = new Set<string>();
+  for (const raw of text.split('\n')) {
+    const m = /procd_set_param\s+command\s+(\S+)/.exec(raw);
+    if (!m) continue;
+    const binary = resolve(m[1] as string);
+    if (!binary || binary.startsWith('$')) continue;
+    const base = binary.split('/').filter(Boolean).pop() ?? binary;
+    if (seen.has(base)) continue;
+    seen.add(base);
+    out.push(mk(base, binary, scriptPath, isNetworkDaemon(base), autostart, defaultPort(base)));
+  }
+  return out;
+}
+
 // ============================================================================
 // systemd units
 // ============================================================================
@@ -495,7 +546,12 @@ export function runServiceMap(rootfsPath: string): ServiceMapResult {
   const raw: Service[] = [];
   raw.push(...parseInittab(readInside(root, 'etc/inittab')));
   raw.push(...parseInetd(readInside(root, 'etc/inetd.conf')));
-  for (const f of collectRcScripts(root, budget)) raw.push(...parseRcScript(f.path, f.content));
+  for (const f of collectRcScripts(root, budget)) {
+    // Both readings of the same file: the classic `daemon &` shape and the procd shape, which binds the binary
+    // to a variable and launches it from a function. An OpenWRT rootfs only ever answers to the second.
+    raw.push(...parseRcScript(f.path, f.content));
+    raw.push(...parseProcdScript(f.path, f.content));
+  }
   for (const f of collectSystemdUnits(root, budget)) raw.push(...parseSystemdUnit(f.path, f.content));
 
   const services = buildServiceMap(raw);
