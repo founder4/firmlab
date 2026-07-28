@@ -2104,3 +2104,10 @@ span.run-dot.run-running {
     max-width: 14ch;
   }
 }
+/* Prose in the hardware section obeys the same measure the rest of the shell does. Without this the explanatory
+   text — which is where this screen's refusals live, so it is the text most likely to be skipped — ran the full
+   panel width at ~155 characters per line, against `.panel-sub`'s established 72ch. Tables keep the full width;
+   only the sentences are constrained. Caught by looking at the rendered page, not by any test. */
+.hw-prose {
+  max-width: 72ch;
+}

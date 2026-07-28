@@ -208,7 +208,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
                 carries `bootargs = "clk_ignore_unused"` — no `console=` at all — and its console is known solely
                 because `stdout-path = serial0` resolves to /soc/serial@78af000. Gating this on both sources left
                 the corpus's actual case showing a bare node path with nothing saying where it came from. */}
-            <div className="hint">
+            <div className="hint hw-prose">
               {console_ && (
                 <>
                   Kernel command line names <span className="mono">{console_.tty}</span>
@@ -240,7 +240,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
             </div>
           </>
         ) : (
-          <p className="hint" style={{ margin: 0 }}>
+          <p className="hint hw-prose" style={{ margin: 0 }}>
             {treeFound
               ? 'Neither the kernel command line nor the device tree names a console for this image.'
               : 'No console known yet — the device tree has not been read.'}
@@ -265,7 +265,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
             </span>
           )}
           {prompt.state === 'unknown' && (
-            <span className="hint">
+            <span className="hint hw-prose">
               not determinable — {uboot?.found ? 'the env carries no bootdelay' : 'no U-Boot environment was decoded'}
             </span>
           )}
@@ -277,7 +277,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
       {!treeRan && (
         <div className="hw-nothing" style={{ marginTop: 18 }}>
           <strong>Nothing has been read for this image yet</strong>
-          <span className="hint">
+          <span className="hint hw-prose">
             The buses, the flash map and the console all come from the device tree and the U-Boot environment, and
             neither has run. That is why this screen is empty — not because the firmware declares no interfaces.
           </span>
@@ -325,7 +325,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
                             not: `ok` vs `okay` vs absent is real provenance, but a node whose status IS the string
                             "disabled" would otherwise render as "disabled disabled". */}
                         {p.status && p.status !== (p.enabled ? 'enabled' : 'disabled') && (
-                          <span className="hint" style={{ marginLeft: 6 }}>
+                          <span className="hint hw-prose" style={{ marginLeft: 6 }}>
                             {p.status}
                           </span>
                         )}
@@ -336,19 +336,19 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
             </table>
           </div>
         ) : (
-          <p className="hint" style={{ margin: 0 }}>
+          <p className="hint hw-prose" style={{ margin: 0 }}>
             {treeFound
               ? 'The device tree declares no bus nodes this reader recognises.'
               : 'No device tree has been read for this image, so no interface is declared either way.'}
           </p>
         )}
         {(blob?.peripheralsDropped ?? 0) > 0 && (
-          <p className="hint" style={{ marginTop: 6 }}>
+          <p className="hint hw-prose" style={{ marginTop: 6 }}>
             {blob?.peripheralsDropped} further node(s) were not listed — {blob?.peripheralNote ?? 'a cap applied'}.
           </p>
         )}
         {(blob?.nestedNodesSkipped ?? 0) > 0 && (
-          <p className="hint" style={{ marginTop: 6 }}>
+          <p className="hint hw-prose" style={{ marginTop: 6 }}>
             {blob?.nestedNodesSkipped} node(s) nested under another peripheral were excluded as driver chip-support
             tables rather than board hardware.
           </p>
@@ -357,7 +357,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
         {/* Named, not omitted: a list of buses that silently skipped JTAG would read as "there is no JTAG". */}
         <div className="hw-nothing">
           <strong>JTAG / SWD</strong>
-          <span className="hint">
+          <span className="hint hw-prose">
             Not determinable from firmware. A device tree does not describe the debug port, and whether it is fused off,
             password-locked or open is a property of the silicon and the board — this row exists so its absence above is
             not read as a negative.
@@ -401,7 +401,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
                 </tbody>
               </table>
             </div>
-            <p className="hint" style={{ marginTop: 8 }}>
+            <p className="hint hw-prose" style={{ marginTop: 8 }}>
               <strong>`read-only` is not write protection.</strong> It asks the kernel to withhold a writable mtd node.
               A bootloader, a recovery path or a direct SPI write ignores it, and nothing here says the region is
               protected in hardware.
@@ -414,7 +414,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
             </p>
           </>
         ) : (
-          <p className="hint" style={{ margin: 0 }}>
+          <p className="hint hw-prose" style={{ margin: 0 }}>
             {blob?.partitionNote ??
               (treeFound
                 ? 'This device tree declares no partition map.'
@@ -426,7 +426,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
       {/* Provenance and the honest empty state, last: what produced this, and what to run when it produced nothing. */}
       <section style={{ marginTop: 20 }}>
         {blob && (
-          <p className="hint" style={{ margin: 0 }}>
+          <p className="hint hw-prose" style={{ margin: 0 }}>
             Board: <span className="mono">{blob.model ?? blob.compatible?.[0] ?? 'unnamed'}</span>
             {blob.origin && (
               <>
@@ -448,7 +448,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
           <div className="banner banner-warn" style={{ marginTop: 8 }}>
             No device tree could be read. {dt?.reason}
             {(dt?.searched?.length ?? 0) > 0 && (
-              <div className="hint" style={{ marginTop: 4 }}>
+              <div className="hint hw-prose" style={{ marginTop: 4 }}>
                 Searched: <span className="mono">{dt?.searched?.join(', ')}</span>
               </div>
             )}
