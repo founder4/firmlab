@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type SinkResult, type SymReachResult, api } from '../api';
+import { RunHistory } from './RunHistory';
 
 /** How each outcome is allowed to look. Nothing but `reached` earns an affirmative colour. */
 const OUTCOME_META: Record<SinkResult['outcome'], { label: string; cls: string }> = {
@@ -220,6 +221,7 @@ export function SymReachPanel({
           </p>
         </div>
       )}
+      <RunHistory imageId={imageId} kinds={['symreach']} label="reachability" />
     </div>
   );
 }

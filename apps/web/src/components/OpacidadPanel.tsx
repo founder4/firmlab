@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type OpacidadResult, api } from '../api';
+import { RunHistory } from './RunHistory';
 
 const STATUS_META: Record<OpacidadResult['steps'][number]['status'], { mark: string; cls: string }> = {
   ran: { mark: '✓', cls: 'badge-ok' },
@@ -182,6 +183,7 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
           )}
         </div>
       )}
+      <RunHistory imageId={imageId} kinds={['opacidad']} label="autonomous-scan" />
     </div>
   );
 }

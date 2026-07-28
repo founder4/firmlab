@@ -36,6 +36,7 @@ import { FuzzPanel } from '../components/FuzzPanel';
 import { OpacidadPanel } from '../components/OpacidadPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
 import { ReportBuilder } from '../components/ReportBuilder';
+import { RunHistory } from '../components/RunHistory';
 import { SbomGraph } from '../components/SbomGraph';
 import { SignalCanvas } from '../components/SignalCanvas';
 import { SimulationMenu } from '../components/SimulationMenu';
@@ -958,6 +959,7 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
           )}
         </>
       )}
+      <RunHistory imageId={imageId} kinds={['sbom']} label="SBOM" />
     </div>
   );
 }
@@ -1504,6 +1506,7 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
           </div>
         </>
       )}
+      <RunHistory imageId={imageId} kinds={['diff']} label="diff" />
     </div>
   );
 }
@@ -1861,6 +1864,7 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
           )}
         </div>
       )}
+      <RunHistory imageId={imageId} kinds={['research']} label="research" />
     </div>
   );
 }

@@ -6,6 +6,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import { type WebProbeResult, api } from '../api';
+import { RunHistory } from './RunHistory';
 
 export function WebProbePanel({ imageId }: { imageId: string }): JSX.Element {
   const [url, setUrl] = useState('http://127.0.0.1:8080');
@@ -110,6 +111,7 @@ export function WebProbePanel({ imageId }: { imageId: string }): JSX.Element {
           ))}
         </div>
       )}
+      <RunHistory imageId={imageId} kinds={['webprobe']} label="web-probe" />
     </div>
   );
 }

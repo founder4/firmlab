@@ -97,6 +97,8 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState<{ target: string; text: string } | null>(null);
   const [detail, setDetail] = useState<{ run: RunSummary; result: unknown; log: string } | null>(null);
+  /** The job just launched from here, followed through the ledger so its state outlives this component. */
+  const [active, setActive] = useState<{ jobId: string; target: string } | null>(null);
   /** Sink addresses harvested from finished reachability runs, so the probe can be offered pre-filled. */
   const [addresses, setAddresses] = useState<Record<string, { sink: string; address: string }[]>>({});
 
@@ -172,7 +174,7 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
   const launch = useCallback(
     async (target: string, what: 'decompile' | 'symreach' | 'dynprobe', extra?: { sink: string; address: string }) => {
       setBusy(`${target}:${what}`);
-      setLog({ target, text: '' });
+      setLog(null);
       try {
         const started =
           what === 'decompile'
@@ -184,24 +186,45 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
                   sink: extra?.sink ?? '',
                   addresses: extra ? [extra.address] : [],
                 });
-        const jobId = (started as { jobId: string }).jobId;
-        // Poll the ledger rather than one endpoint: it is the same source the list renders from, so the row
-        // updates in place and the finished run lands in history without a second fetch shape to keep in sync.
-        for (let i = 0; i < 200; i++) {
-          await new Promise((r) => setTimeout(r, 1500));
-          const job = await api.job(jobId).catch(() => null);
-          if (job) setLog({ target, text: job.log ?? '' });
-          if (job && (job.status === 'done' || job.status === 'error')) break;
-        }
+        setActive({ jobId: (started as { jobId: string }).jobId, target });
         refresh();
       } catch (err) {
         setLog({ target, text: err instanceof Error ? err.message : String(err) });
+        setActive(null);
       } finally {
+        // The button stops being busy as soon as the job EXISTS. From here the row is driven by the ledger, so
+        // the state survives navigating away — it lives in the database, not in this component.
         setBusy(null);
       }
     },
     [imageId, refresh],
   );
+
+  /**
+   * Follow running work through the ledger rather than through one job handle.
+   *
+   * The first version blocked in a `for` loop over `api.job(jobId)`, which meant a run only existed while this
+   * component stayed mounted: navigating away lost the log tail, and a ten-minute fuzz lost it entirely. The job
+   * itself always survived — it is a row in SQLite — so the fix is to read that row instead of holding it in the
+   * browser. Polling stops on its own when nothing is running, so an idle bench makes no requests.
+   */
+  useEffect(() => {
+    const running = ledger.some((r) => r.outcome === 'running');
+    if (!running && !active) return;
+    const t = window.setInterval(() => {
+      refresh();
+      if (active) {
+        api
+          .runDetail(imageId, active.jobId)
+          .then((d) => {
+            setLog({ target: active.target, text: d.log ?? '' });
+            if (d.summary.outcome !== 'running') setActive(null);
+          })
+          .catch(() => setActive(null));
+      }
+    }, 2000);
+    return () => window.clearInterval(t);
+  }, [ledger, active, imageId, refresh]);
 
   if (!rootfsReady && binaries.length === 0) {
     return (

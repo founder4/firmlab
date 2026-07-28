@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type FuzzResult, type HarnessClass, type Job, api } from '../api';
+import { RunHistory } from './RunHistory';
 
 export function FuzzPanel({
   imageId,
@@ -199,6 +200,7 @@ export function FuzzPanel({
           )}
         </div>
       )}
+      <RunHistory imageId={imageId} kinds={['fuzz']} label="fuzzing" />
     </div>
   );
 }

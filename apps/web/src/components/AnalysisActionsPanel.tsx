@@ -6,6 +6,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import { type AnalysisKind, api } from '../api';
+import { RunHistory } from './RunHistory';
 
 const PROVIDERS: { kind: AnalysisKind; icon: string; title: string; desc: string }[] = [
   {
@@ -56,6 +57,8 @@ type RunState = { status: 'idle' | 'running' | 'done' | 'error'; reason?: string
 
 export function AnalysisActionsPanel({ imageId }: { imageId: string }): JSX.Element {
   const [state, setState] = useState<Record<string, RunState>>({});
+  /** Bumped when a provider finishes, so the history below re-reads without polling. */
+  const [historyKey, setHistoryKey] = useState(0);
   const polls = useRef<Record<string, number>>({});
 
   const run = useCallback(
@@ -74,6 +77,7 @@ export function AnalysisActionsPanel({ imageId }: { imageId: string }): JSX.Elem
               const done: RunState = { status: 'done', findings: res?.findings?.length ?? 0 };
               if (res?.reason) done.reason = res.reason;
               setState((s) => ({ ...s, [kind]: done }));
+              setHistoryKey((k) => k + 1);
             }
           }
         }, 700);
@@ -130,6 +134,14 @@ export function AnalysisActionsPanel({ imageId }: { imageId: string }): JSX.Elem
           );
         })}
       </div>
+      {/* Each tile above shows the LAST run of its provider. These are the others — a provider re-run after a fix
+          and one that was blocked and later worked are indistinguishable from a single result. */}
+      <RunHistory
+        imageId={imageId}
+        kinds={PROVIDERS.map((p) => p.kind)}
+        label="deep-analysis"
+        refreshKey={historyKey}
+      />
     </div>
   );
 }

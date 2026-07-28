@@ -104,6 +104,20 @@ async function waitForStub(port: number, timeoutMs = STUB_WAIT_MS): Promise<bool
   return false;
 }
 
+/**
+ * Why a probe could not produce a verdict — two different situations that `available: false` alone collapses.
+ *
+ * `platform` this deployment cannot perform the reproduction at all: no rootfs, no emulator for the architecture,
+ *            gdb-multiarch absent, no sink address to break on. Running it again changes nothing.
+ * `harness`  the tools are here and the attempt itself broke: the gdbstub never accepted a connection, gdb
+ *            produced no output. A retry may well succeed, and the two lead an operator to opposite next steps.
+ *
+ * Both are honestly NOT negative results about the binary, which is why both keep `blocked_by_platform` on the
+ * finding — the proof-state vocabulary has no third option and inventing one here would be worse than the
+ * imprecision. The distinction lives on the result so the run ledger can act on it.
+ */
+export type ProbeBlockedBy = 'platform' | 'harness';
+
 export interface DynProbeResult {
   available: boolean;
   reason: string;
@@ -113,12 +127,21 @@ export interface DynProbeResult {
   patternLength: number;
   probe: ProbeResult | null;
   findings: FindingDraft[];
+  /** Present only when `available` is false. See `ProbeBlockedBy`. */
+  blockedBy?: ProbeBlockedBy;
 }
 
-function unavailable(binary: string, sink: string, arch: string, reason: string): DynProbeResult {
+function unavailable(
+  binary: string,
+  sink: string,
+  arch: string,
+  reason: string,
+  blockedBy: ProbeBlockedBy = 'platform',
+): DynProbeResult {
   return {
     available: false,
     reason,
+    blockedBy,
     binary,
     sink,
     arch,
@@ -130,10 +153,13 @@ function unavailable(binary: string, sink: string, arch: string, reason: string)
         title: `Dynamic reproduction of ${sink} in ${binary} could not run`,
         severity: 'info',
         proofState: 'blocked_by_platform',
-        evidence: { binary, sink, arch, reason },
+        evidence: { binary, sink, arch, reason, blockedBy },
         rationale:
-          'The reproduction was attempted and this deployment could not perform it. Recorded so the absence of a ' +
-          'confirmed crash reads as a missing capability rather than as evidence the binary is sound.',
+          blockedBy === 'harness'
+            ? 'The tools for this reproduction are present and the attempt itself broke, so a retry may succeed. ' +
+              'Recorded either way, so the absence of a confirmed crash never reads as evidence the binary is sound.'
+            : 'The reproduction was attempted and this deployment could not perform it. Recorded so the absence of ' +
+              'a confirmed crash reads as a missing capability rather than as evidence the binary is sound.',
       },
     ],
   };
@@ -218,6 +244,7 @@ export async function runDynProbe(
         sink,
         arch,
         `the emulator's gdbstub never accepted a connection on port ${port} within ${STUB_WAIT_MS}ms — the target may have failed to load under ${emulator}`,
+        'harness',
       );
     }
 
@@ -234,7 +261,7 @@ export async function runDynProbe(
       const e = err as { stdout?: string; message?: string };
       stdout = e.stdout ?? '';
       if (!stdout.trim()) {
-        return unavailable(binary, sink, arch, `gdb produced no output: ${e.message ?? 'unknown failure'}`);
+        return unavailable(binary, sink, arch, `gdb produced no output: ${e.message ?? 'unknown failure'}`, 'harness');
       }
     }
 
