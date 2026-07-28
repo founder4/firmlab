@@ -1,7 +1,8 @@
 import type { OperatorAssertion } from '@firmlab/core';
 import { describe, expect, it } from 'vitest';
 import { type StoredAssertion, amendAssertion, assertionToDraft, validateAssertion } from '../operator-findings.js';
-import { MAX_MEASURED_ROWS, type ReportFinding, indexDisputes, renderLedgerSections } from './report-assertions.js';
+import { indexDisputes } from '../operator-findings.js';
+import { MAX_MEASURED_ROWS, type ReportFinding, renderLedgerSections } from './report-assertions.js';
 
 const DAY = 1_700_000_000_000; // 2023-11-14
 

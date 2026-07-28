@@ -9,9 +9,29 @@
  * runtime reproduction are listed separately and explicitly marked "reachability unverified". Published-advisory
  * correlations (OSV/NVD/KEV) are included as context, never as confirmed vulnerabilities of this image. The
  * builder is PURE (takes a context, returns a string) so it is unit-testable without the store or the network.
+ *
+ * The operator ledger reaches this document under the same discipline, and one addition it makes non-negotiable:
+ * **a finding this draft asks a vendor to act on, which someone on the reporting side has contested, says so on
+ * the finding.** Of every surface that renders the ledger this is the one where the omission costs most — it is
+ * the document that leaves the building. So a contested finding carries the objection inline, with its proof
+ * state printed unchanged beside it and the statement that the dispute moved nothing; the vendor weighs both,
+ * which is the only honest thing to hand them. For the same reason an amended assertion shows what it replaced
+ * (an author who quietly narrowed a strong claim after the vendor read the first draft would be untraceable
+ * otherwise) and a withdrawn one is printed as withdrawn rather than dropped — a claim already communicated must
+ * not vanish silently; its retraction is the update the vendor needs.
+ *
+ * Every one of those fields is read defensively: `supersedes` and a revision's `title` were added late, so an
+ * assertion stored by an older build simply has no history, which is the correct thing to say about it.
  */
 import type { Finding, ImageIdentity, ProofState } from '@firmlab/core';
-import { describeAssertion, partitionByProvenance } from '../operator-findings.js';
+import {
+  type AssertionRevision,
+  assertionDay,
+  describeAssertion,
+  indexDisputes,
+  partitionByProvenance,
+  revisionsOf,
+} from '../operator-findings.js';
 
 export interface DisclosureContext {
   image: { filename: string; sha256: string };
@@ -56,11 +76,107 @@ function evidenceHint(f: Finding): string {
   return parts.join(' · ');
 }
 
-function findingBlock(f: Finding): string {
+/**
+ * The contest as it appears on the finding it contests: who, when, on what basis — and, in the same block, that
+ * the proof state above it is unchanged. The two sentences travel together on purpose. A vendor reading only
+ * "DISPUTED" is being invited to discount the measurement, which is precisely the override an assertion may not
+ * perform; a vendor reading only the proof state is being shown a claim the reporting side does not fully stand
+ * behind, presented as though it did.
+ */
+function disputeBlock(target: Finding, disputes: readonly Finding[]): string {
+  return disputes
+    .map((d) => {
+      const a = d.assertion;
+      const who = a ? (a.authorKind === 'agent' ? `${a.assertedBy} (agent)` : a.assertedBy) : 'an unrecorded author';
+      const when = a ? assertionDay(a.assertedAt) : 'an unrecorded date';
+      const basis = d.rationale ? ` Stated basis: ${d.rationale}` : '';
+      return [
+        `> **CONTESTED BY AN OPERATOR** — ${who} asserts on ${when} that this finding is wrong: “${d.title}”.${basis}`,
+        '>',
+        `> This is testimony about a measurement, not a measurement: the proof state above is still \`${target.proofState}\`, decided by code from the evidence, and the dispute neither changes it, downgrades it nor removes the finding. Both stand — the assertion is listed in full under "Operator assertions" below.`,
+        '',
+      ].join('\n');
+    })
+    .join('\n');
+}
+
+function findingBlock(f: Finding, disputes: readonly Finding[] = []): string {
   const lines = [`#### ${f.title}`, '', `- **Severity:** ${f.severity}`, `- **Proof state:** \`${f.proofState}\``];
   const hint = evidenceHint(f);
   if (hint) lines.push(`- **Evidence:** ${hint}`);
   if (f.rationale) lines.push(`- **Rationale:** ${f.rationale}`);
+  lines.push('');
+  if (disputes.length > 0) lines.push(disputeBlock(f, disputes));
+  return lines.join('\n');
+}
+
+/** One superseded claim, printed with the window it stood in — "they said X, then narrowed it to Y" needs both. */
+function revisionLine(r: AssertionRevision, n: number): string {
+  const title = r.title ? ` — “${r.title}”` : '';
+  const target = r.disputesFindingId ? ` (contested \`${r.disputesFindingId}\`)` : '';
+  return `  ${n}. \`${r.claim}\`, stood from ${assertionDay(r.from)} to ${assertionDay(
+    r.supersededAt,
+  )}${title}${target}. Basis given at the time: ${r.rationale}`;
+}
+
+/**
+ * What this claim replaced, or an honest statement that the predecessor was not kept.
+ *
+ * An amendment that showed only its result would let an author restate a strong claim as a weak one with no
+ * trace — the same erasure a delete performs, in the document where the earlier version may already have been
+ * sent. Returns nothing at all for a claim that was never amended, which is every assertion stored before the
+ * history existed.
+ */
+function historyLines(f: Finding): string[] {
+  const a = f.assertion;
+  if (!a) return [];
+  const revisions = revisionsOf(a);
+  if (a.amendedAt === undefined && revisions.length === 0) return [];
+  const when = assertionDay(a.amendedAt ?? a.assertedAt);
+  if (revisions.length === 0) {
+    return [
+      `- **Amended ${when}:** the claim it replaced was not preserved — this row was amended by a build that overwrote its predecessor. What stands above is the current claim only; it is not necessarily the original one.`,
+    ];
+  }
+  const plural = revisions.length === 1 ? 'claim' : 'claims';
+  return [
+    `- **Amended ${when}, superseding ${revisions.length} earlier ${plural}.** An amendment appends; it never overwrites. What the author previously stated, and on what basis — superseded, and quoted here only as history:`,
+    ...revisions.map((r, i) => revisionLine(r, i + 1)),
+  ];
+}
+
+/**
+ * The finding an assertion contests, named back so a vendor can find it, or said to be gone if it is.
+ *
+ * A retracted contest gets its own sentence rather than the live one. Rendering the draft showed the defect: the
+ * live wording promises the target "is annotated where it appears above", and for a withdrawn dispute it is not —
+ * the annotation was deliberately withheld, and the document would have been sending the vendor to look for a
+ * block that is not there.
+ */
+function contestedTargetLine(f: Finding, ledger: readonly Finding[]): string | null {
+  const targetId = f.assertion?.disputesFindingId;
+  if (!targetId) return null;
+  const retracted = f.assertion?.status === 'withdrawn';
+  const target = ledger.find((r) => r.id === targetId);
+  if (!target) {
+    return `- **Contested:** finding \`${targetId}\`, which is no longer in this image's ledger. Re-running an analysis replaces its rows with new ids, so a dispute can outlive the row it was recorded against: the claim is kept, and what it pointed at cannot be shown here.`;
+  }
+  if (retracted) {
+    return `- **Contested until withdrawn:** “${target.title}” (\`${target.proofState}\`). The objection has been retracted, so that finding carries no contest annotation above; it stands as code decided it, and always did.`;
+  }
+  return `- **Contests:** “${target.title}” (\`${target.proofState}\`), annotated where it appears above. That row stands exactly as code decided it; this assertion is recorded beside it, not over it.`;
+}
+
+/** One asserted row, in the shape an assertion earns: an author, a basis, and no proof state anywhere. */
+function assertionBlock(f: Finding, ledger: readonly Finding[], severityLabel: string): string {
+  const lines = [`#### ${f.title}`, '', `- **${severityLabel}:** ${f.severity}`];
+  if (f.assertion) lines.push(`- **Attribution:** ${describeAssertion(f.assertion)}`);
+  const hint = evidenceHint(f);
+  if (hint) lines.push(`- **Referenced:** ${hint}`);
+  if (f.rationale) lines.push(`- **Stated basis:** ${f.rationale}`);
+  const contested = contestedTargetLine(f, ledger);
+  if (contested) lines.push(contested);
+  lines.push(...historyLines(f));
   lines.push('');
   return lines.join('\n');
 }
@@ -74,9 +190,13 @@ export function buildDisclosureReport(ctx: DisclosureContext): string {
   // Assertions are separated first. They match neither bucket's filter, so without this they would simply vanish
   // from the draft — and an operator's observation on the physical device is often the strongest thing in the
   // ledger. Silent omission and silent promotion are both failures; a section that names the author is neither.
-  const { measured, asserted } = partitionByProvenance(ctx.findings);
+  const { measured, asserted, withdrawn } = partitionByProvenance(ctx.findings);
   const confirmed = sortBySeverity(measured.filter((f) => CONFIRMED.has(f.proofState)));
   const leads = sortBySeverity(measured.filter((f) => f.proofState === 'needs_runtime_reproduction'));
+  // Built from the whole ledger, and read by both the finding blocks and the draft email: a contested issue must
+  // not be listed in the email as though nobody on this side objected to it.
+  const disputesByTarget = indexDisputes(ctx.findings);
+  const disputesFor = (f: Finding): Finding[] => disputesByTarget.get(f.id) ?? [];
 
   const vendor = ctx.provenance?.vendors[0];
   const product = ctx.provenance?.models[0];
@@ -137,7 +257,7 @@ export function buildDisclosureReport(ctx: DisclosureContext): string {
       'These are present in the firmware bytes or were reproduced under isolation. Proof states are stated per finding; emulated reproduction proves the sandbox, not the deployed device.',
     );
     out.push('');
-    for (const f of confirmed) out.push(findingBlock(f));
+    for (const f of confirmed) out.push(findingBlock(f, disputesFor(f)));
   }
 
   if (leads.length > 0) {
@@ -147,7 +267,7 @@ export function buildDisclosureReport(ctx: DisclosureContext): string {
       `> These are **not confirmed**. They need runtime reproduction on the target before they belong in a report. Listed for the vendor's own triage; do not present them as vulnerabilities.`,
     );
     out.push('');
-    for (const f of leads) out.push(findingBlock(f));
+    for (const f of leads) out.push(findingBlock(f, disputesFor(f)));
   }
 
   if (asserted.length > 0) {
@@ -160,15 +280,22 @@ export function buildDisclosureReport(ctx: DisclosureContext): string {
         'without asking, which lines are measurements and which are testimony.',
     );
     out.push('');
-    for (const f of sortBySeverity(asserted)) {
-      const lines = [`#### ${f.title}`, '', `- **Severity (asserted):** ${f.severity}`];
-      if (f.assertion) lines.push(`- **Attribution:** ${describeAssertion(f.assertion)}`);
-      const hint = evidenceHint(f);
-      if (hint) lines.push(`- **Referenced:** ${hint}`);
-      if (f.rationale) lines.push(`- **Stated basis:** ${f.rationale}`);
-      lines.push('');
-      out.push(lines.join('\n'));
-    }
+    for (const f of sortBySeverity(asserted)) out.push(assertionBlock(f, ctx.findings, 'Severity (asserted)'));
+  }
+
+  // A retraction is an update the recipient needs more than the original claim: if an earlier draft cited it, the
+  // vendor is still working from it. Kept apart from the standing assertions, counted nowhere, contesting nothing.
+  if (withdrawn.length > 0) {
+    out.push(`## Withdrawn assertions (${withdrawn.length}) — retracted, and kept`);
+    out.push('');
+    out.push(
+      '> Each of these was asserted and then withdrawn by a named author, with the reason recorded. None of them ' +
+        'is a claim any longer and none contests anything; they are printed rather than deleted so that a claim ' +
+        'which may already have been communicated is not silently dropped. "This was wrong, and here is why" is ' +
+        'the most useful line a ledger holds.',
+    );
+    out.push('');
+    for (const f of sortBySeverity(withdrawn)) out.push(assertionBlock(f, ctx.findings, 'Severity (as asserted)'));
   }
 
   if (ctx.kevMatches && ctx.kevMatches.length > 0) {
@@ -195,7 +322,19 @@ export function buildDisclosureReport(ctx: DisclosureContext): string {
       `analyzing the firmware image ${ctx.image.filename} (SHA-256 ${ctx.image.sha256.slice(0, 16)}…).`,
   );
   out.push('');
-  for (const f of confirmed.slice(0, 10)) out.push(`- [${f.severity}] ${f.title}`);
+  // The email is the part that gets read; a contested issue that is flagged only in the attachment is flagged in
+  // the document the vendor may never open.
+  for (const f of confirmed.slice(0, 10)) {
+    const contested = disputesFor(f).length > 0 ? ' — CONTESTED on my side, see the attached details' : '';
+    out.push(`- [${f.severity}] ${f.title}${contested}`);
+  }
+  const contestedInEmail = confirmed.slice(0, 10).filter((f) => disputesFor(f).length > 0).length;
+  if (contestedInEmail > 0) {
+    out.push('');
+    out.push(
+      `${contestedInEmail === 1 ? 'One issue above is' : `${contestedInEmail} issues above are`} marked CONTESTED: someone on my side has recorded that the finding is wrong, and their objection is in the attached details alongside the measurement. I have not removed or downgraded the finding — you have both, and I would value your reading of it.`,
+    );
+  }
   out.push('');
   out.push(
     'Full technical details are attached. I am disclosing this privately and will coordinate on a timeline before ' +

@@ -37,6 +37,7 @@ import {
   NOT_A_MEASUREMENT,
   assertionDay,
   describeAssertion,
+  indexDisputes,
   partitionByProvenance,
   revisionsOf,
 } from '../operator-findings.js';
@@ -116,27 +117,6 @@ function bySeverityThenName(a: ReportFinding, b: ReportFinding): number {
   if (a.proofState !== b.proofState) return a.proofState < b.proofState ? -1 : 1;
   if (a.title !== b.title) return a.title < b.title ? -1 : 1;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-/**
- * Pure: index the ACTIVE disputes by the finding each one contests.
- *
- * Withdrawn disputes are excluded on purpose. A retraction means the author took the contest back, so continuing to
- * mark the row "contested" would report a disagreement that no longer exists — and the withdrawn assertion is still
- * rendered in its own block, naming the finding it used to contest, so nothing is hidden by leaving it out here.
- */
-export function indexDisputes(findings: readonly ReportFinding[]): Map<string, ReportFinding[]> {
-  const byTarget = new Map<string, ReportFinding[]>();
-  for (const f of findings) {
-    const a = f.assertion;
-    if (!a || a.claim !== 'disputes_finding' || a.status === 'withdrawn') continue;
-    const target = a.disputesFindingId;
-    if (!target) continue;
-    const list = byTarget.get(target);
-    if (list) list.push(f);
-    else byTarget.set(target, [f]);
-  }
-  return byTarget;
 }
 
 /**

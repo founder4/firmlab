@@ -1,4 +1,6 @@
+import type { OperatorAssertion } from '@firmlab/core';
 import { describe, expect, it } from 'vitest';
+import type { StoredAssertion } from '../operator-findings.js';
 import {
   HONESTY_INSTRUCTIONS,
   type McpCoverage,
@@ -413,5 +415,230 @@ describe('HONESTY_INSTRUCTIONS — the briefing covers the write path', () => {
     expect(HONESTY_INSTRUCTIONS).toContain('OPERATOR ASSERTIONS');
     expect(HONESTY_INSTRUCTIONS).toMatch(/restatement of your own claim, never evidence for it/);
     expect(HONESTY_INSTRUCTIONS).toMatch(/count towards NO analysis stage/);
+  });
+
+  it('binds the two fields that carry the ledger’s history', () => {
+    expect(HONESTY_INSTRUCTIONS).toContain('`amendmentHistory`');
+    expect(HONESTY_INSTRUCTIONS).toMatch(/They are retired/);
+    expect(HONESTY_INSTRUCTIONS).toContain('`disputedByOperator`');
+    expect(HONESTY_INSTRUCTIONS).toMatch(/proof state stays exactly as code decided it/);
+  });
+});
+
+/**
+ * The report could show all of this and the agent surface could not, which meant the consumer least able to ask a
+ * follow-up question was the one shown least. These cover the two halves of closing that: an amendment's history
+ * reaching an agent as history, and a contest reaching it without moving the row it contests.
+ */
+describe('findingsPayload — amendment history is exposed, and never as a second live claim', () => {
+  const amended: StoredAssertion = {
+    assertedBy: 'aaron',
+    authorKind: 'human',
+    assertedAt: 1_700_000_000_000,
+    amendedAt: 1_700_500_000_000,
+    claim: 'asserted_unverified',
+    rationale: 'Only reproducible on the dev board, not the shipped unit.',
+    title: 'Telnet root shell on the DEV BOARD',
+    status: 'active',
+    supersedes: [
+      {
+        claim: 'asserted_from_device',
+        rationale: 'Logged in on hardware rev B.',
+        title: 'Telnet root shell on the shipped unit',
+        from: 1_700_000_000_000,
+        supersededAt: 1_700_500_000_000,
+      },
+    ],
+  };
+
+  const amendedRow = (a: StoredAssertion = amended): McpFinding =>
+    finding({
+      id: 'op-1',
+      kind: a.claim,
+      title: a.title ?? 'Telnet root shell on the DEV BOARD',
+      proofState: 'operator_assertion',
+      source: 'operator:aaron',
+      rationale: a.rationale,
+      assertion: a,
+    });
+
+  it('returns what the claim replaced, labelled as history, with the current claim on the row itself', () => {
+    const row = findingsPayload(coverage(), [amendedRow()]).operatorAssertions?.[0];
+    // The live claim is the row's own, and it is the amended one.
+    expect(row?.claim).toBe('asserted_unverified');
+    expect(row?.title).toBe('Telnet root shell on the DEV BOARD');
+
+    const history = row?.amendmentHistory;
+    expect(history?.note).toMatch(/^HISTORY, NOT A LIVE CLAIM/);
+    expect(history?.note).toMatch(/no longer asserted/);
+    expect(history?.amendedOn).toBe('2023-11-20');
+    expect(history?.supersededClaimCount).toBe(1);
+    expect(history?.supersededClaims[0]).toEqual({
+      supersededClaim: 'asserted_from_device',
+      supersededTitle: 'Telnet root shell on the shipped unit',
+      supersededBasis: 'Logged in on hardware rev B.',
+      stoodFrom: '2023-11-14',
+      supersededOn: '2023-11-20',
+    });
+  });
+
+  // The retired sentence must not be reachable under the key a reader uses for the live one.
+  it('names no history field `claim`, `title` or `rationale`', () => {
+    const row = findingsPayload(coverage(), [amendedRow()]).operatorAssertions?.[0];
+    const keys = Object.keys(row?.amendmentHistory?.supersededClaims[0] ?? {});
+    expect(keys).not.toContain('claim');
+    expect(keys).not.toContain('title');
+    expect(keys).not.toContain('rationale');
+  });
+
+  it('says the attribution mentions the amendment too, so the sentence and the array agree', () => {
+    const row = findingsPayload(coverage(), [amendedRow()]).operatorAssertions?.[0];
+    expect(row?.attribution).toMatch(/Amended 2023-11-20/);
+    expect(row?.attribution).toMatch(/1 earlier claim is kept in the record/);
+  });
+
+  // A stored assertion is data written by an OLDER build (CLAUDE.md): absence is the answer, not a throw.
+  it('reads a row from a build with no `supersedes` as no history rather than throwing', () => {
+    const old: StoredAssertion = {
+      assertedBy: 'aaron',
+      authorKind: 'human',
+      assertedAt: 1_700_000_000_000,
+      claim: 'asserted_from_device',
+      rationale: 'Logged in on hardware rev B.',
+      status: 'active',
+    };
+    const p = findingsPayload(coverage(), [amendedRow(old)]);
+    expect(p.operatorAssertions?.[0]?.amendmentHistory).toBeUndefined();
+    expect(p.operatorAssertions?.[0]?.claim).toBe('asserted_from_device');
+  });
+
+  it('reports an amendment whose predecessor was overwritten as a hole, not as "never amended"', () => {
+    const { supersedes: _lost, ...lossy } = { ...amended, amendedAt: 1_700_500_000_000 };
+    const h = findingsPayload(coverage(), [amendedRow(lossy)]).operatorAssertions?.[0]?.amendmentHistory;
+    expect(h?.note).toMatch(/^HISTORY UNAVAILABLE/);
+    expect(h?.supersededClaimCount).toBe(0);
+    expect(h?.supersededClaims).toEqual([]);
+  });
+
+  it('degrades a `supersedes` column of the wrong shape instead of failing the whole payload', () => {
+    const junk = { ...amended, supersedes: 'not an array' } as unknown as StoredAssertion;
+    expect(() => findingsPayload(coverage(), [amendedRow(junk)])).not.toThrow();
+    const h = findingsPayload(coverage(), [amendedRow(junk)]).operatorAssertions?.[0]?.amendmentHistory;
+    expect(h?.note).toMatch(/^HISTORY UNAVAILABLE/);
+  });
+
+  it('keeps a withdrawn assertion visible as withdrawn, with its history intact', () => {
+    const retracted: StoredAssertion = {
+      ...amended,
+      status: 'withdrawn',
+      withdrawnBy: 'aaron',
+      withdrawnReason: 'the dev board was not the shipped firmware',
+      withdrawnAt: 1_701_000_000_000,
+    };
+    const p = findingsPayload(coverage(), [amendedRow(retracted)]);
+    expect(p.operatorAssertionCount).toBe(0);
+    expect(p.withdrawnAssertions?.[0]?.withdrawn).toBe(true);
+    expect(p.withdrawnAssertions?.[0]?.attribution).toMatch(/WITHDRAWN by aaron/);
+    expect(p.withdrawnAssertions?.[0]?.amendmentHistory?.supersededClaimCount).toBe(1);
+  });
+});
+
+describe('findingsPayload — a contested measurement carries the contest, and keeps its proof state', () => {
+  const target = (): McpFinding =>
+    finding({
+      id: 'f-1',
+      title: 'Hardcoded root password in /etc/shadow',
+      severity: 'high',
+      proofState: 'static_confirmed',
+      source: 'secrets',
+    });
+
+  const dispute = (over: Partial<OperatorAssertion> = {}, targetId = 'f-1'): McpFinding =>
+    finding({
+      id: 'op-9',
+      kind: 'disputes_finding',
+      title: 'That hash is a placeholder, not a credential',
+      severity: 'info',
+      proofState: 'operator_assertion',
+      source: 'operator:aaron',
+      rationale: 'The field is the string "x" on the shipped unit; the hash never ships.',
+      assertion: {
+        assertedBy: 'aaron',
+        authorKind: 'human',
+        assertedAt: 1_700_000_000_000,
+        claim: 'disputes_finding',
+        rationale: 'The field is the string "x" on the shipped unit; the hash never ships.',
+        status: 'active',
+        disputesFindingId: targetId,
+        ...over,
+      },
+    });
+
+  it('annotates the row without touching its proof state or removing it', () => {
+    const p = findingsPayload(coverage(), [target(), dispute()]);
+    expect(p.findingCount).toBe(1);
+    expect(p.proofStateCounts).toEqual({ static_confirmed: 1 });
+    const row = p.findings[0];
+    expect(row?.proofState).toBe('static_confirmed');
+    const note = row?.disputedByOperator?.[0];
+    expect(note?.meaning).toMatch(/still `static_confirmed`/);
+    expect(note?.meaning).toMatch(/neither changes it, downgrades it nor removes the row/);
+    expect(note?.disputedBy).toBe('aaron');
+    expect(note?.authorKind).toBe('human');
+    expect(note?.assertedOn).toBe('2023-11-14');
+    expect(note?.assertionTitle).toBe('That hash is a placeholder, not a credential');
+    expect(note?.assertionId).toBe('op-9');
+    expect(note?.statedBasis).toMatch(/never ships/);
+  });
+
+  it('puts the contested count and its caveat before the list they bound', () => {
+    const p = findingsPayload(coverage(), [target(), dispute()]);
+    expect(p.contestedFindingCount).toBe(1);
+    expect(p.contestedFindingsNotice).toMatch(/testimony about a measurement/);
+    expect(p.contestedFindingsNotice).toMatch(/no row was removed or downgraded/);
+    const keys = Object.keys(p);
+    expect(keys.indexOf('contestedFindingsNotice')).toBeLessThan(keys.indexOf('findings'));
+  });
+
+  it('names the contested row back from the assertion, and says the row still stands', () => {
+    const p = findingsPayload(coverage(), [target(), dispute()]);
+    const contests = p.operatorAssertions?.[0]?.contestsFinding;
+    expect(contests?.findingId).toBe('f-1');
+    expect(contests?.stillInLedger).toBe(true);
+    expect(contests?.note).toMatch(/stands exactly as code decided it/);
+  });
+
+  it('says so when the disputed row is no longer in the ledger, instead of dangling silently', () => {
+    const p = findingsPayload(coverage(), [target(), dispute({}, 'f-gone')]);
+    expect(p.contestedFindingCount).toBeUndefined();
+    expect(p.findings[0]?.disputedByOperator).toBeUndefined();
+    const contests = p.operatorAssertions?.[0]?.contestsFinding;
+    expect(contests?.stillInLedger).toBe(false);
+    expect(contests?.note).toMatch(/no longer in this image/);
+  });
+
+  it('leaves an undisputed finding exactly as it arrived — no empty array, no `disputed: false`', () => {
+    const p = findingsPayload(coverage(), [target()]);
+    expect(p.findings[0]).not.toHaveProperty('disputedByOperator');
+    expect(p.contestedFindingCount).toBeUndefined();
+    expect(p.contestedFindingsNotice).toBeUndefined();
+  });
+
+  it('stops annotating once the contest is withdrawn, but still shows the withdrawal', () => {
+    const retracted = dispute({
+      status: 'withdrawn',
+      withdrawnBy: 'aaron',
+      withdrawnReason: 'I was reading the wrong build',
+    });
+    const p = findingsPayload(coverage(), [target(), retracted]);
+    expect(p.findings[0]?.disputedByOperator).toBeUndefined();
+    expect(p.contestedFindingCount).toBeUndefined();
+    expect(p.withdrawnAssertions?.[0]?.withdrawn).toBe(true);
+    const contests = p.withdrawnAssertions?.[0]?.contestsFinding;
+    expect(contests?.findingId).toBe('f-1');
+    // Caught by rendering a payload rather than by a fixture: the live wording promises the target row "carries
+    // the annotation", and a retracted dispute deliberately annotates nothing.
+    expect(contests?.note).toMatch(/objection has been retracted/);
+    expect(contests?.note).not.toMatch(/carries the annotation/);
   });
 });

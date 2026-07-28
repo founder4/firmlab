@@ -30,13 +30,37 @@
  * Partitioning is by the `operator_assertion` sentinel, not by source, so no string a model controls decides
  * which array it lands in.
  *
+ * The fourth rule is the one the HTML report learned first and this surface inherited: **the ledger's history is
+ * part of the ledger.** An amended assertion returns what it replaced, in its own object, under keys that are not
+ * `claim`/`title`/`rationale` — a model scanning for those must not find a retired sentence under them, and the
+ * history's first field says so before the retired claim appears. A computed row a named author has contested
+ * carries the contest inline, next to its unchanged proof state, because the agent reading a `static_confirmed`
+ * row has the same right to know someone disagrees as a human opening the report — and the same obligation not to
+ * treat the disagreement as having moved the row. Both fields are read defensively: `supersedes` and the
+ * revision's `title` were added late, and a stored assertion written by an older build has neither. No history is
+ * the correct reading of such a row, never a throw.
+ *
  * Pure — takes plain data, returns plain data, unit-tested.
  */
 import type { OperatorAssertion } from '@firmlab/core';
-import { CLAIM_MEANING, NOT_A_MEASUREMENT, describeAssertion, partitionByProvenance } from '../operator-findings.js';
+import {
+  type AssertionRevision,
+  CLAIM_MEANING,
+  NOT_A_MEASUREMENT,
+  assertionDay,
+  describeAssertion,
+  indexDisputes,
+  partitionByProvenance,
+  revisionsOf,
+} from '../operator-findings.js';
 
 /** A finding as the API serves it (the fields that matter for the agent boundary). */
 export interface McpFinding {
+  /**
+   * The ledger row id. Optional: this interface describes a payload that has been served by more than one build,
+   * and a dispute that cannot find its target must degrade to "not annotated", never to a crash.
+   */
+  id?: string;
   kind: string;
   title: string;
   severity: string;
@@ -46,6 +70,33 @@ export interface McpFinding {
   rationale?: string;
   /** Present iff a person or agent asserted this row rather than FirmLab measuring it. */
   assertion?: OperatorAssertion | undefined;
+}
+
+/**
+ * One operator contest, attached to the computed row it contests.
+ *
+ * `meaning` comes first and names the target's proof state inside itself, because the misreading here is the
+ * mirror image of the one the rest of this module guards: a bare `disputed: true` invites a model to discount the
+ * measurement, which is exactly the override an assertion is not allowed to perform.
+ */
+export interface McpDisputeNote {
+  /** First field: what a dispute does, and what it does not do, to the row it is attached to. */
+  meaning: string;
+  disputedBy: string;
+  authorKind: string;
+  assertedOn: string;
+  assertionTitle: string;
+  statedBasis?: string;
+  assertionId?: string;
+}
+
+/**
+ * A measured row as this surface returns it: the finding verbatim, plus the contest if one stands against it.
+ * Nothing here rewrites `proofState` — the annotation sits beside it and says so.
+ */
+export interface McpMeasuredFinding extends McpFinding {
+  /** Present iff an ACTIVE operator assertion contests this row. Never present on an undisputed finding. */
+  disputedByOperator?: McpDisputeNote[];
 }
 
 /** The coverage report shape `GET /images/:id/coverage` returns. */
@@ -101,6 +152,13 @@ export const HONESTY_INSTRUCTIONS = [
   '  - Record one only for something you actually concluded or observed, with the basis stated. Do not mirror a',
   '    measured finding into an assertion — that inflates the ledger and adds no knowledge.',
   '',
+  'The ledger keeps its own history, and two fields carry it:',
+  '  - `amendmentHistory` on an assertion holds the claims it SUPERSEDED. They are retired: the live claim is the',
+  '    one in the row’s own fields. Quote a superseded claim only as what the author previously stated.',
+  '  - `disputedByOperator` on a MEASURED finding means a named author says that finding is wrong. It is testimony',
+  '    about a measurement, not a measurement: the proof state stays exactly as code decided it, the row stands,',
+  '    and you report both — never silently drop the finding, and never downgrade it because someone objected.',
+  '',
   'When you report, say what was examined and what was not. An honest partial answer is the deliverable here;',
   'a confident complete-sounding one built on unexamined stages is the failure this workbench exists to prevent.',
 ].join('\n');
@@ -139,6 +197,41 @@ export const SELF_AUTHORSHIP_NOTICE =
   'not evidence for the claim: you may report that someone asserted it, attributed to them, but you may never ' +
   'cite one as measurement, as confirmation, or as support for the same conclusion you are arguing.';
 
+/**
+ * One superseded claim from an amended assertion.
+ *
+ * Not one field is named `claim`, `title` or `rationale`. That is the whole design: a model — or a caller
+ * flattening this object — that reaches for those keys must not come back holding a sentence the author has
+ * already replaced. The window the claim stood in travels with it, because "they said X, then narrowed it to Y"
+ * is only readable if you can see when each one applied.
+ */
+export interface McpSupersededClaim {
+  supersededClaim: string;
+  /** Absent on a revision written before the title was preserved — see `AssertionRevision.title`. */
+  supersededTitle?: string;
+  supersededBasis: string;
+  stoodFrom: string;
+  supersededOn: string;
+  /** The finding this retired claim contested, if it was a dispute. It no longer contests anything. */
+  contestedFindingId?: string;
+}
+
+/**
+ * The amendment record for one assertion: the note first, the retired claims after it.
+ *
+ * `note` leads for the same reason `notAMeasurement` leads the row it sits on — the field that bounds how the
+ * data may be read has to be encountered before the data. The two notes differ because the two situations do:
+ * a build that amended without preserving its predecessor leaves a hole, and saying "no history" for that row
+ * would report the hole as an absence of amendment.
+ */
+export interface McpAmendmentHistory {
+  /** First field: everything below is retired, and the live claim is on the row itself. */
+  note: string;
+  amendedOn: string;
+  supersededClaimCount: number;
+  supersededClaims: McpSupersededClaim[];
+}
+
 /** One asserted row, shaped so no field of it can be read as a measurement. */
 export interface McpAssertedFinding {
   /** First field: the reading, before the model gets to anything that looks like a result. */
@@ -154,12 +247,73 @@ export interface McpAssertedFinding {
   /** Set on agent-authored rows — the ones a model is at risk of citing back to itself. */
   selfAuthored?: boolean;
   withdrawn?: boolean;
+  /** Which computed row this assertion contests, set only for `claim: 'disputes_finding'`. */
+  contestsFinding?: { findingId: string; stillInLedger: boolean; note: string };
+  /** Present iff this claim replaced an earlier one. Absent means never amended — including on an older row. */
+  amendmentHistory?: McpAmendmentHistory;
 }
 
-function shapeAssertion(f: McpFinding): McpAssertedFinding {
+function shapeRevision(r: AssertionRevision): McpSupersededClaim {
+  return {
+    supersededClaim: r.claim,
+    ...(r.title ? { supersededTitle: r.title } : {}),
+    supersededBasis: r.rationale,
+    stoodFrom: assertionDay(r.from),
+    supersededOn: assertionDay(r.supersededAt),
+    ...(r.disputesFindingId ? { contestedFindingId: r.disputesFindingId } : {}),
+  };
+}
+
+/**
+ * Pure: the amendment record, or null for a claim that was never amended.
+ *
+ * Read defensively at both ends. `revisionsOf` tolerates a `supersedes` column written by a build that shipped a
+ * different shape, and an `amendedAt` with no revisions behind it is a real, reachable state — it is every row
+ * amended before amendment became append-only — so it reports the gap instead of pretending the current claim is
+ * the original one. A row with neither returns null, which is the correct reading of every assertion ever stored
+ * before this feature existed.
+ */
+export function amendmentHistoryOf(a: OperatorAssertion | undefined): McpAmendmentHistory | null {
+  if (!a) return null;
+  const revisions = revisionsOf(a);
+  if (a.amendedAt === undefined && revisions.length === 0) return null;
+  const amendedOn = assertionDay(a.amendedAt ?? a.assertedAt);
+  if (revisions.length === 0) {
+    return {
+      note:
+        'HISTORY UNAVAILABLE — this assertion was amended, but the build that amended it did not preserve the ' +
+        'claim it replaced, so what it superseded cannot be shown. Only the current claim stands; do not read it ' +
+        'as the author’s original one.',
+      amendedOn,
+      supersededClaimCount: 0,
+      supersededClaims: [],
+    };
+  }
+  return {
+    note:
+      'HISTORY, NOT A LIVE CLAIM — the claim, title and basis on the row above are the current ones. Everything ' +
+      'listed here was superseded by an amendment and is no longer asserted: cite it only as what the author ' +
+      'previously stated, never as the claim that stands. An amendment appends; it never overwrites.',
+    amendedOn,
+    supersededClaimCount: revisions.length,
+    supersededClaims: revisions.map(shapeRevision),
+  };
+}
+
+function shapeAssertion(f: McpFinding, ledgerIds: ReadonlySet<string>): McpAssertedFinding {
   const a = f.assertion;
   const claim = a?.claim ?? 'asserted_unverified';
   const isAgent = a?.authorKind === 'agent';
+  const target = a?.disputesFindingId;
+  const history = amendmentHistoryOf(a);
+  // A withdrawn contest gets its own sentence: the live one promises the target row "carries the annotation", and
+  // a retracted dispute deliberately does not annotate anything — that wording would send a reader looking for a
+  // field that is not there.
+  const contestNote = !ledgerIds.has(target ?? '')
+    ? 'The finding this contests is no longer in this image’s ledger — re-running a provider replaces its rows with new ids, so a dispute can outlive its target. The claim is kept; what it pointed at cannot be shown.'
+    : a?.status === 'withdrawn'
+      ? 'The objection has been retracted, so that row carries no dispute note: it stands exactly as code decided it, and the dispute never moved it.'
+      : 'That row stands exactly as code decided it. This assertion is recorded beside it, not over it, and it carries the annotation.';
   return {
     notAMeasurement: NOT_A_MEASUREMENT,
     title: f.title,
@@ -172,7 +326,27 @@ function shapeAssertion(f: McpFinding): McpAssertedFinding {
     ...(f.rationale ? { rationale: f.rationale } : {}),
     ...(isAgent ? { selfAuthored: true } : {}),
     ...(a?.status === 'withdrawn' ? { withdrawn: true } : {}),
+    ...(target
+      ? { contestsFinding: { findingId: target, stillInLedger: ledgerIds.has(target), note: contestNote } }
+      : {}),
+    ...(history ? { amendmentHistory: history } : {}),
   };
+}
+
+/** The contest as it hangs off the row it contests: who, when, on what basis, and what it did NOT do. */
+function disputeNotes(target: McpFinding, disputes: readonly McpFinding[]): McpDisputeNote[] {
+  return disputes.map((d) => {
+    const a = d.assertion;
+    return {
+      meaning: `An operator contests this finding. This is testimony ABOUT a measurement, not a measurement: the proof state of this row is still \`${target.proofState}\`, decided by code from the evidence, and the dispute neither changes it, downgrades it nor removes the row. Both stand — report the finding and the objection together, attributed to their authors.`,
+      disputedBy: a?.assertedBy ?? 'unknown',
+      authorKind: a?.authorKind ?? 'unknown',
+      assertedOn: a ? assertionDay(a.assertedAt) : 'an unrecorded date',
+      assertionTitle: d.title,
+      ...(d.rationale ? { statedBasis: d.rationale } : {}),
+      ...(d.id ? { assertionId: d.id } : {}),
+    };
+  });
 }
 
 /**
@@ -183,6 +357,11 @@ function shapeAssertion(f: McpFinding): McpAssertedFinding {
  * `withdrawnAssertions`, and `proofStateCounts` is computed over the measured population alone — an assertion
  * incrementing a proof-state histogram would put a human's sentence into the same tally the model uses to judge
  * how well-evidenced the image is.
+ *
+ * A measured row that a standing assertion contests is returned with the contest attached and its proof state
+ * untouched, so the annotation cannot be reached without the sentence saying it changed nothing. An undisputed
+ * row is returned exactly as it arrived: no empty array, no `disputed: false`, nothing to make the common case
+ * look like it was considered and cleared.
  */
 export function findingsPayload(
   coverage: McpCoverage | null,
@@ -192,7 +371,9 @@ export function findingsPayload(
   notCovered: string[];
   proofStateCounts: Record<string, number>;
   findingCount: number;
-  findings: McpFinding[];
+  contestedFindingCount?: number;
+  contestedFindingsNotice?: string;
+  findings: McpMeasuredFinding[];
   operatorAssertionCount: number;
   operatorAssertionsNotice?: string;
   operatorAssertions?: McpAssertedFinding[];
@@ -208,18 +389,37 @@ export function findingsPayload(
     ? coverageHeadline(coverage)
     : 'COVERAGE UNKNOWN — the coverage report could not be read, so it is not known which analysis stages ran. Do not treat this list as complete.';
 
+  const ledgerIds = new Set<string>();
+  for (const f of findings) if (f.id) ledgerIds.add(f.id);
+  const disputesByTarget = indexDisputes(asserted);
+  const annotated: McpMeasuredFinding[] = measured.map((f) => {
+    const disputes = f.id ? disputesByTarget.get(f.id) : undefined;
+    return disputes?.length ? { ...f, disputedByOperator: disputeNotes(f, disputes) } : f;
+  });
+  const contested = annotated.filter((f) => f.disputedByOperator).length;
+
   return {
     coverageVerdict,
     notCovered: coverage ? coverage.stages.filter((s) => UNCOVERED.has(s.status)).map((s) => s.worker) : [],
     proofStateCounts,
     findingCount: measured.length,
-    findings: measured,
+    // Before the list, for the same reason the coverage verdict is: a caveat encountered after the data it bounds
+    // has already been read is a caveat that arrived too late. Absent when nothing is contested.
+    ...(contested
+      ? {
+          contestedFindingCount: contested,
+          contestedFindingsNotice: `${contested} of these measured findings ${
+            contested === 1 ? 'is' : 'are'
+          } contested by an operator, and ${contested === 1 ? 'carries' : 'carry'} a \`disputedByOperator\` note. A dispute is testimony about a measurement: the proof states below are exactly what code decided, no row was removed or downgraded, and an honest report gives both the finding and the objection.`,
+        }
+      : {}),
+    findings: annotated,
     operatorAssertionCount: asserted.length,
     // Emitted only when there is something to caveat, so the common case is not padded with a warning about an
     // empty array — a warning that is always present is a warning that is never read.
     ...(asserted.length || withdrawn.length ? { operatorAssertionsNotice: SELF_AUTHORSHIP_NOTICE } : {}),
-    ...(asserted.length ? { operatorAssertions: asserted.map(shapeAssertion) } : {}),
-    ...(withdrawn.length ? { withdrawnAssertions: withdrawn.map(shapeAssertion) } : {}),
+    ...(asserted.length ? { operatorAssertions: asserted.map((f) => shapeAssertion(f, ledgerIds)) } : {}),
+    ...(withdrawn.length ? { withdrawnAssertions: withdrawn.map((f) => shapeAssertion(f, ledgerIds)) } : {}),
   };
 }
 

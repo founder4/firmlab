@@ -495,3 +495,33 @@ export function describeAssertion(a: OperatorAssertion): string {
   }
   return `Asserted by ${who} on ${when} (${a.claim}). ${CLAIM_MEANING[a.claim]}${amended}`;
 }
+
+/**
+ * Pure: index the ACTIVE disputes by the finding each one contests.
+ *
+ * Withdrawn disputes are excluded on purpose. A retraction means the author took the contest back, so continuing to
+ * mark the row "contested" would report a disagreement that no longer exists — and every surface still renders the
+ * withdrawn assertion in its own block, naming the finding it used to contest, so nothing is hidden by leaving it
+ * out here.
+ *
+ * It lives beside `partitionByProvenance` because it is the same kind of rule and has the same reach: the report,
+ * the MCP payload and the disclosure draft each need it, each already imports this module, and each had grown its
+ * own byte-identical copy. Three implementations of "a withdrawn dispute does not annotate" is precisely the shape
+ * that drifts — one surface gets a fix, the other two keep contradicting it, and nothing fails to tell you.
+ * Generic over the row type because the three callers carry different finding shapes around the same assertion.
+ */
+export function indexDisputes<T extends { assertion?: OperatorAssertion | undefined }>(
+  rows: readonly T[],
+): Map<string, T[]> {
+  const byTarget = new Map<string, T[]>();
+  for (const row of rows) {
+    const a = row.assertion;
+    if (!a || a.claim !== 'disputes_finding' || a.status === 'withdrawn') continue;
+    const target = a.disputesFindingId;
+    if (!target) continue;
+    const list = byTarget.get(target);
+    if (list) list.push(row);
+    else byTarget.set(target, [row]);
+  }
+  return byTarget;
+}
