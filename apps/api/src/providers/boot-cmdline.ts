@@ -59,6 +59,26 @@
  * A reference that does not resolve stops the comparison outright (`unresolved-variables`) rather than letting an
  * unexpanded `${x}` masquerade as a differing value — the check refuses to answer instead of answering wrongly.
  *
+ * **The line a boot script assembles, which the same image forced again.** `bootargs` is a stored variable and a
+ * `bootcmd` is free to overwrite it before it boots — which the Tenda's does: `bootcmd=run boot_normal`, and
+ * `boot_normal` performs `env set bootargs … ${mtdparts}${mtdparts1} ${mem} ${memsize}`, a line carrying the very
+ * `mem`/`memsize` parameters whose absence from the stored variable this check was reporting as a disagreement. So
+ * the U-Boot side may hand over what a script BUILDS as well as what the environment stores, and the assembled line
+ * is what gets compared when one exists — it is closer to what the board passes. Every finding then names which of
+ * the two it compared, because a reader who cannot tell which string was used cannot check the claim.
+ *
+ * What the assembled line is NOT is an execution. `uboot.ts` reads script text: a conditional makes more than one
+ * assignment reachable, so all of them are compared and reported rather than one being chosen; a `run` the walk
+ * could not follow is named. And when a script assembles a line that cannot be resolved, the comparison is REFUSED
+ * rather than quietly falling back to the stored variable — the script overwrites that variable, so it is known
+ * *not* to be the operative line, and comparing it is precisely the defect this paragraph exists to fix.
+ *
+ * That is also why a source may declare its variable store COMPLETE. `${mtdparts1}` is not in the Tenda's
+ * environment at all, and U-Boot expands an unset variable to nothing; the blanket refusal above exists because a
+ * name missing from a store we may have CAPPED could be a variable the board really has. When the provider can say
+ * it dropped nothing and decoded everything, an absent name is the board's own answer — recorded as `unset` rather
+ * than as unresolved, and the comparison proceeds.
+ *
  * Two refusals bound the result. **Both sources present is a precondition, not an assumption**: only one, or
  * neither, is neither disagreement nor agreement, and `verdict` keeps every case apart so no reader can
  * collapse "we could not ask" into "they match". And the finding's `static_confirmed` claims exactly one thing —
@@ -147,6 +167,32 @@ export interface CmdlineSource {
    * comparison is refused rather than guessed.
    */
   variables?: Record<string, string>;
+  /**
+   * True when `variables` is the WHOLE store the source has — nothing dropped by a cap, nothing that failed to
+   * decode. Only then may a reference to a name the store lacks be read as U-Boot's own rule (an unset variable
+   * expands to nothing) rather than as our own blind spot. Absent means "cannot claim completeness", which keeps
+   * every existing caller on the refusal path it had before this field existed.
+   */
+  variablesComplete?: boolean;
+}
+
+/**
+ * A command line a `bootcmd`/`preboot` script ASSEMBLES, as the cross-check needs to see it. Same shape as any
+ * other source plus the one thing a comparison must not lose: whether a static read could say this variant runs.
+ */
+export interface AssembledCmdlineSource extends CmdlineSource {
+  /** True when the assignment sits under an `if`/`while`/`for` — reachable, but not established as the one. */
+  conditional?: boolean;
+}
+
+/** The U-Boot side's second answer: what a boot script builds, and what reading it could not decide. */
+export interface UbootScriptCmdlines {
+  /** One per DISTINCT `setenv bootargs` the script reaches. Empty means the script sets no command line. */
+  assembled: AssembledCmdlineSource[];
+  /** True when the read cannot say which variant runs (several, a conditional, or an unfollowable `run`). */
+  ambiguous?: boolean;
+  /** The reader's own sentence, quoted verbatim so the claim travels with the limits its author put on it. */
+  note?: string;
 }
 
 /** The three spellings U-Boot's own `setenv` accepts for a variable reference. */
@@ -163,6 +209,12 @@ export interface ExpandedCmdline {
   substitutions: Record<string, string>;
   /** References that did not resolve. Non-empty means the line is still a template and must not be compared. */
   unresolved: string[];
+  /**
+   * References the store PROVES are unset, expanded to nothing exactly as U-Boot's own `setenv` does. Only ever
+   * non-empty when the source declared its store complete; without that declaration an absent name is
+   * `unresolved`, because it may be a variable our own cap dropped rather than one the board does not have.
+   */
+  unset: string[];
 }
 
 /**
@@ -170,12 +222,22 @@ export interface ExpandedCmdline {
  * line is returned verbatim and nothing is ever reported unresolved — a literal `$` in a device-tree string is a
  * `$`, not a reference. Bounded at `MAX_EXPANSION_PASSES`; anything still referencing after that (a self- or
  * mutually-recursive variable) is reported unresolved rather than expanded further.
+ *
+ * `options.complete` says the store is everything the source has, which changes what an ABSENT name means: not
+ * "we may have dropped it" but "the board does not carry it", which U-Boot expands to nothing. Those names are
+ * recorded in `unset` rather than `unresolved`, so the substitution is still visible and auditable.
  */
-export function expandCmdlineVariables(line: string, variables?: Record<string, string>): ExpandedCmdline {
-  if (!variables) return { value: line, substitutions: {}, unresolved: [] };
+export function expandCmdlineVariables(
+  line: string,
+  variables?: Record<string, string>,
+  options?: { complete?: boolean },
+): ExpandedCmdline {
+  if (!variables) return { value: line, substitutions: {}, unresolved: [], unset: [] };
 
+  const complete = options?.complete === true;
   const substitutions: Record<string, string> = {};
   const unresolved = new Set<string>();
+  const unset = new Set<string>();
   let value = line;
   for (let pass = 0; pass < MAX_EXPANSION_PASSES; pass++) {
     let changed = false;
@@ -184,8 +246,13 @@ export function expandCmdlineVariables(line: string, variables?: Record<string, 
       if (name === undefined) return match;
       const resolved = variables[name];
       if (resolved === undefined) {
-        unresolved.add(name);
-        return match;
+        if (!complete) {
+          unresolved.add(name);
+          return match;
+        }
+        unset.add(name);
+        changed = true;
+        return '';
       }
       substitutions[name] = resolved;
       changed = true;
@@ -197,7 +264,7 @@ export function expandCmdlineVariables(line: string, variables?: Record<string, 
     const name = m[1] ?? m[2] ?? m[3];
     if (name !== undefined) unresolved.add(name);
   }
-  return { value, substitutions, unresolved: [...unresolved].sort() };
+  return { value, substitutions, unresolved: [...unresolved].sort(), unset: [...unset].sort() };
 }
 
 /**
@@ -314,10 +381,14 @@ export function diffCommandLines(deviceTree: NormalizedCmdline, ubootEnv: Normal
   return out;
 }
 
-/** The outcome of comparing ONE device tree's command line against the environment's. */
+/** The outcome of comparing ONE device tree's command line against ONE of the environment's. */
 export interface CmdlineComparison {
   /** Where the tree's line came from, in the same words the finding uses. */
   deviceTreeWhere: string;
+  /** Where the U-Boot line came from — the stored variable, or the script chain that assembles it. */
+  ubootWhere: string;
+  /** Which of the U-Boot side's two possible lines this comparison used. Never inferred by a reader. */
+  ubootLine: 'stored' | 'assembled';
   agrees: boolean;
   /** Capped at `DIFF_CAP`, sorted by parameter name. Empty when the two agree. */
   differences: CmdlineDifference[];
@@ -340,16 +411,27 @@ export type CmdlineCrossCheckVerdict =
   | 'neither'
   | 'unresolved-variables';
 
-/** Outcome of cross-checking the device tree's command line(s) against the stored U-Boot environment's. */
+/** Outcome of cross-checking the device tree's command line(s) against the U-Boot side's. */
 export interface CmdlineCrossCheck {
   verdict: CmdlineCrossCheckVerdict;
   /** True only when BOTH sources yielded a comparable line. The precondition, stated rather than assumed. */
   comparable: boolean;
-  /** One entry per DISTINCT device-tree command line. Empty whenever `comparable` is false. */
+  /** One entry per (distinct device-tree line × distinct U-Boot line). Empty whenever `comparable` is false. */
   comparisons: CmdlineComparison[];
   findings: FindingDraft[];
   /** What was compared and what was normalised away — or, when nothing was compared, why not. */
   reason: string;
+  /**
+   * Which U-Boot line the comparison used: the one a boot script assembles (preferred — it is closer to what the
+   * board passes), the one stored in `bootargs`, or neither because nothing was comparable. Stated, never implied.
+   */
+  comparedUbootLine: 'stored' | 'assembled' | 'none';
+  /**
+   * True when the environment stores a `bootargs` AND a script assembles a different boot configuration from it.
+   * Worth stating on its own: it means quoting the stored variable anywhere else on this image answers a different
+   * question from the one this check answered.
+   */
+  storedAndAssembledDiffer: boolean;
 }
 
 /** The audit questions a line answers, as a stable set — used only to decide whether a difference is material. */
@@ -378,8 +460,18 @@ interface ResolvedSide {
 
 /** Expand a source and audit the EXPANDED line, since that is the line the comparison actually works on. */
 function resolveSide(source: CmdlineSource): ResolvedSide {
-  const expanded = expandCmdlineVariables(source.value, source.variables);
+  const expanded = expandCmdlineVariables(source.value, source.variables, {
+    complete: source.variablesComplete === true,
+  });
   return { source, expanded, kinds: auditKinds(expanded.value) };
+}
+
+/** One U-Boot line the comparison may use, carrying the label every finding has to quote. */
+interface EnvCandidate {
+  side: ResolvedSide;
+  line: 'stored' | 'assembled';
+  /** True when the assembled assignment sits under a conditional — reachable, not established. */
+  conditional: boolean;
 }
 
 /** The `expanded`/`substitutions` half of the evidence, present only when the source really was a template. */
@@ -392,15 +484,28 @@ function expansionEvidence(side: ResolvedSide, prefix: 'deviceTree' | 'ubootEnv'
   };
 }
 
-function disagreementFinding(
-  tree: ResolvedSide,
-  env: ResolvedSide,
-  comparison: CmdlineComparison,
-  treeKinds: string[],
-  envKinds: string[],
-): FindingDraft {
+/** The stored `bootargs` as context for a comparison that used the ASSEMBLED line instead. */
+interface StoredContext {
+  cmdline: string;
+  /** True when the stored variable and the compared assembled line are different boot configurations. */
+  differs: boolean;
+}
+
+function disagreementFinding(input: {
+  tree: ResolvedSide;
+  env: EnvCandidate;
+  comparison: CmdlineComparison;
+  treeKinds: string[];
+  envKinds: string[];
+  stored: StoredContext | null;
+  scriptNote?: string;
+  scriptAmbiguous?: boolean;
+}): FindingDraft {
+  const { tree, env, comparison, treeKinds, envKinds, stored } = input;
+  const envSource = env.side.source;
   const total = comparison.differences.length + comparison.differencesDropped;
   const material = comparison.securityRelevant;
+  const assembled = env.line === 'assembled';
   const materialNote = material
     ? [
         'The difference is material to this audit: the two lines do not answer the root-shell / serial-console',
@@ -411,18 +516,45 @@ function disagreementFinding(
         'None of the differing parameters changes the root-shell / serial-console answer, so the disagreement is',
         'reported as a provenance fact rather than a security one.',
       ].join(' ');
+  // Which line was compared leads the rationale, because a reader who cannot tell which of the U-Boot side's two
+  // strings produced the diff below cannot check a single row of it.
+  const comparedNote = assembled
+    ? [
+        `Compared against ${envSource.origin.where} — the line a \`bootcmd\`/\`preboot\` script ASSEMBLES, not the`,
+        'value stored in the `bootargs` variable. That is a static read of the script text: it shows the assignment',
+        'is on the path U-Boot would run, not that this board ran it.',
+        env.conditional
+          ? 'This assignment sits inside a conditional, so it is one reachable variant and not established as the one.'
+          : '',
+      ]
+        .filter((s) => s !== '')
+        .join(' ')
+    : `Compared against ${envSource.origin.where} — the line stored in the \`bootargs\` variable.`;
+  const storedNote = stored
+    ? stored.differs
+      ? [
+          'The stored `bootargs` and the assembled line are themselves different boot configurations (stored:',
+          `\`${truncate(stored.cmdline, 120)}\`), so quoting the stored variable would answer a different question`,
+          'from the one answered here.',
+        ].join(' ')
+      : 'The stored `bootargs` normalises to the same boot configuration as the assembled line, so which one is quoted does not change this result.'
+    : '';
   const rationale = [
-    'The device tree and the stored U-Boot environment both declare a kernel command line, and after normalising',
+    comparedNote,
+    'The device tree and the U-Boot environment both declare a kernel command line, and after normalising',
     `${NORMALIZED_NOTE} they are not the same line: ${total} parameter(s) differ. static_confirmed claims exactly`,
     'that — two parsed structures in these bytes carry different strings. It does NOT claim the board is',
     'misconfigured, that either line is exploitable, or which line the kernel actually receives: U-Boot normally',
     'writes $bootargs into /chosen/bootargs before handing the tree to the kernel, so the environment is usually',
     'the operative line and the tree records what the build expected — but nothing in these bytes proves this',
-    'board takes that path, and nothing proves the stored value is even the line U-Boot passes: a `bootcmd` script',
-    'is free to `setenv bootargs` again before it boots. Read it as: every other command-line finding on this',
-    'image is conditional on which source wins, and each one names the origin it was read from.',
+    'board takes that path. Read it as: every other command-line finding on this image is conditional on which',
+    'source wins, and each one names the origin it was read from.',
+    storedNote,
+    input.scriptAmbiguous && input.scriptNote ? input.scriptNote : '',
     materialNote,
-  ].join(' ');
+  ]
+    .filter((s) => s !== '')
+    .join(' ');
 
   return {
     kind: 'boot-cmdline-disagreement',
@@ -431,11 +563,19 @@ function disagreementFinding(
     proofState: 'static_confirmed',
     evidence: {
       deviceTreeCmdline: truncate(tree.source.value),
-      ubootEnvCmdline: truncate(env.source.value),
+      ubootEnvCmdline: truncate(envSource.value),
+      // The one field a reader needs before any of the rows below mean anything.
+      ubootEnvLine: env.line,
+      ubootEnvWhere: envSource.origin.where,
+      ...(assembled && env.conditional ? { ubootEnvConditional: true } : {}),
+      ...(stored
+        ? { ubootStoredCmdline: truncate(stored.cmdline), ubootStoredDiffersFromAssembled: stored.differs }
+        : {}),
       ...expansionEvidence(tree, 'deviceTree'),
-      ...expansionEvidence(env, 'ubootEnv'),
+      ...expansionEvidence(env.side, 'ubootEnv'),
+      ...(env.side.expanded.unset.length > 0 ? { ubootEnvUnsetVariables: env.side.expanded.unset } : {}),
       deviceTreeSource: tree.source.origin.evidence,
-      ubootEnvSource: env.source.origin.evidence,
+      ubootEnvSource: envSource.origin.evidence,
       differences: comparison.differences.map((d) => ({
         key: d.key,
         deviceTree: truncateSide(d.deviceTree),
@@ -461,16 +601,36 @@ function disagreementFinding(
   };
 }
 
+/** The refusal shape, so every "we could not ask" exit is built by the same code and none can drift. */
+function refuse(verdict: CmdlineCrossCheckVerdict, reason: string): CmdlineCrossCheck {
+  return {
+    verdict,
+    comparable: false,
+    comparisons: [],
+    findings: [],
+    reason,
+    comparedUbootLine: 'none',
+    storedAndAssembledDiffer: false,
+  };
+}
+
 /**
- * Pure: cross-check the kernel command line(s) a device tree declares against the one the stored U-Boot
- * environment declares. Produces a finding ONLY for a real disagreement — a line that survives normalisation
- * unequal. Agreement produces no finding, and neither does an image where only one source (or no source) carried
- * a line: those are the question going unasked, and `verdict` keeps them distinguishable from equality.
+ * Pure: cross-check the kernel command line(s) a device tree declares against the one(s) the U-Boot side declares.
+ * Produces a finding ONLY for a real disagreement — a line that survives normalisation unequal. Agreement produces
+ * no finding, and neither does an image where only one source (or no source) carried a line: those are the question
+ * going unasked, and `verdict` keeps them distinguishable from equality.
  *
- * A FIT commonly ships one device tree per board variant, so the tree side is a LIST. Identical lines collapse to
- * one comparison (the same disagreement reported twice is noise); genuinely different ones each get their own,
- * because each is a different board variant disagreeing with the same environment. The list is already bounded by
- * the device-tree provider's blob cap, so nothing is truncated here.
+ * The U-Boot side has TWO possible answers and they are not equal in standing. `ubootEnv` is the value stored in
+ * `bootargs`; `ubootScript` is what a `bootcmd`/`preboot` script assembles, which OVERWRITES that value before the
+ * board boots. So an assembled line is preferred whenever one is available, `comparedUbootLine` says which was
+ * used, and every finding repeats it — the diff rows are unreadable without knowing which string produced them.
+ * When a script assembles a line that cannot be resolved, the check REFUSES rather than falling back to the stored
+ * variable: the script overwrites it, so it is known not to be the operative line.
+ *
+ * A FIT commonly ships one device tree per board variant, so the tree side is a LIST — and a conditional makes the
+ * U-Boot side one too. Identical lines collapse on both axes (the same disagreement reported twice is noise), and
+ * what remains is compared pairwise: each distinct board variant against each reachable command line. Nothing here
+ * picks one variant and calls it the boot.
  *
  * Variable expansion runs FIRST, before presence is even decided: a `bootargs` that is nothing but `${x}`
  * references is a template, and whether it yields a line at all depends on what the store holds.
@@ -478,36 +638,88 @@ function disagreementFinding(
 export function crossCheckBootCmdlines(input: {
   deviceTree: CmdlineSource[];
   ubootEnv: CmdlineSource | null;
+  ubootScript?: UbootScriptCmdlines;
 }): CmdlineCrossCheck {
   const treeSides = input.deviceTree.map((s) => resolveSide(s));
-  const envSide = input.ubootEnv ? resolveSide(input.ubootEnv) : null;
 
   // An unresolved reference is not a differing value, and pretending otherwise is exactly how this check would
   // manufacture its first false finding. Stop, and name what could not be resolved.
-  const unresolved = [
-    ...new Set([...(envSide?.expanded.unresolved ?? []), ...treeSides.flatMap((t) => t.expanded.unresolved)]),
-  ].sort();
-  if (unresolved.length > 0) {
-    return {
-      verdict: 'unresolved-variables',
-      comparable: false,
-      comparisons: [],
-      findings: [],
-      reason: [
-        `The command line still references ${unresolved.length} variable(s) that could not be resolved from the`,
-        `source's own store (${unresolved.join(', ')}), so it is a template rather than a command line and was`,
-        'not compared. That is not agreement and not a disagreement — comparing an unexpanded ${…} against a',
-        'literal value would report a difference that is an artefact of not expanding it.',
+  const treeUnresolved = [...new Set(treeSides.flatMap((t) => t.expanded.unresolved))].sort();
+  if (treeUnresolved.length > 0) return refuse('unresolved-variables', unresolvedReason(treeUnresolved));
+
+  const storedSide = input.ubootEnv ? resolveSide(input.ubootEnv) : null;
+  const assembledSides = (input.ubootScript?.assembled ?? []).map((source) => ({
+    side: resolveSide(source),
+    conditional: source.conditional === true,
+  }));
+
+  const usableAssembled: EnvCandidate[] = assembledSides
+    .filter((a) => a.side.expanded.unresolved.length === 0 && a.side.expanded.value.trim() !== '')
+    .map((a) => ({ side: a.side, line: 'assembled' as const, conditional: a.conditional }));
+  const usableStored: EnvCandidate | null =
+    storedSide && storedSide.expanded.unresolved.length === 0 && storedSide.expanded.value.trim() !== ''
+      ? { side: storedSide, line: 'stored', conditional: false }
+      : null;
+
+  // A script that sets `bootargs` and whose line we cannot resolve is the one case where falling back would be
+  // actively wrong: the stored variable is overwritten by that very script, so comparing it answers a question
+  // about a string the board never passes.
+  if (usableAssembled.length === 0 && assembledSides.length > 0) {
+    const names = [...new Set(assembledSides.flatMap((a) => a.side.expanded.unresolved))].sort();
+    return refuse(
+      'unresolved-variables',
+      [
+        `A \`bootcmd\`/\`preboot\` script assembles the kernel command line, and it could not be resolved${
+          names.length ? ` (unresolved: ${names.join(', ')})` : ' (it expands to nothing)'
+        }.`,
+        'The stored `bootargs` was NOT compared in its place: the script overwrites that variable, so it is known',
+        'not to be the line this board passes, and comparing it would answer a different question. That is not',
+        'agreement and not a disagreement.',
       ].join(' '),
-    };
+    );
   }
 
-  const trees = treeSides.filter((s) => s.expanded.value.trim() !== '');
-  const env = envSide && envSide.expanded.value.trim() !== '' ? envSide : null;
+  const chosen: EnvCandidate[] = usableAssembled.length > 0 ? usableAssembled : usableStored ? [usableStored] : [];
+  const comparedUbootLine: 'stored' | 'assembled' | 'none' =
+    chosen.length === 0 ? 'none' : (chosen[0] as EnvCandidate).line;
 
-  if (trees.length === 0 || env === null) {
+  // Two reachable assignments that normalise to one boot configuration are one answer, not two.
+  const envCandidates: { cand: EnvCandidate; norm: NormalizedCmdline }[] = [];
+  const envSeen = new Set<string>();
+  for (const cand of chosen) {
+    const norm = normalizeCommandLine(cand.side.expanded.value);
+    if (envSeen.has(norm.canonical)) continue;
+    envSeen.add(norm.canonical);
+    envCandidates.push({ cand, norm });
+  }
+
+  // The stored variable as CONTEXT, only when it was not itself the thing compared. Whether it differs from the
+  // assembled line is a fact about this image worth stating even when the tree agrees with everything.
+  const storedNorm = usableStored ? normalizeCommandLine(usableStored.side.expanded.value) : null;
+  const storedContext: StoredContext | null =
+    comparedUbootLine === 'assembled' && usableStored && storedNorm
+      ? {
+          cmdline: usableStored.side.source.value,
+          differs: envCandidates.some((e) => e.norm.canonical !== storedNorm.canonical),
+        }
+      : null;
+  const storedAndAssembledDiffer = storedContext?.differs === true;
+
+  const trees = treeSides.filter((s) => s.expanded.value.trim() !== '');
+
+  if (trees.length === 0 || envCandidates.length === 0) {
+    // A stored line that is still a template is the one absence that is really a refusal, so it is checked before
+    // the presence verdicts — "we could not expand it" must never be filed as "the environment carried none".
+    const storedUnresolved = storedSide?.expanded.unresolved ?? [];
+    if (envCandidates.length === 0 && storedUnresolved.length > 0) {
+      return refuse('unresolved-variables', unresolvedReason([...storedUnresolved].sort()));
+    }
     const verdict: CmdlineCrossCheckVerdict =
-      trees.length === 0 && env === null ? 'neither' : trees.length === 0 ? 'uboot-env-only' : 'device-tree-only';
+      trees.length === 0 && envCandidates.length === 0
+        ? 'neither'
+        : trees.length === 0
+          ? 'uboot-env-only'
+          : 'device-tree-only';
     const reason =
       verdict === 'neither'
         ? [
@@ -525,10 +737,10 @@ export function crossCheckBootCmdlines(input: {
               'declared one, so no cross-check was possible. That is not agreement — the environment is',
               'uncorroborated, not confirmed.',
             ].join(' ');
-    return { verdict, comparable: false, comparisons: [], findings: [], reason };
+    // `comparedUbootLine` stays `none`: nothing was compared, and naming the line that WOULD have been used would
+    // read as though it had been. `storedAndAssembledDiffer` is still a fact about these bytes and survives.
+    return { ...refuse(verdict, reason), storedAndAssembledDiffer };
   }
-
-  const envNorm = normalizeCommandLine(env.expanded.value);
 
   const comparisons: CmdlineComparison[] = [];
   const findings: FindingDraft[] = [];
@@ -543,28 +755,51 @@ export function crossCheckBootCmdlines(input: {
     }
     seen.add(treeNorm.canonical);
 
-    const all = diffCommandLines(treeNorm, envNorm);
-    const comparison: CmdlineComparison = {
-      deviceTreeWhere: tree.source.origin.where,
-      agrees: all.length === 0,
-      differences: all.slice(0, DIFF_CAP),
-      differencesDropped: Math.max(0, all.length - DIFF_CAP),
-      securityRelevant: tree.kinds.join(' ') !== env.kinds.join(' '),
-    };
-    comparisons.push(comparison);
-    if (!comparison.agrees) findings.push(disagreementFinding(tree, env, comparison, tree.kinds, env.kinds));
+    for (const { cand, norm } of envCandidates) {
+      const all = diffCommandLines(treeNorm, norm);
+      const comparison: CmdlineComparison = {
+        deviceTreeWhere: tree.source.origin.where,
+        ubootWhere: cand.side.source.origin.where,
+        ubootLine: cand.line,
+        agrees: all.length === 0,
+        differences: all.slice(0, DIFF_CAP),
+        differencesDropped: Math.max(0, all.length - DIFF_CAP),
+        securityRelevant: tree.kinds.join(' ') !== cand.side.kinds.join(' '),
+      };
+      comparisons.push(comparison);
+      if (!comparison.agrees) {
+        findings.push(
+          disagreementFinding({
+            tree,
+            env: cand,
+            comparison,
+            treeKinds: tree.kinds,
+            envKinds: cand.side.kinds,
+            stored: storedContext,
+            ...(input.ubootScript?.note ? { scriptNote: input.ubootScript.note } : {}),
+            ...(input.ubootScript?.ambiguous ? { scriptAmbiguous: true } : {}),
+          }),
+        );
+      }
+    }
   }
 
   const disagreeing = comparisons.filter((c) => !c.agrees).length;
   const distinctNote =
     duplicates > 0
       ? [
-          ` ${comparisons.length} distinct command line(s) across ${trees.length} device tree(s); the rest are`,
+          ` ${seen.size} distinct command line(s) across ${trees.length} device tree(s); the rest are`,
           'byte-for-byte repeats.',
         ].join(' ')
       : trees.length > 1
         ? ` All ${trees.length} device tree(s) in this image were compared.`
         : '';
+  const lineNote = lineProvenanceNote(comparedUbootLine, envCandidates.length, input.ubootScript);
+  const storedNote = storedContext
+    ? storedContext.differs
+      ? ' The stored `bootargs` is a different boot configuration from the assembled line, so it is not the string this result is about.'
+      : ' The stored `bootargs` normalises to the same boot configuration as the assembled line.'
+    : '';
 
   if (disagreeing === 0) {
     return {
@@ -572,9 +807,11 @@ export function crossCheckBootCmdlines(input: {
       comparable: true,
       comparisons,
       findings,
+      comparedUbootLine,
+      storedAndAssembledDiffer,
       reason: [
-        'The device tree and the stored U-Boot environment declare the same kernel command line once',
-        `${NORMALIZED_NOTE} are normalised.${distinctNote}`,
+        'The device tree and the U-Boot environment declare the same kernel command line once',
+        `${NORMALIZED_NOTE} are normalised.${distinctNote}${lineNote}${storedNote}`,
         'Both sources answer the boot question identically; nothing here says which one the board actually uses.',
       ].join(' '),
     };
@@ -585,11 +822,47 @@ export function crossCheckBootCmdlines(input: {
     comparable: true,
     comparisons,
     findings,
+    comparedUbootLine,
+    storedAndAssembledDiffer,
     reason: [
-      `${disagreeing} of ${comparisons.length} device-tree command line(s) differ from the stored U-Boot`,
-      `environment's after normalising ${NORMALIZED_NOTE}.${distinctNote}`,
+      `${disagreeing} of ${comparisons.length} comparison(s) differ after normalising`,
+      `${NORMALIZED_NOTE}.${distinctNote}${lineNote}${storedNote}`,
       'The tree says what the build expects and the environment says what the board would pass; which one the',
       'kernel receives is not decidable from these bytes.',
     ].join(' '),
   };
+}
+
+/** The one sentence a refused expansion gets, so `reason` reads the same wherever the refusal came from. */
+function unresolvedReason(names: string[]): string {
+  return [
+    `The command line still references ${names.length} variable(s) that could not be resolved from the source's`,
+    `own store (${names.join(', ')}), so it is a template rather than a command line and was not compared. That is`,
+    'not agreement and not a disagreement — comparing an unexpanded ${…} against a literal value would report a',
+    'difference that is an artefact of not expanding it.',
+  ].join(' ');
+}
+
+/** Say which of the U-Boot side's lines was used, and what reading it could not settle. Never omitted. */
+function lineProvenanceNote(
+  line: 'stored' | 'assembled' | 'none',
+  candidates: number,
+  script?: UbootScriptCmdlines,
+): string {
+  if (line === 'assembled') {
+    const many =
+      candidates > 1
+        ? ` ${candidates} distinct assembled line(s) are statically reachable and each was compared; which one a powered board takes is not decidable from these bytes.`
+        : '';
+    return [
+      ' The U-Boot side is the command line a `bootcmd`/`preboot` script ASSEMBLES, not the stored `bootargs`',
+      `variable — a static read of the script text, not an execution.${many}${script?.note ? ` ${script.note}` : ''}`,
+    ].join(' ');
+  }
+  if (line === 'stored') {
+    return script?.note
+      ? ` The U-Boot side is the line stored in \`bootargs\`. ${script.note}`
+      : ' The U-Boot side is the line stored in `bootargs`; no boot script was read for this image, so nothing here rules out a `bootcmd` re-setting it.';
+  }
+  return '';
 }

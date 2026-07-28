@@ -20,6 +20,7 @@ export type ProviderId =
   | 'uboot'
   | 'updatepath'
   | 'devicetree'
+  | 'bootcmdline'
   | 'nvram'
   | 'fcc'
   | 'rtos'
@@ -90,6 +91,24 @@ const EXTRACT: PlanSpec = {
   needsRootfs: false,
   built: true,
   provider: 'extract',
+};
+
+/**
+ * The one boot question neither provider can answer alone: the tree's `/chosen` line says what the build expects,
+ * the environment says what the board would pass, and only something holding both can notice they differ.
+ *
+ * It is a STAGE rather than a clause folded into the two steps that feed it, because `coverage.ts` reads this plan
+ * to answer "was this question asked" — a check with no row of its own is one an operator cannot see going
+ * unasked, which is the conflation that report exists to prevent. It must be ordered AFTER both halves; the
+ * executor still verifies both ran and degrades honestly when one did not, so the ordering is an intention here
+ * and not a load-bearing assumption (a comment that was true when written is a trap this codebase has paid for).
+ */
+const BOOT_CMDLINE_CROSSCHECK: PlanSpec = {
+  worker: 'Cross-check · Kernel command line',
+  reason: 'the tree and the U-Boot env each declare one — do they agree, and which line does the board pass?',
+  needsRootfs: false,
+  built: true,
+  provider: 'bootcmdline',
 };
 
 /** The provider chain for a standard Linux rootfs (also the FIT/UBI class, after W1 recovers its rootfs). */
@@ -168,6 +187,7 @@ const LINUX_CHAIN: PlanSpec[] = [
     built: true,
     provider: 'devicetree',
   },
+  BOOT_CMDLINE_CROSSCHECK,
   { worker: 'Recon · FCC-ID', reason: 'FCC IDs → public filings', needsRootfs: false, built: true, provider: 'fcc' },
   {
     // Listed here as well as in RECON_ANY_CLASS: the Linux chain enumerates its rootfs-free workers explicitly so
@@ -242,6 +262,7 @@ const RECON_ANY_CLASS: PlanSpec[] = [
     built: true,
     provider: 'devicetree',
   },
+  BOOT_CMDLINE_CROSSCHECK,
   { worker: 'Recon · FCC-ID', reason: 'FCC IDs → public filings', needsRootfs: false, built: true, provider: 'fcc' },
   {
     // Every other W3 stage walks extraction output, which is why no provider had ever seen one of these: the

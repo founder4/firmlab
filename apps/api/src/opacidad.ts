@@ -52,7 +52,7 @@ import {
 import { partitionByProvenance } from './operator-findings.js';
 import { runAuxSecrets } from './providers/auxsecrets.js';
 import { runBinVuln } from './providers/binvuln.js';
-import { type CmdlineSource, crossCheckBootCmdlines } from './providers/boot-cmdline.js';
+import { type CmdlineSource, type UbootScriptCmdlines, crossCheckBootCmdlines } from './providers/boot-cmdline.js';
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
@@ -84,15 +84,18 @@ import { getImage, listFindings, listJobs } from './store.js';
  * The two halves of the kernel-command-line question, and whether each provider has run at all.
  *
  * Neither provider can see the interesting case on its own: the device tree holds what the build expects and the
- * U-Boot environment holds what the board would pass, and only a run that has both in hand can notice they
- * disagree. So each executor deposits its half here and asks for the cross-check; the one that runs LAST is the
- * one that can actually make it. `ubootRan` / `deviceTreeRan` exist so "ran and found no command line" is never
- * read as "has not run yet" — the difference decides whether the check is due.
+ * U-Boot side holds what the board would pass, and only something with both in hand can notice they disagree. So
+ * each executor deposits its half here and the `bootcmdline` stage — planned after both — performs the check.
+ * `ubootRan` / `deviceTreeRan` exist so "ran and found no command line" is never read as "has not run yet": the
+ * difference is whether the question was answerable or merely unasked, and the cross-check stage reports the two
+ * differently.
  */
 interface BootCmdlineState {
   ubootRan: boolean;
   /** The env's `bootargs`, when the stored environment declared a non-empty one. */
   uboot: CmdlineSource | null;
+  /** What a `bootcmd`/`preboot` script ASSEMBLES — the operative line when the script re-sets `bootargs`. */
+  ubootScript: UbootScriptCmdlines | null;
   deviceTreeRan: boolean;
   /** One per device tree whose `/chosen` declared a command line — a FIT ships one tree per board variant. */
   deviceTree: CmdlineSource[];
@@ -312,37 +315,43 @@ async function compmapRun(c: RunCtx): Promise<StepOutcome> {
   return { summary: `component dependency map: ${r.findings.length} findings`, findingCount: r.findings.length };
 }
 
-/** What the cross-check contributed to the step that was able to perform it. */
-interface CrossCheckOutcome {
-  /** A clause for the step summary. */
-  summary: string;
-  /** The full honest sentence, including the case where the check could NOT be made. */
-  note: string;
-  findingCount: number;
-}
-
 /**
- * Cross-check the device tree's `/chosen` command line against the stored U-Boot environment's `bootargs`.
+ * Cross-check the device tree's `/chosen` command line against the U-Boot side's — its own stage, planned after
+ * both halves (see `BOOT_CMDLINE_CROSSCHECK` in opacidad-plan.ts for why it is not folded into them).
  *
- * Called by BOTH boot-config executors right after each deposits its half, and it does nothing until both have
- * run — which is what keeps it independent of the order the class plan happens to list them in. (`uboot` precedes
- * `devicetree` in every plan today; a comment that is true when written is exactly the thing this codebase has
- * paid for before, so the check does not rely on it.) It syncs under its own source, always — including with no
- * drafts, so a disagreement recorded by an earlier run cannot outlive a re-run that no longer sees one.
- *
- * A class plan that routes to only ONE of the two providers gets no cross-check at all, and that is honest: the
- * question needs both halves. Both are in `LINUX_CHAIN` and in `RECON_ANY_CLASS`, so today every class has them.
+ * It syncs under its own source whenever the check was actually made — including with no drafts, so a disagreement
+ * recorded by an earlier run cannot outlive a re-run that no longer sees one. When a half never ran it syncs
+ * NOTHING: clearing a finding a complete earlier run established, because this run could not repeat the question,
+ * would turn an unasked question into a retraction.
  */
-function bootCmdlineCrossCheck(c: RunCtx): CrossCheckOutcome | null {
+async function bootCmdlineRun(c: RunCtx): Promise<StepOutcome> {
   const state = c.bootCmdlines;
-  if (!state.ubootRan || !state.deviceTreeRan) return null;
-  const r = crossCheckBootCmdlines({ deviceTree: state.deviceTree, ubootEnv: state.uboot });
+  if (!state.ubootRan || !state.deviceTreeRan) {
+    const missing = [!state.ubootRan ? 'the U-Boot env stage' : '', !state.deviceTreeRan ? 'the device-tree stage' : '']
+      .filter((s) => s !== '')
+      .join(' and ');
+    return {
+      summary: 'cmdline cross-check: not made',
+      findingCount: 0,
+      degraded: true,
+      note: `${missing} did not run in this scan, so the two lines could not be compared. That is the question going unasked — not agreement between them.`,
+    };
+  }
+  const r = crossCheckBootCmdlines({
+    deviceTree: state.deviceTree,
+    ubootEnv: state.uboot,
+    ...(state.ubootScript ? { ubootScript: state.ubootScript } : {}),
+  });
   syncFindings(c.imageId, 'boot-cmdline', r.findings);
   c.handle.log(`↔ kernel cmdline cross-check: ${r.verdict} — ${r.reason}`);
+  const lineClause = r.comparedUbootLine === 'none' ? '' : ` (compared the ${r.comparedUbootLine} U-Boot line)`;
   return {
-    summary: `cmdline cross-check: ${r.verdict}`,
-    note: r.reason,
+    summary: `cmdline cross-check: ${r.verdict}${lineClause}`,
     findingCount: r.findings.length,
+    // `unresolved-variables` is the check REFUSING to answer, which is a stage that could not do its job. The
+    // absence verdicts are the stage doing its job and reporting that a source carried nothing — a real result.
+    ...(r.verdict === 'unresolved-variables' ? { degraded: true } : {}),
+    note: r.reason,
   };
 }
 
@@ -354,19 +363,48 @@ async function ubootRun(c: RunCtx): Promise<StepOutcome> {
   // `capVars` keeps `bootargs` first whatever the cap, so the audit input is never the thing that gets dropped.
   // The whole variable map goes with it: a real `bootargs` is routinely a template of `${…}` references (the
   // Tenda camera's is nothing else), and without the store the cross-check cannot tell a differing value from an
-  // unexpanded one. What the cap DID drop shows up as an unresolved reference, which refuses the comparison.
+  // unexpanded one. What the cap DID drop shows up as an unresolved reference, which refuses the comparison —
+  // unless the provider can state the map is complete, in which case an absent name is the board's own answer.
+  const variables = r.vars;
+  const complete = r.varsComplete === true;
   c.bootCmdlines.uboot = bootargs
     ? {
         value: bootargs,
         origin: { where: 'the stored U-Boot environment', evidence: { var: 'bootargs' } },
-        variables: r.vars,
+        variables,
+        variablesComplete: complete,
       }
     : null;
-  const cross = bootCmdlineCrossCheck(c);
+  // The stored variable is not necessarily the operative line: a `bootcmd` script may re-set it before booting.
+  const script = r.bootScript;
+  c.bootCmdlines.ubootScript = script
+    ? {
+        assembled: script.variants.map((v) => ({
+          value: v.value,
+          origin: {
+            where: `the kernel command line \`${v.via.join(' → ')}\` assembles`,
+            evidence: {
+              var: 'bootargs',
+              via: v.via,
+              statement: v.statement,
+              ...(v.conditional ? { conditional: true } : {}),
+            },
+          },
+          variables,
+          variablesComplete: complete,
+          conditional: v.conditional,
+        })),
+        ambiguous: script.ambiguous,
+        note: script.reason,
+      }
+    : null;
+  const assembledClause = script?.variants.length
+    ? ` · ${script.variants.length} assembled cmdline variant(s) from ${script.roots.join('/')}`
+    : '';
   return {
-    summary: `U-Boot / boot posture: ${r.findings.length} findings${cross ? ` · ${cross.summary}` : ''}`,
-    findingCount: r.findings.length + (cross?.findingCount ?? 0),
-    ...(cross ? { note: cross.note } : {}),
+    summary: `U-Boot / boot posture: ${r.findings.length} findings${assembledClause}`,
+    findingCount: r.findings.length,
+    ...(script?.variants.length ? { note: script.reason } : {}),
   };
 }
 
@@ -409,21 +447,18 @@ async function devicetreeRun(c: RunCtx): Promise<StepOutcome> {
         evidence: { origin: b.origin, node: '/chosen', properties: b.bootargsFrom },
       },
     }));
-  const cross = bootCmdlineCrossCheck(c);
-  const crossClause = cross ? ` · ${cross.summary}` : '';
   const models = r.blobs.map((b) => b.model ?? b.compatible[0] ?? b.origin).join(', ');
   if (!r.found) {
     return {
-      summary: `device tree: none readable in this image${crossClause}`,
-      findingCount: r.findings.length + (cross?.findingCount ?? 0),
+      summary: 'device tree: none readable in this image',
+      findingCount: r.findings.length,
       degraded: true,
-      note: cross ? `${r.reason} ${cross.note}` : r.reason,
+      note: r.reason,
     };
   }
   return {
-    summary: `device tree (${models}): ${r.findings.length} findings${crossClause}`,
-    findingCount: r.findings.length + (cross?.findingCount ?? 0),
-    ...(cross ? { note: cross.note } : {}),
+    summary: `device tree (${models}): ${r.findings.length} findings`,
+    findingCount: r.findings.length,
   };
 }
 
@@ -654,6 +689,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   uboot: ubootRun,
   updatepath: updatepathRun,
   devicetree: devicetreeRun,
+  bootcmdline: bootCmdlineRun,
   fcc: fccRun,
   rtos: rtosRun,
   chipsec: chipsecRun,
@@ -727,7 +763,7 @@ export async function runOpacidad(
     ...(prior?.detectedArch ? { detectedArch: prior.detectedArch } : {}),
     // Live view of the agenda — executors size the shared reachability budget off it as the run grows.
     planned: sched.planned,
-    bootCmdlines: { ubootRan: false, uboot: null, deviceTreeRan: false, deviceTree: [] },
+    bootCmdlines: { ubootRan: false, uboot: null, ubootScript: null, deviceTreeRan: false, deviceTree: [] },
     handle,
   };
 

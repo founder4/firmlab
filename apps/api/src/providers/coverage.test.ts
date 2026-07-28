@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { OpacidadStep } from '../opacidad-narrative.js';
-import type { PlanSpec } from '../opacidad-plan.js';
+import { type PlanSpec, specsForClass } from '../opacidad-plan.js';
 import { buildCoverage } from './coverage.js';
+
+const CROSS_CHECK = 'Cross-check · Kernel command line';
 
 const spec = (worker: string, built = true): PlanSpec => ({
   worker,
@@ -163,6 +165,77 @@ describe('buildCoverage — a degraded stage must not be absorbed by "all stages
     });
     expect(r.verdict).not.toContain('DEGRADED');
     expect(r.ambiguous).toBe(false);
+  });
+});
+
+/**
+ * The kernel-command-line cross-check used to fold into the U-Boot and device-tree steps: the arithmetic balanced,
+ * and there was no row anywhere saying whether the question had been asked. That is the conflation this whole
+ * report exists to prevent, so it now has a stage — and it has it by being in `specsForClass`, the same plan W9
+ * executes, rather than by anything here knowing the check exists.
+ */
+describe('buildCoverage — the cross-check is a stage an operator can see going unasked', () => {
+  it('gets a row for a class that routes to it, taken straight from the plan', () => {
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs: specsForClass('embedded-linux'),
+      steps: null,
+      findingCount: 0,
+    });
+    const stage = r.stages.find((s) => s.worker === CROSS_CHECK);
+    expect(stage).toBeDefined();
+    expect(stage?.status).toBe('not-run');
+    expect(stage?.reason).toContain('do they agree');
+  });
+
+  it('gets no row for a plan that does not route to it — coverage never invents a stage', () => {
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs: [spec('W1 · Extraction'), spec('W3 · Credentials')],
+      steps: null,
+      findingCount: 0,
+    });
+    expect(r.stages.some((s) => s.worker === CROSS_CHECK)).toBe(false);
+    expect(r.applicable).toBe(2);
+  });
+
+  it('keeps the executed/applicable arithmetic balanced once it runs', () => {
+    const specs = [spec('Static · U-Boot env'), spec('Static · Device tree'), spec(CROSS_CHECK)];
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs,
+      steps: [
+        step('Static · U-Boot env', 'ran', 2),
+        step('Static · Device tree', 'ran', 1),
+        step(CROSS_CHECK, 'ran', 1),
+      ],
+      findingCount: 4,
+    });
+    expect(r.applicable).toBe(3);
+    expect(r.executed).toBe(3);
+    expect(r.verdict).toBe('4 finding(s) across all 3 applicable stages.');
+    expect(r.ambiguous).toBe(false);
+  });
+
+  // The half that mattered: a scan where one feeding stage never ran must leave the cross-check visibly unanswered
+  // rather than counted as a stage that looked and found nothing.
+  it('names the cross-check among the stages a zero does NOT cover when it could not be made', () => {
+    const specs = [spec('Static · U-Boot env'), spec('Static · Device tree'), spec(CROSS_CHECK)];
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs,
+      steps: [
+        step('Static · U-Boot env', 'ran', 0),
+        step('Static · Device tree', 'ran', 0),
+        step(CROSS_CHECK, 'degraded', 0, 'the device-tree stage did not run in this scan'),
+      ],
+      findingCount: 0,
+    });
+    expect(r.executed).toBe(3);
+    expect(r.applicable).toBe(3);
+    expect(r.verdict).toContain('DEGRADED');
+    expect(r.verdict).toContain(CROSS_CHECK);
+    expect(r.ambiguous).toBe(true);
   });
 });
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type AssembledCmdlineSource,
   type CmdlineSource,
+  type UbootScriptCmdlines,
   auditKernelCommandLine,
   crossCheckBootCmdlines,
   diffCommandLines,
@@ -25,6 +27,34 @@ function env(value: string, variables?: Record<string, string>): CmdlineSource {
     value,
     origin: { where: 'the stored U-Boot environment', evidence: { var: 'bootargs' } },
     ...(variables ? { variables } : {}),
+  };
+}
+
+/** One command line a boot script assembles, shaped exactly as `opacidad.ts` hands it to the cross-check. */
+function assembled(
+  value: string,
+  via: string[],
+  variables?: Record<string, string>,
+  opts?: { conditional?: boolean; complete?: boolean },
+): AssembledCmdlineSource {
+  return {
+    value,
+    origin: {
+      where: `the kernel command line \`${via.join(' → ')}\` assembles`,
+      evidence: { var: 'bootargs', via, statement: `env set bootargs ${value}` },
+    },
+    ...(variables ? { variables } : {}),
+    ...(opts?.complete ? { variablesComplete: true } : {}),
+    ...(opts?.conditional ? { conditional: true } : {}),
+  };
+}
+
+/** The script half of the U-Boot side, with the reader's own sentence attached as the provider supplies it. */
+function script(assembledLines: AssembledCmdlineSource[], opts?: { ambiguous?: boolean }): UbootScriptCmdlines {
+  return {
+    assembled: assembledLines,
+    ...(opts?.ambiguous ? { ambiguous: true } : {}),
+    note: 'A static read of bootcmd found the assignment(s) listed.',
   };
 }
 
@@ -416,5 +446,236 @@ describe('crossCheckBootCmdlines — a disagreement is the finding, absence is n
     expect(String(ev.deviceTreeCmdline).endsWith('…')).toBe(true);
     const first = (ev.differences as { deviceTree: string[] | null }[])[0];
     expect((first?.deviceTree ?? [])[0]?.length).toBeLessThanOrEqual(121);
+  });
+});
+
+/**
+ * `bootargs` is a stored variable and a `bootcmd` is free to overwrite it. Until this existed the check compared
+ * the stored one unconditionally, which on the one corpus image carrying both sources was comparing the wrong
+ * string — the Tenda's `boot_normal` appends the very `mem`/`memsize` the check was reporting as missing.
+ */
+describe('crossCheckBootCmdlines — the assembled line, and saying which one was compared', () => {
+  it('prefers the line the script assembles over the stored variable, and names it in the finding', () => {
+    const r = crossCheckBootCmdlines({
+      deviceTree: [tree('root=/dev/mtdblock2 ro')],
+      ubootEnv: env('root=/dev/mtdblock9 ro'),
+      ubootScript: script([assembled('root=/dev/mtdblock5 ro', ['bootcmd', 'boot_normal'])]),
+    });
+    expect(r.comparedUbootLine).toBe('assembled');
+    expect(r.comparisons[0]?.ubootLine).toBe('assembled');
+    expect(r.comparisons[0]?.ubootWhere).toContain('boot_normal');
+    // The diff is against the ASSEMBLED value; the stored mtdblock9 never enters it.
+    expect(evidenceOf(r.findings[0] as { evidence?: Record<string, unknown> }).differences).toEqual([
+      { key: 'root', deviceTree: ['root=/dev/mtdblock2'], ubootEnv: ['root=/dev/mtdblock5'] },
+    ]);
+  });
+
+  it('states which line it compared in the evidence and leads the rationale with it', () => {
+    const r = crossCheckBootCmdlines({
+      deviceTree: [tree('root=/dev/mtdblock2 ro')],
+      ubootEnv: env('root=/dev/mtdblock9 ro'),
+      ubootScript: script([assembled('root=/dev/mtdblock5 ro', ['bootcmd', 'boot_normal'])]),
+    });
+    const f = r.findings[0];
+    const ev = evidenceOf(f as { evidence?: Record<string, unknown> });
+    expect(ev.ubootEnvLine).toBe('assembled');
+    expect(ev.ubootEnvWhere).toContain('bootcmd → boot_normal');
+    expect(ev.ubootEnvSource).toMatchObject({ via: ['bootcmd', 'boot_normal'] });
+    expect(f?.rationale?.startsWith('Compared against')).toBe(true);
+    expect(f?.rationale).toContain('ASSEMBLES');
+    expect(f?.rationale).toContain('not that this board ran it');
+    expect(r.reason).toContain('static read of the script text, not an execution');
+  });
+
+  it('says that the stored bootargs and the assembled line are themselves different boot configurations', () => {
+    const r = crossCheckBootCmdlines({
+      deviceTree: [tree('root=/dev/mtdblock2 ro')],
+      ubootEnv: env('root=/dev/mtdblock9 ro'),
+      ubootScript: script([assembled('root=/dev/mtdblock5 ro', ['bootcmd', 'boot_normal'])]),
+    });
+    expect(r.storedAndAssembledDiffer).toBe(true);
+    const ev = evidenceOf(r.findings[0] as { evidence?: Record<string, unknown> });
+    expect(ev.ubootStoredCmdline).toBe('root=/dev/mtdblock9 ro');
+    expect(ev.ubootStoredDiffersFromAssembled).toBe(true);
+    expect(r.reason).toContain('not the string this result is about');
+  });
+
+  it('says so just as explicitly when the two U-Boot lines agree with each other', () => {
+    const r = crossCheckBootCmdlines({
+      deviceTree: [tree('root=/dev/mtdblock2 ro')],
+      ubootEnv: env('ro root=/dev/mtdblock5'),
+      ubootScript: script([assembled('root=/dev/mtdblock5 ro', ['bootcmd', 'boot_normal'])]),
+    });
+    expect(r.storedAndAssembledDiffer).toBe(false);
+    expect(evidenceOf(r.findings[0] as { evidence?: Record<string, unknown> }).ubootStoredDiffersFromAssembled).toBe(
+      false,
+    );
+  });
+
+  it('compares EVERY reachable variant rather than picking one, and labels each comparison', () => {
+    const r = crossCheckBootCmdlines({
+      deviceTree: [tree('root=/dev/mtdblock2 ro')],
+      ubootEnv: null,
+      ubootScript: script(
+        [
+          assembled('root=/dev/mtdblock2 ro', ['bootcmd', 'boot_normal'], undefined, { conditional: true }),
+          assembled('root=/dev/mtdblock2 ro single', ['bootcmd', 'boot_rescue'], undefined, { conditional: true }),
+        ],
+        { ambiguous: true },
+      ),
+    });
+    expect(r.comparisons).toHaveLength(2);
+    expect(r.comparisons.map((c) => c.agrees)).toEqual([true, false]);
+    // One variant agrees and one does not; only the disagreement mints a finding, and it names its own variant.
+    expect(r.findings).toHaveLength(1);
+    const ev = evidenceOf(r.findings[0] as { evidence?: Record<string, unknown> });
+    expect(ev.ubootEnvWhere).toContain('boot_rescue');
+    expect(ev.ubootEnvConditional).toBe(true);
+    expect(r.verdict).toBe('disagree');
+    expect(r.reason).toContain('2 distinct assembled line(s) are statically reachable');
+    expect(r.reason).toContain('which one a powered board takes is not decidable');
+  });
+
+  it('collapses two reachable assignments that normalise to one boot configuration into one comparison', () => {
+    const r = crossCheckBootCmdlines({
+      deviceTree: [tree('root=/dev/mtdblock2 ro')],
+      ubootEnv: null,
+      ubootScript: script([
+        assembled('root=/dev/mtdblock5 ro', ['bootcmd', 'a']),
+        assembled('ro   root=/dev/mtdblock5', ['bootcmd', 'b']),
+      ]),
+    });
+    expect(r.comparisons).toHaveLength(1);
+    expect(r.findings).toHaveLength(1);
+  });
+
+  it('refuses rather than falling back to a stored variable the script is known to overwrite', () => {
+    const r = crossCheckBootCmdlines({
+      deviceTree: [tree('root=/dev/mtdblock2 ro')],
+      ubootEnv: env('root=/dev/mtdblock9 ro'),
+      ubootScript: script([assembled('root=${unknown_root} ro', ['bootcmd', 'boot_normal'], { ro: '' })]),
+    });
+    expect(r.verdict).toBe('unresolved-variables');
+    expect(r.comparable).toBe(false);
+    expect(r.findings).toEqual([]);
+    expect(r.comparedUbootLine).toBe('none');
+    expect(r.reason).toContain('was NOT compared in its place');
+    expect(r.reason).toContain('unknown_root');
+  });
+
+  it('uses the assembled line even when the environment stores no bootargs at all', () => {
+    const r = crossCheckBootCmdlines({
+      deviceTree: [tree('root=/dev/mtdblock2 ro')],
+      ubootEnv: null,
+      ubootScript: script([assembled('root=/dev/mtdblock5 ro', ['bootcmd', 'boot_normal'])]),
+    });
+    expect(r.verdict).toBe('disagree');
+    expect(r.comparedUbootLine).toBe('assembled');
+  });
+
+  describe('no boot script behaves exactly as it did before the reader existed', () => {
+    const dt = 'console=ttyS0,115200 root=/dev/mtdblock2 ro';
+    const ub = 'console=ttyS0,115200 root=/dev/mtdblock5 ro';
+
+    it('compares the stored line and says so, with no ubootScript supplied at all', () => {
+      const r = crossCheckBootCmdlines({ deviceTree: [tree(dt)], ubootEnv: env(ub) });
+      expect(r.verdict).toBe('disagree');
+      expect(r.comparedUbootLine).toBe('stored');
+      expect(r.storedAndAssembledDiffer).toBe(false);
+      expect(evidenceOf(r.findings[0] as { evidence?: Record<string, unknown> }).ubootEnvLine).toBe('stored');
+      expect(r.findings[0]?.rationale).toContain('the line stored in the `bootargs` variable');
+    });
+
+    it('produces the identical verdict and diff when the script was read and sets nothing', () => {
+      const without = crossCheckBootCmdlines({ deviceTree: [tree(dt)], ubootEnv: env(ub) });
+      const withEmpty = crossCheckBootCmdlines({
+        deviceTree: [tree(dt)],
+        ubootEnv: env(ub),
+        ubootScript: { assembled: [], note: 'nothing in the script re-sets the stored command line' },
+      });
+      expect(withEmpty.verdict).toBe(without.verdict);
+      expect(withEmpty.comparedUbootLine).toBe('stored');
+      expect(evidenceOf(withEmpty.findings[0] as { evidence?: Record<string, unknown> }).differences).toEqual(
+        evidenceOf(without.findings[0] as { evidence?: Record<string, unknown> }).differences,
+      );
+      // The reader's own sentence travels, so "no script" and "a script that sets nothing" stay distinguishable.
+      expect(withEmpty.reason).toContain('nothing in the script re-sets');
+    });
+  });
+
+  describe('a complete variable store makes an ABSENT variable the board answer, not our blind spot', () => {
+    it('expands an unset reference to nothing and records it, instead of refusing', () => {
+      const r = expandCmdlineVariables('ro ${gone} rw', { ro: '' }, { complete: true });
+      expect(r.value).toBe('ro  rw');
+      expect(r.unresolved).toEqual([]);
+      expect(r.unset).toEqual(['gone']);
+    });
+
+    it('still refuses when the store was not declared complete — it may be our cap that dropped it', () => {
+      const r = expandCmdlineVariables('ro ${gone} rw', { ro: '' });
+      expect(r.unresolved).toEqual(['gone']);
+      expect(r.unset).toEqual([]);
+    });
+  });
+
+  /**
+   * The board this whole feature came from. `bootcmd=run boot_normal`, and `boot_normal` performs
+   * `env set bootargs … ${mtdparts}${mtdparts1} ${mem} ${memsize}` — where `mtdparts1` is not in the environment at
+   * all. Against the STORED variable the check reported mem/memsize/root/rootfstype as differing; against the line
+   * the board actually assembles, mem and memsize agree and what is left is the real disagreement.
+   */
+  describe('the Tenda camera, straight off the corpus', () => {
+    const TENDA_VARS: Record<string, string> = {
+      console: 'ttySAK0,115200n8',
+      mtd_root: '/dev/mtdblock3',
+      rootfstype: 'jffs2',
+      init: '/sbin/init',
+      mem: 'mem=64M',
+      memsize: 'memsize=64M',
+      mtdparts: 'mtdparts=spi0.0:320k(boot),2112k(kernel),64k(dtb),5120k(rootfs)',
+      bootargs: 'console=${console} root=${mtd_root} rootfstype=${rootfstype} init=${init} ',
+    };
+    const TENDA_STORED = TENDA_VARS.bootargs as string;
+    const TENDA_ASSEMBLED =
+      'console=${console} root=${mtd_root} rootfstype=${rootfstype} init=${init} ${mtdparts}${mtdparts1} ${mem} ${memsize}';
+    const TENDA_TREE =
+      'console=ttySAK0,115200n8 root=/dev/mtdblock5 rootfstype=squashfs init=/sbin/init mem=64M memsize=64M';
+
+    const run = () =>
+      crossCheckBootCmdlines({
+        deviceTree: [tree(TENDA_TREE, 'raw image offset 2490368')],
+        ubootEnv: { ...env(TENDA_STORED, TENDA_VARS), variablesComplete: true },
+        ubootScript: script([assembled(TENDA_ASSEMBLED, ['bootcmd', 'boot_normal'], TENDA_VARS, { complete: true })]),
+      });
+
+    it('survives as a disagreement, and it is the sharper one', () => {
+      const r = run();
+      expect(r.verdict).toBe('disagree');
+      expect(r.comparedUbootLine).toBe('assembled');
+      const keys = (
+        evidenceOf(r.findings[0] as { evidence?: Record<string, unknown> }).differences as { key: string }[]
+      ).map((d) => d.key);
+      // mem and memsize now AGREE — they were an artefact of comparing the stored variable, not a real difference.
+      expect(keys).not.toContain('mem');
+      expect(keys).not.toContain('memsize');
+      expect(keys).toEqual(['mtdparts', 'root', 'rootfstype']);
+    });
+
+    it('records ${mtdparts1} as a variable the board does not carry, rather than refusing over it', () => {
+      const r = run();
+      const ev = evidenceOf(r.findings[0] as { evidence?: Record<string, unknown> });
+      expect(ev.ubootEnvUnsetVariables).toEqual(['mtdparts1']);
+      expect(ev.ubootEnvExpanded).toContain('mem=64M memsize=64M');
+    });
+
+    it('keeps the stored template beside it, marked as a different boot configuration', () => {
+      const r = run();
+      expect(r.storedAndAssembledDiffer).toBe(true);
+      expect(evidenceOf(r.findings[0] as { evidence?: Record<string, unknown> }).ubootStoredCmdline).toBe(TENDA_STORED);
+    });
+
+    it('is still only a provenance fact — neither line answers the security questions differently', () => {
+      expect(run().findings[0]?.severity).toBe('info');
+    });
   });
 });
