@@ -8,6 +8,7 @@ import { rowToFinding } from './findings.js';
  */
 import type { LlmConfig, LlmResult } from './llm.js';
 import { complete } from './llm.js';
+import { partitionByProvenance } from './operator-findings.js';
 import { getImage, listBinaries, listFindings, listJobs } from './store.js';
 
 /** The compact, structured view of an image the copilot reasons over. Deliberately bounded to control tokens. */
@@ -18,6 +19,12 @@ interface CopilotContext {
   binaries: { path: string; arch: string | null; networkFacing: boolean; hardening: string }[];
   corpusRefs: { credentials: number; components: number; artifacts: number };
   counts: { findings: number; binaries: number };
+  /**
+   * Claims a person or agent recorded, kept in their own array with no proofState field at all. Handing the model
+   * a `proofState` key on a row nobody measured is how the ladder starts meaning two things, so these rows simply
+   * do not have one — there is nothing for the model to misread.
+   */
+  operatorAssertions: { title: string; severity: string; assertedBy: string; claim: string; basis: string }[];
 }
 
 /** The proof-state discipline, as a system prompt. This is the copilot's conscience. */
@@ -36,6 +43,10 @@ Non-negotiable rules:
    Do not upgrade a finding's certainty beyond its proofState.
 3. Corpus cross-references (credentials/components/binaries seen in other images) are priors worth checking,
    not conclusions.
+3b. \`operatorAssertions\` are NOT analysis results. Each is a claim a named person or agent recorded; FirmLab
+   measured none of them and they have no proofState. You may repeat one only with its attribution ("X asserts
+   …"), never as a finding, never as confirmation of a finding, and never as a reason to raise another finding's
+   certainty. They also cover no analysis stage: an image whose only rows are assertions is UNEXAMINED.
 4. Your job: (a) a short honest risk summary, (b) the findings prioritized by real risk with a one-line reason
    each, (c) concrete next analysis steps the user could run (e.g. extract, run SBOM, triage a specific binary,
    attempt emulation of a network-facing service). Recommend steps that the coverage shows haven't run yet.
@@ -49,7 +60,7 @@ export function gatherContext(imageId: string): CopilotContext | null {
   if (!row) return null;
   const jobsDone = (kind: string): boolean => listJobs(imageId).some((j) => j.kind === kind && j.status === 'done');
 
-  const findings = listFindings(imageId).map(rowToFinding);
+  const { measured: findings, asserted } = partitionByProvenance(listFindings(imageId).map(rowToFinding));
   const binaries = listBinaries(imageId);
   const refs = corpusRefs(imageId);
   const hardening = (b: (typeof binaries)[number]): string =>
@@ -83,6 +94,13 @@ export function gatherContext(imageId: string): CopilotContext | null {
       artifacts: refs.artifacts.length,
     },
     counts: { findings: findings.length, binaries: binaries.length },
+    operatorAssertions: asserted.slice(0, 40).map((f) => ({
+      title: f.title,
+      severity: f.severity,
+      assertedBy: f.assertion?.assertedBy ?? 'unknown',
+      claim: f.assertion?.claim ?? 'asserted_unverified',
+      basis: f.rationale ?? '(no basis stated)',
+    })),
   };
 }
 

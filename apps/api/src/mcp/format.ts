@@ -21,8 +21,19 @@
  * them, so they are never summarised away, and `HONESTY_INSTRUCTIONS` tells the model what each one licenses it
  * to claim.
  *
+ * The third rule arrived with operator assertions, and it closes a loop that only exists at this boundary. An
+ * agent can now WRITE to the ledger. If its own assertion came back in the same array as the measured findings, a
+ * model would read the workbench agreeing with it — and it would be reading its own sentence, laundered through a
+ * database round-trip into something that looks like corroboration. So assertions are lifted out of `findings`
+ * entirely, `proofStateCounts` never sees them, and every agent-authored row is returned carrying the explicit
+ * statement that the agent may have written it and that a record of a claim is not evidence for the claim.
+ * Partitioning is by the `operator_assertion` sentinel, not by source, so no string a model controls decides
+ * which array it lands in.
+ *
  * Pure — takes plain data, returns plain data, unit-tested.
  */
+import type { OperatorAssertion } from '@firmlab/core';
+import { CLAIM_MEANING, NOT_A_MEASUREMENT, describeAssertion, partitionByProvenance } from '../operator-findings.js';
 
 /** A finding as the API serves it (the fields that matter for the agent boundary). */
 export interface McpFinding {
@@ -33,6 +44,8 @@ export interface McpFinding {
   source: string;
   evidence?: Record<string, unknown>;
   rationale?: string;
+  /** Present iff a person or agent asserted this row rather than FirmLab measuring it. */
+  assertion?: OperatorAssertion | undefined;
 }
 
 /** The coverage report shape `GET /images/:id/coverage` returns. */
@@ -40,8 +53,11 @@ export interface McpCoverage {
   firmwareClass: string;
   classRationale?: string;
   applicable: number;
-  executed: number;
+  /** MEASURED findings only. Operator assertions are reported separately and cover no stage. */
   findingCount: number;
+  executed: number;
+  /** Absent on a deployment that predates operator assertions — treat as 0. */
+  operatorAssertions?: number;
   verdict: string;
   ambiguous: boolean;
   stages: { worker: string; reason: string; status: string; detail?: string; findingCount?: number }[];
@@ -71,6 +87,16 @@ export const HONESTY_INSTRUCTIONS = [
   '  2. A tool being absent, or a bounded search expiring, is not evidence of absence. Symbolic reachability that',
   '     does not reach a sink has proven nothing about that sink.',
   '',
+  'OPERATOR ASSERTIONS are the one kind of row FirmLab did not compute. A person — or you — asserted them. They',
+  'carry no proof state (their provenance field reads `operator_assertion`), they count towards NO analysis stage,',
+  'and they are returned in their own array, never mixed into findings. Three rules bind you here:',
+  '  - Never cite an assertion as though the workbench measured it. Cite the author: "X asserts …".',
+  '  - An assertion YOU recorded is a restatement of your own claim, never evidence for it. Reading your own note',
+  '    back out of the ledger and reporting it as corroboration is circular; the payload labels which rows you may',
+  '    have written, and you must not use them to support the claim they contain.',
+  '  - Record one only for something you actually concluded or observed, with the basis stated. Do not mirror a',
+  '    measured finding into an assertion — that inflates the ledger and adds no knowledge.',
+  '',
   'When you report, say what was examined and what was not. An honest partial answer is the deliverable here;',
   'a confident complete-sounding one built on unexamined stages is the failure this workbench exists to prevent.',
 ].join('\n');
@@ -99,8 +125,60 @@ export function coverageHeadline(c: McpCoverage): string {
 const UNCOVERED = new Set(['no-input', 'not-built', 'not-run']);
 
 /**
+ * The notice that heads every operator block. It states the circularity in the second person because the model
+ * reading it is the party that might close the loop, and an abstract caveat about "authored content" would not
+ * connect to the fact that the row it is looking at may be its own from twenty minutes ago.
+ */
+export const SELF_AUTHORSHIP_NOTICE =
+  'None of these rows was produced by analysis. Each is a claim recorded by a named author, and some may have ' +
+  'been recorded BY YOU in this or an earlier session — `authorKind: "agent"` marks those. A record of a claim is ' +
+  'not evidence for the claim: you may report that someone asserted it, attributed to them, but you may never ' +
+  'cite one as measurement, as confirmation, or as support for the same conclusion you are arguing.';
+
+/** One asserted row, shaped so no field of it can be read as a measurement. */
+export interface McpAssertedFinding {
+  /** First field: the reading, before the model gets to anything that looks like a result. */
+  notAMeasurement: string;
+  title: string;
+  severity: string;
+  claim: string;
+  claimMeaning: string;
+  assertedBy: string;
+  authorKind: string;
+  attribution: string;
+  rationale?: string;
+  /** Set on agent-authored rows — the ones a model is at risk of citing back to itself. */
+  selfAuthored?: boolean;
+  withdrawn?: boolean;
+}
+
+function shapeAssertion(f: McpFinding): McpAssertedFinding {
+  const a = f.assertion;
+  const claim = a?.claim ?? 'asserted_unverified';
+  const isAgent = a?.authorKind === 'agent';
+  return {
+    notAMeasurement: NOT_A_MEASUREMENT,
+    title: f.title,
+    severity: f.severity,
+    claim,
+    claimMeaning: CLAIM_MEANING[claim] ?? 'Unrecognised claim — treat as an unverified assertion.',
+    assertedBy: a?.assertedBy ?? 'unknown',
+    authorKind: a?.authorKind ?? 'unknown',
+    attribution: a ? describeAssertion(a) : 'Asserted by an unrecorded author.',
+    ...(f.rationale ? { rationale: f.rationale } : {}),
+    ...(isAgent ? { selfAuthored: true } : {}),
+    ...(a?.status === 'withdrawn' ? { withdrawn: true } : {}),
+  };
+}
+
+/**
  * Pure: the findings payload. The verdict comes FIRST, and the stages that produced no result are named, so the
  * model cannot reach the list without passing the caveat that bounds it. `findings` is never returned alone.
+ *
+ * `findings` holds measured rows only. Assertions are lifted into `operatorAssertions` and withdrawn ones into
+ * `withdrawnAssertions`, and `proofStateCounts` is computed over the measured population alone — an assertion
+ * incrementing a proof-state histogram would put a human's sentence into the same tally the model uses to judge
+ * how well-evidenced the image is.
  */
 export function findingsPayload(
   coverage: McpCoverage | null,
@@ -111,9 +189,15 @@ export function findingsPayload(
   proofStateCounts: Record<string, number>;
   findingCount: number;
   findings: McpFinding[];
+  operatorAssertionCount: number;
+  operatorAssertionsNotice?: string;
+  operatorAssertions?: McpAssertedFinding[];
+  withdrawnAssertions?: McpAssertedFinding[];
 } {
+  const { measured, asserted, withdrawn } = partitionByProvenance(findings);
+
   const proofStateCounts: Record<string, number> = {};
-  for (const f of findings) proofStateCounts[f.proofState] = (proofStateCounts[f.proofState] ?? 0) + 1;
+  for (const f of measured) proofStateCounts[f.proofState] = (proofStateCounts[f.proofState] ?? 0) + 1;
 
   // Coverage unavailable is itself a caveat, not a licence to present the list as complete.
   const coverageVerdict = coverage
@@ -124,8 +208,14 @@ export function findingsPayload(
     coverageVerdict,
     notCovered: coverage ? coverage.stages.filter((s) => UNCOVERED.has(s.status)).map((s) => s.worker) : [],
     proofStateCounts,
-    findingCount: findings.length,
-    findings,
+    findingCount: measured.length,
+    findings: measured,
+    operatorAssertionCount: asserted.length,
+    // Emitted only when there is something to caveat, so the common case is not padded with a warning about an
+    // empty array — a warning that is always present is a warning that is never read.
+    ...(asserted.length || withdrawn.length ? { operatorAssertionsNotice: SELF_AUTHORSHIP_NOTICE } : {}),
+    ...(asserted.length ? { operatorAssertions: asserted.map(shapeAssertion) } : {}),
+    ...(withdrawn.length ? { withdrawnAssertions: withdrawn.map(shapeAssertion) } : {}),
   };
 }
 

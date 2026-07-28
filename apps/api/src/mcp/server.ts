@@ -144,7 +144,9 @@ export function buildServer(fl: FirmLabClient): McpServer {
         classRationale: c.classRationale,
         stagesExecuted: c.executed,
         stagesApplicable: c.applicable,
-        findingCount: c.findingCount,
+        measuredFindingCount: c.findingCount,
+        // Reported next to the stage arithmetic, deliberately never inside it.
+        operatorAssertions: c.operatorAssertions ?? 0,
         stages: c.stages,
       });
     },
@@ -336,6 +338,129 @@ export function buildServer(fl: FirmLabClient): McpServer {
       }
       const image = await fl.upload(basename(filePath), bytes);
       return toolResult({ ingested: true, ...image, next: 'Run firmlab_extract, then firmlab_autonomous_scan.' });
+    },
+  );
+
+  // === Write what you concluded — the one path into the ledger that FirmLab did not compute ===
+
+  server.registerTool(
+    'firmlab_record_assertion',
+    {
+      title: 'Record something you concluded (NOT a measurement)',
+      description:
+        'Put a claim of your own into the ledger, attributed to you and marked as an assertion rather than an ' +
+        'analysis result. Use it for a conclusion you reached that no provider can express, or an observation ' +
+        'from outside this workbench. It carries NO proof state and counts towards NO coverage stage; you cannot ' +
+        'set one, and the request is refused if you try. Read it back and you will see it in a separate array ' +
+        'labelled as yours — it is a record of your claim, never evidence for it, so do not cite it as support ' +
+        'for the same conclusion. Do not mirror a measured finding into an assertion: that adds no knowledge.',
+      inputSchema: {
+        imageId: z.string(),
+        assertedBy: z.string().describe('Who is asserting — name yourself, e.g. "claude/triage-session"'),
+        title: z.string().describe('The claim, in one line'),
+        claim: z
+          .enum(['asserted_unverified', 'asserted_from_device', 'asserted_from_external_evidence', 'disputes_finding'])
+          .describe(
+            'asserted_unverified = you believe it, nothing here measured it · asserted_from_device = observed on ' +
+              'physical hardware (FirmLab cannot measure this at all) · asserted_from_external_evidence = a vendor ' +
+              'advisory or third-party source says so · disputes_finding = a code-decided finding is wrong',
+          ),
+        rationale: z.string().describe('On what basis. Required — a claim with no stated basis cannot be evaluated'),
+        severity: z.enum(['critical', 'high', 'medium', 'low', 'info']).optional().describe('Defaults to info'),
+        references: z.array(z.string()).optional().describe('URLs, advisory ids, ticket ids'),
+        disputesFindingId: z.string().optional().describe('Required for claim=disputes_finding: the finding id'),
+      },
+    },
+    async ({ imageId, ...body }) => {
+      try {
+        const res = await fl.post<{ finding: { id: string }; attribution: string; notAMeasurement: string }>(
+          `/api/images/${imageId}/operator-findings`,
+          body,
+        );
+        return toolResult({
+          recorded: true,
+          findingId: res.finding.id,
+          attribution: res.attribution,
+          notAMeasurement: res.notAMeasurement,
+          reminder:
+            'This is now in the ledger as YOUR assertion. When you next read the findings you will see it under ' +
+            'operatorAssertions with authorKind "agent". Reporting it back as though FirmLab found it, or as ' +
+            'corroboration of the claim it contains, would be circular.',
+        });
+      } catch (err) {
+        return toolError(err instanceof Error ? err.message : String(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    'firmlab_withdraw_assertion',
+    {
+      title: 'Retract an assertion you no longer stand behind',
+      description:
+        'Withdraw an operator assertion, with the reason. The row is NOT deleted — it stays in the ledger marked ' +
+        'as retracted, with who retracted it and why, and stops counting anywhere. Use this the moment you find ' +
+        'that something you recorded was wrong: "this was wrong, and here is why" is a more useful row than a ' +
+        'gap where the claim used to be. Code-decided findings cannot be withdrawn this way; to disagree with ' +
+        'one, record an assertion with claim=disputes_finding instead.',
+      inputSchema: {
+        imageId: z.string(),
+        findingId: z.string().describe('The assertion id returned by firmlab_record_assertion'),
+        withdrawnBy: z.string().describe('Who is retracting it'),
+        reason: z.string().describe('Why it no longer stands. Required'),
+      },
+    },
+    async ({ imageId, findingId, withdrawnBy, reason }) => {
+      try {
+        const res = await fl.post<{ attribution: string }>(
+          `/api/images/${imageId}/operator-findings/${findingId}/withdraw`,
+          { withdrawnBy, reason },
+        );
+        return toolResult({ withdrawn: true, findingId, attribution: res.attribution });
+      } catch (err) {
+        return toolError(err instanceof Error ? err.message : String(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    'firmlab_notes',
+    {
+      title: 'Read the working notes on an image',
+      description:
+        'The free-text scratchpad for an image: reasoning that is not yet a claim. Notes are NOT findings — they ' +
+        'are never counted, never reported, and carry no evidentiary weight at all. Read them at the start of a ' +
+        'session to pick up where the last one left off.',
+      inputSchema: { imageId: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ imageId }) => {
+      const res = await fl.get<{ notes: unknown[]; notFindings: string }>(`/api/images/${imageId}/notes`);
+      return toolResult({ notFindings: res.notFindings, count: res.notes.length, notes: res.notes });
+    },
+  );
+
+  server.registerTool(
+    'firmlab_add_note',
+    {
+      title: 'Leave a working note (not a claim)',
+      description:
+        'Write reasoning to the image scratchpad — a hypothesis, a thread to pull next, why you ruled something ' +
+        'out. Deliberately weaker than an assertion: nothing reads notes as evidence, so this is the right place ' +
+        'for thinking you are not ready to stand behind. Promote it with firmlab_record_assertion when you are.',
+      inputSchema: {
+        imageId: z.string(),
+        author: z.string().describe('Name yourself'),
+        body: z.string().describe('The note'),
+      },
+    },
+    async ({ imageId, author, body }) => {
+      try {
+        const res = await fl.post<{ note: { id: string } }>(`/api/images/${imageId}/notes`, { author, body });
+        return toolResult({ saved: true, noteId: res.note.id, note: 'Recorded as a note. It is not a finding.' });
+      } catch (err) {
+        return toolError(err instanceof Error ? err.message : String(err));
+      }
     },
   );
 

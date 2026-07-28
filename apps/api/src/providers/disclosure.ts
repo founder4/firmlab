@@ -11,6 +11,7 @@
  * builder is PURE (takes a context, returns a string) so it is unit-testable without the store or the network.
  */
 import type { Finding, ImageIdentity, ProofState } from '@firmlab/core';
+import { describeAssertion, partitionByProvenance } from '../operator-findings.js';
 
 export interface DisclosureContext {
   image: { filename: string; sha256: string };
@@ -26,8 +27,12 @@ export interface DisclosureContext {
   generatedAt: string;
 }
 
-/** Proof states that represent a genuinely confirmed issue worth disclosing (vs. an unproven lead). */
-const CONFIRMED: ReadonlySet<ProofState> = new Set<ProofState>([
+/**
+ * Proof states that represent a genuinely confirmed issue worth disclosing (vs. an unproven lead). Typed over
+ * `string` rather than `ProofState` because a finding's provenance field can also hold the operator-assertion
+ * sentinel, which belongs to neither bucket and gets a section of its own below.
+ */
+const CONFIRMED: ReadonlySet<string> = new Set<ProofState>([
   'static_confirmed',
   'confirmed_in_emulation',
   'confirmed_full_system',
@@ -66,8 +71,12 @@ function findingBlock(f: Finding): string {
  * separated) → known-exploited context (KEV) → a DRAFT email body. Returns the full document.
  */
 export function buildDisclosureReport(ctx: DisclosureContext): string {
-  const confirmed = sortBySeverity(ctx.findings.filter((f) => CONFIRMED.has(f.proofState)));
-  const leads = sortBySeverity(ctx.findings.filter((f) => f.proofState === 'needs_runtime_reproduction'));
+  // Assertions are separated first. They match neither bucket's filter, so without this they would simply vanish
+  // from the draft — and an operator's observation on the physical device is often the strongest thing in the
+  // ledger. Silent omission and silent promotion are both failures; a section that names the author is neither.
+  const { measured, asserted } = partitionByProvenance(ctx.findings);
+  const confirmed = sortBySeverity(measured.filter((f) => CONFIRMED.has(f.proofState)));
+  const leads = sortBySeverity(measured.filter((f) => f.proofState === 'needs_runtime_reproduction'));
 
   const vendor = ctx.provenance?.vendors[0];
   const product = ctx.provenance?.models[0];
@@ -139,6 +148,27 @@ export function buildDisclosureReport(ctx: DisclosureContext): string {
     );
     out.push('');
     for (const f of leads) out.push(findingBlock(f));
+  }
+
+  if (asserted.length > 0) {
+    out.push(`## Operator assertions (${asserted.length}) — asserted by a person, not measured here`);
+    out.push('');
+    out.push(
+      '> FirmLab did not measure any of these. Each is a claim by the named author, on the stated basis, and it ' +
+        'carries no proof state. They are included because an observation made on the physical device is ' +
+        'knowledge this workbench structurally cannot produce — but a vendor reading this must be able to see, ' +
+        'without asking, which lines are measurements and which are testimony.',
+    );
+    out.push('');
+    for (const f of sortBySeverity(asserted)) {
+      const lines = [`#### ${f.title}`, '', `- **Severity (asserted):** ${f.severity}`];
+      if (f.assertion) lines.push(`- **Attribution:** ${describeAssertion(f.assertion)}`);
+      const hint = evidenceHint(f);
+      if (hint) lines.push(`- **Referenced:** ${hint}`);
+      if (f.rationale) lines.push(`- **Stated basis:** ${f.rationale}`);
+      lines.push('');
+      out.push(lines.join('\n'));
+    }
   }
 
   if (ctx.kevMatches && ctx.kevMatches.length > 0) {

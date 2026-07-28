@@ -33,6 +33,7 @@ import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
 import { nvramRoutes } from './routes/nvram.js';
 import { opacidadRoutes } from './routes/opacidad.js';
+import { operatorRoutes } from './routes/operator.js';
 import { presetsRoutes } from './routes/presets.js';
 import { renodeRoutes } from './routes/renode.js';
 import { reportRoutes } from './routes/report.js';
@@ -131,6 +132,7 @@ async function main(): Promise<void> {
       await api.register(fccRoutes);
       await api.register(nvramRoutes);
       await api.register(opacidadRoutes);
+      await api.register(operatorRoutes);
       await api.register(symreachRoutes);
       await api.register(runsRoutes);
       await api.register(presetsRoutes);

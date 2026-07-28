@@ -223,7 +223,14 @@ export interface TargetSelectionContext {
   identity: { firmwareClass: string; arch: string };
   capabilities: { strategy: RuntimeStrategy; proofCeiling: string; reason: string; maxRung: EmulationRung };
   binaries: { path: string; arch: string | null; networkFacing: boolean; hardening: string; imports: string | null }[];
-  findings: { total: number; bySeverity: Record<string, number>; byProofState: Record<string, number> };
+  findings: {
+    /** MEASURED findings only — assertions are counted separately and never enter the proof-state histogram. */
+    total: number;
+    bySeverity: Record<string, number>;
+    byProofState: Record<string, number>;
+    /** Claims a person or agent recorded on this image. Not measurements, not evidence. */
+    operatorAssertions: number;
+  };
   corpus: { reusedArtifacts: number; prevalentComponents: number };
 }
 
@@ -263,9 +270,15 @@ export async function gatherTargetSelectionContext(
 ): Promise<TargetSelectionContext> {
   const { listBinaries, listFindings } = await import('../store.js');
   const { corpusRefs } = await import('../corpus.js');
+  const { partitionByProvenance } = await import('../operator-findings.js');
   const binaries = listBinaries(imageId);
-  const findings = listFindings(imageId);
   const refs = corpusRefs(imageId);
+
+  // This context is fed to a model choosing what to investigate next, and the proof-state histogram is how it
+  // judges how well-evidenced the image already is. An operator assertion in that tally would be a claim voting
+  // on the strength of the evidence for itself, so assertions are counted on their own line instead.
+  const { measured, asserted } = partitionByProvenance(listFindings(imageId));
+  const findings = measured;
 
   const bySeverity: Record<string, number> = {};
   const byProofState: Record<string, number> = {};
@@ -289,7 +302,7 @@ export async function gatherTargetSelectionContext(
       hardening: b.triaged ? `nx=${b.nx} canary=${b.canary} pic=${b.pic}` : 'not-triaged',
       imports: b.importsSummary,
     })),
-    findings: { total: findings.length, bySeverity, byProofState },
+    findings: { total: findings.length, bySeverity, byProofState, operatorAssertions: asserted.length },
     corpus: { reusedArtifacts: refs.artifacts.length, prevalentComponents: refs.components.length },
   };
 }

@@ -345,6 +345,38 @@ export type ProofState =
   | 'blocked_by_security'
   | 'false_positive';
 
+/**
+ * What a person may assert. Deliberately disjoint from `ProofState`: a proof state is code's record of what it
+ * measured, and an operator finding records what someone claims. The two vocabularies share no token, so nothing
+ * in the UI can render one as the other.
+ */
+export type OperatorClaim =
+  | 'asserted_unverified'
+  | 'asserted_from_device'
+  | 'asserted_from_external_evidence'
+  | 'disputes_finding';
+
+/** Who asserted a finding, when, on what basis, and whether it still stands. */
+export interface OperatorAssertion {
+  assertedBy: string;
+  authorKind: 'human' | 'agent';
+  assertedAt: number;
+  claim: OperatorClaim;
+  rationale: string;
+  status: 'active' | 'withdrawn';
+  disputesFindingId?: string;
+  withdrawnBy?: string;
+  withdrawnAt?: number;
+  withdrawnReason?: string;
+  amendedAt?: number;
+}
+
+/**
+ * A finding's provenance: a code-decided proof state, or the one sentinel that means a person asserted it.
+ * `ProofState` stays the ladder; this is the field's full domain.
+ */
+export type FindingProvenance = ProofState | 'operator_assertion';
+
 export interface Finding {
   id: string;
   imageId: string;
@@ -352,10 +384,36 @@ export interface Finding {
   kind: string;
   title: string;
   severity: 'info' | 'low' | 'medium' | 'high' | 'critical';
-  proofState: ProofState;
+  proofState: FindingProvenance;
   evidence?: Record<string, unknown>;
   rationale?: string;
+  /** Present iff a person or agent asserted this row rather than FirmLab measuring it. */
+  assertion?: OperatorAssertion;
   createdAt: number;
+}
+
+/** An operator assertion as the ledger route serves it, with the one-line attribution already composed. */
+export interface AssertedFinding extends Finding {
+  attribution: string;
+}
+
+/** The operator ledger for one image, partitioned so active and retracted claims are never summed. */
+export interface OperatorLedger {
+  notAMeasurement: string;
+  claimMeanings: Record<OperatorClaim, string>;
+  measuredFindingCount: number;
+  assertions: AssertedFinding[];
+  withdrawn: AssertedFinding[];
+}
+
+/** A working note. Explicitly NOT a finding — never counted, never reported, never rendered as one. */
+export interface ImageNote {
+  id: string;
+  imageId: string;
+  author: string;
+  body: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /** Whether the flag-gated copilot is enabled, and which provider/model backs it (no secrets). */
@@ -638,6 +696,22 @@ async function put<T>(url: string, body?: unknown): Promise<T> {
   }
   return (await res.json()) as T;
 }
+/** Like `post`, but for amending something that already exists. Surfaces the route's `{ error }` verbatim — the
+ *  operator routes answer a refusal with the reason (why a proof state may not be asserted, why a rationale is
+ *  required), and that sentence is the whole point of the refusal. */
+async function patch<T>(url: string, body?: unknown): Promise<T> {
+  const init: RequestInit = { method: 'PATCH' };
+  if (body !== undefined) {
+    init.headers = { 'content-type': 'application/json' };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as T;
+}
 async function del<T>(url: string): Promise<T> {
   const res = await fetch(url, { method: 'DELETE' });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -693,7 +767,10 @@ export interface CoverageReport {
   classRationale?: string;
   applicable: number;
   executed: number;
+  /** MEASURED findings only — operator assertions are counted separately and cover no stage. */
   findingCount: number;
+  /** Absent from a response that predates operator assertions; treat as 0. */
+  operatorAssertions?: number;
   stages: CoverageStage[];
   verdict: string;
   /** The finding count alone would mislead — show the banner prominently. */
@@ -941,6 +1018,42 @@ export const api = {
   symreachResult: (id: string) =>
     get<{ result: SymReachResult | null }>(`/api/images/${id}/symreach`).then((r) => r.result),
   findings: (id: string) => get<{ findings: Finding[] }>(`/api/images/${id}/findings`).then((r) => r.findings),
+
+  // === Operator assertions: the ledger's only hand-authored rows. No proofState is ever sent or accepted. ===
+  operatorLedger: (id: string) => get<OperatorLedger>(`/api/images/${id}/operator-findings`),
+  addAssertion: (
+    id: string,
+    body: {
+      assertedBy: string;
+      title: string;
+      claim: OperatorClaim;
+      rationale: string;
+      severity?: Finding['severity'];
+      references?: string[];
+      disputesFindingId?: string;
+    },
+  ) => post<{ finding: Finding; attribution: string }>(`/api/images/${id}/operator-findings`, body),
+  amendAssertion: (
+    id: string,
+    findingId: string,
+    body: { title: string; claim: OperatorClaim; rationale: string; severity?: Finding['severity'] },
+  ) =>
+    patch<{ finding: Finding; attribution: string }>(`/api/images/${id}/operator-findings/${findingId}`, body).then(
+      (r) => r.finding,
+    ),
+  /** Retract, never delete: the claim and the reason it was retracted both stay in the ledger. */
+  withdrawAssertion: (id: string, findingId: string, body: { withdrawnBy: string; reason: string }) =>
+    post<{ finding: Finding }>(`/api/images/${id}/operator-findings/${findingId}/withdraw`, body).then(
+      (r) => r.finding,
+    ),
+
+  // === Working notes: reasoning that is not a claim. Deleteable, precisely because nobody relied on it. ===
+  notes: (id: string) => get<{ notes: ImageNote[] }>(`/api/images/${id}/notes`).then((r) => r.notes),
+  addNote: (id: string, body: { author: string; body: string }) =>
+    post<{ note: ImageNote }>(`/api/images/${id}/notes`, body).then((r) => r.note),
+  updateNote: (id: string, noteId: string, body: string) =>
+    patch<{ note: ImageNote }>(`/api/images/${id}/notes/${noteId}`, { body }).then((r) => r.note),
+  deleteNote: (id: string, noteId: string) => del<{ deleted: string }>(`/api/images/${id}/notes/${noteId}`),
   corpusRefs: (id: string) => get<{ refs: CorpusRefs }>(`/api/images/${id}/corpus-refs`).then((r) => r.refs),
   agentStatus: () => get<AgentStatus>('/api/agent/status'),
   runCopilot: (id: string) => post<{ jobId: string }>(`/api/images/${id}/copilot`),

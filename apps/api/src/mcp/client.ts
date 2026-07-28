@@ -118,5 +118,8 @@ export function clientFromEnv(): FirmLabClient {
     // A malformed header blob must not silently become "no auth" on a gated instance — but it also must not stop
     // the server from starting, so it degrades to none and the first call fails loudly with the HTTP status.
   }
-  return new FirmLabClient(base, headers);
+  // Everything arriving through this client is an agent acting, so authorship is stamped by the transport rather
+  // than asked of the model. Set last so it wins over FIRMLAB_MCP_HEADERS: an agent's row must never be able to
+  // be attributed to a human, whether by a model choosing a field or by an operator mis-setting an env var.
+  return new FirmLabClient(base, { ...headers, 'x-firmlab-author-kind': 'agent' });
 }

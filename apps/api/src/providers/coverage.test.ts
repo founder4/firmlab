@@ -165,3 +165,62 @@ describe('buildCoverage — a degraded stage must not be absorbed by "all stages
     expect(r.ambiguous).toBe(false);
   });
 });
+
+/**
+ * The property that matters: writing an assertion must not move a single number in the stage arithmetic. If it
+ * could, the ledger would become a way to make an unexamined image look examined — which is the exact conflation
+ * this whole report exists to prevent, arriving through a door it did not previously have.
+ */
+describe('buildCoverage — operator assertions are counted apart, never as coverage', () => {
+  const unscanned = (): { firmwareClass: string; specs: PlanSpec[]; steps: null } => ({
+    firmwareClass: 'embedded-linux',
+    specs: [spec('A'), spec('B')],
+    steps: null,
+  });
+
+  it('leaves an image with three assertions and no analysis reading UNEXAMINED', () => {
+    const r = buildCoverage({ ...unscanned(), findingCount: 0, operatorAssertions: 3 });
+    expect(r.executed).toBe(0);
+    expect(r.findingCount).toBe(0);
+    expect(r.operatorAssertions).toBe(3);
+    expect(r.verdict).toContain('UNEXAMINED');
+    expect(r.verdict).toContain('Nothing has analyzed this image yet');
+  });
+
+  it('names them as statements by an author rather than letting them pass as results', () => {
+    const r = buildCoverage({ ...unscanned(), findingCount: 0, operatorAssertions: 2 });
+    expect(r.verdict).toContain('2 operator assertion(s)');
+    expect(r.verdict).toContain('not measurements');
+    expect(r.verdict).toContain('cover no stage');
+  });
+
+  it('changes no number and no clause of the stage arithmetic, whatever the assertion count', () => {
+    const base = { ...unscanned(), steps: [step('A', 'ran', 3), step('B', 'skipped')], findingCount: 3 };
+    const without = buildCoverage(base);
+    const with7 = buildCoverage({ ...base, operatorAssertions: 7 });
+    expect(with7.executed).toBe(without.executed);
+    expect(with7.applicable).toBe(without.applicable);
+    expect(with7.findingCount).toBe(without.findingCount);
+    expect(with7.ambiguous).toBe(without.ambiguous);
+    // The pre-existing sentence survives verbatim; the assertion clause is strictly appended.
+    expect(with7.verdict.startsWith(without.verdict)).toBe(true);
+  });
+
+  it('appends the clause in the fully-covered branch too, so a reader never learns to stop looking for it', () => {
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs: [spec('A')],
+      steps: [step('A', 'ran', 2)],
+      findingCount: 2,
+      operatorAssertions: 1,
+    });
+    expect(r.verdict).toContain('2 finding(s) across all 1 applicable stages');
+    expect(r.verdict).toContain('1 operator assertion(s)');
+  });
+
+  it('reports zero, and stays silent about them, when nobody has asserted anything', () => {
+    const r = buildCoverage({ ...unscanned(), findingCount: 0 });
+    expect(r.operatorAssertions).toBe(0);
+    expect(r.verdict).not.toContain('operator assertion');
+  });
+});

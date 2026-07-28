@@ -49,6 +49,7 @@ import {
   specKey,
   specsForClass,
 } from './opacidad-plan.js';
+import { partitionByProvenance } from './operator-findings.js';
 import { runAuxSecrets } from './providers/auxsecrets.js';
 import { runBinVuln } from './providers/binvuln.js';
 import { runCertAnalysis } from './providers/certs.js';
@@ -632,7 +633,10 @@ export async function runOpacidad(
     });
   }
 
-  const findings = listFindings(imageId).map(rowToFinding);
+  // Measured rows only. The scan reports what IT established; an operator assertion that happens to sit on the
+  // same image was not produced by any worker here, and letting one into the narrative's evidence would let a
+  // human sentence become part of an attack path the scan claims to have traced.
+  const findings = partitionByProvenance(listFindings(imageId).map(rowToFinding)).measured;
   const narrativeCtx: OpacidadContext = {
     filename: row.filename,
     firmwareClass: identity.firmwareClass,

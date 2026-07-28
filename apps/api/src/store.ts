@@ -4,6 +4,8 @@
  * decompilation). Survives API restarts so an analysis session is durable.
  */
 import { DatabaseSync } from 'node:sqlite';
+import { OPERATOR_ASSERTION } from '@firmlab/core';
+import { OPERATOR_SOURCE_PREFIX } from './operator-findings.js';
 import { DB_PATH, ensureDataDirs } from './paths.js';
 
 export type JobKind =
@@ -98,7 +100,23 @@ export interface FindingRow {
   proofState: string;
   evidenceJson: string | null;
   rationale: string | null;
+  /**
+   * Set only on operator-authored rows: the serialized `OperatorAssertion` (who, when, on what basis, whether it
+   * still stands). Nullable forever — every row written before this column existed is code-authored, and a null
+   * here means exactly that.
+   */
+  assertionJson: string | null;
   createdAt: number;
+}
+
+/** A free-text working note on an image. Explicitly NOT a finding — see `routes/operator.ts`. */
+export interface ImageNoteRow {
+  id: string;
+  imageId: string;
+  author: string;
+  body: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /** Lifecycle of an agent session. `running`/`awaiting_approval` are the *active* states that pin the image. */
@@ -186,10 +204,23 @@ export function getDb(): DatabaseSync {
       proofState TEXT NOT NULL,
       evidenceJson TEXT,
       rationale TEXT,
+      assertionJson TEXT,
       createdAt INTEGER NOT NULL,
       FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_findings_image ON findings(imageId);
+    -- Per-image working notes: reasoning that is not yet (and may never be) a finding. A separate table rather
+    -- than a nullable finding kind, so nothing that reads findings can ever pick a note up by accident.
+    CREATE TABLE IF NOT EXISTS image_note (
+      id TEXT PRIMARY KEY,
+      imageId TEXT NOT NULL,
+      author TEXT NOT NULL,
+      body TEXT NOT NULL,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL,
+      FOREIGN KEY (imageId) REFERENCES images(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_image_note_image ON image_note(imageId);
     CREATE TABLE IF NOT EXISTS binaries (
       imageId TEXT NOT NULL,
       path TEXT NOT NULL,
@@ -395,6 +426,13 @@ export function getDb(): DatabaseSync {
   } catch {
     // Column already present — nothing to do.
   }
+  // Migration: operator assertions. Every pre-existing row gets NULL, which is the correct reading — everything
+  // written before this column existed was authored by code.
+  try {
+    db.exec('ALTER TABLE findings ADD COLUMN assertionJson TEXT');
+  } catch {
+    // Column already present — nothing to do.
+  }
   return db;
 }
 
@@ -479,15 +517,24 @@ export function insertFindings(rows: FindingRow[]): void {
   if (rows.length === 0) return;
   const stmt = getDb().prepare(
     `INSERT OR REPLACE INTO findings
-       (id, imageId, source, kind, title, severity, proofState, evidenceJson, rationale, createdAt)
-     VALUES (@id, @imageId, @source, @kind, @title, @severity, @proofState, @evidenceJson, @rationale, @createdAt)`,
+       (id, imageId, source, kind, title, severity, proofState, evidenceJson, rationale, assertionJson, createdAt)
+     VALUES (@id, @imageId, @source, @kind, @title, @severity, @proofState, @evidenceJson, @rationale, @assertionJson, @createdAt)`,
   );
   for (const row of rows) stmt.run(asParams(row));
 }
 
-/** Replace the finding set contributed by one source for an image (idempotent re-normalization). */
+/**
+ * Replace the finding set contributed by one source for an image (idempotent re-normalization).
+ *
+ * Operator-authored rows are excluded IN THE SQL, not by the caller checking first. That placement is the point:
+ * `syncFindings` also refuses an operator source, but this is the layer a provider written next year — by someone
+ * who never read that guard — still cannot get past. A hand-written record surviving every future re-run is a
+ * property of the schema access path, not of anyone remembering.
+ */
 export function deleteFindingsBySource(imageId: string, source: string): void {
-  getDb().prepare('DELETE FROM findings WHERE imageId = ? AND source = ?').run(imageId, source);
+  getDb()
+    .prepare(`DELETE FROM findings WHERE imageId = ? AND source = ? AND source NOT LIKE '${OPERATOR_SOURCE_PREFIX}%'`)
+    .run(imageId, source);
 }
 
 export function listFindings(imageId: string): FindingRow[] {
@@ -496,14 +543,80 @@ export function listFindings(imageId: string): FindingRow[] {
     .all(imageId) as unknown as FindingRow[];
 }
 
-/** Update a finding's proof state (and optional rationale) — used when emulation confirms or downgrades it. */
-export function updateFindingProofState(id: string, proofState: string, rationale: string | null): void {
-  getDb().prepare('UPDATE findings SET proofState = ?, rationale = ? WHERE id = ?').run(proofState, rationale, id);
+export function getFinding(id: string): FindingRow | null {
+  const row = getDb().prepare('SELECT * FROM findings WHERE id = ?').get(id) as unknown as FindingRow | undefined;
+  return row ?? null;
 }
 
-/** Raise a finding's severity + rationale — used when a corpus watchlist rule matches (Phase 1, Level 1). */
+/**
+ * Update a finding's proof state (and optional rationale) — used when emulation confirms or downgrades it.
+ *
+ * Refuses operator rows in the SQL. This is the promotion path: the agent's verdict node calls it to move a
+ * finding up the ladder, and an assertion silently acquiring `static_confirmed` because an agent decided its own
+ * note looked convincing is the single worst outcome this feature could have. An assertion is not on the ladder,
+ * so nothing can move it along one.
+ */
+export function updateFindingProofState(id: string, proofState: string, rationale: string | null): void {
+  getDb()
+    .prepare(`UPDATE findings SET proofState = ?, rationale = ? WHERE id = ? AND proofState <> '${OPERATOR_ASSERTION}'`)
+    .run(proofState, rationale, id);
+}
+
+/**
+ * Raise a finding's severity + rationale — used when a corpus watchlist rule matches (Phase 1, Level 1).
+ * Also refuses operator rows: the rationale it overwrites is the author's stated basis for the claim, and code
+ * lending its own weight to a human's assertion is the same conflation from the other direction.
+ */
 export function elevateFinding(id: string, severity: string, rationale: string): void {
-  getDb().prepare('UPDATE findings SET severity = ?, rationale = ? WHERE id = ?').run(severity, rationale, id);
+  getDb()
+    .prepare(`UPDATE findings SET severity = ?, rationale = ? WHERE id = ? AND proofState <> '${OPERATOR_ASSERTION}'`)
+    .run(severity, rationale, id);
+}
+
+/** Amend or withdraw an operator row's assertion in place. Only ever called for rows that carry one. */
+export function updateFindingAssertion(
+  id: string,
+  assertionJson: string,
+  patch: { title?: string; severity?: string; rationale?: string; evidenceJson?: string },
+): void {
+  const sets = ['assertionJson = @assertionJson'];
+  if (patch.title !== undefined) sets.push('title = @title');
+  if (patch.severity !== undefined) sets.push('severity = @severity');
+  if (patch.rationale !== undefined) sets.push('rationale = @rationale');
+  if (patch.evidenceJson !== undefined) sets.push('evidenceJson = @evidenceJson');
+  getDb()
+    .prepare(`UPDATE findings SET ${sets.join(', ')} WHERE id = @id AND proofState = '${OPERATOR_ASSERTION}'`)
+    .run(asParams({ id, assertionJson, ...patch }));
+}
+
+// === Per-image working notes (not findings) ===
+
+export function insertImageNote(row: ImageNoteRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO image_note (id, imageId, author, body, createdAt, updatedAt)
+       VALUES (@id, @imageId, @author, @body, @createdAt, @updatedAt)`,
+    )
+    .run(asParams(row));
+}
+
+export function listImageNotes(imageId: string): ImageNoteRow[] {
+  return getDb()
+    .prepare('SELECT * FROM image_note WHERE imageId = ? ORDER BY createdAt DESC')
+    .all(imageId) as unknown as ImageNoteRow[];
+}
+
+export function getImageNote(id: string): ImageNoteRow | null {
+  const row = getDb().prepare('SELECT * FROM image_note WHERE id = ?').get(id) as unknown as ImageNoteRow | undefined;
+  return row ?? null;
+}
+
+export function updateImageNote(id: string, body: string, updatedAt: number): void {
+  getDb().prepare('UPDATE image_note SET body = ?, updatedAt = ? WHERE id = ?').run(body, updatedAt, id);
+}
+
+export function deleteImageNote(id: string): void {
+  getDb().prepare('DELETE FROM image_note WHERE id = ?').run(id);
 }
 
 // === Saved emulation presets ===

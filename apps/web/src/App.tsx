@@ -79,6 +79,7 @@ export const SECTION_LABEL: Record<string, string> = {
   filesystem: 'Extraction',
   bootloader: 'Bootloader',
   findings: 'Findings & report',
+  operator: 'Operator ledger',
   simulate: 'Emulation recipes',
   testbench: 'Test bench',
   binaries: 'Test bench',
