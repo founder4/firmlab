@@ -21,12 +21,26 @@ const arg = (name, dflt) => {
 };
 const BASE = process.env.FIRMLAB_UI ?? 'http://127.0.0.1:8899';
 
+const theme = arg('--theme', 'dark') === 'light' ? 'light' : 'dark';
+
 const browser = await chromium.launch();
 const ctx = await browser.newContext({
   viewport: { width: 1440, height: 1000 },
   deviceScaleFactor: 2,
-  colorScheme: arg('--theme', 'dark') === 'light' ? 'light' : 'dark',
+  colorScheme: theme,
 });
+// `colorScheme` alone was a lie for as long as this flag has existed. It drives `prefers-color-scheme`, and
+// `theme.ts` only consults that when the STORED preference is `system` — its default is a hard `'dark'`, and a
+// fresh capture profile has nothing stored. So `--theme light` set the media query, the app ignored it, and the
+// screenshot came back dark while the run reported it as light. Seed the app's own key, exactly as the tour
+// suppression below does; the media query stays set so anything that genuinely reads it agrees with the token.
+await ctx.addInitScript((t) => {
+  try {
+    localStorage.setItem('firmlab.theme', t);
+  } catch {
+    /* a context without storage access is not a reason to fail the capture */
+  }
+}, theme);
 // The onboarding tour opens over the content on any fresh profile and its "Skip" button is not reliably
 // clickable before the overlay settles. Mark it seen the way the app itself does (`onboarding.tsx` DONE_KEY),
 // so every capture shows the screen rather than the welcome card. `--tour` opts back in to test the tour itself.
