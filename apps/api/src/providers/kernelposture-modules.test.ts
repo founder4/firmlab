@@ -92,6 +92,27 @@ describe('moduleProvenanceFindings', () => {
     expect(oot?.title).not.toMatch(/vulnerab/i);
   });
 
+  it('says the count is a FLOOR when the cap opened only part of the shipped set', () => {
+    // The regression the deploy caught: 200 of the GL.iNet's 375 modules were opened, alphabetically, and the
+    // finding read "25 of 200" as though 200 were the total — while the three proprietary modules all sorted
+    // past the cap and vanished from a result that was otherwise presented as a measurement.
+    const p = assessModuleProvenance([
+      mod('nf_nat', 'intree=Y\u0000license=GPL\u0000'),
+      mod('ecm', 'license=GPL\u0000name=ecm\u0000'),
+    ]);
+    const f = moduleProvenanceFindings({
+      versionDir: '5.4.213',
+      vermagic: '5.4.213',
+      moduleCount: 375,
+      signedCount: 0,
+      inspectedCount: 2,
+      provenance: p,
+    });
+    const oot = f.find((d) => d.kind === 'kernel-out-of-tree-modules');
+    expect(oot?.title).toContain('375 ship');
+    expect(oot?.rationale).toMatch(/this count is a floor/i);
+  });
+
   it('says nothing at all when there is no module evidence to speak from', () => {
     expect(moduleProvenanceFindings(null)).toEqual([]);
   });

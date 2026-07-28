@@ -998,17 +998,20 @@ export function moduleProvenanceFindings(mods: ModuleEvidence | null): FindingDr
     return drafts;
   }
   if (p.outOfTree > 0) {
+    const opened = mods?.inspectedCount ?? p.inTree + p.outOfTree;
+    const total = mods?.moduleCount ?? opened;
+    const sampled = total > opened;
     drafts.push({
       kind: 'kernel-out-of-tree-modules',
-      title: `${p.outOfTree} of ${p.inTree + p.outOfTree} kernel modules are built out of tree`,
+      title: `${p.outOfTree} of the ${opened} kernel modules examined are built out of tree${sampled ? ` (${total} ship)` : ''}`,
       severity: 'medium',
       proofState: 'static_confirmed',
-      evidence: { outOfTree: p.outOfTree, inTree: p.inTree, names: p.outOfTreeNames },
-      rationale:
-        'These modules declare no `intree=Y`, so they were built outside the kernel source tree. They run with ' +
-        'full kernel privilege while sitting outside the process that reviews and patches the kernel: an upstream ' +
-        'fix does not reach them, and no distribution security team tracks them. This is a statement about ' +
-        'ATTACK SURFACE and about who maintains it — nothing here opened a module and looked for a defect.',
+      evidence: { outOfTree: p.outOfTree, inTree: p.inTree, examined: opened, shipped: total, names: p.outOfTreeNames },
+      rationale: `${
+        sampled
+          ? `Only ${opened} of the ${total} shipped modules were opened, so this count is a floor and the names below are not the whole set. `
+          : ''
+      }These modules declare no \`intree=Y\`, so they were built outside the kernel source tree. They run with full kernel privilege while sitting outside the process that reviews and patches the kernel: an upstream fix does not reach them, and no distribution security team tracks them. This is a statement about ATTACK SURFACE and about who maintains it — nothing here opened a module and looked for a defect.`,
     });
   }
   if (p.proprietary.length > 0) {
@@ -1133,8 +1136,18 @@ const BLOB_MAX_BYTES = 64 * 1024 * 1024;
 const BLOB_CANDIDATE_CAP = 12;
 /** How much of one blob is read. Comfortably above every firmware kernel measured (114 KiB … 5.6 MiB). */
 const BLOB_READ_CAP = 24 * 1024 * 1024;
-/** How many `.ko` files are opened for the signature check. Reported when it truncates. */
-const MODULE_SAMPLE_CAP = 200;
+/**
+ * How many `.ko` files are opened. 200 was chosen for the signature check, where a sample is genuinely enough —
+ * the useful signal there is "not ONE module is signed". Provenance is a different question and a sample answers
+ * it wrongly: on the real GL.iNet the first 200 of 375 modules (sorted by name) yielded "25 of 200 out of tree"
+ * with ZERO proprietary ones, while the full set is 68 of 372 with three — `ath_pktlog`, `rawmode_sim` and
+ * `smart_antenna` all sort past the cap. A count over a prefix of an alphabetical walk is an artifact of the
+ * naming, which is the defect `selectFindings` exists to prevent, reappearing here.
+ *
+ * Raised to cover the corpus outright, and the finding states what was opened either way — because the cap can
+ * still bite on a larger module set, and a bound that does not say so makes a partial count read as a total.
+ */
+const MODULE_SAMPLE_CAP = 1200;
 /** Bound on the recursive walk of an extraction tree. */
 const WALK_FILE_CAP = 4000;
 
