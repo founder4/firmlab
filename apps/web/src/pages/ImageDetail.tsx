@@ -42,6 +42,7 @@ import { SimulationMenu } from '../components/SimulationMenu';
 import { StepTimeline } from '../components/StepTimeline';
 import { StructureMap } from '../components/StructureMap';
 import { SymReachPanel } from '../components/SymReachPanel';
+import { TestBench } from '../components/TestBench';
 import { toast } from '../toast';
 
 type TabId =
@@ -54,6 +55,7 @@ type TabId =
   | 'bootloader'
   | 'sbom'
   | 'binaries'
+  | 'testbench'
   | 'findings'
   | 'diff'
   | 'simulate'
@@ -68,6 +70,7 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'bootloader',
   'sbom',
   'binaries',
+  'testbench',
   'findings',
   'diff',
   'simulate',
@@ -85,10 +88,11 @@ const SECTION_TITLES: Record<TabId, string> = {
   secrets: 'Secrets',
   bootloader: 'Bootloader',
   sbom: 'SBOM & CVEs',
-  binaries: 'Binaries',
+  binaries: 'Test bench',
+  testbench: 'Test bench',
   findings: 'Findings & report',
   diff: 'Diff',
-  simulate: 'Emulation',
+  simulate: 'Emulation recipes',
   opacidad: 'Autonomous scan',
   agent: 'Agent',
 };
@@ -163,8 +167,15 @@ export function ImageDetail(): JSX.Element {
       {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}
       {tab === 'bootloader' && <AnalysisActionsPanel imageId={id} />}
       {tab === 'sbom' && <SbomPanel imageId={id} />}
-      {tab === 'binaries' && <BinariesPanel imageId={id} />}
-      {/* Emulation: dynamic reproduction only — the deep static providers moved to Bootloader. */}
+      {/* The test bench is organised by TARGET: every question asked of a binary, and every run it produced.
+          `binaries` still routes here so older links keep working. */}
+      {(tab === 'testbench' || tab === 'binaries') && (
+        <>
+          <TestBench imageId={id} />
+          <SymReachPanel imageId={id} binary="" onBinary={() => undefined} />
+        </>
+      )}
+      {/* Emulation recipes answer a different question: how this IMAGE can be booted at all. */}
       {tab === 'simulate' && (
         <>
           <SimulationMenu imageId={id} />

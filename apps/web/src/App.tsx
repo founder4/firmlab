@@ -50,11 +50,19 @@ const SECTION_GROUPS: { label: string; items: { id: string; label: string; icon:
       { id: 'entropy', label: 'Entropy', icon: 'entropy' },
       { id: 'filesystem', label: 'Filesystem', icon: 'filesystem' },
       { id: 'secrets', label: 'Secrets', icon: 'secrets' },
-      { id: 'binaries', label: 'Binaries', icon: 'binaries' },
     ],
   },
   { label: 'Components', items: [{ id: 'sbom', label: 'SBOM & CVEs', icon: 'sbom' }] },
-  { label: 'Execution', items: [{ id: 'simulate', label: 'Simulation', icon: 'simulate' }] },
+  {
+    label: 'Execution',
+    items: [
+      // Two distinct questions, deliberately not one screen: what can be RUN against a given binary, and how this
+      // image can be booted at all. They were merged as "Binaries" + "Simulation", split by tool rather than by
+      // question, which is why neither said what had actually been executed.
+      { id: 'testbench', label: 'Test bench', icon: 'binaries' },
+      { id: 'simulate', label: 'Emulation recipes', icon: 'simulate' },
+    ],
+  },
   { label: 'Comparison', items: [{ id: 'diff', label: 'Diff', icon: 'diff' }] },
   {
     label: 'Assistance',
@@ -71,7 +79,9 @@ export const SECTION_LABEL: Record<string, string> = {
   filesystem: 'Extraction',
   bootloader: 'Bootloader',
   findings: 'Findings & report',
-  simulate: 'Emulation',
+  simulate: 'Emulation recipes',
+  testbench: 'Test bench',
+  binaries: 'Test bench',
 };
 
 /** Parse the active firmware id + section out of the route (/image/:id/:section?). */

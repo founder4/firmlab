@@ -575,6 +575,32 @@ export interface BinaryEntry {
   emulationStatus: string | null;
 }
 
+/**
+ * One execution against this image. `status` is the process; `outcome` is what was learned, and they are separate
+ * on purpose — a probe that finishes without reaching its sink is `done` and has proven nothing, while one blocked
+ * by a missing device is also `done` and asked a question this deployment could not answer.
+ */
+export interface RunSummary {
+  jobId: string;
+  kind: string;
+  status: string;
+  startedAt: number;
+  finishedAt: number | null;
+  /** The binary or service this run was aimed at. Null for image-wide runs. */
+  target: string | null;
+  /** The specific question put to it — a sink, a harness, a platform. */
+  question: string | null;
+  headline: string;
+  outcome: 'proven' | 'lead' | 'empty' | 'blocked' | 'failed' | 'running';
+  /** The bound it ran under (a budget, an input length), so no result reads as unbounded. */
+  bound: string | null;
+}
+
+export interface RunLedger {
+  runs: RunSummary[];
+  byTarget: { target: string | null; runs: RunSummary[] }[];
+}
+
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -889,8 +915,21 @@ export const api = {
   decompileResult: (id: string) =>
     get<{ result: DecompileResult | null }>(`/api/images/${id}/decompile`).then((r) => r.result),
   decompile: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/decompile`, { binary }),
+  /** Every run against this image, newest first, plus the same set grouped by what it targeted. */
+  runs: (id: string, opts?: { kind?: string; scope?: 'targeted' }) =>
+    get<RunLedger>(
+      `/api/images/${id}/runs${opts?.kind ? `?kind=${encodeURIComponent(opts.kind)}` : opts?.scope ? `?scope=${opts.scope}` : ''}`,
+    ),
+  /** One run in full — its stored result, params and log, for a run that is no longer the most recent. */
+  runDetail: (id: string, jobId: string) =>
+    get<{ summary: RunSummary; params: unknown; result: unknown; log: string; error: string | null }>(
+      `/api/images/${id}/runs/${jobId}`,
+    ),
   binaries: (id: string) => get<{ binaries: BinaryEntry[] }>(`/api/images/${id}/binaries`).then((r) => r.binaries),
   /** Ask angr about ANY rootfs binary and ANY sink — not only what the W5 sweep happened to flag. */
+  /** Break on an exact sink address under qemu+gdb. `addresses` is required — a reachability run produces them. */
+  dynprobe: (id: string, body: { binary: string; sink: string; addresses: string[]; patternLength?: number }) =>
+    post<{ jobId: string }>(`/api/images/${id}/dynprobe`, body),
   symreach: (id: string, body: { binary: string; sinks?: string[]; budgetSeconds?: number }) =>
     post<{ jobId: string }>(`/api/images/${id}/symreach`, body),
   symreachResult: (id: string) =>

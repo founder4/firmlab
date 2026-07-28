@@ -38,6 +38,7 @@ import { renodeRoutes } from './routes/renode.js';
 import { reportRoutes } from './routes/report.js';
 import { researchRoutes } from './routes/research.js';
 import { rtosRoutes } from './routes/rtos.js';
+import { runsRoutes } from './routes/runs.js';
 import { sbomRoutes } from './routes/sbom.js';
 import { servicemapRoutes } from './routes/servicemap.js';
 import { settingsRoutes } from './routes/settings.js';
@@ -131,6 +132,7 @@ async function main(): Promise<void> {
       await api.register(nvramRoutes);
       await api.register(opacidadRoutes);
       await api.register(symreachRoutes);
+      await api.register(runsRoutes);
       await api.register(presetsRoutes);
       await api.register(researchRoutes);
       await api.register(settingsRoutes);

@@ -1,0 +1,299 @@
+/**
+ * What one execution DID — the pure half of the run ledger.
+ *
+ * Every provider already persists a job row, and every route then exposed exactly one of them:
+ * `listJobs(id).find(j => j.kind === … && j.status === 'done')`, twenty times over. That returns the most recent
+ * run and silently discards the rest, so probing three binaries left an operator looking at a single result with
+ * no indication that two others had happened, what they were aimed at, or what they returned. The history existed
+ * in the database the whole time; nothing read it back.
+ *
+ * This module turns a stored job into a line an operator can act on, and it is deliberately store-free so the
+ * per-kind reading of each result stays unit-testable (vitest cannot resolve `node:sqlite`, so anything importing
+ * `store.js` cannot be loaded by a test at all).
+ *
+ * **The outcome vocabulary is the proof-state discipline, not a status.** A job's `status` says whether the
+ * process finished; it says nothing about what was learned, and conflating the two is how "done" comes to read as
+ * "clean". A dynamic probe that completes without reaching its sink is `done` and has proven nothing. A probe
+ * blocked because the sandbox lacks `/dev/nvram` is also `done`, and the question was asked and could not be
+ * answered — which is not a negative result. So each run carries BOTH: `status` for the process, `outcome` for the
+ * epistemics, and they are never collapsed.
+ */
+
+/** The subset of a persisted job this module reads. Structural on purpose — no import from the store. */
+export interface RunInput {
+  id: string;
+  kind: string;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  params: string | null;
+  resultJson: string | null;
+  error: string | null;
+}
+
+/**
+ * How to read what came back — never how the process exited.
+ *
+ * `proven`   the run established a fact about the target (a reproduced crash, a reached sink, an injection echoed)
+ * `lead`     something worth pursuing was observed; nothing was proven
+ * `empty`    the run completed and found nothing — for THIS input, THIS budget, THIS question
+ * `blocked`  the question was asked and this deployment could not answer it. NOT a negative
+ * `failed`   the harness broke; no statement about the target either way
+ * `running`  still going
+ */
+export type RunOutcome = 'proven' | 'lead' | 'empty' | 'blocked' | 'failed' | 'running';
+
+export interface RunSummary {
+  jobId: string;
+  kind: string;
+  status: string;
+  startedAt: number;
+  finishedAt: number | null;
+  /** What this run was aimed at — a binary path, a URL. Null when the run is image-wide rather than targeted. */
+  target: string | null;
+  /** The specific question put to that target (a sink, a sink set, a harness). Null when the kind has none. */
+  question: string | null;
+  /** One line stating what came back. Never empty — a run with no result says exactly that. */
+  headline: string;
+  outcome: RunOutcome;
+  /** The bound this run operated under, when it had one worth stating (a budget, a pattern length, a timeout). */
+  bound: string | null;
+}
+
+function parse<T>(json: string | null): T | null {
+  if (!json) return null;
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Human-facing wording for each dynamic-probe verdict, plus how much it is allowed to claim. */
+const DYNPROBE: Record<string, { outcome: RunOutcome; text: string }> = {
+  crash_input_controlled: { outcome: 'proven', text: 'Crash, and the input controls the return address' },
+  crash: { outcome: 'proven', text: 'Crashed, but the faulting address is not input bytes' },
+  sink_executed: { outcome: 'lead', text: 'The sink executed; the program did not fault' },
+  ran_clean: { outcome: 'empty', text: 'Ran without reaching the sink and without faulting' },
+  emulation_artifact: { outcome: 'blocked', text: 'The sandbox came up short — nothing was learned' },
+  not_attached: { outcome: 'failed', text: 'gdb never attached; nothing was observed' },
+};
+
+/** Wording for each symbolic-reachability outcome. `not reached` is a spent budget, never a proof of absence. */
+const SYMREACH: Record<string, { outcome: RunOutcome; text: string }> = {
+  reached: { outcome: 'proven', text: 'reachable from the entry point' },
+  not_reached_in_budget: { outcome: 'empty', text: 'not reached before the budget expired — not proven unreachable' },
+  absent: { outcome: 'empty', text: 'not imported by this binary' },
+  error: { outcome: 'failed', text: 'the prover failed' },
+};
+
+/**
+ * Pure: read one stored job into a line.
+ *
+ * Each kind gets its own reading because each result means something different, and a generic
+ * "done / N bytes of JSON" would be exactly the uninformative row this exists to replace. Kinds with no special
+ * reading fall through to a shape that still states the target and refuses to imply more than it knows.
+ */
+export function summarizeRun(job: RunInput): RunSummary {
+  const params = parse<Record<string, unknown>>(job.params) ?? {};
+  const result = parse<Record<string, unknown>>(job.resultJson);
+  const base = {
+    jobId: job.id,
+    kind: job.kind,
+    status: job.status,
+    startedAt: job.createdAt,
+    finishedAt: job.status === 'done' || job.status === 'error' ? job.updatedAt : null,
+    target:
+      typeof params.binary === 'string' ? params.binary : typeof params.target === 'string' ? params.target : null,
+    question: null as string | null,
+    bound: null as string | null,
+  };
+
+  if (job.status === 'running' || job.status === 'queued') {
+    return { ...base, outcome: 'running', headline: job.status === 'queued' ? 'Queued' : 'Running…' };
+  }
+  if (job.status === 'error') {
+    return { ...base, outcome: 'failed', headline: job.error?.slice(0, 200) || 'Failed with no message' };
+  }
+  // `done` with nothing stored is its own case: the process finished and left no result to read. Reporting that
+  // as an empty finding would be the conflation this module exists to prevent.
+  if (!result) return { ...base, outcome: 'failed', headline: 'Finished but stored no result' };
+
+  switch (job.kind) {
+    case 'dynprobe': {
+      const probe = (result.probe ?? {}) as { verdict?: string; controlOffset?: { offset?: number } };
+      const sink = typeof params.sink === 'string' ? params.sink : null;
+      const known = DYNPROBE[probe.verdict ?? ''];
+      const offset = probe.controlOffset?.offset;
+      const len = typeof params.patternLength === 'number' ? params.patternLength : null;
+      if (result.available === false) {
+        return {
+          ...base,
+          question: sink,
+          outcome: 'blocked',
+          headline: String(result.reason ?? 'The probe could not run here'),
+          bound: null,
+        };
+      }
+      return {
+        ...base,
+        question: sink,
+        outcome: known?.outcome ?? 'empty',
+        headline: known ? `${known.text}${offset !== undefined ? ` (offset ${offset})` : ''}` : 'Ran',
+        bound: len ? `${len}-byte cyclic input` : null,
+      };
+    }
+
+    case 'symreach': {
+      const sinks = Array.isArray(result.sinks) ? (result.sinks as { sink?: string; outcome?: string }[]) : [];
+      if (result.available === false) {
+        return { ...base, outcome: 'blocked', headline: String(result.reason ?? 'The prover is unavailable') };
+      }
+      const reached = sinks.filter((s) => s.outcome === 'reached');
+      const names =
+        sinks
+          .map((s) => s.sink)
+          .filter(Boolean)
+          .join(', ') || null;
+      const budget = typeof params.budgetSeconds === 'number' ? `${params.budgetSeconds}s budget` : null;
+      if (sinks.length === 0)
+        return { ...base, question: names, outcome: 'empty', headline: 'No sink was asked about', bound: budget };
+      if (reached.length > 0) {
+        const one = reached[0] as { sink?: string };
+        return {
+          ...base,
+          question: names,
+          outcome: 'proven',
+          headline:
+            reached.length === 1
+              ? `${one.sink} is ${SYMREACH.reached?.text}`
+              : `${reached.length} of ${sinks.length} sinks reachable from the entry point`,
+          bound: budget,
+        };
+      }
+      const first = sinks[0] as { sink?: string; outcome?: string };
+      const known = SYMREACH[first.outcome ?? ''];
+      return {
+        ...base,
+        question: names,
+        outcome: known?.outcome ?? 'empty',
+        headline: `${first.sink ?? 'the sink'} — ${known?.text ?? 'no answer'}`,
+        bound: budget,
+      };
+    }
+
+    case 'webprobe': {
+      const findings = Array.isArray(result.findings) ? result.findings : [];
+      if (result.available === false) {
+        return {
+          ...base,
+          target: (result.target as string) ?? base.target,
+          outcome: 'blocked',
+          headline: String(result.reason ?? 'Could not probe'),
+        };
+      }
+      const reqs = typeof result.requests === 'number' ? `${result.requests} requests` : null;
+      return {
+        ...base,
+        target: (result.target as string) ?? base.target,
+        outcome: findings.length > 0 ? 'proven' : 'empty',
+        headline:
+          findings.length > 0
+            ? `${findings.length} injection point(s) reproduced against the booted service`
+            : 'No injection reproduced — for the points this probe knows how to test',
+        bound: reqs,
+      };
+    }
+
+    case 'fuzz': {
+      if (result.available === false) {
+        return { ...base, outcome: 'blocked', headline: String(result.reason ?? 'The fuzzer is unavailable') };
+      }
+      const crashes = typeof result.crashes === 'number' ? result.crashes : 0;
+      const secs = typeof result.seconds === 'number' ? `${result.seconds}s` : null;
+      const harness = typeof result.harness === 'string' ? result.harness : null;
+      return {
+        ...base,
+        question: harness ? `${harness} harness` : null,
+        outcome: crashes > 0 ? 'proven' : 'empty',
+        headline: crashes > 0 ? `${crashes} crashing input(s)` : 'No crash in this budget — which is not "no bug"',
+        bound: secs,
+      };
+    }
+
+    case 'decompile': {
+      if (result.available === false) {
+        return { ...base, outcome: 'blocked', headline: String(result.reason ?? 'The decompiler is unavailable') };
+      }
+      const fns = typeof result.functionCount === 'number' ? result.functionCount : 0;
+      const imports = Array.isArray(result.imports) ? result.imports.length : 0;
+      return { ...base, outcome: 'lead', headline: `${fns} functions, ${imports} imports catalogued`, bound: null };
+    }
+
+    case 'renode': {
+      if (result.available === false) {
+        return { ...base, outcome: 'blocked', headline: String(result.reason ?? 'Renode is unavailable') };
+      }
+      const platform = typeof result.platform === 'string' ? result.platform : null;
+      return {
+        ...base,
+        question: platform,
+        outcome: result.booted === true ? 'proven' : result.ran === true ? 'empty' : 'blocked',
+        headline:
+          result.booted === true
+            ? `Booted under Renode${platform ? ` on ${platform}` : ''}`
+            : String(result.reason ?? 'Did not boot'),
+        bound: null,
+      };
+    }
+
+    case 'emulate': {
+      const ran = result.ran === true;
+      const timedOut = result.timedOut === true;
+      return {
+        ...base,
+        outcome: ran ? (timedOut ? 'empty' : 'lead') : 'blocked',
+        headline: ran
+          ? timedOut
+            ? 'Ran until the timeout — no exit observed'
+            : `Ran under user-mode emulation, exit ${result.exitCode ?? '?'}`
+          : 'Did not run',
+        bound: null,
+      };
+    }
+
+    default: {
+      // An unknown kind still gets an honest row: it happened, it finished, and this module does not pretend to
+      // read its result. Better than inventing a summary the caller might trust.
+      return { ...base, outcome: 'lead', headline: 'Completed — open the run for its full result' };
+    }
+  }
+}
+
+/**
+ * Pure: group runs by what they were aimed at, newest first within each target.
+ *
+ * The test bench is organised by TARGET rather than by tool, because that is the question an operator actually
+ * has: "what do I know about this binary", not "what did the prober do lately". Runs with no target (image-wide
+ * jobs like extraction) collect under a null key so they are never silently dropped.
+ */
+export function groupRunsByTarget(runs: RunSummary[]): { target: string | null; runs: RunSummary[] }[] {
+  const byTarget = new Map<string, RunSummary[]>();
+  for (const r of runs) {
+    const key = r.target ?? ' image';
+    const list = byTarget.get(key);
+    if (list) list.push(r);
+    else byTarget.set(key, [r]);
+  }
+  return [...byTarget.entries()]
+    .map(([key, list]) => ({
+      target: key === ' image' ? null : key,
+      runs: [...list].sort((a, b) => b.startedAt - a.startedAt),
+    }))
+    .sort((a, b) => {
+      // Image-wide runs last: they are context, not the thing being investigated.
+      if (a.target === null) return 1;
+      if (b.target === null) return -1;
+      return (b.runs[0]?.startedAt ?? 0) - (a.runs[0]?.startedAt ?? 0);
+    });
+}
