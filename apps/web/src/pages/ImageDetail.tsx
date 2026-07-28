@@ -1609,7 +1609,13 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
             {nvd && (nvd.queried > 0 || nvd.totalAdvisories > 0) && (
               <span
                 className="badge"
-                title={`NVD, for components OSV could not map: ${nvd.askedByCpe} asked by CPE version match, ${nvd.askedByKeyword} by keyword. A keyword answer matches CVE description text only — an empty one is not evidence the component is unaffected.`}
+                title={
+                  // A result stored before this split does not know how it asked, and saying nothing beats
+                  // rendering "undefined asked by CPE version match".
+                  nvd.askedByCpe === undefined
+                    ? 'NVD, for components OSV could not map. This result predates the CPE/keyword split, so which question produced it was not recorded — re-run research to find out.'
+                    : `NVD, for components OSV could not map: ${nvd.askedByCpe} asked by CPE version match, ${nvd.askedByKeyword ?? 0} by keyword. A keyword answer matches CVE description text only — an empty one is not evidence the component is unaffected.`
+                }
               >
                 NVD {nvd.queried} queried · {nvd.totalAdvisories} advisories
               </span>
@@ -1726,7 +1732,7 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                   {nvd.notQueriedRule}
                 </div>
               )}
-              {nvd.uncheckedIdentities.map((u) => (
+              {(nvd.uncheckedIdentities ?? []).map((u) => (
                 <div className="note" style={{ marginBottom: 8 }} key={`nvd-alt-${u.name}@${u.version}`}>
                   {u.name} {u.version} came back empty under its primary CPE identity. NVD also carries it as{' '}
                   <span className="mono">{u.identities.join(', ')}</span>, not queried — the zero is scoped to the
@@ -1748,15 +1754,24 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                         {c.name} {c.version}
                       </td>
                       <td>
+                        {/* Three states, not two. A row stored before `matchedBy` existed does not know how it
+                            was asked, and defaulting the unknown to "keyword" would assert the weaker question
+                            was used — a claim about provenance made from a missing field. */}
                         <span
                           className={`badge ${c.matchedBy === 'cpe' ? 'badge-ok' : ''}`}
                           title={
                             c.matchedBy === 'cpe'
                               ? "CPE version match — NVD resolved this version against each CVE's affected range."
-                              : 'Keyword — matched CVE description text, which names the FIXED release rather than the vulnerable one. The weaker of the two questions.'
+                              : c.matchedBy === 'keyword'
+                                ? 'Keyword — matched CVE description text, which names the FIXED release rather than the vulnerable one. The weaker of the two questions.'
+                                : 'This result predates the CPE/keyword split, so which question produced it was not recorded. Re-run research to find out.'
                           }
                         >
-                          {c.matchedBy === 'cpe' ? 'CPE version' : 'keyword'}
+                          {c.matchedBy === 'cpe'
+                            ? 'CPE version'
+                            : c.matchedBy === 'keyword'
+                              ? 'keyword'
+                              : 'not recorded'}
                         </span>
                       </td>
                       <td>

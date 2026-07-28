@@ -488,19 +488,25 @@ export interface ResearchResult {
       name: string;
       version: string;
       advisories: NvdAdvisory[];
-      matchedBy: 'cpe' | 'keyword';
+      matchedBy?: 'cpe' | 'keyword';
       /** What NVD says the true match count is — `advisories` may be a prefix of it. */
-      totalMatching: number | null;
+      totalMatching?: number | null;
     }[];
-    /** How the run split between the version-scoped CPE question and the weaker description-text keyword one. */
-    askedByCpe: number;
-    askedByKeyword: number;
+    /**
+     * Everything below is OPTIONAL, and that is not laziness — a research result is JSON persisted on the job row
+     * and re-read months later, so a stored result is data written by an OLDER version of this code and simply
+     * does not have fields added since. Declaring them required made the type lie about what comes back and let a
+     * `.map` on `undefined` through the compiler, which took down the whole dossier for any image analysed before
+     * the field existed. Optional here turns that class of crash into a compile error at every call site.
+     */
+    askedByCpe?: number;
+    askedByKeyword?: number;
     /** What the rate-limit cap dropped and by what rule — empty when it dropped nothing. */
-    notQueriedRule: string;
+    notQueriedRule?: string;
     /** Components whose CPE answer was empty while other NVD identities for the same software went unqueried. */
-    uncheckedIdentities: { name: string; version: string; identities: string[] }[];
+    uncheckedIdentities?: { name: string; version: string; identities: string[] }[];
     /** Components whose advisory list is a prefix of what NVD holds — one page is returned per question. */
-    truncated: { name: string; version: string; shown: number; total: number }[];
+    truncated?: { name: string; version: string; shown: number; total: number }[];
   };
   kev: { checked: boolean; catalogSize: number; matches: KevMatch[]; reason?: string };
   keyMaterial: { kind: string; redacted: string; effectivelyPublic: boolean; sharedInImages?: number }[];
