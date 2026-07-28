@@ -341,15 +341,43 @@ export interface ModinfoFacts {
  */
 export function parseModinfo(text: string): ModinfoFacts {
   const out: ModinfoFacts = {};
-  const intree = /\bintree=([YyNn])/.exec(text)?.[1];
-  if (intree !== undefined) out.intree = intree === 'Y' || intree === 'y';
-  // A .modinfo value runs to the NUL that separates it from the next key, NOT to the next space: `Dual BSD/GPL`
-  // and `GPL v2` both contain one, and stopping at whitespace would truncate the licence that matters most.
-  const license = /\blicense=([^\u0000]{1,64})/.exec(text)?.[1];
-  if (license) out.license = license.trim();
-  const name = /\bname=([A-Za-z0-9_]{1,64})/.exec(text)?.[1];
+  const intree = readModinfoValue(text, 'intree');
+  if (intree !== null) out.intree = intree === 'Y' || intree === 'y';
+  const license = readModinfoValue(text, 'license');
+  if (license) out.license = license;
+  const name = readModinfoValue(text, 'name');
   if (name) out.name = name;
   return out;
+}
+
+/**
+ * Read one `key=value` record out of a `.modinfo` blob, stopping at the NUL that ends it.
+ *
+ * Deliberately not a regular expression. The value legitimately contains spaces (`Dual BSD/GPL`, `GPL v2`), so a
+ * whitespace-terminated match truncates the licence that matters most; and the correct terminator is a control
+ * character, which a regex cannot carry here without tripping `noControlCharactersInRegex` — a rule worth obeying
+ * rather than suppressing, since scanning for a NUL by hand is both clearer and closer to what the format is:
+ * NUL-separated records, not prose to pattern-match over.
+ */
+function readModinfoValue(text: string, key: string, maxLen = 64): string | null {
+  const needle = `${key}=`;
+  let from = 0;
+  while (from < text.length) {
+    const at = text.indexOf(needle, from);
+    if (at === -1) return null;
+    // A record starts at the beginning of the blob or just after a NUL; anything else is a coincidental substring
+    // inside another string (`filename=`, `parmtype=`), which must not be mistaken for the key.
+    const prev = at === 0 ? 0 : text.charCodeAt(at - 1);
+    if (at !== 0 && prev !== 0) {
+      from = at + needle.length;
+      continue;
+    }
+    const start = at + needle.length;
+    let end = start;
+    while (end < text.length && end - start < maxLen && text.charCodeAt(end) !== 0) end++;
+    return text.slice(start, end).trim();
+  }
+  return null;
 }
 
 /** Where the shipped modules came from, and whether that question could be answered at all. */
