@@ -20,7 +20,20 @@ export const ANALYSIS_STEPS: { id: string; label: string }[] = [
 ];
 
 type State = 'done' | 'running' | 'blocked' | 'pending';
-const BOOT_KINDS = ['uboot', 'fsaudit', 'certs', 'services', 'rtos', 'compmap', 'fcc'];
+// Every job kind the Bootloader step's panel can start. It must list all of them: the step reads `done` from this
+// set, so a provider missing here leaves the stage showing `pending` after it has actually run.
+const BOOT_KINDS = [
+  'uboot',
+  'fsaudit',
+  'certs',
+  'services',
+  'rtos',
+  'compmap',
+  'fcc',
+  'kernel',
+  'updatepath',
+  'devicetree',
+];
 const EMU_KINDS = ['emulate', 'emulate-system', 'renode', 'chipsec', 'webprobe', 'fuzz'];
 
 export function StepTimeline({

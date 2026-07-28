@@ -54,6 +54,10 @@ const SECTION_GROUPS: { label: string; items: { id: string; label: string; icon:
       // finding's evidence depends on.
       { id: 'files', label: 'File browser', icon: 'files' },
       { id: 'secrets', label: 'Secrets', icon: 'secrets' },
+      // The physical way in, assembled from three providers that each hold a piece of it. Sits under Analysis
+      // rather than Execution because it reads the image and runs nothing against a device — FirmLab has no
+      // hardware transport, and putting it beside the emulation rungs would imply one.
+      { id: 'hardware', label: 'Hardware interfaces', icon: 'hardware' },
     ],
   },
   { label: 'Components', items: [{ id: 'sbom', label: 'SBOM & CVEs', icon: 'sbom' }] },

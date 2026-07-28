@@ -90,6 +90,15 @@ export const Icon = {
       <circle cx="12" cy="15" r="1.3" />
     </S>
   ),
+  /* A pin header — the physical way into a board, and the one motif a UART, SPI and JTAG break-out all share.
+     Deliberately not a chip outline: this section is about the ports, not the silicon. */
+  hardware: (p: P) => (
+    <S {...p}>
+      <rect x="3" y="8" width="18" height="8" rx="1.5" />
+      <path d="M7 8V5M12 8V5M17 8V5" />
+      <path d="M7 16v3M12 16v3M17 16v3" opacity="0.75" />
+    </S>
+  ),
   binaries: (p: P) => (
     <S {...p}>
       <rect x="4" y="3" width="16" height="18" rx="2" />

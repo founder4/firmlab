@@ -413,9 +413,49 @@ Surfaced while building the above and deliberately not built. Ordered roughly by
   *measured* occurrences, and letting an assertion in would turn one person's claim into a cross-image prior —
   the laundering this feature exists to prevent, one layer out. Wants its own table and a prevalence signal
   explicitly labelled "asserted by N operators".
-- ▢ **Three surfaces still lack a web panel** — kernel posture, update-path integrity and device tree all have
-  routes and W9 stages but no section in `pages/ImageDetail.tsx`, so their results are API-and-ledger only.
-  `AnalysisKind` in `apps/web/src/api.ts` needs the three additions.
+- ✅ **The three new surfaces reached the workbench, and the physical way in became a section** (2026-07-28) —
+  `AnalysisKind` gained `kernel`/`updatepath`/`devicetree`, `AnalysisActionsPanel` runs them, and `BOOT_KINDS` in
+  `StepTimeline` lists them (it did not, so a stage that had actually run still read `pending`). The panel went from
+  7 providers to 10, at which point a flat grid stops being scannable, so the providers are now **grouped by the
+  question they answer** — boot & platform · filesystem & configuration · update & supply chain · device & radio.
+
+  **New `hardware` section** (`components/HardwareInterfaces.tsx`, 14 tests): the console, the declared buses, and
+  the flash map, assembled from three providers that each held a piece and none of which put it on one screen. It
+  answers the question an analyst with the board on the bench actually asks, and it **refuses the one inference it
+  would otherwise invite**: FirmLab reads the image and connects to nothing, a UART the tree marks `okay` says
+  nothing about populated pads or an attached console, and `read-only` on a partition is a request to the kernel,
+  not write protection — all three sentences render on screen, not only in the module doc. **JTAG/SWD gets its own
+  row saying FirmLab cannot answer it**, because a list of UART and SPI that silently omitted JTAG would read as
+  "no JTAG here".
+
+  _The defect that matters was found by running the real provider instead of trusting the type._ The first fixture
+  was invented and gave the BE3600 `bootargs = "console=ttyMSM0,115200n8 …"`. Running `runDeviceTreeAnalysis` over
+  the real 111 MB image returns `bootargs = "clk_ignore_unused"` — **no `console=` at all**; that board's console is
+  known solely because `stdout-path = serial0` resolves to `/soc/serial@78af000`. The component's provenance line
+  was gated on *both* sources being present, so the corpus's actual case rendered a bare node path with nothing
+  explaining it, and the invented fixture agreed with the code instead of checking it — CLAUDE.md's trap, in the
+  UI layer. The fixture is now the provider's real output, including `status: "(absent)"` and the empty partition
+  list with its explanatory note. Two smaller defects the tests caught the same way: a node whose status is
+  literally `disabled` rendered "disabled disabled", and an unanalysed image repeated "no device tree has been
+  read" under every heading instead of showing one consolidated empty state.
+- ▢ **`funcdiff` has no web surface at all.** Function-level diffing and the decompiled-text diff shipped
+  2026-07-27 with a route (`POST/GET /images/:id/funcdiff?against=`), pure logic and 31 tests — and **zero
+  references anywhere in `apps/web`**. The Diff section only offers the image-level `diff`. A whole shipped
+  capability is reachable only by curl, which is how it goes unused and unvalidated on real firmware; the backlog
+  already notes the real-firmware run is open, and no UI is part of why.
+- ▢ **Two navigations list different sets of sections.** The sidebar (`SECTION_GROUPS`) and the pipeline strip
+  (`ANALYSIS_STEPS`) overlap on only five ids: the sidebar omits `bootloader` — now ten deep providers — and
+  `findings`, while the strip omits `structure`, `secrets`, `files`, `hardware`, `testbench`, `diff`, `opacidad`
+  and `agent`. Everything is reachable from one or the other, so nothing is lost, but which one a section appears
+  in is currently an accident rather than a rule. Decide the rule (pipeline stages in the strip, everything in the
+  sidebar) and apply it.
+- ▢ **The `bootloader` section id no longer describes its contents.** It holds U-Boot, device tree, kernel posture,
+  rootfs audit, certificates, services, update-path, component map, RTOS and FCC. The id should stay for old links
+  the way `binaries` did when it became `testbench`, but the label should say what it is.
+- ▢ **`AnalysisActionsPanel` uses emoji where the rest of the shell uses the line-icon family** in `icons.tsx`,
+  whose own doc comment says it exists "so the chrome reads as one system instead of the old grab-bag of unicode
+  glyphs". Three more emoji were added rather than deepening the divergence silently — recording it instead of
+  quietly redesigning a panel that was not in scope.
 - ▢ **Assertions never reach the HTML report**, and `disputes_finding` is recorded but inert — a reader looking
   at a code-decided row has no indication someone contested it. Also: an amended assertion overwrites its prior
   claim, which is the inconsistent case for a ledger whose whole point is that a retraction survives.

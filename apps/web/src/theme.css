@@ -2028,3 +2028,79 @@ span.run-dot.run-running {
 .fsb-nav .hint {
   margin-left: auto;
 }
+
+/* === Hardware interfaces ==================================================================================
+   What the firmware declares about the physical ways into the board. The lead answer (which UART, at what baud)
+   is typeset as a statement rather than a table row, because it is the one fact an analyst came here for; the
+   rest are rows that get compared column-wise and use the shared `.data` table. Colour is carried by the two
+   existing semantic tokens only — `--ok` for an enabled interface, `--text-faint` for a disabled one — so this
+   section adds no new hue to a duotone system. */
+.hw-lead {
+  margin-top: 14px;
+  padding: 14px 16px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+}
+.hw-answer {
+  font-size: 1.375rem;
+  line-height: 1.25;
+  margin: 6px 0 8px;
+  letter-spacing: -0.01em;
+}
+.hw-answer .mono {
+  font-size: 1.25rem;
+}
+.hw-prompt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+.hw-on {
+  color: var(--ok);
+}
+.hw-off {
+  color: var(--text-faint);
+}
+/* A compatible string list is the widest column and the least often read in full; cap it so it cannot push the
+   status column off a narrow viewport, and let the row expand on hover for the times it does matter. */
+.hw-compat {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hw-compat:hover {
+  max-width: none;
+  white-space: normal;
+}
+/* The row that exists to say FirmLab knows nothing. Deliberately styled as a quiet aside rather than a warning:
+   it is not a problem with the image, it is the boundary of what firmware bytes can answer. */
+.hw-nothing {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg-inset) 60%, transparent);
+}
+.hw-nothing strong {
+  font-size: 0.8125rem;
+}
+@media (max-width: 640px) {
+  .hw-answer {
+    font-size: 1.125rem;
+  }
+  .hw-answer .mono {
+    font-size: 1rem;
+  }
+  .hw-compat {
+    max-width: 14ch;
+  }
+}

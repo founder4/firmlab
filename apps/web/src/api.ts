@@ -746,7 +746,143 @@ async function del<T>(url: string): Promise<T> {
 }
 
 /** The deep static-analysis providers runnable per image; their findings appear in the dossier. */
-export type AnalysisKind = 'uboot' | 'fsaudit' | 'certs' | 'rtos' | 'compmap' | 'services' | 'fcc';
+export type AnalysisKind =
+  | 'uboot'
+  | 'fsaudit'
+  | 'certs'
+  | 'rtos'
+  | 'compmap'
+  | 'services'
+  | 'fcc'
+  | 'kernel'
+  | 'updatepath'
+  | 'devicetree';
+
+/**
+ * Shapes of the three providers whose results this UI reads field by field rather than only counting findings.
+ *
+ * EVERY field is optional, without exception, and that is not defensive style — it is the rule this codebase paid
+ * for. A provider result is JSON on a job row, written once and re-read for as long as the image exists, so a field
+ * added after a result was stored is absent from that result forever. Declaring one required made the web types
+ * assert something about persisted data they cannot know, and `nvd.uncheckedIdentities.map` then took down the whole
+ * image view for three of four images. Optional turns that class of crash into a compile error.
+ */
+export interface DtPeripheral {
+  path?: string;
+  kind?: 'uart' | 'watchdog' | 'spi' | 'i2c' | 'usb' | 'gpio' | 'flash' | 'mmc';
+  compatible?: string[];
+  status?: string;
+  enabled?: boolean;
+  console?: boolean;
+}
+
+export interface DtPartition {
+  nodeName?: string;
+  label?: string;
+  offset?: number;
+  size?: number;
+  /** The `read-only` property is present — a request to the kernel, NOT hardware write protection. */
+  declaredReadOnly?: boolean;
+}
+
+export interface DeviceTreeBlob {
+  origin?: string;
+  sizeBytes?: number;
+  model?: string;
+  compatible?: string[];
+  bootargs?: string;
+  bootargsFrom?: string[];
+  stdoutPath?: string;
+  consolePath?: string;
+  partitions?: DtPartition[];
+  partitionNode?: string;
+  partitionNote?: string;
+  peripherals?: DtPeripheral[];
+  peripheralsDropped?: number;
+  nestedNodesSkipped?: number;
+  peripheralNote?: string;
+  nodeCount?: number;
+  selected?: boolean;
+}
+
+export interface DeviceTreeResult {
+  available?: boolean;
+  found?: boolean;
+  blobs?: DeviceTreeBlob[];
+  rejected?: { origin?: string; reason?: string }[];
+  /** Every place that was searched — what a `found: false` does and does not cover. */
+  searched?: string[];
+  findings?: unknown[];
+  reason?: string;
+}
+
+export interface PostureAnswer {
+  id?: string;
+  option?: string;
+  question?: string;
+  verdict?: 'on' | 'off' | 'unknown';
+  reason?: string;
+  source?: string;
+  detail?: string;
+  bad?: boolean;
+  severity?: string;
+}
+
+export interface KernelPostureResult {
+  available?: boolean;
+  located?: boolean;
+  version?: string | null;
+  versionSource?: string | null;
+  bannerPath?: string | null;
+  configPath?: string | null;
+  age?: { years?: number; severity?: string; detail?: string } | null;
+  modules?: { total?: number; signed?: number; vermagic?: string } | null;
+  answers?: PostureAnswer[];
+  searched?: string[];
+  findings?: unknown[];
+  reason?: string;
+}
+
+export interface UpdaterCandidate {
+  path?: string;
+  kind?: 'elf' | 'script';
+  why?: string;
+  symbolSource?: string;
+  signatureFns?: string[];
+  digestFns?: string[];
+  verifyCommands?: string[];
+  /** Verification executables the script invokes that are NOT present in the rootfs — the fail-open case. */
+  missingVerifiers?: string[];
+  flashWrites?: string[];
+}
+
+export interface UpdatePathResult {
+  available?: boolean;
+  imageIntegrity?: {
+    container?: string;
+    containerNote?: string;
+    items?: { kind?: string; strength?: string; detail?: string }[];
+    siblings?: string[];
+  };
+  updaters?: UpdaterCandidate[];
+  droppedUpdaters?: number;
+  rollback?: { state?: string; evidence?: string };
+  filesWalked?: number;
+  elfsExamined?: number;
+  elfBudgetExhausted?: boolean;
+  findings?: unknown[];
+  reason?: string;
+}
+
+/** What the U-Boot provider decoded — the env is a flat key/value map, so the console lives in `vars`. */
+export interface UbootResult {
+  available?: boolean;
+  found?: boolean;
+  varCount?: number;
+  vars?: Record<string, string>;
+  findings?: unknown[];
+  reason?: string;
+}
 
 /** The result of a W9 autonomous scan (opacidad): the class-routed plan, per-worker outcomes, and the narrative. */
 export interface OpacidadResult {
@@ -1109,6 +1245,18 @@ export const api = {
     get<{ result: { reason?: string; findings?: unknown[] } | null }>(`/api/images/${id}/${kind}`).then(
       (r) => r.result,
     ),
+  /**
+   * The same GET, typed for the callers that read a provider's fields rather than only its finding count. Separate
+   * from `analysisResult` so that one keeps its deliberately narrow shape — a caller that only counts findings
+   * should not be handed a type inviting it to read fields a stored result may not carry.
+   */
+  deviceTree: (id: string) =>
+    get<{ result: DeviceTreeResult | null }>(`/api/images/${id}/devicetree`).then((r) => r.result),
+  kernelPosture: (id: string) =>
+    get<{ result: KernelPostureResult | null }>(`/api/images/${id}/kernel`).then((r) => r.result),
+  updatePath: (id: string) =>
+    get<{ result: UpdatePathResult | null }>(`/api/images/${id}/updatepath`).then((r) => r.result),
+  ubootEnv: (id: string) => get<{ result: UbootResult | null }>(`/api/images/${id}/uboot`).then((r) => r.result),
   listPresets: (id: string) => get<{ presets: EmulationPreset[] }>(`/api/images/${id}/presets`).then((r) => r.presets),
   savePreset: (id: string, p: { name: string; mode: EmulationPreset['mode']; binary?: string; args?: string[] }) =>
     post<{ preset: EmulationPreset }>(`/api/images/${id}/presets`, p).then((r) => r.preset),

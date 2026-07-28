@@ -35,6 +35,7 @@ import { EntropyChart } from '../components/EntropyChart';
 import { FileBrowser } from '../components/FileBrowser';
 import { FilesystemTree } from '../components/FilesystemTree';
 import { FuzzPanel } from '../components/FuzzPanel';
+import { HardwareInterfaces } from '../components/HardwareInterfaces';
 import { OpacidadPanel } from '../components/OpacidadPanel';
 import { OperatorPanel } from '../components/OperatorPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
@@ -57,6 +58,7 @@ type TabId =
   | 'filesystem'
   | 'files'
   | 'secrets'
+  | 'hardware'
   | 'bootloader'
   | 'sbom'
   | 'binaries'
@@ -74,6 +76,7 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'filesystem',
   'files',
   'secrets',
+  'hardware',
   'bootloader',
   'sbom',
   'binaries',
@@ -95,6 +98,7 @@ const SECTION_TITLES: Record<TabId, string> = {
   filesystem: 'Extraction',
   files: 'File browser',
   secrets: 'Secrets',
+  hardware: 'Hardware interfaces',
   bootloader: 'Bootloader',
   sbom: 'SBOM & CVEs',
   binaries: 'Test bench',
@@ -176,6 +180,8 @@ export function ImageDetail(): JSX.Element {
       {/* File browser: the surface that lets a finding's evidence be checked instead of trusted. */}
       {tab === 'files' && <FileBrowser imageId={id} />}
       {tab === 'secrets' && <SecretsPanel analysis={analysis} imageId={id} />}
+      {/* What the firmware declares about the physical ways in. Reads stored results; connects to nothing. */}
+      {tab === 'hardware' && <HardwareInterfaces imageId={id} />}
       {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}
       {tab === 'bootloader' && <AnalysisActionsPanel imageId={id} />}
       {tab === 'sbom' && <SbomPanel imageId={id} />}
