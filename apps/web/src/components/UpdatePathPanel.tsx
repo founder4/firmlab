@@ -53,11 +53,17 @@ export interface SourceChainView {
   unresolved: UnresolvedSource[];
   bounds: string[];
   /**
-   * Whether this candidate carries any source-following record at all. False is genuinely ambiguous — the script
-   * may source nothing, or the result may predate the pass that follows edges — so the panel states both readings
-   * rather than picking one, and prints no chain block for the row.
+   * Whether this candidate carries any source-following record at all — i.e. whether there is a chain to draw.
    */
   recorded: boolean;
+  /**
+   * Whether the pass that follows `source` edges ran for this candidate, whatever it found. This is what makes an
+   * empty chain readable: `followed && !recorded` is "this build looked and there is no chain", while `!followed`
+   * is "the result predates the pass" — two facts that were the same absence until the provider started saying
+   * which. Measured on the real Tenda camera, whose updater genuinely sources nothing: the panel could previously
+   * only report that it did not know.
+   */
+  followed: boolean;
 }
 
 /**
@@ -72,11 +78,15 @@ export function sourceChainOf(c: UpdaterCandidate): SourceChainView {
     ? c.unresolvedSources.filter((u): u is UnresolvedSource => !!u && typeof u === 'object')
     : [];
   const bounds = Array.isArray(c.sourceBounds) ? c.sourceBounds.filter((b): b is string => typeof b === 'string') : [];
+  const recorded = sourced.length > 0 || unresolved.length > 0 || bounds.length > 0;
   return {
     sourced,
     unresolved,
     bounds,
-    recorded: sourced.length > 0 || unresolved.length > 0 || bounds.length > 0,
+    recorded,
+    // A record implies the pass ran, so an older result that somehow carries a chain without the flag still reads
+    // as followed rather than as unknown.
+    followed: c.sourcesFollowed === true || recorded,
   };
 }
 
@@ -262,7 +272,10 @@ export function UpdatePathPanel({ imageId }: { imageId: string }): JSX.Element {
 
   const state = updatePathState(result, loaded);
   const updaters = result?.updaters ?? [];
-  const anyChain = updaters.some((c) => sourceChainOf(c).recorded);
+  const chains = updaters.map((c) => sourceChainOf(c));
+  const anyChain = chains.some((c) => c.recorded);
+  // Every candidate was put through the pass and none had a chain — a real answer, not a gap.
+  const allFollowed = chains.length > 0 && chains.every((c) => c.followed);
 
   return (
     <div className="panel" style={{ marginTop: 16 }}>
@@ -303,9 +316,18 @@ export function UpdatePathPanel({ imageId }: { imageId: string }): JSX.Element {
           </div>
           {!anyChain ? (
             <div className="hint" style={{ marginTop: 8, maxWidth: '72ch' }}>
-              No source chain is recorded on any candidate below. Two readings, and this result cannot tell them apart:
-              these scripts source nothing, or the result was stored by a build that did not follow{' '}
-              <span className="mono">source</span> edges at all. Re-run the provider to be sure which.
+              {allFollowed ? (
+                <>
+                  No candidate below sources another file. This run followed <span className="mono">source</span> edges
+                  and found none — an answer about these scripts, not a gap in the analysis.
+                </>
+              ) : (
+                <>
+                  No source chain is recorded on any candidate below. Two readings, and this result cannot tell them
+                  apart: these scripts source nothing, or the result was stored by a build that did not follow{' '}
+                  <span className="mono">source</span> edges at all. Re-run the provider to be sure which.
+                </>
+              )}
             </div>
           ) : null}
           {updaters.map((c, i) => (

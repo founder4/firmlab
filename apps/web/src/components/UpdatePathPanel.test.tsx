@@ -122,7 +122,13 @@ describe('UpdatePathPanel — a result stored before the source pass reads exact
 
   it('reads a malformed chain field as absent instead of throwing', () => {
     const junk = { path: 'a', sourced: 'nope', unresolvedSources: 3 } as unknown as UpdaterCandidate;
-    expect(sourceChainOf(junk)).toEqual({ sourced: [], unresolved: [], bounds: [], recorded: false });
+    expect(sourceChainOf(junk)).toEqual({
+      sourced: [],
+      unresolved: [],
+      bounds: [],
+      recorded: false,
+      followed: false,
+    });
   });
 });
 
@@ -142,5 +148,33 @@ describe('UpdatePathPanel — every kind of nothing gets its own sentence', () =
     const { container } = mount(result({ updaters: [], reason: 'no updater matched' }));
     await waitFor(() => expect(screen.getByText(/located no updater candidate/)).toBeTruthy());
     expect(container.textContent ?? '').toContain('not a verdict that the device has no update path');
+  });
+});
+
+/**
+ * The distinction this file exists to protect, and the one real bytes exposed: the Tenda camera's
+ * `usr/bin/force_upgrade` genuinely sources nothing, and until the provider said so an empty chain and a result
+ * written before the pass existed were the same absence on screen.
+ */
+describe('sourceChainOf — "no chain" and "nobody looked" are different answers', () => {
+  it('reads a followed-but-empty candidate as an answer, not a gap', () => {
+    const chain = sourceChainOf({ path: 'usr/bin/force_upgrade', sourcesFollowed: true });
+    expect(chain.recorded).toBe(false);
+    expect(chain.followed).toBe(true);
+  });
+
+  it('reads a candidate from a build that never followed edges as unknown', () => {
+    const chain = sourceChainOf({ path: 'sbin/sysupgrade' });
+    expect(chain.recorded).toBe(false);
+    expect(chain.followed).toBe(false);
+  });
+
+  it('treats a recorded chain as followed even without the flag, so an older result is not called unknown', () => {
+    const chain = sourceChainOf({
+      path: 'sbin/sysupgrade',
+      sourced: [{ file: 'lib/upgrade/fwtool.sh', via: ['sbin/sysupgrade'], verifyCommands: ['ucert -V'] }],
+    });
+    expect(chain.recorded).toBe(true);
+    expect(chain.followed).toBe(true);
   });
 });

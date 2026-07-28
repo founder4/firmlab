@@ -480,6 +480,13 @@ export interface UpdaterCandidate {
   unresolvedSources?: UnresolvedSource[];
   /** Where following `source` edges stopped short — depth, cycle or file bound. A bound is not an answer. */
   sourceBounds?: string[];
+  /**
+   * True when this pass followed `source` edges for this candidate, whatever it found. It exists so that an empty
+   * `sourced` is readable: WITHOUT it, a candidate that sources nothing and a result written before the pass
+   * existed are the same absence, and a reader is left unable to tell "there is no chain" from "nobody looked" —
+   * which is the distinction this whole provider is built around. Optional forever: absent means an older build.
+   */
+  sourcesFollowed?: boolean;
 }
 
 /** Paths whose `update`/`upgrade` is about something other than firmware — the glob's own false positives. */
@@ -1011,9 +1018,18 @@ export function creditSourcedEvidence(
     spec: e.spec,
     reason: e.reason ?? 'unresolved',
   }));
-  if (sourced.length === 0 && unresolvedSources.length === 0 && closure.bounds.length === 0) return candidate;
+  // `sourcesFollowed` is set on EVERY candidate this pass considered, including the ones that source nothing, and
+  // that is the whole point of it. Omitting the fields when they are empty made "this build followed the edges and
+  // there were none" indistinguishable from "an older build never followed edges at all" — the reader gets an
+  // absence and cannot tell which, which is the conflation this provider exists to refuse. Measured on the real
+  // Tenda camera: `usr/bin/force_upgrade` genuinely sources nothing, and the panel could only say it did not know.
+  // The arrays stay omitted when empty (nothing is gained by shipping `[]`); the flag carries the fact.
+  if (sourced.length === 0 && unresolvedSources.length === 0 && closure.bounds.length === 0) {
+    return { ...candidate, sourcesFollowed: true };
+  }
   return {
     ...candidate,
+    sourcesFollowed: true,
     ...(sourced.length > 0 ? { sourced } : {}),
     ...(unresolvedSources.length > 0 ? { unresolvedSources } : {}),
     ...(closure.bounds.length > 0 ? { sourceBounds: [...closure.bounds] } : {}),

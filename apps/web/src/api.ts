@@ -945,6 +945,12 @@ export interface UpdaterCandidate {
   unresolvedSources?: UnresolvedSource[];
   /** Where following `source` edges stopped short — depth, cycle or file bound. A bound is not an answer. */
   sourceBounds?: string[];
+  /**
+   * True when the pass that follows `source` edges ran for this candidate, whatever it found. Without it an empty
+   * chain is unreadable: a script that sources nothing and a result written before the pass existed are the same
+   * absence. Optional forever — absent means the older build, which is exactly the case it distinguishes.
+   */
+  sourcesFollowed?: boolean;
 }
 
 export interface UpdatePathResult {

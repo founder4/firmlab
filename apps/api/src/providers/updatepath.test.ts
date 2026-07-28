@@ -605,6 +605,28 @@ describe('creditSourcedEvidence — the credit, and what it refuses to claim', (
       missingUcert,
     );
 
+  // Found on the real Tenda camera through the UI: `usr/bin/force_upgrade` sources nothing, the fields were
+  // therefore omitted, and the panel could not tell that from a result written before this pass existed. An
+  // absence that means two different things is the conflation this provider is built to refuse.
+  it('marks a candidate that sources NOTHING as followed, so an empty chain is not read as an unasked question', () => {
+    const standalone = candidate({ path: 'usr/bin/force_upgrade', kind: 'script', flashWrites: ['dd of=/dev/mtd'] });
+    const c = creditSourcedEvidence(
+      standalone,
+      resolveSourceClosure(standalone.path, 'dd if=$1 of=/dev/mtdblock3\n', rootfs),
+      (rel) => rootfs.read(rel),
+      missingUcert,
+    );
+    expect(c.sourcesFollowed).toBe(true);
+    // Nothing is invented to carry the flag: the arrays stay absent rather than claiming an empty search.
+    expect(c.sourced).toBeUndefined();
+    expect(c.unresolvedSources).toBeUndefined();
+    expect(c.sourceBounds).toBeUndefined();
+  });
+
+  it('marks a candidate that DOES source as followed too, so the flag means the pass ran and nothing else', () => {
+    expect(credit(sysupgrade()).sourcesFollowed).toBe(true);
+  });
+
   it('credits sysupgrade with fwtool.sh’s ucert -V, attributed to the file the line is IN', () => {
     const c = credit(sysupgrade());
     // The credit is real…
@@ -626,11 +648,16 @@ describe('creditSourcedEvidence — the credit, and what it refuses to claim', (
     expect(sourceFollowingNotes([c])[0]).toContain('`. $file`');
   });
 
-  it('leaves a script that sources nothing exactly as it was — the same object, not a rebuilt one', () => {
+  // This used to assert object identity — that a script sourcing nothing came back untouched. That is no longer
+  // the intent: it comes back with `sourcesFollowed`, and only that, because the alternative was an absence the
+  // reader could not distinguish from a result predating the pass. Everything else must still be byte-identical,
+  // which is what this now pins.
+  it('adds the followed flag to a script that sources nothing, and changes nothing else about it', () => {
     const plain = candidate({ path: 'usr/bin/force_upgrade', flashWrites: ['dd of=/dev/…'] });
     const closure = resolveSourceClosure(plain.path, 'dd if=fw.bin of=/dev/mtdblock8\n', fakeRootfs({}));
     expect(closure.reached).toEqual([]);
-    expect(creditSourcedEvidence(plain, closure, () => null, missingUcert)).toBe(plain);
+    const credited = creditSourcedEvidence(plain, closure, () => null, missingUcert);
+    expect(credited).toEqual({ ...plain, sourcesFollowed: true });
   });
 
   it('does not credit a sourced file that verifies, flashes and bounds nothing', () => {
