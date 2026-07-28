@@ -65,6 +65,7 @@ import { runFccLookup } from './providers/fcc.js';
 import { runFsAudit } from './providers/fsaudit.js';
 import { runFwHunt } from './providers/fwhunt.js';
 import type { JobHandle } from './providers/jobs.js';
+import { runKernelPosture } from './providers/kernelposture.js';
 import { runNvramScan } from './providers/nvram.js';
 import { runRtosAnalysis } from './providers/rtos.js';
 import { runSbom } from './providers/sbom.js';
@@ -248,6 +249,30 @@ async function servicemapRun(c: RunCtx): Promise<StepOutcome> {
     summary: `network-service attack surface: ${r.findings.length} findings${leads.length ? `, ${leads.length} daemon(s) to decompile` : ''}`,
     findingCount: r.findings.length,
     ...(leads.length ? { leads } : {}),
+  };
+}
+
+/**
+ * The kernel underneath the userland. Runs with or without a rootfs — without one it still recovers the version
+ * from a carved blob and reports every posture question as explicitly undetermined, which is the honest degraded
+ * answer, not a skip.
+ */
+async function kernelRun(c: RunCtx): Promise<StepOutcome> {
+  const r = runKernelPosture(c.imagePath, c.rootfsPath, c.outputDir);
+  syncFindings(c.imageId, 'kernel', r.findings);
+  if (!r.located) {
+    return {
+      summary: 'kernel posture: no kernel located',
+      findingCount: r.findings.length,
+      degraded: true,
+      note: r.reason,
+    };
+  }
+  const undetermined = r.answers.filter((a) => a.verdict === 'unknown').length;
+  return {
+    summary: `kernel posture: Linux ${r.version}, ${r.answers.length - undetermined}/${r.answers.length} questions answered, ${r.findings.length} findings`,
+    findingCount: r.findings.length,
+    ...(undetermined > 0 ? { note: `${undetermined} posture question(s) undetermined — each records why.` } : {}),
   };
 }
 
@@ -489,6 +514,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   nvram: nvramRun,
   sbom: sbomRun,
   compcve: compcveRun,
+  kernel: kernelRun,
   servicemap: servicemapRun,
   certs: certsRun,
   compmap: compmapRun,

@@ -33,7 +33,8 @@ export type JobKind =
   | 'fwhunt'
   | 'funcdiff'
   | 'dynprobe'
-  | 'nvram';
+  | 'nvram'
+  | 'kernel';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
 export interface ImageRow {
