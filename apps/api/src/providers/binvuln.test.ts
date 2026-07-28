@@ -170,6 +170,33 @@ describe('runBinVuln (rootfs sweep)', () => {
     expect(r.reason).toMatch(/drops 6 further finding/);
   });
 
+  /**
+   * The DVRF ledger end to end: the cap must not spend half its slots on the weakest kind.
+   *
+   * The command-exec sinks are the SMALL binaries here, as they are on the real image (CGI helpers), so a cap that
+   * ranked on answerability alone would seat them all. Severity decides the contested half instead, and the sinks
+   * keep the equal floor — a quarter of the ledger, not zero.
+   */
+  it('spends the contested half of the cap on medium candidates, not on info sinks', () => {
+    const root = path.join(tmp, 'severity');
+    fs.mkdirSync(root, { recursive: true });
+    for (let i = 0; i < 80; i++) {
+      fs.writeFileSync(path.join(root, `cand${String(i).padStart(3, '0')}`), fakeElf(['strcpy', 'main'], 8192));
+    }
+    for (let i = 0; i < 40; i++) {
+      fs.writeFileSync(path.join(root, `sink${String(i).padStart(3, '0')}`), fakeElf(['system', 'main'], 8));
+    }
+
+    const r = runBinVuln(root);
+    expect(r.binariesScanned).toBe(120);
+    expect(r.candidates).toBe(80); // every candidate FOUND is counted, listed or not
+    expect(r.findings.filter((f) => f.kind === 'binary-pwnable-candidate')).toHaveLength(45);
+    expect(r.findings.filter((f) => f.kind === 'binary-cmdexec-sink')).toHaveLength(15);
+    // The share and what it dropped are both stated, so a reader is never left to infer the rule from the counts.
+    expect(r.reason).toMatch(/lists 45 of the 80 candidate\(s\) and drops 60 further finding\(s\)/);
+    expect(r.reason).toMatch(/highest severity first/);
+  });
+
   it('states an exhausted examination budget instead of passing it off as a clean sweep', () => {
     const root = path.join(tmp, 'budget');
     fs.mkdirSync(root, { recursive: true });
@@ -220,14 +247,21 @@ describe('isRunnableElf — a library is a candidate the probes cannot question'
 });
 
 describe('selectFindings — which leads survive the cap is a decision, not an accident', () => {
-  const draft = (kind: string, p: string, size: number): FindingDraft => ({
+  const draft = (
+    kind: string,
+    p: string,
+    size: number,
+    severity: FindingDraft['severity'] = 'medium',
+  ): FindingDraft => ({
     kind,
     title: `${kind} ${p}`,
-    severity: 'medium',
+    severity,
     proofState: 'needs_runtime_reproduction',
     evidence: { path: p, size },
     rationale: '',
   });
+
+  const kindsOf = (kept: FindingDraft[], kind: string): number => kept.filter((f) => f.kind === kind).length;
 
   it('keeps everything when the set fits, and reports nothing dropped', () => {
     const drafts = [draft('a', 'x', 3), draft('a', 'y', 1)];
@@ -257,6 +291,101 @@ describe('selectFindings — which leads survive the cap is a decision, not an a
     const forward = selectFindings(drafts, 2).kept.map((f) => f.title);
     const reversed = selectFindings([...drafts].reverse(), 2).kept.map((f) => f.title);
     expect(forward).toEqual(reversed);
+  });
+
+  /**
+   * The DVRF ledger, in the shape the flat round-robin left it.
+   *
+   * An equal share between kinds gave 30 of the 60 slots to `info` command-exec sinks — the weakest lead this
+   * sweep emits — while 76 `medium` stack-overflow candidates were dropped, which is the finding the sweep exists
+   * to produce. Half the cap is still shared out equally (so the sinks keep a quarter of the ledger rather than
+   * vanishing), and the other half is now contested on severity, which the candidates win outright.
+   */
+  it('seats the medium candidates DVRF was dropping without deleting the info sinks', () => {
+    const candidates = Array.from({ length: 106 }, (_, i) => draft('binary-pwnable-candidate', `c${i}`, 5000 + i));
+    // Deliberately the SMALLEST binaries in the set: severity has to beat size above the floor, or the sinks —
+    // which are tiny CGI helpers on the real image — win every contested slot on answerability alone.
+    const sinks = Array.from({ length: 40 }, (_, i) => draft('binary-cmdexec-sink', `s${i}`, 10 + i, 'info'));
+
+    const { kept, dropped } = selectFindings([...candidates, ...sinks], 60);
+    expect(kept).toHaveLength(60);
+    expect(kindsOf(kept, 'binary-pwnable-candidate')).toBe(45); // was 30 under the flat round-robin
+    expect(kindsOf(kept, 'binary-cmdexec-sink')).toBe(15); // the floor: a quarter of the ledger, never zero
+    expect(dropped).toBe(86); // and everything not listed is still counted
+  });
+
+  it('does not let severity starve a kind — the floor is guaranteed before anything competes', () => {
+    const many = Array.from({ length: 100 }, (_, i) => draft('candidate', `c${i}`, i));
+    const weak = Array.from({ length: 10 }, (_, i) => draft('sink', `s${i}`, 900 + i, 'info'));
+    const { kept } = selectFindings([...many, ...weak], 10);
+    expect(kindsOf(kept, 'sink')).toBe(3); // ceil(10 / (2 * 2))
+    expect(kindsOf(kept, 'candidate')).toBe(7);
+  });
+
+  it('gives a contested slot to the worse lead even when it is the fatter binary', () => {
+    const small = Array.from({ length: 5 }, (_, i) => draft('sink', `s${i}`, 1 + i, 'info'));
+    const heavy = Array.from({ length: 5 }, (_, i) => draft('candidate', `c${i}`, 900 + i, 'high'));
+    const { kept } = selectFindings([...small, ...heavy], 4);
+    expect(kindsOf(kept, 'candidate')).toBe(3); // 1 floor + 2 contested
+    expect(kindsOf(kept, 'sink')).toBe(1); // its floor, and nothing more
+  });
+
+  it('spends a cap too small to seat every kind on the worst leads, not on the alphabet', () => {
+    const { kept } = selectFindings([draft('a-sink', 'x', 1, 'info'), draft('z-candidate', 'y', 900, 'critical')], 1);
+    expect(kept.map((f) => f.kind)).toEqual(['z-candidate']);
+  });
+
+  it('is still order-independent once severity is in the comparison', () => {
+    const drafts = [
+      draft('a', 'x', 9, 'info'),
+      draft('b', 'y', 2, 'high'),
+      draft('a', 'z', 4, 'critical'),
+      draft('b', 'w', 4, 'medium'),
+      draft('c', 'v', 1, 'low'),
+    ];
+    const forward = selectFindings(drafts, 3).kept.map((f) => f.title);
+    const reversed = selectFindings([...drafts].reverse(), 3).kept.map((f) => f.title);
+    const rotated = selectFindings([...drafts.slice(2), ...drafts.slice(0, 2)], 3).kept.map((f) => f.title);
+    expect(reversed).toEqual(forward);
+    expect(rotated).toEqual(forward);
+  });
+
+  it('drops everything, and says so, at cap 0', () => {
+    const drafts = [draft('a', 'x', 1), draft('b', 'y', 2, 'critical')];
+    expect(selectFindings(drafts, 0)).toEqual({ kept: [], dropped: 2 });
+  });
+
+  it('keeps every draft when the cap exceeds the input, whatever the severity mix', () => {
+    const drafts = [draft('a', 'x', 900, 'info'), draft('b', 'y', 1, 'critical'), draft('c', 'z', 5, 'low')];
+    const { kept, dropped } = selectFindings(drafts, 50);
+    expect(kept).toHaveLength(3);
+    expect(dropped).toBe(0);
+  });
+
+  it('degrades to a plain severity-then-size ranking for a single kind', () => {
+    const drafts = [
+      draft('only', 'fat-medium', 900),
+      draft('only', 'tiny-info', 1, 'info'),
+      draft('only', 'small-medium', 20),
+      draft('only', 'fat-high', 5000, 'high'),
+    ];
+    const { kept } = selectFindings(drafts, 3);
+    expect(kept.map((f) => (f.evidence as Record<string, unknown>).path)).toEqual([
+      'fat-high',
+      'small-medium',
+      'fat-medium',
+    ]);
+  });
+
+  it('terminates on an empty draft list — the floor loop has no kinds to hand seats to', () => {
+    expect(selectFindings([], 60)).toEqual({ kept: [], dropped: 0 });
+  });
+
+  it('ranks an unrecognised severity as info rather than trusting it with a seat', () => {
+    const odd = { ...draft('a', 'odd', 1), severity: 'urgent' as FindingDraft['severity'] };
+    const known = draft('a', 'known', 900, 'low');
+    const { kept } = selectFindings([odd, known], 1);
+    expect(kept.map((f) => (f.evidence as Record<string, unknown>).path)).toEqual(['known']);
   });
 });
 

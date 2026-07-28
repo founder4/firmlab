@@ -518,6 +518,39 @@ function draftPath(d: FindingDraft): string {
 }
 
 /**
+ * Severity as a number, so a share of the cap can be weighted by it. A severity this table does not know sorts as
+ * `info`: an unrecognised label is not thereby urgent, and the alternative — ranking the unknown high — would let
+ * a typo outrank a real `critical`.
+ */
+const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+
+function severityRank(d: FindingDraft): number {
+  return SEVERITY_RANK[d.severity] ?? 0;
+}
+
+/**
+ * The total order a contested slot is decided by: severity descending (the worst lead wins), then SMALLEST BINARY
+ * first (bounded symbolic execution converges on small binaries and times out on large ones, so a small candidate
+ * is one the downstream prober can actually settle), then path, kind and title — enough tiebreaks that the answer
+ * is a function of the rootfs alone and never of the order the walk happened to produce it in.
+ */
+function rankDrafts(a: FindingDraft, b: FindingDraft): number {
+  return (
+    severityRank(b) - severityRank(a) ||
+    draftSize(a) - draftSize(b) ||
+    draftPath(a).localeCompare(draftPath(b)) ||
+    a.kind.localeCompare(b.kind) ||
+    a.title.localeCompare(b.title)
+  );
+}
+
+/**
+ * Half the cap is the per-kind floor, the other half is contested on severity. See `selectFindings` for why the
+ * split is where it is — it is the knob that trades "no kind disappears" against "the worst leads are listed".
+ */
+const EQUAL_SHARE_DIVISOR = 2;
+
+/**
  * Pure: choose which findings survive `FINDING_CAP`.
  *
  * The cap has to exist — a busy rootfs yields hundreds of leads and a flooded ledger is unreadable. But WHICH ones
@@ -527,49 +560,95 @@ function draftPath(d: FindingDraft): string {
  * one binary this workbench has ever reproduced a crash in. The list read as "43 candidates" and was in fact the
  * prefix of a reverse-alphabetical walk. Nothing in it was false; it was the *set* that was an artifact.
  *
- * So the selection is explicit and stated. Round-robin across kinds, so a high-volume kind cannot crowd out
- * another (43 pwnable candidates evicted every command-exec sink found after them). Within a kind, SMALLEST
- * FIRST: bounded symbolic execution converges on small binaries and reliably times out on large ones, so the
- * small candidates are the ones the downstream prober can actually settle — and a lead nobody can settle is worth
- * less shelf space than one somebody can. Ties break on path, so the same rootfs yields the same list on any
- * filesystem, which walk order never guaranteed.
+ * The first fix was a flat round-robin across kinds, so a high-volume kind could not crowd out another (43 pwnable
+ * candidates evicted every command-exec sink found after them). It over-corrected. An equal share is only fair
+ * when the kinds are equally serious, and here they are not: on DVRF the round-robin handed 30 of the 60 slots to
+ * `info` command-exec sinks — the weakest thing this sweep emits, usually a MENTION of `system` in a binary's
+ * strings — while dropping 76 `medium` stack-overflow candidates, which is the finding the sweep exists to
+ * produce. Severity-blind fairness between kinds is unfairness between findings.
+ *
+ * So the rule has two halves, and each exists to stop the other's failure mode:
+ *
+ *   1. **A floor, split equally.** Every kind present is guaranteed `ceil(cap / (2 * kinds))` seats before
+ *      anything competes — half the cap, shared out. This is the anti-crowding guarantee the round-robin was
+ *      written for, and it is what keeps a severity weighting from simply deleting a kind: on DVRF the `info`
+ *      sinks keep a quarter of the ledger, where the flat rule gave them half and a pure severity sort would have
+ *      given them nothing.
+ *   2. **The rest, on merit.** The remaining slots go to the highest-severity drafts left, whatever kind they are
+ *      in, ranked by `rankDrafts` — severity, then smallest binary, then path. Above the floor there is no
+ *      per-kind quota at all, so the 30 slots the `info` sinks used to take go to `medium` candidates instead.
+ *
+ * When the cap cannot seat even one of each kind, the floor is handed out to the kinds carrying the worst leads
+ * first, so a tight cap degrades by severity rather than by alphabet.
+ *
+ * What this refuses to claim: that the kept list is *the* set, or even the worst of it. It is a ranking of leads
+ * by how bad they would be if real and how cheaply the next stage can find out. Every draft it drops is counted in
+ * `dropped` and stated in the caller's `reason`, because a short list that does not say it is short is a bound
+ * pretending to be an answer.
  */
 export function selectFindings(drafts: FindingDraft[], cap: number): { kept: FindingDraft[]; dropped: number } {
   if (cap <= 0) return { kept: [], dropped: drafts.length };
+  if (drafts.length === 0) return { kept: [], dropped: 0 };
+
   const byKind = new Map<string, FindingDraft[]>();
   for (const d of drafts) {
     const list = byKind.get(d.kind);
     if (list) list.push(d);
     else byKind.set(d.kind, [d]);
   }
-  const order = (a: FindingDraft, b: FindingDraft): number =>
-    draftSize(a) - draftSize(b) || draftPath(a).localeCompare(draftPath(b));
-  const kinds = [...byKind.keys()].sort();
-  for (const k of kinds) (byKind.get(k) as FindingDraft[]).sort(order);
+  for (const list of byKind.values()) list.sort(rankDrafts);
 
+  // The order the floor is handed out in: the kind whose best remaining lead is worst goes first, so a cap too
+  // small to seat every kind spends its seats on severity instead of on whichever kind name sorts earliest.
+  const kinds = [...byKind.keys()].sort((ka, kb) => {
+    const a = (byKind.get(ka) as FindingDraft[])[0] as FindingDraft;
+    const b = (byKind.get(kb) as FindingDraft[])[0] as FindingDraft;
+    return severityRank(b) - severityRank(a) || ka.localeCompare(kb);
+  });
+
+  const floorPerKind = Math.max(1, Math.ceil(cap / (EQUAL_SHARE_DIVISOR * kinds.length)));
   const kept: FindingDraft[] = [];
-  let progress = true;
-  while (kept.length < cap && progress) {
-    progress = false;
+  const takenPerKind = new Map<string, number>();
+  for (let round = 0; round < floorPerKind && kept.length < cap; round++) {
+    // A round that seats nobody means every kind is exhausted; without this the loop would spin when the drafts
+    // run out before the floor does.
+    let progress = false;
     for (const k of kinds) {
       if (kept.length >= cap) break;
-      const next = (byKind.get(k) as FindingDraft[]).shift();
-      if (next) {
-        kept.push(next);
-        progress = true;
-      }
+      const list = byKind.get(k) as FindingDraft[];
+      const taken = takenPerKind.get(k) ?? 0;
+      const next = list[taken];
+      if (!next) continue;
+      kept.push(next);
+      takenPerKind.set(k, taken + 1);
+      progress = true;
     }
+    if (!progress) break;
   }
-  // Round-robin interleaves the kinds; regroup so the emitted list reads as a list rather than as the draw order.
-  kept.sort((a, b) => a.kind.localeCompare(b.kind) || order(a, b));
+
+  // Above the floor the kinds are pooled and the worst leads win, so a flood of `info` cannot outbid a `medium`.
+  const contenders: FindingDraft[] = [];
+  for (const k of kinds) {
+    const list = byKind.get(k) as FindingDraft[];
+    for (let i = takenPerKind.get(k) ?? 0; i < list.length; i++) contenders.push(list[i] as FindingDraft);
+  }
+  contenders.sort(rankDrafts);
+  for (const d of contenders) {
+    if (kept.length >= cap) break;
+    kept.push(d);
+  }
+
+  // Both phases interleave the kinds; regroup so the emitted list reads as a list rather than as the draw order.
+  kept.sort((a, b) => a.kind.localeCompare(b.kind) || rankDrafts(a, b));
   return { kept, dropped: drafts.length - kept.length };
 }
 
 /**
  * Sweep an extracted rootfs for memory-corruption candidates. Walks for ELF binaries, extracts each one's symbol
  * tokens from its strings, and applies the pure assessor. Honest: no rootfs → available:false; hardened binaries
- * are not flagged; the candidate list is capped by `selectFindings` (smallest-first, not walk order) and both the
- * cap and an exhausted ELF budget are reported in the reason, never silently dropped.
+ * are not flagged; the candidate list is capped by `selectFindings` (a per-kind floor, then severity and
+ * smallest-first — never walk order) and both the cap and an exhausted ELF budget are reported in the reason,
+ * never silently dropped.
  */
 export function runBinVuln(rootfsPath: string | null): BinVulnResult {
   if (!rootfsPath) {
@@ -632,7 +711,7 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
   // Both bounds are stated, because either one silently makes a partial answer look like a complete one.
   const capNote =
     dropped > 0
-      ? ` The ${FINDING_CAP}-finding cap lists the ${listed} smallest candidate(s) and drops ${dropped} further finding(s) — selected by binary size (what a bounded symbolic probe can settle), not by directory order.`
+      ? ` The ${FINDING_CAP}-finding cap lists ${listed} of the ${candidates} candidate(s) and drops ${dropped} further finding(s) — half the slots are split equally between kinds so none is crowded out, and the rest go to the highest severity first, then to the smallest binary (what a bounded symbolic probe can settle); never to whatever the walk reached first.`
       : '';
   // Not a bound but an exclusion, and it owes the same sentence: a reader comparing "400 ELFs" against a rootfs
   // they know holds 375 modules must be able to see where the difference went.
