@@ -10,6 +10,7 @@ import { type PlanContext, planEmulation, runUserModeEmulation } from '../provid
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
 import { computeRuntimeCapabilities } from '../providers/preflight.js';
+import { ensureRootfsImage } from '../providers/rootfs-image.js';
 import { getImage, listJobs, updateBinaryEmulationStatus } from '../store.js';
 import { rootfsArch } from './symreach.js';
 
@@ -112,11 +113,26 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
     const arch = rootfsArch(id, identity) ?? identity.arch;
 
     if (body.rung === 'full-system') {
-      const jobId = startJob(id, 'emulate', { rung: 'full-system' }, (handle) =>
-        runFullSystem(arch, `${rootfsPath}.img`, 8080, handle, rootfsPath).then((r) =>
-          onSystemEmulationResult(id, identity, 'system-boot', r),
-        ),
-      );
+      const jobId = startJob(id, 'emulate', { rung: 'full-system' }, async (handle) => {
+        // Assemble the disk image first. Nothing used to: the rung was handed `${rootfsPath}.img` and every run
+        // died on a file no code path created, which the guided recipe expected an operator to build by hand.
+        const image = await ensureRootfsImage(rootfsPath, handle);
+        if (!image.available || !image.imagePath) {
+          const blocked: SystemEmulationResult = {
+            ran: false,
+            strategy: 'full-system',
+            proofState: 'blocked_by_platform',
+            reason: image.reason,
+            command: '',
+            stdout: '',
+            stderr: '',
+            timedOut: false,
+          };
+          return onSystemEmulationResult(id, identity, 'system-boot', blocked);
+        }
+        const r = await runFullSystem(arch, image.imagePath, 8080, handle, rootfsPath);
+        return onSystemEmulationResult(id, identity, 'system-boot', r);
+      });
       return reply.status(202).send({ jobId });
     }
 

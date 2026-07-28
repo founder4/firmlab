@@ -53,6 +53,7 @@ function resolveOnPath(bin: string): string | null {
 
 export type ToolId =
   | 'binwalk'
+  | 'mkfs.ext2'
   | 'unsquashfs'
   | 'sasquatch'
   | 'jefferson'
@@ -157,6 +158,15 @@ const TOOLS: readonly ToolSpec[] = [
     bin: 'qemu-system-arm',
     probe: ['-version'],
     unlocks: 'Full-system ARM boot',
+    group: 'emulate',
+  },
+  {
+    // e2fsprogs' mke2fs, used with `-d` to populate a filesystem from a directory WITHOUT root — which is the
+    // only reason the full-system rung can assemble its disk image inside an unprivileged container.
+    id: 'mkfs.ext2',
+    bin: 'mkfs.ext2',
+    probe: ['-V'],
+    unlocks: 'Assembling the raw disk image a full-system boot needs',
     group: 'emulate',
   },
   { id: 'renode', bin: 'renode', probe: ['--version'], unlocks: 'RTOS / Cortex-M emulation', group: 'emulate' },
