@@ -388,10 +388,19 @@ Surfaced while building the above and deliberately not built. Ordered roughly by
 - ▢ **`REQUIRE_IMAGE_SIGNATURE` is an enforcement flag nothing reads.** Detecting "a fail-open guard whose
   enabling variable is never set" generalises well past OpenWrt, and is the difference between a check that was
   skipped and one that was disabled. The GL.iNet is the worked example above.
-- ▢ **`etc/passwd → /dev/null` is visible but unclaimed.** DVRF symlinks its entire account database (`passwd`,
-  `shadow`, `group`, `gshadow`, `hosts`, `resolv.conf`, `cron.d`) to `/dev/null`. The new browser reports the
-  escape; no provider turns it into a finding, and `fsaudit` — which reads exactly those files — **cannot
-  distinguish "no accounts" from "the account file is a bit bucket"**, so it currently reads as an absence.
+- ✅ **`etc/passwd → /dev/null` is claimed now, and the silence has four causes** (2026-07-28, deploy `10ce0c3`)
+  — `readInside` returned `''` for a file that is absent, empty, unreadable, OR a symlink resolving outside the
+  rootfs, and `auditCredentials('', '')` then emitted nothing, which renders as "no credential findings" and reads
+  as "no credential problems". DVRF is the worked example: it symlinks its ENTIRE account database — `passwd`,
+  `shadow`, `group`, `gshadow` — to `/dev/null`, so every read is empty, every check passes, and the image looked
+  clean on the one axis `fsaudit` exists to examine. New pure `auditAccountSources` + `inspectAccountFile`
+  (`lstat`/`readlink`, because `safeJoin` validates the path it is HANDED and `etc/passwd` is perfectly in-root
+  right up until the kernel follows it out). Redirected ⇒ `medium`/`static_confirmed` stating that an empty
+  credential list here is a gap and not a negative; nothing readable at all ⇒ `blocked_by_platform`; an ordinary
+  rootfs simply missing `gshadow` stays quiet, because flagging that would be noise. **Measured on the deploy:
+  DVRF's fsaudit went from 0 findings to 1 naming all four redirected paths and their target.** _Where DVRF's real
+  credentials live — the Broadcom `router_defaults[]` string pool in `usr/lib/libshared.so` — remains a separate
+  open item; the point closed here is only that this provider stops implying it looked and found nothing._
 - ✅ **`binvuln` now reads stripped binaries — measured, and the claim it was recorded with was wrong**
   (2026-07-28, deploy `fa168fe`) — the follow-up said the `PT_DYNAMIC` fallback "flips **every** GL.iNet ELF from
   `symbolSource: 'strings'` to `'dynsym'`". Run against the deployed bench on the real carve: **8 of 22, not 22.**
