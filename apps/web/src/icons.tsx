@@ -111,6 +111,16 @@ export const Icon = {
       <path d="M3 7l9 5 9-5M12 12v10" opacity="0.75" />
     </S>
   ),
+  /* A node-link fragment: one thing on the left naming two on the right. The sibling `sbom` icon is the box of
+     parts; this is what links against what. */
+  compmap: (p: P) => (
+    <S {...p}>
+      <circle cx="5" cy="12" r="2.2" />
+      <circle cx="19" cy="6.5" r="2.2" />
+      <circle cx="19" cy="17.5" r="2.2" />
+      <path d="M7.1 11.1 16.9 7.4M7.1 12.9l9.8 3.7" opacity="0.75" />
+    </S>
+  ),
   simulate: (p: P) => (
     <S {...p}>
       <circle cx="12" cy="12" r="9" />

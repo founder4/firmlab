@@ -907,6 +907,45 @@ export interface UbootResult {
   reason?: string;
 }
 
+/**
+ * The rootfs link-dependency graph (`providers/compmap.ts`): one node per ELF the walk found, plus one per soname
+ * some binary references and the walk did NOT find, and a "needs" edge for every DT_NEEDED entry.
+ *
+ * Nodes are keyed by BASENAME, because a DT_NEEDED reference is a basename — two files called `busybox` in
+ * different directories are one node, which is why the node count and `binaryCount` can disagree.
+ *
+ * Optional throughout, and not out of caution: this is JSON persisted on a job row and re-read for as long as the
+ * image exists, so any result stored before a field existed simply does not carry it (see the `nvd` comment above,
+ * where a required field took the image view down for three of four images).
+ */
+export interface CompGraphNode {
+  id?: string;
+  /** `binary` = the walk found this file. `lib` = only referenced, never found — i.e. an unresolved soname. */
+  kind?: 'binary' | 'lib';
+}
+
+export interface CompGraphEdge {
+  from?: string;
+  to?: string;
+}
+
+export interface CompGraph {
+  nodes?: CompGraphNode[];
+  edges?: CompGraphEdge[];
+  /** Sonames referenced by some binary and absent from the entries' basenames. */
+  unresolved?: string[];
+}
+
+export interface CompMapResult {
+  /** False when rabin2 is absent or there is no rootfs — an empty graph that must never read as "no dependencies". */
+  available?: boolean;
+  graph?: CompGraph;
+  /** ELF FILES walked (not graph nodes — see the basename note above). */
+  binaryCount?: number;
+  findings?: unknown[];
+  reason?: string;
+}
+
 /** The result of a W9 autonomous scan (opacidad): the class-routed plan, per-worker outcomes, and the narrative. */
 export interface OpacidadResult {
   firmwareClass: string;
@@ -1284,6 +1323,9 @@ export const api = {
   updatePath: (id: string) =>
     get<{ result: UpdatePathResult | null }>(`/api/images/${id}/updatepath`).then((r) => r.result),
   ubootEnv: (id: string) => get<{ result: UbootResult | null }>(`/api/images/${id}/uboot`).then((r) => r.result),
+  /** The stored rootfs dependency graph. `null` means nobody has built one — never "this rootfs links nothing". */
+  compmapResult: (id: string) =>
+    get<{ result: CompMapResult | null }>(`/api/images/${id}/compmap`).then((r) => r.result),
   listPresets: (id: string) => get<{ presets: EmulationPreset[] }>(`/api/images/${id}/presets`).then((r) => r.presets),
   savePreset: (id: string, p: { name: string; mode: EmulationPreset['mode']; binary?: string; args?: string[] }) =>
     post<{ preset: EmulationPreset }>(`/api/images/${id}/presets`, p).then((r) => r.preset),

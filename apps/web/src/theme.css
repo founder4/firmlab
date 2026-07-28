@@ -2148,3 +2148,130 @@ span.run-dot.run-running {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* === Component map ========================================================================================
+   The rootfs link-dependency graph. Hand-rolled SVG like every other visual here, so the styling lives in CSS
+   rather than in inline `fill=` attributes — that is what lets one rule serve both themes, and it is why the
+   diagram carries no literal colour anywhere in the component.
+
+   The palette is deliberately two-valued: the graph's job is to make ONE distinction visible — a reference the
+   carve resolved versus one it did not — and a third hue would compete with it. `--warn` carries unresolved,
+   `--border-strong` / `--text-dim` carry everything else, and the accent line marks a binary. */
+.cmap-canvas {
+  margin-top: 4px;
+  padding: 8px 4px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  /* Below ~620px the labels would scale to unreadable, so the diagram scrolls instead of shrinking. */
+  overflow-x: auto;
+}
+.cmap-svg {
+  display: block;
+  width: 100%;
+  min-width: 620px;
+  height: auto;
+}
+.cmap-colhead {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  fill: var(--text-faint);
+}
+.cmap-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  fill: var(--text-dim);
+}
+.cmap-pill {
+  fill: var(--bg-panel);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.cmap-node {
+  cursor: default;
+}
+.cmap-node.is-binary .cmap-pill {
+  stroke: var(--accent-line);
+}
+.cmap-node.is-binary .cmap-label {
+  fill: var(--text);
+}
+/* A binary that names something the carve does not have is itself an interesting row, so it is marked in the
+   drawing as well as in the table — the two must not disagree about which side the problem is on. */
+.cmap-node.is-binary.has-unresolved .cmap-pill {
+  stroke: color-mix(in srgb, var(--warn) 55%, var(--border));
+}
+.cmap-node.is-lib.is-unresolved .cmap-pill {
+  stroke: var(--warn);
+  stroke-dasharray: 3 2;
+}
+.cmap-node.is-lib.is-unresolved .cmap-label {
+  fill: var(--warn);
+}
+.cmap-node.is-dim {
+  opacity: 0.28;
+}
+.cmap-edge {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 0.8;
+  opacity: 0.55;
+}
+.cmap-edge.is-unresolved {
+  stroke: var(--warn);
+  stroke-width: 1.1;
+  stroke-dasharray: 3 3;
+  opacity: 0.8;
+}
+.cmap-edge.is-dim {
+  opacity: 0.08;
+}
+/* Same quiet aside as `.hw-nothing`: an empty component map is a statement about coverage, not a problem with
+   the firmware, and styling it as a warning would teach exactly the inference this panel refuses. */
+.cmap-nothing {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg-inset) 60%, transparent);
+}
+.cmap-nothing strong {
+  font-size: 0.8125rem;
+}
+.cmap-prose {
+  max-width: 72ch;
+}
+.cmap-unres {
+  color: var(--warn);
+}
+.cmap-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.cmap-chip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+}
+.cmap-sw-bin {
+  background: transparent;
+  border: 1px solid var(--accent-line);
+}
+.cmap-sw-lib {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+}
+.cmap-sw-unres {
+  background: transparent;
+  border: 1px dashed var(--warn);
+}

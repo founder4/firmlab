@@ -60,7 +60,16 @@ const SECTION_GROUPS: { label: string; items: { id: string; label: string; icon:
       { id: 'hardware', label: 'Hardware interfaces', icon: 'hardware' },
     ],
   },
-  { label: 'Components', items: [{ id: 'sbom', label: 'SBOM & CVEs', icon: 'sbom' }] },
+  {
+    label: 'Components',
+    items: [
+      { id: 'sbom', label: 'SBOM & CVEs', icon: 'sbom' },
+      // The other half of "what is this made of": the SBOM names the packages, this says what links against what,
+      // and which of those references the carve cannot resolve. The graph has been computed since compmap.ts was
+      // written and had nowhere to be seen until this entry existed.
+      { id: 'compmap', label: 'Component map', icon: 'compmap' },
+    ],
+  },
   {
     label: 'Execution',
     items: [

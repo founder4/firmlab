@@ -30,6 +30,7 @@ import {
   fmtHex,
 } from '../api';
 import { AnalysisActionsPanel } from '../components/AnalysisActionsPanel';
+import { ComponentMap } from '../components/ComponentMap';
 import { CoverageBanner } from '../components/CoverageBanner';
 import { EntropyChart } from '../components/EntropyChart';
 import { FileBrowser } from '../components/FileBrowser';
@@ -62,6 +63,7 @@ type TabId =
   | 'hardware'
   | 'bootloader'
   | 'sbom'
+  | 'compmap'
   | 'binaries'
   | 'testbench'
   | 'findings'
@@ -80,6 +82,7 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'hardware',
   'bootloader',
   'sbom',
+  'compmap',
   'binaries',
   'testbench',
   'findings',
@@ -102,6 +105,7 @@ const SECTION_TITLES: Record<TabId, string> = {
   hardware: 'Hardware interfaces',
   bootloader: 'Bootloader',
   sbom: 'SBOM & CVEs',
+  compmap: 'Component map',
   binaries: 'Test bench',
   testbench: 'Test bench',
   findings: 'Findings & report',
@@ -192,6 +196,8 @@ export function ImageDetail(): JSX.Element {
       {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}
       {tab === 'bootloader' && <AnalysisActionsPanel imageId={id} />}
       {tab === 'sbom' && <SbomPanel imageId={id} />}
+      {/* The other half of "what is this made of": the SBOM's packages, and here what links against what. */}
+      {tab === 'compmap' && <ComponentMap imageId={id} />}
       {/* The test bench is organised by TARGET: every question asked of a binary, and every run it produced.
           `binaries` still routes here so older links keep working. */}
       {(tab === 'testbench' || tab === 'binaries') && (
