@@ -152,7 +152,7 @@ function rootfsProvenanceStrings(imageId: string): string[] {
 
 export async function runResearch(imageId: string, handle: JobHandle): Promise<ResearchResult> {
   const cfg = loadResearchConfig();
-  if (!cfg) throw new Error('External research disabled — set FIRMLAB_RESEARCH=1');
+  if (!cfg) throw new Error('External research disabled — turn it on in Settings › Privacy, or set FIRMLAB_RESEARCH=1');
   const row = getImage(imageId);
   if (!row?.analysisJson || !row.identityJson) throw new Error('No analysis for this image');
 

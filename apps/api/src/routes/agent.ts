@@ -66,7 +66,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
     const cfg = loadLlmConfig();
-    if (!cfg) return reply.status(400).send({ error: 'Agent disabled — set FIRMLAB_AGENT=1 and an LLM API key' });
+    if (!cfg) return reply.status(400).send({ error: 'Agent disabled — turn it on in Settings › Privacy (and configure an LLM API key)' });
     const goal = ((req.body ?? {}) as { goal?: string }).goal ?? null;
     try {
       const session = startAgentSession(id, cfg, goal);

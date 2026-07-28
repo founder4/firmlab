@@ -22,7 +22,7 @@ export async function researchRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
     if (!loadResearchConfig()) {
-      const error = 'External research disabled — set FIRMLAB_RESEARCH=1 (the only feature that leaves the machine)';
+      const error = 'External research disabled — External intelligence is off — turn it on in Settings › Privacy, or set FIRMLAB_RESEARCH=1';
       return reply.status(400).send({ error });
     }
     const jobId = startJob(id, 'research', {}, (h) => runResearch(id, h));
