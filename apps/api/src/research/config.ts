@@ -8,6 +8,7 @@
  * strings, hashes) may leave — never raw firmware bytes; the egress ledger (research/egress.ts) makes that
  * explicit before a run.
  */
+import { effectiveEnv } from '../flags.js';
 
 export interface ResearchConfig {
   /** Hosts this deployment is permitted to reach for external intelligence. Nothing else is contacted. */
@@ -38,7 +39,7 @@ export const HASH_LOOKUP_HOSTS = ['www.nitrxgen.net', 'weakpass.com'];
  * Resolve the research config, or null when the track is off. Gated by FIRMLAB_RESEARCH so the deterministic,
  * local-only workbench is the default and no external host is contacted unless the operator opts in.
  */
-export function loadResearchConfig(env: NodeJS.ProcessEnv = process.env): ResearchConfig | null {
+export function loadResearchConfig(env: NodeJS.ProcessEnv = effectiveEnv()): ResearchConfig | null {
   if (env.FIRMLAB_RESEARCH !== '1') return null;
   const extra = (env.FIRMLAB_RESEARCH_ALLOWLIST ?? '')
     .split(',')

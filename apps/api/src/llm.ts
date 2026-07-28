@@ -9,6 +9,7 @@
  * The request builders and response parsers are pure (no I/O) so they unit-test without hitting a provider;
  * complete() is the thin fetch wrapper over them.
  */
+import { effectiveEnv } from './flags.js';
 
 export type LlmProvider = 'deepseek' | 'openai' | 'anthropic';
 
@@ -40,7 +41,7 @@ const PROVIDER_DEFAULTS: Record<LlmProvider, { baseUrl: string; model: string; k
  * the deterministic workbench stays local-only, no-network, no-cost by default. Returns null (not an error) when
  * the flag is unset or no API key is available — callers treat null as "copilot disabled".
  */
-export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfig | null {
+export function loadLlmConfig(env: NodeJS.ProcessEnv = effectiveEnv()): LlmConfig | null {
   if (env.FIRMLAB_AGENT !== '1') return null;
   const provider = (env.FIRMLAB_LLM_PROVIDER ?? 'deepseek') as LlmProvider;
   if (!PROVIDER_DEFAULTS[provider]) return null;

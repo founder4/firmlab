@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { type AgentConfig, type StorageUsage, api, fmtBytes } from '../api';
+import { type AgentConfig, type LaneFlag, type StorageUsage, api, fmtBytes } from '../api';
 import { Icon } from '../icons';
 import { startTour } from '../onboarding';
 import { type Density, type ThemePref, setDensity, setTheme, useAppearance } from '../theme';
@@ -37,12 +37,126 @@ function Row({ label, children }: { label: string; children: React.ReactNode }):
   );
 }
 
+/**
+ * One switchable lane.
+ *
+ * The switch is the small part. What earns the space is the sentence underneath: an operator deciding whether to
+ * turn on external intelligence needs to know what leaves this machine before they flip it, not after — so the
+ * effect and the egress are always visible rather than hidden behind a tooltip or an info icon. The source line
+ * exists because an override and the environment can disagree, and the person reading the compose file deserves
+ * to be told which one won.
+ */
+function LaneToggle({
+  flag,
+  busy,
+  onToggle,
+  onClear,
+}: {
+  flag: LaneFlag;
+  busy: boolean;
+  onToggle: (enabled: boolean) => void;
+  onClear: () => void;
+}): JSX.Element {
+  const on = flag.enabled;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 14,
+        padding: '16px 0',
+        borderBottom: '1px solid var(--border-soft)',
+        alignItems: 'flex-start',
+      }}
+    >
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={flag.label}
+        disabled={busy}
+        onClick={() => onToggle(!on)}
+        style={{
+          flexShrink: 0,
+          marginTop: 2,
+          width: 40,
+          height: 22,
+          padding: 2,
+          borderRadius: 999,
+          border: `1px solid ${on ? 'var(--accent-line)' : 'var(--border-soft)'}`,
+          background: on ? 'var(--accent-soft)' : 'var(--surface-2)',
+          cursor: busy ? 'wait' : 'pointer',
+          opacity: busy ? 0.6 : 1,
+          transition: 'background 160ms cubic-bezier(0.16, 1, 0.3, 1), border-color 160ms',
+        }}
+      >
+        <span
+          style={{
+            display: 'block',
+            width: 16,
+            height: 16,
+            borderRadius: 999,
+            background: on ? 'var(--accent)' : 'var(--text-dim)',
+            transform: `translateX(${on ? 18 : 0}px)`,
+            transition: 'transform 160ms cubic-bezier(0.16, 1, 0.3, 1), background 160ms',
+          }}
+        />
+      </button>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600 }}>{flag.label}</span>
+          <span className="mono" style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+            {flag.name}
+          </span>
+          {flag.source === 'override' && (
+            <button
+              type="button"
+              onClick={onClear}
+              disabled={busy}
+              title={`The container environment has this ${flag.environmentValue ? 'on' : 'off'}. Follow it again.`}
+              style={{
+                fontSize: 11,
+                padding: '1px 7px',
+                borderRadius: 999,
+                border: '1px solid var(--border-soft)',
+                background: 'transparent',
+                color: 'var(--text-dim)',
+                cursor: 'pointer',
+              }}
+            >
+              set here · follow environment
+            </button>
+          )}
+        </div>
+
+        <div className="hint" style={{ marginTop: 6 }}>
+          {flag.effect}
+        </div>
+        <div className="hint" style={{ marginTop: 4, color: on && flag.outward ? 'var(--warn)' : 'var(--text-dim)' }}>
+          {on && flag.outward ? 'Leaving this machine: ' : 'If enabled: '}
+          {flag.egress}
+        </div>
+
+        {flag.inert && (
+          <div className="hint" style={{ marginTop: 6, color: 'var(--warn)' }}>
+            On, but doing nothing — <span className="mono">{flag.requires}</span> is off, and this only acts inside that
+            lane.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function Settings(): JSX.Element {
   const { theme, density } = useAppearance();
   const [tab, setTab] = useState<SettingsTab>('appearance');
   const [health, setHealth] = useState<Health | null>(null);
   const [agent, setAgent] = useState<AgentConfig | null>(null);
   const [usage, setUsage] = useState<StorageUsage | null>(null);
+  const [flags, setFlags] = useState<LaneFlag[] | null>(null);
+  const [busyFlag, setBusyFlag] = useState<string | null>(null);
+  const [flagError, setFlagError] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -57,7 +171,22 @@ export function Settings(): JSX.Element {
       .storage()
       .then(setUsage)
       .catch(() => setUsage(null));
+    api
+      .flags()
+      .then((r) => setFlags(r.flags))
+      .catch(() => setFlags(null));
   }, []);
+
+  // A lane change is answered with the whole resolved set, so a dependent flag turning inert shows up in the same
+  // paint as the switch that caused it.
+  const applyFlag = (name: string, run: () => Promise<LaneFlag[]>): void => {
+    setBusyFlag(name);
+    setFlagError(null);
+    run()
+      .then(setFlags)
+      .catch((e: Error) => setFlagError(e.message))
+      .finally(() => setBusyFlag(null));
+  };
 
   const posture = !health
     ? { label: 'Unknown', cls: 'badge-medium', note: 'The API is unreachable.' }
@@ -183,6 +312,36 @@ export function Settings(): JSX.Element {
           <Row label="Bind address">
             <span className="mono">{health ? `${health.host}:${health.port}` : '—'}</span>
           </Row>
+
+          <div style={{ marginTop: 22 }}>
+            <div className="panel-title" style={{ marginBottom: 2 }}>
+              Lanes
+            </div>
+            <div className="panel-sub">
+              Everything that can reach outside this process. Off is the default and the deterministic engine needs none
+              of them. A change takes effect on the next run — no restart.
+            </div>
+            {flagError && (
+              <div className="banner banner-warn" style={{ marginTop: 12 }}>
+                <Icon.shield size={16} />
+                <span>{flagError}</span>
+              </div>
+            )}
+            {flags === null && (
+              <div className="hint" style={{ marginTop: 12 }}>
+                Loading lanes…
+              </div>
+            )}
+            {flags?.map((f) => (
+              <LaneToggle
+                key={f.name}
+                flag={f}
+                busy={busyFlag === f.name}
+                onToggle={(enabled) => applyFlag(f.name, () => api.setFlag(f.name, enabled))}
+                onClear={() => applyFlag(f.name, () => api.clearFlag(f.name))}
+              />
+            ))}
+          </div>
           <Row label="External copilot / agent">
             {agent?.enabled ? (
               <>

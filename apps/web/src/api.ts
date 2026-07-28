@@ -577,6 +577,19 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
   }
   return (await res.json()) as T;
 }
+async function put<T>(url: string, body?: unknown): Promise<T> {
+  const init: RequestInit = { method: 'PUT' };
+  if (body !== undefined) {
+    init.headers = { 'content-type': 'application/json' };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as T;
+}
 async function del<T>(url: string): Promise<T> {
   const res = await fetch(url, { method: 'DELETE' });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -873,6 +886,10 @@ export const api = {
   copilotResult: (id: string) =>
     get<{ result: CopilotResult | null }>(`/api/images/${id}/copilot`).then((r) => r.result),
   agentConfig: () => get<AgentConfig>('/api/agent/config'),
+  flags: () => get<{ flags: LaneFlag[]; appliesImmediately: boolean }>('/api/settings/flags'),
+  setFlag: (name: string, enabled: boolean) =>
+    put<{ flags: LaneFlag[] }>(`/api/settings/flags/${name}`, { enabled }).then((r) => r.flags),
+  clearFlag: (name: string) => del<{ flags: LaneFlag[] }>(`/api/settings/flags/${name}`).then((r) => r.flags),
   startAgentSession: (id: string, goal?: string) =>
     post<{ session: AgentSession }>(`/api/images/${id}/agent/session`, goal ? { goal } : {}).then((r) => r.session),
   agentSession: (id: string) => get<AgentSessionView>(`/api/images/${id}/agent/session`),
@@ -944,6 +961,25 @@ export const CATEGORY_COLORS: Record<string, string> = {
 
 export function categoryColor(cat: string): string {
   return CATEGORY_COLORS[cat] ?? CATEGORY_COLORS.other ?? '#4a5468';
+}
+
+/**
+ * A network/AI lane the operator can switch at runtime, with everything needed to decide: what turns on, what
+ * leaves the machine, whether the environment or a stored override is deciding, and whether it is on-but-inert
+ * because the lane it depends on is off.
+ */
+export interface LaneFlag {
+  name: string;
+  label: string;
+  effect: string;
+  egress: string;
+  requires?: string;
+  outward: boolean;
+  enabled: boolean;
+  source: 'override' | 'environment' | 'default';
+  environmentValue: boolean;
+  inert: boolean;
+  overriddenAt?: number;
 }
 
 export function fmtBytes(n: number): string {

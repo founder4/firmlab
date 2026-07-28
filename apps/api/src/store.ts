@@ -213,6 +213,11 @@ export function getDb(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS idx_binaries_image ON binaries(imageId);
 
     -- === Corpus: cross-image occurrence tables (Phase 1). They record WHERE things appear, never conclusions. ===
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updatedAt INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS artifact_occurrence (
       sha1 TEXT NOT NULL,
       imageId TEXT NOT NULL,

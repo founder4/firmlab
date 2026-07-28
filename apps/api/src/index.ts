@@ -10,6 +10,7 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { reconcileSessions } from './agent/session.js';
+import { setFlagOverrideProvider } from './flags.js';
 import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
 import { SWEEP_INTERVAL_MS, sweepRetention } from './retention.js';
 import { agentRoutes } from './routes/agent.js';
@@ -39,12 +40,14 @@ import { researchRoutes } from './routes/research.js';
 import { rtosRoutes } from './routes/rtos.js';
 import { sbomRoutes } from './routes/sbom.js';
 import { servicemapRoutes } from './routes/servicemap.js';
+import { settingsRoutes } from './routes/settings.js';
 import { storageRoutes } from './routes/storage.js';
 import { symreachRoutes } from './routes/symreach.js';
 import { toolRoutes } from './routes/tools.js';
 import { ubootRoutes } from './routes/uboot.js';
 import { webprobeRoutes } from './routes/webprobe.js';
 import { registerSecurity } from './security.js';
+import { getFlagOverrides } from './settings.js';
 import { getDb } from './store.js';
 
 const HOST = process.env.FIRMLAB_HOST ?? '127.0.0.1';
@@ -54,6 +57,11 @@ const MAX_UPLOAD_BYTES = Number(process.env.FIRMLAB_MAX_UPLOAD ?? 500 * 1024 * 1
 async function main(): Promise<void> {
   ensureDataDirs();
   getDb(); // initialize schema early so a bad data dir fails fast
+
+  // Let stored operator overrides reach the lane loaders. Installed here rather than imported by the config
+  // modules themselves, which must stay free of the store: vitest cannot resolve node:sqlite. With no provider
+  // installed — a unit test, a one-off script — the loaders see exactly process.env, as they always did.
+  setFlagOverrideProvider(getFlagOverrides);
 
   // Any agent session left 'running' by a previous process was interrupted — mark it errored so the transcript
   // stays honest (awaiting_approval sessions are a legitimate durable pause and survive the restart).
@@ -125,6 +133,7 @@ async function main(): Promise<void> {
       await api.register(symreachRoutes);
       await api.register(presetsRoutes);
       await api.register(researchRoutes);
+      await api.register(settingsRoutes);
       await api.register(reportRoutes);
       await api.register(storageRoutes);
       await api.register(toolRoutes);

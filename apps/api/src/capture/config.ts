@@ -7,6 +7,7 @@
  * Discovery in Phase 6.0 is passive/observational (host sweep + service discovery); nothing is intercepted until a
  * later phase, and even then only on a human-triggered, time-boxed, single-target session with guaranteed teardown.
  */
+import { effectiveEnv } from '../flags.js';
 
 export interface CaptureConfig {
   /**
@@ -25,7 +26,7 @@ export interface CaptureConfig {
  * Resolve the capture config, or null when the lane is off. Gated by FIRMLAB_CAPTURE so the deterministic,
  * local-only workbench stays the default and nothing reaches onto the LAN unless the operator opts in.
  */
-export function loadCaptureConfig(env: NodeJS.ProcessEnv = process.env): CaptureConfig | null {
+export function loadCaptureConfig(env: NodeJS.ProcessEnv = effectiveEnv()): CaptureConfig | null {
   if (env.FIRMLAB_CAPTURE !== '1') return null;
   return {
     gatewayDeclared: env.FIRMLAB_CAPTURE_GATEWAY === '1',
