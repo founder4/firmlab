@@ -34,7 +34,8 @@
  * hand-written rows must never make an unexamined image read as examined, which is why `buildCoverage` takes the
  * two counts separately. It is not promotable: nothing here can raise a row onto the ladder, and the store
  * refuses the promotion even if a caller tries. And it is never deleted — `withdraw` retracts it in place, with a
- * reason, because a ledger that can only forget cannot record "this was wrong, and here is why".
+ * reason, because a ledger that can only forget cannot record "this was wrong, and here is why". `amend` obeys the
+ * same rule for the same reason: it appends the superseded claim as a revision instead of writing over it.
  *
  * Pure: plain data in, plain data out, no store import, so all of the above is unit-testable.
  */
@@ -266,13 +267,16 @@ export function assertionToDraft(
   v: ValidatedAssertion,
   authorKind: OperatorAuthorKind,
   now: number,
-): FindingDraft & { assertion: OperatorAssertion } {
-  const assertion: OperatorAssertion = {
+): FindingDraft & { assertion: StoredAssertion } {
+  const assertion: StoredAssertion = {
     assertedBy: v.assertedBy,
     authorKind,
     assertedAt: now,
     claim: v.claim,
     rationale: v.rationale,
+    // Copied onto the assertion so a later amendment can preserve the sentence it replaces; the row's own title
+    // stays the authority for the current claim.
+    title: v.title,
     status: 'active',
     ...(v.disputesFindingId ? { disputesFindingId: v.disputesFindingId } : {}),
   };
@@ -302,15 +306,100 @@ export function assertionToDraft(
 export const NOT_A_MEASUREMENT =
   'This row was asserted by a named author, not measured by FirmLab. It carries no proof state, it counts towards no analysis stage, and it is not evidence that the property holds.';
 
-/** Pure: apply an amendment to an active assertion, keeping the original author and timestamp. */
-export function amendAssertion(existing: OperatorAssertion, v: ValidatedAssertion, now: number): OperatorAssertion {
+/**
+ * One superseded state of an assertion: the claim as it stood, the basis given for it, and the window it stood in.
+ *
+ * Kept because an amendment is not a correction of a typo — it changes what a named author is on record as
+ * claiming, and the earlier sentence is often the one a later reader needs ("they first said the device shipped
+ * with telnet open, then narrowed it to the dev board"). Every field here is a copy, never a reference: the
+ * revision must stay readable after the current claim has moved on again.
+ */
+export interface AssertionRevision {
+  claim: OperatorClaim;
+  rationale: string;
+  /**
+   * The title the row carried while this claim stood. Absent on a revision superseded by a build that did not yet
+   * record it — a persisted field is optional forever (see CLAUDE.md), and the renderer states the claim without it.
+   */
+  title?: string;
+  /** When this claim started standing: the original assertion, or the amendment that introduced it. */
+  from: number;
+  supersededAt: number;
+  disputesFindingId?: string;
+}
+
+/**
+ * The assertion as it is actually persisted: `OperatorAssertion` plus the history a ledger may not throw away.
+ *
+ * `OperatorAssertion` lives in `@firmlab/core` and describes the current state of a claim. These two fields are
+ * additive and both optional, so every row written before they existed still parses — `supersedes` absent means
+ * "never amended", which is the correct reading of every such row.
+ *
+ * `title` is stored on the assertion for exactly one reason: an amendment overwrites the finding row's title, and
+ * `amendAssertion` cannot see the row. Without a copy here the superseded sentence would be unrecoverable. The
+ * row's title remains the authority for the CURRENT claim; this field is only ever read for a superseded one.
+ *
+ * The record grows by one revision per amendment and nothing prunes it. That is deliberate: a cap would silently
+ * drop the oldest claim, which is the one an amendment is most likely to be hiding. Each revision is bounded by
+ * the same limits validation applies to a new assertion.
+ */
+export interface StoredAssertion extends OperatorAssertion {
+  /** Oldest first. Append-only: `amendAssertion` never rewrites or removes an entry. */
+  supersedes?: AssertionRevision[];
+  title?: string;
+}
+
+/**
+ * Pure: apply an amendment to an active assertion, keeping the original author, timestamp — and the claim it
+ * replaces.
+ *
+ * Amendment used to overwrite `claim` and `rationale` in place, which is the one inconsistent operation in a
+ * ledger whose entire argument is that a retraction survives: withdrawal kept everything, amendment destroyed the
+ * predecessor, and an author could quietly turn "I saw a root shell on the shipped unit" into something milder
+ * with no trace that the stronger claim was ever made. So the prior state is appended as a revision and the new
+ * one takes its place at the head. Nothing is deleted here, ever.
+ *
+ * The one field that does NOT carry over is a stale `disputesFindingId`: an amendment away from `disputes_finding`
+ * would otherwise leave the row pointing at a finding it no longer contests, which the report would render as a
+ * live dispute. The target is preserved inside the revision, where it belongs to the claim that made it.
+ */
+export function amendAssertion(existing: StoredAssertion, v: ValidatedAssertion, now: number): StoredAssertion {
+  const prior: AssertionRevision = {
+    claim: existing.claim,
+    rationale: existing.rationale,
+    from: existing.amendedAt ?? existing.assertedAt,
+    supersededAt: now,
+    ...(existing.title ? { title: existing.title } : {}),
+    ...(existing.disputesFindingId ? { disputesFindingId: existing.disputesFindingId } : {}),
+  };
+  // Destructured out rather than spread and overwritten: with `exactOptionalPropertyTypes` there is no value that
+  // means "absent", so the only way to drop the field is not to carry it.
+  const { disputesFindingId: _superseded, ...carried } = existing;
   return {
-    ...existing,
+    ...carried,
     claim: v.claim,
     rationale: v.rationale,
+    title: v.title,
     amendedAt: now,
+    supersedes: [...revisionsOf(existing), prior],
     ...(v.disputesFindingId ? { disputesFindingId: v.disputesFindingId } : {}),
   };
+}
+
+/**
+ * Pure: the revisions an assertion has been through, oldest first, read defensively.
+ *
+ * The argument comes from `JSON.parse` over a column written by an older build, so its shape is asserted, not
+ * known. A row from before amendment history existed has no array at all, and one written by a build that shipped
+ * a different shape must degrade to "no history readable" rather than throw in the middle of a report.
+ */
+export function revisionsOf(a: OperatorAssertion | StoredAssertion): AssertionRevision[] {
+  const raw = (a as StoredAssertion).supersedes;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (r): r is AssertionRevision =>
+      !!r && typeof r === 'object' && typeof r.claim === 'string' && typeof r.rationale === 'string',
+  );
 }
 
 /**
@@ -376,13 +465,33 @@ export function partitionByProvenance<T extends ProvenancedFinding>(
   return { measured, asserted, withdrawn };
 }
 
-/** Pure: the one-line attribution shown wherever an operator row appears next to measured ones. */
+/** Pure: an ISO day, the granularity every operator surface dates a claim to. */
+export function assertionDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/**
+ * Pure: the one-line attribution shown wherever an operator row appears next to measured ones.
+ *
+ * An amended row says so here rather than only in the report, because this sentence is what the MCP payload, the
+ * disclosure draft and the operator route all carry — a reader told the current claim without being told it
+ * replaced another is being shown an edit as though it were the original.
+ */
 export function describeAssertion(a: OperatorAssertion): string {
-  const when = new Date(a.assertedAt).toISOString().slice(0, 10);
+  const when = assertionDay(a.assertedAt);
   const who = a.authorKind === 'agent' ? `${a.assertedBy} (agent)` : a.assertedBy;
+  const revisions = revisionsOf(a);
+  const amended =
+    a.amendedAt !== undefined
+      ? ` Amended ${assertionDay(a.amendedAt)}${
+          revisions.length
+            ? `; ${revisions.length} earlier claim${revisions.length === 1 ? ' is' : 's are'} kept in the record.`
+            : '; the claim it replaced was not recorded by the build that amended it.'
+        }`
+      : '';
   if (a.status === 'withdrawn') {
     const byWhom = a.withdrawnBy ?? 'unknown';
-    return `WITHDRAWN by ${byWhom}: ${a.withdrawnReason ?? 'no reason recorded'} — originally asserted by ${who} on ${when}.`;
+    return `WITHDRAWN by ${byWhom}: ${a.withdrawnReason ?? 'no reason recorded'} — originally asserted by ${who} on ${when}.${amended}`;
   }
-  return `Asserted by ${who} on ${when} (${a.claim}). ${CLAIM_MEANING[a.claim]}`;
+  return `Asserted by ${who} on ${when} (${a.claim}). ${CLAIM_MEANING[a.claim]}${amended}`;
 }

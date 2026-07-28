@@ -1,3 +1,4 @@
+import type { OperatorAssertion } from '@firmlab/core';
 import { describe, expect, it } from 'vitest';
 import {
   CLAIM_MEANING,
@@ -8,6 +9,7 @@ import {
   isOperatorSource,
   operatorSourceFor,
   partitionByProvenance,
+  revisionsOf,
   validateAssertion,
   withdrawAssertion,
 } from './operator-findings.js';
@@ -157,7 +159,7 @@ describe('withdrawal is first-class', () => {
   });
 });
 
-describe('amendAssertion', () => {
+describe('amendAssertion — an amendment appends, it never overwrites', () => {
   it('cannot reassign authorship or backdate the original assertion', () => {
     const base = assertionToDraft(assertOk(good), 'human', 1_000).assertion;
     const amended = amendAssertion(
@@ -169,6 +171,84 @@ describe('amendAssertion', () => {
     expect(amended.assertedAt).toBe(1_000);
     expect(amended.amendedAt).toBe(9_000);
     expect(amended.claim).toBe('asserted_unverified');
+  });
+
+  it('keeps the claim it replaced, with the basis and the title that stood with it', () => {
+    const base = assertionToDraft(assertOk(good), 'human', 1_000).assertion;
+    const amended = amendAssertion(
+      base,
+      assertOk({
+        ...good,
+        title: 'It was the dev board',
+        claim: 'asserted_unverified',
+        rationale: 'Re-read the label.',
+      }),
+      9_000,
+    );
+    expect(revisionsOf(amended)).toHaveLength(1);
+    const [prior] = revisionsOf(amended);
+    expect(prior?.claim).toBe('asserted_from_device');
+    expect(prior?.rationale).toBe(good.rationale);
+    expect(prior?.title).toBe(good.title);
+    expect(prior?.from).toBe(1_000);
+    expect(prior?.supersededAt).toBe(9_000);
+    // And the current state is the new claim, not a merge of the two.
+    expect(amended.claim).toBe('asserted_unverified');
+    expect(amended.rationale).toBe('Re-read the label.');
+    expect(amended.title).toBe('It was the dev board');
+  });
+
+  it('accumulates revisions oldest-first, so a chain of edits stays readable end to end', () => {
+    const base = assertionToDraft(assertOk(good), 'human', 1_000).assertion;
+    const once = amendAssertion(base, assertOk({ ...good, claim: 'asserted_unverified', rationale: 'second' }), 2_000);
+    const twice = amendAssertion(
+      once,
+      assertOk({ ...good, claim: 'asserted_from_external_evidence', rationale: 'third' }),
+      3_000,
+    );
+    expect(revisionsOf(twice).map((r) => r.rationale)).toEqual([good.rationale, 'second']);
+    expect(revisionsOf(twice).map((r) => r.from)).toEqual([1_000, 2_000]);
+    expect(twice.rationale).toBe('third');
+  });
+
+  it('survives a withdrawal — retracting an amended claim keeps every earlier one', () => {
+    const base = assertionToDraft(assertOk(good), 'human', 1_000).assertion;
+    const amended = amendAssertion(
+      base,
+      assertOk({ ...good, claim: 'asserted_unverified', rationale: 'second' }),
+      2_000,
+    );
+    const r = withdrawAssertion(amended, 'aaron', 'Both readings were wrong.', 3_000);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(revisionsOf(r.value)).toHaveLength(1);
+    expect(r.value.status).toBe('withdrawn');
+  });
+
+  it('drops a dispute target the new claim no longer makes, and keeps it on the revision that did', () => {
+    const disputing = assertionToDraft(
+      assertOk({ ...good, claim: 'disputes_finding', disputesFindingId: 'f0001' }),
+      'human',
+      1_000,
+    ).assertion;
+    const amended = amendAssertion(disputing, assertOk({ ...good, claim: 'asserted_unverified' }), 2_000);
+    expect(amended.disputesFindingId).toBeUndefined();
+    expect(revisionsOf(amended)[0]?.disputesFindingId).toBe('f0001');
+  });
+
+  it('reads no history off a row written before amendments were preserved, rather than throwing', () => {
+    const legacy = { ...assertionToDraft(assertOk(good), 'human', 1_000).assertion, amendedAt: 5_000 };
+    expect(revisionsOf(legacy)).toEqual([]);
+    // The same tolerance for a column holding a shape this build does not know.
+    expect(revisionsOf({ ...legacy, supersedes: 'nonsense' } as unknown as OperatorAssertion)).toEqual([]);
+    expect(revisionsOf({ ...legacy, supersedes: [null, { claim: 7 }] } as unknown as OperatorAssertion)).toEqual([]);
+  });
+
+  it('says an amendment happened in the attribution line every surface already shows', () => {
+    const base = assertionToDraft(assertOk(good), 'human', 1_700_000_000_000).assertion;
+    const amended = amendAssertion(base, assertOk({ ...good, claim: 'asserted_unverified' }), 1_700_086_400_000);
+    expect(describeAssertion(amended)).toMatch(/Amended 2023-11-15; 1 earlier claim is kept/);
+    expect(describeAssertion(base)).not.toMatch(/Amended/);
   });
 });
 
