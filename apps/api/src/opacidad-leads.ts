@@ -5,6 +5,10 @@
  * whether their unsafe sinks are reachable), and the binary-vuln sweep (each stack-overflow candidate → the same
  * reachability question, from a much weaker premise). A lead only survives if its binary actually resolves to a
  * regular file inside the rootfs — so W9 never schedules work on a daemon that isn't really there.
+ *
+ * The sources are not independent: the exposure the first two establish is also what ranks the third's questions,
+ * so the expensive probes go to binaries some other worker already had a reason to care about. See
+ * `interestingBinaries` and the ordering note on `reachabilityLeads`.
  */
 import type { FindingDraft } from './findings-normalize.js';
 import type { Lead } from './opacidad-plan.js';
@@ -30,12 +34,21 @@ export function resolveDaemonBinary(rootfsPath: string, token: string): string |
   return null;
 }
 
+/**
+ * The exposure rule W3's leads are built on: the binary is a known network daemon AND init really starts it. Named
+ * because the probe ranking below reuses it — "interesting" there must mean exactly what "worth decompiling" means
+ * here, or the two would drift into disagreeing about the same rootfs.
+ */
+function exposedDaemon(s: Service): boolean {
+  return s.network && s.autostart;
+}
+
 /** Leads from service enumeration: each autostart network daemon whose binary resolves → decompile it (deduped). */
 export function daemonLeads(services: Service[], rootfsPath: string): Lead[] {
   const leads: Lead[] = [];
   const seen = new Set<string>();
   for (const s of services) {
-    if (!(s.network && s.autostart)) continue;
+    if (!exposedDaemon(s)) continue;
     const bin = resolveDaemonBinary(rootfsPath, s.binary);
     if (!bin || seen.has(bin)) continue;
     seen.add(bin);
@@ -75,45 +88,128 @@ function leadRunnable(f: FindingDraft): boolean {
 }
 
 /**
+ * What the earlier workers already established about the binaries this sweep is about to rank. Every field is
+ * OPTIONAL, and an empty one means "nobody looked", never "nothing is exposed": a caller that cannot supply the
+ * signal gets exactly the smallest-first order this function has always produced, rather than a ranking built on
+ * a silence read as a negative.
+ */
+export interface ProbeInterest {
+  /** W3's service map. Which entries count is decided by `daemonLeads`' own rule, not by a second one here. */
+  services?: Service[];
+  /** W4's handler analysis. Which binaries count is whatever `taintReachabilityLeads` would ask about. */
+  handlers?: HandlerAnalysis[];
+  /**
+   * W9's live agenda (`RunCtx.planned`). A binary W4 has ALREADY scheduled a probe for is exposed and already
+   * asked; `replan` would drop the duplicate lead anyway, so the slot it occupied would silently buy nothing.
+   * Dropping it here is what makes that slot available to the next candidate instead.
+   */
+  planned?: ReadonlySet<string>;
+}
+
+/**
+ * Rootfs-relative binary path → the clause saying why it is worth asking about ahead of its size.
+ *
+ * Deliberately a PROJECTION of the two lead builders in this module rather than a third rule of its own: what
+ * counts as exposed for the ranking is exactly what W3 decompiles and what W4 probes, so the rank cannot drift
+ * into disagreeing with the leads that justify it. W4's clause wins when a binary is both, because a resolved
+ * source→sink→exec chain is a stronger statement than a listening socket.
+ */
+export function interestingBinaries(rootfsPath: string, interest: ProbeInterest = {}): Map<string, string> {
+  const why = new Map<string, string>();
+  // Unbounded on purpose: the question here is WHICH binaries a tainted handler feeds, not how many probes the
+  // run can afford — that budget is spent by the caller of `taintReachabilityLeads`, not by this map.
+  for (const l of taintReachabilityLeads(interest.handlers ?? [], rootfsPath, Number.MAX_SAFE_INTEGER)) {
+    why.set(l.target, 'a tainted web handler execs it with web input in its argv');
+  }
+  for (const s of interest.services ?? []) {
+    if (!exposedDaemon(s)) continue;
+    const bin = resolveDaemonBinary(rootfsPath, s.binary);
+    if (!bin || why.has(bin)) continue;
+    why.set(bin, `it is an autostart network daemon (${s.name})`);
+  }
+  return why;
+}
+
+/**
  * Leads from the binary-vuln sweep: each stack-overflow candidate becomes one reachability question. The candidate
  * finding already carries the binary path, its size and the unbounded-copy functions it imports, which is exactly
  * the input the symbolic probe needs — so this reads the drafts rather than re-walking the rootfs.
+ *
+ * The allowance is spent along TWO axes, because size answers only one of them.
+ *
+ * Size measures ANSWERABILITY. Bounded symbolic execution converges on small binaries and reliably times out on
+ * large ones, so spending the budget in the order the filesystem happened to be walked spends it on the questions
+ * least likely to come back with an answer at all. Measured on the real DVRF rootfs: walk order put all three
+ * probes into `usr/sbin` daemons and never reached the 7 KB pwnable that does crash. Smallest-first fixed that —
+ * and then showed its own limit on the same image, which is why this is not a pure size sort any more: the budget
+ * went to `store_domain_sid` and `store_machine_password`, two 4 KB samba helpers that both came back
+ * inconclusive, while `stack_bof_01` — the one binary in that rootfs known to crash — sat at 7 KB behind them.
+ * Small is a claim about which questions RESOLVE, and none about which are worth asking.
+ *
+ * So INTEREST is the second axis, and it is not a new signal: a candidate is interesting exactly when W3 or W4
+ * already said so for their own leads (`interestingBinaries`). The two queues are drawn ROUND-ROBIN, interest
+ * first, each still smallest-first internally — the same shape `selectFindings` uses so that one kind cannot
+ * crowd out another. Alternating rather than sorting on interest is the whole point: a pure interest ranking
+ * would hand the first slots to a 900 KB daemon that times out, which is the previous failure in the other
+ * direction. Half the allowance buys questions that matter, half buys questions that come back.
+ *
+ * The price is stated rather than hidden: on an image whose exposed binaries are all large, the interest half of
+ * the budget is spent on probes that will exhaust their step budget. Those return inconclusive — which records
+ * that the question was asked and not answered, never that the sink is unreachable — and the answerability half
+ * still runs, which is why the two queues are alternated rather than one being preferred outright.
+ *
+ * What this ranking does NOT claim: that a promoted binary is likelier to be vulnerable, or that an unpromoted
+ * one is not. Interest is exposure the earlier workers happened to establish; where they said nothing, the
+ * candidate is ranked on answerability alone and never disqualified for it. The candidates the budget never
+ * reaches keep their `needs_runtime_reproduction` state and stay visible as unasked, exactly as before — the
+ * rank changes which questions get asked first, not what an unasked candidate means.
+ *
+ * Shared libraries are dropped, not because they are uninteresting but because the question cannot be put to
+ * them: there is no entry point to be reachable FROM, and the reproduction rung cannot execute a .so either.
+ * They stay in the ledger as candidates — unasked, which is what they are — rather than being cleared by a probe
+ * that never happened. (A candidate carrying no `runnable` flag predates the field; unknown must not disqualify.)
  */
 export function reachabilityLeads(
   candidates: FindingDraft[],
   rootfsPath: string,
   budget = REACHABILITY_LEAD_CAP,
+  interest: ProbeInterest = {},
 ): Lead[] {
   const leads: Lead[] = [];
-  const seen = new Set<string>();
   if (budget <= 0) return leads;
+  const exposed = interestingBinaries(rootfsPath, interest);
+  const seen = new Set<string>();
   // Smallest binary first, and explicitly — not inherited from the sweep's ordering, so this holds however the
-  // caller assembled the list. The budget buys a handful of probes; bounded symbolic execution converges on small
-  // binaries and reliably times out on large ones, so spending the allowance in the order the filesystem happened
-  // to be walked spends it on the questions least likely to come back with an answer. Measured on the real DVRF
-  // rootfs: that order put all three probes into usr/sbin daemons and never reached the 7 KB pwnable that does
-  // crash. Ties break on path so a re-run schedules the same probes.
-  // Shared libraries are dropped, not because they are uninteresting but because the question cannot be put to
-  // them: there is no entry point to be reachable FROM, and the reproduction rung cannot execute a .so either.
-  // They stay in the ledger as candidates — unasked, which is what they are — rather than being cleared by a probe
-  // that never happened. (A candidate carrying no `runnable` flag predates the field; unknown must not disqualify.)
+  // caller assembled the list. Ties break on path so a re-run schedules the same probes.
   const ordered = candidates
     .filter((f) => f.kind === 'binary-pwnable-candidate' && leadRunnable(f))
     .sort((a, b) => leadSize(a) - leadSize(b) || leadPath(a).localeCompare(leadPath(b)));
+  const promoted: Lead[] = [];
+  const plain: Lead[] = [];
   for (const f of ordered) {
     const ev = (f.evidence ?? {}) as Record<string, unknown>;
     const target = typeof ev.path === 'string' ? ev.path : '';
     const sinks = Array.isArray(ev.unsafeFns) ? ev.unsafeFns.filter((s): s is string => typeof s === 'string') : [];
     if (!target || sinks.length === 0 || seen.has(target)) continue;
+    // `specKey` in opacidad-plan.ts keys a reachability spec `symreach:<target>`; already asked ⇒ not asked again.
+    if (interest.planned?.has(`symreach:${target}`)) continue;
     if (!resolveInsideRootfs(rootfsPath, target)) continue;
     seen.add(target);
-    leads.push({
-      kind: 'prove-reachability',
-      target,
-      sinks,
-      reason: `stack-overflow candidate (${sinks.join('/')}, no canary) — prove whether the sink is on a live path`,
-    });
+    const why = exposed.get(target);
+    const head = `stack-overflow candidate (${sinks.join('/')}, no canary)`;
+    // The promotion states itself in the lead, which is what carries it into the trace and the spec's `trigger`:
+    // a probe scheduled ahead of a smaller one has to say on whose authority it jumped the queue.
+    const reason = why
+      ? `${head}, ranked ahead of smaller candidates because ${why} — prove whether the sink is on a live path`
+      : `${head} — prove whether the sink is on a live path`;
+    (why ? promoted : plain).push({ kind: 'prove-reachability', target, sinks, reason });
+  }
+  for (let i = 0; leads.length < budget && (i < promoted.length || i < plain.length); i++) {
+    const p = promoted[i];
+    if (p) leads.push(p);
     if (leads.length >= budget) break;
+    const q = plain[i];
+    if (q) leads.push(q);
   }
   return leads;
 }

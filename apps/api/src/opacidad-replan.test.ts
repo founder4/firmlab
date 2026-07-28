@@ -4,9 +4,11 @@ import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { FindingDraft } from './findings-normalize.js';
 import {
+  type ProbeInterest,
   daemonLeads,
   execTargetFromSnippet,
   handlerLeads,
+  interestingBinaries,
   reachabilityLeads,
   reproductionLeads,
   resolveDaemonBinary,
@@ -215,7 +217,7 @@ describe('the reachability budget is global across lead sources', () => {
   });
 });
 
-describe('reachabilityLeads spends the probe budget smallest-first', () => {
+describe('reachabilityLeads spends the probe budget smallest-first when no worker flagged anything', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-order-'));
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
@@ -263,6 +265,173 @@ describe('reachabilityLeads spends the probe budget smallest-first', () => {
   it('sorts a candidate carrying no size last rather than letting it jump the queue', () => {
     const noSize: FindingDraft = { ...sized('bin/d', 0), evidence: { path: 'bin/d', unsafeFns: ['strcpy'] } };
     expect(reachabilityLeads([noSize, sized('bin/a', 500)], root, 2).map((l) => l.target)).toEqual(['bin/a', 'bin/d']);
+  });
+});
+
+describe('reachabilityLeads weighs interest against answerability', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-interest-'));
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  const write = (rel: string): void => {
+    const abs = path.join(root, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, '\x7fELFstrcpy');
+  };
+  for (const rel of [
+    'usr/sbin/httpd',
+    'usr/sbin/gl-tor',
+    'usr/bin/small',
+    'usr/bin/store_domain_sid',
+    'usr/bin/store_machine_password',
+    'pwnable/Intro/stack_bof_01',
+    'etc/init.d/quiet',
+  ]) {
+    write(rel);
+  }
+
+  const sized = (p: string, size: number): FindingDraft => ({
+    kind: 'binary-pwnable-candidate',
+    title: p,
+    severity: 'medium',
+    proofState: 'needs_runtime_reproduction',
+    evidence: { path: p, size, unsafeFns: ['strcpy'] },
+    rationale: '',
+  });
+  const daemon = (name: string, binary: string): Service => ({
+    name,
+    binary,
+    source: 'etc/inittab',
+    network: true,
+    autostart: true,
+  });
+  const taintedHandler = (snippet: string): HandlerAnalysis => ({
+    handler: 'usr/lib/oui-httpd/rpc/tor',
+    object: 'tor',
+    sinks: [{ sink: 'os.execute', line: 12, concat: true, argvArray: false, snippet }],
+    sources: [{ kind: 'param', name: 'enable', line: 11 }],
+    tainted: true,
+    fromUci: true,
+    runsAsRoot: true,
+  });
+
+  it('reads exposure off W3 and W4 rather than deciding it again', () => {
+    const interest: ProbeInterest = {
+      services: [
+        daemon('httpd', '/usr/sbin/httpd'),
+        { ...daemon('quiet', '/etc/init.d/quiet'), network: false }, // not a network daemon
+        { ...daemon('later', '/usr/bin/small'), autostart: false }, // configured but never started
+      ],
+      handlers: [taintedHandler('os.execute("/usr/sbin/gl-tor " .. params.enable)')],
+    };
+    const why = interestingBinaries(root, interest);
+    expect([...why.keys()].sort()).toEqual(['usr/sbin/gl-tor', 'usr/sbin/httpd']);
+    expect(why.get('usr/sbin/gl-tor')).toContain('argv');
+    expect(why.get('usr/sbin/httpd')).toContain('network daemon');
+  });
+
+  it('keeps W4’s clause when a binary is both — a resolved chain outranks a listening socket', () => {
+    const why = interestingBinaries(root, {
+      services: [daemon('gl-tor', '/usr/sbin/gl-tor')],
+      handlers: [taintedHandler('os.execute("/usr/sbin/gl-tor " .. params.enable)')],
+    });
+    expect(why.get('usr/sbin/gl-tor')).toContain('argv');
+  });
+
+  it('asks the exposed binary before a smaller one nothing has flagged, and says why in the lead', () => {
+    const candidates = [sized('usr/bin/small', 42), sized('usr/sbin/httpd', 60_000)];
+    const interest: ProbeInterest = { services: [daemon('httpd', '/usr/sbin/httpd')] };
+    const one = reachabilityLeads(candidates, root, 1, interest);
+    expect(one.map((l) => l.target)).toEqual(['usr/sbin/httpd']);
+    expect(one[0]?.reason).toContain('ranked ahead of smaller candidates');
+    expect(one[0]?.reason).toContain('autostart network daemon (httpd)');
+    // Round-robin, not a preference: the second slot goes back to the answerability queue.
+    expect(reachabilityLeads(candidates, root, 2, interest).map((l) => l.target)).toEqual([
+      'usr/sbin/httpd',
+      'usr/bin/small',
+    ]);
+  });
+
+  it('asks the binary a tainted handler execs — the probe seeds argv, which is that exact channel', () => {
+    const candidates = [sized('usr/bin/small', 42), sized('usr/sbin/gl-tor', 30_000)];
+    const interest: ProbeInterest = { handlers: [taintedHandler('os.execute("/usr/sbin/gl-tor " .. params.enable)')] };
+    const leads = reachabilityLeads(candidates, root, 1, interest);
+    expect(leads.map((l) => l.target)).toEqual(['usr/sbin/gl-tor']);
+    expect(leads[0]?.reason).toContain('web input in its argv');
+  });
+
+  /**
+   * The DVRF shape the backlog measured: the two smallest candidates were 4 KB samba helpers that both came back
+   * inconclusive, and `stack_bof_01` — the one binary in that rootfs known to crash — sat at 7 KB behind them, so
+   * a two-probe allowance never reached it. Reproduced synthetically, and deliberately so: on the REAL DVRF the
+   * exposure signal is empty for all three (no Lua handlers for W4 to taint, and the pwnable is in no init script
+   * for W3 to call a daemon), so this rule alone does not reorder that image. What it pins is the rank — an
+   * exposed candidate is asked before smaller unflagged ones — not a claim about DVRF, which still needs a signal
+   * neither W3 nor W4 produces.
+   */
+  it('spends a probe on the flagged pwnable instead of two inconclusive helpers ahead of it', () => {
+    const candidates = [
+      sized('usr/bin/store_domain_sid', 4_096),
+      sized('usr/bin/store_machine_password', 4_096),
+      sized('pwnable/Intro/stack_bof_01', 7_016),
+    ];
+    // What the old rule did with the same two probes.
+    expect(reachabilityLeads(candidates, root, 2).map((l) => l.target)).toEqual([
+      'usr/bin/store_domain_sid',
+      'usr/bin/store_machine_password',
+    ]);
+    const interest: ProbeInterest = { services: [daemon('bof', '/pwnable/Intro/stack_bof_01')] };
+    expect(reachabilityLeads(candidates, root, 2, interest).map((l) => l.target)).toEqual([
+      'pwnable/Intro/stack_bof_01',
+      'usr/bin/store_domain_sid',
+    ]);
+  });
+
+  it('ranks the candidates no worker flagged rather than disqualifying them on that silence', () => {
+    const candidates = [
+      sized('usr/bin/small', 42),
+      sized('usr/bin/store_domain_sid', 100),
+      sized('usr/sbin/httpd', 9_000),
+    ];
+    const interest: ProbeInterest = { services: [daemon('httpd', '/usr/sbin/httpd')] };
+    expect(reachabilityLeads(candidates, root, 3, interest).map((l) => l.target)).toEqual([
+      'usr/sbin/httpd',
+      'usr/bin/small',
+      'usr/bin/store_domain_sid',
+    ]);
+  });
+
+  it('asks an unflagged candidate carrying no size or runnable flag at all', () => {
+    const bare: FindingDraft = {
+      kind: 'binary-pwnable-candidate',
+      title: 'usr/bin/store_domain_sid',
+      severity: 'medium',
+      proofState: 'needs_runtime_reproduction',
+      evidence: { path: 'usr/bin/store_domain_sid', unsafeFns: ['strcpy'] },
+      rationale: '',
+    };
+    const interest: ProbeInterest = { services: [daemon('httpd', '/usr/sbin/httpd')] };
+    expect(reachabilityLeads([bare, sized('usr/sbin/httpd', 9_000)], root, 2, interest).map((l) => l.target)).toEqual([
+      'usr/sbin/httpd',
+      'usr/bin/store_domain_sid',
+    ]);
+  });
+
+  it('does not re-ask a binary W4 already put on the agenda — that slot would buy nothing', () => {
+    const candidates = [sized('usr/sbin/gl-tor', 10), sized('usr/bin/small', 42)];
+    const interest: ProbeInterest = {
+      handlers: [taintedHandler('os.execute("/usr/sbin/gl-tor " .. params.enable)')],
+      planned: new Set(['symreach:usr/sbin/gl-tor']),
+    };
+    expect(reachabilityLeads(candidates, root, 1, interest).map((l) => l.target)).toEqual(['usr/bin/small']);
+  });
+
+  it('spends nothing on a zero budget and everything askable on a budget larger than the list', () => {
+    const candidates = [sized('usr/bin/small', 42), sized('usr/sbin/httpd', 9_000)];
+    const interest: ProbeInterest = { services: [daemon('httpd', '/usr/sbin/httpd')] };
+    expect(reachabilityLeads(candidates, root, 0, interest)).toEqual([]);
+    expect(reachabilityLeads(candidates, root, 99, interest).map((l) => l.target)).toEqual([
+      'usr/sbin/httpd',
+      'usr/bin/small',
+    ]);
   });
 });
 
