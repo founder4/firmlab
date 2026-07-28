@@ -31,6 +31,20 @@ describe('parseModinfo', () => {
     expect(parseModinfo(`license=Dual BSD/GPL${NUL}name=a${NUL}`).license).toBe('Dual BSD/GPL');
   });
 
+  it('reads the FIRST record of the section, which no NUL precedes', () => {
+    // The real ath_pktlog.ko opens its .modinfo with `license=Proprietary`, and the byte before it is 0x08 — the
+    // tail of the preceding section. A rule demanding a NUL there drops the first record of every module; that
+    // one cost the corpus a tainting module and was visible only because two runs disagreed.
+    expect(parseModinfo('\u0008license=Proprietary\u0000depends=\u0000name=ath_pktlog\u0000')).toEqual({
+      license: 'Proprietary',
+      name: 'ath_pktlog',
+    });
+  });
+
+  it('still refuses a printable predecessor, so filename= is not read as name=', () => {
+    expect(parseModinfo('\u0000filename=ath_pktlog.ko\u0000').name).toBeUndefined();
+  });
+
   it('says nothing rather than guessing when the module is stripped of modinfo', () => {
     expect(parseModinfo('no keys here at all')).toEqual({});
   });

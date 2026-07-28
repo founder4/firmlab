@@ -365,10 +365,15 @@ function readModinfoValue(text: string, key: string, maxLen = 64): string | null
   while (from < text.length) {
     const at = text.indexOf(needle, from);
     if (at === -1) return null;
-    // A record starts at the beginning of the blob or just after a NUL; anything else is a coincidental substring
-    // inside another string (`filename=`, `parmtype=`), which must not be mistaken for the key.
+    // A record starts at the beginning of the blob, or after ANY non-printable byte — not only after a NUL.
+    // Requiring a NUL looked stricter and was wrong: the FIRST record of the .modinfo section is preceded by
+    // whatever the previous section ended with, and on the real `ath_pktlog.ko` that byte is 0x08. The rule
+    // silently dropped the first record of every module, which cost that module its `license=Proprietary` and
+    // under-reported the corpus by one tainting module — a systematic loss, visible only because the count
+    // disagreed with an earlier run. What must still be rejected is a PRINTABLE predecessor, which is what makes
+    // `filename=` look like `name=` and `parmtype=` look like `type=`.
     const prev = at === 0 ? 0 : text.charCodeAt(at - 1);
-    if (at !== 0 && prev !== 0) {
+    if (at !== 0 && prev >= 0x20 && prev <= 0x7e) {
       from = at + needle.length;
       continue;
     }
