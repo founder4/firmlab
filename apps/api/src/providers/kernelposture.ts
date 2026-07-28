@@ -322,6 +322,80 @@ export interface ModuleEvidence {
   signedCount: number;
   /** How many were actually opened (the sampling bound). */
   inspectedCount: number;
+  /** Where the inspected modules came from. Optional forever — absent on every result stored before this pass. */
+  provenance?: ModuleProvenance;
+}
+
+/** What one `.ko`'s `.modinfo` says about where it came from. All optional: a stripped module says nothing. */
+export interface ModinfoFacts {
+  /** `intree=Y` — set by the kernel build system for a module built inside the kernel tree. */
+  intree?: boolean;
+  license?: string;
+  name?: string;
+}
+
+/**
+ * Pure: read the `.modinfo` key=value pairs out of a module's bytes. They are NUL-separated ASCII in a dedicated
+ * section, so the printable-string scan finds them without a section-header walk — which matters, because OpenWrt
+ * strips section headers and every module on the corpus's richest image reports `e_shoff == 0`.
+ */
+export function parseModinfo(text: string): ModinfoFacts {
+  const out: ModinfoFacts = {};
+  const intree = /\bintree=([YyNn])/.exec(text)?.[1];
+  if (intree !== undefined) out.intree = intree === 'Y' || intree === 'y';
+  // A .modinfo value runs to the NUL that separates it from the next key, NOT to the next space: `Dual BSD/GPL`
+  // and `GPL v2` both contain one, and stopping at whitespace would truncate the licence that matters most.
+  const license = /\blicense=([^\u0000]{1,64})/.exec(text)?.[1];
+  if (license) out.license = license.trim();
+  const name = /\bname=([A-Za-z0-9_]{1,64})/.exec(text)?.[1];
+  if (name) out.name = name;
+  return out;
+}
+
+/** Where the shipped modules came from, and whether that question could be answered at all. */
+export interface ModuleProvenance {
+  inTree: number;
+  outOfTree: number;
+  /** Modules carrying no `intree=` tag in a build that uses the tag elsewhere is out-of-tree; see below. */
+  indeterminate: number;
+  /** True when NO inspected module carried an `intree=` tag, so the build does not use it and nothing is decided. */
+  tagUnused: boolean;
+  /** Names of out-of-tree modules, bounded, so the finding can quote rather than assert. */
+  outOfTreeNames: string[];
+  /** Modules declaring a non-GPL-compatible licence — these taint the kernel. */
+  proprietary: string[];
+}
+
+/**
+ * Pure: decide module provenance from the SET, never from a remembered kernel version.
+ *
+ * `intree=Y` is written by the kernel build system, so its absence is meaningful — but only in a build that emits
+ * the tag at all. The tag postdates the oldest kernels in this corpus (DVRF ships 2.6.22), and hard-coding the
+ * version it arrived in would be exactly the recall-based claim `component-cve.ts` refuses to make about CVE
+ * ranges. So the rule calibrates itself: if NOT ONE inspected module carries `intree=`, this build does not use
+ * the tag and the question is unanswerable here — every module is `indeterminate` and `tagUnused` says why. Only
+ * when the tag IS in use does its absence on a given module mean that module was built outside the tree.
+ */
+export function assessModuleProvenance(mods: ReadonlyArray<{ file: string; facts: ModinfoFacts }>): ModuleProvenance {
+  const tagUnused = !mods.some((m) => m.facts.intree !== undefined);
+  const outOfTreeNames: string[] = [];
+  const proprietary: string[] = [];
+  let inTree = 0;
+  let outOfTree = 0;
+  let indeterminate = 0;
+  for (const m of mods) {
+    const label = m.facts.name ?? m.file;
+    if (tagUnused) indeterminate++;
+    else if (m.facts.intree === true) inTree++;
+    else {
+      outOfTree++;
+      if (outOfTreeNames.length < 24) outOfTreeNames.push(label);
+    }
+    // A GPL-incompatible licence taints the kernel and is a fact about the string, not a judgement about the code.
+    const lic = m.facts.license ?? '';
+    if (lic && !/GPL|MIT|BSD|Dual/i.test(lic) && proprietary.length < 24) proprietary.push(`${label} (${lic})`);
+  }
+  return { inTree, outOfTree, indeterminate, tagUnused, outOfTreeNames, proprietary };
 }
 
 /** The trailer `scripts/sign-file` appends to a signed module. Its absence from EVERY module is the useful signal. */
@@ -865,8 +939,69 @@ const UNDETERMINED_LABEL: Readonly<Record<UndeterminedReason, string>> = {
  *   4. ONE finding recording the questions that could NOT be answered, at `blocked_by_platform`. Without it, a
  *      firmware where nothing could be determined would produce a short list that reads as "the kernel is fine".
  */
+/**
+ * Pure: what the shipped module set's provenance is worth saying.
+ *
+ * The claim is about SURFACE, not defects. An out-of-tree module is code running with full kernel privilege that
+ * the kernel's own review and patch process never covered: when an upstream bug is fixed, these do not receive
+ * the fix, and no distribution security team tracks them. That is a fact worth a finding. "68 vulnerable modules"
+ * would not be — nothing here opened one and looked.
+ *
+ * A build that does not emit `intree=` at all yields no finding rather than a zero, because a zero would be a
+ * measurement and this is the absence of one.
+ */
+export function moduleProvenanceFindings(mods: ModuleEvidence | null): FindingDraft[] {
+  const p = mods?.provenance;
+  if (!p) return [];
+  const drafts: FindingDraft[] = [];
+  if (p.tagUnused) {
+    drafts.push({
+      kind: 'kernel-module-provenance-unknown',
+      title: `Module provenance is not determinable: none of the ${mods?.inspectedCount ?? 0} inspected modules carries an intree tag`,
+      severity: 'info',
+      proofState: 'blocked_by_platform',
+      evidence: { inspected: mods?.inspectedCount, moduleCount: mods?.moduleCount },
+      rationale:
+        'The kernel build system writes `intree=Y` into a module built inside the kernel tree, so its absence ' +
+        'normally means the module was built outside it. This build emits the tag on no module at all, so the ' +
+        'tag is not in use here and NOTHING is decided either way — this is the question being unanswerable, not ' +
+        'an answer that every module is in-tree.',
+    });
+    return drafts;
+  }
+  if (p.outOfTree > 0) {
+    drafts.push({
+      kind: 'kernel-out-of-tree-modules',
+      title: `${p.outOfTree} of ${p.inTree + p.outOfTree} kernel modules are built out of tree`,
+      severity: 'medium',
+      proofState: 'static_confirmed',
+      evidence: { outOfTree: p.outOfTree, inTree: p.inTree, names: p.outOfTreeNames },
+      rationale:
+        'These modules declare no `intree=Y`, so they were built outside the kernel source tree. They run with ' +
+        'full kernel privilege while sitting outside the process that reviews and patches the kernel: an upstream ' +
+        'fix does not reach them, and no distribution security team tracks them. This is a statement about ' +
+        'ATTACK SURFACE and about who maintains it — nothing here opened a module and looked for a defect.',
+    });
+  }
+  if (p.proprietary.length > 0) {
+    drafts.push({
+      kind: 'kernel-proprietary-modules',
+      title: `${p.proprietary.length} kernel module(s) declare a non-GPL licence and taint the kernel`,
+      severity: 'low',
+      proofState: 'static_confirmed',
+      evidence: { modules: p.proprietary },
+      rationale:
+        "The `license=` string in each module's .modinfo is not GPL-compatible, so loading it sets the kernel " +
+        'taint flag. Source is therefore unavailable for review, and an upstream maintainer will not debug a ' +
+        'tainted kernel. A fact about the declared licence string, not about the code behind it.',
+    });
+  }
+  return drafts;
+}
+
 export function postureFindings(result: Omit<KernelPostureResult, 'findings'>): FindingDraft[] {
   const drafts: FindingDraft[] = [];
+  drafts.push(...moduleProvenanceFindings(result.modules));
 
   if (!result.located) {
     drafts.push({
@@ -1236,6 +1371,7 @@ function readModules(rootfs: string): ModuleEvidence | null {
   let signedCount = 0;
   let vermagic: string | null = null;
   let inspectedCount = 0;
+  const facts: { file: string; facts: ModinfoFacts }[] = [];
   for (const ko of kos.slice(0, MODULE_SAMPLE_CAP)) {
     const buf = readBounded(ko, 8 * 1024 * 1024);
     if (!buf) continue;
@@ -1243,8 +1379,16 @@ function readModules(rootfs: string): ModuleEvidence | null {
     const text = Buffer.from(buf).toString('latin1');
     if (text.includes(MODULE_SIG_TRAILER)) signedCount++;
     vermagic ??= parseVermagic(text);
+    facts.push({ file: path.basename(ko, '.ko'), facts: parseModinfo(text) });
   }
-  return { versionDir, vermagic, moduleCount: kos.length, signedCount, inspectedCount };
+  return {
+    versionDir,
+    vermagic,
+    moduleCount: kos.length,
+    signedCount,
+    inspectedCount,
+    provenance: assessModuleProvenance(facts),
+  };
 }
 
 function statSize(p: string): number {
