@@ -127,10 +127,15 @@ export function summarizeRun(job: RunInput): RunSummary {
       const offset = probe.controlOffset?.offset;
       const len = typeof params.patternLength === 'number' ? params.patternLength : null;
       if (result.available === false) {
+        // `available: false` covers two situations that lead an operator to opposite next steps: this deployment
+        // cannot do it at all (retrying changes nothing) versus the tools are here and the attempt broke (a retry
+        // may well succeed). The provider now says which; older rows carry no `blockedBy` and stay `blocked`,
+        // which is the conservative reading — it never claims a negative either way.
+        const harness = result.blockedBy === 'harness';
         return {
           ...base,
           question: sink,
-          outcome: 'blocked',
+          outcome: harness ? 'failed' : 'blocked',
           headline: String(result.reason ?? 'The probe could not run here'),
           bound: null,
         };
@@ -280,14 +285,18 @@ export function summarizeRun(job: RunInput): RunSummary {
 export function groupRunsByTarget(runs: RunSummary[]): { target: string | null; runs: RunSummary[] }[] {
   const byTarget = new Map<string, RunSummary[]>();
   for (const r of runs) {
-    const key = r.target ?? ' image';
+    // A NUL sentinel for the image-wide bucket: it cannot occur in a filesystem path, so it can never collide with
+    // a real target the way a plausible string like 'image' could. Written as the ESCAPE and never as the byte —
+    // a literal NUL passes tsc, biome and vitest silently while `file` calls the source `data` and grep skips it
+    // without saying so, which is how a correct change comes to look like it was never made.
+    const key = r.target ?? '\u0000image';
     const list = byTarget.get(key);
     if (list) list.push(r);
     else byTarget.set(key, [r]);
   }
   return [...byTarget.entries()]
     .map(([key, list]) => ({
-      target: key === ' image' ? null : key,
+      target: key === '\u0000image' ? null : key,
       runs: [...list].sort((a, b) => b.startedAt - a.startedAt),
     }))
     .sort((a, b) => {

@@ -2,7 +2,7 @@
   "name": "firmlab",
   "version": "0.1.0",
   "private": true,
-  "description": "FirmLab — local-only firmware analysis workbench (structure map, entropy, filesystem, SBOM, emulation).",
+  "description": "FirmLab \u2014 local-only firmware analysis workbench (structure map, entropy, filesystem, SBOM, emulation).",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -13,8 +13,9 @@
     "test": "pnpm -r run test",
     "dev:api": "pnpm --filter @firmlab/api run dev",
     "dev:web": "pnpm --filter @firmlab/web run dev",
-    "biome": "biome check .",
-    "biome:fix": "biome check --write ."
+    "biome": "bash scripts/check-nul.sh && biome check .",
+    "biome:fix": "biome check --write .",
+    "check:nul": "bash scripts/check-nul.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
