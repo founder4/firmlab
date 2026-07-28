@@ -2,24 +2,12 @@
   "mcpServers": {
     "firmlab": {
       "command": "docker",
-      "args": [
-        "exec",
-        "-i",
-        "firmlab",
-        "node",
-        "/app/apps/api/dist/mcp/server.js"
-      ],
+      "args": ["exec", "-i", "firmlab", "node", "/app/apps/api/dist/mcp/server.js"],
       "env": {}
     },
     "playwright": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@playwright/mcp@latest",
-        "--browser",
-        "chromium",
-        "--isolated"
-      ],
+      "args": ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--isolated"],
       "env": {}
     }
   }

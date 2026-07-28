@@ -66,12 +66,19 @@ await page.waitForTimeout(Number(arg('--wait', 900)));
 
 await page.screenshot({ path: out, fullPage: true });
 
-const text = (await page.locator('body').innerText().catch(() => '')).replace(/\n{3,}/g, '\n\n');
+const text = (
+  await page
+    .locator('body')
+    .innerText()
+    .catch(() => '')
+).replace(/\n{3,}/g, '\n\n');
 console.log(`URL      ${url}`);
 console.log(`TITLE    ${await page.title()}`);
 console.log(`SHOT     ${out}`);
-console.log(`ERRORS   ${consoleErrors.length ? '\n  - ' + consoleErrors.join('\n  - ') : 'none'}`);
-console.log(`NET FAIL ${failedRequests.length ? '\n  - ' + [...new Set(failedRequests)].slice(0, 8).join('\n  - ') : 'none'}`);
+console.log(`ERRORS   ${consoleErrors.length ? `\n  - ${consoleErrors.join('\n  - ')}` : 'none'}`);
+console.log(
+  `NET FAIL ${failedRequests.length ? `\n  - ${[...new Set(failedRequests)].slice(0, 8).join('\n  - ')}` : 'none'}`,
+);
 console.log(`--- visible text (first 1800 chars) ---\n${text.slice(0, 1800)}`);
 
 await browser.close();
