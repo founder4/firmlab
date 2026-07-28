@@ -104,7 +104,20 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ✅ **Second-pass recovery for the blobs binwalk leaves** (2026-07-27, deploy `96af0cf`) — `providers/extract-recover.ts` + `lzop` in the tools base. Dispatches on MAGIC, not extension, because binwalk's `.7z` is a raw LZMA stream rather than 7-Zip. Measured on the corpus: BeanView's `4F0010.lzo` is **partial at 225460 bytes** ("ignoring trailing garbage"), AliExpress's `50040.7z` is **partial at 511555 bytes** of a declared 7660784 with unlzma's own "Compressed data is corrupt", and `persondet_230511_v200.lzma` opens fully to 1305600 bytes and is not a filesystem. **None of the three images is rescued, and that was known before the code was written** — the gain is that "unexamined" became "examined, truncated or damaged, and not a missing tool". _One defect the real run exposed: on the stdout path (`unlzma -c`) a failed decompression's partial bytes live on the rejected process's stdout and were being discarded, so AliExpress read as "could not open it" — pointing at the tool — instead of "stopped at 511 KB", pointing at the image. Fixed with the same rescue dynprobe-run.ts does on gdb's output._
 - ✅ **Concurrent dynamic probes collided on a fixed port** (2026-07-28, deploy `26b00a4`) — `BASE_PORT = 14500` was justified by "one probe runs at a time per job anyway", true per job and false once W9 schedules reproductions in two scans at once, which the runner does at its default concurrency of 2. **Reproduced deliberately**: two probes launched together, the first returns a verdict and the second reports "gdb produced no output" even with DVRF's `stack_bof_01` as its target. Sequential probes were fine, which is why the scan logs made it look per-binary. The blocked probe was the *good* outcome — the same constant also allowed gdb to attach to the other probe's stub and return a verdict about a different binary. Each probe now takes a free port from the OS. _One defect the fix itself introduced and the same test caught: the new readiness check connected to the stub to prove it was live, and a qemu gdbstub accepts exactly ONE client — the check consumed it, and BOTH concurrent probes then failed. Readiness is tested by trying to bind the port instead (EADDRINUSE = the stub has it); nothing connects to the stub except gdb._ Validated concurrently: `pktlogconf` → `sink_executed`, `stack_bof_01` → `crash_input_controlled` at offset 204, in the same pair of simultaneous jobs.
 - ✅ **`sink_executed` now earns its claim from the observed argument** (2026-07-28) — the verdict asserted the call site "really does run with attacker-supplied data" while WDR3600's own evidence recorded the copied string as `/proc/sys/ath_pktlog/system/enable`, a constant. `argumentCarriesInput` decides it from the bytes. _The existing test caught the first version collapsing a third state: when no argument was readable at the breakpoint, "we did not read it" is not "it was not our input", and reporting the latter is the same overclaim pointing the other way. Tri-state now — our bytes, a constant, or unknown — each with its own wording, title and severity (`low` only for the constant case)._
-- ▶ **The recovery pass only runs when NO rootfs was found**, so an image that yields a small rootfs AND leaves multi-MB payloads unopened reports the rootfs and says nothing about the rest. Measured: the Tenda camera's extract dir holds two **16.4 MB `.xz`** blobs and ~40 `.gz` beside a 97-file tree; the IMOU holds two 8.3 MB `.xz` and an 8 MB raw-LZMA beside a 113-file tree. Checked before assuming: IMOU's `530FE.7z` decompresses to 2.6 MB starting `01 90 8f e2`, an ARM instruction — a kernel, not a filesystem — and both `.xz` blobs are carved from a valid magic but report "Compressed data is corrupt" from that offset. So the rootfs is not obviously hiding in them, which is exactly why the gap matters: nothing currently states that 16 MB went unexamined, and "we found a rootfs" is being read as "we found everything". The fix is not to decompress everything on every image; it is to REPORT the unopened payload alongside a successful extraction, the same way `diagnoseNoRootfs` reports it after a failed one.
+- ✅ **A recovered rootfs is not a fully-opened image, and now says how much it is not** (2026-07-28, deploy
+  `47ce86c`) — the second-pass recovery runs only when NO rootfs was found, so an image yielding a small rootfs
+  beside multi-MB unopened payloads reported the rootfs and said nothing about the rest. New pure
+  `surveyUnopenedPayloads` in `extract-recover.ts` reads sizes and magic only — it **surveys, never decompresses**,
+  because the corpus already established those particular blobs are a kernel and two corrupt streams rather than a
+  hidden rootfs, and the gap was that nothing STATED the unopened bytes. Wired into `finalizeRootfs`, so it reaches
+  the success path where the silence was. **Measured on the deploy: the Tenda camera's 97-file rootfs sits beside
+  49 payloads totalling 54.1 MB, two of them 15.7 MB `.xz`; the IMOU's 113-file rootfs beside 4 payloads and
+  24.2 MB.** _One defect the real bytes exposed and the first version had: excluding only the CURRENT `rootfsPath`
+  counted a PREVIOUS extraction run's entire tree as unopened payload — a re-extraction leaves `_img.extracted`
+  beside the live `_img-0.extracted`, and IMOU reported `_IMOU-Ranger-2C.bin.extracted/squashfs-root/usr/lib/
+  modules.7z` while its live rootfs was in the `-0` sibling. The exclusion now follows what a directory IS, by the
+  same >=2-of-`bin`/`etc`/`sbin`/`lib` rule `findRootfs` uses, rather than what this run happened to name; IMOU went
+  8 payloads/25.7 MB → 4/24.2 MB._
 - ◐ **The camera rootfs are suspiciously small** — Tenda 97 files, IMOU 113, both with a complete-looking top level (`bin`, `etc`, `lib`, `sbin`, `usr`). Plausible for a minimal camera build and equally plausible as a partial carve; nothing here settles it, and an IP camera with no web server on disk is the part that does not fit. Worth resolving before either image is used as evidence about what cameras contain.
 - ▢ **CVE-2021-36369 for the Tenda camera's dropbear 2020.81** — the range (`<= 2020.81`) covers it exactly, and it was rejected for the same reason as CVE-2016-2148: zero enumerated CPEs, one open-below range. Recorded so the rejection is visible as a decision rather than an oversight, and so it can be revisited if a per-version source turns up.
 - ▢ **A per-version-backed critical for old BusyBox.** CVE-2016-2148 (udhcpc heap overflow, CRITICAL, "before 1.25.0") would match both builds in the corpus and was deliberately left out: NVD gives it zero enumerated CPEs and one range with no lower bound, the same shape refused for dnsmasq 1.10. CVE-2011-2716 covers the same images and IS backed per-version (90 enumerated CPEs, `1.01` and `1.7.2` among them), so nothing is lost in coverage — only in severity. Claiming 2148 honestly needs a source that asserts per-version (a distro advisory) or source archaeology for when the vulnerable udhcpc code appeared.
@@ -385,16 +398,23 @@ Surfaced while building the above and deliberately not built. Ordered roughly by
   Stored findings from the previous build were 22/22 `strings`, all titled *references*; the new run is 8 `dynsym`
   (*imports*) and 14 still `strings`. The overstatement is the same shape this ledger keeps catching — a claim
   about a whole set, written from the case that was inspected.
-- ▶ **The `binvuln` sweep scans kernel modules and says something about them that cannot be true.** The 14 that
-  stay on the string superset are all `lib/modules/5.4.213/*.ko`, and they stay there **correctly**: a `.ko` is
-  ET_REL with a `.symtab` and no `PT_DYNAMIC`, so there is no dynamic symbol table to read and the fallback is
-  behaving. The defect is upstream of that — those 14 are emitted as *"Command-exec sink: `ath_pktlog.ko`
-  **references system**"*, and a kernel module cannot call userland `system(3)`. The token is in its strings
-  (a symbol fragment, a format string, `sysfs`), and the heuristic reports a sink that structurally cannot exist.
-  **That is 64% of this image's `binvuln` findings.** It is precisely the defect already fixed once for DVRF's
-  iptables `.so` plugins — *"a queue whose question they structurally cannot answer"* — except `isRunnableElf`
-  filters ET_DYN-without-`PT_INTERP` and lets **ET_REL** straight through. Fix is to reject ET_REL in the sweep
-  (and to decide separately whether `.ko` files deserve their own question, which is the open `.ko` CVE item).
+- ✅ **The `binvuln` sweep claimed something impossible about kernel modules — and the noise was the smaller half**
+  (2026-07-28, deploy `47ce86c`) — 14 of the BE3600's 22 findings were `lib/modules/5.4.213/*.ko` reported as
+  *"Command-exec sink: … references system"*, a userland call a kernel module cannot make. New pure
+  `isRelocatableObject` rejects ET_REL before the file is counted as scanned, and the reason states the exclusion
+  (`relocatableSkipped`), because a reader comparing "400 ELFs" against a rootfs they know holds 375 modules must
+  be able to see where the difference went. `isRunnableElf` did not catch this: that predicate answers "can a probe
+  run it", which is also false for a `.so` that IS worth listing — **the axis is the object type, not runnability**,
+  and a test pins that a shared library is still reported.
+
+  **The real defect was the budget, not the noise.** `ELF_SCAN_CAP` is 400, and on the BE3600 **375 of those 400
+  were `.ko`** — the sweep spent 94% of its examination allowance on files whose question does not apply, left
+  roughly 25 real userland binaries examined out of the whole rootfs, and reported "400 ELF binaries" as though
+  that were thorough. This is the `selectFindings` lesson one layer earlier: a bound that fills with the wrong
+  population makes its own result an artifact. **Measured on the deploy: BE3600 22 → 60 findings, symbol source
+  8 dynsym/14 strings → 59 dynsym/1 strings; DVRF skips 44 `.ko` and returns 60 findings, all dynsym.** _The
+  `.ko` files themselves remain a genuinely open question — the kernel `.ko` CVE surface below — and deserve a
+  provider that speaks kernel, not a userland sweep's vocabulary._
 - ✅ **The three new providers measured across the whole corpus** (2026-07-28, deploy `fa168fe`) — 48 jobs over 16
   images through the deployed API, and the numbers reproduce what each agent measured in isolation, which is the
   independent confirmation that mattered. **Device tree found on 2 of 16** (BE3600 `qcom,ipq5332` 12 peripherals;
