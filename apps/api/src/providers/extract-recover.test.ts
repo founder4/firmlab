@@ -100,3 +100,25 @@ describe('surveyUnopenedPayloads', () => {
     expect(s.note).toMatch(/No compressed payload/);
   });
 });
+
+describe('surveyUnopenedPayloads — the stale-rootfs exclusion', () => {
+  it("does not count a PREVIOUS extraction run's rootfs as unopened payload", () => {
+    // The real IMOU layout: a re-extraction leaves `_img.extracted` beside the live `_img-0.extracted`, and the
+    // stale tree's own shipped files are not payload anybody failed to open.
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-'));
+    const stale = path.join(out, '_IMOU.bin.extracted', 'squashfs-root');
+    const live = path.join(out, '_IMOU.bin-0.extracted', 'squashfs-root');
+    for (const root of [stale, live]) {
+      for (const d of ['bin', 'etc', 'usr']) fs.mkdirSync(path.join(root, d), { recursive: true });
+    }
+    fs.writeFileSync(path.join(stale, 'usr', 'modules.7z'), Buffer.alloc(1_400_000));
+    // A genuine sibling payload, outside every filesystem root — this one must still be reported.
+    fs.writeFileSync(
+      path.join(out, '_IMOU.bin-0.extracted', '8CBB.xz'),
+      Buffer.concat([Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]), Buffer.alloc(50000)]),
+    );
+
+    const s = surveyUnopenedPayloads(out, live);
+    expect(s.payloads.map((p) => path.basename(p.path))).toEqual(['8CBB.xz']);
+  });
+});

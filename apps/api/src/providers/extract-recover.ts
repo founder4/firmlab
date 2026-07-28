@@ -181,15 +181,49 @@ export interface PayloadSurvey {
  * unopened bytes, the same way `diagnoseNoRootfs` states them after a failed extraction. So this reads sizes and
  * magic only.
  *
- * Payloads **inside** the recovered rootfs are excluded: a compressed file the firmware legitimately ships is part
- * of the filesystem and is already browsable, and counting it here would inflate the number with things nobody
- * expected to be opened.
+ * Payloads inside ANY extracted filesystem are excluded, not merely inside the one that was returned. A compressed
+ * file the firmware legitimately ships is part of the filesystem and is already browsable — and, less obviously, a
+ * re-extraction leaves the PREVIOUS run's tree behind as a sibling (`_img.extracted` beside `_img-0.extracted`), so
+ * excluding only the current `rootfsPath` counts an older run's entire rootfs as unopened payload. The real IMOU
+ * carve showed exactly that: `_IMOU-Ranger-2C.bin.extracted/squashfs-root/usr/lib/modules.7z` was reported as
+ * unopened while the live rootfs was `_IMOU-Ranger-2C.bin-0.extracted/squashfs-root`. A directory is treated as a
+ * filesystem root by the same >=2-of-`bin`/`etc`/`sbin`/`lib` rule `findRootfs` uses, so the exclusion follows what
+ * the tree IS rather than what this run happened to name.
  */
+const FS_ROOT_MARKERS = ['bin', 'etc', 'sbin', 'lib'];
+
+/** Does this directory look like an extracted filesystem root (>=2 of bin/etc/sbin/lib)? */
+function looksLikeFsRoot(dir: string): boolean {
+  try {
+    const names = new Set(
+      fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name),
+    );
+    return FS_ROOT_MARKERS.filter((m) => names.has(m)).length >= 2;
+  } catch {
+    return false;
+  }
+}
+
+/** Is `abs` inside any extracted filesystem root at or below `outputDir`? */
+function insideAnyFsRoot(abs: string, outputDir: string): boolean {
+  let dir = path.dirname(path.resolve(abs));
+  const stop = path.resolve(outputDir);
+  while (dir.startsWith(stop) && dir !== stop) {
+    if (looksLikeFsRoot(dir)) return true;
+    dir = path.dirname(dir);
+  }
+  return false;
+}
+
 export function surveyUnopenedPayloads(outputDir: string, rootfsPath: string | null): PayloadSurvey {
   const inRootfs = rootfsPath ? path.resolve(rootfsPath) + path.sep : null;
   const payloads: UnopenedPayload[] = [];
   for (const abs of collectCompressedBlobs(outputDir)) {
     if (inRootfs && path.resolve(abs).startsWith(inRootfs)) continue;
+    if (insideAnyFsRoot(abs, outputDir)) continue;
     let bytes = 0;
     try {
       bytes = fs.statSync(abs).size;
