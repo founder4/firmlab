@@ -33,6 +33,7 @@ export type JobKind =
   | 'fwhunt'
   | 'funcdiff'
   | 'dynprobe'
+  | 'updatepath'
   | 'nvram';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 

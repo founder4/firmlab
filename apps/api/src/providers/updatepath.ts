@@ -1,0 +1,1497 @@
+/**
+ * Update-mechanism integrity (OWASP ISTG-FW, FSTM stage 7) — the question docs/METHODOLOGY-GAPS.md §4 ranks #4 of
+ * seven and nobody had asked: does this firmware's update path authenticate what it flashes, and can it be rolled
+ * back? All three sub-questions are answerable from bytes alone, which is why this provider is pure static analysis
+ * with no new tool dependency.
+ *
+ * It is composed out of what already exists rather than beside it: `parseDynamicSymbols` (binvuln) reads what an
+ * updater ELF really imports, `extractPems` (certs) recognises PEM material, `parseOtaHeader` (encrypted) reads a
+ * framed vendor OTA header, and the anti-rollback vocabulary is `esp.ts`'s `'on' | 'off' | 'unknown'` so two
+ * providers do not name the same property differently.
+ *
+ * ## What this provider refuses to claim
+ *
+ * This is the detector on that list most likely to MANUFACTURE A FALSE NEGATIVE, and a wrong "unsigned firmware"
+ * line discredits the whole ledger, so the refusals are the design:
+ *
+ *  - **"No verification symbols found" is never "the firmware is unsigned."** Verification routinely lives in the
+ *    bootloader (not in this image), in SoC mask ROM, in a statically-linked blob with no symbol table, behind a
+ *    vendor-named wrapper, or in a server-side check the device never performs locally. The honest finding is
+ *    scoped to what was read — *"the updaters we found import/invoke no signature-verification routine"* — it is
+ *    `needs_runtime_reproduction` at most, and it names every place that was not looked at (`unexamined`).
+ *  - **"We could not find an updater" is `blocked_by_platform`,** not a clean result, and it states the exact
+ *    patterns that were searched. Corpus images with a partial or absent rootfs make this branch real, not theory.
+ *  - **A signature block present proves the bytes are there, not that anything checks them.** `static_confirmed`
+ *    covers "this image carries a PKCS#7 block"; "this device verifies its updates" is a rung above this provider.
+ *  - **The strongest positive available is the conjunction** — a signature/verifiable-integrity structure in the
+ *    image AND a verify routine in the update path AND key material on the device — and it is stated as a
+ *    conjunction with each part attributed to the bytes it came from (`update-verify-chain`).
+ *
+ * Everything that decides is pure and unit-tested; the runner only walks the rootfs, reads bounded prefixes and
+ * composes. Absence of an extractor or of a rootfs degrades honestly and says which question went unanswered.
+ */
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { FindingDraft } from '../findings-normalize.js';
+import { type SymbolSource, extractSymbols, parseDynamicSymbols } from './binvuln.js';
+import { extractPems } from './certs.js';
+import { parseOtaHeader } from './encrypted.js';
+
+// ===========================================================================================================
+// Part 1 — what integrity metadata does the IMAGE itself carry?
+// ===========================================================================================================
+
+/** One integrity structure read out of the image bytes, with where it was found and what it can be trusted for. */
+export interface IntegrityItem {
+  /** `signature` authenticates an origin; `checksum` only detects accidental corruption. The distinction is the point. */
+  strength: 'signature' | 'checksum';
+  kind: string;
+  detail: string;
+  /** Byte offset in the image, when the structure has one. */
+  offset?: number;
+}
+
+export interface ImageIntegrity {
+  /** The outer container recognised, or `unknown` when the image opens with a vendor header we do not decode. */
+  container: 'fit' | 'uimage' | 'tplink' | 'ota-framed' | 'unknown';
+  containerNote: string;
+  items: IntegrityItem[];
+  /** Sibling files beside the uploaded image that look like detached signatures/digests. */
+  siblings: string[];
+}
+
+// --- Flattened device tree / FIT ---------------------------------------------------------------------------
+
+export interface FdtHeader {
+  totalSize: number;
+  offDtStruct: number;
+  offDtStrings: number;
+  sizeDtStrings: number;
+  version: number;
+}
+
+/** Read a big-endian u32, tolerating a short buffer. */
+function u32be(b: Uint8Array, o: number): number {
+  return (((b[o] ?? 0) << 24) | ((b[o + 1] ?? 0) << 16) | ((b[o + 2] ?? 0) << 8) | (b[o + 3] ?? 0)) >>> 0;
+}
+
+const FDT_MAGIC = 0xd00dfeed;
+
+/**
+ * Pure: parse a flattened-device-tree header (a U-Boot FIT image is an FDT). Returns null when the magic is absent
+ * or the declared offsets do not fit inside the declared total size — a coincidental magic must not be read as a
+ * container.
+ */
+export function parseFdtHeader(buf: Uint8Array): FdtHeader | null {
+  if (buf.length < 40) return null;
+  if (u32be(buf, 0) !== FDT_MAGIC) return null;
+  const totalSize = u32be(buf, 4);
+  const offDtStruct = u32be(buf, 8);
+  const offDtStrings = u32be(buf, 12);
+  const version = u32be(buf, 20);
+  const sizeDtStrings = u32be(buf, 32);
+  if (!totalSize || offDtStrings === 0 || offDtStrings + sizeDtStrings > totalSize) return null;
+  if (offDtStruct === 0 || offDtStruct >= totalSize) return null;
+  return { totalSize, offDtStruct, offDtStrings, sizeDtStrings, version };
+}
+
+/**
+ * Pure: read a FIT's integrity posture out of its property-NAME string block.
+ *
+ * Every property name used anywhere in an FDT appears exactly once in `dt_strings`, so the presence or absence of
+ * `signature`, `key-name-hint` and `hashed-nodes` there settles whether the container declares signed
+ * configurations — without walking the multi-megabyte structure block. `algo` + `value` with no `signature` is the
+ * hash-only shape.
+ */
+export function classifyFitStrings(strings: string): { signed: boolean; hashed: boolean; props: string[] } {
+  // The block is NUL-separated. The separator is written as an escape and never as the byte: a literal NUL in a
+  // source file passes tsc, biome and vitest, and makes grep skip the whole file without saying so.
+  const props = strings.split('\u0000').filter((s) => s.length > 0);
+  const has = (p: string): boolean => props.includes(p);
+  return {
+    signed: has('signature') || has('key-name-hint') || has('hashed-nodes') || has('sign-images'),
+    hashed: has('algo') && has('value'),
+    props,
+  };
+}
+
+// --- Legacy uImage -----------------------------------------------------------------------------------------
+
+export interface UImageHeader {
+  headerCrc: number;
+  dataCrc: number;
+  dataSize: number;
+  name: string;
+}
+
+const UIMAGE_MAGIC = 0x27051956;
+
+/** Pure: parse a legacy U-Boot uImage header (64 bytes, big-endian). Null when the magic is absent. */
+export function parseUImageHeader(buf: Uint8Array): UImageHeader | null {
+  if (buf.length < 64) return null;
+  if (u32be(buf, 0) !== UIMAGE_MAGIC) return null;
+  let name = '';
+  for (let i = 32; i < 64; i++) {
+    const c = buf[i] ?? 0;
+    if (c === 0) break;
+    if (c < 0x20 || c > 0x7e) break;
+    name += String.fromCharCode(c);
+  }
+  return { headerCrc: u32be(buf, 4), dataCrc: u32be(buf, 24), dataSize: u32be(buf, 12), name };
+}
+
+// --- TP-Link vendor header ---------------------------------------------------------------------------------
+
+export interface TpLinkHeader {
+  vendor: string;
+  hardwareId: number;
+  /** Total firmware length the header declares — validated against the file size before the header is believed. */
+  firmwareLength: number;
+  /** The stored 16-byte integrity field at 0x4c, hex. */
+  checksumHex: string;
+}
+
+const TPLINK_HEADER_SIZE = 0x200;
+const TPLINK_MD5_OFFSET = 0x4c;
+
+/**
+ * The two 16-byte constants OpenWrt's `mktplinkfw` substitutes into the checksum field before hashing. They are
+ * published in the tool's source, which is exactly what makes the resulting field a checksum rather than a MAC:
+ * the "key" is public, so anyone can recompute it for a modified image.
+ *
+ * These are here to be VERIFIED against the bytes in hand, never asserted from recall — `verifyTpLinkChecksum`
+ * recomputes and only a byte-for-byte match is ever reported (the same discipline `component-cve.ts` applies to a
+ * CVE range).
+ */
+export const TPLINK_MD5_SALTS: ReadonlyArray<{ name: string; bytes: Uint8Array }> = [
+  {
+    name: 'mktplinkfw md5salt_normal',
+    bytes: Uint8Array.from([
+      0xdc, 0xd7, 0x3a, 0xa5, 0xc3, 0x95, 0x98, 0xfb, 0xdd, 0xf9, 0xe7, 0xf9, 0x1f, 0xd9, 0x35, 0xa4,
+    ]),
+  },
+  {
+    name: 'mktplinkfw md5salt_boot',
+    bytes: Uint8Array.from([
+      0x8c, 0xef, 0x33, 0x5b, 0xd5, 0xc5, 0xce, 0xfa, 0xa7, 0x9c, 0x28, 0xda, 0xb2, 0xe9, 0x0f, 0x42,
+    ]),
+  },
+];
+
+/**
+ * Pure: recognise a TP-Link vendor firmware header, STRUCTURALLY rather than by the vendor string alone. The
+ * declared `fw_length` must equal the file size and the kernel data must start immediately after the 0x200-byte
+ * header; a stray "TP-LINK" string somewhere in a blob satisfies neither, so it is not mistaken for a container.
+ */
+export function parseTpLinkHeader(buf: Uint8Array, fileSize: number): TpLinkHeader | null {
+  if (buf.length < TPLINK_HEADER_SIZE) return null;
+  let vendor = '';
+  for (let i = 4; i < 28; i++) {
+    const c = buf[i] ?? 0;
+    if (c === 0) break;
+    if (c < 0x20 || c > 0x7e) return null;
+    vendor += String.fromCharCode(c);
+  }
+  if (!/^TP-LINK/i.test(vendor)) return null;
+  const firmwareLength = u32be(buf, 0x7c);
+  const kernelOffset = u32be(buf, 0x80);
+  if (firmwareLength !== fileSize) return null;
+  if (kernelOffset !== TPLINK_HEADER_SIZE) return null;
+  return {
+    vendor,
+    hardwareId: u32be(buf, 0x40),
+    firmwareLength,
+    checksumHex: Buffer.from(buf.subarray(TPLINK_MD5_OFFSET, TPLINK_MD5_OFFSET + 16)).toString('hex'),
+  };
+}
+
+/**
+ * Recompute the TP-Link header checksum with each published salt and report which one (if any) reproduces the
+ * stored bytes. A match is the whole claim: the image's integrity field is an MD5 whose key is public, so it
+ * detects corruption and authenticates nothing. No match ⇒ null, and the field is reported as an undecoded
+ * 16-byte value rather than as a forgeable checksum we could not actually forge.
+ */
+export function verifyTpLinkChecksum(image: Uint8Array, header: TpLinkHeader): string | null {
+  if (image.length < header.firmwareLength) return null;
+  const stored = Buffer.from(header.checksumHex, 'hex');
+  for (const salt of TPLINK_MD5_SALTS) {
+    const probe = Buffer.from(image.subarray(0, header.firmwareLength));
+    probe.set(salt.bytes, TPLINK_MD5_OFFSET);
+    if (crypto.createHash('md5').update(probe).digest().equals(stored)) return salt.name;
+  }
+  return null;
+}
+
+// --- Generic signature structures --------------------------------------------------------------------------
+
+/** DER for `OBJECT IDENTIFIER 1.2.840.113549.1.7.2` (PKCS#7 / CMS signedData) — the tag, the length, the OID. */
+const PKCS7_SIGNED_DATA_OID = Uint8Array.from([0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02]);
+
+/** Pure: every offset in `buf` at which a PKCS#7/CMS signedData OID appears, biased by `base`. */
+export function findPkcs7SignedData(buf: Uint8Array, base = 0): number[] {
+  const out: number[] = [];
+  const n = PKCS7_SIGNED_DATA_OID.length;
+  outer: for (let i = 0; i + n <= buf.length; i++) {
+    for (let k = 0; k < n; k++) {
+      if (buf[i + k] !== PKCS7_SIGNED_DATA_OID[k]) continue outer;
+    }
+    out.push(base + i);
+    i += n - 1;
+  }
+  return out;
+}
+
+/** Armored signature envelopes that carry their own labels, so a text scan settles them without heuristics. */
+const ARMORED_SIGNATURES: ReadonlyArray<{ marker: string; kind: string }> = [
+  { marker: '-----BEGIN PGP SIGNATURE-----', kind: 'OpenPGP detached signature' },
+  { marker: '-----BEGIN SIGNATURE-----', kind: 'PEM-armored signature block' },
+  { marker: '-----BEGIN PKCS7-----', kind: 'PEM-armored PKCS#7 block' },
+];
+
+/**
+ * A usign/signify block. Both a PUBLIC KEY and a SIGNATURE open with `untrusted comment:`, and the comment line is
+ * what tells them apart — `signed by key <id>` versus `public key <id>`. Conflating them is not academic: the
+ * GL.iNet BE3600 image carries BOTH, an appended signature 167 bytes from the end of the file and a shipped public
+ * key inside the squashfs, and reading the embedded key as a signature over the image would have manufactured the
+ * central claim of this provider out of a file that happens to be in the payload.
+ */
+const USIGN_MARKER = 'untrusted comment:';
+const USIGN_SIGNED_BY = /untrusted comment:\s*signed by key\s+(\S+)/;
+
+/** Pure: armored signature envelopes present in a text view of the bytes, with the offset of each first match. */
+export function findArmoredSignatures(text: string, base = 0): IntegrityItem[] {
+  const out: IntegrityItem[] = [];
+  for (const { marker, kind } of ARMORED_SIGNATURES) {
+    const at = text.indexOf(marker);
+    if (at < 0) continue;
+    out.push({ strength: 'signature', kind, detail: `armored block beginning "${marker}"`, offset: base + at });
+  }
+  // Scan every usign block, not just the first: an image can carry a shipped public key and an appended signature.
+  for (let at = text.indexOf(USIGN_MARKER); at >= 0; at = text.indexOf(USIGN_MARKER, at + 1)) {
+    // ONLY this block's comment line. A fixed-width window bled past a `public key` block into a later
+    // `signed by key` one and reported the key as a signature — the exact conflation this branch exists to stop.
+    const lineEnd = text.indexOf('\n', at);
+    const line = text.slice(at, lineEnd < 0 ? Math.min(text.length, at + 200) : lineEnd);
+    const m = USIGN_SIGNED_BY.exec(line);
+    if (!m) continue; // a `public key` block is trust material, not a signature over these bytes
+    out.push({
+      strength: 'signature',
+      kind: 'usign/signify Ed25519 signature (OpenWrt)',
+      detail: `armored block labelled "signed by key ${m[1]}"`,
+      offset: base + at,
+    });
+  }
+  return out;
+}
+
+/** A sibling file beside the uploaded image that carries a detached signature or digest for it. */
+const SIBLING_RE = /\.(sig|sign|asc|gpg|pem|cer|crt|p7s|ucert|sha1|sha256|sha512|md5|hash|cms)$/i;
+
+/** Pure: which of `names` look like detached integrity material for `imageName`. */
+export function classifySiblings(imageName: string, names: string[]): string[] {
+  const stem = imageName.replace(/\.[^.]*$/, '');
+  return names
+    .filter((n) => n !== imageName)
+    .filter((n) => SIBLING_RE.test(n) && (n.startsWith(imageName) || n.startsWith(stem)))
+    .sort();
+}
+
+// ===========================================================================================================
+// Part 2 — does the UPDATER verify anything?
+// ===========================================================================================================
+
+/**
+ * Symbols whose presence in a binary's import list means an ASYMMETRIC SIGNATURE CHECK is linked in. Matched as
+ * EXACT names, never as substrings: TP-Link's httpd imports `RSA_modpow`, `RSA_bignum_from_bytes` and
+ * `wc_FreeRsaKey` for its SSH/TLS stacks, and a prefix match on `RSA_` would have reported that binary as
+ * verifying update signatures. It does not — it has no verify entry point at all.
+ */
+export const SIGNATURE_VERIFY_SYMBOLS: ReadonlyArray<string> = [
+  // OpenSSL / LibreSSL
+  'EVP_DigestVerify',
+  'EVP_DigestVerifyInit',
+  'EVP_DigestVerifyUpdate',
+  'EVP_DigestVerifyFinal',
+  'EVP_VerifyFinal',
+  'EVP_PKEY_verify',
+  'EVP_PKEY_verify_init',
+  'RSA_verify',
+  'RSA_verify_PKCS1_PSS',
+  'RSA_verify_PKCS1_PSS_mgf1',
+  'DSA_verify',
+  'ECDSA_verify',
+  'ECDSA_do_verify',
+  'X509_verify',
+  'PKCS7_verify',
+  'CMS_verify',
+  // mbedTLS
+  'mbedtls_pk_verify',
+  'mbedtls_pk_verify_ext',
+  'mbedtls_rsa_pkcs1_verify',
+  'mbedtls_rsa_rsassa_pss_verify',
+  'mbedtls_ecdsa_verify',
+  'mbedtls_ecdsa_read_signature',
+  // wolfSSL
+  'wc_SignatureVerify',
+  'wc_RsaSSL_Verify',
+  'wc_RsaPSS_Verify',
+  'wc_ecc_verify_hash',
+  'wc_ed25519_verify_msg',
+  // libsodium / NaCl
+  'crypto_sign_open',
+  'crypto_sign_verify_detached',
+  // libubox (OpenWrt usign/ucert) and TweetNaCl-style Ed25519
+  'edsign_verify',
+  'edsign_verify_init',
+  'ed25519_verify',
+  // libgcrypt / nettle / BearSSL
+  'gcry_pk_verify',
+  'nettle_rsa_pkcs1_verify',
+  'nettle_ecdsa_verify',
+  'br_rsa_pkcs1_vrfy',
+  'br_ecdsa_vrfy_asn1',
+];
+
+/**
+ * Digest routines. Their presence proves an INTEGRITY check at most — a checksum detects a corrupted download and
+ * stops nobody who can recompute it. Kept separate from the list above so a finding can never say "verifies"
+ * about a binary that only hashes.
+ */
+export const DIGEST_SYMBOLS: ReadonlyArray<string> = [
+  'MD5_Init',
+  'MD5_Update',
+  'MD5_Final',
+  'md5_verify_digest',
+  'SHA1_Init',
+  'SHA1_Update',
+  'SHA256_Init',
+  'SHA256_Update',
+  'SHA512_Init',
+  'sha512_init',
+  'sha512_final',
+  'EVP_DigestInit',
+  'EVP_DigestInit_ex',
+  'EVP_DigestUpdate',
+  'EVP_DigestFinal_ex',
+  'mbedtls_md5',
+  'mbedtls_sha1',
+  'mbedtls_sha256',
+  'mbedtls_sha512',
+  'wc_Md5Update',
+  'wc_ShaUpdate',
+  'wc_Sha256Update',
+  'crc32',
+  'crc32_le',
+];
+
+/**
+ * Commands a SHELL updater invokes to verify something. Firmware updaters are as often `/bin/sh` as ELF — the
+ * whole OpenWrt sysupgrade path is shell — so a symbol-only detector would report the most modern image in the
+ * corpus as importing no verification at all. Each entry carries the executable it needs, so the runner can check
+ * whether that executable is actually IN the rootfs.
+ */
+export const VERIFY_COMMANDS: ReadonlyArray<{
+  re: RegExp;
+  strength: 'signature' | 'checksum';
+  binary: string;
+  label: string;
+}> = [
+  { re: /\bucert\s+-[A-Za-z]*V/, strength: 'signature', binary: 'ucert', label: 'ucert -V (OpenWrt Ed25519 cert)' },
+  { re: /\busign\s+-[A-Za-z]*V/, strength: 'signature', binary: 'usign', label: 'usign -V (OpenWrt Ed25519)' },
+  { re: /\bsignify\s+-[A-Za-z]*V/, strength: 'signature', binary: 'signify', label: 'signify -V' },
+  { re: /\bgpgv\b/, strength: 'signature', binary: 'gpgv', label: 'gpgv' },
+  { re: /\bgpg\s+[^\n|;&]*--verify/, strength: 'signature', binary: 'gpg', label: 'gpg --verify' },
+  {
+    re: /\bopenssl\s+(?:dgst|rsautl|pkeyutl|smime|cms|ts)\b[^\n|;&]*-verify/,
+    strength: 'signature',
+    binary: 'openssl',
+    label: 'openssl … -verify',
+  },
+  { re: /\bsha256sum\s+-[A-Za-z]*c/, strength: 'checksum', binary: 'sha256sum', label: 'sha256sum -c' },
+  { re: /\bsha1sum\s+-[A-Za-z]*c/, strength: 'checksum', binary: 'sha1sum', label: 'sha1sum -c' },
+  { re: /\bmd5sum\s+-[A-Za-z]*c/, strength: 'checksum', binary: 'md5sum', label: 'md5sum -c' },
+  { re: /\bcksum\b/, strength: 'checksum', binary: 'cksum', label: 'cksum' },
+];
+
+/**
+ * Writes that actually commit an image to flash — what makes a file the update path rather than a mention of it.
+ *
+ * Only WRITE PRIMITIVES belong here. `sysupgrade` and `fw_setenv` were in this list and had to come out: the word
+ * `sysupgrade` appears in comments, variable names and log lines throughout an OpenWrt rootfs, so it labelled
+ * `lib/upgrade/common.sh` — which flashes nothing — as committing an image to flash, and `fw_setenv` writes the
+ * boot environment, not firmware. The `of=` target is deliberately loose about what follows `/dev/`, because the
+ * Tenda camera's real script writes to `of=/dev/$upgradeblock` and a device-name whitelist missed it entirely.
+ */
+export const FLASH_WRITE_PATTERNS: ReadonlyArray<{ re: RegExp; label: string }> = [
+  { re: /\bdd\s+[^\n]*\bof=(?:"|')?\/dev\/\S+/, label: 'dd of=/dev/…' },
+  { re: /\bmtd\s+(?:-[A-Za-z]+\s+)*write\b/, label: 'mtd write' },
+  { re: /\bflashcp\b/, label: 'flashcp' },
+  { re: /\bflash_erase(?:all)?\b/, label: 'flash_erase' },
+  { re: /\bnandwrite\b/, label: 'nandwrite' },
+  { re: /\bubiupdatevol\b/, label: 'ubiupdatevol' },
+  { re: /\bubiformat\b/, label: 'ubiformat' },
+];
+
+/** Version/rollback vocabulary, kept deliberately narrow so a changelog string cannot pass for a version check. */
+export const ROLLBACK_PATTERNS: ReadonlyArray<{ re: RegExp; label: string }> = [
+  { re: /\banti[_-]?rollback\b/i, label: 'anti-rollback' },
+  { re: /\brollback[_-]?(?:protect|counter|index|version)\b/i, label: 'rollback counter' },
+  { re: /\bsecure[_-]?version\b/i, label: 'secure_version' },
+  { re: /\bmin(?:imum)?[_-]?(?:fw[_-]?)?version\b/i, label: 'minimum version floor' },
+  { re: /\bcompat[_-]?version\b/i, label: 'compat_version' },
+  { re: /\bdowngrade\b/i, label: 'downgrade' },
+  { re: /\bversion[_-]?(?:cmp|compare|check)\b/i, label: 'version comparison' },
+];
+
+/** How a candidate came to our attention — it decides how much the finding is entitled to imply. */
+export type Discovery = 'path' | 'symbol';
+
+export interface UpdaterCandidate {
+  path: string;
+  kind: 'elf' | 'script';
+  discoveredBy: Discovery;
+  /** Why this file is believed to be part of the update path — quoted in the finding, never left implicit. */
+  why: string;
+  /** For an ELF: whether the names came from the real dynamic symbol table or from the weaker string superset. */
+  symbolSource?: SymbolSource;
+  signatureFns: string[];
+  digestFns: string[];
+  /** For a script: verification commands it invokes. */
+  verifyCommands: string[];
+  /** Verification executables the script invokes that are NOT present in the rootfs. */
+  missingVerifiers: string[];
+  flashWrites: string[];
+  rollbackMarkers: string[];
+}
+
+/** Paths whose `update`/`upgrade` is about something other than firmware — the glob's own false positives. */
+const NOT_FIRMWARE_UPDATE =
+  /(?:ddns|ip[_-]?update|ipupdate|updated?[_-]?dns|dyn(?:amic)?[_-]?dns|tzoupdate|ez-ipupdate|apn[_-]?db|dpi|clients|plugins|vpn[_-]?domain|qdiscs|modem|affinity|smp|cable[_-]?mac|odhcpd|wgserver|wps|dpp|hostapd|supplicant|route)/i;
+
+/** Files that are documentation, translations or package bookkeeping, never code that runs during an update. */
+const NON_EXECUTABLE_SUFFIX = /\.(?:json|html?|htm|css|js|gz|png|svg|md|txt|po|mo|control|list|prerm|postinst|conf)$/i;
+
+/** UCI config lives in `etc/config/` and is data with no extension — `etc/config/upgrade` is settings, not code. */
+const CONFIG_DIR = /(?:^|\/)etc\/config\//;
+
+/** Names that are the update path itself wherever they appear. */
+const STRONG_NAME =
+  /^(?:sysupgrade|upgraded?|fwupdate|fw_update|firmware_?upgrade|firmware_?update|otad?|ota_?upgrade|ota_?update|force_upgrade|update_?firmware|upgrade_?firmware|doupgrade|do_upgrade)$/i;
+
+/** Directories whose contents are, by construction, the update helper library. */
+const STRONG_DIR = /(?:^|\/)(?:lib\/upgrade|etc\/upgrade|usr\/lib\/upgrade|sd_otaupgrade|ota)\//i;
+
+/**
+ * A generic `*update*` / `*upgrade*` mention — a candidate, but a weak one, and labelled as such.
+ *
+ * `ota` needs its word boundaries. Without them the pattern matched `quota`, and the sweep opened
+ * `lib/modules/5.4.213/nft_quota.ko`, `xt_quota.ko` and DVRF's `usr/lib/iptables/libxt_quota.so` as firmware
+ * updaters — on DVRF the iptables plugin became "the 1 updater located", which would have printed a
+ * no-verification finding about a netfilter match extension.
+ */
+const WEAK_NAME = /(?:update|upgrade|\bota\b)/i;
+
+export interface PathClassification {
+  tier: 'strong' | 'weak' | 'excluded';
+  /**
+   * What the tier rests on. A `name` match identifies the file itself as an update entry point; a `directory`
+   * match only says it sits in the update helper tree, which on the GL.iNet is 30 one-line `lib/upgrade/keep.d/*`
+   * package manifests that are data, not code. Directory-basis candidates therefore have to show verification or
+   * flash evidence in their content before they count.
+   */
+  basis: 'name' | 'directory' | 'none';
+  why: string;
+}
+
+/**
+ * Pure: is this rootfs-relative path plausibly part of the update path, and on what evidence?
+ *
+ * Name matching alone is both over- and under-inclusive, so the answer is TIERED and the reason travels with it.
+ * The exclusions are not cosmetic: a bare `*update*` glob over the DVRF rootfs returns `ez-ipupdate`, `ipupdated`
+ * and `tzoupdate-1.11` — three dynamic-DNS clients — and reporting "the updater imports no verify routine" about a
+ * DDNS client would be a fabricated finding about a program that has nothing to do with firmware.
+ */
+export function classifyUpdaterPath(rel: string): PathClassification {
+  const base = rel.split('/').pop() ?? rel;
+  const stem = base.replace(/\.(?:sh|lua|py|pl)$/i, '');
+  if (NON_EXECUTABLE_SUFFIX.test(base)) {
+    return {
+      tier: 'excluded',
+      basis: 'none',
+      why: 'documentation / translation / package bookkeeping, not code run during an update',
+    };
+  }
+  if (CONFIG_DIR.test(`/${rel}`)) {
+    return { tier: 'excluded', basis: 'none', why: 'UCI configuration data, not code run during an update' };
+  }
+  if (STRONG_NAME.test(stem)) {
+    return { tier: 'strong', basis: 'name', why: `file name "${base}" is a firmware-update entry point` };
+  }
+  if (STRONG_DIR.test(`/${rel}`)) {
+    return { tier: 'strong', basis: 'directory', why: `lives in the update helper directory of "${rel}"` };
+  }
+  if (NOT_FIRMWARE_UPDATE.test(rel)) {
+    return {
+      tier: 'excluded',
+      basis: 'none',
+      why: `"${base}" updates something other than firmware (DNS/config/database/radio)`,
+    };
+  }
+  if (WEAK_NAME.test(base)) return { tier: 'weak', basis: 'name', why: `file name "${base}" mentions update/upgrade` };
+  return { tier: 'excluded', basis: 'none', why: 'no update-path evidence in the name' };
+}
+
+/**
+ * Pure: a symbol name that means this binary handles firmware updates even though nothing in its PATH said so.
+ * TP-Link's update logic lives inside `usr/bin/httpd`, which no name-based hunt reaches; it exports
+ * `upgradeFirmware`, `checkAndUpgradeFirmware` and `isSysUpgradeNeedChecksum`. Requiring BOTH an update verb and a
+ * firmware/image noun in the same identifier keeps `update_dns_list` and `apn_db_update` out.
+ */
+export function isUpdaterSymbol(name: string): boolean {
+  if (/sysupgrade/i.test(name)) return true;
+  const verb = /(?:upgrade|update|flash|burn|write)/i.test(name);
+  const noun = /(?:firmware|fwimage|fw_image|rootfs|kernel|image|bootloader)/i.test(name);
+  return verb && noun;
+}
+
+/** Pure: split a symbol set into the signature-verify and digest names it actually contains (exact matches only). */
+export function assessSymbols(symbols: ReadonlySet<string>): { signatureFns: string[]; digestFns: string[] } {
+  return {
+    signatureFns: SIGNATURE_VERIFY_SYMBOLS.filter((s) => symbols.has(s)),
+    digestFns: DIGEST_SYMBOLS.filter((s) => symbols.has(s)),
+  };
+}
+
+export interface ScriptAssessment {
+  verifyCommands: string[];
+  /** Executables the verification commands need — the runner checks each against the rootfs. */
+  verifierBinaries: string[];
+  signatureCommands: string[];
+  flashWrites: string[];
+  rollbackMarkers: string[];
+}
+
+/**
+ * Pure: read a shell/lua updater as text. Comment lines are stripped first — the Tenda camera's `force_upgrade`
+ * has its entire MD5 check inside a `: <<'COMMENT'` heredoc, and counting a disabled check as a check is precisely
+ * the false reassurance this provider exists to avoid.
+ */
+export function assessScript(text: string): ScriptAssessment {
+  const live = stripInertText(text);
+  const verifyCommands: string[] = [];
+  const verifierBinaries: string[] = [];
+  const signatureCommands: string[] = [];
+  for (const c of VERIFY_COMMANDS) {
+    if (!c.re.test(live)) continue;
+    verifyCommands.push(c.label);
+    verifierBinaries.push(c.binary);
+    if (c.strength === 'signature') signatureCommands.push(c.label);
+  }
+  const flashWrites = FLASH_WRITE_PATTERNS.filter((p) => p.re.test(live)).map((p) => p.label);
+  const rollbackMarkers = ROLLBACK_PATTERNS.filter((p) => p.re.test(live)).map((p) => p.label);
+  return { verifyCommands, verifierBinaries, signatureCommands, flashWrites, rollbackMarkers };
+}
+
+/**
+ * Pure: drop `#` comments and `<<'HEREDOC'` blocks used to comment code out, so a disabled check is not counted.
+ * Deliberately simple and conservative — it only removes text that cannot execute in a POSIX shell.
+ */
+export function stripInertText(text: string): string {
+  const out: string[] = [];
+  let heredoc: string | null = null;
+  for (const raw of text.split('\n')) {
+    if (heredoc !== null) {
+      if (raw.trim() === heredoc) heredoc = null;
+      continue;
+    }
+    const open = /<<-?\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]/.exec(raw);
+    if (open?.[1]) {
+      heredoc = open[1];
+      continue;
+    }
+    const line = raw.replace(/(^|\s)#.*$/, '$1');
+    if (line.trim()) out.push(line);
+  }
+  return out.join('\n');
+}
+
+// ===========================================================================================================
+// Part 3 — key material and rollback posture
+// ===========================================================================================================
+
+export interface KeyMaterial {
+  path: string;
+  kind: string;
+}
+
+/** The system TLS trust store — a public-key pile that has nothing to do with authenticating an update. */
+const CA_BUNDLE_PATH = /(?:^|\/)(?:etc\/ssl\/certs|usr\/share\/ca-certificates|etc\/ca-certificates|usr\/lib\/ssl)\//;
+
+/** A path token that ties key material to the UPDATE path specifically, rather than to TLS or to logging. */
+const UPDATE_ANCHOR_PATH =
+  /(?:secboot|secure_?boot|bootloader|sign|verify|update|upgrade|\bota\b|firmware|(?:^|\/)fw(?:\/|_))/i;
+
+/**
+ * Pure: is this file an update-verification trust anchor kept on the device?
+ *
+ * The first version answered "is there a public key here", and on the GL.iNet that returned the entire Mozilla CA
+ * bundle — 40 root certificates that authenticate TLS servers and could not verify a firmware image if they tried.
+ * Worse, they then fed the three-part conjunction, so the strongest positive this provider can state would have
+ * been attributed to `AC_RAIZ_FNMT-RCM.crt`. So an anchor now needs an update-shaped reason to be here: an OpenWrt
+ * usign/opkg key, or public key material sitting on a path that names signing, secure boot, firmware or updates.
+ *
+ * A file containing PRIVATE key material is never returned. That is the secret-scanning providers' finding, and
+ * filing a private key as a "trust anchor" would be both a wrong label and a quiet way to leak one into a title.
+ */
+export function classifyKeyMaterial(rel: string, head: string): KeyMaterial | null {
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(head)) return null;
+  if (CA_BUNDLE_PATH.test(`/${rel}`)) return null;
+
+  const isOpkgKey = /(?:^|\/)etc\/opkg\/keys\//.test(rel) || /key-build\.pub$/.test(rel);
+  if (isOpkgKey && head.includes(USIGN_MARKER)) {
+    return { path: rel, kind: 'usign Ed25519 public key (OpenWrt package/image signing)' };
+  }
+  if (/\.pub$/i.test(rel) && head.includes(USIGN_MARKER)) {
+    return { path: rel, kind: 'usign/signify Ed25519 public key' };
+  }
+  if (!UPDATE_ANCHOR_PATH.test(`/${rel}`)) return null;
+  if (head.includes('-----BEGIN PUBLIC KEY-----') || head.includes('-----BEGIN RSA PUBLIC KEY-----')) {
+    return { path: rel, kind: 'PEM public key on an update/secure-boot path' };
+  }
+  // A certificate is a public key with an identity attached; certs.ts details them, this only records the anchor.
+  if (extractPems(head).length > 0) {
+    return { path: rel, kind: 'PEM certificate on an update path (see the certs provider)' };
+  }
+  return null;
+}
+
+/** The anti-rollback vocabulary is `esp.ts`'s, so the two providers describe the same property with one word. */
+export type RollbackState = 'on' | 'off' | 'unknown';
+
+export interface RollbackPosture {
+  state: RollbackState;
+  evidence: string;
+  markers: string[];
+}
+
+/**
+ * Pure: the rollback posture of the update path.
+ *
+ * `on` needs a marker that actually bounds the acceptable version downward (an anti-rollback counter, a secure
+ * version, a minimum-version floor). A `compat_version` or a bare `downgrade` mention is a COMPATIBILITY check,
+ * not rollback protection — OpenWrt's `compat_version` gates whether config survives, and `sysupgrade -F` walks
+ * straight past it — so those degrade to `unknown` with the marker quoted rather than being scored as protection.
+ * No updater examined at all is `unknown` too: nothing was measured, so nothing is claimed.
+ */
+export function assessRollback(candidates: UpdaterCandidate[]): RollbackPosture {
+  const markers = [...new Set(candidates.flatMap((c) => c.rollbackMarkers))].sort();
+  if (candidates.length === 0) {
+    return {
+      state: 'unknown',
+      evidence: 'no updater was examined, so rollback protection was never measured',
+      markers,
+    };
+  }
+  const enforcing = markers.filter((m) => m !== 'compat_version' && m !== 'downgrade');
+  if (enforcing.length > 0) {
+    return {
+      state: 'on',
+      evidence: `the update path references ${enforcing.join(', ')} — a version floor the updater can enforce`,
+      markers,
+    };
+  }
+  if (markers.length > 0) {
+    return {
+      state: 'unknown',
+      evidence: `the update path references ${markers.join(', ')}, which gate compatibility rather than bound the version downward — rollback protection is neither shown nor ruled out`,
+      markers,
+    };
+  }
+  return {
+    state: 'off',
+    evidence: `none of the ${candidates.length} updater(s) read reference a version floor, an anti-rollback counter or a downgrade check`,
+    markers,
+  };
+}
+
+// ===========================================================================================================
+// Composition — the honest verdict
+// ===========================================================================================================
+
+/** The patterns the rootfs hunt looks for, stated verbatim whenever it comes back empty. */
+export const SEARCHED_FOR: ReadonlyArray<string> = [
+  'sysupgrade / upgraded',
+  'fwupdate / fw_update / firmware_update',
+  'ota / otad / ota_upgrade / force_upgrade',
+  'files under lib/upgrade, etc/upgrade, sd_otaUpgrade',
+  'any file whose name mentions update/upgrade/ota',
+  'any ELF exporting an update symbol (upgradeFirmware, sysupgrade, …)',
+];
+
+/**
+ * The places this provider structurally cannot look. Attached to every negative finding, because a negative that
+ * does not say where it did not look is the thing that reads as "clean".
+ */
+export const UNEXAMINED_PLACES: ReadonlyArray<string> = [
+  'the bootloader — usually a separate flash region that is not part of this image, and the most common place a real signature check lives',
+  'SoC mask ROM / secure-boot eFuses, which no image dump can show',
+  'statically-linked verification with no symbol table — the routine is in the code, the name is not',
+  'a vendor-named wrapper around a verify routine, which matches no known symbol',
+  'a server-side check performed by the update service and never by the device',
+  'kernel modules and non-ELF blobs, which this sweep does not walk',
+];
+
+export interface UpdatePathResult {
+  available: boolean;
+  imageIntegrity: ImageIntegrity;
+  updaters: UpdaterCandidate[];
+  /** Candidates the per-image cap left out, chosen by merit — stated so the list never reads as exhaustive. */
+  droppedUpdaters: number;
+  keyMaterial: KeyMaterial[];
+  rollback: RollbackPosture;
+  /** How many rootfs entries were walked and how many ELFs were opened — a bound, stated, never implied. */
+  filesWalked: number;
+  elfsExamined: number;
+  /** The ELF examination budget ran out, so binaries beyond it were never opened — stated, never left implicit. */
+  elfBudgetExhausted: boolean;
+  truncated: boolean;
+  findings: FindingDraft[];
+  reason: string;
+}
+
+/** Cap what a title quotes so one enormous path or symbol list cannot swallow the ledger. */
+function short(list: string[], n = 4): string {
+  return list.length <= n ? list.join(', ') : `${list.slice(0, n).join(', ')} +${list.length - n} more`;
+}
+
+/**
+ * Pure: choose which updater candidates survive the per-image cap.
+ *
+ * The cap has to exist, and WHICH candidates it keeps must not be an accident of directory order — the same rule
+ * `selectFindings` in binvuln.ts exists to enforce, and the same way of learning it. On the real GL.iNet the walk
+ * reached `lib/upgrade/keep.d/` first, its 30 package-manifest files filled the cap, and `sbin/sysupgrade` — the
+ * update entry point, the single most important file for this question — never got opened. The list read as "40
+ * updaters" and was in fact the prefix of a directory traversal.
+ *
+ * So the order is merit: a file whose NAME is an update entry point first, then one that actually invokes a
+ * verification, then one that writes to flash, then the rest. Ties break on path so the same rootfs yields the
+ * same list on any filesystem.
+ */
+export function selectUpdaters(
+  candidates: UpdaterCandidate[],
+  cap: number,
+): { kept: UpdaterCandidate[]; dropped: number } {
+  if (cap <= 0) return { kept: [], dropped: candidates.length };
+  const score = (c: UpdaterCandidate): number => {
+    let s = 0;
+    if (c.why.startsWith('entry point')) s += 8;
+    if (c.signatureFns.length > 0 || c.verifyCommands.length > 0) s += 4;
+    if (c.flashWrites.length > 0) s += 2;
+    if (c.discoveredBy === 'symbol') s += 1;
+    return s;
+  };
+  const ordered = [...candidates].sort((a, b) => score(b) - score(a) || a.path.localeCompare(b.path));
+  return { kept: ordered.slice(0, cap), dropped: Math.max(0, ordered.length - cap) };
+}
+
+/**
+ * Pure: compose everything measured into findings.
+ *
+ * The severities encode the refusals. Presence facts about the image bytes are `static_confirmed`; anything whose
+ * point is an ABSENCE — no verify routine found, no rollback floor found — is `needs_runtime_reproduction` and
+ * carries `unexamined`, because an absence measured through one lens is a lead, not a verdict. Finding no updater
+ * at all is `blocked_by_platform` with the search terms listed, never an empty pass.
+ */
+export function buildUpdatePathFindings(
+  integrity: ImageIntegrity,
+  updaters: UpdaterCandidate[],
+  keyMaterial: KeyMaterial[],
+  rollback: RollbackPosture,
+  hasRootfs: boolean,
+  bounds: { elfBudgetExhausted: boolean; walkTruncated: boolean } = { elfBudgetExhausted: false, walkTruncated: false },
+): FindingDraft[] {
+  // A bound that truncated the search belongs in every negative finding: an absence measured over part of the
+  // rootfs is weaker than one measured over all of it, and the reader cannot tell which without being told.
+  const boundNotes = [
+    bounds.elfBudgetExhausted
+      ? `the ${ELF_SCAN_CAP}-binary examination budget was exhausted, so some ELFs were never opened`
+      : '',
+    bounds.walkTruncated ? `the ${WALK_CAP}-entry walk bound was reached, so part of the rootfs was never visited` : '',
+  ].filter(Boolean);
+  const drafts: FindingDraft[] = [];
+  const signatureItems = integrity.items.filter((i) => i.strength === 'signature');
+  const checksumItems = integrity.items.filter((i) => i.strength === 'checksum');
+
+  // --- The image side -------------------------------------------------------------------------------------
+  for (const item of signatureItems) {
+    drafts.push({
+      kind: 'update-image-signature-block',
+      title: `Update image carries a ${item.kind}${item.offset === undefined ? '' : ` at 0x${item.offset.toString(16)}`}`,
+      severity: 'info',
+      proofState: 'static_confirmed',
+      evidence: { kind: item.kind, detail: item.detail, offset: item.offset ?? null, container: integrity.container },
+      rationale:
+        'The signature structure is literally present in the image bytes. That is all this proves: it does NOT ' +
+        'show that the device checks it, that the key is trusted, or that the signature is even valid — those are ' +
+        'rungs above static structure recognition.',
+    });
+  }
+
+  for (const item of checksumItems) {
+    drafts.push({
+      kind: 'update-image-unauthenticated-integrity',
+      title: `Update image integrity is a ${item.kind}, which detects corruption and authenticates nothing`,
+      severity: item.detail.includes('verified by recomputation') ? 'high' : 'medium',
+      proofState: 'static_confirmed',
+      evidence: { kind: item.kind, detail: item.detail, offset: item.offset ?? null, container: integrity.container },
+      rationale: [
+        item.detail,
+        'A checksum stops a corrupted download; it stops nobody who can recompute it, which is anyone who can',
+        'modify the image. Whether a signature is enforced elsewhere (bootloader, SoC ROM, update server) is a',
+        'separate question this does not answer.',
+      ].join(' '),
+    });
+  }
+
+  if (integrity.container !== 'unknown' && signatureItems.length === 0 && checksumItems.length === 0) {
+    drafts.push({
+      kind: 'update-image-no-integrity-metadata',
+      title: `The ${integrity.container} container declares neither a signature nor a checksum over the payload`,
+      severity: 'medium',
+      proofState: 'static_confirmed',
+      evidence: { container: integrity.container, note: integrity.containerNote },
+      rationale: [
+        integrity.containerNote,
+        "The absence is a fact about this container's own metadata, read from its declared structure. It does not",
+        'prove the device accepts an arbitrary image — an outer transport or the bootloader may still authenticate it.',
+      ].join(' '),
+    });
+  }
+
+  // --- The updater side -----------------------------------------------------------------------------------
+  if (updaters.length === 0) {
+    drafts.push({
+      kind: 'update-path-not-located',
+      title: hasRootfs
+        ? 'No updater could be located in the extracted rootfs — the update-integrity question is unanswered'
+        : 'No rootfs was extracted, so the updater could not be looked for at all',
+      severity: 'info',
+      proofState: 'blocked_by_platform',
+      evidence: {
+        searchedFor: [...SEARCHED_FOR],
+        hasRootfs,
+        unexamined: [...UNEXAMINED_PLACES],
+        ...(boundNotes.length > 0 ? { boundsThatTruncatedTheSearch: boundNotes } : {}),
+      },
+      rationale: [
+        'The question was asked and could not be answered. This is NOT a finding that the firmware has no updater —',
+        `it is a record that the search (${SEARCHED_FOR.join('; ')}) came back empty here, so nothing about`,
+        'signature verification or downgrade protection has been established either way.',
+      ].join(' '),
+    });
+  }
+
+  const verifying = updaters.filter((u) => u.signatureFns.length > 0 || u.verifyCommands.length > 0);
+  const signatureCapable = updaters.filter(
+    (u) =>
+      u.signatureFns.length > 0 ||
+      u.missingVerifiers.length > 0 ||
+      u.verifyCommands.some((c) => /ucert|usign|signify|gpg|openssl/.test(c)),
+  );
+
+  for (const u of updaters.filter((c) => c.missingVerifiers.length > 0)) {
+    drafts.push({
+      kind: 'update-verifier-binary-absent',
+      title: `${u.path} invokes ${short(u.missingVerifiers)} to verify an update, and that executable is not in this rootfs`,
+      severity: 'high',
+      proofState: 'static_confirmed',
+      evidence: { path: u.path, missing: u.missingVerifiers, commands: u.verifyCommands },
+      rationale:
+        'The verification command and the absence of the program it runs are both facts about these bytes: the ' +
+        'check as written cannot execute from this filesystem. Shell updaters commonly treat a missing verifier ' +
+        'as a pass rather than a failure, so read this as a disabled check unless the caller is shown to fail closed.',
+    });
+  }
+
+  if (updaters.length > 0 && signatureCapable.length === 0) {
+    const withDigest = updaters.filter((u) => u.digestFns.length > 0 || u.verifyCommands.length > 0);
+    drafts.push({
+      kind: 'update-no-signature-verification-found',
+      title: `The ${updaters.length} updater(s) located import and invoke no signature-verification routine`,
+      severity: withDigest.length > 0 ? 'medium' : 'high',
+      proofState: 'needs_runtime_reproduction',
+      evidence: {
+        updaters: updaters.map((u) => ({
+          path: u.path,
+          kind: u.kind,
+          why: u.why,
+          symbolSource: u.symbolSource ?? null,
+          digestFns: u.digestFns,
+          verifyCommands: u.verifyCommands,
+        })),
+        unexamined: [...UNEXAMINED_PLACES],
+        ...(boundNotes.length > 0 ? { boundsThatTruncatedTheSearch: boundNotes } : {}),
+      },
+      rationale: [
+        `What was measured: ${updaters.map((u) => u.path).join(', ')}.`,
+        boundNotes.length > 0 ? `The search was itself bounded — ${boundNotes.join('; ')}.` : '',
+        `None of them names a signature-verify entry point${
+          withDigest.length > 0
+            ? `, though ${short(withDigest.map((u) => u.path))} do compute a digest — integrity, not authentication`
+            : ''
+        }.`,
+        `This is explicitly NOT "the firmware is unsigned": verification may live in ${UNEXAMINED_PLACES.slice(0, 3).join('; ')}.`,
+        'Settling it needs the bootloader or a live update attempt, which is why this stays a lead.',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    });
+  }
+
+  // Only when NOTHING in the update path verifies. An OpenWrt rootfs splits one update path across five files, so
+  // per-file reporting would have printed four HIGH "flashes without checking" findings for `nand.sh`,
+  // `platform.sh`, `stage2` and `common.sh` while `fwtool.sh` — the sibling they are invoked alongside — was
+  // calling `ucert -V`. The unverified-write claim is about the path as a whole or it is misleading.
+  const flashers = updaters.filter((c) => c.flashWrites.length > 0);
+  if (flashers.length > 0 && verifying.length === 0) {
+    drafts.push({
+      kind: 'update-flash-write-without-check',
+      title: `${short(
+        flashers.map((f) => f.path),
+        3,
+      )} ${flashers.length === 1 ? 'commits' : 'commit'} an image to flash and nothing in the located update path verifies it first`,
+      severity: 'high',
+      proofState: 'needs_runtime_reproduction',
+      evidence: {
+        flashers: flashers.map((f) => ({ path: f.path, flashWrites: f.flashWrites, why: f.why })),
+        verifiersFound: 0,
+        unexamined: [...UNEXAMINED_PLACES],
+      },
+      rationale: [
+        'The flash writes and the absence of any verification call are both facts about these files. The caveat is',
+        'the scope: a caller, a bootloader or an update server may verify before any of this runs, and this provider',
+        'cannot see that, so the claim stays a lead about the files that were read rather than a verdict about the',
+        'device.',
+      ].join(' '),
+    });
+  }
+
+  // --- Key material and rollback --------------------------------------------------------------------------
+  if (keyMaterial.length > 0) {
+    drafts.push({
+      kind: 'update-trust-anchor-present',
+      title: `Update trust anchor on the device: ${short(keyMaterial.map((k) => k.path))}`,
+      severity: 'info',
+      proofState: 'static_confirmed',
+      evidence: { keys: keyMaterial },
+      rationale:
+        'Public key material for verifying updates is present in the filesystem — the third element a real ' +
+        'verification chain needs. Its presence proves the key is shipped, not that any code consults it.',
+    });
+  }
+
+  if (rollback.state === 'off') {
+    drafts.push({
+      kind: 'update-rollback-unprotected',
+      title: 'No downgrade/rollback protection found anywhere in the update path that was read',
+      severity: 'medium',
+      proofState: 'needs_runtime_reproduction',
+      evidence: { state: rollback.state, evidence: rollback.evidence, unexamined: [...UNEXAMINED_PLACES] },
+      rationale: [
+        `${rollback.evidence}.`,
+        'An attacker who can present an older, vulnerable image therefore has nothing in this layer stopping them.',
+        'Not proven: the version floor may be enforced in the bootloader or server-side, so this is a lead to settle',
+        'against a real downgrade attempt.',
+      ].join(' '),
+    });
+  } else if (rollback.state === 'on') {
+    drafts.push({
+      kind: 'update-rollback-check-present',
+      title: `The update path references a version floor (${short(rollback.markers)})`,
+      severity: 'info',
+      proofState: 'static_confirmed',
+      evidence: { state: rollback.state, markers: rollback.markers, evidence: rollback.evidence },
+      rationale: `${rollback.evidence}. The marker is in the bytes; whether the comparison is enforced (and cannot be overridden with a force flag) is a runtime question.`,
+    });
+  }
+
+  // --- The conjunction ------------------------------------------------------------------------------------
+  if (signatureItems.length > 0 && verifying.length > 0 && keyMaterial.length > 0) {
+    const verifier = verifying[0] as UpdaterCandidate;
+    drafts.push({
+      kind: 'update-verify-chain',
+      title: 'All three elements of an authenticated update are present in this image',
+      severity: 'info',
+      proofState: 'static_confirmed',
+      evidence: {
+        signatureInImage: signatureItems.map((i) => i.kind),
+        verifierInUpdater: {
+          path: verifier.path,
+          symbols: verifier.signatureFns,
+          commands: verifier.verifyCommands,
+          symbolSource: verifier.symbolSource ?? null,
+        },
+        keyOnDevice: keyMaterial.map((k) => k.path),
+      },
+      rationale: [
+        `Stated as the conjunction it is, with each part attributed: (1) the image carries ${short(signatureItems.map((i) => i.kind))};`,
+        `(2) ${verifier.path} ${
+          verifier.signatureFns.length > 0
+            ? `imports ${short(verifier.signatureFns)}`
+            : `invokes ${short(verifier.verifyCommands)}`
+        };`,
+        `(3) ${short(keyMaterial.map((k) => k.path))} is on the device.`,
+        'Each is a fact about the bytes. Together they show the mechanism is BUILT — they do not show it is reached',
+        'on the real update path, that the key is the one used, or that a failure is fatal rather than logged.',
+      ].join(' '),
+    });
+  }
+
+  return drafts;
+}
+
+// ===========================================================================================================
+// Runner
+// ===========================================================================================================
+
+const IMAGE_HEAD_CAP = 2 * 1024 * 1024;
+const IMAGE_TAIL_CAP = 1 * 1024 * 1024;
+const TPLINK_VERIFY_CAP = 64 * 1024 * 1024; // recomputing MD5 over a larger image is not worth the wall-clock
+const FDT_STRINGS_CAP = 256 * 1024;
+const WALK_CAP = 20000;
+const ELF_SCAN_CAP = 500;
+const SCRIPT_READ_CAP = 512 * 1024;
+const BIN_READ_CAP = 4 * 1024 * 1024;
+const KEY_HEAD_CAP = 8 * 1024;
+const CANDIDATE_CAP = 40;
+
+/** Read `[offset, offset+len)` of a file; a short/failed read yields what it got. */
+function readAt(p: string, offset: number, len: number): Uint8Array {
+  if (len <= 0) return new Uint8Array(0);
+  try {
+    const fd = fs.openSync(p, 'r');
+    try {
+      const buf = Buffer.allocUnsafe(len);
+      const read = fs.readSync(fd, buf, 0, len, offset);
+      return buf.subarray(0, read);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return new Uint8Array(0);
+  }
+}
+
+function fileSizeOf(p: string): number {
+  try {
+    return fs.statSync(p).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Read the image's integrity posture. Bounded: a head and a tail prefix plus, for a FIT, a targeted read of the
+ * property-name block (which sits at the very end of a 100 MB container and is a few dozen bytes long).
+ */
+export function scanImageIntegrity(imagePath: string): ImageIntegrity {
+  const size = fileSizeOf(imagePath);
+  const head = readAt(imagePath, 0, Math.min(size, IMAGE_HEAD_CAP));
+  const tailLen = Math.min(Math.max(size - head.length, 0), IMAGE_TAIL_CAP);
+  const tailStart = size - tailLen;
+  const tail = tailLen > 0 ? readAt(imagePath, tailStart, tailLen) : new Uint8Array(0);
+
+  const items: IntegrityItem[] = [];
+  let container: ImageIntegrity['container'] = 'unknown';
+  let containerNote =
+    'The image opens with no container header this analysis decodes, so any integrity structure it defines was not read.';
+
+  const fdt = parseFdtHeader(head);
+  const uimage = parseUImageHeader(head);
+  const tplink = parseTpLinkHeader(head, size);
+
+  if (fdt) {
+    container = 'fit';
+    const strings = Buffer.from(
+      readAt(imagePath, fdt.offDtStrings, Math.min(fdt.sizeDtStrings, FDT_STRINGS_CAP)),
+    ).toString('latin1');
+    const fit = classifyFitStrings(strings);
+    containerNote = `FIT/FDT v${fdt.version} container; its property-name block declares: ${fit.props.join(', ') || '(none read)'}.`;
+    if (fit.signed) {
+      items.push({
+        strength: 'signature',
+        kind: 'FIT signature node',
+        detail: 'the FIT declares signature properties over its configurations',
+      });
+    }
+    if (fit.hashed && !fit.signed) {
+      items.push({
+        strength: 'checksum',
+        kind: 'FIT hash node',
+        detail:
+          'the FIT declares hash properties (algo/value) and no signature/key-name-hint property, so the container authenticates nothing.',
+      });
+    }
+  } else if (uimage) {
+    container = 'uimage';
+    containerNote = `Legacy U-Boot uImage "${uimage.name}", ${uimage.dataSize} payload bytes.`;
+    items.push({
+      strength: 'checksum',
+      kind: 'uImage CRC32 header/data checksum',
+      detail: `the uImage header carries CRC32 fields (header 0x${uimage.headerCrc.toString(16)}, data 0x${uimage.dataCrc.toString(16)}) and no signature field.`,
+    });
+  } else if (tplink) {
+    container = 'tplink';
+    containerNote = `TP-Link vendor header ("${tplink.vendor}", hardware id 0x${tplink.hardwareId.toString(16)}), ${tplink.firmwareLength} bytes declared and present.`;
+    const wholeImage = size <= TPLINK_VERIFY_CAP ? readAt(imagePath, 0, tplink.firmwareLength) : new Uint8Array(0);
+    const salt = wholeImage.length >= tplink.firmwareLength ? verifyTpLinkChecksum(wholeImage, tplink) : null;
+    items.push({
+      strength: 'checksum',
+      kind: salt ? 'TP-Link keyed-MD5 header checksum' : 'TP-Link 16-byte header integrity field',
+      offset: TPLINK_MD5_OFFSET,
+      detail: salt
+        ? `verified by recomputation: hashing the image with the published "${salt}" constant substituted at 0x4c reproduces the stored value ${tplink.checksumHex} byte-for-byte, so the key is public.`
+        : `the stored value is ${tplink.checksumHex}; no published constant reproduced it here, so what it covers was not established.`,
+    });
+  } else {
+    const ota = parseOtaHeader(head, size);
+    if (ota.ivBlock || ota.lengthField !== null) {
+      container = 'ota-framed';
+      containerNote = `Framed vendor OTA header (read with the encrypted provider's parser): ${ota.lengthField !== null ? `length field ${ota.lengthField}` : 'no length field'}${ota.ivBlock ? `, framed 16-byte block at 0x${ota.ivBlock.offset.toString(16)}` : ''}.`;
+    }
+  }
+
+  // Generic structures, wherever the container came out.
+  for (const off of findPkcs7SignedData(head, 0)) {
+    items.push({
+      strength: 'signature',
+      kind: 'PKCS#7/CMS signedData structure',
+      detail: 'DER OID 1.2.840.113549.1.7.2 present in the image bytes',
+      offset: off,
+    });
+  }
+  for (const off of findPkcs7SignedData(tail, tailStart)) {
+    items.push({
+      strength: 'signature',
+      kind: 'PKCS#7/CMS signedData structure (appended)',
+      detail: 'DER OID 1.2.840.113549.1.7.2 present near the end of the image',
+      offset: off,
+    });
+  }
+  items.push(...findArmoredSignatures(Buffer.from(head).toString('latin1'), 0));
+  if (tail.length > 0) items.push(...findArmoredSignatures(Buffer.from(tail).toString('latin1'), tailStart));
+
+  let siblings: string[] = [];
+  try {
+    siblings = classifySiblings(path.basename(imagePath), fs.readdirSync(path.dirname(imagePath)));
+  } catch {
+    siblings = [];
+  }
+  for (const s of siblings) {
+    items.push({
+      strength: 'signature',
+      kind: `detached integrity file "${s}"`,
+      detail: 'a sibling file beside the uploaded image',
+    });
+  }
+
+  // Dedupe by (kind, offset): the same appended block can be seen from both the head and the tail window.
+  const seen = new Set<string>();
+  const deduped = items.filter((i) => {
+    const key = `${i.kind}@${i.offset ?? -1}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return { container, containerNote, items: deduped, siblings };
+}
+
+/** Is this file an ELF? Reads only the first four bytes. */
+function isElf(abs: string): boolean {
+  const b = readAt(abs, 0, 4);
+  return b[0] === 0x7f && b[1] === 0x45 && b[2] === 0x4c && b[3] === 0x46;
+}
+
+/** Extract printable ASCII runs (>= 3 chars) so the string fallback has something to tokenize. */
+function binaryStrings(buf: Uint8Array): string {
+  const out: string[] = [];
+  let cur = '';
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i] as number;
+    if (b >= 0x20 && b <= 0x7e) cur += String.fromCharCode(b);
+    else {
+      if (cur.length >= 3) out.push(cur);
+      cur = '';
+    }
+  }
+  if (cur.length >= 3) out.push(cur);
+  return out.join('\n');
+}
+
+/** Where a verification executable would live if the rootfs shipped it. */
+const BIN_DIRS = ['usr/bin', 'bin', 'usr/sbin', 'sbin', 'usr/local/bin', 'usr/libexec'];
+
+function verifierPresent(root: string, name: string): boolean {
+  for (const d of BIN_DIRS) {
+    try {
+      if (fs.existsSync(path.join(root, d, name))) return true;
+    } catch {
+      // an unreadable directory is not evidence of absence, but it is also not presence — keep looking
+    }
+  }
+  return false;
+}
+
+interface WalkHit {
+  rel: string;
+  abs: string;
+}
+
+/** Bounded, order-stable walk of the rootfs. Sorted so the same rootfs yields the same candidate set anywhere. */
+function walkRootfs(root: string): { files: WalkHit[]; walked: number; truncated: boolean } {
+  const files: WalkHit[] = [];
+  let walked = 0;
+  let truncated = false;
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    if (walked >= WALK_CAP) {
+      truncated = true;
+      break;
+    }
+    const dir = stack.pop() as string;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    const subdirs: string[] = [];
+    for (const e of entries) {
+      if (walked >= WALK_CAP) {
+        truncated = true;
+        break;
+      }
+      walked++;
+      if (e.isSymbolicLink()) continue;
+      const abs = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        subdirs.push(abs);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      files.push({ rel: path.relative(root, abs).split(path.sep).join('/'), abs });
+    }
+    for (let i = subdirs.length - 1; i >= 0; i--) stack.push(subdirs[i] as string);
+  }
+  return { files, walked, truncated };
+}
+
+/** Read one ELF updater candidate's symbol facts, preferring the real dynamic symbol table over the string superset. */
+function assessElf(rel: string, abs: string, discoveredBy: Discovery, why: string): UpdaterCandidate {
+  const bytes = readAt(abs, 0, Math.min(fileSizeOf(abs), BIN_READ_CAP));
+  const dyn = parseDynamicSymbols(bytes);
+  const symbols = dyn ?? extractSymbols(binaryStrings(bytes));
+  const { signatureFns, digestFns } = assessSymbols(symbols);
+  const rollbackMarkers = ROLLBACK_PATTERNS.filter((p) => [...symbols].some((s) => p.re.test(s))).map((p) => p.label);
+  return {
+    path: rel,
+    kind: 'elf',
+    discoveredBy,
+    why,
+    symbolSource: dyn ? 'dynsym' : 'strings',
+    signatureFns,
+    digestFns,
+    verifyCommands: [],
+    missingVerifiers: [],
+    flashWrites: [],
+    rollbackMarkers,
+  };
+}
+
+/**
+ * Locate the update path in an extracted rootfs and read what it verifies.
+ *
+ * Two discovery routes, because either alone manufactures a false negative: by PATH (which finds OpenWrt's
+ * `sbin/sysupgrade` and `lib/upgrade/fwtool.sh`) and by SYMBOL (which finds TP-Link's update logic living inside
+ * `usr/bin/httpd`, a file no name-based hunt would ever open). Every candidate records which route found it.
+ */
+export function findUpdaters(rootfsPath: string): {
+  updaters: UpdaterCandidate[];
+  droppedUpdaters: number;
+  keyMaterial: KeyMaterial[];
+  filesWalked: number;
+  elfsExamined: number;
+  elfBudgetExhausted: boolean;
+  truncated: boolean;
+} {
+  const root = path.resolve(rootfsPath);
+  const { files, walked, truncated } = walkRootfs(root);
+  // Collected in full and capped only at the END, so the cap chooses on merit instead of on traversal order.
+  const found: UpdaterCandidate[] = [];
+  const keyMaterial: KeyMaterial[] = [];
+  const claimed = new Set<string>();
+  let elfsExamined = 0;
+
+  // Route 1: the path says so.
+  for (const f of files) {
+    const cls = classifyUpdaterPath(f.rel);
+    if (cls.tier === 'excluded') continue;
+    const entryPoint = cls.tier === 'strong' && cls.basis === 'name';
+    const why = `${entryPoint ? 'entry point' : 'path match'} — ${cls.why}`;
+    if (isElf(f.abs)) {
+      if (elfsExamined >= ELF_SCAN_CAP) continue;
+      elfsExamined++;
+      found.push(assessElf(f.rel, f.abs, 'path', why));
+      claimed.add(f.rel);
+      continue;
+    }
+    const size = fileSizeOf(f.abs);
+    if (size === 0 || size > SCRIPT_READ_CAP) continue;
+    const text = Buffer.from(readAt(f.abs, 0, size)).toString('latin1');
+    if (!/^(?:#!|--|\s*local\s|\s*function\s)/.test(text) && !/\n/.test(text.slice(0, 4096))) continue;
+    const a = assessScript(text);
+    // Only a file whose own NAME is an update entry point gets in on the name alone. Anything reached through the
+    // helper directory or a generic mention has to show verification or a flash write in its content: on the real
+    // GL.iNet, `lib/upgrade/keep.d/` holds 30 one-line package manifests that are data, and counting them as
+    // updaters both flooded the list and (before the cap became merit-ordered) evicted `sbin/sysupgrade` from it.
+    if (!entryPoint && a.verifyCommands.length === 0 && a.flashWrites.length === 0) continue;
+    found.push({
+      path: f.rel,
+      kind: 'script',
+      discoveredBy: 'path',
+      why,
+      signatureFns: [],
+      digestFns: [],
+      verifyCommands: a.verifyCommands,
+      missingVerifiers: a.verifierBinaries.filter((b) => !verifierPresent(root, b)),
+      flashWrites: a.flashWrites,
+      rollbackMarkers: a.rollbackMarkers,
+    });
+    claimed.add(f.rel);
+  }
+
+  // Route 2: the symbols say so, whatever the file is called.
+  for (const f of files) {
+    if (elfsExamined >= ELF_SCAN_CAP) break;
+    if (claimed.has(f.rel)) continue;
+    if (NON_EXECUTABLE_SUFFIX.test(f.rel)) continue;
+    if (!isElf(f.abs)) continue;
+    elfsExamined++;
+    const bytes = readAt(f.abs, 0, Math.min(fileSizeOf(f.abs), BIN_READ_CAP));
+    const dyn = parseDynamicSymbols(bytes);
+    if (!dyn) continue; // route 2 requires a REAL symbol table — a string mention is far too weak to open on
+    const hits = [...dyn].filter(isUpdaterSymbol).sort();
+    if (hits.length === 0) continue;
+    const { signatureFns, digestFns } = assessSymbols(dyn);
+    found.push({
+      path: f.rel,
+      kind: 'elf',
+      discoveredBy: 'symbol',
+      why: `dynamic symbol table names firmware-update routines (${short(hits)})`,
+      symbolSource: 'dynsym',
+      signatureFns,
+      digestFns,
+      verifyCommands: [],
+      missingVerifiers: [],
+      flashWrites: [],
+      rollbackMarkers: ROLLBACK_PATTERNS.filter((p) => hits.some((h) => p.re.test(h))).map((p) => p.label),
+    });
+  }
+
+  // Trust anchors kept on the device.
+  for (const f of files) {
+    if (keyMaterial.length >= CANDIDATE_CAP) break;
+    const size = fileSizeOf(f.abs);
+    if (size === 0 || size > KEY_HEAD_CAP * 8) continue;
+    if (!/(?:\.pub|\.pem|\.crt|\.cer|\.key)$/i.test(f.rel) && !/(?:^|\/)etc\/opkg\/keys\//.test(f.rel)) continue;
+    const head = Buffer.from(readAt(f.abs, 0, Math.min(size, KEY_HEAD_CAP))).toString('latin1');
+    const k = classifyKeyMaterial(f.rel, head);
+    if (k) keyMaterial.push(k);
+  }
+
+  const { kept, dropped } = selectUpdaters(found, CANDIDATE_CAP);
+  return {
+    updaters: kept,
+    droppedUpdaters: dropped,
+    keyMaterial,
+    filesWalked: walked,
+    elfsExamined,
+    elfBudgetExhausted: elfsExamined >= ELF_SCAN_CAP,
+    truncated,
+  };
+}
+
+/**
+ * Assess the update mechanism of one image: what the image itself carries, what the updater in its rootfs
+ * verifies, and whether anything bounds the version downward. Always `available` (no external tool), and a missing
+ * rootfs degrades to the image half plus an explicit `blocked_by_platform` record of the half that went unasked.
+ */
+export function runUpdatePath(imagePath: string, rootfsPath: string | null): UpdatePathResult {
+  const imageIntegrity = scanImageIntegrity(imagePath);
+
+  let updaters: UpdaterCandidate[] = [];
+  let droppedUpdaters = 0;
+  let keyMaterial: KeyMaterial[] = [];
+  let filesWalked = 0;
+  let elfsExamined = 0;
+  let elfBudgetExhausted = false;
+  let truncated = false;
+  let rootfsUsable = false;
+  if (rootfsPath) {
+    try {
+      rootfsUsable = fs.statSync(rootfsPath).isDirectory();
+    } catch {
+      rootfsUsable = false;
+    }
+  }
+  if (rootfsUsable && rootfsPath) {
+    const found = findUpdaters(rootfsPath);
+    updaters = found.updaters;
+    droppedUpdaters = found.droppedUpdaters;
+    keyMaterial = found.keyMaterial;
+    filesWalked = found.filesWalked;
+    elfsExamined = found.elfsExamined;
+    elfBudgetExhausted = found.elfBudgetExhausted;
+    truncated = found.truncated;
+  }
+
+  const rollback = assessRollback(updaters);
+  const findings = buildUpdatePathFindings(imageIntegrity, updaters, keyMaterial, rollback, rootfsUsable, {
+    elfBudgetExhausted,
+    walkTruncated: truncated,
+  });
+
+  const sigCount = imageIntegrity.items.filter((i) => i.strength === 'signature').length;
+  const sumCount = imageIntegrity.items.filter((i) => i.strength === 'checksum').length;
+  const capNote =
+    droppedUpdaters > 0
+      ? ` The ${CANDIDATE_CAP}-candidate cap kept the ${updaters.length} strongest and dropped ${droppedUpdaters} further candidate(s) — ordered by entry-point/verification/flash evidence, not by directory order.`
+      : '';
+  const walkNote = truncated
+    ? ` The ${WALK_CAP}-entry walk bound was reached, so part of the rootfs was never visited and is absent from these counts, not cleared by them.`
+    : '';
+  const elfNote = elfBudgetExhausted
+    ? ` The ${ELF_SCAN_CAP}-binary examination budget was exhausted, so ELFs beyond it were never opened for update symbols and are absent from these counts, not cleared by them.`
+    : '';
+
+  return {
+    available: true,
+    imageIntegrity,
+    updaters,
+    droppedUpdaters,
+    keyMaterial,
+    rollback,
+    filesWalked,
+    elfsExamined,
+    elfBudgetExhausted,
+    truncated,
+    findings,
+    reason:
+      `Update-path integrity: container ${imageIntegrity.container} (${sigCount} signature structure(s), ${sumCount} checksum structure(s)); ` +
+      `${updaters.length} updater(s) located across ${filesWalked} rootfs entries; ${keyMaterial.length} trust anchor(s); ` +
+      `rollback ${rollback.state}.${capNote}${walkNote}${elfNote} A missing verify routine is a lead about what was read, never a verdict that the firmware is unsigned.`,
+  };
+}

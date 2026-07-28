@@ -46,6 +46,7 @@ import { storageRoutes } from './routes/storage.js';
 import { symreachRoutes } from './routes/symreach.js';
 import { toolRoutes } from './routes/tools.js';
 import { ubootRoutes } from './routes/uboot.js';
+import { updatepathRoutes } from './routes/updatepath.js';
 import { webprobeRoutes } from './routes/webprobe.js';
 import { registerSecurity } from './security.js';
 import { getFlagOverrides } from './settings.js';
@@ -123,6 +124,7 @@ async function main(): Promise<void> {
       await api.register(chipsecRoutes);
       await api.register(webprobeRoutes);
       await api.register(ubootRoutes);
+      await api.register(updatepathRoutes);
       await api.register(fsauditRoutes);
       await api.register(certsRoutes);
       await api.register(rtosRoutes);
