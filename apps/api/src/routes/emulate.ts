@@ -11,6 +11,7 @@ import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
 import { computeRuntimeCapabilities } from '../providers/preflight.js';
 import { getImage, listJobs, updateBinaryEmulationStatus } from '../store.js';
+import { rootfsArch } from './symreach.js';
 
 /** Find the most recent successful extraction result for an image, if any. */
 function latestExtract(imageId: string): ExtractResult | null {
@@ -103,10 +104,16 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
     }
     const rootfsPath = extract.rootfsPath;
     const body = (req.body ?? {}) as { rung?: string; binary?: string };
+    // Prefer the MEASURED architecture over the guessed one. `identity.arch` is inferred from the raw image bytes
+    // and is `unknown` for plenty of real images (DVRF among them) while extraction has already read it out of the
+    // ELF headers of every binary in the rootfs — so this rung refused to run on an image whose architecture was
+    // known, just not in the field being consulted. Exactly the defect fixed once for the dynamic probe and never
+    // carried across to here.
+    const arch = rootfsArch(id, identity) ?? identity.arch;
 
     if (body.rung === 'full-system') {
       const jobId = startJob(id, 'emulate', { rung: 'full-system' }, (handle) =>
-        runFullSystem(identity.arch, `${rootfsPath}.img`, 8080, handle, rootfsPath).then((r) =>
+        runFullSystem(arch, `${rootfsPath}.img`, 8080, handle, rootfsPath).then((r) =>
           onSystemEmulationResult(id, identity, 'system-boot', r),
         ),
       );
@@ -116,7 +123,7 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
     const service = body.binary ?? extract.suggestedBinary;
     if (!service) return reply.status(400).send({ error: 'No target service specified and none could be suggested' });
     const jobId = startJob(id, 'emulate', { rung: 'chroot-service', binary: service }, (handle) =>
-      runChrootService(identity.arch, rootfsPath, service, handle).then((r) =>
+      runChrootService(arch, rootfsPath, service, handle).then((r) =>
         onSystemEmulationResult(id, identity, service, r),
       ),
     );
