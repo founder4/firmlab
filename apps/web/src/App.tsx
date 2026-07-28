@@ -359,7 +359,11 @@ function Shell(): JSX.Element {
 
 export function App(): JSX.Element {
   return (
-    <HashRouter>
+    // The v7 flags are opted into explicitly rather than left to warn on every dev boot. Both are inert here
+    // and that is the point of taking them now: there are no splat routes for relativeSplatPath to re-resolve,
+    // and startTransition only marks router state updates non-urgent, which this shell already tolerates —
+    // so the upgrade is a no-op today and will not become a behavioural surprise on the day v7 lands.
+    <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Shell />
       <Onboarding />
       <Toaster />

@@ -62,7 +62,7 @@ describe('Dashboard image filter', () => {
   it('narrows the list to images matching the query', async () => {
     mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips'), image('b', 'camera.img', 'arm')]);
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Dashboard />
       </MemoryRouter>,
     );
@@ -82,7 +82,7 @@ describe('Dashboard coverage column', () => {
     mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips'), image('b', 'camera.img', 'arm')]);
     mockApi.coverageAll.mockResolvedValue([coverage('a', 0, 12), coverage('b', 12, 12)]);
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Dashboard />
       </MemoryRouter>,
     );
@@ -95,7 +95,7 @@ describe('Dashboard coverage column', () => {
     mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips')]);
     mockApi.coverageAll.mockRejectedValue(new Error('offline'));
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Dashboard />
       </MemoryRouter>,
     );
@@ -113,5 +113,31 @@ describe('App shell', () => {
     expect(shell?.className).not.toContain('nav-open');
     fireEvent.click(screen.getByLabelText('Toggle navigation'));
     expect(shell?.className).toContain('nav-open');
+  });
+
+  // The router opts into the v7 future flags, and `v7_startTransition` is the one with teeth: it marks router
+  // state updates non-urgent, so a route change is no longer guaranteed to be on screen by the time the click
+  // returns. Nothing else here navigates through the REAL HashRouter, which left the opt-in resting on a
+  // suite that never exercised the behaviour it changes. Asserting asynchronously is not a workaround for a
+  // flaky test — deferred arrival is precisely the contract, and this proves the destination still arrives.
+  it('navigates between routes under the v7 startTransition opt-in', async () => {
+    mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips')]);
+    render(<App />);
+    await screen.findByText(/auth-gated/i);
+
+    // The destination is identified by the filter box, which only Dashboard renders. The obvious assertion —
+    // that the image filename appears — is worthless here: Overview lists filenames too, so it holds on the
+    // ORIGIN route and the test would pass with the router torn out entirely.
+    expect(screen.queryByPlaceholderText(/Filter by filename/i)).not.toBeInTheDocument();
+
+    // Scoped to the sidebar on purpose: the Overview page links to the same destination, so an unscoped
+    // query matches two links and the failure reads as ambiguity rather than as the routing fact under test.
+    const sidebarLink = screen
+      .getAllByRole('link', { name: /Local analysis/i })
+      .find((a) => a.className.includes('nav-item'));
+    if (!sidebarLink) throw new Error('the sidebar has no Local analysis link');
+    fireEvent.click(sidebarLink);
+
+    expect(await screen.findByPlaceholderText(/Filter by filename/i)).toBeInTheDocument();
   });
 });

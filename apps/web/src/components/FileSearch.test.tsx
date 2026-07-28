@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type FilesSearch, api } from '../api';
 import { FileSearch, isCompleteSearch } from './FileSearch';
@@ -47,11 +47,16 @@ describe('isCompleteSearch', () => {
 });
 
 describe('FileSearch', () => {
+  // The submit handler is async, so the state it sets lands a microtask AFTER fireEvent returns. Clicking
+  // inside act() lets that update settle within the render cycle React accounts for, instead of arriving
+  // unattached and being reported as an unwrapped update.
   const search = async (result: FilesSearch) => {
     mockApi.searchFiles.mockResolvedValue(result);
     render(<FileSearch imageId="447719f7" />);
     fireEvent.change(screen.getByLabelText('Search term'), { target: { value: 'nope' } });
-    fireEvent.click(screen.getByRole('button', { name: /Search/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Search/i }));
+    });
   };
 
   it('an empty COMPLETE search is allowed to be a negative, and says so plainly', async () => {

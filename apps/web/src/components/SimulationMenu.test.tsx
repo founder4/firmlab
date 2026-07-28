@@ -16,12 +16,16 @@ vi.mock('../api', async (importOriginal) => {
       runRenode: vi.fn(),
       runChipsec: vi.fn(),
       extract: vi.fn(),
+      // The component also loads the extracted binaries to populate the target selector. Leaving it real
+      // meant every test in this file made an unmocked fetch into jsdom, and its rejection then updated
+      // state after the test had finished — a live network call is not something a unit test should own.
+      binaries: vi.fn(),
     },
   };
 });
 
 const mockApi = api as unknown as Record<
-  'emulation' | 'job' | 'emulate' | 'emulateSystem' | 'runRenode' | 'runChipsec' | 'extract',
+  'emulation' | 'job' | 'emulate' | 'emulateSystem' | 'runRenode' | 'runChipsec' | 'extract' | 'binaries',
   ReturnType<typeof vi.fn>
 >;
 
@@ -63,13 +67,16 @@ beforeEach(() => {
   mockApi.runRenode.mockResolvedValue({ jobId: 'j1' });
   mockApi.runChipsec.mockResolvedValue({ jobId: 'j1' });
   mockApi.extract.mockResolvedValue({ jobId: 'j1' });
+  mockApi.binaries.mockResolvedValue([]);
 });
 
 describe('SimulationMenu', () => {
-  it('shows a loading state until the emulation plan arrives', () => {
+  it('shows a loading state until the emulation plan arrives', async () => {
     mockApi.emulation.mockReturnValueOnce(new Promise(() => {})); // never resolves
     render(<SimulationMenu imageId="img1" />);
-    expect(screen.getByText(/Loading emulation plan/i)).toBeInTheDocument();
+    // findBy, not getBy: the binaries effect resolves a microtask later, and awaiting an async query lets
+    // that settle inside act. The plan itself never arrives, so the loading state is still what is asserted.
+    expect(await screen.findByText(/Loading emulation plan/i)).toBeInTheDocument();
   });
 
   it('is honest per rung: a runnable recipe gets a run button, a non-runnable one does not', async () => {
