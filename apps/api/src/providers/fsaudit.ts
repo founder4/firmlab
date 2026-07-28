@@ -415,6 +415,124 @@ const STANDALONE_CONFIGS = [
   'etc/dropbear/dropbear.conf',
 ];
 
+// === The account database, and the four ways it can be silent ==============================================
+
+/** How an account file actually presents on disk. `readInside` collapses all of these to `''`. */
+export type AccountFileState =
+  | { state: 'present'; bytes: number }
+  | { state: 'absent' }
+  | { state: 'empty' }
+  | { state: 'symlink-escapes'; target: string }
+  | { state: 'unreadable'; reason: string };
+
+export interface AccountSource {
+  /** Rootfs-relative path, e.g. `etc/passwd`. */
+  path: string;
+  state: AccountFileState;
+}
+
+/** The files whose silence would otherwise be read as "this image has no credential problems". */
+const ACCOUNT_FILES = ['etc/passwd', 'etc/shadow', 'etc/group', 'etc/gshadow'];
+
+/**
+ * Pure: say what the credential audit is entitled to conclude, given how the account files present.
+ *
+ * `readInside` returns `''` for a file that is absent, empty, unreadable, or a symlink pointing outside the
+ * rootfs — and `auditCredentials('', '')` then emits nothing, which renders as "no credential findings" and reads
+ * as "no credential problems". Those are not the same claim, and DVRF is the worked example: it symlinks its
+ * ENTIRE account database — `passwd`, `shadow`, `group`, `gshadow`, plus `hosts`, `resolv.conf` and `cron.d` — to
+ * `/dev/null`. Every read returns empty, every check passes, and the image looks clean on the one axis this
+ * provider exists to examine. (Its real credentials live in the Broadcom `router_defaults[]` string pool inside
+ * `usr/lib/libshared.so`, which is a different provider's problem — the point here is that this one must not
+ * imply it looked and found nothing.)
+ *
+ * Rule 3 of the proof-state discipline, applied to a provider that had it backwards: an empty result must say why.
+ */
+export function auditAccountSources(sources: AccountSource[]): FindingDraft[] {
+  const neutered = sources.filter((s) => s.state.state === 'symlink-escapes');
+  const missing = sources.filter((s) => s.state.state === 'absent');
+  const empty = sources.filter((s) => s.state.state === 'empty');
+  const unreadable = sources.filter((s) => s.state.state === 'unreadable');
+  const readable = sources.filter((s) => s.state.state === 'present');
+
+  const drafts: FindingDraft[] = [];
+
+  if (neutered.length > 0) {
+    const targets = [...new Set(neutered.map((s) => (s.state as { target: string }).target))];
+    drafts.push({
+      kind: 'account-db-redirected',
+      title: `Account database is redirected out of the filesystem: ${neutered.map((s) => s.path).join(', ')} → ${targets.join(', ')}`,
+      severity: 'medium',
+      proofState: 'static_confirmed',
+      evidence: {
+        redirected: neutered.map((s) => ({ path: s.path, target: (s.state as { target: string }).target })),
+        readableAccountFiles: readable.map((s) => s.path),
+      },
+      rationale: `These account files are symlinks whose target lies outside the extracted filesystem, so reading them yields nothing. The credential checks in this audit therefore examined NO accounts for those paths — that is a gap in what was asked, not a clean result, and an empty credential finding list for this image must not be read as "no weak accounts". Where the real credentials live (a vendor NVRAM store, a string pool inside a shared library, a cloud provisioning step) is a separate question this provider does not answer.`,
+    });
+  }
+
+  // Absent and empty are reported together and only when NOTHING was readable: a rootfs with a real `etc/passwd`
+  // and no `etc/gshadow` is ordinary, and flagging it would be noise. A rootfs where none of the four could be
+  // read is a credential audit that examined nothing at all.
+  if (readable.length === 0 && neutered.length === 0 && sources.length > 0) {
+    const detail = [
+      missing.length ? `${missing.length} absent (${missing.map((s) => s.path).join(', ')})` : '',
+      empty.length ? `${empty.length} present but empty` : '',
+      unreadable.length ? `${unreadable.length} unreadable` : '',
+    ]
+      .filter(Boolean)
+      .join('; ');
+    drafts.push({
+      kind: 'account-db-unreadable',
+      title: 'No account file in this rootfs could be read, so no account was examined',
+      severity: 'info',
+      proofState: 'blocked_by_platform',
+      evidence: { sources: sources.map((s) => ({ path: s.path, state: s.state.state })), detail },
+      rationale: `The credential checks read ${ACCOUNT_FILES.join(', ')}; on this image ${detail}. Zero credential findings here means the question could not be asked, never that the accounts are sound.`,
+    });
+  }
+  return drafts;
+}
+
+/**
+ * Read how one account file presents. Separated from the pure decision above because it needs `lstat`/`realpath`:
+ * the interesting case is a symlink that RESOLVES outside the rootfs, which `safeJoin` cannot catch — it validates
+ * the path it was handed, and `etc/passwd` is perfectly in-root right up until the kernel follows it to /dev/null.
+ */
+export function inspectAccountFile(root: string, rel: string): AccountFileState {
+  const abs = safeJoin(root, rel);
+  if (!abs) return { state: 'absent' };
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(abs);
+  } catch {
+    return { state: 'absent' };
+  }
+  if (st.isSymbolicLink()) {
+    let target = '';
+    try {
+      target = fs.readlinkSync(abs);
+    } catch {
+      return { state: 'unreadable', reason: 'symlink could not be read' };
+    }
+    const resolved = path.resolve(path.dirname(abs), target);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) return { state: 'symlink-escapes', target };
+    // An in-root symlink is followed normally; fall through to the size check on its target.
+  }
+  try {
+    const s = fs.statSync(abs);
+    return s.size === 0 ? { state: 'empty' } : { state: 'present', bytes: s.size };
+  } catch {
+    return { state: 'unreadable', reason: 'target could not be stat-ed' };
+  }
+}
+
+/** Inspect every account file this audit depends on, so its silence can be explained rather than assumed. */
+export function collectAccountSources(root: string): AccountSource[] {
+  return ACCOUNT_FILES.map((rel) => ({ path: rel, state: inspectAccountFile(root, rel) }));
+}
+
 /** Confine a rootfs-relative path to the rootfs; returns the absolute path, or null on traversal. */
 function safeJoin(root: string, rel: string): string | null {
   const abs = path.resolve(root, rel);
@@ -581,6 +699,9 @@ export function runFsAudit(rootfsPath: string): FsAuditResult {
   const contentScanFiles = collectContentScanFiles(root, relPaths);
 
   const findings: FindingDraft[] = [
+    // First, whether the credential checks below could examine anything at all — an empty result from them is
+    // only a negative when the files they read were actually readable.
+    ...auditAccountSources(collectAccountSources(root)),
     ...auditCredentials(passwd, shadow),
     ...auditInittab(inittab),
     ...auditServiceConfigs(serviceFiles),

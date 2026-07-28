@@ -3,13 +3,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  auditAccountSources,
   auditCredentials,
   auditInittab,
   auditServiceConfigs,
+  inspectAccountFile,
   notableFiles,
   runFsAudit,
   scanContentSecrets,
 } from './fsaudit.js';
+import type { AccountFileState, AccountSource } from './fsaudit.js';
 
 // A UID-0 root that defers its password to /etc/shadow, plus a normal daemon account.
 const PASSWD = 'root:x:0:0:root:/root:/bin/sh\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n';
@@ -213,5 +216,73 @@ describe('scanContentSecrets (private key by content, not filename)', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('auditAccountSources — the four ways an account file is silent', () => {
+  const src = (p: string, state: AccountFileState): AccountSource => ({ path: p, state });
+
+  it('flags the DVRF case: the whole account database symlinked out of the filesystem', () => {
+    // The real DVRF rootfs points passwd/shadow/group/gshadow at /dev/null; every read returns '' and every
+    // credential check then passes, which is how a bit-bucket reads as a clean bill of health.
+    const out = auditAccountSources([
+      src('etc/passwd', { state: 'symlink-escapes', target: '/dev/null' }),
+      src('etc/shadow', { state: 'symlink-escapes', target: '/dev/null' }),
+      src('etc/group', { state: 'symlink-escapes', target: '/dev/null' }),
+      src('etc/gshadow', { state: 'symlink-escapes', target: '/dev/null' }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.kind).toBe('account-db-redirected');
+    expect(out[0]?.proofState).toBe('static_confirmed');
+    expect(out[0]?.title).toContain('/dev/null');
+    // The claim that matters: an empty credential list here is a gap, not a negative.
+    expect(out[0]?.rationale).toMatch(/not a clean result/i);
+  });
+
+  it('stays quiet on an ordinary rootfs that simply has no gshadow', () => {
+    const out = auditAccountSources([
+      src('etc/passwd', { state: 'present', bytes: 420 }),
+      src('etc/shadow', { state: 'present', bytes: 310 }),
+      src('etc/group', { state: 'present', bytes: 200 }),
+      src('etc/gshadow', { state: 'absent' }),
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it('reports blocked_by_platform when nothing could be read at all', () => {
+    const out = auditAccountSources([
+      src('etc/passwd', { state: 'absent' }),
+      src('etc/shadow', { state: 'absent' }),
+      src('etc/group', { state: 'empty' }),
+      src('etc/gshadow', { state: 'unreadable', reason: 'target could not be stat-ed' }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.proofState).toBe('blocked_by_platform');
+    expect(out[0]?.rationale).toMatch(/never that the accounts are sound/i);
+  });
+
+  it('does not double-report: a redirected database is not also "nothing readable"', () => {
+    const out = auditAccountSources([
+      src('etc/passwd', { state: 'symlink-escapes', target: '/dev/null' }),
+      src('etc/shadow', { state: 'absent' }),
+    ]);
+    expect(out.map((d) => d.kind)).toEqual(['account-db-redirected']);
+  });
+});
+
+describe('inspectAccountFile', () => {
+  it('separates an escaping symlink from an in-root one, and from a real file', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-'));
+    fs.mkdirSync(path.join(root, 'etc'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'etc', 'group'), 'root:x:0:\n');
+    fs.symlinkSync('/dev/null', path.join(root, 'etc', 'passwd'));
+    fs.symlinkSync('group', path.join(root, 'etc', 'shadow')); // in-root symlink: followed normally
+    fs.writeFileSync(path.join(root, 'etc', 'gshadow'), '');
+
+    expect(inspectAccountFile(root, 'etc/passwd')).toEqual({ state: 'symlink-escapes', target: '/dev/null' });
+    expect(inspectAccountFile(root, 'etc/shadow').state).toBe('present');
+    expect(inspectAccountFile(root, 'etc/group').state).toBe('present');
+    expect(inspectAccountFile(root, 'etc/gshadow')).toEqual({ state: 'empty' });
+    expect(inspectAccountFile(root, 'etc/nope')).toEqual({ state: 'absent' });
   });
 });
