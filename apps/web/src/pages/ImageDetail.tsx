@@ -33,6 +33,7 @@ import { AnalysisActionsPanel } from '../components/AnalysisActionsPanel';
 import { CoverageBanner } from '../components/CoverageBanner';
 import { EntropyChart } from '../components/EntropyChart';
 import { FileBrowser } from '../components/FileBrowser';
+import { FileSearch } from '../components/FileSearch';
 import { FilesystemTree } from '../components/FilesystemTree';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { HardwareInterfaces } from '../components/HardwareInterfaces';
@@ -178,7 +179,13 @@ export function ImageDetail(): JSX.Element {
         </>
       )}
       {/* File browser: the surface that lets a finding's evidence be checked instead of trusted. */}
-      {tab === 'files' && <FileBrowser imageId={id} />}
+      {tab === 'files' && (
+        <>
+          <FileBrowser imageId={id} />
+          {/* The other direction: the browser answers "what does this file say", this answers "which file says this". */}
+          <FileSearch imageId={id} />
+        </>
+      )}
       {tab === 'secrets' && <SecretsPanel analysis={analysis} imageId={id} />}
       {/* What the firmware declares about the physical ways in. Reads stored results; connects to nothing. */}
       {tab === 'hardware' && <HardwareInterfaces imageId={id} />}

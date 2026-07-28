@@ -28,6 +28,7 @@ import {
   listDirectory,
   readFileSlice,
 } from '../providers/fsbrowse.js';
+import { searchExtraction } from '../providers/fssearch.js';
 import { getImage, listJobs } from '../store.js';
 
 /** Status codes per refusal rule — "not there" and "not allowed" are different answers. */
@@ -79,6 +80,27 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(status).send({ error: listing.reason, rule: listing.rule, extraction: view });
     }
     return { extraction: view, listing, claim: EVIDENCE_CLAIM };
+  });
+
+  /**
+   * Which file says this — the other direction from the browser, and the one an analyst reaches for when a
+   * provider's evidence names a string and the question is where else it appears.
+   *
+   * The answer leads with its coverage, not its hits: every skipped file is a hole, and a short list that does
+   * not say what it skipped reads as a complete one.
+   */
+  app.get('/images/:id/files/search', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
+
+    const { root, view } = extractionOf(id);
+    const { q, regex } = req.query as { q?: string; regex?: string };
+    if (!root) return { extraction: view, result: null, claim: EVIDENCE_CLAIM };
+    if (!q) return reply.status(400).send({ error: 'Provide a search term as ?q=', extraction: view });
+
+    const result = searchExtraction(root, q, { regex: regex === '1' || regex === 'true' });
+    if ('error' in result) return reply.status(400).send({ error: result.error, extraction: view });
+    return { extraction: view, result, claim: EVIDENCE_CLAIM };
   });
 
   /**

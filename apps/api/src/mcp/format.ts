@@ -458,3 +458,47 @@ export function toolResult(payload: unknown): {
 export function toolError(message: string): { content: { type: 'text'; text: string }[]; isError: true } {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
+
+/** The search result as the API serves it — mirrors `providers/fssearch.ts`, fields optional for stored shapes. */
+export interface McpSearchResult {
+  query?: string;
+  regex?: boolean;
+  hits?: { path?: string; offset?: number; line?: number; excerpt?: string; binary?: boolean }[];
+  coverage?: {
+    filesExamined?: number;
+    entriesWalked?: number;
+    skipped?: { tooLarge?: number; unreadable?: number; budgetExhausted?: number };
+    walkTruncated?: boolean;
+    hitCapReached?: boolean;
+  };
+  verdict?: string;
+}
+
+/**
+ * Shape a search for a model that is about to write "the term does not appear in this firmware".
+ *
+ * It cannot: the search declined to open some files, and a model reading a `hits: []` will not go looking for the
+ * coverage object to find out how many. So the verdict leads, in the first field, and a result with any hole
+ * carries an explicit `isCompleteSearch: false` beside it — the same discipline `findingsPayload` applies to an
+ * empty findings list, at the layer where the equivalent mistake is even easier to make.
+ */
+export function searchPayload(extraction: McpExtraction, r: McpSearchResult): Record<string, unknown> {
+  const sk = r.coverage?.skipped ?? {};
+  const holes = (sk.tooLarge ?? 0) + (sk.unreadable ?? 0) + (sk.budgetExhausted ?? 0);
+  const complete = holes === 0 && !r.coverage?.walkTruncated && !r.coverage?.hitCapReached;
+  return {
+    searchVerdict: r.verdict ?? 'This result was stored without a coverage verdict; treat its completeness as unknown.',
+    isCompleteSearch: complete,
+    ...(complete
+      ? {}
+      : {
+          whyNotComplete:
+            'Files were left unopened or the hit list was capped. An absent term here means "not found in what was searched", never "not present in this firmware".',
+        }),
+    extractionVerdict: extraction.verdict,
+    query: r.query,
+    matchCount: r.hits?.length ?? 0,
+    filesExamined: r.coverage?.filesExamined ?? null,
+    hits: r.hits ?? [],
+  };
+}

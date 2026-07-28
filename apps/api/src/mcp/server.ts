@@ -36,12 +36,14 @@ import {
   type McpExtraction,
   type McpFileRead,
   type McpFinding,
+  type McpSearchResult,
   coverageHeadline,
   fileListingPayload,
   fileReadPayload,
   findingsPayload,
   reachabilityPayload,
   scanPayload,
+  searchPayload,
   toolError,
   toolResult,
 } from './format.js';
@@ -242,6 +244,46 @@ export function buildServer(fl: FirmLabClient): McpServer {
       }>(`/api/images/${imageId}/files${query}`);
       if (!ok) return toolError(`${body.error ?? 'the path was refused'} (rule: ${body.rule ?? 'unknown'})`);
       return toolResult(fileListingPayload(body.extraction, body.listing));
+    },
+  );
+
+  server.registerTool(
+    'firmlab_search_files',
+    {
+      title: 'Search the extraction for a term',
+      description:
+        'Answer "which file says this" across the whole extraction — the direction the browser cannot go. ' +
+        'THE COVERAGE IS THE ANSWER, not the hit list: every file the search declined to open (too large, ' +
+        'unreadable, past the read budget) is a hole, and a term present only in those would not appear. The ' +
+        'result carries a verdict sentence stating exactly that, and it says plainly when NOTHING was skipped — ' +
+        'which is the only case where an empty result is a real negative. Binaries ARE searched, because a ' +
+        "firmware's most interesting strings live inside them; a hit there carries a byte offset and no line " +
+        'number, since a line number in a binary is a fiction. Quote the verdict when you report.',
+      inputSchema: {
+        imageId: z.string(),
+        query: z.string().describe('Literal term by default — it is escaped, so `a.out` will not match `about`'),
+        regex: z.boolean().optional().describe('Treat the query as a regular expression instead'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ imageId, query, regex }) => {
+      const params = new URLSearchParams({ q: query });
+      if (regex) params.set('regex', '1');
+      const { ok, body } = await fl.getWithStatus<{
+        extraction: McpExtraction;
+        result: McpSearchResult | null;
+        error?: string;
+      }>(`/api/images/${imageId}/files/search?${params.toString()}`);
+      if (!ok) return toolError(body.error ?? 'the search was refused');
+      if (!body.result) {
+        return toolResult({
+          extractionVerdict: body.extraction.verdict,
+          state: body.extraction.state,
+          result: null,
+          note: 'Nothing is on disk to search for this image. That is not the same claim as "the term is absent".',
+        });
+      }
+      return toolResult(searchPayload(body.extraction, body.result));
     },
   );
 

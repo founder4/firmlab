@@ -745,6 +745,29 @@ async function del<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** A content search over the extraction. Every field optional: this is a provider shape read back from the API. */
+export interface SearchHit {
+  path?: string;
+  offset?: number;
+  line?: number;
+  excerpt?: string;
+  binary?: boolean;
+}
+
+export interface FilesSearch {
+  query?: string;
+  hits?: SearchHit[];
+  coverage?: {
+    filesExamined?: number;
+    entriesWalked?: number;
+    skipped?: { tooLarge?: number; unreadable?: number; budgetExhausted?: number };
+    walkTruncated?: boolean;
+    hitCapReached?: boolean;
+  };
+  /** What this answer does and does not cover — rendered always, never only when something went wrong. */
+  verdict?: string;
+}
+
 /** The deep static-analysis providers runnable per image; their findings appear in the dossier. */
 export type AnalysisKind =
   | 'uboot'
@@ -1250,6 +1273,10 @@ export const api = {
    * from `analysisResult` so that one keeps its deliberately narrow shape — a caller that only counts findings
    * should not be handed a type inviting it to read fields a stored result may not carry.
    */
+  searchFiles: (id: string, q: string, regex = false) =>
+    get<{ result: FilesSearch | null }>(
+      `/api/images/${id}/files/search?q=${encodeURIComponent(q)}${regex ? '&regex=1' : ''}`,
+    ).then((r) => r.result),
   deviceTree: (id: string) =>
     get<{ result: DeviceTreeResult | null }>(`/api/images/${id}/devicetree`).then((r) => r.result),
   kernelPosture: (id: string) =>
