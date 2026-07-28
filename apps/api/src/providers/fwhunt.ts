@@ -31,8 +31,10 @@
  *  - fwhunt-scan / rizin absent ⇒ `blocked_by_platform` with the reason, never a silent skip.
  *  - The per-module pass buys RULE coverage by spending MODULE coverage, and both numbers are reported. It scans a
  *    bounded number of modules (a rizin analysis per module, ~10-30 s each) and it runs rules OUTSIDE the volume
- *    scoping their authors set, so a match seen only there is graded a step lower and says why. A module that was
- *    not reached, a rule no pass could offer, a scan that crashed — each is reported as what it is.
+ *    scoping their authors set, so a match seen only there is graded a step lower and says why. The bound spends
+ *    its slots on the modules nothing has looked at yet, the ones the loaded corpus was written about, and the
+ *    ones that run at the highest privilege — never on the ones the carver happened to write first. A module that
+ *    was not reached, a rule no pass could offer, a scan that crashed — each is reported as what it is.
  *
  * The output parser, the rule-corpus reader, the module ranking and the finding builder are PURE and unit-tested;
  * the runners only shell out under a timeout.
@@ -452,24 +454,181 @@ export function findCarvedModules(dir: string): { modules: CarvedModule[]; deepD
 }
 
 /**
+ * What a carved module is, ranked by the privilege the code inside it runs at. This is an ORDERING, not a
+ * taxonomy: `unclassified` sits below every tier that was actually read off the carve because guessing UP from a
+ * name nothing could be read out of would invent the evidence the tier exists to carry, and above `application`
+ * because a UEFI application is the one thing here that is definitely not privileged firmware.
+ */
+export type ModulePrivilege =
+  | 'smm'
+  | 'boot-core'
+  | 'peim'
+  | 'runtime-dxe'
+  | 'dxe-driver'
+  | 'unclassified'
+  | 'application';
+
+/** Most privileged first. `rankModulesForScan` orders on this index; nothing else depends on the numbering. */
+const PRIVILEGE_ORDER: ModulePrivilege[] = [
+  'smm',
+  'boot-core',
+  'peim',
+  'runtime-dxe',
+  'dxe-driver',
+  'unclassified',
+  'application',
+];
+
+/** Lowercase alphanumerics only — the one shape a carve path, a module label and a rule name are comparable in. */
+function normalizeToken(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * chipsec stamps the FFS file type into the directory it carves a module into (`…FV_SMM_CORE.dir`,
+ * `…FV_PEI_CORE.dir`), which is the file type byte out of the image rather than a guess about a name. Order
+ * matters: `FV_COMBINED_PEIM_DRIVER` is a PEIM that also runs as a driver, and the PEIM half is the earlier one.
+ */
+const FV_TYPE_PRIVILEGE: Array<[RegExp, ModulePrivilege]> = [
+  [/smm/, 'smm'],
+  [/seccore|peicore|dxecore/, 'boot-core'],
+  [/peim/, 'peim'],
+  [/driver/, 'dxe-driver'],
+  [/application/, 'application'],
+];
+
+/** The extension the analyzer's own `extract` appends, which it takes from the same file type. */
+const EXT_PRIVILEGE: Record<string, ModulePrivilege> = {
+  smm: 'smm',
+  sec: 'boot-core',
+  core: 'boot-core',
+  peim: 'peim',
+  pei: 'peim',
+  dxe: 'dxe-driver',
+  app: 'application',
+};
+
+/**
+ * EDK2 naming convention, tested against the normalized label. Weaker evidence than the two above — it is a
+ * convention, not a header — but it is the only signal that survives a carver which names files `<Name>.efi`.
+ */
+const NAME_PRIVILEGE: Array<[RegExp, ModulePrivilege]> = [
+  [/smm|^smi/, 'smm'],
+  [/seccore|peicore|dxecore|coredxe|secmain/, 'boot-core'],
+  [/peim|pei$/, 'peim'],
+  [/runtime/, 'runtime-dxe'],
+  [/dxe$|driver$/, 'dxe-driver'],
+  [/^shell|app$/, 'application'],
+];
+
+/**
+ * Pure: what privilege the code in a carved module runs at, read off the carve rather than the bytes.
+ *
+ * Three independent signals are consulted — the FFS type chipsec puts in the directory name, the extension the
+ * analyzer's `extract` appends, and the EDK2 naming convention — and when they disagree the MOST privileged of
+ * them wins. That asymmetry is deliberate: over-ranking a module costs one scan slot, under-ranking one costs the
+ * highest-privilege code in the image its only look. A module none of the three can speak to is `unclassified`,
+ * which is an admission and not a tier — it is never promoted to a privileged one on a hunch.
+ *
+ * This claims nothing about the module's contents. It orders a queue.
+ */
+export function classifyModulePrivilege(module: CarvedModule): ModulePrivilege {
+  const signals: ModulePrivilege[] = [];
+
+  // Only directory segments: a module *named* `FvSimpleFileSystemDxe` is not a statement about its file type.
+  for (const segment of path.dirname(module.path).split(/[\\/]+/)) {
+    const token = normalizeToken(segment);
+    if (!token.includes('fv')) continue;
+    const hit = FV_TYPE_PRIVILEGE.find(([re]) => re.test(token))?.[1];
+    if (hit) signals.push(hit);
+  }
+
+  const ext = /\.([a-z0-9]+)$/i.exec(path.basename(module.path))?.[1]?.toLowerCase();
+  const byExt = ext ? EXT_PRIVILEGE[ext] : undefined;
+  if (byExt) signals.push(byExt);
+
+  const byName = NAME_PRIVILEGE.find(([re]) => re.test(normalizeToken(module.name)))?.[1];
+  if (byName) signals.push(byName);
+
+  if (signals.length === 0) return 'unclassified';
+  return signals.reduce((best, s) => (PRIVILEGE_ORDER.indexOf(s) < PRIVILEGE_ORDER.indexOf(best) ? s : best));
+}
+
+/**
+ * A module label shorter than this is not tested against the corpus at all. `Dxe`, `Pei` and `Smm` occur in most
+ * of the corpus, so matching them would rank every driver in the image first and the signal would be noise
+ * wearing the shape of evidence.
+ */
+const CORPUS_NAME_MIN_CHARS = 5;
+
+/** How many of the offered rules name this module — see key 2 of `rankModulesForScan`. */
+function countRulesNaming(module: CarvedModule, ruleTexts: string[]): number {
+  const key = normalizeToken(module.name);
+  if (key.length < CORPUS_NAME_MIN_CHARS) return 0;
+  return ruleTexts.reduce((n, text) => (text.includes(key) ? n + 1 : n), 0);
+}
+
+/**
  * Pure: choose which carved modules the per-module pass scans, and hand back the ones the cap dropped.
  *
  * The order is deliberately NOT the walk order, which would make the scanned set an artifact of how the carver
- * laid the tree out. It is by coverage debt: a module the whole-image pass never printed a verdict for had ZERO
- * rules run against it, so that is where the extra pass buys the most and those go first. Modules the image pass
- * did reach follow — it offered them only the rules scoped to their volume, so they are not covered either, just
- * less starved. Within each group the order is by name, so two runs over the same image scan the same modules.
+ * laid the tree out. Four keys decide it, and only the last is arbitrary:
+ *
+ *  1. COVERAGE DEBT. A module the whole-image pass never printed a verdict for had ZERO rules run against it, so
+ *     that is where the extra pass buys the most. Modules the image pass did reach follow — it offered them only
+ *     the rules scoped to their volume, so they are not covered either, just less starved.
+ *  2. WHAT THE CORPUS NAMES. A module whose label appears in the name or filename of a rule this pass is about to
+ *     offer is a module somebody wrote a detection about: `LojaxSecDxe` names `SecDxe`, `CosmicStrandDxeCore`
+ *     names `DxeCore`. Twelve slots spent where the corpus has something to say beat twelve spent where it has
+ *     nothing, and modules more rules name go first. This reads only `CorpusRule`'s name and path — it is not a
+ *     prediction that the rule will match, and a rule that names no module at all (`BRLY-2022-009`, most of the
+ *     corpus) contributes nothing here rather than a guess.
+ *  3. PRIVILEGE, from `classifyModulePrivilege`: SMM first, because it runs at ring -2, stays resident after the
+ *     OS has booted, and is what the largest share of the module-target corpus (SMM callouts, SMI entry code) was
+ *     written against; then the dispatch cores, which decide what runs after them; then PEIMs, which run before
+ *     DXE exists; then runtime DXE, which stays mapped at OS runtime; then ordinary drivers; then applications.
+ *  4. Name, then path. Arbitrary, and here for one reason: two runs over the same carve must scan the same
+ *     modules. Two modules CAN carry the same label in different volumes, which is why the path has the last word
+ *     — without it the tie would fall back to walk order, i.e. to directory layout.
+ *
+ * None of this is a verdict about a module. It decides ORDER ONLY: every module the cap drops comes back in
+ * `skipped`, whole, and the caller states the rule that dropped it. A module ranked last is not a module cleared.
  */
 export function rankModulesForScan(input: {
   modules: CarvedModule[];
   /** Module labels the whole-image pass printed — those already had SOME rules run against them. */
   coveredByImageScan: string[];
   cap: number;
+  /**
+   * The rules this pass will offer, when the caller has them. Optional: a caller without a corpus loses key 2 and
+   * ranks on privilege alone, which is a weaker order and never a wrong one.
+   */
+  rules?: CorpusRule[];
 }): { selected: CarvedModule[]; skipped: CarvedModule[] } {
-  const { modules, coveredByImageScan, cap } = input;
+  const { modules, coveredByImageScan, cap, rules = [] } = input;
   const covered = new Set(coveredByImageScan.map((m) => path.basename(m).replace(MODULE_EXT, '').toLowerCase()));
-  const debt = (m: CarvedModule): number => (covered.has(m.name.toLowerCase()) ? 1 : 0);
-  const ordered = [...modules].sort((a, b) => debt(a) - debt(b) || a.name.localeCompare(b.name));
+  // The scanner prints `meta.name`, which for five rules in the pinned corpus is not the filename, so both are
+  // searched. Joined with a space the two cannot form a match across their boundary — normalized keys have none.
+  const ruleTexts = rules.map(
+    (r) => `${normalizeToken(r.name)} ${normalizeToken(path.basename(r.path).replace(/\.ya?ml$/i, ''))}`,
+  );
+
+  const ranked = modules.map((m) => ({
+    module: m,
+    debt: covered.has(m.name.toLowerCase()) ? 1 : 0,
+    namedBy: countRulesNaming(m, ruleTexts),
+    privilege: PRIVILEGE_ORDER.indexOf(classifyModulePrivilege(m)),
+  }));
+  ranked.sort(
+    (a, b) =>
+      a.debt - b.debt ||
+      b.namedBy - a.namedBy ||
+      a.privilege - b.privilege ||
+      a.module.name.localeCompare(b.module.name) ||
+      a.module.path.localeCompare(b.module.path),
+  );
+
+  const ordered = ranked.map((r) => r.module);
   if (cap <= 0) return { selected: [], skipped: ordered };
   return { selected: ordered.slice(0, cap), skipped: ordered.slice(cap) };
 }
@@ -841,7 +1000,7 @@ async function runModulePass(
       return { ...modulePassNotRun('the carve produced no EFI modules to scan'), deepDirsSkipped };
     }
 
-    const { selected, skipped } = rankModulesForScan({ modules, coveredByImageScan, cap });
+    const { selected, skipped } = rankModulesForScan({ modules, coveredByImageScan, cap, rules });
     const budgetMs = opts.moduleBudgetMs ?? DEFAULT_MODULE_BUDGET_MS;
     const ruleArgs = rules.flatMap((r) => ['-r', path.join(rulesDir, r.path)]);
     handle.log(
@@ -886,7 +1045,7 @@ async function runModulePass(
     const dropped = [...outOfBudget, ...skipped];
     const skipReason = outOfBudget.length
       ? `the ${Math.round(budgetMs / 1000)}s pass budget ran out after ${scanned.length} module(s), and a cap of ${cap} module(s) applied besides`
-      : `a cap of ${cap} module(s), taken in order of coverage debt rather than carve order`;
+      : `a cap of ${cap} module(s), taken in order of coverage debt, then how many of the offered rules name the module, then module privilege (SMM and the dispatch cores first) — never carve order`;
 
     return {
       ran: scanned.length > 0,

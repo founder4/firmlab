@@ -4,6 +4,7 @@ import {
   type CorpusRule,
   type ModulePass,
   buildFwHuntFindings,
+  classifyModulePrivilege,
   describeCarvedModule,
   parseFwHuntOutput,
   parseRuleMeta,
@@ -54,6 +55,11 @@ const REAL_RULE_YAML = `RsbStuffingCheck:
 
 function carved(name: string): CarvedModule {
   return { path: `/tmp/mods/${name}.dxe`, name };
+}
+
+/** A rule as the corpus reader hands it over: only `name` and `path` carry a module label. */
+function rule(name: string, rulePath = `Threats/${name}.yml`): CorpusRule {
+  return { path: rulePath, name, volumeGuids: 0 };
 }
 
 function modulePassFixture(over: Partial<ModulePass> = {}): ModulePass {
@@ -215,6 +221,38 @@ describe('describeCarvedModule — two carvers, two layouts, one label', () => {
   });
 });
 
+describe('classifyModulePrivilege — read off the carve, most privileged signal wins', () => {
+  it('reads the FFS type chipsec stamps into the directory name', () => {
+    const p = '/t/img.fd.dir/FV/00_x.dir/04_52c05b14-0b98-496c-bc3b-04b50211d680.FV_PEI_CORE.dir/PeiCore.efi';
+    expect(classifyModulePrivilege({ path: p, name: 'PeiCore' })).toBe('boot-core');
+  });
+
+  it('classifies from the carve directory alone when the module’s own name says nothing', () => {
+    expect(classifyModulePrivilege({ path: '/t/img.fd.dir/01_abc.FV_SMM.dir/Foo.efi', name: 'Foo' })).toBe('smm');
+  });
+
+  it('reads the extension the analyzer’s own extract appends', () => {
+    expect(classifyModulePrivilege({ path: '/t/mods/CpuIo2Smm-cbd2e4d5.smm', name: 'CpuIo2Smm' })).toBe('smm');
+  });
+
+  it('takes the MOST privileged signal when the extension and the name disagree', () => {
+    // The extension says "a DXE driver"; the name says "the SEC phase entry point". Under-ranking this one costs
+    // the earliest code in the image its only look, so the name wins.
+    expect(classifyModulePrivilege({ path: '/t/mods/SecMain-cbd2e4d5.dxe', name: 'SecMain' })).toBe('boot-core');
+  });
+
+  it('separates a runtime driver from an ordinary one, and a PEIM from both', () => {
+    expect(classifyModulePrivilege(carved('VariableRuntimeDxe'))).toBe('runtime-dxe');
+    expect(classifyModulePrivilege(carved('NvmExpressDxe'))).toBe('dxe-driver');
+    expect(classifyModulePrivilege(carved('S3Resume2Pei'))).toBe('peim');
+    expect(classifyModulePrivilege({ path: '/t/mods/Shell.efi', name: 'Shell' })).toBe('application');
+  });
+
+  it('admits it could not read a tier rather than promoting the module to one', () => {
+    expect(classifyModulePrivilege({ path: '/t/blob.bin', name: 'blob' })).toBe('unclassified');
+  });
+});
+
 describe('rankModulesForScan — coverage debt, not carve order', () => {
   const modules = [carved('Zeta'), carved('Alpha'), carved('NvmExpressDxe'), carved('Beta')];
 
@@ -248,6 +286,112 @@ describe('rankModulesForScan — coverage debt, not carve order', () => {
       cap: 1,
     });
     expect(selected[0]?.name).toBe('Alpha');
+  });
+
+  it('scans everything and drops nothing when the cap exceeds the carve', () => {
+    const { selected, skipped } = rankModulesForScan({ modules, coveredByImageScan: [], cap: 99 });
+    expect(selected).toHaveLength(4);
+    expect(skipped).toEqual([]);
+  });
+});
+
+describe('rankModulesForScan — the corpus names some of these modules, and that is worth a slot', () => {
+  it('puts a module a rule was written about ahead of one no rule mentions', () => {
+    const { selected } = rankModulesForScan({
+      modules: [carved('Alpha'), carved('SecDxe')],
+      coveredByImageScan: [],
+      cap: 1,
+      rules: [rule('LojaxSecDxe')],
+    });
+    // Alphabetically Alpha wins; the corpus is why it does not.
+    expect(selected[0]?.name).toBe('SecDxe');
+  });
+
+  it('reads the rule FILENAME too, because five rules print a name that is not their filename', () => {
+    const { selected } = rankModulesForScan({
+      modules: [carved('Alpha'), carved('NvmExpressDxe')],
+      coveredByImageScan: [],
+      cap: 1,
+      rules: [rule('BRLY-2021-010', 'Vulnerabilities/NvmExpressDxeOverflow.yml')],
+    });
+    expect(selected[0]?.name).toBe('NvmExpressDxe');
+  });
+
+  it('ranks a module more rules name ahead of one fewer name, and both ahead of an unnamed module', () => {
+    const { selected } = rankModulesForScan({
+      modules: [carved('Alpha'), carved('DxeCore'), carved('SecDxe')],
+      coveredByImageScan: [],
+      cap: 3,
+      rules: [rule('LojaxSecDxe'), rule('SecDxeImplant'), rule('CosmicStrandDxeCore')],
+    });
+    // DxeCore is the more privileged module and still loses to the one two rules were written about.
+    expect(selected.map((m) => m.name)).toEqual(['SecDxe', 'DxeCore', 'Alpha']);
+  });
+
+  it('does not test a label too short to mean anything, so `Core` does not match half the corpus', () => {
+    const { selected } = rankModulesForScan({
+      modules: [carved('Alpha'), carved('Core')],
+      coveredByImageScan: [],
+      cap: 1,
+      rules: [rule('PiSmmCoreDoor')],
+    });
+    expect(selected[0]?.name).toBe('Alpha');
+  });
+
+  it('still puts a module the image pass already reached last, however well the corpus knows it', () => {
+    const { selected, skipped } = rankModulesForScan({
+      modules: [carved('Alpha'), carved('PiSmmCore')],
+      coveredByImageScan: ['PiSmmCore'],
+      cap: 1,
+      rules: [rule('PiSmmCoreImplant')],
+    });
+    expect(selected.map((m) => m.name)).toEqual(['Alpha']);
+    expect(skipped.map((m) => m.name)).toEqual(['PiSmmCore']);
+  });
+});
+
+describe('rankModulesForScan — privilege decides when the corpus names nothing', () => {
+  it('spends its slots on SMM and the dispatch cores before ordinary drivers and applications', () => {
+    const { selected } = rankModulesForScan({
+      modules: [
+        carved('AaaDxe'),
+        { path: '/tmp/mods/ShellApp.efi', name: 'ShellApp' },
+        carved('PiSmmCore'),
+        carved('PeiCore'),
+      ],
+      coveredByImageScan: [],
+      cap: 4,
+    });
+    expect(selected.map((m) => m.name)).toEqual(['PiSmmCore', 'PeiCore', 'AaaDxe', 'ShellApp']);
+  });
+
+  it('prefers a driver that stays mapped at OS runtime over one that does not', () => {
+    const { selected } = rankModulesForScan({
+      modules: [carved('AlphaDxe'), carved('VariableRuntimeDxe')],
+      coveredByImageScan: [],
+      cap: 1,
+    });
+    expect(selected[0]?.name).toBe('VariableRuntimeDxe');
+  });
+
+  it('breaks a tie between two modules sharing a label by path, never by carve order', () => {
+    // The same driver in two firmware volumes is the case where a name tiebreak silently hands the decision back
+    // to the directory walk. Reversing the input must not change what gets scanned.
+    const one = { path: '/t/vol1/PeiCore.efi', name: 'PeiCore' };
+    const two = { path: '/t/vol2/PeiCore.efi', name: 'PeiCore' };
+    const a = rankModulesForScan({ modules: [one, two], coveredByImageScan: [], cap: 1 });
+    const b = rankModulesForScan({ modules: [two, one], coveredByImageScan: [], cap: 1 });
+    expect(a.selected[0]?.path).toBe('/t/vol1/PeiCore.efi');
+    expect(b.selected[0]?.path).toBe('/t/vol1/PeiCore.efi');
+  });
+
+  it('is deterministic across an input permutation once the corpus is in play', () => {
+    const modules = [carved('ZetaDxe'), carved('PiSmmCore'), carved('SecDxe'), carved('Beta')];
+    const rules = [rule('LojaxSecDxe'), rule('BRLY-2021-010', 'Vulnerabilities/ZetaDxeOverflow.yml')];
+    const a = rankModulesForScan({ modules, coveredByImageScan: [], cap: 3, rules });
+    const b = rankModulesForScan({ modules: [...modules].reverse(), coveredByImageScan: [], cap: 3, rules });
+    expect(a.selected.map((m) => m.name)).toEqual(b.selected.map((m) => m.name));
+    expect(a.skipped.map((m) => m.name)).toEqual(b.skipped.map((m) => m.name));
   });
 });
 
