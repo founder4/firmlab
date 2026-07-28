@@ -13,20 +13,22 @@
  * that made the app report "no rootfs"): an unreadable volume is simply skipped, not fatal. The only tool-backed
  * step is the final `unsquashfs`/`sasquatch`, which degrades honestly — a carved-but-unextracted SquashFS volume
  * is a first-class, non-empty result, never a silent "0 files".
+ *
+ * The FDT token walk `parseFitImages` needs lives in `fdt.ts`, not here. A FIT *is* a flattened device tree, so
+ * this module was already a device-tree parser that used the tree only to locate sub-image byte ranges and then
+ * discarded it; `devicetree.ts` reads the same format for the tree itself. Two independent walks over a format
+ * with a NUL-terminated string table and 4-byte token alignment is a defect waiting to happen, so there is one.
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { isToolAvailable } from '../tools.js';
+import { FDT_MAGIC, be32, decodeFdtValue, readFdtHeader, walkFdt } from './fdt.js';
 
 const execFileAsync = promisify(execFile);
 
 // === Byte helpers (bounds-guarded; never throw) ===
-function be32(b: Uint8Array, o: number): number {
-  if (o < 0 || o + 3 >= b.length) return 0;
-  return (((b[o] ?? 0) << 24) | ((b[o + 1] ?? 0) << 16) | ((b[o + 2] ?? 0) << 8) | (b[o + 3] ?? 0)) >>> 0;
-}
 function be16(b: Uint8Array, o: number): number {
   if (o < 0 || o + 1 >= b.length) return 0;
   return (((b[o] ?? 0) << 8) | (b[o + 1] ?? 0)) & 0xffff;
@@ -34,9 +36,6 @@ function be16(b: Uint8Array, o: number): number {
 function le32(b: Uint8Array, o: number): number {
   if (o < 0 || o + 3 >= b.length) return 0;
   return (((b[o] ?? 0) | ((b[o + 1] ?? 0) << 8) | ((b[o + 2] ?? 0) << 16) | ((b[o + 3] ?? 0) << 24)) >>> 0) >>> 0;
-}
-function alignUp(n: number, a: number): number {
-  return Math.ceil(n / a) * a;
 }
 function cstr(b: Uint8Array, start: number, max = b.length): string {
   let e = start;
@@ -47,7 +46,6 @@ function cstr(b: Uint8Array, start: number, max = b.length): string {
 }
 
 // === Leading-format detection ===
-const FDT_MAGIC = 0xd00dfeed;
 const UBI_EC_MAGIC = 0x55424923; // "UBI#"
 const UBI_VID_MAGIC = 0x55424921; // "UBI!"
 const SQUASHFS_LE = 0x73717368; // "hsqs" read as a little-endian u32
@@ -80,70 +78,93 @@ export interface FitSubimage {
   dataSize: number;
 }
 
-const FDT_BEGIN_NODE = 0x1;
-const FDT_END_NODE = 0x2;
-const FDT_PROP = 0x3;
-const FDT_NOP = 0x4;
-const FDT_END = 0x9;
+/** The node stack for a `/images/<name>` node: ['', 'images', '<name>'] — the root's own name is empty. */
+function isImageNode(path: readonly string[]): boolean {
+  return path.length === 3 && path[1] === 'images';
+}
 
 /**
  * Parse a FIT/FDT and return the `/images/<name>` sub-images with the absolute byte range of their inlined
  * `data`. FIT inlines each payload in the structure block, so the `data` property's position IS where the
- * sub-image lives in the file. Never throws — a truncated/malformed tree returns what it parsed so far.
+ * sub-image lives in the file. Never throws — a truncated/malformed tree returns what it parsed so far, which is
+ * why this uses the shared walk's events rather than its tree: an incomplete FIT still yields carve-able ranges.
  */
 export function parseFitImages(buf: Uint8Array): FitSubimage[] {
-  if (be32(buf, 0) !== FDT_MAGIC) return [];
-  const offStruct = be32(buf, 8);
-  const offStrings = be32(buf, 12);
-  const sizeStruct = be32(buf, 36);
-  const structEnd = Math.min(offStruct + sizeStruct || buf.length, buf.length);
+  const header = readFdtHeader(buf, 0);
+  if (!header) return [];
 
   const images: FitSubimage[] = [];
-  const pathStack: string[] = [];
   let cur: FitSubimage | null = null;
-  let pos = offStruct;
-  let guard = 0;
 
-  const isImageNode = (): boolean => pathStack.length === 3 && pathStack[1] === 'images';
-
-  while (pos + 4 <= structEnd && guard++ < 200000) {
-    const token = be32(buf, pos);
-    pos += 4;
-    if (token === FDT_BEGIN_NODE) {
-      const name = cstr(buf, pos, structEnd);
-      pos = alignUp(pos + name.length + 1, 4);
-      pathStack.push(name);
-      if (isImageNode()) cur = { name, dataOffset: -1, dataSize: 0 };
-    } else if (token === FDT_END_NODE) {
-      if (isImageNode() && cur) {
-        if (cur.dataOffset >= 0) images.push(cur);
-        cur = null;
+  walkFdt(buf, header, {
+    beginNode(name, path) {
+      if (isImageNode(path)) cur = { name, dataOffset: -1, dataSize: 0 };
+    },
+    prop(name, value, valueOffset, path) {
+      if (!cur || !isImageNode(path)) return;
+      if (name === 'data') {
+        cur.dataOffset = valueOffset;
+        cur.dataSize = value.length;
+      } else if (name === 'type' || name === 'arch' || name === 'compression') {
+        const decoded = decodeFdtValue(value);
+        if (decoded.type === 'stringlist' && decoded.strings[0]) cur[name] = decoded.strings[0];
       }
-      pathStack.pop();
-    } else if (token === FDT_PROP) {
-      const len = be32(buf, pos);
-      const nameOff = be32(buf, pos + 4);
-      pos += 8;
-      const valPos = pos;
-      pos = alignUp(pos + len, 4);
-      if (cur && isImageNode()) {
-        const pname = cstr(buf, offStrings + nameOff);
-        if (pname === 'data') {
-          cur.dataOffset = valPos;
-          cur.dataSize = len;
-        } else if (pname === 'type' || pname === 'arch' || pname === 'compression') {
-          cur[pname] = cstr(buf, valPos, valPos + len);
-        }
-      }
-    } else if (token === FDT_NOP) {
-      // skip
-    } else if (token === FDT_END) {
-      break;
-    } else {
-      break; // malformed token stream — stop honestly with what we have
-    }
-  }
+    },
+    endNode(_name, path) {
+      if (!isImageNode(path) || !cur) return;
+      if (cur.dataOffset >= 0) images.push(cur);
+      cur = null;
+    },
+  });
   return images;
+}
+
+/** Which FIT configuration the container declares as default, and the sub-images that configuration names. */
+export interface FitConfiguration {
+  name: string;
+  /** True for the node `/configurations/default` points at. */
+  isDefault: boolean;
+  description?: string;
+  kernel?: string;
+  /** The `/images/<name>` the configuration selects as the device tree — the answer to "which dtb does it boot?". */
+  fdt?: string;
+}
+
+/**
+ * Parse a FIT's `/configurations` node. A FIT commonly carries one device tree per board variant, so "which dtb is
+ * in this image" and "which dtb does this image boot" are different questions; this answers the second one from
+ * what the container literally declares, and returns [] when it declares nothing.
+ */
+export function parseFitConfigurations(buf: Uint8Array): FitConfiguration[] {
+  const header = readFdtHeader(buf, 0);
+  if (!header) return [];
+
+  const configs: FitConfiguration[] = [];
+  let defaultName: string | undefined;
+  let cur: FitConfiguration | null = null;
+  const isConfigNode = (path: readonly string[]): boolean => path.length === 3 && path[1] === 'configurations';
+
+  walkFdt(buf, header, {
+    beginNode(name, path) {
+      if (isConfigNode(path)) cur = { name, isDefault: false };
+    },
+    prop(name, value, _valueOffset, path) {
+      const decoded = decodeFdtValue(value);
+      const first = decoded.type === 'stringlist' ? decoded.strings[0] : undefined;
+      if (!first) return;
+      if (path.length === 2 && path[1] === 'configurations' && name === 'default') {
+        defaultName = first;
+      } else if (cur && isConfigNode(path) && (name === 'description' || name === 'kernel' || name === 'fdt')) {
+        cur[name] = first;
+      }
+    },
+    endNode(_name, path) {
+      if (!isConfigNode(path) || !cur) return;
+      configs.push(cur);
+      cur = null;
+    },
+  });
+  return configs.map((c) => ({ ...c, isDefault: c.name === defaultName }));
 }
 
 // === UBI parsing =========================================================================================

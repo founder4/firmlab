@@ -22,6 +22,7 @@ import { compmapRoutes } from './routes/compmap.js';
 import { copilotRoutes } from './routes/copilot.js';
 import { corpusRoutes } from './routes/corpus.js';
 import { decompileRoutes } from './routes/decompile.js';
+import { devicetreeRoutes } from './routes/devicetree.js';
 import { diffRoutes } from './routes/diff.js';
 import { emulateRoutes } from './routes/emulate.js';
 import { fccRoutes } from './routes/fcc.js';
@@ -123,6 +124,7 @@ async function main(): Promise<void> {
       await api.register(chipsecRoutes);
       await api.register(webprobeRoutes);
       await api.register(ubootRoutes);
+      await api.register(devicetreeRoutes);
       await api.register(fsauditRoutes);
       await api.register(certsRoutes);
       await api.register(rtosRoutes);

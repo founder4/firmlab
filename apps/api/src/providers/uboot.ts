@@ -14,6 +14,7 @@
  */
 import fs from 'node:fs';
 import type { FindingDraft } from '../findings-normalize.js';
+import { auditKernelCommandLine, truncate } from './boot-cmdline.js';
 
 /** The decoded U-Boot environment: the stored CRC, the `key=value` variables, and how many were parsed. */
 export interface ParsedEnv {
@@ -164,11 +165,6 @@ export function findEnvBlock(image: Uint8Array): Uint8Array | null {
   return image.slice(asciiStart, end);
 }
 
-/** Truncate a variable value for evidence so a huge bootargs can't bloat the finding. */
-function truncate(s: string, n = 200): string {
-  return s.length > n ? `${s.slice(0, n)}…` : s;
-}
-
 const NETBOOT_RE = /\b(tftp|dhcp|nfs|bootp)/i;
 
 /**
@@ -178,6 +174,10 @@ const NETBOOT_RE = /\b(tftp|dhcp|nfs|bootp)/i;
  *   - an interruptible autoboot (`bootdelay` present, not 0/-1)             → medium / static_confirmed.
  *   - a network boot path in `bootcmd`/`preboot` (tftp/dhcp/nfs/bootp)      → medium / needs_runtime_reproduction.
  *   - an exposed serial console on the kernel command line (`console=`)     → info / static_confirmed.
+ *
+ * The two `bootargs`-derived findings come from `boot-cmdline.ts` because the device tree's `/chosen` node carries
+ * the same string and must produce the same finding codes; `bootdelay` and `bootcmd` stay here because they are
+ * genuinely U-Boot-only facts with no device-tree equivalent.
  */
 export function auditBootEnv(vars: Record<string, string>): FindingDraft[] {
   const drafts: FindingDraft[] = [];
@@ -185,22 +185,12 @@ export function auditBootEnv(vars: Record<string, string>): FindingDraft[] {
   const bootdelay = vars.bootdelay;
 
   if (bootargs) {
-    const markers: string[] = [];
-    if (/\binit=\/bin\/sh\b/.test(bootargs)) markers.push('init=/bin/sh');
-    if (/\brdinit=/.test(bootargs)) markers.push('rdinit=');
-    if (/(?:^|\s)single(?:\s|$)/.test(bootargs)) markers.push('single');
-    if (markers.length > 0) {
-      drafts.push({
-        kind: 'uboot-root-shell',
-        title: 'U-Boot boot args drop to an unauthenticated root shell',
-        severity: 'high',
-        proofState: 'needs_runtime_reproduction',
-        evidence: { var: 'bootargs', value: truncate(bootargs), markers },
-        rationale:
-          'The stored kernel command line hands PID 1 / an interactive shell to whoever powers the device on ' +
-          '(no authentication). Confirmed by a real boot — hence needs_runtime_reproduction, not asserted device compromise.',
-      });
-    }
+    drafts.push(
+      ...auditKernelCommandLine(bootargs, {
+        where: 'the stored U-Boot environment',
+        evidence: { var: 'bootargs' },
+      }),
+    );
   }
 
   if (bootdelay !== undefined && bootdelay.trim() !== '' && bootdelay.trim() !== '0' && bootdelay.trim() !== '-1') {
@@ -231,22 +221,6 @@ export function auditBootEnv(vars: Record<string, string>): FindingDraft[] {
         'The device fetches boot code over the network at power-on; an attacker on the LAN can answer with a ' +
         'rogue DHCP/TFTP/NFS server and supply their own image. A LAN-position lead — needs_runtime_reproduction.',
     });
-  }
-
-  if (bootargs) {
-    const cm = /\bconsole=(\S+)/.exec(bootargs);
-    if (cm) {
-      drafts.push({
-        kind: 'uboot-serial-console',
-        title: `Kernel serial console exposed (console=${truncate(cm[1] ?? '', 32)})`,
-        severity: 'info',
-        proofState: 'static_confirmed',
-        evidence: { var: 'bootargs', value: truncate(bootargs), console: cm[1] },
-        rationale:
-          'A serial console on the kernel command line means physical UART access yields boot logs and, combined ' +
-          'with a boot-args shell, an interactive session. The console= directive is present in the env bytes.',
-      });
-    }
   }
 
   return drafts;
