@@ -250,7 +250,8 @@ start_service() {
   });
 
   it('takes a direct path too, and does not double-count repeats', () => {
-    const s = `USE_PROCD=1\nSTART=50\nprocd_set_param command /usr/sbin/dropbear -p 22\nprocd_set_param command /usr/sbin/dropbear\n`;
+    const s =
+      'USE_PROCD=1\nSTART=50\nprocd_set_param command /usr/sbin/dropbear -p 22\nprocd_set_param command /usr/sbin/dropbear\n';
     const svcs = parseProcdScript('etc/init.d/dropbear', s);
     expect(svcs).toHaveLength(1);
     expect(svcs[0]?.name).toBe('dropbear');
