@@ -13,9 +13,10 @@
     "test": "pnpm -r run test",
     "dev:api": "pnpm --filter @firmlab/api run dev",
     "dev:web": "pnpm --filter @firmlab/web run dev",
-    "biome": "bash scripts/check-nul.sh && biome check .",
+    "biome": "bash scripts/check-nul.sh && bash scripts/check-web-api-mock.sh && biome check .",
     "biome:fix": "biome check --write .",
     "check:nul": "bash scripts/check-nul.sh",
+    "check:web-api-mock": "bash scripts/check-web-api-mock.sh",
     "ui:up": "bash scripts/ui-expose.sh up",
     "ui:down": "bash scripts/ui-expose.sh down",
     "ui:shot": "node scripts/ui-drive.mjs"
