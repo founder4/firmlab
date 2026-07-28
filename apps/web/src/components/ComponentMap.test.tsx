@@ -35,9 +35,12 @@ const NO_OUTPUT = extraction('no-output', 'Extraction ran and wrote nothing — 
 /**
  * A uClibc router rootfs of the shape compmap actually produces. Two properties of it matter and both are real:
  *
- *  • `libc.so.0` is UNRESOLVED even though every such rootfs has a libc, because the walk does not follow symlinks
- *    and a soname is normally one. A fixture that resolved it would have agreed with the code and hidden the case
- *    the panel's biggest caveat exists for.
+ *  • `libc.so.0` is UNRESOLVED even though every such rootfs has a libc. This used to be the symlink case — the
+ *    walk would not follow a link and a soname normally is one — and the provider now resolves those by reading
+ *    the link's target name, so that reason is gone. The fixture stays unresolved on purpose because the case did
+ *    not: a library past the walk's file/ELF cap reports exactly the same way, and results stored before link
+ *    resolution existed still look like this. A fixture that resolved it would agree with the current provider
+ *    and stop exercising the caveat the panel exists to carry.
  *  • six ELF FILES become five binary nodes — `bin/busybox` and `sbin/busybox` collapse, since a node is a
  *    basename. That is what makes `binaryCount` and the node count legitimately disagree.
  */
@@ -222,9 +225,12 @@ describe('ComponentMap', () => {
     expect(table.getByText('libutil.so.0')).toBeTruthy();
     // The row is only useful with its dependents named — that is what makes it actionable.
     expect(table.getAllByText('dropbear').length).toBeGreaterThan(0);
-    // And the caveat that stops it being read as a broken rootfs.
+    // And the caveat that stops it being read as a broken rootfs. Both halves are asserted: that a link-provided
+    // soname is resolved rather than listed here, and — now the dominant cause of a false row — that the walk is
+    // bounded, so a library past the cap reports as unresolved by every binary that references it.
     expect(screen.getByText(/Unresolved is not missing/i)).toBeTruthy();
-    expect(screen.getByText(/does not follow symlinks/i)).toBeTruthy();
+    expect(screen.getByText(/refuses to follow a link/i)).toBeTruthy();
+    expect(screen.getByText(/beyond the walk's bounds/i)).toBeTruthy();
   });
 
   it('lists orphan binaries as top-level executables, explicitly not as a verdict', async () => {

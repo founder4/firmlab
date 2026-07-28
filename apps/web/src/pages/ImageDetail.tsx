@@ -10,7 +10,6 @@ import {
   type CorpusRefs,
   type DecompileResult,
   type Finding,
-  type FindingProvenance,
   type FirmwareDiffResult,
   type FsNode,
   type FsSummary,
@@ -36,6 +35,7 @@ import { EntropyChart } from '../components/EntropyChart';
 import { FileBrowser } from '../components/FileBrowser';
 import { FileSearch } from '../components/FileSearch';
 import { FilesystemTree } from '../components/FilesystemTree';
+import { FindingsLedger, PROOF_STATE_META, ProofStateBadge } from '../components/FindingsLedger';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { HardwareInterfaces } from '../components/HardwareInterfaces';
 import { OpacidadPanel } from '../components/OpacidadPanel';
@@ -50,6 +50,7 @@ import { StepTimeline } from '../components/StepTimeline';
 import { StructureMap } from '../components/StructureMap';
 import { SymReachPanel } from '../components/SymReachPanel';
 import { TestBench } from '../components/TestBench';
+import { UpdatePathPanel } from '../components/UpdatePathPanel';
 import { toast } from '../toast';
 
 type TabId =
@@ -194,7 +195,14 @@ export function ImageDetail(): JSX.Element {
       {/* What the firmware declares about the physical ways in. Reads stored results; connects to nothing. */}
       {tab === 'hardware' && <HardwareInterfaces imageId={id} />}
       {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}
-      {tab === 'bootloader' && <AnalysisActionsPanel imageId={id} />}
+      {tab === 'bootloader' && (
+        <>
+          <AnalysisActionsPanel imageId={id} />
+          {/* The update-path provider is launched from the panel above and its result had nowhere to be read: the
+              findings landed in the ledger, the updaters and the source chain that credited them did not. */}
+          <UpdatePathPanel imageId={id} />
+        </>
+      )}
       {tab === 'sbom' && <SbomPanel imageId={id} />}
       {/* The other half of "what is this made of": the SBOM's packages, and here what links against what. */}
       {tab === 'compmap' && <ComponentMap imageId={id} />}
@@ -249,47 +257,8 @@ export function ImageDetail(): JSX.Element {
 
 // === Dossier: the single view that builds up everything known about an image, honestly. ===
 
-/**
- * The ladder, plus the one value that is not on it. `operator_assertion` gets a dashed border and the theme's
- * agent/heuristic trust colour rather than a rung's colour, so an asserted row is distinguishable from a measured
- * one at a glance and not only by reading the label — the ladder's own colours are reserved for code's verdicts.
- */
-const PROOF_STATE_META: Record<FindingProvenance, { label: string; color: string; asserted?: boolean }> = {
-  confirmed_full_system: { label: 'confirmed (full-system)', color: 'var(--ok, #4caf7d)' },
-  confirmed_in_emulation: { label: 'confirmed (emulated)', color: 'var(--ok, #4caf7d)' },
-  static_confirmed: { label: 'static-confirmed', color: 'var(--info, #4db5ff)' },
-  needs_runtime_reproduction: { label: 'needs reproduction', color: 'var(--sev-medium, #e6b45c)' },
-  blocked_by_platform: { label: 'blocked (platform)', color: 'var(--text-dim)' },
-  blocked_by_security: { label: 'blocked (control)', color: 'var(--text-dim)' },
-  false_positive: { label: 'false positive', color: 'var(--text-dim)' },
-  operator_assertion: { label: 'asserted · not measured', color: 'var(--trust-agent)', asserted: true },
-};
-
-function ProofStateBadge({ state }: { state: FindingProvenance }): JSX.Element {
-  const m = PROOF_STATE_META[state] ?? { label: state, color: 'var(--text-dim)' };
-  return (
-    <span
-      className="mono"
-      style={{
-        color: m.color,
-        border: `1px ${m.asserted ? 'dashed' : 'solid'} ${m.color}`,
-        borderRadius: 4,
-        padding: '1px 6px',
-        fontSize: 10.5,
-      }}
-    >
-      {m.label}
-    </span>
-  );
-}
-
-const SEV_COLOR: Record<string, string> = {
-  critical: 'var(--sev-critical, #e0524f)',
-  high: 'var(--sev-high, #e06c4f)',
-  medium: 'var(--sev-medium, #e6b45c)',
-  low: 'var(--text-dim)',
-  info: 'var(--text-dim)',
-};
+/* The proof-state badge, the severity palette and the ledger table itself live in `FindingsLedger`: the dispute
+   annotation needs all three, and they belong beside the one table that shows measured and asserted rows together. */
 
 /** One row of the coverage strip: says whether an analysis stage ran, so the dossier never fakes completeness. */
 function CoverageItem({ label, done, detail }: { label: string; done: boolean; detail?: string }): JSX.Element {
@@ -388,10 +357,6 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
   const triagedBinaries = binaries.filter((b) => b.triaged).length;
 
   const idn = image.identity;
-  const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-  const sortedFindings = [...findings].sort((a, b) => (sevRank[a.severity] ?? 9) - (sevRank[b.severity] ?? 9));
-  // Counted, not filtered: an assertion belongs in this table — it just may never be read as a measurement.
-  const assertedCount = findings.filter((f) => f.assertion).length;
 
   return (
     <div>
@@ -522,61 +487,9 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
         </div>
       )}
 
-      <div className="panel">
-        <div className="panel-title">Findings ({findings.length})</div>
-        <div className="panel-sub">
-          Each carries an explicit proof state — not just what was found, but how much it is proven.
-          {assertedCount > 0 ? (
-            <>
-              {' '}
-              {assertedCount} of these {assertedCount === 1 ? 'was' : 'were'} asserted by a person rather than measured;
-              those rows name their author and count towards no analysis stage.
-            </>
-          ) : null}
-        </div>
-        {sortedFindings.length === 0 ? (
-          <div className="hint">No findings yet. Run extraction, SBOM and the deep scans to populate the ledger.</div>
-        ) : (
-          <div className="table-wrap" style={{ marginTop: 10 }}>
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Sev</th>
-                  <th>Finding</th>
-                  <th>Source</th>
-                  <th>Proof state</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedFindings.slice(0, 300).map((f) => (
-                  <tr key={f.id}>
-                    <td>
-                      <span style={{ color: SEV_COLOR[f.severity] ?? 'var(--text-dim)' }}>●</span>
-                    </td>
-                    <td style={{ fontSize: 12.5 }}>
-                      {f.title}
-                      {/* An assertion never appears here without its author on the same line. */}
-                      {f.assertion ? (
-                        <div className="hint">
-                          asserted by {f.assertion.assertedBy}
-                          {f.assertion.authorKind === 'agent' ? ' (agent)' : ''}
-                          {f.assertion.status === 'withdrawn' ? ' — WITHDRAWN' : ''}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="mono hint" style={{ fontSize: 11 }}>
-                      {f.source}
-                    </td>
-                    <td>
-                      <ProofStateBadge state={f.proofState} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {/* Measured rows and the assertions about them, in one table — including the contest an operator recorded
+          against a computed row, annotated onto it without touching what code decided. */}
+      <FindingsLedger findings={findings} />
     </div>
   );
 }

@@ -20,11 +20,18 @@
  * **What an unresolved reference does NOT mean.** Two properties of the walk make false unresolved entries normal,
  * and both are stated on screen rather than only here, because an operator who does not know them will read this
  * table as a broken rootfs:
- *   • the walk does not follow symlinks (it must not — symlink loops and rootfs escapes), and a soname is very
- *     often a symlink (`libc.so.0 → libuClibc-0.9.33.so`), so the target exists and the reference still lists here;
+ *   • the walk is BOUNDED — a file cap and an ELF cap stop it early on a large rootfs, and a library past the cut
+ *     is reported unresolved by every binary that references it. Measured on the GL.iNet: the walk reached 4,000 of
+ *     6,496 files, so a real 590 KB `lib/libc.so` that 298 binaries need was never seen. That is the dominant
+ *     source of false entries here, and the result says so via its truncation flag;
  *   • resolution is by basename against what the carve recovered, and a partial carve, a second partition, or a
  *     vendor overlay mounted at boot are all libraries the device has and this image does not.
  * A missing library is a hypothesis to check in the file browser, never a finding.
+ *
+ * The symlink case USED to head this list and no longer does. The provider now reads a link's target name — never
+ * following it, so loops and rootfs escapes stay impossible — and resolves it lexically inside the carve, which is
+ * a weaker fact than a walked file and is labelled `link` rather than folded into `binary`. That alone took the
+ * IMOU from 2 unresolved to 0 and the GL.iNet from 143 to 65, and the 65 that remain are the cap above.
  *
  * **Every kind of nothing gets its own sentence.** "Nobody has built the map", "there is no extracted rootfs to
  * build one from", "rabin2 is not installed here" and "the map was built and the rootfs links nothing" are four
@@ -521,11 +528,14 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
                   </table>
                 </div>
                 <p className="hint cmap-prose" style={{ marginTop: 8 }}>
-                  <strong>Unresolved is not missing.</strong> The walk does not follow symlinks — it must not — and a
-                  soname is very often one (<span className="mono">libc.so.0 → libuClibc-0.9.33.so</span>), so a library
-                  that is present appears here anyway. Resolution is by basename against what this carve recovered, and
-                  a partial carve, a second partition or an overlay mounted at boot are all libraries the device has and
-                  this image does not. Open the file browser before treating a row here as a missing library.
+                  <strong>Unresolved is not missing.</strong> A soname provided by a symlink now resolves and is
+                  labelled as link-provided — the walk still refuses to follow a link, it reads the link's target name
+                  and matches that inside the carve, so a rootfs escape stays impossible. What is left here is either
+                  genuinely absent or <em>beyond the walk's bounds</em>: the file and ELF caps stop early on a large
+                  rootfs, and a library past the cut is reported unresolved by binaries that do reference it. Resolution
+                  is also by basename against this carve alone, so a partial extraction, a second partition or an
+                  overlay mounted at boot are all libraries the device has and this image does not. Open the file
+                  browser before treating a row here as a missing library.
                 </p>
               </>
             ) : (

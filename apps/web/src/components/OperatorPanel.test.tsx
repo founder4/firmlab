@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { type AssertedFinding, type OperatorLedger, api } from '../api';
+import { type AssertedFinding, type AssertionRevision, type OperatorLedger, api } from '../api';
 import { mockedApi } from '../test-api-mock';
-import { OperatorPanel } from './OperatorPanel';
+import { OperatorPanel, revisionsOf } from './OperatorPanel';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
@@ -153,6 +153,83 @@ describe('OperatorPanel — withdrawal is first-class', () => {
     mount(ledger({ assertions: [asserted()] }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Withdraw' })).toBeTruthy());
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+});
+
+describe('OperatorPanel — an amendment appends, and the panel shows what it replaced', () => {
+  const amended = (supersedes: AssertionRevision[] | undefined) =>
+    asserted({
+      id: 'a3',
+      title: 'The dev board shipped with telnet open as root',
+      attribution: 'Asserted by aaron on 2023-11-14 (asserted_from_device). Amended 2023-11-20',
+      rationale: 'Narrowed to the dev board after re-checking a retail unit.',
+      assertion: {
+        assertedBy: 'aaron',
+        authorKind: 'human',
+        assertedAt: 1_700_000_000_000,
+        claim: 'asserted_from_device',
+        rationale: 'Narrowed to the dev board after re-checking a retail unit.',
+        status: 'active',
+        amendedAt: 1_700_500_000_000,
+        title: 'The dev board shipped with telnet open as root',
+        ...(supersedes ? { supersedes } : {}),
+      },
+    });
+
+  const revision: AssertionRevision = {
+    claim: 'asserted_from_device',
+    rationale: 'Telnet answered as root on the unit I was sent.',
+    title: 'Every shipped unit has telnet open as root',
+    from: 1_700_000_000_000,
+    supersededAt: 1_700_500_000_000,
+  };
+
+  it('offers the history behind its own affordance rather than beside the claim that stands', async () => {
+    mount(ledger({ assertions: [amended([revision])] }));
+    const toggle = await screen.findByRole('button', { name: /Amended 2023-11-20 — show 1 superseded claim/ });
+    // Collapsed: the superseded sentence is nowhere on screen, so it cannot be read as a second live claim.
+    expect(screen.queryByText(/Every shipped unit has telnet open as root/)).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByText(/History — superseded, no longer claimed/)).toBeTruthy();
+    expect(screen.getByText(/Every shipped unit has telnet open as root/)).toBeTruthy();
+    expect(screen.getByText(/Telnet answered as root on the unit I was sent/)).toBeTruthy();
+    expect(screen.getByText(/stood from 2023-11-14 to 2023-11-20/)).toBeTruthy();
+    // Labelled as superseded, never with the live "asserted" badge the current claim carries.
+    expect(screen.getByText(/superseded · asserted_from_device/)).toBeTruthy();
+    expect(screen.getByText(/An amendment appends; it never overwrites/)).toBeTruthy();
+  });
+
+  it('reads as "no history" for a row amended by a build that did not keep the predecessor', async () => {
+    mount(ledger({ assertions: [amended(undefined)] }));
+    await waitFor(() => expect(screen.getByText(/No history is readable/)).toBeTruthy());
+    expect(screen.getByText(/overwrote its predecessor/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /show 1 superseded/ })).toBeNull();
+  });
+
+  it('shows no history affordance at all on a claim that was never amended', async () => {
+    mount(ledger({ assertions: [asserted()] }));
+    await waitFor(() => expect(screen.getByText('asserted · not measured')).toBeTruthy());
+    expect(screen.queryByText(/superseded/i)).toBeNull();
+    expect(screen.queryByText(/No history is readable/)).toBeNull();
+  });
+
+  it('reads a malformed or absent supersedes defensively instead of throwing', () => {
+    expect(revisionsOf(undefined)).toEqual([]);
+    const bad = { supersedes: 'not an array' } as unknown as AssertedFinding['assertion'];
+    expect(revisionsOf(bad)).toEqual([]);
+    const holes = {
+      supersedes: [null, 7, { claim: 'asserted_unverified' }],
+    } as unknown as AssertedFinding['assertion'];
+    expect(revisionsOf(holes)).toEqual([{ claim: 'asserted_unverified' }]);
+  });
+
+  it('states a revision whose fields an older build never wrote, rather than dropping it', async () => {
+    mount(ledger({ assertions: [amended([{ claim: 'asserted_unverified' }])] }));
+    const toggle = await screen.findByRole('button', { name: /show 1 superseded claim/ });
+    fireEvent.click(toggle);
+    expect(screen.getByText(/superseded · asserted_unverified/)).toBeTruthy();
+    expect(screen.getByText(/No basis was recorded with this revision/)).toBeTruthy();
+    expect(screen.getByText(/stood from an unrecorded date to an unrecorded date/)).toBeTruthy();
   });
 });
 

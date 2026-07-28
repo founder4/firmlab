@@ -97,7 +97,15 @@ export function ReportBuilder({
   }, [imageId]);
 
   const ranKind = (k: string): boolean => jobs.some((j) => j.kind === k && j.status === 'done');
-  const sevCount = (s: string): number => findings.filter((f) => f.severity === s).length;
+
+  // The ledger route serves measured rows and operator assertions in ONE array, separated only by the
+  // `operator_assertion` sentinel on `proofState`. Sorting that array into the findings table put a person's claim
+  // in the measured population under a "Proof state" column — printing the sentinel itself, since PROOF_LABEL has
+  // no entry for it — which is the exact interleaving the server-side renderer was built to make impossible. The
+  // two populations are split here, once, and every count below is taken from `measured`.
+  const measured = findings.filter((f) => f.proofState !== 'operator_assertion');
+  const asserted = findings.filter((f) => f.proofState === 'operator_assertion');
+  const sevCount = (s: string): number => measured.filter((f) => f.severity === s).length;
 
   const sections = useMemo<Section[]>(() => {
     const idn = image.identity;
@@ -115,8 +123,13 @@ export function ReportBuilder({
             text: [
               `This report covers the static firmware analysis of ${image.filename} (${fmtBytes(image.size)}),`,
               `classified as ${idn?.firmwareClass ?? 'unknown'} on ${idn?.arch ?? 'unknown'}/${idn?.endianness ?? 'unknown'}.`,
-              `${findings.length} finding${findings.length === 1 ? '' : 's'} were recorded${sevNote}.`,
+              `${measured.length} finding${measured.length === 1 ? ' was' : 's were'} recorded${sevNote}.`,
               'Each finding carries an explicit proof state; a stage that has not run is reported as such rather than implied clean.',
+              ...(asserted.length
+                ? [
+                    `${asserted.length} operator assertion${asserted.length === 1 ? ' is' : 's are'} listed separately below and counted in neither that total nor any stage — FirmLab did not measure them.`,
+                  ]
+                : []),
             ].join(' '),
           },
         ],
@@ -190,30 +203,60 @@ export function ReportBuilder({
       },
       findings: {
         id: 'findings',
-        title: `${SECTION_LABEL.findings} (${findings.length})`,
-        blocks: findings.length
-          ? [
-              {
-                kind: 'findings',
-                rows: [...findings]
-                  .sort(
-                    (a, b) =>
-                      ['critical', 'high', 'medium', 'low', 'info'].indexOf(a.severity) -
-                      ['critical', 'high', 'medium', 'low', 'info'].indexOf(b.severity),
-                  )
-                  .map((f) => {
-                    const off = (f.evidence as Record<string, unknown> | undefined)?.offset;
-                    return {
-                      sev: f.severity,
-                      title: f.title,
-                      offset: typeof off === 'number' ? hex(off) : '—',
-                      source: f.source,
-                      proof: PROOF_LABEL[f.proofState] ?? f.proofState,
-                    };
-                  }),
-              },
-            ]
-          : [{ kind: 'p', text: 'No findings recorded. Note: zero findings is not the same as clean.' }],
+        title: `${SECTION_LABEL.findings} (${measured.length})`,
+        blocks: [
+          ...(measured.length
+            ? ([
+                {
+                  kind: 'findings',
+                  rows: [...measured]
+                    .sort(
+                      (a, b) =>
+                        ['critical', 'high', 'medium', 'low', 'info'].indexOf(a.severity) -
+                        ['critical', 'high', 'medium', 'low', 'info'].indexOf(b.severity),
+                    )
+                    .map((f) => {
+                      const off = (f.evidence as Record<string, unknown> | undefined)?.offset;
+                      return {
+                        sev: f.severity,
+                        title: f.title,
+                        offset: typeof off === 'number' ? hex(off) : '—',
+                        source: f.source,
+                        proof: PROOF_LABEL[f.proofState] ?? f.proofState,
+                      };
+                    }),
+                },
+              ] as Block[])
+            : ([
+                { kind: 'p', text: 'No findings recorded. Note: zero findings is not the same as clean.' },
+              ] as Block[])),
+          // Assertions follow the measured table, never inside it, and carry no proof-state column — there is no
+          // proof state to print. The heading says what they are before the reader reaches a single row.
+          ...(asserted.length
+            ? ([
+                {
+                  kind: 'p',
+                  text: [
+                    `Operator assertions (${asserted.length}) — asserted, not measured.`,
+                    'A person or an agent recorded these; FirmLab did not compute them.',
+                    'They carry no proof state, count towards no analysis stage, and are excluded from the finding count above.',
+                  ].join(' '),
+                },
+                {
+                  kind: 'table',
+                  head: ['Claim', 'Statement', 'Asserted by', 'Recorded'],
+                  rows: asserted.map((f) => [
+                    f.assertion?.claim ?? 'asserted_unverified',
+                    f.title,
+                    f.assertion?.assertedBy
+                      ? `${f.assertion.assertedBy}${f.assertion.authorKind === 'agent' ? ' (agent)' : ''}`
+                      : 'unrecorded',
+                    new Date(f.createdAt).toISOString().slice(0, 10),
+                  ]),
+                },
+              ] as Block[])
+            : []),
+        ],
       },
       sbom: {
         id: 'sbom',

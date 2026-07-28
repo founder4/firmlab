@@ -10,6 +10,12 @@
  * Withdrawn claims stay visible in their own table rather than disappearing, because the retraction and its reason
  * are usually the most informative rows in the file. Nothing here can delete an assertion.
  *
+ * An amendment is append-only, so this panel shows the claims a row has superseded rather than only the one that
+ * stands now. That distinction is the whole argument of the ledger: an author who could restate "I saw a root shell
+ * on the shipped unit" as something milder, with no trace, would be performing the same erasure a delete performs.
+ * History is therefore rendered as history — behind its own affordance, headed as superseded, greyed and struck
+ * through the badge — and never as a second live claim a reader might weigh alongside the current one.
+ *
  * Notes sit below, deliberately plainer and deliberately deleteable: they are reasoning, not claims, and the
  * asymmetry — a note can be thrown away, an assertion can only be retracted — is the visible form of the
  * difference between the two.
@@ -17,8 +23,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   type AssertedFinding,
+  type AssertionRevision,
   type Finding,
   type ImageNote,
+  type OperatorAssertion,
   type OperatorClaim,
   type OperatorLedger,
   api,
@@ -58,6 +66,111 @@ function AssertedBadge({ f }: { f: AssertedFinding }): JSX.Element {
   );
 }
 
+/**
+ * Pure: the revisions an assertion has been through, oldest first, read defensively.
+ *
+ * `supersedes` arrives from a JSON column written by an older build, so its shape is asserted, not known — a row
+ * recorded before amendment history existed carries no array at all, and one written by a build with a different
+ * shape must degrade to "nothing readable" rather than throw in the middle of the ledger. Anything that is not an
+ * object is dropped; nothing else is, because a revision missing one field is still the claim someone made.
+ */
+export function revisionsOf(a: OperatorAssertion | undefined): AssertionRevision[] {
+  const raw = a?.supersedes;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((r): r is AssertionRevision => !!r && typeof r === 'object');
+}
+
+/** Pure: an ISO day, or an honest blank — a revision written by an older build may carry no timestamp at all. */
+function day(ms: number | undefined): string {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return 'an unrecorded date';
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/**
+ * What this claim replaced. Collapsed by default and opened deliberately: the current claim is what stands, and a
+ * superseded one shown at equal weight beside it is a second live claim to anyone skimming.
+ *
+ * The two "no history" cases are different and are worded differently. A row that was never amended gets no
+ * affordance at all — there is nothing behind it. A row that WAS amended by a build that overwrote its predecessor
+ * says exactly that, because "amended, and the earlier claim is gone" is information, and rendering it as though
+ * nothing had ever been replaced would be the erasure this ledger exists to refuse.
+ */
+function AssertionHistory({ a }: { a: OperatorAssertion | undefined }): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const revisions = revisionsOf(a);
+  if (!a || (a.amendedAt === undefined && revisions.length === 0)) return null;
+
+  if (revisions.length === 0) {
+    return (
+      <div className="hint" style={{ marginTop: 4 }}>
+        Amended {day(a.amendedAt)}. No history is readable: this row was amended by a build that overwrote its
+        predecessor rather than appending it, so what stands here is the current claim only.
+      </div>
+    );
+  }
+
+  const plural = revisions.length === 1 ? 'claim' : 'claims';
+  return (
+    <div style={{ marginTop: 4 }}>
+      <button
+        type="button"
+        className="btn btn-sm btn-ghost"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        style={{ padding: '0 4px' }}
+      >
+        {open ? 'Hide history' : `Amended ${day(a.amendedAt)} — show ${revisions.length} superseded ${plural}`}
+      </button>
+      {open ? (
+        <div
+          style={{
+            marginTop: 6,
+            borderLeft: '2px solid var(--border-strong)',
+            background: 'var(--bg-inset)',
+            borderRadius: 'var(--r-sm)',
+            padding: '6px 10px',
+            maxWidth: '72ch',
+          }}
+        >
+          <div className="eyebrow">History — superseded, no longer claimed</div>
+          <div className="hint">
+            An amendment appends; it never overwrites. Nothing below stands: it is what this author previously stated,
+            kept so a claim cannot be quietly restated as a weaker one.
+          </div>
+          <ol style={{ margin: '6px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {revisions.map((r, i) => (
+              <li key={`${r.supersededAt ?? 'unknown'}-${i}`} style={{ fontSize: 12.5 }}>
+                <span
+                  className="mono"
+                  style={{
+                    color: 'var(--text-faint)',
+                    border: '1px dashed var(--text-faint)',
+                    borderRadius: 4,
+                    padding: '1px 6px',
+                    fontSize: 10.5,
+                  }}
+                >
+                  superseded · {r.claim ?? 'claim not recorded'}
+                </span>{' '}
+                <span style={{ color: 'var(--text-dim)' }}>
+                  stood from {day(r.from)} to {day(r.supersededAt)}
+                </span>
+                {r.title ? <div style={{ marginTop: 2 }}>“{r.title}”</div> : null}
+                {r.disputesFindingId ? (
+                  <div className="hint">
+                    contested <span className="mono">{r.disputesFindingId}</span>
+                  </div>
+                ) : null}
+                <div className="hint">{r.rationale ?? 'No basis was recorded with this revision.'}</div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AssertionTable({
   rows,
   onWithdraw,
@@ -83,6 +196,8 @@ function AssertionTable({
                 <div>{f.title}</div>
                 {/* The attribution sentence comes from the API, so the UI and a report can never word it apart. */}
                 <div className="hint">{f.attribution}</div>
+                {/* …and what it replaced, if anything, kept visibly apart from the claim that stands. */}
+                <AssertionHistory a={f.assertion} />
               </td>
               <td style={{ width: '1%', whiteSpace: 'nowrap' }}>
                 <AssertedBadge f={f} />

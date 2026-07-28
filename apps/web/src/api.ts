@@ -356,6 +356,26 @@ export type OperatorClaim =
   | 'asserted_from_external_evidence'
   | 'disputes_finding';
 
+/**
+ * One claim an assertion used to make, kept after an amendment replaced it.
+ *
+ * Every field is optional, and not out of caution: this is JSON persisted on a finding row and re-read for as long
+ * as the image exists, so a revision appended by an older build simply does not carry the fields that build did not
+ * write (`title` is the live example — it was added to the API's revision after the first ones were already
+ * stored). A renderer states what is there and says so where something is not; it never asserts a field it cannot
+ * know it owns. See the `nvd` incident in CLAUDE.md, where one required field took the image view down.
+ */
+export interface AssertionRevision {
+  claim?: OperatorClaim;
+  rationale?: string;
+  /** The title the row carried while this claim stood. Absent on a revision written before it was recorded. */
+  title?: string;
+  /** When this claim started standing — the original assertion, or the amendment that introduced it. */
+  from?: number;
+  supersededAt?: number;
+  disputesFindingId?: string;
+}
+
 /** Who asserted a finding, when, on what basis, and whether it still stands. */
 export interface OperatorAssertion {
   assertedBy: string;
@@ -369,6 +389,15 @@ export interface OperatorAssertion {
   withdrawnAt?: number;
   withdrawnReason?: string;
   amendedAt?: number;
+  /**
+   * What this claim replaced, oldest first. Append-only on the API side: an amendment adds a revision and never
+   * rewrites one, because an author restating a strong claim as a weak one with no trace is the same erasure a
+   * delete performs. Absent means "never amended, or amended by a build that did not keep the predecessor" — the
+   * two are distinguished by `amendedAt`, and the UI must not read a missing array as an empty history.
+   */
+  supersedes?: AssertionRevision[];
+  /** The title as the assertion itself recorded it. The finding row's title stays authoritative for the CURRENT claim. */
+  title?: string;
 }
 
 /**
@@ -866,6 +895,34 @@ export interface KernelPostureResult {
   reason?: string;
 }
 
+/**
+ * Verification or flash evidence found in a file that an updater `source`s, with the chain that reached it.
+ *
+ * `file` is the point of the type: the lines are IN that file, not in the candidate that sources it. `sbin/sysupgrade`
+ * invokes no verifier — it *reaches* one in `lib/upgrade/fwtool.sh` — and a reader must never be told the entry point
+ * contains a line it does not contain. Optional throughout: a result stored before the source pass existed carries
+ * none of this, and the renderer has to say "no chain was recorded" rather than "this script sources nothing".
+ */
+export interface SourcedEvidence {
+  /** The file the lines physically live in. */
+  file?: string;
+  /** From the candidate to that file inclusive — the chain a reader retraces. */
+  via?: string[];
+  verifyCommands?: string[];
+  signatureCommands?: string[];
+  missingVerifiers?: string[];
+  flashWrites?: string[];
+  rollbackMarkers?: string[];
+}
+
+/** A `source`/`.`/`include` directive that could not be turned into a file, and the reason it could not. */
+export interface UnresolvedSource {
+  from?: string;
+  directive?: string;
+  spec?: string;
+  reason?: string;
+}
+
 export interface UpdaterCandidate {
   path?: string;
   kind?: 'elf' | 'script';
@@ -873,10 +930,21 @@ export interface UpdaterCandidate {
   symbolSource?: string;
   signatureFns?: string[];
   digestFns?: string[];
+  /** The script's OWN lines only. Anything it merely reaches lives in `sourced` — a different claim. */
   verifyCommands?: string[];
   /** Verification executables the script invokes that are NOT present in the rootfs — the fail-open case. */
   missingVerifiers?: string[];
   flashWrites?: string[];
+  /**
+   * Evidence credited from files this script sources. A source edge is one static fact — this file names that file
+   * where a POSIX shell would read it — and crediting it never raises a proof state, because sourcing a file defines
+   * its functions and does not call them.
+   */
+  sourced?: SourcedEvidence[];
+  /** Directives that named something no static read could resolve, each with why. An honest unknown, not a drop. */
+  unresolvedSources?: UnresolvedSource[];
+  /** Where following `source` edges stopped short — depth, cycle or file bound. A bound is not an answer. */
+  sourceBounds?: string[];
 }
 
 export interface UpdatePathResult {
@@ -920,8 +988,15 @@ export interface UbootResult {
  */
 export interface CompGraphNode {
   id?: string;
-  /** `binary` = the walk found this file. `lib` = only referenced, never found — i.e. an unresolved soname. */
-  kind?: 'binary' | 'lib';
+  /**
+   * `binary` = the walk found this file. `link` = provided only by a symlink whose target the carve holds — a
+   * weaker fact than a walked file, and the reason `libc.so.0` stopped reading as missing on every uClibc rootfs.
+   * `lib` = only referenced, never found — i.e. a genuinely unresolved soname.
+   *
+   * A result stored before link resolution existed carries no `link` nodes at all, which is why absence here means
+   * "this build never looked", not "nothing is link-provided".
+   */
+  kind?: 'binary' | 'link' | 'lib';
 }
 
 export interface CompGraphEdge {
