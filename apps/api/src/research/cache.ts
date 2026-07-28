@@ -33,6 +33,30 @@
  * Honest degradation, as everywhere else here: an unwritable data root makes lookups slower, never broken. Every
  * filesystem operation is wrapped; a write that fails reports `written: false` with the reason instead of
  * pretending it cached, and a corrupt or wrong-schema entry is a miss with a stated reason.
+ *
+ * EVICTION — a disk-pressure release valve, and deliberately not an expiry mechanism. Because an entry past its TTL
+ * is *kept* (that record is the reproducibility half above: what the service said, and when), the directory grows
+ * slowly and without bound. Two optional caps release that pressure, both off unless configured, so a deployment
+ * that wants the corpus snapshot keeps every byte of it:
+ *
+ *   FIRMLAB_MAX_RESEARCH_CACHE_BYTES     keep the cache under N bytes, evicting oldest-first  (0/unset = off)
+ *   FIRMLAB_MAX_RESEARCH_CACHE_AGE_DAYS  delete entries written more than N days ago          (0/unset = off)
+ *
+ * Read that second knob as "this deployment does not want a record older than N days", never as "an entry older
+ * than N days has expired" — expiry is `classifyAge` and it deletes nothing. A malformed value turns the cap OFF
+ * rather than falling back to a default (the opposite of `resolveTtlMs`, on purpose): guessing a TTL costs a
+ * re-query, guessing a deletion threshold costs the record itself.
+ *
+ * The sweep orders by file mtime rather than the envelope's `fetchedAt`, which for every entry this module writes
+ * is the same instant — the file is written and renamed the moment the payload lands. They diverge only for a
+ * cache directory copied between machines without preserving times, and there the cost is an eviction in the wrong
+ * order, not a wrong answer: reading N multi-megabyte payloads (the KEV catalog is one file) to decide which files
+ * to delete would cost more than the deletion recovers. The freshness decision, where being wrong *is* an answer,
+ * still reads `fetchedAt` and only `fetchedAt`.
+ *
+ * And a bound states what it dropped: `planCacheEviction` is pure, orders deterministically (oldest first, ties by
+ * path — never by directory arrival order), and returns the sentence naming how many entries went, how many bytes,
+ * and under which of the two rules each one was selected.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -285,4 +309,254 @@ export async function cachedFetch(
   if (payload === null) return { payload: null, freshness: null, stored: false };
   const write = writeCache(source, key, payload, { ...opts, now });
   return { payload, freshness: liveFreshness(now), stored: write.written };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Eviction. See the module header: this is disk pressure, not expiry.
+// ---------------------------------------------------------------------------------------------------------------
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The two caps. `0` means "no limit" for both, which is the default and leaves the cache untouched forever. */
+export interface CacheLimits {
+  /** Total cache size to stay under, in bytes. 0 = off. */
+  maxBytes: number;
+  /** Age past which an entry is deleted, in days. 0 = off. */
+  maxAgeDays: number;
+}
+
+/** One cache file as the sweep sees it: what it costs, and when it was written. Never its payload. */
+export interface CacheEntryStat {
+  path: string;
+  bytes: number;
+  /** Epoch ms the file was last written — see the module header for why this and not `fetchedAt`. */
+  writtenAt: number;
+}
+
+/** One selected file, and which of the two rules selected it. Both are reported; they are different decisions. */
+export interface CacheEviction {
+  path: string;
+  bytes: number;
+  /** Age at the moment of the sweep. Clamped at 0 for an entry stamped in the future. */
+  ageMs: number;
+  rule: 'age' | 'size';
+}
+
+/** What a sweep would do, or did. Complete enough that the caller never has to re-derive the arithmetic. */
+export interface CacheSweepPlan {
+  limits: CacheLimits;
+  /** Entries considered, and their total size. */
+  entryCount: number;
+  totalBytes: number;
+  evictions: CacheEviction[];
+  evictedBytes: number;
+  remainingCount: number;
+  remainingBytes: number;
+  /** One sentence stating what went, what stayed, and by which rule. Never empty. */
+  report: string;
+}
+
+/**
+ * Pure: the configured caps. Unlike `resolveTtlMs`, anything unusable (non-numeric, negative, infinite) disables
+ * the cap instead of falling back to a default — the failure mode of a misread deletion threshold is a deleted
+ * record, and no env var should be able to cause that by being a typo.
+ */
+export function resolveCacheLimits(env: NodeJS.ProcessEnv = process.env): CacheLimits {
+  const num = (raw: string | undefined): number => {
+    if (raw === undefined || raw.trim() === '') return 0;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  return {
+    maxBytes: num(env.FIRMLAB_MAX_RESEARCH_CACHE_BYTES),
+    maxAgeDays: num(env.FIRMLAB_MAX_RESEARCH_CACHE_AGE_DAYS),
+  };
+}
+
+/** Pure: `1 entry` / `2 entries`. These sentences end up in an operator's log, so they are written for one. */
+function plural(n: number): string {
+  return `${n} ${n === 1 ? 'entry' : 'entries'}`;
+}
+
+/** Pure: how the configured caps read in a sentence, for the "nothing evicted" case. */
+function describeLimits(limits: CacheLimits): string {
+  const parts: string[] = [];
+  if (limits.maxAgeDays > 0) parts.push(`${limits.maxAgeDays}d age cap`);
+  if (limits.maxBytes > 0) parts.push(`${limits.maxBytes}B cap`);
+  return parts.join(' and ');
+}
+
+/**
+ * Pure: which entries to evict, in what order, to get under the caps — the whole decision, testable without a
+ * filesystem. Age first, then size, mirroring `sweepRetention`.
+ *
+ * Ordering is oldest-first with the path as tie-break, so two entries written in the same millisecond are still
+ * ordered the same way on every run and on every machine; nothing here depends on the order `readdir` happened to
+ * return. Size eviction stops the moment the total is under the cap, so it never removes more than the cap asks
+ * for — and a cap smaller than the newest single entry empties the cache, which the report then says outright.
+ *
+ * An entry stamped in the FUTURE is never age-evicted, for the same reason `classifyAge` will not serve one: its
+ * age is not a number we can state, and a rule that cannot state its input has not made a decision. Such an entry
+ * is still size-evictable — that rule asks how big it is, not how old.
+ */
+export function planCacheEviction(
+  entries: readonly CacheEntryStat[],
+  limits: CacheLimits,
+  now: number,
+): CacheSweepPlan {
+  const byAgeThenPath = (a: CacheEntryStat, b: CacheEntryStat): number =>
+    a.writtenAt - b.writtenAt || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const ordered = [...entries].sort(byAgeThenPath);
+  const totalBytes = ordered.reduce((sum, e) => sum + e.bytes, 0);
+  const maxAgeMs = limits.maxAgeDays > 0 ? limits.maxAgeDays * DAY_MS : 0;
+
+  const evictions: CacheEviction[] = [];
+  const kept: CacheEntryStat[] = [];
+  for (const e of ordered) {
+    const ageMs = now - e.writtenAt;
+    if (maxAgeMs > 0 && ageMs > maxAgeMs) evictions.push({ path: e.path, bytes: e.bytes, ageMs, rule: 'age' });
+    else kept.push(e);
+  }
+
+  let remainingBytes = kept.reduce((sum, e) => sum + e.bytes, 0);
+  let remainingCount = kept.length;
+  if (limits.maxBytes > 0) {
+    for (const e of kept) {
+      if (remainingBytes <= limits.maxBytes) break; // under the cap — stop, never evict beyond what it asks
+      evictions.push({ path: e.path, bytes: e.bytes, ageMs: Math.max(0, now - e.writtenAt), rule: 'size' });
+      remainingBytes -= e.bytes;
+      remainingCount -= 1;
+    }
+  }
+
+  const evictedBytes = evictions.reduce((sum, e) => sum + e.bytes, 0);
+  const ageCount = evictions.filter((e) => e.rule === 'age').length;
+  const sizeCount = evictions.length - ageCount;
+
+  let report: string;
+  if (limits.maxBytes === 0 && limits.maxAgeDays === 0) {
+    const knobs = 'FIRMLAB_MAX_RESEARCH_CACHE_BYTES / FIRMLAB_MAX_RESEARCH_CACHE_AGE_DAYS unset';
+    const held = `${plural(ordered.length)}, ${totalBytes}B kept in full`;
+    report = `research cache: ${held} — no eviction configured (${knobs})`;
+  } else if (evictions.length === 0) {
+    const within = describeLimits(limits);
+    report = `research cache: ${plural(ordered.length)}, ${totalBytes}B within the ${within} — nothing evicted`;
+  } else {
+    const reasons: string[] = [];
+    if (ageCount > 0) reasons.push(`${ageCount} older than ${limits.maxAgeDays}d`);
+    if (sizeCount > 0) reasons.push(`${sizeCount} oldest-first over the ${limits.maxBytes}B cap`);
+    report =
+      `research cache: evicted ${evictions.length} of ${plural(ordered.length)} (${evictedBytes}B) — ` +
+      `${reasons.join(', ')}; ${plural(remainingCount)} (${remainingBytes}B) kept`;
+  }
+
+  return {
+    limits,
+    entryCount: ordered.length,
+    totalBytes,
+    evictions,
+    evictedBytes,
+    remainingCount,
+    remainingBytes,
+    report,
+  };
+}
+
+/** What a walk of the cache directory found — and whether it saw all of it. */
+export interface CacheScan {
+  entries: CacheEntryStat[];
+  /** True when the walk hit its budget: the totals below then describe a PREFIX of the tree, not the tree. */
+  truncated: boolean;
+}
+
+/**
+ * Walk the cache directory. Bounded like `dirSize` in `retention.ts` so a pathological tree cannot stall the sweep,
+ * and it says when the bound bit rather than passing a partial total off as the whole.
+ *
+ * Only `*.json` entries are candidates. A `.tmp` file belongs to a write that is still in flight; deleting one
+ * turns a successful cache write into a reported failure, and the disk it holds is transient by construction. A
+ * missing or unreadable directory is an empty scan, never a throw — the sweep runs on every upload.
+ */
+export function scanCacheEntries(dir: string = RESEARCH_CACHE_DIR, budget = 500_000): CacheScan {
+  const entries: CacheEntryStat[] = [];
+  const stack: string[] = [dir];
+  let visited = 0;
+  while (stack.length > 0 && visited < budget) {
+    const cur = stack.pop();
+    if (cur === undefined) break;
+    let dirents: fs.Dirent[];
+    try {
+      dirents = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue; // absent, or unreadable — nothing to sweep here
+    }
+    for (const d of dirents) {
+      visited++;
+      const abs = path.join(cur, d.name);
+      if (d.isDirectory()) stack.push(abs);
+      else if (d.isFile() && d.name.endsWith('.json')) {
+        try {
+          const st = fs.statSync(abs);
+          entries.push({ path: abs, bytes: st.size, writtenAt: st.mtimeMs });
+        } catch {
+          // vanished mid-sweep — ignore
+        }
+      }
+    }
+  }
+  // Anything still on the stack is a directory the budget stopped us from opening; an empty stack means the walk
+  // finished, however close to the budget it ran.
+  return { entries, truncated: stack.length > 0 };
+}
+
+export interface CacheSweepOptions {
+  dir?: string;
+  /** Defaults to the environment. Pass explicitly to sweep under caps the process was not started with. */
+  limits?: CacheLimits;
+  now?: number;
+  log?: (line: string) => void;
+}
+
+/** A plan that was executed: what actually left the disk, and what refused to. */
+export interface CacheSweepResult extends CacheSweepPlan {
+  removed: string[];
+  failed: { path: string; reason: string }[];
+  /** The scan hit its budget; `entryCount`/`totalBytes` then cover only the part of the tree it walked. */
+  truncated: boolean;
+}
+
+/**
+ * Sweep the advisory cache. Safe to call on every retention pass: with both caps unset it walks the directory,
+ * reports what it costs, and deletes nothing — the default, and the documented one. Logging is silent unless a cap
+ * is configured, so an unconfigured deployment's behaviour is unchanged down to its log lines.
+ *
+ * A deletion that fails is reported, not thrown and not counted as removed: the caller is a scheduled sweep, and a
+ * read-only data root must slow it down rather than take the API's upload path with it.
+ */
+export function sweepResearchCache(opts: CacheSweepOptions = {}): CacheSweepResult {
+  const dir = opts.dir ?? RESEARCH_CACHE_DIR;
+  const limits = opts.limits ?? resolveCacheLimits();
+  const now = opts.now ?? Date.now();
+  const scan = scanCacheEntries(dir);
+  const plan = planCacheEviction(scan.entries, limits, now);
+
+  const removed: string[] = [];
+  const failed: { path: string; reason: string }[] = [];
+  for (const e of plan.evictions) {
+    try {
+      fs.rmSync(e.path, { force: true });
+      removed.push(e.path);
+    } catch (err) {
+      failed.push({ path: e.path, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  let report = plan.report;
+  if (scan.truncated) report += ' (scan budget reached — the totals cover only the part of the tree walked)';
+  if (failed.length > 0) {
+    report += `; ${failed.length} could not be removed (${failed[0]?.reason ?? 'unknown'})`;
+  }
+  if (limits.maxBytes > 0 || limits.maxAgeDays > 0) opts.log?.(report);
+
+  return { ...plan, report, removed, failed, truncated: scan.truncated };
 }
