@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { type AgentConfig, type LaneFlag, type StorageUsage, api, fmtBytes } from '../api';
+import { LOCALES, type Locale, setLocale, useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { startTour } from '../onboarding';
 import { type Density, type ThemePref, setDensity, setTheme, useAppearance } from '../theme';
@@ -150,6 +151,8 @@ function LaneToggle({
 
 export function Settings(): JSX.Element {
   const { theme, density } = useAppearance();
+  const t = useMessages();
+  const locale = useLocale();
   const [tab, setTab] = useState<SettingsTab>('appearance');
   const [health, setHealth] = useState<Health | null>(null);
   const [agent, setAgent] = useState<AgentConfig | null>(null);
@@ -228,9 +231,9 @@ export function Settings(): JSX.Element {
 
       {tab === 'appearance' && (
         <div className="panel" style={{ maxWidth: 640 }}>
-          <div className="panel-title">Appearance</div>
-          <div className="panel-sub">Applied instantly and remembered on this device.</div>
-          <Row label="Theme">
+          <div className="panel-title">{t.settings.appearance.title}</div>
+          <div className="panel-sub">{t.settings.appearance.sub}</div>
+          <Row label={t.settings.appearance.theme}>
             <div className="segmented">
               {(['light', 'system', 'dark'] as ThemePref[]).map((v) => (
                 <button key={v} type="button" className={theme === v ? 'active' : ''} onClick={() => setTheme(v)}>
@@ -241,22 +244,52 @@ export function Settings(): JSX.Element {
                   ) : (
                     <Icon.monitor size={14} />
                   )}
-                  <span style={{ textTransform: 'capitalize' }}>{v}</span>
+                  <span>
+                    {v === 'light'
+                      ? t.settings.appearance.themeLight
+                      : v === 'dark'
+                        ? t.settings.appearance.themeDark
+                        : t.settings.appearance.themeSystem}
+                  </span>
                 </button>
               ))}
             </div>
           </Row>
-          <Row label="Density">
+          <Row label={t.settings.appearance.density}>
             <div className="segmented">
               {(['comfortable', 'compact'] as Density[]).map((v) => (
                 <button key={v} type="button" className={density === v ? 'active' : ''} onClick={() => setDensity(v)}>
-                  <span style={{ textTransform: 'capitalize' }}>{v}</span>
+                  <span>
+                    {v === 'compact' ? t.settings.appearance.densityCompact : t.settings.appearance.densityComfortable}
+                  </span>
                 </button>
               ))}
             </div>
           </Row>
-          <div className="hint" style={{ marginTop: 12 }}>
-            Compact density tightens table rows and spacing for dense sessions on large monitors.
+          <Row label={t.settings.language.row}>
+            <div className="segmented">
+              {LOCALES.map((l) => (
+                <button
+                  key={l.value}
+                  type="button"
+                  className={locale === l.value ? 'active' : ''}
+                  aria-pressed={locale === l.value}
+                  onClick={() => setLocale(l.value)}
+                >
+                  <span>{l.label}</span>
+                </button>
+              ))}
+            </div>
+          </Row>
+          <div className="hint" style={{ marginTop: 12, maxWidth: '72ch' }}>
+            {t.settings.appearance.densityHint}
+          </div>
+          <div className="hint" style={{ marginTop: 8, maxWidth: '72ch' }}>
+            {t.settings.language.hint}
+          </div>
+          {/* The boundary, stated where the switch is thrown rather than discovered later inside a report. */}
+          <div className="hint" style={{ marginTop: 8, maxWidth: '72ch' }}>
+            {t.settings.language.scope}
           </div>
         </div>
       )}

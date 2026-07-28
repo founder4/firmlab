@@ -1,0 +1,25 @@
+/** nav — the sidebar and the app shell. English source of truth. */
+export const nav = {
+  brandSub: 'firmware · local',
+  dashboard: 'Dashboard',
+  localAnalysis: 'Local analysis',
+  agents: 'Agents',
+  proxyUpdates: 'Proxy / Updates',
+  corpus: 'Corpus',
+  settings: 'Settings',
+  system: 'System',
+  firmware: 'Firmware',
+  activeImage: 'Active image',
+  allImages: 'All images',
+  navigateHint: 'Navigate the analysis from the step timeline at the top of the page.',
+  localOnly: 'Local-only. Never expose to the internet.',
+  toggleNav: 'Toggle navigation',
+  health: {
+    unreachable: 'API unreachable',
+    exposed: '⚠ bound to network',
+    proxied: '🔒 auth-gated',
+    proxiedTitle: 'Reachable only through an authenticating reverse proxy',
+    local: '● local-only',
+    localTitle: 'Bound to loopback — nothing leaves this machine',
+  },
+};

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { HashRouter, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { type ImageSummary, api } from './api';
+import { type Messages, useMessages } from './i18n';
 import { Icon, type IconName } from './icons';
 import { Onboarding, startTour } from './onboarding';
 import { Agents } from './pages/Agents';
@@ -40,67 +41,13 @@ function HealthPill(): JSX.Element {
   );
 }
 
-/** The analysis sections of one firmware, grouped for comprehension (maps to ImageDetail's section routes). */
-const SECTION_GROUPS: { label: string; items: { id: string; label: string; icon: IconName }[] }[] = [
-  { label: 'Summary', items: [{ id: 'overview', label: 'Overview', icon: 'overview' }] },
-  {
-    label: 'Analysis',
-    items: [
-      { id: 'structure', label: 'Structure', icon: 'structure' },
-      { id: 'entropy', label: 'Entropy', icon: 'entropy' },
-      { id: 'filesystem', label: 'Filesystem', icon: 'filesystem' },
-      // Deliberately its own section rather than a sub-view of Filesystem: that one answers "what shape is the
-      // carve", this one answers "what does this file actually say", and the second question is the one every
-      // finding's evidence depends on.
-      { id: 'files', label: 'File browser', icon: 'files' },
-      { id: 'secrets', label: 'Secrets', icon: 'secrets' },
-      // The physical way in, assembled from three providers that each hold a piece of it. Sits under Analysis
-      // rather than Execution because it reads the image and runs nothing against a device — FirmLab has no
-      // hardware transport, and putting it beside the emulation rungs would imply one.
-      { id: 'hardware', label: 'Hardware interfaces', icon: 'hardware' },
-    ],
-  },
-  {
-    label: 'Components',
-    items: [
-      { id: 'sbom', label: 'SBOM & CVEs', icon: 'sbom' },
-      // The other half of "what is this made of": the SBOM names the packages, this says what links against what,
-      // and which of those references the carve cannot resolve. The graph has been computed since compmap.ts was
-      // written and had nowhere to be seen until this entry existed.
-      { id: 'compmap', label: 'Component map', icon: 'compmap' },
-    ],
-  },
-  {
-    label: 'Execution',
-    items: [
-      // Two distinct questions, deliberately not one screen: what can be RUN against a given binary, and how this
-      // image can be booted at all. They were merged as "Binaries" + "Simulation", split by tool rather than by
-      // question, which is why neither said what had actually been executed.
-      { id: 'testbench', label: 'Test bench', icon: 'binaries' },
-      { id: 'simulate', label: 'Emulation recipes', icon: 'simulate' },
-    ],
-  },
-  { label: 'Comparison', items: [{ id: 'diff', label: 'Diff', icon: 'diff' }] },
-  {
-    label: 'Assistance',
-    items: [
-      { id: 'opacidad', label: 'Autonomous scan', icon: 'shield' },
-      { id: 'agent', label: 'Agent', icon: 'agent' },
-    ],
-  },
-];
-
-export const SECTION_LABEL: Record<string, string> = {
-  ...Object.fromEntries(SECTION_GROUPS.flatMap((g) => g.items.map((i) => [i.id, i.label]))),
-  overview: 'General',
-  filesystem: 'Extraction',
-  bootloader: 'Bootloader',
-  findings: 'Findings & report',
-  operator: 'Operator ledger',
-  simulate: 'Emulation recipes',
-  testbench: 'Test bench',
-  binaries: 'Test bench',
-};
+/**
+ * The header title for a section id. The ids are route segments and never move; only the labels do, which is what
+ * lets a language switch repaint the header without a reload. Falls back to the id — itself a readable slug.
+ */
+export function sectionLabel(t: Messages, id: string): string {
+  return (t.sections as Record<string, string>)[id] ?? id;
+}
 
 /** Parse the active firmware id + section out of the route (/image/:id/:section?). */
 function useActiveImage(): { id: string | null; section: string } {
@@ -136,6 +83,7 @@ function NavRow({
 function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
   const { id } = useActiveImage();
   const nav = useNavigate();
+  const t = useMessages();
   const [activeName, setActiveName] = useState<string | null>(null);
 
   useEffect(() => {
@@ -154,21 +102,21 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
         </div>
         <div>
           <div className="brand-name">FirmLab</div>
-          <div className="brand-sub">firmware · local</div>
+          <div className="brand-sub">{t.nav.brandSub}</div>
         </div>
       </div>
 
-      <NavRow to="/" end icon="dashboard" label="Dashboard" onNavigate={onNavigate} />
-      <NavRow to="/analyze" icon="overview" label="Local analysis" onNavigate={onNavigate} />
-      <NavRow to="/agents" icon="agent" label="Agents" onNavigate={onNavigate} />
-      <NavRow to="/updates" icon="capture" label="Proxy / Updates" onNavigate={onNavigate} />
-      <NavRow to="/corpus" icon="corpus" label="Corpus" onNavigate={onNavigate} />
+      <NavRow to="/" end icon="dashboard" label={t.nav.dashboard} onNavigate={onNavigate} />
+      <NavRow to="/analyze" icon="overview" label={t.nav.localAnalysis} onNavigate={onNavigate} />
+      <NavRow to="/agents" icon="agent" label={t.nav.agents} onNavigate={onNavigate} />
+      <NavRow to="/updates" icon="capture" label={t.nav.proxyUpdates} onNavigate={onNavigate} />
+      <NavRow to="/corpus" icon="corpus" label={t.nav.corpus} onNavigate={onNavigate} />
 
       {id && (
         <>
-          <div className="nav-section">Firmware</div>
+          <div className="nav-section">{t.nav.firmware}</div>
           <div className="ctx-card" data-tour="firmware-context">
-            <div className="eyebrow">Active image</div>
+            <div className="eyebrow">{t.nav.activeImage}</div>
             <div className="ctx-name" title={activeName ?? id}>
               {activeName ?? id}
             </div>
@@ -181,20 +129,20 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
                 onNavigate();
               }}
             >
-              <Icon.back size={13} /> All images
+              <Icon.back size={13} /> {t.nav.allImages}
             </button>
             <div className="hint" style={{ marginTop: 8, fontSize: '0.72rem' }}>
-              Navigate the analysis from the step timeline at the top of the page.
+              {t.nav.navigateHint}
             </div>
           </div>
         </>
       )}
 
       <div style={{ flex: 1, minHeight: 12 }} />
-      <div className="nav-section">System</div>
-      <NavRow to="/settings" icon="settings" label="Settings" onNavigate={onNavigate} />
+      <div className="nav-section">{t.nav.system}</div>
+      <NavRow to="/settings" icon="settings" label={t.nav.settings} onNavigate={onNavigate} />
       <div className="hint" style={{ padding: '10px 10px 2px', display: 'flex', gap: 6, alignItems: 'center' }}>
-        <Icon.shield size={13} /> Local-only. Never expose to the internet.
+        <Icon.shield size={13} /> {t.nav.localOnly}
       </div>
     </>
   );
@@ -257,6 +205,7 @@ function ContextHeader(): JSX.Element {
   const { id, section } = useActiveImage();
   const { pathname } = useLocation();
   const nav = useNavigate();
+  const t = useMessages();
   const [images, setImages] = useState<ImageSummary[]>([]);
 
   useEffect(() => {
@@ -301,7 +250,7 @@ function ContextHeader(): JSX.Element {
       </select>
       <Icon.chevron size={13} />
       <span className="topbar-title" style={{ color: 'var(--text-dim)' }}>
-        {SECTION_LABEL[section] ?? section}
+        {sectionLabel(t, section)}
       </span>
     </div>
   );
