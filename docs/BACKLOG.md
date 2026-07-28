@@ -145,7 +145,10 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ✅ **Six exported accessors nothing had ever called** (2026-07-28) — a dead-export sweep over the 803 exported runtime bindings in api/core/web found six reachable from nowhere: `listSessions`, `listCaptureSessions`, `latestCaptureSession`, `provenanceForImage` (store.ts) and `isolationNetnsArgs`, `resetIsolationCache` (providers/isolate.ts). Each was a speculative accessor a sibling already covered. Two near-misses worth recording. **`isolationNetnsArgs` looked like it might be hiding a real bug** — it hands out the probed unshare flags "for callers building their own invocation", and if `buildIsolatedInvocation` had defaulted to `-n` while `detectIsolation` had selected the rootless `-rn`, every isolated run under Docker/OrbStack would have failed in exactly the case the fallback was added for. It does not: `runIsolated` passes `cachedNetns` explicitly. **`resetIsolationCache` is a test seam for a test nobody wrote** — `isolate.test.ts` exercises only the pure builders and never populates the cache, so no order-dependence was hiding behind it either. _The sweep was grep-based on purpose: this repo's note that the code graph under-approximates CALLS edges through local wrappers applies directly to a dead-code question, where a missing edge reads as an orphan and invites deleting live code. The graph proposed candidates; textual reference decided them._
 - ▢ **Make the dead-export sweep a repeatable script, and mind the tree it walks.** The sweep above was a throwaway. Its first pass reported a seventh victim, `parseBinwalkOutput` — which is NOT dead: core keeps its tests in `packages/core/test/`, outside the `src` roots the sweep walked, so its only caller was invisible. **A sweep is only as good as the tree it walks**, and that is the same failure shape as the guard traps already in CLAUDE.md. Two further honest limits any permanent version must state rather than paper over: a symbol used only inside its own file is *over-exported*, not dead (the two are different findings and were conflated in the first pass, giving 90 candidates instead of 6), and a symbol reached only from its own tests is not dead here at all — this codebase deliberately exports pure decision logic so vitest can reach it, per the store-free-sibling rule.
 - ✅ **Nothing enforced that an `api` spread-mock covered what the component calls** (2026-07-28, `8cb4251`) — `test-api-mock.ts` enumerates the surface from the real client at runtime, so a method added to `api.ts` is covered the day it is added, and every method starts as a `vi.fn()` throwing `unmocked api call: <name>`. Migrating the 13 spread-pattern files found **five live network calls**, each firing on mount in every test in its file: `runs` in FuzzPanel / SymReachPanel / OpacidadPanel / SimulationMenu (all four via the shared `RunHistory`) and `tools` in App (via Overview). **Four of five are one shared child** — a component grew a dependency and the hand-written lists did not follow — which is the class this entry predicted, not a run of unrelated slips. `SimulationMenu` is the proof: fixed by hand in `11cb8b9` for `binaries`, and still fetching through `WebProbePanel`. The guard's failure path was exercised five times, not just its success path. Arguments stay typed, so `toHaveBeenCalledWith` is now checked where `ReturnType<typeof vi.fn>` had made it `any[]`. _Scope is narrow and the module states it: `src/api.ts` is the only module under `apps/web/src` that calls `fetch`, which is what makes a complete `api` mock a complete network guard — and a component that swallows its own errors would swallow this one too._
-- ▢ **Nothing stops the NEXT web test file from hand-writing the mock again.** A `{...actual.api, foo: vi.fn()}` spread still compiles and passes. The cheap guard is a grep in the `pnpm biome` pre-step beside `scripts/check-nul.sh`, refusing `actual.api` under `apps/web/src/**/*.test.tsx` outside `test-api-mock.ts` — the same shape as the NUL guard, and it would need the same care about its success path. Also: `ImageDetail`, `Corpus`, `Settings`, `Agents` and `Capabilities` have no test file at all, so this defect class is untested there rather than absent.
+- ✅ **Nothing stopped the NEXT web test file from hand-writing the mock** (2026-07-28, `09dd66e`) — `scripts/check-web-api-mock.sh`, chained into `pnpm biome`. Two rules, deliberately different in scope: no web source may spread the real client, AND a test that `vi.mock`s the client must delegate to `buildApiMock` — the second matters because the first is sidesteppable by writing the literal out by hand, and it is what preserves the enumerate-at-runtime property. `test-api-mock.ts` is exempt, and the exemption is load-bearing: without it the guard flags that file's own doc comment, which quotes the shape it refuses. Scans untracked files too. All branches exercised, including tools-missing and listing-failed (both exit 2, never 0).
+- ✅ **`check-nul.sh` reported clean when it could not look** (2026-07-28, `09dd66e`) — **the fourth instance of the SUCCESS-path trap, found while writing the guard above.** The file list came through `done < <(git ls-files …)`, and a process substitution's exit status is DISCARDED: with git unavailable or failing the loop read nothing, `found` stayed 0, and it printed *"no literal NUL bytes in tracked sources"* and exited 0 — from a check that had opened no file. Proven by shadowing `git` with a stub exiting 128. True since the guard was written, including the day it caught three real instances. Now: the listing is captured and its failure checked, the tools it shells out to are verified present first, the success line states the count (338 files) because *found nothing* and *looked at nothing* are only the same sentence when the count is invisible, and the root is resolved by parameter expansion rather than `dirname` — which ran before the tool check and so failed first on a stripped PATH, reporting the wrong problem.
+- ✅ **`--theme light` produced dark screenshots** (2026-07-28, `1bf7465`) — `ui-drive.mjs` set Playwright's `colorScheme`, which drives `prefers-color-scheme`, and `theme.ts` consults that ONLY when the stored preference is `system`; its default is a hard `'dark'` and a fresh capture profile stores nothing. So the flag set the media query, the app ignored it, and the run reported a dark render as light — every light-theme check ever made this way. It now seeds `firmlab.theme` via `addInitScript`, as the tour suppression beside it already did. Verified: both captures differ, the light one is light, and the header toggle shows the matching control active. _Found by the agent building the component-map view, which needed a light capture to check its tokens and got a dark one — the tool lying is worse than the tool missing._
+- ▢ **`ImageDetail`, `Corpus`, `Settings`, `Agents` and `Capabilities` have no test file at all**, so the unmocked-api defect class is untested there rather than absent — the guard above only constrains files that exist.
 
 ## Deploy & operations
 - ✅ **`deploy.sh` aborted silently, which is what made the guard bug expensive** (2026-07-28) — `set -e` kills the script wherever a command returns non-zero and says nothing, so the defect below surfaced as three lines of normal output and an exit code, and locating it took a `bash -x` session. An `ERR` trap now names the line and the command. _Its first version was wrong in exactly the way it was written to catch: a plain `trap … ERR` is **not** inherited by shell functions, subshells or command substitutions, which is precisely where the abort happened, so it printed nothing for the very bug it existed for. `set -E` (errtrace) propagates it. Verified by reintroducing the original defect on a copy: the trap now prints `abortó en la línea 116 … listeners="$(lsof …)"`._
@@ -510,21 +513,62 @@ Surfaced while building the above and deliberately not built. Ordered roughly by
   raw UBI volume and a SquashFS image are containers whose contents are already searched one extracted file at a
   time beside them. Deep now caps at 64 MB (clearing every real binary — the largest is `AdGuardHome` at 32.9 MB)
   with a 1 GB budget: **6469 files searched, 2 skipped, both containers.** Pinned by a regression test._
-- ▢ **Update-path: reach past the file that was read.** (a) resolve shell `source`/`include` so `sbin/sysupgrade`
-  is credited with `fwtool.sh`'s `ucert -V` instead of the two being separate candidates; (b) decode OpenWrt's
-  `FWx0` fwtool trailer so the appended ucert/metadata blobs are parsed rather than recognised by their armor —
-  the layout was not verified against bytes, so it was deliberately left out; (c) actually verify the detached
-  signature when image, block and on-device key are all present (`usign -V` is a one-shot Ed25519 check), taking
-  `update-verify-chain` from "the mechanism is built" to "this image validates under the shipped key".
+- ▢ **Update-path: reach past the file that was read.** ✅ **(a) DONE** (2026-07-28, `d485237`) — `sysupgrade` is
+  credited with `fwtool.sh`'s `ucert -V`, so the entry point stops being reported as
+  `update-no-signature-verification-found` AND `update-flash-write-without-check`, both false for the same reason.
+  Directives are read at command position only over the inert-text stripper (a `source` in a comment or a
+  `datasource=` assignment is not one), `include DIR` expands OpenWrt-style to every `*.sh` — precisely the edge
+  that reaches `fwtool.sh` — and reached files are assessed with the existing `assessScript` into their own
+  `sourced` field, never merged into `verifyCommands`. **Evidence stays keyed to the file the line is physically
+  in**, so a reader is never told `sysupgrade` contains a line it does not, and the same fact reached two ways
+  produces one finding. No source edge raises a proof state, and the chain says it would READ the file, which is
+  not the same as calling what it defines. Containment is done on the string to stay pure: `..` above the root is
+  refused WITH a reason, `$`/backtick makes it an honest unknown, a slash-less operand is refused because POSIX
+  `.` searches `$PATH`; cycles are named, diamonds read once, and depth/file/mention caps feed
+  `boundsThatTruncatedTheSearch`. _A defect surfaced from the SUCCESS-path test: the depth bound announced
+  "anything lib/c.sh itself sources was not followed" at a leaf that sources nothing — a false bound that would
+  have weakened every negative finding it touched._
+  Still open: **(b)** decode OpenWrt's `FWx0` fwtool trailer so the appended ucert/metadata blobs are parsed
+  rather than recognised by their armor — the layout was not verified against bytes, so it stays out; guessing it
+  would fabricate. **(c)** actually verify the detached signature when image, block and on-device key are all
+  present (`usign -V` is a one-shot Ed25519 check), taking `update-verify-chain` from "the mechanism is built" to
+  "this image validates under the shipped key".
+- ▢ **The source credit does not reach the web, and two narrower gaps beside it.** `apps/web/src/api.ts`
+  `UpdaterCandidate` has no `sourced`/`unresolvedSources`/`sourceBounds`, so the UI shows the credit's *effect*
+  (the findings) but never the chain that produced it — all optional, so nothing breaks, it is simply invisible.
+  A sourced file joins the enforcement-flag guard set only if it carried verify/flash/rollback evidence, so one
+  holding *only* a `REQUIRE_*` guard is still unscanned. And only `verifierPresent`'s `BIN_DIRS` decide "the
+  executable is absent", so a verifier reached by an absolute path outside those dirs reads as missing.
 - ▢ **Device tree: vendor partition bindings.** No corpus image declares a standard `fixed-partitions` node. The
   BE3600 carries a vendor `gl-mtd` node (`compatible = "gl-mtd-rw"`) whose `mtd_read_only` children name nine
   partitions by label — `0:SBL1`, `0:MIBIB`, `0:BOOTCONFIG`, `0:QSEE`, `0:DEVCFG`, `0:TME`, `0:CDT`,
   `0:APPSBLENV`, `0:APPSBL` — with no `reg`, because on IPQ5332 the offsets live in the on-flash MIBIB table.
   Reading it needs a MIBIB parser, and a rule for how far to chase vendor bindings before the provider is just a
   vendor table.
-- ▢ **Cross-check the device tree against the U-Boot env.** Both now yield a kernel command line under the same
-  finding codes. When an image carries both and they **disagree**, that disagreement is itself the finding — the
-  tree says what the build expects, the env says what the board will actually pass.
+- ✅ **Cross-check the device tree against the U-Boot env** (2026-07-28, `61357da`) — `boot-cmdline-disagreement`,
+  `static_confirmed`, fires only when BOTH sources yield a line and the two survive normalisation unequal.
+  Normalised as cosmetic: whitespace, order of independent parameters, and repeats the kernel resolves last-wins.
+  **Deliberately not** normalised: `console=` order/repetition (every occurrence registers and the LAST becomes
+  `/dev/console`, so a reorder is a different boot), anything after a standalone `--` (init's argv), case, and
+  parameter *values* — `root=/dev/mtdblock2` vs `root=31:02` may name one device but deciding that needs the flash
+  layout. The bias is one-directional on purpose: a key wrongly treated as last-wins can only hide a difference,
+  never invent one. Absence is a separate axis — `disagree | agree | device-tree-only | uboot-env-only | neither |
+  unresolved-variables`, and only the first mints a finding. _Real bytes found what the tests could not:_ the only
+  corpus image carrying both stores `bootargs` as a **template** (`console=${console} root=${mtd_root} …`), so a
+  literal compare reported `console=` as differing while the env's own variable held exactly the tree's value.
+  Expansion is now a property of the SOURCE (a DT string is literal, a `$` stays a `$`) and an unresolvable
+  reference **refuses** the comparison rather than comparing `${…}` to a value. The live result is a real
+  disagreement: tree `root=/dev/mtdblock5 rootfstype=squashfs`, env `root=/dev/mtdblock3 rootfstype=jffs2`.
+- ▢ **`bootcmd` can re-set `bootargs`, and on the Tenda it does.** Its `boot_normal` assembles a THIRD variant
+  (`… ${mtdparts} ${mem} ${memsize}`) that matches the device tree more closely than the stored `bootargs` does —
+  so the stored variable is not the operative line on that board, and the cross-check above is comparing against
+  the wrong one of the two. Auditing the command line a `bootcmd`/`preboot` script *assembles* is the real
+  follow-up and would sharpen the finding rather than merely add to it.
+- ▢ **The cross-check fires only from W9**, not from the manual `routes/uboot.ts` / `routes/devicetree.ts` paths,
+  so an operator running the two providers by hand never gets it. Also: two device trees disagreeing with *each
+  other* (a FIT's board variants) is counted and mentioned in `reason` but mints no finding, and `coverage.ts` has
+  no stage of its own for the cross-check — it folds into the uboot/devicetree steps, so the arithmetic balances
+  but no "was this question asked" row exists for it.
 - ▢ **Kernel posture: the authoritative path is untested on real bytes.** The provider prefers a shipped kernel
   config over every inferred source, and **no image in the corpus ships one** — no `/proc/config.gz`, no
   `IKCFG_ST` segment — so that branch is unit-tested only. Add an official OpenWrt build (they ship
@@ -581,9 +625,27 @@ Surfaced while building the above and deliberately not built. Ordered roughly by
   whose own doc comment says it exists "so the chrome reads as one system instead of the old grab-bag of unicode
   glyphs". Three more emoji were added rather than deepening the divergence silently — recording it instead of
   quietly redesigning a panel that was not in scope.
-- ▢ **Assertions never reach the HTML report**, and `disputes_finding` is recorded but inert — a reader looking
-  at a code-decided row has no indication someone contested it. Also: an amended assertion overwrites its prior
-  claim, which is the inconsistent case for a ledger whose whole point is that a retraction survives.
+- ✅ **Assertions never reached the HTML report, and `disputes_finding` was inert** (2026-07-28, `422c18f`) — all
+  three fixed. Assertions render in their own section, placed elsewhere on the page, and the caller cannot
+  interleave them (`renderLedgerSections` returns two finished strings, not the pieces); partitioning is by the
+  `operator_assertion` sentinel, not by source, so a hand-set `source: 'sbom'` still lands on the operator side.
+  **No proof-state markup at all** — a test asserts `class="proof"` appears in the measured section and never in
+  the operator one. A contested row is annotated in place with who/when/basis and states in the same block that
+  its proof state was decided by code and the dispute changes, downgrades and removes nothing; a dangling target
+  (a provider re-run renumbers rows) is surfaced, not dropped. **The row cap exempts contested rows**, or the cap
+  would make disputes inert again on exactly the largest images. Amendment is append-only **without a schema
+  change** — `assertionJson` already holds arbitrary JSON, so the superseded state appends to `supersedes[]`, both
+  new fields optional forever and read defensively. A stale `disputesFindingId` left behind when an amendment
+  moves off `disputes_finding` is now dropped (it survived on the revision that made it and would have rendered as
+  a live dispute). _Rendered against a copy of the real corpus DB, which caught what no test would: under
+  `word-break: break-word` the wide annotation column collapsed the others to one character per line._
+- ▢ **Amendment history stops at the HTML report.** `mcp/format.ts` `shapeAssertion` does not surface
+  `supersedes` (an agent sees only the current claim), `apps/web/src/api.ts` `OperatorAssertion` lacks
+  `supersedes`/`title` so the web `OperatorPanel` shows no history and the web findings table carries no dispute
+  annotation at all, and `providers/disclosure.ts` omits both from the vendor draft. The report is currently the
+  only surface that tells the whole truth about the ledger. Also: `POST` validates that a dispute target exists,
+  but nothing revalidates after a provider re-run renumbers rows — the report states the dangling case rather
+  than repairing it.
 - ▢ **Device tree: `/reserved-memory` and `/memory` are parsed but not surfaced.** A TrustZone/QSEE carve-out is
   useful context for an emulation attempt. Same for partition flags beyond `read-only` (`lock`, `slc-mode`).
 - ▢ **An older extract result cannot say why it has no rootfs.** Asus-Router's stored row predates
@@ -622,6 +684,26 @@ it navigable, which is the more honest shape and is argued in that file's own he
   be seen. wairz gives it a page (React Flow + dagre auto-layout, MiniMap, edge details, click-through to the binary,
   PNG/SVG export via `html-to-image` in `MapControls.tsx`); `SbomGraph.tsx` is the precedent that this shell draws
   graphs by hand, so the dependency is not required — the view is.
+  ✅ **BUILT** (2026-07-28, `0acf818`) — Components → Component map, no new dependency, plain `<svg>` in an
+  `overflow-x:auto` wrapper, zero literal colours (all `.cmap-*` over existing tokens, checked in both themes).
+  Evidence is placed ABOVE the picture: the header states DT_NEEDED is what the *linker* recorded and a `dlopen(3)`
+  library leaves no edge, so silence here is silence about linking, not loading; then counts, then the
+  unresolved-reference table (the actual content), then the drawing, then orphans. **Four states, not one empty**:
+  not-run ("a statement about this workbench, not about the firmware"), no-rootfs (extraction verdict quoted, Build
+  disabled since the POST would refuse), empty ("a real answer, and a plausible one — a busybox-only or fully
+  static rootfs links nothing dynamically"), tool-absent ("an absent tool is an absent answer"). The drawing's cap
+  ranks unresolved-first, then degree, then name — never arrival order — and every unresolved reference stays in
+  the table regardless of what the picture had room for. _Three defects only the render caught: a basename note
+  explaining a discrepancy that had not happened; 55 orphans, most of them `.so` files, described as "top-level
+  executables"; and a column headed "binary" over a list of `.so` files._
+- ▢ **`compmap.ts` skips symlinks, so a soname provided by one always reads unresolved.** On the Tenda camera 63
+  of 67 binaries "need" a missing `libc.so.0` — an artifact of the walk, not a missing library. The new view says
+  so loudly, which is the honest stopgap, but the provider could resolve a symlink's *target basename* without
+  following the link and cut the false set dramatically. Three smaller ones in the same file: `orphanBinaries` is
+  computed only inside a finding's evidence (sliced to 200) and never on the result, so the web recomputes it from
+  the persisted graph instead of being handed it; `binaryCount` counts files while the graph counts basenames and
+  nothing records the collapse; and `unresolved` and the `kind: 'lib'` node set are provably the same set stored
+  twice, which is fine but wants a comment in `buildGraph` so a later change cannot let them drift.
 - ▢ **The MCP server has no surface in the UI that exposes it.** `apps/api/src/mcp/server.ts` ships and the only way
   to discover it is to read `CLAUDE.md`. wairz's `McpConnectionCard.tsx` (212 lines) shows a copyable
   `claude mcp add … -- docker exec -i …`, the Claude Desktop JSON block, and four starter prompts. Pure UI over a
