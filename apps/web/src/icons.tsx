@@ -75,6 +75,14 @@ export const Icon = {
       <path d="M4 5h5l2 2h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z" />
     </S>
   ),
+  /* An opened document rather than a folder: the sibling `filesystem` icon is the carve, this is reading one file. */
+  files: (p: P) => (
+    <S {...p}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 3v5h5" opacity="0.75" />
+      <path d="M9 13h6M9 17h4" opacity="0.75" />
+    </S>
+  ),
   secrets: (p: P) => (
     <S {...p}>
       <rect x="4" y="10" width="16" height="10" rx="2" />

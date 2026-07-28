@@ -31,6 +31,7 @@ import {
 import { AnalysisActionsPanel } from '../components/AnalysisActionsPanel';
 import { CoverageBanner } from '../components/CoverageBanner';
 import { EntropyChart } from '../components/EntropyChart';
+import { FileBrowser } from '../components/FileBrowser';
 import { FilesystemTree } from '../components/FilesystemTree';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { OpacidadPanel } from '../components/OpacidadPanel';
@@ -52,6 +53,7 @@ type TabId =
   | 'structure'
   | 'entropy'
   | 'filesystem'
+  | 'files'
   | 'secrets'
   | 'bootloader'
   | 'sbom'
@@ -67,6 +69,7 @@ type TabId =
 const NO_ANALYSIS_TABS = new Set<TabId>([
   'dossier',
   'filesystem',
+  'files',
   'secrets',
   'bootloader',
   'sbom',
@@ -86,6 +89,7 @@ const SECTION_TITLES: Record<TabId, string> = {
   structure: 'Structure',
   entropy: 'Entropy',
   filesystem: 'Extraction',
+  files: 'File browser',
   secrets: 'Secrets',
   bootloader: 'Bootloader',
   sbom: 'SBOM & CVEs',
@@ -164,6 +168,8 @@ export function ImageDetail(): JSX.Element {
           <SecretsPanel analysis={analysis} imageId={id} />
         </>
       )}
+      {/* File browser: the surface that lets a finding's evidence be checked instead of trusted. */}
+      {tab === 'files' && <FileBrowser imageId={id} />}
       {tab === 'secrets' && <SecretsPanel analysis={analysis} imageId={id} />}
       {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}
       {tab === 'bootloader' && <AnalysisActionsPanel imageId={id} />}

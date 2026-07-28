@@ -1844,3 +1844,187 @@ span.run-dot.run-running {
   background: var(--bg-inset);
   border-color: var(--border-soft);
 }
+
+/* ============================================================================================================
+ * FILE BROWSER  (components/FileBrowser.tsx)
+ *
+ * A two-pane navigator/viewer over the extraction. The row is a monospace GRID rather than a flex line, because
+ * the mode string is the thing an analyst scans down a column for — `-rwsr-xr-x` next to `-rw-r--r--` only reads
+ * as a difference when the two are aligned. Type needs no icon of its own: character 0 of the mode already says
+ * `d`, `l` or `-`, which is why the classic `ls -l` column has survived fifty years of file browsers.
+ * ========================================================================================================== */
+.fsb {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1000px) {
+  .fsb {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.fsb-pane {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.fsb-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  background: var(--bg-panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Breadcrumb: every ancestor stays reachable in one click, which is the whole navigation model here. */
+.fsb-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  min-width: 0;
+}
+.fsb-crumb {
+  padding: 2px 5px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fsb-crumb:hover {
+  color: var(--text);
+  background: var(--bg-inset);
+}
+.fsb-crumb:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.fsb-crumb[aria-current="page"] {
+  color: var(--text);
+}
+.fsb-sep {
+  color: var(--text-faint);
+}
+
+.fsb-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.fsb-row {
+  display: grid;
+  grid-template-columns: 11ch minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+}
+.fsb-row:hover {
+  background: var(--bg-panel-2);
+}
+.fsb-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.fsb-row[aria-current="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent-line);
+}
+.fsb-mode {
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.fsb-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.fsb-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fsb-row.is-dir .fsb-name > span:first-child {
+  color: var(--accent);
+}
+.fsb-size {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fsb-link {
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The bound, rendered where the list stops rather than as a footnote somewhere else. */
+.fsb-bound {
+  margin: 4px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.fsb-view {
+  padding: 12px;
+}
+.fsb-content {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.65;
+  color: var(--text);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  margin: 10px 0 0;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre;
+  tab-size: 4;
+}
+.fsb-content.is-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.fsb-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.fsb-nav .hint {
+  margin-left: auto;
+}

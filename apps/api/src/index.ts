@@ -25,6 +25,7 @@ import { decompileRoutes } from './routes/decompile.js';
 import { diffRoutes } from './routes/diff.js';
 import { emulateRoutes } from './routes/emulate.js';
 import { fccRoutes } from './routes/fcc.js';
+import { filesRoutes } from './routes/files.js';
 import { fsauditRoutes } from './routes/fsaudit.js';
 import { fuzzRoutes } from './routes/fuzz.js';
 import { ghidraRoutes } from './routes/ghidra.js';
@@ -124,6 +125,7 @@ async function main(): Promise<void> {
       await api.register(webprobeRoutes);
       await api.register(ubootRoutes);
       await api.register(fsauditRoutes);
+      await api.register(filesRoutes);
       await api.register(certsRoutes);
       await api.register(rtosRoutes);
       await api.register(compmapRoutes);

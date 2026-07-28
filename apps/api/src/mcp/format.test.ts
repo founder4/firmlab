@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   HONESTY_INSTRUCTIONS,
   type McpCoverage,
+  type McpDirListing,
+  type McpExtraction,
+  type McpFileRead,
   type McpFinding,
   coverageHeadline,
+  fileListingPayload,
+  fileReadPayload,
   findingsPayload,
   reachabilityPayload,
+  readHeadline,
   scanPayload,
   toolError,
   toolResult,
@@ -173,6 +179,138 @@ describe('HONESTY_INSTRUCTIONS', () => {
     ]) {
       expect(HONESTY_INSTRUCTIONS).toContain(state);
     }
+  });
+});
+
+const extraction = (o: Partial<McpExtraction> = {}): McpExtraction => ({
+  state: 'rootfs',
+  browsable: true,
+  verdict: "Extraction recovered a rootfs at 'squashfs-root'. You are browsing the WHOLE carve.",
+  ...o,
+});
+
+const listing = (o: Partial<McpDirListing> = {}): McpDirListing => ({
+  path: 'squashfs-root/etc',
+  entries: [],
+  totalEntries: 0,
+  fileCount: 0,
+  dirCount: 0,
+  symlinkCount: 0,
+  truncated: false,
+  ...o,
+});
+
+describe('fileListingPayload', () => {
+  it('leads with the extraction verdict, so entries cannot be reached without it', () => {
+    const p = fileListingPayload(extraction(), listing());
+    expect(Object.keys(p)[0]).toBe('extractionVerdict');
+  });
+
+  it('answers a null listing with the reason instead of an empty array read as "nothing here"', () => {
+    const p = fileListingPayload(
+      extraction({ state: 'never-run', browsable: false, verdict: 'No extraction has run for this image.' }),
+      null,
+    );
+    expect(p.entries).toEqual([]);
+    expect(p.note).toMatch(/NOT an empty filesystem/);
+    expect(p.extractionVerdict).toMatch(/No extraction has run/);
+  });
+
+  it('lifts escaping symlinks out of the entry array and says they cannot be read', () => {
+    const p = fileListingPayload(
+      extraction(),
+      listing({
+        entries: [
+          {
+            name: 'passwd',
+            path: 'x/etc/passwd',
+            type: 'symlink',
+            size: 0,
+            modeString: 'lrwxrwxrwx',
+            symlinkTarget: '/dev/null',
+            symlinkEscapes: true,
+          },
+          { name: 'group', path: 'x/etc/group', type: 'file', size: 12, modeString: '-rw-r--r--' },
+        ],
+        totalEntries: 2,
+        fileCount: 1,
+        symlinkCount: 1,
+      }),
+    );
+    const escaping = p.symlinksLeavingTheExtraction as { path: string; meaning: string }[];
+    expect(escaping).toHaveLength(1);
+    expect(escaping[0]?.path).toBe('x/etc/passwd');
+    expect(escaping[0]?.meaning).toMatch(/CANNOT be read/);
+  });
+
+  it('carries the truncation rule when the listing was capped', () => {
+    const p = fileListingPayload(
+      extraction(),
+      listing({ truncated: true, truncationRule: '6497 entries, 2000 shown.' }),
+    );
+    expect(p.truncation).toBe('6497 entries, 2000 shown.');
+  });
+});
+
+const read = (o: Partial<McpFileRead> = {}): McpFileRead => ({
+  path: 'jffs2-root/private_key.pem',
+  size: 451,
+  offset: 0,
+  bytesRead: 451,
+  truncated: false,
+  unreadBefore: 0,
+  unreadAfter: 0,
+  classification: { kind: 'text', reason: 'Text: no NUL bytes. Decided from the bytes.' },
+  view: 'text',
+  viewReason: 'Text: no NUL bytes. Decided from the bytes.',
+  text: '-----BEGIN PUBLIC KEY-----\n',
+  adjustments: [],
+  claim: 'These bytes are what the extractor wrote to disk.',
+  ...o,
+});
+
+describe('readHeadline', () => {
+  it('licenses a whole-file quote only when the whole file was read', () => {
+    expect(readHeadline(read())).toMatch(/^COMPLETE FILE/);
+  });
+
+  it('calls a window a window, naming both unread sides', () => {
+    const h = readHeadline(read({ size: 5000, bytesRead: 100, truncated: true, unreadBefore: 0, unreadAfter: 4900 }));
+    expect(h).toMatch(/^PARTIAL READ/);
+    expect(h).toMatch(/4900 unread after/);
+    expect(h).toMatch(/do not characterise what you have not read/);
+  });
+
+  it('treats a tail window as partial too — bytes skipped before the offset are still unread', () => {
+    const h = readHeadline(
+      read({ size: 5000, offset: 4900, bytesRead: 100, truncated: true, unreadBefore: 4900, unreadAfter: 0 }),
+    );
+    expect(h).toMatch(/^PARTIAL READ/);
+    expect(h).toMatch(/4900 skipped before/);
+  });
+
+  it('reports an empty file as a result rather than as missing content', () => {
+    expect(readHeadline(read({ size: 0, bytesRead: 0 }))).toMatch(/^EMPTY FILE/);
+  });
+});
+
+describe('fileReadPayload', () => {
+  it('puts the bound and the claim before the content', () => {
+    const keys = Object.keys(fileReadPayload(extraction(), read()));
+    expect(keys[0]).toBe('readVerdict');
+    expect(keys[1]).toBe('claim');
+    expect(keys.indexOf('text')).toBeGreaterThan(keys.indexOf('readVerdict'));
+  });
+
+  it('keeps the classification REASON, since "binary from the bytes" and "binary from the name" differ', () => {
+    const p = fileReadPayload(extraction(), read());
+    expect(p.classificationReason).toMatch(/Decided from the bytes/);
+  });
+
+  it('is the surface that would have caught the withdrawn backlog entry', () => {
+    // `private_key.pem` holding a PUBLIC key: the payload hands over the bytes, not the filename's implication.
+    const p = fileReadPayload(extraction(), read());
+    expect(p.text).toContain('BEGIN PUBLIC KEY');
   });
 });
 
