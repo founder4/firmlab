@@ -385,9 +385,24 @@ tree: `pnpm check` 3/3, **1307 tests** (75 core / 1160 api / 72 web), biome clea
 ### Follow-ups from the five
 Surfaced while building the above and deliberately not built. Ordered roughly by value.
 
-- ▢ **`REQUIRE_IMAGE_SIGNATURE` is an enforcement flag nothing reads.** Detecting "a fail-open guard whose
-  enabling variable is never set" generalises well past OpenWrt, and is the difference between a check that was
-  skipped and one that was disabled. The GL.iNet is the worked example above.
+- ✅ **A guard whose enabling variable nobody sets is DISABLED, not skipped** (2026-07-28, deploy `d30350c`) —
+  pure `findEnforcementFlags` + `buildEnforcementFindings`. A curated name pattern (`REQUIRE_*`, `*_REQUIRED`,
+  `ENFORCE_*`) read **in a test expression** inside a script already identified as part of the update path, cross
+  referenced against every script the walk read to ask whether ANYTHING assigns it. The asymmetry is the design:
+  guards are looked for in the update path, assignments everywhere, because a flag legitimately set by an
+  unrelated init script is not this defect. Comment and heredoc stripping applies to both sides, so a
+  commented-out assignment does not clear a guard.
+  **Measured on the deploy across six images: the GL.iNet finds 2 flags and reports exactly 1**
+  (`REQUIRE_IMAGE_SIGNATURE`, unassigned), while `REQUIRE_IMAGE_METADATA` is correctly cleared because
+  `lib/upgrade/platform.sh` sets it — that discrimination, on real vendor scripts, is what makes the pass worth
+  trusting. **The other five images report zero: no false positives.** The finding states the FACT as
+  `static_confirmed` (read here, assigned nowhere in this filesystem) and marks the CONSEQUENCE as a strong
+  inference rather than a certainty, because the value could still arrive from the invoking environment, a
+  bootloader variable or a binary's `setenv` — none of which this pass reads.
+  _Honest limit: the corpus contains exactly ONE positive, and it is the case the detector was written from. The
+  generalisation past OpenWrt is designed, not demonstrated; a vendor updater using a different idiom (a C flag, a
+  uci option, a file's presence) would not be caught, and only more firmware families can settle whether the name
+  pattern is the right net._
 - ✅ **`etc/passwd → /dev/null` is claimed now, and the silence has four causes** (2026-07-28, deploy `10ce0c3`)
   — `readInside` returned `''` for a file that is absent, empty, unreadable, OR a symlink resolving outside the
   rootfs, and `auditCredentials('', '')` then emitted nothing, which renders as "no credential findings" and reads
