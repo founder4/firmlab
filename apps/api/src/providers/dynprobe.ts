@@ -226,9 +226,15 @@ export function parseGdbOutput(text: string): GdbParse {
 export function parseTargetStderr(text: string): { deficiencies: string[]; output: string[] } {
   const deficiencies: string[] = [];
   const output: string[] = [];
-  // Each pattern is a way the SANDBOX comes up short, not a way the program misbehaves.
+  // Each pattern is a way the SANDBOX comes up short, not a way the program misbehaves. The distinction is
+  // narrower than it looks: `qemu: uncaught target signal 11 (Segmentation fault)` is deliberately NOT here,
+  // because qemu prints it on EVERY unhandled fault — it is qemu faithfully reporting the target crashing, which
+  // is the program misbehaving and the very result this probe exists to find. Counting it would have turned any
+  // real crash that missed the sink into an "emulation artifact", i.e. discarded the finding as harness noise.
+  // The real `stack_bof_01` run is what surfaced it: a reproduced SIGSEGV at offset 204 came back with that line
+  // sitting in its sandbox-shortfall list.
   const SANDBOX = [
-    /qemu:\s*(unsupported syscall|uncaught target signal|unhandled cpu exception|could not open)/i,
+    /qemu:\s*(unsupported syscall|unhandled cpu exception|could not open)/i,
     /error while loading shared libraries/i,
     /cannot open shared object file/i,
     /function not implemented/i,

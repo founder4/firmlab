@@ -142,6 +142,18 @@ describe('parseGdbOutput — against gdb 13.1 batch output', () => {
     expect(p.output).toEqual(['Starting daemon…']);
   });
 
+  it('does NOT count qemu reporting the target crashing as the sandbox failing', () => {
+    // Verbatim from the real stack_bof_01 run, which reproduced a SIGSEGV at offset 204. qemu prints this on
+    // every unhandled fault: it is the program crashing — the result this probe exists to find — not a sandbox
+    // shortcoming. Counting it turned any real crash that missed the sink into an "emulation artifact".
+    const line = 'qemu: uncaught target signal 11 (Segmentation fault) - core dumped';
+    expect(parseTargetStderr(line).deficiencies).toEqual([]);
+    expect(parseTargetStderr(line).output).toEqual([line]);
+
+    const crashNoHits = parseGdbOutput('Program stopped at 0x400a30.\nIt stopped with signal SIGSEGV, x.');
+    expect(classifyRun(crashNoHits, cyclicPattern(400), line).verdict).toBe('crash');
+  });
+
   it('separates the EMULATOR failing from the target misbehaving', () => {
     const p = parseGdbOutput('warning: Could not load shared library symbols for 3 libraries.');
     expect(p.emulationWarnings).toHaveLength(1);
