@@ -27,7 +27,15 @@
 #   TOOLS_IMAGE    tools base image tag       (default: firmlab-tools:latest)
 #   FW_IMAGE       deploy image tag           (default: firmlab-firmware:latest)
 
-set -euo pipefail
+# `-E` is the load-bearing letter. `set -e` kills the script wherever a command returns non-zero and by default
+# does so SILENTLY — the anti-squatter guard died on an lsof that simply found nothing, and the only symptom was
+# three lines of output and an exit code, which took a `bash -x` session to locate. An ERR trap fixes that, but a
+# plain `trap … ERR` is NOT inherited by shell functions, subshells or command substitutions, which is precisely
+# where that abort happened: the first version of this line printed nothing for the very bug it was written for.
+# `-E` (errtrace) propagates it. Aborting is still right; being quiet about it is not.
+set -Eeuo pipefail
+
+trap 'status=$?; printf "\033[1;31m[x]\033[0m deploy.sh abortó en la línea %s (exit %s): %s\n" "$LINENO" "$status" "$BASH_COMMAND" >&2' ERR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${COMPOSE_FILE:-$HOME/homelab/firmlab/docker-compose.yml}"
