@@ -32,8 +32,13 @@ import { type FirmLabClient, clientFromEnv } from './client.js';
 import {
   HONESTY_INSTRUCTIONS,
   type McpCoverage,
+  type McpDirListing,
+  type McpExtraction,
+  type McpFileRead,
   type McpFinding,
   coverageHeadline,
+  fileListingPayload,
+  fileReadPayload,
   findingsPayload,
   reachabilityPayload,
   scanPayload,
@@ -197,6 +202,91 @@ export function buildServer(fl: FirmLabClient): McpServer {
         note: binaries.length === 0 ? 'No binaries registered — run firmlab_extract first.' : undefined,
         binaries,
       });
+    },
+  );
+
+  // === Open the evidence ===
+  //
+  // These two exist because the ledger was asking to be trusted. FirmLab carved 6497 files out of one corpus image
+  // and served none of them, and docs/BACKLOG.md carries an entry that had to be withdrawn because it was written
+  // from a FILENAME without opening the file — `private_key.pem`, which begins `-----BEGIN PUBLIC KEY-----`. An
+  // agent reading a finding is one step further from the bytes than the operator who could not check them either.
+
+  server.registerTool(
+    'firmlab_list_files',
+    {
+      title: 'List a directory of the extracted filesystem',
+      description:
+        'Browse what extraction actually wrote to disk. The path is relative to the EXTRACTION ROOT, not to the ' +
+        'rootfs, because several images carve into volumes without ever producing a rootfs and rooting here at the ' +
+        'rootfs would show them an empty tree. Omit `path` for the top level. The result leads with the extraction ' +
+        'verdict: an empty listing is not an empty filesystem, and the verdict says which of the several reasons ' +
+        'applies. Symlinks are listed but never followed, and ones pointing out of the extraction are named ' +
+        'separately — that a firmware ships `etc/passwd -> /dev/null` is a fact worth reporting, but its contents ' +
+        'belong to the host and cannot be read.',
+      inputSchema: {
+        imageId: z.string(),
+        path: z.string().optional().describe('Extraction-root-relative directory, e.g. squashfs-root/etc'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ imageId, path: dir }) => {
+      const query = dir ? `?path=${encodeURIComponent(dir)}` : '';
+      const { ok, body } = await fl.getWithStatus<{
+        extraction: McpExtraction;
+        listing: McpDirListing | null;
+        error?: string;
+        rule?: string;
+      }>(`/api/images/${imageId}/files${query}`);
+      if (!ok) return toolError(`${body.error ?? 'the path was refused'} (rule: ${body.rule ?? 'unknown'})`);
+      return toolResult(fileListingPayload(body.extraction, body.listing));
+    },
+  );
+
+  server.registerTool(
+    'firmlab_read_file',
+    {
+      title: 'Read a bounded slice of an extracted file',
+      description:
+        'Open a file from the extraction and see its bytes. Text-vs-binary is decided FROM THE BYTES, never from ' +
+        'the extension — a binary comes back as a hexdump whatever you ask for, and the result says which rule ' +
+        'chose. The read is BOUNDED: the result always states the full size, the window served and how many bytes ' +
+        'were not read, on each side. A window is not the file. Use it to CHECK evidence a finding cites rather ' +
+        'than to infer content from a filename.',
+      inputSchema: {
+        imageId: z.string(),
+        path: z.string().describe('Extraction-root-relative file, e.g. squashfs-root/etc/shadow'),
+        offset: z.number().min(0).optional().describe('First byte to read (default 0)'),
+        limit: z.number().min(1).optional().describe('Bytes to read (default 65536, ceiling 1048576)'),
+        view: z.enum(['text', 'hex']).optional().describe('Preference only; binary bytes are always hexdumped'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ imageId, path: file, offset, limit, view }) => {
+      const params = new URLSearchParams({ path: file });
+      if (offset !== undefined) params.set('offset', String(offset));
+      if (limit !== undefined) params.set('limit', String(limit));
+      if (view !== undefined) params.set('view', view);
+      const { ok, body } = await fl.getWithStatus<{
+        extraction: McpExtraction;
+        read: McpFileRead | null;
+        error?: string;
+        rule?: string;
+        symlinkTarget?: string;
+      }>(`/api/images/${imageId}/files/read?${params.toString()}`);
+      if (!ok) {
+        const target = body.symlinkTarget ? ` (symlink target: ${body.symlinkTarget})` : '';
+        return toolError(`${body.error ?? 'the read was refused'}${target} (rule: ${body.rule ?? 'unknown'})`);
+      }
+      if (!body.read) {
+        return toolResult({
+          extractionVerdict: body.extraction.verdict,
+          state: body.extraction.state,
+          read: null,
+          note: 'Nothing is on disk to read for this image. Read the extraction verdict — it is not the same claim as "the file is empty".',
+        });
+      }
+      return toolResult(fileReadPayload(body.extraction, body.read));
     },
   );
 

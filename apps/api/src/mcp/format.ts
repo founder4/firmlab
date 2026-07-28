@@ -71,6 +71,10 @@ export const HONESTY_INSTRUCTIONS = [
   '  2. A tool being absent, or a bounded search expiring, is not evidence of absence. Symbolic reachability that',
   '     does not reach a sink has proven nothing about that sink.',
   '',
+  'A filename is not its contents. firmlab_read_file opens the file a finding cites, and the one entry this',
+  "project's backlog had to WITHDRAW was written from a filename without opening it — `private_key.pem`, which",
+  'holds a PUBLIC key. If you are about to characterise a file, read it first.',
+  '',
   'When you report, say what was examined and what was not. An honest partial answer is the deliverable here;',
   'a confident complete-sounding one built on unexamined stages is the failure this workbench exists to prevent.',
 ].join('\n');
@@ -206,6 +210,143 @@ export function reachabilityPayload(result: {
       ...s,
       meaning: meaning[s.outcome] ?? 'Unrecognised outcome — treat as no result.',
     })),
+  };
+}
+
+/** The extraction verdict a file listing must be read next to (`providers/fsbrowse.ts`). */
+export interface McpExtraction {
+  state: string;
+  browsable: boolean;
+  verdict: string;
+  rootfsRel?: string;
+}
+
+/** One directory entry as the files route serves it. */
+export interface McpDirEntry {
+  name: string;
+  path: string;
+  type: string;
+  size: number;
+  modeString: string;
+  setuid?: boolean;
+  symlinkTarget?: string;
+  symlinkEscapes?: boolean;
+  symlinkResolved?: string;
+}
+
+export interface McpDirListing {
+  path: string;
+  entries: McpDirEntry[];
+  totalEntries: number;
+  fileCount: number;
+  dirCount: number;
+  symlinkCount: number;
+  truncated: boolean;
+  truncationRule?: string;
+  note?: string;
+}
+
+/**
+ * Pure: a directory-listing payload.
+ *
+ * Same rule as `findingsPayload`, one layer down: an empty listing reads as "the firmware has nothing here" and is
+ * produced identically by an empty directory, an extraction that recovered nothing, and an extraction that never
+ * ran — so the extraction verdict comes FIRST and the entries cannot be reached without it. Symlinks that leave the
+ * extraction are lifted out of the entry array for the reason `scanPayload` lifts incomplete workers: buried in a
+ * long list a model reads them as noise, and they are the entries whose contents it must NOT claim to have read.
+ */
+export function fileListingPayload(extraction: McpExtraction, listing: McpDirListing | null): Record<string, unknown> {
+  if (!listing) {
+    return {
+      extractionVerdict: extraction.verdict,
+      state: extraction.state,
+      browsable: false,
+      entryCount: 0,
+      entries: [],
+      note: 'There is nothing on disk to list. This is NOT an empty filesystem — read the extraction verdict above; it says which of the several different reasons applies and what would change it.',
+    };
+  }
+  const escaping = listing.entries.filter((e) => e.symlinkEscapes);
+  return {
+    extractionVerdict: extraction.verdict,
+    state: extraction.state,
+    path: listing.path,
+    entryCount: listing.totalEntries,
+    shown: listing.entries.length,
+    counts: { files: listing.fileCount, directories: listing.dirCount, symlinks: listing.symlinkCount },
+    ...(listing.truncated ? { truncation: listing.truncationRule } : {}),
+    ...(listing.note ? { note: listing.note } : {}),
+    // Named up front: reading through one of these is refused, so a model must not describe their contents.
+    symlinksLeavingTheExtraction: escaping.map((e) => ({
+      path: e.path,
+      target: e.symlinkTarget,
+      meaning:
+        'This link points outside the extraction. It is left unfollowed and CANNOT be read — the bytes on the ' +
+        'other side belong to the machine running FirmLab, not to the firmware. That the firmware ships this link ' +
+        'is itself the fact worth reporting.',
+    })),
+    entries: listing.entries,
+  };
+}
+
+/** One bounded read as the files route serves it. */
+export interface McpFileRead {
+  path: string;
+  size: number;
+  offset: number;
+  bytesRead: number;
+  truncated: boolean;
+  unreadBefore: number;
+  unreadAfter: number;
+  truncationRule?: string;
+  classification: { kind: string; reason: string };
+  view: string;
+  viewReason: string;
+  text?: string;
+  hexdump?: string;
+  adjustments: string[];
+  claim: string;
+}
+
+/**
+ * Pure: the one-line reading of a read, phrased for a model about to quote the content as evidence.
+ *
+ * `not truncated` is the only case that licenses "the file says X". Everything else is a window, and a window read
+ * as the file is how a config's first 64 KB becomes a claim about a 4 MB blob.
+ */
+export function readHeadline(read: McpFileRead): string {
+  if (read.size === 0) {
+    return 'EMPTY FILE — 0 bytes on disk. There is no content to quote; an empty file is a result, not an absence of one.';
+  }
+  if (!read.truncated) {
+    return `COMPLETE FILE — all ${read.size} bytes were read. Quotes from this content are quotes from the whole file as extracted.`;
+  }
+  return `PARTIAL READ — ${read.bytesRead} of ${read.size} bytes (${read.unreadBefore} skipped before, ${read.unreadAfter} unread after). This is a WINDOW, not the file: do not characterise what you have not read.`;
+}
+
+/**
+ * Pure: a file-read payload. The bound leads, then what the bytes prove, then the content — so a model cannot
+ * reach the text without passing both the truncation and the fact that this is an extraction, not a device.
+ */
+export function fileReadPayload(extraction: McpExtraction, read: McpFileRead): Record<string, unknown> {
+  return {
+    readVerdict: readHeadline(read),
+    claim: read.claim,
+    extractionVerdict: extraction.verdict,
+    path: read.path,
+    size: read.size,
+    offset: read.offset,
+    bytesRead: read.bytesRead,
+    ...(read.truncationRule ? { truncation: read.truncationRule } : {}),
+    ...(read.adjustments.length ? { requestAdjustments: read.adjustments } : {}),
+    // The classification is served with its reason because "binary" decided from the bytes and "binary" guessed
+    // from an extension are different claims, and only the first one is being made here.
+    classification: read.classification.kind,
+    classificationReason: read.classification.reason,
+    view: read.view,
+    viewReason: read.viewReason,
+    ...(read.text !== undefined ? { text: read.text } : {}),
+    ...(read.hexdump !== undefined ? { hexdump: read.hexdump } : {}),
   };
 }
 

@@ -612,6 +612,33 @@ async function get<T>(url: string): Promise<T> {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return (await res.json()) as T;
 }
+/**
+ * GET whose 4xx body IS the answer.
+ *
+ * The file browser's guard refuses a path with the rule that refused it, and that sentence is the whole value —
+ * "400 Bad Request" and "refused by the symlink rule: etc/passwd points at /dev/null, outside the extraction" are
+ * the same status and completely different answers. So a refusal comes back as data, merged onto the payload the
+ * route sent alongside it (the extraction verdict), and only a genuine transport failure throws.
+ */
+async function getOrRefusal<T extends { refusal?: { error: string; rule: string; symlinkTarget?: string } }>(
+  url: string,
+): Promise<T> {
+  const res = await fetch(url);
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (res.ok) return body as T;
+  if (typeof body.error === 'string' && typeof body.rule === 'string') {
+    return {
+      ...(body as object),
+      refusal: {
+        error: body.error,
+        rule: body.rule,
+        ...(typeof body.symlinkTarget === 'string' ? { symlinkTarget: body.symlinkTarget } : {}),
+      },
+    } as T;
+  }
+  throw new Error(typeof body.error === 'string' ? body.error : `${res.status} ${res.statusText}`);
+}
+
 async function post<T>(url: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method: 'POST' };
   if (body !== undefined) {
@@ -848,6 +875,95 @@ export interface LearningSurface {
   cdnGraph: { host: string; families: string[] }[];
 }
 
+// === The extraction browser (providers/fsbrowse.ts) ===
+
+/** Which of the several different "nothing to show" states an image's extraction is in. */
+export type ExtractionBrowseState = 'never-run' | 'in-progress' | 'failed' | 'no-output' | 'volumes-only' | 'rootfs';
+
+export interface ExtractionBrowseView {
+  state: ExtractionBrowseState;
+  browsable: boolean;
+  /** The sentence an empty tree must be read next to. The UI never renders the tree without it. */
+  verdict: string;
+  rootfsRel?: string;
+  extractor?: string;
+}
+
+export interface DirEntryView {
+  name: string;
+  path: string;
+  type: 'file' | 'dir' | 'symlink' | 'other';
+  size: number;
+  mode: number;
+  modeString: string;
+  setuid?: boolean;
+  symlinkTarget?: string;
+  /** The link resolves outside the extraction — reported, never followed. */
+  symlinkEscapes?: boolean;
+  symlinkResolved?: string;
+}
+
+export interface DirListing {
+  path: string;
+  entries: DirEntryView[];
+  totalEntries: number;
+  fileCount: number;
+  dirCount: number;
+  symlinkCount: number;
+  truncated: boolean;
+  truncationRule?: string;
+  note?: string;
+}
+
+export interface ByteClassification {
+  kind: 'text' | 'binary' | 'empty';
+  reason: string;
+  sampled: number;
+  nulBytes: number;
+  nonPrintable: number;
+  utf8: boolean;
+}
+
+export interface FileRead {
+  path: string;
+  size: number;
+  offset: number;
+  bytesRead: number;
+  truncated: boolean;
+  unreadBefore: number;
+  unreadAfter: number;
+  truncationRule?: string;
+  classification: ByteClassification;
+  view: 'text' | 'hex';
+  viewReason: string;
+  text?: string;
+  hexdump?: string;
+  adjustments: string[];
+  claim: string;
+}
+
+/** A path the guard refused, carrying WHICH rule refused it — the part a bare status code destroys. */
+export interface PathRefusal {
+  error: string;
+  rule: string;
+  symlinkTarget?: string;
+}
+
+export interface FilesListing {
+  extraction: ExtractionBrowseView;
+  listing: DirListing | null;
+  claim: string;
+  /** Set instead of `listing` when the path was refused; the panel renders the rule rather than an empty tree. */
+  refusal?: PathRefusal;
+}
+
+export interface FilesRead {
+  extraction: ExtractionBrowseView;
+  read: FileRead | null;
+  claim: string;
+  refusal?: PathRefusal;
+}
+
 export interface StartCaptureResult {
   sessionId: string;
   watching: boolean;
@@ -897,6 +1013,19 @@ export const api = {
     }),
   fuzzResult: (id: string) => get<{ result: FuzzResult | null }>(`/api/images/${id}/fuzz`).then((r) => r.result),
   extract: (id: string) => post<{ jobId: string }>(`/api/images/${id}/extract`),
+  /**
+   * Browse the extraction. A refused path resolves rather than throwing: the rule that refused it is the answer
+   * the panel has to show, and `get`'s bare "400 Bad Request" would throw it away.
+   */
+  files: (id: string, path?: string) =>
+    getOrRefusal<FilesListing>(`/api/images/${id}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  readFile: (id: string, path: string, opts?: { offset?: number; limit?: number; view?: 'text' | 'hex' }) => {
+    const params = new URLSearchParams({ path });
+    if (opts?.offset !== undefined) params.set('offset', String(opts.offset));
+    if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+    if (opts?.view !== undefined) params.set('view', opts.view);
+    return getOrRefusal<FilesRead>(`/api/images/${id}/files/read?${params.toString()}`);
+  },
   /** Run one of the deep static-analysis providers; findings land in the dossier. */
   runAnalysis: (id: string, kind: AnalysisKind) => post<{ jobId: string }>(`/api/images/${id}/${kind}`, {}),
   analysisResult: (id: string, kind: AnalysisKind) =>

@@ -32,8 +32,28 @@ export class FirmLabClient {
 
   async get<T>(p: string): Promise<T> {
     const res = await fetch(this.url(p), { headers: this.headers });
-    if (!res.ok) throw new Error(`GET ${p} → ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      // Same reasoning as `post` below: a refused GET carries the sentence naming what was refused and why, and
+      // that sentence is the actionable part. The file browser's guard is the case that made this matter — "400
+      // Bad Request" and "refused by the symlink rule: etc/passwd points at /dev/null, outside the extraction"
+      // are the same status code and completely different answers.
+      const detail = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(detail.error ?? `GET ${p} → ${res.status} ${res.statusText}`);
+    }
     return (await res.json()) as T;
+  }
+
+  /**
+   * GET that hands back the parsed body WITH its status rather than throwing on a refusal.
+   *
+   * A refusal from the file routes is not a transport failure, it is an answer with structure — the rule that
+   * refused, and the extraction verdict the caller still needs. Collapsing it into a thrown string loses both, so
+   * the tools that need to render a refusal read it through here.
+   */
+  async getWithStatus<T>(p: string): Promise<{ ok: boolean; status: number; body: T }> {
+    const res = await fetch(this.url(p), { headers: this.headers });
+    const body = (await res.json().catch(() => ({}))) as T;
+    return { ok: res.ok, status: res.status, body };
   }
 
   async post<T>(p: string, body?: unknown): Promise<T> {

@@ -49,6 +49,10 @@ const SECTION_GROUPS: { label: string; items: { id: string; label: string; icon:
       { id: 'structure', label: 'Structure', icon: 'structure' },
       { id: 'entropy', label: 'Entropy', icon: 'entropy' },
       { id: 'filesystem', label: 'Filesystem', icon: 'filesystem' },
+      // Deliberately its own section rather than a sub-view of Filesystem: that one answers "what shape is the
+      // carve", this one answers "what does this file actually say", and the second question is the one every
+      // finding's evidence depends on.
+      { id: 'files', label: 'File browser', icon: 'files' },
       { id: 'secrets', label: 'Secrets', icon: 'secrets' },
     ],
   },
