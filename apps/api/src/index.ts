@@ -31,6 +31,7 @@ import { ghidraRoutes } from './routes/ghidra.js';
 import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
+import { kernelRoutes } from './routes/kernel.js';
 import { nvramRoutes } from './routes/nvram.js';
 import { opacidadRoutes } from './routes/opacidad.js';
 import { presetsRoutes } from './routes/presets.js';
@@ -123,6 +124,7 @@ async function main(): Promise<void> {
       await api.register(chipsecRoutes);
       await api.register(webprobeRoutes);
       await api.register(ubootRoutes);
+      await api.register(kernelRoutes);
       await api.register(fsauditRoutes);
       await api.register(certsRoutes);
       await api.register(rtosRoutes);

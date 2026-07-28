@@ -13,6 +13,7 @@ export type ProviderId =
   | 'auxsecrets'
   | 'sbom'
   | 'compcve'
+  | 'kernel'
   | 'servicemap'
   | 'certs'
   | 'compmap'
@@ -119,6 +120,16 @@ const LINUX_CHAIN: PlanSpec[] = [
     needsRootfs: true,
     built: true,
     provider: 'compcve',
+  },
+  {
+    // Deliberately `needsRootfs: false` even though the rootfs is what makes it strong. The kernel banner lives in a
+    // carved blob or the raw image, so this stage still answers the version question when extraction produced no
+    // rootfs — and a version with an explicitly undetermined posture is strictly more than a skipped stage.
+    worker: 'W2 · Kernel posture',
+    reason: 'the kernel under the userland: version age, /dev/kmem, module signing, KASLR/RWX (three-state, honest)',
+    needsRootfs: false,
+    built: true,
+    provider: 'kernel',
   },
   {
     worker: 'Recon · Service enumeration',
