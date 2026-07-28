@@ -1746,7 +1746,7 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                         </span>
                       </td>
                       <td>
-                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
                           {c.advisories.slice(0, 8).map((a) => {
                             const href = a.references[0] ?? `https://nvd.nist.gov/vuln/detail/${a.id}`;
                             const sev = a.severity ? ` · ${a.severity}` : '';
@@ -1763,6 +1763,20 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                               </a>
                             );
                           })}
+                          {/* The table shows at most 8; NVD may hold more than were even fetched. Stating both
+                              keeps a truncated row from reading as the complete set. */}
+                          {(() => {
+                            const total = c.totalMatching ?? c.advisories.length;
+                            const shown = Math.min(8, c.advisories.length);
+                            return total > shown ? (
+                              <span
+                                className="badge"
+                                title={`This row lists ${shown}. NVD matches ${total} CVEs for ${c.name} ${c.version}; the rest are not shown here.`}
+                              >
+                                {shown} of {total} shown
+                              </span>
+                            ) : null;
+                          })()}
                         </div>
                       </td>
                     </tr>

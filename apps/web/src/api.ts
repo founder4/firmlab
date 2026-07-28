@@ -484,7 +484,14 @@ export interface ResearchResult {
     notQueried: number;
     withAdvisories: number;
     totalAdvisories: number;
-    components: { name: string; version: string; advisories: NvdAdvisory[]; matchedBy: 'cpe' | 'keyword' }[];
+    components: {
+      name: string;
+      version: string;
+      advisories: NvdAdvisory[];
+      matchedBy: 'cpe' | 'keyword';
+      /** What NVD says the true match count is — `advisories` may be a prefix of it. */
+      totalMatching: number | null;
+    }[];
     /** How the run split between the version-scoped CPE question and the weaker description-text keyword one. */
     askedByCpe: number;
     askedByKeyword: number;
@@ -492,6 +499,8 @@ export interface ResearchResult {
     notQueriedRule: string;
     /** Components whose CPE answer was empty while other NVD identities for the same software went unqueried. */
     uncheckedIdentities: { name: string; version: string; identities: string[] }[];
+    /** Components whose advisory list is a prefix of what NVD holds — one page is returned per question. */
+    truncated: { name: string; version: string; shown: number; total: number }[];
   };
   kev: { checked: boolean; catalogSize: number; matches: KevMatch[]; reason?: string };
   keyMaterial: { kind: string; redacted: string; effectivelyPublic: boolean; sharedInImages?: number }[];

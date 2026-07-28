@@ -171,10 +171,18 @@ export function rankNvdCandidates(candidates: NvdCandidate[]): NvdCandidate[] {
  * weak question, kept deliberately: an unverified vendor guess would be worse than a weak answer, and `strategy`
  * tells the caller which one it got. `resultsPerPage` caps the response.
  */
+/**
+ * How many advisories one question may return. It was 20 while `parseNvdResponse` independently sliced at 50 —
+ * two different silent bounds on the same list, the tighter one invisible. They are one number now, and whatever
+ * it still cuts is REPORTED (`totalMatching`) rather than dropped: measured on the GL.iNet, curl 8.6.0 has 35 CVEs
+ * and openssl 3.0.13 has 26, so the old page size discarded 21 of them and presented the remainder as the set.
+ */
+export const NVD_PAGE_SIZE = 50;
+
 export function buildNvdQuery(
   name: string,
   version: string,
-  resultsPerPage = 20,
+  resultsPerPage = NVD_PAGE_SIZE,
 ): { url: string; strategy: NvdMatchStrategy } {
   const cpe = nvdCpeFor(name);
   const v = nvdVersion(version);
@@ -242,11 +250,21 @@ interface NvdCveMetrics {
   cvssMetricV2?: { baseSeverity?: string; cvssData?: NvdCvssData }[];
 }
 
+/**
+ * Pure: how many CVEs NVD says match the question, independent of how many it returned on this page. This is the
+ * denominator — without it a page-limited list looks like the complete answer, which is the reading a bound is
+ * never allowed to invite. Null when the response does not carry the field.
+ */
+export function parseNvdTotal(json: unknown): number | null {
+  const t = (json as { totalResults?: unknown })?.totalResults;
+  return typeof t === 'number' && Number.isFinite(t) ? t : null;
+}
+
 /** Pure: parse an NVD CVE-API 2.0 response into a compact advisory list. Tolerates missing fields. */
 export function parseNvdResponse(json: unknown): NvdAdvisory[] {
   const vulns = (json as { vulnerabilities?: unknown[] })?.vulnerabilities;
   if (!Array.isArray(vulns)) return [];
-  return vulns.slice(0, 50).map((raw) => {
+  return vulns.slice(0, NVD_PAGE_SIZE).map((raw) => {
     const cve = (raw as { cve?: unknown }).cve as
       | {
           id?: string;
@@ -288,6 +306,12 @@ export interface NvdComponentResult {
    * asked rather than a fact about the version. Empty otherwise, including when advisories were found.
    */
   uncheckedIdentities: string[];
+  /**
+   * How many CVEs NVD says match, which is not always how many are in `advisories` — one page is returned per
+   * question. `advisories.length < totalMatching` means the list here is a prefix, and the difference has to be
+   * visible or a truncated list reads as a complete one. Null when the response carried no count.
+   */
+  totalMatching: number | null;
 }
 
 /**
@@ -322,6 +346,7 @@ export async function queryNvd(
     freshness: answer.freshness,
     matchedBy: query.strategy,
     uncheckedIdentities: unchecked,
+    totalMatching: answer.freshness ? parseNvdTotal(answer.payload) : null,
   };
 }
 
@@ -356,6 +381,8 @@ export interface NvdBatchResult {
    * dropped before anyone could read it.
    */
   uncheckedIdentities: { name: string; version: string; identities: string[] }[];
+  /** Components whose advisory list is a PREFIX of what NVD holds, with both numbers. Empty when nothing was cut. */
+  truncated: { name: string; version: string; shown: number; total: number }[];
 }
 
 /**
@@ -417,6 +444,7 @@ export async function queryNvdBatch(
   const cache = opts.cache ?? {};
   const results: NvdComponentResult[] = [];
   const unchecked: { name: string; version: string; identities: string[] }[] = [];
+  const truncated: { name: string; version: string; shown: number; total: number }[] = [];
   // Freshness is collected for every component, not only the ones with advisories: `components` keeps only the
   // latter, so this is the sole place the age of a clean answer survives.
   const freshness: (Freshness | null)[] = [];
@@ -439,6 +467,9 @@ export async function queryNvdBatch(
     if (r.uncheckedIdentities.length > 0) {
       unchecked.push({ name: r.name, version: r.version, identities: r.uncheckedIdentities });
     }
+    if (r.totalMatching !== null && r.totalMatching > r.advisories.length) {
+      truncated.push({ name: r.name, version: r.version, shown: r.advisories.length, total: r.totalMatching });
+    }
   }
   return {
     queried,
@@ -452,6 +483,7 @@ export async function queryNvdBatch(
     notQueriedRule: describeNvdDrop(dropped, cap),
     tiers,
     uncheckedIdentities: unchecked,
+    truncated,
   };
 }
 

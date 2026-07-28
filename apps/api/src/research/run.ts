@@ -210,6 +210,11 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   const nvd = await queryNvdBatch(nvdCandidates, cfg);
   handle.log(`NVD: ${nvd.queried} queried, ${nvd.withAdvisories} with advisories (${nvd.totalAdvisories} total).`);
   if (nvd.notQueriedRule) handle.log(`NVD: ${nvd.notQueriedRule}`);
+  for (const t of nvd.truncated) {
+    handle.log(
+      `NVD: ${t.name} ${t.version} shows ${t.shown} of ${t.total} matching CVEs — one page per question, so this list is a prefix, not the set.`,
+    );
+  }
   for (const u of nvd.uncheckedIdentities) {
     handle.log(
       `NVD: ${u.name} ${u.version} came back empty under its primary CPE identity; NVD also carries it as ${u.identities.join(', ')}, not queried — the zero is scoped to the identity asked.`,

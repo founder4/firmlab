@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   COMPONENT_CPE,
   NVD_ENDPOINT,
+  NVD_PAGE_SIZE,
   buildNvdQuery,
   describeNvdDrop,
   nvdCacheKey,
@@ -10,6 +11,7 @@ import {
   nvdCpeFor,
   nvdVersion,
   parseNvdResponse,
+  parseNvdTotal,
   rankNvdCandidates,
   shouldPauseForRateLimit,
 } from './nvd.js';
@@ -21,7 +23,9 @@ describe('buildNvdQuery', () => {
     expect(`${url.origin}${url.pathname}`).toBe(NVD_ENDPOINT);
     expect(q.strategy).toBe('cpe');
     expect(url.searchParams.get('virtualMatchString')).toBe('cpe:2.3:a:dropbear_ssh_project:dropbear_ssh:2019.78');
-    expect(url.searchParams.get('resultsPerPage')).toBe('20');
+    // Bound to the constant, not to a literal: the request page size and the parser's slice were two different
+    // silent limits on the same list until they were made one number.
+    expect(url.searchParams.get('resultsPerPage')).toBe(String(NVD_PAGE_SIZE));
     // The whole defect: the keyword form matched CVE DESCRIPTIONS, which name the fixed release and never the
     // vulnerable one someone shipped, so asking for the installed version could not be answered.
     expect(url.searchParams.get('keywordSearch')).toBeNull();
@@ -160,6 +164,21 @@ describe('describeNvdDrop', () => {
     const real = describeNvdDrop([{ name: 'busybox', version: '1.01' }], 6);
     expect(real).toContain('the cap is genuinely too small');
     expect(real).toContain('1 cpe-versioned');
+  });
+});
+
+describe('parseNvdTotal', () => {
+  it("reads NVD's own match count, which is the denominator a page-limited list needs", () => {
+    // Measured: curl 8.6.0 matches 35 CVEs and openssl 3.0.13 matches 26, while a page returned 20 of each. The
+    // list was presented as the set, so 21 advisories vanished without anything saying so.
+    expect(parseNvdTotal({ totalResults: 35, vulnerabilities: [] })).toBe(35);
+    expect(parseNvdTotal({ totalResults: 0 })).toBe(0);
+  });
+
+  it('is null rather than 0 when the field is absent — "we did not read it" is not "there are none"', () => {
+    expect(parseNvdTotal({})).toBeNull();
+    expect(parseNvdTotal(null)).toBeNull();
+    expect(parseNvdTotal({ totalResults: 'many' })).toBeNull();
   });
 });
 
