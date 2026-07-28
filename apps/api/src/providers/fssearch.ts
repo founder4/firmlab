@@ -84,10 +84,11 @@ export interface SearchResult {
  * into three different accounts of the same bound — the coverage banner exists for exactly this reason one layer
  * up, and a search is the same shape of claim.
  */
-export function formatCoverage(c: SearchCoverage, hitCount: number): string {
+export function formatCoverage(c: SearchCoverage, hitCount: number, deep = false): string {
   const holes: string[] = [];
   if (c.skipped.tooLarge > 0) {
-    holes.push(`${c.skipped.tooLarge} file(s) larger than ${Math.round(SEARCH_FILE_CAP / (1024 * 1024))} MB`);
+    const capMb = Math.round((deep ? SEARCH_BYTE_BUDGET : SEARCH_FILE_CAP) / (1024 * 1024));
+    holes.push(`${c.skipped.tooLarge} file(s) larger than ${capMb} MB`);
   }
   if (c.skipped.budgetExhausted > 0) holes.push(`${c.skipped.budgetExhausted} file(s) after the read budget ran out`);
   if (c.skipped.unreadable > 0) holes.push(`${c.skipped.unreadable} unreadable file(s)`);
@@ -104,6 +105,8 @@ export function formatCoverage(c: SearchCoverage, hitCount: number): string {
   }
   if (holes.length === 0 && !c.walkTruncated && !c.hitCapReached) {
     parts.push('Every file in the extraction was opened, so this list is complete for this term.');
+  } else if (!deep && c.skipped.tooLarge > 0) {
+    parts.push('Re-run with deep search to open those too.');
   }
   return parts.join(' ');
 }
@@ -157,11 +160,16 @@ function looksBinary(buf: Uint8Array): boolean {
 export function searchExtraction(
   root: string,
   query: string,
-  opts: { regex?: boolean; hitCap?: number } = {},
+  opts: { regex?: boolean; hitCap?: number; deep?: boolean } = {},
 ): SearchResult | { error: string } {
   const matcher = buildMatcher(query, opts.regex === true);
   if ('error' in matcher) return matcher;
   const hitCap = opts.hitCap ?? SEARCH_HIT_CAP;
+  // `deep` lifts the per-file cap. It exists because the default makes a COMPLETE search impossible on the
+  // corpus's richest image: the GL.iNet carve holds 10 files above 8 MB, so every query there — including one
+  // that legitimately found nothing — carries a permanent hole. An operator who needs a real negative has to be
+  // able to buy one, and the byte budget still bounds the cost.
+  const fileCap = opts.deep === true ? SEARCH_BYTE_BUDGET : SEARCH_FILE_CAP;
 
   const hits: SearchHit[] = [];
   const skipped: SearchSkips = { tooLarge: 0, unreadable: 0, budgetExhausted: 0 };
@@ -212,7 +220,7 @@ export function searchExtraction(
         continue;
       }
       if (size === 0) continue;
-      if (size > SEARCH_FILE_CAP) {
+      if (size > fileCap) {
         skipped.tooLarge++;
         continue;
       }
@@ -268,5 +276,11 @@ export function searchExtraction(
     hitCapReached,
     budgetSpent,
   };
-  return { query, regex: opts.regex === true, hits, coverage, verdict: formatCoverage(coverage, hits.length) };
+  return {
+    query,
+    regex: opts.regex === true,
+    hits,
+    coverage,
+    verdict: formatCoverage(coverage, hits.length, opts.deep === true),
+  };
 }

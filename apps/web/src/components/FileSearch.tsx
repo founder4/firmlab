@@ -24,6 +24,7 @@ export function isCompleteSearch(s: FilesSearch | null): boolean {
 export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
   const [q, setQ] = useState('');
   const [regex, setRegex] = useState(false);
+  const [deep, setDeep] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<FilesSearch | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,14 +37,14 @@ export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
       setError(null);
       setResult(null);
       try {
-        setResult(await api.searchFiles(imageId, q, regex));
+        setResult(await api.searchFiles(imageId, q, regex, deep));
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
     },
-    [imageId, q, regex],
+    [imageId, q, regex, deep],
   );
 
   const hits = result?.hits ?? [];
@@ -68,6 +69,12 @@ export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
         <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input type="checkbox" checked={regex} onChange={(e) => setRegex(e.target.checked)} />
           regex
+        </label>
+        {/* Without this the GL.iNet can never return a complete search: 10 of its files exceed the default cap,
+            so every answer there carries a permanent hole. Slower, and the operator chooses when to pay. */}
+        <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} />
+          deep (open large files)
         </label>
         <button className="btn btn-primary btn-sm" type="submit" disabled={busy || !q.trim()}>
           {busy ? <span className="spinner" /> : 'Search'}

@@ -106,6 +106,33 @@ describe('searchExtraction', () => {
   });
 });
 
+describe('deep search', () => {
+  it('opens a file the default cap refuses, so a complete answer is buyable', () => {
+    const root = tree();
+    const big = Buffer.alloc(SEARCH_FILE_CAP + 4096, 0x41);
+    big.write('updates.vendor.example', SEARCH_FILE_CAP + 100);
+    fs.writeFileSync(path.join(root, 'big.bin'), big);
+
+    const shallow = searchExtraction(root, 'updates.vendor.example') as {
+      hits: unknown[];
+      verdict: string;
+      coverage: { skipped: { tooLarge: number } };
+    };
+    expect(shallow.coverage.skipped.tooLarge).toBe(1);
+    // The default answer points at its own remedy rather than leaving the hole unexplained.
+    expect(shallow.verdict).toMatch(/Re-run with deep search/);
+
+    const deep = searchExtraction(root, 'updates.vendor.example', { deep: true }) as {
+      hits: { path: string }[];
+      verdict: string;
+      coverage: { skipped: { tooLarge: number } };
+    };
+    expect(deep.coverage.skipped.tooLarge).toBe(0);
+    expect(deep.hits.some((h) => h.path === 'big.bin')).toBe(true);
+    expect(deep.verdict).toMatch(/Every file in the extraction was opened/);
+  });
+});
+
 describe('formatCoverage', () => {
   it('never emits a bare count — a clean search still states that it was complete', () => {
     const v = formatCoverage(

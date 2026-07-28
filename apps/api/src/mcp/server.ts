@@ -263,12 +263,19 @@ export function buildServer(fl: FirmLabClient): McpServer {
         imageId: z.string(),
         query: z.string().describe('Literal term by default — it is escaped, so `a.out` will not match `about`'),
         regex: z.boolean().optional().describe('Treat the query as a regular expression instead'),
+        deep: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also open files above the per-file cap. Slower, and the only way to get a COMPLETE search on an image that holds large blobs',
+          ),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ imageId, query, regex }) => {
+    async ({ imageId, query, regex, deep }) => {
       const params = new URLSearchParams({ q: query });
       if (regex) params.set('regex', '1');
+      if (deep) params.set('deep', '1');
       const { ok, body } = await fl.getWithStatus<{
         extraction: McpExtraction;
         result: McpSearchResult | null;

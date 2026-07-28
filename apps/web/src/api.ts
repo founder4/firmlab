@@ -1273,9 +1273,9 @@ export const api = {
    * from `analysisResult` so that one keeps its deliberately narrow shape — a caller that only counts findings
    * should not be handed a type inviting it to read fields a stored result may not carry.
    */
-  searchFiles: (id: string, q: string, regex = false) =>
+  searchFiles: (id: string, q: string, regex = false, deep = false) =>
     get<{ result: FilesSearch | null }>(
-      `/api/images/${id}/files/search?q=${encodeURIComponent(q)}${regex ? '&regex=1' : ''}`,
+      `/api/images/${id}/files/search?q=${encodeURIComponent(q)}${regex ? '&regex=1' : ''}${deep ? '&deep=1' : ''}`,
     ).then((r) => r.result),
   deviceTree: (id: string) =>
     get<{ result: DeviceTreeResult | null }>(`/api/images/${id}/devicetree`).then((r) => r.result),

@@ -94,11 +94,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
 
     const { root, view } = extractionOf(id);
-    const { q, regex } = req.query as { q?: string; regex?: string };
+    const { q, regex, deep } = req.query as { q?: string; regex?: string; deep?: string };
     if (!root) return { extraction: view, result: null, claim: EVIDENCE_CLAIM };
     if (!q) return reply.status(400).send({ error: 'Provide a search term as ?q=', extraction: view });
 
-    const result = searchExtraction(root, q, { regex: regex === '1' || regex === 'true' });
+    const result = searchExtraction(root, q, {
+      regex: regex === '1' || regex === 'true',
+      deep: deep === '1' || deep === 'true',
+    });
     if ('error' in result) return reply.status(400).send({ error: result.error, extraction: view });
     return { extraction: view, result, claim: EVIDENCE_CLAIM };
   });
