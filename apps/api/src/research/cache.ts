@@ -57,6 +57,11 @@
  * And a bound states what it dropped: `planCacheEviction` is pure, orders deterministically (oldest first, ties by
  * path — never by directory arrival order), and returns the sentence naming how many entries went, how many bytes,
  * and under which of the two rules each one was selected.
+ *
+ * MEASURING is separate from sweeping, and `measureResearchCache` is the read-only half. This directory is the one
+ * thing under the data root that grows without an image behind it, so `/storage` has to be able to state what it
+ * costs — and asking that question must not be able to delete anything. It shares the same bounded walk, and
+ * therefore the same obligation: when the walk truncates, the number it returns is a floor and says so.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -507,6 +512,47 @@ export function scanCacheEntries(dir: string = RESEARCH_CACHE_DIR, budget = 500_
   // Anything still on the stack is a directory the budget stopped us from opening; an empty stack means the walk
   // finished, however close to the budget it ran.
   return { entries, truncated: stack.length > 0 };
+}
+
+/**
+ * What the cache costs on disk, as a MEASUREMENT — nothing here deletes, and nothing here needs a cap configured.
+ *
+ * `truncated` is the field that keeps this honest. The walk underneath is bounded, and a bounded walk that reports
+ * its partial total as "the size" is the failure this codebase has paid for repeatedly. When the bound bites, the
+ * two numbers are a FLOOR — at least this much, on the part of the tree that was walked — and `note` says so in
+ * the same sentence that carries them, so a caller that renders only the note cannot lose the caveat.
+ */
+export interface CacheUsage {
+  /** Total size of the cache entries walked, in bytes. A floor when `truncated`. */
+  bytes: number;
+  /** How many entries were walked. A floor when `truncated`. */
+  entryCount: number;
+  /** True when the bounded walk stopped early: the two numbers above then describe a prefix of the tree. */
+  truncated: boolean;
+  /** One sentence stating the two numbers and, when they are a floor, that they are one. Never empty. */
+  note: string;
+}
+
+/**
+ * Measure the advisory cache without touching it. Deliberately NOT `sweepResearchCache`: measuring and deleting
+ * are different operations, and a size endpoint that ran an eviction sweep to answer would make reading a page
+ * destructive — the caps are a disk-pressure valve the operator configures, not something a GET may trigger.
+ *
+ * A missing or unreadable cache directory measures as zero and says zero. It is the ordinary state of a deployment
+ * that has never enabled `FIRMLAB_RESEARCH`, and an error there would be a lie about a directory that is simply
+ * not needed yet.
+ *
+ * Only `*.json` entries are counted, matching what the sweep considers an entry. A `.tmp` file belongs to a write
+ * still in flight; it is transient by construction, and one per concurrent write, so leaving it out understates
+ * the directory by a bounded and short-lived amount rather than reporting churn as cost.
+ */
+export function measureResearchCache(dir: string = RESEARCH_CACHE_DIR, budget = 500_000): CacheUsage {
+  const scan = scanCacheEntries(dir, budget);
+  const bytes = scan.entries.reduce((sum, e) => sum + e.bytes, 0);
+  const note = scan.truncated
+    ? `research cache: at least ${plural(scan.entries.length)}, ${bytes}B — the walk hit its budget, so this is a floor, not the total`
+    : `research cache: ${plural(scan.entries.length)}, ${bytes}B on disk`;
+  return { bytes, entryCount: scan.entries.length, truncated: scan.truncated, note };
 }
 
 export interface CacheSweepOptions {

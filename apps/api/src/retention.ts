@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EXTRACT_DIR, IMAGES_DIR } from './paths.js';
-import { sweepResearchCache } from './research/cache.js';
+import { measureResearchCache, sweepResearchCache } from './research/cache.js';
 import { deleteImage, imagesWithActiveSessions, listImages } from './store.js';
 
 const MAX_AGE_DAYS = Math.max(0, Number(process.env.FIRMLAB_MAX_IMAGE_AGE_DAYS ?? 0));
@@ -55,14 +55,39 @@ export interface StorageUsage {
   imageCount: number;
   imagesBytes: number;
   extractsBytes: number;
+  /** Images + extracts. This, and only this, is what `FIRMLAB_MAX_DATA_BYTES` governs — see the note below. */
   totalBytes: number;
   quotaBytes: number;
   maxAgeDays: number;
+  /**
+   * The advisory cache, reported BESIDE the image quota rather than inside it. Every field below is optional
+   * forever: a client compiled against an older shape must not assert they exist, and a payload that predates
+   * them must not become a crash.
+   */
+  researchCacheBytes?: number;
+  researchCacheEntries?: number;
+  /** True when the cache walk hit its budget: the two numbers above are then a floor, not the total. */
+  researchCacheTruncated?: boolean;
+  /** The sentence that carries the two numbers and, when they are a floor, says so. */
+  researchCacheNote?: string;
 }
 
+/**
+ * What the data root currently holds. The research advisory cache is measured too — it is the one directory here
+ * that grows without an image behind it, which is why it has caps of its own, and it was invisible in usage until
+ * now.
+ *
+ * It is reported separately and is NOT added into `totalBytes`, because `totalBytes` is the number
+ * `sweepRetention` compares against `FIRMLAB_MAX_DATA_BYTES` and that quota evicts IMAGES. Folding cache growth
+ * into it would make the image sweep delete firmware to compensate for a directory it does not control, under a
+ * cap that was never about it. The cache has its own two knobs; this states what it costs.
+ *
+ * Measuring never sweeps: `measureResearchCache` walks and sums, and deletes nothing whatever the caps say.
+ */
 export function storageUsage(): StorageUsage {
   const imagesBytes = dirSize(IMAGES_DIR);
   const extractsBytes = dirSize(EXTRACT_DIR);
+  const cache = measureResearchCache();
   return {
     imageCount: listImages().length,
     imagesBytes,
@@ -70,6 +95,10 @@ export function storageUsage(): StorageUsage {
     totalBytes: imagesBytes + extractsBytes,
     quotaBytes: MAX_DATA_BYTES,
     maxAgeDays: MAX_AGE_DAYS,
+    researchCacheBytes: cache.bytes,
+    researchCacheEntries: cache.entryCount,
+    researchCacheTruncated: cache.truncated,
+    researchCacheNote: cache.note,
   };
 }
 

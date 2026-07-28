@@ -108,6 +108,12 @@ export interface CorpusRule {
   name: string;
   /** `meta.target`: `firmware` or `bootloader`; absent means the rule is about a module. */
   target?: string;
+  /**
+   * `meta.description` — free prose, and the place the corpus most often names the module a rule is about when
+   * neither the name nor the filename does (`CVE-2023-45230` names `Dhcp6Dxe` only here). Absent when the rule
+   * declares none, which most do not.
+   */
+  description?: string;
   /** How many volume GUIDs the rule declares — the scoping the per-module pass deliberately bypasses. */
   volumeGuids: number;
 }
@@ -265,16 +271,28 @@ export function ruleCategory(rulePath: string): string | undefined {
 /**
  * Pure: read the `meta:` block of a FwHunt rule.
  *
- * Three fields there decide what a rule can be asked to do and none of them is visible from the filename.
- * `name` is what the scanner PRINTS — five rules in the pinned corpus print something other than their filename,
- * so indexing matches by filename alone loses exactly those five rules' categories and grades their matches with
- * the fallback severity. `target` says whether the rule is about a whole firmware image, an OS bootloader or a
- * module, which is the only thing standing between `scan-module` and evaluating a whole-image hex string against
- * one driver. `volume guids` is the scoping its author set, which the per-module pass bypasses and must therefore
- * disclose. Read by hand rather than with a YAML parser because the API has no YAML dependency and this needs
- * three scalars, not a document model — the block is delimited by indentation, so `variants:` cannot leak in.
+ * Four fields there decide what a rule can be asked to do, or what it is about, and none of them is visible from
+ * the filename. `name` is what the scanner PRINTS — five rules in the pinned corpus print something other than
+ * their filename, so indexing matches by filename alone loses exactly those five rules' categories and grades
+ * their matches with the fallback severity. `target` says whether the rule is about a whole firmware image, an OS
+ * bootloader or a module, which is the only thing standing between `scan-module` and evaluating a whole-image hex
+ * string against one driver. `volume guids` is the scoping its author set, which the per-module pass bypasses and
+ * must therefore disclose. `description` is prose, and it is read for one reason only: it is where the corpus most
+ * often names the module a rule was written about when the name and the filename do not (`CVE-2023-45230` says
+ * `Dhcp6Dxe` here and nowhere else), which is the strongest key `rankModulesForScan` has and was starving without
+ * it. Read by hand rather than with a YAML parser because the API has no YAML dependency and this needs four
+ * scalars, not a document model — the block is delimited by indentation, so `variants:` cannot leak in.
+ *
+ * A description written as a folded/literal block (`description: >`) yields its indicator rather than the prose,
+ * so the rule simply contributes nothing to the ranking. That is a miss, not a wrong answer, and it is the same
+ * shape of miss as a rule that names no module at all — which is the majority of the corpus.
  */
-export function parseRuleMeta(text: string): { name?: string; target?: string; volumeGuids: number } {
+export function parseRuleMeta(text: string): {
+  name?: string;
+  target?: string;
+  description?: string;
+  volumeGuids: number;
+} {
   const lines = text.split('\n');
   const start = lines.findIndex((l) => /^\s*meta:\s*$/.test(l));
   if (start < 0) return { volumeGuids: 0 };
@@ -309,7 +327,13 @@ export function parseRuleMeta(text: string): { name?: string; target?: string; v
 
   const name = scalar('name');
   const target = scalar('target');
-  return { ...(name ? { name } : {}), ...(target ? { target } : {}), volumeGuids };
+  const description = scalar('description');
+  return {
+    ...(name ? { name } : {}),
+    ...(target ? { target } : {}),
+    ...(description ? { description } : {}),
+    volumeGuids,
+  };
 }
 
 /**
@@ -360,6 +384,7 @@ export function loadRuleCorpus(rulesDir: string): CorpusRule[] {
           path: path.relative(rulesDir, abs),
           name: meta.name ?? e.name.replace(/\.ya?ml$/i, ''),
           ...(meta.target ? { target: meta.target } : {}),
+          ...(meta.description ? { description: meta.description } : {}),
           volumeGuids: meta.volumeGuids,
         });
       }
@@ -557,15 +582,54 @@ export function classifyModulePrivilege(module: CarvedModule): ModulePrivilege {
 /**
  * A module label shorter than this is not tested against the corpus at all. `Dxe`, `Pei` and `Smm` occur in most
  * of the corpus, so matching them would rank every driver in the image first and the signal would be noise
- * wearing the shape of evidence.
+ * wearing the shape of evidence. The rule binds descriptions harder than it binds names, not less: a description
+ * is a sentence, and a short label finds a substring in prose far more readily than in an identifier.
  */
 const CORPUS_NAME_MIN_CHARS = 5;
 
-/** How many of the offered rules name this module — see key 2 of `rankModulesForScan`. */
-function countRulesNaming(module: CarvedModule, ruleTexts: string[]): number {
+/**
+ * What one mention of a module is worth, by where in the rule it was found.
+ *
+ * A name or filename mention counts DOUBLE a description mention, and the asymmetry is the point. A rule's
+ * `meta.name` and its filename are identifiers its author chose to say what the rule is *about* — `LojaxSecDxe`
+ * is a rule about `SecDxe`. A description is prose written for a human, and prose names modules it is not about:
+ * as context, as contrast, as the place a bug is *not*. It is also two orders of magnitude longer than a name, so
+ * an incidental substring hit is correspondingly likelier. Halving it keeps a description mention doing the job
+ * it exists for — a module the corpus has written *something* about outranks one it has written nothing about,
+ * which is how `CVE-2023-45230` finally buys `Dhcp6Dxe` a slot — without ever letting prose outrank a rule that
+ * carries the module's name.
+ *
+ * The consequence worth stating: two rules describing a module tie with one rule named after it. That is
+ * deliberate rather than an artifact of the numbers — two independent authors writing the label down is about as
+ * much as one author naming the rule for it — and the tie then falls to privilege, which is a defensible order.
+ */
+const NAME_MENTION_WEIGHT = 2;
+const DESCRIPTION_MENTION_WEIGHT = 1;
+
+/** One rule reduced to the two normalized texts a module label is looked for in. */
+interface RuleMentionText {
+  /** `meta.name` and the filename, joined. */
+  label: string;
+  /** `meta.description`, or empty when the rule declares none. */
+  description: string;
+}
+
+/**
+ * How much the offered corpus has to say about this module — key 2 of `rankModulesForScan`.
+ *
+ * A rule contributes AT MOST ONCE: a rule that names the module in its name and describes it again scores the
+ * name weight, not the sum. Otherwise a single rule that repeats itself would outweigh two rules that agree, and
+ * the key would be measuring verbosity instead of attention.
+ */
+function scoreCorpusMentions(module: CarvedModule, rules: readonly RuleMentionText[]): number {
   const key = normalizeToken(module.name);
   if (key.length < CORPUS_NAME_MIN_CHARS) return 0;
-  return ruleTexts.reduce((n, text) => (text.includes(key) ? n + 1 : n), 0);
+  let score = 0;
+  for (const r of rules) {
+    if (r.label.includes(key)) score += NAME_MENTION_WEIGHT;
+    else if (r.description.includes(key)) score += DESCRIPTION_MENTION_WEIGHT;
+  }
+  return score;
 }
 
 /**
@@ -577,12 +641,14 @@ function countRulesNaming(module: CarvedModule, ruleTexts: string[]): number {
  *  1. COVERAGE DEBT. A module the whole-image pass never printed a verdict for had ZERO rules run against it, so
  *     that is where the extra pass buys the most. Modules the image pass did reach follow — it offered them only
  *     the rules scoped to their volume, so they are not covered either, just less starved.
- *  2. WHAT THE CORPUS NAMES. A module whose label appears in the name or filename of a rule this pass is about to
- *     offer is a module somebody wrote a detection about: `LojaxSecDxe` names `SecDxe`, `CosmicStrandDxeCore`
- *     names `DxeCore`. Twelve slots spent where the corpus has something to say beat twelve spent where it has
- *     nothing, and modules more rules name go first. This reads only `CorpusRule`'s name and path — it is not a
- *     prediction that the rule will match, and a rule that names no module at all (`BRLY-2022-009`, most of the
- *     corpus) contributes nothing here rather than a guess.
+ *  2. WHAT THE CORPUS NAMES. A module whose label appears in a rule this pass is about to offer is a module
+ *     somebody wrote a detection about: `LojaxSecDxe` names `SecDxe`, `CosmicStrandDxeCore` names `DxeCore`, and
+ *     `CVE-2023-45230` names `Dhcp6Dxe` in its DESCRIPTION and in neither its name nor its filename. Twelve slots
+ *     spent where the corpus has something to say beat twelve spent where it has nothing, and modules the corpus
+ *     says more about go first. Three fields are read — `name`, `path` and `description` — and a description
+ *     mention is worth half a name mention, for the reasons on `NAME_MENTION_WEIGHT`. This is not a prediction
+ *     that the rule will match, and a rule that names no module at all (`BRLY-2022-009`, most of the corpus)
+ *     contributes nothing here rather than a guess.
  *  3. PRIVILEGE, from `classifyModulePrivilege`: SMM first, because it runs at ring -2, stays resident after the
  *     OS has booted, and is what the largest share of the module-target corpus (SMM callouts, SMI entry code) was
  *     written against; then the dispatch cores, which decide what runs after them; then PEIMs, which run before
@@ -609,20 +675,23 @@ export function rankModulesForScan(input: {
   const covered = new Set(coveredByImageScan.map((m) => path.basename(m).replace(MODULE_EXT, '').toLowerCase()));
   // The scanner prints `meta.name`, which for five rules in the pinned corpus is not the filename, so both are
   // searched. Joined with a space the two cannot form a match across their boundary — normalized keys have none.
-  const ruleTexts = rules.map(
-    (r) => `${normalizeToken(r.name)} ${normalizeToken(path.basename(r.path).replace(/\.ya?ml$/i, ''))}`,
-  );
+  // The description is kept SEPARATE rather than joined in, because where the label was found is what decides
+  // what the mention is worth.
+  const ruleTexts: RuleMentionText[] = rules.map((r) => ({
+    label: `${normalizeToken(r.name)} ${normalizeToken(path.basename(r.path).replace(/\.ya?ml$/i, ''))}`,
+    description: normalizeToken(r.description ?? ''),
+  }));
 
   const ranked = modules.map((m) => ({
     module: m,
     debt: covered.has(m.name.toLowerCase()) ? 1 : 0,
-    namedBy: countRulesNaming(m, ruleTexts),
+    mentions: scoreCorpusMentions(m, ruleTexts),
     privilege: PRIVILEGE_ORDER.indexOf(classifyModulePrivilege(m)),
   }));
   ranked.sort(
     (a, b) =>
       a.debt - b.debt ||
-      b.namedBy - a.namedBy ||
+      b.mentions - a.mentions ||
       a.privilege - b.privilege ||
       a.module.name.localeCompare(b.module.name) ||
       a.module.path.localeCompare(b.module.path),
@@ -1045,7 +1114,7 @@ async function runModulePass(
     const dropped = [...outOfBudget, ...skipped];
     const skipReason = outOfBudget.length
       ? `the ${Math.round(budgetMs / 1000)}s pass budget ran out after ${scanned.length} module(s), and a cap of ${cap} module(s) applied besides`
-      : `a cap of ${cap} module(s), taken in order of coverage debt, then how many of the offered rules name the module, then module privilege (SMM and the dispatch cores first) — never carve order`;
+      : `a cap of ${cap} module(s), taken in order of coverage debt, then how much the offered rules say about the module (its name or filename, and at half weight their description), then module privilege (SMM and the dispatch cores first) — never carve order`;
 
     return {
       ran: scanned.length > 0,

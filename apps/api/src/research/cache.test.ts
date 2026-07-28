@@ -12,6 +12,7 @@ import {
   cachedFreshness,
   classifyAge,
   liveFreshness,
+  measureResearchCache,
   parseEnvelope,
   planCacheEviction,
   readCache,
@@ -445,5 +446,85 @@ describe('sweepResearchCache against a real directory', () => {
     seed(dir, 'kev', 'c', 1);
     expect(scanCacheEntries(dir, 2).truncated).toBe(true);
     expect(scanCacheEntries(dir).truncated).toBe(false);
+  });
+});
+
+describe('measureResearchCache — what the cache costs, measured without touching it', () => {
+  const roots: string[] = [];
+  const makeCache = (): string => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-cache-usage-'));
+    roots.push(dir);
+    return dir;
+  };
+  afterAll(() => {
+    for (const r of roots) fs.rmSync(r, { recursive: true, force: true });
+  });
+
+  const seed = (dir: string, source: string, key: string): string => {
+    const w = writeCache(source, key, { vulns: [{ id: key }] }, { dir });
+    if (!w.written) throw new Error(w.reason);
+    return w.path;
+  };
+
+  it('reports the size and entry count of a populated cache', () => {
+    const dir = makeCache();
+    const files = [seed(dir, 'osv', 'a'), seed(dir, 'nvd', 'b'), seed(dir, 'kev', 'c')];
+    const expected = files.reduce((sum, f) => sum + fs.statSync(f).size, 0);
+
+    const usage = measureResearchCache(dir);
+    expect(usage.entryCount).toBe(3);
+    expect(usage.bytes).toBe(expected);
+    expect(usage.truncated).toBe(false);
+    expect(usage.note).toBe(`research cache: 3 entries, ${expected}B on disk`);
+  });
+
+  it('reads a missing cache directory as zero, and reports zero rather than failing', () => {
+    const missing = path.join(makeCache(), 'never-created');
+    expect(measureResearchCache(missing)).toEqual({
+      bytes: 0,
+      entryCount: 0,
+      truncated: false,
+      note: 'research cache: 0 entries, 0B on disk',
+    });
+  });
+
+  it('calls a truncated walk a FLOOR and says so, instead of passing it off as the total', () => {
+    const dir = makeCache();
+    seed(dir, 'osv', 'a');
+    seed(dir, 'nvd', 'b');
+    seed(dir, 'kev', 'c');
+
+    const partial = measureResearchCache(dir, 2);
+    expect(partial.truncated).toBe(true);
+    expect(partial.note).toContain('at least');
+    expect(partial.note).toContain('a floor, not the total');
+    // The floor is a real lower bound on the full walk, not a number of its own.
+    const whole = measureResearchCache(dir);
+    expect(whole.truncated).toBe(false);
+    expect(partial.entryCount).toBeLessThan(whole.entryCount);
+    expect(partial.bytes).toBeLessThanOrEqual(whole.bytes);
+    expect(whole.note).not.toContain('at least');
+  });
+
+  it('deletes nothing — measuring and sweeping are different operations', () => {
+    const dir = makeCache();
+    const files = [seed(dir, 'osv', 'keep-1'), seed(dir, 'osv', 'keep-2'), seed(dir, 'kev', 'keep-3')];
+    // A cap this tight empties the cache when a SWEEP sees it. Measuring under the same conditions must leave
+    // every byte where it is, however many times it is asked.
+    const limits = { maxBytes: 1, maxAgeDays: 0 };
+
+    const before = measureResearchCache(dir);
+    measureResearchCache(dir, 2); // the truncated path deletes nothing either
+    measureResearchCache(dir);
+    expect(files.every((f) => fs.existsSync(f))).toBe(true);
+    expect(measureResearchCache(dir)).toEqual(before);
+    expect(before.entryCount).toBe(3);
+
+    // ...and the fixture really was one a sweep would have emptied, which is what makes the assertion above mean
+    // something. This is the destructive operation, and it is a different call.
+    const swept = sweepResearchCache({ dir, limits });
+    expect(swept.removed).toHaveLength(3);
+    expect(files.some((f) => fs.existsSync(f))).toBe(false);
+    expect(measureResearchCache(dir)).toMatchObject({ bytes: 0, entryCount: 0 });
   });
 });

@@ -57,9 +57,17 @@ function carved(name: string): CarvedModule {
   return { path: `/tmp/mods/${name}.dxe`, name };
 }
 
-/** A rule as the corpus reader hands it over: only `name` and `path` carry a module label. */
+/** A rule as the corpus reader hands it over: `name` and `path` carry the module label. */
 function rule(name: string, rulePath = `Threats/${name}.yml`): CorpusRule {
   return { path: rulePath, name, volumeGuids: 0 };
+}
+
+/**
+ * A rule that names a module only in its prose. `CVE-2023-45230` is the real one: it says `Dhcp6Dxe` in its
+ * description and in neither its `meta.name` nor its filename.
+ */
+function describedRule(name: string, description: string): CorpusRule {
+  return { path: `Vulnerabilities/${name}.yml`, name, description, volumeGuids: 0 };
 }
 
 function modulePassFixture(over: Partial<ModulePass> = {}): ModulePass {
@@ -155,9 +163,14 @@ describe('ruleCategory', () => {
   });
 });
 
-describe('parseRuleMeta — the three fields that decide what a rule may be asked to do', () => {
+describe('parseRuleMeta — the four fields that decide what a rule may be asked to do, or is about', () => {
   it('reads the printed name, which is not the filename', () => {
     expect(parseRuleMeta(REAL_RULE_YAML).name).toBe('BRLY-2022-028 (RsbStuffingCheck)');
+  });
+
+  it('reads the description — the field that carries a module label when the name does not', () => {
+    expect(parseRuleMeta(REAL_RULE_YAML).description).toBe('Check if StuffRsb used before RSM');
+    expect(parseRuleMeta('R:\n  meta:\n    name: X\n').description).toBeUndefined();
   });
 
   it('counts the volume GUIDs the author scoped the rule to', () => {
@@ -334,6 +347,67 @@ describe('rankModulesForScan — the corpus names some of these modules, and tha
       coveredByImageScan: [],
       cap: 1,
       rules: [rule('PiSmmCoreDoor')],
+    });
+    expect(selected[0]?.name).toBe('Alpha');
+  });
+
+  it('counts a rule that names the module only in its prose — CVE-2023-45230 and Dhcp6Dxe', () => {
+    const { selected } = rankModulesForScan({
+      modules: [carved('PiSmmCore'), carved('Dhcp6Dxe')],
+      coveredByImageScan: [],
+      cap: 1,
+      rules: [
+        describedRule('CVE-2023-45230', 'Buffer overflow in the DHCPv6 client (Dhcp6Dxe) parsing a long server ID'),
+      ],
+    });
+    // PiSmmCore is the more privileged module and wins on privilege alone; the corpus having written something
+    // about Dhcp6Dxe — in the one field that was not being read — is what takes the slot off it.
+    expect(selected[0]?.name).toBe('Dhcp6Dxe');
+  });
+
+  it('weights a description mention at half a name mention, so prose never outranks an identifier', () => {
+    // Two unclassified modules, so privilege cannot decide and the alphabetical break points AGAINST the module
+    // the rule is named for — the mention score is the only thing that can reorder them.
+    const modules = [carved('Alpha'), carved('Bravo')];
+    const named = rule('BravoImplant');
+    const describes = (id: string): CorpusRule => describedRule(id, 'the bug is reached through Alpha');
+
+    // 2 (a name mention) against 1 (a description mention): the named module wins, against the alphabetical break.
+    const one = rankModulesForScan({ modules, coveredByImageScan: [], cap: 2, rules: [named, describes('BRLY-1')] });
+    expect(one.selected.map((m) => m.name)).toEqual(['Bravo', 'Alpha']);
+
+    // 2 against 2: two rules describing a module tie with one rule named after it, and the tie falls through.
+    const two = rankModulesForScan({
+      modules,
+      coveredByImageScan: [],
+      cap: 2,
+      rules: [named, describes('BRLY-1'), describes('BRLY-2')],
+    });
+    expect(two.selected.map((m) => m.name)).toEqual(['Alpha', 'Bravo']);
+  });
+
+  it('counts one rule once however often it says the label — attention, not verbosity', () => {
+    const { selected } = rankModulesForScan({
+      modules: [carved('Alpha'), carved('Bravo')],
+      coveredByImageScan: [],
+      cap: 2,
+      rules: [
+        { path: 'Threats/BravoImplant.yml', name: 'BravoImplant', description: 'an implant in Bravo', volumeGuids: 0 },
+        describedRule('BRLY-1', 'the bug is reached through Alpha'),
+        describedRule('BRLY-2', 'a second rule about Alpha'),
+      ],
+    });
+    // Bravo scores the name weight (2), not name + description (3), so Alpha's two descriptions tie it and the
+    // alphabetical break decides. A 3 here would put Bravo first.
+    expect(selected.map((m) => m.name)).toEqual(['Alpha', 'Bravo']);
+  });
+
+  it('applies the short-label rule to prose too, which is where a short label hits most easily', () => {
+    const { selected } = rankModulesForScan({
+      modules: [carved('Alpha'), carved('Core')],
+      coveredByImageScan: [],
+      cap: 1,
+      rules: [describedRule('BRLY-3', 'the DXE dispatcher is patched before Core hands control over')],
     });
     expect(selected[0]?.name).toBe('Alpha');
   });
