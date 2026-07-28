@@ -18,77 +18,65 @@
  * 3. **Status and outcome are never collapsed.** `done` says the process finished; it says nothing about what was
  *    learned. A probe blocked because the sandbox lacks `/dev/nvram` finished successfully and answered nothing,
  *    and rendering that as an empty result is the conflation this whole workbench exists to prevent.
+ *
+ * The prose lives in the `testbench` namespace, and rule 3 is the reason it has to: `outcome.means` is the claim,
+ * so a translation that lets `empty` read as "nothing is there" or `blocked` read as a clean result would undo the
+ * surface. Target paths, sink names, addresses, architectures and the proof ceiling are identifiers and stay put.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type BinaryEntry, type EmulationMenu, type RunSummary, type SymReachResult, api } from '../api';
+import { type Messages, useMessages } from '../i18n';
 
-/** How each outcome reads. The wording is the claim: a bounded search that ended is never "nothing is there". */
-const OUTCOME: Record<RunSummary['outcome'], { label: string; cls: string; means: string }> = {
-  proven: { label: 'proven', cls: 'run-proven', means: 'A fact was established about this target.' },
-  lead: { label: 'lead', cls: 'run-lead', means: 'Worth pursuing. Nothing is proven yet.' },
-  empty: {
-    label: 'nothing found',
-    cls: 'run-empty',
-    means: 'This run found nothing — for this input, this budget, this question. Not a clean bill of health.',
-  },
-  blocked: {
-    label: 'blocked',
-    cls: 'run-blocked',
-    means: 'The question was asked and this deployment could not answer it. This is NOT a negative result.',
-  },
-  failed: { label: 'failed', cls: 'run-failed', means: 'The harness broke. No statement about the target either way.' },
-  running: { label: 'running', cls: 'run-running', means: 'Still going.' },
+/** Purely presentational: which dot and badge colour an outcome gets. Not prose, so not in the catalogue. */
+const OUTCOME_CLASS: Record<RunSummary['outcome'], string> = {
+  proven: 'run-proven',
+  lead: 'run-lead',
+  empty: 'run-empty',
+  blocked: 'run-blocked',
+  failed: 'run-failed',
+  running: 'run-running',
 };
 
-/** What each action does and what it needs, in the operator's words rather than the route's. */
-const ACTIONS = {
-  decompile: { title: 'Triage', gives: 'Headers, imports, symbols and strings (radare2).' },
-  symreach: {
-    title: 'Reachability',
-    gives: 'Whether a sink is reachable from the entry point, and at what address (angr).',
-  },
-  dynprobe: {
-    title: 'Dynamic probe',
-    gives: 'Runs it under qemu with gdb on the sink: does it execute, does it crash, is the crash input-controlled.',
-  },
-} as const;
-
-function ago(ts: number): string {
+function ago(ts: number, m: Messages['testbench']): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
+  if (s < 60) return m.ago.seconds(s);
+  if (s < 3600) return m.ago.minutes(Math.round(s / 60));
+  if (s < 86400) return m.ago.hours(Math.round(s / 3600));
+  return m.ago.days(Math.round(s / 86400));
 }
 
-const KIND_LABEL: Record<string, string> = {
-  dynprobe: 'Dynamic probe',
-  symreach: 'Reachability',
-  decompile: 'Triage',
-  fuzz: 'Fuzz',
-  webprobe: 'Web probe',
-  emulate: 'Emulation',
-  renode: 'Renode',
-};
+/** Kinds whose label IS a tool name. Never translated, so never in the catalogue. */
+const TOOL_KIND: Record<string, string> = { renode: 'Renode' };
+
+/** The kind is an identifier the API chose; an unknown one prints as sent rather than as a blank. */
+const kindLabel = (kind: string, m: Messages['testbench']): string =>
+  TOOL_KIND[kind] ?? (m.kind as Record<string, string>)[kind] ?? kind;
 
 function RunRow({ run, onOpen }: { run: RunSummary; onOpen: (r: RunSummary) => void }): JSX.Element {
-  const meta = OUTCOME[run.outcome];
+  const t = useMessages();
+  const cls = OUTCOME_CLASS[run.outcome];
   return (
-    <button type="button" className="run-row" onClick={() => onOpen(run)} title={meta.means}>
-      <span className={`run-dot ${meta.cls}`} aria-hidden="true" />
-      <span className="run-kind">{KIND_LABEL[run.kind] ?? run.kind}</span>
+    <button
+      type="button"
+      className="run-row"
+      onClick={() => onOpen(run)}
+      title={t.testbench.outcome.means[run.outcome]}
+    >
+      <span className={`run-dot ${cls}`} aria-hidden="true" />
+      <span className="run-kind">{kindLabel(run.kind, t.testbench)}</span>
       {run.question && <span className="run-question mono">{run.question}</span>}
       <span className="run-headline">{run.headline}</span>
       <span className="run-tail">
         {run.bound && <span className="run-bound">{run.bound}</span>}
-        <span className={`badge ${meta.cls}`}>{meta.label}</span>
-        <time dateTime={new Date(run.startedAt).toISOString()}>{ago(run.startedAt)}</time>
+        <span className={`badge ${cls}`}>{t.testbench.outcome.label[run.outcome]}</span>
+        <time dateTime={new Date(run.startedAt).toISOString()}>{ago(run.startedAt, t.testbench)}</time>
       </span>
     </button>
   );
 }
 
 export function TestBench({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
   const [menu, setMenu] = useState<EmulationMenu | null>(null);
   const [ledger, setLedger] = useState<RunSummary[]>([]);
@@ -211,7 +199,7 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
   useEffect(() => {
     const running = ledger.some((r) => r.outcome === 'running');
     if (!running && !active) return;
-    const t = window.setInterval(() => {
+    const timer = window.setInterval(() => {
       refresh();
       if (active) {
         api
@@ -223,20 +211,17 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
           .catch(() => setActive(null));
       }
     }, 2000);
-    return () => window.clearInterval(t);
+    return () => window.clearInterval(timer);
   }, [ledger, active, imageId, refresh]);
 
   if (!rootfsReady && binaries.length === 0) {
     return (
       <div className="panel">
-        <div className="panel-title">Test bench</div>
+        <div className="panel-title">{t.sections.testbench}</div>
         <div className="empty">
           <div className="empty-mark">0x—</div>
-          <div className="empty-title">No extracted filesystem yet</div>
-          <div className="empty-body">
-            Everything on this bench runs against a binary from the image's filesystem. Run extraction on the Filesystem
-            tab, and the binaries it recovers appear here as targets.
-          </div>
+          <div className="empty-title">{t.testbench.noRootfsTitle}</div>
+          <div className="empty-body">{t.testbench.noRootfsBody}</div>
         </div>
       </div>
     );
@@ -245,34 +230,31 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
   return (
     <div>
       <div className="panel">
-        <div className="panel-title">Test bench</div>
-        <div className="panel-sub">
-          Every executable question, grouped by what it was asked about. {binaries.length} target
-          {binaries.length === 1 ? '' : 's'} · {totalRuns} run{totalRuns === 1 ? '' : 's'} · {withRuns} target
-          {withRuns === 1 ? '' : 's'} examined.
-        </div>
+        <div className="panel-title">{t.sections.testbench}</div>
+        <div className="panel-sub">{t.testbench.sub(binaries.length, totalRuns, withRuns)}</div>
 
         {/* What the bench can do right now, and what each gap costs. Stated once, up front, rather than as a
             rejection after a button is pressed. */}
         <div className="bench-ready">
           <span className={`bench-fact ${rootfsReady ? 'is-ok' : 'is-off'}`}>
-            <b>Filesystem</b> {rootfsReady ? 'extracted' : 'not extracted — no target can be run'}
+            <b>{t.testbench.ready.filesystem}</b>{' '}
+            {rootfsReady ? t.testbench.ready.filesystemOk : t.testbench.ready.filesystemOff}
           </span>
           <span className={`bench-fact ${archKnown ? 'is-ok' : 'is-off'}`}>
-            <b>Architecture</b> {archKnown ? (arch as string) : 'unknown — the dynamic probe cannot pick an emulator'}
+            <b>{t.testbench.ready.arch}</b> {archKnown ? (arch as string) : t.testbench.ready.archOff}
           </span>
           <span className="bench-fact">
-            <b>Proof ceiling</b> {menu?.capabilities?.proofCeiling ?? 'static_confirmed'} — a result here describes the
-            sandbox, never the physical device.
+            <b>{t.testbench.ready.ceiling}</b> {menu?.capabilities?.proofCeiling ?? 'static_confirmed'}{' '}
+            {t.testbench.ready.ceilingNote}
           </span>
         </div>
 
         <label className="bench-filter">
-          <span className="hint">Filter targets</span>
+          <span className="hint">{t.testbench.filterLabel}</span>
           <input
             className="input"
             value={filter}
-            placeholder="path contains…"
+            placeholder={t.testbench.filterPlaceholder}
             onChange={(e) => setFilter(e.target.value)}
           />
         </label>
@@ -282,8 +264,8 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
         <div className="panel">
           <div className="empty">
             <div className="empty-mark">0x—</div>
-            <div className="empty-title">No target matches “{filter}”</div>
-            <div className="empty-body">{binaries.length} binaries were recovered from this image.</div>
+            <div className="empty-title">{t.testbench.noMatchTitle(filter)}</div>
+            <div className="empty-body">{t.testbench.noMatchBody(binaries.length)}</div>
           </div>
         </div>
       )}
@@ -302,20 +284,18 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
             >
               <span className="bench-path mono">{b.path}</span>
               <span className="bench-meta">
-                {b.arch ?? 'arch unknown'}
-                {b.networkFacing ? ' · network-facing' : ''}
+                {b.arch ?? t.testbench.archUnknown}
+                {b.networkFacing ? t.testbench.networkFacing : ''}
               </span>
               <span className="bench-state">
                 {runs.length === 0 ? (
-                  <span className="hint">not examined</span>
+                  <span className="hint">{t.testbench.notExamined}</span>
                 ) : (
                   <>
-                    <span className={`badge ${OUTCOME[(best as RunSummary).outcome].cls}`}>
-                      {OUTCOME[(best as RunSummary).outcome].label}
+                    <span className={`badge ${OUTCOME_CLASS[(best as RunSummary).outcome]}`}>
+                      {t.testbench.outcome.label[(best as RunSummary).outcome]}
                     </span>
-                    <span className="hint">
-                      {runs.length} run{runs.length === 1 ? '' : 's'}
-                    </span>
+                    <span className="hint">{t.testbench.runCount(runs.length)}</span>
                   </>
                 )}
               </span>
@@ -339,46 +319,40 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
                     ))}
                   </div>
                 ) : (
-                  <p className="bench-none">
-                    Nothing has been run against this binary. An empty history means unexamined — it is not a statement
-                    about the code.
-                  </p>
+                  <p className="bench-none">{t.testbench.nothingRun}</p>
                 )}
 
                 <div className="bench-actions">
                   <div className="bench-action">
-                    <div className="bench-action-name">{ACTIONS.decompile.title}</div>
-                    <p className="bench-action-gives">{ACTIONS.decompile.gives}</p>
+                    <div className="bench-action-name">{t.testbench.actions.decompile.title}</div>
+                    <p className="bench-action-gives">{t.testbench.actions.decompile.gives}</p>
                     <button
                       type="button"
                       className="btn btn-sm"
                       disabled={!rootfsReady || busy !== null}
                       onClick={() => launch(b.path, 'decompile')}
                     >
-                      {busy === `${b.path}:decompile` ? 'Running…' : 'Run triage'}
+                      {busy === `${b.path}:decompile` ? t.testbench.running : t.testbench.actions.decompile.run}
                     </button>
                   </div>
 
                   <div className="bench-action">
-                    <div className="bench-action-name">{ACTIONS.symreach.title}</div>
-                    <p className="bench-action-gives">{ACTIONS.symreach.gives}</p>
+                    <div className="bench-action-name">{t.testbench.actions.symreach.title}</div>
+                    <p className="bench-action-gives">{t.testbench.actions.symreach.gives}</p>
                     <button
                       type="button"
                       className="btn btn-sm"
                       disabled={!rootfsReady || busy !== null}
                       onClick={() => launch(b.path, 'symreach')}
                     >
-                      {busy === `${b.path}:symreach` ? 'Running…' : 'Ask reachability'}
+                      {busy === `${b.path}:symreach` ? t.testbench.running : t.testbench.actions.symreach.run}
                     </button>
-                    <p className="bench-action-note">
-                      Sinks are read from the binary's own unbounded-copy imports. A sink not reached means the search
-                      ended, never that the sink is safe.
-                    </p>
+                    <p className="bench-action-note">{t.testbench.actions.symreach.note}</p>
                   </div>
 
                   <div className="bench-action">
-                    <div className="bench-action-name">{ACTIONS.dynprobe.title}</div>
-                    <p className="bench-action-gives">{ACTIONS.dynprobe.gives}</p>
+                    <div className="bench-action-name">{t.testbench.actions.dynprobe.title}</div>
+                    <p className="bench-action-gives">{t.testbench.actions.dynprobe.gives}</p>
                     {known.length > 0 ? (
                       <div className="bench-probe-list">
                         {known.map((k) => (
@@ -389,27 +363,24 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
                             disabled={!archKnown || busy !== null}
                             onClick={() => launch(b.path, 'dynprobe', k)}
                           >
-                            {busy === `${b.path}:dynprobe` ? 'Running…' : `Probe ${k.sink} at ${k.address}`}
+                            {busy === `${b.path}:dynprobe`
+                              ? t.testbench.running
+                              : t.testbench.actions.dynprobe.probeAt(k.sink, k.address)}
                           </button>
                         ))}
                       </div>
                     ) : (
                       <>
                         <button type="button" className="btn btn-sm" disabled>
-                          Needs a sink address
+                          {t.testbench.actions.dynprobe.needsAddress}
                         </button>
                         <p className="bench-action-note">
-                          This probe breaks on an exact call site, so it needs an address. Run{' '}
-                          <b>{ACTIONS.symreach.title}</b> above first — every sink it proves reachable appears here as a
-                          one-click probe.
+                          {t.testbench.actions.dynprobe.needsAddressBefore} <b>{t.testbench.actions.symreach.title}</b>
+                          {t.testbench.actions.dynprobe.needsAddressAfter}
                         </p>
                       </>
                     )}
-                    {!archKnown && (
-                      <p className="bench-action-note">
-                        Blocked: no architecture is known for this rootfs, so no user-mode emulator can be chosen.
-                      </p>
-                    )}
+                    {!archKnown && <p className="bench-action-note">{t.testbench.actions.dynprobe.noArch}</p>}
                   </div>
                 </div>
 
@@ -425,15 +396,15 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
           <div className="panel-head">
             <div>
               <div className="panel-title">
-                {KIND_LABEL[detail.run.kind] ?? detail.run.kind}
+                {kindLabel(detail.run.kind, t.testbench)}
                 {detail.run.target ? ` · ${detail.run.target}` : ''}
               </div>
               <div className="panel-sub">
-                {detail.run.headline} — {OUTCOME[detail.run.outcome].means}
+                {detail.run.headline} — {t.testbench.outcome.means[detail.run.outcome]}
               </div>
             </div>
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => setDetail(null)}>
-              Close
+              {t.common.close}
             </button>
           </div>
           {detail.log && <pre className="joblog">{detail.log}</pre>}

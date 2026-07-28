@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type UpdatePathResult, type UpdaterCandidate, api } from '../api';
+import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import { UpdatePathPanel, sourceChainOf, updatePathState } from './UpdatePathPanel';
 
@@ -60,6 +61,12 @@ function mount(r: UpdatePathResult | null) {
   mockApi.updatePath.mockResolvedValue(r);
   return render(<UpdatePathPanel imageId="img1" />);
 }
+
+beforeEach(() => {
+  // Reset BEFORE the render, never after it: the locale store notifies live subscribers, so switching back in an
+  // `afterEach` re-renders a still-mounted tree and fills the suite with act(…) warnings.
+  setLocale('en');
+});
 
 describe('UpdatePathPanel — the chain that credited the candidate', () => {
   it('names the file the evidence is physically in, and how it was reached', async () => {
@@ -176,5 +183,48 @@ describe('sourceChainOf — "no chain" and "nobody looked" are different answers
     });
     expect(chain.recorded).toBe(true);
     expect(chain.followed).toBe(true);
+  });
+});
+
+/**
+ * The two sentences the panel is built to protect, in the other language: a credit is not a runtime proof, and
+ * "this run looked and found none" is not "nobody looked". Both are the kind of claim a softer translation would
+ * quietly upgrade, so both are asserted — along with the paths and commands, which are evidence and never move.
+ */
+describe('UpdatePathPanel — Spanish', () => {
+  it('keeps "credited does NOT prove the check runs" as blunt as the English', async () => {
+    setLocale('es');
+    const { container } = mount(result());
+    await screen.findByText('Cadena de source');
+    const text = container.textContent ?? '';
+
+    expect(text).toContain('no prueba que la comprobación llegue a ejecutarse');
+    expect(text).toContain('define sus funciones, no las llama');
+    expect(text).toContain('Ninguna arista de source sube un estado de prueba');
+    // The evidence stays under the file it is physically IN, never under the entry point that reads it.
+    expect(text).toContain('el fichero en el que están físicamente estas líneas');
+    expect(text).toContain('no bajo sbin/sysupgrade, que no contiene ninguna de esas líneas');
+    expect(text).toContain('lib/upgrade/fwtool.sh');
+    expect(screen.getAllByText('ucert -V').length).toBeGreaterThan(0);
+    // A bound is stated as a bound, and what could not be resolved is stated rather than guessed.
+    expect(text).toContain('Un límite no es una respuesta');
+    expect(text).toContain('Adivinarlo sería fabricar');
+    expect(text).toContain('$LIB_DIR/helper.sh');
+  });
+
+  it('keeps "this run followed source edges and found none" apart from "nobody looked"', async () => {
+    setLocale('es');
+    const answered = mount(result({ updaters: [sysupgrade({ sourcesFollowed: true })] }));
+    await screen.findByText('sbin/sysupgrade');
+    const answeredText = answered.container.textContent ?? '';
+    expect(answeredText).toContain('Esta ejecución siguió las aristas de');
+    expect(answeredText).toContain('una respuesta sobre estos scripts, no un hueco del análisis');
+    answered.unmount();
+
+    const unknown = mount(result({ updaters: [sysupgrade()] }));
+    await screen.findByText('sbin/sysupgrade');
+    const unknownText = unknown.container.textContent ?? '';
+    expect(unknownText).toContain('o el resultado lo guardó una compilación que no siguió las aristas de');
+    expect(unknownText).not.toContain('una respuesta sobre estos scripts');
   });
 });

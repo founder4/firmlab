@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CaptureBackend, api } from '../api';
+import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import { Capture } from './Capture';
 
@@ -24,6 +25,9 @@ const backend = (over: Partial<CaptureBackend>): CaptureBackend => ({
 });
 
 beforeEach(() => {
+  // Reset the locale BEFORE the render, never after it: the store notifies live subscribers, so switching back in
+  // an `afterEach` re-renders a still-mounted tree and the suite fills with act(…) warnings.
+  setLocale('en');
   mockApi.captureStatus.mockResolvedValue({ enabled: true, gatewayDeclared: false, defaultSubnet: null });
   mockApi.captureBackends.mockResolvedValue({
     enabled: true,
@@ -164,6 +168,61 @@ describe('Capture — Phase 6.3 capturability preflight', () => {
     await waitFor(() => expect(mockApi.capturePreflight).toHaveBeenCalledWith('dev1'));
     expect(await screen.findByText('captured_plaintext')).toBeInTheDocument();
     expect(screen.getByText(/Best path: http via gateway/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The lane's prose says what leaves this machine and under whose acknowledgement, so it is worth proving it still
+ * says it in Spanish — and that the parts an operator has to TYPE (the env var, the Docker flag) and the parts the
+ * API owns (backend ids, a tool's own reason) came through untouched.
+ */
+describe('Capture — Spanish', () => {
+  it('states the lane is off without softening it, and leaves the env var and backend id alone', async () => {
+    setLocale('es');
+    mockApi.captureStatus.mockResolvedValue({ enabled: false });
+    mockApi.captureBackends.mockResolvedValue({ enabled: false, backends: [backend({})], transports: [] });
+    render(<Capture />);
+
+    expect(await screen.findByText(/El carril de captura está/)).toBeInTheDocument();
+    expect(screen.getByText('desactivado')).toBeInTheDocument();
+    // Typed by the operator, not read by them: these must survive every translation verbatim.
+    expect(screen.getByText('FIRMLAB_CAPTURE=1')).toBeInTheDocument();
+    expect(screen.getByText('--network host')).toBeInTheDocument();
+    // The backend id and the detector's own reason are API values, shown as they arrived.
+    expect(screen.getByText('network-proxy')).toBeInTheDocument();
+    expect(screen.getByText('mitmproxy not installed')).toBeInTheDocument();
+
+    // And the gate still holds: acknowledging authorization does not enable a scan while the lane is off.
+    const btn = screen.getByRole('button', { name: 'Escanear la red' }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/autorización para probarlos/i));
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('keeps the acknowledgement gating the scan when the lane is on', async () => {
+    setLocale('es');
+    render(<Capture />);
+    const btn = (await screen.findByRole('button', { name: 'Escanear la red' })) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/autorización para probarlos/i));
+    expect(btn.disabled).toBe(false);
+    fireEvent.click(btn);
+    // The acknowledgement is what reaches the API — the flag it sends is not a display concern.
+    await waitFor(() => expect(mockApi.runCaptureDiscover).toHaveBeenCalledWith(null, true));
+  });
+
+  it('reports a sweep that ran and found nothing as such, not as an absent sweep', async () => {
+    setLocale('es');
+    mockApi.captureScan.mockResolvedValue({
+      session: { id: 'scan1', status: 'done', transcript: 'done', deviceCount: 0, error: null },
+      devices: [],
+    });
+    render(<Capture />);
+    expect(await screen.findByText('Todavía no se ha escaneado')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(/autorización para probarlos/i));
+    fireEvent.click(screen.getByRole('button', { name: 'Escanear la red' }));
+    expect(await screen.findByText('Barrido completado — no respondió ningún dispositivo')).toBeInTheDocument();
   });
 });
 

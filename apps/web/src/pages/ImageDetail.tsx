@@ -10,6 +10,7 @@ import {
   type CorpusRefs,
   type DecompileResult,
   type Finding,
+  type FindingProvenance,
   type FirmwareDiffResult,
   type FsNode,
   type FsSummary,
@@ -17,7 +18,6 @@ import {
   type GitleaksResult,
   type ImageSummary,
   type Job,
-  type ProofState,
   type ResearchResult,
   type ResearchStatus,
   type RuntimeCapabilities,
@@ -35,7 +35,7 @@ import { EntropyChart } from '../components/EntropyChart';
 import { FileBrowser } from '../components/FileBrowser';
 import { FileSearch } from '../components/FileSearch';
 import { FilesystemTree } from '../components/FilesystemTree';
-import { FindingsLedger, PROOF_STATE_META, ProofStateBadge } from '../components/FindingsLedger';
+import { FindingsLedger, PROOF_STATE_META } from '../components/FindingsLedger';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { HardwareInterfaces } from '../components/HardwareInterfaces';
 import { OpacidadPanel } from '../components/OpacidadPanel';
@@ -51,28 +51,43 @@ import { StructureMap } from '../components/StructureMap';
 import { SymReachPanel } from '../components/SymReachPanel';
 import { TestBench } from '../components/TestBench';
 import { UpdatePathPanel } from '../components/UpdatePathPanel';
+import { type Messages, messages, useLocale, useMessages } from '../i18n';
 import { toast } from '../toast';
 
-type TabId =
-  | 'dossier'
-  | 'overview'
-  | 'structure'
-  | 'entropy'
-  | 'filesystem'
-  | 'files'
-  | 'secrets'
-  | 'hardware'
-  | 'bootloader'
-  | 'sbom'
-  | 'compmap'
-  | 'binaries'
-  | 'testbench'
-  | 'findings'
-  | 'operator'
-  | 'diff'
-  | 'simulate'
-  | 'opacidad'
-  | 'agent';
+/**
+ * The URL sections this screen serves, as ROUTE segments — English forever, because a translated URL breaks every
+ * saved link and every screenshot in the docs.
+ *
+ * `satisfies` pins the list to the shared `sections` catalogue: an id added here that the catalogue cannot label is
+ * a compile error, and the label itself is read from `t.sections` at render time. This file used to carry its own
+ * `SECTION_TITLES` map beside the catalogue's, which is two lists of the same thing and one commit away from
+ * disagreeing.
+ */
+const SECTION_IDS = [
+  'dossier',
+  'overview',
+  'structure',
+  'entropy',
+  'filesystem',
+  'files',
+  'secrets',
+  'hardware',
+  'bootloader',
+  'sbom',
+  'compmap',
+  'binaries',
+  'testbench',
+  'findings',
+  'operator',
+  'diff',
+  'simulate',
+  'opacidad',
+  'agent',
+] as const satisfies readonly (keyof Messages['sections'])[];
+
+type TabId = (typeof SECTION_IDS)[number];
+
+const SECTION_SET: ReadonlySet<string> = new Set<string>(SECTION_IDS);
 
 /** Sections that operate on the extracted rootfs / tools rather than the cached static analysis. */
 const NO_ANALYSIS_TABS = new Set<TabId>([
@@ -94,36 +109,45 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'agent',
 ]);
 
-/** URL section → internal panel id. The step timeline drives these; `overview` is the composite dossier. */
-const SECTION_TITLES: Record<TabId, string> = {
-  dossier: 'General',
-  overview: 'General',
-  structure: 'Structure',
-  entropy: 'Entropy',
-  filesystem: 'Extraction',
-  files: 'File browser',
-  secrets: 'Secrets',
-  hardware: 'Hardware interfaces',
-  bootloader: 'Bootloader',
-  sbom: 'SBOM & CVEs',
-  compmap: 'Component map',
-  binaries: 'Test bench',
-  testbench: 'Test bench',
-  findings: 'Findings & report',
-  operator: 'Operator ledger',
-  diff: 'Diff',
-  simulate: 'Emulation recipes',
-  opacidad: 'Autonomous scan',
-  agent: 'Agent',
-};
-
 function resolveSection(section: string | undefined): TabId {
   if (!section || section === 'overview') return 'dossier';
-  return section in SECTION_TITLES ? (section as TabId) : 'dossier';
+  return SECTION_SET.has(section) ? (section as TabId) : 'dossier';
+}
+
+/**
+ * A proof state as this screen states it: the CODE verbatim, then its gloss.
+ *
+ * The code is an identifier — it crosses the API and lands in SQLite, and rendering `confirmado_en_emulación`
+ * anywhere would invent a value the workbench does not use. What is localised is the sentence beside it, and that
+ * sentence is the load-bearing part: `confirmed_in_emulation` proves the sandbox and never the physical device,
+ * `blocked_by_*` means the question WAS asked and could not be answered. Both come from the shared `proofState`
+ * namespace rather than being restated here, so this screen and the findings ledger cannot word them differently.
+ */
+function ProofStateChip({ state }: { state: FindingProvenance }): JSX.Element {
+  const t = useMessages();
+  const color = PROOF_STATE_META[state].color;
+  return (
+    <span
+      title={t.proofState.meaning[state]}
+      style={{ display: 'inline-flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' }}
+    >
+      <span
+        className="mono"
+        style={{ color, border: `1px solid ${color}`, borderRadius: 4, padding: '1px 6px', fontSize: 10.5 }}
+      >
+        {state}
+      </span>
+      <span className="hint">{t.proofState.label[state]}</span>
+    </span>
+  );
 }
 
 export function ImageDetail(): JSX.Element {
   const { id = '', section } = useParams();
+  const t = useMessages();
+  // The export follows the language the workbench is being read in. The API's resolver is total — an unknown value
+  // falls back to English — so the parameter is safe to append unconditionally.
+  const locale = useLocale();
   const [image, setImage] = useState<ImageSummary | null>(null);
   const [analysis, setAnalysis] = useState<StaticAnalysis | null>(null);
   const tab = resolveSection(section);
@@ -152,22 +176,26 @@ export function ImageDetail(): JSX.Element {
     <div>
       <div className="page-head">
         <div style={{ minWidth: 0 }}>
-          <div className="eyebrow">Firmware · {image.identity?.arch ?? 'unknown arch'}</div>
-          <h1 className="page-title">{SECTION_TITLES[tab]}</h1>
+          <div className="eyebrow">
+            {t.imageDetail.header.eyebrow(image.identity?.arch ?? t.imageDetail.header.unknownArch)}
+          </div>
+          <h1 className="page-title">{t.sections[tab]}</h1>
           <div className="hint mono" style={{ wordBreak: 'break-all' }}>
             {image.sha256.slice(0, 24)}… · {fmtBytes(image.size)}
           </div>
         </div>
-        <a className="btn btn-sm" href={`/api/images/${id}/report`} download>
-          <span aria-hidden="true">⭳</span> Report
+        {/* `download` carries no value on purpose: the server's content-disposition names the file with the locale
+            suffix, so the two languages of one report do not overwrite each other. Hardcoding a name breaks that. */}
+        <a className="btn btn-sm" href={`/api/images/${id}/report?lang=${locale}`} download>
+          <span aria-hidden="true">⭳</span> {t.imageDetail.header.report}
         </a>
         <a
           className="btn btn-sm"
-          href={`/api/images/${id}/disclosure-report`}
+          href={`/api/images/${id}/disclosure-report?lang=${locale}`}
           download
-          title="Coordinated-disclosure draft (Markdown) — review before sending"
+          title={t.imageDetail.header.disclosureTitle}
         >
-          <span aria-hidden="true">⭳</span> Disclosure
+          <span aria-hidden="true">⭳</span> {t.imageDetail.header.disclosure}
         </a>
       </div>
 
@@ -229,9 +257,9 @@ export function ImageDetail(): JSX.Element {
           {/* Not a pipeline stage, so deliberately not in the StepTimeline — reached from here, where a reader is
               already looking at what the bench measured and may need to record what it cannot. */}
           <div className="hint" style={{ margin: '-8px 0 12px' }}>
-            Know something the bench cannot measure — a result from the physical device, a vendor advisory?{' '}
+            {t.imageDetail.findingsTab.operatorPrompt}{' '}
             <Link className="btn btn-sm btn-ghost" to={`/image/${id}/operator`}>
-              Operator ledger
+              {t.sections.operator}
             </Link>
           </div>
           <ReportBuilder imageId={id} image={image} analysis={analysis} />
@@ -245,10 +273,8 @@ export function ImageDetail(): JSX.Element {
       {!analysis && !NO_ANALYSIS_TABS.has(tab) && (
         <div className="empty">
           <div className="empty-mark">0x—</div>
-          <div className="empty-title">No static analysis</div>
-          <div className="empty-body">
-            This image hasn’t been analyzed yet, or analysis failed. Re-upload it from the Dashboard.
-          </div>
+          <div className="empty-title">{t.imageDetail.emptyAnalysis.title}</div>
+          <div className="empty-body">{t.imageDetail.emptyAnalysis.body(t.nav.dashboard)}</div>
         </div>
       )}
     </div>
@@ -296,6 +322,7 @@ function CorpusRefRow({
 
 function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
   const id = image.id;
+  const t = useMessages();
   const [findings, setFindings] = useState<Finding[]>([]);
   const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -364,13 +391,12 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <div className="panel-title">Signal tape</div>
-            <div className="panel-sub">
-              Entropy trace over the structure carve, findings pinned to their offset. Scrub to read any byte range.
-            </div>
+            <div className="panel-title">{t.imageDetail.dossier.signalTitle}</div>
+            <div className="panel-sub">{t.imageDetail.dossier.signalSub}</div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <span className="badge badge-accent">{idn?.firmwareClass ?? 'unknown'}</span>
+            {/* The class is an identifier the API decided; only the "we do not know" fallback is prose. */}
+            <span className="badge badge-accent">{idn?.firmwareClass ?? t.common.unknown}</span>
             <span className="badge mono">
               {idn?.arch ?? '—'}/{idn?.endianness ?? '—'}
             </span>
@@ -385,37 +411,37 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
       </div>
 
       <div className="grid grid-3" style={{ margin: '16px 0' }}>
-        <Stat label="Binaries" value={`${binaries.length} (${triagedBinaries} triaged)`} />
-        <Stat label="Findings" value={String(findings.length)} />
-        <Stat label="Runtime strategy" value={caps?.strategy ?? '—'} mono />
+        <Stat
+          label={t.imageDetail.dossier.statBinaries}
+          value={t.imageDetail.dossier.statBinariesValue(binaries.length, triagedBinaries)}
+        />
+        <Stat label={t.imageDetail.dossier.statFindings} value={String(findings.length)} />
+        <Stat label={t.imageDetail.dossier.statStrategy} value={caps?.strategy ?? '—'} mono />
       </div>
 
       {agent?.enabled && (
         <div className="panel">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <div className="panel-title" style={{ margin: 0 }}>
-              Copilot analysis
+              {t.imageDetail.dossier.copilotTitle}
             </div>
-            <span className="badge" title="LLM backing the copilot">
+            <span className="badge" title={t.imageDetail.dossier.copilotModelTitle}>
               {agent.provider} · {agent.model}
             </span>
             <div style={{ flex: 1 }} />
             <button type="button" className="btn btn-sm btn-primary" disabled={copilotRunning} onClick={runCopilot}>
               {copilotRunning ? (
                 <>
-                  <span className="spinner" /> Analyzing…
+                  <span className="spinner" /> {t.imageDetail.dossier.copilotAnalyzing}
                 </>
               ) : copilot ? (
-                'Re-run'
+                t.imageDetail.dossier.copilotRerun
               ) : (
-                'Analyze'
+                t.imageDetail.dossier.copilotAnalyze
               )}
             </button>
           </div>
-          <div className="panel-sub">
-            Interpretation over the cited findings — priors and proof-states, not new truth. The copilot runs nothing
-            and invents nothing.
-          </div>
+          <div className="panel-sub">{t.imageDetail.dossier.copilotSub}</div>
           {copilotLog && !copilot && (
             <pre className="mono" style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 10 }}>
               {copilotLog}
@@ -435,40 +461,43 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
       <ResearchPanel imageId={id} />
 
       <div className="panel">
-        <div className="panel-title">Coverage</div>
-        <div className="panel-sub">What has run so far — the dossier never implies completeness it doesn't have.</div>
+        <div className="panel-title">{t.imageDetail.dossier.coverageTitle}</div>
+        <div className="panel-sub">{t.imageDetail.dossier.coverageSub}</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 24px', marginTop: 10 }}>
-          <CoverageItem label="Static analysis" done={image.status === 'ready'} />
-          <CoverageItem label="Extraction" done={ranKind('extract')} />
-          <CoverageItem label="SBOM & CVEs" done={ranKind('sbom')} />
-          <CoverageItem label="Deep secrets (gitleaks)" done={ranKind('gitleaks')} />
+          <CoverageItem label={t.imageDetail.dossier.stageStatic} done={image.status === 'ready'} />
+          <CoverageItem label={t.imageDetail.dossier.stageExtract} done={ranKind('extract')} />
+          <CoverageItem label={t.imageDetail.dossier.stageSbom} done={ranKind('sbom')} />
+          <CoverageItem label={t.imageDetail.dossier.stageSecrets} done={ranKind('gitleaks')} />
           <CoverageItem
-            label="Binary triage"
+            label={t.imageDetail.dossier.stageTriage}
             done={triagedBinaries > 0}
             detail={binaries.length ? `${triagedBinaries}/${binaries.length}` : ''}
           />
-          <CoverageItem label="Emulation" done={ranKind('emulate')} />
+          <CoverageItem label={t.imageDetail.dossier.stageEmulation} done={ranKind('emulate')} />
         </div>
         {caps && (
-          <div className="hint" style={{ marginTop: 12 }}>
-            Runtime preflight: <strong>{caps.strategy}</strong> — {caps.reason} (proof ceiling:{' '}
-            <span className="mono">{caps.proofCeiling}</span>)
-          </div>
+          <>
+            <div className="hint" style={{ marginTop: 12 }}>
+              {t.imageDetail.dossier.preflight}: <strong>{caps.strategy}</strong> — {caps.reason}
+            </div>
+            {/* A ceiling, not a result: the highest rung this deployment could reach for this image. */}
+            <div className="hint" style={{ marginTop: 4, display: 'flex', gap: 6, alignItems: 'baseline' }}>
+              {t.imageDetail.dossier.proofCeiling}: <ProofStateChip state={caps.proofCeiling} />
+            </div>
+          </>
         )}
       </div>
 
       {refCount > 0 && refs && (
         <div className="panel">
-          <div className="panel-title">Corpus cross-references ({refCount})</div>
-          <div className="panel-sub">
-            Things in this image the corpus has seen elsewhere — priors worth checking, not conclusions.
-          </div>
+          <div className="panel-title">{t.imageDetail.dossier.corpusTitle(refCount)}</div>
+          <div className="panel-sub">{t.imageDetail.dossier.corpusSub}</div>
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5 }}>
             {refs.credentials.map((c) => (
               <CorpusRefRow
                 key={`c-${c.hash}`}
                 icon="🔑"
-                label={`${c.kind ?? 'credential'} — also in`}
+                label={t.imageDetail.dossier.corpusCredential(c.kind ?? t.imageDetail.dossier.corpusCredentialFallback)}
                 images={c.otherImages}
               />
             ))}
@@ -476,12 +505,17 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
               <CorpusRefRow
                 key={`p-${c.name}-${c.version}`}
                 icon="📦"
-                label={`${c.name} ${c.version}${c.cveCount > 0 ? ` (${c.cveCount} CVE)` : ''} — also in`}
+                label={t.imageDetail.dossier.corpusComponent(c.name, c.version, c.cveCount)}
                 images={c.otherImages}
               />
             ))}
             {refs.artifacts.map((a) => (
-              <CorpusRefRow key={`a-${a.sha1}`} icon="⚙" label={`${a.path} — same binary in`} images={a.otherImages} />
+              <CorpusRefRow
+                key={`a-${a.sha1}`}
+                icon="⚙"
+                label={t.imageDetail.dossier.corpusArtifact(a.path)}
+                images={a.otherImages}
+              />
             ))}
           </div>
         </div>
@@ -495,29 +529,31 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
 }
 
 function StructurePanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element {
+  const t = useMessages();
   return (
     <div className="panel">
-      <div className="panel-title">Structure map</div>
-      <div className="panel-sub">Signature-carved layout across the image ({analysis.structure.length} segments)</div>
+      <div className="panel-title">{t.imageDetail.structure.title}</div>
+      <div className="panel-sub">{t.imageDetail.structure.sub(analysis.structure.length)}</div>
       <StructureMap segments={analysis.structure} size={analysis.size} />
     </div>
   );
 }
 
 function EntropyPanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element {
+  const t = useMessages();
   return (
     <div className="panel">
-      <div className="panel-title">Entropy profile</div>
-      <div className="panel-sub">Shannon entropy across the image — high bands are compressed or encrypted</div>
+      <div className="panel-title">{t.imageDetail.entropy.title}</div>
+      <div className="panel-sub">{t.imageDetail.entropy.sub}</div>
       <EntropyChart entropy={analysis.entropy} size={analysis.size} />
       {analysis.entropy.highEntropyRegions.length > 0 && (
         <div className="table-wrap" style={{ marginTop: 16 }}>
           <table className="data">
             <thead>
               <tr>
-                <th>High-entropy region</th>
-                <th>Mean H</th>
-                <th>Size</th>
+                <th>{t.imageDetail.entropy.colRegion}</th>
+                <th>{t.imageDetail.entropy.colMeanH}</th>
+                <th>{t.imageDetail.entropy.colSize}</th>
               </tr>
             </thead>
             <tbody>
@@ -539,23 +575,24 @@ function EntropyPanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element {
 }
 
 function SecretsPanel({ analysis, imageId }: { analysis: StaticAnalysis | null; imageId: string }): JSX.Element {
+  const t = useMessages();
   const secrets = analysis?.secrets ?? [];
   return (
     <div>
       <div className="panel">
-        <div className="panel-title">Secrets & credentials</div>
-        <div className="panel-sub">Heuristic matches in the raw image (values shown are pre-extraction)</div>
+        <div className="panel-title">{t.imageDetail.secrets.title}</div>
+        <div className="panel-sub">{t.imageDetail.secrets.sub}</div>
         {secrets.length === 0 ? (
-          <div className="hint">No secret-like strings detected in the raw image.</div>
+          <div className="hint">{t.imageDetail.secrets.empty}</div>
         ) : (
           <div className="table-wrap">
             <table className="data">
               <thead>
                 <tr>
-                  <th>Severity</th>
-                  <th>Kind</th>
-                  <th>Offset</th>
-                  <th>Value</th>
+                  <th>{t.imageDetail.secrets.colSeverity}</th>
+                  <th>{t.imageDetail.secrets.colKind}</th>
+                  <th>{t.imageDetail.secrets.colOffset}</th>
+                  <th>{t.imageDetail.secrets.colValue}</th>
                 </tr>
               </thead>
               <tbody>
@@ -585,6 +622,7 @@ function SecretsPanel({ analysis, imageId }: { analysis: StaticAnalysis | null; 
 }
 
 function GitleaksSection({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [result, setResult] = useState<GitleaksResult | null>(null);
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState('');
@@ -612,38 +650,39 @@ function GitleaksSection({ imageId }: { imageId: string }): JSX.Element {
 
   return (
     <div className="panel">
-      <div className="panel-title">Deep secret scan (gitleaks)</div>
-      <div className="panel-sub">Scans the extracted rootfs for keys, tokens, and credentials in files.</div>
+      <div className="panel-title">{t.imageDetail.gitleaks.title}</div>
+      <div className="panel-sub">{t.imageDetail.gitleaks.sub}</div>
       <button className="btn btn-primary" disabled={running} onClick={run}>
         {running ? (
           <>
-            <span className="spinner" /> Scanning…
+            <span className="spinner" /> {t.imageDetail.gitleaks.scanning}
           </>
         ) : result?.available ? (
-          'Re-scan rootfs'
+          t.imageDetail.gitleaks.rescan
         ) : (
-          'Scan rootfs'
+          t.imageDetail.gitleaks.scan
         )}
       </button>
       {result && !result.available && (
+        // The provider's own reason wins: it knows whether the tool is missing or the rootfs is. Ours is the floor.
         <div className="banner banner-warn" style={{ marginTop: 14 }}>
-          {result.reason ?? 'gitleaks unavailable — run extraction first, or install gitleaks.'}
+          {result.reason ?? t.imageDetail.gitleaks.unavailable}
         </div>
       )}
       {result?.available && (
         <div style={{ marginTop: 14 }}>
           <div className="hint" style={{ marginBottom: 10 }}>
-            {result.findingCount} finding{result.findingCount === 1 ? '' : 's'} in the rootfs.
+            {t.imageDetail.gitleaks.count(result.findingCount)}
           </div>
           {result.findings.length > 0 && (
             <div className="table-wrap">
               <table className="data">
                 <thead>
                   <tr>
-                    <th>Rule</th>
-                    <th>File</th>
-                    <th>Line</th>
-                    <th>Match</th>
+                    <th>{t.imageDetail.gitleaks.colRule}</th>
+                    <th>{t.imageDetail.gitleaks.colFile}</th>
+                    <th>{t.imageDetail.gitleaks.colLine}</th>
+                    <th>{t.imageDetail.gitleaks.colMatch}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -674,6 +713,7 @@ function GitleaksSection({ imageId }: { imageId: string }): JSX.Element {
 }
 
 function FilesystemPanel({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [tree, setTree] = useState<FsNode | null>(null);
   const [summary, setSummary] = useState<FsSummary | null>(null);
   const [status, setStatus] = useState<'none' | 'running' | 'done' | 'error'>('none');
@@ -690,10 +730,10 @@ function FilesystemPanel({ imageId }: { imageId: string }): JSX.Element {
         setStatus('done');
       } else {
         setStatus('error');
-        setLog(extract.log ?? 'Extraction produced no rootfs (binwalk unavailable or no filesystem found).');
+        setLog(extract.log ?? t.imageDetail.filesystem.noRootfs);
       }
     }
-  }, [imageId]);
+  }, [imageId, t]);
   useEffect(() => {
     loadLatest();
   }, [loadLatest]);
@@ -718,13 +758,13 @@ function FilesystemPanel({ imageId }: { imageId: string }): JSX.Element {
       <div>
         {summary && (
           <div className="grid grid-3" style={{ marginBottom: 16 }}>
-            <Stat label="Files" value={String(summary.totalFiles)} />
-            <Stat label="Directories" value={String(summary.totalDirs)} />
-            <Stat label="setuid binaries" value={String(summary.setuidBinaries.length)} />
+            <Stat label={t.imageDetail.filesystem.statFiles} value={String(summary.totalFiles)} />
+            <Stat label={t.imageDetail.filesystem.statDirs} value={String(summary.totalDirs)} />
+            <Stat label={t.imageDetail.filesystem.statSetuid} value={String(summary.setuidBinaries.length)} />
           </div>
         )}
         <div className="panel">
-          <div className="panel-title">Root filesystem</div>
+          <div className="panel-title">{t.imageDetail.filesystem.rootfsTitle}</div>
           <FilesystemTree root={tree} />
         </div>
       </div>
@@ -733,15 +773,15 @@ function FilesystemPanel({ imageId }: { imageId: string }): JSX.Element {
 
   return (
     <div className="panel">
-      <div className="panel-title">Filesystem extraction</div>
-      <div className="panel-sub">Carve the image with binwalk and model the recovered rootfs.</div>
+      <div className="panel-title">{t.imageDetail.filesystem.title}</div>
+      <div className="panel-sub">{t.imageDetail.filesystem.sub}</div>
       <button className="btn btn-primary" disabled={status === 'running'} onClick={runExtract}>
         {status === 'running' ? (
           <>
-            <span className="spinner" /> Extracting…
+            <span className="spinner" /> {t.imageDetail.filesystem.extracting}
           </>
         ) : (
-          'Run extraction'
+          t.imageDetail.filesystem.run
         )}
       </button>
       {log && (
@@ -765,7 +805,8 @@ function pollJob(jobId: string, onLog: (log: string) => void): Promise<Job> {
         onLog(j.log);
         if (j.status === 'done' || j.status === 'error') {
           window.clearInterval(timer);
-          if (j.status === 'error') toast.error(j.error ?? 'Job failed');
+          // Outside React: `messages()` is the module-scope reader, so a toast fired from a timer is still localised.
+          if (j.status === 'error') toast.error(j.error ?? messages().imageDetail.job.failed);
           resolve(j);
         }
       } catch (err) {
@@ -788,6 +829,7 @@ const SEVERITY_BADGE: Record<Severity, string> = {
 };
 
 function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [result, setResult] = useState<SbomResult | null>(null);
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState('');
@@ -815,27 +857,27 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
     }
   }, [imageId]);
 
-  if (!loaded) return <div className="empty">Loading…</div>;
+  if (!loaded) return <div className="empty">{t.common.loading}</div>;
 
   return (
     <div>
       <div className="panel">
-        <div className="panel-title">Software Bill of Materials + CVEs</div>
-        <div className="panel-sub">syft inventories the extracted rootfs; grype matches known (N-day) CVEs.</div>
+        <div className="panel-title">{t.imageDetail.sbom.title}</div>
+        <div className="panel-sub">{t.imageDetail.sbom.sub}</div>
         <button className="btn btn-primary" disabled={running} onClick={run}>
           {running ? (
             <>
-              <span className="spinner" /> Scanning…
+              <span className="spinner" /> {t.imageDetail.sbom.scanning}
             </>
           ) : result ? (
-            'Re-scan'
+            t.imageDetail.sbom.rescan
           ) : (
-            'Generate SBOM & scan CVEs'
+            t.imageDetail.sbom.generate
           )}
         </button>
         {result && !result.available && (
           <div className="banner banner-warn" style={{ marginTop: 14 }}>
-            {result.reason ?? 'SBOM unavailable — run extraction first, or install syft.'}
+            {result.reason ?? t.imageDetail.sbom.unavailable}
           </div>
         )}
         {log && (
@@ -851,24 +893,24 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
       {result?.available && (
         <>
           <div className="grid grid-3" style={{ marginBottom: 18 }}>
-            <Stat label="Packages" value={String(result.packageCount)} />
-            <Stat label="Vulnerabilities" value={String(result.vulnerabilities.length)} />
-            <Stat label="Critical / High" value={`${result.counts.Critical} / ${result.counts.High}`} mono />
+            <Stat label={t.imageDetail.sbom.statPackages} value={String(result.packageCount)} />
+            <Stat label={t.imageDetail.sbom.statVulns} value={String(result.vulnerabilities.length)} />
+            <Stat
+              label={t.imageDetail.sbom.statCritHigh}
+              value={`${result.counts.Critical} / ${result.counts.High}`}
+              mono
+            />
           </div>
 
-          {!result.grypeAvailable && (
-            <div className="banner banner-info">grype not present — SBOM generated, but CVE matching was skipped.</div>
-          )}
+          {/* Absence of the matcher is not absence of CVEs — the banner has to say which of the two happened. */}
+          {!result.grypeAvailable && <div className="banner banner-info">{t.imageDetail.sbom.grypeMissing}</div>}
 
           {result.packages.length > 0 && (
             <div className="panel">
               <div className="panel-head" style={{ marginBottom: 4 }}>
                 <div>
-                  <div className="panel-title">Component graph</div>
-                  <div className="panel-sub">
-                    The rootfs and its components, grouped by ecosystem around the ring and coloured by the worst CVE
-                    affecting each. Hover a node for its version and CVEs.
-                  </div>
+                  <div className="panel-title">{t.imageDetail.sbom.graphTitle}</div>
+                  <div className="panel-sub">{t.imageDetail.sbom.graphSub}</div>
                 </div>
               </div>
               <SbomGraph sbom={result} />
@@ -878,8 +920,9 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
           {result.vulnerabilities.length > 0 && (
             <div className="panel">
               <div className="panel-title">
-                CVEs
+                {t.imageDetail.sbom.cvesTitle}
                 <span className="legend" style={{ marginLeft: 'auto' }}>
+                  {/* grype's severity names are its own vocabulary and travel with the data — rendered verbatim. */}
                   {SEVERITY_ORDER.filter((s) => result.counts[s] > 0).map((s) => (
                     <span key={s} className={`badge ${SEVERITY_BADGE[s]}`}>
                       {s} {result.counts[s]}
@@ -891,11 +934,12 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
                 <table className="data">
                   <thead>
                     <tr>
-                      <th>Severity</th>
+                      <th>{t.imageDetail.sbom.colSeverity}</th>
+                      {/* The acronym IS the identifier in the cell below it; there is nothing to translate. */}
                       <th>CVE</th>
-                      <th>Package</th>
-                      <th>Version</th>
-                      <th>Fixed in</th>
+                      <th>{t.imageDetail.sbom.colPackage}</th>
+                      <th>{t.imageDetail.sbom.colVersion}</th>
+                      <th>{t.imageDetail.sbom.colFixedIn}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -918,14 +962,14 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
 
           {result.packages.length > 0 && (
             <div className="panel">
-              <div className="panel-title">Packages ({result.packageCount})</div>
+              <div className="panel-title">{t.imageDetail.sbom.packagesTitle(result.packageCount)}</div>
               <div className="table-wrap">
                 <table className="data">
                   <thead>
                     <tr>
-                      <th>Name</th>
-                      <th>Version</th>
-                      <th>Type</th>
+                      <th>{t.imageDetail.sbom.colName}</th>
+                      <th>{t.imageDetail.sbom.colVersion}</th>
+                      <th>{t.imageDetail.sbom.colType}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -943,7 +987,7 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
           )}
         </>
       )}
-      <RunHistory imageId={imageId} kinds={['sbom']} label="SBOM" />
+      <RunHistory imageId={imageId} kinds={['sbom']} label={t.imageDetail.sbom.runLabel} />
     </div>
   );
 }
@@ -973,6 +1017,7 @@ function HardeningBadges({
 }
 
 function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [result, setResult] = useState<DecompileResult | null>(null);
   const [binary, setBinary] = useState('');
   const [rootfsReady, setRootfsReady] = useState<boolean | null>(null);
@@ -1029,19 +1074,17 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
     <div>
       {binaries.length > 0 && (
         <div className="panel">
-          <div className="panel-title">Binaries ({binaries.length})</div>
-          <div className="panel-sub">
-            Every ELF from the extracted rootfs, with architecture from its header. Select one to triage it.
-          </div>
+          <div className="panel-title">{t.imageDetail.binaries.listTitle(binaries.length)}</div>
+          <div className="panel-sub">{t.imageDetail.binaries.listSub}</div>
           <div className="table-wrap" style={{ marginTop: 12 }}>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Path</th>
-                  <th>Arch</th>
-                  <th>Hardening</th>
-                  <th>Notable imports</th>
-                  <th>Net</th>
+                  <th>{t.imageDetail.binaries.colPath}</th>
+                  <th>{t.imageDetail.binaries.colArch}</th>
+                  <th>{t.imageDetail.binaries.colHardening}</th>
+                  <th>{t.imageDetail.binaries.colImports}</th>
+                  <th>{t.imageDetail.binaries.colNet}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1076,19 +1119,17 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
       {/* Same selection, two questions: what the binary IS (radare2) and whether its sinks are live (angr). */}
       <SymReachPanel imageId={imageId} binary={binary} onBinary={setBinary} />
       <div className="panel">
-        <div className="panel-title">Binary triage (radare2)</div>
-        <div className="panel-sub">
-          Static triage of a binary from the extracted rootfs: headers, imports, symbols, strings.
-        </div>
+        <div className="panel-title">{t.imageDetail.binaries.triageTitle}</div>
+        <div className="panel-sub">{t.imageDetail.binaries.triageSub}</div>
         {rootfsReady === false && (
           <div className="banner banner-warn" style={{ marginBottom: 14 }}>
-            No extracted rootfs yet — run extraction on the Filesystem tab first.
+            {t.imageDetail.binaries.noRootfs(t.sections.filesystem)}
           </div>
         )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <input
             className="input mono"
-            placeholder="rootfs-relative path, e.g. bin/busybox"
+            placeholder={t.imageDetail.binaries.pathPlaceholder}
             value={binary}
             onChange={(e) => setBinary(e.target.value)}
             style={{ flex: '1 1 240px', minWidth: 0 }}
@@ -1096,16 +1137,16 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
           <button className="btn btn-primary" disabled={running || !binary.trim()} onClick={run}>
             {running ? (
               <>
-                <span className="spinner" /> Triaging…
+                <span className="spinner" /> {t.imageDetail.binaries.triaging}
               </>
             ) : (
-              'Triage binary'
+              t.imageDetail.binaries.triage
             )}
           </button>
         </div>
         {result && !result.available && (
           <div className="banner banner-warn" style={{ marginTop: 14 }}>
-            {result.reason ?? 'Triage unavailable — check the path, or install radare2.'}
+            {result.reason ?? t.imageDetail.binaries.unavailable}
           </div>
         )}
         {log && (
@@ -1132,17 +1173,22 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
               {info.bintype && <span className="badge badge-info">{info.bintype}</span>}
               {info.endian && <span className="badge badge-info">{info.endian}</span>}
               {info.os && <span className="badge badge-info">{info.os}</span>}
-              <span className={`badge ${info.nx ? 'badge-ok' : 'badge-medium'}`}>NX {info.nx ? 'on' : 'off'}</span>
-              <span className={`badge ${info.canary ? 'badge-ok' : 'badge-medium'}`}>
-                canary {info.canary ? 'on' : 'off'}
+              <span className={`badge ${info.nx ? 'badge-ok' : 'badge-medium'}`}>
+                {t.imageDetail.binaries.nx(Boolean(info.nx))}
               </span>
-              <span className="badge badge-info">PIC {info.pic ? 'yes' : 'no'}</span>
-              <span className="badge badge-info">{result.functionCount} funcs</span>
+              <span className={`badge ${info.canary ? 'badge-ok' : 'badge-medium'}`}>
+                {t.imageDetail.binaries.canary(Boolean(info.canary))}
+              </span>
+              <span className="badge badge-info">{t.imageDetail.binaries.pic(Boolean(info.pic))}</span>
+              <span className="badge badge-info">{t.imageDetail.binaries.funcs(result.functionCount)}</span>
             </div>
           </div>
 
           <div className="grid grid-2">
-            <TriageTable title={`Imports (${result.imports.length})`} head={['Symbol', 'Library']}>
+            <TriageTable
+              title={t.imageDetail.binaries.importsTitle(result.imports.length)}
+              head={[t.imageDetail.binaries.colSymbol, t.imageDetail.binaries.colLibrary]}
+            >
               {result.imports.slice(0, 300).map((im, i) => (
                 <tr key={`${im.name}-${i}`}>
                   <td className="mono">{im.name}</td>
@@ -1150,7 +1196,10 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
                 </tr>
               ))}
             </TriageTable>
-            <TriageTable title={`Symbols (${result.symbols.length})`} head={['Name', 'Type']}>
+            <TriageTable
+              title={t.imageDetail.binaries.symbolsTitle(result.symbols.length)}
+              head={[t.imageDetail.binaries.colSymbolName, t.imageDetail.binaries.colSymbolType]}
+            >
               {result.symbols.slice(0, 300).map((s, i) => (
                 <tr key={`${s.name}-${i}`}>
                   <td className="mono">{s.name}</td>
@@ -1162,13 +1211,13 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
 
           {result.strings.length > 0 && (
             <div className="panel">
-              <div className="panel-title">Strings ({result.strings.length})</div>
+              <div className="panel-title">{t.imageDetail.binaries.stringsTitle(result.strings.length)}</div>
               <div className="table-wrap">
                 <table className="data">
                   <thead>
                     <tr>
-                      <th>Address</th>
-                      <th>Value</th>
+                      <th>{t.imageDetail.binaries.colAddress}</th>
+                      <th>{t.imageDetail.binaries.colValue}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1192,6 +1241,7 @@ function BinariesPanel({ imageId }: { imageId: string }): JSX.Element {
 }
 
 function GhidraDecompile({ imageId, binary }: { imageId: string; binary: string }): JSX.Element {
+  const t = useMessages();
   const [result, setResult] = useState<GhidraResult | null>(null);
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState('');
@@ -1221,26 +1271,26 @@ function GhidraDecompile({ imageId, binary }: { imageId: string; binary: string 
 
   return (
     <div className="panel">
-      <div className="panel-title">Decompilation (Ghidra)</div>
-      <div className="panel-sub">Full pseudocode via Ghidra headless — needs the optional Ghidra image layer.</div>
+      <div className="panel-title">{t.imageDetail.ghidra.title}</div>
+      <div className="panel-sub">{t.imageDetail.ghidra.sub}</div>
       <button className="btn" disabled={running || !binary.trim()} onClick={run}>
         {running ? (
           <>
-            <span className="spinner" /> Decompiling…
+            <span className="spinner" /> {t.imageDetail.ghidra.decompiling}
           </>
         ) : (
-          'Decompile with Ghidra'
+          t.imageDetail.ghidra.decompile
         )}
       </button>
       {result && !result.available && (
         <div className="banner banner-info" style={{ marginTop: 14 }}>
-          {result.reason ?? 'Ghidra not installed — build the image with the optional Ghidra layer.'}
+          {result.reason ?? t.imageDetail.ghidra.unavailable}
         </div>
       )}
       {result?.available && (
         <div style={{ marginTop: 12 }}>
           <div className="hint" style={{ marginBottom: 8 }}>
-            {result.functionCount} functions decompiled from {result.binary}.
+            {t.imageDetail.ghidra.decompiled(result.functionCount, result.binary)}
           </div>
           {result.functions.map((fn, i) => (
             <div key={`${fn.name}-${i}`} style={{ marginBottom: 6 }}>
@@ -1304,6 +1354,7 @@ function TriageTable({
 }
 
 function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [images, setImages] = useState<ImageSummary[]>([]);
   const [against, setAgainst] = useState('');
   const [result, setResult] = useState<FirmwareDiffResult | null>(null);
@@ -1345,12 +1396,10 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
   return (
     <div>
       <div className="panel">
-        <div className="panel-title">Compare firmware</div>
-        <div className="panel-sub">
-          Diff identity, packages/CVEs (needs SBOM on both), and rootfs files (needs extraction).
-        </div>
+        <div className="panel-title">{t.imageDetail.diff.title}</div>
+        <div className="panel-sub">{t.imageDetail.diff.sub}</div>
         {images.length === 0 ? (
-          <div className="hint">Upload a second image to compare against.</div>
+          <div className="hint">{t.imageDetail.diff.needSecond}</div>
         ) : (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <select
@@ -1359,7 +1408,7 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
               onChange={(e) => setAgainst(e.target.value)}
               style={{ flex: '1 1 240px', minWidth: 0 }}
             >
-              <option value="">Select an image to compare against…</option>
+              <option value="">{t.imageDetail.diff.selectPlaceholder}</option>
               {images.map((im) => (
                 <option key={im.id} value={im.id}>
                   {im.filename}
@@ -1369,10 +1418,10 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
             <button className="btn btn-primary" disabled={running || !against} onClick={run}>
               {running ? (
                 <>
-                  <span className="spinner" /> Comparing…
+                  <span className="spinner" /> {t.imageDetail.diff.comparing}
                 </>
               ) : (
-                'Compare'
+                t.imageDetail.diff.compare
               )}
             </button>
           </div>
@@ -1390,15 +1439,15 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
       {result && (
         <>
           <div className="panel">
-            <div className="panel-title">Identity</div>
+            <div className="panel-title">{t.imageDetail.diff.identityTitle}</div>
             {result.identity.length === 0 ? (
-              <div className="hint">No identity differences.</div>
+              <div className="hint">{t.imageDetail.diff.identityNone}</div>
             ) : (
               <div className="table-wrap">
                 <table className="data">
                   <thead>
                     <tr>
-                      <th>Field</th>
+                      <th>{t.imageDetail.diff.colField}</th>
                       <th className="mono">{result.a.filename}</th>
                       <th className="mono">{result.b.filename}</th>
                     </tr>
@@ -1418,22 +1467,22 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
           </div>
 
           <div className="panel">
-            <div className="panel-title">Packages</div>
+            <div className="panel-title">{t.imageDetail.diff.packagesTitle}</div>
             {!result.packages.hasData ? (
-              <div className="hint">Run SBOM on both images to diff packages.</div>
+              <div className="hint">{t.imageDetail.diff.packagesNeedSbom}</div>
             ) : (
               <>
                 <div className="grid grid-3" style={{ marginBottom: 12 }}>
-                  <Stat label="Added" value={String(result.packages.added.length)} />
-                  <Stat label="Removed" value={String(result.packages.removed.length)} />
-                  <Stat label="Version-changed" value={String(result.packages.changed.length)} />
+                  <Stat label={t.imageDetail.diff.statAdded} value={String(result.packages.added.length)} />
+                  <Stat label={t.imageDetail.diff.statRemoved} value={String(result.packages.removed.length)} />
+                  <Stat label={t.imageDetail.diff.statVersionChanged} value={String(result.packages.changed.length)} />
                 </div>
                 {result.packages.changed.length > 0 && (
                   <div className="table-wrap">
                     <table className="data">
                       <thead>
                         <tr>
-                          <th>Package</th>
+                          <th>{t.imageDetail.diff.colPackage}</th>
                           <th>{result.a.filename}</th>
                           <th>{result.b.filename}</th>
                         </tr>
@@ -1455,42 +1504,43 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
           </div>
 
           <div className="panel">
-            <div className="panel-title">CVEs</div>
+            <div className="panel-title">{t.imageDetail.diff.cvesTitle}</div>
             {!result.cves.hasData ? (
-              <div className="hint">Run SBOM on both images to diff CVEs.</div>
+              <div className="hint">{t.imageDetail.diff.cvesNeedSbom}</div>
             ) : (
               <>
                 <div className="legend" style={{ marginBottom: 10 }}>
-                  <span className="badge badge-ok">+{result.cves.addedIds.length} added</span>
-                  <span className="badge badge-info">−{result.cves.removedIds.length} removed</span>
+                  <span className="badge badge-ok">{t.imageDetail.diff.added(result.cves.addedIds.length)}</span>
+                  <span className="badge badge-info">{t.imageDetail.diff.removed(result.cves.removedIds.length)}</span>
                   {SEVERITY_ORDER.filter((s) => result.cves.addedBySeverity[s] > 0).map((s) => (
                     <span key={s} className={`badge ${SEVERITY_BADGE[s]}`}>
-                      +{result.cves.addedBySeverity[s]} {s}
+                      {t.imageDetail.diff.bySeverity(result.cves.addedBySeverity[s], s)}
                     </span>
                   ))}
                 </div>
+                {/* "None added" is a statement about these two images, never about either one's exposure. */}
                 <div className="hint mono" style={{ wordBreak: 'break-word' }}>
-                  {result.cves.addedIds.slice(0, 60).join(', ') || 'No newly-introduced CVEs.'}
+                  {result.cves.addedIds.slice(0, 60).join(', ') || t.imageDetail.diff.noNewCves}
                 </div>
               </>
             )}
           </div>
 
           <div className="panel">
-            <div className="panel-title">Root filesystem</div>
+            <div className="panel-title">{t.imageDetail.diff.filesTitle}</div>
             {!result.files.hasData ? (
-              <div className="hint">Run extraction on both images to diff files.</div>
+              <div className="hint">{t.imageDetail.diff.filesNeedExtract}</div>
             ) : (
               <div className="grid grid-3">
-                <Stat label="Added" value={String(result.files.counts.added)} />
-                <Stat label="Removed" value={String(result.files.counts.removed)} />
-                <Stat label="Changed (size)" value={String(result.files.counts.changed)} />
+                <Stat label={t.imageDetail.diff.statAdded} value={String(result.files.counts.added)} />
+                <Stat label={t.imageDetail.diff.statRemoved} value={String(result.files.counts.removed)} />
+                <Stat label={t.imageDetail.diff.statFilesChanged} value={String(result.files.counts.changed)} />
               </div>
             )}
           </div>
         </>
       )}
-      <RunHistory imageId={imageId} kinds={['diff']} label="diff" />
+      <RunHistory imageId={imageId} kinds={['diff']} label={t.imageDetail.diff.runLabel} />
     </div>
   );
 }
@@ -1507,6 +1557,7 @@ function Stat({ label, value, mono }: { label: string; value: string; mono?: boo
 // === External intelligence (Phase 5): OSINT + published-vuln correlation, the only network-touching surface. ===
 
 function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
+  const t = useMessages();
   const [status, setStatus] = useState<ResearchStatus | null>(null);
   const [result, setResult] = useState<ResearchResult | null>(null);
   const [running, setRunning] = useState(false);
@@ -1541,12 +1592,14 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
     return (
       <div className="panel" style={{ borderStyle: 'dashed' }}>
         <div className="panel-title">
-          External intelligence <span className="badge">off</span>
+          {t.imageDetail.research.offTitle} <span className="badge">{t.imageDetail.research.offBadge}</span>
         </div>
+        {/* The env var is a literal and is spliced between two halves of the sentence, so each language keeps its
+            own word order around it. */}
         <div className="panel-sub" style={{ margin: 0 }}>
-          The only feature that leaves this machine. Enable with <span className="mono">FIRMLAB_RESEARCH=1</span> to
-          correlate the SBOM against public advisories (OSV) and draft responsible-disclosure notes. Off by default —
-          FirmLab stays local-only.
+          {t.imageDetail.research.offBodyBefore}
+          <span className="mono">FIRMLAB_RESEARCH=1</span>
+          {t.imageDetail.research.offBodyAfter}
         </div>
       </div>
     );
@@ -1559,37 +1612,34 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
     <div className="panel">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div className="panel-title" style={{ margin: 0 }}>
-          External intelligence
+          {t.imageDetail.research.title}
         </div>
-        <span className="prov prov-heuristic" title="Correlated from public sources; reachability unverified">
-          public sources
+        <span className="prov prov-heuristic" title={t.imageDetail.research.sourceTitle}>
+          {t.imageDetail.research.sourceBadge}
         </span>
         <div style={{ flex: 1 }} />
         <button type="button" className="btn btn-sm btn-primary" disabled={running} onClick={run}>
           {running ? (
             <>
-              <span className="spinner" /> Researching…
+              <span className="spinner" /> {t.imageDetail.research.researching}
             </>
           ) : result ? (
-            'Re-run'
+            t.imageDetail.research.rerun
           ) : (
-            'Run research'
+            t.imageDetail.research.run
           )}
         </button>
       </div>
-      <div className="panel-sub">
-        Sends only component names + versions to the vuln databases (OSV, NVD); downloads the CISA KEV catalog to flag
-        known-exploited CVEs locally. Never firmware bytes, secrets, or keys. A published advisory for a present
-        component is a lead, not a confirmed bug (reachability is decided per-image).
-      </div>
+      {/* What leaves the machine, and that an advisory is a lead — both have to survive translation intact. */}
+      <div className="panel-sub">{t.imageDetail.research.sub}</div>
 
       {result && osv && (
         <div style={{ marginTop: 4 }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-            <span className="badge" title="OSV: ecosystem-mapped SBOM components queried">
-              OSV {osv.queried} queried
+            <span className="badge" title={t.imageDetail.research.osvBadgeTitle}>
+              {t.imageDetail.research.osvBadge(osv.queried)}
             </span>
-            <span className="badge badge-high">{osv.totalAdvisories} OSV advisories</span>
+            <span className="badge badge-high">{t.imageDetail.research.osvAdvisories(osv.totalAdvisories)}</span>
             {nvd && (nvd.queried > 0 || nvd.totalAdvisories > 0) && (
               <span
                 className="badge"
@@ -1597,23 +1647,23 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                   // A result stored before this split does not know how it asked, and saying nothing beats
                   // rendering "undefined asked by CPE version match".
                   nvd.askedByCpe === undefined
-                    ? 'NVD, for components OSV could not map. This result predates the CPE/keyword split, so which question produced it was not recorded — re-run research to find out.'
-                    : `NVD, for components OSV could not map: ${nvd.askedByCpe} asked by CPE version match, ${nvd.askedByKeyword ?? 0} by keyword. A keyword answer matches CVE description text only — an empty one is not evidence the component is unaffected.`
+                    ? t.imageDetail.research.nvdTitleUnknown
+                    : t.imageDetail.research.nvdTitle(nvd.askedByCpe, nvd.askedByKeyword ?? 0)
                 }
               >
-                NVD {nvd.queried} queried · {nvd.totalAdvisories} advisories
+                {t.imageDetail.research.nvdBadge(nvd.queried, nvd.totalAdvisories)}
               </span>
             )}
             {kev?.checked && (
               <span
                 className={`badge ${kev.matches.length > 0 ? 'badge-high' : 'badge-ok'}`}
-                title="CISA Known Exploited Vulnerabilities — exploited in the wild"
+                title={t.imageDetail.research.kevBadgeTitle}
               >
-                KEV {kev.matches.length} known-exploited
+                {t.imageDetail.research.kevBadge(kev.matches.length)}
               </span>
             )}
             {result.provenance.vendors.slice(0, 4).map((v) => (
-              <span key={v} className="badge badge-accent" title="Provenance hint (vendor)">
+              <span key={v} className="badge badge-accent" title={t.imageDetail.research.vendorTitle}>
                 {v}
               </span>
             ))}
@@ -1630,7 +1680,7 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
               }}
             >
               <div className="eyebrow" style={{ marginBottom: 6 }}>
-                ⚠ Known-exploited in the wild (CISA KEV) · reachability here still unverified
+                {t.imageDetail.research.kevHeading}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 {kev.matches.slice(0, 10).map((m) => (
@@ -1647,12 +1697,12 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                       {m.vendorProject} {m.product}
                     </span>
                     {m.knownRansomware === 'Known' && (
-                      <span className="badge badge-high" title="Used in known ransomware campaigns">
-                        ransomware
+                      <span className="badge badge-high" title={t.imageDetail.research.ransomwareTitle}>
+                        {t.imageDetail.research.ransomware}
                       </span>
                     )}
                     <span className="hint" title={m.shortDescription}>
-                      added {m.dateAdded}
+                      {t.imageDetail.research.kevAdded(m.dateAdded)}
                     </span>
                   </div>
                 ))}
@@ -1665,8 +1715,8 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
               <table className="data">
                 <thead>
                   <tr>
-                    <th>Component</th>
-                    <th>Advisories (reachability unverified)</th>
+                    <th>{t.imageDetail.research.colComponent}</th>
+                    <th>{t.imageDetail.research.colAdvisories}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1709,8 +1759,9 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
           {nvd && nvd.components.length > 0 && (
             <div className="table-wrap" style={{ marginBottom: 12 }}>
               <div className="eyebrow" style={{ marginBottom: 6 }}>
-                NVD · components OSV couldn't map (affected-version match; reachability unverified)
+                {t.imageDetail.research.nvdHeading}
               </div>
+              {/* The provider's own rule text, as it recorded it. */}
               {nvd.notQueriedRule && (
                 <div className="note" style={{ marginBottom: 8 }}>
                   {nvd.notQueriedRule}
@@ -1718,17 +1769,17 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
               )}
               {(nvd.uncheckedIdentities ?? []).map((u) => (
                 <div className="note" style={{ marginBottom: 8 }} key={`nvd-alt-${u.name}@${u.version}`}>
-                  {u.name} {u.version} came back empty under its primary CPE identity. NVD also carries it as{' '}
-                  <span className="mono">{u.identities.join(', ')}</span>, not queried — the zero is scoped to the
-                  identity asked, not to the component.
+                  {t.imageDetail.research.uncheckedBefore(u.name, u.version)}
+                  <span className="mono">{u.identities.join(', ')}</span>
+                  {t.imageDetail.research.uncheckedAfter}
                 </div>
               ))}
               <table className="data">
                 <thead>
                   <tr>
-                    <th>Component</th>
-                    <th>Asked by</th>
-                    <th>CVEs (NVD)</th>
+                    <th>{t.imageDetail.research.colComponent}</th>
+                    <th>{t.imageDetail.research.colAskedBy}</th>
+                    <th>{t.imageDetail.research.colCves}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1745,17 +1796,17 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                           className={`badge ${c.matchedBy === 'cpe' ? 'badge-ok' : ''}`}
                           title={
                             c.matchedBy === 'cpe'
-                              ? "CPE version match — NVD resolved this version against each CVE's affected range."
+                              ? t.imageDetail.research.askedCpeTitle
                               : c.matchedBy === 'keyword'
-                                ? 'Keyword — matched CVE description text, which names the FIXED release rather than the vulnerable one. The weaker of the two questions.'
-                                : 'This result predates the CPE/keyword split, so which question produced it was not recorded. Re-run research to find out.'
+                                ? t.imageDetail.research.askedKeywordTitle
+                                : t.imageDetail.research.askedUnknownTitle
                           }
                         >
                           {c.matchedBy === 'cpe'
-                            ? 'CPE version'
+                            ? t.imageDetail.research.askedCpe
                             : c.matchedBy === 'keyword'
-                              ? 'keyword'
-                              : 'not recorded'}
+                              ? t.imageDetail.research.askedKeyword
+                              : t.imageDetail.research.askedUnknown}
                         </span>
                       </td>
                       <td>
@@ -1784,9 +1835,9 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                             return total > shown ? (
                               <span
                                 className="badge"
-                                title={`This row lists ${shown}. NVD matches ${total} CVEs for ${c.name} ${c.version}; the rest are not shown here.`}
+                                title={t.imageDetail.research.shownOfTitle(shown, total, c.name, c.version)}
                               >
-                                {shown} of {total} shown
+                                {t.imageDetail.research.shownOf(shown, total)}
                               </span>
                             ) : null;
                           })()}
@@ -1802,7 +1853,7 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
           {result.keyMaterial.length > 0 && (
             <div style={{ marginBottom: 12 }}>
               <div className="eyebrow" style={{ marginBottom: 6 }}>
-                Key material · embedded keys are effectively public
+                {t.imageDetail.research.keyHeading}
               </div>
               {result.keyMaterial.map((k) => (
                 <div
@@ -1819,12 +1870,12 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                   <span className="badge">{k.kind}</span>
                   <span className="mono hint">{k.redacted}</span>
                   {k.effectivelyPublic && (
-                    <span className="badge badge-high" title="Extractable from any device running this firmware">
-                      effectively public
+                    <span className="badge badge-high" title={t.imageDetail.research.effectivelyPublicTitle}>
+                      {t.imageDetail.research.effectivelyPublic}
                     </span>
                   )}
                   {(k.sharedInImages ?? 0) > 0 && (
-                    <span className="badge badge-medium">reused in {k.sharedInImages} other image(s)</span>
+                    <span className="badge badge-medium">{t.imageDetail.research.reusedIn(k.sharedInImages ?? 0)}</span>
                   )}
                 </div>
               ))}
@@ -1834,7 +1885,7 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
           {result.securityContacts.some((c) => c.checked) && (
             <div style={{ marginBottom: 12 }}>
               <div className="eyebrow" style={{ marginBottom: 6 }}>
-                Responsible disclosure · security.txt
+                {t.imageDetail.research.contactsHeading}
               </div>
               {result.securityContacts.map((c) => (
                 <div key={c.domain} style={{ fontSize: 12.5, marginBottom: 3 }}>
@@ -1846,7 +1897,7 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                       </span>
                     ))
                   ) : (
-                    <span className="hint">{c.reason ?? 'no security.txt'}</span>
+                    <span className="hint">{c.reason ?? t.imageDetail.research.noSecurityTxt}</span>
                   )}
                 </div>
               ))}
@@ -1856,35 +1907,30 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
           {result.synthesis && (
             <>
               <div className="eyebrow" style={{ marginBottom: 6 }}>
-                Brief · {result.synthesis.provider} · {result.synthesis.model}
+                {t.imageDetail.research.brief(result.synthesis.provider, result.synthesis.model)}
               </div>
               <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.5 }}>{result.synthesis.text}</div>
             </>
           )}
         </div>
       )}
-      <RunHistory imageId={imageId} kinds={['research']} label="research" />
+      <RunHistory imageId={imageId} kinds={['research']} label={t.imageDetail.research.runLabel} />
     </div>
   );
 }
 
 // === Agent: the conscious-autonomy session view — what the agent chose at each node, and why (Phase 3). ===
 
-const SESSION_META: Record<AgentSession['status'], { label: string; color: string }> = {
-  running: { label: 'running', color: 'var(--info, #4db5ff)' },
-  awaiting_approval: { label: 'awaiting approval', color: 'var(--sev-medium, #e6b45c)' },
-  done: { label: 'done', color: 'var(--ok, #4caf7d)' },
-  error: { label: 'error', color: 'var(--sev-critical, #e0524f)' },
-  halted: { label: 'halted (governor)', color: 'var(--text-dim)' },
-};
-
-const NODE_LABEL: Record<string, string> = {
-  triage: '① Triage',
-  extraction: 'Extraction (deterministic)',
-  preflight: 'Preflight (deterministic)',
-  'target-selection': '② Target selection',
-  emulation: 'Emulation',
-  error: 'Error',
+/**
+ * Session-status colour only. The status CODES are what the API stores, so they stay the keys; the label a reader
+ * sees comes from `t.imageDetail.agent.sessionStatus`, keyed by the same code.
+ */
+const SESSION_COLOR: Record<AgentSession['status'], string> = {
+  running: 'var(--info, #4db5ff)',
+  awaiting_approval: 'var(--sev-medium, #e6b45c)',
+  done: 'var(--ok, #4caf7d)',
+  error: 'var(--sev-critical, #e0524f)',
+  halted: 'var(--text-dim)',
 };
 
 /** The emulation plan the target-selection node produced, read from the latest such step. */
@@ -1895,52 +1941,57 @@ function emulationPlanOf(steps: AgentStep[]): { binary: string; rung: string }[]
 }
 
 function StepCard({ step }: { step: AgentStep }): JSX.Element {
+  const t = useMessages();
+  const a = t.imageDetail.agent;
+  // The transcript's node ids are open-ended strings from the API; an unknown one renders as its own id.
+  const nodeLabels: Record<string, string> = a.node;
   const out = step.output as Record<string, unknown> | null;
   const highlights: ReactNode[] = [];
   if (step.node === 'triage' && out) {
     highlights.push(
       <div key="h">
-        class <b>{String(out.resolvedClass)}</b> ({String(out.classConfidence)}) · extract:{' '}
-        <b>{out.shouldExtract ? 'yes' : 'no'}</b>
+        {a.triageClass} <b>{String(out.resolvedClass)}</b> ({String(out.classConfidence)}) · {a.triageExtract}{' '}
+        <b>{out.shouldExtract ? t.common.yes : t.common.no}</b>
         {Array.isArray(out.extractionCascade) && out.extractionCascade.length > 0 && (
-          <> · cascade {(out.extractionCascade as string[]).join(' → ')}</>
+          <> · {a.cascade((out.extractionCascade as string[]).join(' → '))}</>
         )}
       </div>,
     );
     if (Array.isArray(out.attackSurface) && out.attackSurface.length > 0)
-      highlights.push(<div key="a">attack surface: {(out.attackSurface as string[]).join(', ')}</div>);
+      highlights.push(<div key="a">{a.attackSurface((out.attackSurface as string[]).join(', '))}</div>);
   } else if (step.node === 'preflight' && out) {
     highlights.push(
       <div key="p">
-        strategy <b>{String(out.strategy)}</b> · ceiling <b>{String(out.proofCeiling)}</b>
+        {a.strategy} <b>{String(out.strategy)}</b> · {a.ceiling} <b>{String(out.proofCeiling)}</b>
       </div>,
     );
   } else if (step.node === 'extraction' && out) {
     highlights.push(
       <div key="e">
-        {out.rootfs ? '✓ rootfs' : '○ no rootfs'} · {String(out.extractor ?? '—')} · arch{' '}
-        {String(out.detectedArch ?? '—')} · {String(out.files ?? '?')} files
+        {out.rootfs ? a.rootfsYes : a.rootfsNo} · {String(out.extractor ?? '—')} · {a.arch}{' '}
+        {String(out.detectedArch ?? '—')} · {a.files(String(out.files ?? '?'))}
       </div>,
     );
   } else if (step.node === 'target-selection' && out) {
     const targets = (out.targets as { path: string; rung: string; priority: string; reason: string }[]) ?? [];
     highlights.push(
       <div key="t" style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-        {targets.map((t) => (
-          <div key={t.path} className="mono" style={{ fontSize: 12 }}>
-            <span style={{ color: 'var(--text)' }}>{t.path}</span> <span className="badge">{t.rung}</span>{' '}
-            <span className="hint">{t.priority}</span> — {t.reason}
+        {/* Path, rung, priority and reason are what the node recorded — printed as recorded. */}
+        {targets.map((target) => (
+          <div key={target.path} className="mono" style={{ fontSize: 12 }}>
+            <span style={{ color: 'var(--text)' }}>{target.path}</span> <span className="badge">{target.rung}</span>{' '}
+            <span className="hint">{target.priority}</span> — {target.reason}
           </div>
         ))}
-        {targets.length === 0 && <span className="hint">no targets selected</span>}
+        {targets.length === 0 && <span className="hint">{a.noTargets}</span>}
       </div>,
     );
   } else if (step.node === 'emulation' && out) {
     highlights.push(
       <div key="m">
-        ran <b>{out.ran ? 'yes' : 'no'}</b> · exit {String(out.exitCode ?? '—')} · proof-state{' '}
+        {a.ran} <b>{out.ran ? t.common.yes : t.common.no}</b> · {a.exit} {String(out.exitCode ?? '—')} · {a.proofState}{' '}
         {typeof out.proofState === 'string' && (PROOF_STATE_META as Record<string, unknown>)[out.proofState] ? (
-          <ProofStateBadge state={out.proofState as ProofState} />
+          <ProofStateChip state={out.proofState as FindingProvenance} />
         ) : (
           <b>{String(out.proofState)}</b>
         )}
@@ -1958,10 +2009,10 @@ function StepCard({ step }: { step: AgentStep }): JSX.Element {
     <div className="panel" style={{ marginTop: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ color: dot }}>●</span>
-        <b>{NODE_LABEL[step.node] ?? step.node}</b>
+        <b>{nodeLabels[step.node] ?? step.node}</b>
         {step.model && <span className="badge">{step.model}</span>}
         {step.inputTokens + step.outputTokens > 0 && (
-          <span className="hint mono">{step.inputTokens + step.outputTokens} tok</span>
+          <span className="hint mono">{a.tokens(step.inputTokens + step.outputTokens)}</span>
         )}
       </div>
       <div
@@ -1977,7 +2028,7 @@ function StepCard({ step }: { step: AgentStep }): JSX.Element {
       {(step.input != null || step.output != null) && (
         <details style={{ marginTop: 6 }}>
           <summary className="hint" style={{ cursor: 'pointer' }}>
-            audit: inputs & decision
+            {a.audit}
           </summary>
           <pre className="mono" style={{ fontSize: 10.5, color: 'var(--text-dim)', overflowX: 'auto' }}>
             {JSON.stringify({ input: step.input, output: step.output }, null, 2)}
@@ -1989,6 +2040,7 @@ function StepCard({ step }: { step: AgentStep }): JSX.Element {
 }
 
 function BudgetGauge({ session }: { session: AgentSession }): JSX.Element {
+  const t = useMessages();
   const b = session.budget;
   const c = session.consumed;
   const row = (label: string, used: string, cap: string) => (
@@ -2003,15 +2055,17 @@ function BudgetGauge({ session }: { session: AgentSession }): JSX.Element {
   );
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 24px', marginTop: 8 }}>
-      {row('steps', String(c.steps), String(b.maxSteps))}
-      {row('tokens', String(c.inputTokens + c.outputTokens), String(b.maxTokens))}
-      {row('cost', `$${c.usd.toFixed(4)}`, b.maxUsd > 0 ? `$${b.maxUsd}` : '∞')}
-      {row('time', `${Math.round(c.elapsedMs / 1000)}s`, `${Math.round(b.maxWallMs / 1000)}s`)}
+      {row(t.imageDetail.agent.budgetSteps, String(c.steps), String(b.maxSteps))}
+      {row(t.imageDetail.agent.budgetTokens, String(c.inputTokens + c.outputTokens), String(b.maxTokens))}
+      {row(t.imageDetail.agent.budgetCost, `$${c.usd.toFixed(4)}`, b.maxUsd > 0 ? `$${b.maxUsd}` : '∞')}
+      {row(t.imageDetail.agent.budgetTime, `${Math.round(c.elapsedMs / 1000)}s`, `${Math.round(b.maxWallMs / 1000)}s`)}
     </div>
   );
 }
 
 function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
+  const a = t.imageDetail.agent;
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [session, setSession] = useState<AgentSession | null>(null);
   const [steps, setSteps] = useState<AgentStep[]>([]);
@@ -2087,10 +2141,11 @@ function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
   if (config && !config.enabled) {
     return (
       <div className="panel">
-        <div className="panel-title">Agent — conscious autonomy</div>
+        <div className="panel-title">{a.disabledTitle}</div>
         <div className="panel-sub">
-          Disabled. Set <span className="mono">FIRMLAB_AGENT=1</span> and an LLM API key to enable the decision nodes.
-          With the flag off, FirmLab stays local-only, deterministic, no-network, no-cost.
+          {a.disabledBefore}
+          <span className="mono">FIRMLAB_AGENT=1</span>
+          {a.disabledAfter}
         </div>
       </div>
     );
@@ -2105,7 +2160,7 @@ function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
       <div className="panel">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <div className="panel-title" style={{ margin: 0 }}>
-            Agent session
+            {a.sessionTitle}
           </div>
           {config?.model && (
             <span className="badge">
@@ -2113,28 +2168,24 @@ function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
             </span>
           )}
           {session && (
-            <span className="mono" style={{ color: SESSION_META[session.status].color, fontSize: 12 }}>
-              {SESSION_META[session.status].label}
+            <span className="mono" style={{ color: SESSION_COLOR[session.status], fontSize: 12 }}>
+              {a.sessionStatus[session.status]}
             </span>
           )}
           <div style={{ flex: 1 }} />
           <button type="button" className="btn btn-sm btn-primary" disabled={busy || running} onClick={start}>
             {running ? (
               <>
-                <span className="spinner" /> Running…
+                <span className="spinner" /> {a.running}
               </>
             ) : session ? (
-              'New session'
+              a.newSession
             ) : (
-              'Start session'
+              a.startSession
             )}
           </button>
         </div>
-        <div className="panel-sub">
-          The agent reasons within a deterministic skeleton: it chooses branches (triage ①, target selection ②) and
-          interprets — every mechanical step is deterministic, and emulation waits for your approval. A governor caps
-          the run.
-        </div>
+        <div className="panel-sub">{a.sub}</div>
         {session && <BudgetGauge session={session} />}
         {session?.haltReason && (
           <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--sev-medium, #e6b45c)' }}>
@@ -2145,11 +2196,9 @@ function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
 
       {awaiting && plan.length > 0 && (
         <div className="panel" style={{ borderColor: 'var(--sev-medium, #e6b45c)' }}>
-          <div className="panel-title">Approval required — proposed emulation</div>
-          <div className="panel-sub">
-            The agent proposes running these under emulation. Emulation proves the sandbox, not the device; nothing runs
-            without your approval.
-          </div>
+          <div className="panel-title">{a.approvalTitle}</div>
+          {/* Emulation proves the sandbox, never the physical device — and nothing runs unapproved. */}
+          <div className="panel-sub">{a.approvalSub}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
             {plan.map((p) => (
               <div key={p.binary} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -2162,22 +2211,20 @@ function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
                   disabled={busy}
                   onClick={() => approve(p.binary)}
                 >
-                  Approve & run
+                  {a.approve}
                 </button>
               </div>
             ))}
             <div>
               <button type="button" className="btn btn-sm" disabled={busy} onClick={decline}>
-                Decline all
+                {a.declineAll}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {steps.length === 0 && !session && (
-        <div className="empty">No agent session yet. Start one to have the agent triage and select targets.</div>
-      )}
+      {steps.length === 0 && !session && <div className="empty">{a.noSession}</div>}
       {steps.map((s) => (
         <StepCard key={s.seq} step={s} />
       ))}

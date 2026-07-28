@@ -19,6 +19,11 @@
  *
  * The row is a monospace grid keyed on the `ls -l` mode string, so `-rwsr-xr-x` and `-rw-r--r--` line up in one
  * column and setuid is visible by scanning rather than by clicking.
+ *
+ * What is localised and what is not: the panel's own prose lives in the `files` namespace, while the extraction
+ * verdict, the truncation rule, the view reason and a refusal's error are sentences the API composed about what it
+ * actually did — they are the record, and they render as written. So do paths, mode strings, symlink targets, the
+ * refusal rule ids and the `extract` crumb, which is a real directory name.
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -29,6 +34,7 @@ import {
   api,
   fmtBytes,
 } from '../api';
+import { useMessages } from '../i18n';
 
 /** How each extraction state is allowed to look. Only a real rootfs is neutral; nothing here reads as "fine". */
 const STATE_TONE: Record<ExtractionBrowseState, string> = {
@@ -40,21 +46,13 @@ const STATE_TONE: Record<ExtractionBrowseState, string> = {
   rootfs: '',
 };
 
-const STATE_LABEL: Record<ExtractionBrowseState, string> = {
-  'never-run': 'never extracted',
-  'in-progress': 'extracting',
-  failed: 'extraction failed',
-  'no-output': 'nothing on disk',
-  'volumes-only': 'carve only — no rootfs',
-  rootfs: 'rootfs recovered',
-};
-
 function parentOf(p: string): string {
   const i = p.lastIndexOf('/');
   return i < 0 ? '' : p.slice(0, i);
 }
 
 export function FileBrowser({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [dir, setDir] = useState('');
   const [listing, setListing] = useState<FilesListing | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -113,17 +111,14 @@ export function FileBrowser({ imageId }: { imageId: string }): JSX.Element {
     <div className="panel">
       <div className="panel-head">
         <div>
-          <div className="panel-title">Extracted files</div>
-          <div className="panel-sub">
-            Open what the extractor wrote to disk and read the bytes a finding cites. Reading a file establishes that
-            the content is present in this extraction — it is not evidence about the running device.
-          </div>
+          <div className="panel-title">{t.files.browser.title}</div>
+          <div className="panel-sub">{t.files.browser.sub}</div>
         </div>
       </div>
 
       {extraction ? (
         <div className={`banner ${STATE_TONE[extraction.state]}`} style={{ marginBottom: 14 }}>
-          <span className="eyebrow">Extraction · {STATE_LABEL[extraction.state]}</span>
+          <span className="eyebrow">{t.files.browser.extractionEyebrow(t.files.state[extraction.state])}</span>
           <p style={{ margin: '4px 0 0' }}>{extraction.verdict}</p>
         </div>
       ) : null}
@@ -136,24 +131,21 @@ export function FileBrowser({ imageId }: { imageId: string }): JSX.Element {
 
       {listing?.refusal ? (
         <div className="banner banner-warn" style={{ marginBottom: 14 }}>
-          <span className="eyebrow">Refused · {listing.refusal.rule}</span>
+          <span className="eyebrow">{t.files.browser.refusedEyebrow(listing.refusal.rule)}</span>
           <p style={{ margin: '4px 0 0' }}>{listing.refusal.error}</p>
         </div>
       ) : null}
 
       {extraction && !extraction.browsable ? (
         <div className="empty">
-          <div className="empty-title">Nothing on disk to browse</div>
-          <p className="empty-body">
-            This is not an empty filesystem. Read the verdict above — it says which of the several different reasons
-            applies, and what would change it.
-          </p>
+          <div className="empty-title">{t.files.browser.nothingTitle}</div>
+          <p className="empty-body">{t.files.browser.nothingBody}</p>
         </div>
       ) : (
         <div className="fsb">
           <div className="fsb-pane">
             <div className="fsb-pane-head">
-              <nav className="fsb-crumbs" aria-label="Extraction path">
+              <nav className="fsb-crumbs" aria-label={t.files.browser.pathLabel}>
                 <button
                   type="button"
                   className="fsb-crumb"
@@ -181,8 +173,11 @@ export function FileBrowser({ imageId }: { imageId: string }): JSX.Element {
               </nav>
               {listing?.listing ? (
                 <span className="hint mono">
-                  {listing.listing.dirCount} dir · {listing.listing.fileCount} file · {listing.listing.symlinkCount}{' '}
-                  link
+                  {t.files.browser.counts(
+                    listing.listing.dirCount,
+                    listing.listing.fileCount,
+                    listing.listing.symlinkCount,
+                  )}
                 </span>
               ) : null}
             </div>
@@ -220,8 +215,11 @@ export function FileBrowser({ imageId }: { imageId: string }): JSX.Element {
                         <span className="fsb-mode">{e.modeString}</span>
                         <span className="fsb-name">
                           <span>{e.name}</span>
+                          {/* `setuid` is the POSIX bit's own name, not a word. */}
                           {e.setuid ? <span className="badge badge-crit">setuid</span> : null}
-                          {e.symlinkEscapes ? <span className="badge badge-warn">leaves extraction</span> : null}
+                          {e.symlinkEscapes ? (
+                            <span className="badge badge-warn">{t.files.browser.symlinkEscapes}</span>
+                          ) : null}
                           {e.symlinkTarget ? <span className="fsb-link">&rarr; {e.symlinkTarget}</span> : null}
                         </span>
                         <span className="fsb-size">{e.type === 'file' ? fmtBytes(e.size) : ''}</span>
@@ -268,17 +266,18 @@ function FileViewer({
   onPreferHex: (hex: boolean) => void;
   onSeek: (offset: number) => void;
 }): JSX.Element {
+  const t = useMessages();
+
   if (!selected) {
     return (
       <div className="fsb-pane">
         <div className="fsb-pane-head">
-          <span className="eyebrow">Viewer</span>
+          <span className="eyebrow">{t.files.viewer.heading}</span>
         </div>
         <div className="empty" style={{ padding: '36px 24px' }}>
-          <div className="empty-title">Pick a file</div>
+          <div className="empty-title">{t.files.viewer.pickTitle}</div>
           <p className="empty-body">
-            Text and binary are decided from the bytes, not from the extension — the mistake this panel exists to
-            prevent was a <span className="mono">.pem</span> that turned out to hold a public key.
+            {t.files.viewer.pickBodyBefore} <span className="mono">.pem</span> {t.files.viewer.pickBodyAfter}
           </p>
         </div>
       </div>
@@ -289,7 +288,7 @@ function FileViewer({
     return (
       <div className="fsb-pane">
         <div className="fsb-pane-head">
-          <span className="eyebrow">Refused · {read.refusal.rule}</span>
+          <span className="eyebrow">{t.files.browser.refusedEyebrow(read.refusal.rule)}</span>
         </div>
         <div className="fsb-view">
           <p style={{ margin: 0, color: 'var(--text-dim)', fontSize: '0.8125rem', lineHeight: 1.55 }}>
@@ -305,7 +304,7 @@ function FileViewer({
     return (
       <div className="fsb-pane">
         <div className="fsb-pane-head">
-          <span className="eyebrow">Viewer</span>
+          <span className="eyebrow">{t.files.viewer.heading}</span>
         </div>
         <div className="fsb-view">
           <div className="skeleton" style={{ height: 120 }} />
@@ -317,10 +316,10 @@ function FileViewer({
   const end = r.offset + r.bytesRead;
   const headline =
     r.size === 0
-      ? 'Empty file — 0 bytes on disk.'
+      ? t.files.viewer.empty
       : r.truncated
-        ? `Showing bytes ${r.offset}–${end} of ${r.size}.`
-        : `Whole file — all ${r.size} bytes.`;
+        ? t.files.viewer.window(r.offset, end, r.size)
+        : t.files.viewer.whole(r.size);
 
   return (
     <div className="fsb-pane">
@@ -332,10 +331,11 @@ function FileViewer({
           {r.path}
         </span>
         {/* biome-ignore lint/a11y/useSemanticElements: a segmented button group, matching the shell's theme toggle. */}
-        <div className="segmented" role="group" aria-label="View">
+        <div className="segmented" role="group" aria-label={t.files.viewer.viewLabel}>
           <button type="button" className={preferHex ? '' : 'active'} onClick={() => onPreferHex(false)}>
-            Text
+            {t.files.viewer.text}
           </button>
+          {/* `Hex` names the radix, so it reads the same in either language. */}
           <button type="button" className={preferHex ? 'active' : ''} onClick={() => onPreferHex(true)}>
             Hex
           </button>
@@ -371,10 +371,10 @@ function FileViewer({
             disabled={r.offset === 0}
             onClick={() => onSeek(Math.max(0, r.offset - r.bytesRead))}
           >
-            Previous
+            {t.files.viewer.previous}
           </button>
           <button type="button" className="btn btn-sm" disabled={end >= r.size} onClick={() => onSeek(end)}>
-            Next
+            {t.files.viewer.next}
           </button>
           <span className="hint">{r.claim}</span>
         </div>

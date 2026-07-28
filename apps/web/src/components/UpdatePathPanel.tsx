@@ -30,9 +30,14 @@
  *
  * Every kind of nothing gets its own sentence — nobody ran the provider, it ran and found no updater, it could not
  * run at all — because this codebase has already shipped the conflation of the first with the second once.
+ *
+ * Paths, sonames, `source` / `.` / `include`, `ucert` and the reasons the provider recorded are identifiers or
+ * recorded evidence and render in `mono` exactly as stored — which is why several sentences arrive from the
+ * catalogue in pieces, one run of prose per side of the identifier (the `updatepath` namespace).
  */
 import { useEffect, useState } from 'react';
 import { type SourcedEvidence, type UnresolvedSource, type UpdatePathResult, type UpdaterCandidate, api } from '../api';
+import { useMessages } from '../i18n';
 
 /**
  * Which of the several different nothings this image is in. Pure and exported: "nobody asked" must never render as
@@ -112,39 +117,37 @@ function ItemRow({
 
 /** One file reached through `source`, printed under the file the lines are IN — never under the one that reads it. */
 function SourcedBlock({ s }: { s: SourcedEvidence }): JSX.Element {
+  const t = useMessages();
   const via = Array.isArray(s.via) ? s.via.filter((v): v is string => typeof v === 'string') : [];
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ fontSize: 12.5 }}>
         <span className="mono" style={{ color: 'var(--text)' }}>
-          {s.file ?? '(the file was not recorded)'}
+          {s.file ?? t.updatepath.chain.noFile}
         </span>{' '}
-        <span className="hint">— the file these lines are physically in</span>
+        <span className="hint">{t.updatepath.chain.physicallyIn}</span>
       </div>
       <div className="hint" style={{ fontSize: 11.5 }}>
         {via.length > 0 ? (
           <>
-            reached: <span className="mono">{via.join(' → ')}</span>
+            {t.updatepath.chain.reached} <span className="mono">{via.join(' → ')}</span>
           </>
         ) : (
-          'the chain that reached it was not recorded on this result'
+          t.updatepath.chain.notRecorded
         )}
       </div>
-      <ItemRow label="verifies" items={s.verifyCommands} />
-      <ItemRow label="authenticates origin" items={s.signatureCommands} />
-      <ItemRow
-        label="invokes, but the binary is absent from the rootfs"
-        items={s.missingVerifiers}
-        tone="var(--warn)"
-      />
-      <ItemRow label="writes flash" items={s.flashWrites} />
-      <ItemRow label="rollback markers" items={s.rollbackMarkers} />
+      <ItemRow label={t.updatepath.row.verifies} items={s.verifyCommands} />
+      <ItemRow label={t.updatepath.row.signatureCommands} items={s.signatureCommands} />
+      <ItemRow label={t.updatepath.row.missingVerifiers} items={s.missingVerifiers} tone="var(--warn)" />
+      <ItemRow label={t.updatepath.row.flashWrites} items={s.flashWrites} />
+      <ItemRow label={t.updatepath.row.rollbackMarkers} items={s.rollbackMarkers} />
     </div>
   );
 }
 
 /** The whole source-chain record for one candidate: what was credited, what was not resolved, what was not followed. */
 function SourceChain({ chain, path }: { chain: SourceChainView; path: string }): JSX.Element {
+  const t = useMessages();
   return (
     <div
       style={{
@@ -156,40 +159,39 @@ function SourceChain({ chain, path }: { chain: SourceChainView; path: string }):
         maxWidth: '72ch',
       }}
     >
-      <div className="eyebrow">Source chain</div>
+      <div className="eyebrow">{t.updatepath.chain.heading}</div>
       {chain.sourced.length > 0 ? (
         <>
           <div className="hint">
-            {chain.sourced.length} file{chain.sourced.length === 1 ? '' : 's'} that <span className="mono">{path}</span>{' '}
-            reads with <span className="mono">source</span> / <span className="mono">.</span> /{' '}
-            <span className="mono">include</span> were credited to it. The evidence is listed under the file it lives
-            in, not under <span className="mono">{path}</span>, which contains none of these lines.
+            {t.updatepath.chain.creditedLead(chain.sourced.length)} <span className="mono">{path}</span>{' '}
+            {t.updatepath.chain.creditedReadsWith} <span className="mono">source</span> /{' '}
+            <span className="mono">.</span> / <span className="mono">include</span>{' '}
+            {t.updatepath.chain.creditedTail(chain.sourced.length)} <span className="mono">{path}</span>
+            {t.updatepath.chain.creditedTailAfter}
           </div>
           {chain.sourced.map((s, i) => (
             <SourcedBlock key={`${s.file ?? 'unnamed'}-${i}`} s={s} />
           ))}
+          {/* The caveat sits inside the chain block, beside the credit it qualifies: a caveat a reader has to go
+              and find is a caveat that does not travel. */}
           <div className="hint" style={{ marginTop: 8 }}>
-            A resolved source edge is one static fact: this file names that file where a POSIX shell would read it.
-            Being credited with a sourced verification does <strong>not</strong> prove the check runs — sourcing a file
-            defines its functions, it does not call them, and the call may sit behind a branch, behind a flag nobody
-            sets, or inside a function that returns 0 without verifying anything. No source edge raises a proof state.
+            {t.updatepath.chain.caveatBefore} <strong>{t.updatepath.chain.caveatNot}</strong>{' '}
+            {t.updatepath.chain.caveatAfter}
           </div>
         </>
       ) : null}
 
       {chain.unresolved.length > 0 ? (
         <div style={{ marginTop: 10 }}>
-          <div className="hint">
-            {chain.unresolved.length} directive{chain.unresolved.length === 1 ? '' : 's'} could not be turned into a
-            file. Guessing one would fabricate; dropping it silently would hide that this graph is incomplete.
-          </div>
+          <div className="hint">{t.updatepath.chain.unresolved(chain.unresolved.length)}</div>
           <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
             {chain.unresolved.map((u, i) => (
               <li key={`${u.from ?? '?'}-${u.spec ?? '?'}-${i}`} style={{ fontSize: 12 }}>
                 <span className="mono">
-                  {u.from ?? '(file not recorded)'}: {u.directive ?? '.'} {u.spec ?? '(no operand recorded)'}
+                  {u.from ?? t.updatepath.chain.unresolvedNoFile}: {u.directive ?? '.'}{' '}
+                  {u.spec ?? t.updatepath.chain.unresolvedNoSpec}
                 </span>{' '}
-                <span className="hint">— {u.reason ?? 'no reason was recorded'}</span>
+                <span className="hint">— {u.reason ?? t.updatepath.chain.unresolvedNoReason}</span>
               </li>
             ))}
           </ul>
@@ -198,10 +200,7 @@ function SourceChain({ chain, path }: { chain: SourceChainView; path: string }):
 
       {chain.bounds.length > 0 ? (
         <div style={{ marginTop: 10 }}>
-          <div className="hint">
-            Where following stopped short. A bound is not an answer: anything past it was not looked at, and is absent
-            from what this candidate is credited with rather than cleared by it.
-          </div>
+          <div className="hint">{t.updatepath.chain.bounds}</div>
           <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
             {chain.bounds.map((b, i) => (
               <li key={`${b}-${i}`} style={{ fontSize: 12 }} className="hint">
@@ -216,15 +215,17 @@ function SourceChain({ chain, path }: { chain: SourceChainView; path: string }):
 }
 
 function CandidateBlock({ c }: { c: UpdaterCandidate }): JSX.Element {
+  const t = useMessages();
   const chain = sourceChainOf(c);
-  const path = c.path ?? '(path not recorded)';
+  const path = c.path ?? t.updatepath.candidate.noPath;
   return (
     <div className="panel" style={{ margin: '10px 0 0' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
         <span className="mono" style={{ fontSize: 12.5, color: 'var(--text)' }}>
           {path}
         </span>
-        <span className="badge">{c.kind ?? 'unknown kind'}</span>
+        {/* `kind` and `symbolSource` are values the provider recorded; only the stand-in for a missing one is prose. */}
+        <span className="badge">{c.kind ?? t.updatepath.candidate.unknownKind}</span>
         {c.symbolSource ? <span className="badge mono">{c.symbolSource}</span> : null}
       </div>
       {c.why ? (
@@ -232,21 +233,18 @@ function CandidateBlock({ c }: { c: UpdaterCandidate }): JSX.Element {
           {c.why}
         </div>
       ) : null}
-      <ItemRow label="verifies (its own lines)" items={c.verifyCommands} />
-      <ItemRow label="signature routines" items={c.signatureFns} />
-      <ItemRow label="digest routines" items={c.digestFns} />
-      <ItemRow
-        label="invokes, but the binary is absent from the rootfs"
-        items={c.missingVerifiers}
-        tone="var(--warn)"
-      />
-      <ItemRow label="writes flash" items={c.flashWrites} />
+      <ItemRow label={t.updatepath.row.verifiesOwn} items={c.verifyCommands} />
+      <ItemRow label={t.updatepath.row.signatureFns} items={c.signatureFns} />
+      <ItemRow label={t.updatepath.row.digestFns} items={c.digestFns} />
+      <ItemRow label={t.updatepath.row.missingVerifiers} items={c.missingVerifiers} tone="var(--warn)" />
+      <ItemRow label={t.updatepath.row.flashWrites} items={c.flashWrites} />
       {chain.recorded ? <SourceChain chain={chain} path={path} /> : null}
     </div>
   );
 }
 
 export function UpdatePathPanel({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [result, setResult] = useState<UpdatePathResult | null>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -279,33 +277,26 @@ export function UpdatePathPanel({ imageId }: { imageId: string }): JSX.Element {
 
   return (
     <div className="panel" style={{ marginTop: 16 }}>
-      <div className="panel-title">Update path — what the updater checks, and where that check lives</div>
-      <div className="panel-sub">
-        The files this rootfs would run to install new firmware, the verification each one performs, and — because an
-        entry point routinely delegates its checking to a file it sources — the chain that reached the check.
-      </div>
+      <div className="panel-title">{t.updatepath.title}</div>
+      <div className="panel-sub">{t.updatepath.sub}</div>
 
       {state === 'loading' ? <div className="skeleton" style={{ height: 60, marginTop: 12 }} /> : null}
 
       {state === 'not-run' ? (
         <div className="banner" style={{ marginTop: 12, maxWidth: '72ch' }}>
-          Nobody has run the update-path provider on this image. That is not a statement about the firmware: no updater
-          has been looked for, so nothing here has been cleared. Run <span className="mono">updatepath</span> from Deep
-          analysis above.
+          {t.updatepath.notRun} <span className="mono">updatepath</span> {t.updatepath.notRunFrom}
         </div>
       ) : null}
 
       {state === 'unavailable' ? (
         <div className="banner banner-warn" style={{ marginTop: 12, maxWidth: '72ch' }}>
-          {result?.reason ?? 'The update-path provider could not run on this image.'}
+          {result?.reason ?? t.updatepath.unavailable}
         </div>
       ) : null}
 
       {state === 'no-updaters' ? (
         <div className="banner" style={{ marginTop: 12, maxWidth: '72ch' }}>
-          The provider ran and located no updater candidate. That is a statement about what the walk read, not a verdict
-          that the device has no update path — an updater outside the carved rootfs, in a second partition or past a
-          walk bound was never opened. {result?.reason ?? ''}
+          {t.updatepath.noUpdaters} {result?.reason ?? ''}
         </div>
       ) : null}
 
@@ -318,14 +309,13 @@ export function UpdatePathPanel({ imageId }: { imageId: string }): JSX.Element {
             <div className="hint" style={{ marginTop: 8, maxWidth: '72ch' }}>
               {allFollowed ? (
                 <>
-                  No candidate below sources another file. This run followed <span className="mono">source</span> edges
-                  and found none — an answer about these scripts, not a gap in the analysis.
+                  {t.updatepath.chain.followedNone} <span className="mono">source</span>{' '}
+                  {t.updatepath.chain.followedNoneTail}
                 </>
               ) : (
                 <>
-                  No source chain is recorded on any candidate below. Two readings, and this result cannot tell them
-                  apart: these scripts source nothing, or the result was stored by a build that did not follow{' '}
-                  <span className="mono">source</span> edges at all. Re-run the provider to be sure which.
+                  {t.updatepath.chain.unknownChain} <span className="mono">source</span>{' '}
+                  {t.updatepath.chain.unknownChainTail}
                 </>
               )}
             </div>
@@ -335,9 +325,7 @@ export function UpdatePathPanel({ imageId }: { imageId: string }): JSX.Element {
           ))}
           {result?.droppedUpdaters ? (
             <div className="hint" style={{ marginTop: 10, maxWidth: '72ch' }}>
-              {result.droppedUpdaters} further candidate(s) were dropped by the candidate cap — kept by
-              entry-point/verification/flash evidence, never by directory order — and are absent from the list above
-              rather than cleared by it.
+              {t.updatepath.dropped(result.droppedUpdaters)}
             </div>
           ) : null}
         </>

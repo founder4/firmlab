@@ -19,6 +19,13 @@
  * Notes sit below, deliberately plainer and deliberately deleteable: they are reasoning, not claims, and the
  * asymmetry — a note can be thrown away, an assertion can only be retracted — is the visible form of the
  * difference between the two.
+ *
+ * What translation may not touch: the claim CODES and the severity codes are the values that leave this form and
+ * land in SQLite, so the `<option>` carries the code and only its explanation is localised; the attribution
+ * sentence and the not-a-measurement caveat come from the API precisely so the UI, the report and the MCP payload
+ * cannot word the same row three ways; and the asserted badge reuses the shared `proofState` gloss for the same
+ * reason. The `operator` namespace carries the rest, including the two sentences that must never read as live
+ * claims — the superseded history heading and its note.
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -31,12 +38,14 @@ import {
   type OperatorLedger,
   api,
 } from '../api';
+import { messages, useMessages } from '../i18n';
 
-const CLAIMS: { value: OperatorClaim; label: string }[] = [
-  { value: 'asserted_unverified', label: 'I believe this — nothing here measured it' },
-  { value: 'asserted_from_device', label: 'I observed this on the physical device' },
-  { value: 'asserted_from_external_evidence', label: 'An external source says so (advisory, datasheet)' },
-  { value: 'disputes_finding', label: 'A code-decided finding is wrong' },
+/** The claim codes, in the order the form offers them. The label is a lookup, so the vocabulary lives in one place. */
+const CLAIMS: OperatorClaim[] = [
+  'asserted_unverified',
+  'asserted_from_device',
+  'asserted_from_external_evidence',
+  'disputes_finding',
 ];
 
 const SEVERITIES: Finding['severity'][] = ['info', 'low', 'medium', 'high', 'critical'];
@@ -54,6 +63,7 @@ const SEV_COLOR: Record<string, string> = {
  * row cannot be told apart only by squinting at a label — a reader scanning the table sees a different shape.
  */
 function AssertedBadge({ f }: { f: AssertedFinding }): JSX.Element {
+  const t = useMessages();
   const withdrawn = f.assertion?.status === 'withdrawn';
   const color = withdrawn ? 'var(--text-faint)' : 'var(--trust-agent)';
   return (
@@ -61,7 +71,8 @@ function AssertedBadge({ f }: { f: AssertedFinding }): JSX.Element {
       className="mono"
       style={{ color, border: `1px dashed ${color}`, borderRadius: 4, padding: '1px 6px', fontSize: 10.5 }}
     >
-      {withdrawn ? 'withdrawn' : 'asserted · not measured'}
+      {/* The live label is the SHARED proof-state gloss for `operator_assertion`, not a second wording of it. */}
+      {withdrawn ? t.operator.withdrawnBadge : t.proofState.label.operator_assertion}
     </span>
   );
 }
@@ -80,9 +91,15 @@ export function revisionsOf(a: OperatorAssertion | undefined): AssertionRevision
   return raw.filter((r): r is AssertionRevision => !!r && typeof r === 'object');
 }
 
-/** Pure: an ISO day, or an honest blank — a revision written by an older build may carry no timestamp at all. */
+/**
+ * Pure: an ISO day, or an honest blank — a revision written by an older build may carry no timestamp at all.
+ *
+ * The day is an ISO string in every language (a claim is dated the way it was recorded); only the stand-in for a
+ * date nobody wrote is prose, and that comes from the catalogue via `messages()` — this is a helper, not a
+ * component, and it is called from a render pass that already subscribes to the locale.
+ */
 function day(ms: number | undefined): string {
-  if (typeof ms !== 'number' || !Number.isFinite(ms)) return 'an unrecorded date';
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return messages().operator.unrecordedDate;
   return new Date(ms).toISOString().slice(0, 10);
 }
 
@@ -96,6 +113,7 @@ function day(ms: number | undefined): string {
  * nothing had ever been replaced would be the erasure this ledger exists to refuse.
  */
 function AssertionHistory({ a }: { a: OperatorAssertion | undefined }): JSX.Element | null {
+  const t = useMessages();
   const [open, setOpen] = useState(false);
   const revisions = revisionsOf(a);
   if (!a || (a.amendedAt === undefined && revisions.length === 0)) return null;
@@ -103,13 +121,11 @@ function AssertionHistory({ a }: { a: OperatorAssertion | undefined }): JSX.Elem
   if (revisions.length === 0) {
     return (
       <div className="hint" style={{ marginTop: 4 }}>
-        Amended {day(a.amendedAt)}. No history is readable: this row was amended by a build that overwrote its
-        predecessor rather than appending it, so what stands here is the current claim only.
+        {t.operator.history.noneReadable(day(a.amendedAt))}
       </div>
     );
   }
 
-  const plural = revisions.length === 1 ? 'claim' : 'claims';
   return (
     <div style={{ marginTop: 4 }}>
       <button
@@ -119,7 +135,7 @@ function AssertionHistory({ a }: { a: OperatorAssertion | undefined }): JSX.Elem
         onClick={() => setOpen((v) => !v)}
         style={{ padding: '0 4px' }}
       >
-        {open ? 'Hide history' : `Amended ${day(a.amendedAt)} — show ${revisions.length} superseded ${plural}`}
+        {open ? t.operator.history.hide : t.operator.history.show(day(a.amendedAt), revisions.length)}
       </button>
       {open ? (
         <div
@@ -132,11 +148,8 @@ function AssertionHistory({ a }: { a: OperatorAssertion | undefined }): JSX.Elem
             maxWidth: '72ch',
           }}
         >
-          <div className="eyebrow">History — superseded, no longer claimed</div>
-          <div className="hint">
-            An amendment appends; it never overwrites. Nothing below stands: it is what this author previously stated,
-            kept so a claim cannot be quietly restated as a weaker one.
-          </div>
+          <div className="eyebrow">{t.operator.history.heading}</div>
+          <div className="hint">{t.operator.history.note}</div>
           <ol style={{ margin: '6px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {revisions.map((r, i) => (
               <li key={`${r.supersededAt ?? 'unknown'}-${i}`} style={{ fontSize: 12.5 }}>
@@ -150,18 +163,18 @@ function AssertionHistory({ a }: { a: OperatorAssertion | undefined }): JSX.Elem
                     fontSize: 10.5,
                   }}
                 >
-                  superseded · {r.claim ?? 'claim not recorded'}
+                  {t.operator.history.superseded} · {r.claim ?? t.operator.history.claimNotRecorded}
                 </span>{' '}
                 <span style={{ color: 'var(--text-dim)' }}>
-                  stood from {day(r.from)} to {day(r.supersededAt)}
+                  {t.operator.history.stood(day(r.from), day(r.supersededAt))}
                 </span>
                 {r.title ? <div style={{ marginTop: 2 }}>“{r.title}”</div> : null}
                 {r.disputesFindingId ? (
                   <div className="hint">
-                    contested <span className="mono">{r.disputesFindingId}</span>
+                    {t.operator.history.contested} <span className="mono">{r.disputesFindingId}</span>
                   </div>
                 ) : null}
-                <div className="hint">{r.rationale ?? 'No basis was recorded with this revision.'}</div>
+                <div className="hint">{r.rationale ?? t.operator.history.noBasis}</div>
               </li>
             ))}
           </ol>
@@ -175,14 +188,15 @@ function AssertionTable({
   rows,
   onWithdraw,
 }: { rows: AssertedFinding[]; onWithdraw?: (f: AssertedFinding) => void }): JSX.Element {
+  const t = useMessages();
   return (
     <div className="table-wrap" style={{ marginTop: 10 }}>
       <table className="data">
         <thead>
           <tr>
-            <th>Sev</th>
-            <th>Claim</th>
-            <th>Provenance</th>
+            <th>{t.operator.col.severity}</th>
+            <th>{t.operator.col.claim}</th>
+            <th>{t.operator.col.provenance}</th>
             {onWithdraw ? <th /> : null}
           </tr>
         </thead>
@@ -205,7 +219,7 @@ function AssertionTable({
               {onWithdraw ? (
                 <td style={{ width: '1%' }}>
                   <button type="button" className="btn btn-sm btn-ghost" onClick={() => onWithdraw(f)}>
-                    Withdraw
+                    {t.operator.withdraw}
                   </button>
                 </td>
               ) : null}
@@ -218,6 +232,7 @@ function AssertionTable({
 }
 
 export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [ledger, setLedger] = useState<OperatorLedger | null>(null);
   const [notes, setNotes] = useState<ImageNote[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -271,9 +286,9 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
 
   const withdraw = useCallback(
     async (f: AssertedFinding) => {
-      const reason = window.prompt('Why does this claim no longer stand? (recorded with the retraction)');
+      const reason = window.prompt(t.operator.withdrawPrompt);
       if (!reason?.trim()) return;
-      const who = window.prompt('Who is retracting it?', assertedBy || f.assertion?.assertedBy || '');
+      const who = window.prompt(t.operator.withdrawWho, assertedBy || f.assertion?.assertedBy || '');
       if (!who?.trim()) return;
       setErr(null);
       try {
@@ -283,7 +298,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
         setErr(e instanceof Error ? e.message : String(e));
       }
     },
-    [imageId, assertedBy, load],
+    [imageId, assertedBy, load, t],
   );
 
   const addNote = useCallback(async () => {
@@ -315,31 +330,27 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
   return (
     <>
       <div className="panel">
-        <div className="panel-title">Operator assertions ({ledger?.assertions.length ?? 0})</div>
-        <div className="panel-sub">
-          What a person knows, recorded as such. These carry no proof state, count towards no analysis stage, and are
-          never deleted — only withdrawn, with the reason.
-        </div>
+        <div className="panel-title">{t.operator.assertionsTitle(ledger?.assertions.length ?? 0)}</div>
+        <div className="panel-sub">{t.operator.assertionsSub}</div>
 
         {/* The caveat is served by the API so the UI cannot drift from the report or the MCP payload. */}
         <div className="banner" style={{ marginTop: 12 }}>
-          {ledger?.notAMeasurement ??
-            'An operator assertion is evidence that a person asserted something. It is not a measurement.'}
+          {ledger?.notAMeasurement ?? t.operator.notAMeasurement}
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 12 }}>
           <input
             className="input"
-            placeholder="who is asserting this"
-            aria-label="Who is asserting this"
+            placeholder={t.operator.form.whoPlaceholder}
+            aria-label={t.operator.form.whoLabel}
             value={assertedBy}
             onChange={(e) => setAssertedBy(e.target.value)}
             style={{ flex: '1 1 160px', minWidth: 0 }}
           />
           <input
             className="input"
-            placeholder="the claim, in one line"
-            aria-label="The claim"
+            placeholder={t.operator.form.claimPlaceholder}
+            aria-label={t.operator.form.claimLabel}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             style={{ flex: '2 1 280px', minWidth: 0 }}
@@ -347,20 +358,21 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
           {/* There is no proof-state control here, and there is not meant to be one. */}
           <select
             className="select"
-            aria-label="On what basis"
+            aria-label={t.operator.form.basisLabel}
             value={claim}
             onChange={(e) => setClaim(e.target.value as OperatorClaim)}
             style={{ flex: '1 1 260px', minWidth: 0 }}
           >
             {CLAIMS.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
+              <option key={c} value={c}>
+                {t.operator.claim[c]}
               </option>
             ))}
           </select>
+          {/* The severity CODE is what is submitted and what SQLite stores, so it is what the option shows. */}
           <select
             className="select"
-            aria-label="Asserted severity"
+            aria-label={t.operator.form.severityLabel}
             value={severity}
             onChange={(e) => setSeverity(e.target.value as Finding['severity'])}
             style={{ flex: '0 0 110px' }}
@@ -376,8 +388,8 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
         {claim === 'disputes_finding' ? (
           <input
             className="input mono"
-            placeholder="id of the finding you dispute"
-            aria-label="Disputed finding id"
+            placeholder={t.operator.form.disputesPlaceholder}
+            aria-label={t.operator.form.disputesLabel}
             value={disputes}
             onChange={(e) => setDisputes(e.target.value)}
             style={{ marginTop: 8 }}
@@ -386,8 +398,8 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
 
         <textarea
           className="input"
-          placeholder="on what basis — required, because nobody else can evaluate a claim without it"
-          aria-label="Stated basis"
+          placeholder={t.operator.form.rationalePlaceholder}
+          aria-label={t.operator.form.rationaleLabel}
           value={rationale}
           onChange={(e) => setRationale(e.target.value)}
           style={{ marginTop: 8, height: 72, padding: '8px 10px', resize: 'vertical' }}
@@ -395,13 +407,9 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
 
         <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
           <button type="button" className="btn btn-primary" disabled={busy || !canAdd} onClick={add}>
-            {busy ? 'Recording…' : 'Record assertion'}
+            {busy ? t.operator.form.recording : t.operator.form.record}
           </button>
-          {ledger ? (
-            <span className="hint">
-              {ledger.measuredFindingCount} measured finding(s) on this image, counted separately.
-            </span>
-          ) : null}
+          {ledger ? <span className="hint">{t.operator.measuredCount(ledger.measuredFindingCount)}</span> : null}
         </div>
 
         {err ? (
@@ -414,43 +422,38 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
           <AssertionTable rows={ledger.assertions} onWithdraw={withdraw} />
         ) : (
           <div className="hint" style={{ marginTop: 12 }}>
-            No assertions recorded. Everything in this image's ledger was decided by code.
+            {t.operator.noAssertions}
           </div>
         )}
 
         {ledger && ledger.withdrawn.length > 0 ? (
           <>
             <div className="eyebrow" style={{ marginTop: 16 }}>
-              Withdrawn ({ledger.withdrawn.length})
+              {t.operator.withdrawnHeading(ledger.withdrawn.length)}
             </div>
-            <div className="hint">
-              Kept on purpose. "This was wrong, and here is why" is a more useful record than a gap.
-            </div>
+            <div className="hint">{t.operator.withdrawnNote}</div>
             <AssertionTable rows={ledger.withdrawn} />
           </>
         ) : null}
       </div>
 
       <div className="panel">
-        <div className="panel-title">Working notes ({notes.length})</div>
-        <div className="panel-sub">
-          Reasoning that is not a claim: a hypothesis, a thread to pull next, why you ruled something out. Notes are
-          never counted, never reported, and never rendered as findings.
-        </div>
+        <div className="panel-title">{t.operator.notes.title(notes.length)}</div>
+        <div className="panel-sub">{t.operator.notes.sub}</div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
           <input
             className="input"
-            placeholder="author"
-            aria-label="Note author"
+            placeholder={t.operator.notes.authorPlaceholder}
+            aria-label={t.operator.notes.authorLabel}
             value={noteAuthor}
             onChange={(e) => setNoteAuthor(e.target.value)}
             style={{ flex: '0 1 160px', minWidth: 0 }}
           />
           <textarea
             className="input"
-            placeholder="what you are thinking"
-            aria-label="Note body"
+            placeholder={t.operator.notes.bodyPlaceholder}
+            aria-label={t.operator.notes.bodyLabel}
             value={noteBody}
             onChange={(e) => setNoteBody(e.target.value)}
             style={{ flex: '1 1 320px', minWidth: 0, height: 56, padding: '8px 10px', resize: 'vertical' }}
@@ -461,13 +464,13 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
             disabled={!noteAuthor.trim() || !noteBody.trim()}
             onClick={addNote}
           >
-            Save note
+            {t.operator.notes.save}
           </button>
         </div>
 
         {notes.length === 0 ? (
           <div className="hint" style={{ marginTop: 12 }}>
-            No notes yet.
+            {t.operator.notes.empty}
           </div>
         ) : (
           <div className="table-wrap" style={{ marginTop: 10 }}>
@@ -483,7 +486,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
                     </td>
                     <td style={{ width: '1%' }}>
                       <button type="button" className="btn btn-sm btn-ghost" onClick={() => removeNote(n.id)}>
-                        Delete
+                        {t.common.delete}
                       </button>
                     </td>
                   </tr>

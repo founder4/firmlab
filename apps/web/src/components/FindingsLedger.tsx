@@ -23,28 +23,43 @@
  *
  * The badge and severity vocabulary live here too, because they are what makes an assertion legible as *not* a
  * measurement at a glance, and this is now the only table that shows both kinds of row side by side.
+ *
+ * Localisation stops at the gloss. The proof-state CODE is an identifier that crosses the API and lands in SQLite,
+ * so the dispute annotation prints it verbatim — that is the whole point of the sentence it sits in. What the badge
+ * shows is the shared `proofState` gloss, the same one the operator ledger and the report read, so a row cannot be
+ * worded three ways. Finding titles, rationales and source strings are the record providers wrote when they ran and
+ * are shown as written, in whatever language produced them.
  */
 import { useState } from 'react';
 import type { Finding, FindingProvenance } from '../api';
+import { messages, useMessages } from '../i18n';
 
 /**
  * The ladder, plus the one value that is not on it. `operator_assertion` gets a dashed border and the theme's
  * agent/heuristic trust colour rather than a rung's colour, so an asserted row is distinguishable from a measured
  * one at a glance and not only by reading the label — the ladder's own colours are reserved for code's verdicts.
+ *
+ * The human gloss is deliberately NOT here. It lives in the shared `proofState` namespace beside the sentence
+ * stating what each state does and does not claim, so a label and its meaning cannot drift apart, and so the one
+ * translation of `blocked_by_*` that must never read as "clean" has exactly one home.
  */
-export const PROOF_STATE_META: Record<FindingProvenance, { label: string; color: string; asserted?: boolean }> = {
-  confirmed_full_system: { label: 'confirmed (full-system)', color: 'var(--ok)' },
-  confirmed_in_emulation: { label: 'confirmed (emulated)', color: 'var(--ok)' },
-  static_confirmed: { label: 'static-confirmed', color: 'var(--info)' },
-  needs_runtime_reproduction: { label: 'needs reproduction', color: 'var(--sev-medium)' },
-  blocked_by_platform: { label: 'blocked (platform)', color: 'var(--text-dim)' },
-  blocked_by_security: { label: 'blocked (control)', color: 'var(--text-dim)' },
-  false_positive: { label: 'false positive', color: 'var(--text-dim)' },
-  operator_assertion: { label: 'asserted · not measured', color: 'var(--trust-agent)', asserted: true },
+export const PROOF_STATE_META: Record<FindingProvenance, { color: string; asserted?: boolean }> = {
+  confirmed_full_system: { color: 'var(--ok)' },
+  confirmed_in_emulation: { color: 'var(--ok)' },
+  static_confirmed: { color: 'var(--info)' },
+  needs_runtime_reproduction: { color: 'var(--sev-medium)' },
+  blocked_by_platform: { color: 'var(--text-dim)' },
+  blocked_by_security: { color: 'var(--text-dim)' },
+  false_positive: { color: 'var(--text-dim)' },
+  operator_assertion: { color: 'var(--trust-agent)', asserted: true },
 };
 
 export function ProofStateBadge({ state }: { state: FindingProvenance }): JSX.Element {
-  const m = PROOF_STATE_META[state] ?? { label: state, color: 'var(--text-dim)' };
+  const t = useMessages();
+  const m = PROOF_STATE_META[state] ?? { color: 'var(--text-dim)' };
+  // A state the catalogue does not know falls back to the CODE, never to a blank: an unglossed identifier is still
+  // the truth about the row, and an empty badge would quietly drop it.
+  const label = t.proofState.label[state] ?? state;
   return (
     <span
       className="mono"
@@ -56,7 +71,7 @@ export function ProofStateBadge({ state }: { state: FindingProvenance }): JSX.El
         fontSize: 10.5,
       }}
     >
-      {m.label}
+      {label}
     </span>
   );
 }
@@ -88,17 +103,23 @@ function bySeverityThenName(a: Finding, b: Finding): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** Pure: an ISO day, the granularity every operator surface dates a claim to. */
+/**
+ * Pure: an ISO day, the granularity every operator surface dates a claim to.
+ *
+ * The date itself is an ISO string in both languages — a claim is dated the way it was recorded — but the sentence
+ * standing in for a missing one is prose, so it comes from the catalogue. `messages()` rather than a hook because
+ * this is a helper, not a component; it is called from a render pass that already subscribes to the locale.
+ */
 export function assertionDay(ms: number | undefined): string {
-  if (typeof ms !== 'number' || !Number.isFinite(ms)) return 'an unrecorded date';
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return messages().findings.unrecordedDate;
   return new Date(ms).toISOString().slice(0, 10);
 }
 
 /** Pure: how a dispute's author is named, agent-hood included, or an honest blank when the row carries no author. */
 export function disputeAuthor(d: Finding): string {
   const a = d.assertion;
-  if (!a) return 'an unrecorded author';
-  return a.authorKind === 'agent' ? `${a.assertedBy} (agent)` : a.assertedBy;
+  if (!a) return messages().findings.unrecordedAuthor;
+  return a.authorKind === 'agent' ? `${a.assertedBy}${messages().findings.agentSuffix}` : a.assertedBy;
 }
 
 /**
@@ -169,13 +190,9 @@ export function selectLedgerRows(
   const rows = [...contested, ...rest.slice(0, room)].sort(bySeverityThenName);
   const omitted = sorted.length - rows.length;
   if (omitted === 0) return { rows, omitted: 0, rule: null };
-  const rule = [
-    `Showing ${rows.length} of ${sorted.length}.`,
-    'Rows are ordered by severity (highest first, then proof state and title) and the',
-    `${omitted} lowest-ranked are omitted — the cut is by that rule, never by the order the rows were written.`,
-    'Every contested row is shown regardless of the cap.',
-  ].join(' ');
-  return { rows, omitted, rule };
+  // The sentence travels with the selection rather than being assembled at the render site: a bound that states
+  // what it dropped is part of the answer, and keeping the two together is what lets a test hold this to it.
+  return { rows, omitted, rule: messages().findings.cutRule(rows.length, sorted.length, omitted) };
 }
 
 /**
@@ -183,6 +200,7 @@ export function selectLedgerRows(
  * reader has to go and find — that the proof state beside it is untouched.
  */
 function DisputeNote({ target, disputes }: { target: Finding; disputes: readonly Finding[] }): JSX.Element {
+  const t = useMessages();
   return (
     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
       {disputes.map((d) => (
@@ -197,15 +215,16 @@ function DisputeNote({ target, disputes }: { target: Finding; disputes: readonly
           }}
         >
           <div style={{ fontSize: 12 }}>
-            <strong style={{ color: 'var(--trust-agent)' }}>Contested by an operator</strong> — {disputeAuthor(d)}{' '}
-            asserts on {assertionDay(d.assertion?.assertedAt)} that this finding is wrong: “{d.title}”.
+            <strong style={{ color: 'var(--trust-agent)' }}>{t.findings.dispute.heading}</strong> —{' '}
+            {t.findings.dispute.claim(disputeAuthor(d), assertionDay(d.assertion?.assertedAt), d.title)}
             {d.rationale ? ` ${d.rationale}` : ''}
           </div>
+          {/* One block, never two: the id and the proof-state code are printed verbatim between the runs of prose,
+              and the half saying the state is untouched cannot be separated from the half naming the contest. */}
           <div className="hint" style={{ marginTop: 4 }}>
-            Recorded as operator assertion <span className="mono">{d.id}</span>, and listed in full in the operator
-            ledger. This is testimony about a measurement, not a measurement: the proof state of this row is still{' '}
-            <span className="mono">{target.proofState}</span>, decided by code from the evidence, and the dispute
-            neither changes it, downgrades it nor removes the row. Both stand; a reader weighs them.
+            {t.findings.dispute.recordedAs} <span className="mono">{d.id}</span>
+            {t.findings.dispute.stillStates} <span className="mono">{target.proofState}</span>
+            {t.findings.dispute.stands}
           </div>
         </div>
       ))}
@@ -215,19 +234,17 @@ function DisputeNote({ target, disputes }: { target: Finding; disputes: readonly
 
 /** The disputes that name a row this ledger no longer holds — surfaced, because dropping one deletes a claim. */
 function DanglingDisputeNote({ dangling }: { dangling: readonly Finding[] }): JSX.Element {
+  const t = useMessages();
   return (
     <div className="banner banner-warn" style={{ marginTop: 10 }}>
       {/* 72ch, like `.panel-sub`: the prose that carries this screen's refusals is the prose most likely to be
           skipped, and at full panel width it runs past 150 characters a line. */}
-      <div style={{ maxWidth: '72ch' }}>
-        {dangling.length} recorded dispute{dangling.length === 1 ? '' : 's'} name{dangling.length === 1 ? 's' : ''} a
-        finding that is not in this ledger. Re-running a provider replaces its rows with new ids, so a dispute can
-        outlive the row it was recorded against: the claim is kept, and what it pointed at cannot be annotated here.
-      </div>
+      <div style={{ maxWidth: '72ch' }}>{t.findings.dangling.lead(dangling.length)}</div>
       <ul style={{ margin: '6px 0 0', paddingLeft: 18, maxWidth: '72ch' }}>
         {dangling.map((d) => (
           <li key={d.id} style={{ fontSize: 12 }}>
-            {disputeAuthor(d)} contests <span className="mono">{d.assertion?.disputesFindingId}</span> — “{d.title}”
+            {t.findings.dangling.contests(disputeAuthor(d))}{' '}
+            <span className="mono">{d.assertion?.disputesFindingId}</span> {t.findings.dangling.quoted(d.title)}
             {d.rationale ? `. ${d.rationale}` : ''}
           </li>
         ))}
@@ -242,6 +259,7 @@ function DanglingDisputeNote({ dangling }: { dangling: readonly Finding[] }): JS
  * claim that produces it is an asserted one.
  */
 export function FindingsLedger({ findings }: { findings: readonly Finding[] }): JSX.Element {
+  const t = useMessages();
   const [showAll, setShowAll] = useState(false);
   const disputesByTarget = indexDisputes(findings);
   const dangling = danglingDisputes(findings);
@@ -252,36 +270,24 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
 
   return (
     <div className="panel">
-      <div className="panel-title">Findings ({findings.length})</div>
+      <div className="panel-title">{t.findings.title(findings.length)}</div>
       <div className="panel-sub">
-        Each carries an explicit proof state — not just what was found, but how much it is proven.
-        {assertedCount > 0 ? (
-          <>
-            {' '}
-            {assertedCount} of these {assertedCount === 1 ? 'was' : 'were'} asserted by a person rather than measured;
-            those rows name their author and count towards no analysis stage.
-          </>
-        ) : null}
-        {disputesByTarget.size > 0 ? (
-          <>
-            {' '}
-            {disputesByTarget.size} row{disputesByTarget.size === 1 ? ' is' : 's are'} contested by an operator and
-            annotated in place — the annotation records the disagreement and changes nothing code decided.
-          </>
-        ) : null}
+        {t.findings.sub}
+        {assertedCount > 0 ? <> {t.findings.asserted(assertedCount)}</> : null}
+        {disputesByTarget.size > 0 ? <> {t.findings.contested(disputesByTarget.size)}</> : null}
       </div>
 
       {dangling.length > 0 ? <DanglingDisputeNote dangling={dangling} /> : null}
 
       {view.rows.length === 0 ? (
-        <div className="hint">No findings yet. Run extraction, SBOM and the deep scans to populate the ledger.</div>
+        <div className="hint">{t.findings.empty}</div>
       ) : (
         <>
           {view.rule ? (
             <div className="hint" style={{ marginTop: 10, maxWidth: '72ch' }}>
               {view.rule}{' '}
               <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowAll(true)}>
-                Show all {findings.length}
+                {t.findings.showAllCount(findings.length)}
               </button>
             </div>
           ) : null}
@@ -289,10 +295,10 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
             <table className="data">
               <thead>
                 <tr>
-                  <th>Sev</th>
-                  <th>Finding</th>
-                  <th>Source</th>
-                  <th>Proof state</th>
+                  <th>{t.findings.col.severity}</th>
+                  <th>{t.findings.col.finding}</th>
+                  <th>{t.findings.col.source}</th>
+                  <th>{t.findings.col.proofState}</th>
                 </tr>
               </thead>
               <tbody>
@@ -310,9 +316,9 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                         {/* An assertion never appears here without its author on the same line. */}
                         {f.assertion ? (
                           <div className="hint">
-                            asserted by {f.assertion.assertedBy}
-                            {f.assertion.authorKind === 'agent' ? ' (agent)' : ''}
-                            {f.assertion.status === 'withdrawn' ? ' — WITHDRAWN' : ''}
+                            {t.findings.assertedBy(f.assertion.assertedBy)}
+                            {f.assertion.authorKind === 'agent' ? t.findings.agentSuffix : ''}
+                            {f.assertion.status === 'withdrawn' ? t.findings.withdrawnSuffix : ''}
                           </div>
                         ) : null}
                         {disputes.length ? <DisputeNote target={f} disputes={disputes} /> : null}

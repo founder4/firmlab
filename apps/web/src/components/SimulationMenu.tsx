@@ -2,6 +2,16 @@
  * Simulation menu — the emulation control surface. Shows the arch/class-aware ranked recipes (user-mode QEMU,
  * full-system QEMU, Renode), whether each is runnable in this deployment, and lets the user launch a user-mode
  * proof against the extracted rootfs, streaming the job log/result.
+ *
+ * Two sentences carry the panel and live in the `simulation` namespace so they survive translation. A rung that
+ * cannot run says WHY — the badge is not enough, because a rung with no button reads as "not applicable to this
+ * firmware", which is a different and false claim, so `simulation.requires` names the tools this deployment would
+ * have to install. And `simulation.sandboxCaveat`: a rung that boots proves the emulator accepted the image and
+ * proves nothing whatsoever about the board.
+ *
+ * The recipe's own title, description, command and notes are composed by the API when it plans the run, and the
+ * modes (`user-qemu`, `system-qemu`, `renode`, `uefi-chipsec`), tool names, job ids and proof states are
+ * identifiers. None of them is translated here.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -13,6 +23,7 @@ import {
   type RenodeResult,
   api,
 } from '../api';
+import { useMessages } from '../i18n';
 import { WebProbePanel } from './WebProbePanel';
 
 const MODE_ICON: Record<string, string> = {
@@ -27,6 +38,7 @@ const MODE_ICON: Record<string, string> = {
 const NEEDS_BINARY = new Set(['user-qemu', 'chroot-qemu']);
 
 export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [menu, setMenu] = useState<EmulationMenu | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [binary, setBinary] = useState('');
@@ -106,7 +118,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
     }
   }, [imageId, load, pollJob]);
 
-  if (!menu) return <div className="empty">Loading emulation plan…</div>;
+  if (!menu) return <div className="empty">{t.simulation.loading}</div>;
 
   const result = job?.result as
     | ({ command?: string; stdout?: string; stderr?: string; timedOut?: boolean } & Partial<RenodeResult> &
@@ -122,9 +134,9 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
           className="banner banner-warn"
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
         >
-          <span>User-mode emulation needs an extracted rootfs. Run extraction first (requires binwalk).</span>
+          <span>{t.simulation.needsRootfs}</span>
           <button className="btn btn-sm" disabled={busy} onClick={extractFirst}>
-            Extract now
+            {t.simulation.extractNow}
           </button>
         </div>
       )}
@@ -140,7 +152,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
               <span style={{ fontSize: 16 }}>{MODE_ICON[r.mode]}</span>
               <strong style={{ fontSize: 13 }}>{r.title}</strong>
               <span style={{ marginLeft: 'auto' }} className={`badge ${r.runnable ? 'badge-ok' : ''}`}>
-                {r.runnable ? 'runnable' : 'needs tools'}
+                {r.runnable ? t.simulation.runnable : t.simulation.needsTools}
               </span>
             </div>
             <div className="hint" style={{ marginBottom: 10 }}>
@@ -166,19 +178,28 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                 ℹ {r.notes}
               </div>
             )}
+            {/* A rung with no button must not read as "not applicable to this firmware". The tool names are what
+                would make it runnable, so they are named rather than left to the badge. */}
+            {!r.runnable && r.requires.length > 0 && (
+              <div className="hint" style={{ marginTop: 8 }}>
+                {t.simulation.requires(r.requires.join(', '))}
+              </div>
+            )}
             {r.runnable && (
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 {NEEDS_BINARY.has(r.mode) &&
                   (binaries.length > 0 ? (
                     <select
                       className="select mono"
-                      aria-label="Target binary"
+                      aria-label={t.simulation.targetBinary}
                       value={binary}
                       onChange={(e) => setBinary(e.target.value)}
                       style={{ flex: 1, fontSize: 12 }}
                     >
                       <option value="">
-                        {menu.suggestedBinary ? `suggested: ${menu.suggestedBinary}` : 'Select a binary…'}
+                        {menu.suggestedBinary
+                          ? t.simulation.suggested(menu.suggestedBinary)
+                          : t.simulation.selectBinary}
                       </option>
                       {binaries.map((b) => (
                         <option key={b.path} value={b.path}>
@@ -191,7 +212,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                   ) : (
                     <input
                       className="input mono"
-                      placeholder={menu.suggestedBinary ?? 'run Extraction to list binaries'}
+                      placeholder={menu.suggestedBinary ?? t.simulation.binaryPlaceholder}
                       value={binary}
                       onChange={(e) => setBinary(e.target.value)}
                       style={{ flex: 1, fontSize: 12 }}
@@ -206,17 +227,22 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                   {busy ? (
                     <span className="spinner" />
                   ) : r.mode === 'renode' ? (
-                    'Boot under Renode'
+                    t.simulation.bootRenode
                   ) : r.mode === 'uefi-chipsec' ? (
-                    'Decode & scan'
+                    t.simulation.decodeScan
                   ) : (
-                    'Run proof'
+                    t.simulation.runProof
                   )}
                 </button>
               </div>
             )}
           </div>
         ))}
+      </div>
+
+      {/* The ceiling of everything above, stated where the buttons are rather than only in a finding's proof state. */}
+      <div className="hint" style={{ marginTop: 12 }}>
+        {t.simulation.sandboxCaveat}
       </div>
 
       {error && (
@@ -228,7 +254,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
       {job && (
         <div className="panel" style={{ marginTop: 16 }}>
           <div className="panel-title">
-            Job {job.id}{' '}
+            {t.simulation.job(job.id)}{' '}
             <span
               className={`badge ${job.status === 'done' ? 'badge-ok' : job.status === 'error' ? 'badge-high' : ''}`}
             >
@@ -247,7 +273,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
             <div style={{ marginTop: 8 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span className={`badge ${result.booted ? 'badge-ok' : 'badge-medium'}`}>
-                  {result.booted ? 'booted' : 'no UART output'}
+                  {result.booted ? t.simulation.booted : t.simulation.noUart}
                 </span>
                 <span className="badge">{result.proofState}</span>
                 {result.platform && (
@@ -280,9 +306,11 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
             <div style={{ marginTop: 8 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span className={`badge ${result.moduleCount ? 'badge-ok' : 'badge-medium'}`}>
-                  {result.moduleCount ? `${result.moduleCount} modules` : 'no UEFI volume'}
+                  {result.moduleCount ? t.simulation.moduleCount(result.moduleCount) : t.simulation.noUefiVolume}
                 </span>
-                {Boolean(result.volumes) && <span className="badge">{result.volumes} FV</span>}
+                {Boolean(result.volumes) && (
+                  <span className="badge">{t.simulation.volumeCount(result.volumes ?? 0)}</span>
+                )}
                 <span className="badge">{result.proofState}</span>
               </div>
               <div className="hint" style={{ marginTop: 6 }}>
@@ -292,14 +320,14 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                 <div className="mono" style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>
                   {Object.entries(result.byType)
                     .sort((a, b) => b[1] - a[1])
-                    .map(([t, n]) => `${t}: ${n}`)
+                    .map(([type, n]) => `${type}: ${n}`)
                     .join('  ·  ')}
                 </div>
               )}
               {result.secureBoot && (
                 <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                   <span className="hint" style={{ fontSize: 11 }}>
-                    Secure Boot:
+                    {t.simulation.secureBoot}
                   </span>
                   <span
                     className={`badge ${result.secureBoot.secureBoot === 'enabled' ? 'badge-ok' : result.secureBoot.secureBoot === 'disabled' ? 'badge-high' : ''}`}
@@ -308,14 +336,14 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                   </span>
                   {result.secureBoot.setupMode !== 'unknown' && (
                     <span className={`badge ${result.secureBoot.setupMode === 'setup' ? 'badge-high' : ''}`}>
-                      {result.secureBoot.setupMode} mode
+                      {t.simulation.setupMode(result.secureBoot.setupMode)}
                     </span>
                   )}
                   {result.secureBoot.testKey && (
-                    <span className="badge badge-high">test key: {result.secureBoot.testKey}</span>
+                    <span className="badge badge-high">{t.simulation.testKey(result.secureBoot.testKey)}</span>
                   )}
                   <span className="hint mono" style={{ fontSize: 10.5 }}>
-                    {result.secureBoot.variableCount} NVRAM var(s)
+                    {t.simulation.nvramVars(result.secureBoot.variableCount)}
                   </span>
                 </div>
               )}
@@ -340,6 +368,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                         {f.severity}
                       </span>
                       <div>
+                        {/* The finding's own words, as the provider recorded them — never re-worded here. */}
                         <div style={{ fontSize: 12.5 }}>{f.title}</div>
                         <div className="hint" style={{ marginTop: 2 }}>
                           {f.rationale}
@@ -353,7 +382,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
           )}
           {result?.command && !isRenode && !isChipsec && (
             <>
-              {result.timedOut && <div className="badge badge-medium">timed out (likely a long-running daemon)</div>}
+              {result.timedOut && <div className="badge badge-medium">{t.simulation.timedOut}</div>}
               {result.stdout && (
                 <pre
                   className="mono"

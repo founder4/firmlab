@@ -3,9 +3,22 @@
  * (toggle sections, reorder, fill the cover), see a live paper preview on the right, and export it as a
  * self-contained HTML file, Markdown, or PDF (via the browser's print-to-PDF). One report model feeds all three
  * renderers, so the preview and the exports never drift.
+ *
+ * **Its strings are the deliverable, not decoration.** This document leaves the workbench: nobody who reads the
+ * exported PDF can check a claim against the panel it came from. So the scaffolding is localised through the
+ * `report` namespace and the honesty sentences are carried there by name — that every finding has an explicit
+ * proof state and an unrun stage is reported as such rather than implied clean, that operator assertions count
+ * towards neither the total nor any stage, and that zero findings is not the same as clean.
+ *
+ * The proof-state gloss and the section names that also name a screen are read from the SHARED `proofState` and
+ * `sections` namespaces. This file used to keep private `PROOF_LABEL` and `SECTION_LABEL` maps that duplicated
+ * them, which is two copies of one meaning free to drift — and the copy nobody edits is the one that ships.
+ * `section.findings` stays local because `sections.findings` names the SCREEN ("Findings & report"), which is
+ * self-referential as a heading inside the report itself.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { type Finding, type ImageSummary, type Job, type SbomResult, type StaticAnalysis, api, fmtBytes } from '../api';
+import { type Messages, messages, useMessages } from '../i18n';
 
 type Block =
   | { kind: 'p'; text: string }
@@ -26,15 +39,6 @@ const SEV_HEX: Record<string, string> = {
   low: '#2c72af',
   info: '#67737f',
 };
-const PROOF_LABEL: Record<string, string> = {
-  confirmed_full_system: 'confirmed (full-system)',
-  confirmed_in_emulation: 'confirmed (emulated)',
-  static_confirmed: 'static-confirmed',
-  needs_runtime_reproduction: 'needs reproduction',
-  blocked_by_platform: 'blocked (platform)',
-  blocked_by_security: 'blocked (control)',
-  false_positive: 'false positive',
-};
 
 const ALL_SECTIONS = [
   'summary',
@@ -46,17 +50,39 @@ const ALL_SECTIONS = [
   'sbom',
   'appendix',
 ] as const;
-const SECTION_LABEL = {
-  summary: 'Executive summary',
-  identity: 'Firmware identity',
-  entropy: 'Entropy profile',
-  structure: 'Structure map',
-  coverage: 'Analysis coverage',
-  findings: 'Findings',
-  sbom: 'Software bill of materials',
-  appendix: 'Appendix — artefacts',
-} as const;
-const labelOf = (id: string): string => (SECTION_LABEL as Record<string, string>)[id] ?? id;
+
+/** One place the eight headings are named, drawing from `sections` wherever that namespace already holds the word. */
+const labelOf = (id: string, t: Messages): string => {
+  switch (id) {
+    case 'summary':
+      return t.report.section.summary;
+    case 'identity':
+      return t.report.section.identity;
+    case 'entropy':
+      return t.sections.entropy;
+    case 'structure':
+      return t.sections.structure;
+    case 'coverage':
+      return t.report.section.coverage;
+    case 'findings':
+      return t.report.section.findings;
+    case 'sbom':
+      return t.sections.sbom;
+    case 'appendix':
+      return t.report.section.appendix;
+    default:
+      return id;
+  }
+};
+
+/** The findings table's column headers, shared by the preview and both exporters so the three cannot disagree. */
+const findingsHead = (t: Messages): string[] => [
+  t.report.findings.severity,
+  t.report.findings.finding,
+  t.report.findings.offset,
+  t.report.findings.source,
+  t.report.findings.proof,
+];
 
 const hex = (n: number): string => `0x${n.toString(16)}`;
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -70,6 +96,7 @@ export function ReportBuilder({
   image: ImageSummary;
   analysis: StaticAnalysis | null;
 }): JSX.Element {
+  const t = useMessages();
   const [findings, setFindings] = useState<Finding[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [sbom, setSbom] = useState<SbomResult | null>(null);
@@ -77,9 +104,10 @@ export function ReportBuilder({
   const [enabled, setEnabled] = useState<Record<string, boolean>>(
     Object.fromEntries(ALL_SECTIONS.map((s) => [s, true])),
   );
-  const [title, setTitle] = useState(`${image.filename} — Firmware Security Assessment`);
+  // Seeded once. A later language switch must not overwrite a cover the operator has already typed into.
+  const [title, setTitle] = useState(() => t.report.defaultTitle(image.filename));
   const [preparedBy, setPreparedBy] = useState('');
-  const [classification, setClassification] = useState('Confidential');
+  const [classification, setClassification] = useState(() => t.report.classificationDefault);
 
   useEffect(() => {
     api
@@ -100,9 +128,9 @@ export function ReportBuilder({
 
   // The ledger route serves measured rows and operator assertions in ONE array, separated only by the
   // `operator_assertion` sentinel on `proofState`. Sorting that array into the findings table put a person's claim
-  // in the measured population under a "Proof state" column — printing the sentinel itself, since PROOF_LABEL has
-  // no entry for it — which is the exact interleaving the server-side renderer was built to make impossible. The
-  // two populations are split here, once, and every count below is taken from `measured`.
+  // in the measured population under a "Proof state" column — printing the sentinel itself, since the proof-state
+  // gloss is written for measurements — which is the exact interleaving the server-side renderer was built to make
+  // impossible. The two populations are split here, once, and every count below is taken from `measured`.
   const measured = findings.filter((f) => f.proofState !== 'operator_assertion');
   const asserted = findings.filter((f) => f.proofState === 'operator_assertion');
   const sevCount = (s: string): number => measured.filter((f) => f.severity === s).length;
@@ -110,42 +138,46 @@ export function ReportBuilder({
   const sections = useMemo<Section[]>(() => {
     const idn = image.identity;
     const ent = analysis?.entropy;
+    const unknown = t.common.unknown;
     const sevNote =
-      sevCount('critical') || sevCount('high') ? ` — ${sevCount('critical')} critical, ${sevCount('high')} high` : '';
+      sevCount('critical') || sevCount('high')
+        ? t.report.summary.severityNote(sevCount('critical'), sevCount('high'))
+        : '';
     const build: Record<string, Section> = {
       summary: {
         id: 'summary',
-        title: SECTION_LABEL.summary,
+        title: t.report.section.summary,
         blocks: [
           {
             kind: 'p',
-            // Sentences joined rather than concatenated so each stays on one readable line.
+            // Sentences joined rather than concatenated so each language builds its own and each stays readable.
             text: [
-              `This report covers the static firmware analysis of ${image.filename} (${fmtBytes(image.size)}),`,
-              `classified as ${idn?.firmwareClass ?? 'unknown'} on ${idn?.arch ?? 'unknown'}/${idn?.endianness ?? 'unknown'}.`,
-              `${measured.length} finding${measured.length === 1 ? ' was' : 's were'} recorded${sevNote}.`,
-              'Each finding carries an explicit proof state; a stage that has not run is reported as such rather than implied clean.',
-              ...(asserted.length
-                ? [
-                    `${asserted.length} operator assertion${asserted.length === 1 ? ' is' : 's are'} listed separately below and counted in neither that total nor any stage — FirmLab did not measure them.`,
-                  ]
-                : []),
+              t.report.summary.scope(
+                image.filename,
+                fmtBytes(image.size),
+                idn?.firmwareClass ?? unknown,
+                idn?.arch ?? unknown,
+                idn?.endianness ?? unknown,
+              ),
+              t.report.summary.recorded(measured.length, sevNote),
+              t.report.summary.proofDiscipline,
+              ...(asserted.length ? [t.report.summary.assertionsExcluded(asserted.length)] : []),
             ].join(' '),
           },
         ],
       },
       identity: {
         id: 'identity',
-        title: SECTION_LABEL.identity,
+        title: t.report.section.identity,
         blocks: [
           {
             kind: 'kv',
             rows: [
-              ['Class', idn?.firmwareClass ?? 'unknown'],
-              ['Architecture', `${idn?.arch ?? 'unknown'} / ${idn?.endianness ?? 'unknown'}`],
-              ['Filesystems', idn?.filesystems.join(', ') || '—'],
-              ['Bootloader', idn?.bootloader ?? '—'],
-              ['Vendor / model', [idn?.vendor, idn?.model].filter(Boolean).join(' / ') || '—'],
+              [t.report.identity.firmwareClass, idn?.firmwareClass ?? unknown],
+              [t.report.identity.arch, `${idn?.arch ?? unknown} / ${idn?.endianness ?? unknown}`],
+              [t.report.identity.filesystems, idn?.filesystems.join(', ') || '—'],
+              [t.report.identity.bootloader, idn?.bootloader ?? '—'],
+              [t.report.identity.vendorModel, [idn?.vendor, idn?.model].filter(Boolean).join(' / ') || '—'],
             ],
           },
           ...(idn?.classRationale ? [{ kind: 'p' as const, text: idn.classRationale }] : []),
@@ -153,57 +185,57 @@ export function ReportBuilder({
       },
       entropy: {
         id: 'entropy',
-        title: SECTION_LABEL.entropy,
+        title: t.sections.entropy,
         blocks: ent
           ? [
               {
                 kind: 'kv',
                 rows: [
-                  ['Mean entropy', `${ent.mean.toFixed(2)} bits/byte`],
-                  ['Max entropy', `${ent.max.toFixed(2)} bits/byte`],
-                  ['Likely encrypted', ent.likelyEncrypted ? 'yes' : 'no'],
-                  ['Likely compressed', ent.likelyCompressed ? 'yes' : 'no'],
-                  ['High-entropy regions', String(ent.highEntropyRegions.length)],
+                  [t.report.entropy.mean, t.report.entropy.bitsPerByte(ent.mean.toFixed(2))],
+                  [t.report.entropy.max, t.report.entropy.bitsPerByte(ent.max.toFixed(2))],
+                  [t.report.entropy.likelyEncrypted, ent.likelyEncrypted ? t.common.yes : t.common.no],
+                  [t.report.entropy.likelyCompressed, ent.likelyCompressed ? t.common.yes : t.common.no],
+                  [t.report.entropy.highEntropyRegions, String(ent.highEntropyRegions.length)],
                 ],
               },
             ]
-          : [{ kind: 'p', text: 'No entropy profile available.' }],
+          : [{ kind: 'p', text: t.report.entropy.none }],
       },
       structure: {
         id: 'structure',
-        title: SECTION_LABEL.structure,
+        title: t.sections.structure,
         blocks: analysis?.structure?.length
           ? [
               {
                 kind: 'table',
-                head: ['Range', 'Category', 'Label'],
+                head: [t.report.structure.range, t.report.structure.category, t.report.structure.label],
                 rows: analysis.structure
                   .slice(0, 24)
                   .map((s) => [`${hex(s.start)}–${hex(s.end)}`, s.category, s.label || '—']),
               },
             ]
-          : [{ kind: 'p', text: 'No structural segments carved.' }],
+          : [{ kind: 'p', text: t.report.structure.none }],
       },
       coverage: {
         id: 'coverage',
-        title: SECTION_LABEL.coverage,
+        title: t.report.section.coverage,
         blocks: [
           {
             kind: 'ul',
             items: [
-              `${image.status === 'ready' ? '✓' : '×'} Static analysis`,
-              `${ranKind('extract') ? '✓' : '○'} Extraction (rootfs)`,
-              `${ranKind('sbom') ? '✓' : '○'} SBOM & CVEs`,
-              `${ranKind('gitleaks') ? '✓' : '○'} Deep secret scan`,
-              `${ranKind('decompile') ? '✓' : '○'} Binary triage`,
-              `${jobs.some((j) => j.kind.startsWith('emulate') && j.status === 'done') ? '✓' : '○'} Emulation`,
+              `${image.status === 'ready' ? '✓' : '×'} ${t.report.coverage.staticAnalysis}`,
+              `${ranKind('extract') ? '✓' : '○'} ${t.report.coverage.extraction}`,
+              `${ranKind('sbom') ? '✓' : '○'} ${t.sections.sbom}`,
+              `${ranKind('gitleaks') ? '✓' : '○'} ${t.report.coverage.secrets}`,
+              `${ranKind('decompile') ? '✓' : '○'} ${t.report.coverage.binaries}`,
+              `${jobs.some((j) => j.kind.startsWith('emulate') && j.status === 'done') ? '✓' : '○'} ${t.report.coverage.emulation}`,
             ],
           },
         ],
       },
       findings: {
         id: 'findings',
-        title: `${SECTION_LABEL.findings} (${measured.length})`,
+        title: t.report.findings.heading(t.report.section.findings, measured.length),
         blocks: [
           ...(measured.length
             ? ([
@@ -222,14 +254,12 @@ export function ReportBuilder({
                         title: f.title,
                         offset: typeof off === 'number' ? hex(off) : '—',
                         source: f.source,
-                        proof: PROOF_LABEL[f.proofState] ?? f.proofState,
+                        proof: t.proofState.label[f.proofState],
                       };
                     }),
                 },
               ] as Block[])
-            : ([
-                { kind: 'p', text: 'No findings recorded. Note: zero findings is not the same as clean.' },
-              ] as Block[])),
+            : ([{ kind: 'p', text: t.report.findings.none }] as Block[])),
           // Assertions follow the measured table, never inside it, and carry no proof-state column — there is no
           // proof state to print. The heading says what they are before the reader reaches a single row.
           ...(asserted.length
@@ -237,20 +267,25 @@ export function ReportBuilder({
                 {
                   kind: 'p',
                   text: [
-                    `Operator assertions (${asserted.length}) — asserted, not measured.`,
-                    'A person or an agent recorded these; FirmLab did not compute them.',
-                    'They carry no proof state, count towards no analysis stage, and are excluded from the finding count above.',
+                    t.report.assertions.heading(asserted.length),
+                    t.report.assertions.provenance,
+                    t.report.assertions.excluded,
                   ].join(' '),
                 },
                 {
                   kind: 'table',
-                  head: ['Claim', 'Statement', 'Asserted by', 'Recorded'],
+                  head: [
+                    t.report.assertions.claim,
+                    t.report.assertions.statement,
+                    t.report.assertions.assertedBy,
+                    t.report.assertions.recorded,
+                  ],
                   rows: asserted.map((f) => [
                     f.assertion?.claim ?? 'asserted_unverified',
                     f.title,
                     f.assertion?.assertedBy
-                      ? `${f.assertion.assertedBy}${f.assertion.authorKind === 'agent' ? ' (agent)' : ''}`
-                      : 'unrecorded',
+                      ? `${f.assertion.assertedBy}${f.assertion.authorKind === 'agent' ? t.report.assertions.agentSuffix : ''}`
+                      : t.report.assertions.unrecorded,
                     new Date(f.createdAt).toISOString().slice(0, 10),
                   ]),
                 },
@@ -260,19 +295,20 @@ export function ReportBuilder({
       },
       sbom: {
         id: 'sbom',
-        title: SECTION_LABEL.sbom,
+        title: t.sections.sbom,
         blocks:
           sbom?.available && sbom.packages?.length
             ? [
                 {
                   kind: 'p',
-                  text: `${sbom.packages.length} components inventoried; ${sbom.vulnerabilities?.length ?? 0} known vulnerabilities.`,
+                  text: t.report.sbom.inventory(sbom.packages.length, sbom.vulnerabilities?.length ?? 0),
                 },
                 ...(sbom.vulnerabilities?.length
                   ? [
                       {
                         kind: 'table' as const,
-                        head: ['CVE', 'Severity', 'Component', 'Fixed in'],
+                        // `CVE` is the identifier's own name, not a word to translate.
+                        head: ['CVE', t.report.sbom.severity, t.report.sbom.component, t.report.sbom.fixedIn],
                         rows: sbom.vulnerabilities
                           .slice(0, 40)
                           .map((v) => [v.id, v.severity, `${v.packageName} ${v.packageVersion}`, v.fixedIn ?? '—']),
@@ -280,18 +316,19 @@ export function ReportBuilder({
                     ]
                   : []),
               ]
-            : [{ kind: 'p', text: 'No SBOM generated (needs extraction + syft). Not run.' }],
+            : [{ kind: 'p', text: t.report.sbom.none }],
       },
       appendix: {
         id: 'appendix',
-        title: SECTION_LABEL.appendix,
+        title: t.report.section.appendix,
         blocks: [
           {
             kind: 'kv',
             rows: [
+              // The digest names its own algorithm; only the two labels beside it are prose.
               ['SHA-256', image.sha256],
-              ['Size', `${fmtBytes(image.size)} (${image.size} bytes)`],
-              ['Image id', image.id],
+              [t.report.appendix.size, t.report.appendix.sizeWithBytes(fmtBytes(image.size), image.size)],
+              [t.report.appendix.imageId, image.id],
             ],
           },
         ],
@@ -301,9 +338,15 @@ export function ReportBuilder({
       .filter((id) => enabled[id])
       .map((id) => build[id])
       .filter((s): s is Section => s !== undefined);
-  }, [order, enabled, image, analysis, findings, jobs, sbom, ranKind, sevCount]);
+  }, [order, enabled, image, analysis, findings, jobs, sbom, ranKind, sevCount, t]);
 
-  const coverMeta = [classification, preparedBy && `Prepared by ${preparedBy}`, `${findings.length} findings`]
+  // Counted from `measured`, like every other total in the document: a cover reading "3 findings" over an executive
+  // summary reading "1 finding was recorded" is the same interleaving the table below refuses, moved to the top.
+  const coverMeta = [
+    classification,
+    preparedBy && t.report.coverPreparedBy(preparedBy),
+    t.report.coverFindings(measured.length),
+  ]
     .filter(Boolean)
     .join('  ·  ');
 
@@ -332,24 +375,24 @@ export function ReportBuilder({
     <div className="report-builder">
       <div className="report-config">
         <div className="panel">
-          <div className="panel-title">Report</div>
+          <div className="panel-title">{t.report.panelTitle}</div>
           <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
             <label className="eyebrow" htmlFor="rb-title">
-              Title
+              {t.report.fieldTitle}
             </label>
             <input id="rb-title" className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
             <label className="eyebrow" htmlFor="rb-by">
-              Prepared by
+              {t.report.fieldPreparedBy}
             </label>
             <input
               id="rb-by"
               className="input"
-              placeholder="analyst / team"
+              placeholder={t.report.preparedByPlaceholder}
               value={preparedBy}
               onChange={(e) => setPreparedBy(e.target.value)}
             />
             <label className="eyebrow" htmlFor="rb-cls">
-              Classification
+              {t.report.fieldClassification}
             </label>
             <input
               id="rb-cls"
@@ -360,7 +403,7 @@ export function ReportBuilder({
           </div>
 
           <div className="eyebrow" style={{ marginTop: 16, marginBottom: 4 }}>
-            Sections
+            {t.report.sectionsHeading}
           </div>
           {order.map((id, i) => (
             <div key={id} className={`report-toggle ${enabled[id] ? '' : 'off'}`}>
@@ -371,13 +414,13 @@ export function ReportBuilder({
                 onChange={() => setEnabled((e) => ({ ...e, [id]: !e[id] }))}
               />
               <label className="rt-label" htmlFor={`rb-${id}`}>
-                {labelOf(id)}
+                {labelOf(id, t)}
               </label>
               <button
                 type="button"
                 className="report-move"
                 disabled={i === 0}
-                aria-label="Move up"
+                aria-label={t.report.moveUp}
                 onClick={() => move(id, -1)}
               >
                 ↑
@@ -386,7 +429,7 @@ export function ReportBuilder({
                 type="button"
                 className="report-move"
                 disabled={i === order.length - 1}
-                aria-label="Move down"
+                aria-label={t.report.moveDown}
                 onClick={() => move(id, 1)}
               >
                 ↓
@@ -396,7 +439,7 @@ export function ReportBuilder({
 
           <div style={{ display: 'grid', gap: 8, marginTop: 16 }}>
             <button type="button" className="btn btn-primary btn-sm" onClick={() => window.print()}>
-              Print / Save as PDF
+              {t.report.print}
             </button>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
@@ -438,6 +481,7 @@ export function ReportBuilder({
 }
 
 function PreviewBlock({ block }: { block: Block }): JSX.Element {
+  const t = useMessages();
   switch (block.kind) {
     case 'p':
       return <p>{block.text}</p>;
@@ -488,11 +532,9 @@ function PreviewBlock({ block }: { block: Block }): JSX.Element {
         <table>
           <thead>
             <tr>
-              <th>Severity</th>
-              <th>Finding</th>
-              <th>Offset</th>
-              <th>Source</th>
-              <th>Proof state</th>
+              {findingsHead(t).map((h) => (
+                <th key={h}>{h}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -515,6 +557,9 @@ function PreviewBlock({ block }: { block: Block }): JSX.Element {
 }
 
 // --- exporters (same model → HTML / Markdown) ---
+//
+// These run from a click handler rather than a render, so they read the catalogue through `messages()` instead of
+// the hook. Same store, same locale: the export a reader downloads is in the language they were reading.
 
 function blockToHtml(b: Block): string {
   switch (b.kind) {
@@ -529,7 +574,9 @@ function blockToHtml(b: Block): string {
         .map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`)
         .join('')}</tbody></table>`;
     case 'findings':
-      return `<table><thead><tr><th>Severity</th><th>Finding</th><th>Offset</th><th>Source</th><th>Proof state</th></tr></thead><tbody>${b.rows
+      return `<table><thead><tr>${findingsHead(messages())
+        .map((h) => `<th>${esc(h)}</th>`)
+        .join('')}</tr></thead><tbody>${b.rows
         .map(
           (r) =>
             `<tr><td><span class="sev" style="background:${SEV_HEX[r.sev] ?? '#67737f'}"></span>${esc(r.sev)}</td><td>${esc(r.title)}</td><td class="mono">${esc(r.offset)}</td><td class="mono">${esc(r.source)}</td><td>${esc(r.proof)}</td></tr>`,
@@ -565,10 +612,12 @@ function blockToMd(b: Block): string {
       return `| ${b.head.join(' | ')} |\n| ${b.head.map(() => '---').join(' | ')} |\n${b.rows
         .map((r) => `| ${r.join(' | ')} |`)
         .join('\n')}\n`;
-    case 'findings':
-      return `| Severity | Finding | Offset | Source | Proof state |\n| --- | --- | --- | --- | --- |\n${b.rows
+    case 'findings': {
+      const head = findingsHead(messages());
+      return `| ${head.join(' | ')} |\n| ${head.map(() => '---').join(' | ')} |\n${b.rows
         .map((r) => `| ${r.sev} | ${r.title} | ${r.offset} | ${r.source} | ${r.proof} |`)
         .join('\n')}\n`;
+    }
   }
 }
 

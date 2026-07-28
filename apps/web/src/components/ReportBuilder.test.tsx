@@ -8,9 +8,10 @@
  * It survived because nothing here was tested. These assertions are written against the DOM preview rather than the
  * export string, because the preview is the thing a person reads before deciding the report is right.
  */
-import { render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Finding, type ImageSummary, api } from '../api';
+import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import { ReportBuilder } from './ReportBuilder';
 
@@ -69,6 +70,14 @@ const assertion = (over: Partial<Finding> = {}): Finding => ({
 beforeEach(() => {
   mockApi.jobs.mockResolvedValue([]);
   mockApi.sbom.mockResolvedValue(null);
+});
+
+// The locale store is module-level, so a test that switches it would leak into the next file's worth of assertions.
+// `cleanup()` runs BEFORE the switch back on purpose: the store notifies its subscribers, and notifying a still
+// mounted tree from outside `act` is an unwrapped update — the warning would be real, not noise.
+afterEach(() => {
+  cleanup();
+  setLocale('en');
 });
 
 const findingsTable = (): HTMLElement => {
@@ -136,5 +145,55 @@ describe('ReportBuilder — assertions are never measured findings', () => {
 
     expect(await screen.findByText(/zero findings is not the same as clean/i)).toBeInTheDocument();
     expect(screen.queryByText(/Operator assertions/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The report is exported and handed on, so its scaffolding has to translate — and the evidence inside it must not.
+ * Those are opposite requirements landing in the same paragraph, which is why they are asserted together: a
+ * catalogue that swallowed the finding titles would pass every English test in this file.
+ */
+describe('ReportBuilder — Spanish translates the frame, never the record', () => {
+  it('translates the assertion partition while the stored finding title stays as recorded', async () => {
+    setLocale('es');
+    mockApi.findings.mockResolvedValue([measured(), assertion()]);
+    render(<ReportBuilder imageId="img1" image={image} analysis={null} />);
+
+    // The honesty sentences, in Spanish. Losing any of these ships a document making a claim nobody measured.
+    expect(await screen.findByText(/Cada hallazgo lleva un estado de prueba explícito/i)).toBeInTheDocument();
+    expect(screen.getByText(/se declara como tal en lugar de darse por limpia/i)).toBeInTheDocument();
+    expect(screen.getByText(/no cuenta ni para ese total ni para ninguna etapa/i)).toBeInTheDocument();
+    expect(screen.getByText(/Afirmaciones del operador \(1\) — afirmadas, no medidas/i)).toBeInTheDocument();
+    // The English is gone, not merely joined by the Spanish.
+    expect(screen.queryByText(/counted in neither that total nor any stage/i)).not.toBeInTheDocument();
+
+    // The frame is translated…
+    const header = screen.getByText('Estado de prueba');
+    const table = header.closest('table');
+    if (!table) throw new Error('the measured findings table is not rendered');
+    expect(within(table).getByText('confirmado en los bytes')).toBeInTheDocument();
+
+    // …and the record is not. The title is the sentence the analysis wrote, the source is an identifier that
+    // crosses the API, and neither is this screen's to reword.
+    expect(within(table).getByText('unbounded strcpy in sbin/httpd')).toBeInTheDocument();
+    expect(within(table).getByText('binvuln')).toBeInTheDocument();
+    expect(screen.getByText(/the update endpoint is behind a VPN on this fleet/i)).toBeInTheDocument();
+  });
+
+  it('keeps the assertion out of the measured population in Spanish too', async () => {
+    setLocale('es');
+    mockApi.findings.mockResolvedValue([measured(), assertion()]);
+    render(<ReportBuilder imageId="img1" image={image} analysis={null} />);
+
+    // `proofState.label` HAS a Spanish gloss for `operator_assertion`; the partition, not the missing label, is
+    // what keeps a person's claim out of the measured table.
+    await screen.findByText('unbounded strcpy in sbin/httpd');
+    const table = screen.getByText('Estado de prueba').closest('table');
+    if (!table) throw new Error('the measured findings table is not rendered');
+    expect(within(table).queryByText(/behind a VPN/i)).not.toBeInTheDocument();
+    expect(within(table).queryByText('afirmado · no medido')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Estado de prueba')).toHaveLength(1);
+    // One measured finding, counted in Spanish and not inflated by the assertion.
+    expect(screen.getByText(/Se registró 1 hallazgo/i)).toBeInTheDocument();
   });
 });

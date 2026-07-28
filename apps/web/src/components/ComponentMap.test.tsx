@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CompGraph, type CompMapResult, type ExtractionBrowseView, type FilesListing, api } from '../api';
+import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import {
   ComponentMap,
@@ -79,6 +80,9 @@ const result = (o: Partial<CompMapResult> = {}): CompMapResult => ({
 });
 
 beforeEach(() => {
+  // Reset BEFORE the render, never after it: the locale store notifies live subscribers, so switching back in an
+  // `afterEach` re-renders a still-mounted tree and fills the suite with act(…) warnings.
+  setLocale('en');
   mockApi.files.mockResolvedValue(filesFor(ROOTFS));
 });
 
@@ -361,5 +365,53 @@ describe('ComponentMap', () => {
     mockApi.compmapResult.mockResolvedValue({ available: true, graph: { nodes: [{}], edges: [{}] } });
     render(<ComponentMap imageId="old-3" />);
     await waitFor(() => expect(screen.getByRole('button', { name: /Rebuild map/i })).toBeTruthy());
+  });
+});
+
+/**
+ * "Unresolved is not missing" is the sentence this whole section exists to carry, and it is the one a translation
+ * can silently invert: it explains a BOUND — the walk stopped, the library may well be there — and rendered as an
+ * absence it blames the firmware for an analysis that was cut short. Both halves are asserted in Spanish, together
+ * with the identifiers the prose is built around, which are never translated in any language.
+ */
+describe('ComponentMap — the unresolved caveat in Spanish', () => {
+  it('keeps the caveat a statement about the walk, never about the rootfs', async () => {
+    setLocale('es');
+    mockApi.compmapResult.mockResolvedValue(result());
+    const { container } = render(<ComponentMap imageId="447719f7" />);
+
+    expect(await screen.findByText('Bibliotecas sin resolver · 4')).toBeTruthy();
+    expect(screen.getByText(/Sin resolver no quiere decir ausente/i)).toBeTruthy();
+    // The bound, and that it is the WALK that stopped rather than the library that is gone.
+    expect(screen.getByText(/más allá de los límites del recorrido/i)).toBeTruthy();
+    const text = container.textContent ?? '';
+    expect(text).toContain('los topes de ficheros y de ELF cortan pronto en un rootfs grande');
+    expect(text).toContain('se reporta como no resuelta por los binarios que sí la referencian');
+    // …and the drawing states its own bound and its rule, in Spanish, whether or not it cut anything.
+    expect(text).toContain('nunca por el orden del directorio');
+
+    // Identifiers survive translation: the soname, the linker record, and the tool that read it out of the bytes.
+    expect(text).toContain('libc.so.0');
+    expect(screen.getAllByText('DT_NEEDED').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('rabin2').length).toBeGreaterThan(0);
+    expect(screen.getByText('dlopen(3)')).toBeTruthy();
+  });
+
+  it('keeps the several different nothings apart in Spanish too', async () => {
+    setLocale('es');
+    mockApi.compmapResult.mockResolvedValue(null);
+    const { unmount } = render(<ComponentMap imageId="fresh" />);
+    expect(await screen.findByText(/Nadie ha construido el mapa de componentes/i)).toBeTruthy();
+    expect(screen.getByText(/sobre este banco de trabajo, no sobre el firmware/i)).toBeTruthy();
+    expect(screen.queryByText(/el grafo está vacío/i)).toBeNull();
+    unmount();
+
+    mockApi.compmapResult.mockResolvedValue(
+      result({ graph: { nodes: [], edges: [], unresolved: [] }, binaryCount: 0 }),
+    );
+    render(<ComponentMap imageId="static-rootfs" />);
+    expect(await screen.findByText(/El mapa se construyó y el grafo está vacío/i)).toBeTruthy();
+    // The distinction the whole panel is built on, and it has to hold in both languages.
+    expect(screen.getByText(/No es lo mismo que si nadie hubiera mirado/i)).toBeTruthy();
   });
 });

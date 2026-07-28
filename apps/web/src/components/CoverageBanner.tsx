@@ -8,20 +8,27 @@
  *
  * The reading is computed server-side (`GET /images/:id/coverage`) from the same class plan the autonomous scan
  * executes, so this can never claim coverage the scan disagrees with.
+ *
+ * The verdict, the class rationale and each stage's reason arrive from the API and are printed as it states them:
+ * they are the record of what this deployment measured, not interface copy. What IS localised is the status badge,
+ * and that is the part with a trap in it — `not-run` and `ran-empty` produce the same empty findings list and are
+ * opposite conclusions, so neither label may read as the other in any language (the `coverage` namespace).
  */
 import { useEffect, useState } from 'react';
 import { type CoverageReport, type CoverageStage, api } from '../api';
+import { useMessages } from '../i18n';
 
-const STATUS_META: Record<CoverageStage['status'], { mark: string; cls: string; label: string }> = {
-  found: { mark: '✓', cls: 'badge-ok', label: 'found' },
-  'ran-empty': { mark: '✓', cls: 'badge', label: 'ran · nothing' },
-  degraded: { mark: '⚠', cls: 'badge-medium', label: 'degraded' },
-  'no-input': { mark: '–', cls: 'badge-medium', label: 'no input' },
-  'not-built': { mark: '▢', cls: 'badge', label: 'not built' },
-  'not-run': { mark: '○', cls: 'badge', label: 'not run' },
+const STATUS_META: Record<CoverageStage['status'], { mark: string; cls: string }> = {
+  found: { mark: '✓', cls: 'badge-ok' },
+  'ran-empty': { mark: '✓', cls: 'badge' },
+  degraded: { mark: '⚠', cls: 'badge-medium' },
+  'no-input': { mark: '–', cls: 'badge-medium' },
+  'not-built': { mark: '▢', cls: 'badge' },
+  'not-run': { mark: '○', cls: 'badge' },
 };
 
 export function CoverageBanner({ imageId }: { imageId: string }): JSX.Element | null {
+  const t = useMessages();
   const [report, setReport] = useState<CoverageReport | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -41,16 +48,13 @@ export function CoverageBanner({ imageId }: { imageId: string }): JSX.Element | 
   return (
     <div className={`banner ${report.ambiguous ? 'banner-warn' : ''}`} style={{ marginBottom: 16 }}>
       <div>
-        <span className="eyebrow">Coverage · {report.firmwareClass}</span>
+        <span className="eyebrow">{t.coverage.eyebrow(report.firmwareClass)}</span>
         <p style={{ margin: '4px 0 0' }}>{report.verdict}</p>
         {report.classRationale ? <p className="hint">{report.classRationale}</p> : null}
         {/* The verdict already names them; this states the arithmetic explicitly, because a reader who sees more
             rows in the findings table than the count admits will otherwise assume the count is simply wrong. */}
         {report.operatorAssertions ? (
-          <p className="hint">
-            The {report.findingCount} above are measured. {report.operatorAssertions} further row(s) are operator
-            assertions — a named person's claim, covering no stage.
-          </p>
+          <p className="hint">{t.coverage.assertions(report.findingCount, report.operatorAssertions)}</p>
         ) : null}
       </div>
 
@@ -61,7 +65,7 @@ export function CoverageBanner({ imageId }: { imageId: string }): JSX.Element | 
         aria-expanded={open}
         style={{ marginTop: 8 }}
       >
-        {open ? 'Hide' : `What can run on this image? (${report.executed}/${report.applicable})`}
+        {open ? t.coverage.hide : t.coverage.whatCanRun(report.executed, report.applicable)}
       </button>
 
       {open ? (
@@ -74,7 +78,7 @@ export function CoverageBanner({ imageId }: { imageId: string }): JSX.Element | 
                   <tr key={s.worker}>
                     <td style={{ width: '1%', whiteSpace: 'nowrap' }}>
                       <span className={`badge ${meta.cls} mono`}>
-                        {meta.mark} {meta.label}
+                        {meta.mark} {t.coverage.status[s.status]}
                       </span>
                     </td>
                     <td>

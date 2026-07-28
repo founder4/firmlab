@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { type CorpusOverview, type CorpusRule, api } from '../api';
+import { useMessages } from '../i18n';
 import { toast } from '../toast';
 
 /**
@@ -10,6 +11,7 @@ import { toast } from '../toast';
 export function Corpus(): JSX.Element {
   const [overview, setOverview] = useState<CorpusOverview | null>(null);
   const [rules, setRules] = useState<CorpusRule[]>([]);
+  const t = useMessages();
 
   const refresh = useCallback(() => {
     api
@@ -28,17 +30,19 @@ export function Corpus(): JSX.Element {
 
   const promote = useCallback(
     async (hash: string, kind: string | null) => {
-      const label = window.prompt('Label for this known-bad credential:', kind ?? 'known-bad credential');
+      // `kind` is the detector's own label for the secret — a stored measurement, offered as-is rather than
+      // re-worded, and only the fallback the operator sees when there is none is localised.
+      const label = window.prompt(t.corpus.reuse.promptLabel, kind ?? t.corpus.reuse.promptDefault);
       if (!label) return;
       try {
         await api.promoteRule('known-credential', hash, label);
-        toast.success('Promoted to the watchlist');
+        toast.success(t.corpus.reuse.promoted);
         refresh();
       } catch (err) {
         toast.error(err);
       }
     },
-    [refresh],
+    [refresh, t],
   );
 
   const removeRule = useCallback(
@@ -49,33 +53,30 @@ export function Corpus(): JSX.Element {
     [refresh],
   );
 
-  if (!overview) return <div className="empty">Loading corpus…</div>;
+  if (!overview) return <div className="empty">{t.corpus.loading}</div>;
 
   return (
     <div>
       <div className="grid grid-3" style={{ marginBottom: 18 }}>
-        <Stat label="Images" value={String(overview.imageCount)} />
-        <Stat label="Reused credentials" value={String(overview.credentialReuse.length)} />
-        <Stat label="Watchlist rules" value={String(overview.ruleCount)} />
+        <Stat label={t.corpus.stats.images} value={String(overview.imageCount)} />
+        <Stat label={t.corpus.stats.reusedCredentials} value={String(overview.credentialReuse.length)} />
+        <Stat label={t.corpus.stats.watchlistRules} value={String(overview.ruleCount)} />
       </div>
 
       <div className="panel">
-        <div className="panel-title">Credential reuse</div>
-        <div className="panel-sub">
-          Secrets that appear in more than one image — a prior worth checking, not a verdict. Promote a recurring one to
-          the known-bad watchlist to auto-flag it on future uploads.
-        </div>
+        <div className="panel-title">{t.corpus.reuse.title}</div>
+        <div className="panel-sub">{t.corpus.reuse.sub}</div>
         {overview.credentialReuse.length === 0 ? (
-          <div className="hint">No credential appears in more than one image yet.</div>
+          <div className="hint">{t.corpus.reuse.empty}</div>
         ) : (
           <div className="table-wrap" style={{ marginTop: 10 }}>
             <table className="data">
               <thead>
                 <tr>
-                  <th>Kind</th>
-                  <th>Hash</th>
-                  <th>Images</th>
-                  <th>Watchlist</th>
+                  <th>{t.corpus.reuse.colKind}</th>
+                  <th>{t.corpus.reuse.colHash}</th>
+                  <th>{t.corpus.reuse.colImages}</th>
+                  <th>{t.corpus.reuse.colWatchlist}</th>
                   <th />
                 </tr>
               </thead>
@@ -91,7 +92,7 @@ export function Corpus(): JSX.Element {
                     <td>
                       {!ruleKeys.has(c.hash) && (
                         <button type="button" className="btn btn-sm" onClick={() => promote(c.hash, c.kind)}>
-                          + watchlist
+                          {t.corpus.reuse.promote}
                         </button>
                       )}
                     </td>
@@ -104,19 +105,19 @@ export function Corpus(): JSX.Element {
       </div>
 
       <div className="panel">
-        <div className="panel-title">Component prevalence</div>
-        <div className="panel-sub">Which component versions span the most images, and how many CVEs grype matched.</div>
+        <div className="panel-title">{t.corpus.prevalence.title}</div>
+        <div className="panel-sub">{t.corpus.prevalence.sub}</div>
         {overview.componentPrevalence.length === 0 ? (
-          <div className="hint">No SBOM data yet — run SBOM on some images.</div>
+          <div className="hint">{t.corpus.prevalence.empty}</div>
         ) : (
           <div className="table-wrap" style={{ marginTop: 10 }}>
             <table className="data">
               <thead>
                 <tr>
-                  <th>Component</th>
-                  <th>Version</th>
-                  <th>Images</th>
-                  <th>CVEs</th>
+                  <th>{t.corpus.prevalence.colComponent}</th>
+                  <th>{t.corpus.prevalence.colVersion}</th>
+                  <th>{t.corpus.prevalence.colImages}</th>
+                  <th>{t.corpus.prevalence.colCves}</th>
                 </tr>
               </thead>
               <tbody>
@@ -139,11 +140,8 @@ export function Corpus(): JSX.Element {
       </div>
 
       <div className="panel">
-        <div className="panel-title">Device families</div>
-        <div className="panel-sub">
-          Images grouped by identity (vendor:class:arch). A family with several versions is the basis for cross-version
-          diff.
-        </div>
+        <div className="panel-title">{t.corpus.families.title}</div>
+        <div className="panel-sub">{t.corpus.families.sub}</div>
         {overview.deviceFamilies.map((fam) => (
           <div key={fam.familyKey} style={{ marginTop: 12 }}>
             <div className="mono" style={{ fontSize: 12.5, marginBottom: 4 }}>
@@ -162,14 +160,14 @@ export function Corpus(): JSX.Element {
 
       {rules.length > 0 && (
         <div className="panel">
-          <div className="panel-title">Watchlist rules ({rules.length})</div>
+          <div className="panel-title">{t.corpus.rules.title(rules.length)}</div>
           <div className="table-wrap" style={{ marginTop: 10 }}>
             <table className="data">
               <thead>
                 <tr>
-                  <th>Type</th>
-                  <th>Label</th>
-                  <th>Key</th>
+                  <th>{t.corpus.rules.colType}</th>
+                  <th>{t.corpus.rules.colLabel}</th>
+                  <th>{t.corpus.rules.colKey}</th>
                   <th />
                 </tr>
               </thead>
@@ -185,7 +183,7 @@ export function Corpus(): JSX.Element {
                     </td>
                     <td>
                       <button type="button" className="btn btn-sm" onClick={() => removeRule(r.id)}>
-                        remove
+                        {t.corpus.rules.remove}
                       </button>
                     </td>
                   </tr>

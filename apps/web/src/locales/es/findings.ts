@@ -1,4 +1,83 @@
 import type { Messages } from '../en';
 
-/** findings — Spanish. Typed against the English catalogue, so an untranslated key cannot ship silently. */
-export const findings: Messages['findings'] = {};
+/**
+ * findings — Spanish.
+ *
+ * La anotación de una disputa es lo delicado de este espacio. Una fila impugnada afirma DOS cosas y tienen que
+ * viajar juntas: quién la impugna y con qué base, Y que el estado de prueba que hay al lado es exactamente el que
+ * decidió el código — no cambia, no se rebaja y la fila no se retira. Un simple «DISPUTADO» invitaría a descontar la
+ * medición, que es justo la anulación que el diseño rechaza: por eso `dispute.recordedAs` … `dispute.stands` son un
+ * único bloque, troceado sólo donde se imprimen en `mono` el id de la afirmación y el CÓDIGO del estado de prueba,
+ * ambos identificadores y ambos sin traducir.
+ *
+ * Los títulos, las justificaciones y las fuentes de los hallazgos no están aquí: son el registro que escribieron los
+ * proveedores al ejecutarse y se muestran tal cual, en el idioma que los produjo.
+ */
+export const findings: Messages['findings'] = {
+  title: (n: number) => `Hallazgos (${n})`,
+  sub: 'Cada uno lleva un estado de prueba explícito — no sólo qué se encontró, sino cuánto está probado.',
+
+  asserted: (n: number) =>
+    [
+      `De estos, ${n} ${n === 1 ? 'fue afirmado' : 'fueron afirmados'} por una persona`,
+      `en lugar de ${n === 1 ? 'medido' : 'medidos'};`,
+      'esas filas nombran a su autor y no cuentan para ninguna etapa del análisis.',
+    ].join(' '),
+  contested: (n: number) =>
+    [
+      `${n} fila${n === 1 ? '' : 's'} ${n === 1 ? 'está impugnada' : 'están impugnadas'} por un operador`,
+      `y ${n === 1 ? 'anotada' : 'anotadas'} en su sitio —`,
+      'la anotación deja constancia del desacuerdo y no cambia nada de lo que decidió el código.',
+    ].join(' '),
+
+  empty: 'Aún no hay hallazgos. Ejecuta la extracción, el SBOM y los análisis profundos para poblar el registro.',
+
+  cutRule: (shown: number, total: number, omitted: number) =>
+    [
+      `Mostrando ${shown} de ${total}.`,
+      'Las filas se ordenan por gravedad (de mayor a menor, luego por estado de prueba y por título)',
+      `y se omiten las ${omitted} peor clasificadas — el corte sigue esa regla,`,
+      'nunca el orden en que se escribieron las filas.',
+      'Toda fila impugnada se muestra sea cual sea el tope.',
+    ].join(' '),
+  showAllCount: (n: number) => `Ver los ${n}`,
+
+  col: {
+    severity: 'Grav.',
+    finding: 'Hallazgo',
+    source: 'Fuente',
+    proofState: 'Estado de prueba',
+  },
+
+  assertedBy: (who: string) => `afirmado por ${who}`,
+  agentSuffix: ' (agente)',
+  withdrawnSuffix: ' — RETIRADA',
+  unrecordedAuthor: 'un autor sin registrar',
+  unrecordedDate: 'una fecha sin registrar',
+
+  dispute: {
+    heading: 'Impugnado por un operador',
+    claim: (author: string, day: string, title: string) =>
+      `${author} afirma el ${day} que este hallazgo es incorrecto: “${title}”.`,
+    recordedAs: 'Registrado como afirmación del operador',
+    stillStates:
+      ', y listado íntegro en el registro del operador. Esto es testimonio sobre una medición, no una medición: el ' +
+      'estado de prueba de esta fila sigue siendo',
+    stands:
+      ', decidido por el código a partir de la evidencia, y la disputa no lo cambia, no lo rebaja ni retira la ' +
+      'fila. Ambas cosas se sostienen; quien lee las pondera.',
+  },
+
+  dangling: {
+    lead: (n: number) =>
+      [
+        `${n} disputa${n === 1 ? '' : 's'} registrada${n === 1 ? '' : 's'} ${n === 1 ? 'nombra' : 'nombran'}`,
+        'un hallazgo que no está en este registro.',
+        'Volver a ejecutar un proveedor sustituye sus filas por ids nuevos, así que una disputa puede sobrevivir',
+        'a la fila contra la que se registró: la afirmación se conserva, y aquello a lo que apuntaba no se puede',
+        'anotar aquí.',
+      ].join(' '),
+    contests: (author: string) => `${author} impugna`,
+    quoted: (title: string) => `— “${title}”`,
+  },
+};

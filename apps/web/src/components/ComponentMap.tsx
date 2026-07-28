@@ -42,9 +42,17 @@
  *
  * Hand-rolled SVG, like every other visual in this shell — no chart library, and every colour is a theme token so
  * the diagram reads in both themes.
+ *
+ * Sonames, `DT_NEEDED`, `rabin2`, `dlopen(3)` and every file name are identifiers: they render in `mono` and are
+ * never translated. That is why several sentences arrive from the catalogue as the runs of prose either side of an
+ * identifier — one key per run, in render order — and why the panel is what puts the identifier back between them.
+ * The paragraph the section exists for, "unresolved is not missing", is the one that must survive that treatment
+ * intact in every language: it explains a BOUND, and a bound rendered as an absence blames the firmware for a walk
+ * that was cut short.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type CompGraph, type CompMapResult, type ExtractionBrowseView, api } from '../api';
+import { messages, useMessages } from '../i18n';
 
 /** How many nodes the drawing shows per column before it stops and says what it dropped, and by what rule. */
 export const GRAPH_BIN_CAP = 26;
@@ -120,7 +128,13 @@ export interface GraphView {
   edges: { from: string; to: string; unresolved: boolean }[];
   droppedBinaries: number;
   droppedLibs: number;
-  /** The sentence stating what was left out and by what rule. Rendered always, not only when something was cut. */
+  /**
+   * The sentence stating what was left out and by what rule. Rendered always, not only when something was cut.
+   *
+   * It travels with the selection rather than being assembled at the render site, because a bound that states what
+   * it dropped is part of the answer — and a rule a test cannot call is a rule held on trust. It reads the active
+   * catalogue through `messages()`, which is what that accessor exists for.
+   */
   rule: string;
 }
 
@@ -177,7 +191,7 @@ export function selectGraphView(
       .map((e) => ({ ...e, unresolved: unresolved.has(e.to) })),
     droppedBinaries: binsAll.length - binaries.length,
     droppedLibs: libsAll.length - libs.length,
-    rule: 'Ranked with unresolved references first, then by number of links, then by name — never by directory order.',
+    rule: messages().compmap.shape.rule,
   };
 }
 
@@ -213,6 +227,7 @@ const LABEL_CHARS = 26;
 
 /** The bipartite drawing: what links (left) against what it links to (right). Every colour is a theme token. */
 function DependencyDiagram({ view }: { view: GraphView }): JSX.Element {
+  const t = useMessages();
   const [hover, setHover] = useState<string | null>(null);
   const rows = Math.max(view.binaries.length, view.libs.length, 1);
   const height = TOP_PAD + rows * ROW_H + 14;
@@ -223,18 +238,13 @@ function DependencyDiagram({ view }: { view: GraphView }): JSX.Element {
 
   return (
     <div className="cmap-canvas">
-      <svg
-        className="cmap-svg"
-        viewBox={`0 0 ${SVG_W} ${height}`}
-        role="img"
-        aria-label="Rootfs link-dependency diagram: ELF files on the left, the sonames they name on the right"
-      >
-        <title>Rootfs link-dependency diagram</title>
+      <svg className="cmap-svg" viewBox={`0 0 ${SVG_W} ${height}`} role="img" aria-label={t.compmap.shape.diagramLabel}>
+        <title>{t.compmap.shape.diagramTitle}</title>
         {/* "ELF file", not "binary": on a real rootfs the left column fills with `.so` files, because a shared
             object that names another one is itself an ELF the walk found. Labelling it "binary" made the drawing
             look wrong against the Tenda carve when it was in fact correct. */}
         <text className="cmap-colhead" x={COL_L_END} y={18} textAnchor="end">
-          ELF file
+          {t.compmap.shape.colElf}
         </text>
         <text className="cmap-colhead" x={COL_R_START} y={18}>
           DT_NEEDED
@@ -263,7 +273,7 @@ function DependencyDiagram({ view }: { view: GraphView }): JSX.Element {
             onMouseEnter={() => setHover(n.id)}
             onMouseLeave={() => setHover(null)}
           >
-            <title>{`${n.id} — links ${n.degree} shared object(s), ${n.unresolved} unresolved`}</title>
+            <title>{t.compmap.shape.nodeTitle(n.id, n.degree, n.unresolved)}</title>
             <rect className="cmap-pill" x={8} y={yOf(i) - 9} width={COL_L_END - 8} height={18} rx={3} />
             <text className="cmap-label" x={COL_L_END - 8} y={yOf(i) + 3.5} textAnchor="end">
               {middleTruncate(n.id, LABEL_CHARS)}
@@ -280,9 +290,7 @@ function DependencyDiagram({ view }: { view: GraphView }): JSX.Element {
             onMouseEnter={() => setHover(n.id)}
             onMouseLeave={() => setHover(null)}
           >
-            <title>
-              {`${n.id} — named by ${n.degree} binary/binaries, ${n.unresolved ? 'NOT present in the carve' : 'present in the carve'}`}
-            </title>
+            <title>{t.compmap.shape.libTitle(n.id, n.degree, !n.unresolved)}</title>
             <rect
               className="cmap-pill"
               x={COL_R_START}
@@ -304,6 +312,7 @@ function DependencyDiagram({ view }: { view: GraphView }): JSX.Element {
 type Load = 'loading' | 'ready';
 
 export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [result, setResult] = useState<CompMapResult | null>(null);
   const [extraction, setExtraction] = useState<ExtractionBrowseView | null>(null);
   const [load, setLoad] = useState<Load>('loading');
@@ -339,7 +348,7 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
         if (j.status === 'done' || j.status === 'error') {
           window.clearInterval(timer);
           setRunning(false);
-          if (j.status === 'error') setError(j.error ?? 'The component map job failed.');
+          if (j.status === 'error') setError(j.error ?? t.compmap.jobFailed);
           await refresh();
         }
       }, 700);
@@ -348,11 +357,13 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
       setRunning(false);
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [imageId, refresh]);
+  }, [imageId, refresh, t]);
 
   const graph = result?.graph;
   const state = compMapState(result, extraction);
-  const view = useMemo(() => selectGraphView(graph), [graph]);
+  // `t` is a dependency because the view carries the rule SENTENCE: memoised on the graph alone, a locale switch
+  // would leave the one line explaining what the drawing dropped in the language it was computed under.
+  const view = useMemo(() => selectGraphView(graph), [graph, t]);
   const unresolved = useMemo(() => unresolvedSonames(graph), [graph]);
   const orphans = useMemo(() => orphanBinaries(graph), [graph]);
 
@@ -379,41 +390,36 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
   // orphans of which most are `.so` files. Calling those "top-level executables" was simply wrong.
   const orphanLibs = orphans.filter((o) => looksLikeSharedObject(o)).length;
 
-  const runLabel = running ? <span className="spinner" /> : result ? 'Rebuild map' : 'Build component map';
+  const runLabel = running ? <span className="spinner" /> : result ? t.compmap.rebuild : t.compmap.build;
 
   return (
     <div className="panel" style={{ marginTop: 16 }}>
-      <div className="panel-title">Component map</div>
+      <div className="panel-title">{t.compmap.title}</div>
       <div className="panel-sub">
-        Every ELF in the extracted rootfs mapped to the shared objects its <span className="mono">DT_NEEDED</span>{' '}
-        entries name — what the <em>linker</em> recorded, read out of the bytes with{' '}
-        <span className="mono">rabin2</span>. A library the program opens with <span className="mono">dlopen(3)</span>{' '}
-        at runtime leaves no such entry and no edge here, so silence in this graph is silence about linking, not about
-        loading. It is structure, not a security verdict.
+        {t.compmap.sub.beforeNeeded} <span className="mono">DT_NEEDED</span> {t.compmap.sub.beforeLinker}{' '}
+        <em>{t.compmap.sub.linker}</em> {t.compmap.sub.beforeRabin2} <span className="mono">rabin2</span>
+        {t.compmap.sub.beforeDlopen} <span className="mono">dlopen(3)</span> {t.compmap.sub.afterDlopen}
       </div>
 
       {load === 'loading' && <div className="skeleton" style={{ height: 120, marginTop: 14 }} />}
 
       {load === 'ready' && state === 'not-run' && (
         <div className="cmap-nothing" data-state="not-run">
-          <strong>No component map has been built for this image</strong>
-          <span className="hint cmap-prose">
-            Nothing has asked what this rootfs links against, so there is nothing to show — which is a statement about
-            this workbench, not about the firmware. Build it and the answer, including an empty one, will say so.
-          </span>
+          <strong>{t.compmap.notRun.title}</strong>
+          <span className="hint cmap-prose">{t.compmap.notRun.body}</span>
         </div>
       )}
 
       {load === 'ready' && state === 'no-rootfs' && (
         <div className="cmap-nothing" data-state="no-rootfs">
-          <strong>There is no extracted rootfs to map</strong>
+          <strong>{t.compmap.noRootfs.title}</strong>
           <span className="hint cmap-prose">
-            The map is built by walking the files extraction wrote to disk, and this image has none to walk. That is a
-            gap in the extraction, not a firmware that links nothing — run extraction first from the Extraction section.
+            {t.compmap.noRootfs.body}
+            {/* The extraction's own verdict, quoted as it recorded it — this panel never re-words another's answer. */}
             {extraction?.verdict && (
               <>
                 {' '}
-                Extraction says: <em>{extraction.verdict}</em>
+                {t.compmap.noRootfs.extractionSays} <em>{extraction.verdict}</em>
               </>
             )}
           </span>
@@ -423,10 +429,9 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
       {load === 'ready' && state === 'unavailable' && (
         <div className="banner banner-warn" style={{ marginTop: 14 }}>
           <div>
-            <strong>The map could not be built — the question was not answered.</strong>
+            <strong>{t.compmap.unavailable.title}</strong>
             <div className="hint cmap-prose" style={{ marginTop: 4 }}>
-              {result?.reason ?? 'The provider reported itself unavailable and gave no reason.'} Nothing below is a
-              finding about this firmware: an absent tool is an absent answer, not an absent dependency.
+              {result?.reason ?? t.compmap.unavailable.noReason} {t.compmap.unavailable.body}
             </div>
           </div>
         </div>
@@ -434,15 +439,13 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
 
       {load === 'ready' && state === 'empty' && (
         <div className="cmap-nothing" data-state="empty">
-          <strong>The map was built and the graph is empty</strong>
+          <strong>{t.compmap.empty.title}</strong>
           <span className="hint cmap-prose">
-            The walk ran over the rootfs and came back with no ELF carrying a <span className="mono">DT_NEEDED</span>{' '}
-            entry. That is a real answer, and a plausible one — a busybox-only or fully static rootfs links nothing
-            dynamically. It is not the same as nobody having looked.
+            {t.compmap.empty.beforeNeeded} <span className="mono">DT_NEEDED</span> {t.compmap.empty.afterNeeded}
             {result?.reason && (
               <>
                 {' '}
-                Provider: <em>{result.reason}</em>
+                {t.compmap.providerLabel} <em>{result.reason}</em>
               </>
             )}
           </span>
@@ -453,15 +456,15 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
         <>
           <div className="grid grid-3" style={{ marginTop: 16 }}>
             <div className="stat">
-              <div className="stat-label">ELF binaries walked</div>
+              <div className="stat-label">{t.compmap.stat.walked}</div>
               <div className="stat-value">{result?.binaryCount ?? binaryNodes}</div>
             </div>
             <div className="stat">
-              <div className="stat-label">Link edges</div>
+              <div className="stat-label">{t.compmap.stat.edges}</div>
               <div className="stat-value">{(graph?.edges ?? []).length}</div>
             </div>
             <div className="stat">
-              <div className="stat-label">Unresolved references</div>
+              <div className="stat-label">{t.compmap.stat.unresolved}</div>
               <div className="stat-value" style={{ color: unresolved.size > 0 ? 'var(--warn)' : undefined }}>
                 {unresolved.size}
               </div>
@@ -469,22 +472,18 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
           </div>
 
           <p className="hint cmap-prose" style={{ marginTop: 10 }}>
-            A node is a <strong>basename</strong>, because a <span className="mono">DT_NEEDED</span> reference is one —
-            two files called <span className="mono">busybox</span> in different directories are one node.
+            {t.compmap.basename.lead} <strong>{t.compmap.basename.word}</strong>
+            {t.compmap.basename.beforeNeeded} <span className="mono">DT_NEEDED</span> {t.compmap.basename.beforeExample}{' '}
+            <span className="mono">busybox</span> {t.compmap.basename.afterExample}
             {/* Only when the two counts actually differ. The first version stated the discrepancy unconditionally
                 and rendered "67 files walked can become 67 binary nodes" against the real Tenda carve — a sentence
                 explaining something that had not happened. Caught by looking at the page, not by a test. */}
-            {filesWalked !== binaryNodes && (
-              <>
-                {' '}
-                Here that collapses {filesWalked} ELF files into {binaryNodes} nodes.
-              </>
-            )}
+            {filesWalked !== binaryNodes && <> {t.compmap.basename.collapse(filesWalked, binaryNodes)}</>}
             {linksNothing > 0 && (
               <>
                 {' '}
-                {linksNothing} of them name no shared object at all — statically linked, or an ELF{' '}
-                <span className="mono">rabin2</span> could not read.
+                {t.compmap.linksNothing.lead(linksNothing)} <span className="mono">rabin2</span>{' '}
+                {t.compmap.linksNothing.tail}
               </>
             )}
           </p>
@@ -492,7 +491,7 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
           {/* The point of the section, above the picture: a hairball is exactly where this row would be lost. */}
           <section style={{ marginTop: 20 }}>
             <div className="eyebrow" style={{ marginBottom: 8 }}>
-              Unresolved libraries · {unresolved.size}
+              {t.compmap.unresolved.heading(unresolved.size)}
             </div>
             {neededBy.length > 0 ? (
               <>
@@ -500,9 +499,9 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
                   <table className="data">
                     <thead>
                       <tr>
-                        <th>Soname referenced</th>
-                        <th className="num">Count</th>
-                        <th>Named by</th>
+                        <th>{t.compmap.unresolved.colSoname}</th>
+                        <th className="num">{t.compmap.unresolved.colCount}</th>
+                        <th>{t.compmap.unresolved.colNamedBy}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -518,7 +517,7 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
                                 </span>
                               ))}
                               {row.bins.length > NEEDED_BY_CAP && (
-                                <span className="hint">+{row.bins.length - NEEDED_BY_CAP} more</span>
+                                <span className="hint">{t.common.andMore(row.bins.length - NEEDED_BY_CAP)}</span>
                               )}
                             </span>
                           </td>
@@ -527,64 +526,59 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
                     </tbody>
                   </table>
                 </div>
+                {/* The bound, stated where the rows are, not in a legend: a reader who does not know the walk is
+                    capped reads this table as a broken rootfs. */}
                 <p className="hint cmap-prose" style={{ marginTop: 8 }}>
-                  <strong>Unresolved is not missing.</strong> A soname provided by a symlink now resolves and is
-                  labelled as link-provided — the walk still refuses to follow a link, it reads the link's target name
-                  and matches that inside the carve, so a rootfs escape stays impossible. What is left here is either
-                  genuinely absent or <em>beyond the walk's bounds</em>: the file and ELF caps stop early on a large
-                  rootfs, and a library past the cut is reported unresolved by binaries that do reference it. Resolution
-                  is also by basename against this carve alone, so a partial extraction, a second partition or an
-                  overlay mounted at boot are all libraries the device has and this image does not. Open the file
-                  browser before treating a row here as a missing library.
+                  <strong>{t.compmap.unresolved.notMissing}</strong> {t.compmap.unresolved.caveat}{' '}
+                  <em>{t.compmap.unresolved.bounds}</em>
+                  {t.compmap.unresolved.caveatTail}
                 </p>
               </>
             ) : (
               <p className="hint cmap-prose" style={{ margin: 0 }}>
-                Every <span className="mono">DT_NEEDED</span> reference in this rootfs names a file the walk also found.
-                That says the carve is self-consistent for the binaries it recovered — not that the carve is complete.
+                {t.compmap.unresolved.noneLead} <span className="mono">DT_NEEDED</span> {t.compmap.unresolved.noneTail}
               </p>
             )}
           </section>
 
           <section style={{ marginTop: 22 }}>
             <div className="eyebrow" style={{ marginBottom: 8 }}>
-              Dependency shape
+              {t.compmap.shape.heading}
             </div>
             <DependencyDiagram view={view} />
             <div className="legend" style={{ marginTop: 10 }}>
               <span className="legend-item">
                 <span className="legend-swatch cmap-sw-bin" />
-                ELF file in the carve
+                {t.compmap.shape.legendBin}
               </span>
               <span className="legend-item">
                 <span className="legend-swatch cmap-sw-lib" />
-                soname the carve has
+                {t.compmap.shape.legendLib}
               </span>
               <span className="legend-item">
                 <span className="legend-swatch cmap-sw-unres" />
-                soname it does not
+                {t.compmap.shape.legendUnres}
               </span>
               <span className="legend-item" style={{ marginLeft: 'auto', color: 'var(--text-faint)' }}>
-                {view.binaries.length} of {view.binaries.length + view.droppedBinaries} linking files ·{' '}
-                {view.libs.length} of {view.libs.length + view.droppedLibs} referenced sonames
+                {t.compmap.shape.legendCounts(
+                  view.binaries.length,
+                  view.binaries.length + view.droppedBinaries,
+                  view.libs.length,
+                  view.libs.length + view.droppedLibs,
+                )}
               </span>
             </div>
             <p className="hint cmap-prose" style={{ marginTop: 6 }}>
               {view.rule}
-              {view.droppedBinaries + view.droppedLibs > 0 && (
-                <>
-                  {' '}
-                  {view.droppedBinaries} ELF file{view.droppedBinaries === 1 ? '' : 's'} and {view.droppedLibs} soname
-                  {view.droppedLibs === 1 ? '' : 's'} are not drawn; every unresolved reference is in the table above
-                  regardless of what the drawing had room for.
-                </>
-              )}
+              {/* A string rather than a fragment, so the separating space survives without a wrapper element. */}
+              {view.droppedBinaries + view.droppedLibs > 0 &&
+                ` ${t.compmap.shape.dropped(view.droppedBinaries, view.droppedLibs)}`}
             </p>
           </section>
 
           <section style={{ marginTop: 22 }}>
             <div className="eyebrow" style={{ marginBottom: 8 }}>
-              Orphan binaries · {orphans.length}
+              {t.compmap.orphans.heading(orphans.length)}
             </div>
             {orphans.length > 0 ? (
               <>
@@ -595,29 +589,25 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
                     </span>
                   ))}
                   {orphans.length > ORPHAN_CAP && (
-                    <span className="hint">+{orphans.length - ORPHAN_CAP} more, listed alphabetically</span>
+                    <span className="hint">{t.compmap.orphans.moreAlphabetical(orphans.length - ORPHAN_CAP)}</span>
                   )}
                 </span>
                 <p className="hint cmap-prose" style={{ marginTop: 8 }}>
-                  No <span className="mono">DT_NEEDED</span> entry in this rootfs names these. For a program that is
-                  ordinary and not a verdict — a daemon, a CLI tool and a helper called from an init script are all
-                  legitimately orphans in a link graph; what the list gives you is the set of <em>top-level</em>{' '}
-                  executables, the things something outside this graph has to start.
+                  {t.compmap.orphans.lead} <span className="mono">DT_NEEDED</span> {t.compmap.orphans.beforeTopLevel}{' '}
+                  <em>{t.compmap.orphans.topLevel}</em> {t.compmap.orphans.afterTopLevel}
                   {orphanLibs > 0 && (
                     <>
                       {' '}
-                      {orphanLibs} of them are shared objects, and for those it says something else: nothing{' '}
-                      <em>links</em> them, which usually means they are loaded with{' '}
-                      <span className="mono">dlopen(3)</span> — invisible to this graph — and occasionally that nothing
-                      uses them at all. This section does not decide which.
+                      {t.compmap.orphans.libsLead(orphanLibs)} <em>{t.compmap.orphans.links}</em>{' '}
+                      {t.compmap.orphans.beforeDlopen} <span className="mono">dlopen(3)</span>{' '}
+                      {t.compmap.orphans.afterDlopen}
                     </>
                   )}
                 </p>
               </>
             ) : (
               <p className="hint cmap-prose" style={{ margin: 0 }}>
-                Every binary in this graph is named by another one. In a rootfs of any size that is unusual and worth a
-                second look at the walk's bounds before reading it as a fact about the firmware.
+                {t.compmap.orphans.none}
               </p>
             )}
           </section>
@@ -628,7 +618,7 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
         <section style={{ marginTop: 20 }}>
           {result?.reason && state === 'graph' && (
             <p className="hint cmap-prose" style={{ margin: '0 0 10px' }}>
-              Provider: {result.reason}
+              {t.compmap.providerLabel} {result.reason}
             </p>
           )}
           {error && (
@@ -641,7 +631,7 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
           <button
             className="btn btn-sm"
             disabled={running || state === 'no-rootfs'}
-            title={state === 'no-rootfs' ? 'Run extraction first — the map is built by walking the rootfs' : undefined}
+            title={state === 'no-rootfs' ? t.compmap.needsRootfs : undefined}
             onClick={() => void run()}
           >
             {runLabel}

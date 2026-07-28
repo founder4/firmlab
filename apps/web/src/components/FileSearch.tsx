@@ -8,9 +8,15 @@
  *
  * A hit in a binary is labelled and carries a byte offset instead of a line number, because a line number in an
  * ELF is a fiction and presenting one would send an analyst to a place that does not exist.
+ *
+ * The two empty-result sentences are the whole point of the panel and live in the `files` namespace so they survive
+ * translation: only a COMPLETE search is allowed to say "no file in this extraction contains that term", and a
+ * partial one says "no match in what was searched", which is not the same as absent from this firmware. The
+ * verdict itself is composed by the API from what it actually opened and is rendered as written.
  */
 import { type FormEvent, useCallback, useState } from 'react';
 import { type FilesSearch, api } from '../api';
+import { useMessages } from '../i18n';
 
 /** True when the search opened every file and capped nothing — the only case an empty result is a real negative. */
 export function isCompleteSearch(s: FilesSearch | null): boolean {
@@ -22,6 +28,7 @@ export function isCompleteSearch(s: FilesSearch | null): boolean {
 }
 
 export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [q, setQ] = useState('');
   const [regex, setRegex] = useState(false);
   const [deep, setDeep] = useState(false);
@@ -52,11 +59,8 @@ export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
 
   return (
     <div className="panel" style={{ marginTop: 16 }}>
-      <div className="panel-title">Search the extraction</div>
-      <div className="panel-sub">
-        Which file says this — a certificate CN, a hostname, a symbol, an NVRAM key. Binaries are searched too; their
-        hits carry a byte offset rather than a line number.
-      </div>
+      <div className="panel-title">{t.files.search.title}</div>
+      <div className="panel-sub">{t.files.search.sub}</div>
 
       <form onSubmit={run} style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
         <input
@@ -64,20 +68,21 @@ export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="updates.vendor.example"
-          aria-label="Search term"
+          aria-label={t.files.search.termLabel}
         />
         <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input type="checkbox" checked={regex} onChange={(e) => setRegex(e.target.checked)} />
+          {/* `regex` is the term of art in both languages. */}
           regex
         </label>
         {/* Without this the GL.iNet can never return a complete search: 10 of its files exceed the default cap,
             so every answer there carries a permanent hole. Slower, and the operator chooses when to pay. */}
         <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} />
-          deep (open large files)
+          {t.files.search.deep}
         </label>
         <button className="btn btn-primary btn-sm" type="submit" disabled={busy || !q.trim()}>
-          {busy ? <span className="spinner" /> : 'Search'}
+          {busy ? <span className="spinner" /> : t.common.search}
         </button>
       </form>
 
@@ -91,27 +96,24 @@ export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
         <>
           {/* The verdict leads and is never conditional on something having gone wrong. */}
           <div className={`fsq-verdict ${complete ? 'fsq-complete' : 'fsq-partial'}`}>
-            <span className="eyebrow">{complete ? 'complete search' : 'partial search'}</span>
+            <span className="eyebrow">{complete ? t.files.search.complete : t.files.search.partial}</span>
             <p className="hint" style={{ margin: '4px 0 0' }}>
-              {result.verdict ??
-                'This result carries no coverage verdict, so how much of the extraction it covered is unknown.'}
+              {result.verdict ?? t.files.search.noVerdict}
             </p>
           </div>
 
           {hits.length === 0 ? (
             <p className="hint" style={{ marginTop: 10 }}>
-              {complete
-                ? 'No file in this extraction contains that term.'
-                : 'No match in what was searched — which is not the same as absent from this firmware. See above.'}
+              {complete ? t.files.search.noneComplete : t.files.search.nonePartial}
             </p>
           ) : (
             <div style={{ overflowX: 'auto', marginTop: 10 }}>
               <table className="data">
                 <thead>
                   <tr>
-                    <th>File</th>
-                    <th className="num">At</th>
-                    <th>Match</th>
+                    <th>{t.files.search.file}</th>
+                    <th className="num">{t.files.search.at}</th>
+                    <th>{t.files.search.match}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -121,7 +123,7 @@ export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
                         {h.path}
                         {h.binary && (
                           <span className="badge" style={{ marginLeft: 6 }}>
-                            binary
+                            {t.files.search.binary}
                           </span>
                         )}
                       </td>

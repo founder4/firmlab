@@ -9,6 +9,7 @@ import {
   type LearningSurface,
   api,
 } from '../api';
+import { type Messages, useMessages } from '../i18n';
 
 function ceilingClass(c: string | null | undefined): string {
   if (c === 'captured_plaintext' || c === 'captured_encrypted') return 'badge-ok';
@@ -16,12 +17,18 @@ function ceilingClass(c: string | null | undefined): string {
   return 'badge-medium';
 }
 
-/** The capturability ladder for a target: the honest ceiling, the ranked strategies, and what would unlock more. */
+/**
+ * The capturability ladder for a target: the honest ceiling, the ranked strategies, and what would unlock more.
+ *
+ * The ceiling itself (`captured_plaintext`, `blocked_by_pinning`…) is an identifier the API returns, and each
+ * strategy's reason is the preflight's own sentence — both render verbatim. Only the label in front is localised.
+ */
 function PreflightCard({ plan }: { plan: CapturabilityPlan }): JSX.Element {
+  const t = useMessages();
   return (
     <div style={{ padding: '4px 2px' }}>
       <div style={{ marginBottom: 6 }}>
-        Ceiling: <span className={`badge ${ceilingClass(plan.ceiling)} mono`}>{plan.ceiling}</span>{' '}
+        {t.capture.preflight.ceiling} <span className={`badge ${ceilingClass(plan.ceiling)} mono`}>{plan.ceiling}</span>{' '}
         <span className="hint">{plan.reason}</span>
       </div>
       <table className="data">
@@ -46,7 +53,7 @@ function PreflightCard({ plan }: { plan: CapturabilityPlan }): JSX.Element {
           {/pin|frida/i.test(plan.unlockHint) && (
             <>
               {' '}
-              <a href="/api/capture/frida-unpin">download Frida unpin →</a>
+              <a href="/api/capture/frida-unpin">{t.capture.preflight.unpin}</a>
             </>
           )}
         </div>
@@ -55,12 +62,12 @@ function PreflightCard({ plan }: { plan: CapturabilityPlan }): JSX.Element {
   );
 }
 
-const ROLE_LABEL: Record<string, string> = {
-  positioning: 'Positioning',
-  interception: 'Interception',
-  radio: 'Radio',
-  physical: 'Physical',
-};
+/**
+ * A backend's role is an API value; only its gloss is localised, and an unrecognised role falls through to the raw
+ * value rather than to a blank cell — a backend this build has never seen still has to name itself.
+ */
+const ROLES = ['positioning', 'interception', 'radio', 'physical'] as const;
+const isRole = (r: string): r is (typeof ROLES)[number] => (ROLES as readonly string[]).includes(r);
 
 function confidenceClass(c: string | null): string {
   if (c === 'high') return 'badge-ok';
@@ -68,11 +75,12 @@ function confidenceClass(c: string | null): string {
   return 'badge';
 }
 
-function fmtWhen(ms: number): string {
+/** Not a component, so the catalogue is handed in: each language spells its own elapsed-time phrase. */
+function fmtWhen(ms: number, t: Messages): string {
   const s = Math.round((Date.now() - ms) / 1000);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  return `${Math.round(s / 3600)}h ago`;
+  if (s < 60) return t.capture.radar.seconds(s);
+  if (s < 3600) return t.capture.radar.minutes(Math.round(s / 60));
+  return t.capture.radar.hours(Math.round(s / 3600));
 }
 
 /**
@@ -81,6 +89,11 @@ function fmtWhen(ms: number): string {
  * per-target capturability preflight (the ranked strategy ladder + the honest acquisition ceiling + a Frida unpin
  * download when pinned), and arms an on-path proxy to intercept a target's OTA — scoring the flows for firmware and
  * ingesting a carved blob into the workbench. Gated by FIRMLAB_CAPTURE + a per-action operator acknowledgement.
+ *
+ * Every sentence on this page comes from the `capture` catalogue, and the two lane banners are assembled from
+ * fragments rather than held as one string. That is deliberate: the env var, the Docker flag and the emphasised
+ * verbs stay OUTSIDE the translated text, so a translation can restate the sentence but cannot quietly alter what
+ * the operator has to type — or which word the banner leans on.
  */
 export function Capture(): JSX.Element {
   const [status, setStatus] = useState<CaptureStatus | null>(null);
@@ -108,6 +121,8 @@ export function Capture(): JSX.Element {
 
   // 6.6 learning surface (OTA timeline + per-vendor priors + CDN graph).
   const [learning, setLearning] = useState<LearningSurface | null>(null);
+
+  const t = useMessages();
 
   const runPreflight = useCallback(async (deviceId: string) => {
     const plan = await api.capturePreflight(deviceId).catch(() => null);
@@ -209,57 +224,54 @@ export function Capture(): JSX.Element {
           if (pollRef.current) window.clearInterval(pollRef.current);
           setScanning(false);
           setScanned(true);
-          if (v.session.status === 'error') setErr(v.session.error ?? 'Discovery failed');
+          // The session's own error text when it has one; the generic sentence only when it does not.
+          if (v.session.status === 'error') setErr(v.session.error ?? t.capture.discover.failed);
         }
       }, 900);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setScanning(false);
     }
-  }, [subnet, ack]);
+  }, [subnet, ack, t]);
 
   const enabled = status?.enabled === true;
 
   return (
     <div>
       <div className="page-head">
-        <div className="eyebrow">Acquisition</div>
-        <h1 className="page-title">Proxy / Updates</h1>
-        <div className="page-desc">
-          Get on-path of a device, intercept its OTA update, carve the firmware from the captured traffic and ingest it
-          — and track how its firmware versions change over time. FirmLab's second network-touching lane.
-        </div>
+        <div className="eyebrow">{t.capture.eyebrow}</div>
+        <h1 className="page-title">{t.capture.title}</h1>
+        <div className="page-desc">{t.capture.desc}</div>
       </div>
 
       {enabled ? (
         <div className="banner banner-info">
-          <strong>Discover</strong> devices below, then <strong>Capture</strong> arms an on-path proxy for one target:
-          trigger its OTA and FirmLab scores the captured flows for firmware and offers the carved blob for one-click
-          ingest. Interactive request replay (a full HTTP repeater) is on the roadmap — it needs a server-side replay
-          endpoint.
+          <strong>{t.capture.laneOn.discover}</strong> {t.capture.laneOn.mid}{' '}
+          <strong>{t.capture.laneOn.capture}</strong> {t.capture.laneOn.tail}
         </div>
       ) : (
+        // The env var and the Docker flag are what the operator has to type: they sit beside the sentence, never
+        // inside it, so no translation can quietly bend one.
         <div className="banner banner-warn">
-          The capture lane is <strong>off</strong>. Set <span className="mono">FIRMLAB_CAPTURE=1</span> to enable it
-          (its own flag, like <span className="mono">FIRMLAB_RESEARCH</span>). Detection below still runs — it's
-          read-only — but arming a scan is disabled until the lane is on. On Docker, discovery also needs{' '}
+          {t.capture.laneOff.lead} <strong>{t.capture.laneOff.word}</strong>. {t.capture.laneOff.set}{' '}
+          <span className="mono">FIRMLAB_CAPTURE=1</span> {t.capture.laneOff.enable}{' '}
+          <span className="mono">FIRMLAB_RESEARCH</span>). {t.capture.laneOff.detection} {t.capture.laneOff.docker}{' '}
           <span className="mono">--network host</span>.
         </div>
       )}
 
       <div className="panel">
-        <div className="panel-title">Capture backends</div>
+        <div className="panel-title">{t.capture.backends.title}</div>
         <div className="panel-sub">
-          How this deployment could get on-path and what it could read. Plug hardware → a backend lights up. Capture
-          ceiling right now:{' '}
+          {t.capture.backends.sub}{' '}
           {transports.length ? (
-            transports.map((t) => (
-              <span key={t} className="badge badge-accent mono" style={{ marginRight: 4 }}>
-                {t}
+            transports.map((transport) => (
+              <span key={transport} className="badge badge-accent mono" style={{ marginRight: 4 }}>
+                {transport}
               </span>
             ))
           ) : (
-            <span className="badge">nothing capturable yet</span>
+            <span className="badge">{t.capture.backends.none}</span>
           )}
         </div>
         <div className="table-wrap">
@@ -267,9 +279,9 @@ export function Capture(): JSX.Element {
             <thead>
               <tr>
                 <th style={{ width: 30 }} />
-                <th style={{ width: 130 }}>Backend</th>
-                <th style={{ width: 110 }}>Role</th>
-                <th>What it unlocks / what's needed</th>
+                <th style={{ width: 130 }}>{t.capture.backends.colBackend}</th>
+                <th style={{ width: 110 }}>{t.capture.backends.colRole}</th>
+                <th>{t.capture.backends.colUnlocks}</th>
               </tr>
             </thead>
             <tbody>
@@ -279,7 +291,7 @@ export function Capture(): JSX.Element {
                     <span className={`badge ${b.available ? 'badge-ok' : ''}`}>{b.available ? '●' : '○'}</span>
                   </td>
                   <td className="mono">{b.id}</td>
-                  <td className="hint">{ROLE_LABEL[b.role] ?? b.role}</td>
+                  <td className="hint">{isRole(b.role) ? t.capture.roles[b.role] : b.role}</td>
                   <td>
                     <div>{b.available ? b.unlocks : <span className="hint">{b.unlocks}</span>}</div>
                     <div className="hint" style={{ marginTop: 2 }}>
@@ -294,28 +306,25 @@ export function Capture(): JSX.Element {
       </div>
 
       <div className="panel">
-        <div className="panel-title">Discover devices</div>
-        <div className="panel-sub">
-          A passive host sweep (arp-scan / nmap) builds the inventory below. Nothing is intercepted — discovery only
-          enumerates who is on the wire.
-        </div>
+        <div className="panel-title">{t.capture.discover.title}</div>
+        <div className="panel-sub">{t.capture.discover.sub}</div>
 
         <label
           style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '10px 0', maxWidth: 640 }}
           htmlFor="capture-ack"
         >
           <input id="capture-ack" type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-          <span className="hint">I confirm these are devices/networks I own or am authorized to test.</span>
+          <span className="hint">{t.capture.discover.ack}</span>
         </label>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             className="select"
-            placeholder={status?.defaultSubnet ?? 'subnet (e.g. 192.168.1.0/24) — blank = auto-detect'}
+            placeholder={status?.defaultSubnet ?? t.capture.discover.subnetPlaceholder}
             value={subnet}
             onChange={(e) => setSubnet(e.target.value)}
             style={{ minWidth: 320, fontFamily: 'var(--mono)', fontSize: 12.5 }}
-            aria-label="Subnet to scan"
+            aria-label={t.capture.discover.subnetLabel}
           />
           <button
             type="button"
@@ -323,7 +332,7 @@ export function Capture(): JSX.Element {
             disabled={!enabled || !ack || scanning}
             onClick={runScan}
           >
-            {scanning ? 'Scanning…' : 'Scan network'}
+            {scanning ? t.capture.discover.scanning : t.capture.discover.scan}
           </button>
         </div>
 
@@ -340,31 +349,26 @@ export function Capture(): JSX.Element {
       </div>
 
       <div className="panel">
-        <div className="panel-title">Device radar</div>
-        <div className="panel-sub">
-          {devices.length} device(s) in the inventory. Type guesses are heuristic (phrased as questions), never
-          asserted.
-        </div>
+        <div className="panel-title">{t.capture.radar.title}</div>
+        <div className="panel-sub">{t.capture.radar.sub(devices.length)}</div>
         {devices.length === 0 ? (
           <div className="empty">
-            <div className="empty-title">{scanned ? 'Scan complete — no devices responded' : 'No scan yet'}</div>
-            <div className="empty-body">
-              {scanned
-                ? 'The sweep ran but nothing answered. On Docker, discovery needs --network host; also confirm arp-scan or nmap is installed.'
-                : 'Arm a discovery scan above to build the LAN inventory.'}
-            </div>
+            {/* A sweep that ran and found nothing is not the same as no sweep, and the two say so separately. */}
+            <div className="empty-title">{scanned ? t.capture.radar.scannedTitle : t.capture.radar.noScanTitle}</div>
+            <div className="empty-body">{scanned ? t.capture.radar.scannedBody : t.capture.radar.noScanBody}</div>
           </div>
         ) : (
           <div className="table-wrap">
             <table className="data">
               <thead>
+                {/* MAC, IP and mDNS are protocol names — the same in every language. */}
                 <tr>
                   <th style={{ width: 150 }}>MAC</th>
                   <th style={{ width: 130 }}>IP</th>
-                  <th>Vendor</th>
-                  <th>Type guess</th>
+                  <th>{t.capture.radar.colVendor}</th>
+                  <th>{t.capture.radar.colGuess}</th>
                   <th>mDNS</th>
-                  <th style={{ width: 90 }}>Seen</th>
+                  <th style={{ width: 90 }}>{t.capture.radar.colSeen}</th>
                   <th style={{ width: 90 }} />
                 </tr>
               </thead>
@@ -374,7 +378,7 @@ export function Capture(): JSX.Element {
                     <tr>
                       <td className="mono">{d.mac}</td>
                       <td className="mono hint">{d.ip ?? '—'}</td>
-                      <td>{d.ouiVendor ?? <span className="hint">unknown</span>}</td>
+                      <td>{d.ouiVendor ?? <span className="hint">{t.common.unknown}</span>}</td>
                       <td>
                         {d.typeGuess ? (
                           <span className={`badge ${confidenceClass(d.typeConfidence)}`}>
@@ -387,19 +391,19 @@ export function Capture(): JSX.Element {
                       <td className="hint mono" style={{ fontSize: 11 }}>
                         {d.mdnsIdentity ?? '—'}
                       </td>
-                      <td className="hint">{fmtWhen(d.lastSeen)}</td>
+                      <td className="hint">{fmtWhen(d.lastSeen, t)}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <button type="button" className="btn btn-sm btn-ghost" onClick={() => runPreflight(d.id)}>
-                          Preflight
+                          {t.capture.radar.preflight}
                         </button>{' '}
                         <button
                           type="button"
                           className="btn btn-sm btn-ghost"
                           disabled={!enabled || !ack}
-                          title={ack ? 'Arm an OTA capture for this device' : 'Acknowledge authorization first'}
+                          title={ack ? t.capture.radar.captureReady : t.capture.radar.captureBlocked}
                           onClick={() => armCapture(d)}
                         >
-                          Capture
+                          {t.capture.radar.capture}
                         </button>
                       </td>
                     </tr>
@@ -420,24 +424,24 @@ export function Capture(): JSX.Element {
 
       {capSession && (
         <div className="panel">
-          <div className="panel-title">Capture session</div>
+          <div className="panel-title">{t.capture.session.title}</div>
           <div className="panel-sub">
-            Target {capSession.targetDeviceId ?? '—'} · status{' '}
+            {t.capture.session.target} {capSession.targetDeviceId ?? '—'} · {t.capture.session.status}{' '}
             <span className={`badge ${capSession.status === 'ingested' ? 'badge-ok' : 'badge-accent'}`}>
               {capSession.status}
             </span>
             {capCeiling && (
               <>
                 {' '}
-                · ceiling <span className={`badge ${ceilingClass(capCeiling)} mono`}>{capCeiling}</span>
+                · {t.capture.session.ceiling}{' '}
+                <span className={`badge ${ceilingClass(capCeiling)} mono`}>{capCeiling}</span>
               </>
             )}
-            . Trigger the device's OTA now; firmware-looking flows are highlighted and can be ingested.
+            . {t.capture.session.trigger}
           </div>
           {capCeiling === 'blocked_by_pinning' && (
             <div className="banner banner-warn">
-              The device pins TLS — the OTA can't be decrypted through the proxy. Run the bundled unpin script on a
-              rooted phone: <a href="/api/capture/frida-unpin">download Frida unpin →</a>
+              {t.capture.session.pinned} <a href="/api/capture/frida-unpin">{t.capture.preflight.unpin}</a>
             </div>
           )}
           {capReason && (
@@ -445,20 +449,20 @@ export function Capture(): JSX.Element {
           )}
           <div style={{ display: 'flex', gap: 8, margin: '8px 0' }}>
             <button type="button" className="btn btn-sm btn-ghost" onClick={stopCapture}>
-              Stop &amp; teardown
+              {t.capture.session.stop}
             </button>
           </div>
           {capFlows.length === 0 ? (
-            <div className="hint">No flows yet — waiting for traffic through the proxy.</div>
+            <div className="hint">{t.capture.session.noFlows}</div>
           ) : (
             <div className="table-wrap">
               <table className="data">
                 <thead>
                   <tr>
-                    <th style={{ width: 70 }}>Score</th>
+                    <th style={{ width: 70 }}>{t.capture.session.colScore}</th>
                     <th>URL</th>
-                    <th style={{ width: 130 }}>Type</th>
-                    <th style={{ width: 90 }}>Size</th>
+                    <th style={{ width: 130 }}>{t.capture.session.colType}</th>
+                    <th style={{ width: 90 }}>{t.capture.session.colSize}</th>
                     <th style={{ width: 120 }} />
                   </tr>
                 </thead>
@@ -482,11 +486,11 @@ export function Capture(): JSX.Element {
                       <td>
                         {ingested[f.id] ? (
                           <a className="badge badge-ok" href={`#/image/${ingested[f.id]}`}>
-                            ingested →
+                            {t.capture.session.ingested}
                           </a>
                         ) : f.carved ? (
                           <button type="button" className="btn btn-primary btn-sm" onClick={() => ingest(f.id)}>
-                            Ingest
+                            {t.capture.session.ingest}
                           </button>
                         ) : (
                           <span className="hint">—</span>
@@ -502,25 +506,23 @@ export function Capture(): JSX.Element {
       )}
 
       <div className="panel">
-        <div className="panel-title">OTA learning</div>
-        <div className="panel-sub">
-          What the corpus has learned across captured versions — a per-family OTA timeline, how each vendor ships, and
-          which CDN serves whom. Capture the same device twice to unlock a cross-version diff.
-        </div>
+        <div className="panel-title">{t.capture.learning.title}</div>
+        <div className="panel-sub">{t.capture.learning.sub}</div>
         {!learning || learning.families.length === 0 ? (
           <div className="empty">
-            <div className="empty-title">No captured versions yet</div>
-            <div className="empty-body">Ingest a capture (above) — its provenance seeds the OTA timeline here.</div>
+            <div className="empty-title">{t.capture.learning.emptyTitle}</div>
+            <div className="empty-body">{t.capture.learning.emptyBody}</div>
           </div>
         ) : (
           <>
             {learning.vendorPriors.length > 0 && (
               <div className="hint" style={{ marginBottom: 10 }}>
-                Vendor priors:{' '}
+                {t.capture.learning.priors}{' '}
                 {learning.vendorPriors.map((p) => (
                   <span key={p.vendor} style={{ marginRight: 10 }}>
-                    <strong>{p.vendor}</strong> ships <span className="badge mono">{p.ships}</span>
-                    {p.cdns.length ? ` from ${p.cdns.join(', ')}` : ''} ({p.captureCount})
+                    {/* The vendor name, its shipping posture and the CDN hosts are observations, not prose. */}
+                    <strong>{p.vendor}</strong> {t.capture.learning.ships} <span className="badge mono">{p.ships}</span>
+                    {p.cdns.length ? ` ${t.capture.learning.fromCdns(p.cdns.join(', '))}` : ''} ({p.captureCount})
                   </span>
                 ))}
               </div>
@@ -528,7 +530,7 @@ export function Capture(): JSX.Element {
             {learning.families.map((fam) => (
               <div key={fam.key} style={{ marginBottom: 14 }}>
                 <div className="eyebrow">
-                  {fam.key} · {fam.captures.length} version(s) · {fam.transports.join(', ') || '—'}
+                  {fam.key} · {t.capture.learning.versions(fam.captures.length)} · {fam.transports.join(', ') || '—'}
                 </div>
                 <div className="table-wrap">
                   <table className="data">
@@ -543,11 +545,11 @@ export function Capture(): JSX.Element {
                           <td className="hint mono">{(c.size / 1024).toFixed(0)} KB</td>
                           <td style={{ width: 130 }}>
                             <a className="badge" href={`#/image/${c.imageId}`}>
-                              open →
+                              {t.capture.learning.open}
                             </a>{' '}
                             {i > 0 && (
                               <a className="badge badge-accent" href={`#/image/${c.imageId}/diff`}>
-                                diff prev
+                                {t.capture.learning.diffPrev}
                               </a>
                             )}
                           </td>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { type ImageSummary, type ToolStatus, api, fmtBytes } from '../api';
+import { useMessages } from '../i18n';
 import { Icon } from '../icons';
 
 /**
@@ -13,6 +14,7 @@ export function Overview(): JSX.Element {
   const [tools, setTools] = useState<ToolStatus[]>([]);
   const [health, setHealth] = useState<Awaited<ReturnType<typeof api.health>> | null>(null);
   const [loading, setLoading] = useState(true);
+  const t = useMessages();
 
   useEffect(() => {
     Promise.all([
@@ -32,17 +34,25 @@ export function Overview(): JSX.Element {
     });
   }, []);
 
+  // The class breakdown is keyed by the firmware-class ID, which is data and stays in its identifier spelling; only
+  // the fallback for an image with no class at all is a word, and that one is localised.
   const byClass = useMemo(() => {
     const m = new Map<string, number>();
-    for (const im of images)
-      m.set(im.identity?.firmwareClass ?? 'unknown', (m.get(im.identity?.firmwareClass ?? 'unknown') ?? 0) + 1);
+    for (const im of images) {
+      const cls = im.identity?.firmwareClass ?? t.common.unknown;
+      m.set(cls, (m.get(cls) ?? 0) + 1);
+    }
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
-  }, [images]);
+  }, [images, t]);
 
   const analyzing = images.filter((i) => i.status === 'analyzing').length;
   const errored = images.filter((i) => i.status === 'error').length;
-  const toolsUp = tools.filter((t) => t.available).length;
-  const posture = health?.exposedToNetwork ? (health.trustedProxy ? 'auth-gated' : 'bound to network') : 'local-only';
+  const toolsUp = tools.filter((tool) => tool.available).length;
+  const posture = health?.exposedToNetwork
+    ? health.trustedProxy
+      ? t.overview.stats.postureProxied
+      : t.overview.stats.postureExposed
+    : t.overview.stats.postureLocal;
   const postureClass = health?.exposedToNetwork ? (health.trustedProxy ? 'warn' : 'danger') : 'ok';
 
   const recent = images.slice(-6).reverse();
@@ -50,11 +60,9 @@ export function Overview(): JSX.Element {
   return (
     <div>
       <div className="page-head">
-        <div className="eyebrow">Workspace</div>
-        <h1 className="page-title">Dashboard</h1>
-        <div className="page-desc">
-          Everything at a glance across your firmware corpus — fleet, capacity, and posture.
-        </div>
+        <div className="eyebrow">{t.overview.eyebrow}</div>
+        <h1 className="page-title">{t.overview.title}</h1>
+        <div className="page-desc">{t.overview.desc}</div>
       </div>
 
       {loading ? (
@@ -69,18 +77,24 @@ export function Overview(): JSX.Element {
           <div className="panel">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 20 }}>
               <SummaryStat
-                label="Images"
+                label={t.overview.stats.images}
                 value={String(images.length)}
-                sub={`${analyzing} analyzing · ${errored} error`}
+                sub={t.overview.stats.imagesSub(analyzing, errored)}
               />
               <SummaryStat
-                label="On disk"
+                label={t.overview.stats.onDisk}
                 value={usage ? fmtBytes(usage.totalBytes) : '—'}
-                sub={usage?.quotaBytes ? `of ${fmtBytes(usage.quotaBytes)}` : 'local store'}
+                sub={
+                  usage?.quotaBytes ? t.overview.stats.quotaOf(fmtBytes(usage.quotaBytes)) : t.overview.stats.localStore
+                }
               />
-              <SummaryStat label="Tools" value={`${toolsUp}/${tools.length}`} sub="available in this deployment" />
+              <SummaryStat
+                label={t.overview.stats.tools}
+                value={`${toolsUp}/${tools.length}`}
+                sub={t.overview.stats.toolsSub}
+              />
               <div className="stat">
-                <div className="stat-label">Network posture</div>
+                <div className="stat-label">{t.overview.stats.posture}</div>
                 <div style={{ marginTop: 4 }}>
                   <span className={`health ${postureClass}`}>{posture}</span>
                 </div>
@@ -93,10 +107,10 @@ export function Overview(): JSX.Element {
             <div className="panel panel-flush">
               <div className="panel-head" style={{ padding: 'var(--panel-pad)', marginBottom: 0 }}>
                 <span className="panel-title" style={{ margin: 0 }}>
-                  Recent images
+                  {t.overview.recent.title}
                 </span>
                 <Link to="/analyze" className="btn btn-sm btn-ghost">
-                  Local analysis
+                  {t.overview.recent.link}
                   <span style={{ display: 'inline-flex', transform: 'rotate(180deg)' }}>
                     <Icon.back size={13} />
                   </span>
@@ -104,9 +118,10 @@ export function Overview(): JSX.Element {
               </div>
               {recent.length === 0 ? (
                 <div className="empty" style={{ padding: 28 }}>
-                  <div className="empty-title">No firmware yet</div>
+                  <div className="empty-title">{t.overview.recent.emptyTitle}</div>
                   <div className="empty-body">
-                    Head to <Link to="/analyze">Local analysis</Link> to upload your first image.
+                    {t.overview.recent.emptyLead} <Link to="/analyze">{t.overview.recent.link}</Link>{' '}
+                    {t.overview.recent.emptyTail}
                   </div>
                 </div>
               ) : (
@@ -128,7 +143,7 @@ export function Overview(): JSX.Element {
                             {im.filename}
                           </td>
                           <td>
-                            <span className="badge">{im.identity?.firmwareClass ?? 'unknown'}</span>
+                            <span className="badge">{im.identity?.firmwareClass ?? t.common.unknown}</span>
                           </td>
                           <td className="mono">{im.identity?.arch ?? '—'}</td>
                           <td className="num" style={{ textAlign: 'right' }}>
@@ -145,10 +160,10 @@ export function Overview(): JSX.Element {
             {/* class breakdown + entry points */}
             <div>
               <div className="panel">
-                <div className="panel-title">Fleet by class</div>
+                <div className="panel-title">{t.overview.byClass.title}</div>
                 {byClass.length === 0 ? (
                   <div className="hint" style={{ marginTop: 8 }}>
-                    No images yet.
+                    {t.overview.byClass.empty}
                   </div>
                 ) : (
                   <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
@@ -170,22 +185,32 @@ export function Overview(): JSX.Element {
               </div>
 
               <div className="panel">
-                <div className="panel-title">Jump to</div>
+                <div className="panel-title">{t.overview.jump.title}</div>
                 <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
                   <EntryLink
                     to="/analyze"
                     icon="overview"
-                    title="Local analysis"
-                    desc="Upload & read firmware as signal"
+                    title={t.overview.jump.analysis}
+                    desc={t.overview.jump.analysisDesc}
                   />
-                  <EntryLink to="/agents" icon="agent" title="Agents" desc="Launch & monitor autonomous runs" />
+                  <EntryLink
+                    to="/agents"
+                    icon="agent"
+                    title={t.overview.jump.agents}
+                    desc={t.overview.jump.agentsDesc}
+                  />
                   <EntryLink
                     to="/updates"
                     icon="capture"
-                    title="Proxy / Updates"
-                    desc="Intercept & analyze OTA updates"
+                    title={t.overview.jump.capture}
+                    desc={t.overview.jump.captureDesc}
                   />
-                  <EntryLink to="/corpus" icon="corpus" title="Corpus" desc="Cross-image priors & reuse" />
+                  <EntryLink
+                    to="/corpus"
+                    icon="corpus"
+                    title={t.overview.jump.corpus}
+                    desc={t.overview.jump.corpusDesc}
+                  />
                 </div>
               </div>
             </div>

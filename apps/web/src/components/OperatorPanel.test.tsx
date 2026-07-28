@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AssertedFinding, type AssertionRevision, type OperatorLedger, api } from '../api';
+import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import { OperatorPanel, revisionsOf } from './OperatorPanel';
 
@@ -53,6 +54,12 @@ function mount(l: OperatorLedger = ledger()) {
   mockApi.notes.mockResolvedValue([]);
   return render(<OperatorPanel imageId="img1" />);
 }
+
+beforeEach(() => {
+  // Reset BEFORE the render, never after it: the locale store notifies live subscribers, so switching back in an
+  // `afterEach` re-renders a still-mounted tree and fills the suite with act(…) warnings.
+  setLocale('en');
+});
 
 describe('OperatorPanel — the form cannot express a proof state', () => {
   it('offers claims, and no proof-state control of any kind', async () => {
@@ -230,6 +237,65 @@ describe('OperatorPanel — an amendment appends, and the panel shows what it re
     expect(screen.getByText(/superseded · asserted_unverified/)).toBeTruthy();
     expect(screen.getByText(/No basis was recorded with this revision/)).toBeTruthy();
     expect(screen.getByText(/stood from an unrecorded date to an unrecorded date/)).toBeTruthy();
+  });
+
+  /**
+   * In Spanish the history has to stay history. A superseded claim rendered in the present tense is a second live
+   * claim to anyone skimming, which is the erasure this ledger refuses — and the row must still carry no proof
+   * state, only the shared asserted gloss.
+   */
+  it('keeps the superseded history from reading as a live claim in Spanish', async () => {
+    setLocale('es');
+    mount(ledger({ assertions: [amended([revision])] }));
+    const toggle = await screen.findByRole('button', {
+      name: /Enmendada el 2023-11-20 — ver 1 afirmación sustituida/,
+    });
+    // Collapsed, the superseded claim is nowhere on screen — it cannot be weighed beside the one that stands.
+    expect(screen.queryByText(/Every shipped unit has telnet open as root/)).toBeNull();
+    fireEvent.click(toggle);
+
+    expect(screen.getByText('Histórico — sustituidas, ya no se afirman')).toBeTruthy();
+    expect(screen.getByText(/Una enmienda añade; nunca sobrescribe/)).toBeTruthy();
+    expect(screen.getByText(/Nada de lo de abajo se sostiene/)).toBeTruthy();
+    expect(screen.getByText(/vigente de 2023-11-14 a 2023-11-20/)).toBeTruthy();
+    // The claim CODE is an identifier and survives; the badge is the shared gloss, never a proof-state rung.
+    expect(screen.getByText(/sustituida · asserted_from_device/)).toBeTruthy();
+    expect(screen.getByText('afirmado · no medido')).toBeTruthy();
+    expect(screen.queryByText('confirmado en los bytes')).toBeNull();
+    // The author's own words, and the attribution the API serves, are the record and are shown as written.
+    expect(screen.getByText(/Every shipped unit has telnet open as root/)).toBeTruthy();
+    expect(screen.getByText(/Asserted by aaron on 2023-11-14/)).toBeTruthy();
+  });
+});
+
+/**
+ * The form cannot express a proof state in any language: the ladder is absent from its vocabulary, not disabled in
+ * it, and the panel-sub still states the three things an assertion is not.
+ */
+describe('OperatorPanel — Spanish', () => {
+  it('offers claims and no proof state, and says an assertion covers no stage', async () => {
+    setLocale('es');
+    mount(ledger({ assertions: [asserted()] }));
+
+    const basis = (await screen.findByLabelText('Con qué base')) as HTMLSelectElement;
+    expect(Array.from(basis.options).map((o) => o.value)).toEqual([
+      'asserted_unverified',
+      'asserted_from_device',
+      'asserted_from_external_evidence',
+      'disputes_finding',
+    ]);
+    for (const rung of ['static_confirmed', 'needs_runtime_reproduction', 'confirmed_in_emulation']) {
+      expect(screen.queryByText(rung)).toBeNull();
+    }
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('No llevan estado de prueba, no cuentan para ninguna etapa del análisis');
+    expect(text).toContain('sólo se retiran, dejando dicho el motivo');
+    expect(screen.getByText(/101 hallazgo\(s\) medido\(s\)/)).toBeTruthy();
+    // The severity option is the CODE, because that is what is submitted and stored.
+    const sev = screen.getByLabelText('Gravedad afirmada') as HTMLSelectElement;
+    expect(Array.from(sev.options).map((o) => o.text)).toEqual(['info', 'low', 'medium', 'high', 'critical']);
+    // The caveat the API serves wins over the local fallback, in Spanish as in English.
+    expect(screen.getByText(/asserted by a named author, not measured by FirmLab/)).toBeTruthy();
   });
 });
 

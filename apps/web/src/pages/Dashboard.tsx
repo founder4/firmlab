@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { type CoverageSummary, type ImageSummary, api, fmtBytes } from '../api';
+import { useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { toast } from '../toast';
 
@@ -15,38 +16,51 @@ const STATUS_BADGE: Record<string, string> = { ready: 'badge-ok', error: 'badge-
  * coverage banner exists to prevent, reintroduced at corpus scale. So the cell states it: nothing run at all is
  * called `unexamined` and is never dressed as a neutral zero; a partial run shows how much of the applicable plan
  * actually executed. The full sentence is on the title, one hover away.
+ *
+ * That hover sentence is `c.verdict` — written by the coverage provider when it ran and stored with the image, so
+ * it stays in the language that produced it. Translating a stored measurement would be rewriting the record.
  */
 function CoverageCell({ c }: { c: CoverageSummary | undefined }): JSX.Element {
+  const t = useMessages();
   if (!c) return <span className="hint">—</span>;
   if (c.executed === 0) {
     return (
       <span className="badge badge-medium mono" title={c.verdict}>
-        unexamined
+        {t.dashboard.coverage.unexamined}
       </span>
     );
   }
   const complete = c.executed >= c.applicable;
   return (
     <span className={`badge ${complete ? 'badge-ok' : ''} mono`} title={c.verdict}>
-      {c.executed}/{c.applicable} stages
+      {t.dashboard.coverage.stages(c.executed, c.applicable)}
     </span>
   );
 }
 
-/** A small confirm dialog that escapes its container (replaces window.confirm). */
+/**
+ * A small confirm dialog that escapes its container (replaces window.confirm).
+ *
+ * The action label is passed in rather than derived. It used to be `title.startsWith('Delete') ? 'Delete' :
+ * 'Confirm'`, which reads the button off English prose — under any other language every dialog would have
+ * silently offered "Confirm" for a destructive action.
+ */
 function Confirm({
   title,
   body,
+  confirmLabel,
   danger,
   onCancel,
   onConfirm,
 }: {
   title: string;
   body: string;
+  confirmLabel: string;
   danger?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }): JSX.Element {
+  const t = useMessages();
   return (
     <div
       className="modal-scrim"
@@ -62,7 +76,7 @@ function Confirm({
         </p>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button type="button" className="btn btn-sm" onClick={onCancel}>
-            Cancel
+            {t.common.cancel}
           </button>
           <button
             type="button"
@@ -70,7 +84,7 @@ function Confirm({
             onClick={onConfirm}
             ref={(el) => el?.focus()}
           >
-            {title.startsWith('Delete') ? 'Delete' : 'Confirm'}
+            {confirmLabel}
           </button>
         </div>
       </div>
@@ -91,10 +105,16 @@ export function Dashboard(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const [editingTag, setEditingTag] = useState<string | null>(null);
   const [tagDraft, setTagDraft] = useState('');
-  const [confirm, setConfirm] = useState<{ title: string; body: string; run: () => void } | null>(null);
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    body: string;
+    confirmLabel: string;
+    run: () => void;
+  } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const tagInputRef = useRef<HTMLInputElement>(null);
   const nav = useNavigate();
+  const t = useMessages();
 
   // Focus the inline tag field when it opens (only one row edits at a time).
   useEffect(() => {
@@ -136,7 +156,7 @@ export function Dashboard(): JSX.Element {
             im.filename.toLowerCase().includes(q) ||
             (im.identity?.arch ?? '').toLowerCase().includes(q) ||
             (im.identity?.firmwareClass ?? '').toLowerCase().includes(q) ||
-            im.tags.some((t) => t.toLowerCase().includes(q)),
+            im.tags.some((tag) => tag.toLowerCase().includes(q)),
         )
       : images;
     const val = (im: ImageSummary): string | number =>
@@ -173,7 +193,7 @@ export function Dashboard(): JSX.Element {
 
   const editTags = useCallback(
     async (img: ImageSummary, action: 'add' | 'remove', tag: string) => {
-      const next = action === 'add' ? [...new Set([...img.tags, tag])] : img.tags.filter((t) => t !== tag);
+      const next = action === 'add' ? [...new Set([...img.tags, tag])] : img.tags.filter((x) => x !== tag);
       try {
         await api.setTags(img.id, next);
         refresh();
@@ -202,7 +222,10 @@ export function Dashboard(): JSX.Element {
     [nav, refresh],
   );
 
-  const askDelete = useCallback((title: string, body: string, run: () => void) => setConfirm({ title, body, run }), []);
+  const askDelete = useCallback(
+    (title: string, body: string, run: () => void) => setConfirm({ title, body, confirmLabel: t.common.delete, run }),
+    [t],
+  );
 
   const hasImages = images.length > 0;
 
@@ -257,12 +280,10 @@ export function Dashboard(): JSX.Element {
         {uploading ? <span className="spinner" /> : <Icon.upload size={22} />}
       </div>
       <div style={{ fontSize: '1.05rem', fontWeight: 650, color: 'var(--text)' }}>
-        {uploading ? 'Analyzing…' : 'Drop a firmware image to begin'}
+        {uploading ? t.dashboard.upload.analyzing : t.dashboard.upload.dropTitle}
       </div>
-      <div className="empty-body">
-        Get an instant identity, structure map, entropy profile, and secret scan — analyzed entirely on this machine, no
-        toolchain required.
-      </div>
+      <div className="empty-body">{t.dashboard.upload.dropBody}</div>
+      {/* File extensions, not prose. */}
       <div className="mono" style={{ marginTop: 6, fontSize: '0.72rem', color: 'var(--text-faint)' }}>
         .bin · .img · .trx · .squashfs · .ubi · .jffs2 · .elf · .dtb
       </div>
@@ -288,20 +309,20 @@ export function Dashboard(): JSX.Element {
           <Icon.upload size={18} />
         </div>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600 }}>Analyze another image</div>
+          <div style={{ fontWeight: 600 }}>{t.dashboard.upload.another}</div>
           <div className="mono hint" style={{ marginTop: 2, fontSize: '0.72rem' }}>
-            drop a file, or select — nothing leaves this machine
+            {t.dashboard.upload.anotherHint}
           </div>
         </div>
       </div>
       <button type="button" className="btn btn-primary" disabled={uploading} onClick={() => fileRef.current?.click()}>
         {uploading ? (
           <>
-            <span className="spinner" /> Analyzing…
+            <span className="spinner" /> {t.dashboard.upload.analyzing}
           </>
         ) : (
           <>
-            <Icon.upload size={15} /> Drop or select
+            <Icon.upload size={15} /> {t.dashboard.upload.dropOrSelect}
           </>
         )}
       </button>
@@ -318,12 +339,9 @@ export function Dashboard(): JSX.Element {
   return (
     <div>
       <div className="page-head">
-        <div className="eyebrow">Workspace</div>
-        <h1 className="page-title">Local analysis</h1>
-        <div className="page-desc">
-          Upload an image to analyze it locally, then read it as signal, deepen with tool-backed jobs, and compare
-          across your corpus.
-        </div>
+        <div className="eyebrow">{t.dashboard.eyebrow}</div>
+        <h1 className="page-title">{t.dashboard.title}</h1>
+        <div className="page-desc">{t.dashboard.desc}</div>
       </div>
 
       {hiddenInput}
@@ -342,7 +360,7 @@ export function Dashboard(): JSX.Element {
             <div className="panel-head" style={{ padding: 'var(--panel-pad)', marginBottom: 0, alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                 <span className="panel-title" style={{ margin: 0 }}>
-                  Images
+                  {t.dashboard.list.title}
                 </span>
                 <span className="mono" style={{ color: 'var(--text-faint)', fontSize: '0.8rem' }}>
                   {images.length}
@@ -351,8 +369,8 @@ export function Dashboard(): JSX.Element {
               {/* The corpus-level reading of the same coverage the rows show — "0 findings" across an unscanned
                   workspace is not a quiet corpus, and this is where that would otherwise go unsaid. */}
               {unexamined > 0 && (
-                <span className="badge badge-medium" title="Run the autonomous scan on these to actually examine them">
-                  {unexamined} of {images.length} unexamined
+                <span className="badge badge-medium" title={t.dashboard.coverage.unexaminedTitle}>
+                  {t.dashboard.coverage.unexaminedCount(unexamined, images.length)}
                 </span>
               )}
               <div style={{ flex: 1 }} />
@@ -361,25 +379,21 @@ export function Dashboard(): JSX.Element {
                   type="button"
                   className="btn btn-sm btn-danger"
                   onClick={() =>
-                    askDelete(
-                      `Delete ${selected.size} image${selected.size === 1 ? '' : 's'}?`,
-                      'This removes each image and any carved rootfs. This cannot be undone.',
-                      async () => {
-                        const ids = [...selected];
-                        try {
-                          await api.deleteImages(ids);
-                          toast.success(`Deleted ${ids.length} image${ids.length === 1 ? '' : 's'}`);
-                        } catch (e) {
-                          toast.error(e);
-                        }
-                        setSelected(new Set());
-                        setConfirm(null);
-                        refresh();
-                      },
-                    )
+                    askDelete(t.dashboard.del.manyTitle(selected.size), t.dashboard.del.manyBody, async () => {
+                      const ids = [...selected];
+                      try {
+                        await api.deleteImages(ids);
+                        toast.success(t.dashboard.del.done(ids.length));
+                      } catch (e) {
+                        toast.error(e);
+                      }
+                      setSelected(new Set());
+                      setConfirm(null);
+                      refresh();
+                    })
                   }
                 >
-                  Delete selected ({selected.size})
+                  {t.dashboard.del.selected(selected.size)}
                 </button>
               )}
               <div style={{ position: 'relative', flex: '0 1 300px' }}>
@@ -397,7 +411,7 @@ export function Dashboard(): JSX.Element {
                 </span>
                 <input
                   className="input"
-                  placeholder="Filter by filename, arch, class, or tag…"
+                  placeholder={t.dashboard.list.filterPlaceholder}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   style={{ paddingLeft: 30 }}
@@ -414,12 +428,10 @@ export function Dashboard(): JSX.Element {
             ) : shown.length === 0 ? (
               <div style={{ padding: 20 }}>
                 <div className="empty">
-                  <div className="empty-title">No matches</div>
-                  <div className="empty-body">
-                    No image matches “{query}”. Clear the filter to see all {images.length}.
-                  </div>
+                  <div className="empty-title">{t.dashboard.list.noMatches}</div>
+                  <div className="empty-body">{t.dashboard.list.noMatchesBody(query, images.length)}</div>
                   <button type="button" className="btn btn-sm" onClick={() => setQuery('')}>
-                    Clear filter
+                    {t.dashboard.list.clearFilter}
                   </button>
                 </div>
               </div>
@@ -432,15 +444,15 @@ export function Dashboard(): JSX.Element {
                   <thead>
                     <tr>
                       <th style={{ width: 36 }} />
-                      <Th k="filename">Filename</Th>
-                      <Th k="firmwareClass">Class</Th>
-                      <Th k="arch">Arch</Th>
-                      <th>Tags</th>
+                      <Th k="filename">{t.dashboard.list.colFilename}</Th>
+                      <Th k="firmwareClass">{t.dashboard.list.colClass}</Th>
+                      <Th k="arch">{t.dashboard.list.colArch}</Th>
+                      <th>{t.dashboard.list.colTags}</th>
                       <Th k="size" num>
-                        Size
+                        {t.dashboard.list.colSize}
                       </Th>
-                      <Th k="coverage">Coverage</Th>
-                      <Th k="status">Status</Th>
+                      <Th k="coverage">{t.dashboard.list.colCoverage}</Th>
+                      <Th k="status">{t.dashboard.list.colStatus}</Th>
                       <th style={{ width: 40 }} />
                     </tr>
                   </thead>
@@ -450,30 +462,31 @@ export function Dashboard(): JSX.Element {
                         <td onClick={(e) => e.stopPropagation()}>
                           <input
                             type="checkbox"
-                            aria-label={`Select ${img.filename}`}
+                            aria-label={t.dashboard.list.select(img.filename)}
                             checked={selected.has(img.id)}
                             onChange={() => toggleSelect(img.id)}
                           />
                         </td>
+                        {/* Filename, class and arch are data the analysis produced — never translated. */}
                         <td className="mono" style={{ color: 'var(--text)', fontWeight: 500 }}>
                           {img.filename}
                         </td>
                         <td>
-                          <span className="badge">{img.identity?.firmwareClass ?? 'unknown'}</span>
+                          <span className="badge">{img.identity?.firmwareClass ?? t.common.unknown}</span>
                         </td>
                         <td className="mono">{img.identity?.arch ?? '—'}</td>
                         <td onClick={(e) => e.stopPropagation()} style={{ maxWidth: 240 }}>
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-                            {img.tags.map((t) => (
+                            {img.tags.map((tag) => (
                               <button
                                 type="button"
-                                key={t}
+                                key={tag}
                                 className="badge"
-                                title="Remove tag"
-                                onClick={() => editTags(img, 'remove', t)}
+                                title={t.dashboard.list.removeTag}
+                                onClick={() => editTags(img, 'remove', tag)}
                                 style={{ cursor: 'pointer' }}
                               >
-                                {t}{' '}
+                                {tag}{' '}
                                 <span aria-hidden="true" style={{ opacity: 0.6 }}>
                                   ✕
                                 </span>
@@ -484,18 +497,18 @@ export function Dashboard(): JSX.Element {
                                 ref={tagInputRef}
                                 className="input"
                                 value={tagDraft}
-                                placeholder="tag…"
+                                placeholder={t.dashboard.list.tagPlaceholder}
                                 onChange={(e) => setTagDraft(e.target.value)}
                                 onBlur={() => {
-                                  const t = tagDraft.trim();
-                                  if (t) editTags(img, 'add', t);
+                                  const tag = tagDraft.trim();
+                                  if (tag) editTags(img, 'add', tag);
                                   setEditingTag(null);
                                   setTagDraft('');
                                 }}
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') {
-                                    const t = tagDraft.trim();
-                                    if (t) editTags(img, 'add', t);
+                                    const tag = tagDraft.trim();
+                                    if (tag) editTags(img, 'add', tag);
                                     setEditingTag(null);
                                     setTagDraft('');
                                   } else if (e.key === 'Escape') {
@@ -509,8 +522,8 @@ export function Dashboard(): JSX.Element {
                               <button
                                 type="button"
                                 className="icon-btn"
-                                title="Add tag"
-                                aria-label="Add tag"
+                                title={t.dashboard.list.addTag}
+                                aria-label={t.dashboard.list.addTag}
                                 style={{ width: 22, height: 22 }}
                                 onClick={() => {
                                   setEditingTag(img.id);
@@ -535,22 +548,18 @@ export function Dashboard(): JSX.Element {
                           <button
                             type="button"
                             className="icon-btn"
-                            aria-label={`Delete ${img.filename}`}
-                            title="Delete"
+                            aria-label={t.dashboard.list.deleteImage(img.filename)}
+                            title={t.common.delete}
                             onClick={() =>
-                              askDelete(
-                                `Delete ${img.filename}?`,
-                                'This removes the image and any carved rootfs.',
-                                () => {
-                                  api
-                                    .deleteImage(img.id)
-                                    .then(() => {
-                                      setConfirm(null);
-                                      refresh();
-                                    })
-                                    .catch(toast.error);
-                                },
-                              )
+                              askDelete(t.dashboard.del.oneTitle(img.filename), t.dashboard.del.oneBody, () => {
+                                api
+                                  .deleteImage(img.id)
+                                  .then(() => {
+                                    setConfirm(null);
+                                    refresh();
+                                  })
+                                  .catch(toast.error);
+                              })
                             }
                           >
                             <Icon.trash size={15} />
@@ -589,6 +598,7 @@ export function Dashboard(): JSX.Element {
         <Confirm
           title={confirm.title}
           body={confirm.body}
+          confirmLabel={confirm.confirmLabel}
           danger
           onCancel={() => setConfirm(null)}
           onConfirm={confirm.run}

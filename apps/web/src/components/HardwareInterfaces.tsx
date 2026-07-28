@@ -18,6 +18,11 @@
  * JTAG and SWD get a row that says FirmLab has nothing, and that is deliberate rather than an omission: a device tree
  * does not describe the debug port, so a section listing UART and SPI while silently skipping JTAG would read as
  * "no JTAG here". The honest answer to a question this evidence cannot settle is to name the question.
+ *
+ * All of that prose lives in the `hardware` namespace, because it is the screen's product rather than its chrome —
+ * including the three-way `absence` split, which is the distinction a real image caught this component getting
+ * wrong. Node paths, `compatible` strings, tty names, baud rates and the literal `bootdelay` / `read-only` keys are
+ * device-tree vocabulary and stay in it.
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -28,12 +33,18 @@ import {
   type UbootResult,
   api,
 } from '../api';
+import { type Messages, useMessages } from '../i18n';
 
 /** The buses a device tree can describe, in the order an analyst on the bench cares about them. */
 const BUS_ORDER: NonNullable<DtPeripheral['kind']>[] = ['uart', 'spi', 'i2c', 'mmc', 'usb', 'gpio', 'watchdog'];
 
+/**
+ * Bus names, not prose — which is why they sit here rather than in the catalogue. `SPI`, `I²C`, `GPIO` and the rest
+ * are what the bus is called on a datasheet in any language, and a Spanish "translation" of one would name a thing
+ * no schematic uses. `JTAG / SWD` below is here for the same reason.
+ */
 const BUS_LABEL: Record<string, string> = {
-  uart: 'UART / serial',
+  uart: 'UART',
   spi: 'SPI',
   i2c: 'I²C',
   mmc: 'MMC / SD',
@@ -108,15 +119,16 @@ function primaryBlob(result: DeviceTreeResult | null): DeviceTreeBlob | null {
  * came back empty, which is a different claim from one that never ran, and the banner further down was already
  * saying so while these three contradicted it.
  */
-function absenceReason(treeRan: boolean, treeFound: boolean, whenFound: string): string {
+function absenceReason(treeRan: boolean, treeFound: boolean, whenFound: string, t: Messages): string {
   if (treeFound) return whenFound;
-  if (treeRan) return 'The device tree was read for this image and none could be parsed — see the reason below.';
-  return 'No device tree has been read for this image yet, so nothing is declared either way.';
+  if (treeRan) return t.hardware.absence.ranNotParsed;
+  return t.hardware.absence.neverRan;
 }
 
 type Load = 'loading' | 'ready' | 'error';
 
 export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Element {
+  const t = useMessages();
   const [dt, setDt] = useState<DeviceTreeResult | null>(null);
   const [uboot, setUboot] = useState<UbootResult | null>(null);
   const [load, setLoad] = useState<Load>('loading');
@@ -172,7 +184,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
   if (load === 'loading') {
     return (
       <div className="panel" style={{ marginTop: 16 }}>
-        <div className="panel-title">Hardware interfaces</div>
+        <div className="panel-title">{t.sections.hardware}</div>
         <div className="skeleton" style={{ height: 96, marginTop: 12 }} />
       </div>
     );
@@ -180,18 +192,18 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
 
   return (
     <div className="panel" style={{ marginTop: 16 }}>
-      <div className="panel-title">Hardware interfaces</div>
+      <div className="panel-title">{t.sections.hardware}</div>
       <div className="panel-sub">
-        What this firmware <em>declares</em> about the physical ways into the board — read from the device tree, the
-        kernel command line and the U-Boot environment. FirmLab does not connect to hardware: everything here describes
-        the board the image was <strong>built for</strong>, not the board on your bench.
+        {t.hardware.sub.before} <em>{t.hardware.sub.declares}</em> {t.hardware.sub.middle}{' '}
+        <strong>{t.hardware.sub.builtFor}</strong>
+        {t.hardware.sub.after}
       </div>
 
       {load === 'error' && (
         <div className="banner banner-warn" style={{ marginTop: 12 }}>
-          Could not read the stored provider results.{' '}
+          {t.hardware.loadError}{' '}
           <button className="btn btn-sm btn-ghost" onClick={() => void refresh()}>
-            Retry
+            {t.common.retry}
           </button>
         </div>
       )}
@@ -200,7 +212,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
           a sentence, not a table row. */}
       <section className="hw-lead" aria-labelledby="hw-console-h">
         <div className="eyebrow" id="hw-console-h">
-          Console
+          {t.hardware.console.heading}
         </div>
         {console_ || consoleNode ? (
           <>
@@ -210,8 +222,8 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
                   <span className="mono">{console_.tty}</span>
                   {console_.baud && (
                     <>
-                      {' at '}
-                      <span className="mono">{console_.baud}</span> baud
+                      {' '}
+                      {t.hardware.console.at} <span className="mono">{console_.baud}</span> {t.hardware.console.baud}
                     </>
                   )}
                 </>
@@ -226,14 +238,14 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
             <div className="hint hw-prose">
               {console_ && (
                 <>
-                  Kernel command line names <span className="mono">{console_.tty}</span>
+                  {t.hardware.console.fromCmdline} <span className="mono">{console_.tty}</span>
                   {consoleNode ? '; ' : '. '}
                 </>
               )}
               {consoleNode && (
                 <>
-                  {console_ ? 'the tree resolves ' : 'The device tree resolves '}
-                  <span className="mono">{blob?.stdoutPath ?? 'stdout-path'}</span> to{' '}
+                  {console_ ? t.hardware.console.treeResolvesAfter : t.hardware.console.treeResolvesFirst}{' '}
+                  <span className="mono">{blob?.stdoutPath ?? 'stdout-path'}</span> {t.hardware.console.to}{' '}
                   <span className="mono">{consoleNode.path}</span>
                   {consoleNode.compatible?.[0] && (
                     <>
@@ -244,46 +256,40 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
                   .{' '}
                 </>
               )}
-              {!console_ && consoleNode && (
-                <>
-                  The kernel command line does not name a console, so the baud rate is not declared anywhere in this
-                  image.{' '}
-                </>
-              )}
-              A declared console is a UART the kernel is told to bring up. Whether the pads are populated, a header is
-              fitted, or the console asks for a login are three further questions the image cannot answer.
+              {!console_ && consoleNode && <>{t.hardware.console.noBaud} </>}
+              {t.hardware.console.caveat}
             </div>
           </>
         ) : (
           <p className="hint hw-prose" style={{ margin: 0 }}>
             {treeFound
-              ? 'Neither the kernel command line nor the device tree names a console for this image.'
+              ? t.hardware.console.noneFound
               : treeRan
-                ? 'The device tree was read and none could be parsed, so no console is known from it.'
-                : 'No console known yet — the device tree has not been read.'}
+                ? t.hardware.console.noneParsed
+                : t.hardware.console.noneRead}
           </p>
         )}
 
         <div className="hw-prompt">
-          <span className="eyebrow">Bootloader prompt</span>
+          <span className="eyebrow">{t.hardware.prompt.heading}</span>
           {prompt.state === 'open' && (
             <span className="badge badge-medium">
-              interruptible — <span className="mono">bootdelay={prompt.seconds}</span>
+              {t.hardware.prompt.open} — <span className="mono">bootdelay={prompt.seconds}</span>
             </span>
           )}
           {prompt.state === 'none' && (
             <span className="badge">
-              no window — <span className="mono">bootdelay=0</span>
+              {t.hardware.prompt.none} — <span className="mono">bootdelay=0</span>
             </span>
           )}
           {prompt.state === 'disabled' && (
             <span className="badge badge-ok">
-              prompt disabled — <span className="mono">bootdelay=-1</span>
+              {t.hardware.prompt.disabled} — <span className="mono">bootdelay=-1</span>
             </span>
           )}
           {prompt.state === 'unknown' && (
             <span className="hint hw-prose">
-              not determinable — {uboot?.found ? 'the env carries no bootdelay' : 'no U-Boot environment was decoded'}
+              {t.hardware.prompt.unknown} — {uboot?.found ? t.hardware.prompt.noBootdelay : t.hardware.prompt.noEnv}
             </span>
           )}
         </div>
@@ -293,28 +299,26 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
           "no device tree has been read" under Buses and again under Flash map reads as two separate findings. */}
       {!treeRan && (
         <div className="hw-nothing" style={{ marginTop: 18 }}>
-          <strong>Nothing has been read for this image yet</strong>
-          <span className="hint hw-prose">
-            The buses, the flash map and the console all come from the device tree and the U-Boot environment, and
-            neither has run. That is why this screen is empty — not because the firmware declares no interfaces.
-          </span>
+          <strong>{t.hardware.nothingRead.title}</strong>
+          <span className="hint hw-prose">{t.hardware.nothingRead.body}</span>
         </div>
       )}
 
       {/* Buses. A table rather than tiles: these are rows of technical data that get compared column-wise. */}
       <section style={{ marginTop: 20, display: treeRan ? undefined : 'none' }}>
         <div className="eyebrow" style={{ marginBottom: 8 }}>
-          Declared buses & debug interfaces
+          {t.hardware.buses.heading}
         </div>
         {peripherals.length > 0 ? (
           <div style={{ overflowX: 'auto' }}>
             <table className="data">
               <thead>
                 <tr>
-                  <th>Interface</th>
-                  <th>Node</th>
+                  <th>{t.hardware.buses.interface}</th>
+                  <th>{t.hardware.buses.node}</th>
+                  {/* The heading names the device tree's own `compatible` property. */}
                   <th>Compatible</th>
-                  <th>Status</th>
+                  <th>{t.hardware.buses.status}</th>
                 </tr>
               </thead>
               <tbody>
@@ -330,17 +334,20 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
                         {BUS_LABEL[p.kind ?? ''] ?? p.kind}
                         {p.console && (
                           <span className="badge badge-accent" style={{ marginLeft: 6 }}>
-                            console
+                            {t.hardware.buses.console}
                           </span>
                         )}
                       </td>
                       <td className="mono">{p.path}</td>
                       <td className="mono hw-compat">{p.compatible?.join(', ') ?? '—'}</td>
                       <td>
-                        <span className={p.enabled ? 'hw-on' : 'hw-off'}>{p.enabled ? 'enabled' : 'disabled'}</span>
+                        <span className={p.enabled ? 'hw-on' : 'hw-off'}>
+                          {p.enabled ? t.hardware.buses.enabled : t.hardware.buses.disabled}
+                        </span>
                         {/* The literal `status` value is worth showing only when it adds something the word does
                             not: `ok` vs `okay` vs absent is real provenance, but a node whose status IS the string
-                            "disabled" would otherwise render as "disabled disabled". */}
+                            "disabled" would otherwise render as "disabled disabled". The comparison is against the
+                            device tree's own vocabulary, so it stays in English whatever the interface language. */}
                         {p.status && p.status !== (p.enabled ? 'enabled' : 'disabled') && (
                           <span className="hint hw-prose" style={{ marginLeft: 6 }}>
                             {p.status}
@@ -354,36 +361,34 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
           </div>
         ) : (
           <p className="hint hw-prose" style={{ margin: 0 }}>
-            {absenceReason(treeRan, treeFound, 'The device tree declares no bus nodes this reader recognises.')}
+            {absenceReason(treeRan, treeFound, t.hardware.buses.none, t)}
           </p>
         )}
         {(blob?.peripheralsDropped ?? 0) > 0 && (
           <p className="hint hw-prose" style={{ marginTop: 6 }}>
-            {blob?.peripheralsDropped} further node(s) were not listed — {blob?.peripheralNote ?? 'a cap applied'}.
+            {t.hardware.buses.dropped(
+              blob?.peripheralsDropped ?? 0,
+              blob?.peripheralNote ?? t.hardware.buses.droppedDefaultRule,
+            )}
           </p>
         )}
         {(blob?.nestedNodesSkipped ?? 0) > 0 && (
           <p className="hint hw-prose" style={{ marginTop: 6 }}>
-            {blob?.nestedNodesSkipped} node(s) nested under another peripheral were excluded as driver chip-support
-            tables rather than board hardware.
+            {t.hardware.buses.nested(blob?.nestedNodesSkipped ?? 0)}
           </p>
         )}
 
         {/* Named, not omitted: a list of buses that silently skipped JTAG would read as "there is no JTAG". */}
         <div className="hw-nothing">
           <strong>JTAG / SWD</strong>
-          <span className="hint hw-prose">
-            Not determinable from firmware. A device tree does not describe the debug port, and whether it is fused off,
-            password-locked or open is a property of the silicon and the board — this row exists so its absence above is
-            not read as a negative.
-          </span>
+          <span className="hint hw-prose">{t.hardware.jtag.body}</span>
         </div>
       </section>
 
       {/* Flash map. The read-only caveat sits with the column it qualifies, not in a footnote. */}
       <section style={{ marginTop: 20, display: treeRan ? undefined : 'none' }}>
         <div className="eyebrow" style={{ marginBottom: 8 }}>
-          Declared flash map
+          {t.hardware.flash.heading}
         </div>
         {partitions.length > 0 ? (
           <>
@@ -391,10 +396,10 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
               <table className="data">
                 <thead>
                   <tr>
-                    <th>Partition</th>
-                    <th className="num">Offset</th>
-                    <th className="num">Size</th>
-                    <th>Declares read-only</th>
+                    <th>{t.hardware.flash.partition}</th>
+                    <th className="num">{t.hardware.flash.offset}</th>
+                    <th className="num">{t.hardware.flash.size}</th>
+                    <th>{t.hardware.flash.declaresReadOnly}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -417,20 +422,18 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
               </table>
             </div>
             <p className="hint hw-prose" style={{ marginTop: 8 }}>
-              <strong>`read-only` is not write protection.</strong> It asks the kernel to withhold a writable mtd node.
-              A bootloader, a recovery path or a direct SPI write ignores it, and nothing here says the region is
-              protected in hardware.
+              <strong>{t.hardware.flash.readOnlyStrong}</strong> {t.hardware.flash.readOnlyBody}
               {blob?.partitionNode && (
                 <>
                   {' '}
-                  Read from <span className="mono">{blob.partitionNode}</span>.
+                  {t.hardware.flash.readFrom} <span className="mono">{blob.partitionNode}</span>.
                 </>
               )}
             </p>
           </>
         ) : (
           <p className="hint hw-prose" style={{ margin: 0 }}>
-            {blob?.partitionNote ?? absenceReason(treeRan, treeFound, 'This device tree declares no partition map.')}
+            {blob?.partitionNote ?? absenceReason(treeRan, treeFound, t.hardware.flash.none, t)}
           </p>
         )}
       </section>
@@ -439,29 +442,30 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
       <section style={{ marginTop: 20 }}>
         {blob && (
           <p className="hint hw-prose" style={{ margin: 0 }}>
-            Board: <span className="mono">{blob.model ?? blob.compatible?.[0] ?? 'unnamed'}</span>
+            {t.hardware.provenance.board}{' '}
+            <span className="mono">{blob.model ?? blob.compatible?.[0] ?? t.hardware.provenance.unnamed}</span>
             {blob.origin && (
               <>
-                {' · reached via '}
-                <span className="mono">{blob.origin}</span>
+                {' · '}
+                {t.hardware.provenance.reachedVia} <span className="mono">{blob.origin}</span>
               </>
             )}
-            {blob.nodeCount !== undefined && <> · {blob.nodeCount} nodes</>}
+            {blob.nodeCount !== undefined && <> · {t.hardware.provenance.nodes(blob.nodeCount)}</>}
             {(dt?.blobs?.length ?? 0) > 1 && (
               <>
                 {' · '}
-                {dt?.blobs?.length} trees in this image
-                {blob.selected ? ', this one selected by the FIT configuration' : ', none declared as the choice'}
+                {t.hardware.provenance.trees(dt?.blobs?.length ?? 0)}
+                {blob.selected ? t.hardware.provenance.selected : t.hardware.provenance.notSelected}
               </>
             )}
           </p>
         )}
         {treeRan && !treeFound && (
           <div className="banner banner-warn" style={{ marginTop: 8 }}>
-            No device tree could be read. {dt?.reason}
+            {t.hardware.provenance.noneRead} {dt?.reason}
             {(dt?.searched?.length ?? 0) > 0 && (
               <div className="hint hw-prose" style={{ marginTop: 4 }}>
-                Searched: <span className="mono">{dt?.searched?.join(', ')}</span>
+                {t.hardware.provenance.searched} <span className="mono">{dt?.searched?.join(', ')}</span>
               </div>
             )}
           </div>
@@ -471,13 +475,19 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
             {running === 'devicetree' ? (
               <span className="spinner" />
             ) : treeRan ? (
-              'Re-read device tree'
+              t.hardware.actions.rereadTree
             ) : (
-              'Read device tree'
+              t.hardware.actions.readTree
             )}
           </button>
           <button className="btn btn-sm" disabled={running !== null} onClick={() => void run('uboot')}>
-            {running === 'uboot' ? <span className="spinner" /> : uboot ? 'Re-read U-Boot env' : 'Read U-Boot env'}
+            {running === 'uboot' ? (
+              <span className="spinner" />
+            ) : uboot ? (
+              t.hardware.actions.rereadUboot
+            ) : (
+              t.hardware.actions.readUboot
+            )}
           </button>
         </div>
       </section>

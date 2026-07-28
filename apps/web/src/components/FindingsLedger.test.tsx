@@ -1,7 +1,15 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { Finding } from '../api';
+import { setLocale } from '../i18n';
+import { en } from '../locales/en';
 import { FindingsLedger, danglingDisputes, indexDisputes, selectLedgerRows } from './FindingsLedger';
+
+beforeEach(() => {
+  // Reset BEFORE the render, never after it: the locale store notifies live subscribers, so switching back in an
+  // `afterEach` re-renders a still-mounted tree and fills the suite with act(…) warnings.
+  setLocale('en');
+});
 
 const measured = (o: Partial<Finding> = {}): Finding => ({
   id: 'f1',
@@ -148,6 +156,9 @@ describe('FindingsLedger — the pure selection rules', () => {
     const view = selectLedgerRows(rows, new Set(['low']), 5);
     expect(view.rows.some((r) => r.id === 'low')).toBe(true);
     expect(view.omitted).toBe(8);
+    // The sentence still travels WITH the selection; it is now the catalogue's, so the two are pinned together
+    // rather than the wording being restated here and drifting from what a reader actually sees.
+    expect(view.rule).toBe(en.findings.cutRule(5, 13, 8));
     expect(view.rule).toContain('Every contested row is shown regardless of the cap');
     expect(view.rule).toContain('never by the order the rows were written');
   });
@@ -156,5 +167,42 @@ describe('FindingsLedger — the pure selection rules', () => {
     const view = selectLedgerRows([measured()], new Set(), 5);
     expect(view.rule).toBeNull();
     expect(view.omitted).toBe(0);
+  });
+});
+
+/**
+ * The dispute annotation is the one piece of prose here a translation can quietly invert. Drop the half saying the
+ * proof state is untouched and what is left is a bare "DISPUTADO" — precisely the override the design refuses. So
+ * both halves are asserted in Spanish, and so is the fact that the two identifiers the sentence is built around,
+ * the assertion id and the proof-state CODE, came through untranslated.
+ */
+describe('FindingsLedger — the dispute annotation in Spanish', () => {
+  it('records the contest AND that the state code decided still stands', () => {
+    setLocale('es');
+    const { container } = render(<FindingsLedger findings={[measured(), dispute('f1')]} />);
+    const text = container.textContent ?? '';
+
+    expect(screen.getByText('Impugnado por un operador')).toBeTruthy();
+    expect(text).toContain('aaron afirma el 2023-11-14 que este hallazgo es incorrecto');
+    // The half a bare chip would drop: the state is unchanged, not downgraded, and the row is not removed.
+    expect(text).toContain('el estado de prueba de esta fila sigue siendo');
+    expect(text).toContain('no lo cambia, no lo rebaja ni retira la fila');
+    expect(text).toContain('no cambia nada de lo que decidió el código');
+    // The badge carries the shared gloss; the CODE is still the code, because it crosses the API into SQLite.
+    expect(screen.getByText('confirmado en los bytes')).toBeTruthy();
+    expect(screen.getByText('static_confirmed')).toBeTruthy();
+    // Recorded evidence — the provider's title, the operator's claim and the source string — is shown as written.
+    expect(text).toContain('strcpy reachable from the HTTP handler');
+    expect(text).toContain('That handler is compiled out of shipping units');
+    expect(screen.getByText('binvuln')).toBeTruthy();
+  });
+
+  it('states a dangling dispute in Spanish rather than dropping a recorded claim', () => {
+    setLocale('es');
+    const { container } = render(<FindingsLedger findings={[measured({ id: 'f9' }), dispute('f1-older-run')]} />);
+    const text = container.textContent ?? '';
+    expect(text).toContain('no está en este registro');
+    expect(text).toContain('sustituye sus filas por ids nuevos');
+    expect(screen.getByText('f1-older-run')).toBeTruthy();
   });
 });
