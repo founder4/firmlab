@@ -29,6 +29,18 @@ import path from 'node:path';
 export const SEARCH_FILE_CAP = 8 * 1024 * 1024;
 /** Total bytes read across one search, so a rootfs of many medium files cannot cost more than a few large ones. */
 export const SEARCH_BYTE_BUDGET = 256 * 1024 * 1024;
+/**
+ * Deep search: a HIGHER per-file cap, not an unlimited one, and a budget raised to match.
+ *
+ * The first version set the deep per-file cap to the whole byte budget, and the real GL.iNet turned that into a
+ * worse answer than the default: it opened the 106 MB `.ubi` and the 92.6 MB `carved_rootfs.squashfs` first,
+ * spent the budget on them, and skipped 4385 files it would otherwise have read — trading 10 holes for 4385.
+ * Those two are also exactly the files worth NOT reading: a raw UBI volume and a SquashFS image are containers
+ * whose contents are already searched, one extracted file at a time, right beside them. 64 MB clears every real
+ * binary on the corpus (the largest is `AdGuardHome` at 32.9 MB) and still refuses the containers.
+ */
+export const DEEP_FILE_CAP = 64 * 1024 * 1024;
+export const DEEP_BYTE_BUDGET = 1024 * 1024 * 1024;
 /** Hits returned. Reaching it is reported, never silently truncating. */
 export const SEARCH_HIT_CAP = 200;
 /** Filesystem entries visited. */
@@ -87,7 +99,7 @@ export interface SearchResult {
 export function formatCoverage(c: SearchCoverage, hitCount: number, deep = false): string {
   const holes: string[] = [];
   if (c.skipped.tooLarge > 0) {
-    const capMb = Math.round((deep ? SEARCH_BYTE_BUDGET : SEARCH_FILE_CAP) / (1024 * 1024));
+    const capMb = Math.round((deep ? DEEP_FILE_CAP : SEARCH_FILE_CAP) / (1024 * 1024));
     holes.push(`${c.skipped.tooLarge} file(s) larger than ${capMb} MB`);
   }
   if (c.skipped.budgetExhausted > 0) holes.push(`${c.skipped.budgetExhausted} file(s) after the read budget ran out`);
@@ -169,7 +181,9 @@ export function searchExtraction(
   // corpus's richest image: the GL.iNet carve holds 10 files above 8 MB, so every query there — including one
   // that legitimately found nothing — carries a permanent hole. An operator who needs a real negative has to be
   // able to buy one, and the byte budget still bounds the cost.
-  const fileCap = opts.deep === true ? SEARCH_BYTE_BUDGET : SEARCH_FILE_CAP;
+  const deep = opts.deep === true;
+  const fileCap = deep ? DEEP_FILE_CAP : SEARCH_FILE_CAP;
+  const byteBudget = deep ? DEEP_BYTE_BUDGET : SEARCH_BYTE_BUDGET;
 
   const hits: SearchHit[] = [];
   const skipped: SearchSkips = { tooLarge: 0, unreadable: 0, budgetExhausted: 0 };
@@ -224,7 +238,7 @@ export function searchExtraction(
         skipped.tooLarge++;
         continue;
       }
-      if (bytesRead + size > SEARCH_BYTE_BUDGET) {
+      if (bytesRead + size > byteBudget) {
         budgetSpent = true;
         skipped.budgetExhausted++;
         continue;
@@ -281,6 +295,6 @@ export function searchExtraction(
     regex: opts.regex === true,
     hits,
     coverage,
-    verdict: formatCoverage(coverage, hits.length, opts.deep === true),
+    verdict: formatCoverage(coverage, hits.length, deep),
   };
 }

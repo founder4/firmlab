@@ -2,7 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { SEARCH_FILE_CAP, buildMatcher, excerptAt, formatCoverage, searchExtraction } from './fssearch.js';
+import {
+  DEEP_FILE_CAP,
+  SEARCH_FILE_CAP,
+  buildMatcher,
+  excerptAt,
+  formatCoverage,
+  searchExtraction,
+} from './fssearch.js';
 
 function tree(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fssearch-'));
@@ -130,6 +137,25 @@ describe('deep search', () => {
     expect(deep.coverage.skipped.tooLarge).toBe(0);
     expect(deep.hits.some((h) => h.path === 'big.bin')).toBe(true);
     expect(deep.verdict).toMatch(/Every file in the extraction was opened/);
+  });
+
+  it('still refuses a container-sized file, so one blob cannot eat the budget', () => {
+    // The real regression: deep once used the whole byte budget as its per-file cap, opened the GL.iNet's 106 MB
+    // .ubi and 92.6 MB carved squashfs first, and then skipped 4385 files it would otherwise have read. Those two
+    // are containers whose contents are already searched file-by-file beside them.
+    const root = tree();
+    const fd = fs.openSync(path.join(root, 'volume.ubi'), 'w');
+    fs.ftruncateSync(fd, DEEP_FILE_CAP + 1);
+    fs.closeSync(fd);
+
+    const r = searchExtraction(root, 'updates.vendor.example', { deep: true }) as {
+      coverage: { skipped: { tooLarge: number; budgetExhausted: number } };
+      hits: { path: string }[];
+    };
+    expect(r.coverage.skipped.tooLarge).toBe(1);
+    expect(r.coverage.skipped.budgetExhausted).toBe(0);
+    // The ordinary files are still all searched — the point of the fix.
+    expect(r.hits.some((h) => h.path.endsWith('config'))).toBe(true);
   });
 });
 
