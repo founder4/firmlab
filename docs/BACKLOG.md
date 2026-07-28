@@ -548,6 +548,160 @@ Surfaced while building the above and deliberately not built. Ordered roughly by
   `extract-diagnose.ts`, so the browser can only report that the diagnosis is missing. Nothing marks stored
   results as produced by a build older than the field they lack.
 
+## Peer-tooling cross-check — the UI axis (wairz frontend, 2026-07-28)
+The two earlier passes over wairz — `METHODOLOGY-GAPS.md` §6 and the section above — both read its **analysis**
+surface, and neither opened its frontend. This one did (84 `.ts`/`.tsx` under `frontend/src`). Its dependency list
+declares most of the difference before a line is read: Monaco, xterm, React Flow + dagre, react-arborist,
+html-to-image — against FirmLab's four runtime deps (`react`, `react-dom`, `react-router-dom`, `@firmlab/core`) and
+hand-rolled SVG.
+
+**What wairz lacks is recorded first, because it decides how much of the rest to take: its UI carries no notion of
+proof state or coverage at all.** The single `Coverage` label across its 84 files is AFL++ edge coverage
+(`FuzzingPage.tsx:630`). `CoverageBanner`, `TechniqueCoverage`, the proof-state badges and `OperatorPanel` have no
+counterpart there. Nothing below is worth having at their expense.
+
+Three things read as gaps and are not: the hex view exists already (`FileBrowser.tsx`, `view: 'hex'` with offset
+seek), PDF export exists already (`ReportBuilder.tsx` → self-contained HTML, Markdown, and print-to-PDF; what is
+missing is a *server-rendered* PDF, which is a narrower item than the `Reporting & integration` entry reads), and
+`react-arborist`-style virtualization is **declined on purpose** — `FileBrowser`'s pager states the bound AND makes
+it navigable, which is the more honest shape and is argued in that file's own header.
+
+- ▢ **The sidebar shows every section for every device class.** `SECTION_GROUPS` (`apps/web/src/App.tsx:44`) is a
+  static list, so an RTOS blob is offered Filesystem, File browser and SBOM — sections that are structurally empty
+  for it, and whose emptiness then has to be explained by a coverage note instead of never being offered. wairz
+  declares `kinds: ['linux'] | ['rtos'] | ALL_KINDS` per sidebar entry and even switches the label by kind
+  (`'File Explorer'` vs `'Project Files'`). The routing answer already exists here — `specsForClass` is the same
+  plan the autonomous scan executes and `coverage.ts` already reads it — so this is filtering a constant against
+  data the app holds. Cheapest item in this section by a wide margin.
+- ▢ **The component map is computed and never drawn.** `providers/compmap.ts` builds the rootfs DT_NEEDED graph with
+  unresolved libraries and orphans surfaced, and in `apps/web` the string `compmap` appears exactly four times: a
+  job-kind union member (`api.ts:754`), a launch button, a timeline row and a technique-coverage tick. **Zero
+  occurrences in `ImageDetail.tsx`.** The graph is produced, persisted, counted towards coverage, and has nowhere to
+  be seen. wairz gives it a page (React Flow + dagre auto-layout, MiniMap, edge details, click-through to the binary,
+  PNG/SVG export via `html-to-image` in `MapControls.tsx`); `SbomGraph.tsx` is the precedent that this shell draws
+  graphs by hand, so the dependency is not required — the view is.
+- ▢ **The MCP server has no surface in the UI that exposes it.** `apps/api/src/mcp/server.ts` ships and the only way
+  to discover it is to read `CLAUDE.md`. wairz's `McpConnectionCard.tsx` (212 lines) shows a copyable
+  `claude mcp add … -- docker exec -i …`, the Claude Desktop JSON block, and four starter prompts. Pure UI over a
+  capability that already exists, and the thing most likely to make the MCP lane actually used. Pairs with the
+  exploratory-tools item above (§*Peer-tooling cross-check*, "The MCP surface cannot navigate a binary").
+- ▢ **No interactive console into an extracted rootfs.** wairz's `backend/app/routers/terminal.py` forks, resolves
+  *"the firmware to chroot into"*, `execve`s `/bin/bash` on a PTY and streams it over a WebSocket to xterm
+  (`components/explorer/TerminalPanel.tsx`). FirmLab has the chroot rung in `emulate.ts` and no interactive surface
+  anywhere. This is the UI face of the existing *Interactive/introspectable emulation* entry, and it carries a
+  constraint that entry does not yet state: **a chroot shell is not the device and is not even emulation** — it is
+  the host kernel running foreign binaries. A console invites the operator to conclude more than the rung supports,
+  so the pane has to be labelled before it is opened, and anything observed through it is at most
+  `confirmed_in_emulation`. wairz can skip this problem because it has no proof states; this workbench cannot.
+- ▢ **The firmware switcher is flat.** The header `<select>` (`App.tsx:283`) lists every image with no notion of
+  family or version, while `capture/learning.ts` already groups provenance into per-family OTA timelines with the
+  versions ordered. wairz puts a `FirmwareVersionPicker` in the layout. The data exists; the control does not.
+- ▢ **No in-app reference documentation.** The onboarding tour opens once on a fresh profile and is gone. wairz has a
+  `HelpPage` with collapsible sections (Getting Started, Firmware Upload & Unpacking, **Firmware Kind (Linux vs
+  RTOS)**, File Explorer…). For a workbench whose central discipline is a vocabulary the operator must understand —
+  seven proof states, coverage verdicts, what an operator assertion is and is not — a page to return to is worth more
+  here than it is there.
+- ▢ **The file viewer is plain text.** Monaco gives syntax highlighting and in-file search, which is most of the time
+  an operator spends in an extraction (init scripts, UCI config, `/etc/*`). Ergonomics rather than capability, and
+  the lowest-value item here, but the one that is felt on every image.
+
+## Product direction — a second peer (galert), and three proposals (2026-07-28)
+`~/Documents/galert` is an LLM-driven pentest agent: **56 markdown skill cards** (40 web, 10 firmware, 6 cloud)
+mounted into a worker that runs against a live URL plus a source repo. It is the **architectural inverse** of this
+workbench, and reading it settled what to take and what to refuse. The decisive artefact is
+`skill-cards/firmware/binary-sink-analysis.md`, which instructs a model to run `rabin2 -I/-z/-i`, hunt
+`system`/`strcpy`/`sprintf`, take xrefs with `axt sym.imp.system`, escalate to Ghidra headless — and closes with
+*"Do not claim RCE without showing the attacker-controlled path into the sink — otherwise mark it
+`needs_runtime_reproduction`."* **That is this project's own vocabulary, asked of a model as an instruction rather
+than enforced by code.** A prompt is exactly what a model can silently fail to follow; `syncFindings` and the
+normalizers make the state a property of the row. That single line is the whole difference, and it is why the two
+rejections below are rejections.
+
+- — **Firmware skill-card agents, as a lane inside FirmLab.** All ten of galert's firmware cards map onto providers
+  that already exist: `binary-sink-analysis` → `binvuln` + `symreach` + `dynprobe`, `embedded-linux-audit` →
+  `fsaudit`, `firmware-triage-extraction` → `extract` + `extract-diagnose` + `extract-recover`, `kernel-analysis` →
+  `kernelposture`, `uefi-bios` → `chipsec` + `fwhunt`, `emulation-bringup` → the ladder, `firmware-acquisition` →
+  Capture, `rtos-baremetal` → `rtos` + Renode, `fuzzing-harness` → `fuzz`. Adding them would put **two
+  implementations of the same question, with different reliability, writing into one ledger** — the failure mode this
+  workbench is built to prevent. _One card has no counterpart: `firmware-dsp-analysis`. That argues for a provider,
+  not for an agent lane, and is recorded as such below._
+- — **Web/cloud agents as a section of this app.** The gap they address is real and self-declared —
+  `METHODOLOGY-GAPS.md` §2 marks ISTG **UI · companion app & cloud API** as ✗ and **DES · protocol-aware service
+  testing** as ◐, and a device's companion app and cloud API genuinely are part of its attack surface. But this is a
+  different product, not a tab: it changes the object from *bytes you possess* to *someone's running system*
+  (authorization and scope become first-class, which nothing here models — Capture's per-scan operator ack is the
+  seed, not the mechanism); it ends "every flag off ⇒ no network, no cost, deterministic"; it needs a
+  `confirmed_on_target` rung that, unlike every existing one, describes a machine that is not ours; and it imports an
+  exploitation posture wholesale (`exploit-development-poc`, `exploit-acquire-build-verify`, `waf-filter-evasion`,
+  `advanced-web-attack-chains`) against a boundary stated in three documents. If it is ever built: its own lane, its
+  own flag, its own scope model — decided deliberately, not arrived at through a sidebar entry.
+- ▢ **The evidence CHANNEL is not recorded, only the proof rung.** galert's `evidence-verdict-discipline.md`
+  separates `code_trace_only` / `manual_steps` / `request_only` / `captured_http` — *how it was known*, alongside
+  *how far it was proven*. FirmLab has the second and only sometimes the first, scattered in evidence prose rather
+  than being a field. Worth having, and the cheaper half of this pair.
+- ▢ **There is no verdict for "out of scope".** galert carries `OUT_OF_SCOPE_INTERNAL` for a finding that would be
+  exploitable but depends on access outside the engagement. Here that collapses into `needs_runtime_reproduction`
+  and therefore **reads as a lead when it is a scope decision** — a distinct kind of not-answered from
+  `blocked_by_platform` (we asked and could not) and `blocked_by_security` (a control stopped us). _Both this and the
+  channel field touch `ProofState` in `packages/core` and land on results that are persisted JSON re-read from rows
+  written by older builds: **a field added to a persisted result type is optional forever**, a trap already paid for
+  once._
+- ▢ **`firmware-dsp-analysis` has no counterpart.** The one galert firmware card with nothing behind it here.
+  Unprioritized until an image in the corpus needs it — recorded so it is not rediscovered as novel.
+
+**Three proposals raised in the same session, with the reservations that shaped them.**
+
+- ▢ **Bench — a live-device section, distinct from the declared one.** The value is not convenience: every rung today
+  tops out at emulation, and `confirmed_full_system` explicitly does *not* speak about the physical board. A UART
+  console or a JTAG halt on the real device is the only path by which that rung becomes a statement about hardware.
+  Four constraints, each from something already paid for: **(1)** `HardwareInterfaces.tsx` (486 lines) already exists
+  and its header reads *"This section reads the image. It never touches hardware, and it must never imply
+  otherwise."* Two sidebar entries both meaning "hardware" would re-commit the conflation this UI committed once
+  already — **Declared** vs **Attached**, with the live one consuming the static one ("the tree says console on
+  ttyS0 @115200; here is the port"). **(2)** Design it host-agent-first. The deploy is a port-less container on a
+  VM-backed runtime; `/dev/ttyUSB0` does not exist inside it, and the Capture lane already paid for this exact
+  lesson with `assessL2Reach` / `looksLikeVmBackedRuntime`, where a bridge deployment is told the thing is
+  *impossible here* rather than pointed at a `--cap-add` that cannot help. An in-container design reports
+  `available: false` forever on the real deployment. **(3)** Three verbs, not one: UART is a console (a terminal is
+  right), JTAG is halt/step/read-memory via OpenOCD (a debugger, not a terminal), and SPI flash is a **dump that
+  should re-enter `capture/ingest.ts` with a provenance row** — a flash read is firmware acquisition, FSTM-2, which
+  closes the loop with the lane that already exists. **(4)** Writes get the human-approval gate unconditionally:
+  a JTAG or flash write is irreversible and outside anything `isolate.ts` contains. _This item also forces a
+  decision the file currently contradicts itself on: `Out of scope` lists JTAG/SWD/SPI extraction as hardware-lab
+  work, while `Live-device UART bridge` sits open under `Recon & acquisition`. A host-side bridge changes the
+  calculus for all three; the out-of-scope line should be re-read rather than left standing beside its exception._
+- ▢ **An agent audit trail — the prompt as SENT, not a prompt library.** Raised as "a tab listing the workers'
+  markdown prompts", after galert's `prompts/skill-cards/`. Two facts redirect it: there are no `.md` prompts here,
+  and **the autonomous workers have no prompts at all** — `opacidad-plan.ts` maps `W1 · Extraction` → provider
+  `extract`, a deterministic chain, and W9's only LLM is `buildLlmPrompt` in `opacidad-narrative.ts`, whose header
+  states the narrative composes fully with the LLM off and which is pinned by a test named *"LLM prompt forbids
+  invention"*. Real prompts live in four files of the `FIRMLAB_AGENT` lane (`agent/nodes.ts`, `copilot.ts`,
+  `agent/zeroday.ts`, `agent/intel.ts`). A prompt LIBRARY would exert steady pull toward prompt-driven workers,
+  which is the differentiator dissolving slowly. What is genuinely missing is the audit: **no prompt is persisted
+  anywhere** — nothing in `agent/session.ts` or `store.ts` records one — so what the model was told cannot be read
+  back after the fact. Per run: the interpolated prompt as sent, the response, which judgment node, and the
+  governor's spend. Rendered from the module the runtime calls, never from a copy on disk: a viewer showing an
+  `.md` while the code uses a TS string is *a comment that was true when written*. The deterministic plan
+  (`specsForClass`) belongs on the same screen and is not a prompt — it is the routing table.
+- ▢ **Corpus: restructure, and split the knowledge store in two.** `pages/Corpus.tsx` (209 lines) already carries the
+  right doctrine in its header — *"Everything here is a prior / cross-reference: it says where things recur, never
+  that something is vulnerable"* — and that sentence has to survive any rewrite. **The safe half is documents with
+  external provenance** (datasheets, FCC filings, vendor advisories, CVE text): citable, and a natural extension of
+  `fcc.ts` and the research lane's egress ledger. Use SQLite **FTS5, not embeddings**: at corpus scale here lexical
+  search wins on recall, and a local embedding model is a heavy new dependency while a hosted one ends *"every flag
+  off ⇒ no network, no cost, deterministic"*. Reach for vectors when lexical search is **measured** to fail.
+- ▢ **Agent-authored lessons — only under the assertion provenance model, or not at all.** The other half of the
+  proposal above: agents recording what went wrong, dead ends, and what it took to get unstuck. The hazard is
+  specific — it is a citation loop with no proof state, where one run writes *"on this vendor X worked"* and a later
+  run retrieves it as ground truth. That is the withdrawn `private_key.pem` entry's failure (written from a filename
+  without opening the file) reproduced at scale and self-reinforcing: **a wrong lesson is not corrected, it is
+  retrieved.** The mechanism to reuse already exists — operator assertions carry their own provenance, no proof
+  state, count towards no stage, are returned in their own array and can be withdrawn. An agent lesson should be a
+  third provenance class under that same machinery, attributed to the run that wrote it, never citable as evidence.
+  **If it cannot be withdrawn, do not build it.** One framing note: "how the analysis got unstuck" is in scope;
+  a growing playbook of working attacks reads differently against a stated FSTM-9 boundary, and what such a store is
+  allowed to emit into a report deserves the care the disclosure lane already got.
+
 ## Out of scope (by design / hardware)
 - — Weaponized exploitation (ROP / shellcode / PoC) — FirmLab proves reachability + drafts disclosure, no PoCs.
 - — JTAG/SWD/SPI extraction, chip-off, side-channel/glitching, BLE/ZigBee/Wi-Fi/SDR — hardware lab / Phase-6 dongle.
