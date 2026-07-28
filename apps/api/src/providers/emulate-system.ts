@@ -182,6 +182,31 @@ export function classifyFullSystem(
   };
 }
 
+/**
+ * firmadyne's kernel filenames, which are NOT the architecture names this codebase uses.
+ *
+ * The path was built as `vmlinux.${arch}.4`, and that is right for exactly one architecture. firmadyne ships
+ * `vmlinux.mipseb.4` for big-endian MIPS and `vmlinux.armel` (no `.4`) for ARM, so a TP-Link WR940N — plain
+ * `mips` — was refused with "No firmadyne kernel at …/vmlinux.mips.4" while the kernel it needed sat in the same
+ * directory under a different name. `mipsel` matched by coincidence, which is why this went unnoticed.
+ *
+ * Candidates are ordered most-specific first and every one is a real filename observed in the deployed image.
+ */
+export const FIRMADYNE_KERNEL_NAMES: Partial<Record<Architecture, string[]>> = {
+  mipsel: ['vmlinux.mipsel.4', 'vmlinux.mipsel'],
+  mips: ['vmlinux.mipseb.4', 'vmlinux.mipseb'],
+  arm: ['vmlinux.armel', 'zImage.armel'],
+};
+
+/** The first firmadyne kernel that exists for an architecture, or null when this deployment ships none. */
+export function firmadyneKernelFor(arch: Architecture, dir: string = FIRMADYNE_KERNELS_DIR): string | null {
+  for (const name of FIRMADYNE_KERNEL_NAMES[arch] ?? []) {
+    const p = `${dir}/${name}`;
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 /** The mandatory teardown: kill every emulator this provider could have spawned. */
 export const TEARDOWN_PATTERNS = ['qemu-system-', 'qemu-mipsel-static', 'qemu-arm-static', 'qemu-aarch64-static'];
 
@@ -315,9 +340,12 @@ export async function runFullSystem(
       `firmadyne kernels missing (${FIRMADYNE_KERNELS_DIR}); enable them in Dockerfile.firmware to run rung-3.`,
     );
   }
-  const kernelPath = `${FIRMADYNE_KERNELS_DIR}/vmlinux.${arch}.4`;
-  if (!fs.existsSync(kernelPath)) {
-    return blocked('full-system', `No firmadyne kernel for arch "${arch}" at ${kernelPath}.`);
+  const kernelPath = firmadyneKernelFor(arch);
+  if (!kernelPath) {
+    return blocked(
+      'full-system',
+      `No firmadyne kernel for arch "${arch}" in ${FIRMADYNE_KERNELS_DIR} (tried ${FIRMADYNE_KERNEL_NAMES[arch]?.join(', ') ?? 'nothing — this architecture has no mapping'}).`,
+    );
   }
 
   // What the firmware itself says it will serve. Read before boot, so the forwards match the image rather than

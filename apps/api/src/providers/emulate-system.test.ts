@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FIRMADYNE_KERNEL_NAMES,
   TEARDOWN_PATTERNS,
   buildChrootServiceArgs,
   buildFullSystemArgs,
@@ -117,5 +118,22 @@ describe('TEARDOWN_PATTERNS', () => {
   it('covers every emulator the system rungs can spawn', () => {
     expect(TEARDOWN_PATTERNS).toContain('qemu-system-');
     expect(TEARDOWN_PATTERNS).toContain('qemu-mipsel-static');
+  });
+});
+
+describe('FIRMADYNE_KERNEL_NAMES — firmadyne does not name kernels the way we name architectures', () => {
+  it('maps big-endian MIPS to mipseb, which `vmlinux.${arch}.4` never found', () => {
+    // A TP-Link WR940N is plain `mips` and was refused with "No firmadyne kernel at …/vmlinux.mips.4" while
+    // vmlinux.mipseb.4 sat in the same directory. `mipsel` matched by coincidence, hiding this.
+    expect(FIRMADYNE_KERNEL_NAMES.mips?.[0]).toBe('vmlinux.mipseb.4');
+    expect(FIRMADYNE_KERNEL_NAMES.mipsel?.[0]).toBe('vmlinux.mipsel.4');
+  });
+
+  it('knows ARM kernels carry no .4 suffix at all', () => {
+    expect(FIRMADYNE_KERNEL_NAMES.arm).toEqual(['vmlinux.armel', 'zImage.armel']);
+  });
+
+  it('has no mapping for an architecture firmadyne ships nothing for, rather than a guessed filename', () => {
+    expect(FIRMADYNE_KERNEL_NAMES.arm64).toBeUndefined();
   });
 });
