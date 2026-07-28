@@ -222,14 +222,27 @@ async function toolAvailable(id: string): Promise<boolean> {
 
 /** Best-effort kill of any emulator left running — the invariant that keeps a hung qemu from stalling the run. */
 async function teardown(handle: JobHandle): Promise<void> {
+  // `pkill` exits non-zero when nothing matched, which is the normal case — and it exits non-zero when it does
+  // not EXIST, which is this deployment. Both landed in the same catch, and the log then said "emulators killed"
+  // regardless. The module's first stated invariant is that teardown is guaranteed; it never was here, and the
+  // message said otherwise. Strays then accumulated across runs holding their forwarded ports.
+  let swept = false;
   for (const pat of TEARDOWN_PATTERNS) {
     try {
       await execFileAsync('pkill', ['-f', pat], { timeout: 5000 });
-    } catch {
-      // pkill exits non-zero when nothing matched — that's the normal case, not an error.
+      swept = true;
+    } catch (err) {
+      // Exit 1 = matched nothing (fine). ENOENT = pkill is absent, and the sweep did not happen at all.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') swept = true;
     }
   }
-  handle.log('Teardown complete (emulators killed).');
+  handle.log(
+    swept
+      ? 'Teardown complete (emulators killed).'
+      : 'Teardown: this run’s emulator was killed directly, but `pkill` is not installed here so no sweep for ' +
+          'strays from earlier runs was possible. Each run takes a FRESH host port, so a survivor cannot be ' +
+          'mistaken for this boot.',
+  );
 }
 
 function blocked(strategy: SystemEmulationResult['strategy'], reason: string, command = ''): SystemEmulationResult {
@@ -354,7 +367,12 @@ export async function runFullSystem(
   // What the firmware itself says it will serve. Read before boot, so the forwards match the image rather than
   // an assumption about it.
   const portMap = readPortMap(rootfsDir ?? null);
-  const forwards = planForwards(portMap, hostPort);
+  // A FRESH host port per forward, asked of the OS, rather than a fixed 8080. This is not tidiness: `pkill` is
+  // absent in this deployment so the stray sweep never ran, an earlier run's qemu could still hold 8080, and the
+  // probe below would then connect to IT and report `confirmed_full_system` for a boot that never happened. It
+  // did, once, with the guest kernel still at NR_IRQS. The dynamic probe learned this exact lesson already.
+  const basePort = await allocateHostPort(hostPort);
+  const forwards = planForwards(portMap, basePort);
   handle.log(portMap.reason);
   handle.log(`Forwarding ${forwards.map((f) => `host ${f.host} → guest ${f.guest}/${f.protocol}`).join(', ')}.`);
 
@@ -389,9 +407,11 @@ export async function runFullSystem(
       await new Promise((r) => setTimeout(r, PROBE_INTERVAL_MS));
       for (const f of forwards) {
         if (open.some((o) => o.host === f.host)) continue;
-        if (await tcpAccepts(f.host)) {
+        if (await guestAnswers(f.host)) {
           open.push({ host: f.host, guest: f.guest });
-          handle.log(`  guest port ${f.guest} answered on host ${f.host} — a service inside the guest is up.`);
+          handle.log(
+            `  guest port ${f.guest} ANSWERED on host ${f.host} — a service inside the guest replied, not just qemu accepting.`,
+          );
         }
       }
       // Every declared port answering is as much as this rung can establish; no reason to hold the box open.
@@ -426,18 +446,50 @@ export async function runFullSystem(
   }
 }
 
-/** Does anything accept a TCP connection on this host port? The one observation that proves a service is up. */
-async function tcpAccepts(port: number, timeoutMs = 1200): Promise<boolean> {
+/** Ask the OS for a free host port to base the forwards on, so no two runs can share one. */
+async function allocateHostPort(preferred: number): Promise<number> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.on('error', () => resolve(preferred));
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : preferred;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+/**
+ * Does a service inside the GUEST answer on this forwarded port?
+ *
+ * Accepting the connection is necessary and not sufficient. qemu's user networking completes the host-side
+ * handshake before it knows whether anything in the guest will take it, so "connected" alone can mean the
+ * emulator is listening rather than the firmware is serving — and that is the difference between the strongest
+ * claim on this ladder and no claim at all. So the probe SENDS a byte and requires the guest to send something
+ * back, or at least to hold the connection open past the point where a refused forward would have reset it.
+ */
+async function guestAnswers(port: number, timeoutMs = 2500): Promise<boolean> {
   return new Promise((resolve) => {
     const sock = new net.Socket();
+    let settled = false;
     const done = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
       sock.destroy();
       resolve(ok);
     };
     sock.setTimeout(timeoutMs);
-    sock.once('connect', () => done(true));
+    sock.once('connect', () => {
+      // A bare CRLF is enough: an HTTP daemon answers, a non-HTTP daemon usually banners or holds the socket,
+      // and a forward with nothing behind it resets here rather than earlier.
+      sock.write('HEAD / HTTP/1.0\r\n\r\n');
+    });
+    sock.once('data', () => done(true));
     sock.once('timeout', () => done(false));
     sock.once('error', () => done(false));
+    // Silence is not an answer. A forward with nothing behind it can also close cleanly, so only data coming
+    // back counts — the 'data' handler above is the sole path to `true`.
+    sock.once('close', () => done(false));
     sock.connect(port, '127.0.0.1');
   });
 }

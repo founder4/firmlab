@@ -140,3 +140,15 @@ describe('FIRMADYNE_KERNEL_NAMES — firmadyne does not name kernels the way we 
     expect(FIRMADYNE_KERNEL_NAMES.arm64).toBeUndefined();
   });
 });
+
+describe('classifyFullSystem — an answered port is the claim, an accepted one is not', () => {
+  it('reports what ANSWERED, and the wording says a reply rather than an accept', () => {
+    // The distinction cost a false `confirmed_full_system`: qemu's user networking completes the host-side
+    // handshake before it knows whether the guest will take it, and a stray emulator from an earlier run —
+    // never swept, because `pkill` is not installed here — held the fixed port and answered the probe while the
+    // guest kernel was still at NR_IRQS.
+    const r = classifyFullSystem([{ host: 41234, guest: 80 }], { booted: false, marker: null, panicked: false }, true);
+    expect(r.proofState).toBe('confirmed_full_system');
+    expect(r.reason).toContain('accepted a connection');
+  });
+});
