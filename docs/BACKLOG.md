@@ -379,9 +379,32 @@ Surfaced while building the above and deliberately not built. Ordered roughly by
   `shadow`, `group`, `gshadow`, `hosts`, `resolv.conf`, `cron.d`) to `/dev/null`. The new browser reports the
   escape; no provider turns it into a finding, and `fsaudit` — which reads exactly those files — **cannot
   distinguish "no accounts" from "the account file is a bit bucket"**, so it currently reads as an absence.
-- ▢ **`binvuln` now reads stripped binaries — re-run W5 over the corpus.** The `PT_DYNAMIC` fallback flips every
-  GL.iNet ELF from `symbolSource: 'strings'` to `'dynsym'`. Worth measuring how many pwnable candidates were
-  weak-sourced and whether any drop out now that mentions are separated from real imports.
+- ✅ **`binvuln` now reads stripped binaries — measured, and the claim it was recorded with was wrong**
+  (2026-07-28, deploy `fa168fe`) — the follow-up said the `PT_DYNAMIC` fallback "flips **every** GL.iNet ELF from
+  `symbolSource: 'strings'` to `'dynsym'`". Run against the deployed bench on the real carve: **8 of 22, not 22.**
+  Stored findings from the previous build were 22/22 `strings`, all titled *references*; the new run is 8 `dynsym`
+  (*imports*) and 14 still `strings`. The overstatement is the same shape this ledger keeps catching — a claim
+  about a whole set, written from the case that was inspected.
+- ▶ **The `binvuln` sweep scans kernel modules and says something about them that cannot be true.** The 14 that
+  stay on the string superset are all `lib/modules/5.4.213/*.ko`, and they stay there **correctly**: a `.ko` is
+  ET_REL with a `.symtab` and no `PT_DYNAMIC`, so there is no dynamic symbol table to read and the fallback is
+  behaving. The defect is upstream of that — those 14 are emitted as *"Command-exec sink: `ath_pktlog.ko`
+  **references system**"*, and a kernel module cannot call userland `system(3)`. The token is in its strings
+  (a symbol fragment, a format string, `sysfs`), and the heuristic reports a sink that structurally cannot exist.
+  **That is 64% of this image's `binvuln` findings.** It is precisely the defect already fixed once for DVRF's
+  iptables `.so` plugins — *"a queue whose question they structurally cannot answer"* — except `isRunnableElf`
+  filters ET_DYN-without-`PT_INTERP` and lets **ET_REL** straight through. Fix is to reject ET_REL in the sweep
+  (and to decide separately whether `.ko` files deserve their own question, which is the open `.ko` CVE item).
+- ✅ **The three new providers measured across the whole corpus** (2026-07-28, deploy `fa168fe`) — 48 jobs over 16
+  images through the deployed API, and the numbers reproduce what each agent measured in isolation, which is the
+  independent confirmation that mattered. **Device tree found on 2 of 16** (BE3600 `qcom,ipq5332` 12 peripherals;
+  Tenda `AK3918EV300L` 8) — the other 14 are honest `found:false`, including three TP-Link OpenWrt-derived images
+  that carry no FDT at all. **Kernel located on 7 of 16**: 2.6.22–2.6.31 on the four TP-Link/DVRF images (22 years
+  old), 4.4.282 Tenda, 4.9.84 IMOU, 5.4.213 BE3600. **Updater found on 6 of 16**, and the BE3600 reproduces the
+  fail-open result on the deploy — 12 updaters, 4 verifying, **1 missing verifier**, `high` / `static_confirmed`.
+  The BE3600 ledger is now 685 findings across 12 sources. _The honest one worth quoting: kernel posture emits
+  `blocked_by_platform` — "8 of 9 kernel posture questions could not be answered" — rather than presenting a
+  posture it could not read as a clean one._
 - ▢ **No content search across the extraction.** `firmlab_list_files`/`firmlab_read_file` answer "what does this
   file say", not "which file says this". The bound is the design question: a grep over 6497 files must state
   what it did **not** scan (size cap, binary skip) rather than return a short list that reads as exhaustive.
