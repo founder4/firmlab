@@ -199,25 +199,45 @@ dataflow, the library fuzz harness, cmplog, RTOS task enumeration, PDF export, `
 here. What follows is what was **not**, each verified absent from this file, from `METHODOLOGY-GAPS.md` and from
 the code, ordered by value ÷ effort. The bookkeeping item is last and is the one worth reading first.
 
-- ▢ **The extracted filesystem cannot be opened — not in the UI, not over MCP.** wairz spends 9 of its 110 tools
-  here (`list_directory`, `read_file`, `hexdump_data`, `file_info`, `search_files`, `search_binary_content`,
-  `search_strings`, `extract_strings`, `find_files_by_type`); FirmLab has **none**, and no route serves a file
-  out of `extract/`. The GL.iNet carve produces 6497 files that nobody can look at. **This is not a convenience
-  gap, it is the structural cause of a defect class this ledger already records:** the withdrawn BeanView entry
-  above was "written from a filename without opening the file", and there was no way to open it. Every finding
-  cites evidence the operator cannot check, so the ledger asks to be trusted at exactly the point this workbench
-  says nothing should be. Cheap — routes + a tree panel + the same tools on the MCP surface — and the one piece
-  of real work is the path guard, which already has its worked example (`symreach` refusing `etc/passwd →
-  /dev/null`, a symlink escaping the rootfs).
-- ▢ **Nothing an operator concludes can enter the ledger.** wairz has `add_finding` / `update_finding`;
-  FirmLab's findings are 100% code-authored, so a hand-confirmed result, an agent's verdict over MCP, and
-  anything learned outside a provider all live nowhere and never reach a report. The proof-state discipline
-  makes this *easier*, not harder: the honest shape is a distinct `operator:<who>` source that `syncFindings`
-  never deletes, a proof state rendered as **asserted** rather than borrowed from the code-decided rungs, and a
-  coverage sentence that counts operator rows separately — because "a human says so" is a different evidentiary
-  standard from "the property is in the bytes", which is the same split `sbom`-vs-`compcve` already labels.
-  Adjacent and smaller: per-image notes / scratchpad (`save_document`, `read_scratchpad`), which is where an
-  agent driving the MCP surface across sessions has nowhere to put its intermediate reasoning today.
+**Five of these shipped the same day, built in parallel in isolated worktrees and merged as
+`integrate-crosscheck`** — the filesystem read surface, operator assertions, kernel posture, device-tree intel
+and update-path integrity. Each is marked ✅ below with what it measured on real corpus bytes; the follow-ups
+they surfaced are gathered under *Follow-ups from the five* at the end of this section. Gate on the merged
+tree: `pnpm check` 3/3, **1307 tests** (75 core / 1160 api / 72 web), biome clean, `check-nul.sh` clean.
+
+- ✅ **The extracted filesystem can be opened** (2026-07-28) — `providers/fsbrowse.ts` (pure, 48 tests against
+  real temp trees with real symlinks) + `routes/files.ts` + `firmlab_list_files`/`firmlab_read_file` +
+  a `files` workbench section. The root is the extraction dir rather than the rootfs, so BeanView (54 volumes,
+  no rootfs) and Asus-Router (truncated SquashFS) browse as what they are instead of as empty trees. The guard
+  is three layers and the third is the one that matters: the lexical containment test the other providers share
+  passes a symlinked *ancestor*, and only a `realpath` check catches it — **the test asserts the lexical test
+  passes it first, so it cannot rot into agreeing with the code.** Text-vs-binary is decided from the bytes,
+  never the extension. **Validated in-container: BeanView's `private_key.pem` reads 460 bytes of
+  `-----BEGIN PUBLIC KEY-----` over HTTP** — the surface that would have caught the withdrawn entry above.
+  GL.iNet walks 6279 files / 740 symlinks in 113 ms with one directory capped (`usr/lib/opkg/info`, 2219
+  entries) and the rule stated. _Three defects the real bytes exposed: `truncated` ignored bytes skipped BEFORE
+  the window, so a tail read reported as a complete file; a literal NUL byte reached the source **in the
+  NUL-check itself**, invisible to grep and caught only by `scripts/check-nul.sh`; and Asus-Router's stored
+  extract result predates `extract-diagnose.ts`, so "no diagnosis was recorded" read as though the extractor had
+  nothing to report rather than as a missing field._
+- ✅ **A person can write to the ledger without writing a proof state** (2026-07-28) — `operator-findings.ts`
+  (pure, store-free, 27 tests) + `routes/operator.ts` + `OperatorPanel` + an `image_note` table. **`ProofState`
+  did not grow a rung**; the *field* widened by exactly one non-rung value (`operator_assertion`), and an author
+  picks a **claim** from a vocabulary disjoint from the ladder — no shared token, so no careless `includes()`
+  can slide an assertion onto it. Four independent layers keep it separable, so no single lapse collapses the
+  distinction: disjoint vocabulary · a self-describing sentinel (a reader predating the feature renders an
+  unfamiliar string rather than mapping it to a measurement) · `operator:%` excluded **inside the SQL** of
+  `deleteFindingsBySource`, not by callers remembering · and the MCP client stamping `x-firmlab-author-kind`
+  unconditionally and last, so an agent cannot sign as a human. The agent loop is closed explicitly: assertions
+  are lifted out of `findings` *and* out of `proofStateCounts`, and an agent's own rows come back
+  `selfAuthored` under a notice that a record of a claim is not evidence for it. Withdrawal is first-class and
+  requires a reason; nothing is ever deleted. **Validated against a read-only copy of the live 14 MB database:
+  coverage arithmetic unmoved at 17 applicable / 16 executed / 101 findings with the prior verdict string
+  surviving verbatim, and re-running `certs`/`compmap`/`fsaudit` removed 7 provider rows while the 2 operator
+  rows stood.** _One defect the tests caught first: `slugify` mangled accented names (`Aarón` → `aar-n`), so the
+  same person writing with and without the accent landed in two namespaces and had their record split by a
+  keyboard layout. Fixed with NFD + `\p{M}` — the property escape, not a literal combining-mark range, since
+  those are invisible in source in the same way the NUL byte is._
 - ▢ **A measured fact cannot be corrected by an operator who knows better.** wairz has `set_firmware_arch`,
   `set_rootfs`, `set_kernel`, `redetect`. FirmLab has `POST /images/:id/analysis`, which re-derives — it cannot
   be told anything. The corpus is full of cases where that costs: DVRF's `identity.arch` is `unknown` (the
@@ -246,16 +266,45 @@ the code, ordered by value ÷ effort. The bookkeeping item is last and is the on
   actually ships. A generic pass over shell/lua/php/python with a small hand-written ruleset (unquoted
   `$QUERY_STRING` reaching `eval`/backticks, `system()` on a CGI env var) generalizes the W4 *result* instead of
   duplicating the W4 *parser*. The existing "WR940N httpd C-source cmdi" follow-up is one image; this is the lane.
-- ▢ **The kernel's own posture is unexamined.** `.ko` CVE correlation is already on this ledger; the *config* is
-  not. A shipped `/proc/config.gz`, or the version string plus `CONFIG_*` strings in the image, answers whether
-  KASLR, `CONFIG_STRICT_DEVMEM`, module signing or `kptr_restrict` are on — a durable, fully static, honest
-  finding, and the exact counterpart to the per-binary hardening check FirmLab already runs. It is the layer
-  underneath everything else that gets analyzed, and nothing looks at it.
-- ▢ **The device tree is parsed and thrown away.** `core` walks FDT to find FIT sub-images to carve; the tree
-  itself never becomes a result. It names the SoC, the flash partition layout with offsets, sizes and read-only
-  flags, the peripherals, and `bootargs` — the same finding class `uboot.ts` already produces from the U-Boot
-  environment, from bytes that are already parsed. Low effort, and it lands on `openwrt-fit-ubi`, a class this
-  workbench otherwise handles well.
+- ✅ **The kernel's own posture, in three states, never two** (2026-07-28) — `providers/kernelposture.ts` (pure,
+  49 tests, fixtures read out of the container with `strings` rather than remembered) + `routes/kernel.ts` +
+  `W2 · Kernel posture` in `LINUX_CHAIN`. Nine questions (KASLR, `STRICT_DEVMEM`, `IO_STRICT_DEVMEM`, `DEVKMEM`,
+  `MODULE_SIG`, `STACKPROTECTOR`, `STRICT_KERNEL_RWX`, `kptr_restrict`, `dmesg_restrict`) plus age, located in
+  priority order: shipped `.config` → module set → carved blob → `/boot` → raw image. **The three-state logic
+  is the feature and it held on real bytes**: 53 undetermined answers spread over *three distinct reasons*
+  (`option-postdates-kernel` 23, `no-kernel-config-shipped` 22, `no-kernel-blob` 8) against 10 determined ones,
+  so it never collapsed to the two-state overclaim this codebase has paid for twice. `CONFIG_*` tokens are
+  **measured not to be an oracle** — the 2.6.x kernels carry zero of them and one of the three in the 4.x
+  kernels occurs only inside the printk `"initcall_blacklist requires CONFIG_KALLSYMS"` — so they are recorded
+  and never consulted; markers are symbols and printks instead. The mirror trap is handled too: `/dev/kmem`
+  *predates* `CONFIG_DEVKMEM` (2.6.26), so gating the device on the switch would have reported DVRF's 2.6.22 —
+  which demonstrably ships `kmem` — as "the option does not exist here". **Measured across the corpus: the four
+  TP-Link/DVRF images run 2.6.22–2.6.31, kernels 22 years old, one of them (WR940N) with a 2026 build date; the
+  BE3600 is 5.4.213 read from module vermagic with 375 modules and 0 signed.** _One defect the real bytes
+  exposed: the first run reported the BE3600 as kernel 4.4.0 read from `carve/rootfs/usr/sbin/tailscaled`, a
+  30 MB Go binary embedding a `Linux version` string — the doc promised banners are never read from a rootfs,
+  and the unit test had placed the rootfs BESIDE the extract dir, so it agreed with the code instead of checking
+  it._
+- ✅ **The device tree becomes a result, and there is now one FDT walk** (2026-07-28) — `providers/fdt.ts` (the
+  reader, 22 tests) + `providers/devicetree.ts` (analysis, 30 tests) + `routes/devicetree.ts` + entries in both
+  `LINUX_CHAIN` and `RECON_ANY_CLASS`. `carve.ts`'s `parseFitImages` was **reimplemented on top of it** and its
+  duplicate token loop deleted, so a second subtly-different FDT parser never exists; `parseFitConfigurations`
+  joined it there. The `/chosen` command line was factored into `providers/boot-cmdline.ts` and emits the
+  **same codes** `uboot.ts` already emits (`uboot-root-shell`, `uboot-serial-console`) with provenance in the
+  evidence, rather than a second dialect for the same fact. **Read off real firmware: the BE3600 is
+  `GL.iNet BE3600, Inc. IPQ5332/AP-MI04.1-C2` / `qcom,ipq5332`, 378 nodes reached through FIT → UBI → kernel
+  volume → inner FIT → `flat_dt` and selected by `/configurations default = config-1`, with its console UART at
+  `/soc/serial@78af000` resolved through `stdout-path`; the Tenda camera carries TWO trees with nothing
+  declaring which the device uses, and real `root=/dev/mtdblock5 init=/sbin/init mem=64M`.** _The defect the
+  bytes exposed is the reason the provider requires a complete walk: the GL.iNet raw image has a **perfectly
+  valid FDT header** at offset 10186216, but the tree lives inside a UBI volume, so the raw file splices
+  eraseblock metadata through it — it diverges from the true blob at byte 37820, the strings block is clobbered
+  so **826 property names decode wrong while the values still look right**, and the walk dies at 10224040. A
+  header check cannot see that; finishing the walk can, and the raw hit is reported in `rejected` with the
+  `UBI#` located as evidence. Two parser rules the spec would also have got wrong: availability follows the
+  kernel's `of_device_is_available` (that tree spells `status = "ok"` 32× against one `"okay"`, and Tenda adds
+  `"disable"`), and property typing uses dtc's exact `util_is_printable_string` — the naive version reads
+  `clock-frequency = <0x7d00>` as a string._
 - ▢ **The fuzzer has no input side.** The ledger carries cmplog and libdesock — both about the *harness*. wairz
   carries `generate_fuzzing_dictionary`, `generate_seed_corpus`, `analyze_fuzzing_target`, `triage_fuzzing_crash`
   and `diagnose_fuzzing_campaign`. AFL++ pointed at a firmware parser with an empty corpus and no dictionary
@@ -281,13 +330,100 @@ the code, ordered by value ÷ effort. The bookkeeping item is last and is the on
   sandboxed per-format extractors, so running it over the same three images is a **measurement, not a promise**:
   if it opens what binwalk did not, the diagnosis was wrong and we learn where; if it does not, the diagnosis is
   independently confirmed. Either outcome is worth the run, which is not true of most tool additions.
-- ▢ **Bookkeeping: update-mechanism integrity fell off this ledger entirely.** `METHODOLOGY-GAPS.md` §4 ranks it
-  **#4 of 7** ("high-signal, fully static, no new heavy deps") and ISTG scores it the top FW-category gap — is
-  the image signed, does the updater binary import signature-verification routines, is there downgrade/rollback
-  protection — and it appears **nowhere in BACKLOG.md** and in no provider. Everything else on that priority
-  list shipped (webprobe #1, FwHunt+SecureBoot #2, angr #3, funcdiff #5, uboot #6, fuzzing debt #7 partial).
-  It is the only one of the seven that was never built *and* never recorded, which is how it went 7 days without
-  being looked at. The gap is the ledger, not the judgement — file it before deciding whether to build it.
+- ✅ **Update-path integrity — the #4 priority that was never built and never recorded** (2026-07-28) —
+  `providers/updatepath.ts` (pure, 58 tests) + `routes/updatepath.ts` + an `ISTG-FW · Update-path integrity`
+  stage in `LINUX_CHAIN`, deliberately `needsRootfs: false` because the image half is answerable from raw bytes
+  and skipping the stage for want of a rootfs would turn "never looked" into a silent absence. It found this
+  entry's own premise correct: `METHODOLOGY-GAPS.md` §4 ranked it **#4 of 7** and every other item on that list
+  had shipped. Three questions — does the image carry integrity metadata, does the updater verify anything, is
+  there rollback protection — each scoped to what was actually opened. **The negative is the careful part**:
+  `update-no-signature-verification-found` is titled *"the N updater(s) located import and invoke no
+  signature-verification routine"*, sits at `needs_runtime_reproduction`, carries the six unexamined places
+  (bootloader, mask ROM, static blob, vendor wrapper, server-side check, unwalked blobs) in evidence, and its
+  rationale contains the literal string `NOT "the firmware is unsigned"` with a test asserting the title never
+  matches `/unsigned/`.
+
+  **The GL.iNet BE3600 is the result worth reading, and both halves are true at once.** The image *is* signed —
+  an appended usign signature 167 bytes from EOF, `signed by key 06a6bf2ad909388f` — and `/usr/bin/usign` ships.
+  But `lib/upgrade/fwtool.sh`'s `fwtool_check_signature` opens with `[ ! -x /usr/bin/ucert ] && { … return 0; }`,
+  **`ucert` is in no path in the rootfs**, and `REQUIRE_IMAGE_SIGNATURE` — the only variable that would turn
+  that branch into `return 1` — appears nowhere except inside `fwtool.sh` reading it. So the check returns pass
+  unconditionally: a guard that fails open because a dependency was not packaged. Verified by hand against the
+  extracted bytes, not inferred. The honest bound is that this is `static_confirmed` about the script's control
+  flow and says nothing about a bootloader-level check. The three TP-Link images contrast sharply: the updater
+  lives inside `usr/bin/httpd` and is found only by symbol (`upgradeFirmware`, `isSysUpgradeNeedChecksum`), it
+  imports `md5_verify_digest` and **zero** signature entry points, and the keyed MD5 at 0x4c was **verified by
+  recomputation** with `mktplinkfw md5salt_boot`, byte-for-byte on all three — which authenticates nobody, the
+  salt being public. Tenda's "verification" is a hardcoded string compare with the MD5 check sitting inside a
+  `: <<'COMMENT'` heredoc, and it writes with `dd of=/dev/$upgradeblock`.
+
+  **The side effect matters more than the feature.** Extending `parseDynamicSymbols` with a `PT_DYNAMIC`
+  fallback (rather than writing a second symbol reader) revealed that **OpenWrt strips section headers**, so
+  `e_shoff == 0` on every ELF in the GL.iNet rootfs and the existing section-header walk returned `null` for all
+  of them — the richest image in the corpus had been falling back to the string superset everywhere. `binvuln`
+  gets the fix for free, which flips those findings' verb from "references" to "imports".
+  _Five defects only the real bytes exposed: `ota` matched **`quota`**, so on DVRF an iptables plugin became
+  "the 1 updater located"; the candidate cap truncated **by directory order** and evicted `sbin/sysupgrade`
+  behind 30 `lib/upgrade/keep.d/*` manifests — the exact failure `selectFindings` exists to prevent, reappearing
+  in a new provider; the key-material scan returned the whole Mozilla CA bundle and fed a root cert to the
+  conjunction; a fixed-width window read the shipped usign **public key** as a signature over the image; and one
+  OpenWrt update path produced four separate HIGH "flashes without checking" findings across five files._
+
+### Follow-ups from the five
+Surfaced while building the above and deliberately not built. Ordered roughly by value.
+
+- ▢ **`REQUIRE_IMAGE_SIGNATURE` is an enforcement flag nothing reads.** Detecting "a fail-open guard whose
+  enabling variable is never set" generalises well past OpenWrt, and is the difference between a check that was
+  skipped and one that was disabled. The GL.iNet is the worked example above.
+- ▢ **`etc/passwd → /dev/null` is visible but unclaimed.** DVRF symlinks its entire account database (`passwd`,
+  `shadow`, `group`, `gshadow`, `hosts`, `resolv.conf`, `cron.d`) to `/dev/null`. The new browser reports the
+  escape; no provider turns it into a finding, and `fsaudit` — which reads exactly those files — **cannot
+  distinguish "no accounts" from "the account file is a bit bucket"**, so it currently reads as an absence.
+- ▢ **`binvuln` now reads stripped binaries — re-run W5 over the corpus.** The `PT_DYNAMIC` fallback flips every
+  GL.iNet ELF from `symbolSource: 'strings'` to `'dynsym'`. Worth measuring how many pwnable candidates were
+  weak-sourced and whether any drop out now that mentions are separated from real imports.
+- ▢ **No content search across the extraction.** `firmlab_list_files`/`firmlab_read_file` answer "what does this
+  file say", not "which file says this". The bound is the design question: a grep over 6497 files must state
+  what it did **not** scan (size cap, binary skip) rather than return a short list that reads as exhaustive.
+- ▢ **Update-path: reach past the file that was read.** (a) resolve shell `source`/`include` so `sbin/sysupgrade`
+  is credited with `fwtool.sh`'s `ucert -V` instead of the two being separate candidates; (b) decode OpenWrt's
+  `FWx0` fwtool trailer so the appended ucert/metadata blobs are parsed rather than recognised by their armor —
+  the layout was not verified against bytes, so it was deliberately left out; (c) actually verify the detached
+  signature when image, block and on-device key are all present (`usign -V` is a one-shot Ed25519 check), taking
+  `update-verify-chain` from "the mechanism is built" to "this image validates under the shipped key".
+- ▢ **Device tree: vendor partition bindings.** No corpus image declares a standard `fixed-partitions` node. The
+  BE3600 carries a vendor `gl-mtd` node (`compatible = "gl-mtd-rw"`) whose `mtd_read_only` children name nine
+  partitions by label — `0:SBL1`, `0:MIBIB`, `0:BOOTCONFIG`, `0:QSEE`, `0:DEVCFG`, `0:TME`, `0:CDT`,
+  `0:APPSBLENV`, `0:APPSBL` — with no `reg`, because on IPQ5332 the offsets live in the on-flash MIBIB table.
+  Reading it needs a MIBIB parser, and a rule for how far to chase vendor bindings before the provider is just a
+  vendor table.
+- ▢ **Cross-check the device tree against the U-Boot env.** Both now yield a kernel command line under the same
+  finding codes. When an image carries both and they **disagree**, that disagreement is itself the finding — the
+  tree says what the build expects, the env says what the board will actually pass.
+- ▢ **Kernel posture: the authoritative path is untested on real bytes.** The provider prefers a shipped kernel
+  config over every inferred source, and **no image in the corpus ships one** — no `/proc/config.gz`, no
+  `IKCFG_ST` segment — so that branch is unit-tested only. Add an official OpenWrt build (they ship
+  `/proc/config.gz`) and re-validate, then inflate the IKCONFIG segment the reader already detects.
+- ▢ **Kernel posture: three questions have no in-blob marker on MIPS/ARM vendor kernels.** `STRICT_DEVMEM`,
+  `STRICT_KERNEL_RWX` and KASLR came back undetermined on **every** corpus image, because the printks they are
+  read from are largely x86-side. Either find arch-specific markers and validate them against real bytes, or
+  make them permanently config-only and say so in the question text.
+- ▢ **Operator assertions: corpus-wide view and cross-image reuse.** Assertions are per-image only. Indexing them
+  the way `artifact_occurrence`/`credential_occurrence` index computed findings needs care: those tables record
+  *measured* occurrences, and letting an assertion in would turn one person's claim into a cross-image prior —
+  the laundering this feature exists to prevent, one layer out. Wants its own table and a prevalence signal
+  explicitly labelled "asserted by N operators".
+- ▢ **Three surfaces still lack a web panel** — kernel posture, update-path integrity and device tree all have
+  routes and W9 stages but no section in `pages/ImageDetail.tsx`, so their results are API-and-ledger only.
+  `AnalysisKind` in `apps/web/src/api.ts` needs the three additions.
+- ▢ **Assertions never reach the HTML report**, and `disputes_finding` is recorded but inert — a reader looking
+  at a code-decided row has no indication someone contested it. Also: an amended assertion overwrites its prior
+  claim, which is the inconsistent case for a ledger whose whole point is that a retraction survives.
+- ▢ **Device tree: `/reserved-memory` and `/memory` are parsed but not surfaced.** A TrustZone/QSEE carve-out is
+  useful context for an emulation attempt. Same for partition flags beyond `read-only` (`lock`, `slc-mode`).
+- ▢ **An older extract result cannot say why it has no rootfs.** Asus-Router's stored row predates
+  `extract-diagnose.ts`, so the browser can only report that the diagnosis is missing. Nothing marks stored
+  results as produced by a build older than the field they lack.
 
 ## Out of scope (by design / hardware)
 - — Weaponized exploitation (ROP / shellcode / PoC) — FirmLab proves reachability + drafts disclosure, no PoCs.
