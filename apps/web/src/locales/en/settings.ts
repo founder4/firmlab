@@ -7,6 +7,7 @@
 export const settings = {
   eyebrow: 'System',
   title: 'Settings',
+  desc: 'Appearance is yours to change here. Analysis, privacy, and agent limits reflect the deployment’s real configuration.',
 
   tabs: {
     appearance: 'Appearance',
@@ -42,5 +43,15 @@ export const settings = {
      */
     scope:
       'Findings keep the wording the analysis recorded for them. Those sentences are stored with the image as evidence, so they are shown as written rather than re-translated.',
+  },
+
+  /** The remaining tab bodies. Most of what these panels show is composed by the API and rendered as it arrives. */
+  panels: {
+    privacyTitle: 'Privacy & connectivity',
+    externalAgent: 'External copilot / agent',
+    humanApproval: 'Human approval required',
+    storageTitle: 'Storage & retention',
+    localAnalysis: 'Local analysis',
+    helpSub: 'Learn your way around, or revisit the introduction.',
   },
 };

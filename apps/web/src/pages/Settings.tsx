@@ -10,15 +10,8 @@ import { Capabilities } from './Capabilities';
 type Health = { exposedToNetwork: boolean; trustedProxy?: boolean; host?: string; port?: number };
 type SettingsTab = 'appearance' | 'analysis' | 'tools' | 'privacy' | 'agent' | 'storage' | 'help';
 
-const TABS: { id: SettingsTab; label: string }[] = [
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'analysis', label: 'Analysis' },
-  { id: 'tools', label: 'Tools' },
-  { id: 'agent', label: 'AI & Agent' },
-  { id: 'privacy', label: 'Privacy' },
-  { id: 'storage', label: 'Storage' },
-  { id: 'help', label: 'Help' },
-];
+/** Order only — the words live in the catalogue, keyed by the same id the view switches on. */
+const TAB_IDS: SettingsTab[] = ['appearance', 'analysis', 'tools', 'agent', 'privacy', 'storage', 'help'];
 
 /** A labeled row of read-only fact + value (the transparency panels are honest mirrors of real backend state). */
 function Row({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
@@ -207,24 +200,16 @@ export function Settings(): JSX.Element {
     <div>
       <div className="page-head">
         <div>
-          <div className="eyebrow">System</div>
-          <h1 className="page-title">Settings</h1>
-          <div className="page-desc">
-            Appearance is yours to change here. Analysis, privacy, and agent limits reflect the deployment’s real
-            configuration.
-          </div>
+          <div className="eyebrow">{t.settings.eyebrow}</div>
+          <h1 className="page-title">{t.settings.title}</h1>
+          <div className="page-desc">{t.settings.desc}</div>
         </div>
       </div>
 
       <div className="tabs" style={{ marginBottom: 18 }}>
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={`tab ${tab === t.id ? 'active' : ''}`}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
+        {TAB_IDS.map((id) => (
+          <button key={id} type="button" className={`tab ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
+            {t.settings.tabs[id]}
           </button>
         ))}
       </div>
@@ -332,7 +317,7 @@ export function Settings(): JSX.Element {
 
       {tab === 'privacy' && (
         <div className="panel" style={{ maxWidth: 720 }}>
-          <div className="panel-title">Privacy & connectivity</div>
+          <div className="panel-title">{t.settings.panels.privacyTitle}</div>
           <div className="panel-sub">
             FirmLab is designed to run locally. Firmware images are analyzed on this machine and are not uploaded.
           </div>
@@ -375,7 +360,7 @@ export function Settings(): JSX.Element {
               />
             ))}
           </div>
-          <Row label="External copilot / agent">
+          <Row label={t.settings.panels.externalAgent}>
             {agent?.enabled ? (
               <>
                 <span className="badge badge-medium">Enabled</span>
@@ -476,7 +461,7 @@ export function Settings(): JSX.Element {
                 </>
               )}
               <Row label="Emulation">
-                <span className="badge badge-medium">Human approval required</span>
+                <span className="badge badge-medium">{t.settings.panels.humanApproval}</span>
               </Row>
             </>
           )}
@@ -491,7 +476,7 @@ export function Settings(): JSX.Element {
 
       {tab === 'storage' && (
         <div className="panel" style={{ maxWidth: 720 }}>
-          <div className="panel-title">Storage & retention</div>
+          <div className="panel-title">{t.settings.panels.storageTitle}</div>
           <div className="panel-sub">
             Uploaded images and carved rootfs live under the data directory on this machine.
           </div>
@@ -524,8 +509,8 @@ export function Settings(): JSX.Element {
             </span>
           </Row>
           <div className="hint" style={{ marginTop: 12 }}>
-            Manage or bulk-delete images from <Link to="/analyze">Local analysis</Link>. Retention limits are configured
-            with
+            Manage or bulk-delete images from <Link to="/analyze">{t.settings.panels.localAnalysis}</Link>. Retention
+            limits are configured with
             <span className="mono"> FIRMLAB_MAX_IMAGE_AGE_DAYS</span> and{' '}
             <span className="mono">FIRMLAB_MAX_DATA_BYTES</span>.
           </div>
@@ -535,7 +520,7 @@ export function Settings(): JSX.Element {
       {tab === 'help' && (
         <div className="panel" style={{ maxWidth: 720 }}>
           <div className="panel-title">Help</div>
-          <div className="panel-sub">Learn your way around, or revisit the introduction.</div>
+          <div className="panel-sub">{t.settings.panels.helpSub}</div>
           <Row label="Product tour">
             <button type="button" className="btn btn-sm" onClick={startTour}>
               <Icon.help size={14} /> Restart tour

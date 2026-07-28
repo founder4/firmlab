@@ -4,6 +4,7 @@ import type { Messages } from '../en';
 export const settings: Messages['settings'] = {
   eyebrow: 'Sistema',
   title: 'Ajustes',
+  desc: 'La apariencia la decides tú aquí. El análisis, la privacidad y los límites del agente reflejan la configuración real de este despliegue.',
 
   tabs: {
     appearance: 'Apariencia',
@@ -34,5 +35,14 @@ export const settings: Messages['settings'] = {
     hint: 'Cambia la interfaz del banco de trabajo y los informes que genera. Se aplica al instante y se recuerda en este dispositivo.',
     scope:
       'Los hallazgos conservan la redacción con la que el análisis los registró. Esas frases se almacenan junto a la imagen como evidencia, así que se muestran tal y como se escribieron en lugar de volver a traducirse.',
+  },
+
+  panels: {
+    privacyTitle: 'Privacidad y conectividad',
+    externalAgent: 'Copiloto / agente externo',
+    humanApproval: 'Requiere aprobación humana',
+    storageTitle: 'Almacenamiento y retención',
+    localAnalysis: 'Análisis local',
+    helpSub: 'Aprende a moverte por el banco, o vuelve a ver la introducción.',
   },
 };
