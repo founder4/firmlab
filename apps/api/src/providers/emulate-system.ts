@@ -19,6 +19,7 @@
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
+import tls from 'node:tls';
 import { promisify } from 'node:util';
 import type { Architecture, ProofState } from '@firmlab/core';
 import { detectTools } from '../tools.js';
@@ -412,7 +413,7 @@ export async function runFullSystem(
       await new Promise((r) => setTimeout(r, PROBE_INTERVAL_MS));
       for (const f of forwards) {
         if (open.some((o) => o.host === f.host)) continue;
-        if (await guestAnswers(f.host)) {
+        if (await guestAnswers(f.host, f.protocol)) {
           open.push({ host: f.host, guest: f.guest });
           handle.log(
             `  guest port ${f.guest} ANSWERED on host ${f.host} — a service inside the guest replied, not just qemu accepting.`,
@@ -484,7 +485,9 @@ async function allocateHostPort(preferred: number): Promise<number> {
  * claim on this ladder and no claim at all. So the probe SENDS a byte and requires the guest to send something
  * back, or at least to hold the connection open past the point where a refused forward would have reset it.
  */
-async function guestAnswers(port: number, timeoutMs = 2500): Promise<boolean> {
+async function guestAnswers(port: number, protocol: PortProtocol, timeoutMs = 3000): Promise<boolean> {
+  if (protocol === 'https') return tlsAnswers(port, timeoutMs);
+  const plan = probePlanFor(protocol);
   return new Promise((resolve) => {
     const sock = new net.Socket();
     let settled = false;
@@ -496,9 +499,9 @@ async function guestAnswers(port: number, timeoutMs = 2500): Promise<boolean> {
     };
     sock.setTimeout(timeoutMs);
     sock.once('connect', () => {
-      // A bare CRLF is enough: an HTTP daemon answers, a non-HTTP daemon usually banners or holds the socket,
-      // and a forward with nothing behind it resets here rather than earlier.
-      sock.write('HEAD / HTTP/1.0\r\n\r\n');
+      // Only speak first where speaking first is correct. SSH and telnet greet the client — an HTTP request sent
+      // into an SSH server is noise that can get the connection dropped before its banner arrives.
+      if (plan.send) sock.write(plan.send);
     });
     sock.once('data', () => done(true));
     sock.once('timeout', () => done(false));
@@ -508,4 +511,69 @@ async function guestAnswers(port: number, timeoutMs = 2500): Promise<boolean> {
     sock.once('close', () => done(false));
     sock.connect(port, '127.0.0.1');
   });
+}
+
+/**
+ * Does a TLS server answer on this forwarded port?
+ *
+ * The plain-text probe could never see one. It sent `HEAD / HTTP/1.0` at a TLS socket, which replies with an
+ * alert or nothing at all, so a firmware whose only service is HTTPS read as "the system came up, its services
+ * did not" — measured on the real WR940N, whose own console shows its HTTPS daemon loading a certificate and a
+ * private key while 443 was reported silent.
+ *
+ * `rejectUnauthorized: false` is mandatory rather than lax: firmware ships self-signed certificates by
+ * construction, and this probe asks whether something is SERVING, not whether it is trustworthy. A TLS-level
+ * failure still answers that question — an alert means a TLS implementation is on the other end — so it counts,
+ * while a connection-level failure does not.
+ */
+async function tlsAnswers(port: number, timeoutMs = 3000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      try {
+        sock.destroy();
+      } catch {}
+      resolve(ok);
+    };
+    const sock = tls.connect(
+      { port, host: '127.0.0.1', rejectUnauthorized: false, servername: 'localhost', timeout: timeoutMs },
+      () => done(true),
+    );
+    sock.once('timeout', () => done(false));
+    sock.once('error', (err) => done(isTlsSpeaker(err as { code?: string; message?: string })));
+  });
+}
+
+/**
+ * Pure: does this connection error still prove a TLS implementation answered?
+ *
+ * A refused or reset connection means nothing was there. A protocol-level failure — an alert, an unsupported
+ * version, a malformed record — means something spoke TLS badly, and something speaking badly is still something
+ * serving. Firmware TLS stacks are old and frequently fail modern handshakes; treating that as "no service" would
+ * discard the result on precisely the images most worth looking at.
+ */
+export function isTlsSpeaker(err: { code?: string | undefined; message?: string | undefined }): boolean {
+  const connectionLevel = new Set(['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'EPIPE']);
+  if (err.code && connectionLevel.has(err.code)) return false;
+  // Node surfaces TLS failures with codes like ERR_SSL_*, ERR_TLS_*, or an OpenSSL library string.
+  return /^ERR_(SSL|TLS)_/.test(err.code ?? '') || /ssl|tls|handshake|alert|wrong version/i.test(err.message ?? '');
+}
+
+/**
+ * Pure: whether to speak first on this port, and what to say.
+ *
+ * SSH and telnet greet the client, so the right move is to listen; HTTP will wait forever for a request. Getting
+ * this backwards is not harmless — an HTTP request written into an SSH server is protocol noise that can have the
+ * connection dropped before the banner arrives, turning a live service into a silent one.
+ */
+export function probePlanFor(protocol: PortProtocol): { send: string | null } {
+  switch (protocol) {
+    case 'ssh':
+    case 'telnet':
+      return { send: null };
+    default:
+      return { send: 'HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n' };
+  }
 }

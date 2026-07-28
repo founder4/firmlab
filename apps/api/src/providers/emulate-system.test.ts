@@ -5,8 +5,10 @@ import {
   buildChrootServiceArgs,
   buildFullSystemArgs,
   classifyFullSystem,
+  isTlsSpeaker,
   libnvramHostPath,
   looksBooted,
+  probePlanFor,
 } from './emulate-system.js';
 
 describe('buildChrootServiceArgs', () => {
@@ -150,5 +152,35 @@ describe('classifyFullSystem — an answered port is the claim, an accepted one 
     const r = classifyFullSystem([{ host: 41234, guest: 80 }], { booted: false, marker: null, panicked: false }, true);
     expect(r.proofState).toBe('confirmed_full_system');
     expect(r.reason).toContain('accepted a connection');
+  });
+});
+
+describe('probePlanFor — speak first only where speaking first is correct', () => {
+  it('listens on ssh and telnet, which greet the client', () => {
+    // An HTTP request written into an SSH server is protocol noise that can get the connection dropped before
+    // its banner arrives — turning a live service into a silent one.
+    expect(probePlanFor('ssh').send).toBeNull();
+    expect(probePlanFor('telnet').send).toBeNull();
+  });
+
+  it('sends a request on http, which waits for one', () => {
+    expect(probePlanFor('http').send).toContain('HEAD / HTTP/1.0');
+    expect(probePlanFor('unknown').send).toContain('HEAD /');
+  });
+});
+
+describe('isTlsSpeaker — a bad TLS answer is still an answer', () => {
+  it('counts a protocol-level failure, because something spoke TLS', () => {
+    // Firmware TLS stacks are old and routinely fail modern handshakes. Reading that as "no service" would
+    // discard the result on exactly the images most worth looking at.
+    expect(isTlsSpeaker({ code: 'ERR_SSL_WRONG_VERSION_NUMBER', message: 'wrong version number' })).toBe(true);
+    expect(isTlsSpeaker({ code: 'ERR_TLS_HANDSHAKE_TIMEOUT', message: 'x' })).toBe(true);
+    expect(isTlsSpeaker({ message: 'sslv3 alert handshake failure' })).toBe(true);
+  });
+
+  it('does not count a connection-level failure, where nothing was there at all', () => {
+    expect(isTlsSpeaker({ code: 'ECONNREFUSED', message: 'connect ECONNREFUSED' })).toBe(false);
+    expect(isTlsSpeaker({ code: 'ECONNRESET', message: 'socket hang up' })).toBe(false);
+    expect(isTlsSpeaker({ code: 'ETIMEDOUT', message: 'timeout' })).toBe(false);
   });
 });
