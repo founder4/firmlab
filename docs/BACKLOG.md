@@ -449,9 +449,25 @@ Surfaced while building the above and deliberately not built. Ordered roughly by
   The BE3600 ledger is now 685 findings across 12 sources. _The honest one worth quoting: kernel posture emits
   `blocked_by_platform` — "8 of 9 kernel posture questions could not be answered" — rather than presenting a
   posture it could not read as a clean one._
-- ▢ **No content search across the extraction.** `firmlab_list_files`/`firmlab_read_file` answer "what does this
-  file say", not "which file says this". The bound is the design question: a grep over 6497 files must state
-  what it did **not** scan (size cap, binary skip) rather than return a short list that reads as exhaustive.
+- ✅ **Content search across the extraction** (2026-07-28) — `providers/fssearch.ts` (pure, 10 tests) +
+  `GET /images/:id/files/search` + `firmlab_search_files` + a `FileSearch` panel under the file browser. Answers
+  "which file says this", the direction the browser cannot go.
+  **The bound was the whole design problem, not the matching.** A grep over 6497 files is a `for` loop; what is
+  hard is that every decision not to open a file removes it from the answer, and each one makes a SHORT list look
+  like a COMPLETE one — this ledger's oldest failure mode. So the result is a `SearchCoverage` first and hits
+  second, `formatCoverage` writes the sentence once so the route, the MCP payload and the panel cannot invent
+  three accounts of the same limits, and the panel renders the verdict **even on a clean search**, because a
+  caveat shown only on failure teaches people not to look for it. `searchPayload` gives the MCP surface an
+  explicit `isCompleteSearch`, since a model reading `hits: []` will not go hunting for a coverage object.
+  Binaries ARE searched — a firmware's most interesting strings live in ELFs — and a binary hit carries a byte
+  offset and **no line number**, because "line 4211 of busybox" is a fiction. Literal queries are escaped, so
+  `a.out` does not also match `about`.
+  **Validated on the real DVRF extraction: `/dev/nvram` → 8 hits, all in binaries, with the real `sbin/rc`
+  strings including "Failed to find /dev/nvram", 454 files searched of 880 walked in 29 ms — and `sohoadmin` → 0
+  hits under a COMPLETE verdict**, which corroborates from a second direction that this image's credentials are
+  not in its rootfs (its account database is symlinked to `/dev/null`, closed above).
+  _Not yet deployed: `deploy.sh` correctly refuses a dirty tree and another session had an uncommitted doc edit
+  in flight at the time. The code is on `main` and gated; the container still runs `d30350c`._
 - ▢ **Update-path: reach past the file that was read.** (a) resolve shell `source`/`include` so `sbin/sysupgrade`
   is credited with `fwtool.sh`'s `ucert -V` instead of the two being separate candidates; (b) decode OpenWrt's
   `FWx0` fwtool trailer so the appended ucert/metadata blobs are parsed rather than recognised by their armor —
