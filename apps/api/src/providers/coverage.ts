@@ -12,6 +12,12 @@
  * never disagree. Execution status comes from the last completed opacidad run's per-worker outcomes; with no run
  * yet, every applicable stage is honestly `not-run` rather than being assumed fine.
  *
+ * Operator assertions are counted on their own axis and never enter the stage arithmetic. A hand-written row is
+ * testimony, not execution: three of them on an image nothing has ever analyzed must still read UNEXAMINED, or the
+ * banner becomes a way to launder a claim into the appearance of coverage. `findingCount` therefore means
+ * *measured* findings throughout — the verdict names the assertions separately so the two numbers can never be
+ * silently summed by a reader who sees more rows in the ledger than the count admits.
+ *
  * Pure: `buildCoverage` takes plain data and returns the report. The route binds it to the store.
  */
 import type { OpacidadStep } from '../opacidad-narrative.js';
@@ -41,7 +47,13 @@ export interface CoverageReport {
   applicable: number;
   /** Of those, how many actually executed (ran or degraded). */
   executed: number;
+  /** MEASURED findings only. Operator assertions are deliberately excluded — they are not a stage's output. */
   findingCount: number;
+  /**
+   * Active operator assertions on this image. Reported beside the count, never inside it. Optional-shaped for
+   * readers that predate it: absent means zero, which is what every image had before assertions existed.
+   */
+  operatorAssertions: number;
   stages: CoverageStage[];
   /** The one honest sentence about what this image's finding count covers. */
   verdict: string;
@@ -73,8 +85,15 @@ function verdictFor(
   applicable: number,
   blocked: CoverageStage[],
   degraded: CoverageStage[] = [],
+  operatorAssertions = 0,
 ): string {
   const missing = applicable - executed;
+  // Appended to every branch rather than folded into one. The stage arithmetic above must read identically
+  // whether or not anyone has written an assertion — that invariance IS the guarantee, and a clause that only
+  // appears in some branches is a clause a reader learns to stop looking for.
+  const assertedNote = operatorAssertions
+    ? ` Separately, ${operatorAssertions} operator assertion(s) are recorded on this image — statements by a named author, not measurements. They are excluded from the count above and cover no stage.`
+    : '';
   const blockedNote = blocked.length
     ? ` Not covered: ${blocked
         .slice(0, 4)
@@ -96,20 +115,22 @@ function verdictFor(
     // route is invisible here. Saying "nothing has analyzed this image" next to a non-zero finding count would be
     // contradicted by the very row it annotates — which is the same conflation this banner exists to prevent.
     if (findingCount > 0) {
-      return `No autonomous scan has run, so coverage of the ${applicable} applicable stage(s) is UNKNOWN. The ${findingCount} finding(s) here come from individually-run stages — real results, but no basis for reading the rest as clean.`;
+      return `No autonomous scan has run, so coverage of the ${applicable} applicable stage(s) is UNKNOWN. The ${findingCount} finding(s) here come from individually-run stages — real results, but no basis for reading the rest as clean.${assertedNote}`;
     }
-    return `Nothing has analyzed this image yet — ${applicable} applicable stage(s) are unexecuted. An empty findings list here means UNEXAMINED, not clean.`;
+    // Reached when the only rows on the image are assertions. The sentence must stay UNEXAMINED: nothing was
+    // analyzed, and a person writing three claims does not change that by one stage.
+    return `Nothing has analyzed this image yet — ${applicable} applicable stage(s) are unexecuted. An empty findings list here means UNEXAMINED, not clean.${assertedNote}`;
   }
   if (findingCount === 0 && missing > 0) {
-    return `${executed} of ${applicable} stages ran and recorded nothing; ${missing} never ran. Zero findings covers only the stages that ran — it is not a clean bill for this firmware.${blockedNote}${degradedNote}`;
+    return `${executed} of ${applicable} stages ran and recorded nothing; ${missing} never ran. Zero findings covers only the stages that ran — it is not a clean bill for this firmware.${blockedNote}${degradedNote}${assertedNote}`;
   }
   if (findingCount === 0) {
-    return `All ${applicable} applicable stages ran and recorded nothing. That is a real negative for what this deployment can check statically — it is not proof the firmware is secure.${degradedNote}`;
+    return `All ${applicable} applicable stages ran and recorded nothing. That is a real negative for what this deployment can check statically — it is not proof the firmware is secure.${degradedNote}${assertedNote}`;
   }
   if (missing > 0) {
-    return `${findingCount} finding(s) from ${executed} of ${applicable} stages; ${missing} never ran, so the picture is incomplete.${blockedNote}${degradedNote}`;
+    return `${findingCount} finding(s) from ${executed} of ${applicable} stages; ${missing} never ran, so the picture is incomplete.${blockedNote}${degradedNote}${assertedNote}`;
   }
-  return `${findingCount} finding(s) across all ${applicable} applicable stages.${degradedNote}`;
+  return `${findingCount} finding(s) across all ${applicable} applicable stages.${degradedNote}${assertedNote}`;
 }
 
 /**
@@ -122,9 +143,12 @@ export function buildCoverage(input: {
   classRationale?: string;
   specs: PlanSpec[];
   steps: OpacidadStep[] | null;
+  /** MEASURED findings only — the caller partitions operator rows out before counting. */
   findingCount: number;
+  /** Active operator assertions. Defaults to 0 so every existing caller keeps its exact previous verdict. */
+  operatorAssertions?: number;
 }): CoverageReport {
-  const { firmwareClass, classRationale, specs, steps, findingCount } = input;
+  const { firmwareClass, classRationale, specs, steps, findingCount, operatorAssertions = 0 } = input;
   const byWorker = new Map((steps ?? []).map((s) => [s.worker, s]));
 
   const stages: CoverageStage[] = specs.map((spec) => {
@@ -168,6 +192,7 @@ export function buildCoverage(input: {
     applicable,
     executed,
     findingCount,
+    operatorAssertions,
     stages,
     verdict: verdictFor(
       findingCount,
@@ -175,6 +200,7 @@ export function buildCoverage(input: {
       applicable,
       blocked,
       stages.filter((s) => s.status === 'degraded'),
+      operatorAssertions,
     ),
     // A degraded stage covers less than its name suggests, so the count alone still misleads even at full
     // execution — the banner must stay prominent.

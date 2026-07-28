@@ -325,3 +325,93 @@ describe('toolResult / toolError', () => {
     expect(toolError('nope')).toMatchObject({ isError: true });
   });
 });
+
+/**
+ * The seam this feature is riskiest at: an agent can now WRITE a finding, and the read-back must not let it treat
+ * its own sentence as the workbench agreeing with it.
+ */
+describe('findingsPayload — an assertion is never returned as a measurement', () => {
+  const assertion = (authorKind: 'human' | 'agent'): NonNullable<McpFinding['assertion']> => ({
+    assertedBy: authorKind === 'agent' ? 'claude' : 'aaron',
+    authorKind,
+    assertedAt: 1_700_000_000_000,
+    claim: 'asserted_from_device',
+    rationale: 'Logged in on hardware rev B.',
+    status: 'active',
+  });
+
+  const asserted = (authorKind: 'human' | 'agent' = 'human'): McpFinding =>
+    finding({
+      kind: 'asserted_from_device',
+      title: 'Telnet root shell on the shipped unit',
+      proofState: 'operator_assertion',
+      source: 'operator:aaron',
+      rationale: 'Logged in on hardware rev B.',
+      assertion: assertion(authorKind),
+    });
+
+  it('lifts assertions out of `findings` entirely', () => {
+    const p = findingsPayload(coverage(), [finding(), asserted()]);
+    expect(p.findings).toHaveLength(1);
+    expect(p.findings[0]?.proofState).toBe('needs_runtime_reproduction');
+    expect(p.operatorAssertionCount).toBe(1);
+    expect(p.operatorAssertions?.[0]?.title).toBe('Telnet root shell on the shipped unit');
+  });
+
+  it('keeps assertions out of the proof-state histogram the model judges evidence strength by', () => {
+    const p = findingsPayload(coverage(), [finding(), asserted()]);
+    expect(p.proofStateCounts).toEqual({ needs_runtime_reproduction: 1 });
+    expect(p.proofStateCounts.operator_assertion).toBeUndefined();
+    expect(p.findingCount).toBe(1);
+  });
+
+  it('leads every asserted row with the reading, before anything that looks like a result', () => {
+    const p = findingsPayload(coverage(), [asserted()]);
+    const row = p.operatorAssertions?.[0];
+    expect(Object.keys(row ?? {})[0]).toBe('notAMeasurement');
+    expect(row?.notAMeasurement).toMatch(/asserted by a named author, not measured/);
+    expect(row?.claimMeaning).toMatch(/FirmLab cannot measure that at all/);
+  });
+
+  it('marks an agent-authored row as self-authored, and warns about the circularity', () => {
+    const p = findingsPayload(coverage(), [asserted('agent')]);
+    expect(p.operatorAssertions?.[0]?.selfAuthored).toBe(true);
+    expect(p.operatorAssertions?.[0]?.attribution).toMatch(/claude \(agent\)/);
+    expect(p.operatorAssertionsNotice).toMatch(/recorded BY YOU/);
+    expect(p.operatorAssertionsNotice).toMatch(/not evidence for the claim/);
+  });
+
+  it('separates withdrawn assertions, so a retracted claim is never counted as active', () => {
+    const withdrawn: McpFinding = {
+      ...asserted(),
+      assertion: { ...assertion('human'), status: 'withdrawn', withdrawnBy: 'aaron', withdrawnReason: 'wrong unit' },
+    };
+    const p = findingsPayload(coverage(), [withdrawn]);
+    expect(p.operatorAssertionCount).toBe(0);
+    expect(p.operatorAssertions).toBeUndefined();
+    expect(p.withdrawnAssertions?.[0]?.withdrawn).toBe(true);
+    expect(p.withdrawnAssertions?.[0]?.attribution).toMatch(/WITHDRAWN by aaron/);
+  });
+
+  it('adds no operator noise at all when the ledger holds none', () => {
+    const p = findingsPayload(coverage(), [finding()]);
+    expect(p.operatorAssertionCount).toBe(0);
+    expect(p.operatorAssertionsNotice).toBeUndefined();
+    expect(p.operatorAssertions).toBeUndefined();
+    expect(p.withdrawnAssertions).toBeUndefined();
+  });
+
+  it('still leads with the coverage verdict — assertions did not displace the original caveat', () => {
+    const p = findingsPayload(coverage({ executed: 0, findingCount: 0 }), [asserted()]);
+    expect(Object.keys(p)[0]).toBe('coverageVerdict');
+    expect(p.coverageVerdict).toContain('UNEXAMINED');
+  });
+});
+
+describe('HONESTY_INSTRUCTIONS — the briefing covers the write path', () => {
+  it('tells the model an assertion it recorded is not evidence for the claim it contains', () => {
+    expect(HONESTY_INSTRUCTIONS).toContain('OPERATOR ASSERTIONS');
+    expect(HONESTY_INSTRUCTIONS).toMatch(/restatement of your own claim, never evidence for it/);
+    expect(HONESTY_INSTRUCTIONS).toMatch(/count towards NO analysis stage/);
+  });
+});

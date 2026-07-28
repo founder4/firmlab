@@ -44,6 +44,14 @@ export function CoverageBanner({ imageId }: { imageId: string }): JSX.Element | 
         <span className="eyebrow">Coverage · {report.firmwareClass}</span>
         <p style={{ margin: '4px 0 0' }}>{report.verdict}</p>
         {report.classRationale ? <p className="hint">{report.classRationale}</p> : null}
+        {/* The verdict already names them; this states the arithmetic explicitly, because a reader who sees more
+            rows in the findings table than the count admits will otherwise assume the count is simply wrong. */}
+        {report.operatorAssertions ? (
+          <p className="hint">
+            The {report.findingCount} above are measured. {report.operatorAssertions} further row(s) are operator
+            assertions — a named person's claim, covering no stage.
+          </p>
+        ) : null}
       </div>
 
       <button

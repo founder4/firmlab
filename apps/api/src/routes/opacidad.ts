@@ -6,10 +6,12 @@
  */
 import type { ImageIdentity } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
+import { rowToFinding } from '../findings.js';
 import { loadLlmConfig } from '../llm.js';
 import type { OpacidadStep } from '../opacidad-narrative.js';
 import { specsForClass } from '../opacidad-plan.js';
 import { runOpacidad } from '../opacidad.js';
+import { partitionByProvenance } from '../operator-findings.js';
 import { type CoverageReport, buildCoverage } from '../providers/coverage.js';
 import { startJob } from '../providers/jobs.js';
 import { type ImageRow, getImage, listFindings, listImages, listJobs } from '../store.js';
@@ -71,6 +73,7 @@ export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
           applicable: c.applicable,
           executed: c.executed,
           findingCount: c.findingCount,
+          operatorAssertions: c.operatorAssertions,
           ambiguous: c.ambiguous,
           verdict: c.verdict,
         };
@@ -97,11 +100,16 @@ function coverageFor(row: ImageRow): CoverageReport {
     steps = null;
   }
 
+  // Split before counting. `findingCount` is the stage arithmetic's input, so an assertion reaching it would make
+  // a hand-written row read as something a stage produced — the one conflation this whole report exists to stop.
+  const { measured, asserted } = partitionByProvenance(listFindings(row.id).map(rowToFinding));
+
   return buildCoverage({
     firmwareClass,
     ...(identity?.classRationale ? { classRationale: identity.classRationale } : {}),
     specs: specsForClass(firmwareClass),
     steps,
-    findingCount: listFindings(row.id).length,
+    findingCount: measured.length,
+    operatorAssertions: asserted.length,
   });
 }

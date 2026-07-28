@@ -171,9 +171,78 @@ export type ProofState =
 export type FindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 
 /**
+ * The one value a finding's provenance field may hold that is NOT on the `ProofState` ladder.
+ *
+ * Every rung of `ProofState` is a claim code made after looking at something — bytes, a booted image, a blocked
+ * probe. An operator finding has no such backing: a person says so. Reusing a rung for it would make the ladder
+ * mean two incompatible things at once, and the whole workbench is built on the ladder meaning exactly one.
+ *
+ * So the field widens by exactly one value instead, and the value is deliberately self-describing: any reader
+ * that predates this feature renders the literal string `operator_assertion` rather than silently mapping it to a
+ * measurement. That is the safe direction to degrade — a stale UI shows an unfamiliar label, never
+ * `static_confirmed` over an assertion nobody measured.
+ */
+export const OPERATOR_ASSERTION = 'operator_assertion';
+
+/**
+ * What a finding's provenance field may hold: a code-decided proof state, or the operator-assertion sentinel.
+ * `ProofState` itself is untouched and still means "code decided this" — the ladder has not grown a rung.
+ */
+export type FindingProvenance = ProofState | typeof OPERATOR_ASSERTION;
+
+/**
+ * What kind of assertion a person is making. Deliberately a DISJOINT vocabulary from `ProofState`: not one token
+ * is shared, so no substring, prefix or careless `includes()` can turn an assertion into a proof state, and a
+ * reader that confuses the two has to work at it.
+ *
+ * The four are not degrees of confidence — they are provenances, and each one bounds a different reader question
+ * ("could FirmLab have checked this itself?"). `asserted_from_device` is the reason this whole class exists:
+ * an observation on physical hardware is knowledge this workbench structurally cannot produce, which is exactly
+ * why `confirmed_full_system` stops at "full-system emulation" and never claims the device.
+ */
+export type OperatorClaim =
+  | 'asserted_unverified' // a person believes it; nothing on the bench backs it
+  | 'asserted_from_device' // observed on the physical hardware — outside anything FirmLab can measure
+  | 'asserted_from_external_evidence' // a vendor advisory, datasheet, or third-party report says so
+  | 'disputes_finding'; // a person says a code-decided finding is wrong, and why
+
+/** Who wrote an assertion. Decided by the transport, never by the caller — see `mcp/server.ts`. */
+export type OperatorAuthorKind = 'human' | 'agent';
+
+/**
+ * The record attached to an operator finding: who asserted it, when, on what basis, and whether it still stands.
+ *
+ * Withdrawal is a state here rather than a `DELETE`, because a ledger that can only forget cannot record "this
+ * was wrong, and here is why" — and that sentence is often the most useful row in the file.
+ */
+export interface OperatorAssertion {
+  /** The named person or agent making the claim. An assertion without an author is not an assertion. */
+  assertedBy: string;
+  /** Whether a human typed it or an agent recorded it — an agent's own note is not corroboration of its claim. */
+  authorKind: OperatorAuthorKind;
+  assertedAt: number;
+  claim: OperatorClaim;
+  /** Why the author believes it. Required: a claim with no stated basis is a rumour with a timestamp. */
+  rationale: string;
+  /** `withdrawn` rows stay in the ledger and are excluded from every count. */
+  status: 'active' | 'withdrawn';
+  /** Set only for `disputes_finding`: the code-decided finding this assertion contradicts. */
+  disputesFindingId?: string;
+  withdrawnBy?: string;
+  withdrawnAt?: number;
+  /** Why it was retracted — the part a deletion would have thrown away. */
+  withdrawnReason?: string;
+  /** Last amendment, if the author edited the claim after asserting it. */
+  amendedAt?: number;
+}
+
+/**
  * A normalized security finding for an image, surfaced by any analysis provider and carrying an explicit proof
  * state. A finding always lives with its image and is backed by the provider evidence that produced it; the
  * corpus and (later) agent layers reference findings, never fabricate them.
+ *
+ * The one exception is an operator finding, which carries `proofState: 'operator_assertion'` and an `assertion`
+ * record naming its author. It is evidence that a person asserted something — never a measurement.
  */
 export interface Finding {
   id: string;
@@ -184,11 +253,17 @@ export interface Finding {
   kind: string;
   title: string;
   severity: FindingSeverity;
-  proofState: ProofState;
+  /** A code-decided proof state, or `operator_assertion` when `assertion` is set. Never both meanings at once. */
+  proofState: FindingProvenance;
   /** Structured evidence (the raw hit, CVE id, file path, emulation output…). */
   evidence?: Record<string, unknown>;
   /** Why it sits at this proof state — especially for downgrades. */
   rationale?: string;
+  /**
+   * Present iff this row was authored by a person or an agent rather than computed. Optional forever: every
+   * finding stored before this field existed has no assertion, and its absence means "code decided this".
+   */
+  assertion?: OperatorAssertion;
   createdAt: number;
 }
 
