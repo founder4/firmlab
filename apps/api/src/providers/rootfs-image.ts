@@ -85,8 +85,15 @@ export function imageIsCurrent(imageMtimeMs: number, rootfsMtimeMs: number): boo
  * does not carry it kills init immediately: the real WR940N boot reached userspace, printed
  * `/sbin/init: can't load library '/firmadyne/libnvram.so'` and panicked with `Attempted to kill init`. The shim
  * ships with this deployment already — the chroot rung uses it — so the only thing missing was putting it where
- * the kernel looks. Copied into a COPY of the extraction, never into the extraction itself: the rootfs is
- * evidence and other providers read it.
+ * the kernel looks.
+ *
+ * **It writes into the extraction, and it must be taken back out.** The header of this function used to claim it
+ * copied into "a COPY of the extraction, never into the extraction itself" — it never did, and both TP-Link
+ * rootfs on this deployment were carrying a `/firmadyne/libnvram.so` that is not part of any firmware. Nothing
+ * had surfaced it yet only because their stored extraction results predate the first full-system boot; any
+ * provider re-run after one would have walked a tree containing a file this workbench put there and reported it
+ * as the firmware's. Copying a whole rootfs per boot is the expensive fix; the cheap and correct one is that the
+ * file only has to exist for the length of the `mkfs` call, so `unstage` removes it in a `finally`.
  */
 async function stageFirmadyneShim(rootfsPath: string, arch: Architecture, log: (m: string) => void): Promise<void> {
   const shim = `${LIBNVRAM_DIR}/libnvram-${arch}.so`;
@@ -103,6 +110,23 @@ async function stageFirmadyneShim(rootfsPath: string, arch: Architecture, log: (
     log(`Staged the ${arch} NVRAM shim at /firmadyne/libnvram.so, which the firmadyne kernel preloads.`);
   } catch (err) {
     log(`Could not stage the NVRAM shim: ${(err as Error).message}. init will very likely fail to start.`);
+  }
+}
+
+/**
+ * Take back out everything staged above, so the extraction is the firmware again.
+ *
+ * Best-effort and silent on failure: a leftover shim degrades the honesty of a later file listing, while throwing
+ * here would fail a boot that has already succeeded. It says so in the log instead.
+ */
+export function unstageFirmadyneShim(rootfsPath: string, log: (m: string) => void): void {
+  const dir = path.join(rootfsPath, 'firmadyne');
+  try {
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    log(
+      `The staged /firmadyne directory could not be removed from the extraction (${(err as Error).message}). It is NOT part of the firmware — treat it as an artefact of this boot if a later listing shows it.`,
+    );
   }
 }
 
@@ -201,5 +225,9 @@ export async function ensureRootfsImage(
       reason: `mkfs.ext2 could not assemble the image: ${(e.stderr || e.message || 'unknown failure').slice(0, 300)}`,
       caveat: CAVEAT,
     };
+  } finally {
+    // The image now holds a copy; the extraction goes back to being the firmware. On BOTH paths, because a
+    // failed mkfs leaves the staged file behind just as surely as a successful one.
+    unstageFirmadyneShim(rootfsPath, log);
   }
 }

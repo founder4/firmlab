@@ -112,6 +112,22 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   claim from one that answers as shipped, so the intervention has to be recorded and has to qualify the result —
   which is the evidence-channel item, again, becoming a prerequisite rather than a nicety.
 
+- ✅ **The emulation rung was writing into the evidence, and its own comment said it was not** (2026-07-29) —
+  `stageFirmadyneShim` copies `/firmadyne/libnvram.so` into the rootfs so `mkfs.ext2 -d` picks it up, and its
+  header claimed it copied "into a COPY of the extraction, never into the extraction itself". It never did.
+  **Seven extractions across the corpus were carrying a shim that is part of no firmware** — both TP-Link routers,
+  the MR3220, DVRF, the GL.iNet carve and two IMOU trees — each verified byte-identical to a
+  `/opt/libnvram/libnvram-<arch>.so` the container ships before being removed.
+  Every other provider walks that same tree as evidence. Nothing had surfaced it yet only because the stored
+  extraction results predate the first full-system boot; a re-run of `fsaudit`, `gitleaks` or the file browser
+  after one would have listed a file this workbench put there as the firmware's. **This is the third instance of
+  the same shape**: a comment that was true about an intention and never about the code.
+  Fixed by removing the staged directory in a `finally` — the file only has to exist for the length of the `mkfs`
+  call, and copying a whole rootfs per boot is the expensive answer to a cheap problem. _Its test is written
+  against `unstageFirmadyneShim` directly, NOT through `ensureRootfsImage`: the suite runs on a host with no
+  `mkfs.ext2`, so the round trip returns before staging anything and a green integration test would prove only
+  that nothing happened — the guard-success-path trap, avoided by naming it._
+
 - ▢ **`webprobe` needs a live target, not new logic.** `runWebProbe(baseUrl, …)` would take `http://127.0.0.1:<host port>` straight from `open[]`, but the rung tears the guest down before returning — driving it needs a hook that runs while pass two is still up, inside `bootOnce`'s probe loop. That is the last step between this rung and a dynamic answer.
 - ▢ **`planForwards` forwards only declared ports plus an 80/443 floor.** On all four corpus images nothing is declared, so a service on 8080/22/23 is missed even now that two guests are reachable at layer 4. Worth widening now that reachability is no longer the blocker.
 - ✅ **Service enumeration** — `providers/servicemap.ts`: statically map the network daemons the rootfs starts (inittab/inetd/SysV/systemd) = boot-time attack surface.
