@@ -155,48 +155,6 @@ export const imageDetail: Messages['imageDetail'] = {
     runLabel: 'SBOM',
   },
 
-  binaries: {
-    listTitle: (n: number) => `Binarios (${n})`,
-    listSub:
-      'Todos los ELF del rootfs extraído, con la arquitectura leída de su cabecera. Selecciona uno para triarlo.',
-    colPath: 'Ruta',
-    colArch: 'Arq.',
-    colHardening: 'Endurecimiento',
-    colImports: 'Importaciones notables',
-    colNet: 'Red',
-    triageTitle: 'Triaje de binarios (radare2)',
-    triageSub: 'Triaje estático de un binario del rootfs extraído: cabeceras, importaciones, símbolos y cadenas.',
-    noRootfs: (section: string) =>
-      `Todavía no hay ningún rootfs extraído — ejecuta antes la extracción en la pestaña ${section}.`,
-    pathPlaceholder: 'ruta relativa al rootfs, p. ej. bin/busybox',
-    triaging: 'Haciendo triaje…',
-    triage: 'Hacer triaje del binario',
-    unavailable: 'Triaje no disponible — comprueba la ruta, o instala radare2.',
-    nx: (on: boolean) => `NX ${on ? 'activo' : 'inactivo'}`,
-    // `canary` es el nombre de la mitigación, no una palabra a traducir; sólo se localiza su estado.
-    canary: (on: boolean) => `canary ${on ? 'activo' : 'inactivo'}`,
-    pic: (on: boolean) => `PIC ${on ? 'sí' : 'no'}`,
-    funcs: (n: number) => `${n} funciones`,
-    importsTitle: (n: number) => `Importaciones (${n})`,
-    colSymbol: 'Símbolo',
-    colLibrary: 'Biblioteca',
-    symbolsTitle: (n: number) => `Símbolos (${n})`,
-    colSymbolName: 'Nombre',
-    colSymbolType: 'Tipo',
-    stringsTitle: (n: number) => `Cadenas (${n})`,
-    colAddress: 'Dirección',
-    colValue: 'Valor',
-  },
-
-  ghidra: {
-    title: 'Descompilación (Ghidra)',
-    sub: 'Pseudocódigo completo con Ghidra headless — necesita la capa opcional de Ghidra en la imagen.',
-    decompiling: 'Descompilando…',
-    decompile: 'Descompilar con Ghidra',
-    unavailable: 'Ghidra no está instalado — construye la imagen con su capa opcional.',
-    decompiled: (n: number, binary: string) => `${n} funciones descompiladas de ${binary}.`,
-  },
-
   diff: {
     title: 'Comparar firmware',
     sub: 'Compara identidad, paquetes y CVE (necesita SBOM en ambas) y ficheros del rootfs (necesita extracción).',
