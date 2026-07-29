@@ -110,6 +110,14 @@ export interface FindingRow {
    * here means exactly that.
    */
   assertionJson: string | null;
+  /**
+   * HOW this was known, alongside how far it was proven. Nullable forever, and a null means NOT RECORDED — a row
+   * written before this column existed, or by a provider that has not been taught its channel. Reading a null as
+   * "static" would invent provenance out of a missing field.
+   */
+  evidenceChannel: string | null;
+  /** The serialized list of what was changed about the subject to obtain this. Null/empty = the image as shipped. */
+  interventionsJson: string | null;
   createdAt: number;
 }
 
@@ -437,6 +445,16 @@ export function getDb(): DatabaseSync {
   } catch {
     // Column already present — nothing to do.
   }
+  // Migration: the evidence channel and the intervention list. NULL on every pre-existing row, and NULL means
+  // NOT RECORDED — deliberately not `static_bytes`. Backfilling a default here would manufacture provenance for
+  // thousands of rows out of a column that did not exist when they were written.
+  for (const column of ['evidenceChannel TEXT', 'interventionsJson TEXT']) {
+    try {
+      db.exec(`ALTER TABLE findings ADD COLUMN ${column}`);
+    } catch {
+      // Column already present — nothing to do.
+    }
+  }
   return db;
 }
 
@@ -521,8 +539,10 @@ export function insertFindings(rows: FindingRow[]): void {
   if (rows.length === 0) return;
   const stmt = getDb().prepare(
     `INSERT OR REPLACE INTO findings
-       (id, imageId, source, kind, title, severity, proofState, evidenceJson, rationale, assertionJson, createdAt)
-     VALUES (@id, @imageId, @source, @kind, @title, @severity, @proofState, @evidenceJson, @rationale, @assertionJson, @createdAt)`,
+       (id, imageId, source, kind, title, severity, proofState, evidenceJson, rationale, assertionJson,
+        evidenceChannel, interventionsJson, createdAt)
+     VALUES (@id, @imageId, @source, @kind, @title, @severity, @proofState, @evidenceJson, @rationale,
+             @assertionJson, @evidenceChannel, @interventionsJson, @createdAt)`,
   );
   for (const row of rows) stmt.run(asParams(row));
 }

@@ -256,6 +256,7 @@ export function buildReachFindings(binary: string, sinks: SinkResult[]): Finding
       title: `${s.sink} in ${binary} is reachable from the entry point under symbolic input`,
       severity: 'high',
       proofState: 'static_confirmed',
+      evidenceChannel: 'symbolic_execution',
       evidence: {
         binary,
         sink: s.sink,
@@ -291,6 +292,8 @@ export function buildReachFindings(binary: string, sinks: SinkResult[]): Finding
       title: `Reachability of ${inconclusive.length} sink(s) in ${binary} is unresolved — the bounded search did not settle it`,
       severity: 'info',
       proofState: 'needs_runtime_reproduction',
+      // The search RAN and did not settle it, which is still something the solver observed.
+      evidenceChannel: 'symbolic_execution',
       evidence: { binary, sinks: inconclusive.map((s) => s.sink), detail, statesPruned: pruned, toolErrors },
       rationale: [
         'The bounded symbolic search did not reach these sinks before it stopped.',
@@ -320,6 +323,9 @@ function unavailable(binary: string, reason: string): SymReachResult {
         title: `Symbolic reachability could not run on ${binary}`,
         severity: 'info',
         proofState: 'blocked_by_platform',
+        // No `evidenceChannel`, deliberately. angr is absent, so nothing was symbolically executed — stamping
+        // this row `symbolic_execution` would name a means that was never used, on the one row whose entire
+        // purpose is to say that the question could not be answered.
         evidence: { binary, reason },
         rationale:
           'The reachability question was asked but the deployment could not answer it. This is recorded so the ' +

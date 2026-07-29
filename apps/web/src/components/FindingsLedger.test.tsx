@@ -206,3 +206,44 @@ describe('FindingsLedger — the dispute annotation in Spanish', () => {
     expect(screen.getByText('f1-older-run')).toBeTruthy();
   });
 });
+
+/**
+ * The evidence channel in the ledger. Two renderings and one refusal, and the refusal is the load-bearing one.
+ */
+describe('FindingsLedger — how it was known, beside how far it was proven', () => {
+  it('prints the channel under the rung, because they answer different questions', () => {
+    render(<FindingsLedger findings={[measured({ source: 'symreach', evidenceChannel: 'symbolic_execution' })]} />);
+    // The rung says how far it was proven; the channel says a solver concluded it and nothing was executed.
+    expect(screen.getByText(en.proofState.label.static_confirmed)).toBeTruthy();
+    expect(screen.getByText('symbolic_execution')).toBeTruthy();
+  });
+
+  it('prints NOTHING when no channel was recorded, rather than an "unknown" chip', () => {
+    // An `unknown` badge would say the question was asked and came back empty. It was not asked: the row was
+    // written by a provider not yet taught its channel, and inventing a value is the failure the field exists
+    // to avoid.
+    const { container } = render(<FindingsLedger findings={[measured()]} />);
+    expect(screen.getByText(en.proofState.label.static_confirmed)).toBeTruthy();
+    expect(container.textContent).not.toMatch(/unknown|not recorded|static_bytes/i);
+  });
+
+  it('marks a row whose subject was not the firmware as shipped, without lowering its rung', () => {
+    render(
+      <FindingsLedger
+        findings={[
+          measured({
+            proofState: 'confirmed_in_emulation',
+            evidenceChannel: 'probe_response',
+            interventions: ['guest firewall rules flushed before boot'],
+          }),
+        ]}
+      />,
+    );
+    // Printed verbatim: the intervention qualifies the claim, it does not downgrade it. Those are different acts
+    // and conflating them would be the mirror of the dispute rule above.
+    expect(screen.getByText(en.proofState.label.confirmed_in_emulation)).toBeTruthy();
+    expect(screen.getByText(/not as shipped/i)).toBeTruthy();
+    // The provider's own words survive, in the tooltip, rather than being summarised into a category.
+    expect(screen.getByTitle('guest firewall rules flushed before boot')).toBeTruthy();
+  });
+});

@@ -168,6 +168,33 @@ export type ProofState =
   | 'blocked_by_security' // a valid control (validator/ACL) stops it
   | 'false_positive'; // evidence contradicts it, or pure device-class speculation with no artifact behind it
 
+/**
+ * HOW a finding came to be known — a second axis, orthogonal to `ProofState`, and the two must never merge.
+ *
+ * `ProofState` answers *how far it was proven*. It says nothing about the means, and two findings on the same
+ * rung can rest on completely different kinds of observation: `static_confirmed` covers both "these bytes are a
+ * private key" (read directly) and "angr proved this sink is on a live path" (a solver's conclusion about a
+ * program nobody ran). A reader who has to weigh a finding needs both, and until this existed only the rung was
+ * a field — the means were prose in `rationale`, where nothing could group, filter or audit by them.
+ *
+ * The one that matters most is the distinction the workbench is otherwise blind to: something a program DID
+ * (`emulated_run`, `probe_response`) versus something a tool CONCLUDED (`symbolic_execution`) versus something a
+ * third party SAID (`external_advisory`). A CVE from a database and a crash reproduced under qemu are not the
+ * same kind of knowledge, however their severities compare.
+ *
+ * Absent is a real value and means "not recorded", never "static". A finding written before this field existed,
+ * or by a provider that has not been taught its channel, must not be silently read as having been observed in
+ * the bytes — that would manufacture provenance out of a missing field, which this codebase has paid for once.
+ */
+export type EvidenceChannel =
+  | 'static_bytes' // read directly out of the image or the extracted rootfs, as shipped
+  | 'symbolic_execution' // a solver concluded it; no program was executed
+  | 'emulated_run' // the program ran under emulation and was observed doing this
+  | 'probe_response' // a service answered a request the workbench sent it
+  | 'captured_traffic' // seen on the wire, in or out of a booted guest
+  | 'external_advisory' // a published source says so (OSV, NVD, KEV, a vendor bulletin)
+  | 'operator_report'; // a person or an agent reported it — see `OperatorAssertion` for who and on what basis
+
 export type FindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 
 /**
@@ -259,6 +286,25 @@ export interface Finding {
   evidence?: Record<string, unknown>;
   /** Why it sits at this proof state — especially for downgrades. */
   rationale?: string;
+  /**
+   * How this was known, alongside how far it was proven. Optional forever, and absent means NOT RECORDED — a
+   * provider that has not been taught its channel, or a row written before the field existed. Never read an
+   * absence as `static_bytes`.
+   */
+  evidenceChannel?: EvidenceChannel;
+  /**
+   * What was changed about the SUBJECT to obtain this observation. Absent or empty means the firmware as
+   * shipped, and that is the whole point of the field: a service that answers only because the workbench
+   * flushed the guest's firewall, or a response obtained after the workbench rewrote the traffic, is a
+   * different claim from the same observation made against an untouched image — and `ProofState` cannot say so,
+   * because the rung reached really is the rung reached.
+   *
+   * Free sentences rather than a taxonomy, deliberately: there are no interventions in this workbench yet, and
+   * inventing a vocabulary for behaviour that does not exist would be guessing at the shape of the thing this
+   * field exists to keep honest. The PRESENCE of an entry is the signal; the wording is the provider's, in its
+   * own words, the way a finding's rationale is.
+   */
+  interventions?: string[];
   /**
    * Present iff this row was authored by a person or an agent rather than computed. Optional forever: every
    * finding stored before this field existed has no assertion, and its absence means "code decided this".

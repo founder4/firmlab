@@ -476,6 +476,21 @@ export interface Finding {
   proofState: FindingProvenance;
   evidence?: Record<string, unknown>;
   rationale?: string;
+  /**
+   * HOW it was known, beside how far it was proven — a second axis, not a finer proof state. Absent means NOT
+   * RECORDED (a row written before the field existed, or a provider not yet taught its channel) and is never to
+   * be rendered as though it were `static_bytes`.
+   */
+  evidenceChannel?:
+    | 'static_bytes'
+    | 'symbolic_execution'
+    | 'emulated_run'
+    | 'probe_response'
+    | 'captured_traffic'
+    | 'external_advisory'
+    | 'operator_report';
+  /** What the workbench changed about the firmware to obtain this. Absent = the image as shipped. */
+  interventions?: string[];
   /** Present iff a person or agent asserted this row rather than FirmLab measuring it. */
   assertion?: OperatorAssertion;
   createdAt: number;

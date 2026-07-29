@@ -83,6 +83,7 @@ export const report: Messages['report'] = {
   },
 
   findings: {
+    interventionSuffix: (what: string) => `[obtenido tras modificar el firmware: ${what}]`,
     heading: (label: string, n: number) => `${label} (${n})`,
     severity: 'Severidad',
     finding: 'Hallazgo',

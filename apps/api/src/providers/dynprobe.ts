@@ -453,6 +453,12 @@ export function buildGdbScript(input: {
  * `confirmed_in_emulation` is the ceiling and it is used deliberately: the sandbox is not the device. Nothing here
  * ever produces a clean result — `ran_clean` and `emulation_artifact` both emit a note saying what was and was not
  * shown, because a probe that found nothing is the case most likely to be misread as safety.
+ *
+ * Every draft below carries `evidenceChannel: 'emulated_run'`, INCLUDING the not-reproduced one. That is not an
+ * oversight: the binary really did execute under emulation and this is what was observed of it, which is a
+ * different and stronger kind of not-finding than a static pass that never ran the program at all. The channel
+ * records how it was known; the proof state records how far it got, and those are the two things a reader has to
+ * weigh separately.
  */
 export function buildDynFindings(binary: string, sink: string, r: ProbeResult): FindingDraft[] {
   const shared = {
@@ -474,6 +480,7 @@ export function buildDynFindings(binary: string, sink: string, r: ProbeResult): 
         title: `${binary}: ${sink} overflow reproduced — input controls the saved return address at offset ${r.controlOffset?.offset}`,
         severity: 'critical',
         proofState: 'confirmed_in_emulation',
+        evidenceChannel: 'emulated_run',
         evidence: { ...shared, controlOffset: r.controlOffset, hits: r.hits.length },
         rationale: `${r.reason} The proof state is confirmed_in_emulation and stops there on purpose: this ran under qemu-user, which has a different libc, no NVRAM and no peripherals, so it demonstrates the sandbox crashing rather than the device. FirmLab reports the offset because that is what crash triage is; it does not build a working exploit.`,
       },
@@ -487,6 +494,7 @@ export function buildDynFindings(binary: string, sink: string, r: ProbeResult): 
         title: `${binary}: crashed (${r.stop?.signal}) while exercising ${sink}`,
         severity: 'high',
         proofState: 'confirmed_in_emulation',
+        evidenceChannel: 'emulated_run',
         evidence: { ...shared, hits: r.hits.length },
         rationale: `${r.reason} Reproduced under qemu-user, so it is a claim about the sandbox, not the device.`,
       },
@@ -505,6 +513,7 @@ export function buildDynFindings(binary: string, sink: string, r: ProbeResult): 
               : `${binary}: ${sink} executed at runtime`,
         severity: r.argumentFromInput === false ? 'low' : 'medium',
         proofState: 'confirmed_in_emulation',
+        evidenceChannel: 'emulated_run',
         evidence: { ...shared, hits: r.hits.length, sample: r.hits[0]?.argument },
         rationale: `${r.reason} This upgrades the static reachability claim to an observed execution, and no further: the copy was not shown to overflow anything.`,
       },
@@ -518,6 +527,7 @@ export function buildDynFindings(binary: string, sink: string, r: ProbeResult): 
       title: `${binary}: ${sink} was not reproduced under emulation — this is not a clean result`,
       severity: 'info',
       proofState: 'needs_runtime_reproduction',
+      evidenceChannel: 'emulated_run',
       evidence: { ...shared, hits: r.hits.length },
       rationale: `${r.reason} The candidate keeps its needs-reproduction state: one input under one emulator that diverges from the device is nowhere near enough to call the binary sound. Fuzzing it, or driving it with a realistic input, is the next rung.`,
     },

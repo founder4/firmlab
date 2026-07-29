@@ -49,6 +49,8 @@ export const findings: Messages['findings'] = {
     proofState: 'Estado de prueba',
   },
 
+  interventionMark: (n: number) =>
+    `⚠ obtenido tras ${n} cambio${n === 1 ? '' : 's'} en el firmware — no tal como se envía`,
   assertedBy: (who: string) => `afirmado por ${who}`,
   agentSuffix: ' (agente)',
   withdrawnSuffix: ' — RETIRADA',

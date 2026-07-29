@@ -12,13 +12,15 @@
  * bounded HTTP and composes them, with an injectable fetch so tests never touch the network.
  */
 import { randomBytes } from 'node:crypto';
-import type { FindingSeverity, ProofState } from '@firmlab/core';
+import type { EvidenceChannel, FindingSeverity, ProofState } from '@firmlab/core';
 
 export interface WebFinding {
   kind: string;
   title: string;
   severity: FindingSeverity;
   proofState: ProofState;
+  /** How it was known, alongside how far it was proven. Optional so a stored result predating it stays valid. */
+  evidenceChannel?: EvidenceChannel;
   evidence: Record<string, unknown>;
   rationale: string;
 }
@@ -190,6 +192,8 @@ export async function runWebProbe(
           title: `OS command injection in ${point.path} (${point.param})`,
           severity: 'critical',
           proofState: 'confirmed_in_emulation',
+          // A live service answered a request this workbench sent it — the response IS the evidence.
+          evidenceChannel: 'probe_response',
           evidence: { path: point.path, param: point.param, payload, nonceEchoed: true },
           rationale:
             'The injected shell command echoed a unique per-run nonce in the response — command execution is ' +
@@ -208,6 +212,8 @@ export async function runWebProbe(
           title: `Path traversal in ${point.path} (${point.param})`,
           severity: 'high',
           proofState: 'confirmed_in_emulation',
+          // A live service answered a request this workbench sent it — the response IS the evidence.
+          evidenceChannel: 'probe_response',
           evidence: { path: point.path, param: point.param, payload, leaked: '/etc/passwd' },
           rationale:
             'The response leaked /etc/passwd (a real root:…:0:0: line) — arbitrary file read reproduced in the ' +

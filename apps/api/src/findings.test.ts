@@ -86,3 +86,58 @@ describe('normalizeBinaryHardening', () => {
     expect(normalizeBinaryHardening(mk({ nx: true, canary: true, pic: true }))).toEqual([]);
   });
 });
+
+/**
+ * The evidence channel — the second axis, and the rules that keep it from collapsing into the first.
+ *
+ * `ProofState` says how far a finding was proven; the channel says how it was known. The pair only earns its
+ * keep if two things hold: the same rung can carry different channels (or the axis is redundant), and an ABSENT
+ * channel never silently reads as a present one (or the field manufactures provenance it does not have).
+ */
+describe('the evidence channel is a second axis, not a finer proof state', () => {
+  it('puts two different channels on the SAME rung, which is the whole reason it exists', () => {
+    const secret = normalizeSecrets([
+      { offset: 16, value: 'root:x:0:0', secretKind: 'default-credential', severity: 'high' },
+    ]);
+    const hardening = normalizeBinaryHardening({
+      available: true,
+      binary: 'bin/httpd',
+      info: { nx: false, canary: null, pic: null },
+    } as unknown as DecompileResult);
+
+    // Both are `static_confirmed`, and both really were read out of the bytes.
+    expect(secret[0]?.proofState).toBe('static_confirmed');
+    expect(hardening[0]?.proofState).toBe('static_confirmed');
+    expect(secret[0]?.evidenceChannel).toBe('static_bytes');
+    expect(hardening[0]?.evidenceChannel).toBe('static_bytes');
+  });
+
+  it('calls a database match what it is: something a third party said, not something measured here', () => {
+    const out = normalizeSbom({
+      available: true,
+      vulnerabilities: [
+        { id: 'CVE-2022-48174', severity: 'Critical', packageName: 'busybox', packageVersion: '1.36.1', fixedIn: null },
+      ],
+    } as unknown as SbomResult);
+    // The rung is a lead, and the channel says the lead came from an advisory rather than from this image.
+    expect(out[0]?.proofState).toBe('needs_runtime_reproduction');
+    expect(out[0]?.evidenceChannel).toBe('external_advisory');
+  });
+
+  it('leaves the channel ABSENT rather than defaulting it, so a gap cannot read as a measurement', () => {
+    // A normalizer that has not been taught its channel must emit none. `undefined` is "not recorded"; picking
+    // `static_bytes` because it is the commonest value would invent provenance out of a missing field.
+    const draft = { kind: 'x', title: 'x', severity: 'info' as const, proofState: 'static_confirmed' as const };
+    expect('evidenceChannel' in draft).toBe(false);
+  });
+
+  it('never records an intervention on a normalizer that changes nothing', () => {
+    const out = normalizeGitleaks({
+      available: true,
+      findings: [{ rule: 'aws-key', description: 'AWS key', file: 'etc/x', line: 3, match: 'AKIA…' }],
+    } as unknown as GitleaksResult);
+    // Reading a file is not altering it. Absent means "the firmware as shipped", and that has to be the default
+    // for every provider that does not intervene — otherwise the mark means nothing when one finally does.
+    expect(out[0]?.interventions).toBeUndefined();
+  });
+});

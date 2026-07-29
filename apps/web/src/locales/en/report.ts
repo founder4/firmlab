@@ -92,6 +92,12 @@ export const report = {
   },
 
   findings: {
+    /**
+     * A measured row obtained against a firmware the workbench had altered. It goes in the TITLE because this
+     * document leaves the bench: nobody reading the exported PDF can check a claim against the panel it came
+     * from, so the qualification has to travel with the claim rather than sit in a column beside it.
+     */
+    interventionSuffix: (what: string) => `[obtained after changing the firmware: ${what}]`,
     heading: (label: string, n: number) => `${label} (${n})`,
     severity: 'Severity',
     finding: 'Finding',

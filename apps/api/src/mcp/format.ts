@@ -68,6 +68,17 @@ export interface McpFinding {
   source: string;
   evidence?: Record<string, unknown>;
   rationale?: string;
+  /**
+   * HOW this was known, beside how far it was proven. Absent means NOT RECORDED and must not be read as
+   * `static_bytes` — a model that fills the gap with the commonest value has invented provenance.
+   */
+  evidenceChannel?: string;
+  /**
+   * What the workbench CHANGED about the firmware to obtain this. Absent or empty means the image as shipped.
+   * When present it qualifies the proof state without lowering it: the rung really was reached, but against a
+   * subject this workbench had altered, and a report that omits that is claiming more than it measured.
+   */
+  interventions?: string[];
   /** Present iff a person or agent asserted this row rather than FirmLab measuring it. */
   assertion?: OperatorAssertion | undefined;
 }

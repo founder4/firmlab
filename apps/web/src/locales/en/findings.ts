@@ -48,6 +48,15 @@ export const findings = {
   },
 
   /** The author line an asserted row always carries — an assertion never appears without who made it. */
+  /**
+   * A finding whose subject was not the firmware as shipped: the workbench changed something to obtain it.
+   *
+   * Load-bearing and it must not soften in translation. The proof state on the row is honest — the rung really
+   * was reached — but it was reached against an altered subject, and a reader comparing it with a row obtained
+   * from an untouched image is comparing two different claims. The interventions themselves are the provider's
+   * own sentences and render as written, in the tooltip.
+   */
+  interventionMark: (n: number) => `⚠ obtained after ${n} change${n === 1 ? '' : 's'} to the firmware — not as shipped`,
   assertedBy: (who: string) => `asserted by ${who}`,
   agentSuffix: ' (agent)',
   withdrawnSuffix: ' — WITHDRAWN',

@@ -254,7 +254,13 @@ export function ReportBuilder({
                       const off = (f.evidence as Record<string, unknown> | undefined)?.offset;
                       return {
                         sev: f.severity,
-                        title: f.title,
+                        // A row obtained against an altered subject says so IN THE TITLE, not in a column a
+                        // reader can skim past. This document leaves the workbench and nobody reading the PDF
+                        // can check it against the panel it came from, so the qualification has to travel with
+                        // the claim itself.
+                        title: f.interventions?.length
+                          ? `${f.title} ${t.report.findings.interventionSuffix(f.interventions.join('; '))}`
+                          : f.title,
                         offset: typeof off === 'number' ? hex(off) : '—',
                         source: f.source,
                         proof: t.proofState.label[f.proofState],

@@ -12,7 +12,14 @@
  * `syncFindings` refuses an operator source outright rather than trusting callers to pass the right one.
  */
 import { randomUUID } from 'node:crypto';
-import type { Finding, FindingProvenance, FindingSeverity, OperatorAssertion, OperatorAuthorKind } from '@firmlab/core';
+import type {
+  EvidenceChannel,
+  Finding,
+  FindingProvenance,
+  FindingSeverity,
+  OperatorAssertion,
+  OperatorAuthorKind,
+} from '@firmlab/core';
 import type { FindingDraft } from './findings-normalize.js';
 import {
   type ValidatedAssertion,
@@ -69,6 +76,12 @@ export function syncFindings(imageId: string, source: string, drafts: FindingDra
     // Always null on this path: a computed finding has no author, and `assertion` being absent is precisely what
     // tells every reader that code decided this row.
     assertionJson: null,
+    // Whatever the normalizer stated, and null when it stated nothing — the provider knows how it learned this
+    // and nothing downstream can work it out, so a default invented here would be a guess wearing a field's
+    // clothes. An empty intervention list is stored as null: "nothing was changed" and "no list" read the same
+    // to every consumer, and one representation cannot drift from the other.
+    evidenceChannel: d.evidenceChannel ?? null,
+    interventionsJson: d.interventions?.length ? JSON.stringify(d.interventions) : null,
     createdAt: now,
   }));
   insertFindings(rows);
@@ -89,6 +102,13 @@ export function rowToFinding(row: FindingRow): Finding {
   if (row.evidenceJson) finding.evidence = JSON.parse(row.evidenceJson) as Record<string, unknown>;
   if (row.rationale) finding.rationale = row.rationale;
   if (row.assertionJson) finding.assertion = JSON.parse(row.assertionJson) as OperatorAssertion;
+  // Both stay ABSENT when the column is null, rather than being defaulted. A null is "not recorded", and the
+  // difference between that and `static_bytes` is the whole reason the column exists.
+  if (row.evidenceChannel) finding.evidenceChannel = row.evidenceChannel as EvidenceChannel;
+  if (row.interventionsJson) {
+    const list = JSON.parse(row.interventionsJson) as string[];
+    if (list.length > 0) finding.interventions = list;
+  }
   return finding;
 }
 
@@ -110,6 +130,10 @@ export function recordOperatorFinding(imageId: string, v: ValidatedAssertion, au
     evidenceJson: draft.evidence ? JSON.stringify(draft.evidence) : null,
     rationale: draft.rationale ?? null,
     assertionJson: JSON.stringify(draft.assertion),
+    // A person or an agent reported it — stated here rather than left null, because for this one row the channel
+    // is knowable with certainty from the path that wrote it.
+    evidenceChannel: 'operator_report',
+    interventionsJson: null,
     createdAt: now,
   };
   insertFindings([row]);

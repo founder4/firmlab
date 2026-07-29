@@ -9,7 +9,7 @@
  *   - SBOM CVEs           → `needs_runtime_reproduction`  (a vulnerable component is present, but reachability
  *                            and on-device exploitability are unproven — never overstated)
  */
-import type { Finding, FindingSeverity, ProofState, StringHit } from '@firmlab/core';
+import type { EvidenceChannel, Finding, FindingSeverity, ProofState, StringHit } from '@firmlab/core';
 import type { DecompileResult } from './providers/decompile.js';
 import type { GitleaksResult } from './providers/gitleaks.js';
 import type { SbomResult, Severity } from './providers/sbom.js';
@@ -26,6 +26,8 @@ export function normalizeSecrets(secrets: StringHit[]): FindingDraft[] {
       title: `${s.secretKind ?? 'secret'} at 0x${s.offset.toString(16)}`,
       severity: (s.severity ?? 'medium') as FindingSeverity,
       proofState: 'static_confirmed' as ProofState,
+      // The classifier read this out of the image itself; nothing was executed and nobody was asked.
+      evidenceChannel: 'static_bytes' as EvidenceChannel,
       evidence: { offset: s.offset, value: s.value },
     }));
 }
@@ -47,6 +49,9 @@ export function normalizeSbom(result: SbomResult): FindingDraft[] {
     title: `${v.id} — ${v.packageName} ${v.packageVersion}`,
     severity: SBOM_SEVERITY[v.severity] ?? 'info',
     proofState: 'needs_runtime_reproduction' as ProofState,
+    // A published database says this version is affected. Nothing here was measured on THIS image beyond the
+    // package's presence — which is exactly the distinction the channel exists to make visible.
+    evidenceChannel: 'external_advisory' as EvidenceChannel,
     rationale: 'Vulnerable component present in the rootfs; reachability and exploitability not yet proven.',
     evidence: { id: v.id, packageName: v.packageName, packageVersion: v.packageVersion, fixedIn: v.fixedIn },
   }));
@@ -60,6 +65,8 @@ export function normalizeGitleaks(result: GitleaksResult): FindingDraft[] {
     title: `${f.description || f.rule} in ${f.file}`,
     severity: 'high' as FindingSeverity,
     proofState: 'static_confirmed' as ProofState,
+    // Matched inside a real file of the extracted rootfs, as shipped.
+    evidenceChannel: 'static_bytes' as EvidenceChannel,
     evidence: { file: f.file, line: f.line, match: f.match, rule: f.rule },
   }));
 }
@@ -75,6 +82,8 @@ export function normalizeBinaryHardening(result: DecompileResult): FindingDraft[
       title: `${label}: ${binary}`,
       severity,
       proofState: 'static_confirmed',
+      // A hardening flag is a field in the ELF header; radare2 read it.
+      evidenceChannel: 'static_bytes',
       evidence: { binary, info },
     });
   };

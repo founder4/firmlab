@@ -329,6 +329,24 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                       <td>
                         {/* Printed verbatim on a contested row: the dispute is recorded beside it, never over it. */}
                         <ProofStateBadge state={f.proofState} />
+                        {/* The second axis, UNDER the rung rather than beside it: how far it was proven is the
+                            headline, how it was known qualifies it. A row with no channel recorded prints
+                            nothing at all — an "unknown" chip would imply the question was asked and answered. */}
+                        {f.evidenceChannel && (
+                          <div className="hint mono" style={{ fontSize: 10.5, marginTop: 3 }}>
+                            {f.evidenceChannel}
+                          </div>
+                        )}
+                        {/* And the one thing that changes what the rung MEANS: the subject was not as shipped. */}
+                        {f.interventions?.length ? (
+                          <div
+                            className="hint"
+                            style={{ fontSize: 11, marginTop: 3, color: 'var(--sev-medium, #e6b45c)' }}
+                            title={f.interventions.join(' · ')}
+                          >
+                            {t.findings.interventionMark(f.interventions.length)}
+                          </div>
+                        ) : null}
                       </td>
                     </tr>
                   );
