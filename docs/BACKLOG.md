@@ -908,10 +908,29 @@ rejections below are rejections.
   exploitation posture wholesale (`exploit-development-poc`, `exploit-acquire-build-verify`, `waf-filter-evasion`,
   `advanced-web-attack-chains`) against a boundary stated in three documents. If it is ever built: its own lane, its
   own flag, its own scope model — decided deliberately, not arrived at through a sidebar entry.
-- ▢ **The evidence CHANNEL is not recorded, only the proof rung.** galert's `evidence-verdict-discipline.md`
-  separates `code_trace_only` / `manual_steps` / `request_only` / `captured_http` — *how it was known*, alongside
-  *how far it was proven*. FirmLab has the second and only sometimes the first, scattered in evidence prose rather
-  than being a field. Worth having, and the cheaper half of this pair.
+- ✅ **The evidence CHANNEL is recorded, beside the proof rung** (2026-07-29, deploy `c7f3b3f`) — `ProofState`
+  answers how far something was proven and says nothing about the means, so `static_confirmed` covered both "these
+  bytes are a private key" (read directly) and "angr proved this sink is on a live path" (a solver's conclusion
+  about a program nobody ran). The means were prose inside `rationale`, where nothing could group, filter or audit
+  by them. `EvidenceChannel` in core is the second axis — `static_bytes` · `symbolic_execution` · `emulated_run` ·
+  `probe_response` · `captured_traffic` · `external_advisory` · `operator_report` — with two rules pinned by test:
+  the same rung must carry different channels (or the axis is redundant), and **absent means NOT RECORDED, never
+  `static_bytes`** (or the field manufactures the provenance it exists to make honest). No backfill: all 1230 live
+  rows migrated to NULL, which is the only correct reading of a column that did not exist when they were written.
+  `symreach`'s blocked row is deliberately left channel-less — angr was absent, so nothing was symbolically
+  executed. **Validated on the deploy**: a re-run stamped 12 gitleaks rows `static_bytes` through
+  normalizer → `syncFindings` → SQLite → API → ledger, with the other 300 rows correctly blank.
+- ▢ **Most providers still have no channel.** `sbom` (531 rows), `binvuln` (299), `certs` (156), `updatepath`,
+  `kernel`, `devicetree`, `nvram`, `compcve` and the rest emit none, so they read as "not recorded" — honest, and
+  incomplete. Each needs its own judgement rather than a sweep: `compcve` is `external_advisory` like `sbom`, but
+  `binvuln`'s sink candidates are `static_bytes` while its *reachability* claims are not, and getting that wrong
+  reintroduces exactly the conflation the axis was added to remove.
+- ▢ **`interventions` exists and nothing writes to it yet, by design.** It is the field the boot-time repair
+  depends on: what the workbench CHANGED about the subject to obtain an observation, absent meaning "as shipped".
+  It qualifies a proof state without lowering it — the rung really was reached, against an altered subject — which
+  `ProofState` structurally cannot express. Free sentences rather than a taxonomy on purpose: there are no
+  interventions yet, and inventing a vocabulary for behaviour that does not exist would be guessing at the shape of
+  the thing the field exists to keep honest. Derive the taxonomy from the first three real ones.
 - ▢ **There is no verdict for "out of scope".** galert carries `OUT_OF_SCOPE_INTERNAL` for a finding that would be
   exploitable but depends on access outside the engagement. Here that collapses into `needs_runtime_reproduction`
   and therefore **reads as a lead when it is a scope decision** — a distinct kind of not-answered from
