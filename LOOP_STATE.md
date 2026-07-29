@@ -33,12 +33,16 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
 - [ ] `FuzzResult.reason` sin lector — impacto: bajo — evidencia: `api.ts:231`.
 - [ ] `BootDiagnosis.cause` se muestra como identificador crudo — impacto: bajo — evidencia:
       `SimulationMenu.tsx:466` pinta `{egressShown.unreachable.cause}` sin pasar por locales.
-- [ ] `egress.attempts` cuenta como «a dónde quiso ir» las RESPUESTAS a nuestras propias sondas — impacto:
+- [x] `egress.attempts` contaba como «a dónde quiso ir» las RESPUESTAS a nuestras propias sondas — impacto:
       **alto** — evidencia: captura de `/image/c8e1ffa0/simulate` sobre el contenedor desplegado: ~150 filas
       `10.0.2.2:<puerto efímero> tcp · the emulator itself · 1 frame`. 10.0.2.2 es el host visto desde slirp y
       esos puertos altos son el lado NATeado de los reenvíos que ABRIMOS nosotros, así que el panel presenta como
       intención del firmware el eco de la intervención del banco de pruebas. Además la lista no lleva cota: la
       página mide 8582 px de alto y las dos filas que importan quedan sepultadas.
+- [ ] La nota de aislamiento se imprime aunque la lista esté vacía — impacto: bajo — evidencia: captura
+      `/image/c8e1ffa0/simulate` tras el arranque `f5301511-1d6`: «This boot was isolated, so nothing below was
+      reached … this is what the firmware asked for» encima de «The guest addressed nothing beyond the emulator»,
+      y el firmware no pidió nada. `SimulationMenu.tsx` la pinta incondicionalmente.
 - [ ] Denominadores OSV/NVD sin lector — impacto: medio — evidencia: `api.ts:639-647`, `:671`.
 
 ## Historial
@@ -63,3 +67,16 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
   Verificado además contra el despliegue real: `/image/c8e1ffa0/simulate` en `firmlab` (build 6324c3e) pinta
   «NETWORK DAEMONS ON THIS BOOT · httpd · SIGSEGV (exit 139) · last open: /proc/simple_config/system_mode»,
   0 errores de consola y 0 peticiones fallidas. Esa captura destapó el punto flojo nuevo de arriba.
+- iter 3: cerrado el punto de `egress.attempts`. La dirección de un flujo TCP se decide ahora por banderas
+  (SYN sin ACK = lo abrió el invitado; SYN+ACK = lo aceptó; cualquier cosa en un flujo que no abrió = respuesta),
+  por FLUJO y no por destino; UDP no reclama dirección; una trama con banderas cortadas se queda en la lista y se
+  cuenta aparte. Las tres cotas que truncaban en silencio (200 destinos, 100 nombres, y una nueva de 40 filas en
+  pantalla) dicen qué dejaron fuera y por qué regla. Además las fixtures TCP llevaban cabecera de 8 bytes: al
+  empezar a leer banderas TODAS caían en la rama «demasiado corta para decidir» y la suite habría seguido verde
+  sin probar nada — ahora llevan cabecera real de 20.
+  Verificación: `pnpm test` → core 75 / api 1747 / web 303 verde · `pnpm check` → Done · `pnpm biome` → limpio ·
+  y contra bytes reales, que es lo que lo destapó: arranque full-system nuevo del MR3220 en el contenedor
+  desplegado (`cef8b8c`, job `f5301511-1d6`) → `attempts 0 · answered 116 · undecided 0 · dropped 0 ·
+  guestFrames 116`. Las 116 tramas que el invitado puso en el cable eran las 116 respuestas a nuestras 116 SYN.
+  La página pasó de 8582 px a 3384 px y ahora dice «116 frames were this guest ANSWERING connections opened from
+  outside it». `undecided 0` confirma que con `maxlen=256` las banderas siempre se capturan.
