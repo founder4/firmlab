@@ -228,3 +228,77 @@ describe('SimulationMenu — the guest’s egress', () => {
     expect(screen.queryByText(/Where it tried to go/i)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The daemon list.
+ *
+ * `boot-diagnose` has always collected both lists and the panel read neither, so the two facts the module exists
+ * to separate — "no network daemon was ever executed" and "one started and took SIGSEGV" — reached the screen as
+ * the same empty space. These tests are written against that: each case asserts what the OTHER case must not say.
+ */
+describe('SimulationMenu — which daemons the boot saw', () => {
+  const ledger = { runs: [{ jobId: 'j9', kind: 'emulate', status: 'done' }], byTarget: [] };
+  const withDiagnosis = (unreachable: Record<string, unknown>) => ({
+    summary: ledger.runs[0],
+    params: {},
+    log: '',
+    error: null,
+    result: { unreachable },
+  });
+
+  it('names the crash with its signal AND the file it died on', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(
+      withDiagnosis({
+        cause: 'service-died',
+        summary: 'httpd died',
+        evidence: [],
+        daemonsStarted: ['httpd'],
+        daemonsExited: [
+          { binary: 'httpd', pid: '103', code: 139, signal: 11, lastOpen: '/proc/simple_config/system_mode' },
+        ],
+      }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('httpd')).toBeInTheDocument();
+    // 139 alone means nothing; SIGSEGV means everything. Both are printed.
+    expect(screen.getByText('SIGSEGV (exit 139)')).toBeInTheDocument();
+    expect(screen.getByText(/\/proc\/simple_config\/system_mode/)).toBeInTheDocument();
+    expect(screen.queryByText(/No network daemon was ever executed/i)).not.toBeInTheDocument();
+  });
+
+  it('separates "never started" from "started and died" — the claim the module exists for', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(
+      withDiagnosis({
+        cause: 'no-service-started',
+        summary: 'nothing came up',
+        evidence: [],
+        daemonsStarted: [],
+        daemonsExited: [],
+      }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText(/nothing died, nothing was started/i)).toBeInTheDocument();
+  });
+
+  it('lists a daemon that started and did NOT exit as running, not as missing', async () => {
+    // The WR940N: httpd is provably still serving and the SYNs vanish anyway. Listing it is what stops a reader
+    // concluding "no service" from an empty `open`.
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(
+      withDiagnosis({
+        cause: 'guest-dropped',
+        summary: '158 SYNs, no answer',
+        evidence: [],
+        daemonsStarted: ['httpd', 'telnetd'],
+        daemonsExited: [{ binary: 'telnetd', pid: '5', code: 1, signal: null, lastOpen: null }],
+      }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('started, did not exit')).toBeInTheDocument();
+    // An ordinary status is reported as an exit, never dressed up as a crash.
+    expect(screen.getByText('exited 1')).toBeInTheDocument();
+    expect(screen.queryByText(/SIG/)).not.toBeInTheDocument();
+  });
+});

@@ -127,6 +127,18 @@ export function readDaemonTrace(consoleOutput: string): { started: string[]; exi
   return { started: [...new Set(started)], exited };
 }
 
+/**
+ * Pure: which dead daemon to lead with.
+ *
+ * A boot can kill more than one, and `exited[0]` made that choice an artifact of the order init happened to start
+ * them in. A death on a SIGNAL ranks first because it says more than a clean exit: a daemon that returned status
+ * 1 chose to stop, one that took SIGSEGV was stopped. Ties keep trace order, which is at least stable — and the
+ * ones not led with are counted in the summary and carried whole in `daemonsExited`, never dropped.
+ */
+export function rankExits(exited: readonly DaemonExit[]): DaemonExit[] {
+  return [...exited].sort((a, b) => (b.signal === null ? 0 : 1) - (a.signal === null ? 0 : 1));
+}
+
 export interface DiagnoseInput {
   consoleOutput: string;
   /** How many host→guest forwards this run set up, so "nothing was even asked" is distinguishable. */
@@ -151,20 +163,28 @@ export function diagnoseUnreachable(input: DiagnoseInput): BootDiagnosis {
     return { ...base, cause: 'answered', summary: 'A service answered; there is nothing to diagnose.', evidence: [] };
   }
 
-  const dead = exited[0];
+  // More than one daemon can die on a boot. Taking `exited[0]` made the choice an artifact of the order the
+  // firmware's init happened to start them in — the "a bound must not truncate by arrival order" rule this
+  // codebase already paid for in `selectFindings` — and the others vanished with no statement that they existed.
+  const dead = rankExits(exited)[0];
   if (dead) {
     const sig = dead.signal;
     const how = sig
       ? `died on ${SIGNALS[sig] ?? `signal ${sig}`} (exit code ${dead.code})`
       : `exited with status ${dead.code}`;
     const doing = dead.lastOpen ? `, and the last file it opened was ${dead.lastOpen}` : '';
+    const others =
+      exited.length > 1
+        ? ` ${exited.length - 1} other network daemon(s) also exited on this boot, and are listed with it.`
+        : '';
     return {
       ...base,
       cause: 'service-died',
-      summary: `The firmware started ${dead.binary} and it ${how}${doing}. Nothing answered because the daemon is not running — forwarding more ports cannot reach a process that already exited. What this needs is the resource it died on, not a wider probe.`,
+      summary: `The firmware started ${dead.binary} and it ${how}${doing}. Nothing answered because the daemon is not running — forwarding more ports cannot reach a process that already exited. What this needs is the resource it died on, not a wider probe.${others}`,
       evidence: [
         `${dead.binary} (pid ${dead.pid}) exit code ${dead.code}`,
         ...(dead.lastOpen ? [`last open: ${dead.lastOpen}`] : []),
+        ...(exited.length > 1 ? [`${exited.length} daemon(s) exited in total`] : []),
       ],
     };
   }

@@ -54,6 +54,22 @@ export const simulation = {
   unreachableTitle: 'Why nothing answered',
 
   /**
+   * The daemons the boot trace saw. `noneStarted` is NOT "they all died" — it is that nothing looking like a
+   * network daemon was ever executed, which is a different thing to go and fix.
+   */
+  daemons: {
+    heading: 'Network daemons on this boot',
+    noneStarted: 'No network daemon was ever executed on this boot — nothing died, nothing was started.',
+    crashed: (signal: string, code: number) => `${signal} (exit ${code})`,
+    exited: (code: number) => `exited ${code}`,
+    exitedTitle: 'This daemon is not running. Forwarding more ports cannot reach a process that already exited.',
+    running: 'started, did not exit',
+    runningTitle:
+      'The trace saw it start and never saw it go. If its port was probed and nothing came back, the daemon is not the thing to fix.',
+    lastOpen: 'last open:',
+  },
+
+  /**
    * Where the booted firmware tried to go. Two words carry this block and neither may soften in translation:
    * the firmware ADDRESSED these — a SYN into a black hole looks identical from the sending side — and whether
    * it was ALLOWED to get there is a property of the run, not of the firmware.

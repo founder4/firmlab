@@ -86,7 +86,9 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
         return (detail.result ?? null) as StoredEmulationResult | null;
       })
       .then((r) => {
-        if (!cancelled) setStored(r?.egress ? r : null);
+        // `unreachable` on its own is kept: a boot on which nothing answered often addressed nothing either, so
+        // gating this on `egress` discarded the diagnosis for exactly the runs whose emptiness needs explaining.
+        if (!cancelled) setStored(r?.egress || r?.unreachable ? r : null);
       })
       .catch(() => {
         if (!cancelled) setStored(null);
@@ -160,7 +162,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
     | null;
   // A live run wins over the stored one — it is the newer of the two — and the stored one is what a reader who
   // simply opened this page sees.
-  const egressShown = result?.egress ? result : stored;
+  const egressShown = result?.egress || result?.unreachable ? result : stored;
   const isRenode = Boolean(result && 'booted' in result);
   const isChipsec = Boolean(result && 'moduleCount' in result);
 
@@ -474,6 +476,11 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                   {egressShown.unreachable.evidence.join(' · ')}
                 </div>
               )}
+              {/* The daemons themselves. The summary above leads with ONE — the most informative death — and
+                  says how many others there were; this is where the others actually are. "never started" and
+                  "started and took SIGSEGV" are the two facts the whole module exists to separate, so a daemon
+                  that started and did NOT exit is listed too, as the running one it is. */}
+              <DaemonList diagnosis={egressShown.unreachable} />
             </div>
           )}
           {egressShown.egress && <EgressPanel egress={egressShown.egress} isolated={egressShown.isolated === true} />}
@@ -484,6 +491,60 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
     </div>
   );
 }
+
+/**
+ * Which network daemons the boot trace saw, and what became of each.
+ *
+ * `boot-diagnose` collects both lists and the panel read neither, so a boot on which two daemons died reported
+ * one of them and a boot on which one started and survived looked, in this panel, exactly like a boot on which
+ * none ever did. The exit code is printed beside the signal name because 139 means nothing on its own and
+ * SIGSEGV means everything.
+ */
+function DaemonList({ diagnosis }: { diagnosis: BootDiagnosis }): JSX.Element | null {
+  const t = useMessages();
+  const d = t.simulation.daemons;
+  const exitedNames = new Set(diagnosis.daemonsExited.map((x) => x.binary));
+  const stillRunning = diagnosis.daemonsStarted.filter((n) => !exitedNames.has(n));
+  if (diagnosis.daemonsStarted.length === 0) {
+    // Not the same as "they all died": nothing that looks like a network daemon was ever executed.
+    return (
+      <div className="hint" style={{ marginTop: 6 }}>
+        {d.noneStarted}
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="eyebrow" style={{ marginBottom: 4 }}>
+        {d.heading}
+      </div>
+      {diagnosis.daemonsExited.map((x) => (
+        <div key={`${x.binary}-${x.pid}`} style={{ fontSize: 12.5, marginBottom: 2 }}>
+          <span className="mono">{x.binary}</span>{' '}
+          <span className="badge badge-crit" title={d.exitedTitle}>
+            {x.signal === null ? d.exited(x.code) : d.crashed(SIGNAL_NAME[x.signal] ?? `signal ${x.signal}`, x.code)}
+          </span>{' '}
+          {x.lastOpen && (
+            <span className="hint mono" style={{ fontSize: 11.5 }}>
+              {d.lastOpen} {x.lastOpen}
+            </span>
+          )}
+        </div>
+      ))}
+      {stillRunning.map((n) => (
+        <div key={n} style={{ fontSize: 12.5, marginBottom: 2 }}>
+          <span className="mono">{n}</span>{' '}
+          <span className="badge badge-ok" title={d.runningTitle}>
+            {d.running}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Signal numbers the firmadyne trace produces, named. The NUMBER stays beside the name — it is what was traced. */
+const SIGNAL_NAME: Record<number, string> = { 4: 'SIGILL', 6: 'SIGABRT', 7: 'SIGBUS', 8: 'SIGFPE', 11: 'SIGSEGV' };
 
 /**
  * The half of a full-system result this panel reads. Every field optional and permanently so: a run stored

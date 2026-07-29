@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diagnoseUnreachable, readDaemonTrace, signalOf } from './boot-diagnose.js';
+import { diagnoseUnreachable, rankExits, readDaemonTrace, signalOf } from './boot-diagnose.js';
 
 /**
  * The two cases in the middle of this file are transcribed from real consoles, because they are the pair that
@@ -165,5 +165,66 @@ describe('diagnoseUnreachable', () => {
     });
     expect(d.summary).toContain('exited with status 1');
     expect(d.summary).not.toMatch(/signal|SIG/);
+  });
+});
+
+/**
+ * More than one daemon can die on a boot, and the first version led with `exited[0]` — making the choice an
+ * artifact of the order init happened to start them in, and dropping the rest with no statement that they
+ * existed. That is the rule `selectFindings` was fixed for, repeated in a new module.
+ */
+describe('more than one daemon dies', () => {
+  const exit = (binary: string, code: number) => ({
+    binary,
+    pid: '1',
+    code,
+    signal: signalOf(code),
+    lastOpen: null,
+  });
+
+  it('leads with the SIGNAL death, not with whichever init started first', () => {
+    // A daemon that returned status 1 chose to stop; one that took SIGSEGV was stopped. The second says more.
+    const ranked = rankExits([exit('telnetd', 1), exit('httpd', 139)]);
+    expect(ranked[0]?.binary).toBe('httpd');
+  });
+
+  it('keeps trace order between two deaths of the same kind, rather than reordering on nothing', () => {
+    const ranked = rankExits([exit('a', 139), exit('b', 139)]);
+    expect(ranked.map((x) => x.binary)).toEqual(['a', 'b']);
+  });
+
+  it('states how many others also exited instead of silently reporting one of them', () => {
+    const d = diagnoseUnreachable({
+      consoleOutput: trace([
+        'firmadyne: do_execve[PID: 1 (rcS)]: argv: /usr/sbin/telnetd, envp: X=1',
+        'firmadyne: do_exit[PID: 1 (telnetd)]: code:1',
+        'firmadyne: do_execve[PID: 2 (rcS)]: argv: /usr/bin/httpd, envp: X=1',
+        'firmadyne: do_exit[PID: 2 (httpd)]: code:139',
+      ]),
+      forwards: 2,
+      open: 0,
+      wire: wire({ synsToGuest: 5, resetsFromGuest: 5 }),
+    });
+    // Led with the crash…
+    expect(d.summary).toContain('httpd');
+    expect(d.summary).toContain('SIGSEGV');
+    // …and the other one is neither led with nor lost.
+    expect(d.summary).toMatch(/1 other network daemon\(s\) also exited/);
+    expect(d.evidence).toContain('2 daemon(s) exited in total');
+    expect(d.daemonsExited.map((x) => x.binary).sort()).toEqual(['httpd', 'telnetd']);
+  });
+
+  it('says nothing about "others" when there is only one', () => {
+    const d = diagnoseUnreachable({
+      consoleOutput: trace([
+        'firmadyne: do_execve[PID: 1 (rcS)]: argv: /usr/bin/httpd, envp: X=1',
+        'firmadyne: do_exit[PID: 1 (httpd)]: code:139',
+      ]),
+      forwards: 1,
+      open: 0,
+      wire: wire({ synsToGuest: 1, resetsFromGuest: 1 }),
+    });
+    expect(d.summary).not.toMatch(/other network daemon/);
+    expect(d.evidence).not.toContain('1 daemon(s) exited in total');
   });
 });

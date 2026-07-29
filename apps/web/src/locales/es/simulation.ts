@@ -47,6 +47,18 @@ export const simulation: Messages['simulation'] = {
   nvramVars: (n: number) => `${n} variable(s) NVRAM`,
 
   unreachableTitle: 'Por qué no respondió nada',
+
+  daemons: {
+    heading: 'Demonios de red en este arranque',
+    noneStarted: 'No se ejecutó ningún demonio de red en este arranque — no murió nada, no arrancó nada.',
+    crashed: (signal, code) => `${signal} (salida ${code})`,
+    exited: (code) => `salió ${code}`,
+    exitedTitle: 'Este demonio no está corriendo. Reenviar más puertos no alcanza a un proceso que ya salió.',
+    running: 'arrancó, no salió',
+    runningTitle:
+      'La traza lo vio arrancar y no lo vio irse. Si se sondeó su puerto y no volvió nada, el demonio no es lo que hay que arreglar.',
+    lastOpen: 'último abierto:',
+  },
   egressTitle: 'A dónde intentó ir',
   egressBlocked: 'salida bloqueada',
   egressOpen: 'salida abierta',
