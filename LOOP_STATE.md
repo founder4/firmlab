@@ -13,7 +13,7 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
       en particular `skipped_salted` (nunca se envió) no puede leerse como `miss` (se consultó y no había).
 - [x] 2. `BootDiagnosis.daemonsStarted` / `daemonsExited` se renderizan: «nunca arrancó» ≠ «arrancó y murió con SIGSEGV».
 - [x] 3. `SecureBootPosture.note` y `DeviceTreeResult.rejected` se renderizan.
-- [ ] 4. `OperatorAssertion.withdrawnReason` y `FuzzResult.reason` se renderizan.
+- [x] 4. `OperatorAssertion.withdrawnReason` y `FuzzResult.reason` se renderizan.
 - [ ] 5. Denominadores de investigación: `osv.skipped`, `nvd.notQueried`, `nvd.truncated[]`, `egress.neverSent`.
 - [ ] 6. Cada uno lleva un test que afirma que el caso «no se preguntó» se distingue del caso «se preguntó y no había».
 
@@ -28,7 +28,7 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
       pintaba `secureBoot`/`setupMode`/`testKey`/`variableCount` y no `note`, que es la frase del proveedor para
       cuando el almacén de variables no era extraíble.
 - [x] `DeviceTreeResult.rejected` sin lector — impacto: medio — evidencia: `api.ts:948`.
-- [ ] `OperatorAssertion.withdrawnReason` — **evidencia original CORREGIDA al auditar**: sí se lee en
+- [x] `OperatorAssertion.withdrawnReason` — **evidencia original CORREGIDA al auditar**: sí se lee en
       `OperatorPanel`, que pinta `attribution` (`OperatorPanel.tsx:212`), y esa frase la compone la API a la hora
       de leer (`routes/operator.ts:80-81` → `operator-findings.ts:494`, `WITHDRAWN by X: <razón>`). Lo que sigue
       abierto es el LEDGER: `FindingsLedger.tsx:358` pinta sólo `t.findings.withdrawnSuffix` junto al autor y la
@@ -131,3 +131,18 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
   → `{available:false, reason:"binary not found in rootfs", crashes:0}` y la captura de `/simulate` muestra el
   aviso con esa frase exacta, con la insignia `runnable` al lado — el caso que hacía peligroso el render anterior.
   0 errores de consola, 0 peticiones fallidas.
+- iter 7: cerrado `withdrawnReason` con el alcance corregido de la iteración anterior. El ledger pintaba
+  «— WITHDRAWN» junto al autor y dejaba tras el chevron la razón ORIGINAL de la afirmación: la única prosa
+  alcanzable en una fila retirada era el argumento A FAVOR de una afirmación que ya no se sostiene. Ahora el
+  motivo va en la fila, no tras un clic (para leer que algo se retiró no hay que descubrir que hay algo que
+  desplegar), con el autor de la retirada nombrado, y la celda desplegada se reetiqueta «for the claim that was
+  retracted». Una retirada sin motivo registrado lo dice en vez de parecer que no hubo retirada. 5 tests nuevos.
+  Verificación: `pnpm test` → core 75 / api 1752 / web 317 verde · `pnpm check` → Done ·
+  `pnpm biome` → limpio (tras `biome:fix`) · y sobre el despliegue real (`89ec6cc`): afirmación creada y
+  retirada por la API real en `c8e1ffa0`, y la fila leída de la página con playwright:
+  `▸ ● The telnet daemon is compiled out of this build | asserted by aaron — WITHDRAWN | withdrawn by aaron: I
+  was reading the wrong build — the retail image does ship it. | operator:aaron | asserted · not measured |
+  operator_report`, y al desplegarla: `WHY THIS STATE — FOR THE CLAIM THAT WAS RETRACTED`.
+  **Residuo retirado**: esa afirmación iba atribuida a `aaron` y él nunca la hizo, así que se borró de
+  `findings` en el contenedor (no hay ruta DELETE — el ledger no borra retiradas — se hizo por SQLite).
+  Corpus de vuelta a 81 hallazgos, 0 afirmaciones.
