@@ -190,7 +190,7 @@ of "known-incomplete semantics" exists without hunting through the sections abov
 - ✅ **A broken harness was graded as a platform block** (2026-07-28) — split at the source, which is where the conflation was: `unavailable()` now takes `blockedBy: 'platform' | 'harness'`, so "gdb is not installed" and "gdb produced no output" stop arriving identically. The ledger renders the second as `failed`, and the finding's rationale tells an operator whether a retry is worth anything. The finding keeps `blocked_by_platform` in both cases — the proof-state vocabulary has no third option and inventing one would be worse than the imprecision. **Both paths validated on the real deploy**: a binary absent from the rootfs → `platform`/`blocked`, and a non-ELF target whose gdbstub never came up → `harness`/`failed`. _Rows written before this carry no `blockedBy` and stay `blocked`, which is the conservative reading._
 - ✅ **The bench polled a job to completion in the browser** (2026-07-28) — it blocked in a `for` loop over `api.job(jobId)`, so a run existed only while the component stayed mounted. The job was always a row in SQLite, so it follows the ledger now: the running row renders from persisted state, the log comes from the stored job, and polling stops on its own when nothing is running, so an idle bench makes no requests.
 
-## Workbench UI — prose and layout (2026-07-29)
+## Workbench UI — prose and layout (2026-07-29, deploy `163b652`)
 - ✅ **Three LLM surfaces showed their Markdown SOURCE** (2026-07-29) — the research brief, the copilot
   interpretation and the autonomous scan's narrative all landed in a `white-space: pre-wrap` block, so the reader
   got `## 🔍 Intelligence Brief`, `**Vendor:**` and `[[NVD](https://…)]` verbatim. Closed with a hand-written
@@ -213,6 +213,11 @@ of "known-incomplete semantics" exists without hunting through the sections abov
   takes the full width) and the table states its column shares in a `colgroup` shared with the HTML export
   instead of letting `table-layout: auto` give the title column everything. Body cells wrap with
   `overflow-wrap: anywhere` and headers deliberately do not.
+- _Both validated against the DEPLOYED container (`163b652`, via the socat sidecar) rather than only the dev
+  build: brief, narrative and report re-read at 1600/1440/1366/1280/1152 over General, Findings & report,
+  Autonomous scan and Agent — every element inside its panel and inside the content edge, no console exception,
+  no failed request. The step timeline is excluded from that measurement on purpose: it is an `overflow-x: auto`
+  scroll container, so a child past its box is the design, not a defect._
 - ▢ **The agent transcript's `step.rationale` is still plain text.** It is LLM prose like the three above and can
   carry `code` spans; it renders in `StepCard` as an italic `<div>`. Left alone because it is one sentence and a
   block renderer inside an italic line is the wrong shape — it wants inline-only Markdown, which `parseInline`
@@ -220,7 +225,8 @@ of "known-incomplete semantics" exists without hunting through the sections abov
 - ▢ **An unreproduced overflow report in *General*.** Reported alongside the two above: "certain items go off the
   right margin" in the dossier. Probed at 1600/1440/1366/1280/1152/1024 against all 16 corpus images and every
   section, measuring each element against both its panel's content box and the `.content` inner edge — the
-  dossier came back clean at every width, and the only hit anywhere was the report builder above. Needs the
+  dossier came back clean at every width, before AND after the deploy, and the only hit anywhere was the report
+  builder above. Needs the
   reporter's viewport width and a screenshot; the likeliest candidate is the copilot output, which no image in
   the corpus has ever had stored, and which is now inside the `.md` measure and `overflow-wrap: anywhere`.
 
