@@ -74,6 +74,30 @@ describe('OpacidadPanel — autonomous scan', () => {
     // The narrative provenance is labelled (deterministic vs LLM) so the operator knows how it was written.
     expect(screen.getByText(new RegExp(`${en.panels.opacidad.narrativeLabel} deterministic`, 'i'))).toBeInTheDocument();
   });
+
+  /**
+   * The narrative is Markdown on BOTH paths — `composeDeterministicNarrative` writes `##`, `- ` and `code` spans
+   * by hand — so it was showing its own source with every LLM flag off. What the codes must survive is the
+   * emphasis rules: `needs_runtime_reproduction` is an identifier, not two italicised words.
+   */
+  it('renders the narrative as prose, with the proof-state codes intact', async () => {
+    mockApi.opacidadResult.mockResolvedValue(
+      result({
+        narrative:
+          '## Findings\n\n- **[critical]** UID-0 `root` has an empty password — _needs_runtime_reproduction_ (sbom)',
+      }),
+    );
+    const { container } = render(<OpacidadPanel imageId="img1" />);
+
+    await waitFor(() => expect(container.querySelector('.md-box .md')).toBeTruthy());
+    const md = container.querySelector('.md-box .md');
+    expect(md?.querySelector('h3')?.textContent).toBe('Findings');
+    expect(md?.querySelector('li strong')?.textContent).toBe('[critical]');
+    expect(md?.querySelector('li code')?.textContent).toBe('root');
+    expect(md?.querySelector('em')?.textContent).toBe('needs_runtime_reproduction');
+    expect(md?.textContent).not.toContain('**');
+    expect(md?.textContent).toContain('needs_runtime_reproduction');
+  });
 });
 
 /**

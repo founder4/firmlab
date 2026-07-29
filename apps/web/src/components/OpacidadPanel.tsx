@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type OpacidadResult, api } from '../api';
 import { useMessages } from '../i18n';
+import { Markdown } from '../markdown';
 import { RunHistory } from './RunHistory';
 
 const STATUS_META: Record<OpacidadResult['steps'][number]['status'], { mark: string; cls: string }> = {
@@ -181,9 +182,11 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
           )}
 
           <Section title={t.panels.opacidad.narrative}>
-            <pre className="narrative" style={narrativeStyle}>
-              {result.narrative}
-            </pre>
+            {/* Markdown on BOTH paths: `composeDeterministicNarrative` writes headings, bullets and `code` spans
+                by hand, so this was showing its source even with every LLM flag off. */}
+            <div className="md-box">
+              <Markdown text={result.narrative} />
+            </div>
           </Section>
 
           {result.honestGaps.length > 0 && (
@@ -235,16 +238,4 @@ const logStyle: React.CSSProperties = {
   maxHeight: 180,
   overflow: 'auto',
   whiteSpace: 'pre-wrap',
-};
-
-const narrativeStyle: React.CSSProperties = {
-  fontSize: 12.5,
-  lineHeight: 1.6,
-  background: 'var(--bg)',
-  border: '1px solid var(--border-soft)',
-  borderRadius: 8,
-  padding: '12px 14px',
-  whiteSpace: 'pre-wrap',
-  fontFamily: 'inherit',
-  overflowX: 'auto',
 };

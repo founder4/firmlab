@@ -177,9 +177,11 @@ export function composeDeterministicNarrative(ctx: OpacidadContext): string {
     for (const g of gaps) L.push(`- ${g}`);
   }
 
-  L.push('\n_Findings are proof-stated: `static_confirmed`/`confirmed_in_emulation` are reproduced from the bytes/');
+  // One `push`, not two: every entry in `L` is a LINE, and the web renders a line break as a line break. Split
+  // across two pushes, this single sentence arrived at the reader broken in half after "the bytes/".
   L.push(
-    'sandbox; `needs_runtime_reproduction` is a lead, not a verdict. No claim is made about the physical device._',
+    '\n_Findings are proof-stated: `static_confirmed`/`confirmed_in_emulation` are reproduced from the bytes/' +
+      'sandbox; `needs_runtime_reproduction` is a lead, not a verdict. No claim is made about the physical device._',
   );
   return L.join('\n');
 }

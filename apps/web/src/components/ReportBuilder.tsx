@@ -84,6 +84,9 @@ const findingsHead = (t: Messages): string[] => [
   t.report.findings.proof,
 ];
 
+/** Column shares for that table, in the same order. Shared with `toHtml` for the same reason the headers are. */
+const FINDINGS_COLS = ['11%', '39%', '9%', '16%', '25%'];
+
 const hex = (n: number): string => `0x${n.toString(16)}`;
 const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -530,6 +533,15 @@ function PreviewBlock({ block }: { block: Block }): JSX.Element {
     case 'findings':
       return (
         <table>
+          {/* Four of the five columns hold a fixed vocabulary — a severity, an offset, a source, a proof state —
+              and only the title is open-ended. Left to `table-layout: auto` the title takes the width in
+              proportion to its length and squeezes the rest until `Severity` wraps to "Severi/ty". The share is
+              stated instead, here and in the HTML export, so the preview and the file agree. */}
+          <colgroup>
+            {FINDINGS_COLS.map((w) => (
+              <col key={w} style={{ width: w }} />
+            ))}
+          </colgroup>
           <thead>
             <tr>
               {findingsHead(t).map((h) => (
@@ -574,7 +586,9 @@ function blockToHtml(b: Block): string {
         .map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`)
         .join('')}</tbody></table>`;
     case 'findings':
-      return `<table><thead><tr>${findingsHead(messages())
+      return `<table><colgroup>${FINDINGS_COLS.map((w) => `<col style="width:${w}">`).join('')}</colgroup><thead><tr>${findingsHead(
+        messages(),
+      )
         .map((h) => `<th>${esc(h)}</th>`)
         .join('')}</tr></thead><tbody>${b.rows
         .map(
@@ -595,7 +609,9 @@ function toHtml(title: string, meta: string, sections: Section[]): string {
     h2{font-size:15px;text-transform:uppercase;letter-spacing:.06em;margin:30px 0 12px;padding-bottom:6px;border-bottom:1px solid #d9dce1}
     table{width:100%;border-collapse:collapse;font-size:12.5px;margin:6px 0 14px}th{text-align:left;border-bottom:1.5px solid #1b1d21;padding:6px 8px;font-size:10.5px;text-transform:uppercase;color:#4a505a}
     td{border-bottom:1px solid #e6e8ec;padding:6px 8px;vertical-align:top}.mono{font-family:ui-monospace,Menlo,monospace}
-    .kv{display:grid;grid-template-columns:190px 1fr;gap:4px 16px}.kv dt{color:#5b616b}.kv dd{margin:0;font-weight:500}
+    /* Same rule as the preview: a proof state and a SHA-256 are unbreakable words, and a printed page cannot scroll. */
+    th,td,.kv dd{overflow-wrap:anywhere}
+    .kv{display:grid;grid-template-columns:minmax(0,190px) minmax(0,1fr);gap:4px 16px}.kv dt{color:#5b616b}.kv dd{margin:0;font-weight:500}
     .sev{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}ul{padding-left:20px}
   </style></head><body><h1>${esc(title)}</h1><div class="meta">${esc(meta)}</div>${body}</body></html>`;
 }

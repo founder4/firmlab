@@ -50,6 +50,7 @@ import { SymReachPanel } from '../components/SymReachPanel';
 import { TestBench } from '../components/TestBench';
 import { UpdatePathPanel } from '../components/UpdatePathPanel';
 import { type Messages, messages, useLocale, useMessages } from '../i18n';
+import { Markdown } from '../markdown';
 import { toast } from '../toast';
 
 /**
@@ -445,14 +446,7 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
               {copilotLog}
             </pre>
           )}
-          {copilot && (
-            <div
-              style={{ marginTop: 12, whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.5 }}
-              className="copilot-output"
-            >
-              {copilot.text}
-            </div>
-          )}
+          {copilot && <Markdown text={copilot.text} className="copilot-output" />}
         </div>
       )}
 
@@ -1546,7 +1540,10 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
               <div className="eyebrow" style={{ marginBottom: 6 }}>
                 {t.imageDetail.research.brief(result.synthesis.provider, result.synthesis.model)}
               </div>
-              <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.5 }}>{result.synthesis.text}</div>
+              {/* The brief is Markdown the model wrote — headings, citation links, tables. Rendered, never as
+                  HTML: see the note at the top of `markdown.tsx` for why that distinction is load-bearing on a
+                  lane whose input came off the internet. */}
+              <Markdown text={result.synthesis.text} />
             </>
           )}
         </div>

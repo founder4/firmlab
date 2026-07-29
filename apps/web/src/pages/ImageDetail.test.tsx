@@ -73,8 +73,8 @@ const finding: Finding = {
   createdAt: 1_700_000_000_000,
 };
 
-function renderSection(section: string): void {
-  render(
+function renderSection(section: string): ReturnType<typeof render> {
+  return render(
     <MemoryRouter initialEntries={[`/image/img1/${section}`]}>
       <Routes>
         <Route path="/image/:id/:section" element={<ImageDetail />} />
@@ -198,5 +198,72 @@ describe('ImageDetail in Spanish', () => {
     // The claim the gloss must never soften: emulation proves the sandbox, never the physical device.
     const chip = screen.getByTitle(/nunca el dispositivo físico/);
     expect(chip.textContent).toContain('confirmed_in_emulation');
+  });
+});
+
+/**
+ * Both LLM lanes on this screen hand back Markdown, and both used to show it as its source. The assertion is not
+ * "it looks nicer" — it is that no `##`/`**` reaches the reader and that a citation is a link they can follow.
+ */
+describe('ImageDetail — the prose the LLM lanes return', () => {
+  it('renders the copilot interpretation as structure, not as its Markdown source', async () => {
+    mockApi.agentStatus.mockResolvedValue({ enabled: true, provider: 'deepseek', model: 'deepseek-v4-flash' });
+    mockApi.copilotResult.mockResolvedValue({
+      text: '## Reading\n\nThe **root** account has `no password` — see [NVD](https://nvd.nist.gov/x).',
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+    });
+    const { container } = renderSection('dossier');
+
+    await waitFor(() => expect(container.querySelector('.md.copilot-output')).toBeTruthy());
+    const md = container.querySelector('.md.copilot-output');
+    expect(md?.querySelector('h3')?.textContent).toBe('Reading');
+    expect(md?.querySelector('strong')?.textContent).toBe('root');
+    expect(md?.querySelector('code')?.textContent).toBe('no password');
+    expect(md?.querySelector('a')?.getAttribute('href')).toBe('https://nvd.nist.gov/x');
+    expect(md?.textContent).not.toContain('**');
+    expect(md?.textContent).not.toContain('##');
+  });
+
+  it('renders the research brief the same way, and refuses its `#` citation as a link', async () => {
+    mockApi.researchStatus.mockResolvedValue({ enabled: true });
+    // The research panel carries a RunHistory, which is the only thing on this screen that asks for the ledger.
+    mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
+    mockApi.researchResult.mockResolvedValue({
+      enabled: true,
+      provenance: {
+        identity: { firmwareClass: 'embedded-linux', arch: 'mips', bootloader: null },
+        vendors: [],
+        models: [],
+        versions: [],
+        urls: [],
+        domains: [],
+        certCNs: [],
+        banners: [],
+      },
+      egress: { destinations: [], neverSent: [] },
+      osv: { queried: 0, skipped: 0, withAdvisories: 0, totalAdvisories: 0, components: [] },
+      nvd: { queried: 0, notQueried: 0, withAdvisories: 0, totalAdvisories: 0, components: [] },
+      kev: { checked: false, catalogSize: 0, matches: [] },
+      keyMaterial: [],
+      securityContacts: [],
+      hashLookup: { enabled: false, reason: '', attempted: 0, resolved: 0, notQueried: 0, entries: [] },
+      synthesis: {
+        text: '### Priority\n\n- `CVE-2022-48174` — busybox [[OSV](#)] [[NVD](https://nvd.nist.gov/y)]',
+        model: 'deepseek-v4-flash',
+        provider: 'deepseek',
+      },
+    });
+    const { container } = renderSection('dossier');
+
+    await waitFor(() => expect(container.querySelector('.md')).toBeTruthy());
+    const md = container.querySelector('.md');
+    expect(md?.querySelector('h4')?.textContent).toBe('Priority');
+    expect(md?.querySelector('li code')?.textContent).toBe('CVE-2022-48174');
+    // Exactly one anchor: `#` is a route change under HashRouter, so it stays inert label text.
+    const links = md?.querySelectorAll('a') ?? [];
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute('href')).toBe('https://nvd.nist.gov/y');
+    expect(md?.textContent).toContain('[OSV]');
   });
 });

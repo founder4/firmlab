@@ -1152,20 +1152,159 @@ th.sortable:hover {
   color: var(--text-faint);
   font-size: 0.75rem;
 }
-.narrative {
+
+/* ============================================================================================================
+ * MARKDOWN PROSE — the research brief, the copilot interpretation and the autonomous scan's narrative.
+ *
+ * These three were shown as their SOURCE (`## heading`, `**bold**`) inside a pre-wrap block, so the one part of
+ * the workbench written for a person to read was the one part rendered for a machine. `markdown.tsx` parses them;
+ * this is the type scale that keeps the result inside the shell's vocabulary rather than looking like a README.
+ *
+ * Two rules here are structural, not cosmetic. `overflow-wrap: anywhere` — an advisory URL is 90 unbreakable
+ * characters and would otherwise push the panel past the right margin. And the measure: this text runs at the
+ * panel's full width, which on a wide screen is ~155 characters a line, roughly twice what a reader can track.
+ * The shell already settled on 72ch for prose (`.panel-sub`), so long-form gets the same treatment.
+ * ========================================================================================================== */
+.md {
   line-height: 1.65;
   color: var(--text);
-}
-.narrative p {
-  margin: 0 0 12px;
-}
-.copilot-output {
-  line-height: 1.65;
   font-size: 0.875rem;
+  max-width: 76ch;
+  overflow-wrap: anywhere;
 }
-.copilot-output p {
+.md > *:first-child {
+  margin-top: 0;
+}
+.md > *:last-child {
+  margin-bottom: 0;
+}
+.md p {
   margin: 0 0 10px;
 }
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 18px 0 7px;
+  line-height: 1.35;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.md h2 {
+  font-size: 1.0625rem;
+}
+.md h3 {
+  font-size: 0.9375rem;
+}
+.md h4,
+.md h5,
+.md h6 {
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+/* …but never the identifiers inside one. `#### **openssl** \`3.0.13\`` is a package and a version, and uppercasing
+   a code span silently restates a value the workbench is supposed to quote. */
+.md h4 code,
+.md h5 code,
+.md h6 code {
+  text-transform: none;
+}
+.md ul,
+.md ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+.md li {
+  margin-bottom: 3px;
+}
+.md li > ul,
+.md li > ol {
+  margin: 3px 0 0;
+}
+.md a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-line);
+}
+.md a:hover {
+  color: var(--accent-hover);
+}
+.md code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  /* Tight horizontally: `getfattr`/`setfattr` reads as one thing, and roomy padding pulls the slash off it. */
+  padding: 0.5px 2px;
+}
+.md .md-code {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+.md .md-code code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+.md blockquote {
+  margin: 0 0 12px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-dim);
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+  margin: 16px 0;
+}
+/* Its own scroll container: a wide table must not be the thing that widens the panel. */
+.md .md-table {
+  margin: 0 0 12px;
+  overflow-x: auto;
+}
+.md table {
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+.md th,
+.md td {
+  border-bottom: 1px solid var(--border-soft);
+  padding: 5px 14px 5px 0;
+  vertical-align: top;
+}
+.md th {
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.md.copilot-output {
+  margin-top: 12px;
+}
+
+/* The autonomous scan's narrative keeps the inset "read this" box it had; the measure applies inside it. */
+.md-box {
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-lg);
+  padding: 12px 14px;
+}
+
 .tree-row {
   display: flex;
   align-items: center;
@@ -1357,9 +1496,22 @@ th.sortable:hover {
   gap: 16px;
   align-items: start;
 }
-@media (max-width: 1040px) {
+/* `minmax(0, 1fr)` bounds the TRACK, not the item in it — a grid item still has `min-width: auto`, so the paper
+   refused to shrink below the findings table's min-content width and the last column ("Proof state") hung off
+   the right of the viewport at anything under ~1400px. The track was never the problem; the item was. */
+.report-builder > * {
+  min-width: 0;
+}
+/* And once it CAN shrink, it has to be given room, or the fix trades an overflowing column for a shredded one:
+   a 300px config rail plus print margins leaves the five-column findings table ~620px on a 1280 laptop, which is
+   narrow enough that `critical` wraps to "critic/al". The paper is the deliverable — below ~1400px it takes the
+   full width and the rail goes above it. 1040px was set when this grid held prose, not a table. */
+@media (max-width: 1400px) {
   .report-builder {
     grid-template-columns: 1fr;
+  }
+  .report-config {
+    position: static;
   }
 }
 .report-config {
@@ -1467,11 +1619,26 @@ th.sortable:hover {
   padding: 6px 8px;
   vertical-align: top;
 }
+/* A report is a document that has to fit a page — so cells WRAP rather than scroll. `anywhere` (not `break-word`)
+   because only `anywhere` also lowers the cell's min-content width, which is what lets the table shrink at all.
+   Body cells only: a header is two known words, and letting those break is how "Severity" became "Severi/ty". */
+.report-doc td {
+  overflow-wrap: anywhere;
+}
 .report-doc .rd-kv {
   display: grid;
-  grid-template-columns: 190px 1fr;
+  grid-template-columns: minmax(0, 190px) minmax(0, 1fr);
   gap: 4px 16px;
   margin-bottom: 14px;
+}
+.report-doc .rd-kv dd {
+  overflow-wrap: anywhere;
+}
+/* On a small screen the print margins are the first thing to give, not the table inside them. */
+@media (max-width: 900px) {
+  .report-doc {
+    padding: 28px 22px;
+  }
 }
 .report-doc .rd-kv dt {
   color: #5b616b;
