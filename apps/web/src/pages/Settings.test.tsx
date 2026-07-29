@@ -52,6 +52,19 @@ const openTab = (label: string): void => {
   fireEvent.click(screen.getByRole('button', { name: label }));
 };
 
+/** A configured provider. `apiKey` carries no key by construction — see the describe block at the end. */
+const llmState = (o: Record<string, unknown> = {}) => ({
+  provider: { value: 'deepseek', source: 'default' as const },
+  model: { value: 'deepseek-v4-flash', source: 'default' as const },
+  baseUrl: { value: 'https://api.deepseek.com', source: 'default' as const },
+  apiKey: { present: true, source: 'environment' as const, tail: 'cd12', envVar: 'DEEPSEEK_API_KEY' },
+  ready: true,
+  reason: '',
+  providers: ['deepseek', 'openai', 'anthropic'],
+  defaultModels: { deepseek: 'deepseek-v4-flash', openai: '', anthropic: 'claude-opus-4-8' },
+  ...o,
+});
+
 beforeEach(() => {
   // Reset BEFORE the render, never after it: the locale store notifies live subscribers, so switching back in an
   // `afterEach` re-renders a component that is still mounted and the suite fills with act(…) warnings.
@@ -60,6 +73,7 @@ beforeEach(() => {
   mockApi.agentConfig.mockResolvedValue({ enabled: false });
   mockApi.storage.mockResolvedValue(usage);
   mockApi.flags.mockResolvedValue({ flags: [], appliesImmediately: true });
+  mockApi.llmSettings.mockResolvedValue({ llm: llmState(), updatedAt: {} });
 });
 
 describe('Settings — the tab bodies follow the locale', () => {
@@ -247,5 +261,74 @@ describe('Settings — no English residue in the converted tabs', () => {
     renderSettings();
     await screen.findByRole('heading', { name: 'Ajustes' });
     expect([...sweep(TABS_ES)].map(String)).toEqual([]);
+  });
+});
+
+/**
+ * The provider editor. What is worth pinning is not that the form works but the three ways it could do harm:
+ * disclosing a key, offering a provider the build would reject, and letting a dropdown choice switch the copilot
+ * off with nothing on screen to say so.
+ */
+describe('Settings — the AI provider is editable', () => {
+  it('offers exactly the providers the SERVER reports, never a hardcoded list', async () => {
+    // The old prose offered `ollama`, which `llm.ts` has never supported. The list comes from the API now, so the
+    // screen structurally cannot offer one the build would reject.
+    renderSettings();
+    openTab('AI & Agent');
+    const select = await screen.findByDisplayValue('deepseek');
+    expect([...select.querySelectorAll('option')].map((o) => o.textContent)).toEqual([
+      'deepseek',
+      'openai',
+      'anthropic',
+    ]);
+  });
+
+  it('shows a key as present and a four-character tail, and the field starts EMPTY', async () => {
+    renderSettings();
+    openTab('AI & Agent');
+    expect(await screen.findByText(/a key is set · …cd12/)).toBeInTheDocument();
+    // A stored key is never returned by the API, so there is nothing to pre-fill and a save replaces rather than
+    // edits. A pre-filled field here would be a bug in the API, not in this component.
+    expect((screen.getByPlaceholderText(/paste a key/i) as HTMLInputElement).value).toBe('');
+  });
+
+  it('states what saving a key here changes, in the same breath as the field', async () => {
+    renderSettings();
+    openTab('AI & Agent');
+    expect(await screen.findByText(/stored in this deployment’s database/i)).toBeInTheDocument();
+    expect(screen.getByText(/receives prompts built from the firmware you analyse/i)).toBeInTheDocument();
+    expect(screen.getByText(/never sent back to this page/i)).toBeInTheDocument();
+  });
+
+  it('surfaces the server’s reason when the configuration would leave the copilot silently off', async () => {
+    // The trap: choosing `openai` and getting no copilot, because it has no default model.
+    mockApi.llmSettings.mockResolvedValue({
+      llm: llmState({
+        provider: { value: 'openai', source: 'override' },
+        model: { value: '', source: 'default' },
+        ready: false,
+        reason: 'The openai provider has no default model, so a model id has to be set explicitly.',
+      }),
+      updatedAt: {},
+    });
+    renderSettings();
+    openTab('AI & Agent');
+    expect(await screen.findByText(/no default model/i)).toBeInTheDocument();
+    expect(screen.getByText('not configured')).toBeInTheDocument();
+  });
+
+  it('says which of the environment and this screen is in force, per field', async () => {
+    mockApi.llmSettings.mockResolvedValue({
+      llm: llmState({ model: { value: 'from-compose', source: 'environment' } }),
+      updatedAt: {},
+    });
+    renderSettings();
+    openTab('AI & Agent');
+    // Two, and that is the assertion: in this fixture the MODEL and the KEY both come from the environment, and
+    // each field carries its own provenance rather than the page carrying one for all of them. The reason the
+    // flags report their source applies here unchanged — a compose file and this page must never disagree in
+    // silence.
+    expect(await screen.findAllByText('from the environment')).toHaveLength(2);
+    expect(screen.getAllByText('provider default')).toHaveLength(2);
   });
 });

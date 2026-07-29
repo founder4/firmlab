@@ -13,6 +13,7 @@
  * than a few toggles are worth.
  */
 import { isToggleableFlag } from './flags.js';
+import { type LlmSettingKey, isLlmSettingKey } from './llm-settings.js';
 import { getDb } from './store.js';
 
 export interface StoredSetting {
@@ -56,4 +57,48 @@ export function clearFlagOverride(name: string): boolean {
   if (!isToggleableFlag(name)) return false;
   getDb().prepare('DELETE FROM settings WHERE key = ?').run(name);
   return true;
+}
+
+// === Model provider settings ===
+
+/**
+ * The stored model-provider overrides, for `effectiveEnv`.
+ *
+ * This is the one reader that sees the API key in the clear, and it exists so `loadLlmConfig` can find it the
+ * same way it finds an environment variable. No route returns this map: `describeLlm` reports the key's presence
+ * and its last four characters, and nothing else.
+ */
+export function getLlmOverrides(): Record<string, string> {
+  const rows = getDb().prepare('SELECT key, value FROM settings').all() as unknown as { key: string; value: string }[];
+  const out: Record<string, string> = {};
+  for (const r of rows) if (isLlmSettingKey(r.key)) out[r.key] = r.value;
+  return out;
+}
+
+/** Set one model setting. Returns false outside the allow-list, which the caller turns into a 400. */
+export function setLlmSetting(name: string, value: string, now = Date.now()): boolean {
+  if (!isLlmSettingKey(name)) return false;
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value, updatedAt) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updatedAt = excluded.updatedAt`,
+    )
+    .run(name, value, now);
+  return true;
+}
+
+/** Drop one, so that field follows the environment again — a distinct state from pinning the same value. */
+export function clearLlmSetting(name: string): boolean {
+  if (!isLlmSettingKey(name)) return false;
+  getDb().prepare('DELETE FROM settings WHERE key = ?').run(name);
+  return true;
+}
+
+/** When each model setting was last written, so the UI can say it. The VALUES are deliberately not returned. */
+export function listLlmSettingTimes(): { key: LlmSettingKey; updatedAt: number }[] {
+  const rows = getDb().prepare('SELECT key, updatedAt FROM settings').all() as unknown as {
+    key: string;
+    updatedAt: number;
+  }[];
+  return rows.filter((r): r is { key: LlmSettingKey; updatedAt: number } => isLlmSettingKey(r.key));
 }

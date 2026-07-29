@@ -170,11 +170,44 @@ export const settings = {
     ].join(' '),
     activeProvider: 'Active provider',
     noneConfigured: 'none configured',
-    selectProvider: 'Select provider',
-    providerKey: 'Provider key',
-    keyLead: 'Set the matching key:',
-    keyOrPoint: ', or point',
-    keyTail: 'at a local server. Keys live in the server environment, never in the browser.',
+
+    /**
+     * The editable provider block.
+     *
+     * Two sentences here are load-bearing and must not soften. `keyWarning` states what saving a key from this
+     * screen CHANGES — it used to need shell access to the host, it now needs reaching this page, and the key is
+     * billed and receives prompts built from firmware. And `keyNeverShown` is a promise about the server: the key
+     * is stored and never returned, so the field can only ever be replaced, not read back.
+     *
+     * Provider ids, model ids and variable names are identifiers and are never translated.
+     */
+    edit: {
+      title: 'Provider',
+      sub: 'Set here, or in the deployment’s environment. Each field says which of the two is in force.',
+      provider: 'Provider',
+      model: 'Model',
+      modelHint: 'A model id, exactly as the provider names it. Not validated here — the provider is the authority.',
+      baseUrl: 'Base URL',
+      baseUrlHint: 'Change it only to reach a compatible endpoint elsewhere. This is where prompts are sent.',
+      apiKey: 'API key',
+      keySet: 'a key is set',
+      keyMissing: 'no key',
+      keyPlaceholder: 'paste a key to replace the stored one',
+      keyNeverShown: 'A stored key is never sent back to this page — it can be replaced, never read.',
+      keyWarning:
+        'Saving a key here means it is stored in this deployment’s database and no longer only in its environment. It is billed to you, and on the agent and research lanes it receives prompts built from the firmware you analyse.',
+      keyInEnv: (envVar: string) => `Or leave this empty and put the key in ${envVar}, which the server also reads.`,
+      save: 'Save',
+      clear: 'Clear',
+      /** Which of the two won, per field. The reason the flags report it applies here unchanged. */
+      fromEnv: 'from the environment',
+      fromOverride: 'set here',
+      fromDefault: 'provider default',
+      ready: 'ready',
+      notReady: 'not configured',
+      saved: 'Saved',
+      cleared: 'Cleared — this field follows the environment again',
+    },
     governorTitle: 'Agent governor',
     governorSub: [
       'The agent reasons within a deterministic skeleton and pauses for approval before emulation. These limits are',

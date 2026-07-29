@@ -1591,6 +1591,11 @@ export const api = {
     put<{ flags: LaneFlag[] }>(`/api/settings/flags/${name}${lang(locale)}`, { enabled }).then((r) => r.flags),
   clearFlag: (name: string, locale?: Locale) =>
     del<{ flags: LaneFlag[] }>(`/api/settings/flags/${name}${lang(locale)}`).then((r) => r.flags),
+  /** The model provider. No locale: every string in the payload is either an identifier or a provider's own id. */
+  llmSettings: () => get<{ llm: LlmSettings; updatedAt: Record<string, number> }>('/api/settings/llm'),
+  setLlmSetting: (key: string, value: string) =>
+    put<{ llm: LlmSettings }>(`/api/settings/llm/${key}`, { value }).then((r) => r.llm),
+  clearLlmSetting: (key: string) => del<{ llm: LlmSettings }>(`/api/settings/llm/${key}`).then((r) => r.llm),
   startAgentSession: (id: string, goal?: string) =>
     post<{ session: AgentSession }>(`/api/images/${id}/agent/session`, goal ? { goal } : {}).then((r) => r.session),
   agentSession: (id: string) => get<AgentSessionView>(`/api/images/${id}/agent/session`),
@@ -1674,6 +1679,38 @@ export function categoryColor(cat: string): string {
  * leaves the machine, whether the environment or a stored override is deciding, and whether it is on-but-inert
  * because the lane it depends on is off.
  */
+/**
+ * The model provider as Settings describes it. Every field says whether the ENVIRONMENT or an OVERRIDE won, the
+ * same contract the lane flags have.
+ *
+ * **The API key is described and never disclosed.** There is no field here that holds it: `present` says whether
+ * one exists, `tail` is its last four characters — enough to tell two keys apart, useless as a credential — and
+ * `envVar` names where the deployment would read it from instead. A type that could carry the key would be one
+ * refactor away from rendering it.
+ */
+export interface LlmFieldState {
+  value: string;
+  source: 'override' | 'environment' | 'default';
+}
+
+export interface LlmSettings {
+  provider: LlmFieldState;
+  model: LlmFieldState;
+  baseUrl: LlmFieldState;
+  apiKey: {
+    present: boolean;
+    source: 'override' | 'environment' | 'default';
+    tail: string;
+    envVar: string;
+  };
+  /** True when a model would actually be contacted. */
+  ready: boolean;
+  /** Empty when ready; otherwise what is missing, in words — never a silently absent copilot. */
+  reason: string;
+  providers: string[];
+  defaultModels: Record<string, string>;
+}
+
 export interface LaneFlag {
   name: string;
   label: string;

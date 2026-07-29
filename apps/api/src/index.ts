@@ -54,7 +54,7 @@ import { updatepathRoutes } from './routes/updatepath.js';
 import { webprobeRoutes } from './routes/webprobe.js';
 import { yarascanRoutes } from './routes/yarascan.js';
 import { registerSecurity } from './security.js';
-import { getFlagOverrides } from './settings.js';
+import { getFlagOverrides, getLlmOverrides } from './settings.js';
 import { getDb } from './store.js';
 
 const HOST = process.env.FIRMLAB_HOST ?? '127.0.0.1';
@@ -68,7 +68,10 @@ async function main(): Promise<void> {
   // Let stored operator overrides reach the lane loaders. Installed here rather than imported by the config
   // modules themselves, which must stay free of the store: vitest cannot resolve node:sqlite. With no provider
   // installed — a unit test, a one-off script — the loaders see exactly process.env, as they always did.
-  setFlagOverrideProvider(getFlagOverrides);
+  // Both populations of stored override reach `effectiveEnv` through one provider. They are merged HERE rather
+  // than in the store, so `getFlagOverrides` keeps its narrow filter and a stored API key can never be returned
+  // by a path that thinks it is handling lane flags.
+  setFlagOverrideProvider(() => ({ ...getFlagOverrides(), ...getLlmOverrides() }));
 
   // Any agent session left 'running' by a previous process was interrupted — mark it errored so the transcript
   // stays honest (awaiting_approval sessions are a legitimate durable pause and survive the restart).

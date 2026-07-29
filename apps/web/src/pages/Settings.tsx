@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { type AgentConfig, type LaneFlag, type StorageUsage, api, fmtBytes } from '../api';
+import { type AgentConfig, type LaneFlag, type LlmSettings, type StorageUsage, api, fmtBytes } from '../api';
 import { LOCALES, type Locale, intlTag, setLocale, useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { startTour } from '../onboarding';
 import { type Density, type ThemePref, setDensity, setTheme, useAppearance } from '../theme';
+import { toast } from '../toast';
 import { Capabilities } from './Capabilities';
 
 type Health = { exposedToNetwork: boolean; trustedProxy?: boolean; host?: string; port?: number };
@@ -44,6 +45,216 @@ function Row({ label, children }: { label: string; children: React.ReactNode }):
  * every read and describe this deployment, so they are interface copy, not a record. The flag NAME beside them is
  * an environment variable and renders verbatim: an operator grepping a compose file for it has to find it.
  */
+/**
+ * The model provider, editable.
+ *
+ * It replaced three rows of read-only prose whose only instruction was "edit a YAML file on the host" — and which
+ * offered `ollama`, a provider `llm.ts` has never supported. The provider list comes from the SERVER now, so this
+ * screen structurally cannot offer one the build would reject.
+ *
+ * **The key is write-only, and that is a property of the API rather than of this component.** `GET /settings/llm`
+ * returns whether a key is present and its last four characters; there is no path that returns the key itself. So
+ * the field starts empty always, `keyNeverShown` says why, and a save replaces rather than edits.
+ *
+ * **Every field says which of the environment and the override is in force**, because an operator who set
+ * `FIRMLAB_LLM_MODEL` in compose and sees a different model here has to be told why, not left to guess. That is
+ * the same contract the lane toggles above already keep.
+ */
+function LlmProviderEditor(): JSX.Element {
+  const t = useMessages();
+  const e = t.settings.agent.edit;
+  const [llm, setLlm] = useState<LlmSettings | null>(null);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .llmSettings()
+      .then((r) => setLlm(r.llm))
+      .catch(() => setLlm(null));
+  }, []);
+  useEffect(load, [load]);
+
+  const apply = useCallback(
+    async (key: string, value: string) => {
+      setBusy(key);
+      setError(null);
+      try {
+        setLlm(await api.setLlmSetting(key, value));
+        // The draft is dropped rather than kept: what is authoritative now is what the server just reported.
+        setDraft((d) => ({ ...d, [key]: '' }));
+        toast.success(e.saved);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [e],
+  );
+
+  const clear = useCallback(
+    async (key: string) => {
+      setBusy(key);
+      setError(null);
+      try {
+        setLlm(await api.clearLlmSetting(key));
+        toast.success(e.cleared);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [e],
+  );
+
+  if (!llm) return <div className="skeleton" style={{ height: 120 }} />;
+
+  const sourceLabel = (s: 'override' | 'environment' | 'default'): string =>
+    s === 'override' ? e.fromOverride : s === 'environment' ? e.fromEnv : e.fromDefault;
+
+  /** A field's provenance chip plus, for an override, the way back to the environment. */
+  const Provenance = ({ source, settingKey }: { source: LlmSettings['provider']['source']; settingKey: string }) => (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span className="hint" style={{ fontSize: 11.5 }}>
+        {sourceLabel(source)}
+      </span>
+      {source === 'override' && (
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          disabled={busy === settingKey}
+          onClick={() => clear(settingKey)}
+        >
+          {e.clear}
+        </button>
+      )}
+    </span>
+  );
+
+  return (
+    <>
+      <div className="panel-title" style={{ marginTop: 18 }}>
+        {e.title}{' '}
+        <span className={`badge ${llm.ready ? 'badge-ok' : 'badge-medium'}`}>{llm.ready ? e.ready : e.notReady}</span>
+      </div>
+      <div className="panel-sub">{e.sub}</div>
+
+      {/* The sentence that keeps a dropdown choice from silently switching the copilot off. */}
+      {!llm.ready && llm.reason && (
+        <div className="banner banner-warn" style={{ marginTop: 10 }}>
+          {llm.reason}
+        </div>
+      )}
+      {error && (
+        <div className="banner banner-warn" style={{ marginTop: 10 }}>
+          {error}
+        </div>
+      )}
+
+      <Row label={e.provider}>
+        <select
+          className="input"
+          style={{ maxWidth: 220 }}
+          value={llm.provider.value}
+          disabled={busy === 'FIRMLAB_LLM_PROVIDER'}
+          onChange={(ev) => apply('FIRMLAB_LLM_PROVIDER', ev.target.value)}
+        >
+          {/* Provider ids are identifiers and render verbatim, and the list is the SERVER's. */}
+          {llm.providers.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>{' '}
+        <Provenance source={llm.provider.source} settingKey="FIRMLAB_LLM_PROVIDER" />
+      </Row>
+
+      <Row label={e.model}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            className="input mono"
+            style={{ maxWidth: 260 }}
+            value={draft.FIRMLAB_LLM_MODEL ?? llm.model.value}
+            placeholder={llm.defaultModels[llm.provider.value] || 'model-id'}
+            onChange={(ev) => setDraft((d) => ({ ...d, FIRMLAB_LLM_MODEL: ev.target.value }))}
+          />
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy === 'FIRMLAB_LLM_MODEL' || !(draft.FIRMLAB_LLM_MODEL ?? '').trim()}
+            onClick={() => apply('FIRMLAB_LLM_MODEL', draft.FIRMLAB_LLM_MODEL ?? '')}
+          >
+            {e.save}
+          </button>
+          <Provenance source={llm.model.source} settingKey="FIRMLAB_LLM_MODEL" />
+        </div>
+        <div className="hint" style={{ marginTop: 4 }}>
+          {e.modelHint}
+        </div>
+      </Row>
+
+      <Row label={e.apiKey}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className={`badge ${llm.apiKey.present ? 'badge-ok' : ''}`}>
+            {llm.apiKey.present ? `${e.keySet} · …${llm.apiKey.tail}` : e.keyMissing}
+          </span>
+          <input
+            className="input mono"
+            type="password"
+            style={{ maxWidth: 260 }}
+            autoComplete="off"
+            placeholder={e.keyPlaceholder}
+            value={draft.FIRMLAB_LLM_API_KEY ?? ''}
+            onChange={(ev) => setDraft((d) => ({ ...d, FIRMLAB_LLM_API_KEY: ev.target.value }))}
+          />
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy === 'FIRMLAB_LLM_API_KEY' || !(draft.FIRMLAB_LLM_API_KEY ?? '').trim()}
+            onClick={() => apply('FIRMLAB_LLM_API_KEY', draft.FIRMLAB_LLM_API_KEY ?? '')}
+          >
+            {e.save}
+          </button>
+          <Provenance source={llm.apiKey.source} settingKey="FIRMLAB_LLM_API_KEY" />
+        </div>
+        {/* What saving a key here CHANGES. Styled as a warning because it is one. */}
+        <div className="hint" style={{ marginTop: 6, color: 'var(--sev-medium, #e6b45c)' }}>
+          {e.keyWarning}
+        </div>
+        <div className="hint" style={{ marginTop: 4 }}>
+          {e.keyNeverShown} {e.keyInEnv(llm.apiKey.envVar)}
+        </div>
+      </Row>
+
+      <Row label={e.baseUrl}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            className="input mono"
+            style={{ maxWidth: 300 }}
+            value={draft.FIRMLAB_LLM_BASE_URL ?? llm.baseUrl.value}
+            onChange={(ev) => setDraft((d) => ({ ...d, FIRMLAB_LLM_BASE_URL: ev.target.value }))}
+          />
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy === 'FIRMLAB_LLM_BASE_URL' || !(draft.FIRMLAB_LLM_BASE_URL ?? '').trim()}
+            onClick={() => apply('FIRMLAB_LLM_BASE_URL', draft.FIRMLAB_LLM_BASE_URL ?? '')}
+          >
+            {e.save}
+          </button>
+          <Provenance source={llm.baseUrl.source} settingKey="FIRMLAB_LLM_BASE_URL" />
+        </div>
+        <div className="hint" style={{ marginTop: 4 }}>
+          {e.baseUrlHint}
+        </div>
+      </Row>
+    </>
+  );
+}
+
 function LaneToggle({
   flag,
   busy,
@@ -401,20 +612,10 @@ export function Settings(): JSX.Element {
               <span className="badge">{t.settings.agent.noneConfigured}</span>
             )}
           </Row>
-          {/* Variable names and their accepted values — identifiers throughout, so this row has no prose at all. */}
-          <Row label={t.settings.agent.selectProvider}>
-            <span className="hint">
-              <span className="mono">FIRMLAB_LLM_PROVIDER</span> = <span className="mono">deepseek</span> ·{' '}
-              <span className="mono">anthropic</span> · <span className="mono">ollama</span>
-            </span>
-          </Row>
-          <Row label={t.settings.agent.providerKey}>
-            <span className="hint">
-              {t.settings.agent.keyLead} <span className="mono">DEEPSEEK_API_KEY</span>,{' '}
-              <span className="mono">ANTHROPIC_API_KEY</span>
-              {t.settings.agent.keyOrPoint} <span className="mono">OLLAMA_HOST</span> {t.settings.agent.keyTail}
-            </span>
-          </Row>
+          {/* Was three rows of read-only prose that told the operator to edit a YAML file on the host — and it
+              listed `ollama`, which `llm.ts` has never supported. Editable now, and the provider list comes from
+              the server so the screen cannot offer one this build would reject. */}
+          <LlmProviderEditor />
 
           <div className="panel-title" style={{ marginTop: 22 }}>
             {t.settings.agent.governorTitle}
