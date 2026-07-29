@@ -1348,6 +1348,20 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
             </div>
           )}
 
+          {/* The denominators, under the badges they qualify. Both lanes count what they never asked about and
+              neither number reached the screen, so "0 advisories" read as "there are none" when it meant "none
+              among the ones we asked". `> 0` rather than truthy: a 0 here is genuinely "nothing was skipped". */}
+          {(osv.skipped > 0 || (nvd?.notQueried ?? 0) > 0) && (
+            <div style={{ marginBottom: 10 }}>
+              {osv.skipped > 0 && <div className="note">{t.imageDetail.research.osvSkipped(osv.skipped)}</div>}
+              {(nvd?.notQueried ?? 0) > 0 && (
+                <div className="note" style={{ marginTop: 6 }}>
+                  {t.imageDetail.research.nvdNotQueried(nvd?.notQueried ?? 0)}
+                </div>
+              )}
+            </div>
+          )}
+
           {osv.components.length > 0 && (
             <div className="table-wrap" style={{ marginBottom: 12 }}>
               <table className="data">
@@ -1358,14 +1372,14 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                   </tr>
                 </thead>
                 <tbody>
-                  {osv.components.slice(0, 12).map((c) => (
+                  {osv.components.slice(0, COMPONENT_ROWS).map((c) => (
                     <tr key={`${c.name}@${c.version}`}>
                       <td className="mono">
                         {c.name} {c.version}
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                          {c.advisories.slice(0, 8).map((a) => {
+                          {c.advisories.slice(0, ADVISORY_ROWS).map((a) => {
                             const label = a.aliases.find((x) => x.startsWith('CVE-')) ?? a.id;
                             const href = a.references[0];
                             return href ? (
@@ -1385,12 +1399,33 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                               </span>
                             );
                           })}
+                          {/* The NVD table beside this one has said "N of M shown" since it was written; this one
+                              stopped at eight and said nothing, so the same truncation read as a complete list on
+                              one table and as a bound on the other. */}
+                          {c.advisories.length > ADVISORY_ROWS && (
+                            <span
+                              className="badge"
+                              title={t.imageDetail.research.shownOfTitle(
+                                ADVISORY_ROWS,
+                                c.advisories.length,
+                                c.name,
+                                c.version,
+                              )}
+                            >
+                              {t.imageDetail.research.shownOf(ADVISORY_ROWS, c.advisories.length)}
+                            </span>
+                          )}
                         </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              {osv.components.length > COMPONENT_ROWS && (
+                <div className="note" style={{ marginTop: 6 }}>
+                  {t.imageDetail.research.componentsShown(COMPONENT_ROWS, osv.components.length)}
+                </div>
+              )}
             </div>
           )}
 
@@ -1421,7 +1456,7 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                   </tr>
                 </thead>
                 <tbody>
-                  {nvd.components.slice(0, 12).map((c) => (
+                  {nvd.components.slice(0, COMPONENT_ROWS).map((c) => (
                     <tr key={`nvd-${c.name}@${c.version}`}>
                       <td className="mono">
                         {c.name} {c.version}
@@ -1485,7 +1520,19 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                   ))}
                 </tbody>
               </table>
+              {nvd.components.length > COMPONENT_ROWS && (
+                <div className="note" style={{ marginTop: 6 }}>
+                  {t.imageDetail.research.componentsShown(COMPONENT_ROWS, nvd.components.length)}
+                </div>
+              )}
             </div>
+          )}
+
+          {/* The egress ledger — what this lane put on the wire and what it never does. `research/egress.ts`
+              builds it on every run and nothing rendered it: the privacy claim that justifies the only
+              internet-touching flag in the product was readable in JSON and nowhere else. */}
+          {result.egress && (result.egress.destinations.length > 0 || result.egress.neverSent.length > 0) && (
+            <ResearchEgress egress={result.egress} />
           )}
 
           {result.keyMaterial.length > 0 && (
@@ -1578,6 +1625,56 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
  *  - **The lane being off is not an empty result.** With `FIRMLAB_HASH_LOOKUP` unset nothing is asked at all,
  *    and the provider's own `reason` says so — printed here rather than showing an empty list.
  */
+/** How many components and how many advisories each table prints. Both used to be bare `12` / `8` inline. */
+const COMPONENT_ROWS = 12;
+const ADVISORY_ROWS = 8;
+
+/**
+ * What this lookup put on the wire, and what it never does.
+ *
+ * `research/egress.ts` builds this ledger on every run, and it is the reason an operator can turn on the only
+ * internet-touching flag in the product: it names each destination, what is sent there, and the ceiling on how
+ * many questions. It had no reader — the claim existed in JSON and nowhere a person would look.
+ *
+ * The `sends` strings and the `neverSent` list are the provider's own words and render as written; a host with a
+ * count of 0 is a one-way download (the KEV catalog comes in, nothing about the firmware goes out) and says so
+ * rather than printing "at most 0", which reads like a bound rather than a direction.
+ */
+function ResearchEgress({ egress }: { egress: ResearchResult['egress'] }): JSX.Element {
+  const t = useMessages();
+  const r = t.imageDetail.research;
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div className="eyebrow" style={{ marginBottom: 6 }}>
+        {r.egressHeading}
+      </div>
+      {egress.destinations.map((d) => (
+        <div key={d.host} style={{ fontSize: 12.5, marginBottom: 4 }}>
+          <span className="mono">{d.host}</span>{' '}
+          <span className="badge" style={{ fontSize: 10 }}>
+            {d.count > 0 ? r.egressAtMost(d.count) : r.egressNothing}
+          </span>
+          <div className="hint" style={{ marginTop: 1 }}>
+            {d.sends}
+          </div>
+        </div>
+      ))}
+      {egress.neverSent.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div className="hint" style={{ fontSize: 11.5 }}>
+            {r.neverSentHeading}
+          </div>
+          <ul className="hint" style={{ margin: '2px 0 0', paddingLeft: 18, fontSize: 11.5 }}>
+            {egress.neverSent.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HashLookupBlock({ lookup }: { lookup: ResearchResult['hashLookup'] }): JSX.Element | null {
   const t = useMessages();
   const h = t.imageDetail.research.hash;

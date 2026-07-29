@@ -358,3 +358,88 @@ describe('ImageDetail — the password-hash lookup says what it refused to ask',
     expect(screen.getByText('ad****')).toBeInTheDocument();
   });
 });
+
+/**
+ * The denominators of the research lane, and its egress ledger.
+ *
+ * Both lanes count what they never asked about — `osv.skipped`, `nvd.notQueried` — and neither number reached
+ * the screen, so "0 advisories" read as "there are none" when it meant "none among the ones we asked". The
+ * egress ledger has the same shape of defect: `research/egress.ts` composes the privacy claim that justifies the
+ * only internet-touching flag in the product, and nothing rendered it.
+ */
+describe('ImageDetail — what the research lane did not ask, and what it sent', () => {
+  const base = (o: Record<string, unknown>) => ({
+    enabled: true,
+    provenance: {
+      identity: { firmwareClass: 'embedded-linux', arch: 'mips', bootloader: null },
+      vendors: [],
+      models: [],
+      versions: [],
+      urls: [],
+      domains: [],
+      certCNs: [],
+      banners: [],
+    },
+    egress: { destinations: [], neverSent: [] },
+    osv: { queried: 3, skipped: 0, withAdvisories: 0, totalAdvisories: 0, components: [] },
+    nvd: { queried: 0, notQueried: 0, withAdvisories: 0, totalAdvisories: 0, components: [] },
+    kev: { checked: false, catalogSize: 0, matches: [] },
+    keyMaterial: [],
+    securityContacts: [],
+    hashLookup: { enabled: false, reason: '', attempted: 0, resolved: 0, notQueried: 0, entries: [] },
+    ...o,
+  });
+
+  const show = async (result: Record<string, unknown>) => {
+    mockApi.researchStatus.mockResolvedValue({ enabled: true });
+    mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
+    mockApi.researchResult.mockResolvedValue(result as never);
+    const rendered = renderSection('dossier');
+    await screen.findByText(/OSV \d+ queried/);
+    return rendered;
+  };
+
+  it('says how many components were never asked about at all', async () => {
+    await show(base({ osv: { queried: 3, skipped: 5, withAdvisories: 0, totalAdvisories: 0, components: [] } }));
+    expect(screen.getByText(/5 SBOM components could not be mapped to an OSV ecosystem/)).toBeInTheDocument();
+    expect(screen.getByText(/does not cover them/)).toBeInTheDocument();
+  });
+
+  it('says the same for the NVD candidates a cap left unasked', async () => {
+    await show(base({ nvd: { queried: 2, notQueried: 7, withAdvisories: 0, totalAdvisories: 0, components: [] } }));
+    expect(screen.getByText(/7 candidates went unasked at NVD/)).toBeInTheDocument();
+  });
+
+  it('stays silent when nothing was skipped, rather than printing a zero', async () => {
+    // A 0 here is a real measurement — everything was asked — and a line saying so is noise that dilutes the
+    // lines that matter.
+    await show(base({}));
+    expect(screen.queryByText(/never asked about/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/went unasked at NVD/)).not.toBeInTheDocument();
+  });
+
+  it('renders the egress ledger: each destination, what goes there, and the ceiling', async () => {
+    await show(
+      base({
+        egress: {
+          destinations: [
+            { host: 'api.osv.dev', sends: 'SBOM component names + versions (no bytes)', count: 12 },
+            { host: 'www.cisa.gov', sends: 'nothing about your firmware — downloads the public KEV catalog', count: 0 },
+          ],
+          neverSent: ['raw firmware bytes / the image file', 'secret values, private keys'],
+        },
+      }),
+    );
+    expect(screen.getByText('api.osv.dev')).toBeInTheDocument();
+    expect(screen.getByText('at most 12')).toBeInTheDocument();
+    // A count of 0 is a DIRECTION, not a bound: the catalog comes in, nothing goes out.
+    expect(screen.getByText('nothing about your firmware')).toBeInTheDocument();
+    expect(screen.queryByText('at most 0')).not.toBeInTheDocument();
+    expect(screen.getByText('raw firmware bytes / the image file')).toBeInTheDocument();
+  });
+
+  it('shows no egress block for a result stored before the ledger existed', async () => {
+    await show(base({ egress: { destinations: [], neverSent: [] } }));
+    expect(screen.queryByText('What this lookup sent, and where')).not.toBeInTheDocument();
+  });
+});

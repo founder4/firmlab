@@ -210,6 +210,19 @@ export const imageDetail = {
 
     osvBadge: (n: number) => `OSV ${n} queried`,
     osvBadgeTitle: 'OSV: ecosystem-mapped SBOM components queried',
+    /**
+     * The denominators. Both lanes counted what they never asked about, and neither number reached the screen —
+     * so "0 advisories" read as "no advisories exist" when it meant "no advisories among the ones we asked".
+     * `unmapped` is not a failure of the component: OSV is asked per ecosystem, and a binary fingerprinted out of
+     * a firmware has no ecosystem to name.
+     */
+    osvSkipped: (n: number) =>
+      `${n} SBOM component${n === 1 ? '' : 's'} could not be mapped to an OSV ecosystem and ${n === 1 ? 'was' : 'were'} never asked about. The advisory count above does not cover ${n === 1 ? 'it' : 'them'}.`,
+    nvdNotQueried: (n: number) =>
+      `${n} candidate${n === 1 ? '' : 's'} went unasked at NVD. The advisory count above does not cover ${n === 1 ? 'it' : 'them'}.`,
+    /** A table bound. Stated because a list that simply stops reads as the whole set. */
+    componentsShown: (shown: number, total: number) =>
+      `Showing ${shown} of ${total} components. The rest are in the run's stored result.`,
     osvAdvisories: (n: number) => `${n} OSV advisories`,
     nvdBadge: (queried: number, advisories: number) => `NVD ${queried} queried · ${advisories} advisories`,
     nvdTitleUnknown:
@@ -286,6 +299,16 @@ export const imageDetail = {
       'This result predates the CPE/keyword split, so which question produced it was not recorded. Re-run research to find out.',
     /** A bound states what it dropped: the row lists 8, NVD may hold far more. */
     shownOf: (shown: number, total: number) => `${shown} of ${total} shown`,
+    /**
+     * What this lane sent, and what it never sends.
+     *
+     * `research/egress.ts` builds this ledger on every run — it is the reason an operator can turn the only
+     * internet-touching flag on — and nothing rendered it. A privacy claim nobody can read is not a claim.
+     */
+    egressHeading: 'What this lookup sent, and where',
+    egressNothing: 'nothing about your firmware',
+    egressAtMost: (n: number) => `at most ${n}`,
+    neverSentHeading: 'Never sent, on any run:',
     shownOfTitle: (shown: number, total: number, name: string, version: string) =>
       `This row lists ${shown}. NVD matches ${total} CVEs for ${name} ${version}; the rest are not shown here.`,
 

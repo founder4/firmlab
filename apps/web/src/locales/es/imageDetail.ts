@@ -200,6 +200,12 @@ export const imageDetail: Messages['imageDetail'] = {
 
     osvBadge: (n: number) => `OSV: ${n} consultados`,
     osvBadgeTitle: 'OSV: componentes del SBOM que pudieron mapearse a un ecosistema y se consultaron',
+    osvSkipped: (n: number) =>
+      `${n} componente${n === 1 ? '' : 's'} del SBOM no pudo${n === 1 ? '' : 'ieron'} mapearse a un ecosistema de OSV y nunca se preguntó por ${n === 1 ? 'él' : 'ellos'}. El recuento de avisos de arriba no ${n === 1 ? 'lo' : 'los'} cubre.`,
+    nvdNotQueried: (n: number) =>
+      `${n} candidato${n === 1 ? '' : 's'} se quedó sin preguntar en NVD. El recuento de avisos de arriba no ${n === 1 ? 'lo' : 'los'} cubre.`,
+    componentsShown: (shown: number, total: number) =>
+      `Se muestran ${shown} de ${total} componentes. El resto está en el resultado guardado de la ejecución.`,
     osvAdvisories: (n: number) => `${n} avisos de OSV`,
     nvdBadge: (queried: number, advisories: number) => `NVD: ${queried} consultados · ${advisories} avisos`,
     nvdTitleUnknown:
@@ -265,6 +271,10 @@ export const imageDetail: Messages['imageDetail'] = {
     askedUnknownTitle:
       'Este resultado es anterior a la separación CPE/palabra clave, así que no se registró qué pregunta lo produjo. Vuelve a ejecutar la investigación para saberlo.',
     shownOf: (shown: number, total: number) => `se muestran ${shown} de ${total}`,
+    egressHeading: 'Qué envió esta consulta, y a dónde',
+    egressNothing: 'nada sobre tu firmware',
+    egressAtMost: (n: number) => `como mucho ${n}`,
+    neverSentHeading: 'Nunca se envía, en ninguna ejecución:',
     shownOfTitle: (shown: number, total: number, name: string, version: string) =>
       `Esta fila lista ${shown}. NVD tiene ${total} CVE para ${name} ${version}; el resto no se muestra aquí.`,
 
