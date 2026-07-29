@@ -93,6 +93,45 @@ describe('FuzzPanel — AFL++ honesty', () => {
     render(<FuzzPanel imageId="img1" />);
     expect(await screen.findByText(en.panels.fuzz.noCrash)).toBeInTheDocument();
   });
+
+  /**
+   * A campaign that never started.
+   *
+   * `unavailable()` in the provider fills the SAME result shape with `crashes: 0`, and this panel rendered that
+   * zero in the OK colour with `reason` nowhere on screen — a run that could not happen reading exactly like a
+   * run that found nothing. `binary not found in rootfs` is the sharper of its two reasons: the deployment IS
+   * runnable, the badge at the top still says so, and the only thing wrong is the path that was typed.
+   */
+  it('never renders a campaign that did not run as a campaign that found nothing', async () => {
+    mockApi.fuzzResult.mockResolvedValue(
+      fuzzResult({ available: false, reason: 'binary not found in rootfs', execsDone: null, isolation: 'none' }),
+    );
+    render(<FuzzPanel imageId="img1" />);
+
+    expect(await screen.findByText(/No campaign ran against/)).toBeInTheDocument();
+    expect(screen.getByText('binary not found in rootfs')).toBeInTheDocument();
+    expect(screen.getByText(/not a count of zero/)).toBeInTheDocument();
+    // The zero and the placeholder configuration are gone: nothing was measured and nothing was chosen.
+    expect(screen.queryByText(en.panels.fuzz.stat.crashes)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.panels.fuzz.noCrash)).not.toBeInTheDocument();
+    // …and the deployment is still runnable, which is exactly why the reason has to be readable.
+    expect(screen.getByText(en.panels.fuzz.runnable)).toBeInTheDocument();
+  });
+
+  it('says a stored result left no reason rather than inventing one', async () => {
+    // Optional forever: a run recorded before `reason` existed carries none, and the panel must not fill the gap.
+    mockApi.fuzzResult.mockResolvedValue(fuzzResult({ available: false, reason: undefined }));
+    render(<FuzzPanel imageId="img1" />);
+    expect(await screen.findByText(en.panels.fuzz.noReason)).toBeInTheDocument();
+  });
+
+  it('still reports the honest negative for a campaign that DID run', async () => {
+    // The guard this replaces was `crashes === 0 && result.available`; the sentence must survive its removal.
+    mockApi.fuzzResult.mockResolvedValue(fuzzResult({ crashes: 0, available: true }));
+    render(<FuzzPanel imageId="img1" />);
+    expect(await screen.findByText(en.panels.fuzz.noCrash)).toBeInTheDocument();
+    expect(screen.queryByText(/No campaign ran against/)).not.toBeInTheDocument();
+  });
 });
 
 /**

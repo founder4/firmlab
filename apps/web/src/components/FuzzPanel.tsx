@@ -164,7 +164,24 @@ export function FuzzPanel({
         </div>
       )}
 
-      {result && (
+      {/* A campaign that never started, first and on its own. `unavailable()` fills the SAME result shape with
+          `crashes: 0`, and this block used to render that zero in the OK colour: a run that could not happen read
+          exactly like a run that found nothing. The stats below are suppressed rather than shown as `—`, because
+          `harness: 'file'` and `isolation: 'none'` in that shape are placeholder defaults, not choices anyone
+          made, and printing them asserts a campaign was configured. */}
+      {result?.available === false && (
+        <div className="banner banner-warn" style={{ marginTop: 12 }}>
+          {t.panels.fuzz.didNotRun} <span className="mono">{result.binary}</span>
+          <div className="hint" style={{ marginTop: 4 }}>
+            {result.reason ?? t.panels.fuzz.noReason}
+          </div>
+          <div className="hint" style={{ marginTop: 4 }}>
+            {t.panels.fuzz.didNotRunMeaning}
+          </div>
+        </div>
+      )}
+
+      {result && result.available !== false && (
         <div style={{ marginTop: 12 }}>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <Stat label={t.panels.fuzz.stat.binary} value={result.binary} mono />
@@ -208,7 +225,7 @@ export function FuzzPanel({
               </table>
             </div>
           )}
-          {result.crashes === 0 && result.available && (
+          {result.crashes === 0 && (
             <div className="hint" style={{ marginTop: 8 }}>
               {t.panels.fuzz.noCrash}
             </div>

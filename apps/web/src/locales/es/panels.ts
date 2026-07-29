@@ -141,6 +141,10 @@ export const panels: Messages['panels'] = {
       lead: 'AFL++ no está instalado en este despliegue — habilita la capa opcional en',
       tail: '(afl-fuzz + afl-qemu-trace). Sin él no se finge nada.',
     },
+    didNotRun: 'No se ejecutó ninguna campaña contra',
+    didNotRunMeaning:
+      'No hay recuento de fallos para este binario — no es un recuento de cero. Debajo no se midió nada, y la frase que acompaña dice qué impidió la ejecución, que nunca es una afirmación sobre el binario.',
+    noReason: 'La versión que registró esta ejecución no dejó motivo.',
     needBinary: 'Escribe la ruta de un binario del rootfs al que fuzzear (p. ej. bin/busybox).',
     harnessLabel: 'Vía de entrada',
     harnessTitle: 'Cómo llega al objetivo la entrada generada',

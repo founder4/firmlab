@@ -151,6 +151,19 @@ export const panels = {
       lead: "AFL++ isn't installed in this deployment — enable the opt-in layer in",
       tail: '(afl-fuzz + afl-qemu-trace). Nothing is faked without it.',
     },
+    /**
+     * A stored result whose campaign never started.
+     *
+     * `unavailable()` fills the same shape with `crashes: 0`, and the panel painted that zero in the OK colour
+     * beside an execs count of `—`: a run that could not happen rendered as a run that found nothing, which is
+     * the one reading this whole workbench exists to prevent. The two reasons it returns are not interchangeable
+     * either — "AFL++ not installed" is a property of the deployment, "binary not found in rootfs" is a typo in
+     * the path, and the fuzz badge at the top still says `runnable` for the second.
+     */
+    didNotRun: 'No campaign ran against',
+    didNotRunMeaning:
+      'There is no crash count for this binary — not a count of zero. Nothing below was measured, and the sentence beside it says what stopped the run, which is never a statement about the binary.',
+    noReason: 'The build that recorded this run left no reason.',
     needBinary: 'Enter a rootfs binary path to fuzz (e.g. bin/busybox).',
     harnessLabel: 'Harness',
     harnessTitle: 'How the fuzzed input reaches the target',
