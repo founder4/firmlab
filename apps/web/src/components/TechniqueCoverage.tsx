@@ -109,7 +109,10 @@ const COVERAGE: CovGroup[] = [
       { id: 'webprobe', status: 'done', ref: 'providers/webprobe' },
       { id: 'webAuthBypass', status: 'planned', note: 'webAuthBypass' },
       { id: 'interactiveGdb', status: 'planned', note: 'interactiveGdb' },
-      { id: 'symreach', status: 'planned', note: 'symreach' },
+      // Built and reachable: `providers/symreach.ts`, `routes/symreach.ts` and `SymReachPanel`. Announced as
+      // `planned` since the day it shipped — this matrix is the only place the workbench states what it can do,
+      // and under-claiming here is the same defect as over-claiming, pointed the other way.
+      { id: 'symreach', status: 'done', note: 'symreach' },
       { id: 'crossBinary', status: 'planned', note: 'crossBinary' },
       { id: 'cmplog', status: 'planned', note: 'cmplog' },
     ],
@@ -118,7 +121,9 @@ const COVERAGE: CovGroup[] = [
     area: 'comparison',
     items: [
       { id: 'treeDiff', status: 'done', ref: 'providers/diff' },
-      { id: 'functionDiff', status: 'planned', note: 'functionDiff' },
+      // Built: `providers/funcdiff.ts` + `funcdiff-run.ts` + `routes/diff.ts`. It has no PANEL, which is a
+      // separate and recorded gap — but the technique is implemented and the route answers.
+      { id: 'functionDiff', status: 'done', note: 'functionDiff' },
       { id: 'kernelModuleCve', status: 'planned', note: 'kernelModuleCve' },
     ],
   },
@@ -129,7 +134,8 @@ const COVERAGE: CovGroup[] = [
       { id: 'bootkitLead', status: 'done', note: 'bootkitLead' },
       { id: 'iocFeed', status: 'done', note: 'iocFeed' },
       { id: 'secureBoot', status: 'done', note: 'secureBoot' },
-      { id: 'fwhunt', status: 'planned', note: 'fwhunt' },
+      // Built: `providers/fwhunt.ts`, served by `routes/chipsec.ts`, with the rule corpus pinned in the image.
+      { id: 'fwhunt', status: 'done', note: 'fwhunt' },
       { id: 'logofail', status: 'planned', note: 'logofail' },
     ],
   },

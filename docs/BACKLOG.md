@@ -380,6 +380,46 @@ of "known-incomplete semantics" exists without hunting through the sections abov
   a single mapped endpoint, and the TAP alternative needs `NET_ADMIN` on a bridge-networked VM-backed runtime —
   the lesson `assessL2Reach`/`looksLikeVmBackedRuntime` already paid for. Deserves its own spike.
 
+## Workbench UI — the visibility audit (2026-07-29)
+
+A full sweep of what the API produces and the web never renders. Ordered by what the absence COSTS, and the
+ordering is the point: a field that hides a limitation is worse than a whole capability nobody can reach, because
+the first one makes a gap read as a clean result and the second is merely missing.
+
+- ✅ **The capability matrix under-claimed three built techniques** (2026-07-29) — `TechniqueCoverage.tsx` is the
+  only place the workbench states what it can do, and it announced `symreach`, `functionDiff` and `fwhunt` as
+  `planned` while all three have providers, routes and (for symreach) a panel. Under-claiming here is the same
+  defect as over-claiming, pointed the other way: an operator reads the matrix to decide what to ask of the bench.
+- ▢ **Fields that make a limitation invisible — fix these first.** Each one is a bound or a reason the provider
+  recorded and no component reads, so an empty answer reads as a negative one:
+  `Finding.rationale` (the sentence saying WHY a proof state was assigned — rendered only for operator disputes);
+  `UpdatePathResult.elfBudgetExhausted` (so "no updaters found" may be a bound, unknowably);
+  `FilesSearch.coverage`'s counts, collapsed into one boolean, so "3 unreadable files" and "0" render identically;
+  `kev.reason` + `kev.catalogSize` (a KEV check that did not happen makes the whole block VANISH);
+  `ResearchResult.hashLookup` entirely (a hash skipped for salt looks like a hash that never existed);
+  `BootDiagnosis.daemonsStarted`/`daemonsExited` (the difference between "never started" and "started and
+  SIGSEGV'd" — the exact distinction the module was written for); `SecureBootPosture.note` (the provider's own
+  sentence for when the variable store was not extractable); `DeviceTreeResult.rejected`;
+  `OperatorAssertion.withdrawnReason` (a retraction is visible but not readable); `FuzzResult.reason`;
+  `osv.skipped`, `nvd.notQueried`, `nvd.truncated[]`, `egress.neverSent`.
+- ▢ **Whole capabilities with a route and no reader.** `yarascan`, `funcdiff`, `fwhunt`, `nvram` and `ghidra` have
+  POST+GET routes and ZERO references in `apps/web`. Each carries its own coverage story with it — yarascan's
+  `rulesDeclared`/`rulesApplied`/`rulesLost`, nvram's `capped` and `duplicateKeys`, fwhunt's `skipReason`,
+  funcdiff's `unmatchable`. `DynProbeResult` is not even typed in the client, so a reproduced crash's
+  `controlOffset` — the whole point of the probe — has nowhere to be read.
+- ▢ **Thirteen API methods with no caller, so a result lives only in the tab that launched it.** `chipsecResult`,
+  `renodeResult`, `webprobeResult`, `decompileResult`, `kernelPosture`, `ghidraResult`, `analysisResult`,
+  `secrets`, `amendAssertion`, `updateNote`, `deleteImage`. The sharpest is `amendAssertion`: `OperatorPanel`
+  renders the full amendment history — `supersedes`, `amendedAt`, superseded revisions — and there is no UI that
+  can produce one. The same shape as the egress panel fixed earlier this session, five more times.
+- ▢ **Four sections with no link anywhere in the app**: `structure`, `files`, `hardware`, `compmap` — reachable
+  only by typing a URL. The costliest is `files`, whose own comment calls it *"the surface that lets a finding's
+  evidence be checked instead of trusted"*. `overview` is a dead id that `resolveSection` remaps to `dossier`
+  while the step timeline still navigates to it.
+- ▢ **Per-binary hardening is collected and never shown.** `BinaryEntry` carries `nx`, `canary`, `pic`, `bits`,
+  `sha1`, `importsSummary`, `emulationStatus`; no component reads any of them, while the matrix announces
+  `hardening: done`.
+
 ## Reporting & integration
 - ▢ **PDF export** of reports.
 - ✅ **External MCP tool surface** (2026-07-27) — `apps/api/src/mcp/` (`server.ts` + `client.ts` + pure, unit-tested `format.ts`) + project-scoped `.mcp.json`. A stdio MCP server exposing **10 tools** — `list_images`, `coverage`, `findings`, `list_binaries`, `capabilities`, `extract`, `run_worker`, `autonomous_scan`, `symbolic_reachability`, `job_status`. Talks to FirmLab over its own HTTP API rather than importing the providers, deliberately: the routes are where findings sync under idempotent sources and where the honest guards live, and the API process holds SQLite open, so a second in-process writer is a lock conflict waiting to happen. Transport is stdio and the deployed container publishes no host port, so **the `docker exec -i` channel IS the transport** (`claude mcp add firmlab -- docker exec -i firmlab node /app/apps/api/dist/mcp/server.js`); `FIRMLAB_API` + `FIRMLAB_MCP_HEADERS` cover a remote/SSO'd instance. **The non-façade part is `format.ts`:** handing this output to a model reintroduces the conflation the CoverageBanner exists to prevent, at a layer with no banner — `{"findings": []}` becomes "no vulnerabilities were found", which an empty list cannot support. So a result that could read as a negative carries its own verdict *inline, in the first field*: `findingsPayload` never emits a list without the coverage sentence and the names of the stages that produced nothing; `scanPayload` lifts the workers that did NOT complete above the narrative; `reachabilityPayload` restates `not_reached_in_budget` as the absence of a result rather than a negative one; and the server's `initialize` instructions brief the model on the proof-state ladder plus the two inferences that are always wrong here. Documented as AUTONOMOUS-WORKERS §10. **Validated in-container against the real bench (2026-07-27)** by driving the server over the `docker exec -i` channel exactly as an agent would: handshake at protocol `2025-06-18` with all 10 tools listed and a 1607-char instruction brief; 16 images and 19/19 tools enumerated; `symbolic_reachability` on the real DVRF derived `strcpy` from `pwnable/Intro/stack_bof_01` and returned **reached** (MIPS32) with the reachability-not-exploitability meaning attached, while an operator-named `system` on `sbin/chkntfs` returned `absent` carrying "nothing was learned"; a full agent-driven `autonomous_scan` ran **15 workers → 94 findings** with the 3 incomplete workers and the honest gaps ordered *above* the narrative, and coverage then closed the loop at 15/15. **Two defects the real run exposed, both now fixed + unit-pinned:** an image holding real findings from individually-run stages was headlined `UNEXAMINED` beside a verdict calling those findings real (now `COVERAGE UNKNOWN`), and the manual-probe hint claimed a binary "imports" a symbol that the sweep had only seen in its strings — angr resolved no PLT entry for it (see the `binvuln` entry below). _Follow-up (updated 2026-07-27): resources, prompts and the write path are now **closed** — `firmlab_add_image` ingests a file the SERVER can read (it tells the agent to `docker cp` first when the file is on the host and the server is in the container), three resources expose the proof-state guide plus report/disclosure-draft templates, and three prompts encode the methodology (`triage_image`, `hunt_memory_safety`, `compare_versions`), each written to steer away from the inferences the instructions warn about. Still open: the **third pass has not been run**_
