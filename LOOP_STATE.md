@@ -33,6 +33,12 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
 - [ ] `FuzzResult.reason` sin lector — impacto: bajo — evidencia: `api.ts:231`.
 - [ ] `BootDiagnosis.cause` se muestra como identificador crudo — impacto: bajo — evidencia:
       `SimulationMenu.tsx:466` pinta `{egressShown.unreachable.cause}` sin pasar por locales.
+- [ ] `egress.attempts` cuenta como «a dónde quiso ir» las RESPUESTAS a nuestras propias sondas — impacto:
+      **alto** — evidencia: captura de `/image/c8e1ffa0/simulate` sobre el contenedor desplegado: ~150 filas
+      `10.0.2.2:<puerto efímero> tcp · the emulator itself · 1 frame`. 10.0.2.2 es el host visto desde slirp y
+      esos puertos altos son el lado NATeado de los reenvíos que ABRIMOS nosotros, así que el panel presenta como
+      intención del firmware el eco de la intervención del banco de pruebas. Además la lista no lleva cota: la
+      página mide 8582 px de alto y las dos filas que importan quedan sepultadas.
 - [ ] Denominadores OSV/NVD sin lector — impacto: medio — evidencia: `api.ts:639-647`, `:671`.
 
 ## Historial
@@ -54,3 +60,6 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
   `pnpm biome` → 431 ficheros sin NUL, 413 comprobados, sin errores.
   Punto flojo nuevo detectado, NO implementado (fuera de alcance): el `cause` se pinta como código crudo
   (`badge` con `no-service-started`) sin frase traducida; `unreachableTitle` es sólo cabecera. Anotado abajo.
+  Verificado además contra el despliegue real: `/image/c8e1ffa0/simulate` en `firmlab` (build 6324c3e) pinta
+  «NETWORK DAEMONS ON THIS BOOT · httpd · SIGSEGV (exit 139) · last open: /proc/simple_config/system_mode»,
+  0 errores de consola y 0 peticiones fallidas. Esa captura destapó el punto flojo nuevo de arriba.
