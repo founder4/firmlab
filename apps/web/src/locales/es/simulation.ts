@@ -78,6 +78,15 @@ export const simulation: Messages['simulation'] = {
     multicast: 'anuncio',
   },
   egressFrames: (n: number) => `${n} trama${n === 1 ? '' : 's'}`,
+  egressAnswered: (n: number) =>
+    `${n} trama${n === 1 ? '' : 's'} eran este invitado RESPONDIENDO a conexiones abiertas desde fuera — las sondas que lanzó este banco de pruebas — así que no aparecen arriba. No son destinos que eligiera el firmware.`,
+  egressUndecided: (n: number) =>
+    `${n} trama${n === 1 ? '' : 's'} TCP se capturaron demasiado cortas para leer las banderas, así que no se puede decidir si el invitado abrió esos flujos. Se listan arriba en vez de descartarse.`,
+  egressDropped: (n: number) =>
+    `${n} destino${n === 1 ? '' : 's'} más superaron el límite de esta ejecución y no se listan. Los mostrados son los de más tramas, nunca los primeros en llegar.`,
+  egressQueriesDropped: (n: number) => `${n} nombre${n === 1 ? '' : 's'} más superaron el límite de esta ejecución.`,
+  egressMore: (shown: number, total: number) =>
+    `Se muestran los ${shown} más contactados de ${total}. El resto está en el resultado guardado de la ejecución.`,
   egressAskedOf: (server: string) => `preguntado a ${server}`,
   egressTruncatedNames: (n: number) =>
     `${n} pregunta(s) DNS se capturaron demasiado cortas para leer el nombre, y un nombre truncado es otro nombre.`,

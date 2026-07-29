@@ -102,6 +102,27 @@ export const simulation = {
     multicast: 'announcement',
   },
   egressFrames: (n: number) => `${n} frame${n === 1 ? '' : 's'}`,
+  /**
+   * The frames the workbench itself provoked.
+   *
+   * A boot of the MR3220 rendered ~150 rows of `10.0.2.2:<ephemeral>` here — every one the guest ANSWERING a
+   * port-forward this bench opened to probe it, listed under a heading that says the firmware aimed there. The
+   * count stays visible rather than the frames simply vanishing: they were on the wire, they were the guest's,
+   * and they are a measurement of what the bench did.
+   */
+  egressAnswered: (n: number) =>
+    `${n} frame${n === 1 ? '' : 's'} were this guest ANSWERING connections opened from outside it — the probes this workbench sent — so they are not listed above. They are not destinations the firmware chose.`,
+  /** A frame whose TCP flags were cut off by the capture length: kept in the list, because losing a real attempt
+      is the worse error, and named so the list reads as the partly-undecided thing it is. */
+  egressUndecided: (n: number) =>
+    `${n} TCP frame${n === 1 ? '' : 's'} were captured too short to read the flags, so whether the guest opened those flows is undecided. They are listed above rather than dropped.`,
+  /** A bound that truncates says what it dropped and by what rule — never by arrival order. */
+  egressDropped: (n: number) =>
+    `${n} further destination${n === 1 ? '' : 's'} went past this run's limit and are not listed. The ones shown are those with the most frames, never the first to arrive.`,
+  egressQueriesDropped: (n: number) => `${n} further name${n === 1 ? '' : 's'} went past this run's limit.`,
+  /** The on-screen cap, which is not the parser's. Stated for the same reason. */
+  egressMore: (shown: number, total: number) =>
+    `Showing the ${shown} most-addressed of ${total}. The rest are in the run's stored result.`,
   egressAskedOf: (server: string) => `asked of ${server}`,
   /** A question whose name did not survive the per-frame capture bound. Counted, never printed half-resolved. */
   egressTruncatedNames: (n: number) =>

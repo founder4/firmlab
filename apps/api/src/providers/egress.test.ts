@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  EMPTY_EGRESS,
   type EgressObservation,
   describeEgress,
   mergeEgress,
@@ -23,7 +24,19 @@ const SLIRP_MAC = [0x52, 0x55, 0x0a, 0x00, 0x02, 0x02];
 
 const ip = (a: string): number[] => a.split('.').map(Number);
 
-/** One Ethernet+IPv4 frame. `payload` follows the transport header this builds for tcp/udp. */
+const SYN = 0x02;
+const SYN_ACK = 0x12;
+const ACK = 0x10;
+const RST_ACK = 0x14;
+
+/**
+ * One Ethernet+IPv4 frame. `payload` follows the transport header this builds for tcp/udp.
+ *
+ * TCP gets a REAL twenty-byte header, flags included. It used to get the same eight bytes as UDP, which was
+ * enough for the parser that only read ports — and the day the parser started reading flags, every one of these
+ * fixtures fell into the "captured too short to decide" branch and the suite stayed green while testing nothing.
+ * `flags` defaults to SYN because a fixture named "the guest addressed X" means the guest opened that flow.
+ */
 function frame(o: {
   smac?: number[];
   src: string;
@@ -31,22 +44,23 @@ function frame(o: {
   proto: 'tcp' | 'udp' | 'icmp';
   sport?: number;
   dport?: number;
+  flags?: number;
   payload?: number[];
 }): number[] {
   const protoNum = o.proto === 'tcp' ? 6 : o.proto === 'udp' ? 17 : 1;
+  const ports = [
+    ((o.sport ?? 1024) >> 8) & 0xff,
+    (o.sport ?? 1024) & 0xff,
+    ((o.dport ?? 80) >> 8) & 0xff,
+    (o.dport ?? 80) & 0xff,
+  ];
   const transport =
     o.proto === 'icmp'
       ? [8, 0, 0, 0, 0, 0, 0, 0]
-      : [
-          ((o.sport ?? 1024) >> 8) & 0xff,
-          (o.sport ?? 1024) & 0xff,
-          ((o.dport ?? 80) >> 8) & 0xff,
-          (o.dport ?? 80) & 0xff,
-          0,
-          8,
-          0,
-          0,
-        ];
+      : o.proto === 'tcp'
+        ? // seq, ack, data-offset 5 << 4, flags, window, checksum, urgent
+          [...ports, 0, 0, 0, 1, 0, 0, 0, 0, 0x50, o.flags ?? SYN, 0xff, 0xff, 0, 0, 0, 0]
+        : [...ports, 0, 8, 0, 0];
   const body = [...transport, ...(o.payload ?? [])];
   const ipHeader = [0x45, 0, 0, 20 + body.length, 0, 0, 0, 0, 64, protoNum, 0, 0, ...ip(o.src), ...ip(o.dst)];
   return [...GUEST_MAC.map(() => 0xff), ...(o.smac ?? GUEST_MAC), 0x08, 0x00, ...ipHeader, ...body];
@@ -315,5 +329,174 @@ describe('parseEgress against real qemu captures', () => {
     // addressing itself is the exact over-claim this attribution exists to prevent.
     expect(open.attempts.some((a) => a.address === '10.0.2.15')).toBe(false);
     expect(open.guestFrames).toBe(read('qemu-guest-isolated.pcap').guestFrames);
+  });
+});
+
+/**
+ * Who opened the flow.
+ *
+ * Written from a screenshot: the MR3220's panel listed ~150 rows of `10.0.2.2:<ephemeral>` under a heading that
+ * says "addresses it aimed at". Every one was the guest answering a port-forward this workbench opened to probe
+ * it — the bench reading its own intervention back as the firmware's intent, with the two real rows buried under
+ * it. Each case here asserts the number that must NOT move as much as the one that must.
+ */
+describe('parseEgress — the guest answering is not the guest asking', () => {
+  const opts = { emulatorAddresses: SLIRP, guestAddress: '10.0.2.15' };
+
+  it('keeps out the answers to a connection opened from outside the guest', () => {
+    // Exactly the MR3220 shape: the bench connects through slirp, the guest's httpd refuses, and the RST is a
+    // frame the guest emitted towards 10.0.2.2 — but not a place it chose to go.
+    const o = parseEgress(
+      pcap([
+        frame({ src: '10.0.2.15', dst: '10.0.2.2', proto: 'tcp', sport: 80, dport: 50078, flags: RST_ACK }),
+        frame({ src: '10.0.2.15', dst: '10.0.2.2', proto: 'tcp', sport: 80, dport: 50079, flags: RST_ACK }),
+        frame({ src: '10.0.2.15', dst: '129.6.15.28', proto: 'tcp', sport: 1024, dport: 123, flags: SYN }),
+      ]),
+      opts,
+    );
+    expect(o.attempts.map((a) => a.address)).toEqual(['129.6.15.28']);
+    expect(o.answeredFrames).toBe(2);
+    // The denominator does not move: those frames existed and were the guest's.
+    expect(o.guestFrames).toBe(3);
+  });
+
+  it('does not mistake an accept for an opening', () => {
+    // SYN+ACK is the guest accepting what somebody else opened. Reading the SYN bit alone would call it egress.
+    const o = parseEgress(
+      pcap([frame({ src: '10.0.2.15', dst: '10.0.2.2', proto: 'tcp', sport: 23, dport: 41000, flags: SYN_ACK })]),
+      opts,
+    );
+    expect(o.attempts).toEqual([]);
+    expect(o.answeredFrames).toBe(1);
+  });
+
+  it('keeps every frame of a flow the guest DID open, not only its SYN', () => {
+    const flow = { src: '10.0.2.15', dst: '8.8.8.8', proto: 'tcp' as const, sport: 4100, dport: 443 };
+    const o = parseEgress(
+      pcap([
+        frame({ ...flow, flags: SYN }),
+        frame({ ...flow, flags: ACK }),
+        frame({ ...flow, flags: ACK, payload: [1, 2, 3] }),
+      ]),
+      opts,
+    );
+    expect(o.attempts).toHaveLength(1);
+    expect(o.attempts[0]?.frames).toBe(3);
+    expect(o.answeredFrames).toBe(0);
+  });
+
+  it('decides per flow, not per destination — the same host can be both', () => {
+    const o = parseEgress(
+      pcap([
+        frame({ src: '10.0.2.15', dst: '10.0.2.2', proto: 'tcp', sport: 80, dport: 50078, flags: RST_ACK }),
+        frame({ src: '10.0.2.15', dst: '10.0.2.2', proto: 'tcp', sport: 4200, dport: 8080, flags: SYN }),
+      ]),
+      opts,
+    );
+    expect(o.attempts.map((a) => a.port)).toEqual([8080]);
+    expect(o.answeredFrames).toBe(1);
+  });
+
+  it('claims no direction for UDP, which carries nothing that says who spoke first', () => {
+    const o = parseEgress(
+      pcap([frame({ src: '10.0.2.15', dst: '10.0.2.3', proto: 'udp', sport: 1024, dport: 53 })]),
+      opts,
+    );
+    expect(o.attempts).toHaveLength(1);
+    expect(o.answeredFrames).toBe(0);
+  });
+
+  it('lists a frame whose flags were cut off, and says the direction is undecided', () => {
+    // Losing a real attempt is the worse error, so an undecidable frame stays in the list — and is counted, so
+    // the list is readable as the partly-undecided thing it is.
+    const short = frame({ src: '10.0.2.15', dst: '1.1.1.1', proto: 'tcp', sport: 4300, dport: 80 }).slice(0, 42);
+    const o = parseEgress(pcap([short]), opts);
+    expect(o.attempts.map((a) => a.address)).toEqual(['1.1.1.1']);
+    expect(o.undecidedFrames).toBe(1);
+    expect(o.answeredFrames).toBe(0);
+    expect(describeEgress(o, true)).toMatch(/too short to read the flags/);
+  });
+
+  it('says what the bound dropped, rather than ending the list where it ran out', () => {
+    // A firmware scanning a /24 hits the cap. Rule: a bound that truncates states what it dropped and by what
+    // rule — and never truncates by arrival order, which is why the kept ones are the most-addressed.
+    const frames: number[][] = [];
+    for (let i = 0; i < 260; i++) {
+      const dst = `203.0.${Math.floor(i / 254)}.${(i % 254) + 1}`;
+      frames.push(frame({ src: '10.0.2.15', dst, proto: 'tcp', sport: 5000 + i, dport: 80, flags: SYN }));
+    }
+    const o = parseEgress(pcap(frames), opts);
+    expect(o.attempts).toHaveLength(200);
+    expect(o.attemptsDropped).toBe(60);
+    expect(describeEgress(o, true)).toMatch(/60 further distinct destination\(s\) went past this run's limit of 200/);
+  });
+
+  it('counts a dropped destination once, however many frames went to it', () => {
+    const frames: number[][] = [];
+    for (let i = 0; i < 201; i++) {
+      const dst = `203.0.113.${(i % 201) + 1}`;
+      frames.push(frame({ src: '10.0.2.15', dst, proto: 'tcp', sport: 5000 + i, dport: 80, flags: SYN }));
+    }
+    // The 201st destination, addressed five more times: still ONE destination dropped, not six.
+    for (let k = 0; k < 5; k++) {
+      frames.push(frame({ src: '10.0.2.15', dst: '203.0.113.201', proto: 'tcp', sport: 5200, dport: 80, flags: SYN }));
+    }
+    const o = parseEgress(pcap(frames), opts);
+    expect(o.attemptsDropped).toBe(1);
+  });
+
+  it('says what the DNS bound dropped too', () => {
+    const frames: number[][] = [];
+    for (let i = 0; i < 106; i++) {
+      frames.push(
+        frame({
+          src: '10.0.2.15',
+          dst: '10.0.2.3',
+          proto: 'udp',
+          sport: 1024,
+          dport: 53,
+          payload: dnsQuestion(`h${i}.example.com`),
+        }),
+      );
+    }
+    const o = parseEgress(pcap(frames), opts);
+    expect(o.dnsQueries).toHaveLength(100);
+    expect(o.queriesDropped).toBe(6);
+    expect(describeEgress(o, true)).toMatch(/6 further distinct name\(s\)/);
+  });
+
+  it('puts the answered count on the EMPTY verdict, which is the sentence it most changes', () => {
+    // "It addressed nothing outside the emulator" is exactly the sentence that must not be read while 150 of the
+    // guest's own frames sit uncounted behind it.
+    const o = parseEgress(
+      pcap([frame({ src: '10.0.2.15', dst: '10.0.2.2', proto: 'tcp', sport: 80, dport: 50078, flags: RST_ACK })]),
+      opts,
+    );
+    expect(describeEgress(o, true)).toMatch(/addressed nothing outside the emulator/);
+    expect(describeEgress(o, true)).toMatch(/1 frame\(s\) were this guest ANSWERING/);
+  });
+
+  it('sums the new counters across a merge instead of taking either side', () => {
+    const a = parseEgress(
+      pcap([frame({ src: '10.0.2.15', dst: '10.0.2.2', proto: 'tcp', sport: 80, dport: 50078, flags: RST_ACK })]),
+      opts,
+    );
+    const b = parseEgress(
+      pcap([frame({ src: '10.0.2.15', dst: '10.0.2.2', proto: 'tcp', sport: 80, dport: 50079, flags: RST_ACK })]),
+      opts,
+    );
+    expect(mergeEgress(a, b)?.answeredFrames).toBe(2);
+  });
+
+  it('survives a merge with an observation stored before these counters existed', () => {
+    // A stored result is data written by an OLDER build, and this module is handed one on every re-read.
+    const old = { ...EMPTY_EGRESS, guestFrames: 4 } as EgressObservation;
+    // biome-ignore lint/performance/noDelete: reproducing exactly what an older stored JSON does not carry.
+    delete (old as { answeredFrames?: number }).answeredFrames;
+    const fresh = parseEgress(
+      pcap([frame({ src: '10.0.2.15', dst: '10.0.2.2', proto: 'tcp', sport: 80, dport: 1, flags: RST_ACK })]),
+      opts,
+    );
+    expect(mergeEgress(old, fresh)?.answeredFrames).toBe(1);
   });
 });

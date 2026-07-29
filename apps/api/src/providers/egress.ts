@@ -24,6 +24,14 @@
  * to resolve a name, which is exactly the thing an operator wants to see. Same capture, opposite polarity; one
  * function trying to be both would have to keep two contradictory exclusion rules straight.
  *
+ * **The guest answering is not the guest asking.** A boot of the MR3220 rendered ~150 rows of
+ * `10.0.2.2:<ephemeral port>` — one per probe the workbench itself sent through slirp's forwards. Every one of
+ * them was the guest ANSWERING a connection this bench opened, presented under a heading that says the firmware
+ * aimed there. That is the workbench reading its own intervention back as the subject's intent, which is the one
+ * thing this module exists not to do, and it buried the two rows that were real. TCP direction is decided from
+ * the flags: a SYN without ACK is the guest opening a connection; anything on a flow it never opened is an
+ * answer, counted apart. UDP carries no such bit, so no direction is claimed for it — see `answeredFrames`.
+ *
  * **What this refuses to claim.** A destination here is a destination the guest ADDRESSED, not one it reached: a
  * SYN into a black hole and a completed handshake look identical from the sending side, and under isolation
  * nothing is reached by construction. Nor does it claim anything about the physical device — a firmware phoning
@@ -67,6 +75,23 @@ export interface EgressObservation {
   dnsTruncated: number;
   /** Frames attributed to the guest. The denominator behind every count above. */
   guestFrames: number;
+  /**
+   * TCP frames the guest sent on a flow it never opened — its answers to connections opened from outside it,
+   * which in this rung means the port-forwards this workbench made to probe it. Kept OUT of `attempts` and
+   * counted here: they are a measurement of what the bench did, not of what the firmware chose. UDP is never
+   * counted here, because a datagram carries nothing that decides who spoke first.
+   */
+  answeredFrames: number;
+  /**
+   * TCP frames whose flags ran past the captured bytes, so who opened the flow could not be decided. They stay
+   * in `attempts` — dropping a real attempt is the worse error — and are counted so the list is readable as the
+   * partly-undecided thing it is. With the capture length this rung uses this is normally 0.
+   */
+  undecidedFrames: number;
+  /** Distinct destinations past `MAX_ATTEMPTS`. A bound that truncates says what it dropped. */
+  attemptsDropped: number;
+  /** Distinct questions past `MAX_QUERIES`. Same rule. */
+  queriesDropped: number;
   /** True when the capture was longer than the caller read; every count is then a floor. */
   truncated: boolean;
   /** Empty when the bytes were a well-formed Ethernet capture; otherwise why nothing could be read. */
@@ -78,6 +103,10 @@ export const EMPTY_EGRESS: EgressObservation = {
   dnsQueries: [],
   dnsTruncated: 0,
   guestFrames: 0,
+  answeredFrames: 0,
+  undecidedFrames: 0,
+  attemptsDropped: 0,
+  queriesDropped: 0,
   truncated: false,
   problem: '',
 };
@@ -86,6 +115,13 @@ const MAX_FRAMES = 20_000;
 /** Enough distinct destinations to characterise a boot; a firmware scanning a /24 must not grow the result. */
 const MAX_ATTEMPTS = 200;
 const MAX_QUERIES = 100;
+
+/** The two TCP flags that decide who opened a flow. A SYN alone opens; a SYN+ACK accepts what someone else opened. */
+const TCP_SYN = 0x02;
+const TCP_ACK = 0x10;
+
+/** Flow identity from the GUEST's side: what it is talking to, from which of its ports, to which of theirs. */
+const flowKey = (dst: string, sport: number, dport: number): string => `${dst}\u0000${sport}\u0000${dport}`;
 
 const ipv4 = (b: Uint8Array, o: number): string => `${b[o] ?? 0}.${b[o + 1] ?? 0}.${b[o + 2] ?? 0}.${b[o + 3] ?? 0}`;
 
@@ -228,10 +264,32 @@ export function parseEgress(pcap: Uint8Array, opts: EgressScopeInput = {}): Egre
     frames.push({ src, dst, smac, body: frame });
   }
 
+  // Which TCP flows the GUEST opened. Read in its own pass so the answer does not depend on capture order: a
+  // retransmitted SYN arriving after the data it opened would otherwise decide the flow the wrong way.
+  const opened = new Set<string>();
+  for (const f of frames) {
+    if (emulatorMacs.has(f.smac)) continue;
+    const b = f.body;
+    if ((b[23] ?? 0) !== 6) continue;
+    const po = 14 + ((b[14] ?? 0) & 0x0f) * 4;
+    if (b.length < po + 14) continue;
+    const flags = b[po + 13] ?? 0;
+    if ((flags & TCP_SYN) === 0 || (flags & TCP_ACK) !== 0) continue;
+    const sport = (b[po] ?? 0) * 256 + (b[po + 1] ?? 0);
+    const dport = (b[po + 2] ?? 0) * 256 + (b[po + 3] ?? 0);
+    opened.add(flowKey(f.dst, sport, dport));
+  }
+
   const attempts = new Map<string, EgressAttempt>();
   const queries = new Map<string, DnsQuery>();
   let dnsTruncated = 0;
   let guestFrames = 0;
+  let answeredFrames = 0;
+  let undecidedFrames = 0;
+  let attemptsDropped = 0;
+  let queriesDropped = 0;
+  const droppedKeys = new Set<string>();
+  const droppedQueryKeys = new Set<string>();
 
   for (const f of frames) {
     if (emulatorMacs.has(f.smac)) continue; // the emulator talking is not the firmware talking
@@ -248,6 +306,19 @@ export function parseEgress(pcap: Uint8Array, opts: EgressScopeInput = {}): Egre
       if (b.length >= po + 4) port = (b[po + 2] ?? 0) * 256 + (b[po + 3] ?? 0);
     }
 
+    // The direction gate. Only TCP can be decided, and only from the flags; an undecidable frame is left in the
+    // list rather than dropped, because losing a real attempt is worse than showing one that may be an answer.
+    if (protocol === 'tcp') {
+      if (b.length < po + 14) undecidedFrames++;
+      else {
+        const sport = (b[po] ?? 0) * 256 + (b[po + 1] ?? 0);
+        if (!opened.has(flowKey(f.dst, sport, port ?? 0))) {
+          answeredFrames++;
+          continue;
+        }
+      }
+    }
+
     const key = `${protocol}\u0000${f.dst}\u0000${port ?? ''}`;
     const existing = attempts.get(key);
     if (existing) existing.frames++;
@@ -259,6 +330,11 @@ export function parseEgress(pcap: Uint8Array, opts: EgressScopeInput = {}): Egre
         scope: scopeOf(f.dst, opts),
         frames: 1,
       });
+    } else if (!droppedKeys.has(key)) {
+      // Past the bound. Counted as DISTINCT destinations dropped, not frames: the sentence a reader needs is
+      // "there were N more places", and a per-frame tally would read as a much larger loss than it is.
+      droppedKeys.add(key);
+      attemptsDropped++;
     }
 
     if (protocol === 'udp' && port === 53 && b.length >= po + 8) {
@@ -269,6 +345,10 @@ export function parseEgress(pcap: Uint8Array, opts: EgressScopeInput = {}): Egre
         const q = queries.get(qk);
         if (q) q.frames++;
         else if (queries.size < MAX_QUERIES) queries.set(qk, { name, server: f.dst, frames: 1 });
+        else if (!droppedQueryKeys.has(qk)) {
+          droppedQueryKeys.add(qk);
+          queriesDropped++;
+        }
       }
     }
   }
@@ -282,6 +362,10 @@ export function parseEgress(pcap: Uint8Array, opts: EgressScopeInput = {}): Egre
     dnsQueries: [...queries.values()].sort(byFrames),
     dnsTruncated,
     guestFrames,
+    answeredFrames,
+    undecidedFrames,
+    attemptsDropped,
+    queriesDropped,
     truncated: count >= MAX_FRAMES,
     problem: '',
   };
@@ -310,6 +394,12 @@ export function mergeEgress(a: EgressObservation | null, b: EgressObservation | 
     dnsQueries: [...queries.values()].sort((x, y) => y.frames - x.frames || x.name.localeCompare(y.name)),
     dnsTruncated: a.dnsTruncated + b.dnsTruncated,
     guestFrames: a.guestFrames + b.guestFrames,
+    // Summed, not maxed: each is a count of frames or of destinations in ITS pass, and the merged observation
+    // covers both passes. `??` because a merge can be handed an observation stored before these existed.
+    answeredFrames: (a.answeredFrames ?? 0) + (b.answeredFrames ?? 0),
+    undecidedFrames: (a.undecidedFrames ?? 0) + (b.undecidedFrames ?? 0),
+    attemptsDropped: (a.attemptsDropped ?? 0) + (b.attemptsDropped ?? 0),
+    queriesDropped: (a.queriesDropped ?? 0) + (b.queriesDropped ?? 0),
     truncated: a.truncated || b.truncated,
     // A problem on either side is a limit on the merged counts, so it is kept rather than averaged away.
     problem: [a.problem, b.problem].filter(Boolean).join(' '),
@@ -323,6 +413,7 @@ export function mergeEgress(a: EgressObservation | null, b: EgressObservation | 
 export function describeEgress(o: EgressObservation, isolated: boolean): string {
   if (o.problem) return o.problem;
   if (o.guestFrames === 0) return 'The guest put no IPv4 frame on the wire during this run.';
+  const answered = answeredNote(o);
   const external = o.attempts.filter((a) => a.scope === 'external');
   const gate = isolated
     ? 'Outbound was blocked for this run, so nothing left the host; the attempt is what was recorded.'
@@ -330,9 +421,37 @@ export function describeEgress(o: EgressObservation, isolated: boolean): string 
   if (external.length === 0) {
     return `The guest addressed nothing outside the emulator during this run (${o.guestFrames} frame(s)). ${
       isolated ? 'Outbound was blocked.' : 'Outbound was open and went unused.'
-    }`;
+    }${answered}`;
   }
   const names = o.dnsQueries.length ? ` It asked to resolve ${o.dnsQueries.length} name(s).` : '';
   const lost = o.dnsTruncated ? ` ${o.dnsTruncated} DNS question(s) were captured too short to read the name.` : '';
-  return `The guest addressed ${external.length} destination(s) beyond the emulator.${names} ${gate}${lost}`;
+  return `The guest addressed ${external.length} destination(s) beyond the emulator.${names} ${gate}${lost}${answered}`;
+}
+
+/**
+ * The frames this bench provoked, and the bounds that truncated. Appended to every verdict `describeEgress`
+ * returns, including the empty one — "it addressed nothing" is exactly the sentence that must not be read while
+ * 150 of the guest's frames sit uncounted behind it.
+ */
+export function answeredNote(o: EgressObservation): string {
+  const parts: string[] = [];
+  if (o.answeredFrames > 0) {
+    parts.push(
+      `${o.answeredFrames} frame(s) were this guest ANSWERING connections opened from outside it — in this rung, the probes this workbench itself sent — and are not destinations the firmware chose.`,
+    );
+  }
+  if (o.undecidedFrames > 0) {
+    parts.push(
+      `${o.undecidedFrames} TCP frame(s) were captured too short to read the flags, so who opened those flows is undecided; they are listed above rather than dropped.`,
+    );
+  }
+  if (o.attemptsDropped > 0) {
+    parts.push(
+      `${o.attemptsDropped} further distinct destination(s) went past this run's limit of ${MAX_ATTEMPTS} and are not listed; the ones shown are those with the most frames, never the first to arrive.`,
+    );
+  }
+  if (o.queriesDropped > 0) {
+    parts.push(`${o.queriesDropped} further distinct name(s) went past this run's limit of ${MAX_QUERIES}.`);
+  }
+  return parts.length ? ` ${parts.join(' ')}` : '';
 }

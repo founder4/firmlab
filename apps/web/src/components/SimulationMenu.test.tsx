@@ -182,6 +182,15 @@ describe('SimulationMenu — the guest’s egress', () => {
     },
   });
 
+  const emptyEgress = {
+    attempts: [],
+    dnsQueries: [],
+    dnsTruncated: 0,
+    guestFrames: 0,
+    truncated: false,
+    problem: '',
+  };
+
   it('shows the last finished run’s destinations without anything being launched', async () => {
     mockApi.runs.mockResolvedValue(ledger);
     mockApi.runDetail.mockResolvedValue(detail({ isolated: false }));
@@ -216,6 +225,45 @@ describe('SimulationMenu — the guest’s egress', () => {
     mockApi.runDetail.mockResolvedValue(detail({ isolated: true }));
     render(<SimulationMenu imageId="img1" />);
     expect(await screen.findByText(/floor and not a total/i)).toBeInTheDocument();
+  });
+
+  it('says the frames it kept OUT of the list, so the bench’s own probes are not read as intent', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(detail({ isolated: true, egress: { ...emptyEgress, answeredFrames: 150 } }));
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText(/150 frames were this guest ANSWERING/)).toBeInTheDocument();
+  });
+
+  it('bounds the printed list and states what the bound cut, by frames and not by arrival', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      address: `203.0.113.${i + 1}`,
+      protocol: 'tcp' as const,
+      port: 80,
+      scope: 'external' as const,
+      frames: 60 - i,
+    }));
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(
+      detail({ isolated: true, egress: { ...emptyEgress, attempts: many, attemptsDropped: 7 } }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    // The most-addressed is printed, the least-addressed is not, and the page says so rather than just ending.
+    expect(await screen.findByText('203.0.113.1:80')).toBeInTheDocument();
+    expect(screen.queryByText('203.0.113.60:80')).not.toBeInTheDocument();
+    expect(screen.getByText(/Showing the 40 most-addressed of 60/)).toBeInTheDocument();
+    // And the cap the PARSER applied, which is a different loss and is stated separately.
+    expect(screen.getByText(/7 further destinations went past this run's limit/)).toBeInTheDocument();
+  });
+
+  it('shows none of those sentences for a run stored before the counters existed', async () => {
+    // Optional forever: an older stored egress carries no `answeredFrames`, and `0` and `absent` must both be
+    // silent — a "0 frames were answers" line would assert a measurement that build never made.
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(detail({ isolated: true }));
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('128.138.140.44:123')).toBeInTheDocument();
+    expect(screen.queryByText(/ANSWERING/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/went past this run's limit/)).not.toBeInTheDocument();
   });
 
   it('shows nothing at all for a run stored before the observation existed', async () => {

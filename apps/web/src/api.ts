@@ -189,6 +189,16 @@ export interface EgressObservation {
   dnsQueries: DnsQuery[];
   dnsTruncated: number;
   guestFrames: number;
+  /**
+   * Optional forever, all four: a boot stored before the direction gate existed carries none of them, and this
+   * type is re-read for every run that image has ever had. `answeredFrames` counts TCP frames the guest sent on
+   * flows it never opened — its answers to the probes this workbench itself made, which the panel used to list
+   * as destinations the firmware chose.
+   */
+  answeredFrames?: number;
+  undecidedFrames?: number;
+  attemptsDropped?: number;
+  queriesDropped?: number;
   truncated: boolean;
   problem: string;
 }

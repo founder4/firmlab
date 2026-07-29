@@ -543,6 +543,13 @@ function DaemonList({ diagnosis }: { diagnosis: BootDiagnosis }): JSX.Element | 
   );
 }
 
+/**
+ * How many destination rows the panel prints. The parser keeps up to 200; printing all of them made one boot's
+ * page 8582 px tall. Sorted by frame count upstream, so this cuts the least-addressed and says so — a cut by
+ * arrival order would make the visible SET an artifact of capture order.
+ */
+const MAX_ROWS = 40;
+
 /** Signal numbers the firmadyne trace produces, named. The NUMBER stays beside the name — it is what was traced. */
 const SIGNAL_NAME: Record<number, string> = { 4: 'SIGILL', 6: 'SIGABRT', 7: 'SIGBUS', 8: 'SIGFPE', 11: 'SIGSEGV' };
 
@@ -616,6 +623,11 @@ function EgressPanel({ egress, isolated }: { egress: EgressObservation; isolated
           {s.egressTruncatedNames(egress.dnsTruncated)}
         </div>
       )}
+      {(egress.queriesDropped ?? 0) > 0 && (
+        <div className="hint" style={{ marginTop: 4 }}>
+          {s.egressQueriesDropped(egress.queriesDropped ?? 0)}
+        </div>
+      )}
 
       {external.length + other.length === 0 ? (
         <div className="hint" style={{ marginTop: 10 }}>
@@ -627,8 +639,10 @@ function EgressPanel({ egress, isolated }: { egress: EgressObservation; isolated
             {s.egressDestinations}
           </div>
           {/* External first and always shown; the rest follow, because a firmware asking the emulator's own
-              resolver is context for the list above rather than noise to hide. */}
-          {[...external, ...other].map((a) => (
+              resolver is context for the list above rather than noise to hide. Bounded on screen — the parser's
+              cap is 200 and one boot printed 150 rows, which made the page eight thousand pixels tall and buried
+              the two that mattered. The cut is by frame count, never by arrival, and it says what it cut. */}
+          {[...external, ...other].slice(0, MAX_ROWS).map((a) => (
             <div
               key={`${a.protocol}-${a.address}-${a.port ?? ''}`}
               style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 12.5, marginBottom: 2 }}
@@ -648,6 +662,28 @@ function EgressPanel({ egress, isolated }: { egress: EgressObservation; isolated
               </span>
             </div>
           ))}
+          {external.length + other.length > MAX_ROWS && (
+            <div className="hint" style={{ marginTop: 4 }}>
+              {s.egressMore(MAX_ROWS, external.length + other.length)}
+            </div>
+          )}
+          {(egress.attemptsDropped ?? 0) > 0 && (
+            <div className="hint" style={{ marginTop: 4 }}>
+              {s.egressDropped(egress.attemptsDropped ?? 0)}
+            </div>
+          )}
+        </div>
+      )}
+      {/* Under the list on purpose: it is the sentence that stops a reader counting the bench's own probes as
+          the firmware's intent, and it belongs where those rows used to be. */}
+      {(egress.answeredFrames ?? 0) > 0 && (
+        <div className="hint" style={{ marginTop: 8 }}>
+          {s.egressAnswered(egress.answeredFrames ?? 0)}
+        </div>
+      )}
+      {(egress.undecidedFrames ?? 0) > 0 && (
+        <div className="hint" style={{ marginTop: 4 }}>
+          {s.egressUndecided(egress.undecidedFrames ?? 0)}
         </div>
       )}
     </div>
