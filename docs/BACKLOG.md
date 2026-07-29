@@ -230,6 +230,48 @@ of "known-incomplete semantics" exists without hunting through the sections abov
   reporter's viewport width and a screenshot; the likeliest candidate is the copilot output, which no image in
   the corpus has ever had stored, and which is now inside the `.md` measure and `overflow-wrap: anywhere`.
 
+## Emulation — the guest's own egress (2026-07-29)
+- ✅ **The emulated guest had unrestricted internet and nothing recorded it** (2026-07-29, deploy `fb3a89e`) — the
+  full-system rung hands the guest `-netdev user`, emulation is behind no flag, and the shell says *"Local-only.
+  Never expose to the internet"*. **The design turned on one measurement**: does cutting the egress also cut the
+  visibility of the attempt? Run in-container on a MIPS BE guest built from the WR940N's own busybox, pinging
+  8.8.8.8, booted twice with nothing changed but `restrict` — `on` gave 9 frames (the guest's ARP, its 3 ICMP to
+  8.8.8.8, no replies), `off` gave 12 (the same 3 ICMP plus 3 replies). `filter-dump` hangs off the netdev, so a
+  frame the guest emits is captured before slirp decides whether to forward it: **blocking the traffic does not
+  hide the attempt.** Both captures ship as fixtures and pin exactly that. So `providers/egress.ts` (pure, 26
+  tests) records destinations and DNS QNAMEs unconditionally, and `FIRMLAB_EMU_ISOLATE` is a separate switch.
+  `filter-dump`'s `maxlen` went 128 → 256 because a DNS question's name starts 54 bytes in and 128 cut real vendor
+  hostnames in half. _Two defects the guards caught before the first commit: six literal NUL bytes used as
+  composite-map-key separators (the exact trap CLAUDE.md documents, in a file at its most dangerous moment), and
+  the real bug underneath — a DNS label is length-prefixed, so its content is arbitrary bytes, and that string was
+  being joined into a map key and rendered into a panel. `parseDnsQName` refuses a non-hostname label now._
+- ⚠ **The flag defaults to PERMISSIVE, deliberately and for now.** Every other lane here is "off ⇒ nothing
+  leaves", so the flag is named for what enabling it does (`FIRMLAB_EMU_ISOLATE`) rather than for the egress,
+  which would have had to default ON — an opt-out switch in a list of opt-ins. Its `egress` prose says in both
+  languages, in capitals, that a firmware under analysis reaches the internet while it is off. **The headline
+  claim is therefore still false by default, and that is now an operator decision rather than an unremarked
+  fact.** Flipping the default is a one-line change; what should decide it is whether any rung depends on
+  outbound, which the item below makes measurable.
+- ▢ **A single boot is a floor, not a total — measured, and it nearly produced a wrong conclusion.** Three
+  full-system runs of the WDR3600: permissive → **15 external destinations** (a hardcoded NTP pool, UDP/123, no
+  DNS involved); isolated → **0**; isolated again → **the same 15**. The empty run differs from its own isolated
+  twin, not from the permissive one, so the variance is the guest's boot and not the flag — and reading the first
+  isolated run alone would have said "isolation hides the attempt", the opposite of what the controlled capture
+  proves. The panel now states that a boot is a sample. What is open is doing something about it: repeated boots
+  merged, or a stated confidence, rather than leaving the reader to discover the variance the way this did.
+- ▢ **IPv6 is skipped entirely.** `parseEgress` reads IPv4 only; a firmware that phones home over v6 is invisible
+  to it. Deliberate — the rung's networking is v4 and a partial v6 story would be worse than none — but it is a
+  hole in a panel whose whole job is "what did it try to reach".
+- ▢ **`webprobe` and the interception ladder** — the observation is peldaño 1 of the design the operator asked
+  for: see, then AUTHORISE, then inspect and edit (a Burp for emulated firmware). Peldaño 2 is a two-pass
+  approve-then-boot, which fits the rung's existing learn/reach shape. Peldaño 3 re-targets `capture/proxy.ts` —
+  mitmproxy already ships — and emulation gives it something a real device cannot: the rootfs is on disk, so the
+  CA can be injected into the guest's trust store before `rootfs-image.ts` builds the image, the same hook that
+  already stages `/firmadyne/libnvram.so`. The one real unknown is transparent redirection: qemu's user
+  networking has no per-destination allowlist, so intercepting arbitrary destinations needs a controlled DNS and
+  a single mapped endpoint, and the TAP alternative needs `NET_ADMIN` on a bridge-networked VM-backed runtime —
+  the lesson `assessL2Reach`/`looksLikeVmBackedRuntime` already paid for. Deserves its own spike.
+
 ## Reporting & integration
 - ▢ **PDF export** of reports.
 - ✅ **External MCP tool surface** (2026-07-27) — `apps/api/src/mcp/` (`server.ts` + `client.ts` + pure, unit-tested `format.ts`) + project-scoped `.mcp.json`. A stdio MCP server exposing **10 tools** — `list_images`, `coverage`, `findings`, `list_binaries`, `capabilities`, `extract`, `run_worker`, `autonomous_scan`, `symbolic_reachability`, `job_status`. Talks to FirmLab over its own HTTP API rather than importing the providers, deliberately: the routes are where findings sync under idempotent sources and where the honest guards live, and the API process holds SQLite open, so a second in-process writer is a lock conflict waiting to happen. Transport is stdio and the deployed container publishes no host port, so **the `docker exec -i` channel IS the transport** (`claude mcp add firmlab -- docker exec -i firmlab node /app/apps/api/dist/mcp/server.js`); `FIRMLAB_API` + `FIRMLAB_MCP_HEADERS` cover a remote/SSO'd instance. **The non-façade part is `format.ts`:** handing this output to a model reintroduces the conflation the CoverageBanner exists to prevent, at a layer with no banner — `{"findings": []}` becomes "no vulnerabilities were found", which an empty list cannot support. So a result that could read as a negative carries its own verdict *inline, in the first field*: `findingsPayload` never emits a list without the coverage sentence and the names of the stages that produced nothing; `scanPayload` lifts the workers that did NOT complete above the narrative; `reachabilityPayload` restates `not_reached_in_budget` as the absence of a result rather than a negative one; and the server's `initialize` instructions brief the model on the proof-state ladder plus the two inferences that are always wrong here. Documented as AUTONOMOUS-WORKERS §10. **Validated in-container against the real bench (2026-07-27)** by driving the server over the `docker exec -i` channel exactly as an agent would: handshake at protocol `2025-06-18` with all 10 tools listed and a 1607-char instruction brief; 16 images and 19/19 tools enumerated; `symbolic_reachability` on the real DVRF derived `strcpy` from `pwnable/Intro/stack_bof_01` and returned **reached** (MIPS32) with the reachability-not-exploitability meaning attached, while an operator-named `system` on `sbin/chkntfs` returned `absent` carrying "nothing was learned"; a full agent-driven `autonomous_scan` ran **15 workers → 94 findings** with the 3 incomplete workers and the honest gaps ordered *above* the narrative, and coverage then closed the loop at 15/15. **Two defects the real run exposed, both now fixed + unit-pinned:** an image holding real findings from individually-run stages was headlined `UNEXAMINED` beside a verdict calling those findings real (now `COVERAGE UNKNOWN`), and the manual-probe hint claimed a binary "imports" a symbol that the sweep had only seen in its strings — angr resolved no PLT entry for it (see the `binvuln` entry below). _Follow-up (updated 2026-07-27): resources, prompts and the write path are now **closed** — `firmlab_add_image` ingests a file the SERVER can read (it tells the agent to `docker cp` first when the file is on the host and the server is in the container), three resources expose the proof-state guide plus report/disclosure-draft templates, and three prompts encode the methodology (`triage_image`, `hunt_memory_safety`, `compare_versions`), each written to steer away from the inferences the instructions warn about. Still open: the **third pass has not been run**_

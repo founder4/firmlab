@@ -457,6 +457,10 @@ function EgressPanel({ egress, isolated }: { egress: EgressObservation; isolated
       <div className="hint" style={{ marginTop: 6 }}>
         {isolated ? s.egressIsolatedNote : s.egressOpenWarning}
       </div>
+      {/* The bound on the whole list, and it is a measured one — see the locale comment. */}
+      <div className="hint" style={{ marginTop: 4 }}>
+        {s.egressOneBoot}
+      </div>
 
       {egress.problem && (
         <div className="hint" style={{ marginTop: 6 }}>

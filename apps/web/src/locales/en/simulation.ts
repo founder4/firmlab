@@ -62,6 +62,13 @@ export const simulation = {
     'This boot was NOT isolated: the firmware could reach these from this machine. Turn on FIRMLAB_EMU_ISOLATE in Settings to keep this list and drop the reachability.',
   egressIsolatedNote:
     'This boot was isolated, so nothing below was reached. Blocking the traffic does not hide the attempt — this is what the firmware asked for.',
+  /**
+   * Measured, not cautious boilerplate: three boots of one WDR3600 gave 15 external destinations, 0, and the same
+   * 15 again — the empty one differing from its own isolated twin, not from the permissive run. A boot is a
+   * sample of what this firmware does, so one list is a floor and never a total.
+   */
+  egressOneBoot:
+    'One boot is one sample. The same firmware booted twice does not always reach the same point, so this list is a floor and not a total — a destination missing here may simply not have been tried in this run.',
   egressNames: 'Names it asked to resolve',
   egressDestinations: 'Addresses it aimed at',
   egressNone: 'The guest addressed nothing beyond the emulator during this run.',
