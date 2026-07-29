@@ -463,6 +463,9 @@ export const en = {
       angr: 'Symbolic reachability (is a dangerous sink on a live path?)',
       'gdb-multiarch': 'Dynamic reproduction of a memory-safety candidate (does it actually crash?)',
       fwhunt: 'UEFI implant detection with real FwHunt code-pattern rules',
+      // The engine, never the rules: FirmLab ships no signatures, so this line promises a scan and names whose
+      // corpus it would run. A gloss that said "detects implants" would claim what only somebody's rules can.
+      yara: 'Rule-based rootfs scan for known implants, webshells and backdoors, with a corpus you supply',
     } satisfies Record<ToolId, string>,
     /**
      * Shown in the version column for a tool detected by PATH existence, because executing its probe costs more

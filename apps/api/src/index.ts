@@ -52,6 +52,7 @@ import { toolRoutes } from './routes/tools.js';
 import { ubootRoutes } from './routes/uboot.js';
 import { updatepathRoutes } from './routes/updatepath.js';
 import { webprobeRoutes } from './routes/webprobe.js';
+import { yarascanRoutes } from './routes/yarascan.js';
 import { registerSecurity } from './security.js';
 import { getFlagOverrides } from './settings.js';
 import { getDb } from './store.js';
@@ -150,6 +151,7 @@ async function main(): Promise<void> {
       await api.register(storageRoutes);
       await api.register(toolRoutes);
       await api.register(captureRoutes);
+      await api.register(yarascanRoutes);
     },
     { prefix: '/api' },
   );

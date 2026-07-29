@@ -441,6 +441,10 @@ export const es: Messages = {
       angr: 'Alcanzabilidad simbólica (¿está un sumidero peligroso en un camino vivo?)',
       'gdb-multiarch': 'Reproducción dinámica de un candidato de seguridad de memoria (¿llega a fallar de verdad?)',
       fwhunt: 'Detección de implantes UEFI con reglas reales de patrón de código de FwHunt',
+      // El motor, nunca las reglas: FirmLab no publica firmas propias, así que la frase promete un escaneo y dice
+      // de quién es el corpus que ejecutaría. Que la herramienta falte es una respuesta ausente, no un problema
+      // ausente — y que el corpus falte es una tercera cosa distinta, que el proveedor declara aparte.
+      yara: 'Escaneo del rootfs por reglas en busca de implantes, webshells y puertas traseras conocidos, con un corpus que aportas tú',
     },
     /** Ni es una versión ni debe confundirse con una: dice que el binario está y que no se le preguntó cuál es. */
     installed: 'instalado',

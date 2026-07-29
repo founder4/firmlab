@@ -82,6 +82,7 @@ export type ToolId =
   | 'chipsec'
   | 'angr'
   | 'fwhunt'
+  | 'yara'
   | 'gdb-multiarch';
 
 interface ToolSpec {
@@ -155,6 +156,15 @@ const TOOLS: readonly ToolSpec[] = [
     probe: ['-c', 'import angr; print("angr", angr.__version__)'],
     group: 'analyze',
     timeoutMs: 30000,
+  },
+  {
+    // The rule engine for the embedded-Linux implant sweep. It is detected here; the RULES are not shipped with it
+    // — `providers/yarascan.ts` reads the corpus from `FIRMLAB_YARA_RULES` and has an empty built-in on purpose,
+    // so "yara is installed" and "this deployment can answer the question" are deliberately two different facts.
+    id: 'yara',
+    bin: 'yara',
+    probe: ['--version'],
+    group: 'analyze',
   },
   { id: 'gdb-multiarch', bin: 'gdb-multiarch', probe: ['--version'], group: 'emulate' },
   {

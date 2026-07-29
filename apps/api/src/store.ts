@@ -38,6 +38,7 @@ export type JobKind =
   | 'dynprobe'
   | 'nvram'
   | 'kernel'
+  | 'yarascan'
   | 'updatepath';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 
