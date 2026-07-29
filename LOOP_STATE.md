@@ -34,15 +34,20 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
       abierto es el LEDGER: `FindingsLedger.tsx:358` pinta sólo `t.findings.withdrawnSuffix` junto al autor y la
       razón no aparece — impacto: bajo. Pendiente para la próxima iteración con este alcance corregido.
 - [x] `FuzzResult.reason` sin lector — impacto: bajo (resultó **alto**) — evidencia: `api.ts:231`.
-- [ ] `BootDiagnosis.cause` se muestra como identificador crudo — impacto: bajo — evidencia:
-      `SimulationMenu.tsx:466` pinta `{egressShown.unreachable.cause}` sin pasar por locales.
+- [~] `BootDiagnosis.cause` se muestra como identificador crudo — **descartado: es la convención de la casa, no
+      un descuido.** Este proyecto imprime los códigos verbatim y los glosa en la frase de al lado — es
+      literalmente lo que hace `ProofStateBadge` con `proofState` (test: «prints the proof-state CODE verbatim
+      and glosses it in Spanish»). Aquí la glosa es `summary`, que va inmediatamente debajo y la compone el
+      proveedor midiendo. Traducir el código lo alejaría del valor que viaja en el JSON y en el MCP, y añadir
+      una segunda redacción de la misma frase es ruido. Evidencia: `SimulationMenu.tsx:466` + `FindingsLedger.tsx`
+      `PROOF_STATE_META`.
 - [x] `egress.attempts` contaba como «a dónde quiso ir» las RESPUESTAS a nuestras propias sondas — impacto:
       **alto** — evidencia: captura de `/image/c8e1ffa0/simulate` sobre el contenedor desplegado: ~150 filas
       `10.0.2.2:<puerto efímero> tcp · the emulator itself · 1 frame`. 10.0.2.2 es el host visto desde slirp y
       esos puertos altos son el lado NATeado de los reenvíos que ABRIMOS nosotros, así que el panel presenta como
       intención del firmware el eco de la intervención del banco de pruebas. Además la lista no lleva cota: la
       página mide 8582 px de alto y las dos filas que importan quedan sepultadas.
-- [ ] La nota de aislamiento se imprime aunque la lista esté vacía — impacto: bajo — evidencia: captura
+- [x] La nota de aislamiento se imprime aunque la lista esté vacía — impacto: bajo — evidencia: captura
       `/image/c8e1ffa0/simulate` tras el arranque `f5301511-1d6`: «This boot was isolated, so nothing below was
       reached … this is what the firmware asked for» encima de «The guest addressed nothing beyond the emulator»,
       y el firmware no pidió nada. `SimulationMenu.tsx` la pinta incondicionalmente.
@@ -162,3 +167,15 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
   `www.cisa.gov · nothing about your firmware`, y las 6 líneas de «Never sent, on any run». 0 errores de consola.
   La línea «Showing N of M components» no aparece en esa imagen porque tiene 7 y 5 componentes, por debajo de la
   cota — la rama se comporta bien, no es un fallo; su caso está cubierto por test.
+- iter 9: cerrada la nota de aislamiento. Las dos frases de política están escritas sobre una lista («nothing
+  below was reached», «could reach these from this machine») y se imprimían siempre, así que un arranque que no
+  se dirigió a nada pintaba una promesa de destinos encima de un hueco, y la aislada afirmaba «esto es lo que el
+  firmware pidió» de un firmware que no pidió nada. Que es justo el caso del MR3220 y estaba en pantalla ahora
+  mismo. Las variantes vacías dicen lo que sí vale la pena: con bloqueo, que no tuvo nada que detener y que son
+  dos hechos independientes; sin bloqueo, que la puerta estaba abierta y el invitado no la cruzó — medición de
+  ESE arranque, no propiedad del firmware. Conmuta por el recuento EXTERNO, no por la lista entera. 4 tests.
+  Descartado en la misma auditoría: `BootDiagnosis.cause` crudo (razón escrita arriba).
+  Verificación: `pnpm test` → core 75 / api 1752 / web 326 verde · `pnpm check` → Done · `pnpm biome` → limpio
+  (tras `biome:fix`) · y sobre el despliegue real (`098779a`), leyendo `/image/c8e1ffa0/simulate` con playwright:
+  PRESENTE «the block had nothing to stop», AUSENTES «nothing below was reached» y «this is what the firmware
+  asked for». 0 errores de consola.
