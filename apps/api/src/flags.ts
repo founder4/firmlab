@@ -39,7 +39,8 @@ export type LaneFlagName =
   | 'FIRMLAB_RESEARCH'
   | 'FIRMLAB_HASH_LOOKUP'
   | 'FIRMLAB_CAPTURE'
-  | 'FIRMLAB_CAPTURE_GATEWAY';
+  | 'FIRMLAB_CAPTURE_GATEWAY'
+  | 'FIRMLAB_EMU_ISOLATE';
 
 /** A lane flag the operator may flip at runtime — its structure. The description of it is in the catalogue. */
 export interface ToggleableFlag {
@@ -61,6 +62,15 @@ export const TOGGLEABLE_FLAGS: readonly ToggleableFlag[] = [
   { name: 'FIRMLAB_HASH_LOOKUP', requires: 'FIRMLAB_RESEARCH', outward: true },
   { name: 'FIRMLAB_CAPTURE', outward: true },
   { name: 'FIRMLAB_CAPTURE_GATEWAY', requires: 'FIRMLAB_CAPTURE', outward: false },
+  // The one flag here whose OFF state is the outward one, and the table must not hide that.
+  //
+  // Every other lane is "off ⇒ nothing leaves", so a flag named for the egress would have had to default ON to
+  // preserve today's behaviour — an opt-OUT switch in a list of opt-ins, which is the shape an operator misreads.
+  // This is named for what turning it on DOES: it isolates the guest. `outward: false` is therefore literal —
+  // enabling it sends nothing anywhere, it stops something being sent — and the honesty lives in the prose, which
+  // has to say plainly that the emulated firmware reaches the internet while this is off. See `providers/egress.ts`
+  // for the measurement that makes the default defensible: the attempt is recorded either way.
+  { name: 'FIRMLAB_EMU_ISOLATE', outward: false },
 ];
 
 const ALLOWED: ReadonlySet<string> = new Set<string>(TOGGLEABLE_FLAGS.map((f) => f.name));

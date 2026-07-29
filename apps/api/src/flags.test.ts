@@ -70,8 +70,41 @@ describe('resolveFlags is localised in its prose and identical in everything els
       'FIRMLAB_HASH_LOOKUP',
       'FIRMLAB_CAPTURE',
       'FIRMLAB_CAPTURE_GATEWAY',
+      'FIRMLAB_EMU_ISOLATE',
     ]);
     expect(find(resolveFlags(env({}), {}, 'es'), 'FIRMLAB_HASH_LOOKUP').requires).toBe('FIRMLAB_RESEARCH');
+  });
+
+  /**
+   * The one flag in the table whose OFF state is the outward one, which makes its prose the only thing standing
+   * between an operator and a firmware that reaches the internet from their machine. Both languages have to say
+   * that plainly, in the `egress` line, which is what a reader consults BEFORE flipping a switch.
+   */
+  describe('FIRMLAB_EMU_ISOLATE — the inverted flag', () => {
+    it('is off by default, which is the permissive direction, and reports that as the default', () => {
+      const f = find(resolveFlags(env({}), {}), 'FIRMLAB_EMU_ISOLATE');
+      expect(f.enabled).toBe(false);
+      expect(f.source).toBe('default');
+      // Turning it ON sends nothing anywhere — it stops the guest sending — so it is not an outward switch.
+      expect(f.outward).toBe(false);
+    });
+
+    it('warns, in both languages, that the emulated firmware reaches the internet while it is off', () => {
+      const en = find(resolveFlags(env({}), {}, 'en'), 'FIRMLAB_EMU_ISOLATE');
+      const es = find(resolveFlags(env({}), {}, 'es'), 'FIRMLAB_EMU_ISOLATE');
+      expect(en.egress).toContain('CAN REACH THE INTERNET');
+      expect(es.egress).toContain('PUEDE ALCANZAR INTERNET');
+      // And both state the property that makes a permissive default defensible: the attempt is recorded anyway.
+      expect(en.egress).toMatch(/does not hide the attempt/i);
+      expect(es.egress).toMatch(/no oculta el intento/i);
+    });
+
+    it('takes an override, so the operator can cut the guest off without a restart', () => {
+      const f = find(resolveFlags(env({}), { FIRMLAB_EMU_ISOLATE: '1' }), 'FIRMLAB_EMU_ISOLATE');
+      expect(f.enabled).toBe(true);
+      expect(f.source).toBe('override');
+      expect(f.environmentValue).toBe(false);
+    });
   });
 
   it('keeps the hash-lookup egress explicit in Spanish: your firmware’s hashes reach a third party', () => {

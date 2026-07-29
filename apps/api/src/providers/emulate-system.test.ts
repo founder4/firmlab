@@ -61,6 +61,46 @@ describe('buildFullSystemArgs', () => {
     expect(buildFullSystemArgs('malta', '/k', '/r.img', []).join(' ')).toContain('user,id=n0 ');
   });
 
+  /**
+   * `FIRMLAB_EMU_ISOLATE`. The default is PERMISSIVE, deliberately and for now: this rung has always given the
+   * guest an open netdev, and flipping that silently would change boot behaviour on every image already measured.
+   * The flag exists so the choice is the operator's, and the guard that makes the default defensible is that the
+   * attempt is captured either way (see `egress.ts` and its real-capture tests).
+   */
+  it('leaves the guest reachable by default, and says so by omission', () => {
+    expect(buildFullSystemArgs('malta', '/k', '/r.img', [{ host: 8080, guest: 80 }]).join(' ')).not.toContain(
+      'restrict',
+    );
+  });
+
+  it('cuts the guest off when asked, WITHOUT dropping the forwards the verdict is read through', () => {
+    // qemu's own contract: `restrict` "does not affect any explicitly set forwarding rules". If it did, turning
+    // isolation on would silently disable the rung's only way of establishing that a service answered — an
+    // honesty fix that quietly destroys the measurement it was protecting.
+    const args = buildFullSystemArgs('malta', '/k', '/r.img', [{ host: 8080, guest: 80 }], null, null, true).join(' ');
+    expect(args).toContain('restrict=on');
+    expect(args).toContain('hostfwd=tcp::8080-:80');
+  });
+
+  it('keeps restrict inside the netdev when slirp has been moved onto the firmware’s subnet', () => {
+    const args = buildFullSystemArgs(
+      'malta',
+      '/k',
+      '/r.img',
+      [{ host: 8080, guest: 80 }],
+      { guestAddress: '192.168.0.1', slirpNet: '192.168.0.0/24', slirpHost: '192.168.0.2', kernelIp: null },
+      null,
+      true,
+    ).join(' ');
+    expect(args).toMatch(/-netdev user,id=n0,restrict=on,net=192\.168\.0\.0\/24,host=192\.168\.0\.2,hostfwd=/);
+  });
+
+  it('captures enough of a frame to read a DNS question’s name', () => {
+    // 128 left 74 bytes after Ethernet+IP+UDP+the DNS header, which cuts real vendor hostnames in half — and
+    // `parseDnsQName` discards a truncated name rather than print a different host.
+    expect(buildFullSystemArgs('malta', '/k', '/r.img', [], null, '/tmp/p.pcap').join(' ')).toContain('maxlen=256');
+  });
+
   it('boots headless with a readable serial console, which qemu needs to start at all', () => {
     // Measured in-container: without these qemu instantiates its default VGA and dies with
     // `failed to find romfile "vgabios-cirrus.bin"` before executing one guest instruction. The serial is also

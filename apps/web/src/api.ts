@@ -142,6 +142,37 @@ export interface ChipsecResult {
   isolation?: string;
 }
 
+/**
+ * Where a booted firmware tried to go, read off its own wire by `providers/egress.ts`.
+ *
+ * Every field is optional on the result that carries it, and permanently: a full-system run stored before this
+ * existed has none of them, and a required field would make these types assert something about a persisted row
+ * they cannot know — the class of defect that took down the whole image view once already.
+ */
+export interface EgressAttempt {
+  address: string;
+  protocol: 'tcp' | 'udp' | 'icmp' | 'other';
+  port?: number;
+  /** `external` is the egress; the rest is the firmware talking to the sandbox, its own subnet, or announcing. */
+  scope: 'external' | 'emulator' | 'local' | 'multicast';
+  frames: number;
+}
+
+export interface DnsQuery {
+  name: string;
+  server: string;
+  frames: number;
+}
+
+export interface EgressObservation {
+  attempts: EgressAttempt[];
+  dnsQueries: DnsQuery[];
+  dnsTruncated: number;
+  guestFrames: number;
+  truncated: boolean;
+  problem: string;
+}
+
 /** Active web-probe result — a reproduced hit against the emulated service is confirmed_in_emulation. */
 export interface WebProbeResult {
   available: boolean;

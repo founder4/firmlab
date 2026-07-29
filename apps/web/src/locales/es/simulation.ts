@@ -45,4 +45,25 @@ export const simulation: Messages['simulation'] = {
   setupMode: (mode: string) => `modo ${mode}`,
   testKey: (key: string) => `clave de prueba: ${key}`,
   nvramVars: (n: number) => `${n} variable(s) NVRAM`,
+
+  egressTitle: 'A dónde intentó ir',
+  egressBlocked: 'salida bloqueada',
+  egressOpen: 'salida abierta',
+  egressOpenWarning:
+    'Este arranque NO estaba aislado: el firmware podía alcanzar esto desde esta máquina. Enciende FIRMLAB_EMU_ISOLATE en Ajustes para conservar la lista y quitarle el alcance.',
+  egressIsolatedNote:
+    'Este arranque estaba aislado, así que no se alcanzó nada de lo de abajo. Bloquear el tráfico no oculta el intento — esto es lo que el firmware pidió.',
+  egressNames: 'Nombres que pidió resolver',
+  egressDestinations: 'Direcciones a las que apuntó',
+  egressNone: 'El guest no se dirigió a nada más allá del emulador durante esta ejecución.',
+  egressScope: {
+    external: 'más allá del emulador',
+    emulator: 'el emulador mismo',
+    local: 'su propia subred',
+    multicast: 'anuncio',
+  },
+  egressFrames: (n: number) => `${n} trama${n === 1 ? '' : 's'}`,
+  egressAskedOf: (server: string) => `preguntado a ${server}`,
+  egressTruncatedNames: (n: number) =>
+    `${n} pregunta(s) DNS se capturaron demasiado cortas para leer el nombre, y un nombre truncado es otro nombre.`,
 };

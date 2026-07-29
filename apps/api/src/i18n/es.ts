@@ -521,5 +521,12 @@ export const es: Messages = {
         'Tu afirmación de que FirmLab YA está en el camino del objetivo — es su ruta por defecto, o le llega un espejo de puerto. No lanza nada; es lo que hace innecesario un envenenamiento ARP, de modo que una sesión de captura se posiciona como `gateway`. Decláralo en falso y la sesión dará el objetivo por alcanzado y no capturará nada.',
       egress: 'Nada por sí solo. Cambia cómo se posiciona una sesión de captura, no lo que envía.',
     },
+    FIRMLAB_EMU_ISOLATE: {
+      label: 'Aislar de internet al firmware emulado',
+      effect:
+        'Añade `restrict=on` a la red del guest emulado, de modo que un firmware arrancado bajo emulación de sistema completo deja de alcanzar nada más allá del emulador. Los reenvíos host→guest siguen funcionando, así que el peldaño sigue llegando a sus propios servicios. El guest sigue viendo un gateway que responde, así que obtiene timeouts en lugar de «red no disponible» — un firmware se comporta más como de costumbre con esto que con el enlace caído.',
+      egress:
+        'MIENTRAS ESTO ESTÉ APAGADO, UN FIRMWARE QUE ESTÁS ANALIZANDO PUEDE ALCANZAR INTERNET DESDE ESTA MÁQUINA. Medido sobre este corpus: un TP-Link WDR3600 arrancado alcanzó tres servidores NTP públicos. Encenderlo no envía nada a ninguna parte — impide que el guest envíe. En ambos casos se registra y se muestra lo que el firmware INTENTÓ alcanzar: bloquear el tráfico no oculta el intento.',
+    },
   },
 };

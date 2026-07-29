@@ -45,4 +45,35 @@ export const simulation = {
   setupMode: (mode: string) => `${mode} mode`,
   testKey: (key: string) => `test key: ${key}`,
   nvramVars: (n: number) => `${n} NVRAM var(s)`,
+
+  /**
+   * Where the booted firmware tried to go. Two words carry this block and neither may soften in translation:
+   * the firmware ADDRESSED these — a SYN into a black hole looks identical from the sending side — and whether
+   * it was ALLOWED to get there is a property of the run, not of the firmware.
+   *
+   * Never translated: the addresses, the port numbers, the protocol names and the hostnames. Those are what was
+   * on the wire.
+   */
+  egressTitle: 'Where it tried to go',
+  egressBlocked: 'outbound blocked',
+  egressOpen: 'outbound open',
+  /** The state an operator must not misread as safety — this run could reach the internet. */
+  egressOpenWarning:
+    'This boot was NOT isolated: the firmware could reach these from this machine. Turn on FIRMLAB_EMU_ISOLATE in Settings to keep this list and drop the reachability.',
+  egressIsolatedNote:
+    'This boot was isolated, so nothing below was reached. Blocking the traffic does not hide the attempt — this is what the firmware asked for.',
+  egressNames: 'Names it asked to resolve',
+  egressDestinations: 'Addresses it aimed at',
+  egressNone: 'The guest addressed nothing beyond the emulator during this run.',
+  egressScope: {
+    external: 'beyond the emulator',
+    emulator: 'the emulator itself',
+    local: 'its own subnet',
+    multicast: 'announcement',
+  },
+  egressFrames: (n: number) => `${n} frame${n === 1 ? '' : 's'}`,
+  egressAskedOf: (server: string) => `asked of ${server}`,
+  /** A question whose name did not survive the per-frame capture bound. Counted, never printed half-resolved. */
+  egressTruncatedNames: (n: number) =>
+    `${n} DNS question${n === 1 ? '' : 's'} were captured too short to read the name, and a truncated hostname is a different hostname.`,
 };

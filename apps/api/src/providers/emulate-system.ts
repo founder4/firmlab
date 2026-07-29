@@ -53,7 +53,9 @@ import path from 'node:path';
 import tls from 'node:tls';
 import { promisify } from 'node:util';
 import type { Architecture, ProofState } from '@firmlab/core';
+import { type LaneFlagName, effectiveEnv } from '../flags.js';
 import { detectTools } from '../tools.js';
+import { type EgressObservation, describeEgress, mergeEgress, parseEgress } from './egress.js';
 import type { JobHandle } from './jobs.js';
 import { readPortMap } from './portmap-run.js';
 import { type PortProtocol, planForwards } from './portmap.js';
@@ -107,6 +109,17 @@ export interface SystemEmulationResult {
   };
   /** One entry per boot, so both passes stay readable after the fact. Consoles are not duplicated here. */
   passes?: SystemEmulationPass[];
+  /**
+   * Where the firmware tried to go, merged across both passes, and whether it was allowed to get there.
+   *
+   * `isolated` is not decoration: it is the difference between "it addressed three NTP servers" and "it reached
+   * three NTP servers", and only the run knows which. Optional forever, like every field added to a persisted
+   * result type — a result stored before this existed has neither, and a required field would make the web
+   * types assert something they cannot know about it.
+   */
+  egress?: EgressObservation;
+  /** True when this run was booted with `restrict=on`, so nothing below was reached. */
+  isolated?: boolean;
 }
 
 /** A single boot's outcome, summarised. The raw console of the pass the verdict came from is `stdout`. */
@@ -123,6 +136,8 @@ export interface SystemEmulationPass {
   network: GuestNetwork;
   /** What this pass saw on the wire, when this qemu could capture it. */
   wire?: WireObservation;
+  /** What this pass saw the guest ADDRESS. Per pass, because the two boots have different networks. */
+  egress?: EgressObservation;
 }
 
 // === Pure command builders (unit-tested; no I/O) ===
@@ -166,6 +181,12 @@ export function buildFullSystemArgs(
    * `filter-dump` object gets — the run then degrades to console-only inference rather than refusing to boot.
    */
   dumpFile?: string | null,
+  /**
+   * `FIRMLAB_EMU_ISOLATE` — cut the guest off the internet. A PARAMETER, never read from the environment in here:
+   * this function is the unit-tested one, and a builder that consulted `process.env` could not be asked what it
+   * emits under either policy.
+   */
+  isolate = false,
 ): string[] {
   // An empty guest address is qemu's "whatever the guest is", which is right for pass one and wrong the moment
   // slirp has been moved onto the firmware's own subnet — there the forward has to name the address the firmware
@@ -173,6 +194,10 @@ export function buildFullSystemArgs(
   const guestAddr = plan?.guestAddress ?? '';
   const fwd = forwards.map((f) => `hostfwd=tcp::${f.host}-${guestAddr}:${f.guest}`).join(',');
   const netdev = ['user', 'id=n0'];
+  // `restrict=on` isolates the guest from the host and from everything past it, and — qemu's own words — "does not
+  // affect any explicitly set forwarding rules", so the `hostfwd` below still reaches the guest's services and the
+  // rung keeps its verdict. It is appended before the forwards purely for readability of the command line.
+  if (isolate) netdev.push('restrict=on');
   if (plan?.slirpNet) netdev.push(`net=${plan.slirpNet}`);
   if (plan?.slirpHost) netdev.push(`host=${plan.slirpHost}`);
   if (fwd) netdev.push(fwd);
@@ -199,10 +224,13 @@ export function buildFullSystemArgs(
     `file=${rootfsImage},format=raw`,
     '-netdev',
     netdev.join(','),
-    // The frame capture, when this qemu has one. `maxlen` keeps only enough of each frame for its Ethernet, ARP,
-    // IP and TCP headers — the capture exists to read addresses and flags, never payloads, and a firmware that
-    // streams video for two minutes must not be able to fill a disk with it.
-    ...(dumpFile ? ['-object', `filter-dump,id=fd0,netdev=n0,file=${dumpFile},maxlen=128`] : []),
+    // The frame capture, when this qemu has one. `maxlen` keeps only enough of each frame for its headers — the
+    // capture exists to read addresses, flags and the ONE payload field that is a destination rather than content:
+    // the QNAME of a DNS question. That is why it is 256 and no longer 128. A question's name starts 54 bytes in
+    // (Ethernet 14 + IP 20 + UDP 8 + DNS header 12), so 128 left 74 bytes and cut real vendor hostnames in half —
+    // and half a hostname is a different hostname, so `parseDnsQName` had to discard them. 256 leaves 202 bytes,
+    // still nowhere near a body: a firmware that streams video for two minutes must not be able to fill a disk.
+    ...(dumpFile ? ['-object', `filter-dump,id=fd0,netdev=n0,file=${dumpFile},maxlen=256`] : []),
     // `romfile=` (empty) disables the NIC's PXE option ROM. Without it qemu demands `efi-e1000.rom`, which the
     // Debian qemu packages do not ship, and refuses to start — the third romfile this rung tripped over. Nothing
     // is lost: the guest boots from `-kernel`, so a network boot ROM has no job here.
@@ -611,6 +639,12 @@ const EMPTY_WIRE: WireObservation = {
   truncated: false,
   problem: '',
 };
+
+/**
+ * The lane flag that cuts the guest off. Named as the identifier it is — it is an environment variable an operator
+ * greps a compose file for — and typed against the catalogue so a rename cannot leave this string behind.
+ */
+const EMU_ISOLATE_FLAG: LaneFlagName = 'FIRMLAB_EMU_ISOLATE';
 
 /** Bounds on the capture this will read. A boot that talks for two minutes must not be able to grow the parse. */
 const PCAP_MAX_BYTES = 8 * 1024 * 1024;
@@ -1251,6 +1285,8 @@ interface BootOutcome {
   consoleState: { booted: boolean; marker: string | null; panicked: boolean };
   network: GuestNetwork;
   wire: WireObservation | null;
+  /** The same capture, read for the opposite question: what the firmware tried to REACH. */
+  egress: EgressObservation | null;
 }
 
 /**
@@ -1268,7 +1304,7 @@ async function bootOnce(
   label: string,
   handle: JobHandle,
   /** The capture this boot was told to write, and the addresses slirp owns in it. Null = no capture was asked for. */
-  capture: { file: string; emulatorAddresses: string[] } | null,
+  capture: { file: string; emulatorAddresses: string[]; guestAddress: string | null } | null,
 ): Promise<BootOutcome> {
   const command = `${qemu} ${args.join(' ')}`;
   handle.log(`Executing (${label}): ${command}`);
@@ -1346,7 +1382,31 @@ async function bootOnce(
     network: guestNetwork(consoleOutput),
     // A capture that could not be read is a null, never an invented empty observation.
     wire: capture ? readCapture(capture.file, capture.emulatorAddresses, handle) : null,
+    egress: capture ? readEgress(capture.file, capture.emulatorAddresses, capture.guestAddress) : null,
   };
+}
+
+/**
+ * The same file, read for destinations. Silent on failure by design: `readCapture` above already logs whatever is
+ * wrong with this exact file, and saying it twice per pass would bury the boot log the verdict is read from.
+ */
+function readEgress(file: string, emulatorAddresses: string[], guestAddress: string | null): EgressObservation | null {
+  try {
+    if (!fs.existsSync(file)) return null;
+    const size = fs.statSync(file).size;
+    const fd = fs.openSync(file, 'r');
+    try {
+      const want = Math.min(size, PCAP_MAX_BYTES);
+      const buf = Buffer.alloc(want);
+      fs.readSync(fd, buf, 0, want, 0);
+      const out = parseEgress(buf, { emulatorAddresses, guestAddress });
+      return size > PCAP_MAX_BYTES ? { ...out, truncated: true } : out;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
 }
 
 /** Read a capture qemu wrote, bounded, and never throwing — an unreadable file is reported, not fatal. */
@@ -1441,6 +1501,16 @@ export async function runFullSystem(
   const portMap = readPortMap(rootfsDir ?? null);
   handle.log(portMap.reason);
 
+  // The egress policy for THIS run, resolved once and logged, because it is the fact that tells a reader whether
+  // an address below was merely addressed or actually reached. Read through `effectiveEnv` so the Settings toggle
+  // reaches it without a restart, exactly as the other lanes do.
+  const isolate = effectiveEnv()[EMU_ISOLATE_FLAG] === '1';
+  handle.log(
+    isolate
+      ? `${EMU_ISOLATE_FLAG}=1: the guest is cut off with restrict=on. Host→guest forwards still work, and what the firmware tries to reach is still recorded.`
+      : `${EMU_ISOLATE_FLAG} is off: this guest can reach the internet from this host. Everything it addresses is recorded either way; turn the flag on in Settings to keep the observation and drop the reachability.`,
+  );
+
   // A FRESH host port per forward, asked of the OS EVERY pass, rather than a fixed 8080. This is not tidiness:
   // `pkill` is absent in this deployment so the stray sweep never ran, an earlier run's qemu could still hold 8080,
   // and the probe below would then connect to IT and report `confirmed_full_system` for a boot that never happened.
@@ -1462,16 +1532,20 @@ export async function runFullSystem(
   ): Promise<{
     args: string[];
     forwards: BootOutcome['forwards'];
-    capture: { file: string; emulatorAddresses: string[] } | null;
+    capture: { file: string; emulatorAddresses: string[]; guestAddress: string | null } | null;
   }> => {
     const basePort = await allocateHostPort(hostPort);
     const forwards = planForwards(portMap, basePort);
     handle.log(`Forwarding ${forwards.map((f) => `host ${f.host} → guest ${f.guest}/${f.protocol}`).join(', ')}.`);
     const capture = captureDir
-      ? { file: path.join(captureDir, `pass${pass}.pcap`), emulatorAddresses: emulatorAddressesFor(plan) }
+      ? {
+          file: path.join(captureDir, `pass${pass}.pcap`),
+          emulatorAddresses: emulatorAddressesFor(plan),
+          guestAddress: plan?.guestAddress ?? null,
+        }
       : null;
     return {
-      args: buildFullSystemArgs(machine, kernelPath, rootfsImage, forwards, plan, capture?.file ?? null),
+      args: buildFullSystemArgs(machine, kernelPath, rootfsImage, forwards, plan, capture?.file ?? null, isolate),
       forwards,
       capture,
     };
@@ -1491,6 +1565,7 @@ export async function runFullSystem(
       open: o.open,
       network: o.network,
       ...(o.wire ? { wire: o.wire } : {}),
+      ...(o.egress ? { egress: o.egress } : {}),
     });
   };
 
@@ -1562,6 +1637,18 @@ export async function runFullSystem(
         `Declared but silent: ${portMap.declared.map((h) => `${h.port}/${h.protocol}`).join(', ')}. A port the firmware declares and no booted service answers is a gap worth reading, not a parse error.`,
       );
     }
+    // Read from the recorded passes rather than from the two locals, so a run that took only pass one and a run
+    // that took both go through the same merge.
+    const egress = passes.reduce<EgressObservation | null>((acc, p) => mergeEgress(acc, p.egress ?? null), null);
+    if (egress) {
+      handle.log(describeEgress(egress, isolate));
+      for (const q of egress.dnsQueries.slice(0, 12)) {
+        handle.log(`  resolves: ${q.name} (asked of ${q.server}, ${q.frames} time(s))`);
+      }
+      for (const a of egress.attempts.filter((x) => x.scope === 'external').slice(0, 12)) {
+        handle.log(`  addresses: ${a.address}${a.port ? `:${a.port}` : ''}/${a.protocol} — ${a.frames} frame(s)`);
+      }
+    }
     return {
       ran: true,
       strategy: 'full-system',
@@ -1575,6 +1662,10 @@ export async function runFullSystem(
       open: verdictPass.open,
       network: pass1.network,
       ...(pass1.wire ? { wire: pass1.wire } : {}),
+      // Merged across both passes: the same firmware booted twice, and a name it resolved only on the pass that
+      // had a working network is still a name this firmware asks for.
+      ...(egress ? { egress } : {}),
+      isolated: isolate,
       inference: {
         kind: inference.kind,
         reason: inference.reason,

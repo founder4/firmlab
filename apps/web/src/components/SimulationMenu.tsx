@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type BinaryEntry,
   type ChipsecResult,
+  type EgressObservation,
   type EmulationMenu,
   type EmulationRecipe,
   type Job,
@@ -121,7 +122,15 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
   if (!menu) return <div className="empty">{t.simulation.loading}</div>;
 
   const result = job?.result as
-    | ({ command?: string; stdout?: string; stderr?: string; timedOut?: boolean } & Partial<RenodeResult> &
+    | ({
+        command?: string;
+        stdout?: string;
+        stderr?: string;
+        timedOut?: boolean;
+        /** Full-system only, and optional forever: a run stored before the observation existed carries neither. */
+        egress?: EgressObservation;
+        isolated?: boolean;
+      } & Partial<RenodeResult> &
         Partial<ChipsecResult>)
     | null;
   const isRenode = Boolean(result && 'booted' in result);
@@ -380,6 +389,10 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
               )}
             </div>
           )}
+          {/* Above the raw console on purpose: this is the one part of a full-system run that says something
+              about the FIRMWARE's intent rather than about the emulator, and it must not be buried under 4 KB
+              of boot log. Rendered from the stored result, so an older run simply has none and shows nothing. */}
+          {result?.egress && <EgressPanel egress={result.egress} isolated={result.isolated === true} />}
           {result?.command && !isRenode && !isChipsec && (
             <>
               {result.timedOut && <div className="badge badge-medium">{t.simulation.timedOut}</div>}
@@ -412,6 +425,99 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
       )}
 
       <WebProbePanel imageId={imageId} />
+    </div>
+  );
+}
+
+/**
+ * What the booted firmware ADDRESSED, and whether this run let it get there.
+ *
+ * Two things it refuses to say. It never reports a destination as *contacted*: under isolation nothing was
+ * reached by construction, and without isolation a SYN into a black hole is indistinguishable from a completed
+ * handshake on the sending side. And the addresses, ports and hostnames render exactly as they were on the wire —
+ * they are measurements, not chrome, and the only translated words here are the ones around them.
+ *
+ * The `outbound open` state is styled as a warning rather than as a neutral fact, because it is the state in
+ * which a firmware under analysis could reach the internet from the operator's machine.
+ */
+function EgressPanel({ egress, isolated }: { egress: EgressObservation; isolated: boolean }): JSX.Element {
+  const t = useMessages();
+  const s = t.simulation;
+  const external = egress.attempts.filter((a) => a.scope === 'external');
+  const other = egress.attempts.filter((a) => a.scope !== 'external');
+
+  return (
+    <div style={{ marginTop: 12, borderTop: '1px solid var(--border-soft)', paddingTop: 12 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 13 }}>{s.egressTitle}</strong>
+        <span className={`badge ${isolated ? 'badge-ok' : 'badge-high'}`}>
+          {isolated ? s.egressBlocked : s.egressOpen}
+        </span>
+      </div>
+      <div className="hint" style={{ marginTop: 6 }}>
+        {isolated ? s.egressIsolatedNote : s.egressOpenWarning}
+      </div>
+
+      {egress.problem && (
+        <div className="hint" style={{ marginTop: 6 }}>
+          {egress.problem}
+        </div>
+      )}
+
+      {egress.dnsQueries.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div className="eyebrow" style={{ marginBottom: 4 }}>
+            {s.egressNames}
+          </div>
+          {egress.dnsQueries.map((q) => (
+            <div key={`${q.name}@${q.server}`} style={{ fontSize: 12.5, marginBottom: 2 }}>
+              <span className="mono">{q.name}</span>{' '}
+              <span className="hint">
+                — {s.egressAskedOf(q.server)} · {s.egressFrames(q.frames)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {egress.dnsTruncated > 0 && (
+        <div className="hint" style={{ marginTop: 6 }}>
+          {s.egressTruncatedNames(egress.dnsTruncated)}
+        </div>
+      )}
+
+      {external.length + other.length === 0 ? (
+        <div className="hint" style={{ marginTop: 10 }}>
+          {s.egressNone}
+        </div>
+      ) : (
+        <div style={{ marginTop: 10 }}>
+          <div className="eyebrow" style={{ marginBottom: 4 }}>
+            {s.egressDestinations}
+          </div>
+          {/* External first and always shown; the rest follow, because a firmware asking the emulator's own
+              resolver is context for the list above rather than noise to hide. */}
+          {[...external, ...other].map((a) => (
+            <div
+              key={`${a.protocol}-${a.address}-${a.port ?? ''}`}
+              style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 12.5, marginBottom: 2 }}
+            >
+              <span className="mono" style={{ minWidth: 0 }}>
+                {a.address}
+                {a.port === undefined ? '' : `:${a.port}`}
+              </span>
+              <span className="badge" style={{ fontSize: 10 }}>
+                {a.protocol}
+              </span>
+              <span className={a.scope === 'external' ? '' : 'hint'} style={{ fontSize: 11.5 }}>
+                {s.egressScope[a.scope]}
+              </span>
+              <span className="hint" style={{ fontSize: 11.5 }}>
+                {s.egressFrames(a.frames)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
