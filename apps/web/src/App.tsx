@@ -126,21 +126,25 @@ function BrandMark(): JSX.Element {
 
     // …and the hearts the badge is covered in, let loose. Three, drifting apart, so it reads as a puff rather
     // than a column. They are appended to the button and removed when they finish — no state, nothing to leak.
+    //
+    // The flight is 24px up and wide rather than tall, and that is measured rather than chosen: `.sidebar` has
+    // `overflow-y: auto` and 14px of padding, `.brand` adds 6, so there are TWENTY pixels above the mark before
+    // the sidebar clips. The first version rose 42px and spent more than half its arc invisible.
     for (let i = 0; i < 3; i++) {
       const heart = document.createElement('span');
       heart.className = 'brand-heart';
       heart.textContent = '♥';
       heart.setAttribute('aria-hidden', 'true');
       el.appendChild(heart);
-      const drift = (i - 1) * 16 + (i === 1 ? 0 : 4);
+      const drift = (i - 1) * 22 + (i === 1 ? 0 : 5);
       heart
         .animate(
           [
-            { transform: 'translate(0, 0) scale(0.6)', opacity: 0 },
-            { transform: `translate(${drift * 0.4}px, -14px) scale(1)`, opacity: 1, offset: 0.3 },
-            { transform: `translate(${drift}px, -42px) scale(0.85)`, opacity: 0 },
+            { transform: 'translate(0, 0) scale(0.5)', opacity: 0 },
+            { transform: `translate(${drift * 0.45}px, -11px) scale(1)`, opacity: 1, offset: 0.35 },
+            { transform: `translate(${drift}px, -24px) scale(0.8)`, opacity: 0 },
           ],
-          { duration: 900 + i * 90, delay: i * 70, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
+          { duration: 820 + i * 80, delay: i * 70, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
         )
         .finished.catch(() => undefined)
         .finally(() => heart.remove());

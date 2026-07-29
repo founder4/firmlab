@@ -314,8 +314,8 @@ a:hover {
  * thin white margin the source PNG carries outside its pink ring — cheaper and more reversible than editing
  * transparency into the asset, and it keeps the file byte-for-byte as supplied.
  *
- * `overflow: hidden` is load-bearing for the easter egg: the hearts are appended INSIDE this button, and without
- * it they would escape the circle at the moment they are least wanted — over the nav item below.
+ * It is `position: relative` and deliberately NOT `overflow: hidden`: the hearts are appended inside this button
+ * and are supposed to escape it. Clipping them to a 44px circle would leave nothing to see.
  */
 .brand-mark {
   position: relative;
