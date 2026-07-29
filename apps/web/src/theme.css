@@ -308,16 +308,18 @@ a:hover {
   gap: 10px;
   padding: 6px 8px 14px;
 }
+/* The product mark. Round rather than the shell's usual `--r-md`, because the artwork IS a circular badge and a
+   rounded-square frame would show four corners of its white plate against a dark sidebar. `scale(1.03)` eats the
+   thin white margin the source PNG carries outside its pink ring — cheaper and more reversible than editing
+   transparency into the asset, and it keeps the file the artist supplied byte-for-byte. */
 .brand-mark {
-  display: grid;
-  place-items: center;
   width: 34px;
   height: 34px;
-  border-radius: var(--r-md);
-  background: var(--bg-inset);
-  border: 1px solid var(--border-strong);
-  color: var(--accent);
   flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  transform: scale(1.03);
+  background: var(--bg-inset);
 }
 .brand-name {
   font-weight: 650;

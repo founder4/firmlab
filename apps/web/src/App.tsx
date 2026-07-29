@@ -98,9 +98,9 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
   return (
     <>
       <div className="brand">
-        <div className="brand-mark" aria-hidden="true">
-          0x
-        </div>
+        {/* Decorative: the product name sits beside it in `brand-name`, so the mark adds nothing a reader needs
+            and an alt text here would just be read out twice. */}
+        <img className="brand-mark" src="/logo.png" alt="" aria-hidden="true" width={34} height={34} />
         <div>
           <div className="brand-name">FirmLab</div>
           <div className="brand-sub">{t.nav.brandSub}</div>
