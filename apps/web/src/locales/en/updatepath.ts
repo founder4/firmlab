@@ -28,6 +28,11 @@ export const updatepath = {
     'updater has been looked for, so nothing here has been cleared. Run',
   notRunFrom: 'from Deep analysis above.',
   unavailable: 'The update-path provider could not run on this image.',
+  /** A bound, stated. "No updaters found" from a sweep that stopped early is a cap, not an answer. */
+  budgetExhausted: (elfs: number, files: number) =>
+    `The sweep STOPPED rather than finished: it examined ${elfs} ELF(s) of ${files} file(s) walked before its budget ran out. Anything below is what was found in that prefix — an updater in the remainder would not appear here, and an empty result is not a negative.`,
+  budgetOk: (elfs: number, files: number) =>
+    `Examined ${elfs} ELF(s) across ${files} file(s); the budget was not reached.`,
   noUpdaters:
     'The provider ran and located no updater candidate. That is a statement about what the walk read, not a ' +
     'verdict that the device has no update path — an updater outside the carved rootfs, in a second partition or ' +

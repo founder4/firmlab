@@ -2515,3 +2515,22 @@ span.run-dot.run-running {
   background: transparent;
   border: 1px dashed var(--warn);
 }
+
+/* The findings ledger's reasoning disclosure. 98% of rows carry a rationale and the median is ~200 characters, so
+   the sentence opens under its row instead of living in the row: always-on would triple a 740-row table. */
+.reason-toggle {
+  padding: 0 4px;
+  min-width: 0;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+.reason-cell {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  background: var(--bg-inset);
+  max-width: 0; /* lets the colSpan cell wrap inside the table rather than widening it */
+}
+.reason-cell .eyebrow {
+  margin-right: 6px;
+}

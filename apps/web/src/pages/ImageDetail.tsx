@@ -1285,12 +1285,19 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                 {t.imageDetail.research.nvdBadge(nvd.queried, nvd.totalAdvisories)}
               </span>
             )}
-            {kev?.checked && (
+            {/* Checked or not, the badge is ALWAYS here. It used to be conditional on `kev.checked`, so a KEV
+                lookup that did not happen made the whole block vanish — and a missing block is indistinguishable
+                from a clean one. `kev.reason` is the provider's own sentence for why it did not run. */}
+            {kev?.checked ? (
               <span
                 className={`badge ${kev.matches.length > 0 ? 'badge-high' : 'badge-ok'}`}
-                title={t.imageDetail.research.kevBadgeTitle}
+                title={t.imageDetail.research.kevBadgeTitle(kev.catalogSize ?? 0)}
               >
                 {t.imageDetail.research.kevBadge(kev.matches.length)}
+              </span>
+            ) : (
+              <span className="badge badge-medium" title={kev?.reason ?? t.imageDetail.research.kevNotCheckedTitle}>
+                {t.imageDetail.research.kevNotChecked}
               </span>
             )}
             {result.provenance.vendors.slice(0, 4).map((v) => (

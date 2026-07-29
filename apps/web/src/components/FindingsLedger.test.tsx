@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Finding } from '../api';
 import { setLocale } from '../i18n';
@@ -74,7 +74,9 @@ describe('FindingsLedger — a dispute annotates a measurement, and moves nothin
       dispute('f1'),
     ];
     render(<FindingsLedger findings={rows} />);
-    const titles = Array.from(document.querySelectorAll('tbody tr td:nth-child(2)')).map((td) =>
+    // Third cell: the reasoning toggle took column one and severity moved to two. Queried by position because
+    // the ORDER of the rows is what is under test, and that is exactly what a position query asserts.
+    const titles = Array.from(document.querySelectorAll('tbody tr td:nth-child(3)')).map((td) =>
       (td.textContent ?? '').slice(0, 16),
     );
     expect(titles[0]).toContain('critical finding');
@@ -245,5 +247,56 @@ describe('FindingsLedger — how it was known, beside how far it was proven', ()
     expect(screen.getByText(/not as shipped/i)).toBeTruthy();
     // The provider's own words survive, in the tooltip, rather than being summarised into a category.
     expect(screen.getByTitle('guest firewall rules flushed before boot')).toBeTruthy();
+  });
+});
+
+/**
+ * The reasoning disclosure. `rationale` is the sentence saying WHY a finding sits at its proof state — the
+ * difference between "this is a lead" and "this is a lead BECAUSE the bounded search expired" — and it reached
+ * the reader on operator disputes only. 98% of the rows in the real corpus carry one, median ~200 characters, so
+ * it opens rather than prints.
+ */
+describe('FindingsLedger — why a finding sits where it does', () => {
+  const why = 'The bounded symbolic search did not reach this sink before it stopped.';
+
+  it('does not print the reasoning until it is asked for', () => {
+    render(<FindingsLedger findings={[measured({ rationale: why })]} />);
+    expect(screen.queryByText(new RegExp(why))).not.toBeInTheDocument();
+  });
+
+  it('opens it under the row, verbatim, as the provider wrote it', () => {
+    render(<FindingsLedger findings={[measured({ rationale: why })]} />);
+    fireEvent.click(screen.getByRole('button', { name: /why this finding sits/i }));
+    expect(screen.getByText(new RegExp(why))).toBeInTheDocument();
+  });
+
+  it('reports its state to assistive tech rather than only by a glyph', () => {
+    render(<FindingsLedger findings={[measured({ rationale: why })]} />);
+    const toggle = screen.getByRole('button', { name: /why this finding sits/i });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('offers NO toggle when the provider wrote no reasoning', () => {
+    // An empty chevron would promise an explanation that does not exist, which is the same shape as an "unknown"
+    // chip over a question nobody asked.
+    render(<FindingsLedger findings={[measured()]} />);
+    expect(screen.queryByRole('button', { name: /why this finding sits/i })).not.toBeInTheDocument();
+  });
+
+  it('opens one row without opening the others', () => {
+    render(
+      <FindingsLedger
+        findings={[
+          measured({ id: 'a', title: 'first', rationale: 'reason A' }),
+          measured({ id: 'b', title: 'second', rationale: 'reason B' }),
+        ]}
+      />,
+    );
+    const toggles = screen.getAllByRole('button', { name: /why this finding sits/i });
+    fireEvent.click(toggles[0] as HTMLElement);
+    expect(screen.getByText(/reason A/)).toBeInTheDocument();
+    expect(screen.queryByText(/reason B/)).not.toBeInTheDocument();
   });
 });

@@ -58,6 +58,14 @@ export const files: Messages['files'] = {
     deep: 'profunda (abrir ficheros grandes)',
     complete: 'búsqueda completa',
     partial: 'búsqueda parcial',
+    cov: {
+      examined: (files, entries) => `abiertos ${files} de ${entries} entradas recorridas`,
+      tooLarge: (n) => `${n} demasiado grandes`,
+      unreadable: (n) => `${n} ilegibles`,
+      budget: (n) => `${n} sin abrir al agotarse el presupuesto`,
+      walkTruncated: 'el propio recorrido se truncó',
+      hitCap: 'se alcanzó el tope de coincidencias, así que puede haber más',
+    },
     noVerdict:
       'Este resultado no lleva veredicto de cobertura, así que se desconoce cuánto de la extracción llegó a cubrir.',
     noneComplete: 'Ningún fichero de esta extracción contiene ese término.',

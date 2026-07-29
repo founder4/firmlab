@@ -300,6 +300,20 @@ export function UpdatePathPanel({ imageId }: { imageId: string }): JSX.Element {
         </div>
       ) : null}
 
+      {/* The bound, wherever it lands. `elfBudgetExhausted` means the sweep STOPPED rather than finished, so
+          "no updaters found" is a cap and not an answer — and it was collected, typed, and read by nobody. It is
+          shown on the found path too: a partial list is as misleading as an empty one when the reader cannot tell
+          it is partial. */}
+      {result?.elfBudgetExhausted ? (
+        <div className="banner banner-warn" style={{ marginTop: 12, maxWidth: '72ch' }}>
+          {t.updatepath.budgetExhausted(result.elfsExamined ?? 0, result.filesWalked ?? 0)}
+        </div>
+      ) : result && (result.elfsExamined ?? 0) > 0 ? (
+        <div className="hint" style={{ marginTop: 8, maxWidth: '72ch' }}>
+          {t.updatepath.budgetOk(result.elfsExamined ?? 0, result.filesWalked ?? 0)}
+        </div>
+      ) : null}
+
       {state === 'updaters' ? (
         <>
           <div className="hint" style={{ marginTop: 12, maxWidth: '72ch' }}>

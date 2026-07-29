@@ -49,6 +49,8 @@ export const findings: Messages['findings'] = {
     proofState: 'Estado de prueba',
   },
 
+  why: 'Por qué este estado',
+  whyLabel: 'Mostrar por qué este hallazgo está en este estado de prueba',
   interventionMark: (n: number) =>
     `⚠ obtenido tras ${n} cambio${n === 1 ? '' : 's'} en el firmware — no tal como se envía`,
   assertedBy: (who: string) => `afirmado por ${who}`,

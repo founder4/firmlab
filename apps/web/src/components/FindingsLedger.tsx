@@ -30,7 +30,7 @@
  * worded three ways. Finding titles, rationales and source strings are the record providers wrote when they ran and
  * are shown as written, in whatever language produced them.
  */
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { Finding, FindingProvenance } from '../api';
 import { messages, useMessages } from '../i18n';
 
@@ -261,6 +261,22 @@ function DanglingDisputeNote({ dangling }: { dangling: readonly Finding[] }): JS
 export function FindingsLedger({ findings }: { findings: readonly Finding[] }): JSX.Element {
   const t = useMessages();
   const [showAll, setShowAll] = useState(false);
+  /**
+   * Which rows have their reasoning open.
+   *
+   * `rationale` is the sentence saying WHY a finding sits at its proof state — the difference between "this is a
+   * lead" and "this is a lead BECAUSE the bounded search expired before it settled" — and until now it reached
+   * the reader on operator disputes only. It cannot simply be printed: 98% of the rows in this corpus carry one,
+   * median 196 characters, so always-on would triple the height of a 740-row table and make the ledger unusable.
+   * A row therefore opens, and the affordance is a real focusable button rather than a click on the `<tr>`.
+   */
+  const [openReasons, setOpenReasons] = useState<ReadonlySet<string>>(new Set());
+  const toggleReason = (id: string): void =>
+    setOpenReasons((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const disputesByTarget = indexDisputes(findings);
   const dangling = danglingDisputes(findings);
   const contestedIds = new Set(disputesByTarget.keys());
@@ -295,6 +311,7 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
             <table className="data">
               <thead>
                 <tr>
+                  <th style={{ width: 28 }} />
                   <th>{t.findings.col.severity}</th>
                   <th>{t.findings.col.finding}</th>
                   <th>{t.findings.col.source}</th>
@@ -304,51 +321,81 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
               <tbody>
                 {view.rows.map((f) => {
                   const disputes = disputesByTarget.get(f.id) ?? [];
+                  const open = openReasons.has(f.id);
                   return (
-                    <tr key={f.id}>
-                      {/* A contested row is marked with an inset rule rather than a background: an inline background
+                    <Fragment key={f.id}>
+                      <tr>
+                        {/* A contested row is marked with an inset rule rather than a background: an inline background
                           would beat `.data tbody tr:hover` and silently cost the row its hover feedback. */}
-                      <td style={disputes.length ? { boxShadow: 'inset 2px 0 0 var(--trust-agent)' } : undefined}>
-                        <span style={{ color: SEV_COLOR[f.severity] ?? 'var(--text-dim)' }}>●</span>
-                      </td>
-                      <td style={{ fontSize: 12.5 }}>
-                        {f.title}
-                        {/* An assertion never appears here without its author on the same line. */}
-                        {f.assertion ? (
-                          <div className="hint">
-                            {t.findings.assertedBy(f.assertion.assertedBy)}
-                            {f.assertion.authorKind === 'agent' ? t.findings.agentSuffix : ''}
-                            {f.assertion.status === 'withdrawn' ? t.findings.withdrawnSuffix : ''}
-                          </div>
-                        ) : null}
-                        {disputes.length ? <DisputeNote target={f} disputes={disputes} /> : null}
-                      </td>
-                      <td className="mono hint" style={{ fontSize: 11 }}>
-                        {f.source}
-                      </td>
-                      <td>
-                        {/* Printed verbatim on a contested row: the dispute is recorded beside it, never over it. */}
-                        <ProofStateBadge state={f.proofState} />
-                        {/* The second axis, UNDER the rung rather than beside it: how far it was proven is the
+                        <td style={disputes.length ? { boxShadow: 'inset 2px 0 0 var(--trust-agent)' } : undefined}>
+                          {/* The reasoning toggle. A real button rather than a click on the `<tr>`: a row is not
+                            focusable, and the sentence behind it is the one that separates "this is a lead" from
+                            "this is a lead BECAUSE the search expired". Absent when the provider wrote none, so an
+                            empty chevron never promises an explanation that does not exist. */}
+                          {f.rationale ? (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost reason-toggle"
+                              aria-expanded={open}
+                              aria-label={t.findings.whyLabel}
+                              title={t.findings.whyLabel}
+                              onClick={() => toggleReason(f.id)}
+                            >
+                              {open ? '▾' : '▸'}
+                            </button>
+                          ) : null}
+                        </td>
+                        <td>
+                          <span style={{ color: SEV_COLOR[f.severity] ?? 'var(--text-dim)' }}>●</span>
+                        </td>
+                        <td style={{ fontSize: 12.5 }}>
+                          {f.title}
+                          {/* An assertion never appears here without its author on the same line. */}
+                          {f.assertion ? (
+                            <div className="hint">
+                              {t.findings.assertedBy(f.assertion.assertedBy)}
+                              {f.assertion.authorKind === 'agent' ? t.findings.agentSuffix : ''}
+                              {f.assertion.status === 'withdrawn' ? t.findings.withdrawnSuffix : ''}
+                            </div>
+                          ) : null}
+                          {disputes.length ? <DisputeNote target={f} disputes={disputes} /> : null}
+                        </td>
+                        <td className="mono hint" style={{ fontSize: 11 }}>
+                          {f.source}
+                        </td>
+                        <td>
+                          {/* Printed verbatim on a contested row: the dispute is recorded beside it, never over it. */}
+                          <ProofStateBadge state={f.proofState} />
+                          {/* The second axis, UNDER the rung rather than beside it: how far it was proven is the
                             headline, how it was known qualifies it. A row with no channel recorded prints
                             nothing at all — an "unknown" chip would imply the question was asked and answered. */}
-                        {f.evidenceChannel && (
-                          <div className="hint mono" style={{ fontSize: 10.5, marginTop: 3 }}>
-                            {f.evidenceChannel}
-                          </div>
-                        )}
-                        {/* And the one thing that changes what the rung MEANS: the subject was not as shipped. */}
-                        {f.interventions?.length ? (
-                          <div
-                            className="hint"
-                            style={{ fontSize: 11, marginTop: 3, color: 'var(--sev-medium, #e6b45c)' }}
-                            title={f.interventions.join(' · ')}
-                          >
-                            {t.findings.interventionMark(f.interventions.length)}
-                          </div>
-                        ) : null}
-                      </td>
-                    </tr>
+                          {f.evidenceChannel && (
+                            <div className="hint mono" style={{ fontSize: 10.5, marginTop: 3 }}>
+                              {f.evidenceChannel}
+                            </div>
+                          )}
+                          {/* And the one thing that changes what the rung MEANS: the subject was not as shipped. */}
+                          {f.interventions?.length ? (
+                            <div
+                              className="hint"
+                              style={{ fontSize: 11, marginTop: 3, color: 'var(--sev-medium, #e6b45c)' }}
+                              title={f.interventions.join(' · ')}
+                            >
+                              {t.findings.interventionMark(f.interventions.length)}
+                            </div>
+                          ) : null}
+                        </td>
+                      </tr>
+                      {open && f.rationale ? (
+                        <tr>
+                          {/* Full width, under the row it explains. The provider WROTE this sentence while measuring,
+                            so it renders as written, in whatever language produced it. */}
+                          <td colSpan={5} className="reason-cell">
+                            <span className="eyebrow">{t.findings.why}</span> {f.rationale}
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
                   );
                 })}
               </tbody>

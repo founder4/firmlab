@@ -56,6 +56,9 @@ export const findings = {
    * from an untouched image is comparing two different claims. The interventions themselves are the provider's
    * own sentences and render as written, in the tooltip.
    */
+  /** The provider's own sentence for why a finding sits at its proof state — especially a downgrade. */
+  why: 'Why this state',
+  whyLabel: 'Show why this finding sits at this proof state',
   interventionMark: (n: number) => `⚠ obtained after ${n} change${n === 1 ? '' : 's'} to the firmware — not as shipped`,
   assertedBy: (who: string) => `asserted by ${who}`,
   agentSuffix: ' (agent)',

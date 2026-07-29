@@ -66,6 +66,15 @@ export const files = {
     deep: 'deep (open large files)',
     complete: 'complete search',
     partial: 'partial search',
+    /** The counts behind the completeness verdict. Reduced to one boolean before this existed. */
+    cov: {
+      examined: (files: number, entries: number) => `opened ${files} of ${entries} entries walked`,
+      tooLarge: (n: number) => `${n} too large`,
+      unreadable: (n: number) => `${n} unreadable`,
+      budget: (n: number) => `${n} left unopened when the budget ran out`,
+      walkTruncated: 'the walk itself was truncated',
+      hitCap: 'the hit cap was reached, so there may be more',
+    },
     noVerdict: 'This result carries no coverage verdict, so how much of the extraction it covered is unknown.',
     /** The only empty result allowed to be a plain negative: every file was opened and nothing was capped. */
     noneComplete: 'No file in this extraction contains that term.',

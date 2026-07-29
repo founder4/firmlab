@@ -390,18 +390,26 @@ the first one makes a gap read as a clean result and the second is merely missin
   only place the workbench states what it can do, and it announced `symreach`, `functionDiff` and `fwhunt` as
   `planned` while all three have providers, routes and (for symreach) a panel. Under-claiming here is the same
   defect as over-claiming, pointed the other way: an operator reads the matrix to decide what to ask of the bench.
-- ▢ **Fields that make a limitation invisible — fix these first.** Each one is a bound or a reason the provider
-  recorded and no component reads, so an empty answer reads as a negative one:
-  `Finding.rationale` (the sentence saying WHY a proof state was assigned — rendered only for operator disputes);
-  `UpdatePathResult.elfBudgetExhausted` (so "no updaters found" may be a bound, unknowably);
-  `FilesSearch.coverage`'s counts, collapsed into one boolean, so "3 unreadable files" and "0" render identically;
-  `kev.reason` + `kev.catalogSize` (a KEV check that did not happen makes the whole block VANISH);
-  `ResearchResult.hashLookup` entirely (a hash skipped for salt looks like a hash that never existed);
-  `BootDiagnosis.daemonsStarted`/`daemonsExited` (the difference between "never started" and "started and
-  SIGSEGV'd" — the exact distinction the module was written for); `SecureBootPosture.note` (the provider's own
-  sentence for when the variable store was not extractable); `DeviceTreeResult.rejected`;
-  `OperatorAssertion.withdrawnReason` (a retraction is visible but not readable); `FuzzResult.reason`;
-  `osv.skipped`, `nvd.notQueried`, `nvd.truncated[]`, `egress.neverSent`.
+- ◐ **Fields that make a limitation invisible.** Four landed (2026-07-29):
+  **`Finding.rationale`** — the sentence saying why a finding sits at its proof state, which reached the reader on
+  operator disputes only. It could not simply be printed: 98% of this corpus's 1230 rows carry one, median 196
+  characters, so always-on would triple a 740-row table. It opens per row behind a real focusable button with
+  `aria-expanded`, and a row whose provider wrote none offers no toggle — an empty chevron would promise an
+  explanation that does not exist.
+  **`UpdatePathResult.elfBudgetExhausted`** — "no updaters found" from a sweep that STOPPED is a cap, not an
+  answer. Now stated on the found path too, because a partial list misleads exactly as much as an empty one when
+  the reader cannot tell it is partial.
+  **`FilesSearch.coverage`** — the counts existed, were reduced to one boolean by `isCompleteSearch` and thrown
+  away, so "3 files unreadable" and "0" rendered identically. The non-zero holes are now named against their
+  denominator; a row of zeros would bury the one count that matters.
+  **`kev.reason` / `kev.catalogSize`** — the badge was conditional on `kev.checked`, so a lookup that did not
+  happen made the whole block VANISH, and a missing block is indistinguishable from a clean one. There is always
+  a badge now, and the not-checked one carries the provider's reason.
+  _Still open in this class_: `ResearchResult.hashLookup` entirely (a hash skipped for salt looks like one that
+  never existed); `BootDiagnosis.daemonsStarted`/`daemonsExited`; `SecureBootPosture.note`;
+  `DeviceTreeResult.rejected`; `OperatorAssertion.withdrawnReason`; `FuzzResult.reason`; `osv.skipped`,
+  `nvd.notQueried`, `nvd.truncated[]`, `egress.neverSent`.
+
 - ▢ **Whole capabilities with a route and no reader.** `yarascan`, `funcdiff`, `fwhunt`, `nvram` and `ghidra` have
   POST+GET routes and ZERO references in `apps/web`. Each carries its own coverage story with it — yarascan's
   `rulesDeclared`/`rulesApplied`/`rulesLost`, nvram's `capped` and `duplicateKeys`, fwhunt's `skipReason`,

@@ -27,6 +27,33 @@ export function isCompleteSearch(s: FilesSearch | null): boolean {
   return holes === 0 && !c.walkTruncated && !c.hitCapReached;
 }
 
+/**
+ * What the search actually opened, and what it did not.
+ *
+ * `isCompleteSearch` collapses all of this into one boolean, which is the right verdict and the wrong amount of
+ * information: an operator deciding whether an empty result is a real negative needs to know WHICH hole it has —
+ * ten files too large is a different next action from a walk that was truncated. The denominator is always shown
+ * because a hole is only readable against one.
+ */
+function SearchCoverage({ coverage }: { coverage: FilesSearch['coverage'] }): JSX.Element | null {
+  const t = useMessages();
+  if (!coverage) return null;
+  const sk = coverage.skipped ?? {};
+  const holes: string[] = [];
+  if (sk.tooLarge) holes.push(t.files.search.cov.tooLarge(sk.tooLarge));
+  if (sk.unreadable) holes.push(t.files.search.cov.unreadable(sk.unreadable));
+  if (sk.budgetExhausted) holes.push(t.files.search.cov.budget(sk.budgetExhausted));
+  if (coverage.walkTruncated) holes.push(t.files.search.cov.walkTruncated);
+  if (coverage.hitCapReached) holes.push(t.files.search.cov.hitCap);
+
+  return (
+    <div className="hint mono" style={{ marginTop: 6, fontSize: 11.5 }}>
+      {t.files.search.cov.examined(coverage.filesExamined ?? 0, coverage.entriesWalked ?? 0)}
+      {holes.length > 0 && <span style={{ color: 'var(--sev-medium, #e6b45c)' }}> · {holes.join(' · ')}</span>}
+    </div>
+  );
+}
+
 export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
   const t = useMessages();
   const [q, setQ] = useState('');
@@ -100,6 +127,11 @@ export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
             <p className="hint" style={{ margin: '4px 0 0' }}>
               {result.verdict ?? t.files.search.noVerdict}
             </p>
+            {/* The NUMBERS behind the verdict. They were collected, reduced to one boolean by `isCompleteSearch`,
+                and thrown away — so "3 files were unreadable" and "0 were" rendered identically, which is exactly
+                the shape where a bound reads as an answer. Only the non-zero holes are listed: a row of zeros
+                would bury the one count that matters. */}
+            <SearchCoverage coverage={result.coverage} />
           </div>
 
           {hits.length === 0 ? (

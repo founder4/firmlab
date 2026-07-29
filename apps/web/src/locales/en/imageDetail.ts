@@ -217,7 +217,16 @@ export const imageDetail = {
     nvdTitle: (cpe: number, keyword: number) =>
       `NVD, for components OSV could not map: ${cpe} asked by CPE version match, ${keyword} by keyword. A keyword answer matches CVE description text only — an empty one is not evidence the component is unaffected.`,
     kevBadge: (n: number) => `KEV ${n} known-exploited`,
-    kevBadgeTitle: 'CISA Known Exploited Vulnerabilities — exploited in the wild',
+    /**
+     * Two states, and the second is why this exists: a KEV check that did not happen used to make the whole
+     * block disappear, and a missing block is indistinguishable from a clean one. The catalogue size goes in the
+     * tooltip because "0 matches" is only readable against what was searched.
+     */
+    kevBadgeTitle: (catalogSize: number) =>
+      `CISA Known Exploited Vulnerabilities — exploited in the wild. ${catalogSize} entries were searched.`,
+    kevNotChecked: 'KEV not checked',
+    kevNotCheckedTitle:
+      'The Known Exploited Vulnerabilities catalogue was not consulted on this run, and the provider recorded no reason. Nothing here says these CVEs are NOT known-exploited — the question was not asked.',
     vendorTitle: 'Provenance hint (vendor)',
 
     kevHeading: '⚠ Known-exploited in the wild (CISA KEV) · reachability here still unverified',

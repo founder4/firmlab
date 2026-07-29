@@ -29,6 +29,9 @@ export const updatepath: Messages['updatepath'] = {
     'firmware: no se ha buscado ningún actualizador, así que aquí no se ha descartado nada. Ejecuta',
   notRunFrom: 'desde Análisis profundo, arriba.',
   unavailable: 'El proveedor de vía de actualización no pudo ejecutarse sobre esta imagen.',
+  budgetExhausted: (elfs, files) =>
+    `El barrido se DETUVO en vez de terminar: examinó ${elfs} ELF de ${files} ficheros recorridos antes de agotar su presupuesto. Lo de abajo es lo que se encontró en ese prefijo — un actualizador en el resto no aparecería aquí, y un resultado vacío no es un negativo.`,
+  budgetOk: (elfs, files) => `Examinados ${elfs} ELF sobre ${files} ficheros; no se llegó al presupuesto.`,
   noUpdaters:
     'El proveedor se ejecutó y no localizó ningún candidato a actualizador. Eso es una afirmación sobre lo que ' +
     'leyó el recorrido, no un veredicto de que el dispositivo no tenga vía de actualización — un actualizador ' +

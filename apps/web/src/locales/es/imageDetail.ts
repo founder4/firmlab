@@ -207,7 +207,11 @@ export const imageDetail: Messages['imageDetail'] = {
     nvdTitle: (cpe: number, keyword: number) =>
       `NVD, para los componentes que OSV no pudo mapear: ${cpe} preguntados por coincidencia de versión CPE y ${keyword} por palabra clave. Una respuesta por palabra clave sólo coincide con el texto de la descripción del CVE — que venga vacía no prueba que el componente no esté afectado.`,
     kevBadge: (n: number) => `KEV: ${n} con explotación conocida`,
-    kevBadgeTitle: 'CISA Known Exploited Vulnerabilities — explotadas activamente',
+    kevBadgeTitle: (catalogSize) =>
+      `CISA Known Exploited Vulnerabilities — explotadas en la práctica. Se buscaron ${catalogSize} entradas.`,
+    kevNotChecked: 'KEV sin consultar',
+    kevNotCheckedTitle:
+      'El catálogo de vulnerabilidades explotadas conocidas no se consultó en esta ejecución, y el proveedor no registró el motivo. Nada aquí dice que estos CVE NO estén explotados — la pregunta no se hizo.',
     vendorTitle: 'Pista de procedencia (fabricante)',
 
     kevHeading: '⚠ Con explotación activa conocida (CISA KEV) · aquí la alcanzabilidad sigue sin verificar',
