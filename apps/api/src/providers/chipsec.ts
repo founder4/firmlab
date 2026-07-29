@@ -71,6 +71,11 @@ export interface ChipsecResult {
   modules: UefiModule[];
   /** Secure Boot / NVRAM posture from the offline variable store, or null when none was extractable. */
   secureBoot: SecureBootPosture | null;
+  /**
+   * Why there is no posture, when there is none. Absent when one was read — and absent, too, on every result
+   * stored before this existed, which is why every reader must treat it as optional.
+   */
+  nvramStoreNote?: string;
   findings: UefiSecurityFinding[];
   command: string;
   isolation?: IsolationLevel;
@@ -305,6 +310,25 @@ export function parseNvramVariables(lst: string): UefiVariable[] {
   return out;
 }
 
+/** How many variable names travel with the posture. The count is always exact; only the NAMES are capped. */
+const VARIABLE_SAMPLE_CAP = 40;
+
+/**
+ * Pure: what it means that this image has no Secure Boot posture at all.
+ *
+ * `readNvramPosture` returned `null` for three different situations and the panel rendered every one of them as
+ * the same blank space — which reads as "this image has no variable store", the one conclusion none of them
+ * supports. A decode that never produced a listing and a listing that could not be parsed need opposite work.
+ * Empty string when a posture WAS read: it carries its own note.
+ */
+export function describeNvramStore(listings: number, parsedVars: number): string {
+  if (parsedVars > 0) return '';
+  if (listings === 0) {
+    return 'This decode produced no NVRAM variable listing, so the Secure Boot state was never read. That is a limit of what chipsec surfaced here, not a finding that the platform has no variable store.';
+  }
+  return `chipsec wrote ${listings} NVRAM listing(s) for this image and none of them parsed into a single variable. The store was found and could not be read — which is a different thing from an image that carries none, and it means the Secure Boot state below is absent rather than negative.`;
+}
+
 // Documented markers for a TEST / self-signed platform key — none of these belong in shipping firmware.
 const TEST_KEY_MARKERS: RegExp[] = [
   /DO NOT TRUST/i,
@@ -339,10 +363,16 @@ export function interpretSecureBoot(vars: UefiVariable[], keyBytes: string): Sec
   const setupMode = setup?.firstByte === 1 ? 'setup' : setup?.firstByte === 0 ? 'user' : 'unknown';
   const customMode = custom?.firstByte === 1 ? 'enabled' : custom?.firstByte === 0 ? 'disabled' : 'unknown';
   const testKey = detectTestKey(keyBytes);
+  // The bound on `variables` is stated here because that is the only field a reader ever sees it through: a list
+  // that stops at 40 with no sentence reads as the whole store.
+  const capped =
+    vars.length > VARIABLE_SAMPLE_CAP
+      ? ` ${vars.length - VARIABLE_SAMPLE_CAP} further variable name(s) are not listed; the count above is exact.`
+      : '';
   const note =
     secureBoot === 'unknown'
-      ? 'Secure Boot state not among the offline-extractable variables for this store — enumerated what chipsec surfaced.'
-      : `Secure Boot ${secureBoot}.`;
+      ? `${vars.length} variable(s) were read from this store and SecureBoot was not among them, so the state is not something this decode can say — it is NOT a platform with Secure Boot off.${capped}`
+      : `Secure Boot ${secureBoot}, read from the SecureBoot variable in the extracted store.${capped}`;
   return {
     variableCount: vars.length,
     secureBoot,
@@ -353,7 +383,7 @@ export function interpretSecureBoot(vars: UefiVariable[], keyBytes: string): Sec
     hasDb: has('db'),
     hasDbx: has('dbx'),
     testKey,
-    variables: vars.map((v) => v.name).slice(0, 40),
+    variables: vars.map((v) => v.name).slice(0, VARIABLE_SAMPLE_CAP),
     note,
   };
 }
@@ -406,18 +436,24 @@ export function secureBootFindings(sb: SecureBootPosture): UefiSecurityFinding[]
   return out;
 }
 
-/** Read + interpret the Secure Boot posture from the decode output, or null when no NVRAM store was extracted. */
-function readNvramPosture(imgCopy: string): SecureBootPosture | null {
+/**
+ * Read + interpret the Secure Boot posture from the decode output.
+ *
+ * Returns the COUNTS alongside it, not just `null`: how many listings chipsec wrote and how many variables came
+ * out of them are what separate "no store was surfaced" from "a store was surfaced and could not be read", and
+ * the caller turns that pair into the sentence a reader gets.
+ */
+function readNvramPosture(imgCopy: string): { posture: SecureBootPosture | null; listings: number; parsed: number } {
   const dir = `${imgCopy}.dir`;
   const lstFiles = findFilesMatching(dir, (n) => /nvram.*\.nvram\.lst$/i.test(n));
-  if (lstFiles.length === 0) return null;
+  if (lstFiles.length === 0) return { posture: null, listings: 0, parsed: 0 };
   const lst = lstFiles.map((f) => safeRead(f, 'utf8')).join('\n');
   const vars = parseNvramVariables(lst);
-  if (vars.length === 0) return null;
+  if (vars.length === 0) return { posture: null, listings: lstFiles.length, parsed: 0 };
   // Key-variable blobs (PK/KEK/db/dbx) carry the certs — read them as latin1 so marker strings survive for the scan.
   const keyBins = findFilesMatching(dir, (n) => /^(pk|platformkey|kek|db|dbx)\b.*\.bin$/i.test(n));
   const keyBytes = keyBins.map((f) => safeRead(f, 'latin1')).join('\n');
-  return interpretSecureBoot(vars, keyBytes);
+  return { posture: interpretSecureBoot(vars, keyBytes), listings: lstFiles.length, parsed: vars.length };
 }
 
 /** Recursively collect files under `dir` whose basename matches `pred` (bounded depth). */
@@ -534,13 +570,18 @@ export async function runChipsec(
     const { volumes, modules } = parseUefiDecode(lst);
     // A VARS-only image has an NVRAM store but no firmware volumes; a full BIOS image has both. Parse the Secure
     // Boot posture regardless, and only block when NEITHER modules nor NVRAM variables were extracted.
-    const secureBoot = readNvramPosture(imgCopy);
+    const nvram = readNvramPosture(imgCopy);
+    const secureBoot = nvram.posture;
+    const nvramStoreNote = describeNvramStore(nvram.listings, nvram.parsed);
     if (modules.length === 0 && (!secureBoot || secureBoot.variableCount === 0)) {
       return {
-        ...blocked('chipsec parsed the image but found no EFI modules or NVRAM variables — not a UEFI firmware image.'),
+        ...blocked(
+          `chipsec parsed the image but found no EFI modules or NVRAM variables — not a UEFI firmware image. ${nvramStoreNote}`.trim(),
+        ),
         available: true,
         ran: res.ran,
         volumes,
+        ...(nvramStoreNote ? { nvramStoreNote } : {}),
         command: res.command,
         isolation: res.isolation,
       };
@@ -561,6 +602,7 @@ export async function runChipsec(
       byType: summarizeByType(modules),
       modules: modules.slice(0, MODULE_SAMPLE_CAP),
       secureBoot,
+      ...(nvramStoreNote ? { nvramStoreNote } : {}),
       findings,
       command: res.command,
       isolation: res.isolation,

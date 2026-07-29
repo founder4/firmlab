@@ -123,6 +123,7 @@ export interface SecureBootPosture {
   hasDbx: boolean;
   testKey: string | null;
   variables: string[];
+  /** The provider's own sentence about what this posture can and cannot say. Rendered beside the state badge. */
   note: string;
 }
 
@@ -137,6 +138,12 @@ export interface ChipsecResult {
   byType: Record<string, number>;
   modules: UefiModule[];
   secureBoot: SecureBootPosture | null;
+  /**
+   * Why there is no posture, when there is none. Optional forever — a result stored before this existed carries
+   * no such field, and `secureBoot: null` on its own was rendered as blank space, which reads as "this image has
+   * no variable store": the one conclusion none of the three situations behind that null supports.
+   */
+  nvramStoreNote?: string;
   findings: UefiSecurityFinding[];
   command: string;
   isolation?: string;

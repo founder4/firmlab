@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type UefiIoc,
   type UefiModule,
+  describeNvramStore,
   detectTestKey,
   interpretSecureBoot,
   loadUefiIocs,
@@ -190,7 +191,9 @@ describe('interpretSecureBoot', () => {
   it('leaves a state unknown when the variable was not extracted (never assumes secure)', () => {
     const sb = interpretSecureBoot([{ name: 'CustomMode', guid: 'x', attributes: 'NV+BS', firstByte: 0 }], '');
     expect(sb.secureBoot).toBe('unknown');
-    expect(sb.note).toMatch(/not among the offline-extractable/i);
+    // The sentence must not let `unknown` be read as `disabled`: an unread state is not a state that is off.
+    expect(sb.note).toMatch(/SecureBoot was not among them/i);
+    expect(sb.note).toMatch(/NOT a platform with Secure Boot off/);
   });
   it('flags a documented TEST platform key from the key bytes', () => {
     const sb = interpretSecureBoot(parseNvramVariables(NVRAM_LST), 'CN=DO NOT TRUST - AMI Test PK');
@@ -230,5 +233,49 @@ describe('runChipsec', () => {
       expect(res.moduleCount).toBe(0);
       expect(res.findings).toHaveLength(0);
     }
+  });
+});
+
+/**
+ * Why there is no posture.
+ *
+ * `readNvramPosture` returned `null` for three different situations and the panel rendered all three as the same
+ * blank space, which reads as "this image has no variable store" — the one conclusion none of them supports.
+ * A decode that surfaced no listing and a listing that would not parse need opposite work.
+ */
+describe('describeNvramStore', () => {
+  it('says nothing when a posture WAS read — that one carries its own note', () => {
+    expect(describeNvramStore(1, 12)).toBe('');
+  });
+
+  it('calls no listing a limit of the decode, never a property of the platform', () => {
+    const s = describeNvramStore(0, 0);
+    expect(s).toMatch(/never read/i);
+    expect(s).toMatch(/not a finding that the platform has no variable store/i);
+  });
+
+  it('separates a store that could not be READ from an image that carries none', () => {
+    const s = describeNvramStore(3, 0);
+    expect(s).toContain('3 NVRAM listing(s)');
+    expect(s).toMatch(/found and could not be read/i);
+    // The claim it exists to prevent.
+    expect(s).toMatch(/absent rather than negative/i);
+    expect(s).not.toBe(describeNvramStore(0, 0));
+  });
+});
+
+describe('interpretSecureBoot — the bound on the variable names', () => {
+  it('states what the name list dropped, and keeps the count exact', () => {
+    const vars = Array.from({ length: 57 }, (_, i) => ({ name: `Var${i}`, guid: 'g', attributes: '' }));
+    const sb = interpretSecureBoot(vars, '');
+    expect(sb.variableCount).toBe(57);
+    expect(sb.variables).toHaveLength(40);
+    expect(sb.note).toMatch(/17 further variable name\(s\) are not listed; the count above is exact/);
+  });
+
+  it('says nothing about a bound it did not hit', () => {
+    const sb = interpretSecureBoot([{ name: 'SecureBoot', guid: 'g', attributes: '', firstByte: 1 }], '');
+    expect(sb.note).not.toMatch(/further variable/);
+    expect(sb.note).toMatch(/Secure Boot enabled/);
   });
 });

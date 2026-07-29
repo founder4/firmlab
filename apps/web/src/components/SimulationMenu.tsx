@@ -386,6 +386,26 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
                   </span>
                 </div>
               )}
+              {/* The provider's own sentence, beside the badge rather than buried in `reason` above: `unknown` is
+                  the state this decode could not read, and next to a badge that says nothing else it reads as a
+                  measurement. Composed by `interpretSecureBoot`, printed as written. */}
+              {result.secureBoot?.note && (
+                <div className="hint" style={{ marginTop: 4 }}>
+                  {result.secureBoot.note}
+                </div>
+              )}
+              {/* And when there is no posture at all. Three different situations reached this spot as the same
+                  blank space, which reads as "this image has no variable store" — the one thing none of them says. */}
+              {!result.secureBoot && result.nvramStoreNote && (
+                <div style={{ marginTop: 8 }}>
+                  <div className="hint" style={{ fontSize: 11 }}>
+                    {t.simulation.secureBoot}
+                  </div>
+                  <div className="hint" style={{ marginTop: 2 }}>
+                    {result.nvramStoreNote}
+                  </div>
+                </div>
+              )}
               {result.findings && result.findings.length > 0 && (
                 <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {result.findings.map((f) => (

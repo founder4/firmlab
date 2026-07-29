@@ -143,6 +143,88 @@ describe('SimulationMenu', () => {
     expect(screen.getByText('2 UEFI applications embedded in firmware')).toBeInTheDocument();
   });
 
+  /**
+   * The Secure Boot posture, and its absence.
+   *
+   * `unknown` beside a badge that says nothing else reads as a measurement, and `secureBoot: null` rendered as
+   * blank space reads as "this image has no variable store" — which is the one conclusion none of the three
+   * situations behind that null supports. Both sentences exist in the provider; neither reached the screen.
+   */
+  const chipsecResult = (o: Record<string, unknown>) => ({
+    id: 'j1',
+    status: 'done',
+    log: '',
+    result: {
+      available: true,
+      ran: true,
+      reason: 'Decoded 1 firmware volume offline with chipsec.',
+      proofState: 'static_confirmed',
+      volumes: 1,
+      moduleCount: 4,
+      byType: {},
+      modules: [],
+      findings: [],
+      command: 'chipsec_util uefi decode image.fd',
+      ...o,
+    },
+  });
+  const uefiMenu = () =>
+    menu({
+      identity: { firmwareClass: 'uefi-bios', arch: 'x86_64', endianness: 'little', filesystems: [] },
+      recipes: [recipe({ mode: 'uefi-chipsec', title: 'chipsec UEFI decode' })],
+    });
+
+  it('prints the provider’s sentence beside an unknown Secure Boot state', async () => {
+    mockApi.emulation.mockResolvedValue(uefiMenu());
+    mockApi.job.mockResolvedValue(
+      chipsecResult({
+        secureBoot: {
+          variableCount: 7,
+          secureBoot: 'unknown',
+          setupMode: 'unknown',
+          customMode: 'unknown',
+          hasPK: false,
+          hasKEK: false,
+          hasDb: false,
+          hasDbx: false,
+          testKey: null,
+          variables: [],
+          note: '7 variable(s) were read from this store and SecureBoot was not among them, so the state is not something this decode can say — it is NOT a platform with Secure Boot off.',
+        },
+      }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
+    expect(await screen.findByText(/NOT a platform with Secure Boot off/)).toBeInTheDocument();
+  });
+
+  it('says WHY there is no posture instead of leaving the section blank', async () => {
+    mockApi.emulation.mockResolvedValue(uefiMenu());
+    mockApi.job.mockResolvedValue(
+      chipsecResult({
+        secureBoot: null,
+        nvramStoreNote:
+          'chipsec wrote 2 NVRAM listing(s) for this image and none of them parsed into a single variable.',
+      }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
+    expect(await screen.findByText(/none of them parsed into a single variable/)).toBeInTheDocument();
+    // The heading comes with it, so the sentence is anchored to what it is about.
+    expect(screen.getByText('Secure Boot:')).toBeInTheDocument();
+  });
+
+  it('stays silent for a decode stored before either sentence existed', async () => {
+    // Optional forever: an older stored ChipsecResult has neither field, and inventing a line here would assert
+    // a limitation that build never measured.
+    mockApi.emulation.mockResolvedValue(uefiMenu());
+    mockApi.job.mockResolvedValue(chipsecResult({ secureBoot: null }));
+    render(<SimulationMenu imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
+    expect(await screen.findByText('4 modules')).toBeInTheDocument();
+    expect(screen.queryByText('Secure Boot:')).not.toBeInTheDocument();
+  });
+
   it('runs a user-mode proof against the entered binary', async () => {
     render(<SimulationMenu imageId="img1" />);
     fireEvent.change(await screen.findByPlaceholderText('bin/busybox'), { target: { value: 'sbin/httpd' } });
