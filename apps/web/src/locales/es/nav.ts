@@ -2,7 +2,6 @@ import type { Messages } from '../en';
 
 /** nav — Spanish. Typed against the English catalogue, so an untranslated key cannot ship silently. */
 export const nav: Messages['nav'] = {
-  brandSub: 'firmware · local',
   dashboard: 'Panel',
   localAnalysis: 'Análisis local',
   agents: 'Agentes',

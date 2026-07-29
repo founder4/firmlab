@@ -1,6 +1,5 @@
 /** nav — the sidebar and the app shell. English source of truth. */
 export const nav = {
-  brandSub: 'firmware · local',
   dashboard: 'Dashboard',
   localAnalysis: 'Local analysis',
   agents: 'Agents',

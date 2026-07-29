@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { HashRouter, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { type ImageSummary, api } from './api';
 import { type Messages, useMessages } from './i18n';
@@ -81,6 +81,79 @@ function NavRow({
   );
 }
 
+/**
+ * The product mark, and the one bit of pure delight in the shell.
+ *
+ * Everything else here earns its place by saying something true about a firmware. This says nothing, and that is
+ * why it is the right place for it: a workbench whose whole job is to refuse to overclaim can afford exactly one
+ * corner that is just nice, as long as it is out of the way of the work.
+ *
+ * Three rules keep it out of the way.
+ *
+ *  1. **It is still when you are not touching it.** The mark sits in the shell, in view on every screen, all day.
+ *     An idle animation there would be the definition of the thing you notice tens of times a day and grow to
+ *     hate. It moves on press and never on its own.
+ *  2. **It is invisible to assistive tech.** `aria-hidden` and out of the tab order — announcing a control that
+ *     does nothing, to someone who cannot see the hearts, is noise dressed as inclusion. "FirmLab" is read from
+ *     the heading beside it, once.
+ *  3. **`prefers-reduced-motion` removes the motion, not the response.** The tumble and the hearts go; the press
+ *     scale stays, because that one is feedback rather than decoration and its absence would read as a dead
+ *     control.
+ *
+ * WAAPI rather than a CSS keyframe: a keyframe restarts from zero when re-triggered, and this is a thing people
+ * will click four times in a row. `element.animate` is hardware-accelerated all the same, and cancelling the
+ * previous run is one call.
+ */
+function BrandMark(): JSX.Element {
+  const ref = useRef<HTMLButtonElement>(null);
+  const spin = useRef<Animation | null>(null);
+
+  const celebrate = useCallback(() => {
+    const el = ref.current;
+    if (!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    // One tumble, ~520ms. Long enough to read as a somersault, short enough that a fourth click is not a queue.
+    spin.current?.cancel();
+    spin.current = el.animate(
+      [
+        { transform: 'scale(1.03) rotate(0turn)' },
+        { transform: 'scale(0.92) rotate(0.35turn)', offset: 0.35 },
+        { transform: 'scale(1.09) rotate(0.8turn)', offset: 0.75 },
+        { transform: 'scale(1.03) rotate(1turn)' },
+      ],
+      { duration: 520, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
+    );
+
+    // …and the hearts the badge is covered in, let loose. Three, drifting apart, so it reads as a puff rather
+    // than a column. They are appended to the button and removed when they finish — no state, nothing to leak.
+    for (let i = 0; i < 3; i++) {
+      const heart = document.createElement('span');
+      heart.className = 'brand-heart';
+      heart.textContent = '♥';
+      heart.setAttribute('aria-hidden', 'true');
+      el.appendChild(heart);
+      const drift = (i - 1) * 16 + (i === 1 ? 0 : 4);
+      heart
+        .animate(
+          [
+            { transform: 'translate(0, 0) scale(0.6)', opacity: 0 },
+            { transform: `translate(${drift * 0.4}px, -14px) scale(1)`, opacity: 1, offset: 0.3 },
+            { transform: `translate(${drift}px, -42px) scale(0.85)`, opacity: 0 },
+          ],
+          { duration: 900 + i * 90, delay: i * 70, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
+        )
+        .finished.catch(() => undefined)
+        .finally(() => heart.remove());
+    }
+  }, []);
+
+  return (
+    <button ref={ref} type="button" className="brand-mark" onClick={celebrate} aria-hidden="true" tabIndex={-1}>
+      <img src="/logo.png" alt="" width={44} height={44} draggable={false} />
+    </button>
+  );
+}
+
 function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
   const { id } = useActiveImage();
   const nav = useNavigate();
@@ -98,13 +171,8 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
   return (
     <>
       <div className="brand">
-        {/* Decorative: the product name sits beside it in `brand-name`, so the mark adds nothing a reader needs
-            and an alt text here would just be read out twice. */}
-        <img className="brand-mark" src="/logo.png" alt="" aria-hidden="true" width={34} height={34} />
-        <div>
-          <div className="brand-name">FirmLab</div>
-          <div className="brand-sub">{t.nav.brandSub}</div>
-        </div>
+        <BrandMark />
+        <div className="brand-name">FirmLab</div>
       </div>
 
       <NavRow to="/" end icon="dashboard" label={t.nav.dashboard} onNavigate={onNavigate} />

@@ -305,33 +305,73 @@ a:hover {
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 8px 14px;
+  gap: 11px;
+  padding: 6px 8px 16px;
 }
-/* The product mark. Round rather than the shell's usual `--r-md`, because the artwork IS a circular badge and a
-   rounded-square frame would show four corners of its white plate against a dark sidebar. `scale(1.03)` eats the
-   thin white margin the source PNG carries outside its pink ring — cheaper and more reversible than editing
-   transparency into the asset, and it keeps the file the artist supplied byte-for-byte. */
+/*
+ * The product mark. Round rather than the shell's usual `--r-md`, because the artwork IS a circular badge and a
+ * rounded-square frame would show four corners of its white plate against a dark sidebar. `scale(1.03)` eats the
+ * thin white margin the source PNG carries outside its pink ring — cheaper and more reversible than editing
+ * transparency into the asset, and it keeps the file byte-for-byte as supplied.
+ *
+ * `overflow: hidden` is load-bearing for the easter egg: the hearts are appended INSIDE this button, and without
+ * it they would escape the circle at the moment they are least wanted — over the nav item below.
+ */
 .brand-mark {
-  width: 34px;
-  height: 34px;
+  position: relative;
+  width: 44px;
+  height: 44px;
   flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bg-inset);
+  cursor: pointer;
+  /* Only `transform`: `all` here would also animate the border-radius and the background on every theme flip. */
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+  transform: scale(1.03);
+}
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
   object-fit: cover;
-  transform: scale(1.03);
-  background: var(--bg-inset);
+  pointer-events: none;
+  user-select: none;
+}
+/* Press feedback, and the one motion `prefers-reduced-motion` keeps: it is a response, not decoration, and a
+   control that does not answer a press reads as broken. Gated on a real pointer so a tap does not stick. */
+@media (hover: hover) and (pointer: fine) {
+  .brand-mark:hover {
+    transform: scale(1.07);
+  }
+}
+.brand-mark:active {
+  transform: scale(0.97);
+}
+/* The hearts the badge is covered in, let loose on a click. Positioned from the top so they rise out of the mark
+   rather than out of its centre; the animation itself lives in `BrandMark`, where it can be cancelled. */
+.brand-heart {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  margin-left: -6px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--sev-critical, #e0524f);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-mark:hover {
+    transform: scale(1.03);
+  }
 }
 .brand-name {
-  font-weight: 650;
-  font-size: 0.95rem;
-  letter-spacing: -0.01em;
-}
-.brand-sub {
-  font-family: var(--mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-faint);
+  font-weight: 660;
+  font-size: 1.0625rem;
+  letter-spacing: -0.015em;
 }
 
 .nav-section {

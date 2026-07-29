@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -129,5 +129,77 @@ describe('App shell', () => {
     fireEvent.click(sidebarLink);
 
     expect(await screen.findByPlaceholderText(/Filter by filename/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The brand mark's easter egg. Nothing here checks that it looks nice — that is what eyes are for. What is worth
+ * pinning is the three ways a decorative flourish in an always-visible shell turns into a defect.
+ */
+describe('the brand mark', () => {
+  /** jsdom implements neither, so the component is exercised through stubs it can actually be asked about. */
+  const setup = (reducedMotion: boolean) => {
+    const animate = vi.fn(() => ({
+      cancel: vi.fn(),
+      finished: Promise.resolve(),
+    })) as unknown as Element['animate'];
+    Element.prototype.animate = animate;
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: reducedMotion && q.includes('reduce'),
+      media: q,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    return animate as unknown as ReturnType<typeof vi.fn>;
+  };
+
+  const markOf = (c: HTMLElement): HTMLElement => {
+    const el = c.querySelector('.brand-mark');
+    if (!(el instanceof HTMLElement)) throw new Error('the sidebar has no brand mark');
+    return el;
+  };
+
+  it('is hidden from assistive tech and out of the tab order — it does nothing, so it announces nothing', () => {
+    mockApi.listImages.mockResolvedValue([]);
+    const { container } = render(<App />);
+    const mark = markOf(container);
+    expect(mark.getAttribute('aria-hidden')).toBe('true');
+    expect(mark.getAttribute('tabindex')).toBe('-1');
+    // And the image inside carries no alt: "FirmLab" is already the heading beside it, and a described mark
+    // would be read out twice.
+    expect(mark.querySelector('img')?.getAttribute('alt')).toBe('');
+  });
+
+  it('plays on click', () => {
+    const animate = setup(false);
+    mockApi.listImages.mockResolvedValue([]);
+    const { container } = render(<App />);
+    fireEvent.click(markOf(container));
+    // The tumble plus one animation per heart.
+    expect(animate.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('plays NOTHING under prefers-reduced-motion', () => {
+    // The press feedback survives, in CSS, because that is a response rather than decoration — but no element
+    // here may be set in motion by script when the reader has asked for none.
+    const animate = setup(true);
+    mockApi.listImages.mockResolvedValue([]);
+    const { container } = render(<App />);
+    fireEvent.click(markOf(container));
+    expect(animate).not.toHaveBeenCalled();
+  });
+
+  it('leaves no hearts behind in the DOM after a click', async () => {
+    // They are appended to the button and removed when they finish. A leak here would grow the shell's DOM for
+    // every click, forever, on the one element that is on screen all day.
+    const animate = setup(false);
+    mockApi.listImages.mockResolvedValue([]);
+    const { container } = render(<App />);
+    const mark = markOf(container);
+    fireEvent.click(mark);
+    expect(animate).toHaveBeenCalled();
+    // `waitFor`, not one microtask: the cleanup hangs off `finished.catch().finally()`, which is two chained
+    // promises deep. A single tick asserts before the removal and passes for the wrong reason.
+    await waitFor(() => expect(mark.querySelectorAll('.brand-heart')).toHaveLength(0));
   });
 });
