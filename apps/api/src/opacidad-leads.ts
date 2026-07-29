@@ -137,14 +137,14 @@ export function interestingBinaries(rootfsPath: string, interest: ProbeInterest 
  *
  * The allowance is spent along TWO axes, because size answers only one of them.
  *
- * Size measures ANSWERABILITY. Bounded symbolic execution converges on small binaries and reliably times out on
- * large ones, so spending the budget in the order the filesystem happened to be walked spends it on the questions
- * least likely to come back with an answer at all. Measured on the real DVRF rootfs: walk order put all three
- * probes into `usr/sbin` daemons and never reached the 7 KB pwnable that does crash. Smallest-first fixed that —
- * and then showed its own limit on the same image, which is why this is not a pure size sort any more: the budget
- * went to `store_domain_sid` and `store_machine_password`, two 4 KB samba helpers that both came back
+ * Size measures ANSWERABILITY — weakly, which is the point. Measured on the real DVRF rootfs: walk order put all
+ * three probes into `usr/sbin` daemons and never reached the 7 KB pwnable that does crash. Smallest-first fixed
+ * that — and then showed its own limit on the same image, which is why this is not a pure size sort any more: the
+ * budget went to `store_domain_sid` and `store_machine_password`, two 4 KB samba helpers that both came back
  * inconclusive, while `stack_bof_01` — the one binary in that rootfs known to crash — sat at 7 KB behind them.
- * Small is a claim about which questions RESOLVE, and none about which are worth asking.
+ * Across the 22 probes the corpus has actually run, small is a weak predictor even of resolving: 6 of 18 under
+ * 20 KB reached a sink, and IMOU's 7.9 MB `sonia` reached `strcpy` in 39 steps. Small is at best a claim about
+ * which questions RESOLVE, and none at all about which are worth asking.
  *
  * So INTEREST is the second axis, and it is not a new signal: a candidate is interesting exactly when W3 or W4
  * already said so for their own leads (`interestingBinaries`). The two queues are drawn ROUND-ROBIN, interest
@@ -153,10 +153,27 @@ export function interestingBinaries(rootfsPath: string, interest: ProbeInterest 
  * would hand the first slots to a 900 KB daemon that times out, which is the previous failure in the other
  * direction. Half the allowance buys questions that matter, half buys questions that come back.
  *
- * The price is stated rather than hidden: on an image whose exposed binaries are all large, the interest half of
- * the budget is spent on probes that will exhaust their step budget. Those return inconclusive — which records
- * that the question was asked and not answered, never that the sink is unreachable — and the answerability half
- * still runs, which is why the two queues are alternated rather than one being preferred outright.
+ * MEASURED before being enabled, because the fear it was written against — that promoting a large exposed daemon
+ * would spend half the allowance on probes that time out — was a prediction, not a result. Driven over the seven
+ * rootfs-bearing images in the corpus on their REAL binvuln/servicemap/webtaint output, then angr run on what each
+ * ordering would actually have asked (2026-07-29):
+ *
+ *   • On FIVE images the order is byte-identical, because the interest map and the candidate set do not intersect
+ *     at all. DVRF enumerates no services whatever; GL.iNet's three exposed daemons (dnsmasq/dropbear/uhttpd) are
+ *     none of its four candidates; Tenda and IMOU expose nothing that the sweep flagged. On the WDR3600 the
+ *     exposed 1.7 MB `usr/bin/httpd` IS a candidate — and `selectFindings`' 45-item listing cap, which ranks
+ *     equal-severity candidates smallest-first, drops it before this function is handed the list.
+ *   • On the TWO where it reorders, the promoted binary is `usr/bin/httpd` both times. On the MR3220v2 that turns
+ *     a measured 0-of-3 (libutil.so, apstart, libcrypt.so, all inconclusive) into `strcpy` PROVEN REACHABLE in the
+ *     router's web server — 63 steps, 8.6 s, reproduced — at the cost of a `libcrypt` stub that exhausts its
+ *     search space in 1.6 s having answered nothing. On the WR940Nv6 it trades one inconclusive for another and
+ *     costs 4.6 s.
+ *
+ * So the price is real but small, and the feared timeout did not happen on any image: every promoted probe
+ * finished in 8.6–15 s against a 90 s budget, because a big binary tends to exhaust angr's SEARCH SPACE early
+ * rather than run long. What pure smallest-first buys on those images is the cheapest possible non-answer — a 4 KB
+ * uClibc stub whose search space is done in a single step. The queues stay alternated rather than interest being
+ * preferred outright: that half of the budget is what still reaches the small binaries that do resolve.
  *
  * What this ranking does NOT claim: that a promoted binary is likelier to be vulnerable, or that an unpromoted
  * one is not. Interest is exposure the earlier workers happened to establish; where they said nothing, the

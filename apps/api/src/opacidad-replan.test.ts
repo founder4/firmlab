@@ -284,6 +284,17 @@ describe('reachabilityLeads weighs interest against answerability', () => {
     'usr/bin/store_machine_password',
     'pwnable/Intro/stack_bof_01',
     'etc/init.d/quiet',
+    // The two real corpus shapes the 2026-07-29 measurement is pinned on, below.
+    'usr/bin/httpd',
+    'lib/libutil-0.9.30.so',
+    'lib/libcrypt-0.9.30.so',
+    'sbin/apstart',
+    'usr/sbin/dnsmasq',
+    'usr/sbin/dropbear',
+    'usr/sbin/uhttpd',
+    'bin/dhcpdiscover',
+    'usr/bin/dumpimage',
+    'usr/bin/mkimage',
   ]) {
     write(rel);
   }
@@ -359,29 +370,75 @@ describe('reachabilityLeads weighs interest against answerability', () => {
   });
 
   /**
-   * The DVRF shape the backlog measured: the two smallest candidates were 4 KB samba helpers that both came back
-   * inconclusive, and `stack_bof_01` — the one binary in that rootfs known to crash — sat at 7 KB behind them, so
-   * a two-probe allowance never reached it. Reproduced synthetically, and deliberately so: on the REAL DVRF the
-   * exposure signal is empty for all three (no Lua handlers for W4 to taint, and the pwnable is in no init script
-   * for W3 to call a daemon), so this rule alone does not reorder that image. What it pins is the rank — an
-   * exposed candidate is asked before smaller unflagged ones — not a claim about DVRF, which still needs a signal
-   * neither W3 nor W4 produces.
+   * The shape the 2026-07-29 corpus measurement found, and the one that justified enabling this in `opacidad.ts`:
+   * the TP-Link MR3220v2 (`c8e1ffa0`). Real sizes, the real `etc/rc.d/rcS` httpd service, and the real outcome —
+   * the live smallest-first order spent all three probes on `libutil-0.9.30.so`, `apstart` and
+   * `libcrypt-0.9.30.so` and got 0 of 3, while the 1.4 MB `usr/bin/httpd` it never asked about answers `strcpy`
+   * REACHED in 63 steps. The two uClibc stubs are here on purpose: they are what "smallest first" actually buys on
+   * a busy rootfs, and neither is disqualified by the `runnable` filter, because uClibc ships them with an entry
+   * point.
    */
-  it('spends a probe on the flagged pwnable instead of two inconclusive helpers ahead of it', () => {
+  it('promotes the exposed httpd the MR3220v2 measurement found, over the libc stubs ahead of it', () => {
+    const candidates = [
+      sized('lib/libutil-0.9.30.so', 4_900),
+      sized('sbin/apstart', 11_192),
+      sized('lib/libcrypt-0.9.30.so', 11_288),
+      sized('usr/bin/httpd', 1_483_232),
+    ];
+    // What the live rule did with the same three probes — measured 0 of 3 reachable in the deployed run.
+    expect(reachabilityLeads(candidates, root, 3).map((l) => l.target)).toEqual([
+      'lib/libutil-0.9.30.so',
+      'sbin/apstart',
+      'lib/libcrypt-0.9.30.so',
+    ]);
+    const interest: ProbeInterest = { services: [daemon('httpd', '/usr/bin/httpd')] };
+    const leads = reachabilityLeads(candidates, root, 3, interest);
+    expect(leads.map((l) => l.target)).toEqual(['usr/bin/httpd', 'lib/libutil-0.9.30.so', 'sbin/apstart']);
+    // Half the allowance still goes to answerability — the promotion takes the third slot, not the whole budget.
+    expect(leads[0]?.reason).toContain('autostart network daemon (httpd)');
+  });
+
+  /**
+   * The other five corpus images, and the reason this rank is cheap rather than risky: the interest map and the
+   * candidate set simply do not intersect. GL.iNet BE3600 (`447719f7`) is the clearest case — three exposed
+   * autostart daemons, four stack-overflow candidates, no overlap — so the order is byte-identical to the one the
+   * size sort produced. An exposure signal that names nothing the sweep flagged must change nothing at all.
+   */
+  it('leaves the order byte-identical when the exposed daemons are not candidates (GL.iNet BE3600)', () => {
+    const candidates = [
+      sized('bin/dhcpdiscover', 66_212),
+      sized('usr/bin/dumpimage', 206_648),
+      sized('usr/bin/mkimage', 206_648),
+    ];
+    const interest: ProbeInterest = {
+      services: [
+        daemon('dnsmasq', '/usr/sbin/dnsmasq'),
+        daemon('dropbear', '/usr/sbin/dropbear'),
+        daemon('uhttpd', '/usr/sbin/uhttpd'),
+      ],
+    };
+    const leads = reachabilityLeads(candidates, root, 2, interest);
+    expect(leads).toEqual(reachabilityLeads(candidates, root, 2));
+    expect(leads.map((l) => l.target)).toEqual(['bin/dhcpdiscover', 'usr/bin/dumpimage']);
+    expect(leads.some((l) => l.reason.includes('ranked ahead'))).toBe(false);
+  });
+
+  /**
+   * DVRF (`a2c03536`), where this rule was born and where it still does nothing: `runServiceMap` enumerates ZERO
+   * services in that rootfs and there are no Lua handlers to taint, so the signal is empty and `stack_bof_01` — the
+   * one binary in the corpus known to crash — stays behind the two 4 KB samba helpers that both came back
+   * inconclusive. Promoting it needs a predicate neither W3 nor W4 produces (see docs/BACKLOG.md).
+   */
+  it('does not reorder DVRF, whose service map is empty — silence is not a ranking', () => {
     const candidates = [
       sized('usr/bin/store_domain_sid', 4_096),
       sized('usr/bin/store_machine_password', 4_096),
       sized('pwnable/Intro/stack_bof_01', 7_016),
     ];
-    // What the old rule did with the same two probes.
-    expect(reachabilityLeads(candidates, root, 2).map((l) => l.target)).toEqual([
+    const empty: ProbeInterest = { services: [], handlers: [] };
+    expect(reachabilityLeads(candidates, root, 2, empty).map((l) => l.target)).toEqual([
       'usr/bin/store_domain_sid',
       'usr/bin/store_machine_password',
-    ]);
-    const interest: ProbeInterest = { services: [daemon('bof', '/pwnable/Intro/stack_bof_01')] };
-    expect(reachabilityLeads(candidates, root, 2, interest).map((l) => l.target)).toEqual([
-      'pwnable/Intro/stack_bof_01',
-      'usr/bin/store_domain_sid',
     ]);
   });
 

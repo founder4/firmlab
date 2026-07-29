@@ -20,6 +20,7 @@ import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } f
 import type { LlmConfig } from './llm.js';
 import { complete } from './llm.js';
 import {
+  type ProbeInterest,
   REACHABILITY_LEAD_CAP,
   daemonLeads,
   handlerLeads,
@@ -72,12 +73,12 @@ import { runKernelPosture } from './providers/kernelposture.js';
 import { runNvramScan } from './providers/nvram.js';
 import { runRtosAnalysis } from './providers/rtos.js';
 import { runSbom } from './providers/sbom.js';
-import { runServiceMap } from './providers/servicemap.js';
+import { type Service, runServiceMap } from './providers/servicemap.js';
 import { runSymReach } from './providers/symreach.js';
 import { buildTaintScaffold } from './providers/taint.js';
 import { runUbootAnalysis } from './providers/uboot.js';
 import { runUpdatePath } from './providers/updatepath.js';
-import { runWebTaint } from './providers/webtaint.js';
+import { type HandlerAnalysis, runWebTaint } from './providers/webtaint.js';
 import { getImage, listFindings, listJobs } from './store.js';
 
 /**
@@ -117,6 +118,16 @@ interface RunCtx {
    * symbolic reachability costs real wall-clock, so the cap is global across lead sources, not per source.
    */
   planned: ReadonlySet<string>;
+  /**
+   * What W3 and W4 established about this rootfs, deposited for the stages planned after them. `binvulnRun` reads
+   * both to rank its probes by exposure as well as by size (`ProbeInterest` in opacidad-leads.ts).
+   *
+   * UNDEFINED means the stage has not run — never "nothing is exposed". Both are read by a ranking that treats an
+   * absent signal as silence and falls back to its size order, so a class whose plan omits the web-taint stage, or
+   * a run where extraction produced no rootfs, gets exactly the ordering it got before these fields existed.
+   */
+  services?: Service[];
+  handlers?: HandlerAnalysis[];
   /** Both halves of the kernel command line, filled by `ubootRun` / `devicetreeRun` and cross-checked by them. */
   bootCmdlines: BootCmdlineState;
   handle: JobHandle;
@@ -271,6 +282,10 @@ async function compcveRun(c: RunCtx): Promise<StepOutcome> {
 async function servicemapRun(c: RunCtx): Promise<StepOutcome> {
   const r = runServiceMap(c.rootfsPath as string);
   syncFindings(c.imageId, 'services', r.findings);
+  // Deposited for W5's probe ranking, which asks about an exposed daemon ahead of a smaller binary nothing
+  // flagged. Set even when the map is empty: "W3 ran and found no service" and "W3 did not run" rank the same
+  // way here, but only because the ranking reads an empty map as silence rather than as a negative.
+  c.services = r.services;
   const leads = daemonLeads(r.services, c.rootfsPath as string);
   return {
     summary: `network-service attack surface: ${r.findings.length} findings${leads.length ? `, ${leads.length} daemon(s) to decompile` : ''}`,
@@ -534,6 +549,7 @@ async function encryptedRun(c: RunCtx): Promise<StepOutcome> {
 async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
   const r = runWebTaint(c.rootfsPath);
   syncFindings(c.imageId, 'webtaint', r.findings);
+  c.handlers = r.handlers; // the other half of W5's probe ranking — see the note on `services` above.
   const tainted = r.handlers.filter((h) => h.tainted).length;
   // Two lead kinds from one worker: decompile the httpd that SERVES the tainted handler, and ask angr about the
   // native helpers that handler EXECS. The second is the sharpest reachability question the pipeline can pose —
@@ -559,10 +575,24 @@ async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
   // budget may already be spent by W4's better-founded questions — that is the intent, not a shortfall, but the
   // unasked candidates must still be visible as unasked.
   const budget = reachabilityBudget(c);
-  const leads = c.rootfsPath ? reachabilityLeads(r.findings, c.rootfsPath, budget) : [];
+  // Ranked on two axes, not one. Size says which questions RESOLVE; W3's service map and W4's handler analysis say
+  // which are worth ASKING, and the ranking draws from both queues round-robin so neither can take the whole
+  // allowance. Both fields are omitted when their stage has not run — an absent signal is silence, and the rank
+  // then degrades to exactly the smallest-first order it had before (see `ProbeInterest`).
+  const interest: ProbeInterest = {
+    ...(c.services ? { services: c.services } : {}),
+    ...(c.handlers ? { handlers: c.handlers } : {}),
+    planned: c.planned,
+  };
+  const leads = c.rootfsPath ? reachabilityLeads(r.findings, c.rootfsPath, budget, interest) : [];
   const unasked = Math.max(0, r.candidates - leads.length);
+  // A probe that jumped the queue says so in its own `reason`, but the sweep's line is where a reader learns the
+  // ordering was not purely by size — otherwise a 1.4 MB binary at the head of a smallest-first list reads as a bug.
+  const promoted = leads.filter((l) => l.reason.includes('ranked ahead of smaller candidates')).length;
   const probeNote = r.candidates
-    ? ` — ${leads.length} queued for reachability${unasked ? `, ${unasked} left as unproven candidate(s)` : ''}`
+    ? ` — ${leads.length} queued for reachability${promoted ? ` (${promoted} ranked ahead on exposure)` : ''}${
+        unasked ? `, ${unasked} left as unproven candidate(s)` : ''
+      }`
     : '';
   // The sweep counts every candidate it found but lists only what fits its finding cap, so when the two differ the
   // summary has to say which number the ledger below it actually holds.
