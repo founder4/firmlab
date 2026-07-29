@@ -28,9 +28,12 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
       pintaba `secureBoot`/`setupMode`/`testKey`/`variableCount` y no `note`, que es la frase del proveedor para
       cuando el almacén de variables no era extraíble.
 - [x] `DeviceTreeResult.rejected` sin lector — impacto: medio — evidencia: `api.ts:948`.
-- [ ] `OperatorAssertion.withdrawnReason` sin lector — impacto: medio — evidencia: `OperatorPanel.tsx:67` sólo
-      comprueba `status === 'withdrawn'` para un badge; la razón de la retractación no se lee.
-- [ ] `FuzzResult.reason` sin lector — impacto: bajo — evidencia: `api.ts:231`.
+- [ ] `OperatorAssertion.withdrawnReason` — **evidencia original CORREGIDA al auditar**: sí se lee en
+      `OperatorPanel`, que pinta `attribution` (`OperatorPanel.tsx:212`), y esa frase la compone la API a la hora
+      de leer (`routes/operator.ts:80-81` → `operator-findings.ts:494`, `WITHDRAWN by X: <razón>`). Lo que sigue
+      abierto es el LEDGER: `FindingsLedger.tsx:358` pinta sólo `t.findings.withdrawnSuffix` junto al autor y la
+      razón no aparece — impacto: bajo. Pendiente para la próxima iteración con este alcance corregido.
+- [x] `FuzzResult.reason` sin lector — impacto: bajo (resultó **alto**) — evidencia: `api.ts:231`.
 - [ ] `BootDiagnosis.cause` se muestra como identificador crudo — impacto: bajo — evidencia:
       `SimulationMenu.tsx:466` pinta `{egressShown.unreachable.cause}` sin pasar por locales.
 - [x] `egress.attempts` contaba como «a dónde quiso ir» las RESPUESTAS a nuestras propias sondas — impacto:
@@ -115,3 +118,16 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
   y sobre bytes reales: `pnpm ui:shot /image/447719f7/hardware` contra el build desplegado (`e0ff8a2`) →
   «2 FDT HEADERS VALIDATED BUT WOULD NOT READ» con las dos entradas, sus tamaños y las razones completas del
   proveedor; 0 errores de consola, 0 peticiones fallidas.
+- iter 6: cerrado `FuzzResult.reason`, que era el de mayor impacto de los dos del DoD #4 y no el de menor:
+  `unavailable()` rellena el MISMO `FuzzResult` que una campaña completa, con `crashes: 0`, y el panel pintaba ese
+  cero en color OK con `reason` en ninguna parte — una ejecución que no pudo ocurrir se leía exactamente igual que
+  una limpia. Sus dos motivos tampoco son intercambiables: «AFL++ not installed» es del despliegue y «binary not
+  found in rootfs» es una ruta mal escrita, y en ese segundo caso la insignia de arriba sigue diciendo `runnable`.
+  Ahora se suprimen las estadísticas (su `harness: 'file'` / `isolation: 'none'` son valores por defecto, no
+  decisiones de nadie) y se imprime el binario, el motivo del proveedor y la frase «no hay recuento de fallos —
+  no es un recuento de cero». 3 tests nuevos.
+  Verificación: `pnpm test` → core 75 / api 1752 / web 312 verde · `pnpm check` → Done · `pnpm biome` → limpio ·
+  bytes reales sobre el build desplegado (`4449391`): `POST /images/c8e1ffa0/fuzz {"binary":"bin/does-not-exist"}`
+  → `{available:false, reason:"binary not found in rootfs", crashes:0}` y la captura de `/simulate` muestra el
+  aviso con esa frase exacta, con la insignia `runnable` al lado — el caso que hacía peligroso el render anterior.
+  0 errores de consola, 0 peticiones fallidas.
