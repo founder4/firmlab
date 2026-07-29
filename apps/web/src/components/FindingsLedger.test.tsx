@@ -111,6 +111,68 @@ describe('FindingsLedger — a dispute annotates a measurement, and moves nothin
   });
 });
 
+/**
+ * A retracted assertion.
+ *
+ * The row printed "— WITHDRAWN" beside the author, and the chevron expanded the assertion's ORIGINAL rationale —
+ * so the only prose a reader could reach was the argument FOR a claim that no longer stands, and the reason it
+ * was taken back was in the data and nowhere on screen.
+ */
+describe('FindingsLedger — a retraction is readable without a click', () => {
+  const withdrawn = (assertion: Record<string, unknown>) =>
+    measured({
+      id: 'w1',
+      title: 'That handler is compiled out of this build',
+      rationale: 'I traced the symbol and found no caller.',
+      proofState: 'operator_assertion',
+      assertion: {
+        assertedBy: 'aaron',
+        authorKind: 'human',
+        assertedAt: 1_700_000_000_000,
+        claim: 'asserted_unverified',
+        rationale: 'I traced the symbol and found no caller.',
+        status: 'withdrawn',
+        ...assertion,
+      },
+    });
+
+  it('names the reason and the person who withdrew it, on the row itself', () => {
+    render(
+      <FindingsLedger
+        findings={[withdrawn({ withdrawnBy: 'aaron', withdrawnReason: 'I was reading the wrong build' })]}
+      />,
+    );
+    expect(screen.getByText(/withdrawn by aaron:/)).toBeTruthy();
+    expect(screen.getByText(/I was reading the wrong build/)).toBeTruthy();
+  });
+
+  it('says a retraction recorded no reason, rather than looking like no retraction', () => {
+    render(<FindingsLedger findings={[withdrawn({ withdrawnBy: 'aaron' })]} />);
+    expect(screen.getByText(/withdrawn by aaron — no reason was recorded/)).toBeTruthy();
+  });
+
+  it('does not invent an author for a retraction that recorded none', () => {
+    render(<FindingsLedger findings={[withdrawn({ withdrawnReason: 'could not reproduce' })]} />);
+    expect(screen.getByText(/withdrawn by an unrecorded author:/)).toBeTruthy();
+  });
+
+  it('labels the expanded reasoning as the RETRACTED claim’s, not as a standing argument', () => {
+    render(<FindingsLedger findings={[withdrawn({ withdrawnBy: 'aaron', withdrawnReason: 'wrong build' })]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Show why this finding sits at this proof state/ }));
+    expect(screen.getByText('Why this state — for the claim that was retracted')).toBeTruthy();
+    expect(screen.getByText(/I traced the symbol and found no caller/)).toBeTruthy();
+  });
+
+  it('leaves a standing assertion’s label and row alone', () => {
+    const standing = withdrawn({});
+    const live = { ...standing, assertion: { ...standing.assertion, status: 'active' } };
+    render(<FindingsLedger findings={[live as never]} />);
+    expect(screen.queryByText(/withdrawn by/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Show why this finding sits at this proof state/ }));
+    expect(screen.getByText('Why this state')).toBeTruthy();
+  });
+});
+
 describe('FindingsLedger — a dispute whose target is gone is stated, not dropped', () => {
   it('names the missing target and why it can be missing', () => {
     const { container } = render(

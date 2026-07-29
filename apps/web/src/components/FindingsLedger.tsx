@@ -31,7 +31,7 @@
  * are shown as written, in whatever language produced them.
  */
 import { Fragment, useState } from 'react';
-import type { Finding, FindingProvenance } from '../api';
+import type { Finding, FindingProvenance, OperatorAssertion } from '../api';
 import { messages, useMessages } from '../i18n';
 
 /**
@@ -358,6 +358,11 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                               {f.assertion.status === 'withdrawn' ? t.findings.withdrawnSuffix : ''}
                             </div>
                           ) : null}
+                          {/* Why it was retracted, on the row rather than behind the chevron. The chevron holds
+                            the ORIGINAL rationale, so a retracted row expanded into the argument FOR a claim
+                            that had been taken back, with the taking-back nowhere. Reading a retraction must not
+                            require a click. */}
+                          {f.assertion?.status === 'withdrawn' ? <WithdrawalNote assertion={f.assertion} /> : null}
                           {disputes.length ? <DisputeNote target={f} disputes={disputes} /> : null}
                         </td>
                         <td className="mono hint" style={{ fontSize: 11 }}>
@@ -391,7 +396,12 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                           {/* Full width, under the row it explains. The provider WROTE this sentence while measuring,
                             so it renders as written, in whatever language produced it. */}
                           <td colSpan={5} className="reason-cell">
-                            <span className="eyebrow">{t.findings.why}</span> {f.rationale}
+                            {/* A retracted row's reasoning is labelled as the retracted claim's, so an expanded
+                              cell is never read as a standing argument. */}
+                            <span className="eyebrow">
+                              {f.assertion?.status === 'withdrawn' ? t.findings.whyWithdrawn : t.findings.why}
+                            </span>{' '}
+                            {f.rationale}
                           </td>
                         </tr>
                       ) : null}
@@ -402,6 +412,30 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
             </table>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The sentence that says a claim was taken back, and by whom.
+ *
+ * `withdrawnReason` had no reader here at all: the row printed "— WITHDRAWN" beside the author and the chevron
+ * expanded the ORIGINAL rationale, so the only prose a reader could reach was the argument for a claim that no
+ * longer stands. `withdrawnBy` is named because withdrawing your own claim and withdrawing someone else's are
+ * different acts, and a retraction with no reason recorded says so rather than rendering as no retraction.
+ */
+function WithdrawalNote({ assertion }: { assertion: OperatorAssertion }): JSX.Element {
+  const t = useMessages();
+  const by = assertion.withdrawnBy ?? t.findings.withdrawnUnknownBy;
+  return (
+    <div className="hint" style={{ fontSize: 11.5, marginTop: 2 }}>
+      {assertion.withdrawnReason ? (
+        <>
+          {t.findings.withdrawnBecause(by)} {assertion.withdrawnReason}
+        </>
+      ) : (
+        t.findings.withdrawnNoReason(by)
       )}
     </div>
   );

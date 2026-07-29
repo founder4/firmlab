@@ -56,6 +56,10 @@ export const findings: Messages['findings'] = {
   assertedBy: (who: string) => `afirmado por ${who}`,
   agentSuffix: ' (agente)',
   withdrawnSuffix: ' — RETIRADA',
+  withdrawnBecause: (who: string) => `retirada por ${who}:`,
+  withdrawnNoReason: (who: string) => `retirada por ${who} — no se registró motivo.`,
+  withdrawnUnknownBy: 'un autor no registrado',
+  whyWithdrawn: 'Por qué este estado — de la afirmación que se retiró',
   unrecordedAuthor: 'un autor sin registrar',
   unrecordedDate: 'una fecha sin registrar',
 

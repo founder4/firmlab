@@ -63,6 +63,19 @@ export const findings = {
   assertedBy: (who: string) => `asserted by ${who}`,
   agentSuffix: ' (agent)',
   withdrawnSuffix: ' — WITHDRAWN',
+  /**
+   * Why it was retracted.
+   *
+   * The row keeps its original `rationale` behind the chevron, so a retracted claim used to expand into the
+   * argument FOR it with nothing anywhere saying it had been taken back — worse than a missing field. The author
+   * of the retraction is named beside the reason because withdrawing someone else's claim and withdrawing your
+   * own are different acts.
+   */
+  withdrawnBecause: (who: string) => `withdrawn by ${who}:`,
+  withdrawnNoReason: (who: string) => `withdrawn by ${who} — no reason was recorded.`,
+  withdrawnUnknownBy: 'an unrecorded author',
+  /** Labels the expanded cell of a retracted row, so its reasoning is not read as a standing argument. */
+  whyWithdrawn: 'Why this state — for the claim that was retracted',
   /** Honest blanks: a row may carry no author and a revision no timestamp, and neither may be invented. */
   unrecordedAuthor: 'an unrecorded author',
   unrecordedDate: 'an unrecorded date',
