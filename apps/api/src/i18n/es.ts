@@ -1,5 +1,6 @@
 /**
- * El catálogo en español de los documentos generados: el informe HTML y el borrador de divulgación coordinada.
+ * El catálogo en español de todo lo que compone el servidor y el cliente imprime tal cual: el informe HTML, el
+ * borrador de divulgación coordinada, el veredicto de cobertura, la tabla de herramientas y los carriles de red.
  *
  * Está tipado contra el catálogo inglés (`Messages`), de modo que una clave nueva allí es un error de compilación
  * aquí hasta que se traduce. No hay búsqueda en tiempo de ejecución ni respaldo al inglés: un documento a medio
@@ -17,6 +18,11 @@
  * mismo vale para «una lista vacía de hallazgos no significa limpio», «una pista no es un veredicto», «esto prueba
  * el entorno aislado, nunca el dispositivo físico» y las frases sobre las afirmaciones de operador (no llevan
  * estado de prueba y no cuentan para ninguna etapa).
+ *
+ * La regla que decide qué se traduce y qué no: lo que se guarda con la imagen o con el trabajo queda CONGELADO en
+ * el idioma que lo produjo; lo que se recalcula en cada lectura se traduce. Por eso `coverage`, `tools` y `flags`
+ * están aquí — describen esta ejecución del análisis y este despliegue, no el firmware — mientras que el título y
+ * el fundamento de un hallazgo se muestran tal cual se registraron.
  */
 import type { OperatorAssertion, OperatorClaim } from '@firmlab/core';
 import { assertionDay, revisionsOf } from '../operator-findings.js';
@@ -306,5 +312,137 @@ export const es: Messages = {
     emailSignature: '[tu nombre]',
     footer:
       'Generado por FirmLab. Sólo un borrador — revísalo antes de enviarlo. Evalúa únicamente firmware que estés autorizado a probar.',
+  },
+
+  /**
+   * El veredicto de cobertura. Es la frase honesta central del banco: la que impide que una lista de hallazgos
+   * vacía se lea como «limpio».
+   *
+   * Se recalcula en cada lectura a partir de la tabla de etapas, así que habla de LA EJECUCIÓN DEL ANÁLISIS y no
+   * del firmware — por eso se traduce, mientras que los títulos de los hallazgos que cuenta, no.
+   *
+   * Los nombres de los workers (`W3 · Credentials`, `Cross-check · Kernel command line`) llegan como datos y se
+   * interpolan literalmente en los dos idiomas: son los identificadores que usan el plan, el escaneo autónomo y la
+   * tabla de etapas, y quien compare el veredicto con la tabla de debajo tiene que encontrar las mismas cadenas.
+   *
+   * Las ramas son deliberadamente distintas: «no se ha ejecutado nada» y «se ejecutó todo y no encontró nada» son
+   * conclusiones opuestas que producen la misma lista vacía, y ninguna traducción puede acercarlas.
+   */
+  coverage: {
+    verdict: {
+      unexamined: (applicable) =>
+        `Todavía no se ha analizado esta imagen — ${applicable} etapa(s) aplicables están sin ejecutar. Una lista de hallazgos vacía aquí significa SIN EXAMINAR, no limpia.`,
+      unknownWithFindings: (p) =>
+        `No se ha ejecutado ningún escaneo autónomo, así que la cobertura de las ${p.applicable} etapa(s) aplicables es DESCONOCIDA. Los ${p.findingCount} hallazgo(s) que hay vienen de etapas ejecutadas por separado — son resultados reales, pero no son base para dar por limpio el resto.`,
+      partialEmpty: (p) =>
+        `${p.executed} de ${p.applicable} etapas se ejecutaron y no registraron nada; ${p.missing} nunca se ejecutaron. Cero hallazgos sólo cubre las etapas que se ejecutaron — no es un certificado de limpieza para este firmware.`,
+      allRanEmpty: (applicable) =>
+        `Las ${applicable} etapas aplicables se ejecutaron y no registraron nada. Eso es un negativo real para lo que este despliegue puede comprobar de forma estática — no es prueba de que el firmware sea seguro.`,
+      partialWithFindings: (p) =>
+        `${p.findingCount} hallazgo(s) de ${p.executed} de ${p.applicable} etapas; ${p.missing} nunca se ejecutaron, así que el panorama está incompleto.`,
+      complete: (p) => `${p.findingCount} hallazgo(s) en las ${p.applicable} etapas aplicables.`,
+    },
+    notCovered: (p) => `Sin cubrir: ${p.workers.join(', ')}${p.more > 0 ? `, +${p.more} más` : ''}.`,
+    degraded: (p) =>
+      `${p.count} etapa(s) se ejecutaron DEGRADADAS y cubren menos de lo que su nombre sugiere: ${p.workers.join(
+        ', ',
+      )}${p.more > 0 ? `, +${p.more} más` : ''}.`,
+    assertions: (n) =>
+      [
+        `Aparte, hay ${n} afirmación(es) de operador registradas en esta imagen — declaraciones de un autor con`,
+        'nombre, no mediciones. Quedan fuera del recuento anterior y no cubren ninguna etapa.',
+      ].join(' '),
+    scheduledFromLead: 'planificada sobre la marcha a partir de una pista',
+  },
+
+  /**
+   * La tabla de Capacidades: lo que desbloquea cada herramienta externa, y el marcador de versión de una
+   * herramienta detectada sólo por presencia.
+   *
+   * Se sondea en cada petición contra los binarios que hay realmente en esta máquina, así que es texto de interfaz
+   * sobre ESTE DESPLIEGUE y se traduce. Los identificadores de herramienta y los nombres de binario que aparecen al
+   * lado (`binwalk`, `qemu-system-mips`, `analyzeHeadless`) son lo que se teclearía en un intérprete de comandos:
+   * son identificadores, indexan este registro y se imprimen literalmente en los dos idiomas.
+   *
+   * Ninguna de estas frases describe el firmware. Una herramienta ausente es una RESPUESTA ausente, no un problema
+   * ausente: la pregunta no llegó a hacerse.
+   */
+  tools: {
+    unlocks: {
+      binwalk: 'Extracción por firmas con reconocimiento de formato',
+      unsquashfs: 'Extracción de SquashFS',
+      sasquatch: 'Extracción de SquashFS de fabricante',
+      jefferson: 'Extracción de JFFS2',
+      lzop: 'Descompresión de payloads lzop',
+      ubireader_extract_files: 'Extracción de UBIFS',
+      cpio: 'Extracción de CPIO/initramfs',
+      radare2: 'Triaje de binarios y desensamblado',
+      analyzeHeadless: 'Decompilación sin interfaz con Ghidra',
+      syft: 'Generación del SBOM',
+      grype: 'Correlación de CVE (N-day)',
+      gitleaks: 'Escaneo profundo de secretos',
+      'qemu-mipsel-static': 'Emulación en modo usuario de MIPSel',
+      'qemu-arm-static': 'Emulación en modo usuario de ARM',
+      'qemu-aarch64-static': 'Emulación en modo usuario de ARM64',
+      'qemu-system-mips': 'Arranque de sistema completo de MIPS big-endian',
+      'qemu-system-mipsel': 'Arranque de sistema completo de MIPS',
+      'qemu-system-arm': 'Arranque de sistema completo de ARM',
+      'mkfs.ext2': 'Ensamblado de la imagen de disco en bruto que necesita un arranque de sistema completo',
+      renode: 'Emulación de RTOS / Cortex-M',
+      chipsec: 'Análisis de firmware UEFI/BIOS (decodificación sin conexión + escaneo de IOC)',
+      angr: 'Alcanzabilidad simbólica (¿está un sumidero peligroso en un camino vivo?)',
+      'gdb-multiarch': 'Reproducción dinámica de un candidato de seguridad de memoria (¿llega a fallar de verdad?)',
+      fwhunt: 'Detección de implantes UEFI con reglas reales de patrón de código de FwHunt',
+    },
+    /** Ni es una versión ni debe confundirse con una: dice que el binario está y que no se le preguntó cuál es. */
+    installed: 'instalado',
+  },
+
+  /**
+   * Los carriles: qué enciende cada interruptor y qué sale de esta máquina cuando está encendido.
+   *
+   * Se resuelven contra el entorno y las anulaciones guardadas en cada lectura, así que son texto de interfaz sobre
+   * el despliegue. También son el texto donde quedarse corto en la traducción se queda corto sobre una consecuencia
+   * real: la línea de salida es lo que lee un operador ANTES de accionar un interruptor que envía datos a un
+   * tercero, así que cada una nombra el destino y el tipo de dato, y ninguna lo suaviza.
+   *
+   * Los nombres de las variables (`FIRMLAB_RESEARCH`, `FIRMLAB_CAPTURE_GATEWAY`) indexan este registro y se
+   * imprimen literalmente: son variables de entorno, y quien busque una en un fichero de compose tiene que
+   * encontrarla.
+   */
+  flags: {
+    FIRMLAB_AGENT: {
+      label: 'Copiloto y agente de IA',
+      effect:
+        'Permite ejecutar el copiloto y el esqueleto del agente. La mecánica sigue siendo determinista — el modelo sólo toma las decisiones de juicio, dentro de un gobernador que corta por pasos, tokens, dólares o tiempo de reloj.',
+      egress:
+        'Los prompts construidos a partir de los hallazgos y de la identidad van al proveedor de LLM configurado. Necesita una clave de API; sin clave, la capa se queda apagada aunque esto esté encendido.',
+    },
+    FIRMLAB_RESEARCH: {
+      label: 'Inteligencia externa',
+      effect:
+        'Correlaciona el SBOM y los componentes identificados dentro de los binarios empaquetados contra avisos de seguridad publicados, y busca contactos de divulgación del fabricante.',
+      egress:
+        'Los nombres y las versiones de los componentes van a api.osv.dev y a services.nvd.nist.gov; el catálogo KEV de CISA se descarga y se cruza en local. Nunca bytes del firmware, ni secretos, ni claves. El registro de salida declara un techo antes de cada ejecución y lo concilia al terminar.',
+    },
+    FIRMLAB_HASH_LOOKUP: {
+      label: 'Consulta en línea de hashes de contraseña',
+      effect:
+        'Envía a servicios públicos de búsqueda inversa los resúmenes de contraseña SIN SAL recuperados del firmware. Los hashes crypt con sal se descartan y no se envían nunca; un texto en claro recuperado se queda en local y enmascarado.',
+      egress:
+        'Hashes de contraseña de TU firmware llegan a un tercero. Es un paso mayor que enviar el nombre de un componente, y por eso tiene su propio interruptor — si la imagen es material de un cliente o de un encargo, trátalo como una divulgación.',
+    },
+    FIRMLAB_CAPTURE: {
+      label: 'Carril de captura',
+      effect:
+        'Habilita el descubrimiento en la LAN y los backends de interceptación que se usan para obtener firmware de un dispositivo vivo. Nada toca el cable hasta que se arma una acción concreta sobre un único objetivo y con tiempo acotado.',
+      egress: 'El descubrimiento barre la subred local (nmap / arp-scan / mDNS). No sale nada relativo a tu firmware.',
+    },
+    FIRMLAB_CAPTURE_GATEWAY: {
+      label: 'Declarar posición en el camino',
+      effect:
+        'Tu afirmación de que FirmLab YA está en el camino del objetivo — es su ruta por defecto, o le llega un espejo de puerto. No lanza nada; es lo que hace innecesario un envenenamiento ARP, de modo que una sesión de captura se posiciona como `gateway`. Decláralo en falso y la sesión dará el objetivo por alcanzado y no capturará nada.',
+      egress: 'Nada por sí solo. Cambia cómo se posiciona una sesión de captura, no lo que envía.',
+    },
   },
 };

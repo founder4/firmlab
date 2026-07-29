@@ -39,6 +39,10 @@ function Row({ label, children }: { label: string; children: React.ReactNode }):
  * effect and the egress are always visible rather than hidden behind a tooltip or an info icon. The source line
  * exists because an override and the environment can disagree, and the person reading the compose file deserves
  * to be told which one won.
+ *
+ * `label`, `effect` and `egress` are composed by the API in the locale this page asked for — they are resolved on
+ * every read and describe this deployment, so they are interface copy, not a record. The flag NAME beside them is
+ * an environment variable and renders verbatim: an operator grepping a compose file for it has to find it.
  */
 function LaneToggle({
   flag,
@@ -51,6 +55,7 @@ function LaneToggle({
   onToggle: (enabled: boolean) => void;
   onClear: () => void;
 }): JSX.Element {
+  const t = useMessages();
   const on = flag.enabled;
   return (
     <div
@@ -107,7 +112,7 @@ function LaneToggle({
               type="button"
               onClick={onClear}
               disabled={busy}
-              title={`The container environment has this ${flag.environmentValue ? 'on' : 'off'}. Follow it again.`}
+              title={t.settings.lanes.followEnvironmentHint(flag.environmentValue)}
               style={{
                 fontSize: 11,
                 padding: '1px 7px',
@@ -118,7 +123,7 @@ function LaneToggle({
                 cursor: 'pointer',
               }}
             >
-              set here · follow environment
+              {t.settings.lanes.followEnvironment}
             </button>
           )}
         </div>
@@ -127,14 +132,17 @@ function LaneToggle({
           {flag.effect}
         </div>
         <div className="hint" style={{ marginTop: 4, color: on && flag.outward ? 'var(--warn)' : 'var(--text-dim)' }}>
-          {on && flag.outward ? 'Leaving this machine: ' : 'If enabled: '}
+          {/* Present tense when it is already happening, conditional when it is not — the difference between
+              "this is leaving now" and "this would leave" is the whole reason the line is here. */}
+          {on && flag.outward ? t.settings.lanes.leavingNow : t.settings.lanes.ifEnabled}
           {flag.egress}
         </div>
 
         {flag.inert && (
           <div className="hint" style={{ marginTop: 6, color: 'var(--warn)' }}>
-            On, but doing nothing — <span className="mono">{flag.requires}</span> is off, and this only acts inside that
-            lane.
+            {t.settings.lanes.inertLead}
+            <span className="mono">{flag.requires}</span>
+            {t.settings.lanes.inertTail}
           </div>
         )}
       </div>
@@ -168,13 +176,14 @@ export function Settings(): JSX.Element {
       .then(setUsage)
       .catch(() => setUsage(null));
     api
-      .flags()
+      .flags(locale)
       .then((r) => setFlags(r.flags))
       .catch(() => setFlags(null));
-  }, []);
+  }, [locale]);
 
   // A lane change is answered with the whole resolved set, so a dependent flag turning inert shows up in the same
-  // paint as the switch that caused it.
+  // paint as the switch that caused it — and the write carries the locale for the same reason the read does, or
+  // the panel would repaint into English on the click that changed it.
   const applyFlag = (name: string, run: () => Promise<LaneFlag[]>): void => {
     setBusyFlag(name);
     setFlagError(null);
@@ -333,12 +342,9 @@ export function Settings(): JSX.Element {
 
           <div style={{ marginTop: 22 }}>
             <div className="panel-title" style={{ marginBottom: 2 }}>
-              Lanes
+              {t.settings.lanes.title}
             </div>
-            <div className="panel-sub">
-              Everything that can reach outside this process. Off is the default and the deterministic engine needs none
-              of them. A change takes effect on the next run — no restart.
-            </div>
+            <div className="panel-sub">{t.settings.lanes.sub}</div>
             {flagError && (
               <div className="banner banner-warn" style={{ marginTop: 12 }}>
                 <Icon.shield size={16} />
@@ -347,7 +353,7 @@ export function Settings(): JSX.Element {
             )}
             {flags === null && (
               <div className="hint" style={{ marginTop: 12 }}>
-                Loading lanes…
+                {t.settings.lanes.loading}
               </div>
             )}
             {flags?.map((f) => (
@@ -355,8 +361,8 @@ export function Settings(): JSX.Element {
                 key={f.name}
                 flag={f}
                 busy={busyFlag === f.name}
-                onToggle={(enabled) => applyFlag(f.name, () => api.setFlag(f.name, enabled))}
-                onClear={() => applyFlag(f.name, () => api.clearFlag(f.name))}
+                onToggle={(enabled) => applyFlag(f.name, () => api.setFlag(f.name, enabled, locale))}
+                onClear={() => applyFlag(f.name, () => api.clearFlag(f.name, locale))}
               />
             ))}
           </div>

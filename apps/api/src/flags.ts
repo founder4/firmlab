@@ -21,18 +21,31 @@
  * store import: vitest cannot resolve `node:sqlite`, and a config module that dragged it in would take its tests
  * down with it. `settings.ts` registers the real provider at boot; with none registered — a unit test, a script —
  * `effectiveEnv()` is exactly `process.env` and behaviour is what it always was.
+ *
+ * **Why the prose is not in the table below.** A lane's label, what it turns on and what leaves the machine are
+ * read by an operator deciding whether to flip a switch, and they are resolved fresh on every request — nothing
+ * about them is stored, and none of them describes a firmware image. They are therefore interface copy about this
+ * deployment, they live in `i18n/` keyed by the flag name, and `resolveFlags` takes the locale as a parameter.
+ * The table here is the structure: which flags exist, which depend on which, and which of them act outward.
  */
+import { type Locale, messages } from './i18n/index.js';
 
-/** A lane flag the operator may flip at runtime, and the honest description of what flipping it does. */
+/**
+ * The lane flags, as identifiers. These are environment-variable names: they cross the API, appear in a compose
+ * file and key the localised prose, so they are never translated in either direction.
+ */
+export type LaneFlagName =
+  | 'FIRMLAB_AGENT'
+  | 'FIRMLAB_RESEARCH'
+  | 'FIRMLAB_HASH_LOOKUP'
+  | 'FIRMLAB_CAPTURE'
+  | 'FIRMLAB_CAPTURE_GATEWAY';
+
+/** A lane flag the operator may flip at runtime — its structure. The description of it is in the catalogue. */
 export interface ToggleableFlag {
-  name: string;
-  label: string;
-  /** What turns on. Written for someone deciding, not for someone who already knows. */
-  effect: string;
-  /** What leaves the machine, or what reaches onto the network, when this is on. Empty when nothing does. */
-  egress: string;
+  name: LaneFlagName;
   /** A flag that only matters when another is on (the double opt-ins). */
-  requires?: string;
+  requires?: LaneFlagName;
   /** Flipping this changes what the deployment does to things outside itself. */
   outward: boolean;
 }
@@ -43,56 +56,16 @@ export interface ToggleableFlag {
  * and does not. Those stay in the compose file, where a change is a restart and therefore honest.
  */
 export const TOGGLEABLE_FLAGS: readonly ToggleableFlag[] = [
-  {
-    name: 'FIRMLAB_AGENT',
-    label: 'AI copilot & agent',
-    effect:
-      'Lets the copilot and the agent skeleton run. The mechanics stay deterministic — the model only makes the judgment calls, inside a governor that halts on steps, tokens, USD or wall-clock.',
-    egress:
-      'Prompts built from findings and identity go to the configured LLM provider. Needs an API key; with no key the layer stays off however this is set.',
-    outward: true,
-  },
-  {
-    name: 'FIRMLAB_RESEARCH',
-    label: 'External intelligence',
-    effect:
-      'Correlates the SBOM and the components fingerprinted out of bundled binaries against published advisories, and looks up vendor disclosure contacts.',
-    egress:
-      'Component names and versions go to api.osv.dev and services.nvd.nist.gov; the CISA KEV catalogue is downloaded and cross-referenced locally. Never firmware bytes, secrets or keys. The egress ledger declares a ceiling before each run and reconciles it afterwards.',
-    outward: true,
-  },
-  {
-    name: 'FIRMLAB_HASH_LOOKUP',
-    label: 'Online password-hash lookup',
-    effect:
-      'Sends UNSALTED password digests recovered from the firmware to public reverse-lookup services. Salted crypt hashes are counted out and never sent; a recovered plaintext stays local and masked.',
-    egress:
-      'Password hashes from YOUR firmware reach a third party. This is a bigger step than a component name and it has its own switch for that reason — if an image is client or engagement material, treat this as a disclosure.',
-    requires: 'FIRMLAB_RESEARCH',
-    outward: true,
-  },
-  {
-    name: 'FIRMLAB_CAPTURE',
-    label: 'Capture lane',
-    effect:
-      'Unlocks LAN discovery and the interception backends used to acquire firmware from a live device. Nothing touches the wire until a specific action is armed on a single, time-boxed target.',
-    egress: 'Discovery sweeps the local subnet (nmap / arp-scan / mDNS). Nothing about your firmware leaves.',
-    outward: true,
-  },
-  {
-    name: 'FIRMLAB_CAPTURE_GATEWAY',
-    label: 'Declare on-path positioning',
-    effect:
-      'Your assertion that FirmLab is ALREADY on the target’s path — its default route, or fed by a port mirror. It spawns nothing; it is what makes an ARP spoof unnecessary, so a capture session positions as `gateway` instead. Declare it falsely and a session will report the target on-path and capture nothing.',
-    egress: 'Nothing by itself. It changes how a capture session positions, not what it sends.',
-    requires: 'FIRMLAB_CAPTURE',
-    outward: false,
-  },
+  { name: 'FIRMLAB_AGENT', outward: true },
+  { name: 'FIRMLAB_RESEARCH', outward: true },
+  { name: 'FIRMLAB_HASH_LOOKUP', requires: 'FIRMLAB_RESEARCH', outward: true },
+  { name: 'FIRMLAB_CAPTURE', outward: true },
+  { name: 'FIRMLAB_CAPTURE_GATEWAY', requires: 'FIRMLAB_CAPTURE', outward: false },
 ];
 
-const ALLOWED = new Set(TOGGLEABLE_FLAGS.map((f) => f.name));
+const ALLOWED: ReadonlySet<string> = new Set<string>(TOGGLEABLE_FLAGS.map((f) => f.name));
 
-/** Is this a flag a runtime toggle is allowed to set? */
+/** Is this a flag a runtime toggle is allowed to set? Takes any string — the caller's input is a request body. */
 export function isToggleableFlag(name: string): boolean {
   return ALLOWED.has(name);
 }
@@ -115,11 +88,11 @@ export function effectiveEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Proc
 export type FlagSource = 'override' | 'environment' | 'default';
 
 export interface FlagState {
-  name: string;
+  name: LaneFlagName;
   label: string;
   effect: string;
   egress: string;
-  requires?: string;
+  requires?: LaneFlagName;
   outward: boolean;
   /** Whether the lane is on, after the override is applied. */
   enabled: boolean;
@@ -131,13 +104,22 @@ export interface FlagState {
 }
 
 /**
- * Pure: resolve every toggleable flag against an environment and a set of overrides.
+ * Pure: resolve every toggleable flag against an environment, a set of overrides and a locale.
  *
  * `inert` is the part worth keeping: a double opt-in switched on while its parent lane is off reads as enabled
  * and does nothing, which is exactly the kind of quiet gap between what a control says and what it does that
  * this workbench exists to close.
+ *
+ * The locale is a parameter and defaults to English, so a caller that predates the switch — and a request that
+ * arrives with no `?lang` — gets exactly what it always got. There is no module-level current locale: two requests
+ * in two languages have to be able to be in flight at once.
  */
-export function resolveFlags(env: NodeJS.ProcessEnv, overrides: Record<string, string>): FlagState[] {
+export function resolveFlags(
+  env: NodeJS.ProcessEnv,
+  overrides: Record<string, string>,
+  locale: Locale = 'en',
+): FlagState[] {
+  const text = messages(locale).flags;
   const on = (name: string): boolean => (overrides[name] ?? env[name]) === '1';
   return TOGGLEABLE_FLAGS.map((f) => {
     const overridden = Object.hasOwn(overrides, f.name);
@@ -145,6 +127,7 @@ export function resolveFlags(env: NodeJS.ProcessEnv, overrides: Record<string, s
     const enabled = on(f.name);
     return {
       ...f,
+      ...text[f.name],
       enabled,
       source: overridden ? 'override' : env[f.name] !== undefined ? 'environment' : 'default',
       environmentValue,

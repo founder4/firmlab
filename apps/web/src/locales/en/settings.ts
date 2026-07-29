@@ -45,6 +45,33 @@ export const settings = {
       'Findings keep the wording the analysis recorded for them. Those sentences are stored with the image as evidence, so they are shown as written rather than re-translated.',
   },
 
+  /**
+   * The lane switches in the privacy tab — the chrome AROUND the descriptions, not the descriptions themselves.
+   *
+   * What each lane turns on and what leaves the machine is composed by the API and arrives in the locale this page
+   * asked for; those sentences are resolved on every read and describe this deployment, so they are not a record
+   * and they are not frozen. What is here is the framing they sit in, and one distinction in it is load-bearing:
+   * `leavingNow` is present tense because the lane is ON and the traffic is happening, while `ifEnabled` is
+   * conditional. Collapsing the two would let a switched-on lane read as a hypothetical.
+   */
+  lanes: {
+    title: 'Lanes',
+    sub: [
+      'Everything that can reach outside this process. Off is the default and the deterministic engine needs none',
+      'of them. A change takes effect on the next run — no restart.',
+    ].join(' '),
+    loading: 'Loading lanes…',
+    /** The lane is on and outward-facing: this is happening, not hypothetical. */
+    leavingNow: 'Leaving this machine: ',
+    ifEnabled: 'If enabled: ',
+    followEnvironment: 'set here · follow environment',
+    followEnvironmentHint: (environmentValue: boolean) =>
+      `The container environment has this ${environmentValue ? 'on' : 'off'}. Follow it again.`,
+    /** Around the `<code>` naming the lane this one depends on. */
+    inertLead: 'On, but doing nothing — ',
+    inertTail: ' is off, and this only acts inside that lane.',
+  },
+
   /** The remaining tab bodies. Most of what these panels show is composed by the API and rendered as it arrives. */
   panels: {
     privacyTitle: 'Privacy & connectivity',

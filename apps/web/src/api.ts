@@ -1,6 +1,14 @@
 /**
  * Typed API client for the FirmLab backend. All calls are same-origin (dev proxies /api → :8799), so the
  * workbench never talks to a remote host.
+ *
+ * **The `lang` parameter, and why only three endpoints have one.** Most of what the API returns is data or a
+ * record: identity, findings, provider results stored on a job row. Those are written at measurement time and
+ * stay in the language that produced them — re-translating a stored measurement would be rewriting it. Three
+ * surfaces are the opposite. The coverage verdict, the tool table and the lane flags are recomposed from live
+ * state on every request and describe THIS DEPLOYMENT and THIS ANALYSIS RUN, so they are interface copy that
+ * merely happens to be built server-side, and the caller passes the locale it is rendering in. It is optional
+ * everywhere and absent means English, which is exactly what the endpoints answered before it existed.
  */
 import type {
   EntropyProfile,
@@ -12,6 +20,7 @@ import type {
   StringHit,
   StructureSegment,
 } from '@firmlab/core';
+import type { Locale } from './i18n';
 
 export type {
   EntropyProfile,
@@ -699,6 +708,15 @@ async function get<T>(url: string): Promise<T> {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return (await res.json()) as T;
 }
+
+/**
+ * `?lang=` for the endpoints that compose prose. Omitted entirely when no locale is passed, so the request looks
+ * byte-for-byte like it did before — a caller that has not been threaded through yet is served English, which is
+ * a language, rather than `?lang=undefined`, which is a bug report waiting to happen.
+ */
+function lang(locale?: Locale, sep: '?' | '&' = '?'): string {
+  return locale ? `${sep}lang=${locale}` : '';
+}
 /**
  * GET whose 4xx body IS the answer.
  *
@@ -1341,7 +1359,11 @@ export const api = {
   structure: (id: string) =>
     get<{ size: number; structure: StructureSegment[]; signatures: SignatureHit[] }>(`/api/images/${id}/structure`),
   secrets: (id: string) => get<{ secrets: StringHit[] }>(`/api/images/${id}/secrets`).then((r) => r.secrets),
-  tools: () => get<{ tools: ToolStatus[]; groups: Record<string, { available: number; total: number }> }>('/api/tools'),
+  /** `unlocks` is composed per tool by the API, so the Capabilities page asks for it in the language it renders. */
+  tools: (locale?: Locale) =>
+    get<{ tools: ToolStatus[]; groups: Record<string, { available: number; total: number }> }>(
+      `/api/tools${lang(locale)}`,
+    ),
   storage: () => get<{ usage: StorageUsage }>('/api/storage').then((r) => r.usage),
   emulation: (id: string) => get<EmulationMenu>(`/api/images/${id}/emulation`),
   emulate: (id: string, binary?: string) =>
@@ -1415,9 +1437,14 @@ export const api = {
   runOpacidad: (id: string) => post<{ jobId: string }>(`/api/images/${id}/opacidad`),
   opacidadResult: (id: string) =>
     get<{ result: OpacidadResult | null }>(`/api/images/${id}/opacidad`).then((r) => r.result),
-  coverage: (id: string) => get<CoverageReport>(`/api/images/${id}/coverage`),
+  /**
+   * The verdict is recomputed from the stage table on every read and describes the analysis run, not the firmware,
+   * so it is requested in the locale the banner is rendering. Stage ids and every count come back identical.
+   */
+  coverage: (id: string, locale?: Locale) => get<CoverageReport>(`/api/images/${id}/coverage${lang(locale)}`),
   /** Corpus-wide coverage — one row per image, so the dashboard can say what was actually examined. */
-  coverageAll: () => get<{ images: CoverageSummary[] }>('/api/coverage').then((r) => r.images),
+  coverageAll: (locale?: Locale) =>
+    get<{ images: CoverageSummary[] }>(`/api/coverage${lang(locale)}`).then((r) => r.images),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),
   job: (jobId: string) => get<{ job: Job }>(`/api/jobs/${jobId}`).then((r) => r.job),
   sbom: (id: string) => get<{ result: SbomResult | null }>(`/api/images/${id}/sbom`).then((r) => r.result),
@@ -1487,10 +1514,17 @@ export const api = {
   copilotResult: (id: string) =>
     get<{ result: CopilotResult | null }>(`/api/images/${id}/copilot`).then((r) => r.result),
   agentConfig: () => get<AgentConfig>('/api/agent/config'),
-  flags: () => get<{ flags: LaneFlag[]; appliesImmediately: boolean }>('/api/settings/flags'),
-  setFlag: (name: string, enabled: boolean) =>
-    put<{ flags: LaneFlag[] }>(`/api/settings/flags/${name}`, { enabled }).then((r) => r.flags),
-  clearFlag: (name: string) => del<{ flags: LaneFlag[] }>(`/api/settings/flags/${name}`).then((r) => r.flags),
+  /**
+   * The lane descriptions state what leaves this machine, and they are what an operator reads BEFORE flipping a
+   * switch — so all three verbs carry the locale. A write answers with the whole resolved set, and a lane switched
+   * from a Spanish UI coming back in English would repaint the panel into the wrong language mid-interaction.
+   */
+  flags: (locale?: Locale) =>
+    get<{ flags: LaneFlag[]; appliesImmediately: boolean }>(`/api/settings/flags${lang(locale)}`),
+  setFlag: (name: string, enabled: boolean, locale?: Locale) =>
+    put<{ flags: LaneFlag[] }>(`/api/settings/flags/${name}${lang(locale)}`, { enabled }).then((r) => r.flags),
+  clearFlag: (name: string, locale?: Locale) =>
+    del<{ flags: LaneFlag[] }>(`/api/settings/flags/${name}${lang(locale)}`).then((r) => r.flags),
   startAgentSession: (id: string, goal?: string) =>
     post<{ session: AgentSession }>(`/api/images/${id}/agent/session`, goal ? { goal } : {}).then((r) => r.session),
   agentSession: (id: string) => get<AgentSessionView>(`/api/images/${id}/agent/session`),

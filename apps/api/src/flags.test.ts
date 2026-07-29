@@ -20,12 +20,73 @@ describe('the allow-list is the gate', () => {
     expect(isToggleableFlag('DEEPSEEK_API_KEY')).toBe(false);
   });
 
-  it('describes every flag it offers, including what leaves the machine', () => {
-    for (const f of TOGGLEABLE_FLAGS) {
-      expect(f.label.length).toBeGreaterThan(0);
-      expect(f.effect.length).toBeGreaterThan(40);
-      expect(f.egress.length).toBeGreaterThan(20);
+  it('describes every flag it offers, including what leaves the machine, in BOTH languages', () => {
+    // The prose moved to the catalogue, so the check has to run through the resolver that assembles it — and it
+    // has to run for Spanish too. An egress line that shrank to a stub in translation understates what actually
+    // leaves the machine, which is the one thing this panel exists to state before the switch is flipped.
+    for (const locale of ['en', 'es'] as const) {
+      for (const f of resolveFlags(env({}), {}, locale)) {
+        expect(f.label.length).toBeGreaterThan(0);
+        expect(f.effect.length).toBeGreaterThan(40);
+        expect(f.egress.length).toBeGreaterThan(20);
+      }
     }
+  });
+});
+
+/**
+ * The flag NAME is an environment variable: it is what an operator greps a compose file for and what the PUT
+ * endpoint accepts. Only the description of a lane is language-dependent, and getting that backwards would produce
+ * a Spanish UI whose switches address variables the container has never heard of.
+ */
+describe('resolveFlags is localised in its prose and identical in everything else', () => {
+  it('defaults to English, so a request with no ?lang gets what every caller before it got', () => {
+    const [dflt] = resolveFlags(env({}), {});
+    const [english] = resolveFlags(env({}), {}, 'en');
+    expect(dflt).toEqual(english);
+    expect(dflt?.label).toBe('AI copilot & agent');
+  });
+
+  it('translates the label, the effect and the egress, and nothing else', () => {
+    const es = resolveFlags(env({ FIRMLAB_RESEARCH: '1' }), { FIRMLAB_HASH_LOOKUP: '1' }, 'es');
+    const en = resolveFlags(env({ FIRMLAB_RESEARCH: '1' }), { FIRMLAB_HASH_LOOKUP: '1' }, 'en');
+    expect(es.map((f) => f.name)).toEqual(en.map((f) => f.name));
+    expect(es.map((f) => f.enabled)).toEqual(en.map((f) => f.enabled));
+    expect(es.map((f) => f.source)).toEqual(en.map((f) => f.source));
+    expect(es.map((f) => f.inert)).toEqual(en.map((f) => f.inert));
+    expect(es.map((f) => f.requires)).toEqual(en.map((f) => f.requires));
+    for (const [i, f] of es.entries()) {
+      expect(f.label).not.toBe(en[i]?.label);
+      expect(f.effect).not.toBe(en[i]?.effect);
+      expect(f.egress).not.toBe(en[i]?.egress);
+    }
+  });
+
+  it('names the environment variables verbatim in Spanish — they are identifiers, not words', () => {
+    const names = resolveFlags(env({}), {}, 'es').map((f) => f.name);
+    expect(names).toEqual([
+      'FIRMLAB_AGENT',
+      'FIRMLAB_RESEARCH',
+      'FIRMLAB_HASH_LOOKUP',
+      'FIRMLAB_CAPTURE',
+      'FIRMLAB_CAPTURE_GATEWAY',
+    ]);
+    expect(find(resolveFlags(env({}), {}, 'es'), 'FIRMLAB_HASH_LOOKUP').requires).toBe('FIRMLAB_RESEARCH');
+  });
+
+  it('keeps the hash-lookup egress explicit in Spanish: your firmware’s hashes reach a third party', () => {
+    // The lane where a soft translation would cost the most. It must still say WHOSE data goes WHERE.
+    const hash = find(resolveFlags(env({}), {}, 'es'), 'FIRMLAB_HASH_LOOKUP');
+    expect(hash.egress).toContain('TU firmware');
+    expect(hash.egress).toContain('un tercero');
+    expect(hash.effect).toContain('SIN SAL');
+  });
+
+  it('keeps the research lane naming its destinations, which are hostnames and not translatable', () => {
+    const research = find(resolveFlags(env({}), {}, 'es'), 'FIRMLAB_RESEARCH');
+    expect(research.egress).toContain('api.osv.dev');
+    expect(research.egress).toContain('services.nvd.nist.gov');
+    expect(research.egress).toContain('KEV');
   });
 });
 

@@ -3,11 +3,18 @@
  * covers structure/entropy/strings/identity), but each detected tool unlocks a richer provider: binwalk for
  * format-aware carving, the extractors for real rootfs recovery, radare2/Ghidra for decompilation, syft/grype
  * for SBOM+CVEs, and the QEMU/Renode family for emulation. This module answers "what can this deployment do?"
+ *
+ * **Why `unlocks` is not on the spec below.** What a tool would let you ask is prose an operator reads on the
+ * Capabilities page, recomputed on every request from the binaries actually on this box. It describes THIS
+ * DEPLOYMENT, never a firmware image, and nothing about it is stored — so it is interface copy, it lives in
+ * `i18n/` keyed by `ToolId`, and `detectTools` takes the locale as a parameter. The probe cache therefore holds
+ * only what the probe LEARNED (present, version line), which is language-independent: one cache serves both.
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { type Locale, messages } from './i18n/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -83,8 +90,6 @@ interface ToolSpec {
   bin: string;
   /** Args that make it exit quickly (version/help). */
   probe: string[];
-  /** What enabling this tool gives the user. */
-  unlocks: string;
   /** Feature group for the UI capabilities panel. */
   group: 'extract' | 'analyze' | 'sbom' | 'emulate' | 'secrets';
   /** Detect by PATH existence instead of executing — for tools whose probe is too slow (Ghidra's JVM startup > the
@@ -99,121 +104,71 @@ interface ToolSpec {
 const DEFAULT_PROBE_TIMEOUT_MS = 4000;
 
 const TOOLS: readonly ToolSpec[] = [
-  { id: 'binwalk', bin: 'binwalk', probe: ['--help'], unlocks: 'Format-aware signature carving', group: 'extract' },
-  { id: 'unsquashfs', bin: 'unsquashfs', probe: ['-help'], unlocks: 'SquashFS extraction', group: 'extract' },
-  { id: 'sasquatch', bin: 'sasquatch', probe: ['-help'], unlocks: 'Vendor SquashFS extraction', group: 'extract' },
-  { id: 'jefferson', bin: 'jefferson', probe: ['--help'], unlocks: 'JFFS2 extraction', group: 'extract' },
-  { id: 'lzop', bin: 'lzop', probe: ['--version'], unlocks: 'lzop payload decompression', group: 'extract' },
-  {
-    id: 'ubireader_extract_files',
-    bin: 'ubireader_extract_files',
-    probe: ['--help'],
-    unlocks: 'UBIFS extraction',
-    group: 'extract',
-  },
-  { id: 'cpio', bin: 'cpio', probe: ['--version'], unlocks: 'CPIO/initramfs extraction', group: 'extract' },
-  { id: 'radare2', bin: 'radare2', probe: ['-v'], unlocks: 'Binary triage + disassembly', group: 'analyze' },
+  { id: 'binwalk', bin: 'binwalk', probe: ['--help'], group: 'extract' },
+  { id: 'unsquashfs', bin: 'unsquashfs', probe: ['-help'], group: 'extract' },
+  { id: 'sasquatch', bin: 'sasquatch', probe: ['-help'], group: 'extract' },
+  { id: 'jefferson', bin: 'jefferson', probe: ['--help'], group: 'extract' },
+  { id: 'lzop', bin: 'lzop', probe: ['--version'], group: 'extract' },
+  { id: 'ubireader_extract_files', bin: 'ubireader_extract_files', probe: ['--help'], group: 'extract' },
+  { id: 'cpio', bin: 'cpio', probe: ['--version'], group: 'extract' },
+  { id: 'radare2', bin: 'radare2', probe: ['-v'], group: 'analyze' },
   {
     id: 'analyzeHeadless',
     bin: 'analyzeHeadless',
     probe: ['-help'],
-    unlocks: 'Ghidra headless decompilation',
     group: 'analyze',
     // Ghidra's analyzeHeadless spins a JVM + Ghidra init on every call — far longer than the probe timeout, and
     // `-help` exits non-zero. Detect by existence so an installed Ghidra is reported (and thus usable), not "absent".
     detectByExistence: true,
   },
-  { id: 'syft', bin: 'syft', probe: ['version'], unlocks: 'SBOM generation', group: 'sbom' },
-  { id: 'grype', bin: 'grype', probe: ['version'], unlocks: 'CVE matching (N-day)', group: 'sbom' },
-  { id: 'gitleaks', bin: 'gitleaks', probe: ['version'], unlocks: 'Deep secret scan', group: 'secrets' },
-  {
-    id: 'qemu-mipsel-static',
-    bin: 'qemu-mipsel-static',
-    probe: ['-version'],
-    unlocks: 'MIPSel user-mode emulation',
-    group: 'emulate',
-  },
-  {
-    id: 'qemu-arm-static',
-    bin: 'qemu-arm-static',
-    probe: ['-version'],
-    unlocks: 'ARM user-mode emulation',
-    group: 'emulate',
-  },
-  {
-    id: 'qemu-aarch64-static',
-    bin: 'qemu-aarch64-static',
-    probe: ['-version'],
-    unlocks: 'ARM64 user-mode emulation',
-    group: 'emulate',
-  },
+  { id: 'syft', bin: 'syft', probe: ['version'], group: 'sbom' },
+  { id: 'grype', bin: 'grype', probe: ['version'], group: 'sbom' },
+  { id: 'gitleaks', bin: 'gitleaks', probe: ['version'], group: 'secrets' },
+  { id: 'qemu-mipsel-static', bin: 'qemu-mipsel-static', probe: ['-version'], group: 'emulate' },
+  { id: 'qemu-arm-static', bin: 'qemu-arm-static', probe: ['-version'], group: 'emulate' },
+  { id: 'qemu-aarch64-static', bin: 'qemu-aarch64-static', probe: ['-version'], group: 'emulate' },
   {
     // Big-endian MIPS. Distinct from qemu-system-mipsel and NOT interchangeable: handed a big-endian kernel, the
     // little-endian emulator refuses with "The image has incorrect endianness" before executing anything.
     id: 'qemu-system-mips',
     bin: 'qemu-system-mips',
     probe: ['-version'],
-    unlocks: 'Full-system big-endian MIPS boot',
     group: 'emulate',
   },
-  {
-    id: 'qemu-system-mipsel',
-    bin: 'qemu-system-mipsel',
-    probe: ['-version'],
-    unlocks: 'Full-system MIPS boot',
-    group: 'emulate',
-  },
-  {
-    id: 'qemu-system-arm',
-    bin: 'qemu-system-arm',
-    probe: ['-version'],
-    unlocks: 'Full-system ARM boot',
-    group: 'emulate',
-  },
+  { id: 'qemu-system-mipsel', bin: 'qemu-system-mipsel', probe: ['-version'], group: 'emulate' },
+  { id: 'qemu-system-arm', bin: 'qemu-system-arm', probe: ['-version'], group: 'emulate' },
   {
     // e2fsprogs' mke2fs, used with `-d` to populate a filesystem from a directory WITHOUT root — which is the
     // only reason the full-system rung can assemble its disk image inside an unprivileged container.
     id: 'mkfs.ext2',
     bin: 'mkfs.ext2',
     probe: ['-V'],
-    unlocks: 'Assembling the raw disk image a full-system boot needs',
     group: 'emulate',
   },
-  { id: 'renode', bin: 'renode', probe: ['--version'], unlocks: 'RTOS / Cortex-M emulation', group: 'emulate' },
-  {
-    id: 'chipsec',
-    bin: 'chipsec_util',
-    probe: ['--help'],
-    unlocks: 'UEFI/BIOS firmware analysis (offline decode + IOC scan)',
-    group: 'analyze',
-  },
+  { id: 'renode', bin: 'renode', probe: ['--version'], group: 'emulate' },
+  { id: 'chipsec', bin: 'chipsec_util', probe: ['--help'], group: 'analyze' },
   {
     id: 'angr',
     // angr is a Python library, not a command — the honest probe is "can this interpreter import it?", so the
     // reported bin is the interpreter and the version line is angr's own.
     bin: angrPython(),
     probe: ['-c', 'import angr; print("angr", angr.__version__)'],
-    unlocks: 'Symbolic reachability (is a dangerous sink on a live path?)',
     group: 'analyze',
     timeoutMs: 30000,
   },
-  {
-    id: 'gdb-multiarch',
-    bin: 'gdb-multiarch',
-    probe: ['--version'],
-    unlocks: 'Dynamic reproduction of a memory-safety candidate (does it actually crash?)',
-    group: 'emulate',
-  },
+  { id: 'gdb-multiarch', bin: 'gdb-multiarch', probe: ['--version'], group: 'emulate' },
   {
     id: 'fwhunt',
     // Like angr, a Python package rather than a command — probe by importing it, and report the interpreter.
     bin: fwhuntPython(),
     probe: ['-c', 'import fwhunt_scan, rzpipe; print("fwhunt-scan ok")'],
-    unlocks: 'UEFI implant detection with real FwHunt code-pattern rules',
     group: 'analyze',
     timeoutMs: 15000,
   },
 ];
+
+/** Every tool this build knows how to probe, in table order. Exported so a test can check nothing is unglossed. */
+export const TOOL_IDS: readonly ToolId[] = TOOLS.map((t) => t.id);
 
 export interface ToolStatus {
   id: ToolId;
@@ -224,17 +179,30 @@ export interface ToolStatus {
   group: ToolSpec['group'];
 }
 
-let cache: ToolStatus[] | null = null;
+/**
+ * What a probe actually learned. No prose: this is what gets cached, and a cache holding a sentence in one language
+ * would answer the second request in the wrong one.
+ */
+interface ProbeResult {
+  id: ToolId;
+  bin: string;
+  available: boolean;
+  version?: string;
+  /** Present, but never asked which version — the binary was found on PATH and not executed. */
+  presenceOnly?: boolean;
+  group: ToolSpec['group'];
+}
 
-async function probe(spec: ToolSpec): Promise<ToolStatus> {
+let cache: ProbeResult[] | null = null;
+
+async function probe(spec: ToolSpec): Promise<ProbeResult> {
   if (spec.detectByExistence) {
     const resolved = resolveOnPath(spec.bin);
     return {
       id: spec.id,
       bin: spec.bin,
       available: resolved !== null,
-      ...(resolved ? { version: 'installed' } : {}),
-      unlocks: spec.unlocks,
+      ...(resolved ? { presenceOnly: true } : {}),
       group: spec.group,
     };
   }
@@ -243,17 +211,35 @@ async function probe(spec: ToolSpec): Promise<ToolStatus> {
       timeout: spec.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
     });
     const out = `${stdout}${stderr}`.split('\n')[0]?.trim().slice(0, 120) ?? '';
-    return { id: spec.id, bin: spec.bin, available: true, version: out, unlocks: spec.unlocks, group: spec.group };
+    return { id: spec.id, bin: spec.bin, available: true, version: out, group: spec.group };
   } catch {
-    return { id: spec.id, bin: spec.bin, available: false, unlocks: spec.unlocks, group: spec.group };
+    return { id: spec.id, bin: spec.bin, available: false, group: spec.group };
   }
 }
 
-/** Probe all tools once and cache the result for the process lifetime. */
-export async function detectTools(force = false): Promise<ToolStatus[]> {
-  if (cache && !force) return cache;
-  cache = await Promise.all(TOOLS.map(probe));
-  return cache;
+/**
+ * Pure: dress a cached probe result in one language. Ids, binary names and the version line the tool printed are
+ * identifiers and pass through untouched; only the gloss is localised.
+ */
+function describe(r: ProbeResult, locale: Locale): ToolStatus {
+  const text = messages(locale).tools;
+  return {
+    id: r.id,
+    bin: r.bin,
+    available: r.available,
+    ...(r.presenceOnly ? { version: text.installed } : r.version !== undefined ? { version: r.version } : {}),
+    unlocks: text.unlocks[r.id],
+    group: r.group,
+  };
+}
+
+/**
+ * Probe all tools once and cache the result for the process lifetime, then describe it in the requested language.
+ * The locale defaults to English, so a caller that predates it — and a request with no `?lang` — is unaffected.
+ */
+export async function detectTools(force = false, locale: Locale = 'en'): Promise<ToolStatus[]> {
+  if (!cache || force) cache = await Promise.all(TOOLS.map(probe));
+  return cache.map((r) => describe(r, locale));
 }
 
 export async function isToolAvailable(id: ToolId): Promise<boolean> {

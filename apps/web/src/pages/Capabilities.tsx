@@ -10,26 +10,33 @@
  * asked, and the providers that need it say so rather than returning nothing and letting it pass for nothing found.
  * That sentence is on screen, not only in this comment, because it is the whole reason the page exists.
  *
- * What is NOT translated here and could be: `unlocks` is prose the API composes per `ToolSpec`, so it arrives in the
- * language the server wrote it in. Mapping it here by tool id would break the property that a new `ToolSpec` shows
- * up in this page for free, so the column is rendered as the API sends it.
+ * `unlocks` is prose the API composes per tool, and it is asked for in the language this page renders. That is not
+ * a stored measurement — the tools are probed on every request, and the sentence describes what THIS DEPLOYMENT
+ * could be asked, never a property of any firmware — so it is interface copy that happens to be built server-side.
+ * It is still keyed by tool id in the API catalogue rather than mapped here, which keeps the property that a new
+ * `ToolSpec` shows up in this page for free (and makes an unglossed one a compile error there, not a blank cell).
  */
 import { useEffect, useState } from 'react';
 import { type ToolStatus, api } from '../api';
 import { TechniqueCoverage } from '../components/TechniqueCoverage';
-import { useMessages } from '../i18n';
+import { useLocale, useMessages } from '../i18n';
 
 export function Capabilities(): JSX.Element {
   const t = useMessages();
+  const locale = useLocale();
   const [tools, setTools] = useState<ToolStatus[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let alive = true;
     api
-      .tools()
-      .then((r) => setTools(r.tools))
-      .finally(() => setLoading(false));
-  }, []);
+      .tools(locale)
+      .then((r) => alive && setTools(r.tools))
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [locale]);
 
   const byGroup = tools.reduce<Record<string, ToolStatus[]>>((acc, tool) => {
     if (!acc[tool.group]) acc[tool.group] = [];

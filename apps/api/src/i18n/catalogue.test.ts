@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { TOGGLEABLE_FLAGS } from '../flags.js';
+import { TOOL_IDS } from '../tools.js';
 import { en } from './en.js';
 import { es } from './es.js';
 import { formatTimestamp, htmlLang, intlTag, messages, resolveLocale } from './index.js';
@@ -165,6 +167,100 @@ describe('the load-bearing caveats survive translation', () => {
     expect(en.disclosure.draftNotice).toContain('FirmLab does not contact anyone');
     expect(es.disclosure.draftNotice).toContain('BORRADOR');
     expect(es.disclosure.draftNotice).toContain('FirmLab no contacta con nadie');
+  });
+});
+
+/**
+ * The three surfaces that are composed on the server and printed verbatim by the client. Each of them is keyed by
+ * an identifier the rest of the system also uses, so the real risk is not a bad sentence — it is a MISSING one:
+ * a tool or a lane added to its table and never glossed, which would render as `undefined` in both languages.
+ * The compiler catches that for `es` (it is typed against `en`); these check `en` itself against the tables.
+ */
+describe('every runtime surface is glossed for every id it can be asked about', () => {
+  it('glosses every tool this build probes, and invents no tool it does not', () => {
+    expect(Object.keys(en.tools.unlocks).sort()).toEqual([...TOOL_IDS].sort());
+    expect(Object.keys(es.tools.unlocks).sort()).toEqual([...TOOL_IDS].sort());
+  });
+
+  it('describes every toggleable lane, and invents no lane the allow-list does not offer', () => {
+    const names = TOGGLEABLE_FLAGS.map((f) => f.name).sort();
+    expect(Object.keys(en.flags).sort()).toEqual(names);
+    expect(Object.keys(es.flags).sort()).toEqual(names);
+  });
+
+  it('keys the tool table by the shell identifiers, never by a translated name', () => {
+    for (const id of ['qemu-system-mips', 'analyzeHeadless', 'mkfs.ext2', 'gdb-multiarch'] as const) {
+      expect(es.tools.unlocks[id]).toBeTruthy();
+    }
+    // `binwalk`, `Ghidra`, `SquashFS`, `SBOM` and the CVE/KEV acronyms are names, not words — they survive intact.
+    expect(es.tools.unlocks.binwalk).toContain('firmas');
+    expect(es.tools.unlocks.syft).toContain('SBOM');
+    expect(es.tools.unlocks.grype).toContain('CVE');
+    expect(es.tools.unlocks.fwhunt).toContain('FwHunt');
+  });
+
+  it('keys the lane table by the environment variables an operator sets in compose', () => {
+    expect(es.flags.FIRMLAB_RESEARCH.label).toBeTruthy();
+    expect(es.flags.FIRMLAB_CAPTURE_GATEWAY.egress).toBeTruthy();
+    // No Spanish spelling of a variable name is ever invented, in the prose or anywhere else.
+    const prose = [...stringLeaves(es).values()].join('\n');
+    for (const invented of ['FIRMLAB_INVESTIGACION', 'FIRMLAB_CAPTURA', 'FIRMLAB_AGENTE']) {
+      expect(prose).not.toContain(invented);
+    }
+  });
+});
+
+/**
+ * The coverage verdict, translated. Its branches exist because "nothing has run" and "everything ran and found
+ * nothing" produce the identical empty findings list and are opposite conclusions — so the property to protect is
+ * that no two of them collapse into the same sentence, and that none of them reads like a verdict about the
+ * firmware. `providers/coverage.test.ts` checks the composed output; this checks the vocabulary it is built from.
+ */
+describe('the coverage verdict keeps its distinctions in Spanish', () => {
+  it('says an unexamined image is UNEXAMINED, and not that it came back clean', () => {
+    expect(en.coverage.verdict.unexamined(4)).toContain('UNEXAMINED, not clean');
+    expect(es.coverage.verdict.unexamined(4)).toContain('SIN EXAMINAR, no limpia');
+    expect(es.coverage.verdict.unexamined(4)).toContain('4 etapa(s)');
+  });
+
+  it('never lets "ran and found nothing" and "never ran" become the same sentence', () => {
+    const ranEmpty = es.coverage.verdict.allRanEmpty(3);
+    const nothingRan = es.coverage.verdict.unexamined(3);
+    const partial = es.coverage.verdict.partialEmpty({ executed: 1, applicable: 3, missing: 2 });
+    expect(new Set([ranEmpty, nothingRan, partial]).size).toBe(3);
+    // The real negative is allowed to be a negative — but never proof of security.
+    expect(en.coverage.verdict.allRanEmpty(3)).toContain('not proof the firmware is secure');
+    expect(ranEmpty).toContain('no es prueba de que el firmware sea seguro');
+    // And a partial run says outright that a zero covers only what ran.
+    expect(partial).toContain('sólo cubre las etapas que se ejecutaron');
+  });
+
+  it('keeps UNKNOWN coverage unknown rather than letting individually-run findings stand in for a scan', () => {
+    const s = es.coverage.verdict.unknownWithFindings({ applicable: 12, findingCount: 28 });
+    expect(s).toContain('DESCONOCIDA');
+    expect(s).toContain('28 hallazgo(s)');
+    expect(s).not.toContain('SIN EXAMINAR');
+  });
+
+  it('keeps a degraded stage visibly degraded, so the headline cannot absorb its own caveat', () => {
+    expect(en.coverage.degraded({ count: 1, workers: ['UEFI · FwHunt'], more: 0 })).toContain('DEGRADED');
+    expect(es.coverage.degraded({ count: 1, workers: ['UEFI · FwHunt'], more: 0 })).toContain('DEGRADADAS');
+  });
+
+  it('says an operator assertion is a statement and covers no stage, in both languages', () => {
+    expect(en.coverage.assertions(2)).toContain('not measurements');
+    expect(en.coverage.assertions(2)).toContain('cover no stage');
+    expect(es.coverage.assertions(2)).toContain('no mediciones');
+    expect(es.coverage.assertions(2)).toContain('no cubren ninguna etapa');
+  });
+
+  it('prints worker ids verbatim in both languages — the reader compares them against the table below', () => {
+    const workers = ['W3 · Credentials', 'Cross-check · Kernel command line'];
+    for (const catalogue of [en, es]) {
+      const s = catalogue.coverage.notCovered({ workers, more: 2 });
+      for (const w of workers) expect(s).toContain(w);
+      expect(s).toContain('+2');
+    }
   });
 });
 

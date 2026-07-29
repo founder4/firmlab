@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CoverageReport, api } from '../api';
 import { setLocale } from '../i18n';
@@ -95,8 +95,45 @@ describe('CoverageBanner — Spanish', () => {
     // The assertions covering no stage are counted apart, in Spanish and with agreement.
     expect(text).toContain('Hay 2 filas más que son afirmaciones del operador');
     expect(text).toContain('no cubren ninguna etapa');
-    // The verdict and each stage's reason are the API's record and are printed as it wrote them.
-    expect(screen.getByText(/Zero findings covers only/)).toBeTruthy();
+    // Each stage's reason belongs to the class plan the scan executes and is printed as the API stated it.
     expect(screen.getByText('pwnable candidates')).toBeTruthy();
+  });
+
+  /**
+   * The verdict itself. It is composed by the API — from the same class plan the autonomous scan executes, which is
+   * why it is not built here — but it is recomputed on every read and describes the analysis RUN, so it is asked
+   * for in the active locale and printed. Two things to hold: the request has to carry the locale, and what comes
+   * back has to reach the screen unaltered, ids and all.
+   */
+  it('asks the API for the verdict in the active locale and prints exactly what it answered', async () => {
+    setLocale('es');
+    const spanish = [
+      '1 de 3 etapas se ejecutaron y no registraron nada; 2 nunca se ejecutaron.',
+      'Cero hallazgos sólo cubre las etapas que se ejecutaron — no es un certificado de limpieza para este firmware.',
+      'Sin cubrir: W3 · Credentials, W5 · Binary-vuln.',
+    ].join(' ');
+    mockApi.coverage.mockResolvedValue(report({ verdict: spanish }));
+
+    render(<CoverageBanner imageId="img1" />);
+
+    expect(await screen.findByText(/Cero hallazgos sólo cubre las etapas que se ejecutaron/)).toBeTruthy();
+    // The locale reached the request, rather than the sentence being translated on this side of the wire.
+    expect(mockApi.coverage).toHaveBeenCalledWith('img1', 'es');
+    // Stage ids survive inside the Spanish sentence — the reader compares it against the table underneath.
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('W3 · Credentials');
+    expect(text).toContain('W5 · Binary-vuln');
+    // And a zero is still not a clean bill in Spanish.
+    expect(text).toContain('no es un certificado de limpieza');
+  });
+
+  it('re-asks the API when the operator switches language, instead of leaving the sentence behind', async () => {
+    mockApi.coverage.mockResolvedValue(report());
+    render(<CoverageBanner imageId="img1" />);
+    await waitFor(() => expect(mockApi.coverage).toHaveBeenCalledWith('img1', 'en'));
+    // Cleared, or the assertion below would be satisfied by a call an earlier test in this file made.
+    mockApi.coverage.mockClear();
+    act(() => setLocale('es'));
+    await waitFor(() => expect(mockApi.coverage).toHaveBeenCalledWith('img1', 'es'));
   });
 });

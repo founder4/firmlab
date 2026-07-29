@@ -297,3 +297,110 @@ describe('buildCoverage — operator assertions are counted apart, never as cove
     expect(r.verdict).not.toContain('operator assertion');
   });
 });
+
+/**
+ * The verdict is the one sentence a Spanish operator reads above the findings list, and until now it arrived in
+ * English inside Spanish chrome. It is composed here rather than in the browser because it reads the same class
+ * plan the autonomous scan executes — that makes it server-side prose, not a stored record: nothing about it is
+ * written at measurement time, and what it describes is the analysis RUN, not the firmware.
+ *
+ * Two properties, and the second is the one that would ship looking finished: the prose has to change, and the
+ * stage ids inside it must NOT, because the reader compares the sentence against the stage table printed directly
+ * underneath it and the two have to name the same things.
+ */
+describe('buildCoverage — the verdict is composed in the caller’s language, the ids in nobody’s', () => {
+  const base = {
+    firmwareClass: 'embedded-linux',
+    specs: [spec('W1 · Extraction'), spec('W3 · Credentials'), spec('W5 · Binary-vuln')],
+    steps: [
+      step('W1 · Extraction', 'degraded', 0, 'no rootfs'),
+      step('W3 · Credentials', 'skipped', 0, 'no extracted rootfs available'),
+      step('W5 · Binary-vuln', 'skipped', 0, 'no extracted rootfs available'),
+    ],
+    findingCount: 0,
+  };
+
+  it('answers in English when no locale is given — the request that omits ?lang gets what it always got', () => {
+    expect(buildCoverage(base).verdict).toBe(buildCoverage({ ...base, locale: 'en' }).verdict);
+    expect(buildCoverage(base).verdict).toContain('Zero findings covers only the stages that ran');
+  });
+
+  it('translates the prose of every branch, and never reuses an English one', () => {
+    const branches: Parameters<typeof buildCoverage>[0][] = [
+      { ...base, steps: null }, // nothing ran
+      { ...base, steps: null, findingCount: 28 }, // rows exist, no scan
+      base, // partial, empty
+      { ...base, steps: [step('W1 · Extraction', 'ran', 0)], specs: [spec('W1 · Extraction')] }, // all ran, empty
+      { ...base, findingCount: 3, steps: [step('W1 · Extraction', 'ran', 3)] }, // partial, with findings
+    ];
+    for (const input of branches) {
+      const es = buildCoverage({ ...input, locale: 'es' }).verdict;
+      const en = buildCoverage({ ...input, locale: 'en' }).verdict;
+      expect(es).not.toBe(en);
+      expect(es).not.toMatch(/stage\(s\)|finding\(s\)|never ran/);
+    }
+  });
+
+  it('keeps every stage id verbatim inside the Spanish sentence', () => {
+    const r = buildCoverage({ ...base, locale: 'es' });
+    expect(r.verdict).toContain('Sin cubrir:');
+    expect(r.verdict).toContain('W3 · Credentials');
+    expect(r.verdict).toContain('W5 · Binary-vuln');
+    expect(r.verdict).toContain('W1 · Extraction'); // named again as the degraded one
+    // The stage table itself is untouched: ids are data, and the class rationale is not this module's to translate.
+    expect(r.stages.map((s) => s.worker)).toEqual(buildCoverage(base).stages.map((s) => s.worker));
+  });
+
+  it('moves no number: a Spanish reader gets the same arithmetic, not a softer one', () => {
+    const es = buildCoverage({ ...base, operatorAssertions: 2, locale: 'es' });
+    const en = buildCoverage({ ...base, operatorAssertions: 2, locale: 'en' });
+    expect(es.applicable).toBe(en.applicable);
+    expect(es.executed).toBe(en.executed);
+    expect(es.findingCount).toBe(en.findingCount);
+    expect(es.operatorAssertions).toBe(en.operatorAssertions);
+    expect(es.ambiguous).toBe(en.ambiguous);
+    expect(es.stages.map((s) => s.status)).toEqual(en.stages.map((s) => s.status));
+  });
+
+  it('says in Spanish that an unexamined image is UNEXAMINED, never that it looks clean', () => {
+    const r = buildCoverage({ ...base, steps: null, locale: 'es' });
+    expect(r.verdict).toContain('SIN EXAMINAR');
+    expect(r.verdict).not.toMatch(/sin problemas|todo correcto|nada que reportar/i);
+  });
+
+  it('keeps a DEGRADED stage shouting in Spanish, so the headline cannot absorb its own caveat', () => {
+    const r = buildCoverage({
+      firmwareClass: 'uefi-bios',
+      specs: [spec('UEFI · chipsec'), spec('UEFI · FwHunt implant scan')],
+      steps: [step('UEFI · chipsec', 'ran', 2), step('UEFI · FwHunt implant scan', 'degraded', 1, '91 rules unused')],
+      findingCount: 3,
+      locale: 'es',
+    });
+    expect(r.verdict).toContain('DEGRADADAS');
+    expect(r.verdict).toContain('UEFI · FwHunt implant scan');
+    expect(r.ambiguous).toBe(true);
+  });
+
+  it('counts operator assertions apart in Spanish too, as statements rather than results', () => {
+    const r = buildCoverage({ ...base, operatorAssertions: 2, locale: 'es' });
+    expect(r.verdict).toContain('2 afirmación(es) de operador');
+    expect(r.verdict).toContain('no mediciones');
+    expect(r.verdict).toContain('no cubren ninguna etapa');
+  });
+
+  it('localises the fallback reason for a dynamically-planned worker, but not a recorded trigger', () => {
+    const withTrigger = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs: [],
+      steps: [
+        { worker: 'W5 · Reachability (httpd)', status: 'ran', summary: 's', trigger: 'stack-overflow candidate' },
+        { worker: 'W5 · Reachability (telnetd)', status: 'ran', summary: 's' },
+      ],
+      findingCount: 0,
+      locale: 'es',
+    });
+    // The trigger was recorded by the run and is printed as recorded; only the sentence this build composes moves.
+    expect(withTrigger.stages[0]?.reason).toBe('stack-overflow candidate');
+    expect(withTrigger.stages[1]?.reason).toBe('planificada sobre la marcha a partir de una pista');
+  });
+});

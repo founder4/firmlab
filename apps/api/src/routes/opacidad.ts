@@ -7,6 +7,7 @@
 import type { ImageIdentity } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
 import { rowToFinding } from '../findings.js';
+import { type Locale, resolveLocale } from '../i18n/index.js';
 import { loadLlmConfig } from '../llm.js';
 import type { OpacidadStep } from '../opacidad-narrative.js';
 import { specsForClass } from '../opacidad-plan.js';
@@ -47,12 +48,16 @@ export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
    * and does not cover. Served next to opacidad because it reads the same class plan and the same run outcomes;
    * computing it here (rather than in the UI) keeps the banner from ever disagreeing with the autonomous scan.
    * Answers before any scan has run too — that is precisely the case the banner exists for.
+   *
+   * `?lang` picks the language of the verdict sentence. Nothing else about the report moves: the stage ids, the
+   * statuses and every number are identifiers and data, and the counts a Spanish reader gets are the same counts.
+   * Absent or unrecognised, it is English.
    */
   app.get('/images/:id/coverage', async (req, reply) => {
     const { id } = req.params as { id: string };
     const row = getImage(id);
     if (!row) return reply.status(404).send({ error: 'Image not found' });
-    return coverageFor(row);
+    return coverageFor(row, resolveLocale((req.query as { lang?: unknown }).lang));
   });
 
   /**
@@ -62,10 +67,11 @@ export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
    * which is the exact conflation the per-image banner exists to prevent. Same `buildCoverage`, so a row and the
    * image's own banner can never disagree.
    */
-  app.get('/coverage', async () => {
+  app.get('/coverage', async (req) => {
+    const locale = resolveLocale((req.query as { lang?: unknown }).lang);
     return {
       images: listImages().map((row) => {
-        const c = coverageFor(row);
+        const c = coverageFor(row, locale);
         return {
           imageId: row.id,
           filename: row.filename,
@@ -83,7 +89,7 @@ export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
 }
 
 /** Build one image's coverage report from its stored identity, its last opacidad run and its finding count. */
-function coverageFor(row: ImageRow): CoverageReport {
+function coverageFor(row: ImageRow, locale: Locale = 'en'): CoverageReport {
   let identity: ImageIdentity | null = null;
   try {
     identity = row.identityJson ? (JSON.parse(row.identityJson) as ImageIdentity) : null;
@@ -111,5 +117,6 @@ function coverageFor(row: ImageRow): CoverageReport {
     steps,
     findingCount: measured.length,
     operatorAssertions: asserted.length,
+    locale,
   });
 }

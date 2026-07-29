@@ -9,14 +9,20 @@
  * The reading is computed server-side (`GET /images/:id/coverage`) from the same class plan the autonomous scan
  * executes, so this can never claim coverage the scan disagrees with.
  *
- * The verdict, the class rationale and each stage's reason arrive from the API and are printed as it states them:
- * they are the record of what this deployment measured, not interface copy. What IS localised is the status badge,
- * and that is the part with a trap in it — `not-run` and `ran-empty` produce the same empty findings list and are
- * opposite conclusions, so neither label may read as the other in any language (the `coverage` namespace).
+ * **The verdict is server-side prose, not a stored record, so it is fetched in the active locale.** Nothing about
+ * it is written at measurement time: it is recomposed from the stage table on every request and it describes THE
+ * ANALYSIS RUN — which stages this class routes to and which of them executed — rather than the firmware. So the
+ * component passes `useLocale()` and prints what comes back. A finding's title is the opposite case and stays as
+ * the provider recorded it. Stage ids, the counts and each stage's `reason` (which the plan and the scan own) come
+ * back identical in either language, because the sentence and the table underneath it must name the same things.
+ *
+ * The status badge is localised here, and that is the part with a trap in it — `not-run` and `ran-empty` produce
+ * the same empty findings list and are opposite conclusions, so neither label may read as the other in any
+ * language (the `coverage` namespace).
  */
 import { useEffect, useState } from 'react';
 import { type CoverageReport, type CoverageStage, api } from '../api';
-import { useMessages } from '../i18n';
+import { useLocale, useMessages } from '../i18n';
 
 const STATUS_META: Record<CoverageStage['status'], { mark: string; cls: string }> = {
   found: { mark: '✓', cls: 'badge-ok' },
@@ -29,19 +35,22 @@ const STATUS_META: Record<CoverageStage['status'], { mark: string; cls: string }
 
 export function CoverageBanner({ imageId }: { imageId: string }): JSX.Element | null {
   const t = useMessages();
+  const locale = useLocale();
   const [report, setReport] = useState<CoverageReport | null>(null);
   const [open, setOpen] = useState(false);
 
+  // Re-fetched when the locale changes, not re-translated: the sentence is composed by the API from the same plan
+  // the scan executes, and a client-side translation of it could drift from what the scan would say.
   useEffect(() => {
     let alive = true;
     api
-      .coverage(imageId)
+      .coverage(imageId, locale)
       .then((r) => alive && setReport(r))
       .catch(() => alive && setReport(null));
     return () => {
       alive = false;
     };
-  }, [imageId]);
+  }, [imageId, locale]);
 
   if (!report) return null;
 

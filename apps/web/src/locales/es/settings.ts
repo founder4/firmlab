@@ -37,6 +37,28 @@ export const settings: Messages['settings'] = {
       'Los hallazgos conservan la redacción con la que el análisis los registró. Esas frases se almacenan junto a la imagen como evidencia, así que se muestran tal y como se escribieron en lugar de volver a traducirse.',
   },
 
+  /**
+   * El marco de los interruptores de carril. Lo que enciende cada uno y lo que sale de la máquina lo compone la
+   * API en el idioma que pide esta página. `leavingNow` va en presente porque el carril YA está encendido y el
+   * tráfico está ocurriendo; `ifEnabled` es condicional. Juntarlos dejaría que un carril encendido se leyera como
+   * una hipótesis.
+   */
+  lanes: {
+    title: 'Carriles',
+    sub: [
+      'Todo lo que puede salir de este proceso. Apagado es lo predeterminado, y el motor determinista no necesita',
+      'ninguno. Un cambio surte efecto en la siguiente ejecución — sin reiniciar.',
+    ].join(' '),
+    loading: 'Cargando carriles…',
+    leavingNow: 'Sale de esta máquina: ',
+    ifEnabled: 'Si se activa: ',
+    followEnvironment: 'fijado aquí · seguir al entorno',
+    followEnvironmentHint: (environmentValue) =>
+      `El entorno del contenedor lo tiene ${environmentValue ? 'encendido' : 'apagado'}. Vuelve a seguirlo.`,
+    inertLead: 'Encendido, pero sin hacer nada — ',
+    inertTail: ' está apagado, y esto sólo actúa dentro de ese carril.',
+  },
+
   panels: {
     privacyTitle: 'Privacidad y conectividad',
     externalAgent: 'Copiloto / agente externo',

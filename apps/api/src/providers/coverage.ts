@@ -18,8 +18,17 @@
  * *measured* findings throughout — the verdict names the assertions separately so the two numbers can never be
  * silently summed by a reader who sees more rows in the ledger than the count admits.
  *
+ * **Why the verdict is localised and a finding's title is not.** Nothing in this sentence is written at measurement
+ * time. It is recomposed from the stage table on every request, and what it describes is THE ANALYSIS RUN — which
+ * stages this deployment routed to and which of them executed — not the firmware. It is interface copy that happens
+ * to be built server-side, so it is composed in the caller's language from `i18n/`. A finding's title and rationale
+ * are the opposite: a provider wrote them while measuring and they are stored with the image as evidence, so they
+ * render as recorded. Worker names are ids and are interpolated verbatim in either language, because the reader
+ * compares the verdict against the stage table printed directly underneath it.
+ *
  * Pure: `buildCoverage` takes plain data and returns the report. The route binds it to the store.
  */
+import { type Locale, messages } from '../i18n/index.js';
 import type { OpacidadStep } from '../opacidad-narrative.js';
 import type { PlanSpec } from '../opacidad-plan.js';
 
@@ -75,9 +84,16 @@ function statusOfStep(step: OpacidadStep): StageStatus {
   }
 }
 
+/** The first `limit` worker names, plus how many were left out — the list is a summary and must say so. */
+function namesAndRest(stages: CoverageStage[], limit: number): { workers: string[]; more: number } {
+  return { workers: stages.slice(0, limit).map((s) => s.worker), more: Math.max(0, stages.length - limit) };
+}
+
 /**
  * Compose the honest reading of the finding count. The cases are deliberately distinct: "nothing has run" and
- * "everything ran and found nothing" must never produce the same sentence, because they are opposite conclusions.
+ * "everything ran and found nothing" must never produce the same sentence, because they are opposite conclusions —
+ * and that has to hold in every language, which is why each branch is its own catalogue entry rather than a
+ * placeholder substituted into one shared sentence.
  */
 function verdictFor(
   findingCount: number,
@@ -86,51 +102,49 @@ function verdictFor(
   blocked: CoverageStage[],
   degraded: CoverageStage[] = [],
   operatorAssertions = 0,
+  locale: Locale = 'en',
 ): string {
+  const t = messages(locale).coverage;
   const missing = applicable - executed;
   // Appended to every branch rather than folded into one. The stage arithmetic above must read identically
   // whether or not anyone has written an assertion — that invariance IS the guarantee, and a clause that only
   // appears in some branches is a clause a reader learns to stop looking for.
-  const assertedNote = operatorAssertions
-    ? ` Separately, ${operatorAssertions} operator assertion(s) are recorded on this image — statements by a named author, not measurements. They are excluded from the count above and cover no stage.`
-    : '';
-  const blockedNote = blocked.length
-    ? ` Not covered: ${blocked
-        .slice(0, 4)
-        .map((s) => s.worker)
-        .join(', ')}${blocked.length > 4 ? `, +${blocked.length - 4} more` : ''}.`
-    : '';
+  const assertedNote = operatorAssertions ? t.assertions(operatorAssertions) : '';
+  const blockedNote = blocked.length ? t.notCovered(namesAndRest(blocked, 4)) : '';
   // A degraded stage RAN, so it counts as executed — but saying "all applicable stages" while one of them only
   // half-worked lets the headline absorb the caveat its own table is showing. Seen on a real OVMF scan: FwHunt
   // ran 17 of 108 rules, and the verdict still read "across all 2 applicable stages".
-  const degradedNote = degraded.length
-    ? ` ${degraded.length} stage(s) ran DEGRADED and cover less than their name suggests: ${degraded
-        .slice(0, 3)
-        .map((s) => s.worker)
-        .join(', ')}${degraded.length > 3 ? `, +${degraded.length - 3} more` : ''}.`
-    : '';
+  const degradedNote = degraded.length ? t.degraded({ count: degraded.length, ...namesAndRest(degraded, 3) }) : '';
+  // Joined rather than concatenated so the notes carry no leading space of their own — a catalogue entry that has
+  // to remember to start with one is an entry the next language will get wrong.
+  const sentence = (base: string, ...notes: string[]): string => [base, ...notes.filter((n) => n)].join(' ');
 
   if (executed === 0) {
     // Coverage is measured off the autonomous scan's per-worker outcomes, so a stage run on its own from a manual
     // route is invisible here. Saying "nothing has analyzed this image" next to a non-zero finding count would be
     // contradicted by the very row it annotates — which is the same conflation this banner exists to prevent.
     if (findingCount > 0) {
-      return `No autonomous scan has run, so coverage of the ${applicable} applicable stage(s) is UNKNOWN. The ${findingCount} finding(s) here come from individually-run stages — real results, but no basis for reading the rest as clean.${assertedNote}`;
+      return sentence(t.verdict.unknownWithFindings({ applicable, findingCount }), assertedNote);
     }
     // Reached when the only rows on the image are assertions. The sentence must stay UNEXAMINED: nothing was
     // analyzed, and a person writing three claims does not change that by one stage.
-    return `Nothing has analyzed this image yet — ${applicable} applicable stage(s) are unexecuted. An empty findings list here means UNEXAMINED, not clean.${assertedNote}`;
+    return sentence(t.verdict.unexamined(applicable), assertedNote);
   }
   if (findingCount === 0 && missing > 0) {
-    return `${executed} of ${applicable} stages ran and recorded nothing; ${missing} never ran. Zero findings covers only the stages that ran — it is not a clean bill for this firmware.${blockedNote}${degradedNote}${assertedNote}`;
+    return sentence(t.verdict.partialEmpty({ executed, applicable, missing }), blockedNote, degradedNote, assertedNote);
   }
   if (findingCount === 0) {
-    return `All ${applicable} applicable stages ran and recorded nothing. That is a real negative for what this deployment can check statically — it is not proof the firmware is secure.${degradedNote}${assertedNote}`;
+    return sentence(t.verdict.allRanEmpty(applicable), degradedNote, assertedNote);
   }
   if (missing > 0) {
-    return `${findingCount} finding(s) from ${executed} of ${applicable} stages; ${missing} never ran, so the picture is incomplete.${blockedNote}${degradedNote}${assertedNote}`;
+    return sentence(
+      t.verdict.partialWithFindings({ findingCount, executed, applicable, missing }),
+      blockedNote,
+      degradedNote,
+      assertedNote,
+    );
   }
-  return `${findingCount} finding(s) across all ${applicable} applicable stages.${degradedNote}${assertedNote}`;
+  return sentence(t.verdict.complete({ findingCount, applicable }), degradedNote, assertedNote);
 }
 
 /**
@@ -147,8 +161,14 @@ export function buildCoverage(input: {
   findingCount: number;
   /** Active operator assertions. Defaults to 0 so every existing caller keeps its exact previous verdict. */
   operatorAssertions?: number;
+  /**
+   * The language the verdict is composed in. A parameter, never a module-level setting: two requests in two
+   * languages can be in flight at once, and it defaults to English so a caller without one — or a request whose
+   * `?lang` was absent or unrecognised — gets exactly what it always got.
+   */
+  locale?: Locale;
 }): CoverageReport {
-  const { firmwareClass, classRationale, specs, steps, findingCount, operatorAssertions = 0 } = input;
+  const { firmwareClass, classRationale, specs, steps, findingCount, operatorAssertions = 0, locale = 'en' } = input;
   const byWorker = new Map((steps ?? []).map((s) => [s.worker, s]));
 
   const stages: CoverageStage[] = specs.map((spec) => {
@@ -173,7 +193,9 @@ export function buildCoverage(input: {
     if (byWorker.has(step.worker) && specs.some((s) => s.worker === step.worker)) continue;
     stages.push({
       worker: step.worker,
-      reason: step.trigger ?? 'scheduled dynamically from a lead',
+      // `trigger` is the lead the re-plan fired on — recorded by the run and printed as it was recorded. Only the
+      // fallback, which this build composes now, is localised.
+      reason: step.trigger ?? messages(locale).coverage.scheduledFromLead,
       status: statusOfStep(step),
       detail: step.note ?? step.summary,
       ...(step.findingCount !== undefined ? { findingCount: step.findingCount } : {}),
@@ -201,6 +223,7 @@ export function buildCoverage(input: {
       blocked,
       stages.filter((s) => s.status === 'degraded'),
       operatorAssertions,
+      locale,
     ),
     // A degraded stage covers less than its name suggests, so the count alone still misleads even at full
     // execution — the banner must stay prominent.
