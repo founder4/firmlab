@@ -55,6 +55,7 @@ import { promisify } from 'node:util';
 import type { Architecture, ProofState } from '@firmlab/core';
 import { type LaneFlagName, effectiveEnv } from '../flags.js';
 import { detectTools } from '../tools.js';
+import { type BootDiagnosis, diagnoseUnreachable } from './boot-diagnose.js';
 import { type EgressObservation, describeEgress, mergeEgress, parseEgress } from './egress.js';
 import type { JobHandle } from './jobs.js';
 import { readPortMap } from './portmap-run.js';
@@ -120,6 +121,12 @@ export interface SystemEmulationResult {
   egress?: EgressObservation;
   /** True when this run was booted with `restrict=on`, so nothing below was reached. */
   isolated?: boolean;
+  /**
+   * Why nothing answered, when nothing did. Absent on a run where something answered — there is then nothing to
+   * diagnose — and on results stored before this existed. Never changes `proofState`: it explains the empty
+   * list, it does not reclassify it.
+   */
+  unreachable?: BootDiagnosis;
 }
 
 /** A single boot's outcome, summarised. The raw console of the pass the verdict came from is `stdout`. */
@@ -1637,6 +1644,19 @@ export async function runFullSystem(
         `Declared but silent: ${portMap.declared.map((h) => `${h.port}/${h.protocol}`).join(', ')}. A port the firmware declares and no booted service answers is a gap worth reading, not a parse error.`,
       );
     }
+    // An empty `open` covers at least five situations that want different work, and until this it rendered as one.
+    // Read from the VERDICT pass, because that is the boot the result speaks for.
+    const unreachable = diagnoseUnreachable({
+      consoleOutput: `${verdictPass.stdout}\n${verdictPass.stderr}`,
+      forwards: verdictPass.forwards.length,
+      open: verdictPass.open.length,
+      wire: verdictPass.wire,
+    });
+    if (unreachable.cause !== 'answered') {
+      handle.log(`Why nothing answered: ${unreachable.summary}`);
+      for (const e of unreachable.evidence) handle.log(`  evidence: ${e}`);
+    }
+
     // Read from the recorded passes rather than from the two locals, so a run that took only pass one and a run
     // that took both go through the same merge.
     const egress = passes.reduce<EgressObservation | null>((acc, p) => mergeEgress(acc, p.egress ?? null), null);
@@ -1666,6 +1686,7 @@ export async function runFullSystem(
       // had a working network is still a name this firmware asks for.
       ...(egress ? { egress } : {}),
       isolated: isolate,
+      ...(unreachable.cause === 'answered' ? {} : { unreachable }),
       inference: {
         kind: inference.kind,
         reason: inference.reason,

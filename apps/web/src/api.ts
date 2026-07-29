@@ -164,6 +164,26 @@ export interface DnsQuery {
   frames: number;
 }
 
+/**
+ * Why nothing answered on a full-system boot. An empty `open` list covers at least five situations that want
+ * different work — a daemon that crashed, a guest that drops packets, a stack that refuses them — and this is
+ * what separates them. Optional forever, like every field added to a persisted result type.
+ */
+export interface BootDiagnosis {
+  cause:
+    | 'answered'
+    | 'service-died'
+    | 'guest-dropped'
+    | 'nothing-listening'
+    | 'no-syns'
+    | 'no-service-started'
+    | 'unknown';
+  summary: string;
+  evidence: string[];
+  daemonsStarted: string[];
+  daemonsExited: { binary: string; pid: string; code: number; signal: number | null; lastOpen: string | null }[];
+}
+
 export interface EgressObservation {
   attempts: EgressAttempt[];
   dnsQueries: DnsQuery[];

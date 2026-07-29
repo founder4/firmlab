@@ -46,6 +46,7 @@ export const simulation: Messages['simulation'] = {
   testKey: (key: string) => `clave de prueba: ${key}`,
   nvramVars: (n: number) => `${n} variable(s) NVRAM`,
 
+  unreachableTitle: 'Por qué no respondió nada',
   egressTitle: 'A dónde intentó ir',
   egressBlocked: 'salida bloqueada',
   egressOpen: 'salida abierta',

@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type BinaryEntry,
+  type BootDiagnosis,
   type ChipsecResult,
   type EgressObservation,
   type EmulationMenu,
@@ -453,9 +454,29 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
       {/* Its own panel, OUTSIDE the running-job block: the observation is a property of the image, and a reader
           who simply opened this page has to see it without having launched the boot themselves. `egressShown`
           prefers a live run over the stored one. */}
-      {egressShown?.egress && (
+      {(egressShown?.egress || egressShown?.unreachable) && (
         <div className="panel" style={{ marginTop: 16 }}>
-          <EgressPanel egress={egressShown.egress} isolated={egressShown.isolated === true} />
+          {/* Above the egress, because "nothing answered, and here is why" is the first thing a reader of an
+              empty result needs — and the sentence names what to go and fix. */}
+          {egressShown.unreachable && (
+            <div style={{ marginBottom: egressShown.egress ? 14 : 0 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: 13 }}>{t.simulation.unreachableTitle}</strong>
+                <span className="badge badge-medium mono" style={{ fontSize: 10 }}>
+                  {egressShown.unreachable.cause}
+                </span>
+              </div>
+              <div className="hint" style={{ marginTop: 6 }}>
+                {egressShown.unreachable.summary}
+              </div>
+              {egressShown.unreachable.evidence.length > 0 && (
+                <div className="hint mono" style={{ marginTop: 4, fontSize: 11.5 }}>
+                  {egressShown.unreachable.evidence.join(' · ')}
+                </div>
+              )}
+            </div>
+          )}
+          {egressShown.egress && <EgressPanel egress={egressShown.egress} isolated={egressShown.isolated === true} />}
         </div>
       )}
 
@@ -472,6 +493,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
 interface StoredEmulationResult {
   egress?: EgressObservation;
   isolated?: boolean;
+  unreachable?: BootDiagnosis;
 }
 
 /**

@@ -47,6 +47,13 @@ export const simulation = {
   nvramVars: (n: number) => `${n} NVRAM var(s)`,
 
   /**
+   * The verdict on an empty `open` list. It is a HEADING only: the sentence under it is composed by
+   * `boot-diagnose.ts` from the guest's own trace and renders as the provider wrote it, because it quotes exit
+   * codes, file paths and packet counts — measurements, not chrome.
+   */
+  unreachableTitle: 'Why nothing answered',
+
+  /**
    * Where the booted firmware tried to go. Two words carry this block and neither may soften in translation:
    * the firmware ADDRESSED these — a SYN into a black hole looks identical from the sending side — and whether
    * it was ALLOWED to get there is a property of the run, not of the firmware.
