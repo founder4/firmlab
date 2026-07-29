@@ -19,6 +19,7 @@ type HealthState = 'ok' | 'proxied' | 'exposed' | 'down';
 
 /** Local-only reassurance + API reachability. Communicates the security posture, honestly (§14). */
 function HealthPill(): JSX.Element {
+  const t = useMessages();
   const [state, setState] = useState<HealthState>('down');
   useEffect(() => {
     api
@@ -26,17 +27,17 @@ function HealthPill(): JSX.Element {
       .then((h) => setState(h.trustedProxy ? 'proxied' : h.exposedToNetwork ? 'exposed' : 'ok'))
       .catch(() => setState('down'));
   }, []);
-  if (state === 'down') return <span className="badge badge-high">API unreachable</span>;
-  if (state === 'exposed') return <span className="badge badge-medium">⚠ bound to network</span>;
+  if (state === 'down') return <span className="badge badge-high">{t.nav.health.unreachable}</span>;
+  if (state === 'exposed') return <span className="badge badge-medium">{t.nav.health.exposed}</span>;
   if (state === 'proxied')
     return (
-      <span className="badge badge-ok" title="Reachable only through an authenticating reverse proxy">
-        🔒 auth-gated
+      <span className="badge badge-ok" title={t.nav.health.proxiedTitle}>
+        {t.nav.health.proxied}
       </span>
     );
   return (
-    <span className="badge badge-ok" title="Bound to loopback — nothing leaves this machine">
-      ● local-only
+    <span className="badge badge-ok" title={t.nav.health.localTitle}>
+      {t.nav.health.local}
     </span>
   );
 }
@@ -148,10 +149,11 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
   );
 }
 
-const THEME_OPTS: { value: ThemePref; icon: IconName; label: string }[] = [
-  { value: 'light', icon: 'sun', label: 'Light theme' },
-  { value: 'system', icon: 'monitor', label: 'Match system theme' },
-  { value: 'dark', icon: 'moon', label: 'Dark theme' },
+/** Order and glyph only — the label a screen reader reads comes from the catalogue, keyed by the same value. */
+const THEME_OPTS: { value: ThemePref; icon: IconName }[] = [
+  { value: 'light', icon: 'sun' },
+  { value: 'system', icon: 'monitor' },
+  { value: 'dark', icon: 'moon' },
 ];
 
 /** Theme + density controls, mirrored in Settings but always reachable from the header. */
@@ -161,17 +163,19 @@ function AppearanceControls(): JSX.Element {
   return (
     <>
       {/* biome-ignore lint/a11y/useSemanticElements: a segmented button group; a <fieldset> would impose UA styling. */}
-      <div className="segmented" role="group" aria-label="Theme" data-tour="appearance">
+      <div className="segmented" role="group" aria-label={t.nav.themeGroup} data-tour="appearance">
         {THEME_OPTS.map((o) => {
           const Glyph = Icon[o.icon];
+          const label =
+            o.value === 'light' ? t.nav.themeLight : o.value === 'dark' ? t.nav.themeDark : t.nav.themeSystem;
           return (
             <button
               key={o.value}
               type="button"
               className={theme === o.value ? 'active' : ''}
-              aria-label={o.label}
+              aria-label={label}
               aria-pressed={theme === o.value}
-              title={o.label}
+              title={label}
               onClick={() => setTheme(o.value)}
             >
               <Glyph size={15} />
@@ -182,8 +186,8 @@ function AppearanceControls(): JSX.Element {
       <button
         type="button"
         className="icon-btn"
-        title={density === 'compact' ? 'Comfortable density' : 'Compact density'}
-        aria-label="Toggle density"
+        title={density === 'compact' ? t.nav.densityToComfortable : t.nav.densityToCompact}
+        aria-label={t.nav.densityToggle}
         onClick={() => setDensity(density === 'compact' ? 'comfortable' : 'compact')}
       >
         {density === 'compact' ? <Icon.overview size={15} /> : <Icon.binaries size={15} />}

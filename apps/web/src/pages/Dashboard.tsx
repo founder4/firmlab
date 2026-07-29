@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { type CoverageSummary, type ImageSummary, api, fmtBytes } from '../api';
-import { useMessages } from '../i18n';
+import { useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { toast } from '../toast';
 
@@ -17,8 +17,11 @@ const STATUS_BADGE: Record<string, string> = { ready: 'badge-ok', error: 'badge-
  * called `unexamined` and is never dressed as a neutral zero; a partial run shows how much of the applicable plan
  * actually executed. The full sentence is on the title, one hover away.
  *
- * That hover sentence is `c.verdict` — written by the coverage provider when it ran and stored with the image, so
- * it stays in the language that produced it. Translating a stored measurement would be rewriting the record.
+ * That hover sentence is `c.verdict`, and it is NOT a stored measurement: `providers/coverage.ts` recomposes it
+ * from the stage table on every request, and what it describes is the analysis RUN — which stages this deployment
+ * routed to and which of them executed — not the firmware. So it arrives already written in the locale the page
+ * asked for, and there is nothing to translate here. A finding's title is the opposite case and is shown as the
+ * provider recorded it.
  */
 function CoverageCell({ c }: { c: CoverageSummary | undefined }): JSX.Element {
   const t = useMessages();
@@ -115,6 +118,7 @@ export function Dashboard(): JSX.Element {
   const tagInputRef = useRef<HTMLInputElement>(null);
   const nav = useNavigate();
   const t = useMessages();
+  const locale = useLocale();
 
   // Focus the inline tag field when it opens (only one row edits at a time).
   useEffect(() => {
@@ -131,11 +135,15 @@ export function Dashboard(): JSX.Element {
       .storage()
       .then(setUsage)
       .catch(() => setUsage(null));
+    // The corpus coverage carries the locale, and `refresh` therefore depends on it: the verdict behind every
+    // row's hover is recomposed per request, so a language switch has to re-ask for it. The listing and the
+    // storage figures beside it are data and would come back identical — they ride along because they are one
+    // refresh, not because they move.
     api
-      .coverageAll()
+      .coverageAll(locale)
       .then((rows) => setCoverage(new Map(rows.map((r) => [r.imageId, r]))))
       .catch(() => setCoverage(new Map()));
-  }, []);
+  }, [locale]);
   useEffect(refresh, [refresh]);
 
   /**

@@ -19,6 +19,13 @@ export const nav: Messages['nav'] = {
   toggleNav: 'Mostrar u ocultar la navegación',
   help: 'Ayuda y visita guiada',
   helpAria: 'Ayuda y visita guiada',
+  themeGroup: 'Tema',
+  themeLight: 'Tema claro',
+  themeSystem: 'Seguir el tema del sistema',
+  themeDark: 'Tema oscuro',
+  densityToggle: 'Cambiar la densidad',
+  densityToComfortable: 'Densidad cómoda',
+  densityToCompact: 'Densidad compacta',
   health: {
     unreachable: 'API inaccesible',
     exposed: '⚠ expuesto a la red',

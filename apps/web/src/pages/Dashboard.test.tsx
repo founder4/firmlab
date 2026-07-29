@@ -6,7 +6,7 @@
  * that showed `arm` as `brazo`, or translated a file the operator uploaded, would be inventing values the API never
  * returned. The same run asserts both, because either one alone passes with the other broken.
  */
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
@@ -113,7 +113,42 @@ describe('Dashboard localisation', () => {
     renderDashboard();
     expect(await screen.findByText('sin examinar')).toBeInTheDocument();
     expect(screen.getByText('1 de 1 sin examinar')).toBeInTheDocument();
-    // The stored verdict is a measurement the provider wrote and is shown as recorded, not re-translated.
+    // The hover verdict arrives from the API already written in the requested language; this fixture answers the
+    // same sentence whatever is asked for, so what is pinned here is that the page prints what it was given.
     expect(screen.getByTitle('Nothing has analyzed this image yet')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The coverage verdict is composed by the server on every read, so the DASHBOARD has to ask for it in the language
+ * it is rendering — and ask again when that changes.
+ *
+ * This is the half a render test cannot see. The row's badge is local prose and translated on the spot, so the
+ * screen looks entirely Spanish while the sentence behind every hover is still English, and the panel that exists
+ * to stop an unexamined image reading as a clean one is exactly the one that must not half-translate. What is
+ * asserted is the CALL, because the fixture's answer is the same either way.
+ */
+describe('Dashboard — the corpus coverage is requested in the active language', () => {
+  // The mocked client is module-scoped and its call log survives between tests, so "how many times" is only a
+  // question this file can ask after clearing it. The outer `beforeEach` has already restored the resolved value.
+  beforeEach(() => mockApi.coverageAll.mockClear());
+
+  it('carries the locale on the first load', async () => {
+    renderDashboard();
+    expect(await screen.findByText('router-v1.bin')).toBeInTheDocument();
+    expect(mockApi.coverageAll).toHaveBeenCalledWith('en');
+  });
+
+  it('re-asks for it when the operator switches language, rather than keeping the first answer', async () => {
+    renderDashboard();
+    expect(await screen.findByText('router-v1.bin')).toBeInTheDocument();
+    expect(mockApi.coverageAll).toHaveBeenCalledTimes(1);
+
+    // Inside `act`, because the locale store notifies live subscribers and this tree is mounted.
+    await act(async () => {
+      setLocale('es');
+    });
+    await waitFor(() => expect(mockApi.coverageAll).toHaveBeenCalledWith('es'));
+    expect(mockApi.coverageAll).toHaveBeenCalledTimes(2);
   });
 });

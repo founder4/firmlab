@@ -9,7 +9,7 @@ import {
   type LearningSurface,
   api,
 } from '../api';
-import { type Messages, useMessages } from '../i18n';
+import { type Messages, useLocale, useMessages } from '../i18n';
 
 function ceilingClass(c: string | null | undefined): string {
   if (c === 'captured_plaintext' || c === 'captured_encrypted') return 'badge-ok';
@@ -123,24 +123,33 @@ export function Capture(): JSX.Element {
   const [learning, setLearning] = useState<LearningSurface | null>(null);
 
   const t = useMessages();
+  const locale = useLocale();
 
   const runPreflight = useCallback(async (deviceId: string) => {
     const plan = await api.capturePreflight(deviceId).catch(() => null);
     if (plan) setPreflight((m) => ({ ...m, [deviceId]: plan }));
   }, []);
 
+  /**
+   * The backend table is asked for again when the language changes, and it is its OWN effect for a reason: the
+   * mount effect below owns the polling intervals and tears them down on cleanup, so folding the locale into its
+   * dependency list would kill a running discovery sweep every time somebody flipped the switch.
+   */
   useEffect(() => {
     api
-      .captureStatus()
-      .then(setStatus)
-      .catch(() => setStatus({ enabled: false }));
-    api
-      .captureBackends()
+      .captureBackends(locale)
       .then((v) => {
         setBackends(v.backends);
         setTransports(v.transports);
       })
       .catch(() => undefined);
+  }, [locale]);
+
+  useEffect(() => {
+    api
+      .captureStatus()
+      .then(setStatus)
+      .catch(() => setStatus({ enabled: false }));
     api
       .captureDevices()
       .then(setDevices)
@@ -292,6 +301,9 @@ export function Capture(): JSX.Element {
                   </td>
                   <td className="mono">{b.id}</td>
                   <td className="hint">{isRole(b.role) ? t.capture.roles[b.role] : b.role}</td>
+                  {/* `unlocks` is composed by the API in the locale this page asked for — it describes the
+                      deployment and is recomputed on every read. `reason` is what THIS box answered when probed
+                      (the dongle it found, the capability it lacks), so it is printed exactly as it arrived. */}
                   <td>
                     <div>{b.available ? b.unlocks : <span className="hint">{b.unlocks}</span>}</div>
                     <div className="hint" style={{ marginTop: 2 }}>

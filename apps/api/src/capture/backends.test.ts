@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CAPTURE_BACKEND_IDS,
   CAP_NET_ADMIN,
   CAP_NET_RAW,
   type CaptureBackendStatus,
@@ -141,5 +142,62 @@ describe('detectCaptureBackends', () => {
       expect(typeof b.available).toBe('boolean');
       expect(b.reason.length).toBeGreaterThan(0);
     }
+  });
+
+  it('keeps the exported id list and the registry naming the same set', () => {
+    // `CAPTURE_BACKEND_IDS` is what the catalogue test checks both glosses against, so a backend added to the
+    // registry and forgotten here would silently drop out of the "is everything glossed?" guarantee.
+    expect([...CAPTURE_BACKEND_IDS].sort()).toEqual(
+      detectCaptureBackends(true)
+        .map((b) => b.id)
+        .sort(),
+    );
+  });
+});
+
+/**
+ * The gloss is a parameter; the probe is not.
+ *
+ * What a backend would let you acquire is prose about this deployment and moves with the locale. What the probe
+ * LEARNED does not: the id keys the record, the role and transports are matched by the preflight, and the reason
+ * is what this box answered when asked — the dongle it found, the capability it lacks, the layer-2 verdict. A
+ * cache holding a sentence in one language would answer the second request in the wrong one, so the cache holds
+ * none, and this pins that the two halves cannot be swapped for each other.
+ */
+describe('detectCaptureBackends — the locale changes the gloss and nothing else', () => {
+  it('answers an absent locale in English, exactly as it did before the parameter existed', () => {
+    const proxy = detectCaptureBackends(true).find((b) => b.id === 'network-proxy');
+    expect(proxy?.unlocks).toBe(
+      'Intercept an HTTP OTA (or HTTPS when the device does not pin/validate) and carve the blob',
+    );
+  });
+
+  it('leaves the ids, roles, transports, availability and probe reasons byte-identical in Spanish', () => {
+    const english = detectCaptureBackends(true);
+    const spanish = detectCaptureBackends(false, 'es');
+    const probeOnly = (b: CaptureBackendStatus): unknown => ({
+      id: b.id,
+      role: b.role,
+      transports: b.transports,
+      available: b.available,
+      reason: b.reason,
+      capabilities: b.capabilities,
+    });
+    expect(spanish.map(probeOnly)).toEqual(english.map(probeOnly));
+  });
+
+  it('translates every backend gloss, leaving none empty and none still in English', () => {
+    const english = detectCaptureBackends(true);
+    const spanish = detectCaptureBackends(false, 'es');
+    spanish.forEach((b, i) => {
+      expect(b.unlocks.length, b.id).toBeGreaterThan(0);
+      expect(b.unlocks, b.id).not.toBe(english[i]?.unlocks);
+    });
+  });
+
+  it('reads the same transports off either language — a ceiling is not a translation', () => {
+    expect(availableTransports(detectCaptureBackends(false, 'es'))).toEqual(
+      availableTransports(detectCaptureBackends(true)),
+    );
   });
 });

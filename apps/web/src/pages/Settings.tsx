@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { type AgentConfig, type LaneFlag, type StorageUsage, api, fmtBytes } from '../api';
-import { LOCALES, type Locale, setLocale, useLocale, useMessages } from '../i18n';
+import { LOCALES, type Locale, intlTag, setLocale, useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { startTour } from '../onboarding';
 import { type Density, type ThemePref, setDensity, setTheme, useAppearance } from '../theme';
@@ -193,17 +193,16 @@ export function Settings(): JSX.Element {
       .finally(() => setBusyFlag(null));
   };
 
+  // Four states, never three: an unreachable API is its own answer and must not collapse into the local-only one.
+  // The badge class is a style token and the words are prose, so only the words come from the catalogue.
+  const p = t.settings.privacy.posture;
   const posture = !health
-    ? { label: 'Unknown', cls: 'badge-medium', note: 'The API is unreachable.' }
+    ? { label: p.unknown, cls: 'badge-medium', note: p.unknownNote }
     : health.trustedProxy
-      ? { label: 'Auth-gated proxy', cls: 'badge-ok', note: 'Reached only through an authenticating reverse proxy.' }
+      ? { label: p.proxy, cls: 'badge-ok', note: p.proxyNote }
       : health.exposedToNetwork
-        ? {
-            label: 'Bound to network',
-            cls: 'badge-medium',
-            note: 'The API is reachable beyond loopback. Consider restricting it.',
-          }
-        : { label: 'Local-only', cls: 'badge-ok', note: 'Bound to loopback — firmware never leaves this machine.' };
+        ? { label: p.exposed, cls: 'badge-medium', note: p.exposedNote }
+        : { label: p.local, cls: 'badge-ok', note: p.localNote };
 
   return (
     <div>
@@ -290,34 +289,31 @@ export function Settings(): JSX.Element {
 
       {tab === 'analysis' && (
         <div className="panel" style={{ maxWidth: 720 }}>
-          <div className="panel-title">Analysis</div>
-          <div className="panel-sub">
-            The deterministic engine runs on every upload with no configuration. Depth comes from external tools and
-            from deployment limits, which are set on the server.
-          </div>
-          <Row label="External tools">
+          <div className="panel-title">{t.settings.analysis.title}</div>
+          <div className="panel-sub">{t.settings.analysis.sub}</div>
+          <Row label={t.settings.analysis.externalTools}>
             <button type="button" className="btn btn-sm" onClick={() => setTab('tools')}>
-              <Icon.capabilities size={14} /> View detected tools
+              <Icon.capabilities size={14} /> {t.settings.analysis.viewTools}
             </button>
             <div className="hint" style={{ marginTop: 6 }}>
-              binwalk, radare2/Ghidra, syft/grype, gitleaks and QEMU unlock extraction, triage, SBOM/CVEs, deep secret
-              scans and emulation when present.
+              {t.settings.analysis.toolsHint}
             </div>
           </Row>
-          <Row label="Upload limit">
+          {/* The variable names sit outside the sentence in both languages — they are what an operator types. */}
+          <Row label={t.settings.analysis.uploadLimit}>
             <span className="hint">
-              Max image size is set with <span className="mono">FIRMLAB_MAX_UPLOAD</span> (default 500 MB).
+              {t.settings.analysis.uploadLimitLead} <span className="mono">FIRMLAB_MAX_UPLOAD</span>{' '}
+              {t.settings.analysis.uploadLimitTail}
             </span>
           </Row>
-          <Row label="Job concurrency">
+          <Row label={t.settings.analysis.jobConcurrency}>
             <span className="hint">
-              Heavy tools are throttled with <span className="mono">FIRMLAB_MAX_CONCURRENT_JOBS</span> (default 2) so a
-              burst can’t exhaust the machine.
+              {t.settings.analysis.concurrencyLead} <span className="mono">FIRMLAB_MAX_CONCURRENT_JOBS</span>{' '}
+              {t.settings.analysis.concurrencyTail}
             </span>
           </Row>
           <div className="hint" style={{ marginTop: 12 }}>
-            These are deployment settings rather than per-session preferences, so they live in the environment, not here
-            — this panel mirrors them honestly.
+            {t.settings.analysis.deploymentNote}
           </div>
         </div>
       )}
@@ -327,16 +323,15 @@ export function Settings(): JSX.Element {
       {tab === 'privacy' && (
         <div className="panel" style={{ maxWidth: 720 }}>
           <div className="panel-title">{t.settings.panels.privacyTitle}</div>
-          <div className="panel-sub">
-            FirmLab is designed to run locally. Firmware images are analyzed on this machine and are not uploaded.
-          </div>
-          <Row label="Network posture">
+          <div className="panel-sub">{t.settings.privacy.sub}</div>
+          <Row label={t.settings.privacy.networkPosture}>
             <span className={`badge ${posture.cls}`}>{posture.label}</span>
             <div className="hint" style={{ marginTop: 6 }}>
               {posture.note}
             </div>
           </Row>
-          <Row label="Bind address">
+          {/* Host and port are what the server is actually bound to — data, printed as it arrived. */}
+          <Row label={t.settings.privacy.bindAddress}>
             <span className="mono">{health ? `${health.host}:${health.port}` : '—'}</span>
           </Row>
 
@@ -369,112 +364,105 @@ export function Settings(): JSX.Element {
           <Row label={t.settings.panels.externalAgent}>
             {agent?.enabled ? (
               <>
-                <span className="badge badge-medium">Enabled</span>
+                <span className="badge badge-medium">{t.settings.state.enabled}</span>
+                {/* The provider and the model are ids from /agent/config, printed verbatim in either language. */}
                 <div className="hint" style={{ marginTop: 6 }}>
-                  When you run the copilot or an agent session, the deterministic analysis context (findings, binary
-                  metadata, corpus cross-refs) is sent to <span className="mono">{agent.provider}</span> (
-                  <span className="mono">{agent.model}</span>). No raw firmware bytes are sent. Emulation requires your
-                  approval.
+                  {t.settings.privacy.agentSentTo} <span className="mono">{agent.provider}</span> (
+                  <span className="mono">{agent.model}</span>). {t.settings.privacy.agentNoBytes}
                 </div>
               </>
             ) : (
               <>
-                <span className="badge badge-ok">Disabled</span>
+                <span className="badge badge-ok">{t.settings.state.disabled}</span>
                 <div className="hint" style={{ marginTop: 6 }}>
-                  No external model is configured. Nothing is sent off-machine. Enable it with
-                  <span className="mono"> FIRMLAB_AGENT=1</span> and an API key.
+                  {t.settings.privacy.agentOffLead} <span className="mono">FIRMLAB_AGENT=1</span>{' '}
+                  {t.settings.privacy.agentOffTail}
                 </div>
               </>
             )}
           </Row>
           <div className="banner banner-info" style={{ marginTop: 16, marginBottom: 0 }}>
             <Icon.shield size={16} />
-            <span>
-              The engine (@firmlab/core) is deterministic and needs no network. External tools and the optional copilot
-              are the only things that can reach outside this process.
-            </span>
+            <span>{t.settings.privacy.banner}</span>
           </div>
         </div>
       )}
 
       {tab === 'agent' && (
         <div className="panel" style={{ maxWidth: 720 }}>
-          <div className="panel-title">AI provider</div>
-          <div className="panel-sub">
-            An LLM powers the copilot and the conscious agent's decision nodes. It is optional — with no key configured
-            FirmLab stays fully deterministic and local. Provider and key are set on the server; this mirrors them.
-          </div>
-          <Row label="Active provider">
+          <div className="panel-title">{t.settings.agent.title}</div>
+          <div className="panel-sub">{t.settings.agent.sub}</div>
+          <Row label={t.settings.agent.activeProvider}>
             {agent?.enabled ? (
               <span className="mono">
                 {agent.provider} · {agent.model}
               </span>
             ) : (
-              <span className="badge">none configured</span>
+              <span className="badge">{t.settings.agent.noneConfigured}</span>
             )}
           </Row>
-          <Row label="Select provider">
+          {/* Variable names and their accepted values — identifiers throughout, so this row has no prose at all. */}
+          <Row label={t.settings.agent.selectProvider}>
             <span className="hint">
               <span className="mono">FIRMLAB_LLM_PROVIDER</span> = <span className="mono">deepseek</span> ·{' '}
               <span className="mono">anthropic</span> · <span className="mono">ollama</span>
             </span>
           </Row>
-          <Row label="Provider key">
+          <Row label={t.settings.agent.providerKey}>
             <span className="hint">
-              Set the matching key: <span className="mono">DEEPSEEK_API_KEY</span>,{' '}
-              <span className="mono">ANTHROPIC_API_KEY</span>, or point <span className="mono">OLLAMA_HOST</span> at a
-              local server. Keys live in the server environment, never in the browser.
+              {t.settings.agent.keyLead} <span className="mono">DEEPSEEK_API_KEY</span>,{' '}
+              <span className="mono">ANTHROPIC_API_KEY</span>
+              {t.settings.agent.keyOrPoint} <span className="mono">OLLAMA_HOST</span> {t.settings.agent.keyTail}
             </span>
           </Row>
 
           <div className="panel-title" style={{ marginTop: 22 }}>
-            Agent governor
+            {t.settings.agent.governorTitle}
           </div>
-          <div className="panel-sub">
-            The agent reasons within a deterministic skeleton and pauses for approval before emulation. These limits are
-            enforced by the governor and set via environment variables.
-          </div>
-          <Row label="Status">
+          <div className="panel-sub">{t.settings.agent.governorSub}</div>
+          <Row label={t.settings.agent.status}>
             <span className={`badge ${agent?.enabled ? 'badge-ok' : ''}`}>
-              {agent?.enabled ? 'Enabled' : 'Disabled'}
+              {agent?.enabled ? t.settings.state.enabled : t.settings.state.disabled}
             </span>
           </Row>
           {agent?.enabled && (
             <>
-              <Row label="Model">
+              <Row label={t.settings.agent.model}>
                 <span className="mono">
                   {agent.provider} · {agent.model}
                 </span>
               </Row>
               {agent.budget && (
                 <>
-                  <Row label="Step budget">
+                  <Row label={t.settings.agent.stepBudget}>
                     <span className="mono">{agent.budget.maxSteps}</span>{' '}
                     <span className="hint">FIRMLAB_AGENT_MAX_STEPS</span>
                   </Row>
-                  <Row label="Token budget">
-                    <span className="mono">{agent.budget.maxTokens.toLocaleString()}</span>{' '}
+                  <Row label={t.settings.agent.tokenBudget}>
+                    <span className="mono">{agent.budget.maxTokens.toLocaleString(intlTag(locale))}</span>{' '}
                     <span className="hint">FIRMLAB_AGENT_MAX_TOKENS</span>
                   </Row>
-                  <Row label="Cost ceiling">
-                    <span className="mono">{agent.budget.maxUsd > 0 ? `$${agent.budget.maxUsd}` : 'unbounded'}</span>{' '}
+                  {/* No ceiling is not "spend freely" — it is that nothing would stop the run, so it is a word. */}
+                  <Row label={t.settings.agent.costCeiling}>
+                    <span className="mono">
+                      {agent.budget.maxUsd > 0 ? `$${agent.budget.maxUsd}` : t.settings.agent.unbounded}
+                    </span>{' '}
                     <span className="hint">FIRMLAB_AGENT_MAX_USD</span>
                   </Row>
-                  <Row label="Time budget">
+                  <Row label={t.settings.agent.timeBudget}>
                     <span className="mono">{Math.round(agent.budget.maxWallMs / 1000)}s</span>{' '}
                     <span className="hint">FIRMLAB_AGENT_MAX_SECONDS</span>
                   </Row>
                 </>
               )}
-              <Row label="Emulation">
+              <Row label={t.settings.agent.emulation}>
                 <span className="badge badge-medium">{t.settings.panels.humanApproval}</span>
               </Row>
             </>
           )}
           {!agent?.enabled && (
             <div className="hint" style={{ marginTop: 12 }}>
-              Set <span className="mono">FIRMLAB_AGENT=1</span> and an LLM API key to enable the decision nodes. With
-              the flag off, FirmLab stays local-only and deterministic.
+              {t.settings.agent.offLead} <span className="mono">FIRMLAB_AGENT=1</span> {t.settings.agent.offTail}
             </div>
           )}
         </div>
@@ -483,10 +471,8 @@ export function Settings(): JSX.Element {
       {tab === 'storage' && (
         <div className="panel" style={{ maxWidth: 720 }}>
           <div className="panel-title">{t.settings.panels.storageTitle}</div>
-          <div className="panel-sub">
-            Uploaded images and carved rootfs live under the data directory on this machine.
-          </div>
-          <Row label="On disk">
+          <div className="panel-sub">{t.settings.storage.sub}</div>
+          <Row label={t.settings.storage.onDisk}>
             <span className="mono">{usage ? fmtBytes(usage.totalBytes) : '—'}</span>
             {usage && usage.quotaBytes > 0 && (
               <div style={{ marginTop: 8, maxWidth: 320 }}>
@@ -496,56 +482,54 @@ export function Settings(): JSX.Element {
                   />
                 </div>
                 <div className="hint" style={{ marginTop: 4 }}>
-                  {fmtBytes(usage.totalBytes)} of {fmtBytes(usage.quotaBytes)} quota
+                  {t.settings.storage.quotaOf({
+                    used: fmtBytes(usage.totalBytes),
+                    quota: fmtBytes(usage.quotaBytes),
+                  })}
                 </div>
               </div>
             )}
           </Row>
-          <Row label="Images">
+          <Row label={t.settings.storage.images}>
             <span className="mono">{usage?.imageCount ?? '—'}</span>
           </Row>
-          <Row label="Retention">
+          {/* Two independent limits, each of which may be unset — an absent limit says so rather than staying
+              blank, and the two sentences are joined here so neither catalogue has to carry a leading space. */}
+          <Row label={t.settings.storage.retention}>
             <span className="hint">
-              {usage && usage.maxAgeDays > 0
-                ? `Images older than ${usage.maxAgeDays} days are evicted.`
-                : 'No age limit set.'}
-              {usage && usage.quotaBytes > 0
-                ? ' Oldest images are evicted first when over quota.'
-                : ' No size quota set.'}
+              {[
+                usage && usage.maxAgeDays > 0
+                  ? t.settings.storage.evictedAfter(usage.maxAgeDays)
+                  : t.settings.storage.noAgeLimit,
+                usage && usage.quotaBytes > 0 ? t.settings.storage.oldestFirst : t.settings.storage.noQuota,
+              ].join(' ')}
             </span>
           </Row>
           <div className="hint" style={{ marginTop: 12 }}>
-            Manage or bulk-delete images from <Link to="/analyze">{t.settings.panels.localAnalysis}</Link>. Retention
-            limits are configured with
-            <span className="mono"> FIRMLAB_MAX_IMAGE_AGE_DAYS</span> and{' '}
-            <span className="mono">FIRMLAB_MAX_DATA_BYTES</span>.
+            {t.settings.storage.manageLead} <Link to="/analyze">{t.settings.panels.localAnalysis}</Link>
+            {t.settings.storage.manageMid} <span className="mono">FIRMLAB_MAX_IMAGE_AGE_DAYS</span>{' '}
+            {t.settings.storage.manageAnd} <span className="mono">FIRMLAB_MAX_DATA_BYTES</span>.
           </div>
         </div>
       )}
 
       {tab === 'help' && (
         <div className="panel" style={{ maxWidth: 720 }}>
-          <div className="panel-title">Help</div>
+          <div className="panel-title">{t.settings.help.title}</div>
           <div className="panel-sub">{t.settings.panels.helpSub}</div>
-          <Row label="Product tour">
+          <Row label={t.settings.help.tour}>
             <button type="button" className="btn btn-sm" onClick={startTour}>
-              <Icon.help size={14} /> Restart tour
+              <Icon.help size={14} /> {t.settings.help.restartTour}
             </button>
           </Row>
-          <Row label="Keyboard">
-            <span className="hint">
-              Navigate with Tab and Shift+Tab; activate with Enter/Space; dismiss overlays with Esc.
-            </span>
+          <Row label={t.settings.help.keyboard}>
+            <span className="hint">{t.settings.help.keyboardHint}</span>
           </Row>
-          <Row label="Documentation">
-            <span className="hint">
-              See the project README and docs/ for architecture, the emulation ladder, and the agent design.
-            </span>
+          <Row label={t.settings.help.documentation}>
+            <span className="hint">{t.settings.help.documentationHint}</span>
           </Row>
-          <Row label="About">
-            <span className="hint">
-              FirmLab — local-only firmware analysis workbench. Deterministic engine, optional tool-backed depth.
-            </span>
+          <Row label={t.settings.help.about}>
+            <span className="hint">{t.settings.help.aboutHint}</span>
           </Row>
         </div>
       )}

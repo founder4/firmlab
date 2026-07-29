@@ -17,6 +17,13 @@ export const nav = {
   toggleNav: 'Toggle navigation',
   help: 'Help & tour',
   helpAria: 'Help and tour',
+  themeGroup: 'Theme',
+  themeLight: 'Light theme',
+  themeSystem: 'Match system theme',
+  themeDark: 'Dark theme',
+  densityToggle: 'Toggle density',
+  densityToComfortable: 'Comfortable density',
+  densityToCompact: 'Compact density',
   health: {
     unreachable: 'API unreachable',
     exposed: '⚠ bound to network',

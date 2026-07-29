@@ -49,9 +49,12 @@ export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
    * computing it here (rather than in the UI) keeps the banner from ever disagreeing with the autonomous scan.
    * Answers before any scan has run too — that is precisely the case the banner exists for.
    *
-   * `?lang` picks the language of the verdict sentence. Nothing else about the report moves: the stage ids, the
-   * statuses and every number are identifiers and data, and the counts a Spanish reader gets are the same counts.
-   * Absent or unrecognised, it is English.
+   * `?lang` picks the language of the verdict sentence AND of the per-stage "why this stage" column beside it —
+   * both are recomposed from `specsForClass` on every read and describe the plan, not the firmware, so they move
+   * together. They have to: a Spanish verdict over an English reason column is the one seam this panel cannot
+   * afford, since it is the panel whose whole job is to be read carefully. Nothing else about the report moves —
+   * the stage ids, the statuses and every number are identifiers and data, and the counts a Spanish reader gets
+   * are the same counts. Absent or unrecognised, it is English.
    */
   app.get('/images/:id/coverage', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -113,7 +116,7 @@ function coverageFor(row: ImageRow, locale: Locale = 'en'): CoverageReport {
   return buildCoverage({
     firmwareClass,
     ...(identity?.classRationale ? { classRationale: identity.classRationale } : {}),
-    specs: specsForClass(firmwareClass),
+    specs: specsForClass(firmwareClass, locale),
     steps,
     findingCount: measured.length,
     operatorAssertions: asserted.length,

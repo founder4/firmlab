@@ -81,4 +81,147 @@ export const settings = {
     localAnalysis: 'Local analysis',
     helpSub: 'Learn your way around, or revisit the introduction.',
   },
+
+  /**
+   * On/off as a BADGE, shared by the privacy tab's copilot row and the agent tab's status row.
+   *
+   * Deliberately not in `common`: these two are the same claim about the same lane read from the same
+   * `/agent/config`, and letting them drift would let one panel say the copilot is off while the other says it is
+   * on. Every other on/off on this screen is a lane switch, and those words come from the API.
+   */
+  state: {
+    enabled: 'Enabled',
+    disabled: 'Disabled',
+  },
+
+  /**
+   * The analysis tab. Nothing here is a preference — every value it names is a deployment setting read from the
+   * environment, and the panel's own closing line says so. The variable names sit BESIDE these sentences in
+   * `<span class="mono">`, never inside them: an operator greps a compose file for `FIRMLAB_MAX_UPLOAD`, and a
+   * translation that bent it would be a translation of an identifier.
+   */
+  analysis: {
+    title: 'Analysis',
+    sub: [
+      'The deterministic engine runs on every upload with no configuration. Depth comes from external tools and',
+      'from deployment limits, which are set on the server.',
+    ].join(' '),
+    externalTools: 'External tools',
+    viewTools: 'View detected tools',
+    toolsHint: [
+      'binwalk, radare2/Ghidra, syft/grype, gitleaks and QEMU unlock extraction, triage, SBOM/CVEs, deep secret',
+      'scans and emulation when present.',
+    ].join(' '),
+    uploadLimit: 'Upload limit',
+    uploadLimitLead: 'Max image size is set with',
+    uploadLimitTail: '(default 500 MB).',
+    jobConcurrency: 'Job concurrency',
+    concurrencyLead: 'Heavy tools are throttled with',
+    concurrencyTail: '(default 2) so a burst can’t exhaust the machine.',
+    deploymentNote: [
+      'These are deployment settings rather than per-session preferences, so they live in the environment, not here',
+      '— this panel mirrors them honestly.',
+    ].join(' '),
+  },
+
+  /**
+   * The privacy tab's own chrome. The lane switches inside it are described by the API (see `lanes` above); what is
+   * here is the bind posture, the copilot row and the closing banner.
+   *
+   * The posture words are a verdict about THIS deployment, recomputed from `/health` on every load — `Local-only`
+   * is a claim that firmware never leaves the machine, and a translation that softened `Bound to network` into
+   * something reassuring would invert it. `Unknown` is its own state on purpose: an unreachable API is not a
+   * local-only one, and the panel must never guess in the safe direction.
+   */
+  privacy: {
+    sub: 'FirmLab is designed to run locally. Firmware images are analyzed on this machine and are not uploaded.',
+    networkPosture: 'Network posture',
+    bindAddress: 'Bind address',
+    posture: {
+      unknown: 'Unknown',
+      unknownNote: 'The API is unreachable.',
+      proxy: 'Auth-gated proxy',
+      proxyNote: 'Reached only through an authenticating reverse proxy.',
+      exposed: 'Bound to network',
+      exposedNote: 'The API is reachable beyond loopback. Consider restricting it.',
+      local: 'Local-only',
+      localNote: 'Bound to loopback — firmware never leaves this machine.',
+    },
+    /** Wraps the configured provider and model, which are identifiers and render verbatim. */
+    agentSentTo: [
+      'When you run the copilot or an agent session, the deterministic analysis context (findings, binary metadata,',
+      'corpus cross-refs) is sent to',
+    ].join(' '),
+    agentNoBytes: 'No raw firmware bytes are sent. Emulation requires your approval.',
+    agentOffLead: 'No external model is configured. Nothing is sent off-machine. Enable it with',
+    agentOffTail: 'and an API key.',
+    banner: [
+      'The engine (@firmlab/core) is deterministic and needs no network. External tools and the optional copilot',
+      'are the only things that can reach outside this process.',
+    ].join(' '),
+  },
+
+  /** The AI & agent tab. Every budget it lists is enforced by the governor; this panel only mirrors them. */
+  agent: {
+    title: 'AI provider',
+    sub: [
+      "An LLM powers the copilot and the conscious agent's decision nodes. It is optional — with no key configured",
+      'FirmLab stays fully deterministic and local. Provider and key are set on the server; this mirrors them.',
+    ].join(' '),
+    activeProvider: 'Active provider',
+    noneConfigured: 'none configured',
+    selectProvider: 'Select provider',
+    providerKey: 'Provider key',
+    keyLead: 'Set the matching key:',
+    keyOrPoint: ', or point',
+    keyTail: 'at a local server. Keys live in the server environment, never in the browser.',
+    governorTitle: 'Agent governor',
+    governorSub: [
+      'The agent reasons within a deterministic skeleton and pauses for approval before emulation. These limits are',
+      'enforced by the governor and set via environment variables.',
+    ].join(' '),
+    status: 'Status',
+    model: 'Model',
+    stepBudget: 'Step budget',
+    tokenBudget: 'Token budget',
+    costCeiling: 'Cost ceiling',
+    /** No ceiling is configured. It is not "unlimited spending is fine" — it is that nothing is stopping it. */
+    unbounded: 'unbounded',
+    timeBudget: 'Time budget',
+    emulation: 'Emulation',
+    offLead: 'Set',
+    offTail: [
+      'and an LLM API key to enable the decision nodes. With the flag off, FirmLab stays local-only and',
+      'deterministic.',
+    ].join(' '),
+  },
+
+  /** The storage tab. Retention is enforced by the server; a limit that is not set says so rather than staying blank. */
+  storage: {
+    sub: 'Uploaded images and carved rootfs live under the data directory on this machine.',
+    onDisk: 'On disk',
+    quotaOf: (p: { used: string; quota: string }) => `${p.used} of ${p.quota} quota`,
+    images: 'Images',
+    retention: 'Retention',
+    evictedAfter: (days: number) => `Images older than ${days} day(s) are evicted.`,
+    noAgeLimit: 'No age limit set.',
+    oldestFirst: 'Oldest images are evicted first when over quota.',
+    noQuota: 'No size quota set.',
+    manageLead: 'Manage or bulk-delete images from',
+    manageMid: '. Retention limits are configured with',
+    manageAnd: 'and',
+  },
+
+  /** The help tab. */
+  help: {
+    title: 'Help',
+    tour: 'Product tour',
+    restartTour: 'Restart tour',
+    keyboard: 'Keyboard',
+    keyboardHint: 'Navigate with Tab and Shift+Tab; activate with Enter/Space; dismiss overlays with Esc.',
+    documentation: 'Documentation',
+    documentationHint: 'See the project README and docs/ for architecture, the emulation ladder, and the agent design.',
+    about: 'About',
+    aboutHint: 'FirmLab — local-only firmware analysis workbench. Deterministic engine, optional tool-backed depth.',
+  },
 };

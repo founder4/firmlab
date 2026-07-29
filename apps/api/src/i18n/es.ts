@@ -20,9 +20,9 @@
  * estado de prueba y no cuentan para ninguna etapa).
  *
  * La regla que decide qué se traduce y qué no: lo que se guarda con la imagen o con el trabajo queda CONGELADO en
- * el idioma que lo produjo; lo que se recalcula en cada lectura se traduce. Por eso `coverage`, `tools` y `flags`
- * están aquí — describen esta ejecución del análisis y este despliegue, no el firmware — mientras que el título y
- * el fundamento de un hallazgo se muestran tal cual se registraron.
+ * el idioma que lo produjo; lo que se recalcula en cada lectura se traduce. Por eso `coverage`, `plan`, `tools`,
+ * `captureBackends` y `flags` están aquí — describen esta ejecución del análisis y este despliegue, no el firmware
+ * — mientras que el título y el fundamento de un hallazgo se muestran tal cual se registraron.
  */
 import type { OperatorAssertion, OperatorClaim } from '@firmlab/core';
 import { assertionDay, revisionsOf } from '../operator-findings.js';
@@ -356,6 +356,54 @@ export const es: Messages = {
   },
 
   /**
+   * La columna «por qué esta etapa» del plan por clase. Se recalcula desde `specsForClass` en cada petición y habla
+   * DEL PLAN, nunca del firmware, así que se traduce — mientras el veredicto de cobertura estuvo traducido y esta
+   * columna no, un lector en español leía una frase honesta en español con una columna en inglés al lado, y
+   * justamente en el panel que existe para leerse con cuidado.
+   *
+   * Los nombres de los workers no están aquí: son identificadores y se imprimen literalmente en los dos idiomas.
+   * Tampoco se traducen las rutas, los indicadores ni los nombres de biblioteca que aparecen dentro de estas
+   * frases — `init=/bin/sh`, `/dev/kmem`, `/chosen bootargs`, `os.execute/io.popen` son lo que se busca en el
+   * sistema de ficheros o en el registro, no palabras.
+   */
+  plan: {
+    reason: {
+      extract: 'recuperar el rootfs (extracción recursiva FIT→UBI→SquashFS cuando el contenedor lo requiere)',
+      credentials: 'credenciales débiles o vacías, shells de root, material de claves',
+      auxSecrets:
+        'claves privadas embebidas en particiones hermanas (fuera del rootfs) que la auditoría del rootfs nunca ve',
+      sbom: 'componentes → CVE conocidos (la superficie n-day)',
+      componentFingerprint:
+        'binarios empaquetados (pppd, openssl) → CVE que un SBOM basado sólo en manifiestos no alcanza',
+      kernelPosture:
+        'el kernel bajo el espacio de usuario: antigüedad de la versión, /dev/kmem, firma de módulos, KASLR/RWX (tres estados, honesto)',
+      serviceEnumeration: 'demonios de red que arrancan con el sistema = superficie de ataque',
+      certificates: 'postura de los certificados X.509 embebidos',
+      certificatesRaw: 'postura de los certificados X.509 embebidos (lee la imagen en bruto — no necesita rootfs)',
+      componentMap: 'ELF del rootfs → grafo de dependencias',
+      ubootEnv: 'postura de arranque (init=/bin/sh, autoboot interrumpible, consola)',
+      ubootEnvRaw: 'postura de arranque (init=/bin/sh, autoboot interrumpible, arranque por red, consola)',
+      deviceTree: 'identidad de placa/SoC, mapa de flash declarado, /chosen bootargs, UART de depuración habilitada',
+      bootCmdlineCrosscheck:
+        'el árbol y el entorno de U-Boot declaran cada uno la suya — ¿coinciden, y qué línea pasa realmente la placa?',
+      fccId: 'identificadores FCC → expedientes públicos',
+      nvram:
+        'almacén clave-valor en la flash de la imagen en bruto — credenciales y claves wifi que ningún barrido del rootfs alcanza',
+      webTaint: 'parámetro web → uci → sumideros os.execute/io.popen (la clase del RCE como root de Tor en GL.iNet)',
+      binaryVulnSweep:
+        'ELF del rootfs → candidatos a desbordamiento de pila por copia sin límite y sin canario (los pwnables de DVRF)',
+      updatePath: 'si la imagen va firmada, si el actualizador verifica algo, y si un downgrade está acotado',
+      chipsec: 'decodificación sin conexión de los volúmenes de firmware + postura de Secure Boot / NVRAM',
+      fwhunt:
+        'reglas de patrón de código de FwHunt de upstream → familias conocidas de implantes y módulos vulnerables',
+      rtos: 'tabla de vectores + mapa de memoria + detección de RTOS y de rutinas de decodificación',
+      esp: 'tabla de particiones + almacén de claves NVS (¡claves de firma!) + postura de Flash-Enc/Secure-Boot',
+      encrypted:
+        'identificar cifrador/modo/IV y nombrar la vía de recuperación de la clave (veredicto honesto, nunca un vacío silencioso)',
+    },
+  },
+
+  /**
    * La tabla de Capacidades: lo que desbloquea cada herramienta externa, y el marcador de versión de una
    * herramienta detectada sólo por presencia.
    *
@@ -396,6 +444,31 @@ export const es: Messages = {
     },
     /** Ni es una versión ni debe confundirse con una: dice que el binario está y que no se le preguntó cuál es. */
     installed: 'instalado',
+  },
+
+  /**
+   * La tabla de backends de captura: qué permite ADQUIRIR cada uno cuando está disponible.
+   *
+   * Se sondea en cada petición contra el hardware, los privilegios y lo que el operador ha declarado, así que es
+   * texto de interfaz sobre este despliegue y se traduce. Los identificadores de backend (`on-path-spoof`,
+   * `network-proxy`), los transportes y las variables de entorno se imprimen literalmente.
+   *
+   * Aquí quedarse corto en la traducción cuesta algo fuera del navegador: dos de estas frases describen tocar la
+   * red de otra persona y una describe descifrar su tráfico. Donde el inglés dice lo que se le hace a un
+   * dispositivo, el español lo dice igual — esta línea se lee ANTES de armar nada.
+   */
+  captureBackends: {
+    unlocks: {
+      'network-proxy':
+        'Interceptar una OTA por HTTP (o por HTTPS cuando el dispositivo no fija ni valida el certificado) y extraer el blob',
+      'on-path-spoof':
+        'Ponerse en el camino de un único objetivo sin tocar la configuración del router, mediante envenenamiento ARP/DNS',
+      'on-path-gateway':
+        'La captura más limpia: el objetivo enruta a través de FirmLab (ruta por defecto / espejo SPAN), sin suplantar nada',
+      ble: 'Esnifar una OTA/DFU por BLE (Nordic DFU y similares) y reensamblar el firmware',
+      zigbee: 'Capturar el clúster estándar de actualización OTA de Zigbee (0x0019)',
+      'usb-serial': 'Volcado desde el propio dispositivo por UART/serie cuando no hay ninguna OTA que interceptar',
+    },
   },
 
   /**

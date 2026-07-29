@@ -14,6 +14,7 @@ import { planCapture, realizedCeiling } from '../capture/preflight.js';
 import { ingestFlow, refreshCaptureFlows, startCaptureSession, teardownCaptureSession } from '../capture/proxy.js';
 import { startDiscoveryScan } from '../capture/scan.js';
 import { createZigbeeSession, stageZigbeeOta } from '../capture/zigbee.js';
+import { resolveLocale } from '../i18n/index.js';
 import { getCaptureSession, getDevice, getImage, listCaptureProvenance, listDevices } from '../store.js';
 
 export async function captureRoutes(app: FastifyInstance): Promise<void> {
@@ -24,10 +25,18 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
     return { enabled: true, gatewayDeclared: cfg.gatewayDeclared, defaultSubnet: cfg.defaultSubnet };
   });
 
-  // Detected capture backends + the transports the current mix can carry (parity with /tools). Read-only.
+  /**
+   * Detected capture backends + the transports the current mix can carry (parity with /tools). Read-only.
+   *
+   * `?lang` selects the per-backend "what this would let you acquire" gloss only. The ids, the roles, the
+   * transports and the probe's own reason are what this box answered and come back identical either way; what is
+   * probed does not depend on the locale, so the cache is shared and "is it available?" is the same answer in both
+   * languages. Absent or unrecognised, it is English.
+   */
   app.get('/capture/backends', async (req) => {
-    const force = (req.query as { refresh?: string }).refresh === '1';
-    const backends = detectCaptureBackends(force);
+    const query = req.query as { refresh?: string; lang?: unknown };
+    const force = query.refresh === '1';
+    const backends = detectCaptureBackends(force, resolveLocale(query.lang));
     const cfg = loadCaptureConfig();
     return { enabled: cfg !== null, backends, transports: availableTransports(backends) };
   });

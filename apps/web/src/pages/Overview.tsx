@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { type ImageSummary, type ToolStatus, api, fmtBytes } from '../api';
-import { useMessages } from '../i18n';
+import { useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 
 /**
@@ -15,14 +15,18 @@ export function Overview(): JSX.Element {
   const [health, setHealth] = useState<Awaited<ReturnType<typeof api.health>> | null>(null);
   const [loading, setLoading] = useState(true);
   const t = useMessages();
+  const locale = useLocale();
 
+  // The tool table carries the locale and the effect re-runs on a switch: each tool's `unlocks` gloss is composed
+  // by the API from the binaries on this box at request time — interface copy about the deployment, recomputed on
+  // every read. The counts it feeds (`toolsUp`/`tools.length`) are the same numbers in either language.
   useEffect(() => {
     Promise.all([
       api.listImages().catch(() => []),
       api.storage().catch(() => null),
       api
-        .tools()
-        .then((t) => t.tools)
+        .tools(locale)
+        .then((r) => r.tools)
         .catch(() => []),
       api.health().catch(() => null),
     ]).then(([im, st, to, he]) => {
@@ -32,7 +36,7 @@ export function Overview(): JSX.Element {
       setHealth(he);
       setLoading(false);
     });
-  }, []);
+  }, [locale]);
 
   // The class breakdown is keyed by the firmware-class ID, which is data and stays in its identifier spelling; only
   // the fallback for an image with no class at all is a word, and that one is localised.

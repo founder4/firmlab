@@ -10,11 +10,39 @@
  * Linux capabilities, and attached USB — so it runs regardless of the `FIRMLAB_CAPTURE` flag; only *acting* is
  * gated. Every probe degrades honestly: absent tool / missing cap / no dongle → `available:false` with a reason
  * that says what would unlock it, never a fabricated capability.
+ *
+ * **Why `unlocks` is not on the spec below.** What a backend would let you acquire is prose an operator reads on
+ * the Capture page, recomputed on every request from the hardware and the privileges actually on this box. It
+ * describes THIS DEPLOYMENT, never a firmware image, and nothing about it is stored — so it follows `tools.ts`
+ * exactly: it lives in `i18n/` keyed by `CaptureBackendId`, and `detectCaptureBackends` takes the locale as a
+ * parameter. The cache therefore holds only what the probe LEARNED (available, reason, detail), and one cache
+ * serves both languages.
+ *
+ * The probe's own `reason` deliberately stays where it is. It is not a fixed sentence about the backend: it is
+ * built from what this box answered — the dongle's model line, the serial nodes present, the missing capability,
+ * the layer-2 verdict — so it belongs with the probe, not with the catalogue. That leaves it English in a Spanish
+ * render, which is a real seam: it is named here rather than papered over, because the honest fix is to compose
+ * each reason from its parts in the catalogue, not to freeze today's English sentence into a lookup table.
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { type Locale, messages } from '../i18n/index.js';
 
 export type CaptureBackendId = 'network-proxy' | 'on-path-spoof' | 'on-path-gateway' | 'ble' | 'zigbee' | 'usb-serial';
+
+/**
+ * Every backend this build can probe, in table order. Exported so a test can check the gloss table and the
+ * registry name exactly the same set — a backend added and never glossed would render as `undefined` in BOTH
+ * languages, which is the one failure a catalogue typed against English cannot catch on its own.
+ */
+export const CAPTURE_BACKEND_IDS: readonly CaptureBackendId[] = [
+  'network-proxy',
+  'on-path-spoof',
+  'on-path-gateway',
+  'ble',
+  'zigbee',
+  'usb-serial',
+];
 
 export type CaptureRole = 'positioning' | 'interception' | 'radio' | 'physical';
 
@@ -32,8 +60,6 @@ interface CaptureBackendSpec {
   role: CaptureRole;
   /** What this backend can carry once positioned. */
   transports: Transport[];
-  /** What enabling this backend gives the operator. */
-  unlocks: string;
   capabilities: { decrypt?: boolean; needsHardware?: string; needsCaps?: string[] };
   /** Read-only probe: PATH / Linux caps / USB / operator declaration. Never touches the wire. */
   detect: () => DetectResult;
@@ -43,12 +69,19 @@ export interface CaptureBackendStatus {
   id: CaptureBackendId;
   role: CaptureRole;
   transports: Transport[];
+  /** What enabling this backend gives the operator — composed per request from `i18n/`, in the caller's language. */
   unlocks: string;
   available: boolean;
   reason: string;
   capabilities: CaptureBackendSpec['capabilities'];
   detail?: Record<string, unknown>;
 }
+
+/**
+ * What a probe actually learned. No `unlocks`: this is what gets cached, and a cache holding a sentence in one
+ * language would answer the second request in the wrong one.
+ */
+type BackendProbe = Omit<CaptureBackendStatus, 'unlocks'>;
 
 // === Pure probe helpers (unit-tested; the fs/env-touching wrappers below call these) ===
 
@@ -270,7 +303,6 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
     id: 'network-proxy',
     role: 'interception',
     transports: ['http', 'https'],
-    unlocks: 'Intercept an HTTP OTA (or HTTPS when the device does not pin/validate) and carve the blob',
     capabilities: { decrypt: true },
     detect: () => {
       const have = onPath('mitmdump') || onPath('mitmproxy');
@@ -287,7 +319,6 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
     id: 'on-path-spoof',
     role: 'positioning',
     transports: [],
-    unlocks: 'Get on-path for one target without router config, via ARP/DNS spoof',
     capabilities: { needsCaps: ['NET_ADMIN', 'NET_RAW'] },
     detect: () => {
       const haveBin = onPath('bettercap');
@@ -332,7 +363,6 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
     id: 'on-path-gateway',
     role: 'positioning',
     transports: [],
-    unlocks: 'Cleanest capture: the target routes through FirmLab (default route / SPAN mirror), no spoofing',
     capabilities: {},
     detect: () => {
       const declared = process.env.FIRMLAB_CAPTURE_GATEWAY === '1';
@@ -353,7 +383,6 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
     id: 'ble',
     role: 'radio',
     transports: ['ble-gatt'],
-    unlocks: 'Sniff a BLE OTA/DFU (Nordic DFU & friends) and reassemble the firmware',
     capabilities: { needsHardware: 'nRF52840 sniffer (nRF Sniffer / Sniffle)' },
     detect: () => {
       const label = matchRadio(usbIds(), KNOWN_BLE);
@@ -369,7 +398,6 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
     id: 'zigbee',
     role: 'radio',
     transports: ['zigbee-ota'],
-    unlocks: 'Capture the standard Zigbee OTA Upgrade cluster (0x0019)',
     capabilities: { needsHardware: 'CC2531 / ConBee Zigbee sniffer' },
     detect: () => {
       const label = matchRadio(usbIds(), KNOWN_ZIGBEE);
@@ -385,7 +413,6 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
     id: 'usb-serial',
     role: 'physical',
     transports: ['serial-dump'],
-    unlocks: 'On-device dump over UART/serial when there is no OTA to intercept',
     capabilities: { needsHardware: 'USB-UART adapter' },
     detect: () => {
       const ports = serialPorts();
@@ -399,15 +426,14 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
   },
 ];
 
-let cache: CaptureBackendStatus[] | null = null;
+let cache: BackendProbe[] | null = null;
 
-function probe(spec: CaptureBackendSpec): CaptureBackendStatus {
+function probe(spec: CaptureBackendSpec): BackendProbe {
   const r = spec.detect();
   return {
     id: spec.id,
     role: spec.role,
     transports: spec.transports,
-    unlocks: spec.unlocks,
     available: r.available,
     reason: r.reason,
     capabilities: spec.capabilities,
@@ -415,11 +441,23 @@ function probe(spec: CaptureBackendSpec): CaptureBackendStatus {
   };
 }
 
-/** Probe all capture backends. Cheap (fs/env only), but cached for the process lifetime like `detectTools`. */
-export function detectCaptureBackends(force = false): CaptureBackendStatus[] {
-  if (cache && !force) return cache;
-  cache = BACKENDS.map(probe);
-  return cache;
+/**
+ * Pure: dress a cached probe in one language. The id, the role, the transports and the probe's own reason are
+ * what the rest of the system keys on or what this box answered — they pass through untouched; only the gloss is
+ * localised.
+ */
+function describe(p: BackendProbe, locale: Locale): CaptureBackendStatus {
+  return { ...p, unlocks: messages(locale).captureBackends.unlocks[p.id] };
+}
+
+/**
+ * Probe all capture backends, then describe them in the requested language. Cheap (fs/env only), but cached for
+ * the process lifetime like `detectTools` — and the cache is language-independent, so one probe serves both. The
+ * locale defaults to English, so a caller that predates it (and a request with no `?lang`) is unaffected.
+ */
+export function detectCaptureBackends(force = false, locale: Locale = 'en'): CaptureBackendStatus[] {
+  if (!cache || force) cache = BACKENDS.map(probe);
+  return cache.map((p) => describe(p, locale));
 }
 
 /**

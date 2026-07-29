@@ -12,10 +12,11 @@
  * **The rule that decides what belongs here.** Stored with the image or the job → FROZEN, in the language that
  * produced it; recomputed on every read → localised. A finding's title and rationale were written at measurement
  * time and are stored as evidence about the firmware, so re-translating one would be rewriting a record. The
- * coverage verdict, the tool table and the lane flags are the opposite: they are recomputed from live state on
- * every request and they describe THIS DEPLOYMENT and THIS ANALYSIS RUN, not the firmware. They are interface copy
- * that merely happens to be built server-side — which is why `coverage`, `tools` and `flags` below sit in the same
- * catalogue as the report's own scaffolding, and why every endpoint serving them takes the locale as a parameter.
+ * coverage verdict, the class plan's stage reasons, the tool table, the capture backends and the lane flags are the
+ * opposite: they are recomputed from live state on every request and they describe THIS DEPLOYMENT and THIS
+ * ANALYSIS RUN, not the firmware. They are interface copy that merely happens to be built server-side — which is
+ * why `coverage`, `plan`, `tools`, `captureBackends` and `flags` below sit in the same catalogue as the report's
+ * own scaffolding, and why every endpoint serving them takes the locale as a parameter.
  *
  * **Why the catalogue is typed rather than keyed by string.** `Messages` is derived from this object and `es.ts`
  * declares itself as `Messages`, so a key added here is a COMPILE error there until it is translated. There is no
@@ -37,7 +38,9 @@
  *
  * Pure: no store import, no I/O, so every sentence here is reachable from a unit test.
  */
+import type { CaptureBackendId } from '../capture/backends.js';
 import type { LaneFlagName } from '../flags.js';
+import type { PlanReasonId } from '../opacidad-plan.js';
 import { CLAIM_MEANING, NOT_A_MEASUREMENT, describeAssertion } from '../operator-findings.js';
 import type { ToolId } from '../tools.js';
 import { escapeHtml as esc } from './escape.js';
@@ -375,6 +378,52 @@ export const en = {
   },
 
   /**
+   * The class plan's "why this stage" column — what each worker in `opacidad-plan.ts` could even tell you.
+   *
+   * It sits directly underneath the coverage verdict in the same table, which is the reason it is here at all: for
+   * as long as the verdict was localised and this column was not, a Spanish reader got an honest Spanish sentence
+   * with an English stage-reason column beside it, and the seam was in the one panel whose whole job is to be read
+   * carefully. Nothing in this column is written at measurement time — it is recomposed from `specsForClass` on
+   * every request and describes THE PLAN, never a firmware image.
+   *
+   * Keyed by `PlanReasonId`, so a stage added to the routing is a compile error here (and in `es.ts`) until its
+   * sentence exists. The worker ids beside it (`W3 · Credentials & secrets`, `Cross-check · Kernel command line`)
+   * are NOT here: they are identifiers the plan, the scan and the stage table all key on, and they are printed
+   * verbatim in both languages. Neither are the paths, the flags and the library names inside these sentences —
+   * `init=/bin/sh`, `/dev/kmem`, `/chosen bootargs`, `os.execute/io.popen` are what you would grep for.
+   */
+  plan: {
+    reason: {
+      extract: 'recover the rootfs (recursive FIT→UBI→SquashFS carve when the container needs it)',
+      credentials: 'weak/empty creds, root shells, key material',
+      auxSecrets: 'embedded private keys in sibling (non-rootfs) partitions the rootfs audit never sees',
+      sbom: 'components → known CVEs (the n-day surface)',
+      componentFingerprint: 'bundled binaries (pppd, openssl) → CVEs a manifest-only SBOM misses',
+      kernelPosture:
+        'the kernel under the userland: version age, /dev/kmem, module signing, KASLR/RWX (three-state, honest)',
+      serviceEnumeration: 'boot-time network daemons = attack surface',
+      certificates: 'embedded X.509 posture',
+      certificatesRaw: 'embedded X.509 posture (reads the raw image — no rootfs needed)',
+      componentMap: 'rootfs ELF → dependency graph',
+      ubootEnv: 'boot posture (init=/bin/sh, interruptible autoboot, console)',
+      ubootEnvRaw: 'boot posture (init=/bin/sh, interruptible autoboot, net-boot, console)',
+      deviceTree: 'board/SoC identity, declared flash map, /chosen bootargs, enabled debug UART',
+      bootCmdlineCrosscheck:
+        'the tree and the U-Boot env each declare one — do they agree, and which line does the board pass?',
+      fccId: 'FCC IDs → public filings',
+      nvram: 'flash key-value store in the raw image — credentials and wifi keys no rootfs scan can reach',
+      webTaint: 'web-param → uci → os.execute/io.popen sinks (the GL.iNet Tor root-RCE class)',
+      binaryVulnSweep: 'rootfs ELFs → unbounded-copy + no-canary stack-overflow candidates (DVRF pwnables)',
+      updatePath: 'is the image signed, does the updater verify anything, is a downgrade bounded',
+      chipsec: 'offline firmware-volume decode + Secure Boot / NVRAM posture',
+      fwhunt: 'upstream FwHunt code-pattern rules → known implant / vulnerable-module families',
+      rtos: 'vector table + memory map + RTOS/decode-routine detection',
+      esp: 'partition table + NVS key store (signing keys!) + Flash-Enc/Secure-Boot posture',
+      encrypted: 'identify cipher/mode/IV and name the key-recovery path (honest verdict, never a silent empty)',
+    } satisfies Record<PlanReasonId, string>,
+  },
+
+  /**
    * The Capabilities table — what each external tool unlocks, and the placeholder version for a tool detected by
    * presence alone.
    *
@@ -421,6 +470,31 @@ export const en = {
      * not asked for — it is not a version string, and it must not be mistaken for one.
      */
     installed: 'installed',
+  },
+
+  /**
+   * The Capture backends table — what each backend would let an operator ACQUIRE, once it is available.
+   *
+   * Same category as the tool table and the same reasoning: probed from the hardware, the privileges and the
+   * operator declaration present at request time, so it is interface copy about THIS DEPLOYMENT and it is
+   * localised. The backend ids (`on-path-spoof`, `network-proxy`), the transports and the environment variable
+   * beside them are identifiers and render verbatim in every language.
+   *
+   * These sentences are the ones where a milder translation costs something outside the browser: two of them
+   * describe touching somebody else's network, and one describes decrypting traffic. Where the English says what
+   * is done to a device, the Spanish says it too — a backend's line is read BEFORE the operator arms it.
+   */
+  captureBackends: {
+    /** Keyed by `CaptureBackendId`, so a new backend is a compile error in `es.ts` until it is glossed. */
+    unlocks: {
+      'network-proxy': 'Intercept an HTTP OTA (or HTTPS when the device does not pin/validate) and carve the blob',
+      'on-path-spoof': 'Get on-path for one target without router config, via ARP/DNS spoof',
+      'on-path-gateway':
+        'Cleanest capture: the target routes through FirmLab (default route / SPAN mirror), no spoofing',
+      ble: 'Sniff a BLE OTA/DFU (Nordic DFU & friends) and reassemble the firmware',
+      zigbee: 'Capture the standard Zigbee OTA Upgrade cluster (0x0019)',
+      'usb-serial': 'On-device dump over UART/serial when there is no OTA to intercept',
+    } satisfies Record<CaptureBackendId, string>,
   },
 
   /**

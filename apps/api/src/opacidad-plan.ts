@@ -3,7 +3,25 @@
  * isolation. `specsForClass` maps W0's device class to the ordered list of workers to run; the concrete executor
  * for each `provider` tag lives in opacidad.ts (which binds the store + provider runners). A worker whose deep
  * implementation does not exist yet is `built: false` (no provider tag) — reported honestly, never omitted.
+ *
+ * **Why the "why this stage" line is not in the table below.** A seed spec's `reason` is the sentence the coverage
+ * report prints beside the stage — "what could this even tell me". It is recomposed from this routing on every
+ * request, it describes THE PLAN this deployment would run and never a firmware image, and nothing about it is
+ * written at measurement time. So it follows the same rule as `tools.ts`'s `unlocks`: the table holds a stable
+ * `reasonId`, the prose lives in `i18n/` keyed by that id, and `specsForClass` takes the locale as a parameter.
+ * The routing itself — order, providers, `needsRootfs`, `built` — is data and does not move between languages.
+ *
+ * The locale DEFAULTS to English, deliberately. `opacidad.ts` stores its plan on the job row, and a stored plan is
+ * a record of what was run: it stays in the language that produced it, exactly like a finding's title. Only the
+ * read-side callers (the coverage route) pass a locale.
+ *
+ * A `replan` spec's reason is the opposite case again — it is the LEAD that scheduled it, composed by a worker
+ * mid-run and recorded in the trace, so it is carried through verbatim in either language.
+ *
+ * The i18n import is type-safe in both directions: `i18n/en.ts` imports `PlanReasonId` with `import type`, which
+ * is erased, so there is no runtime cycle and this module stays store-free and unit-testable.
  */
+import { type Locale, messages } from './i18n/index.js';
 import type { OpacidadPlanEntry } from './opacidad-narrative.js';
 
 /** Executor tags — each maps to a concrete provider runner in opacidad.ts's registry. */
@@ -33,6 +51,69 @@ export type ProviderId =
   | 'symreach'
   | 'dynprobe'
   | 'decompile';
+
+/**
+ * The stable id of a seed stage's "why this stage" line. It keys the catalogue and never reaches a screen, so a
+ * routing change that needs new prose is a compile error in `i18n/en.ts` until the sentence exists — the same
+ * guarantee `ToolId` gives the Capabilities table.
+ *
+ * Two pairs look redundant and are not: `certificates`/`certificatesRaw` and `ubootEnv`/`ubootEnvRaw` are the same
+ * provider reached from the Linux chain and from the rootfs-free recon group, and the recon wording says outright
+ * that it reads the raw image. Collapsing them would drop that clause from the class where it is the whole point.
+ */
+export type PlanReasonId =
+  | 'extract'
+  | 'credentials'
+  | 'auxSecrets'
+  | 'sbom'
+  | 'componentFingerprint'
+  | 'kernelPosture'
+  | 'serviceEnumeration'
+  | 'certificates'
+  | 'certificatesRaw'
+  | 'componentMap'
+  | 'ubootEnv'
+  | 'ubootEnvRaw'
+  | 'deviceTree'
+  | 'bootCmdlineCrosscheck'
+  | 'fccId'
+  | 'nvram'
+  | 'webTaint'
+  | 'binaryVulnSweep'
+  | 'updatePath'
+  | 'chipsec'
+  | 'fwhunt'
+  | 'rtos'
+  | 'esp'
+  | 'encrypted';
+
+/** Every reason id the routing can produce, so a test can check none of them is unglossed. */
+export const PLAN_REASON_IDS: readonly PlanReasonId[] = [
+  'extract',
+  'credentials',
+  'auxSecrets',
+  'sbom',
+  'componentFingerprint',
+  'kernelPosture',
+  'serviceEnumeration',
+  'certificates',
+  'certificatesRaw',
+  'componentMap',
+  'ubootEnv',
+  'ubootEnvRaw',
+  'deviceTree',
+  'bootCmdlineCrosscheck',
+  'fccId',
+  'nvram',
+  'webTaint',
+  'binaryVulnSweep',
+  'updatePath',
+  'chipsec',
+  'fwhunt',
+  'rtos',
+  'esp',
+  'encrypted',
+];
 
 export interface PlanSpec {
   worker: string;
@@ -85,9 +166,15 @@ export type Lead =
       sinks: string[];
     };
 
-const EXTRACT: PlanSpec = {
+/**
+ * A seed stage as the routing table declares it: everything a `PlanSpec` has except the prose, which the locale
+ * supplies. Nothing is cached here that a second language would have to un-say.
+ */
+type SeedSpec = Omit<PlanSpec, 'reason'> & { reasonId: PlanReasonId };
+
+const EXTRACT: SeedSpec = {
   worker: 'W1 · Extraction',
-  reason: 'recover the rootfs (recursive FIT→UBI→SquashFS carve when the container needs it)',
+  reasonId: 'extract',
   needsRootfs: false,
   built: true,
   provider: 'extract',
@@ -103,41 +190,41 @@ const EXTRACT: PlanSpec = {
  * executor still verifies both ran and degrades honestly when one did not, so the ordering is an intention here
  * and not a load-bearing assumption (a comment that was true when written is a trap this codebase has paid for).
  */
-const BOOT_CMDLINE_CROSSCHECK: PlanSpec = {
+const BOOT_CMDLINE_CROSSCHECK: SeedSpec = {
   worker: 'Cross-check · Kernel command line',
-  reason: 'the tree and the U-Boot env each declare one — do they agree, and which line does the board pass?',
+  reasonId: 'bootCmdlineCrosscheck',
   needsRootfs: false,
   built: true,
   provider: 'bootcmdline',
 };
 
 /** The provider chain for a standard Linux rootfs (also the FIT/UBI class, after W1 recovers its rootfs). */
-const LINUX_CHAIN: PlanSpec[] = [
+const LINUX_CHAIN: SeedSpec[] = [
   EXTRACT,
   {
     worker: 'W3 · Credentials & secrets',
-    reason: 'weak/empty creds, root shells, key material',
+    reasonId: 'credentials',
     needsRootfs: true,
     built: true,
     provider: 'fsaudit',
   },
   {
     worker: 'W3 · Auxiliary-partition secrets',
-    reason: 'embedded private keys in sibling (non-rootfs) partitions the rootfs audit never sees',
+    reasonId: 'auxSecrets',
     needsRootfs: false,
     built: true,
     provider: 'auxsecrets',
   },
   {
     worker: 'W2 · SBOM / CVE',
-    reason: 'components → known CVEs (the n-day surface)',
+    reasonId: 'sbom',
     needsRootfs: true,
     built: true,
     provider: 'sbom',
   },
   {
     worker: 'W2 · Component fingerprint (bundled n-days)',
-    reason: 'bundled binaries (pppd, openssl) → CVEs a manifest-only SBOM misses',
+    reasonId: 'componentFingerprint',
     needsRootfs: true,
     built: true,
     provider: 'compcve',
@@ -147,67 +234,67 @@ const LINUX_CHAIN: PlanSpec[] = [
     // carved blob or the raw image, so this stage still answers the version question when extraction produced no
     // rootfs — and a version with an explicitly undetermined posture is strictly more than a skipped stage.
     worker: 'W2 · Kernel posture',
-    reason: 'the kernel under the userland: version age, /dev/kmem, module signing, KASLR/RWX (three-state, honest)',
+    reasonId: 'kernelPosture',
     needsRootfs: false,
     built: true,
     provider: 'kernel',
   },
   {
     worker: 'Recon · Service enumeration',
-    reason: 'boot-time network daemons = attack surface',
+    reasonId: 'serviceEnumeration',
     needsRootfs: true,
     built: true,
     provider: 'servicemap',
   },
   {
     worker: 'Static · Certificates',
-    reason: 'embedded X.509 posture',
+    reasonId: 'certificates',
     needsRootfs: false,
     built: true,
     provider: 'certs',
   },
   {
     worker: 'Static · Component map',
-    reason: 'rootfs ELF → dependency graph',
+    reasonId: 'componentMap',
     needsRootfs: true,
     built: true,
     provider: 'compmap',
   },
   {
     worker: 'Static · U-Boot env',
-    reason: 'boot posture (init=/bin/sh, interruptible autoboot, console)',
+    reasonId: 'ubootEnv',
     needsRootfs: false,
     built: true,
     provider: 'uboot',
   },
   {
     worker: 'Static · Device tree',
-    reason: 'board/SoC identity, declared flash map, /chosen bootargs, enabled debug UART',
+    reasonId: 'deviceTree',
     needsRootfs: false,
     built: true,
     provider: 'devicetree',
   },
   BOOT_CMDLINE_CROSSCHECK,
-  { worker: 'Recon · FCC-ID', reason: 'FCC IDs → public filings', needsRootfs: false, built: true, provider: 'fcc' },
+  { worker: 'Recon · FCC-ID', reasonId: 'fccId', needsRootfs: false, built: true, provider: 'fcc' },
   {
     // Listed here as well as in RECON_ANY_CLASS: the Linux chain enumerates its rootfs-free workers explicitly so
     // the shared group does not duplicate them, which means an addition there does not reach this chain.
     worker: 'W3 · NVRAM store',
-    reason: 'flash key-value store in the raw image — credentials and wifi keys no rootfs scan can reach',
+    reasonId: 'nvram',
     needsRootfs: false,
     built: true,
     provider: 'nvram',
   },
   {
     worker: 'W4 · Web attack-surface (taint)',
-    reason: 'web-param → uci → os.execute/io.popen sinks (the GL.iNet Tor root-RCE class)',
+    reasonId: 'webTaint',
     needsRootfs: true,
     built: true,
     provider: 'webtaint',
   },
   {
     worker: 'W5 · Binary-vuln sweep',
-    reason: 'rootfs ELFs → unbounded-copy + no-canary stack-overflow candidates (DVRF pwnables)',
+    reasonId: 'binaryVulnSweep',
     needsRootfs: true,
     built: true,
     provider: 'binvuln',
@@ -218,7 +305,7 @@ const LINUX_CHAIN: PlanSpec[] = [
     // a silent absence on precisely the images where the answer matters. The provider records the updater half as
     // blocked when there is no rootfs to search.
     worker: 'ISTG-FW · Update-path integrity',
-    reason: 'is the image signed, does the updater verify anything, is a downgrade bounded',
+    reasonId: 'updatePath',
     needsRootfs: false,
     built: true,
     provider: 'updatepath',
@@ -237,17 +324,17 @@ const LINUX_CHAIN: PlanSpec[] = [
  * They are cheap and they degrade to nothing honestly (no U-Boot env / no X.509 / no FCC ID each report zero),
  * and a stage that ran and found nothing is strictly more information than a stage that was never planned.
  */
-const RECON_ANY_CLASS: PlanSpec[] = [
+const RECON_ANY_CLASS: SeedSpec[] = [
   {
     worker: 'Static · Certificates',
-    reason: 'embedded X.509 posture (reads the raw image — no rootfs needed)',
+    reasonId: 'certificatesRaw',
     needsRootfs: false,
     built: true,
     provider: 'certs',
   },
   {
     worker: 'Static · U-Boot env',
-    reason: 'boot posture (init=/bin/sh, interruptible autoboot, net-boot, console)',
+    reasonId: 'ubootEnvRaw',
     needsRootfs: false,
     built: true,
     provider: 'uboot',
@@ -257,28 +344,28 @@ const RECON_ANY_CLASS: PlanSpec[] = [
     // class. It also degrades to nothing honestly: an image with no FDT reports `blocked_by_platform` naming
     // where it looked, which is strictly more information than a stage that was never planned.
     worker: 'Static · Device tree',
-    reason: 'board/SoC identity, declared flash map, /chosen bootargs, enabled debug UART',
+    reasonId: 'deviceTree',
     needsRootfs: false,
     built: true,
     provider: 'devicetree',
   },
   BOOT_CMDLINE_CROSSCHECK,
-  { worker: 'Recon · FCC-ID', reason: 'FCC IDs → public filings', needsRootfs: false, built: true, provider: 'fcc' },
+  { worker: 'Recon · FCC-ID', reasonId: 'fccId', needsRootfs: false, built: true, provider: 'fcc' },
   {
     // Every other W3 stage walks extraction output, which is why no provider had ever seen one of these: the
     // stores live in the RAW upload's flash environment partition, not in the rootfs. Nine of the sixteen images
     // in the corpus carry one — routers, cameras and both eCos Xiaomis — so it belongs to every class, and it can
     // never be skipped for want of a rootfs.
     worker: 'W3 · NVRAM store',
-    reason: 'flash key-value store in the raw image — credentials and wifi keys no rootfs scan can reach',
+    reasonId: 'nvram',
     needsRootfs: false,
     built: true,
     provider: 'nvram',
   },
 ];
 
-/** Given W0's class, the ordered plan of workers. Pure — the routing itself is unit-tested. */
-export function specsForClass(cls: string): PlanSpec[] {
+/** Given W0's class, the ordered routing — ids only, no prose. Pure, and the shape the tests pin. */
+function seedsForClass(cls: string): SeedSpec[] {
   switch (cls) {
     case 'embedded-linux':
     case 'openwrt-fit-ubi':
@@ -287,14 +374,14 @@ export function specsForClass(cls: string): PlanSpec[] {
       return [
         {
           worker: 'UEFI · chipsec',
-          reason: 'offline firmware-volume decode + Secure Boot / NVRAM posture',
+          reasonId: 'chipsec',
           needsRootfs: false,
           built: true,
           provider: 'chipsec',
         },
         {
           worker: 'UEFI · FwHunt implant scan',
-          reason: 'upstream FwHunt code-pattern rules → known implant / vulnerable-module families',
+          reasonId: 'fwhunt',
           needsRootfs: false,
           built: true,
           provider: 'fwhunt',
@@ -306,7 +393,7 @@ export function specsForClass(cls: string): PlanSpec[] {
       return [
         {
           worker: 'W7 · Bare-metal / RTOS',
-          reason: 'vector table + memory map + RTOS/decode-routine detection',
+          reasonId: 'rtos',
           needsRootfs: false,
           built: true,
           provider: 'rtos',
@@ -317,7 +404,7 @@ export function specsForClass(cls: string): PlanSpec[] {
       return [
         {
           worker: 'W6 · ESP / IoT-SoC',
-          reason: 'partition table + NVS key store (signing keys!) + Flash-Enc/Secure-Boot posture',
+          reasonId: 'esp',
           needsRootfs: false,
           built: true,
           provider: 'esp',
@@ -328,7 +415,7 @@ export function specsForClass(cls: string): PlanSpec[] {
       return [
         {
           worker: 'W8 · Encrypted-blob',
-          reason: 'identify cipher/mode/IV and name the key-recovery path (honest verdict, never a silent empty)',
+          reasonId: 'encrypted',
           needsRootfs: false,
           built: true,
           provider: 'encrypted',
@@ -338,6 +425,26 @@ export function specsForClass(cls: string): PlanSpec[] {
     default:
       return [EXTRACT, ...RECON_ANY_CLASS];
   }
+}
+
+/**
+ * Pure: dress one seed in a language. The worker id, the provider tag and every boolean pass through untouched —
+ * they are what the scan, the coverage table and the stored run all key on, and a reader comparing the plan
+ * against the table underneath it must find the same strings in both languages.
+ */
+function dress(seed: SeedSpec, locale: Locale): PlanSpec {
+  const { reasonId, ...rest } = seed;
+  return { ...rest, reason: messages(locale).plan.reason[reasonId] };
+}
+
+/**
+ * Given W0's class, the ordered plan of workers. Pure — the routing itself is unit-tested.
+ *
+ * The locale defaults to English, so a caller that predates it — and every stored plan — is byte-for-byte
+ * unaffected. Only the "why this stage" line moves; the routing does not.
+ */
+export function specsForClass(cls: string, locale: Locale = 'en'): PlanSpec[] {
+  return seedsForClass(cls).map((seed) => dress(seed, locale));
 }
 
 /** Turn a plan into the pre-execution plan list shown to the operator. */

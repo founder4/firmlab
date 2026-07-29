@@ -1551,7 +1551,12 @@ export const api = {
   runDiff: (id: string, against: string) => post<{ jobId: string }>(`/api/images/${id}/diff`, { against }),
   /** Phase 6 capture lane — all top-level (a capture precedes any image), gated by FIRMLAB_CAPTURE. */
   captureStatus: () => get<CaptureStatus>('/api/capture/status'),
-  captureBackends: () => get<CaptureBackendsView>('/api/capture/backends'),
+  /**
+   * `unlocks` is composed per backend by the API from the hardware and privileges present at request time, so the
+   * Capture page asks for it in the language it renders. The ids, the transports and each probe's own reason are
+   * what this deployment answered and come back identical either way.
+   */
+  captureBackends: (locale?: Locale) => get<CaptureBackendsView>(`/api/capture/backends${lang(locale)}`),
   captureDevices: () => get<{ devices: CaptureDevice[] }>('/api/capture/devices').then((r) => r.devices),
   runCaptureDiscover: (subnet: string | null, acknowledged: boolean) =>
     post<{ scanId: string }>('/api/capture/discover', { ...(subnet ? { subnet } : {}), acknowledged }),

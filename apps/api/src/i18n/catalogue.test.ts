@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { CAPTURE_BACKEND_IDS } from '../capture/backends.js';
 import { TOGGLEABLE_FLAGS } from '../flags.js';
+import { PLAN_REASON_IDS } from '../opacidad-plan.js';
 import { TOOL_IDS } from '../tools.js';
 import { en } from './en.js';
 import { es } from './es.js';
@@ -199,6 +201,22 @@ describe('every runtime surface is glossed for every id it can be asked about', 
     expect(es.tools.unlocks.fwhunt).toContain('FwHunt');
   });
 
+  it('glosses every stage the class routing can plan, and invents none it cannot', () => {
+    expect(Object.keys(en.plan.reason).sort()).toEqual([...PLAN_REASON_IDS].sort());
+    expect(Object.keys(es.plan.reason).sort()).toEqual([...PLAN_REASON_IDS].sort());
+  });
+
+  it('glosses every capture backend this build probes, and invents none it does not', () => {
+    expect(Object.keys(en.captureBackends.unlocks).sort()).toEqual([...CAPTURE_BACKEND_IDS].sort());
+    expect(Object.keys(es.captureBackends.unlocks).sort()).toEqual([...CAPTURE_BACKEND_IDS].sort());
+  });
+
+  it('keys the backend table by the ids the API returns, never by a translated name', () => {
+    for (const id of ['network-proxy', 'on-path-spoof', 'on-path-gateway', 'usb-serial'] as const) {
+      expect(es.captureBackends.unlocks[id]).toBeTruthy();
+    }
+  });
+
   it('keys the lane table by the environment variables an operator sets in compose', () => {
     expect(es.flags.FIRMLAB_RESEARCH.label).toBeTruthy();
     expect(es.flags.FIRMLAB_CAPTURE_GATEWAY.egress).toBeTruthy();
@@ -261,6 +279,63 @@ describe('the coverage verdict keeps its distinctions in Spanish', () => {
       for (const w of workers) expect(s).toContain(w);
       expect(s).toContain('+2');
     }
+  });
+});
+
+/**
+ * The plan's stage-reason column and the capture backends' unlocks — the two surfaces that joined the localised
+ * side last, and the two whose sentences are densest in things that are NOT words.
+ *
+ * A stage reason is half identifiers: `init=/bin/sh`, `/dev/kmem`, `os.execute/io.popen`, `KASLR/RWX` are what an
+ * operator greps a rootfs or a boot log for, and a translation that rendered one of them as Spanish would make the
+ * sentence unusable against the thing it describes. A backend's line is the other risk: two of the six describe
+ * touching somebody else's network and one describes decrypting their traffic, and it is read BEFORE the operator
+ * arms anything.
+ */
+describe('the plan reasons and the backend glosses keep what is not a word', () => {
+  it('never translates a path, a flag or a symbol name inside a Spanish plan reason', () => {
+    const prose = Object.values(es.plan.reason).join('\n');
+    for (const literal of [
+      'init=/bin/sh',
+      '/dev/kmem',
+      '/chosen bootargs',
+      'os.execute/io.popen',
+      'KASLR/RWX',
+      'X.509',
+      'FIT→UBI→SquashFS',
+      'FwHunt',
+      'SBOM',
+    ]) {
+      expect(prose, literal).toContain(literal);
+    }
+  });
+
+  it('keeps the two same-provider stages distinct, so the raw-image recon still says it reads the raw image', () => {
+    expect(es.plan.reason.certificatesRaw).not.toBe(es.plan.reason.certificates);
+    expect(es.plan.reason.certificatesRaw).toContain('imagen en bruto');
+    expect(es.plan.reason.ubootEnvRaw).not.toBe(es.plan.reason.ubootEnv);
+    expect(en.plan.reason.ubootEnvRaw).toContain('net-boot');
+    expect(es.plan.reason.ubootEnvRaw).toContain('arranque por red');
+  });
+
+  it('keeps the encrypted-blob stage promising a verdict rather than a silent empty, in both languages', () => {
+    expect(en.plan.reason.encrypted).toContain('never a silent empty');
+    expect(es.plan.reason.encrypted).toContain('nunca un vacío silencioso');
+  });
+
+  it('says in Spanish what a positioning backend actually does, without softening it', () => {
+    // The spoof line describes poisoning a segment somebody else is on. It names the technique in both languages.
+    expect(en.captureBackends.unlocks['on-path-spoof']).toContain('ARP/DNS');
+    expect(es.captureBackends.unlocks['on-path-spoof']).toContain('ARP/DNS');
+    expect(es.captureBackends.unlocks['on-path-spoof']).toMatch(/envenenamiento|suplant/i);
+    // The gateway line is the one that claims to spoof NOTHING — that contrast has to survive translation.
+    expect(es.captureBackends.unlocks['on-path-gateway']).toContain('SPAN');
+    expect(es.captureBackends.unlocks['on-path-gateway']).toMatch(/sin suplantar/i);
+  });
+
+  it('keeps the proxy line honest about the one condition HTTPS interception needs', () => {
+    expect(en.captureBackends.unlocks['network-proxy']).toMatch(/does not pin/i);
+    expect(es.captureBackends.unlocks['network-proxy']).toMatch(/no fija ni valida/i);
   });
 });
 

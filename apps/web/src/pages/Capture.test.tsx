@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CaptureBackend, api } from '../api';
 import { setLocale } from '../i18n';
@@ -223,6 +223,33 @@ describe('Capture — Spanish', () => {
     fireEvent.click(screen.getByLabelText(/autorización para probarlos/i));
     fireEvent.click(screen.getByRole('button', { name: 'Escanear la red' }));
     expect(await screen.findByText('Barrido completado — no respondió ningún dispositivo')).toBeInTheDocument();
+  });
+});
+
+/**
+ * A backend's `unlocks` is composed by the API from the hardware and the privileges present on this box at request
+ * time, so the page asks for it in the language it renders and asks again on a switch. Nothing visible here would
+ * change if the locale never reached the request — the fixture answers the same string either way — so the CALL is
+ * what is pinned.
+ *
+ * It is its OWN effect in the component, and that is the part worth protecting: the mount effect owns the
+ * discovery-poll intervals and clears them on cleanup, so folding the locale into its dependency list would kill a
+ * running sweep every time somebody flipped the language switch.
+ */
+describe('Capture — the backend glosses are requested in the active language', () => {
+  it('carries the locale on the first load and re-asks when it changes', async () => {
+    mockApi.captureBackends.mockClear();
+    render(<Capture />);
+    expect(await screen.findByText('network-proxy')).toBeInTheDocument();
+    expect(mockApi.captureBackends).toHaveBeenCalledWith('en');
+    expect(mockApi.captureBackends).toHaveBeenCalledTimes(1);
+
+    // Inside `act`, because the locale store notifies live subscribers and this tree is mounted.
+    await act(async () => {
+      setLocale('es');
+    });
+    await waitFor(() => expect(mockApi.captureBackends).toHaveBeenCalledWith('es'));
+    expect(mockApi.captureBackends).toHaveBeenCalledTimes(2);
   });
 });
 
