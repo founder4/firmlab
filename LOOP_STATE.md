@@ -14,8 +14,8 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
 - [x] 2. `BootDiagnosis.daemonsStarted` / `daemonsExited` se renderizan: «nunca arrancó» ≠ «arrancó y murió con SIGSEGV».
 - [x] 3. `SecureBootPosture.note` y `DeviceTreeResult.rejected` se renderizan.
 - [x] 4. `OperatorAssertion.withdrawnReason` y `FuzzResult.reason` se renderizan.
-- [ ] 5. Denominadores de investigación: `osv.skipped`, `nvd.notQueried`, `nvd.truncated[]`, `egress.neverSent`.
-- [ ] 6. Cada uno lleva un test que afirma que el caso «no se preguntó» se distingue del caso «se preguntó y no había».
+- [x] 5. Denominadores de investigación: `osv.skipped`, `nvd.notQueried`, `nvd.truncated[]`, `egress.neverSent`.
+- [x] 6. Cada uno lleva un test que afirma que el caso «no se preguntó» se distingue del caso «se preguntó y no había».
 
 ## Puntos flojos detectados
 
@@ -54,7 +54,9 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
       rechazado de `raw image offset 10186216` mide 60082 bytes, exactamente los del blob que sí se lee vía
       `FIT /images/ubi → UBI volume kernel /images/fdt-1`. Son la misma vista cruda y reensamblada del mismo
       árbol y el panel las presenta como dos cosas sin relación.
-- [ ] Denominadores OSV/NVD sin lector — impacto: medio — evidencia: `api.ts:639-647`, `:671`.
+- [x] Denominadores OSV/NVD sin lector — impacto: medio — evidencia: `api.ts:639-647`, `:671`.
+      `nvd.truncated[]` no necesita lector propio: la insignia por fila `totalMatching` («8 of 35 shown»)
+      ya lo dice, y duplicarlo sería una segunda redacción del mismo hecho.
 
 ## Historial
 
@@ -146,3 +148,17 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
   **Residuo retirado**: esa afirmación iba atribuida a `aaron` y él nunca la hizo, así que se borró de
   `findings` en el contenedor (no hay ruta DELETE — el ledger no borra retiradas — se hizo por SQLite).
   Corpus de vuelta a 81 hallazgos, 0 afirmaciones.
+- iter 8: cerrado el DoD #5. `osv.skipped` y `nvd.notQueried` se pintan bajo las insignias que matizan — «0 avisos»
+  junto a «3 consultados» se leía como «no hay» cuando significaba «ninguno entre los tres que preguntamos». Y el
+  registro de egreso de `research/egress.ts`, que es la razón por la que se puede encender la única bandera del
+  producto que toca internet, no lo pintaba nadie: una promesa de privacidad que no se puede leer no es una
+  promesa. Un destino con cuenta 0 dice «nada sobre tu firmware» y no «como mucho 0» — es una dirección, no una
+  cota. Además dos cotas mudas: las dos tablas cortaban a 12 filas sin decirlo, y la celda de avisos de OSV
+  cortaba a 8 mientras la de NVD a su lado lleva desde siempre «N of M shown». 5 tests nuevos.
+  Verificación: `pnpm test` → core 75 / api 1752 / web 322 verde · `pnpm check` → Done · `pnpm biome` → limpio ·
+  y sobre datos reales del despliegue (`47462de`), leído de la página con playwright en `447719f7`:
+  «46 SBOM components could not be mapped to an OSV ecosystem and were never asked about», «66 candidates went
+  unasked at NVD», `api.osv.dev · at most 500`, `services.nvd.nist.gov · at most 72`,
+  `www.cisa.gov · nothing about your firmware`, y las 6 líneas de «Never sent, on any run». 0 errores de consola.
+  La línea «Showing N of M components» no aparece en esa imagen porque tiene 7 y 5 componentes, por debajo de la
+  cota — la rama se comporta bien, no es un fallo; su caso está cubierto por test.
