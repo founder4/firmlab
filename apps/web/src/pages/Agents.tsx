@@ -1,14 +1,28 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { type AgentStatus, type ImageSummary, api } from '../api';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { type AgentStatus, type ImageSummary, type OpacidadResult, api } from '../api';
+import { OpacidadPanel } from '../components/OpacidadPanel';
 import { useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { toast } from '../toast';
+import { AgentPanel } from './ImageDetail';
 
 /**
- * Agents — the console over FirmLab's autonomous engine, lifted to workspace level. It launches the two run
- * kinds (the deterministic Opacidad scan and the conscious LLM Agent) on any target and keeps a unified run
- * history across every image, with live status; opening a run drops into its steps + evidence on the target.
+ * Agents — the console over FirmLab's autonomous engine.
+ *
+ * **The unit is a RUN, and that is the whole re-architecture.** The previous version listed images and every click
+ * navigated to `/image/:id/opacidad`, which is the static-analysis shell: opening a result dropped the reader into
+ * a different section, under a pipeline strip about a different activity, with no route back to the console. So
+ * the run view lives here (`/agents/:imageId/scan`), reusing the very same panels the image section renders, and
+ * leaving for the image is one labelled link rather than the side effect of a click.
+ *
+ * **A row states an outcome, not a status.** `done` says a process finished and says nothing about what was
+ * learned. `725 findings` says less than nothing on its own — it is the exact number the coverage discipline
+ * exists to qualify. `summariseRun` therefore leads with how much of the plan actually ran and names the workers
+ * that did not, because a total drawn from an incomplete plan is the misreading this workbench is built to
+ * prevent, and a console that hides it is where that misreading starts.
+ *
+ * Statuses, filenames, worker ids and provider/model names render verbatim: they are records, not chrome.
  */
 
 interface Run {
@@ -18,8 +32,9 @@ interface Run {
   filename: string;
   status: string;
   at: number;
-  detail: string;
-  to: string;
+  /** The stored result, when the run produced one. Absent while queued/running, and after an error. */
+  scan?: OpacidadResult;
+  steps?: number;
 }
 
 const STATUS_CLASS: Record<string, string> = {
@@ -30,7 +45,14 @@ const STATUS_CLASS: Record<string, string> = {
   error: 'badge-crit',
   halted: 'badge-crit',
 };
-const isLive = (s: string): boolean => s === 'running' || s === 'queued' || s === 'awaiting_approval';
+const isLive = (s: string): boolean => s === 'running' || s === 'queued';
+
+/** Where a run opens. Inside this section, always. */
+const runPath = (r: Pick<Run, 'type' | 'imageId'>): string => `/agents/${r.imageId}/${r.type}`;
+
+const fmtWhen = (ms: number): string => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+
+// === The console ===
 
 export function Agents(): JSX.Element {
   const [images, setImages] = useState<ImageSummary[]>([]);
@@ -41,16 +63,12 @@ export function Agents(): JSX.Element {
 
   useEffect(() => {
     api
-      .listImages()
-      .then(setImages)
-      .catch(() => setImages([]));
-    api
       .agentStatus()
       .then(setStatus)
       .catch(() => setStatus(null));
   }, []);
 
-  // Assemble the cross-target run history: Opacidad scans surface as image jobs, the Agent as a per-image session.
+  // Assemble the cross-target run list: scans surface as image jobs, the agent as a per-image session.
   const loadRuns = useCallback(async () => {
     const imgs = await api.listImages().catch(() => [] as ImageSummary[]);
     setImages(imgs);
@@ -62,7 +80,6 @@ export function Agents(): JSX.Element {
           api.agentSession(im.id).catch(() => null),
         ]);
         for (const j of jobs.filter((x) => x.kind === 'opacidad')) {
-          const r = j.result as { findings?: { total?: number } } | null;
           out.push({
             key: `scan-${j.id}`,
             type: 'scan',
@@ -70,41 +87,34 @@ export function Agents(): JSX.Element {
             filename: im.filename,
             status: j.status,
             at: j.createdAt,
-            // A still-running job shows its raw job status — an identifier the API owns, glossed by the badge
-            // beside it; only the finished count is a sentence this screen writes.
-            detail: j.status === 'done' ? t.agents.history.findings(r?.findings?.total ?? 0) : j.status,
-            to: `/image/${im.id}/opacidad`,
+            ...(j.result ? { scan: j.result as OpacidadResult } : {}),
           });
         }
         if (view?.session) {
-          const s = view.session;
           out.push({
-            key: `agent-${s.id}`,
+            key: `agent-${view.session.id}`,
             type: 'agent',
             imageId: im.id,
             filename: im.filename,
-            status: s.status,
-            at: s.createdAt,
-            // The goal is the operator's or the agent's own wording, recorded with the session — shown as written.
-            detail: `${t.agents.history.steps(view.steps.length)}${s.goal ? ` · ${s.goal}` : ''}`,
-            to: `/image/${im.id}/agent`,
+            status: view.session.status,
+            at: view.session.createdAt,
+            steps: view.steps.length,
           });
         }
         return out;
       }),
     );
     setRuns(collected.flat().sort((a, b) => b.at - a.at));
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     loadRuns();
   }, [loadRuns]);
 
-  // Poll while anything is live.
   useEffect(() => {
     if (!runs?.some((r) => isLive(r.status))) return;
-    const t = setInterval(loadRuns, 4000);
-    return () => clearInterval(t);
+    const id = setInterval(loadRuns, 4000);
+    return () => clearInterval(id);
   }, [runs, loadRuns]);
 
   const launchScan = useCallback(
@@ -112,7 +122,7 @@ export function Agents(): JSX.Element {
       try {
         await api.runOpacidad(im.id);
         toast.success(t.agents.launch.launched(im.filename));
-        nav(`/image/${im.id}/opacidad`);
+        nav(`/agents/${im.id}/scan`);
       } catch (e) {
         toast.error(e);
       }
@@ -131,49 +141,50 @@ export function Agents(): JSX.Element {
         <div className="page-desc">{t.agents.desc}</div>
       </div>
 
-      <div className="grid grid-2" style={{ marginBottom: 16 }}>
-        <div className="panel">
-          <div className="panel-title" style={{ gap: 8 }}>
-            <Icon.shield size={16} /> {t.agents.scan.title}
-            <span className="badge badge-accent" style={{ marginLeft: 'auto' }}>
-              {t.agents.scan.badge}
-            </span>
+      {/* The two engines, as one strip. What each one IS belongs here once; what a run DID belongs in its row. */}
+      <div className="engine-strip">
+        <div className="engine">
+          <div className="engine-head">
+            <Icon.shield size={15} />
+            <strong>{t.agents.engine.scanName}</strong>
+            <span className="badge badge-accent">{t.agents.engine.scanKind}</span>
+            <span className="badge badge-ok">{t.agents.engine.scanReady}</span>
           </div>
-          <div className="panel-sub">{t.agents.scan.sub}</div>
+          <div className="hint">{t.agents.engine.scanWhat}</div>
         </div>
-        <div className="panel">
-          <div className="panel-title" style={{ gap: 8 }}>
-            <Icon.agent size={16} /> {t.agents.llm.title}
+        <div className="engine">
+          <div className="engine-head">
+            <Icon.agent size={15} />
+            <strong>{t.agents.engine.agentName}</strong>
             {status?.enabled ? (
-              // Provider and model ids as configured — never translated.
-              <span className="badge badge-ok" style={{ marginLeft: 'auto' }}>
+              <span className="badge badge-ok mono">
                 {status.provider} · {status.model}
               </span>
             ) : (
-              <span className="badge" style={{ marginLeft: 'auto' }}>
-                {t.agents.llm.off}
-              </span>
+              <span className="badge">{t.agents.engine.agentOff}</span>
             )}
           </div>
-          <div className="panel-sub">{status?.enabled ? t.agents.llm.on : t.agents.llm.disabled}</div>
+          <div className="hint">
+            {t.agents.engine.agentWhat}
+            {!status?.enabled && ` ${t.agents.engine.agentDisabled}`}
+          </div>
         </div>
       </div>
 
-      {/* Run history — the console's spine */}
-      <div className="panel panel-flush">
+      <div className="panel panel-flush" style={{ marginTop: 16 }}>
         <div className="panel-head" style={{ padding: 'var(--panel-pad)', marginBottom: 0 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span className="panel-title" style={{ margin: 0 }}>
-              {t.agents.history.title}
+              {t.agents.runs.title}
             </span>
             {liveCount > 0 && (
               <span className="badge badge-medium">
-                <span className="spinner" style={{ width: 10, height: 10 }} /> {t.agents.history.live(liveCount)}
+                <span className="spinner" style={{ width: 10, height: 10 }} /> {t.agents.runs.live(liveCount)}
               </span>
             )}
           </div>
-          <button type="button" className="btn btn-sm btn-ghost" onClick={loadRuns} title={t.agents.history.refresh}>
-            <Icon.refresh size={14} /> {t.agents.history.refresh}
+          <button type="button" className="btn btn-sm btn-ghost" onClick={loadRuns} title={t.agents.runs.refresh}>
+            <Icon.refresh size={14} /> {t.agents.runs.refresh}
           </button>
         </div>
 
@@ -188,44 +199,37 @@ export function Agents(): JSX.Element {
             <div className="empty-mark">
               <Icon.agent size={20} />
             </div>
-            <div className="empty-title">{t.agents.history.emptyTitle}</div>
-            <div className="empty-body">{t.agents.history.emptyBody}</div>
+            <div className="empty-title">{t.agents.runs.emptyTitle}</div>
+            <div className="empty-body">{t.agents.runs.emptyBody}</div>
           </div>
         ) : (
           <div className="table-wrap" style={{ border: 'none', borderTop: '1px solid var(--border)', borderRadius: 0 }}>
             <table className="data">
               <thead>
                 <tr>
-                  <th>{t.agents.history.colTarget}</th>
-                  <th>{t.agents.history.colKind}</th>
-                  <th>{t.agents.history.colStatus}</th>
-                  <th>{t.agents.history.colDetail}</th>
-                  <th style={{ width: 80 }} />
+                  <th>{t.agents.runs.colTarget}</th>
+                  <th>{t.agents.runs.colOutcome}</th>
+                  <th style={{ width: 150 }}>{t.agents.runs.colWhen}</th>
                 </tr>
               </thead>
               <tbody>
                 {runs.map((r) => (
-                  <tr key={r.key} className="row-link" onClick={() => nav(r.to)}>
-                    <td className="mono" style={{ color: 'var(--text)' }}>
-                      {r.filename}
+                  <tr key={r.key} className="row-link" onClick={() => nav(runPath(r))}>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span className="badge">
+                          {r.type === 'scan' ? t.agents.runs.kindScan : t.agents.runs.kindAgent}
+                        </span>
+                        <span className="mono" style={{ color: 'var(--text)' }}>
+                          {r.filename}
+                        </span>
+                      </div>
                     </td>
                     <td>
-                      <span className="badge">
-                        {r.type === 'scan' ? t.agents.history.kindScan : t.agents.history.kindAgent}
-                      </span>
+                      <RunOutcome run={r} />
                     </td>
-                    <td>
-                      {/* The run status is a job value that crosses the API and lands in SQLite: shown verbatim. */}
-                      <span className={`badge ${STATUS_CLASS[r.status] ?? ''}`}>
-                        {isLive(r.status) && <span className="spinner" style={{ width: 9, height: 9 }} />}
-                        {r.status}
-                      </span>
-                    </td>
-                    <td className="mono" style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>
-                      {r.detail}
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <span className="btn btn-sm btn-ghost">{t.agents.history.view}</span>
+                    <td className="mono hint" style={{ fontSize: '0.75rem' }}>
+                      {fmtWhen(r.at)}
                     </td>
                   </tr>
                 ))}
@@ -235,7 +239,6 @@ export function Agents(): JSX.Element {
         )}
       </div>
 
-      {/* Launch */}
       <div className="panel panel-flush" style={{ marginTop: 16 }}>
         <div className="panel-head" style={{ padding: 'var(--panel-pad)', marginBottom: 0 }}>
           <span className="panel-title" style={{ margin: 0 }}>
@@ -265,13 +268,13 @@ export function Agents(): JSX.Element {
                     <td>
                       <span className="badge">{im.identity?.firmwareClass ?? t.common.unknown}</span>
                     </td>
-                    <td className="mono">{im.identity?.arch ?? '—'}</td>
+                    <td className="mono hint">{im.identity?.arch ?? '—'}</td>
                     <td style={{ textAlign: 'right' }}>
                       <div style={{ display: 'inline-flex', gap: 6 }}>
                         <button type="button" className="btn btn-sm btn-primary" onClick={() => launchScan(im)}>
                           <Icon.play size={13} /> {t.agents.launch.scan}
                         </button>
-                        <Link to={`/image/${im.id}/agent`} className="btn btn-sm">
+                        <Link to={`/agents/${im.id}/agent`} className="btn btn-sm">
                           {t.agents.launch.agent}
                         </Link>
                       </div>
@@ -282,6 +285,139 @@ export function Agents(): JSX.Element {
             </table>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What came of a run, in the order a reader needs it.
+ *
+ * The plan's completion comes FIRST and the finding total second, because the total is only readable once you know
+ * how much of the plan produced it. `not-built` and `skipped` workers are counted as not completing — they are
+ * stages nothing was asked of, never stages that passed, and the whole honest-gaps machinery exists to keep those
+ * two apart. A run with no stored result says so rather than rendering an empty cell that reads as "found
+ * nothing".
+ */
+function RunOutcome({ run }: { run: Run }): JSX.Element {
+  const t = useMessages();
+  const status = (
+    <span className={`badge ${STATUS_CLASS[run.status] ?? ''}`}>
+      {isLive(run.status) && <span className="spinner" style={{ width: 9, height: 9 }} />}
+      {run.status}
+    </span>
+  );
+
+  if (run.status === 'awaiting_approval') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {status}
+        <span style={{ fontSize: 12.5, color: 'var(--sev-medium, #e6b45c)' }}>{t.agents.runs.needsYou}</span>
+      </div>
+    );
+  }
+
+  if (run.type === 'agent') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {status}
+        <span className="hint" style={{ fontSize: 12.5 }}>
+          {t.agents.runs.steps(run.steps ?? 0)}
+        </span>
+      </div>
+    );
+  }
+
+  const scan = run.scan;
+  if (!scan) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {status}
+        <span className="hint" style={{ fontSize: 12.5 }}>
+          {t.agents.runs.pending}
+        </span>
+      </div>
+    );
+  }
+
+  const total = scan.steps.length;
+  const ran = scan.steps.filter((s) => s.status === 'ran').length;
+  const incomplete = total - ran;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      {status}
+      <span style={{ fontSize: 12.5 }}>{t.agents.runs.workers(ran, total)}</span>
+      <span className="hint">·</span>
+      <span style={{ fontSize: 12.5 }}>{t.agents.runs.findings(scan.findings.total)}</span>
+      {incomplete > 0 && (
+        <span
+          className="badge badge-medium"
+          title={scan.steps
+            .filter((s) => s.status !== 'ran')
+            .map((s) => s.worker)
+            .join(', ')}
+        >
+          {t.agents.runs.incomplete(incomplete)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// === One run, inside this section ===
+
+/**
+ * The run view. It renders the SAME panels the image section does — the trace is the trace — inside this
+ * section's frame, so opening a result never silently changes which part of the workbench you are in.
+ */
+export function AgentsRun(): JSX.Element {
+  const { imageId = '', kind = 'scan' } = useParams();
+  const t = useMessages();
+  const [image, setImage] = useState<ImageSummary | null>(null);
+  const [missing, setMissing] = useState(false);
+
+  useEffect(() => {
+    api
+      .getImage(imageId)
+      .then(setImage)
+      .catch(() => setMissing(true));
+  }, [imageId]);
+
+  if (missing) {
+    return (
+      <div className="empty" style={{ padding: 32 }}>
+        <div className="empty-title">{t.agents.run.notFound}</div>
+        <div className="empty-body">
+          <Link to="/agents">{t.agents.run.back}</Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <Link to="/agents" className="btn btn-sm btn-ghost" style={{ paddingLeft: 0, marginBottom: 4 }}>
+          <Icon.back size={13} /> {t.agents.run.back}
+        </Link>
+        <h1 className="page-title">{kind === 'agent' ? t.agents.run.agentTitle : t.agents.run.scanTitle}</h1>
+        <div className="hint mono" style={{ wordBreak: 'break-all' }}>
+          {image?.filename ?? imageId}
+          {image?.identity ? ` · ${image.identity.firmwareClass} · ${image.identity.arch}` : ''}
+        </div>
+      </div>
+
+      {kind === 'agent' ? <AgentPanel imageId={imageId} /> : <OpacidadPanel imageId={imageId} />}
+
+      {/* The one way out, labelled. Leaving for the static-analysis shell is a choice made here, never the
+          unannounced result of clicking a row. */}
+      <div className="panel" style={{ marginTop: 16 }}>
+        <Link to={`/image/${imageId}/dossier`} className="btn btn-sm">
+          {t.agents.run.openImage}
+        </Link>
+        <div className="hint" style={{ marginTop: 6 }}>
+          {t.agents.run.openImageHint}
+        </div>
       </div>
     </div>
   );

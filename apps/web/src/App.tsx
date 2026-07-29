@@ -4,7 +4,7 @@ import { type ImageSummary, api } from './api';
 import { type Messages, useMessages } from './i18n';
 import { Icon, type IconName } from './icons';
 import { Onboarding, startTour } from './onboarding';
-import { Agents } from './pages/Agents';
+import { Agents, AgentsRun } from './pages/Agents';
 import { Capabilities } from './pages/Capabilities';
 import { Capture } from './pages/Capture';
 import { Corpus } from './pages/Corpus';
@@ -379,6 +379,9 @@ function Shell(): JSX.Element {
             <Route path="/image/:id" element={<ImageDetail />} />
             <Route path="/image/:id/:section" element={<ImageDetail />} />
             <Route path="/agents" element={<Agents />} />
+            {/* A run opens INSIDE Agents. The old console navigated to /image/:id/opacidad, which is the
+                static-analysis shell — so a click on a result silently changed which section you were in. */}
+            <Route path="/agents/:imageId/:kind" element={<AgentsRun />} />
             <Route path="/updates" element={<Capture />} />
             <Route path="/capture" element={<Capture />} />
             <Route path="/corpus" element={<Corpus />} />

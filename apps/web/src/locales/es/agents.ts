@@ -3,56 +3,73 @@ import type { Messages } from '../en';
 /**
  * agents — Spanish. Tipado contra el catálogo inglés, así que una clave sin traducir no puede colarse.
  *
- * La frase que no se puede suavizar es la de la cabecera: el agente conduce el pipeline, no inventa hallazgos. Los
- * ESTADOS de ejecución (`queued`, `running`, `awaiting_approval`, `error`, `halted`) viajan por la API y se guardan
- * en SQLite: se muestran tal cual, y aquí sólo se traduce lo que los rodea.
+ * Aquí la unidad es la EJECUCIÓN, no la imagen, y eso es lo que hay que preservar al traducir: una fila dice qué
+ * salió de una ejecución, no en qué estado terminó el proceso. La frase que no se puede suavizar es
+ * `runs.incomplete` — un total de hallazgos sacado de un plan incompleto es justo la lectura que este banco existe
+ * para impedir.
+ *
+ * Los ESTADOS (`queued`, `running`, `awaiting_approval`, `error`, `halted`) viajan por la API y se guardan en
+ * SQLite: se muestran tal cual. Los nombres de fichero, los ids de worker y el proveedor/modelo también son
+ * registros y no se traducen.
  */
 export const agents: Messages['agents'] = {
   eyebrow: 'Autonomía',
   title: 'Agentes',
-  desc: 'Lanza y vigila ejecuciones de análisis autónomo sobre cualquier objetivo. Cada ejecución registra sus pasos y conserva el estado de prueba de cada afirmación — el agente conduce el pipeline, nunca inventa hallazgos.',
+  desc: 'Ejecuciones autónomas sobre cualquier objetivo. Cada una registra qué planificó, qué llegó a ejecutar de verdad y qué no pudo responder — el motor conduce el pipeline, nunca inventa hallazgos.',
 
-  scan: {
-    title: 'Escaneo autónomo',
-    badge: 'determinista',
-    sub: 'Un clic planifica una cadena de workers enrutada por clase, la ejecuta de principio a fin y devuelve una traza de razonamiento con sus lagunas declaradas. No hace falta clave de LLM.',
+  engine: {
+    scanName: 'Escaneo autónomo',
+    scanKind: 'determinista',
+    scanReady: 'siempre disponible',
+    scanWhat:
+      'Planifica una cadena de workers enrutada por clase, la ejecuta de principio a fin, re-planifica a partir de las pistas y declara sus lagunas.',
+    agentName: 'Agente consciente',
+    agentOff: 'desactivado',
+    agentWhat:
+      'LLM sólo en los nodos de decisión, tras una aprobación humana y un gobernador que limita pasos, tokens, coste y tiempo.',
+    agentDisabled:
+      'Define FIRMLAB_AGENT=1 y una clave de API para activarlo. El escaneo determinista funciona sin ninguna de las dos.',
   },
 
-  llm: {
-    title: 'Agente consciente',
-    off: 'desactivado',
-    on: 'Nodos de decisión con LLM, con una aprobación humana antes de emular y un gobernador que limita pasos, tokens, coste y tiempo.',
-    disabled:
-      'Desactivado — define FIRMLAB_AGENT=1 y una clave de API para las decisiones dirigidas por LLM. El escaneo determinista sigue funcionando.',
-  },
-
-  history: {
-    title: 'Historial de ejecuciones',
+  runs: {
+    title: 'Ejecuciones',
     live: (n) => (n === 1 ? '1 en curso' : `${n} en curso`),
     refresh: 'Actualizar',
-    emptyTitle: 'Todavía no hay ejecuciones',
+    emptyTitle: 'Todavía no se ha ejecutado nada',
     emptyBody:
-      'Lanza un escaneo autónomo sobre uno de los objetivos listos de abajo. Las ejecuciones aparecen aquí con su estado en vivo, y se abren en su transcripción de pasos y sus evidencias.',
+      'Arranca un escaneo autónomo sobre uno de los objetivos listos de abajo. Las ejecuciones aparecen aquí y se abren en su propia traza.',
     colTarget: 'Objetivo',
-    colKind: 'Tipo',
-    colStatus: 'Estado',
-    colDetail: 'Detalle',
-    view: 'Ver',
+    colOutcome: 'Qué salió de ella',
+    colWhen: 'Cuándo',
     kindScan: 'escaneo',
     kindAgent: 'agente',
+
+    workers: (ran, total) => `${ran} de ${total} workers`,
     findings: (n) => (n === 1 ? '1 hallazgo' : `${n} hallazgos`),
+    incomplete: (n) => (n === 1 ? '1 no completó' : `${n} no completaron`),
     steps: (n) => (n === 1 ? '1 paso' : `${n} pasos`),
+    needsYou: 'esperando tu aprobación',
+    pending: 'todavía sin resultado registrado',
+  },
+
+  run: {
+    back: 'Todas las ejecuciones',
+    scanTitle: 'Escaneo autónomo',
+    agentTitle: 'Sesión de agente',
+    openImage: 'Abrir el análisis completo de este firmware',
+    openImageHint: 'Sale de Agentes hacia la vista de análisis estático de esta imagen.',
+    notFound: 'Ese objetivo no está en este espacio de trabajo.',
   },
 
   launch: {
-    title: 'Lanzar sobre un objetivo',
+    title: 'Arrancar una ejecución',
     ready: (n) => (n === 1 ? '1 lista' : `${n} listas`),
     emptyTitle: 'Todavía no hay objetivos',
     emptyLead: 'Sube firmware en',
     emptyLink: 'Análisis local',
-    emptyTail: '— las imágenes analizadas se convierten aquí en objetivos del agente.',
+    emptyTail: '— una imagen analizada se convierte aquí en objetivo.',
     scan: 'Escanear',
     agent: 'Agente',
-    launched: (filename) => `Escaneo autónomo lanzado sobre ${filename}`,
+    launched: (filename) => `Escaneo autónomo arrancado sobre ${filename}`,
   },
 };

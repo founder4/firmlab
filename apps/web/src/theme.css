@@ -1347,6 +1347,37 @@ th.sortable:hover {
   padding: 12px 14px;
 }
 
+/* Agents — the two engines as one strip. They used to be two full panels of prose, which gave a permanent
+   explanation the same weight as the runs underneath it; what an engine IS belongs here once, what a run DID
+   belongs in its row. Collapses to one column before the text has to wrap mid-sentence. */
+.engine-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 900px) {
+  .engine-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.engine {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 12px 14px;
+}
+.engine-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 5px;
+  font-size: 0.875rem;
+}
+.engine .hint {
+  max-width: 62ch;
+}
+
 .tree-row {
   display: flex;
   align-items: center;

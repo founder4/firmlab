@@ -1697,7 +1697,7 @@ function BudgetGauge({ session }: { session: AgentSession }): JSX.Element {
   );
 }
 
-function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
+export function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
   const t = useMessages();
   const a = t.imageDetail.agent;
   const [config, setConfig] = useState<AgentConfig | null>(null);
