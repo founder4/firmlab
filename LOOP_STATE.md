@@ -24,8 +24,8 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
       `providers/hashlookup.ts:272-366` y ninguno llegaba a pantalla.
 - [x] `daemonsStarted`/`daemonsExited` sin lector — impacto: medio — evidencia: `SimulationMenu.tsx` pintaba
       `cause`/`summary`/`evidence` y no la lista de demonios; `api.ts:183-184`.
-- [ ] `SecureBootPosture.note` sin lector — impacto: medio — evidencia: `api.ts:126`; `SimulationMenu.tsx:363-386`
-      pinta `secureBoot`/`setupMode`/`testKey`/`variableCount` y no `note`, que es la frase del proveedor para
+- [x] `SecureBootPosture.note` sin lector — impacto: medio — evidencia: `api.ts:126`; `SimulationMenu.tsx:363-386`
+      pintaba `secureBoot`/`setupMode`/`testKey`/`variableCount` y no `note`, que es la frase del proveedor para
       cuando el almacén de variables no era extraíble.
 - [ ] `DeviceTreeResult.rejected` sin lector — impacto: medio — evidencia: `api.ts:948`.
 - [ ] `OperatorAssertion.withdrawnReason` sin lector — impacto: medio — evidencia: `OperatorPanel.tsx:67` sólo
@@ -43,6 +43,10 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
       `/image/c8e1ffa0/simulate` tras el arranque `f5301511-1d6`: «This boot was isolated, so nothing below was
       reached … this is what the firmware asked for» encima de «The guest addressed nothing beyond the emulator»,
       y el firmware no pidió nada. `SimulationMenu.tsx` la pinta incondicionalmente.
+- [ ] El carril UEFI/chipsec no tiene ninguna muestra en el corpus — impacto: medio — evidencia: las 16 imágenes
+      de `/api/images` son rtos/embedded-linux/baremetal/esp-soc/encrypted/openwrt; `chipsec_util` está instalado
+      (`/api/tools`) pero ninguna imagen llega a decodificar un volumen. Todo lo de `chipsec.ts` está probado
+      contra fixtures sintéticas y nunca contra un BIOS real.
 - [ ] Denominadores OSV/NVD sin lector — impacto: medio — evidencia: `api.ts:639-647`, `:671`.
 
 ## Historial
@@ -80,3 +84,19 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
   guestFrames 116`. Las 116 tramas que el invitado puso en el cable eran las 116 respuestas a nuestras 116 SYN.
   La página pasó de 8582 px a 3384 px y ahora dice «116 frames were this guest ANSWERING connections opened from
   outside it». `undecided 0` confirma que con `maxlen=256` las banderas siempre se capturan.
+- iter 4: cerrado `SecureBootPosture.note`. Auditando salió el defecto de debajo, que es el que le daba sentido:
+  `readNvramPosture` devolvía `null` en dos situaciones opuestas (chipsec no sacó ningún listado NVRAM / sacó
+  listados que no parsearon ni una variable) y el panel pintaba ambas como la misma ausencia — que se lee como
+  «esta imagen no tiene almacén de variables», la única conclusión que ninguna de las dos sostiene. Nuevo
+  `describeNvramStore` (puro) las separa y viaja como `nvramStoreNote` (opcional para siempre). El `note` propio
+  ahora va al lado de la insignia en vez de enterrado en `reason`, dice de cuántas variables se leyó, y declara la
+  cota de 40 nombres que truncaba en silencio. 8 tests nuevos.
+  Verificación: `pnpm test` → core 75 / api 1752 / web 306 verde · `pnpm check` → Done · `pnpm biome` → limpio ·
+  contra el build desplegado (`2ce3aa2`): `docker exec firmlab node -e 'import(...dist/providers/chipsec.js)'`
+  devuelve las tres frases distintas y `""` cuando sí hubo postura; y `POST /images/c8e1ffa0/chipsec` real →
+  `status done`, rama bloqueada temprana intacta y `nvramStoreNote: undefined` (correcto: el decode no llegó al
+  almacén, y la razón ya dice por qué).
+  **Limitación de la verificación, dicha explícitamente:** no hay ninguna imagen UEFI en el corpus (las 16 son
+  rtos/embedded-linux/baremetal/esp-soc/encrypted/openwrt), así que la rama que compone `nvramStoreNote` desde un
+  decode UEFI real no se ha ejecutado nunca sobre bytes reales — sólo sobre el build desplegado con entradas
+  sintéticas. Anotado abajo como punto flojo del corpus, no del código.
