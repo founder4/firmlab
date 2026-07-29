@@ -86,6 +86,19 @@ export const simulation = {
   egressIsolatedNote:
     'This boot was isolated, so nothing below was reached. Blocking the traffic does not hide the attempt — this is what the firmware asked for.',
   /**
+   * The same two states when the guest addressed NOTHING beyond the emulator.
+   *
+   * Both sentences above point at a list — "nothing below was reached", "could reach these" — and both were
+   * printed unconditionally, so a boot that asked for nothing rendered a promise of destinations above an empty
+   * space, and the isolated one claimed "this is what the firmware asked for" about a firmware that asked for
+   * nothing. The open-and-empty case is the one worth stating plainly: the door was open and the guest did not
+   * walk through it, which is a measurement of this boot and not a property of the firmware.
+   */
+  egressIsolatedEmpty:
+    'Outbound was blocked for this run, and the guest addressed nothing beyond the emulator in any case — the block had nothing to stop. Those are two independent facts: with the block on, an attempt would still have been recorded.',
+  egressOpenEmpty:
+    'Outbound was NOT blocked for this run — the firmware could have reached the internet from this machine — and it addressed nothing beyond the emulator. That is a measurement of THIS boot, not a property of the firmware.',
+  /**
    * Measured, not cautious boilerplate: three boots of one WDR3600 gave 15 external destinations, 0, and the same
    * 15 again — the empty one differing from its own isolated twin, not from the permissive run. A boot is a
    * sample of what this firmware does, so one list is a floor and never a total.

@@ -609,8 +609,19 @@ function EgressPanel({ egress, isolated }: { egress: EgressObservation; isolated
           {isolated ? s.egressBlocked : s.egressOpen}
         </span>
       </div>
+      {/* Both standing sentences point at a list — "nothing below was reached", "could reach these" — so a boot
+          that addressed nothing outside the emulator printed a promise of destinations above empty space, and
+          the isolated one claimed "this is what the firmware asked for" about a firmware that asked for nothing.
+          Switched on the EXTERNAL count, not on the whole list: a row for the sandbox's own resolver is not
+          something the firmware could reach "from this machine" either. */}
       <div className="hint" style={{ marginTop: 6 }}>
-        {isolated ? s.egressIsolatedNote : s.egressOpenWarning}
+        {external.length === 0
+          ? isolated
+            ? s.egressIsolatedEmpty
+            : s.egressOpenEmpty
+          : isolated
+            ? s.egressIsolatedNote
+            : s.egressOpenWarning}
       </div>
       {/* The bound on the whole list, and it is a measured one — see the locale comment. */}
       <div className="hint" style={{ marginTop: 4 }}>

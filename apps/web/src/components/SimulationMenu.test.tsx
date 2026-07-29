@@ -348,6 +348,62 @@ describe('SimulationMenu — the guest’s egress', () => {
     expect(screen.queryByText(/went past this run's limit/)).not.toBeInTheDocument();
   });
 
+  /**
+   * The two policy sentences when the guest addressed nothing outside the emulator.
+   *
+   * Both standing ones point at a list, and both were printed unconditionally — so a boot that asked for nothing
+   * showed "nothing below was reached" above empty space, and the isolated one asserted "this is what the
+   * firmware asked for" about a firmware that asked for nothing. Which happens to be the MR3220's real case: all
+   * 116 of its frames were answers to our own probes.
+   */
+  it('does not promise destinations that are not there on an isolated empty boot', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(
+      detail({ isolated: true, egress: { ...emptyEgress, guestFrames: 116, answeredFrames: 116 } }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText(/the block had nothing to stop/)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing below was reached/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/this is what the firmware asked for/)).not.toBeInTheDocument();
+  });
+
+  it('states the open-and-unused case plainly, as a fact about THIS boot', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(detail({ isolated: false, egress: { ...emptyEgress, guestFrames: 4 } }));
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText(/could have reached the internet from this machine/)).toBeInTheDocument();
+    expect(screen.getByText(/not a property of the firmware/)).toBeInTheDocument();
+    expect(screen.queryByText(/could reach these from this machine/)).not.toBeInTheDocument();
+  });
+
+  it('switches on the EXTERNAL count, so a row for the sandbox’s own resolver does not count as reachable', async () => {
+    // 10.0.2.3:53 is slirp's resolver. "The firmware could reach these from this machine" is false about it.
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(
+      detail({
+        isolated: false,
+        egress: {
+          ...emptyEgress,
+          attempts: [
+            { address: '10.0.2.3', protocol: 'udp' as const, port: 53, scope: 'emulator' as const, frames: 2 },
+          ],
+        },
+      }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText(/could have reached the internet from this machine/)).toBeInTheDocument();
+    // …and the row itself is still listed: it is context, not noise.
+    expect(screen.getByText('10.0.2.3:53')).toBeInTheDocument();
+  });
+
+  it('keeps the standing sentences when there IS somewhere outside the emulator', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(detail({ isolated: true }));
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText(/does not hide the attempt/)).toBeInTheDocument();
+    expect(screen.queryByText(/the block had nothing to stop/)).not.toBeInTheDocument();
+  });
+
   it('shows nothing at all for a run stored before the observation existed', async () => {
     // Optional forever: an older `emulate` result has no `egress`, and the panel must be absent rather than
     // rendering an empty one that reads as "it tried to reach nothing".

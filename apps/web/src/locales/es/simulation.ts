@@ -66,6 +66,10 @@ export const simulation: Messages['simulation'] = {
     'Este arranque NO estaba aislado: el firmware podía alcanzar esto desde esta máquina. Enciende FIRMLAB_EMU_ISOLATE en Ajustes para conservar la lista y quitarle el alcance.',
   egressIsolatedNote:
     'Este arranque estaba aislado, así que no se alcanzó nada de lo de abajo. Bloquear el tráfico no oculta el intento — esto es lo que el firmware pidió.',
+  egressIsolatedEmpty:
+    'La salida estuvo bloqueada en esta ejecución, y el invitado no se dirigió a nada más allá del emulador de todas formas — el bloqueo no tuvo nada que detener. Son dos hechos independientes: con el bloqueo puesto, un intento se habría registrado igual.',
+  egressOpenEmpty:
+    'La salida NO estuvo bloqueada en esta ejecución — el firmware podría haber alcanzado internet desde esta máquina — y no se dirigió a nada más allá del emulador. Eso es una medición de ESTE arranque, no una propiedad del firmware.',
   egressOneBoot:
     'Un arranque es una muestra. El mismo firmware arrancado dos veces no siempre llega al mismo punto, así que esta lista es un suelo y no un total — que un destino falte aquí puede significar sólo que no se intentó en esta ejecución.',
   egressNames: 'Nombres que pidió resolver',
