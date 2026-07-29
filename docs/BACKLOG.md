@@ -128,16 +128,24 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   `mkfs.ext2`, so the round trip returns before staging anything and a green integration test would prove only
   that nothing happened — the guard-success-path trap, avoided by naming it._
 
-- ⚠ **A SECOND kind of contamination in the corpus, and this one is not the code's.** `/bin/iptables-xml ->
-  /dev/null` in all three TP-Link rootfs, dated 2026-07-21 and 2026-07-27 against trees whose every other file is
-  2026-05-28 / 2015-05-18 / 2014-09-29; and `/etc/passwd -> /dev/null` on the WDR3600 with the same July date,
-  while the WR940N's `/etc/passwd -> ../tmp/passwd` carries the tree's own May date and is plausibly original.
-  Nothing in this repository creates those symlinks, so they are hand-made test residue — the symreach guard
-  validation used an `etc/passwd -> /dev/null` exactly like this one. **Deliberately NOT cleaned up**, unlike the
-  staged libnvram shim: that one was provably ours (byte-identical to a file the container ships), while these
-  cannot be told from firmware with certainty one by one, and restoring `iptables-xml` to what it PROBABLY pointed
-  at (`iptables-multi`) would be inventing firmware. Needs the operator's call, and a rule about who may write
-  into `/data/extract` at all.
+- ⚠ **The extractor neuters escaping symlinks to `/dev/null`, silently, and every provider then reads an empty
+  file as an absent one.** Chased as a suspected second contamination and it is not one — the correction matters
+  as much as the finding. `/bin/iptables-xml -> /dev/null` on all three TP-Link images carries a July mtime
+  against a tree of 2015/2014 files, which reads as hand-made residue. It is not: the mtimes match each image's
+  extraction job **to the minute** (dddbbb22 → 2026-07-21 19:12, b1fda926 and c8e1ffa0 → 2026-07-27 20:00).
+  `unsquashfs` replaces a symlink that would escape the extraction root with `/dev/null` as a path-traversal
+  guard, and gives the replacement the current time while regular files keep their squashfs mtimes. A corpus-wide
+  sweep finds DOZENS: the IMOU has ~25 including binaries under `/sbin`, the Tenda has `/etc/resolv.conf`, and
+  **DVRF has `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/hosts` and `/etc/resolv.conf` all pointing at
+  `/dev/null`.**
+  **The consequence is the project's central invariant, broken one layer below where it is enforced.** `fsaudit`
+  exists to find weak, empty and legacy credentials; on DVRF it reads `/etc/passwd` and `/etc/shadow` as ZERO
+  BYTES and has no way to tell "this firmware ships no shadow file" from "the extractor cut this one off". An
+  empty result that cannot say why is exactly what `extract-diagnose.ts` was written to prevent for a missing
+  rootfs, and nothing does the equivalent for a neutered file. The fix is cheap and it is not a deletion: detect
+  a symlink whose target is `/dev/null`, and have every reader of that path say the file was neutered by the
+  extraction rather than absent from the firmware. _Nothing was deleted here, deliberately: these are the
+  extractor's own record, and removing them would make the tree less faithful, not more._
 - ▢ **The guest repair is composed and not yet wired.** `providers/guest-repair.ts` (pure, 13 tests) plans one
   appended line for the booted image; `rootfs-image.ts` still has to write it, `FIRMLAB_EMU_REPAIR` still has to
   gate it, and the result still has to carry its `interventions`. The design came out of an inventory of what the
