@@ -17,21 +17,27 @@
  * row is the one a reader will never find. So the unresolved references are a table, with who needs each one, and
  * the drawing below is the shape — not the evidence. Orphans get the same treatment for the same reason.
  *
- * **What an unresolved reference does NOT mean.** Two properties of the walk make false unresolved entries normal,
- * and both are stated on screen rather than only here, because an operator who does not know them will read this
- * table as a broken rootfs:
- *   • the walk is BOUNDED — a file cap and an ELF cap stop it early on a large rootfs, and a library past the cut
- *     is reported unresolved by every binary that references it. Measured on the GL.iNet: the walk reached 4,000 of
- *     6,496 files, so a real 590 KB `lib/libc.so` that 298 binaries need was never seen. That is the dominant
- *     source of false entries here, and the result says so via its truncation flag;
- *   • resolution is by basename against what the carve recovered, and a partial carve, a second partition, or a
- *     vendor overlay mounted at boot are all libraries the device has and this image does not.
- * A missing library is a hypothesis to check in the file browser, never a finding.
+ * **What an unresolved reference does NOT mean.** The two causes that used to head this list were both artifacts of
+ * the analysis rather than facts about the firmware, and both are now gone from the provider:
+ *   • the SYMLINK case. A soname is usually a link (`libc.so.0 → libuClibc-0.9.33.so`), and a walk that refuses to
+ *     follow links — as it must, or a carve whose `usr/lib` points at `/` walks the host — collected the file under
+ *     its other name. The provider reads the link's target NAME and resolves it lexically inside the carve, which
+ *     is a weaker fact than a walked file and is labelled `link` rather than folded into `binary`. That took the
+ *     IMOU from 2 unresolved to 0 and the GL.iNet from 143 to 65;
+ *   • the WALK's file cap, which is what the remaining 65 were. It stopped at 4,000 of the GL.iNet's 6,496 files,
+ *     so a real 590 KB `lib/libc.so` that 298 binaries reference was never seen and every one of them reported it
+ *     missing. Indexing names costs a `readdir`, so it is no longer capped at all: the walk covers the whole tree
+ *     and the GL.iNet's 65 went to 0.
+ * What is still bounded is the EXPENSIVE pass — a `rabin2` spawn per ELF — and what that cap now costs is stated
+ * in the provider's own sentence at the foot of this panel: the ELFs it did not open are still indexed by name, so
+ * they resolve (node kind `file`, a fourth kind beside `binary`/`link`/`lib`); what is missing is the libraries
+ * THEY link, i.e. edges out of them, never a soname wrongly called absent.
  *
- * The symlink case USED to head this list and no longer does. The provider now reads a link's target name — never
- * following it, so loops and rootfs escapes stay impossible — and resolves it lexically inside the carve, which is
- * a weaker fact than a walked file and is labelled `link` rather than folded into `binary`. That alone took the
- * IMOU from 2 unresolved to 0 and the GL.iNet from 143 to 65, and the 65 that remain are the cap above.
+ * So a row left in this table is either genuinely absent or outside this carve, and the second is the one to hold
+ * onto: resolution is by basename against what THIS extraction recovered, and a partial carve, a second partition
+ * or a vendor overlay mounted at boot are all libraries the device has and this image does not. The Tenda's one
+ * remaining row is the honest shape — it names `libcrypto.so.1.0.0` where the carve ships `libcrypto.so.1.1`.
+ * A missing library is a hypothesis to check in the file browser, never a finding.
  *
  * **Every kind of nothing gets its own sentence.** "Nobody has built the map", "there is no extracted rootfs to
  * build one from", "rabin2 is not installed here" and "the map was built and the rootfs links nothing" are four

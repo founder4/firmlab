@@ -87,13 +87,14 @@ export const compmap: Messages['compmap'] = {
       'Un soname que aporta un enlace simbólico ya se resuelve y se etiqueta como provisto por enlace — el ' +
       'recorrido sigue negándose a seguir un enlace: lee el nombre del destino y lo casa dentro de lo extraído, ' +
       'así que escapar del rootfs sigue siendo imposible. Lo que queda aquí o falta de verdad, o está',
-    bounds: 'más allá de los límites del recorrido',
+    bounds: 'fuera de esta extracción',
     caveatTail:
-      ': los topes de ficheros y de ELF cortan pronto en un rootfs grande, y una biblioteca que quede tras el ' +
-      'corte se reporta como no resuelta por los binarios que sí la referencian. Además la resolución es por ' +
-      'nombre base y sólo contra lo que se extrajo, así que una extracción parcial, una segunda partición o un ' +
-      'overlay montado en el arranque son bibliotecas que el dispositivo tiene y esta imagen no. Abre el ' +
-      'explorador de ficheros antes de tratar una fila de aquí como una biblioteca ausente.',
+      ': la resolución es por nombre base y sólo contra lo que se extrajo, así que una extracción parcial, una ' +
+      'segunda partición o un overlay montado en el arranque son bibliotecas que el dispositivo tiene y esta ' +
+      'imagen no. El paso caro sigue acotado, pero un fichero que no llegó a abrirse se indexa igualmente por ' +
+      'nombre y sigue resolviendo — lo que cuesta un corte son las bibliotecas que ESE fichero enlaza, nunca un ' +
+      'soname declarado ausente por error. Abre el explorador de ficheros antes de tratar una fila de aquí como ' +
+      'una biblioteca ausente.',
     noneLead: 'Cada referencia',
     noneTail:
       'de este rootfs nombra un fichero que el recorrido también encontró. Eso dice que lo extraído es coherente ' +

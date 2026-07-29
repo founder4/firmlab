@@ -90,12 +90,20 @@ export const compmap = {
       'A soname provided by a symlink now resolves and is labelled as link-provided — the walk still refuses to ' +
       "follow a link, it reads the link's target name and matches that inside the carve, so a rootfs escape stays " +
       'impossible. What is left here is either genuinely absent or',
-    bounds: "beyond the walk's bounds",
+    bounds: 'outside this extraction',
+    /**
+     * Rewritten when the walk stopped being capped. It used to blame "the file and ELF caps", which was true and
+     * is not any more: indexing a name costs a `readdir`, so the walk now covers the whole tree. Only the
+     * `rabin2` pass is still bounded, and an ELF it did not open is INDEXED BY NAME and still resolves — so what
+     * a cut costs is the edges out of that file, never a soname wrongly called absent. Saying otherwise blamed
+     * the firmware for a bound of ours.
+     */
     caveatTail:
-      ': the file and ELF caps stop early on a large rootfs, and a library past the cut is reported unresolved by ' +
-      'binaries that do reference it. Resolution is also by basename against this carve alone, so a partial ' +
-      'extraction, a second partition or an overlay mounted at boot are all libraries the device has and this ' +
-      'image does not. Open the file browser before treating a row here as a missing library.',
+      ': resolution is by basename against this carve alone, so a partial extraction, a second partition or an ' +
+      'overlay mounted at boot are all libraries the device has and this image does not. The expensive pass is ' +
+      'still bounded, but a file it did not open is still indexed by name and still resolves — a cut costs the ' +
+      'libraries THAT file links, never a soname wrongly reported absent. Open the file browser before treating ' +
+      'a row here as a missing library.',
     /** Around `DT_NEEDED`. Self-consistent is not complete, and the sentence has to say both. */
     noneLead: 'Every',
     noneTail:
