@@ -262,6 +262,38 @@ of "known-incomplete semantics" exists without hunting through the sections abov
 - ▢ **IPv6 is skipped entirely.** `parseEgress` reads IPv4 only; a firmware that phones home over v6 is invisible
   to it. Deliberate — the rung's networking is v4 and a partial v6 story would be worse than none — but it is a
   hole in a panel whose whole job is "what did it try to reach".
+- ⚠ **The corpus barely talks, and that is the finding that should decide the interception work.** The egress
+  observation run across every image that can reach the full-system rung (2026-07-29, deploy `9c485b6`), one boot
+  each except the WDR3600's three:
+
+  | image | boot | guest frames | external | DNS | protocols |
+  |---|---|---|---|---|---|
+  | TP-Link WDR3600 | booted | 19 / 116 / 19 | **15** / 0 / **15** | 0 | UDP/123 only |
+  | TP-Link WR940N | booted | 135 | 0 | 0 | — |
+  | TP-Link MR3220 | booted | 116 | 0 | 0 | — |
+  | DVRF | kernel panic | 0 | 0 | 0 | — |
+  | IMOU Ranger 2C | never reached userspace | 0 | 0 | 0 | — |
+  | GL.iNet BE3600 | `blocked_by_platform` | — | — | — | no arm64 kernel here |
+
+  **Across eight boots of six images there is not one outbound TCP connection and not one DNS question.** The only
+  external traffic anywhere is the WDR3600's hardcoded NTP pool on UDP/123 — and `guestfwd` is TCP-only (verified:
+  `guestfwd=udp:…` is rejected as an invalid rule), so the one mechanism that needs no new privilege cannot touch
+  the one thing there is to see. A Burp-style intercept is an HTTP tool and there is currently no HTTP to
+  intercept.
+  **The blocker is not the redirection mechanism, it is how far the boots get**: `open` is empty on every image,
+  so no service answered anywhere, and a firmware whose web UI never comes up never does an OTA check either.
+  Spending the spike on transparent redirection would be optimising a stage nothing reaches.
+  _And the zeros are floors, not negatives — the WDR3600 gave 15, 0 and 15 across three identical runs, so a
+  single boot reporting 0 is a sample, not a statement about the firmware. Repeated boots come before conclusions._
+- ▢ **The interception mechanisms, ranked by what was measured rather than by preference.** DNS-controlled
+  redirection dies on hardcoded addresses (0 DNS questions observed anywhere). `guestfwd` per destination is
+  TCP-only. TAP + `iptables REDIRECT` needs `/dev/net/tun` (**absent in the container**) and `CAP_NET_ADMIN`
+  (**not granted**), i.e. a compose change that widens the deployment's privilege, on the VM-backed runtime
+  `looksLikeVmBackedRuntime` already paid for. That leaves a userspace stack behind `-netdev socket`/`stream`
+  (gvisor-tap-vsock, slirp4netns, vpnkit): full control including UDP and per-connection approval, at the cost of
+  a new dependency in the data path. The real choice is privilege-in-the-container versus dependency-in-the-path,
+  and neither is worth paying until a boot produces traffic worth intercepting.
+
 - ▢ **`webprobe` and the interception ladder** — the observation is peldaño 1 of the design the operator asked
   for: see, then AUTHORISE, then inspect and edit (a Burp for emulated firmware). Peldaño 2 is a two-pass
   approve-then-boot, which fits the rung's existing learn/reach shape. Peldaño 3 re-targets `capture/proxy.ts` —
