@@ -12,7 +12,7 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
 - [x] 1. `ResearchResult.hashLookup` se renderiza, y sus **seis** desenlaces son distinguibles entre sí —
       en particular `skipped_salted` (nunca se envió) no puede leerse como `miss` (se consultó y no había).
 - [x] 2. `BootDiagnosis.daemonsStarted` / `daemonsExited` se renderizan: «nunca arrancó» ≠ «arrancó y murió con SIGSEGV».
-- [ ] 3. `SecureBootPosture.note` y `DeviceTreeResult.rejected` se renderizan.
+- [x] 3. `SecureBootPosture.note` y `DeviceTreeResult.rejected` se renderizan.
 - [ ] 4. `OperatorAssertion.withdrawnReason` y `FuzzResult.reason` se renderizan.
 - [ ] 5. Denominadores de investigación: `osv.skipped`, `nvd.notQueried`, `nvd.truncated[]`, `egress.neverSent`.
 - [ ] 6. Cada uno lleva un test que afirma que el caso «no se preguntó» se distingue del caso «se preguntó y no había».
@@ -27,7 +27,7 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
 - [x] `SecureBootPosture.note` sin lector — impacto: medio — evidencia: `api.ts:126`; `SimulationMenu.tsx:363-386`
       pintaba `secureBoot`/`setupMode`/`testKey`/`variableCount` y no `note`, que es la frase del proveedor para
       cuando el almacén de variables no era extraíble.
-- [ ] `DeviceTreeResult.rejected` sin lector — impacto: medio — evidencia: `api.ts:948`.
+- [x] `DeviceTreeResult.rejected` sin lector — impacto: medio — evidencia: `api.ts:948`.
 - [ ] `OperatorAssertion.withdrawnReason` sin lector — impacto: medio — evidencia: `OperatorPanel.tsx:67` sólo
       comprueba `status === 'withdrawn'` para un badge; la razón de la retractación no se lee.
 - [ ] `FuzzResult.reason` sin lector — impacto: bajo — evidencia: `api.ts:231`.
@@ -47,6 +47,10 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
       de `/api/images` son rtos/embedded-linux/baremetal/esp-soc/encrypted/openwrt; `chipsec_util` está instalado
       (`/api/tools`) pero ninguna imagen llega a decodificar un volumen. Todo lo de `chipsec.ts` está probado
       contra fixtures sintéticas y nunca contra un BIOS real.
+- [ ] El mismo árbol leído dos veces no se dice que es el mismo — impacto: bajo — evidencia: en `447719f7` el
+      rechazado de `raw image offset 10186216` mide 60082 bytes, exactamente los del blob que sí se lee vía
+      `FIT /images/ubi → UBI volume kernel /images/fdt-1`. Son la misma vista cruda y reensamblada del mismo
+      árbol y el panel las presenta como dos cosas sin relación.
 - [ ] Denominadores OSV/NVD sin lector — impacto: medio — evidencia: `api.ts:639-647`, `:671`.
 
 ## Historial
@@ -100,3 +104,14 @@ De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cu
   rtos/embedded-linux/baremetal/esp-soc/encrypted/openwrt), así que la rama que compone `nvramStoreNote` desde un
   decode UEFI real no se ha ejecutado nunca sobre bytes reales — sólo sobre el build desplegado con entradas
   sintéticas. Anotado abajo como punto flojo del corpus, no del código.
+- iter 5: cerrado `DeviceTreeResult.rejected`. Era la forma más nítida del defecto: la frase del proveedor termina
+  en «(see rejected)», apuntando a un campo que nadie pintaba — y en `447719f7`, la única imagen del corpus que
+  los produce, `found` es TRUE, así que ni esa frase salía en pantalla (el banner que la lleva sólo se dibuja
+  cuando no se encontró nada). Nuevo bloque `RejectedHeaders` FUERA de ese banner, con la frase de que una
+  cabecera que no se pudo recorrer es un límite del lector y no un hallazgo de que ahí no haya árbol, y con cota
+  de 6 filas que dice lo que corta (el proveedor no acota nada). 3 tests nuevos.
+  Verificación: `pnpm test` → core 75 / api 1752 / web 309 verde · `pnpm check` → Done ·
+  `pnpm biome` → limpio (tras `biome:fix`, un formato en el locale es) ·
+  y sobre bytes reales: `pnpm ui:shot /image/447719f7/hardware` contra el build desplegado (`e0ff8a2`) →
+  «2 FDT HEADERS VALIDATED BUT WOULD NOT READ» con las dos entradas, sus tamaños y las razones completas del
+  proveedor; 0 errores de consola, 0 peticiones fallidas.
