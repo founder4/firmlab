@@ -150,3 +150,81 @@ describe('SimulationMenu', () => {
     await waitFor(() => expect(mockApi.emulate).toHaveBeenCalledWith('img1', 'sbin/httpd'));
   });
 });
+
+/**
+ * Where the booted firmware tried to go.
+ *
+ * The first version of this panel rendered only inside the running-job block, so the observation existed in the
+ * tab that launched the boot and vanished on reload — the defect this project already closed once for twenty
+ * per-kind routes, reappearing in a new panel. It reads the run LEDGER on mount now, and these tests are written
+ * from that failure: nothing here launches anything.
+ */
+describe('SimulationMenu — the guest’s egress', () => {
+  const ledger = { runs: [{ jobId: 'j9', kind: 'emulate', status: 'done' }], byTarget: [] };
+  const detail = (o: Record<string, unknown>) => ({
+    summary: ledger.runs[0],
+    params: {},
+    log: '',
+    error: null,
+    result: {
+      egress: {
+        attempts: [
+          { address: '128.138.140.44', protocol: 'udp', port: 123, scope: 'external', frames: 1 },
+          { address: '10.0.2.3', protocol: 'udp', port: 53, scope: 'emulator', frames: 2 },
+        ],
+        dnsQueries: [{ name: 'update.tplink.com', server: '10.0.2.3', frames: 2 }],
+        dnsTruncated: 0,
+        guestFrames: 19,
+        truncated: false,
+        problem: '',
+      },
+      ...o,
+    },
+  });
+
+  it('shows the last finished run’s destinations without anything being launched', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(detail({ isolated: false }));
+    render(<SimulationMenu imageId="img1" />);
+
+    // The addresses and the hostname render as they were on the wire — they are measurements, not chrome.
+    expect(await screen.findByText('128.138.140.44:123')).toBeInTheDocument();
+    expect(screen.getByText('update.tplink.com')).toBeInTheDocument();
+    expect(mockApi.emulateSystem).not.toHaveBeenCalled();
+  });
+
+  it('warns when the run was NOT isolated, which is the state that lets a firmware reach the internet', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(detail({ isolated: false }));
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText(/could reach these from this machine/i)).toBeInTheDocument();
+    expect(screen.getByText('outbound open')).toBeInTheDocument();
+  });
+
+  it('says an isolated run reached nothing, and that blocking did not hide the attempt', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(detail({ isolated: true }));
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText(/does not hide the attempt/i)).toBeInTheDocument();
+    expect(screen.getByText('outbound blocked')).toBeInTheDocument();
+    // The destination is still listed — that is the whole point of the isolated mode.
+    expect(screen.getByText('128.138.140.44:123')).toBeInTheDocument();
+  });
+
+  it('states that one boot is a floor, because three real boots of one image disagreed', async () => {
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue(detail({ isolated: true }));
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText(/floor and not a total/i)).toBeInTheDocument();
+  });
+
+  it('shows nothing at all for a run stored before the observation existed', async () => {
+    // Optional forever: an older `emulate` result has no `egress`, and the panel must be absent rather than
+    // rendering an empty one that reads as "it tried to reach nothing".
+    mockApi.runs.mockResolvedValue(ledger);
+    mockApi.runDetail.mockResolvedValue({ summary: ledger.runs[0], params: {}, log: '', error: null, result: {} });
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('User-mode QEMU')).toBeInTheDocument();
+    expect(screen.queryByText(/Where it tried to go/i)).not.toBeInTheDocument();
+  });
+});

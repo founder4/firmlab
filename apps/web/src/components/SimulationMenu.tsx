@@ -42,6 +42,8 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
   const t = useMessages();
   const [menu, setMenu] = useState<EmulationMenu | null>(null);
   const [job, setJob] = useState<Job | null>(null);
+  /** The last finished full-system run, so its egress survives a page reload. */
+  const [stored, setStored] = useState<StoredEmulationResult | null>(null);
   const [binary, setBinary] = useState('');
   const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
   const [busy, setBusy] = useState(false);
@@ -63,6 +65,35 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
       .catch(() => setMenu(null));
   }, [imageId]);
   useEffect(load, [load]);
+
+  /**
+   * The last full-system run's egress, read from the LEDGER on mount.
+   *
+   * Without this the observation would exist only in the browser tab that launched the boot and vanish on reload
+   * — which is the defect this project already closed once for twenty per-kind routes, reappearing in a new
+   * panel. The run ledger is where a finished job lives, so that is where this reads it from; a live run below
+   * still takes precedence, because it is the newer of the two.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .runs(imageId, { kind: 'emulate' })
+      .then(async (ledger) => {
+        const last = ledger.runs.find((r) => r.status === 'done');
+        if (!last) return null;
+        const detail = await api.runDetail(imageId, last.jobId);
+        return (detail.result ?? null) as StoredEmulationResult | null;
+      })
+      .then((r) => {
+        if (!cancelled) setStored(r?.egress ? r : null);
+      })
+      .catch(() => {
+        if (!cancelled) setStored(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageId]);
 
   useEffect(
     () => () => {
@@ -122,17 +153,13 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
   if (!menu) return <div className="empty">{t.simulation.loading}</div>;
 
   const result = job?.result as
-    | ({
-        command?: string;
-        stdout?: string;
-        stderr?: string;
-        timedOut?: boolean;
-        /** Full-system only, and optional forever: a run stored before the observation existed carries neither. */
-        egress?: EgressObservation;
-        isolated?: boolean;
-      } & Partial<RenodeResult> &
+    | ({ command?: string; stdout?: string; stderr?: string; timedOut?: boolean } & StoredEmulationResult &
+        Partial<RenodeResult> &
         Partial<ChipsecResult>)
     | null;
+  // A live run wins over the stored one — it is the newer of the two — and the stored one is what a reader who
+  // simply opened this page sees.
+  const egressShown = result?.egress ? result : stored;
   const isRenode = Boolean(result && 'booted' in result);
   const isChipsec = Boolean(result && 'moduleCount' in result);
 
@@ -392,7 +419,6 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
           {/* Above the raw console on purpose: this is the one part of a full-system run that says something
               about the FIRMWARE's intent rather than about the emulator, and it must not be buried under 4 KB
               of boot log. Rendered from the stored result, so an older run simply has none and shows nothing. */}
-          {result?.egress && <EgressPanel egress={result.egress} isolated={result.isolated === true} />}
           {result?.command && !isRenode && !isChipsec && (
             <>
               {result.timedOut && <div className="badge badge-medium">{t.simulation.timedOut}</div>}
@@ -424,9 +450,28 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
         </div>
       )}
 
+      {/* Its own panel, OUTSIDE the running-job block: the observation is a property of the image, and a reader
+          who simply opened this page has to see it without having launched the boot themselves. `egressShown`
+          prefers a live run over the stored one. */}
+      {egressShown?.egress && (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <EgressPanel egress={egressShown.egress} isolated={egressShown.isolated === true} />
+        </div>
+      )}
+
       <WebProbePanel imageId={imageId} />
     </div>
   );
+}
+
+/**
+ * The half of a full-system result this panel reads. Every field optional and permanently so: a run stored
+ * before the observation existed carries none of them, and a required field would make this type assert
+ * something about a persisted row it cannot know.
+ */
+interface StoredEmulationResult {
+  egress?: EgressObservation;
+  isolated?: boolean;
 }
 
 /**
@@ -447,7 +492,7 @@ function EgressPanel({ egress, isolated }: { egress: EgressObservation; isolated
   const other = egress.attempts.filter((a) => a.scope !== 'external');
 
   return (
-    <div style={{ marginTop: 12, borderTop: '1px solid var(--border-soft)', paddingTop: 12 }}>
+    <div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <strong style={{ fontSize: 13 }}>{s.egressTitle}</strong>
         <span className={`badge ${isolated ? 'badge-ok' : 'badge-high'}`}>
