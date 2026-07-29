@@ -222,6 +222,38 @@ export const imageDetail = {
      * block disappear, and a missing block is indistinguishable from a clean one. The catalogue size goes in the
      * tooltip because "0 matches" is only readable against what was searched.
      */
+    /**
+     * The online hash lookup. Six outcomes, and two of the distinctions between them are load-bearing:
+     * `skipped_salted` is a REFUSAL to ask (a miss on a salted hash proves nothing), and `miss` is a question
+     * that was asked and came back empty — which is still not evidence the password is strong. Flattening either
+     * into "not found" is the mistake this whole block exists to prevent.
+     */
+    hash: {
+      heading: 'Password-hash lookup',
+      disabled:
+        'Not asked: the online hash-lookup lane is off. Nothing here says these hashes are unrecoverable — the question was never put.',
+      noneToAsk: 'The lane is on and there was no hash to ask about.',
+      manual: 'look up by hand',
+      saltedNote:
+        'A salted crypt hash is never sent, because a miss on one would prove nothing about the password. Those rows are a refusal to ask, not an answer.',
+      outcome: {
+        resolved: 'recovered',
+        unverified: 'unverified',
+        miss: 'no match',
+        skipped_salted: 'not sent (salted)',
+        skipped_cap: 'not sent (cap)',
+        skipped_other: 'not sent',
+      },
+      outcomeMeaning: {
+        resolved: 'A plaintext was recovered AND verified locally against this hash. This is a credential.',
+        unverified: 'A lookup returned a candidate that did not verify against this hash. Not a credential.',
+        miss: 'The hash was sent and nothing matched. That is not evidence the password is strong — only that this service has not seen it.',
+        skipped_salted:
+          'Never sent. The hash is salted, so a miss would prove nothing about the password, and sending it would leak firmware material for no answer.',
+        skipped_cap: 'Never sent: the per-run cap was reached first. This is a bound, not a result.',
+        skipped_other: 'Never sent — the scheme was not one this lane queries.',
+      },
+    },
     kevBadgeTitle: (catalogSize: number) =>
       `CISA Known Exploited Vulnerabilities — exploited in the wild. ${catalogSize} entries were searched.`,
     kevNotChecked: 'KEV not checked',

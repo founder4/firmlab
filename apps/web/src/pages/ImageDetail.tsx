@@ -1520,6 +1520,8 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
             </div>
           )}
 
+          <HashLookupBlock lookup={result.hashLookup} />
+
           {result.securityContacts.some((c) => c.checked) && (
             <div style={{ marginBottom: 12 }}>
               <div className="eyebrow" style={{ marginBottom: 6 }}>
@@ -1559,6 +1561,94 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
     </div>
   );
 }
+
+/**
+ * What the online hash lookup asked, and — the part that matters — what it deliberately did not.
+ *
+ * The whole block was invisible: `providers/hashlookup.ts` distinguishes SIX outcomes and `apps/web` had no
+ * reader for any of them, so a password hash that was never sent rendered exactly like one that was checked and
+ * came back clean. On the highest-stakes finding class in the workbench, that is the worst version of the
+ * mistake this project exists to prevent.
+ *
+ * Two distinctions are load-bearing and neither may be flattened:
+ *
+ *  - **`skipped_salted` is not `miss`.** A salted crypt hash is never sent, because a miss on one would prove
+ *    nothing about the password's strength. Rendering both as "not found" would turn a refusal to ask into a
+ *    negative answer.
+ *  - **The lane being off is not an empty result.** With `FIRMLAB_HASH_LOOKUP` unset nothing is asked at all,
+ *    and the provider's own `reason` says so — printed here rather than showing an empty list.
+ */
+function HashLookupBlock({ lookup }: { lookup: ResearchResult['hashLookup'] }): JSX.Element | null {
+  const t = useMessages();
+  const h = t.imageDetail.research.hash;
+  if (!lookup) return null;
+
+  // The lane is off, or it ran and had nothing to ask. Both are stated; neither is silence.
+  if (!lookup.enabled || lookup.entries.length === 0) {
+    return (
+      <div style={{ marginBottom: 12 }}>
+        <div className="eyebrow" style={{ marginBottom: 4 }}>
+          {h.heading}
+        </div>
+        <div className="hint" style={{ maxWidth: '72ch' }}>
+          {/* The provider's own sentence, as it recorded it. */}
+          {lookup.reason || (lookup.enabled ? h.noneToAsk : h.disabled)}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div className="eyebrow" style={{ marginBottom: 4 }}>
+        {h.heading}
+      </div>
+      <div className="hint" style={{ maxWidth: '72ch', marginBottom: 6 }}>
+        {lookup.reason}
+      </div>
+      {lookup.entries.map((e) => (
+        <div
+          key={`${e.source}:${e.account}`}
+          style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', fontSize: 12.5, marginBottom: 3 }}
+        >
+          {/* Account, source and scheme are what the provider read out of the firmware — verbatim. */}
+          <span className="mono">{e.account}</span>
+          <span className="hint mono" style={{ fontSize: 11 }}>
+            {e.source} · {e.scheme}
+          </span>
+          <span className={`badge ${HASH_OUTCOME_CLASS[e.outcome] ?? ''}`} title={h.outcomeMeaning[e.outcome]}>
+            {h.outcome[e.outcome]}
+          </span>
+          {/* Recovered AND locally verified against the hash. Masked by the provider; never widened here. */}
+          {e.passwordMasked && <span className="mono">{e.passwordMasked}</span>}
+          {e.manualLookupUrl && (
+            <a href={e.manualLookupUrl} target="_blank" rel="noreferrer" className="hint" style={{ fontSize: 11.5 }}>
+              {h.manual}
+            </a>
+          )}
+        </div>
+      ))}
+      {/* The sentence a list of six labels cannot carry on its own. */}
+      <div className="hint" style={{ marginTop: 6, maxWidth: '72ch' }}>
+        {h.saltedNote}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Outcome colour. `resolved` is the only one that earns a severity: a recovered, locally verified password is a
+ * credential. `miss` is deliberately NEUTRAL rather than green — it means the lookup found nothing, which is not
+ * evidence the password is strong.
+ */
+const HASH_OUTCOME_CLASS: Record<string, string> = {
+  resolved: 'badge-crit',
+  unverified: 'badge-medium',
+  miss: '',
+  skipped_salted: '',
+  skipped_cap: 'badge-medium',
+  skipped_other: '',
+};
 
 // === Agent: the conscious-autonomy session view — what the agent chose at each node, and why (Phase 3). ===
 

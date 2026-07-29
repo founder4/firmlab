@@ -267,3 +267,94 @@ describe('ImageDetail — the prose the LLM lanes return', () => {
     expect(md?.textContent).toContain('[OSV]');
   });
 });
+
+/**
+ * The online hash lookup. It was typed, produced, and read by nobody — so a hash that was never sent rendered
+ * exactly like one that was checked and came back clean, on the highest-stakes finding class in the workbench.
+ */
+describe('ImageDetail — the password-hash lookup says what it refused to ask', () => {
+  const research = (hashLookup: Record<string, unknown>) => ({
+    enabled: true,
+    provenance: {
+      identity: { firmwareClass: 'embedded-linux', arch: 'mips', bootloader: null },
+      vendors: [],
+      models: [],
+      versions: [],
+      urls: [],
+      domains: [],
+      certCNs: [],
+      banners: [],
+    },
+    egress: { destinations: [], neverSent: [] },
+    osv: { queried: 0, skipped: 0, withAdvisories: 0, totalAdvisories: 0, components: [] },
+    nvd: { queried: 0, notQueried: 0, withAdvisories: 0, totalAdvisories: 0, components: [] },
+    kev: { checked: false, catalogSize: 0, matches: [] },
+    keyMaterial: [],
+    securityContacts: [],
+    hashLookup,
+  });
+
+  const entry = (o: Record<string, unknown>) => ({
+    account: 'root',
+    source: 'etc/shadow',
+    scheme: 'md5crypt',
+    ...o,
+  });
+
+  beforeEach(() => {
+    mockApi.researchStatus.mockResolvedValue({ enabled: true });
+    mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
+  });
+
+  it('does not let a hash that was NEVER SENT read like one that came back clean', async () => {
+    mockApi.researchResult.mockResolvedValue(
+      research({
+        enabled: true,
+        reason: 'Online hash lookup: 1 unsalted hash(es) queried, 0 recovered.',
+        attempted: 1,
+        resolved: 0,
+        notQueried: 1,
+        entries: [
+          entry({ account: 'root', outcome: 'skipped_salted' }),
+          entry({ account: 'admin', outcome: 'miss', manualLookupUrl: 'https://crackstation.net/' }),
+        ],
+      }),
+    );
+    const { container } = renderSection('dossier');
+
+    // Two different labels for two different facts — the distinction the whole block exists for.
+    expect(await screen.findByText('not sent (salted)')).toBeInTheDocument();
+    expect(screen.getByText('no match')).toBeInTheDocument();
+    // …and the sentence a pair of labels cannot carry alone.
+    expect(container.textContent).toMatch(/refusal to ask, not an answer/i);
+    // A miss must never be dressed as reassurance.
+    expect(screen.getByTitle(/not evidence the password is strong/i)).toBeInTheDocument();
+  });
+
+  it('says the lane was off rather than rendering an empty list', async () => {
+    // With FIRMLAB_HASH_LOOKUP unset nothing is asked at all, and an empty block would read as "nothing found".
+    mockApi.researchResult.mockResolvedValue(
+      research({ enabled: false, reason: '', attempted: 0, resolved: 0, notQueried: 0, entries: [] }),
+    );
+    const { container } = renderSection('dossier');
+    await waitFor(() => expect(container.textContent).toMatch(/Password-hash lookup/));
+    expect(container.textContent).toMatch(/the question was never put/i);
+  });
+
+  it('marks a recovered-and-verified password as the credential it is', async () => {
+    mockApi.researchResult.mockResolvedValue(
+      research({
+        enabled: true,
+        reason: 'r',
+        attempted: 1,
+        resolved: 1,
+        notQueried: 0,
+        entries: [entry({ outcome: 'resolved', passwordMasked: 'ad****' })],
+      }),
+    );
+    renderSection('dossier');
+    expect(await screen.findByText('recovered')).toBeInTheDocument();
+    // The provider masks it; this screen never widens that.
+    expect(screen.getByText('ad****')).toBeInTheDocument();
+  });
+});

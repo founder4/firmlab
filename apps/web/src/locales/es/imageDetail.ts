@@ -207,6 +207,32 @@ export const imageDetail: Messages['imageDetail'] = {
     nvdTitle: (cpe: number, keyword: number) =>
       `NVD, para los componentes que OSV no pudo mapear: ${cpe} preguntados por coincidencia de versión CPE y ${keyword} por palabra clave. Una respuesta por palabra clave sólo coincide con el texto de la descripción del CVE — que venga vacía no prueba que el componente no esté afectado.`,
     kevBadge: (n: number) => `KEV: ${n} con explotación conocida`,
+    hash: {
+      heading: 'Consulta de hashes de contraseña',
+      disabled:
+        'No se preguntó: el carril de consulta online de hashes está apagado. Nada aquí dice que estos hashes sean irrecuperables — la pregunta no llegó a hacerse.',
+      noneToAsk: 'El carril está encendido y no había ningún hash por el que preguntar.',
+      manual: 'consultar a mano',
+      saltedNote:
+        'Un hash crypt con sal no se envía nunca, porque un fallo no probaría nada sobre la contraseña. Esas filas son una negativa a preguntar, no una respuesta.',
+      outcome: {
+        resolved: 'recuperada',
+        unverified: 'sin verificar',
+        miss: 'sin coincidencia',
+        skipped_salted: 'no enviado (con sal)',
+        skipped_cap: 'no enviado (tope)',
+        skipped_other: 'no enviado',
+      },
+      outcomeMeaning: {
+        resolved: 'Se recuperó un texto claro Y se verificó localmente contra este hash. Esto es una credencial.',
+        unverified: 'Una consulta devolvió un candidato que no verificó contra este hash. No es una credencial.',
+        miss: 'El hash se envió y no coincidió nada. Eso no prueba que la contraseña sea fuerte — sólo que este servicio no la ha visto.',
+        skipped_salted:
+          'No enviado nunca. El hash lleva sal, así que un fallo no probaría nada sobre la contraseña, y enviarlo filtraría material del firmware sin obtener respuesta.',
+        skipped_cap: 'No enviado: se alcanzó antes el tope por ejecución. Es un límite, no un resultado.',
+        skipped_other: 'No enviado — el esquema no es de los que este carril consulta.',
+      },
+    },
     kevBadgeTitle: (catalogSize) =>
       `CISA Known Exploited Vulnerabilities — explotadas en la práctica. Se buscaron ${catalogSize} entradas.`,
     kevNotChecked: 'KEV sin consultar',
