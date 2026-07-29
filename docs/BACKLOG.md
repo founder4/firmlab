@@ -128,6 +128,28 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   `mkfs.ext2`, so the round trip returns before staging anything and a green integration test would prove only
   that nothing happened — the guard-success-path trap, avoided by naming it._
 
+- ⚠ **A SECOND kind of contamination in the corpus, and this one is not the code's.** `/bin/iptables-xml ->
+  /dev/null` in all three TP-Link rootfs, dated 2026-07-21 and 2026-07-27 against trees whose every other file is
+  2026-05-28 / 2015-05-18 / 2014-09-29; and `/etc/passwd -> /dev/null` on the WDR3600 with the same July date,
+  while the WR940N's `/etc/passwd -> ../tmp/passwd` carries the tree's own May date and is plausibly original.
+  Nothing in this repository creates those symlinks, so they are hand-made test residue — the symreach guard
+  validation used an `etc/passwd -> /dev/null` exactly like this one. **Deliberately NOT cleaned up**, unlike the
+  staged libnvram shim: that one was provably ours (byte-identical to a file the container ships), while these
+  cannot be told from firmware with certainty one by one, and restoring `iptables-xml` to what it PROBABLY pointed
+  at (`iptables-multi`) would be inventing firmware. Needs the operator's call, and a rule about who may write
+  into `/data/extract` at all.
+- ▢ **The guest repair is composed and not yet wired.** `providers/guest-repair.ts` (pure, 13 tests) plans one
+  appended line for the booted image; `rootfs-image.ts` still has to write it, `FIRMLAB_EMU_REPAIR` still has to
+  gate it, and the result still has to carry its `interventions`. The design came out of an inventory of what the
+  three rootfs actually contain, and two facts shaped it: **`ebtables` exists in none of them** — that console
+  message is the emulation kernel reacting to a userspace `setsockopt`, and the WR940N is the only image carrying
+  `br_MultiSsidVlan_InputForward.ko`, the only module importing `nf_register_sockopt` — and **the vendor already
+  ships `/etc/rc.d/iptables-stop`**, identical in all three, which nothing in the boot path ever calls. So the
+  repair runs the firmware's own teardown rather than injecting a flush, and it prints the live ruleset BEFORE
+  flushing it, because the outcome worth having is the one where the rules are empty and the firewall is ruled
+  out. _Timing detail that is not a detail: BusyBox 1.01 here has no `sleep` applet, so the wait is
+  `ping -c 20 127.0.0.1`, and the plan REFUSES to run at all on a guest with neither._
+
 - ▢ **`webprobe` needs a live target, not new logic.** `runWebProbe(baseUrl, …)` would take `http://127.0.0.1:<host port>` straight from `open[]`, but the rung tears the guest down before returning — driving it needs a hook that runs while pass two is still up, inside `bootOnce`'s probe loop. That is the last step between this rung and a dynamic answer.
 - ▢ **`planForwards` forwards only declared ports plus an 80/443 floor.** On all four corpus images nothing is declared, so a service on 8080/22/23 is missed even now that two guests are reachable at layer 4. Worth widening now that reachability is no longer the blocker.
 - ✅ **Service enumeration** — `providers/servicemap.ts`: statically map the network daemons the rootfs starts (inittab/inetd/SysV/systemd) = boot-time attack surface.
