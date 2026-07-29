@@ -112,6 +112,19 @@ export const hardware = {
     notSelected: ', none declared as the choice',
     noneRead: 'No device tree could be read.',
     searched: 'Searched:',
+    /**
+     * The headers that validated and would not walk.
+     *
+     * The provider's own `reason` ends with "(see rejected)" — a sentence pointing at a field nothing rendered,
+     * and on the one corpus image that produces them (`447719f7`) `found` is true, so that sentence was not on
+     * screen either. One of its two entries is the SAME tree that reads fine once the UBI volume is
+     * reassembled, seen from the raw image. That is information, and it was nowhere.
+     */
+    rejectedTitle: (n: number) => `${n} FDT header${n === 1 ? '' : 's'} validated but would not read`,
+    rejectedMeaning:
+      'The bytes at these offsets are a device tree by their header, and the tree could not be walked to the end. That is a limit of this reader or of how the blob is stored — not a finding that there is no tree there.',
+    rejectedMore: (n: number) => `${n} more, in the run's stored result.`,
+    rejectedSize: (n: number) => `${n} bytes`,
   },
 
   actions: {

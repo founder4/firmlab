@@ -238,6 +238,60 @@ describe('HardwareInterfaces', () => {
     expect(screen.queryByText(/has been read for this image yet/i)).toBeNull();
   });
 
+  /**
+   * The rejected FDT headers. Verbatim from `447719f7`, where the provider's own `reason` ends with
+   * "(see rejected)" — a sentence pointing at a field nothing rendered — and where `found` is TRUE, so that
+   * sentence was not on screen either. One of the two entries is the same 60082-byte tree the panel renders
+   * above, seen from the raw image with the UBI eraseblock headers still interleaved through it.
+   */
+  it('shows the headers that validated and would not walk, even when a tree WAS read', async () => {
+    mockApi.deviceTree.mockResolvedValue({
+      ...gliNetTree(),
+      rejected: [
+        {
+          origin: 'raw image offset 10186216',
+          sizeBytes: 60082,
+          reason:
+            'FDT header valid but the tree could not be read to completion: invalid token 0x1000000 at offset 10224040; a UBI eraseblock header ("UBI#") appears 37820 bytes in.',
+        },
+      ],
+    });
+    mockApi.ubootEnv.mockResolvedValue(null);
+    render(<HardwareInterfaces imageId="447719f7" />);
+
+    expect(await screen.findByText('1 FDT header validated but would not read')).toBeTruthy();
+    expect(screen.getByText('raw image offset 10186216')).toBeTruthy();
+    expect(screen.getByText(/UBI eraseblock header/)).toBeTruthy();
+    // The claim the block exists to prevent.
+    expect(screen.getByText(/not a finding that there is no tree there/i)).toBeTruthy();
+  });
+
+  it('bounds the list and says what it cut, rather than ending where it ran out', async () => {
+    mockApi.deviceTree.mockResolvedValue({
+      ...gliNetTree(),
+      rejected: Array.from({ length: 9 }, (_, i) => ({
+        origin: `raw image offset ${1000 + i}`,
+        sizeBytes: 64,
+        reason: 'FDT header valid but the tree could not be read to completion.',
+      })),
+    });
+    mockApi.ubootEnv.mockResolvedValue(null);
+    render(<HardwareInterfaces imageId="447719f7" />);
+
+    expect(await screen.findByText('9 FDT headers validated but would not read')).toBeTruthy();
+    expect(screen.getByText('raw image offset 1005')).toBeTruthy();
+    expect(screen.queryByText('raw image offset 1006')).toBeNull();
+    expect(screen.getByText(/3 more, in the run's stored result/)).toBeTruthy();
+  });
+
+  it('renders no such block for a run stored before rejections were recorded', async () => {
+    mockApi.deviceTree.mockResolvedValue(gliNetTree());
+    mockApi.ubootEnv.mockResolvedValue(null);
+    render(<HardwareInterfaces imageId="447719f7" />);
+    expect(await screen.findByText(/Board:/)).toBeTruthy();
+    expect(screen.queryByText(/would not read/)).toBeNull();
+  });
+
   it('an image nobody has analysed says so, and never renders an empty table as "no interfaces"', async () => {
     mockApi.deviceTree.mockResolvedValue(null);
     mockApi.ubootEnv.mockResolvedValue(null);

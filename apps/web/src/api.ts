@@ -962,7 +962,12 @@ export interface DeviceTreeResult {
   available?: boolean;
   found?: boolean;
   blobs?: DeviceTreeBlob[];
-  rejected?: { origin?: string; reason?: string }[];
+  /**
+   * FDT headers that validated and whose tree could not be walked to the end. `reason` is the provider's own
+   * sentence and quotes offsets and token values — it is a measurement, printed as written. Never empty-meaning:
+   * an entry here is a device tree this reader could not read, which is not the same as no tree being there.
+   */
+  rejected?: { origin?: string; sizeBytes?: number; reason?: string }[];
   /** Every place that was searched — what a `found: false` does and does not cover. */
   searched?: string[];
   findings?: unknown[];

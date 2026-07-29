@@ -109,6 +109,12 @@ export const hardware: Messages['hardware'] = {
     notSelected: ', ninguno declarado como el elegido',
     noneRead: 'No se pudo leer ningún árbol de dispositivos.',
     searched: 'Se buscó en:',
+    rejectedTitle: (n: number) =>
+      `${n} cabecera${n === 1 ? '' : 's'} FDT válida${n === 1 ? '' : 's'} que no se pudo leer`,
+    rejectedMeaning:
+      'Los bytes de estos desplazamientos son un árbol de dispositivos según su cabecera, y el árbol no se pudo recorrer hasta el final. Eso es un límite de este lector o de cómo está almacenado el blob, no un hallazgo de que ahí no haya árbol.',
+    rejectedMore: (n: number) => `${n} más, en el resultado guardado de la ejecución.`,
+    rejectedSize: (n: number) => `${n} bytes`,
   },
 
   actions: {

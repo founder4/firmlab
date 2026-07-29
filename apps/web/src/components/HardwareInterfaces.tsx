@@ -470,6 +470,11 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
             )}
           </div>
         )}
+        {/* Outside the not-found banner on purpose. The provider's `reason` says "(see rejected)" and on the one
+            corpus image that produces them a tree WAS found, so that sentence never rendered and neither did the
+            entries. A header that validated and would not walk is a limit of this reader, and it belongs on
+            screen whether or not some other candidate read cleanly. */}
+        <RejectedHeaders rejected={dt?.rejected ?? []} />
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           <button className="btn btn-sm" disabled={running !== null} onClick={() => void run('devicetree')}>
             {running === 'devicetree' ? (
@@ -494,3 +499,50 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
     </div>
   );
 }
+
+/**
+ * The FDT headers that validated and would not walk to the end.
+ *
+ * On `447719f7` there are two, and one of them is the SAME 60082-byte tree the panel renders above — seen from
+ * the raw image, where the UBI eraseblock headers are still interleaved through it, instead of from the
+ * reassembled volume. That a reader saw a device tree twice and could only walk one of the two views is a fact
+ * about the storage, and it reached the screen as nothing at all.
+ *
+ * The reasons are the provider's own sentences and quote offsets, token values and byte counts. They render as
+ * written; nothing here re-words a measurement.
+ */
+function RejectedHeaders({ rejected }: { rejected: { origin?: string; sizeBytes?: number; reason?: string }[] }) {
+  const t = useMessages();
+  const p = t.hardware.provenance;
+  if (rejected.length === 0) return null;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="eyebrow">{p.rejectedTitle(rejected.length)}</div>
+      <p className="hint hw-prose" style={{ margin: '4px 0 0' }}>
+        {p.rejectedMeaning}
+      </p>
+      {rejected.slice(0, REJECTED_ROWS).map((r, i) => (
+        <div key={`${r.origin ?? 'unknown'}-${i}`} style={{ marginTop: 6 }}>
+          <div className="mono" style={{ fontSize: 12 }}>
+            {r.origin ?? '—'}
+            {r.sizeBytes !== undefined && <span className="hint"> · {p.rejectedSize(r.sizeBytes)}</span>}
+          </div>
+          {r.reason && (
+            <p className="hint hw-prose" style={{ margin: '2px 0 0' }}>
+              {r.reason}
+            </p>
+          )}
+        </div>
+      ))}
+      {rejected.length > REJECTED_ROWS && (
+        <p className="hint" style={{ margin: '6px 0 0' }}>
+          {p.rejectedMore(rejected.length - REJECTED_ROWS)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The provider bounds nothing here — a raw scan of a large image can validate many headers — so the panel does,
+    and says what it cut rather than ending the list where it ran out. */
+const REJECTED_ROWS = 6;
