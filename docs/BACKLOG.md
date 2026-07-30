@@ -139,24 +139,45 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   `mkfs.ext2`, so the round trip returns before staging anything and a green integration test would prove only
   that nothing happened — the guard-success-path trap, avoided by naming it._
 
-- ⚠ **The extractor neuters escaping symlinks to `/dev/null`, silently, and every provider then reads an empty
-  file as an absent one.** Chased as a suspected second contamination and it is not one — the correction matters
-  as much as the finding. `/bin/iptables-xml -> /dev/null` on all three TP-Link images carries a July mtime
-  against a tree of 2015/2014 files, which reads as hand-made residue. It is not: the mtimes match each image's
-  extraction job **to the minute** (dddbbb22 → 2026-07-21 19:12, b1fda926 and c8e1ffa0 → 2026-07-27 20:00).
-  `unsquashfs` replaces a symlink that would escape the extraction root with `/dev/null` as a path-traversal
-  guard, and gives the replacement the current time while regular files keep their squashfs mtimes. A corpus-wide
-  sweep finds DOZENS: the IMOU has ~25 including binaries under `/sbin`, the Tenda has `/etc/resolv.conf`, and
-  **DVRF has `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/hosts` and `/etc/resolv.conf` all pointing at
-  `/dev/null`.**
-  **The consequence is the project's central invariant, broken one layer below where it is enforced.** `fsaudit`
-  exists to find weak, empty and legacy credentials; on DVRF it reads `/etc/passwd` and `/etc/shadow` as ZERO
-  BYTES and has no way to tell "this firmware ships no shadow file" from "the extractor cut this one off". An
-  empty result that cannot say why is exactly what `extract-diagnose.ts` was written to prevent for a missing
-  rootfs, and nothing does the equivalent for a neutered file. The fix is cheap and it is not a deletion: detect
-  a symlink whose target is `/dev/null`, and have every reader of that path say the file was neutered by the
-  extraction rather than absent from the firmware. _Nothing was deleted here, deliberately: these are the
-  extractor's own record, and removing them would make the tree less faithful, not more._
+- ✅ **The extractor neutered escaping symlinks to `/dev/null` silently, and every provider read an empty file as
+  an absent one** (2026-07-30, deploy `92553de`). `unsquashfs` refuses to write a symlink whose target would leave
+  the extraction root and substitutes `/dev/null`; the substituted entry is indistinguishable, through
+  `readFileSync`, from a file the vendor shipped empty or never shipped. **126 such entries across six corpus
+  images**, DVRF with `etc/{passwd,shadow,group,hosts,resolv.conf}` and the IMOU Ranger with 93.
+  **CORRECTION to this entry as originally written: the account-file half was ALREADY solved and the entry did not
+  know it.** `inspectAccountFile` detects `symlink-escapes` and `auditAccountSources` emits
+  `account-db-redirected` / `static_confirmed` — verified on the real DVRF rootfs, which returns
+  `{"state":"symlink-escapes","target":"/dev/null"}` for all four account files and produces the finding. What was
+  actually open was everything else.
+  **The fix is not a patch in each of a dozen readers.** `providers/extract-neutered.ts` (pure
+  `classifyExtractedPath` / `stageImpact` / `neuteredFindings`, thin `scanNeutered`, 15 tests) records the fact
+  where it is DISCOVERED — once, on the extraction result and as an `extract-integrity` finding — so any provider's
+  later silence about one of those paths is already explained. The classifier judges a symlink on its TARGET before
+  any size, because `statSync` on `etc/passwd -> /dev/null` returns 0 bytes and a reader that stops there has
+  converted the extractor's refusal into a statement about the vendor's filesystem. `stageImpact` says which
+  QUESTION went unasked rather than which path was cut.
+  **What it refuses to claim:** the original target. The substitution discarded it, so a cut entry proves the
+  firmware had something there and nothing about what — never "empty", never "missing", never a guess.
+  Escaping symlinks get a separate finding precisely because their target survived and stays legible.
+  **The ELF sweep now counts them**, separately from relocatable objects (those were passed over as out of scope;
+  these were shipped and destroyed). On the real IMOU that reads **24 ELFs examined against 31 entries cut** — the
+  extractor destroyed more paths than the sweep opened, and that number did not exist before. Nothing was deleted:
+  the entries are the extractor's own record of its refusal.
+- ▢ **`scanNeutered` surveys only the rootfs in use, not the sibling carve trees.** Surfaced 2026-07-30 while
+  validating the above, not implemented. The IMOU has TWO `.extracted` trees and 93 cut paths between them; the
+  stored extract points at `_IMOU-Ranger-2C.bin-0.extracted/squashfs-root`, which holds 31. The other ~62 are
+  unsurveyed — and `auxsecrets` deliberately reads sibling partitions, so they are paths a provider does open.
+  Impact: medium. The survey should take the extraction OUTPUT DIR, as `diagnoseNoRootfs` does, not the rootfs.
+- ▢ **Every extract result stored before 2026-07-30 carries no `neuteredPaths`, and nothing flags the stale ones.**
+  Verified: the IMOU's stored row reports the field absent, which correctly reads as "never surveyed" rather than
+  "nothing was cut" — the optional-forever rule working. But it means the corpus reports no cut paths until each
+  image is re-extracted, and no code path says which images are in that state. Same shape as the stale-fwhunt
+  entry above. Impact: low, but it makes a corpus-wide count of the problem read as zero.
+- ▢ **`fsaudit.readInside` still collapses missing, unreadable and escaping into `''`** for every path that is not
+  one of the four account files — `etc/inittab` and the service configs among them. The rootfs-wide finding now
+  explains the silence in general, which is the important half; the per-path distinction inside that provider is
+  still a `''` that three different situations produce. Impact: low now that the fact is reported once, and it is
+  the remaining instance of the pattern.
 - ▢ **The guest repair is composed and not yet wired.** `providers/guest-repair.ts` (pure, 13 tests) plans one
   appended line for the booted image; `rootfs-image.ts` still has to write it, `FIRMLAB_EMU_REPAIR` still has to
   gate it, and the result still has to carry its `interventions`. The design came out of an inventory of what the

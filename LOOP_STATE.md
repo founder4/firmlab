@@ -24,9 +24,9 @@ cinco proveedores que corren y no se pueden leer.
 - [x] **A2. El cap de listado esconde el binario que el rank existe para promover.** Cerrado en iter 11
       (`a234b9a`). Ninguna de las dos formas de arreglo que proponía el backlog: ambas reparaban los leads y
       dejaban el ledger mal. La exposición pasa a ser clave de orden entre severidad y tamaño.
-- [ ] **A3. El extractor neutraliza a `/dev/null` los symlinks que escapan, en silencio**, y cada proveedor
-      lee después un fichero vacío y lo reporta como ausencia. Es la regla 3 del proyecto incumplida en el
-      extractor.
+- [x] **A3. El extractor neutraliza a `/dev/null` los symlinks que escapan, en silencio.** Cerrado en iter 12
+      (`92553de`). La mitad de ficheros de cuentas ya estaba resuelta y la entrada del backlog no lo sabía; el
+      hecho se registra ahora donde se descubre, una vez, no en cada lector.
 - [ ] **A4. La rama de reglas de yara nunca ha visto un yara real** — validada contra un stub que hablaba el
       CLI de YARA 4.x. `yara` no está en ninguna receta (es deliberado: el corpus de reglas lo trae el
       operador), así que esto es decidir si se instala o si la rama se declara no validable aquí.
@@ -322,3 +322,35 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   (b) la señal de exposición se apoya en `network && autostart` sin ninguna evidencia de puerto detrás — el
   WDR3600 da `ports: []` para su httpd — defendible para ORDENAR, más discutible en `daemonLeads`, cuyos hallazgos
   sí se leen como afirmaciones sobre un servicio expuesto.
+- iter 12 (2026-07-30): cerrado **A3**, lo que el extractor corta. **La hipótesis estaba a medias equivocada y
+  comprobarlo primero fue lo que lo destapó:** la mitad de ficheros de cuentas YA estaba resuelta —
+  `inspectAccountFile` detecta `symlink-escapes` y `auditAccountSources` emite `account-db-redirected`, verificado
+  sobre el DVRF real, que devuelve `{"state":"symlink-escapes","target":"/dev/null"}` para los cuatro ficheros y
+  produce el hallazgo. La entrada del backlog llevaba escrito que nada lo hacía. Lo abierto era todo lo demás.
+  Medido primero: **126 entradas neutralizadas en seis imágenes**; DVRF con `passwd/shadow/group/hosts/resolv.conf`
+  y la IMOU Ranger con 93, **45 de ellas bajo `/sbin`** (`netinit`, `syshelper`, `gethwid`, `armbenv`,
+  `sb_util_r/w`) — binarios que la cámara sí trae y que la barrida de ELFs nunca abre, porque un recorrido que
+  salta symlinks también los salta sin decir nada.
+  **El arreglo no es un parche en cada lector.** `providers/extract-neutered.ts` (puro `classifyExtractedPath` /
+  `stageImpact` / `neuteredFindings`, con `scanNeutered` fino, 15 tests) registra el hecho donde se DESCUBRE, una
+  vez, en el resultado de extracción y como hallazgo `extract-integrity`; así el silencio posterior de cualquier
+  proveedor sobre esas rutas queda ya explicado. El clasificador juzga un symlink por su DESTINO antes de mirar
+  ningún tamaño, porque `statSync` sobre `etc/passwd -> /dev/null` devuelve 0 bytes y quien se para ahí ha
+  convertido la negativa del extractor en una afirmación sobre el sistema de ficheros del fabricante.
+  `stageImpact` dice qué PREGUNTA se quedó sin hacer, no qué ruta se cortó.
+  **Lo que se niega a afirmar:** el destino original, que la sustitución descartó. Una entrada cortada prueba que
+  el firmware tenía algo ahí y nada sobre qué. Los symlinks que escapan van en un hallazgo aparte precisamente
+  porque su destino sobrevivió y sigue siendo legible.
+  Verificación: `pnpm test` → core 75 / api **1790** / web 326 verde · `pnpm check` → Done · `pnpm biome` → limpio
+  (tras ordenar un import que biome marca como *unsafe fix*) · y sobre bytes reales en el build desplegado
+  (`92553de`): DVRF → 446 entradas recorridas, 12 cortadas, «7 en the credential and service-config audit reads
+  this directory»; IMOU → 329 recorridas, 31 cortadas, «15 en the ELF sweep and the emulation rungs run binaries
+  from here». Y el número que resume todo, de la barrida real sobre la IMOU: **24 ELFs examinados contra 31
+  entradas cortadas** — el extractor destruyó más rutas de las que la barrida abrió, y ese número no existía.
+  **Puntos flojos nuevos en `docs/BACKLOG.md`, NO implementados:** (a) `scanNeutered` sólo inspecciona el rootfs en
+  uso, no los árboles de carve hermanos — la IMOU tiene DOS y las 93 se reparten entre ellos, 31 en el que apunta
+  el extract guardado, y `auxsecrets` sí lee particiones hermanas; impacto medio, debería recibir el directorio de
+  salida como hace `diagnoseNoRootfs`; (b) todo extract almacenado antes de hoy no trae `neuteredPaths` y nada
+  marca cuáles están así — se lee correctamente como «nunca se inspeccionó», pero hace que un recuento del corpus
+  dé cero; (c) `fsaudit.readInside` sigue fundiendo ausente/ilegible/escapa en `''` para lo que no es un fichero
+  de cuentas, y es la última instancia del patrón.
