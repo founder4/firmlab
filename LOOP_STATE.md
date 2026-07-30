@@ -33,11 +33,10 @@ cinco proveedores que corren y no se pueden leer.
 
 ### Bloque B — inferencia de red (§4 #1 de `METHODOLOGY-GAPS.md`)
 
-- [ ] **B1. Inferencia de red al estilo firmadyne/FirmAE.** Los kernels firmadyne ya trazan cada `execve`, así
-      que la consola lleva las interfaces y direcciones que el firmware *intenta* configurar: observar lo que
-      quiere y re-arrancar con una NIC/VLAN que encaje. Desbloquea `webprobe`, la enumeración de servicios y
-      cualquier test protocol-aware, que hoy a menudo no tienen demonio alcanzable. Mientras no exista,
-      `confirmed_full_system` significa honestamente «el sistema arrancó».
+- [x] **B1. Inferencia de red al estilo firmadyne/FirmAE.** Cerrado en iter 14 (`6ad7423` + `c0eb9b2`), con el
+      alcance corregido: la inferencia de red YA estaba construida (`inferGuestNetwork`, dos pasadas
+      observe→reach). El bloqueo real, que el propio backlog tenía registrado, era la intervención en el arranque
+      del invitado — y con ella el WR940N abre dos puertos donde el control abre cero.
 
 ### Bloque C — bloque 2 de la auditoría de visibilidad
 
@@ -393,3 +392,44 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   / 0 sobre cota / 0 fallidos, el rechazado nombrado (`broken.yar · undefined-identifier · undefined string
   "$nope"`), y `Telnetd_Binary [network,backdoor]` acertando en `bin/busybox` a `medium` / `static_confirmed`,
   junto a la frase de cobertura «1 rule matched — 1/2 rule(s) applied over 235/235 file(s)».
+- iter 14 (2026-07-30): cerrado **B1**, y el alcance de la agenda estaba mal por tercera vez seguida. La
+  inferencia de red **ya existía**: `inferGuestNetwork` es puro, exportado, lee consola y cable, y produce tres
+  desenlaces; el dos-pasadas observe→reach lleva tiempo funcionando. Lo que el backlog SÍ tenía registrado —y la
+  agenda no recogió— es que el bloqueo del peldaño dinámico no es `planForwards` ni la inferencia, sino una
+  **intervención en el arranque del invitado**. Y `guest-repair.ts` la tenía compuesta, pura, con 13 tests y
+  **cero llamantes**: componía la línea y nadie la escribía.
+  Verificadas primero las premisas del diseño sobre bytes reales: los tres routers traen `etc/rc.d/iptables-stop`
+  de **284 bytes idénticos**, ninguno lo llama desde `rcS`, los tres tienen applet `ping`, y el WR940N y el MR3220
+  **no tienen `sleep`** — por eso el temporizador es un ping.
+  **El resultado, con control:** misma imagen del WR940N, ambas pasadas reconstruidas de cero para que el rebuild
+  no sea la variable → con reparación `open: [{80},{443}]`, sin ella `open: []`. **Primer servicio alcanzable que
+  este peldaño produce en el corpus**, y desbloquea `webprobe`, la enumeración de servicios y cualquier test
+  protocol-aware.
+  **Y el mecanismo NO está confirmado, y el resultado lo dice:** `ruleset.ran` volvió FALSE — la línea añadida no
+  imprimió sus marcadores — así que la imagen llevaba la reparación demostrablemente y su autoinforme falta. El
+  efecto está medido, el camino causal por `iptables-stop` no. Es exactamente lo que la cabecera del módulo exigía
+  poder reportar, y `interventions` lleva los dos hechos a cada hallazgo de ese arranque.
+  La pieza pura que faltaba no era la línea sino la DISPOSICIÓN: `interventions: []` ya significaba «la imagen tal
+  como se envía», y eso sólo es cierto si el firmware se examinó. `describeRepairDisposition` añade `attempted` y
+  los cuatro desenlaces dan cuatro frases. `rcS` restaurado byte a byte (mismo sha256, 795 bytes) tras los dos
+  arranques.
+  **Dos defectos propios en el camino, y los dos son trampas que este repo tiene documentadas:**
+  (a) **escribí el byte NUL literal** en el regex de applets en vez del escape. `tsc` pasó, el test falló por una
+  razón aparente distinta, y **grep dejó de ver el fichero entero**, así que toda la edición parecía no existir;
+  `scripts/check-nul.sh` lo nombró con su línea. La medición posterior sobre los tres busybox confirma que el
+  delimitador NUL es el predicado correcto: `ping` va NUL-delimitado en los tres y `sleep` sólo en el WDR3600,
+  mientras una búsqueda por espacios acierta `ping` en los tres por casualidad y pierde el `sleep` del WDR3600.
+  (b) **una imagen en caché se reutilizaba con la disposición equivocada** — tercera instancia esta sesión de «un
+  guardián sólo vale lo que su camino de éxito». La reutilización comparaba sólo mtimes, así que el primer arranque
+  reparado recibió una imagen construida SIN reparación y devolvió `repair: undefined`: el operador pidió una
+  intervención y no la tuvo. `imageReusable` exige ahora que coincida la disposición, en las DOS direcciones — y la
+  segunda dirección se ganó el sueldo al instante, porque sin ella el control habría reutilizado la imagen reparada
+  y habría invertido el experimento.
+  Verificación: `pnpm test` → core 75 / api **1810** / web 326 verde · `pnpm check` → Done · `pnpm biome` → limpio
+  (tras cambiar el regex por `includes`, que biome rechaza con razón por carácter de control) · override de
+  validación retirado, los dos flags de emulación vuelven a `source: default`.
+  **Puntos flojos nuevos en `docs/BACKLOG.md`, NO implementados:** (a) los marcadores de la reparación no reportan
+  y nada explica por qué — impacto **alto**, es la diferencia entre un efecto medido y uno entendido, y deja sin
+  explicar el POR QUÉ de los dos puertos abiertos; (b) `agent/session.ts:627` pasa el DIRECTORIO del rootfs donde
+  `runFullSystem` espera la imagen de disco, así que el peldaño full-system del agente no ha podido arrancar nunca
+  — impacto medio.
