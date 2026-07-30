@@ -58,9 +58,8 @@ cinco proveedores que corren y no se pueden leer.
 
 ### Deuda de documentación, para cerrar en cualquier iteración con hueco
 
-- [ ] **D1. `METHODOLOGY-GAPS.md` §4 item #2 está desfasado.** Describe tres cotas mal asignadas y las
-      etiqueta «cheapest value in the ledger»; las tres están arregladas (`e8b23c0`, `22a7961`, y el probe
-      rank habilitado el 29-07). Re-derivar el item con lo que sigue abierto.
+- [x] **D1. `METHODOLOGY-GAPS.md` §4 item #2 está desfasado.** Cerrado en iter 19 (`213324c`). Y no era uno:
+      tres de los nueve items estaban entregados, más un ⚠ del backlog y la fila 7 de la tabla FSTM.
 
 ## Definición de hecho (la de la casa, por iteración)
 
@@ -558,3 +557,42 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   `emulationStatus` siguen sin lector — no son banderas de endurecimiento, y por eso no los metí en la fila de
   insignias en vez de dejarlos a medio pintar; `importsSummary` es la evidencia detrás de cada
   `binary-pwnable-candidate`, impacto medio.
+- iter 19 (2026-07-30): cerrado **D1**, la deuda de documentación que detecté en la iteración 1. **Aviso de alcance
+  del DoD: esto es documentación, así que la cláusula del «módulo puro con tests» no aplica** — no voy a inventar un
+  módulo para satisfacer una casilla. Lo que sí apliqué es el resto: tratar la lista como hipótesis y verificar cada
+  afirmación contra el sistema desplegado.
+  Y no era un item desfasado, eran **tres de los nueve**:
+  - **#2** («gastar los presupuestos acotados en el eje correcto», etiquetado «lo más barato del ledger») describía
+    tres cotas mal asignadas que ya estaban las tres arregladas cuando se escribió.
+  - **#1 inferencia de red no era un hueco.** `inferGuestNetwork` ya era puro, exportado y corriendo dos pasadas; el
+    bloqueo real era la intervención en el arranque, que el backlog sí tenía registrada y esta lista no.
+  - **#4 «un carril de reglas general» es `yarascan`**, con ruta, lector desde la iter 15 y un yara 4.2.3 real en la
+    imagen. Lo que queda no es el carril, son las reglas.
+  **El patrón de los tres es el mismo y es lo que cambia la regla de orden:** la entrada nombraba una técnica y el
+  hueco real estaba una capa por debajo — ya construido y sin cablear, construido y sin medir, o construido e
+  ilegible. Es literalmente lo que ha pasado en C1, C2, C3, C4, A3 y B1. Así que «esfuerzo» pondera ahora *averiguar
+  qué es verdad de la cosa* por encima de construirla.
+  **Y el nuevo #1 no es una técnica: el corpus es la restricción que ata.** Ninguna imagen UEFI, 2 de 2007 binarios
+  triados, ningún corpus de reglas yara, y un corpus que apenas habla. Cada una la descubrí por separado en este
+  loop, antes de que el patrón tuviera nombre. Conseguir tres o cuatro imágenes que ejerciten eso compra más que
+  cualquier proveedor de la lista.
+  Corregida además la fila 7 de la tabla FSTM —seguía diciendo que el invitado emulado no tiene red alcanzable— con
+  las dos advertencias que viajan con el arreglo: es una INTERVENCIÓN, y su autoinforme no reportó. Y el ⚠ del
+  backlog que prescribía exactamente lo que la iter 14 entregó pasa a ✅: **los ⚠ abiertos van de 7 a 1.**
+  Verificación: cada afirmación de la reescritura comprobada contra el despliegue — los cuatro commits citados
+  existen con su asunto, `yara --version` responde 4.2.3, `yarascanResult` tiene lector, y el job `c8db8c19-498` da
+  `open: [{80},{443}]` con `repair.attempted: true` y `ruleset.ran: false`. Puertas: `pnpm test` → core 75 / api
+  1810 / web 399 verde · `pnpm check` → Done ×3 · `pnpm biome` → limpio.
+
+## Agenda completada (2026-07-30)
+
+Los diez puntos acordados están cerrados salvo la mitad de C2, que quedó a medias **con su diagnosis corregida**:
+los doce métodos restantes no son doce defectos sino uno — cada panel lee el resultado del job que él lanzó, así que
+un resultado que sí está en la base de datos desaparece al recargar. Es un patrón de hidratación en ~5 sitios y está
+anotado como tal.
+
+Lo que este loop dejó como próximo trabajo, en el orden re-derivado de `METHODOLOGY-GAPS.md` §4:
+1. **El corpus**, que es la restricción que ata: sin imagen UEFI, 2/2007 triados, sin reglas yara.
+2. Un corpus de reglas yara que este despliegue pueda correr.
+3. **Por qué respondió el invitado reparado** — dos puertos abiertos y `ruleset.ran: false`.
+4. Los resultados de proveedor que existen y no se pueden leer (el medio C2).
