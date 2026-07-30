@@ -386,3 +386,10 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   honestidad — correcto, pero hay que decirlo para que no se dé el arreglo por vivo; (b) un warning con ámbito de
   regla ya se parsea y sigue sin cambiar nada, porque `compileEachRuleFile` filtra a `level === 'error'` — una
   regla lenta es riesgo de cobertura bajo `-a`, y la prosa del módulo promete más de lo que hace.
+  **Cerrado también el punto (a) en la misma iteración**, ya que era el que dejaba el arreglo sin llegar al
+  despliegue: `deploy.sh --tools` reconstruyó la base y `/api/tools` pasa de 24 a **25 de 25 disponibles**, con
+  yara 4.2.3. Validación final sobre el build desplegado (`8011ea2`), sin módulos copiados a mano: corpus de 2
+  ficheros con uno roto sobre el rootfs real del DVRF → `state: scanned`, 235/235 escaneados, 0 demasiado grandes
+  / 0 sobre cota / 0 fallidos, el rechazado nombrado (`broken.yar · undefined-identifier · undefined string
+  "$nope"`), y `Telnetd_Binary [network,backdoor]` acertando en `bin/busybox` a `medium` / `static_confirmed`,
+  junto a la frase de cobertura «1 rule matched — 1/2 rule(s) applied over 235/235 file(s)».
