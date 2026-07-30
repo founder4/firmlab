@@ -398,6 +398,12 @@ function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: 
 
   return (
     <div>
+      {/* Every section, reachable — placed FIRST because it is navigation. It was appended after the findings
+          ledger at first, which on a 110-finding image put it 16,500 px down the page: an index nobody scrolls to
+          is an index that does not exist, i.e. the defect it exists to fix, reintroduced by its position. */}
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <SectionIndex imageId={image.id} sections={sectionIds} extraction={extraction} />
+      </div>
       {/* The signal tape — the image read as signal along its byte axis; every panel below is a lens over it. */}
       <div className="panel">
         <div className="panel-head">
@@ -528,12 +534,6 @@ function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: 
       {/* Measured rows and the assertions about them, in one table — including the contest an operator recorded
           against a computed row, annotated onto it without touching what code decided. */}
       <FindingsLedger findings={findings} />
-
-      {/* Every section, reachable. Ten of them had no link anywhere in the app and the shell's own hint pointed at a
-          timeline that cannot reach them. */}
-      <div className="panel" style={{ marginTop: 16 }}>
-        <SectionIndex imageId={image.id} sections={sectionIds} extraction={extraction} />
-      </div>
     </div>
   );
 }
