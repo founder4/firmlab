@@ -13,7 +13,7 @@ export const nav: Messages['nav'] = {
   firmware: 'Firmware',
   activeImage: 'Imagen activa',
   allImages: 'Todas las imágenes',
-  navigateHint: 'Navega el análisis desde la línea de pasos en la parte superior de la página.',
+  navigateHint: 'Navega el análisis desde el timeline de pasos de arriba, o desde Todas las secciones en la cabecera del dossier — el timeline cubre ocho de las diecinueve.',
   localOnly: 'Sólo local. No lo expongas nunca a internet.',
   toggleNav: 'Mostrar u ocultar la navegación',
   help: 'Ayuda y visita guiada',
