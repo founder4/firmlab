@@ -561,12 +561,45 @@ the first one makes a gap read as a clean result and the second is merely missin
   reader uses to move through an analysis and it stops at `findings` — `deepscans`, `testbench`, `opacidad`,
   `operator` and `diff` are all stages of real work that never appear in the sequence. Whether they belong there is
   a design question (the timeline models the ANALYSIS pipeline, not the section list), which is exactly why it
-  should be decided rather than left as a side effect of when each section was added. Impact: medium.- ▢ **Per-binary hardening is collected and never shown.** `BinaryEntry` carries `nx`, `canary`, `pic`, `bits`,
-  `sha1`, `importsSummary`, `emulationStatus`; no component reads any of them, while the matrix announces
-  `hardening: done`.
-
-## Reporting & integration
-- ▢ **PDF export** of reports.
+  should be decided rather than left as a side effect of when each section was added. Impact: medium.- ✅ **Per-binary hardening was collected and never shown — and the blank INVERTED the finding** (2026-07-30,
+  `84450d3`). `BinaryEntry` carries `nx`, `canary`, `pic`, `bits`, `importsSummary` and `emulationStatus`, and not
+  one had a reader, while the matrix announced `hardening: done` labelled *"Binary hardening (NX / canary / PIC /
+  RELRO)"*.
+  **Measured, and it is worse than "collected and not shown": 2007 binaries in the corpus, 2 triaged, 2 with any
+  hardening flag.** The fields are populated by radare2 triage, which is per-binary and on demand, so 2005 of 2007
+  rows carry `null` in every column — on the DVRF, all 218. **And RELRO is measured NOWHERE in the API**: no
+  provider, no column, not even the string, while the matrix named it in the technique's own label and called the
+  technique done.
+  So the load-bearing decision is not the rendering, it is what `null` MEANS. `nx: 0` is a measurement — this binary
+  has no NX. `nx: null` is the absence of one. A column rendering both as a blank tells a reader that 2005 binaries
+  are unhardened when nothing has looked at any of them, which does not lose the fact but **inverts** it. This is
+  the one place in the workbench where the empty value points at the ALARMING conclusion rather than the reassuring
+  one, and the three readings therefore share neither a word nor a colour. A third nothing gets its own number:
+  triaged and yielding no flags at all — radare2 read the binary and recorded nothing, which a stripped or packed
+  target legitimately produces. And when nothing has been measured the panel leads with WHY instead of drawing a
+  grid of blanks, because a grid of blanks is the shape a reader skims past and skimming past it is how the
+  inversion goes unnoticed. The matrix is now `partial` — its own catalogue header says *"`partial` must never sound
+  finished"* — and the label no longer advertises RELRO as measured.
+  Validated on the deployed build, both cases: DVRF renders *"a blank NX is not an absent NX"* with **654 badges,
+  every one `not-measured`** (218 × 3, not one reading `off`); the IMOU renders *"hardening measured on 2 of 24
+  binaries"* with the flags splitting **3 `on` / 3 `off` / 66 `not-measured`** — the two triaged binaries' six real
+  readings kept apart from the 66 absences.
+- ▢ **The hardening technique is effectively unexercised on this corpus: 2 of 2007 binaries.** Surfaced 2026-07-30,
+  not implemented. radare2 triage is per-binary and on demand, and nobody has run it — so a technique the matrix
+  lists has one image's worth of evidence behind it, from a session months ago. The question is not the renderer
+  (closed above) but whether triage should be swept over the exposed/candidate binaries the way the ELF sweep
+  already is, which would make the columns mean something on more than two rows. Impact: medium — it is the
+  difference between a column that can be read and one that merely can be trusted to say it was not measured.
+- ▢ **RELRO is measured by no provider, and the UI now says so rather than the gap being closed.** `checksec`-class
+  data comes from radare2, which does report RELRO; the provider simply does not read or store it, and there is no
+  column for it. `UNMEASURED_HARDENING` in `apps/web/src/hardening.ts` is the single place to change when it lands.
+  Impact: low-medium — one of four advertised properties, now honestly labelled as absent.
+- ▢ **`importsSummary` and `emulationStatus` still have no reader.** Two of the six fields the closed entry named:
+  the hardening flags and `bits` now render, these do not. `importsSummary` is the per-binary import list radare2
+  already extracted (the sweep's own signal for what a binary can call), and `emulationStatus` is what the emulation
+  ladder recorded about that target. Neither is a hardening flag, which is why they were not folded into the badge
+  row rather than left half-rendered. Impact: low for `emulationStatus` (the run ledger beside it carries the same
+  story), medium for `importsSummary` — it is the evidence behind every `binary-pwnable-candidate`.- ▢ **PDF export** of reports.
 - ✅ **External MCP tool surface** (2026-07-27) — `apps/api/src/mcp/` (`server.ts` + `client.ts` + pure, unit-tested `format.ts`) + project-scoped `.mcp.json`. A stdio MCP server exposing **10 tools** — `list_images`, `coverage`, `findings`, `list_binaries`, `capabilities`, `extract`, `run_worker`, `autonomous_scan`, `symbolic_reachability`, `job_status`. Talks to FirmLab over its own HTTP API rather than importing the providers, deliberately: the routes are where findings sync under idempotent sources and where the honest guards live, and the API process holds SQLite open, so a second in-process writer is a lock conflict waiting to happen. Transport is stdio and the deployed container publishes no host port, so **the `docker exec -i` channel IS the transport** (`claude mcp add firmlab -- docker exec -i firmlab node /app/apps/api/dist/mcp/server.js`); `FIRMLAB_API` + `FIRMLAB_MCP_HEADERS` cover a remote/SSO'd instance. **The non-façade part is `format.ts`:** handing this output to a model reintroduces the conflation the CoverageBanner exists to prevent, at a layer with no banner — `{"findings": []}` becomes "no vulnerabilities were found", which an empty list cannot support. So a result that could read as a negative carries its own verdict *inline, in the first field*: `findingsPayload` never emits a list without the coverage sentence and the names of the stages that produced nothing; `scanPayload` lifts the workers that did NOT complete above the narrative; `reachabilityPayload` restates `not_reached_in_budget` as the absence of a result rather than a negative one; and the server's `initialize` instructions brief the model on the proof-state ladder plus the two inferences that are always wrong here. Documented as AUTONOMOUS-WORKERS §10. **Validated in-container against the real bench (2026-07-27)** by driving the server over the `docker exec -i` channel exactly as an agent would: handshake at protocol `2025-06-18` with all 10 tools listed and a 1607-char instruction brief; 16 images and 19/19 tools enumerated; `symbolic_reachability` on the real DVRF derived `strcpy` from `pwnable/Intro/stack_bof_01` and returned **reached** (MIPS32) with the reachability-not-exploitability meaning attached, while an operator-named `system` on `sbin/chkntfs` returned `absent` carrying "nothing was learned"; a full agent-driven `autonomous_scan` ran **15 workers → 94 findings** with the 3 incomplete workers and the honest gaps ordered *above* the narrative, and coverage then closed the loop at 15/15. **Two defects the real run exposed, both now fixed + unit-pinned:** an image holding real findings from individually-run stages was headlined `UNEXAMINED` beside a verdict calling those findings real (now `COVERAGE UNKNOWN`), and the manual-probe hint claimed a binary "imports" a symbol that the sweep had only seen in its strings — angr resolved no PLT entry for it (see the `binvuln` entry below). _Follow-up (updated 2026-07-27): resources, prompts and the write path are now **closed** — `firmlab_add_image` ingests a file the SERVER can read (it tells the agent to `docker cp` first when the file is on the host and the server is in the container), three resources expose the proof-state guide plus report/disclosure-draft templates, and three prompts encode the methodology (`triage_image`, `hunt_memory_safety`, `compare_versions`), each written to steer away from the inferences the instructions warn about. Still open: the **third pass has not been run**_
 
 ## Autonomous workers — the *opacidad* section (see [`AUTONOMOUS-WORKERS.md`](AUTONOMOUS-WORKERS.md))

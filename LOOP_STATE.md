@@ -52,8 +52,9 @@ cinco proveedores que corren y no se pueden leer.
 - [x] **C3. Secciones sin enlace.** Cerrado en iter 17 (`8457011`). Y eran DIEZ, no cuatro: `secrets` y
       `testbench` no estaban ni en la cuenta. La pista de la cascara era la otra mitad del defecto.
 
-- [ ] **C4. El endurecimiento por binario se recoge y nunca se muestra** (`nx`, `canary`, `pic`, `bits`,
-      `sha1`, `importsSummary`) mientras la matriz anuncia `hardening: done`.
+- [x] **C4. El endurecimiento por binario se recoge y nunca se muestra.** Cerrado en iter 18 (`84450d3`). Y el
+      blanco no perdía el hecho, lo INVERTÍA: 2005 de 2007 filas traen `null` y una columna en blanco se lee como
+      «sin endurecer». RELRO no se mide en ninguna parte y la matriz lo anunciaba como hecho.
 
 ### Deuda de documentación, para cerrar en cualquier iteración con hueco
 
@@ -527,3 +528,33 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   `deepscans`, `testbench`, `opacidad`, `operator` y `diff` son etapas de trabajo real que no aparecen en la
   secuencia. Si deben estar es una pregunta de diseño (el timeline modela el PIPELINE, no la lista de secciones),
   y por eso hay que decidirla en vez de dejarla como efecto secundario de cuándo se añadió cada sección.
+- iter 18 (2026-07-30): cerrado **C4**, y es el caso más agudo del loop entero. `BinaryEntry` lleva seis campos y
+  ninguno tenía lector, mientras la matriz anunciaba `hardening: done` con la etiqueta «NX / canary / PIC / RELRO».
+  **Medido, y es peor que «se recoge y no se pinta»: 2007 binarios en el corpus, 2 triados, 2 con alguna bandera.**
+  Los rellena el triaje de radare2, por binario y a demanda, así que 2005 de 2007 filas traen `null` en cada
+  columna — en el DVRF, las 218. **Y RELRO no se mide en NINGUNA parte de la API**: ni proveedor, ni columna, ni la
+  cadena, mientras la matriz lo nombraba en la etiqueta de la propia técnica y la daba por hecha.
+  Así que la decisión que sostiene todo no es el render, es qué significa `null`. `nx: 0` es una medición: este
+  binario no tiene NX. `nx: null` es la ausencia de una. Pintar las dos como un blanco le dice al lector que 2005
+  binarios están sin endurecer cuando nadie ha mirado ninguno — y eso no pierde el hecho, lo **invierte**. Es el
+  único sitio del banco donde el valor vacío apunta a la conclusión ALARMANTE en vez de a la tranquilizadora, y por
+  eso las tres lecturas no comparten ni palabra ni color. Un tercer «nada» con su propio número: triado y sin
+  banderas — radare2 lo leyó y no registró nada, que un binario despojado o empaquetado produce legítimamente.
+  Y cuando nada se ha medido se lidera con el POR QUÉ en vez de dibujar una rejilla de blancos, porque una rejilla
+  de blancos es la forma que un lector se salta, y saltársela es cómo pasa desapercibida la inversión.
+  La matriz pasa a `partial` —lo dice la cabecera de su propio catálogo, «partial must never sound finished»— y la
+  etiqueta ya no anuncia RELRO como medido.
+  Validado sobre el despliegue, los dos casos con la aritmética cuadrando: DVRF pinta «a blank NX is not an absent
+  NX» con **654 insignias, todas `not-measured`** (218 × 3, ninguna en `off`); la IMOU pinta «hardening measured on
+  2 of 24 binaries» con el reparto **3 `on` / 3 `off` / 66 `not-measured`** — las seis lecturas reales de los dos
+  triados apartadas de las 66 ausencias. Comprobado además con captura que las dos frases no se pegan, que es el
+  defecto que me ha morddido dos veces.
+  Verificación: `pnpm test` → core 75 / api 1810 / web **399** verde · `pnpm check` → Done · `pnpm biome` → limpio,
+  y esta vez corrido ANTES de commitear.
+  **Tres puntos flojos nuevos en `docs/BACKLOG.md`:** (a) la técnica está de hecho sin ejercer en este corpus — 2 de
+  2007 — y la pregunta no es el renderizador sino si el triaje debería barrerse sobre los binarios expuestos como ya
+  hace la barrida de ELFs, impacto medio; (b) RELRO sigue sin medirse y ahora la UI lo dice en vez de cerrarse el
+  hueco, con `UNMEASURED_HARDENING` como único sitio a cambiar cuando llegue; (c) `importsSummary` y
+  `emulationStatus` siguen sin lector — no son banderas de endurecimiento, y por eso no los metí en la fila de
+  insignias en vez de dejarlos a medio pintar; `importsSummary` es la evidencia detrás de cada
+  `binary-pwnable-candidate`, impacto medio.
