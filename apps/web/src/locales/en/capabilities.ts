@@ -41,6 +41,15 @@ export const capabilities = {
   run: 'Run',
   running: 'Running…',
 
+  /**
+   * The offset at which the input controls the saved return address — the whole point of the dynamic probe, and the
+   * field that had nowhere to be read because the client did not type its result at all. `null` is "not recovered",
+   * which is emphatically not offset zero.
+   */
+  controlOffset: (n: number) => `input controls the saved return address at offset ${n}`,
+  controlOffsetNone:
+    'no control offset was recovered, which is not the same as an offset of zero — the run did not establish that the input reaches the saved return address.',
+
   /** funcdiff is the one that needs a second image, so its absence has a third cause worth naming. */
   needsBaseline:
     'Function-level diffing compares two images, and no baseline has been chosen for this one. That is a missing input, not a result.',

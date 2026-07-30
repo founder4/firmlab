@@ -39,6 +39,10 @@ export const capabilities: typeof en = {
   run: 'Ejecutar',
   running: 'Ejecutando…',
 
+  controlOffset: (n) => `la entrada controla la direccion de retorno guardada en el desplazamiento ${n}`,
+  controlOffsetNone:
+    'no se recupero ningun desplazamiento de control, que no es lo mismo que un desplazamiento cero — la ejecucion no establecio que la entrada alcance la direccion de retorno guardada.',
+
   needsBaseline:
     'El diff a nivel de función compara dos imágenes, y para ésta no se ha elegido ninguna base. Eso es una entrada que falta, no un resultado.',
 };

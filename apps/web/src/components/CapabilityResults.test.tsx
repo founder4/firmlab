@@ -26,6 +26,7 @@ beforeEach(() => {
   m().fwhuntResult.mockResolvedValue(null);
   m().nvramResult.mockResolvedValue(null);
   m().ghidraResult.mockResolvedValue(null);
+  m().dynprobeResult.mockResolvedValue(null);
 });
 
 describe('CapabilityResults — the three states reach the screen and do not share a sentence', () => {
@@ -121,9 +122,37 @@ describe('CapabilityResults — the three states reach the screen and do not sha
   it('renders all five capabilities, so none of them is invisible again', async () => {
     render(<CapabilityResults imageId="abc" />);
     await waitFor(() => expect(screen.getByTestId('capability-results')).toBeTruthy());
-    for (const id of ['yarascan', 'fwhunt', 'nvram', 'ghidra', 'funcdiff']) {
+    for (const id of ['yarascan', 'fwhunt', 'nvram', 'ghidra', 'funcdiff', 'dynprobe']) {
       expect(row(id)).toBeTruthy();
     }
+  });
+
+  /**
+   * `controlOffset` is the whole point of the dynamic probe and had nowhere to be read, because the client did not
+   * type its result at all. A recovered offset and an unrecovered one must not read the same, and an unrecovered one
+   * must not read as zero.
+   */
+  it('prints the control offset the probe recovered', async () => {
+    m().dynprobeResult.mockResolvedValue({
+      available: true,
+      reason: 'crash_input_controlled',
+      controlOffset: 204,
+      sinkHits: 2,
+      findings: [{}],
+    });
+    render(<CapabilityResults imageId="abc" />);
+    await waitFor(() => expect(row('dynprobe').dataset.state).toBe('ran'));
+    expect(row('dynprobe').textContent).toMatch(/input controls the saved return address at offset 204/);
+    expect(row('dynprobe').textContent).toMatch(/2 sink hits examined/);
+  });
+
+  it('refuses to read an unrecovered offset as zero', async () => {
+    m().dynprobeResult.mockResolvedValue({ available: true, reason: 'ran_clean', controlOffset: null, findings: [] });
+    render(<CapabilityResults imageId="abc" />);
+    await waitFor(() => expect(row('dynprobe').dataset.state).toBe('ran'));
+    const text = row('dynprobe').textContent ?? '';
+    expect(text).toMatch(/not the same as an offset of zero/);
+    expect(text).not.toMatch(/at offset 0/);
   });
 
   it('says the same three things in Spanish', async () => {

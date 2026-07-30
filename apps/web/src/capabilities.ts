@@ -23,7 +23,7 @@
  */
 
 /** The five capability ids, as they appear in their routes. */
-export type CapabilityId = 'yarascan' | 'fwhunt' | 'nvram' | 'ghidra' | 'funcdiff';
+export type CapabilityId = 'yarascan' | 'fwhunt' | 'nvram' | 'ghidra' | 'funcdiff' | 'dynprobe';
 
 /** The shape every one of the five results shares. Anything beyond this is read per capability. */
 export interface CapabilityResultBase {
@@ -124,6 +124,11 @@ export function coverageNumbers(id: CapabilityId, result: CapabilityResultBase |
         lost: null,
         unit: 'functions',
       };
+    case 'dynprobe':
+      // The probe answers about ONE call site, so it has no denominator to report and pretending otherwise would
+      // invent one. What it does carry is `sinkHits` — how many times the breakpoint was reached — which is the
+      // closest thing to a measure of what the run examined.
+      return { denominator: null, applied: num(r.sinkHits), lost: null, unit: 'sink hits' };
     case 'funcdiff':
       return {
         denominator: null,

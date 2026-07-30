@@ -33,6 +33,11 @@ const CAPABILITIES: ReadonlyArray<{ id: CapabilityId; label: string; unlocks: st
   { id: 'nvram', label: 'nvram', unlocks: 'the vendor key–value store carved out of flash' },
   { id: 'ghidra', label: 'ghidra', unlocks: 'decompiled pseudocode for one rootfs binary' },
   { id: 'funcdiff', label: 'funcdiff', unlocks: 'function-level diffing against a baseline image' },
+  {
+    id: 'dynprobe',
+    label: 'dynprobe',
+    unlocks: 'a crash reproduced under gdb, with the offset at which the input controls the return address',
+  },
 ];
 
 type Loaded = Record<string, CapabilityResultBase | null>;
@@ -92,6 +97,10 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
           .ghidraResult(imageId)
           .then((r) => ['ghidra', r] as const)
           .catch(() => ['ghidra', null] as const),
+        api
+          .dynprobeResult(imageId)
+          .then((r) => ['dynprobe', r] as const)
+          .catch(() => ['dynprobe', null] as const),
       ]);
       if (live) setLoaded(Object.fromEntries(entries) as Loaded);
     };
@@ -140,7 +149,7 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
                   {t.capabilities.states[state.kind === 'not-run' ? 'notRun' : state.kind].label}
                 </span>
                 {state.kind === 'ran' && <span className="hint">{t.capabilities.findings(state.findingCount)}</span>}
-                {state.kind === 'not-run' && cap.id !== 'funcdiff' && cap.id !== 'ghidra' && (
+                {state.kind === 'not-run' && (cap.id === 'yarascan' || cap.id === 'fwhunt' || cap.id === 'nvram') && (
                   <button type="button" onClick={() => void run(cap.id)} disabled={busy === cap.id}>
                     {busy === cap.id ? t.capabilities.running : t.capabilities.run}
                   </button>
@@ -153,6 +162,13 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
                 {state.kind === 'not-run' ? notRunBody : t.capabilities.states[state.kind].body}
               </span>
               {state.kind === 'ran' && <Coverage id={cap.id} result={result} />}
+              {state.kind === 'ran' && cap.id === 'dynprobe' && (
+                <span className="hint" data-role="control-offset" style={{ maxWidth: '72ch' }}>
+                  {typeof (result as { controlOffset?: number | null } | null)?.controlOffset === 'number'
+                    ? t.capabilities.controlOffset((result as unknown as { controlOffset: number }).controlOffset)
+                    : t.capabilities.controlOffsetNone}
+                </span>
+              )}
               {state.kind !== 'not-run' && state.reason && (
                 <span className="hint" style={{ maxWidth: '72ch' }}>
                   <strong>{t.capabilities.reasonLabel}</strong> <span className="mono">{state.reason}</span>
