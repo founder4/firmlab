@@ -452,11 +452,40 @@ the first one makes a gap read as a clean result and the second is merely missin
   `DeviceTreeResult.rejected`; `OperatorAssertion.withdrawnReason`; `FuzzResult.reason`; `osv.skipped`,
   `nvd.notQueried`, `nvd.truncated[]`, `egress.neverSent`.
 
-- ▢ **Whole capabilities with a route and no reader.** `yarascan`, `funcdiff`, `fwhunt`, `nvram` and `ghidra` have
-  POST+GET routes and ZERO references in `apps/web`. Each carries its own coverage story with it — yarascan's
-  `rulesDeclared`/`rulesApplied`/`rulesLost`, nvram's `capped` and `duplicateKeys`, fwhunt's `skipReason`,
-  funcdiff's `unmatchable`. `DynProbeResult` is not even typed in the client, so a reproduced crash's
-  `controlOffset` — the whole point of the probe — has nowhere to be read.
+- ✅ **Whole capabilities with a route and no reader** (2026-07-30, `04af0f4` + `98fc9cd`) — `yarascan`, `funcdiff`,
+  `fwhunt`, `nvram` and `ghidra` had POST+GET routes and zero references in `apps/web`, and `DynProbeResult` was not
+  typed in the client at all, so `controlOffset` — the whole point of the dynamic probe — had nowhere to be read.
+  A `deepscans` section now renders all six with `capabilities.ts` (pure, 13 tests) deciding the state.
+  **The entry said two states and there are THREE**, which is the distinction this workbench is built on:
+  `not-run` (nobody asked — about the workbench), `unavailable` (`available: false`: the question WAS asked and this
+  deployment could not answer — about the deployment, and never a negative), and `ran` (the only one that says
+  anything about the firmware, and even then bounded by its coverage numbers). Collapsing `unavailable` into either
+  neighbour was the defect hiding inside the fix.
+  An absent denominator prints as unknown, never as 0 — an invented zero is a measurement nobody made.
+  **All three states validated live on one screen** (`/image/a2c03536/deepscans`, deploy `98fc9cd`, 0 console
+  errors): `yarascan` → *could not answer*, "no rule corpus is configured: FIRMLAB_YARA_RULES is unset" — with yara
+  now installed, which is exactly the "yara is installed" ≠ "this deployment can answer" split its `ToolSpec`
+  comment always claimed; `nvram` → *ran*, 0 findings, "0 stores examined · this provider reports no denominator",
+  beside the provider's own refusal to be read as "the device has no nvram"; `dynprobe` → *could not answer*, with
+  the gdbstub timeout verbatim; `fwhunt`/`ghidra` → *has not run*; `funcdiff` → its missing BASELINE named as a
+  missing input rather than as a stage nobody ran.
+  Named `deepscans` and not `capabilities` because the global nav already has a *Capabilities* page (the tool
+  matrix), and two different things under one word is how a reader is misled.
+- ▢ **`deepscans` renders each capability's STATE and denominator, not its payload.** Deliberate and recorded rather
+  than half-built: the matches list, the nvram stores, ghidra's pseudocode and funcdiff's per-binary detail still
+  have no surface. What the closed entry above was about — a stage that never ran being indistinguishable from one
+  that ran and found nothing — is fixed; a rich per-provider view is separate work. Impact: medium for `yarascan`
+  and `fwhunt`, whose matches are the finding itself.
+- ▢ **`deepscans` is reachable only by URL, like the four sections in the entry below.** Adding it made that entry's
+  count five rather than four: the step timeline is a curated pipeline and does not list it, and the sidebar carries
+  no per-image sections at all. It should be closed together with `structure`/`files`/`hardware`/`compmap` rather
+  than separately. Impact: high — a panel nobody can navigate to is a panel with no reader, which is the defect this
+  iteration just closed arriving one level up.
+- ▢ **`scripts/ui-drive.mjs` TRUNCATES the visible text it reports, mid-sentence, with no marker.** Found while
+  validating the above: the page rendered six capability rows and the text dump stopped inside the third one's prose
+  ("…so ther"), so grepping it for `dynprobe` returned nothing and the row looked absent. The screenshot was correct
+  and the text was not. This is the loop's own validation instrument understating what it saw — the same class of
+  defect as a bound reading as an answer, in the tool used to catch them. It should say it truncated. Impact: medium.
 - ▢ **Thirteen API methods with no caller, so a result lives only in the tab that launched it.** `chipsecResult`,
   `renodeResult`, `webprobeResult`, `decompileResult`, `kernelPosture`, `ghidraResult`, `analysisResult`,
   `secrets`, `amendAssertion`, `updateNote`, `deleteImage`. The sharpest is `amendAssertion`: `OperatorPanel`

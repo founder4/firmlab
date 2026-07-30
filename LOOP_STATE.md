@@ -40,9 +40,9 @@ cinco proveedores que corren y no se pueden leer.
 
 ### Bloque C — bloque 2 de la auditoría de visibilidad
 
-- [ ] **C1. Cinco capacidades con ruta y cero lectores en `apps/web`**: `yarascan`, `funcdiff`, `fwhunt`,
-      `nvram`, `ghidra`. Cada una trae su propia historia de cobertura. `DynProbeResult` ni está tipado en el
-      cliente, así que `controlOffset` — el punto entero de la sonda — no tiene dónde leerse.
+- [x] **C1. Cinco capacidades con ruta y cero lectores en `apps/web`.** Cerrado en iter 15 (`04af0f4` +
+      `98fc9cd`). Y eran DOS estados en el enunciado y son TRES: `unavailable` es su propio hecho.
+
 - [ ] **C2. Trece métodos de API sin llamante.** El más agudo es `amendAssertion`: `OperatorPanel` pinta el
       historial de enmiendas y no hay UI capaz de producir una.
 - [ ] **C3. Cuatro secciones sin enlace en ninguna parte**: `structure`, `files`, `hardware`, `compmap`. La
@@ -433,3 +433,35 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   explicar el POR QUÉ de los dos puertos abiertos; (b) `agent/session.ts:627` pasa el DIRECTORIO del rootfs donde
   `runFullSystem` espera la imagen de disco, así que el peldaño full-system del agente no ha podido arrancar nunca
   — impacto medio.
+- iter 15 (2026-07-30): cerrado **C1**. Verificada primero la afirmación, que estaba parcialmente desfasada:
+  `funcdiff`, `fwhunt` y `nvram` sí se MENCIONAN en la web (matriz de técnicas, locales), pero mención no es lector
+  de resultado — `ghidraResult` tenía cero llamantes fuera de `api.ts`, `nvram` no tenía ni tipo ni método, y
+  `yarascan` no aparecía en ninguna parte. La afirmación se sostiene.
+  **Y el enunciado decía dos estados: son tres.** `available: false` es su propio hecho — la pregunta SÍ se hizo y
+  este despliegue no pudo responderla — y fundirlo con «nadie preguntó» o con «corrió y no había» pierde justo la
+  distinción sobre la que está construido el banco. Ése era el defecto escondido dentro del arreglo.
+  `capabilities.ts` (puro, 13 tests) decide el estado y saca el denominador de cada proveedor; un denominador
+  ausente se imprime como desconocido y nunca como 0, porque un cero inventado es una medición que nadie hizo.
+  **Los tres estados validados vivos en una sola pantalla** (`/image/a2c03536/deepscans`, deploy `98fc9cd`, 0 errores
+  de consola): `yarascan` → *could not answer*, «no rule corpus is configured: FIRMLAB_YARA_RULES is unset» —con
+  yara YA instalado desde la iter 13, que es exactamente el «yara está instalado» ≠ «este despliegue puede
+  responder» que su `ToolSpec` afirmaba; `nvram` → *ran*, 0 hallazgos, «0 stores examined · this provider reports no
+  denominator», junto a la negativa del propio proveedor a leerse como «este dispositivo no tiene nvram»;
+  `dynprobe` → *could not answer* con el timeout del gdbstub literal; `fwhunt`/`ghidra` → *has not run*;
+  `funcdiff` → su BASE ausente nombrada como entrada que falta y no como etapa sin correr.
+  Añadí `DynProbeResultView` al cliente y, al darme cuenta de que nadie lo leía, añadí `dynprobe` como sexta fila —
+  un tipo sin lector habría sido el mismo defecto que esta iteración arregla.
+  La sección se llama `deepscans` y no `capabilities` porque la navegación global ya tiene una página *Capabilities*
+  (la matriz de herramientas).
+  **Un defecto que sólo se vio mirando la página**: las filas eran un grid de spans inline, así que la descripción y
+  la frase de estado salían pegadas en una palabra («…corpus you supplyNothing has asked…»). Arreglado en `c2714c3`.
+  Verificación: `pnpm test` → core 75 / api 1810 / web **350** verde · `pnpm check` → Done · `pnpm biome` → limpio.
+  **Puntos flojos nuevos en `docs/BACKLOG.md`, NO implementados:** (a) `deepscans` pinta el ESTADO y el denominador,
+  no la carga de cada proveedor — matches, stores, pseudocódigo y detalle por binario siguen sin superficie, impacto
+  medio para yarascan y fwhunt, cuyos matches son el hallazgo; (b) `deepscans` es alcanzable sólo por URL, así que
+  suma una quinta a las cuatro secciones sin enlace de C3 y hay que cerrarlas juntas — impacto alto, un panel al que
+  nadie puede navegar es un panel sin lector, el mismo defecto un nivel más arriba; (c) **`scripts/ui-drive.mjs`
+  trunca el texto visible que reporta, a mitad de frase y sin marcarlo** — la página pintó seis filas y el volcado
+  cortó dentro de la tercera, así que buscar `dynprobe` en él no devolvía nada y la fila parecía ausente. Es el
+  instrumento de validación del propio loop subestimando lo que vio: una cota leyéndose como respuesta, dentro de la
+  herramienta que existe para cazarlas.
