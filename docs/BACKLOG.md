@@ -214,28 +214,30 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   `confirmed_full_system` with no panic and `{"arch":"mips","shimStaged":true}` on disk; then the accident was
   reproduced deliberately — a `mipseb` build reported *"WITHOUT the NVRAM shim, so a boot will panic on init"* and
   stamped `shimStaged:false`, and the next `mips` boot refused it with *"built for mipseb and this boot is mips"*.
-- ◐ **The full-system rung is not reproducible on the WR940N, and every single-boot conclusion about it is n=1.**
-  Three boots of one image, 2026-07-30: `confirmed_full_system` with `open: [80,443]`; `confirmed_full_system` with
-  `open: []`; and `blocked_by_platform` on a kernel panic (that third one explained — the poisoned cache, closed
-  above). Console sizes 262 KB / 262 KB / 17 KB, guest time 95.2 / 95.8 / 29.4 s, `rcS` traces 198 / 214 / 0.
-  **The rule is now enforced in code** (`providers/boot-reproducibility.ts`, pure, 11 tests): every full-system
-  result carries a `reproducibility` verdict computed from the image's prior boots PLUS this one, and its first job is
-  to refuse — one boot of a rung with unmeasured variance supports **no** causal claim, not a weaker one.
-  `comparisonIsAttributable` states the three conditions a two-arm comparison needs, and the third is the one whose
-  absence produced this workbench's one retraction: the intervention must be shown to have EXECUTED. Prior boots are
-  read in the route (only it knows which rows belong to which image) and read defensively — a row with no `open`
-  array counts as a boot with zero open ports rather than being dropped, because dropping it would understate `n`.
-  **Still open: the measurement itself.** A 5-boot series with the repair off is in flight
-  (`scratchpad/series.sh` → `series.jsonl`) to characterise the distribution; until it lands, "not reproducible" rests
-  on n=3 with one of the three explained by a defect since fixed, which is suggestive and not a characterisation.
-  Impact: high — it is a precondition for every conclusion this rung is used to draw.- ▢ **Where a boot-time intervention CAN be staged is still unanswered.** The repair appends to the end of
-  `/etc/rc.d/rcS` and has never executed on any of the three boots — zero `execve` traces for `ping`,
-  `iptables-save` or `iptables-stop`, and none of its three markers, on both repaired runs. Whether that is because
-  `rcS` does not reach its tail or because a backgrounded subshell does not survive is undetermined and needs the
-  reproducibility question above answered first. The candidates firmadyne/FirmAE use are `/etc/inittab`, a `preInit`
-  ahead of `rcS`, and the kernel command line. Impact: high — the dynamic rung still has no demonstrated way to make
-  a service answer.- ▢ **The repair's own markers never reported back, and nothing yet explains why.** `ruleset.ran: false` on the boot that DID open two ports, so `iptables-save`/`iptables-stop`/`echo` produced no console output between the markers. Candidates, none tested: the backgrounded subshell is killed when the boot's console capture ends; `ping -c 20 127.0.0.1` outlives the run's window; stdout of a backgrounded `rcS` child does not reach the serial console. Until it is settled the workbench can say the repair was present and cannot say it ran — which also means the WHY of the two open ports is unexplained, since the flush is only the leading hypothesis. Impact: **high** — it is the difference between a measured effect and an understood one.
-- ▢ **`agent/session.ts:627` passes the rootfs DIRECTORY where `runFullSystem` wants the disk image.** Surfaced 2026-07-30 while threading the repair through the call sites, not fixed (out of this iteration's scope): `runFullSystem(arch, rootfsPath, 8080, h, rootfsPath)` hands the extraction directory as `rootfsImage`, so qemu is given `-drive file=<dir>` and the agent's full-system rung cannot ever have booted. The route path builds the image with `ensureRootfsImage` first; the agent path never does. Impact: medium — one of the two entry points to the highest rung is inert, and it also means the agent's boots carry no `repair` disposition.
+- ✅ **CORRECTED: the full-system rung IS reproducible on the WR940N — measured, n=5** (2026-07-30). The claim that
+  stood here was wrong, and it was itself an n=3 inference. **Five consecutive boots of one build, repair off, are
+  identical**: `confirmed_full_system` / `open: 0` / no panic, five times; console 262,193 bytes in all five; guest
+  time 94.6–96.0 s. What the earlier three showed was one boot explained by the poisoned cache (a defect since fixed)
+  and one that opened two ports — so the real anomaly is narrower and sharper than "the rung is unstable".
+  **The remaining anomaly is a single boot, and the rule now refuses it.** The repair-on arm has exactly one usable
+  boot (the other panicked from the cache defect), and it is the one that opened two ports. Run against the real
+  record, `comparisonIsAttributable` returns *"At least one arm is not reproducible"* — which is the correct answer
+  and the one that was missing when that boot was credited to the repair. The cheapest next measurement is five boots
+  with the repair ON; until then the two-port observation stands as an unexplained single boot.
+  **The rule is enforced in code** (`providers/boot-reproducibility.ts`, pure, 16 tests) and live: a real boot on the
+  deployed build reports `kind: single`, `n: 1`, `incomparable: 20`, `supportsCausalClaim: false`.
+- ✅ **The reproducibility verdict counted boots across BUILDS as repeats** (2026-07-30, `94e90dd`) — a defect in the
+  module written hours earlier, found by running it on the real record rather than on fixtures. Over the WR940N's 17
+  stored boots it reported `varies`; those 17 span the shim fix, the per-run port allocation, the measured-arch fix
+  and the build stamp. **What varied was the codebase**, and a reader would have concluded the emulator is unstable
+  from a record of it being repaired. Boots now carry `buildRev`, the verdict filters on it, and the excluded count is
+  REPORTED — `single` beside 20 excluded boots is a different situation from `single` on a fresh image, and only one
+  of them is fixed by booting again. A boot that recorded no build counts as incomparable, not as this one's.
+- ▢ **Five boots with the repair ON is the next measurement, and it is cheap.** ~25 minutes, and it is what would
+  settle whether the two-port boot was the repair or noise — bearing in mind the repair demonstrably never executes,
+  so a stable two-port repair-on arm would mean the appended LINE changes the boot without running, which would be a
+  more interesting finding than the one originally claimed. Impact: medium-high, and it is the last thing standing
+  between this rung and a characterised error bar.- ▢ **`agent/session.ts:627` passes the rootfs DIRECTORY where `runFullSystem` wants the disk image.** Surfaced 2026-07-30 while threading the repair through the call sites, not fixed (out of this iteration's scope): `runFullSystem(arch, rootfsPath, 8080, h, rootfsPath)` hands the extraction directory as `rootfsImage`, so qemu is given `-drive file=<dir>` and the agent's full-system rung cannot ever have booted. The route path builds the image with `ensureRootfsImage` first; the agent path never does. Impact: medium — one of the two entry points to the highest rung is inert, and it also means the agent's boots carry no `repair` disposition.
 - ▢ **`webprobe` needs a live target, not new logic.** `runWebProbe(baseUrl, …)` would take `http://127.0.0.1:<host port>` straight from `open[]`, but the rung tears the guest down before returning — driving it needs a hook that runs while pass two is still up, inside `bootOnce`'s probe loop. That is the last step between this rung and a dynamic answer.
 - ▢ **`planForwards` forwards only declared ports plus an 80/443 floor.** On all four corpus images nothing is declared, so a service on 8080/22/23 is missed even now that two guests are reachable at layer 4. Worth widening now that reachability is no longer the blocker.
 - ✅ **Service enumeration** — `providers/servicemap.ts`: statically map the network daemons the rootfs starts (inittab/inetd/SysV/systemd) = boot-time attack surface.

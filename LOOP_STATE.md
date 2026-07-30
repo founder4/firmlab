@@ -688,3 +688,24 @@ Lo que este loop dejó como próximo trabajo, en el orden re-derivado de `METHOD
   que un arranque real reporta el veredicto con su `n` y su distribución.
   Y hasta que esa serie aterrice, «el peldaño no es reproducible» descansa en n=3 con uno de los tres explicado por
   un defecto ya arreglado — sugerente, no una caracterización. La entrada del backlog pasa a ◐ y lo dice.
+  **Continuación de iter 22, con la serie ya aterrizada — y corrige mi propia afirmación otra vez.**
+  Cinco arranques consecutivos de una build con la reparación apagada son **idénticos**: `confirmed_full_system` /
+  `open: 0` / sin panic, cinco veces; consola 262.193 bytes en los cinco; tiempo de invitado 94,6–96,0 s. Así que
+  **el peldaño SÍ es reproducible**, y mi «no es reproducible» era una inferencia de n=3 en la que uno de los tres
+  era el caché envenenado —defecto ya arreglado— y otro el que abrió dos puertos.
+  La anomalía real es más estrecha: el brazo CON reparación tiene **un** arranque utilizable, y es el de los dos
+  puertos. Corriendo el módulo contra el registro real, `comparisonIsAttributable` responde «At least one arm is not
+  reproducible» — que es la respuesta correcta, y la que faltaba cuando atribuí ese arranque a la reparación.
+  **Y el módulo tenía su propio defecto, encontrado al aplicarlo al registro real y no a fixtures:** contaba los 17
+  arranques almacenados del WR940N como repeticiones, y reportaba `varies`. Pero esos 17 abarcan el arreglo del shim,
+  el puerto por ejecución, la arquitectura medida y el sello de build — lo que variaba era el CODEBASE, y un lector
+  habría concluido que el emulador es inestable a partir del registro de que lo estaban arreglando. Los arranques
+  llevan ahora `buildRev`, el veredicto filtra por él, y los excluidos se REPORTAN.
+  Validación in-container final, sobre el build desplegado: un arranque real devuelve `kind: single`, `n: 1`,
+  **`incomparable: 20`**, `supportsCausalClaim: false`, con la frase que dice que un segundo arranque es la medición
+  más barata.
+  Puertas: `pnpm test` → core 75 / api **1831** / web 399 verde · `pnpm check` → Done ×3 · `pnpm biome` → limpio.
+  **Punto nuevo:** cinco arranques con la reparación ENCENDIDA son la siguiente medición, ~25 min, y es lo único que
+  queda entre este peldaño y una barra de error caracterizada. Con un matiz que la hace más interesante de lo que
+  parece: la reparación demostrablemente no se ejecuta, así que un brazo estable de dos puertos significaría que la
+  LÍNEA añadida cambia el arranque sin correr.
