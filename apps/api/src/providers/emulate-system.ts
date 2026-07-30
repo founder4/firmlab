@@ -148,6 +148,11 @@ export interface SystemEmulationResult {
    * knowing whether the rung is reproducible is a number with an unmeasured error bar.
    */
   reproducibility?: ReproducibilityVerdict;
+  /**
+   * The build that produced this boot. Optional forever — rows stored before it existed carry none — and it is what
+   * lets a later run tell repeats of one experiment from a record of the codebase changing.
+   */
+  buildRev?: string;
 }
 
 /** A single boot's outcome, summarised. The raw console of the pass the verdict came from is `stdout`. */
@@ -1731,10 +1736,21 @@ export async function runFullSystem(
       ...(egress ? { egress } : {}),
       isolated: isolate,
       // Computed from the prior boots PLUS this one, so a first-ever boot reports `single` rather than `stable`.
-      reproducibility: reproducibility([
-        ...(priorBoots ?? []),
-        { verdict: proofState, openPorts: verdictPass.open.length, panic: verdictPass.stdout.includes('Kernel panic') },
-      ]),
+      // Filtered to THIS build: boots from other builds are not repeats of this experiment, and counting them made
+      // the first version of this verdict report `varies` over a record of the codebase being fixed.
+      reproducibility: reproducibility(
+        [
+          ...(priorBoots ?? []),
+          {
+            verdict: proofState,
+            openPorts: verdictPass.open.length,
+            panic: verdictPass.stdout.includes('Kernel panic'),
+            ...(process.env.FIRMLAB_BUILD ? { buildRev: process.env.FIRMLAB_BUILD } : {}),
+          },
+        ],
+        process.env.FIRMLAB_BUILD,
+      ),
+      ...(process.env.FIRMLAB_BUILD ? { buildRev: process.env.FIRMLAB_BUILD } : {}),
       ...(repair ? { repair } : {}),
       ...(rulesetRead ? { ruleset: rulesetRead } : {}),
       ...(unreachable.cause === 'answered' ? {} : { unreachable }),

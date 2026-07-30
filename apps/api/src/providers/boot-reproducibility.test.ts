@@ -114,3 +114,68 @@ describe('comparisonIsAttributable — the third condition is the one that was m
     );
   });
 });
+
+/**
+ * The defect the module itself had for a few hours, found by running it on the real record.
+ *
+ * Applied to the WR940N's 17 stored boots it reported `varies` — but those 17 span the shim fix, the per-run port
+ * allocation, the measured-arch fix and the build stamp. What varied was the CODEBASE. A reader would have concluded
+ * the emulator is unstable from a record of it being repaired.
+ */
+describe('build filtering — boots from other builds are not repeats of one experiment', () => {
+  const at = (rev: string | undefined, openPorts = 0): BootOutcome => ({
+    verdict: 'confirmed_full_system',
+    openPorts,
+    panic: false,
+    buildRev: rev,
+  });
+
+  it('counts only boots from this build, and reports how many it excluded', () => {
+    const v = reproducibility([at('old', 2), at('old', 0), at('new'), at('new'), at('new')], 'new');
+    expect(v.kind).toBe('stable');
+    expect(v.n).toBe(3);
+    expect(v.incomparable).toBe(2);
+  });
+
+  it('is the measured corpus case: five consecutive boots of one build are stable', () => {
+    // The real series, 2026-07-30: confirmed_full_system / open=0 / no panic, five times.
+    const v = reproducibility(
+      Array.from({ length: 5 }, () => at('e67b503')),
+      'e67b503',
+    );
+    expect(v.kind).toBe('stable');
+    expect(v.n).toBe(5);
+    expect(v.incomparable).toBe(0);
+    expect(v.supportsCausalClaim).toBe(true);
+  });
+
+  /**
+   * The pair, at build granularity: no boot from this build, and no boot at all. Both are `unobserved` and only one
+   * of them is fixed by booting again — the other says a history exists and cannot be counted.
+   */
+  it('separates "no boot from this build" from "no boot at all"', () => {
+    const excluded = reproducibility([at('old'), at('old')], 'new');
+    const none = reproducibility([], 'new');
+    expect(excluded.kind).toBe('unobserved');
+    expect(none.kind).toBe('unobserved');
+    expect(excluded.incomparable).toBe(2);
+    expect(none.incomparable).toBe(0);
+    expect(excluded.reason).toMatch(/2 earlier boot\(s\) exist and came from another build/);
+    expect(excluded.reason).toMatch(/what varied across them may have been the codebase/);
+    expect(none.reason).toMatch(/Nothing has booted this image/);
+  });
+
+  it('treats a boot that recorded no build as incomparable, not as this build’s', () => {
+    // Stored before boots carried the revision: nothing is known about which build ran it.
+    const v = reproducibility([at(undefined), at(undefined), at('new')], 'new');
+    expect(v.n).toBe(1);
+    expect(v.incomparable).toBe(2);
+    expect(v.kind).toBe('single');
+  });
+
+  it('filters nothing when no build is given, which is what the first version did', () => {
+    const v = reproducibility([at('a'), at('b'), at(undefined)]);
+    expect(v.n).toBe(3);
+    expect(v.incomparable).toBe(0);
+  });
+});

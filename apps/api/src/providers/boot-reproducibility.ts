@@ -31,8 +31,21 @@
  * Pure and dependency-free: the caller reads the boots out of the job rows and hands them over.
  */
 
-/** One boot's outcome, reduced to the facts a comparison across boots can actually use. */
+/**
+ * One boot's outcome, reduced to the facts a comparison across boots can actually use.
+ *
+ * `buildRev` is not decoration and it was missing from the first version of this module, which made the verdict
+ * actively misleading. Applied to the WR940N's real history it reported `varies` over 17 boots — but those 17 span
+ * the shim fix, the per-run port allocation, the measured-arch fix and the build stamp, so what varied was the
+ * CODEBASE, not the rung. A reader would have concluded the emulator is unstable from a record of it being repaired.
+ * Boots from different builds are not repeats of one experiment.
+ */
 export interface BootOutcome {
+  /**
+   * The git revision of the build that produced this boot. `undefined` means the row was stored before boots
+   * recorded it — nothing is known about which build ran it, which is not the same as knowing it was this one.
+   */
+  buildRev?: string | undefined;
   /** The proof state the rung recorded. */
   verdict: string;
   /** How many forwarded ports answered. */
@@ -45,8 +58,14 @@ export type ReproducibilityKind = 'unobserved' | 'single' | 'stable' | 'varies';
 
 export interface ReproducibilityVerdict {
   kind: ReproducibilityKind;
-  /** How many boots this is derived from. */
+  /** How many boots this is derived from — comparable ones only. */
   n: number;
+  /**
+   * Boots excluded because they came from a different build, or from one that did not record which. Reported rather
+   * than silently dropped: a verdict of `single` next to 16 excluded boots is a different situation from `single` on
+   * a fresh image, and only one of them is fixed by booting again.
+   */
+  incomparable: number;
   /** The distinct outcome signatures seen, most frequent first, as `verdict/openPorts/panic` counts. */
   distribution: { signature: string; count: number }[];
   /** Whether a claim of the form "X caused Y" may be made across boots at all. */
@@ -68,9 +87,13 @@ function signatureOf(b: BootOutcome): string {
  * arms that differ still need the intervention to be shown to have executed, which is the step that was missing when
  * the repair was credited with opening two ports.
  */
-export function reproducibility(boots: readonly BootOutcome[]): ReproducibilityVerdict {
+export function reproducibility(boots: readonly BootOutcome[], buildRev?: string): ReproducibilityVerdict {
+  // Only boots from THIS build are repeats of this experiment. With no build given, nothing is filtered and the
+  // caller is trusted to have done it — which is how the first version behaved, and why it was wrong.
+  const comparable = buildRev === undefined ? [...boots] : boots.filter((b) => b.buildRev === buildRev);
+  const incomparable = boots.length - comparable.length;
   const counts = new Map<string, number>();
-  for (const b of boots) {
+  for (const b of comparable) {
     const sig = signatureOf(b);
     counts.set(sig, (counts.get(sig) ?? 0) + 1);
   }
@@ -78,19 +101,23 @@ export function reproducibility(boots: readonly BootOutcome[]): ReproducibilityV
     .map(([signature, count]) => ({ signature, count }))
     .sort((a, b) => b.count - a.count || a.signature.localeCompare(b.signature));
 
-  if (boots.length === 0) {
+  if (comparable.length === 0) {
     return {
       kind: 'unobserved',
+      incomparable,
       n: 0,
       distribution,
       supportsCausalClaim: false,
       reason:
-        'Nothing has booted this image on this rung, so there is nothing to be reproducible or otherwise. That is a statement about this workbench, not about the firmware.',
+        incomparable > 0
+          ? `No boot of this image was produced by this build (${incomparable} earlier boot(s) exist and came from another build, or from one that did not record which). Those cannot be counted as repeats of this experiment — what varied across them may have been the codebase.`
+          : 'Nothing has booted this image on this rung, so there is nothing to be reproducible or otherwise. That is a statement about this workbench, not about the firmware.',
     };
   }
-  if (boots.length === 1) {
+  if (comparable.length === 1) {
     return {
       kind: 'single',
+      incomparable,
       n: 1,
       distribution,
       supportsCausalClaim: false,
@@ -100,18 +127,20 @@ export function reproducibility(boots: readonly BootOutcome[]): ReproducibilityV
   if (distribution.length === 1) {
     return {
       kind: 'stable',
-      n: boots.length,
+      incomparable,
+      n: comparable.length,
       distribution,
       supportsCausalClaim: true,
-      reason: `${boots.length} boots, all ${distribution[0]?.signature}. That licences comparing this configuration against another one — it does NOT licence attributing a difference to an intervention without showing the intervention executed.`,
+      reason: `${comparable.length} boots, all ${distribution[0]?.signature}. That licences comparing this configuration against another one — it does NOT licence attributing a difference to an intervention without showing the intervention executed.`,
     };
   }
   return {
     kind: 'varies',
-    n: boots.length,
+    incomparable,
+    n: comparable.length,
     distribution,
     supportsCausalClaim: false,
-    reason: `${boots.length} boots produced ${distribution.length} different outcomes (${distribution
+    reason: `${comparable.length} boots produced ${distribution.length} different outcomes (${distribution
       .map((d) => `${d.count}× ${d.signature}`)
       .join(
         '; ',

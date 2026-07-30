@@ -152,6 +152,9 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
             verdict: typeof res.proofState === 'string' ? res.proofState : 'unknown',
             openPorts: Array.isArray(res.open) ? res.open.length : 0,
             panic: typeof res.stdout === 'string' && res.stdout.includes('Kernel panic'),
+            // Absent on every row stored before boots recorded it, which the verdict counts as incomparable rather
+            // than as a repeat — the same rule as the image's build stamp.
+            buildRev: typeof res.buildRev === 'string' ? res.buildRev : undefined,
           }));
         const r = await runFullSystem(arch, image.imagePath, 8080, handle, rootfsPath, image.repair, priorBoots);
         return onSystemEmulationResult(id, identity, 'system-boot', r);
