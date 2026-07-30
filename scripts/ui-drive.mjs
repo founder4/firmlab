@@ -72,8 +72,38 @@ await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {
 
 const click = arg('--click', null);
 if (click) {
-  const target = page.getByText(click, { exact: false }).first();
-  await target.click({ timeout: 10000 }).catch((e) => consoleErrors.push(`CLICK FAILED "${click}": ${e.message}`));
+  // `getByText(x, {exact:false}).first()` was the whole implementation, and it clicks the wrong thing in silence.
+  // Measured: `--click "Amend"` on the operator ledger landed on the row's PROSE, because the attribution sentence
+  // contains "Amended 2026-07-30" and that paragraph comes first in the document. Clicking a <div> succeeds, so
+  // nothing failed and the screenshot simply showed an unopened form — the instrument reporting a false negative
+  // about the app it exists to check.
+  //
+  // So: interactive elements first, exact match before substring, and SAY which one was clicked. A driver that
+  // cannot tell you what it pressed cannot be used to prove what it saw.
+  const candidates = [
+    ['button (exact)', page.getByRole('button', { name: click, exact: true })],
+    ['link (exact)', page.getByRole('link', { name: click, exact: true })],
+    ['button (substring)', page.getByRole('button', { name: click })],
+    ['link (substring)', page.getByRole('link', { name: click })],
+    ['text (exact)', page.getByText(click, { exact: true })],
+    ['text (substring)', page.getByText(click, { exact: false })],
+  ];
+  let clicked = null;
+  for (const [how, locator] of candidates) {
+    const n = await locator.count().catch(() => 0);
+    if (n === 0) continue;
+    const err = await locator
+      .first()
+      .click({ timeout: 5000 })
+      .then(() => null)
+      .catch((e) => e);
+    if (!err) {
+      clicked = `${how}${n > 1 ? ` (${n} matched, took the first)` : ''}`;
+      break;
+    }
+  }
+  if (clicked) console.log(`CLICKED  "${click}" as ${clicked}`);
+  else consoleErrors.push(`CLICK FAILED "${click}": nothing matched as a button, link or text`);
   await page.waitForLoadState('networkidle').catch(() => {});
 }
 await page.waitForTimeout(Number(arg('--wait', 900)));
