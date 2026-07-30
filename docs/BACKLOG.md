@@ -50,6 +50,27 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ▢ **Prebuilt guest-arch libdesock** — so the network fuzz harness works out-of-the-box, not only with `FIRMLAB_DESOCK`.
 
 ## UEFI / BIOS deep analysis
+- ✅ **The corpus has a UEFI image at last, and the lane produces findings on it** (2026-07-30). The #1 item on the
+  re-derived §4 list was that the corpus is the binding constraint — no UEFI image, so every `chipsec`/`fwhunt`
+  branch was tested against fixtures. Closed with **OVMF**, taken from Debian's own `ovmf` package rather than
+  downloaded firmware: `OVMF_CODE_4M.secboot.fd` (3.7 MB, a Secure Boot EDK2 build) and `OVMF_VARS_4M.snakeoil.fd`
+  (541 KB, the TEST-KEY variable store), both carrying the `_FVH` volume signature and both now in
+  `~/Downloads/firmwares` beside the other samples. The classifier calls the volume `uefi-bios` unprompted.
+  **fwhunt on real bytes: 106 of 108 rules ran** — against 17 of 108 on the earlier whole-image-only probe — over
+  136 carved modules, and **11 matches**: `BRLY-2022-028 (RsbStuffingCheck)`, a MitigationFailure, across 11 modules.
+  First real matches this lane has produced. The reason keeps its denominator and its refusal: *"No match means the
+  known families were not found, never that the firmware is implant-free."*
+  **chipsec on the snakeoil VARS:** 1 volume, 1 EFI module, 1 NVRAM variable (`CustomMode`), and the posture degrades
+  exactly as designed — *"SecureBoot was not among them, so the state is not something this decode can say — it is
+  NOT a platform with Secure Boot off."* The honest-degradation branch, on real bytes, for the first time.
+  _This is the "corpus is the binding constraint" thesis paying out immediately: one sample turned a lane that could
+  only report its own limits into one that reports findings._
+- ▢ **`detectTestKey` is STILL unexercised, and the snakeoil store is why it is not.** The variable store chosen
+  precisely because it carries a test key surfaces only `CustomMode` to chipsec's offline decode — no PK, no KEK, no
+  db — so `testKey` came back `null` and the detector has still never fired on real bytes. That is chipsec's
+  extraction boundary rather than a defect here, and it means the test-key path needs either a vendor firmware dump
+  with a readable auth store or a different extraction route. Impact: medium — it is the one UEFI branch that
+  remains fixture-only now that the rest have real input.
 - ✅ **Per-module FwHunt pass** (2026-07-28) — `scan-firmware` alone ran 17 of 108 rules on a real EDK2/OVMF build; scanning the 125 carved modules takes it to 106. `scan-module` is an alias of `scan` with no rules dir and no target/volume-GUID test, so the corpus enumeration and filtering live in the provider, and a module-only match is graded one step down because the pass ignores the volume scoping the rule's author set. _Two pre-existing defects fell out of the real bytes: the output parser dropped every verdict of the one rule that actually triggers (its `meta.name` carries spaces and parens), and the rule index keyed on filename while the scanner prints `meta.name` — different for 5 of 108 rules._
 - ▢ **The 2 `target: bootloader` rules examine nothing in either pass.** The analyzer has `scan-bootloader`, but its input is an OS bootloader off an ESP (`bootmgfw.efi`, `grubx64.efi`), which FirmLab does not carve. Until it does, those rules are permanently inapplicable and the coverage note should keep saying so.
 - ✅ **The module budget is spent alphabetically** (2026-07-28, `22a7961`) — three keys now sit ahead of the name. How many of the rules this pass is about to offer actually name the module (normalised to lowercase alphanumerics; labels under 5 chars are not tested at all, since `Dxe`/`Pei`/`Smm` occur across most of the corpus and would rank every driver first), then privilege — SMM → boot cores → PEIM → runtime DXE → drivers → applications — read from three independent signals (the FFS type chipsec stamps into the directory name, the extension the analyzer appends, the EDK2 naming convention). **When the signals disagree it takes the MOST privileged**: over-ranking costs one slot, under-ranking costs the highest-privilege code in the image its only look. No signal is `unclassified`, never promoted on a hunch. The corpus arrives as an optional input so the function stays pure. _A path tiebreak was added and is load-bearing: the same driver can appear under one label in two volumes, and that tie previously fell through to V8's stable sort — which is carve order, the exact artifact the function exists to avoid._
