@@ -22,7 +22,7 @@ import { overview } from './overview';
 import { panels } from './panels';
 import { proofState } from './proofState';
 import { report } from './report';
-import { sections } from './sections';
+import { sectionIndex, sections } from './sections';
 import { settings } from './settings';
 import { shell } from './shell';
 import { simulation } from './simulation';
@@ -34,6 +34,7 @@ import { visuals } from './visuals';
 export const es: Messages = {
   common,
   nav,
+  sectionIndex,
   sections,
   proofState,
   settings,

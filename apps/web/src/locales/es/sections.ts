@@ -26,3 +26,15 @@ export const sections: Messages['sections'] = {
   opacidad: 'Escaneo autónomo',
   agent: 'Agente',
 };
+
+export const sectionIndex = {
+  heading: 'Todas las secciones',
+  intro:
+    'Todas las superficies de análisis de esta imagen, y todas alcanzables desde aquí. Diez sólo se alcanzaban escribiendo una URL — incluida Ficheros, que es la superficie que permite comprobar la evidencia de un hallazgo en vez de confiarla. No se oculta nada por conjeturar qué aplica a esta clase de dispositivo: ese enrutado vive en la API y una segunda copia aquí estaría a un commit de contradecirla.',
+  timelineNote: 'En el timeline de arriba',
+  urlOnly: 'sólo se alcanzaba por URL',
+  notRun:
+    'necesita un rootfs extraído, y la extracción no ha corrido — una afirmación sobre este banco, no sobre el firmware',
+  noRootfs:
+    'la extracción SÍ corrió y no produjo rootfs, así que esta sección no tiene nada que leer. Es una propiedad medida de esta imagen, no una etapa que nadie arrancó.',
+};

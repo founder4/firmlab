@@ -29,3 +29,15 @@ export const sections = {
   opacidad: 'Autonomous scan',
   agent: 'Agent',
 };
+
+export const sectionIndex = {
+  heading: 'All sections',
+  intro:
+    'Every analysis surface for this image, and every one of them reachable from here. Ten of these were reachable only by typing a URL — including Files, which is the surface that lets a finding’s evidence be checked instead of trusted. Nothing is hidden on a guess about which apply to this device class: that routing lives in the API and a second copy here would be one commit from disagreeing with it.',
+  timelineNote: 'In the step timeline above',
+  urlOnly: 'was reachable only by URL',
+  notRun:
+    'needs an extracted rootfs, and extraction has not run — a statement about this workbench, not about the firmware',
+  noRootfs:
+    'extraction RAN and produced no rootfs, so this section has nothing to read. That is a measured property of this image, not a stage nobody started.',
+};

@@ -43,6 +43,7 @@ import { PresetsPanel } from '../components/PresetsPanel';
 import { ReportBuilder } from '../components/ReportBuilder';
 import { RunHistory } from '../components/RunHistory';
 import { SbomGraph } from '../components/SbomGraph';
+import { SectionIndex } from '../components/SectionIndex';
 import { SignalCanvas } from '../components/SignalCanvas';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StepTimeline } from '../components/StepTimeline';
@@ -203,7 +204,7 @@ export function ImageDetail(): JSX.Element {
 
       <StepTimeline imageId={id} active={tab} ready={image.status === 'ready'} />
 
-      {tab === 'dossier' && <DossierPanel image={image} />}
+      {tab === 'dossier' && <DossierPanel image={image} sectionIds={SECTION_IDS} />}
       {tab === 'structure' && analysis && <StructurePanel analysis={analysis} />}
       {tab === 'entropy' && analysis && <EntropyPanel analysis={analysis} />}
       {/* Extraction: the carved rootfs and what it exposes — files + secrets in one place. */}
@@ -323,7 +324,7 @@ function CorpusRefRow({
   );
 }
 
-function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
+function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: readonly string[] }): JSX.Element {
   const id = image.id;
   const t = useMessages();
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -384,6 +385,13 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
   const refCount = refs ? refs.credentials.length + refs.components.length + refs.artifacts.length : 0;
 
   const ranKind = (kind: string): boolean => jobs.some((j) => j.kind === kind && j.status === 'done');
+  // The two facts the section index needs, and the only two: did extraction complete, and did it yield a rootfs.
+  // Read from the job's own result rather than inferred, so "ran and found none" cannot be mistaken for "not run".
+  const extractJob = jobs.find((j) => j.kind === 'extract' && j.status === 'done');
+  const extraction = {
+    ran: extractJob !== undefined,
+    rootfs: Boolean((extractJob?.result as { rootfsPath?: string | null } | null | undefined)?.rootfsPath),
+  };
   const triagedBinaries = binaries.filter((b) => b.triaged).length;
 
   const idn = image.identity;
@@ -520,6 +528,12 @@ function DossierPanel({ image }: { image: ImageSummary }): JSX.Element {
       {/* Measured rows and the assertions about them, in one table — including the contest an operator recorded
           against a computed row, annotated onto it without touching what code decided. */}
       <FindingsLedger findings={findings} />
+
+      {/* Every section, reachable. Ten of them had no link anywhere in the app and the shell's own hint pointed at a
+          timeline that cannot reach them. */}
+      <div className="panel" style={{ marginTop: 16 }}>
+        <SectionIndex imageId={image.id} sections={sectionIds} extraction={extraction} />
+      </div>
     </div>
   );
 }
