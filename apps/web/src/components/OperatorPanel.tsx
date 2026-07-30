@@ -28,6 +28,7 @@
  * claims — the superseded history heading and its note.
  */
 import { useCallback, useEffect, useState } from 'react';
+import { type AmendableFields, amendmentIsSendable, describeChangedFields, diffAmendment } from '../amend';
 import {
   type AssertedFinding,
   type AssertionRevision,
@@ -184,10 +185,145 @@ function AssertionHistory({ a }: { a: OperatorAssertion | undefined }): JSX.Elem
   );
 }
 
+/**
+ * The form that produces an amendment — the writer for a history this panel could already display.
+ *
+ * It opens pre-filled with what is stored, so the operator edits the claim rather than retyping it, and it will not
+ * send when nothing changed: `diffAmendment` decides that, and the two ways of changing nothing get their own
+ * sentence. The claim and severity are `select`s over the values the API accepts, because an assertion's claim
+ * decides what a reader may conclude from it and a free-text field there would let a typo become a provenance.
+ */
+function AmendForm({
+  f,
+  onCancel,
+  onDone,
+  onError,
+  imageId,
+}: {
+  f: AssertedFinding;
+  onCancel: () => void;
+  onDone: () => void;
+  onError: (m: string) => void;
+  imageId: string;
+}): JSX.Element {
+  const t = useMessages();
+  const current: AmendableFields = {
+    title: f.title,
+    claim: f.assertion?.claim ?? 'asserted_unverified',
+    rationale: f.rationale ?? '',
+    severity: f.severity,
+  };
+  const [next, setNext] = useState<AmendableFields>(current);
+  const [touched, setTouched] = useState<Set<keyof AmendableFields>>(new Set());
+  const [busy, setBusy] = useState(false);
+
+  const set = (k: keyof AmendableFields, v: string): void => {
+    setNext((n) => ({ ...n, [k]: v }));
+    setTouched((s) => new Set(s).add(k));
+  };
+
+  const diff = diffAmendment(current, next, touched);
+  const sendable = amendmentIsSendable(diff);
+
+  const save = async (): Promise<void> => {
+    if (!sendable) return;
+    setBusy(true);
+    try {
+      await api.amendAssertion(imageId, f.id, {
+        title: next.title.trim(),
+        claim: next.claim as OperatorClaim,
+        rationale: next.rationale.trim(),
+        severity: next.severity as Finding['severity'],
+      });
+      onDone();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div data-testid={`amend-${f.id}`} style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+      <strong style={{ fontSize: 12.5 }}>{t.operator.amend.heading}</strong>
+      <span className="hint" style={{ maxWidth: '72ch' }}>
+        {t.operator.amend.intro}
+      </span>
+      <label style={{ display: 'grid', gap: 4 }}>
+        <span className="hint">{t.operator.amend.fields.title}</span>
+        <input value={next.title} onChange={(e) => set('title', e.target.value)} aria-label="amend-title" />
+      </label>
+      <label style={{ display: 'grid', gap: 4 }}>
+        <span className="hint">{t.operator.amend.fields.claim}</span>
+        <select value={next.claim} onChange={(e) => set('claim', e.target.value)} aria-label="amend-claim">
+          {CLAIMS.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label style={{ display: 'grid', gap: 4 }}>
+        <span className="hint">{t.operator.amend.fields.rationale}</span>
+        <textarea
+          value={next.rationale}
+          rows={3}
+          onChange={(e) => set('rationale', e.target.value)}
+          aria-label="amend-rationale"
+        />
+      </label>
+      <label style={{ display: 'grid', gap: 4 }}>
+        <span className="hint">{t.operator.amend.fields.severity}</span>
+        <select value={next.severity} onChange={(e) => set('severity', e.target.value)} aria-label="amend-severity">
+          {SEVERITIES.map((sv) => (
+            <option key={sv} value={sv}>
+              {sv}
+            </option>
+          ))}
+        </select>
+      </label>
+      {/* The review line: an amendment the operator cannot see before sending is a change to a named person's claim
+          made blind. And when there is nothing to send, WHICH nothing it is gets its own sentence. */}
+      {sendable ? (
+        <span className="mono" data-role="changing" style={{ fontSize: 11.5 }}>
+          {t.operator.amend.changing(describeChangedFields(diff))}
+        </span>
+      ) : (
+        <span className="hint" data-role={`refusal-${diff.refusal}`} style={{ maxWidth: '72ch' }}>
+          {diff.refusal === 'retyped' ? t.operator.amend.retyped : t.operator.amend.untouched}
+        </span>
+      )}
+      <div style={{ display: 'flex', gap: 8 }}>
+        {/* Gated on the DIFF alone. An earlier version also required an author here and that was wrong twice: the
+            amend route deliberately does not accept one — `assertedBy` is carried over so an edit cannot reassign
+            authorship — and requiring it disabled the button for no reason the API asks for. */}
+        <button type="button" className="btn btn-sm" disabled={!sendable || busy} onClick={() => void save()}>
+          {t.operator.amend.save}
+        </button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>
+          {t.operator.amend.cancel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AssertionTable({
   rows,
   onWithdraw,
-}: { rows: AssertedFinding[]; onWithdraw?: (f: AssertedFinding) => void }): JSX.Element {
+  amend,
+}: {
+  rows: AssertedFinding[];
+  onWithdraw?: (f: AssertedFinding) => void;
+  /** Present only where amending is offered — the withdrawn ledger is history and must not be editable. */
+  amend?: {
+    openFor: string | null;
+    imageId: string;
+    setOpenFor: (id: string | null) => void;
+    onDone: () => void;
+    onError: (m: string) => void;
+  };
+}): JSX.Element {
   const t = useMessages();
   return (
     <div className="table-wrap" style={{ marginTop: 10 }}>
@@ -212,12 +348,33 @@ function AssertionTable({
                 <div className="hint">{f.attribution}</div>
                 {/* …and what it replaced, if anything, kept visibly apart from the claim that stands. */}
                 <AssertionHistory a={f.assertion} />
+                {amend?.openFor === f.id && (
+                  <AmendForm
+                    f={f}
+                    imageId={amend.imageId}
+                    onCancel={() => amend.setOpenFor(null)}
+                    onDone={() => {
+                      amend.setOpenFor(null);
+                      amend.onDone();
+                    }}
+                    onError={amend.onError}
+                  />
+                )}
               </td>
               <td style={{ width: '1%', whiteSpace: 'nowrap' }}>
                 <AssertedBadge f={f} />
               </td>
               {onWithdraw ? (
-                <td style={{ width: '1%' }}>
+                <td style={{ width: '1%', whiteSpace: 'nowrap' }}>
+                  {amend && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => amend.setOpenFor(amend.openFor === f.id ? null : f.id)}
+                    >
+                      {t.operator.amend.open}
+                    </button>
+                  )}
                   <button type="button" className="btn btn-sm btn-ghost" onClick={() => onWithdraw(f)}>
                     {t.operator.withdraw}
                   </button>
@@ -244,6 +401,9 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
   const [rationale, setRationale] = useState('');
   const [severity, setSeverity] = useState<Finding['severity']>('info');
   const [disputes, setDisputes] = useState('');
+
+  /** Which row's amend form is open. One at a time: two open forms editing one ledger invites a lost update. */
+  const [amendOpen, setAmendOpen] = useState<string | null>(null);
 
   const [noteAuthor, setNoteAuthor] = useState('');
   const [noteBody, setNoteBody] = useState('');
@@ -419,7 +579,17 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
         ) : null}
 
         {ledger && ledger.assertions.length > 0 ? (
-          <AssertionTable rows={ledger.assertions} onWithdraw={withdraw} />
+          <AssertionTable
+            rows={ledger.assertions}
+            onWithdraw={withdraw}
+            amend={{
+              openFor: amendOpen,
+              imageId,
+              setOpenFor: setAmendOpen,
+              onDone: load,
+              onError: setErr,
+            }}
+          />
         ) : (
           <div className="hint" style={{ marginTop: 12 }}>
             {t.operator.noAssertions}

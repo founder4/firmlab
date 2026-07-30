@@ -311,3 +311,93 @@ describe('OperatorPanel — notes are not findings', () => {
     expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
   });
 });
+
+/**
+ * The writer for a history this panel could already display. `api.amendAssertion` existed with the right shape, the
+ * route existed, `revisionsOf` rendered every superseded revision — and nothing in the app could produce one.
+ */
+describe('amending an assertion — the ledger gets a writer, and refuses a change that is not one', () => {
+  const assertion = {
+    id: 'f1',
+    title: 'The telnet daemon is compiled out of this build',
+    severity: 'medium' as const,
+    rationale: 'I read the applet table on the retail unit.',
+    attribution: 'Asserted by aaron on 2026-07-30 (asserted_from_device).',
+    provenance: 'operator_assertion' as const,
+    assertion: {
+      assertedBy: 'aaron',
+      assertedAt: 1_780_000_000_000,
+      claim: 'asserted_from_device' as const,
+      status: 'active' as const,
+      authorKind: 'human' as const,
+    },
+  };
+
+  beforeEach(() => {
+    setLocale('en');
+    mockedApi(api).operatorLedger.mockResolvedValue({ assertions: [assertion], withdrawn: [] });
+    mockedApi(api).notes.mockResolvedValue([]);
+    mockedApi(api).amendAssertion.mockResolvedValue(undefined as never);
+  });
+
+  it('offers an Amend action and opens a form pre-filled with what is stored', async () => {
+    render(<OperatorPanel imageId="abc" />);
+    fireEvent.click(await screen.findByText('Amend'));
+    const form = await screen.findByTestId('amend-f1');
+    expect(form).toBeTruthy();
+    expect((screen.getByLabelText('amend-title') as HTMLInputElement).value).toBe(assertion.title);
+    expect((screen.getByLabelText('amend-rationale') as HTMLTextAreaElement).value).toBe(assertion.rationale);
+  });
+
+  it('will not send an untouched form, and says why in its own words', async () => {
+    render(<OperatorPanel imageId="abc" />);
+    fireEvent.click(await screen.findByText('Amend'));
+    await screen.findByTestId('amend-f1');
+    expect(document.querySelector('[data-role="refusal-untouched"]')).toBeTruthy();
+    expect(screen.getByText('Save amendment').getAttribute('disabled')).not.toBeNull();
+    fireEvent.click(screen.getByText('Save amendment'));
+    expect(mockedApi(api).amendAssertion).not.toHaveBeenCalled();
+  });
+
+  /** Same values as untouched, different event, different sentence — the distinction the pure diff exists for. */
+  it('says a field retyped to the same text is not the same as having edited nothing', async () => {
+    render(<OperatorPanel imageId="abc" />);
+    fireEvent.click(await screen.findByText('Amend'));
+    await screen.findByTestId('amend-f1');
+    // Typed away and typed back — which is what retyping IS, and the only way to express it here: fireEvent.change
+    // with the value already in the DOM fires no React onChange at all, so a single same-value change would have
+    // tested nothing and passed as "untouched".
+    const box = screen.getByLabelText('amend-rationale');
+    fireEvent.change(box, { target: { value: 'something else entirely' } });
+    fireEvent.change(box, { target: { value: assertion.rationale } });
+    expect(document.querySelector('[data-role="refusal-retyped"]')).toBeTruthy();
+    expect(document.querySelector('[data-role="refusal-untouched"]')).toBeNull();
+    expect(mockedApi(api).amendAssertion).not.toHaveBeenCalled();
+  });
+
+  it('names the fields it is about to change before sending, and sends the trimmed values', async () => {
+    render(<OperatorPanel imageId="abc" />);
+    fireEvent.click(await screen.findByText('Amend'));
+    await screen.findByTestId('amend-f1');
+    fireEvent.change(screen.getByLabelText('amend-rationale'), { target: { value: '  I re-read it: it ships.  ' } });
+    fireEvent.change(screen.getByLabelText('amend-severity'), { target: { value: 'high' } });
+    expect(document.querySelector('[data-role="changing"]')?.textContent).toMatch(/rationale, severity/);
+    fireEvent.click(screen.getByText('Save amendment'));
+    await waitFor(() => expect(mockedApi(api).amendAssertion).toHaveBeenCalled());
+    const [, findingId, body] = mockedApi(api).amendAssertion.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(findingId).toBe('f1');
+    expect(body.rationale).toBe('I re-read it: it ships.');
+    expect(body.severity).toBe('high');
+  });
+
+  it('does NOT offer amending on the withdrawn ledger, which is history and stands as written', async () => {
+    mockedApi(api).operatorLedger.mockResolvedValue({ assertions: [], withdrawn: [assertion] });
+    render(<OperatorPanel imageId="abc" />);
+    await waitFor(() => expect(screen.queryByText(assertion.title)).toBeTruthy());
+    expect(screen.queryByText('Amend')).toBeNull();
+  });
+});

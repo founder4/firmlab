@@ -53,6 +53,21 @@ export const operator: Messages['operator'] = {
     claim: 'Afirmación',
     provenance: 'Procedencia',
   },
+  amend: {
+    open: 'Enmendar',
+    cancel: 'Cancelar',
+    save: 'Guardar enmienda',
+    heading: 'Enmendar esta afirmación',
+    intro:
+      'Esto sustituye la afirmación tal como está. La original se conserva en el registro como revisión sustituida —no se borra nada— y la fila dirá que fue enmendada.',
+    fields: { title: 'Título', claim: 'Afirmación', rationale: 'Fundamento', severity: 'Gravedad' },
+    changing: (fields) => `Se cambia: ${fields}`,
+    untouched:
+      'No se editó nada, así que no hay nada que enmendar. Enviarlo empujaría la afirmación actual al historial y la reemplazaría por una idéntica, que es fabricar una revisión a partir de un envío de formulario.',
+    retyped:
+      'Todos los campos volvieron idénticos a lo que ya está guardado. La pregunta se hizo y la respuesta es que la afirmación no cambia, así que no se registra ninguna revisión — que no es lo mismo que no haber editado nada.',
+    who: 'Enmendando como',
+  },
   withdraw: 'Retirar',
   withdrawnBadge: 'retirada',
   withdrawnHeading: (n: number) => `Retiradas (${n})`,

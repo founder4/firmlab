@@ -54,6 +54,26 @@ export const operator = {
     claim: 'Claim',
     provenance: 'Provenance',
   },
+  /**
+   * Amending an assertion supersedes a claim a named person made, so the panel says what it is about to change and
+   * refuses a change that is not one. The two refusals are separate sentences on purpose: someone who retyped a
+   * rationale character-for-character is told that, not told they did nothing.
+   */
+  amend: {
+    open: 'Amend',
+    cancel: 'Cancel',
+    save: 'Save amendment',
+    heading: 'Amend this assertion',
+    intro:
+      'This supersedes the claim as it stands. The original is kept in the ledger as a superseded revision — nothing is deleted — and the row will say it was amended.',
+    fields: { title: 'Title', claim: 'Claim', rationale: 'Rationale', severity: 'Severity' },
+    changing: (fields: string) => `Changing: ${fields}`,
+    untouched:
+      'Nothing was edited, so there is nothing to amend. Submitting would push the current claim into the history and replace it with an identical one, which manufactures a revision out of a form submit.',
+    retyped:
+      'Every field came back identical to what is already stored. The question was asked and the answer is that the claim does not change, so no revision is recorded — that is not the same as having edited nothing.',
+    who: 'Amending as',
+  },
   withdraw: 'Withdraw',
   withdrawnBadge: 'withdrawn',
   withdrawnHeading: (n: number) => `Withdrawn (${n})`,
