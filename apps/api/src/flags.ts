@@ -49,6 +49,16 @@ export interface ToggleableFlag {
   requires?: LaneFlagName;
   /** Flipping this changes what the deployment does to things outside itself. */
   outward: boolean;
+  /**
+   * The lane is ON when nobody has said otherwise. Absent (the normal case) means absence ⇒ off, which is what
+   * "with every flag off: no network" rests on.
+   *
+   * Only a flag whose ON state is the CLOSED one may set this, and it exists because the alternative was a
+   * deployment whose emulated guest reached the internet with every lane switched off. Setting it makes the flag
+   * an opt-OUT among opt-ins, which is a real cost — it is paid here rather than in the product's headline claim,
+   * and `decideFlag` reports whether anyone stated a value so an operator is never shown a default as a choice.
+   */
+  defaultOn?: boolean;
 }
 
 /**
@@ -62,15 +72,26 @@ export const TOGGLEABLE_FLAGS: readonly ToggleableFlag[] = [
   { name: 'FIRMLAB_HASH_LOOKUP', requires: 'FIRMLAB_RESEARCH', outward: true },
   { name: 'FIRMLAB_CAPTURE', outward: true },
   { name: 'FIRMLAB_CAPTURE_GATEWAY', requires: 'FIRMLAB_CAPTURE', outward: false },
-  // The one flag here whose OFF state is the outward one, and the table must not hide that.
+  // The one flag here whose OFF state is the outward one, and the table must not hide that. It is also the only
+  // one that defaults ON, and the two facts are the same fact.
   //
-  // Every other lane is "off ⇒ nothing leaves", so a flag named for the egress would have had to default ON to
-  // preserve today's behaviour — an opt-OUT switch in a list of opt-ins, which is the shape an operator misreads.
-  // This is named for what turning it on DOES: it isolates the guest. `outward: false` is therefore literal —
-  // enabling it sends nothing anywhere, it stops something being sent — and the honesty lives in the prose, which
-  // has to say plainly that the emulated firmware reaches the internet while this is off. See `providers/egress.ts`
-  // for the measurement that makes the default defensible: the attempt is recorded either way.
-  { name: 'FIRMLAB_EMU_ISOLATE', outward: false },
+  // It shipped defaulting OFF, on the argument that a flag named for the egress would have had to default ON to
+  // preserve behaviour — an opt-OUT switch in a list of opt-ins, which is the shape an operator misreads. The cost
+  // of that choice was that *"with every flag off: no network, no cost, deterministic behaviour"* was FALSE by
+  // default: a booted TP-Link WDR3600 reached three public NTP servers from a deployment with every lane off.
+  //
+  // What the original note said should decide it was whether any rung DEPENDS on outbound, and the corpus has now
+  // answered. Two full-system boots of the same WDR3600 image sixteen minutes apart, one open and one isolated,
+  // recorded the SAME 15 external attempts and the SAME `confirmed_full_system` verdict; across every recorded
+  // full-system boot only that one image ever addressed anything external at all. Isolation costs no rung
+  // anything, and it confirms on real bytes what `providers/egress.ts` had only asserted: blocking the traffic
+  // does not hide the attempt, because `filter-dump` captures the frame before slirp decides its fate.
+  //
+  // So the default is now ON and the misreadable shape is accepted, because the alternative is a false headline.
+  // `outward: false` stays literal — enabling this sends nothing anywhere, it stops something being sent — which
+  // means the outward act is now switching it OFF, and `decideFlag` exists so that act is never confused with
+  // nobody having chosen.
+  { name: 'FIRMLAB_EMU_ISOLATE', outward: false, defaultOn: true },
 ];
 
 const ALLOWED: ReadonlySet<string> = new Set<string>(TOGGLEABLE_FLAGS.map((f) => f.name));
@@ -92,6 +113,45 @@ export function setFlagOverrideProvider(fn: OverrideProvider): void {
 /** The environment as the lane loaders should see it: the process environment with stored overrides on top. */
 export function effectiveEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return { ...base, ...provider() };
+}
+
+/**
+ * What a lane's value is, and whether anybody actually chose it.
+ *
+ * `stated` is the whole reason this is not a boolean. Once a flag may default ON, `enabled === true` covers two
+ * different situations — nobody said anything and the catalogue decided, or an operator asked for it — and a
+ * caller that cannot tell them apart will report a default back to the person as though it were their choice. The
+ * dangerous direction is the other one: `enabled === false` on `FIRMLAB_EMU_ISOLATE` can ONLY happen because
+ * someone explicitly opened the guest's network, and a log line that says so is the difference between a
+ * deliberate decision and a deployment quietly letting a firmware phone home.
+ *
+ * This is the same separation the rest of the codebase keeps between "the question was never asked" and "the
+ * question was asked and the answer was nothing" — here applied to configuration rather than to findings.
+ */
+export interface FlagDecision {
+  enabled: boolean;
+  /** True when the merged environment names this flag at all. False = nobody stated a value. */
+  stated: boolean;
+  /** The stated value verbatim, or null when nothing stated one. `'0'` and `'anything-else'` are both off. */
+  statedValue: string | null;
+  /** True when the value came from the catalogue's `defaultOn` rather than from anyone. */
+  byDefault: boolean;
+}
+
+/**
+ * Pure: decide one lane against an already-merged environment (`effectiveEnv()`), honouring `defaultOn`.
+ *
+ * Takes the merged environment rather than env+overrides because the callers that need this are the lane loaders,
+ * for which the two are one thing; `resolveFlags` keeps them apart because the settings UI has to report which of
+ * the two won.
+ */
+export function decideFlag(name: LaneFlagName, env: NodeJS.ProcessEnv): FlagDecision {
+  const raw = env[name];
+  if (raw === undefined) {
+    const byDefault = TOGGLEABLE_FLAGS.find((f) => f.name === name)?.defaultOn === true;
+    return { enabled: byDefault, stated: false, statedValue: null, byDefault };
+  }
+  return { enabled: raw === '1', stated: true, statedValue: raw, byDefault: false };
 }
 
 /** Where a flag's effective value came from — an operator who set it in compose and sees it off deserves to know. */
@@ -130,10 +190,17 @@ export function resolveFlags(
   locale: Locale = 'en',
 ): FlagState[] {
   const text = messages(locale).flags;
-  const on = (name: string): boolean => (overrides[name] ?? env[name]) === '1';
+  const defaultOnOf = (name: string): boolean => TOGGLEABLE_FLAGS.find((f) => f.name === name)?.defaultOn === true;
+  // A stated value wins; nothing stated falls to the catalogue. Reading `=== '1'` directly — as this did — makes
+  // absence mean OFF for every flag, which silently un-does `defaultOn` for the one flag that has it and would have
+  // shown the isolation switch as off in Settings while the emulator was in fact isolating.
+  const on = (name: string): boolean => {
+    const raw = overrides[name] ?? env[name];
+    return raw === undefined ? defaultOnOf(name) : raw === '1';
+  };
   return TOGGLEABLE_FLAGS.map((f) => {
     const overridden = Object.hasOwn(overrides, f.name);
-    const environmentValue = env[f.name] === '1';
+    const environmentValue = env[f.name] === undefined ? defaultOnOf(f.name) : env[f.name] === '1';
     const enabled = on(f.name);
     return {
       ...f,

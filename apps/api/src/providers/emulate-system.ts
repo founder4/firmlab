@@ -53,10 +53,10 @@ import path from 'node:path';
 import tls from 'node:tls';
 import { promisify } from 'node:util';
 import type { Architecture, ProofState } from '@firmlab/core';
-import { type LaneFlagName, effectiveEnv } from '../flags.js';
+import { type LaneFlagName, decideFlag, effectiveEnv } from '../flags.js';
 import { detectTools } from '../tools.js';
 import { type BootDiagnosis, diagnoseUnreachable } from './boot-diagnose.js';
-import { type EgressObservation, describeEgress, mergeEgress, parseEgress } from './egress.js';
+import { type EgressObservation, describeEgress, describeEgressPolicy, mergeEgress, parseEgress } from './egress.js';
 import type { JobHandle } from './jobs.js';
 import { readPortMap } from './portmap-run.js';
 import { type PortProtocol, planForwards } from './portmap.js';
@@ -1511,12 +1511,12 @@ export async function runFullSystem(
   // The egress policy for THIS run, resolved once and logged, because it is the fact that tells a reader whether
   // an address below was merely addressed or actually reached. Read through `effectiveEnv` so the Settings toggle
   // reaches it without a restart, exactly as the other lanes do.
-  const isolate = effectiveEnv()[EMU_ISOLATE_FLAG] === '1';
-  handle.log(
-    isolate
-      ? `${EMU_ISOLATE_FLAG}=1: the guest is cut off with restrict=on. Host→guest forwards still work, and what the firmware tries to reach is still recorded.`
-      : `${EMU_ISOLATE_FLAG} is off: this guest can reach the internet from this host. Everything it addresses is recorded either way; turn the flag on in Settings to keep the observation and drop the reachability.`,
-  );
+  // `decideFlag`, not `=== '1'`: this flag defaults ON, and reading the raw value would make an unconfigured
+  // deployment permissive — which is the defect this replaced. It also separates the three outcomes, because
+  // "cut off because nobody chose" and "open because somebody chose" are not the same sentence.
+  const egressPolicy = decideFlag(EMU_ISOLATE_FLAG, effectiveEnv());
+  const isolate = egressPolicy.enabled;
+  handle.log(describeEgressPolicy(EMU_ISOLATE_FLAG, egressPolicy));
 
   // A FRESH host port per forward, asked of the OS EVERY pass, rather than a fixed 8080. This is not tidiness:
   // `pkill` is absent in this deployment so the stray sweep never ran, an earlier run's qemu could still hold 8080,

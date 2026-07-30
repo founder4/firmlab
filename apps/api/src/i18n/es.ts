@@ -526,7 +526,7 @@ export const es: Messages = {
       effect:
         'Añade `restrict=on` a la red del guest emulado, de modo que un firmware arrancado bajo emulación de sistema completo deja de alcanzar nada más allá del emulador. Los reenvíos host→guest siguen funcionando, así que el peldaño sigue llegando a sus propios servicios. El guest sigue viendo un gateway que responde, así que obtiene timeouts en lugar de «red no disponible» — un firmware se comporta más como de costumbre con esto que con el enlace caído.',
       egress:
-        'MIENTRAS ESTO ESTÉ APAGADO, UN FIRMWARE QUE ESTÁS ANALIZANDO PUEDE ALCANZAR INTERNET DESDE ESTA MÁQUINA. Medido sobre este corpus: un TP-Link WDR3600 arrancado alcanzó tres servidores NTP públicos. Encenderlo no envía nada a ninguna parte — impide que el guest envíe. En ambos casos se registra y se muestra lo que el firmware INTENTÓ alcanzar: bloquear el tráfico no oculta el intento.',
+        'ENCENDIDO POR OMISIÓN — es el único interruptor de aquí que se APAGA para dejar salir algo, y apagarlo permite que UN FIRMWARE QUE ESTÁS ANALIZANDO ALCANCE INTERNET DESDE ESTA MÁQUINA. Medido sobre este corpus: un TP-Link WDR3600 arrancado alcanzó tres servidores NTP públicos cuando apagado era lo de serie. El valor por omisión se invirtió después de medir su coste: la misma imagen arrancada abierta y aislada registró los mismos 15 intentos externos y el mismo veredicto, así que ningún peldaño de análisis depende de la salida. En ambos casos se registra y se muestra lo que el firmware INTENTÓ alcanzar: bloquear el tráfico no oculta el intento.',
     },
   },
 };

@@ -6,6 +6,7 @@ import {
   EMPTY_EGRESS,
   type EgressObservation,
   describeEgress,
+  describeEgressPolicy,
   mergeEgress,
   parseDnsQName,
   parseEgress,
@@ -498,5 +499,49 @@ describe('parseEgress — the guest answering is not the guest asking', () => {
       opts,
     );
     expect(mergeEgress(old, fresh)?.answeredFrames).toBe(1);
+  });
+});
+
+/**
+ * The policy sentence, which is logged BEFORE any frame exists and is therefore the only thing a reader has to
+ * tell a deliberately-opened guest from an unconfigured one. Three outcomes; the third used to be the default and
+ * read like a footnote.
+ */
+describe('describeEgressPolicy — three outcomes, and the open one is now an act', () => {
+  const F = 'FIRMLAB_EMU_ISOLATE';
+
+  it('says the isolation is the default, and that nobody had to ask for it', () => {
+    const s = describeEgressPolicy(F, { enabled: true, stated: false, byDefault: true });
+    expect(s).toMatch(/the default, which nobody had to ask for/i);
+    expect(s).toMatch(/restrict=on/);
+    // It must not print `FLAG=1`, which would present a default as the operator's own setting.
+    expect(s).not.toContain(`${F}=1`);
+  });
+
+  it('names the flag when the isolation WAS asked for — same policy, different provenance', () => {
+    const asked = describeEgressPolicy(F, { enabled: true, stated: true, byDefault: false });
+    const byDefault = describeEgressPolicy(F, { enabled: true, stated: false, byDefault: true });
+    expect(asked).toContain(`${F}=1`);
+    expect(asked).toMatch(/explicitly asked/i);
+    // The pair is the point: both are isolated and the sentences are not interchangeable.
+    expect(asked).not.toBe(byDefault);
+  });
+
+  it('reads an open guest as a decision, never as an absence of one', () => {
+    const s = describeEgressPolicy(F, { enabled: false, stated: true, byDefault: false });
+    expect(s).toMatch(/CAN reach the internet/i);
+    expect(s).toMatch(/explicitly OFF/);
+    // The load-bearing clause: this state is unreachable by default, so it cannot be read as "not configured".
+    expect(s).toMatch(/Nothing arrives at this state by default/i);
+  });
+
+  it('keeps the recorded-either-way promise in every one of the three, since the panel relies on it', () => {
+    for (const d of [
+      { enabled: true, stated: false, byDefault: true },
+      { enabled: true, stated: true, byDefault: false },
+      { enabled: false, stated: true, byDefault: false },
+    ]) {
+      expect(describeEgressPolicy(F, d)).toMatch(/recorded either way|is recorded|still recorded/i);
+    }
   });
 });

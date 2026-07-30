@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { TOGGLEABLE_FLAGS, effectiveEnv, isToggleableFlag, resolveFlags, setFlagOverrideProvider } from './flags.js';
+import {
+  TOGGLEABLE_FLAGS,
+  decideFlag,
+  effectiveEnv,
+  isToggleableFlag,
+  resolveFlags,
+  setFlagOverrideProvider,
+} from './flags.js';
 
 const env = (o: Record<string, string>): NodeJS.ProcessEnv => o as NodeJS.ProcessEnv;
 const find = (states: ReturnType<typeof resolveFlags>, name: string) => {
@@ -80,30 +87,95 @@ describe('resolveFlags is localised in its prose and identical in everything els
    * between an operator and a firmware that reaches the internet from their machine. Both languages have to say
    * that plainly, in the `egress` line, which is what a reader consults BEFORE flipping a switch.
    */
-  describe('FIRMLAB_EMU_ISOLATE — the inverted flag', () => {
-    it('is off by default, which is the permissive direction, and reports that as the default', () => {
+  describe('FIRMLAB_EMU_ISOLATE — the inverted flag, and the only one that defaults ON', () => {
+    /**
+     * This assertion was the exact inverse until 2026-07-30, and it passed: the suite pinned a default that made
+     * *"with every flag off: no network"* false, because the fixture and the code were written from the same
+     * assumption. What flipped it was not a preference — it was measuring that no rung depends on outbound.
+     */
+    it('is ON when nobody has said anything, and reports that as the default rather than as a choice', () => {
       const f = find(resolveFlags(env({}), {}), 'FIRMLAB_EMU_ISOLATE');
-      expect(f.enabled).toBe(false);
+      expect(f.enabled).toBe(true);
       expect(f.source).toBe('default');
-      // Turning it ON sends nothing anywhere — it stops the guest sending — so it is not an outward switch.
+      // Turning it ON sends nothing anywhere — it stops the guest sending — so it is not an outward switch. The
+      // outward act is turning it OFF, which is why it is the one flag that may default on.
       expect(f.outward).toBe(false);
     });
 
-    it('warns, in both languages, that the emulated firmware reaches the internet while it is off', () => {
+    it('is the ONLY flag allowed to default on — every other lane stays absence ⇒ off', () => {
+      const on = TOGGLEABLE_FLAGS.filter((f) => f.defaultOn === true).map((f) => f.name);
+      expect(on).toEqual(['FIRMLAB_EMU_ISOLATE']);
+      for (const f of resolveFlags(env({}), {})) {
+        if (f.name !== 'FIRMLAB_EMU_ISOLATE') expect(f.enabled).toBe(false);
+      }
+    });
+
+    it('warns, in both languages, that turning it off lets the emulated firmware reach the internet', () => {
       const en = find(resolveFlags(env({}), {}, 'en'), 'FIRMLAB_EMU_ISOLATE');
       const es = find(resolveFlags(env({}), {}, 'es'), 'FIRMLAB_EMU_ISOLATE');
-      expect(en.egress).toContain('CAN REACH THE INTERNET');
-      expect(es.egress).toContain('PUEDE ALCANZAR INTERNET');
-      // And both state the property that makes a permissive default defensible: the attempt is recorded anyway.
+      expect(en.egress).toContain('REACH THE INTERNET');
+      expect(es.egress).toContain('ALCANCE INTERNET');
+      // Both must say it is on by default, or a reader consulting this line before flipping the switch would
+      // still believe absence means permissive.
+      expect(en.egress).toMatch(/ON BY DEFAULT/);
+      expect(es.egress).toMatch(/ENCENDIDO POR OMISIÓN/);
+      // And both keep the property that makes the observation trustworthy either way.
       expect(en.egress).toMatch(/does not hide the attempt/i);
       expect(es.egress).toMatch(/no oculta el intento/i);
     });
 
-    it('takes an override, so the operator can cut the guest off without a restart', () => {
+    it('takes an override of 0, which is now the only way a guest gets outbound', () => {
+      const f = find(resolveFlags(env({}), { FIRMLAB_EMU_ISOLATE: '0' }), 'FIRMLAB_EMU_ISOLATE');
+      expect(f.enabled).toBe(false);
+      expect(f.source).toBe('override');
+      // What the environment would say without the override: on. An operator who removes it gets isolation back.
+      expect(f.environmentValue).toBe(true);
+    });
+
+    it('still honours a stored override of 1, so a deployment that set it keeps meaning what it meant', () => {
+      // Not decoration: a real deployment had FIRMLAB_EMU_ISOLATE=1 stored as an override when the default was
+      // flipped. That row has to keep resolving to isolation rather than quietly becoming a contradiction.
       const f = find(resolveFlags(env({}), { FIRMLAB_EMU_ISOLATE: '1' }), 'FIRMLAB_EMU_ISOLATE');
       expect(f.enabled).toBe(true);
       expect(f.source).toBe('override');
-      expect(f.environmentValue).toBe(false);
+    });
+  });
+
+  /**
+   * `decideFlag` exists because `enabled` alone conflates two situations once a flag may default on, and the
+   * codebase's whole discipline is that "nobody asked" and "asked, and the answer was no" are different facts.
+   */
+  describe('decideFlag separates the default from a decision', () => {
+    it('reports an unstated defaulting-on flag as enabled, unstated, and by default', () => {
+      const d = decideFlag('FIRMLAB_EMU_ISOLATE', {});
+      expect(d).toEqual({ enabled: true, stated: false, statedValue: null, byDefault: true });
+    });
+
+    it('reports an explicit 1 as enabled but NOT by default — same boolean, different fact', () => {
+      const d = decideFlag('FIRMLAB_EMU_ISOLATE', { FIRMLAB_EMU_ISOLATE: '1' });
+      expect(d.enabled).toBe(true);
+      expect(d.stated).toBe(true);
+      expect(d.byDefault).toBe(false);
+      // The pair that matters: both are `enabled`, and only one of them is somebody's choice.
+      expect(decideFlag('FIRMLAB_EMU_ISOLATE', {}).enabled).toBe(d.enabled);
+      expect(decideFlag('FIRMLAB_EMU_ISOLATE', {}).byDefault).not.toBe(d.byDefault);
+    });
+
+    it('reports an explicit 0 as a stated decision, which is the only route to an open guest', () => {
+      const d = decideFlag('FIRMLAB_EMU_ISOLATE', { FIRMLAB_EMU_ISOLATE: '0' });
+      expect(d).toEqual({ enabled: false, stated: true, statedValue: '0', byDefault: false });
+    });
+
+    it('treats a non-"1" value as off and keeps it verbatim, so a typo is visible rather than guessed', () => {
+      const d = decideFlag('FIRMLAB_EMU_ISOLATE', { FIRMLAB_EMU_ISOLATE: 'true' });
+      expect(d.enabled).toBe(false);
+      expect(d.statedValue).toBe('true');
+      expect(d.stated).toBe(true);
+    });
+
+    it('leaves a flag with no defaultOn off when unstated, and says nobody stated it', () => {
+      const d = decideFlag('FIRMLAB_RESEARCH', {});
+      expect(d).toEqual({ enabled: false, stated: false, statedValue: null, byDefault: false });
     });
   });
 

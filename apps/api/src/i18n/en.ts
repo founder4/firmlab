@@ -550,7 +550,7 @@ export const en = {
       effect:
         'Adds `restrict=on` to the emulated guest’s network, so a firmware booted under full-system emulation can no longer reach anything beyond the emulator. Host→guest forwards keep working, so the rung still reaches its own services. The guest keeps seeing a gateway that answers, so it gets timeouts rather than “network unreachable” — a firmware behaves closer to normal under this than under a dead link.',
       egress:
-        'WHILE THIS IS OFF, A FIRMWARE YOU ARE ANALYSING CAN REACH THE INTERNET FROM THIS MACHINE. Measured on this corpus: a booted TP-Link WDR3600 reached three public NTP servers. Turning it on sends nothing anywhere — it stops the guest sending. Either way, what the firmware TRIED to reach is recorded and shown: blocking the traffic does not hide the attempt.',
+        'ON BY DEFAULT — this is the one switch here you turn OFF to let something out, and turning it off lets A FIRMWARE YOU ARE ANALYSING REACH THE INTERNET FROM THIS MACHINE. Measured on this corpus: a booted TP-Link WDR3600 reached three public NTP servers back when off was the default. The default was flipped after measuring the cost: the same image booted open and isolated recorded the same 15 external attempts and the same verdict, so no analysis rung depends on outbound. Either way, what the firmware TRIED to reach is recorded and shown — blocking the traffic does not hide the attempt.',
     },
   } satisfies Record<LaneFlagName, { label: string; effect: string; egress: string }>,
 };

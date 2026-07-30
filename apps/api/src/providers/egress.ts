@@ -407,6 +407,30 @@ export function mergeEgress(a: EgressObservation | null, b: EgressObservation | 
 }
 
 /**
+ * Pure: the sentence stating this run's egress POLICY, before any frame is captured.
+ *
+ * Three outcomes, not two, and the third is the one that used to be invisible. `isolated` alone cannot tell a
+ * reader whether the guest is cut off because that is the policy of a deployment nobody configured, or because an
+ * operator asked for it — and, far more importantly, an OPEN guest can now only happen because somebody explicitly
+ * opened it. That used to be the silent default, so the sentence for it was written as a mild note; it is now a
+ * deliberate act and reads like one.
+ *
+ * Structural parameter rather than the `FlagDecision` type, so this module keeps importing nothing at all.
+ */
+export function describeEgressPolicy(
+  flag: string,
+  d: { enabled: boolean; stated: boolean; byDefault: boolean },
+): string {
+  if (d.enabled && d.byDefault) {
+    return 'The guest is cut off with restrict=on — the default, which nobody had to ask for. Host→guest forwards still work, so this rung still reaches its own services, and what the firmware tries to reach is recorded either way: blocking a frame does not hide the attempt.';
+  }
+  if (d.enabled) {
+    return `${flag}=1: the guest is cut off with restrict=on, as this deployment explicitly asked. Host→guest forwards still work, and what the firmware tries to reach is still recorded.`;
+  }
+  return `${flag} is explicitly OFF, so this guest CAN reach the internet from this host — a firmware under analysis may phone home during this run. Nothing arrives at this state by default; it was set. Everything the guest addresses is recorded either way; clear it in Settings to keep the observation and drop the reachability.`;
+}
+
+/**
  * Pure: the sentence a reader gets. It never says "the firmware contacted X" — under isolation nothing was
  * reached, and without it a SYN into a black hole still looks exactly like this from the sending side.
  */
