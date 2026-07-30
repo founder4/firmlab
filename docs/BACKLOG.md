@@ -531,11 +531,37 @@ the first one makes a gap read as a clean result and the second is merely missin
   exact before substring, and PRINTS which it clicked. The other finding — that it truncates the visible text it
   reports, mid-sentence, unmarked — is still open above. **Two false negatives from the loop's own instrument in
   two iterations is itself the finding:** everything this loop claims to have seen was seen through it.
-- ▢ **Four sections with no link anywhere in the app**: `structure`, `files`, `hardware`, `compmap` — reachable
-  only by typing a URL. The costliest is `files`, whose own comment calls it *"the surface that lets a finding's
-  evidence be checked instead of trusted"*. `overview` is a dead id that `resolveSection` remaps to `dossier`
-  while the step timeline still navigates to it.
-- ▢ **Per-binary hardening is collected and never shown.** `BinaryEntry` carries `nx`, `canary`, `pic`, `bits`,
+- ✅ **Sections with no link anywhere in the app — and there were TEN, not four** (2026-07-30, `8457011`).
+  Measured: the app had exactly THREE places that navigate to a section — the step timeline's 8 steps, one link to
+  `operator`, one to `dossier` — against 20 sections in `SECTION_IDS`. URL-only: `structure`, `files`, `secrets`,
+  `hardware`, `compmap`, `deepscans`, `testbench`, `diff`, `opacidad`, `agent`. This entry named four and did not
+  count `secrets` or `testbench` at all. A `SectionIndex` on the dossier now links every one of them.
+  **And the shell's own hint was half the defect**: *"Navigate the analysis from the step timeline at the top of the
+  page"* pointed at a control reaching 8 of 19. A hint that answers the question wrongly is worse than none — it is
+  not only that the link was missing, it is that the shell said where to look and it was not there. Corrected in
+  both languages, and it now names the count.
+  **What the index refuses to do**: decide which sections a device CLASS routes to. That mapping exists once in
+  `specsForClass`, and a second copy in the web would be two lists of the same thing one commit from disagreeing —
+  the trap this codebase already names about its own `SECTION_TITLES`. Everything is listed and reachable for every
+  image; nothing is hidden on a guess. What the rows DO say is why a section may be empty on arrival, from the two
+  facts the page already holds — and `extraction-not-run` is kept apart from `extraction-found-no-rootfs`, because
+  collapsing them sends an operator to run an extraction that already ran. A section with no rootfs is still LINKED:
+  reachability was the defect, and locking it would trade an unreachable panel for a needlessly closed one.
+  `overview` is omitted — a dead id `resolveSection` remaps to `dossier`, and listing it would offer two links to
+  one page and imply a section that does not exist.
+  Validated on the deployed build (0 console errors): DVRF `/dossier` renders **19 linked sections**, `files` reads
+  `ready`; the Pico RP2040 — extraction ran, no rootfs — renders `files`/`secrets`/`testbench` as
+  `extraction-found-no-rootfs` with *"That is a measured property of this image, not a stage nobody started"*, while
+  `entropy` stays `ready` because it does not read the rootfs. _One defect of my own, visible only by looking: I
+  appended the index at the END of the dossier, i.e. below a 110-row findings ledger, 16,500 px down. An index
+  nobody scrolls to is an index that does not exist — the defect it exists to fix, reintroduced by its position. It
+  is now at 312 px of an 8,480 px page._
+- ▢ **The step timeline still covers 8 of the 19 sections, and it is the primary navigation.** Surfaced 2026-07-30
+  while closing the entry above, not implemented. The index makes everything reachable, but the timeline is what a
+  reader uses to move through an analysis and it stops at `findings` — `deepscans`, `testbench`, `opacidad`,
+  `operator` and `diff` are all stages of real work that never appear in the sequence. Whether they belong there is
+  a design question (the timeline models the ANALYSIS pipeline, not the section list), which is exactly why it
+  should be decided rather than left as a side effect of when each section was added. Impact: medium.- ▢ **Per-binary hardening is collected and never shown.** `BinaryEntry` carries `nx`, `canary`, `pic`, `bits`,
   `sha1`, `importsSummary`, `emulationStatus`; no component reads any of them, while the matrix announces
   `hardening: done`.
 

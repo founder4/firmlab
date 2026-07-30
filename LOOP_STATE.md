@@ -49,9 +49,9 @@ cinco proveedores que corren y no se pueden leer.
       está en la base de datos desaparece al recargar. Es un patrón de hidratación en ~5 sitios, anotado con esa
       diagnosis en `docs/BACKLOG.md`.
 
-- [ ] **C3. Cuatro secciones sin enlace en ninguna parte**: `structure`, `files`, `hardware`, `compmap`. La
-      más cara es `files`, «la superficie que permite comprobar la evidencia de un hallazgo en vez de
-      confiarla». `overview` es un id muerto que `resolveSection` remapea a `dossier`.
+- [x] **C3. Secciones sin enlace.** Cerrado en iter 17 (`8457011`). Y eran DIEZ, no cuatro: `secrets` y
+      `testbench` no estaban ni en la cuenta. La pista de la cascara era la otra mitad del defecto.
+
 - [ ] **C4. El endurecimiento por binario se recoge y nunca se muestra** (`nx`, `canary`, `pic`, `bits`,
       `sha1`, `importsSummary`) mientras la matriz anuncia `hardening: done`.
 
@@ -501,3 +501,29 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   captura mostraba un formulario sin abrir. Arreglado (`40205bc`): interactivos primero, exacto antes que subcadena,
   y dice qué pulsó. **Dos falsos negativos del instrumento del propio loop en dos iteraciones es en sí el hallazgo:
   todo lo que este loop afirma haber visto lo ha visto a través de él.**
+- iter 17 (2026-07-30): cerrado **C3**, y el enunciado volvía a quedarse corto. Medido: la aplicación tiene
+  exactamente TRES sitios que navegan a una sección —el timeline con 8 pasos, un enlace a `operator`, otro a
+  `dossier`— contra 20 secciones. **Diez sólo se alcanzaban por URL**, y `secrets` y `testbench` no estaban ni
+  contadas. `SectionIndex` en el dossier las enlaza todas.
+  **Y la pista de la propia cascara era la otra mitad del defecto:** «Navigate the analysis from the step timeline»
+  apuntaba a un control que llega a 8 de 19. Una pista que contesta mal es peor que ninguna — no era sólo que
+  faltara el enlace, es que la cascara decía dónde buscarlo y no estaba ahí. Corregida en los dos idiomas.
+  **Lo que el índice se niega a hacer**: decidir a qué secciones enruta una CLASE de dispositivo. Ese mapa existe
+  una vez en `specsForClass`, y una segunda copia en la web serían dos listas de lo mismo a un commit de
+  contradecirse. Así que se listan y enlazan todas, siempre. Lo que sí dicen las filas es por qué una sección puede
+  estar vacía al llegar, con los dos hechos que la página ya tiene — y `extraction-not-run` se mantiene aparte de
+  `extraction-found-no-rootfs`, porque fundirlos manda al operador a lanzar una extracción que ya corrió. Una
+  sección sin rootfs SIGUE enlazada: el defecto era la inalcanzabilidad.
+  Validado sobre el despliegue (0 errores de consola): DVRF pinta **19 secciones enlazadas** y `files` en `ready`;
+  la Pico RP2040 —extracción corrida, sin rootfs— pinta `files`/`secrets`/`testbench` como
+  `extraction-found-no-rootfs` con «That is a measured property of this image, not a stage nobody started», y
+  `entropy` sigue en `ready` porque no lee el rootfs.
+  **Un defecto mío que sólo se vio mirando:** lo añadí al FINAL del dossier, o sea debajo de un ledger de 110
+  hallazgos, a 16.500 px. Un índice al que nadie baja es un índice que no existe — el defecto que el componente
+  existe para arreglar, reintroducido por dónde lo puse. Ahora está a 312 px de una página de 8.480.
+  Verificación: `pnpm test` → core 75 / api 1810 / web **380** verde · `pnpm check` → Done · `pnpm biome` → limpio
+  (tras un `biome:fix` que no corrí antes de commitear, y que dejó la puerta en rojo un commit).
+  **Punto flojo nuevo en `docs/BACKLOG.md`:** el timeline sigue cubriendo 8 de 19 y es la navegación principal —
+  `deepscans`, `testbench`, `opacidad`, `operator` y `diff` son etapas de trabajo real que no aparecen en la
+  secuencia. Si deben estar es una pregunta de diseño (el timeline modela el PIPELINE, no la lista de secciones),
+  y por eso hay que decidirla en vez de dejarla como efecto secundario de cuándo se añadió cada sección.
