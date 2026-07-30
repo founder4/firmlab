@@ -96,6 +96,46 @@ export function imageIsCurrent(imageMtimeMs: number, rootfsMtimeMs: number): boo
 }
 
 /**
+ * Pure: may a cached image be reused for THIS boot?
+ *
+ * Freshness is necessary and was not sufficient, and the gap was silent in the worst direction. The repair appends a
+ * line to the init script INSIDE the image, so an image built with the flag off is a different artefact from one
+ * built with it on — and reuse compared only mtimes. Measured on the deployed build: with `FIRMLAB_EMU_REPAIR`
+ * turned on, a real WR940N boot reused an unrepaired image and returned `repair: undefined`. The operator asked for
+ * an intervention and silently did not get one, which is worse than an absent field: it is a result about an
+ * artefact nobody described.
+ *
+ * So the disposition the image was BUILT with has to match the one this boot wants. Both directions matter — a
+ * repaired image reused for an unrepaired run would carry a line the verdict never mentions.
+ */
+export function imageReusable(input: {
+  imageMtimeMs: number;
+  rootfsMtimeMs: number;
+  /** Whether the cached image was built with a repair line appended, read from the sidecar marker. */
+  builtRepaired: boolean;
+  /** Whether this boot wants one. */
+  wantRepaired: boolean;
+}): { reusable: boolean; reason: string } {
+  if (!imageIsCurrent(input.imageMtimeMs, input.rootfsMtimeMs)) {
+    return { reusable: false, reason: 'the rootfs is newer than its disk image' };
+  }
+  if (input.builtRepaired !== input.wantRepaired) {
+    return {
+      reusable: false,
+      reason: input.wantRepaired
+        ? 'the cached image was built WITHOUT the boot-time repair and this run asks for one'
+        : 'the cached image was built WITH a boot-time repair and this run asks for the firmware as shipped',
+    };
+  }
+  return { reusable: true, reason: 'it is newer than the rootfs and was built with the same repair disposition' };
+}
+
+/** The sidecar that records whether an image carries an appended repair line. Its presence IS the fact. */
+function repairMarkerPath(imagePath: string): string {
+  return `${imagePath}.repaired`;
+}
+
+/**
  * Build (or reuse) the raw image for a rootfs. Never throws: a missing tool or a failed mkfs is reported as an
  * unavailable result, so the caller blocks honestly instead of booting something that is not there.
  */
@@ -254,21 +294,39 @@ export async function ensureRootfsImage(
     };
   }
 
+  // The repair is decided BEFORE the reuse check, because it is part of what makes a cached image the right one.
+  // It used to be decided after, which meant a boot that asked for a repair could be served an image built without
+  // one — and report no repair at all.
+  const repairEnabled = decideFlag(REPAIR_FLAG, effectiveEnv()).enabled;
+  const repairInputs = repairEnabled ? collectGuestRepairInputs(rootfsPath) : null;
+  const repairPlan = repairInputs ? planGuestRepair(repairInputs) : null;
+  const repair = describeRepairDisposition(repairEnabled, repairPlan);
+  const wantRepaired = repair.interventions.length > 0;
+
   // Reuse a current image: rebuilding a 100 MB filesystem on every boot is minutes of nothing.
   try {
     const img = fs.statSync(imagePath);
-    if (imageIsCurrent(img.mtimeMs, fs.statSync(rootfsPath).mtimeMs)) {
-      log(`Reusing the existing disk image (${(img.size / 1024 / 1024).toFixed(1)} MB) — it is newer than the rootfs.`);
+    const verdict = imageReusable({
+      imageMtimeMs: img.mtimeMs,
+      rootfsMtimeMs: fs.statSync(rootfsPath).mtimeMs,
+      builtRepaired: fs.existsSync(repairMarkerPath(imagePath)),
+      wantRepaired,
+    });
+    if (verdict.reusable) {
+      log(
+        `Reusing the existing disk image (${(img.size / 1024 / 1024).toFixed(1)} MB) — ${verdict.reason}. ${repair.note}`,
+      );
       return {
         available: true,
         imagePath,
         built: false,
         sizeBytes: img.size,
-        reason: 'Existing image is current.',
+        reason: `Existing image is current: ${verdict.reason}.`,
         caveat: CAVEAT,
+        repair,
       };
     }
-    log('The rootfs is newer than its disk image — rebuilding.');
+    log(`Rebuilding the disk image: ${verdict.reason}.`);
   } catch {
     // no image yet, which is the normal first run
   }
@@ -297,13 +355,7 @@ export async function ensureRootfsImage(
   log(`Assembling a ${(sizeBytes / 1024 / 1024).toFixed(0)} MB ext2 image from ${kb} KiB of extracted files.`);
   await stageFirmadyneShim(rootfsPath, arch, log);
 
-  // The boot-time repair, armed only by the operator. `decideFlag` rather than `=== '1'`, so an unset flag is off
-  // and the disposition can say nobody asked — which is the difference between "the image booted as shipped" and
-  // "we never looked at whether it needed to".
-  const repairEnabled = decideFlag(REPAIR_FLAG, effectiveEnv()).enabled;
-  const repairInputs = repairEnabled ? collectGuestRepairInputs(rootfsPath) : null;
-  const repairPlan = repairInputs ? planGuestRepair(repairInputs) : null;
-  const repair = describeRepairDisposition(repairEnabled, repairPlan);
+  // Armed only by the operator, and decided above so the reuse check could see it.
   log(repair.note);
   const stagedRepair =
     repairPlan?.line && repairInputs?.initScript
@@ -320,6 +372,16 @@ export async function ensureRootfsImage(
       maxBuffer: 4 * 1024 * 1024,
     });
     if (stderr.trim()) log(`mke2fs: ${stderr.trim().split('\n').slice(-3).join(' | ')}`);
+    // The marker records what this image IS, so a later boot cannot be served it under the wrong disposition. Written
+    // after mkfs succeeded: a marker beside a half-built image would describe something that was deleted.
+    try {
+      if (wantRepaired) fs.writeFileSync(repairMarkerPath(imagePath), `${repair.interventions.join('\n')}\n`);
+      else fs.rmSync(repairMarkerPath(imagePath), { force: true });
+    } catch (err) {
+      log(
+        `The repair marker beside the image could not be updated (${(err as Error).message}). A later boot may reuse this image under the wrong disposition — it will be rebuilt rather than mis-described only if the marker is right, so treat the next run's repair field with suspicion.`,
+      );
+    }
     log(CAVEAT);
     return {
       available: true,

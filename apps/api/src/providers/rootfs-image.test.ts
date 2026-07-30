@@ -8,6 +8,7 @@ import {
   collectGuestRepairInputs,
   ensureRootfsImage,
   imageIsCurrent,
+  imageReusable,
   planImageSize,
   stageGuestRepair,
   unstageFirmadyneShim,
@@ -210,5 +211,51 @@ describe('collectGuestRepairInputs reads the rootfs, and reads it honestly', () 
     fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
     fs.writeFileSync(path.join(root, 'bin/busybox'), 'junk\u0000mapping\u0000pinging\u0000more');
     expect(collectGuestRepairInputs(root).hasPing).toBe(false);
+  });
+});
+
+/**
+ * The defect a real boot exposed one commit after the wiring landed, and the third instance this session of "a
+ * guard is only as good as its SUCCESS path". Reuse compared mtimes alone, so with the repair armed a real WR940N
+ * boot was served an image built WITHOUT one and returned `repair: undefined` — the operator asked for an
+ * intervention and silently did not get it.
+ */
+describe('imageReusable — freshness was necessary and not sufficient', () => {
+  const base = { imageMtimeMs: 2000, rootfsMtimeMs: 1000 };
+
+  it('reuses a fresh image when the disposition matches, in both directions', () => {
+    expect(imageReusable({ ...base, builtRepaired: false, wantRepaired: false }).reusable).toBe(true);
+    expect(imageReusable({ ...base, builtRepaired: true, wantRepaired: true }).reusable).toBe(true);
+  });
+
+  it('refuses an unrepaired image for a run that asks for a repair, and says which way round', () => {
+    const v = imageReusable({ ...base, builtRepaired: false, wantRepaired: true });
+    expect(v.reusable).toBe(false);
+    expect(v.reason).toMatch(/built WITHOUT the boot-time repair and this run asks for one/);
+  });
+
+  it('also refuses a REPAIRED image for a run that wants the firmware as shipped', () => {
+    // The other direction matters just as much: the verdict would never mention a line the image carries.
+    const v = imageReusable({ ...base, builtRepaired: true, wantRepaired: false });
+    expect(v.reusable).toBe(false);
+    expect(v.reason).toMatch(/asks for the firmware as shipped/);
+  });
+
+  it('still refuses a stale image whatever the disposition, and reports staleness first', () => {
+    for (const [builtRepaired, wantRepaired] of [
+      [false, false],
+      [true, true],
+      [false, true],
+    ] as const) {
+      const v = imageReusable({ imageMtimeMs: 1000, rootfsMtimeMs: 2000, builtRepaired, wantRepaired });
+      expect(v.reusable).toBe(false);
+      expect(v.reason).toMatch(/rootfs is newer/);
+    }
+  });
+
+  it('treats equal mtimes as current, which is what imageIsCurrent already promised', () => {
+    expect(
+      imageReusable({ imageMtimeMs: 1000, rootfsMtimeMs: 1000, builtRepaired: false, wantRepaired: false }).reusable,
+    ).toBe(true);
   });
 });
