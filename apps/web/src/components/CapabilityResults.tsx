@@ -127,7 +127,13 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
           // reported as a stage nobody ran.
           const notRunBody = cap.id === 'funcdiff' ? t.capabilities.needsBaseline : t.capabilities.states.notRun.body;
           return (
-            <div key={cap.id} data-capability={cap.id} data-state={state.kind} className="panel-row">
+            <div
+              key={cap.id}
+              data-capability={cap.id}
+              data-state={state.kind}
+              className="panel-row"
+              style={{ display: 'grid', gap: 6 }}
+            >
               <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
                 <strong className="mono">{cap.label}</strong>
                 <span className="mono" data-role="state" style={{ fontSize: 11 }}>
