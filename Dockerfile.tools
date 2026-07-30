@@ -22,7 +22,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       qemu-system-arm \
       python3 python3-pip python3-venv \
       curl ca-certificates unzip \
+      yara \
     && rm -rf /var/lib/apt/lists/*
+# `yara` is the ENGINE only; the rules are never shipped with it (`providers/yarascan.ts` reads the corpus from
+# FIRMLAB_YARA_RULES and has an empty built-in on purpose), so "yara is installed" and "this deployment can answer
+# the question" stay two different facts and the coverage sentence reports the denominator either way.
+#
+# Bookworm ships 4.2.3, which has `--scan-list`, `-e`, `-g` and `-a` (`--timeout=SECONDS`) — all four verified
+# against the real binary. **Correcting a prediction recorded in BACKLOG.md:** the note said a Debian build lacks
+# the `cuckoo` module, and it does not. Measured on 4.2.3-4/arm64, `import` succeeds for cuckoo, magic, hash,
+# dotnet, math, pe, elf, time, console, macho and dex — every module tried but a deliberately invented one. So the
+# `missing-module` classification has no trigger on this platform, which is a fact about the coverage of that
+# branch and not a reason to remove it: an operator's own build may well lack one.
 
 # === Phase 6 capture — discovery (passive LAN sweep) + interception (proxy) ===
 # nmap + arp-scan power the host sweep, iproute2 (`ip`) reports the primary subnet, avahi-utils (`avahi-browse`)

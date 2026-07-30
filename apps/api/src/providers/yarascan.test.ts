@@ -149,9 +149,64 @@ describe('the compiler and scanner diagnostics', () => {
     ]);
   });
 
+  /**
+   * These four strings are CAPTURED from YARA 4.2.3 (`yara --version`, Debian 4.2.3-4/arm64) running against real
+   * firmware bytes, not written from `cli/yara.c`. That distinction is the whole point of this block: the parser
+   * above was authored from the source's print order and got the shape below wrong for a year.
+   *
+   * `error: rule "X" in f.yar(1): msg` is the COMMON shape — every broken or slow rule in an operator's corpus
+   * produces it — and `parseCompileDiagnostics` returned `[]` for it, so the per-file attribution was lost on
+   * exactly the failures that happen, and the module's own "warnings are kept" promise was not delivered.
+   */
+  it('reads the RULE-scoped shape too, which is the one a real yara actually prints', () => {
+    const diags = parseCompileDiagnostics(
+      [
+        // Captured: `yara ns0:bad.yar empty.probe`, rc=1
+        'error: rule "Broken" in bad.yar(1): undefined string "$nope"',
+        // Captured: `yara ns0:w1.yar empty.probe`, rc=0 — a warning does NOT fail the compile
+        'warning: rule "Slow" in w1.yar(1): string "$a" may slow down scanning',
+        // Captured: `yara ns0:mod.yar empty.probe`, rc=1 — the file-scoped shape, which already worked
+        'mod.yar(1): error: unknown module "string"',
+      ].join('\n'),
+    );
+    // In stderr order: the parser reports what yara said, in the order it said it, so a reader comparing the two
+    // sees the same sequence.
+    expect(diags).toEqual([
+      { file: 'bad.yar', line: 1, level: 'error', message: 'undefined string "$nope"', rule: 'Broken' },
+      {
+        file: 'w1.yar',
+        line: 1,
+        level: 'warning',
+        message: 'string "$a" may slow down scanning',
+        rule: 'Slow',
+      },
+      { file: 'mod.yar', line: 1, level: 'error', message: 'unknown module "string"' },
+    ]);
+  });
+
+  /**
+   * A file-scoped diagnostic has no rule because there IS no rule yet — the import failed before one was read. That
+   * is not the same as a rule whose name could not be parsed, and the field being absent rather than `''` is what
+   * keeps the two apart.
+   */
+  it('omits the rule for a file-scoped diagnostic, rather than reporting an empty one', () => {
+    const [fileScoped] = parseCompileDiagnostics('mod.yar(1): error: unknown module "string"');
+    expect(fileScoped).not.toHaveProperty('rule');
+    const [ruleScoped] = parseCompileDiagnostics('error: rule "R" in f.yar(2): undefined string "$x"');
+    expect(ruleScoped?.rule).toBe('R');
+  });
+
+  it('still classifies an unrecognised SHAPE, because the message is read independently of the layout', () => {
+    // What an unknown shape costs is the file and line, never the fact that something failed.
+    expect(parseCompileDiagnostics('yara: something entirely new')).toEqual([]);
+    expect(classifyCompileFailure('something entirely new')).toBe('other');
+  });
+
   it('classifies a failure by what an operator would have to do about it', () => {
     expect(classifyCompileFailure('can\'t open include file "./common.yar"')).toBe('missing-module');
-    expect(classifyCompileFailure('unknown module "cuckoo"')).toBe('missing-module');
+    // MEASURED 2026-07-30 on yara 4.2.3-4/arm64: Debian ships cuckoo, so this exact message does NOT arise here.
+    // Kept because an operator's own build may lack a module, and `string` is one no build has:
+    expect(classifyCompileFailure('unknown module "string"')).toBe('missing-module');
     expect(classifyCompileFailure('undefined identifier "pe"')).toBe('undefined-identifier');
     expect(classifyCompileFailure('syntax error, unexpected _IDENTIFIER_')).toBe('syntax');
     expect(classifyCompileFailure('something nobody has seen before')).toBe('other');

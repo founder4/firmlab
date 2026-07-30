@@ -629,8 +629,21 @@ export function parseYaraOutput(stdout: string): { groups: RuleMatchGroup[]; unr
   return { groups, unreadableLines };
 }
 
-/** `<file>(<line>): error: <message>` — how yara reports a rule it will not compile. */
-const COMPILE_DIAGNOSTIC = /^(.*?)\((\d+)\):\s*(error|warning):\s*(.*)$/;
+/**
+ * yara prints compiler diagnostics in TWO shapes, and this module only knew one of them until it met a real binary.
+ *
+ *   A. file-scoped   `mod.yar(1): error: unknown module "string"`
+ *   B. rule-scoped   `error: rule "Broken" in bad.yar(1): undefined string "$nope"`
+ *                    `warning: rule "Slow" in w1.yar(1): string "$a" may slow down scanning`
+ *
+ * Shape B is the COMMON one — it is what any broken or slow rule in an operator's corpus produces — and it was
+ * dropped entirely: `parseCompileDiagnostics` returned `[]` for it, so the per-file attribution that
+ * `compileEachRuleFile` exists to recover was lost on the errors that actually happen, and the "warnings are kept,
+ * they are coverage risk" promise in this module's own comment was not delivered by its code. Both shapes captured
+ * from YARA 4.2.3 (`yara --version`) rather than read off `cli/yara.c`, which is how the gap arose.
+ */
+const COMPILE_DIAGNOSTIC_FILE = /^(.*?)\((\d+)\):\s*(error|warning):\s*(.*)$/;
+const COMPILE_DIAGNOSTIC_RULE = /^(error|warning):\s*rule\s+"([^"]+)"\s+in\s+(.*?)\((\d+)\):\s*(.*)$/;
 
 /** A diagnostic the compiler printed, still attached to the file it was about. */
 export interface CompileDiagnostic {
@@ -638,20 +651,46 @@ export interface CompileDiagnostic {
   line: number;
   level: 'error' | 'warning';
   message: string;
+  /**
+   * The rule yara named, when the diagnostic was scoped to one. Absent for a file-scoped diagnostic (a bad import,
+   * an unopenable include) — where there IS no rule yet, not where the rule is unknown. Optional forever: a result
+   * stored before this field existed carries none, and inventing one would be a claim about a parse that never ran.
+   */
+  rule?: string;
 }
 
-/** Pure: read yara's compiler diagnostics off stderr. Warnings are kept — they are coverage risk, not noise. */
+/**
+ * Pure: read yara's compiler diagnostics off stderr. Warnings are kept — they are coverage risk, not noise.
+ *
+ * Both shapes are tried, file-scoped first: it is the more constrained pattern, and a rule-scoped line begins with
+ * the level so the two cannot collide. A line matching neither is skipped rather than guessed at — but note that
+ * `classifyCompileFailure` reads the raw message independently, so an unrecognised SHAPE still yields a classified
+ * failure; what it costs is the file and line, never the fact that something failed.
+ */
 export function parseCompileDiagnostics(stderr: string): CompileDiagnostic[] {
   const out: CompileDiagnostic[] = [];
   for (const raw of stderr.split('\n')) {
-    const m = COMPILE_DIAGNOSTIC.exec(raw.trim());
-    if (!m?.[1] || !m[4]) continue;
-    out.push({
-      file: m[1],
-      line: Number.parseInt(m[2] ?? '0', 10),
-      level: m[3] === 'warning' ? 'warning' : 'error',
-      message: m[4],
-    });
+    const line = raw.trim();
+    const f = COMPILE_DIAGNOSTIC_FILE.exec(line);
+    if (f?.[1] && f[4]) {
+      out.push({
+        file: f[1],
+        line: Number.parseInt(f[2] ?? '0', 10),
+        level: f[3] === 'warning' ? 'warning' : 'error',
+        message: f[4],
+      });
+      continue;
+    }
+    const r = COMPILE_DIAGNOSTIC_RULE.exec(line);
+    if (r?.[2] && r[3] && r[5]) {
+      out.push({
+        file: r[3],
+        line: Number.parseInt(r[4] ?? '0', 10),
+        level: r[1] === 'warning' ? 'warning' : 'error',
+        message: r[5],
+        rule: r[2],
+      });
+    }
   }
   return out;
 }
