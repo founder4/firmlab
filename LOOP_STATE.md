@@ -21,11 +21,9 @@ cinco proveedores que corren y no se pueden leer.
       `restrict=on` —ya existía— sino que el flag era opt-in: el defecto estaba en el valor por omisión. La
       condición que el backlog puso para invertirlo ya estaba contestada en la base de datos y nadie la había
       leído.
-- [ ] **A2. El cap de listado esconde el binario que el rank existe para promover.** `selectFindings` ordena
-      por tamaño ascendente, así que con más candidatos que las 45 plazas cae primero el más grande — y el
-      demonio expuesto es siempre el más grande (WDR3600: `usr/bin/httpd`, 1,7 MB, autostart en :80).
-      `BinVulnResult` solo expone los `findings` post-cap. Ojo al efecto secundario que ya está anotado: si
-      los leads leen `candidates`, nombrarán binarios que no están en el ledger, y eso necesita su respuesta.
+- [x] **A2. El cap de listado esconde el binario que el rank existe para promover.** Cerrado en iter 11
+      (`a234b9a`). Ninguna de las dos formas de arreglo que proponía el backlog: ambas reparaban los leads y
+      dejaban el ledger mal. La exposición pasa a ser clave de orden entre severidad y tamaño.
 - [ ] **A3. El extractor neutraliza a `/dev/null` los symlinks que escapan, en silencio**, y cada proveedor
       lee después un fichero vacío y lo reporta como ausencia. Es la regla 3 del proyecto incumplida en el
       extractor.
@@ -284,3 +282,43 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   **Puntos flojos nuevos, anotados en `docs/BACKLOG.md` y NO implementados:** `environmentValue` responde ahora a
   otra pregunta y su único lector no se actualizó (impacto bajo); y las tres frases de política llegan al LOG y
   no al panel, que sigue conmutando por el booleano `isolated` a secas (impacto medio).
+- iter 11 (2026-07-30): cerrado **A2**, la cota que escondía el demonio. **Reproducido primero sobre el rootfs real
+  del WDR3600 en el build desplegado, antes de tocar nada:** 124 ELFs → 58 candidatos → 45 listados, y
+  `usr/bin/httpd` NO estaba; a la cabeza `lib/libutil-0.9.30.so` (3964 B), `lib/libmsglog.so` (4644 B) y
+  `sbin/pktlogconf` (7548 B). Es decir, la cota gastaba el ledger exactamente en los stubs de uClibc que el propio
+  backlog denuncia, y borraba de la lista al demonio que el rank de sondas existe para promover — porque ese rank
+  lee `findings`, la lista POST-cota.
+  **No tomé ninguna de las dos formas de arreglo que el backlog proponía** (devolver los candidatos descartados, o
+  que el rank lea `candidates`): las dos reparan los leads y dejan el ledger mal, y la segunda produce leads que
+  nombran binarios ausentes del ledger — el efecto secundario que la propia entrada señalaba. Si un binario merece
+  una sonda, merece una fila. Así que la exposición es ahora **clave de orden**, entre severidad y tamaño, y entra
+  como `ReadonlySet<string>` opcional para que `selectFindings` siga siendo pura (la misma forma que el corpus
+  opcional del ranking de módulos UEFI). Después: `usr/bin/httpd` en **posición 0**, 1.717.140 B, con
+  `strcpy/strcat/sprintf/vsprintf/sscanf`.
+  La exposición NO gana a la severidad: un `critical` en un binario no referenciado sigue siendo peor que un
+  `medium` en un demonio, e invertirlo dejaría que un socket blanquease un hallazgo débil hasta la cabeza.
+  **`undefined` ≠ `new Set()`**, que es la parte que sostiene todo: sin señal significa que W3/W4 no corrieron, y
+  señal vacía que corrieron y no nombraron nada — real, porque `runServiceMap` devuelve cero servicios en DVRF.
+  Ordenan igual y son hechos opuestos, así que la `reason` los separa en prosa. La exposición se calcula ahora
+  ANTES de la barrida; se construía sólo para el rank de sondas, y por eso la cota nunca la tuvo.
+  **Comprobado que el arreglo no queda inerte**, que era el riesgo real: el `runServiceMap` real sobre el WDR3600
+  da `httpd | /usr/bin/httpd | autostart: true`, `interestingBinaries` lo convierte en
+  `{usr/bin/httpd → "it is an autostart network daemon (httpd)"}`, y en **todas** las clases que barren binarios el
+  plan pone `servicemap`@6 y `webtaint`@14 delante de `binvuln`@15. Además `runBinVuln` tiene un único llamante, el
+  de W9, así que no hay ruta manual que se salte la señal.
+  **Un defecto que los tests destaparon:** la exposición es un ESCALÓN, no un override. Entre dos demonios
+  expuestos el tamaño sigue desempatando, así que con cota 1 se queda dropbear (900 KB) y cae httpd (1,7 MB). Mi
+  primera aserción decía lo contrario, escrita leyendo la exposición como orden total — el código tenía razón.
+  Un expuesto puede seguir sin caber, así que los que caen se NOMBRAN en `exposedDropped` en vez de contarse;
+  opcional para siempre, porque `[]` sería una afirmación sobre un ranking que nunca tuvo señal.
+  Verificación: `pnpm test` → core 75 / api 1773 / web 326 verde · `pnpm check` → Done · `pnpm biome` → limpio ·
+  y las tres ramas de exposición leídas del build desplegado (`a234b9a`) sobre el rootfs real: sin señal
+  («No exposure signal reached this sweep … silence about what is exposed, not a finding that nothing is»),
+  vacía («The exposure signal DID reach this sweep and named no binary … having asked»), y nombrando
+  («1 binary(ies) were flagged as exposed and ranked ahead of smaller candidates»).
+  **Puntos flojos nuevos en `docs/BACKLOG.md`, NO implementados:** (a) los stubs de uClibc no toman «algunas
+  sondas» sino el LEDGER — posiciones 1–2 de los 45 listados del WDR3600; la clave de exposición repara la cabeza
+  de la lista y no hace nada con la cola, impacto medio, es ya la mayor distorsión que queda en la barrida;
+  (b) la señal de exposición se apoya en `network && autostart` sin ninguna evidencia de puerto detrás — el
+  WDR3600 da `ports: []` para su httpd — defendible para ORDENAR, más discutible en `daemonLeads`, cuyos hallazgos
+  sí se leen como afirmaciones sobre un servicio expuesto.
