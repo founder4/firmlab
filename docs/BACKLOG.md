@@ -486,11 +486,51 @@ the first one makes a gap read as a clean result and the second is merely missin
   ("…so ther"), so grepping it for `dynprobe` returned nothing and the row looked absent. The screenshot was correct
   and the text was not. This is the loop's own validation instrument understating what it saw — the same class of
   defect as a bound reading as an answer, in the tool used to catch them. It should say it truncated. Impact: medium.
-- ▢ **Thirteen API methods with no caller, so a result lives only in the tab that launched it.** `chipsecResult`,
-  `renodeResult`, `webprobeResult`, `decompileResult`, `kernelPosture`, `ghidraResult`, `analysisResult`,
-  `secrets`, `amendAssertion`, `updateNote`, `deleteImage`. The sharpest is `amendAssertion`: `OperatorPanel`
-  renders the full amendment history — `supersedes`, `amendedAt`, superseded revisions — and there is no UI that
-  can produce one. The same shape as the egress panel fixed earlier this session, five more times.
+- ◐ **Thirteen API methods with no caller — the sharpest is closed and the diagnosis of the rest is corrected**
+  (2026-07-30, `666047a`). Re-measured: still 13, and one of them (`funcdiffResult`) is one the previous iteration
+  added. **`amendAssertion` is closed.** `OperatorPanel` rendered the full amendment history — `amendedAt`,
+  `supersedes`, every superseded revision, read defensively — and no UI could produce one: a reader for a writer
+  that was never built, the inverse of the defect that iteration closed. There is now an inline amend form on each
+  live assertion row.
+  **The pure decision is the DIFF, not the form.** The operator ledger is the most careful surface here — assertions
+  carry no proof state and travel in their own array so they can never be mistaken for a measurement — so an
+  amendment that changes nothing must not be recorded: it would push the original into `supersedes` and replace it
+  with an identical claim, manufacturing a revision history out of a form submit. And the two nothings differ again:
+  a form nobody touched, versus a field retyped to the same text. Identical values, different events, different
+  sentences, both refused. `amend.ts`, 8 tests.
+  Validated on the real deployed build (`/image/a2c03536/operator`, 0 console errors): a real assertion created and
+  amended through the API leaves `amendedAt` set with 1 superseded revision, the row reads *"Amended 2026-07-30; 1
+  earlier claim is kept in the record"*, the form opens pre-filled with what is stored, and with nothing edited it
+  prints *"Nothing was edited, so there is nothing to amend… which manufactures a revision out of a form submit"*
+  with **Save amendment disabled**. The WITHDRAWN table offers no amend action — a retraction is history and its
+  whole value is that it stands as written.
+  _Two defects of my own on the way: I gated the button on an author, which is wrong twice over — the amend route
+  deliberately does not accept one (`assertedBy` is carried over so an edit cannot reassign authorship) and
+  requiring it disabled the button for nothing the API asks; and the retyped-field test proved nothing, because
+  `fireEvent.change` with the value already in the DOM fires no React `onChange` at all, so it passed as
+  "untouched". It now types away and back, which is what retyping is._
+  **STILL OPEN, with the diagnosis corrected — and it is ONE defect, not twelve.** The remaining twelve are almost
+  all `*Result` getters, and the reason they have no caller is that **every panel reads the result of the job IT
+  launched, never the stored one**: `SimulationMenu` calls `runChipsec`, `WebProbePanel` calls `runWebProbe`,
+  `TestBench` calls `decompile`. So a chipsec, renode, webprobe, decompile or kernel-posture result that IS in the
+  database vanishes from the screen on reload, and the getter that would fetch it is the uncalled method. The entry
+  said "a result lives only in the tab that launched it" and that is exactly right — but the fix is one hydration
+  pattern applied at ~5 call sites, not thirteen wirings. Impact: high; it is the same "the data exists and cannot
+  be read" class the `deepscans` section just closed for the other five.
+- ▢ **An amendment records no author, while a withdrawal does.** Surfaced 2026-07-30 while building the amend form,
+  not fixed (it is an API change). `withdrawOperatorFinding` requires `withdrawnBy` — *"name who is retracting the
+  claim"* — and the amend route deliberately takes no author at all, so `assertedBy` is carried over and
+  `amendedAt` records only WHEN. A claim can therefore be reworded by someone other than its author, and the ledger
+  attributes the new wording to the original author with no trace of the editor. In the one surface whose entire
+  purpose is provenance. Impact: medium-high. The fix is an `amendedBy` on the assertion, optional forever.
+- ▢ **`scripts/ui-drive.mjs --click` clicked the wrong element and said nothing** — FIXED 2026-07-30 (`40205bc`),
+  kept here because it is the second defect found in this script in two iterations and the pair is the point. The
+  whole implementation was `getByText(x, {exact:false}).first()`, so `--click "Amend"` landed on the row's PROSE
+  (the attribution contains "Amended 2026-07-30", and that paragraph is earlier in the document); clicking a `<div>`
+  succeeds, so nothing failed and the screenshot showed an unopened form. It now tries interactive elements first,
+  exact before substring, and PRINTS which it clicked. The other finding — that it truncates the visible text it
+  reports, mid-sentence, unmarked — is still open above. **Two false negatives from the loop's own instrument in
+  two iterations is itself the finding:** everything this loop claims to have seen was seen through it.
 - ▢ **Four sections with no link anywhere in the app**: `structure`, `files`, `hardware`, `compmap` — reachable
   only by typing a URL. The costliest is `files`, whose own comment calls it *"the surface that lets a finding's
   evidence be checked instead of trusted"*. `overview` is a dead id that `resolveSection` remaps to `dossier`

@@ -43,8 +43,12 @@ cinco proveedores que corren y no se pueden leer.
 - [x] **C1. Cinco capacidades con ruta y cero lectores en `apps/web`.** Cerrado en iter 15 (`04af0f4` +
       `98fc9cd`). Y eran DOS estados en el enunciado y son TRES: `unavailable` es su propio hecho.
 
-- [ ] **C2. Trece métodos de API sin llamante.** El más agudo es `amendAssertion`: `OperatorPanel` pinta el
-      historial de enmiendas y no hay UI capaz de producir una.
+- [◐] **C2. Trece métodos de API sin llamante.** Iter 16 (`666047a`): cerrado el que el propio punto llamaba el
+      más agudo, `amendAssertion` — el ledger ya tenía lector del historial y ningún escritor. Los doce restantes
+      NO son doce defectos: los paneles leen el resultado del job que ELLOS lanzaron, así que un resultado que sí
+      está en la base de datos desaparece al recargar. Es un patrón de hidratación en ~5 sitios, anotado con esa
+      diagnosis en `docs/BACKLOG.md`.
+
 - [ ] **C3. Cuatro secciones sin enlace en ninguna parte**: `structure`, `files`, `hardware`, `compmap`. La
       más cara es `files`, «la superficie que permite comprobar la evidencia de un hallazgo en vez de
       confiarla». `overview` es un id muerto que `resolveSection` remapea a `dossier`.
@@ -465,3 +469,35 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   cortó dentro de la tercera, así que buscar `dynprobe` en él no devolvía nada y la fila parecía ausente. Es el
   instrumento de validación del propio loop subestimando lo que vio: una cota leyéndose como respuesta, dentro de la
   herramienta que existe para cazarlas.
+- iter 16 (2026-07-30): **C2 a medias, y a propósito.** Medidos de nuevo: siguen siendo 13, y uno es mío
+  (`funcdiffResult`, de la iter 15). Cerrado el que el punto llamaba el más agudo, `amendAssertion`: `OperatorPanel`
+  pintaba el historial completo de enmiendas —`amendedAt`, `supersedes`, cada revisión sustituida, leído a la
+  defensiva— y ninguna UI podía producir una. Un lector para un escritor que nunca se construyó, el inverso exacto
+  del defecto de la iteración anterior.
+  **La decisión pura es el DIFF, no el formulario.** Una enmienda que no cambia nada no puede registrarse: empujaría
+  la original a `supersedes` y la reemplazaría por una idéntica, fabricando historial a partir de un submit, en la
+  única superficie cuyo propósito entero es la procedencia. Y los dos «nada» vuelven a diferir: formulario sin tocar
+  frente a campo reteclado al mismo valor — valores idénticos, sucesos distintos, frases distintas, ambos rechazados.
+  Verificado sobre el despliegue real: afirmación creada y enmendada por la API real, `amendedAt` puesto con 1
+  revisión sustituida, la fila dice «Amended 2026-07-30; 1 earlier claim is kept in the record», el formulario abre
+  pre-rellenado con lo almacenado y sin editar nada imprime «Nothing was edited… which manufactures a revision out
+  of a form submit» con **Save amendment deshabilitado**. La tabla de RETIRADAS no ofrece enmendar.
+  **Dos defectos míos:** condicioné el botón a un autor —mal por dos motivos, la ruta deliberadamente no acepta
+  autor para que una edición no reasigne la autoría, y exigirlo desactivaba el botón sin que la API lo pida—; y el
+  test del reteclado no probaba nada, porque `fireEvent.change` con el valor que ya está en el DOM no dispara
+  ningún `onChange` de React y pasaba como «untouched».
+  **La diagnosis de los doce restantes queda CORREGIDA, y es UN defecto y no doce:** cada panel lee el resultado del
+  job que él lanzó (`SimulationMenu`→`runChipsec`, `WebProbePanel`→`runWebProbe`, `TestBench`→`decompile`), así que
+  un resultado de chipsec/renode/webprobe/decompile/kernel que SÍ está en la base de datos desaparece de la pantalla
+  al recargar, y el getter que lo traería es el método sin llamante. Es un patrón de hidratación en ~5 sitios.
+  Por eso el punto queda a medias y no cerrado: la mitad nombrada está hecha y la otra tiene ahora una diagnosis
+  precisa en vez de una lista de trece nombres.
+  Verificación: `pnpm test` → core 75 / api 1810 / web **363** verde · `pnpm check` → Done · `pnpm biome` → limpio.
+  **Puntos flojos nuevos en `docs/BACKLOG.md`:** (a) **una enmienda no registra autor y una retirada sí** —
+  `withdrawnBy` es obligatorio, y una afirmación puede reescribirla alguien que no es su autor quedando atribuida al
+  original sin rastro del editor, en la superficie cuyo propósito es la procedencia; impacto medio-alto, y es cambio
+  de API; (b) **`--click` del driver pulsaba el elemento equivocado en silencio** — `getByText(x,{exact:false})
+  .first()` aterrizaba en la prosa «Amended 2026-07-30» en vez del botón, y pulsar un div no falla, así que la
+  captura mostraba un formulario sin abrir. Arreglado (`40205bc`): interactivos primero, exacto antes que subcadena,
+  y dice qué pulsó. **Dos falsos negativos del instrumento del propio loop en dos iteraciones es en sí el hallazgo:
+  todo lo que este loop afirma haber visto lo ha visto a través de él.**
