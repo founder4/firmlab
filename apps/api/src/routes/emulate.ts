@@ -130,7 +130,9 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
           };
           return onSystemEmulationResult(id, identity, 'system-boot', blocked);
         }
-        const r = await runFullSystem(arch, image.imagePath, 8080, handle, rootfsPath);
+        // `image.repair` rather than re-deriving it: only the builder knows what it appended, and a verdict that
+        // cannot say whether the firewall was torn down for this boot is a claim about a different artefact.
+        const r = await runFullSystem(arch, image.imagePath, 8080, handle, rootfsPath, image.repair);
         return onSystemEmulationResult(id, identity, 'system-boot', r);
       });
       return reply.status(202).send({ jobId });

@@ -21,11 +21,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Architecture } from '@firmlab/core';
+import { decideFlag, effectiveEnv } from '../flags.js';
 import { isToolAvailable } from '../tools.js';
+import {
+  type GuestRepairInputs,
+  REPAIR_FLAG,
+  type RepairDisposition,
+  describeRepairDisposition,
+  planGuestRepair,
+} from './guest-repair.js';
 import type { JobHandle } from './jobs.js';
 import { LIBNVRAM_DIR } from './preflight.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * The delimiter busybox uses between applet names in its own table. Written as an escape, never as the byte: a
+ * literal NUL passes tsc, biome and vitest and makes grep skip the whole file without saying so.
+ */
+const APPLET_DELIM = '\u0000';
 
 /** Smallest image worth building: a rootfs of a few hundred KB still needs room for the guest to write. */
 const MIN_IMAGE_BYTES = 32 * 1024 * 1024;
@@ -62,6 +76,13 @@ export interface RootfsImageResult {
   sizeBytes: number;
   /** Stated with every result: this is a REBUILT filesystem, not the vendor's. */
   caveat: string;
+  /**
+   * Whether this image was repaired for the boot, and whether the question was asked. Optional forever: a result
+   * stored before the repair existed carries none, and a `RepairDisposition` with `attempted: false` is a different
+   * claim from an absent field — the first says the flag was off on that run, the second that the build predates
+   * the feature.
+   */
+  repair?: RepairDisposition;
 }
 
 const CAVEAT =
@@ -110,6 +131,90 @@ async function stageFirmadyneShim(rootfsPath: string, arch: Architecture, log: (
     log(`Staged the ${arch} NVRAM shim at /firmadyne/libnvram.so, which the firmadyne kernel preloads.`);
   } catch (err) {
     log(`Could not stage the NVRAM shim: ${(err as Error).message}. init will very likely fail to start.`);
+  }
+}
+
+/**
+ * Read what the repair needs to know off the rootfs. Thin: every decision is in `planGuestRepair`.
+ *
+ * `hasPing` is read out of busybox's own strings because these images have no separate `ping` binary — the applet
+ * table inside busybox is the only place the answer exists. Verified on the corpus: all three TP-Link busybox
+ * carry `ping`, and two of the three carry no `sleep` at all, which is why the repair's timer is a ping.
+ */
+export function collectGuestRepairInputs(rootfsPath: string): GuestRepairInputs {
+  const has = (rel: string): boolean => {
+    try {
+      // `existsSync` follows symlinks, and a symlink the extractor neutered to /dev/null WOULD pass it while being
+      // unrunnable. `lstat` + a size test is the honest check for "the firmware ships a usable file here".
+      const abs = path.join(rootfsPath, rel);
+      const st = fs.lstatSync(abs);
+      if (st.isSymbolicLink()) return fs.readlinkSync(abs) !== '/dev/null' && fs.existsSync(abs);
+      return st.size > 0;
+    } catch {
+      return false;
+    }
+  };
+  let hasPing = false;
+  try {
+    const bb = fs.readFileSync(path.join(rootfsPath, 'bin/busybox'));
+    // Applet names sit NUL-delimited in busybox's own table, so the delimiter IS the exact-token test: it is what
+    // separates the `ping` applet from `ping` inside `mapping`. MEASURED on all three corpus routers: `ping` is
+    // NUL-delimited in every one, and `sleep` is NUL-delimited only in the WDR3600 — which matches what those
+    // applet lists actually contain, while a SPACE-delimited search finds `ping` in all three by coincidence and
+    // misses the WDR3600's `sleep` entirely. A search that is accidentally right about the common case is worse
+    // than one that is right, because nothing tells you which of the two you have.
+    //
+    // `includes` rather than a regex: a NUL in a regex literal is a control character biome rightly refuses, and
+    // the raw byte must never be written into a source file here — it makes grep skip the file in silence, which
+    // is exactly how this line was first written and how the entire edit appeared never to have been made.
+    hasPing = bb.toString('latin1').includes(`${APPLET_DELIM}ping${APPLET_DELIM}`);
+  } catch {
+    hasPing = false;
+  }
+  return {
+    initScript: has('etc/rc.d/rcS') ? 'etc/rc.d/rcS' : null,
+    hasIptablesStop: has('etc/rc.d/iptables-stop'),
+    hasIptablesSave: has('sbin/iptables-save'),
+    hasPing,
+  };
+}
+
+/**
+ * Append the repair line to the init script, for the length of the `mkfs` call only.
+ *
+ * The original bytes are returned so `unstageGuestRepair` can put them back EXACTLY. This is the same discipline
+ * `stageFirmadyneShim` had to learn the hard way: whatever is written into the extraction is read as the firmware by
+ * every provider that walks it afterwards, and here what would be read is a vendor init script carrying a line this
+ * workbench wrote. Restoring the bytes — rather than trying to strip the line back out — is the only version of this
+ * that cannot drift.
+ */
+export function stageGuestRepair(
+  rootfsPath: string,
+  line: string,
+  initScript: string,
+  log: (m: string) => void,
+): { original: Buffer; path: string } | null {
+  const abs = path.join(rootfsPath, initScript);
+  try {
+    const original = fs.readFileSync(abs);
+    fs.writeFileSync(abs, Buffer.concat([original, Buffer.from(`\n${line}\n`, 'utf8')]));
+    log(`Appended the boot-time repair to /${initScript} for the length of the mkfs call.`);
+    return { original, path: abs };
+  } catch (err) {
+    log(`Could not append the boot-time repair to /${initScript}: ${(err as Error).message}. The image is as shipped.`);
+    return null;
+  }
+}
+
+/** Put the init script's original bytes back. Best-effort and loud, for the same reason as `unstageFirmadyneShim`. */
+export function unstageGuestRepair(staged: { original: Buffer; path: string } | null, log: (m: string) => void): void {
+  if (!staged) return;
+  try {
+    fs.writeFileSync(staged.path, staged.original);
+  } catch (err) {
+    log(
+      `The repaired init script could NOT be restored (${(err as Error).message}). ${staged.path} now carries a line this workbench appended and is no longer the firmware — treat any later reading of it as an artefact of this boot.`,
+    );
   }
 }
 
@@ -192,6 +297,19 @@ export async function ensureRootfsImage(
   log(`Assembling a ${(sizeBytes / 1024 / 1024).toFixed(0)} MB ext2 image from ${kb} KiB of extracted files.`);
   await stageFirmadyneShim(rootfsPath, arch, log);
 
+  // The boot-time repair, armed only by the operator. `decideFlag` rather than `=== '1'`, so an unset flag is off
+  // and the disposition can say nobody asked — which is the difference between "the image booted as shipped" and
+  // "we never looked at whether it needed to".
+  const repairEnabled = decideFlag(REPAIR_FLAG, effectiveEnv()).enabled;
+  const repairInputs = repairEnabled ? collectGuestRepairInputs(rootfsPath) : null;
+  const repairPlan = repairInputs ? planGuestRepair(repairInputs) : null;
+  const repair = describeRepairDisposition(repairEnabled, repairPlan);
+  log(repair.note);
+  const stagedRepair =
+    repairPlan?.line && repairInputs?.initScript
+      ? stageGuestRepair(rootfsPath, repairPlan.line, repairInputs.initScript, log)
+      : null;
+
   try {
     // Sparse: the file reports its full size while occupying only what is written.
     const fd = fs.openSync(imagePath, 'w');
@@ -210,6 +328,7 @@ export async function ensureRootfsImage(
       sizeBytes,
       reason: `Built a ${(sizeBytes / 1024 / 1024).toFixed(0)} MB ext2 image from the extracted rootfs.`,
       caveat: CAVEAT,
+      repair,
     };
   } catch (err) {
     // A half-written image is worse than none: it would boot into something arbitrary.
@@ -224,10 +343,14 @@ export async function ensureRootfsImage(
       sizeBytes: 0,
       reason: `mkfs.ext2 could not assemble the image: ${(e.stderr || e.message || 'unknown failure').slice(0, 300)}`,
       caveat: CAVEAT,
+      repair,
     };
   } finally {
     // The image now holds a copy; the extraction goes back to being the firmware. On BOTH paths, because a
-    // failed mkfs leaves the staged file behind just as surely as a successful one.
+    // failed mkfs leaves the staged file behind just as surely as a successful one — and the init script is
+    // restored FIRST, since it is the vendor's own file rather than a directory of ours: leaving our line in it
+    // would make every later provider read a firmware that includes our edit.
+    unstageGuestRepair(stagedRepair, log);
     unstageFirmadyneShim(rootfsPath, log);
   }
 }

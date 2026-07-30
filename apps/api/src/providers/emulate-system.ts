@@ -57,6 +57,7 @@ import { type LaneFlagName, decideFlag, effectiveEnv } from '../flags.js';
 import { detectTools } from '../tools.js';
 import { type BootDiagnosis, diagnoseUnreachable } from './boot-diagnose.js';
 import { type EgressObservation, describeEgress, describeEgressPolicy, mergeEgress, parseEgress } from './egress.js';
+import { type RepairDisposition, describeRuleset, readGuestRuleset } from './guest-repair.js';
 import type { JobHandle } from './jobs.js';
 import { readPortMap } from './portmap-run.js';
 import { type PortProtocol, planForwards } from './portmap.js';
@@ -127,6 +128,19 @@ export interface SystemEmulationResult {
    * list, it does not reclassify it.
    */
   unreachable?: BootDiagnosis;
+  /**
+   * Whether the guest was repaired for this boot, and whether anyone asked. Optional forever, and the distinction is
+   * the point: an ABSENT field means the build predates the repair, `attempted: false` means the flag was off on this
+   * run, and `attempted: true` with no interventions means the firmware was examined and left as shipped. A verdict
+   * read without this cannot tell "it answered" from "it answered once we tore its firewall down".
+   */
+  repair?: RepairDisposition;
+  /**
+   * What the repair's own read-back found in the guest's packet filter, when it ran. The most informative outcome is
+   * an EMPTY ruleset with the markers present: the filter was empty while the SYNs were vanishing, which rules the
+   * firewall out rather than confirming it.
+   */
+  ruleset?: { ran: boolean; rules: string; flushed: boolean; note: string };
 }
 
 /** A single boot's outcome, summarised. The raw console of the pass the verdict came from is `stdout`. */
@@ -1483,6 +1497,11 @@ export async function runFullSystem(
    * behaviour, stated rather than assumed.
    */
   rootfsDir?: string | null,
+  /**
+   * What the image builder did to this rootfs, threaded in rather than re-derived: only `ensureRootfsImage` knows,
+   * and only this function has the console to read the repair's own report back out of.
+   */
+  repair?: RepairDisposition,
 ): Promise<SystemEmulationResult> {
   const qemu = QEMU_SYSTEM_BY_ARCH[arch];
   const machine = QEMU_MACHINE_BY_ARCH[arch];
@@ -1669,6 +1688,18 @@ export async function runFullSystem(
         handle.log(`  addresses: ${a.address}${a.port ? `:${a.port}` : ''}/${a.protocol} — ${a.frames} frame(s)`);
       }
     }
+    // The repair reports on itself through the console, and it is allowed to say it was unnecessary — an empty
+    // ruleset with the markers present means the filter was NOT what swallowed the packets. Read only when a repair
+    // actually ran: without one there are no markers, and `ran: false` would then describe a line that never existed.
+    const rulesetRead =
+      repair && repair.interventions.length > 0
+        ? (() => {
+            const r = readGuestRuleset(`${verdictPass.stdout}\n${verdictPass.stderr}`);
+            const note = describeRuleset(r);
+            handle.log(`Guest ruleset: ${note}`);
+            return { ...r, note };
+          })()
+        : null;
     return {
       ran: true,
       strategy: 'full-system',
@@ -1686,6 +1717,8 @@ export async function runFullSystem(
       // had a working network is still a name this firmware asks for.
       ...(egress ? { egress } : {}),
       isolated: isolate,
+      ...(repair ? { repair } : {}),
+      ...(rulesetRead ? { ruleset: rulesetRead } : {}),
       ...(unreachable.cause === 'answered' ? {} : { unreachable }),
       inference: {
         kind: inference.kind,

@@ -552,6 +552,13 @@ export const en = {
       egress:
         'ON BY DEFAULT — this is the one switch here you turn OFF to let something out, and turning it off lets A FIRMWARE YOU ARE ANALYSING REACH THE INTERNET FROM THIS MACHINE. Measured on this corpus: a booted TP-Link WDR3600 reached three public NTP servers back when off was the default. The default was flipped after measuring the cost: the same image booted open and isolated recorded the same 15 external attempts and the same verdict, so no analysis rung depends on outbound. Either way, what the firmware TRIED to reach is recorded and shown — blocking the traffic does not hide the attempt.',
     },
+    FIRMLAB_EMU_REPAIR: {
+      label: 'Repair the guest at boot so services can answer',
+      effect:
+        'Appends ONE line to the firmware’s own init script in the booted disk image, which waits ~20 s and then runs the vendor’s own `/etc/rc.d/iptables-stop` — a teardown script shipped byte-identical in all three corpus routers that nothing in the vendor boot path ever calls. It reads the live ruleset with `iptables-save` first, so a run can report that the firewall was empty and the repair changed nothing. Nothing else is written into the guest: no binary, no script, no busybox of ours.',
+      egress:
+        'Nothing leaves this machine. What it changes is the ARTEFACT: a service that answers on a repaired boot may be answering only because its packet filtering was torn down, which is a different claim from answering as shipped. Every finding from such a boot carries that sentence in `interventions`, and the init script is restored to its original bytes as soon as the image is built.',
+    },
   } satisfies Record<LaneFlagName, { label: string; effect: string; egress: string }>,
 };
 

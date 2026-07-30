@@ -123,6 +123,77 @@ export function planGuestRepair(input: GuestRepairInputs): GuestRepairPlan {
   return { line, interventions, skipped };
 }
 
+/**
+ * The flag that arms this. Off by default and deliberately so: appending a line to a firmware's init script is the
+ * most invasive thing this workbench does to an image, and it must be the operator's decision rather than a default.
+ */
+export const REPAIR_FLAG = 'FIRMLAB_EMU_REPAIR';
+
+/**
+ * Whether a boot's guest was repaired, and — the part that needs its own type — whether anyone ASKED.
+ *
+ * `interventions: []` already carries a meaning the design relies on: the image booted as shipped. But it carries
+ * that meaning only if the repair was actually considered. With the flag off nothing was examined at all, and an
+ * empty intervention list would then be a claim ("we looked and changed nothing") about a look that never happened
+ * — the same conflation this codebase refuses everywhere else, arriving here through a field whose empty value is
+ * load-bearing.
+ *
+ * So `attempted` is the discriminator, and every consumer of `interventions` has to read it: an empty list with
+ * `attempted: false` says nothing about the image, and an empty list with `attempted: true` says the firmware was
+ * inspected and left alone.
+ */
+export interface RepairDisposition {
+  /** False when the flag is off — nobody asked, and `interventions` is silence rather than a finding. */
+  attempted: boolean;
+  /** What was done to the firmware. Empty WITH `attempted` means the image as shipped. */
+  interventions: string[];
+  /** Why no repair was applied, when none was. */
+  skipped: string[];
+  /** The sentence for the log and the result. Never says "as shipped" unless the question was asked. */
+  note: string;
+}
+
+/**
+ * Pure: turn the flag and the plan into a disposition.
+ *
+ * Takes `enabled` rather than reading the environment so it stays testable and so the caller keeps the single
+ * responsibility for resolving the flag (`decideFlag` in flags.ts).
+ */
+export function describeRepairDisposition(enabled: boolean, plan: GuestRepairPlan | null): RepairDisposition {
+  if (!enabled) {
+    return {
+      attempted: false,
+      interventions: [],
+      skipped: [],
+      note: `${REPAIR_FLAG} is off, so this guest was not examined for a boot-time repair and nothing was appended to it. That is not a statement that the image needed none — the question was not asked.`,
+    };
+  }
+  if (!plan) {
+    return {
+      attempted: true,
+      interventions: [],
+      skipped: [],
+      note: `${REPAIR_FLAG} is on, but no rootfs was available to examine, so no repair could be planned.`,
+    };
+  }
+  if (!plan.line) {
+    return {
+      attempted: true,
+      interventions: [],
+      skipped: plan.skipped,
+      note: `${REPAIR_FLAG} is on and this firmware was examined; no repair was applied, so the image booted as shipped. ${plan.skipped.join(' ')}`.trim(),
+    };
+  }
+  return {
+    attempted: true,
+    interventions: plan.interventions,
+    skipped: plan.skipped,
+    note: `${REPAIR_FLAG} is on and this image was MODIFIED for the boot. ${plan.interventions.join(' ')}${
+      plan.skipped.length ? ` ${plan.skipped.join(' ')}` : ''
+    }`,
+  };
+}
+
 /** One captured ruleset, read back off the guest's console. */
 export interface GuestRuleset {
   /** True when the marker pair was found — i.e. the appended line actually ran. */

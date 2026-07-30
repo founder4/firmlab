@@ -78,6 +78,7 @@ describe('resolveFlags is localised in its prose and identical in everything els
       'FIRMLAB_CAPTURE',
       'FIRMLAB_CAPTURE_GATEWAY',
       'FIRMLAB_EMU_ISOLATE',
+      'FIRMLAB_EMU_REPAIR',
     ]);
     expect(find(resolveFlags(env({}), {}, 'es'), 'FIRMLAB_HASH_LOOKUP').requires).toBe('FIRMLAB_RESEARCH');
   });

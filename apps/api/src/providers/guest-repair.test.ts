@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { FLUSHED, RULES_BEGIN, RULES_END, describeRuleset, planGuestRepair, readGuestRuleset } from './guest-repair.js';
+import {
+  FLUSHED,
+  type GuestRepairInputs,
+  REPAIR_FLAG,
+  RULES_BEGIN,
+  RULES_END,
+  describeRepairDisposition,
+  describeRuleset,
+  planGuestRepair,
+  readGuestRuleset,
+} from './guest-repair.js';
 
 const inputs = (o: Partial<Parameters<typeof planGuestRepair>[0]> = {}) => ({
   initScript: 'etc/rc.d/rcS',
@@ -110,5 +120,74 @@ describe('readGuestRuleset', () => {
   it('counts the rules it found', () => {
     const r = readGuestRuleset(console_('-P INPUT DROP\n-A INPUT -j X\n-A FORWARD -j Y'));
     expect(describeRuleset(r)).toMatch(/2 iptables rule\(s\)/);
+  });
+});
+
+/**
+ * `interventions: []` is a load-bearing empty value — the design reads it as "the image as shipped" — and that
+ * reading is only true if the firmware was actually examined. With the flag off nothing was looked at, so the same
+ * empty list would be a claim about a look that never happened. This is that distinction, and it is the reason
+ * `attempted` exists at all.
+ */
+describe('describeRepairDisposition — "nobody asked" is not "asked and changed nothing"', () => {
+  const plannable: GuestRepairInputs = {
+    initScript: 'etc/rc.d/rcS',
+    hasIptablesStop: true,
+    hasIptablesSave: true,
+    hasPing: true,
+  };
+
+  it('reports the flag being off as silence, and refuses to say the image was as shipped', () => {
+    const d = describeRepairDisposition(false, null);
+    expect(d.attempted).toBe(false);
+    expect(d.interventions).toEqual([]);
+    expect(d.note).toMatch(/the question was not asked/);
+    expect(d.note).not.toMatch(/as shipped/);
+  });
+
+  it('reports an examined-and-untouched firmware as exactly that, with the same empty list', () => {
+    // No iptables-stop: the plan declines, and declining is a measurement.
+    const plan = planGuestRepair({ ...plannable, hasIptablesStop: false });
+    const d = describeRepairDisposition(true, plan);
+    expect(d.attempted).toBe(true);
+    expect(d.interventions).toEqual([]);
+    expect(d.note).toMatch(/booted as shipped/);
+    // The pair: identical `interventions`, opposite meanings, and the discriminator is not the list.
+    expect(describeRepairDisposition(false, null).interventions).toEqual(d.interventions);
+    expect(describeRepairDisposition(false, null).attempted).not.toBe(d.attempted);
+  });
+
+  it('carries the skip reason so an unattempted repair is never mistaken for a failed one', () => {
+    const d = describeRepairDisposition(true, planGuestRepair({ ...plannable, hasPing: false }));
+    expect(d.skipped.join(' ')).toMatch(/no `ping` applet/);
+    expect(d.note).toMatch(/booted as shipped/);
+  });
+
+  it('says the image was MODIFIED when a line was appended, and names what ran', () => {
+    const d = describeRepairDisposition(true, planGuestRepair(plannable));
+    expect(d.attempted).toBe(true);
+    expect(d.interventions).toHaveLength(1);
+    expect(d.note).toMatch(/was MODIFIED for the boot/);
+    expect(d.interventions[0]).toMatch(/iptables-stop/);
+    expect(d.interventions[0]).toMatch(/may have answered only because/);
+  });
+
+  it('distinguishes "no rootfs to examine" from both of the above', () => {
+    const d = describeRepairDisposition(true, null);
+    expect(d.attempted).toBe(true);
+    expect(d.interventions).toEqual([]);
+    expect(d.note).toMatch(/no rootfs was available to examine/);
+    expect(d.note).not.toMatch(/as shipped/);
+  });
+
+  it('names the flag in every branch, so a reader knows which switch produced the state', () => {
+    for (const d of [
+      describeRepairDisposition(false, null),
+      describeRepairDisposition(true, null),
+      describeRepairDisposition(true, planGuestRepair({ ...plannable, hasIptablesStop: false })),
+      describeRepairDisposition(true, planGuestRepair(plannable)),
+    ]) {
+      expect(d.note).toContain(REPAIR_FLAG);
+    }
   });
 });

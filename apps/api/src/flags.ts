@@ -40,7 +40,8 @@ export type LaneFlagName =
   | 'FIRMLAB_HASH_LOOKUP'
   | 'FIRMLAB_CAPTURE'
   | 'FIRMLAB_CAPTURE_GATEWAY'
-  | 'FIRMLAB_EMU_ISOLATE';
+  | 'FIRMLAB_EMU_ISOLATE'
+  | 'FIRMLAB_EMU_REPAIR';
 
 /** A lane flag the operator may flip at runtime — its structure. The description of it is in the catalogue. */
 export interface ToggleableFlag {
@@ -92,6 +93,11 @@ export const TOGGLEABLE_FLAGS: readonly ToggleableFlag[] = [
   // means the outward act is now switching it OFF, and `decideFlag` exists so that act is never confused with
   // nobody having chosen.
   { name: 'FIRMLAB_EMU_ISOLATE', outward: false, defaultOn: true },
+  // The most invasive thing this workbench does to an image: it appends one line to the firmware's own init script
+  // so the booted guest runs a teardown the vendor ships and never calls. `outward: false` — nothing leaves the
+  // machine — but it is the one flag that changes the ARTEFACT under analysis rather than what is asked of it,
+  // which is why it is off by default and why `Finding.interventions` carries the fact onto every result.
+  { name: 'FIRMLAB_EMU_REPAIR', outward: false },
 ];
 
 const ALLOWED: ReadonlySet<string> = new Set<string>(TOGGLEABLE_FLAGS.map((f) => f.name));

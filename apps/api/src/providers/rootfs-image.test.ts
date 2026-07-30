@@ -1,13 +1,17 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+import { planGuestRepair } from './guest-repair.js';
 import {
   buildMkfsArgs,
+  collectGuestRepairInputs,
   ensureRootfsImage,
   imageIsCurrent,
   planImageSize,
+  stageGuestRepair,
   unstageFirmadyneShim,
+  unstageGuestRepair,
 } from './rootfs-image.js';
 
 describe('planImageSize', () => {
@@ -113,5 +117,98 @@ describe('ensureRootfsImage leaves the extraction as it found it', () => {
     expect(result.reason).toMatch(/No extracted rootfs directory/);
     expect(fs.existsSync(path.join(dir, 'nope'))).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * The staging discipline `stageFirmadyneShim` had to learn the hard way, applied to a file that is far worse to
+ * leave behind: the vendor's OWN init script. Whatever sits in the extraction is read as the firmware by every
+ * provider that walks it afterwards, so the bytes have to come back exactly.
+ */
+describe('the boot-time repair is staged into the extraction and taken back out', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-'));
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  const rootfs = (name: string, files: Record<string, string>): string => {
+    const root = path.join(tmp, name);
+    for (const [rel, body] of Object.entries(files)) {
+      const abs = path.join(root, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body);
+    }
+    return root;
+  };
+
+  it('restores the init script BYTE FOR BYTE, not by stripping the line back out', () => {
+    const original = '#!/bin/sh\nmount -t proc none /proc\nexec /sbin/init\n';
+    const root = rootfs('restore', { 'etc/rc.d/rcS': original });
+    const abs = path.join(root, 'etc/rc.d/rcS');
+
+    const staged = stageGuestRepair(root, '(echo hi) &', 'etc/rc.d/rcS', () => {});
+    expect(fs.readFileSync(abs, 'utf8')).toContain('(echo hi) &');
+    unstageGuestRepair(staged, () => {});
+    // Byte-exact, which stripping could not guarantee for a script that already ended without a newline.
+    expect(fs.readFileSync(abs, 'utf8')).toBe(original);
+  });
+
+  it('is a no-op when nothing was staged, so the not-repaired path cannot corrupt anything', () => {
+    const original = '#!/bin/sh\n';
+    const root = rootfs('noop', { 'etc/rc.d/rcS': original });
+    unstageGuestRepair(null, () => {});
+    expect(fs.readFileSync(path.join(root, 'etc/rc.d/rcS'), 'utf8')).toBe(original);
+  });
+
+  it('reports the failure and stages nothing when the init script cannot be read', () => {
+    const logs: string[] = [];
+    const staged = stageGuestRepair(path.join(tmp, 'absent'), 'x', 'etc/rc.d/rcS', (m) => logs.push(m));
+    expect(staged).toBeNull();
+    expect(logs.join(' ')).toMatch(/The image is as shipped/);
+  });
+});
+
+describe('collectGuestRepairInputs reads the rootfs, and reads it honestly', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-in-'));
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('finds what the corpus routers ship', () => {
+    const root = path.join(tmp, 'tplink');
+    fs.mkdirSync(path.join(root, 'etc/rc.d'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'sbin'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'etc/rc.d/rcS'), '#!/bin/sh\n');
+    fs.writeFileSync(path.join(root, 'etc/rc.d/iptables-stop'), 'iptables -F\n');
+    fs.writeFileSync(path.join(root, 'sbin/iptables-save'), 'x');
+    fs.writeFileSync(path.join(root, 'bin/busybox'), 'junk\u0000ping\u0000sleep\u0000more');
+
+    expect(collectGuestRepairInputs(root)).toEqual({
+      initScript: 'etc/rc.d/rcS',
+      hasIptablesStop: true,
+      hasIptablesSave: true,
+      hasPing: true,
+    });
+  });
+
+  /**
+   * A path the extractor cut to `/dev/null` passes `existsSync` and is unrunnable, which would have produced a
+   * plan that appends a line invoking a script that is not there — the extract-neutered defect arriving in a new
+   * place. `lstat` first is what keeps the two apart.
+   */
+  it('treats a path the extractor neutered as absent, not as present', () => {
+    const root = path.join(tmp, 'cut');
+    fs.mkdirSync(path.join(root, 'etc/rc.d'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'etc/rc.d/rcS'), '#!/bin/sh\n');
+    fs.symlinkSync('/dev/null', path.join(root, 'etc/rc.d/iptables-stop'));
+    const i = collectGuestRepairInputs(root);
+    expect(i.initScript).toBe('etc/rc.d/rcS');
+    expect(i.hasIptablesStop).toBe(false);
+    // And the plan then declines, rather than appending a line that calls nothing.
+    expect(planGuestRepair(i).line).toBeNull();
+  });
+
+  it('reports a busybox with no ping applet as having none, rather than assuming one', () => {
+    const root = path.join(tmp, 'noping');
+    fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'bin/busybox'), 'junk\u0000mapping\u0000pinging\u0000more');
+    expect(collectGuestRepairInputs(root).hasPing).toBe(false);
   });
 });
