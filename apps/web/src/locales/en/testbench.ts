@@ -114,4 +114,22 @@ export const testbench = {
     hours: (n: number) => `${n}h ago`,
     days: (n: number) => `${n}d ago`,
   },
+
+  /**
+   * `nx: 0` is a measurement and `nx: null` is the absence of one, and here the blank points at the ALARMING
+   * conclusion — so the three readings never share a word.
+   */
+  hardening: {
+    heading: 'Binary hardening',
+    notMeasured: 'not measured',
+    flagOn: 'on',
+    flagOff: 'OFF',
+    noneMeasured:
+      'No binary in this image has been through triage, so every hardening column below would be blank — and a blank NX is not an absent NX. Run triage on a binary from its row and the reading, including a negative one, will say so.',
+    coverage: (p: { measured: number; total: number }) => `hardening measured on ${p.measured} of ${p.total} binaries`,
+    triagedNoFlags: (n: number) =>
+      `${n} binary(ies) were triaged and yielded no hardening flags at all — radare2 read them and recorded nothing, which is not the same as never having looked.`,
+    unmeasured: (fields: string) =>
+      `${fields} is named in this workbench’s own capability matrix and is measured by no provider here, so it is absent from every row rather than off.`,
+  },
 };

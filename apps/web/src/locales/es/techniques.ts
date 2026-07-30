@@ -74,7 +74,7 @@ export const techniques: Messages['techniques'] = {
     extraction: { name: 'Extracción del sistema de ficheros (squashfs/jffs2/ubifs/cramfs/cpio)' },
     secrets: { name: 'Barrido de secretos y credenciales (+ gitleaks a fondo)' },
     sbom: { name: 'SBOM y CVEs (syft → OSV/NVD/grype)' },
-    hardening: { name: 'Endurecimiento de binarios (NX / canary / PIC / RELRO)' },
+    hardening: { name: 'Endurecimiento del binario (NX / canary / PIC medidos por binario; RELRO sin medir)' },
     decompile: { name: 'Triaje con Ghidra / radare2 + andamiaje de taint' },
     fsaudit: { name: 'Heurísticas de scripts de arranque y de configuración (estilo firmwalker)' },
     certs: { name: 'Análisis de certificados y material de claves' },

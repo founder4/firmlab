@@ -103,4 +103,22 @@ export const testbench: Messages['testbench'] = {
     hours: (n: number) => `hace ${n} h`,
     days: (n: number) => `hace ${n} d`,
   },
+
+  /**
+   * `nx: 0` is a measurement and `nx: null` is the absence of one, and here the blank points at the ALARMING
+   * conclusion — so the three readings never share a word.
+   */
+  hardening: {
+    heading: 'Endurecimiento del binario',
+    notMeasured: 'sin medir',
+    flagOn: 'sí',
+    flagOff: 'NO',
+    noneMeasured:
+      'Ningún binario de esta imagen ha pasado por el triaje, así que toda columna de endurecimiento saldría en blanco — y un NX en blanco no es un NX ausente. Lanza el triaje de un binario desde su fila y la lectura, incluso negativa, lo dirá.',
+    coverage: (p) => `endurecimiento medido en ${p.measured} de ${p.total} binarios`,
+    triagedNoFlags: (n) =>
+      `${n} binario(s) pasaron el triaje y no dieron ninguna bandera de endurecimiento — radare2 los leyo y no registro nada, que no es lo mismo que no haber mirado nunca.`,
+    unmeasured: (fields) =>
+      `${fields} aparece nombrado en la propia matriz de capacidades de este banco y ningun proveedor lo mide aqui, asi que esta ausente en todas las filas, no apagado.`,
+  },
 };

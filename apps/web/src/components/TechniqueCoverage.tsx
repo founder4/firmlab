@@ -80,7 +80,10 @@ const COVERAGE: CovGroup[] = [
       { id: 'extraction', status: 'done', ref: 'providers/extract' },
       { id: 'secrets', status: 'done', ref: 'core + gitleaks' },
       { id: 'sbom', status: 'done', ref: 'providers/sbom + research' },
-      { id: 'hardening', status: 'done', ref: 'radare2 checksec' },
+      // `partial`, not `done`, and the locale's own header says why: "`partial` must never sound finished". NX,
+      // canary and PIC are measured by radare2 triage — per binary, on demand, and on this corpus 2 of 2007 rows
+      // carry any of them. RELRO is named in this technique's label and is measured by NO provider here at all.
+      { id: 'hardening', status: 'partial', ref: 'radare2 checksec (NX/canary/PIC only; RELRO unmeasured)' },
       { id: 'decompile', status: 'done', ref: 'providers/decompile + zeroday' },
       { id: 'fsaudit', status: 'done', ref: 'providers/fsaudit' },
       { id: 'certs', status: 'done', ref: 'providers/certs (X.509)' },

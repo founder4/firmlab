@@ -139,3 +139,87 @@ describe('TestBench — the run ledger an operator can act on', () => {
     expect(screen.getByText(/Run extraction on the\s+Filesystem tab/)).toBeTruthy();
   });
 });
+
+/**
+ * `nx`, `canary`, `pic`, `bits`, `importsSummary` and `emulationStatus` were collected since the binaries table
+ * existed and rendered NOWHERE, while the capability matrix reported `hardening: done`. Measured on the real corpus:
+ * 2007 binaries, 2 triaged, 2 with any hardening flag — so almost every row is null, and this is the one place in
+ * the workbench where the blank points at the ALARMING conclusion rather than the reassuring one.
+ */
+describe('per-binary hardening — a blank NX is not an absent NX', () => {
+  const flag = (path: string, label: string): string | undefined => {
+    const rows = [...document.querySelectorAll(`[data-hardening="${label}"]`)];
+    return rows.map((e) => (e as HTMLElement).dataset.flag)[rows.length === 1 ? 0 : 0];
+  };
+
+  it('renders the three flags it has always collected', async () => {
+    setup([], [bin('sbin/one')]);
+    render(<TestBench imageId="img" />);
+    await waitFor(() => expect(screen.getByText('sbin/one')).toBeTruthy());
+    for (const label of ['NX', 'canary', 'PIC']) {
+      expect(document.querySelector(`[data-hardening="${label}"]`)).toBeTruthy();
+    }
+  });
+
+  it('reads a measured ZERO as OFF and an absent value as not-measured — opposite claims', async () => {
+    setup([], [{ ...bin('sbin/off'), nx: 0 }]);
+    render(<TestBench imageId="img" />);
+    await waitFor(() => expect(screen.getByText('sbin/off')).toBeTruthy());
+    expect(flag('sbin/off', 'NX')).toBe('off');
+
+    setup([], [{ ...bin('sbin/unknown'), nx: null, canary: null, pic: null, triaged: 0 }]);
+    render(<TestBench imageId="img" />);
+    await waitFor(() => expect(screen.getByText('sbin/unknown')).toBeTruthy());
+    const flags = [...document.querySelectorAll('[data-hardening="NX"]')].map((e) => (e as HTMLElement).dataset.flag);
+    // Both renders are in the DOM; the second row must NOT read as off.
+    expect(flags).toContain('not-measured');
+  });
+
+  it('leads with WHY when nothing has been measured, instead of drawing a grid of blanks', async () => {
+    setup([], [{ ...bin('a'), nx: null, canary: null, pic: null, triaged: 0 }]);
+    render(<TestBench imageId="img" />);
+    await waitFor(() => expect(screen.getByText('a')).toBeTruthy());
+    const note = document.querySelector('[data-role="hardening-coverage"]');
+    expect(note?.textContent).toMatch(/a blank NX is not an absent NX/);
+    expect(note?.textContent).not.toMatch(/measured on 0 of/);
+  });
+
+  it('prints the denominator once something HAS been measured', async () => {
+    setup(
+      [],
+      [
+        { ...bin('a'), nx: 1 },
+        { ...bin('b'), nx: null, canary: null, pic: null, triaged: 0 },
+      ],
+    );
+    render(<TestBench imageId="img" />);
+    await waitFor(() => expect(screen.getByText('a')).toBeTruthy());
+    expect(document.querySelector('[data-role="hardening-coverage"]')?.textContent).toMatch(
+      /hardening measured on 1 of 2 binaries/,
+    );
+  });
+
+  it('separates "triaged and yielded nothing" from "never triaged"', async () => {
+    setup(
+      [],
+      [
+        { ...bin('a'), nx: null, canary: null, pic: null, triaged: 1 },
+        { ...bin('b'), nx: 1 },
+      ],
+    );
+    render(<TestBench imageId="img" />);
+    await waitFor(() => expect(screen.getByText('a')).toBeTruthy());
+    expect(document.querySelector('[data-role="hardening-coverage"]')?.textContent).toMatch(
+      /1 binary\(ies\) were triaged and yielded no hardening flags/,
+    );
+  });
+
+  it('says RELRO is advertised by the matrix and measured by nothing', async () => {
+    setup([], [bin('a')]);
+    render(<TestBench imageId="img" />);
+    await waitFor(() => expect(screen.getByText('a')).toBeTruthy());
+    const note = document.querySelector('[data-role="hardening-coverage"]');
+    expect(note?.textContent).toMatch(/RELRO is named in this workbench’s own capability matrix/);
+    expect(note?.textContent).toMatch(/absent from every row rather than off/);
+  });
+});

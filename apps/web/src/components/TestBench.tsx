@@ -25,6 +25,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type BinaryEntry, type EmulationMenu, type RunSummary, type SymReachResult, api } from '../api';
+import { UNMEASURED_HARDENING, hardeningCoverage, hardeningFlag, hardeningIsInformative } from '../hardening';
 import { type Messages, useMessages } from '../i18n';
 
 /** Purely presentational: which dot and badge colour an outcome gets. Not prose, so not in the catalogue. */
@@ -72,6 +73,28 @@ function RunRow({ run, onOpen }: { run: RunSummary; onOpen: (r: RunSummary) => v
         <time dateTime={new Date(run.startedAt).toISOString()}>{ago(run.startedAt, t.testbench)}</time>
       </span>
     </button>
+  );
+}
+
+/**
+ * One hardening flag, with `not-measured` as a first-class reading.
+ *
+ * The three never share a word and never share a colour. A blank here reads as "this binary has no NX", which is the
+ * opposite of what a null means — and on this corpus 2005 of 2007 rows are null.
+ */
+function HardeningBadge({ label, value }: { label: string; value: unknown }): JSX.Element {
+  const t = useMessages();
+  const flag = hardeningFlag(value);
+  const text =
+    flag === 'on'
+      ? t.testbench.hardening.flagOn
+      : flag === 'off'
+        ? t.testbench.hardening.flagOff
+        : t.testbench.hardening.notMeasured;
+  return (
+    <span className="mono" data-hardening={label} data-flag={flag} style={{ fontSize: 11 }}>
+      {label} {text}
+    </span>
   );
 }
 
@@ -214,6 +237,8 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
     return () => window.clearInterval(timer);
   }, [ledger, active, imageId, refresh]);
 
+  const hardening = hardeningCoverage(binaries);
+
   if (!rootfsReady && binaries.length === 0) {
     return (
       <div className="panel">
@@ -232,6 +257,27 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
       <div className="panel">
         <div className="panel-title">{t.sections.testbench}</div>
         <div className="panel-sub">{t.testbench.sub(binaries.length, totalRuns, withRuns)}</div>
+        {/* The denominator, because the columns below are blank on almost every row and a grid of blanks is what a
+            reader skims past. Measured on this corpus: 2 of 2007 binaries have any hardening flag at all. */}
+        <div className="panel-sub" data-role="hardening-coverage" style={{ display: 'grid', gap: 4 }}>
+          {hardeningIsInformative(hardening) ? (
+            <span className="mono" style={{ fontSize: 11.5 }}>
+              {t.testbench.hardening.coverage({ measured: hardening.measured, total: hardening.total })}
+            </span>
+          ) : (
+            <span className="hint" style={{ maxWidth: '72ch' }}>
+              {t.testbench.hardening.noneMeasured}
+            </span>
+          )}
+          {hardening.triagedWithoutFlags > 0 && (
+            <span className="hint" style={{ maxWidth: '72ch' }}>
+              {t.testbench.hardening.triagedNoFlags(hardening.triagedWithoutFlags)}
+            </span>
+          )}
+          <span className="hint" style={{ maxWidth: '72ch' }}>
+            {t.testbench.hardening.unmeasured([...UNMEASURED_HARDENING].join(', '))}
+          </span>
+        </div>
 
         {/* What the bench can do right now, and what each gap costs. Stated once, up front, rather than as a
             rejection after a button is pressed. */}
@@ -285,7 +331,15 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
               <span className="bench-path mono">{b.path}</span>
               <span className="bench-meta">
                 {b.arch ?? t.testbench.archUnknown}
+                {b.bits ? ` · ${b.bits}-bit` : ''}
                 {b.networkFacing ? t.testbench.networkFacing : ''}
+              </span>
+              {/* Collected since the binaries table existed and rendered nowhere, while the capability matrix
+                  reported the technique done. */}
+              <span className="bench-hardening" style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
+                <HardeningBadge label="NX" value={b.nx} />
+                <HardeningBadge label="canary" value={b.canary} />
+                <HardeningBadge label="PIC" value={b.pic} />
               </span>
               <span className="bench-state">
                 {runs.length === 0 ? (

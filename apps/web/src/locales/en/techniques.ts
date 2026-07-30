@@ -88,7 +88,7 @@ export const techniques = {
     extraction: { name: 'Filesystem extraction (squashfs/jffs2/ubifs/cramfs/cpio)' },
     secrets: { name: 'Secret & credential scan (+ gitleaks deep scan)' },
     sbom: { name: 'SBOM + CVE (syft → OSV/NVD/grype)' },
-    hardening: { name: 'Binary hardening (NX / canary / PIC / RELRO)' },
+    hardening: { name: 'Binary hardening (NX / canary / PIC measured per binary; RELRO not measured)' },
     decompile: { name: 'Ghidra / radare2 triage + taint scaffold' },
     fsaudit: { name: 'Init-script / config-security heuristics (firmwalker-style)' },
     certs: { name: 'Certificate / key artifact analysis' },
