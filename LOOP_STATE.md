@@ -27,9 +27,9 @@ cinco proveedores que corren y no se pueden leer.
 - [x] **A3. El extractor neutraliza a `/dev/null` los symlinks que escapan, en silencio.** Cerrado en iter 12
       (`92553de`). La mitad de ficheros de cuentas ya estaba resuelta y la entrada del backlog no lo sabía; el
       hecho se registra ahora donde se descubre, una vez, no en cada lector.
-- [ ] **A4. La rama de reglas de yara nunca ha visto un yara real** — validada contra un stub que hablaba el
-      CLI de YARA 4.x. `yara` no está en ninguna receta (es deliberado: el corpus de reglas lo trae el
-      operador), así que esto es decidir si se instala o si la rama se declara no validable aquí.
+- [x] **A4. La rama de reglas de yara nunca ha visto un yara real.** Cerrado en iter 13 (`12fbd79`). Se instaló
+      un yara 4.2.3 real y la rama falló: no era un defecto de formato, era la ruta de recuperación entera
+      desactivada. `Dockerfile.tools` gana `yara`; falta un rebuild `--tools` para que el desplegado lo tenga.
 
 ### Bloque B — inferencia de red (§4 #1 de `METHODOLOGY-GAPS.md`)
 
@@ -354,3 +354,35 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   marca cuáles están así — se lee correctamente como «nunca se inspeccionó», pero hace que un recuento del corpus
   dé cero; (c) `fsaudit.readInside` sigue fundiendo ausente/ilegible/escapa en `''` para lo que no es un fichero
   de cuentas, y es la última instancia del patrón.
+- iter 13 (2026-07-30): cerrado **A4**, la rama de yara. La decisión era instalar o declarar no validable: instalé
+  un **yara 4.2.3-4/arm64 real** en el contenedor y lo conduje contra el rootfs del DVRF con un corpus de 3
+  ficheros, uno roto a propósito. Primero lo bueno: **el parser de líneas de match, escrito contra un stub,
+  acierta** — 6 líneas reales, 3 grupos, 0 ilegibles, incluida la regla sin tags que yara imprime como `[]`. La
+  hipótesis del backlog era falsa ahí.
+  El fallo estaba en los diagnósticos del compilador, y era grande. **yara imprime en DOS formas y el módulo
+  conocía una**, porque se escribió desde el orden de impresión de `cli/yara.c`:
+  `mod.yar(1): error: unknown module "string"` (ámbito de fichero, funcionaba) frente a
+  `error: rule "Broken" in bad.yar(1): undefined string "$nope"` y
+  `warning: rule "Slow" in w1.yar(1): string "$a" may slow down scanning` (ámbito de regla, descartadas del todo —
+  y es la forma COMÚN, la que produce cualquier regla rota o lenta de un corpus real).
+  **Y no era un defecto de formato: desactivaba la recuperación.** `compileEachRuleFile` está condicionado a que
+  el parser encuentre un error, así que nunca se disparaba. A/B sobre los mismos bytes reales:
+  ANTES `state=scan_failed`, `reason="Command failed: yara -e -g -a 60 …"`, declaradas 5 / **aplicadas 5** /
+  rechazadas 0, **0 matches y ningún fichero escaneado**; DESPUÉS `state=scanned`, 5 / 4 / 1, 4 grupos de match,
+  5 hallazgos, **235 ficheros escaneados**. Un solo fichero malformado en un ruleset público devolvía cero matches
+  mientras el denominador afirmaba haber aplicado las cinco reglas — una cota leyéndose como respuesta. Tercera
+  instancia de «un guardián sólo vale lo que su camino de éxito, que es el que nadie ejecuta».
+  **Predicción del backlog corregida:** decía que Debian carece del módulo `cuckoo`. No es cierto — importan
+  cuckoo, magic, hash, dotnet, math, pe, elf, time, console, macho y dex; sólo falla un nombre inventado. Así que
+  `missing-module` no tiene disparador en esta plataforma, que es un hecho sobre su cobertura y no razón para
+  quitarla. Verificado además que `-a` es `--timeout=SECONDS` (el uso del proveedor es correcto) y que **el orden
+  de salida de `--scan-list` no es el de la lista** — yara escanea en hilos, así que nada puede depender de él.
+  Los fixtures de los tests son ahora cadenas CAPTURADAS del binario, no redactadas desde el fuente.
+  Verificación: `pnpm test` → core 75 / api **1793** / web 326 verde · `pnpm check` → Done · `pnpm biome` → limpio.
+  Un fallo propio en el camino: escribí la expectativa del test en un orden distinto al de las líneas de stderr, y
+  el parser conserva el orden de yara — el código tenía razón, la aserción no.
+  **Puntos flojos nuevos en `docs/BACKLOG.md`, NO implementados:** (a) el desplegado no tendrá yara hasta un
+  rebuild `--tools`, así que `/api/tools` seguirá reportándolo ausente y el proveedor seguirá degradando con
+  honestidad — correcto, pero hay que decirlo para que no se dé el arreglo por vivo; (b) un warning con ámbito de
+  regla ya se parsea y sigue sin cambiar nada, porque `compileEachRuleFile` filtra a `level === 'error'` — una
+  regla lenta es riesgo de cobertura bajo `-a`, y la prosa del módulo promete más de lo que hace.
