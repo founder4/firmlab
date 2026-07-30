@@ -2,12 +2,82 @@
 
 Backlog en uso: `docs/BACKLOG.md` (el del proyecto; no se crea otro en la raíz).
 
-## Tarea actual: Campos que hacen invisible una limitación (bloque 1 de la auditoría de visibilidad)
+## Cómo se usa este fichero
+
+El loop dispara **el mismo prompt** en cada iteración, así que este fichero es la única memoria entre
+iteraciones: la agenda de abajo dice qué toca, y el historial dice qué ya se hizo y qué destapó. Al empezar
+una iteración se lee la agenda y se coge **el primer punto sin marcar**; al terminar se marca, se anota en el
+historial y se apunta en `docs/BACKLOG.md` cualquier cosa nueva que haya salido.
+
+## Agenda en curso (orden acordado 2026-07-30)
+
+Tres bloques, en este orden y por esta razón: el egreso contradice una promesa que el producto publica; la
+inferencia de red desbloquea tres capacidades que hoy no tienen a qué hablarle; el bloque 2 de visibilidad son
+cinco proveedores que corren y no se pueden leer.
+
+### Bloque A — los defectos activos (⚠ en `docs/BACKLOG.md`)
+
+- [ ] **A1. El invitado emulado tiene internet de salida.** `-netdev user` da egreso sin restricción y el
+      WDR3600 alcanzó tres NTP públicos; choca de frente con «con todas las banderas apagadas: sin red».
+      `restrict=on` mantiene `hostfwd` y corta la salida. **Lo que hay que decidir y no solo parchear:** un
+      arranque aislado y uno que no contactó nada no son el mismo hecho, y el panel de egreso ya distingue
+      esas dos frases desde la iter 9 — la política nueva no puede volver a fundirlas.
+- [ ] **A2. El cap de listado esconde el binario que el rank existe para promover.** `selectFindings` ordena
+      por tamaño ascendente, así que con más candidatos que las 45 plazas cae primero el más grande — y el
+      demonio expuesto es siempre el más grande (WDR3600: `usr/bin/httpd`, 1,7 MB, autostart en :80).
+      `BinVulnResult` solo expone los `findings` post-cap. Ojo al efecto secundario que ya está anotado: si
+      los leads leen `candidates`, nombrarán binarios que no están en el ledger, y eso necesita su respuesta.
+- [ ] **A3. El extractor neutraliza a `/dev/null` los symlinks que escapan, en silencio**, y cada proveedor
+      lee después un fichero vacío y lo reporta como ausencia. Es la regla 3 del proyecto incumplida en el
+      extractor.
+- [ ] **A4. La rama de reglas de yara nunca ha visto un yara real** — validada contra un stub que hablaba el
+      CLI de YARA 4.x. `yara` no está en ninguna receta (es deliberado: el corpus de reglas lo trae el
+      operador), así que esto es decidir si se instala o si la rama se declara no validable aquí.
+
+### Bloque B — inferencia de red (§4 #1 de `METHODOLOGY-GAPS.md`)
+
+- [ ] **B1. Inferencia de red al estilo firmadyne/FirmAE.** Los kernels firmadyne ya trazan cada `execve`, así
+      que la consola lleva las interfaces y direcciones que el firmware *intenta* configurar: observar lo que
+      quiere y re-arrancar con una NIC/VLAN que encaje. Desbloquea `webprobe`, la enumeración de servicios y
+      cualquier test protocol-aware, que hoy a menudo no tienen demonio alcanzable. Mientras no exista,
+      `confirmed_full_system` significa honestamente «el sistema arrancó».
+
+### Bloque C — bloque 2 de la auditoría de visibilidad
+
+- [ ] **C1. Cinco capacidades con ruta y cero lectores en `apps/web`**: `yarascan`, `funcdiff`, `fwhunt`,
+      `nvram`, `ghidra`. Cada una trae su propia historia de cobertura. `DynProbeResult` ni está tipado en el
+      cliente, así que `controlOffset` — el punto entero de la sonda — no tiene dónde leerse.
+- [ ] **C2. Trece métodos de API sin llamante.** El más agudo es `amendAssertion`: `OperatorPanel` pinta el
+      historial de enmiendas y no hay UI capaz de producir una.
+- [ ] **C3. Cuatro secciones sin enlace en ninguna parte**: `structure`, `files`, `hardware`, `compmap`. La
+      más cara es `files`, «la superficie que permite comprobar la evidencia de un hallazgo en vez de
+      confiarla». `overview` es un id muerto que `resolveSection` remapea a `dossier`.
+- [ ] **C4. El endurecimiento por binario se recoge y nunca se muestra** (`nx`, `canary`, `pic`, `bits`,
+      `sha1`, `importsSummary`) mientras la matriz anuncia `hardening: done`.
+
+### Deuda de documentación, para cerrar en cualquier iteración con hueco
+
+- [ ] **D1. `METHODOLOGY-GAPS.md` §4 item #2 está desfasado.** Describe tres cotas mal asignadas y las
+      etiqueta «cheapest value in the ledger»; las tres están arregladas (`e8b23c0`, `22a7961`, y el probe
+      rank habilitado el 29-07). Re-derivar el item con lo que sigue abierto.
+
+## Definición de hecho (la de la casa, por iteración)
+
+- [ ] 1. Un punto de la agenda cerrado — no varios a medias.
+- [ ] 2. La lógica de decisión, pura y exportada, en un módulo que no importe `store.js`, con tests que
+      afirmen que «no se preguntó» ≠ «se preguntó y no había».
+- [ ] 3. `pnpm test` · `pnpm check` · `pnpm biome` en verde, con los recuentos anotados.
+- [ ] 4. **Validación in-container sobre bytes reales**, no solo la suite: `pnpm ui:shot` o `docker exec` con
+      la salida citada. Los 9 iters anteriores encontraron así defectos que ningún test alcanzaba.
+- [ ] 5. Lo surgido y no implementado, en `docs/BACKLOG.md`, con su evidencia y su impacto.
+- [ ] 6. Commits convencionales, minúscula, **sin trailers de atribución**. Commit local; no se hace `push`.
+
+## Tarea cerrada: Campos que hacen invisible una limitación (bloque 1 de la auditoría de visibilidad)
 
 De `docs/BACKLOG.md` → «Workbench UI — the visibility audit», item ◐. Cuatro cerrados en `1a2fa17`
-(`Finding.rationale`, `elfBudgetExhausted`, cobertura de búsqueda, `kev.reason`). Quedan los de abajo.
-
-## Definición de hecho (DoD)
+(`Finding.rationale`, `elfBudgetExhausted`, cobertura de búsqueda, `kev.reason`). **Los seis puntos del DoD
+quedaron cerrados en 9 iteraciones** (`121320c`); los dos puntos flojos que siguen abiertos pasan a la agenda
+de arriba o se quedan aquí anotados por falta de muestra en el corpus.
 
 - [x] 1. `ResearchResult.hashLookup` se renderiza, y sus **seis** desenlaces son distinguibles entre sí —
       en particular `skipped_salted` (nunca se envió) no puede leerse como `miss` (se consultó y no había).
