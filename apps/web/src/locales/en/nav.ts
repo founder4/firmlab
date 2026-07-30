@@ -11,7 +11,8 @@ export const nav = {
   firmware: 'Firmware',
   activeImage: 'Active image',
   allImages: 'All images',
-  navigateHint: 'Navigate the analysis from the step timeline above, or from All sections at the top of the dossier — the timeline covers eight of the nineteen.',
+  navigateHint:
+    'Navigate the analysis from the step timeline above, or from All sections at the top of the dossier — the timeline covers eight of the nineteen.',
   localOnly: 'Local-only. Never expose to the internet.',
   toggleNav: 'Toggle navigation',
   help: 'Help & tour',
