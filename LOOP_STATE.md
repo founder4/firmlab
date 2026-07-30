@@ -36,7 +36,8 @@ cinco proveedores que corren y no se pueden leer.
 - [x] **B1. Inferencia de red al estilo firmadyne/FirmAE.** Cerrado en iter 14 (`6ad7423` + `c0eb9b2`), con el
       alcance corregido: la inferencia de red YA estaba construida (`inferGuestNetwork`, dos pasadas
       observe→reach). El bloqueo real, que el propio backlog tenía registrado, era la intervención en el arranque
-      del invitado — y con ella el WR940N abre dos puertos donde el control abre cero.
+      del invitado. **RETRACTADO en iter 20: la reparación está cableada y es INERTE** — `rcS` no llega a la línea
+      añadida, y los dos puertos que atribuí a la reparación no eran suyos.
 
 ### Bloque C — bloque 2 de la auditoría de visibilidad
 
@@ -396,6 +397,10 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   / 0 sobre cota / 0 fallidos, el rechazado nombrado (`broken.yar · undefined-identifier · undefined string
   "$nope"`), y `Telnetd_Binary [network,backdoor]` acertando en `bin/busybox` a `medium` / `static_confirmed`,
   junto a la frase de cobertura «1 rule matched — 1/2 rule(s) applied over 235/235 file(s)».
+- **RETRACTACIÓN (iter 20) sobre la iter 14 que sigue:** su resultado central es falso. La reparación está
+  cableada y la línea SÍ se escribe en la imagen, pero **nunca se ejecuta**, y los dos puertos abiertos no eran
+  suyos. La evidencia y el motivo, abajo en la iter 20. La entrada se deja tal como se escribió: una retractación con
+  su razón es mejor registro que un hueco.
 - iter 14 (2026-07-30): cerrado **B1**, y el alcance de la agenda estaba mal por tercera vez seguida. La
   inferencia de red **ya existía**: `inferGuestNetwork` es puro, exportado, lee consola y cable, y produce tres
   desenlaces; el dos-pasadas observe→reach lleva tiempo funcionando. Lo que el backlog SÍ tenía registrado —y la
@@ -594,5 +599,39 @@ anotado como tal.
 Lo que este loop dejó como próximo trabajo, en el orden re-derivado de `METHODOLOGY-GAPS.md` §4:
 1. **El corpus**, que es la restricción que ata: sin imagen UEFI, 2/2007 triados, sin reglas yara.
 2. Un corpus de reglas yara que este despliegue pueda correr.
-3. **Por qué respondió el invitado reparado** — dos puertos abiertos y `ruleset.ran: false`.
+3. **Hacer que la reparación llegue al invitado** — reescrito en iter 20: no es «por qué respondió», es que la
+   reparación nunca corrió. `rcS` no emite ningún `execve` después de la línea 45 de 46, así que nada añadido al
+   final se alcanza.
 4. Los resultados de proveedor que existen y no se pueden leer (el medio C2).
+- iter 20 (2026-07-30): **la agenda estaba completa, así que no había punto sin marcar.** Cogí el primero de los que
+  yo mismo dejé anotados como próximo trabajo que estuviera a mi alcance —el #1 es conseguir imágenes UEFI y el #2
+  una decisión de producto sobre reglas públicas— y el #3 resultó ser una **retractación de mi propio resultado**.
+  La pregunta era por qué respondió el invitado reparado. La respuesta es que no respondió por la reparación,
+  **porque la reparación nunca corrió.**
+  Lo que sigue siendo cierto: la línea SÍ se escribe en la imagen arrancada — la volqué del ext2 con `debugfs` y está
+  al final de `/etc/rc.d/rcS` —, `rcS` se restaura byte a byte, y la disposición viaja en el resultado.
+  Lo falso es que se ejecutara. El kernel firmadyne traza cada `execve` y en el arranque reparado hay **cero** trazas
+  de `ping`, `iptables-save` o `iptables-stop`, y ninguno de los tres marcadores. La última traza de `rcS` es a
+  1,428 s: `do_execve[PID: 114 (rcS)]: argv: echo 75` — línea 45 de 46. Mi línea es la 47.
+  **Y el control lo cierra en la dirección contraria:** su última traza de `rcS` es `argv: echo 200`, línea 46, **una
+  más lejos** que el arranque «reparado». Los dos arrancaron `httpd`. Así que `open: [{80},{443}]` frente a `open: []`
+  no puede ser efecto de la reparación, y la diferencia es no determinismo de este peldaño.
+  **Qué hizo creíble la afirmación falsa:** corrí un control, las dos imágenes se reconstruyeron de cero, y los
+  números eran reales. El paso que faltaba era preguntar si la intervención se EJECUTÓ, que la traza de `execve`
+  contesta directamente y que nada comprobó. Y `ruleset.ran: false` estaba en pantalla todo el tiempo, reportando la
+  verdad mientras el titular la leía de la lista de puertos.
+  **Hipótesis descartada por el camino, y era la mía:** que la cota de consola hubiera evicto los marcadores — es una
+  trampa que este repo tiene documentada. Falsa: la marca de elisión dice `146 bytes of console elided`, imposible
+  que contengan tres marcadores más la salida de `iptables-save`.
+  Corregidos los cuatro sitios donde la afirmación se había propagado: la entrada del backlog (ahora ⚠ retractada
+  con su evidencia), el preámbulo de §4, la fila 7 de la tabla FSTM **que yo mismo había reescrito una iteración
+  antes sobre la afirmación falsa**, y el item 3 de §4, que ya no pregunta por qué respondió sino cómo hacer que la
+  reparación llegue.
+  Verificación: `pnpm test` → core 75 / api 1810 / web 399 verde · `pnpm check` → Done · `pnpm biome` → limpio.
+  Sin cambios de código: esta iteración es una corrección de conclusiones, y la conclusión correcta es que el
+  mecanismo sigue sin demostrar.
+  **Punto flojo nuevo en `docs/BACKLOG.md`, impacto ALTO:** `rcS` se detiene antes de su última línea en el WR940N,
+  así que cualquier cosa añadida al final es inalcanzable — el invitado sigue vivo hasta los 95 s con `httpd`
+  corriendo, así que murió `rcS` y no el invitado. Quedan dos preguntas: por qué se detiene ahí, y dónde se puede
+  poner una intervención que el arranque sí ejecute (`/etc/inittab`, un `preInit` antes de `rcS`, o la línea de
+  comandos del kernel son las candidatas que usa firmadyne/FirmAE).

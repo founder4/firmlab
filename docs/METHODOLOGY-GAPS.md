@@ -38,7 +38,7 @@ part of the current manual workflow).
 | **4 · Extracting the filesystem** | binwalk + squashfs/jffs2/ubifs/cramfs/cpio (`providers/extract.ts`), a **second-pass recovery** for the blobs binwalk leaves (`extract-recover.ts`), and a **diagnosis** that separates a damaged image from a missing extractor (`extract-diagnose.ts`). binwalk v2 is still the only carver. | ✅ |
 | **5 · Analyzing filesystem contents** | Secrets classifier, gitleaks, SBOM (syft) + CVE (grype/OSV/NVD/KEV), binary hardening, Ghidra triage — **plus** the firmwalker/FACT-class misconfiguration audit (`fsaudit.ts`), certificate analysis (`certs.ts`), the DT_NEEDED component graph (`compmap.ts`), U-Boot environment posture (`uboot.ts`), **kernel posture** (`kernelposture.ts`), and web-handler taint surfaced as first-class findings (`webtaint.ts`, W4). | ✅ |
 | **6 · Emulating firmware** | Full ladder: qemu-user → chroot+libnvram → **full-system (firmadyne), which boots real firmware** → Renode (RTOS) → chipsec (UEFI, offline). Forwarded ports are read from the firmware's own config (`portmap.ts`) and probed **in the protocol each port speaks** (TLS handshake for HTTPS; listen, don't speak, for SSH/telnet). Best-in-class here. | ✅ |
-| **7 · Dynamic analysis** | The booted service **is** driven now: `webprobe.ts` reproduces command injection (marker/nonce) and path traversal against the live daemon → `confirmed_in_emulation`. **Update-mechanism integrity** is answered statically (`updatepath.ts`, ISTG-FW, see §2). AFL++ fuzzing (file/stdin/network) under OS-primitive isolation. Open: auth-bypass / default-creds / POST-body injection; protocol-aware service testing (MQTT/CoAP); and — CORRECTED 2026-07-30 — the emulated guest **can now be made to answer**: a boot-time intervention that runs the firmware's own `/etc/rc.d/iptables-stop` took the WR940N from `open: []` to `open: [80, 443]` against a freshly-rebuilt control, which is the first reachable service this corpus has produced. Two caveats travel with it and both belong in this row: it is an INTERVENTION, recorded in `Finding.interventions`, so a service that answered may have answered only because its packet filtering was torn down; and the repair's own read-back came back `ran: false`, so the effect is measured and the mechanism is not. U-Boot posture is read from the env, never interacted with on a live console. | ◐ |
+| **7 · Dynamic analysis** | The booted service **is** driven now: `webprobe.ts` reproduces command injection (marker/nonce) and path traversal against the live daemon → `confirmed_in_emulation`. **Update-mechanism integrity** is answered statically (`updatepath.ts`, ISTG-FW, see §2). AFL++ fuzzing (file/stdin/network) under OS-primitive isolation. Open: auth-bypass / default-creds / POST-body injection; protocol-aware service testing (MQTT/CoAP); and **the emulated guest still has no demonstrated way to be made to answer**. A boot-time intervention that runs the firmware's own `/etc/rc.d/iptables-stop` is wired and armed by `FIRMLAB_EMU_REPAIR`, and it is currently INERT: it appends to the end of `/etc/rc.d/rcS`, and on the WR940N `rcS` emits no `execve` after line 45 of 46, so the appended line is never reached. This row briefly claimed the opposite — the retraction and its evidence are in BACKLOG, and the lesson is that the result's own `ruleset.ran: false` was reporting honestly while the headline read from the port list instead. U-Boot posture is read from the env, never interacted with on a live console. | ◐ |
 | **8 · Runtime analysis** | **`symreach.ts`** (angr) answers one checkable question per sink — is the call site reachable from the entry point under symbolic argv/stdin — and **`dynprobe.ts`** breakpoints that exact call site under gdb-multiarch against qemu's gdbstub, feeds a cyclic pattern, and reads the registers at the fault: sink executed → crashed → *the faulting PC is input bytes at offset N*, self-evidencing. This produced the workbench's first `confirmed_in_emulation` memory-safety finding. Still absent: **dynamic instrumentation of the running firmware** (Frida — the only Frida here is an operator-side TLS-unpin template for Capture, a different thing), and stdin/multi-input search beyond one cyclic argv pattern. | ✅ / ◐ |
 | **9 · Binary exploitation** | Not done — **by design**. FirmLab's honest boundary is *reachability & proof-state*, not weaponization (no ROP/shellcode/PoC). Worth keeping, but "exploitability confirmed" is a proof rung we stop short of. | ✗ (intentional) |
 
@@ -123,8 +123,11 @@ delivered is the reason this list is re-derived rather than edited:
 
 - **#1 network inference** was not a gap. Measured 2026-07-30: `inferGuestNetwork` was already pure, exported and
   running two passes (observe → reach). The real blocker was a **boot-time intervention in the guest**, which the
-  backlog had recorded and this list had not. Wired that day, and the WR940N went from `open: []` to
-  `open: [80, 443]` against a freshly-rebuilt control — the first reachable service this corpus has produced.
+  backlog had recorded and this list had not, and it is now wired. **CORRECTED the same day: the intervention is
+  INERT and the reachable-service result attributed to it has been retracted.** The line is written into the booted
+  image and `rcS` never reaches it — the kernel's `execve` trace shows `rcS` stopping at line 45 of 46, with zero
+  traces of `ping`, `iptables-save` or `iptables-stop` and none of the three markers. The unrepaired control got one
+  line FURTHER, so the ports that opened on the repaired boot were nondeterminism, not the repair. See BACKLOG.
 - **#2 the bounded budgets** — all three caps fixed (`e8b23c0`, `22a7961`, and the probe rank enabled 2026-07-29
   after measuring it across the corpus). This item was already stale when it was written down as "cheapest value in
   the ledger".
@@ -150,11 +153,12 @@ this codebase that step has repeatedly been the whole task.
    gap is that nothing tells an operator where to get a corpus, and the honest fix is the FwHunt shape: pin a public
    rule set to a ref, report the denominator (`rulesDeclared`/`rulesApplied`/`rulesLost`), and attribute a match to
    the rule and its author rather than restating it as FirmLab's verdict.
-3. **Why the repaired guest answered.** The intervention opened two ports and its own read-back came back
-   `ran: false` — the markers never printed — so the effect is measured and the mechanism is not. Until that is
-   settled the workbench can say the repair was present and cannot say it ran, and the *reason* two ports opened is
-   unexplained with the firewall flush only the leading hypothesis. Cheapest high-value item on this list: it is a
-   console-capture question, not a new technique.
+3. **Make the guest repair reach the guest.** Re-derived 2026-07-30 after retracting the claim that it worked:
+   the repair appends to the END of `/etc/rc.d/rcS` and on the WR940N `rcS` emits no `execve` after line 45 of 46, so
+   nothing appended there is ever reached. Two questions, in order: why `rcS` stops one line short (the guest lives on
+   to 95 s of kernel time with `httpd` running, so `rcS` died and the guest did not), and where an intervention CAN be
+   staged that the boot actually executes — `/etc/inittab`, a `preInit` ahead of `rcS`, or the kernel command line are
+   the candidates firmadyne/FirmAE use. Still the cheapest high-value item, and still not a new technique.
 4. **Provider results that exist and cannot be read.** Every panel reads the result of the job IT launched, so a
    chipsec, renode, webprobe, decompile or kernel-posture result sitting in SQLite vanishes from the screen on
    reload. One hydration pattern at ~5 call sites. The same "the data exists and nobody can read it" class as the
