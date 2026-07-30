@@ -38,7 +38,7 @@ part of the current manual workflow).
 | **4 · Extracting the filesystem** | binwalk + squashfs/jffs2/ubifs/cramfs/cpio (`providers/extract.ts`), a **second-pass recovery** for the blobs binwalk leaves (`extract-recover.ts`), and a **diagnosis** that separates a damaged image from a missing extractor (`extract-diagnose.ts`). binwalk v2 is still the only carver. | ✅ |
 | **5 · Analyzing filesystem contents** | Secrets classifier, gitleaks, SBOM (syft) + CVE (grype/OSV/NVD/KEV), binary hardening, Ghidra triage — **plus** the firmwalker/FACT-class misconfiguration audit (`fsaudit.ts`), certificate analysis (`certs.ts`), the DT_NEEDED component graph (`compmap.ts`), U-Boot environment posture (`uboot.ts`), **kernel posture** (`kernelposture.ts`), and web-handler taint surfaced as first-class findings (`webtaint.ts`, W4). | ✅ |
 | **6 · Emulating firmware** | Full ladder: qemu-user → chroot+libnvram → **full-system (firmadyne), which boots real firmware** → Renode (RTOS) → chipsec (UEFI, offline). Forwarded ports are read from the firmware's own config (`portmap.ts`) and probed **in the protocol each port speaks** (TLS handshake for HTTPS; listen, don't speak, for SSH/telnet). Best-in-class here. | ✅ |
-| **7 · Dynamic analysis** | The booted service **is** driven now: `webprobe.ts` reproduces command injection (marker/nonce) and path traversal against the live daemon → `confirmed_in_emulation`. **Update-mechanism integrity** is answered statically (`updatepath.ts`, ISTG-FW, see §2). AFL++ fuzzing (file/stdin/network) under OS-primitive isolation. Open: auth-bypass / default-creds / POST-body injection; protocol-aware service testing (MQTT/CoAP); and **the emulated guest often has no reachable network at all** (see §3). U-Boot posture is read from the env, never interacted with on a live console. | ◐ |
+| **7 · Dynamic analysis** | The booted service **is** driven now: `webprobe.ts` reproduces command injection (marker/nonce) and path traversal against the live daemon → `confirmed_in_emulation`. **Update-mechanism integrity** is answered statically (`updatepath.ts`, ISTG-FW, see §2). AFL++ fuzzing (file/stdin/network) under OS-primitive isolation. Open: auth-bypass / default-creds / POST-body injection; protocol-aware service testing (MQTT/CoAP); and — CORRECTED 2026-07-30 — the emulated guest **can now be made to answer**: a boot-time intervention that runs the firmware's own `/etc/rc.d/iptables-stop` took the WR940N from `open: []` to `open: [80, 443]` against a freshly-rebuilt control, which is the first reachable service this corpus has produced. Two caveats travel with it and both belong in this row: it is an INTERVENTION, recorded in `Finding.interventions`, so a service that answered may have answered only because its packet filtering was torn down; and the repair's own read-back came back `ran: false`, so the effect is measured and the mechanism is not. U-Boot posture is read from the env, never interacted with on a live console. | ◐ |
 | **8 · Runtime analysis** | **`symreach.ts`** (angr) answers one checkable question per sink — is the call site reachable from the entry point under symbolic argv/stdin — and **`dynprobe.ts`** breakpoints that exact call site under gdb-multiarch against qemu's gdbstub, feeds a cyclic pattern, and reads the registers at the fault: sink executed → crashed → *the faulting PC is input bytes at offset N*, self-evidencing. This produced the workbench's first `confirmed_in_emulation` memory-safety finding. Still absent: **dynamic instrumentation of the running firmware** (Frida — the only Frida here is an operator-side TLS-unpin template for Capture, a different thing), and stdin/multi-input search beyond one cyclic argv pattern. | ✅ / ◐ |
 | **9 · Binary exploitation** | Not done — **by design**. FirmLab's honest boundary is *reachability & proof-state*, not weaponization (no ROP/shellcode/PoC). Worth keeping, but "exploitability confirmed" is a proof rung we stop short of. | ✗ (intentional) |
 
@@ -116,52 +116,78 @@ companion-app/cloud (UI).
 
 ## 4. The gaps worth building (prioritized, software-reachable)
 
-**The 2026-07-21 list is delivered.** Six of its seven items shipped inside the week, each with in-container
-validation on real bytes recorded in `BACKLOG.md`: ① drive the emulated attack surface → `webprobe.ts`;
-② UEFI threat-rule + Secure Boot → `fwhunt.ts` + `chipsec.ts`; ③ symbolic reachability → `symreach.ts`;
-④ update-mechanism integrity → `updatepath.ts`; ⑤ function-level diffing → `funcdiff.ts`; ⑥ U-Boot → `uboot.ts`.
-Only ⑦ (advanced fuzzing) survives, below as #7.
+**Two lists delivered.** The 2026-07-21 list of seven absent techniques shipped six inside the week
+(`webprobe`, `fwhunt` + `chipsec`, `symreach`, `updatepath`, `funcdiff`, `uboot`); only advanced fuzzing survived.
+Its successor, written 2026-07-28, has now also had **three of its nine items delivered** — and the way they were
+delivered is the reason this list is re-derived rather than edited:
 
-What follows is re-derived from what is actually open, same ordering rule — value ÷ effort, every item keeping the
-proof-state discipline. Note the shift in *kind*: the old list was seven absent techniques, and half of this one is
-capabilities that work spending their budget on the wrong questions.
+- **#1 network inference** was not a gap. Measured 2026-07-30: `inferGuestNetwork` was already pure, exported and
+  running two passes (observe → reach). The real blocker was a **boot-time intervention in the guest**, which the
+  backlog had recorded and this list had not. Wired that day, and the WR940N went from `open: []` to
+  `open: [80, 443]` against a freshly-rebuilt control — the first reachable service this corpus has produced.
+- **#2 the bounded budgets** — all three caps fixed (`e8b23c0`, `22a7961`, and the probe rank enabled 2026-07-29
+  after measuring it across the corpus). This item was already stale when it was written down as "cheapest value in
+  the ledger".
+- **#4 a general rule lane** — that is `yarascan`, which has a route, a reader since 2026-07-30, and a real
+  yara 4.2.3 in the deployed image. What remains is not the lane but its RULES (below as #2).
 
-1. **Network inference, the way firmadyne/FirmAE do it.** The last gap on the emulation ladder, and it gates more
-   than itself: `webprobe`, service enumeration and any protocol-aware testing all need a reachable daemon, and
-   today they often have none. The data is already captured — the firmadyne kernels trace every `execve`, so the
-   console carries the interfaces and addresses the firmware *tries* to configure. Two-pass: observe what it wants,
-   re-run with a NIC/VLAN that matches. Until then `confirmed_full_system` honestly means the system booted.
-2. **Spend the bounded budgets on the right axis.** Three caps allocate by a property that is not the one that
-   matters, and all three are ranking changes over machinery that already works: the finding cap is
-   **severity-blind** (30 of 60 slots to `info` sinks while 76 `medium` overflow candidates drop); the probe rank
-   measures **answerability, not interest** (DVRF's budget went to 4 KB samba helpers while `stack_bof_01`, the one
-   binary known to crash, waited behind them); the UEFI module budget is spent **alphabetically**. Cheapest value
-   in the ledger.
-3. **Kernel / module CVE surface.** Close the asymmetry in §3: userland gets SBOM → grype/OSV/NVD, the kernel gets
-   posture only. A 2.6.31 kernel with a known-vulnerable driver set is a durable static finding.
-4. **A general rule lane over the rootfs.** `fsaudit` covers the classic firmwalker checklist, but there is no way
-   to run an arbitrary rule set over an extraction — every question the audit does not already ask has to become a
-   provider. _Content search, the other half this item carried until 2026-07-28, shipped that day as
-   `providers/fssearch.ts` with a web surface and an MCP tool; the entry is left narrowed rather than deleted so the
-   remaining half stays visible._
-5. **Cross-binary dataflow.** Extend the single-binary taint scaffold to follow data across binaries; W4 already
-   proves the shape is right within one.
-6. **Interactive / introspectable emulation.** `run_command_in_emulation`, service enumeration on a LIVE boot,
-   `diagnose_emulation_environment`. Pairs directly with #1 — much of diagnosing a boot is running one command in it.
-7. **Advanced fuzzing** (the survivor). cmplog/compcov magic-byte solving, a prebuilt guest-arch **libdesock** so the
-   network harness works without `FIRMLAB_DESOCK`, and an input side for the fuzzer. Stateful/full-system firmware
-   fuzzing (Fuzzware/µEmu) remains the research frontier for the RTOS path.
-8. **The remaining UEFI findings** — LogoFAIL image-parser class, SMM callout analysis (efiXplorer-class), SPI
-   protected-range / BIOS-lock posture.
-9. **Libraries are permanently unasked.** Filtering `.so` out of the reachability queue is right for the question as
-   posed, and leaves a vulnerable library as a candidate nothing will ever settle. Loading the `.so` and starting
-   symbolically from an exported function is a distinct rung, not a variant of this one.
+The pattern across all three: **the entry named a technique and the actual gap was one layer down** — already built
+but unwired, or built and unmeasured, or built and unreadable. That is what shifts the ordering rule below. Value ÷
+effort still, but "effort" now weights *finding out what is actually true of the thing* ahead of building, because on
+this codebase that step has repeatedly been the whole task.
+
+1. **The corpus is the binding constraint, not the technique — and this is the new #1.** Several built and validated
+   capabilities have almost no evidence behind them, and each was discovered separately before the pattern was
+   named: **no UEFI image at all**, so every `chipsec`/`fwhunt` branch is tested against fixtures and the whole
+   posture reader has never met a vendor BIOS; **2 of 2007 binaries triaged**, so the hardening columns are
+   honest-but-blank on 2005 rows; **no yara rule corpus**, so the rule lane reports `no_corpus` on every image; and
+   the egress observation found the corpus **barely talks**, which is the finding that should decide the
+   interception work rather than a preference. Acquiring three or four images that exercise these — a real UEFI
+   dump, something chatty, something with a vendor NVRAM store — buys more than any provider on this list, because
+   it converts capabilities that can only report their own limits into capabilities that can answer.
+2. **A yara rule corpus this deployment can actually run.** The engine is installed and the reader exists; FirmLab
+   ships no signatures **by design**, so "yara is installed" and "this deployment can answer" stay two facts. The
+   gap is that nothing tells an operator where to get a corpus, and the honest fix is the FwHunt shape: pin a public
+   rule set to a ref, report the denominator (`rulesDeclared`/`rulesApplied`/`rulesLost`), and attribute a match to
+   the rule and its author rather than restating it as FirmLab's verdict.
+3. **Why the repaired guest answered.** The intervention opened two ports and its own read-back came back
+   `ran: false` — the markers never printed — so the effect is measured and the mechanism is not. Until that is
+   settled the workbench can say the repair was present and cannot say it ran, and the *reason* two ports opened is
+   unexplained with the firewall flush only the leading hypothesis. Cheapest high-value item on this list: it is a
+   console-capture question, not a new technique.
+4. **Provider results that exist and cannot be read.** Every panel reads the result of the job IT launched, so a
+   chipsec, renode, webprobe, decompile or kernel-posture result sitting in SQLite vanishes from the screen on
+   reload. One hydration pattern at ~5 call sites. The same "the data exists and nobody can read it" class as the
+   five capabilities closed on 2026-07-30 — which took an afternoon and turned out to be three states, not two.
+5. **Kernel / module CVE surface.** Unchanged and still the clean asymmetry: userland gets SBOM → grype/OSV/NVD, the
+   kernel gets posture only. A 2.6.31 kernel with a known-vulnerable driver set is a durable static finding.
+6. **Interactive / introspectable emulation** — moved UP, because the repair unblocked it. `run_command_in_emulation`
+   and service enumeration on a LIVE boot were gated on having a guest that answers, and now one does. Much of
+   diagnosing a boot is running one command inside it, which is also how #3 gets settled.
+7. **The sweep's ledger is still distorted by uClibc stubs.** `lib/libutil-0.9.30.so` and `lib/libmsglog.so` open the
+   WDR3600's 45 listed candidates because `runnable` lets a shared object with an entry point through. The exposure
+   key added 2026-07-30 repaired the HEAD of that list and did nothing for the tail. The real predicate is whether
+   the entry point is a *program*.
+8. **Cross-binary dataflow.** Extend the single-binary taint scaffold across binaries; W4 proves the shape within one.
+9. **Advanced fuzzing.** cmplog/compcov magic-byte solving, a prebuilt guest-arch libdesock so the network harness
+   works without `FIRMLAB_DESOCK`, and an input side for the fuzzer. Stateful/full-system fuzzing (Fuzzware/µEmu)
+   remains the research frontier for the RTOS path.
+10. **The remaining UEFI findings** — LogoFAIL image-parser class, SMM callout analysis (efiXplorer-class), SPI
+    protected-range / BIOS-lock posture. Deliberately last: all of it is gated on #1, since none of it can be
+    validated against a corpus with no UEFI image in it.
+11. **Libraries are permanently unasked.** Filtering `.so` out of the reachability queue is right for the question as
+    posed, and leaves a vulnerable library as a candidate nothing will ever settle. Loading the `.so` and starting
+    symbolically from an exported function is a distinct rung, not a variant of this one.
 
 **A policy debt, not a technique gap.** Two CVE sources with different evidentiary standards run on the same image:
 grype (via a syft manifest) accepts `CVE-2016-2148` for busybox 1.18.4, while the curated `component-cve.ts` table
 declines that exact CVE because NVD backs it with an open range and no enumerated CPE. Each row names its source, so
 nothing contradicts anything, and the broader net is arguably right when a manifest exists — but which standard
 applies is currently an accident of which provider ran, and should be a written decision.
+
+**A second policy debt, surfaced 2026-07-30.** An amendment to an operator assertion records no author while a
+withdrawal requires one, so a claim can be reworded by someone other than its author and the ledger attributes the
+new wording to the original author. In the one surface whose entire purpose is provenance.
 
 **Explicitly out of pure-software scope** (belongs to Phase-6 Capture with the right dongle, or a hardware lab):
 JTAG/UART/SPI extraction & chip-off (ISTG-INT/MEM), USB/DMA (PHY), Wi-Fi/SDR (WRLS), side-channel & glitching (PROC).

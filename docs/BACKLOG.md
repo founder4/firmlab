@@ -112,18 +112,15 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
     dropping.
   _It never touches `proofState`: `classifyFullSystem` owns the ladder, and a reason why nothing answered is not
   evidence that something did._
-- ⚠ **The blocker for the dynamic rung is NOT `planForwards`.** The open item below reads as the obvious next fix
-  and the diagnosis above refutes it for every image in this corpus: the MR3220's daemon is dead before any probe
-  arrives, and the WR940N's is alive and serving TLS on a port whose SYNs never reach it. Widening the forward set
-  is still right on its own terms, and it would have changed nothing here. **What the corpus actually needs is a
-  boot-time intervention in the guest** — flush the vendor firewall/bridge rules, and satisfy the `/proc` entries
-  a vendor daemon dereferences without checking — which is what firmadyne/FirmAE's `preInit` does and what
-  `rootfs-image.ts` is already positioned to stage, the same hook that puts `/firmadyne/libnvram.so` in place.
-  **That is a decision, not a task**: a service that answers only because we flushed its firewall is a different
-  claim from one that answers as shipped, so the intervention has to be recorded and has to qualify the result —
-  which is the evidence-channel item, again, becoming a prerequisite rather than a nicety.
-
-- ✅ **The emulation rung was writing into the evidence, and its own comment said it was not** (2026-07-29) —
+- ✅ **The blocker for the dynamic rung was NOT `planForwards` — and the thing it prescribed is now built**
+  (2026-07-30, `6ad7423`). This entry refuted the obvious next fix for every image in the corpus and named what was
+  actually needed: *"a boot-time intervention in the guest… which is what firmadyne/FirmAE's `preInit` does and what
+  `rootfs-image.ts` is already positioned to stage"*, plus the condition that it be **a decision, not a task** —
+  recorded, and qualifying the result. That is exactly what shipped: the repair runs the firmware's OWN
+  `/etc/rc.d/iptables-stop`, is staged through the same hook as the libnvram shim, is armed only by
+  `FIRMLAB_EMU_REPAIR`, and travels on every finding as an `intervention`. The WR940N went `open: []` → `open: [80,
+  443]` against a freshly-rebuilt unrepaired control. Full account in *Emulation UX* above; what remains open is WHY
+  it answered, since the repair's own markers never reported.- ✅ **The emulation rung was writing into the evidence, and its own comment said it was not** (2026-07-29) —
   `stageFirmadyneShim` copies `/firmadyne/libnvram.so` into the rootfs so `mkfs.ext2 -d` picks it up, and its
   header claimed it copied "into a COPY of the extraction, never into the extraction itself". It never did.
   **Seven extractions across the corpus were carrying a shim that is part of no firmware** — both TP-Link routers,
