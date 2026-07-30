@@ -26,6 +26,7 @@ import { getImage, listBinaries, registerBinary, updateImageIdentity } from '../
 import { isToolAvailable } from '../tools.js';
 import { type CarveStep, runRecursiveCarve } from './carve.js';
 import { type NoRootfsDiagnosis, diagnoseNoRootfs } from './extract-diagnose.js';
+import { type NeuteredScan, scanNeutered } from './extract-neutered.js';
 import {
   type BlobAttempt,
   type PayloadSurvey,
@@ -65,6 +66,12 @@ export interface ExtractResult {
    * an absent value means "not surveyed", never "nothing was left".
    */
   unopenedPayloads?: PayloadSurvey;
+  /**
+   * The paths this extraction CUT — symlinks `unsquashfs` refused to write and replaced with `/dev/null`, plus any
+   * that escape the root intact. Present only when there are some. Optional forever: an extraction stored before
+   * this field existed carries no value, and an absent value means "never surveyed", never "nothing was cut".
+   */
+  neuteredPaths?: NeuteredScan;
 }
 
 /** Directory names that mark the root of an extracted Linux rootfs. */
@@ -244,6 +251,12 @@ function finalizeRootfs(
     .map((b) => ({ sha1: b.sha1 as string, path: b.path, arch: b.arch }));
   recordArtifacts(imageId, artifacts);
 
+  // What the EXTRACTOR cut, surveyed here rather than in each of a dozen readers. `unsquashfs` substitutes
+  // `/dev/null` for a symlink whose target would escape the root, and the substituted entry is indistinguishable
+  // from an empty or absent file to every `readFileSync` downstream — so the fact is recorded once, where it is
+  // discovered, and any provider's later silence about one of these paths is already explained.
+  const neutered = rootfsPath ? scanNeutered(rootfsPath) : null;
+
   return {
     extractor,
     outputDir,
@@ -254,6 +267,7 @@ function finalizeRootfs(
     ...(detected ? { detectedArch: detected.arch, detectedEndianness: detected.endianness } : {}),
     ...(carveTrace ? { carveTrace } : {}),
     ...(unopened.payloads.length > 0 ? { unopenedPayloads: unopened } : {}),
+    ...(neutered && neutered.entries.length > 0 ? { neuteredPaths: neutered } : {}),
   };
 }
 

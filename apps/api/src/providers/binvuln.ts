@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { FindingDraft } from '../findings-normalize.js';
+import { NEUTER_TARGET } from './extract-neutered.js';
 
 /** Unbounded-copy libc functions — a call to one on attacker-influenced input is the classic stack-BOF primitive. */
 export const UNSAFE_COPY_FNS = ['gets', 'strcpy', 'strcat', 'sprintf', 'vsprintf', 'scanf', 'sscanf', 'vscanf'];
@@ -427,6 +428,12 @@ export interface BinVulnResult {
    * for it, and `[]` would be a claim about a ranking that never had an exposure signal.
    */
   exposedDropped?: string[];
+  /**
+   * Entries the extractor cut to `/dev/null`, which this sweep could not open. Distinct from
+   * `relocatableSkipped`: those were out of scope, these were shipped by the firmware and destroyed by the carve.
+   * Optional forever — a result stored before this field existed counted nothing, and 0 would claim it did.
+   */
+  neuteredSkipped?: number;
   reason: string;
 }
 
@@ -713,6 +720,8 @@ export function runBinVuln(rootfsPath: string | null, exposed?: ReadonlySet<stri
   let walked = 0;
   /** ET_REL objects passed over — counted so the exclusion is a stated rule, never a silent gap. */
   let relocatable = 0;
+  /** Entries the EXTRACTOR cut to `/dev/null`: the firmware shipped a file, and this sweep cannot open it. */
+  let neuteredSkipped = 0;
   const stack: string[] = [root];
   while (stack.length > 0 && walked < WALK_CAP && scanned < ELF_SCAN_CAP) {
     const dir = stack.pop() as string;
@@ -730,7 +739,19 @@ export function runBinVuln(rootfsPath: string | null, exposed?: ReadonlySet<stri
     for (const e of entries) {
       if (walked >= WALK_CAP || scanned >= ELF_SCAN_CAP) break;
       walked++;
-      if (e.isSymbolicLink()) continue;
+      if (e.isSymbolicLink()) {
+        // Not following a symlink is right — it would double-count a busybox alias and could leave the root — but
+        // the ones the EXTRACTOR neutered are a different matter: the firmware shipped a real file there and the
+        // substitution made it unopenable. On the IMOU Ranger that is 45 entries under `/sbin` alone (`netinit`,
+        // `syshelper`, `gethwid`, `armbenv`…), silently absent from "N ELFs examined" until now. Counted here, so
+        // the sweep's own denominator says what it could not look at.
+        try {
+          if (fs.readlinkSync(path.join(dir, e.name)) === NEUTER_TARGET) neuteredSkipped++;
+        } catch {
+          // An unreadable link is not evidence of anything; the walk passes over it as it always did.
+        }
+        continue;
+      }
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
         subdirs.push(abs);
@@ -781,6 +802,13 @@ export function runBinVuln(rootfsPath: string | null, exposed?: ReadonlySet<stri
     scanned >= ELF_SCAN_CAP
       ? ` The ${ELF_SCAN_CAP}-binary examination budget was exhausted, so ELFs beyond it were never opened and are absent from these counts, not cleared by them.`
       : '';
+  // A third exclusion, and the only one that is not this sweep's own rule: the extractor's. Reported separately from
+  // the relocatable objects because those were passed over as OUT OF SCOPE, and these were shipped by the vendor and
+  // are simply not there to open.
+  const neuteredNote =
+    neuteredSkipped > 0
+      ? ` ${neuteredSkipped} entry(ies) were cut to ${NEUTER_TARGET} by the extractor and could not be opened: the firmware shipped a file at each, so they are missing from this sweep's denominator and are not binaries it cleared.`
+      : '';
   return {
     available: true,
     binariesScanned: scanned,
@@ -788,6 +816,7 @@ export function runBinVuln(rootfsPath: string | null, exposed?: ReadonlySet<stri
     findings: kept,
     relocatableSkipped: relocatable,
     ...(exposedDropped.length ? { exposedDropped } : {}),
-    reason: `Binary-vuln sweep: ${scanned} ELF binaries, ${candidates} stack-overflow candidate(s).${capNote}${exposureNote}${relocNote}${budgetNote} Candidates are unbounded-copy + no-canary leads for reversing/fuzzing, not proven overflows.`,
+    neuteredSkipped,
+    reason: `Binary-vuln sweep: ${scanned} ELF binaries, ${candidates} stack-overflow candidate(s).${capNote}${exposureNote}${relocNote}${neuteredNote}${budgetNote} Candidates are unbounded-copy + no-canary leads for reversing/fuzzing, not proven overflows.`,
   };
 }

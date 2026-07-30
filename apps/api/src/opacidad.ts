@@ -65,6 +65,7 @@ import { runDeviceTreeAnalysis } from './providers/devicetree.js';
 import { runDynProbe } from './providers/dynprobe-run.js';
 import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
+import { neuteredFindings } from './providers/extract-neutered.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
 import { runFccLookup } from './providers/fcc.js';
 import { runFsAudit } from './providers/fsaudit.js';
@@ -192,9 +193,19 @@ async function extractRun(c: RunCtx): Promise<StepOutcome> {
   c.carveTrace = ex.carveTrace;
   if (ex.detectedArch) c.detectedArch = ex.detectedArch;
   if (ex.rootfsPath) {
+    // What the extractor CUT is part of the extraction's own account of itself, so it is reported here rather than
+    // left for each reader to rediscover as an empty file. Synced under its own source so a re-extraction replaces
+    // it idempotently.
+    const cutDrafts = ex.neuteredPaths ? neuteredFindings(ex.neuteredPaths) : [];
+    syncFindings(c.imageId, 'extract-integrity', cutDrafts);
+    const cut = ex.neuteredPaths?.entries.filter((e) => e.state === 'neutered').length ?? 0;
     return {
-      summary: `rootfs recovered via ${ex.extractor} (${ex.summary?.totalFiles ?? '?'} files)`,
-      findingCount: 0,
+      summary: `rootfs recovered via ${ex.extractor} (${ex.summary?.totalFiles ?? '?'} files)${
+        cut ? `, ${cut} path(s) cut by the extractor` : ''
+      }`,
+      findingCount: cutDrafts.length,
+      // Not "degraded": the extraction succeeded and the rootfs is usable. The cut paths bound what the LATER
+      // stages can see, which is what the finding says; calling the stage degraded would misattribute it.
     };
   }
   // No rootfs. Before reporting a bare "no rootfs", check for a hollow/decoy image (a claimed filesystem whose

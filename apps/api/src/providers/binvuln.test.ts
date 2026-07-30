@@ -68,6 +68,37 @@ describe('runBinVuln (rootfs sweep)', () => {
   });
 
   /**
+   * A symlink the EXTRACTOR cut is not the same exclusion as a `.ko`. The `.ko` was passed over because this
+   * sweep's question does not apply to it; a neutered entry is a file the vendor SHIPPED that the carve destroyed,
+   * and it was vanishing from "N ELFs examined" with no sentence at all. On the real IMOU Ranger that is 45 entries
+   * under `/sbin` alone.
+   */
+  it('counts the entries the extractor cut, instead of dropping them out of its denominator', () => {
+    const root = path.join(tmp, 'neutered-rootfs');
+    fs.mkdirSync(path.join(root, 'sbin'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'sbin/real'), fakeElf(['strcpy'], 200));
+    fs.symlinkSync('/dev/null', path.join(root, 'sbin/netinit'));
+    fs.symlinkSync('/dev/null', path.join(root, 'sbin/syshelper'));
+    // An ordinary in-root alias, which is NOT the extractor's doing and must not be counted.
+    fs.symlinkSync('real', path.join(root, 'sbin/alias'));
+
+    const r = runBinVuln(root);
+    expect(r.neuteredSkipped).toBe(2);
+    expect(r.binariesScanned).toBe(1);
+    expect(r.reason).toMatch(/2 entry\(ies\) were cut to \/dev\/null by the extractor/);
+    expect(r.reason).toMatch(/not binaries it cleared/);
+  });
+
+  it('says nothing about cut entries when there are none, rather than reporting a zero', () => {
+    const root = path.join(tmp, 'intact-rootfs');
+    fs.mkdirSync(path.join(root, 'sbin'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'sbin/real'), fakeElf(['strcpy'], 200));
+    const r = runBinVuln(root);
+    expect(r.neuteredSkipped).toBe(0);
+    expect(r.reason).not.toMatch(/cut to/);
+  });
+
+  /**
    * The three exposure states, on a real directory tree. Two of them RANK identically and mean opposite things,
    * and the sweep's `reason` is the only place a reader can tell them apart — which is the entire reason the
    * parameter is `ReadonlySet | undefined` rather than a set that defaults to empty.
