@@ -4,6 +4,7 @@
  */
 import type { Messages } from '../en';
 import { agents } from './agents';
+import { capabilities } from './capabilities';
 import { capture } from './capture';
 import { common } from './common';
 import { compmap } from './compmap';
@@ -41,6 +42,7 @@ export const es: Messages = {
   imageDetail,
   compmap,
   report,
+  capabilities,
   capture,
   operator,
   hardware,

@@ -1,4 +1,5 @@
 import { agents } from './agents';
+import { capabilities } from './capabilities';
 import { capture } from './capture';
 /**
  * The English catalogue — the source of truth for every user-facing string in the workbench shell.
@@ -46,6 +47,7 @@ export const en = {
   imageDetail,
   compmap,
   report,
+  capabilities,
   capture,
   operator,
   hardware,

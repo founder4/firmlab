@@ -19,6 +19,7 @@ export const sections = {
   bootloader: 'Bootloader',
   sbom: 'SBOM & CVEs',
   compmap: 'Component map',
+  deepscans: 'Deep scans',
   binaries: 'Test bench',
   testbench: 'Test bench',
   findings: 'Findings & report',

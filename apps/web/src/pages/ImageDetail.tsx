@@ -27,6 +27,7 @@ import {
   fmtHex,
 } from '../api';
 import { AnalysisActionsPanel } from '../components/AnalysisActionsPanel';
+import { CapabilityResults } from '../components/CapabilityResults';
 import { ComponentMap } from '../components/ComponentMap';
 import { CoverageBanner } from '../components/CoverageBanner';
 import { EntropyChart } from '../components/EntropyChart';
@@ -74,6 +75,7 @@ const SECTION_IDS = [
   'bootloader',
   'sbom',
   'compmap',
+  'deepscans',
   'binaries',
   'testbench',
   'findings',
@@ -91,6 +93,7 @@ const SECTION_SET: ReadonlySet<string> = new Set<string>(SECTION_IDS);
 /** Sections that operate on the extracted rootfs / tools rather than the cached static analysis. */
 const NO_ANALYSIS_TABS = new Set<TabId>([
   'dossier',
+  'deepscans',
   'filesystem',
   'files',
   'secrets',
@@ -233,6 +236,7 @@ export function ImageDetail(): JSX.Element {
       {tab === 'sbom' && <SbomPanel imageId={id} />}
       {/* The other half of "what is this made of": the SBOM's packages, and here what links against what. */}
       {tab === 'compmap' && <ComponentMap imageId={id} />}
+      {tab === 'deepscans' && <CapabilityResults imageId={id} />}
       {/* The test bench is organised by TARGET: every question asked of a binary, and every run it produced.
           `binaries` still routes here so older links keep working. */}
       {(tab === 'testbench' || tab === 'binaries') && (

@@ -16,6 +16,7 @@ export const sections: Messages['sections'] = {
   bootloader: 'Gestor de arranque',
   sbom: 'SBOM y CVEs',
   compmap: 'Mapa de componentes',
+  deepscans: 'Análisis profundos',
   binaries: 'Banco de pruebas',
   testbench: 'Banco de pruebas',
   findings: 'Hallazgos e informe',

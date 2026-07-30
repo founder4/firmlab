@@ -391,6 +391,71 @@ export interface GhidraResult {
   functions: GhidraFunction[];
 }
 
+/**
+ * The four capability results that had no type here at all.
+ *
+ * Deliberately PARTIAL: each declares only what a reader renders, plus the `available`/`reason` contract every
+ * provider shares. A fuller mirror of the server's interfaces would be a second source of truth that drifts, and
+ * every field is optional beyond the contract because a stored result is data written by an OLDER build — the rule
+ * this codebase learned when `nvd.uncheckedIdentities.map` took down the image view for three of four images.
+ */
+export interface YaraScanResultView {
+  available: boolean;
+  reason?: string;
+  state?: string;
+  corpus?: { rulesDeclared?: number; rulesApplied?: number; rulesLost?: number; ruleFiles?: number };
+  scan?: { filesScanned?: number; filesFound?: number } | null;
+  matches?: { rule: string; namespace?: string; tags?: string[]; files?: string[] }[];
+  findings?: unknown[];
+}
+
+export interface FwHuntResultView {
+  available: boolean;
+  reason?: string;
+  rulesRun?: number;
+  rulesInCorpus?: number;
+  rulesNotApplicable?: number;
+  matches?: { rule?: string; category?: string; verdict?: string }[];
+  findings?: unknown[];
+}
+
+export interface NvramResultView {
+  available: boolean;
+  reason?: string;
+  bytesScanned?: number;
+  stores?: { name?: string; offset?: number; variables?: number; capped?: boolean; duplicateKeys?: number }[];
+  findings?: unknown[];
+}
+
+export interface FuncDiffResultView {
+  available: boolean;
+  reason?: string;
+  binaries?: { path?: string; changed?: number; added?: number; removed?: number; unmatchable?: number }[];
+  findings?: unknown[];
+}
+
+/**
+ * The dynamic probe's result, which was not typed here at all — so `controlOffset`, the whole point of the probe,
+ * had nowhere to be read. Optional throughout for the same persisted-result reason.
+ */
+export interface DynProbeResultView {
+  available: boolean;
+  reason?: string;
+  binary?: string;
+  sink?: string;
+  verdict?: string;
+  proofState?: string;
+  /** The offset at which the input controls the saved return address. `null` is "not recovered", never 0. */
+  controlOffset?: number | null;
+  faultingPc?: string;
+  sinkHits?: number;
+  attached?: boolean;
+  blockedBy?: string;
+  sandboxShortfalls?: string[];
+  targetOutput?: string;
+  findings?: unknown[];
+}
+
 export interface StorageUsage {
   imageCount: number;
   imagesBytes: number;
@@ -1634,6 +1699,22 @@ export const api = {
     post<{ rule: CorpusRule }>('/api/corpus/rules', { type, key, label, note }).then((r) => r.rule),
   deleteRule: (id: string) => fetch(`/api/corpus/rules/${id}`, { method: 'DELETE' }).then(() => undefined),
   ghidraResult: (id: string) => get<{ result: GhidraResult | null }>(`/api/images/${id}/ghidra`).then((r) => r.result),
+  // The five capabilities that had routes and no reader. `null` from any of these means the stage has NOT run —
+  // distinct from a result whose `available` is false, which means it ran and this deployment could not answer.
+  yarascanResult: (id: string) =>
+    get<{ result: YaraScanResultView | null }>(`/api/images/${id}/yarascan`).then((r) => r.result),
+  runYarascan: (id: string) => post<{ jobId: string }>(`/api/images/${id}/yarascan`),
+  fwhuntResult: (id: string) =>
+    get<{ result: FwHuntResultView | null }>(`/api/images/${id}/fwhunt`).then((r) => r.result),
+  runFwhunt: (id: string) => post<{ jobId: string }>(`/api/images/${id}/fwhunt`),
+  nvramResult: (id: string) => get<{ result: NvramResultView | null }>(`/api/images/${id}/nvram`).then((r) => r.result),
+  runNvram: (id: string) => post<{ jobId: string }>(`/api/images/${id}/nvram`),
+  funcdiffResult: (id: string, against: string) =>
+    get<{ result: FuncDiffResultView | null }>(
+      `/api/images/${id}/funcdiff?against=${encodeURIComponent(against)}`,
+    ).then((r) => r.result),
+  dynprobeResult: (id: string) =>
+    get<{ result: DynProbeResultView | null }>(`/api/images/${id}/dynprobe`).then((r) => r.result),
   ghidra: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/ghidra`, { binary }),
   gitleaks: (id: string) => get<{ result: GitleaksResult | null }>(`/api/images/${id}/gitleaks`).then((r) => r.result),
   runGitleaks: (id: string) => post<{ jobId: string }>(`/api/images/${id}/gitleaks`),
