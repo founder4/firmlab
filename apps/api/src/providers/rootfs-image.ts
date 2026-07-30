@@ -135,6 +135,83 @@ function repairMarkerPath(imagePath: string): string {
   return `${imagePath}.repaired`;
 }
 
+/** Where the build stamp lives. One JSON line beside the image, written only after a successful mkfs. */
+function stampPath(imagePath: string): string {
+  return `${imagePath}.build.json`;
+}
+
+/**
+ * What an image was built WITH — the facts that decide whether a later boot may use it.
+ *
+ * A disk image is a cache keyed, until now, on nothing but its mtime and the repair marker. It recorded neither the
+ * ARCHITECTURE it was built for nor whether the NVRAM shim was staged into it, and both are load-bearing: the
+ * firmadyne kernels preload `/firmadyne/libnvram.so` into every process, so an image built without it kills init on
+ * sight.
+ *
+ * **This cost a four-minute boot and a wrong diagnosis to find.** An `ensureRootfsImage` call made out of band with
+ * an architecture that has no shim (`mipseb`, where the shims are `arm`/`arm64`/`mips`/`mipsel`) logged its warning,
+ * built the image anyway, and wrote the repair marker — so the image looked current and correctly-dispositioned. The
+ * next real boot reused it and panicked with `/sbin/init: can't load library '/firmadyne/libnvram.so'` →
+ * `Attempted to kill init`. **And the reuse path logs no shim line at all**, so the panicking boot's log contained
+ * no trace of the cause: the ABSENCE of the line was the evidence, which is precisely what this codebase refuses to
+ * leave unstated.
+ */
+export interface BuildStamp {
+  /** The architecture the image was assembled for. */
+  arch: string;
+  /** Whether `/firmadyne/libnvram.so` was staged into it. False means this image cannot boot under these kernels. */
+  shimStaged: boolean;
+}
+
+export type StampVerdict =
+  | { usable: true; reason: string }
+  | { usable: false; reason: string; kind: 'no-stamp' | 'arch-mismatch' | 'no-shim' };
+
+/**
+ * Pure: may an image with this stamp be booted for this architecture?
+ *
+ * The three refusals are separate because they need separate answers, and the first is the one this codebase's rules
+ * are about: **an absent stamp is not a bad image.** It means the image was built before builds were stamped, so
+ * nothing is known about it — the honest response is to rebuild rather than to refuse or to trust. Reporting it as
+ * `no-shim` would be a claim about a build nobody recorded.
+ */
+export function stampVerdict(stamp: BuildStamp | null, wantArch: string): StampVerdict {
+  if (!stamp) {
+    return {
+      usable: false,
+      kind: 'no-stamp',
+      reason:
+        'the cached image carries no build stamp, so what it was built for is unknown — not known to be wrong, which is why it is rebuilt rather than refused',
+    };
+  }
+  if (stamp.arch !== wantArch) {
+    return {
+      usable: false,
+      kind: 'arch-mismatch',
+      reason: `the cached image was built for ${stamp.arch} and this boot is ${wantArch}`,
+    };
+  }
+  if (!stamp.shimStaged) {
+    return {
+      usable: false,
+      kind: 'no-shim',
+      reason: `the cached image was built for ${stamp.arch} WITHOUT the NVRAM shim, so booting it would panic on init rather than tell you anything about the firmware`,
+    };
+  }
+  return { usable: true, reason: `built for ${stamp.arch} with the NVRAM shim staged` };
+}
+
+/** Read the stamp beside an image. Absent or unparseable both mean "nothing is known", never "it is fine". */
+function readStamp(imagePath: string): BuildStamp | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(stampPath(imagePath), 'utf8')) as Partial<BuildStamp>;
+    if (typeof raw.arch !== 'string' || typeof raw.shimStaged !== 'boolean') return null;
+    return { arch: raw.arch, shimStaged: raw.shimStaged };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Build (or reuse) the raw image for a rootfs. Never throws: a missing tool or a failed mkfs is reported as an
  * unavailable result, so the caller blocks honestly instead of booting something that is not there.
@@ -156,21 +233,23 @@ function repairMarkerPath(imagePath: string): string {
  * as the firmware's. Copying a whole rootfs per boot is the expensive fix; the cheap and correct one is that the
  * file only has to exist for the length of the `mkfs` call, so `unstage` removes it in a `finally`.
  */
-async function stageFirmadyneShim(rootfsPath: string, arch: Architecture, log: (m: string) => void): Promise<void> {
+async function stageFirmadyneShim(rootfsPath: string, arch: Architecture, log: (m: string) => void): Promise<boolean> {
   const shim = `${LIBNVRAM_DIR}/libnvram-${arch}.so`;
   if (!fs.existsSync(shim)) {
     log(
       `No libnvram shim for ${arch} at ${shim}. The firmadyne kernel preloads /firmadyne/libnvram.so into every process, so init will fail to start — the boot will report that honestly rather than look like a firmware fault.`,
     );
-    return;
+    return false;
   }
   const dir = path.join(rootfsPath, 'firmadyne');
   try {
     fs.mkdirSync(dir, { recursive: true });
     fs.copyFileSync(shim, path.join(dir, 'libnvram.so'));
     log(`Staged the ${arch} NVRAM shim at /firmadyne/libnvram.so, which the firmadyne kernel preloads.`);
+    return true;
   } catch (err) {
     log(`Could not stage the NVRAM shim: ${(err as Error).message}. init will very likely fail to start.`);
+    return false;
   }
 }
 
@@ -312,21 +391,27 @@ export async function ensureRootfsImage(
       builtRepaired: fs.existsSync(repairMarkerPath(imagePath)),
       wantRepaired,
     });
-    if (verdict.reusable) {
+    // The stamp is consulted BEFORE the freshness verdict is acted on, because an image that is current and
+    // correctly-dispositioned can still be unbootable — that is exactly the state that cost a four-minute boot and a
+    // wrong diagnosis. And the reuse path now SAYS what the image contains: its silence about the shim was the only
+    // evidence the panicking boot had, and absence is not evidence anyone can read.
+    const stamp = stampVerdict(readStamp(imagePath), arch);
+    if (verdict.reusable && !stamp.usable) {
+      log(`Rebuilding the disk image: ${stamp.reason}.`);
+    } else if (verdict.reusable) {
       log(
-        `Reusing the existing disk image (${(img.size / 1024 / 1024).toFixed(1)} MB) — ${verdict.reason}. ${repair.note}`,
+        `Reusing the existing disk image (${(img.size / 1024 / 1024).toFixed(1)} MB) — ${verdict.reason}; ${stamp.reason}. ${repair.note}`,
       );
       return {
         available: true,
         imagePath,
         built: false,
         sizeBytes: img.size,
-        reason: `Existing image is current: ${verdict.reason}.`,
+        reason: `Existing image is current: ${verdict.reason}; ${stamp.reason}.`,
         caveat: CAVEAT,
         repair,
       };
-    }
-    log(`Rebuilding the disk image: ${verdict.reason}.`);
+    } else log(`Rebuilding the disk image: ${verdict.reason}.`);
   } catch {
     // no image yet, which is the normal first run
   }
@@ -353,7 +438,7 @@ export async function ensureRootfsImage(
   }
   const sizeBytes = planImageSize(kb);
   log(`Assembling a ${(sizeBytes / 1024 / 1024).toFixed(0)} MB ext2 image from ${kb} KiB of extracted files.`);
-  await stageFirmadyneShim(rootfsPath, arch, log);
+  const shimStaged = await stageFirmadyneShim(rootfsPath, arch, log);
 
   // Armed only by the operator, and decided above so the reuse check could see it.
   log(repair.note);
@@ -377,6 +462,8 @@ export async function ensureRootfsImage(
     try {
       if (wantRepaired) fs.writeFileSync(repairMarkerPath(imagePath), `${repair.interventions.join('\n')}\n`);
       else fs.rmSync(repairMarkerPath(imagePath), { force: true });
+      // The stamp records what this image IS, so no later boot can be handed an artefact nobody described.
+      fs.writeFileSync(stampPath(imagePath), `${JSON.stringify({ arch, shimStaged } satisfies BuildStamp)}\n`);
     } catch (err) {
       log(
         `The repair marker beside the image could not be updated (${(err as Error).message}). A later boot may reuse this image under the wrong disposition — it will be rebuilt rather than mis-described only if the marker is right, so treat the next run's repair field with suspicion.`,
@@ -388,7 +475,9 @@ export async function ensureRootfsImage(
       imagePath,
       built: true,
       sizeBytes,
-      reason: `Built a ${(sizeBytes / 1024 / 1024).toFixed(0)} MB ext2 image from the extracted rootfs.`,
+      reason: `Built a ${(sizeBytes / 1024 / 1024).toFixed(0)} MB ext2 image from the extracted rootfs for ${arch}${
+        shimStaged ? ' with the NVRAM shim staged' : ' WITHOUT the NVRAM shim, so a boot will panic on init'
+      }.`,
       caveat: CAVEAT,
       repair,
     };

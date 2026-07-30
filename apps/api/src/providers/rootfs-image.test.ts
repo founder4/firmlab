@@ -11,6 +11,7 @@ import {
   imageReusable,
   planImageSize,
   stageGuestRepair,
+  stampVerdict,
   unstageFirmadyneShim,
   unstageGuestRepair,
 } from './rootfs-image.js';
@@ -257,5 +258,59 @@ describe('imageReusable — freshness was necessary and not sufficient', () => {
     expect(
       imageReusable({ imageMtimeMs: 1000, rootfsMtimeMs: 1000, builtRepaired: false, wantRepaired: false }).reusable,
     ).toBe(true);
+  });
+});
+
+/**
+ * The stamp, and the four-minute boot that found it.
+ *
+ * A disk image was a cache keyed on its mtime and the repair marker, and it recorded neither the ARCHITECTURE it was
+ * built for nor whether the NVRAM shim was staged. An out-of-band build for an arch with no shim produced an image
+ * that looked current and correctly-dispositioned; the next real boot reused it and panicked with
+ * `/sbin/init: can't load library '/firmadyne/libnvram.so'` → `Attempted to kill init`. **And the reuse path logged
+ * no shim line**, so the panicking boot's log carried no trace of the cause: the ABSENCE of a line was the evidence.
+ */
+describe('stampVerdict — an absent stamp is not a bad image', () => {
+  /**
+   * The pair. "Nothing was recorded about this build" and "this build recorded that it has no shim" both refuse
+   * reuse, and only the second is a claim about the image. Reporting the first as `no-shim` would assert something
+   * about a build nobody stamped.
+   */
+  it('separates "nothing is known" from "known to have no shim"', () => {
+    const unknown = stampVerdict(null, 'mips');
+    const known = stampVerdict({ arch: 'mips', shimStaged: false }, 'mips');
+    expect(unknown.usable).toBe(false);
+    expect(known.usable).toBe(false);
+    // Same verdict, different kind, different sentence.
+    expect(unknown.usable === false && unknown.kind).toBe('no-stamp');
+    expect(known.usable === false && known.kind).toBe('no-shim');
+    expect(unknown.reason).toMatch(/not known to be wrong, which is why it is rebuilt rather than refused/);
+    expect(known.reason).toMatch(/would panic on init/);
+  });
+
+  it('accepts an image built for this arch with the shim, and says what it contains', () => {
+    const v = stampVerdict({ arch: 'mips', shimStaged: true }, 'mips');
+    expect(v.usable).toBe(true);
+    expect(v.reason).toBe('built for mips with the NVRAM shim staged');
+  });
+
+  it('refuses an image built for another architecture, and names both', () => {
+    const v = stampVerdict({ arch: 'mipsel', shimStaged: true }, 'mips');
+    expect(v.usable).toBe(false);
+    expect(v.usable === false && v.kind).toBe('arch-mismatch');
+    expect(v.reason).toMatch(/built for mipsel and this boot is mips/);
+  });
+
+  it('checks the arch BEFORE the shim, so a mismatch is not reported as a missing shim', () => {
+    // Both wrong: the arch is the more informative answer, and a shim staged for another arch is the wrong shim.
+    const v = stampVerdict({ arch: 'arm', shimStaged: false }, 'mips');
+    expect(v.usable === false && v.kind).toBe('arch-mismatch');
+  });
+
+  it('reports the real corpus case: the WR940N measures mips and its shim exists', () => {
+    // `/opt/libnvram` holds arm, arm64, mips, mipsel — so a `mips` build stamps shimStaged true and is reusable.
+    expect(stampVerdict({ arch: 'mips', shimStaged: true }, 'mips').usable).toBe(true);
+    // …while the invented `mipseb`, which has no shim, is refused rather than booted into a panic.
+    expect(stampVerdict({ arch: 'mipseb', shimStaged: false }, 'mipseb').usable).toBe(false);
   });
 });
