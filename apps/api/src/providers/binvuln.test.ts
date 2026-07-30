@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FindingDraft } from '../findings-normalize.js';
 import {
   assessBinary,
@@ -65,6 +65,53 @@ describe('runBinVuln (rootfs sweep)', () => {
 
   it('degrades honestly with no rootfs', () => {
     expect(runBinVuln(null).available).toBe(false);
+  });
+
+  /**
+   * The three exposure states, on a real directory tree. Two of them RANK identically and mean opposite things,
+   * and the sweep's `reason` is the only place a reader can tell them apart — which is the entire reason the
+   * parameter is `ReadonlySet | undefined` rather than a set that defaults to empty.
+   */
+  describe('the exposure signal: absent, arrived-and-empty, or naming binaries', () => {
+    const root = path.join(tmp, 'exposure-rootfs');
+    beforeAll(() => {
+      fs.mkdirSync(path.join(root, 'usr', 'bin'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'lib'), { recursive: true });
+      // The exposed daemon, deliberately the largest thing here — which is what made the cap drop it.
+      fs.writeFileSync(path.join(root, 'usr/bin/httpd'), fakeElf(['strcpy', 'sprintf'], 40_000));
+      fs.writeFileSync(path.join(root, 'lib/libtiny.so'), fakeElf(['strcpy'], 10));
+    });
+
+    it('says the signal never arrived, and that this is silence rather than a finding', () => {
+      const r = runBinVuln(root);
+      expect(r.reason).toMatch(/No exposure signal reached this sweep/);
+      expect(r.reason).toMatch(/silence about what is exposed, not a finding that nothing is/);
+      expect(r.exposedDropped).toBeUndefined();
+    });
+
+    it('says the signal ARRIVED and named nothing — the DVRF case, and not the same sentence', () => {
+      const r = runBinVuln(root, new Set<string>());
+      expect(r.reason).toMatch(/exposure signal DID reach this sweep and named no binary/);
+      expect(r.reason).toMatch(/having asked/);
+      // The pair: neither claims anything about exposure, and they are distinguishable prose.
+      expect(r.reason).not.toBe(runBinVuln(root).reason);
+    });
+
+    it('says how many were flagged when the signal names binaries', () => {
+      const r = runBinVuln(root, new Set(['usr/bin/httpd']));
+      expect(r.reason).toMatch(/1 binary\(ies\) were flagged as exposed and ranked ahead of smaller candidates/);
+      // Nothing was dropped at this cap, so it must not invent a shortfall.
+      expect(r.reason).not.toMatch(/did not fit the cap/);
+      expect(r.exposedDropped).toBeUndefined();
+    });
+
+    it('names the exposed binary in the reason when the cap does drop it', () => {
+      // The cap is not a parameter of runBinVuln, so this drives selectFindings directly at a cap of 1 to pin the
+      // sentence the sweep composes from `exposedDropped`. The wiring is pinned by the test above it.
+      const drafts = runBinVuln(root).findings.filter((f) => f.kind === 'binary-pwnable-candidate');
+      const { exposedDropped } = selectFindings(drafts, 1, new Set(['usr/bin/httpd', 'lib/libtiny.so']));
+      expect(exposedDropped).toEqual(['usr/bin/httpd']);
+    });
   });
 
   /**
@@ -263,6 +310,71 @@ describe('selectFindings — which leads survive the cap is a decision, not an a
 
   const kindsOf = (kept: FindingDraft[], kind: string): number => kept.filter((f) => f.kind === kind).length;
 
+  /**
+   * The defect this key exists for, in the shape the WDR3600 produced it. Smallest-first is right about
+   * answerability and blind to worth, and the two disagree in one repeatable way: the exposed daemon is the
+   * LARGEST binary, so it was the first thing the cap dropped — deleting it from the very list the downstream
+   * probe rank reads in order to promote it.
+   */
+  describe('exposure outranks size, because the exposed daemon is always the biggest binary', () => {
+    const httpd = draft('binary-pwnable-candidate', 'usr/bin/httpd', 1_700_000);
+    const stubs = Array.from({ length: 6 }, (_, i) => draft('binary-pwnable-candidate', `lib/libstub${i}.so`, 6_000));
+
+    it('drops the exposed daemon when nothing says it is exposed — the behaviour being fixed', () => {
+      const { kept, exposedDropped } = selectFindings([httpd, ...stubs], 3);
+      expect(kept.map((f) => (f.evidence as Record<string, unknown>).path)).not.toContain('usr/bin/httpd');
+      // And with no exposure signal it cannot even report the loss: naming it would require knowing it mattered.
+      expect(exposedDropped).toEqual([]);
+    });
+
+    it('keeps it, first, once the caller names it exposed — same drafts, same cap', () => {
+      const { kept, exposedDropped } = selectFindings([httpd, ...stubs], 3, new Set(['usr/bin/httpd']));
+      expect((kept[0]?.evidence as Record<string, unknown>).path).toBe('usr/bin/httpd');
+      expect(exposedDropped).toEqual([]);
+    });
+
+    it('still ranks severity above exposure, so a socket cannot launder a weak lead to the top', () => {
+      const critical = draft('binary-pwnable-candidate', 'sbin/tiny', 900, 'critical');
+      const { kept } = selectFindings([httpd, critical], 1, new Set(['usr/bin/httpd']));
+      expect((kept[0]?.evidence as Record<string, unknown>).path).toBe('sbin/tiny');
+    });
+
+    it('names an exposed binary that still did not fit, rather than counting it', () => {
+      const other = draft('binary-pwnable-candidate', 'usr/sbin/dropbear', 900_000);
+      const { kept, exposedDropped } = selectFindings(
+        [httpd, other, ...stubs],
+        1,
+        new Set(['usr/bin/httpd', 'usr/sbin/dropbear']),
+      );
+      expect(kept).toHaveLength(1);
+      // Exposure is a TIER, not an override: between two exposed daemons size still decides, so the 900 KB
+      // dropbear takes the seat and the 1.7 MB httpd is the one named as dropped. Asserting the opposite here is
+      // what caught that this test's author had read exposure as a total order.
+      expect((kept[0]?.evidence as Record<string, unknown>).path).toBe('usr/sbin/dropbear');
+      expect(exposedDropped).toEqual(['usr/bin/httpd']);
+    });
+
+    it('reports an exposed drop even when the cap is zero, which is when it is most invisible', () => {
+      const { kept, exposedDropped } = selectFindings([httpd], 0, new Set(['usr/bin/httpd']));
+      expect(kept).toEqual([]);
+      expect(exposedDropped).toEqual(['usr/bin/httpd']);
+    });
+
+    /**
+     * The distinction the whole change turns on: an EMPTY exposure set and NO exposure set rank identically and
+     * mean opposite things. DVRF is the real case — `runServiceMap` returns zero services on a rootfs that does
+     * have init scripts — so "asked, nothing exposed" must not be reachable from "never asked".
+     */
+    it('ranks an empty exposure set exactly like an absent one, and they are different facts', () => {
+      const asked = selectFindings([httpd, ...stubs], 3, new Set<string>());
+      const never = selectFindings([httpd, ...stubs], 3);
+      expect(asked.kept.map((f) => f.title)).toEqual(never.kept.map((f) => f.title));
+      // Identical ranking, and only the sweep's reason can tell them apart — pinned in the runBinVuln describe.
+      expect(asked.exposedDropped).toEqual([]);
+      expect(never.exposedDropped).toEqual([]);
+    });
+  });
+
   it('keeps everything when the set fits, and reports nothing dropped', () => {
     const drafts = [draft('a', 'x', 3), draft('a', 'y', 1)];
     const { kept, dropped } = selectFindings(drafts, 10);
@@ -352,7 +464,7 @@ describe('selectFindings — which leads survive the cap is a decision, not an a
 
   it('drops everything, and says so, at cap 0', () => {
     const drafts = [draft('a', 'x', 1), draft('b', 'y', 2, 'critical')];
-    expect(selectFindings(drafts, 0)).toEqual({ kept: [], dropped: 2 });
+    expect(selectFindings(drafts, 0)).toEqual({ kept: [], dropped: 2, exposedDropped: [] });
   });
 
   it('keeps every draft when the cap exceeds the input, whatever the severity mix', () => {
@@ -378,7 +490,7 @@ describe('selectFindings — which leads survive the cap is a decision, not an a
   });
 
   it('terminates on an empty draft list — the floor loop has no kinds to hand seats to', () => {
-    expect(selectFindings([], 60)).toEqual({ kept: [], dropped: 0 });
+    expect(selectFindings([], 60)).toEqual({ kept: [], dropped: 0, exposedDropped: [] });
   });
 
   it('ranks an unrecognised severity as info rather than trusting it with a seat', () => {

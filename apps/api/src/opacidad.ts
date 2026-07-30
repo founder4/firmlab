@@ -24,6 +24,7 @@ import {
   REACHABILITY_LEAD_CAP,
   daemonLeads,
   handlerLeads,
+  interestingBinaries,
   reachabilityLeads,
   reproductionLeads,
   taintReachabilityLeads,
@@ -568,7 +569,24 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
 
 /** W5 breadth — sweep every rootfs ELF for stack-overflow candidates (unbounded-copy + no canary). */
 async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
-  const r = runBinVuln(c.rootfsPath);
+  // The exposure signal has to be built BEFORE the sweep, not after it. It used to be assembled below, purely for
+  // the probe ranking, which meant the finding cap chose its list without it — and the cap's smallest-first rule
+  // drops the largest candidate, which is always the exposed daemon. So the rank that exists to promote
+  // `usr/bin/httpd` never saw it: `runBinVuln` had already deleted it from the list the rank reads.
+  //
+  // UNDEFINED when neither stage ran, and that is load-bearing rather than a convenience: it is the difference
+  // between "nothing is exposed here" (a measured property — DVRF really does have zero services) and "nobody
+  // asked", which rank the same way and are opposite facts. The sweep's reason says which of the two it had.
+  const interest: ProbeInterest = {
+    ...(c.services ? { services: c.services } : {}),
+    ...(c.handlers ? { handlers: c.handlers } : {}),
+    planned: c.planned,
+  };
+  const exposed =
+    c.rootfsPath && (c.services || c.handlers)
+      ? new Set(interestingBinaries(c.rootfsPath, interest).keys())
+      : undefined;
+  const r = runBinVuln(c.rootfsPath, exposed);
   syncFindings(c.imageId, 'binvuln', r.findings);
   // Each candidate is a precondition, not a bug. Hand as many as the run's remaining angr budget allows to the
   // symbolic prober so it can settle whether the sink is on a live path instead of leaving a list of maybes. The
@@ -577,13 +595,7 @@ async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
   const budget = reachabilityBudget(c);
   // Ranked on two axes, not one. Size says which questions RESOLVE; W3's service map and W4's handler analysis say
   // which are worth ASKING, and the ranking draws from both queues round-robin so neither can take the whole
-  // allowance. Both fields are omitted when their stage has not run — an absent signal is silence, and the rank
-  // then degrades to exactly the smallest-first order it had before (see `ProbeInterest`).
-  const interest: ProbeInterest = {
-    ...(c.services ? { services: c.services } : {}),
-    ...(c.handlers ? { handlers: c.handlers } : {}),
-    planned: c.planned,
-  };
+  // allowance. `interest` is built above, because the finding cap needs the same signal.
   const leads = c.rootfsPath ? reachabilityLeads(r.findings, c.rootfsPath, budget, interest) : [];
   const unasked = Math.max(0, r.candidates - leads.length);
   // A probe that jumped the queue says so in its own `reason`, but the sweep's line is where a reader learns the

@@ -421,6 +421,12 @@ export interface BinVulnResult {
    * that never counted.
    */
   relocatableSkipped?: number;
+  /**
+   * Exposed binaries that STILL did not fit the cap, named rather than counted, so the ledger's shortfall is
+   * legible instead of inferable. Optional forever — a result stored before this field existed carries no value
+   * for it, and `[]` would be a claim about a ranking that never had an exposure signal.
+   */
+  exposedDropped?: string[];
   reason: string;
 }
 
@@ -529,19 +535,41 @@ function severityRank(d: FindingDraft): number {
 }
 
 /**
- * The total order a contested slot is decided by: severity descending (the worst lead wins), then SMALLEST BINARY
- * first (bounded symbolic execution converges on small binaries and times out on large ones, so a small candidate
- * is one the downstream prober can actually settle), then path, kind and title — enough tiebreaks that the answer
- * is a function of the rootfs alone and never of the order the walk happened to produce it in.
+ * The total order a contested slot is decided by: severity descending (the worst lead wins), then EXPOSURE, then
+ * SMALLEST BINARY first (bounded symbolic execution converges on small binaries and times out on large ones, so a
+ * small candidate is one the downstream prober can actually settle), then path, kind and title — enough tiebreaks
+ * that the answer is a function of the rootfs alone and never of the order the walk happened to produce it in.
+ *
+ * **Exposure sits ahead of size because size alone made the cap hide the one candidate that matters most.** The
+ * smallest-first rule is right about answerability and says nothing about worth, and the two disagree in a
+ * specific, repeatable way: an exposed network daemon is the LARGEST binary in a rootfs, so on any image with more
+ * candidates than the cap it was the first thing dropped. On the WDR3600 that is a 1.7 MB `usr/bin/httpd`,
+ * autostart on port 80, with five unbounded copies and no canary — evicted in favour of uClibc stubs of 6 KB whose
+ * "search space exhausted" the corpus has already recorded as the cheapest possible non-answer. The downstream
+ * prober has a rank that exists precisely to promote that daemon, and it reads `findings`, so the cap was deciding
+ * the probe queue by deleting its best entry before the ranking ever saw it.
+ *
+ * Exposure does NOT outrank severity: a `critical` in an unreferenced binary is still worse than a `medium` in a
+ * daemon, and inverting that would let a listening socket launder a weak finding into the top of the ledger.
  */
-function rankDrafts(a: FindingDraft, b: FindingDraft): number {
+function rankDrafts(a: FindingDraft, b: FindingDraft, exposed?: ReadonlySet<string>): number {
   return (
     severityRank(b) - severityRank(a) ||
+    exposureRank(b, exposed) - exposureRank(a, exposed) ||
     draftSize(a) - draftSize(b) ||
     draftPath(a).localeCompare(draftPath(b)) ||
     a.kind.localeCompare(b.kind) ||
     a.title.localeCompare(b.title)
   );
+}
+
+/**
+ * 1 when this draft's binary is one the caller named as exposed, 0 otherwise — and 0 for EVERY draft when the
+ * caller supplied no set at all, which collapses the key and leaves the order exactly as it was before exposure
+ * was a rank key. An absent signal must be silence, never "nothing is exposed".
+ */
+function exposureRank(d: FindingDraft, exposed?: ReadonlySet<string>): number {
+  return exposed?.has(draftPath(d)) ? 1 : 0;
 }
 
 /**
@@ -586,9 +614,18 @@ const EQUAL_SHARE_DIVISOR = 2;
  * `dropped` and stated in the caller's `reason`, because a short list that does not say it is short is a bound
  * pretending to be an answer.
  */
-export function selectFindings(drafts: FindingDraft[], cap: number): { kept: FindingDraft[]; dropped: number } {
-  if (cap <= 0) return { kept: [], dropped: drafts.length };
-  if (drafts.length === 0) return { kept: [], dropped: 0 };
+export function selectFindings(
+  drafts: FindingDraft[],
+  cap: number,
+  exposed?: ReadonlySet<string>,
+): { kept: FindingDraft[]; dropped: number; exposedDropped: string[] } {
+  const rank = (a: FindingDraft, b: FindingDraft): number => rankDrafts(a, b, exposed);
+  // `exposedDropped` is reported even on the early exits, because "the cap was zero" is exactly the case where an
+  // exposed daemon is silently missing and the caller has to be able to say so.
+  const exposedOf = (list: FindingDraft[]): string[] =>
+    exposed ? [...new Set(list.filter((d) => exposed.has(draftPath(d))).map(draftPath))].sort() : [];
+  if (cap <= 0) return { kept: [], dropped: drafts.length, exposedDropped: exposedOf(drafts) };
+  if (drafts.length === 0) return { kept: [], dropped: 0, exposedDropped: [] };
 
   const byKind = new Map<string, FindingDraft[]>();
   for (const d of drafts) {
@@ -596,7 +633,7 @@ export function selectFindings(drafts: FindingDraft[], cap: number): { kept: Fin
     if (list) list.push(d);
     else byKind.set(d.kind, [d]);
   }
-  for (const list of byKind.values()) list.sort(rankDrafts);
+  for (const list of byKind.values()) list.sort(rank);
 
   // The order the floor is handed out in: the kind whose best remaining lead is worst goes first, so a cap too
   // small to seat every kind spends its seats on severity instead of on whichever kind name sorts earliest.
@@ -632,15 +669,23 @@ export function selectFindings(drafts: FindingDraft[], cap: number): { kept: Fin
     const list = byKind.get(k) as FindingDraft[];
     for (let i = takenPerKind.get(k) ?? 0; i < list.length; i++) contenders.push(list[i] as FindingDraft);
   }
-  contenders.sort(rankDrafts);
+  contenders.sort(rank);
   for (const d of contenders) {
     if (kept.length >= cap) break;
     kept.push(d);
   }
 
   // Both phases interleave the kinds; regroup so the emitted list reads as a list rather than as the draw order.
-  kept.sort((a, b) => a.kind.localeCompare(b.kind) || rankDrafts(a, b));
-  return { kept, dropped: drafts.length - kept.length };
+  kept.sort((a, b) => a.kind.localeCompare(b.kind) || rank(a, b));
+  // An exposed binary CAN still be dropped: the cap may be smaller than the exposed set, or a higher-severity kind
+  // may fill it. Ranking makes that rare rather than impossible, so the ones that fall out are named rather than
+  // counted — the whole point of the fix is that the reader learns which daemon is missing, not how many.
+  const keptPaths = new Set(kept.map(draftPath));
+  return {
+    kept,
+    dropped: drafts.length - kept.length,
+    exposedDropped: exposedOf(drafts).filter((p) => !keptPaths.has(p)),
+  };
 }
 
 /**
@@ -650,7 +695,7 @@ export function selectFindings(drafts: FindingDraft[], cap: number): { kept: Fin
  * smallest-first — never walk order) and both the cap and an exhausted ELF budget are reported in the reason,
  * never silently dropped.
  */
-export function runBinVuln(rootfsPath: string | null): BinVulnResult {
+export function runBinVuln(rootfsPath: string | null, exposed?: ReadonlySet<string>): BinVulnResult {
   if (!rootfsPath) {
     return { available: false, binariesScanned: 0, candidates: 0, findings: [], reason: 'No extracted rootfs.' };
   }
@@ -705,14 +750,27 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
     for (let i = subdirs.length - 1; i >= 0; i--) stack.push(subdirs[i] as string);
   }
 
-  const { kept, dropped } = selectFindings(all, FINDING_CAP);
+  const { kept, dropped, exposedDropped } = selectFindings(all, FINDING_CAP, exposed);
   const candidates = all.filter((f) => f.kind === 'binary-pwnable-candidate').length;
   const listed = kept.filter((f) => f.kind === 'binary-pwnable-candidate').length;
   // Both bounds are stated, because either one silently makes a partial answer look like a complete one.
   const capNote =
     dropped > 0
-      ? ` The ${FINDING_CAP}-finding cap lists ${listed} of the ${candidates} candidate(s) and drops ${dropped} further finding(s) — half the slots are split equally between kinds so none is crowded out, and the rest go to the highest severity first, then to the smallest binary (what a bounded symbolic probe can settle); never to whatever the walk reached first.`
+      ? ` The ${FINDING_CAP}-finding cap lists ${listed} of the ${candidates} candidate(s) and drops ${dropped} further finding(s) — half the slots are split equally between kinds so none is crowded out, and the rest go to the highest severity first, then to whichever binary is EXPOSED, then to the smallest (what a bounded symbolic probe can settle); never to whatever the walk reached first.`
       : '';
+  // Three states, and the middle one is the one a single sentence would have hidden. "No exposure signal reached
+  // this sweep" and "the signal arrived and named nothing" produce the same ranking and are opposite facts: the
+  // first means W3/W4 did not run for this class, the second is a measured property of the rootfs — and it is real,
+  // since `runServiceMap` returns ZERO services on DVRF, a rootfs that does have init scripts.
+  const exposureNote = !exposed
+    ? ' No exposure signal reached this sweep (the service map and web-taint stages did not run for this image), so the ranking used severity and size alone — which is silence about what is exposed, not a finding that nothing is.'
+    : exposed.size === 0
+      ? ' The exposure signal DID reach this sweep and named no binary: nothing in this rootfs was identified as an autostart network daemon or as exec’d by a tainted handler. The ranking therefore fell back to size, having asked.'
+      : ` ${exposed.size} binary(ies) were flagged as exposed and ranked ahead of smaller candidates.${
+          exposedDropped.length
+            ? ` ${exposedDropped.length} of them still did not fit the cap and are named here rather than counted: ${exposedDropped.join(', ')}.`
+            : ''
+        }`;
   // Not a bound but an exclusion, and it owes the same sentence: a reader comparing "400 ELFs" against a rootfs
   // they know holds 375 modules must be able to see where the difference went.
   const relocNote =
@@ -729,6 +787,7 @@ export function runBinVuln(rootfsPath: string | null): BinVulnResult {
     candidates,
     findings: kept,
     relocatableSkipped: relocatable,
-    reason: `Binary-vuln sweep: ${scanned} ELF binaries, ${candidates} stack-overflow candidate(s).${capNote}${relocNote}${budgetNote} Candidates are unbounded-copy + no-canary leads for reversing/fuzzing, not proven overflows.`,
+    ...(exposedDropped.length ? { exposedDropped } : {}),
+    reason: `Binary-vuln sweep: ${scanned} ELF binaries, ${candidates} stack-overflow candidate(s).${capNote}${exposureNote}${relocNote}${budgetNote} Candidates are unbounded-copy + no-canary leads for reversing/fuzzing, not proven overflows.`,
   };
 }
