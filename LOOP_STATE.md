@@ -635,3 +635,35 @@ Lo que este loop dejó como próximo trabajo, en el orden re-derivado de `METHOD
   corriendo, así que murió `rcS` y no el invitado. Quedan dos preguntas: por qué se detiene ahí, y dónde se puede
   poner una intervención que el arranque sí ejecute (`/etc/inittab`, un `preInit` antes de `rcS`, o la línea de
   comandos del kernel son las candidatas que usa firmadyne/FirmAE).
+- iter 21 (2026-07-30): la agenda sigue completa, así que cogí lo que la iter 20 dejó abierto con impacto alto — por
+  qué `rcS` no llega a su última línea. **Y empecé desconfiando de mi propia conclusión de ayer, que se apoyaba en UN
+  arranque.** Bien hecho: repetir el arranque reparado dio un tercer desenlace distinto.
+  **Tres arranques de la misma imagen, tres resultados:** `confirmed_full_system` con `open: [80,443]`;
+  `confirmed_full_system` con `open: []`; y `blocked_by_platform` por panic del kernel. Consolas de 262 KB / 262 KB /
+  17 KB, tiempo de invitado 95,2 / 95,8 / 29,4 s, trazas de `rcS` 198 / 214 / 0. Así que **el peldaño no es
+  reproducible en esta imagen**, y con eso cae también mi afirmación de ayer de que «`rcS` se detiene en la línea
+  45»: eso se leyó de la cola de la consola de un arranque y no se sostiene en los tres. Lo que sí se sostiene con
+  n=2 es que la reparación nunca se ejecuta — cero `execve` de `ping`/`iptables-*` y ningún marcador en ambos
+  arranques reparados.
+  **El tercero sí quedó explicado, y era un defecto mío, más grande que el que perseguía.** Panic:
+  `/sbin/init: can't load library '/firmadyne/libnvram.so'` → `Attempted to kill init`. Causa: mi propia sonda de la
+  iter 21 llamó a `ensureRootfsImage` fuera de banda con `mipseb`, una arquitectura **sin shim** (los shims son
+  arm/arm64/mips/mipsel), y esa build registró su aviso, **construyó la imagen igual** y escribió el marcador de
+  reparación — así que la imagen quedó pareciendo actual y bien dispuesta. El arranque real siguiente la reutilizó.
+  **Y la rama de reutilización no registra ninguna línea de shim, así que el log del arranque que hizo panic no tenía
+  ni rastro de la causa: la AUSENCIA de la línea era la evidencia.**
+  Arreglado con un sello JSON al lado de la imagen (`arch`, `shimStaged`), escrito sólo tras un mkfs correcto, que la
+  reutilización consulta ANTES del veredicto de frescura — porque una imagen actual y bien dispuesta puede seguir
+  siendo inarrancable. Tres rechazos separados, y el primero es de lo que van las reglas de este repo: **un sello
+  ausente no es una imagen mala** — se construyó antes de que se sellaran, no se sabe nada de ella, y lo honesto es
+  reconstruir, no rechazar ni confiar.
+  Verificación sobre bytes reales, las dos direcciones: un arranque real del WR940N cayó en la rama sin-sello
+  («carries no build stamp… not known to be wrong»), puso el shim mips y volvió `confirmed_full_system` sin panic con
+  `{"arch":"mips","shimStaged":true}` en disco; y luego **reproduje el accidente a propósito** — la build `mipseb`
+  declaró «WITHOUT the NVRAM shim, so a boot will panic on init» y selló `shimStaged:false`, y el arranque `mips`
+  siguiente la rechazó con «built for mipseb and this boot is mips».
+  Puertas: `pnpm test` → core 75 / api **1815** / web 399 verde · `pnpm check` → Done ×3 · `pnpm biome` → limpio.
+  **Dos puntos nuevos, los dos de impacto ALTO y en este orden:** (a) el peldaño full-system **no es reproducible**
+  en el WR940N, y eso es precondición de toda conclusión que se saque de él — hay que medirlo (n≥5 por brazo) antes
+  de seguir diagnosticando la reparación; (b) dónde SE PUEDE poner una intervención que el arranque ejecute sigue sin
+  respuesta, y depende de (a).

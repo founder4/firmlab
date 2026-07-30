@@ -193,15 +193,43 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   _What made the wrong claim believable: a control was run, both images were freshly rebuilt, and the numbers were
   real. The step missing was asking whether the intervention EXECUTED, which the `execve` trace answers directly and
   which nothing checked. `ruleset.ran: false` was on the screen the whole time._
-- ▢ **`rcS` stops before its last line on the WR940N, and that is why the repair is inert.** The immediate blocker:
-  the repair appends to the END of `etc/rc.d/rcS`, and on this image `rcS` emits no `execve` after line 45 (repaired
-  boot) or 46 (control) — so anything appended is unreachable. Two questions, both unanswered: WHY it stops there
-  (nothing in lines 45–46 is unusual — `echo 75 >/proc/sys/vm/dirty_ratio`, `echo 200
-  >/proc/sys/vm/vfs_cache_pressure`), and where a repair COULD be appended that the boot actually reaches. Note the
-  guest stays alive to 95 s of kernel time with `httpd` and workers running, so the guest did not die — `rcS` did.
-  Impact: **high** — it makes the whole repair mechanism inert, and it is the reason the dynamic rung still has no
-  demonstrated way to make a service answer.- ✅ **A cached disk image was reused under the WRONG repair disposition** (2026-07-30, `c0eb9b2`) — found by the first real repaired boot, one commit after the wiring, and the **third instance this session** of *"a guard is only as good as its SUCCESS path"*. Reuse compared mtimes alone, so with the flag ON a real WR940N boot was served an image built WITHOUT a repair and returned `repair: undefined`: the operator asked for an intervention and silently did not get one — worse than an absent field, a result about an artefact nobody described. `imageReusable` now requires the disposition the image was BUILT with to match the one the boot wants, recorded in a sidecar written only after a successful mkfs. **Both directions matter and the second one earned its keep immediately:** the unrepaired CONTROL boot above would otherwise have reused the repaired image and reported open ports for a run with no repair, inverting the experiment.
-- ▢ **The repair's own markers never reported back, and nothing yet explains why.** `ruleset.ran: false` on the boot that DID open two ports, so `iptables-save`/`iptables-stop`/`echo` produced no console output between the markers. Candidates, none tested: the backgrounded subshell is killed when the boot's console capture ends; `ping -c 20 127.0.0.1` outlives the run's window; stdout of a backgrounded `rcS` child does not reach the serial console. Until it is settled the workbench can say the repair was present and cannot say it ran — which also means the WHY of the two open ports is unexplained, since the flush is only the leading hypothesis. Impact: **high** — it is the difference between a measured effect and an understood one.
+- ✅ **An image that cannot boot was cached as valid** (2026-07-30, `e67b503`) — found chasing the entry that
+  stood here, and it is a bigger defect than the one it replaced. A disk image was a cache keyed on its mtime and the
+  repair marker, recording neither the ARCHITECTURE it was built for nor whether the NVRAM shim went into it. Both
+  are load-bearing: the firmadyne kernels preload `/firmadyne/libnvram.so` into every process, so an image without it
+  kills init.
+  **What it cost:** an `ensureRootfsImage` call made out of band with `mipseb` — an arch with no shim, where the
+  shims are `arm`/`arm64`/`mips`/`mipsel` — logged its warning, built the image anyway and wrote the repair marker,
+  so the image looked current and correctly-dispositioned. The next real boot reused it and panicked:
+  `/sbin/init: can't load library '/firmadyne/libnvram.so'` → `Attempted to kill init`. **And the reuse path logged
+  no shim line at all**, so the panicking boot's log contained no trace of the cause — the ABSENCE of a line was the
+  evidence.
+  A JSON stamp beside the image now records `arch` and `shimStaged`, written only after a successful mkfs, and reuse
+  consults it BEFORE acting on the freshness verdict — a current, correctly-dispositioned image can still be
+  unbootable. The reuse path now says what the image contains, and a build without the shim states its own
+  unbootability in its `reason`. Three refusals, separately: **an absent stamp is not a bad image** (built before
+  stamps existed, so nothing is known → rebuild rather than refuse or trust); arch mismatch; no shim.
+  Validated on real bytes, both directions: a real WR940N boot hit the no-stamp branch (*"carries no build stamp, so
+  what it was built for is unknown — not known to be wrong"*), staged the mips shim, and came back
+  `confirmed_full_system` with no panic and `{"arch":"mips","shimStaged":true}` on disk; then the accident was
+  reproduced deliberately — a `mipseb` build reported *"WITHOUT the NVRAM shim, so a boot will panic on init"* and
+  stamped `shimStaged:false`, and the next `mips` boot refused it with *"built for mipseb and this boot is mips"*.
+- ▢ **The full-system rung is not reproducible on the WR940N, and every single-boot conclusion about it is n=1.**
+  Three boots of one image, 2026-07-30: `confirmed_full_system` with `open: [80,443]`; `confirmed_full_system` with
+  `open: []`; and `blocked_by_platform` on a kernel panic. Console sizes 262 KB / 262 KB / 17 KB, guest time
+  95.2 s / 95.8 s / 29.4 s, `rcS` traces 198 / 214 / 0. The third is explained (the poisoned cache, closed above),
+  the first two are not: same image, same code, same disposition, and one opened two ports while the other opened
+  none. **This is what made the retracted repair claim believable**, and it means the rung cannot support a causal
+  claim from a single boot — including the claim that `rcS` stops at line 45, which was read off one boot's console
+  tail and does not hold across the three. Impact: **high** — it is a precondition for every conclusion this rung is
+  used to draw, and it should be measured (n≥5 per arm) before the repair is diagnosed further.
+- ▢ **Where a boot-time intervention CAN be staged is still unanswered.** The repair appends to the end of
+  `/etc/rc.d/rcS` and has never executed on any of the three boots — zero `execve` traces for `ping`,
+  `iptables-save` or `iptables-stop`, and none of its three markers, on both repaired runs. Whether that is because
+  `rcS` does not reach its tail or because a backgrounded subshell does not survive is undetermined and needs the
+  reproducibility question above answered first. The candidates firmadyne/FirmAE use are `/etc/inittab`, a `preInit`
+  ahead of `rcS`, and the kernel command line. Impact: high — the dynamic rung still has no demonstrated way to make
+  a service answer.- ▢ **The repair's own markers never reported back, and nothing yet explains why.** `ruleset.ran: false` on the boot that DID open two ports, so `iptables-save`/`iptables-stop`/`echo` produced no console output between the markers. Candidates, none tested: the backgrounded subshell is killed when the boot's console capture ends; `ping -c 20 127.0.0.1` outlives the run's window; stdout of a backgrounded `rcS` child does not reach the serial console. Until it is settled the workbench can say the repair was present and cannot say it ran — which also means the WHY of the two open ports is unexplained, since the flush is only the leading hypothesis. Impact: **high** — it is the difference between a measured effect and an understood one.
 - ▢ **`agent/session.ts:627` passes the rootfs DIRECTORY where `runFullSystem` wants the disk image.** Surfaced 2026-07-30 while threading the repair through the call sites, not fixed (out of this iteration's scope): `runFullSystem(arch, rootfsPath, 8080, h, rootfsPath)` hands the extraction directory as `rootfsImage`, so qemu is given `-drive file=<dir>` and the agent's full-system rung cannot ever have booted. The route path builds the image with `ensureRootfsImage` first; the agent path never does. Impact: medium — one of the two entry points to the highest rung is inert, and it also means the agent's boots carry no `repair` disposition.
 - ▢ **`webprobe` needs a live target, not new logic.** `runWebProbe(baseUrl, …)` would take `http://127.0.0.1:<host port>` straight from `open[]`, but the rung tears the guest down before returning — driving it needs a hook that runs while pass two is still up, inside `bootOnce`'s probe loop. That is the last step between this rung and a dynamic answer.
 - ▢ **`planForwards` forwards only declared ports plus an 80/443 floor.** On all four corpus images nothing is declared, so a service on 8080/22/23 is missed even now that two guests are reachable at layer 4. Worth widening now that reachability is no longer the blocker.
