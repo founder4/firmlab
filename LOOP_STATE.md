@@ -17,11 +17,10 @@ cinco proveedores que corren y no se pueden leer.
 
 ### Bloque A — los defectos activos (⚠ en `docs/BACKLOG.md`)
 
-- [ ] **A1. El invitado emulado tiene internet de salida.** `-netdev user` da egreso sin restricción y el
-      WDR3600 alcanzó tres NTP públicos; choca de frente con «con todas las banderas apagadas: sin red».
-      `restrict=on` mantiene `hostfwd` y corta la salida. **Lo que hay que decidir y no solo parchear:** un
-      arranque aislado y uno que no contactó nada no son el mismo hecho, y el panel de egreso ya distingue
-      esas dos frases desde la iter 9 — la política nueva no puede volver a fundirlas.
+- [x] **A1. El invitado emulado tiene internet de salida.** Cerrado en iter 10 (`f969750`). No era implementar
+      `restrict=on` —ya existía— sino que el flag era opt-in: el defecto estaba en el valor por omisión. La
+      condición que el backlog puso para invertirlo ya estaba contestada en la base de datos y nadie la había
+      leído.
 - [ ] **A2. El cap de listado esconde el binario que el rank existe para promover.** `selectFindings` ordena
       por tamaño ascendente, así que con más candidatos que las 45 plazas cae primero el más grande — y el
       demonio expuesto es siempre el más grande (WDR3600: `usr/bin/httpd`, 1,7 MB, autostart en :80).
@@ -249,3 +248,39 @@ de arriba o se quedan aquí anotados por falta de muestra en el corpus.
   (tras `biome:fix`) · y sobre el despliegue real (`098779a`), leyendo `/image/c8e1ffa0/simulate` con playwright:
   PRESENTE «the block had nothing to stop», AUSENTES «nothing below was reached» y «this is what the firmware
   asked for». 0 errores de consola.
+- iter 10 (2026-07-30): cerrado **A1**, el egreso del invitado emulado. La hipótesis de la agenda era falsa en su
+  premisa: `restrict=on` ya estaba implementado y cableado desde antes, así que no había nada que construir — el
+  defecto era que `FIRMLAB_EMU_ISOLATE` es opt-in, de modo que «con todas las banderas apagadas: sin red, sin
+  coste, comportamiento determinista» era **falso por omisión**. Y la condición que el propio backlog había puesto
+  para invertirlo («whether any rung DEPENDS on outbound») **ya estaba medida en la base de datos y nadie la había
+  leído**: dos arranques full-system de la misma imagen WDR3600 a 16 minutos, uno abierto y otro aislado,
+  registraron los MISMOS 15 destinos externos y el MISMO `confirmed_full_system`; y de todos los arranques
+  guardados, sólo esa imagen ha direccionado jamás algo externo. Reproducido dos veces más hoy hasta cuatro
+  arranques, todos `ext=15` / `confirmed_full_system`. Aislar no cuesta ni un destino ni un veredicto, y confirma
+  sobre bytes reales lo que `egress.ts` sólo afirmaba: bloquear no esconde el intento, porque `filter-dump`
+  captura la trama antes de que slirp decida su suerte.
+  El default pasa a ser propiedad declarada del catálogo (`defaultOn`) y no un accidente de `=== '1'`.
+  **Tres defectos que el cambio destapó, los tres arreglados:** (a) `resolveFlags` leía `=== '1'` directamente, lo
+  que habría deshecho el default en silencio y pintado el interruptor APAGADO en Settings mientras el emulador sí
+  aislaba; (b) `enabled` funde «nadie lo pidió» con «el operador lo pidió» en cuanto un flag puede venir
+  encendido, y la dirección peligrosa es la otra — un invitado abierto sólo puede ocurrir porque alguien lo abrió,
+  así que `decideFlag` los separa y `describeEgressPolicy` compone tres frases donde había dos; (c) **la suite
+  fijaba el default viejo con una aserción que pasaba** (`expect(f.enabled).toBe(false)`, comentada como «which is
+  the permissive direction»), fixture y código escritos desde la misma suposición — la trampa que este repo ya
+  tiene pagada.
+  **Descartado con su razón:** renombrar a un `FIRMLAB_EMU_EGRESS` opt-in, que habría dejado la tabla sin
+  excepciones. Hay un override guardado de `FIRMLAB_EMU_ISOLATE=1` en el despliegue real, y renombrar habría
+  cambiado en silencio lo que esa fila significa. Es la trampa del «campo persistido escrito por una build más
+  vieja», aplicada a los ajustes.
+  Verificación: `pnpm test` → core 75 / api 1763 / web 326 verde · `pnpm check` → Done · `pnpm biome` → limpio
+  (tras arreglar a mano un template literal que biome marca como *unsafe fix* y no toca solo) ·
+  y sobre el despliegue real (`f969750`): el camino del éxito, que es el que nadie ejecuta — override borrado,
+  `decideFlag({})` → `{enabled:true, stated:false, byDefault:true}`, `source=default`, ningún otro carril
+  encendido; arranque real `c0df50a3-e89` con la orden `-netdev user,id=n0,restrict=on,hostfwd=tcp::43593-:80,
+  hostfwd=tcp::43594-:443` — el `restrict=on` de serie **y los dos forwards intactos a su lado**, que es la
+  propiedad de qemu comprobada sobre la orden real y no leída en su documentación; y las tres frases de política
+  leídas del build desplegado, distintas entre sí las tres. La rama ABIERTA se validó llamando al módulo, no
+  arrancando: arrancarla habría abierto de verdad la red del WDR3600, que es lo que esta iteración cierra.
+  **Puntos flojos nuevos, anotados en `docs/BACKLOG.md` y NO implementados:** `environmentValue` responde ahora a
+  otra pregunta y su único lector no se actualizó (impacto bajo); y las tres frases de política llegan al LOG y
+  no al panel, que sigue conmutando por el booleano `isolated` a secas (impacto medio).
