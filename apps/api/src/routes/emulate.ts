@@ -132,7 +132,28 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
         }
         // `image.repair` rather than re-deriving it: only the builder knows what it appended, and a verdict that
         // cannot say whether the firewall was torn down for this boot is a claim about a different artefact.
-        const r = await runFullSystem(arch, image.imagePath, 8080, handle, rootfsPath, image.repair);
+        //
+        // And the image's PRIOR full-system boots, read here because only the route can: three causal claims were
+        // drawn from single boots of this rung and all three were wrong, so a verdict now travels with how many
+        // boots stand behind it. Stored results are data written by older builds, so every field is read
+        // defensively — a row that carries no `open` array is counted as a boot with zero open ports rather than
+        // dropped, because dropping it would understate `n` and understating `n` is what produced the retractions.
+        const priorBoots = listJobs(id)
+          .filter((j) => j.kind === 'emulate' && j.status === 'done' && j.resultJson)
+          .map((j) => {
+            try {
+              return JSON.parse(j.resultJson as string) as Record<string, unknown>;
+            } catch {
+              return null;
+            }
+          })
+          .filter((res): res is Record<string, unknown> => res?.strategy === 'full-system')
+          .map((res) => ({
+            verdict: typeof res.proofState === 'string' ? res.proofState : 'unknown',
+            openPorts: Array.isArray(res.open) ? res.open.length : 0,
+            panic: typeof res.stdout === 'string' && res.stdout.includes('Kernel panic'),
+          }));
+        const r = await runFullSystem(arch, image.imagePath, 8080, handle, rootfsPath, image.repair, priorBoots);
         return onSystemEmulationResult(id, identity, 'system-boot', r);
       });
       return reply.status(202).send({ jobId });

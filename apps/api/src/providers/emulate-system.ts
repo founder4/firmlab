@@ -56,6 +56,7 @@ import type { Architecture, ProofState } from '@firmlab/core';
 import { type LaneFlagName, decideFlag, effectiveEnv } from '../flags.js';
 import { detectTools } from '../tools.js';
 import { type BootDiagnosis, diagnoseUnreachable } from './boot-diagnose.js';
+import { type BootOutcome as ReproBoot, type ReproducibilityVerdict, reproducibility } from './boot-reproducibility.js';
 import { type EgressObservation, describeEgress, describeEgressPolicy, mergeEgress, parseEgress } from './egress.js';
 import { type RepairDisposition, describeRuleset, readGuestRuleset } from './guest-repair.js';
 import type { JobHandle } from './jobs.js';
@@ -141,6 +142,12 @@ export interface SystemEmulationResult {
    * firewall out rather than confirming it.
    */
   ruleset?: { ran: boolean; rules: string; flushed: boolean; note: string };
+  /**
+   * What THIS boot plus the image's prior boots support. Optional forever, and the reason it exists at all is that
+   * three causal claims were drawn from single boots of this rung and all three were wrong: a verdict read without
+   * knowing whether the rung is reproducible is a number with an unmeasured error bar.
+   */
+  reproducibility?: ReproducibilityVerdict;
 }
 
 /** A single boot's outcome, summarised. The raw console of the pass the verdict came from is `stdout`. */
@@ -1502,6 +1509,12 @@ export async function runFullSystem(
    * and only this function has the console to read the repair's own report back out of.
    */
   repair?: RepairDisposition,
+  /**
+   * The outcomes of previous full-system boots of this image, passed in rather than read here: this module stays free
+   * of the store, and only the route knows which rows belong to which image. THIS boot is appended before the
+   * verdict is computed, so `n` always counts the run being reported.
+   */
+  priorBoots?: readonly ReproBoot[],
 ): Promise<SystemEmulationResult> {
   const qemu = QEMU_SYSTEM_BY_ARCH[arch];
   const machine = QEMU_MACHINE_BY_ARCH[arch];
@@ -1717,6 +1730,11 @@ export async function runFullSystem(
       // had a working network is still a name this firmware asks for.
       ...(egress ? { egress } : {}),
       isolated: isolate,
+      // Computed from the prior boots PLUS this one, so a first-ever boot reports `single` rather than `stable`.
+      reproducibility: reproducibility([
+        ...(priorBoots ?? []),
+        { verdict: proofState, openPorts: verdictPass.open.length, panic: verdictPass.stdout.includes('Kernel panic') },
+      ]),
       ...(repair ? { repair } : {}),
       ...(rulesetRead ? { ruleset: rulesetRead } : {}),
       ...(unreachable.cause === 'answered' ? {} : { unreachable }),
