@@ -214,16 +214,21 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   `confirmed_full_system` with no panic and `{"arch":"mips","shimStaged":true}` on disk; then the accident was
   reproduced deliberately — a `mipseb` build reported *"WITHOUT the NVRAM shim, so a boot will panic on init"* and
   stamped `shimStaged:false`, and the next `mips` boot refused it with *"built for mipseb and this boot is mips"*.
-- ▢ **The full-system rung is not reproducible on the WR940N, and every single-boot conclusion about it is n=1.**
+- ◐ **The full-system rung is not reproducible on the WR940N, and every single-boot conclusion about it is n=1.**
   Three boots of one image, 2026-07-30: `confirmed_full_system` with `open: [80,443]`; `confirmed_full_system` with
-  `open: []`; and `blocked_by_platform` on a kernel panic. Console sizes 262 KB / 262 KB / 17 KB, guest time
-  95.2 s / 95.8 s / 29.4 s, `rcS` traces 198 / 214 / 0. The third is explained (the poisoned cache, closed above),
-  the first two are not: same image, same code, same disposition, and one opened two ports while the other opened
-  none. **This is what made the retracted repair claim believable**, and it means the rung cannot support a causal
-  claim from a single boot — including the claim that `rcS` stops at line 45, which was read off one boot's console
-  tail and does not hold across the three. Impact: **high** — it is a precondition for every conclusion this rung is
-  used to draw, and it should be measured (n≥5 per arm) before the repair is diagnosed further.
-- ▢ **Where a boot-time intervention CAN be staged is still unanswered.** The repair appends to the end of
+  `open: []`; and `blocked_by_platform` on a kernel panic (that third one explained — the poisoned cache, closed
+  above). Console sizes 262 KB / 262 KB / 17 KB, guest time 95.2 / 95.8 / 29.4 s, `rcS` traces 198 / 214 / 0.
+  **The rule is now enforced in code** (`providers/boot-reproducibility.ts`, pure, 11 tests): every full-system
+  result carries a `reproducibility` verdict computed from the image's prior boots PLUS this one, and its first job is
+  to refuse — one boot of a rung with unmeasured variance supports **no** causal claim, not a weaker one.
+  `comparisonIsAttributable` states the three conditions a two-arm comparison needs, and the third is the one whose
+  absence produced this workbench's one retraction: the intervention must be shown to have EXECUTED. Prior boots are
+  read in the route (only it knows which rows belong to which image) and read defensively — a row with no `open`
+  array counts as a boot with zero open ports rather than being dropped, because dropping it would understate `n`.
+  **Still open: the measurement itself.** A 5-boot series with the repair off is in flight
+  (`scratchpad/series.sh` → `series.jsonl`) to characterise the distribution; until it lands, "not reproducible" rests
+  on n=3 with one of the three explained by a defect since fixed, which is suggestive and not a characterisation.
+  Impact: high — it is a precondition for every conclusion this rung is used to draw.- ▢ **Where a boot-time intervention CAN be staged is still unanswered.** The repair appends to the end of
   `/etc/rc.d/rcS` and has never executed on any of the three boots — zero `execve` traces for `ping`,
   `iptables-save` or `iptables-stop`, and none of its three markers, on both repaired runs. Whether that is because
   `rcS` does not reach its tail or because a backgrounded subshell does not survive is undetermined and needs the

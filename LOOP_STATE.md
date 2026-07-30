@@ -667,3 +667,24 @@ Lo que este loop dejó como próximo trabajo, en el orden re-derivado de `METHOD
   en el WR940N, y eso es precondición de toda conclusión que se saque de él — hay que medirlo (n≥5 por brazo) antes
   de seguir diagnosticando la reparación; (b) dónde SE PUEDE poner una intervención que el arranque ejecute sigue sin
   respuesta, y depende de (a).
+- iter 22 (2026-07-30): la agenda sigue completa; cogí el primero de los dos abiertos de la iter 21 — medir la
+  reproducibilidad del peldaño, que yo mismo puse como precondición de todo lo demás. Es una medición, y este
+  proyecto la exige antes de más código.
+  **Lo entregado y verde: la regla como código.** `providers/boot-reproducibility.ts` (puro, 11 tests) responde qué
+  sostienen N arranques, y su primer trabajo es negarse: un arranque de un peldaño con varianza sin medir **no
+  sostiene ninguna afirmación causal**, ni una más débil ni matizada. `comparisonIsAttributable` pone las tres
+  condiciones de una comparación de dos brazos, y la tercera es la que faltaba cuando atribuí los puertos a la
+  reparación: que la intervención se haya DEMOSTRADO ejecutar. Cumplir las dos primeras y no la tercera es
+  exactamente la forma de esa afirmación retractada — aritmética correcta, mecanismo ausente.
+  Cableado: el resultado del peldaño lleva ahora el veredicto, calculado sobre los arranques previos MÁS este (así un
+  primer arranque reporta `single` y no `stable`). Los previos los lee la ruta, y a la defensiva: una fila sin array
+  `open` cuenta como arranque de cero puertos en vez de descartarse, porque descartarla subestimaría `n` — y
+  subestimar `n` es lo que produjo las retractaciones.
+  Puertas: `pnpm test` → core 75 / api **1826** / web 399 verde · `pnpm check` → Done ×3 · `pnpm biome` → limpio.
+  **Lo que queda para la próxima iteración, y por qué:** la serie de 5 arranques con la reparación apagada está EN
+  VUELO (`scratchpad/series.sh` → `series.jsonl`), unos 25 min. No la esperé desplegando porque `deploy.sh` recrea el
+  contenedor y mataría el arranque en curso, así que el build desplegado sigue en `e67b503` y la validación
+  in-container del veredicto nuevo está pendiente. La próxima iteración: leer `series.jsonl`, desplegar, y comprobar
+  que un arranque real reporta el veredicto con su `n` y su distribución.
+  Y hasta que esa serie aterrice, «el peldaño no es reproducible» descansa en n=3 con uno de los tres explicado por
+  un defecto ya arreglado — sugerente, no una caracterización. La entrada del backlog pasa a ◐ y lo dice.
