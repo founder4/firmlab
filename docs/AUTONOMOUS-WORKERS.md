@@ -637,3 +637,44 @@ flight when this section was written; its per-binary and full-system results are
 land. And the single most useful thing the run produced is not a scoreboard: it is that **the two arrangements
 fail in opposite directions**, and the app's failures are concentrated in one lane — secrets — where it both
 misses real keys and asserts twelve that do not exist.
+
+### The dynamic tier, and the number that closes the pass
+
+Arm A's dynamic tier completed over all 18 images: per-binary rungs against the binary the ledger itself marks
+`networkFacing`, then qemu-user, Renode where the class calls for it, and a full-system boot.
+
+| rung | outcome |
+|---|---|
+| per-binary | 7 images had binaries; **11 had none**, all of them images with no recoverable rootfs |
+| `decompile` · `ghidra` · `fuzz` | 7/7 each |
+| `symreach` | 6 ran; 1 refused well — *"`usr/sbin/dropbear` imports no unbounded-copy function — name the sink you want asked about"* |
+| `emulate-user` | 7 attempts: **3 destroyed by the `mips`→`qemu-mipsel-static` map** (exit 255, `Invalid ELF image for this architecture`), 1 real execution with guest console output (IMOU: `[OSA-APP] OSA Build on Dec 22 2023…`), 1 stopped on a missing `/dev/nvram` (DVRF), 2 silent exits |
+| `emulate-system` | 11 refused for want of a rootfs; 7 ran → **3 `confirmed_full_system`** (WR940N 243 s, WDR3600 251 s, MR3220 278 s), 2 `needs_runtime_reproduction` (both cameras), 2 `blocked_by_platform` (the BE3600's being the unmapped `arm64`, not a platform limit) |
+
+**And the number that should decide what gets built next: the corpus now holds 1302 findings, and exactly ONE of
+them carries a proof state earned by execution** — `sbin/pktlogconf: strcpy executed at runtime, but on constant
+data rather than the supplied input`, on the WDR3600. Seven user-mode runs, seven boots, seven fuzz campaigns,
+three kernels that reached `confirmed_full_system`, and one row in the ledger that an execution paid for.
+
+That is not an argument against the ladder — the top rungs work, three kernels booted, and the single
+execution-backed row is a *negative* no static pass could have produced. It is that almost nothing is wired to
+turn a successful boot into a finding. The rungs prove the sandbox; the ledger barely hears about it.
+
+### Verdict
+
+Neither arrangement dominates, and the useful result is the shape of the disagreement.
+
+- **The app owns**: container formats (the four-stage BE3600 carve that pass 1 could not do), CVE mapping against
+  fingerprinted versions, structured update-path analysis, coverage that states what did not run, cross-image
+  component prevalence, and execution — the one thing agents never earned.
+- **The blind agents own**: anything inside a file the app's scanners do not open (an ELF's `.rodata`, a kernel
+  module's instruction stream, a UEFI variable store), recovering credentials the image itself carries in
+  cleartext, and — the surprise — **refusing findings**: a CVE declined by reading the vendor's bounds check, a
+  false backdoor rejected by reading `.rodata` in offset order, two exhausted searches reported as bounded
+  negatives rather than absences.
+- **The app's failures concentrate in one lane.** Secrets: it misses a real private key inside an ELF for two
+  independent reasons and simultaneously asserts twelve keys that are not there at `static_confirmed`/`high`.
+  Fixing that one lane closes more of the measured gap than any new worker on the §4 list.
+- **Three one-line defects surfaced only by running**, two of them in the same file and the same pair of maps,
+  and the second prints a reassuring falsehood (`blocked_by_platform` naming a tool that is installed). No test
+  reaches any of them.
