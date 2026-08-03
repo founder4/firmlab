@@ -698,6 +698,34 @@ Both map defects and the emulation half of the ledger gap are closed, and each f
   reproducibility verdict (*"One boot … nothing about what the next one will do"*, `supportsCausalClaim: false`).
   The corpus now holds **three** rows an execution paid for rather than one.
 
+### 11.2 The secrets lane, closed in both directions (deploy `491b4a4`)
+
+§11's verdict named one lane as where the app's failures concentrate: *"it misses a real private key inside an ELF
+for two independent reasons and simultaneously asserts twelve keys that are not there."* Both halves are fixed and
+verified through the deployed service, not against fixtures.
+
+- **The key it lost.** `usr/bin/httpd` on the WR940N now yields `Embedded RSA 1024-bit private key` at
+  `high`/`static_confirmed`, and the certificate beside it — `CN=tplinkwifi.net`, expired 2019-05-30, RSA-1024 —
+  as two more rows, where the same endpoint answered `certCount: 0` that morning. Both scanners walk the bytes for
+  the PEM marker now, and a block is a block only with a matching END and a base64 body: the WR940N holds **19
+  markers and 3 complete blocks**, and what is claimed is decided by decoding the body, so the `DH PARAMETERS` in
+  that same binary are reported and not claimed.
+- **The twelve it invented.** All 12 BE3600 rows are now leads — 7 `info`, 4 `low`, 1 `medium` — carrying the
+  signals they were graded on (`commented-out`, `public-key-identifier`), the entropy, the scrubbed line
+  (`# minisign_key = '…'`) and the sentence naming what would settle them. Nothing was told what `RWQf6LRC…` is:
+  the file says so. Self-identifying rules are never discounted, because losing a real key to "it sits in
+  documentation" is the worse of the two failures.
+- **And the lane now answers a question it used to decline.** `credmatch` recovers `root` = **`Td2N3ww1`** on the
+  Tenda CP3 at `critical`/`static_confirmed` — the vendor writes it in cleartext in `usr/bin/force_upgrade`, eight
+  bytes of which DES actually hashes — and `root` = `sohoadmin` on the WDR3600. The WR940N gets the honest other
+  outcome: *"115226 candidates drawn from this image's own printable strings did not reproduce the md5crypt hash…
+  It does NOT mean the password is strong, unknown, or absent from a vendor default list — no keyspace was
+  searched."* Its password IS `sohoadmin`; that image simply never writes it down, and §7 attributing the string to
+  the WR940N was a shorthand this run corrected.
+
+**The corpus census records the two directions in one number: `static_confirmed` went 349 → 341** — twelve rows
+that had never earned it left, four rows that did arrived — while the total rose 1305 → 1309.
+
 Two things this does **not** close, and they are the larger half. The 894 leads are untouched: a boot that
 confirms still does not reach back to upgrade the `needs_runtime_reproduction` findings it might settle, so the
 census barely moved even though the wiring works. And `renode` and `ghidra` still compose nothing. The correction
