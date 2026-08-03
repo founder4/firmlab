@@ -1358,6 +1358,41 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   holds `big`, measured from the ELF header. Every big-endian MIPS image fails this rung — WR940N, WDR3600,
   MR3220. Third instance of *"a comment that was true when written"*, second of *"big-endian MIPS given the
   little-endian emulator"*.
+- ⚠ **The dynamic tier runs and the ledger does not move** — impact **high**, and it is the pass's biggest
+  structural result. Measured over the whole corpus after the full sweep: **1302 findings from 28 distinct
+  sources**, and the seven heaviest rungs contribute **none of them**.
+
+  | in the ledger | absent from it entirely |
+  |---|---|
+  | `sbom` 474 · `binvuln` 337 · `certs` 156 · `kernel` 36 · `updatepath` 34 · `nvram` 28 · `symreach` 28 · `zeroday` 28 · `devicetree` 24 · `fwhunt` 19 · `compcve` 19 · `binary` 17 · `fsaudit` 14 · `services` 13 · `gitleaks` 13 · `uboot` 10 · `auxsecrets` 8 · `compmap` 7 · `yarascan` 7 · `rtos` 5 · `dynprobe` 5 · `chipsec` 4 · `webtaint` 4 · `esp` 4 · `secrets` 3 · `encrypted` 3 · `boot-cmdline` 1 · `triage` 1 | `emulate` · `emulate-system` · `fuzz` · `decompile` · `ghidra` · `renode` · `webprobe` |
+
+  Those seven ran in this pass — 7 user-mode runs, 7 full-system boots, 7 fuzz campaigns, 7 decompiles, 7 Ghidra
+  passes — and produced **zero rows**. Their results are on the job rows and reachable through the per-kind
+  endpoints; nothing composes them into findings the way `symreach` and `dynprobe` are composed.
+
+  **The proof-state census is the same fact from the other side:**
+
+  | state | count |
+  |---|---|
+  | `needs_runtime_reproduction` | **894** (69 %) |
+  | `static_confirmed` | 349 |
+  | `blocked_by_platform` | 57 |
+  | `confirmed_in_emulation` | **1** |
+  | `blocked_by_security` | 1 |
+  | `confirmed_full_system` | **0** |
+
+  **Three boots returned `proofState: confirmed_full_system` in their stored result and not one produced a finding
+  carrying that state** — the ladder's top rung has zero rows in the entire corpus. Meanwhile 894 findings are
+  leads explicitly waiting for the runtime reproduction that this tier performed 21 times and never fed back.
+  Every one of those leads still reads *"a precondition was observed, nothing was proven"* on images where the
+  kernel booted.
+
+  This is not the ladder failing — the rungs work, three kernels booted, and the single `confirmed_in_emulation`
+  row is a **negative** (`sbin/pktlogconf: strcpy executed at runtime, but on constant data rather than the
+  supplied input`) that no static pass could have produced. It is that the wiring stops at the job row. The
+  pattern already exists and is used twice: a route `startJob`s a provider and calls `syncFindings` under a stable
+  source. Seven providers never got that half. **Closing this converts work already being done into evidence,
+  which is a better return than any new worker on the §4 list.**
 - ⚠ **`arm64` is missing from `QEMU_SYSTEM_BY_ARCH`, and the block says the deployment lacks a tool it has** —
   impact **high**, same file and same shape as the entry above. The BE3600 full-system rung returns
   `{"ran":false,"proofState":"blocked_by_platform","reason":"No qemu-system emulator/machine for arch \"arm64\"
