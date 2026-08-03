@@ -13,6 +13,23 @@ import {
   verifyNvramCrc,
 } from './nvram.js';
 
+/** Generated for these tests only (`openssl genrsa 1024`). Real bytes: the detector decides by decoding them. */
+const RSA_KEY = `-----BEGIN RSA PRIVATE KEY-----
+MIICWwIBAAKBgQCbXuNIEpNWcjq88lQ1lWlXd1kU2S67TX0xits4GGWjZawrq6Ms
+eizb7Gi8pu8Z2oB1KuY8fz0kDtx0gLYVlmZXDz6k22AYrJnfjHyb611PKFbR6Uo1
+cARDO3cItB6w8cfb71EFL2fcg1al0Z31hbBODvTKeHIcYAvKHO9Ijs7pPwIDAQAB
+AoGABEUKR+vCwshm1tRt/f76Ix4zg4AoaZtKinb/aT46ZNAheB3CYTGGVBDeG/kW
+bwZzK0UfiKAShRAnfMgguN0mOMlKqF1qYsfS/MLVnPJAsiSP3Tu2FQCi5LA7GYaO
+YMXK/jzTYt1fN+1uxoiPHbf57yJhlCiYeGNdmacHQIzL80ECQQDL2W0uXU9jhRV7
+bvdbCmd+v/uJ7G+7xnwi2QjZdPh/Kki1gQEvkdAcl34aSfh/nvsQ2fUypW75uBks
+Tz7wPmafAkEAwx56nWkZ/jRnccy261itNHZQ0XZnXGlemmyRdS+3AIH+tj3LUY6C
+AN9Iybbhb02Tw93rR7M8a0239S/yTQuZYQJATmSAE0t5A0mjuEM1RsKaiGjmH+VY
+Frs+89vJBm9wPN8S9RH2VcfaY5Ryv0NhGBsYbCOVovNx2QDOVXboOlWU+wJAHzUW
+w2p1/9R93xOxBf9O5J8v2fCoI32u5eALe8S/7lLcXGWRyV+Tp3QO/kRD1juAMMmj
+wfoG5dquW4bpqCz8wQJASX38vRM+1fnCU/Qs8mN7/vVvxiLL8vjkH+UVfwsUaGDk
+s+q0B/YV4bkgTmF7RZUkbqpYxGEcSVYIOKLtFn8F1A==
+-----END RSA PRIVATE KEY-----`;
+
 // ============================================================================
 // Fixtures — built to the shape measured on the deployed corpus.
 // ============================================================================
@@ -403,14 +420,20 @@ describe('nvramFindings', () => {
     expect(boot?.evidence).toMatchObject({ bootdelaySeconds: 10 });
   });
 
-  it('catches a PEM private key stored inside a value, via fsaudit’s tested detector', () => {
-    const withKey = parseNvramStore(
-      partition([...XIAOMI_ENV, 'device_cert=-----BEGIN RSA PRIVATE KEY-----MIIB'], 0x1000),
-      0,
-    );
+  /**
+   * The fixture is a REAL key with its newlines stripped, which is how one survives a trip through an nvram value
+   * — the store holds NUL-terminated strings and vendors flatten the armor to fit. It used to be
+   * `device_cert=-----BEGIN RSA PRIVATE KEY-----MIIB`: a marker, four characters, and no END at all. That passed
+   * because the old detector matched the marker, which is the same reason it read `libwolfssl`'s format strings
+   * as key material. The detector now decodes the body, so this test only passes if the flattened block is
+   * re-wrapped and actually parses.
+   */
+  it('catches a PEM private key stored inside a value, flattened as nvram would store it', () => {
+    const flattened = RSA_KEY.replace(/\n/g, '');
+    const withKey = parseNvramStore(partition([...XIAOMI_ENV, `device_cert=${flattened}`], 0x2000), 0);
     const f = nvramFindings(withKey ? [withKey] : []).find((d) => d.kind === 'embedded-private-key');
     expect(f?.proofState).toBe('static_confirmed');
-    expect(f?.evidence).toMatchObject({ keyType: 'RSA private key' });
+    expect(f?.evidence).toMatchObject({ keys: [{ keyType: 'rsa', keyBits: 1024 }] });
   });
 
   it('produces nothing at all when there are no stores', () => {

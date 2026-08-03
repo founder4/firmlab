@@ -13,11 +13,35 @@
  * never a device verdict. Evidence carries the file path and the offending line, TRUNCATED, with any password
  * hash REDACTED (never the secret value). The runner tolerates every file being missing and degrades to
  * available:false when there is no rootfs — it never fabricates a finding.
+ *
+ * **The key lane, and what it had wrong.** `scanContentSecrets` was documented "found by content, not filename"
+ * and was — but the runner only ever handed it files whose EXTENSION was on a whitelist (plus extensionless files
+ * under `etc/`), read to 512 KB. So a private key inside a binary was unreachable by construction: the WR940N's
+ * 1.9 MB `usr/bin/httpd` carries a complete RSA-1024 key and its matching certificate in plain PEM, and this
+ * provider reported nothing. The scan is now the byte-level one in `certs.ts` (`scanTreeForPem`) over EVERY file
+ * the walk finds, and the bound it applies is reported instead of being read as a negative.
+ *
+ * **What is claimed, and what is not.** A private-key label is not a private key: this codebase has already had
+ * to withdraw a "private_key.pem" claim made without opening the file. So a block is claimed only when its BODY
+ * decodes — `node:crypto` parses it and reports the algorithm and size — or when it is explicitly an encrypted
+ * key block. Measured on the corpus, that distinction is not academic: of 11 well-formed private-key blocks in
+ * one `libgnutls.so`, 7 do not decode at all, and a `DH PARAMETERS` / `ROOT PUBLIC KEY` block is not a secret in
+ * the first place. Blocks that do not decode are counted and named in the reason — never silently dropped, never
+ * claimed as key material.
  */
+import { createPrivateKey } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { FindingSeverity, ProofState } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
+import {
+  DEFAULT_PEM_BUDGET,
+  type PemBlock,
+  type PemScanCoverage,
+  findPemBlocks,
+  scanTreeForPem,
+  summarizePemScan,
+} from './certs.js';
 
 const MAX_EVIDENCE = 200;
 const MAX_PROCESS = 160;
@@ -289,47 +313,214 @@ export function auditServiceConfigs(files: { path: string; content: string }[]):
 }
 
 // ============================================================================
-// content secret scan (a private key by CONTENT, not just by filename)
+// embedded key material (by CONTENT, not by filename — and read before it is named)
 // ============================================================================
 
-/** PEM private-key block headers → a human label for the key type. The block itself is unambiguous. */
-const PEM_PRIVATE_KEYS: { re: RegExp; label: string }[] = [
-  { re: /-----BEGIN RSA PRIVATE KEY-----/, label: 'RSA private key' },
-  { re: /-----BEGIN DSA PRIVATE KEY-----/, label: 'DSA private key' },
-  { re: /-----BEGIN EC PRIVATE KEY-----/, label: 'EC private key' },
-  { re: /-----BEGIN OPENSSH PRIVATE KEY-----/, label: 'OpenSSH private key' },
-  { re: /-----BEGIN PGP PRIVATE KEY BLOCK-----/, label: 'PGP private key' },
-  { re: /-----BEGIN (?:ENCRYPTED )?PRIVATE KEY-----/, label: 'PKCS#8 private key' },
-];
+/** What a private-key-labelled block turned out to be once its body was actually decoded. */
+export interface KeyBlockRead {
+  /** `rsa` / `ec` / `dsa` / `ed25519` …, or null when nothing was decoded (encrypted, or not key material). */
+  keyType: string | null;
+  /** RSA/DSA modulus length or the EC curve size in bits, when the parser reports one. */
+  keyBits: number | null;
+  namedCurve: string | null;
+  encrypted: boolean;
+  /** True only when the bytes ARE key material: the body decoded, or the block is an explicitly encrypted key. */
+  isKey: boolean;
+  /** Why it was not claimed, when it was not. */
+  note: string;
+}
+
+// EC named-curve → key size in bits, so an EC key can be described by strength like an RSA one.
+const EC_CURVE_BITS: Record<string, number> = {
+  prime192v1: 192,
+  secp192r1: 192,
+  secp224r1: 224,
+  prime256v1: 256,
+  secp256r1: 256,
+  secp256k1: 256,
+  secp384r1: 384,
+  secp521r1: 521,
+};
 
 /**
- * Pure: scan file CONTENTS for an embedded private key. Where `notableFiles` flags a key by *filename*, this
- * catches the case the re-run exposed — a device-wide TLS private key shipped inside a file whose name gives no
- * hint (Tenda-Camera's `O=Tenda` RSA key). A PEM private-key block is unambiguous, so this is HIGH /
- * `static_confirmed`; the key body is NEVER included in evidence, only its type and the path. Dedupes by path so
- * a multi-key bundle is one finding per file.
+ * Read a private-key block instead of trusting its label. `node:crypto` either decodes the body — in which case
+ * the algorithm and size come from the key itself and the claim is beyond argument — or it does not, in which
+ * case this returns `isKey:false` and the caller must not call it a key. An ENCRYPTED block is key material by
+ * construction (the RFC 1421 headers are not something a placeholder carries), and is reported as such without
+ * a passphrase being attempted. The parsed key object never leaves this function; only its shape does.
  */
-export function scanContentSecrets(files: { path: string; content: string }[]): FindingDraft[] {
-  const drafts: FindingDraft[] = [];
+export function readPrivateKeyBlock(block: PemBlock): KeyBlockRead {
+  const base = { keyType: null, keyBits: null, namedCurve: null, encrypted: block.encrypted };
+  if (block.encrypted) {
+    return { ...base, isKey: true, note: 'encrypted key block — passphrase not attempted' };
+  }
+  // The same DER, re-framed: a key that travelled through an nvram value or a C string literal arrives with its
+  // line breaks gone, and OpenSSL's PEM reader wants them. Re-wrapping changes no byte of the payload.
+  const b64 = block.text
+    .replace(/-----(?:BEGIN|END)[^-]*-----/g, '')
+    .replace(/\s+/g, '')
+    .replace(/(.{64})/g, '$1\n');
+  const candidates = [block.text, `-----BEGIN ${block.label}-----\n${b64}\n-----END ${block.label}-----\n`];
+  let lastError = 'no candidate parsed';
+  for (const pem of candidates) {
+    try {
+      const key = createPrivateKey(pem);
+      const details = key.asymmetricKeyDetails;
+      const namedCurve = details?.namedCurve ?? null;
+      const keyBits =
+        typeof details?.modulusLength === 'number' ? details.modulusLength : (EC_CURVE_BITS[namedCurve ?? ''] ?? null);
+      return { keyType: key.asymmetricKeyType ?? null, keyBits, namedCurve, encrypted: false, isKey: true, note: '' };
+    } catch (err) {
+      lastError = String((err as Error).message ?? err);
+    }
+  }
+  return { ...base, isKey: false, note: `body did not decode as a key (${lastError})` };
+}
+
+/** A human description built from what was decoded, never from the label alone. */
+function describeKey(read: KeyBlockRead, label: string): string {
+  if (read.encrypted) {
+    // Nothing was decoded here, so the description falls back to the block's own label — deduped, since a
+    // PKCS#8 block is already labelled `ENCRYPTED PRIVATE KEY`.
+    const human = label.toLowerCase();
+    return human.startsWith('encrypted ') ? human : `encrypted ${human}`;
+  }
+  const alg = read.keyType?.toUpperCase() ?? '';
+  const size = read.keyBits ? `${read.keyBits}-bit` : (read.namedCurve ?? '');
+  return [alg, size, 'private key'].filter(Boolean).join(' ');
+}
+
+/** A PEM block that looks like key material but whose body did not decode — reported, never claimed. */
+export interface UnclaimedKeyBlock {
+  path: string;
+  label: string;
+  offset: number;
+  note: string;
+}
+
+/**
+ * Pure: turn the PEM blocks found in each file into key-material findings. Where `notableFiles` flags a key by
+ * *filename*, this catches the case the re-run exposed — a device-wide TLS private key shipped inside a file whose
+ * name gives no hint (Tenda-Camera's `O=Tenda` RSA key, the WR940N's key inside `usr/bin/httpd`).
+ *
+ * A file yields at most ONE finding (a multi-key bundle is one problem), HIGH / `static_confirmed` because a
+ * decoded private key is a fact about the bytes. Severity drops to MEDIUM when every key in the file is encrypted,
+ * since possession then also needs the passphrase — which this provider does not look for. The key body is NEVER
+ * included in evidence: only its algorithm, size, offset and path. Blocks that are certificates, public keys or
+ * parameters are not key material and are not claimed; blocks that are private-key-labelled but do not decode come
+ * back in `unclaimed` so the caller can say they were seen and rejected.
+ */
+export function keyMaterialFindings(files: { path: string; blocks: PemBlock[] }[]): {
+  findings: FindingDraft[];
+  unclaimed: UnclaimedKeyBlock[];
+} {
+  const findings: FindingDraft[] = [];
+  const unclaimed: UnclaimedKeyBlock[] = [];
   const seen = new Set<string>();
-  for (const { path: p, content } of files) {
+  for (const { path: p, blocks } of files) {
     if (seen.has(p)) continue;
-    const hit = PEM_PRIVATE_KEYS.find((k) => k.re.test(content));
-    if (!hit) continue;
     seen.add(p);
-    drafts.push({
+    const keys: { label: string; read: KeyBlockRead; offset: number }[] = [];
+    for (const block of blocks) {
+      if (block.kind !== 'private-key') continue;
+      const read = readPrivateKeyBlock(block);
+      if (read.isKey) keys.push({ label: block.label, read, offset: block.offset });
+      else unclaimed.push({ path: p, label: block.label, offset: block.offset, note: read.note });
+    }
+    const first = keys[0];
+    if (!first) continue;
+    const described = describeKey(first.read, first.label);
+    const allEncrypted = keys.every((k) => k.read.encrypted);
+    // Two different claims, because two different things were established. Saying "its body decodes as …" about a
+    // block nobody decrypted would be the same overstatement this lane exists to avoid.
+    const rationale = allEncrypted
+      ? [
+          `A PEM ${described} block is literally present in this file: RFC 1421 encryption headers framing a`,
+          'base64 body, which is key material by construction and not a shape a placeholder carries. The',
+          'passphrase was NOT attempted, so this says the material is here — not that it can be used. A',
+          'device-wide/shared key baked into firmware enables impersonation/decryption once its passphrase (often',
+          'shipped in the same image) is known. The body is never stored here. Found by content, not filename.',
+        ]
+      : [
+          `A PEM private-key block is literally present in this file and its body decodes as ${described} with`,
+          'node:crypto — the label alone was not trusted. A device-wide/shared private key baked into the firmware',
+          '(e.g. a TLS server key identical on every unit) enables impersonation/decryption. The key body is never',
+          'stored here; its presence is a static fact about the rootfs. Found by content, not filename, and read',
+          'before it was named.',
+        ];
+    findings.push({
       kind: 'embedded-private-key',
-      title: `Embedded ${hit.label} in firmware: ${p}`,
-      severity: 'high',
+      title:
+        keys.length === 1
+          ? `Embedded ${described} in firmware: ${p}`
+          : `Embedded private key material in firmware: ${p} (${keys.length} blocks, first: ${described})`,
+      severity: allEncrypted ? 'medium' : 'high',
       proofState: 'static_confirmed',
-      evidence: { path: p, keyType: hit.label },
-      rationale:
-        'A PEM private-key block is literally present in this file — a device-wide/shared private key baked into ' +
-        'the firmware (e.g. a TLS server key identical on every unit) enables impersonation/decryption. The key ' +
-        'body is redacted; its presence is a static fact about the rootfs. Found by content, not filename.',
+      evidence: {
+        path: p,
+        keyCount: keys.length,
+        // Shape only — algorithm, strength, where it sits. Never the key.
+        keys: keys.slice(0, 8).map((k) => ({
+          label: k.label,
+          keyType: k.read.keyType,
+          keyBits: k.read.keyBits,
+          namedCurve: k.read.namedCurve,
+          encrypted: k.read.encrypted,
+          offset: k.offset,
+        })),
+      },
+      rationale: rationale.join(' '),
     });
   }
-  return drafts;
+  return { findings, unclaimed };
+}
+
+/** How many unclaimed blocks are named in the aggregate finding (the count itself stays exact). */
+const UNCLAIMED_SAMPLE_CAP = 10;
+
+/**
+ * Pure: ONE aggregate INFO finding for the private-key-labelled blocks whose bodies did not decode. Each is a
+ * fact about the bytes — a well-formed PEM block really is there — but not evidence of key material, so it is
+ * neither claimed as a key nor dropped in silence. One finding rather than one per block on purpose: a single
+ * `libgnutls.so` in this corpus contributes seven, and a per-block finding would bury the real key beside it.
+ */
+export function unclaimedKeyBlockFindings(unclaimed: UnclaimedKeyBlock[]): FindingDraft[] {
+  if (unclaimed.length === 0) return [];
+  const paths = [...new Set(unclaimed.map((u) => u.path))];
+  return [
+    {
+      kind: 'pem-block-unclaimed',
+      title: `${unclaimed.length} PEM private-key block(s) present whose body does not decode as a key`,
+      severity: 'info',
+      proofState: 'static_confirmed',
+      evidence: {
+        count: unclaimed.length,
+        files: paths.length,
+        sample: unclaimed.slice(0, UNCLAIMED_SAMPLE_CAP).map((u) => ({
+          path: u.path,
+          label: u.label,
+          offset: u.offset,
+          note: u.note,
+        })),
+        sampleCap: UNCLAIMED_SAMPLE_CAP,
+      },
+      rationale:
+        'These blocks carry a private-key label and a well-formed base64 body, but node:crypto could not decode ' +
+        'them — a template/placeholder, a test vector compiled into a TLS library, or a truncated fragment. The ' +
+        'block being present is a static fact; that it IS a key is not, so this audit reports them without ' +
+        'claiming them. They are listed here precisely so a zero private-key count is not read as "nothing key-' +
+        'shaped was in the bytes".',
+    },
+  ];
+}
+
+/**
+ * Pure: the text-in, findings-out entry point — finds the PEM blocks in each file's content and applies
+ * `keyMaterialFindings`. The runner uses the byte-level scanner instead (a binary must not be decoded as UTF-8),
+ * but the decision is identical, which is what keeps this testable without touching a disk.
+ */
+export function scanContentSecrets(files: { path: string; content: string }[]): FindingDraft[] {
+  return keyMaterialFindings(files.map((f) => ({ path: f.path, blocks: findPemBlocks(f.content) }))).findings;
 }
 
 // ============================================================================
@@ -393,6 +584,11 @@ export interface FsAuditResult {
   findings: FindingDraft[];
   filesScanned: number;
   reason: string;
+  /**
+   * What the key-material scan read and what it left unread. OPTIONAL FOREVER: a result persisted by an older
+   * build does not carry it, and a required field would be a claim about data this code does not own.
+   */
+  scan?: PemScanCoverage;
 }
 
 const WALK_CAP = 5000;
@@ -605,54 +801,22 @@ function collectServiceConfigs(root: string): { path: string; content: string }[
   return out;
 }
 
-// Extensions worth reading for an embedded private key (PEM is text; binary DER/p12 is out of scope here).
-const CONTENT_SCAN_EXT = new Set([
-  '.pem',
-  '.key',
-  '.crt',
-  '.cer',
-  '.conf',
-  '.cfg',
-  '.config',
-  '.xml',
-  '.json',
-  '.ini',
-  '.txt',
-  '.sh',
-  '.lua',
-  '.js',
-]);
-const CONTENT_SCAN_FILE_CAP = 500;
-const CONTENT_SCAN_BYTES = 512 * 1024;
-
-/** Is this rootfs-relative path a candidate for a content secret scan (key-ish extension, or extensionless under etc/)? */
-function isContentScanCandidate(rel: string): boolean {
-  const lower = rel.toLowerCase();
-  const base = lower.split('/').pop() ?? lower;
-  const dot = base.lastIndexOf('.');
-  const ext = dot > 0 ? base.slice(dot) : '';
-  if (CONTENT_SCAN_EXT.has(ext)) return true;
-  // Extensionless files under etc/ (many embedded keys/configs have no extension).
-  return ext === '' && lower.startsWith('etc/');
-}
-
-/** Read a bounded set of candidate files' contents for the content secret scan. */
-function collectContentScanFiles(root: string, relPaths: string[]): { path: string; content: string }[] {
-  const out: { path: string; content: string }[] = [];
-  for (const rel of relPaths) {
-    if (out.length >= CONTENT_SCAN_FILE_CAP) break;
-    if (!isContentScanCandidate(rel)) continue;
-    const abs = safeJoin(root, rel);
-    if (!abs) continue;
-    out.push({ path: rel, content: readBounded(abs, CONTENT_SCAN_BYTES) });
-  }
-  return out;
-}
-
-/** Bounded, symlink-safe walk collecting rootfs-relative file paths (never follows a link out of the rootfs). */
-function walkRootfs(root: string): { relPaths: string[]; entriesWalked: number } {
+/**
+ * Bounded, symlink-safe walk collecting rootfs-relative file paths WITH their sizes (never follows a link out of
+ * the rootfs). The size comes back because the key scan's budget is measured in bytes, and because a walk that
+ * stopped at its own cap has to say so — `walkTruncated` is the difference between "no key in this rootfs" and
+ * "no key in the part of this rootfs we got to".
+ */
+function walkRootfs(root: string): {
+  relPaths: string[];
+  files: { path: string; bytes: number }[];
+  entriesWalked: number;
+  walkTruncated: boolean;
+} {
   const relPaths: string[] = [];
+  const files: { path: string; bytes: number }[] = [];
   let entriesWalked = 0;
+  let walkTruncated = false;
   const stack: string[] = [root];
   while (stack.length > 0 && entriesWalked < WALK_CAP) {
     const dir = stack.pop() as string;
@@ -663,15 +827,29 @@ function walkRootfs(root: string): { relPaths: string[]; entriesWalked: number }
       continue;
     }
     for (const e of entries) {
-      if (entriesWalked >= WALK_CAP) break;
+      if (entriesWalked >= WALK_CAP) {
+        walkTruncated = true;
+        break;
+      }
       entriesWalked++;
       if (e.isSymbolicLink()) continue; // never follow a symlink (could point outside the rootfs)
       const abs = path.join(dir, e.name);
-      if (e.isDirectory()) stack.push(abs);
-      else if (e.isFile()) relPaths.push(path.relative(root, abs));
+      if (e.isDirectory()) {
+        stack.push(abs);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      const rel = path.relative(root, abs);
+      relPaths.push(rel);
+      try {
+        files.push({ path: rel, bytes: fs.statSync(abs).size });
+      } catch {
+        // Unreadable entry: it is listed as a path but contributes no bytes to the key scan.
+      }
     }
   }
-  return { relPaths, entriesWalked };
+  if (stack.length > 0) walkTruncated = true;
+  return { relPaths, files, entriesWalked, walkTruncated };
 }
 
 /**
@@ -695,8 +873,12 @@ export function runFsAudit(rootfsPath: string): FsAuditResult {
   const shadow = readInside(root, 'etc/shadow');
   const inittab = readInside(root, 'etc/inittab');
   const serviceFiles = collectServiceConfigs(root);
-  const { relPaths, entriesWalked } = walkRootfs(root);
-  const contentScanFiles = collectContentScanFiles(root, relPaths);
+  const { relPaths, files, entriesWalked, walkTruncated } = walkRootfs(root);
+
+  // Every file the walk found, read as BYTES under a stated budget — no extension whitelist, binaries included.
+  const { scanned, skipped, rule } = scanTreeForPem(root, files, DEFAULT_PEM_BUDGET);
+  const scan = summarizePemScan(scanned, skipped, rule);
+  const keyMaterial = keyMaterialFindings(scanned.map((e) => ({ path: e.path, blocks: e.blocks })));
 
   const findings: FindingDraft[] = [
     // First, whether the credential checks below could examine anything at all — an empty result from them is
@@ -706,9 +888,24 @@ export function runFsAudit(rootfsPath: string): FsAuditResult {
     ...auditInittab(inittab),
     ...auditServiceConfigs(serviceFiles),
     ...notableFiles(relPaths),
-    ...scanContentSecrets(contentScanFiles),
+    ...keyMaterial.findings,
+    ...unclaimedKeyBlockFindings(keyMaterial.unclaimed),
   ];
 
-  const reason = `Static rootfs audit: ${findings.length} finding(s) across ${entriesWalked} path(s) (${serviceFiles.length} service config(s) read). Credential/private-key facts are static_confirmed; service exposures (init shell, telnetd, anon ftp) need runtime reproduction.`;
-  return { available: true, findings, filesScanned: entriesWalked, reason };
+  const bounds: string[] = [scan.note];
+  if (walkTruncated) {
+    bounds.push(
+      [
+        `The walk stopped at its ${WALK_CAP}-entry cap, so part of this rootfs was never offered to any check`,
+        'here — the counts above describe what was reached, not what exists.',
+      ].join(' '),
+    );
+  }
+  const reason = [
+    `Static rootfs audit: ${findings.length} finding(s) across ${entriesWalked} path(s)`,
+    `(${serviceFiles.length} service config(s) read). Credential/private-key facts are static_confirmed;`,
+    'service exposures (init shell, telnetd, anon ftp) need runtime reproduction.',
+    ...bounds,
+  ].join(' ');
+  return { available: true, findings, filesScanned: entriesWalked, reason, scan };
 }
