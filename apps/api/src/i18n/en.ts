@@ -468,6 +468,10 @@ export const en = {
       // The engine, never the rules: FirmLab ships no signatures, so this line promises a scan and names whose
       // corpus it would run. A gloss that said "detects implants" would claim what only somebody's rules can.
       yara: 'Rule-based rootfs scan for known implants, webshells and backdoors, with a corpus you supply',
+      // The hasher, and only for the schemes a given build still has an option for — which is why the sentence
+      // promises a cross-reference rather than "recovers passwords". `openssl passwd` lost `-crypt` in 3.0.
+      openssl:
+        'Cross-referencing stored password hashes against the plaintext strings the image itself ships (md5crypt, sha256/512-crypt)',
     } satisfies Record<ToolId, string>,
     /**
      * Shown in the version column for a tool detected by PATH existence, because executing its probe costs more

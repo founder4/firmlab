@@ -21,6 +21,7 @@ import { chipsecRoutes } from './routes/chipsec.js';
 import { compmapRoutes } from './routes/compmap.js';
 import { copilotRoutes } from './routes/copilot.js';
 import { corpusRoutes } from './routes/corpus.js';
+import { credmatchRoutes } from './routes/credmatch.js';
 import { decompileRoutes } from './routes/decompile.js';
 import { devicetreeRoutes } from './routes/devicetree.js';
 import { diffRoutes } from './routes/diff.js';
@@ -155,6 +156,7 @@ async function main(): Promise<void> {
       await api.register(toolRoutes);
       await api.register(captureRoutes);
       await api.register(yarascanRoutes);
+      await api.register(credmatchRoutes);
     },
     { prefix: '/api' },
   );

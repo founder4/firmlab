@@ -39,6 +39,7 @@ export type JobKind =
   | 'nvram'
   | 'kernel'
   | 'yarascan'
+  | 'credmatch'
   | 'updatepath';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error';
 

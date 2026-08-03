@@ -447,6 +447,10 @@ export const es: Messages = {
       // de quién es el corpus que ejecutaría. Que la herramienta falte es una respuesta ausente, no un problema
       // ausente — y que el corpus falte es una tercera cosa distinta, que el proveedor declara aparte.
       yara: 'Escaneo del rootfs por reglas en busca de implantes, webshells y puertas traseras conocidos, con un corpus que aportas tú',
+      // La calculadora de hashes, y solo para los esquemas que esta compilación conserve: `openssl passwd` perdió
+      // `-crypt` en la 3.0, así que la frase promete un cruce, nunca «recupera contraseñas».
+      openssl:
+        'Cruce de los hashes de contraseña almacenados contra las cadenas en claro que la propia imagen incluye (md5crypt, sha256/512-crypt)',
     },
     /** Ni es una versión ni debe confundirse con una: dice que el binario está y que no se le preguntó cuál es. */
     installed: 'instalado',

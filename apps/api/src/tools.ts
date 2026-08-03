@@ -85,6 +85,7 @@ export type ToolId =
   | 'angr'
   | 'fwhunt'
   | 'yara'
+  | 'openssl'
   | 'gdb-multiarch';
 
 interface ToolSpec {
@@ -182,6 +183,16 @@ const TOOLS: readonly ToolSpec[] = [
     bin: 'yara',
     probe: ['--version'],
     group: 'analyze',
+  },
+  {
+    // The hasher behind `providers/credmatch.ts`: `openssl passwd` reproduces a stored `$1$`/`$apr1$`/`$5$`/`$6$`
+    // hash from a candidate plaintext and a salt. Presence here is deliberately NOT the same claim as "this
+    // deployment can test every scheme" — `passwd` lost `-crypt` in OpenSSL 3.0, so which schemes a given build
+    // actually computes is settled by a known-answer self-test in the provider, not by this probe.
+    id: 'openssl',
+    bin: 'openssl',
+    probe: ['version'],
+    group: 'secrets',
   },
   { id: 'gdb-multiarch', bin: 'gdb-multiarch', probe: ['--version'], group: 'emulate' },
   {
