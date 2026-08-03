@@ -22,7 +22,7 @@ import { type ExtractResult, runExtraction } from '../providers/extract.js';
 import { detectIsolation, runIsolated } from '../providers/isolate.js';
 import { startJob } from '../providers/jobs.js';
 import { QEMU_USER_BY_ARCH, type RuntimeCapabilities, computeRuntimeCapabilities } from '../providers/preflight.js';
-import { type RenodeResult, renodeHintsFrom, runRenode } from '../providers/renode.js';
+import { type RenodeResult, buildRenodeFindings, renodeHintsFrom, runRenode } from '../providers/renode.js';
 import { interpretTriggerRun, planDelivery } from '../providers/trigger.js';
 import {
   type AgentSessionRow,
@@ -476,7 +476,14 @@ async function runRenodeForImage(imageId: string): Promise<RenodeResult> {
   const row = getImage(imageId);
   if (!row) throw new Error('Image not found');
   const hints = renodeHintsFrom(row.identityJson ?? null, row.analysisJson ?? null);
-  return runRenode(row.path, hints);
+  const result = await runRenode(row.path, hints);
+  // Both agent lanes reach Renode through here — the auto-run-under-isolation one and the approved one — so the
+  // ledger row is composed here rather than at each call site. Same source the operator route uses, so whichever
+  // lane ran it last owns the answer and re-running is idempotent. This rung matters more than the qemu ones for
+  // the corpus's RTOS and bare-metal images: no rootfs comes out of them, so it is the only dynamic question they
+  // have, and until now it was asked and never written down.
+  syncFindings(imageId, 'renode', buildRenodeFindings(result));
+  return result;
 }
 
 async function autoRunIsolated(

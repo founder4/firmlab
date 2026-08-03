@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { type McuFingerprint, type ProofState, type StaticAnalysis, fingerprintMcu } from '@firmlab/core';
+import type { FindingDraft } from '../findings-normalize.js';
 import { type IsolationLevel, loadIsolationLimits, runIsolated } from './isolate.js';
 
 const execFileAsync = promisify(execFile);
@@ -226,6 +227,51 @@ export interface RenodeResult {
   uartExcerpt: string;
   command: string;
   isolation?: IsolationLevel;
+}
+
+/**
+ * Compose the ledger rows a Renode run earns — the same half `emulate` was missing until 2026-08-03.
+ *
+ * This rung is the ONLY dynamic path an RTOS or bare-metal image has: no rootfs comes out of one, so every
+ * rootfs-shaped stage skips and the dossier for those images is thin by construction. A boot under Renode that
+ * left no row meant the one question that CAN be answered about them was asked and never recorded.
+ *
+ * Same three rules as the qemu composers. The proof state is carried verbatim from `runRenode`, which decided it
+ * from real UART output rather than from the process exiting; every outcome earns a row, including the blocked
+ * one, because Renode is an opt-in layer and "not installed" must not read as "nothing to find"; and the boot is
+ * a claim about the emulated SoC, never about the physical part — `confirmed_in_emulation` is the ceiling and the
+ * title says so.
+ */
+export function buildRenodeFindings(r: RenodeResult): FindingDraft[] {
+  const evidence: Record<string, unknown> = {
+    platform: r.platform,
+    booted: r.booted,
+    command: r.command,
+    // The UART is the evidence the verdict was read from, so it travels with it — bounded, because a chatty
+    // firmware would otherwise grow a findings row without limit.
+    uartExcerpt: r.uartExcerpt.slice(0, 4000),
+  };
+  if (r.isolation) evidence.isolation = r.isolation;
+
+  const kind = !r.ran ? 'renode-blocked' : r.booted ? 'renode-booted' : 'renode-boot-unconfirmed';
+  const title = !r.ran
+    ? 'The firmware could not be booted under Renode here — this is not a negative result'
+    : r.booted
+      ? `The firmware booted under Renode on ${r.platform ?? 'the selected platform'} — in the emulated SoC, not on the part`
+      : `Renode ran ${r.platform ? `on ${r.platform} ` : ''}and the firmware printed no recognisable boot — this is not a verdict about the firmware`;
+
+  const draft: FindingDraft = {
+    kind,
+    title,
+    severity: 'info',
+    proofState: r.proofState,
+    evidence,
+    rationale: r.ran
+      ? `${r.reason} A boot here proves the emulated platform ran this image; the physical device has peripherals and a bootloader this model does not.`
+      : `${r.reason} The question was asked and this deployment could not answer it, which is not evidence that there is nothing to find.`,
+  };
+  if (r.ran) draft.evidenceChannel = 'emulated_run';
+  return [draft];
 }
 
 export async function detectRenode(): Promise<boolean> {

@@ -3,7 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fingerprintMcu } from '@firmlab/core';
 import { afterAll, describe, expect, it } from 'vitest';
-import { buildRenodeScript, discoverUarts, listPlatformCatalog, selectPlatform } from './renode.js';
+import {
+  type RenodeResult,
+  buildRenodeFindings,
+  buildRenodeScript,
+  discoverUarts,
+  listPlatformCatalog,
+  selectPlatform,
+} from './renode.js';
 
 /** A stand-in Renode catalog covering common + less-common families, mirroring real `.repl` filenames. */
 const CATALOG = [
@@ -135,5 +142,69 @@ describe('listPlatformCatalog', () => {
 
   it('returns [] for a missing platforms dir (→ selection blocks honestly)', () => {
     expect(listPlatformCatalog(path.join(root, 'nope'))).toEqual([]);
+  });
+});
+
+describe('buildRenodeFindings', () => {
+  const base: RenodeResult = {
+    available: true,
+    ran: true,
+    booted: true,
+    reason: 'Renode booted the firmware on stm32f4_discovery-kit and the UART printed a recognisable banner.',
+    proofState: 'confirmed_in_emulation',
+    platform: 'boards/stm32f4_discovery-kit.repl',
+    uartExcerpt: 'Contiki 3.x started\n',
+    command: 'renode --disable-xwt -e ...',
+  };
+
+  it('a boot names the platform and refuses the device in its own title', () => {
+    const [d] = buildRenodeFindings(base);
+    expect(d?.kind).toBe('renode-booted');
+    expect(d?.proofState).toBe('confirmed_in_emulation');
+    expect(d?.evidenceChannel).toBe('emulated_run');
+    expect(d?.title).toContain('stm32f4_discovery-kit');
+    expect(d?.title).toContain('not on the part');
+    expect(d?.evidence?.uartExcerpt).toContain('Contiki 3.x started');
+  });
+
+  // Renode is an opt-in layer, so "not installed" is the common case — and it must not read as "nothing to find"
+  // on images whose ONLY dynamic question this is.
+  it('a blocked run earns a row that says it is not a negative, and carries no evidence channel', () => {
+    const [d] = buildRenodeFindings({
+      ...base,
+      available: false,
+      ran: false,
+      booted: false,
+      proofState: 'blocked_by_platform',
+      platform: null,
+      uartExcerpt: '',
+      command: '',
+      reason: 'Renode not installed (opt-in layer).',
+    });
+    expect(d?.kind).toBe('renode-blocked');
+    expect(d?.proofState).toBe('blocked_by_platform');
+    expect(d && 'evidenceChannel' in d).toBe(false);
+    expect(d?.title).toContain('not a negative result');
+    expect(d?.rationale).toContain('not evidence that there is nothing to find');
+  });
+
+  it('ran-but-never-booted is its own row, not a boot and not a block', () => {
+    const [d] = buildRenodeFindings({ ...base, booted: false, proofState: 'needs_runtime_reproduction' });
+    expect(d?.kind).toBe('renode-boot-unconfirmed');
+    expect(d?.proofState).toBe('needs_runtime_reproduction');
+    expect(d?.evidenceChannel).toBe('emulated_run');
+    expect(d?.title).toContain('not a verdict about the firmware');
+  });
+
+  it('carries the proof state the runner decided, never one of its own', () => {
+    // `booted` is read from real UART output; a composer that re-derived the state would be a second opinion on
+    // evidence it never saw.
+    const [d] = buildRenodeFindings({ ...base, proofState: 'blocked_by_security' });
+    expect(d?.proofState).toBe('blocked_by_security');
+  });
+
+  it('bounds the UART excerpt so a chatty firmware cannot grow the row without limit', () => {
+    const [d] = buildRenodeFindings({ ...base, uartExcerpt: 'A'.repeat(9000) });
+    expect(String(d?.evidence?.uartExcerpt).length).toBe(4000);
   });
 });

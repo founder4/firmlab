@@ -4,8 +4,9 @@
  * firmware's hints (or specified); "booted" is decided from real UART output, never assumed.
  */
 import type { FastifyInstance } from 'fastify';
+import { syncFindings } from '../findings.js';
 import { startJob } from '../providers/jobs.js';
-import { detectRenode, renodeHintsFrom, runRenode } from '../providers/renode.js';
+import { buildRenodeFindings, detectRenode, renodeHintsFrom, runRenode } from '../providers/renode.js';
 import { getImage, listJobs } from '../store.js';
 
 /** MCU/vendor hints for platform selection: identity fields + a bounded slice of the analysis strings. */
@@ -25,8 +26,15 @@ export async function renodeRoutes(app: FastifyInstance): Promise<void> {
     const opts: { platform?: string; seconds?: number } = {};
     if (body.platform) opts.platform = body.platform;
     if (body.seconds) opts.seconds = Math.min(120, Math.max(3, Number(body.seconds)));
+    // The source is image-wide, not per platform: Renode selects the platform from the firmware's own bytes, so
+    // "does this image boot under Renode" is one question per image and a re-run replaces its answer. The platform
+    // that was chosen travels in the row's evidence, where an operator override is visible without splitting the
+    // key and stranding a previous platform's verdict in the ledger forever.
     const jobId = startJob(id, 'renode', { platform: opts.platform ?? null }, () =>
-      runRenode(row.path, hintsFor(id), opts),
+      runRenode(row.path, hintsFor(id), opts).then((r) => {
+        syncFindings(id, 'renode', buildRenodeFindings(r));
+        return r;
+      }),
     );
     return reply.status(202).send({ jobId });
   });
