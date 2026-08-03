@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Architecture, ImageIdentity } from '@firmlab/core';
+import type { FindingDraft } from '../findings-normalize.js';
 import { type ToolId, detectTools } from '../tools.js';
 import { libnvramHostPath } from './emulate-system.js';
 import type { JobHandle } from './jobs.js';
@@ -174,6 +175,104 @@ export interface UserEmulationResult {
   stdout: string;
   stderr: string;
   command: string;
+}
+
+/**
+ * qemu refusing the binary outright, as opposed to the binary running and failing.
+ *
+ * The distinction is the whole point and it was paid for on 2026-08-03: three of seven user-mode runs in the
+ * corpus sweep exited 255 with `qemu-mipsel-static: …/usr/bin/httpd: Invalid ELF image for this architecture`,
+ * because the arch map handed big-endian MIPS the little-endian emulator. Read as an exit code, that is a program
+ * that failed; read for what it says, it is the HARNESS that never started the program. A ledger row must not
+ * turn the second into the first — that is `emulation_artifact` versus a result, the separation the dynamic probe
+ * already makes from qemu's stderr.
+ *
+ * **Anchored to qemu's own prefix**, not grepped over the whole stream, and that is the load-bearing part. The
+ * target's own output is in this same buffer, so an unanchored `/unknown architecture/` would let a program that
+ * prints those words for its own reasons downgrade a genuine execution to a platform block and discard the
+ * result. `parseTargetStderr` in dynprobe.ts documents the same trap from the other side: it excludes
+ * `qemu: uncaught target signal 11` precisely because qemu prints it when the TARGET misbehaves. Here the test is
+ * the reverse — the line must be qemu speaking about the image it was handed, before any guest instruction ran.
+ */
+export function emulatorRefusal(stderr: string): string | null {
+  const REFUSAL = /^qemu-\S*:\s.*(invalid elf image|unable to find dynamic linker|unknown architecture)/i;
+  const line = stderr
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => REFUSAL.test(l));
+  return line ?? null;
+}
+
+/**
+ * Compose the ledger rows a user-mode run earns. Pure, so the honesty rules below are unit-testable.
+ *
+ * Severity is `info` on every branch: that a binary executes under emulation is evidence about the sandbox and
+ * about the harness, never a defect in itself — the defects come from what the probe then asks of it. And a clean
+ * exit is a statement about ONE input, which the rationale says out loud rather than leaving to be inferred.
+ */
+export function buildUserEmulationFindings(binary: string, r: UserEmulationResult): FindingDraft[] {
+  const refusal = emulatorRefusal(r.stderr);
+  const evidence: Record<string, unknown> = {
+    binary,
+    command: r.command,
+    exitCode: r.exitCode,
+    timedOut: r.timedOut,
+  };
+  if (refusal) evidence.emulatorRefusal = refusal;
+
+  // Two ways for nothing to have executed, and neither may be reported as the program failing. `ran: false` is the
+  // emulator process never starting at all (`runIsolated` resolves it on a spawn error), and a refusal is qemu
+  // starting and rejecting the image. Gating on `ran` mirrors the system composer, where the same field decides
+  // whether the row may carry an evidence channel: a rung that never started learned nothing.
+  if (!r.ran || refusal) {
+    const why = refusal
+      ? `${refusal.replace(/[.\s]*$/, '')}.`
+      : 'The emulator process never started, so the binary was never executed.';
+    return [
+      {
+        kind: 'binary-execution-blocked',
+        title: refusal
+          ? `${binary}: the emulator refused the binary before executing it — this is not a verdict about the firmware`
+          : `${binary}: the emulator could not be started — this is not a verdict about the firmware`,
+        severity: 'info',
+        proofState: 'blocked_by_platform',
+        evidence,
+        rationale: `The harness could not run this binary here: ${why} Nothing about the program was observed, so this is a gap in the deployment, not a negative result about the code.`,
+      },
+    ];
+  }
+
+  if (r.timedOut) {
+    return [
+      {
+        kind: 'binary-execution-timeboxed',
+        title: `${binary}: executed under user-mode emulation and was still running at the time box`,
+        severity: 'info',
+        proofState: 'confirmed_in_emulation',
+        evidence,
+        evidenceChannel: 'emulated_run',
+        rationale:
+          'The binary ran under qemu-user until the time box killed it, which is what a daemon does. It proves the sandbox can execute this binary; it says nothing about the physical device, and a run that was ended by the clock has no exit code to read.',
+      },
+    ];
+  }
+
+  const clean = r.exitCode === 0;
+  return [
+    {
+      kind: clean ? 'binary-executed-in-emulation' : 'binary-execution-nonzero',
+      title: clean
+        ? `${binary}: executed under user-mode emulation and exited cleanly`
+        : `${binary}: executed under user-mode emulation and exited ${r.exitCode ?? 'on a signal'}`,
+      severity: 'info',
+      proofState: 'confirmed_in_emulation',
+      evidence,
+      evidenceChannel: 'emulated_run',
+      rationale: clean
+        ? 'The binary executed under qemu-user and exited 0 on the input it was given. That proves the sandbox can run it — it is a statement about ONE input and about the emulator, never about the physical device, and it is nowhere near enough to call the binary sound.'
+        : 'The binary executed under qemu-user and exited non-zero on the input it was given. Under a different libc, with no NVRAM and no peripherals, a non-zero exit is as likely to be the sandbox as the program — it is recorded as what happened, not as a defect.',
+    },
+  ];
 }
 
 /**

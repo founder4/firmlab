@@ -53,6 +53,7 @@ import path from 'node:path';
 import tls from 'node:tls';
 import { promisify } from 'node:util';
 import type { Architecture, ProofState } from '@firmlab/core';
+import type { FindingDraft } from '../findings-normalize.js';
 import { type LaneFlagName, decideFlag, effectiveEnv } from '../flags.js';
 import { detectTools } from '../tools.js';
 import { type BootDiagnosis, diagnoseUnreachable } from './boot-diagnose.js';
@@ -64,11 +65,18 @@ import { readPortMap } from './portmap-run.js';
 import { type PortProtocol, planForwards } from './portmap.js';
 import {
   FIRMADYNE_KERNELS_DIR,
+  FIRMADYNE_KERNEL_NAMES,
   LIBNVRAM_DIR,
   QEMU_MACHINE_BY_ARCH,
   QEMU_SYSTEM_BY_ARCH,
   QEMU_USER_BY_ARCH,
+  firmadyneKernelFor,
 } from './preflight.js';
+
+// The kernel catalogue moved up to preflight.ts, which now needs it to answer "can this deployment boot this
+// architecture?" before a runner is ever reached. Re-exported here because this module was its home and both
+// the tests and the callers name it from this path.
+export { FIRMADYNE_KERNEL_NAMES, firmadyneKernelFor };
 
 const execFileAsync = promisify(execFile);
 
@@ -1163,32 +1171,126 @@ export function classifyFullSystem(
 }
 
 /**
- * firmadyne's kernel filenames, which are NOT the architecture names this codebase uses.
+ * Compose the ledger rows an emulation run earns — the half of the pattern this rung never got.
  *
- * The path was built as `vmlinux.${arch}.4`, and that is right for exactly one architecture. firmadyne ships
- * `vmlinux.mipseb.4` for big-endian MIPS and `vmlinux.armel` (no `.4`) for ARM, so a TP-Link WR940N — plain
- * `mips` — was refused with "No firmadyne kernel at …/vmlinux.mips.4" while the kernel it needed sat in the same
- * directory under a different name. `mipsel` matched by coincidence, which is why this went unnoticed.
+ * Measured on 2026-08-03 over the whole corpus: 1302 findings from 28 sources, and `emulate` / `emulate-system`
+ * contributed none of them. Seven full-system boots ran in that sweep, three returned `confirmed_full_system` in
+ * their stored result, and the ledger held ZERO rows carrying that proof state, while 894 findings sat at
+ * `needs_runtime_reproduction` — "a precondition was observed, nothing was proven" — on images whose kernel had
+ * booted. The rung was not failing; nothing composed its result into findings, so the work stopped at the job row.
  *
- * Candidates are ordered most-specific first and every one is a real filename observed in the deployed image.
+ * Three rules this builder keeps, and they are the reason it is pure and lives beside `classifyFullSystem`:
+ *
+ * 1. **It never decides the proof state.** `classifyFullSystem` / `runChrootService` already did, from what the
+ *    run actually showed, and `r.proofState` is carried through verbatim. A composer that re-derived it would be a
+ *    second opinion about evidence it never saw.
+ * 2. **Every outcome earns a row, including the ones that prove nothing.** A blocked rung and an unconfirmed boot
+ *    are results — the ledger going quiet is what let a missing map key read as a platform limit for a week.
+ * 3. **A row is never a claim about the device.** `reason` already ends in the sandbox caveat for the confirmed
+ *    states; the reproducibility verdict is appended verbatim because an `n=1` boot supports no causal claim, and
+ *    a guest that was repaired before it answered says so in `interventions` — "it answered" and "it answered once
+ *    we tore its firewall down" are different facts.
  */
-export const FIRMADYNE_KERNEL_NAMES: Partial<Record<Architecture, string[]>> = {
-  mipsel: ['vmlinux.mipsel.4', 'vmlinux.mipsel'],
-  mips: ['vmlinux.mipseb.4', 'vmlinux.mipseb'],
-  arm: ['vmlinux.armel', 'zImage.armel'],
-};
+export function buildSystemEmulationFindings(subject: string, r: SystemEmulationResult): FindingDraft[] {
+  const fullSystem = r.strategy === 'full-system';
+  const openCount = r.open?.length ?? 0;
 
-/** The first firmadyne kernel that exists for an architecture, or null when this deployment ships none. */
-export function firmadyneKernelFor(arch: Architecture, dir: string = FIRMADYNE_KERNELS_DIR): string | null {
-  for (const name of FIRMADYNE_KERNEL_NAMES[arch] ?? []) {
-    const p = `${dir}/${name}`;
-    if (fs.existsSync(p)) return p;
+  const evidence: Record<string, unknown> = {
+    subject,
+    strategy: r.strategy,
+    command: r.command,
+    timedOut: r.timedOut,
+  };
+  if (r.forwards) evidence.forwards = r.forwards;
+  if (r.open) evidence.open = r.open;
+  if (r.isolated !== undefined) evidence.isolated = r.isolated;
+  if (r.unreachable) evidence.unreachable = { cause: r.unreachable.cause, summary: r.unreachable.summary };
+  if (r.reproducibility) {
+    evidence.reproducibility = {
+      kind: r.reproducibility.kind,
+      n: r.reproducibility.n,
+      incomparable: r.reproducibility.incomparable,
+      supportsCausalClaim: r.reproducibility.supportsCausalClaim,
+    };
   }
-  return null;
+  if (r.repair) evidence.repair = { attempted: r.repair.attempted, interventions: r.repair.interventions };
+  if (r.buildRev) evidence.buildRev = r.buildRev;
+
+  const rationale: string[] = [r.reason];
+  if (r.reproducibility) {
+    rationale.push(r.reproducibility.reason);
+  } else if (r.ran && fullSystem) {
+    rationale.push(
+      'This boot was not compared against any prior boot of this image, so nothing here is known to repeat.',
+    );
+  }
+  const interventions = r.repair?.interventions ?? [];
+  if (interventions.length > 0) {
+    rationale.push(
+      `The guest was modified before it was asked: ${interventions.length} intervention(s). What answered is the repaired firmware, not the firmware as shipped.`,
+    );
+  }
+
+  const kind = ((): string => {
+    if (fullSystem) {
+      if (!r.ran) return 'system-boot-blocked';
+      if (r.proofState === 'confirmed_full_system') return 'system-boot-confirmed';
+      if (r.proofState === 'confirmed_in_emulation') return 'system-service-answered';
+      if (r.proofState === 'blocked_by_platform') return 'system-boot-panicked';
+      return 'system-boot-unconfirmed';
+    }
+    if (!r.ran) return 'service-start-blocked';
+    if (r.proofState === 'confirmed_in_emulation') return 'service-started-in-emulation';
+    if (r.proofState === 'blocked_by_platform') return 'service-start-blocked';
+    return 'service-exited-early';
+  })();
+
+  const title = ((): string => {
+    switch (kind) {
+      case 'system-boot-confirmed':
+        return openCount > 0
+          ? `The image booted under full-system emulation and ${openCount} forwarded port(s) answered — in the sandbox, not on the device`
+          : 'The image booted under full-system emulation — in the sandbox, not on the device';
+      case 'system-service-answered':
+        return `${openCount} forwarded port(s) answered under full-system emulation, without a recognisable boot marker`;
+      case 'system-boot-panicked':
+        return 'The guest kernel panicked under full-system emulation — the question could not be answered here';
+      case 'system-boot-unconfirmed':
+        return 'The full-system boot printed no recognisable boot and nothing answered — this is not a verdict about the firmware';
+      case 'system-boot-blocked':
+        return 'Full-system boot could not run in this deployment — this is not a negative result';
+      case 'service-started-in-emulation':
+        return `${subject}: the service started in a chroot under emulation — in the sandbox, not on the device`;
+      case 'service-exited-early':
+        return `${subject}: the service exited before it could be shown running — this is not a verdict about the firmware`;
+      default:
+        return `${subject}: the chroot service could not be started in this deployment — this is not a negative result`;
+    }
+  })();
+
+  const draft: FindingDraft = {
+    kind,
+    title,
+    severity: 'info',
+    proofState: r.proofState,
+    evidence,
+    rationale: rationale.join(' '),
+  };
+  // The channel says HOW this was learned, and a rung that never started learned nothing — the blocked row keeps
+  // no channel at all, the same refusal `buildReachFindings` makes for a probe that could not run.
+  if (r.ran) draft.evidenceChannel = 'emulated_run';
+  if (interventions.length > 0) draft.interventions = interventions;
+  return [draft];
 }
 
 /** The mandatory teardown: kill every emulator this provider could have spawned. */
-export const TEARDOWN_PATTERNS = ['qemu-system-', 'qemu-mipsel-static', 'qemu-arm-static', 'qemu-aarch64-static'];
+export const TEARDOWN_PATTERNS = [
+  'qemu-system-',
+  'qemu-mipsel-static',
+  'qemu-mips-static',
+  'qemu-arm-static',
+  'qemu-aarch64-static',
+];
 
 // === Runners (asset-gated; guaranteed teardown) ===
 

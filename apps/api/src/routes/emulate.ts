@@ -5,8 +5,19 @@
 import type { ImageIdentity } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
 import { deviceFamilyKey, recordReachabilityPrior } from '../corpus.js';
-import { type SystemEmulationResult, runChrootService, runFullSystem } from '../providers/emulate-system.js';
-import { type PlanContext, planEmulation, runUserModeEmulation } from '../providers/emulate.js';
+import { syncFindings } from '../findings.js';
+import {
+  type SystemEmulationResult,
+  buildSystemEmulationFindings,
+  runChrootService,
+  runFullSystem,
+} from '../providers/emulate-system.js';
+import {
+  type PlanContext,
+  buildUserEmulationFindings,
+  planEmulation,
+  runUserModeEmulation,
+} from '../providers/emulate.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
 import { computeRuntimeCapabilities } from '../providers/preflight.js';
@@ -21,7 +32,21 @@ function latestExtract(imageId: string): ExtractResult | null {
   return JSON.parse(done.resultJson) as ExtractResult;
 }
 
-/** When emulation actually confirms a subject, record the reachability prior for its device family. */
+/**
+ * Record what a system-emulation run earned: the reachability prior when it confirmed something, and — since
+ * 2026-08-03 — a row in the findings ledger on EVERY outcome.
+ *
+ * The two halves are deliberately gated differently. A prior is a claim that this device family can be shown to
+ * do something, so only a confirmation may write one. A finding is the record of a question having been asked,
+ * so a blocked rung and an unconfirmed boot write one too: for as long as this function only spoke on
+ * confirmation, seven full-system boots and three `confirmed_full_system` verdicts left the ledger completely
+ * silent, and a missing arch map key read as an honest platform limit because nothing in the dossier contradicted
+ * it.
+ *
+ * The source key is per rung, not per run: every full-system boot of an image asks the identical question, so
+ * `emulate-system` is image-wide and each boot replaces the last verdict (which is what makes re-running
+ * idempotent). A chroot service is a different question per service, so its key carries the service path.
+ */
 function onSystemEmulationResult(
   imageId: string,
   identity: ImageIdentity,
@@ -32,6 +57,8 @@ function onSystemEmulationResult(
     recordReachabilityPrior(deviceFamilyKey(identity), subject, r.proofState, imageId);
     updateBinaryEmulationStatus(imageId, subject, r.proofState);
   }
+  const source = r.strategy === 'full-system' ? 'emulate-system' : `emulate-chroot:${subject}`;
+  syncFindings(imageId, source, buildSystemEmulationFindings(subject, r));
   return r;
 }
 
@@ -87,8 +114,19 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
 
     const rootfsPath = extract.rootfsPath;
     const args = Array.isArray(body.args) ? body.args.map(String) : [];
+    // The MEASURED architecture, like the deeper rungs below. This rung was still consulting `identity.arch` —
+    // a guess from the raw image bytes, `unknown` on plenty of real images — while extraction had already read
+    // the answer out of the ELF headers of every binary in this rootfs. The comment below records the same fix
+    // being made for the system rungs and never carried across; this is the carry-across.
+    const userArch = rootfsArch(id, identity) ?? identity.arch;
     const jobId = startJob(id, 'emulate', { binary: target, args }, (handle) =>
-      runUserModeEmulation(identity.arch, rootfsPath, target, handle, args),
+      runUserModeEmulation(userArch, rootfsPath, target, handle, args).then((r) => {
+        // A different binary is a different question, so the source carries it — otherwise emulating a second
+        // binary would delete the first one's row (the deletion bug the manual reachability probe already paid
+        // for), and the ledger would only ever remember the most recently emulated binary on the image.
+        syncFindings(id, `emulate:${target}`, buildUserEmulationFindings(target, r));
+        return r;
+      }),
     );
     return reply.status(202).send({ jobId });
   });

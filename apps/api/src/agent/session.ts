@@ -16,8 +16,8 @@ import { type FindingDraft, syncFindings } from '../findings.js';
 import { loadLlmConfig } from '../llm.js';
 import type { LlmConfig } from '../llm.js';
 import { type DecompileResult, resolveInsideRootfs, runDecompile } from '../providers/decompile.js';
-import { runChrootService, runFullSystem } from '../providers/emulate-system.js';
-import { runUserModeEmulation } from '../providers/emulate.js';
+import { buildSystemEmulationFindings, runChrootService, runFullSystem } from '../providers/emulate-system.js';
+import { buildUserEmulationFindings, emulatorRefusal, runUserModeEmulation } from '../providers/emulate.js';
 import { type ExtractResult, runExtraction } from '../providers/extract.js';
 import { detectIsolation, runIsolated } from '../providers/isolate.js';
 import { startJob } from '../providers/jobs.js';
@@ -529,10 +529,19 @@ async function autoRunIsolated(
     return;
   }
   const res = await runIsolated([emulator, '-L', rootfs, abs]);
-  const proofState = res.ran ? 'confirmed_in_emulation' : 'blocked_by_platform';
+  // `ran` is true for ANY process that closed, including qemu exiting 255 because it refused the ELF it was
+  // handed — so `res.ran ? 'confirmed_in_emulation' : …` claimed a reproduction for a run in which not one guest
+  // instruction executed, and then wrote a reachability PRIOR from it. On the three big-endian MIPS images that
+  // is precisely what happened while the arch map pointed at the little-endian emulator. The refusal is read
+  // from qemu's own stderr and the claim drops to the platform block it always was.
+  const refusal = emulatorRefusal(res.stderr);
+  const proofState = res.ran && !refusal ? 'confirmed_in_emulation' : 'blocked_by_platform';
   updateBinaryEmulationStatus(imageId, entry.binary, proofState);
+  syncFindings(imageId, `emulate:${entry.binary}`, buildUserEmulationFindings(entry.binary, res));
   const row = getImage(imageId);
-  if (row?.identityJson) {
+  // A prior says this device family can be SHOWN to do something, so a run that never started the program must
+  // not write one — a false prior outlives the run and feeds every later ranking.
+  if (row?.identityJson && proofState === 'confirmed_in_emulation') {
     recordReachabilityPrior(deviceFamilyKey(JSON.parse(row.identityJson)), entry.binary, proofState, imageId);
   }
   recordStep(
@@ -623,9 +632,25 @@ async function runApprovedEmulation(
     async (h) => {
       if (chosen.rung === 'rtos-renode') return runRenodeForImage(session.imageId);
       if (!rootfsPath) throw new Error('No extracted rootfs — cannot emulate');
-      if (chosen.rung === 'chroot-service') return runChrootService(arch, rootfsPath, chosen.binary, h);
-      if (chosen.rung === 'full-system') return runFullSystem(arch, rootfsPath, 8080, h, rootfsPath);
-      return runUserModeEmulation(arch, rootfsPath, chosen.binary, h);
+      // The same ledger rows the operator-driven route composes. Without this the agent lane runs the identical
+      // rungs and leaves no trace in the dossier, so an image's findings would depend on WHO started the run.
+      if (chosen.rung === 'chroot-service') {
+        const r = await runChrootService(arch, rootfsPath, chosen.binary, h);
+        syncFindings(
+          session.imageId,
+          `emulate-chroot:${chosen.binary}`,
+          buildSystemEmulationFindings(chosen.binary, r),
+        );
+        return r;
+      }
+      if (chosen.rung === 'full-system') {
+        const r = await runFullSystem(arch, rootfsPath, 8080, h, rootfsPath);
+        syncFindings(session.imageId, 'emulate-system', buildSystemEmulationFindings('system-boot', r));
+        return r;
+      }
+      const r = await runUserModeEmulation(arch, rootfsPath, chosen.binary, h);
+      syncFindings(session.imageId, `emulate:${chosen.binary}`, buildUserEmulationFindings(chosen.binary, r));
+      return r;
     },
   );
   const job = await waitForJob(jobId);

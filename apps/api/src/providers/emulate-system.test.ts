@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   FIRMADYNE_KERNEL_NAMES,
+  type SystemEmulationResult,
   TEARDOWN_PATTERNS,
   buildChrootServiceArgs,
   buildFullSystemArgs,
+  buildSystemEmulationFindings,
   classifyFullSystem,
   describeWire,
   emulatorAddressesFor,
@@ -866,5 +868,174 @@ describe('parseGuestWire — a remote host slirp forwarded is not the guest', ()
       arpFrame('192.168.1.1', '52:54:00:12:34:56', '192.168.1.2'),
     ]);
     expect(parseGuestWire(buf, ['10.0.2.2']).addresses.map((a) => a.address)).toEqual(['192.168.1.1']);
+  });
+});
+
+describe('buildSystemEmulationFindings — every outcome earns a row, and none of them is a device claim', () => {
+  function result(over: Partial<SystemEmulationResult> = {}): SystemEmulationResult {
+    return {
+      ran: true,
+      strategy: 'full-system',
+      proofState: 'confirmed_full_system',
+      reason: 'The image booted and two forwarded ports accepted a connection in the sandbox.',
+      command: 'qemu-system-mips -M malta -kernel /opt/firmae/kernels/vmlinux.mipseb.4 …',
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+      ...over,
+    };
+  }
+
+  it('a booted image with two answering ports is confirmed in the sandbox, not on the device', () => {
+    const [draft] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      open: [
+        { host: 8080, guest: 80 },
+        { host: 8081, guest: 443 },
+      ],
+    });
+    expect(draft?.kind).toBe('system-boot-confirmed');
+    expect(draft?.proofState).toBe('confirmed_full_system');
+    expect(draft?.evidenceChannel).toBe('emulated_run');
+    expect(draft?.title).toContain('2 forwarded port(s) answered');
+    expect(draft?.title).toContain('in the sandbox, not on the device');
+  });
+
+  it('a rung that could not run says so and refuses to be read as a negative', () => {
+    const [draft] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      ran: false,
+      proofState: 'blocked_by_platform',
+      reason: 'No firmadyne kernel is installed for mipseb in this deployment.',
+    });
+    expect(draft?.kind).toBe('system-boot-blocked');
+    expect(draft?.proofState).toBe('blocked_by_platform');
+    expect(draft?.title).toContain('this is not a negative result');
+  });
+
+  // The channel says HOW this was learned; a boot that never started learned nothing.
+  it('keeps no evidence channel on the blocked row, because nothing ran', () => {
+    const [draft] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      ran: false,
+      proofState: 'blocked_by_platform',
+    });
+    expect(draft && 'evidenceChannel' in draft).toBe(false);
+  });
+
+  // Both rows are `blocked_by_platform`; only `ran` tells a kernel that died from a kernel that never booted.
+  it('a panic is a blocked run that DID execute, and carries the channel the unrun one does not', () => {
+    const [draft] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      ran: true,
+      proofState: 'blocked_by_platform',
+      reason: 'The guest kernel panicked before init.',
+    });
+    expect(draft?.kind).toBe('system-boot-panicked');
+    expect(draft?.evidenceChannel).toBe('emulated_run');
+    expect(draft?.title).toContain('could not be answered here');
+  });
+
+  it('a boot with no marker and nothing answering is not a verdict about the firmware', () => {
+    const [draft] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      proofState: 'needs_runtime_reproduction',
+      reason: 'No boot marker appeared within the time box and no forwarded port accepted a connection.',
+    });
+    expect(draft?.kind).toBe('system-boot-unconfirmed');
+    expect(draft?.proofState).toBe('needs_runtime_reproduction');
+    expect(draft?.title).toContain('this is not a verdict about the firmware');
+  });
+
+  it('a port that answered without a recognisable boot is filed as the service answering, not as a boot', () => {
+    const [draft] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      proofState: 'confirmed_in_emulation',
+      open: [{ host: 8080, guest: 80 }],
+    });
+    expect(draft?.kind).toBe('system-service-answered');
+    expect(draft?.title).toContain('without a recognisable boot marker');
+  });
+
+  it('a chroot service that came up is emulation-confirmed under its own kind', () => {
+    const [draft] = buildSystemEmulationFindings('usr/sbin/httpd', {
+      ...result(),
+      strategy: 'chroot-service',
+      proofState: 'confirmed_in_emulation',
+      reason: 'The daemon stayed up under qemu-user in the chroot.',
+    });
+    expect(draft?.kind).toBe('service-started-in-emulation');
+    expect(draft?.evidenceChannel).toBe('emulated_run');
+    expect(draft?.title).toContain('in the sandbox, not on the device');
+  });
+
+  it('a chroot service that died early is a lead, and says it is not a verdict about the firmware', () => {
+    const [draft] = buildSystemEmulationFindings('usr/sbin/httpd', {
+      ...result(),
+      strategy: 'chroot-service',
+      proofState: 'needs_runtime_reproduction',
+      reason: 'The daemon exited 1 within a second of starting.',
+    });
+    expect(draft?.kind).toBe('service-exited-early');
+    expect(draft?.proofState).toBe('needs_runtime_reproduction');
+    expect(draft?.title).toContain('this is not a verdict about the firmware');
+  });
+
+  // An n=1 boot supports no causal claim, and the verdict's own sentence is what the reader gets — verbatim,
+  // because a composer that paraphrased it would be a second opinion about evidence it never saw.
+  it('folds the reproducibility verdict’s own sentence into the rationale, unedited', () => {
+    const reason = 'This is the only comparable boot of this image, so nothing here is known to repeat.';
+    const [draft] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      reproducibility: {
+        kind: 'single',
+        n: 1,
+        incomparable: 0,
+        distribution: [],
+        supportsCausalClaim: false,
+        reason,
+      },
+    });
+    expect(draft?.rationale).toContain(reason);
+    expect(draft?.evidence?.reproducibility).toMatchObject({ supportsCausalClaim: false, n: 1, kind: 'single' });
+  });
+
+  it('still says nothing is known to repeat when no reproducibility verdict was computed at all', () => {
+    const [draft] = buildSystemEmulationFindings('rootfs', result());
+    expect(draft?.rationale).toContain('nothing here is known to repeat');
+    expect(draft?.evidence?.reproducibility).toBeUndefined();
+  });
+
+  it('travels the interventions with the finding and says the repaired firmware is what answered', () => {
+    const interventions = ['Appended one line to /etc/rc.d/rcS that runs the firmware’s own /etc/rc.d/iptables-stop.'];
+    const [draft] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      open: [{ host: 8080, guest: 80 }],
+      repair: {
+        attempted: true,
+        interventions,
+        skipped: [],
+        note: 'FIRMLAB_EMU_REPAIR is on and this image was MODIFIED for the boot.',
+      },
+    });
+    expect(draft?.interventions).toEqual(interventions);
+    expect(draft?.rationale).toContain('The guest was modified before it was asked');
+    expect(draft?.rationale).toContain('the repaired firmware, not the firmware as shipped');
+    expect(draft?.evidence?.repair).toMatchObject({ attempted: true, interventions });
+  });
+
+  // Presence is the signal, so an examined-and-left-alone image must not carry an empty list that reads as one.
+  it('sets no interventions field at all when the firmware was examined and left as shipped', () => {
+    const [draft] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      repair: {
+        attempted: true,
+        interventions: [],
+        skipped: ['This firmware ships no /etc/rc.d/iptables-stop.'],
+        note: 'FIRMLAB_EMU_REPAIR is on and this firmware was examined; no repair was applied.',
+      },
+    });
+    expect(draft && 'interventions' in draft).toBe(false);
+    expect(draft?.rationale).not.toContain('The guest was modified');
   });
 });
