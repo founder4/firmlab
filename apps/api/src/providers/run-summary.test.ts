@@ -150,3 +150,99 @@ describe('groupRunsByTarget', () => {
     expect(g.map((x) => x.target)).toEqual(['bin/two', 'bin/one']);
   });
 });
+
+describe('summarizeRun — the three emulation rungs share one job kind', () => {
+  const emulate = (result: unknown, params: unknown = {}): ReturnType<typeof summarizeRun> =>
+    summarizeRun(job({ kind: 'emulate', params: JSON.stringify(params), resultJson: JSON.stringify(result) }));
+
+  /**
+   * The defect: a boot that returned the strongest verdict the ladder can produce rendered as the WEAKEST rung
+   * failing to report an exit code — `lead` / "Ran under user-mode emulation, exit ?" — because this case read
+   * `ran`/`exitCode` and nothing else.
+   */
+  it('reads a confirmed full-system boot as proven, not as a user-mode run', () => {
+    const s = emulate(
+      {
+        ran: true,
+        strategy: 'full-system',
+        proofState: 'confirmed_full_system',
+        reason:
+          'The kernel booted (Freeing unused kernel memory) and two forwarded ports answered. It proves the sandbox.',
+        open: [
+          { host: 43441, guest: 80 },
+          { host: 43442, guest: 443 },
+        ],
+        timedOut: false,
+      },
+      { rung: 'full-system' },
+    );
+    expect(s.outcome).toBe('proven');
+    expect(s.question).toBe('full-system');
+    expect(s.headline).toContain('Full-system boot confirmed');
+    expect(s.headline).toContain('2 forwarded port');
+    expect(s.headline).not.toContain('user-mode');
+  });
+
+  // The corpus's own case: booted, and not one of 158 SYNs answered. Still `confirmed_full_system` — the runner
+  // decided that, and this summary carries it rather than second-guessing it — but the line must not imply a
+  // service answered.
+  it('says so when a confirmed boot had nothing answer on a forwarded port', () => {
+    const s = emulate({
+      ran: true,
+      strategy: 'full-system',
+      proofState: 'confirmed_full_system',
+      reason: 'The kernel booted and its console names only loopback.',
+      open: [],
+      timedOut: false,
+    });
+    expect(s.outcome).toBe('proven');
+    expect(s.headline).toContain('nothing answered');
+  });
+
+  it('reads a blocked rung as blocked, carrying the reason the runner gave', () => {
+    const s = emulate({
+      ran: false,
+      strategy: 'full-system',
+      proofState: 'blocked_by_platform',
+      reason: 'No firmadyne kernel for arch "arm64" in /opt/firmae/kernels. Nothing was attempted.',
+      timedOut: false,
+    });
+    expect(s.outcome).toBe('blocked');
+    expect(s.headline).toContain('No firmadyne kernel');
+    // One sentence, not the whole paragraph the runner wrote for a reader.
+    expect(s.headline).not.toContain('Nothing was attempted');
+  });
+
+  it('reads an unconfirmed boot as empty — it ran, and it settled nothing', () => {
+    const s = emulate({
+      ran: true,
+      strategy: 'full-system',
+      proofState: 'needs_runtime_reproduction',
+      reason: 'The emulator exited without printing a recognisable boot.',
+      open: [],
+      timedOut: false,
+    });
+    expect(s.outcome).toBe('empty');
+  });
+
+  it('reads a chroot service by its own rung name', () => {
+    const s = emulate({
+      ran: true,
+      strategy: 'chroot-service',
+      proofState: 'confirmed_in_emulation',
+      reason: 'The service started under the libnvram shim.',
+      timedOut: false,
+    });
+    expect(s.outcome).toBe('proven');
+    expect(s.question).toBe('chroot-service');
+    expect(s.headline).toContain('Chroot service confirmed');
+  });
+
+  // A user-mode result carries neither field, and its reading is unchanged — that rung really does report an
+  // exit code and nothing else.
+  it('still reads a user-mode run from its exit code', () => {
+    const s = emulate({ ran: true, exitCode: 0, timedOut: false, stdout: '', stderr: '', command: 'qemu…' });
+    expect(s.outcome).toBe('lead');
+    expect(s.headline).toContain('user-mode emulation, exit 0');
+  });
+});

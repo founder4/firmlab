@@ -235,6 +235,23 @@ export function summarizeRun(job: RunInput): RunSummary {
       return { ...base, outcome: 'lead', headline: `${fns} functions, ${imports} imports catalogued`, bound: null };
     }
 
+    case 'ghidra': {
+      // The counterpart of `buildGhidraFindings` refusing to write a findings row for a successful run: what the
+      // decompilation DID belongs here, in the ledger whose column asks "what came of it", and not in a dossier of
+      // claims about the firmware.
+      if (result.available === false) {
+        return { ...base, outcome: 'blocked', headline: String(result.reason ?? 'The decompiler is unavailable') };
+      }
+      const fns = typeof result.functionCount === 'number' ? result.functionCount : 0;
+      return {
+        ...base,
+        outcome: 'lead',
+        headline:
+          fns > 0 ? `${fns} function(s) decompiled — pseudocode available for review` : 'Ran, decompiled no functions',
+        bound: null,
+      };
+    }
+
     case 'renode': {
       if (result.available === false) {
         return { ...base, outcome: 'blocked', headline: String(result.reason ?? 'Renode is unavailable') };
@@ -253,6 +270,40 @@ export function summarizeRun(job: RunInput): RunSummary {
     }
 
     case 'emulate': {
+      // THREE rungs share this job kind — user-mode, chroot-service and full-system — and this case used to read
+      // all of them as the cheapest one. A boot that returned `confirmed_full_system` rendered in the run ledger
+      // as `lead` / "Ran under user-mode emulation, exit ?", i.e. the strongest result the ladder can produce,
+      // described as the weakest rung failing to report an exit code. The two system rungs are told apart by the
+      // fields only they carry, and where they carry a proof state the runner already DECIDED it — from the boot
+      // markers and the ports that answered — so this reads it rather than re-deriving one from `ran`/`exitCode`.
+      const strategy = typeof result.strategy === 'string' ? result.strategy : null;
+      const proofState = typeof result.proofState === 'string' ? result.proofState : null;
+      if (strategy !== null && proofState !== null) {
+        const openPorts = Array.isArray(result.open) ? result.open.length : 0;
+        const rung = strategy === 'full-system' ? 'Full-system boot' : 'Chroot service';
+        const outcome: RunOutcome =
+          proofState === 'confirmed_full_system' || proofState === 'confirmed_in_emulation'
+            ? 'proven'
+            : proofState.startsWith('blocked')
+              ? 'blocked'
+              : result.ran === true
+                ? 'empty'
+                : 'blocked';
+        // The runner's `reason` is a paragraph written for a reader; the ledger wants its first sentence.
+        const reason = typeof result.reason === 'string' ? result.reason : '';
+        const firstSentence = reason.split(/(?<=\.)\s/)[0] ?? '';
+        const headline =
+          outcome === 'proven'
+            ? `${rung} confirmed${openPorts > 0 ? `, ${openPorts} forwarded port(s) answered` : ' — nothing answered on a forwarded port'}`
+            : firstSentence || `${rung}: ${proofState}`;
+        return {
+          ...base,
+          question: strategy,
+          outcome,
+          headline: headline.length > 160 ? `${headline.slice(0, 159)}…` : headline,
+          bound: null,
+        };
+      }
       const ran = result.ran === true;
       const timedOut = result.timedOut === true;
       return {
