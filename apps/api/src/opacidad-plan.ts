@@ -533,7 +533,21 @@ export interface ScheduleState {
   planned: Set<string>;
   dynamicCount: number;
   capped: number;
+  /**
+   * How many were dropped, BY LEAD KIND. The total alone was reported as "N further daemon lead(s) not
+   * scheduled" whatever had actually overflowed, so a run that dropped three crash reproductions told the
+   * operator to go triage daemons. A bound that misnames what it dropped sends the reader to the wrong place —
+   * the count was honest and the sentence was not.
+   */
+  cappedByKind?: Partial<Record<Lead['kind'], number>>;
 }
+
+/** How a lead kind reads in a sentence written for an operator. */
+export const LEAD_KIND_LABEL: Record<Lead['kind'], string> = {
+  'decompile-binary': 'daemon/handler decompile',
+  'reproduce-crash': 'crash reproduction',
+  'prove-reachability': 'reachability probe',
+};
 
 /**
  * Pure (given the state it mutates): turn a batch of leads into the new specs to append to the agenda, respecting
@@ -549,6 +563,8 @@ export function scheduleLeads(leads: Lead[], state: ScheduleState, cap: number):
         if (!state.planned.has(key)) {
           state.planned.add(key);
           state.capped++;
+          state.cappedByKind ??= {};
+          state.cappedByKind[lead.kind] = (state.cappedByKind[lead.kind] ?? 0) + 1;
         }
         continue;
       }

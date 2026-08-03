@@ -1430,11 +1430,45 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   run did … and nothing about what the next one will do"*, with `supportsCausalClaim: false` in the evidence. The
   BE3600 carries a `system-boot-blocked` row and the WR940N an `emulate:usr/bin/httpd` row; none of the three
   existed before.
-  **Still open:** `renode` (its result already carries a `proofState` and a `booted` flag — this is the cheapest
-  one left) and `ghidra` (whose output is a decompilation, so what a row would assert needs deciding first).
-  **And the harder half is untouched:** a confirmed boot does not reach back to the 894 leads it might settle.
-  The new rows are evidence that the rung ran; nothing yet upgrades a `needs_runtime_reproduction` finding on the
-  strength of a boot that confirmed. That is the wiring that would actually move the census.
+  `renode` followed the same day (`dae1e81`) — it matters more than the qemu rungs for the RTOS and bare-metal
+  images, whose lack of a rootfs skips every other stage, making it their only dynamic question. **Still open:**
+  `ghidra`, whose output is a decompilation, so what a row would assert needs deciding first.
+
+  ⚠ **CORRECTION — "a confirmed boot does not reach back to upgrade the leads it might settle" was the wrong
+  diagnosis, and it was written here twice.** Measured over the deployed corpus (1310 findings, 906 at
+  `needs_runtime_reproduction`, 899 of them on the 7 rootfs-bearing images):
+
+  | count | kind | can any rung settle it? |
+  |---|---|---|
+  | **474** | `cve` (grype, package-level) | **No.** Evidence is `{id, packageName, packageVersion}` — no binary, no call site. Deliberately a lead by policy (*present ≠ reachable*). A boot proves the image runs, not that the CVE's code path is reached. |
+  | 210 | `binary-pwnable-candidate` | Yes — by **symreach/dynprobe per binary**, not by a boot. 86 are `.so` and 74 are non-runnable, so 136 are eligible; the scan asks **3 per run**. |
+  | 127 | `binary-cmdexec-sink` | **No lead kind exists for it.** `reachabilityLeads` filters on `binary-pwnable-candidate` alone. The largest addressable untouched class. |
+  | 22 | `sink-reachability-inconclusive` | No, by design — budget exhaustion is not an answer. |
+  | 12 + 21 | gitleaks heuristics · image-wide (`update-*`, `nvram-*`, `uboot-netboot`, …) | No rung applies. |
+  | 7 | `network-daemon-autostart` | **Yes — and these are the ONLY ones a boot can honestly touch**, via a forwarded port that answers. |
+
+  So **529 of the 906 (58 %) are not the kind of thing any rung can settle**, and of the rest the answering rung
+  is per-binary, which a full-system boot does not help with — `dynprobe` is strictly qemu-user over a gdbstub and
+  has no path into a booted guest at all. **The bottleneck is arithmetic, not epistemics: caps of 3/3/8 against
+  136 eligible candidates, plus 127 rows with no lead kind.**
+
+  And the boot does not even deliver its own seven: the corpus's single `confirmed_full_system` row has
+  `open: []` — two forwards, 158 SYNs, not one answer, `guest-dropped`. **No image in the deployed corpus has a
+  booted guest with a port that answers**, so there is nothing to point a web probe at today.
+  **What is actually worth building, in order:**
+  - ▢ **A lead kind for `binary-cmdexec-sink`** (127 rows), asking symreach for `system`/`popen` — the manual
+    route already supports exactly that question and phrases it well. Measure before enabling, the way the probe
+    interest rank was measured: it competes for the same budget of 3.
+  - ▢ **Schedule off STORED findings.** Every lead builder today reads the drafts a provider just returned; no
+    code path turns an existing ledger row into a scheduled question, so the 906 are unreachable by construction
+    even where a rung exists.
+  - ▢ **Drive a web probe inside the boot's live window.** `runFullSystem` tears the guest down, and the forwards
+    are ephemeral high ports, so the stored `open[]` cannot be probed afterwards — pointing a later probe at that
+    port number would connect to whatever else grabbed it, which is the fixed-port trap in reverse. The probe has
+    to run before teardown. (`WebProbePanel` still defaults to `http://127.0.0.1:8080`, which the ephemeral
+    forwards made permanently wrong.)
+  - ✅ The re-plan's cap message called every dropped lead a "daemon lead" whatever it was — fixed, it now names
+    the kinds it dropped.
 - ✅ **`arm64` is missing from `QEMU_SYSTEM_BY_ARCH`, and the block says the deployment lacks a tool it has**
   (fixed 2026-08-03, `135e16a`, deployed `bde3f2d`) — impact **high**, same file and same shape as the entry above. The BE3600 full-system rung returns
   `{"ran":false,"proofState":"blocked_by_platform","reason":"No qemu-system emulator/machine for arch \"arm64\"

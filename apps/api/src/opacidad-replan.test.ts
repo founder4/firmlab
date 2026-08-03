@@ -64,6 +64,27 @@ describe('scheduleLeads', () => {
     const state: ScheduleState = { planned: new Set(['decompile:a']), dynamicCount: 0, capped: 0 };
     expect(scheduleLeads([lead('a')], state, 8)).toHaveLength(0);
   });
+
+  /**
+   * The overflow has to say WHAT it dropped. The run report called every capped lead a "daemon lead", so a run
+   * that ran out of budget on crash reproductions told the operator to go triage daemons — a bound whose count
+   * was honest and whose noun was not, which sends the reader to the wrong rung.
+   */
+  it('records the overflow by lead kind, not just as a total', () => {
+    const state: ScheduleState = { planned: new Set(), dynamicCount: 0, capped: 0 };
+    const mixed = [
+      lead('a'),
+      { kind: 'prove-reachability', target: 'bin/x', sinks: ['strcpy'], reason: 'r' },
+      { kind: 'reproduce-crash', target: 'bin/y', sink: 'strcpy', addresses: ['0x1'], reason: 'r' },
+    ] as Parameters<typeof scheduleLeads>[0];
+    scheduleLeads(mixed, state, 0);
+    expect(state.capped).toBe(3);
+    expect(state.cappedByKind).toEqual({
+      'decompile-binary': 1,
+      'prove-reachability': 1,
+      'reproduce-crash': 1,
+    });
+  });
 });
 
 describe('lead resolution over a rootfs', () => {

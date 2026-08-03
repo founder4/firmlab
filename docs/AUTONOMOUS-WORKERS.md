@@ -726,6 +726,29 @@ verified through the deployed service, not against fixtures.
 **The corpus census records the two directions in one number: `static_confirmed` went 349 → 341** — twelve rows
 that had never earned it left, four rows that did arrived — while the total rose 1305 → 1309.
 
+### 11.3 The 906 leads, and why "the boot should settle them" was the wrong question
+
+§11 closed on a number — *"1302 findings and exactly ONE carries a proof state earned by execution"* — and the
+obvious reading, which this document made twice, is that a confirmed boot ought to reach back and settle the
+leads. Broken down by kind over the deployed corpus, that reading does not survive:
+
+**474 of the 906 are package-level `cve` rows** whose evidence is a package name and a version — no binary, no
+call site, and a lead by deliberate policy because *present ≠ reachable*. Nothing can settle those, least of all a
+boot. Add the heuristic secret rows, the image-wide observations and the by-design inconclusives and **529 of 906
+(58 %) are not the kind of claim any rung can move.** Of the 337 that do name a binary, the rung that answers them
+is symbolic reachability or the dynamic probe — **per binary, under qemu-user** — and `dynprobe` has no path into
+a booted full-system guest at all. A boot's honest per-finding payload is the 7 `network-daemon-autostart` rows,
+and only when a forwarded port answers.
+
+**It does not currently answer.** The corpus's one `confirmed_full_system` row reports `open: []`: two forwards,
+158 SYNs delivered, not one reply — *"the packets are being dropped inside the guest… which is a different
+finding from 'no service'."*
+
+So the real bottleneck is arithmetic. **136 pwnable candidates are eligible for symbolic reachability and each
+scan asks 3**; **127 `binary-cmdexec-sink` rows have no lead kind at all**; and every lead builder reads the
+drafts a provider just returned, so nothing in the codebase can schedule a question off a finding already in the
+ledger. That — not a boot-driven upgrade — is what would move the census, and it is now written down as such.
+
 Two things this does **not** close, and they are the larger half. The 894 leads are untouched: a boot that
 confirms still does not reach back to upgrade the `needs_runtime_reproduction` findings it might settle, so the
 census barely moved even though the wiring works. And `renode` and `ghidra` still compose nothing. The correction

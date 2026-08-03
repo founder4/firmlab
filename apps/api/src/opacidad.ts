@@ -41,6 +41,7 @@ import {
   summarizeFindings,
 } from './opacidad-narrative.js';
 import {
+  LEAD_KIND_LABEL,
   type Lead,
   type PlanSpec,
   type ProviderId,
@@ -875,11 +876,17 @@ export async function runOpacidad(
     }
   }
   if (sched.capped > 0) {
+    // Name what was actually dropped. This said "daemon lead(s)" for every kind, so a run that ran out of budget
+    // on crash reproductions sent the operator to triage daemons instead — the count was right and the noun was
+    // wrong, which is the worst shape for a bound to take.
+    const byKind = Object.entries(sched.cappedByKind ?? {})
+      .map(([kind, n]) => `${n} ${LEAD_KIND_LABEL[kind as keyof typeof LEAD_KIND_LABEL] ?? kind}`)
+      .join(', ');
     steps.push({
       worker: 'W9 · Re-plan (cap reached)',
       status: 'degraded',
-      summary: `${sched.capped} further daemon lead(s) not scheduled — dynamic step cap ${MAX_DYNAMIC_STEPS} reached`,
-      note: 'honest bound: raise the cap or triage the remaining daemons manually',
+      summary: `${sched.capped} further lead(s) not scheduled — dynamic step cap ${MAX_DYNAMIC_STEPS} reached${byKind ? ` (${byKind})` : ''}`,
+      note: 'honest bound: raise the cap, or run the named rung by hand on the leads it did not reach',
     });
   }
 
