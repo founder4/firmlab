@@ -18,7 +18,7 @@
  * and was — but the runner only ever handed it files whose EXTENSION was on a whitelist (plus extensionless files
  * under `etc/`), read to 512 KB. So a private key inside a binary was unreachable by construction: the WR940N's
  * 1.9 MB `usr/bin/httpd` carries a complete RSA-1024 key and its matching certificate in plain PEM, and this
- * provider reported nothing. The scan is now the byte-level one in `certs.ts` (`scanTreeForPem`) over EVERY file
+ * provider reported nothing. The scan is now the byte-level one in `pem-scan.ts` (`scanTreeForPem`) over EVERY file
  * the walk finds, and the bound it applies is reported instead of being read as a negative.
  *
  * **What is claimed, and what is not.** A private-key label is not a private key: this codebase has already had
@@ -36,12 +36,15 @@ import type { FindingSeverity, ProofState } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
 import {
   DEFAULT_PEM_BUDGET,
+  type KeyBlockRead,
   type PemBlock,
   type PemScanCoverage,
   findPemBlocks,
+  matchKeyToCertificates,
+  readPrivateKeyBlock,
   scanTreeForPem,
   summarizePemScan,
-} from './certs.js';
+} from './pem-scan.js';
 
 const MAX_EVIDENCE = 200;
 const MAX_PROCESS = 160;
@@ -316,65 +319,9 @@ export function auditServiceConfigs(files: { path: string; content: string }[]):
 // embedded key material (by CONTENT, not by filename — and read before it is named)
 // ============================================================================
 
-/** What a private-key-labelled block turned out to be once its body was actually decoded. */
-export interface KeyBlockRead {
-  /** `rsa` / `ec` / `dsa` / `ed25519` …, or null when nothing was decoded (encrypted, or not key material). */
-  keyType: string | null;
-  /** RSA/DSA modulus length or the EC curve size in bits, when the parser reports one. */
-  keyBits: number | null;
-  namedCurve: string | null;
-  encrypted: boolean;
-  /** True only when the bytes ARE key material: the body decoded, or the block is an explicitly encrypted key. */
-  isKey: boolean;
-  /** Why it was not claimed, when it was not. */
-  note: string;
-}
-
-// EC named-curve → key size in bits, so an EC key can be described by strength like an RSA one.
-const EC_CURVE_BITS: Record<string, number> = {
-  prime192v1: 192,
-  secp192r1: 192,
-  secp224r1: 224,
-  prime256v1: 256,
-  secp256r1: 256,
-  secp256k1: 256,
-  secp384r1: 384,
-  secp521r1: 521,
-};
-
-/**
- * Read a private-key block instead of trusting its label. `node:crypto` either decodes the body — in which case
- * the algorithm and size come from the key itself and the claim is beyond argument — or it does not, in which
- * case this returns `isKey:false` and the caller must not call it a key. An ENCRYPTED block is key material by
- * construction (the RFC 1421 headers are not something a placeholder carries), and is reported as such without
- * a passphrase being attempted. The parsed key object never leaves this function; only its shape does.
- */
-export function readPrivateKeyBlock(block: PemBlock): KeyBlockRead {
-  const base = { keyType: null, keyBits: null, namedCurve: null, encrypted: block.encrypted };
-  if (block.encrypted) {
-    return { ...base, isKey: true, note: 'encrypted key block — passphrase not attempted' };
-  }
-  // The same DER, re-framed: a key that travelled through an nvram value or a C string literal arrives with its
-  // line breaks gone, and OpenSSL's PEM reader wants them. Re-wrapping changes no byte of the payload.
-  const b64 = block.text
-    .replace(/-----(?:BEGIN|END)[^-]*-----/g, '')
-    .replace(/\s+/g, '')
-    .replace(/(.{64})/g, '$1\n');
-  const candidates = [block.text, `-----BEGIN ${block.label}-----\n${b64}\n-----END ${block.label}-----\n`];
-  let lastError = 'no candidate parsed';
-  for (const pem of candidates) {
-    try {
-      const key = createPrivateKey(pem);
-      const details = key.asymmetricKeyDetails;
-      const namedCurve = details?.namedCurve ?? null;
-      const keyBits =
-        typeof details?.modulusLength === 'number' ? details.modulusLength : (EC_CURVE_BITS[namedCurve ?? ''] ?? null);
-      return { keyType: key.asymmetricKeyType ?? null, keyBits, namedCurve, encrypted: false, isKey: true, note: '' };
-    } catch (err) {
-      lastError = String((err as Error).message ?? err);
-    }
-  }
-  return { ...base, isKey: false, note: `body did not decode as a key (${lastError})` };
+/** The CN of a certificate subject, for a title that names the identity rather than its whole DN. */
+function certCommonName(subject: string): string {
+  return /CN=([^\n]+)/.exec(subject)?.[1]?.trim() ?? subject;
 }
 
 /** A human description built from what was decoded, never from the label alone. */
@@ -420,12 +367,44 @@ export function keyMaterialFindings(files: { path: string; blocks: PemBlock[] }[
   for (const { path: p, blocks } of files) {
     if (seen.has(p)) continue;
     seen.add(p);
-    const keys: { label: string; read: KeyBlockRead; offset: number }[] = [];
+    const keys: { label: string; read: KeyBlockRead; offset: number; text: string }[] = [];
     for (const block of blocks) {
       if (block.kind !== 'private-key') continue;
       const read = readPrivateKeyBlock(block);
-      if (read.isKey) keys.push({ label: block.label, read, offset: block.offset });
+      if (read.isKey) keys.push({ label: block.label, read, offset: block.offset, text: block.text });
       else unclaimed.push({ path: p, label: block.label, offset: block.offset, note: read.note });
+    }
+    // The sharper question, asked only where both halves are in the same file: does this key OPEN a certificate
+    // this firmware ships? That turns "the vendor left key material here" into "the identity is forgeable by
+    // anyone holding this image", which is the finding an operator acts on.
+    for (const k of keys) {
+      if (k.read.encrypted) continue; // no public half is derivable without the passphrase — nothing to compare
+      const match = matchKeyToCertificates(k.text, blocks);
+      if (!match) continue;
+      findings.push({
+        kind: 'private-key-matches-shipped-certificate',
+        title: `Shipped TLS identity is forgeable: ${p} holds the private key for ${certCommonName(match.subject)}`,
+        severity: 'critical',
+        proofState: 'static_confirmed',
+        evidence: {
+          path: p,
+          keyOffset: k.offset,
+          keyType: k.read.keyType,
+          keyBits: k.read.keyBits,
+          certificateOffset: match.offset,
+          subject: match.subject,
+          issuer: match.issuer,
+          validTo: match.validTo,
+        },
+        rationale: [
+          'The private key and the certificate sit in the same file, and the key’s PUBLIC half is byte-identical',
+          'to the certificate’s — exported to DER and compared, so the pair is established rather than inferred',
+          'from names or adjacency. Anyone who can download this firmware can therefore present this identity to',
+          'anything that trusts it, and no device needs to be touched to do it. What this does NOT say: that any',
+          'device actually serves this certificate, that anything trusts it, or that it is in use at all — those',
+          'are runtime questions. It is a fact about the bytes, and the key body is never stored here.',
+        ].join(' '),
+      });
     }
     const first = keys[0];
     if (!first) continue;

@@ -2,18 +2,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { analyzeCert, runCertAnalysis } from './certs.js';
+import type { PemScanEntry, PemScanSkip } from './pem-scan.js';
 import {
-  analyzeCert,
   classifyPemLabel,
   extractPems,
   findPemBlocks,
   parsePemBlockAt,
   planPemScan,
-  runCertAnalysis,
   scanFileForPem,
   summarizePemScan,
-} from './certs.js';
-import type { PemScanEntry, PemScanSkip } from './certs.js';
+} from './pem-scan.js';
 
 // A STATIC, self-signed RSA-2048 certificate generated with:
 //   openssl req -x509 -newkey rsa:2048 -nodes -subj "/CN=DO NOT TRUST snakeoil" -days 3650 -keyout /dev/null -out -

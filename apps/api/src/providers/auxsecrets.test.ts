@@ -78,4 +78,34 @@ describe('runAuxSecrets (sibling-partition scan)', () => {
     const r = runAuxSecrets(path.join(tmp, 'ext2'), null);
     expect(r.findings.filter((f) => f.kind === 'embedded-private-key')).toHaveLength(1); // real.key only
   });
+
+  /**
+   * The defect this provider had until 2026-08-03, in the shape that made it invisible: a real key inside a file
+   * with a binary extension and NUL bytes around it. The old walk only collected key-ish extensions and read them
+   * as UTF-8, so a sibling partition's `.so` could hold the device key and this scan would report a clean run.
+   */
+  it('finds a key inside a BINARY in a sibling partition, which the extension whitelist could never reach', () => {
+    const out = path.join(tmp, 'ext3', '_img.extracted', 'jffs2-root-0');
+    fs.mkdirSync(out, { recursive: true });
+    const blob = Buffer.concat([
+      Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x01, 0x02, 0x01, 0x00, 0x00, 0x00]),
+      Buffer.from(`some strings\u0000${RSA}\u0000more strings`, 'utf8'),
+    ]);
+    fs.writeFileSync(path.join(out, 'libdevice.so.1'), blob);
+    const r = runAuxSecrets(path.join(tmp, 'ext3'), null);
+    expect(r.findings.filter((f) => f.kind === 'embedded-private-key')).toHaveLength(1);
+    expect(r.findings[0]?.title).toContain('libdevice.so.1');
+  });
+
+  // Rule 4: a bound is not an answer. The old result reported `filesScanned` and nothing about what it skipped.
+  it('reports what the scan read, so an empty result can be told from an unread one', () => {
+    const out = path.join(tmp, 'ext4', '_img.extracted', 'data');
+    fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(path.join(out, 'nothing.bin'), Buffer.alloc(64));
+    const r = runAuxSecrets(path.join(tmp, 'ext4'), null);
+    expect(r.findings).toHaveLength(0);
+    expect(r.scan?.filesScanned).toBe(1);
+    expect(r.scan?.note).toBeTruthy();
+    expect(r.reason).toContain('not flagged');
+  });
 });

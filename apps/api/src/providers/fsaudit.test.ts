@@ -2,8 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { findPemBlocks } from './certs.js';
-import type { PemBlock } from './certs.js';
 import {
   auditAccountSources,
   auditCredentials,
@@ -12,12 +10,13 @@ import {
   inspectAccountFile,
   keyMaterialFindings,
   notableFiles,
-  readPrivateKeyBlock,
   runFsAudit,
   scanContentSecrets,
   unclaimedKeyBlockFindings,
 } from './fsaudit.js';
 import type { AccountFileState, AccountSource } from './fsaudit.js';
+import type { PemBlock } from './pem-scan.js';
+import { findPemBlocks, readPrivateKeyBlock } from './pem-scan.js';
 
 // A UID-0 root that defers its password to /etc/shadow, plus a normal daemon account.
 const PASSWD = 'root:x:0:0:root:/root:/bin/sh\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n';
@@ -434,5 +433,63 @@ describe('inspectAccountFile', () => {
     expect(inspectAccountFile(root, 'etc/group').state).toBe('present');
     expect(inspectAccountFile(root, 'etc/gshadow')).toEqual({ state: 'empty' });
     expect(inspectAccountFile(root, 'etc/nope')).toEqual({ state: 'absent' });
+  });
+});
+
+/**
+ * A real certificate FOR `RSA_KEY` above — the pair matters, not the shape. `keyMaterialFindings` compares the two
+ * public halves byte for byte, so a fixture whose certificate merely looked plausible would assert nothing.
+ */
+const CERT_FOR_RSA_KEY = `-----BEGIN CERTIFICATE-----
+MIICGjCCAYOgAwIBAgIUaz9DP2bDaJGN3nr2TuQhB6Qn2rEwDQYJKoZIhvcNAQEL
+BQAwHzEdMBsGA1UEAwwUZmlybWxhYi1wYWlyaW5nLXRlc3QwHhcNMjYwODAzMTky
+NzE3WhcNMzYwNzMxMTkyNzE3WjAfMR0wGwYDVQQDDBRmaXJtbGFiLXBhaXJpbmct
+dGVzdDCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAm17jSBKTVnI6vPJUNZVp
+V3dZFNkuu019MYrbOBhlo2WsK6ujLHos2+xovKbvGdqAdSrmPH89JA7cdIC2FZZm
+Vw8+pNtgGKyZ34x8m+tdTyhW0elKNXAEQzt3CLQesPHH2+9RBS9n3INWpdGd9YWw
+Tg70ynhyHGALyhzvSI7O6T8CAwEAAaNTMFEwHQYDVR0OBBYEFBuHaVjSsH8hgh9i
+EPAEbIn4awbcMB8GA1UdIwQYMBaAFBuHaVjSsH8hgh9iEPAEbIn4awbcMA8GA1Ud
+EwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADgYEARWx3npUGiks/X3njr8GvdUMJ
+0dLbqVry8I6ql/nJJNajEZcU7uPh0hzNKcJ5ZkM0uOnLdDlXHpfW2Xm6zoU4XWO5
+x7O3ZO+Nw4NIiPZ0fItXCVvdtafhGJMfwnqbIjsCB6YXh/Oniy3MG7f0IOC1fpj2
+Mz5bKwXg2tj+b6hbExY=
+-----END CERTIFICATE-----`;
+
+/** A certificate for a DIFFERENT key — the negative control, without which the pairing test proves nothing. */
+const UNRELATED_CERT = `-----BEGIN CERTIFICATE-----
+MIICFjCCAX+gAwIBAgIUKibSPh5JaC++fNM8lqca1WMRKlkwDQYJKoZIhvcNAQEL
+BQAwHTEbMBkGA1UEAwwSdW5yZWxhdGVkLWlkZW50aXR5MB4XDTI2MDgwMzE5Mjky
+NVoXDTM2MDczMTE5MjkyNVowHTEbMBkGA1UEAwwSdW5yZWxhdGVkLWlkZW50aXR5
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDYCoAePiZeVQR30lYVCDou+m1w
+jUprduEf4vn2DOAEc5ugaySJ0sTs24HM8/zLnY5zNmekrW/kN2otSsF5CyLzLY0X
+B7ohlCKem1bkIb5KmDhnWO+7XmtPzd4DbNpf/t0HQ8ua34aYZsAPhmHwRIK5nLT4
+puV0Jtb4xfNGVZbEywIDAQABo1MwUTAdBgNVHQ4EFgQUlmrVnq9spsAE5p+ytcm9
+8pV7rs4wHwYDVR0jBBgwFoAUlmrVnq9spsAE5p+ytcm98pV7rs4wDwYDVR0TAQH/
+BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOBgQAoc8cdJRZfm8kcp87C2gPYOHgpbf0t
+OEs4WBY2r9RQH+N3I/WUOQMUYYza//d8MvOxQWyiN9uf2F/0TVBk5vh8+w9VUFJR
+DncCSro4rTPqk9b8W2rCPpIU2Bo2tWSXunfGlvBFFvcFduy8ZEBrBYXXOYAH1SJB
+hxNaR/rKZ+ZwNA==
+-----END CERTIFICATE-----`;
+
+describe('keyMaterialFindings — the key beside its own certificate', () => {
+  it('calls the shipped identity forgeable when the key opens the certificate in the same file', () => {
+    const blocks = findPemBlocks(`${RSA_KEY}\n${CERT_FOR_RSA_KEY}\n`);
+    const { findings } = keyMaterialFindings([{ path: 'usr/bin/httpd', blocks }]);
+    const pair = findings.find((f) => f.kind === 'private-key-matches-shipped-certificate');
+    expect(pair?.severity).toBe('critical');
+    expect(pair?.proofState).toBe('static_confirmed');
+    expect(pair?.title).toContain('forgeable');
+    expect(pair?.title).toContain('firmlab-pairing-test');
+    // The pair is established by comparing exported public halves, so the rationale must not overclaim runtime.
+    expect(pair?.rationale).toContain('does NOT say');
+    // And the plain "there is a key here" row still stands beside it — two claims, two rows.
+    expect(findings.some((f) => f.kind === 'embedded-private-key')).toBe(true);
+  });
+
+  it('makes no pairing claim when the certificate in the file belongs to a different key', () => {
+    const blocks = findPemBlocks(`${RSA_KEY}\n${UNRELATED_CERT}\n`);
+    const { findings } = keyMaterialFindings([{ path: 'etc/ssl/mixed.pem', blocks }]);
+    expect(findings.some((f) => f.kind === 'private-key-matches-shipped-certificate')).toBe(false);
+    expect(findings.some((f) => f.kind === 'embedded-private-key')).toBe(true);
   });
 });

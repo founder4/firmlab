@@ -41,8 +41,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { FindingDraft } from '../findings-normalize.js';
 import { type SymbolSource, extractSymbols, parseDynamicSymbols } from './binvuln.js';
-import { extractPems } from './certs.js';
 import { parseOtaHeader } from './encrypted.js';
+import { extractPems } from './pem-scan.js';
 
 // ===========================================================================================================
 // Part 1 — what integrity metadata does the IMAGE itself carry?
