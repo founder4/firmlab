@@ -1337,6 +1337,128 @@ rejections below are rejections.
   a growing playbook of working attacks reads differently against a stated FSTM-9 boundary, and what such a store is
   allowed to emit into a report deserves the care the disclosure lane already got.
 
+## Pass 4 — three arrangements over the whole corpus (2026-08-03)
+
+The corpus was re-ingested (18 images) and all three arrangements run over it at once: **A** the app with every
+provider it can run, **B** the app's own agent (DeepSeek behind the governor), **C** one blind Claude agent per
+image with a shell into a `firmlab-tools` container, no access to FirmLab and no access to this repository —
+`AUTONOMOUS-WORKERS.md` §7 is an answer key and a contestant that reads it is reciting. The rubric was fixed
+before any result was read, and **every finding below was verified against the bytes by the judge, not accepted
+from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
+
+- ⚠ **Big-endian MIPS gets the little-endian emulator in the user-mode rung** — impact **high**, one line.
+  `providers/preflight.ts:19` maps `mips: 'qemu-mipsel-static'`. Measured on the WR940N: `emulate-user` exits 255
+  with `qemu-mipsel-static: …/usr/bin/httpd: Invalid ELF image for this architecture`, while the ledger row for
+  that same binary reads `usr/bin/httpd · mips · 32 · big` and `decompile` in the same run reads `"endian":"big"`.
+  Three things make it worse than a typo: the **correct** mapping already exists at `providers/dynprobe-run.ts:34`
+  (`mips: 'qemu-mips-static'`) under a comment claiming it is *"the same mapping the emulation provider uses"*;
+  `QEMU_SYSTEM_BY_ARCH` ten lines below in the same file was fixed for this exact reason and says so; and
+  `qemu-mips-static` 7.2.22 is installed in the deployed container. `identity.arch` is `"mips"` with
+  `identity.endianness: "unknown"`, so the map keys on a string that cannot express endianness while the ledger
+  holds `big`, measured from the ELF header. Every big-endian MIPS image fails this rung — WR940N, WDR3600,
+  MR3220. Third instance of *"a comment that was true when written"*, second of *"big-endian MIPS given the
+  little-endian emulator"*.
+- ⚠ **An embedded TLS private key inside an ELF is invisible to BOTH secret scanners** — impact **high**.
+  `usr/bin/httpd` in the WR940N holds one `BEGIN RSA PRIVATE KEY` and one `BEGIN CERTIFICATE` in plain PEM
+  (verified by grep on the extracted rootfs; the blind agent additionally proved possession by signing with the
+  key and verifying against the certificate's public half, `CN=tplinkwifi.net`, expired 2019-05-30, in a 2026
+  build). The app answers `certs → {"certCount":0,"reason":"No X.509 certificates found."}` and `secrets → []`.
+  Two independent causes: (a) `providers/certs.ts:186` `ROOTFS_FILE_CAP = 256 KB` skips the 1,948,552-byte binary
+  and **nothing counts or reports the skip**, so a cap reads as an answer — rule 4; (b)
+  `fsaudit.scanContentSecrets` is documented *"Found by content, not filename"* and is, but
+  `collectContentScanFiles` only ever hands it paths passing `isContentScanCandidate`
+  (`providers/fsaudit.ts:629`), an extension whitelist plus extensionless files under `etc/` — so the content
+  scanner never sees the file. `CONTENT_SCAN_BYTES = 512 KB` would truncate it anyway.
+- ⚠ **gitleaks hits are normalised to `static_confirmed` / `high`, and 12 of them on one image are false** —
+  impact **high**. On the BE3600: 7 hits on `dnscrypt-proxy.toml` are the upstream **public** minisign key
+  (`RWQf6LRC…`), four of those on **commented-out lines**; two more are `public-resolvers.md` and
+  `odoh-servers.md`, the published dnscrypt resolver directory; one is `hmac.lua`, a generic HMAC implementation
+  with a parameter named `key`; two more (`sendsms`, `wg_client`) were independently triaged as FPs by this run's
+  blind agent and by the 2026-07-22 pass. For a *Generic API Key* rule the property literally in the bytes is a
+  high-entropy string, not an API key — promoting a heuristic to the bench's strongest proof state is the failure
+  the ladder exists to prevent. Mirror image of the entry above: there the app loses a real key, here it asserts
+  twelve that are not there. **The secret lane is the weakest part of the bench.**
+- ⚠ **The UEFI variable reader is one variable deep, and the test key it was built to find is in the other 56** —
+  impact **high**, and it closes the *"`detectTestKey` is STILL unexercised"* item above. App on
+  `OVMF_VARS_4M.snakeoil.fd`: `variableCount: 1 · variables: ["CustomMode"] · hasPK/hasKEK/hasDb/hasDbx: false ·
+  testKey: null`. Two blind agents, independently, each wrote a 60-byte-record walker for the EDK2 authenticated
+  store and each recovered **57 records, 31 live, zero decode failures**, with completeness proven (exactly 57
+  `AA 55` pairs exist in the 540,672 bytes and all 57 are walked headers). Both measured chipsec at **1 of 57**,
+  across 5 parsers × 4 offsets × 6 fwtypes; `chipsec_util uefi nvram` refuses to run offline. What the 56 hold:
+  a self-signed `O = SnakeOil` CA, RSA-2048, valid 2020→**2120**, byte-identical in PK, KEK **and** db; a `dbx`
+  whose only entry is `e3b0c442…b855`, the SHA-256 of the empty string; and an enrolment order showing the keys
+  went in through the **unauthenticated** path. On the `.ms` sibling: Debian's PK byte-identical to KEK[0], db =
+  Windows Production PCA 2011 + UEFI CA 2011, and **both of those CAs expired in June 2026**. The app's `note`
+  is right and refuses to call the platform Secure-Boot-off — it is the extraction under it that is starved.
+- ⚠ **The in-app agent's judgment nodes are starved of what the app already holds** — impact **high**. On the
+  WR940N the `zero-day` node was handed `taint.sources: []`, `cgiHints: []`, `hasTaintSurface: false` and
+  `priors.vulnerableComponents: []`, and concluded — correctly for that input — zero candidates. At that moment
+  the ledger for the same image held **12 `binary-cmdexec-sink`, 37 `binary-pwnable-candidate` and 3
+  `component-cve`, one of them `CVE-2020-8597` at critical**. The agent is not reasoning badly; it reasons over a
+  scaffold far poorer than the workbench it is embedded in, and its empty answer is then stored beside a ledger
+  that contradicts it.
+- ▢ **The agent's `resolvedClass` is unconstrained free text and unreconciled with W0** — impact medium.
+  Over 18 sessions: 15 right, **1 wrong** (Xiaomi 2023 `rtos` → `linux`, and it was the only `high` confidence
+  among the wrong answers, with step 2 of the same transcript saying *"RTOS blob emulable under Renode"* two rows
+  later and nothing reconciling them), and **2 off-vocabulary** — `embedded-uefi` for `uefi-bios`,
+  `embedded-linux-router` for `embedded-linux` — semantically right, unusable by anything that routes on the
+  class. W0 already computed the class deterministically before the session started. The fix is to hand the node
+  that class and make disagreement a recorded event, not a better prompt.
+- ▢ **Cross-reference credential hashes against the strings the image itself ships** — impact **high**, and it is
+  the cheap 90 % of the W3 "offline cracking" item, which is filed as *"hashcat on `/etc/shadow`"*. Two instances
+  measured, both of which the app reported only as "a weak hash exists":
+  **Tenda CP3** — `/usr/bin/force_upgrade` carries `current_force_upgrade_pwd=Td2N3ww1.0_tenda_force_upgrade` in
+  cleartext and `/etc/shadow` carries `root:E0HKrpNhcmto6`; `crypt("Td2N3ww1","E0")` reproduces it exactly (DES
+  truncates at 8; the 7-char prefix does not match). **The root password of that camera is `Td2N3ww1`.**
+  **WR940N** — `openssl passwd -1 -salt GTN.gpri sohoadmin` reproduces `/etc/shadow` byte for byte.
+  No wordlist and no GPU: the candidate set is the printable strings already in the image, the salts are in hand,
+  and a hit is `static_confirmed` because the password is then a fact about the bytes.
+- ▢ **Kernel modules are counted, never disassembled** — impact **high**; the concrete instance behind
+  `METHODOLOGY-GAPS.md` §4 #5. On the WDR3600 the app produced posture only (`kernel-age` critical, `/dev/kmem`
+  compiled in, *"none of the 84 inspected modules carries an intree tag"*, *"8 of 9 kernel posture questions could
+  not be answered"*); its sole mention of the module in question is a count inside `component-map`. The blind
+  agent went in and found **KCodes NetUSB 1.02.66 on TCP 20005** (port read from `li v0,20005` in `tcpConnector`),
+  with `SoftwareBus_dispatchNormalEPMsgOut` at `0x118f0` doing `addiu a0,v0,17` on a byte-swapped attacker length
+  straight into `__kmalloc` with no range check — `len >= 0xFFFFFFEF` wraps to a 0–16 byte allocation and then
+  `len` bytes are written. Unauthenticated kernel heap corruption under `GFP_ATOMIC`, the CVE-2021-45608 class.
+  It also **declined CVE-2015-3036**, the obvious call for an Apr-2015 NetUSB, because `run_init_sbus` at
+  `0xd338` carries the vendor's `sltiu v0,v0,63` bounds check. 84 modules inspected for a tag, none disassembled.
+- ▢ **UEFI module rule coverage is 11 of 136, and the module that decides the answer is in the other 125** —
+  impact medium. `fwhunt` on `OVMF_CODE_4M.secboot.fd` reports 11 matches of `BRLY-2022-028 (RsbStuffingCheck)`
+  across `CpuHotplugSmm, CpuIo2Smm, FvbServicesSmm, PiSmmCore, PiSmmIpl, SmmAccess2Dxe, SmmAccessPei,
+  SmmControl2Dxe, SmmFaultTolerantWriteDxe, SmmLockBox, VariableSmmRuntimeDxe` — eleven examined, eleven matched,
+  a rate that is a property of which modules got examined. `PiSmmCpuDxeSmm`, the module that performs the RSM on
+  SMI exit, is **not** among them, and the blind agent verified against the rule's own hex pattern that both of
+  its `RSM` instructions are preceded by RSB stuffing — FirmwareBleed mitigated where it counts. The provider's
+  own reason line already states the denominator honestly (*"102 module rule(s) over 11/136 carved module(s)"*);
+  the number it reports is the problem, not the reporting. Do not suppress the rule — raise the coverage.
+- ▢ **The cross-image corpus layer misses the only cross-image fact in this corpus** — impact medium, and it is
+  the advertised differentiator. `Livebox6-4BD4` — a home network name — appears 4× in the Xiaomi 2018 raw NVRAM
+  (with its PSK `4Ef5nARJdaZn` in the clear) and 4× inside the BeanView's compressed JFFS2
+  (`devinfo/devlog/ezvizlog`, `log_BE8876253`). Two blind agents found it independently and neither could link
+  it — only a cross-image view can. `/api/corpus/overview` returns `credentialReuse: []`. Not a bug, a modelling
+  gap: `artifact_occurrence` (1999 rows) links **files by sha1** and the files differ; `credential_occurrence`
+  (8 rows) links **credential hashes** and no provider emits an SSID as one. Worth closing because the fact
+  itself is provenance — these two samples come from the same environment, which bears on using either as
+  evidence.
+- ▢ **Route guards still conflate "extraction never ran" with "extraction ran and found no rootfs"** — impact
+  medium. On both Xiaomi eCos images extraction ran, succeeded and returned its diagnosis (*"A raw LZMA stream of
+  973728 bytes, declaring 2175968 bytes uncompressed, was carved and never unpacked"*), and `sbom`, `gitleaks`,
+  `fsaudit`, `compmap` and `services` then answered `HTTP 400 {"error":"Run extraction first — …"}`. Extraction is
+  not what is missing; a rootfs is, and it is missing as a measured property. The same conflation iteration 17
+  fixed in the web's section index, alive one layer down in the route guards.
+- ✅ **The camera rootfs are not partial carves** (closes the ◐ above). The Tenda's rootfs really is 97 files: the
+  vendor's own `mtdparts` declares nine partitions, five JFFS2, and the application lives in `/opt/app` (57 files,
+  holding the 24 MB `Kylin` binary that IS the web/ONVIF/RTSP server), `/opt/custom` (6) and `/opt/sav` (18). The
+  carve is complete; the entry stayed open for a week because nothing read the partition map.
+- ✅ **The BE3600 gap has closed, and this is the run's biggest result in the app's favour.** §2 records this
+  image as *"0 files extracted, 0 findings"*. Today the app extracts it and produces **686 findings**, including
+  at `critical`/`static_confirmed` `Command injection: tor os.execute — params.enable → uci → shell as root` and
+  `Config-restore bypass: tor reads a uci value into os.execute — uci import/restore sidesteps the RPC validator`,
+  plus the same pair for `wg_client io.popen`. That is both halves of §7.1's headline, produced by the fixed
+  pipeline — and **this run's blind agent missed it entirely**. The sink was confirmed present
+  (`replace_country()` in `usr/lib/oui-httpd/rpc/tor`), so it is an agent miss, not a phantom.
+
 ## Out of scope (by design / hardware)
 - — Weaponized exploitation (ROP / shellcode / PoC) — FirmLab proves reachability + drafts disclosure, no PoCs.
 - — JTAG/SWD/SPI extraction, chip-off, side-channel/glitching, BLE/ZigBee/Wi-Fi/SDR — hardware lab / Phase-6 dongle.

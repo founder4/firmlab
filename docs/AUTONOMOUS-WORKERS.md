@@ -170,6 +170,10 @@ _The full technical substance recovered by the autonomous pass, so a future sess
 re-running the agents. Each entry = what the image actually is, what was found, and the exact app-gap it exposes._
 
 ### 7.1 GL.iNet BE3600 (the crown jewel — app returned 0 files/0 findings)
+- **CORRECTED 2026-08-03 (pass 4): the SoC is Qualcomm IPQ5332, not IPQ5300.** The recovered rootfs carries
+  `ipq5332` 83 times under `etc/` and `usr/lib` and zero occurrences of `ipq5300`, with the board compatible
+  reading `qcom,ipq5332-ap-mi04.1-c2`. Also refined: the empty root shadow field below is real but **closed** —
+  dropbear stays disabled until first-boot setup completes, so it is not a reachable state on a shipped unit.
 - **Identity:** WiFi-7 travel router, **aarch64** (`aarch64_cortex-a53_neon-vfpv4`), SoC **Qualcomm IPQ5300**
   (OpenWrt target `ipq53xx/generic`), **OpenWrt 23.05-SNAPSHOT**, GL.iNet **BE3600** fw **4.9.0**
   (`/etc/glversion`), rootfs built 2026-06-23.
@@ -265,7 +269,19 @@ re-running the agents. Each entry = what the image actually is, what was found, 
 
 - **Other:** UART login `user: cR4p!` / `password: cR4p!`; "CTF PASSWORD" is **runtime-derived per device** from
   the flash unique-ID (not statically recoverable); heap guard magic `0x69CAFE69`; a 32-digit decimal @ flash
-  `0x21CDC` in the trap handler is a **decoy**, not a flag. CTF "HARDWAREHACKINGESCON2026" by David Reguera (Dreg).
+  `0x21CDC` in the trap handler is a **decoy**, not a flag.
+- **CORRECTED 2026-08-03 (pass 4) — the line above is wrong on both counts, and it is the answer key.** The
+  32-digit decimal at flash `0x21CDC` is neither a decoy nor in the trap handler: it is the CTF password,
+  statically present, printed at boot. Adjudicated from the instructions after an independent agent claimed the
+  opposite. There is exactly one `lui`-form reference to its address in the image, at RAM `0x2000096a`:
+  `lui a5,0x20022; addi a4,a5,-0x434` materialises `0x20021BCC` (= flash `0x21CDC` + the second copy-region delta
+  `0x1ffffef0`) as the fifth argument to a `printf` whose format string, at file `0x31f48`, is 1870 bytes long,
+  carries **exactly four** conversion specifiers `%d %s %s %s` matching the four arguments beside it, and whose
+  fourth reads `YOUR CTF PASSWORD TO SUBMIT FLAGS: %s`. The value is
+  **`51827887635080545336455095185274`**. Bound on the check, stated: the scan covered full `lui`+`addi` address
+  materialisation, so "exactly one reference" means one *of that form* — a reference built by `auipc` or reached
+  through a pointer table would not have appeared. That does not weaken the positive: the call that does exist
+  passes those bytes to the password line. CTF "HARDWAREHACKINGESCON2026" by David Reguera (Dreg).
 - **Tooling caveats worth persisting:** Ghidra 12.1.2's **decompiler native is missing for linux_arm64** in this
   container (decompilation fails; disassembly works) — algorithm was reconstructed from the instruction listing +
   re-implementation. radare2's **RISC-V compressed-instruction decoding mis-splits** some 32-bit ops. Renode can
@@ -525,3 +541,99 @@ is **plan adaptivity** — the agent runs workers the class DAG does not name �
 underneath are byte-identical across passes 1 and 3, so any finding one produces the other produces too *once it
 is asked*. Whether the arrangement also wins on the twelve remaining images, and whether an agent left unattended
 degrades over a longer run, are open.
+
+---
+
+## 11. Pass 4 — all three arrangements, all eighteen images (2026-08-03)
+
+§10 closed by naming what it did not establish: *"four images of sixteen, one run each."* This pass answers that,
+and it is the first time the three arrangements have been run **against the same corpus in the same session**.
+
+The corpus had to be rebuilt first: on 2026-07-31 the deployed database lost every image row (`images 0 · jobs 0 ·
+findings 0 · binaries 0 · reachability_prior 0`, `devices` and `capture_sessions` surviving), so all 18 samples
+were re-ingested. Everything below is from that fresh state, which also means the boot series measured in the
+loop's iterations 21–22 is gone and the full-system arm restarts at `n=1`.
+
+### The arrangement
+
+| Arm | What it is | Adapts | Reproducible | Knows what it did not do |
+|---|---|---|---|---|
+| **A** — app, no AI | every provider the deployment can run, over the HTTP API the UI drives: extraction, the raw-image recon, the rootfs stages, the class plan (`opacidad`), the research lane, then the dynamic tier | no | yes | yes, structurally |
+| **B** — the app's own agent | `FIRMLAB_AGENT` session per image, DeepSeek behind the governor (8 steps / 120k tok / $0.50 / 300 s) | yes | partly | yes — every answer carries a proof state it did not choose |
+| **C** — my agents, raw toolchain | one blind Claude agent per image with a shell into a `firmlab-tools` container, the raw `.bin`, and no FirmLab | yes | no | **this is the arm where it must be checked, not assumed** |
+
+**Blindness, and why it is the load-bearing part.** §7 of this document is an *answer key* — it names the BE3600
+Tor RCE, the ESP32 NVS signing key, the RP2350 flags and `root:sohoadmin`. Arm C was forbidden the FirmLab API,
+the MCP server, the `firmlab` container and **this repository**, and worked from the firmware bytes and the
+toolchain only. That is an instruction-level guarantee, not a sandbox, and it is stated as such. The judge reads
+§7; the contestants do not.
+
+**The rubric was fixed before any result was read**: identity, recovery, headline, breadth, **honesty as a
+negative axis**, and cost. And the rule that did the most work: **every claim was adjudicated against the bytes by
+the judge rather than accepted from the arm that made it** — which caught a false claim from arm C, a false
+criticism from the judge, and two errors in §7 itself.
+
+### What each arm produced
+
+Arm A's shape is the structural result. Findings per image, after the deterministic tier:
+
+| | |
+|---|---|
+| rootfs recovered | BE3600 **686** · DVRF 101 · WDR3600 87/93 · IMOU 78 · MR3220 75 · WR940N 72 · Tenda 71 · AliExpress 23 |
+| no rootfs | Xiaomi ×2 **9** · ESP32 9 · BeanView 9 · GE800 8 · OVMF 5–7 · Pico 5 · Asus 5 |
+
+**The app is strong where a Linux rootfs comes out and near-silent where it does not** — and the silence is
+honest, every quiet image carrying its `blocked_by_platform` rows. Arm C produced its headline findings in
+precisely those quiet rows: the ESP32's Ed25519 signing key plus an 11-byte `06 "rooted2026"` ESP-NOW frame that
+bypasses verification fleet-wide; the Pico's six flags and its startup password; the GE800's encryption diagnosis
+earned against a `/dev/urandom` control; the BeanView factory-reset that wiped the wrong partition and left the
+pairing code, the previous owner's SSID and their EZVIZ account live; the Xiaomi 2023's `postfile` path writing
+`uboot.bin` with no signature, *below* the OTA signature check it would replace.
+
+Arm B, all 18 sessions: **$0.077 total, 1,873 s of wall clock**, 3 steps on the 11 images with no rootfs and 7 on
+the 7 with one; triage right on 15, wrong on 1, off-vocabulary on 2; the `zero-day` node produced candidates on
+5 of the 7 images it ran on. Its `synthesis` prose is genuinely the operator summary the product wants. Its
+judgment nodes are starved — see the backlog entry — and that, not the model, is what bounds it.
+
+### The head-to-head, and it does not go one way
+
+- **The app wins the BE3600 outright**, which matters because §2 built the whole worker programme on that image
+  returning nothing. It now extracts it and finds both halves of the Tor `os.execute` root RCE at
+  `critical`/`static_confirmed`, plus the `wg_client` pair, the update-path chain and 432 CVEs. **Arm C missed the
+  Tor injection entirely.**
+- **The app wins on CVE mapping**, structurally: on the WR940N it produced `CVE-2020-8597 — pppd 2.4.3` (the §7.3
+  headline) from a fingerprinted version, while arm C identified `pppd 2.4.3` and never mapped it, having no
+  network for grype's database.
+- **The app wins a plain matter of fact against arm C**: the Xiaomi 2023 report claims `miio_token_seed` appears
+  *"0 times in the firmware"*; it appears twice, at `0x30071` and `0x1f0071`, exactly where the app's
+  `Credential in nvram` findings put it.
+- **The app owns execution.** Its `confirmed_in_emulation` on the WDR3600 — *"sbin/pktlogconf: strcpy executed at
+  runtime, but on constant data rather than the supplied input"* — is a **negative confirmed by running the
+  binary**, a claim no arm-C report earned. Arm C's own strongest reports say so themselves: the Pico agent's
+  closing caveat is *"nothing was executed."*
+- **Arm C wins wherever the answer is inside a file the app's scanners do not open**: the private key in
+  `usr/bin/httpd`, the root passwords recoverable from the image's own strings, the kernel module with the
+  pre-auth heap overflow, and 57 UEFI variables against the app's 1.
+- **Arm C wins on refusing findings**, which is the surprise. It declined `CVE-2015-3036` after reading the
+  vendor's bounds check in the bytes; it rejected `admin:ilovetplink` as a backdoor after reading `.rodata` in
+  offset order (outbound dongle requests); it called a 12,333-key dictionary and a 30-million-candidate
+  passphrase sweep **bounded negatives**; and on the BeanView it opened `private_key.pem`, found
+  `-----BEGIN PUBLIC KEY-----`, and said so — the exact trap that cost this project its one withdrawn backlog
+  entry, on that same camera.
+
+### Two errors in §7, corrected by this pass
+
+Both are marked at the entries themselves. §7.6's *"CTF PASSWORD is runtime-derived per device … a 32-digit
+decimal @ flash `0x21CDC` … is a decoy"* is wrong on both counts, and §7.1's SoC is IPQ**5332**, not IPQ5300.
+An answer key with errors in it silently marks correct answers wrong, and every future session was told to trust
+this one without re-running.
+
+### What this does NOT establish
+
+Eighteen images, **one run per arm**, one operator, and the arms are not equal-cost: arm C spent roughly 15–25
+minutes of a frontier model per image against arm B's 100 seconds and $0.004. Nothing here says an agent is
+cheaper, and nothing says one is reproducible — arm C is explicitly not. The dynamic tier of arm A was still in
+flight when this section was written; its per-binary and full-system results are recorded in the backlog as they
+land. And the single most useful thing the run produced is not a scoreboard: it is that **the two arrangements
+fail in opposite directions**, and the app's failures are concentrated in one lane — secrets — where it both
+misses real keys and asserts twelve that do not exist.
