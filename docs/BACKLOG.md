@@ -1346,7 +1346,8 @@ image with a shell into a `firmlab-tools` container, no access to FirmLab and no
 before any result was read, and **every finding below was verified against the bytes by the judge, not accepted
 from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
 
-- ⚠ **Big-endian MIPS gets the little-endian emulator in the user-mode rung** — impact **high**, one line.
+- ✅ **Big-endian MIPS gets the little-endian emulator in the user-mode rung** (fixed 2026-08-03, `135e16a`,
+  deployed `bde3f2d`) — impact **high**, one line.
   `providers/preflight.ts:19` maps `mips: 'qemu-mipsel-static'`. Measured on the WR940N: `emulate-user` exits 255
   with `qemu-mipsel-static: …/usr/bin/httpd: Invalid ELF image for this architecture`, while the ledger row for
   that same binary reads `usr/bin/httpd · mips · 32 · big` and `decompile` in the same run reads `"endian":"big"`.
@@ -1358,8 +1359,21 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   holds `big`, measured from the ELF header. Every big-endian MIPS image fails this rung — WR940N, WDR3600,
   MR3220. Third instance of *"a comment that was true when written"*, second of *"big-endian MIPS given the
   little-endian emulator"*.
-- ⚠ **The dynamic tier runs and the ledger does not move** — impact **high**, and it is the pass's biggest
-  structural result. Measured over the whole corpus after the full sweep: **1302 findings from 28 distinct
+
+  **Closed**, and the fix needed a `ToolId` that had never been declared (`qemu-mips-static`) even though the
+  binary ships in the container. `dynprobe-run.ts`'s map now IS `QEMU_USER_BY_ARCH` by spread rather than a copy
+  claiming to be one — that divergence is what let the correct mapping sit ten files away for weeks. **Verified on
+  the deployed build against the real WR940N rootfs**: `usr/bin/httpd` no longer exits 255 on an invalid ELF, it
+  *executes* — the run's stderr carries the firmware's own `==>power_led_blink_start<2457> Create
+  power_led_blink_thread Thread Failed` — and the ledger now holds a row for it. **Neither map was pinned by any
+  test**, which is how the second instance survived the fix for the first; five pins added, including one that
+  fails if any arch with a user-mode emulator lacks a system one.
+  _Follow-up surfaced by that same run: the user-mode composer has no sandbox-shortfall separation. The httpd run
+  also printed `cache '/etc/ld.so.cache' is corrupt` and exited on a signal, and the row reads
+  `binary-execution-nonzero` — "the program exited non-zero" — when the more likely reading is that the sandbox
+  came up short. `parseTargetStderr` in `dynprobe.ts` already draws exactly this line and is right there to reuse._
+- ◐ **The dynamic tier runs and the ledger does not move** — impact **high**, and it is the pass's biggest
+  structural result. **The emulation half is wired as of 2026-08-03 (`bde3f2d`); `renode` and `ghidra` are not.** Measured over the whole corpus after the full sweep: **1302 findings from 28 distinct
   sources**, and the seven heaviest rungs contribute **none of them**.
 
   | in the ledger | absent from it entirely |
@@ -1391,10 +1405,35 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   row is a **negative** (`sbin/pktlogconf: strcpy executed at runtime, but on constant data rather than the
   supplied input`) that no static pass could have produced. It is that the wiring stops at the job row. The
   pattern already exists and is used twice: a route `startJob`s a provider and calls `syncFindings` under a stable
-  source. Seven providers never got that half. **Closing this converts work already being done into evidence,
-  which is a better return than any new worker on the §4 list.**
-- ⚠ **`arm64` is missing from `QEMU_SYSTEM_BY_ARCH`, and the block says the deployment lacks a tool it has** —
-  impact **high**, same file and same shape as the entry above. The BE3600 full-system rung returns
+  source. **Closing this converts work already being done into evidence, which is a better return than any new
+  worker on the §4 list.**
+
+  **Correction to the diagnosis above, made while fixing it: it is not seven providers, it is four.** Read from
+  the routes rather than from the census, `decompile` has always called `syncFindings` under `binary:<path>` —
+  those are the 17 `binary` rows in the table — and `fuzz` (`fuzz:<binary>`) and `webprobe` both sync too, but
+  only on a crash and only on a reproduced hit respectively, so their absence from the census is them finding
+  nothing, not them being unwired. The providers that genuinely lacked the second half were `emulate` (all three
+  rungs), `emulate-system`, `renode` and `ghidra`. **A census counts rows; it cannot tell "never wired" from
+  "wired and empty", and this entry read one as the other.**
+
+  **Done (`bde3f2d`): `emulate` and `emulate-system`, both rungs and both lanes.** Two pure composers beside the
+  logic that already decides the verdict — they carry `proofState` verbatim rather than re-deriving it — plus the
+  same rows on the agent's approved-emulation path, so an image's dossier no longer depends on who started the
+  run. Every outcome earns a row, including the blocked and unconfirmed ones, because the ledger going quiet is
+  what let a missing map key read as a platform limit. **Verified on the deployed build against the real corpus,
+  and the census moved for the first time: 1302 → 1305 findings, `confirmed_in_emulation` 1 → 2, and
+  `confirmed_full_system` 0 → 1.** That last row is the WR940N boot — `system-boot-confirmed`, evidence channel
+  `emulated_run`, and its rationale ends in the reproducibility verdict verbatim: *"One boot. It reports what THAT
+  run did … and nothing about what the next one will do"*, with `supportsCausalClaim: false` in the evidence. The
+  BE3600 carries a `system-boot-blocked` row and the WR940N an `emulate:usr/bin/httpd` row; none of the three
+  existed before.
+  **Still open:** `renode` (its result already carries a `proofState` and a `booted` flag — this is the cheapest
+  one left) and `ghidra` (whose output is a decompilation, so what a row would assert needs deciding first).
+  **And the harder half is untouched:** a confirmed boot does not reach back to the 894 leads it might settle.
+  The new rows are evidence that the rung ran; nothing yet upgrades a `needs_runtime_reproduction` finding on the
+  strength of a boot that confirmed. That is the wiring that would actually move the census.
+- ✅ **`arm64` is missing from `QEMU_SYSTEM_BY_ARCH`, and the block says the deployment lacks a tool it has**
+  (fixed 2026-08-03, `135e16a`, deployed `bde3f2d`) — impact **high**, same file and same shape as the entry above. The BE3600 full-system rung returns
   `{"ran":false,"proofState":"blocked_by_platform","reason":"No qemu-system emulator/machine for arch \"arm64\"
   in this deployment"}`. That reason is false about the deployment: `qemu-system-aarch64` **is installed** in the
   container. `providers/preflight.ts:24-32` lists `mipsel`, `mips`, `arm` and no `arm64`, while
@@ -1405,6 +1444,36 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   user mode (still open, above), mips→mipsel in system mode (fixed, and its comment is the warning), and now
   arm64 unmapped. It blocks the rung on the corpus's flagship modern image, and `blocked_by_platform` makes it
   read as an honest platform limit rather than a missing map key.
+
+  **Closed, and it moves the failure rather than enabling a boot — which is the whole point.** The BE3600 now
+  answers `No firmadyne kernel for arch "arm64" in /opt/firmae/kernels (tried nothing — this architecture has no
+  mapping)`, verified on the deployed build: the block names the asset that is actually absent instead of a tool
+  that is present. firmadyne ships no arm64 kernel and none was invented. **The fix forced a second one**:
+  `hasSystemKernel` was `fs.existsSync(FIRMADYNE_KERNELS_DIR)` — a bare directory check, true for every image as
+  soon as the deployment shipped any kernel at all — so mapping arm64 would have made the preflight plan
+  `full-system` and advertise a `confirmed_full_system` ceiling for an architecture that cannot boot here. It is
+  now per-architecture, and the kernel catalogue moved up to `preflight.ts` where that question is answered.
+  _Surfaced by the same run, not fixed: the 973 MB ext2 disk image is assembled BEFORE the kernel gate is checked,
+  so an unbootable architecture pays a full image build to be told the deployment has no kernel for it. The gate
+  is pure and could run first._
+- ▢ **The agent's full-system rung is handed a directory where the route hands a disk image** — impact **high**,
+  found 2026-08-03 while wiring the ledger, not fixed because nothing has ever run it end to end. `routes/emulate.ts`
+  calls `ensureRootfsImage(rootfsPath, arch, handle)` first and passes `image.imagePath` to `runFullSystem`; the
+  approved-emulation path in `agent/session.ts` calls `runFullSystem(arch, rootfsPath, 8080, h, rootfsPath)` —
+  the extracted **directory** as the disk image. That is the *"no code path built the disk image it was handed"*
+  defect, fixed once for the operator route and never carried across, and it sits behind a human-approval gate
+  which is why no sweep has hit it. Both lanes should call one helper.
+- ▢ **The run ledger reads a full-system boot as a user-mode run** — impact medium, one function.
+  `summarizeRun` (`providers/run-summary.ts`) handles kind `emulate` by looking at `ran`/`timedOut`/`exitCode`
+  only, and never at `proofState` — so a boot that returned `confirmed_full_system` renders in the Test bench as
+  `outcome: 'lead'`, headline *"Ran under user-mode emulation, exit ?"*. The three rungs share one job kind, and
+  this summary assumes the cheapest one. The findings rows now say the right thing while the run ledger beside
+  them says the wrong one.
+- ▢ **A missing emulator throws instead of returning a blocked result** — impact medium. `runUserModeEmulation`
+  throws when the arch maps no emulator or the tool is absent, so the job fails and the ledger gets nothing —
+  where every other provider returns `available: false` and earns a `blocked_by_platform` row. The auto-run lane
+  now degrades honestly (its runner reports a spawn failure as `ran: false`, which composes a blocked row), but
+  the operator route still throws. Rule 2 of the proof-state discipline, on the one path that predates it.
 - ⚠ **An embedded TLS private key inside an ELF is invisible to BOTH secret scanners** — impact **high**.
   `usr/bin/httpd` in the WR940N holds one `BEGIN RSA PRIVATE KEY` and one `BEGIN CERTIFICATE` in plain PEM
   (verified by grep on the extracted rootfs; the blind agent additionally proved possession by signing with the

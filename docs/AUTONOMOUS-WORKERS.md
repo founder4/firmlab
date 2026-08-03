@@ -678,3 +678,29 @@ Neither arrangement dominates, and the useful result is the shape of the disagre
 - **Three one-line defects surfaced only by running**, two of them in the same file and the same pair of maps,
   and the second prints a reassuring falsehood (`blocked_by_platform` naming a tool that is installed). No test
   reaches any of them.
+
+### 11.1 What the pass paid for, same day (deploy `bde3f2d`)
+
+Both map defects and the emulation half of the ledger gap are closed, and each fix had to be run to be believed.
+
+- **`mips` → `qemu-mips-static`.** The rung that exited 255 on three images now *executes*: the WR940N's
+  `usr/bin/httpd` runs and prints its own `==>power_led_blink_start<2457> Create power_led_blink_thread Thread
+  Failed`. Neither arch map was pinned by a test, which is how the second instance survived the fix for the
+  first; they are pinned now, and `dynprobe-run.ts`'s copy is the same object rather than a lookalike.
+- **`arm64` → `qemu-system-aarch64`**, which deliberately does *not* enable a boot. The BE3600 now answers
+  *"No firmadyne kernel for arch arm64 … (tried nothing — this architecture has no mapping)"*: the block names the
+  asset that is genuinely absent instead of a tool the container has had all along. Fixing it forced a second
+  correction — `hasSystemKernel` was a check that the kernel *directory* existed, so an arm64 image would have
+  been promised a `confirmed_full_system` ceiling it cannot reach.
+- **The ledger moves.** `emulate` and `emulate-system` compose findings on every outcome, carrying the proof state
+  the runner already decided rather than re-deriving it. Measured over the same 18 images: **1302 → 1305
+  findings, and `confirmed_full_system` went from 0 rows to 1** — the WR940N boot, whose rationale ends in its own
+  reproducibility verdict (*"One boot … nothing about what the next one will do"*, `supportsCausalClaim: false`).
+  The corpus now holds **three** rows an execution paid for rather than one.
+
+Two things this does **not** close, and they are the larger half. The 894 leads are untouched: a boot that
+confirms still does not reach back to upgrade the `needs_runtime_reproduction` findings it might settle, so the
+census barely moved even though the wiring works. And `renode` and `ghidra` still compose nothing. The correction
+that matters for anyone reading §11's table: **it was never seven unwired providers, it was four** — `decompile`,
+`fuzz` and `webprobe` were wired all along and simply had nothing to report, which a census of rows cannot
+distinguish from silence.
