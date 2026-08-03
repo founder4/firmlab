@@ -20,6 +20,7 @@ import { resolveInsideRootfs } from '../providers/decompile.js';
 import { runDynProbe } from '../providers/dynprobe-run.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
+import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import {
   MAX_BUDGET_SECONDS,
   MIN_BUDGET_SECONDS,
@@ -36,10 +37,13 @@ function latestExtract(imageId: string): ExtractResult | null {
   return done?.resultJson ? (JSON.parse(done.resultJson) as ExtractResult) : null;
 }
 
-/** The most recent successful extraction's rootfs, if any — the probe needs a real file to load. */
-function latestRootfs(imageId: string): string | null {
-  return latestExtract(imageId)?.rootfsPath ?? null;
-}
+/**
+ * Both probes need a rootfs, and both refuse through `providers/rootfs-gate.ts` rather than a local null check:
+ * "no extraction has run" and "extraction ran and this image has no rootfs" are different answers, and an operator
+ * told to run a stage that already ran goes in a circle.
+ */
+const SYMREACH_STAGE: RootfsStage = { stage: 'symreach', needs: 'symbolic reachability' };
+const DYNPROBE_STAGE: RootfsStage = { stage: 'dynprobe', needs: 'dynamic reproduction' };
 
 /**
  * The architecture to emulate a ROOTFS BINARY with.
@@ -61,12 +65,9 @@ export async function symreachRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
 
-    const rootfsPath = latestRootfs(id);
-    if (!rootfsPath) {
-      return reply
-        .status(400)
-        .send({ error: 'Run extraction first — symbolic reachability needs an extracted rootfs' });
-    }
+    const gate = gateOnRootfs(SYMREACH_STAGE, listJobs(id));
+    if (!gate.ok) return reply.status(gate.status).send(rootfsGateBody(gate));
+    const rootfsPath = gate.rootfsPath;
 
     const body = (req.body ?? {}) as { binary?: string; sinks?: unknown; budgetSeconds?: unknown };
     const binary = typeof body.binary === 'string' ? body.binary.trim() : '';
@@ -131,10 +132,9 @@ export async function symreachRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const row = getImage(id);
     if (!row) return reply.status(404).send({ error: 'Image not found' });
-    const rootfsPath = latestRootfs(id);
-    if (!rootfsPath) {
-      return reply.status(400).send({ error: 'Run extraction first — dynamic reproduction needs an extracted rootfs' });
-    }
+    const gate = gateOnRootfs(DYNPROBE_STAGE, listJobs(id));
+    if (!gate.ok) return reply.status(gate.status).send(rootfsGateBody(gate));
+    const rootfsPath = gate.rootfsPath;
     const body = (req.body ?? {}) as {
       binary?: string;
       sink?: string;

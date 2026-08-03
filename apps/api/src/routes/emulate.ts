@@ -21,9 +21,16 @@ import {
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
 import { computeRuntimeCapabilities } from '../providers/preflight.js';
+import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { ensureRootfsImage } from '../providers/rootfs-image.js';
 import { getImage, listJobs, updateBinaryEmulationStatus } from '../store.js';
 import { rootfsArch } from './symreach.js';
+
+// Both emulation rungs need a rootfs, and both used to refuse with "Run extraction first" whatever the ledger
+// actually said — the same conflation `rootfs-gate.ts` was written for. The two stages are named separately so the
+// refusal says which rung could not run.
+const USER_STAGE: RootfsStage = { stage: 'emulate', needs: 'user-mode emulation' };
+const SYSTEM_STAGE: RootfsStage = { stage: 'emulate-system', needs: 'system emulation' };
 
 /** Find the most recent successful extraction result for an image, if any. */
 function latestExtract(imageId: string): ExtractResult | null {
@@ -103,16 +110,15 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
     if (!identity) return reply.status(404).send({ error: 'No analysis for this image' });
 
     const body = (req.body ?? {}) as { binary?: string; args?: string[] };
+    const gate = gateOnRootfs(USER_STAGE, listJobs(id));
+    if (!gate.ok) return reply.status(gate.status).send(rootfsGateBody(gate));
     const extract = latestExtract(id);
-    if (!extract?.rootfsPath) {
-      return reply.status(400).send({ error: 'Run extraction first — user-mode emulation needs an extracted rootfs' });
-    }
-    const target = body.binary ?? extract.suggestedBinary;
+    const target = body.binary ?? extract?.suggestedBinary;
     if (!target) {
       return reply.status(400).send({ error: 'No target binary specified and none could be suggested' });
     }
 
-    const rootfsPath = extract.rootfsPath;
+    const rootfsPath = gate.rootfsPath;
     const args = Array.isArray(body.args) ? body.args.map(String) : [];
     // The MEASURED architecture, like the deeper rungs below. This rung was still consulting `identity.arch` —
     // a guess from the raw image bytes, `unknown` on plenty of real images — while extraction had already read
@@ -137,11 +143,10 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const identity = identityOf(id);
     if (!identity) return reply.status(404).send({ error: 'No analysis for this image' });
+    const sysGate = gateOnRootfs(SYSTEM_STAGE, listJobs(id));
+    if (!sysGate.ok) return reply.status(sysGate.status).send(rootfsGateBody(sysGate));
+    const rootfsPath = sysGate.rootfsPath;
     const extract = latestExtract(id);
-    if (!extract?.rootfsPath) {
-      return reply.status(400).send({ error: 'Run extraction first — system emulation needs an extracted rootfs' });
-    }
-    const rootfsPath = extract.rootfsPath;
     const body = (req.body ?? {}) as { rung?: string; binary?: string };
     // Prefer the MEASURED architecture over the guessed one. `identity.arch` is inferred from the raw image bytes
     // and is `unknown` for plenty of real images (DVRF among them) while extraction has already read it out of the
@@ -200,7 +205,7 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(202).send({ jobId });
     }
 
-    const service = body.binary ?? extract.suggestedBinary;
+    const service = body.binary ?? extract?.suggestedBinary;
     if (!service) return reply.status(400).send({ error: 'No target service specified and none could be suggested' });
     const jobId = startJob(id, 'emulate', { rung: 'chroot-service', binary: service }, (handle) =>
       runChrootService(arch, rootfsPath, service, handle).then((r) =>

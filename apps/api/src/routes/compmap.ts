@@ -3,27 +3,27 @@
  * over the latest extracted rootfs, as a background job. radare2's rabin2 is an opt-in layer — with it absent
  * the job returns available:false honestly. The primary output is the graph; the one optional finding is an
  * INFO/static_confirmed inventory.
+ *
+ * The rootfs precondition goes through `providers/rootfs-gate.ts`: "no extraction has run" and "extraction ran and
+ * this image has no rootfs" are different answers with different next moves, and the second must not be reported as
+ * an instruction to repeat the first.
  */
 import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
 import { runComponentMap } from '../providers/compmap.js';
-import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
+import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { getImage, listJobs } from '../store.js';
 
-function latestRootfs(imageId: string): string | null {
-  const job = listJobs(imageId).find((j) => j.kind === 'extract' && j.status === 'done' && j.resultJson);
-  return job?.resultJson ? ((JSON.parse(job.resultJson) as ExtractResult).rootfsPath ?? null) : null;
-}
+const STAGE: RootfsStage = { stage: 'compmap', needs: 'the component map' };
 
 export async function compmapRoutes(app: FastifyInstance): Promise<void> {
   app.post('/images/:id/compmap', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
-    const rootfs = latestRootfs(id);
-    if (!rootfs) {
-      return reply.status(400).send({ error: 'Run extraction first — the component map needs an extracted rootfs' });
-    }
+    const gate = gateOnRootfs(STAGE, listJobs(id));
+    if (!gate.ok) return reply.status(gate.status).send(rootfsGateBody(gate));
+    const rootfs = gate.rootfsPath;
     const jobId = startJob(id, 'compmap', {}, async () => {
       const result = await runComponentMap(rootfs);
       syncFindings(id, 'compmap', result.findings);

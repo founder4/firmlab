@@ -4,7 +4,8 @@
  *
  * It needs a rootfs, and the refusal says so rather than returning an empty run: no extraction is a MISSING
  * PREREQUISITE, not a credential store that came back unbreakable, and the two must never reach the caller looking
- * the same. Everything else the provider can fail at — openssl absent, a scheme it cannot compute, a candidate set
+ * the same. `providers/rootfs-gate.ts` splits that prerequisite further, because "extraction ran and this image has
+ * no rootfs" is a measurement and not an instruction. Everything else the provider can fail at — openssl absent, a scheme it cannot compute, a candidate set
  * that dropped nothing versus one truncated by the cap — comes back as a completed job carrying its own
  * `blocked_by_platform` findings, because those are answers about coverage and belong in the ledger.
  *
@@ -15,19 +16,18 @@
 import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
 import { type CredMatchResult, runCredMatch } from '../providers/credmatch.js';
-import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
+import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { getImage, listJobs } from '../store.js';
 
 /** The source string both this route and any future autonomous stage must use — one ledger namespace, not two. */
 export const CREDMATCH_SOURCE = 'credmatch';
 
-/** Find the most recent successful extraction's rootfs path for an image, if any. */
-function latestRootfs(imageId: string): string | null {
-  const done = listJobs(imageId).find((j) => j.kind === 'extract' && j.status === 'done' && j.resultJson);
-  if (!done?.resultJson) return null;
-  return (JSON.parse(done.resultJson) as ExtractResult).rootfsPath;
-}
+const STAGE: RootfsStage = {
+  stage: 'credmatch',
+  needs: 'the credential cross-reference',
+  note: 'It reads both the stored hashes and the candidate strings out of that rootfs. Nothing was tested, which is not the same as nothing being found.',
+};
 
 function latestCredMatch(imageId: string): CredMatchResult | null {
   const done = listJobs(imageId).find((j) => j.kind === 'credmatch' && j.status === 'done' && j.resultJson);
@@ -39,13 +39,9 @@ export async function credmatchRoutes(app: FastifyInstance): Promise<void> {
   app.post('/images/:id/credmatch', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
-    const rootfsPath = latestRootfs(id);
-    if (!rootfsPath) {
-      return reply.status(400).send({
-        error:
-          'Run extraction first — the credential cross-reference needs an extracted rootfs to read both the stored hashes and the candidate strings. Nothing was tested, which is not the same as nothing being found.',
-      });
-    }
+    const gate = gateOnRootfs(STAGE, listJobs(id));
+    if (!gate.ok) return reply.status(gate.status).send(rootfsGateBody(gate));
+    const rootfsPath = gate.rootfsPath;
     const jobId = startJob(id, 'credmatch', {}, (handle) =>
       runCredMatch(rootfsPath, handle).then((result) => {
         // Synced whatever the outcome: a run that could not compute a scheme, or never reached a hash at all,

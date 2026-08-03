@@ -151,6 +151,7 @@ export const compmap: Messages['compmap'] = {
   providerLabel: 'Proveedor:',
   build: 'Construir mapa de componentes',
   rebuild: 'Reconstruir mapa',
-  needsRootfs: 'Ejecuta primero la extracción — el mapa se construye recorriendo el rootfs',
+  needsRootfs:
+    'La extracción ya corrió y no recuperó ningún rootfs — el mapa se construye recorriendo uno, así que no hay nada que recorrer',
   jobFailed: 'El trabajo del mapa de componentes falló.',
 };

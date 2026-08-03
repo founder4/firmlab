@@ -1,22 +1,20 @@
 /**
  * Deep secret-scan intake. POST runs gitleaks over the latest extracted rootfs as a job; GET returns the most
  * recent completed result. Like SBOM and emulation, this depends on a prior successful extraction for a rootfs.
+ *
+ * The precondition is checked by `providers/rootfs-gate.ts` — see that module for why a null rootfs is four
+ * different answers and why only one of them is "run extraction first".
  */
 import type { FastifyInstance } from 'fastify';
 import { recordCredentials } from '../corpus.js';
 import { classifyGitleaksHit } from '../findings-normalize.js';
 import { normalizeGitleaks, syncFindings } from '../findings.js';
-import type { ExtractResult } from '../providers/extract.js';
 import { type GitleaksResult, runGitleaks } from '../providers/gitleaks.js';
 import { startJob } from '../providers/jobs.js';
+import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { getImage, listJobs } from '../store.js';
 
-/** Find the most recent successful extraction's rootfs path for an image, if any. */
-function latestRootfs(imageId: string): string | null {
-  const done = listJobs(imageId).find((j) => j.kind === 'extract' && j.status === 'done' && j.resultJson);
-  if (!done?.resultJson) return null;
-  return (JSON.parse(done.resultJson) as ExtractResult).rootfsPath;
-}
+const STAGE: RootfsStage = { stage: 'gitleaks', needs: 'the deep secret scan' };
 
 function latestGitleaks(imageId: string): GitleaksResult | null {
   const done = listJobs(imageId).find((j) => j.kind === 'gitleaks' && j.status === 'done' && j.resultJson);
@@ -28,10 +26,9 @@ export async function gitleaksRoutes(app: FastifyInstance): Promise<void> {
   app.post('/images/:id/gitleaks', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
-    const rootfsPath = latestRootfs(id);
-    if (!rootfsPath) {
-      return reply.status(400).send({ error: 'Run extraction first — the deep scan needs an extracted rootfs' });
-    }
+    const gate = gateOnRootfs(STAGE, listJobs(id));
+    if (!gate.ok) return reply.status(gate.status).send(rootfsGateBody(gate));
+    const rootfsPath = gate.rootfsPath;
     const jobId = startJob(id, 'gitleaks', {}, (handle) =>
       runGitleaks(rootfsPath, handle).then((r) => {
         syncFindings(id, 'gitleaks', normalizeGitleaks(r));

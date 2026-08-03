@@ -2,18 +2,18 @@
  * AFL++ fuzzing routes (Phase 4 debt #1) — coverage-guided fuzzing of one rootfs binary under the isolation
  * sandbox. AFL++ is an opt-in layer (not baked into the shipped image, like Ghidra), so with it absent the job
  * returns available:false honestly. A reproduced crash is real dynamic evidence.
+ *
+ * The rootfs precondition goes through `providers/rootfs-gate.ts`, so "no extraction has run" and "extraction ran
+ * and this image has no rootfs" arrive as the different answers they are.
  */
 import type { FastifyInstance } from 'fastify';
 import { type FindingDraft, syncFindings } from '../findings.js';
-import type { ExtractResult } from '../providers/extract.js';
 import { detectFuzzing, runFuzz } from '../providers/fuzz.js';
 import { startJob } from '../providers/jobs.js';
+import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { getImage, listJobs } from '../store.js';
 
-function latestRootfs(imageId: string): string | null {
-  const job = listJobs(imageId).find((j) => j.kind === 'extract' && j.status === 'done' && j.resultJson);
-  return job?.resultJson ? ((JSON.parse(job.resultJson) as ExtractResult).rootfsPath ?? null) : null;
-}
+const STAGE: RootfsStage = { stage: 'fuzz', needs: 'fuzzing' };
 
 export async function fuzzRoutes(app: FastifyInstance): Promise<void> {
   app.get('/fuzz/status', async () => ({ available: await detectFuzzing() }));
@@ -21,8 +21,9 @@ export async function fuzzRoutes(app: FastifyInstance): Promise<void> {
   app.post('/images/:id/fuzz', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
-    const rootfs = latestRootfs(id);
-    if (!rootfs) return reply.status(400).send({ error: 'Run extraction first — fuzzing needs an extracted rootfs' });
+    const gate = gateOnRootfs(STAGE, listJobs(id));
+    if (!gate.ok) return reply.status(gate.status).send(rootfsGateBody(gate));
+    const rootfs = gate.rootfsPath;
     const body = (req.body ?? {}) as { binary?: string; seconds?: number; harness?: string };
     if (!body.binary) return reply.status(400).send({ error: 'No target binary specified' });
     const seconds = Math.min(600, Math.max(10, Number(body.seconds ?? 60)));

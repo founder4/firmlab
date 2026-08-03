@@ -160,6 +160,11 @@ export const compmap = {
   providerLabel: 'Provider:',
   build: 'Build component map',
   rebuild: 'Rebuild map',
-  needsRootfs: 'Run extraction first — the map is built by walking the rootfs',
+  // NOT "run extraction first": this button is disabled precisely BECAUSE extraction already ran and recovered no
+  // rootfs, so telling an operator to run it sends them in a circle. Same conflation the route guards carried
+  // until 2026-08-03, surviving one layer up in a tooltip. The panel body above already quotes extraction's own
+  // verdict; this only has to stop contradicting it.
+  needsRootfs:
+    'Extraction already ran and recovered no rootfs — the map is built by walking one, so there is nothing to walk',
   jobFailed: 'The component map job failed.',
 };

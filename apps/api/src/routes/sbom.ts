@@ -1,21 +1,20 @@
 /**
  * SBOM + CVE intake. POST runs syft (+grype) over the latest extracted rootfs as a job; GET returns the most
  * recent completed SBOM result. Like emulation, this depends on a prior successful extraction for a rootfs.
+ *
+ * The precondition is checked by `providers/rootfs-gate.ts`, not by a local `rootfsPath === null` test: a null
+ * rootfs covered "extraction never ran", "it is running", "it failed" and "it ran and this image has none", and
+ * both Xiaomi eCos images were being told to run an extraction that had already run and already explained itself.
  */
 import type { FastifyInstance } from 'fastify';
 import { recordComponents } from '../corpus.js';
 import { normalizeSbom, syncFindings } from '../findings.js';
-import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
+import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { type SbomResult, runSbom } from '../providers/sbom.js';
 import { getImage, listJobs } from '../store.js';
 
-/** Find the most recent successful extraction result for an image, if any. */
-function latestRootfs(imageId: string): string | null {
-  const done = listJobs(imageId).find((j) => j.kind === 'extract' && j.status === 'done' && j.resultJson);
-  if (!done?.resultJson) return null;
-  return (JSON.parse(done.resultJson) as ExtractResult).rootfsPath;
-}
+const STAGE: RootfsStage = { stage: 'sbom', needs: 'SBOM scanning' };
 
 function latestSbom(imageId: string): SbomResult | null {
   const done = listJobs(imageId).find((j) => j.kind === 'sbom' && j.status === 'done' && j.resultJson);
@@ -27,10 +26,9 @@ export async function sbomRoutes(app: FastifyInstance): Promise<void> {
   app.post('/images/:id/sbom', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
-    const rootfsPath = latestRootfs(id);
-    if (!rootfsPath) {
-      return reply.status(400).send({ error: 'Run extraction first — SBOM scanning needs an extracted rootfs' });
-    }
+    const gate = gateOnRootfs(STAGE, listJobs(id));
+    if (!gate.ok) return reply.status(gate.status).send(rootfsGateBody(gate));
+    const rootfsPath = gate.rootfsPath;
     const jobId = startJob(id, 'sbom', {}, (handle) =>
       runSbom(id, rootfsPath, handle).then((r) => {
         syncFindings(id, 'sbom', normalizeSbom(r));
