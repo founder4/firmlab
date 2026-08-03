@@ -25,15 +25,23 @@ import {
   parseGdbOutput,
 } from './dynprobe.js';
 import type { JobHandle } from './jobs.js';
+import { QEMU_USER_BY_ARCH } from './preflight.js';
 
 const execFileAsync = promisify(execFile);
 
-/** qemu-user binary per guest architecture — the same mapping the emulation provider uses. */
+/**
+ * qemu-user binary per guest architecture — now literally the emulation provider's map, rather than a copy that
+ * claimed to be one.
+ *
+ * The comment above this declaration used to read "the same mapping the emulation provider uses" and was false:
+ * this map had `mips: 'qemu-mips-static'` (correct) while `QEMU_USER_BY_ARCH` had `qemu-mipsel-static`, so the
+ * dynamic probe ran big-endian binaries and the emulation rung could not, and nothing compared the two. One
+ * source now, plus the two guest arches qemu-user-static ships that are not `ToolId`s: this runner gates on
+ * gdb-multiarch rather than on the emulator, so those names were never declared as tools, and declaring them
+ * here would silently widen which architectures the preflight considers emulable.
+ */
 const QEMU_BY_ARCH: Partial<Record<Architecture, string>> = {
-  mipsel: 'qemu-mipsel-static',
-  mips: 'qemu-mips-static',
-  arm: 'qemu-arm-static',
-  arm64: 'qemu-aarch64-static',
+  ...QEMU_USER_BY_ARCH,
   x86: 'qemu-i386-static',
   x86_64: 'qemu-x86_64-static',
 };

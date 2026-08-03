@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { type PreflightInputs, chooseRuntimeStrategy } from './preflight.js';
+import {
+  FIRMADYNE_KERNEL_NAMES,
+  type PreflightInputs,
+  QEMU_MACHINE_BY_ARCH,
+  QEMU_SYSTEM_BY_ARCH,
+  QEMU_USER_BY_ARCH,
+  chooseRuntimeStrategy,
+  firmadyneKernelFor,
+} from './preflight.js';
 
 const base: PreflightInputs = {
   arch: 'mipsel',
@@ -102,5 +110,51 @@ describe('chooseRuntimeStrategy', () => {
     const out = chooseRuntimeStrategy({ ...base, firmwareClass: 'openwrt-fit-ubi', arch: 'arm64' });
     expect(out.strategy).toBe('qemu-user');
     expect(out.proofCeiling).toBe('confirmed_in_emulation');
+  });
+
+  it('an emulator without a kernel for that arch does not promise a full-system proof', () => {
+    // The pair (emulator installed, kernels directory present) used to be enough, because `hasSystemKernel` was a
+    // bare directory check. Mapping arm64 to qemu-system-aarch64 made that reachable: firmadyne ships no arm64
+    // kernel, so this plan would have advertised a `confirmed_full_system` ceiling the runner then blocked on.
+    const out = chooseRuntimeStrategy({
+      ...base,
+      arch: 'arm64',
+      systemEmulatorAvailable: true,
+      hasSystemKernel: false,
+    });
+    expect(out.strategy).not.toBe('full-system');
+    expect(out.proofCeiling).not.toBe('confirmed_full_system');
+  });
+});
+
+describe('the architecture → emulator maps', () => {
+  it('big-endian MIPS gets a big-endian emulator in BOTH modes, never the mipsel one', () => {
+    // Three instances of this one shape have been paid for in this file: mips→mipsel in system mode (fixed, and
+    // its comment is the warning), mips→mipsel in user mode, and arm64 unmapped. Neither map was pinned by any
+    // test, which is how the second survived the fix for the first.
+    expect(QEMU_USER_BY_ARCH.mips).toBe('qemu-mips-static');
+    expect(QEMU_SYSTEM_BY_ARCH.mips).toBe('qemu-system-mips');
+    for (const emulator of [QEMU_USER_BY_ARCH.mips, QEMU_SYSTEM_BY_ARCH.mips]) {
+      expect(emulator).not.toContain('mipsel');
+    }
+  });
+
+  it('little-endian MIPS keeps the little-endian emulator', () => {
+    expect(QEMU_USER_BY_ARCH.mipsel).toBe('qemu-mipsel-static');
+    expect(QEMU_SYSTEM_BY_ARCH.mipsel).toBe('qemu-system-mipsel');
+  });
+
+  it('every architecture with a user-mode emulator also has a system one, so a block names a real limit', () => {
+    // arm64 had a user-mode emulator, a machine (`virt`) and no system emulator, so the full-system rung refused
+    // it with "no emulator in this deployment" about a deployment that had shipped qemu-system-aarch64 all along.
+    for (const arch of Object.keys(QEMU_USER_BY_ARCH) as (keyof typeof QEMU_USER_BY_ARCH)[]) {
+      expect(QEMU_SYSTEM_BY_ARCH[arch]).toBeDefined();
+      expect(QEMU_MACHINE_BY_ARCH[arch]).toBeDefined();
+    }
+  });
+
+  it('an architecture firmadyne ships no kernel for is absent, not guessed', () => {
+    expect(FIRMADYNE_KERNEL_NAMES.arm64).toBeUndefined();
+    expect(firmadyneKernelFor('arm64', '/nonexistent')).toBeNull();
   });
 });

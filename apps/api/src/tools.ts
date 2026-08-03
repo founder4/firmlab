@@ -74,10 +74,12 @@ export type ToolId =
   | 'grype'
   | 'gitleaks'
   | 'qemu-mipsel-static'
+  | 'qemu-mips-static'
   | 'qemu-arm-static'
   | 'qemu-aarch64-static'
   | 'qemu-system-mipsel'
   | 'qemu-system-arm'
+  | 'qemu-system-aarch64'
   | 'renode'
   | 'chipsec'
   | 'angr'
@@ -126,6 +128,17 @@ const TOOLS: readonly ToolSpec[] = [
   { id: 'grype', bin: 'grype', probe: ['version'], group: 'sbom' },
   { id: 'gitleaks', bin: 'gitleaks', probe: ['version'], group: 'secrets' },
   { id: 'qemu-mipsel-static', bin: 'qemu-mipsel-static', probe: ['-version'], group: 'emulate' },
+  {
+    // The user-mode twin of the qemu-system-mips entry below, and it is here for the same reason: handed a
+    // big-endian binary, qemu-mipsel-static exits 255 with "Invalid ELF image for this architecture" before
+    // executing an instruction. The `mips` arch is only ever produced from an ELF whose EI_DATA byte says
+    // big-endian (structure.ts demotes the little-endian case to `mipsel`), so this is the emulator every
+    // `mips` image needs, and it was never declared while the map pointed at the little-endian one.
+    id: 'qemu-mips-static',
+    bin: 'qemu-mips-static',
+    probe: ['-version'],
+    group: 'emulate',
+  },
   { id: 'qemu-arm-static', bin: 'qemu-arm-static', probe: ['-version'], group: 'emulate' },
   { id: 'qemu-aarch64-static', bin: 'qemu-aarch64-static', probe: ['-version'], group: 'emulate' },
   {
@@ -138,6 +151,10 @@ const TOOLS: readonly ToolSpec[] = [
   },
   { id: 'qemu-system-mipsel', bin: 'qemu-system-mipsel', probe: ['-version'], group: 'emulate' },
   { id: 'qemu-system-arm', bin: 'qemu-system-arm', probe: ['-version'], group: 'emulate' },
+  // Shipped by the same Debian qemu-system-arm package as the 32-bit emulator above, and installed in the
+  // deployed image the whole time — the arm64 full-system rung was refused with "no emulator in this
+  // deployment" only because no map key named it.
+  { id: 'qemu-system-aarch64', bin: 'qemu-system-aarch64', probe: ['-version'], group: 'emulate' },
   {
     // e2fsprogs' mke2fs, used with `-d` to populate a filesystem from a directory WITHOUT root — which is the
     // only reason the full-system rung can assemble its disk image inside an unprivileged container.

@@ -13,10 +13,20 @@ import type { Architecture, FirmwareClass, ProofState } from '@firmlab/core';
 import { type ToolId, detectTools } from '../tools.js';
 import type { ExtractResult } from './extract.js';
 
-/** Map an architecture to its qemu-user-static binary. */
+/**
+ * Map an architecture to its qemu-user-static binary.
+ *
+ * `mips` means BIG-endian here — `structure.ts` demotes a little-endian MIPS ELF to `mipsel` when it decodes the
+ * EI_DATA byte, so a `mips` value can only ever have come from a big-endian header (or from a uImage arch code,
+ * which carries no endianness at all and is never little-endian-specific either). This entry pointed at
+ * `qemu-mipsel-static` until 2026-08-03, which is the little-endian emulator: it exits 255 with "Invalid ELF
+ * image for this architecture" without executing an instruction, and it destroyed the user-mode rung on every
+ * big-endian image in the corpus — WR940N, WDR3600, MR3220 — while the ledger row for the very same binary read
+ * `mips · 32 · big`, measured from the ELF header.
+ */
 export const QEMU_USER_BY_ARCH: Partial<Record<Architecture, ToolId>> = {
   mipsel: 'qemu-mipsel-static',
-  mips: 'qemu-mipsel-static',
+  mips: 'qemu-mips-static',
   arm: 'qemu-arm-static',
   arm64: 'qemu-aarch64-static',
 };
@@ -29,6 +39,12 @@ export const QEMU_SYSTEM_BY_ARCH: Partial<Record<Architecture, ToolId>> = {
   // qemu-system-mips was installed the whole time.
   mips: 'qemu-system-mips',
   arm: 'qemu-system-arm',
+  // arm64 was absent until 2026-08-03, and its absence did not read as an absence: the rung answered
+  // `blocked_by_platform` — "No qemu-system emulator/machine for arch arm64 in this deployment" — about a
+  // deployment that has shipped qemu-system-aarch64 all along, on the corpus's flagship modern image. The
+  // machine was already mapped (`arm64: 'virt'` below); only the emulator key was missing. A block that names
+  // the wrong cause is worse than no block, because it closes the question.
+  arm64: 'qemu-system-aarch64',
 };
 
 /** A sensible default qemu-system `-M` machine per arch for the guided full-system boot command. */
@@ -42,6 +58,35 @@ export const QEMU_MACHINE_BY_ARCH: Partial<Record<Architecture, string>> = {
 /** Where the on-image emulation assets live (populated by Dockerfile.firmware, Phase-0 task 4). */
 export const LIBNVRAM_DIR = '/opt/libnvram';
 export const FIRMADYNE_KERNELS_DIR = '/opt/firmae/kernels';
+
+/**
+ * firmadyne's kernel filenames, which are NOT the architecture names this codebase uses.
+ *
+ * The path was built as `vmlinux.${arch}.4`, and that is right for exactly one architecture. firmadyne ships
+ * `vmlinux.mipseb.4` for big-endian MIPS and `vmlinux.armel` (no `.4`) for ARM, so a TP-Link WR940N — plain
+ * `mips` — was refused with "No firmadyne kernel at …/vmlinux.mips.4" while the kernel it needed sat in the same
+ * directory under a different name. `mipsel` matched by coincidence, which is why this went unnoticed.
+ *
+ * Candidates are ordered most-specific first and every one is a real filename observed in the deployed image.
+ * It lives here, beside the emulator maps and upstream of the runner, because the preflight has to answer
+ * "can this deployment boot THIS architecture?" and a kernel is half of that answer — see `hasSystemKernel`.
+ * An architecture firmadyne ships nothing for is absent rather than guessed: `arm64` has no entry, and the
+ * runner's block then names the missing kernel instead of inventing a filename.
+ */
+export const FIRMADYNE_KERNEL_NAMES: Partial<Record<Architecture, string[]>> = {
+  mipsel: ['vmlinux.mipsel.4', 'vmlinux.mipsel'],
+  mips: ['vmlinux.mipseb.4', 'vmlinux.mipseb'],
+  arm: ['vmlinux.armel', 'zImage.armel'],
+};
+
+/** The first firmadyne kernel that exists for an architecture, or null when this deployment ships none. */
+export function firmadyneKernelFor(arch: Architecture, dir: string = FIRMADYNE_KERNELS_DIR): string | null {
+  for (const name of FIRMADYNE_KERNEL_NAMES[arch] ?? []) {
+    const p = `${dir}/${name}`;
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
 
 /** The dynamic-execution strategy the deployment can run for this image, cheapest-viable first. */
 export type RuntimeStrategy =
@@ -218,7 +263,13 @@ export async function computeRuntimeCapabilities(imageId: string): Promise<Runti
     renodeAvailable: available('renode'),
     chipsecAvailable: available('chipsec'),
     hasNvramShim: userEmulator ? fs.existsSync(`${LIBNVRAM_DIR}/libnvram-${arch}.so`) : false,
-    hasSystemKernel: fs.existsSync(FIRMADYNE_KERNELS_DIR),
+    // Per ARCHITECTURE, not per directory. This used to be `fs.existsSync(FIRMADYNE_KERNELS_DIR)` — true for
+    // every image the moment the deployment shipped any kernel at all — which was harmless only for as long as
+    // no unbootable architecture had an emulator. Mapping arm64 to qemu-system-aarch64 ended that: the pair
+    // (emulator available, kernels directory present) would have planned `full-system` and promised a
+    // `confirmed_full_system` ceiling for an architecture firmadyne ships no kernel for, and the runner would
+    // then have blocked. A ceiling is a claim about what this deployment can prove; it has to be measured.
+    hasSystemKernel: firmadyneKernelFor(arch) !== null,
   };
 
   const { strategy, proofCeiling, reason } = chooseRuntimeStrategy(inputs);
