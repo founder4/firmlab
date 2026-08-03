@@ -1358,6 +1358,18 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   holds `big`, measured from the ELF header. Every big-endian MIPS image fails this rung — WR940N, WDR3600,
   MR3220. Third instance of *"a comment that was true when written"*, second of *"big-endian MIPS given the
   little-endian emulator"*.
+- ⚠ **`arm64` is missing from `QEMU_SYSTEM_BY_ARCH`, and the block says the deployment lacks a tool it has** —
+  impact **high**, same file and same shape as the entry above. The BE3600 full-system rung returns
+  `{"ran":false,"proofState":"blocked_by_platform","reason":"No qemu-system emulator/machine for arch \"arm64\"
+  in this deployment"}`. That reason is false about the deployment: `qemu-system-aarch64` **is installed** in the
+  container. `providers/preflight.ts:24-32` lists `mipsel`, `mips`, `arm` and no `arm64`, while
+  `QEMU_MACHINE_BY_ARCH` two lines below already carries `arm64: 'virt'` — the machine was chosen and the
+  emulator never mapped. The comment immediately above is the record of the *previous* instance of this exact
+  bug (*"every full-system boot of a big-endian image … died before executing one instruction, on a machine where
+  qemu-system-mips was installed the whole time"*). So: three instances of one shape in one file — mips→mipsel in
+  user mode (still open, above), mips→mipsel in system mode (fixed, and its comment is the warning), and now
+  arm64 unmapped. It blocks the rung on the corpus's flagship modern image, and `blocked_by_platform` makes it
+  read as an honest platform limit rather than a missing map key.
 - ⚠ **An embedded TLS private key inside an ELF is invisible to BOTH secret scanners** — impact **high**.
   `usr/bin/httpd` in the WR940N holds one `BEGIN RSA PRIVATE KEY` and one `BEGIN CERTIFICATE` in plain PEM
   (verified by grep on the extracted rootfs; the blind agent additionally proved possession by signing with the
