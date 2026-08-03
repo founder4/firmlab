@@ -4,6 +4,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { recordCredentials } from '../corpus.js';
+import { classifyGitleaksHit } from '../findings-normalize.js';
 import { normalizeGitleaks, syncFindings } from '../findings.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { type GitleaksResult, runGitleaks } from '../providers/gitleaks.js';
@@ -35,9 +36,14 @@ export async function gitleaksRoutes(app: FastifyInstance): Promise<void> {
       runGitleaks(rootfsPath, handle).then((r) => {
         syncFindings(id, 'gitleaks', normalizeGitleaks(r));
         if (r.available) {
+          // The SAME classification the ledger row gets, rather than a second opinion hardcoded here. This wrote
+          // `severity: 'high'` for every match, so the BE3600's seven upstream dnscrypt PUBLIC keys entered the
+          // corpus-wide credential table as high-severity credentials — and that table is what the cross-image
+          // layer reads to claim credential REUSE between two devices. An over-claim in a per-image row is
+          // visible beside its own evidence; the same over-claim here travels to conclusions about other images.
           recordCredentials(
             id,
-            r.findings.map((f) => ({ value: f.match, kind: f.rule, severity: 'high' })),
+            r.findings.map((f) => ({ value: f.match, kind: f.rule, severity: classifyGitleaksHit(f).severity })),
           );
         }
         return r;
