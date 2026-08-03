@@ -133,3 +133,48 @@ describe('buildUserEmulationFindings — severity is info everywhere, and a refu
     expect(draft?.evidence?.command).toBe('qemu-mipsel-static -L /rootfs /rootfs/usr/bin/httpd');
   });
 });
+
+describe('the sandbox coming up short is not the program failing', () => {
+  /** The real shape: a firmware daemon exits non-zero because qemu-user has no `/dev/nvram`. */
+  const NVRAM = 'nvram_get: /dev/nvram: No such file or directory';
+
+  it('files a non-zero exit as a sandbox shortfall when the run was missing something the sandbox owes it', () => {
+    const [draft] = buildUserEmulationFindings('sbin/httpd', run({ exitCode: 1, stderr: NVRAM }));
+    expect(draft?.kind).toBe('binary-execution-sandbox-shortfall');
+    // It DID execute — the shortfalls happen after it starts — so the fact of execution stands.
+    expect(draft?.proofState).toBe('confirmed_in_emulation');
+    expect(draft?.evidenceChannel).toBe('emulated_run');
+    expect(draft?.evidence?.sandboxShortfalls).toEqual([NVRAM]);
+    expect(draft?.rationale).toContain('not attributable to the program');
+  });
+
+  // A clean exit DESPITE a shortfall is a stronger result, not a weaker one, and must not be downgraded.
+  it('leaves a clean exit alone even when the sandbox came up short', () => {
+    const [draft] = buildUserEmulationFindings('bin/busybox', run({ exitCode: 0, stderr: NVRAM }));
+    expect(draft?.kind).toBe('binary-executed-in-emulation');
+  });
+
+  /**
+   * The WR940N's httpd prints `cache '/etc/ld.so.cache' is corrupt` and then fails to create a thread. Neither
+   * line matches a shortfall pattern, and inventing one to cover them is the trap the dynamic probe's own comment
+   * warns about — a loose pattern turns real crashes into "harness noise". So they are carried as evidence and
+   * left unclassified.
+   */
+  it('carries output no rule recognises as evidence, without reclassifying the row', () => {
+    const real =
+      "cache '/etc/ld.so.cache' is corrupt\n==>power_led_blink_start<2457> Create power_led_blink_thread Thread Failed";
+    const [draft] = buildUserEmulationFindings('usr/bin/httpd', run({ exitCode: null, stderr: real }));
+    expect(draft?.kind).toBe('binary-execution-nonzero');
+    expect(draft?.evidence?.targetOutput).toHaveLength(2);
+    expect(String((draft?.evidence?.targetOutput as string[])[0])).toContain('ld.so.cache');
+    expect(draft?.evidence?.sandboxShortfalls).toBeUndefined();
+    expect(draft?.rationale).toContain('no rule here classified why it exited');
+  });
+
+  // A refusal is still a refusal: the harness never started the program, whatever else is in the buffer.
+  it('lets a refusal outrank a shortfall', () => {
+    const [draft] = buildUserEmulationFindings('usr/bin/httpd', run({ exitCode: 255, stderr: `${REFUSAL}\n${NVRAM}` }));
+    expect(draft?.kind).toBe('binary-execution-blocked');
+    expect(draft?.proofState).toBe('blocked_by_platform');
+  });
+});

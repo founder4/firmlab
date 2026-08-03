@@ -14,6 +14,7 @@ import { promisify } from 'node:util';
 import type { Architecture, ImageIdentity } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
 import { type ToolId, detectTools } from '../tools.js';
+import { parseTargetStderr } from './dynprobe.js';
 import { libnvramHostPath } from './emulate-system.js';
 import type { JobHandle } from './jobs.js';
 import { FIRMADYNE_KERNELS_DIR, QEMU_MACHINE_BY_ARCH, QEMU_SYSTEM_BY_ARCH, QEMU_USER_BY_ARCH } from './preflight.js';
@@ -212,6 +213,10 @@ export function emulatorRefusal(stderr: string): string | null {
  */
 export function buildUserEmulationFindings(binary: string, r: UserEmulationResult): FindingDraft[] {
   const refusal = emulatorRefusal(r.stderr);
+  // The target's own account of its run, split the way the dynamic probe splits it: a line naming a kernel
+  // interface qemu-user does not implement is the SANDBOX coming up short, and everything else is the program
+  // talking. Reusing that reading rather than writing a second one, because the second one always drifts.
+  const { deficiencies, output } = parseTargetStderr(r.stderr);
   const evidence: Record<string, unknown> = {
     binary,
     command: r.command,
@@ -219,6 +224,13 @@ export function buildUserEmulationFindings(binary: string, r: UserEmulationResul
     timedOut: r.timedOut,
   };
   if (refusal) evidence.emulatorRefusal = refusal;
+  if (deficiencies.length > 0) evidence.sandboxShortfalls = deficiencies.slice(0, 20);
+  // The target's own output travels with EVERY row, including the ones this code does not classify. The WR940N's
+  // httpd prints `cache '/etc/ld.so.cache' is corrupt` and then fails to create a thread — neither matches a
+  // shortfall pattern, and both are the difference between a reader understanding the exit and guessing at it.
+  // Evidence a rule does not recognise is still evidence; inventing a pattern to cover it would be the trap the
+  // probe's own comment warns about.
+  if (output.length > 0) evidence.targetOutput = output.slice(0, 20);
 
   // Two ways for nothing to have executed, and neither may be reported as the program failing. `ran: false` is the
   // emulator process never starting at all (`runIsolated` resolves it on a spawn error), and a refusal is qemu
@@ -258,6 +270,27 @@ export function buildUserEmulationFindings(binary: string, r: UserEmulationResul
   }
 
   const clean = r.exitCode === 0;
+
+  // A non-zero exit from a run in which the sandbox demonstrably came up short is not a statement about the
+  // program, and filing it as one is how an emulation artefact becomes a finding. The binary still EXECUTED — the
+  // shortfalls happen after it starts — so the proof state stays `confirmed_in_emulation` for the fact of
+  // execution; what changes is that the row stops attributing the exit to the code and names what the sandbox
+  // failed to provide. A CLEAN exit is left alone: it succeeded despite the shortfall, which is a stronger result,
+  // not a weaker one.
+  if (!clean && deficiencies.length > 0) {
+    return [
+      {
+        kind: 'binary-execution-sandbox-shortfall',
+        title: `${binary}: executed under user-mode emulation and exited ${r.exitCode ?? 'on a signal'}, on a run where the sandbox came up short`,
+        severity: 'info',
+        proofState: 'confirmed_in_emulation',
+        evidence,
+        evidenceChannel: 'emulated_run',
+        rationale: `The binary executed, and this run was missing something the sandbox does not provide: ${deficiencies[0]}${deficiencies.length > 1 ? ` (and ${deficiencies.length - 1} more)` : ''}. The exit is therefore not attributable to the program — qemu-user has a different libc, no NVRAM and no peripherals, and a firmware daemon that needs any of them will fail here and work on the device. Recorded as what happened to the HARNESS; it is not a defect in the code and not a clean bill of health either.`,
+      },
+    ];
+  }
+
   return [
     {
       kind: clean ? 'binary-executed-in-emulation' : 'binary-execution-nonzero',
@@ -270,7 +303,7 @@ export function buildUserEmulationFindings(binary: string, r: UserEmulationResul
       evidenceChannel: 'emulated_run',
       rationale: clean
         ? 'The binary executed under qemu-user and exited 0 on the input it was given. That proves the sandbox can run it — it is a statement about ONE input and about the emulator, never about the physical device, and it is nowhere near enough to call the binary sound.'
-        : 'The binary executed under qemu-user and exited non-zero on the input it was given. Under a different libc, with no NVRAM and no peripherals, a non-zero exit is as likely to be the sandbox as the program — it is recorded as what happened, not as a defect.',
+        : 'The binary executed under qemu-user and exited non-zero on the input it was given. Under a different libc, with no NVRAM and no peripherals, a non-zero exit is as likely to be the sandbox as the program — it is recorded as what happened, not as a defect. Its own output travels in the evidence, because no rule here classified why it exited.',
     },
   ];
 }
