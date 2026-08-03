@@ -47,9 +47,37 @@ export const agents: Messages['agents'] = {
     workers: (ran, total) => `${ran} de ${total} workers`,
     findings: (n) => (n === 1 ? '1 hallazgo' : `${n} hallazgos`),
     incomplete: (n) => (n === 1 ? '1 no completó' : `${n} no completaron`),
-    steps: (n) => (n === 1 ? '1 paso' : `${n} pasos`),
     needsYou: 'esperando tu aprobación',
     pending: 'todavía sin resultado registrado',
+
+    /**
+     * El resultado de una sesión del agente. La PALABRA del veredicto no está aquí: sale de
+     * `shell.runHistory.outcome`, el vocabulario del registro de ejecuciones, para no tener dos juegos de palabras
+     * para los mismos seis estados. Las tres frases que no se pueden suavizar: una sesión que nunca llegó a un
+     * objetivo no pudo HACER su pregunta (ni falló ni acertó); un nodo de 0-day que no formó nada no formó nada
+     * *con ese andamiaje*, y eso no certifica que la imagen esté limpia; y un candidato es una pista escrita como
+     * `needs_runtime_reproduction`, nunca un fallo probado.
+     */
+    agent: {
+      confirmed: 'Reproducido bajo emulación — lo que prueba el sandbox, nunca el dispositivo',
+      candidates: (n) => (n === 1 ? '1 candidato a 0-day por reproducir' : `${n} candidatos a 0-day por reproducir`),
+      noCandidate: 'El nodo de 0-day no formó ningún candidato con el andamiaje que tenía — no es un binario limpio',
+      noTriage: 'No hubo triaje del binario, así que la pregunta de 0-day nunca llegó a hacerse',
+      noTarget: 'No se seleccionó ningún objetivo — la sesión no tenía nada que analizar',
+      halted: 'El gobernador detuvo la ejecución antes de llegar a una respuesta',
+      failed: 'La sesión se rompió antes de poder concluir',
+      running: 'Sigue en marcha',
+      gateApproved: 'aprobaste la emulación',
+      gateDeclined: 'rechazaste la emulación',
+      gateAuto: 'se ejecutó sin supervisión — aislamiento total',
+      emulation: (proofState) => `emulación → ${proofState}`,
+      preflight: (strategy) => `preflight: ${strategy}`,
+      endedAt: (node) => `terminó en ${node}`,
+      stoppedAt: (node) => `se detuvo en ${node}`,
+      leash: (used, max) => `${used} de ${max} pasos`,
+      leashDetail: (usd, maxUsd, entries) =>
+        `${usd.toFixed(4)} $ de ${maxUsd.toFixed(2)} $ gastados · ${entries === 1 ? '1 entrada' : `${entries} entradas`} de traza`,
+    },
   },
 
   run: {

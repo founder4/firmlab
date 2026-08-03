@@ -52,11 +52,46 @@ export const agents = {
     findings: (n: number) => `${n} findings`,
     /** The half a bare total hides. Never omitted when it is non-zero. */
     incomplete: (n: number) => `${n} did not complete`,
-    steps: (n: number) => `${n} steps`,
     /** A run waiting on a person is not a run in progress; it is a run that needs the operator. */
     needsYou: 'waiting for your approval',
     /** While a run has produced no result, so an empty outcome cell never reads as "it found nothing". */
     pending: 'no result recorded yet',
+
+    /**
+     * An agent session's outcome — the half of this column that used to read `done · 7 steps` for every finished
+     * session, which is the same word by construction and therefore no word at all.
+     *
+     * **The verdict WORD is not here.** It comes from `shell.runHistory.outcome`, the run ledger's own vocabulary,
+     * because a console with a second set of six words for the same six states is how two vocabularies for one
+     * thing begin. What lives here is the sentence saying what THIS session established, and three of them carry
+     * the whole honesty of the column: a session that never reached a target could not ASK its question — it did
+     * not fail and it did not pass; a zero-day node that formed nothing formed nothing *for that scaffold*, which
+     * is a result and not a clean bill of health; and a candidate is a lead written `needs_runtime_reproduction`,
+     * never a proven bug. None of these three may be softened in translation.
+     */
+    agent: {
+      confirmed: 'Reproduced under emulation — which proves the sandbox, never the device',
+      candidates: (n: number) => `${n} zero-day candidate${n === 1 ? '' : 's'} to reproduce`,
+      noCandidate: 'The zero-day node formed no candidate from the scaffold it had — not a clean binary',
+      noTriage: 'No binary triage was possible, so the zero-day question was never put',
+      noTarget: 'No target was selected — the session had nothing to analyse',
+      halted: 'The governor stopped the run before it reached an answer',
+      failed: 'The session broke before it could conclude',
+      running: 'Still going',
+      /** How the human-approval gate was settled. `gateAuto` ran without one because isolation contained it. */
+      gateApproved: 'you approved the emulation',
+      gateDeclined: 'you declined the emulation',
+      gateAuto: 'ran unattended — fully isolated',
+      /** Proof-state codes, node names and preflight strategies are records: the frame is localised, they are not. */
+      emulation: (proofState: string) => `emulation → ${proofState}`,
+      preflight: (strategy: string) => `preflight: ${strategy}`,
+      endedAt: (node: string) => `ended at ${node}`,
+      stoppedAt: (node: string) => `stopped at ${node}`,
+      /** The governor's leash, consumed against its cap — a spend with no cap beside it states nothing. */
+      leash: (used: number, max: number) => `${used} of ${max} steps`,
+      leashDetail: (usd: number, maxUsd: number, entries: number) =>
+        `$${usd.toFixed(4)} of $${maxUsd.toFixed(2)} spent · ${entries} transcript entries`,
+    },
   },
 
   /** The run view: the same trace the image section renders, inside this section's own frame. */

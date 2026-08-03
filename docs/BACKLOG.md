@@ -370,6 +370,29 @@ of "known-incomplete semantics" exists without hunting through the sections abov
 - ✅ **A broken harness was graded as a platform block** (2026-07-28) — split at the source, which is where the conflation was: `unavailable()` now takes `blockedBy: 'platform' | 'harness'`, so "gdb is not installed" and "gdb produced no output" stop arriving identically. The ledger renders the second as `failed`, and the finding's rationale tells an operator whether a retry is worth anything. The finding keeps `blocked_by_platform` in both cases — the proof-state vocabulary has no third option and inventing one would be worse than the imprecision. **Both paths validated on the real deploy**: a binary absent from the rootfs → `platform`/`blocked`, and a non-ELF target whose gdbstub never came up → `harness`/`failed`. _Rows written before this carry no `blockedBy` and stay `blocked`, which is the conservative reading._
 - ✅ **The bench polled a job to completion in the browser** (2026-07-28) — it blocked in a `for` loop over `api.job(jobId)`, so a run existed only while the component stayed mounted. The job was always a row in SQLite, so it follows the ledger now: the running row renders from persisted state, the log comes from the stored job, and polling stops on its own when nothing is running, so an idle bench makes no requests.
 
+- ✅ **The Agents console read `done` for every finished agent session** (2026-08-03, **not yet deployed**) — the
+  Runs table's outcome column ("What came of it") rendered `run.status` plus a transcript count for agent rows, and
+  for anything finished that string is `done` by construction. Measured against the deployed corpus's 18 real
+  sessions: the 7 that ran the full chain read `done · 7 steps` and the 11 that never reached a target read
+  `done · 4 steps`, so a session that formed 8 zero-day candidates was indistinguishable from one that formed none,
+  and both from one that had nothing to analyse at all. **Scan rows were already honest** — the defect was only in
+  the agent lane. `readAgentSession` (pure, exported from `pages/Agents.tsx`, unit-tested) reads the verdict back
+  out of the transcript the session already wrote — halt reason, approval gate, governor leash, candidate count,
+  last node, deterministic preflight strategy — and states it in the run ledger's OWN vocabulary rather than a
+  second one. The three readings deliberately kept apart: never reached a target → `blocked` (it could not ASK its
+  question — not a pass, not a failure); zero-day node ran and formed nothing → `empty` (a result for that
+  scaffold, not a clean image); candidates → `lead`, never `proven`, since they are written
+  `needs_runtime_reproduction`. `proven` requires an emulation step that came back `confirmed_*`, and even then it
+  proves the sandbox.
+- ▢ **`OUTCOME_CLASS` now exists twice** — `components/RunHistory.tsx` and `pages/Agents.tsx` each hold the same
+  six-entry outcome→class map, because the first is private to that file. Lift it (with the
+  `t.shell.runHistory.outcome` lookup beside it) into one shared module before a third copy appears.
+- ▢ **An agent session is not a job row, so it is invisible to the run ledger** — `providers/run-summary.ts` reads
+  `job` rows, and sessions live in `agent_session`/`agent_step`. The consequence is that the session's outcome is
+  computed in the WEB layer and nothing else can state it: not `GET /images/:id/runs`, not the dossier, not the MCP
+  surface, so an agent asking "what came of the last session" still gets a status. The reading is small and pure
+  and belongs beside `summarizeRun` as a `summarizeSession`, with the console consuming it instead of owning it.
+
 ## Workbench UI — prose and layout (2026-07-29, deploy `163b652`)
 - ✅ **Three LLM surfaces showed their Markdown SOURCE** (2026-07-29) — the research brief, the copilot
   interpretation and the autonomous scan's narrative all landed in a `white-space: pre-wrap` block, so the reader
