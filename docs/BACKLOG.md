@@ -1397,6 +1397,26 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   `component-cve`, one of them `CVE-2020-8597` at critical**. The agent is not reasoning badly; it reasons over a
   scaffold far poorer than the workbench it is embedded in, and its empty answer is then stored beside a ledger
   that contradicts it.
+- ⚠ **The Agents console answers "what came of it" with a process status** — impact **high**, found by looking at
+  the page. The Runs table's second column is headed `colOutcome` — *"Qué salió de ella" / "What came of it"* —
+  and `RunOutcome` (`pages/Agents.tsx:304`) always renders a badge built from `run.status`. For anything finished
+  that string is `done` **by construction**, so every completed run reads the same. Scoped precisely:
+  - **`scan` rows are fine.** Beside the badge they carry `workers(ran, total)`, the findings count, and an
+    `incomplete(N)` badge whose `title` names the workers that did not run (`Agents.tsx:343-362`).
+  - **`agent` rows are the defect.** The whole cell is `done` + a step count (`Agents.tsx:320-329`). Verified on
+    the deployed page over this pass's 18 sessions: every row reads `done · 7 steps` or `done · 3 steps`. A
+    session that mis-resolved the class and produced zero `zero-day` candidates and one that produced five are
+    indistinguishable; so are the 11 that halted at `target-selection` for want of a rootfs — whose outcome is
+    "there was nothing to analyse", not "done".
+  **The file's own header states the rule it breaks**, lines 19-23: *"A row states an outcome, not a status.
+  `done` says a process finished and says nothing about what was learned."* That prose describes the
+  `summariseRun` treatment that exists for scans and was never written for agent rows.
+  **And the machinery is already built and used elsewhere:** `routes/runs.ts` + `providers/run-summary.ts` turn a
+  job row into an outcome from `proven | lead | empty | blocked | failed | running`, and `RunHistory.tsx` renders
+  exactly that in the other panels. The console does not call `/runs`; it assembles its own rows from raw jobs
+  (`Agents.tsx:88`, `status: j.status`). The fix is to give agent rows a real outcome — `haltReason`, budget
+  consumed, whether the human gate fired, `zero-day` candidate count — or to route the whole table through
+  `/runs`, and to stop putting a process status in a column that asks a different question.
 - ▢ **The agent's `resolvedClass` is unconstrained free text and unreconciled with W0** — impact medium.
   Over 18 sessions: 15 right, **1 wrong** (Xiaomi 2023 `rtos` → `linux`, and it was the only `high` confidence
   among the wrong answers, with step 2 of the same transcript saying *"RTOS blob emulable under Renode"* two rows
