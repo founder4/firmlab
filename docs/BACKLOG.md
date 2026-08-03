@@ -352,8 +352,11 @@ of "known-incomplete semantics" exists without hunting through the sections abov
 - ▢ **DVRF's credentials are NOT in an nvram store** — `AUTONOMOUS-WORKERS.md` §3.2(5)/§9 says they "lived in an nvram blob"; there is no store in that image. They sit in the Broadcom `router_defaults[]` string pool in `usr/lib/libshared.so` (`http_passwd\0admin\0` at 0xa7dcc), a pointer array whose name→value pairing lives in RELOCATIONS, not adjacency — `http_username\0` is followed by alignment padding, not its value. Recovering it needs relocation-aware ELF parsing. The doc should be corrected either way, since it currently sends a reader looking for the wrong thing.
 - ▢ **U-Boot redundant environment** (CRC + a 1-byte active flag) is unsupported — no sample in the corpus to ground it.
 - ▢ **Cross-image nvram correlation** — "the same WPA PSK on every unit of this model" is the finding operators care about, and it needs a value digest in the corpus. Deliberately not done: a truncated hash of a short password is a crackable oracle, so it needs thought rather than a hash.
-- ▢ **`/etc/shadow` cracking is still unrun** (`root:sohoadmin`) — the other half of the original W3 entry, whose
-  nvram-store parser landed 2026-07-28 (see *W3 nvram store parser* above). See *W3 secret extraction + offline cracking*.
+- ✅ **`/etc/shadow` cracking** (2026-08-03) — the other half of the original W3 entry, whose nvram-store parser
+  landed 2026-07-28 (see *W3 nvram store parser* above). Done as a self-referential cross-reference rather than as
+  hashcat: see *Cross-reference credential hashes against the strings the image itself ships*. Note the entry's
+  `root:sohoadmin` shorthand attached the plaintext to the wrong image — it is the WDR3600 that ships the string,
+  not the WR940N, and both carry the same hash.
 - ▢ **W7 RP2350 `decode()` reversing** — the CTF's `ror+sub+xor` obfuscator hides the flags; plaintext extraction
   honestly will not recover them, so this needs real on-device routine reversing. See *W7 Bare-metal/RTOS worker*.
 - ✅ **Corpus OSV/NVD/KEV cache** — done 2026-07-28; see *External intelligence*.
@@ -686,7 +689,7 @@ Surfaced by the two-pass app-vs-autonomous experiment (15 firmwares). Ordered by
 - ✅ **W8 · Encrypted-blob worker** — `apps/api/src/providers/encrypted.ts` (pure, unit-tested): `parseOtaHeader` (big-endian length field, plaintext ASCII tags, framed `AA55…16…55AA` IV block, ciphertext-body offset — each degrades honestly to null on an unframed blob), `classifyCipher` (16-byte IV ⇒ 128-bit block ⇒ AES; high-entropy body + no repeated 16-byte blocks + IV ⇒ CBC/CTR; repeated blocks ⇒ ECB; reuses core `windowEntropy`). `analyzeEncrypted` → `high`/`static_confirmed` cipher diagnosis (IV in evidence), `high`/**`blocked_by_security`** "unrecoverable without the key" verdict with the key-recovery path named, `info` plaintext-metadata leak. Never a silent empty — even a headerless high-entropy blob gets the verdict. Wired into W9 (`provider:'encrypted'`, `encrypted` → built). **Validated on the real GE800 OTA: length 0x036212d9, `fw-type:Cloud`, the exact 16-byte IV `4c5e831f…8bf7da1` @ 0x116, body entropy 8.00, AES-128 CBC/CTR — matching the §7.5 headline.** _Follow-up: known-plaintext crib detection; bootloader-key extraction is Phase-6 capture._
 - ✅ **W4 · Web attack-surface worker** — `apps/api/src/providers/webtaint.ts` (pure parse, unit-tested): `parseHandler` (exec sinks — flagging the injectable **string-concat** form vs a hardened **argv-array**; sources `params.*`/`uci:get`/CGI-env; `fromUci`; `runsAsRoot` from root-owned-path writes), `extractRpcArgPattern` + `patternPermitsNewline` (models Lua `%s` permitting `\n` → the torrc-directive-injection primitive), validator/`no-auth-methods`/per-object-validator resolution over the rootfs. `buildTaintFindings` → `critical`/`static_confirmed` cmdi with the **source→sink→privilege** chain in evidence (renders in W9's attack path) + the `web-taint-restore-bypass` (uci import sidesteps the RPC validator). Wired into the Linux chain (`provider:'webtaint'`, needs rootfs). **Validated on a faithful synthetic GL.iNet rootfs AND end-to-end in-container on the REAL GL.iNet BE3600 4.9.0** (redeployed `028ca16`, uploaded via the loopback API, ran `/opacidad`, then deleted): W1 carved the real FIT→UBI→SquashFS→`unsquashfs` rootfs (**6497 files**, arm64), and W4 flagged **2 tainted handlers → 4 findings** on the real bytes — the crown-jewel `usr/lib/oui-httpd/rpc/tor` `os.execute` root-RCE (`params.enable → uci → shell as root`, critical) + its config-restore bypass, AND the secondary `rpc/wg_client` `io.popen` cmdi (correctly downgraded to `high` because a per-object validator `gl-validator.d/wg_client.lua` exists) + its restore bypass. W9 re-planning then scheduled + ran a W5 decompile of the serving `uhttpd` (taint surface 9 sinks/3 sources); 10 workers, 633 findings, LLM narrative live. _Follow-up: refine `extractRpcArgPattern` (the 4.9.0 validator `^[%a_-][%w_-]-` was captured slightly truncated — verdict correct, evidence string imperfect); multi-line sink args; WR940N httpd C-source cmdi._
 - ✅ **W2 component-fingerprint CVE** — `providers/component-cve.ts` (2026-07-22, ea81dfa): fingerprint bundled binaries (pppd/openssl) by the version string IN the binary and match a curated table of verified embedded n-days a manifest-only SBOM can't see. **pppd 2.4.2–2.4.8 → CVE-2020-8597 (critical)** closes the WR940N + WDR3600 0-CVE gap; openssl 1.0.1–1.0.1f → Heartbleed. Pure version algebra, wired into the Linux chain as `compcve`. _Follow-up: extend the table (dropbear, lighttpd/goahead, dnsmasq) + Go-module fingerprint inside static binaries._
-- ◐ **W3 secret extraction + offline cracking** — device stores (NVS via W6) done. **Embedded-private-key-by-CONTENT scan added (2026-07-22, 8ba5f45)**: `fsaudit.scanContentSecrets()` flags a PEM key inside any file (caught Tenda's `O=Tenda` RSA key regardless of filename). _Still open: nvram store parser + hashcat on `/etc/shadow` (root:sohoadmin)._
+- ◐ **W3 secret extraction + offline cracking** — device stores (NVS via W6) done. **Embedded-private-key-by-CONTENT scan added (2026-07-22, 8ba5f45)**: `fsaudit.scanContentSecrets()` flags a PEM key inside any file (caught Tenda's `O=Tenda` RSA key regardless of filename). **Offline cracking done 2026-08-03** as `providers/credmatch.ts` — a cross-reference of the stored hashes against the image's own strings, which needs neither a wordlist nor a GPU and recovers `Td2N3ww1` (Tenda CP3) and `sohoadmin` (WDR3600) on the real corpus. _Still open: nvram store parser._
 - ✅ **W0 eCos / RTOS-on-application-CPU classification** (2026-07-22, 1762de3) — `core/structure.ts looksLikeEcos()` marker gate (`cyg_*`/RedBoot/zxrouter); an eCos monolith with no Linux fs now classifies as `rtos` (mips→mipsel/LE) instead of `embedded-linux`, and `rtos.ts detectEcos()` surfaces the version/RedBoot/app. Both Xiaomi repeaters now classify correctly. A real Linux image that merely mentions RedBoot still wins on its filesystem.
 - ✅ **W1/W3 auxiliary-partition secret extraction** (2026-07-22, 58d414d) — `providers/auxsecrets.ts` `runAuxSecrets()` scans the WHOLE extraction output (every carved filesystem), SKIPPING the recognized rootfs subtree (fsaudit covers it), content-scanning the rest. **Validated in-container: Tenda-Camera's 1024-bit RSA private key `jffs2-root-0/-1/version/privkey.pem` — in a sibling partition `findRootfs` never recognizes — now emits 2 `embedded-private-key` findings.** Honesty note: **BeanView-Camera's `private_key.pem`/`devinfo` are actually PUBLIC keys** (`BEGIN PUBLIC KEY`), NOT a cloud secret — the pass-1/re-run "cleartext cloud pairing secret" headline was an autonomous overstatement; the content scan correctly does not flag public keys. _Follow-up: parse the `devinfo`/`DeviceInfo` KV blobs for a real provisioning token if one exists._
 - ✅ **Corrupted / decoy-image honest verdict** (2026-07-22, 0436836) — `providers/decoy.ts` `assessDecoy()`: when a filesystem was CLAIMED but no rootfs was recovered AND the image is mostly zeros, `opacidad`'s extract stage emits a `corrupt-decoy` finding (medium, static_confirmed) instead of a silent empty. Asus-Router.bin (93% zeros) now reads as "payload destroyed", not "clean".
@@ -1474,7 +1477,8 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   where every other provider returns `available: false` and earns a `blocked_by_platform` row. The auto-run lane
   now degrades honestly (its runner reports a spawn failure as `ran: false`, which composes a blocked row), but
   the operator route still throws. Rule 2 of the proof-state discipline, on the one path that predates it.
-- ⚠ **An embedded TLS private key inside an ELF is invisible to BOTH secret scanners** — impact **high**.
+- ✅ **An embedded TLS private key inside an ELF is invisible to BOTH secret scanners** (fixed 2026-08-03,
+  `b4675e6`) — impact **high**.
   `usr/bin/httpd` in the WR940N holds one `BEGIN RSA PRIVATE KEY` and one `BEGIN CERTIFICATE` in plain PEM
   (verified by grep on the extracted rootfs; the blind agent additionally proved possession by signing with the
   key and verifying against the certificate's public half, `CN=tplinkwifi.net`, expired 2019-05-30, in a 2026
@@ -1485,8 +1489,33 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   `collectContentScanFiles` only ever hands it paths passing `isContentScanCandidate`
   (`providers/fsaudit.ts:629`), an extension whitelist plus extensionless files under `etc/` — so the content
   scanner never sees the file. `CONTENT_SCAN_BYTES = 512 KB` would truncate it anyway.
-- ⚠ **gitleaks hits are normalised to `static_confirmed` / `high`, and 12 of them on one image are false** —
-  impact **high**. On the BE3600: 7 hits on `dnscrypt-proxy.toml` are the upstream **public** minisign key
+
+  **Closed.** Both scanners now walk the bytes for the `-----BEGIN ` marker instead of trusting an extension or a
+  size, and a block counts only with a label, a matching END and a base64-armor body — the third condition being
+  what separates a key from `libwolfssl`'s format strings (the WR940N holds **19 markers and only 3 complete
+  blocks**, and the other 16 are reported rather than dropped). What is CLAIMED is decided by decoding the body
+  with `node:crypto`: the same binary's `DH PARAMETERS` are not claimed, and an undecodable block is reported as
+  unclaimed. Real bytes, in-container: `usr/bin/httpd` → the RSA-1024 private key at offset 1894844 AND
+  `CN=tplinkwifi.net` expired 2019-05-30, where the deployed build had answered `certCount: 0`. Bound chosen after
+  measuring all 18 extractions (worst case, the BE3600 carve: 450 MB read in 261 ms; nothing was ever dropped by
+  the total budget) and the coverage now travels in the result, so a zero cites what was read. New true positives
+  across the corpus: Tenda ×2, DVRF `libpolarssl.so`, IMOU ×3 plus an encrypted `privkey.pem` reported **without**
+  claiming a decode, BE3600 `libgnutls`.
+  **Follow-ups, in order of value:**
+  - ▢ **Possession is one comparison away.** The WR940N key's public half matches the certificate in the SAME
+    binary. `createPublicKey(key).export()` vs `cert.publicKey.export()` raises "a private key is present" to
+    "the shipped TLS identity is forgeable" — which is what the blind agent proved by hand, and it is a fact
+    about the bytes, so it stays `static_confirmed`.
+  - ▢ **`auxsecrets.ts` still has the exact defect just fixed**: a `SCAN_EXT` whitelist plus 512 KB UTF-8 reads,
+    and it reports `filesScanned` without ever saying what it skipped. It should call `scanTreeForPem`.
+  - ▢ **The scanner wants its own module.** `fsaudit.ts` importing `certs.js` is the wrong dependency arrow now
+    that four providers want the same scan; `providers/pem-scan.ts` is the right home.
+  - ▢ `fsaudit`'s `WALK_CAP = 5000` now *reports* its truncation but is unchanged, so a 6499-file rootfs is still
+    partly unwalked; and the web has no view of the new `scan` coverage at all.
+  - ▢ **`RSA TESTING KEY`** — Go's testdata convention for evading secret scanners — is classified `other` and not
+    claimed (1 instance in the corpus, `AdGuardHome`). A deliberate under-claim worth revisiting.
+- ✅ **gitleaks hits are normalised to `static_confirmed` / `high`, and 12 of them on one image are false**
+  (fixed 2026-08-03, `0ceb136`) — impact **high**. On the BE3600: 7 hits on `dnscrypt-proxy.toml` are the upstream **public** minisign key
   (`RWQf6LRC…`), four of those on **commented-out lines**; two more are `public-resolvers.md` and
   `odoh-servers.md`, the published dnscrypt resolver directory; one is `hmac.lua`, a generic HMAC implementation
   with a parameter named `key`; two more (`sendsms`, `wg_client`) were independently triaged as FPs by this run's
@@ -1494,6 +1523,26 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   high-entropy string, not an API key — promoting a heuristic to the bench's strongest proof state is the failure
   the ladder exists to prevent. Mirror image of the entry above: there the app loses a real key, here it asserts
   twelve that are not there. **The secret lane is the weakest part of the bench.**
+
+  **Closed by making the classification rule-aware rather than by suppressing rows.** A rule whose match IS the
+  artifact (a PEM private-key block, a prefixed/checksummed token) keeps `static_confirmed`/`high` and is **never**
+  discounted by context — losing a real key to "it sits in documentation" is the worse failure of the two. A
+  heuristic rule becomes a lead, with severity moved by signals measured from the report itself: commented-out
+  line, documentation file, the identifier that named the value (`minisign_key` down, `private_key` up), example
+  marker, source identifier. **Nothing was told what `RWQf6LRC…` is — the file says so.** All 12 demote (four
+  land at `info`, and it turns out five sat on commented-out lines, not four); a real RSA key and a `ghp_` token
+  planted for the test — including one deliberately placed in a `README.md` — stay `static_confirmed`/`high`.
+  Fed the STORED result, which predates the context fields, it still demotes all 12: **a missing field reads as
+  not-measured, never as a discount earned.** The same classification now also feeds `recordCredentials`, which
+  was writing `severity: 'high'` for every match into the corpus-wide credential table — the one the cross-image
+  layer reads to claim credential REUSE between devices, where an over-claim travels to conclusions about other
+  images.
+  **Follow-ups:** ▢ gitleaks-the-tool skips binaries entirely, so `libgnutls.so.30.37.1`'s two EC private-key
+  blocks and `gl-sdk4-hw-info.ko`'s `BEGIN PRIVATE KEY` are invisible to THIS lane (the PEM scanner above now
+  catches them, which is why the entry is not more urgent). ▢ `redactMatch` passes any match ≤24 chars through
+  verbatim, so a genuine 20-char API key is stored in full in `evidence.match`. ▢ `FINDING_CAP = 500` truncates
+  by filesystem-walk arrival order, which rule 4 forbids. ▢ The web mirror of `GitleaksFinding` lacks the new
+  fields, so the UI cannot show the reasoning behind a demotion.
 - ⚠ **The UEFI variable reader is one variable deep, and the test key it was built to find is in the other 56** —
   impact **high**, and it closes the *"`detectTestKey` is STILL unexercised"* item above. App on
   `OVMF_VARS_4M.snakeoil.fd`: `variableCount: 1 · variables: ["CustomMode"] · hasPK/hasKEK/hasDb/hasDbx: false ·
@@ -1540,15 +1589,43 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   `embedded-linux-router` for `embedded-linux` — semantically right, unusable by anything that routes on the
   class. W0 already computed the class deterministically before the session started. The fix is to hand the node
   that class and make disagreement a recorded event, not a better prompt.
-- ▢ **Cross-reference credential hashes against the strings the image itself ships** — impact **high**, and it is
-  the cheap 90 % of the W3 "offline cracking" item, which is filed as *"hashcat on `/etc/shadow`"*. Two instances
-  measured, both of which the app reported only as "a weak hash exists":
-  **Tenda CP3** — `/usr/bin/force_upgrade` carries `current_force_upgrade_pwd=Td2N3ww1.0_tenda_force_upgrade` in
-  cleartext and `/etc/shadow` carries `root:E0HKrpNhcmto6`; `crypt("Td2N3ww1","E0")` reproduces it exactly (DES
-  truncates at 8; the 7-char prefix does not match). **The root password of that camera is `Td2N3ww1`.**
-  **WR940N** — `openssl passwd -1 -salt GTN.gpri sohoadmin` reproduces `/etc/shadow` byte for byte.
-  No wordlist and no GPU: the candidate set is the printable strings already in the image, the salts are in hand,
-  and a hit is `static_confirmed` because the password is then a fact about the bytes.
+- ✅ **Cross-reference credential hashes against the strings the image itself ships** (2026-08-03) —
+  `providers/credmatch.ts` + `providers/descrypt.ts` + `POST/GET /images/:id/credmatch`, source `credmatch`.
+  The cheap 90 % of the W3 "offline cracking" item that was filed as *"hashcat on `/etc/shadow`"*: no wordlist and
+  no GPU, because the candidate set is the image's own printable strings and the salts are already in hand.
+  A hit is `static_confirmed` (the plaintext maps to the stored hash — a fact about the bytes, never a device
+  claim); a miss is a **bounded negative** stating how many candidates were tried, how they were derived and what
+  the cap dropped; a scheme this deployment cannot compute is `blocked_by_platform` naming the scheme.
+  **Measured on the real corpus**: **Tenda CP3** (`2b5fe786`) → `root` = `Td2N3ww1` in 1.3 s, from
+  `usr/bin/force_upgrade` @0x20 via the `current_force_upgrade_pwd=` assignment; **WDR3600** (`398d50ef`) →
+  `root` = `sohoadmin` in 39.5 s, from `usr/bin/vsftpd` @0x28930, 143,561 candidates; **WR940N** (`c42ab6f2`) →
+  a bounded negative over 115,226 candidates.
+  Three corrections to the entry this replaces, all found by running it:
+  **(1) `sohoadmin` is NOT in the WR940N image.** `grep -ria sohoadmin` over the whole of `c42ab6f2` — raw image,
+  every carved artefact, the rootfs — finds nothing. The string lives in `398d50ef` (WDR3600), which ships the
+  **identical** `$1$GTN.gpri$DlSyKvZKMR9A9Uj9e9wR3/` hash. The password of the WR940N really is `sohoadmin`; the
+  image simply does not write it down, so the honest answer for that image is the bounded negative above.
+  **(2) `openssl passwd -crypt` does not exist any more.** OpenSSL 3.0 removed it (`passwd: Unknown option:
+  -crypt` on the container's 3.0.20), so DES — the dominant scheme in firmware of this vintage — is computed
+  in-process by `descrypt.ts`, verified against glibc's `crypt(3)` over 14 vectors.
+  **(3) `$5$`/`$6$` are computable after all**, including a `rounds=N$` cost passed through `-salt`, and both
+  match glibc exactly. bcrypt, yescrypt and scrypt are the ones with no option.
+- ▢ **credmatch harvests only the rootfs, and only that image.** Two gaps, both concrete:
+  *Sibling partitions and the raw image are not candidate sources* — `auxsecrets.ts` exists because the Tenda's
+  device-wide RSA key lives in `jffs2-root-0`, a partition `findRootfs` does not return, and the same blind spot
+  applies here. *Cross-image pooling would settle the WR940N.* Its hash is byte-identical to the WDR3600's, and
+  the plaintext is in the WDR3600 — a vendor that reuses one root password across a product line is the normal
+  case, and the corpus already holds both images. It is deliberately not done: "the strings THIS image ships" is
+  what makes a hit `static_confirmed`, and pooling would need a different, weaker claim ("a sibling image in this
+  corpus ships the plaintext"), stated as such.
+- ▢ **credmatch is not routed into the autonomous scan or the coverage banner.** `opacidad-plan.ts`'s
+  `specsForClass` does not schedule it and `coverage.ts` does not count it, so W9 never asks the question and the
+  per-image banner cannot say whether it was asked. It also has no web panel — the result is reachable only
+  through the API. Impact medium: the provider is honest about its own coverage, and nothing else knows it exists.
+- ▢ **bcrypt, yescrypt and scrypt are permanently `blocked_by_platform` here.** `openssl passwd` has never had an
+  option for any of them, and nothing else in the image computes them. A modern rootfs using `$y$` therefore gets
+  a "could not be tested" row rather than an answer. Closing it means either a second hasher in the toolchain or a
+  pure implementation, and yescrypt's is not the ~250 lines DES was.
 - ▢ **Kernel modules are counted, never disassembled** — impact **high**; the concrete instance behind
   `METHODOLOGY-GAPS.md` §4 #5. On the WDR3600 the app produced posture only (`kernel-age` critical, `/dev/kmem`
   compiled in, *"none of the 84 inspected modules carries an intree tag"*, *"8 of 9 kernel posture questions could
