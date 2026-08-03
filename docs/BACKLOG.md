@@ -392,6 +392,30 @@ of "known-incomplete semantics" exists without hunting through the sections abov
   computed in the WEB layer and nothing else can state it: not `GET /images/:id/runs`, not the dossier, not the MCP
   surface, so an agent asking "what came of the last session" still gets a status. The reading is small and pure
   and belongs beside `summarizeRun` as a `summarizeSession`, with the console consuming it instead of owning it.
+- ✅ **Five honesty defects closed together** (2026-08-03, deploy `d2e19c9`) — the run ledger read a full-system
+  boot as a user-mode run (`e713fa6`), `ghidra` composed no rows at all (`f958046`), a sandbox shortfall was filed
+  as the program failing (`cc9db2f`), ten route guards told an operator to run an extraction that had already run
+  (`8dddaa3`), and the Agents console answered "what came of it" with a process status (`d2e19c9`). Each is
+  recorded at its own entry. Verified on the deployed corpus: the Xiaomi eCos images now answer **422** with
+  extraction's own LZMA diagnosis instead of `400 "Run extraction first"`, the WR940N's boot reads
+  *"Full-system boot confirmed — nothing answered on a forwarded port"* where it read *"Ran under user-mode
+  emulation, exit ?"*, and the console's 18 sessions read `blocked` / `lead 8 zero-day candidates` /
+  `nothing found` instead of eighteen identical `done`s.
+- ▢ **The rootfs gate's structured body lands in the UI as one long sentence** — `AnalysisActionsPanel` renders
+  `error` in a warning banner and `SbomPanel` in its log block, so the full ~700-character refusal DOES appear and
+  nothing is hidden. But `state`, `retryable` and `extractionDiagnosis` are separate fields for a reason: a badge
+  for the state, the diagnosis as a quoted block (the way `ComponentMap` already quotes extraction's verdict), and
+  a visibly different treatment for `retryable: false` would read far better than a wall of prose.
+- ▢ **The MCP surface flattens the gate back into a string** — `mcp/client.ts` `post` throws `detail.error`, so an
+  agent driving FirmLab gets the honest sentence and loses `state` / `retryable` / `extractionDiagnosis`. It
+  therefore cannot tell "wait, extraction is still running" from "this image will never have a rootfs" without
+  parsing prose. `getWithStatus` already exists for exactly this and is unused on the POST path.
+- ▢ **The user-mode emulation route takes its rootfs from the gate and its suggested binary from
+  `latestExtract`** — two different job rows in principle. The gate returns a rootfs from ANY completed extraction
+  (deliberately: a later failed re-run must not hide a rootfs sitting on disk), while `latestExtract` returns the
+  most recent one, so on an image with two extractions the suggestion can come from a run that recovered nothing.
+  Harmless today (every corpus image has one extraction) and wrong in principle; the gate should return the
+  suggestion alongside the path.
 
 ## Workbench UI — prose and layout (2026-07-29, deploy `163b652`)
 - ✅ **Three LLM surfaces showed their Markdown SOURCE** (2026-07-29) — the research brief, the copilot
