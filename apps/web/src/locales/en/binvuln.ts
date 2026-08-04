@@ -20,13 +20,11 @@ export const binvuln = {
   leadMark: (severity: string) => `${severity} if true — not established`,
   field: {
     scanned: 'Binaries walked',
-    candidates: 'Candidates found',
-    listed: 'Listed here',
+    candidates: 'Stack-overflow candidates',
+    listed: 'Findings listed',
     relocatable: 'Relocatable, skipped',
     neutered: 'Cut by the extractor',
   },
-  cutRule: (shown: number, candidates: number, dropped: number) =>
-    `Showing ${shown} of ${candidates} candidates. The ${dropped} omitted were cut by rank — exposure first, never by the order the walk reached them.`,
   exposedDropped: (n: number) =>
     `${n} of them are network-exposed and still did not fit, so they are named rather than counted:`,
   col: { finding: 'Candidate', kind: 'Kind' },

@@ -9,8 +9,13 @@
  * **What the header states, and why it is not decoration.** `binariesScanned` → `candidates` → `findings.length`
  * are three different numbers and the gaps between them are the coverage story:
  *
- *   - the cap truncates on merit (`selectFindings` ranks by exposure, never by arrival order), so
- *     `candidates > findings.length` means rows were dropped **and the drop is stated, not inferred**;
+ *   - `candidates` counts **stack-overflow candidates only**, while `findings` carries every kind the sweep
+ *     emits, so `findings.length` is legitimately the LARGER number on this corpus — 49 listed against 37
+ *     candidates on the WR940N. The first draft of this panel printed `candidates - listed` as a drop count and
+ *     would have shipped a negative bound dressed as an answer; the walk found that, not a test;
+ *   - the cap truncates on merit (`selectFindings` ranks by exposure, never by arrival order) and the provider
+ *     states the cut **in its own `reason`**, which is rendered verbatim rather than re-derived here — the count
+ *     it cut is not in the result at all, so any arithmetic this panel did would be a guess;
  *   - `exposedDropped` NAMES the exposed binaries that still did not fit, because a count of dropped rows on a
  *     rootfs of 300 binaries tells a reader nothing about which ones they are missing;
  *   - `relocatableSkipped` and `neuteredSkipped` are two different silences — a `.ko` the question does not apply
@@ -79,7 +84,6 @@ export function BinVulnPanel({ imageId }: { imageId: string }): JSX.Element {
   }
 
   const shown = result.findings ?? [];
-  const dropped = Math.max(0, result.candidates - shown.length);
 
   return (
     <div className="panel">
@@ -105,22 +109,25 @@ export function BinVulnPanel({ imageId }: { imageId: string }): JSX.Element {
         <div style={{ maxWidth: '72ch' }}>{b.leadsOnly}</div>
       </div>
 
-      {dropped > 0 && (
+      {/* The provider's own sentence, verbatim. It already states the cap and what it dropped, the ranking rule
+          the cut used, whether an exposure signal ever reached the sweep, and the two kinds of skip — and the
+          number it dropped is not in the result, so anything this panel computed would be a guess. */}
+      {result.reason && (
         <div className="hint" style={{ marginTop: 10, maxWidth: '72ch' }}>
-          {b.cutRule(shown.length, result.candidates, dropped)}
-          {result.exposedDropped && result.exposedDropped.length > 0 && (
-            <>
-              {' '}
-              {b.exposedDropped(result.exposedDropped.length)}
-              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-                {result.exposedDropped.map((p) => (
-                  <li key={p} className="mono" style={{ fontSize: 11.5 }}>
-                    {p}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+          {result.reason}
+        </div>
+      )}
+
+      {result.exposedDropped && result.exposedDropped.length > 0 && (
+        <div className="hint" style={{ marginTop: 8, maxWidth: '72ch' }}>
+          {b.exposedDropped(result.exposedDropped.length)}
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {result.exposedDropped.map((p) => (
+              <li key={p} className="mono" style={{ fontSize: 11.5 }}>
+                {p}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

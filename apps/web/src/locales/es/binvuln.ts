@@ -12,13 +12,11 @@ export const binvuln: Messages['binvuln'] = {
   leadMark: (severity: string) => `${severity} si fuera cierto — sin establecer`,
   field: {
     scanned: 'Binarios recorridos',
-    candidates: 'Candidatos hallados',
-    listed: 'Listados aquí',
+    candidates: 'Candidatos de desbordamiento',
+    listed: 'Hallazgos listados',
     relocatable: 'Reubicables, omitidos',
     neutered: 'Cortados por el extractor',
   },
-  cutRule: (shown: number, candidates: number, dropped: number) =>
-    `Mostrando ${shown} de ${candidates} candidatos. Los ${dropped} omitidos se cortaron por rango —exposición primero, nunca por el orden en que el recorrido llegó a ellos.`,
   exposedDropped: (n: number) =>
     `${n} de ellos están expuestos a red y aun así no cupieron, así que se nombran en vez de contarse:`,
   col: { finding: 'Candidato', kind: 'Tipo' },
