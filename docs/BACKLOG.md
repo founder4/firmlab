@@ -398,6 +398,41 @@ image's root hash is md5crypt and was NOT recovered (115226 candidates failed), 
   46 and the appended line 47 never runs. Two boots of the same script disagreeing about whether it finishes is
   itself unexplained, and the console-driven route sidesteps it entirely.
 
+## Per-provider result surfaces (2026-08-04, deploy `6478271`)
+
+The operator's "I run a scan and never find a results table" turned out to name the two worst cases exactly.
+
+- ✅ **Kernel posture had a route, a client method, and no reader.** 1618-line provider, 36 findings across the
+  corpus, `POST`/`GET` since it was written, `api.kernelPosture` declared and called by **nothing**. There was no
+  thin panel to improve; there was no panel. `kernel-posture.ts` (pure, 17 tests) + a section under Deep scans.
+  **The table's shape is the reading it enforces**: on the WR940N eight of nine answers are `unknown`, and the
+  provider's own reason splits them into two incompatible facts — `option-postdates-kernel` /
+  `option-removed-upstream` mean the question could not apply (`CONFIG_RANDOMIZE_BASE` landed in 3.14; this is
+  2.6.31), everything else means it applies and went unanswered. Measured on the deployed build: **9 questions —
+  1 weak, 0 ok, 3 unanswered, 5 not applicable.** A flat "unknown" would have reported eight hardening failures
+  on an image that has one.
+- ✅ **binvuln — the corpus's second-largest source (337 rows) — had no route at all.** It ran only as
+  `binvulnRun` inside the autonomous scan, so the sweep's own result reached nobody and the ledger rows had no way
+  back to the run. Route (same `source` both ways, so a run here and a W9 run stay idempotent), client, panel,
+  section. The panel opens with the one sentence that has to precede the table — every row is a syntactic LEAD —
+  because a table of red rows reads as bugs otherwise.
+  _Running it for real found a defect in the panel that no fixture would have: `candidates: 37`, `listed: 49`.
+  `candidates` counts stack-overflow candidates ONLY and `findings` carries every kind, so the first draft's
+  `candidates - listed` drop count would have shipped a negative bound dressed as an answer. And the number the
+  cap actually dropped is not in the result at all — `selectFindings` computes it and does not return it — so the
+  panel now prints the provider's own `reason` verbatim instead of deriving anything._
+
+Still open, and now the whole of what "no results surface" means:
+
+- ▢ **`BinVulnResult` does not return what the cap dropped.** `selectFindings` computes `dropped` and the result
+  keeps only the prose. A structured count (optional forever) would let any reader — the panel, the report, an
+  agent over MCP — state the bound without parsing a sentence.
+- ▢ **The other six capabilities are still one row each.** `yarascan`, `fwhunt`, `nvram`, `ghidra`, `funcdiff`,
+  `dynprobe` — `CapabilityResults` shows state plus coverage numbers by design and its own doc calls a per-provider
+  surface "a separate piece of work". `nvram` (28 rows) and `yarascan` are the next two worth the work.
+- ▢ **Emulation still has menus and no reading surface.** `SimulationMenu` launches the rungs; where a run's
+  output lands is not evident. Same shape as the two above, and the reason the ledger only moved from 1 row to 3.
+
 ## Workbench UI — findability, and the four things it exposed (2026-08-04, deploy `b691414`)
 
 Operator review of the deployed build. The complaints were "I run a binvuln scan / a kernel posture / an
