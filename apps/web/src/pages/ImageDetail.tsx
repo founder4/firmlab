@@ -38,6 +38,7 @@ import { FilesystemTree } from '../components/FilesystemTree';
 import { FindingsLedger, PROOF_STATE_META } from '../components/FindingsLedger';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { HardwareInterfaces } from '../components/HardwareInterfaces';
+import { KernelPosture } from '../components/KernelPosture';
 import { OpacidadPanel } from '../components/OpacidadPanel';
 import { OperatorPanel } from '../components/OperatorPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
@@ -78,6 +79,7 @@ export const SECTION_IDS = [
   'sbom',
   'compmap',
   'deepscans',
+  'kernel',
   'binaries',
   'testbench',
   'findings',
@@ -97,6 +99,7 @@ const SECTION_SET: ReadonlySet<string> = new Set<string>(SECTION_IDS);
 const NO_ANALYSIS_TABS = new Set<TabId>([
   'dossier',
   'deepscans',
+  'kernel',
   'filesystem',
   'files',
   'secrets',
@@ -241,6 +244,7 @@ export function ImageDetail(): JSX.Element {
       {/* The other half of "what is this made of": the SBOM's packages, and here what links against what. */}
       {tab === 'compmap' && <ComponentMap imageId={id} />}
       {tab === 'deepscans' && <CapabilityResults imageId={id} />}
+      {tab === 'kernel' && <KernelPosture imageId={id} />}
       {/* The test bench is organised by TARGET: every question asked of a binary, and every run it produced.
           `binaries` still routes here so older links keep working. */}
       {(tab === 'testbench' || tab === 'binaries') && (

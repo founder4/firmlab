@@ -16,6 +16,7 @@ import { files } from './files';
 import { findings } from './findings';
 import { hardware } from './hardware';
 import { imageDetail } from './imageDetail';
+import { kernelPosture } from './kernelPosture';
 import { nav } from './nav';
 import { onboarding } from './onboarding';
 import { operator } from './operator';
@@ -62,6 +63,7 @@ export const es: Messages = {
   techniques,
   visuals,
   shell,
+  kernelPosture,
   sectionGroups,
   egressSection,
 };

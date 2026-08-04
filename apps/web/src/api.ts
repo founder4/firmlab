@@ -1059,7 +1059,19 @@ export interface KernelPostureResult {
   bannerPath?: string | null;
   configPath?: string | null;
   age?: { years?: number; severity?: string; detail?: string } | null;
-  modules?: { total?: number; signed?: number; vermagic?: string } | null;
+  /**
+   * The module set, as the provider records it. Every field optional and permanently so: `moduleCount` /
+   * `inspectedCount` / `signedCount` are what `kernelposture.ts` writes today, `total` / `signed` are what an
+   * older stored result carries, and a reader that demanded either shape would throw on the other.
+   */
+  modules?: {
+    total?: number;
+    signed?: number;
+    vermagic?: string;
+    moduleCount?: number;
+    inspectedCount?: number;
+    signedCount?: number;
+  } | null;
   answers?: PostureAnswer[];
   searched?: string[];
   findings?: unknown[];
@@ -1576,6 +1588,7 @@ export const api = {
     get<{ result: DeviceTreeResult | null }>(`/api/images/${id}/devicetree`).then((r) => r.result),
   kernelPosture: (id: string) =>
     get<{ result: KernelPostureResult | null }>(`/api/images/${id}/kernel`).then((r) => r.result),
+  runKernelPosture: (id: string) => post<{ jobId: string }>(`/api/images/${id}/kernel`, {}),
   updatePath: (id: string) =>
     get<{ result: UpdatePathResult | null }>(`/api/images/${id}/updatepath`).then((r) => r.result),
   ubootEnv: (id: string) => get<{ result: UbootResult | null }>(`/api/images/${id}/uboot`).then((r) => r.result),
