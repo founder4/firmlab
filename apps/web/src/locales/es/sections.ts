@@ -22,6 +22,7 @@ export const sections: Messages['sections'] = {
   findings: 'Hallazgos e informe',
   operator: 'Registro del operador',
   diff: 'Comparativa',
+  egress: 'Salida a red del firmware',
   simulate: 'Recetas de emulación',
   opacidad: 'Escaneo autónomo',
   agent: 'Agente',

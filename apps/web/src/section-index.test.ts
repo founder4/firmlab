@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { needsRootfs, reachableBefore, sectionReadiness } from './section-index.js';
+import { SECTION_IDS } from './pages/ImageDetail';
+import { SECTION_GROUPS, groupedSections, needsRootfs, reachableBefore, sectionReadiness } from './section-index.js';
 
 describe('sectionReadiness — an unrun extraction is not an extraction that found nothing', () => {
   /**
@@ -104,5 +105,53 @@ describe('reachableBefore — which sections were URL-only, compared rather than
   it('takes the lists as parameters, so a third copy of them cannot drift', () => {
     // Passing an empty timeline makes everything an orphan — proving nothing is hardcoded here.
     expect(reachableBefore('sbom', [], [])).toBe(false);
+  });
+});
+
+describe('SECTION_GROUPS — the one ordering the sidebar and the index share', () => {
+  it('claims every section the app serves, so none can vanish from the navigation', () => {
+    // The defect this guards: a section added to SECTION_IDS and forgotten here would disappear from the sidebar
+    // silently — which is the exact defect the grouping exists to fix, re-introduced by the fix for it.
+    const { ungrouped } = groupedSections(SECTION_IDS);
+    expect(ungrouped).toEqual([]);
+  });
+
+  it('names no section the app does not serve', () => {
+    const served = new Set<string>(SECTION_IDS);
+    for (const g of SECTION_GROUPS) {
+      for (const s of g.sections) expect(served.has(s), `${g.id} names ${s}`).toBe(true);
+    }
+  });
+
+  it('reports an unknown section instead of dropping it', () => {
+    const { groups, ungrouped } = groupedSections([...SECTION_IDS, 'brand-new-panel']);
+    expect(ungrouped).toEqual(['brand-new-panel']);
+    expect(groups.flatMap((g) => g.sections)).not.toContain('brand-new-panel');
+  });
+
+  it('drops the two aliases rather than offering two links to one page', () => {
+    // `overview` is remapped onto `dossier` by resolveSection; `binaries` is the legacy alias for `testbench`.
+    const all = groupedSections(SECTION_IDS);
+    const listed = all.groups.flatMap((g) => g.sections);
+    expect(listed).not.toContain('overview');
+    expect(listed).not.toContain('binaries');
+    expect(listed).toContain('dossier');
+    expect(listed).toContain('testbench');
+    expect(all.ungrouped).toEqual([]);
+  });
+
+  it('omits a group entirely when the screen serves none of its sections', () => {
+    const { groups } = groupedSections(['dossier', 'entropy']);
+    expect(groups.map((g) => g.id)).toEqual(['identity']);
+  });
+
+  it('keeps each group in its declared order, not the caller order', () => {
+    const { groups } = groupedSections(['entropy', 'dossier', 'structure']);
+    expect(groups[0]?.sections).toEqual(['dossier', 'structure', 'entropy']);
+  });
+
+  it('lists every section exactly once across all groups', () => {
+    const listed = SECTION_GROUPS.flatMap((g) => g.sections);
+    expect(listed.length).toBe(new Set(listed).size);
   });
 });

@@ -13,8 +13,6 @@ export const nav: Messages['nav'] = {
   firmware: 'Firmware',
   activeImage: 'Imagen activa',
   allImages: 'Todas las imágenes',
-  navigateHint:
-    'Navega el análisis desde el timeline de pasos de arriba, o desde Todas las secciones en la cabecera del dossier — el timeline cubre ocho de las diecinueve.',
   posture: {
     ok: {
       label: 'Sólo local — la API escucha en loopback.',
@@ -35,6 +33,8 @@ export const nav: Messages['nav'] = {
       title: 'La API no respondió, así que no se pudo leer la postura. Esto no afirma que sea local.',
     },
   },
+  sectionNavAria: 'Secciones de análisis de este firmware',
+  sectionNavOther: 'Otras',
   toggleNav: 'Mostrar u ocultar la navegación',
   help: 'Ayuda y visita guiada',
   helpAria: 'Ayuda y visita guiada',

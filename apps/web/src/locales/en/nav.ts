@@ -11,8 +11,6 @@ export const nav = {
   firmware: 'Firmware',
   activeImage: 'Active image',
   allImages: 'All images',
-  navigateHint:
-    'Navigate the analysis from the step timeline above, or from All sections at the top of the dossier — the timeline covers eight of the nineteen.',
   /**
    * The posture sentences, one per `/health` state. These replaced a single constant that read "Local-only.
    * Never expose to the internet." — which was both inaccurate on a proxied deployment and a policy the product
@@ -39,6 +37,8 @@ export const nav = {
       title: 'The API did not respond, so the posture could not be read. This is not a statement that it is local.',
     },
   },
+  sectionNavAria: 'Analysis sections for this firmware',
+  sectionNavOther: 'Other',
   toggleNav: 'Toggle navigation',
   help: 'Help & tour',
   helpAria: 'Help and tour',

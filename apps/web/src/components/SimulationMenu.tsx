@@ -595,7 +595,7 @@ interface StoredEmulationResult {
  * The `outbound open` state is styled as a warning rather than as a neutral fact, because it is the state in
  * which a firmware under analysis could reach the internet from the operator's machine.
  */
-function EgressPanel({ egress, isolated }: { egress: EgressObservation; isolated: boolean }): JSX.Element {
+export function EgressPanel({ egress, isolated }: { egress: EgressObservation; isolated: boolean }): JSX.Element {
   const t = useMessages();
   const s = t.simulation;
   const external = egress.attempts.filter((a) => a.scope === 'external');

@@ -16,6 +16,7 @@ import { compmap } from './compmap';
 import { corpus } from './corpus';
 import { coverage } from './coverage';
 import { dashboard } from './dashboard';
+import { egressSection } from './egressSection';
 import { files } from './files';
 import { findings } from './findings';
 import { hardware } from './hardware';
@@ -27,6 +28,7 @@ import { overview } from './overview';
 import { panels } from './panels';
 import { proofState } from './proofState';
 import { report } from './report';
+import { sectionGroups } from './sectionGroups';
 import { sectionIndex, sections } from './sections';
 import { settings } from './settings';
 import { shell } from './shell';
@@ -65,6 +67,8 @@ export const en = {
   techniques,
   visuals,
   shell,
+  sectionGroups,
+  egressSection,
 };
 
 export type Messages = typeof en;

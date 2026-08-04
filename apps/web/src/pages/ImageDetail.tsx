@@ -30,6 +30,7 @@ import { AnalysisActionsPanel } from '../components/AnalysisActionsPanel';
 import { CapabilityResults } from '../components/CapabilityResults';
 import { ComponentMap } from '../components/ComponentMap';
 import { CoverageBanner } from '../components/CoverageBanner';
+import { EgressSection } from '../components/EgressSection';
 import { EntropyChart } from '../components/EntropyChart';
 import { FileBrowser } from '../components/FileBrowser';
 import { FileSearch } from '../components/FileSearch';
@@ -64,7 +65,7 @@ import { toast } from '../toast';
  * `SECTION_TITLES` map beside the catalogue's, which is two lists of the same thing and one commit away from
  * disagreeing.
  */
-const SECTION_IDS = [
+export const SECTION_IDS = [
   'dossier',
   'overview',
   'structure',
@@ -83,6 +84,7 @@ const SECTION_IDS = [
   'operator',
   'diff',
   'simulate',
+  'egress',
   'opacidad',
   'agent',
 ] as const satisfies readonly (keyof Messages['sections'])[];
@@ -108,6 +110,7 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'operator',
   'diff',
   'simulate',
+  'egress',
   'opacidad',
   'agent',
 ]);
@@ -246,6 +249,9 @@ export function ImageDetail(): JSX.Element {
           <SymReachPanel imageId={id} binary="" onBinary={() => undefined} />
         </>
       )}
+      {/* What the booted firmware ADDRESSED. A section rather than a panel inside the emulation menu, which
+          showed only the most recent run — see `EgressSection`. */}
+      {tab === 'egress' && <EgressSection imageId={id} />}
       {/* Emulation recipes answer a different question: how this IMAGE can be booted at all. */}
       {tab === 'simulate' && (
         <>

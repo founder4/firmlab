@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App } from './App';
+import { App, Sidebar } from './App';
 import { api } from './api';
 import { Dashboard } from './pages/Dashboard';
 import { mockedApi } from './test-api-mock';
@@ -103,6 +103,51 @@ describe('App shell', () => {
     expect(shell?.className).not.toContain('nav-open');
     fireEvent.click(screen.getByLabelText('Toggle navigation'));
     expect(shell?.className).toContain('nav-open');
+  });
+
+  describe('the analysis sections in the sidebar', () => {
+    // Measured on the deployed build before this existed: nineteen sections, ZERO in the sidebar, eight in the
+    // step timeline. The component-dependency graph and the SBOM/CVE graph had both been rendering correctly for
+    // months and a reader had to already know they existed to reach them.
+    const withImage = async () => {
+      mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips')]);
+      mockApi.getImage.mockResolvedValue(image('a', 'router-v1.bin', 'mips'));
+      render(
+        <MemoryRouter
+          initialEntries={['/image/a/sbom']}
+          future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+        >
+          <Sidebar onNavigate={() => undefined} />
+        </MemoryRouter>,
+      );
+      await screen.findByText('What it is made of');
+    };
+
+    it('links the two graphs that existed and were unreachable from the shell', async () => {
+      await withImage();
+      expect(screen.getByRole('link', { name: 'SBOM & CVEs' })).toHaveAttribute('href', '/image/a/sbom');
+      expect(screen.getByRole('link', { name: 'Component map' })).toHaveAttribute('href', '/image/a/compmap');
+    });
+
+    it('marks the section the reader is actually on', async () => {
+      await withImage();
+      expect(screen.getByRole('link', { name: 'SBOM & CVEs' }).className).toContain('active');
+      expect(screen.getByRole('link', { name: 'Component map' }).className).not.toContain('active');
+    });
+
+    it('shows no section nav at all when no firmware is active', () => {
+      render(
+        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Sidebar onNavigate={() => undefined} />
+        </MemoryRouter>,
+      );
+      expect(screen.queryByLabelText('Analysis sections for this firmware')).not.toBeInTheDocument();
+    });
+
+    it('no longer points the reader at a control that reaches eight of nineteen', async () => {
+      await withImage();
+      expect(screen.queryByText(/timeline covers eight of the nineteen/i)).not.toBeInTheDocument();
+    });
   });
 
   describe('the network-posture line', () => {

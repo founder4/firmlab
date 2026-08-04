@@ -82,3 +82,78 @@ export function reachableBefore(
 ): boolean {
   return timelineSteps.includes(section) || explicitLinks.includes(section);
 }
+
+/**
+ * The analysis sections, grouped — the one ordering the sidebar and the in-page index both read.
+ *
+ * **Why this exists.** Reachability was fixed once (`8457011`) by listing every section on one page; it did not fix
+ * findability. The shell's own navigation still offers five destinations and none of them is a section, so a reader
+ * who wants the SBOM graph or the component map — both of which have existed and rendered for months — has to know
+ * they exist, remember which page indexes them, and go there first. Measured against the deployed build: nineteen
+ * sections, **zero** in the sidebar, eight in the step timeline. That single fact is what makes "I ran the scan and
+ * I cannot find the results" the honest description of this app rather than a complaint about any one panel.
+ *
+ * **Why the grouping lives here and not in the sidebar.** Two orderings of the same nineteen ids would be two lists
+ * of the same thing one commit from disagreeing — the trap this file already names about `SECTION_TITLES`. The
+ * sidebar and `SectionIndex` render this; neither owns it.
+ *
+ * **What it deliberately does NOT do.** It does not decide which sections a device class routes to. That lives once,
+ * in the API's `specsForClass`. Every section is grouped for every image, and a section that has nothing to show
+ * says why when you get there — `sectionReadiness` — rather than being hidden on a guess.
+ */
+export interface SectionGroup {
+  /** Catalogue key for the group's heading. */
+  id: string;
+  /** Section route segments, in the order a reader should meet them. */
+  sections: readonly string[];
+}
+
+export const SECTION_GROUPS: readonly SectionGroup[] = [
+  // What the image IS, before anything is unpacked from it.
+  { id: 'identity', sections: ['dossier', 'structure', 'entropy', 'hardware', 'bootloader'] },
+  // What came OUT of it.
+  { id: 'content', sections: ['filesystem', 'files', 'secrets'] },
+  // What it is MADE of, and how those parts depend on each other.
+  { id: 'components', sections: ['sbom', 'compmap'] },
+  // The tool-backed passes over those parts.
+  { id: 'deep', sections: ['deepscans', 'testbench'] },
+  // What it DOES when something runs it.
+  { id: 'dynamic', sections: ['simulate', 'egress', 'opacidad', 'agent'] },
+  // What all of it adds up to, and what a person says about that.
+  { id: 'verdict', sections: ['findings', 'operator', 'diff'] },
+];
+
+/** A grouping of the sections a screen actually serves, plus the ones no group claimed. */
+export interface GroupedSections {
+  groups: { id: string; sections: string[] }[];
+  /**
+   * Sections this screen serves that no group names.
+   *
+   * Returned rather than dropped, and rendered rather than ignored. A section added to `SECTION_IDS` and forgotten
+   * here would otherwise vanish from the navigation silently — which is the exact defect this grouping exists to
+   * fix, re-introduced by the fix for it. A test asserts the list is empty for the real catalogue; the UI still
+   * shows whatever turns up, because the test only holds while someone runs it.
+   */
+  ungrouped: string[];
+}
+
+/**
+ * Pure: partition the sections a screen serves into the groups, preserving each group's declared order.
+ *
+ * `overview` is dropped — it is a dead id that `resolveSection` remaps onto `dossier`, and offering both would be
+ * two links to one page. `binaries` is dropped for the same reason: it is the legacy alias that still routes to
+ * `testbench`, and a nav listing both would imply two surfaces where there is one. Neither is "ungrouped"; they are
+ * aliases, and an alias is not a missing section.
+ */
+const ALIASES: ReadonlySet<string> = new Set(['overview', 'binaries']);
+
+export function groupedSections(sections: readonly string[]): GroupedSections {
+  const serves = new Set(sections.filter((s) => !ALIASES.has(s)));
+  const claimed = new Set<string>();
+  const groups = SECTION_GROUPS.map((g) => {
+    const present = g.sections.filter((s) => serves.has(s));
+    for (const s of present) claimed.add(s);
+    return { id: g.id, sections: present };
+  }).filter((g) => g.sections.length > 0);
+  return { groups, ungrouped: [...serves].filter((s) => !claimed.has(s)) };
+}

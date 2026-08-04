@@ -405,6 +405,54 @@ a:hover {
   color: var(--accent-hover);
   border-color: var(--accent-line);
 }
+/* The analysis sections, in the sidebar.
+   A second, quieter level under `.nav-item`: these are nineteen destinations inside ONE firmware, and at the
+   top level's weight they would swamp the five that leave it. The offset gutter is the shell's own identity —
+   a hairline the active row lights up — so depth is carried by structure rather than by indentation alone. */
+.section-nav {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+.section-nav-group {
+  display: grid;
+  gap: 1px;
+}
+.nav-subhead {
+  padding: 4px 10px 3px;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.nav-sub {
+  display: block;
+  padding: 4px 10px 4px 13px;
+  margin-left: 8px;
+  border-left: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.nav-sub:hover {
+  color: var(--text);
+  border-left-color: var(--text-faint);
+  background: var(--bg-panel-2);
+}
+.nav-sub.active {
+  color: var(--accent-hover);
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+/* Keyboard focus has to survive the quieter treatment: this is the only way to reach nineteen destinations. */
+.nav-sub:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .nav-ico {
   display: grid;
   place-items: center;

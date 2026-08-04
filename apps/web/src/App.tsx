@@ -9,9 +9,10 @@ import { Capabilities } from './pages/Capabilities';
 import { Capture } from './pages/Capture';
 import { Corpus } from './pages/Corpus';
 import { Dashboard } from './pages/Dashboard';
-import { ImageDetail } from './pages/ImageDetail';
+import { ImageDetail, SECTION_IDS } from './pages/ImageDetail';
 import { Overview } from './pages/Overview';
 import { Settings } from './pages/Settings';
+import { groupedSections } from './section-index';
 import { type ThemePref, setDensity, setTheme, useAppearance } from './theme';
 import { Toaster } from './toast';
 
@@ -209,8 +210,69 @@ function PostureLine(): JSX.Element {
   );
 }
 
-function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
-  const { id } = useActiveImage();
+/**
+ * The analysis sections, in the sidebar — the fix for the defect that explains most complaints about this app.
+ *
+ * Measured on the deployed build before this existed: **nineteen sections, zero of them in the sidebar, eight in
+ * the step timeline.** Everything else was reachable from an index inside the dossier page, or by typing a URL.
+ * The consequence is not subtle and it is not aesthetic: the component-dependency graph and the SBOM/CVE graph
+ * have both been built, rendering and correct for months, and a reader who wanted them had to already know they
+ * existed. "I run a scan and I cannot find the results" is the accurate description of that, and it is a
+ * navigation defect wearing the costume of a missing feature.
+ *
+ * What this replaces is worse than nothing: the slot held a hint telling the reader to navigate from the step
+ * timeline, a control that reaches eight of the nineteen. A pointer to a control that cannot answer the question
+ * answers it wrongly, which is the shape of defect this codebase keeps paying for.
+ *
+ * **The grouping is not declared here.** It lives in `section-index.ts` beside the rest of the section metadata,
+ * because the in-page index renders the same nineteen and two orderings of one list are one commit from
+ * disagreeing. Anything no group claims is rendered under its own heading rather than dropped — a section added
+ * later and forgotten in the grouping must not silently vanish from the navigation, which is precisely the defect
+ * being fixed here, re-introduced by the fix for it.
+ */
+function SectionNav({
+  imageId,
+  active,
+  onNavigate,
+}: { imageId: string; active: string; onNavigate: () => void }): JSX.Element {
+  const t = useMessages();
+  const labels = t.sections as unknown as Record<string, string>;
+  const headings = t.sectionGroups as unknown as Record<string, string>;
+  const { groups, ungrouped } = groupedSections(SECTION_IDS);
+  // `overview` is the route with no segment and resolves to `dossier`; without this the landing view highlights
+  // nothing and the nav reads as though you were nowhere.
+  const current = active === 'overview' ? 'dossier' : active;
+  const rows = (ids: readonly string[]): JSX.Element[] =>
+    ids.map((sid) => (
+      <NavLink
+        key={sid}
+        to={`/image/${imageId}/${sid}`}
+        onClick={onNavigate}
+        className={`nav-sub ${sid === current ? 'active' : ''}`}
+      >
+        {labels[sid] ?? sid}
+      </NavLink>
+    ));
+  return (
+    <nav className="section-nav" aria-label={t.nav.sectionNavAria}>
+      {groups.map((g) => (
+        <div key={g.id} className="section-nav-group">
+          <div className="nav-subhead">{headings[g.id] ?? g.id}</div>
+          {rows(g.sections)}
+        </div>
+      ))}
+      {ungrouped.length > 0 && (
+        <div className="section-nav-group">
+          <div className="nav-subhead">{t.nav.sectionNavOther}</div>
+          {rows(ungrouped)}
+        </div>
+      )}
+    </nav>
+  );
+}
+
+export function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
+  const { id, section } = useActiveImage();
   const nav = useNavigate();
   const t = useMessages();
   const [activeName, setActiveName] = useState<string | null>(null);
@@ -255,10 +317,8 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
             >
               <Icon.back size={13} /> {t.nav.allImages}
             </button>
-            <div className="hint" style={{ marginTop: 8, fontSize: '0.72rem' }}>
-              {t.nav.navigateHint}
-            </div>
           </div>
+          <SectionNav imageId={id} active={section} onNavigate={onNavigate} />
         </>
       )}
 

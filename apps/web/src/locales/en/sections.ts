@@ -25,6 +25,7 @@ export const sections = {
   findings: 'Findings & report',
   operator: 'Operator ledger',
   diff: 'Diff',
+  egress: 'Firmware egress',
   simulate: 'Emulation recipes',
   opacidad: 'Autonomous scan',
   agent: 'Agent',
