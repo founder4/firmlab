@@ -36,6 +36,53 @@ describe('summarizeFindings', () => {
     // The confirmed critical outranks the merely-suspected critical.
     expect(s.top[0]?.title).toBe('root RCE');
   });
+
+  it('splits each severity into established and unproven, so a bare count cannot stand alone', () => {
+    const s = summarizeFindings([
+      finding({ severity: 'critical', proofState: 'static_confirmed' }),
+      finding({ severity: 'critical', proofState: 'needs_runtime_reproduction' }),
+      finding({ severity: 'critical', proofState: 'blocked_by_platform' }),
+    ]);
+    expect(s.census).toEqual([{ severity: 'critical', total: 3, established: 1, unproven: 2 }]);
+  });
+});
+
+describe('the narrative severity line', () => {
+  const ctx = (findings: Finding[]): OpacidadContext => ({
+    filename: 'fw.bin',
+    firmwareClass: 'embedded-linux',
+    arch: 'mips',
+    plan: [],
+    steps: [],
+    findings,
+  });
+
+  it('qualifies every count with how much of it was established', () => {
+    const md = composeDeterministicNarrative(
+      ctx([
+        finding({ severity: 'critical', proofState: 'static_confirmed' }),
+        finding({ severity: 'critical', proofState: 'needs_runtime_reproduction' }),
+      ]),
+    );
+    expect(md).toContain('2 critical (1 established, 1 unproven)');
+    // The bare count is exactly what this replaces; it must not survive anywhere in the line.
+    expect(md).not.toMatch(/·\s*2 critical\s*·/);
+  });
+
+  it('says so outright when a whole band is leads', () => {
+    const md = composeDeterministicNarrative(
+      ctx([
+        finding({ severity: 'high', proofState: 'needs_runtime_reproduction' }),
+        finding({ severity: 'high', proofState: 'blocked_by_platform' }),
+      ]),
+    );
+    expect(md).toContain('2 high (all unproven leads)');
+  });
+
+  it('marks a fully-established band as such rather than leaving it ambiguous', () => {
+    const md = composeDeterministicNarrative(ctx([finding({ severity: 'medium', proofState: 'static_confirmed' })]));
+    expect(md).toContain('1 medium (established)');
+  });
 });
 
 describe('buildAttackPath', () => {

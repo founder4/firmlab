@@ -362,3 +362,81 @@ describe('FindingsLedger — why a finding sits where it does', () => {
     expect(screen.queryByText(/reason B/)).not.toBeInTheDocument();
   });
 });
+
+describe('the two axes — how bad if true, and how much was established', () => {
+  it('gives a lead and an established row of the same severity different marks', () => {
+    // The defect: both rendered as the same red `●`, so the most emphatic mark in the table was on the rows the
+    // workbench had established least. 48 of this corpus's 72 criticals are leads.
+    render(
+      <FindingsLedger
+        findings={[
+          measured({ id: 'a', severity: 'critical', proofState: 'static_confirmed', title: 'in the bytes' }),
+          measured({
+            id: 'b',
+            severity: 'critical',
+            proofState: 'needs_runtime_reproduction',
+            title: 'a reason to look',
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByRole('img', { name: 'critical — established' })).toHaveLength(1);
+    expect(screen.getAllByRole('img', { name: 'critical if true — not established' })).toHaveLength(1);
+  });
+
+  it('states both axes in words, so the distinction is not carried by fill alone', () => {
+    render(<FindingsLedger findings={[measured({ severity: 'high', proofState: 'blocked_by_platform' })]} />);
+    // A block is a question that could not be answered — it must not read as established.
+    expect(screen.getByRole('img', { name: 'high if true — not established' })).toBeInTheDocument();
+  });
+
+  it('splits every severity band into established and unproven above the table', () => {
+    render(
+      <FindingsLedger
+        findings={[
+          measured({ id: 'a', severity: 'critical', proofState: 'static_confirmed' }),
+          measured({ id: 'b', severity: 'critical', proofState: 'needs_runtime_reproduction' }),
+          measured({ id: 'c', severity: 'critical', proofState: 'needs_runtime_reproduction' }),
+        ]}
+      />,
+    );
+    expect(screen.getByText('3 critical (1 established, 2 unproven)')).toBeInTheDocument();
+  });
+
+  it('says outright when a whole band is unproven', () => {
+    render(
+      <FindingsLedger findings={[measured({ severity: 'critical', proofState: 'needs_runtime_reproduction' })]} />,
+    );
+    expect(screen.getByText('1 critical (all unproven)')).toBeInTheDocument();
+  });
+
+  it('censuses the whole ledger, not the rows that happened to fit under the cap', () => {
+    const many = Array.from({ length: 320 }, (_, i) =>
+      measured({ id: `f${i}`, severity: 'low', proofState: 'needs_runtime_reproduction', title: `row ${i}` }),
+    );
+    render(<FindingsLedger findings={many} />);
+    expect(screen.getByText('320 low (all unproven)')).toBeInTheDocument();
+  });
+
+  it('carries the legend that makes the fill readable, rather than leaving it to be inferred', () => {
+    render(<FindingsLedger findings={[measured()]} />);
+    expect(screen.getByText(/how bad a row would be if true, never that it was established/i)).toBeInTheDocument();
+  });
+
+  it('orders a severity tie by the ladder, not by the alphabet', () => {
+    // `a.proofState < b.proofState` put `blocked_by_platform` above `confirmed_full_system` because 'b' < 'c'.
+    const view = selectLedgerRows(
+      [
+        measured({ id: 'a', severity: 'high', proofState: 'blocked_by_platform', title: 'blocked' }),
+        measured({ id: 'b', severity: 'high', proofState: 'confirmed_full_system', title: 'booted' }),
+      ],
+      new Set(),
+    );
+    expect(view.rows.map((r) => r.proofState)).toEqual(['confirmed_full_system', 'blocked_by_platform']);
+  });
+
+  it('prints no census at all for an empty ledger rather than a row of zeroes', () => {
+    render(<FindingsLedger findings={[]} />);
+    expect(screen.queryByText(/established,/)).not.toBeInTheDocument();
+  });
+});

@@ -405,7 +405,28 @@ describe('kernelAge / ageSeverity', () => {
     expect(age?.years).toBe(22);
     // The banner's own build stamp against the series release — a 2.6 line still being built 23 years later.
     expect(age?.yearsOldAtBuild).toBe(23);
-    expect(ageSeverity(age as NonNullable<typeof age>)).toBe('critical');
+    // `high`, not `critical`: age is a prior, not a mechanism. See `ageSeverity`.
+    expect(ageSeverity(age as NonNullable<typeof age>)).toBe('high');
+  });
+
+  it('does not let the calendar raise the grade on bytes that never changed', () => {
+    // The defect this pins: `preModern && years >= 15` returned `critical`, so the same image was graded `high`
+    // one year and `critical` the next with nothing about the firmware having moved.
+    const v = parseKernelVersion('2.6.31') as NonNullable<ReturnType<typeof parseKernelVersion>>;
+    const y2015 = kernelAge(v, Date.UTC(2015, 0, 1));
+    const y2040 = kernelAge(v, Date.UTC(2040, 0, 1));
+    expect(y2015?.years).toBeLessThan(15);
+    expect(y2040?.years).toBeGreaterThan(30);
+    expect(ageSeverity(y2015 as NonNullable<typeof y2015>)).toBe('high');
+    expect(ageSeverity(y2040 as NonNullable<typeof y2040>)).toBe('high');
+  });
+
+  it('reserves critical for a lane that names a mechanism — age alone never reaches it', () => {
+    for (const version of ['2.6.31', '2.4.20', '3.10.14', '4.7.3', '5.4.213', '6.6.1']) {
+      const v = parseKernelVersion(version) as NonNullable<ReturnType<typeof parseKernelVersion>>;
+      const age = kernelAge(v, NOW);
+      if (age) expect(ageSeverity(age)).not.toBe('critical');
+    }
   });
 
   it('measures a 5.4 kernel as mid-aged rather than pre-modern', () => {
@@ -486,7 +507,7 @@ describe('postureFindings', () => {
     const age = kernelAge(v, NOW, 2026);
     const drafts = postureFindings(shell({ age }));
     const ageDraft = drafts.find((d) => d.kind === 'kernel-age');
-    expect(ageDraft?.severity).toBe('critical');
+    expect(ageDraft?.severity).toBe('high');
     expect(ageDraft?.proofState).toBe('static_confirmed');
     expect(ageDraft?.rationale).toContain('not this one');
     expect(ageDraft?.rationale).not.toMatch(/CVE-\d/);

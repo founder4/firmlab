@@ -30,6 +30,7 @@
  * worded three ways. Finding titles, rationales and source strings are the record providers wrote when they ran and
  * are shown as written, in whatever language produced them.
  */
+import { compareFindings, isEstablished, severityCensus } from '@firmlab/core';
 import { Fragment, useState } from 'react';
 import type { Finding, FindingProvenance, OperatorAssertion } from '../api';
 import { messages, useMessages } from '../i18n';
@@ -87,20 +88,50 @@ export const SEV_COLOR: Record<string, string> = {
 /** How many rows the table prints before it states what it cut and by what rule. Contested rows are exempt. */
 export const MAX_LEDGER_ROWS = 300;
 
-const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-
 /**
- * Deterministic display order: severity, then proof state, then title, then id — the same order the HTML report
- * uses, and never insertion order. Ties broken by arrival order would make the cap's cut an artifact of the order
- * providers happened to run in, which is the "a bound is not an answer" rule in CLAUDE.md.
+ * The severity mark, carrying both axes: hue is how bad if true, fill is whether it was established.
+ *
+ * The table used to print one glyph — `●`, coloured by severity — so a `critical` lead and a `critical` property
+ * read out of the bytes were the same red dot. 48 of this corpus's 72 criticals are leads, which made the most
+ * emphatic mark in the table the one the workbench had established least.
+ *
+ * Fill rather than a second colour or a chip, for three reasons: it reuses the grammar `ProofStateBadge` already
+ * set (a solid stroke is code's verdict, a dashed one is not a measurement), it leaves severity's own hue to say
+ * exactly what it always said, and it survives being read by someone who cannot separate the hues. The label is
+ * not decorative either — colour and fill are both visual, so the accessible name states both axes in words.
  */
-function bySeverityThenName(a: Finding, b: Finding): number {
-  const ra = SEVERITY_RANK[a.severity] ?? 9;
-  const rb = SEVERITY_RANK[b.severity] ?? 9;
-  if (ra !== rb) return ra - rb;
-  if (a.proofState !== b.proofState) return a.proofState < b.proofState ? -1 : 1;
-  if (a.title !== b.title) return a.title < b.title ? -1 : 1;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+function SeverityMark({
+  severity,
+  proofState,
+  decorative = false,
+}: {
+  severity: string;
+  proofState: FindingProvenance;
+  /**
+   * The legend's copies of the mark, where the count beside them already says the split in words. They are
+   * hidden from assistive tech rather than labelled: announcing "critical — established" twice, once as a
+   * legend and once as a row, is noise, and the census sentence is the accessible version of the same fact.
+   */
+  decorative?: boolean;
+}): JSX.Element {
+  const t = useMessages();
+  const color = SEV_COLOR[severity] ?? 'var(--text-dim)';
+  const established = isEstablished(proofState);
+  const label = established ? t.findings.mark.established(severity) : t.findings.mark.unproven(severity);
+  return (
+    <span
+      {...(decorative ? { 'aria-hidden': true } : { role: 'img', 'aria-label': label, title: label })}
+      style={{
+        display: 'inline-block',
+        width: 9,
+        height: 9,
+        borderRadius: '50%',
+        border: `1.5px solid ${color}`,
+        background: established ? color : 'transparent',
+        verticalAlign: 'middle',
+      }}
+    />
+  );
 }
 
 /**
@@ -182,17 +213,52 @@ export function selectLedgerRows(
   contestedIds: ReadonlySet<string>,
   cap = MAX_LEDGER_ROWS,
 ): LedgerView {
-  const sorted = [...findings].sort(bySeverityThenName);
+  const sorted = [...findings].sort(compareFindings);
   if (sorted.length <= cap) return { rows: sorted, omitted: 0, rule: null };
   const contested = sorted.filter((f) => contestedIds.has(f.id));
   const rest = sorted.filter((f) => !contestedIds.has(f.id));
   const room = Math.max(0, cap - contested.length);
-  const rows = [...contested, ...rest.slice(0, room)].sort(bySeverityThenName);
+  const rows = [...contested, ...rest.slice(0, room)].sort(compareFindings);
   const omitted = sorted.length - rows.length;
   if (omitted === 0) return { rows, omitted: 0, rule: null };
   // The sentence travels with the selection rather than being assembled at the render site: a bound that states
   // what it dropped is part of the answer, and keeping the two together is what lets a test hold this to it.
   return { rows, omitted, rule: messages().findings.cutRule(rows.length, sorted.length, omitted) };
+}
+
+/**
+ * The severity census, and the sentence that makes the marks in the table readable.
+ *
+ * It sits above the table rather than under it because it qualifies the number in the panel title, and a
+ * qualifier printed after 300 rows is a qualifier nobody reads. Each band shows its own mark at the size the
+ * rows use, filled and hollow side by side, so the legend is demonstrated rather than described — and the
+ * counts beside it are what the marks are counting.
+ *
+ * It counts the whole ledger even when the table is capped, and it is rendered from `severityCensus` rather
+ * than tallied here so the ledger, the narrative and the report cannot disagree about what "established" means.
+ */
+function SeverityCensus({ census }: { census: ReturnType<typeof severityCensus> }): JSX.Element {
+  const t = useMessages();
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', alignItems: 'center' }}>
+        {census.map((c) => (
+          <span key={c.severity} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12 }}>
+            {c.established > 0 ? <SeverityMark severity={c.severity} proofState="static_confirmed" decorative /> : null}
+            {c.unproven > 0 ? (
+              <SeverityMark severity={c.severity} proofState="needs_runtime_reproduction" decorative />
+            ) : null}
+            <span style={{ color: 'var(--text-dim)' }}>
+              {t.findings.census.band(c.severity, c.total, c.established, c.unproven)}
+            </span>
+          </span>
+        ))}
+      </div>
+      <div className="hint" style={{ marginTop: 6, maxWidth: '72ch' }}>
+        {t.findings.census.legend}
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -280,6 +346,8 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
   const disputesByTarget = indexDisputes(findings);
   const dangling = danglingDisputes(findings);
   const contestedIds = new Set(disputesByTarget.keys());
+  // The whole ledger, not the capped view: a census of the rows that happened to fit would be a different claim.
+  const census = severityCensus(findings);
   const view = selectLedgerRows(findings, contestedIds, showAll ? Number.POSITIVE_INFINITY : MAX_LEDGER_ROWS);
   // Counted, not filtered: an assertion belongs in this table — it just may never be read as a measurement.
   const assertedCount = findings.filter((f) => f.assertion).length;
@@ -292,6 +360,8 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
         {assertedCount > 0 ? <> {t.findings.asserted(assertedCount)}</> : null}
         {disputesByTarget.size > 0 ? <> {t.findings.contested(disputesByTarget.size)}</> : null}
       </div>
+
+      {census.length > 0 ? <SeverityCensus census={census} /> : null}
 
       {dangling.length > 0 ? <DanglingDisputeNote dangling={dangling} /> : null}
 
@@ -346,7 +416,7 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                           ) : null}
                         </td>
                         <td>
-                          <span style={{ color: SEV_COLOR[f.severity] ?? 'var(--text-dim)' }}>●</span>
+                          <SeverityMark severity={f.severity} proofState={f.proofState} />
                         </td>
                         <td style={{ fontSize: 12.5 }}>
                           {f.title}

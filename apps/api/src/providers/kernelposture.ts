@@ -905,9 +905,24 @@ export function kernelAge(version: KernelVersion, nowMs: number, buildYear?: num
   return age;
 }
 
-/** Pure: the severity the age alone justifies. Pre-3.0 is never below `high` — that line is simply unmaintained. */
+/**
+ * Pure: the severity the age alone justifies — and it stops at `high`, deliberately.
+ *
+ * This used to return `critical` for a pre-3.0 series once it passed fifteen years, which made the row's severity
+ * **a function of the calendar rather than of the firmware**: the same unchanged bytes were graded `high` in 2025
+ * and `critical` in 2026, and would keep climbing while nothing about the image moved. Worse, the finding's own
+ * rationale ends with "this is the version arithmetic only — which specific CVEs apply is the SBOM/component
+ * lane's claim, not this one", so the sentence disclaimed exactly what the grade asserted, and on the WR940N the
+ * row rendered above CVE-2020-8597 — a real pre-auth RCE the component lane confirmed — in the same attack path.
+ *
+ * Age is a **prior**: it predicts that vulnerabilities exist, it is not one. `critical` is reserved for a finding
+ * that names a mechanism, which the component and binary lanes do on these same images. Pre-3.0 stays at `high`
+ * and never falls below it — an unmaintained line is a standing fact about the product, not a shading — but the
+ * ceiling is where the arithmetic runs out, and it is here rather than in the caller so a reader of the grade and
+ * a reader of the reason cannot get different answers.
+ */
 export function ageSeverity(age: KernelAge): FindingSeverity {
-  if (age.preModern) return age.years >= 15 ? 'critical' : 'high';
+  if (age.preModern) return 'high';
   if (age.years >= 10) return 'high';
   if (age.years >= 6) return 'medium';
   if (age.years >= 3) return 'low';

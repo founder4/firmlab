@@ -6,6 +6,7 @@
  * them with tool-backed providers (binwalk, radare2/Ghidra, syft/grype, QEMU/Renode) when available.
  */
 export * from './types.js';
+export * from './findings-rank.js';
 export * from './entropy.js';
 export * from './signatures.js';
 export * from './structure.js';

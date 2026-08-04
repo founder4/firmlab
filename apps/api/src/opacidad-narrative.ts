@@ -8,7 +8,7 @@
  * off**; when the LLM is on, `buildLlmPrompt` hands it the same structured facts to phrase more fluidly — never to
  * invent. Everything here is pure (context in, strings out) and fully unit-testable.
  */
-import type { Finding } from '@firmlab/core';
+import { type Finding, SEVERITY_RANK, type SeverityCount, findingRank, severityCensus } from '@firmlab/core';
 
 export type OpacidadStepStatus = 'ran' | 'degraded' | 'skipped' | 'not-built';
 
@@ -35,6 +35,12 @@ export interface FindingsSummary {
   total: number;
   bySeverity: Record<string, number>;
   byProofState: Record<string, number>;
+  /**
+   * The same tally as `bySeverity`, split by whether the row establishes a property of the image. Optional
+   * forever: a summary is persisted on a job row and re-read for as long as the image exists, so a result
+   * stored by an older build has no census and a reader must cope rather than throw.
+   */
+  census?: SeverityCount[];
   top: { title: string; severity: string; proofState: string; source: string }[];
 }
 
@@ -50,21 +56,9 @@ export interface OpacidadContext {
   findings: Finding[];
 }
 
-const SEVERITY_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
-const PROOF_RANK: Record<string, number> = {
-  confirmed_full_system: 6,
-  confirmed_in_emulation: 5,
-  static_confirmed: 4,
-  needs_runtime_reproduction: 3,
-  blocked_by_platform: 2,
-  blocked_by_security: 2,
-  false_positive: 0,
-};
-
-/** Rank a finding for prioritization: severity first, then how well it is proven. */
-function findingRank(f: Finding): number {
-  return (SEVERITY_RANK[f.severity] ?? 0) * 10 + (PROOF_RANK[f.proofState] ?? 0);
-}
+// The ranking used to be declared here, one of three copies of the same rule that had each drifted. It lives in
+// `@firmlab/core` now, beside `isEstablished` and the sentence explaining why severity leads and provenance
+// breaks the tie — see `findings-rank.ts`.
 
 /** Tally findings by severity + proof state and surface the highest-ranked handful. */
 export function summarizeFindings(findings: Finding[]): FindingsSummary {
@@ -78,7 +72,7 @@ export function summarizeFindings(findings: Finding[]): FindingsSummary {
     .sort((a, b) => findingRank(b) - findingRank(a))
     .slice(0, 8)
     .map((f) => ({ title: f.title, severity: f.severity, proofState: f.proofState, source: f.source }));
-  return { total: findings.length, bySeverity, byProofState, top };
+  return { total: findings.length, bySeverity, byProofState, census: severityCensus(findings), top };
 }
 
 /**
@@ -120,10 +114,30 @@ export function honestGaps(ctx: OpacidadContext): string[] {
   return gaps;
 }
 
+/**
+ * The severity tally, with each count split into what was established and what is still a reason to look.
+ *
+ * `3 critical` reads as three problems. On this corpus two thirds of every severity band are leads, so the bare
+ * count was the headline sentence of an autonomous scan asserting more than the scan had. The split is printed
+ * inline — `3 critical (1 established, 2 leads)` — rather than in a footnote, because the number and its
+ * qualifier have to travel together or the qualifier is the part that gets skipped.
+ */
 function severityLine(s: FindingsSummary): string {
-  const order = ['critical', 'high', 'medium', 'low', 'info'];
-  const parts = order.filter((k) => s.bySeverity[k]).map((k) => `${s.bySeverity[k]} ${k}`);
-  return parts.length ? parts.join(' · ') : 'none';
+  // A summary stored before the census existed still has to render. It falls back to the bare counts it does
+  // hold — the old sentence, not a blank and not a fabricated split.
+  if (!s.census) {
+    const order = ['critical', 'high', 'medium', 'low', 'info'];
+    const parts = order.filter((k) => s.bySeverity[k]).map((k) => `${s.bySeverity[k]} ${k}`);
+    return parts.length ? parts.join(' · ') : 'none';
+  }
+  if (!s.census.length) return 'none';
+  return s.census
+    .map((c) => {
+      if (c.unproven === 0) return `${c.total} ${c.severity} (established)`;
+      if (c.established === 0) return `${c.total} ${c.severity} (all unproven leads)`;
+      return `${c.total} ${c.severity} (${c.established} established, ${c.unproven} unproven)`;
+    })
+    .join(' · ');
 }
 
 /**

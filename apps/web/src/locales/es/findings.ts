@@ -49,6 +49,22 @@ export const findings: Messages['findings'] = {
     proofState: 'Estado de prueba',
   },
 
+  census: {
+    band: (severity: string, total: number, established: number, unproven: number) =>
+      unproven === 0
+        ? `${total} ${severity} (todos establecidos)`
+        : established === 0
+          ? `${total} ${severity} (ninguno establecido)`
+          : `${total} ${severity} (${established} establecidos, ${unproven} sin establecer)`,
+    legend:
+      'La gravedad dice lo malo que sería el hallazgo si fuera cierto, nunca que se haya establecido. Una marca rellena afirma una propiedad de esta imagen; una hueca es un motivo para mirar — lee su estado de prueba.',
+  },
+
+  mark: {
+    established: (severity: string) => `${severity} — establecido`,
+    unproven: (severity: string) => `${severity} si fuera cierto — sin establecer`,
+  },
+
   why: 'Por qué este estado',
   whyLabel: 'Mostrar por qué este hallazgo está en este estado de prueba',
   interventionMark: (n: number) =>

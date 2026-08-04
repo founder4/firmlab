@@ -47,6 +47,34 @@ export const findings = {
     proofState: 'Proof state',
   },
 
+  /**
+   * The two axes said in one place, because the table shows both and used to encode only one.
+   *
+   * `severity` is how bad the row would be **if true**; the proof state is how much of it was established. On
+   * this corpus two thirds of every severity band are leads, so "72 critical" was a sentence the workbench had
+   * not earned. The census prints the split inline and the mark carries it per row — a filled disc for a row
+   * that states a property of the image, a hollow ring for one that states a reason to look.
+   *
+   * The legend is not optional decoration: fill is the only thing separating the two, and a distinction a
+   * reader has to infer is a distinction that will be misread.
+   */
+  census: {
+    band: (severity: string, total: number, established: number, unproven: number) =>
+      unproven === 0
+        ? `${total} ${severity} (all established)`
+        : established === 0
+          ? `${total} ${severity} (all unproven)`
+          : `${total} ${severity} (${established} established, ${unproven} unproven)`,
+    legend:
+      'Severity says how bad a row would be if true, never that it was established. A filled mark states a property of this image; a hollow one is a reason to look — read its proof state.',
+  },
+
+  /** Colour is never the only carrier: the mark's own label says both axes for a screen reader. */
+  mark: {
+    established: (severity: string) => `${severity} — established`,
+    unproven: (severity: string) => `${severity} if true — not established`,
+  },
+
   /** The author line an asserted row always carries — an assertion never appears without who made it. */
   /**
    * A finding whose subject was not the firmware as shipped: the workbench changed something to obtain it.
