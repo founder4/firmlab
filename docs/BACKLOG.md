@@ -398,6 +398,67 @@ image's root hash is md5crypt and was NOT recovered (115226 candidates failed), 
   46 and the appended line 47 never runs. Two boots of the same script disagreeing about whether it finishes is
   itself unexplained, and the console-driven route sidesteps it entirely.
 
+## Workbench UI — findability, and the four things it exposed (2026-08-04, deploy `b691414`)
+
+Operator review of the deployed build. The complaints were "I run a binvuln scan / a kernel posture / an
+emulation and I never find a results table", "there is no obvious place for the firmware's outbound requests",
+and "when a SBOM exists I would want a code-dependency graph and a CVE graph". Reading the code first changed the
+diagnosis: **two of the three things asked for already existed.**
+
+- ✅ **Nineteen sections, zero in the sidebar, eight in the step timeline.** That single measurement is the root
+  cause of most of the above. `ComponentMap` (the rootfs `DT_NEEDED` graph) and `SbomGraph` (the SBOM as a graph
+  coloured by worst CVE) have both been built, rendering and correct for months, and reaching them required
+  already knowing they existed. The sidebar now lists all nineteen in six groups, the grouping lives once in
+  `section-index.ts`, and `groupedSections` surfaces anything no group claims rather than dropping it — the
+  defect being fixed, re-introduced by its own fix, is the failure mode this file keeps recording.
+  _What occupied that slot was worse than nothing: a hint telling the reader to navigate from a control that
+  reaches eight of nineteen._
+- ✅ **`egress` is a section.** `providers/egress.ts` reads the guest's own frames, so it knows what a booted
+  firmware ADDRESSED whether or not the run let it through — and the only way to see it was the emulation menu,
+  which showed the most recent run and nothing else. The section lists every boot and separates the three empties
+  (no boot ran · boots ran and none captured · a boot captured and the guest addressed nothing); the middle one is
+  a property of the run, not of the firmware, and reading it as "contacts nobody" is the inference this codebase
+  exists to refuse.
+
+Raised in the same review and NOT done:
+
+- ▢ **No per-provider results surface.** `CapabilityResults` is one row per capability *by design* and says so in
+  its own doc — "a deeper per-provider surface is a separate piece of work". So binvuln, kernel posture, yara and
+  fwhunt genuinely have no readable result: you launch, you watch a spinner, and the payload reaches no screen.
+  This is the largest remaining gap between what the API produces and what the app shows.
+- ▢ **Emulation has menus and no reading surface.** Same shape: `SimulationMenu` launches rungs, and where a
+  run's output lands is not evident. Related to the ledger gap measured in Pass 4 — the rungs run, the ledger
+  moved from 1 row to 3.
+- ▢ **A hardware section for REAL devices.** The existing `hardware` section is interfaces *inferred from the
+  bytes* (UART/JTAG pads). The operator wants connection to hardware: Flipper Zero (there is a
+  `~/Documents/flipper_zero` on the machine — read it before designing anything), a serial UART terminal (already
+  ▢ as "live-device UART bridge"), an SPI flash reader, JTAG/SWD.
+- ▢ **The generated report.** Raised and the sentence was cut off mid-message; the ask is unknown and must be
+  asked again rather than guessed.
+
+## Agents — FirmLab vs galert, measured (2026-08-04)
+
+Asked whether FirmLab should grow an "autonomous agents" section, because a Claude agent driving the workbench
+by hand keeps out-producing the app's own agent. Counted rather than estimated:
+
+| | FirmLab | galert (`~/Documents/galert`) |
+|---|---|---|
+| specialist prompts | **2 decision nodes** (triage ①, target-selection ②) | **~120** in `prompts/shared` (`vuln-X`/`exploit-X` pairs) + **8** firmware agents + skill-cards per domain |
+| `agent/` size | 1711 lines total | `apps/worker`, Claude Agent SDK + Temporal durable workflows |
+| what the model decides | which provider to launch, from a fixed set | what to *do*, with a shell and a documented method |
+
+**The asymmetry is vocabulary, not intelligence**, and this same day proved it: the WR940N answer came from
+booting `init=/bin/sh`, hand-writing a qemu invocation and reading `/proc/net/tcp`. No provider in FirmLab could
+have produced that, so no improvement in planning over the current provider set would have found it.
+
+- ▢ **Give the agent an open vocabulary through the MCP server that already exists** — a bounded, logged shell
+  against the rootfs and against a booted guest. That is the seam; it is already built and already exposed.
+- ▢ **Port the skill-card idea**: per-device-class method documents. FirmLab has the routing (`specsForClass`)
+  and no *method* anywhere.
+- — **A UI section for autonomous agents is NOT the gap** and would not close it.
+- Keep the difference that matters: in galert the agent decides what is proven; here code does. That is
+  FirmLab's actual differentiator and it survives both changes above.
+
 ## Findings — the two axes (2026-08-04, deploy `e6e96e0`)
 
 `severity` says how bad a row would be **if true**; `ProofState` says how much was established. The workbench had a
