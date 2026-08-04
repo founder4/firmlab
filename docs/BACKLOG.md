@@ -375,12 +375,24 @@ image's root hash is md5crypt and was NOT recovered (115226 candidates failed), 
   because the first pass of this experiment had a real confound: the BEFORE probe fired while only `:076C` was
   listening, and `httpd` bound 80/443/22 in the ~30 s between the two probes. The control is what removes it.
 
-- ▢ **Not yet in the product.** This ran from a hand-driven script in the container; `emulate-system.ts` does not
-  drive the console, so no finding carries it. Productising it means a rung that writes to the qemu stdin it
-  already owns, and the result MUST carry `Finding.interventions` — a service that answers only because the
-  workbench replaced init and ran the vendor's teardown is a different claim from one that answers as shipped.
-  `init=/bin/sh` also skips `/sbin/init`, so inittab's respawn entries never run; that is part of the
-  intervention and has to be named in it, not glossed.
+- ◐ **In the product as a pure module; not yet wired to a rung** (`0e05bc3`). `providers/guest-console.ts` owns
+  the script and the reading of it — `consoleScript` (the schedule baked in, both arms identical),
+  `readConsoleOutcome`, `consoleInterventions`, `describeConsole` — 23 unit tests, and **validated against real
+  boots in both arms** by driving qemu with the BUILT module rather than a transcription of it: repair →
+  `DROP`/`ACCEPT`, teardown ran, `listening: [22, 80, 443, 1900, 20002]` read out of the guest's own
+  `/proc/net/tcp`, probe `HTTP/1.1 200 OK`; control → `DROP`/`DROP`, the same five ports, `TIMEOUT`.
+  _The control boot found a defect no fixture was going to: both arms echoed the same completion marker, so the
+  control returned `teardownRan: true` and listed "the firmware's own /etc/rc.d/iptables-stop was run" **on the
+  arm that ran nothing**. Second false intervention claim on this rung — the first was retracted in `3cc413d` —
+  and the same shape both times: a guard whose success path is the branch nobody exercises. The control arm has
+  its own marker now, and a test pins it._
+- ▢ **The remaining half: `emulate-system.ts` still does not write to the qemu stdin it owns** — `bootOnce`
+  spawns with `stdio: ['ignore', 'pipe', 'pipe']`. The honest placement is a THIRD pass, attempted only when pass
+  two found nothing answering, so a firmware that answers as shipped is never touched. The result MUST carry
+  `Finding.interventions`: a service that answers only because the workbench replaced init and ran the vendor's
+  teardown is a different claim from one that answers as shipped, and `init=/bin/sh` also skips `/sbin/init`, so
+  inittab's respawn entries never run. Both belong in the list, not glossed. `buildSystemEmulationFindings`
+  already renders `interventions` onto the draft and into the rationale, so the composer half is done.
 - ▢ **The appended-`rcS` repair should probably be retired, not fixed.** Under `init=/bin/sh` `rcS` runs to
   completion (`MARKER_RCS_DONE` observed), yet under the real init the 2026-07-30 execve trace stops at line 45 of
   46 and the appended line 47 never runs. Two boots of the same script disagreeing about whether it finishes is
