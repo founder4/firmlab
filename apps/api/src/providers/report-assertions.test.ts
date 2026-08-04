@@ -479,3 +479,46 @@ describe('the population split cannot be gamed, and the cap cannot hide a contes
     expect(out).toContain('CONTESTED BY AN OPERATOR');
   });
 });
+
+describe('the report and the screen order the same rows the same way', () => {
+  const row = (o: Partial<ReportFinding>): ReportFinding => ({
+    id: 'r1',
+    source: 'kernel',
+    kind: 'k',
+    title: 'a finding',
+    severity: 'high',
+    proofState: 'static_confirmed',
+    ...o,
+  });
+
+  it('breaks a severity tie by the ladder rather than the alphabet', () => {
+    // This module carried its own copy of the rule with the same defect as the ledger's: `blocked_by_platform`
+    // sorted above `confirmed_full_system` because 'b' precedes 'c'.
+    const html = renderLedgerSections(
+      [
+        row({ id: 'a', proofState: 'blocked_by_platform', title: 'the blocked one' }),
+        row({ id: 'b', proofState: 'confirmed_full_system', title: 'the booted one' }),
+      ],
+      'en',
+    ).measured;
+    expect(html.indexOf('the booted one')).toBeLessThan(html.indexOf('the blocked one'));
+  });
+
+  it('still puts a higher severity first, whatever its proof state', () => {
+    const html = renderLedgerSections(
+      [
+        row({ id: 'a', severity: 'info', proofState: 'confirmed_full_system', title: 'proven trivium' }),
+        row({ id: 'b', severity: 'critical', proofState: 'needs_runtime_reproduction', title: 'critical lead' }),
+      ],
+      'en',
+    ).measured;
+    expect(html.indexOf('critical lead')).toBeLessThan(html.indexOf('proven trivium'));
+  });
+
+  it('prints a proof state it does not recognise rather than throwing on it', () => {
+    // `ReportFinding` widens both fields on purpose: a row persisted by an older build may carry a label this
+    // build's unions do not name, and the comparator must cope rather than the document failing to render.
+    const html = renderLedgerSections([row({ proofState: 'confirmed_on_physical_device' })], 'en').measured;
+    expect(html).toContain('confirmed_on_physical_device');
+  });
+});

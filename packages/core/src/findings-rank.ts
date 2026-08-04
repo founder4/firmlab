@@ -81,8 +81,24 @@ export function isEstablished(proofState: string): boolean {
   return ESTABLISHED.has(proofState);
 }
 
+/**
+ * The four fields the ordering reads, and no more.
+ *
+ * Deliberately structural rather than `Finding`: the HTML report widens `severity` and `proofState` to `string`
+ * on purpose — a row persisted by an older build may carry a label this build's unions do not name, and a report
+ * that throws on an unfamiliar one is worse than a report that prints it. A comparator that demanded the narrow
+ * unions would have forced a cast at that call site, and a cast is how the report ended up with its own copy of
+ * this rule in the first place.
+ */
+export interface RankableFinding {
+  id: string;
+  title: string;
+  severity: string;
+  proofState: string;
+}
+
 /** The composite used to pick the highest-priority handful: severity first, establishment as the tie-break. */
-export function findingRank(f: Pick<Finding, 'severity' | 'proofState'>): number {
+export function findingRank(f: Pick<RankableFinding, 'severity' | 'proofState'>): number {
   return (SEVERITY_RANK[f.severity] ?? 0) * 10 + (PROOF_RANK[f.proofState] ?? 0);
 }
 
@@ -93,7 +109,7 @@ export function findingRank(f: Pick<Finding, 'severity' | 'proofState'>): number
  * runs: ties broken by arrival order would make any cap's cut an artifact of which provider happened to finish
  * first, which is the "a bound is not an answer" rule.
  */
-export function compareFindings(a: Finding, b: Finding): number {
+export function compareFindings(a: RankableFinding, b: RankableFinding): number {
   const ra = SEVERITY_RANK[a.severity] ?? 0;
   const rb = SEVERITY_RANK[b.severity] ?? 0;
   if (ra !== rb) return rb - ra;

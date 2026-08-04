@@ -37,7 +37,7 @@
  * rationale print as the provider recorded them. Only the document's own scaffolding is translated. The proof-state
  * gloss under the table exists so a code that stays verbatim is still readable in the reader's language.
  */
-import type { OperatorAssertion } from '@firmlab/core';
+import { type OperatorAssertion, compareFindings } from '@firmlab/core';
 import { type Locale, type Messages, escapeHtml, messages } from '../i18n/index.js';
 import {
   type AssertionRevision,
@@ -66,8 +66,11 @@ export interface ReportFinding {
   assertion?: OperatorAssertion | undefined;
 }
 
-/** Severity order for display. Anything unrecognised sorts last rather than being dropped. */
-const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+// The severity order and the display comparator used to be declared here — the fourth copy of one rule, and it
+// carried the same defect as the ledger's: a severity tie broken by `a.proofState < b.proofState`, a string
+// comparison under which `blocked_by_platform` outranks `confirmed_full_system` because 'b' precedes 'c'. Both
+// read `compareFindings` from `@firmlab/core` now, so the report and the screen cannot order the same rows
+// differently.
 
 /**
  * How many measured rows the table prints. A bound is not an answer (CLAUDE.md): the cut is by severity and never
@@ -116,15 +119,8 @@ function sevCell(severity: string): string {
   return `<span class="mono">${escapeHtml(severity)}</span>`;
 }
 
-/** Deterministic display order: severity, then proof state, then title, then id. Never insertion order. */
-function bySeverityThenName(a: ReportFinding, b: ReportFinding): number {
-  const ra = SEVERITY_RANK[a.severity] ?? 9;
-  const rb = SEVERITY_RANK[b.severity] ?? 9;
-  if (ra !== rb) return ra - rb;
-  if (a.proofState !== b.proofState) return a.proofState < b.proofState ? -1 : 1;
-  if (a.title !== b.title) return a.title < b.title ? -1 : 1;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
+/** Deterministic display order: the shared rule from core, which reads exactly the four fields it names. */
+const bySeverityThenName = compareFindings;
 
 /**
  * The contest, rendered onto the computed row. Says who and why, then says — in the same block, not in a legend —

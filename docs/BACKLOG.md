@@ -342,6 +342,68 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ✅ **The anti-squatter guard aborted every deploy on a CLEAN port** (2026-07-28) — `check_port_squatter` assigns the output of an `lsof` pipeline, and lsof exits **1** when nothing matches; under the script's own `set -euo pipefail` that status propagates out of the assignment and killed the script there, silently, with exit 1 and no message. Precisely inverted: a squatted port ran to completion, a clean one refused to deploy. It stayed invisible because the guard was only ever exercised against the zombie it was written for — that `pnpm dev:api` was listening on 8799 the day the guard landed and every day after, so lsof always matched and always exited 0. **Killing the zombie is what disabled deploys.** The same shape as the traps in CLAUDE.md: a guard whose success path was never run, and fixtures written from the same assumption as the code. Both branches are now validated — clean port proceeds, a listener deliberately bound to 8799 is still named and refused.
 - ✅ **`deploy.sh` port-squatter check** (2026-07-27) — the compose publishes NO host port (Traefik reaches the container over `proxy_net`), so anything listening on host `8799` is by definition not the deployment. A leftover `pnpm dev:api` there is the worst kind of stale: it serves a plausible FirmLab from an old tree and an old DB, so you verify against the wrong process and believe it — which already cost real debugging time once. `check_port_squatter` runs on every invocation (including `--check`), uses `lsof` or `ss`, exempts Docker's own forwarder (`docker-proxy`/`com.docker`/`vpnkit`, which would mean the compose was changed to publish a port), and stays silent when it has no way to look rather than implying the port is clean. **Caught the ghost on its first run**: `node dist/index.js` (pid 46986, started 2026-07-23) serving `{"build":"dev"}` on 127.0.0.1:8799.
 
+## Findings — the two axes (2026-08-04, deploy `e6e96e0`)
+
+`severity` says how bad a row would be **if true**; `ProofState` says how much was established. The workbench had a
+rigorous vocabulary for the second and was reading the first as though it settled both. Measured before the fix:
+of 72 `critical` rows, **48 carried `needs_runtime_reproduction`** — hypotheses graded on their consequences,
+rendered as the same red dot as the 24 whose property is literally in the bytes.
+
+- ✅ **One ranking, in core** (`packages/core/src/findings-rank.ts`) — `compareFindings`, `findingRank`,
+  `isEstablished`, `severityCensus`. There were **four** copies of the rule and they had drifted:
+  `opacidad-narrative.ts` had the composite right; `FindingsLedger.tsx` **and** `report-assertions.ts` both broke a
+  severity tie with `a.proofState < b.proofState` — a string comparison, under which `blocked_by_platform` outranks
+  `confirmed_full_system` because `b` precedes `c`. So the least-established rows sat on top of the most-established
+  ones at every severity level, on the screen *and* in the exported report. Severity still leads the order (a
+  critical lead on a network daemon does deserve reading before a proven `info`); what changed is the tie-break.
+  `compareFindings` takes a structural `RankableFinding`, not `Finding`, because the report widens `severity` and
+  `proofState` to `string` on purpose — a row persisted by an older build may carry a label this build's unions do
+  not name, and demanding the narrow unions is what would have forced the cast that let the copy exist.
+- ✅ **Fill carries establishment** — the ledger's severity mark is a filled disc when the row states a property of
+  the image and a hollow ring when it states a reason to look, in the same severity hue. It reuses the grammar
+  `ProofStateBadge` already set (solid stroke = code's verdict, dashed = not a measurement), survives a reader who
+  cannot separate the hues, and its accessible name states both axes in words.
+- ✅ **Per-band census** above the table and in the opacidad narrative — `41 medium (2 established, 39 unproven)`.
+  Computed over the whole ledger, not the rows that fit under the 300-row cap. `FindingsSummary.census` is optional
+  forever: a summary persisted by an older build has none and must still render, so `severityLine` falls back to
+  the bare counts it does hold.
+- ✅ **`ageSeverity` no longer returns `critical`** — `preModern && years >= 15` made the grade a function of the
+  **calendar rather than the firmware**: the same unchanged bytes were `high` in 2025 and `critical` in 2026, and
+  would keep climbing. The row's own rationale already disclaimed it ("which specific CVEs apply is the SBOM lane's
+  claim, not this one"), and on the WR940N it rendered above CVE-2020-8597 — a real pre-auth RCE — in the attack
+  path. Age is a prior, not a mechanism. **Re-run over the corpus on the deployed build:** 4 kernel-age rows moved
+  `critical` → `high`, corpus criticals 72 → 68, and the WR940N's critical band is now 2, both `static_confirmed`
+  (the pppd RCE and the forgeable shipped TLS identity).
+
+Surfaced by this work and NOT done:
+
+- ▢ **The MCP surface does not carry the split.** `mcp/format.ts` hands an agent per-row `severity` and
+  `proofState`, so it *can* derive establishment, but the summary it prints states neither the census nor the
+  distinction. An agent reading "68 critical" over this corpus is reading the number the UI no longer prints
+  unqualified, which is the same misreading in the one client that cannot see the marks.
+- ▢ **`binvuln.severityRank` is a fifth ranking** and was deliberately left alone — it selects *which* rows to keep
+  per binary rather than how to display them, so it answers a different question. Worth confirming it should stay
+  separate rather than assuming it, since that assumption is what produced the other four.
+- ▢ **Severity is still assigned per provider with no shared rule.** The census makes the proof axis legible but
+  says nothing about whether two providers mean the same thing by `high`. `ageSeverity` was one calibration defect
+  found by reading one row; nothing has audited the other 37 sources.
+- ▢ **The census is not in the exported HTML report.** The screen now qualifies its counts and the document does
+  not, so the artifact that leaves the workbench is the one still stating bare totals.
+
+## Workbench UI — the network-posture line (2026-08-04, deploy `e6e96e0`)
+
+- ✅ **"Local-only. Never expose to the internet." was a constant printed over a proxied deployment.** `HealthPill`
+  had always recomputed the posture from `/health`; ten lines below it in the same file, the nav footer printed a
+  fixed sentence. On the deployed container `/health` answers `exposedToNetwork: true` with a trusted proxy
+  declared, so two claims about one fact lived in one file and the false one was the one the operator reads.
+  `useHealthPosture()` is now the single source and both read it. Four states, each with its own sentence, and the
+  one that could not be read says so — a `/health` that does not answer prints "posture unknown", never
+  "local-only"; guessing the reassuring one is exactly how the old sentence was wrong. Only `exposed` (on the
+  network, no proxy auth declared) carries a warning colour.
+  _The copy also stated a **policy the product has outgrown**: the research and capture lanes are network work by
+  design — a datasheet lookup, a vendor's update path. The line states the posture and stops; it does not tell the
+  operator what to do about it._
+
 ## Semantic debt (minor, deliberately deferred)
 Small, well-understood gaps — each already described in full where the feature lives; gathered here so a short list
 of "known-incomplete semantics" exists without hunting through the sections above.
