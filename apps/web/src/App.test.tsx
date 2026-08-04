@@ -105,6 +105,39 @@ describe('App shell', () => {
     expect(shell?.className).toContain('nav-open');
   });
 
+  describe('the network-posture line', () => {
+    // What this replaces: a constant reading "Local-only. Never expose to the internet.", printed unconditionally
+    // ten lines below a pill that had always recomputed the posture from `/health`. On the deployed container —
+    // `exposedToNetwork: true`, behind an authenticating proxy — the two disagreed, and the constant was the one
+    // the operator read. It was also a policy the product has outgrown: the research and capture lanes are
+    // network work by design.
+    it('states the proxied posture instead of claiming the deployment is local', async () => {
+      mockApi.health.mockResolvedValue({ status: 'ok', exposedToNetwork: true, trustedProxy: true });
+      render(<App />);
+      expect(await screen.findByText('Reachable through an authenticating proxy.')).toBeInTheDocument();
+      expect(screen.queryByText(/Never expose to the internet/i)).not.toBeInTheDocument();
+    });
+
+    it('says local-only only when the API really is on loopback', async () => {
+      mockApi.health.mockResolvedValue({ status: 'ok', exposedToNetwork: false, host: '127.0.0.1', port: 8799 });
+      render(<App />);
+      expect(await screen.findByText('Local-only — the API is bound to loopback.')).toBeInTheDocument();
+    });
+
+    it('warns when it is on the network with no proxy auth declared', async () => {
+      mockApi.health.mockResolvedValue({ status: 'ok', exposedToNetwork: true });
+      render(<App />);
+      expect(await screen.findByText('On the network — no proxy authentication declared.')).toBeInTheDocument();
+    });
+
+    it('says the posture is unknown when /health does not answer, rather than assuming the reassuring one', async () => {
+      mockApi.health.mockRejectedValue(new Error('connection refused'));
+      render(<App />);
+      expect(await screen.findByText(/Network posture unknown/)).toBeInTheDocument();
+      expect(screen.queryByText(/Local-only/)).not.toBeInTheDocument();
+    });
+  });
+
   // The router opts into the v7 future flags, and `v7_startTransition` is the one with teeth: it marks router
   // state updates non-urgent, so a route change is no longer guaranteed to be on screen by the time the click
   // returns. Nothing else here navigates through the REAL HashRouter, which left the opt-in resting on a

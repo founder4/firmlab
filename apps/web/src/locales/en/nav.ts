@@ -13,7 +13,32 @@ export const nav = {
   allImages: 'All images',
   navigateHint:
     'Navigate the analysis from the step timeline above, or from All sections at the top of the dossier — the timeline covers eight of the nineteen.',
-  localOnly: 'Local-only. Never expose to the internet.',
+  /**
+   * The posture sentences, one per `/health` state. These replaced a single constant that read "Local-only.
+   * Never expose to the internet." — which was both inaccurate on a proxied deployment and a policy the product
+   * has outgrown, since the research and capture lanes are network work by design. Each states what is true and
+   * stops; none of them tells the operator what to do about it.
+   */
+  posture: {
+    ok: {
+      label: 'Local-only — the API is bound to loopback.',
+      title: 'Bound to 127.0.0.1: nothing outside this machine can reach the workbench.',
+    },
+    proxied: {
+      label: 'Reachable through an authenticating proxy.',
+      title:
+        'The API is not on loopback, and this deployment declares a trusted authenticating reverse proxy in front of it (FIRMLAB_TRUSTED_PROXY).',
+    },
+    exposed: {
+      label: 'On the network — no proxy authentication declared.',
+      title:
+        'The API is bound to a non-loopback address and no trusted proxy is declared. Anything that can route to this host can reach the workbench and everything extracted into it.',
+    },
+    down: {
+      label: 'Network posture unknown — /health did not answer.',
+      title: 'The API did not respond, so the posture could not be read. This is not a statement that it is local.',
+    },
+  },
   toggleNav: 'Toggle navigation',
   help: 'Help & tour',
   helpAria: 'Help and tour',

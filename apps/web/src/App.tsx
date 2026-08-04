@@ -17,9 +17,16 @@ import { Toaster } from './toast';
 
 type HealthState = 'ok' | 'proxied' | 'exposed' | 'down';
 
-/** Local-only reassurance + API reachability. Communicates the security posture, honestly (§14). */
-function HealthPill(): JSX.Element {
-  const t = useMessages();
+/**
+ * The deployment's real network posture, read once from `/health`.
+ *
+ * It is a hook rather than local state in the pill because two places in this shell state the posture and they
+ * were not stating the same thing: the pill has always recomputed it from `/health`, while the sidebar printed a
+ * fixed sentence — "Local-only. Never expose to the internet." — ten lines below, on a deployment whose own
+ * `/health` reports `exposedToNetwork: true`. Two claims about one fact, one of them a constant, is the defect
+ * this codebase keeps paying for; there is now one source and both readers share it.
+ */
+function useHealthPosture(): HealthState {
   const [state, setState] = useState<HealthState>('down');
   useEffect(() => {
     api
@@ -27,6 +34,13 @@ function HealthPill(): JSX.Element {
       .then((h) => setState(h.trustedProxy ? 'proxied' : h.exposedToNetwork ? 'exposed' : 'ok'))
       .catch(() => setState('down'));
   }, []);
+  return state;
+}
+
+/** Local-only reassurance + API reachability. Communicates the security posture, honestly (§14). */
+function HealthPill(): JSX.Element {
+  const t = useMessages();
+  const state = useHealthPosture();
   if (state === 'down') return <span className="badge badge-high">{t.nav.health.unreachable}</span>;
   if (state === 'exposed') return <span className="badge badge-medium">{t.nav.health.exposed}</span>;
   if (state === 'proxied')
@@ -158,6 +172,43 @@ function BrandMark(): JSX.Element {
   );
 }
 
+/**
+ * What this deployment's network posture actually is, at the foot of the nav.
+ *
+ * It replaces a constant that read "Local-only. Never expose to the internet." — a prohibition, printed
+ * unconditionally, and false on any deployment reached through a proxy. Two things are wrong with a constant
+ * here and only one of them is the inaccuracy: the sentence also states a *policy* the product has outgrown, on
+ * a workbench whose research and capture lanes exist to use the network. So this states the posture and stops.
+ * `exposed` is the one case that carries a warning colour, because "on the network with no declared proxy auth"
+ * is a fact the operator may not have intended; the other two are reported in the shell's ordinary dim hint.
+ *
+ * A posture it could not read is said, never assumed: a failed `/health` prints "unknown", not "local-only".
+ * Guessing the reassuring one is exactly how the old sentence was wrong.
+ */
+function PostureLine(): JSX.Element {
+  const t = useMessages();
+  const state = useHealthPosture();
+  const copy = t.nav.posture[state];
+  return (
+    <div
+      className="hint"
+      style={{
+        padding: '10px 10px 2px',
+        display: 'flex',
+        gap: 6,
+        alignItems: 'flex-start',
+        ...(state === 'exposed' ? { color: 'var(--warn)' } : {}),
+      }}
+      title={copy.title}
+    >
+      <span style={{ flexShrink: 0, marginTop: 1 }}>
+        <Icon.shield size={13} />
+      </span>
+      <span>{copy.label}</span>
+    </div>
+  );
+}
+
 function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
   const { id } = useActiveImage();
   const nav = useNavigate();
@@ -214,9 +265,7 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element {
       <div style={{ flex: 1, minHeight: 12 }} />
       <div className="nav-section">{t.nav.system}</div>
       <NavRow to="/settings" icon="settings" label={t.nav.settings} onNavigate={onNavigate} />
-      <div className="hint" style={{ padding: '10px 10px 2px', display: 'flex', gap: 6, alignItems: 'center' }}>
-        <Icon.shield size={13} /> {t.nav.localOnly}
-      </div>
+      <PostureLine />
     </>
   );
 }
