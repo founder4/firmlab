@@ -342,6 +342,50 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ✅ **The anti-squatter guard aborted every deploy on a CLEAN port** (2026-07-28) — `check_port_squatter` assigns the output of an `lsof` pipeline, and lsof exits **1** when nothing matches; under the script's own `set -euo pipefail` that status propagates out of the assignment and killed the script there, silently, with exit 1 and no message. Precisely inverted: a squatted port ran to completion, a clean one refused to deploy. It stayed invisible because the guard was only ever exercised against the zombie it was written for — that `pnpm dev:api` was listening on 8799 the day the guard landed and every day after, so lsof always matched and always exited 0. **Killing the zombie is what disabled deploys.** The same shape as the traps in CLAUDE.md: a guard whose success path was never run, and fixtures written from the same assumption as the code. Both branches are now validated — clean port proceeds, a listener deliberately bound to 8799 is still named and refused.
 - ✅ **`deploy.sh` port-squatter check** (2026-07-27) — the compose publishes NO host port (Traefik reaches the container over `proxy_net`), so anything listening on host `8799` is by definition not the deployment. A leftover `pnpm dev:api` there is the worst kind of stale: it serves a plausible FirmLab from an old tree and an old DB, so you verify against the wrong process and believe it — which already cost real debugging time once. `check_port_squatter` runs on every invocation (including `--check`), uses `lsof` or `ss`, exempts Docker's own forwarder (`docker-proxy`/`com.docker`/`vpnkit`, which would mean the compose was changed to publish a port), and stays silent when it has no way to look rather than implying the port is clean. **Caught the ghost on its first run**: `node dist/index.js` (pid 46986, started 2026-07-23) serving `{"build":"dev"}` on 127.0.0.1:8799.
 
+## Full-system — where the SYNs went, answered (2026-08-04)
+
+The rung's open question since 2026-07-29: the WR940N boots, `httpd` is alive and serving TLS, and **157 SYNs are
+delivered and the guest answers none — not even a RST**. `boot-diagnose.ts` correctly separated that from "no
+service" and named two candidate causes (the `ebtables bug: Wrong len argument` on the console plus
+`br_MultiSsidVlan_InputForward.ko`, or the iptables ruleset `httpd` builds through 88–97 `system()` calls). The
+2026-07-30 retraction (`3cc413d`) had ruled out the fix, not the cause: the repair line appended to `rcS` is
+written into the image and never executes.
+
+**Answered by booting with `init=/bin/sh` and asking the guest.** The console is the vendor's `getty` and this
+image's root hash is md5crypt and was NOT recovered (115226 candidates failed), so there is no interactive login —
+`init=/bin/sh` bypasses it.
+
+- **Cause: the guest's own filter table.** `iptables -L INPUT -n` from inside reads
+  `Chain INPUT (policy DROP 35 packets, 9574 bytes)` **with no accept rules at all**. A DROP policy is exactly a
+  SYN that vanishes without a reset, which is the observed symptom to the letter.
+- **Both competing leads are dead.** `lsmod` is **empty** — `br_MultiSsidVlan_InputForward.ko` is not loaded, so
+  it cannot be eating anything. And `/proc/net/tcp` shows `:0050`, `:01BB` and `:0016` in LISTEN, so "httpd is
+  dead before the probe" is false too. `/proc/net/ip_tables_names` holds `raw mangle filter` and **no `nat`**,
+  which is why the vendor teardown exits non-zero while still doing its work on `filter`.
+- **The vendor's own teardown makes the router answer.** `/etc/rc.d/iptables-stop` is shipped in the image and
+  nothing in its boot path calls it. Run from the console after `rcS`:
+
+  | arm | `INPUT` policy, measured in-guest | probe on the forwarded port |
+  |---|---|---|
+  | `iptables-stop` (n=3) | **ACCEPT** | **`HTTP/1.1 200 OK`** |
+  | control, same schedule (n=3) | **DROP** | `TIMEOUT` |
+
+  `Server: Router Webserver` · `WWW-Authenticate: Basic realm="TP-Link Wireless N Router WR940N"`. Six boots, both
+  arms on an identical schedule, port 80 in LISTEN in both — read by hand out of `/proc/net/tcp` in each arm,
+  because the first pass of this experiment had a real confound: the BEFORE probe fired while only `:076C` was
+  listening, and `httpd` bound 80/443/22 in the ~30 s between the two probes. The control is what removes it.
+
+- ▢ **Not yet in the product.** This ran from a hand-driven script in the container; `emulate-system.ts` does not
+  drive the console, so no finding carries it. Productising it means a rung that writes to the qemu stdin it
+  already owns, and the result MUST carry `Finding.interventions` — a service that answers only because the
+  workbench replaced init and ran the vendor's teardown is a different claim from one that answers as shipped.
+  `init=/bin/sh` also skips `/sbin/init`, so inittab's respawn entries never run; that is part of the
+  intervention and has to be named in it, not glossed.
+- ▢ **The appended-`rcS` repair should probably be retired, not fixed.** Under `init=/bin/sh` `rcS` runs to
+  completion (`MARKER_RCS_DONE` observed), yet under the real init the 2026-07-30 execve trace stops at line 45 of
+  46 and the appended line 47 never runs. Two boots of the same script disagreeing about whether it finishes is
+  itself unexplained, and the console-driven route sidesteps it entirely.
+
 ## Findings — the two axes (2026-08-04, deploy `e6e96e0`)
 
 `severity` says how bad a row would be **if true**; `ProofState` says how much was established. The workbench had a
