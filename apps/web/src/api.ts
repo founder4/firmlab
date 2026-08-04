@@ -973,6 +973,7 @@ export type AnalysisKind =
   | 'services'
   | 'fcc'
   | 'kernel'
+  | 'binvuln'
   | 'updatepath'
   | 'devicetree';
 
@@ -1049,6 +1050,28 @@ export interface PostureAnswer {
   detail?: string;
   bad?: boolean;
   severity?: string;
+}
+
+/**
+ * The binary-hardening sweep's own result — the numbers that say whether its findings list is everything.
+ *
+ * Optional throughout below the first four: `relocatableSkipped`, `neuteredSkipped` and `exposedDropped` were each
+ * added after results were already being persisted, and a stored row written by an older build carries none of
+ * them. `0` or `[]` would be a claim about a walk that never counted.
+ */
+export interface BinVulnResult {
+  available: boolean;
+  binariesScanned: number;
+  /** Candidates FOUND. `findings` holds what survived the cap, so on a busy rootfs this is the larger number. */
+  candidates: number;
+  findings: Finding[];
+  /** `.ko`/`.o` objects the walk passed over: this sweep's question does not apply to a relocatable object. */
+  relocatableSkipped?: number;
+  /** Exposed binaries that still did not fit the cap — NAMED, so the shortfall is legible instead of inferable. */
+  exposedDropped?: string[];
+  /** Entries the extractor cut to `/dev/null`. Shipped by the firmware and destroyed by the carve, not out of scope. */
+  neuteredSkipped?: number;
+  reason: string;
 }
 
 export interface KernelPostureResult {
@@ -1586,6 +1609,8 @@ export const api = {
     ).then((r) => r.result),
   deviceTree: (id: string) =>
     get<{ result: DeviceTreeResult | null }>(`/api/images/${id}/devicetree`).then((r) => r.result),
+  binvuln: (id: string) => get<{ result: BinVulnResult | null }>(`/api/images/${id}/binvuln`).then((r) => r.result),
+  runBinvuln: (id: string) => post<{ jobId: string }>(`/api/images/${id}/binvuln`, {}),
   kernelPosture: (id: string) =>
     get<{ result: KernelPostureResult | null }>(`/api/images/${id}/kernel`).then((r) => r.result),
   runKernelPosture: (id: string) => post<{ jobId: string }>(`/api/images/${id}/kernel`, {}),

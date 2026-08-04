@@ -4,6 +4,7 @@
  */
 import type { Messages } from '../en';
 import { agents } from './agents';
+import { binvuln } from './binvuln';
 import { capabilities } from './capabilities';
 import { capture } from './capture';
 import { common } from './common';
@@ -63,6 +64,7 @@ export const es: Messages = {
   techniques,
   visuals,
   shell,
+  binvuln,
   kernelPosture,
   sectionGroups,
   egressSection,

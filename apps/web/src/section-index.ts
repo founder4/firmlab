@@ -116,7 +116,7 @@ export const SECTION_GROUPS: readonly SectionGroup[] = [
   // What it is MADE of, and how those parts depend on each other.
   { id: 'components', sections: ['sbom', 'compmap'] },
   // The tool-backed passes over those parts.
-  { id: 'deep', sections: ['deepscans', 'kernel', 'testbench'] },
+  { id: 'deep', sections: ['deepscans', 'binvuln', 'kernel', 'testbench'] },
   // What it DOES when something runs it.
   { id: 'dynamic', sections: ['simulate', 'egress', 'opacidad', 'agent'] },
   // What all of it adds up to, and what a person says about that.

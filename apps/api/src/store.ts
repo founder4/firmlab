@@ -10,6 +10,9 @@ import { DB_PATH, ensureDataDirs } from './paths.js';
 
 export type JobKind =
   | 'extract'
+  // The binary-hardening sweep. It ran only inside the autonomous scan until it was given a route of its own,
+  // which is why its kind arrives long after the providers around it.
+  | 'binvuln'
   | 'binwalk'
   | 'sbom'
   | 'emulate'

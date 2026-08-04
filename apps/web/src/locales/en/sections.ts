@@ -25,6 +25,7 @@ export const sections = {
   findings: 'Findings & report',
   operator: 'Operator ledger',
   diff: 'Diff',
+  binvuln: 'Binary hardening',
   kernel: 'Kernel posture',
   egress: 'Firmware egress',
   simulate: 'Emulation recipes',

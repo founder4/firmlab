@@ -22,6 +22,7 @@ export const sections: Messages['sections'] = {
   findings: 'Hallazgos e informe',
   operator: 'Registro del operador',
   diff: 'Comparativa',
+  binvuln: 'Endurecimiento de binarios',
   kernel: 'Postura del kernel',
   egress: 'Salida a red del firmware',
   simulate: 'Recetas de emulación',

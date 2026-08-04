@@ -1,4 +1,5 @@
 import { agents } from './agents';
+import { binvuln } from './binvuln';
 import { capabilities } from './capabilities';
 import { capture } from './capture';
 /**
@@ -68,6 +69,7 @@ export const en = {
   techniques,
   visuals,
   shell,
+  binvuln,
   kernelPosture,
   sectionGroups,
   egressSection,

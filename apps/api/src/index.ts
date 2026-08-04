@@ -15,6 +15,7 @@ import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
 import { SWEEP_INTERVAL_MS, sweepRetention } from './retention.js';
 import { agentRoutes } from './routes/agent.js';
 import { analysisRoutes } from './routes/analysis.js';
+import { binvulnRoutes } from './routes/binvuln.js';
 import { captureRoutes } from './routes/capture.js';
 import { certsRoutes } from './routes/certs.js';
 import { chipsecRoutes } from './routes/chipsec.js';
@@ -133,6 +134,7 @@ async function main(): Promise<void> {
       await api.register(chipsecRoutes);
       await api.register(webprobeRoutes);
       await api.register(ubootRoutes);
+      await api.register(binvulnRoutes);
       await api.register(kernelRoutes);
       await api.register(updatepathRoutes);
       await api.register(devicetreeRoutes);
