@@ -332,6 +332,34 @@ export function buildFullSystemArgs(
 }
 
 /**
+ * rung-3 pass three argv: the same boot as pass two, differing in the init and nothing else.
+ *
+ * **Measured, and it is the whole reason this is a named builder rather than a call.** The first wiring of the
+ * console pass passed `plan: null` — qemu's defaults, as pass one uses — while the WR940N addresses itself
+ * `192.168.0.1` and pass two had therefore moved slirp onto `192.168.0.0/24`. The console read worked, because it
+ * travels over the serial: `DROP` → `ACCEPT`, five listening ports read out of the guest's own `/proc/net/tcp`. And
+ * not one forward answered, because `hostfwd=tcp::39301-:80` with slirp back at `10.0.2.0/24` aims at a guest
+ * address nothing holds. The pass tore the firewall down and then knocked on the wrong door — an intervention that
+ * ran, and a reachability question that structurally could not be answered, which is the shape most likely to be
+ * read as "the flush changed nothing".
+ *
+ * So the network is a parameter and this builder exists to be pinned: pass three has to differ from pass two in the
+ * init replacement alone, or the comparison a reader makes between them is confounded by a second variable.
+ * No frame capture is ever taken here — `egress` is merged across passes, and a boot whose init was replaced must
+ * not put destinations into an observation the rest of the product reads as the firmware's own behaviour.
+ */
+export function buildConsolePassArgs(
+  machine: string,
+  kernelPath: string,
+  rootfsImage: string,
+  forwards: { host: number; guest: number }[],
+  plan: QemuNetworkPlan | null,
+  isolate = false,
+): string[] {
+  return buildFullSystemArgs(machine, kernelPath, rootfsImage, forwards, plan, null, isolate, GUEST_SHELL_CMDLINE);
+}
+
+/**
  * The addresses slirp itself speaks from, so the frame reader can tell the emulator apart from the guest.
  *
  * qemu's user network puts its gateway at `host=` (default net+2) and its DNS at net+3. Excluding them by address
@@ -2039,12 +2067,15 @@ export async function runFullSystem(
       handle.log(
         `Forwarding ${forwards.map((f) => `host ${f.host} → guest ${f.guest}/${f.protocol}`).join(', ')} for the console pass.`,
       );
-      // No frame capture on this pass, deliberately. `egress` answers "where does this firmware try to go", and it is
-      // merged across passes — folding in a boot whose init was replaced would put destinations reached under
-      // intervention into an observation the rest of the product reads as the firmware's own behaviour.
+      // The SAME network pass two was given. Booting this on qemu's defaults instead is a measured defect, not a
+      // hypothetical one: the flush ran, the policy went DROP → ACCEPT, and every forward still pointed at a guest
+      // address nothing held. See `buildConsolePassArgs`.
+      if (inference.plan) {
+        handle.log('The console pass boots on the same network pass two used, so it differs from it only in its init.');
+      }
       const pass3 = await bootOnce(
         qemu,
-        buildFullSystemArgs(machine, kernelPath, rootfsImage, forwards, null, null, isolate, GUEST_SHELL_CMDLINE),
+        buildConsolePassArgs(machine, kernelPath, rootfsImage, forwards, inference.plan, isolate),
         forwards,
         'pass 3 — ask the guest',
         handle,

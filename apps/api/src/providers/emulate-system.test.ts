@@ -4,6 +4,7 @@ import {
   type SystemEmulationResult,
   TEARDOWN_PATTERNS,
   buildChrootServiceArgs,
+  buildConsolePassArgs,
   buildFullSystemArgs,
   buildSystemEmulationFindings,
   classifyFullSystem,
@@ -551,6 +552,46 @@ describe('buildFullSystemArgs — pass two’s network, and pass one left untouc
 
   it('leaves the un-driven boot without an init= at all, rather than spelling out the default', () => {
     expect(buildFullSystemArgs('malta', '/k', '/r.img', [{ host: 8080, guest: 80 }]).join(' ')).not.toContain('init=');
+  });
+});
+
+/**
+ * The pass-three builder, pinned because its first wiring was wrong on real bytes in a way no fixture would show:
+ * the flush ran and the forwards pointed at a guest address nothing held, so the pass tore the firewall down and
+ * then knocked on the wrong door.
+ */
+describe('buildConsolePassArgs — pass three differs from pass two in the init and nothing else', () => {
+  const plan = {
+    kernelIp: null,
+    slirpNet: '192.168.0.0/24',
+    slirpHost: '192.168.0.2',
+    guestAddress: '192.168.0.1',
+  };
+
+  it('aims the forwards at the guest’s own address, exactly as pass two did', () => {
+    const args = buildConsolePassArgs('malta', '/k', '/r.img', [{ host: 39301, guest: 80 }], plan, true).join(' ');
+    expect(args).toContain('hostfwd=tcp::39301-192.168.0.1:80');
+    expect(args).toContain('net=192.168.0.0/24,host=192.168.0.2');
+    expect(args).toContain('init=/bin/sh');
+  });
+
+  it('is pass two’s argv plus init=/bin/sh — the ONE difference the comparison rests on', () => {
+    const forwards = [{ host: 39301, guest: 80 }];
+    const two = buildFullSystemArgs('malta', '/k', '/r.img', forwards, plan, null, true);
+    const three = buildConsolePassArgs('malta', '/k', '/r.img', forwards, plan, true);
+    const strip = (a: string[]) => a.map((x) => x.replace(' init=/bin/sh', ''));
+    expect(strip(three)).toEqual(strip(two));
+  });
+
+  it('takes no frame capture, so an intervened boot cannot enter the egress observation', () => {
+    const args = buildConsolePassArgs('malta', '/k', '/r.img', [{ host: 39301, guest: 80 }], plan).join(' ');
+    expect(args).not.toContain('filter-dump');
+  });
+
+  it('falls back to qemu’s own network when pass one inferred none, rather than inventing an address', () => {
+    const args = buildConsolePassArgs('malta', '/k', '/r.img', [{ host: 39301, guest: 80 }], null).join(' ');
+    expect(args).toContain('hostfwd=tcp::39301-:80');
+    expect(args).toContain('init=/bin/sh');
   });
 });
 
