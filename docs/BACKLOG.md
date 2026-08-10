@@ -386,17 +386,62 @@ image's root hash is md5crypt and was NOT recovered (115226 candidates failed), 
   arm that ran nothing**. Second false intervention claim on this rung — the first was retracted in `3cc413d` —
   and the same shape both times: a guard whose success path is the branch nobody exercises. The control arm has
   its own marker now, and a test pins it._
-- ▢ **The remaining half: `emulate-system.ts` still does not write to the qemu stdin it owns** — `bootOnce`
-  spawns with `stdio: ['ignore', 'pipe', 'pipe']`. The honest placement is a THIRD pass, attempted only when pass
-  two found nothing answering, so a firmware that answers as shipped is never touched. The result MUST carry
-  `Finding.interventions`: a service that answers only because the workbench replaced init and ran the vendor's
-  teardown is a different claim from one that answers as shipped, and `init=/bin/sh` also skips `/sbin/init`, so
-  inittab's respawn entries never run. Both belong in the list, not glossed. `buildSystemEmulationFindings`
-  already renders `interventions` onto the draft and into the rationale, so the composer half is done.
+- ✅ **The remaining half is wired: pass three types at the guest** (2026-08-10, `4366592` + `c37d122`, deployed
+  `c37d122`). `bootOnce` spawned with `stdio: ['ignore', …]`, so the console the entire boot verdict is read FROM
+  could never be written TO; `guest-console.ts` had 23 tests and its only importer was its own test.
+  **Arranged so it cannot move the answer to the question before it.** Reached only when the two un-intervened
+  passes had nothing answer, armed by its own flag (`FIRMLAB_EMU_CONSOLE`, off by default), and booted with the
+  vendor's init replaced — so its result lives in `console` and is **never** merged into `open`, `egress` or the
+  reproducibility history. Merging would have put an intervened boot beside un-intervened ones, where the verdict
+  reads `varies` over a difference this workbench caused.
+  **Two rows, not one row with a caveat.** The first speaks about the firmware as shipped, the second about the
+  same firmware with its init replaced; one row would force a reader to hold the salvedad in mind to read the
+  headline, which is the shape at the bottom of most of this file. `system-console-answered` keeps
+  `confirmed_full_system` — the kernel booted, the vendor's `rcS` ran, its daemon bound the port and replied — and
+  says *"not as shipped"* in the TITLE, because the census is the number people quote.
+  **Measured on the deployed build, both images:**
+
+  | image | policy before → after | guest's own LISTEN table | forwards that answered |
+  |---|---|---|---|
+  | WR940N `c42ab6f2` | **DROP → ACCEPT** | 22, 80, 443, 1900, 20002 | **80 and 443 — the first answering ports this corpus has ever had** |
+  | WDR3600 `398d50ef` | **DROP → ACCEPT** | 1900, 51237 | none, and correctly: `httpd` never bound 80/443 on that boot |
+
+  The WDR3600 is the more useful of the two — same vendor teardown, same transition, and the ports still silent
+  because nothing was listening on them. That is the *"a repair that cannot tell you it was unnecessary is not a
+  diagnosis"* branch answering on real bytes, and it is why the row grades `confirmed_in_emulation` /
+  `system-console-diagnosed` there rather than claiming a fix. Ledger: 1312 → 1315 findings,
+  `confirmed_full_system` 1 → 3, `confirmed_in_emulation` 2 → 3.
+  _The defect the run found and no fixture would have: the first wiring booted pass three on qemu's DEFAULT
+  network while the WR940N addresses itself `192.168.0.1` and pass two had already moved slirp onto
+  `192.168.0.0/24` for exactly that reason. The console read came back perfect — `DROP` → `ACCEPT`, five ports in
+  LISTEN — and **not one forward answered**, because `hostfwd=tcp::39301-:80` aimed at an address nothing held.
+  An intervention that ran next to a reachability question that structurally could not be answered: the shape most
+  likely to be read as "flushing the firewall changed nothing". `buildConsolePassArgs` exists so the invariant is
+  pinned — pass three is pass two's argv plus `init=/bin/sh` and nothing else._
+  _Also fixed while wiring it: `proc.stdin` with no `'error'` handler. EPIPE against a guest that is allowed to die
+  at any point is an unhandled stream error, which takes the whole API process down — not the boot._
 - ▢ **The appended-`rcS` repair should probably be retired, not fixed.** Under `init=/bin/sh` `rcS` runs to
   completion (`MARKER_RCS_DONE` observed), yet under the real init the 2026-07-30 execve trace stops at line 45 of
   46 and the appended line 47 never runs. Two boots of the same script disagreeing about whether it finishes is
   itself unexplained, and the console-driven route sidesteps it entirely.
+  **Now overdue rather than optional:** two flags exist for one intent, and `planConsolePass` has to DECLINE
+  outright when `FIRMLAB_EMU_REPAIR` armed the other one — the appended line flushes ~20 s into `rcS`, so the
+  console pass's "before" read would measure this workbench's own flush and then exonerate the firewall on that
+  evidence. A gate that exists because two features overlap is the argument for having one.
+- ▢ **The console pass has no reading surface.** `SystemEmulationResult.console` carries the policy transition, the
+  guest's own LISTEN table and the three interventions, and nothing in the web renders any of it — the two ledger
+  rows are all a reader gets. Same shape as the per-provider surfaces below, and the emulation section is already
+  named there as *"menus and no reading surface"*.
+- ▢ **The guest's own LISTEN table should decide the forwards, and it is now readable.** Both images declare no
+  ports at all (`readPortMap` falls back to 80/443), while the console pass reads the truth out of
+  `/proc/net/tcp`: the WR940N holds **22, 1900 and 20002** beyond the two forwarded, and the WDR3600's only real
+  listeners are **1900 and 51237** — neither of which any run has ever forwarded. A second pass could forward what
+  the first one measured instead of what the config declares. This is the concrete answer to the `planForwards`
+  entry's *"no corpus image declares ports"*.
+- ▢ **Why does `httpd` not bind 80/443 on the WDR3600?** Its console pass ran the vendor's `rcS` to completion and
+  the guest ended with two listeners, neither of them the web server, on an image whose `/usr/bin/httpd` is the
+  same 1.7 MB router program the WR940N ships. The filter policy was NOT the cause of that image's silence, and
+  what is remains open — the first time this rung has separated the two causes on one corpus.
 
 ## Per-provider result surfaces (2026-08-04, deploy `6478271`)
 
@@ -1722,8 +1767,13 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   136 eligible candidates, plus 127 rows with no lead kind.**
 
   And the boot does not even deliver its own seven: the corpus's single `confirmed_full_system` row has
-  `open: []` — two forwards, 158 SYNs, not one answer, `guest-dropped`. **No image in the deployed corpus has a
-  booted guest with a port that answers**, so there is nothing to point a web probe at today.
+  `open: []` — two forwards, 158 SYNs, not one answer, `guest-dropped`. ~~**No image in the deployed corpus has a
+  booted guest with a port that answers**, so there is nothing to point a web probe at today.~~
+  ⚠ **No longer true as of 2026-08-10** (`c37d122`): the WR940N's console pass answers on guest 80 AND 443 —
+  `HTTP` and TLS, from the vendor's own daemon — once the firmware's own `/etc/rc.d/iptables-stop` is run from a
+  serial console. There IS something to point a web probe at now, and it is behind the same wall as before: the
+  window is inside `runFullSystem`, the forwards are ephemeral, and teardown kills the guest. See the entry below,
+  which is now the blocking one rather than a hypothetical.
   **What is actually worth building, in order:**
   - ▢ **A lead kind for `binary-cmdexec-sink`** (127 rows), asking symreach for `system`/`popen` — the manual
     route already supports exactly that question and phrases it well. Measure before enabling, the way the probe
