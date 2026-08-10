@@ -41,7 +41,8 @@ export type LaneFlagName =
   | 'FIRMLAB_CAPTURE'
   | 'FIRMLAB_CAPTURE_GATEWAY'
   | 'FIRMLAB_EMU_ISOLATE'
-  | 'FIRMLAB_EMU_REPAIR';
+  | 'FIRMLAB_EMU_REPAIR'
+  | 'FIRMLAB_EMU_CONSOLE';
 
 /** A lane flag the operator may flip at runtime — its structure. The description of it is in the catalogue. */
 export interface ToggleableFlag {
@@ -98,6 +99,12 @@ export const TOGGLEABLE_FLAGS: readonly ToggleableFlag[] = [
   // machine — but it is the one flag that changes the ARTEFACT under analysis rather than what is asked of it,
   // which is why it is off by default and why `Finding.interventions` carries the fact onto every result.
   { name: 'FIRMLAB_EMU_REPAIR', outward: false },
+  // The same decision as the line above, taken from the other end: instead of writing into the image, boot it with
+  // `init=/bin/sh` and type at it. It changes the ARTEFACT more than the repair does — the vendor's init never runs
+  // at all — and it changes the FILES not at all, so the two are separate switches rather than one. Off by default,
+  // and `planConsolePass` declines outright when the repair already modified the image, because the two
+  // interventions overlap on the one measurement this pass exists to take.
+  { name: 'FIRMLAB_EMU_CONSOLE', outward: false },
 ];
 
 const ALLOWED: ReadonlySet<string> = new Set<string>(TOGGLEABLE_FLAGS.map((f) => f.name));

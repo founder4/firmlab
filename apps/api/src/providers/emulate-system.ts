@@ -45,7 +45,7 @@
  * These rungs need the opt-in assets baked by Dockerfile.firmware (libnvram + firmadyne kernels). Without them
  * the runners return a blocked result rather than attempting a half-baked bring-up.
  */
-import { execFile, spawn } from 'node:child_process';
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -59,6 +59,20 @@ import { detectTools } from '../tools.js';
 import { type BootDiagnosis, diagnoseUnreachable } from './boot-diagnose.js';
 import { type BootOutcome as ReproBoot, type ReproducibilityVerdict, reproducibility } from './boot-reproducibility.js';
 import { type EgressObservation, describeEgress, describeEgressPolicy, mergeEgress, parseEgress } from './egress.js';
+import {
+  CONSOLE_FLAG,
+  type ConsoleOutcome,
+  type ConsoleStep,
+  GUEST_SHELL_CMDLINE,
+  type GuestConsoleInputs,
+  classifyConsolePass,
+  consoleInterventions,
+  consoleScript,
+  consoleScriptDurationMs,
+  describeConsole,
+  planConsolePass,
+  readConsoleOutcome,
+} from './guest-console.js';
 import { type RepairDisposition, describeRuleset, readGuestRuleset } from './guest-repair.js';
 import type { JobHandle } from './jobs.js';
 import { readPortMap } from './portmap-run.js';
@@ -161,6 +175,34 @@ export interface SystemEmulationResult {
    * lets a later run tell repeats of one experiment from a record of the codebase changing.
    */
   buildRev?: string;
+  /**
+   * The third pass: the guest asked directly, on a serial console, why nothing reaches it.
+   *
+   * Deliberately its OWN field rather than folded into the verdict above, and this is the load-bearing part of the
+   * design. Pass three boots with the vendor's init replaced, so its `open` list is not comparable with passes one
+   * and two: letting it become the run's `open` would put an intervened boot into `reproducibility`'s history beside
+   * un-intervened ones, where the verdict would read `varies` over a difference this workbench caused. So the run's
+   * headline stays the un-intervened result, and what the console established reaches the ledger as a row of its own,
+   * under its own kind, carrying its own `interventions`.
+   *
+   * `attempted: false` with a `reason` is the normal case and says which of the six gates declined — an un-attempted
+   * pass is not a failed one. Optional forever, like every field added to a persisted result type.
+   */
+  console?: {
+    attempted: boolean;
+    /** Why the pass was declined, or the sentence describing why it was worth spending. Never silent. */
+    reason: string;
+    /** The boot itself, when one was made. */
+    command?: string;
+    /** What the guest said, read back from markers it echoed. */
+    outcome?: ConsoleOutcome;
+    /** The diagnosis in one sentence, including "the firewall was never the cause". */
+    note?: string;
+    /** What was done to the firmware to get this, in the words that travel on the finding. */
+    interventions?: string[];
+    /** Ports that answered on THIS pass. Never merged into the run's own `open`. */
+    open?: { host: number; guest: number }[];
+  };
 }
 
 /** A single boot's outcome, summarised. The raw console of the pass the verdict came from is `stdout`. */
@@ -228,6 +270,12 @@ export function buildFullSystemArgs(
    * emits under either policy.
    */
   isolate = false,
+  /**
+   * Extra kernel command line, appended verbatim. One caller and one value: `init=/bin/sh` for the console pass,
+   * which is the only way into a guest whose getty wants a credential nobody has. It is a parameter rather than a
+   * boolean so this builder keeps knowing nothing about why — and so the two passes differ in exactly this string.
+   */
+  extraCmdline?: string | null,
 ): string[] {
   // An empty guest address is qemu's "whatever the guest is", which is right for pass one and wrong the moment
   // slirp has been moved onto the firmware's own subnet — there the forward has to name the address the firmware
@@ -246,7 +294,9 @@ export function buildFullSystemArgs(
   // deployment ships — verified by the `IP-Config:` strings inside the vmlinux, not assumed). It is the only way to
   // give an address to a guest whose init never asks for one, and it announces itself in the console, so pass two
   // can check that the kernel took it instead of believing it did.
-  const append = `console=ttyS0 root=/dev/sda rootfstype=ext2 rw${plan?.kernelIp ? ` ip=${plan.kernelIp}` : ''}`;
+  const append = `console=ttyS0 root=/dev/sda rootfstype=ext2 rw${plan?.kernelIp ? ` ip=${plan.kernelIp}` : ''}${
+    extraCmdline ? ` ${extraCmdline}` : ''
+  }`;
   return [
     '-M',
     machine,
@@ -1280,7 +1330,44 @@ export function buildSystemEmulationFindings(subject: string, r: SystemEmulation
   // no channel at all, the same refusal `buildReachFindings` makes for a probe that could not run.
   if (r.ran) draft.evidenceChannel = 'emulated_run';
   if (interventions.length > 0) draft.interventions = interventions;
-  return [draft];
+
+  // The console pass earns its OWN row rather than qualifying the one above, because the two speak about different
+  // artefacts: the row above is this firmware as shipped, and this one is that firmware with its init replaced. A
+  // single row carrying both would force a reader to hold the caveat in mind to read the headline, which is the
+  // shape this codebase keeps finding at the bottom of its own defects. An un-attempted pass composes nothing — the
+  // reason is on the result for anyone who asks, and a ledger row saying "nobody ran this" would be noise on every
+  // image whose firmware answers.
+  const c = r.console;
+  if (!c?.attempted || !c.outcome) return [draft];
+  const verdict = classifyConsolePass(c.outcome, c.open?.length ?? 0);
+  const consoleDraft: FindingDraft = {
+    kind: verdict.kind,
+    title: verdict.title,
+    severity: 'info',
+    proofState: verdict.proofState,
+    evidence: {
+      subject,
+      strategy: 'full-system-console',
+      command: c.command ?? '',
+      shellAnswered: c.outcome.shellAnswered,
+      rcsCompleted: c.outcome.rcsCompleted,
+      policyBefore: c.outcome.policyBefore,
+      policyAfter: c.outcome.policyAfter,
+      teardownRan: c.outcome.teardownRan,
+      // Both, always: an empty list means the guest held no listening socket, and that is only readable next to the
+      // flag saying the table was read at all. `listenersRead: false` with `listening: []` is silence, not a finding.
+      listenersRead: c.outcome.listenersRead,
+      listening: c.outcome.listening,
+      open: c.open ?? [],
+      ...(r.buildRev ? { buildRev: r.buildRev } : {}),
+    },
+    rationale: `${verdict.reason} ${c.note ?? ''}`.trim(),
+  };
+  // A shell that never answered still ran a boot, so the channel is honest; what it is not is a measurement.
+  consoleDraft.evidenceChannel = 'emulated_run';
+  const consoleInterventionList = c.interventions ?? [];
+  if (consoleInterventionList.length > 0) consoleDraft.interventions = consoleInterventionList;
+  return [draft, consoleDraft];
 }
 
 /** The mandatory teardown: kill every emulator this provider could have spawned. */
@@ -1440,6 +1527,15 @@ async function bootOnce(
   handle: JobHandle,
   /** The capture this boot was told to write, and the addresses slirp owns in it. Null = no capture was asked for. */
   capture: { file: string; emulatorAddresses: string[]; guestAddress: string | null } | null,
+  /**
+   * The script to type at this boot's serial console, or null for a boot that is only watched.
+   *
+   * This is what makes pass three possible at all: qemu's stdin has been `'ignore'` since this rung was written, so
+   * the console the whole boot verdict is read FROM could never be written TO. A driven pass also gets its own
+   * deadline, derived from the script rather than from `BOOT_TIMEOUT_MS` — the schedule alone is ~113 s, so the
+   * 120 s box would have cut the run off before the reads it exists for.
+   */
+  drive: { steps: readonly ConsoleStep[]; settleMs: number; deadlineMs: number } | null = null,
 ): Promise<BootOutcome> {
   const command = `${qemu} ${args.join(' ')}`;
   handle.log(`Executing (${label}): ${command}`);
@@ -1447,7 +1543,12 @@ async function bootOnce(
   // Spawned rather than exec'd to completion: the previous version could only look at the run AFTER it ended,
   // which is why "did not exit" became the boot verdict. Watching it while it runs is what makes a TCP probe —
   // and therefore an evidenced answer — possible at all.
-  const proc = spawn(qemu, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(qemu, args, { stdio: [drive ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  // A pipe into a process that has died raises EPIPE as an ERROR EVENT on the stream, and an unhandled 'error' on a
+  // stream takes the whole API process down. The driver below writes into a guest that is allowed to die at any
+  // point — a panic, the kill in the finally — so this is not defensive tidiness, it is the difference between a
+  // boot that ends and a workbench that ends with it.
+  proc.stdin?.on('error', () => undefined);
   let stdout = '';
   let stderr = '';
   // Keep the HEAD as well as the tail. Capping with `slice(-CAP)` evicted the earliest output first — which is
@@ -1470,7 +1571,21 @@ async function bootOnce(
   });
 
   const open: { host: number; guest: number }[] = [];
-  const deadline = Date.now() + BOOT_TIMEOUT_MS;
+  const deadline = Date.now() + (drive?.deadlineMs ?? BOOT_TIMEOUT_MS);
+  // The driver runs alongside the probe loop rather than before it, so the ports are being watched while the script
+  // is still typing — which is how a teardown mid-script gets attributed to the boot it happened in.
+  const stop = { aborted: false };
+  let driveDone = drive === null;
+  const driver = drive
+    ? driveConsole(proc, drive, handle, label, () => `${stdout}\n${stderr}`, stop).then(
+        () => {
+          driveDone = true;
+        },
+        () => {
+          driveDone = true;
+        },
+      )
+    : null;
   try {
     while (Date.now() < deadline && !exited) {
       await new Promise((r) => setTimeout(r, PROBE_INTERVAL_MS));
@@ -1483,10 +1598,21 @@ async function bootOnce(
           );
         }
       }
-      // Every declared port answering is as much as this rung can establish; no reason to hold the box open.
-      if (open.length === forwards.length) break;
+      if (drive) {
+        // A driven pass runs its schedule to the end even once every port answers: the last two steps read the
+        // policy again and read `/proc/net/tcp`, and those reads ARE the result. Breaking early on a full port list
+        // would leave the run claiming an answer with nothing to attribute it to. The sweep above is the final one.
+        if (driveDone) break;
+      } else if (open.length === forwards.length) {
+        // Every declared port answering is as much as this rung can establish; no reason to hold the box open.
+        break;
+      }
     }
   } finally {
+    // Cut the driver short BEFORE the kill, or the finally waits out whatever remains of a 75 s step while typing
+    // into a process that is about to be SIGKILLed.
+    stop.aborted = true;
+    if (driver) await driver;
     if (!exited) {
       try {
         proc.kill('SIGKILL');
@@ -1519,6 +1645,95 @@ async function bootOnce(
     wire: capture ? readCapture(capture.file, capture.emulatorAddresses, handle) : null,
     egress: capture ? readEgress(capture.file, capture.emulatorAddresses, capture.guestAddress) : null,
   };
+}
+
+/**
+ * How long to wait for the guest kernel to print a boot marker before typing at it, and the slack on top of the
+ * script's own schedule. The deadline for a driven pass is `settle + script + slack`, derived rather than fixed —
+ * `BOOT_TIMEOUT_MS` is 120 s and the script alone spends ~113 s, most of it waiting for `httpd` to bind.
+ */
+const CONSOLE_SETTLE_MS = 45_000;
+const CONSOLE_SLACK_MS = 20_000;
+
+/**
+ * What the image ships that the console script needs, read from the extracted rootfs.
+ *
+ * A **symlink counts as present even when it dangles here**, and that is not laxity. `sbin/iptables` in a busybox
+ * rootfs is a symlink, frequently an ABSOLUTE one (`/bin/busybox`), which resolves against the HOST when this
+ * container stats it and against the guest's own root when the guest runs it. Testing with `existsSync` would
+ * therefore report the guest's own applet missing, drop the two policy reads from the script, and return a run whose
+ * outcome says the filter table could not be read — a false negative manufactured by asking the wrong filesystem.
+ */
+function readConsoleInputs(rootfsDir: string | null | undefined): GuestConsoleInputs | null {
+  if (!rootfsDir || !fs.existsSync(rootfsDir)) return null;
+  const present = (rel: string): boolean => {
+    try {
+      const st = fs.lstatSync(path.join(rootfsDir, rel));
+      return st.isFile() || st.isSymbolicLink();
+    } catch {
+      return false;
+    }
+  };
+  return {
+    hasRcS: present('etc/rc.d/rcS'),
+    hasIptablesStop: present('etc/rc.d/iptables-stop'),
+    hasIptables: present('sbin/iptables') || present('usr/sbin/iptables') || present('bin/iptables'),
+    // The product runs the intervened arm only. The control the six-boot experiment used was a scripted no-op on an
+    // identical schedule; here the control is passes one and two of this same run, which had nothing answer — and
+    // the attribution inside the pass is the policy read on both sides of the teardown, not the arm comparison.
+    intervene: true,
+  };
+}
+
+/** Sleep in slices, so a 75 s step can be cut short the moment the boot it belongs to is being torn down. */
+async function sleepAbortable(ms: number, stop: { aborted: boolean }): Promise<void> {
+  const until = Date.now() + ms;
+  while (Date.now() < until && !stop.aborted) {
+    await new Promise((r) => setTimeout(r, Math.min(500, until - Date.now())));
+  }
+}
+
+/**
+ * Type the script at the guest, one step at a time, on the schedule the script itself carries.
+ *
+ * **It waits for the kernel rather than for a number.** The first line goes in when `looksBooted` sees the guest's
+ * own marker, not after a fixed sleep — a sleep long enough for the slowest image wastes it on every other one, and
+ * a sleep short enough for the fastest types into a kernel that is still probing PCI. `settleMs` is the cap on that
+ * wait, and reaching it is not an error: the script runs anyway and `readConsoleOutcome` reports a shell that never
+ * echoed its marker, which is the honest outcome for a guest that had no shell to give.
+ *
+ * Nothing here decides anything. It writes lines and returns; every claim is read back out of the console by
+ * `guest-console.ts`, from markers the guest itself echoed.
+ */
+async function driveConsole(
+  proc: ChildProcess,
+  drive: { steps: readonly ConsoleStep[]; settleMs: number },
+  handle: JobHandle,
+  label: string,
+  consoleSoFar: () => string,
+  stop: { aborted: boolean },
+): Promise<void> {
+  const settleUntil = Date.now() + drive.settleMs;
+  let booted = false;
+  while (Date.now() < settleUntil && !stop.aborted) {
+    if (looksBooted(consoleSoFar()).booted) {
+      booted = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (stop.aborted) return;
+  handle.log(
+    booted
+      ? `  [${label}] the kernel printed its boot marker; typing at the guest console now.`
+      : `  [${label}] no boot marker after ${Math.round(drive.settleMs / 1000)}s. The script runs anyway, and a shell that never answers is reported as exactly that.`,
+  );
+  for (const step of drive.steps) {
+    if (stop.aborted) return;
+    handle.log(`  [${label}] console: ${step.note}`);
+    proc.stdin?.write(`${step.send}\n`);
+    await sleepAbortable(step.waitMs, stop);
+  }
 }
 
 /**
@@ -1592,13 +1807,20 @@ export function passScore(o: { open: { host: number }[]; booted: boolean; panick
 }
 
 /**
- * rung-3: boot the rootfs image under qemu-system + a firmadyne kernel — twice — bounded by a timeout, always
- * tearing down. Returns blocked if the system emulator or the kernel assets are absent.
+ * rung-3: boot the rootfs image under qemu-system + a firmadyne kernel — up to three times — bounded by a timeout,
+ * always tearing down. Returns blocked if the system emulator or the kernel assets are absent.
  *
  * Pass one is the boot that already existed and is left exactly as it was: qemu's own defaults, nothing this file
  * believes injected into it, so what the console shows is what the firmware does. Pass two runs only when pass one
  * booted, nothing answered, and the console named something to work with — and it is skipped entirely, honestly,
  * when it did not.
+ *
+ * **Pass three asks the guest, and it is arranged so that it cannot change the answer to the question above.** It is
+ * reached only when the un-intervened passes had nothing answer, it is armed by its own flag, and it boots with the
+ * vendor's init replaced by a shell — so its result is kept in `console` and NEVER merged into `open`, `egress` or
+ * the reproducibility history. The run's headline stays a statement about the firmware as shipped; what the console
+ * established becomes a row of its own, carrying what was done to get it. See `guest-console.ts` for the script, the
+ * six gates, and what a boot with `init=/bin/sh` may not claim.
  */
 export async function runFullSystem(
   arch: Architecture,
@@ -1796,6 +2018,58 @@ export async function runFullSystem(
       for (const e of unreachable.evidence) handle.log(`  evidence: ${e}`);
     }
 
+    // Pass three. Everything above is the firmware as shipped, and it is finished before anything is changed: the
+    // verdict, the diagnosis and the reproducibility history are all read from the un-intervened boots, so this pass
+    // can only ADD a reading — it can never move the number the run reports.
+    const consoleInputs = readConsoleInputs(rootfsDir);
+    const consolePlan = planConsolePass({
+      enabled: decideFlag(CONSOLE_FLAG, effectiveEnv()).enabled,
+      answered: verdictPass.open.length,
+      booted: verdictPass.consoleState.booted,
+      panicked: verdictPass.consoleState.panicked,
+      rootfsAvailable: consoleInputs !== null,
+      alreadyIntervened: (repair?.interventions.length ?? 0) > 0,
+    });
+    handle.log(`Guest console: ${consolePlan.reason}`);
+    let consolePass: SystemEmulationResult['console'] = { attempted: false, reason: consolePlan.reason };
+    if (consolePlan.run && consoleInputs) {
+      const steps = consoleScript(consoleInputs);
+      const basePort = await allocateHostPort(hostPort);
+      const forwards = planForwards(portMap, basePort);
+      handle.log(
+        `Forwarding ${forwards.map((f) => `host ${f.host} → guest ${f.guest}/${f.protocol}`).join(', ')} for the console pass.`,
+      );
+      // No frame capture on this pass, deliberately. `egress` answers "where does this firmware try to go", and it is
+      // merged across passes — folding in a boot whose init was replaced would put destinations reached under
+      // intervention into an observation the rest of the product reads as the firmware's own behaviour.
+      const pass3 = await bootOnce(
+        qemu,
+        buildFullSystemArgs(machine, kernelPath, rootfsImage, forwards, null, null, isolate, GUEST_SHELL_CMDLINE),
+        forwards,
+        'pass 3 — ask the guest',
+        handle,
+        null,
+        {
+          steps,
+          settleMs: CONSOLE_SETTLE_MS,
+          deadlineMs: CONSOLE_SETTLE_MS + consoleScriptDurationMs(steps) + CONSOLE_SLACK_MS,
+        },
+      );
+      record(3, pass3);
+      const outcome = readConsoleOutcome(`${pass3.stdout}\n${pass3.stderr}`);
+      const note = describeConsole(outcome);
+      handle.log(`The guest was asked, and answered: ${note}`);
+      consolePass = {
+        attempted: true,
+        reason: consolePlan.reason,
+        command: pass3.command,
+        outcome,
+        note,
+        interventions: consoleInterventions(outcome),
+        open: pass3.open,
+      };
+    }
+
     // Read from the recorded passes rather than from the two locals, so a run that took only pass one and a run
     // that took both go through the same merge.
     const egress = passes.reduce<EgressObservation | null>((acc, p) => mergeEgress(acc, p.egress ?? null), null);
@@ -1856,6 +2130,7 @@ export async function runFullSystem(
       ...(repair ? { repair } : {}),
       ...(rulesetRead ? { ruleset: rulesetRead } : {}),
       ...(unreachable.cause === 'answered' ? {} : { unreachable }),
+      console: consolePass,
       inference: {
         kind: inference.kind,
         reason: inference.reason,

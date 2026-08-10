@@ -565,6 +565,13 @@ export const en = {
       egress:
         'Nothing leaves this machine. What it changes is the ARTEFACT: a service that answers on a repaired boot may be answering only because its packet filtering was torn down, which is a different claim from answering as shipped. Every finding from such a boot carries that sentence in `interventions`, and the init script is restored to its original bytes as soon as the image is built.',
     },
+    FIRMLAB_EMU_CONSOLE: {
+      label: 'Ask the booted guest why nothing reaches it',
+      effect:
+        'Adds a THIRD boot, and only when the first two had nothing answer: the image comes up with `init=/bin/sh`, so a shell holds the serial console, and FirmLab types at it. It reads the guest’s own `iptables -L INPUT` policy, runs the vendor’s `/etc/rc.d/iptables-stop` if the image ships one, reads the policy again and reads `/proc/net/tcp`. Nothing is written into the image — no file changes — and a firmware whose services already answer is never driven. Declines outright when the repair switch above has already modified this image, because the two would overlap on the one reading that matters.',
+      egress:
+        'Nothing leaves this machine. What it changes is the ARTEFACT, and more than the repair does: `init=/bin/sh` replaces the vendor’s init, so `/sbin/init` never runs and nothing in `inittab` — its getty included — is started. A port that answers on such a boot answers a system this workbench assembled by hand, and every finding from it carries both interventions in `interventions`, under its own finding kind so it can never be counted as a boot that answered as shipped.',
+    },
   } satisfies Record<LaneFlagName, { label: string; effect: string; egress: string }>,
 };
 

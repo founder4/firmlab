@@ -22,6 +22,7 @@ import {
   probePlanFor,
   readIpConfig,
 } from './emulate-system.js';
+import type { ConsoleOutcome } from './guest-console.js';
 
 describe('buildChrootServiceArgs', () => {
   it('chroots into the rootfs and preloads the NVRAM shim before the service', () => {
@@ -526,6 +527,30 @@ describe('buildFullSystemArgs — pass two’s network, and pass one left untouc
     expect(args).toContain('user,id=n0,net=192.168.1.0/24,host=192.168.1.2,hostfwd=tcp::41000-192.168.1.1:80');
     // No ip= — the guest configures itself and is right to; it is the emulator that moved.
     expect(args).not.toContain('ip=');
+  });
+
+  it('appends the console pass’s cmdline last, so the two boots differ in exactly that string', () => {
+    const base = buildFullSystemArgs('malta', '/k', '/r.img', [{ host: 8080, guest: 80 }], null, null, false);
+    const driven = buildFullSystemArgs(
+      'malta',
+      '/k',
+      '/r.img',
+      [{ host: 8080, guest: 80 }],
+      null,
+      null,
+      false,
+      'init=/bin/sh',
+    );
+    expect(driven.join(' ')).toContain('-append console=ttyS0 root=/dev/sda rootfstype=ext2 rw init=/bin/sh');
+    // Same argv otherwise: an intervened boot that also changed the machine, the drive or the netdev would be
+    // comparing two things at once, which is the confound this rung has already been burned by.
+    expect(driven.filter((a) => !a.startsWith('console=ttyS0'))).toEqual(
+      base.filter((a) => !a.startsWith('console=ttyS0')),
+    );
+  });
+
+  it('leaves the un-driven boot without an init= at all, rather than spelling out the default', () => {
+    expect(buildFullSystemArgs('malta', '/k', '/r.img', [{ host: 8080, guest: 80 }]).join(' ')).not.toContain('init=');
   });
 });
 
@@ -1037,5 +1062,120 @@ describe('buildSystemEmulationFindings — every outcome earns a row, and none o
     });
     expect(draft && 'interventions' in draft).toBe(false);
     expect(draft?.rationale).not.toContain('The guest was modified');
+  });
+});
+
+describe('buildSystemEmulationFindings — the console pass is a second row, never a caveat on the first', () => {
+  function result(over: Partial<SystemEmulationResult> = {}): SystemEmulationResult {
+    return {
+      ran: true,
+      strategy: 'full-system',
+      proofState: 'confirmed_full_system',
+      reason: 'The kernel booted and no forwarded port accepted a connection.',
+      command: 'qemu-system-mips …',
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+      open: [],
+      ...over,
+    };
+  }
+
+  const outcome = (over: Partial<ConsoleOutcome> = {}): ConsoleOutcome => ({
+    shellAnswered: true,
+    rcsCompleted: true,
+    policyBefore: 'DROP',
+    policyAfter: 'ACCEPT',
+    teardownRan: true,
+    listening: [22, 80, 443],
+    listenersRead: true,
+    ...over,
+  });
+
+  /** The branch that must find nothing — every image whose firmware answers, and every deployment with the flag off. */
+  it('composes exactly one row when the console pass was never attempted', () => {
+    const drafts = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      console: { attempted: false, reason: 'FIRMLAB_EMU_CONSOLE is off, so the guest was not asked anything.' },
+    });
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.kind).toBe('system-boot-confirmed');
+  });
+
+  it('composes one row when the result predates the console pass entirely', () => {
+    expect(buildSystemEmulationFindings('rootfs', result())).toHaveLength(1);
+  });
+
+  it('adds a second row when the guest was asked, and leaves the first one untouched', () => {
+    const drafts = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      console: {
+        attempted: true,
+        reason: 'Nothing answered on a guest that booted, so the guest is asked directly.',
+        command: 'qemu-system-mips … init=/bin/sh',
+        outcome: outcome(),
+        note: 'A shell answered and the vendor init script ran to completion.',
+        interventions: ['Booted with init=/bin/sh …', "The firmware's own /etc/rc.d/iptables-stop was run …"],
+        open: [{ host: 41000, guest: 80 }],
+      },
+    });
+    expect(drafts).toHaveLength(2);
+    // The un-intervened row must be exactly what it was before the pass existed.
+    expect(drafts[0]?.kind).toBe('system-boot-confirmed');
+    expect(drafts[0] && 'interventions' in drafts[0]).toBe(false);
+    expect(drafts[1]?.kind).toBe('system-console-answered');
+    expect(drafts[1]?.proofState).toBe('confirmed_full_system');
+    expect(drafts[1]?.interventions).toHaveLength(2);
+    expect(drafts[1]?.evidence).toMatchObject({ policyBefore: 'DROP', policyAfter: 'ACCEPT', teardownRan: true });
+  });
+
+  /**
+   * The run's own `open` is the un-intervened one and stays empty; the console pass's ports live on its own row.
+   * Folding them together is what would put an intervened boot into the reproducibility history as a repeat.
+   */
+  it('never merges the console pass’s answering ports into the run’s own', () => {
+    const drafts = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      console: {
+        attempted: true,
+        reason: 'asked',
+        outcome: outcome(),
+        interventions: ['Booted with init=/bin/sh …'],
+        open: [{ host: 41000, guest: 80 }],
+      },
+    });
+    expect(drafts[0]?.evidence?.open).toEqual([]);
+    expect(drafts[1]?.evidence?.open).toEqual([{ host: 41000, guest: 80 }]);
+  });
+
+  it('carries a shell that never answered as blocked, with no interventions to claim', () => {
+    const drafts = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      console: {
+        attempted: true,
+        reason: 'asked',
+        outcome: outcome({ shellAnswered: false, policyBefore: null, policyAfter: null, teardownRan: false }),
+        interventions: [],
+        open: [],
+      },
+    });
+    expect(drafts[1]?.kind).toBe('system-console-blocked');
+    expect(drafts[1]?.proofState).toBe('blocked_by_platform');
+    expect(drafts[1] && 'interventions' in drafts[1]).toBe(false);
+  });
+
+  // `listening: []` means the guest held no socket; without the flag beside it, it also means nobody read the table.
+  it('carries both halves of the listener reading, so an empty list is never read as a fact on its own', () => {
+    const drafts = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      console: {
+        attempted: true,
+        reason: 'asked',
+        outcome: outcome({ listening: [], listenersRead: false }),
+        interventions: ['Booted with init=/bin/sh …'],
+        open: [],
+      },
+    });
+    expect(drafts[1]?.evidence).toMatchObject({ listening: [], listenersRead: false });
   });
 });

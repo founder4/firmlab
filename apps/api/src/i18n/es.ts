@@ -541,5 +541,12 @@ export const es: Messages = {
       egress:
         'No sale nada de esta máquina. Lo que cambia es el ARTEFACTO: un servicio que responde en un arranque reparado puede estar respondiendo sólo porque se le desmontó el filtrado de paquetes, y eso es una afirmación distinta de responder tal como se envía. Todo hallazgo de ese arranque lleva esa frase en `interventions`, y el script de init se restaura a sus bytes originales en cuanto la imagen queda construida.',
     },
+    FIRMLAB_EMU_CONSOLE: {
+      label: 'Preguntarle al invitado arrancado por qué no le llega nada',
+      effect:
+        'Añade un TERCER arranque, y sólo cuando en los dos primeros no respondió nada: la imagen sube con `init=/bin/sh`, de modo que una shell ocupa la consola serie, y FirmLab le escribe. Lee la política `iptables -L INPUT` del propio invitado, ejecuta el `/etc/rc.d/iptables-stop` del fabricante si la imagen lo trae, vuelve a leer la política y lee `/proc/net/tcp`. No se escribe nada en la imagen —ningún fichero cambia— y a un firmware cuyos servicios ya responden no se le toca. Se abstiene por completo cuando el interruptor de reparación de arriba ya modificó esta imagen, porque los dos se solaparían sobre la única lectura que importa.',
+      egress:
+        'No sale nada de esta máquina. Lo que cambia es el ARTEFACTO, y más que con la reparación: `init=/bin/sh` sustituye al init del fabricante, así que `/sbin/init` no llega a ejecutarse y nada de `inittab` —su getty incluido— se arranca. Un puerto que responde en ese arranque responde a un sistema que este banco de trabajo montó a mano, y todo hallazgo de ahí lleva las dos intervenciones en `interventions`, bajo su propio tipo de hallazgo para que jamás pueda contarse como un arranque que respondió tal cual se envía.',
+    },
   },
 };

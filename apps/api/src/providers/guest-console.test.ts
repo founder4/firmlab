@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CONSOLE_FLAG,
+  type ConsolePassGate,
   GUEST_SHELL_CMDLINE,
   MARK,
+  classifyConsolePass,
   consoleInterventions,
   consoleScript,
+  consoleScriptDurationMs,
   describeConsole,
+  planConsolePass,
   readConsoleOutcome,
 } from './guest-console.js';
 
@@ -196,5 +201,133 @@ describe('describeConsole', () => {
   it('says outright when nothing was listening, whatever the policy', () => {
     const s = describeConsole(readConsoleOutcome(transcript({ before: 'DROP', after: 'ACCEPT', listeners: [] })));
     expect(s).toContain('no listening TCP port at all');
+  });
+});
+
+describe('consoleScriptDurationMs', () => {
+  it('is the sum of the script the caller is about to run, not a number beside it', () => {
+    const steps = consoleScript(inputs());
+    expect(consoleScriptDurationMs(steps)).toBe(steps.reduce((n, s) => n + s.waitMs, 0));
+  });
+
+  /**
+   * The reason this function exists rather than a constant: the schedule is longer than `BOOT_TIMEOUT_MS`, so a
+   * driven pass sized by the un-driven pass's box would be killed before the two reads the outcome comes from.
+   */
+  it('exceeds the 120 s box the un-driven passes use, which is why the deadline is derived', () => {
+    expect(consoleScriptDurationMs(consoleScript(inputs()))).toBeGreaterThan(120_000 - 45_000);
+  });
+
+  it('is zero for an empty script rather than undefined', () => {
+    expect(consoleScriptDurationMs([])).toBe(0);
+  });
+});
+
+describe('planConsolePass — six gates, and the branch that runs is only one of them', () => {
+  const gate = (over: Partial<ConsolePassGate> = {}): ConsolePassGate => ({
+    enabled: true,
+    answered: 0,
+    booted: true,
+    panicked: false,
+    rootfsAvailable: true,
+    alreadyIntervened: false,
+    ...over,
+  });
+
+  it('runs when nothing answered on a guest that booted', () => {
+    const p = planConsolePass(gate());
+    expect(p.run).toBe(true);
+    expect(p.reason).toContain('asked directly');
+  });
+
+  it('does not run with the flag off, and says the question was not put — never that there was nothing to say', () => {
+    const p = planConsolePass(gate({ enabled: false }));
+    expect(p.run).toBe(false);
+    expect(p.reason).toContain(CONSOLE_FLAG);
+    expect(p.reason).toContain('the question was not put');
+  });
+
+  it('never touches a firmware that already answers', () => {
+    const p = planConsolePass(gate({ answered: 2 }));
+    expect(p.run).toBe(false);
+    expect(p.reason).toContain('as shipped');
+  });
+
+  it('declines on a panic before it declines on a missing boot marker — a panic is the more specific fact', () => {
+    // Both are true of a panicked guest (`booted` is false whenever `panicked` is true), and the reader deserves
+    // the cause rather than its consequence.
+    const p = planConsolePass(gate({ booted: false, panicked: true }));
+    expect(p.reason).toContain('panicked');
+  });
+
+  it('declines when no pass printed a boot', () => {
+    expect(planConsolePass(gate({ booted: false })).reason).toContain('no evidence a shell could exist');
+  });
+
+  it('declines without a rootfs rather than assembling the script from assumptions', () => {
+    const p = planConsolePass(gate({ rootfsAvailable: false }));
+    expect(p.run).toBe(false);
+    expect(p.reason).toContain('nobody looked at');
+  });
+
+  /**
+   * The gate that is about correctness rather than cost. The appended-line repair runs the vendor teardown from
+   * inside `rcS`, and this script runs `rcS` and THEN reads the policy — so the "before" read would show the flush
+   * this workbench caused, and `describeConsole` would report the firewall exonerated on that evidence.
+   */
+  it('declines when the repair already flushed this image, because the before-read would measure our own flush', () => {
+    const p = planConsolePass(gate({ alreadyIntervened: true }));
+    expect(p.run).toBe(false);
+    expect(p.reason).toContain('FIRMLAB_EMU_REPAIR');
+    expect(p.reason).toContain('cannot attribute');
+  });
+});
+
+describe('classifyConsolePass', () => {
+  const outcome = (t: Parameters<typeof transcript>[0], open = 0) =>
+    classifyConsolePass(readConsoleOutcome(transcript(t)), open);
+
+  it('keeps confirmed_full_system when a port answered, and says in the TITLE that it was not as shipped', () => {
+    const v = outcome({ before: 'DROP', after: 'ACCEPT', listeners: [listenRow('0050')] }, 1);
+    expect(v.proofState).toBe('confirmed_full_system');
+    expect(v.kind).toBe('system-console-answered');
+    // The census is the number people quote, so the qualification cannot live only in `interventions`.
+    expect(v.title).toContain('not as shipped');
+    expect(v.reason).toContain('says nothing about the physical device');
+  });
+
+  it('grades a read policy as confirmed_in_emulation when nothing answered even so', () => {
+    const v = outcome({ before: 'DROP', after: 'ACCEPT', listeners: [listenRow('0050')] }, 0);
+    expect(v.proofState).toBe('confirmed_in_emulation');
+    expect(v.kind).toBe('system-console-diagnosed');
+    expect(v.title).toContain('DROP → ACCEPT');
+  });
+
+  it('does not print an arrow when the policy did not move', () => {
+    expect(outcome({ before: 'ACCEPT', after: 'ACCEPT' }).title).not.toContain('→');
+  });
+
+  /** A shell that never answered is the question failing, not the firmware answering it. */
+  it('blocks by platform when no shell answered, and refuses to read that as a negative', () => {
+    const v = classifyConsolePass(readConsoleOutcome('[ 0.0] Linux version 4.1.17+'), 0);
+    expect(v.proofState).toBe('blocked_by_platform');
+    expect(v.kind).toBe('system-console-blocked');
+    expect(v.reason).toContain('in either direction');
+  });
+
+  it('reports a shell that answered and read nothing as a lead, not as a measurement', () => {
+    const v = outcome({ before: null, after: null, listeners: null });
+    expect(v.proofState).toBe('needs_runtime_reproduction');
+    expect(v.kind).toBe('system-console-inconclusive');
+  });
+
+  it('gives every branch its own kind, so the ledger can separate them', () => {
+    const kinds = [
+      outcome({ before: 'DROP', after: 'ACCEPT' }, 1).kind,
+      outcome({ before: 'DROP', after: 'ACCEPT' }, 0).kind,
+      classifyConsolePass(readConsoleOutcome('nothing'), 0).kind,
+      outcome({ before: null, after: null, listeners: null }).kind,
+    ];
+    expect(new Set(kinds).size).toBe(4);
   });
 });
