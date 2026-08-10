@@ -657,7 +657,20 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   const binary = spec.target;
   if (!binary)
     return { summary: 'no target binary', findingCount: 0, degraded: true, note: 'symreach spec missing target' };
-  const r = await runSymReach(c.rootfsPath, binary, spec.sinks ?? [], c.handle);
+  // The POLICY has to follow the question, and getting this wrong is not a subtle failure — it is a silent one.
+  // `pickSinks` defaults to `unsafe-copy`, which keeps only the unbounded-copy names; handed `system/popen/execve`
+  // it keeps NOTHING, and `runSymReach` then returns `unavailable('no sink to ask about')` — which composes a
+  // `blocked_by_platform` row reading *"the deployment could not answer it"*. Measured on the deployed build: the
+  // WR940N's `usr/bin/httpd` came back blocked from the scan minutes after the manual route proved `system`
+  // REACHED in the same binary in 11 s. The deployment could answer perfectly well; this caller was asking with a
+  // filter that deleted its own question, and the honest-sounding row hid it.
+  const r = await runSymReach(
+    c.rootfsPath,
+    binary,
+    spec.sinks ?? [],
+    c.handle,
+    spec.sinkClass === 'cmdexec' ? { policy: 'as-given' } : {},
+  );
   // Per-binary idempotent source, mirroring `binary:<path>` — a re-run re-syncs rather than duplicating. Taken from
   // `specKey` rather than rebuilt here, so the string that DEDUPS the spec and the string that OWNS its rows cannot
   // drift: one binary now carries two independent questions, and a copy of this expression that forgot the second

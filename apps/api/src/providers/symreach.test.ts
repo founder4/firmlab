@@ -25,6 +25,18 @@ describe('pickSinks — which questions are worth asking', () => {
     expect(pickSinks(['memcpy', 'snprintf']).asked).toEqual([]);
   });
 
+  /**
+   * Why W9's command-exec specs MUST carry `policy: 'as-given'`, pinned here because the first wiring of them did
+   * not and the failure was silent-shaped. Under the default policy a command-exec sink set survives as NOTHING,
+   * `runSymReach` returns `unavailable('no sink to ask about')`, and that composes a `blocked_by_platform` row
+   * reading *"the deployment could not answer it"*. Measured: the WR940N's `usr/bin/httpd` came back blocked from
+   * an autonomous scan minutes after the manual route proved `system` reachable in that same binary in 11 s.
+   */
+  it('deletes an entire command-exec question under the DEFAULT policy, which is why the caller must say', () => {
+    expect(pickSinks(['system', 'popen', 'execve']).asked).toEqual([]);
+    expect(pickSinks(['system', 'popen', 'execve'], 'as-given').asked).toEqual(['system', 'popen', 'execve']);
+  });
+
   // The autonomous path is settling a W5 candidate, so it filters. The manual route is an operator asking a
   // question of their own — "is system reachable in this CGI?" is the same question, and refusing it would be the
   // prober protecting its own framing rather than answering.
