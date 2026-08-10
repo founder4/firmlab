@@ -124,8 +124,18 @@ export interface PlanSpec {
   note?: string;
   /** A concrete target for the executor (e.g. the rootfs-relative binary path for a `decompile` spec). */
   target?: string;
-  /** For a `symreach` spec: the unbounded-copy sinks to ask about inside `target`. */
+  /** For a `symreach` spec: the sinks to ask about inside `target`. */
   sinks?: string[];
+  /**
+   * Which QUESTION a `symreach` spec is asking about `target`, when it is not the default one.
+   *
+   * One binary can carry two independent reachability questions — "is an unbounded copy on a live path" and "is a
+   * command-exec call on a live path" — and 40 of this corpus's 80 askable command-exec binaries are ALSO
+   * stack-overflow candidates. Both `specKey` and the findings source are derived from this, so the second question
+   * cannot dedup away the first, and its answer cannot delete the first's rows. That deletion has been paid for
+   * once already, on the manual route, whose source string carries its sink set for exactly this reason.
+   */
+  sinkClass?: 'cmdexec';
   /** For a `dynprobe` spec: the single sink to reproduce and the call-site addresses to break on. */
   sink?: string;
   addresses?: string[];
@@ -163,6 +173,19 @@ export type Lead =
       target: string;
       reason: string;
       /** The unbounded-copy functions this binary imports — the sinks to ask angr about. */
+      sinks: string[];
+    }
+  | {
+      /**
+       * The same question, asked about a command-execution sink instead of an unbounded copy.
+       *
+       * Its own kind rather than a flag on the one above, because it schedules under its own key, its own cap and
+       * its own findings source — and because the two must be able to coexist on one binary.
+       */
+      kind: 'prove-cmdexec-reachability';
+      target: string;
+      reason: string;
+      /** The command-exec functions this binary IMPORTS — never the ones merely named in its strings. */
       sinks: string[];
     };
 
@@ -465,7 +488,12 @@ function baseName(p: string): string {
  */
 export function specKey(spec: PlanSpec): string {
   if (spec.provider === 'decompile' && spec.target) return `decompile:${spec.target}`;
-  if (spec.provider === 'symreach' && spec.target) return `symreach:${spec.target}`;
+  // The suffix is only ever ADDED, never applied to the existing question: a key that changed shape would stop
+  // matching the `symreach:<path>` rows every prior run wrote, and `syncFindings` would leave them orphaned beside
+  // the new ones instead of replacing them.
+  if (spec.provider === 'symreach' && spec.target) {
+    return spec.sinkClass === 'cmdexec' ? `symreach:${spec.target}#cmdexec` : `symreach:${spec.target}`;
+  }
   if (spec.provider === 'dynprobe' && spec.target) return `dynprobe:${spec.target}#${spec.sink ?? ''}`;
   return spec.provider ?? spec.worker;
 }
@@ -486,6 +514,21 @@ export function replan(lead: Lead, planned: ReadonlySet<string>): PlanSpec[] {
       target: lead.target,
       sink: lead.sink,
       addresses: lead.addresses,
+      origin: 'replan',
+      trigger: lead.reason,
+    };
+    return planned.has(specKey(spec)) ? [] : [spec];
+  }
+  if (lead.kind === 'prove-cmdexec-reachability') {
+    const spec: PlanSpec = {
+      worker: `W5 · Cmd-exec reachability (${baseName(lead.target)})`,
+      reason: lead.reason,
+      needsRootfs: true,
+      built: true,
+      provider: 'symreach',
+      target: lead.target,
+      sinks: lead.sinks,
+      sinkClass: 'cmdexec',
       origin: 'replan',
       trigger: lead.reason,
     };
@@ -524,7 +567,17 @@ export function replan(lead: Lead, planned: ReadonlySet<string>): PlanSpec[] {
  */
 export function countReachabilityProbes(planned: ReadonlySet<string>): number {
   let n = 0;
-  for (const key of planned) if (key.startsWith('symreach:')) n++;
+  // Command-exec probes are EXCLUDED, and this exclusion is the whole point of them having their own cap. Counting
+  // them here would make adding the new question silently shrink the unbounded-copy allowance from 3 to 1 on any
+  // image carrying both — a budget cut nobody asked for, delivered by a feature that reads like an addition.
+  for (const key of planned) if (key.startsWith('symreach:') && !key.endsWith('#cmdexec')) n++;
+  return n;
+}
+
+/** …and how many command-exec probes are on it. Its own counter, against its own cap, for the reason above. */
+export function countCmdexecProbes(planned: ReadonlySet<string>): number {
+  let n = 0;
+  for (const key of planned) if (key.startsWith('symreach:') && key.endsWith('#cmdexec')) n++;
   return n;
 }
 
@@ -547,6 +600,7 @@ export const LEAD_KIND_LABEL: Record<Lead['kind'], string> = {
   'decompile-binary': 'daemon/handler decompile',
   'reproduce-crash': 'crash reproduction',
   'prove-reachability': 'reachability probe',
+  'prove-cmdexec-reachability': 'command-exec reachability probe',
 };
 
 /**

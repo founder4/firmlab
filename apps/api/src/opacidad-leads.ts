@@ -231,6 +231,86 @@ export function reachabilityLeads(
   return leads;
 }
 
+/**
+ * Its own cap, deliberately small, and it does NOT come out of `REACHABILITY_LEAD_CAP`.
+ *
+ * Two probes rather than three because this is the newer question and the older one has a measured record; and its
+ * own budget rather than a share of the existing one because a "new lead kind" that halves the allowance of the
+ * kind already there is a cut disguised as an addition.
+ */
+export const CMDEXEC_LEAD_CAP = 2;
+
+/**
+ * Command-exec sinks as reachability questions — the class the scan could not ask, measured before it was built.
+ *
+ * **The population, counted over the deployed corpus (2026-08-10, 1315 findings).** 127 `binary-cmdexec-sink` rows
+ * across 7 images. Of those, **121 come from a real `dynsym` import** and 6 from the strings superset; 41 are
+ * libraries; **80 are an imported sink in something that is not a `.so`** — the genuinely askable set. And 40 of
+ * those 80 are ALSO `binary-pwnable-candidate`, which is why this question needed its own spec key rather than
+ * riding the existing one: on half the population the two would have collided on one binary.
+ *
+ * **Does it pay? Asked of the real prober on 8 of them, before writing a line of this.** `system` came back
+ * `reached` on **4 of 8** — `usr/sbin/generate_pin`, `sbin/diag_tracertbutton`, `usr/bin/factory`, and
+ * `usr/bin/httpd` on the WR940N, the 1.9 MB router program that is the whole exposed daemon — in **1 to 14
+ * seconds** against a 90 s budget. Nothing timed out. The rest returned an honest `not_reached_in_budget`.
+ *
+ * **Three refusals.**
+ * 1. A sink read from the strings superset is not asked about. angr resolves a sink by SYMBOL, so a binary that
+ *    merely contains the text `system` gives the prober nothing to break on, and the question would come back
+ *    `absent` — a non-answer that costs a slot and reads like a negative.
+ * 2. A library is not asked. Same reason the unbounded-copy queue drops them: there is no entry point to be
+ *    reachable FROM. `runnable` absent means the row predates the field, and unknown must not disqualify.
+ * 3. `reached` will mean the call site is on a live path, and nothing about attacker control. The sinks are its own
+ *    row's `execFns` rather than a fixed pair, so no probe spends its budget on a `popen` the binary never imports.
+ */
+export function cmdexecLeads(
+  candidates: FindingDraft[],
+  rootfsPath: string,
+  budget = CMDEXEC_LEAD_CAP,
+  interest: ProbeInterest = {},
+): Lead[] {
+  const leads: Lead[] = [];
+  if (budget <= 0) return leads;
+  const exposed = interestingBinaries(rootfsPath, interest);
+  const seen = new Set<string>();
+  const ordered = candidates
+    .filter((f) => f.kind === 'binary-cmdexec-sink' && leadRunnable(f) && fromDynsym(f))
+    .sort((a, b) => leadSize(a) - leadSize(b) || leadPath(a).localeCompare(leadPath(b)));
+  const promoted: Lead[] = [];
+  const plain: Lead[] = [];
+  for (const f of ordered) {
+    const ev = (f.evidence ?? {}) as Record<string, unknown>;
+    const target = typeof ev.path === 'string' ? ev.path : '';
+    const sinks = Array.isArray(ev.execFns) ? ev.execFns.filter((s): s is string => typeof s === 'string') : [];
+    if (!target || sinks.length === 0 || seen.has(target)) continue;
+    if (interest.planned?.has(`symreach:${target}#cmdexec`)) continue;
+    if (!resolveInsideRootfs(rootfsPath, target)) continue;
+    seen.add(target);
+    const why = exposed.get(target);
+    const head = `command-exec sink (${sinks.join('/')}, imported)`;
+    const reason = why
+      ? `${head}, ranked ahead of smaller candidates because ${why} — prove whether the call site is on a live path`
+      : `${head} — prove whether the call site is on a live path`;
+    (why ? promoted : plain).push({ kind: 'prove-cmdexec-reachability', target, sinks, reason });
+  }
+  // Exposure first, then size — the same two-queue round-robin the unbounded-copy leads use, and the measurement
+  // is why: the one binary in the sample that is an exposed daemon (`usr/bin/httpd`, 1.9 MB) is also the one whose
+  // answer is worth the most, and a pure smallest-first order would have put it last.
+  for (let i = 0; leads.length < budget && (i < promoted.length || i < plain.length); i++) {
+    const p = promoted[i];
+    if (p) leads.push(p);
+    if (leads.length >= budget) break;
+    const q = plain[i];
+    if (q) leads.push(q);
+  }
+  return leads;
+}
+
+/** Was this row's symbol read from the real dynamic symbol table? Absent = an older row; treated as not proven. */
+function fromDynsym(f: FindingDraft): boolean {
+  return ((f.evidence ?? {}) as Record<string, unknown>).symbolSource === 'dynsym';
+}
+
 // === W4 → reachability: the good questions ===
 
 /** Shell wrappers that prefix the real program in an exec string — step past them to the actual binary. */

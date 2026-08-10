@@ -20,8 +20,10 @@ import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } f
 import type { LlmConfig } from './llm.js';
 import { complete } from './llm.js';
 import {
+  CMDEXEC_LEAD_CAP,
   type ProbeInterest,
   REACHABILITY_LEAD_CAP,
+  cmdexecLeads,
   daemonLeads,
   handlerLeads,
   interestingBinaries,
@@ -46,6 +48,7 @@ import {
   type PlanSpec,
   type ProviderId,
   type ScheduleState,
+  countCmdexecProbes,
   countReachabilityProbes,
   planEntries,
   scheduleLeads,
@@ -139,6 +142,11 @@ interface RunCtx {
 /** Reachability probes still affordable this run — W4's chains run first, so they claim the slots they deserve. */
 function reachabilityBudget(c: RunCtx): number {
   return REACHABILITY_LEAD_CAP - countReachabilityProbes(c.planned);
+}
+
+/** The command-exec question's own allowance, counted separately so it cannot eat the one above. */
+function cmdexecBudget(c: RunCtx): number {
+  return CMDEXEC_LEAD_CAP - countCmdexecProbes(c.planned);
 }
 
 interface StepOutcome {
@@ -608,22 +616,32 @@ async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
   // Ranked on two axes, not one. Size says which questions RESOLVE; W3's service map and W4's handler analysis say
   // which are worth ASKING, and the ranking draws from both queues round-robin so neither can take the whole
   // allowance. `interest` is built above, because the finding cap needs the same signal.
-  const leads = c.rootfsPath ? reachabilityLeads(r.findings, c.rootfsPath, budget, interest) : [];
-  const unasked = Math.max(0, r.candidates - leads.length);
+  const copyLeads = c.rootfsPath ? reachabilityLeads(r.findings, c.rootfsPath, budget, interest) : [];
+  // The other question this sweep's rows support, and until now nothing asked it: 127 command-exec sink rows sat in
+  // the corpus with no lead kind at all. Its own budget, so scheduling it takes nothing from the line above.
+  const execLeads = c.rootfsPath ? cmdexecLeads(r.findings, c.rootfsPath, cmdexecBudget(c), interest) : [];
+  const leads = [...copyLeads, ...execLeads];
+  const unasked = Math.max(0, r.candidates - copyLeads.length);
   // A probe that jumped the queue says so in its own `reason`, but the sweep's line is where a reader learns the
   // ordering was not purely by size — otherwise a 1.4 MB binary at the head of a smallest-first list reads as a bug.
   const promoted = leads.filter((l) => l.reason.includes('ranked ahead of smaller candidates')).length;
   const probeNote = r.candidates
-    ? ` — ${leads.length} queued for reachability${promoted ? ` (${promoted} ranked ahead on exposure)` : ''}${
+    ? ` — ${copyLeads.length} queued for reachability${promoted ? ` (${promoted} ranked ahead on exposure)` : ''}${
         unasked ? `, ${unasked} left as unproven candidate(s)` : ''
       }`
+    : '';
+  // Counted and stated separately from the line above, because they are a different question against a different
+  // budget: rolling them into one number would make a run look like it asked more of the candidates than it did.
+  const execSinks = r.findings.filter((f) => f.kind === 'binary-cmdexec-sink').length;
+  const execNote = execSinks
+    ? `, ${execSinks} command-exec sink(s)${execLeads.length ? ` — ${execLeads.length} queued for reachability` : ''}`
     : '';
   // The sweep counts every candidate it found but lists only what fits its finding cap, so when the two differ the
   // summary has to say which number the ledger below it actually holds.
   const listed = r.findings.filter((f) => f.kind === 'binary-pwnable-candidate').length;
   const listedNote = listed < r.candidates ? ` (${listed} smallest listed)` : '';
   return {
-    summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)${listedNote}${probeNote}`,
+    summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)${listedNote}${probeNote}${execNote}`,
     findingCount: r.findings.length,
     ...(leads.length ? { leads } : {}),
     ...(r.binariesScanned === 0 ? { degraded: true, note: r.reason } : {}),
@@ -640,8 +658,11 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   if (!binary)
     return { summary: 'no target binary', findingCount: 0, degraded: true, note: 'symreach spec missing target' };
   const r = await runSymReach(c.rootfsPath, binary, spec.sinks ?? [], c.handle);
-  // Per-binary idempotent source, mirroring `binary:<path>` — a re-run re-syncs rather than duplicating.
-  syncFindings(c.imageId, `symreach:${binary}`, r.findings);
+  // Per-binary idempotent source, mirroring `binary:<path>` — a re-run re-syncs rather than duplicating. Taken from
+  // `specKey` rather than rebuilt here, so the string that DEDUPS the spec and the string that OWNS its rows cannot
+  // drift: one binary now carries two independent questions, and a copy of this expression that forgot the second
+  // one would have the command-exec answer delete the unbounded-copy answer on every image carrying both.
+  syncFindings(c.imageId, specKey(spec), r.findings);
   if (!r.available) {
     return {
       summary: `reachability ${binary}: unavailable`,

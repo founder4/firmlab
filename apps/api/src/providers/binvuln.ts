@@ -400,7 +400,10 @@ export function buildBinFindings(a: BinAssessment): FindingDraft[] {
       title: `Command-exec sink: ${a.path} ${verb} ${a.cmdExec.join('/')}`,
       severity: 'info',
       proofState: 'needs_runtime_reproduction',
-      evidence: { path: a.path, size: a.size, execFns: a.cmdExec, symbolSource: a.symbolSource },
+      // `runnable` travels here for the same reason it travels on the candidate above: the reachability lead built
+      // from this row cannot ask a `.so` whether its sink is reachable from an entry point it does not have.
+      // Optional forever — a row stored before this carries none, and unknown must not silently disqualify.
+      evidence: { path: a.path, size: a.size, runnable: a.runnable, execFns: a.cmdExec, symbolSource: a.symbolSource },
       rationale: `The binary ${verb} a command-execution function — a command-injection sink if any argument is attacker-influenced. ${provenance} A lead to taint the callers, not a verdict.`,
     });
   }

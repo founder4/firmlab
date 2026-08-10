@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import type { FindingDraft } from './findings-normalize.js';
 import {
   type ProbeInterest,
+  cmdexecLeads,
   daemonLeads,
   execTargetFromSnippet,
   handlerLeads,
@@ -16,7 +17,9 @@ import {
 } from './opacidad-leads.js';
 import {
   type Lead,
+  type PlanSpec,
   type ScheduleState,
+  countCmdexecProbes,
   countReachabilityProbes,
   replan,
   scheduleLeads,
@@ -611,4 +614,141 @@ describe('the nvram store reaches every class, because it needs no rootfs', () =
       expect(spec?.built).toBe(true);
     });
   }
+});
+
+/**
+ * The command-exec question. Measured over the deployed corpus before it was built: 127 `binary-cmdexec-sink` rows,
+ * 121 of them a real `dynsym` import, 80 of those in something that is not a `.so`, and **40 of the 80 are also a
+ * stack-overflow candidate**. That overlap is why this needed its own key — and 4 of 8 sampled binaries answered
+ * `reached` in 1–14 s, which is why it was worth building.
+ */
+describe('cmdexecLeads — the class 127 corpus rows had no lead kind for', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-cmdexec-'));
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'usr/bin'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'etc/init.d'), { recursive: true });
+  for (const rel of ['usr/bin/httpd', 'usr/bin/small', 'usr/bin/mid', 'usr/bin/lib.so']) {
+    fs.writeFileSync(path.join(root, rel), '\x7fELF');
+  }
+
+  const sink = (p: string, size: number, over: Record<string, unknown> = {}): FindingDraft => ({
+    kind: 'binary-cmdexec-sink',
+    title: p,
+    severity: 'info',
+    proofState: 'needs_runtime_reproduction',
+    evidence: { path: p, size, runnable: true, execFns: ['system'], symbolSource: 'dynsym', ...over },
+    rationale: '',
+  });
+
+  it('asks about an imported command-exec sink, carrying that binary’s own sink names', () => {
+    const leads = cmdexecLeads([sink('usr/bin/small', 9000)], root, 2);
+    expect(leads).toHaveLength(1);
+    expect(leads[0]).toMatchObject({ kind: 'prove-cmdexec-reachability', target: 'usr/bin/small', sinks: ['system'] });
+  });
+
+  it('carries the row’s OWN sinks, so no probe spends its budget on a popen the binary never imports', () => {
+    const leads = cmdexecLeads([sink('usr/bin/small', 10, { execFns: ['system', 'popen', 'execve'] })], root, 2);
+    expect(leads[0]?.kind === 'prove-cmdexec-reachability' && leads[0].sinks).toEqual(['system', 'popen', 'execve']);
+  });
+
+  /** angr resolves a sink by SYMBOL; a binary that merely contains the text `system` gives it nothing to break on. */
+  it('never asks about a sink read from the strings superset — that question cannot be answered', () => {
+    expect(cmdexecLeads([sink('usr/bin/small', 10, { symbolSource: 'strings' })], root, 2)).toEqual([]);
+  });
+
+  it('treats a row predating symbolSource as unproven rather than asking anyway', () => {
+    const old: FindingDraft = {
+      ...sink('usr/bin/small', 10),
+      evidence: { path: 'usr/bin/small', size: 10, runnable: true, execFns: ['system'] },
+    };
+    expect(cmdexecLeads([old], root, 2)).toEqual([]);
+  });
+
+  it('skips a shared library, which has no entry point for the question to start from', () => {
+    expect(cmdexecLeads([sink('usr/bin/lib.so', 10, { runnable: false })], root, 2)).toEqual([]);
+  });
+
+  it('ignores stack-overflow candidates — that is the other question, with the other budget', () => {
+    const pwn: FindingDraft = { ...sink('usr/bin/small', 10), kind: 'binary-pwnable-candidate' };
+    expect(cmdexecLeads([pwn], root, 2)).toEqual([]);
+  });
+
+  it('respects its cap and never returns the same binary twice', () => {
+    const rows = [sink('usr/bin/small', 10), sink('usr/bin/mid', 20), sink('usr/bin/small', 10)];
+    expect(cmdexecLeads(rows, root, 1).map((l) => l.target)).toEqual(['usr/bin/small']);
+    expect(cmdexecLeads(rows, root, 5).map((l) => l.target)).toEqual(['usr/bin/small', 'usr/bin/mid']);
+  });
+
+  /**
+   * The measurement's own lesson: the one binary in the sample worth the most (`usr/bin/httpd`, 1.9 MB, the WR940N's
+   * whole exposed router program) answered in 11 s, and a pure smallest-first order would have put it last.
+   */
+  it('puts an exposed daemon ahead of smaller candidates, and says on whose authority', () => {
+    fs.writeFileSync(path.join(root, 'etc/init.d/uhttpd'), '#!/bin/sh\nstart() { /usr/bin/httpd -p 80 & }\n');
+    const interest: ProbeInterest = {
+      services: [
+        { name: 'httpd', binary: '/usr/bin/httpd', source: 'etc/init.d/uhttpd', autostart: true, network: true },
+      ],
+    };
+    const leads = cmdexecLeads([sink('usr/bin/small', 10), sink('usr/bin/httpd', 1_948_552)], root, 1, interest);
+    expect(leads.map((l) => l.target)).toEqual(['usr/bin/httpd']);
+    expect(leads[0]?.reason).toContain('ranked ahead of smaller candidates');
+  });
+
+  it('does not re-ask a binary whose command-exec probe is already on the agenda', () => {
+    const interest: ProbeInterest = { planned: new Set(['symreach:usr/bin/small#cmdexec']) };
+    expect(cmdexecLeads([sink('usr/bin/small', 10)], root, 2, interest)).toEqual([]);
+  });
+
+  /** …and an unbounded-copy probe on the SAME binary must not block it: they are different questions. */
+  it('still asks when only the OTHER question is already planned for that binary', () => {
+    const interest: ProbeInterest = { planned: new Set(['symreach:usr/bin/small']) };
+    expect(cmdexecLeads([sink('usr/bin/small', 10)], root, 2, interest).map((l) => l.target)).toEqual([
+      'usr/bin/small',
+    ]);
+  });
+
+  it('returns nothing when the budget is already spent', () => {
+    expect(cmdexecLeads([sink('usr/bin/small', 10)], root, 0)).toEqual([]);
+  });
+});
+
+/**
+ * The trap this pair of counters exists for. 40 of the corpus's 80 askable command-exec binaries are ALSO
+ * stack-overflow candidates, so both questions land on one binary — and both a shared spec key and a shared counter
+ * would have turned an addition into a silent cut.
+ */
+describe('the two reachability questions share a provider and nothing else', () => {
+  const copy: Lead = { kind: 'prove-reachability', target: 'usr/bin/httpd', reason: 'r', sinks: ['strcpy'] };
+  const exec: Lead = { kind: 'prove-cmdexec-reachability', target: 'usr/bin/httpd', reason: 'r', sinks: ['system'] };
+
+  it('keys the same binary’s two questions apart, so neither dedups the other away', () => {
+    const a = replan(copy, new Set());
+    const b = replan(exec, new Set());
+    expect(specKey(a[0] as PlanSpec)).toBe('symreach:usr/bin/httpd');
+    expect(specKey(b[0] as PlanSpec)).toBe('symreach:usr/bin/httpd#cmdexec');
+  });
+
+  // The findings source IS this key, so a shared one would have the command-exec answer delete the copy answer.
+  it('schedules both on one binary rather than dropping the second', () => {
+    const planned = new Set(replan(copy, new Set()).map(specKey));
+    expect(replan(exec, planned)).toHaveLength(1);
+    expect(replan(copy, planned)).toHaveLength(0);
+  });
+
+  it('leaves the unbounded-copy key EXACTLY as it was, so prior runs’ rows still re-sync', () => {
+    // A key that changed shape would orphan every `symreach:<path>` row already in the ledger.
+    expect(specKey(replan(copy, new Set())[0] as PlanSpec)).toBe('symreach:usr/bin/httpd');
+  });
+
+  it('does not let command-exec probes eat the unbounded-copy allowance', () => {
+    const planned = new Set(['symreach:a#cmdexec', 'symreach:b#cmdexec', 'symreach:c']);
+    expect(countReachabilityProbes(planned)).toBe(1);
+    expect(countCmdexecProbes(planned)).toBe(2);
+  });
+
+  it('counts nothing on an empty agenda, which is what makes the first probe affordable', () => {
+    expect(countReachabilityProbes(new Set())).toBe(0);
+    expect(countCmdexecProbes(new Set())).toBe(0);
+  });
 });
