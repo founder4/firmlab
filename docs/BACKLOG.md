@@ -1756,7 +1756,7 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   |---|---|---|
   | **474** | `cve` (grype, package-level) | **No.** Evidence is `{id, packageName, packageVersion}` — no binary, no call site. Deliberately a lead by policy (*present ≠ reachable*). A boot proves the image runs, not that the CVE's code path is reached. |
   | 210 | `binary-pwnable-candidate` | Yes — by **symreach/dynprobe per binary**, not by a boot. 86 are `.so` and 74 are non-runnable, so 136 are eligible; the scan asks **3 per run**. |
-  | 127 | `binary-cmdexec-sink` | **No lead kind exists for it.** `reachabilityLeads` filters on `binary-pwnable-candidate` alone. The largest addressable untouched class. |
+  | 127 | `binary-cmdexec-sink` | ~~**No lead kind exists for it.**~~ **Closed 2026-08-10** — `cmdexecLeads` asks symreach for the row's own imported sinks. The addressable set is **80**, not 127 (121 are real imports, 41 are libraries), and 10 of them are now proven reachable. |
   | 22 | `sink-reachability-inconclusive` | No, by design — budget exhaustion is not an answer. |
   | 12 + 21 | gitleaks heuristics · image-wide (`update-*`, `nvram-*`, `uboot-netboot`, …) | No rung applies. |
   | 7 | `network-daemon-autostart` | **Yes — and these are the ONLY ones a boot can honestly touch**, via a forwarded port that answers. |
@@ -1775,9 +1775,39 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
   window is inside `runFullSystem`, the forwards are ephemeral, and teardown kills the guest. See the entry below,
   which is now the blocking one rather than a hypothetical.
   **What is actually worth building, in order:**
-  - ▢ **A lead kind for `binary-cmdexec-sink`** (127 rows), asking symreach for `system`/`popen` — the manual
-    route already supports exactly that question and phrases it well. Measure before enabling, the way the probe
-    interest rank was measured: it competes for the same budget of 3.
+  - ✅ **A lead kind for `binary-cmdexec-sink`** (2026-08-10, `5e6e54a` + `a20f285`, deployed `a20f285`) —
+    measured before it was built, as this entry asked.
+    **The population is not 127.** Counted over the deployed corpus: 127 rows, **121 from a real `dynsym` import**
+    and 6 from the strings superset; 41 are libraries; **80 are an imported sink in something that is not a `.so`**
+    — the askable set. And **40 of those 80 are ALSO `binary-pwnable-candidate`**, which is the fact that shaped
+    the design: on half the population both questions land on one binary.
+    **Does it pay? Asked of the real prober on 8 of them first.** `system` came back `reached` on **4 of 8**, in
+    **1–14 s** against a 90 s budget, nothing timing out. Enabled on that evidence, then run over the whole corpus:
+    **10 `static_confirmed` reachability rows, 9 inconclusive, 0 blocked.** Three separate routers' `usr/bin/httpd`
+    now carry *"`system` is reachable from the entry point"* — WR940N, WDR3600 and MR3220 — plus DVRF's
+    `diagwpsbutton`/`diag_tracertbutton`, the BE3600's `askfirst` (`execvp`), IMOU's `qr` (`popen`) and the Tenda's
+    `factory`/`hw_test`. Corpus `static_confirmed` 343 → 365.
+    **Its own key and its own budget, and both are load-bearing.** `specKey` only ever ADDS `#cmdexec` — changing
+    the existing key would orphan every `symreach:<path>` row already in the ledger — and `countReachabilityProbes`
+    explicitly EXCLUDES the new keys, because counting them would have shrunk the unbounded-copy allowance from 3
+    to 1 on any image carrying both: a cut disguised as an addition. Verified on the deployed build that a scan now
+    schedules 3 + 2 and that the new rows sit beside the old ones rather than replacing them.
+    _The defect the first real scan found: both probes came back `blocked_by_platform` — "the deployment could not
+    answer it" — on the same `usr/bin/httpd` the manual route had proven `reached` eleven minutes earlier.
+    `pickSinks` defaults to the `unsafe-copy` policy, which keeps only unbounded-copy names, so
+    `system/popen/execve` survived as NOTHING and `runSymReach` returned `unavailable('no sink to ask about')`.
+    The deployment could answer perfectly well; this caller was asking with a filter that deleted its own question,
+    and the honest-sounding row hid it. The policy now follows the question, pinned in `pickSinks`._
+  - ▢ **`unavailable('no sink to ask about')` composes `blocked_by_platform`, and it is not a platform fact.** The
+    row says the deployment could not answer, when what happened is that the caller posed a question with no sinks
+    left in it. Exactly the conflation the dynamic probe split with `blockedBy: 'platform' | 'harness'`, alive one
+    provider over. Impact: medium — it makes a caller bug read as an honest capability gap, which is the one
+    misreading this vocabulary exists to prevent.
+  - ▢ **Two probes per run against 80 askable binaries, and a re-run asks the SAME two.** Measured: two consecutive
+    autonomous scans of `c42ab6f2` asked about exactly the same binaries both times, because every cap orders
+    deterministically. That is correct for idempotence and it means **re-scanning an image can never make
+    progress** — the arithmetic bound below is not eased by running the scan again. It is the concrete cost of the
+    entry that follows.
   - ▢ **Schedule off STORED findings.** Every lead builder today reads the drafts a provider just returned; no
     code path turns an existing ledger row into a scheduled question, so the 906 are unreachable by construction
     even where a rung exists.
