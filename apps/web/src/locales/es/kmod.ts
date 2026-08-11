@@ -3,7 +3,7 @@ import type { Messages } from '../en';
 /** kmod — español. Tipado contra el catálogo inglés. */
 export const kmod: Messages['kmod'] = {
   title: 'Superficie de módulos del kernel',
-  sub: 'Cada `.ko` bajo el rootfs: quién lo escribió, qué API del kernel enlaza y —para los módulos que puntúan— dónde una longitud leída de la red llega a un asignador. El barrido de userland excluye los objetos reubicables por construcción, así que hasta ahora los módulos de un rootfs se contaban y no los leía nadie.',
+  sub: 'Cada .ko bajo el rootfs: quién lo escribió, qué API del kernel enlaza y —para los módulos que puntúan— dónde una longitud leída de la red llega a un asignador. El barrido de userland excluye los objetos reubicables por construcción, así que hasta ahora los módulos de un rootfs se contaban y no los leía nadie.',
   run: 'Ejecutar el barrido',
   rerun: 'Volver a ejecutar',
   running: 'Ejecutando…',
@@ -21,9 +21,9 @@ export const kmod: Messages['kmod'] = {
   provenance: {
     heading: 'Señal de procedencia',
     tagInUse:
-      'El tag `intree` se usa en esta imagen, así que un módulo que no lo lleve se construyó realmente fuera del árbol del kernel y el ranking lo aprovecha.',
+      'El tag intree se usa en esta imagen, así que un módulo que no lo lleve se construyó realmente fuera del árbol del kernel y el ranking lo aprovecha.',
     tagUnused:
-      'NINGÚN módulo de esta imagen lleva tag `intree`, así que este build no lo emite y el tag no decide nada aquí — su ausencia no es evidencia de que un módulo sea externo al árbol. El ranking recurre a la licencia declarada.',
+      'NINGÚN módulo de esta imagen lleva tag intree, así que este build no lo emite y el tag no decide nada aquí — su ausencia no es evidencia de que un módulo sea externo al árbol. El ranking recurre a la licencia declarada.',
     noLicence:
       'Ningún módulo de esta imagen declara licencia tampoco, así que no hay ninguna de las dos claves de procedencia disponible.',
   },
@@ -41,7 +41,7 @@ export const kmod: Messages['kmod'] = {
     unavailable: (reason: string) =>
       `El barrido no pudo ejecutarse${reason ? `: ${reason}` : '.'} No se leyó ningún módulo del kernel, que no es lo mismo que el kernel no llevar ninguno.`,
     noModules:
-      'El rootfs no lleva ficheros `.ko`. Un kernel monolítico con todo compilado dentro produce exactamente este resultado, y un carve que se dejó `lib/modules` también — aquí no se distinguen.',
+      'El rootfs no lleva ficheros .ko. Un kernel monolítico con todo compilado dentro produce exactamente este resultado, y un carve que se dejó lib/modules también — aquí no se distinguen.',
     noRows: (modules: number) =>
       `Se ${modules === 1 ? 'leyó' : 'leyeron'} ${modules} módulo${modules === 1 ? '' : 's'} y ninguno produjo fila. Eso acota solo las preguntas de este barrido — un módulo que no enlaza API de sockets, y toda clase de fallo que esta pasada no pregunta, quedan fuera.`,
     passUnavailable: (reason: string) =>

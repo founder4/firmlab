@@ -266,8 +266,8 @@ export function assessProvenanceUsability(ids: readonly KmodIdentity[]): Provena
   const parts: string[] = [];
   parts.push(
     intreeTagInUse
-      ? 'The `intree` tag is in use on this image, so a module lacking it was built outside the kernel tree.'
-      : 'NOT ONE module on this image carries an `intree` tag, so this build does not emit it and the tag ' +
+      ? 'The intree tag is in use on this image, so a module lacking it was built outside the kernel tree.'
+      : 'NOT ONE module on this image carries an intree tag, so this build does not emit it and the tag ' +
           'decides nothing here — its absence is not evidence that a module is out-of-tree.',
   );
   parts.push(
@@ -920,7 +920,7 @@ export function buildKmodFindings(mods: readonly KmodModuleResult[]): FindingDra
     if (api.socket && api.alloc) {
       const sev: FindingSeverity = m.keys.nonGpl ? 'high' : 'medium';
       const versionNote = m.identity.versionCandidate
-        ? ` The version is read from a \`description\` record — \`${m.identity.versionCandidate.from}\` — rather than a \`version=\` field, so treat it as the vendor's own stamp and not a parsed field.`
+        ? ` The version is read from a description record — ${m.identity.versionCandidate.from} — rather than a version= field, so treat it as the vendor's own stamp and not a parsed field.`
         : '';
       out.push({
         kind: 'kernel-module-network-surface',
@@ -942,14 +942,14 @@ export function buildKmodFindings(mods: readonly KmodModuleResult[]): FindingDra
           importCount: m.importCount,
           rankKeys: m.keys,
         },
-        rationale: `\`${m.file}\`${who ? ` (${who})` : ''} imports ${fmtList(api.socket)} and allocates with ${fmtList(api.alloc)}. Those are undefined symbols in the object's own \`.symtab\`, so the module loader must bind them for it to load at all — this is a fact about the bytes, not an inference. A kernel socket answers before any userland daemon does, which is why \`servicemap\` cannot see it: there is no init script or inetd entry to enumerate. It does NOT follow that the module is remotely exploitable; what follows is that its parser runs in kernel context on input from off-box.${versionNote}`,
+        rationale: `${m.file}${who ? ` (${who})` : ''} imports ${fmtList(api.socket)} and allocates with ${fmtList(api.alloc)}. Those are undefined symbols in the object's own .symtab, so the module loader must bind them for it to load at all — this is a fact about the bytes, not an inference. A kernel socket answers before any userland daemon does, which is why the service map cannot see it: there is no init script or inetd entry to enumerate. It does NOT follow that the module is remotely exploitable; what follows is that its parser runs in kernel context on input from off-box.${versionNote}`,
       });
     }
 
     for (const s of m.sites) {
       const e = s.evidence;
       if (!e) continue;
-      const where = s.fn ? `\`${s.fn}\`` : `offset 0x${s.addr.toString(16)}`;
+      const where = s.fn ? s.fn : `offset 0x${s.addr.toString(16)}`;
       const shortNote = e.truncated ? ', and this chase ran out of window still following a live register' : '';
       const callNote = e.crossedCall
         ? ', and it crossed a call, so the value may be a return rather than anything local'
@@ -983,7 +983,7 @@ export function buildKmodFindings(mods: readonly KmodModuleResult[]): FindingDra
             windowTruncated: e.truncated,
             windowInstructions: WINDOW_INSTRUCTIONS,
           },
-          rationale: `In ${where}, a value passes through a byte-order reversal — so it arrived from outside — and is COMPARED before it reaches \`${s.sink}\`'s size argument at 0x${s.addr.toString(16)} (chain ${e.chain.join(' ← ')}). Recorded because it is the same measurement as the lead beside it with the opposite outcome, and a reader needs to see that this pass distinguishes them rather than flagging every allocation. Whether the comparison is a SUFFICIENT bound is NOT decided here — that reading is the operator's, and it is the reading that lets a plausible CVE be declined on evidence. ${windowNote}`,
+          rationale: `In ${where}, a value passes through a byte-order reversal — so it arrived from outside — and is COMPARED before it reaches ${s.sink}'s size argument at 0x${s.addr.toString(16)} (chain ${e.chain.join(' ← ')}). Recorded because it is the same measurement as the lead beside it with the opposite outcome, and a reader needs to see that this pass distinguishes them rather than flagging every allocation. Whether the comparison is a SUFFICIENT bound is NOT decided here — that reading is the operator's, and it is the reading that lets a plausible CVE be declined on evidence. ${windowNote}`,
         });
         continue;
       }
@@ -1010,7 +1010,7 @@ export function buildKmodFindings(mods: readonly KmodModuleResult[]): FindingDra
           windowInstructions: WINDOW_INSTRUCTIONS,
           license: m.identity.license ?? null,
         },
-        rationale: `In ${where}, a value passes through a byte-order reversal and reaches \`${s.sink}\`'s size argument at 0x${s.addr.toString(16)}${addendNote} (chain ${e.chain.join(' ← ')}). A byte swap on the path to an allocation size means the value arrived in network byte order — from outside the machine. No comparison against that value appears in the instructions before the call. ${windowNote} This is a LEAD: it names a call site worth reading, and proves nothing about reachability or exploitability.`,
+        rationale: `In ${where}, a value passes through a byte-order reversal and reaches ${s.sink}'s size argument at 0x${s.addr.toString(16)}${addendNote} (chain ${e.chain.join(' ← ')}). A byte swap on the path to an allocation size means the value arrived in network byte order — from outside the machine. No comparison against that value appears in the instructions before the call. ${windowNote} This is a LEAD: it names a call site worth reading, and proves nothing about reachability or exploitability.`,
       });
     }
   }
@@ -1287,8 +1287,8 @@ export async function runKmod(rootfsPath: string | null): Promise<KmodResult> {
       ...empty,
       available: true,
       reason:
-        'The rootfs carries no `.ko` files. A monolithic kernel with everything compiled in produces exactly ' +
-        'this result, and so does a carve that missed `lib/modules` — the two are not distinguished here.',
+        'The rootfs carries no .ko files. A monolithic kernel with everything compiled in produces exactly ' +
+        'this result, and so does a carve that missed lib/modules — the two are not distinguished here.',
     };
   }
 
@@ -1392,7 +1392,7 @@ export async function runKmod(rootfsPath: string | null): Promise<KmodResult> {
     modulesDropped: dropped,
     sitesDropped,
     sitesHoisted: hoistedSites,
-    rule: `Modules scoring at least ${MIN_SCORE_FOR_DISASM} are eligible (a non-GPL licence weighs 8, a kernel socket 4, out-of-tree 2, allocator-plus-copy 2, the syscall edge 1); the top ${DISASM_MODULE_CAP} by score then path are disassembled, EVERY sink reference in each (bounded only by a ${SITES_PER_MODULE_CAP} safety limit no corpus module approaches), allocators first. The order is by SCORE and then PATH, never by walk order, so the selected set is not an artifact of how the vendor laid out \`lib/modules\`.`,
+    rule: `Modules scoring at least ${MIN_SCORE_FOR_DISASM} are eligible (a non-GPL licence weighs 8, a kernel socket 4, out-of-tree 2, allocator-plus-copy 2, the syscall edge 1); the top ${DISASM_MODULE_CAP} by score then path are disassembled, EVERY sink reference in each (bounded only by a ${SITES_PER_MODULE_CAP} safety limit no corpus module approaches), allocators first. The order is by SCORE and then PATH, never by walk order, so the selected set is not an artifact of how the vendor laid out lib/modules.`,
   };
   if (!r2.ok && r2.reason) callSitePass.reason = r2.reason;
 
@@ -1404,7 +1404,7 @@ export async function runKmod(rootfsPath: string | null): Promise<KmodResult> {
 
   return {
     available: true,
-    reason: `${recs.length} kernel module(s) read${skipNote}${symNote}. ${provenance.note}${passNote} An empty list of call sites means the ranked modules showed none in view — not that this rootfs has none.`,
+    reason: `${recs.length} kernel module(s) read${skipNote}${symNote}.${passNote} An empty list of call sites means the ranked modules showed none in view — not that this rootfs has none.`,
     modules: results,
     modulesFound: files.length,
     notRelocatable,

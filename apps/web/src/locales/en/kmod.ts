@@ -14,7 +14,7 @@
  */
 export const kmod = {
   title: 'Kernel-module surface',
-  sub: 'Every `.ko` under the rootfs: who wrote it, which kernel API it binds, and — for the modules that rank — where a length read off the wire reaches an allocator. The userland sweep excludes relocatable objects by construction, so until this existed the modules in a rootfs were counted and never read.',
+  sub: 'Every .ko under the rootfs: who wrote it, which kernel API it binds, and — for the modules that rank — where a length read off the wire reaches an allocator. The userland sweep excludes relocatable objects by construction, so until this existed the modules in a rootfs were counted and never read.',
   run: 'Run the sweep',
   rerun: 'Re-run',
   running: 'Running…',
@@ -32,9 +32,9 @@ export const kmod = {
   provenance: {
     heading: 'Provenance signal',
     tagInUse:
-      'The `intree` tag is in use on this image, so a module lacking it was genuinely built outside the kernel tree and the ranking uses that.',
+      'The intree tag is in use on this image, so a module lacking it was genuinely built outside the kernel tree and the ranking uses that.',
     tagUnused:
-      'NOT ONE module on this image carries an `intree` tag, so this build does not emit it and the tag decides nothing here — its absence is not evidence that a module is out-of-tree. The ranking falls back to the declared licence.',
+      'NOT ONE module on this image carries an intree tag, so this build does not emit it and the tag decides nothing here — its absence is not evidence that a module is out-of-tree. The ranking falls back to the declared licence.',
     noLicence: 'No module on this image declares a licence either, so neither provenance key is available.',
   },
   hoistedNote: (n: number) =>
@@ -51,7 +51,7 @@ export const kmod = {
     unavailable: (reason: string) =>
       `The sweep could not run${reason ? `: ${reason}` : '.'} No kernel module was read, which is not the same as the kernel carrying none.`,
     noModules:
-      'The rootfs carries no `.ko` files. A monolithic kernel with everything compiled in produces exactly this result, and so does a carve that missed `lib/modules` — the two are not distinguished here.',
+      'The rootfs carries no .ko files. A monolithic kernel with everything compiled in produces exactly this result, and so does a carve that missed lib/modules — the two are not distinguished here.',
     noRows: (modules: number) =>
       `${modules} module${modules === 1 ? ' was' : 's were'} read and none produced a row. That bounds this sweep's questions only — a module that binds no socket API, and every bug class this pass does not ask about, are outside it.`,
     passUnavailable: (reason: string) =>
