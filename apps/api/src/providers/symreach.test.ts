@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import type { BinAssessment } from './binvuln.js';
+import type { JobHandle } from './jobs.js';
 import {
   MAX_SINKS,
   buildReachFindings,
   buildSpec,
   manualSource,
+  nothingToAsk,
   parseReachOutput,
   pickSinks,
+  runSymReach,
+  unavailable,
   validateSinkNames,
 } from './symreach.js';
+
+/** The runner only ever calls `log` on its handle, and these cases return before it does. */
+const silentHandle = { log: () => {} } as unknown as JobHandle;
 
 describe('pickSinks — which questions are worth asking', () => {
   it('keeps only real unbounded-copy imports and orders them by directness', () => {
@@ -213,5 +221,84 @@ describe('buildReachFindings — the honesty contract', () => {
       { sink: 'gets', outcome: 'not_reached_in_budget', addresses: ['0x2'], steps: 400, pruned: false, errors: 0 },
     ]);
     expect(drafts.map((d) => d.kind)).toEqual(['sink-reachable', 'sink-reachability-inconclusive']);
+  });
+});
+
+/**
+ * The conflation `a20f2850` paid for, pinned at the constructor.
+ *
+ * That commit fixed the CALLER — W9 now says `as-given` for a command-exec question — and left the provider still
+ * willing to blame the deployment for anything at all that went wrong. `blocked_by_platform` means *"the question
+ * was asked and this deployment could not answer it"*, and a row saying that is read as a real limit: it is
+ * counted by coverage, composed into the narrative, and outlives the caller that produced it. A malformed request
+ * is not that, and `dynprobe-run.ts` had already drawn the same line one provider earlier.
+ */
+describe('unavailable — a caller error must not be reported as a capability limit', () => {
+  it('writes NO finding when the question could not be posed', () => {
+    const r = unavailable('usr/bin/httpd', "the 'unsafe-copy' policy kept none of the 3 name(s) requested", 'request');
+    expect(r.available).toBe(false);
+    expect(r.blockedBy).toBe('request');
+    // The whole fix: nothing reaches the ledger. The reason still travels on the result.
+    expect(r.findings).toEqual([]);
+    expect(r.reason).toContain('unsafe-copy');
+  });
+
+  it('still records a genuine platform limit, because absence of a tool is not absence of a problem', () => {
+    const r = unavailable('usr/bin/httpd', 'angr not installed in this deployment');
+    expect(r.blockedBy).toBe('platform');
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0]?.kind).toBe('sink-reachability-blocked');
+    expect(r.findings[0]?.proofState).toBe('blocked_by_platform');
+    expect(r.findings[0]?.rationale).toContain('missing capability');
+  });
+
+  it('separates a broken attempt from a missing capability, since only one is worth retrying', () => {
+    const r = unavailable('usr/bin/httpd', 'angr probe produced no output', 'harness');
+    expect(r.blockedBy).toBe('harness');
+    // Both keep `blocked_by_platform` — the vocabulary has no third state and inventing one here would be worse.
+    expect(r.findings[0]?.proofState).toBe('blocked_by_platform');
+    expect(r.findings[0]?.rationale).toContain('retry may');
+  });
+
+  it('refuses a run with no rootfs as a request defect, not as something this deployment cannot do', async () => {
+    const r = await runSymReach(null, 'usr/bin/httpd', ['strcpy'], silentHandle);
+    expect(r.blockedBy).toBe('request');
+    expect(r.findings).toEqual([]);
+  });
+});
+
+describe('nothingToAsk — a binary with no unbounded-copy symbol is ANSWERED, not blocked', () => {
+  const assess = (over: Partial<BinAssessment> = {}): BinAssessment => ({
+    path: 'usr/sbin/tiny',
+    size: 4096,
+    runnable: true,
+    unsafeCopy: [],
+    cmdExec: [],
+    hasCanary: true,
+    symbolSource: 'dynsym',
+    ...over,
+  });
+
+  it('is a bounded negative about the bytes, and says what it does not cover', () => {
+    const r = nothingToAsk('usr/sbin/tiny', assess());
+    expect(r.available).toBe(true);
+    expect(r.asked).toEqual([]);
+    const d = r.findings[0];
+    expect(d?.kind).toBe('sink-reachability-not-applicable');
+    expect(d?.proofState).toBe('static_confirmed');
+    // The claim is about symbols, and the row has to say so itself — an inlined copy leaves nothing to read.
+    expect(d?.rationale).toContain('does NOT say the binary contains no unbounded copy');
+    expect(d?.rationale).toContain('inlined');
+  });
+
+  it('names the weaker evidence when there was no symbol table to read', () => {
+    const r = nothingToAsk('usr/sbin/tiny', assess({ symbolSource: 'strings' }));
+    expect(r.reason).toContain('printable-string superset');
+    expect(r.findings[0]?.evidence).toMatchObject({ symbolSource: 'strings' });
+  });
+
+  it('points at the sinks the binary DOES name, so the answer is not read as "uninteresting"', () => {
+    const r = nothingToAsk('usr/sbin/tiny', assess({ cmdExec: ['system', 'popen'] }));
+    expect(r.findings[0]?.rationale).toContain('system, popen');
   });
 });

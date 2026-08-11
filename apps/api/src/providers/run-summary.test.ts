@@ -95,6 +95,46 @@ describe('summarizeRun — status is the process, outcome is what was learned', 
     }
   });
 
+  /**
+   * `blocked` tells an operator the deployment is short a capability, and that is a claim. Two of the three ways a
+   * reachability run comes back unavailable are not that: the attempt broke (`harness`) or the question could not
+   * be posed at all (`request`). Both are cleared by a corrected retry, and grading them `blocked` sends the
+   * operator off to fix a deployment that is working — which is how `a20f2850` hid.
+   */
+  it('grades a symreach non-answer by WHOSE limit it was', () => {
+    const grade = (blockedBy?: string) =>
+      summarizeRun(
+        job({
+          kind: 'symreach',
+          resultJson: JSON.stringify({
+            available: false,
+            reason: 'no sink to ask about',
+            ...(blockedBy ? { blockedBy } : {}),
+          }),
+        }),
+      ).outcome;
+    expect(grade('platform')).toBe('blocked');
+    expect(grade('harness')).toBe('failed');
+    expect(grade('request')).toBe('failed');
+    // A result stored by an older build carries no discriminant and keeps the conservative reading.
+    expect(grade()).toBe('blocked');
+  });
+
+  it('lets a run that asked nothing say why, instead of implying the caller forgot', () => {
+    const r = summarizeRun(
+      job({
+        kind: 'symreach',
+        resultJson: JSON.stringify({
+          available: true,
+          sinks: [],
+          reason: 'usr/sbin/tiny names none of the 8 unbounded-copy functions in the binary’s dynamic symbol table',
+        }),
+      }),
+    );
+    expect(r.outcome).toBe('empty');
+    expect(r.headline).toContain('names none of the 8');
+  });
+
   it('is honest about a job that finished and stored nothing', () => {
     const r = summarizeRun(job({ resultJson: null }));
     expect(r.outcome).toBe('failed');

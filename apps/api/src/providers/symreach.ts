@@ -17,6 +17,8 @@
  *    real paths routinely. An exhausted search is never a downgrade to `false_positive`, and the budget that ran
  *    out is recorded so the inconclusive reads as one.
  *  - angr absent / arch unsupported / loader failure ⇒ `blocked_by_platform` with the reason, never a silent skip.
+ *  - a question that could not be POSED — no rootfs, the binary is not in it, the sink policy kept none of the
+ *    names asked about — is none of the above and writes NO row. See `SymReachBlockedBy`.
  *
  * The spec builder, the result parser and the verdict mapper are PURE and unit-tested; the runner only shells out to
  * the bundled `scripts/angr-reach.py` under a hard timeout.
@@ -29,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { FindingDraft } from '../findings-normalize.js';
 import { angrPython, isToolAvailable } from '../tools.js';
-import { UNSAFE_COPY_FNS, assessBinaryFile } from './binvuln.js';
+import { type BinAssessment, UNSAFE_COPY_FNS, assessBinaryFile } from './binvuln.js';
 import { resolveInsideRootfs } from './decompile.js';
 import type { JobHandle } from './jobs.js';
 
@@ -90,9 +92,32 @@ export interface SinkResult {
   path?: string[];
 }
 
+/**
+ * WHY a reachability question went unanswered. `blocked_by_platform` is the only proof state the vocabulary offers
+ * for any of them, so the distinction lives here, on the RESULT — exactly as `dynprobe-run.ts` does it, and for
+ * exactly the same reason: the three send an operator to three different places.
+ *
+ *  `platform`  this deployment cannot answer it. angr is not installed, or the probe ran and reported that it
+ *              could not load this binary (unsupported architecture, loader refusal). Retrying changes nothing.
+ *  `harness`   angr is here and the ATTEMPT broke: the probe crashed before writing, wrote nothing, or wrote
+ *              output that would not parse. Nothing was learned about the deployment's reach; a retry may succeed.
+ *  `request`   neither — the QUESTION could not be posed. There is no rootfs, the binary is not inside it, or the
+ *              sink policy kept none of the names this call asked about.
+ *
+ * `request` is the one that earns this type. It is a defect in the CALLER, and it must never reach the findings
+ * ledger as a capability limit: a `blocked_by_platform` row reading *"the deployment could not answer it"* is
+ * precisely how `a20f2850`'s bug hid. W9 asked about `system/popen/execve` under the default `unsafe-copy` policy,
+ * which kept nothing, and the resulting row blamed a deployment that had proven the very same sink reachable in
+ * the very same binary eleven seconds earlier on the manual route. An honest-sounding row absorbed the blame, and
+ * the only reason it was caught is that a human happened to have run the manual probe minutes before.
+ */
+export type SymReachBlockedBy = 'platform' | 'harness' | 'request';
+
 export interface SymReachResult {
   available: boolean;
   reason: string;
+  /** Present only when `available` is false. See `SymReachBlockedBy`. */
+  blockedBy?: SymReachBlockedBy;
   binary: string;
   arch?: string;
   entry?: string;
@@ -311,25 +336,97 @@ export function buildReachFindings(binary: string, sinks: SinkResult[]): Finding
   return drafts;
 }
 
-function unavailable(binary: string, reason: string): SymReachResult {
+export function unavailable(binary: string, reason: string, blockedBy: SymReachBlockedBy = 'platform'): SymReachResult {
   return {
     available: false,
     reason,
+    blockedBy,
     binary,
     sinks: [],
+    // A malformed REQUEST writes no row, and that is the point of the discriminant. The ledger is read as *what is
+    // true of this firmware*: coverage counts its rows, the narrative composes them, and they outlive the caller
+    // that produced them. A row there stating a limit of the deployment that does not exist is worse than silence
+    // — it is a false negative dressed as diligence. The reason travels on the result instead, where the run
+    // ledger reports it as the failed request it is and an operator goes and fixes the caller.
+    findings:
+      blockedBy === 'request'
+        ? []
+        : [
+            {
+              kind: 'sink-reachability-blocked',
+              title: `Symbolic reachability could not run on ${binary}`,
+              severity: 'info',
+              proofState: 'blocked_by_platform',
+              // No `evidenceChannel`, deliberately. Nothing was symbolically executed — stamping this row
+              // `symbolic_execution` would name a means that was never used, on the one row whose entire purpose
+              // is to say that the question could not be answered.
+              evidence: { binary, reason, blockedBy },
+              rationale:
+                blockedBy === 'harness'
+                  ? 'The prover for this question is present and the attempt itself broke, so a retry may ' +
+                    'succeed. Recorded either way, so the absence of a reachability verdict never reads as ' +
+                    'evidence the sink is unreachable.'
+                  : 'The reachability question was asked but the deployment could not answer it. This is ' +
+                    'recorded so the absence of a reachability verdict is visible as a missing capability, not ' +
+                    'mistaken for a clean result.',
+            },
+          ],
+  };
+}
+
+/**
+ * The DERIVED question posed against a binary that has no subject for it: the caller named no sinks, so they were
+ * read off the binary itself, and it names none of the unbounded-copy functions the W5 sweep flags.
+ *
+ * This is an answer, and this module's own header has said so since it was written — *"a binary that imports none
+ * of them is reported as having nothing to ask about, which is a real answer, not a failure"*. The code returned
+ * `blocked_by_platform` anyway, so the contract and the behaviour disagreed and the row blamed a deployment that
+ * was working perfectly. It is the same shape of bounded negative `credmatch` emits for a hash its candidates did
+ * not reproduce, and it states the same two limits out loud: the criterion is a SYMBOL, so a statically linked or
+ * inlined copy leaves nothing to read, and where there was no symbol table the evidence is the weaker string
+ * superset — a name merely mentioned, not an import.
+ */
+export function nothingToAsk(binary: string, assessment: BinAssessment): SymReachResult {
+  const source =
+    assessment.symbolSource === 'dynsym'
+      ? "the binary's dynamic symbol table"
+      : 'the printable-string superset (this binary has no readable symbol table)';
+  const reason = [
+    `${binary} names none of the ${UNSAFE_COPY_FNS.length} unbounded-copy functions in ${source},`,
+    'so the derived reachability question has no subject. Nothing was symbolically executed.',
+  ].join(' ');
+  return {
+    available: true,
+    reason,
+    binary,
+    sinks: [],
+    asked: [],
+    dropped: [],
+    derivedSinks: true,
     findings: [
       {
-        kind: 'sink-reachability-blocked',
-        title: `Symbolic reachability could not run on ${binary}`,
+        kind: 'sink-reachability-not-applicable',
+        title: `No unbounded-copy sink to ask about in ${binary}`,
         severity: 'info',
-        proofState: 'blocked_by_platform',
-        // No `evidenceChannel`, deliberately. angr is absent, so nothing was symbolically executed — stamping
-        // this row `symbolic_execution` would name a means that was never used, on the one row whose entire
-        // purpose is to say that the question could not be answered.
-        evidence: { binary, reason },
-        rationale:
-          'The reachability question was asked but the deployment could not answer it. This is recorded so the ' +
-          'absence of a reachability verdict is visible as a missing capability, not mistaken for a clean result.',
+        proofState: 'static_confirmed',
+        // The claim is about the bytes — which symbols this file does and does not name — and nothing else.
+        evidenceChannel: 'static_bytes',
+        evidence: {
+          binary,
+          symbolSource: assessment.symbolSource,
+          checked: UNSAFE_COPY_FNS,
+          cmdExec: assessment.cmdExec,
+        },
+        rationale: [
+          `${reason} This is a bounded negative about ${source} and nothing more.`,
+          'It does NOT say the binary contains no unbounded copy: a statically linked or inlined `strcpy` has no',
+          'symbol to name, and a sink that was never asked about has had its reachability tested by nothing.',
+          assessment.cmdExec.length
+            ? `Its symbols do name ${assessment.cmdExec.join(', ')} — command-exec sinks that can be asked about explicitly.`
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
       },
     ],
   };
@@ -364,26 +461,34 @@ export async function runSymReach(
     MAX_BUDGET_SECONDS,
     Math.max(MIN_BUDGET_SECONDS, opts.budgetSeconds ?? DEFAULT_BUDGET_SECONDS),
   );
-  if (!rootfsPath) return unavailable(binary, 'No extracted rootfs.');
+  // A caller reaching here without a rootfs asked a question it had no subject for: W9 skips a stage that lacks
+  // one and the route gate refuses first, so this is a caller defect, not a limit of this deployment.
+  if (!rootfsPath) return unavailable(binary, 'No extracted rootfs.', 'request');
   if (!(await isToolAvailable('angr'))) {
     handle.log('angr not available — rebuild the tools base with the optional angr layer to answer reachability.');
     return unavailable(binary, 'angr not installed in this deployment');
   }
 
   const abs = resolveInsideRootfs(rootfsPath, binary);
-  if (!abs) return unavailable(binary, 'binary not found inside the rootfs');
+  if (!abs) return unavailable(binary, 'binary not found inside the rootfs', 'request');
 
   // No sinks named → read them off the binary itself. This is the same symbol extraction the W5 sweep uses, so a
   // derived question asks exactly what the sweep would have flagged.
   const derivedSinks = sinks.length === 0;
-  const requested = derivedSinks ? assessBinaryFile(abs, binary).unsafeCopy : sinks;
+  const assessment = derivedSinks ? assessBinaryFile(abs, binary) : null;
+  const requested = assessment ? assessment.unsafeCopy : sinks;
   const { asked, dropped } = pickSinks(requested, derivedSinks ? 'unsafe-copy' : policy);
   if (asked.length === 0) {
+    // Two different situations, and only one of them is anybody's fault. Derived: the binary has no unbounded-copy
+    // symbol, which ANSWERS the question. Named: the caller handed sinks and the policy discarded every one of
+    // them, which is the caller asking with a filter that deletes its own question — so the reason names the
+    // policy and the names it dropped, rather than the deployment.
+    if (assessment) return nothingToAsk(binary, assessment);
     return unavailable(
       binary,
-      derivedSinks
-        ? 'binary imports no unbounded-copy function — name a sink explicitly to ask about something else'
-        : 'no sink to ask about',
+      `no sink to ask about — the '${policy}' policy kept none of the ${requested.length} name(s) requested ` +
+        `(${requested.join('/')}). Nothing was asked, so nothing about this deployment was learned.`,
+      'request',
     );
   }
 
@@ -403,18 +508,27 @@ export async function runSymReach(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // The probe writes its JSON before exiting non-zero in most failure modes; only give up if it wrote nothing.
+      // The line between `harness` and `platform` for everything below: **the probe never answered ⇒ harness; the
+      // probe answered "I cannot" ⇒ platform.** A crash before it wrote, no output, unparsable output — those are
+      // the attempt breaking, and a retry may well clear them. A probe that ran to completion and reported failure
+      // is telling us angr could not load THIS binary here (unsupported arch, loader refusal), which no retry
+      // fixes. Drawing the line by what the probe managed to say needs no string-matching on its error text.
       if (!fs.existsSync(outPath)) {
         handle.log(`angr probe failed: ${message}`);
-        return unavailable(binary, `angr probe failed: ${message}`);
+        return unavailable(binary, `angr probe failed: ${message}`, 'harness');
       }
     }
 
-    if (!fs.existsSync(outPath)) return unavailable(binary, 'angr probe produced no output');
+    if (!fs.existsSync(outPath)) return unavailable(binary, 'angr probe produced no output', 'harness');
     let parsed: ReturnType<typeof parseReachOutput>;
     try {
       parsed = parseReachOutput(JSON.parse(fs.readFileSync(outPath, 'utf8')));
     } catch (err) {
-      return unavailable(binary, `could not parse angr output: ${err instanceof Error ? err.message : String(err)}`);
+      return unavailable(
+        binary,
+        `could not parse angr output: ${err instanceof Error ? err.message : String(err)}`,
+        'harness',
+      );
     }
     if (!parsed.ok) return unavailable(binary, parsed.error ?? 'angr probe reported failure');
 

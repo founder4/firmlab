@@ -664,6 +664,9 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   // WR940N's `usr/bin/httpd` came back blocked from the scan minutes after the manual route proved `system`
   // REACHED in the same binary in 11 s. The deployment could answer perfectly well; this caller was asking with a
   // filter that deleted its own question, and the honest-sounding row hid it.
+  // The provider no longer absorbs the blame — a question that cannot be POSED comes back `blockedBy: 'request'`
+  // and writes no row — so the same mistake would now surface here, as this step's own defect. Keeping the policy
+  // right remains this function's job; what changed is that getting it wrong is no longer silent.
   const r = await runSymReach(
     c.rootfsPath,
     binary,
@@ -677,10 +680,27 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   // one would have the command-exec answer delete the unbounded-copy answer on every image carrying both.
   syncFindings(c.imageId, specKey(spec), r.findings);
   if (!r.available) {
+    // `request` is THIS orchestrator's defect, not a limit it ran into: the spec named a binary that is not in the
+    // rootfs, or sinks the policy discards. Reporting it as "unavailable" beside the genuinely unavailable ones is
+    // the same conflation the provider just stopped committing, one layer up — it reads as a deployment short of a
+    // capability, which is exactly the sentence that hid the last instance.
+    const specDefect = r.blockedBy === 'request';
     return {
-      summary: `reachability ${binary}: unavailable`,
+      summary: specDefect
+        ? `reachability ${binary}: the spec could not be posed — nothing was asked`
+        : `reachability ${binary}: unavailable`,
       findingCount: r.findings.length,
       degraded: true,
+      note: specDefect ? `spec defect, not a capability limit: ${r.reason}` : r.reason,
+    };
+  }
+  // Answered and cheap: the binary carries no unbounded-copy symbol, so the derived question had no subject. No
+  // budget was spent and nothing was left inconclusive, so the "no sink reached inside the budget" sentence below
+  // would invent a search that never ran.
+  if (r.asked?.length === 0) {
+    return {
+      summary: `reachability ${binary}: no unbounded-copy sink to ask about (answered, not blocked)`,
+      findingCount: r.findings.length,
       note: r.reason,
     };
   }

@@ -152,7 +152,17 @@ export function summarizeRun(job: RunInput): RunSummary {
     case 'symreach': {
       const sinks = Array.isArray(result.sinks) ? (result.sinks as { sink?: string; outcome?: string }[]) : [];
       if (result.available === false) {
-        return { ...base, outcome: 'blocked', headline: String(result.reason ?? 'The prover is unavailable') };
+        // Three reasons, three next steps — see `SymReachBlockedBy`. Only `platform` is a capability limit and
+        // stays `blocked`; `harness` (the attempt broke) and `request` (the question could not be posed) are
+        // failures a corrected retry clears, and reporting either as `blocked` sends the operator off to fix a
+        // deployment that is fine. Rows stored by an older build carry no `blockedBy` and stay `blocked`, which is
+        // the conservative reading: it claims no negative either way.
+        const platform = result.blockedBy === undefined || result.blockedBy === 'platform';
+        return {
+          ...base,
+          outcome: platform ? 'blocked' : 'failed',
+          headline: String(result.reason ?? 'The prover is unavailable'),
+        };
       }
       const reached = sinks.filter((s) => s.outcome === 'reached');
       const names =
@@ -161,8 +171,17 @@ export function summarizeRun(job: RunInput): RunSummary {
           .filter(Boolean)
           .join(', ') || null;
       const budget = typeof params.budgetSeconds === 'number' ? `${params.budgetSeconds}s budget` : null;
+      // Ran, no sink. The provider's own sentence says WHY — for a derived question against a binary that names no
+      // unbounded copy it is a bounded negative, not a caller who forgot to ask, and the generic headline said the
+      // opposite of the row the same run wrote.
       if (sinks.length === 0)
-        return { ...base, question: names, outcome: 'empty', headline: 'No sink was asked about', bound: budget };
+        return {
+          ...base,
+          question: names,
+          outcome: 'empty',
+          headline: String(result.reason ?? 'No sink was asked about').slice(0, 200),
+          bound: budget,
+        };
       if (reached.length > 0) {
         const one = reached[0] as { sink?: string };
         return {
