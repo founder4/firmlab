@@ -139,7 +139,81 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ✅ **Function-level diff** (2026-07-27) — `providers/funcdiff.ts` (pure: `parseFunctions` / `isSyntheticName` / `matchFunctions` / `classifyDiff` / `formatRatio` / `buildFuncDiffFindings`, 18 unit tests) + `providers/funcdiff-run.ts` + `POST/GET /images/:id/funcdiff?against=<older>`. Pairs binaries across two extracted rootfs **by path**, hash-compares first (most of a rootfs is byte-identical between releases, and the identical count is itself the shape of the release), then fingerprints every function on both sides with radare2 `aflj` (size / nbbs / cc / ninstrs / edges) and matches: real symbol names first, then structural fingerprints for the stripped remainder. **Three honesty constraints drive the design.** (1) *A toolchain bump rewrites everything* — above `RECOMPILE_THRESHOLD` (40% of matched functions) the verdict is `recompiled` and the candidate list is **withheld**, because a 400-entry list has no localizing power and showing it with a caveat invites the reading the caveat forbids. (2) *Firmware is stripped* — `fcn.00400abc` encodes the ADDRESS and moves whenever anything earlier moves, so those are matched structurally and ONLY on a fingerprint unique to both sides; an ambiguous shape is reported `unmatchable`, never paired by guesswork. Writing the test caught the inverse bug: `sym.gone` was being paired with `sym.fresh` on shape, inventing a match their names contradict — the structural pass now only sees synthetic names. (3) *A changed function is a fact, not a fix* — `static_confirmed` on "these differ between the builds"; which one is the security patch is an inference the diff does not make. The per-run cap and the `recompiled` verdict both reach the ledger (`function-diff-truncated` / `function-diff-inconclusive`), because a truncated comparison must not read as complete and a rebuild must not read as "no change found". Changed functions are sorted **tightest delta first** — a bounds check is a couple of instructions, a rewrite is many.
 
   **Validated on real compiled bytes (2026-07-27, deploy `e29284c`)**, ground truth controlled: two static mipsel builds of one source differing in exactly one function (`set_name` gains a length check) → **`patched`, 1 of 873 matched functions, correctly `sym.set_name`, zero false positives** (+3 nbbs / +1 cc / +14 ninstrs — the shape of an added bounds check). The rebuild guard: the same source at `-O0` vs `-O3`, dynamically linked → **`recompiled`, 31/39 (79%), list withheld**, finding `function-diff-inconclusive`. A third run was instructive about the guard rather than the tool: `-O1` vs `-O2` *statically* linked moved only 4 of 873 functions and correctly did NOT trip the threshold — 869 of those are libc, identical regardless of the flag, so the two builds genuinely are 99.5% the same. That run also exposed a cosmetic-but-real defect now fixed and pinned: "4 of 873 (0%) changed" printed a percentage contradicting the count beside it, hence `formatRatio`'s `<1%`. _Follow-up: no version PAIR exists in the current corpus, so the real-firmware run is still open — the OTA learning surface (`capture/learning.ts`) already groups families and orders versions, so it is the natural source. **Decompiled-text diff shipped (2026-07-27)** — `providers/funcdiff-text.ts` (pure: `normalizeDecompiled` / `maskCommentAddresses` / `diffLines` [LCS] / `summarizeTextDiff` / `renderUnified`, 13 unit tests) + `withText` on the route. For a `patched` verdict only — on a `recompiled` binary the candidate list is withheld precisely because it means nothing, so decompiling from it would render noise at greater cost — it decompiles the tightest changed functions on both sides and emits a unified diff, attached to the finding that named the function. Honest capability ladder: `pdg` (r2ghidra, real C) when present, else stock radare2's `pdc` pseudo-C; **which one produced the text is carried in the result**, because two `pdc` renderings sit considerably further from source than two Ghidra outputs and the hunks should be weighted accordingly. Both are RECONSTRUCTIONS, and a diff of two of them carries decompiler noise, so `summarizeTextDiff` grades each and says plainly when widespread churn is likely register allocation rather than semantics. **Validated on the same controlled mipsel pair: the diff shows the added guard itself** — `t9 = [sym.strlen]` / `v0 = (unsigned) (v0 < 0x40)` / `if (v0) goto …` inserted before the `strcpy`, i.e. `strlen(in) < sizeof(buf)`. Three real defects the work exposed, all fixed and pinned: (1) `looksTargeted` used churn alone, so wrapping one call in a guard inside a 9-line function scored ~44% and was graded "widespread" — the textbook targeted fix called noise; a small ABSOLUTE edit is now targeted whatever the function's size. (2) `normalizeDecompiled('')` returned one blank line rather than none, adding a phantom `-` to every diff against an empty side. (3) inserting the guard shifted every later address, so radare2's XREF comments rewrote themselves on every line and buried the two lines that mattered — hex addresses are now masked **inside `//` comments only**, since an address in code is meaning (`0x40` IS `sizeof(buf)`) and only the digits are masked so a change in xref COUNT still shows._
-- ▢ **Kernel module (.ko) CVE surface** — correlate kernel/modules to CVEs beyond userland SBOM.
+- ▢ **Kernel module (.ko) CVE surface** — correlate kernel/modules to CVEs beyond userland SBOM. The identity half
+  now exists: `kmod` recovers `KCodes` / `1.02.66` from `NetUSB.ko`'s `.modinfo`, which is exactly the
+  `{vendor, product, version}` triple `component-cve.ts` matches against. What is missing is the curated range,
+  and it must come from the NVD API queried against the version in hand — never from recall.
+
+## Kernel modules — counted, now read (2026-08-11)
+
+- ✅ **`.ko` files were counted and never disassembled** — the last `▢ impact high` item from Pass 4, closed by
+  `providers/kmod.ts` + `routes/kmod.ts` + a W9 stage + a panel. The gap was structural rather than an oversight:
+  `binvuln.isRelocatableObject` excludes ET_REL objects *by construction* and its own doc says they deserve "a
+  different question … its own provider rather than a userland sweep's vocabulary". This is that provider.
+  **Reproduced the blind agent's WDR3600 result from the bytes, independently**: `SoftwareBus_dispatchNormalEPMsgOut`
+  at `0x8011968`, `wsbh`+`rotr` byte swap → `addiu a0, v0, 0x11` → `__kmalloc`, no comparison on the chain. It
+  also found a **second** site of the same shape the agent did not report (`SoftwareBus_reportConfigDescGot` at
+  `0x800e92c`). Corpus-wide: **628 modules across 5 rootfs images → 37 findings** — 32 network-surface
+  (`static_confirmed`), 4 wire-length leads (`needs_runtime_reproduction`), 1 wire-length-but-bounded.
+  **Three layers, and the corpus decided the shape of each.**
+  *Identity* and *kernel API* need no external tool — an ET_REL object's undefined `.symtab` symbols ARE the
+  kernel functions the loader must bind, a materially stronger signal than the userland sweep's string superset
+  (628 modules in ~5 s). *Call sites* need radare2 and degrade honestly without it.
+  **The ranking key had to be measured, not assumed.** The obvious one is `intree` — and **not one of the
+  WDR3600's 84 modules carries it**, so on the very image this provider exists for its absence decides nothing.
+  `assessProvenanceUsability` calibrates from the SET exactly as `assessModuleProvenance` already did for the
+  posture questions, and the key that survives is the declared **licence**: `Proprietary` is 5 of 82 on the
+  WDR3600, and crossing it with the socket API leaves `NetUSB.ko` **alone** on its image, at rank 1 of 84.
+- ✅ **Four defects the real bytes found and no fixture would have**, each fixed and pinned:
+  1. **The per-module site cap truncated by ADDRESS** — rule 4's exact prohibition wearing a different hat, since
+     code layout is arrival order. At a cap of 24 the sweep examined NetUSB's first 24 allocation sites and
+     stopped; **the site this whole provider exists to find is at position 135**. The headline result was missing
+     from the first real run. Fixed by removing the need for the cap: batching every window into ONE radare2
+     invocation took 148 sites from ~7 s (one spawn each) to **56 ms**, and the whole WDR3600 pass from 2467 ms to
+     **359 ms while examining 6× more sites**.
+  2. **A relocation is not always a call site.** The compiler hoists: in `run_init_sbus`, `memcpy`'s address is
+     materialised at the function's second instruction into `s0` and called from elsewhere, so the twenty
+     instructions "before the call" are the prologue. **29% of MIPS sink references on this corpus are that
+     shape** (73 of 254 on the WDR3600, 116 of 386 on the Xiaomi; 0 of 1749 on the arm64 GL.iNet, which calls
+     directly). `findAdjacentCall` now requires a call through the register the address was loaded into, and an
+     unattributed site is reported as a gap rather than as examined-and-clean.
+  3. **A backward chase alone answers the wrong question.** A compiled bounds check does not compare the value —
+     it computes a temporary and compares THAT (`addiu v0, a2, -1; sltiu v0, v0, 0x3f`, the vendor's own check).
+     Chasing backwards from the size argument never visits `v0`, so a bounded allocation would have been reported
+     as unchecked. A forward pass from the reaching definition fixes it — and it must start *after* that
+     definition, because starting at it drops the tracked register on the first iteration and silently disables
+     the whole pass.
+  4. **Reaching-definition tracking, not a keyword scan.** Four instructions above the NetUSB allocation sits a
+     `beqz v0` testing the previous call's return, in the same register that later carries the length. A window
+     scan for comparison mnemonics reports a bound there — a **false exoneration**, the dangerous direction.
+- ✅ **265 of 266 "bounded" rows were noise, and the ledger says so now.** First run emitted a row per compared
+  site: 302 findings corpus-wide. Measured, only **1** site is byte-swapped AND compared — the interesting
+  decline, the shape a reviewer used to reject a plausible CVE on this module. The other 265 are locally-computed
+  sizes that happen to be tested. They stay in the provider RESULT (the whole site table is readable) and out of
+  a ledger meant for findings: **302 → 37**.
+- ▢ **31% of sink sites resolve no containing function** (700 of 2248). `containingFunction` requires a sized
+  `FUNC` symbol and some locals carry `st_size == 0`, so the address falls in a gap — `nat46.ko`'s two leads are
+  reported at `offset 0x…` rather than by name. Reporting the nearest preceding symbol would be attribution by
+  guess; the honest fix is reading section-relative sizes or accepting the gap. Impact low: the row stays correct,
+  it just names less.
+- ▢ **`kernelposture.ts`'s module doc says OpenWrt "strips section headers and every module on the corpus's
+  richest image reports `e_shoff == 0`".** Measured while building this: **every module on all five rootfs images
+  has section headers**, and the GL.iNet's are ELF64, where `e_shoff` is at 0x28 — reading the ELF32 offset 0x20
+  there yields `e_phoff`'s low half, which is legitimately 0 for a relocatable object. The CODE is unaffected (it
+  scans printable strings and works either way); only the justification for doing so is wrong. Worth correcting
+  before someone relies on the claim.
+- ▢ **The `.ko` lane and the `.so` lane are the same missing rung.** *"Libraries are permanently unasked"* above
+  names the identical gap from the other side: neither a shared object nor a kernel module has an entry point, so
+  `symreach`'s "reachable from the entry point" question is ill-posed for both. `kmodRun` therefore schedules no
+  leads at all — deliberately, since handing angr a module would spend a budget on a question the tool cannot be
+  asked. **Symbolic execution starting from an exported symbol** would close both entries at once, and it is now
+  the largest single gap in the static tier.
+- ▢ **`memmove` leads on GPL upstream code need a second look.** Two of the corpus's four leads are in
+  `nat46.ko` (`memmove`, addend 8, GPL, in-tree), which is upstream OpenWrt rather than vendor code. They may be
+  real, or the byte-swap-to-length heuristic may be weaker for `memmove` than for an allocator. Reading them is
+  cheap and would calibrate the heuristic on the one image where it fires outside vendor code.
+- ▢ **The kernel-module surface is not on MCP.** `mcp/format.ts` has no shaper for the two new finding kinds, so
+  an agent driving the workbench sees the rows without the window bound that makes them readable as leads.
 
 ## RTOS / bare-metal
 - ✅ **RTOS blob analysis** — `providers/rtos.ts`: Cortex-M vector table, base-address recovery, flash/RAM memory map, RTOS-kernel detection. (Task enumeration = a deeper follow-up.)
