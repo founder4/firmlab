@@ -414,6 +414,8 @@ export const en = {
       nvram: 'flash key-value store in the raw image — credentials and wifi keys no rootfs scan can reach',
       webTaint: 'web-param → uci → os.execute/io.popen sinks (the GL.iNet Tor root-RCE class)',
       binaryVulnSweep: 'rootfs ELFs → unbounded-copy + no-canary stack-overflow candidates (DVRF pwnables)',
+      kernelModules:
+        'rootfs .ko → who wrote them, which kernel API they bind, and where a wire-order length reaches an allocator',
       updatePath: 'is the image signed, does the updater verify anything, is a downgrade bounded',
       chipsec: 'offline firmware-volume decode + Secure Boot / NVRAM posture',
       fwhunt: 'upstream FwHunt code-pattern rules → known implant / vulnerable-module families',

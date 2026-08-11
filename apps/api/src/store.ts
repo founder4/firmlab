@@ -13,6 +13,9 @@ export type JobKind =
   // The binary-hardening sweep. It ran only inside the autonomous scan until it was given a route of its own,
   // which is why its kind arrives long after the providers around it.
   | 'binvuln'
+  // The kernel-module sweep. `binvuln` excludes ET_REL objects by construction, so until this existed the `.ko`
+  // files in a rootfs were counted by `component-map` and read by nothing.
+  | 'kmod'
   | 'binwalk'
   | 'sbom'
   | 'emulate'

@@ -36,6 +36,7 @@ import { gitleaksRoutes } from './routes/gitleaks.js';
 import { imageRoutes } from './routes/images.js';
 import { jobRoutes } from './routes/jobs.js';
 import { kernelRoutes } from './routes/kernel.js';
+import { kmodRoutes } from './routes/kmod.js';
 import { nvramRoutes } from './routes/nvram.js';
 import { opacidadRoutes } from './routes/opacidad.js';
 import { operatorRoutes } from './routes/operator.js';
@@ -135,6 +136,7 @@ async function main(): Promise<void> {
       await api.register(webprobeRoutes);
       await api.register(ubootRoutes);
       await api.register(binvulnRoutes);
+      await api.register(kmodRoutes);
       await api.register(kernelRoutes);
       await api.register(updatepathRoutes);
       await api.register(devicetreeRoutes);

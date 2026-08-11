@@ -351,20 +351,32 @@ export function parseModinfo(text: string): ModinfoFacts {
 }
 
 /**
- * Read one `key=value` record out of a `.modinfo` blob, stopping at the NUL that ends it.
+ * Read EVERY `key=value` record for one key out of a `.modinfo` blob, each stopping at the NUL that ends it.
  *
  * Deliberately not a regular expression. The value legitimately contains spaces (`Dual BSD/GPL`, `GPL v2`), so a
  * whitespace-terminated match truncates the licence that matters most; and the correct terminator is a control
  * character, which a regex cannot carry here without tripping `noControlCharactersInRegex` — a rule worth obeying
  * rather than suppressing, since scanning for a NUL by hand is both clearer and closer to what the format is:
  * NUL-separated records, not prose to pattern-match over.
+ *
+ * **A key can repeat, and dropping the repeats loses the fact worth having.** `modinfo` is a record list, not a
+ * map: `MODULE_DESCRIPTION` may be invoked more than once, and vendors use it as a changelog. The real
+ * `NetUSB.ko` on the corpus's WDR3600 carries FIVE `description=` records, and the product version — `1.02.66
+ * TL-WDR3600 v1 7437` — is in the third, behind a first record that reads like the only one. A single-value read
+ * returns the prose and silently discards the identity, which is the difference between "a proprietary module"
+ * and a component a CVE range can be matched against. `readModinfoValue` keeps the first-record behaviour its
+ * callers were written against; anything that needs the identity reads the list.
+ *
+ * `maxLen` defaults higher here than for the single read because the records this exists to reach are longer
+ * than a licence string.
  */
-function readModinfoValue(text: string, key: string, maxLen = 64): string | null {
+export function readModinfoValues(text: string, key: string, maxLen = 160): string[] {
   const needle = `${key}=`;
+  const out: string[] = [];
   let from = 0;
   while (from < text.length) {
     const at = text.indexOf(needle, from);
-    if (at === -1) return null;
+    if (at === -1) break;
     // A record starts at the beginning of the blob, or after ANY non-printable byte — not only after a NUL.
     // Requiring a NUL looked stricter and was wrong: the FIRST record of the .modinfo section is preceded by
     // whatever the previous section ended with, and on the real `ath_pktlog.ko` that byte is 0x08. The rule
@@ -380,9 +392,17 @@ function readModinfoValue(text: string, key: string, maxLen = 64): string | null
     const start = at + needle.length;
     let end = start;
     while (end < text.length && end - start < maxLen && text.charCodeAt(end) !== 0) end++;
-    return text.slice(start, end).trim();
+    out.push(text.slice(start, end).trim());
+    // Resume AFTER the record just taken. Resuming at `start` would re-find the same needle when a value happens
+    // to contain the key it belongs to.
+    from = end > start ? end : start + 1;
   }
-  return null;
+  return out;
+}
+
+/** The first record for a key, which is what the posture questions above were written against. */
+function readModinfoValue(text: string, key: string, maxLen = 64): string | null {
+  return readModinfoValues(text, key, maxLen)[0] ?? null;
 }
 
 /** Where the shipped modules came from, and whether that question could be answered at all. */

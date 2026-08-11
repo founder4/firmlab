@@ -76,6 +76,7 @@ import { runFsAudit } from './providers/fsaudit.js';
 import { runFwHunt } from './providers/fwhunt.js';
 import type { JobHandle } from './providers/jobs.js';
 import { runKernelPosture } from './providers/kernelposture.js';
+import { runKmod } from './providers/kmod.js';
 import { runNvramScan } from './providers/nvram.js';
 import { runRtosAnalysis } from './providers/rtos.js';
 import { runSbom } from './providers/sbom.js';
@@ -649,6 +650,37 @@ async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
 }
 
 /**
+ * The other half of the binary sweep. `binvuln` excludes ET_REL objects and counts them; this reads them with the
+ * kernel's vocabulary instead of libc's.
+ *
+ * It schedules no leads, and that is a decision rather than an omission. The reachability prober loads a program
+ * and executes from its entry point; a kernel module has no entry point, is linked into a running kernel and calls
+ * an API that exists only there — so handing it to angr would spend a budget on a question the tool cannot be
+ * asked, which is exactly the defect `isRunnableElf` was fixed twice to avoid. The call-site pass inside the
+ * provider is this stage's depth.
+ */
+async function kmodRun(c: RunCtx): Promise<StepOutcome> {
+  const r = await runKmod(c.rootfsPath);
+  syncFindings(c.imageId, 'kmod', r.findings);
+  if (!r.available) return { summary: 'kernel modules: not read', findingCount: 0, degraded: true, note: r.reason };
+  const surfaced = r.findings.filter((f) => f.kind === 'kernel-module-network-surface').length;
+  const leads = r.findings.filter((f) => f.kind === 'kernel-module-wire-length-alloc').length;
+  const checked = r.findings.filter((f) => f.kind === 'kernel-module-checked-alloc').length;
+  const parts = [`${r.modulesFound} module(s)`];
+  if (surfaced) parts.push(`${surfaced} answering the network`);
+  if (leads) parts.push(`${leads} unchecked wire-length allocation(s)`);
+  if (checked) parts.push(`${checked} bounded in view`);
+  // The call-site pass being unavailable is a DEGRADED run, not a clean one: the inventory still lands, and
+  // reporting that as a complete sweep is the shape this codebase keeps paying for.
+  const degraded = !r.callSitePass.available || r.symbolTableUnreadable > 0;
+  return {
+    summary: `kernel-module surface: ${parts.join(', ')}`,
+    findingCount: r.findings.length,
+    ...(degraded ? { degraded: true, note: r.reason } : {}),
+  };
+}
+
+/**
  * W5 depth — symbolic reachability, scheduled by W9's re-planning off a binvuln candidate. Answers one question per
  * sink: is the call site reachable from the entry point under symbolic input? A reached sink is a `static_confirmed`
  * reachability claim; a sink not reached inside the budget stays inconclusive and is recorded as such.
@@ -806,6 +838,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   encrypted: encryptedRun,
   webtaint: webtaintRun,
   binvuln: binvulnRun,
+  kmod: kmodRun,
   symreach: symreachRun,
   dynprobe: dynprobeRun,
   decompile: decompileRun,

@@ -392,6 +392,8 @@ export const es: Messages = {
       webTaint: 'parámetro web → uci → sumideros os.execute/io.popen (la clase del RCE como root de Tor en GL.iNet)',
       binaryVulnSweep:
         'ELF del rootfs → candidatos a desbordamiento de pila por copia sin límite y sin canario (los pwnables de DVRF)',
+      kernelModules:
+        'los .ko del rootfs → quién los escribió, qué API del kernel enlazan y dónde una longitud en orden de red llega a un asignador',
       updatePath: 'si la imagen va firmada, si el actualizador verifica algo, y si un downgrade está acotado',
       chipsec: 'decodificación sin conexión de los volúmenes de firmware + postura de Secure Boot / NVRAM',
       fwhunt:

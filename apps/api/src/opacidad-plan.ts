@@ -48,6 +48,7 @@ export type ProviderId =
   | 'encrypted'
   | 'webtaint'
   | 'binvuln'
+  | 'kmod'
   | 'symreach'
   | 'dynprobe'
   | 'decompile';
@@ -80,6 +81,7 @@ export type PlanReasonId =
   | 'nvram'
   | 'webTaint'
   | 'binaryVulnSweep'
+  | 'kernelModules'
   | 'updatePath'
   | 'chipsec'
   | 'fwhunt'
@@ -107,6 +109,7 @@ export const PLAN_REASON_IDS: readonly PlanReasonId[] = [
   'nvram',
   'webTaint',
   'binaryVulnSweep',
+  'kernelModules',
   'updatePath',
   'chipsec',
   'fwhunt',
@@ -321,6 +324,16 @@ const LINUX_CHAIN: SeedSpec[] = [
     needsRootfs: true,
     built: true,
     provider: 'binvuln',
+  },
+  {
+    // Runs AFTER the userland sweep on purpose. `binvuln` excludes ET_REL objects by construction and counts
+    // them (`relocatableSkipped`), so this stage is the other half of that exclusion rather than a competitor
+    // for it — and reading its reason next to binvuln's is what makes the split legible in the coverage table.
+    worker: 'W5 · Kernel-module surface',
+    reasonId: 'kernelModules',
+    needsRootfs: true,
+    built: true,
+    provider: 'kmod',
   },
   {
     // Deliberately `needsRootfs: false`: half the question (what integrity metadata the shipped image carries) is
