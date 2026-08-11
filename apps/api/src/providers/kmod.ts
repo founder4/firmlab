@@ -1017,9 +1017,16 @@ export function buildKmodFindings(mods: readonly KmodModuleResult[]): FindingDra
   return out;
 }
 
+/**
+ * Symbol names for a rationale sentence, plain.
+ *
+ * No backticks: this text is stored evidence, and it is rendered by the findings ledger, the exported HTML
+ * report, the disclosure draft and MCP — none of which interpret markdown, so the quotes reach a reader as
+ * literal characters. A kernel symbol is unambiguous without them.
+ */
 function fmtList(names: readonly string[] | undefined, max = 4): string {
   if (!names || names.length === 0) return 'nothing';
-  const head = names.slice(0, max).map((n) => `\`${n}\``);
+  const head = names.slice(0, max);
   return names.length > max ? `${head.join(', ')} (+${names.length - max} more)` : head.join(', ');
 }
 
