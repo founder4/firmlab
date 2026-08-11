@@ -144,7 +144,7 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   `{vendor, product, version}` triple `component-cve.ts` matches against. What is missing is the curated range,
   and it must come from the NVD API queried against the version in hand — never from recall.
 
-## Kernel modules — counted, now read (2026-08-11)
+## Kernel modules — counted, now read (2026-08-11, deploy `dd838f0`)
 
 - ✅ **`.ko` files were counted and never disassembled** — the last `▢ impact high` item from Pass 4, closed by
   `providers/kmod.ts` + `routes/kmod.ts` + a W9 stage + a panel. The gap was structural rather than an oversight:
@@ -191,6 +191,17 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   decline, the shape a reviewer used to reject a plausible CVE on this module. The other 265 are locally-computed
   sizes that happen to be tested. They stay in the provider RESULT (the whole site table is readable) and out of
   a ledger meant for findings: **302 → 37**.
+- ✅ **Two defects only LOOKING at the deployed page found** (`8c49e5c`, `dd838f0`), both invisible to 2708
+  passing tests. **Markdown in prose that four surfaces do not render.** Every other locale module in this repo
+  uses backticks only in its JSDoc, never inside an on-screen string, and **no existing provider puts one in a
+  `rationale`** (0 across binvuln, symreach, kernelposture, fsaudit, certs). This one did both, so the page read
+  `Every \`.ko\` under the rootfs` and `imports \`sock_create\``. It matters because a rationale is STORED
+  EVIDENCE, rendered by the ledger, the exported HTML report, the disclosure draft and MCP — none of which
+  interpret markdown. **And it took two passes**: the first fix cleaned the prose around the symbol list and not
+  `fmtList`, which composes it, so the quotes were still there when the page was re-read. The second, third and
+  fourth failure the module docs say to budget for. **The provenance note was printed twice, adjacently** — the
+  panel renders its own localised copy of the `intree` calibration and the provider's `reason` repeated it
+  verbatim. Noticed earlier as "the test matches twice" and mistaken for a test problem when it was the source.
 - ▢ **31% of sink sites resolve no containing function** (700 of 2248). `containingFunction` requires a sized
   `FUNC` symbol and some locals carry `st_size == 0`, so the address falls in a gap — `nat46.ko`'s two leads are
   reported at `offset 0x…` rather than by name. Reporting the nearest preceding symbol would be attribution by
@@ -212,6 +223,12 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   `nat46.ko` (`memmove`, addend 8, GPL, in-tree), which is upstream OpenWrt rather than vendor code. They may be
   real, or the byte-swap-to-length heuristic may be weaker for `memmove` than for an allocator. Reading them is
   cheap and would calibrate the heuristic on the one image where it fires outside vendor code.
+- ▢ **A module can earn the disassembly budget on provenance alone.** Seen on the deployed panel: `asf.ko` is
+  `Proprietary`, scores 8 on the licence key by itself, binds NO recognised kernel API and yields 0 sink sites —
+  so a slot went to a module where this pass can find nothing by its own vocabulary. Defensible (vendor code is
+  worth opening) and free on this corpus, where 8 eligible modules sit under a budget of 128. It would stop
+  being free on a module-heavy image where the licence key alone promotes dozens. Either require one API
+  category alongside the licence, or keep it and say in the rule why.
 - ▢ **The kernel-module surface is not on MCP.** `mcp/format.ts` has no shaper for the two new finding kinds, so
   an agent driving the workbench sees the rows without the window bound that makes them readable as leads.
 
