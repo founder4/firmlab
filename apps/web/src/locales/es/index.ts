@@ -18,6 +18,7 @@ import { findings } from './findings';
 import { hardware } from './hardware';
 import { imageDetail } from './imageDetail';
 import { kernelPosture } from './kernelPosture';
+import { kmod } from './kmod';
 import { nav } from './nav';
 import { onboarding } from './onboarding';
 import { operator } from './operator';
@@ -66,6 +67,7 @@ export const es: Messages = {
   shell,
   binvuln,
   kernelPosture,
+  kmod,
   sectionGroups,
   egressSection,
 };

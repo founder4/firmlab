@@ -24,6 +24,7 @@ export const sections: Messages['sections'] = {
   diff: 'Comparativa',
   binvuln: 'Endurecimiento de binarios',
   kernel: 'Postura del kernel',
+  kmod: 'Módulos del kernel',
   egress: 'Salida a red del firmware',
   simulate: 'Recetas de emulación',
   opacidad: 'Escaneo autónomo',

@@ -27,6 +27,7 @@ export const sections = {
   diff: 'Diff',
   binvuln: 'Binary hardening',
   kernel: 'Kernel posture',
+  kmod: 'Kernel modules',
   egress: 'Firmware egress',
   simulate: 'Emulation recipes',
   opacidad: 'Autonomous scan',

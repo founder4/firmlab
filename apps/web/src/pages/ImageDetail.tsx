@@ -40,6 +40,7 @@ import { FindingsLedger, PROOF_STATE_META } from '../components/FindingsLedger';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { HardwareInterfaces } from '../components/HardwareInterfaces';
 import { KernelPosture } from '../components/KernelPosture';
+import { KmodPanel } from '../components/KmodPanel';
 import { OpacidadPanel } from '../components/OpacidadPanel';
 import { OperatorPanel } from '../components/OperatorPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
@@ -82,6 +83,7 @@ export const SECTION_IDS = [
   'deepscans',
   'binvuln',
   'kernel',
+  'kmod',
   'binaries',
   'testbench',
   'findings',
@@ -103,6 +105,7 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'deepscans',
   'binvuln',
   'kernel',
+  'kmod',
   'filesystem',
   'files',
   'secrets',
@@ -248,6 +251,7 @@ export function ImageDetail(): JSX.Element {
       {tab === 'compmap' && <ComponentMap imageId={id} />}
       {tab === 'deepscans' && <CapabilityResults imageId={id} />}
       {tab === 'binvuln' && <BinVulnPanel imageId={id} />}
+      {tab === 'kmod' && <KmodPanel imageId={id} />}
       {tab === 'kernel' && <KernelPosture imageId={id} />}
       {/* The test bench is organised by TARGET: every question asked of a binary, and every run it produced.
           `binaries` still routes here so older links keep working. */}

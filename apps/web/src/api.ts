@@ -1074,6 +1074,59 @@ export interface BinVulnResult {
   reason: string;
 }
 
+/**
+ * The kernel-module sweep's result.
+ *
+ * Every field added here is OPTIONAL forever: a result is JSON persisted on a job row and re-read for as long as
+ * the image exists, so a stored result is data written by an older build. Declaring a newly-added field required
+ * made `nvd.uncheckedIdentities.map` throw on a row two commits old and took down the whole image view.
+ */
+export interface KmodResult {
+  available: boolean;
+  reason: string;
+  modulesFound?: number;
+  notRelocatable?: number;
+  symbolTableUnreadable?: number;
+  provenance?: { intreeTagInUse?: boolean; licenceDeclared?: boolean; note?: string };
+  callSitePass?: {
+    available?: boolean;
+    reason?: string;
+    modulesExamined?: number;
+    modulesDropped?: string[];
+    sitesDropped?: number;
+    sitesHoisted?: number;
+    rule?: string;
+  };
+  modules?: KmodModule[];
+  findings: Finding[];
+}
+
+export interface KmodModule {
+  file: string;
+  size?: number;
+  identity?: {
+    license?: string;
+    author?: string;
+    descriptions?: string[];
+    version?: string;
+    versionCandidate?: { value: string; from: string };
+    vermagic?: string;
+    depends?: string[];
+    intree?: boolean;
+  };
+  api?: Record<string, string[]>;
+  importCount?: number;
+  keys?: { nonGpl?: boolean; outOfTree?: boolean; socket?: boolean; allocAndCopy?: boolean; score?: number };
+  symbolsRead?: boolean;
+  sites?: Array<{
+    sink: string;
+    addr: number;
+    fn: string | null;
+    evidence: { byteSwapped: boolean; compared: boolean; addend: number | null; chain: string[] } | null;
+    evidenceGap?: string;
+  }>;
+}
+
 export interface KernelPostureResult {
   available?: boolean;
   located?: boolean;
@@ -1611,6 +1664,8 @@ export const api = {
     get<{ result: DeviceTreeResult | null }>(`/api/images/${id}/devicetree`).then((r) => r.result),
   binvuln: (id: string) => get<{ result: BinVulnResult | null }>(`/api/images/${id}/binvuln`).then((r) => r.result),
   runBinvuln: (id: string) => post<{ jobId: string }>(`/api/images/${id}/binvuln`, {}),
+  kmod: (id: string) => get<{ result: KmodResult | null }>(`/api/images/${id}/kmod`).then((r) => r.result),
+  runKmod: (id: string) => post<{ jobId: string }>(`/api/images/${id}/kmod`, {}),
   kernelPosture: (id: string) =>
     get<{ result: KernelPostureResult | null }>(`/api/images/${id}/kernel`).then((r) => r.result),
   runKernelPosture: (id: string) => post<{ jobId: string }>(`/api/images/${id}/kernel`, {}),
