@@ -565,6 +565,19 @@ export function deleteFindingsBySource(imageId: string, source: string): void {
     .run(imageId, source);
 }
 
+/**
+ * The rows one source contributed to an image. Excludes operator rows for the same reason the delete does, and in
+ * the same place: this is what `retireFindings` reads to describe what it is about to remove, so a listing that
+ * could return an assertion would let a retirement's note claim to be removing one.
+ */
+export function listFindingsBySource(imageId: string, source: string): FindingRow[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM findings WHERE imageId = ? AND source = ? AND source NOT LIKE '${OPERATOR_SOURCE_PREFIX}%' ORDER BY createdAt DESC`,
+    )
+    .all(imageId, source) as unknown as FindingRow[];
+}
+
 export function listFindings(imageId: string): FindingRow[] {
   return getDb()
     .prepare('SELECT * FROM findings WHERE imageId = ? ORDER BY createdAt DESC')

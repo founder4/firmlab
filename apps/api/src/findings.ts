@@ -21,6 +21,7 @@ import type {
   OperatorAuthorKind,
 } from '@firmlab/core';
 import type { FindingDraft } from './findings-normalize.js';
+import { type RetiredRowSummary, type ValidatedRetirement, retirementNote } from './findings-retire.js';
 import {
   type ValidatedAssertion,
   amendAssertion,
@@ -31,9 +32,12 @@ import {
 } from './operator-findings.js';
 import {
   type FindingRow,
+  type ImageNoteRow,
   deleteFindingsBySource,
   getFinding,
   insertFindings,
+  insertImageNote,
+  listFindingsBySource,
   updateFindingAssertion,
 } from './store.js';
 
@@ -85,6 +89,42 @@ export function syncFindings(imageId: string, source: string, drafts: FindingDra
     createdAt: now,
   }));
   insertFindings(rows);
+}
+
+/**
+ * Retire one source's computed rows, leaving a note in their place. The decision and the prose are pure
+ * (`findings-retire.ts`); this binds them to the store.
+ *
+ * `dryRun` reads and reports without touching anything, because the destructive failure mode here is a mistyped
+ * source that names a *different* real question — `symreach:usr/bin/httpd` holds the corpus's proven `system`
+ * reachability, one character-class away from the library sources this feature was built to remove.
+ *
+ * The note is written BEFORE the delete, deliberately. Neither order is atomic without a transaction the store
+ * does not offer, so the choice is which half-finished state to prefer: a note describing rows that are still
+ * present is visibly inconsistent and self-correcting, while rows deleted with no note is exactly the silent gap
+ * this whole module exists to prevent.
+ */
+export function retireFindings(
+  imageId: string,
+  v: ValidatedRetirement,
+  dryRun: boolean,
+): { removed: RetiredRowSummary[]; note: ImageNoteRow | null } {
+  const rows = listFindingsBySource(imageId, v.source);
+  const removed: RetiredRowSummary[] = rows.map((r) => ({ kind: r.kind, title: r.title, proofState: r.proofState }));
+  if (dryRun || removed.length === 0) return { removed, note: null };
+
+  const now = Date.now();
+  const note: ImageNoteRow = {
+    id: randomUUID().slice(0, 12),
+    imageId,
+    author: v.retiredBy,
+    body: retirementNote(v, removed),
+    createdAt: now,
+    updatedAt: now,
+  };
+  insertImageNote(note);
+  deleteFindingsBySource(imageId, v.source);
+  return { removed, note };
 }
 
 /** Parse a stored row back into the domain `Finding` (evidence and assertion rehydrated from JSON). */
