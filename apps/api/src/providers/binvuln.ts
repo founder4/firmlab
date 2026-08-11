@@ -66,6 +66,8 @@ const DT_STRTAB = 5;
 const DT_SYMTAB = 6;
 const DT_STRSZ = 10;
 const DT_SYMENT = 11;
+/** The name a shared object is linked against by. A program does not have one; a library does. */
+const DT_SONAME = 14;
 /** A sane ceiling on a dynamic symbol table, so a corrupt DT_HASH cannot make the reader loop for minutes. */
 const MAX_DYNSYMS = 200000;
 
@@ -261,8 +263,9 @@ const ET_DYN = 3;
  * `lib/modules/5.4.213/*.ko` reported as *"Command-exec sink: … references system"* — 64% of that image's
  * findings asserting a userland call a kernel module cannot make. It is the same defect already fixed once for
  * DVRF's iptables `.so` plugins, and `isRunnableElf` did not catch it: that predicate answers "can a probe run
- * this", which is correctly false for a library too, and a vulnerable `.so` IS a candidate worth listing. The
- * axis that separates them is the object type, not runnability.
+ * this", and a vulnerable `.so` IS a candidate worth listing. The axis that separates them is the object type,
+ * not runnability. (This paragraph used to add "which is correctly false for a library too". It was not: measured
+ * 2026-08-11, `isRunnableElf` returned TRUE for 37 of the corpus's libraries — see its own doc.)
  *
  * A kernel module is not thereby uninteresting — it is a different question (kernel `.ko` CVE surface, its own
  * backlog item) that deserves its own provider rather than a userland sweep's vocabulary.
@@ -293,8 +296,24 @@ const PT_INTERP = 3;
  * at ~6 KB each, just above the three executables that took the budget. On a rootfs with slightly smaller plugins
  * the entire allowance would have gone to libraries.
  *
- * ET_EXEC is a program. ET_DYN is ambiguous — a PIE executable and a library share it — and what separates them is
- * that a PIE names an interpreter to load it, so PT_INTERP is the discriminator rather than the filename.
+ * ET_EXEC is a program. ET_DYN is ambiguous — a PIE executable and a library share it — and PT_INTERP alone does
+ * NOT separate them, which is what this predicate got wrong.
+ *
+ * **Measured on the deployed corpus, 2026-08-11.** PT_INTERP was the sole ET_DYN discriminator here, on the
+ * reasoning that "a PIE names an interpreter to load it". So does the C library: uClibc and glibc build
+ * `libc`/`libdl`/`libm`/`libcrypt`/`libpthread` with an interpreter precisely so they can be executed directly to
+ * print their version banner. **37 `.so` files across the 7 rootfs images were classed runnable, 17 of them also
+ * naming an unbounded copy — so they passed `leadRunnable` straight into the probe queue that exists to exclude
+ * them.** It is not hypothetical either: 4 of the corpus's 57 `symreach` rows already target a shared library
+ * (`libutil-0.9.30.so`, `libcrypt-0.9.30.so`), each having spent a real angr budget to return
+ * `sink-reachability-inconclusive` on a question that cannot be posed to a library at all. And the worst of them
+ * is `libuClibc` itself, which by construction names every unbounded copy there is: the one object guaranteed to
+ * outrank real candidates on a queue ordered by how many sinks a binary carries.
+ *
+ * `DT_SONAME` is the axis that actually separates them. A shared object carries the name it is linked against by;
+ * a program, PIE or not, does not. So: ET_EXEC ⇒ runnable; ET_DYN ⇒ runnable only with an interpreter AND no
+ * SONAME. A stripped-down `.so` without a SONAME still passes, which is the conservative direction — this
+ * predicate gates a probe budget, and over-including costs time where over-excluding loses an answer.
  */
 export function isRunnableElf(buf: Uint8Array): boolean {
   if (buf.length < 64) return false;
@@ -313,13 +332,48 @@ export function isRunnableElf(buf: Uint8Array): boolean {
     const phnum = r.u16(is64 ? 0x38 : 0x2c);
     if (!phoff || !phentsize || !phnum) return false;
     if (phoff + phnum * phentsize > buf.length) return false;
+    let interp = false;
     for (let i = 0; i < phnum; i++) {
-      if (r.u32(phoff + i * phentsize) === PT_INTERP) return true;
+      if (r.u32(phoff + i * phentsize) === PT_INTERP) {
+        interp = true;
+        break;
+      }
     }
-    return false;
+    return interp && !hasSoname(buf, is64, little);
   } catch {
     return false;
   }
+}
+
+/**
+ * Does this ELF's dynamic section carry a `DT_SONAME`? Walks `PT_DYNAMIC` for the tag only — the string it points
+ * at is never read, because the question is whether the object HAS a link-time name, not what it is called.
+ *
+ * A malformed or absent dynamic section answers `false`: unknown must leave the binary runnable, so a parse this
+ * function cannot complete never removes a candidate from the probe queue on a guess.
+ */
+function hasSoname(buf: Uint8Array, is64: boolean, little: boolean): boolean {
+  const r = reader(buf, little);
+  const phoff = is64 ? r.u64(0x20) : r.u32(0x1c);
+  const phentsize = r.u16(is64 ? 0x36 : 0x2a);
+  const phnum = r.u16(is64 ? 0x38 : 0x2c);
+  if (!phoff || !phentsize || !phnum) return false;
+  if (phoff + phnum * phentsize > buf.length) return false;
+  for (let i = 0; i < phnum; i++) {
+    const ph = phoff + i * phentsize;
+    if (r.u32(ph) !== PT_DYNAMIC) continue;
+    const off = is64 ? r.u64(ph + 0x08) : r.u32(ph + 0x04);
+    const size = is64 ? r.u64(ph + 0x20) : r.u32(ph + 0x10);
+    if (!off || !size || off + size > buf.length) return false;
+    const step = is64 ? 16 : 8;
+    for (let o = off; o + step <= off + size; o += step) {
+      const tag = is64 ? r.u64(o) : r.u32(o);
+      if (tag === DT_NULL) break;
+      if (tag === DT_SONAME) return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 export interface BinAssessment {

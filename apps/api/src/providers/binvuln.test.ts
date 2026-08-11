@@ -151,7 +151,7 @@ describe('runBinVuln (rootfs sweep)', () => {
    * On the deployed GL.iNet BE3600 carve, 14 of the sweep's 22 findings were `lib/modules/5.4.213/*.ko` reported
    * as "Command-exec sink: … references system" — 64% of that image's findings asserting a userland call a kernel
    * module cannot make. `isRunnableElf` did not catch it, because that predicate answers "can a probe run this",
-   * which is also false for a `.so` that IS worth listing. The axis is the object type.
+   * a different question from "is this in the sweep's universe". The axis is the object type.
    */
   const elfOfType = (type: number, syms: string[]): Buffer => {
     const b = Buffer.alloc(64 + syms.join('\u0000').length + 2, 0);
@@ -317,6 +317,55 @@ describe('isRunnableElf — a library is a candidate the probes cannot question'
 
   it('rejects a shared library — ET_DYN with no interpreter to load it', () => {
     expect(isRunnableElf(elfWith(3, [1, 2]))).toBe(false); // PT_LOAD, PT_DYNAMIC
+  });
+
+  /**
+   * The shape the corpus actually ships, and the reason PT_INTERP alone was not enough.
+   *
+   * uClibc and glibc build `libc`/`libdl`/`libm`/`libcrypt`/`libpthread` WITH an interpreter, precisely so they
+   * can be executed directly to print a version banner. Measured on the deployed corpus 2026-08-11: 37 `.so`
+   * files across the 7 rootfs images were classed runnable, 17 of them also naming an unbounded copy — so they
+   * passed `leadRunnable` into the probe queue this predicate exists to keep them out of, and 4 `symreach` rows
+   * had already been spent on `libutil-0.9.30.so` and `libcrypt-0.9.30.so`. `DT_SONAME` is the axis: a shared
+   * object carries the name it is linked against by, and a program does not.
+   */
+  const elfWithDynamic = (type: number, phTypes: number[], dynTags: number[]): Uint8Array => {
+    const PH_OFF = 0x40;
+    const PH_ENT = 32;
+    const DYN_OFF = PH_OFF + PH_ENT * phTypes.length;
+    const dynSize = (dynTags.length + 1) * 8; // Elf32_Dyn is 8 bytes; +1 for the DT_NULL terminator
+    const buf = Buffer.alloc(DYN_OFF + dynSize);
+    buf.set([0x7f, 0x45, 0x4c, 0x46, 1, 1], 0); // ELF32, little-endian
+    buf.writeUInt16LE(type, 0x10);
+    buf.writeUInt32LE(PH_OFF, 0x1c);
+    buf.writeUInt16LE(PH_ENT, 0x2a);
+    buf.writeUInt16LE(phTypes.length, 0x2c);
+    phTypes.forEach((t, i) => {
+      const ph = PH_OFF + i * PH_ENT;
+      buf.writeUInt32LE(t, ph);
+      if (t === 2) {
+        // PT_DYNAMIC: point it at the tag array below.
+        buf.writeUInt32LE(DYN_OFF, ph + 0x04); // p_offset
+        buf.writeUInt32LE(dynSize, ph + 0x10); // p_filesz
+      }
+    });
+    dynTags.forEach((tag, i) => buf.writeUInt32LE(tag, DYN_OFF + i * 8));
+    return buf;
+  };
+
+  it('rejects libc, which has an interpreter AND a SONAME — the case the corpus broke this on', () => {
+    // PT_LOAD, PT_INTERP, PT_DYNAMIC with DT_SONAME(14).
+    expect(isRunnableElf(elfWithDynamic(3, [1, 3, 2], [14]))).toBe(false);
+  });
+
+  it('still accepts a PIE that has a dynamic section but no SONAME', () => {
+    // DT_NEEDED(1) and DT_STRTAB(5): a real dynamic section, no link-time name of its own.
+    expect(isRunnableElf(elfWithDynamic(3, [1, 3, 2], [1, 5]))).toBe(true);
+  });
+
+  it('leaves a binary runnable when the dynamic section cannot be read, rather than guessing it away', () => {
+    // PT_DYNAMIC declared but pointing nowhere — unknown must not remove a candidate from the probe queue.
+    expect(isRunnableElf(elfWith(3, [1, 3, 2]))).toBe(true);
   });
 
   it('rejects something that is not an ELF at all', () => {
