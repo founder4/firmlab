@@ -15,7 +15,32 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
 - ✅ **The listing cap hid exactly the binary the rank exists to promote** (2026-07-30, deploy `a234b9a`) — `selectFindings` ordered equal-severity candidates smallest-first, so on a rootfs with more candidates than the cap the LARGEST was dropped first, and the exposed daemon is always the largest. **Reproduced on the real WDR3600 rootfs before the fix: 124 ELFs → 58 candidates → 45 listed, and `usr/bin/httpd` was NOT among them**; the three at the head were `lib/libutil-0.9.30.so` (3964 B), `lib/libmsglog.so` (4644 B) and `sbin/pktlogconf` (7548 B) — i.e. the cap spent the ledger on precisely the uClibc stubs the entry below complains about. **Neither of the two fix shapes this entry proposed was taken**, because both leave the ledger wrong and only repair the leads: if a binary is worth probing it is worth listing, and a lead naming a binary the ledger omits was the side effect the entry itself flagged. Instead exposure became a **ranking key** between severity and size, supplied as an optional `ReadonlySet<string>` so `selectFindings` stays pure (the same shape as the UEFI module ranking's optional corpus). After: `usr/bin/httpd` is listed at **position 0**, 1,717,140 B, carrying `strcpy/strcat/sprintf/vsprintf/sscanf`. Exposure does NOT outrank severity — a `critical` in an unreferenced binary still beats a `medium` in a daemon, or a listening socket could launder a weak lead to the top of the ledger.
   **`undefined` ≠ `new Set()`, and this is the load-bearing part:** no signal means W3/W4 did not run, an empty signal means they ran and named nothing — which is real, since `runServiceMap` returns zero services on DVRF. The two rank identically and are opposite facts, so `reason` separates them in prose and the ranking is unchanged in both. Exposure is now computed **before** the sweep; it used to be assembled only for the probe rank, which is why the cap never had it.
   Verified on the deployed build that the fix is not inert: the real `runServiceMap` on the WDR3600 yields `httpd | /usr/bin/httpd | autostart: true`, `interestingBinaries` turns that into `{usr/bin/httpd → "it is an autostart network daemon (httpd)"}`, and in **every** device class that runs this sweep the plan puts `servicemap` (@6) and `webtaint` (@14) ahead of `binvuln` (@15), so the signal always arrives. _One defect the tests caught: exposure is a TIER, not an override — between two exposed daemons size still decides, so at cap 1 the 900 KB dropbear takes the seat and the 1.7 MB httpd is the one named as dropped. The first assertion said the opposite, written reading exposure as a total order._ An exposed binary can still miss the cap (cap smaller than the exposed set, or a higher severity fills it), so those are **named** in `exposedDropped`, not counted — optional forever, since `[]` would be a claim about a ranking that never had a signal.
-- ▢ **`runnable` lets uClibc's shared objects through, and they are what smallest-first buys.** `lib/libutil-0.9.30.so` and `lib/libcrypt-0.9.30.so` pass the filter because uClibc gives them an entry point, and they are the two smallest candidates on all three TP-Link images — so they take 1–2 of every 3 probes and return "search space exhausted" in 1–8 steps, 0.9–1.6 s. The cheapest possible non-answer. The `.so` filter's premise is that a library has no entry point to be reachable from; the real predicate is whether that entry point is a *program*. **Measured again 2026-07-30 on the deployed build, and it is worse than "they take some probes" — they take the LEDGER:** with no exposure signal the WDR3600's 45 listed candidates open with `lib/libutil-0.9.30.so` (3964 B) and `lib/libmsglog.so` (4644 B) at positions 1–2. The exposure key now moves an autostart daemon ahead of them, which repairs the head of the list and does nothing about the tail: every stub still occupies a seat that a real program could hold, and on an image where W3/W4 do not run the ordering is exactly as it was. Impact: medium — this is now the largest remaining distortion in the sweep's ledger.
+- ✅ **`runnable` let uClibc's shared objects through** (2026-08-11, deploy `43b8d75`) — closed, and the fix is one
+  ELF tag. `isRunnableElf` separated ET_DYN on `PT_INTERP` alone, reasoning that "a PIE names an interpreter to
+  load it". **So does the C library:** uClibc and glibc build `libc`/`libdl`/`libm`/`libcrypt`/`libpthread` with an
+  interpreter precisely so they can be run directly to print a version banner. Measured on the deployed corpus:
+  **37 `.so` across the 7 rootfs images were classed runnable, 17 of them also naming an unbounded copy** — i.e.
+  they passed `leadRunnable` into the probe queue that exists to exclude them. Already spent, not hypothetical:
+  **4 of the corpus's 57 `symreach` rows target a library** (`libutil-0.9.30.so` on WR940N/MR3220/WDR3600,
+  `libcrypt-0.9.30.so` on WR940N, all 2026-08-10), each having burned an angr budget to return
+  `sink-reachability-inconclusive` on a question a library cannot be asked. The worst case is `libuClibc` itself,
+  which by construction names all eight unbounded copies — the one object guaranteed to outrank real candidates on
+  a queue ordered by sink count. `DT_SONAME` is the axis that actually separates them (a shared object carries the
+  name it is linked against by; a program, PIE or not, does not), so ET_DYN is runnable only with an interpreter
+  AND no SONAME. **After, on the same bytes: 37 → 4 classed runnable, and 17 → 0 entering the probe queue, with
+  all 320 real programs unchanged.** The residual 4 are uClibc's `libnsl`/`libresolv` stubs, which genuinely ship
+  no SONAME and name no unbounded copy, so they never reach the queue anyway; a `.so` without a SONAME staying
+  runnable is the conservative direction, since this predicate gates a budget and over-excluding loses answers.
+  Verified at the real consumer, not just the predicate: `reachabilityLeads` + `cmdexecLeads` over the live
+  WDR3600 sweep now select `sbin/pktlogconf, sbin/radartool, sbin/apstart` and `usr/sbin/radvdctl,
+  usr/sbin/dnsproxy` — zero libraries.
+- ▢ **The four already-written library rows will never be retired.** `syncFindings(imageId, source, drafts)` is
+  idempotent per source, and its delete-and-reinsert only runs when that source is *planned again*. Those four
+  `symreach:lib/lib*.so` rows are now unplannable by construction, so they sit in three images' ledgers forever,
+  reporting an inconclusive reachability answer for a question the app has decided not to ask. Impact low in
+  content (the search really was inconclusive) and structural in kind: **there is no path anywhere that retires a
+  source once it stops being generated**, and every future filtering fix inherits the same residue.
+- ▢ **Superseded, kept for the measurement it carries — `runnable` lets uClibc's shared objects through, and they are what smallest-first buys.** `lib/libutil-0.9.30.so` and `lib/libcrypt-0.9.30.so` pass the filter because uClibc gives them an entry point, and they are the two smallest candidates on all three TP-Link images — so they take 1–2 of every 3 probes and return "search space exhausted" in 1–8 steps, 0.9–1.6 s. The cheapest possible non-answer. The `.so` filter's premise is that a library has no entry point to be reachable from; the real predicate is whether that entry point is a *program*. **Measured again 2026-07-30 on the deployed build, and it is worse than "they take some probes" — they take the LEDGER:** with no exposure signal the WDR3600's 45 listed candidates open with `lib/libutil-0.9.30.so` (3964 B) and `lib/libmsglog.so` (4644 B) at positions 1–2. The exposure key now moves an autostart daemon ahead of them, which repairs the head of the list and does nothing about the tail: every stub still occupies a seat that a real program could hold, and on an image where W3/W4 do not run the ordering is exactly as it was. Impact: medium — this is now the largest remaining distortion in the sweep's ledger.
 - ▢ **The exposure signal rests on `network && autostart`, with no port evidence behind it.** Surfaced 2026-07-30
   while validating the exposure ranking, not implemented. `exposedDaemon` is `s.network && s.autostart`, and on
   the real WDR3600 the service map returns `httpd | /usr/bin/httpd | autostart: true | ports: []` — so `network`
@@ -1798,11 +1823,35 @@ from an agent.** Full record in `AUTONOMOUS-WORKERS.md` §11.
     `system/popen/execve` survived as NOTHING and `runSymReach` returned `unavailable('no sink to ask about')`.
     The deployment could answer perfectly well; this caller was asking with a filter that deleted its own question,
     and the honest-sounding row hid it. The policy now follows the question, pinned in `pickSinks`._
-  - ▢ **`unavailable('no sink to ask about')` composes `blocked_by_platform`, and it is not a platform fact.** The
-    row says the deployment could not answer, when what happened is that the caller posed a question with no sinks
-    left in it. Exactly the conflation the dynamic probe split with `blockedBy: 'platform' | 'harness'`, alive one
-    provider over. Impact: medium — it makes a caller bug read as an honest capability gap, which is the one
-    misreading this vocabulary exists to prevent.
+  - ✅ **`unavailable('no sink to ask about')` composed `blocked_by_platform`, and it is not a platform fact**
+    (2026-08-11, deploy `b5fbc00`). The row said the deployment could not answer, when what happened is that the
+    caller posed a question with no sinks left in it — exactly the conflation the dynamic probe split with
+    `blockedBy: 'platform' | 'harness'`, alive one provider over. The result now carries
+    `blockedBy: 'platform' | 'harness' | 'request'`, and **`request` writes no finding at all**: the ledger is read
+    as *what is true of this firmware*, coverage counts its rows, and they outlive the caller that produced them,
+    so a row stating a limit of the deployment that does not exist is worse than silence. The line between the
+    other two needs no string-matching on angr's error text: **the probe never answered ⇒ `harness`; the probe
+    answered "I cannot" ⇒ `platform`.** Two readers, because a field nobody reads fixes nothing — `run-summary.ts`
+    grades `harness`/`request` as `failed` rather than `blocked` (rows stored by an older build carry no
+    discriminant and keep `blocked`, the conservative reading), and `symreachRun` stops calling its own plan defect
+    "unavailable".
+    **Validated in-container against the real corpus**, all four branches on real bytes: no rootfs, a binary absent
+    from the rootfs, and the exact `a20f2850` shape — `system/popen/execve` under the default `unsafe-copy` policy
+    on the WR940N's `usr/bin/httpd` — each return `blockedBy: 'request'` with **0 findings**, and the reason now
+    names the policy and the three names it dropped instead of blaming the deployment. The same question asked
+    correctly still answers: `as-given` on that binary returns `system` **reached** at `0x589850,0x7003c0`, MIPS32.
+  - ✅ **The module's contract and its code disagreed about "nothing to ask about"** (same deploy). The header has
+    said since it was written that a binary importing no unbounded copy *"is reported as having nothing to ask
+    about, which is a real answer, not a failure"*; the code returned `blocked_by_platform` for it. It is now the
+    same shape of bounded negative `credmatch` emits — `static_confirmed` over the bytes, naming the symbol source
+    and stating out loud what it does NOT cover: a statically linked or inlined `strcpy` leaves no symbol to read,
+    and a sink never asked about has had its reachability tested by nothing. **The addressable population is 1304
+    of the corpus's 2007 rootfs ELFs** (772 read from a real `dynsym`, 532 from the weaker strings superset, and
+    the row says which) — every one of which used to get a "the deployment could not answer it" row from a derived
+    question. Verified end to end on `lib/libdl-0.9.30.so` with angr present.
+  - ▢ **The `not-applicable` bounded negative has no surface and no coverage seat.** It is a new finding kind that
+    `coverage.ts` does not count and no web panel renders, so the one place it can be read is the run ledger. Same
+    gap `credmatch` still has.
   - ▢ **Two probes per run against 80 askable binaries, and a re-run asks the SAME two.** Measured: two consecutive
     autonomous scans of `c42ab6f2` asked about exactly the same binaries both times, because every cap orders
     deterministically. That is correct for idempotence and it means **re-scanning an image can never make
