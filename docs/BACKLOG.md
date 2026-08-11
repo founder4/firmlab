@@ -34,12 +34,32 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   Verified at the real consumer, not just the predicate: `reachabilityLeads` + `cmdexecLeads` over the live
   WDR3600 sweep now select `sbin/pktlogconf, sbin/radartool, sbin/apstart` and `usr/sbin/radvdctl,
   usr/sbin/dnsproxy` — zero libraries.
-- ▢ **The four already-written library rows will never be retired.** `syncFindings(imageId, source, drafts)` is
-  idempotent per source, and its delete-and-reinsert only runs when that source is *planned again*. Those four
-  `symreach:lib/lib*.so` rows are now unplannable by construction, so they sit in three images' ledgers forever,
-  reporting an inconclusive reachability answer for a question the app has decided not to ask. Impact low in
-  content (the search really was inconclusive) and structural in kind: **there is no path anywhere that retires a
-  source once it stops being generated**, and every future filtering fix inherits the same residue.
+- ✅ **The four already-written library rows had no way out — now they do, and they are gone** (2026-08-11, deploy
+  `b08369b`). `syncFindings` is idempotent per source and its delete-and-reinsert only runs when that source is
+  *planned again*, so those four `symreach:lib/lib*.so` rows were unplannable by construction and would have sat
+  in three images' ledgers forever. The gap was structural, not local: **no path anywhere retired a source once it
+  stopped being generated**, and every future filtering fix would have left its own residue.
+  `DELETE /images/:id/findings` takes `{ source, retiredBy, reason }` — all three required — plus `dryRun`.
+  **Deliberately not a sweep.** The obvious implementation, retiring every source the current plan does not
+  contain, reads *"we did not ask this time"* as *"this will never be asked"*: a stage skipped for want of a
+  rootfs, or a provider whose tool was missing today, would erase what an earlier run legitimately learned. A
+  person decides a question is retired. It refuses an operator source with the surface that does handle it (an
+  assertion is retracted, never removed), and it writes an `image_note` carrying the source, the count, every row
+  with its proof state first, and the reason — a note precisely because notes are never counted, never reported
+  and never rendered as findings, so recording a deletion cannot itself become a claim about the firmware. The
+  note states out loud the one reading a retirement must never license: *"nothing here was answered, and the
+  removal covers no stage."*
+  **Run against the corpus:** dry run first on all four (each 1 row, all `needs_runtime_reproduction` — no
+  confirmed row was ever in range), then retired. Corpus `symreach` rows **57 → 53, on a library 4 → 0**, with 4
+  notes in their place. Every refusal branch exercised on the deployed build, not just the success path: operator
+  source → 400 naming `/withdraw`, missing reason → 400, missing author → 400, unknown image → 404, and a source
+  matching nothing → 200 with `removed: []` and *"far more often a typo than an empty set"* — which writes no
+  note, since there is no gap to explain.
+- ▢ **Retirement has no web surface and is not on MCP.** The route is API-only. The web omission is a plain gap
+  (the operator panel renders assertions and notes and cannot retire a computed source). MCP is a *decision*: an
+  agent that can delete rows from the ledger it is also reporting on is a different risk shape from one that can
+  only add assertions, and the case for it should be made deliberately rather than inherited from "the other
+  routes are exposed". Impact low either way — the residue it exists to clear is rare by construction.
 - ▢ **Superseded, kept for the measurement it carries — `runnable` lets uClibc's shared objects through, and they are what smallest-first buys.** `lib/libutil-0.9.30.so` and `lib/libcrypt-0.9.30.so` pass the filter because uClibc gives them an entry point, and they are the two smallest candidates on all three TP-Link images — so they take 1–2 of every 3 probes and return "search space exhausted" in 1–8 steps, 0.9–1.6 s. The cheapest possible non-answer. The `.so` filter's premise is that a library has no entry point to be reachable from; the real predicate is whether that entry point is a *program*. **Measured again 2026-07-30 on the deployed build, and it is worse than "they take some probes" — they take the LEDGER:** with no exposure signal the WDR3600's 45 listed candidates open with `lib/libutil-0.9.30.so` (3964 B) and `lib/libmsglog.so` (4644 B) at positions 1–2. The exposure key now moves an autostart daemon ahead of them, which repairs the head of the list and does nothing about the tail: every stub still occupies a seat that a real program could hold, and on an image where W3/W4 do not run the ordering is exactly as it was. Impact: medium — this is now the largest remaining distortion in the sweep's ledger.
 - ▢ **The exposure signal rests on `network && autostart`, with no port evidence behind it.** Surfaced 2026-07-30
   while validating the exposure ranking, not implemented. `exposedDaemon` is `s.network && s.autostart`, and on
