@@ -71,7 +71,24 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   Impact: low for the cap, medium for anything that reports exposure as a fact rather than as an ordering.
 - ▢ **`runServiceMap` returns ZERO services on DVRF**, a rootfs that does have init scripts. That is the prior question behind "promoting `stack_bof_01` needs a signal no worker produces" — it is not that the pwnable is unflagged, it is that nothing on that image is flagged at all. Answer why the service map comes back empty before designing the missing "standalone argv-taking executable no config references" predicate.
 - ▢ **Promoting `stack_bof_01` needs a signal no worker produces.** The missing predicate is "a standalone argv-taking executable that no config references" — the opposite shape from W3's autostart daemons and W4's web handlers, which is why neither finds it. Until that exists, or until the two-queue rank is measured in-container against the corpus, the interest parameter above stays unwired.
-- ▢ **Libraries are permanently unasked.** Filtering `.so` out of the reachability queue is right for the question as posed, but it leaves a vulnerable library as a candidate nothing will ever settle. Loading the `.so` and starting symbolically from an exported function is a distinct rung, not a variant of this one.
+- ◐ **Libraries are no longer permanently unasked — the manual rung is built and validated on real bytes**
+  (2026-08-18, `8b96182`). `exportreach` asks a `.so`/`.ko` the one reachability question it admits, over the
+  RECOVERED control-flow graph rather than symbolically — a decision that is measured, not assumed: a symbolic
+  `call_state` at an export fans out through unconstrained pointer arguments and never converges (5925 steps,
+  123 s on NetUSB.ko, never reaching a target inside the function it started in), while the CFG answers in
+  microseconds after a ~2 s build. The claim is deliberately weaker than `symreach`'s `reached` — a route in the
+  code, not a feasible one — so both are `needs_runtime_reproduction`, separated by severity and wording, and the
+  two sources never merge. `providers/exportreach.ts` (pure `sinksFor`/`sinkSeverity`/`buildExportReachFindings`/
+  `summarise`, 8 tests) + `scripts/angr-cfgreach.py` + `POST/GET /images/:id/exportreach` (source
+  `exportreach:<path>`, ELF-gated) + `ExportReachPanel` beside `SymReachPanel` in the binaries tab (i18n en/es, 4
+  tests). Findings already reach an agent via `firmlab_findings` with the caveat in each row's rationale.
+  **Validated in-container on the real corpus:** `NetUSB.ko` (WDR3600) → 340 functions, 228 entry points, 2.07 s
+  build, `__kmalloc` **reachable** from 37 of 228 entries through 17 holder functions (also `memcpy` 61/41,
+  `sprintf` 2/2); `libcrypt-0.9.30.so` (WR940N) → `readelf -S` shows ZERO section headers, so the graph comes back
+  empty and the probe returns `no_functions_recovered` — `blocked_by_platform`, the state that keeps a
+  section-stripped object from reading like one analysed and found clean. _Remaining (◐): the AUTONOMOUS rung —
+  `opacidad` does not yet turn the `.so` candidates its library filter drops into `exportreach` leads, so the scan
+  will not ask on its own (see the entry below); and a dedicated MCP run-tool is deferred, exactly as `kmod`'s is._
 - ✅ **webprobe** — drives the booted service for command-injection (marker/nonce) + path-traversal (`/etc/passwd`); a reproduced hit → `confirmed_in_emulation`. `providers/webprobe.ts` + `/webprobe` route + panel. Validated against a real vulnerable HTTP server. _Follow-up: auth-bypass / default-creds checks, POST-body injection._
 - ✅ **Dynamic reproduction — GDB in emulation** (2026-07-27) — `providers/dynprobe.ts` (pure: `cyclicPattern` / `patternOffset` / `buildGdbScript` / `parseGdbOutput` / `classifyRun` / `buildDynFindings`, 22 unit tests) + `providers/dynprobe-run.ts` + `POST/GET /images/:id/dynprobe` + a `dynprobe` executor and `reproduce-crash` lead in W9. `Dockerfile.tools` gains **gdb-multiarch**; qemu-user already exposed a gdbstub (`-g PORT`).
 
@@ -213,12 +230,18 @@ Status: `▶ building` · `▢ planned` · `◐ partial` · `— out of scope`.
   there yields `e_phoff`'s low half, which is legitimately 0 for a relocatable object. The CODE is unaffected (it
   scans printable strings and works either way); only the justification for doing so is wrong. Worth correcting
   before someone relies on the claim.
-- ▢ **The `.ko` lane and the `.so` lane are the same missing rung.** *"Libraries are permanently unasked"* above
-  names the identical gap from the other side: neither a shared object nor a kernel module has an entry point, so
-  `symreach`'s "reachable from the entry point" question is ill-posed for both. `kmodRun` therefore schedules no
-  leads at all — deliberately, since handing angr a module would spend a budget on a question the tool cannot be
-  asked. **Symbolic execution starting from an exported symbol** would close both entries at once, and it is now
-  the largest single gap in the static tier.
+- ◐ **The `.ko` lane and the `.so` lane were the same missing rung — the probe now spans both** (2026-08-18,
+  `8b96182`). Both are entered without an entry point (a `.so` through an export, a `.ko` through a handler the
+  kernel calls), so `symreach`'s "reachable from the entry point" question is ill-posed for both, and the closure
+  had to span both at once. `exportreach` does: its entry set is a `.so`'s dynamic exports and a `.ko`'s global
+  function symbols, and its sink vocabulary splits by target class (`__kmalloc`/`copy_from_user` for a module,
+  `system`/`strcpy` for a library) so the wrong set never reads as if it applied. Validated on real bytes of each
+  class — see the closed entry above. _Remaining (◐): this is the MANUAL rung. The autonomous side is the open
+  work — an `exportReachLeads` in `opacidad-leads.ts` turning the library candidates `reachabilityLeads`/
+  `cmdexecLeads` deliberately drop (and kmod's ranked modules) into capped `exportreach` specs, an executor +
+  `ProviderId` in `opacidad.ts`, and a `PlanReasonId` gloss — so the scan asks these on its own within the global
+  angr allowance rather than only when an operator points at one. The budget interaction with `symreach`'s probes
+  is the part to measure, not assume._
 - ▢ **`memmove` leads on GPL upstream code need a second look.** Two of the corpus's four leads are in
   `nat46.ko` (`memmove`, addend 8, GPL, in-tree), which is upstream OpenWrt rather than vendor code. They may be
   real, or the byte-swap-to-length heuristic may be weaker for `memmove` than for an allocator. Reading them is
