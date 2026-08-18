@@ -12,11 +12,11 @@
     "dev": "node --watch dist/index.js"
   },
   "dependencies": {
-    "@fastify/multipart": "^8.3.0",
-    "@fastify/static": "^7.0.4",
+    "@fastify/multipart": "^10.1.1",
+    "@fastify/static": "^10.1.3",
     "@firmlab/core": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "fastify": "^4.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "fastify": "^5.12.0",
     "zod": "^4.4.3"
   }
 }

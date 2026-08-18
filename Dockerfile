@@ -13,15 +13,20 @@ WORKDIR /app
 # Non-interactive: pnpm 11 otherwise aborts a modules-dir purge for lack of a TTY during the build step.
 ENV CI=true
 RUN corepack enable
-COPY pnpm-workspace.yaml package.json tsconfig.base.json ./
+# Keep dependency resolution identical to the checked-in workspace. The packageManager field pins pnpm itself;
+# copying the lockfile before install also preserves Docker's dependency-layer cache when only source changes.
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
-RUN pnpm install --frozen-lockfile=false
+RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm --filter @firmlab/core run build \
   && pnpm --filter @firmlab/api run build \
   && pnpm --filter @firmlab/web run build
+# The runtime image only needs the compiled artifacts and API production graph. Reuse the packages already
+# fetched above so scanners and the final image do not inherit Vite/Vitest/TypeScript or their dev-only surface.
+RUN pnpm install --prod --offline --frozen-lockfile
 
 # === Stage 2: runtime ===
 FROM node:22-bookworm-slim AS runtime

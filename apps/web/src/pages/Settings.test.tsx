@@ -41,7 +41,7 @@ const usage = {
 
 const renderSettings = (): void => {
   render(
-    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter>
       <Settings />
     </MemoryRouter>,
   );
