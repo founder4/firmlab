@@ -62,8 +62,10 @@ Rules, non-negotiable:
    not conclusions. A prior does not raise your reachability by itself.
    The optional operator goal follows the same rule: it can prioritize analysis, but it is never vulnerability proof.
 4. For each candidate give {sink, source, vulnClass, reachability, severity, trigger, rationale}. vulnClass ∈
-   {command-injection, stack-overflow, format-string, path-traversal, other}. The trigger is a concrete input
-   (e.g. an HTTP request/param, an NVRAM value) that would drive the source into the sink.
+   {command-injection, stack-overflow, format-string, path-traversal, other}. The trigger must be a non-destructive
+   canary plan: identify the input field/source and an inert marker, never provide executable shell syntax,
+   shellcode, destructive commands, persistence, credential access, or an operational exploit/PoC. If the operator
+   goal forbids a PoC, keep it descriptive (field + canary condition) rather than giving payload syntax.
 
 Respond with ONLY a JSON object, no prose or code fences:
 {"candidates": [{"sink": string, "source": string, "vulnClass": string, "reachability": "likely"|"possible"|"unlikely",

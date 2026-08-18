@@ -266,6 +266,8 @@ rung above it. If maxRung is "none" (static-only or unsupported arch), you may s
 review but must set every rung to "none". Prefer network-facing, weakly-hardened binaries with dangerous imports.
 The optional operator goal may rank candidates, but it never changes capabilities, proof state, or measured facts.
 Choose at most three targets; a short, evidence-backed queue is more useful than enumerating every binary.
+maxRung is a ceiling, not a recommendation: choose the LEAST sufficient rung. Prefer qemu-user for one binary,
+chroot-service for a rootfs service, and full-system only when boot/kernel/device integration is evidenced and needed.
 
 For each chosen target return {path, rung, priority, reason}. rung ∈ {"none","qemu-user","chroot-service",
 "full-system","rtos-renode"} and must respect maxRung. Ground every choice in the data (hardening flags, imports,

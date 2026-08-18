@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type ZerodayContext, buildZerodayUserPrompt, parseZerodayDecision } from './zeroday.js';
+import { ZERODAY_SYSTEM_PROMPT, type ZerodayContext, buildZerodayUserPrompt, parseZerodayDecision } from './zeroday.js';
 
 it('includes the operator goal in the zero-day decision context', () => {
   const goal = 'Separate measured evidence from hypotheses.';
@@ -12,6 +12,12 @@ it('includes the operator goal in the zero-day decision context', () => {
     priors: { vulnerableComponents: [], confirmedBefore: [] },
   } as unknown as ZerodayContext;
   expect(buildZerodayUserPrompt(ctx)).toContain(goal);
+});
+
+it('requires non-operational, non-destructive canary plans instead of exploit payloads', () => {
+  expect(ZERODAY_SYSTEM_PROMPT).toContain('non-destructive');
+  expect(ZERODAY_SYSTEM_PROMPT).toContain('never provide executable shell syntax');
+  expect(ZERODAY_SYSTEM_PROMPT).toContain('operational exploit/PoC');
 });
 
 describe('parseZerodayDecision', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  TARGET_SELECTION_SYSTEM_PROMPT,
   type TargetSelectionContext,
   type TriageContext,
   buildTargetSelectionUserPrompt,
@@ -41,6 +42,11 @@ describe('operator goal propagation', () => {
 
     expect(buildTriageUserPrompt(triage)).toContain(goal);
     expect(buildTargetSelectionUserPrompt(target)).toContain(goal);
+  });
+
+  it('states that the runtime ceiling is not the recommended rung', () => {
+    expect(TARGET_SELECTION_SYSTEM_PROMPT).toContain('LEAST sufficient rung');
+    expect(TARGET_SELECTION_SYSTEM_PROMPT).toContain('ceiling, not a recommendation');
   });
 });
 
