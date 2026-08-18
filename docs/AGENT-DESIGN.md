@@ -284,6 +284,7 @@ Variables de entorno:
 | `FIRMLAB_LLM_MODEL` | según proveedor | deepseek→`deepseek-v4-flash`; anthropic→`claude-opus-4-8`; openai→**obligatorio**. |
 | `FIRMLAB_LLM_BASE_URL` | según proveedor | Override. Apunta aquí un servidor OpenAI-compatible local (Ollama/vLLM). |
 | `FIRMLAB_LLM_MAX_TOKENS` | `4096` | Tope de salida. |
+| `FIRMLAB_LLM_TIMEOUT_MS` | `900000` | Timeout abortable por petición (1 s–60 min); evita que un proveedor colgado eluda el wall-time. |
 | `FIRMLAB_LLM_THINKING` | `enabled` | DeepSeek V4: `enabled` \| `disabled`. Otros proveedores lo ignoran. |
 | `FIRMLAB_LLM_REASONING_EFFORT` | `high` | DeepSeek V4: `high` \| `max`; solo aplica con thinking activo. |
 

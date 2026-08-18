@@ -4,6 +4,7 @@ import {
   LlmOutputError,
   buildAnthropicRequest,
   buildChatCompletionsRequest,
+  complete,
   completeJson,
   loadLlmConfig,
   parseAnthropicResponse,
@@ -17,6 +18,7 @@ const deepseek: LlmConfig = {
   baseUrl: 'https://api.deepseek.com',
   model: 'deepseek-v4-flash',
   maxTokens: 2048,
+  requestTimeoutMs: 15 * 60_000,
   thinking: 'enabled',
   reasoningEffort: 'max',
 };
@@ -37,6 +39,7 @@ describe('loadLlmConfig', () => {
       baseUrl: 'https://api.deepseek.com',
       thinking: 'enabled',
       reasoningEffort: 'high',
+      requestTimeoutMs: 15 * 60_000,
     });
   });
 
@@ -49,6 +52,20 @@ describe('loadLlmConfig', () => {
         FIRMLAB_LLM_REASONING_EFFORT: 'max',
       }),
     ).toMatchObject({ thinking: 'enabled', reasoningEffort: 'max' });
+  });
+
+  it('accepts a bounded provider timeout and rejects invalid values safely', () => {
+    expect(
+      loadLlmConfig({
+        FIRMLAB_AGENT: '1',
+        DEEPSEEK_API_KEY: 'sk-1',
+        FIRMLAB_LLM_TIMEOUT_MS: '1200000',
+      })?.requestTimeoutMs,
+    ).toBe(1_200_000);
+    expect(
+      loadLlmConfig({ FIRMLAB_AGENT: '1', DEEPSEEK_API_KEY: 'sk-1', FIRMLAB_LLM_TIMEOUT_MS: 'not-a-number' })
+        ?.requestTimeoutMs,
+    ).toBe(15 * 60_000);
   });
 
   it('returns null when the flag is set but no key is available', () => {
@@ -173,6 +190,23 @@ describe('completeJson', () => {
     expect(firstBody).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'max' });
     expect(retryBody).toMatchObject({ thinking: { type: 'disabled' }, temperature: 0.2 });
     expect(retryBody.reasoning_effort).toBeUndefined();
+  });
+});
+
+describe('provider request timeout', () => {
+  it('aborts a hung provider request with an explicit error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        });
+      }),
+    );
+
+    await expect(complete('SYS', 'USER', { ...deepseek, requestTimeoutMs: 5 })).rejects.toThrow(
+      'LLM provider deepseek did not answer within 5 ms',
+    );
   });
 });
 

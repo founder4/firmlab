@@ -21,6 +21,8 @@ export interface LlmConfig {
   baseUrl: string;
   model: string;
   maxTokens: number;
+  /** Abort one provider request instead of letting a hung socket bypass the session wall-time indefinitely. */
+  requestTimeoutMs: number;
   /** DeepSeek V4 thinking controls. Other providers ignore these adapter-specific fields. */
   thinking: LlmThinking;
   reasoningEffort: LlmReasoningEffort;
@@ -56,6 +58,14 @@ export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseUrl: string; model: st
   anthropic: { baseUrl: 'https://api.anthropic.com', model: 'claude-opus-4-8', keyEnv: 'ANTHROPIC_API_KEY' },
 };
 
+export const DEFAULT_LLM_TIMEOUT_MS = 15 * 60_000;
+
+function llmTimeoutMs(raw: string | undefined): number {
+  const parsed = Number(raw ?? DEFAULT_LLM_TIMEOUT_MS);
+  if (!Number.isFinite(parsed)) return DEFAULT_LLM_TIMEOUT_MS;
+  return Math.max(1_000, Math.min(60 * 60_000, Math.round(parsed)));
+}
+
 /**
  * Resolve the LLM config from the environment, or null when the agent layer is off. Gated by FIRMLAB_AGENT so
  * the deterministic workbench stays local-only, no-network, no-cost by default. Returns null (not an error) when
@@ -78,6 +88,7 @@ export function loadLlmConfig(env: NodeJS.ProcessEnv = effectiveEnv()): LlmConfi
     baseUrl: env.FIRMLAB_LLM_BASE_URL ?? defaults.baseUrl,
     model,
     maxTokens: Number(env.FIRMLAB_LLM_MAX_TOKENS ?? 4096),
+    requestTimeoutMs: llmTimeoutMs(env.FIRMLAB_LLM_TIMEOUT_MS),
     thinking,
     reasoningEffort,
   };
@@ -195,7 +206,18 @@ async function dispatchCompletion(
   const req = isAnthropic
     ? buildAnthropicRequest(cfg, system, user)
     : buildChatCompletionsRequest(cfg, system, user, format, thinkingOverride);
-  const res = await fetch(req.url, { method: 'POST', headers: req.headers, body: req.body });
+  const signal = AbortSignal.timeout(cfg.requestTimeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(req.url, { method: 'POST', headers: req.headers, body: req.body, signal });
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`LLM provider ${cfg.provider} did not answer within ${cfg.requestTimeoutMs} ms`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`LLM provider ${cfg.provider} returned ${res.status}: ${detail.slice(0, 300)}`);

@@ -58,7 +58,12 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       enabled: true,
       provider: cfg.provider,
       model: cfg.model,
-      reasoning: { thinking: cfg.thinking, effort: cfg.reasoningEffort, maxOutputTokens: cfg.maxTokens },
+      reasoning: {
+        thinking: cfg.thinking,
+        effort: cfg.reasoningEffort,
+        maxOutputTokens: cfg.maxTokens,
+        requestTimeoutMs: cfg.requestTimeoutMs,
+      },
       budget: loadGovernorBudget(),
       phase4: { isolation, fuzzing: await detectFuzzing(), autoRun: isolation === 'full' },
     };

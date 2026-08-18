@@ -672,7 +672,12 @@ export interface AgentConfig {
   enabled: boolean;
   provider?: string;
   model?: string;
-  reasoning?: { thinking: 'enabled' | 'disabled'; effort: 'high' | 'max'; maxOutputTokens: number };
+  reasoning?: {
+    thinking: 'enabled' | 'disabled';
+    effort: 'high' | 'max';
+    maxOutputTokens: number;
+    requestTimeoutMs: number;
+  };
   budget?: GovernorBudget;
 }
 
