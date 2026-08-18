@@ -27,6 +27,7 @@ import { decompileRoutes } from './routes/decompile.js';
 import { devicetreeRoutes } from './routes/devicetree.js';
 import { diffRoutes } from './routes/diff.js';
 import { emulateRoutes } from './routes/emulate.js';
+import { exportReachRoutes } from './routes/exportreach.js';
 import { fccRoutes } from './routes/fcc.js';
 import { filesRoutes } from './routes/files.js';
 import { fsauditRoutes } from './routes/fsaudit.js';
@@ -137,6 +138,7 @@ async function main(): Promise<void> {
       await api.register(ubootRoutes);
       await api.register(binvulnRoutes);
       await api.register(kmodRoutes);
+      await api.register(exportReachRoutes);
       await api.register(kernelRoutes);
       await api.register(updatepathRoutes);
       await api.register(devicetreeRoutes);

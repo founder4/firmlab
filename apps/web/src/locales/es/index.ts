@@ -13,6 +13,7 @@ import { corpus } from './corpus';
 import { coverage } from './coverage';
 import { dashboard } from './dashboard';
 import { egressSection } from './egressSection';
+import { exportreach } from './exportreach';
 import { files } from './files';
 import { findings } from './findings';
 import { hardware } from './hardware';
@@ -70,4 +71,5 @@ export const es: Messages = {
   kmod,
   sectionGroups,
   egressSection,
+  exportreach,
 };

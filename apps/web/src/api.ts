@@ -330,6 +330,39 @@ export interface SymReachResult {
   budgetSeconds?: number;
 }
 
+/** How the export-reachability probe reports one sink. `reachable` is the only outcome that files a lead. */
+export type ExportReachSinkOutcome = 'reachable' | 'not_reached' | 'absent' | 'no_call_site' | 'budget_exhausted';
+
+export interface ExportReachSink {
+  sink: string;
+  outcome: ExportReachSinkOutcome;
+  holders?: number;
+  reachableFrom?: number;
+  entryPointsNamed?: string[];
+  namedTruncated?: number;
+}
+
+/**
+ * Export reachability over a `.so`/`.ko` — the question those objects admit, since neither has an entry point for
+ * `symreach` to explore from. Every detail field is optional: a stored result is JSON written by an older build,
+ * and `outcome: 'no_functions_recovered'` (an empty graph, a failure to analyse) carries almost none of them.
+ */
+export interface ExportReachResult {
+  available: boolean;
+  reason: string;
+  binary?: string;
+  arch?: string;
+  functionsRecovered?: number;
+  callEdges?: number;
+  entryPoints?: number;
+  entryPointsConsidered?: number;
+  cfgSeconds?: number;
+  elapsedSeconds?: number;
+  /** `no_functions_recovered` when the graph came back empty — analysable/not-analysable is the load-bearing line. */
+  outcome?: string;
+  sinks: ExportReachSink[];
+}
+
 export interface GitleaksFinding {
   rule: string;
   description: string;
@@ -1717,6 +1750,12 @@ export const api = {
     post<{ jobId: string }>(`/api/images/${id}/symreach`, body),
   symreachResult: (id: string) =>
     get<{ result: SymReachResult | null }>(`/api/images/${id}/symreach`).then((r) => r.result),
+  /** Ask a `.so`/`.ko` the reachability question it admits — a control-flow route from an export to a sink. */
+  exportreach: (id: string, body: { binary: string; sinks?: string[]; budgetSeconds?: number }) =>
+    post<{ jobId: string }>(`/api/images/${id}/exportreach`, body),
+  /** The route returns every done probe (one per target); the panel shows the most recent, RunHistory the rest. */
+  exportreachResult: (id: string) =>
+    get<{ results: ExportReachResult[] }>(`/api/images/${id}/exportreach`).then((r) => r.results.at(-1) ?? null),
   findings: (id: string) => get<{ findings: Finding[] }>(`/api/images/${id}/findings`).then((r) => r.findings),
 
   // === Operator assertions: the ledger's only hand-authored rows. No proofState is ever sent or accepted. ===

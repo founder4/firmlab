@@ -16,6 +16,9 @@ export type JobKind =
   // The kernel-module sweep. `binvuln` excludes ET_REL objects by construction, so until this existed the `.ko`
   // files in a rootfs were counted by `component-map` and read by nothing.
   | 'kmod'
+  // Export reachability — the question a `.so` or `.ko` admits, since neither has an entry point to explore
+  // from. A distinct kind from `symreach`: the claim is a control-flow path, not a feasible one.
+  | 'exportreach'
   | 'binwalk'
   | 'sbom'
   | 'emulate'

@@ -33,6 +33,7 @@ import { ComponentMap } from '../components/ComponentMap';
 import { CoverageBanner } from '../components/CoverageBanner';
 import { EgressSection } from '../components/EgressSection';
 import { EntropyChart } from '../components/EntropyChart';
+import { ExportReachPanel } from '../components/ExportReachPanel';
 import { FileBrowser } from '../components/FileBrowser';
 import { FileSearch } from '../components/FileSearch';
 import { FilesystemTree } from '../components/FilesystemTree';
@@ -259,6 +260,8 @@ export function ImageDetail(): JSX.Element {
         <>
           <TestBench imageId={id} />
           <SymReachPanel imageId={id} binary="" onBinary={() => undefined} />
+          {/* The counterpart for the targets symreach refuses — a `.so` or a `.ko`, which have no entry point. */}
+          <ExportReachPanel imageId={id} />
         </>
       )}
       {/* What the booted firmware ADDRESSED. A section rather than a panel inside the emulation menu, which
