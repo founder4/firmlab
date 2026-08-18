@@ -14,9 +14,11 @@
 - [x] Integrar `exportreach`, `credmatch` y `yarascan` en `opacidad`, cobertura y MCP.
 - [x] Persistir y mostrar telemetría operativa de DeepSeek (tokens de razonamiento y recuperación JSON), sin guardar pensamiento interno.
 - [x] Configurar un corpus YARA reproducible: YARA Forge Core fijado por hash, heurísticas de firmware, fixtures y despliegue read-only.
+- [x] Corregir la severidad YARA externa: una regla sin `meta.severity` queda `info` y pendiente de triaje, no se inventa `high`.
+- [x] Vigilar releases YARA sin autodespliegue, comparar candidata/producción sobre los mismos rootfs y exigir positivos inertes.
+- [x] Integrar `webprobe` en la ventana viva de QEMU y automatizar una campaña de cinco arranques full-system reproducibles.
 
 ## Siguiente
 
-- [ ] Terminar la fiabilidad full-system: cinco arranques con reparación, consola legible, puertos derivados del invitado y `webprobe` durante el boot vivo.
 - [ ] Ampliar el corpus de validación: firmware UEFI de proveedor, variables y módulos completos, y más muestras RTOS/hardware.
 - [ ] Reducir deuda del frontend: navegación coherente, tests de páginas sin cobertura, división del bundle y traducción del texto generado por la API.

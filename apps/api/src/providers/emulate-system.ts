@@ -86,6 +86,7 @@ import {
   QEMU_USER_BY_ARCH,
   firmadyneKernelFor,
 } from './preflight.js';
+import { type WebProbeResult, runWebProbe } from './webprobe.js';
 
 // The kernel catalogue moved up to preflight.ts, which now needs it to answer "can this deployment boot this
 // architecture?" before a runner is ever reached. Re-exported here because this module was its home and both
@@ -99,6 +100,19 @@ const BOOT_TIMEOUT_MS = 120_000;
 const PROBE_INTERVAL_MS = 2000;
 /** Console output kept per stream. A chatty boot must not be able to grow this without bound. */
 const CONSOLE_CAP = 256 * 1024;
+
+/** An HTTP service driven while the qemu process that exposed it was still alive. */
+export interface LiveWebProbeObservation {
+  pass: number;
+  label: string;
+  target: string;
+  host: number;
+  guest: number;
+  protocol: 'http';
+  result: WebProbeResult;
+  /** Present on the console pass, where the service is not the firmware as shipped. */
+  interventions?: string[];
+}
 
 export interface SystemEmulationResult {
   ran: boolean;
@@ -134,6 +148,8 @@ export interface SystemEmulationResult {
   };
   /** One entry per boot, so both passes stay readable after the fact. Consoles are not duplicated here. */
   passes?: SystemEmulationPass[];
+  /** Active HTTP probes completed before their qemu pass was torn down. */
+  webProbes?: LiveWebProbeObservation[];
   /**
    * Where the firmware tried to go, merged across both passes, and whether it was allowed to get there.
    *
@@ -1365,37 +1381,102 @@ export function buildSystemEmulationFindings(subject: string, r: SystemEmulation
   // shape this codebase keeps finding at the bottom of its own defects. An un-attempted pass composes nothing — the
   // reason is on the result for anyone who asks, and a ledger row saying "nobody ran this" would be noise on every
   // image whose firmware answers.
+  const drafts: FindingDraft[] = [draft];
   const c = r.console;
-  if (!c?.attempted || !c.outcome) return [draft];
-  const verdict = classifyConsolePass(c.outcome, c.open?.length ?? 0);
-  const consoleDraft: FindingDraft = {
-    kind: verdict.kind,
-    title: verdict.title,
-    severity: 'info',
-    proofState: verdict.proofState,
-    evidence: {
-      subject,
-      strategy: 'full-system-console',
-      command: c.command ?? '',
-      shellAnswered: c.outcome.shellAnswered,
-      rcsCompleted: c.outcome.rcsCompleted,
-      policyBefore: c.outcome.policyBefore,
-      policyAfter: c.outcome.policyAfter,
-      teardownRan: c.outcome.teardownRan,
-      // Both, always: an empty list means the guest held no listening socket, and that is only readable next to the
-      // flag saying the table was read at all. `listenersRead: false` with `listening: []` is silence, not a finding.
-      listenersRead: c.outcome.listenersRead,
-      listening: c.outcome.listening,
-      open: c.open ?? [],
-      ...(r.buildRev ? { buildRev: r.buildRev } : {}),
-    },
-    rationale: `${verdict.reason} ${c.note ?? ''}`.trim(),
-  };
-  // A shell that never answered still ran a boot, so the channel is honest; what it is not is a measurement.
-  consoleDraft.evidenceChannel = 'emulated_run';
-  const consoleInterventionList = c.interventions ?? [];
-  if (consoleInterventionList.length > 0) consoleDraft.interventions = consoleInterventionList;
-  return [draft, consoleDraft];
+  if (c?.attempted && c.outcome) {
+    const verdict = classifyConsolePass(c.outcome, c.open?.length ?? 0);
+    const consoleDraft: FindingDraft = {
+      kind: verdict.kind,
+      title: verdict.title,
+      severity: 'info',
+      proofState: verdict.proofState,
+      evidence: {
+        subject,
+        strategy: 'full-system-console',
+        command: c.command ?? '',
+        shellAnswered: c.outcome.shellAnswered,
+        rcsCompleted: c.outcome.rcsCompleted,
+        policyBefore: c.outcome.policyBefore,
+        policyAfter: c.outcome.policyAfter,
+        teardownRan: c.outcome.teardownRan,
+        // Both, always: an empty list means the guest held no listening socket, and that is only readable next to the
+        // flag saying the table was read at all. `listenersRead: false` with `listening: []` is silence, not a finding.
+        listenersRead: c.outcome.listenersRead,
+        listening: c.outcome.listening,
+        open: c.open ?? [],
+        ...(r.buildRev ? { buildRev: r.buildRev } : {}),
+      },
+      rationale: `${verdict.reason} ${c.note ?? ''}`.trim(),
+    };
+    // A shell that never answered still ran a boot, so the channel is honest; what it is not is a measurement.
+    consoleDraft.evidenceChannel = 'emulated_run';
+    const consoleInterventionList = c.interventions ?? [];
+    if (consoleInterventionList.length > 0) consoleDraft.interventions = consoleInterventionList;
+    drafts.push(consoleDraft);
+  }
+
+  // A web probe is useful even with zero vulnerabilities: it proves that the live service was actually driven,
+  // records the request budget, and makes "no hits in this bounded probe" distinguishable from "nobody probed".
+  // Its vulnerability rows retain their own severity/proof/channel; the coverage row never upgrades them.
+  for (const probe of r.webProbes ?? []) {
+    const coverage: FindingDraft = {
+      kind: 'system-live-webprobe',
+      title: probe.result.available
+        ? `The live guest HTTP service was actively probed during boot (${probe.result.requests} requests, ${probe.result.findings.length} reproduced finding(s))`
+        : 'The guest port answered, but the live HTTP probe could not fetch its base page',
+      severity: 'info',
+      proofState: probe.result.available ? 'confirmed_in_emulation' : 'needs_runtime_reproduction',
+      evidence: {
+        subject,
+        strategy: 'full-system-live-webprobe',
+        pass: probe.pass,
+        label: probe.label,
+        target: probe.target,
+        host: probe.host,
+        guest: probe.guest,
+        protocol: probe.protocol,
+        available: probe.result.available,
+        requests: probe.result.requests,
+        points: probe.result.points,
+        findings: probe.result.findings.length,
+        ...(r.buildRev ? { buildRev: r.buildRev } : {}),
+      },
+      evidenceChannel: probe.result.available ? 'probe_response' : 'emulated_run',
+      rationale: probe.result.available
+        ? `${probe.result.reason} The probe completed while qemu was alive. Zero reproduced hits means only that this bounded probe found none; it is not a clean bill of health.`
+        : `${probe.result.reason} The answering socket and failed HTTP fetch are recorded separately; no vulnerability claim was made.`,
+    };
+    const probeInterventions = probe.interventions ?? [];
+    if (probeInterventions.length > 0) coverage.interventions = probeInterventions;
+    drafts.push(coverage);
+
+    for (const finding of probe.result.findings) {
+      const reproduced: FindingDraft = {
+        kind: finding.kind,
+        title: finding.title,
+        severity: finding.severity,
+        proofState: finding.proofState,
+        evidence: {
+          ...finding.evidence,
+          subject,
+          strategy: 'full-system-live-webprobe',
+          pass: probe.pass,
+          label: probe.label,
+          target: probe.target,
+          host: probe.host,
+          guest: probe.guest,
+          requests: probe.result.requests,
+          points: probe.result.points,
+          ...(r.buildRev ? { buildRev: r.buildRev } : {}),
+        },
+        rationale: `${finding.rationale} The request was made while the qemu boot was alive.`,
+      };
+      if (finding.evidenceChannel) reproduced.evidenceChannel = finding.evidenceChannel;
+      if (probeInterventions.length > 0) reproduced.interventions = probeInterventions;
+      drafts.push(reproduced);
+    }
+  }
+  return drafts;
 }
 
 /** The mandatory teardown: kill every emulator this provider could have spawned. */
@@ -1532,6 +1613,14 @@ interface BootOutcome {
   timedOut: boolean;
   forwards: { host: number; guest: number; protocol: PortProtocol }[];
   open: { host: number; guest: number }[];
+  /** HTTP probes completed before this boot was killed. */
+  webProbes: Array<{
+    target: string;
+    host: number;
+    guest: number;
+    protocol: 'http';
+    result: WebProbeResult;
+  }>;
   consoleState: { booted: boolean; marker: string | null; panicked: boolean };
   network: GuestNetwork;
   wire: WireObservation | null;
@@ -1599,6 +1688,7 @@ async function bootOnce(
   });
 
   const open: { host: number; guest: number }[] = [];
+  const webProbes: BootOutcome['webProbes'] = [];
   const deadline = Date.now() + (drive?.deadlineMs ?? BOOT_TIMEOUT_MS);
   // The driver runs alongside the probe loop rather than before it, so the ports are being watched while the script
   // is still typing — which is how a teardown mid-script gets attributed to the boot it happened in.
@@ -1624,6 +1714,18 @@ async function bootOnce(
           handle.log(
             `  [${label}] guest port ${f.guest} ANSWERED on host ${f.host} — a service inside the guest replied, not just qemu accepting.`,
           );
+          // This has to happen HERE. Once bootOnce returns, its finally has killed qemu and the forwarded service
+          // no longer exists. HTTP is actively driven; HTTPS is still measured for reachability, but global fetch
+          // deliberately does not disable certificate verification for firmware's self-signed certificates.
+          if (f.protocol === 'http') {
+            const target = `http://127.0.0.1:${f.host}`;
+            handle.log(`  [${label}] actively probing ${target} while this qemu pass is alive.`);
+            const result = await runWebProbe(target, { timeoutMs: 1500, maxRequests: 40 });
+            webProbes.push({ target, host: f.host, guest: f.guest, protocol: 'http', result });
+            handle.log(
+              `  [${label}] live web probe: available=${result.available}, requests=${result.requests}, points=${result.points}, reproduced=${result.findings.length}.`,
+            );
+          }
         }
       }
       if (drive) {
@@ -1667,6 +1769,7 @@ async function bootOnce(
     timedOut,
     forwards,
     open,
+    webProbes,
     consoleState: looksBooted(consoleOutput),
     network: guestNetwork(consoleOutput),
     // A capture that could not be read is a null, never an invented empty observation.
@@ -1948,7 +2051,8 @@ export async function runFullSystem(
   };
 
   const passes: SystemEmulationPass[] = [];
-  const record = (n: number, o: BootOutcome): void => {
+  const liveWebProbes: LiveWebProbeObservation[] = [];
+  const record = (n: number, o: BootOutcome, interventions: string[] = []): void => {
     passes.push({
       pass: n,
       label: o.label,
@@ -1963,6 +2067,14 @@ export async function runFullSystem(
       ...(o.wire ? { wire: o.wire } : {}),
       ...(o.egress ? { egress: o.egress } : {}),
     });
+    for (const probe of o.webProbes) {
+      liveWebProbes.push({
+        pass: n,
+        label: o.label,
+        ...probe,
+        ...(interventions.length > 0 ? { interventions } : {}),
+      });
+    }
   };
 
   try {
@@ -2086,9 +2198,10 @@ export async function runFullSystem(
           deadlineMs: CONSOLE_SETTLE_MS + consoleScriptDurationMs(steps) + CONSOLE_SLACK_MS,
         },
       );
-      record(3, pass3);
       const outcome = readConsoleOutcome(`${pass3.stdout}\n${pass3.stderr}`);
       const note = describeConsole(outcome);
+      const interventions = consoleInterventions(outcome);
+      record(3, pass3, interventions);
       handle.log(`The guest was asked, and answered: ${note}`);
       consolePass = {
         attempted: true,
@@ -2096,7 +2209,7 @@ export async function runFullSystem(
         command: pass3.command,
         outcome,
         note,
-        interventions: consoleInterventions(outcome),
+        interventions,
         open: pass3.open,
       };
     }
@@ -2162,6 +2275,7 @@ export async function runFullSystem(
       ...(rulesetRead ? { ruleset: rulesetRead } : {}),
       ...(unreachable.cause === 'answered' ? {} : { unreachable }),
       console: consolePass,
+      ...(liveWebProbes.length > 0 ? { webProbes: liveWebProbes } : {}),
       inference: {
         kind: inference.kind,
         reason: inference.reason,

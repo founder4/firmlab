@@ -1,0 +1,37 @@
+name: YARA corpus watch
+
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare pinned and latest YARA Forge releases
+        id: check
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/check-yara-release.sh > yara-release-report.json
+      - name: Publish the metadata report
+        if: always()
+        run: |
+          printf '## YARA Forge release check\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat yara-release-report.json >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n\nThis workflow never updates the lock or deploys a corpus.\n' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: yara-release-report
+          path: yara-release-report.json
+      - name: Require candidate evaluation when a newer release exists
+        if: steps.check.outcome == 'failure'
+        run: |
+          echo 'A newer release exists. Run scripts/evaluate-yara-candidate.sh in the homelab before changing the lock.'
+          exit 1

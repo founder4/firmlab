@@ -1220,3 +1220,95 @@ describe('buildSystemEmulationFindings — the console pass is a second row, nev
     expect(drafts[1]?.evidence).toMatchObject({ listening: [], listenersRead: false });
   });
 });
+
+describe('buildSystemEmulationFindings — live web probes remain attributable to their boot', () => {
+  const base: SystemEmulationResult = {
+    ran: true,
+    strategy: 'full-system',
+    proofState: 'confirmed_full_system',
+    reason: 'The kernel booted in the sandbox.',
+    command: 'qemu-system-mips …',
+    stdout: '',
+    stderr: '',
+    timedOut: false,
+  };
+
+  it('records a bounded zero-hit probe as coverage, never as a clean verdict', () => {
+    const drafts = buildSystemEmulationFindings('rootfs', {
+      ...base,
+      webProbes: [
+        {
+          pass: 2,
+          label: 'pass 2 — reach',
+          target: 'http://127.0.0.1:41000',
+          host: 41000,
+          guest: 80,
+          protocol: 'http',
+          result: {
+            available: true,
+            reason: 'The target answered and the bounded probe completed.',
+            target: 'http://127.0.0.1:41000',
+            requests: 40,
+            points: 5,
+            findings: [],
+          },
+        },
+      ],
+    });
+    expect(drafts).toHaveLength(2);
+    expect(drafts[1]).toMatchObject({
+      kind: 'system-live-webprobe',
+      severity: 'info',
+      proofState: 'confirmed_in_emulation',
+      evidenceChannel: 'probe_response',
+    });
+    expect(drafts[1]?.evidence).toMatchObject({ pass: 2, guest: 80, requests: 40, findings: 0 });
+    expect(drafts[1]?.rationale).toContain('not a clean bill of health');
+  });
+
+  it('keeps a reproduced issue and the console interventions that made the service reachable', () => {
+    const interventions = ['Booted with init=/bin/sh.', 'Ran the vendor firewall teardown.'];
+    const drafts = buildSystemEmulationFindings('rootfs', {
+      ...base,
+      webProbes: [
+        {
+          pass: 3,
+          label: 'pass 3 — ask the guest',
+          target: 'http://127.0.0.1:42000',
+          host: 42000,
+          guest: 80,
+          protocol: 'http',
+          interventions,
+          result: {
+            available: true,
+            reason: 'The target answered.',
+            target: 'http://127.0.0.1:42000',
+            requests: 7,
+            points: 2,
+            findings: [
+              {
+                kind: 'web-path-traversal',
+                title: 'Path traversal reproduced',
+                severity: 'high',
+                proofState: 'confirmed_in_emulation',
+                evidenceChannel: 'probe_response',
+                evidence: { path: '/get.cgi', leaked: '/etc/passwd' },
+                rationale: 'The response leaked a root account line in the sandbox.',
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(drafts).toHaveLength(3);
+    expect(drafts[1]?.interventions).toEqual(interventions);
+    expect(drafts[2]).toMatchObject({
+      kind: 'web-path-traversal',
+      severity: 'high',
+      proofState: 'confirmed_in_emulation',
+      evidenceChannel: 'probe_response',
+      interventions,
+    });
+    expect(drafts[2]?.evidence).toMatchObject({ pass: 3, guest: 80, requests: 7, leaked: '/etc/passwd' });
+  });
+});

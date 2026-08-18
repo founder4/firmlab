@@ -832,17 +832,18 @@ const SEVERITY_LADDER: ReadonlyArray<FindingDraft['severity']> = ['info', 'low',
  *
  * FirmLab did not write the rule and will not grade it. When the rule's own `meta:` declares a severity on the
  * ladder this ledger uses, that is the RULE AUTHOR's assessment and it is used as such. Otherwise the match is
- * filed at `high` — which is a PLACEMENT, not an assessment, and the finding says so rather than letting a default
- * read as a judgement FirmLab made.
+ * filed at `info` and marked `pending`: the byte-level match remains confirmed and visible, but an absent grade no
+ * longer turns into a high-severity incident invented by the workbench.
  */
 export function severityForMatch(meta: Record<string, string>): {
   severity: FindingDraft['severity'];
-  source: 'rule-meta' | 'firmlab-placement';
+  source: 'rule-meta' | 'ungraded';
+  triageState: 'rule-graded' | 'pending';
 } {
   const declared = (meta.severity ?? '').trim().toLowerCase();
   const hit = SEVERITY_LADDER.find((s) => s === declared);
-  if (hit) return { severity: hit, source: 'rule-meta' };
-  return { severity: 'high', source: 'firmlab-placement' };
+  if (hit) return { severity: hit, source: 'rule-meta', triageState: 'rule-graded' };
+  return { severity: 'info', source: 'ungraded', triageState: 'pending' };
 }
 
 function plural(n: number, one: string, many: string): string {
@@ -946,12 +947,14 @@ export function buildYaraFindings(input: {
   const drafts: FindingDraft[] = [];
 
   for (const g of matches) {
-    const { severity, source } = severityForMatch(g.meta);
+    const { severity, source, triageState } = severityForMatch(g.meta);
     const listed = g.files.slice(0, MATCHED_FILE_LIST_CAP);
     const attribution = g.ruleFile ? `${g.corpus ?? 'the corpus'} · ${g.ruleFile}` : `namespace ${g.namespace}`;
     drafts.push({
       kind: 'yara-rule-match',
-      title: `YARA rule '${g.rule}' matched ${plural(g.files.length, 'file', 'files')} (rule from ${attribution})`,
+      title: `YARA rule '${g.rule}' matched ${plural(g.files.length, 'file', 'files')} (rule from ${attribution})${
+        triageState === 'pending' ? ' — severity pending triage' : ''
+      }`,
       severity,
       proofState: 'static_confirmed',
       evidence: {
@@ -966,6 +969,8 @@ export function buildYaraFindings(input: {
         filesNotListed: Math.max(0, g.files.length - listed.length),
         filesScanned: scan.filesScanned,
         severityFrom: source,
+        severityTriage: triageState,
+        ...(g.meta.severity ? { declaredSeverity: g.meta.severity } : {}),
       },
       rationale: [
         `The YARA rule '${g.rule}' matched ${plural(g.files.length, 'file', 'files')} of the ${scan.filesScanned}`,
@@ -975,7 +980,7 @@ export function buildYaraFindings(input: {
         `firmware. ${
           source === 'rule-meta'
             ? "The severity above is the rule's own `meta: severity`."
-            : 'The rule declares no severity, so this is filed at `high` as a placement, not as an assessment FirmLab made.'
+            : 'The rule declares no supported severity, so this is filed at `info` with severity pending triage. The match remains a confirmed byte-level fact; its impact has not been assessed.'
         }`,
         `Read the rule (${g.ruleFile ?? g.namespace}) before acting on it.`,
       ].join(' '),

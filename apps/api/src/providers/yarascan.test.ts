@@ -507,7 +507,7 @@ describe("buildYaraFindings — the match is the rule's claim", () => {
 
   it('names the rule and the corpus it came from, and does not assert the family as established', () => {
     expect(match?.title).toBe(
-      "YARA rule 'Linux_Mirai_Variant' matched 2 files (rule from /opt/yara-rules · malware/mirai.yar)",
+      "YARA rule 'Linux_Mirai_Variant' matched 2 files (rule from /opt/yara-rules · malware/mirai.yar) — severity pending triage",
     );
     // The rule's name may say Mirai; the title must not say this firmware IS Mirai.
     expect(match?.title).not.toMatch(/this firmware (is|contains)/i);
@@ -523,7 +523,8 @@ describe("buildYaraFindings — the match is the rule's claim", () => {
       ruleFile: 'malware/mirai.yar',
       tags: ['linux', 'botnet'],
       filesMatched: 2,
-      severityFrom: 'firmlab-placement',
+      severityFrom: 'ungraded',
+      severityTriage: 'pending',
     });
   });
 
@@ -535,14 +536,19 @@ describe("buildYaraFindings — the match is the rule's claim", () => {
 
 describe('severityForMatch', () => {
   it("uses the rule author's own severity when the rule declares one on this ledger's ladder", () => {
-    expect(severityForMatch({ severity: 'Critical' })).toEqual({ severity: 'critical', source: 'rule-meta' });
+    expect(severityForMatch({ severity: 'Critical' })).toEqual({
+      severity: 'critical',
+      source: 'rule-meta',
+      triageState: 'rule-graded',
+    });
   });
 
-  it('files an ungraded rule at high as a PLACEMENT, and says so rather than pretending to have judged it', () => {
-    expect(severityForMatch({})).toEqual({ severity: 'high', source: 'firmlab-placement' });
+  it('files an ungraded rule at info with triage pending instead of inventing a high-severity assessment', () => {
+    expect(severityForMatch({})).toEqual({ severity: 'info', source: 'ungraded', triageState: 'pending' });
     expect(severityForMatch({ severity: 'catastrophic' })).toEqual({
-      severity: 'high',
-      source: 'firmlab-placement',
+      severity: 'info',
+      source: 'ungraded',
+      triageState: 'pending',
     });
   });
 });
