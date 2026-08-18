@@ -10,7 +10,6 @@ import {
   type SystemEmulationResult,
   buildSystemEmulationFindings,
   runChrootService,
-  runFullSystem,
 } from '../providers/emulate-system.js';
 import {
   type PlanContext,
@@ -19,10 +18,10 @@ import {
   runUserModeEmulation,
 } from '../providers/emulate.js';
 import type { ExtractResult } from '../providers/extract.js';
+import { runFullSystemFromRootfs } from '../providers/full-system-run.js';
 import { startJob } from '../providers/jobs.js';
 import { computeRuntimeCapabilities } from '../providers/preflight.js';
 import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
-import { ensureRootfsImage } from '../providers/rootfs-image.js';
 import { getImage, listJobs, updateBinaryEmulationStatus } from '../store.js';
 import { rootfsArch } from './symreach.js';
 
@@ -157,26 +156,7 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
 
     if (body.rung === 'full-system') {
       const jobId = startJob(id, 'emulate', { rung: 'full-system' }, async (handle) => {
-        // Assemble the disk image first. Nothing used to: the rung was handed `${rootfsPath}.img` and every run
-        // died on a file no code path created, which the guided recipe expected an operator to build by hand.
-        const image = await ensureRootfsImage(rootfsPath, arch, handle);
-        if (!image.available || !image.imagePath) {
-          const blocked: SystemEmulationResult = {
-            ran: false,
-            strategy: 'full-system',
-            proofState: 'blocked_by_platform',
-            reason: image.reason,
-            command: '',
-            stdout: '',
-            stderr: '',
-            timedOut: false,
-          };
-          return onSystemEmulationResult(id, identity, 'system-boot', blocked);
-        }
-        // `image.repair` rather than re-deriving it: only the builder knows what it appended, and a verdict that
-        // cannot say whether the firewall was torn down for this boot is a claim about a different artefact.
-        //
-        // And the image's PRIOR full-system boots, read here because only the route can: three causal claims were
+        // The image's PRIOR full-system boots: three causal claims were
         // drawn from single boots of this rung and all three were wrong, so a verdict now travels with how many
         // boots stand behind it. Stored results are data written by older builds, so every field is read
         // defensively — a row that carries no `open` array is counted as a boot with zero open ports rather than
@@ -199,7 +179,7 @@ export async function emulateRoutes(app: FastifyInstance): Promise<void> {
             // than as a repeat — the same rule as the image's build stamp.
             buildRev: typeof res.buildRev === 'string' ? res.buildRev : undefined,
           }));
-        const r = await runFullSystem(arch, image.imagePath, 8080, handle, rootfsPath, image.repair, priorBoots);
+        const r = await runFullSystemFromRootfs(arch, rootfsPath, 8080, handle, priorBoots);
         return onSystemEmulationResult(id, identity, 'system-boot', r);
       });
       return reply.status(202).send({ jobId });

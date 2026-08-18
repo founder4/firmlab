@@ -16,9 +16,10 @@ import { type FindingDraft, syncFindings } from '../findings.js';
 import { loadLlmConfig } from '../llm.js';
 import type { LlmConfig } from '../llm.js';
 import { type DecompileResult, resolveInsideRootfs, runDecompile } from '../providers/decompile.js';
-import { buildSystemEmulationFindings, runChrootService, runFullSystem } from '../providers/emulate-system.js';
+import { buildSystemEmulationFindings, runChrootService } from '../providers/emulate-system.js';
 import { buildUserEmulationFindings, emulatorRefusal, runUserModeEmulation } from '../providers/emulate.js';
 import { type ExtractResult, runExtraction } from '../providers/extract.js';
+import { runFullSystemFromRootfs } from '../providers/full-system-run.js';
 import { detectIsolation, runIsolated } from '../providers/isolate.js';
 import { startJob } from '../providers/jobs.js';
 import { QEMU_USER_BY_ARCH, type RuntimeCapabilities, computeRuntimeCapabilities } from '../providers/preflight.js';
@@ -651,7 +652,7 @@ async function runApprovedEmulation(
         return r;
       }
       if (chosen.rung === 'full-system') {
-        const r = await runFullSystem(arch, rootfsPath, 8080, h, rootfsPath);
+        const r = await runFullSystemFromRootfs(arch, rootfsPath, 8080, h);
         syncFindings(session.imageId, 'emulate-system', buildSystemEmulationFindings('system-boot', r));
         return r;
       }
