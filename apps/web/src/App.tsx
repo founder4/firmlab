@@ -109,9 +109,9 @@ function NavRow({
  *     An idle animation there would be the definition of the thing you notice tens of times a day and grow to
  *     hate. It moves on press and never on its own.
  *  2. **It is invisible to assistive tech.** `aria-hidden` and out of the tab order — announcing a control that
- *     does nothing, to someone who cannot see the hearts, is noise dressed as inclusion. "FirmLab" is read from
+ *     does nothing, to someone who cannot see the sparks, is noise dressed as inclusion. "FirmLab" is read from
  *     the heading beside it, once.
- *  3. **`prefers-reduced-motion` removes the motion, not the response.** The tumble and the hearts go; the press
+ *  3. **`prefers-reduced-motion` removes the motion, not the response.** The tumble and the sparks go; the press
  *     scale stays, because that one is feedback rather than decoration and its absence would read as a dead
  *     control.
  *
@@ -139,20 +139,21 @@ function BrandMark(): JSX.Element {
       { duration: 520, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
     );
 
-    // …and the hearts the badge is covered in, let loose. Three, drifting apart, so it reads as a puff rather
-    // than a column. They are appended to the button and removed when they finish — no state, nothing to leak.
+    // …and three sparks, let loose. Drifting apart so it reads as a puff rather than a column — the chip
+    // signalling, not a heart-burst; the mark changed from a mascot to an instrument, and a borrowed heart-emoji
+    // trope did not survive that. They are appended to the button and removed when they finish — no state,
+    // nothing to leak.
     //
     // The flight is 24px up and wide rather than tall, and that is measured rather than chosen: `.sidebar` has
     // `overflow-y: auto` and 14px of padding, `.brand` adds 6, so there are TWENTY pixels above the mark before
     // the sidebar clips. The first version rose 42px and spent more than half its arc invisible.
     for (let i = 0; i < 3; i++) {
-      const heart = document.createElement('span');
-      heart.className = 'brand-heart';
-      heart.textContent = '♥';
-      heart.setAttribute('aria-hidden', 'true');
-      el.appendChild(heart);
+      const pulse = document.createElement('span');
+      pulse.className = 'brand-pulse';
+      pulse.setAttribute('aria-hidden', 'true');
+      el.appendChild(pulse);
       const drift = (i - 1) * 22 + (i === 1 ? 0 : 5);
-      heart
+      pulse
         .animate(
           [
             { transform: 'translate(0, 0) scale(0.5)', opacity: 0 },
@@ -162,7 +163,7 @@ function BrandMark(): JSX.Element {
           { duration: 820 + i * 80, delay: i * 70, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
         )
         .finished.catch(() => undefined)
-        .finally(() => heart.remove());
+        .finally(() => pulse.remove());
     }
   }, []);
 
@@ -505,11 +506,7 @@ function Shell(): JSX.Element {
 
 export function App(): JSX.Element {
   return (
-    // The v7 flags are opted into explicitly rather than left to warn on every dev boot. Both are inert here
-    // and that is the point of taking them now: there are no splat routes for relativeSplatPath to re-resolve,
-    // and startTransition only marks router state updates non-urgent, which this shell already tolerates —
-    // so the upgrade is a no-op today and will not become a behavioural surprise on the day v7 lands.
-    <HashRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <HashRouter>
       <Shell />
       <Onboarding />
       <Toaster />

@@ -309,13 +309,17 @@ a:hover {
   padding: 6px 8px 16px;
 }
 /*
- * The product mark. Round rather than the shell's usual `--r-md`, because the artwork IS a circular badge and a
- * rounded-square frame would show four corners of its white plate against a dark sidebar. `scale(1.03)` eats the
- * thin white margin the source PNG carries outside its pink ring — cheaper and more reversible than editing
- * transparency into the asset, and it keeps the file byte-for-byte as supplied.
+ * The product mark. `--r-lg`, not a circle: the artwork is a chip silhouette with pins on its left and right
+ * edges, and a circular mask would clip them at the corners — round only ever fit the old badge-shaped artwork,
+ * which was drawn as a circular sticker to begin with.
  *
- * It is `position: relative` and deliberately NOT `overflow: hidden`: the hearts are appended inside this button
- * and are supposed to escape it. Clipping them to a 44px circle would leave nothing to see.
+ * The plate sits on `--bg-elev`, not `--bg-inset`: the chip's own fill is near-ink (`#08090b`), and in the dark
+ * theme `--bg-inset` (`#0a0c0e`) sits close enough to that same value that the chip would read as a hole cut in
+ * the sidebar rather than a shape sitting on it. `--bg-elev` is a full step lighter in dark and pure white in
+ * light, so the silhouette stays legible in both instead of merging into its own backing plate.
+ *
+ * It is `position: relative` and deliberately NOT `overflow: hidden`: the pulses are appended inside this button
+ * and are supposed to escape it. Clipping them to the 44px plate would leave nothing to see.
  */
 .brand-mark {
   position: relative;
@@ -324,8 +328,8 @@ a:hover {
   flex: none;
   padding: 0;
   border: 0;
-  border-radius: 50%;
-  background: var(--bg-inset);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
   cursor: pointer;
   /* Only `transform`: `all` here would also animate the border-radius and the background on every theme flip. */
   transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
@@ -335,8 +339,9 @@ a:hover {
   display: block;
   width: 100%;
   height: 100%;
-  border-radius: 50%;
-  object-fit: cover;
+  /* `contain`, never `cover`: the pin stubs are the silhouette's load-bearing edge, and cropping them to fill a
+     frame is exactly the mistake a circular mask made on the old artwork, just moved to a rectangular one. */
+  object-fit: contain;
   pointer-events: none;
   user-select: none;
 }
@@ -350,16 +355,21 @@ a:hover {
 .brand-mark:active {
   transform: scale(0.97);
 }
-/* The hearts the badge is covered in, let loose on a click. Positioned from the top so they rise out of the mark
-   rather than out of its centre; the animation itself lives in `BrandMark`, where it can be cancelled. */
-.brand-heart {
+/* Three sparks, let loose on a click — the mark's own accent colour reads as the chip signalling rather than a
+   borrowed heart-emoji trope, now that the artwork it sits on is a chip, not a mascot. Positioned from the top
+   so they rise out of the mark rather than out of its centre; the animation itself lives in `BrandMark`, where
+   it can be cancelled. Drawn as a plain filled circle, not a glyph, so there is no font/emoji rendering to vary
+   across platforms. */
+.brand-pulse {
   position: absolute;
   top: 2px;
   left: 50%;
-  margin-left: -6px;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--sev-critical, #e0524f);
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-line);
   pointer-events: none;
   will-change: transform, opacity;
 }

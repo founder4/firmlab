@@ -52,7 +52,7 @@ describe('Dashboard image filter', () => {
   it('narrows the list to images matching the query', async () => {
     mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips'), image('b', 'camera.img', 'arm')]);
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <Dashboard />
       </MemoryRouter>,
     );
@@ -72,7 +72,7 @@ describe('Dashboard coverage column', () => {
     mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips'), image('b', 'camera.img', 'arm')]);
     mockApi.coverageAll.mockResolvedValue([coverage('a', 0, 12), coverage('b', 12, 12)]);
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <Dashboard />
       </MemoryRouter>,
     );
@@ -85,7 +85,7 @@ describe('Dashboard coverage column', () => {
     mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips')]);
     mockApi.coverageAll.mockRejectedValue(new Error('offline'));
     render(
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <Dashboard />
       </MemoryRouter>,
     );
@@ -113,10 +113,7 @@ describe('App shell', () => {
       mockApi.listImages.mockResolvedValue([image('a', 'router-v1.bin', 'mips')]);
       mockApi.getImage.mockResolvedValue(image('a', 'router-v1.bin', 'mips'));
       render(
-        <MemoryRouter
-          initialEntries={['/image/a/sbom']}
-          future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-        >
+        <MemoryRouter initialEntries={['/image/a/sbom']}>
           <Sidebar onNavigate={() => undefined} />
         </MemoryRouter>,
       );
@@ -137,7 +134,7 @@ describe('App shell', () => {
 
     it('shows no section nav at all when no firmware is active', () => {
       render(
-        <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <MemoryRouter>
           <Sidebar onNavigate={() => undefined} />
         </MemoryRouter>,
       );
@@ -253,7 +250,7 @@ describe('the brand mark', () => {
     mockApi.listImages.mockResolvedValue([]);
     const { container } = render(<App />);
     fireEvent.click(markOf(container));
-    // The tumble plus one animation per heart.
+    // The tumble plus one animation per spark.
     expect(animate.mock.calls.length).toBeGreaterThan(1);
   });
 
@@ -267,7 +264,7 @@ describe('the brand mark', () => {
     expect(animate).not.toHaveBeenCalled();
   });
 
-  it('leaves no hearts behind in the DOM after a click', async () => {
+  it('leaves no sparks behind in the DOM after a click', async () => {
     // They are appended to the button and removed when they finish. A leak here would grow the shell's DOM for
     // every click, forever, on the one element that is on screen all day.
     const animate = setup(false);
@@ -278,6 +275,6 @@ describe('the brand mark', () => {
     expect(animate).toHaveBeenCalled();
     // `waitFor`, not one microtask: the cleanup hangs off `finished.catch().finally()`, which is two chained
     // promises deep. A single tick asserts before the removal and passes for the wrong reason.
-    await waitFor(() => expect(mark.querySelectorAll('.brand-heart')).toHaveLength(0));
+    await waitFor(() => expect(mark.querySelectorAll('.brand-pulse')).toHaveLength(0));
   });
 });

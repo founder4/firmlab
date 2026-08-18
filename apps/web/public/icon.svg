@@ -1,36 +1,32 @@
 <!--
-  The tab icon.
+  The tab icon: the same chip-and-key mark as `logo.png`, not a separate redraw.
 
-  NOT the badge shrunk down. The artwork is a dense illustration — a binary ring, six hearts, two shields, three
-  stars and a chip carrying readable code — and at the 16 CSS pixels a browser tab actually gives you, all of that
-  resolves to a green smudge. So the favicon is a redraw that keeps only what survives at that size: the pink ring,
-  the green field, and the chip's face. Those three shapes are what makes the mark recognisable, and they are
-  legible down to 16px.
+  The earlier mascot needed two different drawings because its full artwork — a binary ring, six hearts, two
+  shields, three stars and a chip carrying readable code — resolved to a green smudge at 16 CSS pixels, so this
+  file used to keep only the three shapes that survived: the pink ring, the green field, the chip's face. This
+  mark doesn't have that problem. It was built from one rule (every stroke — ring, bar, elbow, pad, pin — is the
+  same thickness) specifically so there is nothing left to simplify away; it was verified at a real rendered
+  16x16 before being committed here, not assumed to scale down cleanly because it looks clean at 256px.
 
-  The full artwork still ships as `logo.png` and is used where the detail can be seen: the sidebar at 44px, the
-  apple-touch icon, and the PWA manifest.
-
-  Colours are sampled from the source badge so the two read as one mark rather than as two logos.
+  The viewBox is cropped tight to the drawn content (2-unit margin, not the roomier square crop `logo.png` uses)
+  because at 16px every pixel of fill is legible pixel budget — the wider sidebar mark can afford the breathing
+  room, a tab icon cannot.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img"
-     aria-label="FirmLab">
-  <!-- Pink rim, then the darker band the binary sits on in the full artwork, then the field. Three rings rather
-       than one because at 16px the rim is the silhouette and the band is what stops it reading as a flat dot. -->
-  <circle cx="32" cy="32" r="31" fill="#F4B9C6" />
-  <circle cx="32" cy="32" r="28" fill="#4F8A5B" />
-  <circle cx="32" cy="32" r="23.5" fill="#B9E4B4" />
-
-  <!-- The chip. Its pins are drawn as four stubs only — at small sizes more pins turn the silhouette to fringe. -->
-  <g fill="#A9B6E6" stroke="#5B2E4A" stroke-width="2.4" stroke-linecap="round">
-    <path d="M22 17.5v-4M32 17.5v-4M42 17.5v-4M22 46.5v4M32 46.5v4M42 46.5v4" />
-    <rect x="16" y="17" width="32" height="30" rx="6" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="5 16 54 32" width="54" height="32" role="img" aria-label="FirmLab">
+  <rect x="11" y="18" width="42" height="28" rx="5" ry="5" fill="#08090b" />
+  <g stroke="#08090b" stroke-width="3.5" stroke-linecap="round">
+    <line x1="7" y1="23" x2="11" y2="23" />
+    <line x1="7" y1="29" x2="11" y2="29" />
+    <line x1="7" y1="35" x2="11" y2="35" />
+    <line x1="7" y1="41" x2="11" y2="41" />
+    <line x1="53" y1="23" x2="57" y2="23" />
+    <line x1="53" y1="29" x2="57" y2="29" />
+    <line x1="53" y1="35" x2="57" y2="35" />
+    <line x1="53" y1="41" x2="57" y2="41" />
   </g>
-
-  <!-- The face: two eyes and a smile, the part that carries the whole mark's personality. Sized so the eyes stay
-       two distinct dots at 16px rather than merging into a bar. -->
-  <g fill="#5B2E4A">
-    <circle cx="26" cy="29" r="3.2" />
-    <circle cx="38" cy="29" r="3.2" />
-  </g>
-  <path d="M27.5 37.5a5.5 5.5 0 0 0 9 0" fill="none" stroke="#5B2E4A" stroke-width="2.4" stroke-linecap="round" />
+  <circle cx="22" cy="26" r="6.5" fill="#c9f23a" />
+  <circle cx="22" cy="26" r="3" fill="#08090b" />
+  <rect x="28.5" y="24.25" width="15.5" height="3.5" fill="#c9f23a" />
+  <rect x="42.25" y="24.25" width="3.5" height="15.75" fill="#c9f23a" />
+  <rect x="40.5" y="37" width="7" height="7" fill="#c9f23a" />
 </svg>
