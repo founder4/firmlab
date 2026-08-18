@@ -11,7 +11,7 @@
  * payload builders, the injection-point parser, and the detectors are PURE and unit-tested; the runner only does
  * bounded HTTP and composes them, with an injectable fetch so tests never touch the network.
  */
-import { randomBytes } from 'node:crypto';
+import { constants as cryptoConstants, randomBytes } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import type { EvidenceChannel, FindingSeverity, ProofState } from '@firmlab/core';
@@ -168,6 +168,9 @@ export function fetchFirmwareLoopback(
               // This is scoped to the guarded loopback socket above; it never changes Node's global TLS policy.
               minVersion: 'TLSv1' as const,
               ciphers: 'DEFAULT@SECLEVEL=0',
+              // Some vendor stacks (the WR940N included) predate RFC 5746. OpenSSL 3 refuses their initial
+              // handshake as "unsafe legacy renegotiation" unless this per-socket compatibility bit is present.
+              secureOptions: cryptoConstants.SSL_OP_LEGACY_SERVER_CONNECT,
             }
           : {}),
       },
@@ -215,6 +218,7 @@ export async function runWebProbe(
   const maxRequests = opts.maxRequests ?? 200;
   const nonce = opts.nonce ?? `FLZ${randomNonce()}`;
   const target = baseUrl.replace(/\/+$/, '');
+  let lastTransportError = '';
 
   const get = async (url: string): Promise<{ ok: boolean; status: number; body: string } | null> => {
     const ac = new AbortController();
@@ -222,7 +226,8 @@ export async function runWebProbe(
     try {
       const res = await doFetch(url, { signal: ac.signal });
       return { ok: res.ok, status: res.status, body: (await res.text()).slice(0, 200_000) };
-    } catch {
+    } catch (error) {
+      lastTransportError = error instanceof Error ? error.message : String(error);
       return null;
     } finally {
       clearTimeout(timer);
@@ -233,7 +238,9 @@ export async function runWebProbe(
   if (!home) {
     return {
       available: false,
-      reason: `Target ${target} is not reachable — boot the service (chroot-service / full-system) first, then probe.`,
+      reason: `Target ${target} is not reachable — boot the service (chroot-service / full-system) first, then probe.${
+        lastTransportError ? ` Transport error: ${lastTransportError}` : ''
+      }`,
       target,
       requests: 0,
       points: 0,
