@@ -2,8 +2,10 @@
  * Minimal in-process job runner with bounded concurrency. Long-running providers (extraction, emulation, SBOM,
  * decompilation, gitleaks, diff) run as jobs so the UI can poll status/log without blocking a request. Jobs are
  * persisted in SQLite; this runner moves a job through queued → running → done/error and streams log lines into
- * the row. At most FIRMLAB_MAX_CONCURRENT_JOBS run at once (default 2) so a burst of heavy tool invocations
- * (binwalk -Me + syft + QEMU …) can't exhaust CPU/RAM; the rest wait in `queued`.
+ * the row. Completed rows are durable, but executable closures are intentionally process-local: startup marks
+ * leftover queued/running rows as interrupted rather than claiming to resume them. At most
+ * FIRMLAB_MAX_CONCURRENT_JOBS run at once (default 2) so a burst of heavy tool invocations (binwalk -Me + syft +
+ * QEMU …) can't exhaust CPU/RAM; the rest wait in `queued`.
  */
 import { randomUUID } from 'node:crypto';
 import { type JobKind, appendJobLog, insertJob, updateJobStatus } from '../store.js';

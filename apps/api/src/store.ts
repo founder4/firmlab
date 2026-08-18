@@ -1,12 +1,19 @@
 /**
  * SQLite persistence for the workbench (better-sqlite3, synchronous). One database under the data root holds
  * uploaded image metadata + cached static analysis, and long-running jobs (extraction, emulation, SBOM,
- * decompilation). Survives API restarts so an analysis session is durable.
+ * decompilation). Completed results survive API restarts; active in-process work is reconciled explicitly at
+ * startup because its executable closure cannot be persisted.
  */
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
 import { OPERATOR_ASSERTION } from '@firmlab/core';
 import { OPERATOR_SOURCE_PREFIX } from './operator-findings.js';
 import { DB_PATH, ensureDataDirs } from './paths.js';
+
+// Vite 5 predates `node:sqlite` and tries to resolve a static import as a package named `sqlite` in tests.
+// Loading the same built-in through Node's require bridge keeps the production dependency native while allowing
+// store integration tests to exercise the real database instead of a SQL mock.
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+type FirmLabDatabase = InstanceType<typeof DatabaseSync>;
 
 export type JobKind =
   | 'extract'
@@ -181,9 +188,9 @@ function asParams(row: object): SqlParams {
   return row as unknown as SqlParams;
 }
 
-let db: DatabaseSync | null = null;
+let db: FirmLabDatabase | null = null;
 
-export function getDb(): DatabaseSync {
+export function getDb(): FirmLabDatabase {
   if (db) return db;
   ensureDataDirs();
   db = new DatabaseSync(DB_PATH);
@@ -531,6 +538,35 @@ export function updateJobStatus(id: string, status: JobStatus, resultJson: strin
   getDb()
     .prepare('UPDATE jobs SET status = ?, resultJson = ?, error = ?, updatedAt = ? WHERE id = ?')
     .run(status, resultJson, error, Date.now(), id);
+}
+
+/**
+ * Close over the gap between durable job rows and the deliberately in-process runner. A queued/running row can
+ * survive a process exit, but the `work` closure that could advance it cannot. On startup, turn every such row
+ * into an explicit terminal failure instead of leaving the UI polling forever or pretending it can be resumed.
+ *
+ * Both statuses are reconciled: a queued job has not started, but its closure lived only in the old process just
+ * like a running job's closure did. Completed/error rows are immutable here. Returns the number of rows changed
+ * so startup can report recovery work. `now` is injectable only to make the persisted transition deterministic
+ * under test.
+ */
+export function reconcileInterruptedJobs(now = Date.now()): number {
+  const runningError =
+    'interrupted by API restart while running; the in-memory job cannot be resumed — retry to start a new job';
+  const queuedError =
+    'discarded after API restart while queued; the in-memory job cannot be resumed — retry to start a new job';
+  const result = getDb()
+    .prepare(
+      `UPDATE jobs
+       SET status = 'error',
+           updatedAt = ?,
+           resultJson = NULL,
+           error = CASE status WHEN 'running' THEN ? ELSE ? END,
+           log = log || CASE status WHEN 'running' THEN ? ELSE ? END
+       WHERE status IN ('queued', 'running')`,
+    )
+    .run(now, runningError, queuedError, `RECOVERY: ${runningError}\n`, `RECOVERY: ${queuedError}\n`);
+  return Number(result.changes);
 }
 
 export function getJob(id: string): JobRow | undefined {

@@ -111,8 +111,10 @@ flowchart TB
 
 **Why this shape?** The pure core means the product has value with zero tools installed and is fully
 unit-testable without Docker. Slow work (extraction, emulation, fuzzing) runs as **persisted SQLite jobs** with
-streamed logs, so the UI polls without blocking and results survive a restart. The agent and research layers are
-strictly *additive* — turn both flags off and FirmLab is a deterministic, offline workbench.
+streamed logs, so the UI polls without blocking. Completed results survive a restart; queued or running work is
+marked as interrupted at the next startup and must be retried because its in-process executable cannot be
+rehydrated. The agent and research layers are strictly *additive* — turn both flags off and FirmLab is a
+deterministic, offline workbench.
 
 ## How an image flows through the system
 

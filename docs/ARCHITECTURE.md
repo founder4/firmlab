@@ -41,7 +41,9 @@ bytes are only re-read for extraction/emulation. Entropy uses an adaptive window
 ~2048 regardless of image size.
 
 **Jobs for anything slow.** Extraction and emulation run as persisted jobs (SQLite rows) with streamed logs,
-so the UI polls status without blocking a request and results survive a restart.
+so the UI polls status without blocking a request. Completed results survive a restart. Queued/running rows do
+too, but their process-local executable closures do not: startup marks those jobs as interrupted and the
+operator must retry them; FirmLab does not claim to resume work it cannot rehydrate.
 
 **Emulation as a planner + a runner.** `planEmulation` turns identity (+ extracted rootfs) into ranked,
 arch-aware recipes with concrete commands and a runnable flag. Only user-mode QEMU is auto-executed (bounded

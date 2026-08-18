@@ -59,7 +59,7 @@ import { webprobeRoutes } from './routes/webprobe.js';
 import { yarascanRoutes } from './routes/yarascan.js';
 import { registerSecurity } from './security.js';
 import { getFlagOverrides, getLlmOverrides } from './settings.js';
-import { getDb } from './store.js';
+import { getDb, reconcileInterruptedJobs } from './store.js';
 
 const HOST = process.env.FIRMLAB_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.FIRMLAB_PORT ?? 8799);
@@ -69,8 +69,15 @@ async function main(): Promise<void> {
   ensureDataDirs();
   getDb(); // initialize schema early so a bad data dir fails fast
 
+  // Job rows are durable, their executable closures are not. Resolve leftovers before accepting requests so a
+  // restart cannot leave the UI polling a queued/running row that no process is capable of advancing.
+  const interruptedJobs = reconcileInterruptedJobs();
+  if (interruptedJobs > 0) {
+    console.warn(`Reconciled ${interruptedJobs} queued/running job(s) interrupted by the previous API restart.`);
+  }
+
   // Let stored operator overrides reach the lane loaders. Installed here rather than imported by the config
-  // modules themselves, which must stay free of the store: vitest cannot resolve node:sqlite. With no provider
+  // modules themselves, which must stay free of persistence and filesystem initialization. With no provider
   // installed — a unit test, a one-off script — the loaders see exactly process.env, as they always did.
   // Both populations of stored override reach `effectiveEnv` through one provider. They are merged HERE rather
   // than in the store, so `getFlagOverrides` keeps its narrow filter and a stored API key can never be returned
