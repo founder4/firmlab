@@ -85,6 +85,8 @@ export function clampRung(requested: EmulationRung, strategy: RuntimeStrategy): 
 // === Node ① Triage ===
 
 export interface TriageContext {
+  /** Operator intent guides prioritisation, but never overrides measured evidence or proof state. */
+  goal: string | null;
   identity: {
     firmwareClass: string;
     arch: string;
@@ -130,12 +132,15 @@ Given the static-analysis summary of one firmware image, decide:
 - rationale: 1-3 sentences citing the specific inputs (entropy, signatures, secrets, corpus priors) behind your call.
 
 Corpus priors (same device family seen before, reused credentials) are hints worth checking, never conclusions.
+The optional operator goal may prioritize which evidenced surface matters, but it cannot create facts, override the
+measured firmware identity, or raise confidence. Generic byte signatures that conflict with a strong container or
+firmware-volume identity are likely false positives unless several coherent measurements support the reclassification.
 Respond with ONLY a JSON object, no prose or code fences:
 {"resolvedClass": string, "classConfidence": "low"|"medium"|"high", "shouldExtract": boolean,
  "extractionCascade": string[], "attackSurface": string[], "rationale": string}`;
 
 /** Assemble the deterministic triage context for an image, or null if it has no cached analysis. */
-export async function gatherTriageContext(imageId: string): Promise<TriageContext | null> {
+export async function gatherTriageContext(imageId: string, goal: string | null = null): Promise<TriageContext | null> {
   const { getImage, listJobs } = await import('../store.js');
   const { corpusOverview, corpusRefs, deviceFamilyKey } = await import('../corpus.js');
   const row = getImage(imageId);
@@ -155,6 +160,7 @@ export async function gatherTriageContext(imageId: string): Promise<TriageContex
   const extracted = listJobs(imageId).some((j) => j.kind === 'extract' && j.status === 'done');
 
   return {
+    goal,
     identity: {
       firmwareClass: identity.firmwareClass,
       arch: identity.arch,
@@ -220,6 +226,8 @@ export async function runTriageNode(ctx: TriageContext, cfg: LlmConfig): Promise
 // === Node ② Target selection ===
 
 export interface TargetSelectionContext {
+  /** Operator intent guides prioritisation, but does not change the deterministic runtime ceiling. */
+  goal: string | null;
   identity: { firmwareClass: string; arch: string };
   capabilities: { strategy: RuntimeStrategy; proofCeiling: string; reason: string; maxRung: EmulationRung };
   binaries: { path: string; arch: string | null; networkFacing: boolean; hardening: string; imports: string | null }[];
@@ -256,6 +264,8 @@ You are given the first-class binaries table, the findings summary, corpus cross
 deterministic runtime preflight (\`capabilities\`). The preflight's \`maxRung\` is a HARD ceiling: never propose a
 rung above it. If maxRung is "none" (static-only or unsupported arch), you may still prioritize binaries for static
 review but must set every rung to "none". Prefer network-facing, weakly-hardened binaries with dangerous imports.
+The optional operator goal may rank candidates, but it never changes capabilities, proof state, or measured facts.
+Choose at most three targets; a short, evidence-backed queue is more useful than enumerating every binary.
 
 For each chosen target return {path, rung, priority, reason}. rung ∈ {"none","qemu-user","chroot-service",
 "full-system","rtos-renode"} and must respect maxRung. Ground every choice in the data (hardening flags, imports,
@@ -267,6 +277,7 @@ network-facing, corpus reuse). Respond with ONLY a JSON object, no prose or code
 export async function gatherTargetSelectionContext(
   imageId: string,
   caps: RuntimeCapabilities,
+  goal: string | null = null,
 ): Promise<TargetSelectionContext> {
   const { listBinaries, listFindings } = await import('../store.js');
   const { corpusRefs } = await import('../corpus.js');
@@ -288,6 +299,7 @@ export async function gatherTargetSelectionContext(
   }
 
   return {
+    goal,
     identity: { firmwareClass: caps.firmwareClass, arch: caps.arch },
     capabilities: {
       strategy: caps.strategy,
@@ -336,7 +348,8 @@ export function parseTargetSelectionDecision(text: string, strategy: RuntimeStra
         reason: asString(t.reason, ''),
       };
     })
-    .filter((t) => t.path !== '');
+    .filter((t) => t.path !== '')
+    .slice(0, 3);
 
   const emulationPlan = targets
     .filter((t) => t.rung !== 'none')

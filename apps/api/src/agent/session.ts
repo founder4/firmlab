@@ -161,7 +161,7 @@ async function orchestrate(session: AgentSessionRow, cfg: LlmConfig): Promise<vo
 
   // --- Node ① Triage ---
   if (!gov.check().ok) return void persist(session, 'halted', gov, gov.check().reason);
-  const triageCtx = await gatherTriageContext(imageId);
+  const triageCtx = await gatherTriageContext(imageId, session.goal);
   if (!triageCtx) throw new Error('No static analysis for this image — cannot triage');
   const triage = await runTriageNode(triageCtx, cfg);
   gov.record(triage.result.model, triage.result.inputTokens ?? 0, triage.result.outputTokens ?? 0);
@@ -225,7 +225,7 @@ async function orchestrate(session: AgentSessionRow, cfg: LlmConfig): Promise<vo
   // --- Node ② Target selection ---
   const budgetCheck = gov.check();
   if (!budgetCheck.ok) return void persist(session, 'halted', gov, budgetCheck.reason);
-  const targetCtx = await gatherTargetSelectionContext(imageId, caps);
+  const targetCtx = await gatherTargetSelectionContext(imageId, caps, session.goal);
   const selection = await runTargetSelectionNode(targetCtx, caps, cfg);
   gov.record(selection.result.model, selection.result.inputTokens ?? 0, selection.result.outputTokens ?? 0);
   recordStep(
@@ -313,7 +313,7 @@ async function runPhase4(
   if (target && gov.check().ok) {
     const decompile = await ensureDecompile(imageId, target);
     if (decompile?.available) {
-      const zctx = await gatherZerodayContext(imageId, decompile);
+      const zctx = await gatherZerodayContext(imageId, decompile, session.goal);
       const z = await runZerodayNode(zctx, cfg);
       gov.record(z.result.model, z.result.inputTokens ?? 0, z.result.outputTokens ?? 0);
       recordStep(

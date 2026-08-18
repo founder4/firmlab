@@ -1,11 +1,48 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type TargetSelectionContext,
+  type TriageContext,
+  buildTargetSelectionUserPrompt,
+  buildTriageUserPrompt,
   clampRung,
   extractJsonObject,
   maxRungFor,
   parseTargetSelectionDecision,
   parseTriageDecision,
 } from './nodes.js';
+
+describe('operator goal propagation', () => {
+  it('places the goal in both structured decision prompts', () => {
+    const goal = 'Prioritize measured Secure Boot evidence; do not invent exploitability.';
+    const triage = {
+      goal,
+      identity: { firmwareClass: 'uefi-bios', arch: 'x86_64', endianness: 'little', filesystems: [], bootloader: null },
+      size: 1,
+      entropy: {
+        mean: 1,
+        max: 2,
+        likelyEncrypted: false,
+        likelyCompressed: false,
+        highEntropyRegions: 0,
+      },
+      signatures: [],
+      secretKinds: {},
+      corpus: { familyKey: 'uefi', familyImageCount: 1, reusedCredentials: 0 },
+      alreadyExtracted: true,
+    } satisfies TriageContext;
+    const target = {
+      goal,
+      identity: { firmwareClass: 'uefi-bios', arch: 'x86_64' },
+      capabilities: { strategy: 'static-only', proofCeiling: 'static', reason: 'UEFI', maxRung: 'none' },
+      binaries: [],
+      findings: { total: 0, bySeverity: {}, byProofState: {}, operatorAssertions: 0 },
+      corpus: { reusedArtifacts: 0, prevalentComponents: 0 },
+    } satisfies TargetSelectionContext;
+
+    expect(buildTriageUserPrompt(triage)).toContain(goal);
+    expect(buildTargetSelectionUserPrompt(target)).toContain(goal);
+  });
+});
 
 describe('extractJsonObject', () => {
   it('parses a bare JSON object', () => {
@@ -103,5 +140,15 @@ describe('parseTargetSelectionDecision — clamps rungs to the strategy', () => 
     const d = parseTargetSelectionDecision(raw, 'static-only');
     expect(d.targets.every((t) => t.rung === 'none')).toBe(true);
     expect(d.emulationPlan).toHaveLength(0);
+  });
+
+  it('keeps the decision queue focused to at most three targets', () => {
+    const targets = Array.from({ length: 6 }, (_, i) => ({
+      path: `sbin/service-${i}`,
+      rung: 'qemu-user',
+      priority: 'medium',
+      reason: 'measured candidate',
+    }));
+    expect(parseTargetSelectionDecision(JSON.stringify({ targets }), 'qemu-user').targets).toHaveLength(3);
   });
 });

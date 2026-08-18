@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { parseZerodayDecision } from './zeroday.js';
+import { type ZerodayContext, buildZerodayUserPrompt, parseZerodayDecision } from './zeroday.js';
+
+it('includes the operator goal in the zero-day decision context', () => {
+  const goal = 'Separate measured evidence from hypotheses.';
+  const ctx = {
+    goal,
+    binary: 'usr/sbin/httpd',
+    arch: 'mips',
+    networkFacing: true,
+    taint: {},
+    priors: { vulnerableComponents: [], confirmedBefore: [] },
+  } as unknown as ZerodayContext;
+  expect(buildZerodayUserPrompt(ctx)).toContain(goal);
+});
 
 describe('parseZerodayDecision', () => {
   it('coerces a well-formed candidate', () => {

@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type LlmConfig,
   LlmOutputError,
   buildAnthropicRequest,
   buildChatCompletionsRequest,
+  completeJson,
   loadLlmConfig,
   parseAnthropicResponse,
   parseChatCompletionsResponse,
@@ -16,7 +17,11 @@ const deepseek: LlmConfig = {
   baseUrl: 'https://api.deepseek.com',
   model: 'deepseek-v4-flash',
   maxTokens: 2048,
+  thinking: 'enabled',
+  reasoningEffort: 'max',
 };
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('loadLlmConfig', () => {
   it('returns null when the agent flag is off (local-only default)', () => {
@@ -30,7 +35,20 @@ describe('loadLlmConfig', () => {
       provider: 'deepseek',
       model: 'deepseek-v4-flash',
       baseUrl: 'https://api.deepseek.com',
+      thinking: 'enabled',
+      reasoningEffort: 'high',
     });
+  });
+
+  it('accepts explicit DeepSeek thinking and effort controls', () => {
+    expect(
+      loadLlmConfig({
+        FIRMLAB_AGENT: '1',
+        DEEPSEEK_API_KEY: 'sk-1',
+        FIRMLAB_LLM_THINKING: 'enabled',
+        FIRMLAB_LLM_REASONING_EFFORT: 'max',
+      }),
+    ).toMatchObject({ thinking: 'enabled', reasoningEffort: 'max' });
   });
 
   it('returns null when the flag is set but no key is available', () => {
@@ -74,14 +92,17 @@ describe('buildChatCompletionsRequest (DeepSeek/OpenAI)', () => {
       { role: 'system', content: 'SYS' },
       { role: 'user', content: 'USER' },
     ]);
-    expect(body.temperature).toBe(0.2);
+    expect(body.thinking).toEqual({ type: 'enabled' });
+    expect(body.reasoning_effort).toBe('max');
+    expect(body.temperature).toBeUndefined();
     expect(body.max_tokens).toBe(2048);
   });
 
-  it('uses non-thinking provider-enforced JSON for a DeepSeek decision node', () => {
+  it('uses max-effort thinking plus provider-enforced JSON for a DeepSeek decision node', () => {
     const body = JSON.parse(buildChatCompletionsRequest(deepseek, 'Return JSON', 'Decide', 'json').body);
     expect(body.response_format).toEqual({ type: 'json_object' });
-    expect(body.thinking).toEqual({ type: 'disabled' });
+    expect(body.thinking).toEqual({ type: 'enabled' });
+    expect(body.reasoning_effort).toBe('max');
     expect(body.temperature).toBeUndefined();
   });
 });
@@ -90,9 +111,9 @@ describe('parseChatCompletionsResponse', () => {
   it('takes the message content and usage, ignoring reasoning_content', () => {
     const out = parseChatCompletionsResponse({
       choices: [{ message: { content: 'answer', reasoning_content: 'chain of thought' } }],
-      usage: { prompt_tokens: 10, completion_tokens: 5 },
+      usage: { prompt_tokens: 10, completion_tokens: 5, completion_tokens_details: { reasoning_tokens: 3 } },
     });
-    expect(out).toEqual({ text: 'answer', inputTokens: 10, outputTokens: 5 });
+    expect(out).toEqual({ text: 'answer', inputTokens: 10, outputTokens: 5, reasoningTokens: 3 });
   });
 
   it('preserves usage when a structured response cannot be parsed', () => {
@@ -110,6 +131,48 @@ describe('parseChatCompletionsResponse', () => {
       expect(err).toBeInstanceOf(LlmOutputError);
       expect((err as LlmOutputError).result).toBe(result);
     }
+  });
+});
+
+describe('completeJson', () => {
+  it('retries one malformed thinking response without thinking and accounts for both paid calls', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '', reasoning_content: 'private reasoning' } }],
+          usage: {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            completion_tokens_details: { reasoning_tokens: 48 },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '{"decision":"safe"}' } }],
+          usage: { prompt_tokens: 100, completion_tokens: 7 },
+        }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await completeJson('Return JSON', 'Decide', deepseek);
+
+    expect(result).toMatchObject({
+      text: '{"decision":"safe"}',
+      inputTokens: 200,
+      outputTokens: 57,
+      reasoningTokens: 48,
+      fallbackUsed: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string);
+    const retryBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
+    expect(firstBody).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'max' });
+    expect(retryBody).toMatchObject({ thinking: { type: 'disabled' }, temperature: 0.2 });
+    expect(retryBody.reasoning_effort).toBeUndefined();
   });
 });
 

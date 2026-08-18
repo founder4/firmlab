@@ -12,6 +12,8 @@
 import { effectiveEnv } from './flags.js';
 
 export type LlmProvider = 'deepseek' | 'openai' | 'anthropic';
+export type LlmThinking = 'enabled' | 'disabled';
+export type LlmReasoningEffort = 'high' | 'max';
 
 export interface LlmConfig {
   provider: LlmProvider;
@@ -19,6 +21,9 @@ export interface LlmConfig {
   baseUrl: string;
   model: string;
   maxTokens: number;
+  /** DeepSeek V4 thinking controls. Other providers ignore these adapter-specific fields. */
+  thinking: LlmThinking;
+  reasoningEffort: LlmReasoningEffort;
 }
 
 export interface LlmResult {
@@ -27,6 +32,9 @@ export interface LlmResult {
   provider: LlmProvider;
   inputTokens?: number;
   outputTokens?: number;
+  reasoningTokens?: number;
+  /** True when a structured DeepSeek call needed the bounded non-thinking recovery attempt. */
+  fallbackUsed?: boolean;
 }
 
 /** A provider answered and consumed tokens, but its final text could not be used by a structured node. */
@@ -62,12 +70,16 @@ export function loadLlmConfig(env: NodeJS.ProcessEnv = effectiveEnv()): LlmConfi
   if (!apiKey) return null;
   const model = env.FIRMLAB_LLM_MODEL ?? defaults.model;
   if (!model) return null; // e.g. openai with no model configured
+  const thinking: LlmThinking = env.FIRMLAB_LLM_THINKING === 'disabled' ? 'disabled' : 'enabled';
+  const reasoningEffort: LlmReasoningEffort = env.FIRMLAB_LLM_REASONING_EFFORT === 'max' ? 'max' : 'high';
   return {
     provider,
     apiKey,
     baseUrl: env.FIRMLAB_LLM_BASE_URL ?? defaults.baseUrl,
     model,
     maxTokens: Number(env.FIRMLAB_LLM_MAX_TOKENS ?? 4096),
+    thinking,
+    reasoningEffort,
   };
 }
 
@@ -84,6 +96,7 @@ export function buildChatCompletionsRequest(
   system: string,
   user: string,
   format: 'text' | 'json' = 'text',
+  thinkingOverride?: LlmThinking,
 ): HttpRequest {
   const body: Record<string, unknown> = {
     model: cfg.model,
@@ -93,15 +106,14 @@ export function buildChatCompletionsRequest(
     ],
     max_tokens: cfg.maxTokens,
   };
-  if (format === 'json') {
-    body.response_format = { type: 'json_object' };
-    // DeepSeek v4 defaults to thinking=enabled. Its reasoning tokens share max_tokens with the final answer; two
-    // live sessions observed on 2026-08-18 returned empty `content` after ~68 s, while the same real prompt in
-    // non-thinking JSON mode returned its object in 4 s. A branch decision needs that small validated object, not
-    // hidden chain-of-thought. Anthropic has no equivalent request field and relies on the explicit prompt.
-    if (cfg.provider === 'deepseek') body.thinking = { type: 'disabled' };
-  } else {
-    body.temperature = 0.2; // low, for stable narrative analysis (ignored by DeepSeek while thinking is enabled)
+  if (format === 'json') body.response_format = { type: 'json_object' };
+  if (cfg.provider === 'deepseek') {
+    const thinking = thinkingOverride ?? cfg.thinking;
+    body.thinking = { type: thinking };
+    if (thinking === 'enabled') body.reasoning_effort = cfg.reasoningEffort;
+    else body.temperature = 0.2;
+  } else if (format === 'text') {
+    body.temperature = 0.2;
   }
   return {
     url: `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`,
@@ -116,15 +128,23 @@ export function parseChatCompletionsResponse(json: unknown): {
   text: string;
   inputTokens?: number;
   outputTokens?: number;
+  reasoningTokens?: number;
 } {
   const j = json as {
     choices?: { message?: { content?: string } }[];
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      completion_tokens_details?: { reasoning_tokens?: number };
+    };
   };
   const text = j.choices?.[0]?.message?.content ?? '';
-  const out: { text: string; inputTokens?: number; outputTokens?: number } = { text };
+  const out: { text: string; inputTokens?: number; outputTokens?: number; reasoningTokens?: number } = { text };
   if (typeof j.usage?.prompt_tokens === 'number') out.inputTokens = j.usage.prompt_tokens;
   if (typeof j.usage?.completion_tokens === 'number') out.outputTokens = j.usage.completion_tokens;
+  if (typeof j.usage?.completion_tokens_details?.reasoning_tokens === 'number') {
+    out.reasoningTokens = j.usage.completion_tokens_details.reasoning_tokens;
+  }
   return out;
 }
 
@@ -169,21 +189,27 @@ async function dispatchCompletion(
   user: string,
   cfg: LlmConfig,
   format: 'text' | 'json',
+  thinkingOverride?: LlmThinking,
 ): Promise<LlmResult> {
   const isAnthropic = cfg.provider === 'anthropic';
   const req = isAnthropic
     ? buildAnthropicRequest(cfg, system, user)
-    : buildChatCompletionsRequest(cfg, system, user, format);
+    : buildChatCompletionsRequest(cfg, system, user, format, thinkingOverride);
   const res = await fetch(req.url, { method: 'POST', headers: req.headers, body: req.body });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`LLM provider ${cfg.provider} returned ${res.status}: ${detail.slice(0, 300)}`);
   }
   const json = await res.json();
-  const parsed = isAnthropic ? parseAnthropicResponse(json) : parseChatCompletionsResponse(json);
+  const parsed: { text: string; inputTokens?: number; outputTokens?: number; reasoningTokens?: number } = isAnthropic
+    ? parseAnthropicResponse(json)
+    : parseChatCompletionsResponse(json);
   const result: LlmResult = { text: parsed.text, model: cfg.model, provider: cfg.provider };
   if (parsed.inputTokens !== undefined) result.inputTokens = parsed.inputTokens;
   if (parsed.outputTokens !== undefined) result.outputTokens = parsed.outputTokens;
+  if (parsed.reasoningTokens !== undefined) {
+    result.reasoningTokens = parsed.reasoningTokens;
+  }
   return result;
 }
 
@@ -191,9 +217,41 @@ export async function complete(system: string, user: string, cfg: LlmConfig): Pr
   return dispatchCompletion(system, user, cfg, 'text');
 }
 
-/** Structured decision call: provider-enforced JSON where supported, ordinary prompt discipline on Anthropic. */
+function containsJsonObject(text: string): boolean {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end < start) return false;
+  try {
+    const value = JSON.parse(text.slice(start, end + 1));
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function sumOptional(a: number | undefined, b: number | undefined): number | undefined {
+  return a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
+}
+
+/**
+ * Structured decision call: provider-enforced JSON where supported. DeepSeek gets the configured thinking mode
+ * first. If that paid request returns an empty/truncated non-object, retry exactly once without thinking — a
+ * bounded recovery for provider JSON-mode edge cases. Usage from BOTH calls is returned so the governor never
+ * turns the recovery into invisible spend.
+ */
 export async function completeJson(system: string, user: string, cfg: LlmConfig): Promise<LlmResult> {
-  return dispatchCompletion(system, user, cfg, 'json');
+  const first = await dispatchCompletion(system, user, cfg, 'json');
+  if (cfg.provider !== 'deepseek' || cfg.thinking !== 'enabled' || containsJsonObject(first.text)) return first;
+
+  const recovery = await dispatchCompletion(system, user, cfg, 'json', 'disabled');
+  const combined: LlmResult = { ...recovery, fallbackUsed: true };
+  const inputTokens = sumOptional(first.inputTokens, recovery.inputTokens);
+  const outputTokens = sumOptional(first.outputTokens, recovery.outputTokens);
+  const reasoningTokens = sumOptional(first.reasoningTokens, recovery.reasoningTokens);
+  if (inputTokens !== undefined) combined.inputTokens = inputTokens;
+  if (outputTokens !== undefined) combined.outputTokens = outputTokens;
+  if (reasoningTokens !== undefined) combined.reasoningTokens = reasoningTokens;
+  return combined;
 }
 
 /** Preserve provider usage when schema parsing fails so the governor never reports a paid turn as free. */

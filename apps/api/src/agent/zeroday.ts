@@ -24,6 +24,8 @@ export interface ZerodayPriors {
 }
 
 export interface ZerodayContext {
+  /** Operator intent guides prioritisation; it is not evidence for a vulnerability. */
+  goal: string | null;
   binary: string;
   arch: string | undefined;
   networkFacing: boolean;
@@ -58,6 +60,7 @@ Rules, non-negotiable:
    (likely/possible/unlikely) from the evidence; missing xref proof means at most "possible".
 3. Corpus priors (vulnerable components in the family, reachability confirmed before) are flags worth checking,
    not conclusions. A prior does not raise your reachability by itself.
+   The optional operator goal follows the same rule: it can prioritize analysis, but it is never vulnerability proof.
 4. For each candidate give {sink, source, vulnClass, reachability, severity, trigger, rationale}. vulnClass ∈
    {command-injection, stack-overflow, format-string, path-traversal, other}. The trigger is a concrete input
    (e.g. an HTTP request/param, an NVRAM value) that would drive the source into the sink.
@@ -114,7 +117,11 @@ export function buildZerodayUserPrompt(ctx: ZerodayContext): string {
 }
 
 /** Assemble node ④'s context for a binary: taint scaffold (from its triage) + Level-2 corpus priors. */
-export async function gatherZerodayContext(imageId: string, decompile: DecompileResult): Promise<ZerodayContext> {
+export async function gatherZerodayContext(
+  imageId: string,
+  decompile: DecompileResult,
+  goal: string | null = null,
+): Promise<ZerodayContext> {
   const { getImage, listBinaries } = await import('../store.js');
   const { corpusRefs, listReachabilityPriors, deviceFamilyKey } = await import('../corpus.js');
 
@@ -136,6 +143,7 @@ export async function gatherZerodayContext(imageId: string, decompile: Decompile
   };
 
   return {
+    goal,
     binary: decompile.binary,
     arch: decompile.info.arch,
     networkFacing: bin?.networkFacing === 1,

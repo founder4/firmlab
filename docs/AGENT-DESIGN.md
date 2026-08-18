@@ -284,6 +284,8 @@ Variables de entorno:
 | `FIRMLAB_LLM_MODEL` | según proveedor | deepseek→`deepseek-v4-flash`; anthropic→`claude-opus-4-8`; openai→**obligatorio**. |
 | `FIRMLAB_LLM_BASE_URL` | según proveedor | Override. Apunta aquí un servidor OpenAI-compatible local (Ollama/vLLM). |
 | `FIRMLAB_LLM_MAX_TOKENS` | `4096` | Tope de salida. |
+| `FIRMLAB_LLM_THINKING` | `enabled` | DeepSeek V4: `enabled` \| `disabled`. Otros proveedores lo ignoran. |
+| `FIRMLAB_LLM_REASONING_EFFORT` | `high` | DeepSeek V4: `high` \| `max`; solo aplica con thinking activo. |
 
 Ejemplos:
 
@@ -299,11 +301,13 @@ FIRMLAB_AGENT=1 FIRMLAB_LLM_PROVIDER=openai FIRMLAB_LLM_BASE_URL=http://127.0.0.
   FIRMLAB_LLM_MODEL=llama3 OPENAI_API_KEY=ollama                      node apps/api/dist/index.js
 ```
 
-Notas de implementación: DeepSeek/OpenAI comparten el adaptador `/chat/completions` (Bearer, `temperature`
-0.2); Anthropic usa `/v1/messages` (`x-api-key` + `anthropic-version`, **sin** `temperature` — los modelos 4.x
-lo rechazan con 400). El `reasoning_content` de los modelos thinking de DeepSeek se descarta: solo se toma la
-respuesta final, nunca la cadena de pensamiento. El copiloto corre como job (las llamadas LLM son lentas); la
-web muestra el panel solo si `/api/agent/status` reporta `enabled`.
+Notas de implementación: DeepSeek/OpenAI comparten el adaptador `/chat/completions` (Bearer). DeepSeek V4 recibe
+`thinking` y `reasoning_effort` explícitos; en thinking no se envía `temperature` porque el proveedor lo ignora.
+Las decisiones usan JSON mode y, si el primer intento thinking devuelve una salida vacía/no-JSON, hacen un único
+reintento sin thinking contabilizando ambos consumos. Anthropic usa `/v1/messages` (`x-api-key` +
+`anthropic-version`, sin `temperature`). El `reasoning_content` de DeepSeek nunca se persiste ni se muestra: solo
+se toma la respuesta final y se registra el número de tokens de salida. El copiloto corre como job (las llamadas
+LLM son lentas); la web muestra el panel solo si `/api/agent/status` reporta `enabled`.
 
 **Principio, reafirmado**: el copiloto es la capa que *interpreta*, nunca la fuente de un hallazgo. Cada
 afirmación se cita de un finding con su proof-state; los cross-refs de corpus son priors, no conclusiones. Es
