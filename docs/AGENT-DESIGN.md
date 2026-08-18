@@ -306,7 +306,8 @@ Notas de implementación: DeepSeek/OpenAI comparten el adaptador `/chat/completi
 Las decisiones usan JSON mode y, si el primer intento thinking devuelve una salida vacía/no-JSON, hacen un único
 reintento sin thinking contabilizando ambos consumos. Anthropic usa `/v1/messages` (`x-api-key` +
 `anthropic-version`, sin `temperature`). El `reasoning_content` de DeepSeek nunca se persiste ni se muestra: solo
-se toma la respuesta final y se registra el número de tokens de salida. El copiloto corre como job (las llamadas
+se toma la respuesta final y se registran el consumo total, los tokens de razonamiento reportados por el proveedor
+y si hizo falta el reintento acotado de recuperación JSON. El copiloto corre como job (las llamadas
 LLM son lentas); la web muestra el panel solo si `/api/agent/status` reporta `enabled`.
 
 **Principio, reafirmado**: el copiloto es la capa que *interpreta*, nunca la fuente de un hallazgo. Cada
@@ -331,10 +332,12 @@ triaje ①  →  extracción determinista (si el agente la eligió, vía el MISM
 El LLM solo actúa dentro de los dos nodos, y devuelve **JSON estructurado** (no prosa) que se valida y coacciona
 con defaults seguros (`nodes.ts`). Contratos:
 
-- **Nodo ① Triaje** — entrada: identidad, resumen de entropía, firmas, conteo de secretos por tipo, priors de
-  corpus (familia vista, credenciales reusadas). Salida: `{resolvedClass, classConfidence, shouldExtract,
-  extractionCascade, attackSurface, rationale}`.
-- **Nodo ② Selección de objetivo** — entrada: tabla de binarios (hardening, network-facing, imports), findings, y
+- **Nodo ① Triaje** — entrada: identidad, resumen de entropía, firmas con confianza/offset, conteo de secretos,
+  etapas completadas, hallazgos medidos con proof-state y priors de corpus. La clase propuesta por el modelo queda
+  como `suggestedClass`; `resolvedClass` se reconcilia en código y siempre conserva la identidad medida. Una
+  discrepancia queda visible y una clase medida sin rootfs no puede activar extracción Linux.
+- **Nodo ② Selección de objetivo** — entrada: tabla de binarios (hardening, network-facing, imports y emulación
+  previa), resumen y muestra acotada de hallazgos medidos, y
   **el preflight** (la cota dura). Salida: `{targets:[{path, rung, priority, reason}], emulationPlan, rationale}`.
   Cada `rung` solicitado se **recorta** (`clampRung`) al techo del preflight: un despliegue `static-only` baja todo
   a `none`; un techo `qemu-user` no se puede subir a `full-system` por decisión del agente. La honestidad se
@@ -346,7 +349,8 @@ función pura antes de cada nodo; el primer techo alcanzado detiene la sesión y
 `FIRMLAB_AGENT_MAX_SECONDS` (300). El coste USD se estima por modelo (tabla de precios; fallback conservador).
 
 **El transcript** (tablas `agent_session` + `agent_step`) es la auditabilidad: cada paso guarda la entrada
-estructurada que vio el nodo, la decisión, el rationale, el modelo y los tokens — reproducible y reanudable. Al
+estructurada que vio el nodo, la decisión, el rationale, el modelo, los tokens totales/de razonamiento y si hubo
+recuperación JSON — nunca el contenido del razonamiento interno. Al
 arranque, `reconcileSessions()` marca como `error` cualquier sesión `running` interrumpida por un reinicio;
 las `awaiting_approval` son una pausa durable legítima y sobreviven.
 
@@ -354,10 +358,12 @@ las `awaiting_approval` son una pausa durable legítima y sobreviven.
 (`POST /agent/sessions/:id/approve|decline`); al aprobar, la mecánica es el provider de emulación determinista
 existente, corrido vía el sistema de jobs, y su proof-state queda acotado por el techo del preflight. Una sesión
 activa (`running`/`awaiting_approval`) **fija** su imagen: `sweepRetention` la salta (cierra el bug latente del
-§9). Sin aislamiento por sesión todavía — eso es Fase 4.
+§9). El aislamiento por sesión y su degradación honesta se describen en la Fase 4.
 
-**Web**: la pestaña **Agent** muestra el transcript en vivo (cada nodo, su decisión y su porqué, con un expander
-de auditoría del JSON de entrada/salida), el medidor del governor, y el gate de aprobar/rechazar emulación.
+**Web**: la pestaña **Agent** muestra el transcript en vivo (cada nodo, su decisión y su porqué, desacuerdos de
+clasificación, telemetría operativa y un expander de auditoría del JSON de entrada/salida), el medidor del governor,
+y el gate de aprobar/rechazar emulación. Los agentes MCP pueden lanzar `credmatch`, `yarascan` y la pregunta
+específica de alcanzabilidad de exports; el escaneo autónomo incluye las tres con presupuestos acotados.
 
 **Validado de extremo a extremo** en la imagen firmware (un mock LLM OpenAI-compatible sustituye la clave ausente,
 así se ejercita toda la maquinaria determinista de forma reproducible): flag apagado inerte; ciclo completo de

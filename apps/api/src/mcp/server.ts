@@ -55,6 +55,8 @@ import {
  */
 const WORKER_ROUTES = {
   fsaudit: 'fsaudit',
+  credmatch: 'credmatch',
+  yarascan: 'yarascan',
   sbom: 'sbom',
   certs: 'certs',
   compmap: 'compmap',
@@ -70,7 +72,7 @@ const WORKERS = Object.keys(WORKER_ROUTES) as [keyof typeof WORKER_ROUTES, ...(k
 /** Job budgets. Extraction and a full autonomous scan are minutes of real work, not seconds. */
 const EXTRACT_TIMEOUT_MS = 10 * 60 * 1000;
 const SCAN_TIMEOUT_MS = 25 * 60 * 1000;
-const WORKER_TIMEOUT_MS = 5 * 60 * 1000;
+const WORKER_TIMEOUT_MS = 25 * 60 * 1000;
 const REACH_TIMEOUT_MS = 12 * 60 * 1000;
 
 /** Read an image's coverage, or null — every findings-shaped result is bound to it. */
@@ -396,7 +398,7 @@ export function buildServer(fl: FirmLabClient): McpServer {
         worker: z
           .enum(WORKERS)
           .describe(
-            'fsaudit = credentials/secrets audit · sbom = packages→CVEs · certs = embedded X.509 · compmap = ELF dependency graph · servicemap = boot-time network daemons · uboot = boot posture · rtos = bare-metal/RTOS · chipsec = UEFI Secure Boot/NVRAM · fcc = FCC-ID recon',
+            'fsaudit = credentials/secrets audit · credmatch = compare stored hashes with strings shipped in the rootfs · yarascan = configured YARA corpus with coverage · sbom = packages→CVEs · certs = embedded X.509 · compmap = ELF dependency graph · servicemap = boot-time network daemons · uboot = boot posture · rtos = bare-metal/RTOS · chipsec = UEFI Secure Boot/NVRAM · fcc = FCC-ID recon',
           ),
       },
     },
@@ -449,6 +451,32 @@ export function buildServer(fl: FirmLabClient): McpServer {
       );
       if (job.status !== 'done') return toolResult(jobPayload(job));
       return toolResult(reachabilityPayload(job.result as Parameters<typeof reachabilityPayload>[0]));
+    },
+  );
+
+  server.registerTool(
+    'firmlab_export_reachability',
+    {
+      title: 'Ask whether an exported function can reach a sink',
+      description:
+        'The reachability question appropriate for a shared library or kernel module, which has no program entry ' +
+        'point for firmlab_symbolic_reachability. Recovers a bounded control-flow graph and asks whether an ' +
+        'exported/global function has a path to each sink. A reachable path is STATIC CONTROL-FLOW REACHABILITY: ' +
+        'it does not establish feasibility, attacker control, a vulnerability, or exploitability. Needs extraction.',
+      inputSchema: {
+        imageId: z.string(),
+        binary: z.string().describe('Rootfs-relative .so/.ko path'),
+        sinks: z.array(z.string()).optional().describe('Function symbols; omit for class-specific defaults'),
+        budgetSeconds: z.number().min(15).max(600).optional().describe('Bounded graph/sink budget (default 240)'),
+      },
+    },
+    async ({ imageId, binary, sinks, budgetSeconds }) => {
+      const job = await fl.runJob(
+        `/api/images/${imageId}/exportreach`,
+        { binary, ...(sinks?.length ? { sinks } : {}), ...(budgetSeconds ? { budgetSeconds } : {}) },
+        REACH_TIMEOUT_MS,
+      );
+      return toolResult(jobPayload(job));
     },
   );
 

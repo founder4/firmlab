@@ -14,7 +14,7 @@ import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
 import { isElfFile } from '../providers/binvuln.js';
 import { resolveInsideRootfs } from '../providers/decompile.js';
-import { runExportReach, sinksFor } from '../providers/exportreach.js';
+import { exportReachSource, runExportReach, sinksFor } from '../providers/exportreach.js';
 import { startJob } from '../providers/jobs.js';
 import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { validateSinkNames } from '../providers/symreach.js';
@@ -25,11 +25,6 @@ const STAGE: RootfsStage = {
   needs: 'export reachability',
   note: 'No object was examined, which is not the same as no object carrying a reachable sink.',
 };
-
-/** The stable source string. One per target, so two objects never clobber each other's rows. */
-export function exportReachSource(binary: string): string {
-  return `exportreach:${binary}`;
-}
 
 export async function exportReachRoutes(app: FastifyInstance): Promise<void> {
   app.post('/images/:id/exportreach', async (req, reply) => {

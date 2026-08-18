@@ -31,6 +31,14 @@ export interface ZerodayContext {
   networkFacing: boolean;
   taint: TaintScaffold;
   priors: ZerodayPriors;
+  /** Existing measured evidence related to this binary; bounded and never includes operator assertions. */
+  relatedFindings: {
+    source: string;
+    kind: string;
+    severity: string;
+    proofState: string;
+    title: string;
+  }[];
 }
 
 export interface ZerodayCandidate {
@@ -124,14 +132,38 @@ export async function gatherZerodayContext(
   decompile: DecompileResult,
   goal: string | null = null,
 ): Promise<ZerodayContext> {
-  const { getImage, listBinaries } = await import('../store.js');
+  const { getImage, listBinaries, listFindings } = await import('../store.js');
   const { corpusRefs, listReachabilityPriors, deviceFamilyKey } = await import('../corpus.js');
+  const { partitionByProvenance } = await import('../operator-findings.js');
 
   const taint = buildTaintScaffold(decompile);
   const bin = listBinaries(imageId).find((b) => b.path === decompile.binary);
   const refs = corpusRefs(imageId);
   const row = getImage(imageId);
   const familyKey = row?.identityJson ? deviceFamilyKey(JSON.parse(row.identityJson)) : '';
+  const { measured } = partitionByProvenance(listFindings(imageId));
+  const binaryName = decompile.binary.split('/').at(-1) ?? decompile.binary;
+  const relatedFindings = measured
+    .filter((finding) => {
+      if (finding.title.includes(decompile.binary) || finding.title.includes(binaryName)) return true;
+      if (!finding.evidenceJson) return false;
+      try {
+        const evidence = JSON.parse(finding.evidenceJson) as Record<string, unknown>;
+        return [evidence.path, evidence.binary, evidence.subject].some(
+          (value) => typeof value === 'string' && (value === decompile.binary || value.endsWith(`/${binaryName}`)),
+        );
+      } catch {
+        return false;
+      }
+    })
+    .slice(0, 12)
+    .map((finding) => ({
+      source: finding.source,
+      kind: finding.kind,
+      severity: finding.severity,
+      proofState: finding.proofState,
+      title: finding.title,
+    }));
 
   const priors: ZerodayPriors = {
     vulnerableComponents: refs.components
@@ -151,6 +183,7 @@ export async function gatherZerodayContext(
     networkFacing: bin?.networkFacing === 1,
     taint,
     priors,
+    relatedFindings,
   };
 }
 

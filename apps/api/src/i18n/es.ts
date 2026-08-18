@@ -370,6 +370,9 @@ export const es: Messages = {
     reason: {
       extract: 'recuperar el rootfs (extracción recursiva FIT→UBI→SquashFS cuando el contenedor lo requiere)',
       credentials: 'credenciales débiles o vacías, shells de root, material de claves',
+      credentialCrossReference:
+        'hashes de cuentas almacenados → comparación acotada con cadenas candidatas incluidas realmente en el mismo rootfs',
+      yaraRuleScan: 'corpus YARA configurado → barrido acotado de malware y código sospechoso con cobertura explícita',
       auxSecrets:
         'claves privadas embebidas en particiones hermanas (fuera del rootfs) que la auditoría del rootfs nunca ve',
       sbom: 'componentes → CVE conocidos (la superficie n-day)',
@@ -394,6 +397,8 @@ export const es: Messages = {
         'ELF del rootfs → candidatos a desbordamiento de pila por copia sin límite y sin canario (los pwnables de DVRF)',
       kernelModules:
         'los .ko del rootfs → quién los escribió, qué API del kernel enlazan y dónde una longitud en orden de red llega a un asignador',
+      exportReachability:
+        'exports de .so/.ko seleccionados → rutas de control acotadas hacia sumideros peligrosos (alcanzabilidad, no factibilidad)',
       updatePath: 'si la imagen va firmada, si el actualizador verifica algo, y si un downgrade está acotado',
       chipsec: 'decodificación sin conexión de los volúmenes de firmware + postura de Secure Boot / NVRAM',
       fwhunt:

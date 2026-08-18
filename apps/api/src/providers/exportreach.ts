@@ -90,6 +90,11 @@ export interface ExportReachResult {
 export const KERNEL_SINKS = ['__kmalloc', 'kmalloc', 'kzalloc', 'memcpy', 'strcpy', 'sprintf', 'copy_from_user'];
 export const USERLAND_SINKS = ['strcpy', 'strcat', 'sprintf', 'vsprintf', 'system', 'popen', 'execve', 'memcpy'];
 
+/** One source per object, so independent reachability questions cannot clobber one another. */
+export function exportReachSource(binary: string): string {
+  return `exportreach:${binary}`;
+}
+
 /** Pure: which sink vocabulary applies, from the file's own extension and ELF type. */
 export function sinksFor(relPath: string): readonly string[] {
   return relPath.endsWith('.ko') ? KERNEL_SINKS : USERLAND_SINKS;

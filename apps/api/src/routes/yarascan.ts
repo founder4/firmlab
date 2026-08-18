@@ -16,11 +16,10 @@ import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
 import { startJob } from '../providers/jobs.js';
 import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
-import { type YaraScanResult, runYaraScan } from '../providers/yarascan.js';
+import { YARASCAN_SOURCE, type YaraScanResult, runYaraScan } from '../providers/yarascan.js';
 import { getImage, listJobs } from '../store.js';
 
 /** The source string both this route and any future autonomous stage must use — one ledger namespace, not two. */
-export const YARASCAN_SOURCE = 'yarascan';
 
 const STAGE: RootfsStage = {
   stage: 'yarascan',

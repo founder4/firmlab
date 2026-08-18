@@ -307,6 +307,7 @@ export const imageDetail: Messages['imageDetail'] = {
     },
 
     triageClass: 'clase',
+    triageSuggested: (value: string) => `el modelo propuso ${value}; prevalece la identidad medida`,
     triageExtract: 'extracción:',
     cascade: (chain: string) => `cascada ${chain}`,
     attackSurface: (surface: string) => `superficie de ataque: ${surface}`,
@@ -321,6 +322,8 @@ export const imageDetail: Messages['imageDetail'] = {
     exit: 'salida',
     proofState: 'estado de prueba',
     tokens: (n: number) => `${n} tok`,
+    reasoningTokens: (n: number) => `${n} razonamiento`,
+    jsonFallback: 'recuperación JSON usada',
     audit: 'auditoría: entradas y decisión',
 
     budgetSteps: 'pasos',

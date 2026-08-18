@@ -19,6 +19,7 @@ import type { Architecture, ImageIdentity } from '@firmlab/core';
 import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } from './findings.js';
 import type { LlmConfig } from './llm.js';
 import { complete } from './llm.js';
+import { selectExportReachTargets } from './opacidad-exportreach.js';
 import {
   CMDEXEC_LEAD_CAP,
   type ProbeInterest,
@@ -57,18 +58,20 @@ import {
 } from './opacidad-plan.js';
 import { partitionByProvenance } from './operator-findings.js';
 import { runAuxSecrets } from './providers/auxsecrets.js';
-import { runBinVuln } from './providers/binvuln.js';
+import { isElfFile, runBinVuln } from './providers/binvuln.js';
 import { type CmdlineSource, type UbootScriptCmdlines, crossCheckBootCmdlines } from './providers/boot-cmdline.js';
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
 import { runComponentCve } from './providers/component-cve.js';
-import { runDecompile } from './providers/decompile.js';
+import { CREDMATCH_SOURCE, runCredMatch } from './providers/credmatch.js';
+import { resolveInsideRootfs, runDecompile } from './providers/decompile.js';
 import { assessDecoy, decoyFinding } from './providers/decoy.js';
 import { runDeviceTreeAnalysis } from './providers/devicetree.js';
 import { runDynProbe } from './providers/dynprobe-run.js';
 import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
+import { exportReachSource, runExportReach } from './providers/exportreach.js';
 import { neuteredFindings } from './providers/extract-neutered.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
 import { runFccLookup } from './providers/fcc.js';
@@ -86,7 +89,8 @@ import { buildTaintScaffold } from './providers/taint.js';
 import { runUbootAnalysis } from './providers/uboot.js';
 import { runUpdatePath } from './providers/updatepath.js';
 import { type HandlerAnalysis, runWebTaint } from './providers/webtaint.js';
-import { getImage, listFindings, listJobs } from './store.js';
+import { YARASCAN_SOURCE, runYaraScan } from './providers/yarascan.js';
+import { getImage, listBinaries, listFindings, listJobs } from './store.js';
 
 /**
  * The two halves of the kernel-command-line question, and whether each provider has run at all.
@@ -247,6 +251,29 @@ async function fsauditRun(c: RunCtx): Promise<StepOutcome> {
   const r = runFsAudit(c.rootfsPath as string);
   syncFindings(c.imageId, 'fsaudit', r.findings);
   return { summary: `rootfs security audit: ${r.findings.length} findings`, findingCount: r.findings.length };
+}
+
+async function credmatchRun(c: RunCtx): Promise<StepOutcome> {
+  const r = await runCredMatch(c.rootfsPath as string, c.handle);
+  syncFindings(c.imageId, CREDMATCH_SOURCE, r.findings);
+  const tested = r.candidates?.candidatesTested ?? 0;
+  const recovered = r.findings.filter((finding) => finding.kind === 'credential-recovered-from-image').length;
+  return {
+    summary: `credential cross-reference: ${r.targets.length} hash target(s), ${tested} candidate(s) tested, ${recovered} recovered`,
+    findingCount: r.findings.length,
+    ...(r.state === 'scanned' ? {} : { degraded: true, note: r.reason }),
+  };
+}
+
+async function yarascanRun(c: RunCtx): Promise<StepOutcome> {
+  const r = await runYaraScan(c.rootfsPath as string, c.handle);
+  syncFindings(c.imageId, YARASCAN_SOURCE, r.findings);
+  const scanned = r.scan?.filesScanned ?? 0;
+  return {
+    summary: `YARA corpus: ${r.corpus.rulesApplied} rule(s), ${scanned} file(s) scanned, ${r.matches.length} match group(s)`,
+    findingCount: r.findings.length,
+    ...(r.state === 'scanned' ? {} : { degraded: true, note: r.reason }),
+  };
 }
 
 /**
@@ -680,6 +707,54 @@ async function kmodRun(c: RunCtx): Promise<StepOutcome> {
   };
 }
 
+const EXPORT_REACH_TARGET_CAP = 4;
+const EXPORT_REACH_TOTAL_BUDGET_SECONDS = 360;
+
+/**
+ * Ask the question libraries and modules admit: whether an exported/global function has a control-flow path to a
+ * dangerous sink. The selector is deterministic and bounded; this remains static reachability, never feasibility.
+ */
+async function exportreachRun(c: RunCtx): Promise<StepOutcome> {
+  const targets = selectExportReachTargets(listBinaries(c.imageId), EXPORT_REACH_TARGET_CAP);
+  if (targets.length === 0) {
+    return {
+      summary: 'export reachability: no .so/.ko target in the binary inventory',
+      findingCount: 0,
+      note: 'The inventory contained no object with an export-oriented entry surface; no reachability claim was made.',
+    };
+  }
+
+  const budgetSeconds = Math.max(15, Math.floor(EXPORT_REACH_TOTAL_BUDGET_SECONDS / targets.length));
+  let findingCount = 0;
+  let reachable = 0;
+  const blocked: string[] = [];
+
+  for (const binary of targets) {
+    const abs = resolveInsideRootfs(c.rootfsPath as string, binary);
+    if (!abs || !isElfFile(abs)) {
+      blocked.push(`${binary}: no longer a readable ELF inside the rootfs`);
+      continue;
+    }
+    const result = await runExportReach(abs, binary, { budgetSeconds });
+    c.handle.log(result.reason);
+    syncFindings(c.imageId, exportReachSource(binary), result.findings);
+    findingCount += result.findings.length;
+    reachable += result.sinks.filter((sink) => sink.outcome === 'reachable').length;
+    if (!result.available) blocked.push(`${binary}: ${result.reason}`);
+  }
+
+  return {
+    summary: `export reachability: ${targets.length} selected object(s), ${reachable} reachable sink path(s), ${findingCount} finding(s)`,
+    findingCount,
+    ...(blocked.length
+      ? {
+          degraded: true,
+          note: `${blocked.join(' | ')} Control-flow reachability is not a feasible or exploitable path.`,
+        }
+      : { note: 'Control-flow reachability is not a feasible or exploitable path.' }),
+  };
+}
+
 /**
  * W5 depth — symbolic reachability, scheduled by W9's re-planning off a binvuln candidate. Answers one question per
  * sink: is the call site reachable from the entry point under symbolic input? A reached sink is a `static_confirmed`
@@ -818,6 +893,8 @@ async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
 const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepOutcome>> = {
   extract: extractRun,
   fsaudit: fsauditRun,
+  credmatch: credmatchRun,
+  yarascan: yarascanRun,
   auxsecrets: auxsecretsRun,
   nvram: nvramRun,
   sbom: sbomRun,
@@ -839,6 +916,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   webtaint: webtaintRun,
   binvuln: binvulnRun,
   kmod: kmodRun,
+  exportreach: exportreachRun,
   symreach: symreachRun,
   dynprobe: dynprobeRun,
   decompile: decompileRun,

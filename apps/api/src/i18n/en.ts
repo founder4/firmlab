@@ -396,6 +396,9 @@ export const en = {
     reason: {
       extract: 'recover the rootfs (recursive FIT→UBI→SquashFS carve when the container needs it)',
       credentials: 'weak/empty creds, root shells, key material',
+      credentialCrossReference:
+        'stored account hashes → bounded comparison with candidate strings actually shipped in the same rootfs',
+      yaraRuleScan: 'configured YARA corpus → bounded malware and suspicious-code scan with explicit coverage',
       auxSecrets: 'embedded private keys in sibling (non-rootfs) partitions the rootfs audit never sees',
       sbom: 'components → known CVEs (the n-day surface)',
       componentFingerprint: 'bundled binaries (pppd, openssl) → CVEs a manifest-only SBOM misses',
@@ -416,6 +419,8 @@ export const en = {
       binaryVulnSweep: 'rootfs ELFs → unbounded-copy + no-canary stack-overflow candidates (DVRF pwnables)',
       kernelModules:
         'rootfs .ko → who wrote them, which kernel API they bind, and where a wire-order length reaches an allocator',
+      exportReachability:
+        'selected .so/.ko exports → bounded control-flow paths to dangerous sinks (reachability, not feasibility)',
       updatePath: 'is the image signed, does the updater verify anything, is a downgrade bounded',
       chipsec: 'offline firmware-volume decode + Secure Boot / NVRAM posture',
       fwhunt: 'upstream FwHunt code-pattern rules → known implant / vulnerable-module families',

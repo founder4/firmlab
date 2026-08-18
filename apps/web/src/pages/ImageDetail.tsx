@@ -1824,6 +1824,14 @@ function StepCard({ step }: { step: AgentStep }): JSX.Element {
         )}
       </div>,
     );
+    if (typeof out.suggestedClass === 'string' && out.classAgreement !== 'confirmed') {
+      highlights.push(
+        <div key="reconcile" className="hint">
+          {a.triageSuggested(out.suggestedClass)}
+          {typeof out.classReconciliation === 'string' ? ` · ${out.classReconciliation}` : ''}
+        </div>,
+      );
+    }
     if (Array.isArray(out.attackSurface) && out.attackSurface.length > 0)
       highlights.push(<div key="a">{a.attackSurface((out.attackSurface as string[]).join(', '))}</div>);
   } else if (step.node === 'preflight' && out) {
@@ -1881,6 +1889,8 @@ function StepCard({ step }: { step: AgentStep }): JSX.Element {
         {step.inputTokens + step.outputTokens > 0 && (
           <span className="hint mono">{a.tokens(step.inputTokens + step.outputTokens)}</span>
         )}
+        {step.reasoningTokens > 0 && <span className="hint mono">{a.reasoningTokens(step.reasoningTokens)}</span>}
+        {step.fallbackUsed && <span className="badge badge-medium">{a.jsonFallback}</span>}
       </div>
       <div
         style={{ marginTop: 6, fontSize: 12.5, color: 'var(--text)', display: 'flex', flexDirection: 'column', gap: 4 }}

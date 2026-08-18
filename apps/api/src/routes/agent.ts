@@ -37,6 +37,8 @@ function stepView(row: AgentStepRow): unknown {
     model: row.model,
     inputTokens: row.inputTokens,
     outputTokens: row.outputTokens,
+    reasoningTokens: row.reasoningTokens,
+    fallbackUsed: row.fallbackUsed === 1,
     createdAt: row.createdAt,
   };
 }

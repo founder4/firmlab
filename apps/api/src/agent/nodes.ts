@@ -9,7 +9,7 @@
  * The prompt builders, JSON extraction, and decision parsers are pure so they unit-test without a provider.
  * The gather* functions read the store; run* functions call the LLM.
  */
-import type { StaticAnalysis } from '@firmlab/core';
+import type { FirmwareClass, StaticAnalysis } from '@firmlab/core';
 import type { LlmConfig, LlmResult } from '../llm.js';
 import { completeJson, parseLlmOutput } from '../llm.js';
 import type { RuntimeCapabilities, RuntimeStrategy } from '../providers/preflight.js';
@@ -88,7 +88,7 @@ export interface TriageContext {
   /** Operator intent guides prioritisation, but never overrides measured evidence or proof state. */
   goal: string | null;
   identity: {
-    firmwareClass: string;
+    firmwareClass: FirmwareClass;
     arch: string;
     endianness: string;
     filesystems: string[];
@@ -102,14 +102,34 @@ export interface TriageContext {
     likelyCompressed: boolean;
     highEntropyRegions: number;
   };
-  signatures: { id: string; category: string; description: string }[];
+  signatures: { id: string; category: string; description: string; confidence: string; offset: number }[];
   secretKinds: Record<string, number>;
   corpus: { familyKey: string; familyImageCount: number; reusedCredentials: number };
   alreadyExtracted: boolean;
+  measurement: {
+    completedStages: string[];
+    findings: {
+      total: number;
+      byProofState: Record<string, number>;
+      top: {
+        source: string;
+        kind: string;
+        severity: string;
+        proofState: string;
+        title: string;
+        subject: string | null;
+      }[];
+    };
+  };
 }
 
 export interface TriageDecision {
+  /** The measured classifier always wins; this is never copied blindly from model output. */
   resolvedClass: string;
+  /** The model's proposal is retained separately so disagreements remain visible in the transcript. */
+  suggestedClass?: string;
+  classAgreement?: 'confirmed' | 'conflict' | 'measured-unknown';
+  classReconciliation?: string;
   classConfidence: (typeof CONFIDENCE)[number];
   shouldExtract: boolean;
   extractionCascade: string[];
@@ -141,7 +161,8 @@ Respond with ONLY a JSON object, no prose or code fences:
 
 /** Assemble the deterministic triage context for an image, or null if it has no cached analysis. */
 export async function gatherTriageContext(imageId: string, goal: string | null = null): Promise<TriageContext | null> {
-  const { getImage, listJobs } = await import('../store.js');
+  const { getImage, listFindings, listJobs } = await import('../store.js');
+  const { partitionByProvenance } = await import('../operator-findings.js');
   const { corpusOverview, corpusRefs, deviceFamilyKey } = await import('../corpus.js');
   const row = getImage(imageId);
   if (!row?.analysisJson || !row.identityJson) return null;
@@ -157,7 +178,25 @@ export async function gatherTriageContext(imageId: string, goal: string | null =
   const familyKey = deviceFamilyKey(identity);
   const family = corpusOverview().deviceFamilies.find((f) => f.familyKey === familyKey);
   const refs = corpusRefs(imageId);
-  const extracted = listJobs(imageId).some((j) => j.kind === 'extract' && j.status === 'done');
+  const jobs = listJobs(imageId);
+  const extracted = jobs.some((j) => j.kind === 'extract' && j.status === 'done');
+  const completedStages = [...new Set(jobs.filter((j) => j.status === 'done').map((j) => j.kind))].sort();
+  const { measured } = partitionByProvenance(listFindings(imageId));
+  const byProofState: Record<string, number> = {};
+  for (const finding of measured) {
+    byProofState[finding.proofState] = (byProofState[finding.proofState] ?? 0) + 1;
+  }
+  const topFindings = [...measured]
+    .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.createdAt - a.createdAt)
+    .slice(0, 12)
+    .map((finding) => ({
+      source: finding.source,
+      kind: finding.kind,
+      severity: finding.severity,
+      proofState: finding.proofState,
+      title: finding.title,
+      subject: findingSubject(finding.evidenceJson),
+    }));
 
   return {
     goal,
@@ -176,9 +215,13 @@ export async function gatherTriageContext(imageId: string, goal: string | null =
       likelyCompressed: analysis.entropy.likelyCompressed,
       highEntropyRegions: analysis.entropy.highEntropyRegions.length,
     },
-    signatures: analysis.signatures
-      .slice(0, 40)
-      .map((s) => ({ id: s.id, category: s.category, description: s.description })),
+    signatures: analysis.signatures.slice(0, 40).map((s) => ({
+      id: s.id,
+      category: s.category,
+      description: s.description,
+      confidence: s.confidence,
+      offset: s.offset,
+    })),
     secretKinds,
     corpus: {
       familyKey,
@@ -186,7 +229,27 @@ export async function gatherTriageContext(imageId: string, goal: string | null =
       reusedCredentials: refs.credentials.length,
     },
     alreadyExtracted: extracted,
+    measurement: {
+      completedStages,
+      findings: { total: measured.length, byProofState, top: topFindings },
+    },
   };
+}
+
+const SEVERITY_RANK: Record<string, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+const severityRank = (severity: string): number => SEVERITY_RANK[severity] ?? 0;
+
+function findingSubject(evidenceJson: string | null): string | null {
+  if (!evidenceJson) return null;
+  try {
+    const evidence = JSON.parse(evidenceJson) as Record<string, unknown>;
+    for (const key of ['path', 'binary', 'subject', 'component', 'cve']) {
+      if (typeof evidence[key] === 'string') return evidence[key];
+    }
+  } catch {
+    // Malformed legacy evidence is omitted from model context; the persisted finding remains intact.
+  }
+  return null;
 }
 
 export function buildTriageUserPrompt(ctx: TriageContext): string {
@@ -213,6 +276,35 @@ export function parseTriageDecision(text: string): TriageDecision {
   };
 }
 
+const NON_ROOTFS_CLASSES = new Set<FirmwareClass>(['esp-soc', 'baremetal', 'rtos', 'uefi-bios', 'encrypted']);
+
+/**
+ * Reconcile model interpretation with the deterministic classifier. The proposal stays auditable, but it can
+ * neither rewrite measured identity nor launch a Linux extraction branch for a measured non-rootfs image.
+ */
+export function reconcileTriageDecision(ctx: TriageContext, proposal: TriageDecision): TriageDecision {
+  const measured = ctx.identity.firmwareClass;
+  const suggested = proposal.resolvedClass;
+  const classAgreement =
+    measured === 'unknown' ? 'measured-unknown' : suggested === measured ? 'confirmed' : 'conflict';
+  const blocksRootfsExtraction = NON_ROOTFS_CLASSES.has(measured);
+
+  return {
+    ...proposal,
+    resolvedClass: measured,
+    suggestedClass: suggested,
+    classAgreement,
+    classReconciliation:
+      classAgreement === 'confirmed'
+        ? `Model proposal agrees with measured class: ${measured}.`
+        : classAgreement === 'measured-unknown'
+          ? `Measured class remains unknown; model proposal ${suggested} is advisory only.`
+          : `Measured class ${measured} overrides model proposal ${suggested}.`,
+    shouldExtract: blocksRootfsExtraction ? false : proposal.shouldExtract,
+    extractionCascade: blocksRootfsExtraction ? [] : proposal.extractionCascade,
+  };
+}
+
 export interface NodeRun<T> {
   decision: T;
   result: LlmResult;
@@ -220,7 +312,8 @@ export interface NodeRun<T> {
 
 export async function runTriageNode(ctx: TriageContext, cfg: LlmConfig): Promise<NodeRun<TriageDecision>> {
   const result = await completeJson(TRIAGE_SYSTEM_PROMPT, buildTriageUserPrompt(ctx), cfg);
-  return { decision: parseLlmOutput(result, parseTriageDecision), result };
+  const proposal = parseLlmOutput(result, parseTriageDecision);
+  return { decision: reconcileTriageDecision(ctx, proposal), result };
 }
 
 // === Node ② Target selection ===
@@ -230,7 +323,14 @@ export interface TargetSelectionContext {
   goal: string | null;
   identity: { firmwareClass: string; arch: string };
   capabilities: { strategy: RuntimeStrategy; proofCeiling: string; reason: string; maxRung: EmulationRung };
-  binaries: { path: string; arch: string | null; networkFacing: boolean; hardening: string; imports: string | null }[];
+  binaries: {
+    path: string;
+    arch: string | null;
+    networkFacing: boolean;
+    hardening: string;
+    imports: string | null;
+    emulationStatus: string | null;
+  }[];
   findings: {
     /** MEASURED findings only — assertions are counted separately and never enter the proof-state histogram. */
     total: number;
@@ -238,6 +338,14 @@ export interface TargetSelectionContext {
     byProofState: Record<string, number>;
     /** Claims a person or agent recorded on this image. Not measurements, not evidence. */
     operatorAssertions: number;
+    top: {
+      source: string;
+      kind: string;
+      severity: string;
+      proofState: string;
+      title: string;
+      subject: string | null;
+    }[];
   };
   corpus: { reusedArtifacts: number; prevalentComponents: number };
 }
@@ -315,8 +423,25 @@ export async function gatherTargetSelectionContext(
       networkFacing: b.networkFacing === 1,
       hardening: b.triaged ? `nx=${b.nx} canary=${b.canary} pic=${b.pic}` : 'not-triaged',
       imports: b.importsSummary,
+      emulationStatus: b.emulationStatus,
     })),
-    findings: { total: findings.length, bySeverity, byProofState, operatorAssertions: asserted.length },
+    findings: {
+      total: findings.length,
+      bySeverity,
+      byProofState,
+      operatorAssertions: asserted.length,
+      top: [...findings]
+        .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.createdAt - a.createdAt)
+        .slice(0, 15)
+        .map((finding) => ({
+          source: finding.source,
+          kind: finding.kind,
+          severity: finding.severity,
+          proofState: finding.proofState,
+          title: finding.title,
+          subject: findingSubject(finding.evidenceJson),
+        })),
+    },
     corpus: { reusedArtifacts: refs.artifacts.length, prevalentComponents: refs.components.length },
   };
 }

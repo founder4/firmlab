@@ -57,6 +57,9 @@ import { isToolAvailable } from '../tools.js';
 import { DES_PASSWORD_BYTES, desCrypt, desEffectivePassword, isDesHash } from './descrypt.js';
 import type { JobHandle } from './jobs.js';
 
+/** Stable finding source shared by manual and autonomous entry points. */
+export const CREDMATCH_SOURCE = 'credmatch';
+
 const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------------------------------------------

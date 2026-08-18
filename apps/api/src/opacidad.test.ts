@@ -21,6 +21,16 @@ describe('specsForClass — class-routed worker plan', () => {
     );
   });
 
+  it('includes the agent-facing depth stages after the evidence they depend on', () => {
+    const providers = specsForClass('embedded-linux').map((spec) => spec.provider);
+    expect(providers).toContain('credmatch');
+    expect(providers).toContain('yarascan');
+    expect(providers).toContain('exportreach');
+    expect(providers.indexOf('credmatch')).toBeGreaterThan(providers.indexOf('fsaudit'));
+    expect(providers.indexOf('yarascan')).toBeGreaterThan(providers.indexOf('compcve'));
+    expect(providers.indexOf('exportreach')).toBeGreaterThan(providers.indexOf('kmod'));
+  });
+
   it('routes each non-Linux class to its own worker', () => {
     expect(specsForClass('uefi-bios')[0]?.worker).toContain('chipsec');
     expect(specsForClass('baremetal')[0]?.worker).toContain('Bare-metal');

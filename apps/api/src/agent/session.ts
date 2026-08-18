@@ -14,7 +14,7 @@ import { runCopilot } from '../copilot.js';
 import { deviceFamilyKey, recordReachabilityPrior } from '../corpus.js';
 import { type FindingDraft, syncFindings } from '../findings.js';
 import { LlmOutputError, loadLlmConfig } from '../llm.js';
-import type { LlmConfig } from '../llm.js';
+import type { LlmConfig, LlmResult } from '../llm.js';
 import { type DecompileResult, resolveInsideRootfs, runDecompile } from '../providers/decompile.js';
 import { buildSystemEmulationFindings, runChrootService } from '../providers/emulate-system.js';
 import { buildUserEmulationFindings, emulatorRefusal, runUserModeEmulation } from '../providers/emulate.js';
@@ -82,6 +82,7 @@ function recordStep(
   model: string | null,
   inputTokens: number,
   outputTokens: number,
+  telemetry?: Pick<LlmResult, 'reasoningTokens' | 'fallbackUsed'>,
 ): void {
   const seq = listSteps(sessionId).length + 1;
   const row: AgentStepRow = {
@@ -96,6 +97,8 @@ function recordStep(
     model,
     inputTokens,
     outputTokens,
+    reasoningTokens: telemetry?.reasoningTokens ?? 0,
+    fallbackUsed: telemetry?.fallbackUsed ? 1 : 0,
     createdAt: Date.now(),
   };
   insertStep(row);
@@ -145,7 +148,18 @@ export function startAgentSession(imageId: string, cfg: LlmConfig, goal: string 
       consumed.usd += estimateUsd(model, inputTokens, outputTokens);
     }
     consumed.elapsedMs = Math.max(consumed.elapsedMs, Date.now() - session.createdAt);
-    recordStep(session.id, 'error', 'error', undefined, undefined, message, model, inputTokens, outputTokens);
+    recordStep(
+      session.id,
+      'error',
+      'error',
+      undefined,
+      undefined,
+      message,
+      model,
+      inputTokens,
+      outputTokens,
+      err instanceof LlmOutputError ? err.result : undefined,
+    );
     updateSession(session.id, 'error', JSON.stringify(consumed), message);
   });
   return session;
@@ -175,6 +189,7 @@ async function orchestrate(session: AgentSessionRow, cfg: LlmConfig): Promise<vo
     triage.result.model,
     triage.result.inputTokens ?? 0,
     triage.result.outputTokens ?? 0,
+    triage.result,
   );
   persist(session, 'running', gov, null);
 
@@ -238,6 +253,7 @@ async function orchestrate(session: AgentSessionRow, cfg: LlmConfig): Promise<vo
     selection.result.model,
     selection.result.inputTokens ?? 0,
     selection.result.outputTokens ?? 0,
+    selection.result,
   );
 
   // --- Node ④ Zero-day + Phase-4 emulation gate (auto-run under isolation, or human approval) ---
@@ -269,6 +285,7 @@ async function runClosingSynthesis(session: AgentSessionRow, cfg: LlmConfig, gov
       result.model,
       result.inputTokens ?? 0,
       result.outputTokens ?? 0,
+      result,
     );
     persist(session, 'done', governor, null);
   } catch (err) {
@@ -326,6 +343,7 @@ async function runPhase4(
         z.result.model,
         z.result.inputTokens ?? 0,
         z.result.outputTokens ?? 0,
+        z.result,
       );
       recordZerodayFindings(imageId, target, z.decision.candidates);
       topCandidate = z.decision.candidates[0];

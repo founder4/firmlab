@@ -52,6 +52,9 @@ import type { FindingDraft } from '../findings-normalize.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 
+/** Stable finding source shared by manual and autonomous entry points. */
+export const YARASCAN_SOURCE = 'yarascan';
+
 const execFileAsync = promisify(execFile);
 
 /** A corpus of thousands of rules over a full rootfs is minutes of scanning, not seconds. */

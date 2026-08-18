@@ -10,6 +10,7 @@ import {
   maxRungFor,
   parseTargetSelectionDecision,
   parseTriageDecision,
+  reconcileTriageDecision,
 } from './nodes.js';
 
 describe('operator goal propagation', () => {
@@ -30,13 +31,14 @@ describe('operator goal propagation', () => {
       secretKinds: {},
       corpus: { familyKey: 'uefi', familyImageCount: 1, reusedCredentials: 0 },
       alreadyExtracted: true,
+      measurement: { completedStages: ['chipsec'], findings: { total: 0, byProofState: {}, top: [] } },
     } satisfies TriageContext;
     const target = {
       goal,
       identity: { firmwareClass: 'uefi-bios', arch: 'x86_64' },
       capabilities: { strategy: 'static-only', proofCeiling: 'static', reason: 'UEFI', maxRung: 'none' },
       binaries: [],
-      findings: { total: 0, bySeverity: {}, byProofState: {}, operatorAssertions: 0 },
+      findings: { total: 0, bySeverity: {}, byProofState: {}, operatorAssertions: 0, top: [] },
       corpus: { reusedArtifacts: 0, prevalentComponents: 0 },
     } satisfies TargetSelectionContext;
 
@@ -121,6 +123,57 @@ describe('parseTriageDecision', () => {
     expect(d.resolvedClass).toBe('unknown');
     expect(d.classConfidence).toBe('low');
     expect(d.rationale).toContain('no rationale');
+  });
+});
+
+describe('reconcileTriageDecision — measured identity is authoritative', () => {
+  const context = {
+    goal: null,
+    identity: { firmwareClass: 'uefi-bios', arch: 'x86_64', endianness: 'little', filesystems: [], bootloader: null },
+    size: 1,
+    entropy: { mean: 1, max: 2, likelyEncrypted: false, likelyCompressed: false, highEntropyRegions: 0 },
+    signatures: [],
+    secretKinds: {},
+    corpus: { familyKey: 'uefi', familyImageCount: 1, reusedCredentials: 0 },
+    alreadyExtracted: false,
+    measurement: { completedStages: [], findings: { total: 0, byProofState: {}, top: [] } },
+  } satisfies TriageContext;
+
+  it('retains a conflicting model proposal but cannot reclassify or extract a measured non-rootfs image', () => {
+    const proposal = parseTriageDecision(
+      JSON.stringify({
+        resolvedClass: 'embedded-linux',
+        classConfidence: 'high',
+        shouldExtract: true,
+        extractionCascade: ['binwalk'],
+        attackSurface: ['filesystem'],
+        rationale: 'generic filesystem signature',
+      }),
+    );
+    const decision = reconcileTriageDecision(context, proposal);
+    expect(decision.resolvedClass).toBe('uefi-bios');
+    expect(decision.suggestedClass).toBe('embedded-linux');
+    expect(decision.classAgreement).toBe('conflict');
+    expect(decision.shouldExtract).toBe(false);
+    expect(decision.extractionCascade).toEqual([]);
+  });
+
+  it('records agreement explicitly', () => {
+    const proposal = parseTriageDecision(
+      JSON.stringify({ resolvedClass: 'uefi-bios', shouldExtract: false, rationale: 'firmware volumes' }),
+    );
+    expect(reconcileTriageDecision(context, proposal).classAgreement).toBe('confirmed');
+  });
+
+  it('keeps a proposal advisory while the measured class is unknown', () => {
+    const unknown = { ...context, identity: { ...context.identity, firmwareClass: 'unknown' as const } };
+    const proposal = parseTriageDecision(
+      JSON.stringify({ resolvedClass: 'embedded-linux', shouldExtract: true, rationale: 'weak hint' }),
+    );
+    const decision = reconcileTriageDecision(unknown, proposal);
+    expect(decision.resolvedClass).toBe('unknown');
+    expect(decision.suggestedClass).toBe('embedded-linux');
+    expect(decision.classAgreement).toBe('measured-unknown');
   });
 });
 

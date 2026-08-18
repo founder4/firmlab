@@ -15,13 +15,12 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
-import { type CredMatchResult, runCredMatch } from '../providers/credmatch.js';
+import { CREDMATCH_SOURCE, type CredMatchResult, runCredMatch } from '../providers/credmatch.js';
 import { startJob } from '../providers/jobs.js';
 import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { getImage, listJobs } from '../store.js';
 
 /** The source string both this route and any future autonomous stage must use — one ledger namespace, not two. */
-export const CREDMATCH_SOURCE = 'credmatch';
 
 const STAGE: RootfsStage = {
   stage: 'credmatch',

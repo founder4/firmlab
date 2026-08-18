@@ -28,6 +28,8 @@ import type { OpacidadPlanEntry } from './opacidad-narrative.js';
 export type ProviderId =
   | 'extract'
   | 'fsaudit'
+  | 'credmatch'
+  | 'yarascan'
   | 'auxsecrets'
   | 'sbom'
   | 'compcve'
@@ -49,6 +51,7 @@ export type ProviderId =
   | 'webtaint'
   | 'binvuln'
   | 'kmod'
+  | 'exportreach'
   | 'symreach'
   | 'dynprobe'
   | 'decompile';
@@ -65,6 +68,8 @@ export type ProviderId =
 export type PlanReasonId =
   | 'extract'
   | 'credentials'
+  | 'credentialCrossReference'
+  | 'yaraRuleScan'
   | 'auxSecrets'
   | 'sbom'
   | 'componentFingerprint'
@@ -82,6 +87,7 @@ export type PlanReasonId =
   | 'webTaint'
   | 'binaryVulnSweep'
   | 'kernelModules'
+  | 'exportReachability'
   | 'updatePath'
   | 'chipsec'
   | 'fwhunt'
@@ -93,6 +99,8 @@ export type PlanReasonId =
 export const PLAN_REASON_IDS: readonly PlanReasonId[] = [
   'extract',
   'credentials',
+  'credentialCrossReference',
+  'yaraRuleScan',
   'auxSecrets',
   'sbom',
   'componentFingerprint',
@@ -110,6 +118,7 @@ export const PLAN_REASON_IDS: readonly PlanReasonId[] = [
   'webTaint',
   'binaryVulnSweep',
   'kernelModules',
+  'exportReachability',
   'updatePath',
   'chipsec',
   'fwhunt',
@@ -235,6 +244,13 @@ const LINUX_CHAIN: SeedSpec[] = [
     provider: 'fsaudit',
   },
   {
+    worker: 'W3 · Credential cross-reference',
+    reasonId: 'credentialCrossReference',
+    needsRootfs: true,
+    built: true,
+    provider: 'credmatch',
+  },
+  {
     worker: 'W3 · Auxiliary-partition secrets',
     reasonId: 'auxSecrets',
     needsRootfs: false,
@@ -254,6 +270,13 @@ const LINUX_CHAIN: SeedSpec[] = [
     needsRootfs: true,
     built: true,
     provider: 'compcve',
+  },
+  {
+    worker: 'Static · YARA rule corpus',
+    reasonId: 'yaraRuleScan',
+    needsRootfs: true,
+    built: true,
+    provider: 'yarascan',
   },
   {
     // Deliberately `needsRootfs: false` even though the rootfs is what makes it strong. The kernel banner lives in a
@@ -334,6 +357,13 @@ const LINUX_CHAIN: SeedSpec[] = [
     needsRootfs: true,
     built: true,
     provider: 'kmod',
+  },
+  {
+    worker: 'W5 · Export reachability',
+    reasonId: 'exportReachability',
+    needsRootfs: true,
+    built: true,
+    provider: 'exportreach',
   },
   {
     // Deliberately `needsRootfs: false`: half the question (what integrity metadata the shipped image carries) is

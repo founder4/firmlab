@@ -343,6 +343,7 @@ export const imageDetail = {
     },
 
     triageClass: 'class',
+    triageSuggested: (value: string) => `model proposed ${value}; measured identity wins`,
     triageExtract: 'extract:',
     cascade: (chain: string) => `cascade ${chain}`,
     attackSurface: (surface: string) => `attack surface: ${surface}`,
@@ -357,6 +358,8 @@ export const imageDetail = {
     exit: 'exit',
     proofState: 'proof-state',
     tokens: (n: number) => `${n} tok`,
+    reasoningTokens: (n: number) => `${n} reasoning`,
+    jsonFallback: 'JSON recovery used',
     audit: 'audit: inputs & decision',
 
     budgetSteps: 'steps',

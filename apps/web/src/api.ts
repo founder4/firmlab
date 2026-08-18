@@ -701,6 +701,8 @@ export interface AgentStep {
   model: string | null;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens: number;
+  fallbackUsed: boolean;
   createdAt: number;
 }
 

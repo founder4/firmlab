@@ -179,6 +179,10 @@ export interface AgentStepRow {
   model: string | null;
   inputTokens: number;
   outputTokens: number;
+  /** Subset of outputTokens spent in hidden provider reasoning; zero when absent/unreported. */
+  reasoningTokens: number;
+  /** SQLite boolean: the structured call needed its bounded non-thinking recovery attempt. */
+  fallbackUsed: number;
   createdAt: number;
 }
 
@@ -365,6 +369,8 @@ export function getDb(): FirmLabDatabase {
       model TEXT,
       inputTokens INTEGER NOT NULL DEFAULT 0,
       outputTokens INTEGER NOT NULL DEFAULT 0,
+      reasoningTokens INTEGER NOT NULL DEFAULT 0,
+      fallbackUsed INTEGER NOT NULL DEFAULT 0,
       createdAt INTEGER NOT NULL,
       FOREIGN KEY (sessionId) REFERENCES agent_session(id) ON DELETE CASCADE
     );
@@ -468,6 +474,15 @@ export function getDb(): FirmLabDatabase {
   for (const column of ['evidenceChannel TEXT', 'interventionsJson TEXT']) {
     try {
       db.exec(`ALTER TABLE findings ADD COLUMN ${column}`);
+    } catch {
+      // Column already present — nothing to do.
+    }
+  }
+  // Migration: provider reasoning telemetry. It is operational metadata, never chain-of-thought content. Older
+  // steps correctly read as zero/not-used because the adapter did not preserve either measurement then.
+  for (const column of ['reasoningTokens INTEGER NOT NULL DEFAULT 0', 'fallbackUsed INTEGER NOT NULL DEFAULT 0']) {
+    try {
+      db.exec(`ALTER TABLE agent_step ADD COLUMN ${column}`);
     } catch {
       // Column already present — nothing to do.
     }
@@ -869,8 +884,10 @@ export function insertStep(row: AgentStepRow): void {
   getDb()
     .prepare(
       `INSERT INTO agent_step
-         (id, sessionId, seq, node, status, inputJson, outputJson, rationale, model, inputTokens, outputTokens, createdAt)
-       VALUES (@id, @sessionId, @seq, @node, @status, @inputJson, @outputJson, @rationale, @model, @inputTokens, @outputTokens, @createdAt)`,
+         (id, sessionId, seq, node, status, inputJson, outputJson, rationale, model, inputTokens, outputTokens,
+          reasoningTokens, fallbackUsed, createdAt)
+       VALUES (@id, @sessionId, @seq, @node, @status, @inputJson, @outputJson, @rationale, @model, @inputTokens,
+               @outputTokens, @reasoningTokens, @fallbackUsed, @createdAt)`,
     )
     .run(asParams(row));
 }
