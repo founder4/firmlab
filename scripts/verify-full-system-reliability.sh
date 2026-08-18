@@ -79,6 +79,7 @@ jq -s '
       liveWebProbes: [.result.webProbes[]? | {
         pass,
         guest,
+        protocol,
         available: .result.available,
         requests: .result.requests,
         points: .result.points,
@@ -93,7 +94,11 @@ jq -s '
       stableHeadline: (([.runs[].proofState] | unique | length) == 1),
       noPanics: ([.runs[].passes[]?.panicked == false] | all),
       consoleRecoveredEveryRun: ([.runs[] | (.console.attempted and .console.shellAnswered and .console.teardownRan and .console.policyBefore == "DROP" and .console.policyAfter == "ACCEPT" and (.console.openGuestPorts | index(80) != null))] | all),
-      liveHttpProbedEveryRun: ([.runs[] | any(.liveWebProbes[]?; .pass == 3 and .guest == 80 and .available and .requests > 0 and (.interventions | length) > 0)] | all),
+      liveHttpAndHttpsProbedEveryRun: ([.runs[] |
+        (any(.liveWebProbes[]?; .pass == 3 and .guest == 80 and .protocol == "http" and .available and .requests > 0 and (.interventions | length) > 0))
+        and
+        (any(.liveWebProbes[]?; .pass == 3 and .guest == 443 and .protocol == "https" and .available and .requests > 0 and (.interventions | length) > 0))
+      ] | all),
       reproducibilityStableAtFive: ((.runs[-1].reproducibility.kind == "stable") and (.runs[-1].reproducibility.n >= 5))
     }
   | .success = ([.checks[]] | all)

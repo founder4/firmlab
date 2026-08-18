@@ -86,7 +86,7 @@ import {
   QEMU_USER_BY_ARCH,
   firmadyneKernelFor,
 } from './preflight.js';
-import { type WebProbeResult, runWebProbe } from './webprobe.js';
+import { type WebProbeResult, fetchFirmwareLoopback, runWebProbe } from './webprobe.js';
 
 // The kernel catalogue moved up to preflight.ts, which now needs it to answer "can this deployment boot this
 // architecture?" before a runner is ever reached. Re-exported here because this module was its home and both
@@ -108,7 +108,7 @@ export interface LiveWebProbeObservation {
   target: string;
   host: number;
   guest: number;
-  protocol: 'http';
+  protocol: 'http' | 'https';
   result: WebProbeResult;
   /** Present on the console pass, where the service is not the firmware as shipped. */
   interventions?: string[];
@@ -1618,7 +1618,7 @@ interface BootOutcome {
     target: string;
     host: number;
     guest: number;
-    protocol: 'http';
+    protocol: 'http' | 'https';
     result: WebProbeResult;
   }>;
   consoleState: { booted: boolean; marker: string | null; panicked: boolean };
@@ -1715,13 +1715,17 @@ async function bootOnce(
             `  [${label}] guest port ${f.guest} ANSWERED on host ${f.host} — a service inside the guest replied, not just qemu accepting.`,
           );
           // This has to happen HERE. Once bootOnce returns, its finally has killed qemu and the forwarded service
-          // no longer exists. HTTP is actively driven; HTTPS is still measured for reachability, but global fetch
-          // deliberately does not disable certificate verification for firmware's self-signed certificates.
-          if (f.protocol === 'http') {
-            const target = `http://127.0.0.1:${f.host}`;
+          // no longer exists. The scoped transport accepts a firmware's self-signed/legacy TLS ONLY on loopback;
+          // it never weakens global fetch or any request that can leave the host.
+          if (f.protocol === 'http' || f.protocol === 'https') {
+            const target = `${f.protocol}://127.0.0.1:${f.host}`;
             handle.log(`  [${label}] actively probing ${target} while this qemu pass is alive.`);
-            const result = await runWebProbe(target, { timeoutMs: 1500, maxRequests: 40 });
-            webProbes.push({ target, host: f.host, guest: f.guest, protocol: 'http', result });
+            const result = await runWebProbe(target, {
+              fetch: fetchFirmwareLoopback,
+              timeoutMs: 1500,
+              maxRequests: 40,
+            });
+            webProbes.push({ target, host: f.host, guest: f.guest, protocol: f.protocol, result });
             handle.log(
               `  [${label}] live web probe: available=${result.available}, requests=${result.requests}, points=${result.points}, reproduced=${result.findings.length}.`,
             );

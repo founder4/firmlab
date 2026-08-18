@@ -12,6 +12,8 @@
  * bounded HTTP and composes them, with an injectable fetch so tests never touch the network.
  */
 import { randomBytes } from 'node:crypto';
+import http from 'node:http';
+import https from 'node:https';
 import type { EvidenceChannel, FindingSeverity, ProofState } from '@firmlab/core';
 
 export interface WebFinding {
@@ -122,7 +124,7 @@ export interface WebProbeResult {
   findings: WebFinding[];
 }
 
-type FetchLike = (
+export type FetchLike = (
   url: string,
   init?: { method?: string; signal?: AbortSignal; body?: string },
 ) => Promise<{
@@ -130,6 +132,74 @@ type FetchLike = (
   status: number;
   text: () => Promise<string>;
 }>;
+
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const LOOPBACK_RESPONSE_CAP = 200_000;
+
+/**
+ * Fetch a service forwarded from a live firmware guest, including its normal self-signed/legacy HTTPS.
+ *
+ * The relaxed TLS policy is intentionally inseparable from the loopback guard. Firmware often ships a self-signed
+ * certificate and TLS 1.0-era stack; accepting those is necessary to test the sandbox, but doing it through a
+ * process-global switch would also weaken research/advisory requests. This transport rejects every non-loopback
+ * URL before opening a socket and applies `rejectUnauthorized:false` only to that one HTTPS request.
+ */
+export function fetchFirmwareLoopback(
+  rawUrl: string,
+  init: { method?: string; signal?: AbortSignal; body?: string } = {},
+): ReturnType<FetchLike> {
+  const url = new URL(rawUrl);
+  if (!LOOPBACK_NAMES.has(url.hostname)) {
+    return Promise.reject(new Error(`Firmware TLS relaxation is restricted to loopback, not ${url.hostname}.`));
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return Promise.reject(new Error(`Unsupported firmware probe protocol: ${url.protocol}`));
+  }
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === 'https:' ? https : http;
+    const request = transport.request(
+      url,
+      {
+        method: init.method ?? 'GET',
+        ...(url.protocol === 'https:'
+          ? {
+              rejectUnauthorized: false,
+              // Old embedded servers frequently stop at TLS 1.0 and weak-but-still-observable cipher suites.
+              // This is scoped to the guarded loopback socket above; it never changes Node's global TLS policy.
+              minVersion: 'TLSv1' as const,
+              ciphers: 'DEFAULT@SECLEVEL=0',
+            }
+          : {}),
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        let kept = 0;
+        response.on('data', (chunk: Buffer) => {
+          if (kept >= LOOPBACK_RESPONSE_CAP) return;
+          const take = chunk.subarray(0, LOOPBACK_RESPONSE_CAP - kept);
+          chunks.push(take);
+          kept += take.length;
+        });
+        response.once('end', () => {
+          const status = response.statusCode ?? 0;
+          resolve({
+            ok: status >= 200 && status < 300,
+            status,
+            text: async () => Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+      },
+    );
+    const abort = (): void => {
+      request.destroy(new Error('Firmware probe aborted.'));
+    };
+    init.signal?.addEventListener('abort', abort, { once: true });
+    request.once('error', reject);
+    request.once('close', () => init.signal?.removeEventListener('abort', abort));
+    if (init.body) request.write(init.body);
+    request.end();
+  });
+}
 
 /**
  * Drive a booted firmware service: fetch the base page, discover injection points (+ the built-in sinks), and
