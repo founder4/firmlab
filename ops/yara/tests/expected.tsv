@@ -1,0 +1,6 @@
+FIRMLAB_FW_Script_Download_And_Execute	positive/download-execute.sh
+FIRMLAB_FW_Telnetd_Unauthenticated_Shell	positive/telnet-shell.sh
+FIRMLAB_FW_Script_Reverse_Shell	positive/reverse-shell.sh
+FIRMLAB_FW_Web_Handler_OS_Command_Execution	positive/web-command.php
+FIRMLAB_FW_Update_TLS_Verification_Disabled	positive/insecure-update.sh
+FIRMLAB_FW_LD_Preload_Persistence_Write	positive/preload-write.sh

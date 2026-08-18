@@ -19,6 +19,7 @@
     "check:nul": "bash scripts/check-nul.sh",
     "check:comment-glob": "bash scripts/check-comment-glob.sh",
     "check:web-api-mock": "bash scripts/check-web-api-mock.sh",
+    "test:yara-policy": "bash scripts/test-yara-policy.sh",
     "ui:up": "bash scripts/ui-expose.sh up",
     "ui:down": "bash scripts/ui-expose.sh down",
     "ui:shot": "node scripts/ui-drive.mjs"

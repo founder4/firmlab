@@ -310,6 +310,19 @@ describe('loadRuleCorpus', () => {
     expect(files).toEqual([]);
     expect(missingSources).toEqual(['/nonexistent/rules']);
   });
+
+  it('reads a public bundle beyond 4 MiB so its denominator describes the bytes yara actually compiles', () => {
+    const dir = tmp();
+    const bundle = path.join(dir, 'bundle.yar');
+    fs.writeFileSync(
+      bundle,
+      `rule BeforeBoundary { condition: false }\n/*${'x'.repeat(4 * 1024 * 1024)}*/\nrule AfterBoundary { condition: false }\n`,
+    );
+
+    const { files } = loadRuleCorpus([bundle]);
+    expect(files).toHaveLength(1);
+    expect(files[0]?.rules.map((rule) => rule.name)).toEqual(['BeforeBoundary', 'AfterBoundary']);
+  });
 });
 
 describe('yaraCorpusSources — the built-in corpus is empty on purpose', () => {

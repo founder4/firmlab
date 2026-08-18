@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "profile": "firmware-balanced",
+  "generatedAt": "2026-08-18",
+  "minimumYaraVersion": "4.2.3",
+  "external": {
+    "name": "YARA Forge Core",
+    "project": "https://github.com/YARAHQ/yara-forge",
+    "release": "20260816",
+    "releaseUrl": "https://github.com/YARAHQ/yara-forge/releases/tag/20260816",
+    "archiveUrl": "https://github.com/YARAHQ/yara-forge/releases/download/20260816/yara-forge-rules-core.zip",
+    "archiveSha256": "c3f0784e78f3c8e53daa52ca3746fba00e6b5b1139fb7b25bd75c24ae495bc32",
+    "archiveBytes": 1708080,
+    "archiveMember": "packages/core/yara-rules-core.yar",
+    "ruleFileSha256": "eb7af9498349dd7991b710a881a4a0b7bc89b0671bb3108db6a87dbaf5630cb9",
+    "ruleFileBytes": 7720773,
+    "rulesDeclared": 5034,
+    "selection": {
+      "minimumQuality": 70,
+      "minimumScore": 65,
+      "maximumAgeDays": 2500,
+      "forceIncludeImportance": 80,
+      "forceExcludeImportance": 50
+    }
+  },
+  "local": {
+    "name": "FirmLab operator firmware policy",
+    "source": "operator-firmware-policy.yar",
+    "sha256": "bcf1afa63fd644322063f958e6e2c26b3149882c8314e1589ca15579223ab29d",
+    "rulesDeclared": 6
+  },
+  "totals": {
+    "ruleFiles": 2,
+    "rulesDeclared": 5040
+  }
+}

@@ -143,16 +143,17 @@ this codebase that step has repeatedly been the whole task.
    capabilities have almost no evidence behind them, and each was discovered separately before the pattern was
    named: **no UEFI image at all**, so every `chipsec`/`fwhunt` branch is tested against fixtures and the whole
    posture reader has never met a vendor BIOS; **2 of 2007 binaries triaged**, so the hardening columns are
-   honest-but-blank on 2005 rows; **no yara rule corpus**, so the rule lane reports `no_corpus` on every image; and
+   honest-but-blank on 2005 rows; **the YARA corpus was closed 2026-08-18** with a hash-pinned YARA Forge Core
+   release plus six operator heuristics, so it is no longer part of this acquisition gap; and
    the egress observation found the corpus **barely talks**, which is the finding that should decide the
    interception work rather than a preference. Acquiring three or four images that exercise these — a real UEFI
    dump, something chatty, something with a vendor NVRAM store — buys more than any provider on this list, because
    it converts capabilities that can only report their own limits into capabilities that can answer.
-2. **A yara rule corpus this deployment can actually run.** The engine is installed and the reader exists; FirmLab
-   ships no signatures **by design**, so "yara is installed" and "this deployment can answer" stay two facts. The
-   gap is that nothing tells an operator where to get a corpus, and the honest fix is the FwHunt shape: pin a public
-   rule set to a ref, report the denominator (`rulesDeclared`/`rulesApplied`/`rulesLost`), and attribute a match to
-   the rule and its author rather than restating it as FirmLab's verdict.
+2. **CLOSED 2026-08-18 — a YARA corpus this deployment can actually run.** The operator layer now pins YARA Forge
+   Core 20260816 by archive and extracted-file SHA-256 (5,034 rules) and adds six documented firmware heuristics.
+   It is mounted read-only rather than baked into FirmLab, preserves the existing
+   `rulesDeclared`/`rulesApplied`/`rulesLost` denominator, and every match remains attributed to its rule and author.
+   Update and fixture scripts live under `ops/yara`; redistribution still requires per-source license review.
 3. **Make the guest repair reach the guest.** Re-derived 2026-07-30 after retracting the claim that it worked:
    the repair appends to the END of `/etc/rc.d/rcS` and on the WR940N `rcS` emits no `execve` after line 45 of 46, so
    nothing appended there is ever reached. Two questions, in order: why `rcS` stops one line short (the guest lives on

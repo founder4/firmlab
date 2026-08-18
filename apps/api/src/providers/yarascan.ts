@@ -83,8 +83,15 @@ const RULE_FILE_EXT = /\.(yar|yara)$/i;
 /** Human name of the filter above, so the result can say what it skipped by. */
 export const RULE_FILE_FILTER = '.yar/.yara';
 
-/** How much of a rule file is read. Public corpora carry rules with megabytes of hex strings in one file. */
-const RULE_FILE_READ_BYTES = 4 * 1024 * 1024;
+/**
+ * How much of a rule file is read for its denominator and attribution metadata.
+ *
+ * This used to be 4 MiB and silently counted only 2,255 of YARA Forge Core's 5,034 declarations while the real
+ * `yara` invocation compiled and applied the whole 7.7 MiB bundle. A denominator that describes different bytes
+ * from the scanner is worse than no denominator. 64 MiB matches the per-target ceiling and covers the pinned
+ * public bundle with room for growth; corpus updates are compiled and denominator-checked before deployment.
+ */
+const RULE_FILE_READ_BYTES = 64 * 1024 * 1024;
 
 /** How many matched file paths one rule's finding lists before it starts counting them instead. */
 const MATCHED_FILE_LIST_CAP = 20;
