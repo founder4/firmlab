@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   type LlmConfig,
+  LlmOutputError,
   buildAnthropicRequest,
   buildChatCompletionsRequest,
   loadLlmConfig,
   parseAnthropicResponse,
   parseChatCompletionsResponse,
+  parseLlmOutput,
 } from './llm.js';
 
 const deepseek: LlmConfig = {
@@ -75,6 +77,13 @@ describe('buildChatCompletionsRequest (DeepSeek/OpenAI)', () => {
     expect(body.temperature).toBe(0.2);
     expect(body.max_tokens).toBe(2048);
   });
+
+  it('uses non-thinking provider-enforced JSON for a DeepSeek decision node', () => {
+    const body = JSON.parse(buildChatCompletionsRequest(deepseek, 'Return JSON', 'Decide', 'json').body);
+    expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.thinking).toEqual({ type: 'disabled' });
+    expect(body.temperature).toBeUndefined();
+  });
 });
 
 describe('parseChatCompletionsResponse', () => {
@@ -84,6 +93,23 @@ describe('parseChatCompletionsResponse', () => {
       usage: { prompt_tokens: 10, completion_tokens: 5 },
     });
     expect(out).toEqual({ text: 'answer', inputTokens: 10, outputTokens: 5 });
+  });
+
+  it('preserves usage when a structured response cannot be parsed', () => {
+    const result = {
+      text: '',
+      model: 'deepseek-v4-pro',
+      provider: 'deepseek' as const,
+      inputTokens: 10,
+      outputTokens: 5,
+    };
+    try {
+      parseLlmOutput(result, JSON.parse);
+      throw new Error('expected parse failure');
+    } catch (err) {
+      expect(err).toBeInstanceOf(LlmOutputError);
+      expect((err as LlmOutputError).result).toBe(result);
+    }
   });
 });
 

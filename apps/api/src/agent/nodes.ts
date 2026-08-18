@@ -11,7 +11,7 @@
  */
 import type { StaticAnalysis } from '@firmlab/core';
 import type { LlmConfig, LlmResult } from '../llm.js';
-import { complete } from '../llm.js';
+import { completeJson, parseLlmOutput } from '../llm.js';
 import type { RuntimeCapabilities, RuntimeStrategy } from '../providers/preflight.js';
 // `store` and `corpus` are imported lazily inside the gather* functions so the pure prompt/parse helpers in this
 // module unit-test without loading node:sqlite (the same convention as providers/diff.ts and preflight.ts).
@@ -213,8 +213,8 @@ export interface NodeRun<T> {
 }
 
 export async function runTriageNode(ctx: TriageContext, cfg: LlmConfig): Promise<NodeRun<TriageDecision>> {
-  const result = await complete(TRIAGE_SYSTEM_PROMPT, buildTriageUserPrompt(ctx), cfg);
-  return { decision: parseTriageDecision(result.text), result };
+  const result = await completeJson(TRIAGE_SYSTEM_PROMPT, buildTriageUserPrompt(ctx), cfg);
+  return { decision: parseLlmOutput(result, parseTriageDecision), result };
 }
 
 // === Node ② Target selection ===
@@ -350,6 +350,6 @@ export async function runTargetSelectionNode(
   caps: RuntimeCapabilities,
   cfg: LlmConfig,
 ): Promise<NodeRun<TargetSelectionDecision>> {
-  const result = await complete(TARGET_SELECTION_SYSTEM_PROMPT, buildTargetSelectionUserPrompt(ctx), cfg);
-  return { decision: parseTargetSelectionDecision(result.text, caps.strategy), result };
+  const result = await completeJson(TARGET_SELECTION_SYSTEM_PROMPT, buildTargetSelectionUserPrompt(ctx), cfg);
+  return { decision: parseLlmOutput(result, (text) => parseTargetSelectionDecision(text, caps.strategy)), result };
 }

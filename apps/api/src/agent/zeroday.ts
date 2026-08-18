@@ -9,7 +9,7 @@
  * The context gatherer reads the store/corpus lazily; the prompt + parse helpers are pure and unit-tested.
  */
 import type { LlmConfig, LlmResult } from '../llm.js';
-import { complete } from '../llm.js';
+import { completeJson, parseLlmOutput } from '../llm.js';
 import type { DecompileResult } from '../providers/decompile.js';
 import { type TaintScaffold, buildTaintScaffold } from '../providers/taint.js';
 
@@ -150,6 +150,6 @@ export interface ZerodayRun {
 }
 
 export async function runZerodayNode(ctx: ZerodayContext, cfg: LlmConfig): Promise<ZerodayRun> {
-  const result = await complete(ZERODAY_SYSTEM_PROMPT, buildZerodayUserPrompt(ctx), cfg);
-  return { decision: parseZerodayDecision(result.text), result };
+  const result = await completeJson(ZERODAY_SYSTEM_PROMPT, buildZerodayUserPrompt(ctx), cfg);
+  return { decision: parseLlmOutput(result, parseZerodayDecision), result };
 }

@@ -29,6 +29,18 @@ export interface LlmResult {
   outputTokens?: number;
 }
 
+/** A provider answered and consumed tokens, but its final text could not be used by a structured node. */
+export class LlmOutputError extends Error {
+  override readonly name = 'LlmOutputError';
+
+  constructor(
+    message: string,
+    readonly result: LlmResult,
+  ) {
+    super(message);
+  }
+}
+
 /** Per-provider defaults. DeepSeek is the default provider (v4-flash: general-purpose, 1M context). */
 export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseUrl: string; model: string; keyEnv: string }> = {
   deepseek: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash', keyEnv: 'DEEPSEEK_API_KEY' },
@@ -67,19 +79,34 @@ export interface HttpRequest {
 
 // === OpenAI-compatible adapter (DeepSeek, OpenAI, any /chat/completions server) ===
 
-export function buildChatCompletionsRequest(cfg: LlmConfig, system: string, user: string): HttpRequest {
+export function buildChatCompletionsRequest(
+  cfg: LlmConfig,
+  system: string,
+  user: string,
+  format: 'text' | 'json' = 'text',
+): HttpRequest {
+  const body: Record<string, unknown> = {
+    model: cfg.model,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    max_tokens: cfg.maxTokens,
+  };
+  if (format === 'json') {
+    body.response_format = { type: 'json_object' };
+    // DeepSeek v4 defaults to thinking=enabled. Its reasoning tokens share max_tokens with the final answer; two
+    // live sessions observed on 2026-08-18 returned empty `content` after ~68 s, while the same real prompt in
+    // non-thinking JSON mode returned its object in 4 s. A branch decision needs that small validated object, not
+    // hidden chain-of-thought. Anthropic has no equivalent request field and relies on the explicit prompt.
+    if (cfg.provider === 'deepseek') body.thinking = { type: 'disabled' };
+  } else {
+    body.temperature = 0.2; // low, for stable narrative analysis (ignored by DeepSeek while thinking is enabled)
+  }
   return {
     url: `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`,
     headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.apiKey}` },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      temperature: 0.2, // low, for stable analysis (DeepSeek default is 1; range 0–2)
-      max_tokens: cfg.maxTokens,
-    }),
+    body: JSON.stringify(body),
   };
 }
 
@@ -137,9 +164,16 @@ export function parseAnthropicResponse(json: unknown): { text: string; inputToke
 }
 
 /** Dispatch to the right adapter, POST it, and return the parsed completion. Throws on a non-2xx response. */
-export async function complete(system: string, user: string, cfg: LlmConfig): Promise<LlmResult> {
+async function dispatchCompletion(
+  system: string,
+  user: string,
+  cfg: LlmConfig,
+  format: 'text' | 'json',
+): Promise<LlmResult> {
   const isAnthropic = cfg.provider === 'anthropic';
-  const req = isAnthropic ? buildAnthropicRequest(cfg, system, user) : buildChatCompletionsRequest(cfg, system, user);
+  const req = isAnthropic
+    ? buildAnthropicRequest(cfg, system, user)
+    : buildChatCompletionsRequest(cfg, system, user, format);
   const res = await fetch(req.url, { method: 'POST', headers: req.headers, body: req.body });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
@@ -151,4 +185,22 @@ export async function complete(system: string, user: string, cfg: LlmConfig): Pr
   if (parsed.inputTokens !== undefined) result.inputTokens = parsed.inputTokens;
   if (parsed.outputTokens !== undefined) result.outputTokens = parsed.outputTokens;
   return result;
+}
+
+export async function complete(system: string, user: string, cfg: LlmConfig): Promise<LlmResult> {
+  return dispatchCompletion(system, user, cfg, 'text');
+}
+
+/** Structured decision call: provider-enforced JSON where supported, ordinary prompt discipline on Anthropic. */
+export async function completeJson(system: string, user: string, cfg: LlmConfig): Promise<LlmResult> {
+  return dispatchCompletion(system, user, cfg, 'json');
+}
+
+/** Preserve provider usage when schema parsing fails so the governor never reports a paid turn as free. */
+export function parseLlmOutput<T>(result: LlmResult, parse: (text: string) => T): T {
+  try {
+    return parse(result.text);
+  } catch (err) {
+    throw new LlmOutputError(err instanceof Error ? err.message : String(err), result);
+  }
 }

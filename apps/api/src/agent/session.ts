@@ -13,7 +13,7 @@ import type { Architecture } from '@firmlab/core';
 import { runCopilot } from '../copilot.js';
 import { deviceFamilyKey, recordReachabilityPrior } from '../corpus.js';
 import { type FindingDraft, syncFindings } from '../findings.js';
-import { loadLlmConfig } from '../llm.js';
+import { LlmOutputError, loadLlmConfig } from '../llm.js';
 import type { LlmConfig } from '../llm.js';
 import { type DecompileResult, resolveInsideRootfs, runDecompile } from '../providers/decompile.js';
 import { buildSystemEmulationFindings, runChrootService } from '../providers/emulate-system.js';
@@ -44,7 +44,7 @@ import {
   updateFindingProofState,
   updateSession,
 } from '../store.js';
-import { Governor, ZERO_CONSUMED, loadGovernorBudget } from './governor.js';
+import { Governor, ZERO_CONSUMED, estimateUsd, loadGovernorBudget } from './governor.js';
 import {
   type EmulationRung,
   type TargetSelectionDecision,
@@ -130,8 +130,23 @@ export function startAgentSession(imageId: string, cfg: LlmConfig, goal: string 
   insertSession(session);
   void orchestrate(session, cfg).catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
-    recordStep(session.id, 'error', 'error', undefined, undefined, message, null, 0, 0);
-    updateSession(session.id, 'error', session.consumedJson, message);
+    const current = getSession(session.id) ?? session;
+    const consumed = JSON.parse(current.consumedJson) as typeof ZERO_CONSUMED;
+    let model: string | null = null;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    if (err instanceof LlmOutputError) {
+      model = err.result.model;
+      inputTokens = err.result.inputTokens ?? 0;
+      outputTokens = err.result.outputTokens ?? 0;
+      consumed.steps += 1;
+      consumed.inputTokens += inputTokens;
+      consumed.outputTokens += outputTokens;
+      consumed.usd += estimateUsd(model, inputTokens, outputTokens);
+    }
+    consumed.elapsedMs = Math.max(consumed.elapsedMs, Date.now() - session.createdAt);
+    recordStep(session.id, 'error', 'error', undefined, undefined, message, model, inputTokens, outputTokens);
+    updateSession(session.id, 'error', JSON.stringify(consumed), message);
   });
   return session;
 }
