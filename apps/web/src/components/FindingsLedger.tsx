@@ -31,7 +31,7 @@
  * are shown as written, in whatever language produced them.
  */
 import { compareFindings, isEstablished, severityCensus } from '@firmlab/core';
-import { Fragment, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import type { Finding, FindingProvenance, OperatorAssertion } from '../api';
 import { messages, useMessages } from '../i18n';
 
@@ -240,18 +240,25 @@ export function selectLedgerRows(
 function SeverityCensus({ census }: { census: ReturnType<typeof severityCensus> }): JSX.Element {
   const t = useMessages();
   return (
-    <div style={{ marginTop: 10 }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', alignItems: 'center' }}>
+    <div className="severity-census">
+      <div className="severity-census-grid">
         {census.map((c) => (
-          <span key={c.severity} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12 }}>
-            {c.established > 0 ? <SeverityMark severity={c.severity} proofState="static_confirmed" decorative /> : null}
-            {c.unproven > 0 ? (
-              <SeverityMark severity={c.severity} proofState="needs_runtime_reproduction" decorative />
-            ) : null}
-            <span style={{ color: 'var(--text-dim)' }}>
-              {t.findings.census.band(c.severity, c.total, c.established, c.unproven)}
-            </span>
-          </span>
+          <div key={c.severity} className={`severity-summary severity-${c.severity}`}>
+            <div className="severity-summary-head">
+              <span className="severity-name">{c.severity}</span>
+              <strong className="num">{c.total}</strong>
+            </div>
+            <div className="severity-summary-split">
+              {c.established > 0 ? (
+                <SeverityMark severity={c.severity} proofState="static_confirmed" decorative />
+              ) : null}
+              {c.unproven > 0 ? (
+                <SeverityMark severity={c.severity} proofState="needs_runtime_reproduction" decorative />
+              ) : null}
+              <span>{t.findings.census.split(c.established, c.unproven)}</span>
+            </div>
+            <span className="sr-only">{t.findings.census.band(c.severity, c.total, c.established, c.unproven)}</span>
+          </div>
         ))}
       </div>
       <div className="hint" style={{ marginTop: 6, maxWidth: '72ch' }}>
@@ -327,6 +334,8 @@ function DanglingDisputeNote({ dangling }: { dangling: readonly Finding[] }): JS
 export function FindingsLedger({ findings }: { findings: readonly Finding[] }): JSX.Element {
   const t = useMessages();
   const [showAll, setShowAll] = useState(false);
+  const [filter, setFilter] = useState<'all' | 'priority' | 'established' | 'unproven'>('all');
+  const [query, setQuery] = useState('');
   /**
    * Which rows have their reasoning open.
    *
@@ -348,7 +357,22 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
   const contestedIds = new Set(disputesByTarget.keys());
   // The whole ledger, not the capped view: a census of the rows that happened to fit would be a different claim.
   const census = severityCensus(findings);
-  const view = selectLedgerRows(findings, contestedIds, showAll ? Number.POSITIVE_INFINITY : MAX_LEDGER_ROWS);
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return findings.filter((f) => {
+      const inScope =
+        filter === 'all' ||
+        (filter === 'priority' && (f.severity === 'critical' || f.severity === 'high')) ||
+        (filter === 'established' && isEstablished(f.proofState)) ||
+        (filter === 'unproven' && f.proofState !== 'operator_assertion' && !isEstablished(f.proofState));
+      if (!inScope) return false;
+      if (!q) return true;
+      return [f.title, f.source, f.severity, f.proofState, f.evidenceChannel, f.rationale]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(q));
+    });
+  }, [findings, filter, query]);
+  const view = selectLedgerRows(filtered, contestedIds, showAll ? Number.POSITIVE_INFINITY : MAX_LEDGER_ROWS);
   // Counted, not filtered: an assertion belongs in this table — it just may never be read as a measurement.
   const assertedCount = findings.filter((f) => f.assertion).length;
 
@@ -362,6 +386,43 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
       </div>
 
       {census.length > 0 ? <SeverityCensus census={census} /> : null}
+
+      {findings.length > 0 ? (
+        <div className="ledger-toolbar">
+          <fieldset className="ledger-filters" aria-label={t.findings.filters.aria}>
+            {(['all', 'priority', 'established', 'unproven'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={`btn btn-sm ${filter === value ? 'is-active' : 'btn-ghost'}`}
+                aria-pressed={filter === value}
+                onClick={() => {
+                  setFilter(value);
+                  setShowAll(false);
+                }}
+              >
+                {t.findings.filters[value]}
+              </button>
+            ))}
+          </fieldset>
+          <label className="ledger-search">
+            <span className="sr-only">{t.findings.filters.searchLabel}</span>
+            <input
+              className="input"
+              type="search"
+              value={query}
+              placeholder={t.findings.filters.searchPlaceholder}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setShowAll(false);
+              }}
+            />
+          </label>
+          <span className="hint mono ledger-results">
+            {t.findings.filters.results(filtered.length, findings.length)}
+          </span>
+        </div>
+      ) : null}
 
       {dangling.length > 0 ? <DanglingDisputeNote dangling={dangling} /> : null}
 
@@ -378,13 +439,12 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
             </div>
           ) : null}
           <div className="table-wrap" style={{ marginTop: 10 }}>
-            <table className="data">
+            <table className="data findings-table">
               <thead>
                 <tr>
                   <th style={{ width: 28 }} />
                   <th>{t.findings.col.severity}</th>
                   <th>{t.findings.col.finding}</th>
-                  <th>{t.findings.col.source}</th>
                   <th>{t.findings.col.proofState}</th>
                 </tr>
               </thead>
@@ -416,10 +476,17 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                           ) : null}
                         </td>
                         <td>
-                          <SeverityMark severity={f.severity} proofState={f.proofState} />
+                          <span className={`severity-pill severity-${f.severity}`}>
+                            <SeverityMark severity={f.severity} proofState={f.proofState} />
+                            {f.severity}
+                          </span>
                         </td>
                         <td style={{ fontSize: 12.5 }}>
-                          {f.title}
+                          <div className="finding-title">{f.title}</div>
+                          <div className="finding-meta mono">
+                            <span>{f.source}</span>
+                            {f.evidenceChannel ? <span>{f.evidenceChannel}</span> : null}
+                          </div>
                           {/* An assertion never appears here without its author on the same line. */}
                           {f.assertion ? (
                             <div className="hint">
@@ -435,20 +502,12 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                           {f.assertion?.status === 'withdrawn' ? <WithdrawalNote assertion={f.assertion} /> : null}
                           {disputes.length ? <DisputeNote target={f} disputes={disputes} /> : null}
                         </td>
-                        <td className="mono hint" style={{ fontSize: 11 }}>
-                          {f.source}
-                        </td>
                         <td>
                           {/* Printed verbatim on a contested row: the dispute is recorded beside it, never over it. */}
                           <ProofStateBadge state={f.proofState} />
                           {/* The second axis, UNDER the rung rather than beside it: how far it was proven is the
                             headline, how it was known qualifies it. A row with no channel recorded prints
                             nothing at all — an "unknown" chip would imply the question was asked and answered. */}
-                          {f.evidenceChannel && (
-                            <div className="hint mono" style={{ fontSize: 10.5, marginTop: 3 }}>
-                              {f.evidenceChannel}
-                            </div>
-                          )}
                           {/* And the one thing that changes what the rung MEANS: the subject was not as shipped. */}
                           {f.interventions?.length ? (
                             <div
@@ -465,7 +524,7 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                         <tr>
                           {/* Full width, under the row it explains. The provider WROTE this sentence while measuring,
                             so it renders as written, in whatever language produced it. */}
-                          <td colSpan={5} className="reason-cell">
+                          <td colSpan={4} className="reason-cell">
                             {/* A retracted row's reasoning is labelled as the retracted claim's, so an expanded
                               cell is never read as a standing argument. */}
                             <span className="eyebrow">

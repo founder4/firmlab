@@ -1523,7 +1523,7 @@ th.sortable:hover {
 .steptl-step {
   position: relative;
   flex: 1 1 0;
-  min-width: 92px;
+  min-width: 108px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1605,7 +1605,12 @@ th.sortable:hover {
 .steptl-label {
   font-size: 0.74rem;
   font-weight: 550;
-  white-space: nowrap;
+  width: 100%;
+  min-height: 2.5em;
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+  text-wrap: balance;
   color: var(--text-dim);
 }
 .steptl-step.active .steptl-label {
@@ -2591,4 +2596,379 @@ span.run-dot.run-running {
 }
 .reason-cell .eyebrow {
   margin-right: 6px;
+}
+
+/* ============================================================================================================
+ * RESULT SURFACES — readable corpus rows and a findings-first workbench
+ * ========================================================================================================== */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.overview-grid {
+  align-items: start;
+}
+.recent-images {
+  border-top: 1px solid var(--border);
+}
+.recent-image {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 68px;
+  padding: 10px var(--panel-pad);
+  color: inherit;
+  border-bottom: 1px solid var(--border-soft);
+  transition: background 0.12s;
+}
+.recent-image:last-child {
+  border-bottom: 0;
+}
+.recent-image:hover {
+  background: var(--bg-panel-2);
+}
+.recent-image-main,
+.recent-image-result {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.recent-image-main > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 0.8rem;
+}
+.recent-image-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  margin-top: 5px;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+.recent-image-result {
+  align-items: flex-end;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.recent-image-result strong {
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1;
+}
+.recent-image-result small {
+  margin-top: 3px;
+  color: var(--text-faint);
+}
+
+.firmware-table {
+  min-width: 820px;
+}
+.firmware-table .firmware-primary {
+  min-width: 260px;
+}
+.firmware-name {
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 600;
+}
+.firmware-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  margin-top: 5px;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+.findings-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.findings-count strong {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.coverage-cell {
+  display: grid;
+  gap: 5px;
+  min-width: 112px;
+}
+.coverage-value {
+  color: var(--warn);
+  font-size: 0.72rem;
+}
+.coverage-value.is-complete {
+  color: var(--ok);
+}
+.coverage-track {
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+}
+.coverage-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.findings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -4px 0 12px;
+  padding: 0 2px;
+}
+.findings-loading {
+  display: grid;
+  gap: 8px;
+}
+.findings-loading .skeleton {
+  height: 40px;
+}
+.severity-census {
+  margin-top: 14px;
+}
+.severity-census-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(112px, 1fr));
+  gap: 8px;
+}
+.severity-summary {
+  --severity-color: var(--text-dim);
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--severity-color);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+.severity-critical {
+  --severity-color: var(--sev-critical);
+}
+.severity-high {
+  --severity-color: var(--sev-high);
+}
+.severity-medium {
+  --severity-color: var(--sev-medium);
+}
+.severity-low {
+  --severity-color: var(--sev-low);
+}
+.severity-info {
+  --severity-color: var(--sev-info);
+}
+.severity-summary-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.severity-summary-head strong {
+  color: var(--text);
+  font-size: 1rem;
+}
+.severity-name {
+  overflow: hidden;
+  color: var(--severity-color);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+}
+.severity-summary-split {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  color: var(--text-dim);
+  font-size: 0.64rem;
+  line-height: 1.3;
+}
+.ledger-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.ledger-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ledger-filters .is-active {
+  color: var(--accent-hover);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.ledger-search {
+  flex: 1 1 220px;
+  max-width: 340px;
+  margin-left: auto;
+}
+.ledger-search .input {
+  width: 100%;
+}
+.ledger-results {
+  white-space: nowrap;
+}
+.findings-table th:nth-child(2),
+.findings-table td:nth-child(2) {
+  width: 112px;
+}
+.findings-table th:last-child,
+.findings-table td:last-child {
+  width: 190px;
+}
+.severity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--severity-color);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.finding-title {
+  color: var(--text);
+  font-weight: 520;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.finding-meta {
+  display: flex;
+  gap: 6px 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: 0.64rem;
+}
+.finding-meta span + span::before {
+  content: "·";
+  margin-right: 12px;
+}
+.report-disclosure {
+  padding: 0;
+  overflow: hidden;
+}
+.report-disclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: var(--panel-pad);
+  cursor: pointer;
+  list-style: none;
+}
+.report-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.report-disclosure > summary > span:first-child {
+  display: grid;
+  gap: 3px;
+}
+.report-disclosure[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+.report-disclosure-body {
+  padding: var(--panel-pad);
+}
+
+@media (max-width: 1100px) {
+  .severity-census-grid {
+    grid-template-columns: repeat(3, minmax(112px, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .content {
+    padding: 14px;
+  }
+  .page-head {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .steptl {
+    margin-inline: -14px;
+    border-radius: 0;
+    border-inline: 0;
+  }
+  .severity-census-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ledger-toolbar,
+  .findings-actions,
+  .report-disclosure > summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .ledger-search {
+    width: 100%;
+    max-width: none;
+    margin-left: 0;
+  }
+  .findings-table,
+  .findings-table tbody,
+  .findings-table tr,
+  .findings-table td {
+    display: block;
+    width: 100% !important;
+  }
+  .findings-table thead {
+    display: none;
+  }
+  .findings-table tr {
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .findings-table td {
+    padding: 3px 0;
+    border: 0;
+  }
+  .findings-table td:first-child {
+    float: right;
+    width: auto !important;
+  }
+  .findings-table .reason-cell {
+    clear: both;
+    margin-top: -1px;
+    padding: 10px;
+    max-width: none;
+  }
+  .recent-image {
+    gap: 10px;
+  }
 }

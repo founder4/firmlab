@@ -446,8 +446,15 @@ function ContextHeader(): JSX.Element {
 function Shell(): JSX.Element {
   const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
+  const sidebarRef = useRef<HTMLElement>(null);
 
-  useEffect(() => setNavOpen(false), [location.pathname]);
+  useEffect(() => {
+    setNavOpen(false);
+    // A firmware exposes a long, independently scrolling section index. Leaving that context used to preserve its
+    // scroll offset, so Dashboard/Agents/Corpus could open with the brand and primary destinations above the fold.
+    // Reset only on top-level routes: moving between firmware sections must not yank the active section away.
+    if (!location.pathname.startsWith('/image/') && sidebarRef.current) sidebarRef.current.scrollTop = 0;
+  }, [location.pathname]);
 
   return (
     <div className={`app-shell ${navOpen ? 'nav-open' : ''}`}>
@@ -458,7 +465,7 @@ function Shell(): JSX.Element {
         tabIndex={navOpen ? 0 : -1}
         onClick={() => setNavOpen(false)}
       />
-      <aside className="sidebar" data-tour="sidebar">
+      <aside ref={sidebarRef} className="sidebar" data-tour="sidebar">
         <Sidebar onNavigate={() => setNavOpen(false)} />
       </aside>
       <div className="main">

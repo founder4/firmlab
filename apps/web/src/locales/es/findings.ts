@@ -49,7 +49,19 @@ export const findings: Messages['findings'] = {
     proofState: 'Estado de prueba',
   },
 
+  filters: {
+    aria: 'Filtrar hallazgos',
+    all: 'Todos',
+    priority: 'Críticos + altos',
+    established: 'Establecidos',
+    unproven: 'Por validar',
+    searchLabel: 'Buscar hallazgos',
+    searchPlaceholder: 'Buscar título, fuente o estado de prueba…',
+    results: (shown, total) => `${shown} de ${total}`,
+  },
+
   census: {
+    split: (established, unproven) => `${established} establecidos · ${unproven} por validar`,
     band: (severity: string, total: number, established: number, unproven: number) =>
       unproven === 0
         ? `${total} ${severity} (todos establecidos)`

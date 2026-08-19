@@ -276,20 +276,7 @@ export function ImageDetail(): JSX.Element {
         </>
       )}
       {/* Coverage first: a findings list is unreadable until you know which stages produced it. */}
-      {tab === 'findings' && (
-        <>
-          <CoverageBanner imageId={id} />
-          {/* Not a pipeline stage, so deliberately not in the StepTimeline — reached from here, where a reader is
-              already looking at what the bench measured and may need to record what it cannot. */}
-          <div className="hint" style={{ margin: '-8px 0 12px' }}>
-            {t.imageDetail.findingsTab.operatorPrompt}{' '}
-            <Link className="btn btn-sm btn-ghost" to={`/image/${id}/operator`}>
-              {t.sections.operator}
-            </Link>
-          </div>
-          <ReportBuilder imageId={id} image={image} analysis={analysis} />
-        </>
-      )}
+      {tab === 'findings' && <FindingsTab imageId={id} image={image} analysis={analysis} />}
       {/* The one section where a person writes a row. Deliberately its own section, not a corner of Findings. */}
       {tab === 'operator' && <OperatorPanel imageId={id} />}
       {tab === 'diff' && <DiffPanel imageId={id} />}
@@ -303,6 +290,64 @@ export function ImageDetail(): JSX.Element {
         </div>
       )}
     </div>
+  );
+}
+
+/** Results are the primary task on this route; report composition is a secondary, explicitly opened tool. */
+function FindingsTab({
+  imageId,
+  image,
+  analysis,
+}: {
+  imageId: string;
+  image: ImageSummary;
+  analysis: StaticAnalysis | null;
+}): JSX.Element {
+  const t = useMessages();
+  const [findings, setFindings] = useState<Finding[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .findings(imageId)
+      .then((rows) => alive && setFindings(rows))
+      .catch(() => alive && setFindings([]));
+    return () => {
+      alive = false;
+    };
+  }, [imageId]);
+
+  return (
+    <>
+      <CoverageBanner imageId={imageId} />
+      <div className="findings-actions">
+        <div className="hint">{t.imageDetail.findingsTab.operatorPrompt}</div>
+        <Link className="btn btn-sm" to={`/image/${imageId}/operator`}>
+          {t.sections.operator}
+        </Link>
+      </div>
+      {findings === null ? (
+        <div className="panel findings-loading" aria-label={t.imageDetail.findingsTab.loading}>
+          <div className="skeleton" />
+          <div className="skeleton" />
+          <div className="skeleton" />
+        </div>
+      ) : (
+        <FindingsLedger findings={findings} />
+      )}
+      <details className="panel report-disclosure">
+        <summary>
+          <span>
+            <strong>{t.imageDetail.findingsTab.reportTitle}</strong>
+            <span className="hint">{t.imageDetail.findingsTab.reportSub}</span>
+          </span>
+          <span className="btn btn-sm btn-ghost">{t.imageDetail.findingsTab.reportAction}</span>
+        </summary>
+        <div className="report-disclosure-body">
+          <ReportBuilder imageId={imageId} image={image} analysis={analysis} />
+        </div>
+      </details>
+    </>
   );
 }
 

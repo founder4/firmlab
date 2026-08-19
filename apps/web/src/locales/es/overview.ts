@@ -31,6 +31,9 @@ export const overview: Messages['overview'] = {
     emptyTitle: 'Todavía no hay firmware',
     emptyLead: 'Ve a',
     emptyTail: 'para subir tu primera imagen.',
+    unexamined: 'sin examinar',
+    findings: (n) => (n === 1 ? 'hallazgo' : 'hallazgos'),
+    coverage: (executed, applicable) => `${executed}/${applicable} etapas`,
   },
 
   byClass: {

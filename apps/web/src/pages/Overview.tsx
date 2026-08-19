@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { type ImageSummary, type ToolStatus, api, fmtBytes } from '../api';
+import { type CoverageSummary, type ImageSummary, type ToolStatus, api, fmtBytes } from '../api';
 import { useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 
@@ -13,6 +13,7 @@ export function Overview(): JSX.Element {
   const [usage, setUsage] = useState<Awaited<ReturnType<typeof api.storage>> | null>(null);
   const [tools, setTools] = useState<ToolStatus[]>([]);
   const [health, setHealth] = useState<Awaited<ReturnType<typeof api.health>> | null>(null);
+  const [coverage, setCoverage] = useState<Map<string, CoverageSummary>>(new Map());
   const [loading, setLoading] = useState(true);
   const t = useMessages();
   const locale = useLocale();
@@ -29,11 +30,13 @@ export function Overview(): JSX.Element {
         .then((r) => r.tools)
         .catch(() => []),
       api.health().catch(() => null),
-    ]).then(([im, st, to, he]) => {
+      api.coverageAll(locale).catch(() => []),
+    ]).then(([im, st, to, he, cov]) => {
       setImages(im);
       setUsage(st);
       setTools(to);
       setHealth(he);
+      setCoverage(new Map(cov.map((row) => [row.imageId, row])));
       setLoading(false);
     });
   }, [locale]);
@@ -106,7 +109,7 @@ export function Overview(): JSX.Element {
             </div>
           </div>
 
-          <div className="grid grid-2" style={{ marginTop: 16 }}>
+          <div className="grid grid-2 overview-grid" style={{ marginTop: 16 }}>
             {/* recent images */}
             <div className="panel panel-flush">
               <div className="panel-head" style={{ padding: 'var(--panel-pad)', marginBottom: 0 }}>
@@ -129,34 +132,41 @@ export function Overview(): JSX.Element {
                   </div>
                 </div>
               ) : (
-                <div
-                  className="table-wrap"
-                  style={{ border: 'none', borderTop: '1px solid var(--border)', borderRadius: 0 }}
-                >
-                  <table className="data">
-                    <tbody>
-                      {recent.map((im) => (
-                        <tr
-                          key={im.id}
-                          className="row-link"
-                          onClick={() => {
-                            window.location.hash = `#/image/${im.id}/overview`;
-                          }}
-                        >
-                          <td className="mono" style={{ color: 'var(--text)' }}>
+                <div className="recent-images">
+                  {recent.map((im) => {
+                    const cov = coverage.get(im.id);
+                    return (
+                      <Link key={im.id} to={`/image/${im.id}/overview`} className="recent-image">
+                        <span className="recent-image-main">
+                          <strong className="mono" title={im.filename}>
                             {im.filename}
-                          </td>
-                          <td>
+                          </strong>
+                          <span className="recent-image-meta">
                             <span className="badge">{im.identity?.firmwareClass ?? t.common.unknown}</span>
-                          </td>
-                          <td className="mono">{im.identity?.arch ?? '—'}</td>
-                          <td className="num" style={{ textAlign: 'right' }}>
-                            {fmtBytes(im.size)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                            <span className="mono">{im.identity?.arch ?? '—'}</span>
+                            <span className="mono">{fmtBytes(im.size)}</span>
+                          </span>
+                        </span>
+                        <span className="recent-image-result" title={cov?.verdict}>
+                          {cov ? (
+                            cov.executed === 0 ? (
+                              <span className="badge badge-medium">{t.overview.recent.unexamined}</span>
+                            ) : (
+                              <>
+                                <strong className="num">{cov.findingCount}</strong>
+                                <span>{t.overview.recent.findings(cov.findingCount)}</span>
+                                <small className="mono">
+                                  {t.overview.recent.coverage(cov.executed, cov.applicable)}
+                                </small>
+                              </>
+                            )
+                          ) : (
+                            <span className="hint">—</span>
+                          )}
+                        </span>
+                      </Link>
+                    );
+                  })}
                 </div>
               )}
             </div>

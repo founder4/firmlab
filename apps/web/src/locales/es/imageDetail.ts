@@ -36,6 +36,10 @@ export const imageDetail: Messages['imageDetail'] = {
   findingsTab: {
     operatorPrompt:
       '¿Sabes algo que el banco no puede medir — un resultado del dispositivo físico, un aviso del fabricante?',
+    loading: 'Cargando hallazgos',
+    reportTitle: 'Preparar un informe exportable',
+    reportSub: 'Elige secciones, edita la portada y previsualiza el documento sólo cuando necesites entregarlo.',
+    reportAction: 'Configurar informe',
   },
 
   dossier: {

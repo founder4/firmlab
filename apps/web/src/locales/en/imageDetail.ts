@@ -41,6 +41,10 @@ export const imageDetail = {
 
   findingsTab: {
     operatorPrompt: 'Know something the bench cannot measure — a result from the physical device, a vendor advisory?',
+    loading: 'Loading findings',
+    reportTitle: 'Build an exportable report',
+    reportSub: 'Choose sections, edit the cover and preview the document only when you need to deliver it.',
+    reportAction: 'Configure report',
   },
 
   dossier: {

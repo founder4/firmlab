@@ -47,6 +47,17 @@ export const findings = {
     proofState: 'Proof state',
   },
 
+  filters: {
+    aria: 'Filter findings',
+    all: 'All',
+    priority: 'Critical + high',
+    established: 'Established',
+    unproven: 'Needs validation',
+    searchLabel: 'Search findings',
+    searchPlaceholder: 'Search title, source or proof state…',
+    results: (shown: number, total: number) => `${shown} of ${total}`,
+  },
+
   /**
    * The two axes said in one place, because the table shows both and used to encode only one.
    *
@@ -59,6 +70,7 @@ export const findings = {
    * reader has to infer is a distinction that will be misread.
    */
   census: {
+    split: (established: number, unproven: number) => `${established} established · ${unproven} to validate`,
     band: (severity: string, total: number, established: number, unproven: number) =>
       unproven === 0
         ? `${total} ${severity} (all established)`

@@ -234,6 +234,35 @@ describe('FindingsLedger — the pure selection rules', () => {
   });
 });
 
+describe('FindingsLedger — analyst controls', () => {
+  const rows = [
+    measured({ id: 'critical', severity: 'critical', title: 'Remote command execution', source: 'symreach' }),
+    measured({
+      id: 'lead',
+      severity: 'medium',
+      title: 'Possible unsafe parser',
+      source: 'yarascan',
+      proofState: 'needs_runtime_reproduction',
+    }),
+  ];
+
+  it('filters to priority findings without hiding the corpus-wide severity summary', () => {
+    render(<FindingsLedger findings={rows} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Critical + high' }));
+    expect(screen.getByText('Remote command execution')).toBeInTheDocument();
+    expect(screen.queryByText('Possible unsafe parser')).not.toBeInTheDocument();
+    expect(screen.getByText('1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('1 medium (all unproven)')).toBeInTheDocument();
+  });
+
+  it('searches evidence metadata as well as the visible title', () => {
+    render(<FindingsLedger findings={rows} />);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search findings' }), { target: { value: 'yarascan' } });
+    expect(screen.queryByText('Remote command execution')).not.toBeInTheDocument();
+    expect(screen.getByText('Possible unsafe parser')).toBeInTheDocument();
+  });
+});
+
 /**
  * The dispute annotation is the one piece of prose here a translation can quietly invert. Drop the half saying the
  * proof state is untouched and what is left is a bare "DISPUTADO" — precisely the override the design refuses. So

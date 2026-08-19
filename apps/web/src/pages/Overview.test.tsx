@@ -60,6 +60,18 @@ beforeEach(() => {
   mockApi.storage.mockResolvedValue(usage);
   mockApi.tools.mockResolvedValue({ tools, groups: {} });
   mockApi.health.mockResolvedValue({ status: 'ok', exposedToNetwork: false, host: '127.0.0.1', port: 8799 });
+  mockApi.coverageAll.mockResolvedValue([
+    {
+      imageId: 'a',
+      filename: image.filename,
+      firmwareClass: 'embedded-linux',
+      applicable: 12,
+      executed: 10,
+      findingCount: 7,
+      ambiguous: true,
+      verdict: '7 findings across 10 of 12 stages',
+    },
+  ]);
   mockApi.tools.mockClear();
 });
 
@@ -89,6 +101,8 @@ describe('Overview localisation', () => {
     expect(await screen.findByText('router-v1.bin')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
     expect(screen.getByText('Recent images')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('10/12 stages')).toBeInTheDocument();
     expect(screen.getByText('Fleet by class')).toBeInTheDocument();
     expect(screen.getByText('local-only')).toBeInTheDocument();
   });

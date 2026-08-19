@@ -31,6 +31,9 @@ export const overview = {
     /** Split around the link: Spanish orders the destination and the purpose differently to English. */
     emptyLead: 'Head to',
     emptyTail: 'to upload your first image.',
+    unexamined: 'unexamined',
+    findings: (n: number): string => (n === 1 ? 'finding' : 'findings'),
+    coverage: (executed: number, applicable: number) => `${executed}/${applicable} stages`,
   },
 
   byClass: {

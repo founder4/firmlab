@@ -104,6 +104,16 @@ beforeEach(() => {
   // StepTimeline + the dossier both read these; every one is stubbed so nothing reaches the network.
   mockApi.jobs.mockResolvedValue([]);
   mockApi.findings.mockResolvedValue([finding]);
+  mockApi.coverage.mockResolvedValue({
+    firmwareClass: 'embedded-linux',
+    applicable: 12,
+    executed: 10,
+    findingCount: 1,
+    stages: [],
+    verdict: '1 finding across 10 of 12 stages',
+    ambiguous: true,
+  });
+  mockApi.sbom.mockResolvedValue(null);
   mockApi.emulation.mockResolvedValue({
     identity: image.identity,
     rootfsReady: true,
@@ -166,6 +176,23 @@ describe('ImageDetail export links', () => {
     // `download="…"` would override it and let two languages of one report overwrite each other.
     expect(report.getAttribute('download')).toBe('');
     expect(await screen.findByText(/2 segmentos/)).toBeTruthy();
+  });
+});
+
+describe('ImageDetail findings workflow', () => {
+  it('shows the findings ledger before the secondary report builder', async () => {
+    const { container } = renderSection('findings');
+    expect((await screen.findAllByText(finding.title)).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Critical + high' })).toBeInTheDocument();
+    expect(screen.getByText('Build an exportable report')).toBeInTheDocument();
+
+    const ledger = container.querySelector('.findings-table');
+    const report = container.querySelector('.report-disclosure');
+    expect(ledger).toBeTruthy();
+    expect(report).toBeTruthy();
+    if (!ledger || !report) throw new Error('findings ledger and report disclosure must both render');
+    expect(ledger.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect((report as HTMLDetailsElement).open).toBe(false);
   });
 });
 

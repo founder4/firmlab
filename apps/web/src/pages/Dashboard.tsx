@@ -5,7 +5,7 @@ import { useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { toast } from '../toast';
 
-type SortKey = 'filename' | 'firmwareClass' | 'arch' | 'size' | 'status' | 'coverage';
+type SortKey = 'filename' | 'firmwareClass' | 'arch' | 'size' | 'status' | 'coverage' | 'findings';
 type SortDir = 'asc' | 'desc';
 
 const STATUS_BADGE: Record<string, string> = { ready: 'badge-ok', error: 'badge-crit', analyzing: 'badge-medium' };
@@ -28,16 +28,36 @@ function CoverageCell({ c }: { c: CoverageSummary | undefined }): JSX.Element {
   if (!c) return <span className="hint">—</span>;
   if (c.executed === 0) {
     return (
-      <span className="badge badge-medium mono" title={c.verdict}>
-        {t.dashboard.coverage.unexamined}
-      </span>
+      <div className="coverage-cell" title={c.verdict}>
+        <span className="badge badge-medium mono">{t.dashboard.coverage.unexamined}</span>
+        <span className="coverage-track" aria-hidden="true">
+          <span style={{ width: 0 }} />
+        </span>
+      </div>
     );
   }
   const complete = c.executed >= c.applicable;
+  const pct = c.applicable > 0 ? Math.min(100, (c.executed / c.applicable) * 100) : 0;
   return (
-    <span className={`badge ${complete ? 'badge-ok' : ''} mono`} title={c.verdict}>
-      {t.dashboard.coverage.stages(c.executed, c.applicable)}
-    </span>
+    <div className="coverage-cell" title={c.verdict}>
+      <span className={`mono coverage-value ${complete ? 'is-complete' : ''}`}>
+        {t.dashboard.coverage.stages(c.executed, c.applicable)}
+      </span>
+      <span className="coverage-track" aria-hidden="true">
+        <span style={{ width: `${pct}%` }} />
+      </span>
+    </div>
+  );
+}
+
+function FindingsCell({ c }: { c: CoverageSummary | undefined }): JSX.Element {
+  const t = useMessages();
+  if (!c || c.executed === 0) return <span className="hint">—</span>;
+  return (
+    <div className="findings-count" title={c.verdict}>
+      <strong className="num">{c.findingCount}</strong>
+      <span>{t.dashboard.list.findingsLabel(c.findingCount)}</span>
+    </div>
   );
 }
 
@@ -177,7 +197,9 @@ export function Dashboard(): JSX.Element {
             : // Sorted by how much of the applicable plan ran, so "show me what nobody has looked at" is one click.
               sort.key === 'coverage'
               ? (coverage.get(im.id)?.executed ?? -1)
-              : (im.identity?.[sort.key] ?? '').toString().toLowerCase();
+              : sort.key === 'findings'
+                ? (coverage.get(im.id)?.findingCount ?? -1)
+                : (im.identity?.[sort.key] ?? '').toString().toLowerCase();
     return [...filtered].sort((a, b) => {
       const av = val(a);
       const bv = val(b);
@@ -448,16 +470,14 @@ export function Dashboard(): JSX.Element {
                 className="table-wrap"
                 style={{ border: 'none', borderTop: '1px solid var(--border)', borderRadius: 0 }}
               >
-                <table className="data">
+                <table className="data firmware-table">
                   <thead>
                     <tr>
                       <th style={{ width: 36 }} />
                       <Th k="filename">{t.dashboard.list.colFilename}</Th>
-                      <Th k="firmwareClass">{t.dashboard.list.colClass}</Th>
-                      <Th k="arch">{t.dashboard.list.colArch}</Th>
                       <th>{t.dashboard.list.colTags}</th>
-                      <Th k="size" num>
-                        {t.dashboard.list.colSize}
+                      <Th k="findings" num>
+                        {t.dashboard.list.colFindings}
                       </Th>
                       <Th k="coverage">{t.dashboard.list.colCoverage}</Th>
                       <Th k="status">{t.dashboard.list.colStatus}</Th>
@@ -476,13 +496,14 @@ export function Dashboard(): JSX.Element {
                           />
                         </td>
                         {/* Filename, class and arch are data the analysis produced — never translated. */}
-                        <td className="mono" style={{ color: 'var(--text)', fontWeight: 500 }}>
-                          {img.filename}
+                        <td className="firmware-primary">
+                          <div className="firmware-name mono">{img.filename}</div>
+                          <div className="firmware-meta">
+                            <span className="badge">{img.identity?.firmwareClass ?? t.common.unknown}</span>
+                            <span className="mono">{img.identity?.arch ?? '—'}</span>
+                            <span className="mono">{fmtBytes(img.size)}</span>
+                          </div>
                         </td>
-                        <td>
-                          <span className="badge">{img.identity?.firmwareClass ?? t.common.unknown}</span>
-                        </td>
-                        <td className="mono">{img.identity?.arch ?? '—'}</td>
                         <td onClick={(e) => e.stopPropagation()} style={{ maxWidth: 240 }}>
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
                             {img.tags.map((tag) => (
@@ -543,14 +564,22 @@ export function Dashboard(): JSX.Element {
                             )}
                           </div>
                         </td>
-                        <td className="num" style={{ textAlign: 'right' }}>
-                          {fmtBytes(img.size)}
+                        <td className="num findings-column">
+                          <FindingsCell c={coverage.get(img.id)} />
                         </td>
                         <td>
                           <CoverageCell c={coverage.get(img.id)} />
                         </td>
                         <td>
-                          <span className={`badge ${STATUS_BADGE[img.status] ?? ''}`}>{img.status}</span>
+                          <span className={`badge ${STATUS_BADGE[img.status] ?? ''}`} title={img.status}>
+                            {img.status === 'ready'
+                              ? t.dashboard.list.statusReady
+                              : img.status === 'analyzing'
+                                ? t.dashboard.list.statusAnalyzing
+                                : img.status === 'error'
+                                  ? t.dashboard.list.statusError
+                                  : img.status}
+                          </span>
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
                           <button
