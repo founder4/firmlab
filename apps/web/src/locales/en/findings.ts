@@ -47,12 +47,19 @@ export const findings = {
     proofState: 'Proof state',
   },
 
+  /**
+   * The bucket names are the census's, deliberately: `unproven` is every row `isEstablished` rejects, which is
+   * leads AND both blocked states AND a dismissal. An earlier draft called it "Needs validation" and shipped a
+   * screen where three `blocked (platform)` rows sat under it — an instruction to go reproduce the very question
+   * this deployment already reported it could not put. A block is not a lead, and naming the bucket after the
+   * action one of its members happens to admit is how the two get conflated.
+   */
   filters: {
     aria: 'Filter findings',
     all: 'All',
     priority: 'Critical + high',
     established: 'Established',
-    unproven: 'Needs validation',
+    unproven: 'Unproven',
     searchLabel: 'Search findings',
     searchPlaceholder: 'Search title, source or proof state…',
     results: (shown: number, total: number) => `${shown} of ${total}`,
@@ -70,7 +77,7 @@ export const findings = {
    * reader has to infer is a distinction that will be misread.
    */
   census: {
-    split: (established: number, unproven: number) => `${established} established · ${unproven} to validate`,
+    split: (established: number, unproven: number) => `${established} established · ${unproven} unproven`,
     band: (severity: string, total: number, established: number, unproven: number) =>
       unproven === 0
         ? `${total} ${severity} (all established)`

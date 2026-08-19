@@ -261,6 +261,30 @@ describe('FindingsLedger — analyst controls', () => {
     expect(screen.queryByText('Remote command execution')).not.toBeInTheDocument();
     expect(screen.getByText('Possible unsafe parser')).toBeInTheDocument();
   });
+
+  /**
+   * The bucket holds leads AND blocks, and only a lead can be reproduced. A first version of this control named
+   * it "Needs validation", which rendered three `blocked (platform)` rows under an instruction to go validate a
+   * question the deployment had ALREADY reported it could not put. The filter groups by what is not established;
+   * it must not tell the reader what to do about it.
+   */
+  it('groups a block with the leads without instructing anyone to reproduce it', () => {
+    const blocked = measured({
+      id: 'blocked',
+      severity: 'info',
+      title: 'No readable device tree in this image',
+      source: 'devicetree',
+      proofState: 'blocked_by_platform',
+    });
+    render(<FindingsLedger findings={[...rows, blocked]} />);
+    expect(screen.queryByRole('button', { name: /validat/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unproven' }));
+    expect(screen.getByText('No readable device tree in this image')).toBeInTheDocument();
+    expect(screen.getByText('Possible unsafe parser')).toBeInTheDocument();
+    expect(screen.queryByText('Remote command execution')).not.toBeInTheDocument();
+    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+  });
 });
 
 /**
