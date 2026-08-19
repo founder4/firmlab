@@ -18,8 +18,11 @@
 - [x] Vigilar releases YARA sin autodespliegue, comparar candidata/producción sobre los mismos rootfs y exigir positivos inertes.
 - [x] Integrar `webprobe` en la ventana viva de QEMU y automatizar una campaña de cinco arranques full-system reproducibles.
 - [x] Sondear activamente también el HTTPS autofirmado/heredado del invitado, con la relajación TLS confinada a loopback.
+- [x] Poner el resultado por delante en Dashboard, corpus y ficha: recuento de hallazgos, cobertura con barra, censo en tarjetas, filtros y búsqueda, e informe replegado a un `<details>`.
 
 ## Siguiente
 
 - [ ] Ampliar el corpus de validación: firmware UEFI de proveedor, variables y módulos completos, y más muestras RTOS/hardware.
 - [ ] Reducir deuda del frontend: navegación coherente, tests de páginas sin cobertura, división del bundle y traducción del texto generado por la API.
+- [ ] Verificar la capa responsive del libro mayor en un viewport estrecho real: la regla de ≤720px que convierte `findings-table` en tarjetas se escribió y se probó por CSS, pero `ui-drive.mjs` no redimensiona, así que nadie la ha visto renderizada. Añadir un `--viewport` al driver y mirarla.
+- [ ] Desglosar el cubo "sin establecer" del censo. Hoy `severityCensus` mete en `unproven` todo lo que `isEstablished` rechaza: pistas, los dos bloqueos, un descarte y el testimonio de un operador. El filtro del libro mayor ya excluye `operator_assertion`, así que la tarjeta puede contar una fila que el filtro no enseña. Son cuatro cosas distintas bajo un número, y la que más importa — pista (accionable) frente a bloqueo (pregunta sin respuesta en este despliegue) — es justo la que el número esconde.
