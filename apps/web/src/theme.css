@@ -1512,6 +1512,14 @@ th.sortable:hover {
   }
 }
 
+@media (max-width: 640px) {
+  /* The posture remains available in Settings and the sidebar. Hiding its long badge here preserves the
+     navigation context and appearance controls without widening a phone-sized document. */
+  .topbar-actions [data-tour="health"] {
+    display: none;
+  }
+}
+
 /* ============================================================================================================
  * STEP TIMELINE — the persistent analysis pipeline (Local analysis / image detail)
  * ========================================================================================================== */
