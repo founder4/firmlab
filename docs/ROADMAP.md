@@ -280,7 +280,8 @@ OSV/KEV cache.
   only when `FIRMLAB_DESOCK` is provided; cmplog/compcov for magic-byte solving.
 - External-intelligence: vendor-PSIRT/CNA sources (OSV + NVD + CISA KEV now integrated), a downloadable disclosure-report generator,
   hardened egress (proxy/slirp4netns), corpus OSV cache.
-- Rebuild `firmlab-firmware:latest` on the next deploy so the image matches HEAD.
+- Keep `firmlab-firmware:latest` pinned to the exact Git revision through `scripts/deploy.sh`; the deployed image
+  currently matches HEAD and `/health` exposes the same build identifier.
 
 ## Phase 6 — Capture & acquisition (COMPLETE — 6.0–6.6 all shipped)
 
