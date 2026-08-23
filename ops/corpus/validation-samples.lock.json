@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-23",
+  "samples": [
+    {
+      "filename": "Framework_Laptop_13_Intel_Core_Ultra_Series1_capsule_signed_allsku_3.04.cap",
+      "size": 36132132,
+      "sha256": "a6266710061fcccabfd24c001837867eeba8b2aaea487d305bfe704bbd246c51",
+      "sourceUrl": "https://downloads.frame.work/bios/Framework_Laptop_13_Intel_Core_Ultra_Series1_capsule_signed_allsku_3.03_3.04_EFI.zip",
+      "sourceArchive": {
+        "filename": "Framework_Laptop_13_Intel_Core_Ultra_Series1_capsule_signed_allsku_3.03_3.04_EFI.zip",
+        "size": 29998324,
+        "sha256": "020502033e76f28d25ddb03c70926e69587ca515e1ec4b65f74e08fa1ef38c01",
+        "member": "Framework_Laptop_13_Intel_Core_Ultra_Series1_capsule_signed_allsku_3.04.cap"
+      },
+      "upstreamReference": "https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/1",
+      "expected": { "firmwareClass": "uefi-bios" }
+    },
+    {
+      "filename": "Contiki-STM32F4-Discovery.elf",
+      "size": 445441,
+      "sha256": "a25bd1bf148fd0ba3f98085ae86585b5b7199554669a3c509efab6fe238ae198",
+      "sha1": "827a0dedd3790f4559d7518320006613768b5e72",
+      "sourceUrl": "https://dl.antmicro.com/projects/renode/stm32f4discovery.elf-s_445441-827a0dedd3790f4559d7518320006613768b5e72",
+      "upstreamReference": "https://github.com/renode/renode/blob/master/scripts/single-node/stm32f4_discovery.resc",
+      "expected": { "firmwareClass": "rtos", "arch": "arm" }
+    },
+    {
+      "filename": "Zephyr-STM32L072-Button.elf",
+      "size": 402204,
+      "sha256": "4b5cdf0589b7bd3f8d79fcf44793e2ada1356b0e1cbd429fae326066b5ecd5f2",
+      "sha1": "2343dc7268dedc253893a84300f3dbd02bc63a2a",
+      "sourceUrl": "https://dl.antmicro.com/projects/renode/b_l072z_lrwan1--zephyr-button.elf-s_402204-2343dc7268dedc253893a84300f3dbd02bc63a2a",
+      "upstreamReference": "https://github.com/renode/renode/blob/master/tests/unit-tests/precise-pause.robot",
+      "expected": { "firmwareClass": "rtos", "arch": "arm" }
+    },
+    {
+      "filename": "Framework-QMK-ANSI-v0.3.1.bin",
+      "size": 61952,
+      "sha256": "b93c8dfb93fa2db5e14f60db8e7deaba23a5f87a11f7f45faaf505ef85ead918",
+      "sourceUrl": "https://github.com/FrameworkComputer/qmk_firmware/releases/download/v0.3.1/framework_ansi_default_v0.3.1.bin",
+      "upstreamReference": "https://github.com/FrameworkComputer/qmk_firmware/releases/tag/v0.3.1",
+      "expected": {},
+      "knownGap": "The current static classifier reports unknown; retained as a hardware/monolithic-firmware regression sample."
+    }
+  ]
+}

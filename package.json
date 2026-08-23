@@ -11,7 +11,7 @@
   "scripts": {
     "build": "pnpm -r run build",
     "check": "pnpm -r run check",
-    "test": "pnpm -r run test",
+    "test": "pnpm -r run test && node --test scripts/corpus-matrix.test.mjs",
     "dev:api": "pnpm --filter @firmlab/api run dev",
     "dev:web": "pnpm --filter @firmlab/web run dev",
     "biome": "bash scripts/check-nul.sh && bash scripts/check-comment-glob.sh && bash scripts/check-web-api-mock.sh && biome check .",
@@ -23,7 +23,9 @@
     "check:yara-release": "bash scripts/check-yara-release.sh --no-fail",
     "ui:up": "bash scripts/ui-expose.sh up",
     "ui:down": "bash scripts/ui-expose.sh down",
-    "ui:shot": "node scripts/ui-drive.mjs"
+    "ui:shot": "node scripts/ui-drive.mjs",
+    "corpus:matrix": "node scripts/corpus-matrix.mjs",
+    "test:corpus-matrix": "node --test scripts/corpus-matrix.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
