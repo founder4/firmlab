@@ -70,11 +70,12 @@ export const agents: Messages['agents'] = {
       gateApproved: 'aprobaste la emulación',
       gateDeclined: 'rechazaste la emulación',
       gateAuto: 'se ejecutó sin supervisión — aislamiento total',
+      gatePreapproved: 'se ejecutó sin supervisión — preautorización global',
       emulation: (proofState) => `emulación → ${proofState}`,
       preflight: (strategy) => `preflight: ${strategy}`,
       endedAt: (node) => `terminó en ${node}`,
       stoppedAt: (node) => `se detuvo en ${node}`,
-      leash: (used, max) => `${used} de ${max} pasos`,
+      leash: (used, max) => `${used} de ${max} turnos LLM`,
       leashDetail: (usd, maxUsd, entries) =>
         `${usd.toFixed(4)} $ de ${maxUsd.toFixed(2)} $ gastados · ${entries === 1 ? '1 entrada' : `${entries} entradas`} de traza`,
     },

@@ -344,6 +344,16 @@ describe('readAgentSession — the verdict is read from the transcript, not from
         agentSession({ nodes: [{ node: 'emulation', input: { autoApproved: true }, output: { ran: true } }] }),
       )?.gate,
     ).toBe('auto');
+    expect(
+      readAgentSession(
+        agentSession({
+          nodes: [
+            { node: 'authorization', input: { source: 'global-setting' } },
+            { node: 'emulation', output: { ran: true } },
+          ],
+        }),
+      )?.gate,
+    ).toBe('preapproved');
   });
 
   it('survives a transcript written by an older build', () => {
@@ -399,7 +409,7 @@ describe('Agents — an agent row says what the session established', () => {
 
     expect(await screen.findByText('you approved the emulation')).toBeInTheDocument();
     // A spend with no cap beside it states nothing, so both are on the row.
-    const leash = screen.getByText('4 of 8 steps');
+    const leash = screen.getByText('4 of 8 LLM turns');
     expect(leash.getAttribute('title')).toBe('$0.0095 of $0.50 spent · 7 transcript entries');
     expect(screen.getByText('ended at synthesis')).toBeInTheDocument();
     // And what the emulation actually established — capped, glossed, never upgraded.

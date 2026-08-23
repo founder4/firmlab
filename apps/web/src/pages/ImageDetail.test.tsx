@@ -16,7 +16,7 @@
  * What this does not claim: it exercises a slice, not the whole screen. The property that a missing Spanish key is
  * a COMPILE error lives in the type system, and `i18n.test.ts` covers the catalogues' structural equality.
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Finding, type ImageSummary, api } from '../api';
@@ -159,6 +159,96 @@ describe('ImageDetail section heading', () => {
     renderSection('not-a-section');
     expect(await screen.findByRole('heading', { level: 1, name: 'General' })).toBeTruthy();
     await waitFor(() => expect(screen.getByText('Coverage')).toBeTruthy());
+  });
+});
+
+describe('ImageDetail agent session', () => {
+  const session = {
+    id: 'session-1',
+    imageId: 'img1',
+    status: 'done' as const,
+    goal: null,
+    budget: { maxSteps: 8, maxTokens: 250000, maxUsd: 1, maxWallMs: 900000 },
+    consumed: { steps: 4, inputTokens: 12000, outputTokens: 8000, usd: 0.01, elapsedMs: 90000 },
+    haltReason: null,
+    createdAt: 1,
+    updatedAt: 2,
+  };
+
+  beforeEach(() => {
+    mockApi.agentConfig.mockResolvedValue({
+      enabled: true,
+      provider: 'deepseek',
+      model: 'deepseek-v4-pro',
+      approval: {
+        key: 'FIRMLAB_AGENT_PREAPPROVE',
+        preapproveAll: false,
+        source: 'default',
+        environmentValue: false,
+      },
+    });
+  });
+
+  it('renders the closing synthesis as Markdown and names 4/8 as an LLM-turn budget', async () => {
+    mockApi.agentSession.mockResolvedValue({
+      session,
+      steps: [
+        {
+          seq: 1,
+          node: 'synthesis',
+          status: 'ok',
+          input: null,
+          output: { provider: 'deepseek', model: 'deepseek-v4-pro' },
+          rationale:
+            '## Risk summary\n\nReadable result.\n\n| Priority | Finding |\n|---|---|\n| 1 | `popen` reachable |',
+          model: 'deepseek-v4-pro',
+          inputTokens: 100,
+          outputTokens: 200,
+          reasoningTokens: 50,
+          fallbackUsed: false,
+          createdAt: 2,
+        },
+      ],
+    });
+    const { container } = renderSection('agent');
+
+    expect(await screen.findByRole('heading', { name: 'Risk summary' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Priority' })).toBeInTheDocument();
+    expect(screen.getByText('LLM turns')).toBeInTheDocument();
+    expect(screen.getByText('4 / 8').parentElement?.title).toMatch(/budget, not a checklist/i);
+    expect(container.querySelector('.md.agent-synthesis')).toBeTruthy();
+    expect(container.textContent).not.toContain('## Risk summary');
+  });
+
+  it('offers one action that authorises every proposed emulation target', async () => {
+    const awaiting = { ...session, status: 'awaiting_approval' as const };
+    const steps = [
+      {
+        seq: 1,
+        node: 'target-selection',
+        status: 'ok',
+        input: null,
+        output: {
+          emulationPlan: [
+            { binary: 'bin/busybox', rung: 'qemu-user' },
+            { binary: 'usr/bin/hostapd', rung: 'full-system' },
+          ],
+        },
+        rationale: null,
+        model: 'deepseek-v4-pro',
+        inputTokens: 10,
+        outputTokens: 10,
+        reasoningTokens: 0,
+        fallbackUsed: false,
+        createdAt: 1,
+      },
+    ];
+    mockApi.agentSession.mockResolvedValue({ session: awaiting, steps });
+    mockApi.approveEmulation.mockResolvedValue({ session, steps });
+    renderSection('agent');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve all proposed runs' }));
+    await waitFor(() => expect(mockApi.approveEmulation).toHaveBeenCalledWith('session-1', undefined, true));
   });
 });
 

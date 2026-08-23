@@ -222,9 +222,10 @@ The optional agent (behind `FIRMLAB_AGENT`) does **not** get a blank loop and a 
 *within* a deterministic orchestrator: the mechanics (extraction, preflight, emulation) are fixed code; the LLM
 only makes the **judgment calls** — what to triage, which target to attack, whether a taint path is reachable —
 each written to an auditable, resumable transcript. A **governor** halts the run at the first hard cap
-(steps · tokens · USD · wall-time). Emulation is gated behind **human approval**, *unless* the blast radius is
-fully contained by OS-primitive isolation (`prlimit` + a fresh network namespace + guaranteed teardown), in
-which case it may auto-run.
+(LLM turns · tokens · USD · wall-time). The turn fraction is consumed/max budget, not workflow progress. Emulation
+is gated behind **human approval**, with an **approve all proposed runs** action; fully contained runs may auto-run.
+An operator may also persistently pre-authorise future sessions in **Settings → AI & Agent**
+(`FIRMLAB_AGENT_PREAPPROVE=1` is the environment equivalent).
 
 ```mermaid
 flowchart TD
@@ -234,8 +235,8 @@ flowchart TD
     TS --> CL["🔒 Rung clamped to the preflight ceiling<br/><i>honesty enforced in code, not by the model</i>"]
     CL --> Q{blast radius<br/>fully contained?}
     Q -->|"yes → full isolation"| RUN["Auto-run under netns + rlimits"]
-    Q -->|"no"| GATE["🙋 Human approval gate"]
-    GATE -->|approved| RUN
+    Q -->|"no"| GATE["🙋 Human approval gate<br/><i>one target or all proposed targets</i>"]
+    GATE -->|approved / pre-authorised in Settings| RUN
     RUN --> EMU["③ Emulation<br/><i>proof-state stays honest</i>"]
     EMU --> ZD["④ Zero-day node<br/><i>taint sink→source + build a trigger</i><br/>→ a CANDIDATE, never a proven bug"]
     ZD --> SY["⑤ Synthesis<br/><i>cited narrative over confirmed findings</i>"]

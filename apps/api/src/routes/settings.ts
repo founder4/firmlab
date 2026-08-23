@@ -12,21 +12,27 @@
  * they answer with the whole resolved set, and a lane switched from a Spanish UI must not come back in English.
  */
 import type { FastifyInstance } from 'fastify';
+import { resolveAgentApproval } from '../agent/approval.js';
 import { TOGGLEABLE_FLAGS, resolveFlags } from '../flags.js';
 import { resolveLocale } from '../i18n/index.js';
 import { LLM_SETTING_KEYS, describeLlm, isLlmSettingKey, validateLlmSetting } from '../llm-settings.js';
 import {
+  clearAgentPreapproval,
   clearFlagOverride,
   clearLlmSetting,
+  getAgentPreapprovalOverride,
   getFlagOverrides,
   getLlmOverrides,
   listFlagOverrides,
   listLlmSettingTimes,
+  setAgentPreapproval,
   setFlagOverride,
   setLlmSetting,
 } from '../settings.js';
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
+  const approvalState = () => resolveAgentApproval(process.env, getAgentPreapprovalOverride());
+
   app.get('/settings/flags', async (req) => {
     const locale = resolveLocale((req.query as { lang?: unknown }).lang);
     const overrides = getFlagOverrides();
@@ -104,5 +110,24 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     if (!clearLlmSetting(key)) return reply.status(400).send({ error: `${key} is not a model setting` });
     app.log.info(`settings: ${key} cleared — following the environment again`);
     return { llm: describeLlm(process.env, getLlmOverrides(), process.env.FIRMLAB_AGENT === '1') };
+  });
+
+  /** Persistent pre-authorisation for future agent sessions. Manual approval remains the default. */
+  app.get('/settings/agent-approval', async () => ({ approval: approvalState() }));
+
+  app.put('/settings/agent-approval', async (req, reply) => {
+    const body = (req.body ?? {}) as { preapproveAll?: unknown };
+    if (typeof body.preapproveAll !== 'boolean') {
+      return reply.status(400).send({ error: 'body must be { "preapproveAll": true | false }' });
+    }
+    setAgentPreapproval(body.preapproveAll);
+    app.log.info(`settings: agent emulation pre-approval set to ${body.preapproveAll ? '1' : '0'}`);
+    return { approval: approvalState() };
+  });
+
+  app.delete('/settings/agent-approval', async () => {
+    clearAgentPreapproval();
+    app.log.info('settings: agent emulation pre-approval cleared — following the environment again');
+    return { approval: approvalState() };
   });
 }

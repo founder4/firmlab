@@ -1,3 +1,4 @@
+import { AGENT_PREAPPROVE_KEY } from './agent/approval.js';
 /**
  * Persisted operator settings — today, the lane-flag overrides behind the Settings toggles.
  *
@@ -101,4 +102,29 @@ export function listLlmSettingTimes(): { key: LlmSettingKey; updatedAt: number }
     updatedAt: number;
   }[];
   return rows.filter((r): r is { key: LlmSettingKey; updatedAt: number } => isLlmSettingKey(r.key));
+}
+
+// === Agent execution approval ===
+
+/** The only agent-execution preference writable at runtime. Undefined means "follow the environment". */
+export function getAgentPreapprovalOverride(): string | undefined {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(AGENT_PREAPPROVE_KEY) as
+    | { value: string }
+    | undefined;
+  return row?.value;
+}
+
+/** Persist the explicit operator choice. The route accepts only a boolean, so the stored vocabulary stays tiny. */
+export function setAgentPreapproval(enabled: boolean, now = Date.now()): void {
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value, updatedAt) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updatedAt = excluded.updatedAt`,
+    )
+    .run(AGENT_PREAPPROVE_KEY, enabled ? '1' : '0', now);
+}
+
+/** Return the approval policy to the environment/default. */
+export function clearAgentPreapproval(): void {
+  getDb().prepare('DELETE FROM settings WHERE key = ?').run(AGENT_PREAPPROVE_KEY);
 }

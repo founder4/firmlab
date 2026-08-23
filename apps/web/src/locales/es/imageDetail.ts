@@ -306,7 +306,11 @@ export const imageDetail: Messages['imageDetail'] = {
       extraction: 'Extracción (determinista)',
       preflight: 'Comprobación previa (determinista)',
       'target-selection': '② Selección de objetivos',
+      'zero-day': 'Hipótesis de zero-day',
+      isolation: 'Comprobación de aislamiento',
+      authorization: 'Autorización de ejecuciones',
       emulation: 'Emulación',
+      synthesis: 'Síntesis',
       error: 'Fallo',
     },
 
@@ -330,7 +334,8 @@ export const imageDetail: Messages['imageDetail'] = {
     jsonFallback: 'recuperación JSON usada',
     audit: 'auditoría: entradas y decisión',
 
-    budgetSteps: 'pasos',
+    budgetSteps: 'turnos LLM',
+    budgetStepsHint: 'Turnos consumidos / máximo estricto. Es un presupuesto, no una lista ni progreso esperado.',
     budgetTokens: 'tokens LLM',
     budgetCost: 'coste',
     budgetTime: 'tiempo',
@@ -344,12 +349,13 @@ export const imageDetail: Messages['imageDetail'] = {
     running: 'Ejecutando…',
     newSession: 'Nueva sesión',
     startSession: 'Comenzar sesión',
-    sub: 'El agente razona dentro de un esqueleto determinista: elige ramas (triaje ①, selección de objetivos ②) e interpreta — cada paso mecánico es determinista, y la emulación espera tu aprobación. Un gobernador acota la ejecución.',
+    sub: 'El agente razona dentro de un esqueleto determinista: elige ramas (triaje ①, selección de objetivos ②) e interpreta — cada paso mecánico es determinista, y la emulación espera tu aprobación. La fracción de turnos LLM indica consumo/máximo del presupuesto, no una lista que deba completarse.',
 
     approvalTitle: 'Se requiere aprobación — emulación propuesta',
     approvalSub:
       'El agente propone ejecutar esto bajo emulación. La emulación prueba el entorno aislado, no el dispositivo; nada se ejecuta sin tu aprobación.',
     approve: 'Aprobar y ejecutar',
+    approveAll: 'Autorizar todas las ejecuciones propuestas',
     declineAll: 'Rechazar todo',
     noSession: 'Todavía no hay ninguna sesión del agente. Inicia una para que triee y seleccione objetivos.',
   },

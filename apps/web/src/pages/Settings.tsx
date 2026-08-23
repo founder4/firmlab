@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { type AgentConfig, type LaneFlag, type LlmSettings, type StorageUsage, api, fmtBytes } from '../api';
+import {
+  type AgentApprovalState,
+  type AgentConfig,
+  type LaneFlag,
+  type LlmSettings,
+  type StorageUsage,
+  api,
+  fmtBytes,
+} from '../api';
 import { LOCALES, type Locale, intlTag, setLocale, useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { startTour } from '../onboarding';
@@ -368,10 +376,13 @@ export function Settings(): JSX.Element {
   const [tab, setTab] = useState<SettingsTab>('appearance');
   const [health, setHealth] = useState<Health | null>(null);
   const [agent, setAgent] = useState<AgentConfig | null>(null);
+  const [approval, setApproval] = useState<AgentApprovalState | null>(null);
   const [usage, setUsage] = useState<StorageUsage | null>(null);
   const [flags, setFlags] = useState<LaneFlag[] | null>(null);
   const [busyFlag, setBusyFlag] = useState<string | null>(null);
   const [flagError, setFlagError] = useState<string | null>(null);
+  const [busyApproval, setBusyApproval] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -380,7 +391,10 @@ export function Settings(): JSX.Element {
       .catch(() => setHealth(null));
     api
       .agentConfig()
-      .then(setAgent)
+      .then((value) => {
+        setAgent(value);
+        setApproval(value.approval ?? null);
+      })
       .catch(() => setAgent(null));
     api
       .storage()
@@ -391,6 +405,15 @@ export function Settings(): JSX.Element {
       .then((r) => setFlags(r.flags))
       .catch(() => setFlags(null));
   }, [locale]);
+
+  const applyApproval = (run: () => Promise<AgentApprovalState>): void => {
+    setBusyApproval(true);
+    setApprovalError(null);
+    run()
+      .then(setApproval)
+      .catch((e: Error) => setApprovalError(e.message))
+      .finally(() => setBusyApproval(false));
+  };
 
   // A lane change is answered with the whole resolved set, so a dependent flag turning inert shows up in the same
   // paint as the switch that caused it — and the write carries the locale for the same reason the read does, or
@@ -657,7 +680,64 @@ export function Settings(): JSX.Element {
                 </>
               )}
               <Row label={t.settings.agent.emulation}>
-                <span className="badge badge-medium">{t.settings.panels.humanApproval}</span>
+                {approval ? (
+                  <>
+                    {/* biome-ignore lint/a11y/useSemanticElements: the shared segmented control intentionally avoids fieldset UA styling. */}
+                    <div className="segmented" role="group" aria-label={t.settings.agent.approvalTitle}>
+                      <button
+                        type="button"
+                        className={!approval.preapproveAll ? 'active' : ''}
+                        aria-pressed={!approval.preapproveAll}
+                        disabled={busyApproval}
+                        onClick={() => applyApproval(() => api.setAgentApproval(false))}
+                      >
+                        {t.settings.agent.approvalManual}
+                      </button>
+                      <button
+                        type="button"
+                        className={approval.preapproveAll ? 'active' : ''}
+                        aria-pressed={approval.preapproveAll}
+                        disabled={busyApproval}
+                        onClick={() => applyApproval(() => api.setAgentApproval(true))}
+                      >
+                        {t.settings.agent.approvalAll}
+                      </button>
+                    </div>
+                    <div className="hint" style={{ marginTop: 7 }}>
+                      {t.settings.agent.approvalScope}
+                    </div>
+                    {approval.preapproveAll && (
+                      <div className="hint" style={{ marginTop: 6, color: 'var(--sev-medium, #e6b45c)' }}>
+                        {t.settings.agent.approvalWarning}
+                      </div>
+                    )}
+                    <div className="hint" style={{ marginTop: 6 }}>
+                      {approval.source === 'override'
+                        ? t.settings.agent.approvalFromOverride
+                        : approval.source === 'environment'
+                          ? t.settings.agent.approvalFromEnvironment
+                          : t.settings.agent.approvalFromDefault}
+                      {approval.source === 'override' && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          style={{ marginLeft: 6 }}
+                          disabled={busyApproval}
+                          onClick={() => applyApproval(() => api.clearAgentApproval())}
+                        >
+                          {t.settings.agent.approvalFollowEnvironment}
+                        </button>
+                      )}
+                    </div>
+                    {approvalError && (
+                      <div className="hint" style={{ marginTop: 6, color: 'var(--sev-critical, #e0524f)' }}>
+                        {approvalError}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <span className="badge badge-medium">{t.settings.panels.humanApproval}</span>
+                )}
               </Row>
             </>
           )}

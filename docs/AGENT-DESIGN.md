@@ -344,7 +344,7 @@ con defaults seguros (`nodes.ts`). Contratos:
   a `none`; un techo `qemu-user` no se puede subir a `full-system` por decisión del agente. La honestidad se
   impone en código, no en la buena voluntad del modelo.
 
-**El governor** (`agent/governor.ts`) es la correa: topes duros de pasos/tokens/dinero/tiempo, evaluados como
+**El governor** (`agent/governor.ts`) es la correa: topes duros de turnos LLM/tokens/dinero/tiempo, evaluados como
 función pura antes de cada nodo; el primer techo alcanzado detiene la sesión y su razón queda registrada. Env:
 `FIRMLAB_AGENT_MAX_STEPS` (8), `FIRMLAB_AGENT_MAX_TOKENS` (120000), `FIRMLAB_AGENT_MAX_USD` (0.5),
 `FIRMLAB_AGENT_MAX_SECONDS` (300). El coste USD se estima por modelo (tabla de precios; fallback conservador).
@@ -356,8 +356,11 @@ arranque, `reconcileSessions()` marca como `error` cualquier sesión `running` i
 las `awaiting_approval` son una pausa durable legítima y sobreviven.
 
 **Aprobación humana + retención.** La emulación propuesta por ② espera una aprobación explícita
-(`POST /agent/sessions/:id/approve|decline`); al aprobar, la mecánica es el provider de emulación determinista
-existente, corrido vía el sistema de jobs, y su proof-state queda acotado por el techo del preflight. Una sesión
+(`POST /agent/sessions/:id/approve|decline`); la aprobación puede cubrir un objetivo o todos los propuestos
+(`{all:true}`). **Settings → IA y agente** puede preautorizar los objetivos de sesiones futuras de forma persistente
+(`FIRMLAB_AGENT_PREAPPROVE=1` hace lo mismo desde el entorno). La preferencia sólo resuelve esta puerta: no autoriza
+fuzzing, mensajes externos ni comandos fuera del plan acotado por preflight. Al aprobar, la mecánica es el provider
+de emulación determinista existente, corrido vía el sistema de jobs, y su proof-state queda acotado por el techo del preflight. Una sesión
 activa (`running`/`awaiting_approval`) **fija** su imagen: `sweepRetention` la salta (cierra el bug latente del
 §9). El aislamiento por sesión y su degradación honesta se describen en la Fase 4.
 
@@ -408,7 +411,8 @@ plantado hallado por cobertura (→ SIGSEGV → finding confirmado) y el `busybo
 
 **El flujo (`agent/session.ts`).** Tras el nodo ②, el orquestador corre node ④ sobre el objetivo top (garantizando
 su triage), registra los candidatos como findings + priors de reachability (write-back de Nivel-2), y decide la
-emulación por nivel de aislamiento: `full` → auto-run bajo sandbox sin aprobación; si no → `awaiting_approval`.
+emulación por nivel de aislamiento: `full` → auto-run bajo sandbox sin aprobación; si no → preautorización global
+o `awaiting_approval`.
 `/api/agent/config` expone `phase4: { isolation, fuzzing, autoRun }`.
 
 **RTOS/Renode (`providers/renode.ts`, opt-in).** Arranca un firmware MCU real bajo Renode y decide "booted" desde los

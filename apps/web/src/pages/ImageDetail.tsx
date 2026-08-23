@@ -1916,7 +1916,8 @@ function StepCard({ step }: { step: AgentStep }): JSX.Element {
       >
         {highlights}
       </div>
-      {step.rationale && (
+      {step.rationale && step.node === 'synthesis' && <Markdown text={step.rationale} className="agent-synthesis" />}
+      {step.rationale && step.node !== 'synthesis' && (
         <div style={{ marginTop: 6, fontSize: 12.5, fontStyle: 'italic', color: 'var(--text-dim)' }}>
           {step.rationale}
         </div>
@@ -1939,8 +1940,8 @@ function BudgetGauge({ session }: { session: AgentSession }): JSX.Element {
   const t = useMessages();
   const b = session.budget;
   const c = session.consumed;
-  const row = (label: string, used: string, cap: string) => (
-    <div style={{ display: 'flex', gap: 6, fontSize: 12 }}>
+  const row = (label: string, used: string, cap: string, title?: string) => (
+    <div style={{ display: 'flex', gap: 6, fontSize: 12 }} title={title}>
       <span className="hint" style={{ minWidth: 56 }}>
         {label}
       </span>
@@ -1951,7 +1952,7 @@ function BudgetGauge({ session }: { session: AgentSession }): JSX.Element {
   );
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 24px', marginTop: 8 }}>
-      {row(t.imageDetail.agent.budgetSteps, String(c.steps), String(b.maxSteps))}
+      {row(t.imageDetail.agent.budgetSteps, String(c.steps), String(b.maxSteps), t.imageDetail.agent.budgetStepsHint)}
       {row(t.imageDetail.agent.budgetTokens, String(c.inputTokens + c.outputTokens), String(b.maxTokens))}
       {row(t.imageDetail.agent.budgetCost, `$${c.usd.toFixed(4)}`, b.maxUsd > 0 ? `$${b.maxUsd}` : '∞')}
       {row(t.imageDetail.agent.budgetTime, `${Math.round(c.elapsedMs / 1000)}s`, `${Math.round(b.maxWallMs / 1000)}s`)}
@@ -2004,11 +2005,11 @@ export function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
   }, [imageId, load]);
 
   const approve = useCallback(
-    async (binary: string) => {
+    async (binary?: string, all = false) => {
       if (!session) return;
       setBusy(true);
       try {
-        const view = await api.approveEmulation(session.id, binary);
+        const view = await api.approveEmulation(session.id, binary, all);
         setSession(view.session);
         setSteps(view.steps);
       } catch (err) {
@@ -2111,7 +2112,17 @@ export function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
                 </button>
               </div>
             ))}
-            <div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {plan.length > 1 && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={busy}
+                  onClick={() => approve(undefined, true)}
+                >
+                  {a.approveAll}
+                </button>
+              )}
               <button type="button" className="btn btn-sm" disabled={busy} onClick={decline}>
                 {a.declineAll}
               </button>

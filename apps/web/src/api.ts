@@ -679,6 +679,14 @@ export interface AgentConfig {
     requestTimeoutMs: number;
   };
   budget?: GovernorBudget;
+  approval?: AgentApprovalState;
+}
+
+export interface AgentApprovalState {
+  key: 'FIRMLAB_AGENT_PREAPPROVE';
+  preapproveAll: boolean;
+  source: 'override' | 'environment' | 'default';
+  environmentValue: boolean;
 }
 
 export type AgentSessionStatus = 'running' | 'awaiting_approval' | 'done' | 'error' | 'halted';
@@ -1823,11 +1831,16 @@ export const api = {
   setLlmSetting: (key: string, value: string) =>
     put<{ llm: LlmSettings }>(`/api/settings/llm/${key}`, { value }).then((r) => r.llm),
   clearLlmSetting: (key: string) => del<{ llm: LlmSettings }>(`/api/settings/llm/${key}`).then((r) => r.llm),
+  agentApproval: () => get<{ approval: AgentApprovalState }>('/api/settings/agent-approval').then((r) => r.approval),
+  setAgentApproval: (preapproveAll: boolean) =>
+    put<{ approval: AgentApprovalState }>('/api/settings/agent-approval', { preapproveAll }).then((r) => r.approval),
+  clearAgentApproval: () =>
+    del<{ approval: AgentApprovalState }>('/api/settings/agent-approval').then((r) => r.approval),
   startAgentSession: (id: string, goal?: string) =>
     post<{ session: AgentSession }>(`/api/images/${id}/agent/session`, goal ? { goal } : {}).then((r) => r.session),
   agentSession: (id: string) => get<AgentSessionView>(`/api/images/${id}/agent/session`),
-  approveEmulation: (sid: string, binary?: string) =>
-    post<AgentSessionView>(`/api/agent/sessions/${sid}/approve`, binary ? { binary } : {}),
+  approveEmulation: (sid: string, binary?: string, all = false) =>
+    post<AgentSessionView>(`/api/agent/sessions/${sid}/approve`, all ? { all: true } : binary ? { binary } : {}),
   declineEmulation: (sid: string) => post<AgentSessionView>(`/api/agent/sessions/${sid}/decline`),
   researchStatus: () => get<ResearchStatus>('/api/research/status'),
   runResearch: (id: string) => post<{ jobId: string }>(`/api/images/${id}/research`),

@@ -5,11 +5,13 @@
  * approve/decline. GET /agent/config surfaces the governor budget so the UI can show the leash.
  */
 import type { FastifyInstance } from 'fastify';
+import { resolveAgentApproval } from '../agent/approval.js';
 import { loadGovernorBudget } from '../agent/governor.js';
 import { approveEmulation, declineEmulation, startAgentSession } from '../agent/session.js';
 import { loadLlmConfig } from '../llm.js';
 import { detectFuzzing } from '../providers/fuzz.js';
 import { detectIsolation } from '../providers/isolate.js';
+import { getAgentPreapprovalOverride } from '../settings.js';
 import { type AgentSessionRow, type AgentStepRow, getImage, getSession, latestSession, listSteps } from '../store.js';
 
 function sessionView(row: AgentSessionRow): unknown {
@@ -54,6 +56,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     const cfg = loadLlmConfig();
     if (!cfg) return { enabled: false };
     const isolation = await detectIsolation();
+    const approval = resolveAgentApproval(process.env, getAgentPreapprovalOverride());
     return {
       enabled: true,
       provider: cfg.provider,
@@ -65,6 +68,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         requestTimeoutMs: cfg.requestTimeoutMs,
       },
       budget: loadGovernorBudget(),
+      approval,
       phase4: { isolation, fuzzing: await detectFuzzing(), autoRun: isolation === 'full' },
     };
   });
@@ -80,7 +84,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: 'Agent disabled — turn it on in Settings › Privacy (and configure an LLM API key)' });
     const goal = ((req.body ?? {}) as { goal?: string }).goal ?? null;
     try {
-      const session = startAgentSession(id, cfg, goal);
+      const approval = resolveAgentApproval(process.env, getAgentPreapprovalOverride());
+      const session = startAgentSession(id, cfg, goal, approval.preapproveAll);
       return reply.status(202).send({ session: sessionView(session) });
     } catch (err) {
       return reply.status(409).send({ error: err instanceof Error ? err.message : String(err) });
@@ -107,9 +112,10 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   // Human-in-the-loop approval: run the proposed emulation deterministically.
   app.post('/agent/sessions/:sid/approve', async (req, reply) => {
     const { sid } = req.params as { sid: string };
-    const binary = ((req.body ?? {}) as { binary?: string }).binary ?? null;
+    const body = (req.body ?? {}) as { binary?: string; all?: boolean };
+    const binary = body.binary ?? null;
     try {
-      const session = await approveEmulation(sid, binary);
+      const session = await approveEmulation(sid, binary, body.all === true);
       return withSteps(session);
     } catch (err) {
       return reply.status(400).send({ error: err instanceof Error ? err.message : String(err) });

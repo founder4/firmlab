@@ -126,7 +126,8 @@ export const settings: Messages['settings'] = {
       'Cuando ejecutas el copiloto o una sesión del agente, el contexto determinista del análisis (hallazgos,',
       'metadatos de binarios, referencias cruzadas del corpus) se envía a',
     ].join(' '),
-    agentNoBytes: 'No se envía ningún byte del firmware en crudo. La emulación requiere tu aprobación.',
+    agentNoBytes:
+      'No se envía ningún byte del firmware en crudo. La emulación sigue la política indicada en IA y agente.',
     agentOffLead: 'No hay ningún modelo externo configurado. No se envía nada fuera de la máquina. Actívalo con',
     agentOffTail: 'y una clave de API.',
     banner: [
@@ -174,16 +175,27 @@ export const settings: Messages['settings'] = {
     governorTitle: 'Gobernador del agente',
     governorSub: [
       'El agente razona dentro de un esqueleto determinista y se detiene a pedir aprobación antes de emular. Estos',
-      'límites los impone el gobernador y se fijan mediante variables de entorno.',
+      'límites son techos estrictos del gobernador, no una lista que la ejecución deba completar. Se fijan mediante variables de entorno.',
     ].join(' '),
     status: 'Estado',
     model: 'Modelo',
-    stepBudget: 'Presupuesto de pasos',
+    stepBudget: 'Máximo de turnos LLM',
     tokenBudget: 'Presupuesto de tokens',
     costCeiling: 'Techo de coste',
     unbounded: 'sin acotar',
     timeBudget: 'Presupuesto de tiempo',
     emulation: 'Emulación',
+    approvalTitle: 'Política de autorización para futuras sesiones del agente',
+    approvalManual: 'Preguntar en cada sesión',
+    approvalAll: 'Preautorizar todo',
+    approvalScope:
+      'Se aplica a sesiones futuras y sólo a objetivos de emulación ya propuestos y acotados por la comprobación determinista. No autoriza fuzzing, mensajes externos ni comandos arbitrarios.',
+    approvalWarning:
+      'Las ejecuciones podrán comenzar sin supervisión incluso si este host sólo ofrece aislamiento parcial. Actívalo únicamente para firmware e infraestructura que estés autorizado a probar.',
+    approvalFromOverride: 'Fijado aquí. ',
+    approvalFromEnvironment: 'Sigue FIRMLAB_AGENT_PREAPPROVE del entorno.',
+    approvalFromDefault: 'Valor seguro por defecto: aprobación manual.',
+    approvalFollowEnvironment: 'Seguir el entorno',
     offLead: 'Define',
     offTail: [
       'y una clave de API de LLM para habilitar los nodos de decisión. Con el interruptor apagado, FirmLab sigue',

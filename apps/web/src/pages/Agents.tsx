@@ -101,8 +101,8 @@ export type AgentReason =
   | 'failed'
   | 'running';
 
-/** How the human-approval gate was settled. `auto` is a run that needed no gate because isolation contained it. */
-export type AgentGate = 'none' | 'pending' | 'approved' | 'declined' | 'auto';
+/** How execution permission was settled. `auto` is isolation; `preapproved` is the explicit global setting. */
+export type AgentGate = 'none' | 'pending' | 'approved' | 'declined' | 'auto' | 'preapproved';
 
 export interface AgentReading {
   outcome: Outcome;
@@ -188,17 +188,20 @@ export function readAgentSession(view: AgentSessionInput): AgentReading | null {
 
   // The gate fired exactly where the orchestrator refused to auto-run: an `isolation` step it could not contain.
   const gateFired = nodes('isolation').some((s) => s.status === 'skipped');
+  const preapproved = nodes('authorization').some((s) => field(s.input, 'source') === 'global-setting');
   const declined = Boolean(haltReason && /declin/i.test(haltReason));
   const gate: AgentGate =
     status === 'awaiting_approval'
       ? 'pending'
       : declined
         ? 'declined'
-        : gateFired && emulated
-          ? 'approved'
-          : emulations.some((s) => field(s.input, 'autoApproved') === true)
-            ? 'auto'
-            : 'none';
+        : preapproved
+          ? 'preapproved'
+          : gateFired && emulated
+            ? 'approved'
+            : emulations.some((s) => field(s.input, 'autoApproved') === true)
+              ? 'auto'
+              : 'none';
 
   const base = {
     candidates,
@@ -592,13 +595,15 @@ function AgentOutcome({ run, status }: { run: Run; status: JSX.Element }): JSX.E
 
   const meta = t.shell.runHistory.outcome[a.outcome];
   const gateLabel =
-    a.gate === 'approved'
-      ? m.gateApproved
-      : a.gate === 'declined'
-        ? m.gateDeclined
-        : a.gate === 'auto'
-          ? m.gateAuto
-          : null;
+    a.gate === 'preapproved'
+      ? m.gatePreapproved
+      : a.gate === 'approved'
+        ? m.gateApproved
+        : a.gate === 'declined'
+          ? m.gateDeclined
+          : a.gate === 'auto'
+            ? m.gateAuto
+            : null;
   // A proof state is a code the API stores; the catalogue glosses the ones it knows and the rest render verbatim,
   // because inventing a gloss for a state this build has not heard of is worse than showing the record itself.
   const proofKey = a.proofState && a.proofState in t.proofState.label ? (a.proofState as ProofStateKey) : null;

@@ -342,7 +342,11 @@ export const imageDetail = {
       extraction: 'Extraction (deterministic)',
       preflight: 'Preflight (deterministic)',
       'target-selection': '② Target selection',
+      'zero-day': 'Zero-day hypotheses',
+      isolation: 'Isolation check',
+      authorization: 'Execution authorization',
       emulation: 'Emulation',
+      synthesis: 'Synthesis',
       error: 'Error',
     },
 
@@ -366,7 +370,8 @@ export const imageDetail = {
     jsonFallback: 'JSON recovery used',
     audit: 'audit: inputs & decision',
 
-    budgetSteps: 'steps',
+    budgetSteps: 'LLM turns',
+    budgetStepsHint: 'Used turns / hard maximum. This is a budget, not a checklist or expected progress.',
     budgetTokens: 'tokens',
     budgetCost: 'cost',
     budgetTime: 'time',
@@ -380,13 +385,14 @@ export const imageDetail = {
     running: 'Running…',
     newSession: 'New session',
     startSession: 'Start session',
-    sub: 'The agent reasons within a deterministic skeleton: it chooses branches (triage ①, target selection ②) and interprets — every mechanical step is deterministic, and emulation waits for your approval. A governor caps the run.',
+    sub: 'The agent reasons within a deterministic skeleton: it chooses branches (triage ①, target selection ②) and interprets — every mechanical step is deterministic, and emulation waits for your approval. The LLM-turn fraction is a spent/maximum budget, not a checklist the run must fill.',
 
     approvalTitle: 'Approval required — proposed emulation',
     /** Emulation proves the sandbox, never the physical device — and nothing runs unapproved. */
     approvalSub:
       'The agent proposes running these under emulation. Emulation proves the sandbox, not the device; nothing runs without your approval.',
     approve: 'Approve & run',
+    approveAll: 'Approve all proposed runs',
     declineAll: 'Decline all',
     noSession: 'No agent session yet. Start one to have the agent triage and select targets.',
   },

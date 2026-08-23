@@ -152,7 +152,7 @@ export const settings = {
       'When you run the copilot or an agent session, the deterministic analysis context (findings, binary metadata,',
       'corpus cross-refs) is sent to',
     ].join(' '),
-    agentNoBytes: 'No raw firmware bytes are sent. Emulation requires your approval.',
+    agentNoBytes: 'No raw firmware bytes are sent. Emulation follows the approval policy shown under AI & Agent.',
     agentOffLead: 'No external model is configured. Nothing is sent off-machine. Enable it with',
     agentOffTail: 'and an API key.',
     banner: [
@@ -211,17 +211,28 @@ export const settings = {
     governorTitle: 'Agent governor',
     governorSub: [
       'The agent reasons within a deterministic skeleton and pauses for approval before emulation. These limits are',
-      'enforced by the governor and set via environment variables.',
+      'hard ceilings enforced by the governor, not a checklist the run must fill. They are set via environment variables.',
     ].join(' '),
     status: 'Status',
     model: 'Model',
-    stepBudget: 'Step budget',
+    stepBudget: 'Maximum LLM turns',
     tokenBudget: 'Token budget',
     costCeiling: 'Cost ceiling',
     /** No ceiling is configured. It is not "unlimited spending is fine" — it is that nothing is stopping it. */
     unbounded: 'unbounded',
     timeBudget: 'Time budget',
     emulation: 'Emulation',
+    approvalTitle: 'Approval policy for future agent sessions',
+    approvalManual: 'Ask every session',
+    approvalAll: 'Pre-authorise all',
+    approvalScope:
+      'Applies to future sessions and only to emulation targets already proposed and bounded by deterministic preflight. It does not authorise fuzzing, external messages or arbitrary commands.',
+    approvalWarning:
+      'Runs may start unattended even when this host offers only partial isolation. Enable this only for firmware and infrastructure you are authorised to test.',
+    approvalFromOverride: 'Set here. ',
+    approvalFromEnvironment: 'Following FIRMLAB_AGENT_PREAPPROVE from the environment.',
+    approvalFromDefault: 'Safe default: manual approval.',
+    approvalFollowEnvironment: 'Follow environment',
     offLead: 'Set',
     offTail: [
       'and an LLM API key to enable the decision nodes. With the flag off, FirmLab stays local-only and',

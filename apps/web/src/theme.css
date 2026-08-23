@@ -1407,6 +1407,13 @@ th.sortable:hover {
   margin-top: 12px;
 }
 
+.md.agent-synthesis {
+  margin-top: 12px;
+  padding-top: 12px;
+  max-width: none;
+  border-top: 1px solid var(--border-soft);
+}
+
 /* The autonomous scan's narrative keeps the inset "read this" box it had; the measure applies inside it. */
 .md-box {
   background: var(--bg);

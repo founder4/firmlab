@@ -82,13 +82,14 @@ export const agents = {
       gateApproved: 'you approved the emulation',
       gateDeclined: 'you declined the emulation',
       gateAuto: 'ran unattended — fully isolated',
+      gatePreapproved: 'ran unattended — globally pre-authorised',
       /** Proof-state codes, node names and preflight strategies are records: the frame is localised, they are not. */
       emulation: (proofState: string) => `emulation → ${proofState}`,
       preflight: (strategy: string) => `preflight: ${strategy}`,
       endedAt: (node: string) => `ended at ${node}`,
       stoppedAt: (node: string) => `stopped at ${node}`,
       /** The governor's leash, consumed against its cap — a spend with no cap beside it states nothing. */
-      leash: (used: number, max: number) => `${used} of ${max} steps`,
+      leash: (used: number, max: number) => `${used} of ${max} LLM turns`,
       leashDetail: (usd: number, maxUsd: number, entries: number) =>
         `$${usd.toFixed(4)} of $${maxUsd.toFixed(2)} spent · ${entries} transcript entries`,
     },

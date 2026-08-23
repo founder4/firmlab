@@ -14,7 +14,7 @@
  * The lane switches are deliberately NOT re-tested here: their prose is composed by the API and arrives in the
  * locale this page asked for, which `api.test.ts` pins at the request level.
  */
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
@@ -104,6 +104,12 @@ describe('Settings — the tab bodies follow the locale', () => {
       provider: 'deepseek',
       model: 'deepseek-chat',
       budget: { maxSteps: 12, maxTokens: 100000, maxUsd: 0, maxWallMs: 600000 },
+      approval: {
+        key: 'FIRMLAB_AGENT_PREAPPROVE',
+        preapproveAll: false,
+        source: 'default',
+        environmentValue: false,
+      },
     });
     setLocale('es');
     renderSettings();
@@ -111,7 +117,7 @@ describe('Settings — the tab bodies follow the locale', () => {
 
     expect(await screen.findByText('Proveedor de IA')).toBeInTheDocument();
     expect(screen.getByText('Gobernador del agente')).toBeInTheDocument();
-    expect(screen.getByText('Presupuesto de pasos')).toBeInTheDocument();
+    expect(screen.getByText('Máximo de turnos LLM')).toBeInTheDocument();
     expect(screen.getByText('Techo de coste')).toBeInTheDocument();
     expect(screen.getByText('Activado')).toBeInTheDocument();
     // No ceiling is configured. It must read as "nothing is stopping this", not as a blank.
@@ -120,6 +126,35 @@ describe('Settings — the tab bodies follow the locale', () => {
     expect(screen.getByText('FIRMLAB_AGENT_MAX_STEPS')).toBeInTheDocument();
     expect(screen.getByText('FIRMLAB_AGENT_MAX_USD')).toBeInTheDocument();
     expect(screen.getAllByText(/deepseek · deepseek-chat/).length).toBeGreaterThan(0);
+  });
+
+  it('persists global pre-authorisation for future sessions and states its boundary', async () => {
+    mockApi.agentConfig.mockResolvedValue({
+      enabled: true,
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      approval: {
+        key: 'FIRMLAB_AGENT_PREAPPROVE',
+        preapproveAll: false,
+        source: 'default',
+        environmentValue: false,
+      },
+    });
+    mockApi.setAgentApproval.mockResolvedValue({
+      key: 'FIRMLAB_AGENT_PREAPPROVE',
+      preapproveAll: true,
+      source: 'override',
+      environmentValue: false,
+    });
+    setLocale('es');
+    renderSettings();
+    openTab('IA y agente');
+
+    const preapprove = await screen.findByRole('button', { name: 'Preautorizar todo' });
+    fireEvent.click(preapprove);
+    await waitFor(() => expect(mockApi.setAgentApproval).toHaveBeenCalledWith(true));
+    expect(await screen.findByText(/Las ejecuciones podrán comenzar sin supervisión/)).toBeInTheDocument();
+    expect(screen.getByText(/No autoriza fuzzing/)).toBeInTheDocument();
   });
 
   it('translates the storage tab, and says outright when a limit is not set', async () => {

@@ -44,6 +44,7 @@ import {
   updateFindingProofState,
   updateSession,
 } from '../store.js';
+import { approvedTargets } from './approval.js';
 import { Governor, ZERO_CONSUMED, estimateUsd, loadGovernorBudget } from './governor.js';
 import {
   type EmulationRung,
@@ -113,7 +114,12 @@ function persist(session: AgentSessionRow, status: AgentSessionStatus, gov: Gove
  * Start a conscious-autonomy session over an image. Returns the created row immediately and drives the flow in
  * the background. Rejects (throws) if the image is missing or already has an active session (one at a time).
  */
-export function startAgentSession(imageId: string, cfg: LlmConfig, goal: string | null = null): AgentSessionRow {
+export function startAgentSession(
+  imageId: string,
+  cfg: LlmConfig,
+  goal: string | null = null,
+  preapproveAll = false,
+): AgentSessionRow {
   if (!getImage(imageId)) throw new Error('Image not found');
   if (hasActiveSession(imageId)) throw new Error('An agent session is already active for this image');
 
@@ -131,7 +137,7 @@ export function startAgentSession(imageId: string, cfg: LlmConfig, goal: string 
     updatedAt: now,
   };
   insertSession(session);
-  void orchestrate(session, cfg).catch((err) => {
+  void orchestrate(session, cfg, preapproveAll).catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     const current = getSession(session.id) ?? session;
     const consumed = JSON.parse(current.consumedJson) as typeof ZERO_CONSUMED;
@@ -166,7 +172,7 @@ export function startAgentSession(imageId: string, cfg: LlmConfig, goal: string 
 }
 
 /** The deterministic flow. LLM calls happen only inside the two decision nodes. */
-async function orchestrate(session: AgentSessionRow, cfg: LlmConfig): Promise<void> {
+async function orchestrate(session: AgentSessionRow, cfg: LlmConfig, preapproveAll: boolean): Promise<void> {
   const budget = loadGovernorBudget();
   const gov = new Governor(budget);
   const imageId = session.imageId;
@@ -257,7 +263,7 @@ async function orchestrate(session: AgentSessionRow, cfg: LlmConfig): Promise<vo
   );
 
   // --- Node ④ Zero-day + Phase-4 emulation gate (auto-run under isolation, or human approval) ---
-  await runPhase4(session, gov, caps, selection.decision.emulationPlan, cfg);
+  await runPhase4(session, gov, caps, selection.decision.emulationPlan, cfg, preapproveAll);
 
   // --- Node ⑤ Synthesis: a cited narrative over the session's findings, when the run actually completed ---
   if (getSession(session.id)?.status === 'done') await runClosingSynthesis(session, cfg, gov);
@@ -321,6 +327,7 @@ async function runPhase4(
   caps: RuntimeCapabilities,
   plan: TargetSelectionDecision['emulationPlan'],
   cfg: LlmConfig,
+  preapproveAll: boolean,
 ): Promise<void> {
   const imageId = session.imageId;
   const target = plan[0]?.binary ?? topNetworkBinary(imageId);
@@ -369,6 +376,24 @@ async function runPhase4(
     await confirmTrigger(session, gov, caps, target, topCandidate);
   } else if (plan.length > 0 && isolation === 'full') {
     await autoRunIsolated(session, gov, caps, plan[0] as TargetSelectionDecision['emulationPlan'][number]);
+  } else if (plan.length > 0 && preapproveAll) {
+    const approved = approvedTargets(plan, { all: true });
+    recordStep(
+      session.id,
+      'authorization',
+      'ok',
+      { source: 'global-setting', isolation },
+      { all: true, targets: approved.map((entry) => ({ binary: entry.binary, rung: entry.rung })) },
+      'All proposed emulation targets were pre-authorised in Settings for future agent sessions.',
+      null,
+      0,
+      0,
+    );
+    persist(session, 'running', gov, null);
+    const current = getSession(session.id);
+    if (!current) throw new Error('Session disappeared before pre-authorised emulation');
+    await runApprovedPlan(current, approved, true);
+    return;
   } else if (plan.length > 0) {
     recordStep(
       session.id,
@@ -618,46 +643,80 @@ function proofStateForEmulation(rung: EmulationRung, ran: boolean, cleanExit: bo
  * mechanics are the existing deterministic emulation providers, run via the job system. On completion the
  * session is done; its proof state is capped by the preflight ceiling.
  */
-export async function approveEmulation(sessionId: string, binary: string | null): Promise<AgentSessionRow> {
+export async function approveEmulation(
+  sessionId: string,
+  binary: string | null,
+  approveAll = false,
+): Promise<AgentSessionRow> {
   const session = getSession(sessionId);
   if (!session) throw new Error('Session not found');
   if (session.status !== 'awaiting_approval')
     throw new Error(`Session is not awaiting approval (status: ${session.status})`);
 
   const plan = planFor(sessionId);
-  const chosen = binary ? plan.find((p) => p.binary === binary) : plan[0];
-  if (!chosen) throw new Error('No approved emulation target in the session plan');
+  const chosen = approvedTargets(plan, { binary, all: approveAll });
+  if (chosen.length === 0) throw new Error('No approved emulation target in the session plan');
   // Claim the session so a concurrent approve can't double-run the emulation.
   updateSession(sessionId, 'running', session.consumedJson, null);
+  recordStep(
+    sessionId,
+    'authorization',
+    'ok',
+    { source: 'operator', all: approveAll },
+    { targets: chosen.map((entry) => ({ binary: entry.binary, rung: entry.rung })) },
+    approveAll ? 'Operator approved every proposed emulation target.' : 'Operator approved one emulation target.',
+    null,
+    0,
+    0,
+  );
 
   try {
-    const done = await runApprovedEmulation(session, chosen);
+    const done = await runApprovedPlan(session, chosen, approveAll);
     // Node ⑤ — close with a cited synthesis over the (now emulation-confirmed) findings.
     const cfg = loadLlmConfig();
     if (cfg) await runClosingSynthesis(done, cfg);
     return getSession(sessionId) as AgentSessionRow;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    recordStep(
-      sessionId,
-      'emulation',
-      'error',
-      { binary: chosen.binary, rung: chosen.rung },
-      undefined,
-      message,
-      null,
-      0,
-      0,
-    );
     updateSession(sessionId, 'error', session.consumedJson, message);
     throw err;
   }
 }
 
-async function runApprovedEmulation(
+/** Execute the targets covered by one approval. Approve-all records a failed attempt and continues with the rest. */
+async function runApprovedPlan(
+  session: AgentSessionRow,
+  chosen: TargetSelectionDecision['emulationPlan'],
+  continueOnError: boolean,
+): Promise<AgentSessionRow> {
+  for (const entry of chosen) {
+    try {
+      await runApprovedTarget(session, entry);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      recordStep(
+        session.id,
+        'emulation',
+        'error',
+        { binary: entry.binary, rung: entry.rung },
+        undefined,
+        message,
+        null,
+        0,
+        0,
+      );
+      if (!continueOnError) throw err;
+    }
+  }
+  const current = getSession(session.id) ?? session;
+  updateSession(session.id, 'done', current.consumedJson, null);
+  return getSession(session.id) as AgentSessionRow;
+}
+
+async function runApprovedTarget(
   session: AgentSessionRow,
   chosen: TargetSelectionDecision['emulationPlan'][number],
-): Promise<AgentSessionRow> {
+): Promise<void> {
   const sessionId = session.id;
   const caps = await computeRuntimeCapabilities(session.imageId);
   const arch = (caps?.arch ?? 'unknown') as Architecture;
@@ -714,9 +773,6 @@ async function runApprovedEmulation(
     0,
     0,
   );
-  // Emulation runs no LLM turn, so the consumed budget is unchanged — persist it verbatim, session complete.
-  updateSession(sessionId, 'done', session.consumedJson, null);
-  return getSession(sessionId) as AgentSessionRow;
 }
 
 /** Operator declines the proposed emulation — the session closes, honestly, with nothing run. */
