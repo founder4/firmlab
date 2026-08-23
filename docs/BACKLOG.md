@@ -19,10 +19,19 @@
 - [x] Integrar `webprobe` en la ventana viva de QEMU y automatizar una campaña de cinco arranques full-system reproducibles.
 - [x] Sondear activamente también el HTTPS autofirmado/heredado del invitado, con la relajación TLS confinada a loopback.
 - [x] Poner el resultado por delante en Dashboard, corpus y ficha: recuento de hallazgos, cobertura con barra, censo en tarjetas, filtros y búsqueda, e informe replegado a un `<details>`.
+- [x] Persistir e hidratar el análisis profundo al recargar, manteniendo el resultado y su trazabilidad fuera del estado efímero del componente.
+- [x] Exigir despliegues reproducibles: build exacta, revisión OCI, comprobación de `latest` y verificación posterior contra el commit solicitado.
+- [x] Reducir deuda del frontend: rutas lazy, bundle principal de 739,58 kB a 427,07 kB, tests de páginas y runtimes vigentes en GitHub Actions.
+- [x] Verificar el libro mayor a 390×844 con navegador real y corregir el desbordamiento de cadenas largas en Update Path.
+- [x] Desglosar el censo por semántica: establecido, pista, bloqueo, descartado, testimonio y otros; `unproven` queda sólo como agregado de compatibilidad.
+- [x] Fijar una matriz ejecutable del corpus (SHA/tamaño/clase/arquitectura, stages y gates) y ampliarlo de 19 a 23 muestras con BIOS Framework oficial, Contiki, Zephyr y QMK.
+- [x] Correlacionar kernel y módulos con CVE sin sobreactuar la evidencia: CPE del kernel restringido a la CNA de Linux, prefijo/truncación explícitos y NetUSB ligado a CVE-2015-3036 sólo por identidad byte-level.
 
 ## Siguiente
 
-- [ ] Ampliar el corpus de validación: firmware UEFI de proveedor, variables y módulos completos, y más muestras RTOS/hardware.
-- [ ] Reducir deuda del frontend: navegación coherente, tests de páginas sin cobertura, división del bundle y traducción del texto generado por la API.
-- [ ] Verificar la capa responsive del libro mayor en un viewport estrecho real: la regla de ≤720px que convierte `findings-table` en tarjetas se escribió y se probó por CSS, pero `ui-drive.mjs` no redimensiona, así que nadie la ha visto renderizada. Añadir un `--viewport` al driver y mirarla.
-- [ ] Desglosar el cubo "sin establecer" del censo. Hoy `severityCensus` mete en `unproven` todo lo que `isEstablished` rechaza: pistas, los dos bloqueos, un descarte y el testimonio de un operador. El filtro del libro mayor ya excluye `operator_assertion`, así que la tarjeta puede contar una fila que el filtro no enseña. Son cuatro cosas distintas bajo un número, y la que más importa — pista (accionable) frente a bloqueo (pregunta sin respuesta en este despliegue) — es justo la que el número esconde.
+- [ ] Cerrar el hueco de clasificación QMK: la muestra oficial permanece `unknown`, por lo que el plan no reconoce todavía su familia RTOS/teclado pese a conservarla como fallo medido.
+- [ ] Reducir el límite de cobertura FwHunt observado en el BIOS Framework: 12 de 409 módulos analizados y 397 declarados fuera del presupuesto; mejorar ranking o barrido por lotes sin esconder el denominador.
+- [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 40 celdas `not-run`, 80 `degraded` y 21 `no-input` entre 376 etapas aplicables; priorizar por clase y coste.
+- [ ] Profundizar la correlación de kernel: el prefijo NVD puede tener miles de CVE (2.037 para Linux 2.6.31); usar config/subsistema, diff de parches o VEX de proveedor para descartar candidatos y paginar más allá de las primeras 50 sin presentarlas como el conjunto.
+- [ ] Hacer que la reparación del invitado alcance una ruta ejecutada y recuperar red/console interactiva en full-system; la intervención al final de `rcS` sigue siendo inerte.
+- [ ] Ampliar RTOS a fuzzing de periféricos/MMIO y enumeración de tareas; Renode demuestra vida, no cobertura del HAL.

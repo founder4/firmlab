@@ -5,6 +5,25 @@ long work session, grounded in a precise review of the current tree (file refere
 
 ---
 
+## Current baseline — 2026-08-23
+
+- Reproducible deploy contract, CI audit/type/test/build/Docker smoke, and exact OCI revision checks are shipped.
+- The web restores persisted deep-analysis results, lazy-loads routes, and has been exercised at 390×844; the main
+  entry chunk is 427.07 kB (146.18 kB gzip).
+- Findings census semantics are explicit (established/lead/blocked/dismissed/asserted/other), with the legacy
+  `unproven` field retained only as a compatibility aggregate.
+- The validation corpus is locked at 23 samples / 8 classes. Its generated matrix covers 376 applicable stage
+  cells (110 found, 125 ran-empty, 80 degraded, 21 no-input, 40 not-run).
+- Kernel versions now correlate through a Linux-CNA-scoped NVD query; module correlation requires byte-level
+  identity anchors and remains a lead. Neither path promotes version presence to device exploitability.
+
+Next, in order: classify the QMK sample; expand FwHunt beyond 12/409 modules on the Framework BIOS; drive down
+the 40 `not-run` and 80 `degraded` matrix cells; add config/patch/VEX pruning to the kernel-CVE prefix; then return
+to full-system guest networking/console and RTOS peripheral fuzzing. The actionable list lives in
+[`BACKLOG.md`](BACKLOG.md).
+
+---
+
 ## Shipped (phases 0–2)
 
 **Phase 0 — deploy consolidation & honesty**

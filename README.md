@@ -22,7 +22,7 @@ image you feed it.
 </p>
 
 > **Status:** active, solo-built engineering project — Phases 0–5 shipped, more on the [roadmap](#-project-status--roadmap).
-> ~14.7k lines of TypeScript, 210+ tests, validated against real tools in-container.
+> ~120k lines of TypeScript/TSX, 2,700+ tests, validated against real tools in-container and a locked 23-image corpus.
 > **Local-only by design:** the API binds to loopback and is never meant to face the internet.
 
 <p align="center">
@@ -248,7 +248,8 @@ flowchart TD
 
 FirmLab is local-only by default. The one internet-touching capability lives behind its **own** separate flag
 (`FIRMLAB_RESEARCH`, distinct from `FIRMLAB_AGENT`) so the deterministic, offline DNA is never compromised by
-accident. When enabled, it correlates the SBOM against **OSV.dev** published advisories, fingerprints
+accident. When enabled, it correlates the SBOM against **OSV.dev/NVD**, restricts Linux-kernel queries to the
+kernel CNA, cross-references discovered CVEs against **CISA KEV**, fingerprints
 **provenance** (vendor/model/version) and discovers the vendor's disclosure contact via RFC 9116
 (`security.txt`) — but only for allowlisted domains. Every fetch passes an allowlist choke point and an **egress
 ledger** that states exactly what leaves the machine (names and versions — *never raw firmware bytes*). A
@@ -265,7 +266,7 @@ published advisory for a present component is a *lead*, not a confirmed bug; rea
 | **Emulation** | `qemu-user-static` · `qemu-system-*` · Renode (RTOS/MCU) |
 | **Security tooling** | binwalk · radare2 / Ghidra · syft / grype · gitleaks · AFL++ · OSV.dev |
 | **Agent/LLM** | Provider-agnostic (DeepSeek-first) · structured-output decision nodes · governor · session isolation |
-| **Quality** | Vitest (210+ tests) · Biome (lint/format) · Docker-based real-tool validation |
+| **Quality** | Vitest (2,700+ tests) · Biome (lint/format) · Docker-based real-tool validation · locked corpus matrix |
 
 ## Quick start
 
@@ -312,7 +313,7 @@ layered on later, always additive.
 | **3** | **Decision nodes** ①②, governor, auditable/resumable sessions, human-approval gate | ✅ Shipped |
 | **4** | **Zero-day** node ④, deterministic taint scaffold, OS-primitive session isolation, opt-in AFL++ | ✅ Shipped |
 | **5** | External **intelligence** — provenance + OSV + security.txt, egress ledger (own flag) | ✅ Shipped |
-| **▶** | **In progress** — broader Renode MCU coverage, per-class fuzz harnesses, more advisory sources, UI test coverage | 🔨 Ongoing |
+| **▶** | **In progress** — QMK classification, deeper UEFI-module coverage, closing matrix `not-run` cells, full-system guest networking | 🔨 Ongoing |
 
 Earlier phases hardened the deterministic workbench itself: arch refinement, gitleaks deep-scan, firmware diff
 with content hashes, report export, a bounded job queue, data retention/quota, an expanded signature pack, Ghidra
@@ -326,7 +327,7 @@ decompilation, API defense-in-depth, and an e2e integration fixture. Full histor
 firmlab/
 ├─ packages/core/     @firmlab/core — pure analysis engine (entropy, signatures, structure,
 │                     strings, filesystem, MCU fingerprint) · zero deps · fully unit-tested
-├─ apps/api/          @firmlab/api — Fastify + node:sqlite · 18 routes · 21 providers
+├─ apps/api/          @firmlab/api — Fastify + node:sqlite · 44 route modules · 81 providers
 │  ├─ providers/      extract · sbom · gitleaks · diff · ghidra · emulate · renode · fuzz
 │  │                  · isolate · taint · trigger · preflight · report · keys · provenance · osv …
 │  ├─ agent/          session orchestrator · decision nodes · governor · zero-day · synthesis
@@ -338,7 +339,7 @@ firmlab/
 
 ## Testing & quality
 
-- **210+ tests** (Vitest) across the three packages — the pure core and every provider's decision logic are
+- **2,700+ tests** (Vitest) across the three packages — the pure core and every provider's decision logic are
   unit-tested without needing the real tool installed.
 - **Real-tool validation in Docker.** Beyond unit tests, changes are exercised against the actual toolchain
   in-container: a 12-assertion integration run over the real provider chain (extract → SBOM → gitleaks →

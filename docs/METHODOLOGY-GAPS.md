@@ -86,9 +86,10 @@ companion-app/cloud (UI).
 - ✗ **LogoFAIL-class** image-parser bugs, **SW SMI handler** callouts (SMM `CommBuffer` not validated), and
   **SPI protected-range / BIOS-lock** posture — the remaining high-value UEFI findings, and now the whole of this
   category's technique gap.
-- ◐ Three allocation defects the real runs exposed, all cheap: the module budget is spent **alphabetically**, the
-  2 `target: bootloader` rules examine nothing (FirmLab does not carve an OS bootloader off an ESP), and chipsec's
-  carve is discarded so fwhunt re-carves the same modules.
+- ◐ The Framework 3.04 validation run makes the remaining bound concrete: the rule-aware ranking scans 12 of 409
+  modules and names the 397 it drops. The ordering defect is closed; the cap is now the real coverage constraint.
+  Two `target: bootloader` rules still examine nothing (FirmLab does not carve an OS bootloader off an ESP), and
+  chipsec's carve is discarded so fwhunt re-carves the same modules.
 
 **RTOS / bare-metal** (Renode boots; `rtos.ts` recovers the vector table, base address and memory map):
 
@@ -106,8 +107,11 @@ companion-app/cloud (UI).
 - ✅ **Kernel posture** — `kernelposture.ts` reads the kernel's own security properties, and refuses to read the
   absence of a `CONFIG_` token as the absence of a feature (measured: the corpus's 2.6.x vendor kernels carry zero
   such tokens; an answer only becomes `off` when an anchor proves we were looking in the right place).
-- ✗ **Kernel/module vuln surface** — the version and the `.ko`s are still not correlated to CVEs the way userland
-  SBOM is. `kernelposture` says how the kernel is *configured*; nothing says which *known bugs* it carries.
+- ✅ **Kernel/module vuln surface** — `kernel-cve.ts` reduces a measured vendor banner to its upstream token and
+  queries NVD by OS CPE restricted to the Linux kernel CNA; total/prefix/freshness survive and every row remains
+  `needs_runtime_reproduction` because backports, config and reachability are unresolved. `kmod.ts` correlates the
+  corpus NetUSB driver with CVE-2015-3036 only when module, KCodes author, product marker and the exact
+  `run_init_sbus` function all exist in the bytes; NVD publishes no affected version range, so none is invented.
 - ✗ **The emulated guest has no network.** The firmware boots and its vendor init configures only loopback,
   because the LAN comes up through switch hardware `-M malta` does not emulate. Everything on the driven-attack-surface
   side of FSTM-7 is bounded by this, which is why it heads §4.
@@ -139,16 +143,13 @@ but unwired, or built and unmeasured, or built and unreadable. That is what shif
 effort still, but "effort" now weights *finding out what is actually true of the thing* ahead of building, because on
 this codebase that step has repeatedly been the whole task.
 
-1. **The corpus is the binding constraint, not the technique — and this is the new #1.** Several built and validated
-   capabilities have almost no evidence behind them, and each was discovered separately before the pattern was
-   named: **no UEFI image at all**, so every `chipsec`/`fwhunt` branch is tested against fixtures and the whole
-   posture reader has never met a vendor BIOS; **2 of 2007 binaries triaged**, so the hardening columns are
-   honest-but-blank on 2005 rows; **the YARA corpus was closed 2026-08-18** with a hash-pinned YARA Forge Core
-   release plus six operator heuristics, so it is no longer part of this acquisition gap; and
-   the egress observation found the corpus **barely talks**, which is the finding that should decide the
-   interception work rather than a preference. Acquiring three or four images that exercise these — a real UEFI
-   dump, something chatty, something with a vendor NVRAM store — buys more than any provider on this list, because
-   it converts capabilities that can only report their own limits into capabilities that can answer.
+1. **CLOSED for the specified acquisition tranche on 2026-08-23 — the corpus now has an executable contract.**
+   `scripts/corpus-matrix.mjs` verifies locked SHA-256/size/class/architecture and renders every applicable stage as
+   found, empty, degraded, no-input, not-built or not-run. The persistent corpus grew from 19 to 23 images with an
+   official Framework Laptop 13 BIOS capsule, Contiki and Zephyr ELF samples from Renode, and Framework QMK. The
+   matrix currently measures 376 applicable cells: 110 found, 125 ran-empty, 80 degraded, 21 no-input and 40
+   not-run. It also exposed the next constraints instead of hiding them: QMK remains honestly `unknown`, and the
+   Framework FwHunt pass reaches 12 of 409 modules.
 2. **CLOSED 2026-08-18 — a YARA corpus this deployment can actually run.** The operator layer now pins YARA Forge
    Core 20260816 by archive and extracted-file SHA-256 (5,034 rules) and adds six documented firmware heuristics.
    It is mounted read-only rather than baked into FirmLab, preserves the existing
@@ -160,12 +161,11 @@ this codebase that step has repeatedly been the whole task.
    to 95 s of kernel time with `httpd` running, so `rcS` died and the guest did not), and where an intervention CAN be
    staged that the boot actually executes — `/etc/inittab`, a `preInit` ahead of `rcS`, or the kernel command line are
    the candidates firmadyne/FirmAE use. Still the cheapest high-value item, and still not a new technique.
-4. **Provider results that exist and cannot be read.** Every panel reads the result of the job IT launched, so a
-   chipsec, renode, webprobe, decompile or kernel-posture result sitting in SQLite vanishes from the screen on
-   reload. One hydration pattern at ~5 call sites. The same "the data exists and nobody can read it" class as the
-   five capabilities closed on 2026-07-30 — which took an afternoon and turned out to be three states, not two.
-5. **Kernel / module CVE surface.** Unchanged and still the clean asymmetry: userland gets SBOM → grype/OSV/NVD, the
-   kernel gets posture only. A 2.6.31 kernel with a known-vulnerable driver set is a durable static finding.
+4. **CLOSED 2026-08-23 — persisted analysis results hydrate after reload.** The deep-analysis panel now restores
+   the completed job from SQLite instead of treating component memory as the source of truth.
+5. **CLOSED 2026-08-23 — kernel / module CVE surface.** Kernel candidates use NVD's Linux-CNA-scoped CPE question
+   and survive as provisional ledger rows with the page denominator. The WDR3600's KCodes NetUSB object correlates
+   to CVE-2015-3036 on four byte-level anchors, while explicitly refusing a version verdict NVD does not publish.
 6. **Interactive / introspectable emulation** — moved UP, because the repair unblocked it. `run_command_in_emulation`
    and service enumeration on a LIVE boot were gated on having a guest that answers, and now one does. Much of
    diagnosing a boot is running one command inside it, which is also how #3 gets settled.
@@ -178,8 +178,8 @@ this codebase that step has repeatedly been the whole task.
    works without `FIRMLAB_DESOCK`, and an input side for the fuzzer. Stateful/full-system fuzzing (Fuzzware/µEmu)
    remains the research frontier for the RTOS path.
 10. **The remaining UEFI findings** — LogoFAIL image-parser class, SMM callout analysis (efiXplorer-class), SPI
-    protected-range / BIOS-lock posture. Deliberately last: all of it is gated on #1, since none of it can be
-    validated against a corpus with no UEFI image in it.
+    protected-range / BIOS-lock posture. A vendor BIOS now exists in the corpus, so acquisition is no longer the
+    blocker; the immediate constraint is expanding the 12-of-409-module deep-pass coverage measured on it.
 11. **Libraries are permanently unasked.** Filtering `.so` out of the reachability queue is right for the question as
     posed, and leaves a vulnerable library as a candidate nothing will ever settle. Loading the `.so` and starting
     symbolically from an exported function is a distinct rung, not a variant of this one.
