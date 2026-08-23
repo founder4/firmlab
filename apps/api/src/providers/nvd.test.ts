@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMPONENT_CPE,
+  LINUX_KERNEL_CNA_SOURCE,
   NVD_ENDPOINT,
   NVD_PAGE_SIZE,
   buildNvdQuery,
@@ -56,7 +57,7 @@ describe('buildNvdQuery', () => {
 
 describe('nvdCpeFor', () => {
   it('queries the first identity of every mapped component, and every entry has one', () => {
-    for (const name of ['busybox', 'dropbear', 'dnsmasq', 'pppd', 'openssl', 'curl', 'ffmpeg']) {
+    for (const name of ['busybox', 'dropbear', 'dnsmasq', 'pppd', 'openssl', 'curl', 'ffmpeg', 'linux-kernel']) {
       expect(nvdCpeFor(name)).toBe(COMPONENT_CPE[name]?.[0]);
       expect(nvdCpeFor(name)).toBeTruthy();
     }
@@ -88,6 +89,12 @@ describe('nvdCpeFor', () => {
     expect(nvdCpeFor('  BusyBox ')).toBe('busybox:busybox');
     expect(nvdCpeFor('busybox-w32')).toBeNull();
     expect(nvdCpeFor('')).toBeNull();
+  });
+
+  it('uses the OS/kernel CPE part and restricts Linux results to the kernel CNA', () => {
+    const url = new URL(buildNvdQuery('linux-kernel', '2.6.31').url);
+    expect(url.searchParams.get('virtualMatchString')).toBe('cpe:2.3:o:linux:linux_kernel:2.6.31');
+    expect(url.searchParams.get('sourceIdentifier')).toBe(LINUX_KERNEL_CNA_SOURCE);
   });
 });
 
@@ -149,6 +156,15 @@ describe('rankNvdCandidates', () => {
       { name: 'pppd', version: '2.4.9' },
     ];
     expect(rankNvdCandidates(same).map((c) => c.name)).toEqual(['openssl', 'dnsmasq', 'pppd']);
+  });
+
+  it('keeps the kernel inside the anonymous budget when CPE-versioned questions tie', () => {
+    const ranked = rankNvdCandidates([
+      { name: 'busybox', version: '1.36' },
+      { name: 'linux-kernel', version: '2.6.31' },
+      { name: 'dnsmasq', version: '2.92' },
+    ]);
+    expect(ranked[0]?.name).toBe('linux-kernel');
   });
 });
 

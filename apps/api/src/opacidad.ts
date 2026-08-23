@@ -691,10 +691,12 @@ async function kmodRun(c: RunCtx): Promise<StepOutcome> {
   syncFindings(c.imageId, 'kmod', r.findings);
   if (!r.available) return { summary: 'kernel modules: not read', findingCount: 0, degraded: true, note: r.reason };
   const surfaced = r.findings.filter((f) => f.kind === 'kernel-module-network-surface').length;
+  const advisoryCandidates = r.findings.filter((f) => f.kind === 'kernel-module-cve-candidate').length;
   const leads = r.findings.filter((f) => f.kind === 'kernel-module-wire-length-alloc').length;
   const checked = r.findings.filter((f) => f.kind === 'kernel-module-checked-alloc').length;
   const parts = [`${r.modulesFound} module(s)`];
   if (surfaced) parts.push(`${surfaced} answering the network`);
+  if (advisoryCandidates) parts.push(`${advisoryCandidates} published-CVE identity candidate(s)`);
   if (leads) parts.push(`${leads} unchecked wire-length allocation(s)`);
   if (checked) parts.push(`${checked} bounded in view`);
   // The call-site pass being unavailable is a DEGRADED run, not a clean one: the inventory still lands, and

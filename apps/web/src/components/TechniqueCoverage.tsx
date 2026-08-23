@@ -127,7 +127,7 @@ const COVERAGE: CovGroup[] = [
       // Built: `providers/funcdiff.ts` + `funcdiff-run.ts` + `routes/diff.ts`. It has no PANEL, which is a
       // separate and recorded gap — but the technique is implemented and the route answers.
       { id: 'functionDiff', status: 'done', note: 'functionDiff' },
-      { id: 'kernelModuleCve', status: 'planned', note: 'kernelModuleCve' },
+      { id: 'kernelModuleCve', status: 'done', ref: 'providers/kernel-cve + providers/kmod' },
     ],
   },
   {

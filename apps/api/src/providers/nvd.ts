@@ -49,6 +49,15 @@ export const NVD_ENDPOINT = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
 export const NVD_CACHE_SOURCE = 'nvd';
 
 /**
+ * NVD's stable source identifier for the Linux kernel CNA. Restricting the kernel query to this source is
+ * load-bearing: a bare Linux CPE match also returns vulnerabilities in applications that merely RUN on Linux.
+ * Measured on 2026-08-23, Linux 2.6.31 produced 3,848 broad CPE matches, including KDE aRts, versus 2,037
+ * records issued by the kernel CNA. The latter is still a large, explicitly truncated candidate set, but it is
+ * at least a set of kernel advisories rather than "software seen on Linux".
+ */
+export const LINUX_KERNEL_CNA_SOURCE = '416baaa9-dc9f-4396-8d5f-8c081fb06d67';
+
+/**
  * The CPE product identities of each component this workbench can name — the fingerprint table's five, plus the
  * ones a real rootfs SBOM surfaces that OSV cannot map. **The first entry is the one queried**; the rest are the
  * other identities NVD carries for the same software, kept as data (see `uncheckedIdentities`).
@@ -63,6 +72,7 @@ export const NVD_CACHE_SOURCE = 'nvd';
  *   openssl 1.0.1    → openssl:openssl                                            78
  *   curl 8.6.0       → haxx:curl                                                  35
  *   ffmpeg 6.1.2     → ffmpeg:ffmpeg                                              18
+ *   Linux 2.6.31     → o:linux:linux_kernel + Linux-kernel CNA source filter    2,037 (prefix reported)
  *
  * **Nothing here is guessable, which is the entire reason it is a hand-measured table.** `pppd` returns ZERO
  * entries from the CPE dictionary — the daemon's binary name is not its product identity — so that mapping was
@@ -85,7 +95,13 @@ export const COMPONENT_CPE: Readonly<Record<string, readonly string[]>> = {
   openssl: ['openssl:openssl', 'openssl_project:openssl'],
   curl: ['haxx:curl', 'haxx:libcurl'],
   ffmpeg: ['ffmpeg:ffmpeg'],
+  'linux-kernel': ['linux:linux_kernel'],
 };
+
+/** CPE part is `a` for applications and `o` for the Linux operating-system/kernel identity. */
+function nvdCpePart(name: string): 'a' | 'o' {
+  return name.trim().toLowerCase() === 'linux-kernel' ? 'o' : 'a';
+}
 
 /** Which question NVD was actually asked. A CPE answer is version-scoped; a keyword answer is a description match. */
 export type NvdMatchStrategy = 'cpe' | 'keyword';
@@ -147,23 +163,32 @@ export function nvdCandidateTier(c: NvdCandidate): NvdTier {
  * anything. The budget bought nothing and the answerable questions were the ones dropped. That is the same defect
  * `selectFindings` was written for in binvuln.ts: a bound must not make its own result an artifact of scan order.
  *
- * Ranking is stable within a tier, so a component's position never depends on anything but the tier rule and the
- * order it arrived in — deterministic, and re-derivable by a reader looking at the same inputs.
+ * Ranking is stable within a tier except for the one explicitly named priority: the Linux-kernel question goes
+ * first among equally answerable CPE+version candidates so the anonymous cap cannot recreate the userland/kernel
+ * asymmetry this provider is meant to close. Everything else retains arrival order.
  */
 export function rankNvdCandidates(candidates: NvdCandidate[]): NvdCandidate[] {
   const rank = new Map<NvdTier, number>(NVD_TIERS.map((t, i) => [t, i]));
   return candidates
-    .map((c, i) => ({ c, i, t: rank.get(nvdCandidateTier(c)) ?? NVD_TIERS.length }))
-    .sort((a, b) => a.t - b.t || a.i - b.i)
+    .map((c, i) => ({
+      c,
+      i,
+      t: rank.get(nvdCandidateTier(c)) ?? NVD_TIERS.length,
+      // A kernel answer can contain thousands of CNA advisories and is the one gap this source specifically
+      // closes. Keep it inside the anonymous six-request budget when it ties with other CPE-versioned questions.
+      kernel: c.name.trim().toLowerCase() === 'linux-kernel' ? 0 : 1,
+    }))
+    .sort((a, b) => a.t - b.t || a.kernel - b.kernel || a.i - b.i)
     .map((x) => x.c);
 }
 
 /**
  * Pure: the NVD CVE-API query string for a component, and which of the two questions it asks.
  *
- * Mapped → `virtualMatchString=cpe:2.3:a:<vendor>:<product>:<version>`, which NVD resolves against the affected
+ * Mapped → `virtualMatchString=cpe:2.3:<part>:<vendor>:<product>:<version>`, which NVD resolves against the affected
  * version RANGES attached to each CVE. That is the only form that can answer "is the version I am holding
- * affected"; the keyword form asks whether the description happens to contain the version, which for a vulnerable
+ * affected"; the kernel additionally carries the Linux-CNA `sourceIdentifier`, because the broad Linux CPE also
+ * denotes the platform under unrelated applications. The keyword form asks whether the description contains the version, which for a vulnerable
  * release it essentially never does. With no version the CPE is sent without one — still correctly scoped to the
  * product, just unconstrained (busybox: 46 CVEs against 17 for 1.01), which beats a name-only keyword.
  *
@@ -186,9 +211,11 @@ export function buildNvdQuery(
 ): { url: string; strategy: NvdMatchStrategy } {
   const cpe = nvdCpeFor(name);
   const v = nvdVersion(version);
+  const normalizedName = name.trim().toLowerCase();
   const params = cpe
     ? new URLSearchParams({
-        virtualMatchString: `cpe:2.3:a:${cpe}${v ? `:${v}` : ''}`,
+        virtualMatchString: `cpe:2.3:${nvdCpePart(name)}:${cpe}${v ? `:${v}` : ''}`,
+        ...(normalizedName === 'linux-kernel' ? { sourceIdentifier: LINUX_KERNEL_CNA_SOURCE } : {}),
         resultsPerPage: String(resultsPerPage),
       })
     : new URLSearchParams({
@@ -408,7 +435,8 @@ export interface NvdCandidate {
 export function mergeNvdCandidates(
   manifest: NvdCandidate[],
   fingerprinted: NvdCandidate[],
-): { candidates: NvdCandidate[]; fingerprintedOnly: NvdCandidate[] } {
+  derived: NvdCandidate[] = [],
+): { candidates: NvdCandidate[]; fingerprintedOnly: NvdCandidate[]; derivedOnly: NvdCandidate[] } {
   const seen = new Set(manifest.map((c) => `${c.name}@${c.version}`));
   const fingerprintedOnly = fingerprinted.filter((c) => {
     const key = `${c.name}@${c.version}`;
@@ -416,7 +444,13 @@ export function mergeNvdCandidates(
     seen.add(key);
     return true;
   });
-  return { candidates: [...manifest, ...fingerprintedOnly], fingerprintedOnly };
+  const derivedOnly = derived.filter((c) => {
+    const key = `${c.name}@${c.version}`;
+    if (!c.name || !c.version || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { candidates: [...manifest, ...fingerprintedOnly, ...derivedOnly], fingerprintedOnly, derivedOnly };
 }
 
 export async function queryNvdBatch(

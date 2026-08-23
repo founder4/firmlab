@@ -35,4 +35,13 @@ describe('mergeNvdCandidates — what actually leaves, counted before it leaves'
     const { candidates } = mergeNvdCandidates(manifest, [...fingerprinted, ...fingerprinted]);
     expect(candidates).toHaveLength(4);
   });
+
+  it('keeps a locally derived kernel identity distinct and deduplicated', () => {
+    const { candidates, derivedOnly } = mergeNvdCandidates(manifest, fingerprinted, [
+      { name: 'linux-kernel', version: '2.6.31' },
+      { name: 'linux-kernel', version: '2.6.31' },
+    ]);
+    expect(derivedOnly).toEqual([{ name: 'linux-kernel', version: '2.6.31' }]);
+    expect(candidates).toHaveLength(5);
+  });
 });

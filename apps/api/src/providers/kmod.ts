@@ -890,6 +890,55 @@ export interface KmodResult {
   findings: FindingDraft[];
 }
 
+export interface KmodAdvisoryCandidate {
+  cveId: string;
+  advisoryUrl: string;
+  matchBasis: {
+    module: string;
+    author: string;
+    productMarker: string;
+    function: string;
+    version: string | null;
+    versionFrom: 'version-field' | 'description-record' | null;
+  };
+}
+
+/**
+ * Correlate only module advisories whose identity can be tied to bytes we actually read.
+ *
+ * NVD currently gives CVE-2015-3036 no affected CPE or version range, so `1.02.66` MUST NOT be compared to a
+ * fabricated bound. The real WDR3600 module does, however, carry all four independent identity anchors named by
+ * the advisory: NetUSB.ko, author KCodes, a NetUSB description, and the exact `run_init_sbus` function. That earns
+ * an identity-level candidate and nothing stronger. A same-named file without those anchors earns no row.
+ */
+export function kmodAdvisoryCandidates(module: KmodModuleResult): KmodAdvisoryCandidate[] {
+  const moduleName = path.basename(module.file);
+  const isNetUsb = moduleName.toLowerCase() === 'netusb.ko';
+  const isKCodes = module.identity.author?.trim().toLowerCase() === 'kcodes';
+  const product = module.identity.descriptions.find((d) => /\bnetusb\b/i.test(d));
+  const functionSeen = module.sites.some((s) => s.fn === 'run_init_sbus');
+  if (!isNetUsb || !isKCodes || !product || !functionSeen) return [];
+  const version = module.identity.version ?? module.identity.versionCandidate?.value ?? null;
+  return [
+    {
+      cveId: 'CVE-2015-3036',
+      advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2015-3036',
+      matchBasis: {
+        module: moduleName,
+        author: module.identity.author as string,
+        productMarker: product,
+        function: 'run_init_sbus',
+        version,
+        versionFrom: module.identity.version
+          ? 'version-field'
+          : module.identity.versionCandidate
+            ? 'description-record'
+            : null,
+      },
+    },
+  ];
+}
+
 // === Findings ===
 
 /**
@@ -943,6 +992,24 @@ export function buildKmodFindings(mods: readonly KmodModuleResult[]): FindingDra
           rankKeys: m.keys,
         },
         rationale: `${m.file}${who ? ` (${who})` : ''} imports ${fmtList(api.socket)} and allocates with ${fmtList(api.alloc)}. Those are undefined symbols in the object's own .symtab, so the module loader must bind them for it to load at all — this is a fact about the bytes, not an inference. A kernel socket answers before any userland daemon does, which is why the service map cannot see it: there is no init script or inetd entry to enumerate. It does NOT follow that the module is remotely exploitable; what follows is that its parser runs in kernel context on input from off-box.${versionNote}`,
+      });
+    }
+
+    for (const candidate of kmodAdvisoryCandidates(m)) {
+      out.push({
+        kind: 'kernel-module-cve-candidate',
+        severity: 'high',
+        proofState: 'needs_runtime_reproduction',
+        title: `${candidate.cveId} identity match: ${label}`,
+        evidenceChannel: 'external_advisory',
+        evidence: {
+          path: m.file,
+          ...candidate.matchBasis,
+          cveId: candidate.cveId,
+          advisoryUrl: candidate.advisoryUrl,
+          affectedVersionRange: null,
+        },
+        rationale: `NVD describes ${candidate.cveId} in the KCodes NetUSB kernel module and names run_init_sbus. This object independently identifies itself as KCodes NetUSB and contains that exact function, so it is a strong published-advisory candidate. It is NOT a version verdict: NVD currently supplies no affected CPE/version range for this CVE, the module's ${candidate.matchBasis.version ?? 'unknown'} stamp cannot be compared to a bound that does not exist, and the vulnerable stack-copy path has not been reproduced. Confirm by patch diff or a controlled runtime test before asserting vulnerability.`,
       });
     }
 

@@ -65,6 +65,12 @@ describe('the ledger declares fingerprinted components as their own class', () =
     expect(d?.count).toBe(5);
     expect(d?.sends).not.toContain('fingerprinted');
   });
+
+  it('declares a kernel version as derived metadata, never as manifest data', () => {
+    const d = nvdLine({ nvdCandidates: 2, derived: 1 });
+    expect(d?.sends).toContain('1 from package manifests');
+    expect(d?.sends).toContain('1 derived locally from the kernel version');
+  });
 });
 
 describe('the declared counts are a ceiling, not a claim', () => {

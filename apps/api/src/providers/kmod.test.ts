@@ -17,6 +17,7 @@ import {
   definesFirstOperand,
   findAdjacentCall,
   isGplCompatible,
+  kmodAdvisoryCandidates,
   parseDisasm,
   rankModules,
   rankSites,
@@ -379,6 +380,34 @@ describe('findings', () => {
     expect(surface?.severity).toBe('high');
     expect(surface?.title).toContain('1.02.66');
     expect(surface?.rationale).toContain('does NOT follow');
+  });
+
+  it('correlates NetUSB only when product, author and the advisory function all exist in the bytes', () => {
+    const module = {
+      ...base,
+      identity: {
+        ...base.identity,
+        descriptions: ['NetUSB module for Linux 2.6 from KCodes.', ...base.identity.descriptions],
+      },
+      sites: [
+        {
+          sink: 'memcpy',
+          addr: 0x0800cfc0,
+          fn: 'run_init_sbus',
+          evidence: null,
+          evidenceGap: 'address parked before an indirect call',
+        },
+      ],
+    } as KmodModuleResult;
+    expect(kmodAdvisoryCandidates(module)).toMatchObject([
+      { cveId: 'CVE-2015-3036', matchBasis: { function: 'run_init_sbus', version: '1.02.66' } },
+    ]);
+    const finding = buildKmodFindings([module]).find((f) => f.kind === 'kernel-module-cve-candidate');
+    expect(finding?.proofState).toBe('needs_runtime_reproduction');
+    expect(finding?.evidenceChannel).toBe('external_advisory');
+    expect(finding?.rationale).toContain('no affected CPE/version range');
+
+    expect(kmodAdvisoryCandidates({ ...module, identity: { ...module.identity, author: 'someone else' } })).toEqual([]);
   });
 
   it('files an unchecked wire length as a LEAD, never as a proven bug', () => {

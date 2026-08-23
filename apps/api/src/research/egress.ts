@@ -34,6 +34,8 @@ export function buildEgressLedger(
      * derived from their firmware. Same shape of data either way — a name and a version, never bytes.
      */
     fingerprinted?: number;
+    /** Kernel/component identities derived by deterministic local analysis rather than a package manifest. */
+    derived?: number;
     hashLookup?: { enabled: boolean; unsaltedCount: number };
   } = {},
 ): EgressLedger {
@@ -48,16 +50,20 @@ export function buildEgressLedger(
   }
   if (opts.nvdCandidates && opts.nvdCandidates > 0) {
     const fp = opts.fingerprinted ?? 0;
-    const split =
-      fp > 0
-        ? `, for the components OSV could not map — ${opts.nvdCandidates - fp} from package manifests and ${fp} fingerprinted from bundled binaries that have no manifest`
-        : ', for the components OSV could not map';
+    const derived = opts.derived ?? 0;
+    const manifest = Math.max(0, opts.nvdCandidates - fp - derived);
+    const classes = [
+      manifest > 0 ? `${manifest} from package manifests` : '',
+      fp > 0 ? `${fp} fingerprinted from bundled binaries that have no manifest` : '',
+      derived > 0 ? `${derived} derived locally from the kernel version` : '',
+    ].filter(Boolean);
+    const split = classes.length > 1 ? ` — ${classes.join(' and ')}` : '';
     destinations.push({
       host: 'services.nvd.nist.gov',
       // "as a keyword" was true until the CPE match landed; a mapped component now leaves as a CPE product
       // identity + version instead. Same class of data either way — a derived name and a number, never bytes —
       // but the ledger states what actually goes on the wire, so it names both forms.
-      sends: `component name + version, as a CPE match string or a keyword${split} (no bytes) — at most this many; a cached answer sends nothing`,
+      sends: `component name + version, as a CPE match string or a keyword, for components OSV could not map${split} (no bytes) — at most this many; a cached answer sends nothing`,
       count: opts.nvdCandidates,
     });
   }

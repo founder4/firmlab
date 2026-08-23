@@ -21,8 +21,11 @@ import {
   runHashLookup,
 } from '../providers/hashlookup.js';
 import type { JobHandle } from '../providers/jobs.js';
+import { normalizeKernelCves, selectKernelCveCandidate } from '../providers/kernel-cve.js';
+import { runKernelPosture } from '../providers/kernelposture.js';
 import { type KevResult, collectCveIds, fetchAndMatchKev } from '../providers/kev.js';
 import { type KeyMaterial, summarizeKeyMaterial } from '../providers/keys.js';
+import { type KmodResult, kmodAdvisoryCandidates } from '../providers/kmod.js';
 import { type NvdBatchResult, mergeNvdCandidates, queryNvdBatch } from '../providers/nvd.js';
 import { type OsvBatchResult, osvEcosystem, queryOsvBatch } from '../providers/osv.js';
 import { type ProvenanceFingerprint, buildProvenanceFingerprint } from '../providers/provenance.js';
@@ -62,6 +65,18 @@ function latestRootfs(imageId: string): string | null {
   return extractJob?.resultJson
     ? ((JSON.parse(extractJob.resultJson) as { rootfsPath?: string }).rootfsPath ?? null)
     : null;
+}
+
+/** Published module candidates from the latest full `.ko` result, for the local KEV cross-reference. */
+function latestKmodCveIds(imageId: string): string[] {
+  const job = listJobs(imageId).find((j) => j.kind === 'kmod' && j.status === 'done' && j.resultJson);
+  if (!job?.resultJson) return [];
+  try {
+    const result = JSON.parse(job.resultJson) as KmodResult;
+    return [...new Set(result.modules.flatMap(kmodAdvisoryCandidates).map((c) => c.cveId))];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -158,6 +173,7 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
 
   const analysis = JSON.parse(row.analysisJson) as StaticAnalysis;
   const identity = JSON.parse(row.identityJson);
+  const rootfsPath = latestRootfs(imageId);
   const strings = [
     ...analysis.secrets.map((s) => s.value),
     ...analysis.signatures.map((s) => s.description),
@@ -177,11 +193,17 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   // WR940N catalogues ONE package while shipping pppd 2.4.3, BusyBox 1.01 and Dropbear 2012.55, so the source
   // built to answer this question was being asked nothing. These five are also exactly the names `COMPONENT_CPE`
   // maps, so they get the version-scoped CPE question rather than the keyword fallback.
-  const fingerprinted = runComponentCve(latestRootfs(imageId)).hits.map((h) => ({
+  const fingerprinted = runComponentCve(rootfsPath).hits.map((h) => ({
     name: h.component,
     version: h.version,
   }));
-  const { candidates: nvdCandidates, fingerprintedOnly } = mergeNvdCandidates(manifestCandidates, fingerprinted);
+  const kernelSelection = selectKernelCveCandidate(runKernelPosture(row.path, rootfsPath, null));
+  const kernelCandidates = kernelSelection.candidate ? [kernelSelection.candidate] : [];
+  const {
+    candidates: nvdCandidates,
+    fingerprintedOnly,
+    derivedOnly,
+  } = mergeNvdCandidates(manifestCandidates, fingerprinted, kernelCandidates);
   // Hash-lookup candidates (from /etc/shadow) — gathered up front so the egress ledger can declare exactly how many
   // UNSALTED hashes would leave before anything does. Salted hashes are counted out here and never sent.
   const hashCandidates = cfg.hashLookup ? collectShadowCandidates(imageId) : [];
@@ -189,6 +211,7 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   const egress = buildEgressLedger(packages, provenance, {
     nvdCandidates: nvdCandidates.length,
     fingerprinted: fingerprintedOnly.length,
+    derived: derivedOnly.length,
     hashLookup: { enabled: cfg.hashLookup, unsaltedCount },
   });
 
@@ -199,6 +222,13 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
         .map((c) => `${c.name} ${c.version}`)
         .join(', ')}.`,
     );
+  }
+  if (derivedOnly.length > 0) {
+    handle.log(
+      `Egress: kernel version ${kernelSelection.detectedVersion} (read from ${kernelSelection.versionSource}) joins NVD as ${derivedOnly[0]?.name} ${derivedOnly[0]?.version}; only this derived name+version leaves.`,
+    );
+  } else {
+    handle.log(`Kernel CVE correlation not queued: ${kernelSelection.reason}`);
   }
   const osv = await queryOsvBatch(packages, cfg);
   handle.log(
@@ -218,6 +248,14 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   for (const u of nvd.uncheckedIdentities) {
     handle.log(
       `NVD: ${u.name} ${u.version} came back empty under its primary CPE identity; NVD also carries it as ${u.identities.join(', ')}, not queried — the zero is scoped to the identity asked.`,
+    );
+  }
+  const kernelAnswer = nvd.components.find((c) => c.name === 'linux-kernel');
+  if (kernelAnswer) {
+    const drafts = normalizeKernelCves(kernelSelection, kernelAnswer);
+    syncFindings(imageId, 'kernel-cve', drafts);
+    handle.log(
+      `Kernel CVE: ${drafts.length} candidate row(s) persisted from ${kernelAnswer.totalMatching ?? drafts.length} Linux-kernel CNA match(es); vendor backports, build configuration and reachability remain unproven.`,
     );
   }
   // Which question was asked matters as much as the answer: a keyword query matches CVE descriptions, which name
@@ -247,13 +285,19 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
 
   // Source #3 — CISA KEV: which of the discovered CVEs are known-exploited in the wild. Downloads the public
   // catalog and cross-references locally, so nothing about the firmware leaves for this step.
-  const cveIds = collectCveIds(osv.components, nvd.components);
+  const moduleCveIds = latestKmodCveIds(imageId);
+  const cveIds = [...new Set([...collectCveIds(osv.components, nvd.components), ...moduleCveIds])];
   const kev = await fetchAndMatchKev(cveIds, cfg);
   handle.log(
     kev.checked
       ? `KEV: ${cveIds.length} discovered CVEs cross-referenced → ${kev.matches.length} known-exploited (catalog: ${kev.catalogSize}).`
       : `KEV: not checked (${kev.reason}).`,
   );
+  if (moduleCveIds.length > 0) {
+    handle.log(
+      `KEV input includes ${moduleCveIds.length} module advisory candidate(s) tied to byte-level product/function identity: ${moduleCveIds.join(', ')}.`,
+    );
+  }
 
   // 5.2 — embedded key material from the image (corpus-cross-referenced) + a scan of the extracted rootfs, where
   // key files actually live (compressed out of the image-level view). An embedded private key is effectively public.
