@@ -4,7 +4,7 @@
   "private": true,
   "description": "FirmLab \u2014 local-only firmware analysis workbench (structure map, entropy, filesystem, SBOM, emulation).",
   "type": "module",
-  "packageManager": "pnpm@11.13.0",
+  "packageManager": "pnpm@11.23.0",
   "engines": {
     "node": ">=22"
   },
