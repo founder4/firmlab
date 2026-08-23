@@ -12,7 +12,7 @@ jobs:
   check-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Compare pinned and latest YARA Forge releases
         id: check
         continue-on-error: true
@@ -25,7 +25,7 @@ jobs:
           printf '## YARA Forge release check\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
           cat yara-release-report.json >> "$GITHUB_STEP_SUMMARY"
           printf '\n```\n\nThis workflow never updates the lock or deploys a corpus.\n' >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: yara-release-report
