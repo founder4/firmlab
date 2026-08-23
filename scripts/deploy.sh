@@ -19,7 +19,7 @@
 #   scripts/deploy.sh --tools         ALSO rebuild the firmlab-tools base first (heavy; when a tool recipe changed)
 #   scripts/deploy.sh --check         report drift + port squatters only, change nothing
 #   scripts/deploy.sh --build-only    build and tag, do not touch the running container
-#   scripts/deploy.sh --allow-dirty   permit building from a dirty working tree (stamped -dirty)
+#   scripts/deploy.sh --allow-dirty   permit a dirty --build-only image (stamped with its content fingerprint)
 #
 # Env overrides:
 #   COMPOSE_FILE   compose file to roll out   (default: ~/homelab/firmlab/docker-compose.yml)
@@ -69,9 +69,23 @@ cd "$REPO_ROOT"
 HEAD_SHA="$(git rev-parse HEAD)"
 HEAD_REF="$(git rev-parse --abbrev-ref HEAD)"
 DIRTY=0
-git diff --quiet && git diff --cached --quiet || DIRTY=1
+if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+  DIRTY=1
+fi
 REVISION="$HEAD_SHA"
-[ "$DIRTY" -eq 1 ] && REVISION="${HEAD_SHA}-dirty"
+if [ "$DIRTY" -eq 1 ]; then
+  # `HEAD-dirty` is not an identity: every uncommitted tree on the same commit receives that same string, and the
+  # old --check therefore called two different builds "up to date". Hash the complete tracked diff plus every
+  # untracked, non-ignored file. The path is part of each untracked entry so equal bytes at different destinations
+  # are different trees. `git hash-object --stdin` keeps this portable anywhere Git itself can run.
+  DIRTY_FINGERPRINT="$({
+    git diff --binary HEAD
+    while IFS= read -r -d '' file; do
+      printf 'untracked %s %s\n' "$(git hash-object "$file")" "$file"
+    done < <(git ls-files --others --exclude-standard -z)
+  } | git hash-object --stdin | cut -c1-12)"
+  REVISION="${HEAD_SHA}-dirty-${DIRTY_FINGERPRINT}"
+fi
 
 # The 2026-07-18 failure in one guard: work that lives only on another branch is not what you are
 # deploying. Surface any branch that is ahead of HEAD instead of letting it stay invisible.
@@ -144,8 +158,11 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
   exit 0
 fi
 
+if [ "$DIRTY" -eq 1 ] && [ "$BUILD_ONLY" -eq 0 ]; then
+  die "árbol sucio: un despliegue debe salir de un commit reproducible; usa --build-only --allow-dirty sólo para una imagen local"
+fi
 if [ "$DIRTY" -eq 1 ] && [ "$ALLOW_DIRTY" -eq 0 ]; then
-  die "árbol sucio: commitea, descarta, o usa --allow-dirty (se sellará como -dirty)"
+  die "árbol sucio: commitea o usa --build-only --allow-dirty (se sellará con la huella del contenido)"
 fi
 
 # --- build: tagging is part of the build, never a separate step you can forget --------------------
