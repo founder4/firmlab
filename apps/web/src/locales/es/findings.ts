@@ -54,22 +54,32 @@ export const findings: Messages['findings'] = {
     all: 'Todos',
     priority: 'Críticos + altos',
     established: 'Establecidos',
-    unproven: 'Sin establecer',
+    lead: 'Pistas',
+    blocked: 'Bloqueados',
+    dismissed: 'Descartados',
+    asserted: 'Afirmaciones',
+    other: 'Sin clasificar',
     searchLabel: 'Buscar hallazgos',
     searchPlaceholder: 'Buscar título, fuente o estado de prueba…',
     results: (shown, total) => `${shown} de ${total}`,
   },
 
   census: {
-    split: (established, unproven) => `${established} establecidos · ${unproven} sin establecer`,
-    band: (severity: string, total: number, established: number, unproven: number) =>
-      unproven === 0
-        ? `${total} ${severity} (todos establecidos)`
-        : established === 0
-          ? `${total} ${severity} (ninguno establecido)`
-          : `${total} ${severity} (${established} establecidos, ${unproven} sin establecer)`,
+    split: (established, leads, blocked, dismissed, asserted, other) =>
+      [
+        established ? `${established} establecido${established === 1 ? '' : 's'}` : '',
+        leads ? `${leads} pista${leads === 1 ? '' : 's'}` : '',
+        blocked ? `${blocked} bloqueado${blocked === 1 ? '' : 's'}` : '',
+        dismissed ? `${dismissed} descartado${dismissed === 1 ? '' : 's'}` : '',
+        asserted ? `${asserted} afirmado${asserted === 1 ? '' : 's'}` : '',
+        other ? `${other} sin clasificar` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    band: (severity, total, established, leads, blocked, dismissed, asserted, other) =>
+      `${total} ${severity}: ${findings.census.split(established, leads, blocked, dismissed, asserted, other)}`,
     legend:
-      'La gravedad dice lo malo que sería el hallazgo si fuera cierto, nunca que se haya establecido. Una marca rellena afirma una propiedad de esta imagen; una hueca es un motivo para mirar — lee su estado de prueba.',
+      'La gravedad dice lo malo que sería el hallazgo si fuera cierto, nunca que se haya establecido. El censo separa propiedades establecidas, pistas, preguntas bloqueadas, descartes y afirmaciones del operador.',
   },
 
   mark: {

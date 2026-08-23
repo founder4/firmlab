@@ -115,12 +115,12 @@ export function honestGaps(ctx: OpacidadContext): string[] {
 }
 
 /**
- * The severity tally, with each count split into what was established and what is still a reason to look.
+ * The severity tally, with each count split by what every row actually says.
  *
  * `3 critical` reads as three problems. On this corpus two thirds of every severity band are leads, so the bare
  * count was the headline sentence of an autonomous scan asserting more than the scan had. The split is printed
- * inline — `3 critical (1 established, 2 leads)` — rather than in a footnote, because the number and its
- * qualifier have to travel together or the qualifier is the part that gets skipped.
+ * inline — `3 critical (1 established, 1 lead, 1 blocked)` — rather than in a footnote, because the number and
+ * its qualifier have to travel together or the qualifier is the part that gets skipped.
  */
 function severityLine(s: FindingsSummary): string {
   // A summary stored before the census existed still has to render. It falls back to the bare counts it does
@@ -133,9 +133,21 @@ function severityLine(s: FindingsSummary): string {
   if (!s.census.length) return 'none';
   return s.census
     .map((c) => {
-      if (c.unproven === 0) return `${c.total} ${c.severity} (established)`;
-      if (c.established === 0) return `${c.total} ${c.severity} (all unproven leads)`;
-      return `${c.total} ${c.severity} (${c.established} established, ${c.unproven} unproven)`;
+      if (c.established === c.total) return `${c.total} ${c.severity} (established)`;
+      const detailed = [c.leads, c.blocked, c.dismissed, c.asserted, c.other].every(Number.isFinite);
+      if (!detailed) {
+        const legacyUnproven = Number.isFinite(c.unproven) ? c.unproven : c.total - c.established;
+        return `${c.total} ${c.severity} (${c.established} established, ${legacyUnproven} non-established; legacy summary has no category split)`;
+      }
+      const parts = [
+        c.established ? `${c.established} established` : '',
+        c.leads ? `${c.leads} lead${c.leads === 1 ? '' : 's'}` : '',
+        c.blocked ? `${c.blocked} blocked` : '',
+        c.dismissed ? `${c.dismissed} dismissed` : '',
+        c.asserted ? `${c.asserted} asserted` : '',
+        c.other ? `${c.other} uncategorized` : '',
+      ].filter(Boolean);
+      return `${c.total} ${c.severity} (${parts.join(', ')})`;
     })
     .join(' · ');
 }

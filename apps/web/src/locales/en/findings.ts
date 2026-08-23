@@ -47,19 +47,17 @@ export const findings = {
     proofState: 'Proof state',
   },
 
-  /**
-   * The bucket names are the census's, deliberately: `unproven` is every row `isEstablished` rejects, which is
-   * leads AND both blocked states AND a dismissal. An earlier draft called it "Needs validation" and shipped a
-   * screen where three `blocked (platform)` rows sat under it — an instruction to go reproduce the very question
-   * this deployment already reported it could not put. A block is not a lead, and naming the bucket after the
-   * action one of its members happens to admit is how the two get conflated.
-   */
+  /** Every semantic census category has the identically-defined filter; card and table can never disagree. */
   filters: {
     aria: 'Filter findings',
     all: 'All',
     priority: 'Critical + high',
     established: 'Established',
-    unproven: 'Unproven',
+    lead: 'Leads',
+    blocked: 'Blocked',
+    dismissed: 'Dismissed',
+    asserted: 'Assertions',
+    other: 'Uncategorized',
     searchLabel: 'Search findings',
     searchPlaceholder: 'Search title, source or proof state…',
     results: (shown: number, total: number) => `${shown} of ${total}`,
@@ -70,22 +68,37 @@ export const findings = {
    *
    * `severity` is how bad the row would be **if true**; the proof state is how much of it was established. On
    * this corpus two thirds of every severity band are leads, so "72 critical" was a sentence the workbench had
-   * not earned. The census prints the split inline and the mark carries it per row — a filled disc for a row
-   * that states a property of the image, a hollow ring for one that states a reason to look.
+   * not earned. The census prints the exhaustive split inline and the mark carries the binary part per row — a
+   * filled disc for a property of the image, a hollow ring for anything not established. The proof-state badge
+   * distinguishes a lead from a block, dismissal or assertion.
    *
    * The legend is not optional decoration: fill is the only thing separating the two, and a distinction a
    * reader has to infer is a distinction that will be misread.
    */
   census: {
-    split: (established: number, unproven: number) => `${established} established · ${unproven} unproven`,
-    band: (severity: string, total: number, established: number, unproven: number) =>
-      unproven === 0
-        ? `${total} ${severity} (all established)`
-        : established === 0
-          ? `${total} ${severity} (all unproven)`
-          : `${total} ${severity} (${established} established, ${unproven} unproven)`,
+    split: (established: number, leads: number, blocked: number, dismissed: number, asserted: number, other: number) =>
+      [
+        established ? `${established} established` : '',
+        leads ? `${leads} lead${leads === 1 ? '' : 's'}` : '',
+        blocked ? `${blocked} blocked` : '',
+        dismissed ? `${dismissed} dismissed` : '',
+        asserted ? `${asserted} asserted` : '',
+        other ? `${other} uncategorized` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    band: (
+      severity: string,
+      total: number,
+      established: number,
+      leads: number,
+      blocked: number,
+      dismissed: number,
+      asserted: number,
+      other: number,
+    ) => `${total} ${severity}: ${findings.census.split(established, leads, blocked, dismissed, asserted, other)}`,
     legend:
-      'Severity says how bad a row would be if true, never that it was established. A filled mark states a property of this image; a hollow one is a reason to look — read its proof state.',
+      'Severity says how bad a row would be if true, never that it was established. The census keeps established properties, leads, blocked questions, dismissals and operator assertions separate.',
   },
 
   /** Colour is never the only carrier: the mark's own label says both axes for a screen reader. */

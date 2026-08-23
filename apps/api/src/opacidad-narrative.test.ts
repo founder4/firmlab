@@ -37,13 +37,25 @@ describe('summarizeFindings', () => {
     expect(s.top[0]?.title).toBe('root RCE');
   });
 
-  it('splits each severity into established and unproven, so a bare count cannot stand alone', () => {
+  it('splits each severity into exhaustive semantic categories, so a bare count cannot stand alone', () => {
     const s = summarizeFindings([
       finding({ severity: 'critical', proofState: 'static_confirmed' }),
       finding({ severity: 'critical', proofState: 'needs_runtime_reproduction' }),
       finding({ severity: 'critical', proofState: 'blocked_by_platform' }),
     ]);
-    expect(s.census).toEqual([{ severity: 'critical', total: 3, established: 1, unproven: 2 }]);
+    expect(s.census).toEqual([
+      {
+        severity: 'critical',
+        total: 3,
+        established: 1,
+        leads: 1,
+        blocked: 1,
+        dismissed: 0,
+        asserted: 0,
+        other: 0,
+        unproven: 2,
+      },
+    ]);
   });
 });
 
@@ -64,19 +76,19 @@ describe('the narrative severity line', () => {
         finding({ severity: 'critical', proofState: 'needs_runtime_reproduction' }),
       ]),
     );
-    expect(md).toContain('2 critical (1 established, 1 unproven)');
+    expect(md).toContain('2 critical (1 established, 1 lead)');
     // The bare count is exactly what this replaces; it must not survive anywhere in the line.
     expect(md).not.toMatch(/·\s*2 critical\s*·/);
   });
 
-  it('says so outright when a whole band is leads', () => {
+  it('does not call a blocked question a lead when both share one severity band', () => {
     const md = composeDeterministicNarrative(
       ctx([
         finding({ severity: 'high', proofState: 'needs_runtime_reproduction' }),
         finding({ severity: 'high', proofState: 'blocked_by_platform' }),
       ]),
     );
-    expect(md).toContain('2 high (all unproven leads)');
+    expect(md).toContain('2 high (1 lead, 1 blocked)');
   });
 
   it('marks a fully-established band as such rather than leaving it ambiguous', () => {

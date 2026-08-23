@@ -17,10 +17,11 @@
  *     `a.proofState < b.proofState`, a string comparison on an identifier — under which `blocked_by_platform`
  *     sorts above `confirmed_full_system` because `b` precedes `c`. That is ordering-shaped noise, and it put
  *     the least-established rows on top of the most-established ones at every severity level in the table.
- *  3. **Establishment is a property of the row a reader must be able to see.** `isEstablished` is the one
- *     predicate that separates "the workbench found this in the image" from "the workbench found a reason to
- *     look". It is deliberately NOT a fourth severity or a confidence score: it is a boolean about provenance,
- *     and `severityCensus` exists so a headline count can never be read as N problems when 2/3 of it is leads.
+ *  3. **Establishment is a property of the row a reader must be able to see.** `findingCategory` is the one
+ *     classifier that separates an established property, a lead, a blocked question, a dismissal and testimony.
+ *     It is deliberately NOT a second severity or a confidence score: it is a category about provenance, and
+ *     `severityCensus` exists so a headline count can never be read as N problems when its rows say five different
+ *     things.
  *
  * `blocked_by_platform` / `blocked_by_security` rank below a lead and above a dismissal. They are questions that
  * could not be answered — never negatives — so they must not sort as though they had been, and must not sort as
@@ -76,9 +77,28 @@ const ESTABLISHED: ReadonlySet<string> = new Set<FindingProvenance>([
   'confirmed_full_system',
 ]);
 
+/** Exhaustive reader-facing categories. `other` is the safe home for an unfamiliar persisted proof state. */
+export type FindingCategory = 'established' | 'lead' | 'blocked' | 'dismissed' | 'asserted' | 'other';
+
+/**
+ * Classify what a row says, independently of how severe its consequence would be.
+ *
+ * The explicit fallback is load-bearing: persisted rows can outlive this build's union. A new proof state must
+ * appear as uncategorized until somebody decides what it means; it may not silently inherit "lead" or
+ * "established" just because those are the largest buckets.
+ */
+export function findingCategory(proofState: string): FindingCategory {
+  if (ESTABLISHED.has(proofState)) return 'established';
+  if (proofState === 'needs_runtime_reproduction') return 'lead';
+  if (proofState === 'blocked_by_platform' || proofState === 'blocked_by_security') return 'blocked';
+  if (proofState === 'false_positive') return 'dismissed';
+  if (proofState === 'operator_assertion') return 'asserted';
+  return 'other';
+}
+
 /** Whether this row states something about the image, as opposed to a reason to investigate it. */
 export function isEstablished(proofState: string): boolean {
-  return ESTABLISHED.has(proofState);
+  return findingCategory(proofState) === 'established';
 }
 
 /**
@@ -120,33 +140,59 @@ export function compareFindings(a: RankableFinding, b: RankableFinding): number 
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** One severity's split between what was established and what is still a reason to look. */
+/** One severity's exhaustive split by what every row actually says. */
 export interface SeverityCount {
   severity: FindingSeverity;
   total: number;
   established: number;
+  leads: number;
+  blocked: number;
+  dismissed: number;
+  asserted: number;
+  other: number;
+  /**
+   * Compatibility aggregate for summaries persisted before the detailed categories existed. New readers must use
+   * the fields above; this number deliberately has no reader-facing label because its members mean different things.
+   */
   unproven: number;
 }
 
 /**
  * The census that stops a headline number from being read as a count of problems.
  *
- * Returned highest-severity-first and only for severities actually present, so a caller can print
- * "72 critical — 24 established, 48 leads" without deciding any of it itself. `unproven` deliberately lumps
- * leads with blocks and assertions: from the reader's side they share the one property that matters here —
- * the workbench has not established them — and the row's own badge says which kind it is.
+ * Returned highest-severity-first and only for severities actually present. The detailed buckets are exhaustive,
+ * so a card and a filter can share exactly the same definition. `unproven` remains only as a compatibility sum for
+ * persisted autonomous summaries; displaying it as one category would recreate the ambiguity this census removes.
  */
 export function severityCensus(findings: readonly Finding[]): SeverityCount[] {
   const by = new Map<string, SeverityCount>();
   for (const f of findings) {
     let e = by.get(f.severity);
     if (!e) {
-      e = { severity: f.severity, total: 0, established: 0, unproven: 0 };
+      e = {
+        severity: f.severity,
+        total: 0,
+        established: 0,
+        leads: 0,
+        blocked: 0,
+        dismissed: 0,
+        asserted: 0,
+        other: 0,
+        unproven: 0,
+      };
       by.set(f.severity, e);
     }
     e.total += 1;
-    if (isEstablished(f.proofState)) e.established += 1;
-    else e.unproven += 1;
+    const category = findingCategory(f.proofState);
+    if (category === 'established') e.established += 1;
+    else {
+      e.unproven += 1;
+      if (category === 'lead') e.leads += 1;
+      else if (category === 'blocked') e.blocked += 1;
+      else if (category === 'dismissed') e.dismissed += 1;
+      else if (category === 'asserted') e.asserted += 1;
+      else e.other += 1;
+    }
   }
   return [...by.values()].sort((a, b) => (SEVERITY_RANK[b.severity] ?? 0) - (SEVERITY_RANK[a.severity] ?? 0));
 }

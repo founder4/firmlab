@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareFindings, findingRank, isEstablished, severityCensus } from '../src/findings-rank.js';
+import { compareFindings, findingCategory, findingRank, isEstablished, severityCensus } from '../src/findings-rank.js';
 import type { Finding, FindingProvenance, FindingSeverity } from '../src/types.js';
 
 let seq = 0;
@@ -30,6 +30,23 @@ describe('isEstablished', () => {
 
   it('treats an unknown proof state as unestablished, so a new rung cannot inherit a claim', () => {
     expect(isEstablished('confirmed_on_physical_device')).toBe(false);
+  });
+});
+
+describe('findingCategory', () => {
+  it('keeps every proof-state meaning in its own exhaustive category', () => {
+    expect(findingCategory('static_confirmed')).toBe('established');
+    expect(findingCategory('confirmed_in_emulation')).toBe('established');
+    expect(findingCategory('confirmed_full_system')).toBe('established');
+    expect(findingCategory('needs_runtime_reproduction')).toBe('lead');
+    expect(findingCategory('blocked_by_platform')).toBe('blocked');
+    expect(findingCategory('blocked_by_security')).toBe('blocked');
+    expect(findingCategory('false_positive')).toBe('dismissed');
+    expect(findingCategory('operator_assertion')).toBe('asserted');
+  });
+
+  it('does not guess what an unfamiliar persisted state means', () => {
+    expect(findingCategory('confirmed_on_physical_device')).toBe('other');
   });
 });
 
@@ -97,8 +114,28 @@ describe('severityCensus', () => {
       f('low', 'confirmed_in_emulation'),
     ]);
     expect(census).toEqual([
-      { severity: 'critical', total: 3, established: 1, unproven: 2 },
-      { severity: 'low', total: 1, established: 1, unproven: 0 },
+      {
+        severity: 'critical',
+        total: 3,
+        established: 1,
+        leads: 2,
+        blocked: 0,
+        dismissed: 0,
+        asserted: 0,
+        other: 0,
+        unproven: 2,
+      },
+      {
+        severity: 'low',
+        total: 1,
+        established: 1,
+        leads: 0,
+        blocked: 0,
+        dismissed: 0,
+        asserted: 0,
+        other: 0,
+        unproven: 0,
+      },
     ]);
   });
 
@@ -107,13 +144,25 @@ describe('severityCensus', () => {
     expect(census.map((c) => c.severity)).toEqual(['high', 'info']);
   });
 
-  it('counts blocks and assertions as unproven, never as established', () => {
+  it('separates leads, blocks, dismissals and assertions while retaining the compatibility sum', () => {
     const census = severityCensus([
+      f('high', 'needs_runtime_reproduction'),
       f('high', 'blocked_by_platform'),
+      f('high', 'blocked_by_security'),
       f('high', 'operator_assertion'),
       f('high', 'false_positive'),
     ]);
-    expect(census[0]).toEqual({ severity: 'high', total: 3, established: 0, unproven: 3 });
+    expect(census[0]).toEqual({
+      severity: 'high',
+      total: 5,
+      established: 0,
+      leads: 1,
+      blocked: 2,
+      dismissed: 1,
+      asserted: 1,
+      other: 0,
+      unproven: 5,
+    });
   });
 
   it('is empty for an empty ledger rather than inventing zero rows', () => {

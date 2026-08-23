@@ -252,7 +252,7 @@ describe('FindingsLedger — analyst controls', () => {
     expect(screen.getByText('Remote command execution')).toBeInTheDocument();
     expect(screen.queryByText('Possible unsafe parser')).not.toBeInTheDocument();
     expect(screen.getByText('1 of 2')).toBeInTheDocument();
-    expect(screen.getByText('1 medium (all unproven)')).toBeInTheDocument();
+    expect(screen.getByText('1 medium: 1 lead')).toBeInTheDocument();
   });
 
   it('searches evidence metadata as well as the visible title', () => {
@@ -262,13 +262,7 @@ describe('FindingsLedger — analyst controls', () => {
     expect(screen.getByText('Possible unsafe parser')).toBeInTheDocument();
   });
 
-  /**
-   * The bucket holds leads AND blocks, and only a lead can be reproduced. A first version of this control named
-   * it "Needs validation", which rendered three `blocked (platform)` rows under an instruction to go validate a
-   * question the deployment had ALREADY reported it could not put. The filter groups by what is not established;
-   * it must not tell the reader what to do about it.
-   */
-  it('groups a block with the leads without instructing anyone to reproduce it', () => {
+  it('gives a lead and a blocked question separate filters with the same definitions as the census', () => {
     const blocked = measured({
       id: 'blocked',
       severity: 'info',
@@ -277,13 +271,17 @@ describe('FindingsLedger — analyst controls', () => {
       proofState: 'blocked_by_platform',
     });
     render(<FindingsLedger findings={[...rows, blocked]} />);
-    expect(screen.queryByRole('button', { name: /validat/i })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Unproven' }));
-    expect(screen.getByText('No readable device tree in this image')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Leads' }));
     expect(screen.getByText('Possible unsafe parser')).toBeInTheDocument();
+    expect(screen.queryByText('No readable device tree in this image')).not.toBeInTheDocument();
     expect(screen.queryByText('Remote command execution')).not.toBeInTheDocument();
-    expect(screen.getByText('2 of 3')).toBeInTheDocument();
+    expect(screen.getByText('1 of 3')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Blocked' }));
+    expect(screen.getByText('No readable device tree in this image')).toBeInTheDocument();
+    expect(screen.queryByText('Possible unsafe parser')).not.toBeInTheDocument();
+    expect(screen.getByText('1 of 3')).toBeInTheDocument();
   });
 });
 
@@ -443,7 +441,7 @@ describe('the two axes — how bad if true, and how much was established', () =>
     expect(screen.getByRole('img', { name: 'high if true — not established' })).toBeInTheDocument();
   });
 
-  it('splits every severity band into established and unproven above the table', () => {
+  it('splits every severity band into its semantic categories above the table', () => {
     render(
       <FindingsLedger
         findings={[
@@ -453,14 +451,14 @@ describe('the two axes — how bad if true, and how much was established', () =>
         ]}
       />,
     );
-    expect(screen.getByText('3 critical (1 established, 2 unproven)')).toBeInTheDocument();
+    expect(screen.getByText('3 critical: 1 established · 2 leads')).toBeInTheDocument();
   });
 
-  it('says outright when a whole band is unproven', () => {
+  it('says outright when a whole band is leads', () => {
     render(
       <FindingsLedger findings={[measured({ severity: 'critical', proofState: 'needs_runtime_reproduction' })]} />,
     );
-    expect(screen.getByText('1 critical (all unproven)')).toBeInTheDocument();
+    expect(screen.getByText('1 critical: 1 lead')).toBeInTheDocument();
   });
 
   it('censuses the whole ledger, not the rows that happened to fit under the cap', () => {
@@ -468,7 +466,34 @@ describe('the two axes — how bad if true, and how much was established', () =>
       measured({ id: `f${i}`, severity: 'low', proofState: 'needs_runtime_reproduction', title: `row ${i}` }),
     );
     render(<FindingsLedger findings={many} />);
-    expect(screen.getByText('320 low (all unproven)')).toBeInTheDocument();
+    expect(screen.getByText('320 low: 320 leads')).toBeInTheDocument();
+  });
+
+  it('counts and filters dismissals and operator assertions instead of hiding them under an aggregate', () => {
+    const dismissed = measured({ id: 'dismissed', title: 'Disproved candidate', proofState: 'false_positive' });
+    const asserted = dispute('missing', {
+      id: 'asserted',
+      title: 'Observed on a physical unit',
+      severity: 'high',
+      assertion: {
+        assertedBy: 'aaron',
+        authorKind: 'human',
+        assertedAt: 1,
+        claim: 'asserted_unverified',
+        rationale: 'Observed on the bench.',
+        status: 'active',
+      },
+    });
+    render(<FindingsLedger findings={[dismissed, asserted]} />);
+    expect(screen.getByText('2 high: 1 dismissed · 1 asserted')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismissed' }));
+    expect(screen.getByText('Disproved candidate')).toBeInTheDocument();
+    expect(screen.queryByText('Observed on a physical unit')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Assertions' }));
+    expect(screen.getByText('Observed on a physical unit')).toBeInTheDocument();
+    expect(screen.queryByText('Disproved candidate')).not.toBeInTheDocument();
   });
 
   it('carries the legend that makes the fill readable, rather than leaving it to be inferred', () => {

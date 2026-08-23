@@ -30,7 +30,7 @@
  * worded three ways. Finding titles, rationales and source strings are the record providers wrote when they ran and
  * are shown as written, in whatever language produced them.
  */
-import { compareFindings, isEstablished, severityCensus } from '@firmlab/core';
+import { type FindingCategory, compareFindings, findingCategory, isEstablished, severityCensus } from '@firmlab/core';
 import { Fragment, useMemo, useState } from 'react';
 import type { Finding, FindingProvenance, OperatorAssertion } from '../api';
 import { messages, useMessages } from '../i18n';
@@ -92,8 +92,8 @@ export const MAX_LEDGER_ROWS = 300;
  * The severity mark, carrying both axes: hue is how bad if true, fill is whether it was established.
  *
  * The table used to print one glyph — `●`, coloured by severity — so a `critical` lead and a `critical` property
- * read out of the bytes were the same red dot. 48 of this corpus's 72 criticals are leads, which made the most
- * emphatic mark in the table the one the workbench had established least.
+ * read out of the bytes were the same red dot. Fill now answers only the binary question the shape can carry:
+ * whether the row establishes a property. The badge and census carry the finer semantic category.
  *
  * Fill rather than a second colour or a chip, for three reasons: it reuses the grammar `ProofStateBadge` already
  * set (a solid stroke is code's verdict, a dashed one is not a measurement), it leaves severity's own hue to say
@@ -232,7 +232,7 @@ export function selectLedgerRows(
  * It sits above the table rather than under it because it qualifies the number in the panel title, and a
  * qualifier printed after 300 rows is a qualifier nobody reads. Each band shows its own mark at the size the
  * rows use, filled and hollow side by side, so the legend is demonstrated rather than described — and the
- * counts beside it are what the marks are counting.
+ * counts beside it name the finer categories the hollow mark deliberately does not collapse.
  *
  * It counts the whole ledger even when the table is capped, and it is rendered from `severityCensus` rather
  * than tallied here so the ledger, the narrative and the report cannot disagree about what "established" means.
@@ -252,12 +252,25 @@ function SeverityCensus({ census }: { census: ReturnType<typeof severityCensus> 
               {c.established > 0 ? (
                 <SeverityMark severity={c.severity} proofState="static_confirmed" decorative />
               ) : null}
-              {c.unproven > 0 ? (
+              {c.total - c.established > 0 ? (
                 <SeverityMark severity={c.severity} proofState="needs_runtime_reproduction" decorative />
               ) : null}
-              <span>{t.findings.census.split(c.established, c.unproven)}</span>
+              <span>
+                {t.findings.census.split(c.established, c.leads, c.blocked, c.dismissed, c.asserted, c.other)}
+              </span>
             </div>
-            <span className="sr-only">{t.findings.census.band(c.severity, c.total, c.established, c.unproven)}</span>
+            <span className="sr-only">
+              {t.findings.census.band(
+                c.severity,
+                c.total,
+                c.established,
+                c.leads,
+                c.blocked,
+                c.dismissed,
+                c.asserted,
+                c.other,
+              )}
+            </span>
           </div>
         ))}
       </div>
@@ -334,7 +347,7 @@ function DanglingDisputeNote({ dangling }: { dangling: readonly Finding[] }): JS
 export function FindingsLedger({ findings }: { findings: readonly Finding[] }): JSX.Element {
   const t = useMessages();
   const [showAll, setShowAll] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'priority' | 'established' | 'unproven'>('all');
+  const [filter, setFilter] = useState<'all' | 'priority' | FindingCategory>('all');
   const [query, setQuery] = useState('');
   /**
    * Which rows have their reasoning open.
@@ -363,8 +376,7 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
       const inScope =
         filter === 'all' ||
         (filter === 'priority' && (f.severity === 'critical' || f.severity === 'high')) ||
-        (filter === 'established' && isEstablished(f.proofState)) ||
-        (filter === 'unproven' && f.proofState !== 'operator_assertion' && !isEstablished(f.proofState));
+        findingCategory(f.proofState) === filter;
       if (!inScope) return false;
       if (!q) return true;
       return [f.title, f.source, f.severity, f.proofState, f.evidenceChannel, f.rationale]
@@ -390,20 +402,22 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
       {findings.length > 0 ? (
         <div className="ledger-toolbar">
           <fieldset className="ledger-filters" aria-label={t.findings.filters.aria}>
-            {(['all', 'priority', 'established', 'unproven'] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                className={`btn btn-sm ${filter === value ? 'is-active' : 'btn-ghost'}`}
-                aria-pressed={filter === value}
-                onClick={() => {
-                  setFilter(value);
-                  setShowAll(false);
-                }}
-              >
-                {t.findings.filters[value]}
-              </button>
-            ))}
+            {(['all', 'priority', 'established', 'lead', 'blocked', 'dismissed', 'asserted', 'other'] as const).map(
+              (value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`btn btn-sm ${filter === value ? 'is-active' : 'btn-ghost'}`}
+                  aria-pressed={filter === value}
+                  onClick={() => {
+                    setFilter(value);
+                    setShowAll(false);
+                  }}
+                >
+                  {t.findings.filters[value]}
+                </button>
+              ),
+            )}
           </fieldset>
           <label className="ledger-search">
             <span className="sr-only">{t.findings.filters.searchLabel}</span>
