@@ -88,6 +88,104 @@ const SYMREACH: Record<string, { outcome: RunOutcome; text: string }> = {
 };
 
 /**
+ * The image-wide providers driven by the boot/platform workbench. They all persist the same small contract even
+ * though their detailed result shapes differ: availability, a reader-facing reason and zero or more findings.
+ * Keeping that contract here prevents ten completed runs falling through to the content-free default summary.
+ */
+const DEEP_ANALYSIS_KINDS = new Set([
+  'uboot',
+  'devicetree',
+  'kernel',
+  'fsaudit',
+  'certs',
+  'services',
+  'updatepath',
+  'compmap',
+  'rtos',
+  'fcc',
+]);
+
+function conciseReason(value: unknown, fallback: string): string {
+  const reason = typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  const first = reason.split(/(?<=\.)\s/)[0] ?? reason;
+  return first.length > 220 ? `${first.slice(0, 219)}…` : first;
+}
+
+function rows(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object')
+    : [];
+}
+
+/**
+ * Read what the findings establish before looking at provider-specific inventory. A provider can establish a
+ * useful fact without emitting a security finding (one parsed U-Boot environment is the worked example), so
+ * `null` deliberately means "the findings do not decide" rather than `empty`.
+ */
+function findingsOutcome(result: Record<string, unknown>): RunOutcome | null {
+  if (result.available === false) return 'blocked';
+  const findings = rows(result.findings);
+  if (findings.length === 0) return null;
+  const states = findings
+    .map((finding) => finding.proofState)
+    .filter((state): state is string => typeof state === 'string');
+  if (states.some((state) => ['static_confirmed', 'confirmed_in_emulation', 'confirmed_full_system'].includes(state))) {
+    return 'proven';
+  }
+  if (states.length > 0 && states.every((state) => state.startsWith('blocked_'))) return 'blocked';
+  return 'lead';
+}
+
+/** A stored provider result can contain useful measured inventory even when it emitted no security finding. */
+function deepAnalysisOutcome(kind: string, result: Record<string, unknown>): RunOutcome {
+  const fromFindings = findingsOutcome(result);
+  if (fromFindings) return fromFindings;
+
+  switch (kind) {
+    case 'uboot':
+    case 'devicetree':
+      return result.found === true ? 'proven' : 'empty';
+    case 'kernel':
+      if (result.located === false) return 'blocked';
+      return result.located === true || typeof result.version === 'string' ? 'proven' : 'empty';
+    case 'certs':
+      return (typeof result.certCount === 'number' && result.certCount > 0) || rows(result.certs).length > 0
+        ? 'proven'
+        : 'empty';
+    case 'services':
+      return rows(result.services).length > 0 ? 'proven' : 'empty';
+    case 'updatepath': {
+      const integrity =
+        result.imageIntegrity !== null && typeof result.imageIntegrity === 'object'
+          ? (result.imageIntegrity as Record<string, unknown>)
+          : null;
+      return rows(result.updaters).length > 0 || rows(integrity?.items).length > 0 ? 'proven' : 'empty';
+    }
+    case 'compmap':
+      return typeof result.binaryCount === 'number' && result.binaryCount > 0 ? 'proven' : 'empty';
+    case 'rtos':
+      return result.isCortexM === true || (typeof result.rtosKernel === 'string' && result.rtosKernel.trim() !== '')
+        ? 'proven'
+        : 'empty';
+    case 'fcc':
+      return rows(result.links).length > 0 || (Array.isArray(result.ids) && result.ids.length > 0) ? 'proven' : 'empty';
+    default:
+      return 'empty';
+  }
+}
+
+function deepAnalysisHeadline(kind: string, result: Record<string, unknown>): string {
+  const fallback = `${kind} completed without a result summary`;
+  if (kind === 'rtos' && typeof result.rtosKernel === 'string' && result.rtosKernel.trim()) {
+    const reason = conciseReason(result.reason, fallback);
+    const detected = `RTOS kernel detected: ${result.rtosKernel.trim()}.`;
+    const combined = `${detected} ${reason}`;
+    return combined.length > 220 ? `${combined.slice(0, 219)}…` : combined;
+  }
+  return conciseReason(result.reason, fallback);
+}
+
+/**
  * Pure: read one stored job into a line.
  *
  * Each kind gets its own reading because each result means something different, and a generic
@@ -118,6 +216,14 @@ export function summarizeRun(job: RunInput): RunSummary {
   // `done` with nothing stored is its own case: the process finished and left no result to read. Reporting that
   // as an empty finding would be the conflation this module exists to prevent.
   if (!result) return { ...base, outcome: 'failed', headline: 'Finished but stored no result' };
+
+  if (DEEP_ANALYSIS_KINDS.has(job.kind)) {
+    return {
+      ...base,
+      outcome: deepAnalysisOutcome(job.kind, result),
+      headline: deepAnalysisHeadline(job.kind, result),
+    };
+  }
 
   switch (job.kind) {
     case 'dynprobe': {

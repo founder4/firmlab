@@ -1,27 +1,17 @@
 /**
- * Deep static-analysis actions — run the offline providers that enrich the dossier. Each runs as a job; its findings
- * land in the dossier's findings ledger. Honest: a provider that has no input (no rootfs, not a UEFI/RTOS image) or a
- * missing tool reports so in its result reason.
+ * The boot/platform workbench.
  *
- * The providers are GROUPED by the question they answer rather than listed flat, and that is a legibility decision
- * with a threshold behind it: at seven a flat grid scanned fine, and the three that landed on 2026-07-28 (kernel
- * posture, update-path integrity, device tree) take it to ten, at which point "which of these do I want" stops being
- * answerable at a glance. The groups are the reader's own question — how does it boot, what is in the filesystem, how
- * does it update, what is the device — not a taxonomy of our module layout.
- *
- * **What is data here and what is words.** The `AnalysisKind` of each card is an identifier: it is the job kind the
- * POST starts and the row it lands on in SQLite. So this file keeps the ROUTING — which kinds, in which group, in
- * which order, behind which icon — and the catalogue keeps every word, keyed by that same identifier. The tile that
- * says `no findings` and the sentence above it saying a provider degrades honestly when its input or tool is absent
- * are the pair that has to survive translation together: on its own, an empty tile is exactly what a clean result
- * looks like.
+ * This used to be ten identical launch cards backed only by component-local state. A completed provider therefore
+ * looked as if it had never run after every reload, while its actual answer lived much farther down in a collapsed
+ * history. This surface now reads the persisted job ledger and the normalized run summaries: action, current state,
+ * answer, bound and re-run all live on the same row.
  */
-import { useCallback, useRef, useState } from 'react';
-import { type AnalysisKind, api } from '../api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type AnalysisKind, type Job, type RunSummary, api } from '../api';
 import { type Messages, useMessages } from '../i18n';
-import { RunHistory } from './RunHistory';
+import { DeepAnalysisDetails } from './DeepAnalysisDetails';
+import { RunHistory, ago } from './RunHistory';
 
-/** The providers this panel offers, and the key under which the catalogue names each one. */
 type ProviderKind = keyof Messages['shell']['deep']['provider'] & AnalysisKind;
 type GroupId = keyof Messages['shell']['deep']['group'];
 
@@ -47,96 +37,252 @@ const ICONS: Record<ProviderKind, string> = {
 
 const PROVIDERS: ProviderKind[] = PROVIDER_GROUPS.flatMap((g) => g.kinds);
 
-type RunState = { status: 'idle' | 'running' | 'done' | 'error'; reason?: string; findings?: number; error?: string };
+const OUTCOME_CLASS: Record<RunSummary['outcome'], string> = {
+  proven: 'run-proven',
+  lead: 'run-lead',
+  empty: 'run-empty',
+  blocked: 'run-blocked',
+  failed: 'run-failed',
+  running: 'run-running',
+};
+
+function latestByKind<T extends { kind: string }>(rows: T[], stamp: (row: T) => number): Map<string, T> {
+  const latest = new Map<string, T>();
+  for (const row of rows) {
+    const previous = latest.get(row.kind);
+    if (!previous || stamp(row) > stamp(previous)) latest.set(row.kind, row);
+  }
+  return latest;
+}
+
+function resultFacts(job: Job | undefined): { findings: number | null; reason: string | null } {
+  if (!job?.result || typeof job.result !== 'object') return { findings: null, reason: null };
+  const result = job.result as { findings?: unknown; reason?: unknown };
+  return {
+    findings: Array.isArray(result.findings) ? result.findings.length : null,
+    reason: typeof result.reason === 'string' && result.reason.trim() ? result.reason : null,
+  };
+}
 
 export function AnalysisActionsPanel({ imageId }: { imageId: string }): JSX.Element {
   const t = useMessages();
-  const [state, setState] = useState<Record<string, RunState>>({});
-  /** Bumped when a provider finishes, so the history below re-reads without polling. */
-  const [historyKey, setHistoryKey] = useState(0);
-  const polls = useRef<Record<string, number>>({});
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [starting, setStarting] = useState<Partial<Record<ProviderKind, boolean>>>({});
+  const [startErrors, setStartErrors] = useState<Partial<Record<ProviderKind, string>>>({});
+
+  const refresh = useCallback(async () => {
+    try {
+      const [nextJobs, ledger] = await Promise.all([
+        api.jobs(imageId),
+        api.runs(imageId, { kind: PROVIDERS.join(',') }),
+      ]);
+      setJobs(nextJobs);
+      setRuns(ledger.runs);
+      setLoadError(null);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoaded(true);
+    }
+  }, [imageId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const currentJobs = useMemo(() => latestByKind(jobs, (job) => job.createdAt), [jobs]);
+  const currentRuns = useMemo(() => latestByKind(runs, (run) => run.startedAt), [runs]);
+  const historyKey = useMemo(() => jobs.reduce((latest, job) => Math.max(latest, job.updatedAt), 0), [jobs]);
+  const hasActiveJob = PROVIDERS.some((kind) => {
+    const status = currentJobs.get(kind)?.status;
+    return starting[kind] || status === 'queued' || status === 'running';
+  });
+
+  useEffect(() => {
+    if (!hasActiveJob) return;
+    const timer = window.setInterval(() => void refresh(), 900);
+    return () => window.clearInterval(timer);
+  }, [hasActiveJob, refresh]);
 
   const run = useCallback(
-    async (kind: AnalysisKind) => {
-      setState((s) => ({ ...s, [kind]: { status: 'running' } }));
+    async (kind: ProviderKind) => {
+      setStarting((current) => ({ ...current, [kind]: true }));
+      setStartErrors((current) => ({ ...current, [kind]: undefined }));
       try {
-        const { jobId } = await api.runAnalysis(imageId, kind);
-        polls.current[kind] = window.setInterval(async () => {
-          const j = await api.job(jobId);
-          if (j.status === 'done' || j.status === 'error') {
-            window.clearInterval(polls.current[kind]);
-            if (j.status === 'error') {
-              setState((s) => ({ ...s, [kind]: { status: 'error', error: j.error ?? t.shell.deep.failed } }));
-            } else {
-              const res = j.result as { reason?: string; findings?: unknown[] } | null;
-              const done: RunState = { status: 'done', findings: res?.findings?.length ?? 0 };
-              if (res?.reason) done.reason = res.reason;
-              setState((s) => ({ ...s, [kind]: done }));
-              setHistoryKey((k) => k + 1);
-            }
-          }
-        }, 700);
-      } catch (e) {
-        setState((s) => ({ ...s, [kind]: { status: 'error', error: e instanceof Error ? e.message : String(e) } }));
+        await api.runAnalysis(imageId, kind);
+        await refresh();
+      } catch (error) {
+        setStartErrors((current) => ({
+          ...current,
+          [kind]: error instanceof Error ? error.message : String(error),
+        }));
+      } finally {
+        setStarting((current) => ({ ...current, [kind]: false }));
       }
     },
-    [imageId, t],
+    [imageId, refresh],
+  );
+
+  const counts = PROVIDERS.reduce(
+    (count, kind) => {
+      const job = currentJobs.get(kind);
+      const summary = currentRuns.get(kind);
+      if (starting[kind] || job?.status === 'queued' || job?.status === 'running') count.running += 1;
+      else if (job?.status === 'error' || summary?.outcome === 'failed' || startErrors[kind]) count.failed += 1;
+      else if (job || summary) count.ran += 1;
+      else count.pending += 1;
+      return count;
+    },
+    { ran: 0, running: 0, failed: 0, pending: 0 },
   );
 
   return (
-    <div className="panel" style={{ marginTop: 16 }}>
-      <div className="panel-title">{t.shell.deep.title}</div>
-      <div className="panel-sub">{t.shell.deep.sub}</div>
-      {PROVIDER_GROUPS.map((group) => (
-        <section key={group.id} style={{ marginTop: 18 }}>
-          <div className="eyebrow" style={{ marginBottom: 8 }}>
-            {t.shell.deep.group[group.id]}
-          </div>
-          <div className="grid grid-2">
-            {group.kinds.map((kind) => {
-              const st = state[kind] ?? { status: 'idle' };
-              const card = t.shell.deep.provider[kind];
-              return (
-                <div key={kind} className="panel" style={{ margin: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontSize: 16 }}>{ICONS[kind]}</span>
-                    <strong style={{ fontSize: 13 }}>{card.title}</strong>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      style={{ marginLeft: 'auto' }}
-                      disabled={st.status === 'running'}
-                      onClick={() => run(kind)}
-                    >
-                      {st.status === 'running' ? <span className="spinner" /> : t.common.run}
-                    </button>
-                  </div>
-                  <div className="hint">{card.desc}</div>
-                  {st.status === 'done' && (
-                    <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                      <span className={`badge ${st.findings ? 'badge-ok' : ''}`}>
-                        {st.findings ? t.shell.deep.findings(st.findings) : t.shell.deep.noFindings}
-                      </span>
-                      {st.reason && (
-                        <span className="hint" style={{ fontSize: 11.5 }}>
-                          {st.reason}
-                        </span>
+    <section className="panel deep-workbench">
+      <div className="deep-workbench-head">
+        <div>
+          <div className="panel-title">{t.shell.deep.title}</div>
+          <div className="panel-sub">{t.shell.deep.sub}</div>
+        </div>
+        <div className="deep-overview" aria-label={t.shell.deep.overviewLabel}>
+          <strong>{t.shell.deep.overview(counts.ran, PROVIDERS.length)}</strong>
+          {counts.running > 0 && <span className="badge run-running">{t.shell.deep.running(counts.running)}</span>}
+          {counts.failed > 0 && <span className="badge run-failed">{t.shell.deep.errors(counts.failed)}</span>}
+          <span className="badge">{t.shell.deep.pending(counts.pending)}</span>
+        </div>
+      </div>
+
+      {loadError && <div className="banner banner-warn deep-load-error">{t.shell.deep.refreshFailed(loadError)}</div>}
+
+      <div className="deep-provider-groups" aria-busy={!loaded}>
+        {PROVIDER_GROUPS.map((group) => (
+          <section className="deep-provider-group" key={group.id} aria-labelledby={`deep-group-${group.id}`}>
+            <h3 className="deep-group-title" id={`deep-group-${group.id}`}>
+              {t.shell.deep.group[group.id]}
+            </h3>
+            <div className="deep-provider-list">
+              {group.kinds.map((kind) => {
+                const summary = currentRuns.get(kind);
+                // Keep the headline and full result on the same execution. Jobs can finish out of order, so the
+                // most recently UPDATED job is not necessarily the most recently STARTED run.
+                const job = summary
+                  ? (jobs.find((candidate) => candidate.id === summary.jobId) ?? currentJobs.get(kind))
+                  : currentJobs.get(kind);
+                const facts = resultFacts(job);
+                const running = !!starting[kind] || job?.status === 'queued' || job?.status === 'running';
+                const error =
+                  startErrors[kind] ?? (job?.status === 'error' ? (job.error ?? t.shell.deep.failed) : null);
+                const outcome = running ? 'running' : error ? 'failed' : summary?.outcome;
+                const meta = outcome ? t.shell.runHistory.outcome[outcome] : null;
+                const hasRun = !!job || !!summary;
+                const card = t.shell.deep.provider[kind];
+
+                return (
+                  <article className={`deep-provider-row${outcome ? ` is-${outcome}` : ''}`} key={kind}>
+                    <span className="deep-provider-icon" aria-hidden="true">
+                      {ICONS[kind]}
+                    </span>
+                    <div className="deep-provider-identity">
+                      <strong>{card.title}</strong>
+                      <p>{card.desc}</p>
+                    </div>
+                    <div className="deep-provider-result" aria-live="polite">
+                      {!loaded && !running ? (
+                        <span className="hint">{t.shell.deep.loading}</span>
+                      ) : running ? (
+                        <>
+                          <span className="deep-result-line">
+                            <span className="spinner" />
+                            <strong>{t.shell.runHistory.outcome.running.label}</strong>
+                          </span>
+                          <span className="hint">{t.shell.deep.runningBody}</span>
+                        </>
+                      ) : error ? (
+                        <>
+                          <span className="deep-result-line">
+                            <span className="run-dot run-failed" aria-hidden="true" />
+                            <strong>{t.shell.runHistory.outcome.failed.label}</strong>
+                          </span>
+                          <span className="deep-result-copy">{error}</span>
+                        </>
+                      ) : summary ? (
+                        <>
+                          <span className="deep-result-line" title={meta?.means}>
+                            <span className={`run-dot ${OUTCOME_CLASS[summary.outcome]}`} aria-hidden="true" />
+                            <span className={`badge ${OUTCOME_CLASS[summary.outcome]}`}>{meta?.label}</span>
+                            {facts.findings !== null && <span>{t.shell.deep.findings(facts.findings)}</span>}
+                          </span>
+                          <strong className="deep-result-headline">{summary.headline}</strong>
+                          {job?.result !== null && job?.result !== undefined && (
+                            <details className="deep-result-details">
+                              <summary>{t.shell.deep.resultDetails}</summary>
+                              <DeepAnalysisDetails imageId={imageId} kind={kind} value={job.result} />
+                              {facts.reason && facts.reason !== summary.headline && (
+                                <span className="deep-result-copy">{facts.reason}</span>
+                              )}
+                            </details>
+                          )}
+                          <span className="deep-result-meta">
+                            {summary.bound && <span>{summary.bound}</span>}
+                            <time dateTime={new Date(summary.startedAt).toISOString()}>
+                              {t.shell.deep.lastRun(ago(summary.startedAt, t.shell.runHistory.ago))}
+                            </time>
+                          </span>
+                        </>
+                      ) : job?.status === 'done' ? (
+                        <>
+                          <span className="deep-result-line">
+                            <span className="run-dot run-empty" aria-hidden="true" />
+                            <strong>{t.shell.deep.completed}</strong>
+                            {facts.findings !== null && <span>{t.shell.deep.findings(facts.findings)}</span>}
+                          </span>
+                          {facts.reason && <span className="deep-result-copy">{facts.reason}</span>}
+                          {job.result !== null && job.result !== undefined && (
+                            <details className="deep-result-details">
+                              <summary>{t.shell.deep.resultDetails}</summary>
+                              <DeepAnalysisDetails imageId={imageId} kind={kind} value={job.result} />
+                            </details>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <strong className="deep-result-idle">{t.shell.deep.notRun}</strong>
+                          <span className="hint">{t.shell.deep.notRunBody}</span>
+                        </>
                       )}
                     </div>
-                  )}
-                  {st.status === 'error' && (
-                    <div className="banner banner-warn" style={{ marginTop: 8 }}>
-                      {st.error}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      ))}
-      {/* Each tile above shows the LAST run of its provider. These are the others — a provider re-run after a fix
-          and one that was blocked and later worked are indistinguishable from a single result. */}
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${hasRun ? '' : 'btn-primary'}`}
+                      disabled={running}
+                      aria-label={
+                        running
+                          ? t.shell.deep.runningProvider(card.title)
+                          : hasRun
+                            ? t.shell.deep.runAgainProvider(card.title)
+                            : t.shell.deep.runProvider(card.title)
+                      }
+                      onClick={() => void run(kind)}
+                    >
+                      {running ? (
+                        <span className="spinner" aria-hidden="true" />
+                      ) : hasRun ? (
+                        t.shell.deep.runAgain
+                      ) : (
+                        t.common.run
+                      )}
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+      </div>
+
       <RunHistory imageId={imageId} kinds={PROVIDERS} runKind="deepAnalysis" refreshKey={historyKey} />
-    </div>
+    </section>
   );
 }

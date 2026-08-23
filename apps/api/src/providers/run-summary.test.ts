@@ -157,6 +157,101 @@ describe('summarizeRun — status is the process, outcome is what was learned', 
     expect(r.headline).toContain('open the run for its full result');
   });
 
+  it('summarizes every boot/platform provider from its stored reason instead of the generic completion text', () => {
+    const kinds = [
+      'uboot',
+      'devicetree',
+      'kernel',
+      'fsaudit',
+      'certs',
+      'services',
+      'updatepath',
+      'compmap',
+      'rtos',
+      'fcc',
+    ];
+    for (const kind of kinds) {
+      const r = summarizeRun(
+        job({
+          kind,
+          resultJson: JSON.stringify({ available: true, findings: [], reason: `${kind} inspected its input.` }),
+        }),
+      );
+      expect(r.headline, kind).toBe(`${kind} inspected its input.`);
+      expect(r.outcome, kind).toBe('empty');
+    }
+  });
+
+  it('grades deep-analysis answers by evidence, while keeping capability limits separate', () => {
+    const summarize = (result: object) =>
+      summarizeRun(
+        job({ kind: 'kernel', resultJson: JSON.stringify({ reason: 'Kernel posture recorded.', ...result }) }),
+      );
+
+    expect(summarize({ available: false, findings: [] }).outcome).toBe('blocked');
+    expect(summarize({ available: true, findings: [{ proofState: 'blocked_by_platform' }] }).outcome).toBe('blocked');
+    expect(summarize({ available: true, findings: [{ proofState: 'needs_runtime_reproduction' }] }).outcome).toBe(
+      'lead',
+    );
+    expect(summarize({ available: true, findings: [{ proofState: 'static_confirmed' }] }).outcome).toBe('proven');
+    expect(
+      summarize({
+        available: true,
+        findings: [{ proofState: 'blocked_by_platform' }, { proofState: 'static_confirmed' }],
+      }).outcome,
+    ).toBe('proven');
+  });
+
+  it('treats measured provider inventory as an established fact even when it emits no security finding', () => {
+    const uboot = summarizeRun(
+      job({
+        kind: 'uboot',
+        resultJson: JSON.stringify({
+          available: true,
+          found: true,
+          varCount: 1,
+          vars: { bootcmd: 'run boot_normal' },
+          findings: [],
+          reason: 'Parsed 1 U-Boot environment variable from the image.',
+        }),
+      }),
+    );
+    const services = summarizeRun(
+      job({
+        kind: 'services',
+        resultJson: JSON.stringify({
+          available: true,
+          services: [{ name: 'httpd' }],
+          findings: [],
+          reason: 'Service map: 1 configured service.',
+        }),
+      }),
+    );
+
+    expect(uboot.outcome).toBe('proven');
+    expect(services.outcome).toBe('proven');
+  });
+
+  it('leads an RTOS summary with the fact it established instead of only the unavailable Cortex-M reading', () => {
+    const r = summarizeRun(
+      job({
+        kind: 'rtos',
+        resultJson: JSON.stringify({
+          available: true,
+          isCortexM: false,
+          rtosKernel: 'ThreadX',
+          findings: [{ proofState: 'static_confirmed' }],
+          reason: 'No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).',
+        }),
+      }),
+    );
+
+    expect(r.outcome).toBe('proven');
+    expect(r.headline).toBe(
+      'RTOS kernel detected: ThreadX. No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).',
+    );
+  });
+
   it('survives malformed stored JSON rather than throwing mid-listing', () => {
     const r = summarizeRun(job({ params: '{not json', resultJson: '{also not' }));
     expect(r.outcome).toBe('failed');
