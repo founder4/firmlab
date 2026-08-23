@@ -1,20 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { HashRouter, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { type ImageSummary, api } from './api';
 import { type Messages, useMessages } from './i18n';
 import { Icon, type IconName } from './icons';
+import { SECTION_IDS } from './image-sections';
 import { Onboarding, startTour } from './onboarding';
-import { Agents, AgentsRun } from './pages/Agents';
-import { Capabilities } from './pages/Capabilities';
-import { Capture } from './pages/Capture';
-import { Corpus } from './pages/Corpus';
-import { Dashboard } from './pages/Dashboard';
-import { ImageDetail, SECTION_IDS } from './pages/ImageDetail';
-import { Overview } from './pages/Overview';
-import { Settings } from './pages/Settings';
 import { groupedSections } from './section-index';
 import { type ThemePref, setDensity, setTheme, useAppearance } from './theme';
 import { Toaster } from './toast';
+
+const Overview = lazy(() => import('./pages/Overview').then((module) => ({ default: module.Overview })));
+const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })));
+const ImageDetail = lazy(() => import('./pages/ImageDetail').then((module) => ({ default: module.ImageDetail })));
+const Agents = lazy(() => import('./pages/Agents').then((module) => ({ default: module.Agents })));
+const AgentsRun = lazy(() => import('./pages/Agents').then((module) => ({ default: module.AgentsRun })));
+const Capture = lazy(() => import('./pages/Capture').then((module) => ({ default: module.Capture })));
+const Corpus = lazy(() => import('./pages/Corpus').then((module) => ({ default: module.Corpus })));
+const Capabilities = lazy(() => import('./pages/Capabilities').then((module) => ({ default: module.Capabilities })));
+const Settings = lazy(() => import('./pages/Settings').then((module) => ({ default: module.Settings })));
 
 type HealthState = 'ok' | 'proxied' | 'exposed' | 'down';
 
@@ -119,7 +122,7 @@ function NavRow({
  * will click four times in a row. `element.animate` is hardware-accelerated all the same, and cancelling the
  * previous run is one call.
  */
-function BrandMark(): JSX.Element {
+export function BrandMark(): JSX.Element {
   const ref = useRef<HTMLButtonElement>(null);
   const spin = useRef<Animation | null>(null);
 
@@ -444,6 +447,7 @@ function ContextHeader(): JSX.Element {
 
 /** App shell — persistent grouped sidebar that becomes a drawer on narrow viewports. */
 function Shell(): JSX.Element {
+  const t = useMessages();
   const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
   const sidebarRef = useRef<HTMLElement>(null);
@@ -490,21 +494,29 @@ function Shell(): JSX.Element {
           </div>
         </div>
         <div className="content">
-          <Routes>
-            <Route path="/" element={<Overview />} />
-            <Route path="/analyze" element={<Dashboard />} />
-            <Route path="/image/:id" element={<ImageDetail />} />
-            <Route path="/image/:id/:section" element={<ImageDetail />} />
-            <Route path="/agents" element={<Agents />} />
-            {/* A run opens INSIDE Agents. The old console navigated to /image/:id/opacidad, which is the
-                static-analysis shell — so a click on a result silently changed which section you were in. */}
-            <Route path="/agents/:imageId/:kind" element={<AgentsRun />} />
-            <Route path="/updates" element={<Capture />} />
-            <Route path="/capture" element={<Capture />} />
-            <Route path="/corpus" element={<Corpus />} />
-            <Route path="/capabilities" element={<Capabilities />} />
-            <Route path="/settings" element={<Settings />} />
-          </Routes>
+          <Suspense
+            fallback={
+              <div className="empty" aria-busy="true">
+                {t.common.loading}
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<Overview />} />
+              <Route path="/analyze" element={<Dashboard />} />
+              <Route path="/image/:id" element={<ImageDetail />} />
+              <Route path="/image/:id/:section" element={<ImageDetail />} />
+              <Route path="/agents" element={<Agents />} />
+              {/* A run opens INSIDE Agents. The old console navigated to /image/:id/opacidad, which is the
+                  static-analysis shell — so a click on a result silently changed which section you were in. */}
+              <Route path="/agents/:imageId/:kind" element={<AgentsRun />} />
+              <Route path="/updates" element={<Capture />} />
+              <Route path="/capture" element={<Capture />} />
+              <Route path="/corpus" element={<Corpus />} />
+              <Route path="/capabilities" element={<Capabilities />} />
+              <Route path="/settings" element={<Settings />} />
+            </Routes>
+          </Suspense>
         </div>
       </div>
     </div>

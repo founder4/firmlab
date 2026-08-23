@@ -276,7 +276,7 @@ export function UpdatePathPanel({ imageId }: { imageId: string }): JSX.Element {
   const allFollowed = chains.length > 0 && chains.every((c) => c.followed);
 
   return (
-    <div className="panel" style={{ marginTop: 16 }}>
+    <div className="panel updatepath-panel" style={{ marginTop: 16 }}>
       <div className="panel-title">{t.updatepath.title}</div>
       <div className="panel-sub">{t.updatepath.sub}</div>
 

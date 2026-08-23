@@ -11,6 +11,7 @@
  *   • the visible text of the section, so an assertion can be made about content rather than about pixels.
  *
  * Usage:  node drive.mjs <route> <out.png> [--click "<text>"] [--wait <ms>] [--theme dark|light]
+ *                                             [--viewport <width>x<height>]
  */
 import { chromium } from 'playwright';
 
@@ -22,10 +23,17 @@ const arg = (name, dflt) => {
 const BASE = process.env.FIRMLAB_UI ?? 'http://127.0.0.1:8899';
 
 const theme = arg('--theme', 'dark') === 'light' ? 'light' : 'dark';
+const viewportArg = arg('--viewport', '1440x1000');
+const viewportMatch = /^(\d{3,4})x(\d{3,4})$/.exec(viewportArg);
+if (!viewportMatch) throw new Error(`Invalid --viewport "${viewportArg}"; expected WIDTHxHEIGHT, e.g. 390x844`);
+const viewport = { width: Number(viewportMatch[1]), height: Number(viewportMatch[2]) };
+if (viewport.width < 240 || viewport.height < 240) {
+  throw new Error(`Invalid --viewport "${viewportArg}"; width and height must both be at least 240`);
+}
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({
-  viewport: { width: 1440, height: 1000 },
+  viewport,
   deviceScaleFactor: 2,
   colorScheme: theme,
 });
@@ -118,6 +126,7 @@ const text = (
 ).replace(/\n{3,}/g, '\n\n');
 console.log(`URL      ${url}`);
 console.log(`TITLE    ${await page.title()}`);
+console.log(`VIEWPORT ${viewport.width}x${viewport.height}`);
 console.log(`SHOT     ${out}`);
 console.log(`ERRORS   ${consoleErrors.length ? `\n  - ${consoleErrors.join('\n  - ')}` : 'none'}`);
 console.log(

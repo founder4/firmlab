@@ -57,6 +57,7 @@ import { SymReachPanel } from '../components/SymReachPanel';
 import { TestBench } from '../components/TestBench';
 import { UpdatePathPanel } from '../components/UpdatePathPanel';
 import { type Messages, messages, useLocale, useMessages } from '../i18n';
+import { type ImageSectionId, SECTION_IDS } from '../image-sections';
 import { Markdown } from '../markdown';
 import { toast } from '../toast';
 
@@ -69,34 +70,7 @@ import { toast } from '../toast';
  * `SECTION_TITLES` map beside the catalogue's, which is two lists of the same thing and one commit away from
  * disagreeing.
  */
-export const SECTION_IDS = [
-  'dossier',
-  'overview',
-  'structure',
-  'entropy',
-  'filesystem',
-  'files',
-  'secrets',
-  'hardware',
-  'bootloader',
-  'sbom',
-  'compmap',
-  'deepscans',
-  'binvuln',
-  'kernel',
-  'kmod',
-  'binaries',
-  'testbench',
-  'findings',
-  'operator',
-  'diff',
-  'simulate',
-  'egress',
-  'opacidad',
-  'agent',
-] as const satisfies readonly (keyof Messages['sections'])[];
-
-type TabId = (typeof SECTION_IDS)[number];
+type TabId = ImageSectionId;
 
 const SECTION_SET: ReadonlySet<string> = new Set<string>(SECTION_IDS);
 

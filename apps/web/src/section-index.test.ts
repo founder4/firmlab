@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SECTION_IDS } from './pages/ImageDetail';
+import { SECTION_IDS } from './image-sections';
 import { SECTION_GROUPS, groupedSections, needsRootfs, reachableBefore, sectionReadiness } from './section-index.js';
 
 describe('sectionReadiness — an unrun extraction is not an extraction that found nothing', () => {

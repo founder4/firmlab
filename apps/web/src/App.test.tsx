@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { App, Sidebar } from './App';
+import { App, BrandMark, Sidebar } from './App';
 import { api } from './api';
 import { Dashboard } from './pages/Dashboard';
 import { mockedApi } from './test-api-mock';
@@ -132,12 +132,13 @@ describe('App shell', () => {
       expect(screen.getByRole('link', { name: 'Component map' }).className).not.toContain('active');
     });
 
-    it('shows no section nav at all when no firmware is active', () => {
+    it('shows no section nav at all when no firmware is active', async () => {
       render(
         <MemoryRouter>
           <Sidebar onNavigate={() => undefined} />
         </MemoryRouter>,
       );
+      await act(async () => undefined);
       expect(screen.queryByLabelText('Analysis sections for this firmware')).not.toBeInTheDocument();
     });
 
@@ -235,8 +236,7 @@ describe('the brand mark', () => {
   };
 
   it('is hidden from assistive tech and out of the tab order — it does nothing, so it announces nothing', () => {
-    mockApi.listImages.mockResolvedValue([]);
-    const { container } = render(<App />);
+    const { container } = render(<BrandMark />);
     const mark = markOf(container);
     expect(mark.getAttribute('aria-hidden')).toBe('true');
     expect(mark.getAttribute('tabindex')).toBe('-1');
@@ -247,8 +247,7 @@ describe('the brand mark', () => {
 
   it('plays on click', () => {
     const animate = setup(false);
-    mockApi.listImages.mockResolvedValue([]);
-    const { container } = render(<App />);
+    const { container } = render(<BrandMark />);
     fireEvent.click(markOf(container));
     // The tumble plus one animation per spark.
     expect(animate.mock.calls.length).toBeGreaterThan(1);
@@ -258,8 +257,7 @@ describe('the brand mark', () => {
     // The press feedback survives, in CSS, because that is a response rather than decoration — but no element
     // here may be set in motion by script when the reader has asked for none.
     const animate = setup(true);
-    mockApi.listImages.mockResolvedValue([]);
-    const { container } = render(<App />);
+    const { container } = render(<BrandMark />);
     fireEvent.click(markOf(container));
     expect(animate).not.toHaveBeenCalled();
   });
@@ -268,8 +266,7 @@ describe('the brand mark', () => {
     // They are appended to the button and removed when they finish. A leak here would grow the shell's DOM for
     // every click, forever, on the one element that is on screen all day.
     const animate = setup(false);
-    mockApi.listImages.mockResolvedValue([]);
-    const { container } = render(<App />);
+    const { container } = render(<BrandMark />);
     const mark = markOf(container);
     fireEvent.click(mark);
     expect(animate).toHaveBeenCalled();
