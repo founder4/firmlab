@@ -40,8 +40,7 @@
       "sha256": "b93c8dfb93fa2db5e14f60db8e7deaba23a5f87a11f7f45faaf505ef85ead918",
       "sourceUrl": "https://github.com/FrameworkComputer/qmk_firmware/releases/download/v0.3.1/framework_ansi_default_v0.3.1.bin",
       "upstreamReference": "https://github.com/FrameworkComputer/qmk_firmware/releases/tag/v0.3.1",
-      "expected": {},
-      "knownGap": "The current static classifier reports unknown; retained as a hardware/monolithic-firmware regression sample."
+      "expected": { "firmwareClass": "rtos", "arch": "arm" }
     }
   ]
 }

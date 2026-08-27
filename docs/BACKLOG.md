@@ -26,12 +26,14 @@
 - [x] Desglosar el censo por semántica: establecido, pista, bloqueo, descartado, testimonio y otros; `unproven` queda sólo como agregado de compatibilidad.
 - [x] Fijar una matriz ejecutable del corpus (SHA/tamaño/clase/arquitectura, stages y gates) y ampliarlo de 19 a 23 muestras con BIOS Framework oficial, Contiki, Zephyr y QMK.
 - [x] Correlacionar kernel y módulos con CVE sin sobreactuar la evidencia: CPE del kernel restringido a la CNA de Linux, prefijo/truncación explícitos y NetUSB ligado a CVE-2015-3036 sólo por identidad byte-level.
+- [x] Cerrar el hueco QMK con evidencia binaria: `boot2` y vector XIP de RP2040, más marcadores QMK corroborados; la muestra oficial queda clasificada como `rtos`/`arm` sin depender del nombre del fichero.
+- [x] Convertir el límite FwHunt en una campaña reanudable por lotes disjuntos, con cobertura acumulada y denominador visible; el segundo lote real del BIOS Framework recorrió las posiciones 13–24 de 409, sin fallos de lectura.
+- [x] Evitar que `opacidad` pise una campaña FwHunt dedicada: exclusión mutua por imagen, reutilización del resultado durable, reinicio explícito y reintento automático de lotes con módulos fallidos.
 
 ## Siguiente
 
-- [ ] Cerrar el hueco de clasificación QMK: la muestra oficial permanece `unknown`, por lo que el plan no reconoce todavía su familia RTOS/teclado pese a conservarla como fallo medido.
-- [ ] Reducir el límite de cobertura FwHunt observado en el BIOS Framework: 12 de 409 módulos analizados y 397 declarados fuera del presupuesto; mejorar ranking o barrido por lotes sin esconder el denominador.
 - [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 40 celdas `not-run`, 80 `degraded` y 21 `no-input` entre 376 etapas aplicables; priorizar por clase y coste.
+- [ ] Compactar el historial FwHunt: cada snapshot conserva la acumulación completa y duplica veredictos entre el agregado y sus lotes, por lo que una campaña larga crece cuadráticamente en SQLite y en la respuesta de polling.
 - [ ] Profundizar la correlación de kernel: el prefijo NVD puede tener miles de CVE (2.037 para Linux 2.6.31); usar config/subsistema, diff de parches o VEX de proveedor para descartar candidatos y paginar más allá de las primeras 50 sin presentarlas como el conjunto.
 - [ ] Hacer que la reparación del invitado alcance una ruta ejecutada y recuperar red/console interactiva en full-system; la intervención al final de `rcS` sigue siendo inerte.
 - [ ] Ampliar RTOS a fuzzing de periféricos/MMIO y enumeración de tareas; Renode demuestra vida, no cobertura del HAL.

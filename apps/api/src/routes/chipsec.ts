@@ -7,7 +7,14 @@
 import type { FastifyInstance } from 'fastify';
 import { type FindingDraft, syncFindings } from '../findings.js';
 import { type ChipsecResult, detectChipsec, runChipsec } from '../providers/chipsec.js';
-import { runFwHunt } from '../providers/fwhunt.js';
+import {
+  DEFAULT_TIMEOUT_MS,
+  hasActiveFwHuntJob,
+  hasActiveOpacidadJob,
+  latestFwHuntResult,
+  nextModuleBatch,
+  runFwHunt,
+} from '../providers/fwhunt.js';
 import { startJob } from '../providers/jobs.js';
 import { getImage, listJobs } from '../store.js';
 
@@ -57,8 +64,50 @@ export async function chipsecRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const row = getImage(id);
     if (!row) return reply.status(404).send({ error: 'Image not found' });
-    const jobId = startJob(id, 'fwhunt', {}, async (handle) => {
-      const result = await runFwHunt(row.path, handle);
+    const jobs = listJobs(id);
+    if (hasActiveFwHuntJob(jobs) || hasActiveOpacidadJob(jobs)) {
+      return reply
+        .status(409)
+        .send({ error: 'FwHunt is already owned by a queued/running FwHunt or autonomous job for this image' });
+    }
+
+    const body = (req.body ?? {}) as { moduleBatch?: unknown; restart?: unknown };
+    if (
+      body.moduleBatch !== undefined &&
+      (typeof body.moduleBatch !== 'number' || !Number.isSafeInteger(body.moduleBatch) || body.moduleBatch < 0)
+    ) {
+      return reply.status(400).send({ error: 'moduleBatch must be a non-negative integer (zero-based)' });
+    }
+    if (body.restart !== undefined && typeof body.restart !== 'boolean') {
+      return reply.status(400).send({ error: 'restart must be a boolean' });
+    }
+    if (body.restart === true && body.moduleBatch !== undefined) {
+      return reply.status(400).send({ error: 'restart and moduleBatch cannot be supplied together' });
+    }
+    // An unavailable/no-carve attempt carries no resumable evidence. The shared lookup keeps this route and the
+    // autonomous orchestrator on the same newest durable campaign; the provider still fingerprint-checks it.
+    const previous = latestFwHuntResult(jobs);
+    if (
+      typeof body.moduleBatch === 'number' &&
+      previous?.modulePass &&
+      previous.modulePass.batchCount > 0 &&
+      body.moduleBatch >= previous.modulePass.batchCount
+    ) {
+      return reply.status(400).send({
+        error: `moduleBatch ${body.moduleBatch} is outside the known zero-based range 0-${previous.modulePass.batchCount - 1}`,
+      });
+    }
+    const restarting = body.restart === true;
+    const moduleBatch = restarting ? 0 : (body.moduleBatch ?? nextModuleBatch(previous?.modulePass));
+    if (moduleBatch === null) {
+      return reply.status(409).send({ error: 'All FwHunt module batches are already complete for this image' });
+    }
+
+    const jobId = startJob(id, 'fwhunt', { moduleBatch, restart: restarting }, async (handle) => {
+      const result = await runFwHunt(row.path, handle, DEFAULT_TIMEOUT_MS, {
+        moduleBatch,
+        previousModulePass: restarting ? null : (previous?.modulePass ?? null),
+      });
       syncFindings(id, 'fwhunt', result.findings);
       return result;
     });

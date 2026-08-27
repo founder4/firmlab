@@ -12,7 +12,7 @@
  * Every decision is in `capabilities.ts` and unit-tested without a DOM; this file renders and fetches.
  */
 import { type JSX, useEffect, useState } from 'react';
-import { api } from '../api';
+import { type FwHuntResultView, type Job, api } from '../api';
 import {
   type CapabilityId,
   type CapabilityResultBase,
@@ -41,6 +41,58 @@ const CAPABILITIES: ReadonlyArray<{ id: CapabilityId; label: string; unlocks: st
 ];
 
 type Loaded = Record<string, CapabilityResultBase | null>;
+
+function fwhuntBatchState(result: CapabilityResultBase | null): {
+  current: number;
+  total: number;
+  scanned: number;
+  carved: number;
+  canContinue: boolean;
+  incomplete: boolean;
+  restart: boolean;
+  legacy: boolean;
+} | null {
+  const pass = (result as FwHuntResultView | null)?.modulePass;
+  if (!pass) return null;
+  const current = pass?.batchIndex;
+  const total = pass?.batchCount;
+  const scanned = pass.modulesScanned?.length ?? 0;
+  const carved = pass.modulesCarved ?? 0;
+  if (typeof current !== 'number' || typeof total !== 'number' || total <= 0) {
+    return {
+      current: 0,
+      total: 0,
+      scanned,
+      carved,
+      canContinue: true,
+      incomplete: false,
+      restart: true,
+      legacy: true,
+    };
+  }
+  const record = pass?.batches?.find((batch) => batch.index === current);
+  const incomplete = record?.complete === false;
+  const completed = new Set(pass?.batchesCompleted ?? []);
+  const allComplete = completed.size >= total;
+  return {
+    current,
+    total,
+    scanned,
+    carved,
+    canContinue: true,
+    incomplete,
+    restart: allComplete,
+    legacy: false,
+  };
+}
+
+async function waitForJob(jobId: string): Promise<Job> {
+  for (;;) {
+    const job = await api.job(jobId);
+    if (job.status === 'done' || job.status === 'error') return job;
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+  }
+}
 
 /** The number line for one row. An absent denominator says so instead of being printed as a zero. */
 function Coverage({ id, result }: { id: CapabilityId; result: CapabilityResultBase | null }): JSX.Element | null {
@@ -114,8 +166,15 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
     setBusy(id);
     try {
       if (id === 'yarascan') await api.runYarascan(imageId);
-      else if (id === 'fwhunt') await api.runFwhunt(imageId);
-      else if (id === 'nvram') await api.runNvram(imageId);
+      else if (id === 'fwhunt') {
+        const batch = fwhuntBatchState(loaded.fwhunt ?? null);
+        const { jobId } = batch?.restart ? await api.runFwhunt(imageId, undefined, true) : await api.runFwhunt(imageId);
+        const job = await waitForJob(jobId);
+        if (job.status === 'done') {
+          const result = await api.fwhuntResult(imageId);
+          setLoaded((current) => ({ ...current, fwhunt: result }));
+        }
+      } else if (id === 'nvram') await api.runNvram(imageId);
     } finally {
       setBusy(null);
     }
@@ -132,6 +191,7 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
         {CAPABILITIES.map((cap) => {
           const result = loaded[cap.id] ?? null;
           const state: CapabilityState = capabilityState(result);
+          const fwhuntBatch = cap.id === 'fwhunt' ? fwhuntBatchState(result) : null;
           // funcdiff needs a baseline image, so its "nothing here" has a third cause worth naming rather than being
           // reported as a stage nobody ran.
           const notRunBody = cap.id === 'funcdiff' ? t.capabilities.needsBaseline : t.capabilities.states.notRun.body;
@@ -154,6 +214,19 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
                     {busy === cap.id ? t.capabilities.running : t.capabilities.run}
                   </button>
                 )}
+                {cap.id === 'fwhunt' && state.kind === 'ran' && fwhuntBatch?.canContinue && (
+                  <button type="button" onClick={() => void run(cap.id)} disabled={busy === cap.id}>
+                    {busy === cap.id
+                      ? t.capabilities.running
+                      : fwhuntBatch.legacy
+                        ? t.capabilities.startCampaign
+                        : fwhuntBatch.restart
+                          ? t.capabilities.restartCampaign
+                          : fwhuntBatch.incomplete
+                            ? t.capabilities.resumeBatch
+                            : t.capabilities.nextBatch}
+                  </button>
+                )}
               </div>
               <span className="hint" style={{ maxWidth: '72ch' }}>
                 {cap.unlocks}
@@ -162,6 +235,17 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
                 {state.kind === 'not-run' ? notRunBody : t.capabilities.states[state.kind].body}
               </span>
               {state.kind === 'ran' && <Coverage id={cap.id} result={result} />}
+              {cap.id === 'fwhunt' && state.kind === 'ran' && fwhuntBatch && !fwhuntBatch.legacy && (
+                <span className="hint" data-role="fwhunt-batch" style={{ maxWidth: '72ch' }}>
+                  {t.capabilities.batchCoverage({
+                    current: fwhuntBatch.current + 1,
+                    total: fwhuntBatch.total,
+                    scanned: fwhuntBatch.scanned,
+                    carved: fwhuntBatch.carved,
+                    incomplete: fwhuntBatch.incomplete,
+                  })}
+                </span>
+              )}
               {state.kind === 'ran' && cap.id === 'dynprobe' && (
                 <span className="hint" data-role="control-offset" style={{ maxWidth: '72ch' }}>
                   {typeof (result as { controlOffset?: number | null } | null)?.controlOffset === 'number'

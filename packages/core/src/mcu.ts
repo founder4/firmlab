@@ -75,6 +75,58 @@ function u32(b: Uint8Array, o: number, le: boolean): number {
   return (le ? x0 | (x1 << 8) | (x2 << 16) | (x3 << 24) : (x0 << 24) | (x1 << 16) | (x2 << 8) | x3) >>> 0;
 }
 
+/** RP2040 flash images start with a 252-byte second-stage bootloader followed by its CRC32. */
+const RP2040_BOOT2_SIZE = 256;
+/** The application vector table immediately follows boot2 in the XIP address space. */
+const RP2040_VECTOR_OFFSET = RP2040_BOOT2_SIZE;
+
+/**
+ * RP2040 boot-ROM CRC32: non-reflected CRC-32/MPEG-2 (poly 0x04C11DB7, init 0xFFFFFFFF). The boot ROM checks
+ * this over bytes 0..251 and reads the expected little-endian value from bytes 252..255. This is deliberately
+ * kept local rather than accepting an arbitrary caller-provided checksum: a matching 32-bit CRC plus the
+ * RP2040-specific XIP vector map is the device-family evidence.
+ */
+function rp2040Boot2Crc(buf: Uint8Array): number {
+  let crc = 0xffff_ffff;
+  for (let i = 0; i < RP2040_BOOT2_SIZE - 4; i++) {
+    crc = (crc ^ ((buf[i] ?? 0) << 24)) >>> 0;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = crc & 0x8000_0000 ? ((crc << 1) ^ 0x04c1_1db7) >>> 0 : (crc << 1) >>> 0;
+    }
+  }
+  return crc;
+}
+
+export interface Rp2040FlashInfo {
+  /** Offset of the Cortex-M0+ application vector table in the raw flash image. */
+  vectorOffset: number;
+  /** Initial stack pointer read from the application vector table. */
+  initialSP: number;
+  /** Thumb reset-handler address read from the application vector table. */
+  resetHandler: number;
+}
+
+/**
+ * Detect a raw RP2040 XIP flash image from hardware-enforced structure, without filenames or product strings.
+ * The RP2040 boot ROM copies exactly 256 bytes from flash, validates the last word as the CRC32 of the first
+ * 252 bytes, and executes boot2; boot2 then enters the Cortex-M vector table at XIP+0x100. Requiring all three
+ * facts (CRC, an RP2040 SRAM stack pointer, and a Thumb reset handler in its 16 MiB XIP window) makes this much
+ * stronger than guessing ARM from instruction-looking bytes.
+ */
+export function parseRp2040Flash(buf: Uint8Array): Rp2040FlashInfo | null {
+  if (buf.length < RP2040_VECTOR_OFFSET + 8) return null;
+  const storedCrc = u32(buf, RP2040_BOOT2_SIZE - 4, true);
+  if (storedCrc !== rp2040Boot2Crc(buf)) return null;
+
+  const initialSP = u32(buf, RP2040_VECTOR_OFFSET, true);
+  const resetHandler = u32(buf, RP2040_VECTOR_OFFSET + 4, true);
+  const spOk = initialSP > 0x2000_0000 && initialSP <= 0x2004_2000 && (initialSP & 0x3) === 0;
+  const resetAddress = (resetHandler & ~1) >>> 0;
+  const resetOk = (resetHandler & 1) === 1 && resetAddress >= 0x1000_0100 && resetAddress < 0x1100_0000;
+  if (!spOk || !resetOk) return null;
+  return { vectorOffset: RP2040_VECTOR_OFFSET, initialSP, resetHandler };
+}
+
 interface Layout {
   isElf: boolean;
   arch: McuArch;
@@ -146,6 +198,30 @@ function decodeAscii(buf: Uint8Array): string {
     out += String.fromCharCode(...buf.subarray(i, Math.min(end, i + 0x8000)));
   }
   return out.toLowerCase();
+}
+
+/**
+ * QMK debug/configuration strings that survive in console-enabled keyboard builds. The first two name QMK's
+ * EEPROM/RGB APIs rather than generic USB-keyboard behavior, while the latter two corroborate the keyboard
+ * protocol path. Requiring at least one API marker and two total markers avoids calling any RP2040 USB device
+ * QMK because it happens to print a generic suspend message.
+ */
+const QMK_MARKERS = [
+  'eeconfig_update_rgb_matrix_default',
+  'rgb_matrix_config eeprom',
+  'xkeyboard_report:',
+  'suspending keyboard',
+] as const;
+
+function qmkMarkersFromText(text: string): string[] {
+  const hits = QMK_MARKERS.filter((marker) => text.includes(marker));
+  const hasQmkApi = hits.includes(QMK_MARKERS[0]) || hits.includes(QMK_MARKERS[1]);
+  return hasQmkApi && hits.length >= 2 ? [...hits] : [];
+}
+
+/** Return corroborated QMK markers embedded in the firmware, or an empty list when the evidence is insufficient. */
+export function qmkFirmwareMarkers(buf: Uint8Array): string[] {
+  return qmkMarkersFromText(decodeAscii(buf));
 }
 
 /**
@@ -288,21 +364,40 @@ export function parsePicobin(buf: Uint8Array): PicobinInfo | null {
 /** Build the fingerprint. `buf` should be the firmware bytes (the caller may cap very large buffers). */
 export function fingerprintMcu(buf: Uint8Array): McuFingerprint {
   const layout = parseElfLayout(buf);
-  const map = layout.isElf ? layout : (parseVectorTable(buf) ?? layout);
+  const rp2040 = layout.isElf ? null : parseRp2040Flash(buf);
+  const rp2040Layout: Layout | null = rp2040
+    ? {
+        isElf: false,
+        arch: 'arm',
+        flashBase: 0x1000_0000,
+        ramBase: 0x2000_0000,
+      }
+    : null;
+  const map = layout.isElf ? layout : (rp2040Layout ?? parseVectorTable(buf) ?? layout);
   const text = decodeAscii(buf);
+  const qmkMarkers = rp2040 ? qmkMarkersFromText(text) : [];
   const evidence: string[] = [];
 
-  let family: string | null = null;
-  let vendor: string | null = null;
+  let family: string | null = rp2040 ? 'rp2040' : null;
+  let vendor: string | null = rp2040 ? 'raspberrypi' : null;
   let markerArch: McuArch = 'unknown';
-  for (const rule of FAMILY_RULES) {
-    const m = text.match(rule.re);
-    if (m) {
-      family = rule.family(m);
-      vendor = rule.vendor;
-      markerArch = rule.arch;
-      evidence.push(`family marker "${m[0]}" → ${family} (${vendor})`);
-      break;
+  if (rp2040) {
+    evidence.push('RP2040 boot2 CRC32 + Cortex-M0+ XIP vector table');
+  }
+  if (qmkMarkers.length > 0) {
+    evidence.push(`QMK markers "${qmkMarkers.join('", "')}"`);
+  }
+  // Hardware-validated RP2040 structure wins over incidental SDK strings naming some other supported target.
+  if (!rp2040) {
+    for (const rule of FAMILY_RULES) {
+      const m = text.match(rule.re);
+      if (m) {
+        family = rule.family(m);
+        vendor = rule.vendor;
+        markerArch = rule.arch;
+        evidence.push(`family marker "${m[0]}" → ${family} (${vendor})`);
+        break;
+      }
     }
   }
 
@@ -316,10 +411,12 @@ export function fingerprintMcu(buf: Uint8Array): McuFingerprint {
   if (part) evidence.push(`part token "${part}"`);
 
   const coreMatch = text.match(CORE_RE);
-  const cortexM = coreMatch ? normalizeCore(coreMatch[1] ?? '') : null;
+  const cortexM = rp2040 ? 'cortex-m0plus' : coreMatch ? normalizeCore(coreMatch[1] ?? '') : null;
   if (cortexM) evidence.push(`core "${cortexM}"`);
 
-  let rtos: string | null = null;
+  // QMK itself is directly evidenced by the embedded API/configuration markers. Do not claim its underlying
+  // platform port (for example ChibiOS) unless that runtime also leaves its own banner in the image.
+  let rtos: string | null = qmkMarkers.length > 0 ? 'qmk' : null;
   for (const r of RTOS_RULES) {
     if (r.re.test(text)) {
       rtos = r.name;

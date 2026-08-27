@@ -39,7 +39,15 @@ export const capabilities = {
   findings: (n: number) => (n === 1 ? '1 finding' : `${n} findings`),
   reasonLabel: 'The provider says:',
   run: 'Run',
+  nextBatch: 'Run next FwHunt batch',
+  resumeBatch: 'Resume FwHunt batch',
+  startCampaign: 'Start resumable FwHunt campaign',
+  restartCampaign: 'Rerun full FwHunt campaign',
   running: 'Running…',
+  batchCoverage: (p: { current: number; total: number; scanned: number; carved: number; incomplete: boolean }) =>
+    `FwHunt module batch ${p.current}/${p.total} · ${p.scanned}/${p.carved} modules accumulated${
+      p.incomplete ? ' · this batch is incomplete and will be resumed before advancing' : ''
+    }`,
 
   /**
    * The offset at which the input controls the saved return address — the whole point of the dynamic probe, and the

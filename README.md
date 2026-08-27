@@ -314,7 +314,7 @@ layered on later, always additive.
 | **3** | **Decision nodes** ①②, governor, auditable/resumable sessions, human-approval gate | ✅ Shipped |
 | **4** | **Zero-day** node ④, deterministic taint scaffold, OS-primitive session isolation, opt-in AFL++ | ✅ Shipped |
 | **5** | External **intelligence** — provenance + OSV + security.txt, egress ledger (own flag) | ✅ Shipped |
-| **▶** | **In progress** — QMK classification, deeper UEFI-module coverage, closing matrix `not-run` cells, full-system guest networking | 🔨 Ongoing |
+| **▶** | **In progress** — completing the resumable UEFI-module campaign, closing matrix `not-run` cells, full-system guest networking | 🔨 Ongoing |
 
 Earlier phases hardened the deterministic workbench itself: arch refinement, gitleaks deep-scan, firmware diff
 with content hashes, report export, a bounded job queue, data retention/quota, an expanded signature pack, Ghidra

@@ -5,7 +5,7 @@ long work session, grounded in a precise review of the current tree (file refere
 
 ---
 
-## Current baseline — 2026-08-23
+## Current baseline — 2026-08-27
 
 - Reproducible deploy contract, CI audit/type/test/build/Docker smoke, and exact OCI revision checks are shipped.
 - The web restores persisted deep-analysis results, lazy-loads routes, and has been exercised at 390×844; the main
@@ -16,8 +16,11 @@ long work session, grounded in a precise review of the current tree (file refere
   cells (110 found, 125 ran-empty, 80 degraded, 21 no-input, 40 not-run).
 - Kernel versions now correlate through a Linux-CNA-scoped NVD query; module correlation requires byte-level
   identity anchors and remains a lead. Neither path promotes version presence to device exploitability.
+- The official Framework QMK image now classifies as `rtos`/`arm` from RP2040 boot structure and corroborated QMK
+  markers. FwHunt module coverage is resumable in deterministic batches; the second real Framework batch scanned
+  ranking positions 13–24 of 409 with no module-read failures.
 
-Next, in order: classify the QMK sample; expand FwHunt beyond 12/409 modules on the Framework BIOS; drive down
+Next, in order: run the scheduled corpus campaign—including the remaining Framework FwHunt batches—and drive down
 the 40 `not-run` and 80 `degraded` matrix cells; add config/patch/VEX pruning to the kernel-CVE prefix; then return
 to full-system guest networking/console and RTOS peripheral fuzzing. The actionable list lives in
 [`BACKLOG.md`](BACKLOG.md).

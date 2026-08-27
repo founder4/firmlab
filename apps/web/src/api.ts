@@ -449,6 +449,16 @@ export interface FwHuntResultView {
   rulesInCorpus?: number;
   rulesNotApplicable?: number;
   matches?: { rule?: string; category?: string; verdict?: string }[];
+  modulePass?: {
+    batchIndex?: number;
+    batchCount?: number;
+    batchSize?: number;
+    batchesCompleted?: number[];
+    modulesCarved?: number;
+    modulesScanned?: unknown[];
+    modulesScannedThisBatch?: number;
+    batches?: { index?: number; complete?: boolean }[];
+  } | null;
   findings?: unknown[];
 }
 
@@ -1859,7 +1869,11 @@ export const api = {
   runYarascan: (id: string) => post<{ jobId: string }>(`/api/images/${id}/yarascan`),
   fwhuntResult: (id: string) =>
     get<{ result: FwHuntResultView | null }>(`/api/images/${id}/fwhunt`).then((r) => r.result),
-  runFwhunt: (id: string) => post<{ jobId: string }>(`/api/images/${id}/fwhunt`),
+  runFwhunt: (id: string, moduleBatch?: number, restart = false) =>
+    post<{ jobId: string }>(`/api/images/${id}/fwhunt`, {
+      ...(moduleBatch === undefined ? {} : { moduleBatch }),
+      ...(restart ? { restart: true } : {}),
+    }),
   nvramResult: (id: string) => get<{ result: NvramResultView | null }>(`/api/images/${id}/nvram`).then((r) => r.result),
   runNvram: (id: string) => post<{ jobId: string }>(`/api/images/${id}/nvram`),
   funcdiffResult: (id: string, against: string) =>

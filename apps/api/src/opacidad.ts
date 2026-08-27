@@ -76,7 +76,7 @@ import { neuteredFindings } from './providers/extract-neutered.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
 import { runFccLookup } from './providers/fcc.js';
 import { runFsAudit } from './providers/fsaudit.js';
-import { runFwHunt } from './providers/fwhunt.js';
+import { type FwHuntResult, hasActiveFwHuntJob, latestFwHuntResult, runFwHunt } from './providers/fwhunt.js';
 import type { JobHandle } from './providers/jobs.js';
 import { runKernelPosture } from './providers/kernelposture.js';
 import { runKmod } from './providers/kmod.js';
@@ -544,10 +544,8 @@ async function chipsecRun(c: RunCtx): Promise<StepOutcome> {
   return { summary: `UEFI offline decode + posture: ${r.findings.length} findings`, findingCount: r.findings.length };
 }
 
-/** UEFI depth — run the upstream FwHunt rule corpus. A clean scan is never an empty result (see the provider). */
-async function fwhuntRun(c: RunCtx): Promise<StepOutcome> {
-  const r = await runFwHunt(c.imagePath, c.handle);
-  syncFindings(c.imageId, 'fwhunt', r.findings);
+/** Summarize one durable or freshly-run FwHunt result without hiding either coverage denominator. */
+function fwhuntOutcome(r: FwHuntResult, reusedDurableCampaign = false): StepOutcome {
   if (!r.available) {
     return {
       summary: 'FwHunt implant scan: unavailable',
@@ -565,13 +563,46 @@ async function fwhuntRun(c: RunCtx): Promise<StepOutcome> {
   const moduleCoverageThin = !!mp && mp.ran && mp.modulesCarved > 0 && mp.modulesScanned.length * 2 < mp.modulesCarved;
   const modulePassBlocked = !mp || !mp.ran;
   const moduleNote = mp?.ran
-    ? `${mp.modulesScanned.length}/${mp.modulesCarved} carved module(s) scanned — ${mp.modulesSkipped.length} dropped by a bound (${mp.skipReason}); the rest is coverage you did not get`
+    ? `${mp.modulesScanned.length}/${mp.modulesCarved} carved module(s) scanned — ${mp.modulesSkipped.length} dropped by a bound (${mp.skipReason}); the rest is coverage you did not get${reusedDurableCampaign ? '; reused the newest dedicated campaign without replacing it with an isolated batch zero' : ''}`
     : `the per-module pass did not run: ${mp?.reason || 'no module pass'} — only the whole-image rules were exercised`;
   return {
-    summary: `FwHunt implant scan: ${r.matches.length} match(es), ${r.rulesRun}/${r.rulesInCorpus} rule(s) over ${mp?.ran ? `${mp.modulesScanned.length}/${mp.modulesCarved}` : '0'} carved module(s)`,
+    summary: `FwHunt implant scan${reusedDurableCampaign ? ' (reused durable campaign)' : ''}: ${r.matches.length} match(es), ${r.rulesRun}/${r.rulesInCorpus} rule(s) over ${mp?.ran ? `${mp.modulesScanned.length}/${mp.modulesCarved}` : '0'} carved module(s)`,
     findingCount: r.findings.length,
-    ...(moduleCoverageThin || modulePassBlocked ? { degraded: true, note: moduleNote } : {}),
+    ...(moduleCoverageThin || modulePassBlocked
+      ? { degraded: true, note: moduleNote }
+      : reusedDurableCampaign
+        ? {
+            note: 'Reused the newest dedicated, provenance-checked FwHunt campaign; this autonomous run did not replace it with an isolated batch zero.',
+          }
+        : {}),
   };
+}
+
+/**
+ * UEFI depth — run the upstream FwHunt corpus only when no dedicated durable campaign exists.
+ *
+ * Dedicated `/fwhunt` jobs own resumable batch provenance. Re-running opacidad after such a campaign must reuse
+ * and re-sync that exact result: launching an isolated batch zero here would erase the accumulated findings while
+ * leaving the durable campaign row untouched, so the ledger and the campaign endpoint would contradict each other.
+ */
+async function fwhuntRun(c: RunCtx): Promise<StepOutcome> {
+  const jobs = listJobs(c.imageId);
+  const durable = latestFwHuntResult(jobs);
+  if (durable) {
+    syncFindings(c.imageId, 'fwhunt', durable.findings);
+    return fwhuntOutcome(durable, true);
+  }
+  if (hasActiveFwHuntJob(jobs)) {
+    return {
+      summary: 'FwHunt implant scan: dedicated campaign currently active',
+      findingCount: 0,
+      degraded: true,
+      note: 'The autonomous run did not race or overwrite the active dedicated FwHunt job; rerun after that campaign reaches a terminal state.',
+    };
+  }
+  const r = await runFwHunt(c.imagePath, c.handle);
+  syncFindings(c.imageId, 'fwhunt', r.findings);
+  return fwhuntOutcome(r);
 }
 
 async function espRun(c: RunCtx): Promise<StepOutcome> {

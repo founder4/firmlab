@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
 import { setLocale } from '../i18n';
@@ -92,6 +92,129 @@ describe('CapabilityResults — the three states reach the screen and do not sha
     expect(text).toMatch(/17 of 108 rules applied/);
     expect(text).toMatch(/91 rules never applied to this image/);
     expect(text).toMatch(/PARTIAL/);
+  });
+
+  it('runs the next FwHunt batch, keeps the button busy through job completion, and reloads accumulated coverage', async () => {
+    m().fwhuntResult.mockClear();
+    const initial = {
+      available: true,
+      reason: 'batch 1',
+      rulesInCorpus: 108,
+      rulesRun: 102,
+      rulesNotApplicable: 6,
+      modulePass: {
+        batchIndex: 0,
+        batchCount: 35,
+        batchSize: 12,
+        batchesCompleted: [0],
+        batches: [{ index: 0, complete: true }],
+        modulesCarved: 409,
+        modulesScanned: Array.from({ length: 12 }, () => ({})),
+        modulesScannedThisBatch: 12,
+      },
+      findings: [],
+    };
+    const accumulated = {
+      ...initial,
+      reason: 'batch 2 accumulated',
+      modulePass: {
+        ...initial.modulePass,
+        batchIndex: 1,
+        batchesCompleted: [0, 1],
+        batches: [
+          { index: 0, complete: true },
+          { index: 1, complete: true },
+        ],
+        modulesScanned: Array.from({ length: 24 }, () => ({})),
+      },
+    };
+    m().fwhuntResult.mockResolvedValueOnce(initial).mockResolvedValueOnce(accumulated);
+    m().runFwhunt.mockResolvedValue({ jobId: 'fw-job' });
+    m().job.mockResolvedValue({ status: 'done' });
+
+    render(<CapabilityResults imageId="abc" />);
+    const button = await screen.findByRole('button', { name: /next FwHunt batch/i });
+    expect(row('fwhunt').textContent).toContain('12/409 modules accumulated');
+    fireEvent.click(button);
+    await waitFor(() => expect(m().job).toHaveBeenCalledWith('fw-job'));
+    await waitFor(() => expect(row('fwhunt').textContent).toContain('24/409 modules accumulated'));
+    expect(m().runFwhunt).toHaveBeenCalledWith('abc');
+    expect(m().fwhuntResult).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks an incomplete FwHunt batch as resumable instead of presenting the next range as ready', async () => {
+    m().fwhuntResult.mockResolvedValue({
+      available: true,
+      reason: 'budget expired',
+      rulesInCorpus: 108,
+      rulesRun: 102,
+      rulesNotApplicable: 6,
+      modulePass: {
+        batchIndex: 3,
+        batchCount: 35,
+        batchesCompleted: [0, 1, 2],
+        batches: [{ index: 3, complete: false }],
+        modulesCarved: 409,
+        modulesScanned: Array.from({ length: 39 }, () => ({})),
+      },
+      findings: [],
+    });
+    render(<CapabilityResults imageId="abc" />);
+    await waitFor(() => expect(row('fwhunt').textContent).toContain('batch is incomplete'));
+    expect(screen.getByRole('button', { name: /resume FwHunt batch/i })).toBeTruthy();
+  });
+
+  it('offers to upgrade a useful legacy result that predates batch provenance', async () => {
+    m().runFwhunt.mockClear();
+    m().fwhuntResult.mockResolvedValue({
+      available: true,
+      reason: 'legacy bounded scan',
+      rulesInCorpus: 108,
+      rulesRun: 102,
+      rulesNotApplicable: 6,
+      modulePass: {
+        modulesCarved: 409,
+        modulesScanned: Array.from({ length: 12 }, () => ({})),
+      },
+      findings: [],
+    });
+    m().runFwhunt.mockResolvedValue({ jobId: 'legacy-upgrade' });
+    m().job.mockResolvedValue({ status: 'error' });
+
+    render(<CapabilityResults imageId="abc" />);
+    const button = await screen.findByRole('button', { name: /start resumable FwHunt campaign/i });
+    fireEvent.click(button);
+    await waitFor(() => expect(m().runFwhunt).toHaveBeenCalledWith('abc', undefined, true));
+  });
+
+  it('keeps a completed campaign rerunnable from a clean first batch', async () => {
+    m().runFwhunt.mockClear();
+    m().fwhuntResult.mockResolvedValue({
+      available: true,
+      reason: 'complete campaign',
+      rulesInCorpus: 108,
+      rulesRun: 106,
+      rulesNotApplicable: 2,
+      modulePass: {
+        batchIndex: 1,
+        batchCount: 2,
+        batchesCompleted: [0, 1],
+        batches: [
+          { index: 0, complete: true },
+          { index: 1, complete: true },
+        ],
+        modulesCarved: 24,
+        modulesScanned: Array.from({ length: 24 }, () => ({})),
+      },
+      findings: [],
+    });
+    m().runFwhunt.mockResolvedValue({ jobId: 'campaign-restart' });
+    m().job.mockResolvedValue({ status: 'error' });
+
+    render(<CapabilityResults imageId="abc" />);
+    const button = await screen.findByRole('button', { name: /rerun full FwHunt campaign/i });
+    fireEvent.click(button);
+    await waitFor(() => expect(m().runFwhunt).toHaveBeenCalledWith('abc', undefined, true));
   });
 
   it('says the denominator is unknown rather than printing a zero for it', async () => {

@@ -3,7 +3,7 @@
  * identity. This is the deterministic backbone of the "binwalk graphical view" the workbench renders: a
  * ribbon of labeled, colored segments across the image, plus an inferred class/arch/endianness.
  */
-import { parsePicobin } from './mcu.js';
+import { parsePicobin, parseRp2040Flash, qmkFirmwareMarkers } from './mcu.js';
 import type {
   Architecture,
   Endianness,
@@ -280,6 +280,8 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
   const strongFs = STRONG_FS_IDS.filter((f) => ids.has(f));
   const jffs2Nodes = corroboratedJffs2Nodes(buf, hits);
   const picobin = parsePicobin(buf);
+  const rp2040 = parseRp2040Flash(buf);
+  const qmkMarkers = rp2040 ? qmkFirmwareMarkers(buf) : [];
 
   let firmwareClass: FirmwareClass = 'unknown';
   let classRationale: string | undefined;
@@ -301,6 +303,13 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
     const cpuLabel = picobin.cpu === 'riscv' ? 'RISC-V' : picobin.cpu === 'arm' ? 'Arm Cortex-M' : 'an undeclared CPU';
     const chipLabel = picobin.chip ? `${picobin.chip.toUpperCase()} ` : '';
     classRationale = `Bare-metal ${chipLabel}image (PICOBIN, ${cpuLabel}). No filesystem; disassembly must target the declared ISA — reading RISC-V as Arm (or vice-versa) yields garbage (worker W7).`;
+  } else if (rp2040) {
+    firmwareClass = qmkMarkers.length > 0 ? 'rtos' : 'baremetal';
+    arch = 'arm';
+    endianness = 'little';
+    classRationale = qmkMarkers.length
+      ? `QMK keyboard firmware on RP2040 Cortex-M0+ (valid boot2 CRC32, XIP vector table, markers: ${qmkMarkers.join(', ')}). No Linux filesystem; analyze as a monolithic RTOS image (worker W7).`
+      : 'Bare-metal RP2040 Cortex-M0+ flash image (valid boot2 CRC32 and XIP vector table; no RTOS family marker). No Linux filesystem; analyze as a standalone MCU image (worker W7).';
   } else if (ids.has('uefi-fv')) {
     firmwareClass = 'uefi-bios';
     ({ arch, endianness } = inferArch(buf, hits));

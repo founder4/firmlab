@@ -141,6 +141,42 @@ describe('structure + identity', () => {
 });
 
 describe('W0 device-class identity (entropy-gated, non-Linux classes)', () => {
+  it('classifies the official Framework QMK raw RP2040 image as ARM RTOS without filename hints', () => {
+    // Hash-locked release evidence: complete boot2 + vectors, plus QMK strings from the same binary. Keeping only
+    // the decisive bytes demonstrates that classification is independent of the release filename.
+    const prefix = Uint8Array.from(
+      Buffer.from(
+        'ALUySyEgWGCYaAIhiEOYYNhgGGFYYS5LACGZYAQhWWEBIfAimVArSRlgASGZYDUgAPBE+AIikEIU0AYhGWYA8DT4GW4BIRlmACAYZhpmAPAs+BluGW4ZbgUgAPAv+AEhCEL50QAhmWAbSRlgACFZYBpJG0gBYAEhmWDrIRlmoCEZZgDwEvgAIZlgFkkUSAFgASGZYAG8ACgA0ABHEkgTSQhgA8iA8wiICEcDtZlqBCABQvvQASABQvjRA70CtRhmGGb/9/L/GG4YbgK9AAACQAAAABgAAAcAAANfACEiAAD0AAAYIiAAoAABABAI7QDgAAAAAAAAAAAAAAAABwuP1QAEBCDFAgAQ',
+        'base64',
+      ),
+    );
+    const markers = new TextEncoder().encode(
+      '\0eeconfig_update_rgb_matrix_default\0rgb_matrix_config EEPROM\0xkeyboard_report: \0suspending keyboard\0',
+    );
+    const buf = new Uint8Array(prefix.length + markers.length);
+    buf.set(prefix);
+    buf.set(markers, prefix.length);
+    const id = inferIdentity(buf, scanSignatures(buf));
+    expect(id.firmwareClass).toBe('rtos');
+    expect(id.arch).toBe('arm');
+    expect(id.endianness).toBe('little');
+    expect(id.filesystems).toEqual([]);
+    expect(id.classRationale).toMatch(/QMK keyboard.*RP2040.*boot2 CRC32/i);
+  });
+
+  it('keeps a structurally valid RP2040 image without RTOS markers as bare-metal', () => {
+    const buf = Uint8Array.from(
+      Buffer.from(
+        'ALUySyEgWGCYaAIhiEOYYNhgGGFYYS5LACGZYAQhWWEBIfAimVArSRlgASGZYDUgAPBE+AIikEIU0AYhGWYA8DT4GW4BIRlmACAYZhpmAPAs+BluGW4ZbgUgAPAv+AEhCEL50QAhmWAbSRlgACFZYBpJG0gBYAEhmWDrIRlmoCEZZgDwEvgAIZlgFkkUSAFgASGZYAG8ACgA0ABHEkgTSQhgA8iA8wiICEcDtZlqBCABQvvQASABQvjRA70CtRhmGGb/9/L/GG4YbgK9AAACQAAAABgAAAcAAANfACEiAAD0AAAYIiAAoAABABAI7QDgAAAAAAAAAAAAAAAABwuP1QAEBCDFAgAQ',
+        'base64',
+      ),
+    );
+    const id = inferIdentity(buf, scanSignatures(buf));
+    expect(id.firmwareClass).toBe('baremetal');
+    expect(id.arch).toBe('arm');
+    expect(id.classRationale).toMatch(/no RTOS family marker/i);
+  });
+
   it('finds the ESP partition-table magic anchored at 0x8000', () => {
     const buf = new Uint8Array(0x9000);
     buf.set([0xaa, 0x50], 0x8000);

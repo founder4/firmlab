@@ -37,7 +37,15 @@ export const capabilities: typeof en = {
   findings: (n) => (n === 1 ? '1 hallazgo' : `${n} hallazgos`),
   reasonLabel: 'El proveedor dice:',
   run: 'Ejecutar',
+  nextBatch: 'Ejecutar siguiente lote FwHunt',
+  resumeBatch: 'Reanudar lote FwHunt',
+  startCampaign: 'Iniciar campaña FwHunt reanudable',
+  restartCampaign: 'Reejecutar campaña FwHunt completa',
   running: 'Ejecutando…',
+  batchCoverage: (p) =>
+    `Lote de módulos FwHunt ${p.current}/${p.total} · ${p.scanned}/${p.carved} módulos acumulados${
+      p.incomplete ? ' · este lote está incompleto y se reanudará antes de avanzar' : ''
+    }`,
 
   controlOffset: (n) => `la entrada controla la direccion de retorno guardada en el desplazamiento ${n}`,
   controlOffsetNone:

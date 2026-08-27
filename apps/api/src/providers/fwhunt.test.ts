@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   type CarvedModule,
   type CorpusRule,
+  type ModuleBatchRecord,
   type ModulePass,
+  accumulateModulePass,
   buildFwHuntFindings,
   classifyModulePrivilege,
   describeCarvedModule,
+  fingerprintRuleCorpus,
+  fwhuntModuleBatch,
+  latestFwHuntResult,
+  nextModuleBatch,
   parseFwHuntOutput,
   parseRuleMeta,
   rankModulesForScan,
@@ -59,7 +65,7 @@ function carved(name: string): CarvedModule {
 
 /** A rule as the corpus reader hands it over: `name` and `path` carry the module label. */
 function rule(name: string, rulePath = `Threats/${name}.yml`): CorpusRule {
-  return { path: rulePath, name, volumeGuids: 0 };
+  return { path: rulePath, name, volumeGuids: 0, contentDigest: `digest:${rulePath}` };
 }
 
 /**
@@ -67,7 +73,8 @@ function rule(name: string, rulePath = `Threats/${name}.yml`): CorpusRule {
  * description and in neither its `meta.name` nor its filename.
  */
 function describedRule(name: string, description: string): CorpusRule {
-  return { path: `Vulnerabilities/${name}.yml`, name, description, volumeGuids: 0 };
+  const rulePath = `Vulnerabilities/${name}.yml`;
+  return { path: rulePath, name, description, volumeGuids: 0, contentDigest: `digest:${rulePath}` };
 }
 
 function modulePassFixture(over: Partial<ModulePass> = {}): ModulePass {
@@ -77,6 +84,26 @@ function modulePassFixture(over: Partial<ModulePass> = {}): ModulePass {
     verdicts: [],
     unreadableLines: 0,
     modulesCarved: 125,
+    batchIndex: 0,
+    batchCount: 11,
+    batchSize: 12,
+    batchesCompleted: [0],
+    batches: [
+      {
+        index: 0,
+        rangeStart: 0,
+        rangeEnd: 12,
+        complete: true,
+        modulesScanned: [carved('SecMain'), carved('BdsDxe')],
+        modulesFailed: [],
+        verdicts: [],
+        unreadableLines: 0,
+      },
+    ],
+    modulesScannedThisBatch: 2,
+    rankingVersion: 1,
+    rankingFingerprint: 'ranking-v1',
+    corpusFingerprint: 'corpus-v1',
     modulesScanned: [carved('SecMain'), carved('BdsDxe')],
     modulesSkipped: [],
     modulesFailed: [],
@@ -195,10 +222,10 @@ describe('parseRuleMeta — the four fields that decide what a rule may be asked
 
 describe('selectModuleRules — a rule no pass can offer is a hole, not a pass', () => {
   const corpus: CorpusRule[] = [
-    { path: 'Threats/A.yml', name: 'A', volumeGuids: 1 },
-    { path: 'Threats/B.yml', name: 'B', target: 'module', volumeGuids: 0 },
-    { path: 'SupplyChain/C.yml', name: 'C', target: 'firmware', volumeGuids: 0 },
-    { path: 'Threats/D.yml', name: 'D', target: 'bootloader', volumeGuids: 0 },
+    { path: 'Threats/A.yml', name: 'A', volumeGuids: 1, contentDigest: 'a' },
+    { path: 'Threats/B.yml', name: 'B', target: 'module', volumeGuids: 0, contentDigest: 'b' },
+    { path: 'SupplyChain/C.yml', name: 'C', target: 'firmware', volumeGuids: 0, contentDigest: 'c' },
+    { path: 'Threats/D.yml', name: 'D', target: 'bootloader', volumeGuids: 0, contentDigest: 'd' },
   ];
 
   it('offers module rules and refuses firmware/bootloader rules', () => {
@@ -212,6 +239,44 @@ describe('selectModuleRules — a rule no pass can offer is a hole, not a pass',
       { rule: 'C', target: 'firmware' },
       { rule: 'D', target: 'bootloader' },
     ]);
+  });
+});
+
+describe('FwHunt campaign configuration', () => {
+  it('reads a non-negative zero-based batch and rejects fractions, negatives and junk', () => {
+    expect(fwhuntModuleBatch({ FIRMLAB_FWHUNT_MODULE_BATCH: '7' })).toBe(7);
+    expect(fwhuntModuleBatch({ FIRMLAB_FWHUNT_MODULE_BATCH: '-1' })).toBe(0);
+    expect(fwhuntModuleBatch({ FIRMLAB_FWHUNT_MODULE_BATCH: '1.5' })).toBe(0);
+    expect(fwhuntModuleBatch({ FIRMLAB_FWHUNT_MODULE_BATCH: 'nope' })).toBe(0);
+  });
+
+  it('changes the corpus identity when detector bytes change without metadata changing', () => {
+    const a = rule('Detector');
+    const b = { ...a, contentDigest: 'different-yaml-bytes' };
+    expect(fingerprintRuleCorpus([a])).not.toBe(fingerprintRuleCorpus([b]));
+  });
+
+  it('recovers the newest well-formed durable campaign and skips malformed or unavailable attempts', () => {
+    const newestCampaign = { available: true, modulePass: modulePassFixture({ batchIndex: 3 }), findings: [] };
+    const olderCampaign = { available: true, modulePass: modulePassFixture({ batchIndex: 2 }), findings: [] };
+    expect(
+      latestFwHuntResult([
+        { kind: 'fwhunt', status: 'error', resultJson: JSON.stringify({ modulePass: { batchIndex: 9 } }) },
+        { kind: 'fwhunt', status: 'done', resultJson: '{broken' },
+        { kind: 'fwhunt', status: 'done', resultJson: JSON.stringify({ available: false, modulePass: null }) },
+        {
+          kind: 'fwhunt',
+          status: 'done',
+          resultJson: JSON.stringify({
+            available: true,
+            modulePass: modulePassFixture({ ran: false, modulesScanned: [], modulesCarved: 0 }),
+            findings: [],
+          }),
+        },
+        { kind: 'fwhunt', status: 'done', resultJson: JSON.stringify(newestCampaign) },
+        { kind: 'fwhunt', status: 'done', resultJson: JSON.stringify(olderCampaign) },
+      ]),
+    ).toEqual(newestCampaign);
   });
 });
 
@@ -306,6 +371,28 @@ describe('rankModulesForScan — coverage debt, not carve order', () => {
     expect(selected).toHaveLength(4);
     expect(skipped).toEqual([]);
   });
+
+  it('cuts disjoint deterministic windows from one global ranking without hiding either side of the slice', () => {
+    const ten = Array.from({ length: 10 }, (_, i) => carved(`Mod${String(i).padStart(2, '0')}`));
+    const batches = [0, 1, 2].map((batch) =>
+      rankModulesForScan({ modules: [...ten].reverse(), coveredByImageScan: [], cap: 4, batch }),
+    );
+    expect(batches.map((result) => result.selected.map((module) => module.name))).toEqual([
+      ['Mod00', 'Mod01', 'Mod02', 'Mod03'],
+      ['Mod04', 'Mod05', 'Mod06', 'Mod07'],
+      ['Mod08', 'Mod09'],
+    ]);
+    expect(new Set(batches.flatMap((result) => result.selected.map((module) => module.name))).size).toBe(10);
+    expect(batches[1]?.skipped).toHaveLength(6);
+    expect(batches[1]).toMatchObject({ batchIndex: 1, batchCount: 3, batchStart: 4 });
+  });
+
+  it('returns an explicit empty out-of-range window while retaining the full skipped denominator', () => {
+    const result = rankModulesForScan({ modules, coveredByImageScan: [], cap: 2, batch: 7 });
+    expect(result.selected).toEqual([]);
+    expect(result.skipped).toHaveLength(4);
+    expect(result).toMatchObject({ batchIndex: 7, batchCount: 2, batchStart: 14 });
+  });
 });
 
 describe('rankModulesForScan — the corpus names some of these modules, and that is worth a slot', () => {
@@ -392,7 +479,13 @@ describe('rankModulesForScan — the corpus names some of these modules, and tha
       coveredByImageScan: [],
       cap: 2,
       rules: [
-        { path: 'Threats/BravoImplant.yml', name: 'BravoImplant', description: 'an implant in Bravo', volumeGuids: 0 },
+        {
+          path: 'Threats/BravoImplant.yml',
+          name: 'BravoImplant',
+          description: 'an implant in Bravo',
+          volumeGuids: 0,
+          contentDigest: 'bravo',
+        },
         describedRule('BRLY-1', 'the bug is reached through Alpha'),
         describedRule('BRLY-2', 'a second rule about Alpha'),
       ],
@@ -466,6 +559,133 @@ describe('rankModulesForScan — privilege decides when the corpus names nothing
     const b = rankModulesForScan({ modules: [...modules].reverse(), coveredByImageScan: [], cap: 3, rules });
     expect(a.selected.map((m) => m.name)).toEqual(b.selected.map((m) => m.name));
     expect(a.skipped.map((m) => m.name)).toEqual(b.skipped.map((m) => m.name));
+  });
+});
+
+const CAMPAIGN_MODULES = ['Aaa', 'Bbb', 'Ccc', 'Ddd', 'Eee', 'Fff'].map(carved);
+
+function campaignPass(input: {
+  index: number;
+  scanned: number[];
+  failed?: number[];
+  complete?: boolean;
+  unreadableLines?: number;
+  corpusFingerprint?: string;
+  rankingFingerprint?: string;
+  batchSize?: number;
+}): ModulePass {
+  const scanned = input.scanned.map((index) => CAMPAIGN_MODULES[index] as CarvedModule);
+  const failed = (input.failed ?? []).map((index) => CAMPAIGN_MODULES[index] as CarvedModule);
+  const excluded = new Set([...scanned, ...failed].map((module) => module.name));
+  const complete = input.complete ?? true;
+  const verdicts = scanned.map((module) => ({ rule: 'R', matched: false, module: module.name }));
+  const batch: ModuleBatchRecord = {
+    index: input.index,
+    rangeStart: input.index * (input.batchSize ?? 2),
+    rangeEnd: Math.min((input.index + 1) * (input.batchSize ?? 2), CAMPAIGN_MODULES.length),
+    complete,
+    modulesScanned: scanned,
+    modulesFailed: failed,
+    verdicts,
+    unreadableLines: input.unreadableLines ?? 0,
+  };
+  return modulePassFixture({
+    verdicts,
+    unreadableLines: batch.unreadableLines,
+    modulesCarved: CAMPAIGN_MODULES.length,
+    batchIndex: input.index,
+    batchCount: 3,
+    batchSize: input.batchSize ?? 2,
+    batchesCompleted: complete ? [input.index] : [],
+    batches: [batch],
+    modulesScannedThisBatch: scanned.length,
+    rankingFingerprint: input.rankingFingerprint ?? 'same-ranking-and-order',
+    corpusFingerprint: input.corpusFingerprint ?? 'same-full-rule-bytes',
+    modulesScanned: scanned,
+    modulesFailed: failed,
+    modulesSkipped: CAMPAIGN_MODULES.filter((module) => !excluded.has(module.name)),
+    skipReason: 'bounded batch',
+  });
+}
+
+describe('accumulateModulePass — only compatible, attributable batches compose', () => {
+  it('accumulates disjoint windows and exposes inherited versus latest-run coverage', () => {
+    const accumulated = accumulateModulePass(
+      campaignPass({ index: 0, scanned: [0, 1] }),
+      campaignPass({
+        index: 1,
+        scanned: [2, 3],
+      }),
+    );
+    expect(accumulated.modulesScanned.map((module) => module.name).sort()).toEqual(['Aaa', 'Bbb', 'Ccc', 'Ddd']);
+    expect(accumulated.modulesScannedThisBatch).toBe(2);
+    expect(accumulated.modulesSkipped).toHaveLength(2);
+    expect(accumulated.batchesCompleted).toEqual([0, 1]);
+    expect(accumulated.batches.map((batch) => batch.index)).toEqual([0, 1]);
+    expect(accumulated.verdicts).toHaveLength(4);
+    expect(nextModuleBatch(accumulated)).toBe(2);
+  });
+
+  it('replaces a complete repeated window instead of double-counting it', () => {
+    const previous = campaignPass({ index: 0, scanned: [0, 1], unreadableLines: 3 });
+    const repeated = campaignPass({ index: 0, scanned: [0, 1], unreadableLines: 1 });
+    const accumulated = accumulateModulePass(previous, repeated);
+    expect(accumulated.batches).toHaveLength(1);
+    expect(accumulated.verdicts).toHaveLength(2);
+    expect(accumulated.unreadableLines).toBe(1);
+  });
+
+  it('lets a longer incomplete deterministic prefix supersede a shorter one without double-counting', () => {
+    const previous = campaignPass({ index: 0, scanned: [0], complete: false, unreadableLines: 3 });
+    const retry = campaignPass({ index: 0, scanned: [0, 1], complete: false, unreadableLines: 4 });
+    const accumulated = accumulateModulePass(previous, retry);
+    expect(accumulated.modulesScanned).toHaveLength(2);
+    expect(accumulated.unreadableLines).toBe(4);
+    expect(accumulated.batchesCompleted).toEqual([]);
+    expect(nextModuleBatch(accumulated)).toBe(0);
+  });
+
+  it('keeps a window with a failed module incomplete so the automatic cursor retries it', () => {
+    const attempted = campaignPass({ index: 0, scanned: [0], failed: [1], complete: false });
+    expect(attempted.batchesCompleted).toEqual([]);
+    expect(nextModuleBatch(attempted)).toBe(0);
+  });
+
+  it.each([
+    ['corpus bytes', { corpusFingerprint: 'changed-rule-yaml' }],
+    ['ranking order', { rankingFingerprint: 'changed-ranking-order' }],
+    ['batch cap', { batchSize: 3 }],
+  ])('refuses to mix a campaign when %s changed', (_label, change) => {
+    const result = accumulateModulePass(
+      campaignPass({ index: 0, scanned: [0, 1] }),
+      campaignPass({
+        index: 1,
+        scanned: [2, 3],
+        ...change,
+      }),
+    );
+    expect(result.modulesScanned.map((module) => module.name)).toEqual(['Ccc', 'Ddd']);
+    expect(result.campaignResetReason).toBeTruthy();
+  });
+
+  it('refuses a legacy result that lacks per-batch provenance instead of throwing or guessing', () => {
+    const { batches: _batches, ...legacy } = campaignPass({ index: 0, scanned: [0, 1] });
+    const current = campaignPass({ index: 1, scanned: [2, 3] });
+    const result = accumulateModulePass(legacy as ModulePass, current);
+    expect(result.modulesScanned.map((module) => module.name)).toEqual(['Ccc', 'Ddd']);
+    expect(result.campaignResetReason).toContain('predates batch provenance');
+  });
+
+  it('returns no cursor only after every batch is complete', () => {
+    const firstTwo = accumulateModulePass(
+      campaignPass({ index: 0, scanned: [0, 1] }),
+      campaignPass({
+        index: 1,
+        scanned: [2, 3],
+      }),
+    );
+    const all = accumulateModulePass(firstTwo, campaignPass({ index: 2, scanned: [4, 5] }));
+    expect(nextModuleBatch(all)).toBeNull();
   });
 });
 
@@ -636,5 +856,28 @@ describe('buildFwHuntFindings — folding the per-module pass in', () => {
     // The headline must never state the rule fraction without the module fraction beside it.
     expect(note.title).toContain('over 2/125 carved module(s)');
     expect(note.evidence?.rulesMatched).toBe(1);
+  });
+
+  it('states which batch ran now and how much module coverage came from compatible earlier runs', () => {
+    const pass = accumulateModulePass(
+      campaignPass({ index: 0, scanned: [0, 1] }),
+      campaignPass({
+        index: 1,
+        scanned: [2, 3],
+      }),
+    );
+    const drafts = buildFwHuntFindings({ verdicts: imageVerdicts, rulesInCorpus: 108, modulePass: pass });
+    const note = drafts[drafts.length - 1] as (typeof drafts)[number];
+    expect(note.evidence).toMatchObject({
+      moduleBatchIndex: 1,
+      moduleBatchNumber: 2,
+      moduleBatchCount: 3,
+      batchesCompleted: [0, 1],
+      modulesScanned: 4,
+      modulesScannedThisBatch: 2,
+      modulesScannedInherited: 2,
+    });
+    expect(note.rationale).toContain('batch 2/3 added 2');
+    expect(note.rationale).toContain('2 module scan(s) inherited');
   });
 });

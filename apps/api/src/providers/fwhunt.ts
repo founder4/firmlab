@@ -40,6 +40,7 @@
  * the runners only shell out under a timeout.
  */
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -67,6 +68,12 @@ export const DEFAULT_MODULE_BUDGET_MS = 6 * 60 * 1000;
 /** Per-module ceiling. A module that blows through this is reported as unscanned, never as clean. */
 export const DEFAULT_MODULE_TIMEOUT_MS = 90 * 1000;
 
+/** The first deterministic slice of the global ranking. Batches are zero-based at the API boundary. */
+export const DEFAULT_MODULE_BATCH = 0;
+
+/** Bump this whenever the ordering keys change; stored campaigns from another ordering must not be merged. */
+export const MODULE_RANKING_VERSION = 1;
+
 /**
  * `FIRMLAB_FWHUNT_MODULE_CAP` — how many carved modules the per-module pass scans. `0` turns the pass off, which
  * is an honest answer for a deployment that cannot spend the minutes; the coverage note then says the pass did not
@@ -77,6 +84,17 @@ export function fwhuntModuleCap(env: NodeJS.ProcessEnv = process.env): number {
   if (raw === undefined || raw.trim() === '') return DEFAULT_MODULE_CAP;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_MODULE_CAP;
+}
+
+/**
+ * `FIRMLAB_FWHUNT_MODULE_BATCH` — zero-based window in the globally ranked module list. Keeping this separate
+ * from the cap lets repeated bounded runs cover disjoint modules without giving any one job a larger CPU budget.
+ */
+export function fwhuntModuleBatch(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.FIRMLAB_FWHUNT_MODULE_BATCH;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MODULE_BATCH;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 0 ? n : DEFAULT_MODULE_BATCH;
 }
 
 /** One rule variant's verdict, as the analyzer reports it. */
@@ -98,6 +116,8 @@ export interface CarvedModule {
   name: string;
   /** File GUID, when the carver put one somewhere in the path. */
   guid?: string;
+  /** Path below the carve root, stable across temporary carve directories and therefore usable for resumption. */
+  relativePath?: string;
 }
 
 /** A rule as it sits in the corpus: what the scanner will PRINT for it, and the scoping its author declared. */
@@ -116,12 +136,26 @@ export interface CorpusRule {
   description?: string;
   /** How many volume GUIDs the rule declares — the scoping the per-module pass deliberately bypasses. */
   volumeGuids: number;
+  /** SHA-256 of the full YAML bytes; metadata equality is not enough to prove two detector versions are equal. */
+  contentDigest: string;
 }
 
 /** A rule no pass could offer to a module, and the target that disqualified it. */
 export interface ExcludedRule {
   rule: string;
   target: string;
+}
+
+/** One bounded ranking window, retained so re-running a window replaces/extends it rather than double-counting. */
+export interface ModuleBatchRecord {
+  index: number;
+  rangeStart: number;
+  rangeEnd: number;
+  complete: boolean;
+  modulesScanned: CarvedModule[];
+  modulesFailed: CarvedModule[];
+  verdicts: RuleVerdict[];
+  unreadableLines: number;
 }
 
 /**
@@ -137,6 +171,24 @@ export interface ModulePass {
   unreadableLines: number;
   /** Modules found in the carve — the denominator module coverage is measured against. */
   modulesCarved: number;
+  /** Zero-based deterministic ranking window requested for the latest run. */
+  batchIndex: number;
+  /** Number of cap-sized windows needed to cover the carve. */
+  batchCount: number;
+  /** Maximum modules selected by one window. */
+  batchSize: number;
+  /** Fully attempted windows whose results are accumulated in this result. */
+  batchesCompleted: number[];
+  /** Per-window provenance needed to merge retries without double-counting them. */
+  batches: ModuleBatchRecord[];
+  /** Successfully scanned modules added by the latest window, separate from the accumulated numerator below. */
+  modulesScannedThisBatch: number;
+  /** Ordering contract used for the stored campaign. */
+  rankingVersion: number;
+  /** Digest of the fully ordered module identities; proves two windows refer to the same ranges. */
+  rankingFingerprint: string;
+  /** Digest of rule identity/scoping; a changed corpus starts a new campaign rather than mixing verdicts. */
+  corpusFingerprint: string;
   modulesScanned: CarvedModule[];
   /** Modules the bound dropped before they were scanned. */
   modulesSkipped: CarvedModule[];
@@ -151,6 +203,8 @@ export interface ModulePass {
   scopedRuleNames: string[];
   /** Directories the walk refused to descend into, so an unreachably deep carve is visible rather than silent. */
   deepDirsSkipped: number;
+  /** Why an earlier campaign was not resumed, when the caller supplied one that was incompatible. */
+  campaignResetReason?: string;
 }
 
 export interface FwHuntResult {
@@ -165,6 +219,49 @@ export interface FwHuntResult {
   /** The per-module pass, or null when it was never attempted. */
   modulePass: ModulePass | null;
   findings: FindingDraft[];
+}
+
+/** The durable job fields needed to recover the newest dedicated FwHunt campaign. Jobs must be newest first. */
+export interface FwHuntJobRecord {
+  kind: string;
+  status: string;
+  resultJson: string | null;
+}
+
+/** A running dedicated job owns the FwHunt findings namespace until it reaches a terminal state. */
+export function hasActiveFwHuntJob(jobs: ReadonlyArray<Pick<FwHuntJobRecord, 'kind' | 'status'>>): boolean {
+  return jobs.some((job) => job.kind === 'fwhunt' && (job.status === 'queued' || job.status === 'running'));
+}
+
+/** An active autonomous UEFI scan may be inside its inline FwHunt stage and therefore owns the same namespace. */
+export function hasActiveOpacidadJob(jobs: ReadonlyArray<Pick<FwHuntJobRecord, 'kind' | 'status'>>): boolean {
+  return jobs.some((job) => job.kind === 'opacidad' && (job.status === 'queued' || job.status === 'running'));
+}
+
+/**
+ * Pure: recover the newest completed FwHunt result that carries module-pass provenance.
+ *
+ * Keeping this lookup shared matters: the HTTP campaign route and the autonomous orchestrator must agree on
+ * which durable result owns the campaign. Otherwise an autonomous scan can run an isolated batch zero and
+ * overwrite findings accumulated by the dedicated route.
+ */
+export function latestFwHuntResult(jobs: readonly FwHuntJobRecord[]): FwHuntResult | null {
+  for (const job of jobs) {
+    if (job.kind !== 'fwhunt' || job.status !== 'done' || !job.resultJson) continue;
+    try {
+      const candidate = JSON.parse(job.resultJson) as FwHuntResult;
+      const pass = candidate?.modulePass;
+      // Accept useful legacy results as safe ledger snapshots; `accumulateModulePass` will deliberately reset
+      // them when a new provenance-aware batch starts. Skip cap=0/no-carve/all-failed attempts so they cannot hide
+      // an older campaign that actually examined modules.
+      if (candidate.available && pass?.ran && Array.isArray(pass.modulesScanned) && pass.modulesScanned.length > 0) {
+        return candidate;
+      }
+    } catch {
+      // A malformed result proves nothing; an older well-formed campaign may still be usable.
+    }
+  }
+  return null;
 }
 
 /** Severity by rule category — a live threat rule is not the same claim as a mitigation-hygiene rule. */
@@ -361,6 +458,32 @@ function readHead(file: string, bytes: number): string {
   }
 }
 
+/** Hash the complete rule without retaining leaked-key rule bodies in memory. Unreadable is a distinct identity. */
+function digestFile(file: string): string {
+  let fd: number;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch {
+    return 'unreadable';
+  }
+  const hash = createHash('sha256');
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  try {
+    let position = 0;
+    for (;;) {
+      const read = fs.readSync(fd, chunk, 0, chunk.length, position);
+      if (read === 0) break;
+      hash.update(chunk.subarray(0, read));
+      position += read;
+    }
+    return hash.digest('hex');
+  } catch {
+    return 'unreadable';
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /**
  * The rule corpus as data: for every `.yml` under `rulesDir`, the path a match is attributed through and the
  * `meta` fields that decide which pass, if any, is allowed to run it. Sorted by path so two runs over the same
@@ -386,6 +509,7 @@ export function loadRuleCorpus(rulesDir: string): CorpusRule[] {
           ...(meta.target ? { target: meta.target } : {}),
           ...(meta.description ? { description: meta.description } : {}),
           volumeGuids: meta.volumeGuids,
+          contentDigest: digestFile(abs),
         });
       }
     }
@@ -393,6 +517,14 @@ export function loadRuleCorpus(rulesDir: string): CorpusRule[] {
   walk(rulesDir);
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
+}
+
+/** Stable identity for the rule set whose per-module verdicts may be accumulated across bounded runs. */
+export function fingerprintRuleCorpus(corpus: CorpusRule[]): string {
+  const canonical = corpus
+    .map((r) => [r.path, r.name, r.target ?? '', r.volumeGuids, r.contentDigest])
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
 
 /**
@@ -470,7 +602,9 @@ export function findCarvedModules(dir: string): { modules: CarvedModule[]; deepD
     for (const e of entries) {
       const abs = path.join(d, e.name);
       if (e.isDirectory()) walk(abs, depth + 1);
-      else if (e.isFile() && hasModuleMagic(abs)) modules.push(describeCarvedModule(abs));
+      else if (e.isFile() && hasModuleMagic(abs)) {
+        modules.push({ ...describeCarvedModule(abs), relativePath: path.relative(dir, abs) });
+      }
     }
   };
   walk(dir, 0);
@@ -665,13 +799,22 @@ export function rankModulesForScan(input: {
   /** Module labels the whole-image pass printed — those already had SOME rules run against them. */
   coveredByImageScan: string[];
   cap: number;
+  /** Zero-based cap-sized window in the global ordering. */
+  batch?: number;
   /**
    * The rules this pass will offer, when the caller has them. Optional: a caller without a corpus loses key 2 and
    * ranks on privilege alone, which is a weaker order and never a wrong one.
    */
   rules?: CorpusRule[];
-}): { selected: CarvedModule[]; skipped: CarvedModule[] } {
-  const { modules, coveredByImageScan, cap, rules = [] } = input;
+}): {
+  selected: CarvedModule[];
+  skipped: CarvedModule[];
+  batchIndex: number;
+  batchCount: number;
+  batchStart: number;
+  rankingFingerprint: string;
+} {
+  const { modules, coveredByImageScan, cap, batch = DEFAULT_MODULE_BATCH, rules = [] } = input;
   const covered = new Set(coveredByImageScan.map((m) => path.basename(m).replace(MODULE_EXT, '').toLowerCase()));
   // The scanner prints `meta.name`, which for five rules in the pinned corpus is not the filename, so both are
   // searched. Joined with a space the two cannot form a match across their boundary — normalized keys have none.
@@ -698,8 +841,161 @@ export function rankModulesForScan(input: {
   );
 
   const ordered = ranked.map((r) => r.module);
-  if (cap <= 0) return { selected: [], skipped: ordered };
-  return { selected: ordered.slice(0, cap), skipped: ordered.slice(cap) };
+  const batchIndex = Number.isSafeInteger(batch) && batch >= 0 ? batch : DEFAULT_MODULE_BATCH;
+  const rankingFingerprint = fingerprintModuleRanking(ordered);
+  if (cap <= 0) return { selected: [], skipped: ordered, batchIndex, batchCount: 0, batchStart: 0, rankingFingerprint };
+  const batchCount = Math.ceil(ordered.length / cap);
+  const batchStart = batchIndex * cap;
+  const selected = ordered.slice(batchStart, batchStart + cap);
+  // Keep every module outside this window in the denominator. This includes earlier batches: a standalone batch
+  // result must never imply that modules before its offset disappeared merely because another run may have them.
+  const skipped = [...ordered.slice(0, batchStart), ...ordered.slice(batchStart + selected.length)];
+  return { selected, skipped, batchIndex, batchCount, batchStart, rankingFingerprint };
+}
+
+/** Stable across temporary carve roots; the relative path disambiguates duplicate GUID/name pairs in nested FVs. */
+function moduleIdentity(module: CarvedModule): string {
+  return [module.guid ?? '', module.relativePath ?? path.basename(module.path), module.name]
+    .join('\u0000')
+    .toLowerCase();
+}
+
+/** The order is part of the digest: equal members in a different rank are not compatible batch ranges. */
+export function fingerprintModuleRanking(modules: CarvedModule[]): string {
+  return createHash('sha256').update(modules.map(moduleIdentity).join('\n')).digest('hex');
+}
+
+function uniqueModules(modules: CarvedModule[]): CarvedModule[] {
+  const out = new Map<string, CarvedModule>();
+  for (const module of modules) out.set(moduleIdentity(module), module);
+  return [...out.values()];
+}
+
+function uniqueVerdicts(verdicts: RuleVerdict[]): RuleVerdict[] {
+  const out = new Map<string, RuleVerdict>();
+  for (const verdict of verdicts) {
+    const key = [verdict.rule, verdict.variant ?? '', verdict.module ?? '', verdict.matched ? '1' : '0'].join('\u0000');
+    out.set(key, verdict);
+  }
+  return [...out.values()];
+}
+
+function mergeBatchRecord(previous: ModuleBatchRecord, current: ModuleBatchRecord): ModuleBatchRecord {
+  // A full rerun is authoritative for this range. Partial retries traverse the same deterministic range from its
+  // start, so a superset supersedes the shorter prefix without double-counting verdicts or unreadable lines.
+  if (current.complete) return current;
+  if (previous.complete) return previous;
+  const previousKeys = new Set(previous.modulesScanned.map(moduleIdentity));
+  const currentKeys = new Set(current.modulesScanned.map(moduleIdentity));
+  const previousIsSubset = [...previousKeys].every((key) => currentKeys.has(key));
+  const currentIsSubset = [...currentKeys].every((key) => previousKeys.has(key));
+  if (previousIsSubset) return current;
+  if (currentIsSubset) return previous;
+  // Two disjoint partial attempts can be accumulated exactly. Partially overlapping non-prefix attempts should not
+  // arise from this runner; refusing to blend their unattributable line counts is safer than inventing a total.
+  const disjoint = [...previousKeys].every((key) => !currentKeys.has(key));
+  if (!disjoint) return current.modulesScanned.length > previous.modulesScanned.length ? current : previous;
+  const modulesScanned = uniqueModules([...previous.modulesScanned, ...current.modulesScanned]);
+  const scanned = new Set(modulesScanned.map(moduleIdentity));
+  const modulesFailed = uniqueModules([...previous.modulesFailed, ...current.modulesFailed]).filter(
+    (module) => !scanned.has(moduleIdentity(module)),
+  );
+  return {
+    ...current,
+    complete: false,
+    modulesScanned,
+    modulesFailed,
+    verdicts: uniqueVerdicts([...previous.verdicts, ...current.verdicts]),
+    unreadableLines: previous.unreadableLines + current.unreadableLines,
+  };
+}
+
+function campaignIncompatibility(previous: ModulePass, current: ModulePass): string | null {
+  if (!previous.corpusFingerprint || previous.corpusFingerprint !== current.corpusFingerprint)
+    return 'the rule corpus fingerprint changed or was not recorded';
+  if (previous.rankingVersion !== current.rankingVersion)
+    return `the ranking contract changed (${previous.rankingVersion} → ${current.rankingVersion})`;
+  if (!previous.rankingFingerprint || previous.rankingFingerprint !== current.rankingFingerprint)
+    return 'the carved-module ranking or its order changed';
+  if (previous.modulesCarved !== current.modulesCarved)
+    return `the carve denominator changed (${previous.modulesCarved} → ${current.modulesCarved})`;
+  if (previous.rulesOffered !== current.rulesOffered)
+    return `the module-rule count changed (${previous.rulesOffered} → ${current.rulesOffered})`;
+  if (previous.batchSize !== current.batchSize || previous.batchCount !== current.batchCount)
+    return `the batch geometry changed (${previous.batchSize}×${previous.batchCount} → ${current.batchSize}×${current.batchCount})`;
+  return null;
+}
+
+/**
+ * Pure: accumulate compatible batch results, replacing/extending a repeated batch instead of counting it twice.
+ * A missing fingerprint or changed cap/denominator/rules/order refuses the merge and records why on the new result.
+ */
+export function accumulateModulePass(previous: ModulePass | null | undefined, current: ModulePass): ModulePass {
+  if (!previous) return current;
+  if (!Array.isArray(previous.batches)) {
+    return { ...current, campaignResetReason: 'the earlier result predates batch provenance and cannot be merged' };
+  }
+  if (previous.batches.length === 0) return current;
+  const incompatibility = campaignIncompatibility(previous, current);
+  if (incompatibility) return { ...current, campaignResetReason: incompatibility };
+
+  const batches = new Map(previous.batches.map((batch) => [batch.index, batch]));
+  for (const batch of current.batches) {
+    const old = batches.get(batch.index);
+    batches.set(batch.index, old ? mergeBatchRecord(old, batch) : batch);
+  }
+  const orderedBatches = [...batches.values()].sort((a, b) => a.index - b.index);
+  const modulesScanned = uniqueModules(orderedBatches.flatMap((batch) => batch.modulesScanned));
+  const scanned = new Set(modulesScanned.map(moduleIdentity));
+  const modulesFailed = uniqueModules(orderedBatches.flatMap((batch) => batch.modulesFailed)).filter(
+    (module) => !scanned.has(moduleIdentity(module)),
+  );
+  const failed = new Set(modulesFailed.map(moduleIdentity));
+  const universe = uniqueModules([
+    ...current.modulesScanned,
+    ...current.modulesFailed,
+    ...current.modulesSkipped,
+    ...previous.modulesScanned,
+    ...previous.modulesFailed,
+    ...previous.modulesSkipped,
+  ]);
+  const modulesSkipped = universe.filter((module) => {
+    const identity = moduleIdentity(module);
+    return !scanned.has(identity) && !failed.has(identity);
+  });
+  const verdicts = uniqueVerdicts(orderedBatches.flatMap((batch) => batch.verdicts));
+  const batchesCompleted = orderedBatches.filter((batch) => batch.complete).map((batch) => batch.index);
+  const ran = modulesScanned.length > 0;
+
+  return {
+    ...current,
+    ran,
+    reason: ran ? '' : current.reason,
+    verdicts,
+    unreadableLines: orderedBatches.reduce((sum, batch) => sum + batch.unreadableLines, 0),
+    batchesCompleted,
+    batches: orderedBatches,
+    modulesScannedThisBatch: current.batches.flatMap((batch) => batch.modulesScanned).length,
+    modulesScanned,
+    modulesSkipped,
+    modulesFailed,
+    skipReason: modulesSkipped.length
+      ? `${current.skipReason}; accumulated across batch(es) ${orderedBatches.map((batch) => batch.index + 1).join(', ')}`
+      : '',
+  };
+}
+
+/** Pure campaign cursor: retry an incomplete latest window; otherwise take the first range not yet completed. */
+export function nextModuleBatch(pass: ModulePass | null | undefined): number | null {
+  if (!pass || !Number.isSafeInteger(pass.batchCount) || pass.batchCount <= 0) return 0;
+  const batches = Array.isArray(pass.batches) ? pass.batches : [];
+  const latest = batches.find((batch) => batch.index === pass.batchIndex);
+  if (latest && !latest.complete) return pass.batchIndex;
+  const completed = new Set(Array.isArray(pass.batchesCompleted) ? pass.batchesCompleted : []);
+  for (let index = 0; index < pass.batchCount; index++) {
+    if (!completed.has(index)) return index;
+  }
+  return null;
 }
 
 /**
@@ -892,7 +1188,30 @@ function buildModuleMatchFindings(
 /** Evidence keys describing the per-module pass, including the one saying it did not happen. */
 function modulePassEvidence(pass: ModulePass | null): Record<string, unknown> {
   if (!pass) return { modulePass: 'not attempted' };
-  if (!pass.ran) return { modulePass: 'did not run', modulePassReason: pass.reason };
+  const batchEvidence = {
+    moduleBatchIndex: pass.batchIndex,
+    moduleBatchNumber: pass.batchCount > 0 ? pass.batchIndex + 1 : 0,
+    moduleBatchCount: pass.batchCount,
+    moduleBatchSize: pass.batchSize,
+    batchesCompleted: pass.batchesCompleted,
+    modulesScannedThisBatch: pass.modulesScannedThisBatch,
+    modulesScannedInherited: Math.max(0, pass.modulesScanned.length - pass.modulesScannedThisBatch),
+    moduleBatchWindowsStored: pass.batches.length,
+    rankingVersion: pass.rankingVersion,
+    rankingFingerprint: pass.rankingFingerprint,
+    corpusFingerprint: pass.corpusFingerprint,
+    ...(pass.campaignResetReason ? { moduleCampaignResetReason: pass.campaignResetReason } : {}),
+  };
+  if (!pass.ran)
+    return {
+      modulePass: 'did not run',
+      modulePassReason: pass.reason,
+      modulesCarved: pass.modulesCarved,
+      modulesSkipped: pass.modulesSkipped.length,
+      modulesFailed: pass.modulesFailed.length,
+      moduleRulesOffered: pass.rulesOffered,
+      ...batchEvidence,
+    };
   return {
     modulePass: 'ran',
     modulesCarved: pass.modulesCarved,
@@ -902,6 +1221,7 @@ function modulePassEvidence(pass: ModulePass | null): Record<string, unknown> {
     moduleRulesOffered: pass.rulesOffered,
     rulesExcludedFromModulePass: pass.rulesExcluded,
     rulesRunOutsideDeclaredScope: pass.scopedRuleNames.length,
+    ...batchEvidence,
     ...(pass.deepDirsSkipped ? { carveDirsTooDeepToWalk: pass.deepDirsSkipped } : {}),
   };
 }
@@ -913,11 +1233,22 @@ function modulePassEvidence(pass: ModulePass | null): Record<string, unknown> {
 function describeModulePass(pass: ModulePass | null, wholeImageRules: number, unionRules: number): string {
   if (!pass) return 'No per-module pass was attempted, so only the rules scoped to this image’s volumes ran.';
   if (!pass.ran)
-    return `The per-module pass did not run (${pass.reason}), so only volume-scoped rules examined anything.`;
+    return `The per-module pass did not run (${pass.reason}); its carve denominator was ${pass.modulesCarved}, so only volume-scoped rules examined anything.`;
 
+  const inherited = Math.max(0, pass.modulesScanned.length - pass.modulesScannedThisBatch);
   const parts: string[] = [
-    `A per-module pass then ran ${pass.rulesOffered} module-target rule(s) against ${pass.modulesScanned.length} of the ${pass.modulesCarved} carved EFI module(s), lifting the rules that examined something from ${wholeImageRules} to ${unionRules}.`,
+    `Per-module batch ${pass.batchIndex + 1}/${pass.batchCount} added ${pass.modulesScannedThisBatch} successful module scan(s); this result accumulates ${pass.modulesScanned.length} of the ${pass.modulesCarved} carved EFI module(s) across ${pass.batches.length} distinct stored batch window(s) (${inherited} module scan(s) inherited from compatible earlier runs), lifting the rules that examined something from ${wholeImageRules} to ${unionRules}.`,
   ];
+  const currentBatch = pass.batches.find((batch) => batch.index === pass.batchIndex);
+  if (currentBatch && !currentBatch.complete) {
+    const attempted = currentBatch.modulesScanned.length + currentBatch.modulesFailed.length;
+    const budgetMisses = Math.max(0, currentBatch.rangeEnd - currentBatch.rangeStart - attempted);
+    parts.push(
+      `Batch ${pass.batchIndex + 1} is incomplete (${currentBatch.modulesFailed.length} failed module scan(s), ${budgetMisses} module(s) not reached before the wall-clock budget); the next run must resume this batch rather than advance past it.`,
+    );
+  }
+  if (pass.campaignResetReason)
+    parts.push(`Earlier batch evidence was not inherited because ${pass.campaignResetReason}.`);
   if (pass.modulesSkipped.length)
     parts.push(
       `${pass.modulesSkipped.length} module(s) were never scanned (${pass.skipReason}) and no rule examined them.`,
@@ -988,8 +1319,12 @@ export interface FwHuntModuleOptions {
   modulesDir?: string;
   /** How many carved modules to scan. Defaults to `FIRMLAB_FWHUNT_MODULE_CAP`; `0` turns the pass off. */
   moduleCap?: number;
+  /** Zero-based deterministic window. Defaults to `FIRMLAB_FWHUNT_MODULE_BATCH`; each window keeps the same cap. */
+  moduleBatch?: number;
   /** Wall-clock ceiling for the whole pass. */
   moduleBudgetMs?: number;
+  /** Compatible accumulated result from earlier windows of this image. Never merged without matching fingerprints. */
+  previousModulePass?: ModulePass | null;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -1009,6 +1344,15 @@ function modulePassNotRun(reason: string): ModulePass {
     verdicts: [],
     unreadableLines: 0,
     modulesCarved: 0,
+    batchIndex: 0,
+    batchCount: 0,
+    batchSize: 0,
+    batchesCompleted: [],
+    batches: [],
+    modulesScannedThisBatch: 0,
+    rankingVersion: MODULE_RANKING_VERSION,
+    rankingFingerprint: '',
+    corpusFingerprint: '',
     modulesScanned: [],
     modulesSkipped: [],
     modulesFailed: [],
@@ -1039,7 +1383,9 @@ async function runModulePass(
   const cap = opts.moduleCap ?? fwhuntModuleCap(opts.env ?? process.env);
   if (cap <= 0) return modulePassNotRun('the per-module cap is 0 (FIRMLAB_FWHUNT_MODULE_CAP)');
 
-  const { rules, excluded } = selectModuleRules(loadRuleCorpus(rulesDir));
+  const corpus = loadRuleCorpus(rulesDir);
+  const corpusFingerprint = fingerprintRuleCorpus(corpus);
+  const { rules, excluded } = selectModuleRules(corpus);
   if (rules.length === 0) return modulePassNotRun('the corpus holds no module-target rules');
 
   // Reuse a carve the caller already paid for, or make our own in a directory we own and delete. A caller-supplied
@@ -1069,11 +1415,37 @@ async function runModulePass(
       return { ...modulePassNotRun('the carve produced no EFI modules to scan'), deepDirsSkipped };
     }
 
-    const { selected, skipped } = rankModulesForScan({ modules, coveredByImageScan, cap, rules });
+    const requestedBatch = opts.moduleBatch ?? fwhuntModuleBatch(opts.env ?? process.env);
+    const { selected, skipped, batchIndex, batchCount, batchStart, rankingFingerprint } = rankModulesForScan({
+      modules,
+      coveredByImageScan,
+      cap,
+      batch: requestedBatch,
+      rules,
+    });
+    if (selected.length === 0 && batchIndex >= batchCount) {
+      return {
+        ...modulePassNotRun(
+          `module batch ${batchIndex} is outside the ${batchCount} batch(es) in this ${modules.length}-module carve`,
+        ),
+        modulesCarved: modules.length,
+        batchIndex,
+        batchCount,
+        batchSize: cap,
+        rankingFingerprint,
+        corpusFingerprint,
+        modulesSkipped: modules,
+        skipReason: `the requested zero-based batch ${batchIndex} has no range in this carve`,
+        rulesOffered: rules.length,
+        rulesExcluded: excluded,
+        scopedRuleNames: rules.filter((r) => r.volumeGuids > 0).map((r) => r.name),
+        deepDirsSkipped,
+      };
+    }
     const budgetMs = opts.moduleBudgetMs ?? DEFAULT_MODULE_BUDGET_MS;
     const ruleArgs = rules.flatMap((r) => ['-r', path.join(rulesDir, r.path)]);
     handle.log(
-      `fwhunt: per-module pass — ${rules.length} module rule(s) against ${selected.length} of ${modules.length} carved module(s).`,
+      `fwhunt: per-module batch ${batchIndex + 1}/${batchCount} — ${rules.length} module rule(s) against ranking positions ${batchStart + 1}-${batchStart + selected.length} of ${modules.length}.`,
     );
 
     const verdicts: RuleVerdict[] = [];
@@ -1113,10 +1485,21 @@ async function runModulePass(
 
     const dropped = [...outOfBudget, ...skipped];
     const skipReason = outOfBudget.length
-      ? `the ${Math.round(budgetMs / 1000)}s pass budget ran out after ${scanned.length} module(s), and a cap of ${cap} module(s) applied besides`
-      : `a cap of ${cap} module(s), taken in order of coverage debt, then how much the offered rules say about the module (its name or filename, and at half weight their description), then module privilege (SMM and the dispatch cores first) — never carve order`;
+      ? `the ${Math.round(budgetMs / 1000)}s pass budget ran out after ${scanned.length} module(s) in batch ${batchIndex + 1}/${batchCount}; every other ranking window remains explicit`
+      : `batch ${batchIndex + 1}/${batchCount}, a cap-sized ranking window selected after ordering by coverage debt, corpus mentions and module privilege — never carve order`;
+    const batchRecord: ModuleBatchRecord = {
+      index: batchIndex,
+      rangeStart: batchStart,
+      rangeEnd: batchStart + selected.length,
+      // A failed module remains unknown and must keep this window resumable; "attempted" is not "complete".
+      complete: outOfBudget.length === 0 && failed.length === 0,
+      modulesScanned: scanned,
+      modulesFailed: failed,
+      verdicts,
+      unreadableLines,
+    };
 
-    return {
+    const current: ModulePass = {
       ran: scanned.length > 0,
       // A pass where every module failed reports `ran: false`, so the failure count has to travel in the reason —
       // otherwise the only trace of "we tried N modules and the analyzer died on all of them" is a bare false.
@@ -1127,6 +1510,15 @@ async function runModulePass(
       verdicts,
       unreadableLines,
       modulesCarved: modules.length,
+      batchIndex,
+      batchCount,
+      batchSize: cap,
+      batchesCompleted: batchRecord.complete ? [batchIndex] : [],
+      batches: [batchRecord],
+      modulesScannedThisBatch: scanned.length,
+      rankingVersion: MODULE_RANKING_VERSION,
+      rankingFingerprint,
+      corpusFingerprint,
       modulesScanned: scanned,
       modulesSkipped: dropped,
       modulesFailed: failed,
@@ -1136,6 +1528,7 @@ async function runModulePass(
       scopedRuleNames: rules.filter((r) => r.volumeGuids > 0).map((r) => r.name),
       deepDirsSkipped,
     };
+    return accumulateModulePass(opts.previousModulePass, current);
   } finally {
     if (ownedCarve) fs.rmSync(ownedCarve, { recursive: true, force: true });
   }
@@ -1211,7 +1604,7 @@ export async function runFwHunt(
   ]);
   const wholeImageRules = new Set(verdicts.map((v) => v.rule)).size;
   const passNote = modulePass.ran
-    ? `, plus ${modulePass.rulesOffered} module rule(s) over ${modulePass.modulesScanned.length}/${modulePass.modulesCarved} carved module(s)`
+    ? `, plus ${modulePass.rulesOffered} module rule(s) over ${modulePass.modulesScanned.length}/${modulePass.modulesCarved} carved module(s) accumulated across ${modulePass.batches.length} distinct batch window(s); latest batch ${modulePass.batchIndex + 1}/${modulePass.batchCount} added ${modulePass.modulesScannedThisBatch}`
     : `; the per-module pass did not run — ${modulePass.reason}`;
   const reason = [
     `FwHunt: ${matched.length + moduleMatches.length} match(es) across ${examined.size}/${rulesInCorpus} rule(s)`,

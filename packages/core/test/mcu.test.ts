@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fingerprintMcu, parsePicobin } from '../src/mcu.js';
+import { fingerprintMcu, parsePicobin, parseRp2040Flash, qmkFirmwareMarkers } from '../src/mcu.js';
 
 /** Minimal ELF32 builder: header + N PT_LOAD program headers, little-endian, plus optional trailing strings. */
 function elf32(machine: number, loads: { vaddr: number; paddr: number; filesz: number }[], trailer = ''): Uint8Array {
@@ -75,6 +75,58 @@ describe('fingerprintMcu — raw Cortex-M vector table', () => {
     const fp = fingerprintMcu(buf);
     expect(fp.flashBase).toBeNull();
     expect(fp.arch).toBe('unknown');
+  });
+});
+
+describe('parseRp2040Flash — boot2 CRC + XIP vector table', () => {
+  // First 264 bytes of the hash-locked official Framework QMK ANSI v0.3.1 release. This covers the complete
+  // checksummed boot2 block and the first two application vectors, without relying on its filename or strings.
+  const frameworkQmkPrefix = () =>
+    Uint8Array.from(
+      Buffer.from(
+        'ALUySyEgWGCYaAIhiEOYYNhgGGFYYS5LACGZYAQhWWEBIfAimVArSRlgASGZYDUgAPBE+AIikEIU0AYhGWYA8DT4GW4BIRlmACAYZhpmAPAs+BluGW4ZbgUgAPAv+AEhCEL50QAhmWAbSRlgACFZYBpJG0gBYAEhmWDrIRlmoCEZZgDwEvgAIZlgFkkUSAFgASGZYAG8ACgA0ABHEkgTSQhgA8iA8wiICEcDtZlqBCABQvvQASABQvjRA70CtRhmGGb/9/L/GG4YbgK9AAACQAAAABgAAAcAAANfACEiAAD0AAAYIiAAoAABABAI7QDgAAAAAAAAAAAAAAAABwuP1QAEBCDFAgAQ',
+        'base64',
+      ),
+    );
+
+  it('recognizes the official Framework QMK RP2040 image from binary structure', () => {
+    const info = parseRp2040Flash(frameworkQmkPrefix());
+    expect(info).toEqual({ vectorOffset: 0x100, initialSP: 0x2004_0400, resetHandler: 0x1000_02c5 });
+
+    const fp = fingerprintMcu(frameworkQmkPrefix());
+    expect(fp).toMatchObject({ arch: 'arm', cortexM: 'cortex-m0plus', family: 'rp2040', vendor: 'raspberrypi' });
+    expect(fp.evidence).toContain('RP2040 boot2 CRC32 + Cortex-M0+ XIP vector table');
+  });
+
+  it('corroborates QMK with multiple internal markers and reports the RP2040 QMK runtime', () => {
+    const base = frameworkQmkPrefix();
+    const markers = ascii('eeconfig_update_rgb_matrix_default\0rgb_matrix_config EEPROM\0xkeyboard_report:');
+    const buf = new Uint8Array(base.length + markers.length);
+    buf.set(base);
+    buf.set(markers, base.length);
+    expect(qmkFirmwareMarkers(buf)).toHaveLength(3);
+    expect(fingerprintMcu(buf).rtos).toBe('qmk');
+  });
+
+  it('does not identify QMK from a generic keyboard message alone', () => {
+    const base = frameworkQmkPrefix();
+    const marker = ascii('suspending keyboard');
+    const buf = new Uint8Array(base.length + marker.length);
+    buf.set(base);
+    buf.set(marker, base.length);
+    expect(qmkFirmwareMarkers(buf)).toEqual([]);
+  });
+
+  it('rejects a corrupted boot2 CRC even when the following vectors look valid', () => {
+    const buf = frameworkQmkPrefix();
+    buf[0] = (buf[0] ?? 0) ^ 1;
+    expect(parseRp2040Flash(buf)).toBeNull();
+  });
+
+  it('rejects a valid boot2 block followed by a vector outside RP2040 XIP flash', () => {
+    const buf = frameworkQmkPrefix();
+    new DataView(buf.buffer).setUint32(0x104, 0x0800_02c5, true);
+    expect(parseRp2040Flash(buf)).toBeNull();
   });
 });
 

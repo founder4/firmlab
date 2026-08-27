@@ -97,6 +97,7 @@ Los kernels firmadyne **no se llaman como nuestras arquitecturas**: `vmlinux.mip
 | Variable | Efecto |
 |---|---|
 | `FIRMLAB_FWHUNT_MODULE_CAP` | Cuántos módulos EFI escanea el pase por módulo de FwHunt (por defecto 12). Lo que recorta se declara en el resultado. |
+| `FIRMLAB_FWHUNT_MODULE_BATCH` | Índice cero-based del lote FwHunt para ejecuciones directas/autónomas (por defecto 0). La ruta HTTP acepta `{"moduleBatch": n}` y, si se omite, reanuda el lote incompleto o avanza al primero pendiente sin aumentar el cap ni el presupuesto temporal; `{"restart": true}` descarta la acumulación anterior y vuelve al lote cero. Sólo acumula lotes si coinciden los hashes del corpus y del ranking, el denominador y la geometría del lote. Un lote con módulos fallidos permanece incompleto y se reintenta. |
 | `FIRMLAB_RESEARCH_CACHE_TTL_HOURS` | Frescura de la caché de advisories (por defecto 24). Una entrada caduca se vuelve a consultar, nunca se sirve. |
 | `FIRMLAB_ANGR_PYTHON` · `FIRMLAB_FWHUNT_PYTHON` | Intérpretes de sus venv propios. angr y fwhunt-scan **no** pueden compartir cierre de dependencias con chipsec. |
 | `FIRMLAB_UEFI_IOC` · `FIRMLAB_DESOCK` | Feeds/preloads opcionales. Vacíos por defecto a propósito: nada fabricado. |

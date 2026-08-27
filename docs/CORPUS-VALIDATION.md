@@ -32,9 +32,9 @@ despliegue y el manifiesto permite volver a obtener y verificar exactamente los 
 | Zephyr button para STM32L072 | [prueba oficial de Renode](https://github.com/renode/renode/blob/master/tests/unit-tests/precise-pause.robot) | tamaño y SHA-1 codificados en la URL, más SHA-256 local | segunda familia RTOS y segundo MCU |
 | Framework QMK ANSI 0.3.1 | [release oficial de Framework](https://github.com/FrameworkComputer/qmk_firmware/releases/tag/v0.3.1) | SHA-256 publicado en la release | firmware monolítico de hardware; regresión del clasificador |
 
-El QMK se conserva aunque hoy se clasifique como `unknown`: una muestra de validación también debe documentar la
-pregunta que el producto todavía no sabe responder. Etiquetarlo manualmente como bare-metal falsearía precisamente
-la señal que el corpus debe proteger.
+El QMK se incorporó inicialmente como `unknown` para que el corpus conservara el fallo en vez de ocultarlo con una
+etiqueta manual. El clasificador ya cierra esa regresión a partir de estructura binaria RP2040 (`boot2` con CRC y
+vector XIP Cortex-M0+) y marcadores QMK corroborados: la expectativa bloqueada es ahora `rtos`/`arm`.
 
 ## Lectura de la matriz
 
