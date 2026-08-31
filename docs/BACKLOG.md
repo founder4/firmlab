@@ -27,13 +27,15 @@
 - [x] Fijar una matriz ejecutable del corpus (SHA/tamaño/clase/arquitectura, stages y gates) y ampliarlo de 19 a 23 muestras con BIOS Framework oficial, Contiki, Zephyr y QMK.
 - [x] Correlacionar kernel y módulos con CVE sin sobreactuar la evidencia: CPE del kernel restringido a la CNA de Linux, prefijo/truncación explícitos y NetUSB ligado a CVE-2015-3036 sólo por identidad byte-level.
 - [x] Cerrar el hueco QMK con evidencia binaria: `boot2` y vector XIP de RP2040, más marcadores QMK corroborados; la muestra oficial queda clasificada como `rtos`/`arm` sin depender del nombre del fichero.
-- [x] Convertir el límite FwHunt en una campaña reanudable por lotes disjuntos, con cobertura acumulada y denominador visible; el segundo lote real del BIOS Framework recorrió las posiciones 13–24 de 409, sin fallos de lectura.
+- [x] Convertir el límite FwHunt en una campaña reanudable por lotes disjuntos, con cobertura acumulada y denominador visible; la campaña real del BIOS Framework dejó los 35/35 lotes resueltos, 404/409 módulos escaneados, 5 no convergentes explícitamente desconocidos y 0 sin intentar.
 - [x] Evitar que `opacidad` pise una campaña FwHunt dedicada: exclusión mutua por imagen, reutilización del resultado durable, reinicio explícito y reintento automático de lotes con módulos fallidos.
+- [x] Compactar FwHunt: un único snapshot durable, veredictos agregados reconstruibles desde sus lotes y borrado de snapshots acumulativos sustituidos; la respuesta final del Framework conserva 51.308 veredictos por lote sin duplicarlos en el agregado.
+- [x] Aislar módulos EFI no convergentes: timeout de 180 s por módulo, terminación de todo el grupo de procesos, `tini` como reaper y estado terminal `finalizedWithFailures` que permite continuar sin llamar limpio a un fallo.
+- [x] Hacer que la cobertura y la matriz lean la campaña FwHunt durable más reciente en vez del snapshot histórico incrustado en el último `opacidad`.
 
 ## Siguiente
 
-- [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 40 celdas `not-run`, 80 `degraded` y 21 `no-input` entre 376 etapas aplicables; priorizar por clase y coste.
-- [ ] Compactar el historial FwHunt: cada snapshot conserva la acumulación completa y duplica veredictos entre el agregado y sus lotes, por lo que una campaña larga crece cuadráticamente en SQLite y en la respuesta de polling.
+- [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 14 celdas `not-run`, 82 `degraded` y 33 `no-input` entre 390 etapas aplicables; priorizar por clase y coste.
 - [ ] Profundizar la correlación de kernel: el prefijo NVD puede tener miles de CVE (2.037 para Linux 2.6.31); usar config/subsistema, diff de parches o VEX de proveedor para descartar candidatos y paginar más allá de las primeras 50 sin presentarlas como el conjunto.
 - [ ] Hacer que la reparación del invitado alcance una ruta ejecutada y recuperar red/console interactiva en full-system; la intervención al final de `rcS` sigue siendo inerte.
 - [ ] Ampliar RTOS a fuzzing de periféricos/MMIO y enumeración de tareas; Renode demuestra vida, no cobertura del HAL.

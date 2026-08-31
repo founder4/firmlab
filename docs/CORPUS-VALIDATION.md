@@ -36,6 +36,26 @@ El QMK se incorporó inicialmente como `unknown` para que el corpus conservara e
 etiqueta manual. El clasificador ya cierra esa regresión a partir de estructura binaria RP2040 (`boot2` con CRC y
 vector XIP Cortex-M0+) y marcadores QMK corroborados: la expectativa bloqueada es ahora `rtos`/`arm`.
 
+## Campaña FwHunt del BIOS Framework
+
+La campaña se ejecuta y reanuda contra el cursor durable del servidor:
+
+```bash
+pnpm fwhunt:campaign --image ebf1c98c
+```
+
+La ejecución del 31 de agosto de 2026 asentó los 35/35 lotes: 404/409 módulos produjeron veredictos, 5 agotaron el
+límite por módulo y permanecen como desconocidos, y ninguno quedó sin intentar. Corrieron 106/108 reglas; las dos
+restantes declaran `target: bootloader` y no son aplicables a los módulos EFI tallados. Los 401 matches pertenecen
+a la variante informativa de `BRLY-2022-028 (RsbStuffingCheck)` — indican ausencia del patrón de mitigación que esa
+regla espera, no la presencia de un implante. El resultado conserva esa atribución y nunca lo resume como “BIOS
+infectada” ni convierte los cinco fallos en negativos.
+
+Cada lote es un job persistido y reanudable. Tras persistir uno nuevo, el servidor elimina el snapshot acumulativo
+sustituido y vacía el agregado duplicado; los 51.308 veredictos finales se reconstruyen desde los 35 registros de
+lote. Un fallo repetido sólo puede finalizarse si todas las posiciones del lote fueron intentadas, queda marcado
+`finalizedWithFailures`, y el modo `--fail-fast` permite exigir parada en vez de continuar.
+
 ## Lectura de la matriz
 
 - `✓`: la etapa se ejecutó y registró hallazgos; el sufijo numérico es su recuento.

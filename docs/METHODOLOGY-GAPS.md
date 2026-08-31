@@ -86,12 +86,11 @@ companion-app/cloud (UI).
 - ✗ **LogoFAIL-class** image-parser bugs, **SW SMI handler** callouts (SMM `CommBuffer` not validated), and
   **SPI protected-range / BIOS-lock** posture — the remaining high-value UEFI findings, and now the whole of this
   category's technique gap.
-- ◐ The Framework 3.04 validation run made the original bound concrete: one rule-aware pass scanned 12 of 409
-  modules and named the 397 outside its budget. The cap is now a deterministic, resumable 35-batch campaign with
-  compatible-result accumulation and an explicit full denominator. A real second-window validation scanned ranking
-  positions 13–24 with 12/12 modules readable; completing the remaining windows is campaign work, not a hidden cap.
-  Two `target: bootloader` rules still examine nothing (FirmLab does not carve an OS bootloader off an ESP), and
-  chipsec's carve is discarded so fwhunt re-carves the same modules.
+- ◐ The Framework 3.04 validation campaign settled all 35 deterministic windows: 404/409 carved modules produced
+  readable verdicts, 5 exhausted the 180 s bound and remain explicit unknowns, and 0 were left unattempted. The
+  scanner exercised 106/108 rules; the two `target: bootloader` rules still examine nothing because FirmLab does
+  not carve an OS bootloader off an ESP. A single compact durable snapshot retains per-window provenance, failed
+  windows can be finalized without being called clean, and timed-out analyzer trees are killed and reaped.
 
 **RTOS / bare-metal** (Renode boots; `rtos.ts` recovers the vector table, base address and memory map):
 
@@ -149,10 +148,10 @@ this codebase that step has repeatedly been the whole task.
    `scripts/corpus-matrix.mjs` verifies locked SHA-256/size/class/architecture and renders every applicable stage as
    found, empty, degraded, no-input, not-built or not-run. The persistent corpus grew from 19 to 23 images with an
    official Framework Laptop 13 BIOS capsule, Contiki and Zephyr ELF samples from Renode, and Framework QMK. The
-   matrix currently measures 376 applicable cells: 110 found, 125 ran-empty, 80 degraded, 21 no-input and 40
+   matrix currently measures 390 applicable cells: 130 found, 131 ran-empty, 82 degraded, 33 no-input and 14
    not-run. It also exposed two constraints instead of hiding them. Both are now closed in source: QMK classifies
-   from RP2040 structure plus corroborated QMK markers, and Framework FwHunt advances through deterministic,
-   resumable module windows while retaining the 409-module denominator.
+   from RP2040 structure plus corroborated QMK markers, and Framework FwHunt settled all 35 deterministic,
+   resumable module windows while retaining the 409-module denominator and 5 explicit unknowns.
 2. **CLOSED 2026-08-18 — a YARA corpus this deployment can actually run.** The operator layer now pins YARA Forge
    Core 20260816 by archive and extracted-file SHA-256 (5,034 rules) and adds six documented firmware heuristics.
    It is mounted read-only rather than baked into FirmLab, preserves the existing
@@ -181,9 +180,8 @@ this codebase that step has repeatedly been the whole task.
    works without `FIRMLAB_DESOCK`, and an input side for the fuzzer. Stateful/full-system fuzzing (Fuzzware/µEmu)
    remains the research frontier for the RTOS path.
 10. **The remaining UEFI findings** — LogoFAIL image-parser class, SMM callout analysis (efiXplorer-class), SPI
-    protected-range / BIOS-lock posture. A vendor BIOS now exists in the corpus and module scanning can traverse
-    all 409 ranked modules in resumable windows; the remaining work is to complete that campaign and add the three
-    missing technique families.
+    protected-range / BIOS-lock posture. A vendor BIOS now exists in the corpus and all 409 ranked modules have a
+    terminal, attributable campaign disposition; the remaining work is the three missing technique families.
 11. **Libraries are permanently unasked.** Filtering `.so` out of the reachability queue is right for the question as
     posed, and leaves a vulnerable library as a candidate nothing will ever settle. Loading the `.so` and starting
     symbolically from an exported function is a distinct rung, not a variant of this one.

@@ -14,6 +14,8 @@ import { specsForClass } from '../opacidad-plan.js';
 import { runOpacidad } from '../opacidad.js';
 import { partitionByProvenance } from '../operator-findings.js';
 import { type CoverageReport, buildCoverage } from '../providers/coverage.js';
+import { FWHUNT_WORKER, fwhuntCoverageStep } from '../providers/fwhunt-outcome.js';
+import { latestFwHuntResult } from '../providers/fwhunt.js';
 import { startJob } from '../providers/jobs.js';
 import { type ImageRow, getImage, listFindings, listImages, listJobs } from '../store.js';
 
@@ -101,12 +103,20 @@ function coverageFor(row: ImageRow, locale: Locale = 'en'): CoverageReport {
   }
   const firmwareClass = identity?.firmwareClass ?? 'unknown';
 
-  const done = listJobs(row.id).find((j) => j.kind === 'opacidad' && j.status === 'done' && j.resultJson);
+  const jobs = listJobs(row.id);
+  const done = jobs.find((j) => j.kind === 'opacidad' && j.status === 'done' && j.resultJson);
   let steps: OpacidadStep[] | null = null;
   try {
     steps = done?.resultJson ? ((JSON.parse(done.resultJson) as { steps?: OpacidadStep[] }).steps ?? null) : null;
   } catch {
     steps = null;
+  }
+  const latestFwHunt = latestFwHuntResult(jobs);
+  if (latestFwHunt) {
+    const fresh = fwhuntCoverageStep(latestFwHunt);
+    const stored = steps ?? [];
+    const index = stored.findIndex((step) => step.worker === FWHUNT_WORKER);
+    steps = index >= 0 ? stored.map((step, i) => (i === index ? fresh : step)) : [...stored, fresh];
   }
 
   // Split before counting. `findingCount` is the stage arithmetic's input, so an assertion reaching it would make

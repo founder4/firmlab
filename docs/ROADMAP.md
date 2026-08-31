@@ -5,23 +5,24 @@ long work session, grounded in a precise review of the current tree (file refere
 
 ---
 
-## Current baseline — 2026-08-27
+## Current baseline — 2026-08-31
 
 - Reproducible deploy contract, CI audit/type/test/build/Docker smoke, and exact OCI revision checks are shipped.
 - The web restores persisted deep-analysis results, lazy-loads routes, and has been exercised at 390×844; the main
   entry chunk is 427.07 kB (146.18 kB gzip).
 - Findings census semantics are explicit (established/lead/blocked/dismissed/asserted/other), with the legacy
   `unproven` field retained only as a compatibility aggregate.
-- The validation corpus is locked at 23 samples / 8 classes. Its generated matrix covers 376 applicable stage
-  cells (110 found, 125 ran-empty, 80 degraded, 21 no-input, 40 not-run).
+- The validation corpus has 25 samples / 8 classes. Its generated matrix covers 390 applicable stage cells (130
+  found, 131 ran-empty, 82 degraded, 33 no-input, 14 not-run).
 - Kernel versions now correlate through a Linux-CNA-scoped NVD query; module correlation requires byte-level
   identity anchors and remains a lead. Neither path promotes version presence to device exploitability.
-- The official Framework QMK image now classifies as `rtos`/`arm` from RP2040 boot structure and corroborated QMK
-  markers. FwHunt module coverage is resumable in deterministic batches; the second real Framework batch scanned
-  ranking positions 13–24 of 409 with no module-read failures.
+- The official Framework QMK image classifies as `rtos`/`arm` from RP2040 boot structure and corroborated QMK
+  markers. The Framework BIOS FwHunt campaign settled all 35 deterministic batches: 404/409 modules produced
+  verdicts, 5 non-convergent modules remain explicit unknowns, and no module was left unattempted. The union was
+  106/108 rules; the two missing rules target bootloaders rather than EFI modules.
 
-Next, in order: run the scheduled corpus campaign—including the remaining Framework FwHunt batches—and drive down
-the 40 `not-run` and 80 `degraded` matrix cells; add config/patch/VEX pruning to the kernel-CVE prefix; then return
+Next, in order: run the scheduled corpus campaign and drive down the 14 `not-run`, 82 `degraded` and 33 `no-input`
+matrix cells; add config/patch/VEX pruning to the kernel-CVE prefix; then return
 to full-system guest networking/console and RTOS peripheral fuzzing. The actionable list lives in
 [`BACKLOG.md`](BACKLOG.md).
 
