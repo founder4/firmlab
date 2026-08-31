@@ -221,6 +221,17 @@ export interface FwHuntResult {
   findings: FindingDraft[];
 }
 
+/**
+ * Remove the aggregate copy of per-module verdicts before a cumulative result is stored.
+ *
+ * Every verdict already lives in exactly one `batches[].verdicts` record, and `accumulateModulePass` rebuilds the
+ * aggregate from those records on the next run. Keeping both copies nearly doubles the largest part of a complete
+ * campaign snapshot. Findings, matches and all batch provenance remain unchanged for API readers.
+ */
+export function compactFwHuntResult(result: FwHuntResult): FwHuntResult {
+  return result.modulePass ? { ...result, modulePass: { ...result.modulePass, verdicts: [] } } : result;
+}
+
 /** The durable job fields needed to recover the newest dedicated FwHunt campaign. Jobs must be newest first. */
 export interface FwHuntJobRecord {
   kind: string;

@@ -15,6 +15,11 @@ export interface JobHandle {
   log: (line: string) => void;
 }
 
+export interface JobLifecycle<T> {
+  /** Runs only after the successful result is durable. Cleanup failures are logged and never rewrite success. */
+  afterPersist?: (handle: JobHandle, result: T) => void;
+}
+
 const MAX_CONCURRENT = Math.max(1, Number(process.env.FIRMLAB_MAX_CONCURRENT_JOBS ?? 2));
 
 let active = 0;
@@ -31,6 +36,7 @@ export function startJob<T>(
   kind: JobKind,
   params: Record<string, unknown>,
   work: (handle: JobHandle) => Promise<T>,
+  lifecycle: JobLifecycle<T> = {},
 ): string {
   const id = randomUUID().slice(0, 12);
   const now = Date.now();
@@ -57,6 +63,12 @@ export function startJob<T>(
       try {
         const result = await work(handle);
         updateJobStatus(id, 'done', JSON.stringify(result ?? null), null);
+        try {
+          lifecycle.afterPersist?.(handle, result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          appendJobLog(id, `WARNING: post-persist cleanup failed: ${message}`);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         appendJobLog(id, `ERROR: ${message}`);

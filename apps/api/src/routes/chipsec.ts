@@ -9,6 +9,7 @@ import { type FindingDraft, syncFindings } from '../findings.js';
 import { type ChipsecResult, detectChipsec, runChipsec } from '../providers/chipsec.js';
 import {
   DEFAULT_TIMEOUT_MS,
+  compactFwHuntResult,
   hasActiveFwHuntJob,
   hasActiveOpacidadJob,
   latestFwHuntResult,
@@ -16,7 +17,7 @@ import {
   runFwHunt,
 } from '../providers/fwhunt.js';
 import { startJob } from '../providers/jobs.js';
-import { getImage, listJobs } from '../store.js';
+import { deleteSupersededJobSnapshots, getImage, listJobs } from '../store.js';
 
 /** Map the provider's UEFI findings onto finding drafts for the ledger (idempotent re-sync per image). */
 function syncChipsecFindings(imageId: string, result: ChipsecResult): void {
@@ -103,14 +104,25 @@ export async function chipsecRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(409).send({ error: 'All FwHunt module batches are already complete for this image' });
     }
 
-    const jobId = startJob(id, 'fwhunt', { moduleBatch, restart: restarting }, async (handle) => {
-      const result = await runFwHunt(row.path, handle, DEFAULT_TIMEOUT_MS, {
-        moduleBatch,
-        previousModulePass: restarting ? null : (previous?.modulePass ?? null),
-      });
-      syncFindings(id, 'fwhunt', result.findings);
-      return result;
-    });
+    const jobId = startJob(
+      id,
+      'fwhunt',
+      { moduleBatch, restart: restarting },
+      async (handle) => {
+        const result = await runFwHunt(row.path, handle, DEFAULT_TIMEOUT_MS, {
+          moduleBatch,
+          previousModulePass: restarting ? null : (previous?.modulePass ?? null),
+        });
+        syncFindings(id, 'fwhunt', result.findings);
+        return compactFwHuntResult(result);
+      },
+      {
+        afterPersist: (handle) => {
+          const removed = deleteSupersededJobSnapshots(id, 'fwhunt', handle.id);
+          if (removed > 0) handle.log(`fwhunt: compacted ${removed} superseded cumulative snapshot(s).`);
+        },
+      },
+    );
     return reply.status(202).send({ jobId });
   });
 

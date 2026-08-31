@@ -7,6 +7,7 @@ import {
   accumulateModulePass,
   buildFwHuntFindings,
   classifyModulePrivilege,
+  compactFwHuntResult,
   describeCarvedModule,
   fingerprintRuleCorpus,
   fwhuntModuleBatch,
@@ -685,6 +686,29 @@ describe('accumulateModulePass — only compatible, attributable batches compose
       }),
     );
     const all = accumulateModulePass(firstTwo, campaignPass({ index: 2, scanned: [4, 5] }));
+    expect(nextModuleBatch(all)).toBeNull();
+  });
+
+  it('rebuilds the aggregate verdicts when the durable snapshot stored them only in batch records', () => {
+    const firstTwo = accumulateModulePass(
+      campaignPass({ index: 0, scanned: [0, 1] }),
+      campaignPass({ index: 1, scanned: [2, 3] }),
+    );
+    const compact = compactFwHuntResult({
+      available: true,
+      reason: 'fixture',
+      rulesRun: 1,
+      rulesNotApplicable: 0,
+      rulesInCorpus: 1,
+      matches: [],
+      modulePass: firstTwo,
+      findings: [],
+    });
+    expect(compact.modulePass?.verdicts).toEqual([]);
+
+    const all = accumulateModulePass(compact.modulePass, campaignPass({ index: 2, scanned: [4, 5] }));
+    expect(all.verdicts).toHaveLength(6);
+    expect(all.modulesScanned).toHaveLength(6);
     expect(nextModuleBatch(all)).toBeNull();
   });
 });

@@ -79,3 +79,20 @@ describe('reconcileInterruptedJobs', () => {
     expect(store.getJob('running')?.updatedAt).toBe(1_234);
   });
 });
+
+describe('deleteSupersededJobSnapshots', () => {
+  it('keeps the newest cumulative snapshot and failed attempts, but removes older successful snapshots', () => {
+    store.insertJob(row('fwhunt-old-1', 'done', { kind: 'fwhunt', resultJson: '{"batch":1}', createdAt: 400 }));
+    store.insertJob(row('fwhunt-error', 'error', { kind: 'fwhunt', error: 'scanner failed', createdAt: 500 }));
+    store.insertJob(row('fwhunt-old-2', 'done', { kind: 'fwhunt', resultJson: '{"batch":2}', createdAt: 600 }));
+    store.insertJob(row('fwhunt-current', 'done', { kind: 'fwhunt', resultJson: '{"batch":3}', createdAt: 700 }));
+    store.insertJob(row('other-kind', 'done', { kind: 'kernel', resultJson: '{"ok":true}', createdAt: 800 }));
+
+    expect(store.deleteSupersededJobSnapshots('image-1', 'fwhunt', 'fwhunt-current')).toBe(2);
+    expect(store.getJob('fwhunt-old-1')).toBeUndefined();
+    expect(store.getJob('fwhunt-old-2')).toBeUndefined();
+    expect(store.getJob('fwhunt-current')?.resultJson).toBe('{"batch":3}');
+    expect(store.getJob('fwhunt-error')).toMatchObject({ status: 'error', error: 'scanner failed' });
+    expect(store.getJob('other-kind')?.resultJson).toBe('{"ok":true}');
+  });
+});

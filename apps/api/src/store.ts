@@ -556,6 +556,24 @@ export function updateJobStatus(id: string, status: JobStatus, resultJson: strin
 }
 
 /**
+ * Keep one cumulative result for a resumable campaign instead of every earlier cumulative snapshot.
+ *
+ * FwHunt's newest result already carries every batch record and every accumulated verdict needed to resume or
+ * audit the campaign. Retaining the previous cumulative result as well makes N batches occupy O(N²) bytes and
+ * makes `/images/:id/jobs` return the same early verdicts over and over. Delete only older successful rows with a
+ * result: failed attempts remain as an audit trail, and the caller invokes this only after `keepId` is durable.
+ */
+export function deleteSupersededJobSnapshots(imageId: string, kind: JobKind, keepId: string): number {
+  const result = getDb()
+    .prepare(
+      `DELETE FROM jobs
+       WHERE imageId = ? AND kind = ? AND status = 'done' AND resultJson IS NOT NULL AND id <> ?`,
+    )
+    .run(imageId, kind, keepId);
+  return Number(result.changes);
+}
+
+/**
  * Close over the gap between durable job rows and the deliberately in-process runner. A queued/running row can
  * survive a process exit, but the `work` closure that could advance it cannot. On startup, turn every such row
  * into an explicit terminal failure instead of leaving the UI polling forever or pretending it can be resumed.
