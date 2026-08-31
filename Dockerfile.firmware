@@ -32,6 +32,12 @@ RUN pnpm install --prod --offline --frozen-lockfile
 # === Stage 2: the app on the tools base ===
 FROM firmlab-tools:latest AS runtime
 WORKDIR /app
+
+# The FwHunt Python wrapper launches rizin below it. PID 1 must reap descendants that are killed as a process
+# group on timeout; plain Node is not an init process and otherwise retains harmless-but-permanent zombies.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends tini \
+  && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 ENV FIRMLAB_HOST=0.0.0.0
 ENV FIRMLAB_PORT=8799
@@ -53,4 +59,5 @@ COPY --from=build /app/apps/web/dist ./apps/web/dist
 
 VOLUME /data
 EXPOSE 8799
+ENTRYPOINT ["tini", "--"]
 CMD ["node", "apps/api/dist/index.js"]
