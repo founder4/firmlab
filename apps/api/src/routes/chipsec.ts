@@ -10,6 +10,7 @@ import { type ChipsecResult, detectChipsec, runChipsec } from '../providers/chip
 import {
   DEFAULT_TIMEOUT_MS,
   compactFwHuntResult,
+  finalizeFailedModuleBatch,
   hasActiveFwHuntJob,
   hasActiveOpacidadJob,
   latestFwHuntResult,
@@ -72,7 +73,7 @@ export async function chipsecRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: 'FwHunt is already owned by a queued/running FwHunt or autonomous job for this image' });
     }
 
-    const body = (req.body ?? {}) as { moduleBatch?: unknown; restart?: unknown };
+    const body = (req.body ?? {}) as { finalizeFailedBatch?: unknown; moduleBatch?: unknown; restart?: unknown };
     if (
       body.moduleBatch !== undefined &&
       (typeof body.moduleBatch !== 'number' || !Number.isSafeInteger(body.moduleBatch) || body.moduleBatch < 0)
@@ -82,12 +83,44 @@ export async function chipsecRoutes(app: FastifyInstance): Promise<void> {
     if (body.restart !== undefined && typeof body.restart !== 'boolean') {
       return reply.status(400).send({ error: 'restart must be a boolean' });
     }
+    if (body.finalizeFailedBatch !== undefined && typeof body.finalizeFailedBatch !== 'boolean') {
+      return reply.status(400).send({ error: 'finalizeFailedBatch must be a boolean' });
+    }
+    if (body.finalizeFailedBatch === true && (body.restart === true || body.moduleBatch !== undefined)) {
+      return reply.status(400).send({ error: 'finalizeFailedBatch cannot be combined with restart or moduleBatch' });
+    }
     if (body.restart === true && body.moduleBatch !== undefined) {
       return reply.status(400).send({ error: 'restart and moduleBatch cannot be supplied together' });
     }
     // An unavailable/no-carve attempt carries no resumable evidence. The shared lookup keeps this route and the
     // autonomous orchestrator on the same newest durable campaign; the provider still fingerprint-checks it.
     const previous = latestFwHuntResult(jobs);
+    if (body.finalizeFailedBatch === true) {
+      const modulePass = finalizeFailedModuleBatch(previous?.modulePass);
+      if (!previous || !modulePass) {
+        return reply.status(409).send({
+          error: 'The current FwHunt batch is not a fully attempted window with unresolved module failures',
+        });
+      }
+      const jobId = startJob(
+        id,
+        'fwhunt',
+        { finalizeFailedBatch: true, moduleBatch: modulePass.batchIndex },
+        async (handle) => {
+          handle.log(
+            `fwhunt: finalized batch ${modulePass.batchIndex + 1}/${modulePass.batchCount} with ${modulePass.modulesFailed.length} module(s) still unknown after external retry policy.`,
+          );
+          return compactFwHuntResult({ ...previous, modulePass });
+        },
+        {
+          afterPersist: (handle) => {
+            const removed = deleteSupersededJobSnapshots(id, 'fwhunt', handle.id);
+            if (removed > 0) handle.log(`fwhunt: compacted ${removed} superseded cumulative snapshot(s).`);
+          },
+        },
+      );
+      return reply.status(202).send({ jobId });
+    }
     if (
       typeof body.moduleBatch === 'number' &&
       previous?.modulePass &&

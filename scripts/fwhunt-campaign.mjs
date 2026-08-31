@@ -13,18 +13,24 @@ const DEFAULT_MAX_RETRIES = 3;
 
 export function campaignComplete(pass) {
   if (!pass?.ran || !Number.isSafeInteger(pass.batchCount) || pass.batchCount <= 0) return false;
-  const completed = new Set(Array.isArray(pass.batchesCompleted) ? pass.batchesCompleted : []);
+  const settled = new Set(
+    Array.isArray(pass.batches)
+      ? pass.batches.filter((batch) => batch.complete || batch.finalizedWithFailures).map((batch) => batch.index)
+      : [],
+  );
   const failed = Array.isArray(pass.modulesFailed) ? pass.modulesFailed.length : Number.POSITIVE_INFINITY;
   const scanned = Array.isArray(pass.modulesScanned) ? pass.modulesScanned.length : 0;
-  return completed.size === pass.batchCount && failed === 0 && scanned === pass.modulesCarved;
+  return settled.size === pass.batchCount && scanned + failed === pass.modulesCarved;
 }
 
 export function progressLine(pass) {
   if (!pass) return 'FwHunt has no module-pass result yet.';
   const scanned = Array.isArray(pass.modulesScanned) ? pass.modulesScanned.length : 0;
   const failed = Array.isArray(pass.modulesFailed) ? pass.modulesFailed.length : 0;
-  const completed = Array.isArray(pass.batchesCompleted) ? pass.batchesCompleted.length : 0;
-  return `FwHunt: ${scanned}/${pass.modulesCarved} modules; ${completed}/${pass.batchCount} batches complete; ${failed} failed.`;
+  const settled = Array.isArray(pass.batches)
+    ? pass.batches.filter((batch) => batch.complete || batch.finalizedWithFailures).length
+    : 0;
+  return `FwHunt: ${scanned}/${pass.modulesCarved} modules scanned; ${settled}/${pass.batchCount} batches settled; ${failed} failed.`;
 }
 
 export function parseArgs(argv, env = process.env) {
@@ -35,6 +41,7 @@ export function parseArgs(argv, env = process.env) {
     pollMs: DEFAULT_POLL_MS,
     jobTimeoutMs: DEFAULT_JOB_TIMEOUT_MS,
     maxRetries: DEFAULT_MAX_RETRIES,
+    failFast: false,
   };
   const take = (flag, index) => {
     const value = argv[index + 1];
@@ -49,6 +56,7 @@ export function parseArgs(argv, env = process.env) {
     else if (token === '--poll-ms') args.pollMs = Number(take(token, i++));
     else if (token === '--job-timeout-ms') args.jobTimeoutMs = Number(take(token, i++));
     else if (token === '--max-retries') args.maxRetries = Number(take(token, i++));
+    else if (token === '--fail-fast') args.failFast = true;
     else if (token === '--help') args.help = true;
     else throw new Error(`Unknown argument ${token}`);
   }
@@ -71,7 +79,8 @@ function usage() {
     '  --restart              Discard the durable cursor and begin at batch 1',
     '  --poll-ms N            Job polling interval (default 5000)',
     '  --job-timeout-ms N     Maximum wait for one persisted batch (default 1800000)',
-    '  --max-retries N        Stop after N incomplete attempts of one batch (default 3)',
+    '  --max-retries N        Finalize a fully attempted failed batch after N attempts (default 3)',
+    '  --fail-fast            Stop instead of finalizing failures as explicit unknowns',
   ].join('\n');
 }
 
@@ -147,9 +156,27 @@ export async function runCampaign(args, env = process.env) {
       retryBatch = null;
       retryCount = 0;
     } else if (retryCount >= args.maxRetries) {
-      throw new Error(
-        `FwHunt batch ${pass.batchIndex + 1}/${pass.batchCount} remained incomplete after ${retryCount} attempts`,
-      );
+      if (args.failFast) {
+        throw new Error(
+          `FwHunt batch ${pass.batchIndex + 1}/${pass.batchCount} remained incomplete after ${retryCount} attempts`,
+        );
+      }
+      const currentBatchSize = currentBatch.rangeEnd - currentBatch.rangeStart;
+      const attempted = (currentBatch.modulesScanned?.length ?? 0) + (currentBatch.modulesFailed?.length ?? 0);
+      if (attempted !== currentBatchSize || !(currentBatch.modulesFailed?.length > 0)) {
+        throw new Error(
+          `FwHunt batch ${pass.batchIndex + 1}/${pass.batchCount} remained incomplete without a fully attributable failed window`,
+        );
+      }
+      const { jobId } = await fetchJson(endpoint, {
+        method: 'POST',
+        headers: requestHeaders(env, true),
+        body: JSON.stringify({ finalizeFailedBatch: true }),
+      });
+      result = await waitForJob(args.base, jobId, args, env);
+      process.stdout.write(`${progressLine(result?.modulePass)} Finalized unresolved modules as unknown.\n`);
+      retryBatch = null;
+      retryCount = 0;
     }
   }
 }

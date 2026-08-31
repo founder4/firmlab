@@ -39,17 +39,14 @@
  * The output parser, the rule-corpus reader, the module ranking and the finding builder are PURE and unit-tested;
  * the runners only shell out under a timeout.
  */
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
+import { execFileProcessGroup } from '../exec-process-group.js';
 import type { FindingDraft } from '../findings-normalize.js';
 import { fwhuntPython, fwhuntRulesDir, isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
-
-const execFileAsync = promisify(execFile);
 
 /** Scanning a full image against the whole corpus is minutes of rizin analysis, not seconds. */
 export const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
@@ -171,6 +168,8 @@ export interface ModuleBatchRecord {
   rangeStart: number;
   rangeEnd: number;
   complete: boolean;
+  /** Every module was attempted, but one or more non-convergent scans were explicitly finalized as unknown. */
+  finalizedWithFailures?: boolean;
   modulesScanned: CarvedModule[];
   modulesFailed: CarvedModule[];
   verdicts: RuleVerdict[];
@@ -915,6 +914,8 @@ function mergeBatchRecord(previous: ModuleBatchRecord, current: ModuleBatchRecor
   // start, so a superset supersedes the shorter prefix without double-counting verdicts or unreadable lines.
   if (current.complete) return current;
   if (previous.complete) return previous;
+  if (current.finalizedWithFailures) return current;
+  if (previous.finalizedWithFailures) return previous;
   const previousKeys = new Set(previous.modulesScanned.map(moduleIdentity));
   const currentKeys = new Set(current.modulesScanned.map(moduleIdentity));
   const previousIsSubset = [...previousKeys].every((key) => currentKeys.has(key));
@@ -1020,12 +1021,34 @@ export function nextModuleBatch(pass: ModulePass | null | undefined): number | n
   if (!pass || !Number.isSafeInteger(pass.batchCount) || pass.batchCount <= 0) return 0;
   const batches = Array.isArray(pass.batches) ? pass.batches : [];
   const latest = batches.find((batch) => batch.index === pass.batchIndex);
-  if (latest && !latest.complete) return pass.batchIndex;
-  const completed = new Set(Array.isArray(pass.batchesCompleted) ? pass.batchesCompleted : []);
+  if (latest && !latest.complete && !latest.finalizedWithFailures) return pass.batchIndex;
+  const completed = new Set([
+    ...(Array.isArray(pass.batchesCompleted) ? pass.batchesCompleted : []),
+    ...batches.filter((batch) => batch.finalizedWithFailures).map((batch) => batch.index),
+  ]);
   for (let index = 0; index < pass.batchCount; index++) {
     if (!completed.has(index)) return index;
   }
   return null;
+}
+
+/**
+ * Finalize a fully attempted, repeatedly failing window without pretending its failed modules were scanned.
+ * Budget-truncated windows cannot be finalized: every ranking position in the range must have an attributable
+ * success or failure first.
+ */
+export function finalizeFailedModuleBatch(pass: ModulePass | null | undefined): ModulePass | null {
+  if (!pass || !Array.isArray(pass.batches)) return null;
+  const batch = pass.batches.find((candidate) => candidate.index === pass.batchIndex);
+  if (!batch || batch.complete || batch.finalizedWithFailures || batch.modulesFailed.length === 0) return null;
+  const expected = batch.rangeEnd - batch.rangeStart;
+  if (batch.modulesScanned.length + batch.modulesFailed.length !== expected) return null;
+  return {
+    ...pass,
+    batches: pass.batches.map((candidate) =>
+      candidate.index === batch.index ? { ...candidate, finalizedWithFailures: true } : candidate,
+    ),
+  };
 }
 
 /**
@@ -1453,7 +1476,7 @@ async function runModulePass(
     ownedCarve = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-fwhunt-'));
     carveDir = path.join(ownedCarve, 'modules');
     try {
-      await execFileAsync(fwhuntPython(), analyzerArgv(['extract', imagePath, carveDir]), {
+      await execFileProcessGroup(fwhuntPython(), analyzerArgv(['extract', imagePath, carveDir]), {
         timeout: DEFAULT_MODULE_TIMEOUT_MS,
         maxBuffer: 32 * 1024 * 1024,
       });
@@ -1520,7 +1543,7 @@ async function runModulePass(
       }
       let stdout = '';
       try {
-        const r = await execFileAsync(fwhuntPython(), analyzerArgv(['scan-module', mod.path, ...ruleArgs]), {
+        const r = await execFileProcessGroup(fwhuntPython(), analyzerArgv(['scan-module', mod.path, ...ruleArgs]), {
           timeout: Math.min(left, opts.moduleTimeoutMs ?? fwhuntModuleTimeoutMs(opts.env ?? process.env)),
           maxBuffer: 32 * 1024 * 1024,
         });
@@ -1636,7 +1659,10 @@ export async function runFwHunt(
   handle.log(`fwhunt: scanning ${path.basename(imagePath)} against the rule corpus at ${rulesDir}.`);
   let stdout = '';
   try {
-    const r = await execFileAsync(fwhuntPython(), args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+    const r = await execFileProcessGroup(fwhuntPython(), args, {
+      timeout: timeoutMs,
+      maxBuffer: 32 * 1024 * 1024,
+    });
     stdout = r.stdout;
   } catch (err) {
     // The analyzer exits non-zero on a match in some versions, so partial stdout is a normal success path — only

@@ -9,6 +9,7 @@ import {
   classifyModulePrivilege,
   compactFwHuntResult,
   describeCarvedModule,
+  finalizeFailedModuleBatch,
   fingerprintRuleCorpus,
   fwhuntModuleBatch,
   fwhuntModuleConcurrency,
@@ -666,6 +667,18 @@ describe('accumulateModulePass — only compatible, attributable batches compose
     const attempted = campaignPass({ index: 0, scanned: [0], failed: [1], complete: false });
     expect(attempted.batchesCompleted).toEqual([]);
     expect(nextModuleBatch(attempted)).toBe(0);
+  });
+
+  it('finalizes only a fully attempted failed window and advances without counting the failure as scanned', () => {
+    const attempted = campaignPass({ index: 0, scanned: [0], failed: [1], complete: false });
+    const finalized = finalizeFailedModuleBatch(attempted);
+    expect(finalized?.batches[0]?.finalizedWithFailures).toBe(true);
+    expect(finalized?.modulesScanned).toHaveLength(1);
+    expect(finalized?.modulesFailed).toHaveLength(1);
+    expect(nextModuleBatch(finalized)).toBe(1);
+
+    const truncated = campaignPass({ index: 0, scanned: [0], complete: false });
+    expect(finalizeFailedModuleBatch(truncated)).toBeNull();
   });
 
   it.each([
