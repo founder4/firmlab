@@ -11,6 +11,7 @@ import {
   describeCarvedModule,
   fingerprintRuleCorpus,
   fwhuntModuleBatch,
+  fwhuntModuleConcurrency,
   latestFwHuntResult,
   nextModuleBatch,
   parseFwHuntOutput,
@@ -249,6 +250,13 @@ describe('FwHunt campaign configuration', () => {
     expect(fwhuntModuleBatch({ FIRMLAB_FWHUNT_MODULE_BATCH: '-1' })).toBe(0);
     expect(fwhuntModuleBatch({ FIRMLAB_FWHUNT_MODULE_BATCH: '1.5' })).toBe(0);
     expect(fwhuntModuleBatch({ FIRMLAB_FWHUNT_MODULE_BATCH: 'nope' })).toBe(0);
+  });
+
+  it('uses four module workers by default and bounds an explicit deployment override', () => {
+    expect(fwhuntModuleConcurrency({})).toBe(4);
+    expect(fwhuntModuleConcurrency({ FIRMLAB_FWHUNT_MODULE_CONCURRENCY: '8' })).toBe(8);
+    expect(fwhuntModuleConcurrency({ FIRMLAB_FWHUNT_MODULE_CONCURRENCY: '200' })).toBe(16);
+    expect(fwhuntModuleConcurrency({ FIRMLAB_FWHUNT_MODULE_CONCURRENCY: '0' })).toBe(4);
   });
 
   it('changes the corpus identity when detector bytes change without metadata changing', () => {

@@ -68,6 +68,9 @@ export const DEFAULT_MODULE_BUDGET_MS = 6 * 60 * 1000;
 /** Per-module ceiling. A module that blows through this is reported as unscanned, never as clean. */
 export const DEFAULT_MODULE_TIMEOUT_MS = 90 * 1000;
 
+/** Independent module analyses may use the deployment's four CPU slots without changing campaign semantics. */
+export const DEFAULT_MODULE_CONCURRENCY = 4;
+
 /** The first deterministic slice of the global ranking. Batches are zero-based at the API boundary. */
 export const DEFAULT_MODULE_BATCH = 0;
 
@@ -95,6 +98,14 @@ export function fwhuntModuleBatch(env: NodeJS.ProcessEnv = process.env): number 
   if (raw === undefined || raw.trim() === '') return DEFAULT_MODULE_BATCH;
   const n = Number(raw);
   return Number.isSafeInteger(n) && n >= 0 ? n : DEFAULT_MODULE_BATCH;
+}
+
+/** `FIRMLAB_FWHUNT_MODULE_CONCURRENCY` — bounded parallel rizin analyses inside one module window. */
+export function fwhuntModuleConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.FIRMLAB_FWHUNT_MODULE_CONCURRENCY;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MODULE_CONCURRENCY;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? Math.min(n, 16) : DEFAULT_MODULE_CONCURRENCY;
 }
 
 /** One rule variant's verdict, as the analyzer reports it. */
@@ -1334,9 +1345,31 @@ export interface FwHuntModuleOptions {
   moduleBatch?: number;
   /** Wall-clock ceiling for the whole pass. */
   moduleBudgetMs?: number;
+  /** Independent module scans allowed at once. Defaults to FIRMLAB_FWHUNT_MODULE_CONCURRENCY (4). */
+  moduleConcurrency?: number;
   /** Compatible accumulated result from earlier windows of this image. Never merged without matching fingerprints. */
   previousModulePass?: ModulePass | null;
   env?: NodeJS.ProcessEnv;
+}
+
+/** Bounded worker pool that preserves input order, keeping batch records deterministic under parallel execution. */
+async function mapConcurrent<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      results[index] = await work(items[index] as T);
+    }
+  };
+  const count = Math.min(items.length, Math.max(1, concurrency));
+  await Promise.all(Array.from({ length: count }, () => worker()));
+  return results;
 }
 
 /** The analyzer is a console script inside the same venv as the library, next to its interpreter. */
@@ -1454,9 +1487,13 @@ async function runModulePass(
       };
     }
     const budgetMs = opts.moduleBudgetMs ?? DEFAULT_MODULE_BUDGET_MS;
+    const concurrency = Math.max(
+      1,
+      Math.min(16, opts.moduleConcurrency ?? fwhuntModuleConcurrency(opts.env ?? process.env)),
+    );
     const ruleArgs = rules.flatMap((r) => ['-r', path.join(rulesDir, r.path)]);
     handle.log(
-      `fwhunt: per-module batch ${batchIndex + 1}/${batchCount} — ${rules.length} module rule(s) against ranking positions ${batchStart + 1}-${batchStart + selected.length} of ${modules.length}.`,
+      `fwhunt: per-module batch ${batchIndex + 1}/${batchCount} — ${rules.length} module rule(s) against ranking positions ${batchStart + 1}-${batchStart + selected.length} of ${modules.length}, concurrency ${concurrency}.`,
     );
 
     const verdicts: RuleVerdict[] = [];
@@ -1466,11 +1503,10 @@ async function runModulePass(
     let unreadableLines = 0;
     const deadline = Date.now() + budgetMs;
 
-    for (const mod of selected) {
+    const results = await mapConcurrent(selected, concurrency, async (mod) => {
       const left = deadline - Date.now();
       if (left <= 0) {
-        outOfBudget.push(mod);
-        continue;
+        return { mod, state: 'budget' as const, verdicts: [] as RuleVerdict[], unreadableLines: 0 };
       }
       let stdout = '';
       try {
@@ -1483,15 +1519,31 @@ async function runModulePass(
         stdout = (err as { stdout?: string }).stdout ?? '';
       }
       const parsed = parseFwHuntOutput(stdout);
-      unreadableLines += parsed.unreadableLines;
       if (parsed.verdicts.length === 0) {
-        failed.push(mod);
-        continue;
+        return {
+          mod,
+          state: 'failed' as const,
+          verdicts: [] as RuleVerdict[],
+          unreadableLines: parsed.unreadableLines,
+        };
       }
-      scanned.push(mod);
       // The analyzer echoes back the PATH we handed it; re-stamp with the module's own label, which is what a
       // reader can act on and what the ranking already keyed on.
-      for (const v of parsed.verdicts) verdicts.push({ ...v, module: mod.name });
+      return {
+        mod,
+        state: 'scanned' as const,
+        verdicts: parsed.verdicts.map((v) => ({ ...v, module: mod.name })),
+        unreadableLines: parsed.unreadableLines,
+      };
+    });
+    for (const result of results) {
+      unreadableLines += result.unreadableLines;
+      if (result.state === 'budget') outOfBudget.push(result.mod);
+      else if (result.state === 'failed') failed.push(result.mod);
+      else {
+        scanned.push(result.mod);
+        verdicts.push(...result.verdicts);
+      }
     }
 
     const dropped = [...outOfBudget, ...skipped];
