@@ -66,7 +66,7 @@ export const DEFAULT_MODULE_CAP = 12;
 export const DEFAULT_MODULE_BUDGET_MS = 6 * 60 * 1000;
 
 /** Per-module ceiling. A module that blows through this is reported as unscanned, never as clean. */
-export const DEFAULT_MODULE_TIMEOUT_MS = 90 * 1000;
+export const DEFAULT_MODULE_TIMEOUT_MS = 3 * 60 * 1000;
 
 /** Independent module analyses may use the deployment's four CPU slots without changing campaign semantics. */
 export const DEFAULT_MODULE_CONCURRENCY = 4;
@@ -106,6 +106,14 @@ export function fwhuntModuleConcurrency(env: NodeJS.ProcessEnv = process.env): n
   if (raw === undefined || raw.trim() === '') return DEFAULT_MODULE_CONCURRENCY;
   const n = Number(raw);
   return Number.isSafeInteger(n) && n > 0 ? Math.min(n, 16) : DEFAULT_MODULE_CONCURRENCY;
+}
+
+/** `FIRMLAB_FWHUNT_MODULE_TIMEOUT_MS` — per-module ceiling, separate from the six-minute batch budget. */
+export function fwhuntModuleTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.FIRMLAB_FWHUNT_MODULE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MODULE_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 1_000 ? Math.min(n, DEFAULT_MODULE_BUDGET_MS) : DEFAULT_MODULE_TIMEOUT_MS;
 }
 
 /** One rule variant's verdict, as the analyzer reports it. */
@@ -1347,6 +1355,8 @@ export interface FwHuntModuleOptions {
   moduleBudgetMs?: number;
   /** Independent module scans allowed at once. Defaults to FIRMLAB_FWHUNT_MODULE_CONCURRENCY (4). */
   moduleConcurrency?: number;
+  /** Per-module ceiling. Defaults to FIRMLAB_FWHUNT_MODULE_TIMEOUT_MS (180000). */
+  moduleTimeoutMs?: number;
   /** Compatible accumulated result from earlier windows of this image. Never merged without matching fingerprints. */
   previousModulePass?: ModulePass | null;
   env?: NodeJS.ProcessEnv;
@@ -1511,7 +1521,7 @@ async function runModulePass(
       let stdout = '';
       try {
         const r = await execFileAsync(fwhuntPython(), analyzerArgv(['scan-module', mod.path, ...ruleArgs]), {
-          timeout: Math.min(left, DEFAULT_MODULE_TIMEOUT_MS),
+          timeout: Math.min(left, opts.moduleTimeoutMs ?? fwhuntModuleTimeoutMs(opts.env ?? process.env)),
           maxBuffer: 32 * 1024 * 1024,
         });
         stdout = r.stdout;

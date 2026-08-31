@@ -12,6 +12,7 @@ import {
   fingerprintRuleCorpus,
   fwhuntModuleBatch,
   fwhuntModuleConcurrency,
+  fwhuntModuleTimeoutMs,
   latestFwHuntResult,
   nextModuleBatch,
   parseFwHuntOutput,
@@ -257,6 +258,13 @@ describe('FwHunt campaign configuration', () => {
     expect(fwhuntModuleConcurrency({ FIRMLAB_FWHUNT_MODULE_CONCURRENCY: '8' })).toBe(8);
     expect(fwhuntModuleConcurrency({ FIRMLAB_FWHUNT_MODULE_CONCURRENCY: '200' })).toBe(16);
     expect(fwhuntModuleConcurrency({ FIRMLAB_FWHUNT_MODULE_CONCURRENCY: '0' })).toBe(4);
+  });
+
+  it('allows slow real modules to finish while bounding the per-module timeout by the batch budget', () => {
+    expect(fwhuntModuleTimeoutMs({})).toBe(180_000);
+    expect(fwhuntModuleTimeoutMs({ FIRMLAB_FWHUNT_MODULE_TIMEOUT_MS: '240000' })).toBe(240_000);
+    expect(fwhuntModuleTimeoutMs({ FIRMLAB_FWHUNT_MODULE_TIMEOUT_MS: '999999' })).toBe(360_000);
+    expect(fwhuntModuleTimeoutMs({ FIRMLAB_FWHUNT_MODULE_TIMEOUT_MS: '999' })).toBe(180_000);
   });
 
   it('changes the corpus identity when detector bytes change without metadata changing', () => {
