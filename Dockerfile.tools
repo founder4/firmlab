@@ -126,6 +126,43 @@ RUN bash -c 'mkdir -p /opt/jdk \
     && /opt/jdk/bin/java -version' \
     || echo "Ghidra optional install failed — decompiler degrades honestly"
 
+# === Ghidra native components — the decompiler itself, which the release does NOT ship for arm64. ===
+#
+# `analyzeHeadless` is a Java launcher; the thing that actually decompiles is a NATIVE binary under
+# `Ghidra/Features/Decompiler/os/<platform>/`. The official release carries linux_x86_64, mac_arm_64, mac_x86_64
+# and win_x86_64 — and nothing for linux_arm_64. On this image the layer therefore installed cleanly, the tool
+# probe passed, headless runs completed, and every function came back with an EMPTY pseudocode string: a
+# decompilation that decompiled nothing, reported as a success. `providers/ghidra.ts` now refuses to call that
+# available, but the real fix is to have the binary.
+#
+# Three things this recipe has to get right, each of which broke the first attempt:
+#
+#   1. **The Makefile has no aarch64 case.** Its OS detection tests for `x86_64` and otherwise falls through to
+#      the 32-bit branch, so it passes `-m32` and g++ refuses it outright. `ARCH_TYPE=` on the make command line
+#      overrides the makefile assignment; empty is correct here, since native aarch64 needs no arch flag.
+#   2. **`OSDIR` is empty for the same reason**, so `install_ghidraopt` would copy to `os//decompile`. The
+#      binaries are placed by hand instead.
+#   3. **The object directories are not created by any rule.** They ship in the distribution; a `make clean`
+#      removes them and then every compile dies with "can't create ghi_opt/xml.o: No such file or directory" —
+#      while make's own exit status is easy to lose in a shell chain. They are created explicitly.
+#
+# Only `ghidra_opt` (→ `decompile`) and `sleigh_opt` (→ `sleigh`) are needed; `decomp_opt` is a standalone CLI
+# that wants libbfd and nothing here drives it. Guarded on the target arch so an x86_64 build keeps the shipped
+# binaries, and the object tree is deleted afterwards — it is ~400 MB of `.o` that no longer has a reader.
+RUN bash -c 'set -e; [ "$(uname -m)" = "aarch64" ] || { echo "not aarch64 — using the natives Ghidra ships"; exit 0; }; \
+    apt-get update && apt-get install -y --no-install-recommends g++ make bison flex zlib1g-dev && rm -rf /var/lib/apt/lists/*; \
+    D=/opt/ghidra/Ghidra/Features/Decompiler; C=$D/src/decompile/cpp; \
+    mkdir -p "$C"/com_dbg "$C"/com_opt "$C"/ghi_dbg "$C"/ghi_opt "$C"/sla_dbg "$C"/sla_opt "$C"/test_dbg; \
+    make -C "$C" -j"$(nproc)" ARCH_TYPE= OSDIR=linux_arm_64 ghidra_opt sleigh_opt; \
+    mkdir -p "$D"/os/linux_arm_64; \
+    install -m 755 "$C"/ghidra_opt "$D"/os/linux_arm_64/decompile; \
+    install -m 755 "$C"/sleigh_opt "$D"/os/linux_arm_64/sleigh; \
+    rm -rf "$C"/com_dbg "$C"/com_opt "$C"/ghi_dbg "$C"/ghi_opt "$C"/sla_dbg "$C"/sla_opt "$C"/test_dbg \
+           "$C"/ghidra_opt "$C"/sleigh_opt; \
+    test -x "$D"/os/linux_arm_64/decompile && test -x "$D"/os/linux_arm_64/sleigh; \
+    echo "Ghidra natives built for linux_arm_64"' \
+    || echo "Ghidra native build failed — decompiler reports blocked_by_platform honestly"
+
 # === sasquatch — patched unsquashfs for VENDOR/non-standard SquashFS (providers/extract.ts). Maintained onekey-sec
 # .deb (no source build). `latest/download/<asset>` is a stable redirect — no api.github.com call to rate-limit.
 # Placed LAST (a fast, volatile .deb layer) so it doesn't invalidate the slow tool builds above on a re-add. ===
