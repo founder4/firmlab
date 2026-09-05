@@ -5,7 +5,7 @@ long work session, grounded in a precise review of the current tree (file refere
 
 ---
 
-## Current baseline — 2026-08-31
+## Current baseline — 2026-09-05
 
 - Reproducible deploy contract, CI audit/type/test/build/Docker smoke, and exact OCI revision checks are shipped.
 - The web restores persisted deep-analysis results, lazy-loads routes, and has been exercised at 390×844; the main
@@ -13,16 +13,19 @@ long work session, grounded in a precise review of the current tree (file refere
 - Findings census semantics are explicit (established/lead/blocked/dismissed/asserted/other), with the legacy
   `unproven` field retained only as a compatibility aggregate.
 - The validation corpus has 25 samples / 8 classes. Its generated matrix covers 390 applicable stage cells (130
-  found, 131 ran-empty, 82 degraded, 33 no-input, 14 not-run).
+  found, 142 ran-empty, 85 degraded, 33 no-input, 0 not-run).
 - Kernel versions now correlate through a Linux-CNA-scoped NVD query; module correlation requires byte-level
   identity anchors and remains a lead. Neither path promotes version presence to device exploitability.
 - The official Framework QMK image classifies as `rtos`/`arm` from RP2040 boot structure and corroborated QMK
   markers. The Framework BIOS FwHunt campaign settled all 35 deterministic batches: 404/409 modules produced
   verdicts, 5 non-convergent modules remain explicit unknowns, and no module was left unattempted. The union was
-  106/108 rules; the two missing rules target bootloaders rather than EFI modules.
+  106/108 rules; the two missing rules target bootloaders rather than EFI modules. The OVMF campaign likewise
+  settled all 12 batches: 131/136 modules produced verdicts, 5 remain explicit unknowns, and none is unattempted.
 
-Next, in order: run the scheduled corpus campaign and drive down the 14 `not-run`, 82 `degraded` and 33 `no-input`
-matrix cells; add config/patch/VEX pruning to the kernel-CVE prefix; then return
+Next, in order: turn the zero-`not-run` corpus pass into a scheduled campaign and drive down the 85 `degraded`
+cells where more evidence can actually unlock coverage. The 33 `no-input` cells are all downstream of three
+rootfs-less artifacts whose fresh extraction proved incomplete or data-only; they need reacquisition, not retries.
+Then add config/patch/VEX pruning to the kernel-CVE prefix; then return
 to full-system guest networking/console and RTOS peripheral fuzzing. The actionable list lives in
 [`BACKLOG.md`](BACKLOG.md).
 

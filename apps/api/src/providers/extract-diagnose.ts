@@ -23,6 +23,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import type { BlobAttempt } from './extract-recover.js';
 
 /** SquashFS compression ids, as stored in the superblock. */
 const SQUASHFS_COMPRESSION: Record<number, string> = {
@@ -256,7 +257,7 @@ const BLOB_DIAGNOSE_CAP = 64 * 1024 * 1024;
  * came out but none of it is a rootfs (go look at the content — it may hold keys); a filesystem was carved and
  * could not be opened (why, from its own superblock); or nothing came out at all.
  */
-export function diagnoseNoRootfs(outputDir: string): NoRootfsDiagnosis {
+export function diagnoseNoRootfs(outputDir: string, recoveryAttempts: readonly BlobAttempt[] = []): NoRootfsDiagnosis {
   const volumes = collectVolumes(outputDir).filter((v) => v.files > 0);
   const totalFiles = volumes.reduce((n, v) => n + v.files, 0);
 
@@ -285,6 +286,18 @@ export function diagnoseNoRootfs(outputDir: string): NoRootfsDiagnosis {
     seenBlob.add(key);
     const bytes = readBlob(blobPath);
     if (!bytes) continue;
+    const recovery = recoveryAttempts.find((attempt) => path.resolve(attempt.blob) === path.resolve(blobPath));
+    const recoveredDiagnosis = recovery
+      ? recovery.outcome === 'decompressed'
+        ? `${recovery.format} payload opened to ${recovery.bytes ?? 0} bytes and was rescanned; no Linux rootfs was found in the decompressed bytes.`
+        : recovery.outcome === 'partial'
+          ? `${recovery.format} decompression recovered ${recovery.bytes ?? 0} bytes before the stream failed; the recovered bytes were rescanned and no Linux rootfs was found. ${recovery.note}`
+          : recovery.note
+      : null;
+    if (recoveredDiagnosis) {
+      blobs.push({ path: blobPath, diagnosis: recoveredDiagnosis });
+      continue;
+    }
     const squash = diagnoseSquashfs(bytes);
     if (squash) {
       blobs.push({ path: blobPath, diagnosis: squash.verdict });

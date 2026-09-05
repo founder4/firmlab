@@ -244,7 +244,9 @@ async function extractRun(c: RunCtx): Promise<StepOutcome> {
     summary: `no rootfs (${ex.extractor})`,
     findingCount: 0,
     degraded: true,
-    note: last ? `carve stopped: ${last.detail}` : 'no extractor installed / not a Linux container',
+    note: last
+      ? `carve stopped: ${last.detail}`
+      : (ex.noRootfsDiagnosis?.verdict ?? 'no extractor installed / not a Linux container'),
   };
 }
 

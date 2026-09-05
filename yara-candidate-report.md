@@ -1,0 +1,94 @@
+# Evaluación YARA Forge Core 20260830
+
+- Corpus desplegado: `20260816` (5034 reglas)
+- Candidata: `20260830` (5164 reglas)
+- Archivo verificado: `sha256:74917bc7f0e6c44c1ae1bec9c93fbb7de509a3f5c33184a40272840a91a6d3b4`
+- Reglas añadidas/eliminadas: 134 / 4
+- Rootfs A/B: 8
+- Matches actual/candidata: 0 / 0
+- Matches nuevos/perdidos: 0 / 0
+
+## Positivos inertes
+
+```text
+TRELLIX_ARC_Malw_Eicar	eicar.inert
+SEKOIA_Generic_Php_Webshell	webshell.inert.php
+SIGNATURE_BASE_MAL_Mirai_Nov19_1	mirai-shape.inert
+YARA external: 3 positivos inertes confirmados
+```
+
+## Primeras reglas añadidas
+
+```text
+BLACKBERRY_Mal_Infostealer_MSI_EXE_Jupyter_Certificate
+BLACKBERRY_Mal_Infostealer_MSI_Jupyter_Embedded_Powershell
+CAPE_Worldwind
+DITEKSHEN_INDICATOR_RMM_Atera
+DITEKSHEN_INDICATOR_RMM_Connectwise_Screenconnect
+DITEKSHEN_INDICATOR_RTF_Threadkit_Exploit_Builder_Document
+DITEKSHEN_INDICATOR_TOOL_Avbypass_Aviator
+DITEKSHEN_INDICATOR_TOOL_ENUM_Sharpshares
+DITEKSHEN_INDICATOR_TOOL_EXP_Eternalblue
+DITEKSHEN_INDICATOR_TOOL_LTM_Sharpexec
+DITEKSHEN_INDICATOR_TOOL_PWS_Mimikatz
+DITEKSHEN_INDICATOR_TOOL_Sharpghosttask
+DITEKSHEN_MALWARE_Linux_Hiddenwasp
+DITEKSHEN_MALWARE_Osx_Genieo
+DITEKSHEN_MALWARE_Win_Actionrat
+DITEKSHEN_MALWARE_Win_Agnianestealer
+DITEKSHEN_MALWARE_Win_Arcrypt
+DITEKSHEN_MALWARE_Win_Arechclient2
+DITEKSHEN_MALWARE_Win_Babuk
+DITEKSHEN_MALWARE_Win_Blackcat
+DITEKSHEN_MALWARE_Win_Blackhunt
+DITEKSHEN_MALWARE_Win_Blitzgrabber
+DITEKSHEN_MALWARE_Win_Bluebot
+DITEKSHEN_MALWARE_Win_Bobik
+DITEKSHEN_MALWARE_Win_Browsergrabber
+DITEKSHEN_MALWARE_Win_Buterat
+DITEKSHEN_MALWARE_Win_Chebka
+DITEKSHEN_MALWARE_Win_Cicada3301
+DITEKSHEN_MALWARE_Win_Cratpluginkeylogger
+DITEKSHEN_MALWARE_Win_Cratpluginransomhansom
+DITEKSHEN_MALWARE_Win_Cratpluginscreencapture
+DITEKSHEN_MALWARE_Win_Darkeye
+DITEKSHEN_MALWARE_Win_Dlagent08
+DITEKSHEN_MALWARE_Win_Espioloader
+DITEKSHEN_MALWARE_Win_Flagpro
+DITEKSHEN_MALWARE_Win_Fpspy
+DITEKSHEN_MALWARE_Win_Garrantdecrypt
+DITEKSHEN_MALWARE_Win_Gelsevirine
+DITEKSHEN_MALWARE_Win_Hakunamatata_Builder
+DITEKSHEN_MALWARE_Win_Horuseyesrat
+DITEKSHEN_MALWARE_Win_Jesterstealer
+DITEKSHEN_MALWARE_Win_Karkoff
+DITEKSHEN_MALWARE_Win_Krakenstealer
+DITEKSHEN_MALWARE_Win_Ktlvdoor
+DITEKSHEN_MALWARE_Win_Lighthand
+DITEKSHEN_MALWARE_Win_Locked
+DITEKSHEN_MALWARE_Win_Lokilocker
+DITEKSHEN_MALWARE_Win_Lorenz
+DITEKSHEN_MALWARE_Win_Lummastealer
+DITEKSHEN_MALWARE_Win_MB150
+```
+
+## Primeras reglas eliminadas
+
+```text
+R3C0NST_ATM_Malware_XFS_DIRECT
+SIGNATURE_BASE_HKTL_Reverse_Connect_TCP_PTY_Shell
+SIGNATURE_BASE_MAL_CRIME_Cobaltgang_Malware_Oct19_1
+SIGNATURE_BASE_SUSP_TINY_PE
+```
+
+## Matches nuevos
+
+```text
+```
+
+## Matches perdidos
+
+```text
+```
+
+**Este informe no modifica `corpus.lock.json`, el compose ni el corpus desplegado.**

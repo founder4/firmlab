@@ -145,7 +145,7 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
 
     // Still nothing. Say WHY, from what is on disk: a `rootfsPath: null` with no verdict is the silent-empty
     // failure docs/AUTONOMOUS-WORKERS.md §3.1(3) blames for the GL.iNet and GE800 misses.
-    const diagnosis = diagnoseNoRootfs(outputDir);
+    const diagnosis = diagnoseNoRootfs(outputDir, recovery.attempts);
     handle.log(`No rootfs — diagnosis: ${diagnosis.verdict}`);
     for (const v of diagnosis.volumes.slice(0, 8)) {
       handle.log(`  volume ${path.relative(outputDir, v.dir)}: ${v.files} file(s) — ${v.topLevel.join(', ')}`);

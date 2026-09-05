@@ -160,6 +160,26 @@ describe('parseLzmaHeader — a carved blob nobody opened is not an empty result
     expect(d.verdict).not.toContain('Nothing was extracted');
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it('replaces unexamined wording after the recovery pass opened and rescanned the payload', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'diagnose-recovered-lzma-'));
+    const blob = path.join(root, '50040.7z');
+    fs.writeFileSync(blob, lzma(7660784, 4096));
+    const d = diagnoseNoRootfs(root, [
+      {
+        blob,
+        format: 'lzma-alone',
+        bytes: 511555,
+        outcome: 'partial',
+        note: 'compressed data is corrupt',
+      },
+    ]);
+    expect(d.verdict).toContain('recovered 511555 bytes');
+    expect(d.verdict).toContain('rescanned');
+    expect(d.verdict).toContain('compressed data is corrupt');
+    expect(d.verdict).not.toContain('UNEXAMINED');
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });
 
 describe('the verdict stays readable, and does not accuse an extractor that succeeded', () => {

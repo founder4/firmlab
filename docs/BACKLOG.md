@@ -32,10 +32,14 @@
 - [x] Compactar FwHunt: un único snapshot durable, veredictos agregados reconstruibles desde sus lotes y borrado de snapshots acumulativos sustituidos; la respuesta final del Framework conserva 51.308 veredictos por lote sin duplicarlos en el agregado.
 - [x] Aislar módulos EFI no convergentes: timeout de 180 s por módulo, terminación de todo el grupo de procesos, `tini` como reaper y estado terminal `finalizedWithFailures` que permite continuar sin llamar limpio a un fallo.
 - [x] Hacer que la cobertura y la matriz lean la campaña FwHunt durable más reciente en vez del snapshot histórico incrustado en el último `opacidad`.
+- [x] Ejecutar las dos muestras nuevas `dragon_reto*`: las 14 celdas `not-run` bajaron a 0 y la matriz viva quedó regenerada con 25 muestras / 390 etapas.
+- [x] Revalidar las 33 celdas `no-input`: dependen exclusivamente de BeanView, Asus y AliExpress; una extracción fresca confirmó, respectivamente, volúmenes de datos sin rootfs, SquashFS truncado y LZMA corrupto. Reintentarlas no recupera bytes ausentes.
+- [x] Evaluar YARA Forge Core 20260830 contra los mismos 8 rootfs: compila, conserva los 3 positivos inertes, añade 134 reglas, elimina 4 y no introduce ni pierde matches en el corpus actual. La promoción sigue siendo una decisión separada.
+- [x] Completar la campaña FwHunt de OVMF: 12/12 lotes terminales, 131/136 módulos con veredicto, 5 no convergentes explícitamente desconocidos y 0 módulos sin intentar (antes quedaban 124).
 
 ## Siguiente
 
-- [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 14 celdas `not-run`, 82 `degraded` y 33 `no-input` entre 390 etapas aplicables; priorizar por clase y coste.
+- [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 0 celdas `not-run`, 85 `degraded` y 33 `no-input` entre 390 etapas aplicables; priorizar las degradadas desbloqueables por clase y coste, y no contar como deuda ejecutable los tres artefactos que requieren reacquisición.
 - [ ] Profundizar la correlación de kernel: el prefijo NVD puede tener miles de CVE (2.037 para Linux 2.6.31); usar config/subsistema, diff de parches o VEX de proveedor para descartar candidatos y paginar más allá de las primeras 50 sin presentarlas como el conjunto.
 - [ ] Hacer que la reparación del invitado alcance una ruta ejecutada y recuperar red/console interactiva en full-system; la intervención al final de `rcS` sigue siendo inerte.
 - [ ] Ampliar RTOS a fuzzing de periféricos/MMIO y enumeración de tareas; Renode demuestra vida, no cobertura del HAL.
