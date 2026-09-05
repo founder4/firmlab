@@ -272,6 +272,9 @@ export interface SbomResult {
   reason?: string;
   target: string;
   packageCount: number;
+  /** True totals from syft/grype. Optional forever — a result stored by an older build carries neither. */
+  packageTotal?: number;
+  vulnerabilityTotal?: number;
   packages: { name: string; version: string; type: string }[];
   grypeAvailable: boolean;
   vulnerabilities: SbomVuln[];

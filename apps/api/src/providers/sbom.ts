@@ -32,6 +32,19 @@ export interface SbomResult {
   grypeAvailable: boolean;
   vulnerabilities: SbomVuln[];
   counts: Record<Severity, number>;
+  /**
+   * What syft and grype actually found, against what this result LISTS.
+   *
+   * Both OPTIONAL FOREVER: an `SbomResult` is persisted as JSON on the job row and re-read for as long as the
+   * image exists, so a stored result is data written by an older build and cannot carry a field it never had.
+   * Absent means the totals were not recorded — never that nothing was dropped.
+   *
+   * These exist because `packageCount` and `counts` were both read off the CAPPED list and presented as totals.
+   * Measured on the deployed GL.iNet image: syft catalogued 2 019 packages and the stored result said
+   * `packageCount: 500`, which is `PKG_CAP` — a bound wearing the name of a count.
+   */
+  packageTotal?: number;
+  vulnerabilityTotal?: number;
 }
 
 const PKG_CAP = 500;
@@ -94,6 +107,8 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
   // === syft: software bill of materials ===
   handle.log(`Running: syft scan dir:${rootfsPath} -o json`);
   let packages: { name: string; version: string; type: string }[] = [];
+  let packageTotal = 0;
+  let vulnerabilityTotal = 0;
   try {
     const { stdout } = await execFileAsync('syft', ['scan', `dir:${rootfsPath}`, '-o', 'json'], {
       timeout: 10 * 60 * 1000,
@@ -101,12 +116,13 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
     });
     const parsed = JSON.parse(stdout) as { artifacts?: SyftArtifact[] };
     const artifacts = Array.isArray(parsed.artifacts) ? parsed.artifacts : [];
-    packages = artifacts.slice(0, PKG_CAP).map((a) => ({
-      name: String(a.name ?? '?'),
-      version: String(a.version ?? ''),
-      type: String(a.type ?? ''),
-    }));
-    handle.log(`syft catalogued ${artifacts.length} package(s).`);
+    packageTotal = artifacts.length;
+    // Sorted before the cut, so which 500 survive is a stated rule and not syft's catalogue order.
+    packages = [...artifacts]
+      .map((a) => ({ name: String(a.name ?? '?'), version: String(a.version ?? ''), type: String(a.type ?? '') }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version))
+      .slice(0, PKG_CAP);
+    handle.log(`syft catalogued ${artifacts.length} package(s); listing ${packages.length}.`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     handle.log(`syft failed: ${message}`);
@@ -128,7 +144,8 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
       });
       const parsed = JSON.parse(stdout) as { matches?: GrypeMatch[] };
       const matches = Array.isArray(parsed.matches) ? parsed.matches : [];
-      const mapped: SbomVuln[] = matches.slice(0, VULN_CAP).map((m) => {
+      vulnerabilityTotal = matches.length;
+      const mapped: SbomVuln[] = matches.map((m) => {
         const fixVersions = m.vulnerability?.fix?.versions;
         return {
           id: String(m.vulnerability?.id ?? '?'),
@@ -138,10 +155,16 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
           fixedIn: Array.isArray(fixVersions) && fixVersions.length > 0 ? fixVersions.join(', ') : null,
         };
       });
+      // Rank and count over EVERY match, then cut. The cap used to be applied to grype's raw array first, so it
+      // truncated by grype's own emission order — arrival order — and `counts` was a tally of the survivors
+      // presented as a total. Severity now decides who survives, and the counts are the real ones either way.
       const ranked = rankVulnerabilities(mapped);
-      vulnerabilities = ranked.sorted;
+      vulnerabilities = ranked.sorted.slice(0, VULN_CAP);
       counts = ranked.counts;
-      handle.log(`grype found ${matches.length} vulnerabilit(ies): ${counts.Critical} critical, ${counts.High} high.`);
+      handle.log(
+        `grype found ${matches.length} vulnerabilit(ies): ${counts.Critical} critical, ${counts.High} high; ` +
+          `listing ${vulnerabilities.length} highest-severity first.`,
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       handle.log(`grype failed (SBOM still returned): ${message}`);
@@ -152,6 +175,8 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
     available: true,
     target: rootfsPath,
     packageCount: packages.length,
+    packageTotal,
+    vulnerabilityTotal,
     packages,
     grypeAvailable,
     vulnerabilities,

@@ -979,15 +979,35 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
 
       {result?.available && (
         <>
+          {/* The stats show the TRUE totals when the result recorded them. They used to show the capped list's
+              own length: measured on the GL.iNet, syft catalogued 2 019 packages and this tile read 500, which is
+              `PKG_CAP`. `counts` is now tallied over every match, so critical/high is exact regardless. */}
           <div className="grid grid-3" style={{ marginBottom: 18 }}>
-            <Stat label={t.imageDetail.sbom.statPackages} value={String(result.packageCount)} />
-            <Stat label={t.imageDetail.sbom.statVulns} value={String(result.vulnerabilities.length)} />
+            <Stat label={t.imageDetail.sbom.statPackages} value={String(result.packageTotal ?? result.packageCount)} />
+            <Stat
+              label={t.imageDetail.sbom.statVulns}
+              value={String(result.vulnerabilityTotal ?? result.vulnerabilities.length)}
+            />
             <Stat
               label={t.imageDetail.sbom.statCritHigh}
               value={`${result.counts.Critical} / ${result.counts.High}`}
               mono
             />
           </div>
+
+          {/* And where the listing is shorter than the total, say so and by what rule — the tables below are a
+              bounded view of a larger set, not the set. */}
+          {(result.packageTotal ?? 0) > result.packages.length ||
+          (result.vulnerabilityTotal ?? 0) > result.vulnerabilities.length ? (
+            <div className="hint" style={{ marginBottom: 14, maxWidth: '72ch' }}>
+              {t.imageDetail.sbom.listingBound(
+                result.packages.length,
+                result.packageTotal ?? result.packages.length,
+                result.vulnerabilities.length,
+                result.vulnerabilityTotal ?? result.vulnerabilities.length,
+              )}
+            </div>
+          ) : null}
 
           {/* Absence of the matcher is not absence of CVEs — the banner has to say which of the two happened. */}
           {!result.grypeAvailable && <div className="banner banner-info">{t.imageDetail.sbom.grypeMissing}</div>}

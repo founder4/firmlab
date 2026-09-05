@@ -167,6 +167,23 @@ export const imageDetail = {
   },
 
   sbom: {
+    /**
+     * The listing bound, and the two things it does NOT touch.
+     *
+     * `packageCount` and `counts` were both read off the capped list and shown as totals — on the GL.iNet, 2 019
+     * packages catalogued and `500` on screen. The tiles now carry the real totals and this sentence carries the
+     * bound, which is a cut by severity (vulnerabilities) and by name (packages), never by the order syft and
+     * grype happened to emit.
+     */
+    listingBound: (pkgShown: number, pkgTotal: number, vulnShown: number, vulnTotal: number) =>
+      [
+        pkgTotal > pkgShown ? `Listing ${pkgShown} of ${pkgTotal} packages, by name.` : '',
+        vulnTotal > vulnShown ? `Listing ${vulnShown} of ${vulnTotal} matches, highest severity first.` : '',
+        'The counts above are tallied over every match, not over the listing — the cut bounds these tables only.',
+      ]
+        .filter(Boolean)
+        .join(' '),
+
     title: 'Software Bill of Materials + CVEs',
     sub: 'syft inventories the extracted rootfs; grype matches known (N-day) CVEs.',
     scanning: 'Scanning…',

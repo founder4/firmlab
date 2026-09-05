@@ -153,6 +153,15 @@ export const imageDetail: Messages['imageDetail'] = {
   },
 
   sbom: {
+    listingBound: (pkgShown: number, pkgTotal: number, vulnShown: number, vulnTotal: number) =>
+      [
+        pkgTotal > pkgShown ? `Se listan ${pkgShown} de ${pkgTotal} paquetes, por nombre.` : '',
+        vulnTotal > vulnShown ? `Se listan ${vulnShown} de ${vulnTotal} coincidencias, de mayor gravedad primero.` : '',
+        'Los recuentos de arriba se calculan sobre todas las coincidencias, no sobre el listado: el corte acota sólo estas tablas.',
+      ]
+        .filter(Boolean)
+        .join(' '),
+
     title: 'Lista de materiales de software (SBOM) + CVE',
     sub: 'syft inventaría el rootfs extraído; grype correlaciona los CVE conocidos (N-day).',
     scanning: 'Escaneando…',
