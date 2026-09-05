@@ -264,4 +264,3 @@ Muestras: `dragon-reto`.
 | Etiqueta | ID | Arquitectura | Fichero | Cobertura |
 |---|---|---|---|---:|
 | `dragon-reto` | `d24f3624` | unknown | dragon_reto.hex | 7/7 |
-

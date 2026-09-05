@@ -39,7 +39,37 @@
 
 ## Siguiente
 
+### Cobertura y análisis
+
 - [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 0 celdas `not-run`, 85 `degraded` y 33 `no-input` entre 390 etapas aplicables; priorizar las degradadas desbloqueables por clase y coste, y no contar como deuda ejecutable los tres artefactos que requieren reacquisición.
 - [ ] Profundizar la correlación de kernel: el prefijo NVD puede tener miles de CVE (2.037 para Linux 2.6.31); usar config/subsistema, diff de parches o VEX de proveedor para descartar candidatos y paginar más allá de las primeras 50 sin presentarlas como el conjunto.
 - [ ] Hacer que la reparación del invitado alcance una ruta ejecutada y recuperar red/console interactiva en full-system; la intervención al final de `rcS` sigue siendo inerte.
 - [ ] Ampliar RTOS a fuzzing de periféricos/MMIO y enumeración de tareas; Renode demuestra vida, no cobertura del HAL.
+
+### Corpus persistente — construido, cableado y vacío
+
+Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `artifact_occurrence` 2.003 filas de sólo 8 imágenes, `component_occurrence` 356 de 3, `credential_occurrence` 8 de 4, `reachability_prior` 3 de 3, `corpus_rule` ninguna. La página `/corpus` muestra `REUSED CREDENTIALS: 0` y `WATCHLIST RULES: 0`. La ventaja estructural que declara el comentario de módulo de `corpus.ts` no ha producido todavía un solo prior cruzado.
+
+- [ ] Alimentar el corpus desde todas las fuentes de secretos: `auxsecrets` (22 hallazgos en 4 imágenes), `nvram` y `certs` no llaman a `recordCredentials`; sólo lo hacen `secrets` (3 hallazgos) y `gitleaks` (13). El corpus nunca vio el 58 % de los secretos del libro mayor, y ésa es la causa directa del `credentialReuse: 0`.
+- [ ] Ampliar el filtro de `flagKnownCredentials` (`corpus.ts:169`, `f.source !== 'secrets'`) a esas mismas fuentes: hoy el Nivel 1 entero —watchlist, elevación a crítico y el «auto-flag it on future uploads» que promete la propia UI— sólo puede alcanzar 3 de los 38 hallazgos de secretos, aunque se promuevan reglas. Son dos defectos apilados: el corpus no graba `auxsecrets` y, aunque lo grabara, tampoco lo elevaría.
+- [ ] Añadir `pnpm corpus:reindex`: hoy sólo se registra en el instante del upload (`routes/images.ts:121`) o del SBOM (`routes/sbom.ts:39`), sin ninguna ruta de reconciliación, así que una base de conocimiento persistente acumula el sesgo de *cuándo* se subió cada imagen en vez de qué contiene. Las tablas son `INSERT OR IGNORE` sobre datos inmutables, luego el reindexado es idempotente por construcción.
+- [ ] Filtrar `componentPrevalence` con `HAVING imageCount > 1`, como ya hace `credentialReuse` (`corpus.ts:212`, el único `HAVING` del fichero): la tabla titulada «qué versiones abarcan más imágenes» devuelve 200 filas en las que ninguna supera 1, rellenas de módulos de kernel con versión `UNKNOWN` y 0 CVE. Y que su estado vacío diga por qué lo está —3 de 25 imágenes tienen SBOM—, igual que sí hace la sección de credenciales: un resultado vacío debe decir por qué, también aquí.
+- [ ] Decidir qué papel juega `vendor` en `deviceFamilyKey`: está sin poblar en 25 de 25 imágenes, de modo que las 13 familias son `unknown:clase:arquitectura` y cuatro routers sin relación comparten los priors de alcanzabilidad del Nivel 2. O se puebla desde la evidencia ya disponible (cadenas del rootfs, banners de servicio, FCC-ID, rutas NVRAM) o se retira de la clave; lo que no puede seguir es una clave que promete vendor y siempre responde `unknown`.
+- [ ] Desambiguar el nombre «corpus», que designa tres cosas sin relación entre sí: el corpus persistente entre imágenes (`apps/api/src/corpus.ts`), el corpus de validación de 25 muestras (`ops/corpus/validation-samples.lock.json`) y el corpus de reglas YARA (`ops/yara/corpus.lock.json`).
+
+### Presentación de los resultados
+
+- [ ] Agrupar y priorizar el libro mayor por proof state. Medido sobre DVRF (`57c12e70`): 129 hallazgos en una lista plana de unos 16.000 px, de los que 91 (71 %) son `needs_runtime_reproduction` y sólo 33 `static_confirmed`; 45 filas comparten una única forma de título y `binvuln` aporta 60 de 129. `FindingsLedger.tsx` no agrupa ni colapsa en ninguna de sus 585 líneas, así que una CVE confirmada pesa lo mismo que la fila 47 de «este binario importa strcpy». Contradice el cuidado de `selectFindings` en `binvuln.ts`, que evita truncar por orden de llegada y luego se pinta en plano: un límite no es una respuesta, pero una lista tampoco.
+- [ ] Exponer `credmatch` en la web: es el único route sin ninguna referencia en `apps/web/src`, pese a sus 1.337 líneas, un source estable en el libro mayor y ✓ en cuatro muestras de la matriz como «W3 · Credential cross-reference».
+
+### Deuda estructural
+
+- [ ] Extraer de `providers/jobs.ts` un planificador puro (admitir, liberar, encolar) que no importe `store.js`, y dejar que `jobs.ts` lo enlace. Hoy el primitivo de concurrencia no tiene fichero de test y es intesteable por la propia regla del repo — y es justo el componente cuyo comportamiento causó el bug del puerto gdb fijo cuando W9 programó dos sondas concurrentes. El patrón ya está resuelto en `opacidad-plan.ts` y `findings-normalize.ts`; falta aplicarlo donde más duele.
+- [ ] Revisar el reparto entre core y api: `packages/core` son 2.353 líneas frente a 84.223 de `apps/api`, y el dominio puro (`opacidad-plan.ts` 674, `boot-cmdline.ts` 868, `nvd.ts` 547, `opacidad-leads.ts` 511, `findings-normalize.ts` 312…) vive en la capa de aplicación porque no puede importar `store.js`. Son 65 módulos acoplados al store, 24 de ellos fuera de `routes/`. Decidir si core recupera ese dominio o si la regla se documenta como lo que es: un workaround, no una arquitectura.
+- [ ] Cubrir con test los 11 componentes web que no lo tienen, empezando por los que no son visuales: `DeepAnalysisDetails.tsx` (569 líneas), `KernelPosture.tsx` (218), `BinVulnPanel.tsx` (200), `PresetsPanel.tsx` (182) y `WebProbePanel.tsx` (123); los visuales dibujados a mano (`SignalCanvas` 280, `SbomGraph` 230, `EntropyChart` 174, `StructureMap` 125, `FilesystemTree` 61) van después.
+
+### Proceso y documentación
+
+- [ ] Hacer que `scripts/corpus-matrix.mjs` compare contra la tirada anterior y señale las regresiones de celda antes de convertir la matriz en campaña programada. Hoy no tiene noción alguna de run previo: entre la matriz del 23 de agosto y la del 5 de septiembre, `W5 · Reachability (diag_tracertbutton)` pasó de `✓1` a `△` mientras el agregado subía de 110 a 130 `found`, y nada lo dijo. Automatizar la generación sin detectar regresiones sólo automatiza el ruido; un número que sube no distingue cobertura nueva de otra tirada de dados.
+- [ ] Dejar de transcribir a mano en `ROADMAP.md` los recuentos que genera la matriz: el documento generado se quedó fijado el 23 de agosto con 376 celdas mientras la prosa ya citaba 390, dos semanas con dos fuentes de verdad para el mismo número. Que el ROADMAP enlace la matriz en vez de copiarla.
+- [ ] Decidir el destino de `yara-candidate-report.md`, hoy sin trackear en la raíz del repo: o se archiva fechado bajo `docs/` o entra en `.gitignore`. La promoción del corpus 20260830 es, en sí, una decisión ya evaluada y de bajo riesgo (0 matches nuevos, 0 perdidos, 3 positivos inertes conservados).
