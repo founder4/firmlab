@@ -11,7 +11,7 @@
   "scripts": {
     "build": "pnpm -r run build",
     "check": "pnpm -r run check",
-    "test": "pnpm -r run test && node --test scripts/corpus-matrix.test.mjs scripts/fwhunt-campaign.test.mjs",
+    "test": "pnpm -r run test && node --test scripts/corpus-matrix.test.mjs scripts/fwhunt-campaign.test.mjs scripts/ui-expose.test.mjs",
     "dev:api": "pnpm --filter @firmlab/api run dev",
     "dev:web": "pnpm --filter @firmlab/web run dev",
     "biome": "bash scripts/check-nul.sh && bash scripts/check-comment-glob.sh && bash scripts/check-web-api-mock.sh && biome check .",
