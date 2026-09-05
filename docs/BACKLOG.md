@@ -37,6 +37,7 @@
 - [x] Evaluar YARA Forge Core 20260830 contra los mismos 8 rootfs: compila, conserva los 3 positivos inertes, añade 134 reglas, elimina 4 y no introduce ni pierde matches en el corpus actual. La promoción sigue siendo una decisión separada.
 - [x] Completar la campaña FwHunt de OVMF: 12/12 lotes terminales, 131/136 módulos con veredicto, 5 no convergentes explícitamente desconocidos y 0 módulos sin intentar (antes quedaban 124).
 
+- [x] Plegar el libro mayor por forma de hallazgo: una corrida de filas que dicen lo mismo sobre sujetos distintos se dibuja como una línea con su recuento y se despliega en el sitio. Medido sobre DVRF, 129 filas pasan a 59 líneas y los cuatro `static_confirmed` de la clave privada encabezan la tabla. La clave de plegado incluye severidad y estado de prueba, así que un grupo es homogéneo en los dos ejes que ordenan la tabla y el orden de `compareFindings` se conserva exacto — se redibuja, no se reordena. Filas impugnadas, testimonios y hallazgos obtenidos sobre un sujeto alterado nunca se pliegan. La etiqueta del grupo se deriva de los tokens en que coinciden todos sus miembros, no de la máscara, y donde difieren de verdad conserva la elisión.
 - [x] Extraer de `providers/jobs.ts` el planificador de concurrencia a `job-scheduler.ts`, sin un solo import: la admisión, la cola FIFO y la contabilidad de huecos pasan de intesteables a 15 tests. El hueco es ahora un token con `release()` idempotente, y soltarlo es lo que arranca al siguiente, sin ventana en la que el contador baje. De paso cierra dos defectos latentes: `Math.max(1, Number(...))` propagaba `NaN` para un `FIRMLAB_MAX_CONCURRENT_JOBS` no numérico y dejaba la cola parada para siempre, y un `insertJob` que lance ya no deja el hueco colgado bajando el techo de concurrencia de forma permanente.
 ## Siguiente
 
@@ -60,7 +61,6 @@ Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `ar
 
 ### Presentación de los resultados
 
-- [ ] Agrupar y priorizar el libro mayor por proof state. Medido sobre DVRF (`57c12e70`): 129 hallazgos en una lista plana de unos 16.000 px, de los que 91 (71 %) son `needs_runtime_reproduction` y sólo 33 `static_confirmed`; 45 filas comparten una única forma de título y `binvuln` aporta 60 de 129. `FindingsLedger.tsx` no agrupa ni colapsa en ninguna de sus 585 líneas, así que una CVE confirmada pesa lo mismo que la fila 47 de «este binario importa strcpy». Contradice el cuidado de `selectFindings` en `binvuln.ts`, que evita truncar por orden de llegada y luego se pinta en plano: un límite no es una respuesta, pero una lista tampoco.
 - [ ] Exponer `credmatch` en la web: es el único route sin ninguna referencia en `apps/web/src`, pese a sus 1.337 líneas, un source estable en el libro mayor y ✓ en cuatro muestras de la matriz como «W3 · Credential cross-reference».
 
 ### Deuda estructural

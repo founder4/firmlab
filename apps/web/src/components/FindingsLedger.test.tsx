@@ -3,7 +3,17 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Finding } from '../api';
 import { setLocale } from '../i18n';
 import { en } from '../locales/en';
-import { FindingsLedger, danglingDisputes, indexDisputes, selectLedgerRows } from './FindingsLedger';
+import {
+  FindingsLedger,
+  SHAPE_ELISION,
+  danglingDisputes,
+  groupLabel,
+  groupLedgerRows,
+  indexDisputes,
+  isFoldable,
+  selectLedgerRows,
+  titleShape,
+} from './FindingsLedger';
 
 beforeEach(() => {
   // Reset BEFORE the render, never after it: the locale store notifies live subscribers, so switching back in an
@@ -516,5 +526,180 @@ describe('the two axes — how bad if true, and how much was established', () =>
   it('prints no census at all for an empty ledger rather than a row of zeroes', () => {
     render(<FindingsLedger findings={[]} />);
     expect(screen.queryByText(/established,/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The fold, exercised against the titles that motivated it.
+ *
+ * The fixtures below are the REAL titles from DVRF (`57c12e70`), not invented ones: CLAUDE.md's own record of this
+ * codebase's traps says a test whose fixture was written from the same assumption as the code proves only that the
+ * two agree. `Stack-overflow candidate: … imports sprintf …` and `… imports sscanf …` are in here specifically
+ * because they must NOT collapse together.
+ */
+describe('FindingsLedger — a run of rows saying one thing about many subjects', () => {
+  const canary = (path: string, fn: string, id: string): Finding =>
+    measured({
+      id,
+      source: 'binvuln',
+      severity: 'medium',
+      proofState: 'needs_runtime_reproduction',
+      title: `Stack-overflow candidate: ${path} imports ${fn} with no stack canary`,
+    });
+
+  const sprintfRun = [
+    canary('sbin/store_domain_sid', 'sprintf', 'c1'),
+    canary('sbin/store_machine_password', 'sprintf', 'c2'),
+    canary('sbin/diag_tracertbutton', 'sprintf', 'c3'),
+  ];
+
+  it('masks the subject but never an ordinary word, so two unsafe functions stay two shapes', () => {
+    expect(titleShape('Stack-overflow candidate: sbin/store_domain_sid imports sprintf with no stack canary')).toBe(
+      `Stack-overflow candidate: ${SHAPE_ELISION} imports sprintf with no stack canary`,
+    );
+    // The whole reason the mask is conservative: sprintf and sscanf are different findings about different calls.
+    expect(
+      titleShape('Stack-overflow candidate: usr/lib/libxt_CLASSIFY.so imports sscanf with no stack canary'),
+    ).not.toBe(titleShape('Stack-overflow candidate: sbin/store_domain_sid imports sprintf with no stack canary'));
+  });
+
+  it('masks versions, CVE ids and digests — the tokens that name a subject rather than describe it', () => {
+    expect(titleShape('CVE-2011-5325 — busybox 1.7.2')).toBe(titleShape('CVE-2013-1813 — busybox 1.7.2'));
+    // A different component is a different statement and must not fold into the same group.
+    expect(titleShape('CVE-2011-5325 — busybox 1.7.2')).not.toBe(titleShape('CVE-2011-5325 — dropbear 2015.67'));
+  });
+
+  it('folds a run into one line and reaches every row behind it', () => {
+    const g = groupLedgerRows(sprintfRun, new Set());
+    expect(g.groups).toHaveLength(1);
+    expect(g.groups[0]?.folded).toBe(true);
+    expect(g.groups[0]?.members.map((m) => m.id)).toEqual(['c1', 'c2', 'c3']);
+    expect(g.foldedRows).toBe(3);
+    // Nothing is dropped: the members of every group put back together are exactly the rows that went in.
+    expect(g.groups.flatMap((x) => x.members)).toHaveLength(sprintfRun.length);
+  });
+
+  it('leaves a pair alone — below the threshold, folding hides more than it saves', () => {
+    const g = groupLedgerRows(sprintfRun.slice(0, 2), new Set());
+    expect(g.groups.every((x) => !x.folded)).toBe(true);
+    expect(g.rule).toBeNull();
+  });
+
+  it('says nothing at all when no row repeats — the path nobody runs', () => {
+    const g = groupLedgerRows(
+      [measured({ id: 'a', title: 'Shipped TLS identity is forgeable: holds a private key' })],
+      new Set(),
+    );
+    expect(g.rule).toBeNull();
+    expect(g.foldedRows).toBe(0);
+    expect(g.groups).toHaveLength(1);
+    expect(g.groups[0]?.folded).toBe(false);
+  });
+
+  it('never folds a contested row, an assertion, or a row obtained against an altered subject', () => {
+    const contested = canary('sbin/a', 'sprintf', 'x1');
+    const withIntervention = canary('sbin/b', 'sprintf', 'x2');
+    withIntervention.interventions = ['patched /etc/passwd'];
+    const asserted = canary('sbin/c', 'sprintf', 'x3');
+    asserted.assertion = {
+      assertedBy: 'aaron',
+      authorKind: 'human',
+      assertedAt: 1,
+      claim: 'asserted_unverified',
+      rationale: 'r',
+      status: 'active',
+    };
+    const g = groupLedgerRows([contested, withIntervention, asserted], new Set(['x1']));
+    // Three exempt rows cannot form a group of three, however identical their shapes are.
+    expect(g.groups).toHaveLength(3);
+    expect(g.groups.every((x) => !x.folded)).toBe(true);
+    expect(isFoldable(contested, new Set(['x1']))).toBe(false);
+    expect(isFoldable(withIntervention, new Set())).toBe(false);
+    expect(isFoldable(asserted, new Set())).toBe(false);
+  });
+
+  it('keeps a group at the position its members held — folding redraws, it never reorders', () => {
+    const critical = measured({ id: 'crit', severity: 'critical', title: 'Shipped TLS identity is forgeable' });
+    const info = measured({
+      id: 'info',
+      severity: 'info',
+      proofState: 'needs_runtime_reproduction',
+      title: 'Command-exec sink: sbin/other imports system',
+    });
+    const rows = [critical, ...sprintfRun, info];
+    const g = groupLedgerRows(rows, new Set());
+    // critical first, the medium group where its members were, the info row last: the order compareFindings gave.
+    expect(g.groups.map((x) => x.lead.id)).toEqual(['crit', 'c1', 'info']);
+  });
+
+  it('labels a group from what its members agree on, not from the mask', () => {
+    const cves = [
+      measured({ id: 'v1', severity: 'high', title: 'CVE-2011-5325 — busybox 1.7.2' }),
+      measured({ id: 'v2', severity: 'high', title: 'CVE-2013-1813 — busybox 1.7.2' }),
+      measured({ id: 'v3', severity: 'high', title: 'CVE-2016-2147 — busybox 1.7.2' }),
+    ];
+    // The mask keys them together but reads as `⋯ — busybox ⋯`, which names neither the component version nor
+    // what actually varies. The label is a fact about these three rows instead.
+    expect(titleShape(cves[0]?.title ?? '')).toBe(`${SHAPE_ELISION} — busybox ${SHAPE_ELISION}`);
+    expect(groupLabel(cves)).toBe(`${SHAPE_ELISION} — busybox 1.7.2`);
+  });
+
+  it('keeps the elision where members genuinely disagree, rather than picking one to show', () => {
+    const mixed = [
+      canary('usr/lib/l2tp/cmd.so', 'sprintf/sscanf', 'm1'),
+      canary('lib/libcrypt.so.0', 'strcpy/strcat', 'm2'),
+      canary('sbin/wan_auto_detect', 'strcpy/sscanf', 'm3'),
+    ];
+    // Two positions vary, so two stay elided: this group really is "several binaries importing several unsafe
+    // functions", and naming one member's functions in the header would misrepresent the other two.
+    expect(groupLabel(mixed)).toBe(
+      `Stack-overflow candidate: ${SHAPE_ELISION} imports ${SHAPE_ELISION} with no stack canary`,
+    );
+  });
+
+  it('prints a single row’s title untouched, and falls back to the shape when titles do not align', () => {
+    expect(groupLabel([measured({ title: 'Kernel 2.6.22 — the 2.6 series is 22 years old' })])).toBe(
+      'Kernel 2.6.22 — the 2.6 series is 22 years old',
+    );
+    const ragged = [
+      measured({ id: 'r1', title: 'Expired certificate: localhost' }),
+      measured({ id: 'r2', title: 'Expired certificate: PolarSSL Test CA' }),
+    ];
+    // Different token counts cannot be compared position by position; the shape is the honest fallback.
+    expect(groupLabel(ragged)).toBe(titleShape('Expired certificate: localhost'));
+  });
+
+  it('states what it folded, and states that it dropped nothing', () => {
+    const g = groupLedgerRows(sprintfRun, new Set());
+    expect(g.rule).toBe(en.findings.foldRule(3, 1, 3));
+    expect(g.rule).toContain('drops no row and reorders none');
+  });
+
+  it('draws the run as a single line, and expands it to the real titles on demand', () => {
+    render(<FindingsLedger findings={sprintfRun} />);
+    // Folded: the shared shape is on screen and no subject is.
+    expect(screen.queryByText(/store_domain_sid/)).toBeNull();
+    expect(screen.getByText(/imports sprintf with no stack canary/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: en.findings.group.toggle(3, false) }));
+    expect(screen.getByText(/sbin\/store_domain_sid imports sprintf/)).toBeTruthy();
+    expect(screen.getByText(/sbin\/diag_tracertbutton imports sprintf/)).toBeTruthy();
+  });
+
+  it('renders a member through the same row component, so a dispute inside a group still annotates', () => {
+    const target = sprintfRun[0];
+    if (!target) throw new Error('fixture');
+    const rows = [...sprintfRun, dispute(target.id)];
+    render(<FindingsLedger findings={rows} />);
+    // The contested member is exempt, so it is drawn outside the group and its annotation is visible unexpanded.
+    expect(screen.getByText(/asserts on/)).toBeTruthy();
+    expect(screen.getByText(/sbin\/store_domain_sid imports sprintf/)).toBeTruthy();
+  });
+
+  it('states the fold in Spanish without turning it into the cut', () => {
+    setLocale('es');
+    const g = groupLedgerRows(sprintfRun, new Set());
+    expect(g.rule).toContain('no descarta ninguna fila ni reordena ninguna');
+    expect(g.rule).not.toContain('descartaron');
+    setLocale('en');
   });
 });

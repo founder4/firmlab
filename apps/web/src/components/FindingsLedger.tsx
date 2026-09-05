@@ -226,6 +226,167 @@ export function selectLedgerRows(
   return { rows, omitted, rule: messages().findings.cutRule(rows.length, sorted.length, omitted) };
 }
 
+/** How many rows sharing a shape it takes before the table folds them. Below this, folding hides more than it saves. */
+export const MIN_GROUP_SIZE = 3;
+
+/** What a masked token is replaced by — an ellipsis, so a folded title still reads as a sentence. */
+export const SHAPE_ELISION = '⋯';
+
+/** Runs of elision, with whatever punctuation separates them, read as one gap. Only ever passed to
+ *  `String.replace`, which resets `lastIndex`; a shared global regex is not safe with `.test()`. */
+const ELISION_RUN = new RegExp(`(?:${SHAPE_ELISION}[\\s.,:;—-]*)+${SHAPE_ELISION}`, 'g');
+
+/**
+ * Pure: a finding title with its SUBJECT masked out, so two rows that say the same thing about different
+ * subjects can be recognised as the same thing.
+ *
+ * Measured on DVRF (`57c12e70`): 129 rows, of which 45 read `Stack-overflow candidate: <path> imports <fn> with
+ * no stack canary` and 15 read `Command-exec sink: <path> imports system`. Printed flat they are ~16 000 px of
+ * near-identical text, and the four `static_confirmed` rows that state a shipped private key sit somewhere inside
+ * it. The ledger was ordering correctly and still could not be triaged, because ordering does not help when 60
+ * consecutive rows differ only in a path.
+ *
+ * **What is masked, and what is deliberately not.** Only tokens that IDENTIFY a subject: paths, dotted versions,
+ * CVE ids, long hex digests and bare numbers. Ordinary words are left alone, which is the whole point — `imports
+ * sprintf` and `imports sscanf` stay different shapes and therefore different groups, so folding never merges two
+ * different unsafe functions into one line. The rule under-folds on purpose: a group that failed to form costs a
+ * reader some scrolling, and a group that should not have formed hides a finding.
+ */
+export function titleShape(title: string): string {
+  return title
+    .replace(/\bCVE-\d{4}-\d+\b/gi, SHAPE_ELISION)
+    .replace(/\S*\/\S*/g, SHAPE_ELISION)
+    .replace(/\b\d+(?:\.\d+)+[\w.+-]*\b/g, SHAPE_ELISION)
+    .replace(/\b[0-9a-f]{8,}\b/gi, SHAPE_ELISION)
+    .replace(/\b\d+\b/g, SHAPE_ELISION)
+    .replace(ELISION_RUN, SHAPE_ELISION)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Pure: what a folded group's header actually says, derived from its members rather than from the mask.
+ *
+ * `titleShape` is built for KEYING, and keying is allowed to be blunt: it masks every token that could identify a
+ * subject, including ones that turn out to be identical across the whole group. Printed as a label that reads
+ * badly — the twelve busybox CVEs keyed to `⋯ — busybox ⋯`, which tells a reader neither the component version
+ * nor that the varying part is a CVE id.
+ *
+ * So the label is computed the other way round: compare the members token by token and elide only the positions
+ * where they actually DISAGREE. `⋯ — busybox 1.7.2` is then not a guess about which tokens are versions, it is a
+ * fact about these twelve rows. Where the members genuinely differ the elision stays — the group of binaries
+ * importing `sprintf/sscanf`, `strcpy/strcat` and so on keeps its `⋯`, which is the honest label for it.
+ *
+ * Titles that disagree on token count cannot be compared position by position, and fall back to the shape rather
+ * than to an alignment invented to make them line up.
+ */
+export function groupLabel(members: readonly Finding[]): string {
+  const first = members[0];
+  if (!first) return '';
+  if (members.length === 1) return first.title;
+  const rows = members.map((m) => m.title.split(' '));
+  const width = rows[0]?.length ?? 0;
+  if (!rows.every((r) => r.length === width)) return titleShape(first.title);
+  const out: string[] = [];
+  for (let i = 0; i < width; i++) {
+    const token = rows[0]?.[i] ?? '';
+    out.push(rows.every((r) => r[i] === token) ? token : SHAPE_ELISION);
+  }
+  return out.join(' ').replace(ELISION_RUN, SHAPE_ELISION).trim();
+}
+
+/**
+ * Pure: whether a row may be folded into a group at all.
+ *
+ * The exemptions are the same ones the display cap already makes, and for the same reason. A contested row carries
+ * an operator's annotation, an asserted row is testimony rather than a measurement, and an intervention mark says
+ * the subject was not the firmware as shipped — each is a claim about THAT row which a count cannot carry. Folding
+ * one behind a collapsed header would make it inert exactly where a reader is least able to notice, which is what
+ * the cap's contested-row exemption exists to prevent.
+ */
+export function isFoldable(f: Finding, contestedIds: ReadonlySet<string>): boolean {
+  return !contestedIds.has(f.id) && !f.assertion && !f.interventions?.length;
+}
+
+/**
+ * Pure: the fold key.
+ *
+ * Severity and proof state are IN the key, which is what makes folding compatible with the one display order
+ * `compareFindings` defines. A group is therefore homogeneous on exactly the two axes that order the table, so it
+ * occupies a single well-defined position rather than standing for a span of them — folding changes how many rows
+ * are drawn, never which row outranks which. `source` is in the key because the ledger already namespaces per
+ * target (`binary:<path>`, `dynprobe:<path>#<sink>`), and two providers that happen to word a title the same way
+ * are not making the same statement.
+ */
+export function ledgerGroupKey(f: Finding): string {
+  return [f.source, f.severity, f.proofState, titleShape(f.title)].join('\u0000');
+}
+
+export interface LedgerGroup {
+  key: string;
+  /** The highest-ranked member, and the row a folded group is drawn from. */
+  lead: Finding;
+  members: Finding[];
+  /** True when this group is drawn folded — a singleton is a group of one and renders exactly as it always did. */
+  folded: boolean;
+}
+
+export interface GroupedLedger {
+  groups: LedgerGroup[];
+  /** How many rows disappeared into a folded header — the number a reader needs to trust the shorter table. */
+  foldedRows: number;
+  /** The sentence stating what was folded and by what rule, or null when nothing was. */
+  rule: string | null;
+}
+
+/**
+ * Pure: fold the already-ordered rows into groups, preserving that order exactly.
+ *
+ * A group is emitted at the position of its FIRST member, and every member shares the group's severity and proof
+ * state, so the sequence of groups is the sequence `compareFindings` produced with runs removed. Members are not
+ * contiguous in the input — rows of one severity are ordered by title, so two shapes interleave alphabetically —
+ * which is why this buckets rather than scanning for runs.
+ *
+ * Rows that may not fold become groups of one. They keep their exact position, so an exempt row never moves in
+ * order to stay visible; it was already where it belonged.
+ */
+export function groupLedgerRows(
+  rows: readonly Finding[],
+  contestedIds: ReadonlySet<string>,
+  minSize = MIN_GROUP_SIZE,
+): GroupedLedger {
+  const buckets = new Map<string, Finding[]>();
+  const order: string[] = [];
+  for (const f of rows) {
+    // An exempt row gets a key nothing else can share, so it stays a singleton without a branch at render time.
+    const key = isFoldable(f, contestedIds) ? ledgerGroupKey(f) : `\u0000exempt\u0000${f.id}`;
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(f);
+    else {
+      buckets.set(key, [f]);
+      order.push(key);
+    }
+  }
+  let foldedRows = 0;
+  let foldedGroups = 0;
+  const groups: LedgerGroup[] = [];
+  for (const key of order) {
+    const members = buckets.get(key) ?? [];
+    const lead = members[0];
+    if (!lead) continue;
+    const folded = members.length >= minSize;
+    if (folded) {
+      foldedGroups += 1;
+      foldedRows += members.length;
+    }
+    groups.push({ key, lead, members, folded });
+  }
+  if (foldedGroups === 0) return { groups, foldedRows: 0, rule: null };
+  // The sentence travels with the fold for the same reason the cap's does: a table that draws fewer rows than the
+  // count above it has to say why, or the census and the table read as though they disagree.
+  return { groups, foldedRows, rule: messages().findings.foldRule(rows.length, groups.length, foldedRows) };
+}
+
 /**
  * The severity census, and the sentence that makes the marks in the table readable.
  *
@@ -340,6 +501,175 @@ function DanglingDisputeNote({ dangling }: { dangling: readonly Finding[] }): JS
 }
 
 /**
+ * One measured row, unchanged by folding.
+ *
+ * Lifted out of the table body so a folded group's members render through exactly the same component as a row that
+ * never folded — the dispute annotation, the retraction note, the intervention mark and the reasoning toggle are
+ * the parts of this table that carry its refusals, and a second copy of the row for "inside a group" is how one of
+ * them would quietly go missing. `nested` indents and nothing else.
+ */
+function LedgerRow({
+  f,
+  disputes,
+  open,
+  onToggleReason,
+  nested = false,
+}: {
+  f: Finding;
+  disputes: readonly Finding[];
+  open: boolean;
+  onToggleReason: (id: string) => void;
+  nested?: boolean;
+}): JSX.Element {
+  const t = useMessages();
+  return (
+    <Fragment>
+      <tr className={nested ? 'ledger-nested' : undefined}>
+        {/* A contested row is marked with an inset rule rather than a background: an inline background
+                          would beat `.data tbody tr:hover` and silently cost the row its hover feedback. */}
+        <td style={disputes.length ? { boxShadow: 'inset 2px 0 0 var(--trust-agent)' } : undefined}>
+          {/* The reasoning toggle. A real button rather than a click on the `<tr>`: a row is not
+                            focusable, and the sentence behind it is the one that separates "this is a lead" from
+                            "this is a lead BECAUSE the search expired". Absent when the provider wrote none, so an
+                            empty chevron never promises an explanation that does not exist. */}
+          {f.rationale ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost reason-toggle"
+              aria-expanded={open}
+              aria-label={t.findings.whyLabel}
+              title={t.findings.whyLabel}
+              onClick={() => onToggleReason(f.id)}
+            >
+              {open ? '▾' : '▸'}
+            </button>
+          ) : null}
+        </td>
+        <td>
+          <span className={`severity-pill severity-${f.severity}`}>
+            <SeverityMark severity={f.severity} proofState={f.proofState} />
+            {f.severity}
+          </span>
+        </td>
+        <td style={{ fontSize: 12.5 }}>
+          <div className="finding-title">{f.title}</div>
+          <div className="finding-meta mono">
+            <span>{f.source}</span>
+            {f.evidenceChannel ? <span>{f.evidenceChannel}</span> : null}
+          </div>
+          {/* An assertion never appears here without its author on the same line. */}
+          {f.assertion ? (
+            <div className="hint">
+              {t.findings.assertedBy(f.assertion.assertedBy)}
+              {f.assertion.authorKind === 'agent' ? t.findings.agentSuffix : ''}
+              {f.assertion.status === 'withdrawn' ? t.findings.withdrawnSuffix : ''}
+            </div>
+          ) : null}
+          {/* Why it was retracted, on the row rather than behind the chevron. The chevron holds
+                            the ORIGINAL rationale, so a retracted row expanded into the argument FOR a claim
+                            that had been taken back, with the taking-back nowhere. Reading a retraction must not
+                            require a click. */}
+          {f.assertion?.status === 'withdrawn' ? <WithdrawalNote assertion={f.assertion} /> : null}
+          {disputes.length ? <DisputeNote target={f} disputes={disputes} /> : null}
+        </td>
+        <td>
+          {/* Printed verbatim on a contested row: the dispute is recorded beside it, never over it. */}
+          <ProofStateBadge state={f.proofState} />
+          {/* The second axis, UNDER the rung rather than beside it: how far it was proven is the
+                            headline, how it was known qualifies it. A row with no channel recorded prints
+                            nothing at all — an "unknown" chip would imply the question was asked and answered. */}
+          {/* And the one thing that changes what the rung MEANS: the subject was not as shipped. */}
+          {f.interventions?.length ? (
+            <div
+              className="hint"
+              style={{ fontSize: 11, marginTop: 3, color: 'var(--sev-medium, #e6b45c)' }}
+              title={f.interventions.join(' · ')}
+            >
+              {t.findings.interventionMark(f.interventions.length)}
+            </div>
+          ) : null}
+        </td>
+      </tr>
+      {open && f.rationale ? (
+        <tr className={nested ? 'ledger-nested' : undefined}>
+          {/* Full width, under the row it explains. The provider WROTE this sentence while measuring,
+                            so it renders as written, in whatever language produced it. */}
+          <td colSpan={4} className="reason-cell">
+            {/* A retracted row's reasoning is labelled as the retracted claim's, so an expanded
+                              cell is never read as a standing argument. */}
+            <span className="eyebrow">
+              {f.assertion?.status === 'withdrawn' ? t.findings.whyWithdrawn : t.findings.why}
+            </span>{' '}
+            {f.rationale}
+          </td>
+        </tr>
+      ) : null}
+    </Fragment>
+  );
+}
+
+/**
+ * The row that stands for a run of rows saying the same thing about different subjects.
+ *
+ * It carries the group's severity mark and proof badge exactly as a single row would, because every member shares
+ * both — that is what `ledgerGroupKey` guarantees, and it is why one header can speak for all of them without
+ * averaging anything. What it must never do is imply that a count is a severity: forty leads are forty leads, and
+ * the badge beside the count still says `needs_runtime_reproduction`.
+ *
+ * The title is the masked shape, with the elision standing where the subject was. The subjects are not summarised
+ * or sampled into the header — a "e.g. sbin/foo and 44 others" line would put one arbitrary path in front of a
+ * reader as though it were representative. Expanding is the only way to see them, and it shows all of them.
+ */
+function GroupHeaderRow({
+  group,
+  open,
+  onToggle,
+}: {
+  group: LedgerGroup;
+  open: boolean;
+  onToggle: (key: string) => void;
+}): JSX.Element {
+  const t = useMessages();
+  const f = group.lead;
+  const label = t.findings.group.toggle(group.members.length, open);
+  return (
+    <tr className={`ledger-group-head${open ? ' is-open' : ''}`}>
+      <td>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost reason-toggle"
+          aria-expanded={open}
+          aria-label={label}
+          title={label}
+          onClick={() => onToggle(group.key)}
+        >
+          {open ? '▾' : '▸'}
+        </button>
+      </td>
+      <td>
+        <span className={`severity-pill severity-${f.severity}`}>
+          <SeverityMark severity={f.severity} proofState={f.proofState} />
+          {f.severity}
+        </span>
+      </td>
+      <td style={{ fontSize: 12.5 }}>
+        <div className="finding-title">
+          <span className="ledger-group-count mono">{group.members.length}</span>
+          {groupLabel(group.members)}
+        </div>
+        <div className="finding-meta mono">
+          <span>{f.source}</span>
+          <span>{t.findings.group.subjects(group.members.length)}</span>
+        </div>
+      </td>
+      <td>
+        <ProofStateBadge state={f.proofState} />
+      </td>
+    </tr>
+  );
+}
+
+/**
  * The ledger table. `findings` is the whole ledger — measured rows AND the operator assertions the same endpoint
  * serves — because a dispute is only findable by looking at both: the annotation lives on a measured row and the
  * claim that produces it is an asserted one.
@@ -365,6 +695,18 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
       if (!next.delete(id)) next.add(id);
       return next;
     });
+  /**
+   * Which folded groups are expanded. Folded by default and never remembered across a filter change: the fold is
+   * how the table stays readable, and a session that slowly re-expands every group ends up back at the flat list
+   * this exists to replace.
+   */
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(new Set());
+  const toggleGroup = (key: string): void =>
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   const disputesByTarget = indexDisputes(findings);
   const dangling = danglingDisputes(findings);
   const contestedIds = new Set(disputesByTarget.keys());
@@ -385,6 +727,10 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
     });
   }, [findings, filter, query]);
   const view = selectLedgerRows(filtered, contestedIds, showAll ? Number.POSITIVE_INFINITY : MAX_LEDGER_ROWS);
+  // Folded AFTER the cap, never instead of it. The cap's rule is about which rows the table is willing to print;
+  // the fold is about how many lines those rows need. Folding first would let a group of forty count as one row
+  // against the cap and quietly change what the cut sentence above the table is describing.
+  const grouped = groupLedgerRows(view.rows, contestedIds);
   // Counted, not filtered: an assertion belongs in this table — it just may never be read as a measurement.
   const assertedCount = findings.filter((f) => f.assertion).length;
 
@@ -452,6 +798,24 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
               </button>
             </div>
           ) : null}
+          {/* The fold states what it did, for the same reason the cut does: the table now draws fewer lines than
+              the count in the panel title, and a reader who cannot see why has to assume rows were dropped. */}
+          {grouped.rule ? (
+            <div className="hint" style={{ marginTop: 10, maxWidth: '72ch' }}>
+              {grouped.rule}{' '}
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={() =>
+                  setOpenGroups((prev) =>
+                    prev.size > 0 ? new Set() : new Set(grouped.groups.filter((g) => g.folded).map((g) => g.key)),
+                  )
+                }
+              >
+                {openGroups.size > 0 ? t.findings.group.collapseAll : t.findings.group.expandAll}
+              </button>
+            </div>
+          ) : null}
           <div className="table-wrap" style={{ marginTop: 10 }}>
             <table className="data findings-table">
               <thead>
@@ -463,91 +827,35 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                 </tr>
               </thead>
               <tbody>
-                {view.rows.map((f) => {
-                  const disputes = disputesByTarget.get(f.id) ?? [];
-                  const open = openReasons.has(f.id);
+                {grouped.groups.map((g) => {
+                  if (!g.folded) {
+                    const f = g.lead;
+                    return (
+                      <LedgerRow
+                        key={f.id}
+                        f={f}
+                        disputes={disputesByTarget.get(f.id) ?? []}
+                        open={openReasons.has(f.id)}
+                        onToggleReason={toggleReason}
+                      />
+                    );
+                  }
+                  const open = openGroups.has(g.key);
                   return (
-                    <Fragment key={f.id}>
-                      <tr>
-                        {/* A contested row is marked with an inset rule rather than a background: an inline background
-                          would beat `.data tbody tr:hover` and silently cost the row its hover feedback. */}
-                        <td style={disputes.length ? { boxShadow: 'inset 2px 0 0 var(--trust-agent)' } : undefined}>
-                          {/* The reasoning toggle. A real button rather than a click on the `<tr>`: a row is not
-                            focusable, and the sentence behind it is the one that separates "this is a lead" from
-                            "this is a lead BECAUSE the search expired". Absent when the provider wrote none, so an
-                            empty chevron never promises an explanation that does not exist. */}
-                          {f.rationale ? (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-ghost reason-toggle"
-                              aria-expanded={open}
-                              aria-label={t.findings.whyLabel}
-                              title={t.findings.whyLabel}
-                              onClick={() => toggleReason(f.id)}
-                            >
-                              {open ? '▾' : '▸'}
-                            </button>
-                          ) : null}
-                        </td>
-                        <td>
-                          <span className={`severity-pill severity-${f.severity}`}>
-                            <SeverityMark severity={f.severity} proofState={f.proofState} />
-                            {f.severity}
-                          </span>
-                        </td>
-                        <td style={{ fontSize: 12.5 }}>
-                          <div className="finding-title">{f.title}</div>
-                          <div className="finding-meta mono">
-                            <span>{f.source}</span>
-                            {f.evidenceChannel ? <span>{f.evidenceChannel}</span> : null}
-                          </div>
-                          {/* An assertion never appears here without its author on the same line. */}
-                          {f.assertion ? (
-                            <div className="hint">
-                              {t.findings.assertedBy(f.assertion.assertedBy)}
-                              {f.assertion.authorKind === 'agent' ? t.findings.agentSuffix : ''}
-                              {f.assertion.status === 'withdrawn' ? t.findings.withdrawnSuffix : ''}
-                            </div>
-                          ) : null}
-                          {/* Why it was retracted, on the row rather than behind the chevron. The chevron holds
-                            the ORIGINAL rationale, so a retracted row expanded into the argument FOR a claim
-                            that had been taken back, with the taking-back nowhere. Reading a retraction must not
-                            require a click. */}
-                          {f.assertion?.status === 'withdrawn' ? <WithdrawalNote assertion={f.assertion} /> : null}
-                          {disputes.length ? <DisputeNote target={f} disputes={disputes} /> : null}
-                        </td>
-                        <td>
-                          {/* Printed verbatim on a contested row: the dispute is recorded beside it, never over it. */}
-                          <ProofStateBadge state={f.proofState} />
-                          {/* The second axis, UNDER the rung rather than beside it: how far it was proven is the
-                            headline, how it was known qualifies it. A row with no channel recorded prints
-                            nothing at all — an "unknown" chip would imply the question was asked and answered. */}
-                          {/* And the one thing that changes what the rung MEANS: the subject was not as shipped. */}
-                          {f.interventions?.length ? (
-                            <div
-                              className="hint"
-                              style={{ fontSize: 11, marginTop: 3, color: 'var(--sev-medium, #e6b45c)' }}
-                              title={f.interventions.join(' · ')}
-                            >
-                              {t.findings.interventionMark(f.interventions.length)}
-                            </div>
-                          ) : null}
-                        </td>
-                      </tr>
-                      {open && f.rationale ? (
-                        <tr>
-                          {/* Full width, under the row it explains. The provider WROTE this sentence while measuring,
-                            so it renders as written, in whatever language produced it. */}
-                          <td colSpan={4} className="reason-cell">
-                            {/* A retracted row's reasoning is labelled as the retracted claim's, so an expanded
-                              cell is never read as a standing argument. */}
-                            <span className="eyebrow">
-                              {f.assertion?.status === 'withdrawn' ? t.findings.whyWithdrawn : t.findings.why}
-                            </span>{' '}
-                            {f.rationale}
-                          </td>
-                        </tr>
-                      ) : null}
+                    <Fragment key={g.key}>
+                      <GroupHeaderRow group={g} open={open} onToggle={toggleGroup} />
+                      {open
+                        ? g.members.map((f) => (
+                            <LedgerRow
+                              key={f.id}
+                              f={f}
+                              disputes={disputesByTarget.get(f.id) ?? []}
+                              open={openReasons.has(f.id)}
+                              onToggleReason={toggleReason}
+                              nested
+                            />
+                          ))
+                        : null}
                     </Fragment>
                   );
                 })}

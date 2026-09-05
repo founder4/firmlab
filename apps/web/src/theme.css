@@ -3267,6 +3267,42 @@ span.run-dot.run-running {
   content: "·";
   margin-right: 12px;
 }
+
+/* A folded group's header line.
+   The tint is the whole treatment. It says "this line stands for several rows" and nothing else — the severity
+   mark and the proof badge beside it are the same ones a single row carries, because every member of a group
+   shares both, and a count must never be allowed to read as a severity of its own. */
+.ledger-group-head > td {
+  background: var(--bg-panel-2);
+}
+.ledger-group-head.is-open > td {
+  border-bottom-color: transparent;
+}
+.ledger-group-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 21px;
+  padding: 1px 6px;
+  margin-right: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  color: var(--text-dim);
+  font-size: 0.64rem;
+  font-weight: 600;
+  /* Lining figures, so counts of different magnitudes stay column-aligned down a folded table. */
+  font-variant-numeric: tabular-nums;
+}
+/* A member of an expanded group. Indent and a hairline are the only changes: the row renders through the same
+   component as an unfolded one, so a dispute annotation or an intervention mark inside a group is never a
+   second, quietly different rendering of the row. */
+.ledger-nested > td:nth-child(2) {
+  box-shadow: inset 1px 0 0 var(--border-strong);
+}
+.ledger-nested .finding-title,
+.ledger-nested .finding-meta {
+  padding-left: 13px;
+}
 .report-disclosure {
   padding: 0;
   overflow: hidden;

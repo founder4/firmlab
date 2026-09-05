@@ -40,6 +40,29 @@ export const findings = {
   /** `common.showAll` exists, but the count has to agree with it grammatically, so the whole label lives here. */
   showAllCount: (n: number) => `Show all ${n}`,
 
+  /**
+   * The fold, and why it is a different sentence from the cut.
+   *
+   * The cut says rows were DROPPED. The fold says the opposite — every row is still here, drawn on fewer lines —
+   * and the two must never be confused, because a reader who mistakes one for the other either thinks findings are
+   * missing when they are not, or stops looking for the ones that really were cut. So this sentence states both
+   * halves outright: nothing dropped, nothing reordered, and expanding shows every row in a group.
+   */
+  foldRule: (rows: number, lines: number, folded: number) =>
+    [
+      `${rows} rows drawn as ${lines} line${lines === 1 ? '' : 's'}:`,
+      `${folded} of them say the same thing about different subjects and are folded into a group each.`,
+      'Folding drops no row and reorders none — expand a group to read every row in it.',
+    ].join(' '),
+
+  /** A folded group speaks for its members without averaging them: they share severity, proof state and source. */
+  group: {
+    toggle: (n: number, open: boolean) => (open ? `Collapse these ${n} findings` : `Expand these ${n} findings`),
+    subjects: (n: number) => `${n} subject${n === 1 ? '' : 's'}`,
+    expandAll: 'Expand every group',
+    collapseAll: 'Collapse every group',
+  },
+
   col: {
     severity: 'Sev',
     finding: 'Finding',

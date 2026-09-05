@@ -42,6 +42,28 @@ export const findings: Messages['findings'] = {
     ].join(' '),
   showAllCount: (n: number) => `Ver los ${n}`,
 
+  /**
+   * El plegado, y por qué es una frase distinta del recorte.
+   *
+   * El recorte dice que se DESCARTARON filas. El plegado dice lo contrario — están todas, dibujadas en menos
+   * líneas — y confundirlos es grave en las dos direcciones: quien lea un plegado como un recorte creerá que faltan
+   * hallazgos, y quien lea un recorte como un plegado dejará de buscar los que sí se cortaron. Por eso la frase
+   * afirma las dos mitades: no se descarta nada, no se reordena nada, y desplegar muestra todas las filas.
+   */
+  foldRule: (rows: number, lines: number, folded: number) =>
+    [
+      `${rows} filas dibujadas en ${lines} línea${lines === 1 ? '' : 's'}:`,
+      `${folded} de ellas dicen lo mismo sobre sujetos distintos y se pliegan en un grupo cada una.`,
+      'El plegado no descarta ninguna fila ni reordena ninguna — despliega un grupo para leerlas todas.',
+    ].join(' '),
+
+  group: {
+    toggle: (n: number, open: boolean) => (open ? `Plegar estos ${n} hallazgos` : `Desplegar estos ${n} hallazgos`),
+    subjects: (n: number) => `${n} sujeto${n === 1 ? '' : 's'}`,
+    expandAll: 'Desplegar todos los grupos',
+    collapseAll: 'Plegar todos los grupos',
+  },
+
   col: {
     severity: 'Grav.',
     finding: 'Hallazgo',
