@@ -643,3 +643,54 @@ describe('ImageDetail — a secrets result says what it covered, not that it is 
     // tree is still mounted re-renders it outside act() — the very thing this file's header warns about.
   });
 });
+
+/**
+ * The structure map draws from a BOUNDED signature list, and used to say nothing about it.
+ *
+ * Measured before the bound was reshaped: the 61.7 MB Obsbot image listed 5 000 of 32 372 matches and drew 4 325
+ * of 29 408 segments. The list is still bounded now — what changed is that it can no longer lose a rule TYPE, so
+ * the class and the filesystems are exact while the drawing stays a sample. Saying which is which matters in the
+ * direction people get wrong: distrusting the class because the map is capped discards the one part that is sound.
+ */
+describe('ImageDetail — the structure map says it is a bounded sample', () => {
+  const withSignatureScan = (scan: { matched: number; distinctIds: number } | undefined): void => {
+    mockApi.analysis.mockResolvedValue({
+      size: image.size,
+      identity: image.identity,
+      entropy: { windowSize: 4096, step: 4096, samples: [], mean: 6.1, max: 7.9, min: 0.2, highEntropyRegions: [] },
+      signatures: [],
+      structure: [{ start: 0, end: image.size, label: 'squashfs', category: 'filesystem', confidence: 'high' }],
+      secrets: [],
+      ...(scan ? { signatureScan: { hits: [], ...scan } } : {}),
+    });
+  };
+
+  it('names how many of the matches it drew, and clears the identity of the same doubt', async () => {
+    withSignatureScan({ matched: 32_372, distinctIds: 17 });
+    renderSection('structure');
+    expect(await screen.findByText(/Drawn from 0 of 32372 signature matches/)).toBeTruthy();
+    expect(screen.getByText(/device class and the filesystems above are unaffected/)).toBeTruthy();
+  });
+
+  it('says nothing when the list was not bounded — the branch where the guard finds nothing wrong', async () => {
+    mockApi.analysis.mockResolvedValue({
+      size: image.size,
+      identity: image.identity,
+      entropy: { windowSize: 4096, step: 4096, samples: [], mean: 6.1, max: 7.9, min: 0.2, highEntropyRegions: [] },
+      signatures: [],
+      structure: [{ start: 0, end: image.size, label: 'squashfs', category: 'filesystem', confidence: 'high' }],
+      secrets: [],
+      signatureScan: { hits: [], matched: 0, distinctIds: 0 },
+    });
+    renderSection('structure');
+    expect(await screen.findByText(/Structure map/)).toBeTruthy();
+    expect(screen.queryByText(/bounded sample/)).toBeNull();
+  });
+
+  it('claims nothing when the count was never recorded', async () => {
+    withSignatureScan(undefined);
+    renderSection('structure');
+    expect(await screen.findByText(/Structure map/)).toBeTruthy();
+    expect(screen.queryByText(/bounded sample/)).toBeNull();
+  });
+});

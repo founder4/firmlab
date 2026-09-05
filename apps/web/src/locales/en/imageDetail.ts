@@ -88,6 +88,13 @@ export const imageDetail = {
   structure: {
     title: 'Structure map',
     sub: (segments: number) => `Signature-carved layout across the image (${segments} segments)`,
+    /**
+     * The drawing is partial; the identity is not. Says which, because the two are easy to conflate and the
+     * conflation runs the wrong way — a reader who distrusts the class because the map is capped would be
+     * discarding the one part the bound cannot touch.
+     */
+    bounded: (listed: number, matched: number) =>
+      `Drawn from ${listed} of ${matched} signature matches — the map is a bounded sample, not every match in the image. The device class and the filesystems above are unaffected: they read which signature TYPES are present, and the bound lists every type it matched however many times each occurs.`,
   },
 
   entropy: {

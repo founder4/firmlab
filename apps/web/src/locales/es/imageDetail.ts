@@ -84,6 +84,13 @@ export const imageDetail: Messages['imageDetail'] = {
   structure: {
     title: 'Mapa de estructura',
     sub: (segments: number) => `Disposición tallada por firmas a lo largo de la imagen (${segments} segmentos)`,
+    /**
+     * El dibujo es parcial; la identidad no. Hay que decir cuál de los dos, porque confundirlos corre en la
+     * dirección mala: quien desconfíe de la clase porque el mapa está acotado estaría descartando justo la parte
+     * que el límite no puede tocar.
+     */
+    bounded: (listed: number, matched: number) =>
+      `Dibujado a partir de ${listed} de ${matched} coincidencias de firma: el mapa es una muestra acotada, no todas las coincidencias de la imagen. La clase de dispositivo y los sistemas de ficheros de arriba no se ven afectados, porque leen qué TIPOS de firma están presentes y el límite lista todos los tipos que encontró, sea cual sea el número de veces que aparece cada uno.`,
   },
 
   entropy: {

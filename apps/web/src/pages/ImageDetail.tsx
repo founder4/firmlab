@@ -584,6 +584,15 @@ function StructurePanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element
     <div className="panel">
       <div className="panel-title">{t.imageDetail.structure.title}</div>
       <div className="panel-sub">{t.imageDetail.structure.sub(analysis.structure.length)}</div>
+      {/* The map is carved from a BOUNDED signature list, and on a large image the bound bites hard — the 61.7 MB
+          Obsbot lists 5 004 of 32 372 matches. The class and the filesystems are exact regardless, because those
+          read the id set and the bound never truncates that; what is partial is the drawing. Absent on analyses
+          persisted before the count existed, and absent is not "complete". */}
+      {analysis.signatureScan && analysis.signatureScan.matched > analysis.signatureScan.hits.length ? (
+        <div className="hint" style={{ marginTop: 8, maxWidth: '72ch' }}>
+          {t.imageDetail.structure.bounded(analysis.signatureScan.hits.length, analysis.signatureScan.matched)}
+        </div>
+      ) : null}
       <StructureMap segments={analysis.structure} size={analysis.size} />
     </div>
   );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeEntropyProfile } from '../src/entropy.js';
-import { scanSignatures } from '../src/signatures.js';
+import { scanSignatures, scanSignaturesDetailed } from '../src/signatures.js';
 import { buildStructureSegments, inferIdentity } from '../src/structure.js';
 
 /** Place `bytes` into a zero-filled buffer of `size` at `offset`. */
@@ -282,5 +282,74 @@ describe('W0 device-class identity (entropy-gated, non-Linux classes)', () => {
     buf.set(ascii('RedBoot bootloader'), 0x800);
     const id = inferIdentity(buf, scanSignatures(buf));
     expect(id.firmwareClass).toBe('embedded-linux');
+  });
+});
+
+/**
+ * The listing bound, and the one thing it may not cost.
+ *
+ * `maxHits` used to `return hits` from inside the scan loop, which ended the walk mid-buffer and truncated by file
+ * offset — arrival order. That was not just a short list: `inferIdentity` reads `new Set(hits.map(h => h.id))`, so
+ * losing a rule TYPE changes a persisted identity. Measured on the corpus before the fix, the 61.7 MB Obsbot image
+ * kept 5 000 of 32 372 matches, lost `cramfs`, `lzop`, `lz4` and `trx` outright, and stored `[squashfs, ubifs, ubi]`
+ * where the complete scan says `[squashfs, cramfs, ubifs, ubi]`.
+ */
+describe('scanSignaturesDetailed — the bound shortens the list, never the id set', () => {
+  /**
+   * A buffer whose first stretch is dense in ONE magic and which carries a different magic only near the end —
+   * the shape that made the old bound lose a type: past the cap, the late rule was never reached.
+   */
+  function crowdedThenRare(): Uint8Array {
+    const buf = new Uint8Array(200_000);
+    // gzip members, one every 4 bytes, far more than any small cap will list.
+    for (let off = 0; off + 3 < 150_000; off += 4) buf.set([0x1f, 0x8b, 0x08, 0x00], off);
+    // A single SquashFS magic near the end, well past where a small cap would have stopped.
+    buf.set(ascii('hsqs'), 190_000);
+    return buf;
+  }
+
+  it('still lists a rule first seen past the cap', () => {
+    const buf = crowdedThenRare();
+    const scan = scanSignaturesDetailed(buf, { maxHits: 10 });
+    expect(scan.hits.length).toBeGreaterThan(10);
+    const late = scan.hits.find((h) => h.id === 'squashfs-le');
+    expect(late).toBeDefined();
+    expect(late?.offset).toBe(190_000);
+  });
+
+  it('produces the same id set — and so the same identity — as an unbounded scan', () => {
+    const buf = crowdedThenRare();
+    const bounded = scanSignaturesDetailed(buf, { maxHits: 10 });
+    const full = scanSignaturesDetailed(buf, { maxHits: Number.MAX_SAFE_INTEGER });
+    const ids = (s: typeof bounded): string[] => [...new Set(s.hits.map((h) => h.id))].sort();
+    expect(ids(bounded)).toEqual(ids(full));
+    expect(bounded.distinctIds).toBe(full.distinctIds);
+    const entropy = computeEntropyProfile(buf);
+    expect(inferIdentity(buf, bounded.hits, entropy)).toEqual(inferIdentity(buf, full.hits, entropy));
+    // And the list really is still bounded — the point is that it costs at most one entry per unseen rule.
+    expect(bounded.hits.length).toBeLessThan(full.hits.length);
+  });
+
+  it('counts every match even though it lists only some', () => {
+    const scan = scanSignaturesDetailed(crowdedThenRare(), { maxHits: 10 });
+    expect(scan.matched).toBeGreaterThan(scan.hits.length);
+    // `matched` is what makes "5 000 listed" readable as a bound rather than as the answer.
+    expect(scan.matched).toBeGreaterThan(30_000);
+  });
+
+  it('keeps hits ascending by offset, which the structure map depends on', () => {
+    const scan = scanSignaturesDetailed(crowdedThenRare(), { maxHits: 10 });
+    const offsets = scan.hits.map((h) => h.offset);
+    expect([...offsets].sort((a, b) => a - b)).toEqual(offsets);
+  });
+
+  it('changes nothing at all below the bound — the branch where the guard finds nothing wrong', () => {
+    const buf = planted(8192, 4096, ascii('hsqs'));
+    const scan = scanSignaturesDetailed(buf);
+    expect(scan.hits.length).toBeLessThan(5000);
+    expect(scan.matched).toBe(scan.hits.length);
+    expect(scan.distinctIds).toBe(new Set(scan.hits.map((h) => h.id)).size);
+    // The plain entry point returns exactly the detailed one's list, as every existing caller relies on.
+    expect(scanSignatures(buf)).toEqual(scan.hits);
   });
 });

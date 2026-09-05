@@ -432,7 +432,40 @@ export interface ScanOptions {
  * Single linear scan of the buffer against all rules. Rules are indexed by their first magic byte so the hot
  * loop only evaluates candidate rules per position, keeping this near-linear for large images.
  */
-export function scanSignatures(buf: Uint8Array, options: ScanOptions = {}): SignatureHit[] {
+/**
+ * A signature scan and the bound that shaped its list.
+ *
+ * The distinction that matters: `hits` is a bounded LIST, `distinctIds` is a complete SET. `inferIdentity` reads
+ * `new Set(hits.map(h => h.id))` and never a count, so the set is the part that must not be truncated — and it
+ * is not.
+ */
+export interface SignatureScan {
+  /** Bounded list, ascending by offset. Carries at least one hit for every rule that matched anywhere. */
+  hits: SignatureHit[];
+  /** Every match found in the whole buffer, before the listing bound. */
+  matched: number;
+  /** Distinct rules that matched. Complete by construction, whatever the bound did to the list. */
+  distinctIds: number;
+}
+
+/**
+ * Single linear scan of the buffer against all rules, bounded in what it LISTS but never in what it observes.
+ *
+ * The bound used to be `if (hits.length >= maxHits) return hits`, which ended the scan mid-buffer and therefore
+ * truncated by file offset — arrival order, which makes the result an artifact of where the magics happen to sit.
+ * That was not merely a short list. `inferIdentity` reads the SET of rule ids, so losing a rule TYPE changes a
+ * persisted identity, and measured on the corpus it did: the 61.7 MB Obsbot image kept 5 000 of 32 372 matches,
+ * lost `cramfs`, `lzop`, `lz4` and `trx` entirely, and was stored as `[squashfs, ubifs, ubi]` when the complete
+ * scan says `[squashfs, cramfs, ubifs, ubi]` — a cramfs volume the workbench did not know existed. The Tenda
+ * image lost `picobin`, which is one of the device-family landmarks the class ordering below exists precisely to
+ * consult before a coincidental filesystem magic.
+ *
+ * So the scan now always runs to the end of the buffer, and the cap stops it ADDING to the list rather than
+ * stopping it looking. Past the cap a match is still recorded when its rule id has not been seen yet, which keeps
+ * the list within one entry per rule of its bound while making the id set exhaustive. `decode` runs only for hits
+ * that are kept, so the work the cap was protecting against is still skipped.
+ */
+export function scanSignaturesDetailed(buf: Uint8Array, options: ScanOptions = {}): SignatureScan {
   const maxHits = options.maxHits ?? 5000;
   const rulesByFirstByte = new Map<number, SignatureRule[]>();
   for (const rule of SIGNATURE_RULES) {
@@ -445,12 +478,19 @@ export function scanSignatures(buf: Uint8Array, options: ScanOptions = {}): Sign
   }
 
   const hits: SignatureHit[] = [];
+  const seenIds = new Set<string>();
+  let matched = 0;
   for (let off = 0; off < buf.length; off++) {
     const candidates = rulesByFirstByte.get(buf[off] ?? -1);
     if (!candidates) continue;
     for (const rule of candidates) {
       if (rule.atOffset !== undefined && rule.atOffset !== off) continue;
       if (!matchesAt(buf, off, rule.magic)) continue;
+      matched++;
+      // Past the bound only a rule nobody has seen yet may still be listed: the list stays short, the set stays
+      // whole. Offsets are visited in ascending order and entries are only appended, so `hits` remains sorted.
+      if (hits.length >= maxHits && seenIds.has(rule.id)) continue;
+      seenIds.add(rule.id);
       const meta = rule.decode?.(buf, off);
       hits.push({
         offset: off,
@@ -460,8 +500,12 @@ export function scanSignatures(buf: Uint8Array, options: ScanOptions = {}): Sign
         confidence: rule.confidence,
         ...(meta ? { meta } : {}),
       });
-      if (hits.length >= maxHits) return hits;
     }
   }
-  return hits;
+  return { hits, matched, distinctIds: seenIds.size };
+}
+
+/** Single linear scan of the buffer against all rules. See `scanSignaturesDetailed` for what the bound does. */
+export function scanSignatures(buf: Uint8Array, options: ScanOptions = {}): SignatureHit[] {
+  return scanSignaturesDetailed(buf, options).hits;
 }

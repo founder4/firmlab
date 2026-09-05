@@ -4,7 +4,7 @@
  * moment an image is uploaded — no external tool required — to populate every deterministic view.
  */
 import { type EntropyOptions, computeEntropyProfile } from './entropy.js';
-import { scanSignatures } from './signatures.js';
+import { type SignatureScan, scanSignaturesDetailed } from './signatures.js';
 import { type SecretScan, scanSecrets } from './strings.js';
 import { buildStructureSegments, inferIdentity } from './structure.js';
 import type { EntropyProfile, ImageIdentity, SignatureHit, StringHit, StructureSegment } from './types.js';
@@ -19,6 +19,15 @@ export interface StaticAnalysis {
   signatures: SignatureHit[];
   structure: StructureSegment[];
   secrets: StringHit[];
+  /**
+   * What the signature scan matched, against what it listed.
+   *
+   * OPTIONAL FOREVER, for the same reason as `secretScan`. `hits` is a bounded list and `signatureScan.matched`
+   * is the number it was bounded from — on the 61.7 MB Obsbot image, 5 000 listed of 32 372 matched. The list
+   * carries every rule id that matched, so identity and class are exact; what the bound costs is the COUNT per
+   * rule, which is what the structure map draws from.
+   */
+  signatureScan?: SignatureScan;
   /**
    * What the secret scan actually covered, and how much it had to leave out.
    *
@@ -40,11 +49,21 @@ export interface AnalyzeOptions {
 
 export function analyzeBuffer(buf: Uint8Array, options: AnalyzeOptions = {}): StaticAnalysis {
   const entropy = computeEntropyProfile(buf, options.entropy);
-  const signatures = scanSignatures(buf);
+  const signatureScan = scanSignaturesDetailed(buf);
+  const signatures = signatureScan.hits;
   const structure = buildStructureSegments(buf.length, signatures, entropy);
   const identity = inferIdentity(buf, signatures, entropy);
   // The listing cap moves INTO the scan so the count survives it. `.slice(0, 500)` here threw away the one
   // number that distinguishes "no secrets in this image" from "more secrets than the bundle carries".
   const secretScan = scanSecrets(buf, { minLength: options.secretMinLength ?? 6 }, SECRET_LIST_CAP);
-  return { size: buf.length, identity, entropy, signatures, structure, secrets: secretScan.secrets, secretScan };
+  return {
+    size: buf.length,
+    identity,
+    entropy,
+    signatures,
+    structure,
+    secrets: secretScan.secrets,
+    secretScan,
+    signatureScan,
+  };
 }
