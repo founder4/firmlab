@@ -101,8 +101,27 @@ export const imageDetail = {
   secrets: {
     title: 'Secrets & credentials',
     sub: 'Heuristic matches in the raw image (values shown are pre-extraction)',
-    /** Not "clean": the heuristics ran over the RAW image, before any extraction. */
-    empty: 'No secret-like strings detected in the raw image.',
+    /**
+     * Not "clean" — and the previous wording, "No secret-like strings detected in the raw image", was read as
+     * exactly that. Two facts have to travel with the zero and neither was on screen.
+     *
+     * The scan reads printable-ASCII runs out of the RAW bytes, before anything is extracted, so a secret inside
+     * a compressed or packed filesystem is not ASCII in this buffer and cannot be found here by construction.
+     * That is what the deep scan over the extracted rootfs is for, and it is a separate stage that may not have
+     * run. Saying so is the difference between a measurement and a clean bill.
+     */
+    empty:
+      'No secret-like strings matched in the bytes that were read. This heuristic reads printable-ASCII runs out of the RAW image, before extraction — a secret inside a compressed or packed filesystem is not ASCII here and cannot be found by this stage at all. The deep scan below reads the extracted rootfs and is what answers that question.',
+    /**
+     * The bound, stated. The string walk runs from offset 0 upward and stops at its cap, so it truncates by file
+     * offset — by arrival order. Measured on the deployed corpus: the 106 MB GL.iNet image stopped at 11% of the
+     * file and still rendered as "no secret-like strings detected".
+     */
+    partial: (scannedPct: string, scanned: string, total: string) =>
+      `The string walk stopped at ${scannedPct}% of the image (${scanned} of ${total}). It reads from the start of the file until it hits its string cap, so what lies past that offset was never examined — this result covers the first ${scannedPct}%, and says nothing whatever about the rest.`,
+    /** A listing cap that cuts by severity, after the sort — so what it drops was examined, unlike the walk's. */
+    listCapped: (shown: number, matched: number) =>
+      `Showing the ${shown} highest-severity of ${matched} matches. This cut is by severity, after ranking — every one of the ${matched} was examined.`,
     colSeverity: 'Severity',
     colKind: 'Kind',
     colOffset: 'Offset',

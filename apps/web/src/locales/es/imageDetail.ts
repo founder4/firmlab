@@ -97,7 +97,18 @@ export const imageDetail: Messages['imageDetail'] = {
   secrets: {
     title: 'Secretos y credenciales',
     sub: 'Coincidencias heurísticas en la imagen en bruto (los valores mostrados son previos a la extracción)',
-    empty: 'No se ha detectado ninguna cadena con aspecto de secreto en la imagen en bruto.',
+    /**
+     * No es «limpio», y la redacción anterior se leía justo así. El cero tiene que viajar con dos hechos: la
+     * heurística lee cadenas ASCII imprimibles de los bytes EN BRUTO, antes de extraer nada, así que un secreto
+     * dentro de un sistema de ficheros comprimido no es ASCII aquí y esta etapa no puede encontrarlo por
+     * construcción. Para eso está el escaneo profundo sobre el rootfs extraído, que es una etapa aparte.
+     */
+    empty:
+      'Ninguna cadena con aspecto de secreto coincidió en los bytes leídos. Esta heurística lee cadenas ASCII imprimibles de la imagen EN BRUTO, antes de la extracción: un secreto dentro de un sistema de ficheros comprimido o empaquetado no es ASCII aquí y esta etapa no puede encontrarlo en absoluto. El escaneo profundo de abajo lee el rootfs extraído y es el que responde a esa pregunta.',
+    partial: (scannedPct: string, scanned: string, total: string) =>
+      `El recorrido de cadenas se detuvo en el ${scannedPct} % de la imagen (${scanned} de ${total}). Lee desde el principio del fichero hasta agotar su límite de cadenas, así que lo que queda más allá de ese desplazamiento no se examinó nunca: este resultado cubre el primer ${scannedPct} % y no dice absolutamente nada del resto.`,
+    listCapped: (shown: number, matched: number) =>
+      `Se muestran las ${shown} coincidencias de mayor gravedad de ${matched}. El corte es por gravedad, después de ordenar: las ${matched} fueron examinadas.`,
     colSeverity: 'Gravedad',
     colKind: 'Tipo',
     colOffset: 'Desplazamiento',

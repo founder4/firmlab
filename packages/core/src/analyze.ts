@@ -5,9 +5,12 @@
  */
 import { type EntropyOptions, computeEntropyProfile } from './entropy.js';
 import { scanSignatures } from './signatures.js';
-import { extractSecrets } from './strings.js';
+import { type SecretScan, scanSecrets } from './strings.js';
 import { buildStructureSegments, inferIdentity } from './structure.js';
 import type { EntropyProfile, ImageIdentity, SignatureHit, StringHit, StructureSegment } from './types.js';
+
+/** How many secrets the bundle lists. Bounds the payload, never the count — `secretScan.matched` keeps that. */
+const SECRET_LIST_CAP = 500;
 
 export interface StaticAnalysis {
   size: number;
@@ -16,6 +19,17 @@ export interface StaticAnalysis {
   signatures: SignatureHit[];
   structure: StructureSegment[];
   secrets: StringHit[];
+  /**
+   * What the secret scan actually covered, and how much it had to leave out.
+   *
+   * OPTIONAL FOREVER, and not because the analysis might omit it — every build from here on writes it. This
+   * bundle is persisted as JSON on the image row and re-read for as long as the image exists, so a stored
+   * analysis is data written by an OLDER build and cannot be made to carry a field it never had. Declaring it
+   * required is the mistake `nvd.uncheckedIdentities` already paid for, where a result stored two commits
+   * earlier took down the whole image view. A reader that finds it absent knows only that the coverage was not
+   * recorded — which is itself the honest answer, and never that the scan was complete.
+   */
+  secretScan?: SecretScan;
 }
 
 export interface AnalyzeOptions {
@@ -29,6 +43,8 @@ export function analyzeBuffer(buf: Uint8Array, options: AnalyzeOptions = {}): St
   const signatures = scanSignatures(buf);
   const structure = buildStructureSegments(buf.length, signatures, entropy);
   const identity = inferIdentity(buf, signatures, entropy);
-  const secrets = extractSecrets(buf, { minLength: options.secretMinLength ?? 6 }).slice(0, 500);
-  return { size: buf.length, identity, entropy, signatures, structure, secrets };
+  // The listing cap moves INTO the scan so the count survives it. `.slice(0, 500)` here threw away the one
+  // number that distinguishes "no secrets in this image" from "more secrets than the bundle carries".
+  const secretScan = scanSecrets(buf, { minLength: options.secretMinLength ?? 6 }, SECRET_LIST_CAP);
+  return { size: buf.length, identity, entropy, signatures, structure, secrets: secretScan.secrets, secretScan };
 }

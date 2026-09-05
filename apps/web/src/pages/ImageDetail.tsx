@@ -627,13 +627,41 @@ function EntropyPanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element {
 function SecretsPanel({ analysis, imageId }: { analysis: StaticAnalysis | null; imageId: string }): JSX.Element {
   const t = useMessages();
   const secrets = analysis?.secrets ?? [];
+  const scan = analysis?.secretScan;
+  /**
+   * The two bounds, shown whether or not anything matched.
+   *
+   * A partial walk beside a NON-empty list matters as much as beside an empty one: eleven per cent of an image
+   * can produce a confident-looking table and still be eleven per cent. `secretScan` is absent on analyses
+   * persisted before it existed, and an absent field is not a complete scan — nothing is claimed either way.
+   */
+  const partial = scan && scan.scannedBytes < scan.totalBytes;
+  const listCapped = scan ? scan.matched > secrets.length : false;
   return (
     <div>
       <div className="panel">
         <div className="panel-title">{t.imageDetail.secrets.title}</div>
         <div className="panel-sub">{t.imageDetail.secrets.sub}</div>
+        {partial && scan ? (
+          <div className="banner banner-warn" style={{ marginTop: 10 }}>
+            <div style={{ maxWidth: '72ch' }}>
+              {t.imageDetail.secrets.partial(
+                ((scan.scannedBytes / scan.totalBytes) * 100).toFixed(1),
+                fmtBytes(scan.scannedBytes),
+                fmtBytes(scan.totalBytes),
+              )}
+            </div>
+          </div>
+        ) : null}
+        {listCapped && scan ? (
+          <div className="hint" style={{ marginTop: 10, maxWidth: '72ch' }}>
+            {t.imageDetail.secrets.listCapped(secrets.length, scan.matched)}
+          </div>
+        ) : null}
         {secrets.length === 0 ? (
-          <div className="hint">{t.imageDetail.secrets.empty}</div>
+          <div className="hint" style={{ marginTop: 10, maxWidth: '72ch' }}>
+            {t.imageDetail.secrets.empty}
+          </div>
         ) : (
           <div className="table-wrap">
             <table className="data">

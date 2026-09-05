@@ -560,3 +560,86 @@ describe('ImageDetail — what the research lane did not ask, and what it sent',
     expect(screen.queryByText('What this lookup sent, and where')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The secrets panel, and the zero that used to read as a clean bill.
+ *
+ * The string walk runs from offset 0 upward and stops at its cap, so it truncates by FILE OFFSET — arrival order,
+ * the one axis a bound in this codebase may not cut on silently. Measured on the deployed corpus before this
+ * existed: the 106 MB GL.iNet image stopped at 11.0% of the file and the 34.5 MB Framework BIOS capsule at 92.5%,
+ * and both rendered as "No secret-like strings detected in the raw image".
+ */
+describe('ImageDetail — a secrets result says what it covered, not that it is clean', () => {
+  // The secrets section also mounts the deep scan; unstubbed it reaches the network and the subtree throws, which
+  // renders BLANK — the failure mode that looks exactly like "this panel found nothing".
+  beforeEach(() => {
+    mockApi.gitleaks.mockResolvedValue(null);
+  });
+
+  const withScan = (scan: { matched: number; scannedBytes: number; totalBytes: number }, secrets: [] = []): void => {
+    mockApi.analysis.mockResolvedValue({
+      size: image.size,
+      identity: image.identity,
+      entropy: { windowSize: 4096, step: 4096, samples: [], mean: 6.1, max: 7.9, min: 0.2, highEntropyRegions: [] },
+      signatures: [],
+      structure: [],
+      secrets,
+      secretScan: scan,
+    });
+  };
+
+  it('names the percentage it stopped at, and refuses the rest of the image outright', async () => {
+    withScan({ matched: 0, scannedBytes: 11_000_000, totalBytes: 100_000_000 });
+    renderSection('secrets');
+    expect(await screen.findByText(/stopped at 11\.0% of the image/)).toBeTruthy();
+    expect(screen.getByText(/says nothing whatever about the rest/)).toBeTruthy();
+  });
+
+  it('says an empty result is bounded by what the heuristic can see at all', async () => {
+    withScan({ matched: 0, scannedBytes: 8 * 1024 * 1024, totalBytes: 8 * 1024 * 1024 });
+    renderSection('secrets');
+    // The zero has to carry the reason a compressed filesystem is invisible to this stage.
+    expect(await screen.findByText(/cannot be found by this stage at all/)).toBeTruthy();
+    // A complete walk must NOT print the partial banner — the branch where nothing is wrong.
+    expect(screen.queryByText(/stopped at/)).toBeNull();
+  });
+
+  it('separates the listing cap, which examined what it dropped, from the walk, which did not', async () => {
+    const many = Array.from({ length: 500 }, (_, i) => ({
+      offset: i,
+      value: `-----BEGIN RSA PRIVATE KEY----- ${i}`,
+      secretKind: 'private-key',
+      severity: 'critical' as const,
+    }));
+    mockApi.analysis.mockResolvedValue({
+      size: image.size,
+      identity: image.identity,
+      entropy: { windowSize: 4096, step: 4096, samples: [], mean: 6.1, max: 7.9, min: 0.2, highEntropyRegions: [] },
+      signatures: [],
+      structure: [],
+      secrets: many,
+      secretScan: { matched: 900, scannedBytes: image.size, totalBytes: image.size },
+    });
+    renderSection('secrets');
+    expect(await screen.findByText(/Showing the 500 highest-severity of 900 matches/)).toBeTruthy();
+    expect(screen.getByText(/every one of the 900 was examined/)).toBeTruthy();
+  });
+
+  it('claims nothing at all when the coverage was never recorded', async () => {
+    // An analysis persisted before `secretScan` existed. Absent is not "complete".
+    renderSection('secrets');
+    expect(await screen.findByText(/cannot be found by this stage at all/)).toBeTruthy();
+    expect(screen.queryByText(/stopped at/)).toBeNull();
+    expect(screen.queryByText(/highest-severity of/)).toBeNull();
+  });
+
+  it('states the bound in Spanish without letting it become a clean bill', async () => {
+    setLocale('es');
+    withScan({ matched: 0, scannedBytes: 11_000_000, totalBytes: 100_000_000 });
+    renderSection('secrets');
+    expect(await screen.findByText(/se detuvo en el 11\.0 % de la imagen/)).toBeTruthy();
+    expect(screen.getByText(/no dice absolutamente nada del resto/)).toBeTruthy();
+    // No switch back here: the global beforeEach sets English before the next render, and restoring it while this
+    // tree is still mounted re-renders it outside act() — the very thing this file's header warns about.
+  });
+});

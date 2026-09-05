@@ -18,8 +18,30 @@ export interface StringOptions {
   maxStrings?: number;
 }
 
-/** Extract printable-ASCII runs of at least `minLength`, then classify each for secret-likeness. */
-export function extractStrings(buf: Uint8Array, options: StringOptions = {}): StringHit[] {
+/**
+ * A string walk and how far it actually got.
+ *
+ * `maxStrings` ends the walk, and the walk proceeds from offset 0 upward, so the cap truncates by FILE OFFSET —
+ * by arrival order, which is the one thing a bound in this codebase may not silently do. Measured: the 106 MB
+ * GL.iNet image hits the 20 000-string cap at 11% of the file, so 89% of it is never looked at; the 34.5 MB
+ * Framework BIOS capsule stops at 92.5%. Both then rendered as "no secret-like strings detected".
+ *
+ * `scannedBytes` is what makes that statable. Equal to `totalBytes` on a complete walk; below it, everything past
+ * that offset was not read and nothing at all is known about it.
+ */
+export interface StringScan {
+  hits: StringHit[];
+  /** Offset the walk reached. Less than `totalBytes` means the cap stopped it and the remainder is unexamined. */
+  scannedBytes: number;
+  totalBytes: number;
+}
+
+/**
+ * Extract printable-ASCII runs of at least `minLength`, classify each for secret-likeness, and report how much of
+ * the buffer the walk covered. Prefer this over `extractStrings` wherever the result is shown to a person: an
+ * empty hit list means "nothing in the first `scannedBytes`", never "nothing in this image".
+ */
+export function scanStrings(buf: Uint8Array, options: StringOptions = {}): StringScan {
   const minLength = Math.max(1, options.minLength ?? 5);
   const maxStrings = options.maxStrings ?? 20000;
   const hits: StringHit[] = [];
@@ -45,11 +67,16 @@ export function extractStrings(buf: Uint8Array, options: StringOptions = {}): St
       if (start < 0) start = i;
     } else {
       flush(i);
-      if (hits.length >= maxStrings) return hits;
+      if (hits.length >= maxStrings) return { hits, scannedBytes: i, totalBytes: buf.length };
     }
   }
   flush(buf.length);
-  return hits;
+  return { hits, scannedBytes: buf.length, totalBytes: buf.length };
+}
+
+/** Extract printable-ASCII runs of at least `minLength`, then classify each for secret-likeness. */
+export function extractStrings(buf: Uint8Array, options: StringOptions = {}): StringHit[] {
+  return scanStrings(buf, options).hits;
 }
 
 function asciiSlice(buf: Uint8Array, start: number, end: number): string {
@@ -102,10 +129,46 @@ export function classifySecret(value: string): SecretClassification {
   return {};
 }
 
+const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+
+/**
+ * The secret scan and the two bounds that shape it, stated rather than applied silently.
+ *
+ * Two different caps are at work and they truncate on different axes, which is why both are reported. The string
+ * walk's cap cuts by file offset — arrival order — and is the dangerous one: what it drops was never examined.
+ * The listing cap cuts by severity, after the sort, so what it drops was examined and ranked; `matched` says how
+ * many there were so a reader can tell "none found" from "more than fit".
+ */
+export interface SecretScan {
+  /** The listed secrets, severity-first, at most `listCap` of them. */
+  secrets: StringHit[];
+  /** How many classified as secrets before the listing cap — `secrets.length` when nothing was dropped. */
+  matched: number;
+  /** Offset the string walk reached. Below `totalBytes`, the remainder was never read. */
+  scannedBytes: number;
+  totalBytes: number;
+}
+
+/**
+ * Only the strings that classified as a secret, severity-first, with the coverage the walk achieved.
+ *
+ * `listCap` bounds what is RETURNED, never what is counted: an empty `secrets` with a non-zero `matched` is
+ * impossible, but a short `secrets` with a large `matched` is exactly the case a caller must be able to state.
+ */
+export function scanSecrets(buf: Uint8Array, options?: StringOptions, listCap = Number.POSITIVE_INFINITY): SecretScan {
+  const scan = scanStrings(buf, options);
+  const matched = scan.hits
+    .filter((h) => h.secretKind)
+    .sort((a, b) => (SEVERITY_ORDER[a.severity ?? 'info'] ?? 9) - (SEVERITY_ORDER[b.severity ?? 'info'] ?? 9));
+  return {
+    secrets: Number.isFinite(listCap) ? matched.slice(0, listCap) : matched,
+    matched: matched.length,
+    scannedBytes: scan.scannedBytes,
+    totalBytes: scan.totalBytes,
+  };
+}
+
 /** Convenience: only the strings that classified as a secret, sorted by severity. */
 export function extractSecrets(buf: Uint8Array, options?: StringOptions): StringHit[] {
-  const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-  return extractStrings(buf, options)
-    .filter((h) => h.secretKind)
-    .sort((a, b) => (order[a.severity ?? 'info'] ?? 9) - (order[b.severity ?? 'info'] ?? 9));
+  return scanSecrets(buf, options).secrets;
 }
