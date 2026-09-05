@@ -116,10 +116,22 @@ export function coverageNumbers(id: CapabilityId, result: CapabilityResultBase |
         unit: 'stores',
       };
     case 'ghidra':
-      // `functionCount` is the provider's own number and `functions` is the (possibly capped) list it returns, so the
-      // count is the denominator and the list length is what actually arrived — the cap is legible from the pair.
+      /**
+       * The denominator is `eligibleCount` (or `functionTotal`), NEVER `functionCount`.
+       *
+       * This case used to read `denominator: num(r.functionCount)` with the comment "the cap is legible from the
+       * pair". It was not: the provider sets `functionCount: functions.length`, so the pair could not differ and
+       * this widget could only ever print "40 of 40" for a binary with thousands of functions — the first forty
+       * by ADDRESS, because the post-script broke out of its walk at the cap and never counted the rest. Its unit
+       * test passed on the fixture `{ functionCount: 900, functions: [{}, {}] }`, which the provider is incapable
+       * of producing.
+       *
+       * `eligibleCount` excludes the thunks and externals the script never decompiles, so it is the denominator
+       * the numerator was actually drawn from. Absent on results persisted before the script counted anything, and
+       * absent yields `null` — no denominator at all is honest; `functions.length` over itself is not.
+       */
       return {
-        denominator: num(r.functionCount),
+        denominator: num(r.eligibleCount ?? r.functionTotal),
         applied: num((r.functions as unknown[] | undefined)?.length),
         lost: null,
         unit: 'functions',

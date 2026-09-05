@@ -423,8 +423,16 @@ export interface GhidraResult {
   available: boolean;
   reason?: string;
   binary: string;
+  /** How many functions this result LISTS — always `functions.length`, never a denominator. */
   functionCount: number;
   functions: GhidraFunction[];
+  /**
+   * The real totals from the post-script. `eligibleCount` excludes thunks and externals, which are never
+   * decompiled, so it is the denominator `functions.length` was drawn from. Optional forever — a result stored
+   * before the script counted anything has neither, and absent is not "complete".
+   */
+  functionTotal?: number;
+  eligibleCount?: number;
 }
 
 /**

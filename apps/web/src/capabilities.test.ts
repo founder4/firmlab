@@ -63,13 +63,33 @@ describe('coverageNumbers — an absent denominator is not a zero', () => {
     });
   });
 
-  it('reads ghidra as functionCount over the list that arrived, so a cap is legible from the pair', () => {
-    expect(coverageNumbers('ghidra', ran({ functionCount: 900, functions: [{}, {}] }))).toEqual({
+  /**
+   * The fixture this replaces was `{ functionCount: 900, functions: [{}, {}] }`, and the provider cannot produce
+   * it: `runGhidra` sets `functionCount: functions.length`, so the pair the old code used as denominator and
+   * numerator could never differ, and this widget could only ever print "40 of 40". The test passed because its
+   * fixture was written from the same assumption as the code — the trap CLAUDE.md records elsewhere.
+   */
+  it('reads ghidra’s denominator from the eligible count, never from the length of its own list', () => {
+    expect(
+      coverageNumbers('ghidra', ran({ functionCount: 40, functions: Array(40).fill({}), eligibleCount: 913 })),
+    ).toEqual({ denominator: 913, applied: 40, lost: null, unit: 'functions' });
+  });
+
+  it('falls back to the whole-program total when only that was recorded', () => {
+    expect(coverageNumbers('ghidra', ran({ functionCount: 2, functions: [{}, {}], functionTotal: 900 }))).toEqual({
       denominator: 900,
       applied: 2,
       lost: null,
       unit: 'functions',
     });
+  });
+
+  it('reports NO denominator for a result stored before the script counted anything', () => {
+    // `functionCount` is present and equals the list length. Reading it as a denominator is what invented a
+    // 100%-covered claim, so its absence must produce null rather than a ratio of the list against itself.
+    const c = coverageNumbers('ghidra', ran({ functionCount: 40, functions: Array(40).fill({}) }));
+    expect(c.applied).toBe(40);
+    expect(c.denominator).toBeNull();
   });
 
   it('returns nulls rather than zeros for a capability that carries no denominator', () => {

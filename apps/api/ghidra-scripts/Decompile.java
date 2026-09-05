@@ -1,8 +1,20 @@
 // Decompile.java — FirmLab Ghidra headless post-script.
 //
 // Runs after analyzeHeadless has imported and auto-analyzed a single binary. Decompiles up to MAX functions to
-// C pseudocode and writes a JSON array of {name, signature, pseudocode} to the path given as the first script
-// argument. Defensive throughout: a failure on one function must not abort the whole run.
+// C pseudocode and writes JSON to the path given as the first script argument. Defensive throughout: a failure
+// on one function must not abort the whole run.
+//
+// The cap bounds the DECOMPILATION, not the walk. It used to `break` out of the function loop, so nothing ever
+// learned how many functions the binary had: the provider then reported `functionCount: functions.length`, the
+// two could not differ, and the workbench's coverage widget could only ever read "40 of 40" for a binary with
+// thousands of functions — the first forty by ADDRESS, at that. Iterating the function manager is cheap and
+// decompiling is not, so the loop now runs to the end and only stops calling the decompiler, which is the same
+// shape as the fix applied to `scanSignatures` in packages/core.
+//
+// Output is therefore an object, not a bare array:
+//   {"functionTotal":N,"eligible":M,"decompiled":K,"functions":[{name,signature,pseudocode},...]}
+// `functionTotal` counts every function Ghidra knows about; `eligible` excludes thunks and externals, which this
+// script never decompiles, and is the honest denominator for K.
 //
 // Invoked by the API provider as:
 //   analyzeHeadless <proj> firmlabproj -import <bin> -scriptPath <dir> -postScript Decompile.java <outJson> -deleteProject
@@ -38,12 +50,18 @@ public class Decompile extends GhidraScript {
     FunctionManager fm = currentProgram.getFunctionManager();
     List<String> objects = new ArrayList<>();
     int count = 0;
+    int total = 0;
+    int eligible = 0;
 
     for (Function fn : fm.getFunctions(true)) {
-      if (count >= MAX_FUNCTIONS) {
-        break;
-      }
+      total++;
       if (fn.isThunk() || fn.isExternal()) {
+        continue;
+      }
+      eligible++;
+      // Past the cap the walk keeps counting and stops decompiling. Breaking here is what made the total
+      // unknowable, and an unknowable total is what let the coverage widget claim completeness it never had.
+      if (count >= MAX_FUNCTIONS) {
         continue;
       }
       try {
@@ -71,19 +89,24 @@ public class Decompile extends GhidraScript {
     decomp.dispose();
 
     StringBuilder sb = new StringBuilder();
-    sb.append("[");
+    sb.append("{\"functionTotal\":").append(total);
+    sb.append(",\"eligible\":").append(eligible);
+    sb.append(",\"decompiled\":").append(count);
+    sb.append(",\"functions\":[");
     for (int i = 0; i < objects.size(); i++) {
       if (i > 0) {
         sb.append(",");
       }
       sb.append(objects.get(i));
     }
-    sb.append("]");
+    sb.append("]}");
 
     try (FileWriter w = new FileWriter(outPath)) {
       w.write(sb.toString());
     }
-    println("Decompile.java: wrote " + count + " functions to " + outPath);
+    println(
+        "Decompile.java: decompiled " + count + " of " + eligible + " eligible function(s) (" + total
+            + " total, thunks and externals excluded) to " + outPath);
   }
 
   /** Minimal JSON string escaper (quotes, backslashes, control chars). */
