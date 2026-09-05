@@ -37,6 +37,7 @@
 - [x] Evaluar YARA Forge Core 20260830 contra los mismos 8 rootfs: compila, conserva los 3 positivos inertes, añade 134 reglas, elimina 4 y no introduce ni pierde matches en el corpus actual. La promoción sigue siendo una decisión separada.
 - [x] Completar la campaña FwHunt de OVMF: 12/12 lotes terminales, 131/136 módulos con veredicto, 5 no convergentes explícitamente desconocidos y 0 módulos sin intentar (antes quedaban 124).
 
+- [x] Extraer de `providers/jobs.ts` el planificador de concurrencia a `job-scheduler.ts`, sin un solo import: la admisión, la cola FIFO y la contabilidad de huecos pasan de intesteables a 15 tests. El hueco es ahora un token con `release()` idempotente, y soltarlo es lo que arranca al siguiente, sin ventana en la que el contador baje. De paso cierra dos defectos latentes: `Math.max(1, Number(...))` propagaba `NaN` para un `FIRMLAB_MAX_CONCURRENT_JOBS` no numérico y dejaba la cola parada para siempre, y un `insertJob` que lance ya no deja el hueco colgado bajando el techo de concurrencia de forma permanente.
 ## Siguiente
 
 ### Cobertura y análisis
@@ -64,7 +65,6 @@ Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `ar
 
 ### Deuda estructural
 
-- [ ] Extraer de `providers/jobs.ts` un planificador puro (admitir, liberar, encolar) que no importe `store.js`, y dejar que `jobs.ts` lo enlace. Hoy el primitivo de concurrencia no tiene fichero de test y es intesteable por la propia regla del repo — y es justo el componente cuyo comportamiento causó el bug del puerto gdb fijo cuando W9 programó dos sondas concurrentes. El patrón ya está resuelto en `opacidad-plan.ts` y `findings-normalize.ts`; falta aplicarlo donde más duele.
 - [ ] Revisar el reparto entre core y api: `packages/core` son 2.353 líneas frente a 84.223 de `apps/api`, y el dominio puro (`opacidad-plan.ts` 674, `boot-cmdline.ts` 868, `nvd.ts` 547, `opacidad-leads.ts` 511, `findings-normalize.ts` 312…) vive en la capa de aplicación porque no puede importar `store.js`. Son 65 módulos acoplados al store, 24 de ellos fuera de `routes/`. Decidir si core recupera ese dominio o si la regla se documenta como lo que es: un workaround, no una arquitectura.
 - [ ] Cubrir con test los 11 componentes web que no lo tienen, empezando por los que no son visuales: `DeepAnalysisDetails.tsx` (569 líneas), `KernelPosture.tsx` (218), `BinVulnPanel.tsx` (200), `PresetsPanel.tsx` (182) y `WebProbePanel.tsx` (123); los visuales dibujados a mano (`SignalCanvas` 280, `SbomGraph` 230, `EntropyChart` 174, `StructureMap` 125, `FilesystemTree` 61) van después.
 
