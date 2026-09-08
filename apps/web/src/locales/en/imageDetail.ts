@@ -267,6 +267,12 @@ export const imageDetail = {
       `${n} SBOM component${n === 1 ? '' : 's'} could not be mapped to an OSV ecosystem and ${n === 1 ? 'was' : 'were'} never asked about. The advisory count above does not cover ${n === 1 ? 'it' : 'them'}.`,
     nvdNotQueried: (n: number) =>
       `${n} candidate${n === 1 ? '' : 's'} went unasked at NVD. The advisory count above does not cover ${n === 1 ? 'it' : 'them'}.`,
+    /**
+     * The other OSV denominator, and a different fact from `osvSkipped`: these components COULD have been asked
+     * and this run chose not to, because the per-run query cap was reached first.
+     */
+    osvNotQueried: (n: number) =>
+      `${n} ecosystem-mapped component${n === 1 ? '' : 's'} went unasked at OSV: the per-run query cap was reached first. The advisory count above does not cover ${n === 1 ? 'it' : 'them'}.`,
     /** A table bound. Stated because a list that simply stops reads as the whole set. */
     componentsShown: (shown: number, total: number) =>
       `Showing ${shown} of ${total} components. The rest are in the run's stored result.`,
@@ -358,6 +364,13 @@ export const imageDetail = {
     neverSentHeading: 'Never sent, on any run:',
     shownOfTitle: (shown: number, total: number, name: string, version: string) =>
       `This row lists ${shown}. NVD matches ${total} CVEs for ${name} ${version}; the rest are not shown here.`,
+    /**
+     * The OSV row's own version. It used to borrow the NVD one, which named the wrong database, and its total was
+     * the stored listing's length rather than the size of OSV's answer — so a component with hundreds of
+     * advisories read as having exactly the fifty that were kept.
+     */
+    osvShownOfTitle: (shown: number, total: number, name: string, version: string) =>
+      `This row lists ${shown}. OSV returned ${total} advisories for ${name} ${version}, ranked most severe first; the rest are not shown here. Every CVE among them was still cross-referenced against KEV.`,
 
     keyHeading: 'Key material · embedded keys are effectively public',
     effectivelyPublic: 'effectively public',

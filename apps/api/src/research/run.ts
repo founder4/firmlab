@@ -232,8 +232,14 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   }
   const osv = await queryOsvBatch(packages, cfg);
   handle.log(
-    `OSV: ${osv.queried} queried, ${osv.skipped} unmapped, ${osv.withAdvisories} with advisories (${osv.totalAdvisories} total).`,
+    `OSV: ${osv.queried} queried, ${osv.skipped} unmapped, ${osv.withAdvisories} with advisories (${osv.totalAdvisories} listed).`,
   );
+  if (osv.notQueriedRule) handle.log(`OSV: ${osv.notQueriedRule}`);
+  for (const t of osv.truncated) {
+    handle.log(
+      `OSV: ${t.name} ${t.version} lists ${t.shown} of ${t.total} advisories, most severe first — the listing is capped, the CVE set behind the KEV cross-reference is not.`,
+    );
+  }
 
   // Source #2 — NVD for the OSV-unmapped components: a CPE version match where the component is mapped, keyword
   // otherwise (rate-limit capped; honest about what it skipped, and about which question it got an answer from).

@@ -86,4 +86,30 @@ describe('collectCveIds', () => {
     const ids = collectCveIds([{ advisories: [{ id: 'RUSTSEC-2021-1', aliases: ['GHSA-abc'] }] }], []);
     expect(ids).toEqual([]);
   });
+
+  /**
+   * The OSV listing is capped; its `cveIds` is not. Reading only the listing meant a component with more
+   * advisories than the cap could drop a CVE that CISA lists as actively exploited, and the KEV verdict would
+   * have read as "not known-exploited" on a question nobody asked.
+   */
+  it('reads the OSV answer’s complete CVE set, not just the advisories the listing kept', () => {
+    const ids = collectCveIds(
+      [{ advisories: [{ id: 'CVE-2021-44228', aliases: [] }], cveIds: ['CVE-2021-44228', 'CVE-2014-0160'] }],
+      [],
+    );
+    expect(ids.sort()).toEqual(['CVE-2014-0160', 'CVE-2021-44228']);
+  });
+
+  it('falls back to the listing for a result stored before that set existed', () => {
+    const ids = collectCveIds([{ advisories: [{ id: 'DSA-1', aliases: ['CVE-2020-1234'] }] }], []);
+    expect(ids).toEqual(['CVE-2020-1234']);
+  });
+
+  it('reads the CVE a distro record names upstream — where OSV puts it, and where nothing looked before', () => {
+    const ids = collectCveIds(
+      [{ advisories: [{ id: 'DEBIAN-CVE-2016-2781', aliases: [], upstream: ['CVE-2016-2781'] }] }],
+      [],
+    );
+    expect(ids).toEqual(['CVE-2016-2781']);
+  });
 });

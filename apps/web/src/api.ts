@@ -750,6 +750,8 @@ export interface ResearchStatus {
 export interface OsvAdvisory {
   id: string;
   aliases: string[];
+  /** The advisories this record derives from — where a distro record names its CVE. Absent on older results. */
+  upstream?: string[];
   summary: string;
   severity: string | null;
   references: string[];
@@ -791,7 +793,16 @@ export interface ResearchResult {
     skipped: number;
     withAdvisories: number;
     totalAdvisories: number;
-    components: { name: string; version: string; ecosystem: string | null; advisories: OsvAdvisory[] }[];
+    components: {
+      name: string;
+      version: string;
+      ecosystem: string | null;
+      advisories: OsvAdvisory[];
+      /** How many advisories OSV held. Absent on results stored before the listing carried its denominator. */
+      totalMatching?: number;
+    }[];
+    /** Answerable components the per-run query cap dropped; absent on results stored before the cap said so. */
+    notQueried?: number;
   };
   nvd: {
     queried: number;

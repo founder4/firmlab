@@ -527,12 +527,103 @@ describe('ImageDetail — what the research lane did not ask, and what it sent',
     expect(screen.getByText(/7 candidates went unasked at NVD/)).toBeInTheDocument();
   });
 
+  it('separates the OSV components that could not be asked from the ones a cap left unasked', async () => {
+    await show(
+      base({
+        osv: { queried: 80, skipped: 5, notQueried: 12, withAdvisories: 0, totalAdvisories: 0, components: [] },
+      }),
+    );
+    expect(screen.getByText(/5 SBOM components could not be mapped to an OSV ecosystem/)).toBeInTheDocument();
+    expect(screen.getByText(/12 ecosystem-mapped components went unasked at OSV/)).toBeInTheDocument();
+  });
+
   it('stays silent when nothing was skipped, rather than printing a zero', async () => {
     // A 0 here is a real measurement — everything was asked — and a line saying so is noise that dilutes the
     // lines that matter.
     await show(base({}));
     expect(screen.queryByText(/never asked about/)).not.toBeInTheDocument();
     expect(screen.queryByText(/went unasked at NVD/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/went unasked at OSV/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The row's denominator has to be OSV's answer, not the stored listing — which is itself capped at 50, so
+   * reading its length made a component with 312 advisories report exactly the fifty that were kept.
+   */
+  it('counts an OSV row against what OSV returned, not against the listing that survived the cap', async () => {
+    const advisories = Array.from({ length: 50 }, (_, i) => ({
+      id: `OSV-${i}`,
+      aliases: [],
+      summary: '',
+      severity: 'HIGH',
+      references: [],
+    }));
+    await show(
+      base({
+        osv: {
+          queried: 1,
+          skipped: 0,
+          withAdvisories: 1,
+          totalAdvisories: 50,
+          components: [{ name: 'busybox', version: '1.01', ecosystem: 'Debian', advisories, totalMatching: 312 }],
+        },
+      }),
+    );
+    expect(await screen.findByText('8 of 312 shown')).toBeInTheDocument();
+  });
+
+  it('labels a distro advisory with the CVE it names upstream, not with the database’s own id', async () => {
+    await show(
+      base({
+        osv: {
+          queried: 1,
+          skipped: 0,
+          withAdvisories: 1,
+          totalAdvisories: 1,
+          components: [
+            {
+              name: 'coreutils',
+              version: '9.1',
+              ecosystem: 'Debian',
+              advisories: [
+                {
+                  id: 'DEBIAN-CVE-2016-2781',
+                  aliases: [],
+                  upstream: ['CVE-2016-2781'],
+                  summary: 'chroot escape',
+                  severity: 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:C/C:N/I:H/A:N',
+                  references: [],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    expect(await screen.findByText('CVE-2016-2781')).toBeInTheDocument();
+    expect(screen.queryByText('DEBIAN-CVE-2016-2781')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the listing length for a result stored before that total existed', async () => {
+    const advisories = Array.from({ length: 12 }, (_, i) => ({
+      id: `OSV-${i}`,
+      aliases: [],
+      summary: '',
+      severity: 'HIGH',
+      references: [],
+    }));
+    await show(
+      base({
+        osv: {
+          queried: 1,
+          skipped: 0,
+          withAdvisories: 1,
+          totalAdvisories: 12,
+          components: [{ name: 'busybox', version: '1.01', ecosystem: 'Debian', advisories }],
+        },
+      }),
+    );
+    expect(await screen.findByText('8 of 12 shown')).toBeInTheDocument();
   });
 
   it('renders the egress ledger: each destination, what goes there, and the ceiling', async () => {

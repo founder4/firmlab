@@ -140,20 +140,29 @@ export async function fetchAndMatchKev(
 /**
  * Pure: collect the CVE IDs from the OSV + NVD results (OSV advisories carry CVEs as aliases or the id itself; NVD
  * advisory ids ARE CVEs). Deduped, upper-cased — the input to the KEV cross-reference.
+ *
+ * An OSV result's `cveIds` is read FIRST and is the complete set: `advisories` is a capped listing, and building
+ * the known-exploited cross-reference out of a listing meant a component with more advisories than the cap could
+ * silently lose a CVE that CISA lists as actively exploited. The advisories are still walked, because a result
+ * stored by a build from before that field existed has no `cveIds` and its listing is all there is.
  */
 export function collectCveIds(
-  osvComponents: { advisories: { id: string; aliases: string[] }[] }[],
+  osvComponents: { advisories: { id: string; aliases: string[]; upstream?: string[] }[]; cveIds?: string[] }[],
   nvdComponents: { advisories: { id: string }[] }[],
 ): string[] {
   const out = new Set<string>();
   const add = (s: string): void => {
     if (/^CVE-\d{4}-\d+$/i.test(s)) out.add(s.toUpperCase());
   };
-  for (const c of osvComponents)
+  for (const c of osvComponents) {
+    for (const id of c.cveIds ?? []) add(id);
     for (const a of c.advisories) {
       add(a.id);
       for (const al of a.aliases) add(al);
+      // A distro record names its CVE here and nowhere else: `DEBIAN-CVE-2016-2781` has no alias at all.
+      for (const up of a.upstream ?? []) add(up);
     }
+  }
   for (const c of nvdComponents) for (const a of c.advisories) add(a.id);
   return [...out];
 }

@@ -1466,9 +1466,16 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
           {/* The denominators, under the badges they qualify. Both lanes count what they never asked about and
               neither number reached the screen, so "0 advisories" read as "there are none" when it meant "none
               among the ones we asked". `> 0` rather than truthy: a 0 here is genuinely "nothing was skipped". */}
-          {(osv.skipped > 0 || (nvd?.notQueried ?? 0) > 0) && (
+          {(osv.skipped > 0 || (osv.notQueried ?? 0) > 0 || (nvd?.notQueried ?? 0) > 0) && (
             <div style={{ marginBottom: 10 }}>
               {osv.skipped > 0 && <div className="note">{t.imageDetail.research.osvSkipped(osv.skipped)}</div>}
+              {/* A component OSV could not be asked about and one this run ran out of budget for are different
+                  facts, so they are two notes rather than one number. */}
+              {(osv.notQueried ?? 0) > 0 && (
+                <div className="note" style={{ marginTop: 6 }}>
+                  {t.imageDetail.research.osvNotQueried(osv.notQueried ?? 0)}
+                </div>
+              )}
               {(nvd?.notQueried ?? 0) > 0 && (
                 <div className="note" style={{ marginTop: 6 }}>
                   {t.imageDetail.research.nvdNotQueried(nvd?.notQueried ?? 0)}
@@ -1487,53 +1494,62 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
                   </tr>
                 </thead>
                 <tbody>
-                  {osv.components.slice(0, COMPONENT_ROWS).map((c) => (
-                    <tr key={`${c.name}@${c.version}`}>
-                      <td className="mono">
-                        {c.name} {c.version}
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                          {c.advisories.slice(0, ADVISORY_ROWS).map((a) => {
-                            const label = a.aliases.find((x) => x.startsWith('CVE-')) ?? a.id;
-                            const href = a.references[0];
-                            return href ? (
-                              <a
-                                key={a.id}
-                                href={href}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="badge mono"
-                                title={a.summary}
-                              >
-                                {label}
-                              </a>
-                            ) : (
-                              <span key={a.id} className="badge mono" title={a.summary}>
-                                {label}
-                              </span>
-                            );
-                          })}
-                          {/* The NVD table beside this one has said "N of M shown" since it was written; this one
+                  {osv.components.slice(0, COMPONENT_ROWS).map((c) => {
+                    const listed = c.advisories.slice(0, ADVISORY_ROWS);
+                    // The denominator is OSV's answer, not the stored listing: the listing is itself capped, so
+                    // reading its length as the total made a component with hundreds of advisories report the
+                    // fifty that survived. `??` keeps a result stored before that field honest — with no total
+                    // to state, the only number this row can defend is the one it holds.
+                    const total = c.totalMatching ?? c.advisories.length;
+                    return (
+                      <tr key={`${c.name}@${c.version}`}>
+                        <td className="mono">
+                          {c.name} {c.version}
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                            {listed.map((a) => {
+                              // OSV's distro records are named `DEBIAN-CVE-2016-2781` and carry the CVE only
+                              // under `upstream`, so a label reading aliases alone showed the database's own id
+                              // for the CVE the reader came to find.
+                              const label =
+                                a.aliases.find((x) => x.startsWith('CVE-')) ??
+                                a.upstream?.find((x) => x.startsWith('CVE-')) ??
+                                a.id;
+                              const href = a.references[0];
+                              return href ? (
+                                <a
+                                  key={a.id}
+                                  href={href}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="badge mono"
+                                  title={a.summary}
+                                >
+                                  {label}
+                                </a>
+                              ) : (
+                                <span key={a.id} className="badge mono" title={a.summary}>
+                                  {label}
+                                </span>
+                              );
+                            })}
+                            {/* The NVD table beside this one has said "N of M shown" since it was written; this one
                               stopped at eight and said nothing, so the same truncation read as a complete list on
                               one table and as a bound on the other. */}
-                          {c.advisories.length > ADVISORY_ROWS && (
-                            <span
-                              className="badge"
-                              title={t.imageDetail.research.shownOfTitle(
-                                ADVISORY_ROWS,
-                                c.advisories.length,
-                                c.name,
-                                c.version,
-                              )}
-                            >
-                              {t.imageDetail.research.shownOf(ADVISORY_ROWS, c.advisories.length)}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                            {total > listed.length && (
+                              <span
+                                className="badge"
+                                title={t.imageDetail.research.osvShownOfTitle(listed.length, total, c.name, c.version)}
+                              >
+                                {t.imageDetail.research.shownOf(listed.length, total)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               {osv.components.length > COMPONENT_ROWS && (
