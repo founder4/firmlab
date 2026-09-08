@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { hashSecret } from '../secret-hash.js';
 import {
   crc32,
   detectNvramStore,
@@ -357,6 +358,9 @@ describe('nvramFindings', () => {
     expect(password?.severity).toBe('critical');
     expect(password?.proofState).toBe('static_confirmed');
     expect(password?.evidence).toMatchObject({ valueClass: 'well-known-default', valueLength: 5, value: '<redacted>' });
+    // The corpus key is a SHA-1 of the value — never the value. Promoting a rule against `hashSecret('admin')`
+    // must therefore reach this finding, and the same default in another image collides on this hash.
+    expect(password?.evidence?.secretHash).toBe(hashSecret('admin'));
   });
 
   it('rates a configured (non-default) credential high rather than critical', () => {

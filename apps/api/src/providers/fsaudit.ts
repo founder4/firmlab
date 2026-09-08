@@ -40,6 +40,7 @@ import {
   type PemBlock,
   type PemScanCoverage,
   findPemBlocks,
+  keyFingerprint,
   matchKeyToCertificates,
   readPrivateKeyBlock,
   scanTreeForPem,
@@ -367,11 +368,18 @@ export function keyMaterialFindings(files: { path: string; blocks: PemBlock[] }[
   for (const { path: p, blocks } of files) {
     if (seen.has(p)) continue;
     seen.add(p);
-    const keys: { label: string; read: KeyBlockRead; offset: number; text: string }[] = [];
+    const keys: { label: string; read: KeyBlockRead; offset: number; text: string; fingerprint: string | null }[] = [];
     for (const block of blocks) {
       if (block.kind !== 'private-key') continue;
       const read = readPrivateKeyBlock(block);
-      if (read.isKey) keys.push({ label: block.label, read, offset: block.offset, text: block.text });
+      if (read.isKey)
+        keys.push({
+          label: block.label,
+          read,
+          offset: block.offset,
+          text: block.text,
+          fingerprint: keyFingerprint(block),
+        });
       else unclaimed.push({ path: p, label: block.label, offset: block.offset, note: read.note });
     }
     // The sharper question, asked only where both halves are in the same file: does this key OPEN a certificate
@@ -395,6 +403,8 @@ export function keyMaterialFindings(files: { path: string; blocks: PemBlock[] }[
           subject: match.subject,
           issuer: match.issuer,
           validTo: match.validTo,
+          // Redaction-safe key identity (SHA-1 of the public half) — the same shared key in another image collides.
+          ...(k.fingerprint ? { secretHash: k.fingerprint } : {}),
         },
         rationale: [
           'The private key and the certificate sit in the same file, and the key’s PUBLIC half is byte-identical',
@@ -447,6 +457,8 @@ export function keyMaterialFindings(files: { path: string; blocks: PemBlock[] }[
           encrypted: k.read.encrypted,
           offset: k.offset,
         })),
+        // Redaction-safe per-key identities for the cross-image credential ledger — hashes, never the keys.
+        secretHashes: keys.map((k) => k.fingerprint).filter((h): h is string => !!h),
       },
       rationale: rationale.join(' '),
     });

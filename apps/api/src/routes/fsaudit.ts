@@ -7,7 +7,8 @@
  * repeat a stage that already completed. Its findings are synced into the findings ledger.
  */
 import type { FastifyInstance } from 'fastify';
-import { syncFindings } from '../findings.js';
+import { recordCredentialHashes } from '../corpus.js';
+import { credentialHashesFromFindings, syncFindings } from '../findings.js';
 import { runFsAudit } from '../providers/fsaudit.js';
 import { startJob } from '../providers/jobs.js';
 import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
@@ -25,6 +26,8 @@ export async function fsauditRoutes(app: FastifyInstance): Promise<void> {
     const jobId = startJob(id, 'fsaudit', {}, async () => {
       const result = runFsAudit(rootfs);
       syncFindings(id, 'fsaudit', result.findings);
+      // Feed the corpus the redaction-safe key fingerprints these findings carry (never the key material itself).
+      recordCredentialHashes(id, credentialHashesFromFindings(result.findings));
       return result;
     });
     return reply.status(202).send({ jobId });

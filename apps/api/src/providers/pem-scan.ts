@@ -20,7 +20,7 @@
  * files truncated, files skipped, bytes left unread and the rule that chose them all travel with the result.
  * Rule 4 of the proof-state discipline: a bound is not an answer.
  */
-import { X509Certificate, createPrivateKey, createPublicKey } from 'node:crypto';
+import { X509Certificate, createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -523,6 +523,37 @@ export function readPrivateKeyBlock(block: PemBlock): KeyBlockRead {
     }
   }
   return { ...base, isKey: false, note: `body did not decode as a key (${lastError})` };
+}
+
+/**
+ * A stable, redaction-SAFE identity for a private-key block, for the cross-image credential ledger. When the key
+ * decodes it is the SHA-1 of the DER-encoded PUBLIC half, so the same keypair baked into two firmwares — the
+ * device-wide TLS key an operator actually cares about — collides regardless of how each was PEM-wrapped. When it
+ * does not decode (an encrypted block, or a body node:crypto rejects) it is the SHA-1 of the block's base64 body,
+ * which is still byte-identical across the units that shipped it. Returns null for a non-private-key block. The
+ * key material itself is never returned — only the hash — so the result may cross into the persistent corpus.
+ */
+export function keyFingerprint(block: PemBlock): string | null {
+  if (block.kind !== 'private-key') return null;
+  if (!block.encrypted) {
+    for (const pem of [block.text, rewrapArmor(block)]) {
+      try {
+        const der = createPublicKey(pem).export({ type: 'spki', format: 'der' });
+        return createHash('sha1').update(der).digest('hex');
+      } catch {
+        // Not decodable as a key this way — fall through to hashing the body, which is still a stable identity.
+      }
+    }
+  }
+  // RFC 1421 headers (`Proc-Type:`, `DEK-Info:`) carry no key material and differ only in formatting; drop the
+  // markers and any `key: value` header line, keep the base64 armor. base64 never contains a colon.
+  const body = block.text
+    .replace(/-----(?:BEGIN|END)[^-]*-----/g, '')
+    .split('\n')
+    .filter((line) => !line.includes(':'))
+    .join('')
+    .replace(/\s+/g, '');
+  return body ? createHash('sha1').update(body).digest('hex') : null;
 }
 
 /**

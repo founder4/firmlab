@@ -34,7 +34,11 @@ export const corpus = {
   prevalence: {
     title: 'Component prevalence',
     sub: 'Which component versions span the most images, and how many CVEs grype matched.',
-    empty: 'No SBOM data yet — run SBOM on some images.',
+    /** Why the table is empty: no SBOM at all, or SBOMs exist but no version yet recurs across two of them. */
+    empty: (withSbom: number, total: number) =>
+      withSbom === 0
+        ? 'No SBOM data yet — run SBOM on some images.'
+        : `No component version spans more than one image yet (${withSbom} of ${total} image(s) have an SBOM).`,
     colComponent: 'Component',
     colVersion: 'Version',
     colImages: 'Images',

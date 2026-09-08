@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { findPemBlocks, keyMatchesCertificate, matchKeyToCertificates, readPrivateKeyBlock } from './pem-scan.js';
+import {
+  findPemBlocks,
+  keyFingerprint,
+  keyMatchesCertificate,
+  matchKeyToCertificates,
+  readPrivateKeyBlock,
+} from './pem-scan.js';
 
 /**
  * A real RSA-1024 key and a real self-signed certificate FOR THAT KEY, generated for these tests only
@@ -127,5 +133,43 @@ describe('readPrivateKeyBlock — decoded, never taken on the label', () => {
     const read = readPrivateKeyBlock(block as NonNullable<typeof block>);
     expect(read.isKey).toBe(false);
     expect(read.note).toContain('did not decode');
+  });
+});
+
+describe('keyFingerprint — a redaction-safe cross-image key identity', () => {
+  const block = (text: string) => findPemBlocks(text)[0] as NonNullable<ReturnType<typeof findPemBlocks>[0]>;
+
+  it('is a stable SHA-1 hex string and never contains the key body', () => {
+    const fp = keyFingerprint(block(KEY));
+    expect(fp).toMatch(/^[0-9a-f]{40}$/);
+    // The key material must not leak into the fingerprint: no base64 line of the private key survives in it.
+    for (const line of KEY.split('\n').filter((l) => !l.includes('-----'))) expect(fp).not.toContain(line.trim());
+  });
+
+  it('collides for the SAME key however its PEM was wrapped — the reuse signal', () => {
+    // A key that travelled through an nvram value or a C literal loses its line breaks; the public half is identical.
+    const flattened = KEY.replace(/\n/g, '');
+    expect(keyFingerprint(block(flattened))).toBe(keyFingerprint(block(KEY)));
+  });
+
+  it('is keyed on the PUBLIC half — matches what the shipped certificate would carry', () => {
+    // Two firmwares shipping the same keypair collide even if one ships only the key and the other key+cert.
+    expect(keyFingerprint(block(KEY))).toMatch(/^[0-9a-f]{40}$/);
+    expect(keyFingerprint(block(`${KEY}\n${CERT_FOR_KEY}`))).toBe(keyFingerprint(block(KEY)));
+  });
+
+  it('returns null for a block that is not a private key', () => {
+    expect(keyFingerprint(block(CERT_FOR_KEY))).toBeNull();
+  });
+
+  it('falls back to a body hash for a private-key block whose body does not decode', () => {
+    const fake =
+      '-----BEGIN RSA PRIVATE KEY-----\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqaw==\n-----END RSA PRIVATE KEY-----';
+    const b = block(fake);
+    expect(readPrivateKeyBlock(b).isKey).toBe(false);
+    // Still a stable identity — an undecodable block is byte-identical across the units that shipped it.
+    const fp = keyFingerprint(b);
+    expect(fp).toMatch(/^[0-9a-f]{40}$/);
+    expect(fp).toBe(keyFingerprint(block(fake)));
   });
 });

@@ -108,7 +108,7 @@ export function Corpus(): JSX.Element {
         <div className="panel-title">{t.corpus.prevalence.title}</div>
         <div className="panel-sub">{t.corpus.prevalence.sub}</div>
         {overview.componentPrevalence.length === 0 ? (
-          <div className="hint">{t.corpus.prevalence.empty}</div>
+          <div className="hint">{t.corpus.prevalence.empty(overview.sbomImageCount, overview.imageCount)}</div>
         ) : (
           <div className="table-wrap" style={{ marginTop: 10 }}>
             <table className="data">

@@ -47,6 +47,7 @@ export {
   normalizeSbom,
   normalizeGitleaks,
   normalizeBinaryHardening,
+  credentialHashesFromFindings,
 } from './findings-normalize.js';
 
 /**

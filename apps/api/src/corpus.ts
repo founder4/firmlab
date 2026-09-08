@@ -11,14 +11,15 @@
  * Recording is additive (INSERT OR IGNORE): firmware images are immutable, so a given (key, imageId) either
  * exists or not, and re-running a provider produces identical rows. Deleting an image cascades its occurrences.
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Architecture, FirmwareClass, ImageIdentity } from '@firmlab/core';
+import { hashSecret } from './secret-hash.js';
 import { elevateFinding, getDb, listFindings, listImages } from './store.js';
 
-/** Content hash of a secret value — the cross-image key for credential reuse. */
-export function hashSecret(value: string): string {
-  return createHash('sha1').update(value).digest('hex');
-}
+// The cross-image credential key lives in a store-free module so the pure providers that produce credential
+// material can compute the SAME hash without dragging SQLite into their unit tests. Re-exported for the callers
+// (research/run.ts) that already import it from here.
+export { hashSecret };
 
 /**
  * A stable device-family key from an image's identity (vendor:class:arch; unknowns collapse). Pure — groups
@@ -50,6 +51,23 @@ export function recordCredentials(
     'INSERT OR IGNORE INTO credential_occurrence (hash, imageId, kind, severity) VALUES (?, ?, ?, ?)',
   );
   for (const c of creds) if (c.value) stmt.run(hashSecret(c.value), imageId, c.kind, c.severity);
+}
+
+/**
+ * Record credential occurrences that arrive ALREADY HASHED — the redaction-safe path for sources whose secret
+ * value must never leave its provider (`nvram`'s store values, the key material `fsaudit`/`auxsecrets` find). The
+ * value-based `recordCredentials` hashes what it is handed; this stores the hash verbatim, so a source that
+ * computed the matching fingerprint (`hashSecret` for a value, `keyFingerprint` for a key) lands in the very same
+ * cross-image bucket. INSERT OR IGNORE, so the same key seen twice in one image is idempotent.
+ */
+export function recordCredentialHashes(
+  imageId: string,
+  creds: { hash: string; kind: string | null; severity: string | null }[],
+): void {
+  const stmt = getDb().prepare(
+    'INSERT OR IGNORE INTO credential_occurrence (hash, imageId, kind, severity) VALUES (?, ?, ?, ?)',
+  );
+  for (const c of creds) if (c.hash) stmt.run(c.hash, imageId, c.kind, c.severity);
 }
 
 export function recordComponents(imageId: string, comps: { name: string; version: string; cveCount: number }[]): void {
@@ -156,22 +174,32 @@ export function knownCredentialRules(): Map<string, string> {
 }
 
 /**
- * Cross-check an image's secret findings against the known-bad credential watchlist and elevate any match to
- * critical, with a rationale that cites the rule and cross-image prevalence. Still deterministic and still
- * evidence-backed: the finding already proved the secret is in this image; the rule only re-prioritizes it.
- * Returns the number of findings elevated.
+ * Cross-check an image's credential findings against the known-bad watchlist and elevate any match to critical,
+ * with a rationale that cites the rule and cross-image prevalence. Still deterministic and still evidence-backed:
+ * the finding already proved the secret is in this image; the rule only re-prioritizes it. Returns the count.
+ *
+ * It USED to look only at `source === 'secrets'` and only at a raw `evidence.value` — so it could reach 3 of the
+ * corpus's 38 secret findings and none of the redacted ones (nvram, key material), meaning the entire Level-1
+ * watchlist was blind to 92% of secrets even once a rule existed. It now keys on the same identity the recorder
+ * stored: a source's redaction-safe `evidence.secretHash`/`secretHashes` when it emitted one, or `hashSecret` of
+ * a raw `evidence.value` for the string classifier that stores the value verbatim. A finding carrying neither is
+ * not a credential and is skipped.
  */
 export function flagKnownCredentials(imageId: string): number {
   const rules = knownCredentialRules();
   if (rules.size === 0) return 0;
   let flagged = 0;
   for (const f of listFindings(imageId)) {
-    if (f.source !== 'secrets' || !f.evidenceJson) continue;
-    const value = (JSON.parse(f.evidenceJson) as { value?: string }).value;
-    if (!value) continue;
-    const label = rules.get(hashSecret(value));
-    if (!label) continue;
-    const seenIn = credentialOtherImages(hashSecret(value), imageId).length;
+    if (!f.evidenceJson) continue;
+    const ev = JSON.parse(f.evidenceJson) as { value?: string; secretHash?: string; secretHashes?: string[] };
+    const hashes = new Set<string>();
+    if (ev.secretHash) hashes.add(ev.secretHash);
+    for (const h of ev.secretHashes ?? []) if (h) hashes.add(h);
+    if (hashes.size === 0 && ev.value) hashes.add(hashSecret(ev.value));
+    const hit = [...hashes].find((h) => rules.has(h));
+    if (!hit) continue;
+    const label = rules.get(hit) as string;
+    const seenIn = credentialOtherImages(hit, imageId).length;
     elevateFinding(
       f.id,
       'critical',
@@ -195,8 +223,10 @@ export interface CorpusOverview {
   ruleCount: number;
   /** Credentials shared across more than one image (the reuse signal), watchlist label attached if promoted. */
   credentialReuse: { hash: string; kind: string | null; imageCount: number; watchlistLabel: string | null }[];
-  /** Component versions ordered by how many images carry them (and their known CVE count). */
+  /** Component versions carried by MORE THAN ONE image (the prevalence signal), with their known CVE count. */
   componentPrevalence: { name: string; version: string; cveCount: number; imageCount: number }[];
+  /** How many images have an SBOM at all — the denominator the prevalence empty-state needs to say WHY it is empty. */
+  sbomImageCount: number;
   /** Images grouped by device family (vendor:class:arch), each list ordered oldest→newest for a version timeline. */
   deviceFamilies: { familyKey: string; images: ImageRef[] }[];
 }
@@ -214,12 +244,19 @@ export function corpusOverview(): CorpusOverview {
       .all() as unknown as { hash: string; kind: string | null; imageCount: number }[]
   ).map((r) => ({ ...r, watchlistLabel: watchlist.get(r.hash) ?? null }));
 
+  // HAVING imageCount > 1, exactly as credentialReuse does: this table is titled "which versions span the most
+  // images", so a row present in one image spans nothing and is noise — without the clause the section rendered
+  // 200 UNKNOWN-version kernel modules that each occur once. The empty result now carries its own reason below.
   const componentPrevalence = db
     .prepare(
       `SELECT name, version, MAX(cveCount) AS cveCount, COUNT(*) AS imageCount FROM component_occurrence
-       GROUP BY name, version ORDER BY imageCount DESC, cveCount DESC LIMIT 200`,
+       GROUP BY name, version HAVING imageCount > 1 ORDER BY imageCount DESC, cveCount DESC LIMIT 200`,
     )
     .all() as unknown as { name: string; version: string; cveCount: number; imageCount: number }[];
+
+  const sbomImageCount = (
+    db.prepare('SELECT COUNT(DISTINCT imageId) AS n FROM component_occurrence').get() as { n: number }
+  ).n;
 
   // Device families are computed from each image's identity (no stored family column — always fresh).
   const families = new Map<string, ImageRef[]>();
@@ -239,6 +276,7 @@ export function corpusOverview(): CorpusOverview {
     ruleCount: listRules().length,
     credentialReuse,
     componentPrevalence,
+    sbomImageCount,
     deviceFamilies,
   };
 }

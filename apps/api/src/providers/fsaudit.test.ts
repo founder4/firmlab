@@ -16,7 +16,7 @@ import {
 } from './fsaudit.js';
 import type { AccountFileState, AccountSource } from './fsaudit.js';
 import type { PemBlock } from './pem-scan.js';
-import { findPemBlocks, readPrivateKeyBlock } from './pem-scan.js';
+import { findPemBlocks, keyFingerprint, readPrivateKeyBlock } from './pem-scan.js';
 
 // A UID-0 root that defers its password to /etc/shadow, plus a normal daemon account.
 const PASSWD = 'root:x:0:0:root:/root:/bin/sh\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n';
@@ -269,6 +269,9 @@ describe('keyMaterialFindings (private key by content, not filename)', () => {
     expect(drafts[0]?.evidence).toMatchObject({ keyCount: 1, keys: [{ keyType: 'rsa', keyBits: 1024 }] });
     // The key body must NOT leak into evidence.
     expect(JSON.stringify(drafts[0]?.evidence)).not.toContain('MIICWwIBAAKBgQ');
+    // …but a redaction-safe fingerprint DOES, for the cross-image credential ledger — the SHA-1 of the public half.
+    const fp = keyFingerprint(findPemBlocks(RSA_KEY)[0] as PemBlock);
+    expect(drafts[0]?.evidence?.secretHashes).toEqual([fp]);
   });
 
   it('does not claim a placeholder block as a key — it returns it as unclaimed instead', () => {
@@ -290,6 +293,11 @@ describe('keyMaterialFindings (private key by content, not filename)', () => {
     expect(drafts).toHaveLength(1);
     expect(drafts[0]?.evidence).toMatchObject({ keyCount: 2 });
     expect(drafts[0]?.title).toContain('2 blocks');
+    // One occurrence per distinct key — the corpus should learn BOTH, not just the first.
+    expect(drafts[0]?.evidence?.secretHashes).toEqual([
+      keyFingerprint(findPemBlocks(RSA_KEY)[0] as PemBlock),
+      keyFingerprint(findPemBlocks(EC_KEY)[0] as PemBlock),
+    ]);
   });
 
   it('does not flag a public key, a certificate or DH parameters', () => {

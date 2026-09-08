@@ -16,7 +16,14 @@
  */
 import fs from 'node:fs';
 import type { Architecture, ImageIdentity } from '@firmlab/core';
-import { normalizeBinaryHardening, normalizeSbom, rowToFinding, syncFindings } from './findings.js';
+import { recordCredentialHashes } from './corpus.js';
+import {
+  credentialHashesFromFindings,
+  normalizeBinaryHardening,
+  normalizeSbom,
+  rowToFinding,
+  syncFindings,
+} from './findings.js';
 import type { LlmConfig } from './llm.js';
 import { complete } from './llm.js';
 import { selectExportReachTargets } from './opacidad-exportreach.js';
@@ -253,6 +260,7 @@ async function extractRun(c: RunCtx): Promise<StepOutcome> {
 async function fsauditRun(c: RunCtx): Promise<StepOutcome> {
   const r = runFsAudit(c.rootfsPath as string);
   syncFindings(c.imageId, 'fsaudit', r.findings);
+  recordCredentialHashes(c.imageId, credentialHashesFromFindings(r.findings));
   return { summary: `rootfs security audit: ${r.findings.length} findings`, findingCount: r.findings.length };
 }
 
@@ -288,6 +296,7 @@ async function yarascanRun(c: RunCtx): Promise<StepOutcome> {
 async function nvramRun(c: RunCtx): Promise<StepOutcome> {
   const r = runNvramScan(c.imagePath);
   syncFindings(c.imageId, 'nvram', r.findings);
+  recordCredentialHashes(c.imageId, credentialHashesFromFindings(r.findings));
   const creds = r.findings.filter((f) => f.kind === 'nvram-credential' || f.kind === 'nvram-wifi-key').length;
   return {
     summary: `nvram store: ${r.stores.length} store(s), ${r.stores.reduce((n, s) => n + s.recordCount, 0)} record(s)${creds ? `, ${creds} credential/key finding(s)` : ''}`,
@@ -301,6 +310,7 @@ async function nvramRun(c: RunCtx): Promise<StepOutcome> {
 async function auxsecretsRun(c: RunCtx): Promise<StepOutcome> {
   const r = runAuxSecrets(c.outputDir, c.rootfsPath);
   syncFindings(c.imageId, 'auxsecrets', r.findings);
+  recordCredentialHashes(c.imageId, credentialHashesFromFindings(r.findings));
   return {
     summary: `sibling-partition secrets: ${r.findings.length} embedded private key(s) in ${r.filesScanned} key-ish file(s)`,
     findingCount: r.findings.length,

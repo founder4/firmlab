@@ -885,6 +885,7 @@ export interface CorpusOverview {
   ruleCount: number;
   credentialReuse: { hash: string; kind: string | null; imageCount: number; watchlistLabel: string | null }[];
   componentPrevalence: { name: string; version: string; cveCount: number; imageCount: number }[];
+  sbomImageCount: number;
   deviceFamilies: { familyKey: string; images: ImageRef[] }[];
 }
 

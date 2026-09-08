@@ -31,7 +31,8 @@
  * literally present in the bytes is `static_confirmed`; a flag whose *effect* depends on the running device (a
  * telnet/ssh enable, an interruptible boot delay) is `needs_runtime_reproduction` — a lead, never a verdict.
  * **Values are never emitted.** Like `fsaudit`'s shadow-hash redaction, evidence carries the key, the value's
- * length and a class (`well-known-default` / `opaque`), never the secret itself.
+ * length, a class (`well-known-default` / `opaque`) and a SHA-1 of the value for the cross-image credential
+ * ledger — never the secret itself. The hash is what the corpus and the watchlist key on; the value stays here.
  *
  * Known limitation, stated rather than hidden: a store is only entered where the preceding byte is 0x00/0xFF (or at
  * offset 0), which is true of every store that lives in flash but not of a copy compiled into an ELF behind
@@ -47,6 +48,7 @@
 import fs from 'node:fs';
 import type { FindingSeverity, ProofState } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
+import { hashSecret } from '../secret-hash.js';
 import { scanContentSecrets } from './fsaudit.js';
 
 // === Bounds ===
@@ -547,6 +549,10 @@ export function nvramFindings(stores: NvramStore[]): FindingDraft[] {
             valueLength: rec.value.length,
             valueClass: cls,
             value: '<redacted>',
+            // A SHA-1 of the value, never the value — the same key stuffed into two devices' flash collides here,
+            // and a well-known default hashes to a stable key the watchlist can be promoted against. Consistent
+            // with this module's redaction rule: a hash is emitted, the value still never leaves.
+            secretHash: hashSecret(rec.value),
             storeConfidence: store.confidence,
           },
           rationale:

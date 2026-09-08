@@ -34,6 +34,29 @@ export function normalizeSecrets(secrets: StringHit[]): FindingDraft[] {
     }));
 }
 
+/**
+ * The cross-image credential occurrences a set of findings implies — every draft that stamped a redaction-safe
+ * `evidence.secretHash` (an nvram value) or `evidence.secretHashes` (the key material in a file). Pure and
+ * uniform: a provider feeds the persistent corpus simply by putting the hash on its finding, and nothing here
+ * ever touches the secret. Deliberately NOT read: `secrets` (recorded at upload from its raw values, which it
+ * stores verbatim) and certificate findings — a certificate is public material and must never enter the
+ * credential-reuse table, the same over-claim the gitleaks route's comment already warns dnscrypt keys made.
+ */
+export function credentialHashesFromFindings(
+  drafts: FindingDraft[],
+): { hash: string; kind: string | null; severity: string | null }[] {
+  const out: { hash: string; kind: string | null; severity: string | null }[] = [];
+  for (const d of drafts) {
+    const ev = d.evidence as { secretHash?: unknown; secretHashes?: unknown } | undefined;
+    const hashes: string[] = [];
+    if (typeof ev?.secretHash === 'string' && ev.secretHash) hashes.push(ev.secretHash);
+    if (Array.isArray(ev?.secretHashes))
+      for (const h of ev.secretHashes) if (typeof h === 'string' && h) hashes.push(h);
+    for (const hash of hashes) out.push({ hash, kind: d.kind, severity: d.severity });
+  }
+  return out;
+}
+
 const SBOM_SEVERITY: Record<Severity, FindingSeverity> = {
   Critical: 'critical',
   High: 'high',

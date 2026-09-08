@@ -33,7 +33,10 @@ export const corpus: Messages['corpus'] = {
   prevalence: {
     title: 'Prevalencia de componentes',
     sub: 'Qué versiones de componente abarcan más imágenes, y cuántos CVE emparejó grype.',
-    empty: 'Todavía no hay datos de SBOM — ejecuta SBOM sobre algunas imágenes.',
+    empty: (withSbom: number, total: number) =>
+      withSbom === 0
+        ? 'Todavía no hay datos de SBOM — ejecuta SBOM sobre algunas imágenes.'
+        : `Ninguna versión de componente abarca aún más de una imagen (${withSbom} de ${total} imagen(es) tienen SBOM).`,
     colComponent: 'Componente',
     colVersion: 'Versión',
     colImages: 'Imágenes',

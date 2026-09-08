@@ -8,7 +8,8 @@
  * stage that has anything to say.
  */
 import type { FastifyInstance } from 'fastify';
-import { syncFindings } from '../findings.js';
+import { recordCredentialHashes } from '../corpus.js';
+import { credentialHashesFromFindings, syncFindings } from '../findings.js';
 import { startJob } from '../providers/jobs.js';
 import { runNvramScan } from '../providers/nvram.js';
 import { getImage, listJobs } from '../store.js';
@@ -27,6 +28,8 @@ export async function nvramRoutes(app: FastifyInstance): Promise<void> {
         );
       }
       syncFindings(id, 'nvram', result.findings);
+      // Feed the corpus a SHA-1 of each credential/wifi value (the value never leaves the provider).
+      recordCredentialHashes(id, credentialHashesFromFindings(result.findings));
       return result;
     });
     return reply.status(202).send({ jobId });
