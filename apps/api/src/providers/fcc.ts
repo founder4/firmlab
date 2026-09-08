@@ -23,12 +23,32 @@ export interface FccLink {
   fccReport: string;
 }
 
+/** How much of the raw image the strings pass actually read — so a bounded miss is not read as a real negative. */
+export interface FccScanCoverage {
+  /** Bytes of the raw image scanned (the 16 MB prefix, or the whole file when it is smaller). */
+  bytesScanned: number;
+  /** Total size of the raw image. */
+  totalBytes: number;
+  /** True when the image is larger than the prefix, so bytes exist that the scan never looked at. */
+  truncated: boolean;
+}
+
 export interface FccResult {
   available: boolean;
   ids: string[];
   links: FccLink[];
   findings: FindingDraft[];
   reason: string;
+  /**
+   * What the raw-image pass covered. OPTIONAL FOREVER — a result stored by an older build has none, and absence
+   * means NOT RECORDED, never "the whole image was scanned".
+   */
+  scan?: FccScanCoverage;
+}
+
+/** Human-readable MiB for the coverage sentences (one decimal, e.g. `16.0 MB`). */
+function mib(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** Cap on the number of distinct IDs surfaced (keeps a noisy blob from flooding the ledger). */
@@ -135,23 +155,31 @@ function parseAnalysisStrings(analysisJson: string | null): string[] {
   }
 }
 
-/** A lightweight strings pass over a bounded latin1 prefix of the raw image (splits on non-printable runs). */
-function rawImageStrings(imagePath: string): string[] {
+/**
+ * A lightweight strings pass over a bounded latin1 prefix of the raw image (splits on non-printable runs). It
+ * reports how much of the file it read against the total, because reading 16 MB of a 100 MB image and then
+ * finding nothing is a bounded miss, not "the firmware has no FCC ID" — and the reason string below has to be
+ * able to tell those apart. A file it cannot open reports zero of zero: unknown coverage, not a clean scan.
+ */
+function rawImageStrings(imagePath: string): { strings: string[]; bytesScanned: number; totalBytes: number } {
   let text = '';
+  let bytesScanned = 0;
+  let totalBytes = 0;
   try {
     const fd = fs.openSync(imagePath, 'r');
     try {
-      const size = Math.min(fs.fstatSync(fd).size, RAW_IMAGE_PREFIX);
-      const buf = Buffer.allocUnsafe(size);
-      if (size > 0) fs.readSync(fd, buf, 0, size, 0);
+      totalBytes = fs.fstatSync(fd).size;
+      bytesScanned = Math.min(totalBytes, RAW_IMAGE_PREFIX);
+      const buf = Buffer.allocUnsafe(bytesScanned);
+      if (bytesScanned > 0) fs.readSync(fd, buf, 0, bytesScanned, 0);
       text = buf.toString('latin1');
     } finally {
       fs.closeSync(fd);
     }
   } catch {
-    return [];
+    return { strings: [], bytesScanned: 0, totalBytes: 0 };
   }
-  return text.split(/[^\x20-\x7e]+/).filter((t) => t.length >= MIN_STRING_LEN);
+  return { strings: text.split(/[^\x20-\x7e]+/).filter((t) => t.length >= MIN_STRING_LEN), bytesScanned, totalBytes };
 }
 
 /**
@@ -161,18 +189,34 @@ function rawImageStrings(imagePath: string): string[] {
  * is an explicit, non-fabricated result.
  */
 export function runFccLookup(imagePath: string, analysisJson: string | null): FccResult {
-  const strings = [...parseAnalysisStrings(analysisJson), ...rawImageStrings(imagePath)];
+  const raw = rawImageStrings(imagePath);
+  const scan: FccScanCoverage = {
+    bytesScanned: raw.bytesScanned,
+    totalBytes: raw.totalBytes,
+    truncated: raw.totalBytes > raw.bytesScanned,
+  };
+  const strings = [...parseAnalysisStrings(analysisJson), ...raw.strings];
   const ids = extractFccIds(strings);
   if (ids.length === 0) {
-    return { available: true, ids: [], links: [], findings: [], reason: 'No FCC ID found in the firmware.' };
+    // A miss over a bounded window is NOT "the firmware has none": say what was looked at when the image is
+    // larger than the prefix, so the empty result cannot be read as a clean negative it did not earn.
+    const reason = scan.truncated
+      ? `No FCC ID in the first ${mib(scan.bytesScanned)} of ${mib(scan.totalBytes)} scanned; the remaining ${mib(scan.totalBytes - scan.bytesScanned)} was not examined (raw strings pass bounded at ${mib(RAW_IMAGE_PREFIX)}), so this is a bounded miss, not "the firmware has none".`
+      : 'No FCC ID found in the firmware.';
+    return { available: true, ids: [], links: [], findings: [], reason, scan };
   }
   const links: FccLink[] = ids.map((id) => ({ id, ...buildFccLinks(id) }));
   const findings = fccFindings(ids);
+  const capped = ids.length >= FCC_ID_CAP ? ` Listing capped at ${FCC_ID_CAP} distinct IDs.` : '';
+  const bounded = scan.truncated
+    ? ` The raw strings pass covered the first ${mib(scan.bytesScanned)} of ${mib(scan.totalBytes)}.`
+    : '';
   return {
     available: true,
     ids,
     links,
     findings,
-    reason: `Extracted ${ids.length} candidate FCC ID${ids.length === 1 ? '' : 's'} from the image bytes and built the public FCC filing links (fccid.io + the FCC OET equipment-authorization search). A recon lead — the ID is present in the firmware — not a device or vulnerability claim.`,
+    reason: `Extracted ${ids.length} candidate FCC ID${ids.length === 1 ? '' : 's'} from the image bytes and built the public FCC filing links (fccid.io + the FCC OET equipment-authorization search). A recon lead — the ID is present in the firmware — not a device or vulnerability claim.${capped}${bounded}`,
+    scan,
   };
 }

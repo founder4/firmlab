@@ -77,6 +77,22 @@ describe('runFccLookup', () => {
     expect(res.links).toEqual([]);
     expect(res.findings).toEqual([]);
     expect(res.reason).toMatch(/no fcc id/i);
+    // A small file is scanned whole: honest coverage, and NOT a bounded miss.
+    expect(res.scan).toMatchObject({ truncated: false });
+    expect(res.scan?.bytesScanned).toBe(res.scan?.totalBytes);
+  });
+
+  it('reports a miss over the 16 MB prefix as a BOUNDED negative, not "the firmware has none"', () => {
+    const file = path.join(dir, 'big-no-id.bin');
+    // Just over the 16 MiB raw-strings prefix, with no FCC-ID-shaped token anywhere.
+    const size = 16 * 1024 * 1024 + 4096;
+    fs.writeFileSync(file, Buffer.alloc(size, 0x2e)); // '.' — printable, matches no ID
+    const res = runFccLookup(file, null);
+    expect(res.ids).toEqual([]);
+    expect(res.scan).toMatchObject({ bytesScanned: 16 * 1024 * 1024, totalBytes: size, truncated: true });
+    // The reason must disclose the bound and refuse to read the empty result as a clean negative.
+    expect(res.reason).toMatch(/not examined|bounded/i);
+    expect(res.reason).not.toBe('No FCC ID found in the firmware.');
   });
 
   it('extracts an FCC ID present in the raw image bytes and builds links + findings', () => {
