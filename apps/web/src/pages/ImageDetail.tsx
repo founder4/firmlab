@@ -759,7 +759,9 @@ function GitleaksSection({ imageId }: { imageId: string }): JSX.Element {
       {result?.available && (
         <div style={{ marginTop: 14 }}>
           <div className="hint" style={{ marginBottom: 10 }}>
-            {t.imageDetail.gitleaks.count(result.findingCount)}
+            {result.total !== undefined && result.total > result.findings.length
+              ? t.imageDetail.gitleaks.countCapped(result.findings.length, result.total)
+              : t.imageDetail.gitleaks.count(result.findingCount)}
           </div>
           {result.findings.length > 0 && (
             <div className="table-wrap">

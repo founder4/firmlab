@@ -143,6 +143,8 @@ export const imageDetail = {
     scan: 'Scan rootfs',
     unavailable: 'gitleaks unavailable — run extraction first, or install gitleaks.',
     count: (n: number) => `${n} finding${n === 1 ? '' : 's'} in the rootfs.`,
+    countCapped: (shown: number, total: number) =>
+      `Showing ${shown} of ${total} findings in the rootfs (listing capped; the count is the true total).`,
     colRule: 'Rule',
     colFile: 'File',
     colLine: 'Line',

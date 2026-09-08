@@ -61,7 +61,14 @@ export interface GitleaksResult {
   available: boolean;
   reason?: string;
   target: string;
+  /** How many findings are LISTED (== `findings.length`, capped at FINDING_CAP). */
   findingCount: number;
+  /**
+   * How many leaks gitleaks reported in total, BEFORE the listing cap. Optional forever — a result stored by an
+   * older build has none, and absent must read as "not recorded", never as "equal to findingCount". When it
+   * exceeds `findingCount`, the listing was truncated and the UI says so.
+   */
+  total?: number;
   findings: GitleaksFinding[];
 }
 
@@ -244,17 +251,20 @@ export async function runGitleaks(rootfsPath: string, handle: JobHandle): Promis
     if (!fs.existsSync(reportPath)) {
       // Ran clean with no findings and (some versions) wrote no file.
       handle.log('gitleaks reported no leaks.');
-      return { available: true, target: rootfsPath, findingCount: 0, findings: [] };
+      return { available: true, target: rootfsPath, findingCount: 0, total: 0, findings: [] };
     }
     const raw = fs.readFileSync(reportPath, 'utf8').trim();
     const rows = raw ? (JSON.parse(raw) as GitleaksRow[]) : [];
+    const total = Array.isArray(rows) ? rows.length : 0;
     const findings = mapFindings(Array.isArray(rows) ? rows : [], rootfsPath, rootfsContextReader());
     const withLine = findings.filter((f) => f.lineText).length;
     if (findings.length > 0) {
       handle.log(`Read line context for ${withLine}/${findings.length} hit(s); the rest report without it.`);
     }
-    handle.log(`gitleaks found ${Array.isArray(rows) ? rows.length : 0} leak(s); reporting ${findings.length}.`);
-    return { available: true, target: rootfsPath, findingCount: findings.length, findings };
+    handle.log(`gitleaks found ${total} leak(s); reporting ${findings.length}.`);
+    // findingCount is the LISTED count; `total` carries the true pre-cap count so a capped listing (>500 leaks)
+    // is never persisted as if 500 were all there were.
+    return { available: true, target: rootfsPath, findingCount: findings.length, total, findings };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     handle.log(`gitleaks report parse failed: ${message}`);

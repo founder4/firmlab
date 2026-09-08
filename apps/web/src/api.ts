@@ -379,6 +379,8 @@ export interface GitleaksResult {
   reason?: string;
   target: string;
   findingCount: number;
+  /** True total before the listing cap; when it exceeds findingCount the table is a truncated view. */
+  total?: number;
   findings: GitleaksFinding[];
 }
 

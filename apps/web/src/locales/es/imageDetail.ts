@@ -130,6 +130,8 @@ export const imageDetail: Messages['imageDetail'] = {
     scan: 'Escanear el rootfs',
     unavailable: 'gitleaks no disponible — ejecuta primero la extracción, o instala gitleaks.',
     count: (n: number) => `${n} hallazgo${n === 1 ? '' : 's'} en el rootfs.`,
+    countCapped: (shown: number, total: number) =>
+      `Mostrando ${shown} de ${total} hallazgos en el rootfs (listado acotado; el recuento es el total real).`,
     colRule: 'Regla',
     colFile: 'Fichero',
     colLine: 'Línea',
