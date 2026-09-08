@@ -304,8 +304,13 @@ export function buildDisclosureReport(ctx: DisclosureContext, locale: Locale = '
     out.push('');
     out.push(t.disclosure.kevIntro);
     out.push('');
-    for (const m of ctx.kevMatches.slice(0, 20))
+    const KEV_CAP = 20;
+    for (const m of ctx.kevMatches.slice(0, KEV_CAP))
       out.push(`- ${t.disclosure.kevItem({ cve: m.cveID, product: m.product })}`);
+    // A KEV list is priority context; truncating it silently drops the very entries an analyst most needs to
+    // know exist. Say how many were held back rather than presenting the first 20 as the whole set.
+    if (ctx.kevMatches.length > KEV_CAP)
+      out.push(t.disclosure.kevMore({ shown: KEV_CAP, total: ctx.kevMatches.length }));
     out.push('');
   }
 

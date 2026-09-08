@@ -90,6 +90,16 @@ describe('buildDisclosureReport', () => {
     // Draft email lists the confirmed finding.
     expect(md).toMatch(/Subject: Security disclosure/);
     expect(md).toContain('[high] Outdated dropbear');
+    // A single KEV match is listed whole — no truncation note.
+    expect(md).not.toMatch(/showing .* of .* KEV/i);
+  });
+
+  it('discloses how many KEV matches were held back when the list is capped, not the first 20 as the whole set', () => {
+    const kevMatches = Array.from({ length: 25 }, (_, i) => ({ cveID: `CVE-2024-${1000 + i}`, product: 'openssl' }));
+    const md = buildDisclosureReport({ ...base, kevMatches });
+    expect(md).toContain('CVE-2024-1000');
+    expect(md).not.toContain('CVE-2024-1020'); // the 21st entry is past the cap
+    expect(md).toMatch(/showing 20 of 25 KEV matches/i);
   });
 
   it('handles a missing security contact by pointing at the allowlist / a CERT', () => {

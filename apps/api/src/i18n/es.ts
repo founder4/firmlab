@@ -252,6 +252,7 @@ export const es: Messages = {
     kevIntro:
       'CVE publicados de componentes presentes en esta imagen que figuran en la lista de vulnerabilidades explotadas conocidas de CISA. Esto eleva la prioridad; **no** confirma que el CVE sea alcanzable en esta compilación.',
     kevItem: (p) => `\`${p.cve}\` — ${p.product} (explotación conocida; alcanzabilidad no verificada)`,
+    kevMore: (p) => `_…y ${p.total - p.shown} más (mostrando ${p.shown} de ${p.total} coincidencias KEV)._`,
     findingLabels: {
       severity: 'Gravedad',
       proofState: 'Estado de prueba',

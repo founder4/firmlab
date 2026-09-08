@@ -261,6 +261,8 @@ export const en = {
       "Published CVEs for components present in this image that are on CISA's Known Exploited Vulnerabilities list. This raises priority; it does **not** confirm the CVE is reachable in this build.",
     kevItem: (p: { cve: string; product: string }) =>
       `\`${p.cve}\` — ${p.product} (known-exploited; reachability unverified)`,
+    kevMore: (p: { shown: number; total: number }) =>
+      `_…and ${p.total - p.shown} more (showing ${p.shown} of ${p.total} KEV matches)._`,
     findingLabels: {
       severity: 'Severity',
       proofState: 'Proof state',
