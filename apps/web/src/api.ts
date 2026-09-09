@@ -1402,6 +1402,8 @@ export interface OpacidadResult {
   attackPath: string[];
   narrative: string;
   narrativeSource: 'llm' | 'deterministic';
+  /** An LLM narrative was produced and discarded for stopping at the token ceiling. Optional forever. */
+  narrativeLlmTruncated?: boolean;
   honestGaps: string[];
   llm?: { provider: string; model: string };
 }

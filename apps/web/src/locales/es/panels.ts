@@ -36,6 +36,7 @@ export const panels: Messages['panels'] = {
     running: 'Escaneando…',
     failed: 'El escaneo autónomo falló',
     narrativeLabel: 'narrativa:',
+    narrativeTruncated: 'la respuesta del modelo se cortó en su límite de tokens y se descartó',
     narrativeTitle: 'Cómo se escribió la narrativa',
     replanned: 'replanificado',
     status: {

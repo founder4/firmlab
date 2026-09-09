@@ -946,6 +946,13 @@ export interface OpacidadResult {
   attackPath: string[];
   narrative: string;
   narrativeSource: 'llm' | 'deterministic';
+  /**
+   * Set when an LLM narrative WAS produced and then discarded because the provider stopped at its output-token
+   * ceiling. Without it, `narrativeSource: 'deterministic'` covers two different runs — one where no model was
+   * configured and one where a model answered with a report ending mid-sentence — and only the second is a
+   * reason to raise the token budget and re-run. Optional forever: absent on every result stored before this.
+   */
+  narrativeLlmTruncated?: boolean;
   honestGaps: string[];
   llm?: { provider: string; model: string };
 }
@@ -1086,12 +1093,27 @@ export async function runOpacidad(
 
   let narrative = composeDeterministicNarrative(narrativeCtx);
   let narrativeSource: 'llm' | 'deterministic' = 'deterministic';
+  let narrativeLlmTruncated = false;
   let llm: { provider: string; model: string } | undefined;
   if (cfg) {
     try {
       const { system, user } = buildLlmPrompt(narrativeCtx);
       const res = await complete(system, user, cfg);
-      if (res.text.trim()) {
+      // A completion the provider cut at its token ceiling is NOT a narrative. It arrives shaped exactly like a
+      // finished one — same 200, same fields, text that simply ends — and this line used to hand it straight into
+      // the report persisted on the job row, replacing a deterministic narrative that was complete. A report that
+      // stops mid-sentence is strictly worse than the one it displaced, so the truncated text is discarded and the
+      // fact is recorded: `deterministic` alone would say a model was never asked.
+      if (res.truncated) {
+        narrativeLlmTruncated = true;
+        handle.log(
+          [
+            `LLM narrative discarded — ${res.provider} (${res.model}) stopped at its output-token ceiling, so its`,
+            'text ends mid-answer. Keeping the deterministic narrative, which is complete. Raise the token budget',
+            'and re-run to get a synthesized one.',
+          ].join(' '),
+        );
+      } else if (res.text.trim()) {
         narrative = res.text.trim();
         narrativeSource = 'llm';
         llm = { provider: res.provider, model: res.model };
@@ -1114,6 +1136,7 @@ export async function runOpacidad(
     attackPath: buildAttackPath(findings),
     narrative,
     narrativeSource,
+    ...(narrativeLlmTruncated ? { narrativeLlmTruncated: true } : {}),
     honestGaps: honestGaps(narrativeCtx),
     ...(llm ? { llm } : {}),
   };

@@ -94,6 +94,10 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
             {result.llm ? ` (${result.llm.provider}/${result.llm.model})` : ''}
           </span>
         )}
+        {/* `deterministic` covers two different runs; this separates the one a bigger token budget would fix. */}
+        {result?.narrativeLlmTruncated && (
+          <span className="badge badge-warn">{t.panels.opacidad.narrativeTruncated}</span>
+        )}
       </div>
 
       {err && (

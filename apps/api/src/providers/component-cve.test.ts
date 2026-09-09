@@ -6,6 +6,8 @@ import {
   COMPONENT_RULES,
   buildComponentFindings,
   compareVersion,
+  componentDirPriority,
+  describeComponentScan,
   extractComponentVersion,
   matchCves,
   parseVersion,
@@ -235,5 +237,56 @@ describe('zero-padded versions are different releases, not the same one', () => 
     expect(versionInRange('1.7.2', '1.0.0', '1.19.4')).toBe(true);
     expect(versionInRange('2.4.3', '2.4.2', '2.4.8')).toBe(true);
     expect(versionInRange('1.0.1e', '1.0.1', '1.0.1f')).toBe(true);
+  });
+});
+
+describe('componentDirPriority', () => {
+  it('visits the directories these components actually live in before anything else', () => {
+    expect(componentDirPriority('usr/lib')).toBeLessThan(componentDirPriority('usr/share/doc'));
+    expect(componentDirPriority('usr/lib/libssl.so.1.1')).toBeLessThan(componentDirPriority('var/www'));
+    expect(componentDirPriority('lib')).toBeLessThan(componentDirPriority('usr/bin'));
+  });
+
+  it('gives every unlisted directory one rank, below all listed ones', () => {
+    expect(componentDirPriority('etc')).toBe(componentDirPriority('var/www/html'));
+    expect(componentDirPriority('etc')).toBeGreaterThan(componentDirPriority('usr/bin'));
+  });
+
+  it('does not mistake a prefix for a directory', () => {
+    // `libexec-old` is not under `lib`, and ranking it as if it were would spend the budget in the wrong subtree.
+    expect(componentDirPriority('libexec-old')).toBe(componentDirPriority('etc'));
+    expect(componentDirPriority('lib/x')).toBeLessThan(componentDirPriority('libexec-old'));
+  });
+
+  // The defect this pins was found by RUNNING the walk, not by a fixture: the priority list holds two-segment
+  // paths while the walk descends one level at a time, so `usr` matched nothing and ranked last — sending a
+  // bounded walk everywhere except where the components are. Measured in-container on a Debian root, a truncated
+  // walk found 0 components before this and 1 (`usr/lib/aarch64-linux-gnu/libcrypto.so.3`) after, same budget.
+  it('ranks a directory that is on the WAY to a component directory, not just one inside it', () => {
+    expect(componentDirPriority('usr')).toBe(componentDirPriority('usr/lib'));
+    expect(componentDirPriority('usr')).toBeLessThan(componentDirPriority('etc'));
+    // Best-of, not first-match: `usr` leads to `usr/lib` (the top rank) as well as to `usr/bin`.
+    expect(componentDirPriority('usr')).toBeLessThan(componentDirPriority('usr/bin'));
+  });
+
+  it('still ranks a directory that merely shares a name prefix as unlisted', () => {
+    expect(componentDirPriority('usrshare')).toBe(componentDirPriority('etc'));
+  });
+});
+
+describe('describeComponentScan', () => {
+  // The branch that runs on every healthy rootfs: no caveat, because a caveat printed always stops being read.
+  it('states the counts plainly when the walk finished', () => {
+    const s = describeComponentScan(4, 2, { walked: 900, truncated: false });
+    expect(s).toContain('4 bundled component(s) versioned, 2 CVE(s) matched');
+    expect(s).not.toContain('FLOOR');
+  });
+
+  it('calls both counts a floor when the walk was cut, and says why that matters', () => {
+    const s = describeComponentScan(4, 2, { walked: 8000, truncated: true });
+    expect(s).toContain('FLOOR');
+    expect(s).toContain('8000 entries');
+    // The claim the reader must not make from a partial walk.
+    expect(s).toContain('indistinguishable here from one that is not present');
   });
 });

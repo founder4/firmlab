@@ -298,9 +298,53 @@ export interface ComponentCveResult {
   hits: ComponentHit[];
   findings: FindingDraft[];
   reason: string;
+  /**
+   * True when the rootfs walk stopped at its entry budget, so `hits` covers only the subtrees it reached.
+   *
+   * This is the curated-CVE path: its `reason` states how many components were versioned and how many CVEs
+   * matched, and a reader takes that for the image's embedded-n-day surface. Over a partial walk it is a floor,
+   * and a component the walk never reached is indistinguishable from one that is not there. Optional forever —
+   * absent on a result stored by an older build, and absent means NOT RECORDED, never "the walk completed".
+   */
+  walkTruncated?: boolean;
+  /** Directory entries the walk visited. Optional forever, for the same reason. */
+  entriesWalked?: number;
 }
 
 const WALK_CAP = 8000;
+
+/**
+ * Where the components this table curates actually live, most-likely first.
+ *
+ * The walk is a LIFO stack over an 8 000-entry budget, so on a rootfs bigger than that WHICH subtrees get covered
+ * was decided by `readdirSync` order — the set of components found became an artifact of directory layout, which
+ * is the one thing a bound here must not do. Visiting the library and service directories first means a truncated
+ * walk still reaches where busybox, dropbear, openssl and the rest are, and the truncation costs the tail of
+ * `/usr/share` rather than the answer.
+ */
+const COMPONENT_DIRS = ['usr/lib', 'lib', 'usr/sbin', 'sbin', 'usr/bin', 'bin', 'usr/libexec', 'usr/local'];
+
+/**
+ * Rank a rootfs-relative directory path: lower is visited earlier. Pure and exported so a test can pin the order
+ * the cap depends on.
+ *
+ * A directory ranks well if it is a component directory, is INSIDE one, or is on the way TO one. The third case
+ * is not a nicety — the walk descends a level at a time, and without it `usr` (a one-segment directory matching no
+ * two-segment entry) ranked last while holding `usr/lib`, `usr/sbin` and `usr/bin`, so the ordering meant to help
+ * a truncated walk sent it everywhere except where the components are. Measured in-container before the fix: a
+ * bounded walk of a Debian root spent all 8 000 entries and found ZERO components, on a filesystem carrying
+ * libcrypto.
+ */
+export function componentDirPriority(rel: string): number {
+  const norm = rel.replace(/^\.?\//, '');
+  let best = COMPONENT_DIRS.length;
+  for (let i = 0; i < COMPONENT_DIRS.length; i++) {
+    const d = COMPONENT_DIRS[i] as string;
+    const onTheWay = norm === d || norm.startsWith(`${d}/`) || d.startsWith(`${norm}/`);
+    if (onTheWay && i < best) best = i;
+  }
+  return best;
+}
 const BIN_READ_CAP = 8 * 1024 * 1024;
 const ALL_BIN_NAMES = new Set(COMPONENT_RULES.flatMap((r) => r.binNames));
 
@@ -363,6 +407,7 @@ export function runComponentCve(rootfsPath: string | null): ComponentCveResult {
   const hits: ComponentHit[] = [];
   const seen = new Set<string>();
   let walked = 0;
+  let truncated = false;
   const stack: string[] = [root];
   while (stack.length > 0 && walked < WALK_CAP) {
     const dir = stack.pop() as string;
@@ -372,13 +417,19 @@ export function runComponentCve(rootfsPath: string | null): ComponentCveResult {
     } catch {
       continue;
     }
+    // Subdirectories are collected and pushed together at the end of the loop: the stack is LIFO, so pushing the
+    // LOWEST-priority ones first leaves the component directories on top, to be popped next.
+    const subdirs: string[] = [];
     for (const e of entries) {
-      if (walked >= WALK_CAP) break;
+      if (walked >= WALK_CAP) {
+        truncated = true;
+        break;
+      }
       walked++;
       if (e.isSymbolicLink()) continue;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
-        stack.push(abs);
+        subdirs.push(abs);
         continue;
       }
       if (!e.isFile()) continue;
@@ -393,7 +444,12 @@ export function runComponentCve(rootfsPath: string | null): ComponentCveResult {
       seen.add(key);
       hits.push({ component: rule.component, version, path: rel });
     }
+    subdirs.sort((x, y) => componentDirPriority(path.relative(root, y)) - componentDirPriority(path.relative(root, x)));
+    stack.push(...subdirs);
   }
+  // Entries still on the stack mean tree was left unvisited. Checked separately from the in-loop `break`, because
+  // the outer `while` can exit on the budget with directories still queued and never reach that branch.
+  if (stack.length > 0) truncated = true;
 
   const findings = buildComponentFindings(hits);
   const cveCount = findings.filter((f) => f.kind === 'component-cve').length;
@@ -401,6 +457,27 @@ export function runComponentCve(rootfsPath: string | null): ComponentCveResult {
     available: true,
     hits,
     findings,
-    reason: `Component fingerprint: ${hits.length} bundled component(s) versioned, ${cveCount} CVE(s) matched from the curated embedded-n-day table (the surface a manifest-only SBOM misses).`,
+    walkTruncated: truncated,
+    entriesWalked: walked,
+    reason: describeComponentScan(hits.length, cveCount, { walked, truncated }),
   };
+}
+
+/**
+ * The sentence the panel prints. Pure and exported so both branches are reachable from a test: the clean one is
+ * reserved for a walk that finished, and a truncated walk says the two counts are a floor rather than the surface.
+ */
+export function describeComponentScan(
+  componentCount: number,
+  cveCount: number,
+  scan: { walked: number; truncated: boolean },
+): string {
+  const head = `Component fingerprint: ${componentCount} bundled component(s) versioned, ${cveCount} CVE(s) matched from the curated embedded-n-day table (the surface a manifest-only SBOM misses).`;
+  if (!scan.truncated) return head;
+  return [
+    head,
+    `The rootfs walk stopped at its ${WALK_CAP}-entry budget after ${scan.walked} entries, so both counts are a`,
+    'FLOOR: library and service directories are visited first, but a component in a subtree the walk never',
+    'reached is indistinguishable here from one that is not present.',
+  ].join(' ');
 }

@@ -242,3 +242,37 @@ describe('parseAnthropicResponse', () => {
     expect(out).toEqual({ text: 'hello world', inputTokens: 3, outputTokens: 7 });
   });
 });
+
+describe('stop reason', () => {
+  // A completion cut at the token ceiling arrives shaped exactly like a finished one, and `runOpacidad` used to
+  // persist it as the image's report. `truncated` is the only thing in the payload that tells them apart.
+  it('flags an OpenAI-style completion the provider stopped at `length`', () => {
+    const cut = parseChatCompletionsResponse({
+      choices: [{ message: { content: 'The device exposes a telnet ser' }, finish_reason: 'length' }],
+    });
+    expect(cut.truncated).toBe(true);
+  });
+
+  it('flags an Anthropic completion stopped at `max_tokens`', () => {
+    expect(
+      parseAnthropicResponse({ content: [{ type: 'text', text: 'x' }], stop_reason: 'max_tokens' }).truncated,
+    ).toBe(true);
+  });
+
+  // The branch that runs every time: a normal answer must not carry the flag, or every narrative gets discarded.
+  it('leaves the flag off for a completion that finished', () => {
+    expect(
+      parseChatCompletionsResponse({ choices: [{ message: { content: 'done' }, finish_reason: 'stop' }] }).truncated,
+    ).toBeUndefined();
+    expect(
+      parseAnthropicResponse({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' }).truncated,
+    ).toBeUndefined();
+  });
+
+  // "The provider did not say" is not "the provider said it finished". Absent stays absent, because a caller that
+  // DISCARDS a truncated answer must never discard one on a guess.
+  it('leaves the flag off, not false, when no stop reason was sent at all', () => {
+    expect(parseChatCompletionsResponse({ choices: [{ message: { content: 'x' } }] }).truncated).toBeUndefined();
+    expect(parseAnthropicResponse({ content: [{ type: 'text', text: 'x' }] }).truncated).toBeUndefined();
+  });
+});

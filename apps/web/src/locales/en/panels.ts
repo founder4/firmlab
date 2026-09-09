@@ -36,6 +36,12 @@ export const panels = {
     failed: 'Autonomous scan failed',
     /** Precedes `narrativeSource`, which is a value (`deterministic` / `llm`) and is printed as sent. */
     narrativeLabel: 'narrative:',
+    /**
+     * Shown beside a `deterministic` narrative when a model DID answer and its answer was thrown away for ending
+     * at the token ceiling. Without it the badge reads identically to a run where no model was configured, and
+     * only this one is fixed by raising the budget.
+     */
+    narrativeTruncated: 'the model\u2019s answer was cut at its token limit and discarded',
     narrativeTitle: 'How the narrative was written',
     replanned: 're-planned',
     /**

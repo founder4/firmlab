@@ -60,6 +60,92 @@
 - [ ] Hacer que la reparación del invitado alcance una ruta ejecutada y recuperar red/console interactiva en full-system; la intervención al final de `rcS` sigue siendo inerte.
 - [ ] Ampliar RTOS a fuzzing de periféricos/MMIO y enumeración de tareas; Renode demuestra vida, no cobertura del HAL.
 
+### Reutilización de moria/mithril (evaluación del 9 de septiembre de 2026)
+
+Dos herramientas C++20 MIT de `nmatt0` (github.com/nmatt0/moria, /mithril), compiladas y ejecutadas contra el corpus
+real de `~/Downloads/firmwares`, no contra sus README. moria identifica y desempaqueta; mithril lee contenidos
+(secretos, SBOM, CVE, licencias). Lo que sigue es lo que la corrida midió, incluido lo que NO se debe adoptar.
+
+- [ ] **Portar el decodificador de kallsyms (`mithril/src/kallsyms.cpp`, 340 líneas) — la pieza de mayor valor.**
+  `kernelposture.ts` documenta desde su cabecera que un barrido de tokens `CONFIG_*` sobre un kernel descomprimido
+  «no vale como oráculo» y que lo que un kernel lleva de verdad son nombres de símbolo; ese oráculo no está
+  implementado (`kallsyms` sólo aparece en el propio comentario y en un test que comprueba que el token suelto se
+  rechaza). El decodificador de mithril recupera la tabla comprimida por tokens auto-anclándose en sus invariantes
+  estructurales, sin símbolos ELF, en 32/64 bits y ambos endianness. Medido: **32.865 símbolos, `complete=1`, sobre
+  el kernel ARM 4.4.282 stripped de la Tenda-Camera**, y **9.987 sobre el MIPS BE 2.6.22 del DVRF**. Sobre el
+  5.4.213 de la GL.iNet devolvió `NO TABLE` — falla en silencio y honestamente, nunca fabrica un símbolo, así que
+  una ausencia jamás produce un descarte falso. Cobertura 2 de 3 kernels probados; el tercero es trabajo pendiente,
+  no un fallo de diseño.
+
+- [ ] **Adoptar el gating triestado de CVE de kernel (`kconfig_infer.cpp` + `kernelcve.cpp`, ~500 líneas + tabla).**
+  Es la respuesta directa al punto ya abierto arriba («el prefijo NVD puede tener miles de CVE (2.037 para Linux
+  2.6.31); usar config/subsistema … para descartar candidatos»). Cada opción `CONFIG` se resuelve a **On / Off /
+  Unknown** fusionando fuentes por confianza descendente (`.config` recuperado > `modules.builtin` y `.ko` >
+  kallsyms > cadenas del kernel), y cada CVE queda **aplicable / descartado / indeterminado**. La regla negativa es
+  la fina y coincide con la disciplina de esta casa: la ausencia sólo descarta un subsistema modular si un `.config`
+  lo dice o si una tabla kallsyms *completa* se empareja con un `/lib/modules` que no lo trae; un subsistema
+  builtin-only ausente de una tabla completa sí es descarte definitivo. Sobre el kernel de la Tenda medido aquí:
+  `create_user_ns`/`bpf_prog_load` ausentes con `complete=1` descartan la familia eBPF y CVE-2022-0185;
+  `packet_rcv` presente deja aplicables los CVE de af_packet. La tabla curada son ~40 LPE/RCE reales con rango
+  mainline y `req`/`mit` por CVE — datos portables tal cual, frente a los 7 CVE de `component-cve.ts`.
+  El mapeo a `ProofState` es directo: aplicable → `needs_runtime_reproduction`, descartado → `false_positive` con
+  su evidencia, indeterminado → `blocked_by_platform`. *Nunca* colapsar los tres a una lista vacía.
+
+- [ ] **Evaluar moria como extractor frente a la cadena binwalk + sasquatch + jefferson + ubireader.** Desempaqueta
+  ~20 sistemas de ficheros en proceso, sin sudo y sin herramienta externa. Medido: JFFS2 de la Tenda-Camera → rootfs
+  completo (153 ficheros) en 0,2 s; GL.iNet BE3600 → recursión FIT → UBI → volumen → FIT hasta el kernel y el
+  SquashFS del rootfs, **7.312 ficheros en 15,7 s**. Añade formatos que hoy no tenemos (btrfs, XFS, NTFS, HFS+,
+  EROFS, exFAT, F2FS). **Caveat medido**: sobre el WR940N el SquashFS LZMA no estándar no decodifica — el
+  `manifest.json` sí lo dice (`status:"error:undecodable-payload"`), pero la salida humana calla y deja un
+  directorio vacío, y el texto del warning atribuye la causa a «obfuscación/cifrado del vendor», que para TP-Link es
+  el diagnóstico equivocado: es el LZMA parcheado que `sasquatch` sí abre. Es decir, moria **complementa**
+  a sasquatch, no lo sustituye, y su diagnóstico habría que reconciliarlo con `extract-diagnose.ts`.
+
+- [ ] **Llevar la capa declarativa de firmas de moria a `packages/core/src/signatures.ts`.** La comparación sobre el
+  mismo fichero (TP-Link WR940N) es el argumento entero: **el escáner de core devuelve 203 hits, moria devuelve 4**,
+  todos correctos y con tier de validación estructural. Los 199 restantes son ruido estructural de nuestro diseño —
+  `jffs2-le`/`jffs2-be` a confianza `medium` disparando sobre un magic de 2 bytes dentro de un flujo LZMA, `pe-mz`
+  dentro de un binario MIPS, decenas de `lzma` sueltos. La diferencia no es la calidad de las reglas: es que moria
+  parsea la cabecera y la rechaza contra constraints (`s_major == 4`, `block_size == 1 << block_log`,
+  `bytes_used <= _avail`), y nuestras reglas son magic + `decode` opcional con una etiqueta de confianza fija y
+  **sin camino de rechazo**. Dos ideas concretas a robar aunque no se adopte el motor TOML: (1) el rúbrico de cuatro
+  niveles `magic 25 / structural 60 / consistent 85 / verified 99` con el porqué viajando en el `evidence`, que mapea
+  limpio sobre `SignatureConfidence`; (2) los `soft_constraints`, que degradan a `magic` en vez de rechazar cuando la
+  estructura es reconocible pero un campo está fuera de rango — un superbloque corrupto-pero-real aparece como
+  «presente, campo fuera de rango» en lugar de desaparecer, que es exactamente la regla 3 («un resultado vacío debe
+  decir por qué») aplicada al mapa de estructura. Añade además ~130 magics de contenedor de vendor
+  (`signatures-firmware/firmware.toml`: TP-Link, D-Link, Netgear CHK, Xiaomi HDR1/2, Ubiquiti, Realtek, Sercomm,
+  MediaTek…) reautorados clean-room y MIT-limpios; ninguno de los 44 rules de core los cubre. moria identificó el
+  `tp_link_firmware_header` del WR940N, que para nosotros hoy es un offset anónimo.
+
+- [ ] **Portar la tabla CPE de banners binarios de `binver.cpp` a `compmap`/`component-cve`.** 17 componentes con
+  `(cpe_vendor, cpe_product)` co-derivado (openssl, busybox, dropbear, dnsmasq, curl, zlib, lighttpd, wget,
+  wpa_supplicant, hostapd, mosquitto, glibc, musl, mbedtls, gnutls, openvpn, lua, u-boot) frente a los 5 de
+  `component-cve.ts`. Es la ruta CPE que cubre precisamente los CVE de librería C que dominan en firmware y que
+  `syft`+`grype` no ven sin manifiesto. Medido sobre el rootfs JFFS2 de la Tenda (sin gestor de paquetes): 5
+  componentes con versión desde los binarios. Interesa además su **mirror NVD dirigido**: consulta la API 2.0 sólo
+  por los productos que la tabla conoce (~700 KB) en vez del feed entero, lo que permitiría una ruta de CVE
+  **offline** con `FIRMLAB_RESEARCH=0` — hoy toda correlación CVE vive tras la lane de red.
+
+- [ ] **NO adoptar el pase de secretos de mithril; nuestra `pem-scan.ts` es estrictamente mejor.** Medido sobre el
+  rootfs de la Tenda-Camera: mithril reporta 18 secretos, de los cuales **12 son falsos positivos a tier
+  `structural` (80/100)** — las cadenas de formato PEM compiladas dentro de `hostapd` y `wpa_supplicant`
+  (`-----BEGIN RSA PRIVATE KEY-----` seguido de `-----END …`, `Proc-Type: 4,ENCRYPTED` y el literal
+  `TLSv1: Unsupported private key format`). No hay cuerpo de clave: es la tabla de etiquetas de la librería TLS.
+  Su escalera afirma «la estructura del propio valor parsea», y aquí no parsea nada. Es la misma trampa que ya
+  costó la retirada de la entrada `private_key.pem` de este backlog, y que `pem-scan.ts` cierra exigiendo que el
+  cuerpo **decodifique**. Lo único aprovechable del pase es el tier `validated` (recomputar un checksum embebido,
+  p. ej. el CRC32 de un token de GitHub), que sí es un peldaño que no tenemos.
+
+- [ ] **NO adoptar la procedencia de componentes de mithril sin re-gating.** Su pase de banner de kernel no está
+  restringido a ELF (por diseño documentado) y sobre la GL.iNet BE3600 cae exactamente en la trampa que la cabecera
+  de `kernelposture.ts` describe: reporta **`linux_kernel 4.4.0` con `origin_path: usr/sbin/tailscaled`** en una
+  imagen cuyo kernel real es 5.4.213 — y sus propias filas opkg (`kmod-* 5.4.213-1`) lo contradicen sin que nada lo
+  señale. Dos sobreatribuciones más en la misma imagen: `openssl 1.0.1` desde `usr/sbin/tor` (cadena de
+  compatibilidad, no la librería enlazada, que es 3.0.13) y `u-boot 2023.04` etiquetado `bootloader-banner` cuando
+  sale de `usr/sbin/fw_printenv`, una utilidad de userland. La buena noticia es que `origin_path` viaja en cada
+  componente, así que los datos son reutilizables **si** la atribución la decide nuestra regla, no la suya.
+
 ### Corpus persistente — construido, cableado y vacío
 
 Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `artifact_occurrence` 2.003 filas de sólo 8 imágenes, `component_occurrence` 356 de 3, `credential_occurrence` 8 de 4, `reachability_prior` 3 de 3, `corpus_rule` ninguna. La página `/corpus` muestra `REUSED CREDENTIALS: 0` y `WATCHLIST RULES: 0`. La ventaja estructural que declara el comentario de módulo de `corpus.ts` no ha producido todavía un solo prior cruzado.
@@ -95,7 +181,7 @@ Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `ar
 - [x] Re-analizar el corpus desplegado tras desplegar `secretScan`. Ya estaba hecho, y lo dice una medición y no una suposición: el reindexado del corpus comprueba, por imagen, si el análisis guardado declara su cobertura, y sobre las 25 imágenes del despliegue devolvió **cero** entradas `static-scan` en «cota NO CONSTA» — es decir, las 25 llevan el campo, y las cinco acotadas (GL.iNet 11,0 %, Obsbot 16,3 %, GE800 21,6 %, Tenda 71,5 %, Framework BIOS 92,5 %) muestran su aviso. Lo que sigue sin migrar es el SBOM: 7 de los 8 resultados guardados son anteriores a `packageTotal`.
 - [ ] Exponer `credmatch` en la web: es el único route sin ninguna referencia en `apps/web/src`, pese a sus 1.337 líneas, un source estable en el libro mayor y ✓ en cuatro muestras de la matriz como «W3 · Credential cross-reference».
 
-### La auditoría de límites — 37 defectos verificados, 5 arreglados
+### La auditoría de límites — 37 defectos verificados, 7 arreglados
 
 Cuatro subpatrones, los mismos que pagaron `ghidra`, `sbom`, `scanSignatures`, `secrets`, `fcc`, `gitleaks`, `osv`
 y `disclosure`: **(A)** cap antes de ordenar, así que el conjunto superviviente es un artefacto del orden de
@@ -103,9 +189,9 @@ llegada · **(B)** un recuento leído de la lista ya recortada y presentado como
 renderizada como negativo limpio · **(D)** un presupuesto gastado en candidatos que no pueden responder. La regla
 de la casa para el arreglo: un campo añadido a un resultado persistido es **opcional para siempre**.
 
-Arreglados hasta ahora los cinco de mayor consecuencia y menor superficie —`copilot`, `diff`, `uboot`,
-`retention` y `funcdiff`—, cada uno con su medición contra el banco desplegado en la entrada correspondiente.
-Quedan 32.
+Arreglados hasta ahora siete: los cinco de mayor consecuencia y menor superficie —`copilot`, `diff`, `uboot`,
+`retention` y `funcdiff`— más `component-cve` y `llm`, cada uno con su medición contra el banco desplegado en la
+entrada correspondiente. Quedan 30.
 
 #### Cambian un veredicto, o convierten una cota en un negativo
 
@@ -118,10 +204,25 @@ Quedan 32.
   `fsaudit` 2, `updatepath` 2, `kmod` 2, `zeroday:usr/sbin/dropbear` 1, `symreach:sbin/askfirst#cmdexec` 1—.
   `sbom` sigue dominando porque de verdad tiene la mayoría de las filas graves; lo que cambió es que el corte ya
   no lo decide qué job terminó el último. Cierra también `copilot.ts:97`.
-- [ ] `providers/component-cve.ts:367` **(A)+(C)** — la caminata del rootfs es una pila LIFO con `WALK_CAP = 8000`
-  dirents y sin flag de truncamiento, mientras el `reason` dice «N componente(s) versionados, M CVE emparejados de
-  la tabla curada». Es el peor del grupo porque es **el camino de la afirmación CVE curada**: un veredicto que
-  suena completo sobre una caminata parcial.
+- [x] `providers/component-cve.ts:367` **(A)+(C)** — resuelto. `ComponentCveResult` gana `walkTruncated` y
+  `entriesWalked` (opcionales para siempre) y `describeComponentScan` —pura, exportada, con test en las dos
+  ramas— reserva la frase limpia para la caminata que terminó; truncada dice que ambos recuentos son un SUELO y
+  que un componente en un subárbol al que no llegó es aquí indistinguible de uno que no está. Y la mitad **(A)**:
+  la pila LIFO visita ahora primero los directorios donde estos componentes viven (`componentDirPriority`), así
+  que el corte cuesta la cola de `/usr/share` y no la respuesta.
+
+  **El primer arreglo estaba mal y sólo lo dijo ejecutarlo.** La lista de prioridad son rutas de dos segmentos
+  (`usr/lib`) mientras la caminata baja nivel a nivel, así que `usr` —que no casa con ninguna entrada de dos
+  segmentos— rankeaba el ÚLTIMO pese a contener `usr/lib`, `usr/sbin` y `usr/bin`: la ordenación pensada para
+  ayudar mandaba la caminata acotada a todas partes menos donde están los componentes. Medido en contenedor sobre
+  una raíz Debian, la rama truncada encontraba **0** componentes con libcrypto delante; ahora un directorio
+  rankea también si está *de camino* a uno, y con el mismo presupuesto de 8.000 entradas encuentra
+  `usr/lib/aarch64-linux-gnu/libcrypto.so.3`. Un test lo fija.
+
+  Validado además contra los rootfs reales del despliegue: GL.iNet 7.552 entradas y WDR3600 697, ambas
+  `truncated: false` y con el mismo conjunto de hits y las mismas rutas que antes del cambio —reordenar no altera
+  la respuesta cuando la caminata cabe—. **El cap no muerde en este corpus**: el mayor rootfs son 7.552 de 8.000,
+  un margen de 448 entradas, así que el defecto era real en código y aún no había disparado aquí.
 - [x] `providers/funcdiff-run.ts:94` **(B)+(C)** y `:221` **(A)** — resueltos juntos, porque son la misma cota.
   `listElves` devuelve `{ elves, truncated }` y **el veredicto de identidad sólo está disponible si ambas
   caminatas terminaron**: cortadas en subárboles distintos, dos builds del mismo dispositivo no comparten nada que
@@ -140,10 +241,20 @@ Quedan 32.
   remaining … was not examined. This is how far the search looked, not a statement that the image has no
   environment block.» Se reporta también en el acierto porque `varsComplete` habla del bloque encontrado, y quien
   quiera saber si otro bloque puede estar más allá del prefijo necesita este campo.
-- [ ] `llm.ts:152` y `:182` **(C)** — ni `parseChatCompletionsResponse` ni `parseAnthropicResponse` leen
-  `finish_reason`/`stop_reason`, así que una respuesta cortada en `maxTokens` (4096 por defecto, y los tokens de
-  razonamiento de DeepSeek cuentan) vuelve como un `LlmResult` normal — y `opacidad.ts:1094` deja que **ese texto
-  truncado sustituya a la narrativa determinista completa** y lo guarda en la fila del job como el informe.
+- [x] `llm.ts:152` y `:182` **(C)** — resuelto. Ambos adaptadores leen ahora el motivo de parada —`finish_reason:
+  'length'` en el estilo OpenAI, `stop_reason: 'max_tokens'` en Anthropic— y lo publican como `LlmResult.truncated`,
+  opcional para siempre. La regla que decide el campo importa tanto como el campo: se pone **sólo** cuando el
+  proveedor lo dijo, porque «no lo dijo» y «dijo que terminó» son hechos distintos y quien DESCARTA una respuesta
+  truncada no puede descartarla por una suposición.
+
+  Y el consumidor: `runOpacidad` dejaba que ese texto sustituyera a la narrativa determinista y lo persistía en la
+  fila del job como el informe de la imagen, de modo que una corrida podía entregar un informe cortado a media
+  frase sin que nada dijera por qué. Ahora se descarta —un informe que se corta es estrictamente peor que el
+  completo al que desplazaba— y el hecho se registra en `narrativeLlmTruncated` (opcional para siempre) más una
+  línea de log, porque `narrativeSource: 'deterministic'` a secas cubre dos corridas distintas: una donde no había
+  modelo configurado y otra donde sí lo hubo y su respuesta se tiró, y sólo la segunda se arregla subiendo el
+  presupuesto de tokens. La web lo muestra al lado de la insignia. 4 tests, incluida la rama que corre siempre:
+  una respuesta normal no lleva el flag, o se descartarían todas.
 - [ ] `capture/proxy.ts:233` (y la misma forma en `capture/agent.ts:78`) **(C)** — un cuerpo por encima de
   `MAX_BODY_BYTES` (64 MB) no se lee nunca, así que `scoreFirmwareFlow` corre sobre un buffer vacío y `carved`
   queda en 0; el flujo se dibuja en `Capture.tsx:503` idéntico a uno cuyos bytes SÍ se examinaron y no eran

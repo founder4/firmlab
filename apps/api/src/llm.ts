@@ -37,6 +37,19 @@ export interface LlmResult {
   reasoningTokens?: number;
   /** True when a structured DeepSeek call needed the bounded non-thinking recovery attempt. */
   fallbackUsed?: boolean;
+  /**
+   * True when the provider stopped because it hit the output-token ceiling rather than because it had finished.
+   *
+   * A completion cut at `maxTokens` arrives looking exactly like a complete one — same shape, same 200, text that
+   * simply ends. Until this was read, `runOpacidad` let such a text REPLACE the complete deterministic narrative
+   * and persisted it on the job row as the image's report, so a run could ship a report ending mid-sentence with
+   * nothing anywhere saying why. DeepSeek makes it likelier than it sounds: reasoning tokens count against the
+   * same 4096-token default.
+   *
+   * Optional forever, and its absence means NOT RECORDED: a result stored by an older build has no such field,
+   * and a provider that omits the stop reason entirely must not be read as having finished cleanly.
+   */
+  truncated?: boolean;
 }
 
 /** A provider answered and consumed tokens, but its final text could not be used by a structured node. */
@@ -140,9 +153,10 @@ export function parseChatCompletionsResponse(json: unknown): {
   inputTokens?: number;
   outputTokens?: number;
   reasoningTokens?: number;
+  truncated?: boolean;
 } {
   const j = json as {
-    choices?: { message?: { content?: string } }[];
+    choices?: { message?: { content?: string }; finish_reason?: string }[];
     usage?: {
       prompt_tokens?: number;
       completion_tokens?: number;
@@ -150,7 +164,17 @@ export function parseChatCompletionsResponse(json: unknown): {
     };
   };
   const text = j.choices?.[0]?.message?.content ?? '';
-  const out: { text: string; inputTokens?: number; outputTokens?: number; reasoningTokens?: number } = { text };
+  const out: {
+    text: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningTokens?: number;
+    truncated?: boolean;
+  } = { text };
+  // Set ONLY when the provider actually said `length`. A response with no `finish_reason` leaves the field absent,
+  // because "the provider did not say" and "the provider said it finished" are different facts and a caller that
+  // discards a truncated answer must not discard one on a guess.
+  if (j.choices?.[0]?.finish_reason === 'length') out.truncated = true;
   if (typeof j.usage?.prompt_tokens === 'number') out.inputTokens = j.usage.prompt_tokens;
   if (typeof j.usage?.completion_tokens === 'number') out.outputTokens = j.usage.completion_tokens;
   if (typeof j.usage?.completion_tokens_details?.reasoning_tokens === 'number') {
@@ -179,16 +203,24 @@ export function buildAnthropicRequest(cfg: LlmConfig, system: string, user: stri
   };
 }
 
-export function parseAnthropicResponse(json: unknown): { text: string; inputTokens?: number; outputTokens?: number } {
+export function parseAnthropicResponse(json: unknown): {
+  text: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  truncated?: boolean;
+} {
   const j = json as {
     content?: { type?: string; text?: string }[];
     usage?: { input_tokens?: number; output_tokens?: number };
+    stop_reason?: string;
   };
   const text = (j.content ?? [])
     .filter((b) => b.type === 'text')
     .map((b) => b.text ?? '')
     .join('');
-  const out: { text: string; inputTokens?: number; outputTokens?: number } = { text };
+  const out: { text: string; inputTokens?: number; outputTokens?: number; truncated?: boolean } = { text };
+  // The Messages API spells the same fact `max_tokens`. Same rule as above: absent stays absent.
+  if (j.stop_reason === 'max_tokens') out.truncated = true;
   if (typeof j.usage?.input_tokens === 'number') out.inputTokens = j.usage.input_tokens;
   if (typeof j.usage?.output_tokens === 'number') out.outputTokens = j.usage.output_tokens;
   return out;
@@ -223,15 +255,20 @@ async function dispatchCompletion(
     throw new Error(`LLM provider ${cfg.provider} returned ${res.status}: ${detail.slice(0, 300)}`);
   }
   const json = await res.json();
-  const parsed: { text: string; inputTokens?: number; outputTokens?: number; reasoningTokens?: number } = isAnthropic
-    ? parseAnthropicResponse(json)
-    : parseChatCompletionsResponse(json);
+  const parsed: {
+    text: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningTokens?: number;
+    truncated?: boolean;
+  } = isAnthropic ? parseAnthropicResponse(json) : parseChatCompletionsResponse(json);
   const result: LlmResult = { text: parsed.text, model: cfg.model, provider: cfg.provider };
   if (parsed.inputTokens !== undefined) result.inputTokens = parsed.inputTokens;
   if (parsed.outputTokens !== undefined) result.outputTokens = parsed.outputTokens;
   if (parsed.reasoningTokens !== undefined) {
     result.reasoningTokens = parsed.reasoningTokens;
   }
+  if (parsed.truncated !== undefined) result.truncated = parsed.truncated;
   return result;
 }
 
