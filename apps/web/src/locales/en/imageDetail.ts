@@ -234,6 +234,7 @@ export const imageDetail = {
     removed: (n: number) => `−${n} removed`,
     bySeverity: (n: number, severity: string) => `+${n} ${severity}`,
     /** Only about the two images compared — it says nothing about either image's absolute exposure. */
+    listedOf: (shown: number, total: number) => `Showing ${shown} of ${total}; the rest are not listed.`,
     noNewCves: 'No newly-introduced CVEs.',
     filesTitle: 'Root filesystem',
     filesNeedExtract: 'Run extraction on both images to diff files.',

@@ -16,40 +16,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EXTRACT_DIR, IMAGES_DIR } from './paths.js';
 import { measureResearchCache, sweepResearchCache } from './research/cache.js';
+import { dirSize } from './retention-usage.js';
 import { deleteImage, imagesWithActiveSessions, listImages } from './store.js';
 
 const MAX_AGE_DAYS = Math.max(0, Number(process.env.FIRMLAB_MAX_IMAGE_AGE_DAYS ?? 0));
 const MAX_DATA_BYTES = Math.max(0, Number(process.env.FIRMLAB_MAX_DATA_BYTES ?? 0));
 export const SWEEP_INTERVAL_MS = Math.max(60_000, Number(process.env.FIRMLAB_RETENTION_SWEEP_MS ?? 6 * 3600 * 1000));
-
-/** Recursively sum file sizes under a directory, bounded so a pathological tree can't stall the sweep. */
-function dirSize(dir: string, budget = 500_000): number {
-  let total = 0;
-  const stack = [dir];
-  let visited = 0;
-  while (stack.length > 0 && visited < budget) {
-    const cur = stack.pop() as string;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(cur, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const e of entries) {
-      visited++;
-      const abs = path.join(cur, e.name);
-      if (e.isDirectory()) stack.push(abs);
-      else if (e.isFile()) {
-        try {
-          total += fs.statSync(abs).size;
-        } catch {
-          // vanished mid-sweep — ignore
-        }
-      }
-    }
-  }
-  return total;
-}
 
 export interface StorageUsage {
   imageCount: number;
@@ -70,6 +42,12 @@ export interface StorageUsage {
   researchCacheTruncated?: boolean;
   /** The sentence that carries the two numbers and, when they are a floor, says so. */
   researchCacheNote?: string;
+  /**
+   * True when the images/extracts walk hit its own budget, so `totalBytes` above is a FLOOR and not the total.
+   * Optional forever, like the cache fields. It matters most where it is least visible: `sweepRetention` compares
+   * `totalBytes` against the quota, and a floor UNDER the quota does not license "we are within quota".
+   */
+  totalTruncated?: boolean;
 }
 
 /**
@@ -85,14 +63,15 @@ export interface StorageUsage {
  * Measuring never sweeps: `measureResearchCache` walks and sums, and deletes nothing whatever the caps say.
  */
 export function storageUsage(): StorageUsage {
-  const imagesBytes = dirSize(IMAGES_DIR);
-  const extractsBytes = dirSize(EXTRACT_DIR);
+  const images = dirSize(IMAGES_DIR);
+  const extracts = dirSize(EXTRACT_DIR);
   const cache = measureResearchCache();
   return {
     imageCount: listImages().length,
-    imagesBytes,
-    extractsBytes,
-    totalBytes: imagesBytes + extractsBytes,
+    imagesBytes: images.bytes,
+    extractsBytes: extracts.bytes,
+    totalBytes: images.bytes + extracts.bytes,
+    totalTruncated: images.truncated || extracts.truncated,
     quotaBytes: MAX_DATA_BYTES,
     maxAgeDays: MAX_AGE_DAYS,
     researchCacheBytes: cache.bytes,
@@ -138,13 +117,25 @@ export function sweepRetention(log: (line: string) => void = () => {}): string[]
   }
 
   if (MAX_DATA_BYTES > 0) {
-    let total = storageUsage().totalBytes;
+    const usage = storageUsage();
+    // A floor under the quota is not compliance. Said before the loop, because after it the sweep prints how many
+    // images it evicted and that line reads like a completed enforcement.
+    if (usage.totalTruncated) {
+      log(
+        [
+          `retention: WARNING — the images/extracts walk hit its budget, so ${usage.totalBytes}B is a FLOOR and not`,
+          'the total. Eviction below runs against an under-estimate: what it removes is real, but staying under',
+          `the ${MAX_DATA_BYTES}B quota is not demonstrated by this pass.`,
+        ].join(' '),
+      );
+    }
+    let total = usage.totalBytes;
     // Oldest first (listImages is newest-first).
     const oldestFirst = [...listImages()].sort((a, b) => a.uploadedAt - b.uploadedAt);
     for (const img of oldestFirst) {
       if (total <= MAX_DATA_BYTES) break;
       if (pinned.has(img.id)) continue; // pinned by an active session — never evict
-      const before = dirSize(path.join(IMAGES_DIR, img.id)) + dirSize(path.join(EXTRACT_DIR, img.id));
+      const before = dirSize(path.join(IMAGES_DIR, img.id)).bytes + dirSize(path.join(EXTRACT_DIR, img.id)).bytes;
       purge(img.id);
       removed.push(img.id);
       total -= before;

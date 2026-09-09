@@ -1,3 +1,4 @@
+import { compareFindings } from '@firmlab/core';
 import { corpusRefs } from './corpus.js';
 import { rowToFinding } from './findings.js';
 /**
@@ -11,6 +12,15 @@ import { complete } from './llm.js';
 import { partitionByProvenance } from './operator-findings.js';
 import { getImage, listBinaries, listFindings, listJobs } from './store.js';
 
+/**
+ * How much of each list the model is handed. Bounded to control tokens — but a bound is only honest if what it
+ * KEEPS is ranked and what it drops is counted, which is why every one of these is paired with an entry in
+ * `counts` and a rule in `truncation`.
+ */
+const FINDING_CAP = 120;
+const BINARY_CAP = 60;
+const ASSERTION_CAP = 40;
+
 /** The compact, structured view of an image the copilot reasons over. Deliberately bounded to control tokens. */
 interface CopilotContext {
   identity: unknown;
@@ -18,7 +28,9 @@ interface CopilotContext {
   findings: { kind: string; title: string; severity: string; proofState: string; source: string }[];
   binaries: { path: string; arch: string | null; networkFacing: boolean; hardening: string }[];
   corpusRefs: { credentials: number; components: number; artifacts: number };
-  counts: { findings: number; binaries: number };
+  counts: { findings: number; binaries: number; operatorAssertions: number };
+  /** How each truncated array was chosen. Stated because a cut whose RULE is unknown is a cut you cannot reason about. */
+  truncation: { findings: string; binaries: string; operatorAssertions: string };
   /**
    * Claims a person or agent recorded, kept in their own array with no proofState field at all. Handing the model
    * a `proofState` key on a row nobody measured is how the ladder starts meaning two things, so these rows simply
@@ -75,14 +87,23 @@ export function gatherContext(imageId: string): CopilotContext | null {
       gitleaks: jobsDone('gitleaks'),
       emulation: jobsDone('emulate'),
     },
-    findings: findings.slice(0, 120).map((f) => ({
-      kind: f.kind,
-      title: f.title,
-      severity: f.severity,
-      proofState: f.proofState,
-      source: f.source,
-    })),
-    binaries: binaries.slice(0, 60).map((b) => ({
+    // Ranked before the cut, by the SAME order the ledger, the narrative and the report display. Measured on the
+    // deployed bench before this line existed: `listFindings` orders by `createdAt DESC`, so the 120 rows handed to
+    // the model on image 81154df7 (799 findings, 41 critical / 230 high) were ALL from `sbom` — symreach, binvuln,
+    // webtaint, gitleaks, credmatch, fsaudit, emulate-system, zeroday and fwhunt were dropped whole, because the
+    // SBOM job happened to be the last one that ran. Which providers a summary sees cannot be an artifact of
+    // scheduling order.
+    findings: [...findings]
+      .sort(compareFindings)
+      .slice(0, FINDING_CAP)
+      .map((f) => ({
+        kind: f.kind,
+        title: f.title,
+        severity: f.severity,
+        proofState: f.proofState,
+        source: f.source,
+      })),
+    binaries: binaries.slice(0, BINARY_CAP).map((b) => ({
       path: b.path,
       arch: b.arch,
       networkFacing: b.networkFacing === 1,
@@ -93,8 +114,13 @@ export function gatherContext(imageId: string): CopilotContext | null {
       components: refs.components.length,
       artifacts: refs.artifacts.length,
     },
-    counts: { findings: findings.length, binaries: binaries.length },
-    operatorAssertions: asserted.slice(0, 40).map((f) => ({
+    counts: { findings: findings.length, binaries: binaries.length, operatorAssertions: asserted.length },
+    truncation: {
+      findings: `${Math.min(findings.length, FINDING_CAP)} of ${findings.length}, severity first and proof state as the tie-break`,
+      binaries: `${Math.min(binaries.length, BINARY_CAP)} of ${binaries.length}, network-facing first then by path`,
+      operatorAssertions: `${Math.min(asserted.length, ASSERTION_CAP)} of ${asserted.length}, most recently recorded first`,
+    },
+    operatorAssertions: asserted.slice(0, ASSERTION_CAP).map((f) => ({
       title: f.title,
       severity: f.severity,
       assertedBy: f.assertion?.assertedBy ?? 'unknown',
@@ -108,7 +134,10 @@ export function gatherContext(imageId: string): CopilotContext | null {
 export function buildCopilotUserPrompt(ctx: CopilotContext): string {
   return [
     'Analyze this firmware image from the following deterministic-analysis results.',
-    'Counts may exceed the arrays shown (they are truncated); use `counts` for totals.',
+    'Counts may exceed the arrays shown (they are truncated); use `counts` for totals, and `truncation` for how',
+    'each array was chosen. An array is a ranked prefix, never a sample: what it omits is what ranked below it,',
+    'so a provider absent from `findings` may simply have ranked lower — never read it as a provider that found',
+    'nothing. Coverage, not this array, is what says which stages ran.',
     '',
     '```json',
     JSON.stringify(ctx, null, 2),

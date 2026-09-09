@@ -56,6 +56,12 @@ export interface FuncDiffResult {
   analyzed: number;
   /** Pairs that differ and were NOT analyzed because the per-run cap was reached. */
   notAnalyzed: number;
+  /**
+   * True when either rootfs walk hit its entry budget, so `paired` is a FLOOR and the set of shared paths is a
+   * prefix of the walk rather than the intersection. Optional forever — a result stored by an older build has
+   * none, and absent means "not recorded", never "the walk completed".
+   */
+  walkTruncated?: boolean;
   diffs: BinaryDiff[];
   /** Before/after decompilation of the tightest changed functions, when `withText` was requested. */
   textDiffs: FuncTextDiff[];
@@ -86,11 +92,20 @@ function sha1(abs: string): string {
   }
 }
 
-/** Every ELF under a rootfs, keyed by its rootfs-relative path — the identity two releases share. */
-function listElves(root: string): Map<string, string> {
+/**
+ * Every ELF under a rootfs, keyed by its rootfs-relative path — the identity two releases share.
+ *
+ * Reports whether the walk finished, because the caller's worst sentence depends on it. The walk is LIFO and
+ * capped at `WALK_CAP` dirents, and the two rootfs are walked independently: cut short, they can stop in
+ * DIFFERENT subtrees, so their intersection can be empty for two builds that share thousands of binaries. That
+ * emptiness used to be reported as "they are probably not two builds of one device" — a confident verdict
+ * manufactured entirely by the bound.
+ */
+function listElves(root: string): { elves: Map<string, string>; truncated: boolean } {
   const out = new Map<string, string>();
   const stack = [root];
   let walked = 0;
+  let truncated = false;
   while (stack.length && walked < WALK_CAP) {
     const dir = stack.pop() as string;
     let entries: fs.Dirent[];
@@ -100,14 +115,52 @@ function listElves(root: string): Map<string, string> {
       continue;
     }
     for (const e of entries) {
-      if (walked++ >= WALK_CAP) break;
+      if (walked++ >= WALK_CAP) {
+        truncated = true;
+        break;
+      }
       if (e.isSymbolicLink()) continue;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) stack.push(abs);
       else if (e.isFile() && isElf(abs)) out.set(path.relative(root, abs), abs);
     }
   }
-  return out;
+  return { elves: out, truncated: truncated || stack.length > 0 };
+}
+
+/**
+ * Directories whose binaries answer the network or run privileged, ranked ahead of the rest.
+ *
+ * The cap has to keep SOMETHING, and what it kept was decided by `Array.sort()` — the alphabet — because `shared`
+ * is sorted for determinism. On a security patch that puts `/bin/ash` ahead of `/usr/sbin/httpd`, which inverts
+ * the only ordering an operator diffing two releases cares about.
+ */
+const PRIORITY_DIRS = ['usr/sbin/', 'sbin/', 'usr/libexec/', 'libexec/', 'usr/bin/', 'bin/'];
+
+/** Where a path ranks by directory; lower sorts first, and an unlisted directory ranks after every listed one. */
+export function pathPriority(rel: string): number {
+  const norm = rel.replace(/^\.?\//, '');
+  const i = PRIORITY_DIRS.findIndex((d) => norm.startsWith(d));
+  return i === -1 ? PRIORITY_DIRS.length : i;
+}
+
+/**
+ * Order the changed binaries so the cap keeps the ones worth comparing: service directories first, then the
+ * largest byte delta — a rewritten binary carries more of a release than one whose size moved by four bytes —
+ * and the path last, which is what keeps the order stable across runs.
+ *
+ * Pure and exported: this decides what a truncated run ANSWERS, so a test has to be able to reach it.
+ */
+export function rankChangedPaths(paths: string[], sizeDelta: (rel: string) => number): string[] {
+  return [...paths].sort((x, y) => {
+    const px = pathPriority(x);
+    const py = pathPriority(y);
+    if (px !== py) return px - py;
+    const dx = sizeDelta(x);
+    const dy = sizeDelta(y);
+    if (dx !== dy) return dy - dx;
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
 }
 
 /**
@@ -198,11 +251,25 @@ export async function runFuncDiff(
   if (!olderRootfs || !newerRootfs) return empty('both images need an extracted rootfs — run extraction on each');
   if (!(await isToolAvailable('radare2'))) return empty('radare2 is not installed in this deployment');
 
-  const a = listElves(olderRootfs);
-  const b = listElves(newerRootfs);
+  const walkA = listElves(olderRootfs);
+  const walkB = listElves(newerRootfs);
+  const a = walkA.elves;
+  const b = walkB.elves;
+  const walkTruncated = walkA.truncated || walkB.truncated;
   const shared = [...b.keys()].filter((p) => a.has(p)).sort();
   if (shared.length === 0) {
-    return empty('the two rootfs share no binary at the same path — they are probably not two builds of one device');
+    // The identity verdict is only available when both walks COMPLETED. Cut short in different subtrees, two
+    // builds of the same device share nothing the walk saw — and blaming the device for the bound is the worst
+    // sentence this provider can produce, because it is confident, wrong, and stops the operator looking further.
+    return empty(
+      walkTruncated
+        ? [
+            `neither walk finished — each stops at ${WALK_CAP} directory entries, and cut short in different`,
+            'subtrees two builds of one device can share nothing the walk saw. This is a bound, not a verdict',
+            'about the images.',
+          ].join(' ')
+        : 'the two rootfs share no binary at the same path — they are probably not two builds of one device',
+    );
   }
 
   // Hash first: an identical binary needs no analysis, and how many are identical is itself the shape of the
@@ -216,9 +283,21 @@ export async function runFuncDiff(
     else changedPaths.push(p);
   }
 
-  handle.log(`${shared.length} binaries in both builds; ${identical} byte-identical, ${changedPaths.length} differ.`);
+  const walkNote = walkTruncated
+    ? ` Both counts are a FLOOR: a rootfs walk stopped at its ${WALK_CAP}-entry budget, so binaries beyond it were never paired.`
+    : '';
+  handle.log(
+    `${shared.length} binaries in both builds; ${identical} byte-identical, ${changedPaths.length} differ.${walkNote}`,
+  );
 
-  const toAnalyze = changedPaths.slice(0, maxPairs);
+  const sizeOf = (rel: string): number => {
+    try {
+      return Math.abs(fs.statSync(a.get(rel) as string).size - fs.statSync(b.get(rel) as string).size);
+    } catch {
+      return 0;
+    }
+  };
+  const toAnalyze = rankChangedPaths(changedPaths, sizeOf).slice(0, maxPairs);
   const notAnalyzed = changedPaths.length - toAnalyze.length;
   const diffs: BinaryDiff[] = [];
   const textDiffs: FuncTextDiff[] = [];
@@ -299,8 +378,8 @@ export async function runFuncDiff(
     ? ` ${notAnalyzed} further changed binar(ies) were NOT compared — the per-run cap of ${maxPairs} was reached, so this comparison is incomplete.`
     : '';
   const reason =
-    `${shared.length} shared binaries: ${identical} identical, ${changedPaths.length} differ, ${toAnalyze.length} compared. ` +
-    `${patched.length} pair(s) show a small localized delta.${capNote}`;
+    `${shared.length} shared binaries: ${identical} identical, ${changedPaths.length} differ, ${toAnalyze.length} compared ` +
+    `(service directories first, then largest byte delta). ${patched.length} pair(s) show a small localized delta.${capNote}${walkNote}`;
   handle.log(reason);
 
   // The cap is a bound on the ANSWER, so it belongs in the ledger, not only in a log line nobody re-reads.
@@ -310,10 +389,18 @@ export async function runFuncDiff(
       title: `Function-level diff was truncated: ${notAnalyzed} changed binar(ies) not compared`,
       severity: 'info',
       proofState: 'needs_runtime_reproduction',
-      evidence: { older: labels.older, newer: labels.newer, notAnalyzed, cap: maxPairs, analyzed: toAnalyze.length },
+      evidence: {
+        older: labels.older,
+        newer: labels.newer,
+        notAnalyzed,
+        cap: maxPairs,
+        analyzed: toAnalyze.length,
+        rule: 'service directories first (sbin, libexec, bin), then largest byte delta, then path',
+      },
       rationale:
         'More binaries changed between these builds than one run compares. The binaries that were not examined ' +
-        'may contain the change you are looking for, so this comparison is a partial answer, not a negative one.',
+        'may contain the change you are looking for, so this comparison is a partial answer, not a negative one. ' +
+        'What survived the cap was chosen by the rule in `rule`, not by the alphabet.',
     });
   }
 
@@ -326,6 +413,7 @@ export async function runFuncDiff(
     identical,
     analyzed: toAnalyze.length,
     notAnalyzed,
+    walkTruncated,
     diffs,
     textDiffs,
     findings,

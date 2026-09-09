@@ -95,7 +95,7 @@ Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `ar
 - [x] Re-analizar el corpus desplegado tras desplegar `secretScan`. Ya estaba hecho, y lo dice una medición y no una suposición: el reindexado del corpus comprueba, por imagen, si el análisis guardado declara su cobertura, y sobre las 25 imágenes del despliegue devolvió **cero** entradas `static-scan` en «cota NO CONSTA» — es decir, las 25 llevan el campo, y las cinco acotadas (GL.iNet 11,0 %, Obsbot 16,3 %, GE800 21,6 %, Tenda 71,5 %, Framework BIOS 92,5 %) muestran su aviso. Lo que sigue sin migrar es el SBOM: 7 de los 8 resultados guardados son anteriores a `packageTotal`.
 - [ ] Exponer `credmatch` en la web: es el único route sin ninguna referencia en `apps/web/src`, pese a sus 1.337 líneas, un source estable en el libro mayor y ✓ en cuatro muestras de la matriz como «W3 · Credential cross-reference».
 
-### La auditoría de límites — 37 defectos verificados, pendientes de arreglo
+### La auditoría de límites — 37 defectos verificados, 5 arreglados
 
 Cuatro subpatrones, los mismos que pagaron `ghidra`, `sbom`, `scanSignatures`, `secrets`, `fcc`, `gitleaks`, `osv`
 y `disclosure`: **(A)** cap antes de ordenar, así que el conjunto superviviente es un artefacto del orden de
@@ -103,28 +103,43 @@ llegada · **(B)** un recuento leído de la lista ya recortada y presentado como
 renderizada como negativo limpio · **(D)** un presupuesto gastado en candidatos que no pueden responder. La regla
 de la casa para el arreglo: un campo añadido a un resultado persistido es **opcional para siempre**.
 
+Arreglados hasta ahora los cinco de mayor consecuencia y menor superficie —`copilot`, `diff`, `uboot`,
+`retention` y `funcdiff`—, cada uno con su medición contra el banco desplegado en la entrada correspondiente.
+Quedan 32.
+
 #### Cambian un veredicto, o convierten una cota en un negativo
 
-- [ ] `copilot.ts:78` **(A)** — `findings.slice(0, 120)` sobre el `ORDER BY createdAt DESC` de `listFindings`, así
-  que la «evaluación priorizada» del copiloto la escriben los proveedores que corrieron *los últimos*. Medido
-  contra la base desplegada: en la imagen `81154df7` (799 hallazgos, 41 críticos / 230 altos) **las 120 filas que
-  llegan al modelo son todas de `sbom`**, y `symreach`, `binvuln`, `webtaint`, `gitleaks`, `credmatch`, `fsaudit`,
-  `emulate-system`, `zeroday` y `fwhunt` caen enteros. Ordenar por `findingRank` (ya exportado de `@firmlab/core`,
-  ya usado por la narrativa) antes del corte, y declarar la regla y el descarte en `buildCopilotUserPrompt`.
+- [x] `copilot.ts:78` **(A)** — resuelto. Se ordena por `compareFindings` —el mismo orden que muestran el libro
+  mayor, la narrativa y el informe— antes del corte, y el contexto lleva ahora `counts.operatorAssertions` y un
+  bloque `truncation` que declara la regla de cada array; el prompt añade que un array es un prefijo RANKEADO y
+  nunca una muestra, así que un proveedor ausente de `findings` rankeó por debajo y jamás significa que no
+  encontró nada. Medido antes y después sobre `81154df7` (799 hallazgos): antes las 120 filas eran **todas de
+  `sbom`**; ahora son los 41 críticos más 79 altos repartidos en **siete fuentes** —`sbom` 108, `webtaint` 4,
+  `fsaudit` 2, `updatepath` 2, `kmod` 2, `zeroday:usr/sbin/dropbear` 1, `symreach:sbin/askfirst#cmdexec` 1—.
+  `sbom` sigue dominando porque de verdad tiene la mayoría de las filas graves; lo que cambió es que el corte ya
+  no lo decide qué job terminó el último. Cierra también `copilot.ts:97`.
 - [ ] `providers/component-cve.ts:367` **(A)+(C)** — la caminata del rootfs es una pila LIFO con `WALK_CAP = 8000`
   dirents y sin flag de truncamiento, mientras el `reason` dice «N componente(s) versionados, M CVE emparejados de
   la tabla curada». Es el peor del grupo porque es **el camino de la afirmación CVE curada**: un veredicto que
   suena completo sobre una caminata parcial.
-- [ ] `providers/funcdiff-run.ts:94` **(B)+(C)** — `listElves` recorre ambos rootfs con una pila LIFO que para a los
-  20.000 dirents y devuelve un `Map` pelado; `paired: shared.length` presenta una intersección capada como el
-  emparejamiento entero. Peor: como las dos caminatas pueden truncar en subárboles distintos, un par grande puede
-  llegar a `empty('the two rootfs share no binary at the same path — they are probably not two builds of one
-  device')`, **un veredicto seguro y falso fabricado enteramente por la cota**. Nunca emitir esa frase si alguna
-  caminata truncó.
-- [ ] `providers/uboot.ts:562` / `:607` **(C)** — `readBounded(imagePath, READ_CAP)` lee 32 MB y luego devuelve
-  `notFound('No U-Boot environment found in the image.')`. El defecto de `fcc.ts` literal, en una clase donde los
-  volcados de 64–128 MB son rutina. El comentario de módulo dice «reads a bounded prefix»; la frase que ve el
-  operador, no.
+- [x] `providers/funcdiff-run.ts:94` **(B)+(C)** y `:221` **(A)** — resueltos juntos, porque son la misma cota.
+  `listElves` devuelve `{ elves, truncated }` y **el veredicto de identidad sólo está disponible si ambas
+  caminatas terminaron**: cortadas en subárboles distintos, dos builds del mismo dispositivo no comparten nada que
+  la caminata viera, y culpar al dispositivo de la cota es la peor frase que este proveedor puede producir —
+  segura, falsa, y hace que el operador deje de mirar. Con truncamiento dice que es una cota y no un veredicto
+  sobre las imágenes; `FuncDiffResult.walkTruncated` (opcional para siempre) y el `reason` lo llevan, y los
+  recuentos se anuncian como suelo. El corte de 20 pasa de alfabético a `rankChangedPaths` —directorios de
+  servicio primero (`sbin`, `libexec`, `bin`), luego mayor delta de bytes, y la ruta al final para que el orden
+  sea estable—, con la regla escrita en el `evidence.rule` del hallazgo `function-diff-truncated`. 7 tests: la
+  prueba que fija el defecto es que `/usr/sbin/httpd` gana a `/bin/ash`, que es exactamente lo que el alfabeto
+  invertía.
+- [x] `providers/uboot.ts:562` / `:607` **(C)** — resuelto. `readBounded` devuelve ahora `bytesRead`/`totalBytes`,
+  `UbootResult.scan` lo persiste (opcional para siempre) tanto en el fallo como en el acierto, y
+  `describeNoEnvBlock` —pura y exportada, con test en las dos ramas— reserva el negativo limpio para la imagen que
+  CUPO en el prefijo: cualquier otra dice «No U-Boot environment in the first 32.0 MB of a N MB image; the
+  remaining … was not examined. This is how far the search looked, not a statement that the image has no
+  environment block.» Se reporta también en el acierto porque `varsComplete` habla del bloque encontrado, y quien
+  quiera saber si otro bloque puede estar más allá del prefijo necesita este campo.
 - [ ] `llm.ts:152` y `:182` **(C)** — ni `parseChatCompletionsResponse` ni `parseAnthropicResponse` leen
   `finish_reason`/`stop_reason`, así que una respuesta cortada en `maxTokens` (4096 por defecto, y los tokens de
   razonamiento de DeepSeek cuentan) vuelve como un `LlmResult` normal — y `opacidad.ts:1094` deja que **ese texto
@@ -170,18 +185,21 @@ de la casa para el arreglo: un campo añadido a un resultado persistido es **opc
 
 #### Presentan una cota como total
 
-- [ ] `providers/diff.ts:122` **(B)** — `addedIds: addedIds.slice(0, CVE_CAP)` (500) e igual `removedIds`, sin
-  ningún total en `FirmwareDiffResult['cves']`; `apps/web/src/pages/ImageDetail.tsx:1261` dibuja
-  `+${result.cves.addedIds.length} added`, así que un diff que introduce 1.400 CVE muestra «+500 added» — y lo
-  muestra **junto a** `addedBySeverity`, que `diffCves` cuenta sobre el conjunto sin truncar, de modo que los dos
-  badges se contradicen en pantalla. El bloque `files` del mismo resultado lo hace bien (`counts` en `:175`), que
-  es lo que convierte esto en un olvido y no en un diseño. Mismo patrón en `packages`, `:100`.
-- [ ] `retention.ts:26`, `:95`, `:141` **(B)+(C)** — el `budget = 500_000` de `dirSize` para la caminata a medio
-  árbol y devuelve una suma parcial que `storageUsage()` reporta como `totalBytes` sin flag —mientras la caché de
-  research medida dos líneas más abajo **sí** devuelve `truncated` más una nota—, y `sweepRetention` compara ese
-  suelo contra `FIRMLAB_MAX_DATA_BYTES`, así que un volumen por encima de cuota **infra-evicta en silencio**: el
-  camino de éxito del guard otra vez. Hoy `/data/extract` tiene 19.811 entradas para 25 imágenes (~2,8k por imagen
-  extraída), luego el presupuesto muerde hacia las ~175 imágenes o con un solo carve recursivo profundo de binwalk.
+- [x] `providers/diff.ts:122` **(B)** — resuelto. `cves` gana `addedTotal`/`removedTotal` y `packages` gana
+  `addedTotal`/`removedTotal`/`changedTotal`, todos opcionales para siempre, contados sobre el conjunto entero
+  igual que `addedBySeverity`; los badges y los `Stat` leen el total con la lista como respaldo, así que ya no
+  pueden contradecir a la tabla de severidades que tienen al lado. Y como en la web se apilaban DOS cortes —el
+  del proveedor y el `slice(0, 60)` de la lista en línea—, la nota «mostrando N de M» compara lo que hay en
+  pantalla contra el total real y no contra el array que la API mandó.
+- [x] `retention.ts:26`, `:95`, `:141` **(B)+(C)** — resuelto. `dirSize` devuelve `{ bytes, truncated }` y decide
+  el truncamiento por «quedó árbol sin visitar» (`stack.length > 0`) y no por `visited >= budget`, que llamaría
+  suelo a un árbol de exactamente `budget` entradas medido entero. `StorageUsage.totalTruncated` es opcional para
+  siempre, y `sweepRetention` avisa **antes** del bucle de que un suelo por debajo de la cuota no demuestra
+  cumplimiento — antes, porque después la línea de desalojos se lee como una aplicación completada. La caminata se
+  extrajo a `retention-usage.ts` para que un test la alcance: `retention.ts` importa `store.js` y ningún fichero de
+  vitest que llegue a `node:sqlite` llega siquiera a cargar, así que este guard llevaba desde siempre sin una sola
+  prueba — y su rama de éxito es justo la que este repo ya ha pagado cuatro veces por no ejercitar. 5 tests,
+  incluida esa rama.
 - [ ] `providers/decompile.ts:120`, `:126`, `:133` **(B)** — `imports`, `symbols` y `strings` son cada uno
   `slice(0, 300)` sin total, mientras `functionCount: rawFuncs.length` en el mismo resultado es exacto: el fichero
   ya conoce la regla y la aplica a uno de cuatro campos. Las longitudes recortadas se imprimen luego como totales

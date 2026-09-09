@@ -209,6 +209,7 @@ export const imageDetail: Messages['imageDetail'] = {
     added: (n: number) => `+${n} añadidos`,
     removed: (n: number) => `−${n} eliminados`,
     bySeverity: (n: number, severity: string) => `+${n} ${severity}`,
+    listedOf: (shown: number, total: number) => `Mostrando ${shown} de ${total}; el resto no se lista.`,
     noNewCves: 'Ningún CVE nuevo respecto a la otra imagen.',
     filesTitle: 'Sistema de ficheros raíz',
     filesNeedExtract: 'Ejecuta la extracción en ambas imágenes para comparar ficheros.',

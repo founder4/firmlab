@@ -399,12 +399,19 @@ export interface FirmwareDiffResult {
     added: { name: string; version: string }[];
     removed: { name: string; version: string }[];
     changed: { name: string; a: string; b: string }[];
+    /** Pre-cap counts. Optional forever — a diff stored by an older build has none. */
+    addedTotal?: number;
+    removedTotal?: number;
+    changedTotal?: number;
   };
   cves: {
     hasData: boolean;
     addedIds: string[];
     removedIds: string[];
     addedBySeverity: Record<Severity, number>;
+    /** Pre-cap counts. Optional forever — a diff stored by an older build has none. */
+    addedTotal?: number;
+    removedTotal?: number;
   };
   files: {
     hasData: boolean;

@@ -908,6 +908,8 @@ function pollJob(jobId: string, onLog: (log: string) => void): Promise<Job> {
 }
 
 const SEVERITY_ORDER: Severity[] = ['Critical', 'High', 'Medium', 'Low', 'Negligible', 'Unknown'];
+/** How many newly-introduced CVE ids the inline list prints. A second cap on top of the provider's — hence the note. */
+const CVE_LIST_CAP = 60;
 const SEVERITY_BADGE: Record<Severity, string> = {
   Critical: 'badge-crit',
   High: 'badge-high',
@@ -1221,9 +1223,18 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
             ) : (
               <>
                 <div className="grid grid-3" style={{ marginBottom: 12 }}>
-                  <Stat label={t.imageDetail.diff.statAdded} value={String(result.packages.added.length)} />
-                  <Stat label={t.imageDetail.diff.statRemoved} value={String(result.packages.removed.length)} />
-                  <Stat label={t.imageDetail.diff.statVersionChanged} value={String(result.packages.changed.length)} />
+                  <Stat
+                    label={t.imageDetail.diff.statAdded}
+                    value={String(result.packages.addedTotal ?? result.packages.added.length)}
+                  />
+                  <Stat
+                    label={t.imageDetail.diff.statRemoved}
+                    value={String(result.packages.removedTotal ?? result.packages.removed.length)}
+                  />
+                  <Stat
+                    label={t.imageDetail.diff.statVersionChanged}
+                    value={String(result.packages.changedTotal ?? result.packages.changed.length)}
+                  />
                 </div>
                 {result.packages.changed.length > 0 && (
                   <div className="table-wrap">
@@ -1258,8 +1269,14 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
             ) : (
               <>
                 <div className="legend" style={{ marginBottom: 10 }}>
-                  <span className="badge badge-ok">{t.imageDetail.diff.added(result.cves.addedIds.length)}</span>
-                  <span className="badge badge-info">{t.imageDetail.diff.removed(result.cves.removedIds.length)}</span>
+                  {/* The TOTAL, so this badge cannot disagree with the severity tally beside it: that one is
+                      counted over every newly-introduced CVE while `addedIds` is a capped, alphabetical prefix. */}
+                  <span className="badge badge-ok">
+                    {t.imageDetail.diff.added(result.cves.addedTotal ?? result.cves.addedIds.length)}
+                  </span>
+                  <span className="badge badge-info">
+                    {t.imageDetail.diff.removed(result.cves.removedTotal ?? result.cves.removedIds.length)}
+                  </span>
                   {SEVERITY_ORDER.filter((s) => result.cves.addedBySeverity[s] > 0).map((s) => (
                     <span key={s} className={`badge ${SEVERITY_BADGE[s]}`}>
                       {t.imageDetail.diff.bySeverity(result.cves.addedBySeverity[s], s)}
@@ -1268,8 +1285,19 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
                 </div>
                 {/* "None added" is a statement about these two images, never about either one's exposure. */}
                 <div className="hint mono" style={{ wordBreak: 'break-word' }}>
-                  {result.cves.addedIds.slice(0, 60).join(', ') || t.imageDetail.diff.noNewCves}
+                  {result.cves.addedIds.slice(0, CVE_LIST_CAP).join(', ') || t.imageDetail.diff.noNewCves}
                 </div>
+                {/* Two caps stack here — the provider's and this list's — so the note names what is on screen
+                    against the real total, not against the array the API happened to send. */}
+                {(result.cves.addedTotal ?? result.cves.addedIds.length) >
+                  Math.min(result.cves.addedIds.length, CVE_LIST_CAP) && (
+                  <div className="hint">
+                    {t.imageDetail.diff.listedOf(
+                      Math.min(result.cves.addedIds.length, CVE_LIST_CAP),
+                      result.cves.addedTotal ?? result.cves.addedIds.length,
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>

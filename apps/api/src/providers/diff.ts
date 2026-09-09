@@ -38,12 +38,27 @@ export interface FirmwareDiffResult {
     added: { name: string; version: string }[];
     removed: { name: string; version: string }[];
     changed: PackageChange[];
+    /**
+     * How many there are, against how many are LISTED. Optional forever — a diff stored by an older build has
+     * none, and absent must read as "not recorded", never as "equal to the array's length".
+     */
+    addedTotal?: number;
+    removedTotal?: number;
+    changedTotal?: number;
   };
   cves: {
     hasData: boolean;
     addedIds: string[];
     removedIds: string[];
     addedBySeverity: Record<Severity, number>;
+    /**
+     * The pre-cap counts. These exist because `addedBySeverity` is tallied over the UNTRUNCATED set while
+     * `addedIds` is the first 500 sorted alphabetically, so a diff introducing 1 400 CVEs rendered "+500 added"
+     * beside a severity breakdown that added up to 1 400 — two numbers from the same result contradicting each
+     * other on screen. Optional forever, for the same reason as `packages`.
+     */
+    addedTotal?: number;
+    removedTotal?: number;
   };
   files: {
     hasData: boolean;
@@ -100,6 +115,9 @@ export function diffPackages(
     added: added.sort(byName).slice(0, PKG_CAP),
     removed: removed.sort(byName).slice(0, PKG_CAP),
     changed: changed.sort(byName).slice(0, PKG_CAP),
+    addedTotal: added.length,
+    removedTotal: removed.length,
+    changedTotal: changed.length,
   };
 }
 
@@ -122,6 +140,10 @@ export function diffCves(aVulns: SbomVuln[], bVulns: SbomVuln[]): FirmwareDiffRe
     addedIds: addedIds.slice(0, CVE_CAP),
     removedIds: removedIds.slice(0, CVE_CAP),
     addedBySeverity,
+    // Counted over the whole set, like `addedBySeverity` beside it — the two must agree or the panel contradicts
+    // itself, which is exactly what it did while only the list was capped.
+    addedTotal: addedIds.length,
+    removedTotal: removedIds.length,
   };
 }
 

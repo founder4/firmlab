@@ -46,6 +46,18 @@ export interface UbootResult {
   varsComplete?: boolean;
   /** What a static read of `bootcmd`/`preboot` found — the command line a script ASSEMBLES. Optional forever. */
   bootScript?: BootScriptReading;
+  /**
+   * How far into the image the search actually looked.
+   *
+   * The env block is located in a bounded PREFIX, and until this field existed a miss returned "No U-Boot
+   * environment found in the image" — a cota presented as an absolute negative, the same defect `fcc.ts` paid for,
+   * on a class where 64–128 MB flash dumps are routine and the env commonly sits high. Optional forever: a result
+   * stored by an older build has none, and absent means "not recorded", never "read the whole file".
+   *
+   * Reported on a successful parse too, and not only on a miss: `varsComplete` speaks for the block that was
+   * found, so a reader who wants to know whether ANOTHER block could be sitting past the prefix needs this.
+   */
+  scan?: { bytesRead: number; totalBytes: number };
 }
 
 // A key is a C-identifier-ish token; a value is any run of printable ASCII (spaces and '=' allowed). A chunk that
@@ -562,17 +574,41 @@ export function auditBootEnv(vars: Record<string, string>, script?: BootScriptRe
 const READ_CAP = 32 * 1024 * 1024;
 const VAR_CAP = 60;
 
-/** Read at most `cap` bytes from the head of a file. */
-function readBounded(p: string, cap: number): Uint8Array {
+/**
+ * Read at most `cap` bytes from the head of a file, reporting how much of it that was.
+ *
+ * The size comes back with the bytes because the caller's negative depends on it: "no env block here" and "no env
+ * block in the part I read" are different claims, and only the file's own size tells them apart.
+ */
+function readBounded(p: string, cap: number): { buf: Uint8Array; bytesRead: number; totalBytes: number } {
   const fd = fs.openSync(p, 'r');
   try {
-    const len = Math.min(fs.fstatSync(fd).size, cap);
+    const totalBytes = fs.fstatSync(fd).size;
+    const len = Math.min(totalBytes, cap);
     const buf = Buffer.allocUnsafe(len);
     fs.readSync(fd, buf, 0, len, 0);
-    return buf;
+    return { buf, bytesRead: len, totalBytes };
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/** Bytes as MB to one decimal — the unit an operator reads a flash dump in. */
+function mb(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * The sentence for "no environment block". Pure and exported so a test reaches both branches: the clean negative
+ * is reserved for an image that FIT in the prefix, and anything larger says what it did not look at.
+ */
+export function describeNoEnvBlock(scan: { bytesRead: number; totalBytes: number }): string {
+  if (scan.bytesRead >= scan.totalBytes) return 'No U-Boot environment found in the image.';
+  return [
+    `No U-Boot environment in the first ${mb(scan.bytesRead)} of a ${mb(scan.totalBytes)} image; the remaining`,
+    `${mb(scan.totalBytes - scan.bytesRead)} was not examined. This is how far the search looked, not a statement`,
+    'that the image has no environment block.',
+  ].join(' ');
 }
 
 /** Cap the surfaced variable map, keeping the boot-relevant keys first so the audit inputs are never dropped. */
@@ -592,8 +628,8 @@ function capVars(vars: Record<string, string>, cap: number): Record<string, stri
   return out;
 }
 
-function notFound(reason: string): UbootResult {
-  return { available: true, found: false, varCount: 0, vars: {}, findings: [], reason };
+function notFound(reason: string, scan?: { bytesRead: number; totalBytes: number }): UbootResult {
+  return { available: true, found: false, varCount: 0, vars: {}, findings: [], reason, ...(scan ? { scan } : {}) };
 }
 
 /**
@@ -602,16 +638,17 @@ function notFound(reason: string): UbootResult {
  * an explicit reason; a successful decode is `static_confirmed` (a fact about the stored env, not device behavior).
  */
 export function runUbootAnalysis(imagePath: string): UbootResult {
-  let buf: Uint8Array;
+  let read: { buf: Uint8Array; bytesRead: number; totalBytes: number };
   try {
-    buf = readBounded(imagePath, READ_CAP);
+    read = readBounded(imagePath, READ_CAP);
   } catch {
     return notFound('The image could not be read.');
   }
-  const block = findEnvBlock(buf);
-  if (!block) return notFound('No U-Boot environment found in the image.');
+  const scan = { bytesRead: read.bytesRead, totalBytes: read.totalBytes };
+  const block = findEnvBlock(read.buf);
+  if (!block) return notFound(describeNoEnvBlock(scan), scan);
   const { vars, entryCount, malformedEntries } = parseUbootEnv(block);
-  if (entryCount === 0) return notFound('No U-Boot environment found in the image.');
+  if (entryCount === 0) return notFound(describeNoEnvBlock(scan), scan);
   const varCount = Object.keys(vars).length;
   const script = readBootScript(vars);
   // Completeness is a claim about what we may infer from a variable's ABSENCE, so it is only made when both ways
@@ -628,6 +665,7 @@ export function runUbootAnalysis(imagePath: string): UbootResult {
     findings: auditBootEnv(vars, script),
     varsComplete,
     bootScript: script,
+    scan,
     reason: `Parsed ${varCount} U-Boot environment variable${varCount === 1 ? '' : 's'} from the image. Static analysis of the stored env bytes — proves the boot configuration, not device behavior.${assembledNote}`,
   };
 }
