@@ -86,13 +86,248 @@ Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `ar
 
 - [ ] Puntuar los vectores CVSS v4.0 en `osv.ts`. Hoy `cvssV3BaseScore` implementa v3.0/v3.1 y devuelve `null` para v4.0, cuya puntuación base necesita la tabla MacroVector; esos avisos quedan sin graduar y se conservan sin recortar, que es el comportamiento seguro, pero no se ordenan. Son 4 de 121 en el corpus cacheado y crecerán.
 - [ ] Re-ejecutar la investigación sobre las imágenes con SBOM tras desplegar esto: los resultados guardados no llevan `totalMatching`, `cveIds` ni `upstream`, así que sus tablas siguen mostrando el denominador de la lista y su cruce contra KEV sigue siendo el vacío que era. La caché de avisos en disco sirve las respuestas sin volver a salir a la red.
-- [ ] Revisar el resto de la auditoría de límites, que quedó a medias: de cuatro grupos sólo uno terminó antes del límite de uso. Pendientes de verificar y decidir, todos reportados con `fichero:línea`: `funcdiff-run.ts:90` (caminata LIFO con cap de 20.000 y sin flag `truncated`, el patrón que `binvuln.ts` ya pagó una vez) y `:210` (población del diff elegida por orden alfabético); `chipsec.ts:490` (trunca la imagen a 64 MB antes de decodificar, sin decirlo); `gitleaks.ts:68` (`findingCount` es post-cap); `disclosure.ts:307` (20 KEV sin total); `diff.ts:100` (sin recuento de descartados). Sin auditar: los grupos A, B y D — entre otros `retention.ts`, `agent/session.ts`, `findings.ts` y las rutas.
+- [x] Terminar la auditoría de límites. Barridos los 558 sitios candidatos del repo en tres frentes —los 83 proveedores; las 44 rutas más `store.ts`/`findings.ts`/`retention.ts`/`corpus.ts`/`opacidad*`; y `agent/`, `research/`, `capture/`, `mcp/`, `packages/core` y `apps/web`—, cada candidato leído y trazado hasta un campo persistido, una respuesta de API/MCP o un píxel. Los cuatro que este punto dejó marcados sin verificar quedan resueltos: `funcdiff-run.ts:90` y `:210` confirmados (ahora `:94` y `:221`), `chipsec.ts:490` confirmado (ahora `:533`), `diff.ts:100` confirmado (en `:122`). **37 defectos verificados**, listados abajo por lo que le hacen al lector; lo revisado y sano queda anotado para que el barrido no se repita.
   - [x] `fcc.ts`: el pase de cadenas leía sólo los primeros 16 MB y un cero se renderizaba como «No FCC ID found in the firmware» — una cota presentada como negativo absoluto. `rawImageStrings` reporta ahora `bytesScanned`/`totalBytes`, `FccResult.scan` lo persiste (opcional para siempre) y, cuando la imagen supera el prefijo, el `reason` dice qué no miró en vez de afirmar que no hay; el negativo limpio se reserva para las imágenes que caben enteras. También anota el corte de listado cuando se alcanzan los 20 IDs.
   - [x] `gitleaks.ts`: `findingCount` era `findings.length` tras el `slice(0, FINDING_CAP)`, así que un rootfs con más de 500 leaks persistía 500 como si fueran todos (el total real sólo iba al log). Nuevo campo `total` (opcional para siempre) con el recuento pre-cap; `findingCount` queda como el listado, y la web muestra «Showing 500 of N» cuando el listado se truncó.
   - [x] `disclosure.ts`: el borrador de divulgación listaba `kevMatches.slice(0, 20)` sin decir que había más, presentando los primeros 20 KEV como el conjunto entero —justo las entradas que un analista más necesita saber que existen—. Ahora, cuando hay más de 20, añade una línea «showing 20 of N KEV matches» (`kevMore`, en ambos idiomas).
+
 - [ ] Anotar como patrón, no como incidencias: los tres defectos de esta clase encontrados hasta ahora (`extractStrings`, `scanSignatures`, `sbom.ts`) comparten forma —cap aplicado antes de ordenar, o recuento leído de la lista ya recortada— y los tres cambiaban lo que la pantalla afirmaba. Merece un test de propiedad o una regla de lint que detecte `.slice(` sobre la misma expresión de la que luego se deriva un recuento.
-- [ ] Re-analizar el corpus desplegado tras desplegar `secretScan` (`POST /analysis/reanalyze-all`): los 25 análisis guardados son de builds anteriores y no llevan el campo, así que las 5 imágenes truncadas —GL.iNet 11,0 %, Obsbot 16,3 %, GE800 21,6 %, Tenda 71,5 %, Framework BIOS 92,5 %, 195,6 MB sin examinar en total— seguirán sin mostrar su aviso de cobertura.
+- [x] Re-analizar el corpus desplegado tras desplegar `secretScan`. Ya estaba hecho, y lo dice una medición y no una suposición: el reindexado del corpus comprueba, por imagen, si el análisis guardado declara su cobertura, y sobre las 25 imágenes del despliegue devolvió **cero** entradas `static-scan` en «cota NO CONSTA» — es decir, las 25 llevan el campo, y las cinco acotadas (GL.iNet 11,0 %, Obsbot 16,3 %, GE800 21,6 %, Tenda 71,5 %, Framework BIOS 92,5 %) muestran su aviso. Lo que sigue sin migrar es el SBOM: 7 de los 8 resultados guardados son anteriores a `packageTotal`.
 - [ ] Exponer `credmatch` en la web: es el único route sin ninguna referencia en `apps/web/src`, pese a sus 1.337 líneas, un source estable en el libro mayor y ✓ en cuatro muestras de la matriz como «W3 · Credential cross-reference».
+
+### La auditoría de límites — 37 defectos verificados, pendientes de arreglo
+
+Cuatro subpatrones, los mismos que pagaron `ghidra`, `sbom`, `scanSignatures`, `secrets`, `fcc`, `gitleaks`, `osv`
+y `disclosure`: **(A)** cap antes de ordenar, así que el conjunto superviviente es un artefacto del orden de
+llegada · **(B)** un recuento leído de la lista ya recortada y presentado como total · **(C)** una cota
+renderizada como negativo limpio · **(D)** un presupuesto gastado en candidatos que no pueden responder. La regla
+de la casa para el arreglo: un campo añadido a un resultado persistido es **opcional para siempre**.
+
+#### Cambian un veredicto, o convierten una cota en un negativo
+
+- [ ] `copilot.ts:78` **(A)** — `findings.slice(0, 120)` sobre el `ORDER BY createdAt DESC` de `listFindings`, así
+  que la «evaluación priorizada» del copiloto la escriben los proveedores que corrieron *los últimos*. Medido
+  contra la base desplegada: en la imagen `81154df7` (799 hallazgos, 41 críticos / 230 altos) **las 120 filas que
+  llegan al modelo son todas de `sbom`**, y `symreach`, `binvuln`, `webtaint`, `gitleaks`, `credmatch`, `fsaudit`,
+  `emulate-system`, `zeroday` y `fwhunt` caen enteros. Ordenar por `findingRank` (ya exportado de `@firmlab/core`,
+  ya usado por la narrativa) antes del corte, y declarar la regla y el descarte en `buildCopilotUserPrompt`.
+- [ ] `providers/component-cve.ts:367` **(A)+(C)** — la caminata del rootfs es una pila LIFO con `WALK_CAP = 8000`
+  dirents y sin flag de truncamiento, mientras el `reason` dice «N componente(s) versionados, M CVE emparejados de
+  la tabla curada». Es el peor del grupo porque es **el camino de la afirmación CVE curada**: un veredicto que
+  suena completo sobre una caminata parcial.
+- [ ] `providers/funcdiff-run.ts:94` **(B)+(C)** — `listElves` recorre ambos rootfs con una pila LIFO que para a los
+  20.000 dirents y devuelve un `Map` pelado; `paired: shared.length` presenta una intersección capada como el
+  emparejamiento entero. Peor: como las dos caminatas pueden truncar en subárboles distintos, un par grande puede
+  llegar a `empty('the two rootfs share no binary at the same path — they are probably not two builds of one
+  device')`, **un veredicto seguro y falso fabricado enteramente por la cota**. Nunca emitir esa frase si alguna
+  caminata truncó.
+- [ ] `providers/uboot.ts:562` / `:607` **(C)** — `readBounded(imagePath, READ_CAP)` lee 32 MB y luego devuelve
+  `notFound('No U-Boot environment found in the image.')`. El defecto de `fcc.ts` literal, en una clase donde los
+  volcados de 64–128 MB son rutina. El comentario de módulo dice «reads a bounded prefix»; la frase que ve el
+  operador, no.
+- [ ] `llm.ts:152` y `:182` **(C)** — ni `parseChatCompletionsResponse` ni `parseAnthropicResponse` leen
+  `finish_reason`/`stop_reason`, así que una respuesta cortada en `maxTokens` (4096 por defecto, y los tokens de
+  razonamiento de DeepSeek cuentan) vuelve como un `LlmResult` normal — y `opacidad.ts:1094` deja que **ese texto
+  truncado sustituya a la narrativa determinista completa** y lo guarda en la fila del job como el informe.
+- [ ] `capture/proxy.ts:233` (y la misma forma en `capture/agent.ts:78`) **(C)** — un cuerpo por encima de
+  `MAX_BODY_BYTES` (64 MB) no se lee nunca, así que `scoreFirmwareFlow` corre sobre un buffer vacío y `carved`
+  queda en 0; el flujo se dibuja en `Capture.tsx:503` idéntico a uno cuyos bytes SÍ se examinaron y no eran
+  firmware, y `realizedCeiling` (`capture/preflight.ts:154`) reporta `metadata_only` — un negativo limpio para una
+  captura que sí aterrizó.
+- [ ] `tools.ts:236-255` **(C)** — el único `catch {}` de `probe()` colapsa «binario ausente» (ENOENT), «la sonda
+  salió distinto de cero» y «la sonda excedió `timeoutMs`» en un mismo `available: false`, que `/tools` agrega en
+  `groups[…].available/total` y cada proveedor convierte en `blocked_by_platform`: **un timeout se renderiza como
+  «este despliegue no puede»**, la trampa que CLAUDE.md ya nombra para las sondas de la JVM y de angr.
+- [ ] `agent/session.ts:337` **(C)** — `if (target && gov.check().ok)` salta el nodo ④ entero cuando el gobernador
+  está agotado **sin registrar paso alguno** (todos los demás caminos de salto registran uno con su motivo) y sin
+  motivo de parada; la corrida llega a `persist(session, 'done', …)` y, si una emulación aislada confirmó algo,
+  `readAgentSession` la lee como `proven` — un análisis terminado cuyo nodo de razonamiento nunca corrió.
+- [ ] `agent/session.ts:279` **(C)** — `runClosingSynthesis` vuelve en silencio con el gobernador agotado
+  (`if (!governor.check().ok) return;`), dejando la sesión en `done` con `haltReason: null` y sin paso `synthesis`,
+  mientras el camino de *error* cuatro líneas más abajo sí registra un `skipped` con su motivo.
+- [ ] `providers/webprobe.ts:253` + `:262` **(C)+(D)** — 40 puntos de inyección × (6 payloads de comando + 4 de
+  traversal) = 400 peticiones contra `maxRequests = 200`, así que con los valores por defecto el `break outer`
+  salta **siempre** hacia el punto 20; el negativo dice entonces «No command injection or traversal reproduced over
+  200 requests against 40 injection point(s)», reclamando cobertura de 40 puntos de los que la mitad no se tocó.
+  Aparte, `[...discovered, ...BUILTIN_POINTS].slice(0, 40)` concatena descubiertos primero, así que una página con
+  40+ formularios descarta en silencio todos los endpoints de router integrados.
+- [ ] `providers/chipsec.ts:533` **(C)** — `copyBounded(firmwarePath, imgCopy, FIRMWARE_READ_CAP)` trunca la imagen
+  a 64 MB antes de que `chipsec_util uefi decode` la vea; si el decode no produce listado, el resultado es
+  `blocked('… the image has no parseable UEFI firmware volume … Not a UEFI/BIOS image, or an unsupported layout.')`
+  — un veredicto de identidad sobre una copia recortada, sin mencionar el corte. (Sus otros dos caps,
+  `MODULE_SAMPLE_CAP` y `VARIABLE_SAMPLE_CAP`, están resueltos de forma ejemplar.)
+- [ ] `capture/scan.ts:66` (con `providers/discover.ts:264`) **(A)+(C)** — `tryExec` devuelve a propósito el stdout
+  parcial de una herramienta abortada, así que un `arp-scan` matado en `discoverTimeoutMs` da un prefijo del rango
+  de direcciones; `runDiscovery` reporta entonces `Swept <subnet> with arp-scan: N device(s)` y el transcript
+  escribe `[done] inventory updated with N device(s)`. Un barrido cortado se presenta como la LAN, y lo que
+  sobrevive son las direcciones bajas.
+- [ ] `providers/rtos.ts:78` / `:160` / `:289` **(C)** — `SCAN_CAP`/`FIRMWARE_READ_CAP` de 16 MB, y el negativo «No
+  eCos/flag markers either — static analysis found nothing to assert.» se afirma sobre ese prefijo sin nombrarlo.
+  Magnitud baja (un blob bare-metal rara vez pasa de 16 MB), pero la frase es una cota vestida de negativo.
+- [ ] `providers/encrypted.ts:232` **(C)** — `READ_CAP` de 1 MB; `plaintextTags` y `verdict.bodyEntropy` se calculan
+  sobre ese prefijo, y sin embargo el `reason` imprime «body entropy X bits/byte» y el fundamento del hallazgo
+  afirma «The body is a high-entropy plateau» — una afirmación sobre el cuerpo entero desde una muestra de 1 MB.
+
+#### Presentan una cota como total
+
+- [ ] `providers/diff.ts:122` **(B)** — `addedIds: addedIds.slice(0, CVE_CAP)` (500) e igual `removedIds`, sin
+  ningún total en `FirmwareDiffResult['cves']`; `apps/web/src/pages/ImageDetail.tsx:1261` dibuja
+  `+${result.cves.addedIds.length} added`, así que un diff que introduce 1.400 CVE muestra «+500 added» — y lo
+  muestra **junto a** `addedBySeverity`, que `diffCves` cuenta sobre el conjunto sin truncar, de modo que los dos
+  badges se contradicen en pantalla. El bloque `files` del mismo resultado lo hace bien (`counts` en `:175`), que
+  es lo que convierte esto en un olvido y no en un diseño. Mismo patrón en `packages`, `:100`.
+- [ ] `retention.ts:26`, `:95`, `:141` **(B)+(C)** — el `budget = 500_000` de `dirSize` para la caminata a medio
+  árbol y devuelve una suma parcial que `storageUsage()` reporta como `totalBytes` sin flag —mientras la caché de
+  research medida dos líneas más abajo **sí** devuelve `truncated` más una nota—, y `sweepRetention` compara ese
+  suelo contra `FIRMLAB_MAX_DATA_BYTES`, así que un volumen por encima de cuota **infra-evicta en silencio**: el
+  camino de éxito del guard otra vez. Hoy `/data/extract` tiene 19.811 entradas para 25 imágenes (~2,8k por imagen
+  extraída), luego el presupuesto muerde hacia las ~175 imágenes o con un solo carve recursivo profundo de binwalk.
+- [ ] `providers/decompile.ts:120`, `:126`, `:133` **(B)** — `imports`, `symbols` y `strings` son cada uno
+  `slice(0, 300)` sin total, mientras `functionCount: rawFuncs.length` en el mismo resultado es exacto: el fichero
+  ya conoce la regla y la aplica a uno de cuatro campos. Las longitudes recortadas se imprimen luego como totales
+  en el log del job (`:139`) y, de cara al usuario, en el resumen de triaje del informe HTML (`report.ts:184-186`).
+  Aguas abajo, `taint.ts:88` deriva sumideros y fuentes de esa lista capada de imports, así que el
+  `hasTaintSurface: false` que llega a `opacidad.ts:894` y `agent/zeroday.ts:139` puede ser un artefacto del cap.
+- [ ] `providers/webtaint.ts:262` (+ `:372`) **(B)+(C)** — `listHandlers` para en `MAX_FILES = 400` en el orden de
+  `HANDLER_DIRS`, y `runWebTaint` además hace `continue` sobre cualquier handler de más de 512 KB sin registrarlo;
+  el `reason` dice entonces «Scanned N web handlers, M tainted», donde N es el recuento post-cap y post-salto
+  presentado como la superficie web.
+- [ ] `providers/kernelposture.ts:1449` / `:1468` **(B)** — `moduleCount: kos.length` se calcula desde
+  `walkFiles(..., WALK_FILE_CAP)` (4.000 ficheros, LIFO, sin flag), así que el denominador de la frase de `:1542`
+  —«X de Y módulos no se abrieron (cap N, ordenado por ruta)»— está él mismo capado. La mitad `MODULE_SAMPLE_CAP`
+  está bien resuelta (`inspectedCount` frente a `moduleCount`); lo silencioso es la caminata de debajo.
+- [ ] `providers/extract.ts:453` / `:468` **(B)** — `registerRootfsBinaries` para en `MAX_BINARIES = 2000` con un
+  `break` sobre `entries` en orden de árbol y devuelve sólo `count`; nada registra cuántos ELF se saltaron. El
+  recuento del panel Binaries (`ImageDetail.tsx:473` y `:524`) y **todo proveedor que llame a `listBinaries`**
+  tratan por tanto un prefijo del orden de caminata como el inventario completo.
+- [ ] `providers/devicetree.ts:605` **(B)** — `collectFromDir` deja de *recolectar* al llegar a `BLOB_CAP` (8), así
+  que un noveno o vigésimo `.dtb` en disco nunca llega a ser candidato y es por tanto invisible para `droppedBlobs`
+  (`:725`) — justo el contador cuya nota en `:764` («N device tree(s) más allá del cap de 8 no se analizaron»)
+  existe para declarar ese cap. Un directorio con 20 dtb reporta 8 árboles y ninguna nota.
+- [ ] `corpus.ts:253` y `:264` **(B)** — `credentialReuse` y `componentPrevalence` son `LIMIT 200` (correctamente
+  tras `ORDER BY imageCount DESC`) sin un `COUNT(*)` hermano, y `/corpus/overview` entrega los arrays a la página
+  como «el corpus»; con 200 filas la página no puede decir que hay más. Hoy no muerde (0 grupos de reuso, 0 de
+  prevalencia), pero el reindexado existe para que deje de ser cero. *(Números de línea previos a `f61945b`.)*
+- [ ] `corpus.ts:107` **(C)** — `listReachabilityPriors` capa en 200 ordenando por `createdAt DESC`, y **ambos**
+  consumidores (`research/run.ts:347`, `agent/zeroday.ts:173`) filtran por priors *confirmados* **después** del cap,
+  así que en cuanto una familia pasa de 200 filas un prior probado se cae por el final y se lee como «no hay prior
+  para esta familia». Filtrar o rankear dentro de la consulta.
+- [ ] `copilot.ts:97` **(B)** — `operatorAssertions: asserted.slice(0, 40)` mientras `counts` (`:96`) sólo lleva
+  `findings` y `binaries`, y el prompt de `:111` le dice al modelo «Counts may exceed the arrays shown; use
+  `counts` for totals»: para el único array cuya sobreafirmación justifica todo el corte operador/medido, ese total
+  no existe. Añadir `counts.operatorAssertions`.
+- [ ] `agent/nodes.ts:218` **(B)+(A)** — `signatures: analysis.signatures.slice(0, 40)` entrega al modelo de triaje
+  40 aciertos **en orden de offset** y sin recuento de lo descartado, aunque `analysis.signatureScan.matched` está
+  en el mismo bundle (5.004 listadas de 32.372 en la Obsbot de 61,7 MB). El modelo lee el array como el conjunto de
+  firmas de la imagen y decide `resolvedClass` / `shouldExtract` con él.
+- [ ] `agent/nodes.ts:420` **(B)** — `binaries.slice(0, 60)` está al menos rankeado (`listBinaries` ordena por
+  `networkFacing DESC, path ASC`), pero el contexto de selección de objetivos no declara total, así que un modelo
+  eligiendo objetivos de emulación sobre un rootfs de 400 ELF lee el array como el inventario.
+- [ ] `research/run.ts:118` **(B)+(C)** — `scanRootfsKeys` recorre con `visited < 4000 && out.length < 20` y salta
+  todo fichero ≥ 32 KiB, sacando directorios en orden DFS; `:326` registra luego `Keys: ${keyMaterial.length}
+  embedded` y ese mismo array pasa a ser `IntelContext.keyMaterial`, que el prompt de inteligencia trata como *el*
+  material de clave embebido del borrador de divulgación. En un rootfs de más de 4.000 entradas el recuento es un
+  suelo producido por la disposición de directorios, y nada lo dice.
+- [ ] `apps/web/src/pages/ImageDetail.tsx:619` **(A)+(B)** — `analysis.entropy.highEntropyRegions.slice(0, 20)`
+  dibuja las veinte primeras regiones *por offset* sin total en ningún sitio del panel. La API devuelve la lista
+  entera; una imagen con más regiones pierde las posteriores —a menudo las mayores— y el lector no tiene forma de
+  saber que la tabla es un prefijo. Ordenar por tamaño antes del corte y añadir el «mostrando N de M» que ya
+  llevan las tablas de OSV y del mapa de componentes.
+- [ ] `apps/web/src/pages/Corpus.tsx:124` **(B)** — `overview.componentPrevalence.slice(0, 100)` recorta la lista
+  que la API ya limitó a 200, sin total y sin nota al pie: las filas 101–200 desaparecen sin nada en pantalla que
+  indique el corte.
+
+#### Gastan un presupuesto en un orden sin significado
+
+- [ ] `opacidad.ts:730` / `:759` **(A)** — `selectExportReachTargets(listBinaries(id), 4)` elige 4 objetos y la
+  línea de paso de W9 dice `export reachability: 4 selected object(s), 0 reachable sink path(s)` sin denominador y
+  sin regla de selección, cuando el pozo real de candidatos son 896 `.so`/`.ko` en `81154df7` (160/135/131/130 en
+  los cuatro TP-Link/Tenda) — y ese pozo es a su vez el `MAX_BINARIES = 2000` en orden de caminata de
+  `providers/extract.ts:453`. Contar los candidatos filtrados y declarar la regla como ya hace `binvulnRun`.
+- [ ] `providers/funcdiff-run.ts:221` **(A)** — `changedPaths.slice(0, maxPairs)` se queda con los 20 binarios
+  cambiados **alfabéticamente** primeros, porque `shared` se ordena en `:200`. El truncamiento en sí se reporta
+  bien (`notAnalyzed`, más un hallazgo `function-diff-truncated` en `:313`), pero *cuáles* 20 sobreviven lo decide
+  el alfabeto, así que en un parche de seguridad `/bin/ash` gana a `/usr/sbin/httpd`.
+- [ ] `research/run.ts:321` **(D)+(B)** — el presupuesto de security.txt se gasta en `provenance.domains.slice(0,
+  5)`, es decir los cinco primeros en *orden de escaneo de cadenas* de una lista ya capada en 20 por `uniqCap`
+  (`providers/provenance.ts:54`); `:326` reporta luego `Disclosure: ${checked}/${securityContacts.length} domains
+  checked`, cuyo denominador es la lista ya truncada, y la web (`ImageDetail.tsx:1710`) sólo dibuja esas filas. Un
+  operador lee «no security.txt» de un fabricante cuyo dominio real nunca se preguntó.
+- [ ] `agent/zeroday.ts:159` **(A)** — `relatedFindings` filtra por binario y luego hace `.slice(0, 12)` sobre el
+  orden de recencia de `listFindings`, sin orden por severidad y sin total, así que un hallazgo estático crítico
+  del mismo binario registrado por una etapa anterior cae en favor de doce filas `info` más nuevas — en el
+  contexto que decide qué sumideros pasan a ser candidatos de zero-day.
+- [ ] `agent/zeroday.ts:171` **(A)** — `priors.vulnerableComponents` es `refs.components.filter(cveCount > 0)
+  .slice(0, 10)`, y `corpusRefs` (`corpus.ts:294`) lee `component_occurrence` **sin `ORDER BY`**, o sea en orden de
+  inserción de SQLite: los diez componentes que se presentan al modelo como los vulnerables de la familia son los
+  diez insertados primero, no los de más CVE. Igual `confirmedBefore` en `:175`.
+
+#### Recortan sin decirlo, con menos consecuencia
+
+- [ ] `opacidad-narrative.ts:87` **(A)+(C)** — `buildAttackPath` rankea bien y luego hace `.slice(0, 6)`, pero la
+  sección se titula «Attack path (chain of evidence)» y no declara ni cuántas filas cualificaron ni la regla: en
+  `81154df7` son **6 de 527** filas no descartadas de severidad media o superior (120 en `398d50ef`, 90 en
+  `57c12e70`).
+- [ ] `providers/exportreach.ts:192` (que llega al agente por `mcp/server.ts:472` → `jobPayload`, sin glosa)
+  **(C)** — `summarise` cuenta sólo `reachable`, `not_reached` y `absent`, así que la frase que lee el agente omite
+  en silencio todo sumidero cuyo desenlace fue `budget_exhausted` o `no_call_site`
+  (`scripts/angr-cfgreach.py:197,205`). Implica que cada sumidero preguntado obtuvo respuesta; uno con presupuesto
+  agotado no obtuvo ninguna, y `buildExportReachFindings` tampoco emite nada por él. Es además la única herramienta
+  de alcanzabilidad que **no** pasa por el mapa `meaning` de `reachabilityPayload`.
+- [ ] `routes/chipsec.ts:45-46` (y `routes/renode.ts:28,33`) **(C)** — los `seconds` del operador se acotan en
+  silencio (5–180 y 3–120) y luego **no se registran en los params del job** (`startJob(id, 'chipsec', {}, …)`), así
+  que `/images/:id/runs` —el registro construido precisamente para volver de una línea a la corrida que la
+  produjo— no puede decir con qué presupuesto de tiempo salió un veredicto, al contrario que `symreach`, `fuzz` y
+  `webprobe`, que sí persisten el suyo.
+
+#### Adyacentes y limítrofes, valorados y no incluidos arriba
+
+- [ ] `providers/extract.ts:360` — `walkRootfs` capa en 100.000 entradas en orden DFS y el resultado alimenta
+  `summarizeFs` → `summary.totalFiles`, las listas de setuid/world-writable/notables y el inventario de ELF
+  registrados. `Walked N filesystem entries` y `files: summary.totalFiles` se presentan como totales sin flag.
+- [ ] `packages/core/src/structure.ts:229` (`looksLikeEcos`) y `mcu.ts:194` (`decodeAscii`) — dos prefijos de 4 MB
+  que convierten «el marcador no está en los primeros 4 MB» en un veredicto de clase sin decirlo. El comentario
+  argumenta que ninguna imagen que llega ahí alcanza el cap; la aritmética es la misma **(C)** si alguna lo hace.
+- [ ] `apps/web/src/components/ReportBuilder.tsx:216` — el informe exportado recorta la tabla de estructura a 24
+  segmentos sin total al lado.
+
+#### Auditado y sano — para que el barrido no se repita
+
+Cumplen la regla, verificados en el sitio del cap *y* en su camino de reporte: `binvuln.selectFindings` y
+`fsbrowse.ts` (`totalEntries` + `truncated` + `truncationRule`) son las dos referencias · `compmap.selectElfScan`
+(rankea antes del cap, `dropped`/`total`/`rule`) · `nvram.ts` · `fsaudit.ts` · `nvd.ts` · `hashlookup.ts`
+(`skipped_cap` separa «nunca preguntado» de «preguntado sin acierto») · `fdt.ts` · `auxsecrets.ts` · `fssearch.ts` ·
+`egress.ts` · `pem-scan.ts` · `boot-cmdline.ts` · `certs.ts` · `symreach.ts` · `updatepath.ts` · `credmatch.ts` ·
+`kmod.ts` (regla explícita «por PUNTUACIÓN y luego RUTA, nunca por orden de caminata») · `yarascan.ts` ·
+`fwhunt.ts` + `fwhunt-outcome.ts` · `funcdiff.ts` · `exportreach.ts` (`namedTruncated`) · `extract-diagnose.ts` ·
+`extract-neutered.ts` · `report-assertions.ts` · `coverage.ts` · `emulate-system.ts` · los caps de módulo y
+variable de `chipsec.ts` · `VAR_CAP`/`MAX_VARIANTS` de `uboot.ts` · los caps de periférico de `devicetree.ts` ·
+`esp.ts`. En el store y el libro mayor: `store.ts` (sus dos `LIMIT` son `LIMIT 1` legítimos; `listFindings`,
+`listJobs`, `listBinaries`, `listImages`, `listCaptureFlows`, `listSteps` no están capados), `findings.ts`,
+`findings-retire.ts` (`retirementNote` es el ejemplo trabajado), `findings-normalize.ts`, `operator-findings.ts`,
+`opacidad-leads.ts` y `opacidad-plan.ts` (`capped` *y* `cappedByKind`, más el paso «W9 · Re-plan (cap reached)»),
+`opacidad-exportreach.ts`. En las lanes: `agent/governor.ts`, `agent/approval.ts`, `agent/intel.ts`;
+`research/cache.ts` (el modelo del género: `scanCacheEntries` devuelve `truncated` y `measureResearchCache` dice
+que es un suelo), `research/egress.ts`; los 15 de `capture/` salvo `proxy.ts`/`agent.ts`/`scan.ts`; `mcp/format.ts`
+entero salvo `firmlab_export_reachability`. En core: `strings.ts`, `analyze.ts`, `signatures.ts` (los ya
+arreglados), `entropy.ts`, `filesystem.ts`, `findings-rank.ts`, `binwalk.ts`. En web: `ComponentMap.tsx`,
+`FindingsLedger.tsx` (`selectLedgerRows`), `SimulationMenu.tsx`, `HardwareInterfaces.tsx`,
+`DeepAnalysisDetails.tsx`, las tablas de OSV/NVD, gitleaks y SBOM de `ReportBuilder.tsx`.
+
+Caps que existen y no pueden morder, deliberadamente fuera: `servicemap.ts:416`, `fsaudit.ts:586`,
+`portmap-run.ts:71`. Fuera de alcance por definición: truncamiento de líneas de log.
+
+**Cobertura del barrido, dicha y no implicada.** Siete ficheros no se leyeron de punta a punta —`emulate-system.ts`
+(2.449 líneas), `updatepath.ts` (2.290), `fwhunt.ts` (1.725), `kernelposture.ts` (1.653), `kmod.ts` (1.490),
+`yarascan.ts` (1.423), `credmatch.ts` (1.337)—: de cada uno se leyó **todo sitio de cap y su camino de reporte**.
+Veinte ficheros pequeños de `providers/` se cribaron por grep de constantes de cap, `.slice(0, N)`, bucles de
+caminata acotados y campos `Count`/`Total` asignados desde `.length`, salieron vacíos y no se leyeron línea a
+línea: `boot-diagnose`, `boot-reproducibility`, `carve`, `decoy`, `discover`, `extract-recover`, `flowscore`,
+`full-system-run`, `guest-console`, `guest-repair`, `isolate`, `kernel-cve`, `kev`, `portmap`, `preflight`,
+`rootfs-gate`, `securitytxt`, `trigger`, `fuzz`. De `store.ts`, las líneas 1–500 (esquema y tipos de fila) sólo por
+grep. `firmlab_run_worker` devuelve resultados de proveedor en crudo, así que **cualquier cap dentro de esos once
+proveedores llega al agente sin glosa**; no se auditó esa superficie como tal.
+
 
 ### Deuda estructural
 
