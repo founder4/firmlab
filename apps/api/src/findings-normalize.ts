@@ -34,6 +34,13 @@ export function normalizeSecrets(secrets: StringHit[]): FindingDraft[] {
     }));
 }
 
+/** The minimum a row must expose for its credential identity to be read: a draft, or a stored row rehydrated. */
+export interface CredentialBearingFinding {
+  kind: string;
+  severity: string;
+  evidence?: unknown;
+}
+
 /**
  * The cross-image credential occurrences a set of findings implies — every draft that stamped a redaction-safe
  * `evidence.secretHash` (an nvram value) or `evidence.secretHashes` (the key material in a file). Pure and
@@ -41,9 +48,13 @@ export function normalizeSecrets(secrets: StringHit[]): FindingDraft[] {
  * ever touches the secret. Deliberately NOT read: `secrets` (recorded at upload from its raw values, which it
  * stores verbatim) and certificate findings — a certificate is public material and must never enter the
  * credential-reuse table, the same over-claim the gitleaks route's comment already warns dnscrypt keys made.
+ *
+ * Takes the three fields it reads rather than a whole `FindingDraft`, so the same function serves a draft on its
+ * way to the ledger and a row already IN it: `corpus-reindex.ts` reconciles the corpus from stored rows, which
+ * carry their evidence as JSON and have no draft to reconstruct.
  */
 export function credentialHashesFromFindings(
-  drafts: FindingDraft[],
+  drafts: CredentialBearingFinding[],
 ): { hash: string; kind: string | null; severity: string | null }[] {
   const out: { hash: string; kind: string | null; severity: string | null }[] = [];
   for (const d of drafts) {

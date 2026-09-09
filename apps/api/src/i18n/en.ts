@@ -582,6 +582,34 @@ export const en = {
         'Nothing leaves this machine. What it changes is the ARTEFACT, and more than the repair does: `init=/bin/sh` replaces the vendor’s init, so `/sbin/init` never runs and nothing in `inittab` — its getty included — is started. A port that answers on such a boot answers a system this workbench assembled by hand, and every finding from it carries both interventions in `interventions`, under its own finding kind so it can never be counted as a boot that answered as shipped.',
     },
   } satisfies Record<LaneFlagName, { label: string; effect: string; egress: string }>,
+
+  /**
+   * The corpus reconciliation's own verdict. Recomputed on every run and describing THIS DEPLOYMENT's bench, not
+   * the firmware, so it is localised — the rule the catalogue's header states.
+   *
+   * The last sentence is the one that earns the section: a reindex that reported only "N rows added" would let a
+   * source that never ran read exactly like a source that ran and found nothing, which is the conflation this
+   * project spends most of its shape preventing.
+   */
+  corpusReindex: {
+    verdict: (p: { imageCount: number; inserted: number; offered: number }) =>
+      [
+        `Reconciled ${p.imageCount === 1 ? '1 image' : `${p.imageCount} images`} from state already persisted: no tool ran`,
+        'and no firmware byte was re-read, so this recovers what the providers had already measured and nothing beyond it.',
+        `${p.inserted} of ${p.offered} occurrences were missing and have been added; the rest were already recorded.`,
+        'A source with no images under "with input" never ran for them, which is not the same as having run and found nothing.',
+      ].join(' '),
+    reachabilityPrior:
+      'Written only when a live run CONFIRMS a subject, and keyed by that run (binary:sink) rather than by anything stored. No row on disk can rebuild one, so this table is untouched by a reindex and its size measures what has been confirmed, never what is there.',
+    corpusRule:
+      'Human-curated by definition: a watchlist rule is promoted by a person and is never derived from an image. Untouched by a reindex.',
+    boundedNote: (p: { count: number }) =>
+      `${p.count === 1 ? '1 stored input declares' : `${p.count} stored inputs declare`} that it stopped short of what it was reading. A reconciliation inherits that bound and does not widen it: the rows are what that bounded pass saw, and the remainder was not examined then and is not examined now.`,
+    unrecordedNote: (p: { count: number }) =>
+      `A further ${p.count === 1 ? 'input predates' : `${p.count} inputs predate`} the field that would state its coverage, so whether it was bounded is NOT RECORDED — which is not the same as its having read everything.`,
+    unstampedNote: (p: { rows: number; imageCount: number }) =>
+      `${p.rows} ledger row(s) across ${p.imageCount === 1 ? '1 image' : `${p.imageCount} images`} come from a provider that stamps a credential identity but carry none: they were written before it did. That identity was never computed, so it is not on disk for a reconciliation to read — re-running those providers is what produces it, and this is the one gap a reindex cannot close.`,
+  },
 };
 
 export type Messages = typeof en;

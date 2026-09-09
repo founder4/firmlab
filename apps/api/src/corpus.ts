@@ -12,9 +12,21 @@
  * exists or not, and re-running a provider produces identical rows. Deleting an image cascades its occurrences.
  */
 import { randomUUID } from 'node:crypto';
-import type { Architecture, FirmwareClass, ImageIdentity } from '@firmlab/core';
+import type { Architecture, FirmwareClass, ImageIdentity, StaticAnalysis } from '@firmlab/core';
+import {
+  CORPUS_REINDEX_SOURCES,
+  type CorpusReindexReport,
+  type CorpusReindexSource,
+  type ReindexImagePlan,
+  type ReindexText,
+  type UnreconciledTable,
+  planImageReindex,
+  summarizeReindex,
+} from './corpus-reindex.js';
+import type { GitleaksResult } from './providers/gitleaks.js';
+import type { SbomResult } from './providers/sbom.js';
 import { hashSecret } from './secret-hash.js';
-import { elevateFinding, getDb, listFindings, listImages } from './store.js';
+import { type JobRow, elevateFinding, getDb, listBinaries, listFindings, listImages, listJobs } from './store.js';
 
 // The cross-image credential key lives in a store-free module so the pure providers that produce credential
 // material can compute the SAME hash without dragging SQLite into their unit tests. Re-exported for the callers
@@ -35,22 +47,32 @@ export function deviceFamilyKey(identity: {
 }
 
 // === Recording (Level 0, additive) ===
+//
+// Each recorder returns how many rows it actually INSERTED, which under `INSERT OR IGNORE` is the number that
+// were missing rather than the number offered. The live call sites ignore it — they are writing what they just
+// measured — but it is the whole measurement for `reindexCorpus`, which otherwise could only report how many
+// times it called insert.
 
-export function recordArtifacts(imageId: string, rows: { sha1: string; path: string; arch: string | null }[]): void {
+export function recordArtifacts(imageId: string, rows: { sha1: string; path: string; arch: string | null }[]): number {
   const stmt = getDb().prepare(
     'INSERT OR IGNORE INTO artifact_occurrence (sha1, imageId, path, arch) VALUES (?, ?, ?, ?)',
   );
-  for (const r of rows) if (r.sha1) stmt.run(r.sha1, imageId, r.path, r.arch);
+  let inserted = 0;
+  for (const r of rows) if (r.sha1) inserted += Number(stmt.run(r.sha1, imageId, r.path, r.arch).changes);
+  return inserted;
 }
 
 export function recordCredentials(
   imageId: string,
   creds: { value: string; kind: string | null; severity: string | null }[],
-): void {
+): number {
   const stmt = getDb().prepare(
     'INSERT OR IGNORE INTO credential_occurrence (hash, imageId, kind, severity) VALUES (?, ?, ?, ?)',
   );
-  for (const c of creds) if (c.value) stmt.run(hashSecret(c.value), imageId, c.kind, c.severity);
+  let inserted = 0;
+  for (const c of creds)
+    if (c.value) inserted += Number(stmt.run(hashSecret(c.value), imageId, c.kind, c.severity).changes);
+  return inserted;
 }
 
 /**
@@ -63,18 +85,26 @@ export function recordCredentials(
 export function recordCredentialHashes(
   imageId: string,
   creds: { hash: string; kind: string | null; severity: string | null }[],
-): void {
+): number {
   const stmt = getDb().prepare(
     'INSERT OR IGNORE INTO credential_occurrence (hash, imageId, kind, severity) VALUES (?, ?, ?, ?)',
   );
-  for (const c of creds) if (c.hash) stmt.run(c.hash, imageId, c.kind, c.severity);
+  let inserted = 0;
+  for (const c of creds) if (c.hash) inserted += Number(stmt.run(c.hash, imageId, c.kind, c.severity).changes);
+  return inserted;
 }
 
-export function recordComponents(imageId: string, comps: { name: string; version: string; cveCount: number }[]): void {
+export function recordComponents(
+  imageId: string,
+  comps: { name: string; version: string; cveCount: number }[],
+): number {
   const stmt = getDb().prepare(
     'INSERT OR IGNORE INTO component_occurrence (name, version, imageId, cveCount) VALUES (?, ?, ?, ?)',
   );
-  for (const c of comps) if (c.name && c.version) stmt.run(c.name, c.version, imageId, c.cveCount);
+  let inserted = 0;
+  for (const c of comps)
+    if (c.name && c.version) inserted += Number(stmt.run(c.name, c.version, imageId, c.cveCount).changes);
+  return inserted;
 }
 
 /** Record that a subject (component or finding kind) was confirmed by emulation for a device family. */
@@ -310,4 +340,64 @@ export function corpusRefs(imageId: string): CorpusRefs {
       .map((a) => ({ sha1: a.sha1, path: a.path, otherImages: artifactOtherImages(a.sha1, imageId) }))
       .filter((a) => a.otherImages.length > 0),
   };
+}
+
+// === Reconciliation (the reindex path) ===
+
+/** The most recent COMPLETED job of a kind, rehydrated. Null means no such job ever finished — never "it was empty". */
+function latestJobResult<T>(jobs: JobRow[], kind: string): T | null {
+  const done = jobs.find((j) => j.kind === kind && j.status === 'done' && j.resultJson);
+  if (!done?.resultJson) return null;
+  try {
+    return JSON.parse(done.resultJson) as T;
+  } catch {
+    return null;
+  }
+}
+
+function parseAnalysis(json: string | null): StaticAnalysis | null {
+  if (!json) return null;
+  try {
+    return JSON.parse(json) as StaticAnalysis;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reconcile the corpus against every image on the bench, from state already persisted.
+ *
+ * Binds the pure planner in `corpus-reindex.ts` to the store: it re-reads no firmware bytes, runs no tool and
+ * opens no socket, so it costs a few SQLite reads per image and is safe to point at a live deployment. Every
+ * insert is `INSERT OR IGNORE` over immutable data, so running it twice inserts nothing the second time.
+ *
+ * The caller supplies `text` and `notReconciled` already localised — this module composes no prose, for the
+ * same reason `providers/coverage.ts` does not: the sentence is recomputed interface copy and belongs to the
+ * request's locale, while the rows are measurements and belong to nobody's language.
+ */
+export function reindexCorpus(text: ReindexText, notReconciled: UnreconciledTable[]): CorpusReindexReport {
+  const inserted = Object.fromEntries(CORPUS_REINDEX_SOURCES.map((s) => [s, 0])) as Record<CorpusReindexSource, number>;
+  const plans: ReindexImagePlan[] = [];
+
+  for (const img of listImages()) {
+    const jobs = listJobs(img.id);
+    const plan = planImageReindex({
+      imageId: img.id,
+      filename: img.filename,
+      analysis: parseAnalysis(img.analysisJson),
+      gitleaks: latestJobResult<GitleaksResult>(jobs, 'gitleaks'),
+      sbom: latestJobResult<SbomResult>(jobs, 'sbom'),
+      findings: listFindings(img.id),
+      binaries: listBinaries(img.id),
+    });
+    plans.push(plan);
+
+    inserted['static-secrets'] += recordCredentials(img.id, plan.staticCredentials);
+    inserted.gitleaks += recordCredentials(img.id, plan.gitleaksCredentials);
+    inserted['credential-hashes'] += recordCredentialHashes(img.id, plan.credentialHashes);
+    inserted.components += recordComponents(img.id, plan.components);
+    inserted.artifacts += recordArtifacts(img.id, plan.artifacts);
+  }
+
+  return summarizeReindex(plans, inserted, text, notReconciled);
 }

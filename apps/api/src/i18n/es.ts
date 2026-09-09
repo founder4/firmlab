@@ -557,4 +557,24 @@ export const es: Messages = {
         'No sale nada de esta máquina. Lo que cambia es el ARTEFACTO, y más que con la reparación: `init=/bin/sh` sustituye al init del fabricante, así que `/sbin/init` no llega a ejecutarse y nada de `inittab` —su getty incluido— se arranca. Un puerto que responde en ese arranque responde a un sistema que este banco de trabajo montó a mano, y todo hallazgo de ahí lleva las dos intervenciones en `interventions`, bajo su propio tipo de hallazgo para que jamás pueda contarse como un arranque que respondió tal cual se envía.',
     },
   },
+
+  corpusReindex: {
+    verdict: (p) =>
+      [
+        `Reconciliada${p.imageCount === 1 ? '' : 's'} ${p.imageCount === 1 ? '1 imagen' : `${p.imageCount} imágenes`} a partir de estado ya persistido: no se ejecutó`,
+        'ninguna herramienta ni se releyó un solo byte de firmware, así que esto recupera lo que los proveedores ya habían medido y nada más.',
+        `Faltaban ${p.inserted} de ${p.offered} ocurrencias y se han añadido; el resto ya estaba registrado.`,
+        'Una fuente sin imágenes en «con entrada» no llegó a ejecutarse en ellas, que no es lo mismo que haberse ejecutado y no encontrar nada.',
+      ].join(' '),
+    reachabilityPrior:
+      'Se escribe únicamente cuando una ejecución viva CONFIRMA un sujeto, y su clave es la de esa ejecución (binario:sink), no la de ninguna fila guardada. Ninguna fila en disco puede reconstruir una, así que un reindexado no toca esta tabla y su tamaño mide lo confirmado, nunca lo que hay.',
+    corpusRule:
+      'Curada por una persona por definición: una regla de la watchlist se promueve a mano y nunca se deriva de una imagen. Un reindexado no la toca.',
+    boundedNote: (p) =>
+      `${p.count === 1 ? '1 entrada guardada declara' : `${p.count} entradas guardadas declaran`} que se detuvo antes del final de lo que estaba leyendo. Una reconciliación hereda esa cota y no la ensancha: las filas son lo que vio ese pase acotado, y el resto no se examinó entonces ni se examina ahora.`,
+    unrecordedNote: (p) =>
+      `Otra${p.count === 1 ? ' entrada es anterior' : `s ${p.count} entradas son anteriores`} al campo que declararía su cobertura, así que si estuvo acotada NO CONSTA — que no es lo mismo que haberlo leído todo.`,
+    unstampedNote: (p) =>
+      `${p.rows} fila(s) del libro mayor en ${p.imageCount === 1 ? '1 imagen' : `${p.imageCount} imágenes`} vienen de un proveedor que estampa una identidad de credencial pero no llevan ninguna: se escribieron antes de que lo hiciera. Esa identidad nunca se calculó, así que no está en disco para que una reconciliación la lea — quien la produce es volver a ejecutar esos proveedores, y ésta es la única brecha que un reindexado no puede cerrar.`,
+  },
 };
