@@ -424,6 +424,13 @@ export const es: Messages = {
    * ausente: la pregunta no llegó a hacerse.
    */
   tools: {
+    probeOutcome: {
+      missing: 'no está instalada en este despliegue — el binario no está en el PATH',
+      timeout:
+        'está instalada, pero no respondió dentro de su presupuesto de sondeo. Esto NO es una herramienta ausente: sube el `timeoutMs` de su spec (un arranque en frío de la JVM o un import de angr superan de rutina los 4 s por omisión) y vuelve a sondear antes de concluir nada sobre este despliegue.',
+      error:
+        'el sondeo se ejecutó y falló. El binario que se nombra aquí está en el PATH — pero cuando el sondeo es un import de Python (angr, fwhunt) ese binario es el INTÉRPRETE, así que esto cubre también que el paquete no esté instalado en él. Léelo como «se hizo la pregunta y fue rechazada», nunca como una respuesta sobre el firmware.',
+    },
     unlocks: {
       binwalk: 'Extracción por firmas con reconocimiento de formato',
       unsquashfs: 'Extracción de SquashFS',

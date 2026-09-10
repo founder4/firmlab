@@ -45,6 +45,15 @@ export const shell: Messages['shell'] = {
       'ganado.',
     ].join(' '),
     notFound: 'no encontrada',
+    probeLabel: {
+      missing: 'no encontrada',
+      timeout: 'sin respuesta a tiempo',
+      error: 'la sonda falló',
+    },
+    unanswered: (n: number) =>
+      n === 1
+        ? '1 de las filas de abajo está instalada y no respondió a su sondeo. Eso no es una capacidad que le falte a este despliegue.'
+        : `${n} de las filas de abajo están instaladas y no respondieron a su sondeo. Ésas no son capacidades que le falten a este despliegue.`,
 
     group: {
       extract: 'Extracción',

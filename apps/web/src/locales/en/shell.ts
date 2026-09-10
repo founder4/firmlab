@@ -74,6 +74,20 @@ export const shell = {
       'themselves unavailable and say why, and none of them returns a clean result it did not earn.',
     ].join(' '),
     notFound: 'not found',
+    /**
+     * A probe answering no is three different facts, and only one of them is an absent tool. The cell keeps a short
+     * label because the table is scanned, not read; the full sentence — which says to raise `timeoutMs` and re-probe
+     * — comes from the API already localised, and only for the two outcomes that are NOT an absence.
+     */
+    probeLabel: {
+      missing: 'not found',
+      timeout: 'no answer in time',
+      error: 'probe failed',
+    },
+    unanswered: (n: number) =>
+      n === 1
+        ? '1 of the rows below is installed and did not answer its probe. That is not a capability this deployment lacks.'
+        : `${n} of the rows below are installed and did not answer their probe. Those are not capabilities this deployment lacks.`,
 
     /** The tool groups. The group ids (`extract`, `analyze`…) cross the API and are never translated. */
     group: {

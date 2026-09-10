@@ -271,15 +271,49 @@ async function orchestrate(session: AgentSessionRow, cfg: LlmConfig, preapproveA
 
 /**
  * Node ⑤ (debt #5) — the session's closing synthesis: a cited narrative over the confirmed findings (zero-day
- * candidates, emulation proof-states). Reuses the read-only copilot, which now sees the session's outputs. Skipped
- * silently if out of budget or unavailable — it never fails the run.
+ * candidates, emulation proof-states). Reuses the read-only copilot, which now sees the session's outputs. Never
+ * fails the run — but never skips it in silence either.
  */
 async function runClosingSynthesis(session: AgentSessionRow, cfg: LlmConfig, gov?: Governor): Promise<void> {
   const governor = gov ?? seededGovernor(session);
-  if (!governor.check().ok) return;
+  const verdict = governor.check();
+  if (!verdict.ok) {
+    // Recorded, not returned. This branch used to `return` bare, leaving a session at `done` with no `synthesis`
+    // step and no halt reason — a transcript indistinguishable from one whose synthesis simply had nothing to say.
+    // The catch branch below has always recorded its reason; a budget ceiling is no less a reason than an error.
+    recordStep(
+      session.id,
+      'synthesis',
+      'skipped',
+      undefined,
+      undefined,
+      `Synthesis skipped: ${verdict.reason ?? 'the governor stopped the run'}. The run ended at a budget ceiling, not at a conclusion.`,
+      null,
+      0,
+      0,
+    );
+    persist(session, 'done', governor, verdict.reason);
+    return;
+  }
   try {
     const result = await runCopilot(session.imageId, cfg);
-    if (!result) return;
+    if (!result) {
+      // The other silent return in this function. `runCopilot` answers null for exactly one reason — its context
+      // gather found no image — and a session closing with no `synthesis` row at all reads as a run that had
+      // nothing to add, which is the one thing this state is not.
+      recordStep(
+        session.id,
+        'synthesis',
+        'skipped',
+        undefined,
+        undefined,
+        'Synthesis skipped: the image this session was opened against could not be read back, so there was nothing to narrate over. This is a missing input, not a quiet conclusion.',
+        null,
+        0,
+        0,
+      );
+      return;
+    }
     governor.record(result.model, result.inputTokens ?? 0, result.outputTokens ?? 0);
     recordStep(
       session.id,
@@ -332,9 +366,33 @@ async function runPhase4(
   const imageId = session.imageId;
   const target = plan[0]?.binary ?? topNetworkBinary(imageId);
   let topCandidate: ZerodayCandidate | undefined;
+  // `updateSession` writes `haltReason` unconditionally, so every later `persist(..., null)` in this function
+  // would ERASE the reason node ④ never ran. The step row keeps the evidence either way; this keeps the session
+  // row agreeing with it instead of reading, one column over, as a run that hit no ceiling at all.
+  let haltReason: string | null = null;
 
   // Node ④ needs a binary triage; run/reuse one for the top target.
-  if (target && gov.check().ok) {
+  const zerodayVerdict = gov.check();
+  if (target && !zerodayVerdict.ok) {
+    // Every other skip path here records a `skipped` step with its reason; this one recorded NOTHING, so a run
+    // whose vulnerability-reasoning node never executed reached `persist(session, 'done')` and — if an isolated
+    // emulation had confirmed anything — read back as `proven`. A finished-looking session whose node ④ never ran
+    // is the worst shape this orchestrator can produce, because nothing in the transcript contradicts it.
+    recordStep(
+      session.id,
+      'zero-day',
+      'skipped',
+      { binary: target },
+      undefined,
+      `Zero-day reasoning skipped: ${zerodayVerdict.reason ?? 'the governor stopped the run'}. The target was selected and never analysed, so this session establishes nothing about it.`,
+      null,
+      0,
+      0,
+    );
+    haltReason = zerodayVerdict.reason;
+    persist(session, getSession(session.id)?.status ?? 'running', gov, haltReason);
+  }
+  if (target && zerodayVerdict.ok) {
     const decompile = await ensureDecompile(imageId, target);
     if (decompile?.available) {
       const zctx = await gatherZerodayContext(imageId, decompile, session.goal);
@@ -367,7 +425,7 @@ async function runPhase4(
         0,
       );
     }
-    persist(session, 'running', gov, null);
+    persist(session, 'running', gov, haltReason);
   }
 
   const isolation = await detectIsolation();
@@ -389,7 +447,7 @@ async function runPhase4(
       0,
       0,
     );
-    persist(session, 'running', gov, null);
+    persist(session, 'running', gov, haltReason);
     const current = getSession(session.id);
     if (!current) throw new Error('Session disappeared before pre-authorised emulation');
     await runApprovedPlan(current, approved, true);
@@ -406,9 +464,9 @@ async function runPhase4(
       0,
       0,
     );
-    persist(session, 'awaiting_approval', gov, null);
+    persist(session, 'awaiting_approval', gov, haltReason);
   } else {
-    persist(session, 'done', gov, null);
+    persist(session, 'done', gov, haltReason);
   }
 }
 

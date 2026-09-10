@@ -51,6 +51,14 @@ export interface ToolStatus {
   version?: string;
   unlocks: string;
   group: 'extract' | 'analyze' | 'sbom' | 'emulate' | 'secrets';
+  /**
+   * Why the probe said no — `missing` is genuinely absent, `timeout` is installed and did not answer inside its
+   * probe budget, `error` is installed and refused. OPTIONAL FOREVER: an API build older than this field answers
+   * without it, and a page that required it would assert something it cannot know.
+   */
+  outcome?: 'missing' | 'timeout' | 'error';
+  /** The API's sentence for `outcome`, already in this page's language. Absent for the same reasons. */
+  outcomeReason?: string;
 }
 
 export interface EmulationRecipe {

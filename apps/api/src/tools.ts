@@ -215,7 +215,22 @@ export interface ToolStatus {
   version?: string;
   unlocks: string;
   group: ToolSpec['group'];
+  /** Why the probe said no. Absent when the tool is available, or on a status built before this existed. */
+  outcome?: ProbeOutcome;
+  /** The localised sentence for `outcome`. Absent for the same reasons. */
+  outcomeReason?: string;
 }
+
+/**
+ * How a probe failed, which is NOT one fact.
+ *
+ * `missing` is the deployment genuinely lacking a tool. `timeout` is a tool that is installed and did not answer
+ * inside its probe budget — a JVM cold start, an `angr` import — and `error` is one that ran and refused. All three
+ * used to collapse into `available: false`, which `/tools` aggregates into the capability counters and every
+ * provider turns into `blocked_by_platform`: a slow tool was reported as a tool this deployment does not have.
+ * That is the trap CLAUDE.md already names for the Ghidra and angr probes, made visible instead of guessed at.
+ */
+export type ProbeOutcome = 'missing' | 'timeout' | 'error';
 
 /**
  * What a probe actually learned. No prose: this is what gets cached, and a cache holding a sentence in one language
@@ -229,6 +244,23 @@ interface ProbeResult {
   /** Present, but never asked which version — the binary was found on PATH and not executed. */
   presenceOnly?: boolean;
   group: ToolSpec['group'];
+  /** Set only when `available` is false. No prose: the cache is language-neutral by design. */
+  outcome?: ProbeOutcome;
+}
+
+/**
+ * Classify what `execFile` threw. Pure and exported so a test reaches all three branches without a probe budget.
+ *
+ * Node reports a timeout by KILLING the child, so the error carries `killed: true` (and usually a signal) while
+ * `code` is undefined; a missing binary is `ENOENT`; anything else — a non-zero exit above all — is a tool that
+ * ran and refused. `unknown` in, never a throw out: a shape this does not recognise falls to `error`, which is the
+ * conservative answer because it is the one that does not claim the tool is absent.
+ */
+export function classifyProbeFailure(err: unknown): ProbeOutcome {
+  const e = err as { code?: unknown; killed?: unknown; signal?: unknown } | null | undefined;
+  if (e?.code === 'ENOENT') return 'missing';
+  if (e?.killed === true || (typeof e?.signal === 'string' && e.signal)) return 'timeout';
+  return 'error';
 }
 
 let cache: ProbeResult[] | null = null;
@@ -240,7 +272,7 @@ async function probe(spec: ToolSpec): Promise<ProbeResult> {
       id: spec.id,
       bin: spec.bin,
       available: resolved !== null,
-      ...(resolved ? { presenceOnly: true } : {}),
+      ...(resolved ? { presenceOnly: true } : { outcome: 'missing' as const }),
       group: spec.group,
     };
   }
@@ -250,8 +282,8 @@ async function probe(spec: ToolSpec): Promise<ProbeResult> {
     });
     const out = `${stdout}${stderr}`.split('\n')[0]?.trim().slice(0, 120) ?? '';
     return { id: spec.id, bin: spec.bin, available: true, version: out, group: spec.group };
-  } catch {
-    return { id: spec.id, bin: spec.bin, available: false, group: spec.group };
+  } catch (err) {
+    return { id: spec.id, bin: spec.bin, available: false, outcome: classifyProbeFailure(err), group: spec.group };
   }
 }
 
@@ -266,6 +298,7 @@ function describe(r: ProbeResult, locale: Locale): ToolStatus {
     bin: r.bin,
     available: r.available,
     ...(r.presenceOnly ? { version: text.installed } : r.version !== undefined ? { version: r.version } : {}),
+    ...(r.outcome ? { outcome: r.outcome, outcomeReason: text.probeOutcome[r.outcome] } : {}),
     unlocks: text.unlocks[r.id],
     group: r.group,
   };

@@ -446,6 +446,18 @@ export const en = {
    * you ask", and none of these may be phrased as a property of the firmware.
    */
   tools: {
+    /**
+     * Why a probe answered no — three facts one `available: false` used to cover. A slow tool reported as an
+     * absent one sends every provider that needs it to `blocked_by_platform`, which reads as "this deployment
+     * cannot do that" when the truth is "it did not answer in 4 seconds".
+     */
+    probeOutcome: {
+      missing: 'not installed in this deployment — the binary is not on PATH',
+      timeout:
+        'installed, but it did not answer within its probe budget. This is NOT a missing tool: raise the spec’s `timeoutMs` (a JVM cold start or an angr import routinely exceeds the 4 s default) and re-probe before concluding anything about this deployment.',
+      error:
+        'the probe ran and failed. The binary named here is on PATH — but where the probe is a Python import (angr, fwhunt) that binary is the INTERPRETER, so this also covers the package not being installed in it. Read the row as “the question was asked and refused”, never as an answer about the firmware.',
+    },
     /** Keyed by `ToolId`, so a new `ToolSpec` is a compile error in `es.ts` until it is translated. */
     unlocks: {
       binwalk: 'Format-aware signature carving',

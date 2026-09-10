@@ -51,6 +51,26 @@
 - [x] Reparar, encontrado en esa misma validación, que la referencia cruzada contra KEV nunca había visto un solo CVE de OSV. Los registros Debian se llaman `DEBIAN-CVE-2016-2781` y ponen el CVE en `upstream`; **ninguno de los 133 avisos reales trae `aliases` y ninguno tiene un CVE como id**, así que `collectCveIds`, que leía id y aliases, devolvía cero. Sobre el corpus cacheado: **0 → 124 CVE** cruzados contra las 1.674 entradas de KEV (0 known-exploited, ya un negativo real y no un conjunto vacío). Además el conjunto de CVE deja de ser la lista recortada — 19 de esos 124 sobreviven sólo por eso — y la etiqueta de la web muestra el CVE en vez del id de la base de datos.
 - [x] Sacar del presupuesto de consultas de OSV los componentes que OSV no puede responder. El tope de 80 se tomaba sobre la lista entera y el orden de llegada es el de syft —alfabético—, de modo que en un rootfs OpenWRT de ~2.000 paquetes los 80 huecos se iban en módulos de kernel sin ecosistema y no se preguntaba nada respondible: el mismo defecto que `rankNvdCandidates`. Un componente no mapeable no cuesta petición, luego ya no cuesta presupuesto; `skipped` cuenta ahora todos y no sólo los que el tope alcanzaba, y `notQueried`/`notQueriedRule` dicen qué dejó fuera el tope y con qué regla.
 
+- [x] Separar las tres cosas que `probe()` metía en un solo `available: false`: `classifyProbeFailure` distingue
+  `missing` (ENOENT), `timeout` (Node mata al hijo, así que llega `killed: true` y `code` vacío) y `error`
+  (salida distinta de cero, o EACCES). Los fixtures del test están escritos a mano — la misma forma en que
+  `parseGdbOutput` estuvo mal — así que `apps/api/scripts/probe-shapes.mjs` hace pasar fallos de `execFile`
+  REALES por la misma función: los cuatro shapes clasifican igual en macOS y en el contenedor desplegado. Ahí
+  angr responde en 889 ms y fwhunt en 128 ms, o sea que **hoy ninguna herramienta del catálogo agota su
+  presupuesto en el despliegue**; la rama `timeout` queda probada por forma, no por un caso vivo. El campo
+  `outcome`/`outcomeReason` es opcional para siempre, y la web lo dibuja aparte: marca ◐ ámbar, etiqueta corta
+  distinta de «no encontrada» y la frase completa en su propia fila a 72ch — la primera versión la puso en la
+  última columna y corría a 155 caracteres por línea, que sólo se vio mirando la página.
+- [x] Registrar los dos saltos mudos de `agent/session.ts` (nodo ④ y síntesis de cierre) y conservar su motivo.
+  Medido con el mock LLM sobre la Xiaomi-Repeater y `FIRMLAB_AGENT_MAX_STEPS=2`, mismo escenario en las dos
+  versiones: **antes** la transcripción terminaba en el paso 3 con `status: done` y `haltReason: null` — nada
+  contradecía a una sesión que parecía completa; **ahora** aparecen los pasos 4 `zero-day skipped` y 5
+  `synthesis skipped`, ambos con `step budget reached (2/2)`, y el motivo sobrevive en la fila de la sesión.
+  Eso último exigió hilar `haltReason` por `runPhase4`: `updateSession` escribe la columna sin condiciones, así
+  que cada `persist(…, null)` posterior la borraba. Cerrado de paso el otro `return` mudo de la misma función
+  (`runCopilot` devuelve null cuando su contexto no encuentra la imagen). Con el gobernador holgado la corrida no
+  inventa ningún salto: el nodo ④ toma su camino honesto de siempre y la síntesis corre.
+
 ## Siguiente
 
 ### Cobertura y análisis
@@ -181,7 +201,7 @@ Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `ar
 - [x] Re-analizar el corpus desplegado tras desplegar `secretScan`. Ya estaba hecho, y lo dice una medición y no una suposición: el reindexado del corpus comprueba, por imagen, si el análisis guardado declara su cobertura, y sobre las 25 imágenes del despliegue devolvió **cero** entradas `static-scan` en «cota NO CONSTA» — es decir, las 25 llevan el campo, y las cinco acotadas (GL.iNet 11,0 %, Obsbot 16,3 %, GE800 21,6 %, Tenda 71,5 %, Framework BIOS 92,5 %) muestran su aviso. Lo que sigue sin migrar es el SBOM: 7 de los 8 resultados guardados son anteriores a `packageTotal`.
 - [ ] Exponer `credmatch` en la web: es el único route sin ninguna referencia en `apps/web/src`, pese a sus 1.337 líneas, un source estable en el libro mayor y ✓ en cuatro muestras de la matriz como «W3 · Credential cross-reference».
 
-### La auditoría de límites — 37 defectos verificados, 7 arreglados
+### La auditoría de límites — 37 defectos verificados, 10 arreglados
 
 Cuatro subpatrones, los mismos que pagaron `ghidra`, `sbom`, `scanSignatures`, `secrets`, `fcc`, `gitleaks`, `osv`
 y `disclosure`: **(A)** cap antes de ordenar, así que el conjunto superviviente es un artefacto del orden de
@@ -260,17 +280,6 @@ entrada correspondiente. Quedan 30.
   queda en 0; el flujo se dibuja en `Capture.tsx:503` idéntico a uno cuyos bytes SÍ se examinaron y no eran
   firmware, y `realizedCeiling` (`capture/preflight.ts:154`) reporta `metadata_only` — un negativo limpio para una
   captura que sí aterrizó.
-- [ ] `tools.ts:236-255` **(C)** — el único `catch {}` de `probe()` colapsa «binario ausente» (ENOENT), «la sonda
-  salió distinto de cero» y «la sonda excedió `timeoutMs`» en un mismo `available: false`, que `/tools` agrega en
-  `groups[…].available/total` y cada proveedor convierte en `blocked_by_platform`: **un timeout se renderiza como
-  «este despliegue no puede»**, la trampa que CLAUDE.md ya nombra para las sondas de la JVM y de angr.
-- [ ] `agent/session.ts:337` **(C)** — `if (target && gov.check().ok)` salta el nodo ④ entero cuando el gobernador
-  está agotado **sin registrar paso alguno** (todos los demás caminos de salto registran uno con su motivo) y sin
-  motivo de parada; la corrida llega a `persist(session, 'done', …)` y, si una emulación aislada confirmó algo,
-  `readAgentSession` la lee como `proven` — un análisis terminado cuyo nodo de razonamiento nunca corrió.
-- [ ] `agent/session.ts:279` **(C)** — `runClosingSynthesis` vuelve en silencio con el gobernador agotado
-  (`if (!governor.check().ok) return;`), dejando la sesión en `done` con `haltReason: null` y sin paso `synthesis`,
-  mientras el camino de *error* cuatro líneas más abajo sí registra un `skipped` con su motivo.
 - [ ] `providers/webprobe.ts:253` + `:262` **(C)+(D)** — 40 puntos de inyección × (6 payloads de comando + 4 de
   traversal) = 400 peticiones contra `maxRequests = 200`, así que con los valores por defecto el `break outer`
   salta **siempre** hacia el punto 20; el negativo dice entonces «No command injection or traversal reproduced over
