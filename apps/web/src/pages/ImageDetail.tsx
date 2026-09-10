@@ -428,11 +428,23 @@ function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: 
   // The two facts the section index needs, and the only two: did extraction complete, and did it yield a rootfs.
   // Read from the job's own result rather than inferred, so "ran and found none" cannot be mistaken for "not run".
   const extractJob = jobs.find((j) => j.kind === 'extract' && j.status === 'done');
+  const extractResult = extractJob?.result as
+    | {
+        rootfsPath?: string | null;
+        binaryInventory?: {
+          candidatesFound: number;
+          registered: number;
+          candidatesAreFloor: boolean;
+        };
+      }
+    | null
+    | undefined;
   const extraction = {
     ran: extractJob !== undefined,
-    rootfs: Boolean((extractJob?.result as { rootfsPath?: string | null } | null | undefined)?.rootfsPath),
+    rootfs: Boolean(extractResult?.rootfsPath),
   };
   const triagedBinaries = binaries.filter((b) => b.triaged).length;
+  const binaryCoverage = extractResult?.binaryInventory;
 
   const idn = image.identity;
 
@@ -470,7 +482,12 @@ function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: 
       <div className="grid grid-3" style={{ margin: '16px 0' }}>
         <Stat
           label={t.imageDetail.dossier.statBinaries}
-          value={t.imageDetail.dossier.statBinariesValue(binaries.length, triagedBinaries)}
+          value={t.imageDetail.dossier.statBinariesValue({
+            listed: binaryCoverage?.registered ?? binaries.length,
+            total: binaryCoverage?.candidatesFound ?? binaries.length,
+            totalIsFloor: binaryCoverage?.candidatesAreFloor ?? false,
+            triaged: triagedBinaries,
+          })}
         />
         <Stat label={t.imageDetail.dossier.statFindings} value={String(findings.length)} />
         <Stat label={t.imageDetail.dossier.statStrategy} value={caps?.strategy ?? '—'} mono />
@@ -805,6 +822,7 @@ function FilesystemPanel({ imageId }: { imageId: string }): JSX.Element {
   const t = useMessages();
   const [tree, setTree] = useState<FsNode | null>(null);
   const [summary, setSummary] = useState<FsSummary | null>(null);
+  const [walkComplete, setWalkComplete] = useState<boolean | null>(null);
   const [status, setStatus] = useState<'none' | 'running' | 'done' | 'error'>('none');
   const [log, setLog] = useState('');
 
@@ -812,10 +830,16 @@ function FilesystemPanel({ imageId }: { imageId: string }): JSX.Element {
     const jobs = await api.jobs(imageId);
     const extract = jobs.find((j) => j.kind === 'extract' && j.status === 'done');
     if (extract) {
-      const r = extract.result as { tree?: FsNode; summary?: FsSummary; extractor?: string } | null;
+      const r = extract.result as {
+        tree?: FsNode;
+        summary?: FsSummary;
+        extractor?: string;
+        rootfsWalk?: { complete: boolean; entriesWalked: number };
+      } | null;
       if (r?.tree) {
         setTree(r.tree);
         setSummary(r.summary ?? null);
+        setWalkComplete(r.rootfsWalk?.complete ?? null);
         setStatus('done');
       } else {
         setStatus('error');
@@ -847,7 +871,10 @@ function FilesystemPanel({ imageId }: { imageId: string }): JSX.Element {
       <div>
         {summary && (
           <div className="grid grid-3" style={{ marginBottom: 16 }}>
-            <Stat label={t.imageDetail.filesystem.statFiles} value={String(summary.totalFiles)} />
+            <Stat
+              label={t.imageDetail.filesystem.statFiles}
+              value={`${walkComplete === false ? '≥' : ''}${summary.totalFiles}`}
+            />
             <Stat label={t.imageDetail.filesystem.statDirs} value={String(summary.totalDirs)} />
             <Stat label={t.imageDetail.filesystem.statSetuid} value={String(summary.setuidBinaries.length)} />
           </div>

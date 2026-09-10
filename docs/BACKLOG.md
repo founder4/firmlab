@@ -370,10 +370,14 @@ entrada correspondiente. Quedan 30.
   `walkFiles(..., WALK_FILE_CAP)` (4.000 ficheros, LIFO, sin flag), así que el denominador de la frase de `:1542`
   —«X de Y módulos no se abrieron (cap N, ordenado por ruta)»— está él mismo capado. La mitad `MODULE_SAMPLE_CAP`
   está bien resuelta (`inspectedCount` frente a `moduleCount`); lo silencioso es la caminata de debajo.
-- [ ] `providers/extract.ts:453` / `:468` **(B)** — `registerRootfsBinaries` para en `MAX_BINARIES = 2000` con un
-  `break` sobre `entries` en orden de árbol y devuelve sólo `count`; nada registra cuántos ELF se saltaron. El
-  recuento del panel Binaries (`ImageDetail.tsx:473` y `:524`) y **todo proveedor que llame a `listBinaries`**
-  tratan por tanto un prefijo del orden de caminata como el inventario completo.
+- [x] `providers/extract.ts` (inventario ELF) **(A)+(B)** — resuelto junto con la cobertura de la caminata de la
+  que depende. Se leen las cabeceras de todos los ficheros alcanzados, se cuenta el pozo ELF antes del cap y se
+  rankea antes de persistir: servicios/sugerido primero, después `sbin`, `usr/sbin`, `bin`, `usr/bin`, librerías y
+  otras rutas, con la ruta como desempate estable. `binaryInventory` registra candidatos encontrados, persistidos,
+  descartados, cap, regla y si el total es sólo un suelo porque la caminata se cortó. Log y ficha muestran `N de M`
+  o `N de ≥M`; nunca vuelven a llamar inventario completo a los primeros 2.000 del DFS. Una reextracción elimina
+  sólo las rutas que ya no pertenecen a la selección nueva y conserva el triaje de las que siguen, evitando que la
+  unión de dos selecciones supere el propio cap.
 - [ ] `providers/devicetree.ts:605` **(B)** — `collectFromDir` deja de *recolectar* al llegar a `BLOB_CAP` (8), así
   que un noveno o vigésimo `.dtb` en disco nunca llega a ser candidato y es por tanto invisible para `droppedBlobs`
   (`:725`) — justo el contador cuya nota en `:764` («N device tree(s) más allá del cap de 8 no se analizaron»)
@@ -456,9 +460,10 @@ entrada correspondiente. Quedan 30.
 
 #### Adyacentes y limítrofes, valorados y no incluidos arriba
 
-- [ ] `providers/extract.ts:360` — `walkRootfs` capa en 100.000 entradas en orden DFS y el resultado alimenta
-  `summarizeFs` → `summary.totalFiles`, las listas de setuid/world-writable/notables y el inventario de ELF
-  registrados. `Walked N filesystem entries` y `files: summary.totalFiles` se presentan como totales sin flag.
+- [x] `providers/extract.ts` (caminata rootfs) — resuelto. `walkRootfs` devuelve `rootfsWalk` con entradas, cap y
+  `complete`; distingue correctamente un árbol que termina justo en el límite de otro con nodos pendientes. El log
+  reserva «all N» para el primero y nombra los subárboles no visitados en el segundo; la ficha antepone `≥` al
+  recuento de ficheros cuando es un suelo. Tests fijan ambos lados del borde y que el ranking ELF no hereda el DFS.
 - [ ] `packages/core/src/structure.ts:229` (`looksLikeEcos`) y `mcu.ts:194` (`decodeAscii`) — dos prefijos de 4 MB
   que convierten «el marcador no está en los primeros 4 MB» en un veredicto de clase sin decirlo. El comentario
   argumenta que ninguna imagen que llega ahí alcanza el cap; la aritmética es la misma **(C)** si alguna lo hace.

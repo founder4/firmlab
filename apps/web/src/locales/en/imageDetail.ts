@@ -52,7 +52,8 @@ export const imageDetail = {
     signalSub: 'Entropy trace over the structure carve, findings pinned to their offset. Scrub to read any byte range.',
 
     statBinaries: 'Binaries',
-    statBinariesValue: (total: number, triaged: number) => `${total} (${triaged} triaged)`,
+    statBinariesValue: (p: { listed: number; total: number; totalIsFloor: boolean; triaged: number }) =>
+      `${p.listed}${p.listed < p.total ? ` of ${p.totalIsFloor ? '≥' : ''}${p.total}` : p.totalIsFloor ? ` of ≥${p.total}` : ''} listed (${p.triaged} triaged)`,
     statFindings: 'Findings',
     statStrategy: 'Runtime strategy',
 

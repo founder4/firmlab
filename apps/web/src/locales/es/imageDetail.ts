@@ -48,7 +48,8 @@ export const imageDetail: Messages['imageDetail'] = {
       'Traza de entropía sobre el corte por estructura, con los hallazgos anclados a su desplazamiento. Desplázate para leer cualquier rango de bytes.',
 
     statBinaries: 'Binarios',
-    statBinariesValue: (total: number, triaged: number) => `${total} (${triaged} triados)`,
+    statBinariesValue: (p: { listed: number; total: number; totalIsFloor: boolean; triaged: number }) =>
+      `${p.listed}${p.listed < p.total ? ` de ${p.totalIsFloor ? '≥' : ''}${p.total}` : p.totalIsFloor ? ` de ≥${p.total}` : ''} listados (${p.triaged} triados)`,
     statFindings: 'Hallazgos',
     statStrategy: 'Estrategia de ejecución',
 

@@ -818,6 +818,18 @@ export function registerBinary(b: BinaryIdentity): void {
     });
 }
 
+/**
+ * Reconcile a fresh extraction's bounded selection without deleting triage for paths that remain selected. The
+ * per-row form avoids SQLite's host-parameter ceiling for inventories whose cap is itself 2,000 paths.
+ */
+export function deleteUnregisteredBinaries(imageId: string, keepPaths: ReadonlySet<string>): number {
+  const stale = listBinaries(imageId).filter((binary) => !keepPaths.has(binary.path));
+  const remove = getDb().prepare('DELETE FROM binaries WHERE imageId = ? AND path = ?');
+  let deleted = 0;
+  for (const binary of stale) deleted += Number(remove.run(imageId, binary.path).changes);
+  return deleted;
+}
+
 /** Triage fields set when radare2 runs over a binary. Upserts so a manually-triaged path still lands a row. */
 export interface BinaryTriage {
   imageId: string;

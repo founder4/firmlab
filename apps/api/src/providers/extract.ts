@@ -22,7 +22,7 @@ import {
 } from '@firmlab/core';
 import { recordArtifacts } from '../corpus.js';
 import { EXTRACT_DIR } from '../paths.js';
-import { getImage, listBinaries, registerBinary, updateImageIdentity } from '../store.js';
+import { deleteUnregisteredBinaries, getImage, listBinaries, registerBinary, updateImageIdentity } from '../store.js';
 import { isToolAvailable } from '../tools.js';
 import { type CarveStep, runRecursiveCarve } from './carve.js';
 import { type NoRootfsDiagnosis, diagnoseNoRootfs } from './extract-diagnose.js';
@@ -72,6 +72,27 @@ export interface ExtractResult {
    * this field existed carries no value, and an absent value means "never surveyed", never "nothing was cut".
    */
   neuteredPaths?: NeuteredScan;
+  /** Coverage of the bounded rootfs walk. Optional forever for historical extraction results. */
+  rootfsWalk?: RootfsWalkCoverage;
+  /** Coverage and selection rule for the first-class ELF inventory. Optional forever for historical results. */
+  binaryInventory?: BinaryInventoryCoverage;
+}
+
+export interface RootfsWalkCoverage {
+  entriesWalked: number;
+  cap: number;
+  complete: boolean;
+}
+
+export interface BinaryInventoryCoverage {
+  /** ELF files found inside the walked portion; a floor when rootfsWalk.complete is false. */
+  candidatesFound: number;
+  registered: number;
+  droppedByCap: number;
+  cap: number;
+  complete: boolean;
+  candidatesAreFloor: boolean;
+  selectionRule: string;
 }
 
 /** Directory names that mark the root of an extracted Linux rootfs. */
@@ -220,8 +241,13 @@ function finalizeRootfs(
   handle: JobHandle,
   carveTrace?: CarveStep[],
 ): ExtractResult {
-  const entries = walkRootfs(rootfsPath);
-  handle.log(`Walked ${entries.length} filesystem entries.`);
+  const walked = walkRootfs(rootfsPath);
+  const entries = walked.entries;
+  handle.log(
+    walked.coverage.complete
+      ? `Walked all ${entries.length} filesystem entries.`
+      : `Walked the first ${entries.length} filesystem entries (cap ${walked.coverage.cap}); remaining subtrees were not visited.`,
+  );
   const summary = summarizeFs(entries);
   const tree = buildFsTree(entries);
   const suggestedBinary = pickNetworkBinary(entries);
@@ -232,8 +258,18 @@ function finalizeRootfs(
     persistRefinedIdentity(imageId, detected);
   }
 
-  const registered = registerRootfsBinaries(imageId, rootfsPath, entries, suggestedBinary);
-  if (registered > 0) handle.log(`Registered ${registered} ELF binary/binaries.`);
+  const binaryInventory = registerRootfsBinaries(
+    imageId,
+    rootfsPath,
+    entries,
+    suggestedBinary,
+    walked.coverage.complete,
+  );
+  if (binaryInventory.registered > 0 || binaryInventory.candidatesAreFloor) {
+    handle.log(
+      `Registered ${binaryInventory.registered} of ${binaryInventory.candidatesAreFloor ? 'at least ' : ''}${binaryInventory.candidatesFound} ELF candidate(s).${binaryInventory.droppedByCap ? ` ${binaryInventory.droppedByCap} lower-ranked candidate(s) were omitted by the ${binaryInventory.cap} cap; ${binaryInventory.selectionRule}.` : ''}`,
+    );
+  }
 
   // A recovered rootfs is not the same claim as a fully-opened image. Survey (never decompress) what else came out
   // and was left unopened, so a small rootfs beside 16 MB of untouched payload cannot read as "we found everything".
@@ -268,6 +304,8 @@ function finalizeRootfs(
     ...(carveTrace ? { carveTrace } : {}),
     ...(unopened.payloads.length > 0 ? { unopenedPayloads: unopened } : {}),
     ...(neutered && neutered.entries.length > 0 ? { neuteredPaths: neutered } : {}),
+    rootfsWalk: walked.coverage,
+    binaryInventory,
   };
 }
 
@@ -356,11 +394,15 @@ function findRootfs(root: string, depth = 0): string | null {
   return null;
 }
 
-/** Walk an extracted rootfs into flat FsEntry records, capped so a huge tree can't exhaust memory. */
-function walkRootfs(rootfsPath: string, maxEntries = 100000): FsEntry[] {
+/** Walk an extracted rootfs into flat FsEntry records, carrying whether the memory cap left nodes unvisited. */
+export function walkRootfs(
+  rootfsPath: string,
+  maxEntries = 100000,
+): { entries: FsEntry[]; coverage: RootfsWalkCoverage } {
   const out: FsEntry[] = [];
   const stack: string[] = [rootfsPath];
-  while (stack.length > 0 && out.length < maxEntries) {
+  let truncated = false;
+  while (stack.length > 0) {
     const dir = stack.pop() as string;
     let dirents: fs.Dirent[];
     try {
@@ -368,7 +410,12 @@ function walkRootfs(rootfsPath: string, maxEntries = 100000): FsEntry[] {
     } catch {
       continue;
     }
-    for (const dirent of dirents) {
+    for (let index = 0; index < dirents.length; index++) {
+      if (out.length >= maxEntries) {
+        truncated = true;
+        break;
+      }
+      const dirent = dirents[index] as fs.Dirent;
       const abs = path.join(dir, dirent.name);
       const rel = path.relative(rootfsPath, abs).split(path.sep).join('/');
       try {
@@ -388,8 +435,12 @@ function walkRootfs(rootfsPath: string, maxEntries = 100000): FsEntry[] {
         // Unreadable node — skip.
       }
     }
+    if (truncated) break;
   }
-  return out;
+  return {
+    entries: out,
+    coverage: { entriesWalked: out.length, cap: maxEntries, complete: !truncated && stack.length === 0 },
+  };
 }
 
 function safeReadlink(abs: string): string {
@@ -450,7 +501,27 @@ function readElfIdentity(abs: string): { arch: Architecture; endianness: Endiann
 }
 
 /** Cap on binaries persisted per image, so a pathological rootfs can't flood the table. */
-const MAX_BINARIES = 2000;
+export const MAX_BINARIES = 2000;
+export const BINARY_SELECTION_RULE =
+  'network-facing/suggested binaries first, then sbin, usr/sbin, bin, usr/bin, libraries and other paths; path breaks ties';
+
+/** Pure: stable value ranking before the persistence cap; filesystem traversal order never chooses survivors. */
+export function rankRootfsBinaryCandidates<T extends { path: string; networkFacing: boolean }>(items: T[]): T[] {
+  const dirRank = (candidatePath: string): number => {
+    if (candidatePath.startsWith('sbin/')) return 0;
+    if (candidatePath.startsWith('usr/sbin/')) return 1;
+    if (candidatePath.startsWith('bin/')) return 2;
+    if (candidatePath.startsWith('usr/bin/')) return 3;
+    if (/^(?:usr\/)?lib(?:64)?\//.test(candidatePath)) return 4;
+    return 5;
+  };
+  return [...items].sort(
+    (a, b) =>
+      Number(b.networkFacing) - Number(a.networkFacing) ||
+      dirRank(a.path) - dirRank(b.path) ||
+      a.path.localeCompare(b.path),
+  );
+}
 
 /**
  * Persist every ELF file in the rootfs as a first-class binary, decoding arch/endianness/bits from its header
@@ -462,24 +533,48 @@ function registerRootfsBinaries(
   rootfsPath: string,
   entries: FsEntry[],
   suggestedBinary: string | undefined,
-): number {
-  let count = 0;
+  walkComplete: boolean,
+): BinaryInventoryCoverage {
+  const candidates: {
+    entry: FsEntry;
+    identity: { arch: Architecture; endianness: Endianness; bits: number };
+    path: string;
+    networkFacing: boolean;
+  }[] = [];
   for (const entry of entries) {
-    if (count >= MAX_BINARIES) break;
     if (entry.type !== 'file' || entry.size <= 0) continue;
-    const id = readElfIdentity(path.join(rootfsPath, entry.path));
-    if (!id) continue;
+    const identity = readElfIdentity(path.join(rootfsPath, entry.path));
+    if (!identity) continue;
+    candidates.push({
+      entry,
+      identity,
+      path: entry.path,
+      networkFacing: isNetworkFacingPath(entry.path) || entry.path === suggestedBinary,
+    });
+  }
+  const selected = rankRootfsBinaryCandidates(candidates).slice(0, MAX_BINARIES);
+  deleteUnregisteredBinaries(imageId, new Set(selected.map((candidate) => candidate.path)));
+  for (const candidate of selected) {
+    const { entry, identity } = candidate;
     registerBinary({
       imageId,
       path: entry.path,
       sha1: entry.sha1 ?? null,
       size: entry.size,
-      arch: id.arch === 'unknown' ? null : id.arch,
-      bits: id.bits,
-      endianness: id.endianness === 'unknown' ? null : id.endianness,
-      networkFacing: isNetworkFacingPath(entry.path) || entry.path === suggestedBinary,
+      arch: identity.arch === 'unknown' ? null : identity.arch,
+      bits: identity.bits,
+      endianness: identity.endianness === 'unknown' ? null : identity.endianness,
+      networkFacing: candidate.networkFacing,
     });
-    count++;
   }
-  return count;
+  const droppedByCap = candidates.length - selected.length;
+  return {
+    candidatesFound: candidates.length,
+    registered: selected.length,
+    droppedByCap,
+    cap: MAX_BINARIES,
+    complete: walkComplete && droppedByCap === 0,
+    candidatesAreFloor: !walkComplete,
+    selectionRule: BINARY_SELECTION_RULE,
+  };
 }
