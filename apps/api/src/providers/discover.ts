@@ -40,6 +40,10 @@ export interface DiscoveryResult {
   subnet: string | null;
   devices: DiscoveredDevice[];
   reason: string;
+  /** Whether the chosen host sweep reached its natural end. Optional for persisted/pre-field results. */
+  sweepComplete?: boolean;
+  /** Why the host sweep stopped, when it did not complete. */
+  sweepLimitation?: string;
 }
 
 // === Pure: MAC normalization + OUI vendor lookup ===
@@ -253,30 +257,70 @@ export function buildDevices(
 
 // === Side-effecting runner ===
 
-async function tryExec(bin: string, args: string[], timeoutMs: number): Promise<string | null> {
+export interface DiscoveryCommandResult {
+  stdout: string;
+  complete: boolean;
+  limitation: string | null;
+}
+
+export type DiscoveryCommandExecutor = (
+  bin: string,
+  args: string[],
+  timeoutMs: number,
+) => Promise<DiscoveryCommandResult | null>;
+
+/** Pure: turn an execFile failure into the scope statement that must travel with any partial stdout. */
+export function describeDiscoveryCommandFailure(
+  error: { code?: string | number | null; killed?: boolean; signal?: string | null },
+  timeoutMs: number,
+): string {
+  if (error.killed)
+    return `the command was terminated before completion (time bound ${timeoutMs} ms${error.signal ? `, signal ${error.signal}` : ''})`;
+  if (error.signal) return `the command was terminated by ${error.signal} before completion`;
+  if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return 'the command exceeded its 16 MB output bound';
+  if (typeof error.code === 'number') return `the command exited non-zero (${error.code})`;
+  return 'the command failed before completion';
+}
+
+async function tryExec(bin: string, args: string[], timeoutMs: number): Promise<DiscoveryCommandResult | null> {
   try {
     const { stdout } = await execFileAsync(bin, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
-    return stdout;
+    return { stdout, complete: true, limitation: null };
   } catch (e) {
-    // A tool that ran but exited non-zero may still have written useful stdout (e.g. arp-scan with partial results).
-    const withOut = e as { stdout?: string; code?: string };
+    // A tool that ran but stopped may still have useful stdout. Preserve it, but never let that prefix inherit the
+    // success path merely because at least one address happened to answer before the stop.
+    const withOut = e as { stdout?: string; code?: string | number | null; killed?: boolean; signal?: string | null };
     if (withOut?.code === 'ENOENT') return null; // tool not installed
-    return typeof withOut?.stdout === 'string' && withOut.stdout.length > 0 ? withOut.stdout : null;
+    return {
+      stdout: typeof withOut?.stdout === 'string' ? withOut.stdout : '',
+      complete: false,
+      limitation: describeDiscoveryCommandFailure(withOut, timeoutMs),
+    };
   }
 }
 
-async function resolveSubnet(explicit: string | null, timeoutMs: number): Promise<string | null> {
+async function resolveSubnet(
+  explicit: string | null,
+  timeoutMs: number,
+  execute: DiscoveryCommandExecutor,
+): Promise<string | null> {
   if (explicit) return explicit;
-  const out = await tryExec('ip', ['-o', '-4', 'addr', 'show'], timeoutMs);
-  return out ? parsePrimarySubnet(out) : null;
+  const out = await execute('ip', ['-o', '-4', 'addr', 'show'], timeoutMs);
+  return out ? parsePrimarySubnet(out.stdout) : null;
 }
 
 /**
  * Run a passive host sweep + optional mDNS enrichment over the chosen subnet. Returns the device inventory, or an
  * honest `available:false` when no sweep tool is installed or no subnet could be determined. Never intercepts.
  */
-export async function runDiscovery(opts: { subnet: string | null; timeoutMs: number }): Promise<DiscoveryResult> {
-  const subnet = await resolveSubnet(opts.subnet, Math.min(opts.timeoutMs, 5000));
+export async function runDiscovery(opts: {
+  subnet: string | null;
+  timeoutMs: number;
+  /** Test seam for the subprocess boundary; production always uses bounded execFile. */
+  execute?: DiscoveryCommandExecutor;
+}): Promise<DiscoveryResult> {
+  const execute = opts.execute ?? tryExec;
+  const subnet = await resolveSubnet(opts.subnet, Math.min(opts.timeoutMs, 5000), execute);
   if (!subnet) {
     return {
       available: false,
@@ -291,15 +335,18 @@ export async function runDiscovery(opts: { subnet: string | null; timeoutMs: num
   // when run with privilege on the local segment).
   let tool: 'arp-scan' | 'nmap' | null = null;
   let hosts: ScannedHost[] = [];
-  const arp = await tryExec('arp-scan', ['--retry=2', subnet], opts.timeoutMs);
+  let sweep: DiscoveryCommandResult | null = null;
+  const arp = await execute('arp-scan', ['--retry=2', subnet], opts.timeoutMs);
   if (arp !== null) {
     tool = 'arp-scan';
-    hosts = parseArpScan(arp);
+    sweep = arp;
+    hosts = parseArpScan(arp.stdout);
   } else {
-    const nmap = await tryExec('nmap', ['-sn', subnet], opts.timeoutMs);
+    const nmap = await execute('nmap', ['-sn', subnet], opts.timeoutMs);
     if (nmap !== null) {
       tool = 'nmap';
-      hosts = parseNmapSn(nmap);
+      sweep = nmap;
+      hosts = parseNmapSn(nmap.stdout);
     }
   }
 
@@ -315,16 +362,22 @@ export async function runDiscovery(opts: { subnet: string | null; timeoutMs: num
   }
 
   // Optional mDNS/DNS-SD enrichment; silently skipped if avahi-browse isn't present.
-  const avahi = await tryExec('avahi-browse', ['-aprt'], Math.min(opts.timeoutMs, 8000));
-  const mdns = avahi ? parseAvahiBrowse(avahi) : new Map();
+  const avahi = await execute('avahi-browse', ['-aprt'], Math.min(opts.timeoutMs, 8000));
+  const mdns = avahi ? parseAvahiBrowse(avahi.stdout) : new Map();
 
   const devices = buildDevices(hosts, mdns);
   const typed = devices.filter((d) => d.typeGuess).length;
+  const sweepComplete = sweep?.complete === true;
+  const sweepLimitation = sweep?.limitation ?? undefined;
   return {
     available: true,
     tool,
     subnet,
     devices,
-    reason: `Swept ${subnet} with ${tool}: ${devices.length} device(s)${mdns.size ? `, ${mdns.size} announcing over mDNS` : ''}, ${typed} with a type guess. Passive — nothing was intercepted.`,
+    reason: sweepComplete
+      ? `Swept ${subnet} with ${tool}: ${devices.length} device(s)${mdns.size ? `, ${mdns.size} announcing over mDNS` : ''}, ${typed} with a type guess. Passive — nothing was intercepted.`
+      : `Partial sweep of ${subnet} with ${tool}: ${devices.length} device(s) were observed before ${sweepLimitation}. This is a prefix of what answered before the stop, not a complete LAN inventory.`,
+    sweepComplete,
+    ...(sweepLimitation ? { sweepLimitation } : {}),
   };
 }

@@ -318,11 +318,13 @@ entrada correspondiente. Quedan 30.
   una política de recursos, no evidencia de que falte un volumen UEFI/BIOS parseable. Los resultados nuevos que sí
   ejecutan conservan la misma cobertura con `complete: true`; el campo es opcional para los resultados históricos.
   Tests fijan ambos lados del límite, incluido el byte exacto del cap.
-- [ ] `capture/scan.ts:66` (con `providers/discover.ts:264`) **(A)+(C)** — `tryExec` devuelve a propósito el stdout
-  parcial de una herramienta abortada, así que un `arp-scan` matado en `discoverTimeoutMs` da un prefijo del rango
-  de direcciones; `runDiscovery` reporta entonces `Swept <subnet> with arp-scan: N device(s)` y el transcript
-  escribe `[done] inventory updated with N device(s)`. Un barrido cortado se presenta como la LAN, y lo que
-  sobrevive son las direcciones bajas.
+- [x] `capture/scan.ts` / `providers/discover.ts` **(A)+(C)** — resuelto. `tryExec` conserva el stdout útil de una
+  herramienta abortada pero devuelve también `complete` y la causa (terminación con cota/señal, límite de salida,
+  exit no cero o fallo). `runDiscovery` persiste `sweepComplete`/`sweepLimitation`; un prefijo dice «partial sweep»
+  y que sólo contiene lo que respondió antes del corte, nunca «swept» a secas. Los dispositivos observados siguen
+  siendo hechos útiles y se conservan, pero la sesión termina `error` con `[incomplete]`, no `done`, y su
+  `deviceCount` es explícitamente inventario parcial. Tres tests fijan la causa de timeout, la de exit no cero y
+  la composición del resultado con un host real del prefijo conservado.
 - [x] `providers/rtos.ts:78` / `:160` / `:289` **(C)** — resuelto. `RtosResult` expone bytes escaneados, tamaño
   completo y `complete`; los negativos sobre RTOS/eCos/flags nombran esa cobertura. El hallazgo bare-metal sólo
   conserva su título categórico cuando se leyó todo el archivo; ante truncamiento pasa a «possible bare-metal» y

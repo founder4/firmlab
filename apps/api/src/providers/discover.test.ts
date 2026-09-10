@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDevices,
+  describeDiscoveryCommandFailure,
   guessDeviceType,
   normalizeMac,
   ouiVendor,
@@ -8,7 +9,41 @@ import {
   parseAvahiBrowse,
   parseNmapSn,
   parsePrimarySubnet,
+  runDiscovery,
 } from './discover.js';
+
+describe('describeDiscoveryCommandFailure', () => {
+  it('names a terminated command as incomplete and carries its time bound', () => {
+    expect(describeDiscoveryCommandFailure({ killed: true, signal: 'SIGTERM' }, 12_000)).toBe(
+      'the command was terminated before completion (time bound 12000 ms, signal SIGTERM)',
+    );
+  });
+
+  it('keeps a non-zero exit distinct from a missing executable', () => {
+    expect(describeDiscoveryCommandFailure({ code: 2 }, 12_000)).toBe('the command exited non-zero (2)');
+  });
+});
+
+describe('runDiscovery completion', () => {
+  it('retains partial observations without presenting them as a complete LAN inventory', async () => {
+    const result = await runDiscovery({
+      subnet: '192.168.1.0/24',
+      timeoutMs: 1000,
+      execute: async (bin) =>
+        bin === 'arp-scan'
+          ? {
+              stdout: '192.168.1.2\t24:0a:c4:aa:bb:cc\tEspressif Inc.\n',
+              complete: false,
+              limitation: 'the command was terminated before completion (time bound 1000 ms)',
+            }
+          : null,
+    });
+    expect(result).toMatchObject({ available: true, tool: 'arp-scan', sweepComplete: false });
+    expect(result.devices).toHaveLength(1);
+    expect(result.reason).toMatch(/partial sweep/i);
+    expect(result.reason).toMatch(/not a complete LAN inventory/i);
+  });
+});
 
 describe('normalizeMac', () => {
   it('lowercases and colon-separates a valid MAC', () => {

@@ -63,7 +63,13 @@ async function runScan(id: string, subnet: string | null, timeoutMs: number, tra
         lastSeen: now,
       });
     }
-    t += `[done] inventory updated with ${result.devices.length} device(s) from ${result.subnet}.\n`;
+    if (result.sweepComplete === false) {
+      const error = `Discovery stopped before covering ${result.subnet}; ${result.devices.length} observed device(s) were retained as a partial inventory. ${result.sweepLimitation ?? 'The sweep did not complete.'}`;
+      t += `[incomplete] ${error}\n`;
+      updateCaptureSession(id, 'error', t, result.devices.length, error);
+      return;
+    }
+    t += `[done] complete sweep inventory updated with ${result.devices.length} device(s) from ${result.subnet}.\n`;
     updateCaptureSession(id, 'done', t, result.devices.length, null);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
