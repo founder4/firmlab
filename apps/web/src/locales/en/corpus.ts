@@ -47,7 +47,7 @@ export const corpus = {
 
   families: {
     title: 'Device families',
-    sub: 'Images grouped by identity (vendor:class:arch). A family with several versions is the basis for cross-version diff.',
+    sub: 'Images share a family only when vendor is evidenced; an unknown vendor stays scoped to one image. A proven family with several versions is the basis for cross-version diff.',
   },
 
   rules: {

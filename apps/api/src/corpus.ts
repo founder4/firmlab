@@ -12,7 +12,7 @@
  * exists or not, and re-running a provider produces identical rows. Deleting an image cascades its occurrences.
  */
 import { randomUUID } from 'node:crypto';
-import type { Architecture, FirmwareClass, ImageIdentity, StaticAnalysis } from '@firmlab/core';
+import type { ImageIdentity, StaticAnalysis } from '@firmlab/core';
 import {
   CORPUS_REINDEX_SOURCES,
   type CorpusReindexReport,
@@ -23,6 +23,7 @@ import {
   planImageReindex,
   summarizeReindex,
 } from './corpus-reindex.js';
+import { deviceFamilyKey } from './device-family.js';
 import type { GitleaksResult } from './providers/gitleaks.js';
 import type { SbomResult } from './providers/sbom.js';
 import { hashSecret } from './secret-hash.js';
@@ -34,17 +35,10 @@ import { type JobRow, elevateFinding, getDb, listBinaries, listFindings, listIma
 export { hashSecret };
 
 /**
- * A stable device-family key from an image's identity (vendor:class:arch; unknowns collapse). Pure — groups
- * images so cross-version diff and reachability priors can be scoped to "the same kind of device".
+ * A stable device-family key from an image's identity. An evidenced vendor groups versions; an unknown vendor is
+ * scoped to the image so unrelated devices cannot share reachability priors merely because metadata is missing.
  */
-export function deviceFamilyKey(identity: {
-  vendor?: string | undefined;
-  firmwareClass: FirmwareClass;
-  arch: Architecture;
-}): string {
-  const vendor = (identity.vendor ?? 'unknown').toLowerCase().replace(/\s+/g, '-');
-  return `${vendor}:${identity.firmwareClass}:${identity.arch}`;
-}
+export { deviceFamilyKey };
 
 // === Recording (Level 0, additive) ===
 //
@@ -119,13 +113,22 @@ export function recordReachabilityPrior(familyKey: string, subject: string, proo
 
 // === Cross-reference queries (priors — enrich existing per-image data, never assert new claims) ===
 
-/** Reachability priors recorded for a device family — subjects proven reachable before (Level-2 input to node ④). */
-export function listReachabilityPriors(familyKey: string): { subject: string; proofState: string; imageId: string }[] {
+/**
+ * Reachability priors for an evidenced family, plus legacy broad-scope rows only for this exact image.
+ * The second branch retains an image's own historical evidence without letting `unknown:class:arch` leak it to a
+ * different device. New writes always use the safe key.
+ */
+export function listReachabilityPriors(
+  familyKey: string,
+  imageId: string,
+): { subject: string; proofState: string; imageId: string }[] {
   return getDb()
     .prepare(
-      'SELECT subject, proofState, imageId FROM reachability_prior WHERE familyKey = ? ORDER BY createdAt DESC LIMIT 200',
+      `SELECT subject, proofState, imageId FROM reachability_prior
+       WHERE familyKey = ? OR (imageId = ? AND familyKey LIKE 'unknown:%')
+       GROUP BY subject, proofState, imageId ORDER BY MAX(createdAt) DESC LIMIT 200`,
     )
-    .all(familyKey) as unknown as { subject: string; proofState: string; imageId: string }[];
+    .all(familyKey, imageId) as unknown as { subject: string; proofState: string; imageId: string }[];
 }
 
 /** A live image referenced by a corpus cross-reference. */
@@ -257,7 +260,7 @@ export interface CorpusOverview {
   componentPrevalence: { name: string; version: string; cveCount: number; imageCount: number }[];
   /** How many images have an SBOM at all — the denominator the prevalence empty-state needs to say WHY it is empty. */
   sbomImageCount: number;
-  /** Images grouped by device family (vendor:class:arch), each list ordered oldest→newest for a version timeline. */
+  /** Images grouped by evidenced vendor, or isolated per-image when vendor is unknown. */
   deviceFamilies: { familyKey: string; images: ImageRef[] }[];
 }
 
@@ -292,7 +295,7 @@ export function corpusOverview(): CorpusOverview {
   const families = new Map<string, ImageRef[]>();
   for (const img of [...listImages()].reverse()) {
     if (!img.identityJson) continue;
-    const key = deviceFamilyKey(JSON.parse(img.identityJson) as ImageIdentity);
+    const key = deviceFamilyKey(JSON.parse(img.identityJson) as ImageIdentity, img.id);
     const list = families.get(key) ?? [];
     list.push({ id: img.id, filename: img.filename });
     families.set(key, list);

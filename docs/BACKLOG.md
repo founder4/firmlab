@@ -168,7 +168,11 @@ real de `~/Downloads/firmwares`, no contra sus README. moria identifica y desemp
 
 ### Corpus persistente — construido, cableado y vacío
 
-Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `artifact_occurrence` 2.003 filas de sólo 8 imágenes, `component_occurrence` 356 de 3, `credential_occurrence` 8 de 4, `reachability_prior` 3 de 3, `corpus_rule` ninguna. La página `/corpus` muestra `REUSED CREDENTIALS: 0` y `WATCHLIST RULES: 0`. La ventaja estructural que declara el comentario de módulo de `corpus.ts` no ha producido todavía un solo prior cruzado.
+La medición inicial del 5 de septiembre de 2026 (25 imágenes) encontró `artifact_occurrence` 2.003 filas de sólo
+8 imágenes, `component_occurrence` 356 de 3, `credential_occurrence` 8 de 4, `reachability_prior` 3 y
+`corpus_rule` ninguna. Tras el refresco selectivo del 10 de septiembre: artefactos 2.003/8, componentes 363/3,
+credenciales **30/9**, reachability 3 y reglas 0. `REUSED CREDENTIALS: 0` ya es un negativo real para las fuentes
+con entrada; `WATCHLIST RULES: 0` sigue siendo curación pendiente, no una incapacidad técnica.
 
 - [x] Alimentar el corpus desde todas las fuentes de secretos que SON secretos, sin exponer ninguno. Un camino uniforme y redaction-safe: cada proveedor estampa en su hallazgo una identidad hasheada —`evidence.secretHash` para un valor (nvram) o `evidence.secretHashes[]` para el material de clave de un fichero (`fsaudit`/`auxsecrets`)—, el `keyFingerprint` puro de `pem-scan.ts` la calcula (SHA-1 de la mitad PÚBLICA cuando la clave decodifica, del cuerpo base64 cuando no), y `credentialHashesFromFindings` (puro, en `findings-normalize.ts`) las recoge para que la ruta/opacidad llame a `recordCredentialHashes`. El valor NUNCA sale del proveedor; el corpus sigue guardando sólo un SHA-1, igual que ya hacía `hashSecret`. **`certs` queda deliberadamente FUERA**: un certificado es material público y meterlo en `credential_occurrence` es exactamente la sobreactuación que el comentario de la ruta gitleaks ya pagó con las claves dnscrypt. Validado contra bytes reales: la clave RSA device-wide de la Tenda-Camera —en dos particiones jffs2 y una reextracción— colapsa a UNA huella (`63949fb7…`), la de otro dispositivo (IMOU) difiere, y el cuerpo de la clave no se filtra en la huella. `hashSecret` se extrajo a `secret-hash.ts` para que los proveedores puros lo compartan sin arrastrar el store.
 - [x] Ampliar el alcance de `flagKnownCredentials`: ya no filtra por `source === 'secrets'` ni lee sólo un `evidence.value` en claro, sino que casa contra la MISMA identidad que grabó el recorder —`evidence.secretHash`/`secretHashes` cuando el proveedor la estampó, o `hashSecret(evidence.value)` para el clasificador de cadenas que guarda el valor literal—. Con esto el Nivel 1 alcanza los hallazgos redactados (nvram, material de clave), no sólo los 3 de `secrets`. Su valor sigue supeditado a que exista una regla en la watchlist (`ruleCount` sigue en 0 hasta promover una).
@@ -183,9 +187,22 @@ Medido contra el despliegue vivo del 5 de septiembre de 2026 (25 imágenes): `ar
 
   Y el resultado que corrige la premisa de este propio punto: **el reindexado NO puede poblar `credential_occurrence` desde el material de clave**. 72 filas del libro mayor en 12 imágenes vienen de `fsaudit`/`nvram`/`auxsecrets` y **ninguna lleva identidad estampada**, porque se escribieron antes de `c8a1516`. Esa identidad nunca se calculó y no está en disco para leerla. El informe lo nombra en vez de dejar que «0 ofrecidas / 25 imágenes con entrada» se lea como «revisadas las 25, no hay material de clave».
 
-- [ ] Re-ejecutar `fsaudit`/`nvram`/`auxsecrets` sobre las 25 imágenes tras desplegar `c8a1516`, y sólo entonces `pnpm corpus:reindex`. Ése —y no el reindexado— es el paso que produce las 72 identidades que hoy faltan; medido, es la única brecha que una reconciliación no puede cerrar. Después, un `credentialReuse` en 0 sería por fin un negativo real.
+- [x] Re-ejecutados `fsaudit`/`nvram`/`auxsecrets` sobre las 25 imágenes y después `pnpm corpus:reindex`. Se añadió
+  una ruta específica para `auxsecrets` y `pnpm corpus:refresh-credentials`, porque repetir toda la campaña
+  autónoma para tres fuentes era coste sin evidencia. Medición viva: 75 estados planificados, 54 ejecutados, 21
+  sin entrada atribuible, 0 errores y 72 findings; las huellas pasaron de 8/4 imágenes a **30/9**, con 22 identidades
+  ofrecidas por el ledger y cero filas de credencial sin estampar. El primer reindexado reveló además que su auditor
+  confundía 26 findings de postura de esos proveedores con credenciales; ahora sólo exige identidad a
+  `embedded-private-key`, par clave-certificado y valores NVRAM, con regresión cubierta. `credentialReuse` queda en
+  0 después de esa medición: negativo real para lo ejecutado, con las cotas de lectura aún visibles.
 - [x] Filtrar `componentPrevalence` con `HAVING imageCount > 1`, como ya hace `credentialReuse`: la tabla titulada «qué versiones abarcan más imágenes» devolvía 200 filas donde ninguna superaba 1, rellenas de módulos de kernel con versión `UNKNOWN` y 0 CVE. Y su estado vacío dice ahora por qué lo está —`sbomImageCount` de `imageCount` imágenes tienen SBOM— con un mensaje interpolado en ambos idiomas, igual que la sección de credenciales.
-- [ ] Decidir qué papel juega `vendor` en `deviceFamilyKey`: está sin poblar en 25 de 25 imágenes, de modo que las 13 familias son `unknown:clase:arquitectura` y cuatro routers sin relación comparten los priors de alcanzabilidad del Nivel 2. O se puebla desde la evidencia ya disponible (cadenas del rootfs, banners de servicio, FCC-ID, rutas NVRAM) o se retira de la clave; lo que no puede seguir es una clave que promete vendor y siempre responde `unknown`.
+- [x] Resuelto el papel de `vendor` en `deviceFamilyKey` sin inventar fabricantes. Sigue sin constar en 25/25
+  imágenes, así que el fallback `unknown:clase:arquitectura` —que mezclaba cuatro routers sin relación— ya no
+  existe: cuando falta vendor, la clave lleva el ID de la imagen y el prior no sale de ella. Sólo un vendor
+  evidenciado agrupa versiones. Todos los call sites exigen ahora el ID por tipo, la vista explica el aislamiento y
+  los tres priors históricos amplios sólo se consultan para su propio `imageId`, nunca para otra imagen. Es menos aprendizaje
+  cruzado, deliberadamente: fabricante del silicio, nombre de fichero o heurística de copyright no bastan para
+  afirmar familia de producto.
 - [ ] Desambiguar el nombre «corpus», que designa tres cosas sin relación entre sí: el corpus persistente entre imágenes (`apps/api/src/corpus.ts`), el corpus de validación de 25 muestras (`ops/corpus/validation-samples.lock.json`) y el corpus de reglas YARA (`ops/yara/corpus.lock.json`).
 
 ### Presentación de los resultados

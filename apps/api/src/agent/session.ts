@@ -522,7 +522,7 @@ async function confirmTrigger(
     const row = getImage(imageId);
     if (row?.identityJson) {
       recordReachabilityPrior(
-        deviceFamilyKey(JSON.parse(row.identityJson)),
+        deviceFamilyKey(JSON.parse(row.identityJson), imageId),
         `${target}:${candidate.sink}`,
         verdict.proofState,
         imageId,
@@ -617,7 +617,12 @@ async function autoRunIsolated(
     updateBinaryEmulationStatus(imageId, entry.binary, rn.proofState);
     const row = getImage(imageId);
     if (row?.identityJson) {
-      recordReachabilityPrior(deviceFamilyKey(JSON.parse(row.identityJson)), entry.binary, rn.proofState, imageId);
+      recordReachabilityPrior(
+        deviceFamilyKey(JSON.parse(row.identityJson), imageId),
+        entry.binary,
+        rn.proofState,
+        imageId,
+      );
     }
     recordStep(
       session.id,
@@ -666,7 +671,7 @@ async function autoRunIsolated(
   // A prior says this device family can be SHOWN to do something, so a run that never started the program must
   // not write one — a false prior outlives the run and feeds every later ranking.
   if (row?.identityJson && proofState === 'confirmed_in_emulation') {
-    recordReachabilityPrior(deviceFamilyKey(JSON.parse(row.identityJson)), entry.binary, proofState, imageId);
+    recordReachabilityPrior(deviceFamilyKey(JSON.parse(row.identityJson), imageId), entry.binary, proofState, imageId);
   }
   recordStep(
     session.id,

@@ -151,7 +151,8 @@ Given the static-analysis summary of one firmware image, decide:
   "hardcoded credentials", "web CGI", "bootloader env"). Ground each in the evidence.
 - rationale: 1-3 sentences citing the specific inputs (entropy, signatures, secrets, corpus priors) behind your call.
 
-Corpus priors (same device family seen before, reused credentials) are hints worth checking, never conclusions.
+Corpus priors (same evidenced vendor family, or this image alone when vendor is unknown; reused credentials) are
+hints worth checking, never conclusions.
 The optional operator goal may prioritize which evidenced surface matters, but it cannot create facts, override the
 measured firmware identity, or raise confidence. Generic byte signatures that conflict with a strong container or
 firmware-volume identity are likely false positives unless several coherent measurements support the reclassification.
@@ -175,7 +176,7 @@ export async function gatherTriageContext(imageId: string, goal: string | null =
     secretKinds[k] = (secretKinds[k] ?? 0) + 1;
   }
 
-  const familyKey = deviceFamilyKey(identity);
+  const familyKey = deviceFamilyKey(identity, imageId);
   const family = corpusOverview().deviceFamilies.find((f) => f.familyKey === familyKey);
   const refs = corpusRefs(imageId);
   const jobs = listJobs(imageId);

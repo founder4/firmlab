@@ -344,7 +344,7 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   let synthesis: ResearchResult['synthesis'];
   const llm = loadLlmConfig();
   if (llm) {
-    const reachablePriors = listReachabilityPriors(deviceFamilyKey(identity))
+    const reachablePriors = listReachabilityPriors(deviceFamilyKey(identity, imageId), imageId)
       .filter((p) => p.proofState === 'confirmed_in_emulation' || p.proofState === 'confirmed_full_system')
       .slice(0, 10)
       .map((p) => ({ subject: p.subject, proofState: p.proofState }));

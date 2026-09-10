@@ -60,7 +60,7 @@ function onSystemEmulationResult(
   r: SystemEmulationResult,
 ): SystemEmulationResult {
   if (r.proofState === 'confirmed_in_emulation' || r.proofState === 'confirmed_full_system') {
-    recordReachabilityPrior(deviceFamilyKey(identity), subject, r.proofState, imageId);
+    recordReachabilityPrior(deviceFamilyKey(identity, imageId), subject, r.proofState, imageId);
     updateBinaryEmulationStatus(imageId, subject, r.proofState);
   }
   const source = r.strategy === 'full-system' ? 'emulate-system' : `emulate-chroot:${subject}`;

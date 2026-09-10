@@ -1,8 +1,9 @@
 /**
  * Decision node ④ — zero-day reasoning. Given the deterministic taint scaffold for one binary (sinks it imports,
  * attacker-controlled sources, CGI hints, hardening) plus Level-2 corpus priors (vulnerable components seen in
- * this device family, reachability confirmed before), the agent hypothesizes a source→sink taint path, classifies
- * the vuln, and constructs a trigger. It is bound hard by the proof-state machine: node ④ only ever produces
+ * this evidenced device family — or this image alone when vendor is unknown — and reachability confirmed before),
+ * the agent hypothesizes a source→sink taint path, classifies the vuln, and constructs a trigger. It is bound hard
+ * by the proof-state machine: node ④ only ever produces
  * CANDIDATES — every one is `needs_runtime_reproduction`. It can never declare a confirmed finding; only the
  * deterministic trigger run (isolated emulation / fuzzing) can upgrade a candidate, and that decision is code's.
  *
@@ -140,7 +141,7 @@ export async function gatherZerodayContext(
   const bin = listBinaries(imageId).find((b) => b.path === decompile.binary);
   const refs = corpusRefs(imageId);
   const row = getImage(imageId);
-  const familyKey = row?.identityJson ? deviceFamilyKey(JSON.parse(row.identityJson)) : '';
+  const familyKey = row?.identityJson ? deviceFamilyKey(JSON.parse(row.identityJson), imageId) : '';
   const { measured } = partitionByProvenance(listFindings(imageId));
   const binaryName = decompile.binary.split('/').at(-1) ?? decompile.binary;
   const relatedFindings = measured
@@ -170,7 +171,7 @@ export async function gatherZerodayContext(
       .filter((c) => c.cveCount > 0)
       .slice(0, 10)
       .map((c) => ({ name: c.name, version: c.version, cveCount: c.cveCount, otherImages: c.otherImages.length })),
-    confirmedBefore: (familyKey ? listReachabilityPriors(familyKey) : [])
+    confirmedBefore: (familyKey ? listReachabilityPriors(familyKey, imageId) : [])
       .filter((p) => p.proofState === 'confirmed_in_emulation' || p.proofState === 'confirmed_full_system')
       .slice(0, 10)
       .map((p) => ({ subject: p.subject, proofState: p.proofState })),

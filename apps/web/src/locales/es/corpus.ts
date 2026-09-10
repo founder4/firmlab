@@ -45,7 +45,7 @@ export const corpus: Messages['corpus'] = {
 
   families: {
     title: 'Familias de dispositivo',
-    sub: 'Imágenes agrupadas por identidad (vendor:class:arch). Una familia con varias versiones es la base de la comparativa entre versiones.',
+    sub: 'Las imágenes sólo comparten familia cuando consta el fabricante; un fabricante desconocido queda aislado por imagen. Una familia demostrada con varias versiones permite comparar versiones.',
   },
 
   rules: {
