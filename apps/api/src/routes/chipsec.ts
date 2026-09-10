@@ -19,6 +19,7 @@ import {
 } from '../providers/fwhunt.js';
 import { startJob } from '../providers/jobs.js';
 import { deleteSupersededJobSnapshots, getImage, listJobs } from '../store.js';
+import { normalizeRunBudget } from './run-budget.js';
 
 /** Map the provider's UEFI findings onto finding drafts for the ledger (idempotent re-sync per image). */
 function syncChipsecFindings(imageId: string, result: ChipsecResult): void {
@@ -40,15 +41,15 @@ export async function chipsecRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const row = getImage(id);
     if (!row) return reply.status(404).send({ error: 'Image not found' });
-    const body = (req.body ?? {}) as { seconds?: number };
-    const opts: { seconds?: number } = {};
-    if (body.seconds) opts.seconds = Math.min(180, Math.max(5, Number(body.seconds)));
-    const jobId = startJob(id, 'chipsec', {}, async () => {
-      const result = await runChipsec(row.path, opts);
+    const body = (req.body ?? {}) as { seconds?: unknown };
+    const budget = normalizeRunBudget(body.seconds, { defaultSeconds: 60, minSeconds: 5, maxSeconds: 180 });
+    if (!budget) return reply.status(400).send({ error: 'seconds must be a finite number' });
+    const jobId = startJob(id, 'chipsec', { ...budget }, async () => {
+      const result = await runChipsec(row.path, { seconds: budget.seconds });
       syncChipsecFindings(id, result);
       return result;
     });
-    return reply.status(202).send({ jobId });
+    return reply.status(202).send({ jobId, ...budget });
   });
 
   app.get('/images/:id/chipsec', async (req) => {

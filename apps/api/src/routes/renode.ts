@@ -8,6 +8,7 @@ import { syncFindings } from '../findings.js';
 import { startJob } from '../providers/jobs.js';
 import { buildRenodeFindings, detectRenode, renodeHintsFrom, runRenode } from '../providers/renode.js';
 import { getImage, listJobs } from '../store.js';
+import { normalizeRunBudget } from './run-budget.js';
 
 /** MCU/vendor hints for platform selection: identity fields + a bounded slice of the analysis strings. */
 function hintsFor(imageId: string): string[] {
@@ -22,21 +23,22 @@ export async function renodeRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const row = getImage(id);
     if (!row) return reply.status(404).send({ error: 'Image not found' });
-    const body = (req.body ?? {}) as { platform?: string; seconds?: number };
-    const opts: { platform?: string; seconds?: number } = {};
+    const body = (req.body ?? {}) as { platform?: string; seconds?: unknown };
+    const budget = normalizeRunBudget(body.seconds, { defaultSeconds: 15, minSeconds: 3, maxSeconds: 120 });
+    if (!budget) return reply.status(400).send({ error: 'seconds must be a finite number' });
+    const opts: { platform?: string; seconds: number } = { seconds: budget.seconds };
     if (body.platform) opts.platform = body.platform;
-    if (body.seconds) opts.seconds = Math.min(120, Math.max(3, Number(body.seconds)));
     // The source is image-wide, not per platform: Renode selects the platform from the firmware's own bytes, so
     // "does this image boot under Renode" is one question per image and a re-run replaces its answer. The platform
     // that was chosen travels in the row's evidence, where an operator override is visible without splitting the
     // key and stranding a previous platform's verdict in the ledger forever.
-    const jobId = startJob(id, 'renode', { platform: opts.platform ?? null }, () =>
+    const jobId = startJob(id, 'renode', { platform: opts.platform ?? null, ...budget }, () =>
       runRenode(row.path, hintsFor(id), opts).then((r) => {
         syncFindings(id, 'renode', buildRenodeFindings(r));
         return r;
       }),
     );
-    return reply.status(202).send({ jobId });
+    return reply.status(202).send({ jobId, ...budget });
   });
 
   app.get('/images/:id/renode', async (req) => {

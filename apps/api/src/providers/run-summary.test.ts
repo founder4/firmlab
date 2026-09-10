@@ -114,6 +114,26 @@ describe('summarizeRun — status is the process, outcome is what was learned', 
     expect(r.outcome).toBe('lead');
   });
 
+  it('shows persisted wall-clock budgets, including defaults and silent clamps', () => {
+    const chipsec = summarizeRun(
+      job({
+        kind: 'chipsec',
+        params: JSON.stringify({ seconds: 180, requestedSeconds: 999, secondsClamped: true }),
+        resultJson: JSON.stringify({ available: false, reason: 'tool absent' }),
+      }),
+    );
+    const renode = summarizeRun(
+      job({
+        kind: 'renode',
+        params: JSON.stringify({ seconds: 15, requestedSeconds: null, secondsClamped: false }),
+        resultJson: JSON.stringify({ available: true, ran: true, booted: false, reason: 'No UART output.' }),
+      }),
+    );
+
+    expect(chipsec.bound).toBe('180s budget (requested 999s; clamped)');
+    expect(renode.bound).toBe('15s default budget');
+  });
+
   it('reads a reachability proof, and refuses to call a spent budget a negative', () => {
     const reached = summarizeRun(
       job({

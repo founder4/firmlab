@@ -69,6 +69,20 @@ function parse<T>(json: string | null): T | null {
   }
 }
 
+/** Render the wall-clock budget newer routes persist, including whether it was defaulted or clamped. */
+function runSecondsBound(params: Record<string, unknown>): string | null {
+  if (typeof params.seconds !== 'number' || !Number.isFinite(params.seconds)) return null;
+  if (params.requestedSeconds === null) return `${params.seconds}s default budget`;
+  if (
+    params.secondsClamped === true &&
+    typeof params.requestedSeconds === 'number' &&
+    Number.isFinite(params.requestedSeconds)
+  ) {
+    return `${params.seconds}s budget (requested ${params.requestedSeconds}s; clamped)`;
+  }
+  return `${params.seconds}s budget`;
+}
+
 /** Human-facing wording for each dynamic-probe verdict, plus how much it is allowed to claim. */
 const DYNPROBE: Record<string, { outcome: RunOutcome; text: string }> = {
   crash_input_controlled: { outcome: 'proven', text: 'Crash, and the input controls the return address' },
@@ -204,7 +218,7 @@ export function summarizeRun(job: RunInput): RunSummary {
     target:
       typeof params.binary === 'string' ? params.binary : typeof params.target === 'string' ? params.target : null,
     question: null as string | null,
-    bound: null as string | null,
+    bound: runSecondsBound(params),
   };
 
   if (job.status === 'running' || job.status === 'queued') {
@@ -402,7 +416,7 @@ export function summarizeRun(job: RunInput): RunSummary {
           result.booted === true
             ? `Booted under Renode${platform ? ` on ${platform}` : ''}`
             : String(result.reason ?? 'Did not boot'),
-        bound: null,
+        bound: base.bound,
       };
     }
 

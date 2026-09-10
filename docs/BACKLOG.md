@@ -434,11 +434,11 @@ entrada correspondiente. Quedan 30.
   (`scripts/angr-cfgreach.py:197,205`). Implica que cada sumidero preguntado obtuvo respuesta; uno con presupuesto
   agotado no obtuvo ninguna, y `buildExportReachFindings` tampoco emite nada por él. Es además la única herramienta
   de alcanzabilidad que **no** pasa por el mapa `meaning` de `reachabilityPayload`.
-- [ ] `routes/chipsec.ts:45-46` (y `routes/renode.ts:28,33`) **(C)** — los `seconds` del operador se acotan en
-  silencio (5–180 y 3–120) y luego **no se registran en los params del job** (`startJob(id, 'chipsec', {}, …)`), así
-  que `/images/:id/runs` —el registro construido precisamente para volver de una línea a la corrida que la
-  produjo— no puede decir con qué presupuesto de tiempo salió un veredicto, al contrario que `symreach`, `fuzz` y
-  `webprobe`, que sí persisten el suyo.
+- [x] `routes/chipsec.ts:45-46` (y `routes/renode.ts:28,33`) **(C)** — resuelto. Ambos jobs persisten ahora
+  `seconds` efectivo, `requestedSeconds` y `secondsClamped`; incluso el presupuesto por defecto queda registrado.
+  La respuesta `202` devuelve los mismos campos para que el recorte no sea silencioso, y tipos JSON inválidos o
+  números no finitos reciben `400`. La normalización compartida conserva los rangos 5–180 y 3–120 sin cambiar los
+  defaults reales de los proveedores (60 y 15 segundos).
 
 #### Adyacentes y limítrofes, valorados y no incluidos arriba
 
