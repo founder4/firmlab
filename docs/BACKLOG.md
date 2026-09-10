@@ -101,7 +101,7 @@ real de `~/Downloads/firmwares`, no contra sus README. moria identifica y desemp
   Revalidado sobre los bytes reales: Tenda **33.018 filas / 32.865 nombres únicos** en 105 ms; DVRF **10.189 / 9.987**
   en 71 ms; GL.iNet sigue devolviendo `null` honestamente. Hay fixtures de tabla completa, recuento corrupto y ruido.
 
-- [ ] **Adoptar el gating triestado de CVE de kernel (`kconfig_infer.cpp` + `kernelcve.cpp`, ~500 líneas + tabla).**
+- [x] **Adoptar el gating triestado de CVE de kernel (`kconfig_infer.cpp` + `kernelcve.cpp`, ~500 líneas + tabla).**
   Es la respuesta directa al punto ya abierto arriba («el prefijo NVD puede tener miles de CVE (2.037 para Linux
   2.6.31); usar config/subsistema … para descartar candidatos»). Cada opción `CONFIG` se resuelve a **On / Off /
   Unknown** fusionando fuentes por confianza descendente (`.config` recuperado > `modules.builtin` y `.ko` >
@@ -113,7 +113,12 @@ real de `~/Downloads/firmwares`, no contra sus README. moria identifica y desemp
   `packet_rcv` presente deja aplicables los CVE de af_packet. La tabla curada son ~40 LPE/RCE reales con rango
   mainline y `req`/`mit` por CVE — datos portables tal cual, frente a los 7 CVE de `component-cve.ts`.
   El mapeo a `ProofState` es directo: aplicable → `needs_runtime_reproduction`, descartado → `false_positive` con
-  su evidencia, indeterminado → `blocked_by_platform`. *Nunca* colapsar los tres a una lista vacía.
+  su evidencia, indeterminado → `blocked_by_platform`. *Nunca* colapsar los tres a una lista vacía. Cerrado el 10 de
+  septiembre: 27 opciones se infieren en tres estados y las 56 reglas curadas conservan los tres resultados en API,
+  ledger y resumen de UI. La enumeración parcial de módulos sólo puede confirmar presencia; para descartar exige
+  tabla kallsyms completa y recorrido completo de `lib/modules`. Revalidación real: Tenda 4.4.282 produce **14
+  indicios / 5 descartados / 20 indeterminados**; DVRF 2.6.22, **17 / 6 / 20**. En Tenda, CVE-2022-0185 se descarta
+  por ausencia demostrada de `CONFIG_USER_NS`, mientras CVE-2016-8655 queda como indicio por `packet_rcv`.
 
 - [ ] **Evaluar moria como extractor frente a la cadena binwalk + sasquatch + jefferson + ubireader.** Desempaqueta
   ~20 sistemas de ficheros en proceso, sin sudo y sin herramienta externa. Medido: JFFS2 de la Tenda-Camera → rootfs

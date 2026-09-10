@@ -74,6 +74,24 @@ export function postureCensus(answers: readonly PostureAnswer[]): PostureCensus 
   return c;
 }
 
+export interface KernelCveCensus {
+  total: number;
+  applicable: number;
+  ruledOut: number;
+  unknown: number;
+}
+
+/** Preserve the provider's three states on screen; a dismissed candidate and an unanswered one are not both zero. */
+export function kernelCveCensus(result: KernelPostureResult | null | undefined): KernelCveCensus {
+  const c: KernelCveCensus = { total: result?.cves?.length ?? 0, applicable: 0, ruledOut: 0, unknown: 0 };
+  for (const cve of result?.cves ?? []) {
+    if (cve.state === 'applicable') c.applicable += 1;
+    else if (cve.state === 'ruled_out') c.ruledOut += 1;
+    else c.unknown += 1;
+  }
+  return c;
+}
+
 const CLASS_ORDER: Record<AnswerClass, number> = { bad: 0, unanswered: 1, good: 2, 'not-applicable': 3 };
 
 /**

@@ -30,6 +30,10 @@ export const kernelPosture = {
     `${c.total} question${c.total === 1 ? '' : 's'} — ${c.bad} weak, ${c.good} ok, ${c.unanswered} unanswered, ${c.notApplicable} not applicable to this kernel.`,
   legend:
     'Unanswered and not-applicable are different: the first is a question this image did not settle, the second a question that could not exist for this kernel version — an option that postdates it, or one upstream has removed. Neither is a statement that the hardening is off.',
+  cveCensus: (c: { total: number; applicable: number; ruledOut: number; unknown: number }) =>
+    `${c.total} curated, version-range kernel CVEs — ${c.applicable} leads, ${c.ruledOut} dismissed by configuration evidence, ${c.unknown} undetermined.`,
+  cveLegend:
+    'A lead still needs reproduction and a backport check. Dismissed means a required subsystem was proven absent; undetermined means the evidence could not decide and is not a clean result.',
   field: {
     version: 'Version',
     versionSource: 'Read from',

@@ -1266,6 +1266,14 @@ export interface KernelPostureResult {
     signedCount?: number;
   } | null;
   answers?: PostureAnswer[];
+  configOptions?: Array<{ option: string; state: 'on' | 'off' | 'unknown'; evidence: string | null }>;
+  cves?: Array<{
+    id: string;
+    impact: 'LPE' | 'RCE' | 'DoS';
+    state: 'applicable' | 'ruled_out' | 'unknown';
+    reason: string;
+    note: string;
+  }>;
   searched?: string[];
   findings?: unknown[];
   reason?: string;

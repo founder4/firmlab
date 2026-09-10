@@ -63,6 +63,14 @@ import zlib from 'node:zlib';
 import type { FindingSeverity } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
 import { type DecodedKallsyms, decodeKallsyms } from './kallsyms.js';
+import {
+  KERNEL_OPTION_KNOWLEDGE,
+  type KernelCveAssessment,
+  type KernelOptionAssessment,
+  assessKernelCves,
+  inferKernelOption,
+  kernelCveFindings,
+} from './kernel-cve.js';
 
 /**
  * Named so the rule is greppable from outside this file: loose `CONFIG_*` tokens recovered from a kernel blob are
@@ -343,6 +351,10 @@ export interface ModuleEvidence {
   inspectedCount: number;
   /** Where the inspected modules came from. Optional forever — absent on every result stored before this pass. */
   provenance?: ModuleProvenance;
+  /** Module basenames used for positive CVE-subsystem evidence, even when the inventory is partial. */
+  cveModuleNames?: string[];
+  /** Only a complete inventory may support a negative modular-subsystem inference. */
+  cveModuleInventoryComplete?: boolean;
 }
 
 /** What one `.ko`'s `.modinfo` says about where it came from. All optional: a stripped module says nothing. */
@@ -1007,6 +1019,10 @@ export interface KernelPostureResult {
   modules: ModuleEvidence | null;
   age: KernelAge | null;
   answers: PostureAnswer[];
+  /** Tri-state CONFIG inference used by the curated CVE gate. */
+  configOptions: KernelOptionAssessment[];
+  /** Every curated, version-in-range CVE, including dismissed and undetermined rows. */
+  cves: KernelCveAssessment[];
   findings: FindingDraft[];
   /** What was searched, in order — this is what a `located: false` result owes the operator. */
   searched: string[];
@@ -1099,6 +1115,7 @@ export function moduleProvenanceFindings(mods: ModuleEvidence | null): FindingDr
 export function postureFindings(result: Omit<KernelPostureResult, 'findings'>): FindingDraft[] {
   const drafts: FindingDraft[] = [];
   drafts.push(...moduleProvenanceFindings(result.modules));
+  if (result.version) drafts.push(...kernelCveFindings(result.version, result.cves));
 
   if (!result.located) {
     drafts.push({
@@ -1317,16 +1334,22 @@ function isFilesystemRoot(entries: readonly fs.Dirent[]): boolean {
  * extraction recorded `rootfsPath: null`), a filesystem root discovered here is where the module set and the
  * shipped config are read from — and the result says that is where it came from.
  */
-function walkExtraction(dir: string, cap: number, pruneFilesystemRoots: boolean): { files: string[]; roots: string[] } {
+function walkExtraction(
+  dir: string,
+  cap: number,
+  pruneFilesystemRoots: boolean,
+): { files: string[]; roots: string[]; complete: boolean } {
   const files: string[] = [];
   const roots: string[] = [];
   const stack = [dir];
+  let walkComplete = true;
   while (stack.length > 0 && files.length < cap) {
     const cur = stack.pop() as string;
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(cur, { withFileTypes: true });
     } catch {
+      walkComplete = false;
       continue;
     }
     if (pruneFilesystemRoots && cur !== dir && isFilesystemRoot(entries)) {
@@ -1339,12 +1362,14 @@ function walkExtraction(dir: string, cap: number, pruneFilesystemRoots: boolean)
       else if (e.isFile()) {
         files.push(p);
         if (files.length >= cap) break;
-      }
+      } else walkComplete = false; // A symlink or special entry may hide another module; do not infer absence.
     }
   }
   // Shallowest first, then lexicographic — a deterministic order, never the filesystem's.
   roots.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length || (a < b ? -1 : 1));
-  return { files, roots };
+  // Treat an exact-cap walk as partial even when the stack happened to empty: the current directory may have had
+  // more entries after the break. This deliberately underclaims completeness at the boundary.
+  return { files, roots, complete: walkComplete && stack.length === 0 && files.length < cap };
 }
 
 /** The container extensions binwalk leaves beside its decompressed output — the compressed side is never a kernel. */
@@ -1472,9 +1497,16 @@ function readModules(rootfs: string): ModuleEvidence | null {
   }
   const versionDir = versionDirs[0];
   if (!versionDir) return null;
-  const kos = walkFiles(path.join(base, versionDir), WALK_FILE_CAP)
-    .filter((f) => f.endsWith('.ko'))
-    .sort();
+  const moduleWalk = walkExtraction(path.join(base, versionDir), WALK_FILE_CAP, false);
+  const kos = moduleWalk.files.filter((f) => f.endsWith('.ko')).sort();
+  const cveModuleNames = new Set(kos.map((ko) => path.basename(ko, '.ko')));
+  const builtin = readBounded(path.join(base, versionDir, 'modules.builtin'), 4 * 1024 * 1024);
+  if (builtin) {
+    for (const line of Buffer.from(builtin).toString('utf8').split('\n')) {
+      const name = path.basename(line.trim(), '.ko');
+      if (name) cveModuleNames.add(name);
+    }
+  }
   let signedCount = 0;
   let vermagic: string | null = null;
   let inspectedCount = 0;
@@ -1495,6 +1527,8 @@ function readModules(rootfs: string): ModuleEvidence | null {
     signedCount,
     inspectedCount,
     provenance: assessModuleProvenance(facts),
+    cveModuleNames: [...cveModuleNames].sort(),
+    cveModuleInventoryComplete: moduleWalk.complete,
   };
 }
 
@@ -1603,6 +1637,8 @@ export function runKernelPosture(
   let banner: KernelBanner | null = null;
   let bannerPath: string | null = null;
   let blob: KernelBlobFacts | null = null;
+  let selectedKallsyms: DecodedKallsyms | null = null;
+  let selectedKernelStrings: string | null = null;
   for (const cand of candidates) {
     const buf = readBounded(cand, BLOB_READ_CAP);
     if (!buf) continue;
@@ -1617,10 +1653,16 @@ export function runKernelPosture(
       banner = b;
       bannerPath = cand;
       blob = facts;
+      selectedKallsyms = decodedKallsyms;
+      selectedKernelStrings = text;
       break;
     }
     // Keep the best readable non-banner blob: its markers are still worth something without a version banner.
-    if (facts.readable && !blob) blob = facts;
+    if (facts.readable && !blob) {
+      blob = facts;
+      selectedKallsyms = decodedKallsyms;
+      selectedKernelStrings = text;
+    }
   }
 
   // --- reconcile the version sources rather than silently preferring one ---
@@ -1651,8 +1693,21 @@ export function runKernelPosture(
   const answers = located
     ? assessPosture({ version: numeric, config, configPath, blob, modules, sysctl, sysctlPath })
     : [];
+  const cveEvidence = {
+    config,
+    kallsyms: selectedKallsyms,
+    modules: modules?.cveModuleNames
+      ? { names: new Set(modules.cveModuleNames), complete: modules.cveModuleInventoryComplete === true }
+      : null,
+    kernelStrings: selectedKernelStrings,
+  };
+  const configOptions = KERNEL_OPTION_KNOWLEDGE.map((entry) => inferKernelOption(entry.option, cveEvidence));
+  const cves = version ? assessKernelCves(version, cveEvidence) : [];
   const age = numeric ? kernelAge(numeric, nowMs, banner?.buildYear) : null;
   const answered = answers.filter((a) => a.verdict !== 'unknown').length;
+  const cveLeads = cves.filter((cve) => cve.state === 'applicable').length;
+  const cveRuledOut = cves.filter((cve) => cve.state === 'ruled_out').length;
+  const cveUnknown = cves.length - cveLeads - cveRuledOut;
 
   const shell: Omit<KernelPostureResult, 'findings'> = {
     available: true,
@@ -1669,10 +1724,12 @@ export function runKernelPosture(
     modules,
     age,
     answers,
+    configOptions,
+    cves,
     searched,
     bounds,
     reason: located
-      ? `Linux ${version} (from ${versionSource}; ${configPath ? `kernel config at ${configPath}` : 'no kernel config shipped'}). ${answered} of ${answers.length} posture questions answered from the bytes; ${answers.length - answered} could not be determined and each says why. An undetermined question is not a passing one.`
+      ? `Linux ${version} (from ${versionSource}; ${configPath ? `kernel config at ${configPath}` : 'no kernel config shipped'}). ${answered} of ${answers.length} posture questions answered from the bytes; ${answers.length - answered} could not be determined and each says why. Curated CVE gating retained ${cveLeads} lead(s), ruled out ${cveRuledOut}, and left ${cveUnknown} undetermined. An undetermined question is not a passing one.`
       : 'No Linux kernel was located. The posture questions were asked and could not be answered — a coverage gap, not a clean result.',
   };
 

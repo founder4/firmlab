@@ -22,6 +22,10 @@ export const kernelPosture: Messages['kernelPosture'] = {
     `${c.total} pregunta${c.total === 1 ? '' : 's'} — ${c.bad} débil${c.bad === 1 ? '' : 'es'}, ${c.good} correcta${c.good === 1 ? '' : 's'}, ${c.unanswered} sin contestar, ${c.notApplicable} sin aplicación en este kernel.`,
   legend:
     'Sin contestar y sin aplicación no son lo mismo: la primera es una pregunta que esta imagen no cerró, la segunda una que no podía existir para esta versión de kernel — una opción posterior a ella, o una que upstream ya retiró. Ninguna de las dos afirma que el endurecimiento esté desactivado.',
+  cveCensus: (c: { total: number; applicable: number; ruledOut: number; unknown: number }) =>
+    `${c.total} CVE de kernel curados cuyo rango incluye la versión — ${c.applicable} indicios, ${c.ruledOut} descartados por evidencia de configuración, ${c.unknown} indeterminados.`,
+  cveLegend:
+    'Un indicio aún exige reproducción y comprobar backports. Descartado significa que se demostró ausente un subsistema requerido; indeterminado significa que la evidencia no pudo decidir y no es un resultado limpio.',
   field: {
     version: 'Versión',
     versionSource: 'Leída de',

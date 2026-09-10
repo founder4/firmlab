@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { PostureAnswer } from './api';
-import { answerClass, moduleSigning, orderAnswers, postureCensus, postureState } from './kernel-posture';
+import {
+  answerClass,
+  kernelCveCensus,
+  moduleSigning,
+  orderAnswers,
+  postureCensus,
+  postureState,
+} from './kernel-posture';
 
 const a = (over: Partial<PostureAnswer>): PostureAnswer => ({
   id: 'q',
@@ -55,6 +62,20 @@ describe('postureCensus', () => {
 
   it('is all zeroes for no answers rather than throwing', () => {
     expect(postureCensus([])).toEqual({ total: 0, bad: 0, unanswered: 0, good: 0, notApplicable: 0 });
+  });
+});
+
+describe('kernelCveCensus', () => {
+  it('keeps applicable, dismissed and undetermined CVEs separate', () => {
+    expect(
+      kernelCveCensus({
+        cves: [
+          { id: 'CVE-A', impact: 'LPE', state: 'applicable', reason: 'present', note: 'a' },
+          { id: 'CVE-B', impact: 'LPE', state: 'ruled_out', reason: 'absent', note: 'b' },
+          { id: 'CVE-C', impact: 'RCE', state: 'unknown', reason: 'unknown', note: 'c' },
+        ],
+      }),
+    ).toEqual({ total: 3, applicable: 1, ruledOut: 1, unknown: 1 });
   });
 });
 

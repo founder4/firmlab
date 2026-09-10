@@ -29,6 +29,7 @@ import { useMessages } from '../i18n';
 import {
   type AnswerClass,
   answerClass,
+  kernelCveCensus,
   moduleSigning,
   orderAnswers,
   postureCensus,
@@ -97,6 +98,7 @@ export function KernelPosture({ imageId }: { imageId: string }): JSX.Element {
   const state = postureState(result);
   const answers = orderAnswers(result?.answers ?? []);
   const census = postureCensus(answers);
+  const cveCensus = kernelCveCensus(result);
   const mods = moduleSigning(result);
 
   const runButton = (
@@ -152,6 +154,15 @@ export function KernelPosture({ imageId }: { imageId: string }): JSX.Element {
               {k.legend}
             </div>
           </div>
+
+          {cveCensus.total > 0 && (
+            <div style={{ marginTop: 12, maxWidth: '72ch' }}>
+              <div style={{ fontSize: 12.5 }}>{k.cveCensus(cveCensus)}</div>
+              <div className="hint" style={{ marginTop: 4 }}>
+                {k.cveLegend}
+              </div>
+            </div>
+          )}
 
           {answers.length === 0 ? (
             <div className="hint" style={{ marginTop: 12, maxWidth: '72ch' }}>

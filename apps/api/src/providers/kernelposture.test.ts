@@ -482,6 +482,8 @@ function shell(over: Partial<Parameters<typeof postureFindings>[0]> = {}): Param
     modules: null,
     age: null,
     answers: [],
+    configOptions: [],
+    cves: [],
     searched: [],
     bounds: [],
     reason: '',
@@ -768,5 +770,13 @@ describe('runKernelPosture', () => {
     expect(r.versionSource).toBe('kernel-config');
     expect(r.answers.find((a) => a.id === 'devkmem')).toMatchObject({ verdict: 'on', source: 'kernel-config' });
     expect(r.answers.find((a) => a.id === 'strict-devmem')).toMatchObject({ verdict: 'off', source: 'kernel-config' });
+    expect(r.configOptions.find((o) => o.option === 'CONFIG_USER_NS')).toMatchObject({
+      state: 'off',
+      evidence: 'kernel-config:not-enabled',
+    });
+    expect(r.cves.find((cve) => cve.id === 'CVE-2022-0185')).toMatchObject({ state: 'ruled_out' });
+    expect(
+      r.findings.find((finding) => finding.kind === 'kernel-cve' && finding.title.startsWith('CVE-2022-0185')),
+    ).toMatchObject({ proofState: 'false_positive' });
   });
 });
