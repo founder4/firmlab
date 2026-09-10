@@ -172,14 +172,17 @@ describe('planImageReindex', () => {
     expect(cappedSbom.boundedInputs).toEqual([{ kind: 'sbom-packages', covered: 1, total: 2019 }]);
   });
 
-  it('counts ledger rows from a stamping provider that carry no identity', () => {
-    // The deployed bench's exact state: fsaudit/nvram/auxsecrets rows written before c8a1516 taught them to stamp.
+  it('counts credential-bearing rows without identity, not unrelated posture from the same providers', () => {
     const plan = planImageReindex(
       emptyInput({
         findings: [
-          finding({ source: 'fsaudit', evidenceJson: JSON.stringify({ path: 'etc/shadow' }) }),
-          finding({ source: 'nvram', evidenceJson: JSON.stringify({ secretHash: 'aaa' }) }),
-          finding({ source: 'auxsecrets:etc/keys', evidenceJson: null }),
+          finding({ source: 'fsaudit', kind: 'embedded-private-key', evidenceJson: JSON.stringify({ path: 'key' }) }),
+          finding({ source: 'nvram', kind: 'nvram-credential', evidenceJson: JSON.stringify({ secretHash: 'aaa' }) }),
+          finding({ source: 'auxsecrets:etc/keys', kind: 'embedded-private-key', evidenceJson: null }),
+          // Same providers, but these rows describe posture or a filename heuristic — no reusable credential.
+          finding({ source: 'fsaudit', kind: 'weak-password-hash', evidenceJson: null }),
+          finding({ source: 'fsaudit', kind: 'notable-private-key', evidenceJson: null }),
+          finding({ source: 'nvram', kind: 'nvram-boot-interruptible', evidenceJson: null }),
           // Not a stamping source: a missing hash here says nothing about when it was written.
           finding({ source: 'sbom', evidenceJson: null }),
           // An operator row is never counted towards a gap in code-authored measurement.

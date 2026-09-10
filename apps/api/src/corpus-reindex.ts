@@ -63,17 +63,28 @@ export const CORPUS_REINDEX_SOURCES: readonly CorpusReindexSource[] = [
 ] as const;
 
 /**
- * The sources that stamp a redaction-safe credential identity on their findings.
+ * The sources and finding kinds that stamp a redaction-safe credential identity.
  *
  * Named here so a reconciliation can tell apart two zeroes that look identical in the ledger: a provider that ran
  * and found no key material, and a provider that ran BEFORE it learned to stamp one. The second is the state the
- * deployed bench is actually in — 22 `fsaudit`, 22 `auxsecrets` and 28 `nvram` rows, and not one carrying a hash —
- * and it is the one a reindex cannot fix, because the identity was never computed and is not on disk to be read.
+ * A provider also emits posture findings (boot delay, accounts, services, suspicious filenames) that are not
+ * credentials and must not be counted as missing stamps merely because they share the same source.
  */
 export const CREDENTIAL_STAMPING_SOURCES = ['fsaudit', 'nvram', 'auxsecrets'] as const;
 
 function isStampingSource(source: string): boolean {
   return CREDENTIAL_STAMPING_SOURCES.some((s) => source === s || source.startsWith(`${s}:`));
+}
+
+export const CREDENTIAL_STAMPING_KINDS = new Set([
+  'embedded-private-key',
+  'private-key-matches-shipped-certificate',
+  'nvram-credential',
+  'nvram-wifi-key',
+]);
+
+function expectsStampedIdentity(finding: ReindexFindingRow): boolean {
+  return isStampingSource(finding.source) && CREDENTIAL_STAMPING_KINDS.has(finding.kind);
 }
 
 /** The ledger columns a reconciliation reads. A subset of `FindingRow`, so the pure layer needs no store type. */
@@ -328,7 +339,7 @@ export function planImageReindex(input: ReindexImageInput): ReindexImagePlan {
     boundedInputs: bounds.bounded,
     unrecordedBounds: bounds.unrecorded,
     unstampedCredentialRows: input.findings.filter(
-      (f) => isStampingSource(f.source) && !isOperatorSource(f.source) && !hasStampedIdentity(f.evidenceJson),
+      (f) => expectsStampedIdentity(f) && !isOperatorSource(f.source) && !hasStampedIdentity(f.evidenceJson),
     ).length,
   };
 }
