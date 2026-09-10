@@ -174,7 +174,17 @@ export interface RtosAnalysis {
   rtosKernel: string | null;
   ecos: { version: string | null; redboot: boolean; app: string | null } | null;
   flags: string[];
+  coverage: RtosCoverage;
   findings: FindingDraft[];
+}
+
+export interface RtosCoverage {
+  /** Bytes actually searched for RTOS/eCos/flag markers. */
+  scannedBytes: number;
+  /** Size of the complete image on disk (or the supplied buffer for pure callers). */
+  fileBytes: number;
+  /** True only when marker scanning covered the complete image. */
+  complete: boolean;
 }
 
 /**
@@ -183,7 +193,9 @@ export interface RtosAnalysis {
  * the recovered flash base) and any detected RTOS kernel — plus, when a vector table is found with NO RTOS
  * strings, an `info` lead noting that a dynamic run needs Renode with a matching platform.
  */
-export function analyzeRtos(buf: Uint8Array): RtosAnalysis {
+export function analyzeRtos(buf: Uint8Array, fileSize = buf.length): RtosAnalysis {
+  const scannedBytes = Math.min(buf.length, SCAN_CAP, fileSize);
+  const coverage: RtosCoverage = { scannedBytes, fileBytes: fileSize, complete: scannedBytes === fileSize };
   const vectorTable = parseVectorTable(buf);
   const rtosKernel = detectRtosKernel(buf);
   const isCortexM = vectorTable !== null;
@@ -223,19 +235,22 @@ export function analyzeRtos(buf: Uint8Array): RtosAnalysis {
   }
 
   if (vectorTable && !rtosKernel) {
+    const markerScope = coverage.complete
+      ? `the complete ${coverage.fileBytes}-byte image`
+      : `the first ${coverage.scannedBytes} of ${coverage.fileBytes} image bytes`;
     findings.push({
       kind: 'rtos-baremetal',
-      title: 'bare-metal (no RTOS strings) — dynamic analysis needs Renode with a matching platform',
+      title: coverage.complete
+        ? 'bare-metal (no RTOS strings) — dynamic analysis needs Renode with a matching platform'
+        : 'possible bare-metal (no RTOS strings in scanned prefix) — dynamic analysis needs Renode with a matching platform',
       severity: 'info',
       proofState: 'needs_runtime_reproduction',
       evidence: {
         flashBase: memoryMap ? hex(memoryMap.flashBase) : null,
         ramBase: memoryMap ? hex(memoryMap.ramBase) : null,
+        markerScanCoverage: coverage,
       },
-      rationale:
-        'A valid Cortex-M vector table with no recognizable RTOS kernel strings indicates a bare-metal firmware. ' +
-        'Confirming its behavior needs Renode booting a matching per-MCU platform (.repl); this is a lead for ' +
-        'that runtime step, not a verdict.',
+      rationale: `A valid Cortex-M vector table is present, with no recognizable RTOS kernel strings in ${markerScope}. This leaves bare-metal firmware as a lead; confirming its behavior needs Renode booting a matching per-MCU platform (.repl), not a stronger static verdict.`,
     });
   }
 
@@ -273,7 +288,7 @@ export function analyzeRtos(buf: Uint8Array): RtosAnalysis {
     });
   }
 
-  return { isCortexM, vectorTable, memoryMap, rtosKernel, ecos, flags, findings };
+  return { isCortexM, vectorTable, memoryMap, rtosKernel, ecos, flags, coverage, findings };
 }
 
 export interface RtosResult {
@@ -282,6 +297,7 @@ export interface RtosResult {
   vectorTable: { initialSP: number; resetHandler: number } | null;
   memoryMap: { flashBase: number; ramBase: number } | null;
   rtosKernel: string | null;
+  coverage: RtosCoverage | null;
   findings: FindingDraft[];
   reason: string;
 }
@@ -289,13 +305,14 @@ export interface RtosResult {
 const FIRMWARE_READ_CAP = 16 * 1024 * 1024;
 
 /** Read a bounded prefix of the firmware — MCU blobs are tiny; this caps a mis-routed image. */
-function readFirmwareBounded(p: string, cap = FIRMWARE_READ_CAP): Uint8Array {
+function readFirmwareBounded(p: string, cap = FIRMWARE_READ_CAP): { buf: Uint8Array; fileSize: number } {
   const fd = fs.openSync(p, 'r');
   try {
-    const len = Math.min(fs.fstatSync(fd).size, cap);
+    const fileSize = fs.fstatSync(fd).size;
+    const len = Math.min(fileSize, cap);
     const b = Buffer.allocUnsafe(len);
     fs.readSync(fd, b, 0, len, 0);
-    return b;
+    return { buf: b, fileSize };
   } finally {
     fs.closeSync(fd);
   }
@@ -308,9 +325,9 @@ function readFirmwareBounded(p: string, cap = FIRMWARE_READ_CAP): Uint8Array {
  * findings about the layout and any RTOS kernel.
  */
 export function runRtosAnalysis(imagePath: string): RtosResult {
-  let buf: Uint8Array;
+  let read: { buf: Uint8Array; fileSize: number };
   try {
-    buf = readFirmwareBounded(imagePath);
+    read = readFirmwareBounded(imagePath);
   } catch (err) {
     return {
       available: true,
@@ -318,24 +335,29 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
       vectorTable: null,
       memoryMap: null,
       rtosKernel: null,
+      coverage: null,
       findings: [],
       reason: `Could not read image bytes: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 
-  const a = analyzeRtos(buf);
+  const a = analyzeRtos(read.buf, read.fileSize);
+  const scanScope = a.coverage.complete
+    ? `the complete ${a.coverage.fileBytes}-byte image`
+    : `the first ${a.coverage.scannedBytes} of ${a.coverage.fileBytes} image bytes`;
   if (!a.isCortexM) {
     const ecosNote = a.ecos ? ` eCos monolith detected (${a.ecos.version ?? 'version unknown'}).` : '';
     const flagNote = a.flags.length ? ` ${a.flags.length} plaintext flag/credential token(s) recovered.` : '';
     const emptyNote = a.findings.length
       ? ''
-      : ' No eCos/flag markers either — static analysis found nothing to assert.';
+      : ` No eCos/flag markers in ${scanScope} — static analysis found nothing to assert within that scope.`;
     return {
       available: true,
       isCortexM: false,
       vectorTable: null,
       memoryMap: null,
       rtosKernel: a.rtosKernel,
+      coverage: a.coverage,
       findings: a.findings,
       reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${ecosNote}${flagNote}${emptyNote}`,
     };
@@ -343,13 +365,16 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
 
   const map = a.memoryMap;
   const mapNote = map ? ` Recovered map: flash ${hex(map.flashBase)}, RAM ${hex(map.ramBase)}.` : '';
-  const kernelNote = a.rtosKernel ? ` RTOS kernel: ${a.rtosKernel}.` : ' No RTOS strings — bare-metal.';
+  const kernelNote = a.rtosKernel
+    ? ` RTOS kernel: ${a.rtosKernel}.`
+    : ` No RTOS strings in ${scanScope} — bare-metal lead.`;
   return {
     available: true,
     isCortexM: true,
     vectorTable: a.vectorTable,
     memoryMap: a.memoryMap,
     rtosKernel: a.rtosKernel,
+    coverage: a.coverage,
     findings: a.findings,
     reason: `ARM Cortex-M vector table at offset 0.${mapNote}${kernelNote} Static analysis of the image bytes — proves layout, not device behavior.`,
   };

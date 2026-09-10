@@ -116,6 +116,7 @@ describe('analyzeRtos', () => {
     expect(lead?.severity).toBe('info');
     expect(lead?.proofState).toBe('needs_runtime_reproduction');
     expect(lead?.title).toMatch(/needs Renode/i);
+    expect((lead?.evidence as { markerScanCoverage: { complete: boolean } }).markerScanCoverage.complete).toBe(true);
   });
 
   it('produces no findings for a non-Cortex-M blob with no eCos/flag markers', () => {
@@ -173,6 +174,11 @@ describe('runRtosAnalysis', () => {
     expect(res.isCortexM).toBe(true);
     expect(res.vectorTable).toEqual({ initialSP: INITIAL_SP, resetHandler: RESET_HANDLER });
     expect(res.rtosKernel).toBe('FreeRTOS');
+    expect(res.coverage).toEqual({
+      scannedBytes: baremetalBlob().length,
+      fileBytes: baremetalBlob().length,
+      complete: true,
+    });
     expect(res.findings.length).toBeGreaterThan(0);
   });
 
@@ -184,5 +190,30 @@ describe('runRtosAnalysis', () => {
     expect(res.isCortexM).toBe(false);
     expect(res.vectorTable).toBeNull();
     expect(res.reason).toContain('No ARM Cortex-M vector table at offset 0');
+    expect(res.reason).toContain('complete 8-byte image');
+  });
+
+  it('bounds negative marker claims when the file exceeds the 16 MiB scan cap', () => {
+    const p = path.join(tmp, 'large-random.bin');
+    const cap = 16 * 1024 * 1024;
+    const lateMarker = Buffer.from('eCos 3.6.10 cyg_scheduler', 'latin1');
+    const fd = fs.openSync(p, 'w');
+    try {
+      fs.writeSync(fd, Buffer.from([0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0]), 0, 8, 0);
+      fs.writeSync(fd, lateMarker, 0, lateMarker.length, cap + 32);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    const res = runRtosAnalysis(p);
+    expect(res.findings).toHaveLength(0);
+    expect(res.coverage).toEqual({
+      scannedBytes: cap,
+      fileBytes: cap + 32 + lateMarker.length,
+      complete: false,
+    });
+    expect(res.reason).toContain(`first ${cap} of ${cap + 32 + lateMarker.length} image bytes`);
+    expect(res.reason).toContain('within that scope');
+    expect(res.reason).not.toContain('static analysis found nothing to assert.');
   });
 });
