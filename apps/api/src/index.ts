@@ -15,6 +15,7 @@ import { WEB_DIST_DIR, ensureDataDirs } from './paths.js';
 import { SWEEP_INTERVAL_MS, sweepRetention } from './retention.js';
 import { agentRoutes } from './routes/agent.js';
 import { analysisRoutes } from './routes/analysis.js';
+import { auxsecretsRoutes } from './routes/auxsecrets.js';
 import { binvulnRoutes } from './routes/binvuln.js';
 import { captureRoutes } from './routes/capture.js';
 import { certsRoutes } from './routes/certs.js';
@@ -128,6 +129,7 @@ async function main(): Promise<void> {
     async (api) => {
       await api.register(imageRoutes);
       await api.register(analysisRoutes);
+      await api.register(auxsecretsRoutes);
       await api.register(jobRoutes);
       await api.register(emulateRoutes);
       await api.register(sbomRoutes);

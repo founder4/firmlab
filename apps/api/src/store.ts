@@ -53,6 +53,7 @@ export type JobKind =
   | 'funcdiff'
   | 'dynprobe'
   | 'nvram'
+  | 'auxsecrets'
   | 'kernel'
   | 'yarascan'
   | 'credmatch'

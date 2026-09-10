@@ -65,6 +65,28 @@ su evidencia de revalidación, archiva el JSON completo de cada job modificado e
 Los hallazgos de operador y los resultados que ya declaran `probeVersion: 2` quedan fuera. Una segunda simulación
 debe informar cero candidatos.
 
+## Refrescar las huellas de credenciales del corpus
+
+Los resultados antiguos de `fsaudit`, `nvram` y `auxsecrets` pueden preceder a las huellas redactadas que alimentan
+`credential_occurrence`. No hace falta repetir la campaña autónoma completa. Comprueba primero el alcance:
+
+```bash
+pnpm corpus:refresh-credentials --dry-run
+```
+
+Después ejecuta sólo esos tres proveedores y, cuando terminen, reconcilia el corpus desde los resultados ya
+persistidos:
+
+```bash
+pnpm corpus:refresh-credentials
+pnpm corpus:reindex
+```
+
+El cliente respeta la cola de jobs, distingue un proveedor ejecutado de una imagen sin entrada y no imprime
+valores ni material de clave. `auxsecrets` conserva sus hallazgos históricos si la extracción ya no es legible;
+un input ausente no se transforma en un negativo limpio. Usa `--concurrency`, `--poll-ms` y `--job-timeout-ms`
+para ajustar una campaña, sin elevar la concurrencia del servidor.
+
 ## Qué versión está corriendo
 
 Cada imagen se sella con el commit del que salió:
