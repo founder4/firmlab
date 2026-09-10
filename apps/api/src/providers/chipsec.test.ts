@@ -8,11 +8,30 @@ import {
   loadUefiIocs,
   parseNvramVariables,
   parseUefiDecode,
+  planChipsecInput,
   runChipsec,
   scanUefi,
   secureBootFindings,
   summarizeByType,
 } from './chipsec.js';
+
+describe('planChipsecInput', () => {
+  it('offers the whole image when it fits the resource guard', () => {
+    expect(planChipsecInput(64, 64)).toEqual({
+      accepted: true,
+      coverage: { bytesDecoded: 64, totalBytes: 64, complete: true, capBytes: 64 },
+      reason: null,
+    });
+  });
+
+  it('rejects an oversized image instead of decoding a prefix as though it were complete', () => {
+    const plan = planChipsecInput(65, 64);
+    expect(plan.accepted).toBe(false);
+    expect(plan.coverage).toEqual({ bytesDecoded: 0, totalBytes: 65, complete: false, capBytes: 64 });
+    expect(plan.reason).toMatch(/zero image bytes were offered/i);
+    expect(plan.reason).toMatch(/not evidence.*no parseable UEFI\/BIOS/i);
+  });
+});
 
 // A faithful excerpt of a real `chipsec_util uefi decode` .UEFI.lst (chipsec 1.13.16, on OVMF): two firmware
 // volumes, a mix of file types, named + unnamed entries, plus section-level noise the parser must ignore.

@@ -79,6 +79,18 @@ export interface ChipsecResult {
   findings: UefiSecurityFinding[];
   command: string;
   isolation?: IsolationLevel;
+  /**
+   * Bytes actually offered to CHIPSEC versus the source image size. Optional forever because older persisted
+   * results predate this measurement. A rejected oversized input records zero bytes decoded, never a prefix.
+   */
+  inputCoverage?: ChipsecInputCoverage;
+}
+
+export interface ChipsecInputCoverage {
+  bytesDecoded: number;
+  totalBytes: number;
+  complete: boolean;
+  capBytes: number;
 }
 
 /** EFI_FV_FILETYPE code → label (see PI spec / EDK2 PiFirmwareFile.h). */
@@ -493,7 +505,35 @@ export async function detectChipsec(): Promise<boolean> {
 }
 
 const MODULE_SAMPLE_CAP = 80;
-const FIRMWARE_READ_CAP = 64 * 1024 * 1024;
+export const FIRMWARE_READ_CAP = 64 * 1024 * 1024;
+
+/**
+ * Pure: decide whether CHIPSEC may receive an image under the input-size guard. An oversized image is rejected
+ * whole instead of silently replacing it with a prefix that CHIPSEC could misclassify as a complete firmware.
+ */
+export function planChipsecInput(
+  totalBytes: number,
+  capBytes = FIRMWARE_READ_CAP,
+): {
+  accepted: boolean;
+  coverage: ChipsecInputCoverage;
+  reason: string | null;
+} {
+  const accepted = totalBytes <= capBytes;
+  const coverage: ChipsecInputCoverage = {
+    bytesDecoded: accepted ? totalBytes : 0,
+    totalBytes,
+    complete: accepted,
+    capBytes,
+  };
+  if (accepted) return { accepted, coverage, reason: null };
+  const mib = (n: number): string => (n / (1024 * 1024)).toFixed(1);
+  return {
+    accepted,
+    coverage,
+    reason: `CHIPSEC did not decode this ${mib(totalBytes)} MB image because it exceeds the ${mib(capBytes)} MB input cap. Zero image bytes were offered to the decoder; this is a resource-policy limit, not evidence that the image has no parseable UEFI/BIOS firmware volume.`,
+  };
+}
 
 function blocked(reason: string): ChipsecResult {
   return {
@@ -530,7 +570,17 @@ export async function runChipsec(
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-chipsec-'));
   try {
     const imgCopy = path.join(work, 'image.fd');
-    copyBounded(firmwarePath, imgCopy, FIRMWARE_READ_CAP);
+    const input = planChipsecInput(fs.statSync(firmwarePath).size);
+    if (!input.accepted) {
+      return {
+        ...blocked(input.reason as string),
+        available: true,
+        inputCoverage: input.coverage,
+      };
+    }
+    // The size guard above has accepted the WHOLE image. Never hand CHIPSEC a prefix under the original name:
+    // downstream absence claims are valid only when the decoder received every source byte.
+    fs.copyFileSync(firmwarePath, imgCopy);
 
     const res = await runIsolated(['chipsec_util', 'uefi', 'decode', imgCopy], {
       limits: {
@@ -564,6 +614,7 @@ export async function runChipsec(
         ran: res.ran,
         command: res.command,
         isolation: res.isolation,
+        inputCoverage: input.coverage,
       };
     }
 
@@ -584,6 +635,7 @@ export async function runChipsec(
         ...(nvramStoreNote ? { nvramStoreNote } : {}),
         command: res.command,
         isolation: res.isolation,
+        inputCoverage: input.coverage,
       };
     }
 
@@ -606,21 +658,9 @@ export async function runChipsec(
       findings,
       command: res.command,
       isolation: res.isolation,
+      inputCoverage: input.coverage,
     };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
-  }
-}
-
-/** Copy at most `cap` bytes of the firmware into `dest` — a mis-routed huge image can't blow up the decode. */
-function copyBounded(src: string, dest: string, cap: number): void {
-  const fd = fs.openSync(src, 'r');
-  try {
-    const len = Math.min(fs.fstatSync(fd).size, cap);
-    const buf = Buffer.allocUnsafe(len);
-    fs.readSync(fd, buf, 0, len, 0);
-    fs.writeFileSync(dest, buf);
-  } finally {
-    fs.closeSync(fd);
   }
 }

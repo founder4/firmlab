@@ -312,11 +312,12 @@ entrada correspondiente. Quedan 30.
   en la petición; traversal exige baseline limpio y control de fichero inexistente. La ruta manual queda restringida
   a loopback y nunca eleva por sí sola a `confirmed_in_emulation`. Los resultados anteriores se degradan de forma
   conservadora a pistas de revalidación mediante `pnpm reconcile:webprobe`, conservando el original.
-- [ ] `providers/chipsec.ts:533` **(C)** — `copyBounded(firmwarePath, imgCopy, FIRMWARE_READ_CAP)` trunca la imagen
-  a 64 MB antes de que `chipsec_util uefi decode` la vea; si el decode no produce listado, el resultado es
-  `blocked('… the image has no parseable UEFI firmware volume … Not a UEFI/BIOS image, or an unsupported layout.')`
-  — un veredicto de identidad sobre una copia recortada, sin mencionar el corte. (Sus otros dos caps,
-  `MODULE_SAMPLE_CAP` y `VARIABLE_SAMPLE_CAP`, están resueltos de forma ejemplar.)
+- [x] `providers/chipsec.ts` **(C)** — resuelto. El guard de 64 MB ya no crea una copia prefijo bajo el nombre de
+  la imagen completa: `planChipsecInput` acepta y copia todos los bytes o rechaza la entrada antes de ejecutar
+  CHIPSEC. El rechazo registra `bytesDecoded: 0`, tamaño total, cap y `complete: false`, y dice expresamente que es
+  una política de recursos, no evidencia de que falte un volumen UEFI/BIOS parseable. Los resultados nuevos que sí
+  ejecutan conservan la misma cobertura con `complete: true`; el campo es opcional para los resultados históricos.
+  Tests fijan ambos lados del límite, incluido el byte exacto del cap.
 - [ ] `capture/scan.ts:66` (con `providers/discover.ts:264`) **(A)+(C)** — `tryExec` devuelve a propósito el stdout
   parcial de una herramienta abortada, así que un `arp-scan` matado en `discoverTimeoutMs` da un prefijo del rango
   de direcciones; `runDiscovery` reporta entonces `Swept <subnet> with arp-scan: N device(s)` y el transcript
