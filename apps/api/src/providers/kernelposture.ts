@@ -62,6 +62,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import type { FindingSeverity } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
+import { type DecodedKallsyms, decodeKallsyms } from './kallsyms.js';
 
 /**
  * Named so the rule is greppable from outside this file: loose `CONFIG_*` tokens recovered from a kernel blob are
@@ -274,6 +275,8 @@ export interface KernelBlobFacts {
   ikconfigPresent: boolean;
   /** Loose `CONFIG_*` tokens. Recorded for the operator; never consulted — see the module doc. */
   looseConfigTokens: string[];
+  /** Present only when the compressed builtin symbol table passed every structural invariant and decoded fully. */
+  kallsyms?: Pick<DecodedKallsyms, 'complete' | 'symbolCount' | 'uniqueNameCount' | 'wordBytes'>;
 }
 
 /** Sibling entries of `kmem` in `drivers/char/mem.c`'s device list — the anchor set. */
@@ -288,24 +291,40 @@ const KERNEL_ANCHORS = ['Kernel panic', 'Linux version ', 'swapper', 'Freeing un
  * `kmem` must be its own entry, not a substring of some `vmalloc_kmem`), and `text` is the same runs joined, for the
  * phrase markers. The split matters: the entire value of the `/dev/kmem` signal is that it is an exact table entry.
  */
-export function readKernelBlobFacts(blobPath: string, tokens: ReadonlySet<string>, text: string): KernelBlobFacts {
+export function readKernelBlobFacts(
+  blobPath: string,
+  tokens: ReadonlySet<string>,
+  text: string,
+  decodedKallsyms?: DecodedKallsyms | null,
+): KernelBlobFacts {
   const anchors = KERNEL_ANCHORS.filter((a) => text.includes(a)).length;
   const siblings = MEM_DEVLIST_SIBLINGS.filter((s) => tokens.has(s)).length;
   const loose = [...new Set(text.match(/CONFIG_[A-Z0-9_]{2,48}/g) ?? [])].sort();
+  const hasSymbol = (name: string) => tokens.has(name) || decodedKallsyms?.names.has(name) === true;
   return {
     path: blobPath,
-    readable: anchors >= 2,
+    readable: anchors >= 2 || decodedKallsyms?.complete === true,
     memDevlistAnchored: siblings >= 2,
     hasKmemEntry: tokens.has('kmem'),
-    hasStackProtector: tokens.has('__stack_chk_fail') || tokens.has('__stack_chk_guard'),
-    hasModuleSigParam: text.includes('module.sig_enforce') || tokens.has('sig_enforce'),
-    hasKptrRestrictSysctl: tokens.has('kptr_restrict'),
-    hasDmesgRestrictSysctl: tokens.has('dmesg_restrict'),
-    hasKaslrParam: tokens.has('nokaslr'),
-    hasRodataWriteProtect: text.includes('Write protecting') || tokens.has('mark_rodata_ro'),
-    hasStrictDevmemDiag: text.includes('tried to access /dev/mem') || tokens.has('devmem_is_allowed'),
+    hasStackProtector: hasSymbol('__stack_chk_fail') || hasSymbol('__stack_chk_guard'),
+    hasModuleSigParam: text.includes('module.sig_enforce') || hasSymbol('sig_enforce'),
+    hasKptrRestrictSysctl: hasSymbol('kptr_restrict'),
+    hasDmesgRestrictSysctl: hasSymbol('dmesg_restrict'),
+    hasKaslrParam: hasSymbol('nokaslr'),
+    hasRodataWriteProtect: text.includes('Write protecting') || hasSymbol('mark_rodata_ro'),
+    hasStrictDevmemDiag: text.includes('tried to access /dev/mem') || hasSymbol('devmem_is_allowed'),
     ikconfigPresent: text.includes('IKCFG_ST'),
     looseConfigTokens: loose.slice(0, 40),
+    ...(decodedKallsyms
+      ? {
+          kallsyms: {
+            complete: decodedKallsyms.complete,
+            symbolCount: decodedKallsyms.symbolCount,
+            uniqueNameCount: decodedKallsyms.uniqueNameCount,
+            wordBytes: decodedKallsyms.wordBytes,
+          },
+        }
+      : {}),
   };
 }
 
@@ -708,7 +727,14 @@ function answerFromBlob(q: QuestionSpec, blob: KernelBlobFacts): PostureAnswer |
     }
     case 'stackprotector':
       return blob.hasStackProtector
-        ? determined(q, 'on', 'kernel-blob', 'The kernel blob references `__stack_chk_fail`/`__stack_chk_guard`.')
+        ? determined(
+            q,
+            'on',
+            'kernel-blob',
+            blob.kallsyms
+              ? `The complete ${blob.kallsyms.symbolCount.toLocaleString('en-US')}-entry kallsyms table (${blob.kallsyms.uniqueNameCount.toLocaleString('en-US')} distinct names) names \`__stack_chk_fail\`/\`__stack_chk_guard\`.`
+              : 'The kernel blob references `__stack_chk_fail`/`__stack_chk_guard`.',
+          )
         : null;
     case 'module-sig':
       return blob.hasModuleSigParam
@@ -1584,7 +1610,8 @@ export function runKernelPosture(
     // from, and the raw images in the corpus are up to 111 MB.
     if (!containsAscii(buf, BANNER_ANCHOR) && !containsAscii(buf, 'Kernel panic')) continue;
     const { tokens, text } = extractPrintable(buf);
-    const facts = readKernelBlobFacts(cand, tokens, text);
+    const decodedKallsyms = decodeKallsyms(buf);
+    const facts = readKernelBlobFacts(cand, tokens, text, decodedKallsyms);
     const b = parseKernelBanner(text);
     if (b) {
       banner = b;

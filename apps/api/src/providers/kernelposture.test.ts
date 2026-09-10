@@ -190,6 +190,26 @@ describe('readKernelBlobFacts', () => {
     expect(facts.hasStackProtector).toBe(false);
     expect(facts.hasModuleSigParam).toBe(false);
   });
+
+  it('uses a fully decoded kallsyms table as positive symbol evidence and retains its coverage', () => {
+    const decoded = {
+      names: new Set(['__stack_chk_fail', 'mark_rodata_ro', 'devmem_is_allowed']),
+      symbolCount: 32_865,
+      uniqueNameCount: 32_865,
+      wordBytes: 4 as const,
+      complete: true as const,
+    };
+    const facts = readKernelBlobFacts('/blob', new Set(), '', decoded);
+
+    expect(facts).toMatchObject({
+      readable: true,
+      hasStackProtector: true,
+      hasRodataWriteProtect: true,
+      hasStrictDevmemDiag: true,
+      kallsyms: { complete: true, symbolCount: 32_865, uniqueNameCount: 32_865, wordBytes: 4 },
+    });
+    expect(facts).not.toHaveProperty('kallsyms.names');
+  });
 });
 
 // === The three-state assessment ===

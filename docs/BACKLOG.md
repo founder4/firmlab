@@ -86,7 +86,7 @@ Dos herramientas C++20 MIT de `nmatt0` (github.com/nmatt0/moria, /mithril), comp
 real de `~/Downloads/firmwares`, no contra sus README. moria identifica y desempaqueta; mithril lee contenidos
 (secretos, SBOM, CVE, licencias). Lo que sigue es lo que la corrida midió, incluido lo que NO se debe adoptar.
 
-- [ ] **Portar el decodificador de kallsyms (`mithril/src/kallsyms.cpp`, 340 líneas) — la pieza de mayor valor.**
+- [x] **Portar el decodificador de kallsyms (`mithril/src/kallsyms.cpp`, 340 líneas) — la pieza de mayor valor.**
   `kernelposture.ts` documenta desde su cabecera que un barrido de tokens `CONFIG_*` sobre un kernel descomprimido
   «no vale como oráculo» y que lo que un kernel lleva de verdad son nombres de símbolo; ese oráculo no está
   implementado (`kallsyms` sólo aparece en el propio comentario y en un test que comprueba que el token suelto se
@@ -95,7 +95,11 @@ real de `~/Downloads/firmwares`, no contra sus README. moria identifica y desemp
   el kernel ARM 4.4.282 stripped de la Tenda-Camera**, y **9.987 sobre el MIPS BE 2.6.22 del DVRF**. Sobre el
   5.4.213 de la GL.iNet devolvió `NO TABLE` — falla en silencio y honestamente, nunca fabrica un símbolo, así que
   una ausencia jamás produce un descarte falso. Cobertura 2 de 3 kernels probados; el tercero es trabajo pendiente,
-  no un fallo de diseño.
+  no un fallo de diseño. Cerrado el 10 de septiembre: el puerto TypeScript valida geometría de índice/tabla de tokens,
+  ancla dirección/recuento o markers, decodifica longitudes big-kallsyms y sólo entrega tablas completas con un símbolo
+  núcleo de control. `kernelposture` usa esos nombres como evidencia positiva y persiste cobertura, no el `Set` entero.
+  Revalidado sobre los bytes reales: Tenda **33.018 filas / 32.865 nombres únicos** en 105 ms; DVRF **10.189 / 9.987**
+  en 71 ms; GL.iNet sigue devolviendo `null` honestamente. Hay fixtures de tabla completa, recuento corrupto y ruido.
 
 - [ ] **Adoptar el gating triestado de CVE de kernel (`kconfig_infer.cpp` + `kernelcve.cpp`, ~500 líneas + tabla).**
   Es la respuesta directa al punto ya abierto arriba («el prefijo NVD puede tener miles de CVE (2.037 para Linux
