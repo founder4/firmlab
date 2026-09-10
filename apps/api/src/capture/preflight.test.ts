@@ -66,6 +66,11 @@ describe('realizedCeiling', () => {
   it('is captured_plaintext once a flow is carved', () => {
     expect(realizedCeiling([{ tlsPosture: 'tls-unpinned', carved: 1, firmwareScore: 100 }])).toBe('captured_plaintext');
   });
+  it('is captured_plaintext when a body landed even if its bounded score did not carve it', () => {
+    expect(
+      realizedCeiling([{ tlsPosture: 'tls-unpinned', carved: 0, firmwareScore: 35, bodyBytes: 96 * 1024 * 1024 }]),
+    ).toBe('captured_plaintext');
+  });
   it('is blocked_by_pinning when a pinned TLS flow appears and nothing carved', () => {
     expect(realizedCeiling([{ tlsPosture: 'tls-pinned', carved: 0, firmwareScore: 0 }])).toBe('blocked_by_pinning');
   });

@@ -93,6 +93,9 @@ export function ingestAgentFlow(
     firmwareScore: score.score,
     carved,
     bodyPath: carved ? bodyPath : null,
+    bodyBytes: body?.length ?? (meta.contentLength === 0 ? 0 : null),
+    bodyBytesInspected: body?.length ?? 0,
+    bodyInspectionComplete: body !== null || meta.contentLength === 0 ? 1 : 0,
     createdAt: Date.now(),
   });
   return { flowId, firmwareScore: score.score, carved: carved === 1 };

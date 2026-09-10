@@ -145,15 +145,18 @@ interface FlowFacts {
   tlsPosture: string | null;
   carved: number;
   firmwareScore: number;
+  /** Exact saved body size when coverage-aware capture code observed it. */
+  bodyBytes?: number | null;
 }
 
 /**
- * Pure: the acquisition ceiling actually realized by a session's observed flows. A carved blob = captured; a
- * pinned TLS flow with nothing carved = blocked_by_pinning; flows but nothing carved = metadata_only; nothing yet.
+ * Pure: the acquisition ceiling actually realized by a session's observed flows. A retained body = captured even
+ * when a bounded score did not classify it as firmware; classification and acquisition are different facts.
+ * Legacy carved rows remain captured. Pinned TLS wins only when no body landed; metadata-only means exactly that.
  */
 export function realizedCeiling(flows: FlowFacts[]): AcquisitionState | null {
   if (flows.length === 0) return null;
-  if (flows.some((f) => f.carved)) return 'captured_plaintext';
+  if (flows.some((f) => f.carved || (f.bodyBytes ?? 0) > 0)) return 'captured_plaintext';
   if (flows.some((f) => f.tlsPosture === 'tls-pinned')) return 'blocked_by_pinning';
   return 'metadata_only';
 }

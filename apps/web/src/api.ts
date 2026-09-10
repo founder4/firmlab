@@ -1550,6 +1550,9 @@ export interface CaptureFlow {
   firmwareScore: number;
   carved: number;
   bodyPath: string | null;
+  bodyBytes: number | null;
+  bodyBytesInspected: number | null;
+  bodyInspectionComplete: number | null;
   createdAt: number;
 }
 

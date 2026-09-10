@@ -79,6 +79,9 @@ const carvedFlow = {
   firmwareScore: 100,
   carved: 1,
   bodyPath: '/x',
+  bodyBytes: 300 * 1024,
+  bodyBytesInspected: 300 * 1024,
+  bodyInspectionComplete: 1,
   createdAt: 0,
 };
 
@@ -139,6 +142,25 @@ describe('Capture — Phase 6.1 interception', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Ingest' }));
     await waitFor(() => expect(mockApi.ingestCaptureFlow).toHaveBeenCalledWith('cap1', 'flowA'));
     expect(await screen.findByRole('link', { name: /ingested/i })).toBeInTheDocument();
+  });
+
+  it('makes a bounded body score visibly different from a complete negative', async () => {
+    mockApi.captureSession.mockResolvedValue({
+      session: { id: 'cap1', status: 'watching', targetDeviceId: 'dev1', transcript: 'armed', error: null },
+      flows: [
+        {
+          ...carvedFlow,
+          size: 96 * 1024 * 1024,
+          bodyBytes: 96 * 1024 * 1024,
+          bodyBytesInspected: 64 * 1024 * 1024,
+          bodyInspectionComplete: 0,
+        },
+      ],
+    });
+    render(<Capture />);
+    fireEvent.click(await screen.findByLabelText(/authorized to test/i));
+    fireEvent.click(await screen.findByRole('button', { name: 'Capture' }));
+    expect(await screen.findByText(/64\.0 MB of 96\.0 MB inspected — score is bounded/)).toBeInTheDocument();
   });
 });
 

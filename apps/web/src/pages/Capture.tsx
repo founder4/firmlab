@@ -475,6 +475,7 @@ export function Capture(): JSX.Element {
                     <th>URL</th>
                     <th style={{ width: 130 }}>{t.capture.session.colType}</th>
                     <th style={{ width: 90 }}>{t.capture.session.colSize}</th>
+                    <th style={{ width: 210 }}>{t.capture.session.colInspection}</th>
                     <th style={{ width: 120 }} />
                   </tr>
                 </thead>
@@ -495,6 +496,18 @@ export function Capture(): JSX.Element {
                         {f.contentType ?? '—'}
                       </td>
                       <td className="hint mono">{(f.size / 1024).toFixed(0)} KB</td>
+                      <td className="hint" style={{ fontSize: 11 }}>
+                        {f.bodyBytesInspected === null || f.bodyInspectionComplete === null
+                          ? t.capture.session.inspectionLegacy
+                          : f.bodyInspectionComplete
+                            ? t.capture.session.inspectionComplete(`${(f.bodyBytesInspected / 1024).toFixed(0)} KB`)
+                            : f.bodyBytes === null
+                              ? t.capture.session.inspectionUnavailable
+                              : t.capture.session.inspectionPartial(
+                                  `${(f.bodyBytesInspected / (1024 * 1024)).toFixed(1)} MB`,
+                                  `${(f.bodyBytes / (1024 * 1024)).toFixed(1)} MB`,
+                                )}
+                      </td>
                       <td>
                         {ingested[f.id] ? (
                           <a className="badge badge-ok" href={`#/image/${ingested[f.id]}`}>

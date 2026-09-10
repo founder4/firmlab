@@ -28,15 +28,13 @@ import {
   updateCaptureSession,
   upsertCaptureFlow,
 } from '../store.js';
+import { readCapturedBodyBounded } from './body-inspection.js';
 import { parseFlowManifest } from './flow-manifest.js';
 import { ingestCapturedBlob } from './ingest.js';
 import { armPositioning, stopPositioning } from './spoof.js';
 
 const PROXY_PORT = Math.max(1, Number(process.env.FIRMLAB_CAPTURE_PROXY_PORT ?? 8788));
 const WINDOW_MS = Math.max(30, Number(process.env.FIRMLAB_CAPTURE_WINDOW_SECONDS ?? 300)) * 1000;
-/** Cap the body we read back for scoring so a pathological multi-GB response can't blow up memory. */
-const MAX_BODY_BYTES = 64 * 1024 * 1024;
-
 /** The mitmproxy addon, embedded so it ships with the code (tsc doesn't copy .py). Written to the session dir. */
 const MITM_ADDON = `# FirmLab capture addon (Phase 6.1) — appends response metadata to flows.jsonl and saves plausibly-firmware
 # bodies to bodies/<flowid>.bin. FirmLab does the authoritative scoring; this only pre-filters what to save.
@@ -222,20 +220,21 @@ export function refreshCaptureFlows(sessionId: string): CaptureFlowRow[] {
   const now = Date.now();
   for (const raw of parseFlowManifest(manifest)) {
     const existing = getCaptureFlow(raw.id);
-    if (existing && existing.size === raw.contentLength) continue; // already scored at this size
+    // Rows written before body coverage existed must be revisited once; otherwise the migration's NULL would
+    // preserve the old clean-looking negative forever.
+    if (existing && existing.size === raw.contentLength && existing.bodyBytesInspected !== null) continue;
     const bodyRel = raw.body;
     const bodyAbs = bodyRel ? path.join(capdir, bodyRel) : null;
-    let body = new Uint8Array(0);
+    const inspection = bodyAbs
+      ? readCapturedBodyBounded(bodyAbs)
+      : {
+          body: new Uint8Array(0),
+          bodyBytes: raw.contentLength === 0 ? 0 : null,
+          bodyBytesInspected: 0,
+          bodyInspectionComplete: raw.contentLength === 0,
+        };
     let bodyPath: string | null = null;
-    if (bodyAbs) {
-      try {
-        const stat = fs.statSync(bodyAbs);
-        if (stat.size <= MAX_BODY_BYTES) {
-          body = fs.readFileSync(bodyAbs);
-          bodyPath = bodyAbs;
-        }
-      } catch {}
-    }
+    if (bodyAbs && inspection.bodyBytes !== null) bodyPath = bodyAbs;
     const meta: FlowMeta = {
       url: raw.url,
       method: raw.method,
@@ -243,7 +242,7 @@ export function refreshCaptureFlows(sessionId: string): CaptureFlowRow[] {
       contentLength: raw.contentLength,
       tls: raw.tls,
     };
-    const score = scoreFirmwareFlow(meta, body);
+    const score = scoreFirmwareFlow(meta, inspection.body);
     const carved = score.isFirmwareCandidate && bodyPath ? 1 : 0;
     upsertCaptureFlow({
       id: raw.id,
@@ -257,6 +256,9 @@ export function refreshCaptureFlows(sessionId: string): CaptureFlowRow[] {
       firmwareScore: score.score,
       carved,
       bodyPath: carved ? bodyPath : null,
+      bodyBytes: inspection.bodyBytes,
+      bodyBytesInspected: inspection.bodyBytesInspected,
+      bodyInspectionComplete: inspection.bodyInspectionComplete ? 1 : 0,
       createdAt: now,
     });
   }

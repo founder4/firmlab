@@ -74,6 +74,9 @@ export function stageBleDfu(
     firmwareScore: score.score,
     carved: 1, // a DFU image IS firmware — always ingestable
     bodyPath,
+    bodyBytes: blob.length,
+    bodyBytesInspected: blob.length,
+    bodyInspectionComplete: 1,
     createdAt: Date.now(),
   });
   return { flowId, size: blob.length, firmwareScore: score.score, carved: true };

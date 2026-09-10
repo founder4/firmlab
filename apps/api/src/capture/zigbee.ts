@@ -87,6 +87,9 @@ export function stageZigbeeOta(sessionId: string, name: string, blocks: Uint8Arr
     firmwareScore: score.score,
     carved: 1, // a valid unwrapped OTA image IS firmware — always ingestable
     bodyPath,
+    bodyBytes: image.length,
+    bodyBytesInspected: image.length,
+    bodyInspectionComplete: 1,
     createdAt: Date.now(),
   });
   return {

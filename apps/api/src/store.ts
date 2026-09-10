@@ -451,6 +451,9 @@ export function getDb(): FirmLabDatabase {
       firmwareScore INTEGER NOT NULL DEFAULT 0,
       carved INTEGER NOT NULL DEFAULT 0,
       bodyPath TEXT,
+      bodyBytes INTEGER,
+      bodyBytesInspected INTEGER,
+      bodyInspectionComplete INTEGER,
       createdAt INTEGER NOT NULL,
       FOREIGN KEY (sessionId) REFERENCES capture_sessions(id) ON DELETE CASCADE
     );
@@ -484,6 +487,15 @@ export function getDb(): FirmLabDatabase {
   for (const column of ['reasoningTokens INTEGER NOT NULL DEFAULT 0', 'fallbackUsed INTEGER NOT NULL DEFAULT 0']) {
     try {
       db.exec(`ALTER TABLE agent_step ADD COLUMN ${column}`);
+    } catch {
+      // Column already present — nothing to do.
+    }
+  }
+  // Migration: exact capture-body scoring coverage. NULL is deliberately preserved for old rows: those bodies
+  // were scored before coverage was recorded, so zero/complete would both manufacture a fact.
+  for (const column of ['bodyBytes INTEGER', 'bodyBytesInspected INTEGER', 'bodyInspectionComplete INTEGER']) {
+    try {
+      db.exec(`ALTER TABLE capture_flows ADD COLUMN ${column}`);
     } catch {
       // Column already present — nothing to do.
     }
@@ -1051,6 +1063,12 @@ export interface CaptureFlowRow {
   carved: number;
   /** Absolute path to the saved body on disk (for carved flows), or null. */
   bodyPath: string | null;
+  /** Exact captured body size; null for legacy rows or when no body was retained/readable. */
+  bodyBytes: number | null;
+  /** Bytes actually supplied to the firmware scorer; null for legacy rows. */
+  bodyBytesInspected: number | null;
+  /** 1 when the scorer saw the entire captured body, 0 when bounded/unavailable, null for legacy rows. */
+  bodyInspectionComplete: number | null;
   createdAt: number;
 }
 
@@ -1072,12 +1090,16 @@ export function upsertCaptureFlow(row: CaptureFlowRow): void {
   getDb()
     .prepare(
       `INSERT INTO capture_flows
-         (id, sessionId, host, url, method, contentType, size, tlsPosture, firmwareScore, carved, bodyPath, createdAt)
-       VALUES (@id, @sessionId, @host, @url, @method, @contentType, @size, @tlsPosture, @firmwareScore, @carved, @bodyPath, @createdAt)
+         (id, sessionId, host, url, method, contentType, size, tlsPosture, firmwareScore, carved, bodyPath,
+          bodyBytes, bodyBytesInspected, bodyInspectionComplete, createdAt)
+       VALUES (@id, @sessionId, @host, @url, @method, @contentType, @size, @tlsPosture, @firmwareScore, @carved,
+          @bodyPath, @bodyBytes, @bodyBytesInspected, @bodyInspectionComplete, @createdAt)
        ON CONFLICT(id) DO UPDATE SET
          host = excluded.host, url = excluded.url, method = excluded.method, contentType = excluded.contentType,
          size = excluded.size, tlsPosture = excluded.tlsPosture, firmwareScore = excluded.firmwareScore,
-         carved = excluded.carved, bodyPath = excluded.bodyPath`,
+         carved = excluded.carved, bodyPath = excluded.bodyPath, bodyBytes = excluded.bodyBytes,
+         bodyBytesInspected = excluded.bodyBytesInspected,
+         bodyInspectionComplete = excluded.bodyInspectionComplete`,
     )
     .run(asParams(row));
 }

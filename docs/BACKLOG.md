@@ -292,11 +292,18 @@ entrada correspondiente. Quedan 30.
   modelo configurado y otra donde sí lo hubo y su respuesta se tiró, y sólo la segunda se arregla subiendo el
   presupuesto de tokens. La web lo muestra al lado de la insignia. 4 tests, incluida la rama que corre siempre:
   una respuesta normal no lleva el flag, o se descartarían todas.
-- [ ] `capture/proxy.ts:233` (y la misma forma en `capture/agent.ts:78`) **(C)** — un cuerpo por encima de
-  `MAX_BODY_BYTES` (64 MB) no se lee nunca, así que `scoreFirmwareFlow` corre sobre un buffer vacío y `carved`
-  queda en 0; el flujo se dibuja en `Capture.tsx:503` idéntico a uno cuyos bytes SÍ se examinaron y no eran
-  firmware, y `realizedCeiling` (`capture/preflight.ts:154`) reporta `metadata_only` — un negativo limpio para una
-  captura que sí aterrizó.
+- [x] `capture/proxy.ts` / `capture/agent.ts` **(C)** — resuelto. El límite de 64 MB sigue protegiendo la memoria,
+  pero ahora es un límite de lectura y no una orden de puntuar un buffer vacío: el proxy lee ese prefijo, conserva
+  intacto el cuerpo capturado y persiste `bodyBytes`, `bodyBytesInspected` y `bodyInspectionComplete`. Las filas
+  anteriores quedan en `NULL` (cobertura no registrada) y se vuelven a puntuar al reaparecer en el manifiesto; no
+  se les inventa un cero ni un análisis completo. El agente remoto declara de la misma forma cuándo recibió el
+  cuerpo y cuándo sólo recibió metadatos; BLE y Zigbee registran cobertura completa.
+
+  La adquisición y la clasificación dejan además de ser el mismo hecho: `realizedCeiling` reconoce que aterrizó
+  un cuerpo aunque su puntuación acotada no lo marque como candidato. La tabla muestra cobertura completa,
+  prefijo/total, cuerpo no conservado o legado sin medición, así una captura de 96 MB leída hasta 64 MB ya no se
+  parece a un negativo sobre 96 MB examinados. Tests fijan la lectura completa, el corte, el fallo de I/O, el techo
+  de adquisición y la representación web.
 - [x] `providers/webprobe.ts` **(C)+(D)** — WebProbe v2 hace explícita la cobertura: puntos descubiertos, elegibles,
   planificados, intentados y completados, peticiones fallidas y descartes por presupuesto. Intercala formularios
   descubiertos y endpoints integrados y reparte técnicas por rondas, de modo que un presupuesto corto no consume
