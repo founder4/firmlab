@@ -20,6 +20,126 @@ export const STATUS_META = {
 
 const STATUS_ORDER = Object.keys(STATUS_META);
 
+/** Compare immutable image bytes + stage identity, never transient IDs, labels or row order. */
+export function compareMatrices(current, baseline) {
+  const index = (matrix, name) => {
+    if (matrix?.schemaVersion !== 1 || !Array.isArray(matrix.samples)) {
+      throw new Error(`${name}: expected corpus matrix schemaVersion 1 with samples`);
+    }
+    const samples = new Map();
+    for (const sample of matrix.samples) {
+      if (typeof sample.sha256 !== 'string' || !/^[a-f\d]{64}$/i.test(sample.sha256)) {
+        throw new Error(`${name}: sample has missing or invalid SHA-256`);
+      }
+      const sha256 = sample.sha256.toLowerCase();
+      if (samples.has(sha256)) throw new Error(`${name}: duplicate sample SHA-256 ${sha256}`);
+      if (!Array.isArray(sample.coverage?.stages)) throw new Error(`${name}: missing stages for ${sha256}`);
+      const stages = new Map();
+      for (const stage of sample.coverage.stages) {
+        if (typeof stage.worker !== 'string' || !stage.worker.trim() || !STATUS_ORDER.includes(stage.status)) {
+          throw new Error(`${name}: invalid stage identity or status for ${sha256}`);
+        }
+        if (stages.has(stage.worker)) throw new Error(`${name}: duplicate stage ${stage.worker} for ${sha256}`);
+        stages.set(stage.worker, stage);
+      }
+      samples.set(sha256, { filename: sample.filename, stages });
+    }
+    return samples;
+  };
+  const before = index(baseline, 'baseline');
+  const after = index(current, 'current');
+  const result = {
+    comparedCells: 0,
+    addedSamples: [],
+    removedSamples: [],
+    addedStages: [],
+    removedStages: [],
+    statusChanges: [],
+    findingCountChanges: [],
+    regressions: [],
+  };
+  for (const sha256 of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+    const oldSample = before.get(sha256);
+    const newSample = after.get(sha256);
+    if (!oldSample) {
+      result.addedSamples.push({ sha256, filename: newSample.filename });
+      continue;
+    }
+    if (!newSample) {
+      result.removedSamples.push({ sha256, filename: oldSample.filename });
+      continue;
+    }
+    for (const worker of [...new Set([...oldSample.stages.keys(), ...newSample.stages.keys()])].sort()) {
+      const previous = oldSample.stages.get(worker);
+      const next = newSample.stages.get(worker);
+      const cell = { sha256, filename: newSample.filename, worker };
+      if (!previous) {
+        result.addedStages.push(cell);
+        continue;
+      }
+      if (!next) {
+        result.removedStages.push(cell);
+        continue;
+      }
+      result.comparedCells++;
+      if (previous.status !== next.status) {
+        const change = { ...cell, before: previous.status, after: next.status };
+        result.statusChanges.push(change);
+        if (
+          ['found', 'ran-empty'].includes(previous.status) &&
+          ['degraded', 'no-input', 'not-run', 'not-built'].includes(next.status)
+        ) {
+          result.regressions.push(change);
+        }
+      }
+      const oldCount =
+        Number.isSafeInteger(previous.findingCount) && previous.findingCount >= 0 ? previous.findingCount : null;
+      const newCount = Number.isSafeInteger(next.findingCount) && next.findingCount >= 0 ? next.findingCount : null;
+      if (oldCount !== newCount) {
+        result.findingCountChanges.push({ ...cell, before: oldCount, after: newCount });
+      }
+    }
+  }
+  return result;
+}
+
+export function evaluateRegressions(comparison) {
+  return comparison.regressions.map(
+    (change) => `regression ${change.sha256}/${change.worker}: ${change.before} -> ${change.after}`,
+  );
+}
+
+function renderComparison(comparison) {
+  const lines = [
+    '',
+    '## Comparación con baseline',
+    '',
+    `${comparison.comparedCells} celdas comparables · ${comparison.regressions.length} regresiones de ejecución.`,
+    '',
+    'Los cambios de recuento requieren revisión: más o menos hallazgos no implica mejora. Un recuento ausente es desconocido.',
+    'Las muestras y etapas añadidas o retiradas se informan por separado; no se consideran regresiones de ejecución.',
+  ];
+  for (const [key, title] of [
+    ['regressions', 'Regresiones de ejecución'],
+    ['statusChanges', 'Cambios de estado'],
+    ['findingCountChanges', 'Cambios de recuento'],
+    ['addedSamples', 'Muestras añadidas'],
+    ['removedSamples', 'Muestras retiradas'],
+    ['addedStages', 'Etapas añadidas'],
+    ['removedStages', 'Etapas retiradas'],
+  ]) {
+    lines.push('', `### ${title} (${comparison[key].length})`, '');
+    for (const change of comparison[key]) {
+      const transition =
+        'before' in change ? `: ${change.before ?? 'desconocido'} → ${change.after ?? 'desconocido'}` : '';
+      lines.push(
+        `- ${escapeCell(change.filename)} (${change.sha256})${change.worker ? ` / ${escapeCell(change.worker)}` : ''}${transition}`,
+      );
+    }
+  }
+  return lines;
+}
+
 function escapeCell(value) {
   return String(value ?? '')
     .replaceAll('|', '\\|')
@@ -141,6 +261,7 @@ export function renderMarkdown(matrix, generatedAt = new Date().toISOString()) {
       );
     }
   }
+  if (matrix.comparison) lines.push(...renderComparison(matrix.comparison));
   lines.push('');
   return `${lines.join('\n')}\n`;
 }
@@ -187,7 +308,7 @@ export function evaluateManifest(matrix, manifest) {
   return failures;
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = {
     base: process.env.FIRMLAB_UI ?? 'http://127.0.0.1:8899',
     format: 'markdown',
@@ -195,6 +316,8 @@ function parseArgs(argv) {
     requiredClasses: [],
     forbiddenStatuses: [],
     manifest: null,
+    baseline: null,
+    failOnRegression: false,
   };
   const value = (flag, index) => {
     const next = argv[index + 1];
@@ -207,6 +330,8 @@ function parseArgs(argv) {
     else if (token === '--format') args.format = value(token, i++);
     else if (token === '--out') args.out = value(token, i++);
     else if (token === '--manifest') args.manifest = value(token, i++);
+    else if (token === '--baseline') args.baseline = value(token, i++);
+    else if (token === '--fail-on-regression') args.failOnRegression = true;
     else if (token === '--require-class') {
       const requirement = value(token, i++);
       const match = /^([^=]+)=(\d+)$/.exec(requirement);
@@ -223,6 +348,7 @@ function parseArgs(argv) {
     }
   }
   if (!['markdown', 'json'].includes(args.format)) throw new Error('--format must be markdown or json');
+  if (args.failOnRegression && !args.baseline) throw new Error('--fail-on-regression requires --baseline');
   return args;
 }
 
@@ -233,6 +359,8 @@ function usage() {
     '  --format markdown|json      Output format',
     '  --out FILE                  Write output to a file instead of stdout',
     '  --manifest FILE             Require every SHA-256 locked in this manifest',
+    '  --baseline FILE             Compare with an earlier --format json matrix',
+    '  --fail-on-regression        Fail on executed -> degraded/unavailable transitions (requires --baseline)',
     '  --require-class CLASS=N     Fail unless at least N samples of this class exist (repeatable)',
     '  --forbid-status STATUS      Fail if any applicable stage has this status (repeatable)',
   ].join('\n');
@@ -250,6 +378,8 @@ async function main() {
     process.stdout.write(`${usage()}\n`);
     return;
   }
+  const baseline = args.baseline ? JSON.parse(await readFile(args.baseline, 'utf8')) : null;
+  if (args.baseline) compareMatrices(baseline, baseline);
   const base = args.base.replace(/\/$/, '');
   const headers = process.env.FIRMLAB_UI_AUTH
     ? { authorization: `Basic ${Buffer.from(process.env.FIRMLAB_UI_AUTH).toString('base64')}` }
@@ -262,6 +392,7 @@ async function main() {
     }),
   );
   const matrix = buildMatrix(images, new Map(coverageEntries));
+  if (args.baseline) matrix.comparison = compareMatrices(matrix, baseline);
   const output =
     args.format === 'json'
       ? `${JSON.stringify({ generatedAt: new Date().toISOString(), ...matrix }, null, 2)}\n`
@@ -273,6 +404,7 @@ async function main() {
   const failures = [
     ...evaluateRequirements(matrix, args.requiredClasses, args.forbiddenStatuses),
     ...(manifest ? evaluateManifest(matrix, manifest) : []),
+    ...(args.failOnRegression ? evaluateRegressions(matrix.comparison) : []),
   ];
   if (failures.length > 0) {
     process.stderr.write(`Corpus validation failed:\n- ${failures.join('\n- ')}\n`);

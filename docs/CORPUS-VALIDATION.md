@@ -23,6 +23,33 @@ pnpm corpus:matrix \
 muestras añadidas expresamente para regresión. Los blobs no se versionan en Git: viven en el corpus persistente del
 despliegue y el manifiesto permite volver a obtener y verificar exactamente los artefactos públicos.
 
+## Comparación entre campañas
+
+Guarda la matriz JSON antes de ejecutar una campaña y compara los resultados posteriores con ese archivo:
+
+```bash
+pnpm corpus:matrix --format json --out /private/tmp/corpus-before.json
+# Ejecutar la campaña prevista y esperar a que termine.
+pnpm corpus:matrix --baseline /private/tmp/corpus-before.json --fail-on-regression \
+  --out /private/tmp/corpus-comparison.md
+```
+
+La comparación usa SHA-256 de la imagen y nombre de etapa (`worker`), independientemente del ID, nombre de fichero
+o posición. Acepta matrices de esquema 1; rechaza esquemas incompatibles, hashes ausentes y claves duplicadas para
+evitar emparejamientos ambiguos. Un cambio de nombre de etapa aparece como retirada y alta, sin inferir equivalencia.
+
+`--baseline` añade la comparación al Markdown o al campo `comparison` del JSON. Conserva todos los cambios de
+estado y recuento, y distingue muestras nuevas/retiradas de etapas nuevas/retiradas en muestras comunes. Sólo las
+transiciones de `found` o `ran-empty` a `degraded`, `no-input`, `not-run` o `not-built` son regresiones de ejecución.
+`--fail-on-regression` requiere baseline y devuelve código 2 si existe alguna; sin ese flag, la comparación informa
+sin bloquear. Entradas inválidas producen código 1. Los gates existentes de manifiesto/clase/estado siguen aplicándose.
+
+Más hallazgos no demuestra mejora y menos hallazgos no demuestra regresión: pueden reflejar correcciones de falsos
+positivos, cambios de reglas o pérdida de detección. Los recuentos ausentes permanecen desconocidos. Las retiradas
+se muestran para revisión, pero no activan este gate; usa además `--manifest` para exigir las muestras bloqueadas.
+Esta comparación detecta pérdida de ejecución, no demuestra exactitud semántica ni que todas las etapas se hayan
+recalculado: se comparan los últimos resultados persistidos. Usa el mismo idioma y contrato de etapas en ambas campañas.
+
 ## Ampliación del 23 de agosto de 2026
 
 | Muestra | Procedencia | Comprobación | Propósito |

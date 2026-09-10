@@ -1721,6 +1721,7 @@ async function bootOnce(
             const target = `${f.protocol}://127.0.0.1:${f.host}`;
             handle.log(`  [${label}] actively probing ${target} while this qemu pass is alive.`);
             const result = await runWebProbe(target, {
+              targetContext: 'emulation',
               fetch: fetchFirmwareLoopback,
               timeoutMs: 1500,
               maxRequests: 40,

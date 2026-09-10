@@ -6,8 +6,8 @@
  * (`confirmed_in_emulation`: proves the sandbox, never the deployed device); everything else is honestly a lead or
  * nothing. No exploitation, no fuzzing of third parties — only the operator's own emulated target.
  *
- * Command injection is marker-based: a unique per-run nonce is injected and only counted if the response echoes it
- * (shell execution proven, not guessed). Traversal is confirmed only when `/etc/passwd`'s `root:…:0:0:` leaks. The
+ * Command injection requires generated output absent from the input, a clean baseline, and a second challenge.
+ * Traversal requires a passwd root line absent from baseline and missing-file controls. The
  * payload builders, the injection-point parser, and the detectors are PURE and unit-tested; the runner only does
  * bounded HTTP and composes them, with an injectable fetch so tests never touch the network.
  */
@@ -15,6 +15,7 @@ import { constants as cryptoConstants, randomBytes } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import type { EvidenceChannel, FindingSeverity, ProofState } from '@firmlab/core';
+import { fetchLocalTarget, isLocalTarget } from './webprobe-transport.js';
 
 export interface WebFinding {
   kind: string;
@@ -45,14 +46,11 @@ const BUILTIN_POINTS: InjectionPoint[] = [
 
 /** Pure: OS command-injection payloads that echo `nonce` iff a shell runs them. Separator-, pipe-, and subshell-based. */
 export function cmdInjectionPayloads(nonce: string): string[] {
-  return [
-    `;echo ${nonce};`,
-    `| echo ${nonce}`,
-    `\`echo ${nonce}\``,
-    `$(echo ${nonce})`,
-    `%0aecho ${nonce}`,
-    `&&echo ${nonce}`,
-  ];
+  if (!/^[A-Za-z0-9]{2,128}$/.test(nonce))
+    throw new Error('Probe nonce must contain 2–128 ASCII alphanumeric characters.');
+  const middle = Math.ceil(nonce.length / 2);
+  const command = `printf '%s%s' '${nonce.slice(0, middle)}' '${nonce.slice(middle)}'`;
+  return [`;${command};`, `| ${command}`, `\`${command}\``, `$(${command})`, `\n${command}`, `&&${command}`];
 }
 
 /** Pure: path-traversal payloads aiming at /etc/passwd through the usual encodings. */
@@ -65,14 +63,14 @@ export function traversalPayloads(): string[] {
   ];
 }
 
-/** Pure: a shell ran our payload iff the unique nonce is echoed back verbatim. */
+/** Candidate detector only: the runner also requires baseline and independent challenge controls. */
 export function detectCmdInjection(nonce: string, body: string): boolean {
   return body.includes(nonce);
 }
 
 /** Pure: a traversal succeeded iff the response leaks a real /etc/passwd root line. */
 export function detectPasswdLeak(body: string): boolean {
-  return /root:.*:0:0:/.test(body);
+  return /(?:^|\r?\n)root:[^:\r\n]*:0:0:[^:\r\n]*:[^:\r\n]*:[^:\r\n]+(?:\r?\n|$)/.test(body);
 }
 
 const FORM_RE = /<form\b[^>]*\baction\s*=\s*["']?([^"'\s>]+)[^>]*>([\s\S]*?)<\/form>/gi;
@@ -112,16 +110,31 @@ export function parseInjectionPoints(html: string, basePath = '/'): InjectionPoi
 /** Pure: build the probe URL for a GET injection point (payload URL-encoded into the parameter). */
 export function buildProbeUrl(baseUrl: string, point: InjectionPoint, payload: string): string {
   const base = baseUrl.replace(/\/+$/, '');
-  return `${base}${point.path}?${point.param}=${encodeURIComponent(payload)}`;
+  return `${base}${point.path}?${encodeURIComponent(point.param)}=${encodeURIComponent(payload)}`;
 }
 
 export interface WebProbeResult {
+  probeVersion?: number;
   available: boolean;
   reason: string;
   target: string;
   requests: number;
   points: number;
   findings: WebFinding[];
+  /** Absent on historical results, whose coverage cannot be reconstructed reliably. */
+  coverage?: {
+    discoveredPoints: number;
+    eligiblePoints: number;
+    plannedPoints: number;
+    attemptedPoints: number;
+    completedPoints: number;
+    skippedUnsupportedMethod: number;
+    skippedPointLimit: number;
+    skippedBudget: number;
+    requestBudget: number;
+    budgetExhausted: boolean;
+    failedRequests: number;
+  };
 }
 
 export type FetchLike = (
@@ -152,9 +165,9 @@ export function fetchFirmwareLoopback(
   if (!LOOPBACK_NAMES.has(url.hostname)) {
     return Promise.reject(new Error(`Firmware TLS relaxation is restricted to loopback, not ${url.hostname}.`));
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    return Promise.reject(new Error(`Unsupported firmware probe protocol: ${url.protocol}`));
-  }
+  if (!isLocalTarget(rawUrl)) return Promise.reject(new Error('Invalid firmware probe URL or credentials.'));
+  if (init.signal?.aborted) return Promise.reject(new Error('Firmware probe aborted.'));
+  if (url.hostname === 'localhost') url.hostname = '127.0.0.1';
   return new Promise((resolve, reject) => {
     const transport = url.protocol === 'https:' ? https : http;
     const request = transport.request(
@@ -175,13 +188,22 @@ export function fetchFirmwareLoopback(
           : {}),
       },
       (response) => {
+        response.once('error', reject);
+        response.once('aborted', () => reject(new Error('Firmware probe response aborted.')));
+        if ((response.statusCode ?? 0) >= 300 && (response.statusCode ?? 0) < 400) {
+          response.destroy();
+          reject(new Error('Firmware probe redirects are not permitted.'));
+          return;
+        }
         const chunks: Buffer[] = [];
         let kept = 0;
         response.on('data', (chunk: Buffer) => {
-          if (kept >= LOOPBACK_RESPONSE_CAP) return;
-          const take = chunk.subarray(0, LOOPBACK_RESPONSE_CAP - kept);
-          chunks.push(take);
-          kept += take.length;
+          if (kept + chunk.length > LOOPBACK_RESPONSE_CAP) {
+            response.destroy(new Error('Firmware probe response exceeded its byte limit.'));
+            return;
+          }
+          chunks.push(chunk);
+          kept += chunk.length;
         });
         response.once('end', () => {
           const status = response.statusCode ?? 0;
@@ -211,22 +233,36 @@ export function fetchFirmwareLoopback(
  */
 export async function runWebProbe(
   baseUrl: string,
-  opts: { fetch?: FetchLike; timeoutMs?: number; maxRequests?: number; nonce?: string } = {},
+  opts: {
+    fetch?: FetchLike;
+    timeoutMs?: number;
+    maxRequests?: number;
+    nonce?: string;
+    targetContext?: 'emulation';
+  } = {},
 ): Promise<WebProbeResult> {
-  const doFetch = (opts.fetch ?? (globalThis.fetch as unknown as FetchLike)) as FetchLike;
+  const doFetch = opts.fetch ?? fetchLocalTarget;
   const timeoutMs = opts.timeoutMs ?? 6000;
   const maxRequests = opts.maxRequests ?? 200;
+  if (!Number.isSafeInteger(maxRequests) || maxRequests < 0)
+    throw new Error('Request budget must be a nonnegative integer.');
   const nonce = opts.nonce ?? `FLZ${randomNonce()}`;
+  cmdInjectionPayloads(nonce); // Validate before any network request.
   const target = baseUrl.replace(/\/+$/, '');
   let lastTransportError = '';
+  let requests = 0;
+  let failedRequests = 0;
 
   const get = async (url: string): Promise<{ ok: boolean; status: number; body: string } | null> => {
+    if (requests >= maxRequests) return null;
+    requests++;
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
       const res = await doFetch(url, { signal: ac.signal });
       return { ok: res.ok, status: res.status, body: (await res.text()).slice(0, 200_000) };
     } catch (error) {
+      failedRequests++;
       lastTransportError = error instanceof Error ? error.message : String(error);
       return null;
     } finally {
@@ -237,78 +273,195 @@ export async function runWebProbe(
   const home = await get(`${target}/`);
   if (!home) {
     return {
+      probeVersion: 2,
       available: false,
-      reason: `Target ${target} is not reachable — boot the service (chroot-service / full-system) first, then probe.${
-        lastTransportError ? ` Transport error: ${lastTransportError}` : ''
-      }`,
+      reason:
+        maxRequests === 0
+          ? 'Request budget is zero; target was not contacted.'
+          : `Target ${target} is not reachable — boot the service (chroot-service / full-system) first, then probe.${
+              lastTransportError ? ` Transport error: ${lastTransportError}` : ''
+            }`,
       target,
-      requests: 0,
+      requests,
       points: 0,
       findings: [],
     };
   }
 
-  // Points from the served page take priority; the built-in sinks fill in when the page yields none.
   const discovered = parseInjectionPoints(home.body);
-  const points = [...discovered, ...BUILTIN_POINTS].slice(0, 40);
-
+  // Interleave sources before the cap, so a large discovery page cannot exclude the fallback sinks.
+  const discoveredGet = discovered.filter((point) => point.method === 'GET');
+  const candidates: InjectionPoint[] = [];
+  const pointKeys = new Set<string>();
+  for (let i = 0; i < Math.max(discoveredGet.length, BUILTIN_POINTS.length); i++) {
+    for (const point of [discoveredGet[i], BUILTIN_POINTS[i]]) {
+      if (!point) continue;
+      const key = `${point.path}:${point.param}`;
+      if (pointKeys.has(key)) continue;
+      pointKeys.add(key);
+      candidates.push(point);
+    }
+  }
+  const points = candidates.slice(0, 40);
+  const states = points.map((point) => ({
+    point,
+    baseline: null as { body: string } | null,
+    baselineAttempted: false,
+    attempted: false,
+    steps: 0,
+  }));
   const findings: WebFinding[] = [];
   const seenKinds = new Set<string>();
-  let requests = 1; // counted the home fetch
-
-  outer: for (const point of points) {
-    if (point.method !== 'GET') continue; // POST bodies are handled by the fuzzer path; probe GET params here
-    for (const payload of cmdInjectionPayloads(nonce)) {
-      if (requests >= maxRequests) break outer;
-      requests++;
+  const proofState: ProofState =
+    opts.targetContext === 'emulation' ? 'confirmed_in_emulation' : 'needs_runtime_reproduction';
+  const context =
+    opts.targetContext === 'emulation'
+      ? 'Reproduced in the associated emulation session; this does not prove the deployed device.'
+      : 'Observed on the supplied service; association with a firmware emulation session is unverified.';
+  // Each round reaches all points before progressing to another payload; techniques alternate.
+  const rounds = [
+    { kind: 'ci', index: 0 },
+    { kind: 'pt', index: 0 },
+    { kind: 'ci', index: 1 },
+    { kind: 'pt', index: 1 },
+    { kind: 'ci', index: 2 },
+    { kind: 'pt', index: 2 },
+    { kind: 'ci', index: 3 },
+    { kind: 'pt', index: 3 },
+    { kind: 'ci', index: 4 },
+    { kind: 'ci', index: 5 },
+  ];
+  let budgetExhausted = false;
+  outer: for (const round of rounds) {
+    for (const state of states) {
+      if (requests >= maxRequests) {
+        budgetExhausted = true;
+        break outer;
+      }
+      if (round.kind === 'ci' && round.index === 0) {
+        if (maxRequests - requests < 2) {
+          budgetExhausted = true;
+          break outer;
+        }
+        state.baselineAttempted = true;
+        state.baseline = await get(buildProbeUrl(target, state.point, `FLCONTROL${randomNonce()}`));
+      }
+      if (!state.baseline) continue; // A failed control cannot establish a negative baseline.
+      const { point, baseline } = state;
+      const key = `${round.kind}:${point.path}:${point.param}`;
+      if (seenKinds.has(key)) {
+        state.steps++;
+        continue;
+      }
+      const challenge = `${nonce.slice(0, 100)}${randomNonce()}`;
+      const payload =
+        round.kind === 'ci' ? cmdInjectionPayloads(challenge)[round.index] : traversalPayloads()[round.index];
+      if (payload === undefined) continue;
+      state.attempted = true;
       const r = await get(buildProbeUrl(target, point, payload));
-      if (r && detectCmdInjection(nonce, r.body) && !seenKinds.has(`ci:${point.path}:${point.param}`)) {
-        seenKinds.add(`ci:${point.path}:${point.param}`);
+      if (!r) continue;
+      state.steps++;
+      if (
+        round.kind === 'ci' &&
+        detectCmdInjection(challenge, r.body) &&
+        !detectCmdInjection(challenge, baseline.body)
+      ) {
+        const secondChallenge = `${nonce.slice(0, 100)}${randomNonce()}`;
+        const secondPayload = cmdInjectionPayloads(secondChallenge)[round.index];
+        if (secondPayload === undefined) continue;
+        const confirmation = await get(buildProbeUrl(target, point, secondPayload));
+        if (!confirmation) {
+          state.steps--;
+          continue;
+        }
+        if (
+          !detectCmdInjection(secondChallenge, confirmation.body) ||
+          detectCmdInjection(secondChallenge, baseline.body) ||
+          detectCmdInjection(secondChallenge, r.body) ||
+          detectCmdInjection(challenge, confirmation.body)
+        )
+          continue;
+        seenKinds.add(key);
         findings.push({
           kind: 'web-command-injection',
           title: `OS command injection in ${point.path} (${point.param})`,
           severity: 'critical',
-          proofState: 'confirmed_in_emulation',
+          proofState,
           // A live service answered a request this workbench sent it — the response IS the evidence.
           evidenceChannel: 'probe_response',
-          evidence: { path: point.path, param: point.param, payload, nonceEchoed: true },
-          rationale:
-            'The injected shell command echoed a unique per-run nonce in the response — command execution is ' +
-            'reproduced in the sandbox (proves the emulated service, not the deployed device).',
+          evidence: {
+            probeVersion: 2,
+            path: point.path,
+            param: point.param,
+            payload,
+            expectedOutput: challenge,
+            confirmationPayload: secondPayload,
+            confirmationOutput: secondChallenge,
+            baselineMarkerAbsent: true,
+            independentChallengeConfirmed: true,
+            targetContext: opts.targetContext ?? 'unverified',
+          },
+          rationale: `Two independent shell challenges produced their expected outputs, absent verbatim from the inputs and baseline. ${context}`,
         });
       }
-    }
-    for (const payload of traversalPayloads()) {
-      if (requests >= maxRequests) break outer;
-      requests++;
-      const r = await get(buildProbeUrl(target, point, payload));
-      if (r && detectPasswdLeak(r.body) && !seenKinds.has(`pt:${point.path}:${point.param}`)) {
-        seenKinds.add(`pt:${point.path}:${point.param}`);
+      if (round.kind === 'pt' && detectPasswdLeak(r.body) && !detectPasswdLeak(baseline.body)) {
+        const controlPayload = payload.replace(/passwd$/, `firmlab-missing-${randomNonce()}`);
+        const control = await get(buildProbeUrl(target, point, controlPayload));
+        if (!control) {
+          state.steps--;
+          continue;
+        }
+        if (detectPasswdLeak(control.body)) continue;
+        seenKinds.add(key);
         findings.push({
           kind: 'web-path-traversal',
           title: `Path traversal in ${point.path} (${point.param})`,
           severity: 'high',
-          proofState: 'confirmed_in_emulation',
+          proofState,
           // A live service answered a request this workbench sent it — the response IS the evidence.
           evidenceChannel: 'probe_response',
-          evidence: { path: point.path, param: point.param, payload, leaked: '/etc/passwd' },
-          rationale:
-            'The response leaked /etc/passwd (a real root:…:0:0: line) — arbitrary file read reproduced in the ' +
-            'sandbox. Proves the emulated service, not the deployed device.',
+          evidence: {
+            probeVersion: 2,
+            path: point.path,
+            param: point.param,
+            payload,
+            leaked: '/etc/passwd',
+            baselineLeakAbsent: true,
+            missingFileControl: controlPayload,
+            missingFileLeakAbsent: true,
+            targetContext: opts.targetContext ?? 'unverified',
+          },
+          rationale: `The requested path returned passwd-format root data absent from baseline and missing-file controls. ${context}`,
         });
       }
     }
   }
 
+  const attemptedPoints = states.filter((state) => state.attempted).length;
+  const completedPoints = states.filter((state) => state.steps === rounds.length).length;
   return {
+    probeVersion: 2,
     available: true,
     reason: findings.length
-      ? `Reproduced ${findings.length} issue(s) against the emulated service over ${requests} requests.`
-      : `No command injection or traversal reproduced over ${requests} requests against ${points.length} injection point(s). Absence of a hit is not proof of safety.`,
+      ? `Observed ${findings.length} issue(s) over ${requests} requests; attempted ${attemptedPoints}/${points.length} planned points, completed ${completedPoints}. ${context}`
+      : `No command injection or traversal reproduced over ${requests} requests; attempted ${attemptedPoints}/${points.length} planned injection point(s), completed ${completedPoints}. Absence of a hit is not proof of safety.`,
     target,
     requests,
-    points: points.length,
+    points: attemptedPoints,
     findings,
+    coverage: {
+      discoveredPoints: discovered.length,
+      eligiblePoints: candidates.length,
+      plannedPoints: points.length,
+      attemptedPoints,
+      completedPoints,
+      skippedUnsupportedMethod: discovered.length - discoveredGet.length,
+      skippedPointLimit: candidates.length - points.length,
+      skippedBudget: states.filter((state) => !state.baselineAttempted).length,
+      requestBudget: maxRequests,
+      budgetExhausted: (budgetExhausted || requests >= maxRequests) && completedPoints < points.length,
+      failedRequests,
+    },
   };
 }
 

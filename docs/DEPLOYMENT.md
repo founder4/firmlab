@@ -43,6 +43,28 @@ El script construye ambas imágenes **etiquetando `:latest` en el mismo paso**, 
 cosas: que el healthcheck pase, que el contenedor corra exactamente la imagen recién construida, y que el
 sello de commit coincida con el repo. Si algo no cuadra, sale con error en vez de dejarte creer que fue bien.
 
+## Reconciliar resultados WebProbe anteriores a v2
+
+WebProbe v2 añadió controles independientes y cobertura verificable. Los hallazgos calculados por versiones
+anteriores no deben seguir apareciendo como confirmados hasta reproducirlos con ese contrato. Tras desplegar una
+versión que incluya `reconcile-webprobe.mjs`, ejecuta primero el modo sólo lectura:
+
+```bash
+docker exec firmlab node apps/api/scripts/reconcile-webprobe.mjs --db /data/firmlab.db
+```
+
+Revisa el resumen y aplica después la misma selección:
+
+```bash
+docker exec firmlab node apps/api/scripts/reconcile-webprobe.mjs --db /data/firmlab.db --apply
+```
+
+La aplicación es transaccional e idempotente. No borra filas: conserva los datos originales del finding dentro de
+su evidencia de revalidación, archiva el JSON completo de cada job modificado en
+`evidence_revalidation_archive`, añade una nota auditable por imagen y mantiene la cronología original del job.
+Los hallazgos de operador y los resultados que ya declaran `probeVersion: 2` quedan fuera. Una segunda simulación
+debe informar cero candidatos.
+
 ## Qué versión está corriendo
 
 Cada imagen se sella con el commit del que salió:

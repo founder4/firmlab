@@ -5,15 +5,20 @@ long work session, grounded in a precise review of the current tree (file refere
 
 ---
 
-## Current baseline — 2026-09-05
+## Current baseline — 2026-09-10
 
 - Reproducible deploy contract, CI audit/type/test/build/Docker smoke, and exact OCI revision checks are shipped.
 - The web restores persisted deep-analysis results, lazy-loads routes, and has been exercised at 390×844; the main
   entry chunk is 427.07 kB (146.18 kB gzip).
 - Findings census semantics are explicit (established/lead/blocked/dismissed/asserted/other), with the legacy
   `unproven` field retained only as a compatibility aggregate.
-- The validation corpus has 25 samples / 8 classes. Its generated matrix covers 390 applicable stage cells (130
-  found, 142 ran-empty, 85 degraded, 33 no-input, 0 not-run).
+- The validation corpus is measured by the generated matrix and its locked manifest; see
+  [`CORPUS-VALIDATION.md`](CORPUS-VALIDATION.md) for the current command and regression gate instead of copying
+  volatile counts into this roadmap.
+- Web probes use control requests plus independent challenges, expose attempted/completed coverage, and preserve
+  legacy results as revalidation leads rather than treating reflection as command execution.
+- `netns` and rlimits are reported as partial containment. They reduce blast radius but do not waive operator
+  approval because they do not isolate filesystem, PID namespace or host credentials.
 - Kernel versions now correlate through a Linux-CNA-scoped NVD query; module correlation requires byte-level
   identity anchors and remains a lead. Neither path promotes version presence to device exploitability.
 - The official Framework QMK image classifies as `rtos`/`arm` from RP2040 boot structure and corroborated QMK
@@ -134,7 +139,7 @@ visual, and — uniquely — stateful: a persistent corpus that learns the domai
 
 Phased so Phases 0–1 ship value with **no LLM at all** (first-class binaries table, live-building dossier
 panel, hardened emulation ladder as deterministic providers, the persistent corpus), then Phases 2–4 layer the
-agent onto that base: copilot → decision nodes → zero-day + per-session isolation.
+agent onto that base: copilot → decision nodes → zero-day + bounded per-session execution.
 
 Shipped: **Phase 0** (proof-states + findings, binaries table, deterministic preflight, dossier, emulation
 ladder providers), **Phase 1** (persistent cross-image corpus, cross-refs, Level-1 rule watchlist, corpus web
@@ -144,23 +149,23 @@ structured-output LLM nodes on a deterministic orchestrator, a governor with har
 auditable+resumable session transcript, emulation gated behind human approval, and the retention↔session guard
 so a live session pins its image — all flag-gated), **Phase 4** (the zero-day node ④ reasoning sink→source over a
 deterministic taint scaffold and constructing a trigger — candidates only, never a proven bug; per-session
-isolation via OS primitives — prlimit + unshare -n network namespace + guaranteed teardown — so emulation
-auto-runs WITHOUT a human gate when the blast radius is fully contained; Level-2 corpus priors into node ④; an
-opt-in AFL++ fuzzing provider). Next: broaden class coverage (Renode/RTOS, UEFI/chipsec) and node ⑤ synthesis.
+bounded execution via OS primitives — prlimit + unshare network namespace + guaranteed teardown — while retaining
+the human gate because that containment is partial; Level-2 corpus priors into node ④; an opt-in AFL++ fuzzing
+provider). Next: broaden class coverage (Renode/RTOS, UEFI/chipsec) and node ⑤ synthesis.
 
 **Phase 4 — zero-day + isolation (implemented).** Node ④ (`agent/zeroday.ts`) reasons about a reachable vuln from
 a deterministic taint scaffold (`providers/taint.ts`: the dangerous sinks a binary imports, the attacker sources,
 CGI hints) plus Level-2 corpus priors, and constructs a trigger — but the proof-state machine binds it to
 CANDIDATES (`needs_runtime_reproduction`); only a real trigger run upgrades, and that is code's call. Per-session
-isolation (`providers/isolate.ts`) bounds the blast radius with OS primitives instead of a nested container —
+execution isolation (`providers/isolate.ts`) reduces the blast radius with OS primitives instead of a nested container —
 `prlimit` (CPU/RAM/fsize/fd caps), `unshare -n` (empty network namespace), a throwaway workdir with guaranteed
-teardown, composed without a shell. At isolation level `full` emulation auto-runs with no approval (contained
-radius); otherwise the Phase-3 approval gate is kept — honest degradation (`unshare -n` needs CAP_SYS_ADMIN). An
+teardown, composed without a shell. These controls are reported as `partial`: they do not isolate the filesystem,
+PID tree or host credentials, so the Phase-3 approval gate is always kept unless the operator pre-authorises. An
 opt-in AFL++ provider (`providers/fuzz.ts`) fuzzes under the sandbox, degrading to `available:false` when absent,
 like Ghidra. Env: `FIRMLAB_ISOLATE_CPU/_MEM_MB/_FSIZE_MB/_WALL_SECONDS`. `/api/agent/config` reports
-`phase4: {isolation, fuzzing, autoRun}`. Validated end-to-end in the firmware image (mock LLM for ①②④): full
+`phase4: {isolation, fuzzing, autoRun}`. Validated end-to-end in the firmware image (mock LLM for ①②④):
 transcript through node ④, a command-injection candidate from the real radare2 scaffold, and a real qemu-user run
-auto-executed under netns+rlimits with no approval — proof-state honest. AFL++ and Renode are both integrated and
+executed under netns+rlimits after authorisation — proof-state honest. AFL++ and Renode are both integrated and
 validated against real firmware (a real coverage-guided crash; a real Contiki boot on an emulated STM32F4). The
 `uefi-bios` class now has its own offline analysis track too (chipsec `providers/chipsec.ts`) — no faked coverage.
 
@@ -211,12 +216,12 @@ OSV/KEV cache.
   Validated end-to-end: a real overflow target crashed under the delivered trigger (SIGSEGV) → the candidate went
   `needs_runtime_reproduction` → `confirmed_in_emulation`.
 - **✅ Node ⑤ (synthesis) wired into the session** (debt #5) — a cited narrative over the confirmed findings runs as
-  the session's closing step (governor-bounded), recorded in the transcript, after both the auto-run and the
-  approval paths.
-- **✅ Rootless network namespace** (debt #2) — `detectIsolation` now falls back to `unshare -rn` (a user namespace
-  mapping to root, then a fresh netns), so `full` isolation works WITHOUT `CAP_SYS_ADMIN` on hosts that allow
-  unprivileged user namespaces. Caveat: some container runtimes (e.g. Docker/OrbStack default) block `unshare`
-  entirely, so there it still needs `--cap-add=SYS_ADMIN` or degrades honestly to `partial` (approval kept).
+  the session's closing step (governor-bounded), recorded in the transcript, after both the pre-authorised and the
+  per-target approval paths.
+- **✅ Rootless network namespace** (debt #2) — `detectIsolation` falls back to `unshare -rn` (a user namespace
+  mapping to root, then a fresh netns) on hosts that allow unprivileged user namespaces. This improves network
+  containment without overstating it as full process/filesystem isolation; the result remains `partial` and keeps
+  the approval gate. Some container runtimes block `unshare` entirely, where execution retains rlimits only.
 - **✅ AFL++ fuzzing** (debt #1) — `providers/fuzz.ts` runs coverage-guided qemu-mode AFL++ under isolation, with a
   seed corpus + a `rabin2`-mined dictionary, and records a `fuzz-crash` finding (`confirmed_in_emulation`) for each
   reproduced crash. Validated end-to-end **twice** against a real AFL++ (built `afl-qemu-trace`): (1) a planted
@@ -239,7 +244,7 @@ OSV/KEV cache.
   platform `.repl`'s `using` include graph, and degrades honestly to `blocked_by_platform` without Renode or a
   matching platform. Validated end-to-end with a real known sample — Contiki OS on an emulated STM32F4 Discovery
   (Renode's canonical demo ELF) booted and printed `Contiki 3.x started` on uart4 → `confirmed_in_emulation`. Runs
-  under `full` isolation (netns + cpu + wall-clock caps); the `--as`/`--fsize` caps are skipped because .NET's GC and
+  under partial containment (netns + cpu + wall-clock caps) after authorisation; the `--as`/`--fsize` caps are skipped because .NET's GC and
   Renode's mmap'd emulation files abort under them.
 - **✅ Renode per-MCU auto-identification — broadened** (was a hardcoded 7-family regex map). A pure MCU fingerprint
   (`@firmlab/core` `fingerprintMcu`, unit-tested) reads the evidence static analysis never mined: the memory map
@@ -261,7 +266,7 @@ OSV/KEV cache.
 - **✅ Agent RTOS/Renode path — validated end-to-end.** A mock-LLM driver (`apps/api/scripts/mock-llm.mjs` +
   `apps/api/scripts/agent-renode-e2e.mjs`) drives a full conscious-autonomy session over a real RTOS ELF against a
   real Renode: node ① triage → preflight → node ② picks the `rtos-renode` rung → zero-day skipped (no rootfs) →
-  the Phase-4 executor auto-runs under full isolation and **boots Contiki under Renode** → `confirmed_in_emulation`.
+  the Phase-4 executor runs after authorisation and **boots Contiki under Renode** → `confirmed_in_emulation`.
   Asserts the transcript, including that the executor dispatches the RTOS rung to Renode and not the user-mode
   emulator (agent-level guard for the split-brain fix). This closes the deferred F7-adjacent hardening (paired with
   the new `FuzzPanel`/`SimulationMenu` web component tests).

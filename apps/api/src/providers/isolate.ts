@@ -1,13 +1,12 @@
 /**
- * Session isolation (Phase 4) — the contained blast radius that lets emulation run WITHOUT a human-approval gate.
- * Galert's weakness is exactly here (docker socket, seccomp=unconfined, no CPU/RAM caps); FirmLab bounds the
- * radius with OS primitives instead of a nested container, so it is portable and needs no privileged daemon:
+ * Best-effort resource and network restrictions for emulation. These primitives do not isolate the filesystem,
+ * credentials, or host processes, and therefore cannot authorize unattended execution by themselves:
  *
  *   - prlimit: hard CPU-time, address-space (RAM), file-size and fd caps — enforced by the kernel, no shell.
  *   - unshare: a fresh network namespace with no interfaces, so a booted service cannot reach the network. We
  *     prefer `-n` (needs CAP_SYS_ADMIN) but fall back to `-rn` (a user namespace mapping to root first), which
  *     gives full network isolation UNPRIVILEGED when the kernel allows unprivileged user namespaces.
- *   - a private throwaway workdir, removed in a finally — teardown is guaranteed, never "creative".
+ *   - a private throwaway workdir, removed in a finally. This is NOT a filesystem sandbox.
  *
  * `runIsolated` composes these without a shell (spawn of unshare/prlimit directly), so a rootfs path with odd
  * characters can't inject a command, and it can drive the target with a trigger via stdin/env/argv while capturing
@@ -21,6 +20,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
+/** 'full' remains a legacy result value; the current runtime never detects full containment. */
 export type IsolationLevel = 'full' | 'partial' | 'none';
 
 export interface IsolationLimits {
@@ -54,14 +54,14 @@ export function loadIsolationLimits(env: NodeJS.ProcessEnv = process.env): Isola
 }
 
 /**
- * Pure: compose the isolation invocation for an inner argv. `prlimit` applies the kernel caps; `unshare <netns>`
- * (only at level 'full') drops network access with whichever flag the probe found works. No shell in the chain.
+ * Pure: compose the restrictions for an inner argv. A probed netns may strengthen partial isolation, but does
+ * not make it full containment. The legacy 'full' invocation is retained for compatibility, not detection.
  */
 export function buildIsolatedInvocation(
   argv: string[],
   limits: IsolationLimits,
   level: IsolationLevel,
-  netnsArgs: string[] = ['-n'],
+  netnsArgs: string[] = level === 'full' ? ['-n'] : [],
 ): { file: string; args: string[] } {
   const asBytes = Math.floor(limits.addressSpaceBytes / 1024) * 1024;
   const fsizeBytes = Math.floor(limits.fileSizeBytes / 1024) * 1024;
@@ -70,7 +70,7 @@ export function buildIsolatedInvocation(
     `--cpu=${limits.cpuSeconds}`,
     // An address-space cap is skipped when addressSpaceBytes <= 0. Managed runtimes (Renode's .NET GC on arm64)
     // reserve a huge virtual region up front and abort under any --as ceiling; the cpu/fsize/nofile/netns caps
-    // still apply, so isolation is preserved without breaking those workloads.
+    // still apply, although the address-space resource bound is lost.
     ...(asBytes > 0 ? [`--as=${asBytes}`] : []),
     // Likewise skipped when <= 0: Renode's memory-mapped emulation files trip a --fsize ceiling (SIGXFSZ). The
     // wall-clock + cpu caps still bound a runaway, and sparse mmaps don't actually consume disk.
@@ -80,29 +80,13 @@ export function buildIsolatedInvocation(
     '--',
     ...argv,
   ];
-  if (level === 'full') return { file: 'unshare', args: [...netnsArgs, ...prlimit] };
+  if (level !== 'none' && netnsArgs.length > 0) return { file: 'unshare', args: [...netnsArgs, ...prlimit] };
   if (level === 'partial') return { file: prlimit[0] as string, args: prlimit.slice(1) };
   return { file: argv[0] as string, args: argv.slice(1) };
 }
 
 let cachedLevel: IsolationLevel | null = null;
-let cachedNetns: string[] = ['-n'];
-
-async function canRun(file: string, args: string[]): Promise<boolean> {
-  try {
-    await execFileAsync(file, args, { timeout: 4000 });
-    return true;
-  } catch (err) {
-    // A tool that exists but exits non-zero still proves availability; ENOENT does not. For `unshare -n true`,
-    // failure means the namespace couldn't be created (no privilege), which we DO want to treat as "can't".
-    const e = err as { code?: string };
-    if (e.code === 'ENOENT') return false;
-    // Distinguish "ran but exited nonzero" (fine) from "failed to create ns". execFile rejects with code number
-    // for a nonzero exit; unshare failing to create the ns exits nonzero too — so for the netns probe we require
-    // a clean exit. canRunClean handles that; this looser check is for `--version` probes.
-    return true;
-  }
-}
+let cachedNetns: string[] = [];
 
 async function canRunClean(file: string, args: string[]): Promise<boolean> {
   try {
@@ -115,8 +99,8 @@ async function canRunClean(file: string, args: string[]): Promise<boolean> {
 
 /**
  * Detect the best isolation level this deployment can enforce, and remember which unshare flag creates a netns.
- *   full    = prlimit + a usable network namespace (`unshare -n`, else rootless `unshare -rn`) → auto-run, no gate.
- *   partial = prlimit only → approval still required.
+ *   full    = reserved for a future containment implementation; never reported here.
+ *   partial = prlimit, optionally with a network namespace → approval or explicit preauthorization required.
  *   none    = neither (macOS dev, util-linux absent) → Phase-3 approval flow.
  */
 export async function detectIsolation(): Promise<IsolationLevel> {
@@ -125,16 +109,16 @@ export async function detectIsolation(): Promise<IsolationLevel> {
     cachedLevel = 'none';
     return cachedLevel;
   }
-  if (!(await canRun('prlimit', ['--version']))) {
+  if (!(await canRunClean('prlimit', ['--cpu=1', '--', 'true']))) {
     cachedLevel = 'none';
     return cachedLevel;
   }
   if (await canRunClean('unshare', ['-n', 'true'])) {
     cachedNetns = ['-n'];
-    cachedLevel = 'full';
+    cachedLevel = 'partial';
   } else if (await canRunClean('unshare', ['-rn', 'true'])) {
     cachedNetns = ['-rn']; // rootless: map to root in a new userns, then a fresh netns — no CAP_SYS_ADMIN needed
-    cachedLevel = 'full';
+    cachedLevel = 'partial';
   } else {
     cachedLevel = 'partial';
   }
@@ -158,16 +142,27 @@ export async function runIsolated(
 
   try {
     return await new Promise<IsolatedResult>((resolve) => {
+      const grouped = process.platform !== 'win32';
       const child = spawn(file, args, {
+        detached: grouped,
         cwd: workdir,
         env: opts.env ?? { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: workdir },
       });
       let stdout = '';
       let stderr = '';
       let timedOut = false;
+      const killGroup = () => {
+        if (!child.pid) return;
+        try {
+          if (grouped) process.kill(-child.pid, 'SIGKILL');
+          else child.kill('SIGKILL');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL');
+        }
+      };
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill('SIGKILL');
+        killGroup();
       }, limits.wallMs);
       child.stdout?.on('data', (d: Buffer) => {
         if (stdout.length < maxBuffer) stdout += d.toString();
@@ -181,6 +176,8 @@ export async function runIsolated(
       });
       child.on('close', (code, signal) => {
         clearTimeout(timer);
+        // Reap same-group background children even when the direct process exited normally.
+        killGroup();
         resolve({
           ran: true,
           exitCode: code,

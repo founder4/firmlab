@@ -13,6 +13,63 @@ const job = (over: Partial<RunInput>): RunInput => ({
   ...over,
 });
 
+describe('historical web-probe revalidation', () => {
+  it.each([{ findings: [] }, { findings: [{ proofState: 'confirmed_in_emulation' }] }])(
+    'never treats a legacy web result as confirmed or clean',
+    ({ findings }) => {
+      const summary = summarizeRun(
+        job({ kind: 'webprobe', resultJson: JSON.stringify({ available: true, findings }) }),
+      );
+      expect(summary.outcome).toBe('lead');
+      expect(summary.headline).toContain('requires revalidation');
+      expect(summary.bound).toContain('anti-reflection');
+    },
+  );
+
+  it('retains current probe conclusions', () => {
+    const summary = summarizeRun(
+      job({
+        kind: 'webprobe',
+        resultJson: JSON.stringify({
+          available: true,
+          probeVersion: 2,
+          findings: [{ proofState: 'confirmed_in_emulation' }],
+        }),
+      }),
+    );
+    expect(summary.outcome).toBe('proven');
+  });
+
+  it('warns about embedded probes without downgrading a separately confirmed boot', () => {
+    const summary = summarizeRun(
+      job({
+        kind: 'emulate',
+        resultJson: JSON.stringify({
+          strategy: 'full-system',
+          proofState: 'confirmed_full_system',
+          webProbes: [{ result: { findings: [] } }],
+        }),
+      }),
+    );
+    expect(summary.outcome).toBe('proven');
+    expect(summary.bound).toContain('require revalidation');
+  });
+
+  it('accepts version 2 embedded probes without a top-level version', () => {
+    const summary = summarizeRun(
+      job({
+        kind: 'emulate',
+        resultJson: JSON.stringify({
+          strategy: 'full-system',
+          proofState: 'confirmed_full_system',
+          webProbes: [{ result: { probeVersion: 2 } }],
+        }),
+      }),
+    );
+    expect(summary.bound).toBeNull();
+  });
+});
+
 describe('summarizeRun — status is the process, outcome is what was learned', () => {
   it('never lets a finished process read as a clean result', () => {
     // The whole point of two fields. Both of these are `done`; one proved a bug and one proved nothing.

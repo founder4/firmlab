@@ -1,5 +1,9 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
-import { type IsolationLimits, buildIsolatedInvocation, loadIsolationLimits } from './isolate.js';
+import { type IsolationLimits, buildIsolatedInvocation, loadIsolationLimits, runIsolated } from './isolate.js';
 
 const limits: IsolationLimits = {
   cpuSeconds: 30,
@@ -54,6 +58,13 @@ describe('buildIsolatedInvocation', () => {
     expect(args.slice(-4)).toEqual(argv);
   });
 
+  it('partial: preserves a usable network namespace without claiming full containment', () => {
+    const { file, args } = buildIsolatedInvocation(argv, limits, 'partial', ['-rn']);
+    expect(file).toBe('unshare');
+    expect(args.slice(0, 2)).toEqual(['-rn', 'prlimit']);
+    expect(args.slice(-4)).toEqual(argv);
+  });
+
   it('none: runs the argv unwrapped (caller must decide if acceptable)', () => {
     const { file, args } = buildIsolatedInvocation(argv, limits, 'none');
     expect(file).toBe('qemu-arm-static');
@@ -78,5 +89,25 @@ describe('loadIsolationLimits', () => {
     expect(l.cpuSeconds).toBe(10);
     expect(l.addressSpaceBytes).toBe(128 * 1024 * 1024);
     expect(l.wallMs).toBe(20000);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('runIsolated process cleanup', () => {
+  it('kills a background descendant on timeout before it can write outside the workdir', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-isolation-test-'));
+    const marker = path.join(dir, 'escaped-child');
+    try {
+      const result = await runIsolated(
+        ['/bin/sh', '-c', '(sleep 0.8; touch "$1") & echo started; wait', 'test', marker],
+        { limits: { ...limits, wallMs: 300 } },
+      );
+      expect(result.stdout).toContain('started');
+      expect(result.timedOut).toBe(true);
+      expect(result.signal).toBe('SIGKILL');
+      await delay(700);
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

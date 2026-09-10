@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildMatrix, evaluateManifest, evaluateRequirements, labelImages, renderMarkdown } from './corpus-matrix.mjs';
+import {
+  buildMatrix,
+  compareMatrices,
+  evaluateManifest,
+  evaluateRegressions,
+  evaluateRequirements,
+  labelImages,
+  parseArgs,
+  renderMarkdown,
+} from './corpus-matrix.mjs';
 
 const image = (id, filename, firmwareClass = 'rtos') => ({
   id,
@@ -13,6 +22,103 @@ const coverage = (firmwareClass, stages) => ({
   applicable: stages.length,
   executed: stages.filter((stage) => ['found', 'ran-empty', 'degraded'].includes(stage.status)).length,
   stages,
+});
+
+const snapshot = (samples) => ({ schemaVersion: 1, samples });
+const sample = (digest, stages, id = 'id') => ({
+  ...image(id, `${id}.bin`),
+  sha256: digest.repeat(64),
+  coverage: coverage('rtos', stages),
+});
+const stage = (worker, status, findingCount = 0) => ({ worker, status, findingCount });
+
+test('baseline matches bytes and worker across changed IDs, filenames and ordering', () => {
+  const baseline = snapshot([sample('a', [stage('B', 'found', 2), stage('A', 'ran-empty')], 'old')]);
+  const current = snapshot([sample('a', [stage('A', 'degraded'), stage('B', 'found', 1)], 'new')]);
+  const comparison = compareMatrices(current, baseline);
+  assert.equal(comparison.comparedCells, 2);
+  assert.equal(comparison.regressions.length, 1);
+  assert.equal(comparison.regressions[0].worker, 'A');
+  assert.equal(comparison.findingCountChanges.length, 1);
+  assert.deepEqual(comparison.findingCountChanges[0], {
+    sha256: 'a'.repeat(64),
+    filename: 'new.bin',
+    worker: 'B',
+    before: 2,
+    after: 1,
+  });
+  assert.equal(evaluateRegressions(comparison).length, 1);
+});
+
+test('each executed state becoming unavailable or degraded is a regression', () => {
+  for (const before of ['found', 'ran-empty']) {
+    for (const after of ['degraded', 'no-input', 'not-run', 'not-built']) {
+      const comparison = compareMatrices(
+        snapshot([sample('a', [stage('A', after)])]),
+        snapshot([sample('a', [stage('A', before)])]),
+      );
+      assert.equal(comparison.regressions.length, 1, `${before} -> ${after}`);
+    }
+  }
+});
+
+test('count shifts and recovery are review changes, not automatic regression or improvement', () => {
+  const comparison = compareMatrices(
+    snapshot([sample('a', [stage('A', 'found', 10), stage('B', 'ran-empty'), { worker: 'C', status: 'found' }])]),
+    snapshot([sample('a', [stage('A', 'degraded', 1), stage('B', 'found', 8), stage('C', 'found', 2)])]),
+  );
+  assert.equal(comparison.regressions.length, 0);
+  assert.equal(comparison.statusChanges.length, 2);
+  assert.equal(comparison.findingCountChanges.length, 3);
+  assert.equal(comparison.findingCountChanges[2].after, null);
+  assert.deepEqual(evaluateRegressions(comparison), []);
+});
+
+test('missing and new samples or stages are reported separately from execution regressions', () => {
+  const comparison = compareMatrices(
+    snapshot([sample('c', [stage('new-image-stage', 'not-run')]), sample('a', [stage('new', 'not-run')])]),
+    snapshot([sample('b', [stage('removed-image-stage', 'found')]), sample('a', [stage('old', 'found')])]),
+  );
+  assert.equal(comparison.comparedCells, 0);
+  assert.equal(comparison.regressions.length, 0);
+  assert.equal(comparison.addedSamples.length, 1);
+  assert.equal(comparison.removedSamples.length, 1);
+  assert.deepEqual(
+    comparison.addedStages.map((entry) => entry.worker),
+    ['new'],
+  );
+  assert.deepEqual(
+    comparison.removedStages.map((entry) => entry.worker),
+    ['old'],
+  );
+});
+
+test('invalid or ambiguous baseline schemas fail explicitly, while additive metadata is compatible', () => {
+  const valid = snapshot([sample('a', [stage('A', 'found')])]);
+  for (const invalid of [
+    null,
+    { ...valid, schemaVersion: 2 },
+    {},
+    snapshot([image('old', 'old.bin')]),
+    snapshot([sample('a', []), sample('a', [])]),
+    snapshot([sample('a', [stage('A', 'future-status')])]),
+    snapshot([sample('a', [stage('A', 'found'), stage('A', 'found')])]),
+  ]) {
+    assert.throws(() => compareMatrices(valid, invalid));
+  }
+  assert.equal(compareMatrices(valid, { ...valid, futureMetadata: true }).comparedCells, 1);
+});
+
+test('regression flags are optional and gated comparison is rendered in review artifacts', () => {
+  assert.equal(parseArgs([]).failOnRegression, false);
+  assert.throws(() => parseArgs(['--fail-on-regression']), /requires --baseline/);
+  assert.throws(() => parseArgs(['--baseline']), /requires a value/);
+  assert.equal(parseArgs(['--baseline', 'old.json', '--fail-on-regression']).failOnRegression, true);
+  const matrix = buildMatrix([sample('a', [])], new Map([['id', coverage('rtos', [])]]));
+  assert.doesNotMatch(renderMarkdown(matrix, 'fixed'), /Comparación con baseline/);
+  matrix.comparison = compareMatrices(matrix, matrix);
+  assert.match(renderMarkdown(matrix, 'fixed'), /0 celdas comparables · 0 regresiones/);
+  assert.match(renderMarkdown(matrix, 'fixed'), /más o menos hallazgos no implica mejora/);
 });
 
 test('labels remain compact and become unique when filenames share a stem', () => {

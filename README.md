@@ -93,7 +93,7 @@ flowchart TB
     subgraph api["⚙️  apps/api · Fastify + node:sqlite"]
         R["REST routes (18)"]
         P["<b>Providers</b> — runtime-detected tools<br/>binwalk · radare2 / Ghidra · syft / grype<br/>gitleaks · QEMU · Renode · AFL++"]
-        AG["<b>Agent</b> <i>(flag-gated)</i><br/>triage · target-selection · zero-day · synthesis<br/>governor · OS-primitive session isolation"]
+        AG["<b>Agent</b> <i>(flag-gated)</i><br/>triage · target-selection · zero-day · synthesis<br/>governor · bounded execution + approval"]
         RS["<b>Research</b> <i>(flag-gated)</i><br/>provenance · OSV.dev · security.txt · egress ledger"]
         ST[("SQLite (WAL)<br/>images · jobs · findings<br/>corpus · agent sessions")]
     end
@@ -223,7 +223,9 @@ The optional agent (behind `FIRMLAB_AGENT`) does **not** get a blank loop and a 
 only makes the **judgment calls** — what to triage, which target to attack, whether a taint path is reachable —
 each written to an auditable, resumable transcript. A **governor** halts the run at the first hard cap
 (LLM turns · tokens · USD · wall-time). The turn fraction is consumed/max budget, not workflow progress. Emulation
-is gated behind **human approval**, with an **approve all proposed runs** action; fully contained runs may auto-run.
+is gated behind **human approval**, with an **approve all proposed runs** action. Resource limits and a network
+namespace reduce blast radius, but do not isolate the filesystem, process tree or host credentials, so they are
+reported as partial containment and never waive approval on their own.
 An operator may also persistently pre-authorise future sessions in **Settings → AI & Agent**
 (`FIRMLAB_AGENT_PREAPPROVE=1` is the environment equivalent).
 
@@ -233,10 +235,9 @@ flowchart TD
     X --> PF["Deterministic preflight"]
     PF --> TS["② Target selection<br/><i>LLM: which binary + which rung</i>"]
     TS --> CL["🔒 Rung clamped to the preflight ceiling<br/><i>honesty enforced in code, not by the model</i>"]
-    CL --> Q{blast radius<br/>fully contained?}
-    Q -->|"yes → full isolation"| RUN["Auto-run under netns + rlimits"]
-    Q -->|"no"| GATE["🙋 Human approval gate<br/><i>one target or all proposed targets</i>"]
-    GATE -->|approved / pre-authorised in Settings| RUN
+    CL --> GATE{"🙋 Approved?<br/><i>one target, all proposed targets,<br/>or persistent pre-authorisation</i>"}
+    GATE -->|yes| RUN["Bounded run<br/><i>rlimits + optional network namespace</i>"]
+    GATE -->|no| WAIT["Await operator approval"]
     RUN --> EMU["③ Emulation<br/><i>proof-state stays honest</i>"]
     EMU --> ZD["④ Zero-day node<br/><i>taint sink→source + build a trigger</i><br/>→ a CANDIDATE, never a proven bug"]
     ZD --> SY["⑤ Synthesis<br/><i>cited narrative over confirmed findings</i>"]
@@ -266,7 +267,7 @@ published advisory for a present component is a *lead*, not a confirmed bug; rea
 | **Web** | React + Vite · hand-rolled SVG/DOM visuals (no chart lib) · light/dark/system theming · PWA |
 | **Emulation** | `qemu-user-static` · `qemu-system-*` · Renode (RTOS/MCU) |
 | **Security tooling** | binwalk · radare2 / Ghidra · syft / grype · gitleaks · AFL++ · OSV.dev |
-| **Agent/LLM** | Provider-agnostic (DeepSeek-first) · structured-output decision nodes · governor · session isolation |
+| **Agent/LLM** | Provider-agnostic (DeepSeek-first) · structured-output decision nodes · governor · bounded execution + approval |
 | **Quality** | Vitest (2,700+ tests) · Biome (lint/format) · Docker-based real-tool validation · locked corpus matrix |
 
 ## Quick start
@@ -312,7 +313,7 @@ layered on later, always additive.
 | **1** | Persistent cross-image **corpus**, cross-refs, rule watchlist, corpus web views | ✅ Shipped |
 | **2** | Read-only **copilot** (multi-provider LLM, proof-state discipline, dossier) | ✅ Shipped |
 | **3** | **Decision nodes** ①②, governor, auditable/resumable sessions, human-approval gate | ✅ Shipped |
-| **4** | **Zero-day** node ④, deterministic taint scaffold, OS-primitive session isolation, opt-in AFL++ | ✅ Shipped |
+| **4** | **Zero-day** node ④, deterministic taint scaffold, bounded execution with approval, opt-in AFL++ | ✅ Shipped |
 | **5** | External **intelligence** — provenance + OSV + security.txt, egress ledger (own flag) | ✅ Shipped |
 | **▶** | **In progress** — completing the resumable UEFI-module campaign, closing matrix `not-run` cells, full-system guest networking | 🔨 Ongoing |
 

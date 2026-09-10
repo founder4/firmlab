@@ -205,20 +205,26 @@ export const panels = {
      */
     sub: {
       lead: [
-        'Drive a booted service (chroot-service / full-system) for command injection and path traversal. A',
-        'reproduced hit is recorded as',
+        'Probe an authorised loopback service for command injection and path traversal. A manually entered URL',
+        'does not establish which firmware it runs. Its findings remain',
       ].join(' '),
       /** Introduces the shared gloss, which follows the code and is owned by `proofState`. */
       means: ', which means:',
-      tail: 'Loopback / private targets only.',
+      tail: 'Confirmation for this image requires a probe inside its live emulation session.',
     },
     probe: 'Probe',
     probeFailed: 'probe failed',
     reachable: 'reachable',
     unreachable: 'unreachable',
     requests: (n: number) => `${n} requests`,
-    points: (n: number) => `${n} injection points`,
-    reproduced: (n: number) => `${n} reproduced`,
+    points: (n: number) => `${n} points attempted`,
+    reproduced: (n: number) => `${n} observations`,
+    legacy:
+      'Historical probe: reflection and coverage controls were not recorded. Treat its vulnerability claims as unverified and repeat the probe.',
+    coverage: (attempted: number, planned: number, completed: number, failed: number) =>
+      `${attempted} of ${planned} planned points attempted; ${completed} completed; ${failed} failed requests.`,
+    skipped: (method: number, limit: number, budget: number) =>
+      `Not attempted: ${method} unsupported methods, ${limit} beyond the point limit, ${budget} beyond the request budget.`,
     runLabel: 'web-probe',
   },
 

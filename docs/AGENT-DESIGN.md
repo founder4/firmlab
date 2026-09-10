@@ -233,11 +233,11 @@ introducir riesgo de agente. Las Fases 2–4 añaden la autonomía consciente so
 - Governor (presupuesto de pasos/tokens/dinero/tiempo), tabla de sesiones, transcript auditable.
 - Emulación con aprobación humana (aún sin aislamiento de Fase 4).
 
-### Fase 4 — Zero-day + profundidad + aislamiento
+### Fase 4 — Zero-day + profundidad + ejecución acotada
 - Nodo **④**: razonamiento sink→source, construcción de trigger.
 - Fuzzing AFL++ como provider; RTOS/Renode; UEFI/chipsec — cobertura de clases que Galert tiene nacientes.
-- **Aislamiento por sesión**: contenedor efímero (como Galert, pero firmware-only y con límites de CPU/RAM que
-  a ellos les faltan). Emulación sin aprobación manual porque el radio de daño ya está contenido.
+- **Contención por sesión**: límites de CPU/RAM, namespace de red cuando el host lo permite y teardown del grupo de
+  procesos. La autorización humana se conserva porque esos controles no aíslan filesystem, PID ni credenciales.
 - **Nivel 2** de aprendizaje (priors asistidos).
 
 ---
@@ -392,14 +392,14 @@ candidato, y esa decisión es de código. **Nivel-2 de aprendizaje**: el context
 corpus (componentes vulnerables vistos en la familia, reachability confirmada antes) — banderas a comprobar, no
 conclusiones.
 
-**Aislamiento por sesión (`providers/isolate.ts`) — el trabajo grande, donde Galert falla.** En vez de un
-contenedor anidado (socket Docker, seccomp abierto, sin límites — las grietas de Galert), FirmLab acota el radio de
-daño con **primitivas del SO**: `prlimit` (topes duros de CPU/RAM/tamaño-de-fichero/FDs, aplicados por el kernel,
-sin shell), `unshare -n` (namespace de red vacío, sin salida a internet) y un workdir efímero con teardown
-garantizado en un `finally`. Se componen **sin shell** (execFile directo de `unshare`/`prlimit`), así una ruta de
-rootfs con caracteres raros no puede inyectar. Niveles: `full` (netns + rlimits) → **la emulación se auto-ejecuta
-sin aprobación humana**, porque el radio ya está contenido; `partial` (solo rlimits) o `none` → se conserva el gate
-de aprobación de la Fase 3. Degradación honesta: `unshare -n` necesita `CAP_SYS_ADMIN`; sin él, `partial`.
+**Ejecución acotada por sesión (`providers/isolate.ts`).** FirmLab reduce el radio de daño con primitivas del SO:
+`prlimit` (topes de CPU/RAM/tamaño-de-fichero/FDs, aplicados por el kernel, sin shell), `unshare -n` (namespace de
+red vacío, sin salida a internet cuando el host lo permite) y un workdir efímero con teardown garantizado en un
+`finally`. Se componen **sin shell** (`execFile` directo), así una ruta de rootfs con caracteres raros no puede
+inyectar. Esta combinación no separa el filesystem, el namespace PID ni las credenciales del host: por eso se
+declara `partial`, incluso con red y rlimits activos, y **no habilita autoejecución**. Se conserva el gate de la
+Fase 3 salvo aprobación puntual, aprobación de todos los objetivos o preautorización persistente. Un futuro nivel
+`full` exige aislamiento efectivo de esos recursos, no sólo otro nombre para límites parciales.
 
 **Fuzzing AFL++ (`providers/fuzz.ts`, opt-in).** Fuzz qemu-mode acotado en tiempo, ejecutado *dentro* del sandbox
 de aislamiento, con corpus semilla + diccionario minado de `rabin2`; un crash reproducido registra un finding
@@ -411,24 +411,24 @@ plantado hallado por cobertura (→ SIGSEGV → finding confirmado) y el `busybo
 
 **El flujo (`agent/session.ts`).** Tras el nodo ②, el orquestador corre node ④ sobre el objetivo top (garantizando
 su triage), registra los candidatos como findings + priors de reachability (write-back de Nivel-2), y decide la
-emulación por nivel de aislamiento: `full` → auto-run bajo sandbox sin aprobación; si no → preautorización global
-o `awaiting_approval`.
+emulación por autorización: preautorización global o aprobación explícita → ejecución acotada; si no,
+`awaiting_approval`. El nivel parcial de aislamiento nunca sustituye esa decisión del operador.
 `/api/agent/config` expone `phase4: { isolation, fuzzing, autoRun }`.
 
 **RTOS/Renode (`providers/renode.ts`, opt-in).** Arranca un firmware MCU real bajo Renode y decide "booted" desde los
 bytes UART reales (file-backend por UART), nunca por asunción; descubre el UART correcto siguiendo el grafo de
 includes `using` del `.repl` de la plataforma, y degrada honestamente a `blocked_by_platform` sin Renode o sin
 plataforma. Validado con muestra real: Contiki OS sobre un STM32F4 Discovery emulado (ELF demo canónico de Renode)
-arrancó e imprimió `Contiki 3.x started` en uart4 → `confirmed_in_emulation`. Corre bajo aislamiento `full` (netns +
-cpu + wall-clock); los caps `--as`/`--fsize` se omiten porque el GC de .NET y los ficheros mmap de Renode abortan bajo
-ellos. **UEFI/chipsec** queda reconocido pero **no integrado** — degradación honesta, sin fingir cobertura.
+arrancó e imprimió `Contiki 3.x started` en uart4 → `confirmed_in_emulation`. Corre con contención parcial (netns
+cuando está disponible, CPU y wall-clock) y autorización; los caps `--as`/`--fsize` se omiten porque el GC de .NET
+y los ficheros mmap de Renode abortan bajo ellos. **UEFI/chipsec** queda reconocido pero **no integrado** —
+degradación honesta, sin fingir cobertura.
 
-**Validado de extremo a extremo** en la imagen firmware (mock LLM para ①②④): config Fase-4 con `isolation:full`;
-sesión completa `triaje → extracción → preflight → ② → ④ → emulación`; node ④ produce un candidato de
-command-injection desde el scaffold real de radare2; **la emulación qemu-user real se auto-ejecuta bajo netns +
-prlimit SIN aprobación**; proof-state honesto; el candidato queda como `needs_runtime_reproduction`. Tests unitarios
-cubren el scaffold de taint, el parseo de ④, el constructor de invocación aislada y el de fuzzing — sin tocar
-`node:sqlite`.
+**Validado de extremo a extremo** en la imagen firmware (mock LLM para ①②④): sesión completa
+`triaje → extracción → preflight → ② → ④ → emulación`; node ④ produce un candidato de command-injection desde el
+scaffold real de radare2; la emulación qemu-user real se ejecuta con netns + prlimit tras autorización; proof-state
+honesto; el candidato queda como `needs_runtime_reproduction`. Tests unitarios cubren el scaffold de taint, el
+parseo de ④, el constructor de invocación acotada y el de fuzzing — sin tocar `node:sqlite`.
 
 ---
 

@@ -314,6 +314,18 @@ export function summarizeRun(job: RunInput): RunSummary {
 
     case 'webprobe': {
       const findings = Array.isArray(result.findings) ? result.findings : [];
+      const revalidation = result.revalidation as { required?: boolean; reason?: string } | undefined;
+      if (result.probeVersion !== 2 || revalidation?.required) {
+        return {
+          ...base,
+          target: (result.target as string) ?? base.target,
+          outcome: result.available === false ? 'blocked' : 'lead',
+          headline: 'Historical web probe requires revalidation — its detections are not confirmed',
+          bound:
+            revalidation?.reason ??
+            'Legacy detector lacked differential and anti-reflection controls; rerun with probeVersion 2.',
+        };
+      }
       if (result.available === false) {
         return {
           ...base,
@@ -395,6 +407,15 @@ export function summarizeRun(job: RunInput): RunSummary {
     }
 
     case 'emulate': {
+      const revalidation = result.revalidation as { required?: boolean; reason?: string } | undefined;
+      const legacyWebProbes = rows(result.webProbes).some(
+        (probe) => (probe.result as { probeVersion?: number } | undefined)?.probeVersion !== 2,
+      );
+      const webWarning =
+        revalidation?.required || legacyWebProbes
+          ? (revalidation?.reason ??
+            'Embedded historical web probes require revalidation; boot evidence remains valid.')
+          : null;
       // THREE rungs share this job kind — user-mode, chroot-service and full-system — and this case used to read
       // all of them as the cheapest one. A boot that returned `confirmed_full_system` rendered in the run ledger
       // as `lead` / "Ran under user-mode emulation, exit ?", i.e. the strongest result the ladder can produce,
@@ -426,7 +447,7 @@ export function summarizeRun(job: RunInput): RunSummary {
           question: strategy,
           outcome,
           headline: headline.length > 160 ? `${headline.slice(0, 159)}…` : headline,
-          bound: null,
+          bound: webWarning,
         };
       }
       const ran = result.ran === true;
@@ -439,7 +460,7 @@ export function summarizeRun(job: RunInput): RunSummary {
             ? 'Ran until the timeout — no exit observed'
             : `Ran under user-mode emulation, exit ${result.exitCode ?? '?'}`
           : 'Did not run',
-        bound: null,
+        bound: webWarning,
       };
     }
 

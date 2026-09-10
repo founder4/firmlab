@@ -51,7 +51,8 @@ function withSteps(row: AgentSessionRow): unknown {
 
 export async function agentRoutes(app: FastifyInstance): Promise<void> {
   // The governor budget, model, and Phase-4 runtime posture — lets the UI render the leash and the isolation
-  // status. `autoRun` means emulation runs without a human gate because the blast radius is fully contained.
+  // status. `autoRun` is retained in the API contract, but current rlimits/netns detection never claims the full
+  // filesystem/process/credential containment required to waive the human gate.
   app.get('/agent/config', async () => {
     const cfg = loadLlmConfig();
     if (!cfg) return { enabled: false };

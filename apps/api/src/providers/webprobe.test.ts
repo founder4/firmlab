@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import https from 'node:https';
 import { describe, expect, it } from 'vitest';
 import {
@@ -62,9 +63,9 @@ Fe76F5IYQ/aQQxDxNliNqB0jay37o1OHhjXQnz8ooyPzKHdUWA==
 -----END CERTIFICATE-----`;
 
 describe('payload builders + detectors (pure)', () => {
-  it('command-injection payloads carry the nonce across separators/subshells', () => {
+  it('command-injection inputs never contain their expected output verbatim', () => {
     const ps = cmdInjectionPayloads('NONCE1');
-    expect(ps.every((p) => p.includes('NONCE1'))).toBe(true);
+    expect(ps.every((p) => !p.includes('NONCE1'))).toBe(true);
     expect(ps.some((p) => p.startsWith(';'))).toBe(true);
     expect(ps.some((p) => p.includes('$('))).toBe(true);
   });
@@ -72,6 +73,18 @@ describe('payload builders + detectors (pure)', () => {
   it('detectCmdInjection only fires when the exact nonce is echoed', () => {
     expect(detectCmdInjection('NONCE1', 'ping output ... NONCE1 ... done')).toBe(true);
     expect(detectCmdInjection('NONCE1', 'ping output, no marker')).toBe(false);
+  });
+
+  it('all six challenge forms generate the expected output in a real local shell', () => {
+    for (const payload of cmdInjectionPayloads('NONCE123456')) {
+      const output = execFileSync('/bin/sh', ['-c', `echo safe${payload}`], { encoding: 'utf8' });
+      expect(output).toContain('NONCE123456');
+      expect(payload).not.toContain('NONCE123456');
+    }
+  });
+
+  it('rejects non-alphanumeric nonce overrides before building shell syntax', () => {
+    expect(() => cmdInjectionPayloads("bad'nonce")).toThrow();
   });
 
   it('detectPasswdLeak requires a real root:…:0:0: line', () => {
@@ -123,9 +136,9 @@ function vulnerableFetch(): (url: string) => Promise<{ ok: boolean; status: numb
     }
     if (u.pathname === '/ping.cgi') {
       const ip = u.searchParams.get('ip') ?? '';
-      // Simulate `system("ping " + ip)`: a shell splits on ; and runs echo, so the nonce lands in the output.
-      const m = ip.match(/echo ([A-Za-z0-9]+)/);
-      const echoed = m ? m[1] : '';
+      // Model printf joining two separate arguments; simple request reflection never joins them.
+      const m = ip.match(/printf '%s%s' '([A-Za-z0-9]+)' '([A-Za-z0-9]+)'/);
+      const echoed = m ? `${m[1]}${m[2]}` : '';
       return { ok: true, status: 200, text: async () => `PING ${ip}\n${echoed}\n64 bytes` };
     }
     return { ok: false, status: 404, text: async () => 'not found' };
@@ -134,12 +147,157 @@ function vulnerableFetch(): (url: string) => Promise<{ ok: boolean; status: numb
 
 describe('runWebProbe', () => {
   it('reproduces command injection against the emulated service → confirmed_in_emulation', async () => {
-    const res = await runWebProbe('http://127.0.0.1:8080', { fetch: vulnerableFetch(), nonce: 'FLZdeadbeef' });
+    const res = await runWebProbe('http://127.0.0.1:8080', {
+      fetch: vulnerableFetch(),
+      nonce: 'FLZdeadbeef',
+      targetContext: 'emulation',
+    });
     expect(res.available).toBe(true);
     const ci = res.findings.find((f) => f.kind === 'web-command-injection');
     expect(ci?.severity).toBe('critical');
     expect(ci?.proofState).toBe('confirmed_in_emulation');
     expect(ci?.title).toContain('/ping.cgi');
+    expect(ci?.evidence.probeVersion).toBe(2);
+    expect(ci?.evidence.independentChallengeConfirmed).toBe(true);
+  });
+
+  it('does not attribute an arbitrary supplied service to an emulation session', async () => {
+    const res = await runWebProbe('http://127.0.0.1:8080', { fetch: vulnerableFetch() });
+    expect(res.findings[0]?.proofState).toBe('needs_runtime_reproduction');
+  });
+
+  it('never confirms reflected decoded inputs, URLs, or HTML-escaped inputs', async () => {
+    for (const mode of ['decoded', 'url', 'html']) {
+      const res = await runWebProbe('http://127.0.0.1:8080', {
+        fetch: async (url) => {
+          const input = [...new URL(url).searchParams.values()].join(' ');
+          return {
+            ok: true,
+            status: 200,
+            text: async () => (mode === 'url' ? url : mode === 'html' ? input.replaceAll("'", '&#39;') : input),
+          };
+        },
+      });
+      expect(res.findings).toHaveLength(0);
+    }
+  });
+
+  it('rejects a one-off candidate whose independent challenge fails', async () => {
+    const vulnerable = vulnerableFetch();
+    let challenges = 0;
+    const res = await runWebProbe('http://127.0.0.1:8080', {
+      fetch: async (url) => {
+        if (new URL(url).searchParams.get('ip')?.includes('printf') && ++challenges > 1) {
+          return { ok: true, status: 200, text: async () => 'no execution' };
+        }
+        return vulnerable(url);
+      },
+    });
+    expect(res.findings).toHaveLength(0);
+  });
+
+  it('does not report traversal for a static passwd page or a generic traversal error page', async () => {
+    for (const staticPage of [true, false]) {
+      const res = await runWebProbe('http://127.0.0.1:8080', {
+        fetch: async (url) => ({
+          ok: true,
+          status: 200,
+          text: async () =>
+            staticPage || [...new URL(url).searchParams.values()].some((p) => p.includes('etc'))
+              ? 'root:x:0:0:root:/root:/bin/sh\n'
+              : 'safe baseline',
+        }),
+      });
+      expect(res.findings).toHaveLength(0);
+    }
+  });
+
+  it('confirms traversal only with clean baseline and missing-file control', async () => {
+    const res = await runWebProbe('http://127.0.0.1:8080', {
+      targetContext: 'emulation',
+      fetch: async (url) => ({
+        ok: true,
+        status: 200,
+        text: async () =>
+          new URL(url).searchParams.get('file')?.endsWith('/etc/passwd')
+            ? 'root:x:0:0:root:/root:/bin/sh\n'
+            : 'not found',
+      }),
+    });
+    expect(res.findings).toHaveLength(1);
+    expect(res.findings[0]?.kind).toBe('web-path-traversal');
+    expect(res.findings[0]?.evidence.missingFileLeakAbsent).toBe(true);
+  });
+
+  it('does not confirm traversal when the missing-file control fails', async () => {
+    const res = await runWebProbe('http://127.0.0.1:8080', {
+      fetch: async (url) => {
+        if (url.includes('firmlab-missing')) throw new Error('connection lost');
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            new URL(url).searchParams.get('file')?.endsWith('passwd') ? 'root:x:0:0:root:/root:/bin/sh\n' : 'not found',
+        };
+      },
+    });
+    expect(res.findings).toHaveLength(0);
+    expect(res.coverage?.failedRequests).toBeGreaterThan(0);
+  });
+
+  it('reports actual coverage and shares a limited budget across discovered and builtin GET points', async () => {
+    const urls: string[] = [];
+    const html = `${Array.from({ length: 50 }, (_, i) => `<form action="/p${i}"><input name="x"></form>`).join('')}
+      <form action="/post" method="POST"><input name="x"></form>`;
+    const res = await runWebProbe('http://127.0.0.1:8080', {
+      maxRequests: 23,
+      fetch: async (url) => {
+        urls.push(url);
+        return { ok: true, status: 200, text: async () => (new URL(url).pathname === '/' ? html : 'safe') };
+      },
+    });
+    expect(res.requests).toBe(23);
+    expect(res.points).toBe(11);
+    expect(res.coverage).toMatchObject({
+      discoveredPoints: 51,
+      eligiblePoints: 55,
+      plannedPoints: 40,
+      attemptedPoints: 11,
+      completedPoints: 0,
+      skippedUnsupportedMethod: 1,
+      skippedPointLimit: 15,
+      skippedBudget: 29,
+      budgetExhausted: true,
+    });
+    expect(urls.some((url) => new URL(url).pathname === '/cgi-bin/get.cgi')).toBe(true);
+    expect(res.reason).toContain('11/40');
+    expect(urls.some((url) => decodeURIComponent(url).includes('printf'))).toBe(true);
+  });
+
+  it('does not mark failed probes or an unconfirmed last-budget candidate as complete', async () => {
+    const failed = await runWebProbe('http://127.0.0.1:8080', {
+      fetch: async (url) => {
+        if (decodeURIComponent(url).includes('printf')) throw new Error('timeout');
+        return { ok: true, status: 200, text: async () => 'safe' };
+      },
+    });
+    expect(failed.coverage?.completedPoints).toBe(0);
+    expect(failed.coverage?.failedRequests).toBeGreaterThan(0);
+    const limited = await runWebProbe('http://127.0.0.1:8080', { fetch: vulnerableFetch(), maxRequests: 3 });
+    expect(limited.findings).toHaveLength(0);
+    expect(limited.coverage?.completedPoints).toBe(0);
+    expect(limited.coverage?.budgetExhausted).toBe(true);
+  });
+
+  it('makes no request for a zero budget and counts failed attempts', async () => {
+    let calls = 0;
+    const fetch = async () => {
+      calls++;
+      throw new Error('unreachable');
+    };
+    expect((await runWebProbe('http://127.0.0.1:9', { fetch, maxRequests: 0 })).requests).toBe(0);
+    expect(calls).toBe(0);
+    expect((await runWebProbe('http://127.0.0.1:9', { fetch })).requests).toBe(1);
   });
 
   it('reports no hit honestly on a non-vulnerable target (no overclaim)', async () => {
@@ -212,5 +370,35 @@ describe('fetchFirmwareLoopback — scoped legacy/self-signed TLS', () => {
 
   it('refuses to apply relaxed TLS to any non-loopback host', async () => {
     await expect(fetchFirmwareLoopback('https://example.com/')).rejects.toThrow(/restricted to loopback/i);
+  });
+
+  it('rejects embedded credentials and already-aborted requests', async () => {
+    await expect(fetchFirmwareLoopback('https://user:pass@localhost/')).rejects.toThrow(/invalid/i);
+    await expect(fetchFirmwareLoopback('https://localhost/', { signal: AbortSignal.abort() })).rejects.toThrow(
+      /aborted/i,
+    );
+  });
+
+  it('rejects oversized responses, redirects and prematurely closed responses', async () => {
+    const server = https.createServer({ key: TLS_KEY, cert: TLS_CERT }, (req, res) => {
+      if (req.url === '/large') return res.end('x'.repeat(200_001));
+      if (req.url === '/redirect') {
+        res.writeHead(302, { location: 'https://example.com/' });
+        return res.end();
+      }
+      res.writeHead(200, { 'content-length': '1000' });
+      res.write('partial');
+      res.destroy();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('No port');
+      for (const path of ['/large', '/redirect', '/partial']) {
+        await expect(fetchFirmwareLoopback(`https://127.0.0.1:${address.port}${path}`)).rejects.toThrow();
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
   });
 });

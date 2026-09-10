@@ -220,11 +220,26 @@ export interface EgressObservation {
 
 /** Active web-probe result — a reproduced hit against the emulated service is confirmed_in_emulation. */
 export interface WebProbeResult {
+  probeVersion?: number;
+  revalidation?: { required: boolean; reason: string };
   available: boolean;
   reason: string;
   target: string;
   requests: number;
   points: number;
+  coverage?: {
+    discoveredPoints: number;
+    eligiblePoints: number;
+    plannedPoints: number;
+    attemptedPoints: number;
+    completedPoints: number;
+    skippedUnsupportedMethod: number;
+    skippedPointLimit: number;
+    skippedBudget: number;
+    requestBudget: number;
+    budgetExhausted: boolean;
+    failedRequests: number;
+  };
   findings: {
     kind: string;
     title: string;

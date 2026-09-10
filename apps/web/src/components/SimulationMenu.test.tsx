@@ -54,6 +54,7 @@ beforeEach(() => {
   mockApi.runChipsec.mockResolvedValue({ jobId: 'j1' });
   mockApi.extract.mockResolvedValue({ jobId: 'j1' });
   mockApi.binaries.mockResolvedValue([]);
+  mockApi.webprobeResult.mockResolvedValue(null);
   // The menu drops a RunHistory under the rungs, which reads the run ledger — the second live fetch this file
   // was making, and the one the hand-written list still missed after `binaries` was fixed.
   mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });

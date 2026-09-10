@@ -172,19 +172,25 @@ export const panels: Messages['panels'] = {
     title: 'Sonda web activa',
     sub: {
       lead: [
-        'Dirige un servicio arrancado (chroot-service / full-system) buscando inyección de órdenes y salto de',
-        'directorio. Un acierto reproducido se registra como',
+        'Sondea un servicio autorizado en loopback buscando inyección de órdenes y salto de directorio. Una URL escrita',
+        'a mano no demuestra qué firmware ejecuta. Sus hallazgos permanecen en',
       ].join(' '),
       means: ', que significa:',
-      tail: 'Sólo objetivos en loopback o en red privada.',
+      tail: 'Confirmar el hallazgo para esta imagen requiere una sonda dentro de su sesión de emulación activa.',
     },
     probe: 'Sondear',
     probeFailed: 'la sonda falló',
     reachable: 'accesible',
     unreachable: 'inaccesible',
     requests: (n: number) => `${n} peticiones`,
-    points: (n: number) => `${n} puntos de inyección`,
-    reproduced: (n: number) => `${n} reproducidos`,
+    points: (n: number) => `${n} puntos intentados`,
+    reproduced: (n: number) => `${n} observaciones`,
+    legacy:
+      'Sonda histórica: no se registraron controles de reflexión y cobertura. Sus afirmaciones de vulnerabilidad requieren verificación y una nueva sonda.',
+    coverage: (attempted: number, planned: number, completed: number, failed: number) =>
+      `${attempted} de ${planned} puntos previstos intentados; ${completed} completados; ${failed} peticiones fallidas.`,
+    skipped: (method: number, limit: number, budget: number) =>
+      `Sin intentar: ${method} métodos no admitidos, ${limit} fuera del límite de puntos, ${budget} fuera del presupuesto de peticiones.`,
     runLabel: 'sonda web',
   },
 

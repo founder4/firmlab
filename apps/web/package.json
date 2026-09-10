@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check": "pnpm --filter @firmlab/core build && tsc --noEmit",
-    "test": "pnpm --filter @firmlab/core build && vitest run --passWithNoTests",
+    "test": "pnpm --filter @firmlab/core build && vitest run --exclude '**/dist/**' --passWithNoTests",
     "preview": "vite preview"
   },
   "dependencies": {

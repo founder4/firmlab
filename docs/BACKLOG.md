@@ -280,12 +280,14 @@ entrada correspondiente. Quedan 30.
   queda en 0; el flujo se dibuja en `Capture.tsx:503` idéntico a uno cuyos bytes SÍ se examinaron y no eran
   firmware, y `realizedCeiling` (`capture/preflight.ts:154`) reporta `metadata_only` — un negativo limpio para una
   captura que sí aterrizó.
-- [ ] `providers/webprobe.ts:253` + `:262` **(C)+(D)** — 40 puntos de inyección × (6 payloads de comando + 4 de
-  traversal) = 400 peticiones contra `maxRequests = 200`, así que con los valores por defecto el `break outer`
-  salta **siempre** hacia el punto 20; el negativo dice entonces «No command injection or traversal reproduced over
-  200 requests against 40 injection point(s)», reclamando cobertura de 40 puntos de los que la mitad no se tocó.
-  Aparte, `[...discovered, ...BUILTIN_POINTS].slice(0, 40)` concatena descubiertos primero, así que una página con
-  40+ formularios descarta en silencio todos los endpoints de router integrados.
+- [x] `providers/webprobe.ts` **(C)+(D)** — WebProbe v2 hace explícita la cobertura: puntos descubiertos, elegibles,
+  planificados, intentados y completados, peticiones fallidas y descartes por presupuesto. Intercala formularios
+  descubiertos y endpoints integrados y reparte técnicas por rondas, de modo que un presupuesto corto no consume
+  todas las variantes del primer endpoint. El negativo sólo describe lo realmente completado. Además, cada prueba
+  de command injection exige baseline limpio y dos desafíos independientes cuyo resultado no viaja literalmente
+  en la petición; traversal exige baseline limpio y control de fichero inexistente. La ruta manual queda restringida
+  a loopback y nunca eleva por sí sola a `confirmed_in_emulation`. Los resultados anteriores se degradan de forma
+  conservadora a pistas de revalidación mediante `pnpm reconcile:webprobe`, conservando el original.
 - [ ] `providers/chipsec.ts:533` **(C)** — `copyBounded(firmwarePath, imgCopy, FIRMWARE_READ_CAP)` trunca la imagen
   a 64 MB antes de que `chipsec_util uefi decode` la vea; si el decode no produce listado, el resultado es
   `blocked('… the image has no parseable UEFI firmware volume … Not a UEFI/BIOS image, or an unsupported layout.')`
@@ -470,11 +472,16 @@ proveedores llega al agente sin glosa**; no se auditó esa superficie como tal.
 ### Deuda estructural
 
 - [ ] Revisar el reparto entre core y api: `packages/core` son 2.353 líneas frente a 84.223 de `apps/api`, y el dominio puro (`opacidad-plan.ts` 674, `boot-cmdline.ts` 868, `nvd.ts` 547, `opacidad-leads.ts` 511, `findings-normalize.ts` 312…) vive en la capa de aplicación porque no puede importar `store.js`. Son 65 módulos acoplados al store, 24 de ellos fuera de `routes/`. Decidir si core recupera ese dominio o si la regla se documenta como lo que es: un workaround, no una arquitectura.
-- [ ] Cubrir con test los 11 componentes web que no lo tienen, empezando por los que no son visuales: `DeepAnalysisDetails.tsx` (569 líneas), `KernelPosture.tsx` (218), `BinVulnPanel.tsx` (200), `PresetsPanel.tsx` (182) y `WebProbePanel.tsx` (123); los visuales dibujados a mano (`SignalCanvas` 280, `SbomGraph` 230, `EntropyChart` 174, `StructureMap` 125, `FilesystemTree` 61) van después.
+- [ ] Cubrir con test los 10 componentes web que aún no lo tienen, empezando por los que no son visuales: `DeepAnalysisDetails.tsx` (569 líneas), `KernelPosture.tsx` (218), `BinVulnPanel.tsx` (200) y `PresetsPanel.tsx` (182); `WebProbePanel.tsx` ya cubre compatibilidad legacy y cobertura v2. Los visuales dibujados a mano (`SignalCanvas` 280, `SbomGraph` 230, `EntropyChart` 174, `StructureMap` 125, `FilesystemTree` 61) van después.
 
 ### Proceso y documentación
 
 - [x] Resuelta la colisión entre `scripts/ui-expose.sh` y el servicio permanente `firmlab-view` del compose. `ui:up` reutiliza el endpoint si `/health` responde, el fallback usa el nombre separado `firmlab-ui-expose` y una etiqueta de propiedad, y `ui:down` sólo retira un contenedor que tenga esa etiqueta y no pertenezca a Compose. Cubierto por pruebas de no mutación, rechazo y retirada segura.
-- [ ] Hacer que `scripts/corpus-matrix.mjs` compare contra la tirada anterior y señale las regresiones de celda antes de convertir la matriz en campaña programada. Hoy no tiene noción alguna de run previo: entre la matriz del 23 de agosto y la del 5 de septiembre, `W5 · Reachability (diag_tracertbutton)` pasó de `✓1` a `△` mientras el agregado subía de 110 a 130 `found`, y nada lo dijo. Automatizar la generación sin detectar regresiones sólo automatiza el ruido; un número que sube no distingue cobertura nueva de otra tirada de dados.
-- [ ] Dejar de transcribir a mano en `ROADMAP.md` los recuentos que genera la matriz: el documento generado se quedó fijado el 23 de agosto con 376 celdas mientras la prosa ya citaba 390, dos semanas con dos fuentes de verdad para el mismo número. Que el ROADMAP enlace la matriz en vez de copiarla.
+- [x] `scripts/corpus-matrix.mjs` compara ahora una tirada con `--baseline`, emparejando por SHA-256 + worker, y
+  muestra cambios de estado/recuento y altas o retiradas. `--fail-on-regression` bloquea las transiciones desde
+  ejecución (`found`/`ran-empty`) a degradación, falta de entrada, no ejecución o proveedor ausente; un cambio de
+  recuento se informa para revisión pero no se interpreta automáticamente. Cubierto con baseline inválida,
+  duplicados, cambios, regresión y ausencia de regresión.
+- [x] `ROADMAP.md` enlaza la matriz y su contrato en vez de copiar recuentos volátiles. La fuente ejecutable es
+  `pnpm corpus:matrix` más `ops/corpus/validation-samples.lock.json`.
 - [ ] Decidir el destino de `yara-candidate-report.md`, hoy sin trackear en la raíz del repo: o se archiva fechado bajo `docs/` o entra en `.gitignore`. La promoción del corpus 20260830 es, en sí, una decisión ya evaluada y de bajo riesgo (0 matches nuevos, 0 perdidos, 3 positivos inertes conservados).
