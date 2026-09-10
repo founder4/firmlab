@@ -3,9 +3,9 @@
  * empty — which the app used to surface as "0 findings", indistinguishable from "clean". That is the wrong answer.
  * The right answer is a *diagnosis*: this body is encrypted, here is the cipher/mode and the IV, and it is
  * unrecoverable without the key — with the key-recovery path named. This worker reads the OTA header framing and
- * the body entropy straight from the bytes (pure, no tool) and emits that honest verdict.
+ * a bounded body-entropy sample straight from the bytes (pure, no tool) and emits that honest verdict.
  *
- * It never claims to decrypt anything. The cipher facts (IV framing, block size, entropy plateau) are literally
+ * It never claims to decrypt anything. The cipher facts (IV framing, block size, sampled body entropy) are
  * present in the bytes → `static_confirmed`; the "cannot extract" outcome is `blocked_by_security` (a valid
  * control — encryption — stops it), not a silent empty (docs/AUTONOMOUS-WORKERS.md §3.1(3), §7.5, W8).
  */
@@ -96,6 +96,13 @@ export interface CipherVerdict {
   ivPresent: boolean;
   bodyBlockAligned: boolean;
   bodyEntropy: number;
+  /** Exact scope of `bodyEntropy`; retained with the verdict so callers cannot mistake a sample for the body. */
+  entropySample: {
+    offset: number;
+    bytes: number;
+    bodyBytes: number;
+    complete: boolean;
+  };
 }
 
 /** Count repeated 16-byte blocks in a body sample — the ECB tell (identical plaintext blocks → identical cipher). */
@@ -118,6 +125,8 @@ function hasRepeatedBlocks(buf: Uint8Array, start: number, end: number): boolean
 export function classifyCipher(buf: Uint8Array, header: OtaHeader, fileSize: number): CipherVerdict {
   const bodyStart = header.cipherBodyOffset;
   const sampleEnd = Math.min(buf.length, bodyStart + 0x10000);
+  const sampleBytes = Math.max(0, sampleEnd - bodyStart);
+  const bodyBytes = Math.max(0, fileSize - bodyStart);
   const bodyEntropy = windowEntropy(buf, bodyStart, sampleEnd);
   const ivPresent = header.ivBlock !== null;
   const ivLen = ivPresent ? 16 : 0;
@@ -131,7 +140,20 @@ export function classifyCipher(buf: Uint8Array, header: OtaHeader, fileSize: num
   }
   // A 128-bit block + a high-entropy body is the AES signature; we cannot prove the key size from the bytes.
   const cipher: CipherVerdict['cipher'] = blockBits === 128 && bodyEntropy > 7.5 ? 'AES' : 'unknown';
-  return { cipher, blockBits, mode, ivPresent, bodyBlockAligned, bodyEntropy };
+  return {
+    cipher,
+    blockBits,
+    mode,
+    ivPresent,
+    bodyBlockAligned,
+    bodyEntropy,
+    entropySample: {
+      offset: bodyStart,
+      bytes: sampleBytes,
+      bodyBytes,
+      complete: sampleBytes === bodyBytes,
+    },
+  };
 }
 
 // === Composition ===
@@ -154,7 +176,7 @@ function verdictLine(v: CipherVerdict, header: OtaHeader): string {
 
 /**
  * Pure: compose the header + verdict into honest findings. The cipher diagnosis is `static_confirmed` (the IV
- * framing and entropy plateau are literally present); the "cannot extract" outcome is `blocked_by_security` with
+ * framing and sampled entropy are literally present); the "cannot extract" outcome is `blocked_by_security` with
  * the key-recovery path named — never a silent empty. A plaintext tag leak (fw-type) is surfaced as `info`.
  */
 export function analyzeEncrypted(buf: Uint8Array, fileSize: number): EncryptedAnalysis {
@@ -163,6 +185,10 @@ export function analyzeEncrypted(buf: Uint8Array, fileSize: number): EncryptedAn
   const findings: FindingDraft[] = [];
 
   const encrypted = verdict.bodyEntropy > 7.5;
+  const sample = verdict.entropySample;
+  const entropyScope = sample.complete
+    ? `The complete ${sample.bodyBytes}-byte ciphertext body`
+    : `A ${sample.bytes}-byte sample at offset 0x${sample.offset.toString(16)} of the ${sample.bodyBytes}-byte ciphertext body`;
   findings.push({
     kind: 'encrypted-cipher',
     title: `Encrypted firmware body — ${verdictLine(verdict, header)}`,
@@ -177,13 +203,11 @@ export function analyzeEncrypted(buf: Uint8Array, fileSize: number): EncryptedAn
       ivHex: header.ivBlock?.bytes ?? null,
       cipherBodyOffset: `0x${header.cipherBodyOffset.toString(16)}`,
       bodyEntropy: Number(verdict.bodyEntropy.toFixed(4)),
+      entropySample: sample,
       bodyBlockAligned: verdict.bodyBlockAligned,
       lengthField: header.lengthField,
     },
-    rationale:
-      'The body is a high-entropy plateau with no compression/container header; a 16-byte framed IV implies a ' +
-      '128-bit block cipher (AES). Mode CBC-vs-CTR is not statically separable without the key. These are facts ' +
-      'about the bytes, not a decryption.',
+    rationale: `${entropyScope} has entropy ${verdict.bodyEntropy.toFixed(4)} bits/byte; a 16-byte framed IV implies a 128-bit block cipher (AES). Mode CBC-vs-CTR is not statically separable without the key. The entropy ${sample.complete ? 'covers the complete body' : 'characterizes only the stated sample'}, not a decryption.`,
   });
 
   findings.push({
@@ -262,6 +286,7 @@ export function runEncryptedAnalysis(imagePath: string): EncryptedResult {
       ivPresent: false,
       bodyBlockAligned: false,
       bodyEntropy: 0,
+      entropySample: { offset: 0, bytes: 0, bodyBytes: 0, complete: false },
     };
     return {
       available: true,
@@ -274,13 +299,15 @@ export function runEncryptedAnalysis(imagePath: string): EncryptedResult {
 
   const a = analyzeEncrypted(read.buf, read.fileSize);
   const iv = a.header.ivBlock ? ` IV @ 0x${a.header.ivBlock.offset.toString(16)}.` : '';
+  const sample = a.verdict.entropySample;
+  const sampleScope = sample.complete
+    ? `the complete ${sample.bodyBytes}-byte body`
+    : `${sample.bytes} of ${sample.bodyBytes} body bytes`;
   return {
     available: true,
     header: a.header,
     verdict: a.verdict,
     findings: a.findings,
-    reason:
-      `Encrypted firmware: ${a.verdict.cipher} ${a.verdict.mode}, body entropy ${a.verdict.bodyEntropy.toFixed(2)} ` +
-      `bits/byte.${iv} Unrecoverable without the key — this is the honest verdict, not an empty result.`,
+    reason: `Encrypted firmware: ${a.verdict.cipher} ${a.verdict.mode}, sampled body entropy ${a.verdict.bodyEntropy.toFixed(2)} bits/byte over ${sampleScope}.${iv} Unrecoverable without the key — this is the honest verdict, not an empty result.`,
   };
 }

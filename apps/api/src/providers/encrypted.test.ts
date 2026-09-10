@@ -66,6 +66,12 @@ describe('classifyCipher', () => {
     expect(v.mode).toBe('CBC-or-CTR');
     expect(v.ivPresent).toBe(true);
     expect(v.bodyEntropy).toBeGreaterThan(7.5);
+    expect(v.entropySample).toEqual({
+      offset: 0x128,
+      bytes: 0x10000,
+      bodyBytes: 0x20000 - 0x128,
+      complete: false,
+    });
   });
 
   it('detects ECB from repeated ciphertext blocks', () => {
@@ -86,6 +92,11 @@ describe('analyzeEncrypted', () => {
     expect(cipher?.title).toContain('AES');
     expect(cipher?.title).toContain('IV @ 0x116');
     expect((cipher?.evidence as { ivHex: string }).ivHex).toBe('4c5e831f534ba1f8f7c918df8fbf7da1');
+    expect(
+      (cipher?.evidence as { entropySample: { bytes: number; bodyBytes: number; complete: boolean } }).entropySample,
+    ).toEqual({ offset: 0x128, bytes: 0x10000, bodyBytes: 0x20000 - 0x128, complete: false });
+    expect(cipher?.rationale).toContain('characterizes only the stated sample');
+    expect(cipher?.rationale).not.toContain('The body is a high-entropy plateau');
   });
 
   it('emits the honest blocked_by_security "unrecoverable without key" verdict with a recovery path', () => {
@@ -118,6 +129,21 @@ describe('runEncryptedAnalysis', () => {
     expect(res.available).toBe(true);
     expect(res.verdict.cipher).toBe('AES');
     expect(res.reason).toContain('IV @ 0x116');
+    expect(res.reason).toContain('sampled body entropy');
+    expect(res.reason).toContain('65536 of 130776 body bytes');
     expect(res.findings.some((f) => f.kind === 'encrypted-unrecoverable')).toBe(true);
+  });
+
+  it('reports the complete measured scope for a body smaller than the entropy window', () => {
+    const p = path.join(tmp, 'small-ota.bin');
+    fs.writeFileSync(p, buildEncryptedOta(0x8000));
+    const res = runEncryptedAnalysis(p);
+    expect(res.verdict.entropySample).toEqual({
+      offset: 0x128,
+      bytes: 0x8000 - 0x128,
+      bodyBytes: 0x8000 - 0x128,
+      complete: true,
+    });
+    expect(res.reason).toContain('over the complete 32472-byte body');
   });
 });

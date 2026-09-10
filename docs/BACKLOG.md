@@ -318,9 +318,10 @@ entrada correspondiente. Quedan 30.
 - [ ] `providers/rtos.ts:78` / `:160` / `:289` **(C)** — `SCAN_CAP`/`FIRMWARE_READ_CAP` de 16 MB, y el negativo «No
   eCos/flag markers either — static analysis found nothing to assert.» se afirma sobre ese prefijo sin nombrarlo.
   Magnitud baja (un blob bare-metal rara vez pasa de 16 MB), pero la frase es una cota vestida de negativo.
-- [ ] `providers/encrypted.ts:232` **(C)** — `READ_CAP` de 1 MB; `plaintextTags` y `verdict.bodyEntropy` se calculan
-  sobre ese prefijo, y sin embargo el `reason` imprime «body entropy X bits/byte» y el fundamento del hallazgo
-  afirma «The body is a high-entropy plateau» — una afirmación sobre el cuerpo entero desde una muestra de 1 MB.
+- [x] `providers/encrypted.ts:232` **(C)** — resuelto. El veredicto conserva ahora la cobertura exacta de la
+  entropía (`offset`, bytes muestreados, bytes totales de cuerpo y `complete`), y la evidencia la expone junto al
+  valor. `reason` y `rationale` dicen explícitamente «sampled body entropy» y cuantifican la muestra —que en
+  realidad estaba limitada a 64 KiB dentro del prefijo leído—; sólo hablan del cuerpo completo cuando cabe entero.
 
 #### Presentan una cota como total
 
