@@ -352,12 +352,16 @@ entrada correspondiente. Quedan 30.
   vitest que llegue a `node:sqlite` llega siquiera a cargar, así que este guard llevaba desde siempre sin una sola
   prueba — y su rama de éxito es justo la que este repo ya ha pagado cuatro veces por no ejercitar. 5 tests,
   incluida esa rama.
-- [ ] `providers/decompile.ts:120`, `:126`, `:133` **(B)** — `imports`, `symbols` y `strings` son cada uno
-  `slice(0, 300)` sin total, mientras `functionCount: rawFuncs.length` en el mismo resultado es exacto: el fichero
-  ya conoce la regla y la aplica a uno de cuatro campos. Las longitudes recortadas se imprimen luego como totales
-  en el log del job (`:139`) y, de cara al usuario, en el resumen de triaje del informe HTML (`report.ts:184-186`).
-  Aguas abajo, `taint.ts:88` deriva sumideros y fuentes de esa lista capada de imports, así que el
-  `hasTaintSurface: false` que llega a `opacidad.ts:894` y `agent/zeroday.ts:139` puede ser un artefacto del cap.
+- [x] `providers/decompile.ts` **(B)** — resuelto. Imports, símbolos y cadenas conservan ahora sus totales pre-cap
+  (`importsTotal`, `symbolsTotal`, `stringsTotal`, opcionales para resultados históricos); log, resumen de corrida
+  e informe HTML usan el denominador real y el informe dice cuántas importaciones muestra; un resultado histórico
+  sin total se rotula como suelo (`≥N`), no se rellena con la longitud del array. Un bloque JSON que radare2 no
+  pudo entregar tampoco se convierte en un total cero. La segunda mitad era
+  más importante que los contadores: el scaffold de taint gana cobertura y `surfaceState` triestado. Sólo una
+  lista completa sin fuente+sumidero permite `absent`; un resultado capado o legado es `unknown`, degrada el paso
+  autónomo con su razón y el prompt del nodo zero-day tiene prohibido leerlo como ausencia (también tiene prohibido
+  inventar un candidato). Tests fijan el total anterior al corte, el borde exacto, `present`/`absent`, el cap y el
+  legado sin cobertura.
 - [ ] `providers/webtaint.ts:262` (+ `:372`) **(B)+(C)** — `listHandlers` para en `MAX_FILES = 400` en el orden de
   `HANDLER_DIRS`, y `runWebTaint` además hace `continue` sobre cualquier handler de más de 512 KB sin registrarlo;
   el `reason` dice entonces «Scanned N web handlers, M tainted», donde N es el recuento post-cap y post-salto

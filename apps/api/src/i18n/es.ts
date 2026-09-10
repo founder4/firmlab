@@ -132,6 +132,8 @@ export const es: Messages = {
         p.functions
       } funciones · ${p.imports} importaciones · ${p.strings} cadenas`,
     triageColumns: { import: 'Importación', library: 'Biblioteca' },
+    triageCut: (p) =>
+      `Se muestran ${p.shown} de ${p.total} importaciones; el resumen usa el total completo anterior al corte.`,
     footer:
       'Generado por FirmLab — banco de análisis de firmware que se ejecuta en local. Analiza únicamente firmware que estés autorizado a evaluar.',
   },

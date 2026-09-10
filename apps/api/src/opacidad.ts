@@ -894,10 +894,18 @@ async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   const scaffold = buildTaintScaffold(r);
   const surface = scaffold.hasTaintSurface
     ? `, taint surface (${scaffold.sinks.length} sinks / ${scaffold.sources.length} sources)`
-    : '';
+    : scaffold.surfaceState === 'unknown'
+      ? ', taint surface unknown (bounded or legacy inventory)'
+      : '';
   return {
     summary: `decompiled ${binary}: ${r.functionCount} fns, ${hardening.length} hardening findings${surface}`,
     findingCount: hardening.length,
+    ...(scaffold.surfaceState === 'unknown'
+      ? {
+          degraded: true,
+          note: `Taint absence is not established: ${scaffold.coverage.imports.listed}/${scaffold.coverage.imports.total ?? '?'} imports and ${scaffold.coverage.strings.listed}/${scaffold.coverage.strings.total ?? '?'} strings were available.`,
+        }
+      : {}),
   };
 }
 

@@ -78,6 +78,15 @@ export interface TaintScaffold {
   cgiHints: string[];
   /** Both a sink and a source are present — the minimal precondition for a taint hypothesis. */
   hasTaintSurface: boolean;
+  /**
+   * `absent` is reserved for complete import + string inventories. A capped or legacy-empty inventory is unknown,
+   * not evidence that the binary lacks a taint surface.
+   */
+  surfaceState: 'present' | 'absent' | 'unknown';
+  coverage: {
+    imports: { listed: number; total: number | null; complete: boolean | null };
+    strings: { listed: number; total: number | null; complete: boolean | null };
+  };
 }
 
 /** Pure: derive the taint scaffold from a binary's decompile triage. Empty/degraded triage → empty scaffold. */
@@ -106,6 +115,11 @@ export function buildTaintScaffold(decompile: DecompileResult): TaintScaffold {
     ...(typeof decompile.info.canary === 'boolean' ? { canary: decompile.info.canary } : {}),
     ...(typeof decompile.info.pic === 'boolean' ? { pic: decompile.info.pic } : {}),
   };
+  const hasTaintSurface = sinks.length > 0 && (sources.length > 0 || cgiHints.length > 0);
+  const importsComplete =
+    typeof decompile.importsTotal === 'number' ? decompile.imports.length >= decompile.importsTotal : null;
+  const stringsComplete =
+    typeof decompile.stringsTotal === 'number' ? decompile.strings.length >= decompile.stringsTotal : null;
   return {
     binary: decompile.binary,
     arch: decompile.info.arch,
@@ -113,6 +127,23 @@ export function buildTaintScaffold(decompile: DecompileResult): TaintScaffold {
     sinks,
     sources,
     cgiHints,
-    hasTaintSurface: sinks.length > 0 && (sources.length > 0 || cgiHints.length > 0),
+    hasTaintSurface,
+    surfaceState: hasTaintSurface
+      ? 'present'
+      : importsComplete === true && stringsComplete === true
+        ? 'absent'
+        : 'unknown',
+    coverage: {
+      imports: {
+        listed: decompile.imports.length,
+        total: decompile.importsTotal ?? null,
+        complete: importsComplete,
+      },
+      strings: {
+        listed: decompile.strings.length,
+        total: decompile.stringsTotal ?? null,
+        complete: stringsComplete,
+      },
+    },
   };
 }

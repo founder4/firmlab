@@ -30,13 +30,30 @@ export interface DecompileResult {
   binary: string;
   info: DecompileInfo;
   functionCount: number;
+  /** True pre-cap totals. Optional forever because persisted results from older builds do not carry them. */
+  symbolsTotal?: number;
+  importsTotal?: number;
+  stringsTotal?: number;
   symbols: { name: string; type: string; addr: string }[];
   imports: { name: string; libname?: string }[];
   strings: { addr: string; value: string }[];
 }
 
-const CAP = 300;
+export const DECOMPILE_LIST_CAP = 300;
 const SPLIT = '---R2SPLIT---';
+
+/** Pure: cap a display/persistence list while retaining the denominator from before the cut. */
+export function capDecompileItems<T>(
+  items: T[],
+  cap = DECOMPILE_LIST_CAP,
+): {
+  items: T[];
+  total: number;
+  complete: boolean;
+} {
+  const boundedCap = Math.max(0, Math.floor(cap));
+  return { items: items.slice(0, boundedCap), total: items.length, complete: items.length <= boundedCap };
+}
 
 function unavailable(binary: string, reason: string): DecompileResult {
   return { available: false, reason, binary, info: {}, functionCount: 0, symbols: [], imports: [], strings: [] };
@@ -56,6 +73,17 @@ function parseBlock<T>(block: string | undefined, fallback: T): T {
     return JSON.parse(trimmed) as T;
   } catch {
     return fallback;
+  }
+}
+
+/** Pure: list blocks need a parse bit because `[]` and "radare2 emitted no valid JSON" are opposite evidence. */
+export function parseDecompileList<T>(block: string | undefined): { items: T[]; parsed: boolean } {
+  if (!block?.trim()) return { items: [], parsed: false };
+  try {
+    const value = JSON.parse(block.trim()) as unknown;
+    return Array.isArray(value) ? { items: value as T[], parsed: true } : { items: [], parsed: false };
+  } catch {
+    return { items: [], parsed: false };
   }
 }
 
@@ -116,28 +144,47 @@ export async function runDecompile(rootfsPath: string, binary: string, handle: J
     ...(typeof bin.pic === 'boolean' ? { pic: bin.pic } : {}),
   };
 
-  const rawImports = parseBlock<{ name?: string; libname?: string }[]>(importsB, []);
-  const imports = rawImports.slice(0, CAP).map((i) => ({
+  const rawImports = parseDecompileList<{ name?: string; libname?: string }>(importsB);
+  const importInventory = capDecompileItems(rawImports.items);
+  const imports = importInventory.items.map((i) => ({
     name: String(i.name ?? '?'),
     ...(i.libname ? { libname: String(i.libname) } : {}),
   }));
 
-  const rawSymbols = parseBlock<{ name?: string; type?: string; vaddr?: number }[]>(symbolsB, []);
-  const symbols = rawSymbols.slice(0, CAP).map((s) => ({
+  const rawSymbols = parseDecompileList<{ name?: string; type?: string; vaddr?: number }>(symbolsB);
+  const symbolInventory = capDecompileItems(rawSymbols.items);
+  const symbols = symbolInventory.items.map((s) => ({
     name: String(s.name ?? '?'),
     type: String(s.type ?? ''),
     addr: hex(s.vaddr),
   }));
 
-  const rawStrings = parseBlock<{ vaddr?: number; string?: string }[]>(stringsB, []);
-  const strings = rawStrings.slice(0, CAP).map((s) => ({ addr: hex(s.vaddr), value: String(s.string ?? '') }));
+  const rawStrings = parseDecompileList<{ vaddr?: number; string?: string }>(stringsB);
+  const stringInventory = capDecompileItems(rawStrings.items);
+  const strings = stringInventory.items.map((s) => ({ addr: hex(s.vaddr), value: String(s.string ?? '') }));
 
   const rawFuncs = parseBlock<unknown[]>(funcsB, []);
   const functionCount = Array.isArray(rawFuncs) ? rawFuncs.length : 0;
 
+  const describeList = (label: string, parsed: boolean, total: number, listed: number): string =>
+    parsed
+      ? `${total} ${label} (${listed} listed)`
+      : `${listed} ${label} listed (total unavailable: radare2 block did not parse)`;
+
   handle.log(
-    `Triage: ${info.arch ?? '?'}/${info.bits ?? '?'}bit, ${functionCount} functions, ${imports.length} imports, ${strings.length} strings.`,
+    `Triage: ${info.arch ?? '?'}/${info.bits ?? '?'}bit, ${functionCount} functions, ${describeList('imports', rawImports.parsed, importInventory.total, imports.length)}, ${describeList('symbols', rawSymbols.parsed, symbolInventory.total, symbols.length)}, ${describeList('strings', rawStrings.parsed, stringInventory.total, strings.length)}.`,
   );
 
-  return { available: true, binary, info, functionCount, symbols, imports, strings };
+  return {
+    available: true,
+    binary,
+    info,
+    functionCount,
+    ...(rawSymbols.parsed ? { symbolsTotal: symbolInventory.total } : {}),
+    ...(rawImports.parsed ? { importsTotal: importInventory.total } : {}),
+    ...(rawStrings.parsed ? { stringsTotal: stringInventory.total } : {}),
+    symbols,
+    imports,
+    strings,
+  };
 }

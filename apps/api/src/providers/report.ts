@@ -175,21 +175,30 @@ export function generateReport(imageId: string, locale: Locale = 'en'): string |
     : '';
 
   const triageSection = triage?.available
-    ? section(
-        t.report.triageHeading(triage.binary),
-        `<p>${t.report.triageSummary({
-          arch: `${esc(triage.info.arch ?? '?')}${triage.info.bits ? `/${triage.info.bits}` : ''}`,
-          nx: triage.info.nx === true,
-          canary: triage.info.canary === true,
-          functions: triage.functionCount,
-          imports: triage.imports.length,
-          strings: triage.strings.length,
-        })}</p>${table(
-          [t.report.triageColumns.import, t.report.triageColumns.library],
-          triage.imports.slice(0, 200).map((i) => [`<code>${esc(i.name)}</code>`, esc(i.libname ?? '—')]),
-          t.report.none,
-        )}`,
-      )
+    ? (() => {
+        const importsTotal = triage.importsTotal;
+        const stringsTotal = triage.stringsTotal;
+        const importsShown = Math.min(triage.imports.length, 200);
+        return section(
+          t.report.triageHeading(triage.binary),
+          `<p>${t.report.triageSummary({
+            arch: `${esc(triage.info.arch ?? '?')}${triage.info.bits ? `/${triage.info.bits}` : ''}`,
+            nx: triage.info.nx === true,
+            canary: triage.info.canary === true,
+            functions: triage.functionCount,
+            imports: importsTotal === undefined ? `≥${triage.imports.length}` : String(importsTotal),
+            strings: stringsTotal === undefined ? `≥${triage.strings.length}` : String(stringsTotal),
+          })}</p>${table(
+            [t.report.triageColumns.import, t.report.triageColumns.library],
+            triage.imports.slice(0, 200).map((i) => [`<code>${esc(i.name)}</code>`, esc(i.libname ?? '—')]),
+            t.report.none,
+          )}${
+            importsTotal !== undefined && importsShown < importsTotal
+              ? `<p class="muted">${esc(t.report.triageCut({ shown: importsShown, total: importsTotal }))}</p>`
+              : ''
+          }`,
+        );
+      })()
     : '';
 
   return `<!doctype html>

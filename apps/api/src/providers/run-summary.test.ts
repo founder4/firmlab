@@ -71,6 +71,23 @@ describe('historical web-probe revalidation', () => {
 });
 
 describe('summarizeRun — status is the process, outcome is what was learned', () => {
+  it('uses the pre-cap decompile total and keeps a legacy list from posing as that total', () => {
+    const current = summarizeRun(
+      job({
+        kind: 'decompile',
+        resultJson: JSON.stringify({ available: true, functionCount: 20, imports: [{}, {}], importsTotal: 450 }),
+      }),
+    );
+    expect(current.headline).toContain('450 imports catalogued');
+    expect(current.bound).toBe('2/450 imports listed');
+
+    const legacy = summarizeRun(
+      job({ kind: 'decompile', resultJson: JSON.stringify({ available: true, functionCount: 20, imports: [{}, {}] }) }),
+    );
+    expect(legacy.headline).toContain('2 imports listed');
+    expect(legacy.bound).toBe('import total not recorded');
+  });
+
   it('never lets a finished process read as a clean result', () => {
     // The whole point of two fields. Both of these are `done`; one proved a bug and one proved nothing.
     const crash = summarizeRun(

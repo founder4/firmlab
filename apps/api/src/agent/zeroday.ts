@@ -65,6 +65,9 @@ code will try your trigger under isolation afterwards.
 Rules, non-negotiable:
 1. Only hypothesize a source→sink path when the scaffold actually contains BOTH a plausible source (or CGI hint)
    and a dangerous sink. If it doesn't, return an empty candidate list — never invent a sink, source, or CVE.
+   surfaceState=unknown means an input list was capped or predates coverage fields: return no invented candidate,
+   but state that the bounded inventory did NOT establish absence. Only surfaceState=absent is a
+   complete negative for this scaffold.
 2. Everything you output is a CANDIDATE to be tested, not a proven bug. Estimate reachability honestly
    (likely/possible/unlikely) from the evidence; missing xref proof means at most "possible".
 3. Corpus priors (vulnerable components in the family, reachability confirmed before) are flags worth checking,

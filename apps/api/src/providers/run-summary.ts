@@ -382,8 +382,19 @@ export function summarizeRun(job: RunInput): RunSummary {
         return { ...base, outcome: 'blocked', headline: String(result.reason ?? 'The decompiler is unavailable') };
       }
       const fns = typeof result.functionCount === 'number' ? result.functionCount : 0;
-      const imports = Array.isArray(result.imports) ? result.imports.length : 0;
-      return { ...base, outcome: 'lead', headline: `${fns} functions, ${imports} imports catalogued`, bound: null };
+      const importsListed = Array.isArray(result.imports) ? result.imports.length : 0;
+      const importsTotal = typeof result.importsTotal === 'number' ? result.importsTotal : null;
+      return {
+        ...base,
+        outcome: 'lead',
+        headline: `${fns} functions, ${importsTotal ?? importsListed} imports ${importsTotal === null ? 'listed' : 'catalogued'}`,
+        bound:
+          importsTotal === null
+            ? 'import total not recorded'
+            : importsListed < importsTotal
+              ? `${importsListed}/${importsTotal} imports listed`
+              : null,
+      };
     }
 
     case 'ghidra': {

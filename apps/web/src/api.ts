@@ -319,6 +319,9 @@ export interface DecompileResult {
     pic?: boolean;
   };
   functionCount: number;
+  symbolsTotal?: number;
+  importsTotal?: number;
+  stringsTotal?: number;
   symbols: { name: string; type: string; addr: string }[];
   imports: { name: string; libname?: string }[];
   strings: { addr: string; value: string }[];
