@@ -375,10 +375,11 @@ entrada correspondiente. Quedan 30.
   `HANDLER_DIRS`, y `runWebTaint` además hace `continue` sobre cualquier handler de más de 512 KB sin registrarlo;
   el `reason` dice entonces «Scanned N web handlers, M tainted», donde N es el recuento post-cap y post-salto
   presentado como la superficie web.
-- [ ] `providers/kernelposture.ts:1449` / `:1468` **(B)** — `moduleCount: kos.length` se calcula desde
-  `walkFiles(..., WALK_FILE_CAP)` (4.000 ficheros, LIFO, sin flag), así que el denominador de la frase de `:1542`
-  —«X de Y módulos no se abrieron (cap N, ordenado por ruta)»— está él mismo capado. La mitad `MODULE_SAMPLE_CAP`
-  está bien resuelta (`inspectedCount` frente a `moduleCount`); lo silencioso es la caminata de debajo.
+- [x] `providers/kernelposture.ts` (inventario de módulos) **(B)** — resuelto. La caminata devuelve ahora
+  `complete:false` al alcanzar 4.000 ficheros, ante un directorio ilegible o ante una entrada especial/symlink que
+  podría ocultar otro módulo. `moduleInventoryComplete` viaja por API; límites y hallazgos rotulan `moduleCount`
+  como suelo, la UI muestra `≥N` (también para resultados históricos sin flag), y el gating CVE sólo permite una
+  inferencia modular negativa con cobertura completa. Test extremo a extremo fija la rama de entrada no recorrible.
 - [x] `providers/extract.ts` (inventario ELF) **(A)+(B)** — resuelto junto con la cobertura de la caminata de la
   que depende. Se leen las cabeceras de todos los ficheros alcanzados, se cuenta el pozo ELF antes del cap y se
   rankea antes de persistir: servicios/sugerido primero, después `sbin`, `usr/sbin`, `bin`, `usr/bin`, librerías y

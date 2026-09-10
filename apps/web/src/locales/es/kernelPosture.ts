@@ -10,8 +10,8 @@ export const kernelPosture: Messages['kernelPosture'] = {
   unknownValue: 'no recuperada',
   unrecorded: 'sin registrar',
   years: (n: number) => `${n} años`,
-  modulesValue: (signed: number, inspected: number, total: number) =>
-    `${signed} firmados de ${inspected} inspeccionados${inspected === total ? '' : ` (de ${total})`}`,
+  modulesValue: (signed: number, inspected: number, total: number, complete: boolean) =>
+    `${signed} firmados de ${inspected} inspeccionados${complete && inspected === total ? '' : ` (de ${complete ? total : `≥${total}`})`}`,
   class: {
     bad: 'débil',
     unanswered: 'sin contestar',

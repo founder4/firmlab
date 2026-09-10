@@ -130,11 +130,22 @@ describe('moduleSigning', () => {
   it('counts signed against what was INSPECTED, not against the total', () => {
     // A walk that could not read every module must not have its silence counted as unsigned modules.
     const m = moduleSigning({ modules: { moduleCount: 73, inspectedCount: 40, signedCount: 0, vermagic: '2.6.31' } });
-    expect(m).toEqual({ total: 73, inspected: 40, signed: 0, vermagic: '2.6.31' });
+    expect(m).toEqual({
+      total: 73,
+      inspected: 40,
+      signed: 0,
+      vermagic: '2.6.31',
+      inventoryComplete: false,
+    });
   });
 
   it('falls back to the total when no inspected count was recorded', () => {
     expect(moduleSigning({ modules: { moduleCount: 5, signedCount: 1 } })?.inspected).toBe(5);
+  });
+
+  it('only labels the module denominator complete when the provider recorded complete walk coverage', () => {
+    expect(moduleSigning({ modules: { moduleCount: 5, moduleInventoryComplete: true } })?.inventoryComplete).toBe(true);
+    expect(moduleSigning({ modules: { moduleCount: 5 } })?.inventoryComplete).toBe(false);
   });
 
   it('returns null when no module set was inspected at all', () => {

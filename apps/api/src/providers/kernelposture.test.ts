@@ -639,6 +639,7 @@ describe('runKernelPosture', () => {
     expect(JSON.stringify(r)).not.toContain('4.4.0');
 
     expect(r.modules).toMatchObject({ versionDir: '5.4.213', vermagic: '5.4.213', signedCount: 0 });
+    expect(r.modules?.moduleInventoryComplete).toBe(true);
     const sig = r.answers.find((a) => a.id === 'module-sig');
     expect(sig).toMatchObject({ verdict: 'off', source: 'shipped-modules' });
     const kmem = r.answers.find((a) => a.id === 'devkmem');
@@ -778,5 +779,20 @@ describe('runKernelPosture', () => {
     expect(
       r.findings.find((finding) => finding.kind === 'kernel-cve' && finding.title.startsWith('CVE-2022-0185')),
     ).toMatchObject({ proofState: 'false_positive' });
+  });
+
+  it('marks a module inventory with an unwalkable entry as a lower bound and infers no modular absence', () => {
+    const root = path.join(tmp, 'partial-modules');
+    const rootfs = path.join(root, 'rootfs');
+    const moduleDir = path.join(rootfs, 'lib/modules/5.4.213');
+    fs.mkdirSync(moduleDir, { recursive: true });
+    fs.symlinkSync('missing.ko', path.join(moduleDir, 'hidden.ko'));
+    const image = path.join(root, 'fw.bin');
+    fs.writeFileSync(image, Buffer.alloc(1024));
+
+    const r = runKernelPosture(image, rootfs, null, NOW);
+    expect(r.modules).toMatchObject({ moduleCount: 0, moduleInventoryComplete: false });
+    expect(r.bounds.some((bound) => bound.includes('moduleCount=0 is a lower bound'))).toBe(true);
+    expect(r.configOptions.find((o) => o.option === 'CONFIG_NF_TABLES')?.state).toBe('unknown');
   });
 });

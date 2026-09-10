@@ -143,11 +143,19 @@ export interface ModuleSigning {
   inspected: number;
   signed: number;
   vermagic: string | null;
+  inventoryComplete: boolean;
 }
 
 export function moduleSigning(result: KernelPostureResult | null | undefined): ModuleSigning | null {
   const m = result?.modules as
-    | { moduleCount?: number; inspectedCount?: number; signedCount?: number; vermagic?: string; total?: number }
+    | {
+        moduleCount?: number;
+        inspectedCount?: number;
+        signedCount?: number;
+        vermagic?: string;
+        total?: number;
+        moduleInventoryComplete?: boolean;
+      }
     | null
     | undefined;
   if (!m) return null;
@@ -158,5 +166,6 @@ export function moduleSigning(result: KernelPostureResult | null | undefined): M
     inspected: m.inspectedCount ?? total,
     signed: m.signedCount ?? 0,
     vermagic: m.vermagic ?? null,
+    inventoryComplete: m.moduleInventoryComplete === true,
   };
 }

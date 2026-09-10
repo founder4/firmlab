@@ -1264,6 +1264,7 @@ export interface KernelPostureResult {
     moduleCount?: number;
     inspectedCount?: number;
     signedCount?: number;
+    moduleInventoryComplete?: boolean;
   } | null;
   answers?: PostureAnswer[];
   configOptions?: Array<{ option: string; state: 'on' | 'off' | 'unknown'; evidence: string | null }>;

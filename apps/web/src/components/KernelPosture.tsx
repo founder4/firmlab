@@ -144,7 +144,11 @@ export function KernelPosture({ imageId }: { imageId: string }): JSX.Element {
             {result?.age?.years !== undefined && <Fact label={k.field.age} value={k.years(result.age.years)} />}
             {result?.configPath && <Fact label={k.field.configPath} value={result.configPath} mono />}
             {mods && (
-              <Fact label={k.field.modules} value={k.modulesValue(mods.signed, mods.inspected, mods.total)} mono />
+              <Fact
+                label={k.field.modules}
+                value={k.modulesValue(mods.signed, mods.inspected, mods.total, mods.inventoryComplete)}
+                mono
+              />
             )}
           </div>
 

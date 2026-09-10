@@ -18,8 +18,8 @@ export const kernelPosture = {
   unknownValue: 'not recovered',
   unrecorded: 'not recorded',
   years: (n: number) => `${n} years`,
-  modulesValue: (signed: number, inspected: number, total: number) =>
-    `${signed} signed of ${inspected} inspected${inspected === total ? '' : ` (of ${total})`}`,
+  modulesValue: (signed: number, inspected: number, total: number, complete: boolean) =>
+    `${signed} signed of ${inspected} inspected${complete && inspected === total ? '' : ` (of ${complete ? total : `≥${total}`})`}`,
   class: {
     bad: 'weak',
     unanswered: 'unanswered',

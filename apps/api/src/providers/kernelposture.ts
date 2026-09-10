@@ -354,7 +354,7 @@ export interface ModuleEvidence {
   /** Module basenames used for positive CVE-subsystem evidence, even when the inventory is partial. */
   cveModuleNames?: string[];
   /** Only a complete inventory may support a negative modular-subsystem inference. */
-  cveModuleInventoryComplete?: boolean;
+  moduleInventoryComplete?: boolean;
 }
 
 /** What one `.ko`'s `.modinfo` says about where it came from. All optional: a stripped module says nothing. */
@@ -1083,15 +1083,24 @@ export function moduleProvenanceFindings(mods: ModuleEvidence | null): FindingDr
     const opened = mods?.inspectedCount ?? p.inTree + p.outOfTree;
     const total = mods?.moduleCount ?? opened;
     const sampled = total > opened;
+    const inventoryComplete = mods?.moduleInventoryComplete === true;
+    const shipped = inventoryComplete ? `${total}` : `at least ${total}`;
     drafts.push({
       kind: 'kernel-out-of-tree-modules',
-      title: `${p.outOfTree} of the ${opened} kernel modules examined are built out of tree${sampled ? ` (${total} ship)` : ''}`,
+      title: `${p.outOfTree} of the ${opened} kernel modules examined are built out of tree${sampled || !inventoryComplete ? ` (${shipped} observed)` : ''}`,
       severity: 'medium',
       proofState: 'static_confirmed',
-      evidence: { outOfTree: p.outOfTree, inTree: p.inTree, examined: opened, shipped: total, names: p.outOfTreeNames },
+      evidence: {
+        outOfTree: p.outOfTree,
+        inTree: p.inTree,
+        examined: opened,
+        shipped: total,
+        inventoryComplete,
+        names: p.outOfTreeNames,
+      },
       rationale: `${
-        sampled
-          ? `Only ${opened} of the ${total} shipped modules were opened, so this count is a floor and the names below are not the whole set. `
+        sampled || !inventoryComplete
+          ? `Only ${opened} of ${shipped} observed modules were opened, so this count is a floor and the names below are not the whole set. `
           : ''
       }These modules declare no \`intree=Y\`, so they were built outside the kernel source tree. They run with full kernel privilege while sitting outside the process that reviews and patches the kernel: an upstream fix does not reach them, and no distribution security team tracks them. This is a statement about ATTACK SURFACE and about who maintains it — nothing here opened a module and looked for a defect.`,
     });
@@ -1528,7 +1537,7 @@ function readModules(rootfs: string): ModuleEvidence | null {
     inspectedCount,
     provenance: assessModuleProvenance(facts),
     cveModuleNames: [...cveModuleNames].sort(),
-    cveModuleInventoryComplete: moduleWalk.complete,
+    moduleInventoryComplete: moduleWalk.complete,
   };
 }
 
@@ -1599,7 +1608,12 @@ export function runKernelPosture(
     modules = readModules(rootfs);
     if (modules && modules.moduleCount > modules.inspectedCount) {
       bounds.push(
-        `${modules.moduleCount - modules.inspectedCount} of ${modules.moduleCount} modules were not opened (cap ${MODULE_SAMPLE_CAP}, path-sorted); the signature verdict covers the ${modules.inspectedCount} inspected.`,
+        `${modules.moduleCount - modules.inspectedCount} of ${modules.moduleInventoryComplete ? modules.moduleCount : `at least ${modules.moduleCount}`} observed modules were not opened (cap ${MODULE_SAMPLE_CAP}, path-sorted); the signature verdict covers the ${modules.inspectedCount} inspected.`,
+      );
+    }
+    if (modules && !modules.moduleInventoryComplete) {
+      bounds.push(
+        `The lib/modules walk reached its ${WALK_FILE_CAP}-file cap or an unreadable/special entry; moduleCount=${modules.moduleCount} is a lower bound and no modular absence is inferred from it.`,
       );
     }
     const sc = readSysctl(rootfs);
@@ -1697,7 +1711,7 @@ export function runKernelPosture(
     config,
     kallsyms: selectedKallsyms,
     modules: modules?.cveModuleNames
-      ? { names: new Set(modules.cveModuleNames), complete: modules.cveModuleInventoryComplete === true }
+      ? { names: new Set(modules.cveModuleNames), complete: modules.moduleInventoryComplete === true }
       : null,
     kernelStrings: selectedKernelStrings,
   };
