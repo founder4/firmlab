@@ -27,12 +27,16 @@ long work session, grounded in a precise review of the current tree (file refere
   106/108 rules; the two missing rules target bootloaders rather than EFI modules. The OVMF campaign likewise
   settled all 12 batches: 131/136 modules produced verdicts, 5 remain explicit unknowns, and none is unattempted.
 
-Next, in order: turn the zero-`not-run` corpus pass into a scheduled campaign and drive down the 85 `degraded`
-cells where more evidence can actually unlock coverage. The 33 `no-input` cells are all downstream of three
-rootfs-less artifacts whose fresh extraction proved incomplete or data-only; they need reacquisition, not retries.
-Then add config/patch/VEX pruning to the kernel-CVE prefix; then return
-to full-system guest networking/console and RTOS peripheral fuzzing. The actionable list lives in
-[`BACKLOG.md`](BACKLOG.md).
+The coverage campaign is built and has been run end to end (`pnpm corpus:campaign`, 2026-09-12). Every degraded
+stage now declares what would change it, so the corpus's uncovered cells are partitioned rather than counted: of
+the 106 cells a naive reading called executable debt, exactly ONE is — the rest are real negatives, searches that
+are inconclusive by construction, caps a re-run does not move, and the three rootfs-less artifacts that need
+reacquisition. No cell in the corpus declares a missing tool. See [`CORPUS-VALIDATION.md`](CORPUS-VALIDATION.md).
+
+Next, in order: the two code questions the campaign raised (telling an extractor gap from a truncated volume;
+telling a monolithic kernel from a carve that missed `lib/modules`), then config/patch/VEX pruning for the
+kernel-CVE prefix, then full-system guest networking/console and RTOS peripheral fuzzing. The actionable list
+lives in [`BACKLOG.md`](BACKLOG.md).
 
 ---
 

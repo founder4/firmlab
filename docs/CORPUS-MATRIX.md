@@ -1,8 +1,8 @@
 # FirmLab — matriz de validación del corpus
 
-Generada: 2026-09-05T16:27:09.706Z
+Generada: 2026-09-12T17:55:48.607Z
 
-25 muestras · 8 clases · 390 celdas de etapa aplicable.
+26 muestras · 8 clases · 421 celdas de etapa aplicable.
 
 ## Leyenda
 
@@ -21,9 +21,9 @@ Un número tras `✓` es el recuento de hallazgos registrado por esa etapa.
 
 | Estado | Celdas |
 |---|---:|
-| `found` | 130 |
-| `ran-empty` | 142 |
-| `degraded` | 85 |
+| `found` | 147 |
+| `ran-empty` | 149 |
+| `degraded` | 92 |
 | `no-input` | 33 |
 | `not-built` | 0 |
 | `not-run` | 0 |
@@ -48,78 +48,88 @@ Muestras: `Pico-RP2040-CTF`.
 
 ## embedded-linux
 
-Muestras: `AliExpress-Repeater`, `Asus-Router`, `BeanView-Camera`, `DVRF-v03`, `IMOU-Ranger-2C`, `Obsbot-meetse-OA-E-P`, `Tenda-Camera`, `TP-Link-MR3220-v2-3-`, `TP-Link-WDR3600v1-3-`, `TP-Link-WR940Nv6-3-2`.
+Muestras: `AliExpress-Repeater`, `Asus-Router`, `BeanView-Camera`, `DVRF-v03`, `firmware-1-podado`, `IMOU-Ranger-2C`, `Obsbot-meetse-OA-E-P`, `Tenda-Camera`, `TP-Link-MR3220-v2-3-`, `TP-Link-WDR3600v1-3-`, `TP-Link-WR940Nv6-3-2`.
 
-| Etapa | AliExpress-Repeater | Asus-Router | BeanView-Camera | DVRF-v03 | IMOU-Ranger-2C | Obsbot-meetse-OA-E-P | Tenda-Camera | TP-Link-MR3220-v2-3- | TP-Link-WDR3600v1-3- | TP-Link-WR940Nv6-3-2 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| W1 · Extraction | △ | △ | △ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
-| W3 · Credentials & secrets | ⊘ | ⊘ | ⊘ | ✓4 | ✓3 | ✓1 | ✓2 | ✓3 | ✓2 | ✓3 |
-| W3 · Credential cross-reference | ⊘ | ⊘ | ⊘ | △ | △ | △ | ✓1 | ✓2 | ✓1 | ✓1 |
-| W3 · Auxiliary-partition secrets | ○ | ○ | ○ | ✓6 | ✓8 | ○ | ✓4 | ○ | ○ | ✓4 |
-| W2 · SBOM / CVE | ⊘ | ⊘ | ⊘ | ✓18 | ✓24 | ○ | ○ | ○ | ○ | ○ |
-| W2 · Component fingerprint (bundled n-days) | ⊘ | ⊘ | ⊘ | ✓3 | ✓1 | △ | ✓3 | ✓2 | ✓3 | ✓3 |
-| Static · YARA rule corpus | ⊘ | ⊘ | ⊘ | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 |
-| W2 · Kernel posture | △ | △ | △ | ✓4 | ✓2 | ✓2 | ✓2 | ✓4 | ✓4 | ✓4 |
-| Recon · Service enumeration | ⊘ | ⊘ | ⊘ | ○ | ✓2 | ○ | ✓1 | ✓2 | ✓2 | ✓2 |
-| Static · Certificates | ○ | ○ | ○ | ✓6 | ✓2 | ○ | ○ | ○ | ○ | ✓2 |
-| Static · Component map | ⊘ | ⊘ | ⊘ | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 |
-| Static · U-Boot env | ✓2 | ○ | ✓2 | ○ | ✓2 | ○ | ✓2 | ○ | ○ | ○ |
-| Static · Device tree | △ | △ | △ | △ | △ | ✓5 | ✓6 | △ | △ | △ |
-| Cross-check · Kernel command line | ○ | ○ | ○ | ○ | ○ | ○ | ✓1 | ○ | ○ | ○ |
-| Recon · FCC-ID | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
-| W3 · NVRAM store | ✓15 | ○ | ✓3 | ○ | ✓2 | ○ | ✓2 | ○ | ○ | ○ |
-| W4 · Web attack-surface (taint) | ⊘ | ⊘ | ⊘ | △ | △ | △ | △ | △ | △ | △ |
-| W5 · Binary-vuln sweep | ⊘ | ⊘ | ⊘ | ✓60 | ✓19 | ○ | ✓40 | ✓49 | ✓60 | ✓49 |
-| W5 · Kernel-module surface | ⊘ | ⊘ | ⊘ | ✓2 | △ | △ | △ | ○ | ✓6 | ✓1 |
-| W5 · Export reachability | ⊘ | ⊘ | ⊘ | ○ | ✓5 | ✓1 | ✓2 | ○ | ○ | ○ |
-| ISTG-FW · Update-path integrity | △ | △ | △ | ✓1 | ✓3 | ✓2 | ✓3 | ✓3 | ✓3 | ✓3 |
-| W5 · Reachability (store_domain_sid) | — | — | — | △ | — | — | — | — | — | — |
-| W5 · Reachability (store_machine_password) | — | — | — | △ | — | — | — | — | — | — |
-| W5 · Reachability (diag_tracertbutton) | — | — | — | △ | — | — | — | — | — | — |
-| W5 · Cmd-exec reachability (diagwpsbutton) | — | — | — | ✓1 | — | — | — | — | — | — |
-| W5 · Cmd-exec reachability (diag_tracertbutton) | — | — | — | ✓1 | — | — | — | — | — | — |
-| W5 · Reproduce (diagwpsbutton:system) | — | — | — | △ | — | — | — | — | — | — |
-| W5 · Reproduce (diag_tracertbutton:system) | — | — | — | △ | — | — | — | — | — | — |
-| W5 · Binary-vuln (telnetd) | — | — | — | — | ✓2 | — | — | — | — | — |
-| W5 · Reachability (mnt_jffs2) | — | — | — | — | △ | — | — | — | — | — |
-| W5 · Reachability (mtd2bin) | — | — | — | — | ✓2 | — | — | — | — | — |
-| W5 · Reachability (jffs2dump) | — | — | — | — | △ | — | — | — | — | — |
-| W5 · Cmd-exec reachability (qr) | — | — | — | — | ✓2 | — | — | — | — | — |
-| W5 · Cmd-exec reachability (busybox) | — | — | — | — | △ | — | — | — | — | — |
-| W5 · Reproduce (mtd2bin:strcpy) | — | — | — | — | △ | — | — | — | — | — |
-| W5 · Reproduce (qr:popen) | — | — | — | — | △ | — | — | — | — | — |
-| W5 · Reachability (hw_test) | — | — | — | — | — | — | △ | — | — | — |
-| W5 · Reachability (motor_test) | — | — | — | — | — | — | △ | — | — | — |
-| W5 · Reachability (wifi_test) | — | — | — | — | — | — | △ | — | — | — |
-| W5 · Cmd-exec reachability (factory) | — | — | — | — | — | — | ✓2 | — | — | — |
-| W5 · Cmd-exec reachability (hw_test) | — | — | — | — | — | — | ✓1 | — | — | — |
-| W5 · Reproduce (factory:system) | — | — | — | — | — | — | △ | — | — | — |
-| W5 · Reproduce (hw_test:system) | — | — | — | — | — | — | △ | — | — | — |
-| W5 · Binary-vuln (httpd) | — | — | — | — | — | — | — | ✓3 | ✓3 | ✓3 |
-| W5 · Reachability (httpd) | — | — | — | — | — | — | — | ✓2 | △ | △ |
-| W5 · Reachability (apstart) | — | — | — | — | — | — | — | △ | — | — |
-| W5 · Reachability (pktlogconf) | — | — | — | — | — | — | — | ✓2 | ✓2 | — |
-| W5 · Cmd-exec reachability (httpd) | — | — | — | — | — | — | — | ✓2 | ✓2 | ✓2 |
-| W5 · Cmd-exec reachability (modem_scan) | — | — | — | — | — | — | — | ✓1 | — | — |
-| W5 · Reproduce (httpd:strcpy) | — | — | — | — | — | — | — | △ | — | — |
-| W5 · Reproduce (pktlogconf:strcpy) | — | — | — | — | — | — | — | △ | △ | — |
-| W9 · Re-plan (cap reached) | — | — | — | — | — | — | — | △ | △ | — |
-| W5 · Reachability (radartool) | — | — | — | — | — | — | — | — | ✓2 | — |
-| W5 · Cmd-exec reachability (radvdctl) | — | — | — | — | — | — | — | — | △ | △ |
-| W5 · Reproduce (pktlogconf:sprintf) | — | — | — | — | — | — | — | — | △ | — |
-| W5 · Reachability (iwpriv) | — | — | — | — | — | — | — | — | — | △ |
-| W5 · Reachability (radvdctl) | — | — | — | — | — | — | — | — | — | ✓2 |
-| W5 · Reproduce (radvdctl:strcpy) | — | — | — | — | — | — | — | — | — | △ |
-| W5 · Reproduce (httpd:system) | — | — | — | — | — | — | — | — | — | △ |
+| Etapa | AliExpress-Repeater | Asus-Router | BeanView-Camera | DVRF-v03 | firmware-1-podado | IMOU-Ranger-2C | Obsbot-meetse-OA-E-P | Tenda-Camera | TP-Link-MR3220-v2-3- | TP-Link-WDR3600v1-3- | TP-Link-WR940Nv6-3-2 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| W1 · Extraction | △ | △ | △ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
+| W3 · Credentials & secrets | ⊘ | ⊘ | ⊘ | ✓4 | ✓1 | ✓3 | ✓1 | ✓2 | ✓3 | ✓2 | ✓3 |
+| W3 · Credential cross-reference | ⊘ | ⊘ | ⊘ | △ | △ | △ | △ | ✓1 | ✓2 | ✓1 | ✓1 |
+| W3 · Auxiliary-partition secrets | ○ | ○ | ○ | ✓6 | ○ | ✓8 | ○ | ✓4 | ○ | ○ | ✓4 |
+| W2 · SBOM / CVE | ⊘ | ⊘ | ⊘ | ✓18 | ✓21 | ✓24 | ○ | ○ | ○ | ○ | ○ |
+| W2 · Component fingerprint (bundled n-days) | ⊘ | ⊘ | ⊘ | ✓3 | ✓3 | ✓1 | △ | ✓3 | ✓2 | ✓3 | ✓3 |
+| Static · YARA rule corpus | ⊘ | ⊘ | ⊘ | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 |
+| W2 · Kernel posture | △ | △ | △ | ✓47 | ✓43 | ✓39 | ✓33 | ✓41 | ✓47 | ✓47 | ✓47 |
+| Recon · Service enumeration | ⊘ | ⊘ | ⊘ | ○ | ✓4 | ✓2 | ○ | ✓1 | ✓2 | ✓2 | ✓2 |
+| Static · Certificates | ○ | ○ | ○ | ✓6 | ✓208 | ✓2 | ○ | ○ | ○ | ○ | ✓2 |
+| Static · Component map | ⊘ | ⊘ | ⊘ | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 | ✓1 |
+| Static · U-Boot env | ✓2 | ○ | ✓2 | ○ | ✓2 | ✓2 | ○ | ✓2 | ○ | ○ | ○ |
+| Static · Device tree | △ | △ | △ | △ | ✓3 | △ | ✓5 | ✓6 | △ | △ | △ |
+| Cross-check · Kernel command line | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ✓1 | ○ | ○ | ○ |
+| Recon · FCC-ID | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
+| W3 · NVRAM store | ✓15 | ○ | ✓3 | ○ | ✓3 | ✓2 | ○ | ✓2 | ○ | ○ | ○ |
+| W4 · Web attack-surface (taint) | ⊘ | ⊘ | ⊘ | △ | ○ | △ | △ | △ | △ | △ | △ |
+| W5 · Binary-vuln sweep | ⊘ | ⊘ | ⊘ | ✓60 | ✓38 | ✓19 | ○ | ✓40 | ✓49 | ✓60 | ✓49 |
+| W5 · Kernel-module surface | ⊘ | ⊘ | ⊘ | ✓2 | ○ | △ | △ | △ | ○ | ✓6 | ✓1 |
+| W5 · Export reachability | ⊘ | ⊘ | ⊘ | ○ | ○ | ✓5 | ✓1 | ✓2 | ○ | ○ | ○ |
+| ISTG-FW · Update-path integrity | △ | △ | △ | ✓1 | ✓4 | ✓3 | ✓2 | ✓3 | ✓3 | ✓3 | ✓3 |
+| W5 · Reachability (store_domain_sid) | — | — | — | △ | — | — | — | — | — | — | — |
+| W5 · Reachability (store_machine_password) | — | — | — | △ | — | — | — | — | — | — | — |
+| W5 · Reachability (diag_tracertbutton) | — | — | — | ✓1 | — | — | — | — | — | — | — |
+| W5 · Cmd-exec reachability (diagwpsbutton) | — | — | — | ✓1 | — | — | — | — | — | — | — |
+| W5 · Cmd-exec reachability (diag_tracertbutton) | — | — | — | ✓1 | — | — | — | — | — | — | — |
+| W5 · Reproduce (diag_tracertbutton:sprintf) | — | — | — | △ | — | — | — | — | — | — | — |
+| W5 · Reproduce (diagwpsbutton:system) | — | — | — | △ | — | — | — | — | — | — | — |
+| W5 · Reproduce (diag_tracertbutton:system) | — | — | — | △ | — | — | — | — | — | — | — |
+| W5 · Binary-vuln (dnsmasq) | — | — | — | — | ✓1 | — | — | — | — | — | — |
+| W5 · Binary-vuln (dropbear) | — | — | — | — | ✓1 | — | — | — | — | — | — |
+| W5 · Binary-vuln (uhttpd) | — | — | — | — | ✓1 | — | — | — | — | — | — |
+| W5 · Reachability (logd) | — | — | — | — | △ | — | — | — | — | — | — |
+| W5 · Reachability (uci) | — | — | — | — | △ | — | — | — | — | — | — |
+| W5 · Reachability (important_secret_service) | — | — | — | — | △ | — | — | — | — | — | — |
+| W5 · Cmd-exec reachability (uhttpd) | — | — | — | — | △ | — | — | — | — | — | — |
+| W5 · Cmd-exec reachability (askfirst) | — | — | — | — | ✓1 | — | — | — | — | — | — |
+| W9 · Re-plan (cap reached) | — | — | — | — | △ | — | — | — | △ | △ | — |
+| W5 · Binary-vuln (telnetd) | — | — | — | — | — | ✓2 | — | — | — | — | — |
+| W5 · Reachability (mnt_jffs2) | — | — | — | — | — | △ | — | — | — | — | — |
+| W5 · Reachability (mtd2bin) | — | — | — | — | — | ✓2 | — | — | — | — | — |
+| W5 · Reachability (jffs2dump) | — | — | — | — | — | △ | — | — | — | — | — |
+| W5 · Cmd-exec reachability (qr) | — | — | — | — | — | ✓2 | — | — | — | — | — |
+| W5 · Cmd-exec reachability (busybox) | — | — | — | — | — | △ | — | — | — | — | — |
+| W5 · Reproduce (mtd2bin:strcpy) | — | — | — | — | — | △ | — | — | — | — | — |
+| W5 · Reproduce (qr:popen) | — | — | — | — | — | △ | — | — | — | — | — |
+| W5 · Reachability (hw_test) | — | — | — | — | — | — | — | △ | — | — | — |
+| W5 · Reachability (motor_test) | — | — | — | — | — | — | — | △ | — | — | — |
+| W5 · Reachability (wifi_test) | — | — | — | — | — | — | — | △ | — | — | — |
+| W5 · Cmd-exec reachability (factory) | — | — | — | — | — | — | — | ✓2 | — | — | — |
+| W5 · Cmd-exec reachability (hw_test) | — | — | — | — | — | — | — | ✓1 | — | — | — |
+| W5 · Reproduce (factory:system) | — | — | — | — | — | — | — | △ | — | — | — |
+| W5 · Reproduce (hw_test:system) | — | — | — | — | — | — | — | △ | — | — | — |
+| W5 · Binary-vuln (httpd) | — | — | — | — | — | — | — | — | ✓3 | ✓3 | △ |
+| W5 · Reachability (httpd) | — | — | — | — | — | — | — | — | ✓2 | △ | △ |
+| W5 · Reachability (apstart) | — | — | — | — | — | — | — | — | △ | — | — |
+| W5 · Reachability (pktlogconf) | — | — | — | — | — | — | — | — | ✓2 | ✓2 | — |
+| W5 · Cmd-exec reachability (httpd) | — | — | — | — | — | — | — | — | ✓2 | ✓2 | ✓2 |
+| W5 · Cmd-exec reachability (modem_scan) | — | — | — | — | — | — | — | — | ✓1 | — | — |
+| W5 · Reproduce (httpd:strcpy) | — | — | — | — | — | — | — | — | △ | — | — |
+| W5 · Reproduce (pktlogconf:strcpy) | — | — | — | — | — | — | — | — | △ | △ | — |
+| W5 · Reachability (radartool) | — | — | — | — | — | — | — | — | — | ✓2 | — |
+| W5 · Cmd-exec reachability (radvdctl) | — | — | — | — | — | — | — | — | — | △ | △ |
+| W5 · Reproduce (pktlogconf:sprintf) | — | — | — | — | — | — | — | — | — | △ | — |
+| W5 · Reachability (iwpriv) | — | — | — | — | — | — | — | — | — | — | △ |
+| W5 · Reachability (radvdctl) | — | — | — | — | — | — | — | — | — | — | ✓2 |
+| W5 · Reproduce (radvdctl:strcpy) | — | — | — | — | — | — | — | — | — | — | △ |
+| W5 · Reproduce (httpd:system) | — | — | — | — | — | — | — | — | — | — | △ |
 
 | Etiqueta | ID | Arquitectura | Fichero | Cobertura |
 |---|---|---|---|---:|
 | `AliExpress-Repeater` | `e86d7094` | mips | AliExpress-Repeater.bin | 10/21 |
 | `Asus-Router` | `106bc83d` | unknown | Asus-Router.bin | 10/21 |
 | `BeanView-Camera` | `1ec1802c` | arm | BeanView-Camera.bin | 10/21 |
-| `DVRF-v03` | `57c12e70` | mipsel | DVRF_v03.bin | 28/28 |
+| `DVRF-v03` | `57c12e70` | unknown | DVRF_v03.bin | 29/29 |
+| `firmware-1-podado` | `a096d9b8` | arm | firmware_1_podado | 30/30 |
 | `IMOU-Ranger-2C` | `f3618503` | arm | IMOU-Ranger-2C.bin | 29/29 |
-| `Obsbot-meetse-OA-E-P` | `4cd8d78c` | arm | Obsbot_meetse_OA_E_PW204_4.6.4.1_release.bin | 21/21 |
+| `Obsbot-meetse-OA-E-P` | `4cd8d78c` | unknown | Obsbot_meetse_OA_E_PW204_4.6.4.1_release.bin | 21/21 |
 | `Tenda-Camera` | `2b5fe786` | arm | Tenda-Camera.bin | 28/28 |
 | `TP-Link-MR3220-v2-3-` | `d2587cb0` | mips | TP-Link-MR3220_v2_3.17.1.bin | 30/30 |
 | `TP-Link-WDR3600v1-3-` | `398d50ef` | mips | TP-Link-WDR3600v1_3.14.3.bin | 30/30 |
@@ -171,10 +181,10 @@ Muestras: `GL-iNet-BE3600-4-9-0`.
 | W3 · Credentials & secrets | ✓4 |
 | W3 · Credential cross-reference | △ |
 | W3 · Auxiliary-partition secrets | ○ |
-| W2 · SBOM / CVE | ✓484 |
+| W2 · SBOM / CVE | ✓513 |
 | W2 · Component fingerprint (bundled n-days) | ✓4 |
 | Static · YARA rule corpus | ✓1 |
-| W2 · Kernel posture | ✓5 |
+| W2 · Kernel posture | ✓35 |
 | Recon · Service enumeration | ✓4 |
 | Static · Certificates | ✓148 |
 | Static · Component map | ✓1 |
@@ -200,7 +210,7 @@ Muestras: `GL-iNet-BE3600-4-9-0`.
 
 | Etiqueta | ID | Arquitectura | Fichero | Cobertura |
 |---|---|---|---|---:|
-| `GL-iNet-BE3600-4-9-0` | `81154df7` | arm64 | GL.iNet-BE3600_4.9.0.bin | 30/30 |
+| `GL-iNet-BE3600-4-9-0` | `81154df7` | unknown | GL.iNet-BE3600_4.9.0.bin | 30/30 |
 
 ## rtos
 
@@ -264,3 +274,4 @@ Muestras: `dragon-reto`.
 | Etiqueta | ID | Arquitectura | Fichero | Cobertura |
 |---|---|---|---|---:|
 | `dragon-reto` | `d24f3624` | unknown | dragon_reto.hex | 7/7 |
+

@@ -75,7 +75,15 @@
 
 ### Cobertura y análisis
 
-- [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 0 celdas `not-run`, 85 `degraded` y 33 `no-input` entre 390 etapas aplicables; priorizar las degradadas desbloqueables por clase y coste, y no contar como deuda ejecutable los tres artefactos que requieren reacquisición.
+- [x] Convertir la matriz del corpus en una campaña programada. `pnpm corpus:campaign` planifica y ejecuta: cada
+  degradación declara ahora su remedio (`opacidad-remedy.ts`, derivado del estado que el proveedor ya devuelve,
+  nunca de su nota en prosa), las celdas `no-input` se atribuyen a la extracción que las bloqueó en vez de
+  contarse, y la cola se ordena por clase y por coste medido. Ejecutada entera el 12 de septiembre de 2026 sobre
+  las 26 muestras: de 106 celdas que la lectura ingenua contaba como deuda ejecutable queda **1** — casi toda la
+  «deuda degradada» eran negativos reales (37 `settled`), búsquedas inconcluyentes por construcción (34), los
+  tres artefactos de reacquisición (7 + 33 aguas abajo) y topes que una re-ejecución no mueve (5). Ninguna celda
+  declara `install-tool`. Detalle medido en `CORPUS-VALIDATION.md`; las dos preguntas de código que levantó están
+  abiertas arriba.
 - [ ] Encaminar una sonda que termina en `emulation_artifact` al peldaño full-system. Hoy la celda declara
   `defect` porque el arreglo es de FirmLab —qemu-user no da NVRAM, nodos de dispositivo ni periféricos— pero el
   peldaño que sí puede responder ya existe y arranca firmware real desde 2026-07-28. Medido: DVRF trae dos de

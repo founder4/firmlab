@@ -73,6 +73,44 @@ sección, con la etapa que nombra el tope.
 
 Una imagen que falla no aborta la cola: se registra, se informa al final y el código de salida es 2.
 
+### La campaña del 12 de septiembre de 2026 — lo que midió
+
+Primera ejecución completa, contra el despliegue y las 26 muestras vivas. Antes: 411 celdas aplicables, 85
+`degraded`, 33 `no-input`, 21 `not-run` — 106 celdas que una lectura ingenua contaría como deuda ejecutable.
+Después de 26 escaneos (24 en la cola rankeada, ~30 min, más dos re-ejecuciones por corrección de build):
+
+| Disposición | Celdas |
+|---|---:|
+| `covered` | 296 |
+| `settled` | 37 |
+| `open-ended` | 34 |
+| `blocked-upstream` | 33 |
+| `reacquire` | 7 |
+| `undeclared` | 6 |
+| `raise` | 5 |
+| `defect` | 2 |
+| `scan` (EJECUTABLE) | **1** |
+
+La respuesta a «prioriza las degradadas desbloqueables» resultó ser que casi ninguna lo es: de 92 celdas
+degradadas queda **una** que una corrida pueda cambiar (Tenda-Camera, `W5 · Reproduce (hw_test:system)`, donde
+gdb no llegó a enlazar). Ninguna celda declara `install-tool`: a este despliegue no le falta ninguna herramienta.
+Las 33 `no-input` cuelgan, las 33, de los tres artefactos que necesitan reacquisición —BeanView, Asus,
+AliExpress, 11 celdas cada uno— y ninguna se desbloquea re-ejecutando.
+
+Las 6 `undeclared` son las dos preguntas de código que el propio barrido levantó, y están en el backlog: tres
+extracciones cuyo veredicto sólo distingue en prosa una brecha de extractor de un volumen truncado, y tres
+rootfs sin `.ko` donde un kernel monolítico y un tallado incompleto son indistinguibles.
+
+**El coste medido predice mal entre builds.** El plan presupuestó 213 min a partir de la duración real del último
+escaneo de cada imagen y la cola tardó ~30. No es un fallo de la medida: DVRF tardó 1.261 s en su corrida de
+septiembre y 217 s en ésta, sobre otra build. El número es honesto sobre lo que midió —la corrida anterior— y no
+es una predicción de la siguiente.
+
+Contra la baseline previa, el gate reporta **una** regresión de ejecución: `W5 · Binary-vuln (httpd)` de
+TP-Link-WR940Nv6 pasa de `found` a `degraded`. No se perdió capacidad: la corrida nueva declara que sólo
+300 de 3.047 imports estaban disponibles, así que la ausencia de taint no está establecida. La celda dice ahora
+lo que la anterior callaba, y la regla del gate —que es deliberadamente conservadora— lo cuenta como regresión.
+
 ## Comparación entre campañas
 
 Guarda la matriz JSON antes de ejecutar una campaña y compara los resultados posteriores con ese archivo:
