@@ -372,6 +372,32 @@ async function fetchJson(url, headers) {
   return response.json();
 }
 
+/** Basic-auth headers when the deployment is behind one, undefined otherwise — shared with the campaign planner. */
+export function apiHeaders(env = process.env) {
+  return env.FIRMLAB_UI_AUTH
+    ? { authorization: `Basic ${Buffer.from(env.FIRMLAB_UI_AUTH).toString('base64')}` }
+    : undefined;
+}
+
+/**
+ * Read the live matrix from a running workbench. Exported so the coverage campaign plans against exactly the same
+ * cells this command prints — a second reader with its own idea of what a stage is would be a second contract.
+ */
+export async function fetchMatrix(base, headers, lang = 'es') {
+  const origin = base.replace(/\/$/, '');
+  const { images } = await fetchJson(`${origin}/api/images`, headers);
+  const coverageEntries = await Promise.all(
+    images.map(async (image) => {
+      const coverage = await fetchJson(
+        `${origin}/api/images/${encodeURIComponent(image.id)}/coverage?lang=${encodeURIComponent(lang)}`,
+        headers,
+      );
+      return [image.id, coverage];
+    }),
+  );
+  return buildMatrix(images, new Map(coverageEntries));
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -381,17 +407,7 @@ async function main() {
   const baseline = args.baseline ? JSON.parse(await readFile(args.baseline, 'utf8')) : null;
   if (args.baseline) compareMatrices(baseline, baseline);
   const base = args.base.replace(/\/$/, '');
-  const headers = process.env.FIRMLAB_UI_AUTH
-    ? { authorization: `Basic ${Buffer.from(process.env.FIRMLAB_UI_AUTH).toString('base64')}` }
-    : undefined;
-  const { images } = await fetchJson(`${base}/api/images`, headers);
-  const coverageEntries = await Promise.all(
-    images.map(async (image) => {
-      const coverage = await fetchJson(`${base}/api/images/${encodeURIComponent(image.id)}/coverage?lang=es`, headers);
-      return [image.id, coverage];
-    }),
-  );
-  const matrix = buildMatrix(images, new Map(coverageEntries));
+  const matrix = await fetchMatrix(base, apiHeaders());
   if (args.baseline) matrix.comparison = compareMatrices(matrix, baseline);
   const output =
     args.format === 'json'

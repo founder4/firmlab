@@ -30,7 +30,8 @@
  */
 import { type Locale, messages } from '../i18n/index.js';
 import type { OpacidadStep } from '../opacidad-narrative.js';
-import type { PlanSpec } from '../opacidad-plan.js';
+import type { PlanSpec, ProviderId } from '../opacidad-plan.js';
+import type { DegradedRemedy } from '../opacidad-remedy.js';
 
 export type StageStatus =
   | 'found' // ran and recorded findings
@@ -42,11 +43,24 @@ export type StageStatus =
 
 export interface CoverageStage {
   worker: string;
+  /**
+   * The plan's provider tag — a stable id, unlike `worker`, which is a display name and is compared verbatim by the
+   * corpus matrix. A reader that needs to say "this stage is the extraction" (to attribute every `no-input` cell
+   * downstream of it, say) must not do it by matching English. Optional forever: a stage W9 scheduled from a lead
+   * has no plan entry, and so no tag.
+   */
+  provider?: ProviderId;
   /** Why the class routes to this stage — the "what could this even tell me" line. */
   reason: string;
   status: StageStatus;
   detail?: string;
   findingCount?: number;
+  /**
+   * For a `degraded` stage: what would change it (`opacidad-remedy.ts`). Optional forever, and absent means the
+   * run that produced this cell predates the field or could not tell — a reader must report it as undeclared
+   * rather than treat it as answered. Never set on any other status: a stage that ran has no remedy to name.
+   */
+  remedy?: DegradedRemedy;
 }
 
 export interface CoverageReport {
@@ -175,15 +189,22 @@ export function buildCoverage(input: {
     const step = byWorker.get(spec.worker);
     if (!step) {
       // Planned for this class but absent from the run: either it was never built, or nothing has run it yet.
-      return { worker: spec.worker, reason: spec.reason, status: spec.built ? 'not-run' : 'not-built' };
+      return {
+        worker: spec.worker,
+        ...(spec.provider ? { provider: spec.provider } : {}),
+        reason: spec.reason,
+        status: spec.built ? 'not-run' : 'not-built',
+      };
     }
     const status = statusOfStep(step);
     return {
       worker: spec.worker,
+      ...(spec.provider ? { provider: spec.provider } : {}),
       reason: spec.reason,
       status,
       ...(step.note ? { detail: step.note } : { detail: step.summary }),
       ...(step.findingCount !== undefined ? { findingCount: step.findingCount } : {}),
+      ...(status === 'degraded' && step.remedy ? { remedy: step.remedy } : {}),
     };
   });
 
@@ -199,6 +220,7 @@ export function buildCoverage(input: {
       status: statusOfStep(step),
       detail: step.note ?? step.summary,
       ...(step.findingCount !== undefined ? { findingCount: step.findingCount } : {}),
+      ...(statusOfStep(step) === 'degraded' && step.remedy ? { remedy: step.remedy } : {}),
     });
   }
 

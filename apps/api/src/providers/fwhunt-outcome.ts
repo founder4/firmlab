@@ -1,4 +1,5 @@
 import type { OpacidadStep } from '../opacidad-narrative.js';
+import { type DegradedRemedy, remedyForFwHunt } from '../opacidad-remedy.js';
 import type { FwHuntResult } from './fwhunt.js';
 
 export const FWHUNT_WORKER = 'UEFI · FwHunt implant scan';
@@ -7,6 +8,8 @@ export interface FwHuntStepOutcome {
   summary: string;
   findingCount: number;
   degraded?: boolean;
+  /** What would change the degradation. Optional forever; absent means undeclared, never settled. */
+  remedy?: DegradedRemedy;
   note?: string;
 }
 
@@ -17,6 +20,7 @@ export function fwhuntOutcome(r: FwHuntResult, reusedDurableCampaign = false): F
       summary: 'FwHunt implant scan: unavailable',
       findingCount: r.findings.length,
       degraded: true,
+      remedy: 'install-tool',
       note: r.reason,
     };
   }
@@ -34,7 +38,20 @@ export function fwhuntOutcome(r: FwHuntResult, reusedDurableCampaign = false): F
     summary: `FwHunt implant scan${reusedDurableCampaign ? ' (reused durable campaign)' : ''}: ${r.matches.length} match(es), ${r.rulesRun}/${r.rulesInCorpus} rule(s) over ${mp?.ran ? `${modulesScanned}/${mp.modulesCarved}` : '0'} carved module(s)`,
     findingCount: r.findings.length,
     ...(moduleCoverageThin || modulePassBlocked || modulePassPartial
-      ? { degraded: true, note: moduleNote }
+      ? {
+          degraded: true,
+          // Carving no modules out of a variable store is that store's answer; modules left unattempted are the
+          // dedicated campaign's work; a module that exhausts its per-module timeout does not converge on a rerun.
+          remedy: remedyForFwHunt({
+            available: r.available,
+            modulePassRan: !!mp?.ran,
+            modulesCarved: mp?.modulesCarved ?? 0,
+            modulesScanned,
+            modulesFailed,
+            modulesSkipped,
+          }),
+          note: moduleNote,
+        }
       : reusedDurableCampaign
         ? {
             note: 'Reused the newest dedicated, provenance-checked FwHunt campaign; this autonomous run did not replace it with an isolated batch zero.',
@@ -51,6 +68,7 @@ export function fwhuntCoverageStep(r: FwHuntResult): OpacidadStep {
     status: outcome.degraded ? 'degraded' : 'ran',
     summary: outcome.summary,
     findingCount: outcome.findingCount,
+    ...(outcome.degraded && outcome.remedy ? { remedy: outcome.remedy } : {}),
     ...(outcome.note ? { note: outcome.note } : {}),
   };
 }

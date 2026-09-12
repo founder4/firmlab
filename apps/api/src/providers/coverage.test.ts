@@ -404,3 +404,47 @@ describe('buildCoverage — the verdict is composed in the caller’s language, 
     expect(withTrigger.stages[1]?.reason).toBe('planificada sobre la marcha a partir de una pista');
   });
 });
+
+describe('what a degraded stage says about itself', () => {
+  it('carries the remedy and the provider tag, so a campaign never has to match English', () => {
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs: [
+        { worker: 'W1 · Extraction', reason: 'carve', needsRootfs: false, built: true, provider: 'extract' },
+        { worker: 'Static · Device tree', reason: 'board', needsRootfs: false, built: true, provider: 'devicetree' },
+      ],
+      steps: [
+        { worker: 'W1 · Extraction', status: 'ran', summary: 'ok', findingCount: 1 },
+        { worker: 'Static · Device tree', status: 'degraded', summary: 'none readable', remedy: 'settled' },
+      ],
+      findingCount: 1,
+    });
+    expect(r.stages[0]?.provider).toBe('extract');
+    expect(r.stages[1]?.provider).toBe('devicetree');
+    expect(r.stages[1]?.remedy).toBe('settled');
+  });
+
+  it('never leaves a remedy on a stage that ran, even if the step carries one', () => {
+    // A remedy is a claim about a degradation. On a clean stage it would queue work against a question already
+    // answered — the exact shape this field exists to stop.
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs: [{ worker: 'W1 · Extraction', reason: 'carve', needsRootfs: false, built: true, provider: 'extract' }],
+      steps: [{ worker: 'W1 · Extraction', status: 'ran', summary: 'ok', findingCount: 2, remedy: 'retry' }],
+      findingCount: 2,
+    });
+    expect(r.stages[0]?.status).toBe('found');
+    expect(r.stages[0]?.remedy).toBeUndefined();
+  });
+
+  it('leaves the remedy undefined for a run stored before the field existed', () => {
+    const r = buildCoverage({
+      firmwareClass: 'embedded-linux',
+      specs: [{ worker: 'W4 · Web surface', reason: 'handlers', needsRootfs: true, built: true, provider: 'webtaint' }],
+      steps: [{ worker: 'W4 · Web surface', status: 'degraded', summary: 'no handlers', note: 'none found' }],
+      findingCount: 0,
+    });
+    expect(r.stages[0]?.status).toBe('degraded');
+    expect(r.stages[0]?.remedy).toBeUndefined();
+  });
+});

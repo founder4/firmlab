@@ -63,6 +63,17 @@ import {
   specKey,
   specsForClass,
 } from './opacidad-plan.js';
+import {
+  type DegradedRemedy,
+  remedyForCredMatch,
+  remedyForDeviceTree,
+  remedyForFwHunt,
+  remedyForNoRootfs,
+  remedyForProbeVerdict,
+  remedyForSymReach,
+  remedyForWebTaint,
+  remedyForYaraScan,
+} from './opacidad-remedy.js';
 import { partitionByProvenance } from './operator-findings.js';
 import { runAuxSecrets } from './providers/auxsecrets.js';
 import { isElfFile, runBinVuln } from './providers/binvuln.js';
@@ -166,6 +177,12 @@ interface StepOutcome {
   summary: string;
   findingCount: number;
   degraded?: boolean;
+  /**
+   * What would change this degradation (`opacidad-remedy.ts`). Set beside every `degraded: true` that can name it,
+   * and left absent where the site genuinely cannot tell — an undeclared remedy reads as unknown, a wrong one reads
+   * as a fact. Ignored unless `degraded`: a stage that ran has no remedy to name.
+   */
+  remedy?: DegradedRemedy;
   note?: string;
   /** Leads this worker surfaced — W9 re-plans the agenda to schedule the follow-up workers they name. */
   leads?: Lead[];
@@ -244,13 +261,24 @@ async function extractRun(c: RunCtx): Promise<StepOutcome> {
       summary: `corrupt/decoy image — ${decoy.reason}`,
       findingCount: decoyDrafts.length,
       degraded: true,
+      remedy: 'reacquire-input',
       note: 'payload unextractable (hollow image), not a clean scan',
     };
   }
+  // Volumes that came out holding no rootfs are this image's answer. A carved filesystem nobody could open and a
+  // stream that died mid-decompression are not, and they reach this layer as the same absence — so the remedy is
+  // left undeclared there rather than guessed. See docs/BACKLOG.md on structuring that verdict.
+  const noRootfsRemedy = remedyForNoRootfs({
+    isDecoy: false,
+    diagnosed: !!ex.noRootfsDiagnosis,
+    volumes: ex.noRootfsDiagnosis?.volumes.length ?? 0,
+    unopenedBlobs: ex.noRootfsDiagnosis?.blobs.length ?? 0,
+  });
   return {
     summary: `no rootfs (${ex.extractor})`,
     findingCount: 0,
     degraded: true,
+    ...(noRootfsRemedy ? { remedy: noRootfsRemedy } : {}),
     note: last
       ? `carve stopped: ${last.detail}`
       : (ex.noRootfsDiagnosis?.verdict ?? 'no extractor installed / not a Linux container'),
@@ -272,7 +300,7 @@ async function credmatchRun(c: RunCtx): Promise<StepOutcome> {
   return {
     summary: `credential cross-reference: ${r.targets.length} hash target(s), ${tested} candidate(s) tested, ${recovered} recovered`,
     findingCount: r.findings.length,
-    ...(r.state === 'scanned' ? {} : { degraded: true, note: r.reason }),
+    ...(r.state === 'scanned' ? {} : { degraded: true, remedy: remedyForCredMatch(r.state), note: r.reason }),
   };
 }
 
@@ -283,7 +311,7 @@ async function yarascanRun(c: RunCtx): Promise<StepOutcome> {
   return {
     summary: `YARA corpus: ${r.corpus.rulesApplied} rule(s), ${scanned} file(s) scanned, ${r.matches.length} match group(s)`,
     findingCount: r.findings.length,
-    ...(r.state === 'scanned' ? {} : { degraded: true, note: r.reason }),
+    ...(r.state === 'scanned' ? {} : { degraded: true, remedy: remedyForYaraScan(r.state), note: r.reason }),
   };
 }
 
@@ -314,7 +342,8 @@ async function auxsecretsRun(c: RunCtx): Promise<StepOutcome> {
   return {
     summary: `sibling-partition secrets: ${r.findings.length} embedded private key(s) in ${r.filesScanned} key-ish file(s)`,
     findingCount: r.findings.length,
-    ...(r.available ? {} : { degraded: true, note: r.reason }),
+    // Unavailable here means one thing only: there is no extraction output to walk.
+    ...(r.available ? {} : { degraded: true, remedy: 'reacquire-input' as const, note: r.reason }),
   };
 }
 
@@ -323,7 +352,13 @@ async function sbomRun(c: RunCtx): Promise<StepOutcome> {
   const drafts = normalizeSbom(r);
   syncFindings(c.imageId, 'sbom', drafts);
   if (!r.available)
-    return { summary: 'SBOM unavailable', findingCount: 0, degraded: true, note: 'syft/grype not installed' };
+    return {
+      summary: 'SBOM unavailable',
+      findingCount: 0,
+      degraded: true,
+      remedy: 'install-tool',
+      note: 'syft/grype not installed',
+    };
   return {
     summary: `${r.packageCount} packages · ${r.vulnerabilities.length} CVEs (Crit ${r.counts.Critical}, High ${r.counts.High})`,
     findingCount: drafts.length,
@@ -337,7 +372,9 @@ async function compcveRun(c: RunCtx): Promise<StepOutcome> {
   return {
     summary: `bundled-component fingerprint: ${r.hits.length} component(s), ${cves} n-day CVE(s) a manifest SBOM misses`,
     findingCount: r.findings.length,
-    ...(r.hits.length === 0 ? { degraded: true, note: r.reason } : {}),
+    // The curated table was applied to the whole rootfs and matched nothing. Re-running asks the same table the
+    // same question; what would change this cell is a bigger table, which is not this image's coverage debt.
+    ...(r.hits.length === 0 ? { degraded: true, remedy: 'settled' as const, note: r.reason } : {}),
   };
 }
 
@@ -369,6 +406,8 @@ async function kernelRun(c: RunCtx): Promise<StepOutcome> {
       summary: 'kernel posture: no kernel located',
       findingCount: r.findings.length,
       degraded: true,
+      // The raw image, the rootfs and the carve output were all searched: what is missing is a kernel in the bytes.
+      remedy: 'reacquire-input',
       note: r.reason,
     };
   }
@@ -411,6 +450,8 @@ async function bootCmdlineRun(c: RunCtx): Promise<StepOutcome> {
       summary: 'cmdline cross-check: not made',
       findingCount: 0,
       degraded: true,
+      // Both halves are planned for this class, so a scan in which both run settles the question either way.
+      remedy: 'retry',
       note: `${missing} did not run in this scan, so the two lines could not be compared. That is the question going unasked — not agreement between them.`,
     };
   }
@@ -427,7 +468,8 @@ async function bootCmdlineRun(c: RunCtx): Promise<StepOutcome> {
     findingCount: r.findings.length,
     // `unresolved-variables` is the check REFUSING to answer, which is a stage that could not do its job. The
     // absence verdicts are the stage doing its job and reporting that a source carried nothing — a real result.
-    ...(r.verdict === 'unresolved-variables' ? { degraded: true } : {}),
+    // The env's variables do not resolve in these bytes; asking again resolves the same nothing.
+    ...(r.verdict === 'unresolved-variables' ? { degraded: true, remedy: 'settled' as const } : {}),
     note: r.reason,
   };
 }
@@ -498,7 +540,11 @@ async function updatepathRun(c: RunCtx): Promise<StepOutcome> {
     findingCount: r.findings.length,
     ...(c.rootfsPath
       ? {}
-      : { degraded: true, note: 'no rootfs — only the image container was read, so the updater half is unanswered' }),
+      : {
+          degraded: true,
+          remedy: 'reacquire-input' as const,
+          note: 'no rootfs — only the image container was read, so the updater half is unanswered',
+        }),
   };
 }
 
@@ -526,10 +572,20 @@ async function devicetreeRun(c: RunCtx): Promise<StepOutcome> {
     }));
   const models = r.blobs.map((b) => b.model ?? b.compatible[0] ?? b.origin).join(', ');
   if (!r.found) {
+    // The largest single block of degraded cells in the corpus, and mostly `settled`: a great many vendor builds
+    // describe their board in compiled-in C, so once every candidate place has been read that IS the answer, not a
+    // gap a re-run closes. Only a short search — capped, unfinished, or an FDT that parsed partway — leaves
+    // something to ask, and the first two are the only ones this layer can tell apart.
+    const remedy = remedyForDeviceTree({
+      extractionScan: r.extractionScan,
+      rejectedCount: r.rejected.length,
+      extractionAvailable: !!c.outputDir,
+    });
     return {
       summary: 'device tree: none readable in this image',
       findingCount: r.findings.length,
       degraded: true,
+      ...(remedy ? { remedy } : {}),
       note: r.reason,
     };
   }
@@ -576,6 +632,7 @@ async function fwhuntRun(c: RunCtx): Promise<StepOutcome> {
       summary: 'FwHunt implant scan: dedicated campaign currently active',
       findingCount: 0,
       degraded: true,
+      remedy: 'retry',
       note: 'The autonomous run did not race or overwrite the active dedicated FwHunt job; rerun after that campaign reaches a terminal state.',
     };
   }
@@ -587,7 +644,8 @@ async function fwhuntRun(c: RunCtx): Promise<StepOutcome> {
 async function espRun(c: RunCtx): Promise<StepOutcome> {
   const r = runEspAnalysis(c.imagePath);
   syncFindings(c.imageId, 'esp', r.findings);
-  if (!r.isEsp) return { summary: 'not an ESP dump', findingCount: 0, degraded: true, note: r.reason };
+  if (!r.isEsp)
+    return { summary: 'not an ESP dump', findingCount: 0, degraded: true, remedy: 'settled', note: r.reason };
   const keys = r.findings.filter((f) => f.kind === 'esp-nvs-key').length;
   return {
     summary: `ESP SoC: ${r.partitions.length} partitions, ${r.nvsEntries.length} NVS entries${keys ? `, ${keys} key(s) recovered` : ''}; Flash-Enc ${r.posture.flashEncryption}/Secure-Boot ${r.posture.secureBoot}`,
@@ -627,7 +685,15 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
     summary: `web attack-surface: ${r.handlers.length} handlers, ${tainted} tainted → ${r.findings.length} findings${probeNote}`,
     findingCount: r.findings.length,
     ...(leads.length ? { leads } : {}),
-    ...(r.handlers.length === 0 || partial ? { degraded: true, note: r.reason } : {}),
+    // Same shape as the device tree: a rootfs with no rpcd/luci/cgi handler at all has been answered, and only an
+    // incomplete or capped walk leaves surface unexamined.
+    ...(r.handlers.length === 0 || partial
+      ? {
+          degraded: true,
+          remedy: remedyForWebTaint({ partialWalk: partial, handlers: r.handlers.length }),
+          note: r.reason,
+        }
+      : {}),
   };
 }
 
@@ -688,7 +754,7 @@ async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
     summary: `binary-vuln sweep: ${r.binariesScanned} ELFs, ${r.candidates} stack-overflow candidate(s)${listedNote}${probeNote}${execNote}`,
     findingCount: r.findings.length,
     ...(leads.length ? { leads } : {}),
-    ...(r.binariesScanned === 0 ? { degraded: true, note: r.reason } : {}),
+    ...(r.binariesScanned === 0 ? { degraded: true, remedy: 'reacquire-input' as const, note: r.reason } : {}),
   };
 }
 
@@ -705,7 +771,14 @@ async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
 async function kmodRun(c: RunCtx): Promise<StepOutcome> {
   const r = await runKmod(c.rootfsPath);
   syncFindings(c.imageId, 'kmod', r.findings);
-  if (!r.available) return { summary: 'kernel modules: not read', findingCount: 0, degraded: true, note: r.reason };
+  if (!r.available)
+    return {
+      summary: 'kernel modules: not read',
+      findingCount: 0,
+      degraded: true,
+      remedy: 'reacquire-input',
+      note: r.reason,
+    };
   const surfaced = r.findings.filter((f) => f.kind === 'kernel-module-network-surface').length;
   const advisoryCandidates = r.findings.filter((f) => f.kind === 'kernel-module-cve-candidate').length;
   const leads = r.findings.filter((f) => f.kind === 'kernel-module-wire-length-alloc').length;
@@ -721,7 +794,15 @@ async function kmodRun(c: RunCtx): Promise<StepOutcome> {
   return {
     summary: `kernel-module surface: ${parts.join(', ')}`,
     findingCount: r.findings.length,
-    ...(degraded ? { degraded: true, note: r.reason } : {}),
+    // The call-site pass is radare2's, and without it the inventory still lands — that is a deployment gap. An
+    // unreadable symbol table is the module's own shape, which no re-run changes.
+    ...(degraded
+      ? {
+          degraded: true,
+          remedy: r.callSitePass.available ? ('settled' as const) : ('install-tool' as const),
+          note: r.reason,
+        }
+      : {}),
   };
 }
 
@@ -767,6 +848,9 @@ async function exportreachRun(c: RunCtx): Promise<StepOutcome> {
     ...(blocked.length
       ? {
           degraded: true,
+          // Every entry here is an export the per-object budget could not settle. More seconds ask more; no number
+          // of them turns "not reached" into "unreachable".
+          remedy: 'unbounded-search' as const,
           note: `${blocked.join(' | ')} Control-flow reachability is not a feasible or exploitable path.`,
         }
       : { note: 'Control-flow reachability is not a feasible or exploitable path.' }),
@@ -781,7 +865,13 @@ async function exportreachRun(c: RunCtx): Promise<StepOutcome> {
 async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   const binary = spec.target;
   if (!binary)
-    return { summary: 'no target binary', findingCount: 0, degraded: true, note: 'symreach spec missing target' };
+    return {
+      summary: 'no target binary',
+      findingCount: 0,
+      degraded: true,
+      remedy: 'defect',
+      note: 'symreach spec missing target',
+    };
   // The POLICY has to follow the question, and getting this wrong is not a subtle failure — it is a silent one.
   // `pickSinks` defaults to `unsafe-copy`, which keeps only the unbounded-copy names; handed `system/popen/execve`
   // it keeps NOTHING, and `runSymReach` then returns `unavailable('no sink to ask about')` — which composes a
@@ -810,12 +900,14 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
     // the same conflation the provider just stopped committing, one layer up — it reads as a deployment short of a
     // capability, which is exactly the sentence that hid the last instance.
     const specDefect = r.blockedBy === 'request';
+    const remedy = remedyForSymReach(r.blockedBy);
     return {
       summary: specDefect
         ? `reachability ${binary}: the spec could not be posed — nothing was asked`
         : `reachability ${binary}: unavailable`,
       findingCount: r.findings.length,
       degraded: true,
+      ...(remedy ? { remedy } : {}),
       note: specDefect ? `spec defect, not a capability limit: ${r.reason}` : r.reason,
     };
   }
@@ -841,7 +933,9 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
     summary,
     findingCount: r.findings.length,
     ...(leads.length ? { leads } : {}),
-    ...(reached.length === 0 ? { degraded: true, note: r.reason } : {}),
+    // A sink not reached inside the budget is inconclusive by construction: a bigger budget asks more of the same
+    // question and no budget makes the negative provable.
+    ...(reached.length === 0 ? { degraded: true, remedy: 'unbounded-search' as const, note: r.reason } : {}),
   };
 }
 
@@ -855,7 +949,13 @@ async function dynprobeRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   const binary = spec.target;
   const sink = spec.sink;
   if (!binary || !sink) {
-    return { summary: 'no target', findingCount: 0, degraded: true, note: 'dynprobe spec missing binary/sink' };
+    return {
+      summary: 'no target',
+      findingCount: 0,
+      degraded: true,
+      remedy: 'defect',
+      note: 'dynprobe spec missing binary/sink',
+    };
   }
   // Prefer the arch measured from the rootfs ELF headers over the whole-image guess: the guess is routinely
   // `unknown` (DVRF's is) while the measurement is the actual class of the binary about to be emulated.
@@ -866,17 +966,22 @@ async function dynprobeRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
       summary: `reproduce ${binary}:${sink}`,
       findingCount: 0,
       degraded: true,
+      remedy: 'reacquire-input',
       note: 'no architecture known for this rootfs — cannot choose a user-mode emulator',
     };
   }
   const r = await runDynProbe(c.rootfsPath, binary, sink, spec.addresses ?? [], arch, c.handle);
   syncFindings(c.imageId, `dynprobe:${binary}#${sink}`, r.findings);
   const settled = r.probe?.verdict === 'crash_input_controlled' || r.probe?.verdict === 'crash';
+  // The three unsettled verdicts need three different responses and used to read alike: a gdb that never attached
+  // is a harness failure worth retrying, a sandbox short of `/dev/nvram` is the emulated environment rather than
+  // the firmware, and a clean run is the probe's reach, not a coverage gap.
+  const probeRemedy = remedyForProbeVerdict(r.probe?.verdict);
   return {
     summary: `reproduce ${binary}:${sink} → ${r.probe?.verdict ?? 'unavailable'}`,
     findingCount: r.findings.length,
     // Anything short of an observed fault leaves the candidate exactly where it was, and says so.
-    ...(settled ? {} : { degraded: true, note: r.reason }),
+    ...(settled ? {} : { degraded: true, ...(probeRemedy ? { remedy: probeRemedy } : {}), note: r.reason }),
   };
 }
 
@@ -884,13 +989,20 @@ async function dynprobeRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
 async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   const binary = spec.target;
   if (!binary)
-    return { summary: 'no target binary', findingCount: 0, degraded: true, note: 'decompile spec missing target' };
+    return {
+      summary: 'no target binary',
+      findingCount: 0,
+      degraded: true,
+      remedy: 'defect',
+      note: 'decompile spec missing target',
+    };
   const r = await runDecompile(c.rootfsPath as string, binary, c.handle);
   if (!r.available) {
     return {
       summary: `decompile ${binary}: unavailable`,
       findingCount: 0,
       degraded: true,
+      remedy: 'install-tool',
       note: r.reason ?? 'unavailable',
     };
   }
@@ -909,6 +1021,7 @@ async function decompileRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
     ...(scaffold.surfaceState === 'unknown'
       ? {
           degraded: true,
+          remedy: 'raise-bound' as const,
           note: `Taint absence is not established: ${scaffold.coverage.imports.listed}/${scaffold.coverage.imports.total ?? '?'} imports and ${scaffold.coverage.strings.listed}/${scaffold.coverage.strings.total ?? '?'} strings were available.`,
         }
       : {}),
@@ -1059,6 +1172,9 @@ export async function runOpacidad(
         summary: out.summary,
         findingCount: out.findingCount,
         ...(out.note ? { note: out.note } : {}),
+        // Only a degraded step carries one, so a stage that ran cannot leave a stale remedy behind for a campaign
+        // to schedule work against.
+        ...(out.degraded && out.remedy ? { remedy: out.remedy } : {}),
         ...meta,
       });
       handle.log(`✓ ${spec.worker}: ${out.summary}`);
@@ -1069,7 +1185,15 @@ export async function runOpacidad(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      steps.push({ worker: spec.worker, status: 'degraded', summary: spec.reason, note: `error: ${msg}`, ...meta });
+      steps.push({
+        worker: spec.worker,
+        status: 'degraded',
+        summary: spec.reason,
+        // The executor threw. Nothing about the image is established by that, and the same run may well complete.
+        remedy: 'retry',
+        note: `error: ${msg}`,
+        ...meta,
+      });
       handle.log(`⚠ ${spec.worker}: ${msg}`);
     }
   }
@@ -1084,6 +1208,7 @@ export async function runOpacidad(
       worker: 'W9 · Re-plan (cap reached)',
       status: 'degraded',
       summary: `${sched.capped} further lead(s) not scheduled — dynamic step cap ${MAX_DYNAMIC_STEPS} reached${byKind ? ` (${byKind})` : ''}`,
+      remedy: 'raise-bound',
       note: 'honest bound: raise the cap, or run the named rung by hand on the leads it did not reach',
     });
   }

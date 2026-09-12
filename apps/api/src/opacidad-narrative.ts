@@ -9,6 +9,7 @@
  * invent. Everything here is pure (context in, strings out) and fully unit-testable.
  */
 import { type Finding, SEVERITY_RANK, type SeverityCount, findingRank, severityCensus } from '@firmlab/core';
+import type { DegradedRemedy } from './opacidad-remedy.js';
 
 export type OpacidadStepStatus = 'ran' | 'degraded' | 'skipped' | 'not-built';
 
@@ -19,6 +20,12 @@ export interface OpacidadStep {
   summary: string;
   note?: string;
   findingCount?: number;
+  /**
+   * What would change a `degraded` outcome (`opacidad-remedy.ts`). Optional forever — every run persisted before
+   * this field declares none — and absent means UNKNOWN, never `settled`: a campaign must not read silence from an
+   * older build as an answered question.
+   */
+  remedy?: DegradedRemedy;
   /** `replan` = this worker was scheduled dynamically by W9 in response to a lead (not a seed of the class DAG). */
   origin?: 'replan';
   /** The lead that scheduled a re-planned worker. */

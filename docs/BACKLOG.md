@@ -76,6 +76,19 @@
 ### Cobertura y análisis
 
 - [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 0 celdas `not-run`, 85 `degraded` y 33 `no-input` entre 390 etapas aplicables; priorizar las degradadas desbloqueables por clase y coste, y no contar como deuda ejecutable los tres artefactos que requieren reacquisición.
+- [ ] Estructurar el veredicto de `extract-diagnose` para el caso sin rootfs. Hoy distingue en PROSA las tres
+  situaciones (volúmenes sin rootfs, sistema de ficheros tallado que no abre, nada salió), y `remedyForNoRootfs`
+  sólo puede declarar remedio para la primera: una brecha de extractor y un volumen truncado llegan idénticos, y
+  necesitan respuestas opuestas. `SquashfsDiagnosis` ya trae `short` e `idTableInZeroFill` estructurados; falta
+  subirlos a `NoRootfsDiagnosis.blobs` (opcionales para siempre) para que la campaña deje de reportarlo como
+  indeclarado.
+- [ ] Reportar el `READ_CAP` de 512 MB del barrido en crudo de `devicetree.ts`. Una imagen mayor que el tope se lee
+  parcialmente y el resultado no lo dice, así que `remedyForDeviceTree` no puede distinguir esa búsqueda corta de
+  una exhaustiva y la declararía `settled`. Ninguna muestra del corpus actual llega al tope — el defecto está
+  latente, no medido.
+- [ ] Mostrar el `remedy` de cada etapa degradada en la web. Hoy sólo lo lee `scripts/corpus-campaign.mjs`; el
+  panel de cobertura sigue diciendo «degradada» sin decir si eso se arregla con una corrida, con una herramienta o
+  con otra muestra. Requiere entradas de i18n en los dos idiomas para las siete disposiciones.
 - [ ] Profundizar la correlación de kernel: el prefijo NVD puede tener miles de CVE (2.037 para Linux 2.6.31); usar config/subsistema, diff de parches o VEX de proveedor para descartar candidatos y paginar más allá de las primeras 50 sin presentarlas como el conjunto.
 - [ ] Hacer que la reparación del invitado alcance una ruta ejecutada y recuperar red/console interactiva en full-system; la intervención al final de `rcS` sigue siendo inerte.
 - [ ] Ampliar RTOS a fuzzing de periféricos/MMIO y enumeración de tareas; Renode demuestra vida, no cobertura del HAL.
