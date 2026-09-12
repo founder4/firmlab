@@ -123,6 +123,9 @@ describe('moduleProvenanceFindings', () => {
       provenance: p,
     });
     const oot = f.find((d) => d.kind === 'kernel-out-of-tree-modules');
+    // moduleInventoryComplete is left unset above (as readModules leaves it whenever the lib/modules walk hit its
+    // own cap), so the 375 itself is not a confirmed total either — the title must hedge it with "at least", not
+    // present it as a shipped count. See the fix in kernelposture.ts that changed this wording deliberately.
     expect(oot?.title).toContain('at least 375 observed');
     expect(oot?.rationale).toMatch(/this count is a floor/i);
   });

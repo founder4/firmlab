@@ -30,8 +30,12 @@ describe('execFileProcessGroup', () => {
     ].join('\n');
 
     try {
+      // 150ms was tight enough that node's own startup cost, under the CPU contention of the full parallel
+      // suite, could eat the whole budget before the grandchild ever wrote its pid file — a false failure in
+      // the test's timing margin, not in execFileProcessGroup. 500ms keeps the test fast while giving spawn
+      // enough headroom under load.
       await expect(
-        execFileProcessGroup(process.execPath, ['-e', script], { timeout: 150, maxBuffer: 1024 * 1024 }),
+        execFileProcessGroup(process.execPath, ['-e', script], { timeout: 500, maxBuffer: 1024 * 1024 }),
       ).rejects.toMatchObject({ killed: true, signal: 'SIGKILL' });
       const grandchildPid = Number(readFileSync(pidFile, 'utf8'));
       expect(await processDisappeared(grandchildPid)).toBe(true);
