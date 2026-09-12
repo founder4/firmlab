@@ -71,6 +71,7 @@ import {
   remedyForCredMatch,
   remedyForDeviceTree,
   remedyForFwHunt,
+  remedyForKmod,
   remedyForNoRootfs,
   remedyForProbeVerdict,
   remedyForWebTaint,
@@ -793,18 +794,18 @@ async function kmodRun(c: RunCtx): Promise<StepOutcome> {
   // The call-site pass being unavailable is a DEGRADED run, not a clean one: the inventory still lands, and
   // reporting that as a complete sweep is the shape this codebase keeps paying for.
   const degraded = !r.callSitePass.available || r.symbolTableUnreadable > 0;
+  // `callSitePass.available` is radare2's flag on a rootfs that HAS modules, and "never reached" on one that does
+  // not — so the remedy cannot be read off it alone. Measured on IMOU-Ranger-2C, whose rootfs carries no .ko at
+  // all: the cell reported a missing disassembler, which is a deployment gap a reader would go and act on.
+  const remedy = remedyForKmod({
+    modulesFound: r.modulesFound,
+    callSitePassAvailable: r.callSitePass.available,
+    symbolTableUnreadable: r.symbolTableUnreadable,
+  });
   return {
     summary: `kernel-module surface: ${parts.join(', ')}`,
     findingCount: r.findings.length,
-    // The call-site pass is radare2's, and without it the inventory still lands — that is a deployment gap. An
-    // unreadable symbol table is the module's own shape, which no re-run changes.
-    ...(degraded
-      ? {
-          degraded: true,
-          remedy: r.callSitePass.available ? ('settled' as const) : ('install-tool' as const),
-          note: r.reason,
-        }
-      : {}),
+    ...(degraded ? { degraded: true, ...(remedy ? { remedy } : {}), note: r.reason } : {}),
   };
 }
 

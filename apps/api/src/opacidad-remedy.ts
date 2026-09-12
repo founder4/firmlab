@@ -213,6 +213,26 @@ export function remedyForFwHunt(input: {
 }
 
 /**
+ * Kernel-module surface. Found by running the campaign against the deployed corpus, not by a test: the step
+ * degrades on `!callSitePass.available`, which is radare2's availability — EXCEPT on a rootfs with no `.ko` file
+ * at all, where the pass was never reached and the same flag is false. Every module-less image was therefore
+ * reporting a missing disassembler, which is a deployment gap a reader would go and act on.
+ *
+ * A module-less rootfs declares nothing, deliberately: the provider's own reason says a monolithic kernel and a
+ * carve that missed `lib/modules` produce this result identically, and they need opposite responses.
+ */
+export function remedyForKmod(input: {
+  modulesFound: number;
+  callSitePassAvailable: boolean;
+  symbolTableUnreadable: number;
+}): DegradedRemedy | undefined {
+  if (input.modulesFound === 0) return undefined;
+  if (!input.callSitePassAvailable) return 'install-tool';
+  // Modules were read and disassembled; some carry a symbol table that cannot be parsed. That is their shape.
+  return input.symbolTableUnreadable > 0 ? 'settled' : undefined;
+}
+
+/**
  * Extraction that recovered no rootfs. Volumes that came out and hold no `bin`/`etc`/`lib` are a data dump and are
  * answered; everything else — a carved filesystem nobody could open, a stream that died mid-decompression, nothing
  * at all — reaches this layer as the same absence, and `extract-diagnose` separates them only in prose. Undeclared

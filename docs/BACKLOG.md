@@ -76,6 +76,11 @@
 ### Cobertura y análisis
 
 - [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 0 celdas `not-run`, 85 `degraded` y 33 `no-input` entre 390 etapas aplicables; priorizar las degradadas desbloqueables por clase y coste, y no contar como deuda ejecutable los tres artefactos que requieren reacquisición.
+- [ ] Distinguir un kernel monolítico de un tallado que se dejó `lib/modules`. `kmod.ts` lo dice en su propia
+  razón — «A monolithic kernel with everything compiled in produces exactly this result, and so does a carve that
+  missed lib/modules» — y por eso `remedyForKmod` no declara remedio para un rootfs sin `.ko`. Se puede decidir:
+  un kernel monolítico no trae `CONFIG_MODULES=y` en su `.config` embebido ni tabla `kallsyms` con símbolos de
+  módulo, y un tallado incompleto deja rastro en `carveTrace`. Hoy la celda queda explícitamente indeclarada.
 - [ ] Estructurar el veredicto de `extract-diagnose` para el caso sin rootfs. Hoy distingue en PROSA las tres
   situaciones (volúmenes sin rootfs, sistema de ficheros tallado que no abre, nada salió), y `remedyForNoRootfs`
   sólo puede declarar remedio para la primera: una brecha de extractor y un volumen truncado llegan idénticos, y

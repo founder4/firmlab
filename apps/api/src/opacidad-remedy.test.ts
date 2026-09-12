@@ -7,6 +7,7 @@ import {
   remedyForCredMatch,
   remedyForDeviceTree,
   remedyForFwHunt,
+  remedyForKmod,
   remedyForNoRootfs,
   remedyForProbeVerdict,
   remedyForWebTaint,
@@ -186,6 +187,24 @@ describe('FwHunt', () => {
 
   it('reports an absent tool as the deployment gap it is', () => {
     expect(remedyForFwHunt({ ...base, available: false })).toBe('install-tool');
+  });
+});
+
+describe('kernel-module surface', () => {
+  it('does not read a module-less rootfs as a missing disassembler', () => {
+    // Measured on the deployed corpus: `callSitePass.available` is false both when radare2 is absent and when the
+    // pass was never reached, and every module-less image was reporting a deployment gap.
+    expect(remedyForKmod({ modulesFound: 0, callSitePassAvailable: false, symbolTableUnreadable: 0 })).toBeUndefined();
+  });
+
+  it('names the missing disassembler when there were modules to disassemble', () => {
+    expect(remedyForKmod({ modulesFound: 12, callSitePassAvailable: false, symbolTableUnreadable: 0 })).toBe(
+      'install-tool',
+    );
+  });
+
+  it('settles an unreadable symbol table — that is the module, not the deployment', () => {
+    expect(remedyForKmod({ modulesFound: 12, callSitePassAvailable: true, symbolTableUnreadable: 3 })).toBe('settled');
   });
 });
 
