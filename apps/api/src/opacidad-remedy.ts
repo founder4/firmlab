@@ -136,16 +136,20 @@ export function remedyForBlockedProbes(blocked: readonly (SymReachBlockedBy | un
 
 /**
  * Dynamic reproduction. Only `not_attached` is a harness failure; the rest observed the program and did not see it
- * misbehave, which is a result about the probe's reach, not a gap in coverage. `emulation_artifact` is the sandbox
- * coming up short (a missing `/dev/nvram`, say) — the emulated environment, not the firmware, so more of the same
- * run changes nothing.
+ * misbehave, which is a result about the probe's reach, not a gap in coverage.
+ *
+ * `emulation_artifact` is FirmLab's rung, not the firmware: the provider's own reason says so — "a limit of
+ * qemu-user (no NVRAM, no device nodes, no peripherals), not a result about the code". It was briefly mapped to
+ * `reacquire-input`, which reads as "get a different firmware" and is plainly the wrong instruction; DVRF carried
+ * two such cells and neither has anything to do with the bytes. The fix is FirmLab's: provide what the program
+ * asks for, or route the probe to the full-system rung.
  */
 export function remedyForProbeVerdict(verdict: ProbeVerdict | undefined): DegradedRemedy | undefined {
   switch (verdict) {
     case 'not_attached':
       return 'retry';
     case 'emulation_artifact':
-      return 'reacquire-input';
+      return 'defect';
     case 'sink_executed':
     case 'ran_clean':
       return 'unbounded-search';

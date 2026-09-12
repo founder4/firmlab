@@ -87,7 +87,9 @@ describe('dynamic reproduction', () => {
   it('retries only the verdict that observed nothing', () => {
     const cases: [ProbeVerdict, string | undefined][] = [
       ['not_attached', 'retry'],
-      ['emulation_artifact', 'reacquire-input'],
+      // The sandbox came up short, which is qemu-user's limit and FirmLab's rung — never an instruction to go and
+      // find different firmware.
+      ['emulation_artifact', 'defect'],
       ['sink_executed', 'unbounded-search'],
       ['ran_clean', 'unbounded-search'],
       ['crash', undefined],

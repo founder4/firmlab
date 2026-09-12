@@ -76,6 +76,10 @@
 ### Cobertura y análisis
 
 - [ ] Convertir la matriz del corpus en una campaña programada: hoy quedan 0 celdas `not-run`, 85 `degraded` y 33 `no-input` entre 390 etapas aplicables; priorizar las degradadas desbloqueables por clase y coste, y no contar como deuda ejecutable los tres artefactos que requieren reacquisición.
+- [ ] Encaminar una sonda que termina en `emulation_artifact` al peldaño full-system. Hoy la celda declara
+  `defect` porque el arreglo es de FirmLab —qemu-user no da NVRAM, nodos de dispositivo ni periféricos— pero el
+  peldaño que sí puede responder ya existe y arranca firmware real desde 2026-07-28. Medido: DVRF trae dos de
+  estas celdas (`diag_tracertbutton:system` y `:sprintf`), ambas paradas por `/dev/nvram`.
 - [ ] Distinguir un kernel monolítico de un tallado que se dejó `lib/modules`. `kmod.ts` lo dice en su propia
   razón — «A monolithic kernel with everything compiled in produces exactly this result, and so does a carve that
   missed lib/modules» — y por eso `remedyForKmod` no declara remedio para un rootfs sin `.ko`. Se puede decidir:
