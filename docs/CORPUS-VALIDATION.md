@@ -44,7 +44,7 @@ Las siete disposiciones y lo que significan para una campaña:
 | Remedio | Disposición | ¿Lo resuelve una corrida? |
 |---|---|---|
 | `retry` | la corrida se rompió (fallo del arnés, campaña dedicada en curso, ejecutor que lanzó) | sí |
-| `raise-bound` | un tope truncó una búsqueda que SÍ puede terminar | sí |
+| `raise-bound` | un tope truncó una búsqueda que SÍ puede terminar | no tal cual: hay que subir el tope (o, en FwHunt, correr su campaña dedicada) |
 | `install-tool` | falta la herramienta, el venv o el corpus de reglas en este despliegue | sí, tras cambiar el despliegue |
 | `reacquire-input` | la entrada no está en estos bytes | no: hace falta otro artefacto |
 | `settled` | miró donde podía y ésa es la respuesta para esta imagen | no, y no es un defecto |
@@ -65,6 +65,11 @@ Tres reglas que el planificador sostiene, y conviene leerlas antes que cualquier
    resuelve a la vez todas las celdas ejecutables de esa muestra. El orden es clase → celdas ejecutables → coste
    MEDIDO (la duración real del último escaneo de esa imagen; una imagen sin coste medido va al final de su
    grupo, nunca con una media inventada).
+
+Sólo `retry`, las etapas nunca ejecutadas y las celdas sin remedio declarado entran en la cola. `raise-bound` NO:
+medido en la primera campaña real, el tope de pasos dinámicos de W9 devuelve la misma celda en cada corrida, así
+que encolarla dejaría la imagen en la cola para siempre y el bucle se leería como progreso. Va en su propia
+sección, con la etapa que nombra el tope.
 
 Una imagen que falla no aborta la cola: se registra, se informa al final y el código de salida es 2.
 

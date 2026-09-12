@@ -38,7 +38,7 @@ test('a stage that has never executed is the cheapest thing a campaign can do', 
 test('the remedy, not the note, decides what a degraded cell is', () => {
   const cases = [
     ['retry', 'scan'],
-    ['raise-bound', 'scan'],
+    ['raise-bound', 'raise'],
     ['install-tool', 'deploy'],
     ['reacquire-input', 'reacquire'],
     ['settled', 'settled'],
@@ -127,6 +127,19 @@ test('the extraction cell is found by its provider tag, not by its display name'
     ]),
   );
   assert.equal(spanish.cells[1].unlockedBy, null);
+});
+
+test('a cap is never queued as a re-run: the same scan returns the same cell', () => {
+  // Measured on the first live campaign: the W9 dynamic-step cap comes back identical from a plain re-run, so an
+  // image queued for it would sit in the queue for ever and the loop would read as progress.
+  const plan = planCampaign(
+    matrix([
+      sample('capped', 'embedded-linux', [stage('W9 · Re-plan (cap reached)', 'degraded', { remedy: 'raise-bound' })]),
+    ]),
+  );
+  assert.equal(plan.queue.length, 0);
+  assert.equal(plan.raise.length, 1);
+  assert.match(renderPlan(plan, 'x'), /Requiere subir un tope/);
 });
 
 test('a settled corpus queues nothing at all', () => {

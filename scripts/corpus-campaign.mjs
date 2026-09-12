@@ -39,7 +39,11 @@ import { apiHeaders, fetchMatrix } from './corpus-matrix.mjs';
  */
 export const REMEDY_META = {
   retry: { disposition: 'scan', label: 'the run broke; the same question may settle it' },
-  'raise-bound': { disposition: 'scan', label: 'a cap truncated a search that can finish' },
+  // NOT the scan queue, and the first live campaign is what showed why: every `raise-bound` cell in the corpus —
+  // the W9 dynamic-step cap, a capped device-tree walk, FwHunt modules left unattempted — comes back identical
+  // from a re-run with the same bound. Queueing it would put an image in the queue for ever and report the loop
+  // as progress. It needs the bound raised (or, for FwHunt, its dedicated resumable campaign) first.
+  'raise-bound': { disposition: 'raise', label: 'a cap truncated a search that can finish; raise it, then re-run' },
   'install-tool': { disposition: 'deploy', label: 'this deployment lacks the tool or rule corpus' },
   'reacquire-input': { disposition: 'reacquire', label: 'the input is not in these bytes' },
   settled: { disposition: 'settled', label: 'looked everywhere it can; this is the answer for this image' },
@@ -47,7 +51,10 @@ export const REMEDY_META = {
   defect: { disposition: 'defect', label: "FirmLab's own defect, not the image's" },
 };
 
-/** Dispositions a scan can retire. Everything else is reported and never queued. */
+/**
+ * Dispositions a plain re-run can retire, and only those. Everything else is reported and never queued: a queue
+ * whose entries survive their own execution is a loop with a progress bar.
+ */
 export const SCHEDULABLE = new Set(['scan', 'declare']);
 
 const COVERED = new Set(['found', 'ran-empty']);
@@ -174,6 +181,7 @@ export function planCampaign(matrix, costs = new Map()) {
   const deployment = [];
   const reacquire = [];
   const notExecutable = { settled: [], 'open-ended': [], defect: [], undeclared: [], unknown: [], build: [] };
+  const raise = [];
   let blockedUpstreamUnlockable = 0;
   let blockedUpstreamDead = 0;
 
@@ -192,6 +200,10 @@ export function planCampaign(matrix, costs = new Map()) {
         costMs: costs.get(sample.id)?.lastScanMs ?? null,
         workers: schedulable.map((cell) => ({ worker: cell.worker, disposition: cell.disposition, rule: cell.rule })),
       });
+    }
+    const toRaise = cells.filter((cell) => cell.disposition === 'raise');
+    if (toRaise.length > 0) {
+      raise.push({ ...identity, workers: toRaise.map((cell) => cell.worker) });
     }
     const toDeploy = cells.filter((cell) => cell.disposition === 'deploy');
     if (toDeploy.length > 0) {
@@ -229,6 +241,7 @@ export function planCampaign(matrix, costs = new Map()) {
     classes: rankQueue(queue),
     queue: queue.sort((a, b) => b.cells - a.cells || a.id.localeCompare(b.id)),
     deployment,
+    raise,
     reacquire,
     blockedUpstream: { unlockable: blockedUpstreamUnlockable, dead: blockedUpstreamDead },
     notExecutable,
@@ -268,6 +281,7 @@ export function renderPlan(plan, generatedAt = new Date().toISOString()) {
     covered: 'la etapa se ejecutó',
     scan: 'una corrida puede cambiarla — EJECUTABLE',
     declare: 'registrada por una build sin remedio declarado; re-ejecutar la mide — EJECUTABLE',
+    raise: 'un tope la truncó: hay que subirlo (o correr su campaña dedicada) antes de re-ejecutar',
     deploy: 'falta la herramienta o el corpus de reglas en este despliegue',
     'blocked-upstream': 'omitida por falta de rootfs; hereda el estado de su extracción',
     settled: 'miró donde podía y ésa es la respuesta para esta imagen',
@@ -318,6 +332,18 @@ export function renderPlan(plan, generatedAt = new Date().toISOString()) {
     '',
   );
 
+  if (plan.raise.length > 0) {
+    lines.push('### Requiere subir un tope antes de re-ejecutar', '');
+    lines.push(
+      'Re-ejecutar tal cual devuelve la misma celda: el tope no depende de la corrida. Para FwHunt, la campaña',
+      'dedicada (`pnpm fwhunt:campaign --image ID`) sí la retira.',
+      '',
+    );
+    for (const entry of plan.raise) {
+      lines.push(`- \`${entry.id}\` ${entry.filename} — ${entry.workers.join(', ')}`);
+    }
+    lines.push('');
+  }
   if (plan.deployment.length > 0) {
     lines.push('### Requiere cambiar el despliegue antes de re-ejecutar', '');
     for (const entry of plan.deployment) {
