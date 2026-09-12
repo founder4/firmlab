@@ -4,7 +4,10 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCK="$ROOT/ops/yara/corpus.lock.json"
 TAG="${1:-latest}"
-REPORT="${2:-$ROOT/yara-candidate-report.md}"
+# Written outside the repo by default: the report is a dated evaluation of ONE candidate, not a source file, and
+# the previous default dropped it in the repo root where it sat untracked until someone noticed. A report worth
+# keeping is archived deliberately under docs/ (see docs/YARA-CANDIDATE-20260830.md).
+REPORT="${2:-${TMPDIR:-/tmp}/yara-candidate-report.md}"
 CONTAINER="${FIRMLAB_CONTAINER:-firmlab}"
 API_BASE="${FIRMLAB_API_BASE:-http://127.0.0.1:8899/api}"
 

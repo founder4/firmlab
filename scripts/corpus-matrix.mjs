@@ -1,5 +1,6 @@
 /**
- * Live corpus validation matrix.
+ * Live coverage matrix over the VALIDATION corpus — the locked sample set, not the persistent cross-image corpus
+ * (`apps/api/src/corpus.ts`) and not the YARA rule corpus. See "The three corpora" in docs/ARCHITECTURE.md.
  *
  * The workbench already knows which stages apply to every firmware class and what the latest autonomous run did
  * with each one. This script reads that contract instead of maintaining a second provider map in a spreadsheet.

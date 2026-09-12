@@ -64,6 +64,13 @@ export interface SinkReach {
 export interface ExportReachResult {
   available: boolean;
   reason: string;
+  /**
+   * Present only when `available` is false, and it says WHOSE limit this is — the same discriminant `symreach`
+   * grew after an unavailable-shaped row hid a caller's own defect for months. `platform`: angr is not installed
+   * here. `harness`: the probe ran and failed or threw. `request`: the object named is not in the rootfs, which is
+   * this orchestrator's mistake and not a capability gap. Optional forever: results stored before it carry none.
+   */
+  blockedBy?: 'platform' | 'harness' | 'request';
   binary?: string;
   arch?: string;
   /** Functions in the recovered call graph. ZERO is the analysable/not-analysable boundary — see the module doc. */
@@ -231,12 +238,19 @@ export async function runExportReach(
     return {
       available: false,
       reason: `${probe.reason ?? 'angr unavailable'} No reachability question was asked, which is not an answer about this object.`,
+      blockedBy: 'platform',
       sinks: [],
       findings: [],
     };
   }
   if (!fs.existsSync(absPath)) {
-    return { available: false, reason: `No such file in the rootfs: ${relPath}`, sinks: [], findings: [] };
+    return {
+      available: false,
+      reason: `No such file in the rootfs: ${relPath}`,
+      blockedBy: 'request',
+      sinks: [],
+      findings: [],
+    };
   }
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-cfgreach-'));
@@ -257,6 +271,7 @@ export async function runExportReach(
       return {
         available: false,
         reason: `The probe could not analyse ${relPath}: ${String(raw.error ?? 'unknown error')}`,
+        blockedBy: 'harness',
         sinks: [],
         findings: [],
       };
@@ -281,6 +296,7 @@ export async function runExportReach(
     return {
       available: false,
       reason: `The probe failed on ${relPath}: ${(e as Error).message}. Nothing was concluded about this object.`,
+      blockedBy: 'harness',
       sinks: [],
       findings: [],
     };

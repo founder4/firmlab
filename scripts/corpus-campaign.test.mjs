@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   classifyCell,
   classifySample,
+  executeCampaign,
   executionOrder,
   parseArgs,
   planCampaign,
@@ -202,6 +203,45 @@ test('the rendered plan names every bucket with its count and its rule', () => {
   assert.match(markdown, /Requiere volver a obtener el artefacto/);
   assert.match(markdown, /1 celda\(s\) que ninguna corrida recupera/);
   assert.match(markdown, /open-end/);
+});
+
+test('one failing scan does not abort the queue behind it', async () => {
+  // The branch nobody runs: a campaign whose second image throws must still measure the third, and must not
+  // report a clean pass. Driven through a stub server so the failure is a real HTTP one, not a mocked promise.
+  const { createServer } = await import('node:http');
+  const server = createServer((req, res) => {
+    if (req.method === 'POST' && req.url.includes('/bad/')) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'boom' }));
+      return;
+    }
+    if (req.method === 'POST') {
+      res.writeHead(202, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ jobId: 'j1' }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ job: { status: 'done' } }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const plan = planCampaign(
+      matrix([
+        sample('good', 'rtos', [stage('W', 'not-run'), stage('X', 'not-run')]),
+        sample('bad', 'rtos', [stage('W', 'not-run')]),
+      ]),
+    );
+    const outcome = await executeCampaign(plan, { base, limit: 0, pollMs: 1, jobTimeoutMs: 5_000 }, {});
+    assert.deepEqual(
+      outcome.ran.map((entry) => entry.id),
+      ['good'],
+    );
+    assert.equal(outcome.failed.length, 1);
+    assert.match(outcome.failed[0].error, /boom/);
+  } finally {
+    server.close();
+  }
 });
 
 test('a matrix of another schema is refused rather than half-read', () => {

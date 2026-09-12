@@ -27,6 +27,47 @@ pnpm corpus:matrix \
 muestras añadidas expresamente para regresión. Los blobs no se versionan en Git: viven en el corpus persistente del
 despliegue y el manifiesto permite volver a obtener y verificar exactamente los artefactos públicos.
 
+## Campaña de cobertura: qué merece ejecutarse
+
+La matriz mide; no prioriza. El planificador lee la matriz viva y reparte cada celda sin cubrir según lo que la
+propia etapa DECLARA que la cambiaría (`remedy`, de `apps/api/src/opacidad-remedy.ts`), nunca leyendo su nota en
+prosa:
+
+```bash
+pnpm corpus:campaign                      # imprime el plan (Markdown; --format json para automatizar)
+pnpm corpus:campaign --execute --limit 5  # ejecuta la cola, un escaneo autónomo cada vez, en el orden impreso
+pnpm corpus:campaign --matrix m.json      # planifica sobre una matriz guardada (no permite --execute)
+```
+
+Las siete disposiciones y lo que significan para una campaña:
+
+| Remedio | Disposición | ¿Lo resuelve una corrida? |
+|---|---|---|
+| `retry` | la corrida se rompió (fallo del arnés, campaña dedicada en curso, ejecutor que lanzó) | sí |
+| `raise-bound` | un tope truncó una búsqueda que SÍ puede terminar | sí |
+| `install-tool` | falta la herramienta, el venv o el corpus de reglas en este despliegue | sí, tras cambiar el despliegue |
+| `reacquire-input` | la entrada no está en estos bytes | no: hace falta otro artefacto |
+| `settled` | miró donde podía y ésa es la respuesta para esta imagen | no, y no es un defecto |
+| `unbounded-search` | inconcluyente por construcción (exploración simbólica, timeout por módulo) | no: «terminado» no es un estado que tenga |
+| `defect` | la degradación es de FirmLab, no de la imagen | no: es código |
+
+Tres reglas que el planificador sostiene, y conviene leerlas antes que cualquier número que imprima:
+
+1. **Un remedio sin declarar es DESCONOCIDO, nunca `settled`.** Todo resultado persistido antes del campo no
+   declara nada; esa celda se programa una vez, porque medirla es ejecutarla. Si tras una corrida que sí declara
+   sigue sin declararlo, es un sitio que no puede decirlo — una cuestión de código, no deuda de campaña. Que la
+   corrida declare o no se LEE de `remedySchema` en el resultado guardado; inferirlo de las celdas es incorrecto,
+   porque la celda de FwHunt se recompone desde su campaña durable y haría parecer declarante a una corrida vieja.
+2. **Una celda `no-input` se atribuye, no se cuenta.** Todas cuelgan de la extracción, y que sean ejecutables o no
+   es un hecho sobre la celda de extracción de esa misma imagen. La etapa se localiza por su `provider`, no por el
+   nombre visible, que cambia con el idioma de la interfaz.
+3. **La unidad de trabajo es una imagen.** El escaneo autónomo recorre la cadena completa, así que una corrida
+   resuelve a la vez todas las celdas ejecutables de esa muestra. El orden es clase → celdas ejecutables → coste
+   MEDIDO (la duración real del último escaneo de esa imagen; una imagen sin coste medido va al final de su
+   grupo, nunca con una media inventada).
+
+Una imagen que falla no aborta la cola: se registra, se informa al final y el código de salida es 2.
+
 ## Comparación entre campañas
 
 Guarda la matriz JSON antes de ejecutar una campaña y compara los resultados posteriores con ese archivo:

@@ -66,12 +66,13 @@ import {
 import {
   type DegradedRemedy,
   REMEDY_SCHEMA,
+  remedyForBlockedProbe,
+  remedyForBlockedProbes,
   remedyForCredMatch,
   remedyForDeviceTree,
   remedyForFwHunt,
   remedyForNoRootfs,
   remedyForProbeVerdict,
-  remedyForSymReach,
   remedyForWebTaint,
   remedyForYaraScan,
 } from './opacidad-remedy.js';
@@ -828,11 +829,17 @@ async function exportreachRun(c: RunCtx): Promise<StepOutcome> {
   let findingCount = 0;
   let reachable = 0;
   const blocked: string[] = [];
+  // The CAUSE of each block, kept beside its sentence. One step covers several objects and they can be blocked for
+  // different reasons at once — a deployment without angr, a probe that threw, a spec naming an object that is not
+  // there — and a single note reads as one cause.
+  const blockedBy: ('platform' | 'harness' | 'request')[] = [];
 
   for (const binary of targets) {
     const abs = resolveInsideRootfs(c.rootfsPath as string, binary);
     if (!abs || !isElfFile(abs)) {
       blocked.push(`${binary}: no longer a readable ELF inside the rootfs`);
+      // The selection named it from this run's own inventory, so its absence is this orchestrator's mistake.
+      blockedBy.push('request');
       continue;
     }
     const result = await runExportReach(abs, binary, { budgetSeconds });
@@ -840,7 +847,10 @@ async function exportreachRun(c: RunCtx): Promise<StepOutcome> {
     syncFindings(c.imageId, exportReachSource(binary), result.findings);
     findingCount += result.findings.length;
     reachable += result.sinks.filter((sink) => sink.outcome === 'reachable').length;
-    if (!result.available) blocked.push(`${binary}: ${result.reason}`);
+    if (!result.available) {
+      blocked.push(`${binary}: ${result.reason}`);
+      if (result.blockedBy) blockedBy.push(result.blockedBy);
+    }
   }
 
   return {
@@ -849,9 +859,9 @@ async function exportreachRun(c: RunCtx): Promise<StepOutcome> {
     ...(blocked.length
       ? {
           degraded: true,
-          // Every entry here is an export the per-object budget could not settle. More seconds ask more; no number
-          // of them turns "not reached" into "unreachable".
-          remedy: 'unbounded-search' as const,
+          // Worst cause wins: a missing angr is what a reader must act on, and summarising it as a budget note
+          // would file a deployment gap under "the search did not finish".
+          remedy: remedyForBlockedProbes(blockedBy),
           note: `${blocked.join(' | ')} Control-flow reachability is not a feasible or exploitable path.`,
         }
       : { note: 'Control-flow reachability is not a feasible or exploitable path.' }),
@@ -901,7 +911,7 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
     // the same conflation the provider just stopped committing, one layer up — it reads as a deployment short of a
     // capability, which is exactly the sentence that hid the last instance.
     const specDefect = r.blockedBy === 'request';
-    const remedy = remedyForSymReach(r.blockedBy);
+    const remedy = remedyForBlockedProbe(r.blockedBy);
     return {
       summary: specDefect
         ? `reachability ${binary}: the spec could not be posed — nothing was asked`

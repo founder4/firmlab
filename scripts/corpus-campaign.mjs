@@ -1,5 +1,6 @@
 /**
- * Coverage campaign — which of the corpus's uncovered cells are worth scheduling, and which are not debt at all.
+ * Coverage campaign over the VALIDATION corpus — which of its uncovered cells are worth scheduling, and which are
+ * not debt at all. (Three unrelated things are called "corpus" here; see docs/ARCHITECTURE.md.)
  *
  * `corpus-matrix.mjs` measures the corpus; it does not prioritise it. Measured on the deployed workbench the
  * difference matters more than the total: of 411 applicable stage cells, 85 are `degraded`, and they are five
@@ -448,22 +449,32 @@ export async function executeCampaign(plan, args, env = process.env) {
   const order = executionOrder(plan);
   const targets = args.limit > 0 ? order.slice(0, args.limit) : order;
   const ran = [];
+  const failed = [];
   for (const [index, sample] of targets.entries()) {
     process.stdout.write(
       `[${index + 1}/${targets.length}] ${sample.firmwareClass} · ${sample.filename} (${sample.id}) — ${sample.cells} cell(s)\n`,
     );
     const started = Date.now();
-    const { jobId } = await fetchJson(`${args.base}/api/images/${encodeURIComponent(sample.id)}/opacidad`, {
-      method: 'POST',
-      headers: { ...(headers ?? {}), 'content-type': 'application/json' },
-      body: '{}',
-    });
-    await waitForJob(args.base, jobId, args, headers);
-    const elapsed = Date.now() - started;
-    ran.push({ id: sample.id, jobId, elapsedMs: elapsed });
-    process.stdout.write(`      done in ${ms(elapsed)} (job ${jobId})\n`);
+    // One image failing is a result about that image, not about the campaign: a scan that throws is precisely the
+    // `retry` case this plan exists to name, and aborting the queue would leave every image behind it unmeasured
+    // for a reason that has nothing to do with them. Recorded, reported at the end, and the exit code says so.
+    try {
+      const { jobId } = await fetchJson(`${args.base}/api/images/${encodeURIComponent(sample.id)}/opacidad`, {
+        method: 'POST',
+        headers: { ...(headers ?? {}), 'content-type': 'application/json' },
+        body: '{}',
+      });
+      await waitForJob(args.base, jobId, args, headers);
+      const elapsed = Date.now() - started;
+      ran.push({ id: sample.id, jobId, elapsedMs: elapsed });
+      process.stdout.write(`      done in ${ms(elapsed)} (job ${jobId})\n`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failed.push({ id: sample.id, filename: sample.filename, error: message });
+      process.stdout.write(`      FAILED after ${ms(Date.now() - started)}: ${message}\n`);
+    }
   }
-  return ran;
+  return { ran, failed };
 }
 
 async function main() {
@@ -494,8 +505,16 @@ async function main() {
     process.stdout.write('Nothing schedulable: every uncovered cell is reported above as not executable by a scan.\n');
     return;
   }
-  const ran = await executeCampaign(plan, args);
+  const { ran, failed } = await executeCampaign(plan, args);
   process.stdout.write(`Campaign executed ${ran.length} scan(s). Re-run corpus-matrix.mjs to measure the result.\n`);
+  if (failed.length > 0) {
+    process.stderr.write(
+      `${failed.length} scan(s) failed and their cells are unchanged:\n- ${failed
+        .map((entry) => `${entry.filename} (${entry.id}): ${entry.error}`)
+        .join('\n- ')}\n`,
+    );
+    process.exitCode = 2;
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   EXECUTABLE_REMEDIES,
   isExecutableRemedy,
+  remedyForBlockedProbe,
+  remedyForBlockedProbes,
   remedyForCredMatch,
   remedyForDeviceTree,
   remedyForFwHunt,
   remedyForNoRootfs,
   remedyForProbeVerdict,
-  remedyForSymReach,
   remedyForWebTaint,
   remedyForYaraScan,
 } from './opacidad-remedy.js';
@@ -57,18 +58,27 @@ describe('YARA', () => {
   });
 });
 
-describe('symbolic reachability', () => {
+describe('a blocked reachability probe', () => {
   it('keeps a malformed request apart from a missing tool', () => {
     const cases: [SymReachBlockedBy, string][] = [
       ['platform', 'install-tool'],
       ['harness', 'retry'],
       ['request', 'defect'],
     ];
-    for (const [blockedBy, remedy] of cases) expect(remedyForSymReach(blockedBy)).toBe(remedy);
+    for (const [blockedBy, remedy] of cases) expect(remedyForBlockedProbe(blockedBy)).toBe(remedy);
   });
 
   it('declares nothing for a result stored before the discriminant existed', () => {
-    expect(remedyForSymReach(undefined)).toBeUndefined();
+    expect(remedyForBlockedProbe(undefined)).toBeUndefined();
+  });
+
+  it('reports the worst cause when one step covered several objects', () => {
+    expect(remedyForBlockedProbes(['request', 'harness', 'platform'])).toBe('install-tool');
+    expect(remedyForBlockedProbes(['request', 'harness'])).toBe('retry');
+    expect(remedyForBlockedProbes(['request'])).toBe('defect');
+    // Nothing named a cause: every object answered inside its budget and simply reached nothing.
+    expect(remedyForBlockedProbes([undefined])).toBe('unbounded-search');
+    expect(remedyForBlockedProbes([])).toBe('unbounded-search');
   });
 });
 

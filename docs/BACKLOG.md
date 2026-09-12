@@ -554,4 +554,8 @@ proveedores llega al agente sin glosa**; no se auditó esa superficie como tal.
   duplicados, cambios, regresión y ausencia de regresión.
 - [x] `ROADMAP.md` enlaza la matriz y su contrato en vez de copiar recuentos volátiles. La fuente ejecutable es
   `pnpm corpus:matrix` más `ops/corpus/validation-samples.lock.json`.
-- [ ] Decidir el destino de `yara-candidate-report.md`, hoy sin trackear en la raíz del repo: o se archiva fechado bajo `docs/` o entra en `.gitignore`. La promoción del corpus 20260830 es, en sí, una decisión ya evaluada y de bajo riesgo (0 matches nuevos, 0 perdidos, 3 positivos inertes conservados).
+- [x] Decidir el destino de `yara-candidate-report.md`. La premisa de esta entrada era falsa: el fichero SÍ estaba
+  trackeado, desde `47264fd`. Archivado fechado como `docs/YARA-CANDIDATE-20260830.md`, y el valor por defecto de
+  `scripts/evaluate-yara-candidate.sh` deja de escribir en la raíz del repo — ahí es donde se generaba — y escribe
+  en `$TMPDIR`. Un informe que merezca conservarse se archiva a mano. La promoción del corpus 20260830 sigue
+  siendo una decisión aparte, ya evaluada y de bajo riesgo (0 matches nuevos, 0 perdidos, 3 positivos inertes).

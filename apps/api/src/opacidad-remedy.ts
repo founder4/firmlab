@@ -104,11 +104,11 @@ export function remedyForYaraScan(state: Exclude<YaraScanState, 'scanned'>): Deg
 }
 
 /**
- * Symbolic reachability. `blockedBy` is the discriminant the provider grew after a `request` defect spent months
- * reading as a deployment limit — keep the three apart here too, or the campaign re-runs a question that this
- * orchestrator asked wrong.
+ * A blocked reachability probe, symbolic or export-graph. `blockedBy` is the discriminant `symreach` grew after a
+ * `request` defect spent months reading as a deployment limit — keep the three apart here too, or the campaign
+ * re-runs a question that this orchestrator asked wrong. `exportreach` carries the same three.
  */
-export function remedyForSymReach(blockedBy: SymReachBlockedBy | undefined): DegradedRemedy | undefined {
+export function remedyForBlockedProbe(blockedBy: SymReachBlockedBy | undefined): DegradedRemedy | undefined {
   switch (blockedBy) {
     case 'platform':
       return 'install-tool';
@@ -119,6 +119,19 @@ export function remedyForSymReach(blockedBy: SymReachBlockedBy | undefined): Deg
     default:
       return undefined; // an older result with no discriminant: unknown, not assumed
   }
+}
+
+/**
+ * One export-reachability step covers several objects, and they can be blocked for different reasons at once. The
+ * worst-to-best order is deliberate: a deployment without angr is what a reader must act on first, and a summary
+ * that reported the mildest cause would hide it behind a budget note.
+ */
+export function remedyForBlockedProbes(blocked: readonly (SymReachBlockedBy | undefined)[]): DegradedRemedy {
+  if (blocked.some((b) => b === 'platform')) return 'install-tool';
+  if (blocked.some((b) => b === 'harness')) return 'retry';
+  if (blocked.some((b) => b === 'request')) return 'defect';
+  // Every object answered within its budget and simply reached nothing: the search, not the deployment.
+  return 'unbounded-search';
 }
 
 /**
