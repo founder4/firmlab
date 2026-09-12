@@ -98,10 +98,20 @@ export function classifyCell(stage, context = {}) {
   return { disposition: meta.disposition, rule: meta.label, remedy: stage.remedy };
 }
 
-/** Per-sample pass: classify every cell, attributing the skips to the extraction cell of that same sample. */
+/**
+ * Per-sample pass: classify every cell, attributing the skips to the extraction cell of that same sample.
+ *
+ * Whether the run declares remedies is READ from the coverage report (`declaresRemedies`, stamped on the stored
+ * result) and only inferred from the cells when a deployment too old to report it is being planned against. The
+ * inference is not equivalent, and the first live run measured the gap: the FwHunt cell is recomposed from its own
+ * durable campaign, so two UEFI images stored long before remedies existed showed exactly one declared cell each,
+ * and the inference then read their stale device-tree cells as sites that cannot tell — dropping both images out
+ * of the queue.
+ */
 export function classifySample(sample) {
   const stages = sample.coverage?.stages ?? [];
-  const runDeclaresRemedies = stages.some((stage) => stage.status === 'degraded' && stage.remedy);
+  const runDeclaresRemedies =
+    sample.coverage?.declaresRemedies ?? stages.some((stage) => stage.status === 'degraded' && stage.remedy);
   // `provider` is a stable tag; the worker name is a display string and moves with the interface language.
   const extractionStage = stages.find((stage) => stage.provider === 'extract');
   const extraction = extractionStage ? classifyCell(extractionStage, { runDeclaresRemedies }) : null;

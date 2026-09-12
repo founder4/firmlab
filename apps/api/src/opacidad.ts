@@ -65,6 +65,7 @@ import {
 } from './opacidad-plan.js';
 import {
   type DegradedRemedy,
+  REMEDY_SCHEMA,
   remedyForCredMatch,
   remedyForDeviceTree,
   remedyForFwHunt,
@@ -1080,6 +1081,12 @@ export interface OpacidadResult {
    * reason to raise the token budget and re-run. Optional forever: absent on every result stored before this.
    */
   narrativeLlmTruncated?: boolean;
+  /**
+   * The remedy vocabulary this run was produced with (`REMEDY_SCHEMA`). Optional forever: absent means the run
+   * predates remedies entirely, and a reader must treat its degraded steps as UNDECLARED rather than as sites that
+   * had nothing to declare.
+   */
+  remedySchema?: number;
   honestGaps: string[];
   llm?: { provider: string; model: string };
 }
@@ -1276,6 +1283,9 @@ export async function runOpacidad(
     narrative,
     narrativeSource,
     ...(narrativeLlmTruncated ? { narrativeLlmTruncated: true } : {}),
+    // Stamped unconditionally: it says the run was produced by a build that declares remedies, so a degraded step
+    // WITHOUT one is a site that could not tell rather than a result stored before the field existed.
+    remedySchema: REMEDY_SCHEMA,
     honestGaps: honestGaps(narrativeCtx),
     ...(llm ? { llm } : {}),
   };

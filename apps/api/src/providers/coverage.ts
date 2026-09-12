@@ -78,6 +78,13 @@ export interface CoverageReport {
    */
   operatorAssertions: number;
   stages: CoverageStage[];
+  /**
+   * True when the run these stages came from was produced by a build that declares stage remedies. It is the
+   * difference between a degraded cell whose remedy is unknown because nothing could tell and one whose remedy is
+   * unknown because the run predates the field — opposite readings, and only the first is a code question.
+   * Optional forever; absent when no run exists or when the stored result carries no schema stamp.
+   */
+  declaresRemedies?: boolean;
   /** The one honest sentence about what this image's finding count covers. */
   verdict: string;
   /** True when the finding count alone would mislead — the UI shows the banner prominently. */
@@ -173,6 +180,12 @@ export function buildCoverage(input: {
   steps: OpacidadStep[] | null;
   /** MEASURED findings only — the caller partitions operator rows out before counting. */
   findingCount: number;
+  /**
+   * Whether the stored run stamped the remedy schema. Read from the persisted result by the route — never inferred
+   * from the steps, because the FwHunt cell is recomposed from its own durable result and would make an old run
+   * look like a declaring one.
+   */
+  declaresRemedies?: boolean;
   /** Active operator assertions. Defaults to 0 so every existing caller keeps its exact previous verdict. */
   operatorAssertions?: number;
   /**
@@ -182,7 +195,16 @@ export function buildCoverage(input: {
    */
   locale?: Locale;
 }): CoverageReport {
-  const { firmwareClass, classRationale, specs, steps, findingCount, operatorAssertions = 0, locale = 'en' } = input;
+  const {
+    firmwareClass,
+    classRationale,
+    specs,
+    steps,
+    findingCount,
+    operatorAssertions = 0,
+    declaresRemedies,
+    locale = 'en',
+  } = input;
   const byWorker = new Map((steps ?? []).map((s) => [s.worker, s]));
 
   const stages: CoverageStage[] = specs.map((spec) => {
@@ -237,6 +259,7 @@ export function buildCoverage(input: {
     executed,
     findingCount,
     operatorAssertions,
+    ...(declaresRemedies === undefined ? {} : { declaresRemedies }),
     stages,
     verdict: verdictFor(
       findingCount,

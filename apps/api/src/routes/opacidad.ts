@@ -11,6 +11,7 @@ import { type Locale, resolveLocale } from '../i18n/index.js';
 import { loadLlmConfig } from '../llm.js';
 import type { OpacidadStep } from '../opacidad-narrative.js';
 import { specsForClass } from '../opacidad-plan.js';
+import { REMEDY_SCHEMA } from '../opacidad-remedy.js';
 import { runOpacidad } from '../opacidad.js';
 import { partitionByProvenance } from '../operator-findings.js';
 import { type CoverageReport, buildCoverage } from '../providers/coverage.js';
@@ -106,8 +107,15 @@ function coverageFor(row: ImageRow, locale: Locale = 'en'): CoverageReport {
   const jobs = listJobs(row.id);
   const done = jobs.find((j) => j.kind === 'opacidad' && j.status === 'done' && j.resultJson);
   let steps: OpacidadStep[] | null = null;
+  // Read from the stored result, never inferred from the steps: the FwHunt cell below is recomposed from its own
+  // durable campaign, so a run stored long before remedies existed can still show one declared cell.
+  let declaresRemedies: boolean | undefined;
   try {
-    steps = done?.resultJson ? ((JSON.parse(done.resultJson) as { steps?: OpacidadStep[] }).steps ?? null) : null;
+    const stored = done?.resultJson
+      ? (JSON.parse(done.resultJson) as { steps?: OpacidadStep[]; remedySchema?: number })
+      : null;
+    steps = stored?.steps ?? null;
+    if (stored) declaresRemedies = (stored.remedySchema ?? 0) >= REMEDY_SCHEMA;
   } catch {
     steps = null;
   }
@@ -130,6 +138,7 @@ function coverageFor(row: ImageRow, locale: Locale = 'en'): CoverageReport {
     steps,
     findingCount: measured.length,
     operatorAssertions: asserted.length,
+    ...(declaresRemedies === undefined ? {} : { declaresRemedies }),
     locale,
   });
 }

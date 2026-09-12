@@ -54,6 +54,15 @@ export type DegradedRemedy =
   | 'unbounded-search'
   | 'defect';
 
+/**
+ * Stamped on every persisted run, so "did this run declare remedies?" is READ rather than inferred. Inferring it
+ * from the steps — "some degraded cell declares one, so the run must" — is wrong in a way that was measured the
+ * first time the campaign ran: the coverage report recomputes the FwHunt cell from its durable campaign result, so
+ * a run stored months ago can show exactly one declared cell, and the inference then labels its genuinely stale
+ * neighbours as sites that cannot tell. Two UEFI images dropped out of the queue that way.
+ */
+export const REMEDY_SCHEMA = 1;
+
 /** Remedies a coverage campaign can act on by scheduling work. The rest are reported, never queued. */
 export const EXECUTABLE_REMEDIES: readonly DegradedRemedy[] = ['retry', 'raise-bound', 'install-tool'];
 

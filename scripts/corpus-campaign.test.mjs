@@ -89,6 +89,29 @@ test('a skipped stage inherits its executability from the extraction that blocke
   assert.equal(alive.cells[1].unlockedBy, 'deploy');
 });
 
+test('the run says whether it declares remedies; the cells are only a fallback', () => {
+  // A coverage report that says so wins over any count of declared cells. Measured: the FwHunt cell is recomposed
+  // from its durable campaign, so an old run can show one declared cell and still be entirely stale.
+  const withStamp = {
+    id: 'uefi',
+    filename: 'uefi.fd',
+    identity: { firmwareClass: 'uefi-bios' },
+    coverage: {
+      firmwareClass: 'uefi-bios',
+      declaresRemedies: false,
+      stages: [
+        stage('UEFI · FwHunt', 'degraded', { remedy: 'unbounded-search' }),
+        stage('Static · Device tree', 'degraded'),
+      ],
+    },
+  };
+  const cells = classifySample(withStamp).cells;
+  assert.equal(cells[1].disposition, 'declare');
+
+  const declaring = { ...withStamp, coverage: { ...withStamp.coverage, declaresRemedies: true } };
+  assert.equal(classifySample(declaring).cells[1].disposition, 'undeclared');
+});
+
 test('a skip with no extraction cell to attribute it to is unknown, not dead', () => {
   const orphan = classifySample(sample('orphan', 'rtos', [stage('W3 · Credentials', 'no-input')]));
   assert.equal(orphan.cells[0].disposition, 'unknown');

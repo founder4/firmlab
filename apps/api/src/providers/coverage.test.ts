@@ -437,6 +437,21 @@ describe('what a degraded stage says about itself', () => {
     expect(r.stages[0]?.remedy).toBeUndefined();
   });
 
+  it('reports whether the run declares remedies at all, so unknown can be told from undeclarable', () => {
+    const stale = buildCoverage({
+      firmwareClass: 'uefi-bios',
+      specs: [{ worker: 'UEFI · FwHunt', reason: 'implants', needsRootfs: false, built: true, provider: 'fwhunt' }],
+      steps: [{ worker: 'UEFI · FwHunt', status: 'degraded', summary: 'thin' }],
+      findingCount: 0,
+      declaresRemedies: false,
+    });
+    expect(stale.declaresRemedies).toBe(false);
+    // Absent, not false, when the caller has nothing to say: no run at all carries no claim about the build.
+    expect(buildCoverage({ firmwareClass: 'rtos', specs: [], steps: null, findingCount: 0 }).declaresRemedies).toBe(
+      undefined,
+    );
+  });
+
   it('leaves the remedy undefined for a run stored before the field existed', () => {
     const r = buildCoverage({
       firmwareClass: 'embedded-linux',
