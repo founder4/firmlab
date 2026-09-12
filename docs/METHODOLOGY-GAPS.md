@@ -8,8 +8,8 @@ column was re-measured against the code on **2026-07-28**. They drifted apart in
 the direction that matters least visibly: this document had gone on listing as gaps six of the seven things §4
 told the project to build, all of which had shipped. A gap analysis that under-reports its own tool is worse than
 none, because it is the document consulted to decide what to build next — it was steering work at capabilities
-that already existed. **Re-measure this file's FirmLab column whenever a §4 item lands**; the methodology column
-only changes when OWASP does.
+that already existed. **Re-measure this file's FirmLab column whenever a `BACKLOG.md` item in this coverage
+area closes**; the methodology column only changes when OWASP does.
 
 Reference methodologies (reputable, widely used):
 
@@ -115,86 +115,18 @@ companion-app/cloud (UI).
   `run_init_sbus` function all exist in the bytes; NVD publishes no affected version range, so none is invented.
 - ✗ **The emulated guest has no network.** The firmware boots and its vendor init configures only loopback,
   because the LAN comes up through switch hardware `-M malta` does not emulate. Everything on the driven-attack-surface
-  side of FSTM-7 is bounded by this, which is why it heads §4.
+  side of FSTM-7 is bounded by this, which is why it heads the backlog's kernel/emulation section (see §4).
 
 ---
 
-## 4. The gaps worth building (prioritized, software-reachable)
+## 4. The gaps worth building
 
-**Two lists delivered.** The 2026-07-21 list of seven absent techniques shipped six inside the week
-(`webprobe`, `fwhunt` + `chipsec`, `symreach`, `updatepath`, `funcdiff`, `uboot`); only advanced fuzzing survived.
-Its successor, written 2026-07-28, has now also had **three of its nine items delivered** — and the way they were
-delivered is the reason this list is re-derived rather than edited:
-
-- **#1 network inference** was not a gap. Measured 2026-07-30: `inferGuestNetwork` was already pure, exported and
-  running two passes (observe → reach). The real blocker was a **boot-time intervention in the guest**, which the
-  backlog had recorded and this list had not, and it is now wired. **CORRECTED the same day: the intervention is
-  INERT and the reachable-service result attributed to it has been retracted.** The line is written into the booted
-  image and `rcS` never reaches it — the kernel's `execve` trace shows `rcS` stopping at line 45 of 46, with zero
-  traces of `ping`, `iptables-save` or `iptables-stop` and none of the three markers. The unrepaired control got one
-  line FURTHER, so the ports that opened on the repaired boot were nondeterminism, not the repair. See BACKLOG.
-- **#2 the bounded budgets** — all three caps fixed (`e8b23c0`, `22a7961`, and the probe rank enabled 2026-07-29
-  after measuring it across the corpus). This item was already stale when it was written down as "cheapest value in
-  the ledger".
-- **#4 a general rule lane** — that is `yarascan`, which has a route, a reader since 2026-07-30, and a real
-  yara 4.2.3 in the deployed image. What remains is not the lane but its RULES (below as #2).
-
-The pattern across all three: **the entry named a technique and the actual gap was one layer down** — already built
-but unwired, or built and unmeasured, or built and unreadable. That is what shifts the ordering rule below. Value ÷
-effort still, but "effort" now weights *finding out what is actually true of the thing* ahead of building, because on
-this codebase that step has repeatedly been the whole task.
-
-1. **CLOSED for the specified acquisition tranche on 2026-08-23 — the corpus now has an executable contract.**
-   `scripts/corpus-matrix.mjs` verifies locked SHA-256/size/class/architecture and renders every applicable stage as
-   found, empty, degraded, no-input, not-built or not-run. The persistent corpus grew from 19 to 23 images with an
-   official Framework Laptop 13 BIOS capsule, Contiki and Zephyr ELF samples from Renode, and Framework QMK. The
-   matrix currently measures 390 applicable cells: 130 found, 131 ran-empty, 82 degraded, 33 no-input and 14
-   not-run. It also exposed two constraints instead of hiding them. Both are now closed in source: QMK classifies
-   from RP2040 structure plus corroborated QMK markers, and Framework FwHunt settled all 35 deterministic,
-   resumable module windows while retaining the 409-module denominator and 5 explicit unknowns.
-2. **CLOSED 2026-08-18 — a YARA corpus this deployment can actually run.** The operator layer now pins YARA Forge
-   Core 20260816 by archive and extracted-file SHA-256 (5,034 rules) and adds six documented firmware heuristics.
-   It is mounted read-only rather than baked into FirmLab, preserves the existing
-   `rulesDeclared`/`rulesApplied`/`rulesLost` denominator, and every match remains attributed to its rule and author.
-   Update and fixture scripts live under `ops/yara`; redistribution still requires per-source license review.
-3. **Make the guest repair reach the guest.** Re-derived 2026-07-30 after retracting the claim that it worked:
-   the repair appends to the END of `/etc/rc.d/rcS` and on the WR940N `rcS` emits no `execve` after line 45 of 46, so
-   nothing appended there is ever reached. Two questions, in order: why `rcS` stops one line short (the guest lives on
-   to 95 s of kernel time with `httpd` running, so `rcS` died and the guest did not), and where an intervention CAN be
-   staged that the boot actually executes — `/etc/inittab`, a `preInit` ahead of `rcS`, or the kernel command line are
-   the candidates firmadyne/FirmAE use. Still the cheapest high-value item, and still not a new technique.
-4. **CLOSED 2026-08-23 — persisted analysis results hydrate after reload.** The deep-analysis panel now restores
-   the completed job from SQLite instead of treating component memory as the source of truth.
-5. **CLOSED 2026-08-23 — kernel / module CVE surface.** Kernel candidates use NVD's Linux-CNA-scoped CPE question
-   and survive as provisional ledger rows with the page denominator. The WDR3600's KCodes NetUSB object correlates
-   to CVE-2015-3036 on four byte-level anchors, while explicitly refusing a version verdict NVD does not publish.
-6. **Interactive / introspectable emulation** — moved UP, because the repair unblocked it. `run_command_in_emulation`
-   and service enumeration on a LIVE boot were gated on having a guest that answers, and now one does. Much of
-   diagnosing a boot is running one command inside it, which is also how #3 gets settled.
-7. **The sweep's ledger is still distorted by uClibc stubs.** `lib/libutil-0.9.30.so` and `lib/libmsglog.so` open the
-   WDR3600's 45 listed candidates because `runnable` lets a shared object with an entry point through. The exposure
-   key added 2026-07-30 repaired the HEAD of that list and did nothing for the tail. The real predicate is whether
-   the entry point is a *program*.
-8. **Cross-binary dataflow.** Extend the single-binary taint scaffold across binaries; W4 proves the shape within one.
-9. **Advanced fuzzing.** cmplog/compcov magic-byte solving, a prebuilt guest-arch libdesock so the network harness
-   works without `FIRMLAB_DESOCK`, and an input side for the fuzzer. Stateful/full-system fuzzing (Fuzzware/µEmu)
-   remains the research frontier for the RTOS path.
-10. **The remaining UEFI findings** — LogoFAIL image-parser class, SMM callout analysis (efiXplorer-class), SPI
-    protected-range / BIOS-lock posture. A vendor BIOS now exists in the corpus and all 409 ranked modules have a
-    terminal, attributable campaign disposition; the remaining work is the three missing technique families.
-11. **Libraries are permanently unasked.** Filtering `.so` out of the reachability queue is right for the question as
-    posed, and leaves a vulnerable library as a candidate nothing will ever settle. Loading the `.so` and starting
-    symbolically from an exported function is a distinct rung, not a variant of this one.
-
-**A policy debt, not a technique gap.** Two CVE sources with different evidentiary standards run on the same image:
-grype (via a syft manifest) accepts `CVE-2016-2148` for busybox 1.18.4, while the curated `component-cve.ts` table
-declines that exact CVE because NVD backs it with an open range and no enumerated CPE. Each row names its source, so
-nothing contradicts anything, and the broader net is arguably right when a manifest exists — but which standard
-applies is currently an accident of which provider ran, and should be a written decision.
-
-**A second policy debt, surfaced 2026-07-30.** An amendment to an operator assertion records no author while a
-withdrawal requires one, so a claim can be reworded by someone other than its author and the ledger attributes the
-new wording to the original author. In the one surface whose entire purpose is provenance.
+The prioritized, actionable list lives in one place now — [`BACKLOG.md`](BACKLOG.md) — instead of duplicated
+here where it drifted from what had actually shipped (this section once still listed as open six of seven items
+that were already done; that history is why the list moved rather than being re-synced again). What belongs in
+*this* document is the coverage mapping in §1–§3 and §5: which OWASP stage or category is automated, partial or
+a genuine gap, independent of the order anything gets built in. FSTM-7's own limit — the emulated guest boots
+and configures only loopback — is why it heads the backlog's kernel/emulation section.
 
 **Explicitly out of pure-software scope** (belongs to Phase-6 Capture with the right dongle, or a hardware lab):
 JTAG/UART/SPI extraction & chip-off (ISTG-INT/MEM), USB/DMA (PHY), Wi-Fi/SDR (WRLS), side-channel & glitching (PROC).
@@ -231,20 +163,12 @@ concrete mechanisms worth adopting. Re-checked 2026-07-28 — four have since be
 - ✅ **Concrete RTOS deep-analysis tools** — `detect_rtos_kernel` / `analyze_vector_table` / `recover_base_address` /
   `analyze_memory_map` are `rtos.ts`. `enumerate_rtos_tasks` is the one still open (§3).
 - ✅ **The runtime half** — `run_gdb_command` is `dynprobe.ts`, driving gdb-multiarch against qemu's gdbstub.
-- ▢ **Library/function-level fuzz harness.** Cross-compile a harness linked against an extracted `.so` to fuzz a
-  specific exported function, plus `patch_function_return` to stub a blocking check (checksum/auth gate) so the
-  fuzzer reaches the target. Deeper than the current per-class harnesses; §4 #7 and #9 both point here.
-- ▢ **Interactive emulation + self-diagnostics.** `run_command_in_emulation`, `enumerate_emulation_services` on a live
-  boot, `diagnose_emulation_environment` / `troubleshoot_emulation` — §4 #6.
-- ▢ **Cross-binary dataflow** (`trace_dataflow`, `cross_binary_dataflow`, `get_stack_layout`, `get_global_layout`)
-  — §4 #5.
-- ▢ **Live-device UART bridge.** A host-side serial bridge lets the containerized backend reach a physical device's
-  UART console — the pragmatic software-side foothold into hardware, and the only ISTG-INT item that is not lab work.
-- ◐ **Kind-aware tool visibility.** Recipes are gated by device class already (`specsForClass`, which `coverage.ts`
-  reads so the banner and the scan cannot disagree); formalizing per-kind capability visibility in the UI is the
-  remaining tidy-up.
-- ▢ **capa-style capability inventory** — what a binary *can do* is a different question from what is *wrong* with it,
-  and FirmLab currently asks only the second.
+
+The remaining wairz-inspired ideas not yet built — a library/function-level fuzz harness, interactive
+emulation + self-diagnostics on a live boot, cross-binary dataflow, a live-device UART bridge, and a capa-style
+capability inventory — are tracked in [`BACKLOG.md`](BACKLOG.md) rather than duplicated here. One is already
+partial: kind-aware tool visibility (recipes already gate by device class via `specsForClass`/`coverage.ts`;
+only the UI formalizing that per-kind is left).
 
 Not adopting wholesale (different identity): wairz is MCP-first + Postgres/Redis + cloud (Fargate/Batch); FirmLab
 stays local-first with its own proof-state agent and OS-primitive isolation. The *techniques* above transfer; the

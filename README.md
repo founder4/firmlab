@@ -21,8 +21,9 @@ image you feed it.
   <img alt="Biome" src="https://img.shields.io/badge/lint-Biome-60A5FA?style=flat-square&logo=biome&logoColor=white">
 </p>
 
-> **Status:** active, solo-built engineering project — Phases 0–5 shipped, more on the [roadmap](#-project-status--roadmap).
-> ~120k lines of TypeScript/TSX, 2,700+ tests, validated against real tools in-container and a locked 23-image corpus.
+> **Status:** active, solo-built engineering project — Phases 0–6 shipped, more on the [roadmap](#-project-status--roadmap).
+> ~130k lines of TypeScript/TSX, 3,100+ tests, validated against real tools in-container and a locked regression
+> corpus of public/official firmware samples (`ops/corpus/validation-samples.lock.json`).
 > **Local-only by design:** the API binds to loopback and is never meant to face the internet.
 
 <p align="center">
@@ -43,6 +44,7 @@ image you feed it.
 - [The proof-state machine — honesty, encoded](#the-proof-state-machine--honesty-encoded)
 - [The agent — autonomy *with a skeleton*](#the-agent--autonomy-with-a-skeleton)
 - [External intelligence (opt-in)](#external-intelligence-opt-in)
+- [Capture — the on-the-wire lane (opt-in)](#capture--the-on-the-wire-lane-opt-in)
 - [Tech stack](#tech-stack)
 - [Quick start](#quick-start)
 - [Project status & roadmap](#-project-status--roadmap)
@@ -77,7 +79,8 @@ on.
 | **Emulation as a ranked ladder** | A planner turns identity + rootfs into arch-aware, runnable recipes; the runner only claims what it reproduced. |
 | **Autonomy with a skeleton** | The optional agent *chooses branches* on a fixed deterministic orchestrator, bounded by a governor (steps/tokens/USD/wall-time) and a human-approval gate. |
 | **Stateful — it learns** | A persistent cross-image **corpus** links shared artifacts, reused credentials and common components across firmware, and promotes repeat offenders to a watchlist. |
-| **Local-only DNA** | No network at all unless you opt in; the internet-touching *research* track lives behind a separate flag with an allowlist and an egress ledger that states exactly what leaves the machine. |
+| **Local-only DNA** | No network at all unless you opt in; the internet-touching *research* and *capture* tracks each live behind their own flag with an allowlist and an egress ledger that states exactly what leaves the machine. |
+| **Agent-native surface** | Every provider is also reachable over **MCP** (`apps/api/src/mcp/server.ts`), so an external agent inherits the proof-state/coverage discipline instead of having to reconstruct it. |
 
 ## Architecture
 
@@ -87,14 +90,16 @@ composes the pure core, and the core knows nothing about either.
 ```mermaid
 flowchart TB
     subgraph web["🖥️  apps/web · React + Vite"]
-        UI["Dashboard · Structure map · Entropy · Filesystem · Secrets<br/>SBOM/CVEs · Simulation · Agent · Corpus · Capabilities<br/><i>all visuals are hand-rolled SVG/DOM — no chart library</i>"]
+        UI["Dashboard · Structure map · Entropy · Filesystem · Secrets<br/>SBOM/CVEs · Simulation · Agent · Corpus · Capture · Capabilities<br/><i>all visuals are hand-rolled SVG/DOM — no chart library</i>"]
     end
 
     subgraph api["⚙️  apps/api · Fastify + node:sqlite"]
-        R["REST routes (18)"]
-        P["<b>Providers</b> — runtime-detected tools<br/>binwalk · radare2 / Ghidra · syft / grype<br/>gitleaks · QEMU · Renode · AFL++"]
+        R["REST routes (46)"]
+        MCP["<b>MCP server</b> <i>(stdio)</i><br/>the same providers, over the Model Context Protocol —<br/>answers pre-shaped with proof-state + coverage"]
+        P["<b>Providers (85)</b> — runtime-detected tools<br/>binwalk · radare2 / Ghidra · syft / grype · gitleaks<br/>QEMU · Renode · chipsec · AFL++ · angr · gdb-multiarch"]
         AG["<b>Agent</b> <i>(flag-gated)</i><br/>triage · target-selection · zero-day · synthesis<br/>governor · bounded execution + approval"]
         RS["<b>Research</b> <i>(flag-gated)</i><br/>provenance · OSV.dev · security.txt · egress ledger"]
+        CP["<b>Capture</b> <i>(flag-gated)</i><br/>LAN discovery · mitmproxy OTA · BLE/Zigbee OTA<br/>own egress ledger"]
         ST[("SQLite (WAL)<br/>images · jobs · findings<br/>corpus · agent sessions")]
     end
 
@@ -103,8 +108,9 @@ flowchart TB
     end
 
     UI -->|"same-origin /api (loopback)"| R
-    R --> P & AG & RS
-    P & AG & RS --> ST
+    R --> P & AG & RS & CP
+    MCP -.->|"same providers, agent-shaped answers"| P
+    P & AG & RS & CP --> ST
     P -->|"bytes in → structured data out"| E
     AG -.->|"reasons *within* the deterministic core"| E
 ```
@@ -113,8 +119,8 @@ flowchart TB
 unit-testable without Docker. Slow work (extraction, emulation, fuzzing) runs as **persisted SQLite jobs** with
 streamed logs, so the UI polls without blocking. Completed results survive a restart; queued or running work is
 marked as interrupted at the next startup and must be retried because its in-process executable cannot be
-rehydrated. The agent and research layers are strictly *additive* — turn both flags off and FirmLab is a
-deterministic, offline workbench.
+rehydrated. The agent, research and capture layers are strictly *additive* — turn all three flags off and FirmLab
+is a deterministic, offline workbench.
 
 ## How an image flows through the system
 
@@ -257,6 +263,18 @@ kernel CNA, cross-references discovered CVEs against **CISA KEV**, fingerprints
 ledger** that states exactly what leaves the machine (names and versions — *never raw firmware bytes*). A
 published advisory for a present component is a *lead*, not a confirmed bug; reachability is decided per-image.
 
+## Capture — the on-the-wire lane (opt-in)
+
+A third, independent flag (`FIRMLAB_CAPTURE`, deliberately separate from both `FIRMLAB_AGENT` and
+`FIRMLAB_RESEARCH`) turns on acquisition and interception rather than analysis: LAN discovery, mitmproxy-based
+OTA update interception, ARP-spoof positioning, a token-gated remote capture agent, and reassembling a BLE
+Nordic-DFU or Zigbee OTA-cluster transfer back into the firmware image it carried — with no dongle required for
+the reassembly half. A captured flow auto-ingests through the same upload intake as a manual upload, carrying its
+own provenance row. Capture has its **own** egress ledger, independent of the research track's, because it is a
+different kind of network access (acquiring bytes, not querying intel about them) and the two should never be
+confused for one flag doing double duty. See [`docs/CAPTURE-DESIGN.md`](docs/CAPTURE-DESIGN.md) for the full
+transport/data-model design.
+
 ## Tech stack
 
 | Layer | Choices |
@@ -268,7 +286,7 @@ published advisory for a present component is a *lead*, not a confirmed bug; rea
 | **Emulation** | `qemu-user-static` · `qemu-system-*` · Renode (RTOS/MCU) |
 | **Security tooling** | binwalk · radare2 / Ghidra · syft / grype · gitleaks · AFL++ · OSV.dev |
 | **Agent/LLM** | Provider-agnostic (DeepSeek-first) · structured-output decision nodes · governor · bounded execution + approval |
-| **Quality** | Vitest (2,700+ tests) · Biome (lint/format) · Docker-based real-tool validation · locked corpus matrix |
+| **Quality** | Vitest (3,100+ tests) · Biome (lint/format) · Docker-based real-tool validation · locked corpus matrix |
 
 ## Quick start
 
@@ -298,9 +316,11 @@ pnpm --filter @firmlab/api build && pnpm dev:api
 pnpm dev:web
 ```
 
-Optional layers are off unless you set their flag: `FIRMLAB_AGENT=1` (agent/copilot, needs an LLM key) and
-`FIRMLAB_RESEARCH=1` (external intelligence). See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the homelab
-rollout and how to tell which commit is running.
+Optional layers are off unless you set their flag: `FIRMLAB_AGENT=1` (agent/copilot, needs an LLM key),
+`FIRMLAB_RESEARCH=1` (external intelligence) and `FIRMLAB_CAPTURE=1` (LAN/OTA/BLE/Zigbee capture — also needs
+`FIRMLAB_CAPTURE_AGENT_TOKEN` for the remote LAN agent). All three also persist from **Settings → Privacy**, so a
+flag can be on even when it isn't set in the environment. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the
+homelab rollout and how to tell which commit is running.
 
 ## 🚧 Project status & roadmap
 
@@ -315,13 +335,16 @@ layered on later, always additive.
 | **3** | **Decision nodes** ①②, governor, auditable/resumable sessions, human-approval gate | ✅ Shipped |
 | **4** | **Zero-day** node ④, deterministic taint scaffold, bounded execution with approval, opt-in AFL++ | ✅ Shipped |
 | **5** | External **intelligence** — provenance + OSV + security.txt, egress ledger (own flag) | ✅ Shipped |
-| **▶** | **In progress** — completing the resumable UEFI-module campaign, closing matrix `not-run` cells, full-system guest networking | 🔨 Ongoing |
+| **6** | **Capture & acquisition** — LAN discovery, mitmproxy OTA interception, BLE/Zigbee reassembly (own flag) | ✅ Shipped |
+| **▶** | **In progress** — telling an extractor gap from a truncated volume, telling a monolithic kernel from an incomplete carve, config/patch/VEX pruning for the kernel-CVE prefix, full-system guest networking/console, RTOS peripheral fuzzing | 🔨 Ongoing |
 
 Earlier phases hardened the deterministic workbench itself: arch refinement, gitleaks deep-scan, firmware diff
 with content hashes, report export, a bounded job queue, data retention/quota, an expanded signature pack, Ghidra
 decompilation, API defense-in-depth, and an e2e integration fixture. Full history in
 [`docs/ROADMAP.md`](docs/ROADMAP.md); the design rationale for the autonomy work is in
-[`docs/AGENT-DESIGN.md`](docs/AGENT-DESIGN.md).
+[`docs/AGENT-DESIGN.md`](docs/AGENT-DESIGN.md); the ordered list of what's not built yet is
+[`docs/BACKLOG.md`](docs/BACKLOG.md); and [`docs/METHODOLOGY-GAPS.md`](docs/METHODOLOGY-GAPS.md) maps this whole
+table against OWASP FSTM/ISTG stage-by-stage, including what's deliberately out of scope.
 
 ## Repository layout
 
@@ -329,19 +352,22 @@ decompilation, API defense-in-depth, and an e2e integration fixture. Full histor
 firmlab/
 ├─ packages/core/     @firmlab/core — pure analysis engine (entropy, signatures, structure,
 │                     strings, filesystem, MCU fingerprint) · zero deps · fully unit-tested
-├─ apps/api/          @firmlab/api — Fastify + node:sqlite · 44 route modules · 81 providers
-│  ├─ providers/      extract · sbom · gitleaks · diff · ghidra · emulate · renode · fuzz
+├─ apps/api/          @firmlab/api — Fastify + node:sqlite · 46 route modules · 85 providers
+│  ├─ providers/      extract · sbom · gitleaks · diff · ghidra · emulate · renode · chipsec · fuzz
 │  │                  · isolate · taint · trigger · preflight · report · keys · provenance · osv …
 │  ├─ agent/          session orchestrator · decision nodes · governor · zero-day · synthesis
-│  └─ research/       allowlist config · egress ledger
+│  ├─ research/       allowlist config · egress ledger              (FIRMLAB_RESEARCH)
+│  ├─ capture/        LAN discovery · mitmproxy OTA · BLE/Zigbee    (FIRMLAB_CAPTURE)
+│  └─ mcp/            the provider surface over MCP (stdio)
 ├─ apps/web/          @firmlab/web — Vite + React workbench (SVG/DOM visuals, theming, PWA)
-├─ docs/              ARCHITECTURE · AGENT-DESIGN · DEPLOYMENT · ROADMAP
+├─ docs/              ARCHITECTURE · AGENT-DESIGN · AUTONOMOUS-WORKERS · CAPTURE-DESIGN ·
+│                     METHODOLOGY-GAPS · DEPLOYMENT · ROADMAP · BACKLOG · CORPUS-VALIDATION
 └─ Dockerfile · Dockerfile.firmware · docker-compose.yml   (loopback-published)
 ```
 
 ## Testing & quality
 
-- **2,700+ tests** (Vitest) across the three packages — the pure core and every provider's decision logic are
+- **3,100+ tests** (Vitest) across the three packages — the pure core and every provider's decision logic are
   unit-tested without needing the real tool installed.
 - **Real-tool validation in Docker.** Beyond unit tests, changes are exercised against the actual toolchain
   in-container: a 12-assertion integration run over the real provider chain (extract → SBOM → gitleaks →
@@ -351,9 +377,10 @@ firmlab/
 ## Safety & responsible use
 
 FirmLab is a **defensive / research** tool. Analyze only firmware you own or are explicitly authorized to
-assess. It binds to loopback by design and is never meant to be exposed to the internet — don't change the
-publish binding. The zero-day and external-intelligence capabilities are opt-in, defensive-only (candidates and
-*drafted* disclosure reports — never auto-send, never auto-exploit), and gated behind explicit flags.
+assess, and only capture traffic or devices you own or are explicitly authorized to intercept. It binds to
+loopback by design and is never meant to be exposed to the internet — don't change the publish binding. The
+zero-day and external-intelligence capabilities are opt-in, defensive-only (candidates and *drafted* disclosure
+reports — never auto-send, never auto-exploit), and gated behind explicit flags, same as capture.
 
 ---
 

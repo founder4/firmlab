@@ -3,56 +3,76 @@
 ## Layers
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ apps/web  (React + Vite)                                      │
-│   Dashboard · Overview · Structure · Entropy · Filesystem ·   │
-│   Secrets · Simulation · Capabilities                         │
-│   Visual components: EntropyChart, StructureMap, FsTree,      │
-│   SimulationMenu (all pure SVG/DOM, no chart lib)             │
-└───────────────▲──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ apps/web  (React + Vite, HashRouter)                              │
+│   Dashboard · Overview · ImageDetail (Structure · Entropy ·       │
+│   Filesystem · Secrets · SBOM/CVE · Simulation) · Agents ·        │
+│   Corpus · Capture · Capabilities · Settings                      │
+│   Visual components: EntropyChart, StructureMap, FsTree,          │
+│   SimulationMenu, SbomGraph… (all pure SVG/DOM, no chart lib)      │
+└───────────────▲────────────────────────────────────────────────────┘
                 │ same-origin /api (loopback)
-┌───────────────┴──────────────────────────────────────────────┐
-│ apps/api  (Fastify + node:sqlite)                             │
-│   routes: images · analysis · jobs · emulate · tools          │
-│   providers: extract (binwalk), emulate (qemu/renode planner  │
-│     + user-mode runner), jobs (in-proc runner)                │
-│   store: images + cached analysis + jobs (SQLite, WAL)        │
-│   tools: runtime capability detection                         │
-└───────────────▲──────────────────────────────────────────────┘
+┌───────────────┴────────────────────────────────────────────────────┐
+│ apps/api  (Fastify + node:sqlite)                                  │
+│   routes/    46 thin HTTP modules → startJob + syncFindings        │
+│   providers/ 85 modules — the actual work, runtime-detected tools  │
+│     extract · sbom · gitleaks · diff · ghidra · emulate · renode · │
+│     chipsec · fwhunt · fuzz · isolate · taint · trigger ·          │
+│     preflight · report · keys · provenance · osv · kernelposture…  │
+│   agent/     session orchestrator, decision nodes, governor        │
+│              (FIRMLAB_AGENT)                                       │
+│   research/  provenance/OSV/security.txt, egress ledger            │
+│              (FIRMLAB_RESEARCH)                                    │
+│   capture/   LAN discovery, mitmproxy OTA, BLE/Zigbee reassembly    │
+│              (FIRMLAB_CAPTURE)                                     │
+│   mcp/       the same providers over the Model Context Protocol    │
+│   store.ts:  images · jobs · findings · corpus · agent sessions    │
+│              (SQLite, WAL)                                         │
+│   tools.ts:  runtime capability detection                          │
+└───────────────▲────────────────────────────────────────────────────┘
                 │ pure functions (bytes in, structured data out)
-┌───────────────┴──────────────────────────────────────────────┐
-│ packages/core  (@firmlab/core — zero external deps)           │
-│   entropy · signatures · structure · strings · filesystem ·   │
-│   binwalk (output parser) · analyze (one-shot bundle)         │
-└──────────────────────────────────────────────────────────────┘
+┌───────────────┴────────────────────────────────────────────────────┐
+│ packages/core  (@firmlab/core — zero external deps)                │
+│   entropy · signatures · structure · strings · filesystem ·        │
+│   MCU fingerprint · binwalk (output parser) · analyze (bundle)     │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Design decisions
 
 **Deterministic core, optional tools.** Everything that can be computed from bytes alone lives in
-`@firmlab/core` and is unit-tested. External tools (binwalk, radare2, QEMU…) are providers behind runtime
-detection, so the product degrades gracefully instead of hard-failing when a tool is absent. This is the
-inverse of a tool-first design: the workbench is useful with nothing installed and *better* with the full
-image.
+`@firmlab/core` and is unit-tested. External tools (binwalk, radare2/Ghidra, QEMU, Renode, syft/grype,
+gitleaks, chipsec, AFL++, angr, gdb-multiarch…) are providers behind runtime detection, so the product degrades
+gracefully instead of hard-failing when a tool is absent. This is the inverse of a tool-first design: the
+workbench is useful with nothing installed and *better* with the full image.
 
 **Static analysis on upload, cached.** The moment an image lands, the API runs the core bundle
-(`analyzeBuffer`) and persists identity + analysis JSON. Every view then loads instantly from cache; the image
-bytes are only re-read for extraction/emulation. Entropy uses an adaptive window so the sample count stays
-~2048 regardless of image size.
+(`analyzeImageBuffer`) and persists identity + analysis JSON. Every view then loads instantly from cache; the
+image bytes are only re-read for extraction/emulation. Entropy uses an adaptive window so the sample count
+stays ~2048 regardless of image size.
 
-**Jobs for anything slow.** Extraction and emulation run as persisted jobs (SQLite rows) with streamed logs,
-so the UI polls status without blocking a request. Completed results survive a restart. Queued/running rows do
-too, but their process-local executable closures do not: startup marks those jobs as interrupted and the
-operator must retry them; FirmLab does not claim to resume work it cannot rehydrate.
+**Jobs for anything slow.** Extraction, SBOM, emulation and everything else that shells out runs as a
+persisted job (`providers/jobs.ts`): a SQLite row moving queued → running → done/error with streamed log
+lines, bounded by `FIRMLAB_MAX_CONCURRENT_JOBS` (default 2), so the UI polls status without blocking a
+request. Completed results survive a restart. Queued/running rows do too, but their process-local executable
+closures do not: startup marks those jobs as interrupted and the operator must retry them; FirmLab does not
+claim to resume work it cannot rehydrate.
 
-**Emulation as a planner + a runner.** `planEmulation` turns identity (+ extracted rootfs) into ranked,
-arch-aware recipes with concrete commands and a runnable flag. Only user-mode QEMU is auto-executed (bounded
-by a timeout + output cap); full-system boot and Renode need per-image kernel/platform assembly and are
-surfaced as guided recipes rather than one-click actions that would silently fail.
+**The proof-state discipline.** Every finding carries an explicit `ProofState`, decided by code — never by a
+model — and an empty findings list never means "clean": `providers/coverage.ts` computes, per image, which
+stages the device class routes to, which actually ran, and states what the count does and does not cover. This
+is the project's central invariant; see `CLAUDE.md` for the full state machine.
+
+**Emulation as a ranked ladder.** A deterministic preflight turns identity (+ extracted rootfs, + installed
+emulators) into ranked, arch-aware recipes and the honest proof-state ceiling each can claim: qemu-user →
+chroot+libnvram → full-system (firmadyne, boots real firmware) → Renode (RTOS/MCU) → chipsec (UEFI, offline).
+The runner only claims what it actually reproduced.
 
 **Local-only, enforced in three places.** The API defaults to `127.0.0.1`; the Vite dev server binds
 loopback; the compose publish is `127.0.0.1:8799:8799`. In Docker the in-container bind is `0.0.0.0` (required
-for port publishing) but `FIRMLAB_LOOPBACK_PUBLISH=1` keeps the health/indicator honest.
+for port publishing) but `FIRMLAB_LOOPBACK_PUBLISH=1` keeps the health/indicator honest. `FIRMLAB_AGENT`,
+`FIRMLAB_RESEARCH` and `FIRMLAB_CAPTURE` are three separate, independent flags — each is the only thing that
+turns on its own kind of network access, and turning all three off leaves a deterministic, offline workbench.
 
 ## The three "corpora" — one word, three unrelated things
 
@@ -71,12 +91,15 @@ in `docs/` — so the disambiguation lives here and in each module's own header.
 
 ## Data model
 
-- `images` — id, filename, path, size, sha256, status, identityJson, analysisJson
-- `jobs` — id, imageId, kind (`extract|binwalk|sbom|emulate|decompile`), status, log, resultJson, error
+The core tables in `firmlab.db` (SQLite, WAL): `images` (identity + analysis JSON, cached per upload), `jobs`
+(queued/running/done/error, streamed log, result JSON — one row per provider run), `findings` (the ledger every
+provider writes to via `syncFindings`, one `source` per provider so re-runs are idempotent), `binaries`
+(per-ELF inventory), `agent_sessions` (the agent's auditable/resumable transcripts), and the persistent-corpus
+tables (`*_occurrence`, `reachability_prior` — see "The three corpora" above). `store.ts` owns the schema and
+is the only module allowed to import `node:sqlite`.
 
 ## Extending
 
-- **New signature** → add a rule to `SIGNATURE_RULES` in `packages/core/src/signatures.ts` (+ a test).
-- **New tool** → add a `ToolSpec` in `apps/api/src/tools.ts`; it appears in Capabilities automatically.
-- **New emulation mode** → add a recipe branch in `apps/api/src/providers/emulate.ts`.
-- **New analysis view** → add an endpoint in `routes/analysis.ts` and a tab in `apps/web/src/pages/ImageDetail.tsx`.
+The exact recipe for adding a signature, tool, provider or analysis view — including why pure decision logic
+has to live in a module that doesn't import `store.js` — is kept in one place, `CLAUDE.md`'s "Adding things"
+section, rather than duplicated here where it would drift.

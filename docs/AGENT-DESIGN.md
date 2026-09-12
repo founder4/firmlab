@@ -545,6 +545,6 @@ allowlisted/citada/honesta:
   servicios reales**: NVD real (HTTP 200, CVE con severidad CVSS parseada) y KEV real (catálogo de ~1650 entradas,
   cruce correcto de Log4Shell `CVE-2021-44228` → producto Log4j2, ransomware=Known).
 
-**Pendiente en este track** (deuda, `docs/ROADMAP.md`): fuentes de vendor-PSIRT/CNA (sin API única gratuita); un
-generador de reporte de disclosure descargable; mecanismo de egress-allowlist reforzado (proxy/netns) y caché OSV/
-KEV en el corpus.
+**Pendiente en este track** (deuda, `docs/BACKLOG.md`): fuentes de vendor-PSIRT/CNA (sin API única gratuita).
+`disclosure.ts` y la caché de `research/cache.ts` ya existen desde que se escribió este párrafo; lo que sigue
+abierto de esta lista original es solo el punto de vendor-PSIRT/CNA.
