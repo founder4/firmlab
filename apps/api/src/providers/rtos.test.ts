@@ -193,6 +193,8 @@ describe('runRtosAnalysis', () => {
     expect(res.reason).toContain('complete 8-byte image');
   });
 
+  // Scanning a real 16 MiB buffer synchronously takes ~4s on its own, which already eats most of vitest's 5s
+  // default under the full parallel suite's CPU contention — this raises the test's own budget, not the code's.
   it('bounds negative marker claims when the file exceeds the 16 MiB scan cap', () => {
     const p = path.join(tmp, 'large-random.bin');
     const cap = 16 * 1024 * 1024;
@@ -215,5 +217,5 @@ describe('runRtosAnalysis', () => {
     expect(res.reason).toContain(`first ${cap} of ${cap + 32 + lateMarker.length} image bytes`);
     expect(res.reason).toContain('within that scope');
     expect(res.reason).not.toContain('static analysis found nothing to assert.');
-  });
+  }, 20000);
 });
