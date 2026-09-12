@@ -82,7 +82,7 @@ export const findings: Messages['findings'] = {
     asserted: 'Afirmaciones',
     other: 'Sin clasificar',
     searchLabel: 'Buscar hallazgos',
-    searchPlaceholder: 'Buscar título, fuente o estado de prueba…',
+    searchPlaceholder: 'Buscar título, fuente, estado de prueba o evidencia…',
     results: (shown, total) => `${shown} de ${total}`,
   },
 
@@ -111,6 +111,8 @@ export const findings: Messages['findings'] = {
 
   why: 'Por qué este estado',
   whyLabel: 'Mostrar por qué este hallazgo está en este estado de prueba',
+  evidence: 'Evidencia registrada',
+  openRecovered: 'Abrir valores exactos',
   interventionMark: (n: number) =>
     `⚠ obtenido tras ${n} cambio${n === 1 ? '' : 's'} en el firmware — no tal como se envía`,
   assertedBy: (who: string) => `afirmado por ${who}`,

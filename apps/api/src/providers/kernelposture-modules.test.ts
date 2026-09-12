@@ -123,7 +123,7 @@ describe('moduleProvenanceFindings', () => {
       provenance: p,
     });
     const oot = f.find((d) => d.kind === 'kernel-out-of-tree-modules');
-    expect(oot?.title).toContain('375 ship');
+    expect(oot?.title).toContain('at least 375 observed');
     expect(oot?.rationale).toMatch(/this count is a floor/i);
   });
 

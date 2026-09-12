@@ -2984,6 +2984,170 @@ span.run-dot.run-running {
 .reason-cell .eyebrow {
   margin-right: 6px;
 }
+.finding-evidence {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.finding-evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.finding-evidence-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.finding-evidence dl {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+}
+.finding-evidence dl > div {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.32fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 5px 7px;
+  background: var(--bg-panel);
+}
+.finding-evidence dt,
+.finding-evidence dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.finding-evidence dt {
+  color: var(--text-faint);
+}
+.finding-evidence dd {
+  color: var(--text);
+}
+
+/* Exact artefacts are the primary content on this surface, not a clipped final column in a generic table. */
+.recovered-values-panel {
+  display: grid;
+  gap: 14px;
+}
+.recovered-values-head,
+.recovered-toolbar,
+.recovered-value-body,
+.recovered-value-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.recovered-values-head {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.recovered-value-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.recovered-values-warning,
+.recovered-bound {
+  max-width: 88ch;
+}
+.recovered-value-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.recovered-stat {
+  display: grid;
+  gap: 2px;
+  padding: 11px 12px;
+  text-align: left;
+  color: var(--text-dim);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.recovered-stat:hover,
+.recovered-stat.is-active {
+  color: var(--text);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.recovered-stat strong {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 1.15rem;
+}
+.recovered-stat span {
+  font-size: 0.72rem;
+}
+.recovered-toolbar {
+  padding-top: 2px;
+}
+.recovered-value-list {
+  display: grid;
+  gap: 8px;
+}
+.recovered-value {
+  min-width: 0;
+  padding: 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.recovered-value-meta {
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+.recovered-value-body {
+  align-items: flex-start;
+}
+.recovered-value-body pre {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 11px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.recovered-value-context {
+  margin-top: 7px;
+  color: var(--text-dim);
+  font-size: 0.69rem;
+  overflow-wrap: anywhere;
+}
+.recovered-empty {
+  padding: 20px;
+  color: var(--text-dim);
+  background: var(--bg-inset);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  line-height: 1.55;
+  max-width: 88ch;
+}
+.recovered-log {
+  margin: 0;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  font-size: 0.7rem;
+}
+.dossier-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
 
 /* ============================================================================================================
  * RESULT SURFACES — readable corpus rows and a findings-first workbench
@@ -3363,6 +3527,22 @@ span.run-dot.run-running {
     max-width: none;
     margin-left: 0;
   }
+  .recovered-values-head,
+  .recovered-toolbar,
+  .recovered-value-body {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .recovered-value-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .recovered-value-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dossier-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .findings-table,
   .findings-table tbody,
   .findings-table tr,
@@ -3390,6 +3570,10 @@ span.run-dot.run-running {
     margin-top: -1px;
     padding: 10px;
     max-width: none;
+  }
+  .finding-evidence dl > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
   .recent-image {
     gap: 10px;

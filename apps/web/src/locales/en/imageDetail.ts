@@ -55,6 +55,8 @@ export const imageDetail = {
     statBinariesValue: (p: { listed: number; total: number; totalIsFloor: boolean; triaged: number }) =>
       `${p.listed}${p.listed < p.total ? ` of ${p.totalIsFloor ? '≥' : ''}${p.total}` : p.totalIsFloor ? ` of ≥${p.total}` : ''} listed (${p.triaged} triaged)`,
     statFindings: 'Findings',
+    statFindingsValue: (priority: number, total: number) => `${priority} priority · ${total} total`,
+    statRecovered: 'Raw recovered values',
     statStrategy: 'Runtime strategy',
 
     copilotTitle: 'Copilot analysis',
@@ -107,8 +109,34 @@ export const imageDetail = {
   },
 
   secrets: {
-    title: 'Secrets & credentials',
-    sub: 'Heuristic matches in the raw image (values shown are pre-extraction)',
+    title: 'Recovered values',
+    sub: 'Exact credentials, hashes, tokens, keys, and configuration recovered from raw bytes, files, and NVRAM.',
+    sensitive:
+      'Sensitive evidence is shown in full. These values come from local firmware artefacts; copying one places it on your system clipboard.',
+    inventory: 'Recovered-value inventory',
+    allSources: 'All values',
+    rawSource: 'Raw image',
+    rootfsSource: 'Extracted rootfs',
+    nvramSource: 'NVRAM',
+    search: 'Search keys, values, paths, or offsets…',
+    audit: 'Scan files & accounts',
+    auditing: 'Auditing…',
+    reaudit: 'Refresh file values',
+    showing: (shown: number, total: number) => `${shown} of ${total} values`,
+    noResults: 'No recovered value matches this source filter or search.',
+    emptyValue: '"" (empty value)',
+    legacyRedaction:
+      'This older stored scan only retained a redacted fingerprint. Re-scan the rootfs to recover the exact value.',
+    sourceLabel: {
+      raw: 'raw image',
+      rootfs: 'rootfs',
+      nvram: 'NVRAM',
+    },
+    category: {
+      credential: 'credential',
+      'key-material': 'key material / hash',
+      configuration: 'configuration',
+    },
     /**
      * Not "clean" — and the previous wording, "No secret-like strings detected in the raw image", was read as
      * exactly that. Two facts have to travel with the zero and neither was on screen.

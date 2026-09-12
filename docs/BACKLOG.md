@@ -371,10 +371,13 @@ entrada correspondiente. Quedan 30.
   autónomo con su razón y el prompt del nodo zero-day tiene prohibido leerlo como ausencia (también tiene prohibido
   inventar un candidato). Tests fijan el total anterior al corte, el borde exacto, `present`/`absent`, el cap y el
   legado sin cobertura.
-- [ ] `providers/webtaint.ts:262` (+ `:372`) **(B)+(C)** — `listHandlers` para en `MAX_FILES = 400` en el orden de
+- [x] `providers/webtaint.ts:262` (+ `:372`) **(B)+(C)** — `listHandlers` paraba en `MAX_FILES = 400` en el orden de
   `HANDLER_DIRS`, y `runWebTaint` además hace `continue` sobre cualquier handler de más de 512 KB sin registrarlo;
   el `reason` dice entonces «Scanned N web handlers, M tainted», donde N es el recuento post-cap y post-salto
-  presentado como la superficie web.
+  presentado como la superficie web. Resuelto: el inventario recorre y cuenta antes de recortar, ordena de forma
+  estable y persiste cobertura retrocompatible (candidatos, seleccionados, analizados, cap, tamaño, ilegibles y
+  completitud de la caminata). W4 queda degradado cuando algo no se examinó. Tests fijan 402 candidatos bajo cap
+  400 y un handler sobredimensionado.
 - [x] `providers/kernelposture.ts` (inventario de módulos) **(B)** — resuelto. La caminata devuelve ahora
   `complete:false` al alcanzar 4.000 ficheros, ante un directorio ilegible o ante una entrada especial/symlink que
   podría ocultar otro módulo. `moduleInventoryComplete` viaja por API; límites y hallazgos rotulan `moduleCount`
@@ -388,10 +391,12 @@ entrada correspondiente. Quedan 30.
   o `N de ≥M`; nunca vuelven a llamar inventario completo a los primeros 2.000 del DFS. Una reextracción elimina
   sólo las rutas que ya no pertenecen a la selección nueva y conserva el triaje de las que siguen, evitando que la
   unión de dos selecciones supere el propio cap.
-- [ ] `providers/devicetree.ts:605` **(B)** — `collectFromDir` deja de *recolectar* al llegar a `BLOB_CAP` (8), así
+- [x] `providers/devicetree.ts:605` **(B)** — `collectFromDir` dejaba de *recolectar* al llegar a `BLOB_CAP` (8), así
   que un noveno o vigésimo `.dtb` en disco nunca llega a ser candidato y es por tanto invisible para `droppedBlobs`
   (`:725`) — justo el contador cuya nota en `:764` («N device tree(s) más allá del cap de 8 no se analizaron»)
-  existe para declarar ese cap. Un directorio con 20 dtb reporta 8 árboles y ninguna nota.
+  existe para declarar ese cap. Resuelto: la caminata sigue inventariando tras el octavo fichero, separa candidatos
+  no leídos por cap/tamaño/error y declara si el recorrido terminó. El negativo cambia a «entradas examinadas» si
+  la extracción fue parcial. Test con 10 DTB distintos fija 8 leídos y 2 explícitamente omitidos.
 - [ ] `corpus.ts:253` y `:264` **(B)** — `credentialReuse` y `componentPrevalence` son `LIMIT 200` (correctamente
   tras `ORDER BY imageCount DESC`) sin un `COUNT(*)` hermano, y `/corpus/overview` entrega los arrays a la página
   como «el corpus»; con 200 filas la página no puede decir que hay más. Hoy no muerde (0 grupos de reuso, 0 de
@@ -400,27 +405,30 @@ entrada correspondiente. Quedan 30.
   consumidores (`research/run.ts:347`, `agent/zeroday.ts:173`) filtran por priors *confirmados* **después** del cap,
   así que en cuanto una familia pasa de 200 filas un prior probado se cae por el final y se lee como «no hay prior
   para esta familia». Filtrar o rankear dentro de la consulta.
-- [ ] `copilot.ts:97` **(B)** — `operatorAssertions: asserted.slice(0, 40)` mientras `counts` (`:96`) sólo lleva
+- [x] `copilot.ts:97` **(B)** — `operatorAssertions: asserted.slice(0, 40)` mientras `counts` (`:96`) sólo llevaba
   `findings` y `binaries`, y el prompt de `:111` le dice al modelo «Counts may exceed the arrays shown; use
   `counts` for totals»: para el único array cuya sobreafirmación justifica todo el corte operador/medido, ese total
-  no existe. Añadir `counts.operatorAssertions`.
-- [ ] `agent/nodes.ts:218` **(B)+(A)** — `signatures: analysis.signatures.slice(0, 40)` entrega al modelo de triaje
+  no existía. Ya resuelto en `b863e71`: `counts.operatorAssertions` y su regla de truncamiento viajan en el mismo
+  contexto; esta casilla duplicada había quedado abierta.
+- [x] `agent/nodes.ts:218` **(B)+(A)** — `signatures: analysis.signatures.slice(0, 40)` entregaba al modelo de triaje
   40 aciertos **en orden de offset** y sin recuento de lo descartado, aunque `analysis.signatureScan.matched` está
   en el mismo bundle (5.004 listadas de 32.372 en la Obsbot de 61,7 MB). El modelo lee el array como el conjunto de
-  firmas de la imagen y decide `resolvedClass` / `shouldExtract` con él.
-- [ ] `agent/nodes.ts:420` **(B)** — `binaries.slice(0, 60)` está al menos rankeado (`listBinaries` ordena por
+  firmas de la imagen y decide `resolvedClass` / `shouldExtract` con él. Resuelto: se entrega un representante por
+  ID, ordenado por confianza antes que offset, junto a `shownDistinctIds`, listado, total de matches y total de IDs;
+  un análisis histórico sin esos totales lleva `null`, no una completitud inventada.
+- [x] `agent/nodes.ts:420` **(B)** — `binaries.slice(0, 60)` está al menos rankeado (`listBinaries` ordena por
   `networkFacing DESC, path ASC`), pero el contexto de selección de objetivos no declara total, así que un modelo
-  eligiendo objetivos de emulación sobre un rootfs de 400 ELF lee el array como el inventario.
+  eligiendo objetivos de emulación sobre un rootfs de 400 ELF lee el array como el inventario. Resuelto con
+  `binaryInventory` (`shown`, `total`, regla) y una instrucción explícita en el prompt: es un prefijo rankeado, no
+  el inventario completo. Los prompts tienen regresión sobre denominador y regla.
 - [ ] `research/run.ts:118` **(B)+(C)** — `scanRootfsKeys` recorre con `visited < 4000 && out.length < 20` y salta
   todo fichero ≥ 32 KiB, sacando directorios en orden DFS; `:326` registra luego `Keys: ${keyMaterial.length}
   embedded` y ese mismo array pasa a ser `IntelContext.keyMaterial`, que el prompt de inteligencia trata como *el*
   material de clave embebido del borrador de divulgación. En un rootfs de más de 4.000 entradas el recuento es un
   suelo producido por la disposición de directorios, y nada lo dice.
-- [ ] `apps/web/src/pages/ImageDetail.tsx:619` **(A)+(B)** — `analysis.entropy.highEntropyRegions.slice(0, 20)`
-  dibuja las veinte primeras regiones *por offset* sin total en ningún sitio del panel. La API devuelve la lista
-  entera; una imagen con más regiones pierde las posteriores —a menudo las mayores— y el lector no tiene forma de
-  saber que la tabla es un prefijo. Ordenar por tamaño antes del corte y añadir el «mostrando N de M» que ya
-  llevan las tablas de OSV y del mapa de componentes.
+- [x] `apps/web/src/pages/ImageDetail.tsx` **(A)+(B)** — la tabla de entropía ya no aplica
+  `highEntropyRegions.slice(0, 20)` por desplazamiento: muestra todas las regiones que la API devuelve, ordenadas
+  de mayor a menor tamaño. No queda un segundo límite de presentación ni un prefijo silencioso que explicar.
 - [ ] `apps/web/src/pages/Corpus.tsx:124` **(B)** — `overview.componentPrevalence.slice(0, 100)` recorta la lista
   que la API ya limitó a 200, sin total y sin nota al pie: las filas 101–200 desaparecen sin nada en pantalla que
   indique el corte.

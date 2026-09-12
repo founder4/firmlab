@@ -358,6 +358,30 @@ describe('runFsAudit — the key lane over real files', () => {
       expect(r.scan?.filesScanned).toBe(1);
       expect(r.scan?.bytesUnread).toBe(0);
       expect(r.reason).toMatch(/Read every byte of all 1 file\(s\)/);
+      expect(r.recoveredValues).toContainEqual({
+        kind: 'private-key',
+        path: 'usr/bin/httpd',
+        label: 'RSA PRIVATE KEY',
+        offset: 700 * 1024,
+        value: RSA_KEY,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains exact shadow hashes for the local evidence inventory', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fsaudit-shadow-value-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'etc'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'etc/shadow'), 'root:$1$firmware$exact-hash:19000:0:99999:7:::\n');
+      const r = runFsAudit(dir);
+      expect(r.recoveredValues).toContainEqual({
+        kind: 'shadow-hash',
+        path: 'etc/shadow',
+        account: 'root',
+        value: '$1$firmware$exact-hash',
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

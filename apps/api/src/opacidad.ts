@@ -617,11 +617,17 @@ async function webtaintRun(c: RunCtx): Promise<StepOutcome> {
   const probes = taintReachabilityLeads(r.handlers, c.rootfsPath as string, reachabilityBudget(c));
   const leads = [...handlerLeads(r.handlers, c.rootfsPath as string), ...probes];
   const probeNote = probes.length ? `, ${probes.length} exec'd helper(s) queued for reachability` : '';
+  const partial =
+    !!r.coverage &&
+    (!r.coverage.traversalComplete ||
+      r.coverage.skippedByFileCap > 0 ||
+      r.coverage.skippedOversize > 0 ||
+      r.coverage.skippedUnreadable > 0);
   return {
     summary: `web attack-surface: ${r.handlers.length} handlers, ${tainted} tainted → ${r.findings.length} findings${probeNote}`,
     findingCount: r.findings.length,
     ...(leads.length ? { leads } : {}),
-    ...(r.handlers.length === 0 ? { degraded: true, note: r.reason } : {}),
+    ...(r.handlers.length === 0 || partial ? { degraded: true, note: r.reason } : {}),
   };
 }
 

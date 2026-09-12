@@ -11,8 +11,10 @@
  * weak hash, a private key on disk) is `static_confirmed`; a *service exposure* whose reachability depends on
  * the device being wired/powered (an init shell, telnetd, anon ftp) is `needs_runtime_reproduction` — a lead,
  * never a device verdict. Evidence carries the file path and the offending line, TRUNCATED, with any password
- * hash REDACTED (never the secret value). The runner tolerates every file being missing and degrades to
- * available:false when there is no rootfs — it never fabricates a finding.
+ * hash REDACTED in normalized finding evidence. The provider result separately retains exact recovered values for
+ * the local forensic UI; reports and corpus indices continue to receive only the redacted evidence. The runner
+ * tolerates every file being missing and degrades to available:false when there is no rootfs — it never fabricates
+ * a finding.
  *
  * **The key lane, and what it had wrong.** `scanContentSecrets` was documented "found by content, not filename"
  * and was — but the runner only ever handed it files whose EXTENSION was on a whitelist (plus extensionless files
@@ -351,10 +353,11 @@ export interface UnclaimedKeyBlock {
  * *filename*, this catches the case the re-run exposed — a device-wide TLS private key shipped inside a file whose
  * name gives no hint (Tenda-Camera's `O=Tenda` RSA key, the WR940N's key inside `usr/bin/httpd`).
  *
- * A file yields at most ONE finding (a multi-key bundle is one problem), HIGH / `static_confirmed` because a
+ * A file yields at most ONE normalized finding (a multi-key bundle is one problem), HIGH / `static_confirmed` because a
  * decoded private key is a fact about the bytes. Severity drops to MEDIUM when every key in the file is encrypted,
  * since possession then also needs the passphrase — which this provider does not look for. The key body is NEVER
- * included in evidence: only its algorithm, size, offset and path. Blocks that are certificates, public keys or
+ * included in normalized evidence: only its algorithm, size, offset and path. The local provider result retains it
+ * for direct forensic inspection. Blocks that are certificates, public keys or
  * parameters are not key material and are not claimed; blocks that are private-key-labelled but do not decode come
  * back in `unclaimed` so the caller can say they were seen and rejected.
  */
@@ -428,13 +431,13 @@ export function keyMaterialFindings(files: { path: string; blocks: PemBlock[] }[
           'base64 body, which is key material by construction and not a shape a placeholder carries. The',
           'passphrase was NOT attempted, so this says the material is here — not that it can be used. A',
           'device-wide/shared key baked into firmware enables impersonation/decryption once its passphrase (often',
-          'shipped in the same image) is known. The body is never stored here. Found by content, not filename.',
+          'shipped in the same image) is known. The body is retained only in the local provider result, never in normalized evidence. Found by content, not filename.',
         ]
       : [
           `A PEM private-key block is literally present in this file and its body decodes as ${described} with`,
           'node:crypto — the label alone was not trusted. A device-wide/shared private key baked into the firmware',
-          '(e.g. a TLS server key identical on every unit) enables impersonation/decryption. The key body is never',
-          'stored here; its presence is a static fact about the rootfs. Found by content, not filename, and read',
+          '(e.g. a TLS server key identical on every unit) enables impersonation/decryption. The key body is retained',
+          'only in the local provider result, never in normalized evidence; its presence is a static fact about the rootfs. Found by content, not filename, and read',
           'before it was named.',
         ];
     findings.push({
@@ -580,6 +583,15 @@ export interface FsAuditResult {
    * build does not carry it, and a required field would be a claim about data this code does not own.
    */
   scan?: PemScanCoverage;
+  /** Exact local artefacts for direct operator inspection. Optional forever for older persisted results. */
+  recoveredValues?: {
+    kind: 'shadow-hash' | 'empty-password' | 'private-key';
+    path: string;
+    value: string;
+    account?: string;
+    label?: string;
+    offset?: number;
+  }[];
 }
 
 const WALK_CAP = 5000;
@@ -870,6 +882,28 @@ export function runFsAudit(rootfsPath: string): FsAuditResult {
   const { scanned, skipped, rule } = scanTreeForPem(root, files, DEFAULT_PEM_BUDGET);
   const scan = summarizePemScan(scanned, skipped, rule);
   const keyMaterial = keyMaterialFindings(scanned.map((e) => ({ path: e.path, blocks: e.blocks })));
+  const recoveredValues: NonNullable<FsAuditResult['recoveredValues']> = [];
+  for (const entry of parseShadow(shadow)) {
+    if (entry.hash === '!' || entry.hash === '!!' || entry.hash === '*' || entry.hash === 'x') continue;
+    recoveredValues.push({
+      kind: entry.hash ? 'shadow-hash' : 'empty-password',
+      path: 'etc/shadow',
+      account: entry.name,
+      value: entry.hash,
+    });
+  }
+  for (const entry of scanned) {
+    for (const block of entry.blocks) {
+      if (block.kind !== 'private-key' || !readPrivateKeyBlock(block).isKey) continue;
+      recoveredValues.push({
+        kind: 'private-key',
+        path: entry.path,
+        label: block.label,
+        offset: block.offset,
+        value: block.text,
+      });
+    }
+  }
 
   const findings: FindingDraft[] = [
     // First, whether the credential checks below could examine anything at all — an empty result from them is
@@ -898,5 +932,5 @@ export function runFsAudit(rootfsPath: string): FsAuditResult {
     'service exposures (init shell, telnetd, anon ftp) need runtime reproduction.',
     ...bounds,
   ].join(' ');
-  return { available: true, findings, filesScanned: entriesWalked, reason, scan };
+  return { available: true, findings, filesScanned: entriesWalked, reason, scan, recoveredValues };
 }

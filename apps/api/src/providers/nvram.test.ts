@@ -467,7 +467,7 @@ describe('runNvramScan', () => {
         `1 nvram store\\(s\\): 0x32000 — ${ALIEXPRESS_CONFIG.length} record\\(s\\), CRC32 verified over 16384 bytes`,
       ),
     );
-    expect(res.reason).toMatch(/all values redacted/);
+    expect(res.reason).toMatch(/provider result retains the recovered records/);
     expect(res.findings.some((f) => f.kind === 'nvram-credential')).toBe(true);
   });
 

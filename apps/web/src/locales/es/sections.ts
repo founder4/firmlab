@@ -11,7 +11,7 @@ export const sections: Messages['sections'] = {
   entropy: 'Entropía',
   filesystem: 'Extracción',
   files: 'Explorador de ficheros',
-  secrets: 'Secretos',
+  secrets: 'Valores recuperados',
   hardware: 'Interfaces de hardware',
   bootloader: 'Gestor de arranque',
   sbom: 'SBOM y CVEs',

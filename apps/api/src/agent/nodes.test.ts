@@ -11,6 +11,7 @@ import {
   parseTargetSelectionDecision,
   parseTriageDecision,
   reconcileTriageDecision,
+  selectTriageSignatures,
 } from './nodes.js';
 
 describe('operator goal propagation', () => {
@@ -28,6 +29,13 @@ describe('operator goal propagation', () => {
         highEntropyRegions: 0,
       },
       signatures: [],
+      signatureInventory: {
+        shownDistinctIds: 0,
+        listedMatches: 0,
+        matched: 0,
+        distinctIds: 0,
+        selectionRule: 'high confidence first',
+      },
       secretKinds: {},
       corpus: { familyKey: 'uefi', familyImageCount: 1, reusedCredentials: 0 },
       alreadyExtracted: true,
@@ -38,6 +46,7 @@ describe('operator goal propagation', () => {
       identity: { firmwareClass: 'uefi-bios', arch: 'x86_64' },
       capabilities: { strategy: 'static-only', proofCeiling: 'static', reason: 'UEFI', maxRung: 'none' },
       binaries: [],
+      binaryInventory: { shown: 0, total: 0, selectionRule: 'network-facing first, then path' },
       findings: { total: 0, bySeverity: {}, byProofState: {}, operatorAssertions: 0, top: [] },
       corpus: { reusedArtifacts: 0, prevalentComponents: 0 },
     } satisfies TargetSelectionContext;
@@ -49,6 +58,53 @@ describe('operator goal propagation', () => {
   it('states that the runtime ceiling is not the recommended rung', () => {
     expect(TARGET_SELECTION_SYSTEM_PROMPT).toContain('LEAST sufficient rung');
     expect(TARGET_SELECTION_SYSTEM_PROMPT).toContain('ceiling, not a recommendation');
+  });
+});
+
+describe('bounded model inventories', () => {
+  it('selects one signature per id and ranks confidence before file offset', () => {
+    const signatures = [
+      { id: 'noise', description: 'noise', category: 'compression', confidence: 'low', offset: 1 },
+      { id: 'noise', description: 'noise again', category: 'compression', confidence: 'low', offset: 2 },
+      { id: 'firmware', description: 'container', category: 'container', confidence: 'high', offset: 999 },
+    ] as const;
+    expect(selectTriageSignatures(signatures).map((signature) => signature.id)).toEqual(['firmware', 'noise']);
+  });
+
+  it('puts the inventory denominator and selection rule in both model prompts', () => {
+    const goal = 'Review bounded inputs.';
+    const triage = {
+      goal,
+      identity: { firmwareClass: 'unknown', arch: 'unknown', endianness: 'unknown', filesystems: [], bootloader: null },
+      size: 1,
+      entropy: { mean: 0, max: 0, likelyEncrypted: false, likelyCompressed: false, highEntropyRegions: 0 },
+      signatures: [],
+      signatureInventory: {
+        shownDistinctIds: 40,
+        listedMatches: 5004,
+        matched: 32372,
+        distinctIds: 44,
+        selectionRule: 'high confidence first',
+      },
+      secretKinds: {},
+      corpus: { familyKey: 'image:test', familyImageCount: 1, reusedCredentials: 0 },
+      alreadyExtracted: false,
+      measurement: { completedStages: [], findings: { total: 0, byProofState: {}, top: [] } },
+    } satisfies TriageContext;
+    const target = {
+      goal,
+      identity: { firmwareClass: 'embedded-linux', arch: 'mips' },
+      capabilities: { strategy: 'qemu-user', proofCeiling: 'emulation', reason: 'ready', maxRung: 'qemu-user' },
+      binaries: [],
+      binaryInventory: { shown: 60, total: 400, selectionRule: 'network-facing first, then path' },
+      findings: { total: 0, bySeverity: {}, byProofState: {}, operatorAssertions: 0, top: [] },
+      corpus: { reusedArtifacts: 0, prevalentComponents: 0 },
+    } satisfies TargetSelectionContext;
+
+    expect(buildTriageUserPrompt(triage)).toContain('32372');
+    expect(buildTriageUserPrompt(triage)).toContain('high confidence first');
+    expect(buildTargetSelectionUserPrompt(target)).toContain('400');
+    expect(buildTargetSelectionUserPrompt(target)).toContain('network-facing first');
   });
 });
 
@@ -133,6 +189,13 @@ describe('reconcileTriageDecision — measured identity is authoritative', () =>
     size: 1,
     entropy: { mean: 1, max: 2, likelyEncrypted: false, likelyCompressed: false, highEntropyRegions: 0 },
     signatures: [],
+    signatureInventory: {
+      shownDistinctIds: 0,
+      listedMatches: 0,
+      matched: 0,
+      distinctIds: 0,
+      selectionRule: 'high confidence first',
+    },
     secretKinds: {},
     corpus: { familyKey: 'uefi', familyImageCount: 1, reusedCredentials: 0 },
     alreadyExtracted: false,

@@ -4,8 +4,9 @@
  * gitleaks is optional: with it absent the job returns a clear `available:false` result rather than throwing.
  *
  * gitleaks exits non-zero (1) precisely WHEN it finds leaks, so a non-zero exit with a valid JSON report is the
- * success path here, not a failure. Matched secrets are redacted before persistence so the DB never holds a full
- * credential.
+ * success path here, not a failure. The exact value is retained in the provider result so the local forensic UI
+ * can inspect and copy the artefact it found. The normalized findings ledger still uses the redacted fingerprint
+ * and scrubbed context: a report or cross-provider summary must not reproduce credentials incidentally.
  *
  * **This module gathers; it does not judge.** Whether a hit deserves `static_confirmed` or is only a lead is
  * decided in `findings-normalize.ts`, which is store-free and therefore reachable by a unit test. What this
@@ -46,6 +47,8 @@ export interface GitleaksFinding {
   file: string;
   line: number;
   match: string;
+  /** Exact value reported by gitleaks. Optional forever for results persisted before direct inspection existed. */
+  value?: string;
   /**
    * Shannon entropy gitleaks scored the secret at. Optional forever — results stored before this field existed
    * do not carry it, and an absent score must not be read as a low one.
@@ -138,7 +141,7 @@ export function scrubContext(raw: unknown, secret: string): string {
 }
 
 /**
- * Map a raw gitleaks report array to capped, redacted findings.
+ * Map a raw gitleaks report array to capped findings with an exact operator value and redacted summary fields.
  *
  * `readFile` is optional and injected: with it, each hit also carries the (scrubbed) source line it sits on,
  * which is the only way to tell a commented-out match from live configuration — gitleaks reports the column but
@@ -178,6 +181,7 @@ export function mapFindings(rows: GitleaksRow[], rootfsPath: string, readFile?: 
       file: rel,
       line,
       match: redactMatch(r.Secret ?? r.Match),
+      ...(secret ? { value: secret } : {}),
       ...(typeof r.Entropy === 'number' && Number.isFinite(r.Entropy) ? { entropy: r.Entropy } : {}),
       ...(context ? { context } : {}),
       ...(lineText ? { lineText } : {}),

@@ -141,7 +141,22 @@ export interface DeviceTreeResult {
   /** Every place that was actually searched — what a `found:false` does and does not cover. */
   searched: string[];
   findings: FindingDraft[];
+  /** Optional forever: older persisted results predate explicit coverage of extracted DTB candidates. */
+  extractionScan?: ExtractedDeviceTreeScan;
   reason: string;
+}
+
+export interface ExtractedDeviceTreeScan {
+  /** Matching filenames encountered; a lower bound when `traversalComplete` is false. */
+  candidateFiles: number;
+  filesRead: number;
+  skippedByFileCap: number;
+  skippedOversize: number;
+  skippedUnreadable: number;
+  traversalComplete: boolean;
+  directoriesVisited: number;
+  fileCap: number;
+  selectionRule: string;
 }
 
 // === Pure analysis =======================================================================================
@@ -503,16 +518,28 @@ export function deviceTreeFindings(blob: DeviceTreeBlob): FindingDraft[] {
 }
 
 /** Pure: the honest finding for an image no device tree could be read from. Not a negative — a question unanswered. */
-export function absentFinding(searched: string[], rejected: RejectedFdt[]): FindingDraft {
+export function absentFinding(
+  searched: string[],
+  rejected: RejectedFdt[],
+  extractionScan?: ExtractedDeviceTreeScan,
+): FindingDraft {
+  const partialExtraction =
+    !!extractionScan &&
+    (!extractionScan.traversalComplete ||
+      extractionScan.skippedByFileCap > 0 ||
+      extractionScan.skippedOversize > 0 ||
+      extractionScan.skippedUnreadable > 0);
   return {
     kind: 'devicetree-absent',
-    title: 'No readable device tree in this image',
+    title: partialExtraction
+      ? 'No readable device tree in the examined inputs'
+      : 'No readable device tree in this image',
     severity: 'info',
     proofState: 'blocked_by_platform',
-    evidence: { searched, ...(rejected.length > 0 ? { rejected } : {}) },
+    evidence: { searched, ...(rejected.length > 0 ? { rejected } : {}), ...(extractionScan ? { extractionScan } : {}) },
     rationale: [
       `The question "what board does this image declare?" was asked in ${searched.length} place(s) and could not`,
-      'be answered from these bytes. That is not a finding that the image lacks a board description: a great many',
+      `be answered from the examined bytes.${partialExtraction ? ' Some extracted DTB candidates were not examined, so this is explicitly a partial search.' : ''} That is not a finding that the image lacks a board description: a great many`,
       'vendor builds (every pre-device-tree ath79 or Broadcom image in this corpus among them) describe their',
       'board in compiled-in C instead, so there is nothing here to read. Board identity for this image has to',
       'come from another source, and the MCU fingerprint remains a heuristic.',
@@ -528,6 +555,7 @@ const READ_CAP = 512 * 1024 * 1024;
 const BLOB_CAP = 8;
 /** How deep the FIT → UBI → FIT descent may go before it stops looking. */
 const CHAIN_DEPTH = 3;
+const DIR_WALK_CAP = 20000;
 const UBI_EC_MAGIC = 0x55424923; // "UBI#"
 
 interface Candidate {
@@ -596,19 +624,28 @@ function collectFromFit(bytes: Uint8Array, origin: string, depth: number, search
   return out;
 }
 
-/** Collect `*.dtb` / `*.dtbo` files from the extraction output, bounded so a huge rootfs cannot stall the job. */
-function collectFromDir(dir: string, searched: Set<string>): Candidate[] {
+/** Inventory `*.dtb` / `*.dtbo` files, reading a bounded prefix while counting what the cap leaves out. */
+function collectFromDir(
+  dir: string,
+  searched: Set<string>,
+): { candidates: Candidate[]; scan: ExtractedDeviceTreeScan } {
   const out: Candidate[] = [];
   const queue: string[] = [dir];
-  let visited = 0;
+  let directoriesVisited = 0;
+  let candidateFiles = 0;
+  let skippedByFileCap = 0;
+  let skippedOversize = 0;
+  let skippedUnreadable = 0;
+  let traversalComplete = true;
   searched.add(`the extraction output (*.dtb / *.dtbo under ${dir})`);
-  while (queue.length > 0 && visited < 20000 && out.length < BLOB_CAP) {
+  while (queue.length > 0 && directoriesVisited < DIR_WALK_CAP) {
     const current = queue.shift() as string;
-    visited++;
+    directoriesVisited++;
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
+      entries = fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
     } catch {
+      traversalComplete = false;
       continue;
     }
     for (const entry of entries) {
@@ -616,21 +653,43 @@ function collectFromDir(dir: string, searched: Set<string>): Candidate[] {
       if (entry.isDirectory()) {
         queue.push(full);
       } else if (entry.isFile() && /\.dtbo?$/i.test(entry.name)) {
+        candidateFiles++;
+        if (out.length >= BLOB_CAP) {
+          skippedByFileCap++;
+          continue;
+        }
         try {
           const stat = fs.statSync(full);
-          if (stat.size > 16 * 1024 * 1024) continue;
+          if (stat.size > 16 * 1024 * 1024) {
+            skippedOversize++;
+            continue;
+          }
           out.push({
             origin: `extracted file ${path.relative(dir, full)}`,
             bytes: new Uint8Array(fs.readFileSync(full)),
             base: 0,
           });
         } catch {
-          // unreadable file — skipped, and the raw-image scan still covers the same bytes
+          skippedUnreadable++;
         }
       }
     }
   }
-  return out;
+  if (queue.length > 0) traversalComplete = false;
+  return {
+    candidates: out,
+    scan: {
+      candidateFiles,
+      filesRead: out.length,
+      skippedByFileCap,
+      skippedOversize,
+      skippedUnreadable,
+      traversalComplete,
+      directoriesVisited,
+      fileCap: BLOB_CAP,
+      selectionRule: 'breadth-first directory walk with path-sorted entries',
+    },
+  };
 }
 
 function blocked(reason: string, searched: string[]): DeviceTreeResult {
@@ -669,8 +728,13 @@ export function runDeviceTreeAnalysis(imagePath: string, extractDir: string | nu
   }
 
   const candidates: Candidate[] = [];
+  let extractionScan: ExtractedDeviceTreeScan | undefined;
   if (detectFormat(bytes) === 'fit') candidates.push(...collectFromFit(bytes, 'FIT', 0, searched));
-  if (extractDir && fs.existsSync(extractDir)) candidates.push(...collectFromDir(extractDir, searched));
+  if (extractDir && fs.existsSync(extractDir)) {
+    const extracted = collectFromDir(extractDir, searched);
+    candidates.push(...extracted.candidates);
+    extractionScan = extracted.scan;
+  }
 
   searched.add('the raw image (FDT magic scan with full header validation)');
   for (const header of scanFdtCandidates(bytes)) {
@@ -735,20 +799,28 @@ export function runDeviceTreeAnalysis(imagePath: string, extractDir: string | nu
 
   const searchedList = [...searched];
   if (blobs.length === 0) {
+    const unexamined = extractionScan
+      ? extractionScan.skippedByFileCap + extractionScan.skippedOversize + extractionScan.skippedUnreadable
+      : 0;
     const why =
       rejected.length > 0
         ? `${rejected.length} FDT header(s) validated but no tree could be read to completion — see rejected.`
         : containerCount > 0
           ? 'The only flattened device trees present are FIT containers, which describe an image layout, not a board.'
           : 'No FDT magic with a valid header was present.';
+    const coverageNote =
+      extractionScan && (unexamined > 0 || !extractionScan.traversalComplete)
+        ? ` The extracted-file search was partial: ${extractionScan.filesRead} of at least ${extractionScan.candidateFiles} candidate file(s) were read.`
+        : '';
     return {
       available: true,
       found: false,
       blobs: [],
       rejected,
       searched: searchedList,
-      findings: [absentFinding(searchedList, rejected)],
-      reason: `No readable device tree found. ${why}`,
+      findings: [absentFinding(searchedList, rejected, extractionScan)],
+      ...(extractionScan ? { extractionScan } : {}),
+      reason: `No readable device tree found in the examined inputs. ${why}${coverageNote}`,
     };
   }
 
@@ -762,6 +834,24 @@ export function runDeviceTreeAnalysis(imagePath: string, extractDir: string | nu
         : ' Nothing in the image declares which one the board uses, so all are reported.';
   const droppedNote =
     droppedBlobs > 0 ? ` ${droppedBlobs} further device tree(s) beyond the ${BLOB_CAP} cap were not analyzed.` : '';
+  const extractedDropNote = extractionScan
+    ? [
+        extractionScan.skippedByFileCap
+          ? `${extractionScan.skippedByFileCap} extracted .dtb/.dtbo candidate file(s) beyond the ${BLOB_CAP}-file cap were not read (breadth-first, path-sorted selection)`
+          : null,
+        extractionScan.skippedOversize
+          ? `${extractionScan.skippedOversize} extracted candidate file(s) over 16 MiB were not read`
+          : null,
+        extractionScan.skippedUnreadable
+          ? `${extractionScan.skippedUnreadable} extracted candidate file(s) could not be read`
+          : null,
+        extractionScan.traversalComplete
+          ? null
+          : `the extracted-file walk stopped after ${extractionScan.directoriesVisited} directories`,
+      ]
+        .filter((part): part is string => part !== null)
+        .join('; ')
+    : '';
   const rejectedNote =
     rejected.length > 0
       ? ` ${rejected.length} further FDT header(s) validated but could not be read to completion (see rejected).`
@@ -774,9 +864,10 @@ export function runDeviceTreeAnalysis(imagePath: string, extractDir: string | nu
     rejected,
     searched: searchedList,
     findings,
+    ...(extractionScan ? { extractionScan } : {}),
     reason: [
       `Read ${blobs.length} device tree${blobs.length === 1 ? '' : 's'} from the image.`,
-      `${multiNote}${droppedNote}${rejectedNote}`.trim(),
+      `${multiNote}${droppedNote}${rejectedNote}${extractedDropNote ? ` ${extractedDropNote}.` : ''}`.trim(),
       'Static analysis of the tree bytes — it proves what the image declares about its hardware, never what the',
       'hardware does.',
     ]

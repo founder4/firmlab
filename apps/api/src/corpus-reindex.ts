@@ -251,7 +251,11 @@ function dedupe<T>(rows: T[], key: (row: T) => string): T[] {
 export function planGitleaksCredentials(result: GitleaksResult | null): CredentialRow[] {
   if (!result?.available) return [];
   return dedupe(
-    result.findings.map((f) => ({ value: f.match, kind: f.rule, severity: classifyGitleaksHit(f).severity })),
+    result.findings.map((f) => ({
+      value: f.value ?? f.match,
+      kind: f.rule,
+      severity: classifyGitleaksHit(f).severity,
+    })),
     (r) => r.value,
   );
 }

@@ -82,7 +82,7 @@ export const findings = {
     asserted: 'Assertions',
     other: 'Uncategorized',
     searchLabel: 'Search findings',
-    searchPlaceholder: 'Search title, source or proof state…',
+    searchPlaceholder: 'Search title, source, proof state, or evidence…',
     results: (shown: number, total: number) => `${shown} of ${total}`,
   },
 
@@ -142,6 +142,8 @@ export const findings = {
   /** The provider's own sentence for why a finding sits at its proof state — especially a downgrade. */
   why: 'Why this state',
   whyLabel: 'Show why this finding sits at this proof state',
+  evidence: 'Recorded evidence',
+  openRecovered: 'Open exact values',
   interventionMark: (n: number) => `⚠ obtained after ${n} change${n === 1 ? '' : 's'} to the firmware — not as shipped`,
   assertedBy: (who: string) => `asserted by ${who}`,
   agentSuffix: ' (agent)',

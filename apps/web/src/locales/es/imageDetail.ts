@@ -51,6 +51,8 @@ export const imageDetail: Messages['imageDetail'] = {
     statBinariesValue: (p: { listed: number; total: number; totalIsFloor: boolean; triaged: number }) =>
       `${p.listed}${p.listed < p.total ? ` de ${p.totalIsFloor ? '≥' : ''}${p.total}` : p.totalIsFloor ? ` de ≥${p.total}` : ''} listados (${p.triaged} triados)`,
     statFindings: 'Hallazgos',
+    statFindingsValue: (priority: number, total: number) => `${priority} prioritarios · ${total} en total`,
+    statRecovered: 'Valores recuperados en bruto',
     statStrategy: 'Estrategia de ejecución',
 
     copilotTitle: 'Análisis del copiloto',
@@ -103,8 +105,34 @@ export const imageDetail: Messages['imageDetail'] = {
   },
 
   secrets: {
-    title: 'Secretos y credenciales',
-    sub: 'Coincidencias heurísticas en la imagen en bruto (los valores mostrados son previos a la extracción)',
+    title: 'Valores recuperados',
+    sub: 'Credenciales, hashes, tokens, claves y configuración exactos recuperados de bytes, ficheros y NVRAM.',
+    sensitive:
+      'La evidencia sensible se muestra íntegra. Estos valores proceden de artefactos locales del firmware; al copiar uno se coloca en el portapapeles del sistema.',
+    inventory: 'Inventario de valores recuperados',
+    allSources: 'Todos los valores',
+    rawSource: 'Imagen en bruto',
+    rootfsSource: 'Rootfs extraído',
+    nvramSource: 'Almacén NVRAM',
+    search: 'Buscar claves, valores, rutas o desplazamientos…',
+    audit: 'Escanear ficheros y cuentas',
+    auditing: 'Auditando…',
+    reaudit: 'Actualizar valores de ficheros',
+    showing: (shown: number, total: number) => `${shown} de ${total} valores`,
+    noResults: 'Ningún valor recuperado coincide con esta fuente o búsqueda.',
+    emptyValue: '"" (valor vacío)',
+    legacyRedaction:
+      'Este escaneo antiguo sólo conservó una huella censurada. Vuelve a escanear el rootfs para recuperar el valor exacto.',
+    sourceLabel: {
+      raw: 'imagen en bruto',
+      rootfs: 'rootfs extraído',
+      nvram: 'almacén NVRAM',
+    },
+    category: {
+      credential: 'credencial',
+      'key-material': 'material de clave / hash',
+      configuration: 'configuración',
+    },
     /**
      * No es «limpio», y la redacción anterior se leía justo así. El cero tiene que viajar con dos hechos: la
      * heurística lee cadenas ASCII imprimibles de los bytes EN BRUTO, antes de extraer nada, así que un secreto

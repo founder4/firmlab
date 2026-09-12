@@ -583,4 +583,31 @@ describe('runDeviceTreeAnalysis', () => {
     expect(res.blobs[0]?.origin).toMatch(/extracted file/);
     expect(res.searched.some((s) => s.includes('.dtb'))).toBe(true);
   });
+
+  it('counts extracted DTB candidates beyond the read cap instead of hiding them', () => {
+    const dir = path.join(tmp, 'extract-many');
+    fs.mkdirSync(path.join(dir, 'boot'), { recursive: true });
+    for (let i = 0; i < 10; i++) {
+      const tree = buildFdt({
+        name: '',
+        props: [
+          ['model', str(`Board variant ${i}`)],
+          ['compatible', strlist(`vendor,board-${i}`)],
+        ],
+      });
+      fs.writeFileSync(path.join(dir, 'boot', `board-${i}.dtb`), tree);
+    }
+
+    const res = runDeviceTreeAnalysis(write('empty-many.bin', Buffer.alloc(4096, 0xff)), dir);
+    expect(res.found).toBe(true);
+    expect(res.blobs).toHaveLength(8);
+    expect(res.extractionScan).toMatchObject({
+      candidateFiles: 10,
+      filesRead: 8,
+      skippedByFileCap: 2,
+      traversalComplete: true,
+      selectionRule: 'breadth-first directory walk with path-sorted entries',
+    });
+    expect(res.reason).toMatch(/2 extracted \.dtb\/\.dtbo candidate file\(s\).*were not read/);
+  });
 });

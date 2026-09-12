@@ -32,8 +32,11 @@
  */
 import { type FindingCategory, compareFindings, findingCategory, isEstablished, severityCensus } from '@firmlab/core';
 import { Fragment, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { Finding, FindingProvenance, OperatorAssertion } from '../api';
+import { copyToClipboard } from '../clipboard';
 import { messages, useMessages } from '../i18n';
+import { toast } from '../toast';
 
 /**
  * The ladder, plus the one value that is not on it. `operator_assertion` gets a dashed border and the theme's
@@ -500,6 +503,71 @@ function DanglingDisputeNote({ dangling }: { dangling: readonly Finding[] }): JS
   );
 }
 
+interface EvidenceLeaf {
+  path: string;
+  value: string;
+}
+
+/** Flatten provider evidence without interpreting, masking, or dropping nested values. */
+export function evidenceLeaves(evidence: Record<string, unknown>): EvidenceLeaf[] {
+  const leaves: EvidenceLeaf[] = [];
+  const visit = (value: unknown, path: string): void => {
+    if (Array.isArray(value)) {
+      if (value.length === 0) leaves.push({ path, value: '[]' });
+      else value.forEach((item, index) => visit(item, `${path}[${index}]`));
+      return;
+    }
+    if (value !== null && typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length === 0) leaves.push({ path, value: '{}' });
+      else for (const [key, item] of entries) visit(item, path ? `${path}.${key}` : key);
+      return;
+    }
+    leaves.push({ path, value: value === null ? 'null' : String(value) });
+  };
+  for (const [key, value] of Object.entries(evidence)) visit(value, key);
+  return leaves;
+}
+
+function FindingEvidence({ evidence, imageId }: { evidence: Record<string, unknown>; imageId: string }): JSX.Element {
+  const t = useMessages();
+  const leaves = evidenceLeaves(evidence);
+  const hasRedaction = leaves.some((leaf) => leaf.value.includes('<redacted>'));
+  const copy = async (): Promise<void> => {
+    try {
+      await copyToClipboard(JSON.stringify(evidence, null, 2));
+      toast.success(t.common.copied);
+    } catch (error) {
+      toast.error(error);
+    }
+  };
+  return (
+    <div className="finding-evidence">
+      <div className="finding-evidence-head">
+        <span className="eyebrow">{t.findings.evidence}</span>
+        <div className="finding-evidence-actions">
+          {hasRedaction ? (
+            <Link className="btn btn-sm" to={`/image/${imageId}/secrets`}>
+              {t.findings.openRecovered}
+            </Link>
+          ) : null}
+          <button type="button" className="btn btn-sm" onClick={() => void copy()}>
+            {t.common.copy}
+          </button>
+        </div>
+      </div>
+      <dl>
+        {leaves.map((leaf, index) => (
+          <div key={`${leaf.path}-${index}`}>
+            <dt className="mono">{leaf.path}</dt>
+            <dd className="mono">{leaf.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 /**
  * One measured row, unchanged by folding.
  *
@@ -532,7 +600,7 @@ function LedgerRow({
                             focusable, and the sentence behind it is the one that separates "this is a lead" from
                             "this is a lead BECAUSE the search expired". Absent when the provider wrote none, so an
                             empty chevron never promises an explanation that does not exist. */}
-          {f.rationale ? (
+          {f.rationale || f.evidence ? (
             <button
               type="button"
               className="btn btn-sm btn-ghost reason-toggle"
@@ -590,17 +658,22 @@ function LedgerRow({
           ) : null}
         </td>
       </tr>
-      {open && f.rationale ? (
+      {open && (f.rationale || f.evidence) ? (
         <tr className={nested ? 'ledger-nested' : undefined}>
           {/* Full width, under the row it explains. The provider WROTE this sentence while measuring,
                             so it renders as written, in whatever language produced it. */}
           <td colSpan={4} className="reason-cell">
             {/* A retracted row's reasoning is labelled as the retracted claim's, so an expanded
                               cell is never read as a standing argument. */}
-            <span className="eyebrow">
-              {f.assertion?.status === 'withdrawn' ? t.findings.whyWithdrawn : t.findings.why}
-            </span>{' '}
-            {f.rationale}
+            {f.rationale ? (
+              <div>
+                <span className="eyebrow">
+                  {f.assertion?.status === 'withdrawn' ? t.findings.whyWithdrawn : t.findings.why}
+                </span>{' '}
+                {f.rationale}
+              </div>
+            ) : null}
+            {f.evidence ? <FindingEvidence evidence={f.evidence} imageId={f.imageId} /> : null}
           </td>
         </tr>
       ) : null}
@@ -721,7 +794,7 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
         findingCategory(f.proofState) === filter;
       if (!inScope) return false;
       if (!q) return true;
-      return [f.title, f.source, f.severity, f.proofState, f.evidenceChannel, f.rationale]
+      return [f.title, f.source, f.severity, f.proofState, f.evidenceChannel, f.rationale, JSON.stringify(f.evidence)]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q));
     });

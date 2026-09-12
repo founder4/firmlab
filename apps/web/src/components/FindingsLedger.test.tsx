@@ -272,6 +272,17 @@ describe('FindingsLedger — analyst controls', () => {
     expect(screen.getByText('Possible unsafe parser')).toBeInTheDocument();
   });
 
+  it('reveals exact nested evidence and makes it searchable even when the provider wrote no rationale', () => {
+    const row = measured({
+      evidence: { config: { passwordHash: '$6$rounds=5000$firmware$deadbeef' }, path: '/etc/shadow' },
+    });
+    render(<FindingsLedger findings={[row]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Show why this finding sits at this proof state/ }));
+    expect(screen.getByText('config.passwordHash')).toBeInTheDocument();
+    expect(screen.getByText('$6$rounds=5000$firmware$deadbeef')).toBeInTheDocument();
+    expect(screen.getByText('/etc/shadow')).toBeInTheDocument();
+  });
+
   it('gives a lead and a blocked question separate filters with the same definitions as the census', () => {
     const blocked = measured({
       id: 'blocked',

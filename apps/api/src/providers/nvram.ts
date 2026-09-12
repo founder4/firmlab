@@ -30,9 +30,10 @@
  * Everything except `runNvramScan` is pure and unit-tested. Proof states follow the house rule: a credential
  * literally present in the bytes is `static_confirmed`; a flag whose *effect* depends on the running device (a
  * telnet/ssh enable, an interruptible boot delay) is `needs_runtime_reproduction` — a lead, never a verdict.
- * **Values are never emitted.** Like `fsaudit`'s shadow-hash redaction, evidence carries the key, the value's
- * length, a class (`well-known-default` / `opaque`) and a SHA-1 of the value for the cross-image credential
- * ledger — never the secret itself. The hash is what the corpus and the watchlist key on; the value stays here.
+ * Normalized finding evidence stays redacted: it carries the key, the value's length, a class
+ * (`well-known-default` / `opaque`) and a SHA-1 for the cross-image credential ledger. The provider result is the
+ * forensic artefact and retains the parsed records verbatim for direct inspection in the local UI. This keeps
+ * reports and cross-image indices free of credentials without throwing away the bytes the operator asked to see.
  *
  * Known limitation, stated rather than hidden: a store is only entered where the preceding byte is 0x00/0xFF (or at
  * offset 0), which is true of every store that lives in flash but not of a copy compiled into an ELF behind
@@ -718,6 +719,6 @@ export function runNvramScan(imagePath: string): NvramResult {
     stores,
     findings,
     bytesScanned: read.bytes.length,
-    reason: `${stores.length} nvram store(s)${truncated}: ${inventory}. ${findings.length} finding(s); all values redacted.${bounds}`,
+    reason: `${stores.length} nvram store(s)${truncated}: ${inventory}. ${findings.length} finding(s); normalized finding evidence is redacted, while the provider result retains the recovered records.${bounds}`,
   };
 }

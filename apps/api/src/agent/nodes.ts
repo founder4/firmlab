@@ -9,7 +9,7 @@
  * The prompt builders, JSON extraction, and decision parsers are pure so they unit-test without a provider.
  * The gather* functions read the store; run* functions call the LLM.
  */
-import type { FirmwareClass, StaticAnalysis } from '@firmlab/core';
+import type { FirmwareClass, SignatureHit, StaticAnalysis } from '@firmlab/core';
 import type { LlmConfig, LlmResult } from '../llm.js';
 import { completeJson, parseLlmOutput } from '../llm.js';
 import type { RuntimeCapabilities, RuntimeStrategy } from '../providers/preflight.js';
@@ -43,6 +43,8 @@ export type EmulationRung = 'none' | 'qemu-user' | 'chroot-service' | 'full-syst
 const CONFIDENCE = ['low', 'medium', 'high'] as const;
 const PRIORITY = ['low', 'medium', 'high'] as const;
 const RUNGS: readonly EmulationRung[] = ['none', 'qemu-user', 'chroot-service', 'full-system', 'rtos-renode'];
+const TRIAGE_SIGNATURE_CAP = 40;
+const TARGET_BINARY_CAP = 60;
 
 /** Rank within the Linux emulation track (rtos-renode is a separate track, ranked alongside qemu-user). */
 const RUNG_RANK: Record<EmulationRung, number> = {
@@ -103,6 +105,15 @@ export interface TriageContext {
     highEntropyRegions: number;
   };
   signatures: { id: string; category: string; description: string; confidence: string; offset: number }[];
+  signatureInventory: {
+    shownDistinctIds: number;
+    listedMatches: number;
+    /** Null means an older stored analysis did not record the pre-cap total. */
+    matched: number | null;
+    /** Null means an older stored analysis did not record the complete distinct-id count. */
+    distinctIds: number | null;
+    selectionRule: string;
+  };
   secretKinds: Record<string, number>;
   corpus: { familyKey: string; familyImageCount: number; reusedCredentials: number };
   alreadyExtracted: boolean;
@@ -137,6 +148,32 @@ export interface TriageDecision {
   rationale: string;
 }
 
+const SIGNATURE_CONFIDENCE_RANK: Record<string, number> = { low: 0, medium: 1, high: 2 };
+
+/** Select stable, high-confidence representatives without spending the model budget on repeated early offsets. */
+export function selectTriageSignatures(signatures: readonly SignatureHit[]): SignatureHit[] {
+  const byId = new Map<string, SignatureHit>();
+  for (const signature of signatures) {
+    const current = byId.get(signature.id);
+    if (
+      !current ||
+      (SIGNATURE_CONFIDENCE_RANK[signature.confidence] ?? 0) > (SIGNATURE_CONFIDENCE_RANK[current.confidence] ?? 0) ||
+      (signature.confidence === current.confidence && signature.offset < current.offset)
+    ) {
+      byId.set(signature.id, signature);
+    }
+  }
+  return [...byId.values()]
+    .sort(
+      (a, b) =>
+        (SIGNATURE_CONFIDENCE_RANK[b.confidence] ?? 0) - (SIGNATURE_CONFIDENCE_RANK[a.confidence] ?? 0) ||
+        a.category.localeCompare(b.category) ||
+        a.id.localeCompare(b.id) ||
+        a.offset - b.offset,
+    )
+    .slice(0, TRIAGE_SIGNATURE_CAP);
+}
+
 export const TRIAGE_SYSTEM_PROMPT = `You are FirmLab's triage node — decision node ① in a deterministic firmware-analysis
 skeleton. Everything mechanical (extraction, emulation, proof capture) is done by deterministic code; your job is
 ONLY to choose a branch and justify it from the evidence you are given. You never invent facts.
@@ -153,6 +190,8 @@ Given the static-analysis summary of one firmware image, decide:
 
 Corpus priors (same evidenced vendor family, or this image alone when vendor is unknown; reused credentials) are
 hints worth checking, never conclusions.
+The signatures array is a ranked, distinct-id prefix; use signatureInventory for the measured totals and never
+interpret an omitted signature as absent when those totals exceed what is shown.
 The optional operator goal may prioritize which evidenced surface matters, but it cannot create facts, override the
 measured firmware identity, or raise confidence. Generic byte signatures that conflict with a strong container or
 firmware-volume identity are likely false positives unless several coherent measurements support the reclassification.
@@ -199,6 +238,7 @@ export async function gatherTriageContext(imageId: string, goal: string | null =
       subject: findingSubject(finding.evidenceJson),
     }));
 
+  const triageSignatures = selectTriageSignatures(analysis.signatures);
   return {
     goal,
     identity: {
@@ -216,13 +256,21 @@ export async function gatherTriageContext(imageId: string, goal: string | null =
       likelyCompressed: analysis.entropy.likelyCompressed,
       highEntropyRegions: analysis.entropy.highEntropyRegions.length,
     },
-    signatures: analysis.signatures.slice(0, 40).map((s) => ({
+    signatures: triageSignatures.map((s) => ({
       id: s.id,
       category: s.category,
       description: s.description,
       confidence: s.confidence,
       offset: s.offset,
     })),
+    signatureInventory: {
+      shownDistinctIds: triageSignatures.length,
+      listedMatches: analysis.signatures.length,
+      matched: analysis.signatureScan?.matched ?? null,
+      distinctIds: analysis.signatureScan?.distinctIds ?? null,
+      selectionRule:
+        'one representative per signature id; high confidence first, then category/id/offset; null totals mean coverage was not recorded by the stored analysis',
+    },
     secretKinds,
     corpus: {
       familyKey,
@@ -332,6 +380,11 @@ export interface TargetSelectionContext {
     imports: string | null;
     emulationStatus: string | null;
   }[];
+  binaryInventory: {
+    shown: number;
+    total: number;
+    selectionRule: string;
+  };
   findings: {
     /** MEASURED findings only — assertions are counted separately and never enter the proof-state histogram. */
     total: number;
@@ -369,7 +422,8 @@ export const TARGET_SELECTION_SYSTEM_PROMPT = `You are FirmLab's target-selectio
 deterministic firmware-analysis skeleton. You choose WHICH binaries deserve deeper analysis and WHICH emulation
 rung to attempt for each. You do not run anything; a human approves emulation and deterministic code executes it.
 
-You are given the first-class binaries table, the findings summary, corpus cross-refs, and — critically — the
+You are given a bounded binaries table, its binaryInventory total/selection rule, the findings summary, corpus
+cross-refs, and — critically — the
 deterministic runtime preflight (\`capabilities\`). The preflight's \`maxRung\` is a HARD ceiling: never propose a
 rung above it. If maxRung is "none" (static-only or unsupported arch), you may still prioritize binaries for static
 review but must set every rung to "none". Prefer network-facing, weakly-hardened binaries with dangerous imports.
@@ -418,7 +472,7 @@ export async function gatherTargetSelectionContext(
       reason: caps.reason,
       maxRung: maxRungFor(caps.strategy),
     },
-    binaries: binaries.slice(0, 60).map((b) => ({
+    binaries: binaries.slice(0, TARGET_BINARY_CAP).map((b) => ({
       path: b.path,
       arch: b.arch,
       networkFacing: b.networkFacing === 1,
@@ -426,6 +480,11 @@ export async function gatherTargetSelectionContext(
       imports: b.importsSummary,
       emulationStatus: b.emulationStatus,
     })),
+    binaryInventory: {
+      shown: Math.min(binaries.length, TARGET_BINARY_CAP),
+      total: binaries.length,
+      selectionRule: 'network-facing first, then path; the array is a ranked prefix, not the complete inventory',
+    },
     findings: {
       total: findings.length,
       bySeverity,
@@ -449,7 +508,8 @@ export async function gatherTargetSelectionContext(
 
 export function buildTargetSelectionUserPrompt(ctx: TargetSelectionContext): string {
   return [
-    'Select analysis/emulation targets for this image. Respect capabilities.maxRung as a hard ceiling:',
+    'Select analysis/emulation targets for this image. The binaries array is a ranked prefix; use binaryInventory',
+    'for its total and selection rule. Respect capabilities.maxRung as a hard ceiling:',
     '',
     '```json',
     JSON.stringify(ctx, null, 2),

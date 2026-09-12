@@ -47,6 +47,7 @@ describe('mapFindings', () => {
       file: 'etc/passwd',
       line: 3,
       match: 'abc',
+      value: 'abc',
     });
   });
 
@@ -55,6 +56,24 @@ describe('mapFindings', () => {
     const out = mapFindings(rows, '/r');
     expect(out).toHaveLength(500);
     expect(out[0]?.description).toBe('r');
+  });
+
+  it('retains the exact secret for direct local inspection while summary fields stay scrubbed', () => {
+    const out = mapFindings(
+      [
+        {
+          RuleID: 'generic-api-key',
+          File: '/x/rootfs/etc/service.conf',
+          StartLine: 1,
+          Secret: BE3600_MINISIGN,
+          Match: `token=${BE3600_MINISIGN}`,
+        },
+      ],
+      '/x/rootfs',
+    );
+    expect(out[0]?.value).toBe(BE3600_MINISIGN);
+    expect(out[0]?.match).not.toContain(BE3600_MINISIGN);
+    expect(out[0]?.context).not.toContain(BE3600_MINISIGN);
   });
 });
 

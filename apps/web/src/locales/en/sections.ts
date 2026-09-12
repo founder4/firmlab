@@ -14,7 +14,7 @@ export const sections = {
   entropy: 'Entropy',
   filesystem: 'Extraction',
   files: 'File browser',
-  secrets: 'Secrets',
+  secrets: 'Recovered values',
   hardware: 'Hardware interfaces',
   bootloader: 'Bootloader',
   sbom: 'SBOM & CVEs',

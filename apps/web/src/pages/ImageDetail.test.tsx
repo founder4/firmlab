@@ -138,6 +138,8 @@ beforeEach(() => {
   mockApi.researchResult.mockResolvedValue(null);
   mockApi.entropy.mockResolvedValue({ size: image.size, entropy: { samples: [] } });
   mockApi.structure.mockResolvedValue({ size: image.size, structure: [] });
+  mockApi.nvramResult.mockResolvedValue(null);
+  mockApi.fsauditResult.mockResolvedValue(null);
 });
 
 describe('ImageDetail section heading', () => {
@@ -722,6 +724,55 @@ describe('ImageDetail — a secrets result says what it covered, not that it is 
     expect(await screen.findByText(/cannot be found by this stage at all/)).toBeTruthy();
     expect(screen.queryByText(/stopped at/)).toBeNull();
     expect(screen.queryByText(/highest-severity of/)).toBeNull();
+  });
+
+  it('shows exact values from raw bytes, rootfs files, and NVRAM in one inventory', async () => {
+    mockApi.analysis.mockResolvedValue({
+      size: image.size,
+      identity: image.identity,
+      entropy: { windowSize: 4096, step: 4096, samples: [], mean: 6.1, max: 7.9, min: 0.2, highEntropyRegions: [] },
+      signatures: [],
+      structure: [],
+      secrets: [{ offset: 4660, value: 'password=raw-admin', secretKind: 'password-assignment', severity: 'medium' }],
+    });
+    mockApi.gitleaks.mockResolvedValue({
+      available: true,
+      target: '/rootfs',
+      findingCount: 1,
+      findings: [
+        {
+          rule: 'generic-api-key',
+          description: 'API key',
+          file: 'etc/service.conf',
+          line: 7,
+          match: 'live-s…alue (21 chars)',
+          value: 'live-service-token-value',
+        },
+      ],
+    });
+    mockApi.nvramResult.mockResolvedValue({
+      available: true,
+      stores: [
+        {
+          offset: 8192,
+          confidence: 'crc-verified',
+          records: [{ key: 'http_passwd', value: 'nvram-admin-password', offset: 8200 }],
+        },
+      ],
+    });
+    mockApi.fsauditResult.mockResolvedValue({
+      available: true,
+      recoveredValues: [
+        { kind: 'shadow-hash', path: 'etc/shadow', account: 'root', value: '$1$firmware$exact-legacy-hash' },
+      ],
+    });
+
+    renderSection('secrets');
+    expect(await screen.findByText('password=raw-admin')).toBeInTheDocument();
+    expect(screen.getByText('live-service-token-value')).toBeInTheDocument();
+    expect(screen.getByText('nvram-admin-password')).toBeInTheDocument();
+    expect(screen.getByText('$1$firmware$exact-legacy-hash')).toBeInTheDocument();
+    expect(screen.getByText(/etc\/service\.conf:7/)).toBeInTheDocument();
   });
 
   it('states the bound in Spanish without letting it become a clean bill', async () => {

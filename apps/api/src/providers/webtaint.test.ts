@@ -152,4 +152,43 @@ describe('runWebTaint (over a synthetic GL.iNet rootfs)', () => {
     expect(runWebTaint(empty).findings).toHaveLength(0);
     fs.rmSync(empty, { recursive: true, force: true });
   });
+
+  it('counts candidates beyond the file cap instead of calling the selected prefix the surface', () => {
+    const many = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-webtaint-many-'));
+    try {
+      const dir = path.join(many, 'www/cgi-bin');
+      fs.mkdirSync(dir, { recursive: true });
+      for (let i = 0; i < 402; i++) fs.writeFileSync(path.join(dir, `handler-${String(i).padStart(3, '0')}.sh`), '');
+      const capped = runWebTaint(many);
+      expect(capped.handlers).toHaveLength(400);
+      expect(capped.coverage).toMatchObject({
+        candidates: 402,
+        selected: 400,
+        analyzed: 400,
+        skippedByFileCap: 2,
+        traversalComplete: true,
+        selectionRule: 'HANDLER_DIRS priority, then path; duplicates are removed before the cap',
+      });
+      expect(capped.reason).toMatch(/Discovered 402 candidate/);
+      expect(capped.reason).toMatch(/2 beyond the 400-file analysis cap/);
+      expect(capped.reason).toMatch(/handler-directory priority, then path/);
+    } finally {
+      fs.rmSync(many, { recursive: true, force: true });
+    }
+  });
+
+  it('reports an oversized handler as unexamined rather than silently dropping it', () => {
+    const huge = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-webtaint-huge-'));
+    try {
+      const file = path.join(huge, 'www/cgi-bin/huge.sh');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, Buffer.alloc(512 * 1024 + 1));
+      const skipped = runWebTaint(huge);
+      expect(skipped.handlers).toHaveLength(0);
+      expect(skipped.coverage).toMatchObject({ candidates: 1, selected: 1, analyzed: 0, skippedOversize: 1 });
+      expect(skipped.reason).toMatch(/1 over the 524288-byte size cap/);
+    } finally {
+      fs.rmSync(huge, { recursive: true, force: true });
+    }
+  });
 });

@@ -13,7 +13,6 @@ import {
   type FirmwareDiffResult,
   type FsNode,
   type FsSummary,
-  type GitleaksResult,
   type ImageSummary,
   type Job,
   type ResearchResult,
@@ -45,10 +44,10 @@ import { KmodPanel } from '../components/KmodPanel';
 import { OpacidadPanel } from '../components/OpacidadPanel';
 import { OperatorPanel } from '../components/OperatorPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
+import { RecoveredValuesPanel } from '../components/RecoveredValuesPanel';
 import { ReportBuilder } from '../components/ReportBuilder';
 import { RunHistory } from '../components/RunHistory';
 import { SbomGraph } from '../components/SbomGraph';
-import { SectionIndex } from '../components/SectionIndex';
 import { SignalCanvas } from '../components/SignalCanvas';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StepTimeline } from '../components/StepTimeline';
@@ -191,16 +190,11 @@ export function ImageDetail(): JSX.Element {
 
       <StepTimeline imageId={id} active={tab} ready={image.status === 'ready'} />
 
-      {tab === 'dossier' && <DossierPanel image={image} sectionIds={SECTION_IDS} />}
+      {tab === 'dossier' && <DossierPanel image={image} analysis={analysis} />}
       {tab === 'structure' && analysis && <StructurePanel analysis={analysis} />}
       {tab === 'entropy' && analysis && <EntropyPanel analysis={analysis} />}
-      {/* Extraction: the carved rootfs and what it exposes — files + secrets in one place. */}
-      {tab === 'filesystem' && (
-        <>
-          <FilesystemPanel imageId={id} />
-          <SecretsPanel analysis={analysis} imageId={id} />
-        </>
-      )}
+      {/* Extraction owns the carved rootfs; recovered values have a dedicated cross-source inventory. */}
+      {tab === 'filesystem' && <FilesystemPanel imageId={id} />}
       {/* File browser: the surface that lets a finding's evidence be checked instead of trusted. */}
       {tab === 'files' && (
         <>
@@ -209,7 +203,7 @@ export function ImageDetail(): JSX.Element {
           <FileSearch imageId={id} />
         </>
       )}
-      {tab === 'secrets' && <SecretsPanel analysis={analysis} imageId={id} />}
+      {tab === 'secrets' && <RecoveredValuesPanel analysis={analysis} imageId={id} />}
       {/* What the firmware declares about the physical ways in. Reads stored results; connects to nothing. */}
       {tab === 'hardware' && <HardwareInterfaces imageId={id} />}
       {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}
@@ -364,7 +358,13 @@ function CorpusRefRow({
   );
 }
 
-function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: readonly string[] }): JSX.Element {
+function DossierPanel({
+  image,
+  analysis,
+}: {
+  image: ImageSummary;
+  analysis: StaticAnalysis | null;
+}): JSX.Element {
   const id = image.id;
   const t = useMessages();
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -439,24 +439,41 @@ function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: 
       }
     | null
     | undefined;
-  const extraction = {
-    ran: extractJob !== undefined,
-    rootfs: Boolean(extractResult?.rootfsPath),
-  };
   const triagedBinaries = binaries.filter((b) => b.triaged).length;
   const binaryCoverage = extractResult?.binaryInventory;
+  const priorityFindings = findings.filter(
+    (finding) => finding.severity === 'critical' || finding.severity === 'high',
+  ).length;
 
   const idn = image.identity;
 
   return (
     <div>
-      {/* Every section, reachable — placed FIRST because it is navigation. It was appended after the findings
-          ledger at first, which on a 110-finding image put it 16,500 px down the page: an index nobody scrolls to
-          is an index that does not exist, i.e. the defect it exists to fix, reintroduced by its position. */}
-      <div className="panel" style={{ marginBottom: 16 }}>
-        <SectionIndex imageId={image.id} sections={sectionIds} extraction={extraction} />
+      <div className="dossier-kpis" style={{ margin: '16px 0' }}>
+        <Stat
+          label={t.imageDetail.dossier.statBinaries}
+          value={t.imageDetail.dossier.statBinariesValue({
+            listed: binaryCoverage?.registered ?? binaries.length,
+            total: binaryCoverage?.candidatesFound ?? binaries.length,
+            totalIsFloor: binaryCoverage?.candidatesAreFloor ?? false,
+            triaged: triagedBinaries,
+          })}
+        />
+        <Stat
+          label={t.imageDetail.dossier.statFindings}
+          value={t.imageDetail.dossier.statFindingsValue(priorityFindings, findings.length)}
+        />
+        <Stat
+          label={t.imageDetail.dossier.statRecovered}
+          value={String(analysis?.secretScan?.matched ?? analysis?.secrets.length ?? 0)}
+        />
+        <Stat label={t.imageDetail.dossier.statStrategy} value={caps?.strategy ?? '—'} mono />
       </div>
-      {/* The signal tape — the image read as signal along its byte axis; every panel below is a lens over it. */}
+
+      {/* Decisions before decoration: the actionable ledger belongs above the signal visualization. */}
+      <FindingsLedger findings={findings} />
+
+      {/* The signal tape — useful spatial context after the analyst has seen what needs attention. */}
       <div className="panel">
         <div className="panel-head">
           <div>
@@ -464,7 +481,6 @@ function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: 
             <div className="panel-sub">{t.imageDetail.dossier.signalSub}</div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            {/* The class is an identifier the API decided; only the "we do not know" fallback is prose. */}
             <span className="badge badge-accent">{idn?.firmwareClass ?? t.common.unknown}</span>
             <span className="badge mono">
               {idn?.arch ?? '—'}/{idn?.endianness ?? '—'}
@@ -477,20 +493,6 @@ function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: 
           </div>
         </div>
         <SignalCanvas imageId={id} size={image.size} findings={findings} />
-      </div>
-
-      <div className="grid grid-3" style={{ margin: '16px 0' }}>
-        <Stat
-          label={t.imageDetail.dossier.statBinaries}
-          value={t.imageDetail.dossier.statBinariesValue({
-            listed: binaryCoverage?.registered ?? binaries.length,
-            total: binaryCoverage?.candidatesFound ?? binaries.length,
-            totalIsFloor: binaryCoverage?.candidatesAreFloor ?? false,
-            triaged: triagedBinaries,
-          })}
-        />
-        <Stat label={t.imageDetail.dossier.statFindings} value={String(findings.length)} />
-        <Stat label={t.imageDetail.dossier.statStrategy} value={caps?.strategy ?? '—'} mono />
       </div>
 
       {agent?.enabled && (
@@ -587,10 +589,6 @@ function DossierPanel({ image, sectionIds }: { image: ImageSummary; sectionIds: 
           </div>
         </div>
       )}
-
-      {/* Measured rows and the assertions about them, in one table — including the contest an operator recorded
-          against a computed row, annotated onto it without touching what code decided. */}
-      <FindingsLedger findings={findings} />
     </div>
   );
 }
@@ -617,12 +615,13 @@ function StructurePanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element
 
 function EntropyPanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element {
   const t = useMessages();
+  const regions = [...analysis.entropy.highEntropyRegions].sort((a, b) => b.end - b.start - (a.end - a.start));
   return (
     <div className="panel">
       <div className="panel-title">{t.imageDetail.entropy.title}</div>
       <div className="panel-sub">{t.imageDetail.entropy.sub}</div>
       <EntropyChart entropy={analysis.entropy} size={analysis.size} />
-      {analysis.entropy.highEntropyRegions.length > 0 && (
+      {regions.length > 0 && (
         <div className="table-wrap" style={{ marginTop: 16 }}>
           <table className="data">
             <thead>
@@ -633,7 +632,7 @@ function EntropyPanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {analysis.entropy.highEntropyRegions.slice(0, 20).map((r, i) => (
+              {regions.map((r, i) => (
                 <tr key={i}>
                   <td className="mono">
                     {fmtHex(r.start)} – {fmtHex(r.end)}
@@ -645,174 +644,6 @@ function EntropyPanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element {
             </tbody>
           </table>
         </div>
-      )}
-    </div>
-  );
-}
-
-function SecretsPanel({ analysis, imageId }: { analysis: StaticAnalysis | null; imageId: string }): JSX.Element {
-  const t = useMessages();
-  const secrets = analysis?.secrets ?? [];
-  const scan = analysis?.secretScan;
-  /**
-   * The two bounds, shown whether or not anything matched.
-   *
-   * A partial walk beside a NON-empty list matters as much as beside an empty one: eleven per cent of an image
-   * can produce a confident-looking table and still be eleven per cent. `secretScan` is absent on analyses
-   * persisted before it existed, and an absent field is not a complete scan — nothing is claimed either way.
-   */
-  const partial = scan && scan.scannedBytes < scan.totalBytes;
-  const listCapped = scan ? scan.matched > secrets.length : false;
-  return (
-    <div>
-      <div className="panel">
-        <div className="panel-title">{t.imageDetail.secrets.title}</div>
-        <div className="panel-sub">{t.imageDetail.secrets.sub}</div>
-        {partial && scan ? (
-          <div className="banner banner-warn" style={{ marginTop: 10 }}>
-            <div style={{ maxWidth: '72ch' }}>
-              {t.imageDetail.secrets.partial(
-                ((scan.scannedBytes / scan.totalBytes) * 100).toFixed(1),
-                fmtBytes(scan.scannedBytes),
-                fmtBytes(scan.totalBytes),
-              )}
-            </div>
-          </div>
-        ) : null}
-        {listCapped && scan ? (
-          <div className="hint" style={{ marginTop: 10, maxWidth: '72ch' }}>
-            {t.imageDetail.secrets.listCapped(secrets.length, scan.matched)}
-          </div>
-        ) : null}
-        {secrets.length === 0 ? (
-          <div className="hint" style={{ marginTop: 10, maxWidth: '72ch' }}>
-            {t.imageDetail.secrets.empty}
-          </div>
-        ) : (
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>{t.imageDetail.secrets.colSeverity}</th>
-                  <th>{t.imageDetail.secrets.colKind}</th>
-                  <th>{t.imageDetail.secrets.colOffset}</th>
-                  <th>{t.imageDetail.secrets.colValue}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {secrets.map((s, i) => (
-                  <tr key={i}>
-                    <td>
-                      <span className={`badge badge-${s.severity}`}>{s.severity}</span>
-                    </td>
-                    <td>{s.secretKind}</td>
-                    <td className="mono">{fmtHex(s.offset)}</td>
-                    <td
-                      className="mono"
-                      style={{ maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                    >
-                      {s.value}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-      <GitleaksSection imageId={imageId} />
-    </div>
-  );
-}
-
-function GitleaksSection({ imageId }: { imageId: string }): JSX.Element {
-  const t = useMessages();
-  const [result, setResult] = useState<GitleaksResult | null>(null);
-  const [running, setRunning] = useState(false);
-  const [log, setLog] = useState('');
-
-  useEffect(() => {
-    api
-      .gitleaks(imageId)
-      .then(setResult)
-      .catch(() => setResult(null));
-  }, [imageId]);
-
-  const run = useCallback(async () => {
-    setRunning(true);
-    setLog('');
-    try {
-      const { jobId } = await api.runGitleaks(imageId);
-      const job = await pollJob(jobId, setLog);
-      if (job.status === 'done') setResult(job.result as GitleaksResult);
-    } catch (err) {
-      setLog(String(err instanceof Error ? err.message : err));
-    } finally {
-      setRunning(false);
-    }
-  }, [imageId]);
-
-  return (
-    <div className="panel">
-      <div className="panel-title">{t.imageDetail.gitleaks.title}</div>
-      <div className="panel-sub">{t.imageDetail.gitleaks.sub}</div>
-      <button className="btn btn-primary" disabled={running} onClick={run}>
-        {running ? (
-          <>
-            <span className="spinner" /> {t.imageDetail.gitleaks.scanning}
-          </>
-        ) : result?.available ? (
-          t.imageDetail.gitleaks.rescan
-        ) : (
-          t.imageDetail.gitleaks.scan
-        )}
-      </button>
-      {result && !result.available && (
-        // The provider's own reason wins: it knows whether the tool is missing or the rootfs is. Ours is the floor.
-        <div className="banner banner-warn" style={{ marginTop: 14 }}>
-          {result.reason ?? t.imageDetail.gitleaks.unavailable}
-        </div>
-      )}
-      {result?.available && (
-        <div style={{ marginTop: 14 }}>
-          <div className="hint" style={{ marginBottom: 10 }}>
-            {result.total !== undefined && result.total > result.findings.length
-              ? t.imageDetail.gitleaks.countCapped(result.findings.length, result.total)
-              : t.imageDetail.gitleaks.count(result.findingCount)}
-          </div>
-          {result.findings.length > 0 && (
-            <div className="table-wrap">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>{t.imageDetail.gitleaks.colRule}</th>
-                    <th>{t.imageDetail.gitleaks.colFile}</th>
-                    <th>{t.imageDetail.gitleaks.colLine}</th>
-                    <th>{t.imageDetail.gitleaks.colMatch}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.findings.slice(0, 300).map((f, i) => (
-                    <tr key={`${f.file}-${f.line}-${i}`}>
-                      <td>{f.rule}</td>
-                      <td className="mono">{f.file}</td>
-                      <td className="mono">{f.line}</td>
-                      <td className="mono">{f.match}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-      {log && (
-        <pre
-          className="mono"
-          style={{ fontSize: 11.5, color: 'var(--text-dim)', whiteSpace: 'pre-wrap', marginTop: 14 }}
-        >
-          {log}
-        </pre>
       )}
     </div>
   );

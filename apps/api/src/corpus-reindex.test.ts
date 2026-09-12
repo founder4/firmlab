@@ -74,6 +74,16 @@ describe('planGitleaksCredentials', () => {
     expect(planGitleaksCredentials(result)).toEqual([{ value: 'S3CR3T', kind: 'private-key', severity: 'high' }]);
   });
 
+  it('keys the corpus on the exact local value when a new result carries it', () => {
+    const result = {
+      available: true,
+      target: 'rootfs',
+      findingCount: 1,
+      findings: [hit({ value: 'complete-token-value', match: 'comple…alue (20 chars)' })],
+    } as unknown as GitleaksResult;
+    expect(planGitleaksCredentials(result)[0]?.value).toBe('complete-token-value');
+  });
+
   it('contributes nothing when gitleaks was unavailable', () => {
     expect(planGitleaksCredentials({ available: false, target: '', findingCount: 0, findings: [] })).toEqual([]);
     expect(planGitleaksCredentials(null)).toEqual([]);

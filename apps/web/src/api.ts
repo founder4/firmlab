@@ -398,6 +398,11 @@ export interface GitleaksFinding {
   file: string;
   line: number;
   match: string;
+  /** Exact secret in new local results; older persisted scans only carry the redacted match. */
+  value?: string;
+  entropy?: number;
+  context?: string;
+  lineText?: string;
 }
 
 export interface GitleaksResult {
@@ -512,8 +517,33 @@ export interface NvramResultView {
   available: boolean;
   reason?: string;
   bytesScanned?: number;
-  stores?: { name?: string; offset?: number; variables?: number; capped?: boolean; duplicateKeys?: number }[];
+  stores?: {
+    offset?: number;
+    headerBytes?: number;
+    bodyOffset?: number;
+    recordCount?: number;
+    malformedCount?: number;
+    terminated?: boolean;
+    confidence?: 'crc-verified' | 'structural';
+    records?: { key: string; value: string; offset: number }[];
+    duplicateKeys?: string[];
+    capped?: string | null;
+    crc?: { stored: number; regionSize: number } | null;
+  }[];
   findings?: unknown[];
+}
+
+export interface FsAuditResultView {
+  available: boolean;
+  reason?: string;
+  recoveredValues?: {
+    kind: 'shadow-hash' | 'empty-password' | 'private-key';
+    path: string;
+    value: string;
+    account?: string;
+    label?: string;
+    offset?: number;
+  }[];
 }
 
 export interface FuncDiffResultView {
@@ -1154,6 +1184,18 @@ export interface DeviceTreeResult {
   /** Every place that was searched — what a `found: false` does and does not cover. */
   searched?: string[];
   findings?: unknown[];
+  /** Absent on results stored before extracted-file coverage was recorded. */
+  extractionScan?: {
+    candidateFiles?: number;
+    filesRead?: number;
+    skippedByFileCap?: number;
+    skippedOversize?: number;
+    skippedUnreadable?: number;
+    traversalComplete?: boolean;
+    directoriesVisited?: number;
+    fileCap?: number;
+    selectionRule?: string;
+  };
   reason?: string;
 }
 
@@ -1947,6 +1989,8 @@ export const api = {
       ...(restart ? { restart: true } : {}),
     }),
   nvramResult: (id: string) => get<{ result: NvramResultView | null }>(`/api/images/${id}/nvram`).then((r) => r.result),
+  fsauditResult: (id: string) =>
+    get<{ result: FsAuditResultView | null }>(`/api/images/${id}/fsaudit`).then((r) => r.result),
   runNvram: (id: string) => post<{ jobId: string }>(`/api/images/${id}/nvram`),
   funcdiffResult: (id: string, against: string) =>
     get<{ result: FuncDiffResultView | null }>(

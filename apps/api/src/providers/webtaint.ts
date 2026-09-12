@@ -238,7 +238,24 @@ export interface WebTaintResult {
   handlers: HandlerAnalysis[];
   validator: ValidatorInfo;
   findings: FindingDraft[];
+  /** Optional forever: older persisted worker results predate explicit handler-inventory coverage. */
+  coverage?: WebHandlerCoverage;
   reason: string;
+}
+
+export interface WebHandlerCoverage {
+  /** Candidate handler files discovered; a lower bound when `traversalComplete` is false. */
+  candidates: number;
+  selected: number;
+  analyzed: number;
+  skippedByFileCap: number;
+  skippedOversize: number;
+  skippedUnreadable: number;
+  traversalComplete: boolean;
+  visitedEntries: number;
+  fileCap: number;
+  maxFileSize: number;
+  selectionRule: string;
 }
 
 /** Subtrees that hold web handlers, relative to the rootfs. */
@@ -254,20 +271,37 @@ const HANDLER_DIRS = [
 const HANDLER_EXT = /\.(lua|cgi|sh)$/;
 const MAX_FILES = 400;
 const MAX_FILE_SIZE = 512 * 1024;
+const MAX_WALK_ENTRIES = 20000;
 
-/** Recursively list handler files under a rootfs subtree (bounded). */
-function listHandlers(root: string): string[] {
-  const out: string[] = [];
+interface HandlerListing {
+  paths: string[];
+  candidates: number;
+  traversalComplete: boolean;
+  visitedEntries: number;
+}
+
+/** Recursively inventory handler files, then apply the file cap to a stable, de-duplicated list. */
+function listHandlers(root: string): HandlerListing {
+  const candidates = new Set<string>();
+  const visitedDirs = new Set<string>();
+  let traversalComplete = true;
+  let visitedEntries = 0;
   const walk = (abs: string, rel: string): void => {
-    if (out.length >= MAX_FILES) return;
+    if (visitedDirs.has(abs)) return;
+    visitedDirs.add(abs);
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(abs, { withFileTypes: true });
+      entries = fs.readdirSync(abs, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
     } catch {
+      traversalComplete = false;
       return;
     }
     for (const e of entries) {
-      if (out.length >= MAX_FILES) return;
+      if (visitedEntries >= MAX_WALK_ENTRIES) {
+        traversalComplete = false;
+        return;
+      }
+      visitedEntries++;
       const childAbs = path.join(abs, e.name);
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) walk(childAbs, childRel);
@@ -275,14 +309,19 @@ function listHandlers(root: string): string[] {
         e.isFile() &&
         (HANDLER_EXT.test(e.name) || rel.includes('oui-httpd/rpc') || rel.includes('libexec/rpcd'))
       )
-        out.push(childRel);
+        candidates.add(childRel);
     }
   };
   for (const d of HANDLER_DIRS) {
     const abs = path.join(root, d);
     if (fs.existsSync(abs)) walk(abs, d);
   }
-  return Array.from(new Set(out));
+  return {
+    paths: [...candidates].slice(0, MAX_FILES),
+    candidates: candidates.size,
+    traversalComplete,
+    visitedEntries,
+  };
 }
 
 /** Read the default `valid_rpc_args` validator pattern from the rootfs, if present. */
@@ -349,14 +388,28 @@ export function runWebTaint(rootfsPath: string | null): WebTaintResult {
       reason: 'no extracted rootfs',
     };
   }
-  const rels = listHandlers(rootfsPath);
-  if (rels.length === 0) {
+  const listing = listHandlers(rootfsPath);
+  const baseCoverage = {
+    candidates: listing.candidates,
+    selected: listing.paths.length,
+    skippedByFileCap: Math.max(0, listing.candidates - listing.paths.length),
+    traversalComplete: listing.traversalComplete,
+    visitedEntries: listing.visitedEntries,
+    fileCap: MAX_FILES,
+    maxFileSize: MAX_FILE_SIZE,
+    selectionRule: 'HANDLER_DIRS priority, then path; duplicates are removed before the cap',
+  };
+  if (listing.paths.length === 0) {
+    const scope = listing.traversalComplete
+      ? 'no rpcd/oui-httpd/luci/cgi handlers found in the rootfs'
+      : `no handlers found in the scanned portion; the directory walk stopped after ${listing.visitedEntries} entries`;
     return {
       available: true,
       handlers: [],
       validator: { path: null, pattern: null, permitsNewline: true },
       findings: [],
-      reason: 'no rpcd/oui-httpd/luci/cgi handlers found in the rootfs',
+      coverage: { ...baseCoverage, analyzed: 0, skippedOversize: 0, skippedUnreadable: 0 },
+      reason: scope,
     };
   }
 
@@ -364,14 +417,20 @@ export function runWebTaint(rootfsPath: string | null): WebTaintResult {
   const noAuth = resolveNoAuthMethods(rootfsPath);
   const handlers: HandlerAnalysis[] = [];
   const findings: FindingDraft[] = [];
+  let skippedOversize = 0;
+  let skippedUnreadable = 0;
 
-  for (const rel of rels) {
+  for (const rel of listing.paths) {
     let src: string;
     try {
       const abs = path.join(rootfsPath, rel);
-      if (fs.statSync(abs).size > MAX_FILE_SIZE) continue;
+      if (fs.statSync(abs).size > MAX_FILE_SIZE) {
+        skippedOversize++;
+        continue;
+      }
       src = fs.readFileSync(abs, 'utf8');
     } catch {
+      skippedUnreadable++;
       continue;
     }
     const h = parseHandler(src, rel);
@@ -382,11 +441,27 @@ export function runWebTaint(rootfsPath: string | null): WebTaintResult {
   }
 
   const tainted = handlers.filter((h) => h.tainted).length;
+  const coverage: WebHandlerCoverage = {
+    ...baseCoverage,
+    analyzed: handlers.length,
+    skippedOversize,
+    skippedUnreadable,
+  };
+  const candidateTotal = listing.traversalComplete ? `${listing.candidates}` : `at least ${listing.candidates}`;
+  const omissions = [
+    coverage.skippedByFileCap ? `${coverage.skippedByFileCap} beyond the ${MAX_FILES}-file analysis cap` : null,
+    skippedOversize ? `${skippedOversize} over the ${MAX_FILE_SIZE}-byte size cap` : null,
+    skippedUnreadable ? `${skippedUnreadable} unreadable` : null,
+    listing.traversalComplete ? null : `directory walk stopped after ${listing.visitedEntries} entries`,
+  ].filter((part): part is string => part !== null);
   return {
     available: true,
     handlers,
     validator,
     findings,
-    reason: `Scanned ${handlers.length} web handlers, ${tainted} tainted (web-param → shell). Validator: ${validator.pattern ?? 'none found'}${validator.permitsNewline ? ' (permits newline)' : ''}. Static taint over the handler bytes — on-device reproduction is the dynamic webprobe step.`,
+    coverage,
+    reason: `Discovered ${candidateTotal} candidate web handler(s); analyzed ${handlers.length}${
+      omissions.length ? ` (${omissions.join(', ')} not analyzed)` : ''
+    }. Selection is by handler-directory priority, then path. ${tainted} analyzed handler(s) were tainted (web-param → shell). Validator: ${validator.pattern ?? 'none found'}${validator.permitsNewline ? ' (permits newline)' : ''}. Static taint over the handler bytes — on-device reproduction is the dynamic webprobe step.`,
   };
 }
