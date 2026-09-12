@@ -31,6 +31,12 @@ export const corpus = {
     promoted: 'Promoted to the watchlist',
   },
 
+  /**
+   * The footnote a truncated table owes its reader. Both corpus-wide tables are a ranked prefix, and without this
+   * line a full page of rows and the whole set look identical — which is how a cap becomes a claim.
+   */
+  listNote: (shown: number, total: number, rule: string) => `Showing ${shown} of ${total}. ${rule}`,
+
   prevalence: {
     title: 'Component prevalence',
     sub: 'Which component versions span the most images, and how many CVEs grype matched.',

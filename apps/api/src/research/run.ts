@@ -8,7 +8,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { StaticAnalysis } from '@firmlab/core';
 import { type IntelContext, runIntelSynthesis } from '../agent/intel.js';
-import { credentialOtherImages, deviceFamilyKey, hashSecret, listReachabilityPriors } from '../corpus.js';
+import {
+  CONFIRMED_PRIOR_STATES,
+  credentialOtherImages,
+  deviceFamilyKey,
+  hashSecret,
+  listReachabilityPriors,
+} from '../corpus.js';
 import { syncFindings } from '../findings.js';
 import { loadLlmConfig } from '../llm.js';
 import { runComponentCve } from '../providers/component-cve.js';
@@ -344,8 +350,9 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   let synthesis: ResearchResult['synthesis'];
   const llm = loadLlmConfig();
   if (llm) {
-    const reachablePriors = listReachabilityPriors(deviceFamilyKey(identity, imageId), imageId)
-      .filter((p) => p.proofState === 'confirmed_in_emulation' || p.proofState === 'confirmed_full_system')
+    const reachablePriors = listReachabilityPriors(deviceFamilyKey(identity, imageId), imageId, {
+      proofStates: CONFIRMED_PRIOR_STATES,
+    })
       .slice(0, 10)
       .map((p) => ({ subject: p.subject, proofState: p.proofState }));
     const ctx: IntelContext = { provenance, osv, nvd, kev, reachablePriors, keyMaterial, securityContacts };

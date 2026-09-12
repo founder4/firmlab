@@ -950,6 +950,14 @@ export interface CorpusOverview {
   ruleCount: number;
   credentialReuse: { hash: string; kind: string | null; imageCount: number; watchlistLabel: string | null }[];
   componentPrevalence: { name: string; version: string; cveCount: number; imageCount: number }[];
+  /**
+   * How many reused credentials / prevalent component versions exist, counted before the listing cap. The two
+   * arrays are a ranked prefix of these. Optional: a deployment older than the totals sends neither, and the page
+   * then shows what it has without claiming it is everything.
+   */
+  credentialReuseTotal?: number;
+  componentPrevalenceTotal?: number;
+  listing?: { cap: number; rule: string };
   sbomImageCount: number;
   deviceFamilies: { familyKey: string; images: ImageRef[] }[];
 }

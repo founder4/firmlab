@@ -59,7 +59,10 @@ export function Corpus(): JSX.Element {
     <div>
       <div className="grid grid-3" style={{ marginBottom: 18 }}>
         <Stat label={t.corpus.stats.images} value={String(overview.imageCount)} />
-        <Stat label={t.corpus.stats.reusedCredentials} value={String(overview.credentialReuse.length)} />
+        <Stat
+          label={t.corpus.stats.reusedCredentials}
+          value={String(overview.credentialReuseTotal ?? overview.credentialReuse.length)}
+        />
         <Stat label={t.corpus.stats.watchlistRules} value={String(overview.ruleCount)} />
       </div>
 
@@ -100,6 +103,16 @@ export function Corpus(): JSX.Element {
                 ))}
               </tbody>
             </table>
+            {overview.credentialReuseTotal !== undefined &&
+              overview.credentialReuseTotal > overview.credentialReuse.length && (
+                <div className="hint" style={{ marginTop: 8 }}>
+                  {t.corpus.listNote(
+                    overview.credentialReuse.length,
+                    overview.credentialReuseTotal,
+                    overview.listing?.rule ?? '',
+                  )}
+                </div>
+              )}
           </div>
         )}
       </div>
@@ -121,7 +134,7 @@ export function Corpus(): JSX.Element {
                 </tr>
               </thead>
               <tbody>
-                {overview.componentPrevalence.slice(0, 100).map((c) => (
+                {overview.componentPrevalence.map((c) => (
                   <tr key={`${c.name}@${c.version}`}>
                     <td className="mono" style={{ fontSize: 12 }}>
                       {c.name}
@@ -135,6 +148,16 @@ export function Corpus(): JSX.Element {
                 ))}
               </tbody>
             </table>
+            {overview.componentPrevalenceTotal !== undefined &&
+              overview.componentPrevalenceTotal > overview.componentPrevalence.length && (
+                <div className="hint" style={{ marginTop: 8 }}>
+                  {t.corpus.listNote(
+                    overview.componentPrevalence.length,
+                    overview.componentPrevalenceTotal,
+                    overview.listing?.rule ?? '',
+                  )}
+                </div>
+              )}
           </div>
         )}
       </div>

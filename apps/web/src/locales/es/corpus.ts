@@ -30,6 +30,8 @@ export const corpus: Messages['corpus'] = {
     promoted: 'Añadida a la lista de vigilancia',
   },
 
+  listNote: (shown: number, total: number, rule: string) => `Mostrando ${shown} de ${total}. ${rule}`,
+
   prevalence: {
     title: 'Prevalencia de componentes',
     sub: 'Qué versiones de componente abarcan más imágenes, y cuántos CVE emparejó grype.',

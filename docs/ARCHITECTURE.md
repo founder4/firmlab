@@ -54,6 +54,21 @@ surfaced as guided recipes rather than one-click actions that would silently fai
 loopback; the compose publish is `127.0.0.1:8799:8799`. In Docker the in-container bind is `0.0.0.0` (required
 for port publishing) but `FIRMLAB_LOOPBACK_PUBLISH=1` keeps the health/indicator honest.
 
+## The three "corpora" — one word, three unrelated things
+
+The name is overloaded in the code, the CLI and the docs, and the three have nothing to do with each other. Where
+the context does not make it obvious, use the qualified name:
+
+| Qualified name | What it is | Where it lives |
+|---|---|---|
+| **persistent corpus** (*corpus persistente*) | cross-image occurrences — which credential, component or artifact appears in which image — read back as PRIORS, never as conclusions | `apps/api/src/corpus.ts`, tables `*_occurrence` / `reachability_prior` in `firmlab.db` |
+| **validation corpus** (*corpus de validación*) | the locked set of firmware samples the coverage matrix and its gates are measured over | `ops/corpus/validation-samples.lock.json`, `scripts/corpus-matrix.mjs`, `scripts/corpus-campaign.mjs` |
+| **YARA rule corpus** (*corpus de reglas YARA*) | the pinned third-party + local rule set the scanner applies | `ops/yara/corpus.lock.json`, `scripts/sync-yara-corpus.sh` |
+
+`pnpm corpus:matrix`, `corpus:campaign` and `corpus:reindex` are not one family: the first two are the validation
+corpus, the third rebuilds the persistent one. The CLI names are kept as they are — they are in muscle memory and
+in `docs/` — so the disambiguation lives here and in each module's own header.
+
 ## Data model
 
 - `images` — id, filename, path, size, sha256, status, identityJson, analysisJson

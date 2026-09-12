@@ -1,5 +1,9 @@
 # Corpus de validación
 
+Éste es el **corpus de validación**: el conjunto bloqueado de muestras sobre el que se mide la cobertura. No es el
+corpus persistente entre imágenes (`apps/api/src/corpus.ts`, que devuelve *priors*) ni el corpus de reglas YARA;
+los tres están desambiguados en `ARCHITECTURE.md`.
+
 La cobertura del corpus se mide desde el mismo plan que ejecuta `opacidad`; no se mantiene una lista paralela de
 proveedores en una hoja de cálculo. El comando siguiente cruza cada muestra viva con todas sus etapas aplicables,
 distingue ejecución con hallazgos, ejecución vacía, degradación, falta de entrada, proveedor no construido y etapa

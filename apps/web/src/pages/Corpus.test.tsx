@@ -28,6 +28,60 @@ beforeEach(() => {
 });
 
 describe('Corpus', () => {
+  it('shows every row the API returned and says so when the API itself cut the list', async () => {
+    // Two bounds used to stack here: the API ranks and cuts at 200, and the page cut the survivors again at 100
+    // with nothing on screen to say so. Rows 101-200 simply were not there.
+    const rows = Array.from({ length: 150 }, (_, i) => ({
+      name: `pkg-${String(i).padStart(3, '0')}`,
+      version: '1.0',
+      cveCount: 0,
+      imageCount: 2,
+    }));
+    mockApi.corpusOverview.mockResolvedValue({
+      imageCount: 9,
+      ruleCount: 0,
+      credentialReuse: [],
+      componentPrevalence: rows,
+      componentPrevalenceTotal: 412,
+      credentialReuseTotal: 0,
+      listing: { cap: 200, rule: 'ordenadas por número de imágenes' },
+      sbomImageCount: 9,
+      deviceFamilies: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <Corpus />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('pkg-000')).toBeInTheDocument();
+    expect(screen.getByText('pkg-149')).toBeInTheDocument();
+    expect(screen.getByText(/Mostrando 150 de 412/)).toBeInTheDocument();
+  });
+
+  it('counts reused credentials from the corpus total, never from the length of a truncated list', async () => {
+    mockApi.corpusOverview.mockResolvedValue({
+      imageCount: 9,
+      ruleCount: 0,
+      credentialReuse: [{ hash: 'aa', kind: 'password', imageCount: 2, watchlistLabel: null }],
+      credentialReuseTotal: 37,
+      componentPrevalence: [],
+      componentPrevalenceTotal: 0,
+      listing: { cap: 200, rule: 'ordenadas por número de imágenes' },
+      sbomImageCount: 9,
+      deviceFamilies: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <Corpus />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('37')).toBeInTheDocument();
+  });
+
   it('renders measured reuse and links every family member back to its image', async () => {
     mockApi.corpusOverview.mockResolvedValue({
       imageCount: 2,

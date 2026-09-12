@@ -1,5 +1,7 @@
 /**
- * The persistent corpus — FirmLab's structural edge over a stateless scanner. It accumulates cross-image
+ * The PERSISTENT corpus — FirmLab's structural edge over a stateless scanner. Not the validation corpus (the
+ * locked sample set the coverage matrix is measured over) and not the YARA rule corpus; see "The three corpora"
+ * in docs/ARCHITECTURE.md. It accumulates cross-image
  * *occurrences* (which artifact/credential/component appears in which image) so that analysing a new firmware
  * can be enriched with priors from every firmware seen before.
  *
@@ -113,23 +115,45 @@ export function recordReachabilityPrior(familyKey: string, subject: string, proo
 
 // === Cross-reference queries (priors — enrich existing per-image data, never assert new claims) ===
 
+/** How many prior rows one call returns at most. Stated here because both callers rank and cut again after it. */
+export const REACHABILITY_PRIOR_CAP = 200;
+
 /**
  * Reachability priors for an evidenced family, plus legacy broad-scope rows only for this exact image.
  * The second branch retains an image's own historical evidence without letting `unknown:class:arch` leak it to a
  * different device. New writes always use the safe key.
+ *
+ * **The cap must never decide which priors exist.** Both callers want the CONFIRMED ones and filtered for them
+ * after the cut, so a family with more than 200 rows would drop a proven prior off the end of a recency ordering
+ * and read as "no prior for this family" — a bound answering a question it never looked at. Two defences, and the
+ * first is the real one: `proofStates` filters inside the query, so the cap applies to the rows the caller asked
+ * for. The ordering then puts proven rows ahead of unproven ones regardless, so an unfiltered call cannot lose
+ * one either.
  */
 export function listReachabilityPriors(
   familyKey: string,
   imageId: string,
+  options: { proofStates?: readonly string[] } = {},
 ): { subject: string; proofState: string; imageId: string }[] {
+  const states = options.proofStates ?? [];
+  const filter = states.length > 0 ? `AND proofState IN (${states.map(() => '?').join(', ')})` : '';
   return getDb()
     .prepare(
       `SELECT subject, proofState, imageId FROM reachability_prior
-       WHERE familyKey = ? OR (imageId = ? AND familyKey LIKE 'unknown:%')
-       GROUP BY subject, proofState, imageId ORDER BY MAX(createdAt) DESC LIMIT 200`,
+       WHERE (familyKey = ? OR (imageId = ? AND familyKey LIKE 'unknown:%')) ${filter}
+       GROUP BY subject, proofState, imageId
+       ORDER BY CASE proofState
+                  WHEN 'confirmed_full_system' THEN 0
+                  WHEN 'confirmed_in_emulation' THEN 1
+                  ELSE 2
+                END, MAX(createdAt) DESC
+       LIMIT ${REACHABILITY_PRIOR_CAP}`,
     )
-    .all(familyKey, imageId) as unknown as { subject: string; proofState: string; imageId: string }[];
+    .all(familyKey, imageId, ...states) as unknown as { subject: string; proofState: string; imageId: string }[];
 }
+
+/** The proof states both prior consumers mean by "confirmed before" — one list, so they cannot drift apart. */
+export const CONFIRMED_PRIOR_STATES = ['confirmed_in_emulation', 'confirmed_full_system'] as const;
 
 /** A live image referenced by a corpus cross-reference. */
 export interface ImageRef {
@@ -258,21 +282,52 @@ export interface CorpusOverview {
   credentialReuse: { hash: string; kind: string | null; imageCount: number; watchlistLabel: string | null }[];
   /** Component versions carried by MORE THAN ONE image (the prevalence signal), with their known CVE count. */
   componentPrevalence: { name: string; version: string; cveCount: number; imageCount: number }[];
+  /**
+   * How many reused credentials and prevalent component versions EXIST, counted before the listing cap. The arrays
+   * above are a ranked prefix and the page presents them as "the corpus"; with 200 rows in hand it could not say
+   * there were more, and the stat tile printed the length of a truncated list as the corpus total.
+   */
+  credentialReuseTotal: number;
+  componentPrevalenceTotal: number;
+  /** The cap those two lists are cut at, and the rule that decides what survives it. */
+  listing: { cap: number; rule: string };
   /** How many images have an SBOM at all — the denominator the prevalence empty-state needs to say WHY it is empty. */
   sbomImageCount: number;
   /** Images grouped by evidenced vendor, or isolated per-image when vendor is unknown. */
   deviceFamilies: { familyKey: string; images: ImageRef[] }[];
 }
 
+/** The listing cap for the two ranked corpus-wide tables. */
+const OVERVIEW_LIST_CAP = 200;
+
 export function corpusOverview(): CorpusOverview {
   const db = getDb();
   const watchlist = knownCredentialRules();
+
+  // Counted over the SAME grouped, HAVING-filtered set the lists are drawn from — a count of raw occurrence rows
+  // would be a different question wearing this one's name.
+  const credentialReuseTotal = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM (SELECT hash FROM credential_occurrence
+         GROUP BY hash HAVING COUNT(*) > 1)`,
+      )
+      .get() as { n: number }
+  ).n;
+  const componentPrevalenceTotal = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM (SELECT name, version FROM component_occurrence
+         GROUP BY name, version HAVING COUNT(*) > 1)`,
+      )
+      .get() as { n: number }
+  ).n;
 
   const credentialReuse = (
     db
       .prepare(
         `SELECT hash, MAX(kind) AS kind, COUNT(*) AS imageCount FROM credential_occurrence
-         GROUP BY hash HAVING imageCount > 1 ORDER BY imageCount DESC LIMIT 200`,
+         GROUP BY hash HAVING imageCount > 1 ORDER BY imageCount DESC LIMIT ${OVERVIEW_LIST_CAP}`,
       )
       .all() as unknown as { hash: string; kind: string | null; imageCount: number }[]
   ).map((r) => ({ ...r, watchlistLabel: watchlist.get(r.hash) ?? null }));
@@ -283,7 +338,7 @@ export function corpusOverview(): CorpusOverview {
   const componentPrevalence = db
     .prepare(
       `SELECT name, version, MAX(cveCount) AS cveCount, COUNT(*) AS imageCount FROM component_occurrence
-       GROUP BY name, version HAVING imageCount > 1 ORDER BY imageCount DESC, cveCount DESC LIMIT 200`,
+       GROUP BY name, version HAVING imageCount > 1 ORDER BY imageCount DESC, cveCount DESC LIMIT ${OVERVIEW_LIST_CAP}`,
     )
     .all() as unknown as { name: string; version: string; cveCount: number; imageCount: number }[];
 
@@ -309,6 +364,12 @@ export function corpusOverview(): CorpusOverview {
     ruleCount: listRules().length,
     credentialReuse,
     componentPrevalence,
+    credentialReuseTotal,
+    componentPrevalenceTotal,
+    listing: {
+      cap: OVERVIEW_LIST_CAP,
+      rule: 'ranked by image count (components: then CVE count) and cut at the cap; both counts above are the full sets',
+    },
     sbomImageCount,
     deviceFamilies,
   };

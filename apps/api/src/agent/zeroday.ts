@@ -137,7 +137,7 @@ export async function gatherZerodayContext(
   goal: string | null = null,
 ): Promise<ZerodayContext> {
   const { getImage, listBinaries, listFindings } = await import('../store.js');
-  const { corpusRefs, listReachabilityPriors, deviceFamilyKey } = await import('../corpus.js');
+  const { CONFIRMED_PRIOR_STATES, corpusRefs, listReachabilityPriors, deviceFamilyKey } = await import('../corpus.js');
   const { partitionByProvenance } = await import('../operator-findings.js');
 
   const taint = buildTaintScaffold(decompile);
@@ -174,8 +174,10 @@ export async function gatherZerodayContext(
       .filter((c) => c.cveCount > 0)
       .slice(0, 10)
       .map((c) => ({ name: c.name, version: c.version, cveCount: c.cveCount, otherImages: c.otherImages.length })),
-    confirmedBefore: (familyKey ? listReachabilityPriors(familyKey, imageId) : [])
-      .filter((p) => p.proofState === 'confirmed_in_emulation' || p.proofState === 'confirmed_full_system')
+    confirmedBefore: (familyKey
+      ? listReachabilityPriors(familyKey, imageId, { proofStates: CONFIRMED_PRIOR_STATES })
+      : []
+    )
       .slice(0, 10)
       .map((p) => ({ subject: p.subject, proofState: p.proofState })),
   };
