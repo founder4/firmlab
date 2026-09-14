@@ -11,9 +11,6 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Cobertura y análisis (opacidad / W9)
 
-- [ ] Encaminar una sonda que termina en `emulation_artifact` al peldaño full-system en vez de `defect`:
-  qemu-user no da NVRAM ni nodos de dispositivo, pero full-system sí puede responder (arranca desde 2026-07-28).
-  DVRF trae dos celdas así (`diag_tracertbutton:system`/`:sprintf`), ambas paradas por `/dev/nvram`.
 - [ ] Distinguir un kernel monolítico (sin `lib/modules`) de un tallado que se dejó `lib/modules` (`kmod.ts`):
   decidible con `CONFIG_MODULES` del `.config` embebido, una tabla `kallsyms` con símbolos de módulo, o rastro
   en `carveTrace`. Hoy la celda queda explícitamente indeclarada.
@@ -24,7 +21,7 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   parcialmente sin decirlo. Latente — ninguna muestra del corpus actual lo alcanza.
 - [ ] Mostrar el `remedy` de cada etapa degradada en la web (hoy solo lo lee `scripts/corpus-campaign.mjs`); el
   panel de cobertura dice "degradada" sin decir si se arregla con una corrida, una herramienta u otra muestra.
-  Necesita i18n ES/EN para las siete disposiciones.
+  Necesita i18n ES/EN para las ocho disposiciones.
 
 ## Kernel, emulación, RTOS, UEFI
 
@@ -90,57 +87,6 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   luego se deriva un recuento — el patrón que ya pagaron `extractStrings`, `scanSignatures` y `sbom.ts`.
 - [ ] Exponer `credmatch` en la web: único route sin ninguna referencia en `apps/web/src` pese a 1.337 líneas y
   ✓ en cuatro muestras de la matriz.
-
-### Auditoría de límites — casos concretos aún sin arreglar
-
-Mismo patrón en los 11: **(A)** cap antes de ordenar · **(B)** recuento leído de la lista ya recortada ·
-**(C)** una cota renderizada como negativo limpio · **(D)** presupuesto gastado en candidatos que no responden.
-
-- [ ] `corpus.ts:253,264` **(B)** — `credentialReuse`/`componentPrevalence` son `LIMIT 200` sin `COUNT(*)`
-  hermano; `/corpus/overview` no puede decir si hay más filas. No muerde hoy (0 grupos).
-- [ ] `corpus.ts:107` **(C)** — `listReachabilityPriors` capa en 200 por `createdAt DESC`, y sus dos
-  consumidores (`research/run.ts:347`, `agent/zeroday.ts:173`) filtran por *confirmados* DESPUÉS del cap: un
-  prior probado se cae si su familia supera 200 filas y se lee como "no hay prior".
-- [ ] `research/run.ts:118` **(B)+(C)** — `scanRootfsKeys` recorre `visited<4000 && out.length<20` en orden
-  DFS; el recuento pasado al prompt de inteligencia es un suelo en un rootfs de más de 4.000 entradas, sin
-  decirlo.
-- [ ] `research/run.ts:321` **(D)+(B)** — el presupuesto de security.txt se gasta en
-  `provenance.domains.slice(0,5)`, los 5 primeros en orden de escaneo de una lista ya capada en 20. Un operador
-  lee "no security.txt" de un dominio que nunca se preguntó.
-- [ ] `apps/web/src/pages/Corpus.tsx:124` **(B)** — `overview.componentPrevalence.slice(0,100)` recorta sin
-  total ni nota; las filas 101–200 desaparecen en silencio.
-- [ ] `opacidad.ts:730/:759` **(A)** — `selectExportReachTargets(listBinaries(id), 4)` no cuenta el pozo real de
-  candidatos (896 `.so`/`.ko` en `81154df7`) ni declara la regla de selección, a diferencia de `binvulnRun`.
-- [ ] `providers/funcdiff-run.ts:221` **(A)** — `changedPaths.slice(0,maxPairs)` sobrevive por orden alfabético:
-  en un parche de seguridad, `/bin/ash` gana a `/usr/sbin/httpd`. El truncamiento ya se reporta bien; falta
-  rankear antes de cortar.
-- [ ] `agent/zeroday.ts:159` **(A)** — `relatedFindings` hace `.slice(0,12)` por RECENCIA sin ordenar por
-  severidad ni declarar total: un crítico estático viejo pierde contra doce `info` recientes, en el contexto que
-  decide candidatos de zero-day.
-- [ ] `agent/zeroday.ts:171` **(A)** — `priors.vulnerableComponents`/`confirmedBefore` leen `component_occurrence`
-  SIN `ORDER BY` (orden de inserción SQLite): los diez componentes presentados al modelo como "los vulnerables
-  de la familia" son los diez insertados primero, no los de más CVE.
-- [ ] `opacidad-narrative.ts:87` **(A)+(C)** — `buildAttackPath` rankea bien y luego hace `.slice(0,6)` sin
-  declarar cuántas filas cualificaron (6 de 527 en `81154df7`), bajo un título que no lo dice.
-- [ ] `providers/exportreach.ts:192` **(C)** — `summarise` cuenta solo `reachable`/`not_reached`/`absent`; omite
-  en silencio los sumideros con `budget_exhausted`/`no_call_site`. Es además la única herramienta de
-  alcanzabilidad que no pasa por el mapa `meaning` de `reachabilityPayload` (llega así al agente vía
-  `mcp/server.ts:472`).
-- [ ] `packages/core/src/structure.ts:229` (`looksLikeEcos`) / `mcu.ts:194` (`decodeAscii`) — dos prefijos de
-  4 MB convierten "el marcador no está en los primeros 4 MB" en un veredicto de clase sin decirlo. Ninguna
-  imagen actual alcanza el cap, pero la trampa es la misma si alguna lo hace.
-- [ ] `apps/web/src/components/ReportBuilder.tsx:216` — el informe exportado recorta la tabla de estructura a 24
-  segmentos sin total al lado.
-
-**Auditado y sano, para no repetir el barrido:** `binvuln.selectFindings`, `fsbrowse.ts`, `compmap.selectElfScan`,
-`nvram.ts`, `fsaudit.ts`, `nvd.ts`, `hashlookup.ts`, `fdt.ts`, `auxsecrets.ts`, `fssearch.ts`, `egress.ts`,
-`pem-scan.ts`, `boot-cmdline.ts`, `certs.ts`, `symreach.ts`, `updatepath.ts`, `credmatch.ts`, `kmod.ts`,
-`yarascan.ts`, `fwhunt.ts`, `funcdiff.ts`, `extract-diagnose.ts`, `report-assertions.ts`, `coverage.ts`,
-`emulate-system.ts`, `store.ts`, `findings.ts`, `findings-retire.ts`, `opacidad-leads.ts`, `opacidad-plan.ts`,
-`agent/governor.ts`, `agent/approval.ts`, `agent/intel.ts`, `research/cache.ts`, `research/egress.ts`,
-`mcp/format.ts` (salvo `firmlab_export_reachability`), y en core `strings.ts`/`analyze.ts`/`signatures.ts`/
-`entropy.ts`/`filesystem.ts`/`findings-rank.ts`/`binwalk.ts`. `firmlab_run_worker` devuelve resultados de
-proveedor en crudo sin auditar como superficie propia.
 
 ## Deuda de política (decisiones a escribir, no bugs)
 

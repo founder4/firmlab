@@ -39,13 +39,14 @@ pnpm corpus:campaign --execute --limit 5  # ejecuta la cola, un escaneo autónom
 pnpm corpus:campaign --matrix m.json      # planifica sobre una matriz guardada (no permite --execute)
 ```
 
-Las siete disposiciones y lo que significan para una campaña:
+Las ocho disposiciones y lo que significan para una campaña:
 
 | Remedio | Disposición | ¿Lo resuelve una corrida? |
 |---|---|---|
 | `retry` | la corrida se rompió (fallo del arnés, campaña dedicada en curso, ejecutor que lanzó) | sí |
 | `raise-bound` | un tope truncó una búsqueda que SÍ puede terminar | no tal cual: hay que subir el tope (o, en FwHunt, correr su campaña dedicada) |
 | `install-tool` | falta la herramienta, el venv o el corpus de reglas en este despliegue | sí, tras cambiar el despliegue |
+| `escalate-full-system` | qemu-user llegó a su límite de entorno; W9 agenda un único boot full-system por imagen | sí |
 | `reacquire-input` | la entrada no está en estos bytes | no: hace falta otro artefacto |
 | `settled` | miró donde podía y ésa es la respuesta para esta imagen | no, y no es un defecto |
 | `unbounded-search` | inconcluyente por construcción (exploración simbólica, timeout por módulo) | no: «terminado» no es un estado que tenga |

@@ -73,7 +73,7 @@ de este bloque no necesitan LLM en absoluto; el agente se apoya encima después.
 
 ---
 
-## Línea base actual — 2026-09-10
+## Línea base actual — 2026-09-14
 
 - Contrato de despliegue reproducible, CI de audit/tipos/tests/build/smoke de Docker, y verificación exacta de
   revisión OCI.
@@ -93,5 +93,11 @@ de este bloque no necesitan LLM en absoluto; el agente se apoya encima después.
   inconcluyentes por construcción, topes que una re-ejecución no mueve, o artefactos sin rootfs que necesitan
   reacquisición. Ningún cell del corpus declara herramienta ausente. Ver
   [`CORPUS-VALIDATION.md`](CORPUS-VALIDATION.md).
+- La auditoría transversal de límites quedó cerrada: selecciones y tablas rankean antes de cortar, conservan el
+  denominador previo al cap y distinguen «no preguntado» de una respuesta negativa en corpus, Research, Zero-day,
+  ExportReach/MCP, identidad MCU/eCos, narrativa e informe exportado.
+- Una reproducción que encuentra un artefacto de `qemu-user` ya no termina como defecto: W9 agenda una única
+  escalada full-system por imagen, registra su resultado en el mismo ledger y la campaña reconoce el remedio en
+  resultados guardados por builds intermedias.
 
 Lo siguiente, en el orden acordado, vive en [`BACKLOG.md`](BACKLOG.md).
