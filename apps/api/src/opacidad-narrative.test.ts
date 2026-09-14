@@ -113,6 +113,17 @@ describe('buildAttackPath', () => {
     expect(buildAttackPath([finding({ severity: 'low' })])).toEqual([]);
     expect(buildAttackPath([finding({ severity: 'critical', proofState: 'false_positive' })])).toEqual([]);
   });
+
+  it('states the qualifying denominator when the six-row attack path is truncated', () => {
+    const path = buildAttackPath(
+      Array.from({ length: 8 }, (_, index) =>
+        finding({ id: `f-${index}`, severity: 'high', title: `qualified ${index}` }),
+      ),
+    );
+    expect(path).toHaveLength(7);
+    expect(path.at(-1)).toContain('+2 further high-severity finding(s) qualify');
+    expect(path.at(-1)).toContain('top 6');
+  });
 });
 
 describe('honestGaps + narrative', () => {

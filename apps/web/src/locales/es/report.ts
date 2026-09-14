@@ -72,6 +72,8 @@ export const report: Messages['report'] = {
     category: 'Categoría',
     label: 'Etiqueta',
     none: 'No se ha tallado ningún segmento estructural.',
+    truncated: (shown: number, total: number) =>
+      `Mostrando los primeros ${shown} de ${total} segmentos estructurales (offset ascendente); el informe corta la tabla aquí.`,
   },
 
   coverage: {

@@ -20,6 +20,8 @@ const SEVERITY = ['low', 'medium', 'high', 'critical'] as const;
 export interface ZerodayPriors {
   /** Level 2: components in this binary's image that are also seen (with CVEs) across the device family. */
   vulnerableComponents: { name: string; version: string; cveCount: number; otherImages: number }[];
+  /** How many such components exist before the cap — so the ten shown read as the most-CVE'd, not the first inserted. */
+  vulnerableComponentsTotal: number;
   /** Reachability priors: subjects confirmed reachable before in this family — a flag to check, not a verdict. */
   confirmedBefore: { subject: string; proofState: string }[];
 }
@@ -40,6 +42,12 @@ export interface ZerodayContext {
     proofState: string;
     title: string;
   }[];
+  /**
+   * How many measured findings matched this binary before the cap. The list above is ranked by severity and cut;
+   * without this, a stale critical dropping off the end of a twelve-row recency slice read as absent, in the very
+   * context that decides zero-day candidates.
+   */
+  relatedFindingsTotal: number;
 }
 
 export interface ZerodayCandidate {
@@ -130,6 +138,69 @@ export function buildZerodayUserPrompt(ctx: ZerodayContext): string {
   ].join('\n');
 }
 
+interface RelatedFindingInput {
+  source: string;
+  kind: string;
+  severity: string;
+  proofState: string;
+  title: string;
+  evidenceJson?: string | null;
+}
+
+/** Pure: match one binary's measured findings, rank severity before the cap, and retain the pre-cap denominator. */
+export function selectRelatedFindings(
+  findings: readonly RelatedFindingInput[],
+  binary: string,
+  cap = 12,
+): { rows: ZerodayContext['relatedFindings']; total: number } {
+  const binaryName = binary.split('/').at(-1) ?? binary;
+  const matches = findings.filter((finding) => {
+    if (finding.title.includes(binary) || finding.title.includes(binaryName)) return true;
+    if (!finding.evidenceJson) return false;
+    try {
+      const evidence = JSON.parse(finding.evidenceJson) as Record<string, unknown>;
+      return [evidence.path, evidence.binary, evidence.subject].some(
+        (value) => typeof value === 'string' && (value === binary || value.endsWith(`/${binaryName}`)),
+      );
+    } catch {
+      return false;
+    }
+  });
+  const rows = [...matches]
+    .sort(
+      (a, b) =>
+        SEVERITY.indexOf(b.severity as (typeof SEVERITY)[number]) -
+        SEVERITY.indexOf(a.severity as (typeof SEVERITY)[number]),
+    )
+    .slice(0, Math.max(0, Math.floor(cap)))
+    .map(({ source, kind, severity, proofState, title }) => ({ source, kind, severity, proofState, title }));
+  return { rows, total: matches.length };
+}
+
+interface VulnerableComponentInput {
+  name: string;
+  version: string;
+  cveCount: number;
+  otherImages: readonly unknown[];
+}
+
+/** Pure: keep the most-CVE'd family components, never SQLite insertion order, plus the full qualifying count. */
+export function selectVulnerableComponents(
+  components: readonly VulnerableComponentInput[],
+  cap = 10,
+): Pick<ZerodayPriors, 'vulnerableComponents' | 'vulnerableComponentsTotal'> {
+  const qualifying = components.filter((component) => component.cveCount > 0).sort((a, b) => b.cveCount - a.cveCount);
+  return {
+    vulnerableComponents: qualifying.slice(0, Math.max(0, Math.floor(cap))).map((component) => ({
+      name: component.name,
+      version: component.version,
+      cveCount: component.cveCount,
+      otherImages: component.otherImages.length,
+    })),
+    vulnerableComponentsTotal: qualifying.length,
+  };
+}
+
 /** Assemble node ④'s context for a binary: taint scaffold (from its triage) + Level-2 corpus priors. */
 export async function gatherZerodayContext(
   imageId: string,
@@ -146,34 +217,13 @@ export async function gatherZerodayContext(
   const row = getImage(imageId);
   const familyKey = row?.identityJson ? deviceFamilyKey(JSON.parse(row.identityJson), imageId) : '';
   const { measured } = partitionByProvenance(listFindings(imageId));
-  const binaryName = decompile.binary.split('/').at(-1) ?? decompile.binary;
-  const relatedFindings = measured
-    .filter((finding) => {
-      if (finding.title.includes(decompile.binary) || finding.title.includes(binaryName)) return true;
-      if (!finding.evidenceJson) return false;
-      try {
-        const evidence = JSON.parse(finding.evidenceJson) as Record<string, unknown>;
-        return [evidence.path, evidence.binary, evidence.subject].some(
-          (value) => typeof value === 'string' && (value === decompile.binary || value.endsWith(`/${binaryName}`)),
-        );
-      } catch {
-        return false;
-      }
-    })
-    .slice(0, 12)
-    .map((finding) => ({
-      source: finding.source,
-      kind: finding.kind,
-      severity: finding.severity,
-      proofState: finding.proofState,
-      title: finding.title,
-    }));
+  const related = selectRelatedFindings(measured, decompile.binary);
 
+  // Rank by CVE count BEFORE the cap: component_occurrence has no ORDER BY, so an unranked slice presented the ten
+  // FIRST-INSERTED components as "the vulnerable ones of the family", not the ten with the most CVEs.
+  const vulnerable = selectVulnerableComponents(refs.components);
   const priors: ZerodayPriors = {
-    vulnerableComponents: refs.components
-      .filter((c) => c.cveCount > 0)
-      .slice(0, 10)
-      .map((c) => ({ name: c.name, version: c.version, cveCount: c.cveCount, otherImages: c.otherImages.length })),
+    ...vulnerable,
     confirmedBefore: (familyKey
       ? listReachabilityPriors(familyKey, imageId, { proofStates: CONFIRMED_PRIOR_STATES })
       : []
@@ -189,7 +239,8 @@ export async function gatherZerodayContext(
     networkFacing: bin?.networkFacing === 1,
     taint,
     priors,
-    relatedFindings,
+    relatedFindings: related.rows,
+    relatedFindingsTotal: related.total,
   };
 }
 

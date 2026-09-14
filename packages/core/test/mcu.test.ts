@@ -213,3 +213,17 @@ describe('parsePicobin — RP2350 boot block ISA', () => {
     expect(parsePicobin(new Uint8Array(64))).toBeNull();
   });
 });
+
+describe('fingerprintMcu — the string scan is bounded, and says so', () => {
+  it('records the clip in the audit trail when the image exceeds the 4 MB marker cap', () => {
+    const big = new Uint8Array(5 * 1024 * 1024);
+    const fp = fingerprintMcu(big);
+    expect(fp.evidence.some((e) => /scan bounded to the first 4 MB/.test(e))).toBe(true);
+  });
+
+  it('adds no scan-bound note when the image fits inside the cap', () => {
+    const small = new Uint8Array(1024);
+    const fp = fingerprintMcu(small);
+    expect(fp.evidence.some((e) => /scan bounded/.test(e))).toBe(false);
+  });
+});

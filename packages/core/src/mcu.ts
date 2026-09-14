@@ -440,6 +440,14 @@ export function fingerprintMcu(buf: Uint8Array): McuFingerprint {
   // so expose the bare core (letter + digits, e.g. `h753`, `f429`) as a token too, to match either style of board.
   const partCore = part?.match(/stm32([a-z]\d{2,3})/)?.[1] ?? null;
 
+  // A bound is not an answer: if the string scan was clipped, a NULL family/rtos is "no marker in the first 4 MB",
+  // not "no marker" — record the clip in the audit trail so a bounded negative never reads as a clean one.
+  if (buf.length > MARKER_SCAN_CAP) {
+    evidence.push(
+      `string-marker scan bounded to the first ${Math.floor(MARKER_SCAN_CAP / (1024 * 1024))} MB of ${Math.floor(buf.length / (1024 * 1024))} MB — markers beyond it were not read`,
+    );
+  }
+
   const tokens = [...new Set([part, partCore, family, vendor, cortexM, rtos].filter((t): t is string => !!t))];
   return {
     arch,

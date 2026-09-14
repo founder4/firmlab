@@ -194,11 +194,18 @@ export function summarise(rel: string, r: Omit<ExportReachResult, 'reason' | 'fi
   const reachable = r.sinks.filter((s) => s.outcome === 'reachable').length;
   const absent = r.sinks.filter((s) => s.outcome === 'absent').length;
   const notReached = r.sinks.filter((s) => s.outcome === 'not_reached').length;
+  // Two outcomes the census used to drop on the floor: `no_call_site` (the symbol is present but nothing in the
+  // recovered graph calls it) and `budget_exhausted` (the sink loop ran out of time before this one). Omitting them
+  // let the reachable/not-reached/absent counts sum to less than the sinks asked, so a reader inferred a clean set
+  // where one was never examined — the same bound-as-answer trap the rest of this file guards against.
+  const noCallSite = r.sinks.filter((s) => s.outcome === 'no_call_site').length;
+  const budgetExhausted = r.sinks.filter((s) => s.outcome === 'budget_exhausted').length;
   return [
     `${r.functionsRecovered ?? 0} function(s) recovered, ${r.entryPoints ?? 0} entry point(s);`,
-    `${reachable} sink(s) reachable, ${notReached} not reached in the recovered graph, ${absent} absent.`,
-    'A sink not reached is NOT a sink that cannot be reached: indirect calls are unresolved here, and both',
-    'shared objects and kernel modules are built on them.',
+    `${reachable} sink(s) reachable, ${notReached} not reached in the recovered graph,`,
+    `${noCallSite} present but uncalled, ${budgetExhausted} left unexplored when the budget ran out, ${absent} absent.`,
+    'A sink not reached is NOT a sink that cannot be reached, and a budget-exhausted one was never asked at all:',
+    'indirect calls are unresolved here, and both shared objects and kernel modules are built on them.',
   ].join(' ');
 }
 

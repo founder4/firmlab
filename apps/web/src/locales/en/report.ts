@@ -81,6 +81,8 @@ export const report = {
     category: 'Category',
     label: 'Label',
     none: 'No structural segments carved.',
+    truncated: (shown: number, total: number) =>
+      `Showing the first ${shown} of ${total} structural segments (ascending offset); the report caps the table here.`,
   },
 
   coverage: {

@@ -9,6 +9,7 @@ import {
   type McpFileRead,
   type McpFinding,
   coverageHeadline,
+  exportReachabilityPayload,
   fileListingPayload,
   fileReadPayload,
   findingsPayload,
@@ -159,6 +160,37 @@ describe('reachabilityPayload — an absent result must not read as a negative o
 
   it('degrades an unrecognised outcome to no-result rather than dropping it', () => {
     const p = reachabilityPayload({ available: true, reason: 'r', binary: 'b', sinks: [{ sink: 'x', outcome: '??' }] });
+    expect((p.sinks as { meaning: string }[])[0]?.meaning).toContain('treat as no result');
+  });
+});
+
+describe('exportReachabilityPayload — the CFG outcomes carry meaning too', () => {
+  it('spells out budget_exhausted and no_call_site so neither reads as a negative', () => {
+    const p = exportReachabilityPayload({
+      available: true,
+      reason: 'r',
+      binary: 'lib/x.so',
+      entryPoints: 12,
+      functionsRecovered: 500,
+      sinks: [
+        { sink: 'system', outcome: 'reachable', holders: 1, reachableFrom: 2 },
+        { sink: 'strcpy', outcome: 'not_reached' },
+        { sink: 'memcpy', outcome: 'no_call_site' },
+        { sink: 'popen', outcome: 'budget_exhausted' },
+        { sink: 'execve', outcome: 'absent' },
+      ],
+    });
+    const sinks = p.sinks as { sink: string; meaning: string }[];
+    expect(sinks[0]?.meaning).toContain('does not establish');
+    expect(sinks[1]?.meaning).toContain('NOT proof the sink is unreachable');
+    expect(sinks[2]?.meaning).toContain('indirectly');
+    expect(sinks[3]?.meaning).toContain('NO RESULT');
+    expect(sinks[3]?.meaning).toContain('never asked');
+    expect(sinks[4]?.meaning).toContain('did not apply');
+  });
+
+  it('degrades an unrecognised outcome to no-result rather than dropping it', () => {
+    const p = exportReachabilityPayload({ available: true, reason: 'r', sinks: [{ sink: 'x', outcome: '??' }] });
     expect((p.sinks as { meaning: string }[])[0]?.meaning).toContain('treat as no result');
   });
 });

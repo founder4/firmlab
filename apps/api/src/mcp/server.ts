@@ -38,6 +38,7 @@ import {
   type McpFinding,
   type McpSearchResult,
   coverageHeadline,
+  exportReachabilityPayload,
   fileListingPayload,
   fileReadPayload,
   findingsPayload,
@@ -476,7 +477,8 @@ export function buildServer(fl: FirmLabClient): McpServer {
         { binary, ...(sinks?.length ? { sinks } : {}), ...(budgetSeconds ? { budgetSeconds } : {}) },
         REACH_TIMEOUT_MS,
       );
-      return toolResult(jobPayload(job));
+      if (job.status !== 'done') return toolResult(jobPayload(job));
+      return toolResult(exportReachabilityPayload(job.result as Parameters<typeof exportReachabilityPayload>[0]));
     },
   );
 

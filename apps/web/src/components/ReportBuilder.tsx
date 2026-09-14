@@ -40,6 +40,9 @@ const SEV_HEX: Record<string, string> = {
   info: '#67737f',
 };
 
+/** Rows the exported structure table shows; a cap, so it declares the total when it clips. */
+const STRUCTURE_ROW_CAP = 24;
+
 const ALL_SECTIONS = [
   'summary',
   'identity',
@@ -213,9 +216,19 @@ export function ReportBuilder({
                 kind: 'table',
                 head: [t.report.structure.range, t.report.structure.category, t.report.structure.label],
                 rows: analysis.structure
-                  .slice(0, 24)
+                  .slice(0, STRUCTURE_ROW_CAP)
                   .map((s) => [`${hex(s.start)}–${hex(s.end)}`, s.category, s.label || '—']),
               },
+              // The table caps at STRUCTURE_ROW_CAP rows; say so with the total, so the report never reads the
+              // first 24 segments as the whole structure map.
+              ...(analysis.structure.length > STRUCTURE_ROW_CAP
+                ? [
+                    {
+                      kind: 'p' as const,
+                      text: t.report.structure.truncated(STRUCTURE_ROW_CAP, analysis.structure.length),
+                    },
+                  ]
+                : []),
             ]
           : [{ kind: 'p', text: t.report.structure.none }],
       },

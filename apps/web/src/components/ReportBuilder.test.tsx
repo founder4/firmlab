@@ -10,7 +10,7 @@
  */
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type Finding, type ImageSummary, api } from '../api';
+import { type Finding, type ImageSummary, type StaticAnalysis, api } from '../api';
 import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import { ReportBuilder } from './ReportBuilder';
@@ -145,6 +145,26 @@ describe('ReportBuilder — assertions are never measured findings', () => {
 
     expect(await screen.findByText(/zero findings is not the same as clean/i)).toBeInTheDocument();
     expect(screen.queryByText(/Operator assertions/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('ReportBuilder — bounded structure table', () => {
+  it('renders only 24 rows and states the full segment count beside the cut', async () => {
+    mockApi.findings.mockResolvedValue([]);
+    const analysis = {
+      structure: Array.from({ length: 25 }, (_, index) => ({
+        start: index * 16,
+        end: index * 16 + 15,
+        label: `segment-${index}`,
+        category: 'other' as const,
+        confidence: 'low' as const,
+      })),
+    } as StaticAnalysis;
+    render(<ReportBuilder imageId="img1" image={image} analysis={analysis} />);
+
+    expect(await screen.findByText(/Showing the first 24 of 25 structural segments/i)).toBeInTheDocument();
+    expect(screen.getByText('segment-23')).toBeInTheDocument();
+    expect(screen.queryByText('segment-24')).not.toBeInTheDocument();
   });
 });
 

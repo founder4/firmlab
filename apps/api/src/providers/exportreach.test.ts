@@ -136,4 +136,20 @@ describe('summarise', () => {
     });
     expect(s).toContain('failure to analyse, not a clean result');
   });
+
+  it('counts budget-exhausted and uncalled sinks instead of dropping them on the floor', () => {
+    const s = summarise('usr/lib/x.so', {
+      available: true,
+      functionsRecovered: 100,
+      entryPoints: 4,
+      sinks: [
+        { sink: 'memcpy', outcome: 'reachable', holders: 1, reachableFrom: 1 },
+        { sink: 'system', outcome: 'no_call_site' },
+        { sink: 'strcpy', outcome: 'budget_exhausted' },
+      ],
+    });
+    expect(s).toContain('1 present but uncalled');
+    expect(s).toContain('1 left unexplored when the budget ran out');
+    expect(s).toContain('a budget-exhausted one was never asked at all');
+  });
 });

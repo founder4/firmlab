@@ -514,6 +514,48 @@ export function reachabilityPayload(result: {
   };
 }
 
+/**
+ * Pure: the export-reachability payload, the control-flow-graph counterpart to `reachabilityPayload` for objects
+ * with no program entry point (`.so`/`.ko`). It exists as its own function because the outcome vocabulary is
+ * different — CFGFast reports `not_reached`/`no_call_site`/`budget_exhausted` where the symbolic run reports
+ * `not_reached_in_budget`/`skipped` — and, before it, the export-reach tool was the ONE reachability surface that
+ * reached the agent as a bare `outcome` string with no `meaning` beside it, so `budget_exhausted` read to the model
+ * exactly like `not_reached` read to a human: a negative that is not one.
+ */
+export function exportReachabilityPayload(result: {
+  available: boolean;
+  reason: string;
+  binary?: string;
+  arch?: string;
+  entryPoints?: number;
+  functionsRecovered?: number;
+  sinks: { sink: string; outcome: string; holders?: number; reachableFrom?: number }[];
+}): Record<string, unknown> {
+  const meaning: Record<string, string> = {
+    reachable:
+      'STATIC CONTROL-FLOW REACHABLE: an entry point has a path through the recovered call graph to a caller of this sink. It does not establish that the path is feasible (branch conditions are unchecked), that an input drives it, or that anything is exploitable — a lead, stronger than an import.',
+    not_reached:
+      'NO ROUTE in the RECOVERED graph. This is NOT proof the sink is unreachable: CFGFast does not resolve indirect/virtual calls, on which shared objects and kernel modules are routinely built.',
+    no_call_site:
+      'The symbol is present but no recovered basic block calls it. Nothing was learned about whether a live path reaches it — the call may be made indirectly.',
+    budget_exhausted:
+      'NO RESULT. The sink loop ran out of budget before this one was examined. It was never asked, not answered — do not read it as not-reached.',
+    absent: 'The symbol is not in this object, so the question did not apply. Nothing was learned about the object.',
+  };
+  return {
+    available: result.available,
+    ...(result.binary ? { binary: result.binary } : {}),
+    ...(result.arch ? { arch: result.arch } : {}),
+    ...(result.entryPoints !== undefined ? { entryPoints: result.entryPoints } : {}),
+    ...(result.functionsRecovered !== undefined ? { functionsRecovered: result.functionsRecovered } : {}),
+    reason: result.reason,
+    sinks: result.sinks.map((s) => ({
+      ...s,
+      meaning: meaning[s.outcome] ?? 'Unrecognised outcome — treat as no result.',
+    })),
+  };
+}
+
 /** The extraction verdict a file listing must be read next to (`providers/fsbrowse.ts`). */
 export interface McpExtraction {
   state: string;

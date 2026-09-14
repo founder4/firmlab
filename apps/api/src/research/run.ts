@@ -38,6 +38,7 @@ import { type ProvenanceFingerprint, buildProvenanceFingerprint } from '../provi
 import type { SbomResult } from '../providers/sbom.js';
 import { type SecurityTxt, fetchSecurityTxt } from '../providers/securitytxt.js';
 import { getImage, listJobs } from '../store.js';
+import { rootfsKeyWalkWasBounded, selectSecurityDomains } from './bounds.js';
 import { RESEARCH_DISABLED, loadResearchConfig } from './config.js';
 import { type EgressLedger, buildEgressLedger } from './egress.js';
 
@@ -114,14 +115,26 @@ const KEY_MARKERS: { re: RegExp; kind: string }[] = [
   { re: /-----BEGIN CERTIFICATE-----/, kind: 'certificate' },
 ];
 
-/** Bounded rootfs walk that finds embedded key material (private keys are effectively public — extractable). */
-function scanRootfsKeys(imageId: string): KeyMaterial[] {
+/** Entries walked / keys collected before the rootfs key scan stops. Named so the caller can say a count is a floor. */
+const KEY_WALK_ENTRY_CAP = 4000;
+const KEY_MATERIAL_CAP = 20;
+
+/** How many provenance domains the security.txt probe queries — the rest are unchecked, not without a contact. */
+const SECURITY_DOMAIN_CHECK_CAP = 5;
+
+/**
+ * Bounded rootfs walk that finds embedded key material (private keys are effectively public — extractable).
+ * Returns `bounded: true` when it stopped with tree still to walk or the key list full — then the count is a FLOOR,
+ * not a total, and a caller that passes it to the model or an operator must say so.
+ */
+function scanRootfsKeys(imageId: string): { keys: KeyMaterial[]; bounded: boolean } {
   const rootfs = latestRootfs(imageId);
-  if (!rootfs) return [];
+  if (!rootfs) return { keys: [], bounded: false };
   const out: KeyMaterial[] = [];
   const stack = [rootfs];
   let visited = 0;
-  while (stack.length > 0 && visited < 4000 && out.length < 20) {
+  let entryBudgetExhausted = false;
+  walk: while (stack.length > 0 && out.length < KEY_MATERIAL_CAP) {
     const cur = stack.pop() as string;
     let entries: fs.Dirent[];
     try {
@@ -130,6 +143,10 @@ function scanRootfsKeys(imageId: string): KeyMaterial[] {
       continue;
     }
     for (const e of entries) {
+      if (visited >= KEY_WALK_ENTRY_CAP) {
+        entryBudgetExhausted = true;
+        break walk;
+      }
       visited++;
       const abs = path.join(cur, e.name);
       if (e.isDirectory()) stack.push(abs);
@@ -141,6 +158,7 @@ function scanRootfsKeys(imageId: string): KeyMaterial[] {
             const m = txt.match(re);
             if (m) {
               out.push({ kind, redacted: `${e.name}: ${m[0]}…`, effectivelyPublic: kind === 'private-key' });
+              if (out.length >= KEY_MATERIAL_CAP) break walk;
               break;
             }
           }
@@ -150,7 +168,13 @@ function scanRootfsKeys(imageId: string): KeyMaterial[] {
       }
     }
   }
-  return out;
+  // Stopped early if the key list filled, or the entry budget ran out with directories still queued.
+  const bounded = rootfsKeyWalkWasBounded({
+    keysFound: out.length,
+    keyCap: KEY_MATERIAL_CAP,
+    entryBudgetExhausted,
+  });
+  return { keys: out, bounded };
 }
 
 /** Deterministic, local: pull banner strings from the extracted rootfs (bounded), for the provenance fingerprint. */
@@ -318,18 +342,26 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     const shared = src ? credentialOtherImages(hashSecret(src.value), imageId).length : 0;
     return { ...k, sharedInImages: shared };
   });
-  const rootfsKeys = scanRootfsKeys(imageId);
+  const { keys: rootfsKeys, bounded: keyMaterialBounded } = scanRootfsKeys(imageId);
   const seenKeys = new Set(imageKeys.map((k) => k.redacted));
   const keyMaterial = [...imageKeys, ...rootfsKeys.filter((k) => !seenKeys.has(k.redacted))];
 
-  // 5.3 — vendor security contacts from security.txt, but only for domains the operator allowlisted.
+  // 5.3 — vendor security contacts from security.txt, but only for domains the operator allowlisted. The check is
+  // capped: a domain past the cap is UNCHECKED, not a domain with no security.txt — the denominator is the pool of
+  // provenance domains, never the capped slice, so "0 disclosures" can never be read off a question never asked.
   const securityContacts: SecurityTxt[] = [];
-  for (const domain of provenance.domains.slice(0, 5)) {
+  const domainSelection = selectSecurityDomains(provenance.domains, SECURITY_DOMAIN_CHECK_CAP);
+  for (const domain of domainSelection.selected) {
     securityContacts.push(await fetchSecurityTxt(domain, cfg));
   }
   const checked = securityContacts.filter((c) => c.checked).length;
+  const uncheckedDomains = domainSelection.unchecked;
   handle.log(
-    `Keys: ${keyMaterial.length} embedded. Disclosure: ${checked}/${securityContacts.length} domains checked.`,
+    `Keys: ${keyMaterial.length}${keyMaterialBounded ? '+ (rootfs walk bounded — a floor, not a total)' : ''} embedded. Disclosure: ${checked}/${securityContacts.length} queried domain(s) publish security.txt${
+      uncheckedDomains > 0
+        ? `; ${uncheckedDomains} of ${provenance.domains.length} provenance domain(s) were not queried (cap ${SECURITY_DOMAIN_CHECK_CAP}) — disclosure posture unknown, not absent.`
+        : '.'
+    }`,
   );
 
   // Source #5 — online password-hash lookup (opt-in on top of the track, FIRMLAB_HASH_LOOKUP). Sends only unsalted
@@ -355,7 +387,17 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     })
       .slice(0, 10)
       .map((p) => ({ subject: p.subject, proofState: p.proofState }));
-    const ctx: IntelContext = { provenance, osv, nvd, kev, reachablePriors, keyMaterial, securityContacts };
+    const ctx: IntelContext = {
+      provenance,
+      osv,
+      nvd,
+      kev,
+      reachablePriors,
+      keyMaterial,
+      keyMaterialBounded,
+      securityContacts,
+      securityDomainsUnchecked: uncheckedDomains,
+    };
     handle.log(`Synthesizing cited intelligence brief via ${llm.provider} (${llm.model})…`);
     const r = await runIntelSynthesis(ctx, llm);
     synthesis = { text: r.text, model: r.model, provider: r.provider };

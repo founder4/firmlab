@@ -82,17 +82,23 @@ export function summarizeFindings(findings: Finding[]): FindingsSummary {
   return { total: findings.length, bySeverity, byProofState, census: severityCensus(findings), top };
 }
 
+/** How many chain-of-evidence lines the attack path renders. A cap, so it states what it dropped when it bites. */
+const ATTACK_PATH_CAP = 6;
+
 /**
  * Build the chain-of-evidence lines. A finding whose evidence carries source/sink/privilege is rendered as the
  * source → sink → (privilege) chain the autonomous pass produced; otherwise the title stands, always tagged with
  * its honest proof state so a static lead is never dressed up as a reproduced exploit.
+ *
+ * The ranking is right and the cap is deliberate, but the slice used to be silent — six of five-hundred-odd
+ * qualifying findings rendered under a heading that did not say six. When more qualify than fit, a final line
+ * states how many were held back and by what rule, so the path never reads as the whole ranked set.
  */
 export function buildAttackPath(findings: Finding[]): string[] {
-  const ranked = [...findings]
+  const qualified = [...findings]
     .filter((f) => f.proofState !== 'false_positive' && (SEVERITY_RANK[f.severity] ?? 0) >= 3)
-    .sort((a, b) => findingRank(b) - findingRank(a))
-    .slice(0, 6);
-  return ranked.map((f) => {
+    .sort((a, b) => findingRank(b) - findingRank(a));
+  const rows = qualified.slice(0, ATTACK_PATH_CAP).map((f) => {
     const ev = (f.evidence ?? {}) as Record<string, unknown>;
     const source = ev.source ?? ev.input ?? ev.param;
     const sink = ev.sink ?? ev.binary ?? ev.file;
@@ -101,6 +107,12 @@ export function buildAttackPath(findings: Finding[]): string[] {
     const head = chain ? `${chain}` : f.title;
     return `[${f.severity}/${f.proofState}] ${head}`;
   });
+  if (qualified.length > rows.length) {
+    rows.push(
+      `… +${qualified.length - rows.length} further high-severity finding(s) qualify; the top ${ATTACK_PATH_CAP} are shown, ranked by severity then proof state.`,
+    );
+  }
+  return rows;
 }
 
 /** The honest-degradation surface: what could NOT be done, so "few findings" is never read as "clean/secure". */

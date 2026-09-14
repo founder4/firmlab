@@ -224,15 +224,19 @@ const ECOS_SCAN_CAP = 4 * 1024 * 1024;
  * Does the image carry eCos-monolith marker strings? Decodes a bounded latin1 prefix and looks for any
  * `ECOS_MARKERS` token. Used only when no genuine Linux filesystem is present, so a real Linux image that merely
  * mentions RedBoot in its bootloader is never mistaken for a standalone eCos blob.
+ *
+ * Returns `bounded` so a NEGATIVE on an image larger than the cap is not silently promoted to a class verdict:
+ * "no eCos marker in the first 4 MB" is not "not eCos" for a bigger image. No corpus image reaches the cap today,
+ * but a bound that decides a class must say it decided under a bound — see the caller.
  */
-function looksLikeEcos(buf: Uint8Array): boolean {
+function scanEcos(buf: Uint8Array): { match: boolean; bounded: boolean } {
   const end = Math.min(buf.length, ECOS_SCAN_CAP);
   let text = '';
   for (let i = 0; i < end; i += 0x8000) {
     text += String.fromCharCode(...buf.subarray(i, Math.min(end, i + 0x8000)));
   }
   const lower = text.toLowerCase();
-  return ECOS_MARKERS.some((m) => lower.includes(m));
+  return { match: ECOS_MARKERS.some((m) => lower.includes(m)), bounded: buf.length > ECOS_SCAN_CAP };
 }
 
 /**
@@ -282,6 +286,7 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
   const picobin = parsePicobin(buf);
   const rp2040 = parseRp2040Flash(buf);
   const qmkMarkers = rp2040 ? qmkFirmwareMarkers(buf) : [];
+  const ecos = scanEcos(buf);
 
   let firmwareClass: FirmwareClass = 'unknown';
   let classRationale: string | undefined;
@@ -289,6 +294,10 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
   let endianness: Endianness;
   // Whether the resolved class is a genuine filesystem-bearing image (so the detected fs list is meaningful).
   let filesystemClass = false;
+  // Set only on the fallbacks an eCos monolith could really have been (uImage/trx repack, arm-zimage/elf, unknown):
+  // if the eCos scan was bounded, those verdicts are provisional and must say so. The confident branches (a real
+  // filesystem, ESP/UEFI/PICOBIN headers, encrypted entropy) are unaffected by a marker past the cap.
+  let ecosAmbiguousFallback = false;
 
   if (ids.has('esp-parttable')) {
     firmwareClass = 'esp-soc';
@@ -325,7 +334,7 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
     firmwareClass = 'embedded-linux';
     filesystemClass = true;
     ({ arch, endianness } = inferArch(buf, hits));
-  } else if (looksLikeEcos(buf)) {
+  } else if (ecos.match) {
     // An eCos monolith (no Linux rootfs) — often repacked in a uImage whose ih_os still says Linux. Classify as
     // rtos so the Linux rootfs pipeline (which would return 0 files) is not run; W7 does the static RTOS lens.
     firmwareClass = 'rtos';
@@ -342,6 +351,7 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
   } else if (ids.has('uimage') || ids.has('trx') || ids.has('android-boot')) {
     firmwareClass = 'embedded-linux';
     filesystemClass = true;
+    ecosAmbiguousFallback = true;
     ({ arch, endianness } = inferArch(buf, hits));
   } else if (entropy?.likelyEncrypted) {
     firmwareClass = 'encrypted';
@@ -353,9 +363,20 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
     ({ arch, endianness } = inferArch(buf, hits));
   } else if (ids.has('arm-zimage') || ids.has('elf')) {
     firmwareClass = 'rtos';
+    ecosAmbiguousFallback = true;
     ({ arch, endianness } = inferArch(buf, hits));
   } else {
+    ecosAmbiguousFallback = true;
     ({ arch, endianness } = inferArch(buf, hits));
+  }
+
+  // A bound is not an answer: if the eCos marker scan was clipped and we fell back to a class it could have
+  // overturned, say the class is provisional and why. No corpus image trips this today (all are ≤ the cap).
+  if (ecosAmbiguousFallback && ecos.bounded) {
+    const capMb = Math.floor(ECOS_SCAN_CAP / (1024 * 1024));
+    const sizeMb = Math.floor(buf.length / (1024 * 1024));
+    const note = `The eCos marker scan was bounded to the first ${capMb} MB of this ${sizeMb} MB image; markers beyond it were not read, so this class is provisional against a larger eCos monolith.`;
+    classRationale = classRationale ? `${classRationale} ${note}` : note;
   }
 
   // Only report a filesystem inventory for classes that actually carry one — never surface the coincidental

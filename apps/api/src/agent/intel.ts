@@ -31,8 +31,12 @@ export interface IntelContext {
   reachablePriors: { subject: string; proofState: string }[];
   /** Phase 5.2: embedded key material (redacted). Private keys in firmware are effectively public. */
   keyMaterial: KeyMaterial[];
+  /** True when the rootfs key walk was cut short: `keyMaterial` is then a FLOOR, so absence of more is not proven. */
+  keyMaterialBounded?: boolean;
   /** Phase 5.3: vendor security contacts discovered from security.txt (allowlisted domains only). */
   securityContacts: SecurityTxt[];
+  /** Provenance domains left unqueried under the check cap — unknown disclosure posture, NOT "no security.txt". */
+  securityDomainsUnchecked?: number;
 }
 
 export const INTEL_SYSTEM_PROMPT = `You are FirmLab's external-intelligence analyst. You are given deterministic

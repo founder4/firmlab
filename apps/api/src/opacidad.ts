@@ -821,7 +821,8 @@ const EXPORT_REACH_TOTAL_BUDGET_SECONDS = 360;
  * dangerous sink. The selector is deterministic and bounded; this remains static reachability, never feasibility.
  */
 async function exportreachRun(c: RunCtx): Promise<StepOutcome> {
-  const targets = selectExportReachTargets(listBinaries(c.imageId), EXPORT_REACH_TARGET_CAP);
+  const selection = selectExportReachTargets(listBinaries(c.imageId), EXPORT_REACH_TARGET_CAP);
+  const { targets, total: candidatePool, rule: selectionRule } = selection;
   if (targets.length === 0) {
     return {
       summary: 'export reachability: no .so/.ko target in the binary inventory',
@@ -859,7 +860,7 @@ async function exportreachRun(c: RunCtx): Promise<StepOutcome> {
   }
 
   return {
-    summary: `export reachability: ${targets.length} selected object(s), ${reachable} reachable sink path(s), ${findingCount} finding(s)`,
+    summary: `export reachability: ${targets.length} of ${candidatePool} .so/.ko object(s) selected, ${reachable} reachable sink path(s), ${findingCount} finding(s)`,
     findingCount,
     ...(blocked.length
       ? {
@@ -867,9 +868,9 @@ async function exportreachRun(c: RunCtx): Promise<StepOutcome> {
           // Worst cause wins: a missing angr is what a reader must act on, and summarising it as a budget note
           // would file a deployment gap under "the search did not finish".
           remedy: remedyForBlockedProbes(blockedBy),
-          note: `${blocked.join(' | ')} Control-flow reachability is not a feasible or exploitable path.`,
+          note: `${selectionRule} ${blocked.join(' | ')} Control-flow reachability is not a feasible or exploitable path.`,
         }
-      : { note: 'Control-flow reachability is not a feasible or exploitable path.' }),
+      : { note: `${selectionRule} Control-flow reachability is not a feasible or exploitable path.` }),
   };
 }
 
