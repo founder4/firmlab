@@ -102,7 +102,7 @@ import { runFullSystemFromRootfs } from './providers/full-system-run.js';
 import { fwhuntOutcome } from './providers/fwhunt-outcome.js';
 import { type FwHuntResult, hasActiveFwHuntJob, latestFwHuntResult, runFwHunt } from './providers/fwhunt.js';
 import type { JobHandle } from './providers/jobs.js';
-import { runKernelPosture } from './providers/kernelposture.js';
+import { type KernelModuleSupportAssessment, runKernelPosture } from './providers/kernelposture.js';
 import { runKmod } from './providers/kmod.js';
 import { runNvramScan } from './providers/nvram.js';
 import { runRtosAnalysis } from './providers/rtos.js';
@@ -148,6 +148,7 @@ interface RunCtx {
   /** The extraction output dir (all carved partitions) — the aux-secret scan reads sibling partitions from here. */
   outputDir: string | null;
   carveTrace?: ExtractResult['carveTrace'];
+  kernelModuleSupport?: KernelModuleSupportAssessment;
   /** Architecture read from the rootfs ELF headers — authoritative for emulating a binary out of it. */
   detectedArch?: Architecture;
   /**
@@ -407,6 +408,7 @@ async function servicemapRun(c: RunCtx): Promise<StepOutcome> {
  */
 async function kernelRun(c: RunCtx): Promise<StepOutcome> {
   const r = runKernelPosture(c.imagePath, c.rootfsPath, c.outputDir);
+  if (r.moduleSupport) c.kernelModuleSupport = r.moduleSupport;
   syncFindings(c.imageId, 'kernel', r.findings);
   if (!r.located) {
     return {
@@ -798,19 +800,32 @@ async function kmodRun(c: RunCtx): Promise<StepOutcome> {
   if (checked) parts.push(`${checked} bounded in view`);
   // The call-site pass being unavailable is a DEGRADED run, not a clean one: the inventory still lands, and
   // reporting that as a complete sweep is the shape this codebase keeps paying for.
-  const degraded = !r.callSitePass.available || r.symbolTableUnreadable > 0;
+  const modulelessSettled =
+    r.modulesFound === 0 && (r.inventoryScan.complete || c.kernelModuleSupport?.state === 'disabled');
+  const degraded = modulelessSettled ? false : !r.callSitePass.available || r.symbolTableUnreadable > 0;
   // `callSitePass.available` is radare2's flag on a rootfs that HAS modules, and "never reached" on one that does
-  // not — so the remedy cannot be read off it alone. Measured on IMOU-Ranger-2C, whose rootfs carries no .ko at
-  // all: the cell reported a missing disassembler, which is a deployment gap a reader would go and act on.
+  // not — so the remedy cannot be read off it alone. The old IMOU extraction demonstrated both failure modes:
+  // it missed `usr/lib/modules.7z`, then the cell reported a missing disassembler. Binwalk v3 now recovers its 38
+  // modules; a genuinely empty inventory is distinguished by the complete walk and independent kernel evidence.
   const remedy = remedyForKmod({
     modulesFound: r.modulesFound,
     callSitePassAvailable: r.callSitePass.available,
     symbolTableUnreadable: r.symbolTableUnreadable,
+    inventoryScan: r.inventoryScan,
+    ...(c.kernelModuleSupport ? { moduleSupport: c.kernelModuleSupport.state } : {}),
   });
+  const moduleSupportNote =
+    r.modulesFound === 0 && c.kernelModuleSupport
+      ? ` Kernel module support: ${c.kernelModuleSupport.state} — ${c.kernelModuleSupport.detail}`
+      : '';
   return {
     summary: `kernel-module surface: ${parts.join(', ')}`,
     findingCount: r.findings.length,
-    ...(degraded ? { degraded: true, ...(remedy ? { remedy } : {}), note: r.reason } : {}),
+    ...(degraded
+      ? { degraded: true, ...(remedy ? { remedy } : {}), note: `${r.reason}${moduleSupportNote}` }
+      : moduleSupportNote
+        ? { note: `${r.reason}${moduleSupportNote}` }
+        : {}),
   };
 }
 

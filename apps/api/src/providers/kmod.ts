@@ -881,6 +881,8 @@ export interface KmodResult {
   /** Every `.ko` found, whether or not it ranked into the disassembly budget. */
   modules: KmodModuleResult[];
   modulesFound: number;
+  /** Coverage of the independent `.ko` inventory walk. */
+  inventoryScan: KmodInventoryScan;
   /** Objects that looked like modules and were not `ET_REL` — counted so the exclusion is a stated rule. */
   notRelocatable: number;
   /** Modules whose symbol table could not be read. Never folded into "imports nothing". */
@@ -888,6 +890,13 @@ export interface KmodResult {
   provenance: ProvenanceUsability;
   callSitePass: CallSitePassStatus;
   findings: FindingDraft[];
+}
+
+export interface KmodInventoryScan {
+  entriesVisited: number;
+  cap: number;
+  complete: boolean;
+  skippedUnreadable: number;
 }
 
 export interface KmodAdvisoryCandidate {
@@ -1149,11 +1158,13 @@ async function radare2Available(): Promise<{ ok: boolean; reason?: string }> {
   }
 }
 
-/** Walk a rootfs for `.ko` files, bounded. */
-function findModules(root: string): string[] {
+/** Walk a rootfs for `.ko` files, bounded, retaining what prevented an exhaustive negative. */
+function findModules(root: string): { files: string[]; scan: KmodInventoryScan } {
   const out: string[] = [];
   const stack: string[] = [root];
   let visited = 0;
+  let skippedUnreadable = 0;
+  let capped = false;
   while (stack.length > 0 && visited < WALK_CAP) {
     const dir = stack.pop();
     if (dir === undefined) break;
@@ -1161,18 +1172,30 @@ function findModules(root: string): string[] {
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
+      skippedUnreadable++;
       continue;
     }
     for (const e of entries) {
+      if (visited >= WALK_CAP) {
+        capped = true;
+        break;
+      }
       visited++;
-      if (visited >= WALK_CAP) break;
       const abs = path.join(dir, e.name);
       if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) stack.push(abs);
       else if (e.isFile() && e.name.endsWith('.ko')) out.push(abs);
     }
   }
-  return out.sort();
+  return {
+    files: out.sort(),
+    scan: {
+      entriesVisited: visited,
+      cap: WALK_CAP,
+      complete: !capped && stack.length === 0 && skippedUnreadable === 0,
+      skippedUnreadable,
+    },
+  };
 }
 
 /** Read one module's identity and kernel API from its bytes alone. */
@@ -1333,6 +1356,7 @@ export async function runKmod(rootfsPath: string | null): Promise<KmodResult> {
   const empty: Omit<KmodResult, 'available' | 'reason'> = {
     modules: [],
     modulesFound: 0,
+    inventoryScan: { entriesVisited: 0, cap: WALK_CAP, complete: false, skippedUnreadable: 0 },
     notRelocatable: 0,
     symbolTableUnreadable: 0,
     provenance: { intreeTagInUse: false, licenceDeclared: false, note: 'No module was read.' },
@@ -1355,14 +1379,18 @@ export async function runKmod(rootfsPath: string | null): Promise<KmodResult> {
     };
   }
 
-  const files = findModules(rootfsPath);
+  const inventory = findModules(rootfsPath);
+  const { files } = inventory;
   if (files.length === 0) {
     return {
       ...empty,
       available: true,
-      reason:
-        'The rootfs carries no .ko files. A monolithic kernel with everything compiled in produces exactly ' +
-        'this result, and so does a carve that missed lib/modules — the two are not distinguished here.',
+      inventoryScan: inventory.scan,
+      reason: `The rootfs carries no .ko files. The inventory visited ${inventory.scan.entriesVisited} filesystem entries${
+        inventory.scan.complete
+          ? ' and completed, so no shipped module file was left unseen.'
+          : ` and did not complete${inventory.scan.skippedUnreadable ? `; ${inventory.scan.skippedUnreadable} director${inventory.scan.skippedUnreadable === 1 ? 'y was' : 'ies were'} unreadable` : ` before the ${inventory.scan.cap}-entry cap`}.`
+      }`,
     };
   }
 
@@ -1481,6 +1509,7 @@ export async function runKmod(rootfsPath: string | null): Promise<KmodResult> {
     reason: `${recs.length} kernel module(s) read${skipNote}${symNote}.${passNote} An empty list of call sites means the ranked modules showed none in view — not that this rootfs has none.`,
     modules: results,
     modulesFound: files.length,
+    inventoryScan: inventory.scan,
     notRelocatable,
     symbolTableUnreadable,
     provenance,

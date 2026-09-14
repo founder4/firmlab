@@ -229,6 +229,65 @@ export function parseKernelConfig(text: string): Record<string, string> {
   return out;
 }
 
+export type KernelModuleSupportAssessment =
+  | { state: 'disabled'; evidence: 'kernel-config' | 'complete-kallsyms'; detail: string }
+  | { state: 'enabled'; evidence: 'kernel-config' | 'kallsyms-symbol'; detail: string }
+  | { state: 'unknown'; evidence: 'none'; detail: string };
+
+/** Symbols compiled by the kernel module loader across old `sys_init_module` and newer syscall wrappers. */
+const MODULE_LOADER_SYMBOLS = [
+  'load_module',
+  'do_init_module',
+  'sys_init_module',
+  '__do_sys_init_module',
+  '__x64_sys_init_module',
+  'module_alloc',
+  'find_module',
+] as const;
+
+/** Pure: decide whether this kernel can load modules without inferring from the presence of `.ko` files. */
+export function assessKernelModuleSupport(
+  config: Readonly<Record<string, string>> | null,
+  kallsyms: DecodedKallsyms | null,
+): KernelModuleSupportAssessment {
+  const configured = config?.CONFIG_MODULES;
+  if (configured === 'n') {
+    return {
+      state: 'disabled',
+      evidence: 'kernel-config',
+      detail: 'The shipped kernel config states # CONFIG_MODULES is not set.',
+    };
+  }
+  if (configured === 'y') {
+    return {
+      state: 'enabled',
+      evidence: 'kernel-config',
+      detail: 'The shipped kernel config states CONFIG_MODULES=y.',
+    };
+  }
+
+  const symbol = MODULE_LOADER_SYMBOLS.find((name) => kallsyms?.names.has(name));
+  if (symbol) {
+    return {
+      state: 'enabled',
+      evidence: 'kallsyms-symbol',
+      detail: `The kernel's decoded kallsyms table contains the module-loader symbol ${symbol}.`,
+    };
+  }
+  if (kallsyms?.complete) {
+    return {
+      state: 'disabled',
+      evidence: 'complete-kallsyms',
+      detail: `The complete ${kallsyms.symbolCount}-entry kallsyms table contains none of the module-loader symbols.`,
+    };
+  }
+  return {
+    state: 'unknown',
+    evidence: 'none',
+    detail: 'No shipped CONFIG_MODULES value or complete decoded kallsyms table was available.',
+  };
+}
+
 /** Does this text read as a kernel `.config`, rather than some other file that happens to be called `config`? */
 export function looksLikeKernelConfig(text: string): boolean {
   return /^#\s*Automatically generated/m.test(text) || /^CONFIG_[A-Z0-9_]+=/m.test(text);
@@ -1016,6 +1075,8 @@ export interface KernelPostureResult {
   /** True when that tree was recognised inside the extraction output rather than supplied by the caller. */
   rootfsDiscovered: boolean;
   blob: KernelBlobFacts | null;
+  /** Independent of `.ko` presence. Optional forever because stored provider results predate this assessment. */
+  moduleSupport?: KernelModuleSupportAssessment;
   modules: ModuleEvidence | null;
   age: KernelAge | null;
   answers: PostureAnswer[];
@@ -1716,6 +1777,7 @@ export function runKernelPosture(
     kernelStrings: selectedKernelStrings,
   };
   const configOptions = KERNEL_OPTION_KNOWLEDGE.map((entry) => inferKernelOption(entry.option, cveEvidence));
+  const moduleSupport = assessKernelModuleSupport(config, selectedKallsyms);
   const cves = version ? assessKernelCves(version, cveEvidence) : [];
   const age = numeric ? kernelAge(numeric, nowMs, banner?.buildYear) : null;
   const answered = answers.filter((a) => a.verdict !== 'unknown').length;
@@ -1735,6 +1797,7 @@ export function runKernelPosture(
     rootfsPath: rootfs,
     rootfsDiscovered,
     blob,
+    moduleSupport,
     modules,
     age,
     answers,

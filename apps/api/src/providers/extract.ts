@@ -37,6 +37,29 @@ import type { JobHandle } from './jobs.js';
 
 const execFileAsync = promisify(execFile);
 
+export type BinwalkCli = 'v2' | 'v3';
+
+/** Pure: binwalk 3 is a Rust rewrite whose output-directory flag changed from `-C` to `-d`. */
+export function parseBinwalkCli(versionOutput: string): BinwalkCli {
+  const major = /\bbinwalk\s+v?(\d+)(?:\.|\b)/i.exec(versionOutput)?.[1];
+  return major && Number.parseInt(major, 10) >= 3 ? 'v3' : 'v2';
+}
+
+/** Pure command construction, shared by the initial extraction and recovered-payload rescan. */
+export function binwalkExtractArgs(cli: BinwalkCli, inputPath: string, outputDir: string, isRoot: boolean): string[] {
+  if (cli === 'v3') return ['-M', '-e', '-d', outputDir, inputPath];
+  return isRoot ? ['-Me', '--run-as=root', '-C', outputDir, inputPath] : ['-Me', '-C', outputDir, inputPath];
+}
+
+async function detectBinwalkCli(): Promise<BinwalkCli> {
+  try {
+    const { stdout, stderr } = await execFileAsync('binwalk', ['--version'], { timeout: 8000 });
+    return parseBinwalkCli(`${stdout}\n${stderr}`);
+  } catch {
+    return 'v2';
+  }
+}
+
 export interface ExtractResult {
   extractor: 'binwalk' | 'recursive-carve' | 'none';
   outputDir: string;
@@ -120,7 +143,9 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
   // binwalk refuses to run its (third-party) extraction utilities as root unless explicitly told to; the Docker
   // image runs as root, so pass --run-as=root there. Harmless to omit when running unprivileged (local dev).
   const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
-  const args = isRoot ? ['-Me', '--run-as=root', '-C', outputDir, imagePath] : ['-Me', '-C', outputDir, imagePath];
+  const binwalkCli = await detectBinwalkCli();
+  const args = binwalkExtractArgs(binwalkCli, imagePath, outputDir, isRoot);
+  handle.log(`Detected binwalk ${binwalkCli} command-line contract.`);
   handle.log(`Running: binwalk ${args.join(' ')}`);
   try {
     const { stdout } = await execFileAsync('binwalk', args, {
@@ -143,12 +168,10 @@ export async function runExtraction(imageId: string, imagePath: string, handle: 
     // them reads exactly like no rootfs at all. Open what can be opened and look again.
     const recovery = await recoverFromCompressedBlobs(outputDir, handle);
     if (recovery.producedDir) {
-      const args2 = isRoot
-        ? ['-Me', '--run-as=root', '-C', recovery.producedDir, recovery.producedDir]
-        : ['-Me', '-C', recovery.producedDir, recovery.producedDir];
       for (const file of fs.readdirSync(recovery.producedDir).filter((f) => f.endsWith('.out'))) {
         try {
-          await execFileAsync('binwalk', [...args2.slice(0, -1), path.join(recovery.producedDir, file)], {
+          const recoveredPath = path.join(recovery.producedDir, file);
+          await execFileAsync('binwalk', binwalkExtractArgs(binwalkCli, recoveredPath, recovery.producedDir, isRoot), {
             timeout: 5 * 60 * 1000,
             maxBuffer: 32 * 1024 * 1024,
           });

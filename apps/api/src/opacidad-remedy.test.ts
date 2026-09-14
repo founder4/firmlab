@@ -209,6 +209,35 @@ describe('kernel-module surface', () => {
     expect(remedyForKmod({ modulesFound: 0, callSitePassAvailable: false, symbolTableUnreadable: 0 })).toBeUndefined();
   });
 
+  it('settles an exhaustive module inventory or a kernel that compiled module loading out', () => {
+    const base = { modulesFound: 0, callSitePassAvailable: false, symbolTableUnreadable: 0 };
+    expect(
+      remedyForKmod({
+        ...base,
+        inventoryScan: { complete: true, entriesVisited: 812, cap: 40_000, skippedUnreadable: 0 },
+        moduleSupport: 'enabled',
+      }),
+    ).toBe('settled');
+    expect(remedyForKmod({ ...base, moduleSupport: 'disabled' })).toBe('settled');
+  });
+
+  it('raises a capped module walk and leaves unreadable directories undeclared', () => {
+    const base = { modulesFound: 0, callSitePassAvailable: false, symbolTableUnreadable: 0 };
+    expect(
+      remedyForKmod({
+        ...base,
+        inventoryScan: { complete: false, entriesVisited: 40_000, cap: 40_000, skippedUnreadable: 0 },
+        moduleSupport: 'enabled',
+      }),
+    ).toBe('raise-bound');
+    expect(
+      remedyForKmod({
+        ...base,
+        inventoryScan: { complete: false, entriesVisited: 100, cap: 40_000, skippedUnreadable: 1 },
+      }),
+    ).toBeUndefined();
+  });
+
   it('names the missing disassembler when there were modules to disassemble', () => {
     expect(remedyForKmod({ modulesFound: 12, callSitePassAvailable: false, symbolTableUnreadable: 0 })).toBe(
       'install-tool',

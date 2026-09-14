@@ -9,6 +9,7 @@ import {
   type ModuleEvidence,
   type PostureEvidence,
   ageSeverity,
+  assessKernelModuleSupport,
   assessPosture,
   compareVersion,
   extractPrintable,
@@ -91,6 +92,42 @@ describe('parseKernelBanner', () => {
     const b = parseKernelBanner(`${BANNERS.dvrf}\nSOME_OTHER_KERNEL_STRING`);
     expect(b?.raw).toBe(BANNERS.dvrf);
     expect(b?.raw).not.toContain('SOME_OTHER_KERNEL_STRING');
+  });
+});
+
+describe('kernel module support is independent of the extracted .ko inventory', () => {
+  const kallsyms = (names: string[]) => ({
+    names: new Set(names),
+    symbolCount: names.length,
+    uniqueNameCount: names.length,
+    wordBytes: 4 as const,
+    complete: true as const,
+  });
+
+  it('takes the shipped CONFIG_MODULES value as authoritative', () => {
+    expect(assessKernelModuleSupport({ CONFIG_MODULES: 'n' }, kallsyms(['load_module']))).toMatchObject({
+      state: 'disabled',
+      evidence: 'kernel-config',
+    });
+    expect(assessKernelModuleSupport({ CONFIG_MODULES: 'y' }, kallsyms([]))).toMatchObject({
+      state: 'enabled',
+      evidence: 'kernel-config',
+    });
+  });
+
+  it('uses a loader symbol positively and a complete table negatively', () => {
+    expect(assessKernelModuleSupport(null, kallsyms(['do_init_module']))).toMatchObject({
+      state: 'enabled',
+      evidence: 'kallsyms-symbol',
+    });
+    expect(assessKernelModuleSupport(null, kallsyms(['do_exit', 'schedule']))).toMatchObject({
+      state: 'disabled',
+      evidence: 'complete-kallsyms',
+    });
+  });
+
+  it('stays unknown when neither authoritative source was recovered', () => {
+    expect(assessKernelModuleSupport(null, null).state).toBe('unknown');
   });
 });
 

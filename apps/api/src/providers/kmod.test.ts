@@ -4,6 +4,9 @@
  * than usual for this provider: the two defects these tests pin were both invisible to a fixture written from
  * the same assumption as the code, which is the failure mode this codebase has already paid for repeatedly.
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   type KmodModuleResult,
@@ -23,9 +26,26 @@ import {
   rankSites,
   readIdentity,
   readVersionCandidate,
+  runKmod,
   scoreModule,
   splitMarkedWindows,
 } from './kmod.js';
+
+describe('kernel module inventory coverage', () => {
+  it('records an exhaustive empty rootfs instead of blaming the unavailable disassembler', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-kmod-empty-'));
+    try {
+      for (const dir of ['bin', 'etc', 'lib']) fs.mkdirSync(path.join(root, dir));
+      fs.writeFileSync(path.join(root, 'etc', 'version'), 'fixture');
+      const result = await runKmod(root);
+      expect(result.modulesFound).toBe(0);
+      expect(result.inventoryScan).toMatchObject({ complete: true, skippedUnreadable: 0 });
+      expect(result.reason).toContain('no shipped module file was left unseen');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 /**
  * The allocation site: `SoftwareBus_dispatchNormalEPMsgOut` + 0x514. A length is loaded off the stack, byte

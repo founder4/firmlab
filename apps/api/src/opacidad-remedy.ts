@@ -241,15 +241,21 @@ export function remedyForFwHunt(input: {
  * at all, where the pass was never reached and the same flag is false. Every module-less image was therefore
  * reporting a missing disassembler, which is a deployment gap a reader would go and act on.
  *
- * A module-less rootfs declares nothing, deliberately: the provider's own reason says a monolithic kernel and a
- * carve that missed `lib/modules` produce this result identically, and they need opposite responses.
+ * A module-less rootfs settles only when its own inventory completed or independent kernel evidence proves module
+ * loading was compiled out. A capped inventory can be extended; unreadable directories stay undeclared.
  */
 export function remedyForKmod(input: {
   modulesFound: number;
   callSitePassAvailable: boolean;
   symbolTableUnreadable: number;
+  inventoryScan?: { complete: boolean; entriesVisited: number; cap: number; skippedUnreadable: number };
+  moduleSupport?: 'disabled' | 'enabled' | 'unknown';
 }): DegradedRemedy | undefined {
-  if (input.modulesFound === 0) return undefined;
+  if (input.modulesFound === 0) {
+    if (input.moduleSupport === 'disabled' || input.inventoryScan?.complete) return 'settled';
+    if (input.inventoryScan && input.inventoryScan.skippedUnreadable === 0) return 'raise-bound';
+    return undefined;
+  }
   if (!input.callSitePassAvailable) return 'install-tool';
   // Modules were read and disassembled; some carry a symbol table that cannot be parsed. That is their shape.
   return input.symbolTableUnreadable > 0 ? 'settled' : undefined;
