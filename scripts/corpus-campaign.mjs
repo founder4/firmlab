@@ -39,6 +39,10 @@ import { apiHeaders, fetchMatrix } from './corpus-matrix.mjs';
  */
 export const REMEDY_META = {
   retry: { disposition: 'scan', label: 'the run broke; the same question may settle it' },
+  'escalate-full-system': {
+    disposition: 'scan',
+    label: 're-run with this build: W9 routes the qemu-user environment limit to one full-system boot',
+  },
   // NOT the scan queue, and the first live campaign is what showed why: every `raise-bound` cell in the corpus —
   // the W9 dynamic-step cap, a capped device-tree walk, FwHunt modules left unattempted — comes back identical
   // from a re-run with the same bound. Queueing it would put an image in the queue for ever and report the loop

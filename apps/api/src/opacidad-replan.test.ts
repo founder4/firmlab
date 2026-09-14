@@ -51,6 +51,25 @@ describe('replan + specKey', () => {
     ).toBe('decompile:a/b');
     expect(specKey({ worker: 'W2', reason: '', needsRootfs: true, built: true, provider: 'sbom' })).toBe('sbom');
   });
+
+  it('turns a qemu-user environment artifact into one image-wide full-system boot', () => {
+    const escalation: Lead = {
+      kind: 'escalate-full-system',
+      target: 'pwnable/Intro/diag_tracertbutton',
+      sink: 'system',
+      reason: '/dev/nvram is not available to qemu-user',
+    };
+    const [spec] = replan(escalation, new Set());
+    expect(spec).toMatchObject({
+      provider: 'fullsystem',
+      needsRootfs: true,
+      origin: 'replan',
+      target: escalation.target,
+      sink: escalation.sink,
+    });
+    expect(specKey(spec as PlanSpec)).toBe('fullsystem');
+    expect(replan(escalation, new Set(['fullsystem']))).toEqual([]);
+  });
 });
 
 describe('scheduleLeads', () => {
@@ -79,13 +98,15 @@ describe('scheduleLeads', () => {
       lead('a'),
       { kind: 'prove-reachability', target: 'bin/x', sinks: ['strcpy'], reason: 'r' },
       { kind: 'reproduce-crash', target: 'bin/y', sink: 'strcpy', addresses: ['0x1'], reason: 'r' },
+      { kind: 'escalate-full-system', target: 'bin/y', sink: 'strcpy', reason: 'r' },
     ] as Parameters<typeof scheduleLeads>[0];
     scheduleLeads(mixed, state, 0);
-    expect(state.capped).toBe(3);
+    expect(state.capped).toBe(4);
     expect(state.cappedByKind).toEqual({
       'decompile-binary': 1,
       'prove-reachability': 1,
       'reproduce-crash': 1,
+      'escalate-full-system': 1,
     });
   });
 });

@@ -38,6 +38,7 @@ test('a stage that has never executed is the cheapest thing a campaign can do', 
 test('the remedy, not the note, decides what a degraded cell is', () => {
   const cases = [
     ['retry', 'scan'],
+    ['escalate-full-system', 'scan'],
     ['raise-bound', 'raise'],
     ['install-tool', 'deploy'],
     ['reacquire-input', 'reacquire'],

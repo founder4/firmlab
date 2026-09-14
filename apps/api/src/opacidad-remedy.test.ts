@@ -20,7 +20,7 @@ import type { YaraScanState } from './providers/yarascan.js';
 
 describe('the executable split', () => {
   it('queues only work a campaign can actually schedule', () => {
-    expect([...EXECUTABLE_REMEDIES].sort()).toEqual(['install-tool', 'raise-bound', 'retry']);
+    expect([...EXECUTABLE_REMEDIES].sort()).toEqual(['escalate-full-system', 'install-tool', 'raise-bound', 'retry']);
     for (const remedy of ['settled', 'reacquire-input', 'unbounded-search', 'defect'] as const) {
       expect(isExecutableRemedy(remedy)).toBe(false);
     }
@@ -89,7 +89,7 @@ describe('dynamic reproduction', () => {
       ['not_attached', 'retry'],
       // The sandbox came up short, which is qemu-user's limit and FirmLab's rung — never an instruction to go and
       // find different firmware.
-      ['emulation_artifact', 'defect'],
+      ['emulation_artifact', 'escalate-full-system'],
       ['sink_executed', 'unbounded-search'],
       ['ran_clean', 'unbounded-search'],
       ['crash', undefined],

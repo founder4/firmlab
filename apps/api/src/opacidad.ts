@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs';
 import type { Architecture, ImageIdentity } from '@firmlab/core';
-import { recordCredentialHashes } from './corpus.js';
+import { deviceFamilyKey, recordCredentialHashes, recordReachabilityPrior } from './corpus.js';
 import {
   credentialHashesFromFindings,
   normalizeBinaryHardening,
@@ -90,6 +90,7 @@ import { resolveInsideRootfs, runDecompile } from './providers/decompile.js';
 import { assessDecoy, decoyFinding } from './providers/decoy.js';
 import { runDeviceTreeAnalysis } from './providers/devicetree.js';
 import { runDynProbe } from './providers/dynprobe-run.js';
+import { buildSystemEmulationFindings } from './providers/emulate-system.js';
 import { runEncryptedAnalysis } from './providers/encrypted.js';
 import { runEspAnalysis } from './providers/esp.js';
 import { exportReachSource, runExportReach } from './providers/exportreach.js';
@@ -97,6 +98,7 @@ import { neuteredFindings } from './providers/extract-neutered.js';
 import { type ExtractResult, runExtraction } from './providers/extract.js';
 import { runFccLookup } from './providers/fcc.js';
 import { runFsAudit } from './providers/fsaudit.js';
+import { runFullSystemFromRootfs } from './providers/full-system-run.js';
 import { fwhuntOutcome } from './providers/fwhunt-outcome.js';
 import { type FwHuntResult, hasActiveFwHuntJob, latestFwHuntResult, runFwHunt } from './providers/fwhunt.js';
 import type { JobHandle } from './providers/jobs.js';
@@ -139,6 +141,8 @@ interface BootCmdlineState {
 interface RunCtx {
   imageId: string;
   imagePath: string;
+  /** Parsed once from the stored identity; every runtime rung must make its arch decision from the same record. */
+  identity: ImageIdentity;
   analysisJson: string | null;
   rootfsPath: string | null;
   /** The extraction output dir (all carved partitions) — the aux-secret scan reads sibling partitions from here. */
@@ -971,8 +975,7 @@ async function dynprobeRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   }
   // Prefer the arch measured from the rootfs ELF headers over the whole-image guess: the guess is routinely
   // `unknown` (DVRF's is) while the measurement is the actual class of the binary about to be emulated.
-  const identity = c.analysisJson ? (JSON.parse(c.analysisJson) as { identity?: ImageIdentity }).identity : undefined;
-  const arch = c.detectedArch ?? (identity?.arch !== 'unknown' ? identity?.arch : undefined);
+  const arch = c.detectedArch ?? (c.identity.arch !== 'unknown' ? c.identity.arch : undefined);
   if (!arch) {
     return {
       summary: `reproduce ${binary}:${sink}`,
@@ -989,11 +992,82 @@ async function dynprobeRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
   // is a harness failure worth retrying, a sandbox short of `/dev/nvram` is the emulated environment rather than
   // the firmware, and a clean run is the probe's reach, not a coverage gap.
   const probeRemedy = remedyForProbeVerdict(r.probe?.verdict);
+  if (probeRemedy === 'escalate-full-system') {
+    const reason = `${binary}:${sink} reached qemu-user's environment ceiling (${r.reason}); boot the extracted rootfs on the full-system rung, which can provide NVRAM and device nodes.`;
+    return {
+      summary: `reproduce ${binary}:${sink} → emulation_artifact; full-system escalation scheduled`,
+      findingCount: r.findings.length,
+      note: r.reason,
+      // This process-level stage completed and immediately routed its unanswered question onward. Marking it
+      // degraded as well would leave an executable remedy in the finished coverage report and make the corpus
+      // campaign re-run forever even after the appended full-system stage had executed.
+      leads: [{ kind: 'escalate-full-system', target: binary, sink, reason }],
+    };
+  }
   return {
     summary: `reproduce ${binary}:${sink} → ${r.probe?.verdict ?? 'unavailable'}`,
     findingCount: r.findings.length,
     // Anything short of an observed fault leaves the candidate exactly where it was, and says so.
     ...(settled ? {} : { degraded: true, ...(probeRemedy ? { remedy: probeRemedy } : {}), note: r.reason }),
+  };
+}
+
+/** Prior full-system outcomes reduced to the reproducibility facts the runner compares across boots. */
+function priorFullSystemBoots(imageId: string): {
+  verdict: string;
+  openPorts: number;
+  panic: boolean;
+  buildRev?: string;
+}[] {
+  return listJobs(imageId)
+    .filter((job) => job.kind === 'emulate' && job.status === 'done' && job.resultJson)
+    .map((job) => {
+      try {
+        return JSON.parse(job.resultJson as string) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((result): result is Record<string, unknown> => result?.strategy === 'full-system')
+    .map((result) => ({
+      verdict: typeof result.proofState === 'string' ? result.proofState : 'unknown',
+      openPorts: Array.isArray(result.open) ? result.open.length : 0,
+      panic: typeof result.stdout === 'string' && result.stdout.includes('Kernel panic'),
+      ...(typeof result.buildRev === 'string' ? { buildRev: result.buildRev } : {}),
+    }));
+}
+
+/** The image-wide rung scheduled when a process-level probe needs NVRAM/device integration qemu-user cannot give. */
+async function fullsystemRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
+  const arch = c.detectedArch ?? (c.identity.arch !== 'unknown' ? c.identity.arch : undefined);
+  if (!arch) {
+    return {
+      summary: 'full-system escalation could not choose an architecture',
+      findingCount: 0,
+      degraded: true,
+      remedy: 'reacquire-input',
+      note: 'no measured rootfs architecture or usable image-level architecture is available',
+    };
+  }
+  const result = await runFullSystemFromRootfs(
+    arch,
+    c.rootfsPath as string,
+    8080,
+    c.handle,
+    priorFullSystemBoots(c.imageId),
+  );
+  const findings = buildSystemEmulationFindings('system-boot', result);
+  syncFindings(c.imageId, 'emulate-system', findings);
+  if (result.proofState === 'confirmed_in_emulation' || result.proofState === 'confirmed_full_system') {
+    recordReachabilityPrior(deviceFamilyKey(c.identity, c.imageId), 'system-boot', result.proofState, c.imageId);
+  }
+  const trigger = spec.target && spec.sink ? ` for ${spec.target}:${spec.sink}` : '';
+  return {
+    summary: `full-system escalation${trigger} → ${result.proofState}`,
+    findingCount: findings.length,
+    ...(result.ran
+      ? { note: result.reason }
+      : { degraded: true, remedy: 'install-tool' as const, note: result.reason }),
   };
 }
 
@@ -1070,6 +1144,7 @@ const EXECUTORS: Record<ProviderId, (c: RunCtx, spec: PlanSpec) => Promise<StepO
   exportreach: exportreachRun,
   symreach: symreachRun,
   dynprobe: dynprobeRun,
+  fullsystem: fullsystemRun,
   decompile: decompileRun,
 };
 
@@ -1139,6 +1214,7 @@ export async function runOpacidad(
   const ctx: RunCtx = {
     imageId,
     imagePath,
+    identity,
     analysisJson: row.analysisJson,
     rootfsPath: prior?.rootfsPath ?? null,
     outputDir: prior?.outputDir ?? null,

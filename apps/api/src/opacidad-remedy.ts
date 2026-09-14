@@ -27,7 +27,7 @@ import type { SymReachBlockedBy } from './providers/symreach.js';
 import type { YaraScanState } from './providers/yarascan.js';
 
 /**
- * The closed vocabulary of "what would change this cell". Three of the seven are executable by a campaign, and the
+ * The closed vocabulary of "what would change this cell". Four of the eight are executable by a campaign, and the
  * split is the whole point of the type:
  *
  * - `retry` — the run itself broke (harness failure, a racing dedicated campaign, a thrown executor). The same
@@ -35,6 +35,8 @@ import type { YaraScanState } from './providers/yarascan.js';
  * - `raise-bound` — a cap truncated a search that *can* finish. Raising it covers strictly more. EXECUTABLE.
  * - `install-tool` — this deployment lacks the binary, venv or rule corpus the stage needs. Fix the deployment,
  *   then re-run. EXECUTABLE, but not by a scan alone.
+ * - `escalate-full-system` — qemu-user reached its environment ceiling. A new W9 run schedules the image-wide
+ *   full-system rung instead of repeating that process-level question. EXECUTABLE.
  * - `reacquire-input` — the input is not in these bytes (no rootfs recovered, a truncated volume, no kernel). A
  *   different artifact is needed; re-running the same image cannot change it. NOT executable.
  * - `settled` — the stage looked everywhere it can and this is its answer for this image. NOT executable, and
@@ -52,6 +54,7 @@ export type DegradedRemedy =
   | 'reacquire-input'
   | 'settled'
   | 'unbounded-search'
+  | 'escalate-full-system'
   | 'defect';
 
 /**
@@ -61,10 +64,22 @@ export type DegradedRemedy =
  * a run stored months ago can show exactly one declared cell, and the inference then labels its genuinely stale
  * neighbours as sites that cannot tell. Two UEFI images dropped out of the queue that way.
  */
-export const REMEDY_SCHEMA = 1;
+export const REMEDY_SCHEMA = 2;
 
-/** Remedies a coverage campaign can act on by scheduling work. The rest are reported, never queued. */
-export const EXECUTABLE_REMEDIES: readonly DegradedRemedy[] = ['retry', 'raise-bound', 'install-tool'];
+/**
+ * Remedies a coverage campaign can act on by scheduling work. The rest are reported, never queued.
+ *
+ * `escalate-full-system` is executable because a `defect` was the WRONG label for a probe that hit qemu-user's
+ * ceiling (no NVRAM, no device nodes): re-running the scan now routes it to the full-system rung, which supplies
+ * exactly the environment the probe lacked. It is the only executable remedy that schedules a heavier rung rather
+ * than a retry of the same one.
+ */
+export const EXECUTABLE_REMEDIES: readonly DegradedRemedy[] = [
+  'retry',
+  'raise-bound',
+  'install-tool',
+  'escalate-full-system',
+];
 
 export function isExecutableRemedy(remedy: DegradedRemedy | undefined): boolean {
   return remedy !== undefined && EXECUTABLE_REMEDIES.includes(remedy);
@@ -141,15 +156,17 @@ export function remedyForBlockedProbes(blocked: readonly (SymReachBlockedBy | un
  * `emulation_artifact` is FirmLab's rung, not the firmware: the provider's own reason says so — "a limit of
  * qemu-user (no NVRAM, no device nodes, no peripherals), not a result about the code". It was briefly mapped to
  * `reacquire-input`, which reads as "get a different firmware" and is plainly the wrong instruction; DVRF carried
- * two such cells and neither has anything to do with the bytes. The fix is FirmLab's: provide what the program
- * asks for, or route the probe to the full-system rung.
+ * two such cells and neither has anything to do with the bytes. It then read as `defect` — also wrong, because a
+ * defect is FirmLab's dead-end and this is a rung mismatch with a known escalation: the full-system rung boots the
+ * whole firmware and provides the NVRAM and device nodes qemu-user cannot. So it is `escalate-full-system`, and W9
+ * schedules that rung off the same verdict (see `dynprobeRun`).
  */
 export function remedyForProbeVerdict(verdict: ProbeVerdict | undefined): DegradedRemedy | undefined {
   switch (verdict) {
     case 'not_attached':
       return 'retry';
     case 'emulation_artifact':
-      return 'defect';
+      return 'escalate-full-system';
     case 'sink_executed':
     case 'ran_clean':
       return 'unbounded-search';

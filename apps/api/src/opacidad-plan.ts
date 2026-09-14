@@ -54,6 +54,7 @@ export type ProviderId =
   | 'exportreach'
   | 'symreach'
   | 'dynprobe'
+  | 'fullsystem'
   | 'decompile';
 
 /**
@@ -178,6 +179,14 @@ export type Lead =
       /** The one sink to reproduce, and the call-site addresses symreach already resolved for it. */
       sink: string;
       addresses: string[];
+    }
+  | {
+      /** qemu-user reached its environment ceiling; boot the image-wide rootfs instead of retrying the process. */
+      kind: 'escalate-full-system';
+      /** The process/sink whose device dependency caused the escalation, retained for the trace. */
+      target: string;
+      sink: string;
+      reason: string;
     }
   | {
       kind: 'prove-reachability';
@@ -547,6 +556,21 @@ export function specKey(spec: PlanSpec): string {
  * Both carry origin `replan`, and both are dropped when the same target is already planned (idempotent).
  */
 export function replan(lead: Lead, planned: ReadonlySet<string>): PlanSpec[] {
+  if (lead.kind === 'escalate-full-system') {
+    const spec: PlanSpec = {
+      worker: `W5 · Full-system escalation (${baseName(lead.target)}:${lead.sink})`,
+      reason: lead.reason,
+      needsRootfs: true,
+      built: true,
+      provider: 'fullsystem',
+      target: lead.target,
+      sink: lead.sink,
+      origin: 'replan',
+      trigger: lead.reason,
+    };
+    // `fullsystem` is deliberately image-wide: two processes blocked on /dev/nvram still require one boot, not two.
+    return planned.has(specKey(spec)) ? [] : [spec];
+  }
   if (lead.kind === 'reproduce-crash') {
     const spec: PlanSpec = {
       worker: `W5 · Reproduce (${baseName(lead.target)}:${lead.sink})`,
@@ -642,6 +666,7 @@ export interface ScheduleState {
 export const LEAD_KIND_LABEL: Record<Lead['kind'], string> = {
   'decompile-binary': 'daemon/handler decompile',
   'reproduce-crash': 'crash reproduction',
+  'escalate-full-system': 'full-system escalation',
   'prove-reachability': 'reachability probe',
   'prove-cmdexec-reachability': 'command-exec reachability probe',
 };
