@@ -21,7 +21,7 @@
  * providers already follow for a bound they cannot describe.
  */
 import type { CredMatchState } from './providers/credmatch.js';
-import type { ExtractedDeviceTreeScan } from './providers/devicetree.js';
+import type { ExtractedDeviceTreeScan, RawImageDeviceTreeScan } from './providers/devicetree.js';
 import type { ProbeVerdict } from './providers/dynprobe.js';
 import type { SymReachBlockedBy } from './providers/symreach.js';
 import type { YaraScanState } from './providers/yarascan.js';
@@ -188,12 +188,14 @@ export function remedyForProbeVerdict(verdict: ProbeVerdict | undefined): Degrad
  * tree (reacquire) or a parser that stops early (defect) and nothing at this layer can tell which.
  */
 export function remedyForDeviceTree(input: {
+  rawImageScan?: RawImageDeviceTreeScan | undefined;
   extractionScan?: ExtractedDeviceTreeScan | undefined;
   rejectedCount: number;
   /** True when extraction output existed to be walked — an unwalked rootfs is an unexamined place, not a negative. */
   extractionAvailable: boolean;
 }): DegradedRemedy | undefined {
-  const { extractionScan, rejectedCount, extractionAvailable } = input;
+  const { rawImageScan, extractionScan, rejectedCount, extractionAvailable } = input;
+  if (rawImageScan && !rawImageScan.complete) return 'raise-bound';
   if (extractionScan) {
     const unexamined =
       extractionScan.skippedByFileCap + extractionScan.skippedOversize + extractionScan.skippedUnreadable;
@@ -255,17 +257,18 @@ export function remedyForKmod(input: {
 
 /**
  * Extraction that recovered no rootfs. Volumes that came out and hold no `bin`/`etc`/`lib` are a data dump and are
- * answered; everything else — a carved filesystem nobody could open, a stream that died mid-decompression, nothing
- * at all — reaches this layer as the same absence, and `extract-diagnose` separates them only in prose. Undeclared
- * is the honest answer there: see the backlog entry for structuring that verdict.
+ * answered. A SquashFS whose own superblock proves bytes are missing needs another input; unknown carved blobs and
+ * empty extraction output stay undeclared because this layer still cannot distinguish a tool gap from absent data.
  */
 export function remedyForNoRootfs(input: {
   isDecoy: boolean;
   diagnosed: boolean;
   volumes: number;
   unopenedBlobs: number;
+  blobs?: readonly { short?: boolean; idTableInZeroFill?: boolean }[];
 }): DegradedRemedy | undefined {
   if (input.isDecoy) return 'reacquire-input';
+  if (input.blobs?.some((blob) => blob.short || blob.idTableInZeroFill)) return 'reacquire-input';
   if (input.diagnosed && input.volumes > 0 && input.unopenedBlobs === 0) return 'settled';
   return undefined;
 }

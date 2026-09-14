@@ -99,5 +99,11 @@ de este bloque no necesitan LLM en absoluto; el agente se apoya encima después.
 - Una reproducción que encuentra un artefacto de `qemu-user` ya no termina como defecto: W9 agenda una única
   escalada full-system por imagen, registra su resultado en el mismo ledger y la campaña reconoce el remedio en
   resultados guardados por builds intermedias.
+- El panel web de cobertura traduce las ocho disposiciones estructuradas y muestra el siguiente paso de cada etapa
+  degradada; las corridas antiguas sin `remedy` se presentan como indeclaradas, nunca como resueltas.
+- La extracción sin rootfs conserva en cada carve SquashFS las señales estructuradas de bytes ausentes y recomienda
+  obtener otra muestra cuando su propio superblock prueba el truncado; los blobs ambiguos siguen indeclarados.
+- Device Tree registra el tamaño, los bytes leídos y el tope del barrido crudo. Una imagen sobre 512 MiB queda
+  explícitamente sin leer y con remedio `raise-bound`, cubierto sin construir un fixture gigante.
 
 Lo siguiente, en el orden acordado, vive en [`BACKLOG.md`](BACKLOG.md).

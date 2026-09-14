@@ -23,6 +23,21 @@ export const coverage: Messages['coverage'] = {
     'not-run': 'sin ejecutar',
   },
 
+  remedy: {
+    label: 'Siguiente paso',
+    action: {
+      retry: 'Vuelve a ejecutar esta etapa; la corrida anterior falló antes de responder.',
+      'raise-bound': 'Sube el tope indicado antes de repetir; el mismo límite volverá a truncarla.',
+      'install-tool': 'Instala o repara la herramienta o corpus de reglas requerido y vuelve a ejecutar.',
+      'escalate-full-system': 'Repite con W9: encaminará este límite de qemu-user a un único arranque full-system.',
+      'reacquire-input': 'Obtén un firmware completo o distinto; estos bytes no contienen la entrada necesaria.',
+      settled: 'No hace falta repetir: la etapa agotó la pregunta que puede responder para esta imagen.',
+      'unbounded-search': 'Trátalo como inconcluyente por construcción; ningún presupuesto finito prueba el negativo.',
+      defect: 'Corrige FirmLab antes de repetir; la degradación no procede de la imagen.',
+    },
+    undeclared: 'No se registró un siguiente paso estructurado. La corrida puede ser anterior a los remedios.',
+  },
+
   assertions: (measured: number, asserted: number) => {
     const rows =
       asserted === 1 ? 'Hay 1 fila más que es una afirmación' : `Hay ${asserted} filas más que son afirmaciones`;

@@ -14,14 +14,6 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 - [ ] Distinguir un kernel monolítico (sin `lib/modules`) de un tallado que se dejó `lib/modules` (`kmod.ts`):
   decidible con `CONFIG_MODULES` del `.config` embebido, una tabla `kallsyms` con símbolos de módulo, o rastro
   en `carveTrace`. Hoy la celda queda explícitamente indeclarada.
-- [ ] Estructurar `extract-diagnose` para el caso sin rootfs: distingue en PROSA volúmenes-sin-rootfs / filesystem
-  tallado que no abre / nada salió, pero `remedyForNoRootfs` solo declara remedio para el primero. Falta subir
-  `SquashfsDiagnosis.short`/`idTableInZeroFill` a `NoRootfsDiagnosis.blobs` (opcionales para siempre).
-- [ ] Reportar el `READ_CAP` de 512 MB del barrido en crudo de `devicetree.ts`: una imagen mayor se lee
-  parcialmente sin decirlo. Latente — ninguna muestra del corpus actual lo alcanza.
-- [ ] Mostrar el `remedy` de cada etapa degradada en la web (hoy solo lo lee `scripts/corpus-campaign.mjs`); el
-  panel de cobertura dice "degradada" sin decir si se arregla con una corrida, una herramienta u otra muestra.
-  Necesita i18n ES/EN para las ocho disposiciones.
 
 ## Kernel, emulación, RTOS, UEFI
 

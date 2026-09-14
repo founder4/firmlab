@@ -272,14 +272,14 @@ async function extractRun(c: RunCtx): Promise<StepOutcome> {
       note: 'payload unextractable (hollow image), not a clean scan',
     };
   }
-  // Volumes that came out holding no rootfs are this image's answer. A carved filesystem nobody could open and a
-  // stream that died mid-decompression are not, and they reach this layer as the same absence — so the remedy is
-  // left undeclared there rather than guessed. See docs/BACKLOG.md on structuring that verdict.
+  // Volumes that came out holding no rootfs are this image's answer. A SquashFS superblock can prove its carve is
+  // truncated and therefore needs different bytes; generic unopened blobs remain undeclared rather than guessed.
   const noRootfsRemedy = remedyForNoRootfs({
     isDecoy: false,
     diagnosed: !!ex.noRootfsDiagnosis,
     volumes: ex.noRootfsDiagnosis?.volumes.length ?? 0,
     unopenedBlobs: ex.noRootfsDiagnosis?.blobs.length ?? 0,
+    blobs: ex.noRootfsDiagnosis?.blobs ?? [],
   });
   return {
     summary: `no rootfs (${ex.extractor})`,
@@ -584,6 +584,7 @@ async function devicetreeRun(c: RunCtx): Promise<StepOutcome> {
     // gap a re-run closes. Only a short search — capped, unfinished, or an FDT that parsed partway — leaves
     // something to ask, and the first two are the only ones this layer can tell apart.
     const remedy = remedyForDeviceTree({
+      rawImageScan: r.rawImageScan,
       extractionScan: r.extractionScan,
       rejectedCount: r.rejected.length,
       extractionAvailable: !!c.outputDir,

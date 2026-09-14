@@ -94,6 +94,12 @@ export function CoverageBanner({ imageId }: { imageId: string }): JSX.Element | 
                       <div className="mono">{s.worker}</div>
                       {/* The reason is what this stage COULD tell you — the part a bare status hides. */}
                       <div className="hint">{s.detail ?? s.reason}</div>
+                      {s.status === 'degraded' ? (
+                        <div className="hint" data-role="coverage-remedy" style={{ marginTop: 4 }}>
+                          <strong>{t.coverage.remedy.label}:</strong>{' '}
+                          {s.remedy ? t.coverage.remedy.action[s.remedy] : t.coverage.remedy.undeclared}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="num" style={{ textAlign: 'right' }}>
                       {s.findingCount !== undefined ? s.findingCount : '—'}

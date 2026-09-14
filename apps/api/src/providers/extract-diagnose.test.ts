@@ -115,6 +115,8 @@ describe('diagnoseNoRootfs — three empties that need three different next move
     );
     const d = diagnoseNoRootfs(root);
     expect(d.blobs).toHaveLength(1);
+    expect(d.blobs[0]?.short).toBe(false);
+    expect(d.blobs[0]?.idTableInZeroFill).toBe(true);
     expect(d.verdict).toContain('120000.squashfs');
     expect(d.verdict).toContain('truncated');
   });

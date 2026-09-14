@@ -3,11 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  absentFinding,
   analyzeDeviceTree,
   classifyPeripheral,
   deviceTreeFindings,
   isNodeEnabled,
   isPartitionContainer,
+  rawImageScanCoverage,
   readPartitions,
   resolveStdoutPath,
   runDeviceTreeAnalysis,
@@ -471,6 +473,21 @@ describe('runDeviceTreeAnalysis', () => {
     return p;
   };
 
+  it('records the all-or-nothing read cap without allocating a 512 MiB fixture', () => {
+    expect(rawImageScanCoverage(11, 10)).toEqual({ imageBytes: 11, bytesRead: 0, readCap: 10, complete: false });
+    expect(rawImageScanCoverage(10, 10)).toEqual({ imageBytes: 10, bytesRead: 10, readCap: 10, complete: true });
+
+    const finding = absentFinding(
+      ['nothing — the image exceeded the read cap'],
+      [],
+      undefined,
+      rawImageScanCoverage(11, 10),
+    );
+    expect(finding.title).toBe('No readable device tree in the examined inputs');
+    expect(finding.rationale).toMatch(/raw image was not read/i);
+    expect(finding.evidence).toMatchObject({ rawImageScan: { bytesRead: 0, complete: false } });
+  });
+
   it('finds a tree embedded at a non-zero offset in a raw image', () => {
     const p = write('raw.bin', Buffer.concat([Buffer.alloc(4096, 0xff), BOARD, Buffer.alloc(1024, 0xff)]));
     const res = runDeviceTreeAnalysis(p, null);
@@ -478,6 +495,12 @@ describe('runDeviceTreeAnalysis', () => {
     expect(res.blobs).toHaveLength(1);
     expect(res.blobs[0]?.model).toBe('EVB_CBDM_AK3918EV300L_V1.0.0 board');
     expect(res.blobs[0]?.origin).toMatch(/raw image offset 4096/);
+    expect(res.rawImageScan).toEqual({
+      imageBytes: fs.statSync(p).size,
+      bytesRead: fs.statSync(p).size,
+      readCap: 512 * 1024 * 1024,
+      complete: true,
+    });
   });
 
   it('reports blocked_by_platform naming where it looked when the image has no device tree', () => {

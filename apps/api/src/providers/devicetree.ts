@@ -141,9 +141,18 @@ export interface DeviceTreeResult {
   /** Every place that was actually searched — what a `found:false` does and does not cover. */
   searched: string[];
   findings: FindingDraft[];
+  /** Optional forever: older persisted results predate explicit coverage of the raw-image read. */
+  rawImageScan?: RawImageDeviceTreeScan;
   /** Optional forever: older persisted results predate explicit coverage of extracted DTB candidates. */
   extractionScan?: ExtractedDeviceTreeScan;
   reason: string;
+}
+
+export interface RawImageDeviceTreeScan {
+  imageBytes: number;
+  bytesRead: number;
+  readCap: number;
+  complete: boolean;
 }
 
 export interface ExtractedDeviceTreeScan {
@@ -522,7 +531,9 @@ export function absentFinding(
   searched: string[],
   rejected: RejectedFdt[],
   extractionScan?: ExtractedDeviceTreeScan,
+  rawImageScan?: RawImageDeviceTreeScan,
 ): FindingDraft {
+  const partialRaw = !!rawImageScan && !rawImageScan.complete;
   const partialExtraction =
     !!extractionScan &&
     (!extractionScan.traversalComplete ||
@@ -531,15 +542,21 @@ export function absentFinding(
       extractionScan.skippedUnreadable > 0);
   return {
     kind: 'devicetree-absent',
-    title: partialExtraction
-      ? 'No readable device tree in the examined inputs'
-      : 'No readable device tree in this image',
+    title:
+      partialRaw || partialExtraction
+        ? 'No readable device tree in the examined inputs'
+        : 'No readable device tree in this image',
     severity: 'info',
     proofState: 'blocked_by_platform',
-    evidence: { searched, ...(rejected.length > 0 ? { rejected } : {}), ...(extractionScan ? { extractionScan } : {}) },
+    evidence: {
+      searched,
+      ...(rejected.length > 0 ? { rejected } : {}),
+      ...(rawImageScan ? { rawImageScan } : {}),
+      ...(extractionScan ? { extractionScan } : {}),
+    },
     rationale: [
       `The question "what board does this image declare?" was asked in ${searched.length} place(s) and could not`,
-      `be answered from the examined bytes.${partialExtraction ? ' Some extracted DTB candidates were not examined, so this is explicitly a partial search.' : ''} That is not a finding that the image lacks a board description: a great many`,
+      `be answered from the examined bytes.${partialRaw ? ` The raw image was not read because its ${rawImageScan.imageBytes} bytes exceed the ${rawImageScan.readCap}-byte cap, so this is explicitly a partial search.` : ''}${partialExtraction ? ' Some extracted DTB candidates were not examined, so this is explicitly a partial search.' : ''} That is not a finding that the image lacks a board description: a great many`,
       'vendor builds (every pre-device-tree ath79 or Broadcom image in this corpus among them) describe their',
       'board in compiled-in C instead, so there is nothing here to read. Board identity for this image has to',
       'come from another source, and the MCU fingerprint remains a heuristic.',
@@ -550,7 +567,13 @@ export function absentFinding(
 // === Runner (I/O; composes the pure parts) ===============================================================
 
 /** Beyond this the image is not read — a device tree lives near the front of a container, not past a quarter GB. */
-const READ_CAP = 512 * 1024 * 1024;
+export const DEVICE_TREE_READ_CAP = 512 * 1024 * 1024;
+
+/** Pure coverage record for the all-or-nothing raw-image scan. */
+export function rawImageScanCoverage(imageBytes: number, readCap = DEVICE_TREE_READ_CAP): RawImageDeviceTreeScan {
+  const complete = imageBytes <= readCap;
+  return { imageBytes, bytesRead: complete ? imageBytes : 0, readCap, complete };
+}
 /** How many device trees to report. A FIT with more board variants than this states what it dropped. */
 const BLOB_CAP = 8;
 /** How deep the FIT → UBI → FIT descent may go before it stops looking. */
@@ -692,14 +715,15 @@ function collectFromDir(
   };
 }
 
-function blocked(reason: string, searched: string[]): DeviceTreeResult {
+function blocked(reason: string, searched: string[], rawImageScan?: RawImageDeviceTreeScan): DeviceTreeResult {
   return {
     available: true,
     found: false,
     blobs: [],
     rejected: [],
     searched,
-    findings: [absentFinding(searched, [])],
+    findings: [absentFinding(searched, [], undefined, rawImageScan)],
+    ...(rawImageScan ? { rawImageScan } : {}),
     reason,
   };
 }
@@ -714,12 +738,15 @@ function blocked(reason: string, searched: string[]): DeviceTreeResult {
 export function runDeviceTreeAnalysis(imagePath: string, extractDir: string | null): DeviceTreeResult {
   const searched = new Set<string>();
   let bytes: Uint8Array;
+  let rawImageScan: RawImageDeviceTreeScan | undefined;
   try {
     const size = fs.statSync(imagePath).size;
-    if (size > READ_CAP) {
+    rawImageScan = rawImageScanCoverage(size);
+    if (!rawImageScan.complete) {
       return blocked(
-        `The image is ${size} bytes, over the ${READ_CAP}-byte device-tree read cap; it was not scanned.`,
+        `The image is ${size} bytes, over the ${DEVICE_TREE_READ_CAP}-byte device-tree read cap; it was not scanned.`,
         ['nothing — the image exceeded the read cap'],
+        rawImageScan,
       );
     }
     bytes = new Uint8Array(fs.readFileSync(imagePath));
@@ -818,7 +845,8 @@ export function runDeviceTreeAnalysis(imagePath: string, extractDir: string | nu
       blobs: [],
       rejected,
       searched: searchedList,
-      findings: [absentFinding(searchedList, rejected, extractionScan)],
+      findings: [absentFinding(searchedList, rejected, extractionScan, rawImageScan)],
+      rawImageScan,
       ...(extractionScan ? { extractionScan } : {}),
       reason: `No readable device tree found in the examined inputs. ${why}${coverageNote}`,
     };
@@ -864,6 +892,7 @@ export function runDeviceTreeAnalysis(imagePath: string, extractDir: string | nu
     rejected,
     searched: searchedList,
     findings,
+    rawImageScan,
     ...(extractionScan ? { extractionScan } : {}),
     reason: [
       `Read ${blobs.length} device tree${blobs.length === 1 ? '' : 's'} from the image.`,

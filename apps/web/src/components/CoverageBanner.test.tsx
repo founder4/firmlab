@@ -50,6 +50,38 @@ describe('CoverageBanner', () => {
     await waitFor(() => expect(screen.getByText('W5 · Binary-vuln')).toBeTruthy());
     // The stages that never ran are labelled as such, not left blank as if they were clean.
     expect(screen.getAllByText(/no input/).length).toBe(2);
+    expect(screen.getByText(/No structured next move was recorded/)).toBeTruthy();
+  });
+
+  it('renders every structured remedy as an actionable next move', async () => {
+    const remedies = [
+      'retry',
+      'raise-bound',
+      'install-tool',
+      'escalate-full-system',
+      'reacquire-input',
+      'settled',
+      'unbounded-search',
+      'defect',
+    ] as const;
+    mockApi.coverage.mockResolvedValue(
+      report({
+        applicable: remedies.length,
+        executed: remedies.length,
+        stages: remedies.map((remedy) => ({
+          worker: `stage-${remedy}`,
+          reason: remedy,
+          status: 'degraded',
+          remedy,
+        })),
+      }),
+    );
+    render(<CoverageBanner imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /What can run/ }));
+
+    expect(document.querySelectorAll('[data-role="coverage-remedy"]')).toHaveLength(8);
+    expect(screen.getByText(/route this qemu-user limit to one full-system boot/)).toBeTruthy();
+    expect(screen.getByText(/Fix FirmLab itself before re-running/)).toBeTruthy();
   });
 
   it('renders nothing when coverage is unavailable rather than implying full coverage', async () => {
@@ -97,6 +129,25 @@ describe('CoverageBanner — Spanish', () => {
     expect(text).toContain('no cubren ninguna etapa');
     // Each stage's reason belongs to the class plan the scan executes and is printed as the API stated it.
     expect(screen.getByText('pwnable candidates')).toBeTruthy();
+  });
+
+  it('explains the degraded-stage remedy in Spanish', async () => {
+    setLocale('es');
+    mockApi.coverage.mockResolvedValue(
+      report({
+        stages: [
+          {
+            worker: 'W1 · Extraction',
+            reason: 'extract',
+            status: 'degraded',
+            remedy: 'reacquire-input',
+          },
+        ],
+      }),
+    );
+    render(<CoverageBanner imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /¿Qué se puede ejecutar/ }));
+    expect(screen.getByText(/Obtén un firmware completo o distinto/)).toBeTruthy();
   });
 
   /**

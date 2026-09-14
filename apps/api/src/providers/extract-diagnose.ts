@@ -147,7 +147,14 @@ export interface NoRootfsDiagnosis {
   volumes: ExtractedVolume[];
   totalFiles: number;
   /** Per carved filesystem blob that produced nothing, why it produced nothing. */
-  blobs: { path: string; diagnosis: string }[];
+  blobs: {
+    path: string;
+    diagnosis: string;
+    /** Optional forever: stored extraction results predate the structured SquashFS diagnosis. */
+    short?: boolean;
+    /** Optional forever: stored extraction results predate the structured SquashFS diagnosis. */
+    idTableInZeroFill?: boolean;
+  }[];
 }
 
 /** Directory names binwalk gives an extracted volume; the ones worth reporting when none is a rootfs. */
@@ -300,7 +307,12 @@ export function diagnoseNoRootfs(outputDir: string, recoveryAttempts: readonly B
     }
     const squash = diagnoseSquashfs(bytes);
     if (squash) {
-      blobs.push({ path: blobPath, diagnosis: squash.verdict });
+      blobs.push({
+        path: blobPath,
+        diagnosis: squash.verdict,
+        short: squash.short,
+        idTableInZeroFill: squash.idTableInZeroFill,
+      });
       continue;
     }
     const lzma = parseLzmaHeader(bytes);

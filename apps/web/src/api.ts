@@ -1504,7 +1504,18 @@ export interface CoverageStage {
   status: 'found' | 'ran-empty' | 'no-input' | 'degraded' | 'not-built' | 'not-run';
   detail?: string;
   findingCount?: number;
+  /** Structured next move for a degraded stage. Absent on stored runs that predate remedy declarations. */
+  remedy?: CoverageRemedy;
 }
+export type CoverageRemedy =
+  | 'retry'
+  | 'raise-bound'
+  | 'install-tool'
+  | 'escalate-full-system'
+  | 'reacquire-input'
+  | 'settled'
+  | 'unbounded-search'
+  | 'defect';
 export interface CoverageReport {
   firmwareClass: string;
   classRationale?: string;

@@ -139,6 +139,16 @@ describe('device tree — the largest block of degraded cells in the corpus', ()
     ).toBe('raise-bound');
   });
 
+  it('names the raw-image read cap without allocating a 512 MiB fixture', () => {
+    expect(
+      remedyForDeviceTree({
+        rawImageScan: { imageBytes: 11, bytesRead: 0, readCap: 10, complete: false },
+        rejectedCount: 0,
+        extractionAvailable: false,
+      }),
+    ).toBe('raise-bound');
+  });
+
   it('declares nothing when output existed but no walk was recorded', () => {
     // Absence of a walk is absence of evidence about the walk. Calling it settled would retire a place nobody read.
     expect(remedyForDeviceTree({ rejectedCount: 0, extractionAvailable: true })).toBeUndefined();
@@ -217,6 +227,18 @@ describe('extraction that recovered no rootfs', () => {
 
   it('names a hollow image as needing different bytes', () => {
     expect(remedyForNoRootfs({ isDecoy: true, diagnosed: true, volumes: 0, unopenedBlobs: 0 })).toBe('reacquire-input');
+  });
+
+  it('requests different bytes when the SquashFS metadata proves the carve is truncated', () => {
+    expect(
+      remedyForNoRootfs({
+        isDecoy: false,
+        diagnosed: true,
+        volumes: 0,
+        unopenedBlobs: 1,
+        blobs: [{ short: true, idTableInZeroFill: false }],
+      }),
+    ).toBe('reacquire-input');
   });
 
   it('declares nothing when a carved filesystem could not be opened', () => {
