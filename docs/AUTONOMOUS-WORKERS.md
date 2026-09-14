@@ -755,3 +755,18 @@ census barely moved even though the wiring works. And `renode` and `ghidra` stil
 that matters for anyone reading §11's table: **it was never seven unwired providers, it was four** — `decompile`,
 `fuzz` and `webprobe` were wired all along and simply had nothing to report, which a census of rows cannot
 distinguish from silence.
+
+---
+
+## 12. El mercenario — arm C como apartado opt-in (2026-09-14)
+
+§11 cerró rechazando arm C *como producto por defecto*: reintroduce la confabulación que este documento
+persigue (un `[]` de findings no distingue "corrió y limpio" de "nunca llegó al rootfs", y §7.5/§9 registran las
+sobreafirmaciones reales que produce). Esa decisión sigue en pie para el flujo normal.
+
+Lo contrario, acotado, sí tiene sitio: arm C **productizado y en cuarentena** para los casos más difíciles
+(desconocido / cifrado / bare-metal / CTF / 0-day), donde el pipeline determinista devuelve poco y el propio §11
+midió que arm C gana — lee dentro de ficheros que los scanners no abren, resuelve retos, y rechaza findings bien.
+La condición que lo hace admisible es que su salida NUNCA escriba proof-states en el ledger honesto sin
+reconciliación por un provider determinista. No sustituye a `opacidad`; es un apartado aparte, opt-in, con
+modelo/proveedor configurable. Diseño: [`MERCENARY-DESIGN.md`](MERCENARY-DESIGN.md).

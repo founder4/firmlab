@@ -105,5 +105,9 @@ de este bloque no necesitan LLM en absoluto; el agente se apoya encima después.
   obtener otra muestra cuando su propio superblock prueba el truncado; los blobs ambiguos siguen indeclarados.
 - Device Tree registra el tamaño, los bytes leídos y el tope del barrido crudo. Una imagen sobre 512 MiB queda
   explícitamente sin leer y con remedio `raise-bound`, cubierto sin construir un fixture gigante.
+- La superficie de módulos separa un inventario vacío exhaustivo de uno truncado o ilegible, y cruza la ausencia
+  con `CONFIG_MODULES` o un `kallsyms` completo para identificar soporte monolítico sin inferirlo del rootfs.
+- La extracción reconoce los contratos CLI de binwalk v2 y v3 (`-C` frente a `-d`). La validación local con v3
+  recuperó 84 módulos en WDR3600, 38 en IMOU y 73 en WR940N; antes esas muestras quedaban sin rootfs por sintaxis.
 
 Lo siguiente, en el orden acordado, vive en [`BACKLOG.md`](BACKLOG.md).

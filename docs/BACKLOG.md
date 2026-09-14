@@ -9,12 +9,6 @@ leerlo deja de usarse como backlog.
 `ROADMAP.md` es el historial de qué se envió y cuándo; `METHODOLOGY-GAPS.md` mapea la cobertura contra OWASP
 FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
-## Cobertura y análisis (opacidad / W9)
-
-- [ ] Distinguir un kernel monolítico (sin `lib/modules`) de un tallado que se dejó `lib/modules` (`kmod.ts`):
-  decidible con `CONFIG_MODULES` del `.config` embebido, una tabla `kallsyms` con símbolos de módulo, o rastro
-  en `carveTrace`. Hoy la celda queda explícitamente indeclarada.
-
 ## Kernel, emulación, RTOS, UEFI
 
 - [ ] Profundizar la correlación kernel-CVE: el prefijo NVD puede tener miles de candidatos (2.037 para Linux
@@ -110,3 +104,52 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 - [ ] Cubrir con test los componentes web sin cobertura: `DeepAnalysisDetails.tsx` (569 líneas),
   `KernelPosture.tsx` (218), `BinVulnPanel.tsx` (200), `PresetsPanel.tsx` (182); después los visuales dibujados
   a mano (`SignalCanvas`, `SbomGraph`, `EntropyChart`, `StructureMap`, `FilesystemTree`).
+
+## De la revisión de galert — análisis y adquisición (2026-09-14)
+
+_Tres técnicas que galert cubre y FirmLab no, extraídas contrastando `apps/worker/prompts/firmware/*` de
+galert contra los providers actuales. El resto del pipeline de firmware de galert ya está igualado o superado
+aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a propósito._
+
+- [ ] **(a) Adquisición de imagen hermana + pivote de descifrado.** Cuando la imagen primaria está cifrada (o
+  falta un baseline de diff), bajar UNA release más antigua/no-cifrada o adyacente del MISMO producto, recuperar
+  la clave AES del binario `*upgrade*`/U-Boot/updater PC-side, y re-extraer el rootfs en claro para los providers
+  downstream. Hoy `encrypted.ts` se detiene en el diagnóstico ("AES-128, unrecoverable without key") y
+  `METHODOLOGY-GAPS.md` §1 stage-2 lo reconoce como gap ("No pull-from-vendor"). Es outbound y scope-sensible →
+  detrás de `FIRMLAB_RESEARCH`/egress-ledger, adquiriendo SOLO el producto ya identificado y registrando
+  procedencia (SHA-256, URL, versión confirmada por strings, no por nombre de fichero). Firmware bajado = dato
+  no confiable, nunca se ejecuta. Ref: galert `firmware-acquire.txt`.
+- [ ] **(b) Triage de CVE por contexto de dispositivo.** Complementa el item de "profundizar correlación
+  kernel-CVE" de arriba con reglas de poda de falsos positivos: CVE de GUI/X11 = FP en un headless; subsistema
+  del kernel no compilado (Bluetooth/USB-gadget/FS exóticos) = FP; LPE local = severidad menor cuando todo ya
+  corre como root (común en embebido); DoS = mayor en RTOS (sin init que reinicie una tarea caída) que en Linux
+  (watchdog reinicia). Preservar SIEMPRE el score NVD base y anotar el ajuste con su rationale. Encaja en
+  `component-cve.ts`/`kernel-cve.ts`. Ref: galert `firmware-sbom.txt` (device-context triage + checklist de CVE
+  embebidos de alto valor: BusyBox awk, Dropbear empty-auth, dnsmasq DNSpooq, curl SOCKS5, DirtyPipe).
+- [ ] **(b') Fuentes de taint específicas de firmware.** Enriquecer el scaffold de taint (ver "cross-binary
+  dataflow" arriba) con las SOURCES canónicas de vendor, que rara vez son un `recv` crudo: getters HTTP/CGI
+  (`websGetVar`/`webGetVar`/`GetValue`/`get_cgi`/`httpGetEnv`) y NVRAM/env (`nvram_get`/`nvram_safe_get`/
+  `acosNvramConfig_get`/`getenv` — valores que el operador puede fijar por la UI y un daemon consume sin
+  sanear), + el atajo de command-template `%s` (`rabin2 -z | grep '%s'` → `axt` al builder). Alimenta
+  `taint.ts`/`webtaint.ts`. Ref: galert `firmware-binary.txt` / `firmware-zeroday.txt`.
+
+## Scheduler de leads sobre el ledger (opacidad)
+
+- [ ] Programar la siguiente pregunta a partir de findings YA en el ledger, no solo de los drafts frescos de un
+  provider. `AUTONOMOUS-WORKERS.md` §11.3 lo fija como el cuello de botella medido: 136 candidatas pwnable
+  elegibles para `symreach` y cada scan solo pregunta 3; 127 filas `binary-cmdexec-sink` sin lead-kind ninguno.
+  Hoy los lead-builders leen los drafts que un provider acaba de devolver, así que nada en el código puede
+  agendar una pregunta contra una fila ya persistida. Es la mejora de autonomía que más mueve el censo de
+  proof-states (más que cualquier provider nuevo) y encaja en `opacidad`/`agent` sin motor nuevo — el
+  agente-MCP existente puede conducirlo. Es la contrapartida DETERMINISTA del mercenario (abajo): mismo objetivo
+  —alcanzar los leads sin resolver— desde el lado honesto y reproducible.
+
+## Mercenario — agente 100% autónomo, opt-in (rompe determinismo/reproducibilidad)
+
+- [ ] Nuevo apartado (arm C productizado y en cuarentena) para los casos más difíciles, donde el pipeline
+  determinista devuelve poco: agente 100% autónomo, modelo/proveedor configurable por API, toolchain cruda, con
+  modo de objetivo (assess / resolver-CTF / libre) y clasificación del artefacto ("esto es un reto CTF", "target
+  de investigación", "dispositivo de producción"). Invariante NO negociable: su salida NUNCA escribe
+  proof-states disciplinados en el ledger honesto — vive en un almacén en cuarentena, y las afirmaciones
+  interesantes se devuelven a los providers deterministas para verificación (reconciliación arm C → arm A).
+  Diseño completo y tests de aceptación: `docs/MERCENARY-DESIGN.md`.
