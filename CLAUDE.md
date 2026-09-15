@@ -2,6 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+All agents must first follow `AGENTS.md`. This file is the detailed shared project handbook despite its
+historical Claude-specific name; Codex and Antigravity/Gemini use it too.
+
 FirmLab is a local-first firmware analysis workbench: a pure TypeScript analysis engine, a Fastify API that
 wraps optional external tools (binwalk, radare2/Ghidra, syft/grype, gitleaks, QEMU, Renode, AFL++, angr,
 chipsec, gdb-multiarch) as runtime-detected *providers*, and a React workbench. pnpm workspaces, Node ≥ 22
