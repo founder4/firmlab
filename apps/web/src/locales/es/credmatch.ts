@@ -23,6 +23,8 @@ export const credmatch: Messages['credmatch'] = {
   blockedHeading: 'Preguntado, y no se pudo responder',
   blockedCaveat:
     'El cruce no produjo ninguna respuesta, registrado aquí para que la ausencia de hallazgos de credenciales se lea como una pregunta que nunca se llegó a hacer del todo. NO es «ninguna contraseña recuperable»: no se calculó ningún hash.',
+  persistedUnavailable:
+    'Este resultado almacenado es anterior a los campos que esta vista necesita para explicar su cobertura. Aquí permanece como no disponible en vez de interpretarse como un análisis vacío o limpio.',
 
   fact: {
     recovered: 'Recuperadas',

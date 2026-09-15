@@ -161,6 +161,13 @@ describe('CredMatchPanel', () => {
     expect(screen.getByText(new RegExp(en.credmatch.blockedCaveat.slice(0, 30)))).toBeTruthy();
   });
 
+  it('keeps a sparse persisted result unavailable instead of treating missing fields as clean', async () => {
+    mockApi.credmatchResult.mockResolvedValue({} as CredMatchResult);
+    render(<CredMatchPanel imageId="img1" />);
+    await waitFor(() => expect(screen.getByText(en.credmatch.persistedUnavailable)).toBeTruthy());
+    expect(screen.queryByText(en.credmatch.emptyNotClean)).toBeNull();
+  });
+
   it('surfaces a rootfs-gate refusal as a prerequisite, not a transport error', async () => {
     mockApi.credmatchResult.mockResolvedValue(null);
     // The gate's sentence is the whole answer; `post` throws it as an Error.

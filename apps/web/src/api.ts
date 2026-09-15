@@ -459,13 +459,13 @@ export interface CredMatchOpenssl {
 
 export interface CredMatchResult {
   /** True once the run reached candidate testing; false for the four states blocked before hashing anything. */
-  available: boolean;
-  state: CredMatchState;
-  reason: string;
+  available?: boolean;
+  state?: CredMatchState;
+  reason?: string;
   /** Null whenever no candidate set was ever built — distinct from a set that matched nothing. */
-  candidates: CredMatchCandidateSummary | null;
-  targets: CredMatchTarget[];
-  openssl: CredMatchOpenssl;
+  candidates?: CredMatchCandidateSummary | null;
+  targets?: CredMatchTarget[];
+  openssl?: CredMatchOpenssl;
   /**
    * The provider's own findings. The panel does NOT render them — the findings ledger owns that view under source
    * `credmatch`, and a second table here would be the same rows twice. Typed only so the shape is documented.

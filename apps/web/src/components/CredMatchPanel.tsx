@@ -63,14 +63,19 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
     try {
       const { jobId } = await api.runCredmatch(imageId);
       timer.current = window.setInterval(async () => {
-        const j = await api.job(jobId);
-        setLog(j.log);
-        if (j.status === 'done' || j.status === 'error') {
+        try {
+          const j = await api.job(jobId);
+          setLog(j.log);
+          if (j.status !== 'done' && j.status !== 'error') return;
           if (timer.current) window.clearInterval(timer.current);
           setBusy(false);
           if (j.status === 'done') setResult(j.result as CredMatchResult);
           // The run started and the provider threw — a fault on this bench, not a statement about the firmware.
           else setError({ kind: 'run', message: j.error ?? m.runFailed });
+        } catch (e) {
+          if (timer.current) window.clearInterval(timer.current);
+          setBusy(false);
+          setError({ kind: 'run', message: e instanceof Error ? e.message : m.runFailed });
         }
       }, 900);
     } catch (e) {
@@ -97,6 +102,8 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
   );
 
   const summary = result?.candidates ?? null;
+  const targets = result?.targets ?? [];
+  const openssl = result?.openssl ?? { available: false, verifiedFlags: [], failures: [] };
 
   return (
     <div className="panel">
@@ -130,10 +137,10 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
       )}
 
       {/* Done, but blocked before hashing anything: the question was asked and could not be answered. */}
-      {result && !result.available && (
+      {result && result.available !== true && (
         <div className="banner banner-warn" style={{ marginTop: 12 }}>
           <span className="eyebrow">{m.blockedHeading}</span>
-          <p style={{ margin: '4px 0 0', maxWidth: '72ch' }}>{result.reason}</p>
+          <p style={{ margin: '4px 0 0', maxWidth: '72ch' }}>{result.reason || m.persistedUnavailable}</p>
           <p className="hint" style={{ margin: '6px 0 0', maxWidth: '72ch' }}>
             {m.blockedCaveat}
           </p>
@@ -141,11 +148,11 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
       )}
 
       {/* A scanned run: coverage denominators, capability caveats, and the per-hash outcomes. */}
-      {result?.available && (
+      {result?.available === true && (
         <>
           <div style={{ marginTop: 14, display: 'flex', gap: 22, flexWrap: 'wrap', alignItems: 'baseline' }}>
-            <Fact label={m.fact.recovered} value={String(recoveredCount(result))} />
-            <Fact label={m.fact.targets} value={String(result.targets.length)} />
+            <Fact label={m.fact.recovered} value={String(recoveredCount(targets))} />
+            <Fact label={m.fact.targets} value={String(targets.length)} />
             {summary && <Fact label={m.fact.tested} value={String(summary.candidatesTested)} />}
             {summary && <Fact label={m.fact.distinct} value={String(summary.candidatesDistinct)} />}
             {summary && summary.candidatesDropped > 0 && (
@@ -166,18 +173,18 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
           )}
 
           {/* Absence of a tool is not absence of a problem: say what could not be computed. */}
-          {result.openssl.available === false && (
+          {openssl.available === false && (
             <div className="hint" style={{ marginTop: 10, maxWidth: '72ch' }}>
               {m.opensslMissing}
             </div>
           )}
-          {result.openssl.failures.map((f) => (
+          {openssl.failures.map((f) => (
             <div key={f.flag} className="hint" style={{ marginTop: 8, maxWidth: '72ch' }}>
               {m.opensslFailure(f.flag, f.reason)}
             </div>
           ))}
 
-          {result.targets.length > 0 && (
+          {targets.length > 0 && (
             <div className="table-wrap" style={{ marginTop: 14 }}>
               <table className="data">
                 <thead>
@@ -189,7 +196,7 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
                   </tr>
                 </thead>
                 <tbody>
-                  {result.targets.map((target) => (
+                  {targets.map((target) => (
                     <TargetRow key={`${target.file}:${target.account}`} target={target} m={m} />
                   ))}
                 </tbody>
@@ -214,8 +221,8 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
   );
 }
 
-function recoveredCount(result: CredMatchResult): number {
-  return result.targets.filter((target) => target.result.outcome === 'recovered').length;
+function recoveredCount(targets: CredMatchTarget[]): number {
+  return targets.filter((target) => target.result.outcome === 'recovered').length;
 }
 
 function TargetRow({

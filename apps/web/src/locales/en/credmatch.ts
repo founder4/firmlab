@@ -40,6 +40,8 @@ export const credmatch = {
   blockedHeading: 'Asked, and could not be answered',
   blockedCaveat:
     'The cross-reference produced no answer, recorded here so the absence of credential findings reads as a question that was never fully asked. It is NOT “no recoverable password”: nothing was hashed.',
+  persistedUnavailable:
+    'This stored result predates the fields this view needs to explain its coverage. It remains unavailable here rather than being interpreted as an empty or clean scan.',
 
   // A scanned run. Header facts are denominators — the gaps between them are the coverage story.
   fact: {
