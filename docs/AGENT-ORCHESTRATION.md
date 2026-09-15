@@ -38,13 +38,28 @@ orca-ide orchestration worker-start \
   --spec "<self-contained Claude task>" \
   --worktree new-child --name "<short-name>" --agent claude --setup run --json
 
-orca-ide orchestration worker-start \
-  --spec "<read-only Antigravity/Gemini review>" \
-  --worktree current --agent antigravity --json
+# Antigravity 1.2.3 currently needs the low-level dispatch below; see the note after this block.
 
 orca-ide orchestration check --wait \
   --types "worker_done,escalation,question" --timeout-ms 900000 --json
 ```
+
+Orca 1.4.203 identifies Antigravity 1.2.3, but its supervised `worker-start` readiness probe does not yet
+recognize the Antigravity TUI reliably. Use one managed terminal plus a normal durable task/dispatch instead of
+retrying `worker-start`:
+
+```bash
+orca-ide orchestration task-create \
+  --task-title "<short Antigravity task>" --spec "<self-contained read-only review>" --json
+orca-ide terminal create --worktree active --title "<short-name>" --command "agy" --json
+orca-ide orchestration dispatch --task <task-id> --to <terminal-handle> --inject --dry-run --json
+orca-ide orchestration dispatch --task <task-id> --to <terminal-handle> --inject --json
+```
+
+Confirm with `terminal read` that the account and prompt are visible before the real injection. This dispatch is
+tracked but unsupervised, so the coordinator must inspect terminal liveness directly and close it after settlement.
+On this host, replace the generated preamble's bare `orca` commands with `orca-ide`; bare `orca` is the Linux
+screen reader, not the Orca CLI.
 
 Omit model and effort flags unless the user explicitly requested them. Orca should inherit each provider's
 configured defaults.
