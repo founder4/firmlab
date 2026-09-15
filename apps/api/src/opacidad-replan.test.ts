@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { type Finding, OPERATOR_ASSERTION } from '@firmlab/core';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { FindingDraft } from './findings-normalize.js';
 import {
@@ -10,6 +11,7 @@ import {
   execTargetFromSnippet,
   handlerLeads,
   interestingBinaries,
+  ledgerLeads,
   reachabilityLeads,
   reproductionLeads,
   resolveDaemonBinary,
@@ -26,6 +28,7 @@ import {
   specKey,
   specsForClass,
 } from './opacidad-plan.js';
+import { partitionByProvenance } from './operator-findings.js';
 import type { Service } from './providers/servicemap.js';
 import type { SinkHit } from './providers/webtaint.js';
 import type { HandlerAnalysis } from './providers/webtaint.js';
@@ -771,5 +774,201 @@ describe('the two reachability questions share a provider and nothing else', () 
   it('counts nothing on an empty agenda, which is what makes the first probe affordable', () => {
     expect(countReachabilityProbes(new Set())).toBe(0);
     expect(countCmdexecProbes(new Set())).toBe(0);
+  });
+});
+
+/**
+ * Scheduling off the LEDGER, not only off a provider's fresh drafts (docs/BACKLOG.md §11.3). The lead builders
+ * already rank a `FindingDraft`; these tests prove that a row a PRIOR scan persisted is ranked by exactly the same
+ * rule, that a question the ledger already asked is suppressed (which is what advances the census across runs), and
+ * that none of it regresses the fresh path or lets a suppressed question consume a fresh budget slot.
+ */
+describe('ledgerLeads — the persisted ledger reduced to what the schedulers read', () => {
+  const evPath = (f: FindingDraft): unknown => (f.evidence as Record<string, unknown> | undefined)?.path;
+  const evBinary = (f: FindingDraft): unknown => (f.evidence as Record<string, unknown> | undefined)?.binary;
+
+  const pwn = (p: string, size: number, extra: Record<string, unknown> = {}): FindingDraft => ({
+    kind: 'binary-pwnable-candidate',
+    title: `overflow candidate ${p}`,
+    severity: 'high',
+    proofState: 'needs_runtime_reproduction',
+    evidence: { path: p, size, runnable: true, unsafeFns: ['strcpy'], ...extra },
+    rationale: '',
+  });
+  const cmd = (p: string, size: number): FindingDraft => ({
+    kind: 'binary-cmdexec-sink',
+    title: `command-exec sink ${p}`,
+    severity: 'high',
+    proofState: 'needs_runtime_reproduction',
+    evidence: { path: p, size, runnable: true, execFns: ['system'], symbolSource: 'dynsym' },
+    rationale: '',
+  });
+  const reachable = (binary: string, sink: string, addresses: string[]): FindingDraft => ({
+    kind: 'sink-reachable',
+    title: `${sink} in ${binary} reachable`,
+    severity: 'high',
+    proofState: 'static_confirmed',
+    evidence: { binary, sink, addresses },
+    rationale: '',
+  });
+  const rowOf = (source: string, draft: FindingDraft): Finding => ({
+    id: 'r',
+    imageId: 'img',
+    source,
+    createdAt: 0,
+    ...draft,
+  });
+  const asked = (source: string, binary: string): Finding =>
+    rowOf(source, {
+      kind: 'sink-reachability-inconclusive',
+      title: `${binary} asked`,
+      severity: 'info',
+      proofState: 'needs_runtime_reproduction',
+      evidence: { binary },
+      rationale: '',
+    });
+
+  it('splits persisted rows by kind and reads the answered keys off the row source', () => {
+    const out = ledgerLeads([
+      rowOf('binvuln', pwn('bin/a', 100)),
+      rowOf('binvuln', cmd('usr/sbin/cmd', 200)),
+      rowOf('symreach:bin/a', reachable('bin/a', 'strcpy', ['0x1'])),
+      asked('symreach:usr/sbin/cmd#cmdexec', 'usr/sbin/cmd'),
+      rowOf('dynprobe:bin/a#strcpy', {
+        kind: 'binary-probe-clean',
+        title: 'clean',
+        severity: 'info',
+        proofState: 'needs_runtime_reproduction',
+        rationale: '',
+      }),
+      rowOf('fsaudit', {
+        kind: 'weak-cred',
+        title: 'x',
+        severity: 'low',
+        proofState: 'static_confirmed',
+        rationale: '',
+      }),
+    ]);
+    expect(out.reachCandidates.map(evPath)).toEqual(['bin/a']);
+    expect(out.cmdexecCandidates.map(evPath)).toEqual(['usr/sbin/cmd']);
+    expect(out.reproductionCandidates.map(evBinary)).toEqual(['bin/a']);
+    expect([...out.answered].sort()).toEqual([
+      'dynprobe:bin/a#strcpy',
+      'symreach:bin/a',
+      'symreach:usr/sbin/cmd#cmdexec',
+    ]);
+  });
+
+  it('never schedules against an operator assertion that mimics a candidate kind', () => {
+    const fake: Finding = { ...rowOf('operator:alice', pwn('bin/evil', 10)), proofState: OPERATOR_ASSERTION };
+    const measured = partitionByProvenance([fake, rowOf('binvuln', pwn('bin/a', 100))]).measured;
+    expect(ledgerLeads(measured).reachCandidates.map(evPath)).toEqual(['bin/a']);
+  });
+
+  describe('over a rootfs the persisted targets resolve inside', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-ledger-'));
+    afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+    for (const p of ['bin/a', 'bin/b', 'bin/c', 'usr/sbin/cmd', 'usr/sbin/cmd2', 'pwnable/x', 'pwnable/y']) {
+      const abs = path.join(root, p);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, '\x7fELF');
+    }
+
+    it('schedules a reachability probe from a persisted candidate with no fresh draft at all', () => {
+      const persisted = ledgerLeads([rowOf('binvuln', pwn('bin/a', 100))]);
+      const merged = [...([] as FindingDraft[]), ...persisted.reachCandidates];
+      expect(reachabilityLeads(merged, root, 3).map((l) => l.target)).toEqual(['bin/a']);
+    });
+
+    it('deduplicates a candidate present as both a fresh draft and a persisted row', () => {
+      const persisted = ledgerLeads([rowOf('binvuln', pwn('bin/a', 100))]);
+      const leads = reachabilityLeads([pwn('bin/a', 100), ...persisted.reachCandidates], root, 3);
+      expect(leads).toHaveLength(1);
+      expect(leads[0]?.target).toBe('bin/a');
+    });
+
+    it('suppresses a reachability question the ledger already asked and does not spend the freed slot on it', () => {
+      const persisted = ledgerLeads([
+        rowOf('binvuln', pwn('bin/a', 100)),
+        rowOf('binvuln', pwn('bin/b', 200)),
+        rowOf('symreach:bin/a', reachable('bin/a', 'strcpy', ['0x1'])),
+      ]);
+      const suppress = new Set<string>([...persisted.answered]);
+      // Budget 1: the answered bin/a must not eat the slot — the next unanswered candidate is asked instead.
+      expect(reachabilityLeads(persisted.reachCandidates, root, 1, { planned: suppress }).map((l) => l.target)).toEqual(
+        ['bin/b'],
+      );
+    });
+
+    it('schedules and suppresses command-exec questions off the ledger the same way', () => {
+      const persisted = ledgerLeads([
+        rowOf('binvuln', cmd('usr/sbin/cmd', 100)),
+        rowOf('binvuln', cmd('usr/sbin/cmd2', 200)),
+        asked('symreach:usr/sbin/cmd#cmdexec', 'usr/sbin/cmd'),
+      ]);
+      const suppress = new Set<string>(persisted.answered);
+      expect(cmdexecLeads(persisted.cmdexecCandidates, root, 2, { planned: suppress }).map((l) => l.target)).toEqual([
+        'usr/sbin/cmd2',
+      ]);
+    });
+
+    it('schedules a crash reproduction from a persisted sink-reachable row, suppressing one already reproduced', () => {
+      const persisted = ledgerLeads([
+        rowOf('symreach:pwnable/x', reachable('pwnable/x', 'strcpy', ['0x1'])),
+        rowOf('symreach:pwnable/y', reachable('pwnable/y', 'gets', ['0x2'])),
+        rowOf('dynprobe:pwnable/x#strcpy', {
+          kind: 'binary-probe-clean',
+          title: 'clean',
+          severity: 'info',
+          proofState: 'needs_runtime_reproduction',
+          rationale: '',
+        }),
+      ]);
+      const leads = reproductionLeads(persisted.reproductionCandidates, root, 3, new Set(persisted.answered));
+      expect(leads.map((l) => l.target)).toEqual(['pwnable/y']);
+    });
+
+    it('tolerates a legacy candidate whose optional evidence is absent — never throws', () => {
+      const legacy = rowOf('binvuln', {
+        kind: 'binary-pwnable-candidate',
+        title: 'legacy',
+        severity: 'high',
+        proofState: 'needs_runtime_reproduction',
+        rationale: '',
+      });
+      const out = ledgerLeads([legacy]);
+      expect(out.reachCandidates).toHaveLength(1);
+      // No path to schedule against, so it is un-askable rather than a crash.
+      expect(reachabilityLeads(out.reachCandidates, root, 3)).toEqual([]);
+    });
+
+    it('schedules a persisted candidate that predates the size/runnable fields', () => {
+      const legacy = rowOf('binvuln', {
+        kind: 'binary-pwnable-candidate',
+        title: 'legacy',
+        severity: 'high',
+        proofState: 'needs_runtime_reproduction',
+        evidence: { path: 'bin/a', unsafeFns: ['strcpy'] },
+        rationale: '',
+      });
+      expect(reachabilityLeads(ledgerLeads([legacy]).reachCandidates, root, 3).map((l) => l.target)).toEqual(['bin/a']);
+    });
+
+    it('ranks the fresh+persisted union deterministically and never past the budget', () => {
+      const persisted = ledgerLeads([rowOf('binvuln', pwn('bin/a', 100)), rowOf('binvuln', pwn('bin/b', 200))]);
+      const merged = [pwn('bin/c', 300), ...persisted.reachCandidates];
+      const a = reachabilityLeads(merged, root, 2);
+      expect(a).toEqual(reachabilityLeads(merged, root, 2));
+      expect(a.map((l) => l.target)).toEqual(['bin/a', 'bin/b']); // smallest-first across the union, capped at 2
+    });
+
+    it('is identical to fresh-only scheduling when the ledger is empty (no regression)', () => {
+      const fresh = [pwn('bin/b', 200), pwn('bin/a', 100)];
+      const empty = ledgerLeads([]);
+      expect(empty.answered.size).toBe(0);
+      expect(reachabilityLeads([...fresh, ...empty.reachCandidates], root, 3)).toEqual(
+        reachabilityLeads(fresh, root, 3),
+      );
+    });
   });
 });

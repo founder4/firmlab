@@ -137,7 +137,7 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
 
 ## Scheduler de leads sobre el ledger (opacidad)
 
-- [ ] Programar la siguiente pregunta a partir de findings YA en el ledger, no solo de los drafts frescos de un
+- [x] Programar la siguiente pregunta a partir de findings YA en el ledger, no solo de los drafts frescos de un
   provider. `AUTONOMOUS-WORKERS.md` §11.3 lo fija como el cuello de botella medido: 136 candidatas pwnable
   elegibles para `symreach` y cada scan solo pregunta 3; 127 filas `binary-cmdexec-sink` sin lead-kind ninguno.
   Hoy los lead-builders leen los drafts que un provider acaba de devolver, así que nada en el código puede
@@ -145,6 +145,15 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   proof-states (más que cualquier provider nuevo) y encaja en `opacidad`/`agent` sin motor nuevo — el
   agente-MCP existente puede conducirlo. Es la contrapartida DETERMINISTA del mercenario (abajo): mismo objetivo
   —alcanzar los leads sin resolver— desde el lado honesto y reproducible.
+  **Hecho (slice determinista):** `runOpacidad` toma una instantánea del ledger ANTES de que cualquier executor
+  re-sincronice su source (`ledgerLeads` en `opacidad-leads.ts`, excluyendo asserciones de operador vía
+  `partitionByProvenance`), y `binvulnRun`/`symreachRun` rankean la unión de drafts frescos + filas persistidas de
+  `binary-pwnable-candidate`, `binary-cmdexec-sink` y `sink-reachable`. Un conjunto de supresión derivado del
+  `source` de las filas (`symreach:<t>`, `symreach:<t>#cmdexec`, `dynprobe:<t>#<sink>`) salta la pregunta que un
+  scan anterior ya hizo — que es lo que avanza el censo entre scans en vez de re-preguntar las tres más pequeñas —
+  sin gastar presupuesto fresco, porque los caps siguen contando `c.planned`. Presupuestos por-fuente
+  (reachability/cmdexec/reproduction) y `MAX_DYNAMIC_STEPS` intactos; el conductor MCP/agente queda para su propio
+  apartado.
 
 ## Mercenario — agente 100% autónomo, opt-in (rompe determinismo/reproducibilidad)
 

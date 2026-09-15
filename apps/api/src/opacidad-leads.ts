@@ -10,6 +10,7 @@
  * so the expensive probes go to binaries some other worker already had a reason to care about. See
  * `interestingBinaries` and the ordering note on `reachabilityLeads`.
  */
+import type { Finding } from '@firmlab/core';
 import type { FindingDraft } from './findings-normalize.js';
 import type { Lead } from './opacidad-plan.js';
 import { isElfFile } from './providers/binvuln.js';
@@ -476,7 +477,14 @@ export function handlerLeads(handlers: HandlerAnalysis[], rootfsPath: string): L
  * Only `reached` sinks qualify. An inconclusive one has no address worth breaking on and no reason to expect the
  * path to be taken.
  */
-export function reproductionLeads(drafts: FindingDraft[], rootfsPath: string, budget = REPRODUCTION_LEAD_CAP): Lead[] {
+export function reproductionLeads(
+  drafts: FindingDraft[],
+  rootfsPath: string,
+  budget = REPRODUCTION_LEAD_CAP,
+  // The `dynprobe:<t>#<sink>` keys a prior run already reproduced. Optional so the fresh-only callers stay
+  // unchanged; when supplied it is the same across-runs suppression the reachability queues do off `symreach:<t>`.
+  planned?: ReadonlySet<string>,
+): Lead[] {
   const leads: Lead[] = [];
   const seen = new Set<string>();
   if (budget <= 0) return leads;
@@ -490,6 +498,8 @@ export function reproductionLeads(drafts: FindingDraft[], rootfsPath: string, bu
       : [];
     const key = `${target}#${sink}`;
     if (!target || !sink || addresses.length === 0 || seen.has(key)) continue;
+    // Already reproduced by a prior run: re-running the same breakpoint is deterministic, so the slot buys nothing.
+    if (planned?.has(`dynprobe:${target}#${sink}`)) continue;
     if (!resolveInsideRootfs(rootfsPath, target)) continue;
     seen.add(key);
     leads.push({
@@ -509,3 +519,56 @@ export function reproductionLeads(drafts: FindingDraft[], rootfsPath: string, bu
  * same way the angr budget is — and, like that one, the unattempted candidates stay visible as candidates.
  */
 export const REPRODUCTION_LEAD_CAP = 3;
+
+// === Scheduling off the ledger, not only off a provider's fresh drafts ===
+
+/**
+ * The persisted ledger reduced to exactly what the three lead schedulers read: the candidate rows they rank, and
+ * the spec keys of questions a prior run already asked. It is the deterministic half of docs/BACKLOG.md §11.3 —
+ * the measured bottleneck was that a lead-builder only ever saw the drafts a provider had just returned, so a
+ * candidate that sat in the ledger from an earlier scan could never become the next question. Feeding these lists
+ * ALONGSIDE the fresh drafts is what lets a scan advance the census instead of re-asking the same smallest few.
+ */
+export interface LedgerLeads {
+  /** `binary-pwnable-candidate` rows — the reachability subjects, ranked by exactly the same rule as fresh ones. */
+  reachCandidates: FindingDraft[];
+  /** `binary-cmdexec-sink` rows — the command-exec reachability subjects. */
+  cmdexecCandidates: FindingDraft[];
+  /** `sink-reachable` rows — the crash-reproduction subjects (they carry the call-site addresses a breakpoint needs). */
+  reproductionCandidates: FindingDraft[];
+  /**
+   * The spec keys a prior run already asked: `symreach:<t>`, `symreach:<t>#cmdexec`, `dynprobe:<t>#<sink>`. A
+   * question whose rows are in the ledger is deterministic to re-ask, so the schedulers skip it — which is what
+   * advances the census across runs instead of re-asking the same smallest three forever. Read off the row
+   * SOURCE, which `symreachRun`/`dynprobeRun` set to `specKey(spec)`, so the string that owns the rows and the
+   * string that dedups the spec cannot drift. A blocked probe that wrote NO row leaves no key here, so it is
+   * retried rather than suppressed — the presence of rows, not the outcome, is the signal.
+   */
+  answered: Set<string>;
+}
+
+/** A ledger row already reduced to a question a prior run asked, by the source `syncFindings` stored it under. */
+const ANSWERED_SOURCE = /^(symreach:|dynprobe:)/;
+
+/**
+ * Pure: split a set of MEASURED findings (operator assertions already excluded by the caller — this stays
+ * store-free) into the scheduler's candidate lists and the answered-key set. Takes the whole `Finding` rather
+ * than a `FindingDraft` because it needs the row `source`, which is the spec key a prior run wrote under.
+ *
+ * A row carrying no evidence, or evidence missing the optional fields a later build added, is neither dropped nor
+ * crashed here: the same builders that rank a fresh draft rank it, and their tolerances (absent `runnable` ⇒
+ * askable, absent `size` ⇒ last, absent `symbolSource` ⇒ not from dynsym) apply identically to a legacy row.
+ */
+export function ledgerLeads(measured: readonly Finding[]): LedgerLeads {
+  const reachCandidates: FindingDraft[] = [];
+  const cmdexecCandidates: FindingDraft[] = [];
+  const reproductionCandidates: FindingDraft[] = [];
+  const answered = new Set<string>();
+  for (const f of measured) {
+    if (f.kind === 'binary-pwnable-candidate') reachCandidates.push(f);
+    else if (f.kind === 'binary-cmdexec-sink') cmdexecCandidates.push(f);
+    else if (f.kind === 'sink-reachable') reproductionCandidates.push(f);
+    if (ANSWERED_SOURCE.test(f.source)) answered.add(f.source);
+  }
+  return { reachCandidates, cmdexecCandidates, reproductionCandidates, answered };
+}

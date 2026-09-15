@@ -29,12 +29,15 @@ import { complete } from './llm.js';
 import { selectExportReachTargets } from './opacidad-exportreach.js';
 import {
   CMDEXEC_LEAD_CAP,
+  type LedgerLeads,
   type ProbeInterest,
   REACHABILITY_LEAD_CAP,
+  REPRODUCTION_LEAD_CAP,
   cmdexecLeads,
   daemonLeads,
   handlerLeads,
   interestingBinaries,
+  ledgerLeads,
   reachabilityLeads,
   reproductionLeads,
   taintReachabilityLeads,
@@ -168,6 +171,14 @@ interface RunCtx {
   handlers?: HandlerAnalysis[];
   /** Both halves of the kernel command line, filled by `ubootRun` / `devicetreeRun` and cross-checked by them. */
   bootCmdlines: BootCmdlineState;
+  /**
+   * The persisted ledger reduced to what the schedulers read, snapshotted ONCE at run start. Taken before the
+   * agenda runs precisely because each executor's `syncFindings` deletes-and-reinserts its own source — reading a
+   * candidate list after `binvuln` re-synced would have dropped whatever this run's cap no longer lists, and a
+   * candidate a prior scan had reached would vanish mid-run. The snapshot lets `binvulnRun` schedule a follow-up
+   * against a row an earlier scan left, and its `answered` set suppresses questions the ledger already asked.
+   */
+  ledger: LedgerLeads;
   handle: JobHandle;
 }
 
@@ -179,6 +190,28 @@ function reachabilityBudget(c: RunCtx): number {
 /** The command-exec question's own allowance, counted separately so it cannot eat the one above. */
 function cmdexecBudget(c: RunCtx): number {
   return CMDEXEC_LEAD_CAP - countCmdexecProbes(c.planned);
+}
+
+/**
+ * The crash-reproduction allowance still affordable this run. Counted globally off the live agenda's `dynprobe:`
+ * keys — the same shape the reachability budget uses — so a persisted-reachable sink scheduled by the sweep and a
+ * freshly-proven one scheduled by symreach draw on ONE cap rather than each getting a full three.
+ */
+function reproductionBudget(c: RunCtx): number {
+  let asked = 0;
+  for (const key of c.planned) if (key.startsWith('dynprobe:')) asked++;
+  return REPRODUCTION_LEAD_CAP - asked;
+}
+
+/**
+ * The suppression set the lead builders read: the live agenda PLUS the questions the ledger already asked. Kept
+ * separate from `c.planned` (which the budgets count) so an already-answered question suppresses a re-ask without
+ * spending any of this run's fresh allowance. Returns `c.planned` itself when the ledger asked nothing, so the
+ * common fresh-scan path allocates no new set and behaves exactly as before.
+ */
+function suppression(c: RunCtx): ReadonlySet<string> {
+  if (c.ledger.answered.size === 0) return c.planned;
+  return new Set<string>([...c.planned, ...c.ledger.answered]);
 }
 
 interface StepOutcome {
@@ -733,14 +766,32 @@ async function binvulnRun(c: RunCtx): Promise<StepOutcome> {
   // budget may already be spent by W4's better-founded questions — that is the intent, not a shortfall, but the
   // unasked candidates must still be visible as unasked.
   const budget = reachabilityBudget(c);
+  // The sweep no longer ranks only what IT just produced. A candidate a PRIOR scan persisted is merged in here, so
+  // the union is ranked as one set and the census can advance past the smallest few this run's cap keeps re-listing
+  // (docs/BACKLOG.md §11.3). A binary present in both is deduped by the builder's own per-target `seen`, and the
+  // suppression set drops any target the ledger already asked — WITHOUT spending fresh budget on it, because the
+  // budget above counts `c.planned`, not this set.
+  const suppress = suppression(c);
+  const reachInterest: ProbeInterest = { ...interest, planned: suppress };
   // Ranked on two axes, not one. Size says which questions RESOLVE; W3's service map and W4's handler analysis say
   // which are worth ASKING, and the ranking draws from both queues round-robin so neither can take the whole
   // allowance. `interest` is built above, because the finding cap needs the same signal.
-  const copyLeads = c.rootfsPath ? reachabilityLeads(r.findings, c.rootfsPath, budget, interest) : [];
+  const copyLeads = c.rootfsPath
+    ? reachabilityLeads([...r.findings, ...c.ledger.reachCandidates], c.rootfsPath, budget, reachInterest)
+    : [];
   // The other question this sweep's rows support, and until now nothing asked it: 127 command-exec sink rows sat in
   // the corpus with no lead kind at all. Its own budget, so scheduling it takes nothing from the line above.
-  const execLeads = c.rootfsPath ? cmdexecLeads(r.findings, c.rootfsPath, cmdexecBudget(c), interest) : [];
-  const leads = [...copyLeads, ...execLeads];
+  const execLeads = c.rootfsPath
+    ? cmdexecLeads([...r.findings, ...c.ledger.cmdexecCandidates], c.rootfsPath, cmdexecBudget(c), reachInterest)
+    : [];
+  // Sinks a prior scan already PROVED reachable but never got to run: their `sink-reachable` rows carry the
+  // call-site addresses a breakpoint needs, so they schedule a crash reproduction here even though no symreach ran
+  // this scan. `suppress` drops any the ledger already reproduced; `reproductionBudget` shares the cap with the
+  // fresh reproductions symreach schedules later in the same run.
+  const reproLeads = c.rootfsPath
+    ? reproductionLeads(c.ledger.reproductionCandidates, c.rootfsPath, reproductionBudget(c), suppress)
+    : [];
+  const leads = [...copyLeads, ...execLeads, ...reproLeads];
   const unasked = Math.max(0, r.candidates - copyLeads.length);
   // A probe that jumped the queue says so in its own `reason`, but the sweep's line is where a reader learns the
   // ordering was not purely by size — otherwise a 1.4 MB binary at the head of a smallest-first list reads as a bug.
@@ -955,8 +1006,10 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
     };
   }
   const reached = r.sinks.filter((s) => s.outcome === 'reached');
-  // A proven-reachable sink is the best possible candidate for actually running the thing.
-  const leads = c.rootfsPath ? reproductionLeads(r.findings, c.rootfsPath) : [];
+  // A proven-reachable sink is the best possible candidate for actually running the thing. The budget is the same
+  // one the sweep drew on for persisted-reachable sinks, and the suppression set drops a sink the ledger already
+  // reproduced — so a fresh proof and a persisted one share one cap and neither re-runs a settled reproduction.
+  const leads = c.rootfsPath ? reproductionLeads(r.findings, c.rootfsPath, reproductionBudget(c), suppression(c)) : [];
   // Name the sinks that were asked about: a bare "no sink reached" hides whether one question or four were posed.
   const askedNote = r.asked?.length ? ` [asked: ${r.asked.join('/')}${r.derivedSinks ? ', derived' : ''}]` : '';
   const summary = reached.length
@@ -1228,6 +1281,10 @@ export async function runOpacidad(
   const sched: ScheduleState = { planned: new Set(seed.map(specKey)), dynamicCount: 0, capped: 0 };
 
   const prior = latestExtract(imageId);
+  // The ledger as it stands BEFORE any executor re-syncs its source — the schedulers read this so a follow-up can
+  // be asked of a candidate an earlier scan left, not only of a provider's fresh drafts (docs/BACKLOG.md §11.3).
+  // Operator assertions are excluded: a person's claim is never a measured candidate to schedule a probe against.
+  const ledger = ledgerLeads(partitionByProvenance(listFindings(imageId).map(rowToFinding)).measured);
   const ctx: RunCtx = {
     imageId,
     imagePath,
@@ -1240,6 +1297,7 @@ export async function runOpacidad(
     // Live view of the agenda — executors size the shared reachability budget off it as the run grows.
     planned: sched.planned,
     bootCmdlines: { ubootRan: false, uboot: null, ubootScript: null, deviceTreeRan: false, deviceTree: [] },
+    ledger,
     handle,
   };
 
