@@ -28,7 +28,9 @@
  *      nobody has written yet — cannot erase a human's record.
  *   4. **An author, always.** `assertedBy` is required and `authorKind` is decided by the transport, not the
  *      caller. An agent cannot sign as a human, which is what makes the read-back caveat in `mcp/format.ts`
- *      truthful rather than decorative.
+ *      truthful rather than decorative. An amendment is a second authored act, not a correction to the first, so
+ *      it records its own `amendedBy`/`amendedByKind` beside the original pair and never overwrites it — anyone
+ *      may amend anyone's claim here, and the row must say who did.
  *
  * What an operator finding refuses to claim: it is **not a measurement**. It is not stage coverage — three
  * hand-written rows must never make an unexamined image read as examined, which is why `buildCoverage` takes the
@@ -232,6 +234,23 @@ export function validateAssertion(input: OperatorAssertionInput): ValidationResu
   };
 }
 
+/** The header the MCP server sets on every write it makes. Named here because both the route and its test read it. */
+export const AUTHOR_KIND_HEADER = 'x-firmlab-author-kind';
+
+/**
+ * Pure: how a caller declares itself. `X-FirmLab-Author-Kind: agent` is honoured because the MCP server sets it;
+ * anything else is a human at the workbench, and the request BODY never gets a say — the one field an author
+ * cannot state about themselves is which kind of author they are.
+ *
+ * Note the asymmetry: an agent can only ever make the label *stronger* than the default, never weaker, so the
+ * failure mode of a missing header is an agent's row being over-attributed to a person rather than the reverse.
+ * That is still wrong, which is why the MCP server sets it unconditionally rather than leaving it to a model to
+ * remember. It lives here, and not in the route, because the route imports the store and a test cannot load it.
+ */
+export function authorKindOf(headers: Record<string, unknown>): OperatorAuthorKind {
+  return String(headers[AUTHOR_KIND_HEADER] ?? '').toLowerCase() === 'agent' ? 'agent' : 'human';
+}
+
 /** Pure: the ledger source for one author. Stable per author, so their rows group without ever colliding. */
 export function operatorSourceFor(assertedBy: string): string {
   return `${OPERATOR_SOURCE_PREFIX}${slugify(assertedBy) || 'unnamed'}`;
@@ -318,6 +337,13 @@ export interface AssertionRevision {
   claim: OperatorClaim;
   rationale: string;
   /**
+   * Who stated THIS claim — the amendment that introduced it, mirroring `from`. Absent means the original author
+   * asserted it, or that the amending build did not record who amended. The distinction is not decorative: without
+   * it a chain of amendments collapses onto whoever happened to amend last, and the middle author disappears.
+   */
+  amendedBy?: string;
+  amendedByKind?: OperatorAuthorKind;
+  /**
    * The title the row carried while this claim stood. Absent on a revision superseded by a build that did not yet
    * record it — a persisted field is optional forever (see CLAUDE.md), and the renderer states the claim without it.
    */
@@ -363,7 +389,22 @@ export interface StoredAssertion extends OperatorAssertion {
  * would otherwise leave the row pointing at a finding it no longer contests, which the report would render as a
  * live dispute. The target is preserved inside the revision, where it belongs to the claim that made it.
  */
-export function amendAssertion(existing: StoredAssertion, v: ValidatedAssertion, now: number): StoredAssertion {
+export function amendAssertion(
+  existing: StoredAssertion,
+  v: ValidatedAssertion,
+  by: string,
+  byKind: OperatorAuthorKind,
+  now: number,
+): { ok: true; value: StoredAssertion } | { ok: false; error: string } {
+  const amendedBy = str(by);
+  if (!amendedBy) {
+    return {
+      ok: false,
+      error:
+        'amendedBy is required — name who is making this amendment. An amendment restates what a named author is on record as claiming, so the ledger records the editor separately from the author; it does not silently attribute your wording to them.',
+    };
+  }
+  if (amendedBy.length > MAX_AUTHOR) return { ok: false, error: `amendedBy is longer than ${MAX_AUTHOR} characters.` };
   const prior: AssertionRevision = {
     claim: existing.claim,
     rationale: existing.rationale,
@@ -371,19 +412,44 @@ export function amendAssertion(existing: StoredAssertion, v: ValidatedAssertion,
     supersededAt: now,
     ...(existing.title ? { title: existing.title } : {}),
     ...(existing.disputesFindingId ? { disputesFindingId: existing.disputesFindingId } : {}),
+    // Carried from the HEAD, not from the amender making this edit: the revision holds the claim that stood until
+    // now, so its author is whoever put it there. Absent on the first revision, where the original author did.
+    ...(existing.amendedBy ? { amendedBy: existing.amendedBy } : {}),
+    ...(existing.amendedByKind ? { amendedByKind: existing.amendedByKind } : {}),
   };
   // Destructured out rather than spread and overwritten: with `exactOptionalPropertyTypes` there is no value that
   // means "absent", so the only way to drop the field is not to carry it.
   const { disputesFindingId: _superseded, ...carried } = existing;
   return {
-    ...carried,
-    claim: v.claim,
-    rationale: v.rationale,
-    title: v.title,
-    amendedAt: now,
-    supersedes: [...revisionsOf(existing), prior],
-    ...(v.disputesFindingId ? { disputesFindingId: v.disputesFindingId } : {}),
+    ok: true,
+    value: {
+      ...carried,
+      claim: v.claim,
+      rationale: v.rationale,
+      title: v.title,
+      amendedAt: now,
+      // `assertedBy`/`authorKind` are carried untouched by the spread. An amendment never reassigns authorship —
+      // it records a second, separate actor beside it.
+      amendedBy,
+      amendedByKind: byKind,
+      supersedes: [...revisionsOf(existing), prior],
+      ...(v.disputesFindingId ? { disputesFindingId: v.disputesFindingId } : {}),
+    },
   };
+}
+
+/**
+ * Pure: who last amended a claim, or null when nobody is on record for it.
+ *
+ * Null is returned for an amended row whose amender was never stored, and every caller words that case for itself
+ * rather than falling back to `assertedBy`. That fallback is the bug this whole field exists to remove: it reads
+ * "somebody else rewrote this" as "the author revised their own claim", on the one surface whose purpose is saying
+ * who said what.
+ */
+export function amendmentAuthor(a: OperatorAssertion): { by: string; kind: OperatorAuthorKind } | null {
+  const by = typeof a.amendedBy === 'string' ? a.amendedBy.trim() : '';
+  if (!by) return null;
+  return { by, kind: a.amendedByKind === 'agent' ? 'agent' : 'human' };
 }
 
 /**
@@ -481,9 +547,16 @@ export function describeAssertion(a: OperatorAssertion): string {
   const when = assertionDay(a.assertedAt);
   const who = a.authorKind === 'agent' ? `${a.assertedBy} (agent)` : a.assertedBy;
   const revisions = revisionsOf(a);
+  const amender = amendmentAuthor(a);
+  // Named, and named as an unknown when it is one. An amendment sentence that says only WHEN lets a reader carry
+  // the author of the claim over to the edit, which is precisely how somebody else's rewording ends up attributed
+  // to the person who asserted it.
+  const byWhom = amender
+    ? ` by ${amender.kind === 'agent' ? `${amender.by} (agent)` : amender.by}`
+    : ' by an author the amending build did not record';
   const amended =
     a.amendedAt !== undefined
-      ? ` Amended ${assertionDay(a.amendedAt)}${
+      ? ` Amended ${assertionDay(a.amendedAt)}${byWhom}${
           revisions.length
             ? `; ${revisions.length} earlier claim${revisions.length === 1 ? ' is' : 's are'} kept in the record.`
             : '; the claim it replaced was not recorded by the build that amended it.'

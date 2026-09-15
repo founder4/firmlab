@@ -243,6 +243,11 @@ function referenceList(f: ReportFinding, t: Messages): string {
   return `<div class="basis"><strong>${t.ledger.cited}</strong> ${refs.map((r) => `<code>${escapeHtml(r)}</code>`).join(' · ')}</div>`;
 }
 
+/**
+ * One retired claim. `by` is set only when an amendment is on record as having introduced it: an absent editor
+ * means the original author stated it (or that nobody wrote down who did), and printing a name there would be
+ * inventing the attribution this section exists to preserve.
+ */
 function revisionLine(r: AssertionRevision, t: Messages): string {
   return t.ledger.revision({
     claim: r.claim,
@@ -251,6 +256,7 @@ function revisionLine(r: AssertionRevision, t: Messages): string {
     rationale: r.rationale,
     title: r.title,
     disputesFindingId: r.disputesFindingId,
+    by: r.amendedBy ? (r.amendedByKind === 'agent' ? t.ledger.agentAuthor(r.amendedBy) : r.amendedBy) : undefined,
   });
 }
 

@@ -1,10 +1,13 @@
 import type { OperatorAssertion } from '@firmlab/core';
 import { describe, expect, it } from 'vitest';
 import {
+  AUTHOR_KIND_HEADER,
   CLAIM_MEANING,
   NOT_A_MEASUREMENT,
   amendAssertion,
+  amendmentAuthor,
   assertionToDraft,
+  authorKindOf,
   describeAssertion,
   isOperatorSource,
   operatorSourceFor,
@@ -24,6 +27,13 @@ const good = {
 function assertOk(input: Parameters<typeof validateAssertion>[0]) {
   const r = validateAssertion(input);
   if (!r.ok) throw new Error(`expected valid, got: ${r.error}`);
+  return r.value;
+}
+
+/** An amendment that is expected to be accepted, unwrapped — the refusals are asserted on explicitly below. */
+function amendOk(...args: Parameters<typeof amendAssertion>) {
+  const r = amendAssertion(...args);
+  if (!r.ok) throw new Error(`expected a valid amendment, got: ${r.error}`);
   return r.value;
 }
 
@@ -162,9 +172,11 @@ describe('withdrawal is first-class', () => {
 describe('amendAssertion — an amendment appends, it never overwrites', () => {
   it('cannot reassign authorship or backdate the original assertion', () => {
     const base = assertionToDraft(assertOk(good), 'human', 1_000).assertion;
-    const amended = amendAssertion(
+    const amended = amendOk(
       base,
       assertOk({ ...good, assertedBy: 'someone-else', claim: 'asserted_unverified' }),
+      'someone-else',
+      'human',
       9_000,
     );
     expect(amended.assertedBy).toBe('aaron');
@@ -175,7 +187,7 @@ describe('amendAssertion — an amendment appends, it never overwrites', () => {
 
   it('keeps the claim it replaced, with the basis and the title that stood with it', () => {
     const base = assertionToDraft(assertOk(good), 'human', 1_000).assertion;
-    const amended = amendAssertion(
+    const amended = amendOk(
       base,
       assertOk({
         ...good,
@@ -183,6 +195,8 @@ describe('amendAssertion — an amendment appends, it never overwrites', () => {
         claim: 'asserted_unverified',
         rationale: 'Re-read the label.',
       }),
+      'aaron',
+      'human',
       9_000,
     );
     expect(revisionsOf(amended)).toHaveLength(1);
@@ -200,10 +214,18 @@ describe('amendAssertion — an amendment appends, it never overwrites', () => {
 
   it('accumulates revisions oldest-first, so a chain of edits stays readable end to end', () => {
     const base = assertionToDraft(assertOk(good), 'human', 1_000).assertion;
-    const once = amendAssertion(base, assertOk({ ...good, claim: 'asserted_unverified', rationale: 'second' }), 2_000);
-    const twice = amendAssertion(
+    const once = amendOk(
+      base,
+      assertOk({ ...good, claim: 'asserted_unverified', rationale: 'second' }),
+      'aaron',
+      'human',
+      2_000,
+    );
+    const twice = amendOk(
       once,
       assertOk({ ...good, claim: 'asserted_from_external_evidence', rationale: 'third' }),
+      'aaron',
+      'human',
       3_000,
     );
     expect(revisionsOf(twice).map((r) => r.rationale)).toEqual([good.rationale, 'second']);
@@ -213,9 +235,11 @@ describe('amendAssertion — an amendment appends, it never overwrites', () => {
 
   it('survives a withdrawal — retracting an amended claim keeps every earlier one', () => {
     const base = assertionToDraft(assertOk(good), 'human', 1_000).assertion;
-    const amended = amendAssertion(
+    const amended = amendOk(
       base,
       assertOk({ ...good, claim: 'asserted_unverified', rationale: 'second' }),
+      'nadia',
+      'human',
       2_000,
     );
     const r = withdrawAssertion(amended, 'aaron', 'Both readings were wrong.', 3_000);
@@ -223,6 +247,11 @@ describe('amendAssertion — an amendment appends, it never overwrites', () => {
     if (!r.ok) return;
     expect(revisionsOf(r.value)).toHaveLength(1);
     expect(r.value.status).toBe('withdrawn');
+    // Three actors, three fields. A withdrawal does not absorb the amendment's author, and neither one becomes
+    // the asserter: the row has to be able to say that A claimed it, B rewrote it and C retracted it.
+    expect(r.value.assertedBy).toBe('aaron');
+    expect(r.value.amendedBy).toBe('nadia');
+    expect(r.value.withdrawnBy).toBe('aaron');
   });
 
   it('drops a dispute target the new claim no longer makes, and keeps it on the revision that did', () => {
@@ -231,7 +260,7 @@ describe('amendAssertion — an amendment appends, it never overwrites', () => {
       'human',
       1_000,
     ).assertion;
-    const amended = amendAssertion(disputing, assertOk({ ...good, claim: 'asserted_unverified' }), 2_000);
+    const amended = amendOk(disputing, assertOk({ ...good, claim: 'asserted_unverified' }), 'aaron', 'human', 2_000);
     expect(amended.disputesFindingId).toBeUndefined();
     expect(revisionsOf(amended)[0]?.disputesFindingId).toBe('f0001');
   });
@@ -246,9 +275,125 @@ describe('amendAssertion — an amendment appends, it never overwrites', () => {
 
   it('says an amendment happened in the attribution line every surface already shows', () => {
     const base = assertionToDraft(assertOk(good), 'human', 1_700_000_000_000).assertion;
-    const amended = amendAssertion(base, assertOk({ ...good, claim: 'asserted_unverified' }), 1_700_086_400_000);
-    expect(describeAssertion(amended)).toMatch(/Amended 2023-11-15; 1 earlier claim is kept/);
+    const amended = amendOk(
+      base,
+      assertOk({ ...good, claim: 'asserted_unverified' }),
+      'aaron',
+      'human',
+      1_700_086_400_000,
+    );
+    expect(describeAssertion(amended)).toMatch(/Amended 2023-11-15 by aaron; 1 earlier claim is kept/);
     expect(describeAssertion(base)).not.toMatch(/Amended/);
+  });
+});
+
+describe('amendAssertion — who amended is recorded, and is not who asserted', () => {
+  const base = () => assertionToDraft(assertOk(good), 'human', 1_000).assertion;
+
+  it('refuses an unsigned amendment, the way a withdrawal refuses an unnamed retraction', () => {
+    for (const nobody of ['', '   ', undefined as unknown as string, 42 as unknown as string]) {
+      const r = amendAssertion(base(), assertOk({ ...good, claim: 'asserted_unverified' }), nobody, 'human', 2_000);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error).toMatch(/amendedBy is required/);
+    }
+  });
+
+  it('refuses an author name longer than the bound a validated assertion applies', () => {
+    const r = amendAssertion(base(), assertOk(good), 'n'.repeat(81), 'human', 2_000);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/longer than 80/);
+  });
+
+  it('records a different person editing someone else’s claim as THEIR edit, with the claim still theirs', () => {
+    const amended = amendOk(
+      base(),
+      assertOk({ ...good, claim: 'asserted_unverified', rationale: 'It was the dev board, not the shipped unit.' }),
+      'nadia',
+      'human',
+      2_000,
+    );
+    expect(amended.assertedBy).toBe('aaron');
+    expect(amended.authorKind).toBe('human');
+    expect(amended.amendedBy).toBe('nadia');
+    expect(amended.amendedByKind).toBe('human');
+    // And the sentence every surface renders says both, in that order.
+    expect(describeAssertion(amended)).toMatch(/Asserted by aaron/);
+    expect(describeAssertion(amended)).toMatch(/Amended [\d-]+ by nadia/);
+  });
+
+  it('stamps the amender’s kind from the transport, marking an agent’s edit of a human’s claim as an agent’s', () => {
+    const amended = amendOk(base(), assertOk({ ...good, claim: 'asserted_unverified' }), 'claude', 'agent', 2_000);
+    expect(amended.authorKind).toBe('human');
+    expect(amended.amendedByKind).toBe('agent');
+    expect(describeAssertion(amended)).toMatch(/Amended [\d-]+ by claude \(agent\)/);
+    // The reverse case: a human editing an agent's row leaves the agent's own authorship marked as an agent's.
+    const agentRow = assertionToDraft(assertOk({ ...good, assertedBy: 'claude' }), 'agent', 1_000).assertion;
+    const byHuman = amendOk(agentRow, assertOk({ ...good, claim: 'asserted_unverified' }), 'aaron', 'human', 2_000);
+    expect(byHuman.authorKind).toBe('agent');
+    expect(byHuman.amendedByKind).toBe('human');
+    expect(describeAssertion(byHuman)).toMatch(/Asserted by claude \(agent\)/);
+  });
+
+  it('keeps each link of a chain attributed to whoever made it, not to whoever amended last', () => {
+    const once = amendOk(base(), assertOk({ ...good, rationale: 'second' }), 'nadia', 'human', 2_000);
+    const twice = amendOk(once, assertOk({ ...good, rationale: 'third' }), 'claude', 'agent', 3_000);
+    const [first, second] = revisionsOf(twice);
+    // The claim aaron asserted carries no editor: nobody amended it into being.
+    expect(first?.rationale).toBe(good.rationale);
+    expect(first?.amendedBy).toBeUndefined();
+    // The middle claim is nadia's, and stays nadia's after claude amends over it.
+    expect(second?.rationale).toBe('second');
+    expect(second?.amendedBy).toBe('nadia');
+    expect(second?.amendedByKind).toBe('human');
+    expect(twice.amendedBy).toBe('claude');
+    expect(twice.amendedByKind).toBe('agent');
+  });
+
+  it('says an editor is unrecorded on a legacy row rather than crediting the original author', () => {
+    // Exactly the shape a build before this feature persisted: amended, with no editor on the row.
+    const legacy: OperatorAssertion = { ...base(), amendedAt: 5_000 };
+    expect(amendmentAuthor(legacy)).toBeNull();
+    expect(describeAssertion(legacy)).toMatch(/Amended [\d-]+ by an author the amending build did not record/);
+    expect(describeAssertion(legacy)).not.toMatch(/Amended [\d-]+ by aaron/);
+    // A blank or non-string editor degrades the same way rather than rendering an empty name.
+    expect(amendmentAuthor({ ...legacy, amendedBy: '  ' })).toBeNull();
+    expect(amendmentAuthor({ ...legacy, amendedBy: 7 as unknown as string })).toBeNull();
+    // An unknown kind reads as human rather than promoting the edit to an agent's or printing a bare code.
+    expect(amendmentAuthor({ ...legacy, amendedBy: 'nadia' })).toEqual({ by: 'nadia', kind: 'human' });
+  });
+
+  it('carries an amended legacy row forward without inventing an editor for the claim it replaces', () => {
+    const legacy: OperatorAssertion = { ...base(), amendedAt: 5_000, rationale: 'the legacy wording' };
+    const amended = amendOk(legacy, assertOk({ ...good, rationale: 'fourth' }), 'nadia', 'human', 6_000);
+    expect(revisionsOf(amended)[0]?.rationale).toBe('the legacy wording');
+    expect(revisionsOf(amended)[0]?.amendedBy).toBeUndefined();
+    expect(revisionsOf(amended)[0]?.from).toBe(5_000);
+    expect(amended.amendedBy).toBe('nadia');
+  });
+});
+
+describe('authorKindOf — the one field a writer cannot state about itself', () => {
+  it('stamps an agent only on the header the MCP server sets, and reads the body not at all', () => {
+    expect(authorKindOf({ [AUTHOR_KIND_HEADER]: 'agent' })).toBe('agent');
+    expect(authorKindOf({ [AUTHOR_KIND_HEADER]: 'AGENT' })).toBe('agent');
+    // Fastify hands a repeated header over as an array; it still resolves to the kind it names.
+    expect(authorKindOf({ [AUTHOR_KIND_HEADER]: ['agent'] })).toBe('agent');
+  });
+
+  it('defaults to human for a missing, empty or unrecognised header', () => {
+    expect(authorKindOf({})).toBe('human');
+    expect(authorKindOf({ [AUTHOR_KIND_HEADER]: '' })).toBe('human');
+    expect(authorKindOf({ [AUTHOR_KIND_HEADER]: 'robot' })).toBe('human');
+    expect(authorKindOf({ [AUTHOR_KIND_HEADER]: undefined })).toBe('human');
+  });
+
+  it('cannot be forged from a payload field — only the header is consulted', () => {
+    // The shape a request would take if it tried: every plausible body key naming a kind, and no header.
+    expect(authorKindOf({ authorKind: 'agent', amendedByKind: 'agent', body: { authorKind: 'agent' } })).toBe('human');
+    // And the reverse: a body claiming `human` cannot weaken the header an agent's transport set.
+    expect(authorKindOf({ [AUTHOR_KIND_HEADER]: 'agent', authorKind: 'human' })).toBe('agent');
   });
 });
 

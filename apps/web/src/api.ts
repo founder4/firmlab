@@ -716,6 +716,12 @@ export interface AssertionRevision {
   from?: number;
   supersededAt?: number;
   disputesFindingId?: string;
+  /**
+   * Who stated this claim: the amendment that introduced it, mirroring `from`. Absent means the original author
+   * did — or that the build that superseded it recorded no editor. Never read it as the current author's.
+   */
+  amendedBy?: string;
+  amendedByKind?: 'human' | 'agent';
 }
 
 /** Who asserted a finding, when, on what basis, and whether it still stands. */
@@ -731,6 +737,12 @@ export interface OperatorAssertion {
   withdrawnAt?: number;
   withdrawnReason?: string;
   amendedAt?: number;
+  /**
+   * Who made the last amendment, and over which transport. Separate from `assertedBy` because anyone may amend
+   * anyone's claim: absent means NOT RECORDED (a row amended before the API kept it), never "the author did it".
+   */
+  amendedBy?: string;
+  amendedByKind?: 'human' | 'agent';
   /**
    * What this claim replaced, oldest first. Append-only on the API side: an amendment adds a revision and never
    * rewrites one, because an author restating a strong claim as a weak one with no trace is the same erasure a
@@ -2020,10 +2032,21 @@ export const api = {
       disputesFindingId?: string;
     },
   ) => post<{ finding: Finding; attribution: string }>(`/api/images/${id}/operator-findings`, body),
+  /**
+   * Amend an assertion. `amendedBy` is required by the API and is NOT `assertedBy`: an amendment records its own
+   * author beside the original one, so a rewording is never attributed to the person who made the first claim.
+   * The author KIND is not sent — the transport stamps it, and a body that tried would be ignored.
+   */
   amendAssertion: (
     id: string,
     findingId: string,
-    body: { title: string; claim: OperatorClaim; rationale: string; severity?: Finding['severity'] },
+    body: {
+      title: string;
+      claim: OperatorClaim;
+      rationale: string;
+      severity?: Finding['severity'];
+      amendedBy: string;
+    },
   ) =>
     patch<{ finding: Finding; attribution: string }>(`/api/images/${id}/operator-findings/${findingId}`, body).then(
       (r) => r.finding,

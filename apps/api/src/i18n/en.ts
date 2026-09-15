@@ -53,6 +53,8 @@ export interface RevisionText {
   rationale: string;
   title?: string | undefined;
   disputesFindingId?: string | undefined;
+  /** Who stated this superseded claim, already formatted by the caller. Absent when nobody is on record for it. */
+  by?: string | undefined;
 }
 
 export const en = {
@@ -172,8 +174,8 @@ export const en = {
     cited: 'Cited:',
     revision: (r: RevisionText) =>
       `<li><code>${esc(r.claim)}</code>, stood from ${esc(r.from)} to ${esc(r.to)}${
-        r.title ? ` — “${esc(r.title)}”` : ''
-      }${
+        r.by ? `, stated by ${esc(r.by)}` : ''
+      }${r.title ? ` — “${esc(r.title)}”` : ''}${
         r.disputesFindingId ? ` (contested <code>${esc(r.disputesFindingId)}</code>)` : ''
       }<div class="muted">${esc(r.rationale)}</div></li>`,
     historyLost: (when: string) =>
@@ -183,7 +185,7 @@ export const en = {
     history: (p: { when: string; items: string[] }) =>
       `<div class="history"><strong>Amended ${esc(p.when)}, superseding ${p.items.length} earlier ${
         p.items.length === 1 ? 'claim' : 'claims'
-      }.</strong> An amendment appends; it never overwrites. What the author previously stated, and on what basis:<ol>${p.items.join(
+      }.</strong> An amendment appends; it never overwrites. What was previously stated, by whom, and on what basis:<ol>${p.items.join(
         '',
       )}</ol></div>`,
     disputeTargetGone: (targetId: string) =>
@@ -298,11 +300,11 @@ export const en = {
     amendedSuperseding: (p: { when: string; count: number }) =>
       `- **Amended ${p.when}, superseding ${p.count} earlier ${
         p.count === 1 ? 'claim' : 'claims'
-      }.** An amendment appends; it never overwrites. What the author previously stated, and on what basis — superseded, and quoted here only as history:`,
+      }.** An amendment appends; it never overwrites. What was previously stated, by whom, and on what basis — superseded, and quoted here only as history:`,
     revision: (p: { n: number; revision: RevisionText }) =>
       `  ${p.n}. \`${p.revision.claim}\`, stood from ${p.revision.from} to ${p.revision.to}${
-        p.revision.title ? ` — “${p.revision.title}”` : ''
-      }${
+        p.revision.by ? `, stated by ${p.revision.by}` : ''
+      }${p.revision.title ? ` — “${p.revision.title}”` : ''}${
         p.revision.disputesFindingId ? ` (contested \`${p.revision.disputesFindingId}\`)` : ''
       }. Basis given at the time: ${p.revision.rationale}`,
     emailHeading: 'Draft email',

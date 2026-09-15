@@ -6,6 +6,8 @@
  *   `/images/:id/operator-findings` — assertions. A named author states something, on a stated basis, using a
  *   vocabulary disjoint from the proof-state ladder (`operator-findings.ts` holds the rules and the argument for
  *   them). Create, amend, withdraw; never delete, because a retraction with its reason is more useful than a gap.
+ *   Each of the three names its own actor: nothing here assumes the person editing or retracting a claim is the
+ *   person who made it, because on this surface most often they are not.
  *
  *   `/images/:id/notes` — a working scratchpad. Reasoning that is not yet a claim, and may never become one:
  *   half-formed hypotheses, "check this next", the thread an agent picks up in a later session. Notes live in
@@ -27,7 +29,6 @@
  * assertion count as stage coverage, and to delete one.
  */
 import { randomUUID } from 'node:crypto';
-import type { OperatorAuthorKind } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
 import { describeRetirement, validateRetirement } from '../findings-retire.js';
 import {
@@ -42,6 +43,7 @@ import {
   CLAIM_MEANING,
   NOT_A_MEASUREMENT,
   type OperatorAssertionInput,
+  authorKindOf,
   describeAssertion,
   partitionByProvenance,
   validateAssertion,
@@ -58,17 +60,6 @@ import {
 
 const MAX_NOTE = 20000;
 const MAX_NOTE_AUTHOR = 80;
-
-/**
- * How a caller declares itself. An `X-FirmLab-Author-Kind: agent` header is honoured because the MCP server sets
- * it; anything else is a human at the workbench. Note the asymmetry — an agent can only ever make the label
- * *stronger* than the default, never weaker, so the failure mode of a missing header is an agent's row being
- * over-attributed to a person rather than the reverse. That is still wrong, which is why the MCP server sets it
- * unconditionally rather than leaving it to a model to remember.
- */
-function authorKindOf(headers: Record<string, unknown>): OperatorAuthorKind {
-  return String(headers['x-firmlab-author-kind'] ?? '').toLowerCase() === 'agent' ? 'agent' : 'human';
-}
 
 export async function operatorRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -115,7 +106,14 @@ export async function operatorRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  /** Amend an assertion. The original author and assertion time are immutable; only the claim and its basis move. */
+  /**
+   * Amend an assertion. The original author and assertion time are immutable; the claim, its basis — and a second
+   * author — move.
+   *
+   * `amendedBy` is required and comes from the body the way `withdrawnBy` does; `amendedByKind` comes from the
+   * transport the way it does on creation, so a request cannot sign its edit as a human. The two halves are
+   * deliberately different sources: a name is something a caller states, a kind is something the seam knows.
+   */
   app.patch('/images/:id/operator-findings/:findingId', async (req, reply) => {
     const { id, findingId } = req.params as { id: string; findingId: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
@@ -133,7 +131,16 @@ export async function operatorRoutes(app: FastifyInstance): Promise<void> {
       assertedBy: loaded.assertion.assertedBy,
     });
     if (!parsed.ok) return reply.status(400).send({ error: parsed.error });
-    const finding = amendOperatorFinding(loaded.row, loaded.assertion, parsed.value);
+    const body = (req.body ?? {}) as { amendedBy?: unknown };
+    const amended = amendOperatorFinding(
+      loaded.row,
+      loaded.assertion,
+      parsed.value,
+      typeof body.amendedBy === 'string' ? body.amendedBy : '',
+      authorKindOf(req.headers as Record<string, unknown>),
+    );
+    if (!amended.ok) return reply.status(400).send({ error: amended.error });
+    const finding = amended.finding;
     return { finding, attribution: finding.assertion ? describeAssertion(finding.assertion) : '' };
   });
 

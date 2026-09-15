@@ -6,6 +6,13 @@ import { MAX_MEASURED_ROWS, type ReportFinding, renderLedgerSections } from './r
 
 const DAY = 1_700_000_000_000; // 2023-11-14
 
+/** An amendment expected to be accepted, unwrapped. The refusals are covered in `operator-findings.test.ts`. */
+function amendOk(...args: Parameters<typeof amendAssertion>) {
+  const r = amendAssertion(...args);
+  if (!r.ok) throw new Error(`expected a valid amendment, got: ${r.error}`);
+  return r.value;
+}
+
 function valid(over: Record<string, unknown> = {}): ReturnType<typeof assertionToDraft> {
   const r = validateAssertion({
     assertedBy: 'aaron',
@@ -186,7 +193,7 @@ describe('an amended assertion shows what it superseded', () => {
       rationale: 'Re-checked the label: the unit I logged into was an engineering sample.',
     });
     if (!secondInput.ok) throw new Error('fixture');
-    const amended = amendAssertion(first, secondInput.value, DAY + 86_400_000);
+    const amended = amendOk(first, secondInput.value, 'aaron', 'human', DAY + 86_400_000);
     const row: ReportFinding = {
       ...assertedRow('a4'),
       title: secondInput.value.title,
@@ -212,6 +219,41 @@ describe('an amended assertion shows what it superseded', () => {
 
   it('renders nothing about amendment for a claim that was never amended', () => {
     expect(renderLedgerSections([assertedRow('a6')]).operator).not.toContain('Amended');
+  });
+});
+
+describe('an amendment names its own author, and does not borrow the asserter’s', () => {
+  it('attributes each retired claim to whoever stated it, in the rendered history', () => {
+    const first = valid().assertion;
+    const second = validateAssertion({
+      assertedBy: 'aaron',
+      title: 'Telnet root shell on the dev board',
+      claim: 'asserted_unverified',
+      rationale: 'Re-read the label.',
+    });
+    const third = validateAssertion({
+      assertedBy: 'aaron',
+      title: 'Telnet root shell, vendor confirms',
+      claim: 'asserted_from_external_evidence',
+      rationale: 'Vendor advisory VU#1 names the same interface.',
+    });
+    if (!second.ok || !third.ok) throw new Error('fixture');
+    const once = amendOk(first, second.value, 'nadia', 'human', DAY + 86_400_000);
+    const twice = amendOk(once, third.value, 'claude', 'agent', DAY + 172_800_000);
+    const row: ReportFinding = {
+      ...assertedRow('a15'),
+      title: third.value.title,
+      rationale: third.value.rationale,
+      assertion: twice,
+    };
+    const out = renderLedgerSections([row]).operator;
+
+    expect(out).toContain('superseding 2 earlier claims');
+    // The claim aaron asserted carries no editor; nadia's is attributed to nadia, and the head to claude.
+    expect(out).toContain('stood from 2023-11-14 to 2023-11-15 — “Telnet root shell');
+    expect(out).toContain('stated by nadia');
+    expect(out).toContain('Amended 2023-11-16 by claude (agent)');
+    expect(out).toContain('Asserted by aaron');
   });
 });
 
@@ -421,13 +463,14 @@ describe('an assertion reads as testimony in Spanish too', () => {
       ...assertedRow('a13'),
       title: second.value.title,
       rationale: second.value.rationale,
-      assertion: amendAssertion(first, second.value, DAY + 86_400_000),
+      assertion: amendOk(first, second.value, 'nadia', 'human', DAY + 86_400_000),
     };
     const out = renderLedgerSections([row], 'es').operator;
     expect(out).toContain('sustituyendo 1 afirmación anterior');
     expect(out).toContain('Una modificación añade; nunca sobrescribe');
     expect(out).toContain('<code>asserted_from_device</code>');
     expect(out).toContain('vigente del 2023-11-14 al 2023-11-15');
+    expect(out).toContain('Modificada el 2023-11-15 por nadia');
   });
 
   it('still escapes what an author typed — the language does not change who opens the file', () => {

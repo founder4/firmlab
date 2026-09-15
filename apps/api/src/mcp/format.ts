@@ -47,6 +47,7 @@ import {
   type AssertionRevision,
   CLAIM_MEANING,
   NOT_A_MEASUREMENT,
+  amendmentAuthor,
   assertionDay,
   describeAssertion,
   indexDisputes,
@@ -223,6 +224,14 @@ export interface McpSupersededClaim {
   supersededBasis: string;
   stoodFrom: string;
   supersededOn: string;
+  /**
+   * Who stated this retired claim. Absent means it was the assertion's original author, or that the build that
+   * superseded it did not record an editor — either way, NOT that the current author stated it. A chain of
+   * amendments is several people's sentences, and flattening it onto the last one is the misreading this field
+   * exists to make impossible.
+   */
+  supersededClaimBy?: string;
+  supersededClaimByKind?: string;
   /** The finding this retired claim contested, if it was a dispute. It no longer contests anything. */
   contestedFindingId?: string;
 }
@@ -239,6 +248,12 @@ export interface McpAmendmentHistory {
   /** First field: everything below is retired, and the live claim is on the row itself. */
   note: string;
   amendedOn: string;
+  /**
+   * Who made the last amendment — not necessarily the author of the assertion, which is why it is reported here
+   * rather than left for a reader to infer from `assertedBy`. `unrecorded` on a row amended before this was kept.
+   */
+  amendedBy: string;
+  amendedByKind: string;
   supersededClaimCount: number;
   supersededClaims: McpSupersededClaim[];
 }
@@ -271,8 +286,17 @@ function shapeRevision(r: AssertionRevision): McpSupersededClaim {
     supersededBasis: r.rationale,
     stoodFrom: assertionDay(r.from),
     supersededOn: assertionDay(r.supersededAt),
+    ...(r.amendedBy ? { supersededClaimBy: r.amendedBy, supersededClaimByKind: r.amendedByKind ?? 'unknown' } : {}),
     ...(r.disputesFindingId ? { contestedFindingId: r.disputesFindingId } : {}),
   };
+}
+
+/** The last amender, shaped for a payload: an explicit `unrecorded`, never a fallback to the original author. */
+function amenderFields(a: OperatorAssertion): { amendedBy: string; amendedByKind: string } {
+  const amender = amendmentAuthor(a);
+  return amender
+    ? { amendedBy: amender.by, amendedByKind: amender.kind }
+    : { amendedBy: 'unrecorded', amendedByKind: 'unrecorded' };
 }
 
 /**
@@ -296,6 +320,7 @@ export function amendmentHistoryOf(a: OperatorAssertion | undefined): McpAmendme
         'claim it replaced, so what it superseded cannot be shown. Only the current claim stands; do not read it ' +
         'as the author’s original one.',
       amendedOn,
+      ...amenderFields(a),
       supersededClaimCount: 0,
       supersededClaims: [],
     };
@@ -303,9 +328,11 @@ export function amendmentHistoryOf(a: OperatorAssertion | undefined): McpAmendme
   return {
     note:
       'HISTORY, NOT A LIVE CLAIM — the claim, title and basis on the row above are the current ones. Everything ' +
-      'listed here was superseded by an amendment and is no longer asserted: cite it only as what the author ' +
-      'previously stated, never as the claim that stands. An amendment appends; it never overwrites.',
+      'listed here was superseded by an amendment and is no longer asserted: cite it only as what was previously ' +
+      'stated, never as the claim that stands. An amendment appends; it never overwrites — and an amender is not ' +
+      'necessarily the author, so read `amendedBy` rather than assuming `assertedBy` wrote every claim here.',
     amendedOn,
+    ...amenderFields(a),
     supersededClaimCount: revisions.length,
     supersededClaims: revisions.map(shapeRevision),
   };

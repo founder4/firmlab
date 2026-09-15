@@ -259,8 +259,19 @@ export interface OperatorAssertion {
   withdrawnAt?: number;
   /** Why it was retracted — the part a deletion would have thrown away. */
   withdrawnReason?: string;
-  /** Last amendment, if the author edited the claim after asserting it. */
+  /** Last amendment, if the claim was edited after it was asserted. */
   amendedAt?: number;
+  /**
+   * Who performed the LAST amendment, and by which transport. Separate from `assertedBy` for the same reason
+   * `withdrawnBy` is: "the author narrowed their own claim" and "somebody else rewrote it" are different events,
+   * and a ledger whose entire purpose is provenance may not render the second as the first.
+   *
+   * Both optional forever. A row amended before these fields existed carries neither, and absent means NOT
+   * RECORDED — never "the original author did it", which is exactly the attribution this pair exists to stop
+   * being made silently.
+   */
+  amendedBy?: string;
+  amendedByKind?: OperatorAuthorKind;
 }
 
 /**

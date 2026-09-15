@@ -25,7 +25,7 @@
  * — mientras que el título y el fundamento de un hallazgo se muestran tal cual se registraron.
  */
 import type { OperatorAssertion, OperatorClaim } from '@firmlab/core';
-import { assertionDay, revisionsOf } from '../operator-findings.js';
+import { amendmentAuthor, assertionDay, revisionsOf } from '../operator-findings.js';
 import type { Messages, RevisionText } from './en.js';
 import { escapeHtml as esc } from './escape.js';
 
@@ -56,9 +56,16 @@ function describirAfirmacion(a: OperatorAssertion): string {
   const cuando = assertionDay(a.assertedAt);
   const quien = a.authorKind === 'agent' ? `${a.assertedBy} (agente)` : a.assertedBy;
   const revisiones = revisionsOf(a);
+  const enmendador = amendmentAuthor(a);
+  // Se nombra a quien modificó, y se dice explícitamente cuando no consta. Una frase que sólo diga CUÁNDO deja que
+  // quien lee arrastre el autor de la afirmación hasta la edición, que es justo como la reescritura de otra persona
+  // acaba atribuida a quien afirmó.
+  const porQuienModifica = enmendador
+    ? ` por ${enmendador.kind === 'agent' ? `${enmendador.by} (agente)` : enmendador.by}`
+    : ' por un autor que la versión que la modificó no registró';
   const modificada =
     a.amendedAt !== undefined
-      ? ` Modificada el ${assertionDay(a.amendedAt)}${
+      ? ` Modificada el ${assertionDay(a.amendedAt)}${porQuienModifica}${
           revisiones.length
             ? `; ${
                 revisiones.length === 1
@@ -166,8 +173,8 @@ export const es: Messages = {
     cited: 'Citado:',
     revision: (r: RevisionText) =>
       `<li><code>${esc(r.claim)}</code>, vigente del ${esc(r.from)} al ${esc(r.to)}${
-        r.title ? ` — “${esc(r.title)}”` : ''
-      }${
+        r.by ? `, declarada por ${esc(r.by)}` : ''
+      }${r.title ? ` — “${esc(r.title)}”` : ''}${
         r.disputesFindingId ? ` (impugnaba <code>${esc(r.disputesFindingId)}</code>)` : ''
       }<div class="muted">${esc(r.rationale)}</div></li>`,
     historyLost: (when) =>
@@ -177,7 +184,7 @@ export const es: Messages = {
     history: (p) =>
       `<div class="history"><strong>Modificada el ${esc(p.when)}, sustituyendo ${
         p.items.length === 1 ? '1 afirmación anterior' : `${p.items.length} afirmaciones anteriores`
-      }.</strong> Una modificación añade; nunca sobrescribe. Lo que el autor declaró antes, y sobre qué base:<ol>${p.items.join(
+      }.</strong> Una modificación añade; nunca sobrescribe. Lo que se declaró antes, por quién y sobre qué base:<ol>${p.items.join(
         '',
       )}</ol></div>`,
     disputeTargetGone: (targetId) =>
@@ -288,11 +295,11 @@ export const es: Messages = {
     amendedSuperseding: (p) =>
       `- **Modificada el ${p.when}, sustituyendo ${
         p.count === 1 ? '1 afirmación anterior' : `${p.count} afirmaciones anteriores`
-      }.** Una modificación añade; nunca sobrescribe. Lo que el autor declaró antes, y sobre qué base — sustituido, y citado aquí sólo como historial:`,
+      }.** Una modificación añade; nunca sobrescribe. Lo que se declaró antes, por quién y sobre qué base — sustituido, y citado aquí sólo como historial:`,
     revision: (p) =>
       `  ${p.n}. \`${p.revision.claim}\`, vigente del ${p.revision.from} al ${p.revision.to}${
-        p.revision.title ? ` — “${p.revision.title}”` : ''
-      }${
+        p.revision.by ? `, declarada por ${p.revision.by}` : ''
+      }${p.revision.title ? ` — “${p.revision.title}”` : ''}${
         p.revision.disputesFindingId ? ` (impugnaba \`${p.revision.disputesFindingId}\`)` : ''
       }. Base dada en su momento: ${p.revision.rationale}`,
     emailHeading: 'Borrador de correo',

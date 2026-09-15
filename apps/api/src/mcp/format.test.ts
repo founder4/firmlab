@@ -559,6 +559,50 @@ describe('findingsPayload — amendment history is exposed, and never as a secon
     expect(h?.note).toMatch(/^HISTORY UNAVAILABLE/);
   });
 
+  it('names who amended, separately from who asserted, and names each retired claim’s author', () => {
+    const chained: StoredAssertion = {
+      ...amended,
+      amendedBy: 'claude',
+      amendedByKind: 'agent',
+      supersedes: [
+        // The original claim, exactly as the `amended` fixture stores it: no editor, because none introduced it.
+        {
+          claim: 'asserted_from_device',
+          rationale: 'Logged in on hardware rev B.',
+          title: 'Telnet root shell on the shipped unit',
+          from: 1_700_000_000_000,
+          supersededAt: 1_700_400_000_000,
+        },
+        {
+          claim: 'asserted_unverified',
+          rationale: 'Narrowed to the dev board.',
+          from: 1_700_400_000_000,
+          supersededAt: 1_700_500_000_000,
+          amendedBy: 'nadia',
+          amendedByKind: 'human',
+        },
+      ],
+    };
+    const row = findingsPayload(coverage(), [amendedRow(chained)]).operatorAssertions?.[0];
+    expect(row?.assertedBy).toBe('aaron');
+    expect(row?.amendmentHistory?.amendedBy).toBe('claude');
+    expect(row?.amendmentHistory?.amendedByKind).toBe('agent');
+    expect(row?.attribution).toMatch(/Amended 2023-11-20 by claude \(agent\)/);
+    // The first claim is the author's own and carries no editor; the middle one stays nadia's.
+    expect(row?.amendmentHistory?.supersededClaims[0]?.supersededClaimBy).toBeUndefined();
+    expect(row?.amendmentHistory?.supersededClaims[1]?.supersededClaimBy).toBe('nadia');
+    expect(row?.amendmentHistory?.supersededClaims[1]?.supersededClaimByKind).toBe('human');
+    // `selfAuthored` marks a row a model wrote, and an agent AMENDING a human's row is not that row.
+    expect(row?.selfAuthored).toBeUndefined();
+  });
+
+  it('reports an unrecorded amender on a legacy row instead of crediting the original author', () => {
+    const row = findingsPayload(coverage(), [amendedRow()]).operatorAssertions?.[0];
+    expect(row?.amendmentHistory?.amendedBy).toBe('unrecorded');
+    expect(row?.amendmentHistory?.amendedByKind).toBe('unrecorded');
+    expect(row?.attribution).not.toMatch(/Amended 2023-11-20 by aaron/);
+  });
+
   it('keeps a withdrawn assertion visible as withdrawn, with its history intact', () => {
     const retracted: StoredAssertion = {
       ...amended,

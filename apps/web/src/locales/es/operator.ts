@@ -67,6 +67,8 @@ export const operator: Messages['operator'] = {
     retyped:
       'Todos los campos volvieron idénticos a lo que ya está guardado. La pregunta se hizo y la respuesta es que la afirmación no cambia, así que no se registra ninguna revisión — que no es lo mismo que no haber editado nada.',
     who: 'Enmendando como',
+    unsigned:
+      'Indica quién hace esta enmienda. Se registra junto al autor original, no en su lugar: una edición sobre la afirmación de otra persona se te atribuye a ti, y la afirmación sigue atribuida a quien la hizo.',
   },
   withdraw: 'Retirar',
   withdrawnBadge: 'retirada',
@@ -93,6 +95,7 @@ export const operator: Messages['operator'] = {
     superseded: 'sustituida',
     claimNotRecorded: 'afirmación sin registrar',
     stood: (from: string, to: string) => `vigente de ${from} a ${to}`,
+    statedBy: (who: string) => `, declarada por ${who}`,
     contested: 'impugna',
     noBasis: 'No se registró ninguna base con esta revisión.',
   },

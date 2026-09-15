@@ -199,25 +199,48 @@ export function loadOperatorFinding(
   return { ok: true, row, assertion: JSON.parse(row.assertionJson) as OperatorAssertion };
 }
 
-/** Amend an active assertion. The original author and assertion time survive; `amendedAt` records the edit. */
-export function amendOperatorFinding(row: FindingRow, existing: OperatorAssertion, v: ValidatedAssertion): Finding {
+/**
+ * Amend an active assertion. The original author, author kind and assertion time survive untouched; the amendment
+ * records its OWN author beside them, because anyone may amend anyone's claim here.
+ *
+ * `authorKind` for the amender comes from the transport, exactly as it does on creation — the route reads the
+ * header, the body never gets a say. The evidence blob is rebuilt from the amended claim and carries the amender
+ * too, so a consumer dumping the findings table to JSON reads the same attribution as every rendered surface.
+ */
+export function amendOperatorFinding(
+  row: FindingRow,
+  existing: OperatorAssertion,
+  v: ValidatedAssertion,
+  amendedBy: string,
+  amendedByKind: OperatorAuthorKind,
+): { ok: true; finding: Finding } | { ok: false; error: string } {
   const now = Date.now();
-  const assertion = amendAssertion(existing, v, now);
+  const result = amendAssertion(existing, v, amendedBy, amendedByKind, now);
+  if (!result.ok) return result;
+  const assertion = result.value;
   const draft = assertionToDraft({ ...v, assertedBy: existing.assertedBy }, existing.authorKind, existing.assertedAt);
+  const evidenceJson = JSON.stringify({
+    ...(draft.evidence ?? {}),
+    amendedBy: assertion.amendedBy,
+    amendedByKind: assertion.amendedByKind,
+  });
   updateFindingAssertion(row.id, JSON.stringify(assertion), {
     title: v.title,
     severity: v.severity,
     rationale: v.rationale,
-    evidenceJson: JSON.stringify(draft.evidence ?? {}),
+    evidenceJson,
   });
-  return rowToFinding({
-    ...row,
-    title: v.title,
-    severity: v.severity,
-    rationale: v.rationale,
-    evidenceJson: JSON.stringify(draft.evidence ?? {}),
-    assertionJson: JSON.stringify(assertion),
-  });
+  return {
+    ok: true,
+    finding: rowToFinding({
+      ...row,
+      title: v.title,
+      severity: v.severity,
+      rationale: v.rationale,
+      evidenceJson,
+      assertionJson: JSON.stringify(assertion),
+    }),
+  };
 }
 
 /**

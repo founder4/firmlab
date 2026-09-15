@@ -337,6 +337,9 @@ describe('amending an assertion — the ledger gets a writer, and refuses a chan
     setLocale('en');
     mockedApi(api).operatorLedger.mockResolvedValue({ assertions: [assertion], withdrawn: [] });
     mockedApi(api).notes.mockResolvedValue([]);
+    // Cleared, not just re-stubbed: a `not.toHaveBeenCalled()` that only passes because it runs before the tests
+    // that DO call is an assertion about file order, not about the form.
+    mockedApi(api).amendAssertion.mockClear();
     mockedApi(api).amendAssertion.mockResolvedValue(undefined as never);
   });
 
@@ -379,6 +382,7 @@ describe('amending an assertion — the ledger gets a writer, and refuses a chan
     render(<OperatorPanel imageId="abc" />);
     fireEvent.click(await screen.findByText('Amend'));
     await screen.findByTestId('amend-f1');
+    fireEvent.change(screen.getByLabelText('amend-by'), { target: { value: 'nadia' } });
     fireEvent.change(screen.getByLabelText('amend-rationale'), { target: { value: '  I re-read it: it ships.  ' } });
     fireEvent.change(screen.getByLabelText('amend-severity'), { target: { value: 'high' } });
     expect(document.querySelector('[data-role="changing"]')?.textContent).toMatch(/rationale, severity/);
@@ -392,6 +396,89 @@ describe('amending an assertion — the ledger gets a writer, and refuses a chan
     expect(findingId).toBe('f1');
     expect(body.rationale).toBe('I re-read it: it ships.');
     expect(body.severity).toBe('high');
+  });
+
+  /**
+   * The panel is driven BY somebody, and that somebody is not necessarily the author of the row they are editing.
+   * The form asks who is amending, sends it, and sends no author kind at all — the transport stamps that, and a
+   * body that offered one would be ignored.
+   */
+  it('sends the amender’s name, which is not the asserter’s, and never an author kind', async () => {
+    render(<OperatorPanel imageId="abc" />);
+    fireEvent.click(await screen.findByText('Amend'));
+    await screen.findByTestId('amend-f1');
+    fireEvent.change(screen.getByLabelText('amend-by'), { target: { value: '  nadia  ' } });
+    fireEvent.change(screen.getByLabelText('amend-rationale'), { target: { value: 'It was the dev board.' } });
+    fireEvent.click(screen.getByText('Save amendment'));
+    await waitFor(() => expect(mockedApi(api).amendAssertion).toHaveBeenCalled());
+    const [, , body] = mockedApi(api).amendAssertion.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(body.amendedBy).toBe('nadia');
+    expect(body.assertedBy).toBeUndefined();
+    expect(body.authorKind).toBeUndefined();
+    expect(body.amendedByKind).toBeUndefined();
+  });
+
+  it('refuses a real edit that nobody signed, and says what the record needs rather than naming a field', async () => {
+    render(<OperatorPanel imageId="abc" />);
+    fireEvent.click(await screen.findByText('Amend'));
+    await screen.findByTestId('amend-f1');
+    fireEvent.change(screen.getByLabelText('amend-rationale'), { target: { value: 'It was the dev board.' } });
+    // A real change, so this is not the untouched refusal — it is the unsigned one, which reads differently.
+    expect(document.querySelector('[data-role="refusal-unsigned"]')).toBeTruthy();
+    expect(document.querySelector('[data-role="refusal-untouched"]')).toBeNull();
+    expect(screen.getByText(/recorded beside the original author/)).toBeTruthy();
+    expect(screen.getByText('Save amendment').getAttribute('disabled')).not.toBeNull();
+    fireEvent.click(screen.getByText('Save amendment'));
+    expect(mockedApi(api).amendAssertion).not.toHaveBeenCalled();
+    // Whitespace is not a signature either.
+    fireEvent.change(screen.getByLabelText('amend-by'), { target: { value: '   ' } });
+    expect(document.querySelector('[data-role="refusal-unsigned"]')).toBeTruthy();
+  });
+
+  it('prefills the amender from who the panel is being driven as, not from the row’s author', async () => {
+    render(<OperatorPanel imageId="abc" />);
+    fireEvent.change(screen.getByLabelText('Who is asserting this'), { target: { value: 'nadia' } });
+    fireEvent.click(await screen.findByText('Amend'));
+    await screen.findByTestId('amend-f1');
+    expect((screen.getByLabelText('amend-by') as HTMLInputElement).value).toBe('nadia');
+  });
+
+  it('attributes each superseded claim to whoever stated it, and credits nobody when it is unrecorded', async () => {
+    mockedApi(api).operatorLedger.mockResolvedValue({
+      assertions: [
+        {
+          ...assertion,
+          attribution: 'Asserted by aaron on 2026-07-30 (asserted_from_device). Amended 2026-08-02 by claude (agent)',
+          assertion: {
+            ...assertion.assertion,
+            amendedAt: 1_780_300_000_000,
+            amendedBy: 'claude',
+            amendedByKind: 'agent' as const,
+            supersedes: [
+              { claim: 'asserted_from_device' as const, rationale: 'the first wording', from: 1, supersededAt: 2 },
+              {
+                claim: 'asserted_unverified' as const,
+                rationale: 'the second wording',
+                from: 2,
+                supersededAt: 3,
+                amendedBy: 'nadia',
+                amendedByKind: 'human' as const,
+              },
+            ],
+          },
+        },
+      ],
+      withdrawn: [],
+    });
+    render(<OperatorPanel imageId="abc" />);
+    // The attribution sentence is the API's, so the panel cannot word the amender differently from the report.
+    await waitFor(() => expect(screen.getByText(/Amended 2026-08-02 by claude \(agent\)/)).toBeTruthy());
+    fireEvent.click(screen.getByText(/show 2 superseded claims/));
+    expect(screen.getByText(/stated by nadia/)).toBeTruthy();
+    // The first claim is the author's own: no editor introduced it, so none is named.
+    const items = Array.from(document.querySelectorAll('li'));
+    const firstItem = items.find((li) => li.textContent?.includes('the first wording'));
+    expect(firstItem?.textContent).not.toMatch(/stated by/);
   });
 
   it('does NOT offer amending on the withdrawn ledger, which is history and stands as written', async () => {

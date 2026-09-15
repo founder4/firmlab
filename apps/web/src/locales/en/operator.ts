@@ -73,6 +73,12 @@ export const operator = {
     retyped:
       'Every field came back identical to what is already stored. The question was asked and the answer is that the claim does not change, so no revision is recorded — that is not the same as having edited nothing.',
     who: 'Amending as',
+    /**
+     * The third way an amendment cannot be sent, and the only one that is about the author rather than the diff:
+     * a real edit with nobody signing it. Worded as what the record needs, not as a missing form field.
+     */
+    unsigned:
+      'Name who is making this amendment. It is recorded beside the original author, not instead of them — an edit to someone else\u2019s claim is attributed to you, and their claim stays attributed to them.',
   },
   withdraw: 'Withdraw',
   withdrawnBadge: 'withdrawn',
@@ -101,6 +107,8 @@ export const operator = {
     superseded: 'superseded',
     claimNotRecorded: 'claim not recorded',
     stood: (from: string, to: string) => `stood from ${from} to ${to}`,
+    /** Only rendered when an amendment is on record as having stated it; absence is not attributed to anyone. */
+    statedBy: (who: string) => `, stated by ${who}`,
     contested: 'contested',
     noBasis: 'No basis was recorded with this revision.',
   },

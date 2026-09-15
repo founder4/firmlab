@@ -82,9 +82,16 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   busybox 1.18.4; la tabla curada de `component-cve.ts` la rechaza porque NVD la respalda con un rango abierto
   sin CPE enumerado. Cada fila nombra su fuente, pero qué estándar aplica es hoy un accidente de qué proveedor
   corrió.
-- [ ] Una enmienda a una afirmación de operador no registra autor, mientras que una retirada sí — se puede
+- [x] Una enmienda a una afirmación de operador no registra autor, mientras que una retirada sí — se puede
   reescribir la afirmación de otra persona y el libro mayor atribuye la redacción nueva al autor original. En la
-  única superficie cuyo propósito es la procedencia.
+  única superficie cuyo propósito es la procedencia. *(Hecho: `amendedBy`/`amendedByKind` en `OperatorAssertion` y
+  en cada revisión superada, el nombre desde el cuerpo como en `withdrawnBy` y el tipo desde el transporte como en
+  el alta. `assertedBy` no se reasigna nunca, las filas antiguas dicen «autor sin registrar» en vez de acreditar al
+  autor original, y la atribución se renderiza igual en API, MCP, informe, divulgación y panel.)*
+
+- [ ] Una retirada registra `withdrawnBy` pero no el TIPO de autor, mientras que el alta y la enmienda sí lo
+  estampan desde el transporte: hoy no se distingue «un agente retiró la afirmación de una persona» de «la retiró
+  una persona». Es el último de los tres actos del libro mayor al que le falta la mitad de la atribución.
 
 ## Ideas evaluadas, no programadas (de la revisión de wairz)
 

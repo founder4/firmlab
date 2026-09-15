@@ -137,6 +137,9 @@ function revisionLine(r: AssertionRevision, n: number, t: Messages): string {
       rationale: r.rationale,
       title: r.title,
       disputesFindingId: r.disputesFindingId,
+      // Only when an editor is on record. Absent means the original author stated it, and naming anyone else there
+      // would put a vendor's reader in front of an attribution nobody made.
+      by: r.amendedBy ? (r.amendedByKind === 'agent' ? t.ledger.agentAuthor(r.amendedBy) : r.amendedBy) : undefined,
     },
   });
 }

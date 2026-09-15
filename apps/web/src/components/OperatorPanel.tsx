@@ -168,6 +168,14 @@ function AssertionHistory({ a }: { a: OperatorAssertion | undefined }): JSX.Elem
                 </span>{' '}
                 <span style={{ color: 'var(--text-dim)' }}>
                   {t.operator.history.stood(day(r.from), day(r.supersededAt))}
+                  {/* Only when an amendment is on record as having introduced this claim. Absent means the
+                      original author stated it, and naming the current one there would be the attribution this
+                      whole record exists to prevent. */}
+                  {r.amendedBy
+                    ? t.operator.history.statedBy(
+                        r.amendedByKind === 'agent' ? `${r.amendedBy}${t.findings.agentSuffix}` : r.amendedBy,
+                      )
+                    : ''}
                 </span>
                 {r.title ? <div style={{ marginTop: 2 }}>“{r.title}”</div> : null}
                 {r.disputesFindingId ? (
@@ -199,14 +207,18 @@ function AmendForm({
   onDone,
   onError,
   imageId,
+  defaultWho,
 }: {
   f: AssertedFinding;
   onCancel: () => void;
   onDone: () => void;
   onError: (m: string) => void;
   imageId: string;
+  /** Who the panel is being driven as, prefilled — never `f.assertion.assertedBy`, which is a different person. */
+  defaultWho: string;
 }): JSX.Element {
   const t = useMessages();
+  const [amendedBy, setAmendedBy] = useState(defaultWho);
   const current: AmendableFields = {
     title: f.title,
     claim: f.assertion?.claim ?? 'asserted_unverified',
@@ -223,7 +235,9 @@ function AmendForm({
   };
 
   const diff = diffAmendment(current, next, touched);
-  const sendable = amendmentIsSendable(diff);
+  // The API refuses an unnamed amendment, so the button does too — and for the same reason, not as UI politeness:
+  // an edit to a named person's claim has to say who made it.
+  const sendable = amendmentIsSendable(diff) && amendedBy.trim().length > 0;
 
   const save = async (): Promise<void> => {
     if (!sendable) return;
@@ -234,6 +248,7 @@ function AmendForm({
         claim: next.claim as OperatorClaim,
         rationale: next.rationale.trim(),
         severity: next.severity as Finding['severity'],
+        amendedBy: amendedBy.trim(),
       });
       onDone();
     } catch (e) {
@@ -249,6 +264,10 @@ function AmendForm({
       <span className="hint" style={{ maxWidth: '72ch' }}>
         {t.operator.amend.intro}
       </span>
+      <label style={{ display: 'grid', gap: 4 }}>
+        <span className="hint">{t.operator.amend.who}</span>
+        <input value={amendedBy} onChange={(e) => setAmendedBy(e.target.value)} aria-label="amend-by" />
+      </label>
       <label style={{ display: 'grid', gap: 4 }}>
         <span className="hint">{t.operator.amend.fields.title}</span>
         <input value={next.title} onChange={(e) => set('title', e.target.value)} aria-label="amend-title" />
@@ -288,15 +307,19 @@ function AmendForm({
         <span className="mono" data-role="changing" style={{ fontSize: 11.5 }}>
           {t.operator.amend.changing(describeChangedFields(diff))}
         </span>
+      ) : amendmentIsSendable(diff) ? (
+        <span className="hint" data-role="refusal-unsigned" style={{ maxWidth: '72ch' }}>
+          {t.operator.amend.unsigned}
+        </span>
       ) : (
         <span className="hint" data-role={`refusal-${diff.refusal}`} style={{ maxWidth: '72ch' }}>
           {diff.refusal === 'retyped' ? t.operator.amend.retyped : t.operator.amend.untouched}
         </span>
       )}
       <div style={{ display: 'flex', gap: 8 }}>
-        {/* Gated on the DIFF alone. An earlier version also required an author here and that was wrong twice: the
-            amend route deliberately does not accept one — `assertedBy` is carried over so an edit cannot reassign
-            authorship — and requiring it disabled the button for no reason the API asks for. */}
+        {/* Gated on the diff AND on an author. The author is the amender, not the asserter: `assertedBy` is still
+            carried over by the route so an edit cannot reassign the original claim, and `amendedBy` is recorded
+            beside it so the edit is attributed to whoever actually made it. */}
         <button type="button" className="btn btn-sm" disabled={!sendable || busy} onClick={() => void save()}>
           {t.operator.amend.save}
         </button>
@@ -322,6 +345,8 @@ function AssertionTable({
     setOpenFor: (id: string | null) => void;
     onDone: () => void;
     onError: (m: string) => void;
+    /** Who the panel is being driven as, used to prefill the amendment's author. */
+    who: string;
   };
 }): JSX.Element {
   const t = useMessages();
@@ -352,6 +377,7 @@ function AssertionTable({
                   <AmendForm
                     f={f}
                     imageId={amend.imageId}
+                    defaultWho={amend.who}
                     onCancel={() => amend.setOpenFor(null)}
                     onDone={() => {
                       amend.setOpenFor(null);
@@ -588,6 +614,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
               setOpenFor: setAmendOpen,
               onDone: load,
               onError: setErr,
+              who: assertedBy,
             }}
           />
         ) : (
