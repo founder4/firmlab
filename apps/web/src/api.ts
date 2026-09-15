@@ -734,6 +734,12 @@ export interface OperatorAssertion {
   status: 'active' | 'withdrawn';
   disputesFindingId?: string;
   withdrawnBy?: string;
+  /**
+   * Over which transport it was retracted. Absent means NOT RECORDED, and unlike `amendedByKind` that case is
+   * ordinary rather than historical: `withdrawnBy` predates this field, so every row retracted by an older build
+   * has the name and not the kind. Rendering the gap as "human" would state the very thing that was not recorded.
+   */
+  withdrawnByKind?: 'human' | 'agent';
   withdrawnAt?: number;
   withdrawnReason?: string;
   amendedAt?: number;

@@ -89,9 +89,14 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   el alta. `assertedBy` no se reasigna nunca, las filas antiguas dicen «autor sin registrar» en vez de acreditar al
   autor original, y la atribución se renderiza igual en API, MCP, informe, divulgación y panel.)*
 
-- [ ] Una retirada registra `withdrawnBy` pero no el TIPO de autor, mientras que el alta y la enmienda sí lo
+- [x] Una retirada registra `withdrawnBy` pero no el TIPO de autor, mientras que el alta y la enmienda sí lo
   estampan desde el transporte: hoy no se distingue «un agente retiró la afirmación de una persona» de «la retiró
   una persona». Es el último de los tres actos del libro mayor al que le falta la mitad de la atribución.
+  *(Hecho: `withdrawnByKind` en `OperatorAssertion`, el nombre desde el cuerpo y el tipo desde el transporte como en
+  el alta y la enmienda. `withdrawalAuthor` devuelve un tercer estado — `kind: null` — porque `withdrawnBy` es
+  anterior al campo y toda retirada vieja lleva nombre sin tipo: colapsarlo a `human`, como hace `amendmentAuthor`
+  sin riesgo por haber nacido con su par, afirmaría justo lo que nadie registró. Se renderiza igual en API, MCP,
+  informe, divulgación y panel, y la procedencia del alta y de la enmienda no se toca.)*
 
 ## Ideas evaluadas, no programadas (de la revisión de wairz)
 

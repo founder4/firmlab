@@ -207,7 +207,12 @@ describe('buildDisclosureReport — a contested finding says so where the vendor
       ...base,
       findings: [
         measured(),
-        contesting({ status: 'withdrawn', withdrawnBy: 'aaron', withdrawnReason: 'I was reading the wrong build' }),
+        contesting({
+          status: 'withdrawn',
+          withdrawnBy: 'aaron',
+          withdrawnByKind: 'human',
+          withdrawnReason: 'I was reading the wrong build',
+        }),
       ],
     });
     expect(md).not.toMatch(/CONTESTED BY AN OPERATOR/);
@@ -218,6 +223,28 @@ describe('buildDisclosureReport — a contested finding says so where the vendor
     // withheld, so a retracted contest names its former target with its own sentence.
     expect(md).toMatch(/\*\*Contested until withdrawn:\*\* “Hardcoded root password in \/etc\/shadow”/);
     expect(md).toMatch(/carries no contest annotation above/);
+  });
+
+  it('names an agent retractor, and says so when the kind was never recorded', () => {
+    const byAgent = buildDisclosureReport({
+      ...base,
+      findings: [
+        measured(),
+        contesting({
+          status: 'withdrawn',
+          withdrawnBy: 'opacidad',
+          withdrawnByKind: 'agent',
+          withdrawnReason: 'Re-ran the probe',
+        }),
+      ],
+    });
+    expect(byAgent).toMatch(/WITHDRAWN by opacidad \(agent\)/);
+    // A row retracted before the kind was stamped: a vendor reads "not recorded", never "a person did it".
+    const legacy = buildDisclosureReport({
+      ...base,
+      findings: [measured(), contesting({ status: 'withdrawn', withdrawnBy: 'aaron', withdrawnReason: 'wrong build' })],
+    });
+    expect(legacy).toMatch(/WITHDRAWN by aaron \(author kind not recorded\)/);
   });
 
   it('says plainly when the contested finding is no longer in the ledger', () => {
@@ -336,7 +363,12 @@ describe('buildDisclosureReport — the draft composes in Spanish without transl
         ...base,
         findings: [
           measured(),
-          contesting({ status: 'withdrawn', withdrawnBy: 'aaron', withdrawnReason: 'I was reading the wrong build' }),
+          contesting({
+            status: 'withdrawn',
+            withdrawnBy: 'aaron',
+            withdrawnByKind: 'human',
+            withdrawnReason: 'I was reading the wrong build',
+          }),
         ],
       },
       'es',

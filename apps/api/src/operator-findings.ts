@@ -474,10 +474,15 @@ export function revisionsOf(a: OperatorAssertion | StoredAssertion): AssertionRe
  * Withdrawal is first-class and destructive nowhere: the row, its original author, its original rationale and the
  * reason for the retraction all survive. `who` is recorded separately from `assertedBy` because "the author
  * retracted it" and "someone else overrode it" are different events and a reader needs to tell them apart.
+ *
+ * `kind` completes that pair, and the two halves come from deliberately different sources for the same reason they
+ * do on creation and on amendment: a name is something a caller states, a kind is something the seam knows. A
+ * request cannot sign its retraction as human.
  */
 export function withdrawAssertion(
   existing: OperatorAssertion,
   who: string,
+  kind: OperatorAuthorKind,
   reason: string,
   now: number,
 ): { ok: true; value: OperatorAssertion } | { ok: false; error: string } {
@@ -494,8 +499,30 @@ export function withdrawAssertion(
   if (existing.status === 'withdrawn') return { ok: false, error: 'This assertion is already withdrawn.' };
   return {
     ok: true,
-    value: { ...existing, status: 'withdrawn', withdrawnBy: by, withdrawnAt: now, withdrawnReason: why },
+    value: {
+      ...existing,
+      status: 'withdrawn',
+      withdrawnBy: by,
+      withdrawnByKind: kind,
+      withdrawnAt: now,
+      withdrawnReason: why,
+    },
   };
+}
+
+/**
+ * Pure: who retracted a claim and by which transport, or null when nothing is on record.
+ *
+ * `kind: null` is a THIRD state, not a missing one, and it is the reason this returns a shape rather than a
+ * string: a row withdrawn before `withdrawnByKind` existed carries a name with no kind, and `amendmentAuthor`'s
+ * `=== 'agent' ? 'agent' : 'human'` collapse would read every one of those as a person retracting. That collapse
+ * is safe there only because `amendedBy` and `amendedByKind` were added together and never occur apart. Here they
+ * do occur apart, so every caller has to word "not recorded" for itself.
+ */
+export function withdrawalAuthor(a: OperatorAssertion): { by: string; kind: OperatorAuthorKind | null } | null {
+  const by = typeof a.withdrawnBy === 'string' ? a.withdrawnBy.trim() : '';
+  if (!by) return null;
+  return { by, kind: a.withdrawnByKind === 'agent' || a.withdrawnByKind === 'human' ? a.withdrawnByKind : null };
 }
 
 /** The shape every partitioning caller needs — deliberately structural, so web/API/MCP types all satisfy it. */
@@ -563,7 +590,16 @@ export function describeAssertion(a: OperatorAssertion): string {
         }`
       : '';
   if (a.status === 'withdrawn') {
-    const byWhom = a.withdrawnBy ?? 'unknown';
+    const retractor = withdrawalAuthor(a);
+    // Same rule as the amendment sentence one line up: the kind is stated, and stated as unrecorded when it is.
+    // A bare name here lets a reader take an agent's retraction of somebody else's claim for a person's.
+    const byWhom = retractor
+      ? retractor.kind === 'agent'
+        ? `${retractor.by} (agent)`
+        : retractor.kind === 'human'
+          ? retractor.by
+          : `${retractor.by} (author kind not recorded)`
+      : 'unknown';
     return `WITHDRAWN by ${byWhom}: ${a.withdrawnReason ?? 'no reason recorded'} — originally asserted by ${who} on ${when}.${amended}`;
   }
   return `Asserted by ${who} on ${when} (${a.claim}). ${CLAIM_MEANING[a.claim]}${amended}`;

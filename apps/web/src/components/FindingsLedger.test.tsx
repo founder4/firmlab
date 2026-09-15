@@ -149,15 +149,39 @@ describe('FindingsLedger — a retraction is readable without a click', () => {
   it('names the reason and the person who withdrew it, on the row itself', () => {
     render(
       <FindingsLedger
-        findings={[withdrawn({ withdrawnBy: 'aaron', withdrawnReason: 'I was reading the wrong build' })]}
+        findings={[
+          withdrawn({
+            withdrawnBy: 'aaron',
+            withdrawnByKind: 'human',
+            withdrawnReason: 'I was reading the wrong build',
+          }),
+        ]}
       />,
     );
     expect(screen.getByText(/withdrawn by aaron:/)).toBeTruthy();
     expect(screen.getByText(/I was reading the wrong build/)).toBeTruthy();
   });
 
+  it('marks an agent that retracted a person’s claim, so the two acts do not read alike', () => {
+    render(
+      <FindingsLedger
+        findings={[
+          withdrawn({ withdrawnBy: 'opacidad', withdrawnByKind: 'agent', withdrawnReason: 'the port was never open' }),
+        ]}
+      />,
+    );
+    expect(screen.getByText(/withdrawn by opacidad \(agent\):/)).toBeTruthy();
+  });
+
+  it('says the KIND was not recorded on a row retracted before the API stamped it', () => {
+    // A name and no kind is what every retraction written by an older build looks like. Rendering the bare name
+    // would state that a person did it, which is exactly what nobody wrote down.
+    render(<FindingsLedger findings={[withdrawn({ withdrawnBy: 'aaron', withdrawnReason: 'wrong build' })]} />);
+    expect(screen.getByText(/withdrawn by aaron \(author kind not recorded\):/)).toBeTruthy();
+  });
+
   it('says a retraction recorded no reason, rather than looking like no retraction', () => {
-    render(<FindingsLedger findings={[withdrawn({ withdrawnBy: 'aaron' })]} />);
+    render(<FindingsLedger findings={[withdrawn({ withdrawnBy: 'aaron', withdrawnByKind: 'human' })]} />);
     expect(screen.getByText(/withdrawn by aaron — no reason was recorded/)).toBeTruthy();
   });
 

@@ -256,6 +256,17 @@ export interface OperatorAssertion {
   /** Set only for `disputes_finding`: the code-decided finding this assertion contradicts. */
   disputesFindingId?: string;
   withdrawnBy?: string;
+  /**
+   * Which transport retracted it, stamped the way `authorKind` and `amendedByKind` are — so "an agent withdrew a
+   * person's claim" and "a person withdrew it" stop reading identically. It is the third and last act of the
+   * ledger, and until this field existed it was the only one carrying half its attribution.
+   *
+   * Optional forever, and absent means NOT RECORDED. That case is not hypothetical here the way it is for
+   * `amendedByKind`: `withdrawnBy` has been required since withdrawal existed, so every row retracted before this
+   * field carries a NAME and no kind. Defaulting it to `human` would therefore not be a shrug — it would assert,
+   * of every legacy retraction, the exact fact this field was added to record.
+   */
+  withdrawnByKind?: OperatorAuthorKind;
   withdrawnAt?: number;
   /** Why it was retracted — the part a deletion would have thrown away. */
   withdrawnReason?: string;

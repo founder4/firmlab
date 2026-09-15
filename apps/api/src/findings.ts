@@ -252,9 +252,10 @@ export function withdrawOperatorFinding(
   row: FindingRow,
   existing: OperatorAssertion,
   who: string,
+  kind: OperatorAuthorKind,
   reason: string,
 ): { ok: true; finding: Finding } | { ok: false; error: string } {
-  const result = withdrawAssertion(existing, who, reason, Date.now());
+  const result = withdrawAssertion(existing, who, kind, reason, Date.now());
   if (!result.ok) return result;
   updateFindingAssertion(row.id, JSON.stringify(result.value), {});
   return { ok: true, finding: rowToFinding({ ...row, assertionJson: JSON.stringify(result.value) }) };

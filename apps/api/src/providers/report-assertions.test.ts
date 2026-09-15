@@ -289,6 +289,30 @@ describe('a withdrawn assertion stays visible as withdrawn', () => {
     expect(out).toContain('No assertion currently stands');
     expect(out).toContain('Could not reproduce');
   });
+
+  it('names the retractor kind the same way the asserting author is named', () => {
+    const byAgent: ReportFinding = {
+      ...assertedRow('w2'),
+      assertion: {
+        ...valid().assertion,
+        status: 'withdrawn',
+        withdrawnBy: 'opacidad',
+        withdrawnByKind: 'agent',
+        withdrawnAt: DAY,
+        withdrawnReason: 'Re-ran the probe; the port was never open.',
+      },
+    };
+    const out = renderLedgerSections([byAgent]).operator;
+    expect(out).toContain('WITHDRAWN by opacidad (agent)');
+    // The author of the claim is a human and stays one — the retraction does not repaint the assertion.
+    expect(out).toContain('originally asserted by aaron');
+  });
+
+  it('marks a retraction from before the field as unrecorded rather than showing it as a person', () => {
+    const out = renderLedgerSections([withdrawn]).operator;
+    expect(out).toContain('WITHDRAWN by reviewer (author kind not recorded)');
+    expect(out).not.toContain('reviewer (agent)');
+  });
 });
 
 describe('the empty cases', () => {
@@ -445,9 +469,27 @@ describe('an assertion reads as testimony in Spanish too', () => {
     };
     const out = renderLedgerSections([withdrawn], 'es').operator;
     expect(out).toContain('Afirmaciones retiradas (1)');
-    expect(out).toContain('RETIRADA por reviewer');
+    // Sin tipo registrado: se dice que no consta, no se le atribuye a una persona.
+    expect(out).toContain('RETIRADA por reviewer (tipo de autor sin registrar)');
     expect(out).toContain('Could not reproduce on three further units.');
     expect(out).toContain('retirado · no medido');
+  });
+
+  it('nombra en español al agente que retira la afirmación de una persona', () => {
+    const withdrawn: ReportFinding = {
+      ...assertedRow('w11'),
+      assertion: {
+        ...valid().assertion,
+        status: 'withdrawn',
+        withdrawnBy: 'opacidad',
+        withdrawnByKind: 'agent',
+        withdrawnAt: DAY,
+        withdrawnReason: 'La sonda no encontró el puerto abierto.',
+      },
+    };
+    const out = renderLedgerSections([withdrawn], 'es').operator;
+    expect(out).toContain('RETIRADA por opacidad (agente)');
+    expect(out).toContain('afirmada originalmente por aaron');
   });
 
   it('renders an amendment and its superseded claim in Spanish, keeping both claim codes verbatim', () => {

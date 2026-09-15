@@ -148,6 +148,10 @@ export async function operatorRoutes(app: FastifyInstance): Promise<void> {
    * Withdraw an assertion. The row stays; it is excluded from every count and rendered as retracted, with who
    * retracted it and why. `docs/BACKLOG.md` holds an entry withdrawn because it had been written from a filename
    * without opening the file — a ledger that could only delete would have kept the wrong claim or lost the lesson.
+   *
+   * Split the same way creation and amendment are: `withdrawnBy` is a name the body states, its KIND is stamped
+   * from the transport, and the body has no say in the second — the three acts of this ledger now record the same
+   * two halves of an author, from the same two sources.
    */
   app.post('/images/:id/operator-findings/:findingId/withdraw', async (req, reply) => {
     const { id, findingId } = req.params as { id: string; findingId: string };
@@ -159,6 +163,7 @@ export async function operatorRoutes(app: FastifyInstance): Promise<void> {
       loaded.row,
       loaded.assertion,
       typeof body.withdrawnBy === 'string' ? body.withdrawnBy : '',
+      authorKindOf(req.headers as Record<string, unknown>),
       typeof body.reason === 'string' ? body.reason : '',
     );
     if (!result.ok) return reply.status(400).send({ error: result.error });

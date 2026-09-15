@@ -121,6 +121,7 @@ export const findings: Messages['findings'] = {
   withdrawnBecause: (who: string) => `retirada por ${who}:`,
   withdrawnNoReason: (who: string) => `retirada por ${who} — no se registró motivo.`,
   withdrawnUnknownBy: 'un autor no registrado',
+  unrecordedKindSuffix: ' (tipo de autor sin registrar)',
   whyWithdrawn: 'Por qué este estado — de la afirmación que se retiró',
   unrecordedAuthor: 'un autor sin registrar',
   unrecordedDate: 'una fecha sin registrar',

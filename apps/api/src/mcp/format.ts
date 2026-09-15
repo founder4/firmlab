@@ -53,6 +53,7 @@ import {
   indexDisputes,
   partitionByProvenance,
   revisionsOf,
+  withdrawalAuthor,
 } from '../operator-findings.js';
 
 /** A finding as the API serves it (the fields that matter for the agent boundary). */
@@ -273,6 +274,16 @@ export interface McpAssertedFinding {
   /** Set on agent-authored rows — the ones a model is at risk of citing back to itself. */
   selfAuthored?: boolean;
   withdrawn?: boolean;
+  /**
+   * Who retracted it, present iff `withdrawn`. Reported as structured fields and not left to be read out of
+   * `attribution`, for the same reason `amendedBy` is: a retractor is not necessarily the author, and a model
+   * asked to infer that from prose will infer `assertedBy`.
+   *
+   * `unrecorded` is a real value for the kind, not a filler. It is what every row retracted before the field
+   * existed carries, and it is emitted rather than the field being omitted so the gap cannot be read as `human`.
+   */
+  withdrawnBy?: string;
+  withdrawnByKind?: string;
   /** Which computed row this assertion contests, set only for `claim: 'disputes_finding'`. */
   contestsFinding?: { findingId: string; stillInLedger: boolean; note: string };
   /** Present iff this claim replaced an earlier one. Absent means never amended — including on an older row. */
@@ -297,6 +308,18 @@ function amenderFields(a: OperatorAssertion): { amendedBy: string; amendedByKind
   return amender
     ? { amendedBy: amender.by, amendedByKind: amender.kind }
     : { amendedBy: 'unrecorded', amendedByKind: 'unrecorded' };
+}
+
+/**
+ * The retractor, shaped for a payload. The name and the kind go missing independently — a legacy row has the
+ * first and not the second — so each one says `unrecorded` on its own rather than the pair being dropped together.
+ */
+function retractorFields(a: OperatorAssertion): { withdrawnBy: string; withdrawnByKind: string } {
+  const retractor = withdrawalAuthor(a);
+  return {
+    withdrawnBy: retractor?.by ?? 'unrecorded',
+    withdrawnByKind: retractor?.kind ?? 'unrecorded',
+  };
 }
 
 /**
@@ -363,7 +386,7 @@ function shapeAssertion(f: McpFinding, ledgerIds: ReadonlySet<string>): McpAsser
     attribution: a ? describeAssertion(a) : 'Asserted by an unrecorded author.',
     ...(f.rationale ? { rationale: f.rationale } : {}),
     ...(isAgent ? { selfAuthored: true } : {}),
-    ...(a?.status === 'withdrawn' ? { withdrawn: true } : {}),
+    ...(a?.status === 'withdrawn' ? { withdrawn: true, ...retractorFields(a) } : {}),
     ...(target
       ? { contestsFinding: { findingId: target, stillInLedger: ledgerIds.has(target), note: contestNote } }
       : {}),

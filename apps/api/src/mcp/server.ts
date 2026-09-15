@@ -575,7 +575,12 @@ export function buildServer(fl: FirmLabClient): McpServer {
       inputSchema: {
         imageId: z.string(),
         findingId: z.string().describe('The assertion id returned by firmlab_record_assertion'),
-        withdrawnBy: z.string().describe('Who is retracting it'),
+        withdrawnBy: z
+          .string()
+          .describe(
+            'Who is retracting it — name yourself. The NAME is yours to state; the author KIND is stamped by the ' +
+              'transport, so this retraction is recorded as made by an agent whatever name you give.',
+          ),
         reason: z.string().describe('Why it no longer stands. Required'),
       },
     },

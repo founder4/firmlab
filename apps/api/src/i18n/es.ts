@@ -25,7 +25,7 @@
  * — mientras que el título y el fundamento de un hallazgo se muestran tal cual se registraron.
  */
 import type { OperatorAssertion, OperatorClaim } from '@firmlab/core';
-import { amendmentAuthor, assertionDay, revisionsOf } from '../operator-findings.js';
+import { amendmentAuthor, assertionDay, revisionsOf, withdrawalAuthor } from '../operator-findings.js';
 import type { Messages, RevisionText } from './en.js';
 import { escapeHtml as esc } from './escape.js';
 
@@ -76,7 +76,16 @@ function describirAfirmacion(a: OperatorAssertion): string {
         }`
       : '';
   if (a.status === 'withdrawn') {
-    const porQuien = a.withdrawnBy ?? 'desconocido';
+    const retirador = withdrawalAuthor(a);
+    // Igual que la frase de la enmienda: se dice el tipo de autor, y se dice que no consta cuando no consta. Un
+    // nombre a secas deja leer la retirada hecha por un agente como si la hubiera hecho una persona.
+    const porQuien = retirador
+      ? retirador.kind === 'agent'
+        ? `${retirador.by} (agente)`
+        : retirador.kind === 'human'
+          ? retirador.by
+          : `${retirador.by} (tipo de autor sin registrar)`
+      : 'desconocido';
     return `RETIRADA por ${porQuien}: ${
       a.withdrawnReason ?? 'sin motivo registrado'
     } — afirmada originalmente por ${quien} el ${cuando}.${modificada}`;

@@ -159,6 +159,11 @@ export const findings = {
   withdrawnBecause: (who: string) => `withdrawn by ${who}:`,
   withdrawnNoReason: (who: string) => `withdrawn by ${who} — no reason was recorded.`,
   withdrawnUnknownBy: 'an unrecorded author',
+  /**
+   * Suffixes a named author whose KIND was not recorded — a row retracted before the API stamped it. Neither a
+   * bare name nor the agent suffix: the first reads as a person, the second states what nobody wrote down.
+   */
+  unrecordedKindSuffix: ' (author kind not recorded)',
   /** Labels the expanded cell of a retracted row, so its reasoning is not read as a standing argument. */
   whyWithdrawn: 'Why this state — for the claim that was retracted',
   /** Honest blanks: a row may carry no author and a revision no timestamp, and neither may be invented. */

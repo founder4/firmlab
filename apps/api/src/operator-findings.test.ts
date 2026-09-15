@@ -15,6 +15,7 @@ import {
   revisionsOf,
   validateAssertion,
   withdrawAssertion,
+  withdrawalAuthor,
 } from './operator-findings.js';
 
 const good = {
@@ -140,7 +141,13 @@ describe('withdrawal is first-class', () => {
   const base = assertionToDraft(assertOk(good), 'human', 1_700_000_000_000).assertion;
 
   it('keeps the claim, its author and its original basis while retracting it', () => {
-    const r = withdrawAssertion(base, 'aaron', 'Wrong unit — the shell was on the dev board, not the shipped one.', 2);
+    const r = withdrawAssertion(
+      base,
+      'aaron',
+      'human',
+      'Wrong unit — the shell was on the dev board, not the shipped one.',
+      2,
+    );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value.status).toBe('withdrawn');
@@ -150,22 +157,79 @@ describe('withdrawal is first-class', () => {
   });
 
   it('refuses a bare retraction — the reason is the part worth keeping', () => {
-    const r = withdrawAssertion(base, 'aaron', '   ', 2);
+    const r = withdrawAssertion(base, 'aaron', 'human', '   ', 2);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/needs a reason/);
   });
 
   it('refuses to withdraw twice, so the first reason cannot be overwritten', () => {
-    const first = withdrawAssertion(base, 'aaron', 'wrong unit', 2);
+    const first = withdrawAssertion(base, 'aaron', 'human', 'wrong unit', 2);
     if (!first.ok) throw new Error('setup');
-    expect(withdrawAssertion(first.value, 'someone', 'again', 3).ok).toBe(false);
+    expect(withdrawAssertion(first.value, 'someone', 'human', 'again', 3).ok).toBe(false);
   });
 
   it('records who retracted it separately from who asserted it', () => {
-    const r = withdrawAssertion(base, 'reviewer', 'Could not reproduce on three units.', 2);
+    const r = withdrawAssertion(base, 'reviewer', 'human', 'Could not reproduce on three units.', 2);
     if (!r.ok) throw new Error('setup');
     expect(describeAssertion(r.value)).toMatch(/WITHDRAWN by reviewer/);
     expect(describeAssertion(r.value)).toMatch(/originally asserted by aaron/);
+  });
+
+  it('stamps the retractor kind from the transport, the way creation and amendment do', () => {
+    const byHuman = withdrawAssertion(base, 'reviewer', 'human', 'Could not reproduce on three units.', 2);
+    const byAgent = withdrawAssertion(base, 'opacidad', 'agent', 'Re-ran the probe; the port was never open.', 2);
+    if (!byHuman.ok || !byAgent.ok) throw new Error('setup');
+    expect(byHuman.value.withdrawnByKind).toBe('human');
+    expect(byAgent.value.withdrawnByKind).toBe('agent');
+    // The kind reaches the sentence, or "an agent retracted a person's claim" renders as a person doing it.
+    expect(describeAssertion(byAgent.value)).toMatch(/WITHDRAWN by opacidad \(agent\)/);
+    expect(describeAssertion(byHuman.value)).toMatch(/WITHDRAWN by reviewer:/);
+    // A human retractor gets no suffix at all — the bare name is what "a person did it" looks like here.
+    expect(describeAssertion(byHuman.value)).not.toMatch(/reviewer \(/);
+  });
+
+  it('reads a row retracted before the field existed as a kind NOBODY recorded, never as a human', () => {
+    // Exactly what an older build wrote: a name, a time, a reason, and no kind. `withdrawnBy` predates
+    // `withdrawnByKind`, so this row is ordinary history rather than a corrupt one.
+    const legacy: OperatorAssertion = {
+      ...base,
+      status: 'withdrawn',
+      withdrawnBy: 'reviewer',
+      withdrawnAt: 2,
+      withdrawnReason: 'Could not reproduce.',
+    };
+    expect(withdrawalAuthor(legacy)).toEqual({ by: 'reviewer', kind: null });
+    expect(describeAssertion(legacy)).toMatch(/WITHDRAWN by reviewer \(author kind not recorded\)/);
+    expect(describeAssertion(legacy)).not.toMatch(/\(agent\)/);
+  });
+
+  it('reports nothing at all rather than a name for a withdrawn row that carries no retractor', () => {
+    const nameless: OperatorAssertion = { ...base, status: 'withdrawn', withdrawnReason: 'gone' };
+    expect(withdrawalAuthor(nameless)).toBeNull();
+    expect(withdrawalAuthor({ ...nameless, withdrawnBy: '   ' })).toBeNull();
+    expect(describeAssertion(nameless)).toMatch(/WITHDRAWN by unknown/);
+  });
+
+  it('keeps three actors apart across an amendment and a retraction, kinds included', () => {
+    const asserted = assertionToDraft(assertOk(good), 'human', 1_000).assertion;
+    const amended = amendOk(
+      asserted,
+      assertOk({ ...good, claim: 'asserted_unverified', rationale: 'second' }),
+      'nadia',
+      'agent',
+      2_000,
+    );
+    const r = withdrawAssertion(amended, 'reviewer', 'agent', 'Neither reading held up.', 3_000);
+    if (!r.ok) throw new Error('setup');
+    // Six fields, three actors, and no pair of them collapsed onto another.
+    expect([r.value.assertedBy, r.value.authorKind]).toEqual(['aaron', 'human']);
+    expect([r.value.amendedBy, r.value.amendedByKind]).toEqual(['nadia', 'agent']);
+    expect([r.value.withdrawnBy, r.value.withdrawnByKind]).toEqual(['reviewer', 'agent']);
+    expect(revisionsOf(r.value)).toHaveLength(1);
+    const sentence = describeAssertion(r.value);
+    expect(sentence).toMatch(/WITHDRAWN by reviewer \(agent\)/);
+    expect(sentence).toMatch(/originally asserted by aaron/);
+    expect(sentence).toMatch(/Amended .* by nadia \(agent\)/);
   });
 });
 
@@ -242,7 +306,7 @@ describe('amendAssertion — an amendment appends, it never overwrites', () => {
       'human',
       2_000,
     );
-    const r = withdrawAssertion(amended, 'aaron', 'Both readings were wrong.', 3_000);
+    const r = withdrawAssertion(amended, 'aaron', 'human', 'Both readings were wrong.', 3_000);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(revisionsOf(r.value)).toHaveLength(1);
@@ -391,7 +455,14 @@ describe('authorKindOf — the one field a writer cannot state about itself', ()
 
   it('cannot be forged from a payload field — only the header is consulted', () => {
     // The shape a request would take if it tried: every plausible body key naming a kind, and no header.
-    expect(authorKindOf({ authorKind: 'agent', amendedByKind: 'agent', body: { authorKind: 'agent' } })).toBe('human');
+    expect(
+      authorKindOf({
+        authorKind: 'agent',
+        amendedByKind: 'agent',
+        withdrawnByKind: 'agent',
+        body: { authorKind: 'agent' },
+      }),
+    ).toBe('human');
     // And the reverse: a body claiming `human` cannot weaken the header an agent's transport set.
     expect(authorKindOf({ [AUTHOR_KIND_HEADER]: 'agent', authorKind: 'human' })).toBe('agent');
   });

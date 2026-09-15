@@ -948,10 +948,21 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
  * expanded the ORIGINAL rationale, so the only prose a reader could reach was the argument for a claim that no
  * longer stands. `withdrawnBy` is named because withdrawing your own claim and withdrawing someone else's are
  * different acts, and a retraction with no reason recorded says so rather than rendering as no retraction.
+ *
+ * The kind is suffixed the way it is on an asserting author, with a third suffix for a row retracted before the
+ * API recorded it — the name alone would show an agent's retraction exactly as a person's.
  */
 function WithdrawalNote({ assertion }: { assertion: OperatorAssertion }): JSX.Element {
   const t = useMessages();
-  const by = assertion.withdrawnBy ?? t.findings.withdrawnUnknownBy;
+  const by = assertion.withdrawnBy
+    ? `${assertion.withdrawnBy}${
+        assertion.withdrawnByKind === 'agent'
+          ? t.findings.agentSuffix
+          : assertion.withdrawnByKind === 'human'
+            ? ''
+            : t.findings.unrecordedKindSuffix
+      }`
+    : t.findings.withdrawnUnknownBy;
   return (
     <div className="hint" style={{ fontSize: 11.5, marginTop: 2 }}>
       {assertion.withdrawnReason ? (

@@ -427,6 +427,42 @@ describe('findingsPayload — an assertion is never returned as a measurement', 
     expect(p.withdrawnAssertions?.[0]?.attribution).toMatch(/WITHDRAWN by aaron/);
   });
 
+  it('reports the retractor as fields, so a model never has to infer one from `assertedBy`', () => {
+    const byAgent: McpFinding = {
+      ...asserted(),
+      assertion: {
+        ...assertion('human'),
+        status: 'withdrawn',
+        withdrawnBy: 'opacidad',
+        withdrawnByKind: 'agent',
+        withdrawnReason: 'the port was never open',
+      },
+    };
+    const row = findingsPayload(coverage(), [byAgent]).withdrawnAssertions?.[0];
+    expect(row?.withdrawnBy).toBe('opacidad');
+    expect(row?.withdrawnByKind).toBe('agent');
+    // The agent retracted a HUMAN's claim: neither field may drift onto the other.
+    expect(row?.assertedBy).toBe('aaron');
+    expect(row?.authorKind).toBe('human');
+    expect(row?.attribution).toMatch(/WITHDRAWN by opacidad \(agent\)/);
+  });
+
+  it('says `unrecorded` for a retraction whose kind predates the field, never `human`', () => {
+    const legacy: McpFinding = {
+      ...asserted(),
+      assertion: { ...assertion('human'), status: 'withdrawn', withdrawnBy: 'aaron', withdrawnReason: 'wrong unit' },
+    };
+    const row = findingsPayload(coverage(), [legacy]).withdrawnAssertions?.[0];
+    expect(row?.withdrawnBy).toBe('aaron');
+    expect(row?.withdrawnByKind).toBe('unrecorded');
+  });
+
+  it('carries no retractor fields on a standing assertion', () => {
+    const row = findingsPayload(coverage(), [asserted()]).operatorAssertions?.[0];
+    expect(row?.withdrawnBy).toBeUndefined();
+    expect(row?.withdrawnByKind).toBeUndefined();
+  });
+
   it('adds no operator noise at all when the ledger holds none', () => {
     const p = findingsPayload(coverage(), [finding()]);
     expect(p.operatorAssertionCount).toBe(0);
