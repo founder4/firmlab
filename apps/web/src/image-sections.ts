@@ -12,6 +12,7 @@ export const SECTION_IDS = [
   'filesystem',
   'files',
   'secrets',
+  'credmatch',
   'hardware',
   'bootloader',
   'sbom',

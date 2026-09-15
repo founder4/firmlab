@@ -71,6 +71,7 @@ describe('catalogue integrity', () => {
       'General',
       'Firmware',
       'Bootloader',
+      'UID 0',
     ]);
     const offenders: string[] = [];
     const walk = (a: unknown, b: unknown, path: string): void => {

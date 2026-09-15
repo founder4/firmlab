@@ -12,6 +12,7 @@ export const sections: Messages['sections'] = {
   filesystem: 'Extracción',
   files: 'Explorador de ficheros',
   secrets: 'Valores recuperados',
+  credmatch: 'Cotejo de credenciales',
   hardware: 'Interfaces de hardware',
   bootloader: 'Gestor de arranque',
   sbom: 'SBOM y CVEs',

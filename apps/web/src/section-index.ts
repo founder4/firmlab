@@ -28,6 +28,7 @@ const NEEDS_ROOTFS = new Set([
   'filesystem',
   'files',
   'secrets',
+  'credmatch',
   'compmap',
   'binaries',
   'testbench',
@@ -111,8 +112,8 @@ export interface SectionGroup {
 export const SECTION_GROUPS: readonly SectionGroup[] = [
   // What the image IS, before anything is unpacked from it.
   { id: 'identity', sections: ['dossier', 'structure', 'entropy', 'hardware', 'bootloader'] },
-  // What came OUT of it.
-  { id: 'content', sections: ['filesystem', 'files', 'secrets'] },
+  // What came OUT of it — and, beside the recovered values, the plaintext behind the credential store's own hashes.
+  { id: 'content', sections: ['filesystem', 'files', 'secrets', 'credmatch'] },
   // What it is MADE of, and how those parts depend on each other.
   { id: 'components', sections: ['sbom', 'compmap'] },
   // The tool-backed passes over those parts.

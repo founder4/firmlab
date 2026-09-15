@@ -392,6 +392,87 @@ export interface ExportReachResult {
   sinks: ExportReachSink[];
 }
 
+/**
+ * credmatch — the JOIN of an image's stored credential hashes against its own printable strings. NOT a crack: a hit
+ * means the plaintext is written down in the firmware, so the recovered password is `static_confirmed` and a miss is
+ * a BOUNDED NEGATIVE, never "the password is strong".
+ *
+ * Every detail field is optional-tolerant even though this is a new result type: a persisted job result is JSON
+ * re-read for as long as the image exists, so the panel reads `candidates`/`targets` defensively and never asserts a
+ * nested field it cannot know an older build wrote. `candidates: null` (no set was built) is deliberately distinct
+ * from a set that matched nothing — the coverage numbers are only present when a set existed.
+ */
+export type CredMatchState = 'no_target' | 'no_account_files' | 'no_hashes' | 'no_candidates' | 'scanned';
+
+/** Where a candidate came from — rendered verbatim so a hit's provenance can be gone and looked at. */
+export interface CredMatchCandidate {
+  value: string;
+  derivation: string;
+  key?: string;
+  file: string;
+  offset: number;
+}
+
+/** One stored hash and what this run established about it — the three outcomes stay disjoint. */
+export type CredMatchTargetOutcome =
+  | { outcome: 'recovered'; password: string; candidate: CredMatchCandidate; tested: number }
+  | { outcome: 'not-recovered'; tested: number; collapsed: number }
+  | { outcome: 'blocked'; reason: string };
+
+export interface CredMatchTarget {
+  account: string;
+  uid: number | null;
+  file: string;
+  scheme: string;
+  schemeLabel: string;
+  hashRedacted: string;
+  locked: boolean;
+  result: CredMatchTargetOutcome;
+}
+
+/** How the candidate set was built, and every bound that kept it from being larger. */
+export interface CredMatchCandidateSummary {
+  root: string;
+  filesFound: number;
+  filesRead: number;
+  filesTooLarge: number;
+  filesUnreadable: number;
+  dirsUnreadable: number;
+  deepDirsSkipped: number;
+  bytesRead: number;
+  stringsHarvested: number;
+  candidatesDistinct: number;
+  candidatesTested: number;
+  candidatesDropped: number;
+  cap: number;
+  capRule: string;
+  minStringLength: number;
+  maxCandidateLength: number;
+}
+
+/** Which openssl `passwd` flags this deployment could verify against a known answer. A scheme it cannot compute is blocked, not clean. */
+export interface CredMatchOpenssl {
+  available: boolean;
+  verifiedFlags: string[];
+  failures: Array<{ flag: string; reason: string }>;
+}
+
+export interface CredMatchResult {
+  /** True once the run reached candidate testing; false for the four states blocked before hashing anything. */
+  available: boolean;
+  state: CredMatchState;
+  reason: string;
+  /** Null whenever no candidate set was ever built — distinct from a set that matched nothing. */
+  candidates: CredMatchCandidateSummary | null;
+  targets: CredMatchTarget[];
+  openssl: CredMatchOpenssl;
+  /**
+   * The provider's own findings. The panel does NOT render them — the findings ledger owns that view under source
+   * `credmatch`, and a second table here would be the same rows twice. Typed only so the shape is documented.
+   */
+  findings?: unknown[];
+}
+
 export interface GitleaksFinding {
   rule: string;
   description: string;
@@ -1915,6 +1996,14 @@ export const api = {
   /** The route returns every done probe (one per target); the panel shows the most recent, RunHistory the rest. */
   exportreachResult: (id: string) =>
     get<{ results: ExportReachResult[] }>(`/api/images/${id}/exportreach`).then((r) => r.results.at(-1) ?? null),
+  /**
+   * Start a credential cross-reference. A rootfs-gate refusal (extraction not run / in progress / no rootfs) comes
+   * back 4xx and `post` throws its sentence — that sentence IS the prerequisite answer the panel renders.
+   */
+  runCredmatch: (id: string) => post<{ jobId: string }>(`/api/images/${id}/credmatch`, {}),
+  /** The most recent completed run, or null when none has finished — never-run must never read as clean. */
+  credmatchResult: (id: string) =>
+    get<{ result: CredMatchResult | null }>(`/api/images/${id}/credmatch`).then((r) => r.result),
   findings: (id: string) => get<{ findings: Finding[] }>(`/api/images/${id}/findings`).then((r) => r.findings),
 
   // === Operator assertions: the ledger's only hand-authored rows. No proofState is ever sent or accepted. ===

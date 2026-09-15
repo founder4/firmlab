@@ -30,6 +30,7 @@ import { BinVulnPanel } from '../components/BinVulnPanel';
 import { CapabilityResults } from '../components/CapabilityResults';
 import { ComponentMap } from '../components/ComponentMap';
 import { CoverageBanner } from '../components/CoverageBanner';
+import { CredMatchPanel } from '../components/CredMatchPanel';
 import { EgressSection } from '../components/EgressSection';
 import { EntropyChart } from '../components/EntropyChart';
 import { ExportReachPanel } from '../components/ExportReachPanel';
@@ -83,6 +84,7 @@ const NO_ANALYSIS_TABS = new Set<TabId>([
   'filesystem',
   'files',
   'secrets',
+  'credmatch',
   'hardware',
   'bootloader',
   'sbom',
@@ -204,6 +206,9 @@ export function ImageDetail(): JSX.Element {
         </>
       )}
       {tab === 'secrets' && <RecoveredValuesPanel analysis={analysis} imageId={id} />}
+      {/* The plaintext behind the credential store's own hashes — a join against the image's strings, not a crack.
+          Sits beside recovered values because that is where an operator hunting credentials looks. */}
+      {tab === 'credmatch' && <CredMatchPanel imageId={id} />}
       {/* What the firmware declares about the physical ways in. Reads stored results; connects to nothing. */}
       {tab === 'hardware' && <HardwareInterfaces imageId={id} />}
       {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}

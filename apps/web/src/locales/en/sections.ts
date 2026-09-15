@@ -15,6 +15,7 @@ export const sections = {
   filesystem: 'Extraction',
   files: 'File browser',
   secrets: 'Recovered values',
+  credmatch: 'Credential match',
   hardware: 'Hardware interfaces',
   bootloader: 'Bootloader',
   sbom: 'SBOM & CVEs',

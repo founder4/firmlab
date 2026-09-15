@@ -16,6 +16,7 @@ import { common } from './common';
 import { compmap } from './compmap';
 import { corpus } from './corpus';
 import { coverage } from './coverage';
+import { credmatch } from './credmatch';
 import { dashboard } from './dashboard';
 import { egressSection } from './egressSection';
 import { exportreach } from './exportreach';
@@ -65,6 +66,7 @@ export const en = {
   findings,
   agents,
   corpus,
+  credmatch,
   coverage,
   onboarding,
   panels,
