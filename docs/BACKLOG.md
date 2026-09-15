@@ -31,9 +31,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 - [ ] Librerías nunca preguntadas: filtrar `.so` de la cola de alcanzabilidad es correcto para la pregunta
   actual, pero deja una librería vulnerable como candidato que nada resuelve nunca. Cargar el `.so` y arrancar
   simbólicamente desde una función exportada es un peldaño distinto, no una variante del actual.
-- [ ] uClibc distorsiona el sweep de reachability: `lib/libutil-0.9.30.so` y `lib/libmsglog.so` abren los 45
-  candidatos del WDR3600 porque `runnable` deja pasar un `.so` con entry point. El predicado real es si el
-  entry point es un PROGRAMA, no solo si tiene uno.
+- [x] uClibc ya no distorsiona el sweep de reachability. Medido sobre los bytes del WDR3600: ambos ficheros son
+  ELF32 MIPS big-endian ET_DYN con entry point no nulo; `libutil-0.9.30.so` tiene PT_INTERP y DT_SONAME, mientras
+  `libmsglog.so` no tiene PT_INTERP. El predicado actual exige PT_INTERP y ausencia de DT_SONAME para ET_DYN, así
+  que ambos dan `runnable=false` y ya no abren los 45 candidatos. La regresión fija las dos formas sin confundir
+  esta cola de programas con la pregunta separada de analizar funciones exportadas de una biblioteca.
 
 ## moria/mithril (nmatt0) — evaluado contra el corpus real, no adoptado
 

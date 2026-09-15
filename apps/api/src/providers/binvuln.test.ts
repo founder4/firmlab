@@ -329,33 +329,51 @@ describe('isRunnableElf — a library is a candidate the probes cannot question'
    * had already been spent on `libutil-0.9.30.so` and `libcrypt-0.9.30.so`. `DT_SONAME` is the axis: a shared
    * object carries the name it is linked against by, and a program does not.
    */
-  const elfWithDynamic = (type: number, phTypes: number[], dynTags: number[]): Uint8Array => {
+  const elfWithDynamic = (
+    type: number,
+    phTypes: number[],
+    dynTags: number[],
+    options: { entry?: number; little?: boolean } = {},
+  ): Uint8Array => {
     const PH_OFF = 0x40;
     const PH_ENT = 32;
     const DYN_OFF = PH_OFF + PH_ENT * phTypes.length;
     const dynSize = (dynTags.length + 1) * 8; // Elf32_Dyn is 8 bytes; +1 for the DT_NULL terminator
     const buf = Buffer.alloc(DYN_OFF + dynSize);
-    buf.set([0x7f, 0x45, 0x4c, 0x46, 1, 1], 0); // ELF32, little-endian
-    buf.writeUInt16LE(type, 0x10);
-    buf.writeUInt32LE(PH_OFF, 0x1c);
-    buf.writeUInt16LE(PH_ENT, 0x2a);
-    buf.writeUInt16LE(phTypes.length, 0x2c);
+    const little = options.little ?? true;
+    const u16 = little ? buf.writeUInt16LE.bind(buf) : buf.writeUInt16BE.bind(buf);
+    const u32 = little ? buf.writeUInt32LE.bind(buf) : buf.writeUInt32BE.bind(buf);
+    buf.set([0x7f, 0x45, 0x4c, 0x46, 1, little ? 1 : 2], 0); // ELF32
+    u16(type, 0x10);
+    u32(options.entry ?? 0, 0x18);
+    u32(PH_OFF, 0x1c);
+    u16(PH_ENT, 0x2a);
+    u16(phTypes.length, 0x2c);
     phTypes.forEach((t, i) => {
       const ph = PH_OFF + i * PH_ENT;
-      buf.writeUInt32LE(t, ph);
+      u32(t, ph);
       if (t === 2) {
         // PT_DYNAMIC: point it at the tag array below.
-        buf.writeUInt32LE(DYN_OFF, ph + 0x04); // p_offset
-        buf.writeUInt32LE(dynSize, ph + 0x10); // p_filesz
+        u32(DYN_OFF, ph + 0x04); // p_offset
+        u32(dynSize, ph + 0x10); // p_filesz
       }
     });
-    dynTags.forEach((tag, i) => buf.writeUInt32LE(tag, DYN_OFF + i * 8));
+    dynTags.forEach((tag, i) => u32(tag, DYN_OFF + i * 8));
     return buf;
   };
 
   it('rejects libc, which has an interpreter AND a SONAME — the case the corpus broke this on', () => {
     // PT_LOAD, PT_INTERP, PT_DYNAMIC with DT_SONAME(14).
     expect(isRunnableElf(elfWithDynamic(3, [1, 3, 2], [14]))).toBe(false);
+  });
+
+  it('rejects both WDR3600 uClibc library shapes even though each has a nonzero entry point', () => {
+    // Measured on the real big-endian MIPS files: libutil has entry 0x730, PT_INTERP and DT_SONAME;
+    // libmsglog has entry 0x670 and PT_DYNAMIC, but neither PT_INTERP nor DT_SONAME.
+    const libutil = elfWithDynamic(3, [1, 3, 2], [1, 14], { entry: 0x730, little: false });
+    const libmsglog = elfWithDynamic(3, [1, 2], [1], { entry: 0x670, little: false });
+    expect(isRunnableElf(libutil)).toBe(false);
+    expect(isRunnableElf(libmsglog)).toBe(false);
   });
 
   it('still accepts a PIE that has a dynamic section but no SONAME', () => {
