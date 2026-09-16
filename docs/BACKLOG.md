@@ -43,11 +43,42 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   hoy faltan (btrfs, XFS, NTFS, HFS+, EROFS, exFAT, F2FS) y no requiere sudo. Complementa, no sustituye — sobre
   el SquashFS LZMA no estándar del TP-Link WR940N diagnostica mal la causa ("vendor obfuscation" cuando es LZMA
   parcheado). Reconciliar su diagnóstico con `extract-diagnose.ts` antes de adoptar.
-- [ ] Llevar el rúbrico de confianza de 4 niveles de moria (magic 25 / structural 60 / consistent 85 / verified
-  99, con camino de RECHAZO estructural) y sus `soft_constraints` a `signatures.ts`: hoy nuestras reglas son
-  magic + decode sin rechazo (sobre el mismo fichero, 203 hits de core frente a 4 de moria, casi todo ruido).
-  Añade también ~130 magics de contenedor de vendor (TP-Link, D-Link, Netgear CHK, Xiaomi, Ubiquiti, Realtek,
-  Sercomm, MediaTek) reautorados clean-room.
+- [x] Llevar el rúbrico de confianza de 4 niveles de moria (magic 25 / structural 60 / consistent 85 / verified
+  99, con camino de RECHAZO estructural) a `signatures.ts`: nuestras reglas eran magic + decode sin rechazo
+  (sobre el mismo fichero, 203 hits de core frente a 4 de moria, casi todo ruido). *(Hecho en `e609854`: el
+  `tier` del hit es lo que los bytes sostuvieron en ESE offset y `confidence` sigue siendo el prior de la regla
+  —dos ejes, no uno reescribiendo al otro—; el tier base se deriva de lo que la regla ya declara, de modo que no
+  hay campo nuevo que se desincronice, y `atOffset` sube un escalón porque un offset absoluto es una restricción
+  que una coincidencia no alcanza. `verify` corre siempre y antes del cap, porque un rechazo saca la regla del
+  set de ids que `inferIdentity` lee. El denominador viaja con el resultado —`matched` / `rejected` /
+  `rejectedByRule`— para que «aquí no hay ELFs» no se lea igual que «todos los `\x7fELF` fallaron su e_ident».
+  Los seis chequeos sobre reglas existentes son elf, gzip, lzma, pem-cert, trx y `uefi-fv`, este último el que
+  más pesa: `_FVH` son cuatro bytes ASCII y enrutaba una imagen entera a `uefi-bios` sin leer nada más.
+  `classEvidence` separa además CÓMO se decidió la clase —`exact-signature` / `heuristic` / `unknown`— para que
+  leer la cabecera del formato y contar strings dejen de renderizarse igual.)*
+- [ ] Portar los `soft_constraints` de moria: restricciones que PENALIZAN sin rechazar, para el caso en que un
+  campo es sospechoso pero no imposible. Nuestro `verify` es binario hoy —acepta a un nivel o rechaza— y por eso
+  ningún chequeo llega a `verified` (99), que queda reservado a recomputar un checksum sobre el payload y hoy no
+  lo alcanza ninguna regla. La pieza que falta es el peldaño de arriba, no el de abajo.
+- [ ] Completar los magics de contenedor de vendor: `e609854` añade 21 (SEAMA, WRGG, Netgear CHK y DNI, las tres
+  variantes de Ubiquiti, TRX v2/HDR1, CFE, la tabla safeloader `fwup-ptn` de TP-Link, IMAGEWTY de Allwinner,
+  RKFW/RKAF de Rockchip, IVT de i.MX, bFLT, vendor_boot y vbmeta y la tabla DTBO de Android, FMAP, CBFS, el
+  descriptor de flash de Intel y `$FPT`), no las ~130 del plan original. **El límite no es el esfuerzo: es que
+  cada magic va emparejado con un chequeo de campos que el propio formato declara y con capacidad de rechazar, y
+  un magic que no se puede comprobar estructuralmente es una regla que dispara sobre coincidencias que después
+  hay que explicar.** Quedan fuera por eso, no por olvido: Realtek (`csys`/`cr6c`/`cs6c`), Sercomm, el header
+  MTK y el header legacy de TP-Link —reconstruirlos de memoria es justo la clase de afirmación que la tabla CVE
+  curada tiene prohibida—. Reautorarlos clean-room contra la fuente del formato (OpenWrt `mkfwimage`-style) es
+  lo que falta. Xiaomi ya está cubierto por HDR1 y no necesita regla propia: un magic identifica un FORMATO de
+  contenedor, no una marca, y las descripciones no atribuyen de más.
+- [ ] Llevar la corroboración de JFFS2 por tipo de nodo al escáner, no solo al clasificador. Medido en
+  `e609854`: sobre 16 MB aleatorios el registro casa ~760 magics y la rúbrica rechaza 5 —el resultado honesto,
+  porque todo lo que sobrevive viene de reglas de DOS bytes sin chequeo posible: `pe-mz` ~258, `jffs2-be` ~257,
+  `jffs2-le` ~253, las tres en el peldaño 25—. `structure.ts` ya corrobora JFFS2 por tipo de nodo cuando DECIDE
+  una clase (`corroboratedJffs2Nodes`), así que el chequeo existe y está en el sitio donde cambia un veredicto;
+  moverlo o duplicarlo en el escáner quitaría ~510 filas de ruido por cada 16 MB, pero acopla el clasificador a
+  un detalle del escáner de forma invisible —la trampa del «comentario que era cierto cuando se escribió»—, y
+  hacerlo a medias es peor que no hacerlo. Requiere decidir dónde vive el predicado, no solo escribirlo.
 - [ ] Portar la tabla CPE de banners binarios de moria (17 componentes: openssl, busybox, dropbear, dnsmasq,
   curl, zlib, lighttpd, wget, wpa_supplicant, hostapd, mosquitto, glibc, musl, mbedtls, gnutls, openvpn, lua,
   u-boot) a `compmap`/`component-cve.ts`, frente a los 5 actuales. Habilitaría un mirror NVD dirigido (solo esos
