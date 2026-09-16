@@ -417,6 +417,18 @@ describe('signature confidence rubric', () => {
       pos: img(64, [0, [0x1f, 0x8b, 0x08, 0x00]]),
       neg: img(64, [0, [0x1f, 0x8b, 0x08, 0xe0]]),
     },
+    {
+      id: 'jffs2-le',
+      tier: 'consistent',
+      pos: img(64, [0, [0x85, 0x19, 0x02, 0xe0]]),
+      neg: img(64, [0, [0x85, 0x19, 0x34, 0x12]]),
+    },
+    {
+      id: 'jffs2-be',
+      tier: 'consistent',
+      pos: img(64, [0, [0x19, 0x85, 0xe0, 0x02]]),
+      neg: img(64, [0, [0x19, 0x85, 0x12, 0x34]]),
+    },
     // dict size 0x00800000 (power of two) + the all-ones "unknown length" marker.
     {
       id: 'lzma',
@@ -700,18 +712,16 @@ describe('inferIdentity — exact signature vs heuristic vs unknown', () => {
 /**
  * What the rubric does and does not buy, measured rather than asserted.
  *
- * Run over 16 MB of random bytes, the registry matches ~760 magics. The rubric rejects only a handful of them —
- * and that is the honest result, because every surviving match comes from a rule whose magic is TWO BYTES
- * (`pe-mz`, `jffs2-le`, `jffs2-be`: ~258/257/253 apiece) and which has no structural check to run. The rubric's
- * claim was never "fewer rows"; it is that a row you cannot corroborate must not look like one you can. So the
- * invariant worth locking is the one below: noise may survive the scan, but it may never leave the bottom rung.
+ * Run over 16 MB of random bytes, the registry matches ~760 magics. JFFS2 node-type corroboration now rejects
+ * roughly two thirds of them: the ~510 `jffs2-le` / `jffs2-be` coincidences whose following word is not a valid
+ * node type. The remaining ~258 `pe-mz` hits honestly survive because that two-byte rule has no structural check
+ * to run, but they remain on the bottom rung rather than looking equivalent to corroborated format evidence.
  *
  * On a real ELF (`/usr/lib/.../ld-linux-x86-64.so.2`) the same scan keeps the genuine header at offset 0 at
  * `consistent` and drops a coincidental `\x7fELF` inside the file — the shape this is supposed to have.
  *
- * The remaining 2-byte noise is a separate, named piece of work: `structure.ts` already corroborates JFFS2 by
- * node type when it DECIDES a class, and pushing that check into the scanner is tracked in docs/BACKLOG.md
- * rather than done halfway here.
+ * The classifier consumes the same pure JFFS2 predicate as the scanner and rechecks even persisted legacy hits,
+ * so a future scanner refactor cannot silently loosen the identity decision.
  */
 describe('rubric behaviour on unstructured bytes', () => {
   /** Deterministic xorshift32 so the measurement is a regression test and not a dice roll. */

@@ -3,6 +3,7 @@
  * identity. This is the deterministic backbone of the "binwalk graphical view" the workbench renders: a
  * ribbon of labeled, colored segments across the image, plus an inferred class/arch/endianness.
  */
+import { isJffs2Node } from './jffs2.js';
 import { parsePicobin, parseRp2040Flash, qmkFirmwareMarkers } from './mcu.js';
 import type {
   Architecture,
@@ -173,26 +174,12 @@ const STRONG_FS_IDS = [
   'erofs',
 ];
 
-/**
- * Valid JFFS2 node types — the 16-bit word that follows the 2-byte magic in every real node header. A genuine
- * JFFS2 image is a dense stream of these; a handful of coincidental 2-byte magic matches (the false-positive
- * that misclassified ESP32 SoC dumps and encrypted blobs as `embedded-linux`) will not have valid node types
- * behind them. See docs/AUTONOMOUS-WORKERS.md §3.1(1).
- */
-const JFFS2_NODETYPES = new Set([0xe001, 0xe002, 0x2003, 0x2004, 0x2006, 0xe008, 0xe009]);
-
 /** Count JFFS2 signature hits whose following 2 bytes form a valid node type (endianness matches the magic). */
 function corroboratedJffs2Nodes(buf: Uint8Array, hits: SignatureHit[]): number {
   let count = 0;
   for (const h of hits) {
     if (h.id !== 'jffs2-le' && h.id !== 'jffs2-be') continue;
-    const off = h.offset;
-    if (off + 3 >= buf.length) continue;
-    const nodetype =
-      h.id === 'jffs2-le'
-        ? (buf[off + 2] ?? 0) | ((buf[off + 3] ?? 0) << 8)
-        : ((buf[off + 2] ?? 0) << 8) | (buf[off + 3] ?? 0);
-    if (JFFS2_NODETYPES.has(nodetype)) count++;
+    if (isJffs2Node(buf, h.offset, h.id)) count++;
   }
   return count;
 }

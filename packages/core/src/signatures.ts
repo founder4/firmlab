@@ -27,6 +27,7 @@
  * `consistent` at one offset (the evidence there was good) without becoming a rule you should trust everywhere,
  * and a `high` rule that fails its check is rejected at that offset without being demoted globally.
  */
+import { isJffs2Node } from './jffs2.js';
 import type { SignatureCategory, SignatureConfidence, SignatureHit, SignatureTier } from './types.js';
 
 /** Score for each rubric tier. Exported so a caller can rank hits without re-deriving the ladder. */
@@ -182,6 +183,10 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     category: 'filesystem',
     confidence: 'medium',
     magic: [0x85, 0x19],
+    verify: (buf, off) =>
+      isJffs2Node(buf, off, 'jffs2-le')
+        ? at('consistent', 'the following little-endian word is a valid JFFS2 node type')
+        : no('the following little-endian word is not a valid JFFS2 node type'),
   },
   {
     id: 'jffs2-be',
@@ -189,6 +194,10 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     category: 'filesystem',
     confidence: 'medium',
     magic: [0x19, 0x85],
+    verify: (buf, off) =>
+      isJffs2Node(buf, off, 'jffs2-be')
+        ? at('consistent', 'the following big-endian word is a valid JFFS2 node type')
+        : no('the following big-endian word is not a valid JFFS2 node type'),
   },
   {
     id: 'cramfs',

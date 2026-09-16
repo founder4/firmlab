@@ -71,14 +71,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   curada tiene prohibida—. Reautorarlos clean-room contra la fuente del formato (OpenWrt `mkfwimage`-style) es
   lo que falta. Xiaomi ya está cubierto por HDR1 y no necesita regla propia: un magic identifica un FORMATO de
   contenedor, no una marca, y las descripciones no atribuyen de más.
-- [ ] Llevar la corroboración de JFFS2 por tipo de nodo al escáner, no solo al clasificador. Medido en
-  `e609854`: sobre 16 MB aleatorios el registro casa ~760 magics y la rúbrica rechaza 5 —el resultado honesto,
-  porque todo lo que sobrevive viene de reglas de DOS bytes sin chequeo posible: `pe-mz` ~258, `jffs2-be` ~257,
-  `jffs2-le` ~253, las tres en el peldaño 25—. `structure.ts` ya corrobora JFFS2 por tipo de nodo cuando DECIDE
-  una clase (`corroboratedJffs2Nodes`), así que el chequeo existe y está en el sitio donde cambia un veredicto;
-  moverlo o duplicarlo en el escáner quitaría ~510 filas de ruido por cada 16 MB, pero acopla el clasificador a
-  un detalle del escáner de forma invisible —la trampa del «comentario que era cierto cuando se escribió»—, y
-  hacerlo a medias es peor que no hacerlo. Requiere decidir dónde vive el predicado, no solo escribirlo.
+- [x] Corroboración JFFS2 por tipo de nodo compartida entre escáner y clasificador. El predicado puro exportado
+  `isJffs2Node` vive en core: el escáner rechaza el magic de dos bytes si el word siguiente no es un tipo de nodo
+  válido y eleva uno válido a `consistent` (85), mientras el clasificador vuelve a aplicar el mismo predicado a
+  sus hits —también a hits persistidos por builds anteriores— antes de contar el umbral de cuatro. El chequeo se
+  ejecuta antes del cap, conserva `matched`/`rejected`/`rejectedByRule` y el cap no puede cambiar el conjunto de
+  ids ni la identidad. Medido el 2026-09-16 sobre 16 MiB nuevos de `crypto.randomBytes`: 809 magics casados, 527
+  rechazados, de ellos 522 JFFS2 (`jffs2-be` 254 + `jffs2-le` 268), y 282 supervivientes; la aleatoriedad es solo
+  medida, no oráculo de test. Fixtures deterministas cubren nodos LE/BE válidos, magic incidental, acuerdo entre
+  clasificador/escáner, hits legacy, rechazo antes del cap y los denominadores explícitos.
 - [ ] Portar la tabla CPE de banners binarios de moria (17 componentes: openssl, busybox, dropbear, dnsmasq,
   curl, zlib, lighttpd, wget, wpa_supplicant, hostapd, mosquitto, glibc, musl, mbedtls, gnutls, openvpn, lua,
   u-boot) a `compmap`/`component-cve.ts`, frente a los 5 actuales. Habilitaría un mirror NVD dirigido (solo esos

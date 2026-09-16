@@ -8,6 +8,7 @@
 export * from './types.js';
 export * from './findings-rank.js';
 export * from './entropy.js';
+export * from './jffs2.js';
 export * from './signatures.js';
 export * from './structure.js';
 export * from './strings.js';
