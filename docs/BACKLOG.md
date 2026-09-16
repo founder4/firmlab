@@ -65,23 +65,36 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 - [ ] Desambiguar el nombre "corpus" en CLI/UI (tres cosas sin relación: `apps/api/src/corpus.ts`,
   `ops/corpus/validation-samples.lock.json`, `ops/yara/corpus.lock.json`) — ya documentado en
   `ARCHITECTURE.md` § "The three corpora", falta homogeneizar el naming visible.
-- [ ] Puntuar vectores CVSS v4.0 en `osv.ts` (`cvssV3BaseScore` solo hace v3.0/v3.1; v4.0 necesita la tabla
+- [x] Puntuar vectores CVSS v4.0 en `osv.ts` (`cvssV3BaseScore` solo hace v3.0/v3.1; v4.0 necesita la tabla
   MacroVector). 4 de 121 avisos del corpus cacheado quedan sin graduar — se conservan sin recortar, pero no se
-  ordenan bien.
+  ordenan bien. *(Hecho: `providers/cvss-v4.ts` implementa el procedimiento MacroVector con las tres tablas de
+  FIRST vendorizadas verbatim (`cvss_lookup.js`/`max_composed.js`/`max_severity.js`, BSD-2-Clause), no
+  reconstruidas. `osvSeverityScore` encadena `cvssV3BaseScore(s) ?? cvssV4Score(s)` — los prefijos de versión son
+  disjuntos, ninguno tapa al otro — y `extractSeverity` de `nvd.ts` antepone `cvssMetricV40` dejando intactos los
+  peldaños de abajo. Un vector truncado sigue sin graduar en vez de completarse a ojo. `cvss-v4.test.ts` lleva 15
+  casos cuyos valores esperados los produjo la implementación de referencia de FIRST, no este código.)*
 - [ ] Re-ejecutar SBOM en las imágenes ya desplegadas: los resultados guardados son anteriores a
   `totalMatching`/`cveIds`/`upstream`, así que sus tablas siguen mostrando el denominador de la lista vieja y el
   cruce contra KEV sigue vacío.
 - [ ] Añadir un test de propiedad o regla de lint que detecte `.slice(N)` sobre la misma expresión de la que
   luego se deriva un recuento — el patrón que ya pagaron `extractStrings`, `scanSignatures` y `sbom.ts`.
-- [ ] Exponer `credmatch` en la web: único route sin ninguna referencia en `apps/web/src` pese a 1.337 líneas y
-  ✓ en cuatro muestras de la matriz.
+- [x] Exponer `credmatch` en la web: único route sin ninguna referencia en `apps/web/src` pese a 1.337 líneas y
+  ✓ en cuatro muestras de la matriz. *(Hecho en `79caece`: `components/CredMatchPanel.tsx` (295 líneas) con
+  `CredMatchPanel.test.tsx` (214), la sección registrada en `image-sections.ts`/`section-index.ts`/
+  `ImageDetail.tsx` y las cadenas es/en en `locales/*/credmatch.ts`. `1b10314` la hizo tolerante a resultados
+  dispersos.)*
 
 ## Deuda de política (decisiones a escribir, no bugs)
 
-- [ ] Dos estándares de CVE conviven sin decisión escrita: grype (vía manifiesto syft) acepta CVE-2016-2148 para
+- [x] Dos estándares de CVE conviven sin decisión escrita: grype (vía manifiesto syft) acepta CVE-2016-2148 para
   busybox 1.18.4; la tabla curada de `component-cve.ts` la rechaza porque NVD la respalda con un rango abierto
   sin CPE enumerado. Cada fila nombra su fuente, pero qué estándar aplica es hoy un accidente de qué proveedor
-  corrió.
+  corrió. *(Hecho en `ca7ac2c`: la decisión está escrita en `CLAUDE.md` § «Which standard applies when both lanes
+  run» — los dos carriles corren siempre y ninguno suprime al otro, y solo el curado alcanza `static_confirmed`.
+  `curatedCveVerdict` (`component-cve.ts`) pone el veredicto SOBRE la propia fila de grype vía
+  `findings-normalize.ts` (`claimed`/`rejected`/`outside_curated_range`), y el silencio — componente sin mapear, o
+  una versión de manifiesto como `1.18.4-1` que la tabla no puede comparar — se registra como ausencia de
+  veredicto, no como desacuerdo.)*
 - [x] Una enmienda a una afirmación de operador no registra autor, mientras que una retirada sí — se puede
   reescribir la afirmación de otra persona y el libro mayor atribuye la redacción nueva al autor original. En la
   única superficie cuyo propósito es la procedencia. *(Hecho: `amendedBy`/`amendedByKind` en `OperatorAssertion` y
