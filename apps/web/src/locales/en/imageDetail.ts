@@ -226,6 +226,18 @@ export const imageDetail = {
     statCritHigh: 'Critical / High',
     /** Absence of the matcher is not absence of CVEs, and the banner has to say which of the two happened. */
     grypeMissing: 'grype not present — SBOM generated, but CVE matching was skipped.',
+    /**
+     * A vulnerability count inherits the age of the database that produced it, and an empty table from an old one
+     * is not a clean bill of health. The SBOM lane no longer refreshes that database on its own — it did, from
+     * `grype.anchore.io`, with every lane flag off — so the date is now a property of the deployment the reader
+     * has to be able to see.
+     */
+    dbBuilt: (built: string | null, ageDays: number | null, schema: string | null) =>
+      built === null
+        ? 'Matched against the provisioned vulnerability database; grype recorded no build date for it.'
+        : `Matched against a vulnerability database built ${built}${
+            ageDays === null ? '' : ` (${ageDays} day(s) ago)`
+          }${schema ? `, schema ${schema}` : ''}. A CVE published since then cannot appear in this table.`,
     graphTitle: 'Component graph',
     graphSub:
       'The rootfs and its components, grouped by ecosystem around the ring and coloured by the worst CVE affecting each. Hover a node for its version and CVEs.',

@@ -89,7 +89,12 @@ async function main() {
   console.log('sbom:');
   const sbom = await runSbom(id, rootfs, handle);
   check('syft available + packages found', sbom.available && sbom.packageCount > 0);
-  check('grype ran (counts present)', sbom.grypeAvailable && typeof sbom.counts.Critical === 'number');
+  // A failure here has two very different causes since the lane stopped downloading its own database, so the
+  // reason the provider wrote is printed with the check rather than left for someone to guess at.
+  check(
+    `grype ran (counts present)${sbom.grypeReason ? ` — ${sbom.grypeReason}` : ''}`,
+    sbom.grypeAvailable && typeof sbom.counts.Critical === 'number',
+  );
 
   console.log('gitleaks:');
   const gl = await runGitleaks(rootfs, handle);

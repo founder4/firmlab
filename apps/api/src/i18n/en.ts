@@ -555,7 +555,7 @@ export const en = {
       effect:
         'Correlates the SBOM and the components fingerprinted out of bundled binaries against published advisories, and looks up vendor disclosure contacts.',
       egress:
-        'Component names and versions go to api.osv.dev and services.nvd.nist.gov; the CISA KEV catalogue is downloaded and cross-referenced locally. Never firmware bytes, secrets or keys. The egress ledger declares a ceiling before each run and reconciles it afterwards.',
+        "Component names and versions go to api.osv.dev and services.nvd.nist.gov; the CISA KEV catalogue is downloaded and cross-referenced locally. It also authorises the SBOM lane to download grype's vulnerability database from grype.anchore.io (several GB, once, into FIRMLAB_DATA_DIR) — a one-way download, like KEV. With this switch off the SBOM lane downloads nothing and declines to match rather than matching against a database it does not have. Never firmware bytes, secrets or keys. The egress ledger declares a ceiling before each run and reconciles it afterwards.",
     },
     FIRMLAB_HASH_LOOKUP: {
       label: 'Online password-hash lookup',

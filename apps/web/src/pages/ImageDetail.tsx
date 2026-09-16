@@ -876,8 +876,20 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
             </div>
           ) : null}
 
-          {/* Absence of the matcher is not absence of CVEs — the banner has to say which of the two happened. */}
-          {!result.grypeAvailable && <div className="banner banner-info">{t.imageDetail.sbom.grypeMissing}</div>}
+          {/* Absence of the matcher is not absence of CVEs — the banner has to say WHICH of the three happened:
+              grype is not installed, grype is installed with no vulnerability database (the lane no longer
+              downloads one behind the operator's back), or it ran and failed. The provider writes that sentence;
+              the localised string is the fallback for a result stored before it did. */}
+          {!result.grypeAvailable && (
+            <div className="banner banner-info">{result.grypeReason ?? t.imageDetail.sbom.grypeMissing}</div>
+          )}
+
+          {/* A CVE count is only as current as the database behind it, so the date travels with the table. */}
+          {result.grypeAvailable && result.grypeDb && (
+            <div className="hint" style={{ marginBottom: 14, maxWidth: '72ch' }}>
+              {t.imageDetail.sbom.dbBuilt(result.grypeDb.built, result.grypeDb.ageDays, result.grypeDb.schemaVersion)}
+            </div>
+          )}
 
           {result.packages.length > 0 && (
             <div className="panel">

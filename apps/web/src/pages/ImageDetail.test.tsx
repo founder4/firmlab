@@ -114,6 +114,9 @@ beforeEach(() => {
     ambiguous: true,
   });
   mockApi.sbom.mockResolvedValue(null);
+  // RunHistory mounts inside every analysis section; without this the panel's own effect throws and the subtree
+  // renders BLANK, which is indistinguishable from a panel that simply had nothing to show.
+  mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
   mockApi.emulation.mockResolvedValue({
     identity: image.identity,
     rootfsReady: true,
@@ -161,6 +164,60 @@ describe('ImageDetail section heading', () => {
     renderSection('not-a-section');
     expect(await screen.findByRole('heading', { level: 1, name: 'General' })).toBeTruthy();
     await waitFor(() => expect(screen.getByText('Coverage')).toBeTruthy());
+  });
+});
+
+/**
+ * The SBOM panel's CVE banner, which has to distinguish three situations it used to render identically.
+ *
+ * `grypeAvailable:false` meant one thing when the lane downloaded grype's vulnerability database on its own —
+ * "grype is not installed" — and the banner said exactly that. Since the lane stopped reaching the network, the
+ * commonest cause is the opposite: grype IS installed and has no database, and telling the operator it is absent
+ * would send them to install a tool they already have. The provider now writes the sentence and the panel renders
+ * it; the localised string is the fallback for a result stored before that field existed.
+ */
+describe('ImageDetail SBOM — why no CVEs, and against what', () => {
+  const base = {
+    available: true,
+    target: '/data/extract/img1/rootfs',
+    packageCount: 2,
+    packageTotal: 2,
+    packages: [
+      { name: 'busybox', version: '1.18.4', type: 'binary' },
+      { name: 'dropbear', version: '2012.55', type: 'binary' },
+    ],
+    vulnerabilities: [],
+    vulnerabilityTotal: 0,
+    counts: { Critical: 0, High: 0, Medium: 0, Low: 0, Negligible: 0, Unknown: 0 },
+  };
+
+  it('prints the provider refusal instead of claiming grype is missing', async () => {
+    mockApi.sbom.mockResolvedValue({
+      ...base,
+      grypeAvailable: false,
+      grypeReason:
+        'CVE matching was not attempted: grype is installed but has no vulnerability database at /data/grype-db.',
+    });
+    renderSection('sbom');
+    expect(await screen.findByText(/no vulnerability database at \/data\/grype-db/)).toBeTruthy();
+    expect(screen.queryByText(/grype not present/)).toBeNull();
+  });
+
+  it('still falls back to the localised sentence for a result stored before the field existed', async () => {
+    mockApi.sbom.mockResolvedValue({ ...base, grypeAvailable: false });
+    renderSection('sbom');
+    expect(await screen.findByText(/grype not present/)).toBeTruthy();
+  });
+
+  it('dates the empty CVE table, because zero matches inherits the age of the database behind it', async () => {
+    mockApi.sbom.mockResolvedValue({
+      ...base,
+      grypeAvailable: true,
+      grypeDb: { schemaVersion: 'v6.1.9', built: '2026-09-16T06:30:57Z', from: null, ageDays: 0 },
+    });
+    renderSection('sbom');
+    expect(await screen.findByText(/built 2026-09-16T06:30:57Z/)).toBeTruthy();
+    expect(screen.getByText(/cannot appear in this table/)).toBeTruthy();
   });
 });
 

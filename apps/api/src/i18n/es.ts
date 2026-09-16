@@ -539,7 +539,7 @@ export const es: Messages = {
       effect:
         'Correlaciona el SBOM y los componentes identificados dentro de los binarios empaquetados contra avisos de seguridad publicados, y busca contactos de divulgación del fabricante.',
       egress:
-        'Los nombres y las versiones de los componentes van a api.osv.dev y a services.nvd.nist.gov; el catálogo KEV de CISA se descarga y se cruza en local. Nunca bytes del firmware, ni secretos, ni claves. El registro de salida declara un techo antes de cada ejecución y lo concilia al terminar.',
+        'Los nombres y las versiones de los componentes van a api.osv.dev y a services.nvd.nist.gov; el catálogo KEV de CISA se descarga y se cruza en local. Además autoriza al carril SBOM a descargar la base de vulnerabilidades de grype desde grype.anchore.io (varios GB, una sola vez, a FIRMLAB_DATA_DIR): es una descarga de un sentido, igual que el KEV. Con este interruptor apagado el carril SBOM no descarga nada y se niega a correlacionar en vez de hacerlo contra una base que no tiene. Nunca bytes del firmware, ni secretos, ni claves. El registro de salida declara un techo antes de cada ejecución y lo concilia al terminar.',
     },
     FIRMLAB_HASH_LOOKUP: {
       label: 'Consulta en línea de hashes de contraseña',

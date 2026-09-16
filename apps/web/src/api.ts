@@ -300,6 +300,13 @@ export interface SbomResult {
   vulnerabilityTotal?: number;
   packages: { name: string; version: string; type: string }[];
   grypeAvailable: boolean;
+  /**
+   * Why CVE matching did not run, and what it ran against. Optional forever, like the totals above: a result
+   * stored before the SBOM lane stopped downloading its database on its own has neither, and its
+   * `grypeAvailable:false` really did mean "grype is not installed".
+   */
+  grypeReason?: string;
+  grypeDb?: { schemaVersion: string | null; built: string | null; from: string | null; ageDays: number | null };
   vulnerabilities: SbomVuln[];
   counts: Record<Severity, number>;
 }

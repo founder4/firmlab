@@ -203,6 +203,12 @@ export const imageDetail: Messages['imageDetail'] = {
     statVulns: 'Vulnerabilidades',
     statCritHigh: 'Críticas / altas',
     grypeMissing: 'grype no está presente — el SBOM se generó, pero la correlación con CVE no llegó a ejecutarse.',
+    dbBuilt: (built: string | null, ageDays: number | null, schema: string | null) =>
+      built === null
+        ? 'Correlacionado contra la base de vulnerabilidades aprovisionada; grype no registró su fecha de compilación.'
+        : `Correlacionado contra una base de vulnerabilidades compilada el ${built}${
+            ageDays === null ? '' : ` (hace ${ageDays} día(s))`
+          }${schema ? `, esquema ${schema}` : ''}. Un CVE publicado después no puede aparecer en esta tabla.`,
     graphTitle: 'Grafo de componentes',
     graphSub:
       'El rootfs y sus componentes, agrupados por ecosistema alrededor del anillo y coloreados por el CVE más grave que afecta a cada uno. Pasa el cursor por un nodo para ver su versión y sus CVE.',

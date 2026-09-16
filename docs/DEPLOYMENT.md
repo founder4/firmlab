@@ -147,10 +147,39 @@ Los kernels firmadyne **no se llaman como nuestras arquitecturas**: `vmlinux.mip
 | `FIRMLAB_UEFI_IOC` · `FIRMLAB_DESOCK` | Feeds/preloads opcionales. Vacíos por defecto a propósito: nada fabricado. |
 | `FIRMLAB_CAPTURE_AGENT_TOKEN` | Sin él, el canal del agente LAN está cerrado (401). |
 | `NVD_API_KEY` | Sube el tope de consultas NVD de 6 a 40 y elimina la espera de cortesía de 6,5 s. |
+| `GRYPE_DB_CACHE_DIR` | Dónde vive la base de vulnerabilidades de grype. Por defecto `$FIRMLAB_DATA_DIR/grype-db` — bajo el volumen de datos, no en `~/.cache`, para que sobreviva a un redespliegue. Es la de grype, respetada tal cual si el operador la fija. |
 
 Nota: desde 2026-07-28 los flags de las lanes de red (`FIRMLAB_AGENT`, `FIRMLAB_RESEARCH`, `FIRMLAB_CAPTURE`…)
 se **persisten en la base de datos** desde Ajustes › Privacidad. Que la variable no esté en el entorno ya no
 significa que la lane esté apagada — consulta `/api/settings/flags` o `/api/research/status`.
+
+## El carril SBOM no toca la red
+
+`grype` viene con `db.auto-update: true` y `syft` y `grype` consultan si hay una versión nueva **de sí mismos**
+en cada invocación. Medido el 2026-09-16 sobre el contenedor desplegado, con `FIRMLAB_RESEARCH`, `FIRMLAB_AGENT`
+y `FIRMLAB_CAPTURE` sin poner: el contenedor arrancó a las 07:27 y a las 07:28 `import.json` de la caché de
+grype registraba una base de 2 204 512 256 bytes traída de `grype.anchore.io`. La promesa «con todos los flags
+apagados: sin red» era falsa.
+
+Desde `providers/sbom-db.ts` los dos binarios corren con la actualización automática y el sondeo de versión
+apagados, y grype sólo correlaciona contra una base **ya presente en disco**. Si no la hay, el trabajo devuelve
+el SBOM completo y declara por escrito que la correlación no se intentó, con las dos salidas. Nunca la descarga
+por su cuenta.
+
+Aprovisionarla una vez (la descarga son varios GB; queda en el volumen y sobrevive al redespliegue):
+
+```bash
+docker exec firmlab sh -lc 'GRYPE_DB_CACHE_DIR=$FIRMLAB_DATA_DIR/grype-db grype db update'
+docker exec firmlab sh -lc 'GRYPE_DB_CACHE_DIR=$FIRMLAB_DATA_DIR/grype-db grype db status'   # verificación
+```
+
+La alternativa es encender el carril research (Ajustes › Privacidad o `FIRMLAB_RESEARCH=1`), que autoriza a grype
+a descargarla desde `grype.anchore.io`. Es una descarga de un sentido —no sale nada del firmware, igual que el
+catálogo KEV—, y por eso no tiene flag propio: ese carril es el único que puede salir a internet.
+
+Una base vieja **se usa**, no se rechaza (`GRYPE_DB_VALIDATE_AGE=false`: grype descarta por defecto cualquiera de
+más de cinco días), y su fecha de compilación viaja al resultado y a la tabla de la web. Cero CVE contra una base
+de hace ocho meses no es la misma afirmación que cero CVE contra la de hoy.
 
 ## Limpieza
 

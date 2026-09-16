@@ -104,6 +104,27 @@ interface ToolSpec {
   timeoutMs?: number;
 }
 
+/**
+ * The environment every external tool is invoked under, here and in `providers/sbom-db.ts`.
+ *
+ * Two of the binaries this module probes phone home on their own initiative. `syft` and `grype` both default to
+ * `check-for-app-update: true` — a release poll on every invocation, including the `version` probe below — and
+ * `grype` additionally defaults to `db.auto-update: true`, which downloads a multi-gigabyte vulnerability
+ * database. None of it is gated by a FirmLab flag, so *"with every flag off: no network"* was false for any
+ * deployment that had syft or grype installed, and the capability probe alone was enough to make it false.
+ *
+ * These variables are namespaced to those two tools, so spreading them over every probe costs nothing and means
+ * a tool added later cannot reintroduce the hole by forgetting them. `GRYPE_DB_VALIDATE_AGE=false` is here
+ * deliberately: grype REFUSES a database older than five days by default, and a provisioned, deliberately-pinned
+ * database must be usable and reported as old, not rejected into silence.
+ */
+export const OFFLINE_ANCHORE_ENV: Readonly<Record<string, string>> = {
+  GRYPE_DB_AUTO_UPDATE: 'false',
+  GRYPE_DB_VALIDATE_AGE: 'false',
+  GRYPE_CHECK_FOR_APP_UPDATE: 'false',
+  SYFT_CHECK_FOR_APP_UPDATE: 'false',
+};
+
 /** Probe timeout for a tool that answers promptly. */
 const DEFAULT_PROBE_TIMEOUT_MS = 4000;
 
@@ -279,6 +300,7 @@ async function probe(spec: ToolSpec): Promise<ProbeResult> {
   try {
     const { stdout, stderr } = await execFileAsync(spec.bin, spec.probe, {
       timeout: spec.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+      env: { ...process.env, ...OFFLINE_ANCHORE_ENV },
     });
     const out = `${stdout}${stderr}`.split('\n')[0]?.trim().slice(0, 120) ?? '';
     return { id: spec.id, bin: spec.bin, available: true, version: out, group: spec.group };

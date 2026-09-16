@@ -74,6 +74,13 @@ for port publishing) but `FIRMLAB_LOOPBACK_PUBLISH=1` keeps the health/indicator
 `FIRMLAB_RESEARCH` and `FIRMLAB_CAPTURE` are three separate, independent flags — each is the only thing that
 turns on its own kind of network access, and turning all three off leaves a deterministic, offline workbench.
 
+That last sentence was false for two years in one place, and the shape of the hole is worth naming: **a tool you
+shell out to has its own network policy**. `grype` defaults to downloading its vulnerability database, and both
+anchore binaries poll for a release of themselves on every invocation, so the SBOM lane reached the internet with
+all three flags off — no FirmLab code made the request, which is exactly why no FirmLab flag governed it. The fix
+is in `providers/sbom-db.ts` and the policy is in `CLAUDE.md`; the general rule is that an external tool's
+defaults are part of this deployment's egress surface and have to be pinned where it is invoked.
+
 ## The three "corpora" — one word, three unrelated things
 
 The name is overloaded in the code, the CLI and the docs, and the three have nothing to do with each other. These

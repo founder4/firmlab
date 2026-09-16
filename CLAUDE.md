@@ -130,6 +130,18 @@ either. Where the curated table has an opinion about a grype row, `curatedCveVer
 (`claimed` · `rejected` · `outside_curated_range`), and silence — an unmapped component, or a manifest version
 like `1.18.4-1` the table cannot compare — is recorded as no verdict rather than as a dispute.
 
+**The SBOM lane makes no network request.** A tool you shell out to has its own idea of what it may do: `grype`
+defaults to `db.auto-update: true`, and both anchore binaries poll for a new release of themselves on every
+invocation. Measured on the deployed container on 2026-09-16 with every lane flag off, that meant a 2.2 GB
+vulnerability database arriving from `grype.anchore.io` one minute after start — *"with every flag off: no
+network"* was false, and nothing in the product said so. The policy, in `providers/sbom-db.ts` and pinned by
+`sbom-db.test.ts`: syft and grype run under `OFFLINE_ANCHORE_ENV` (`tools.ts`, applied to the capability probes
+too); the database is **provisioned** under `FIRMLAB_DATA_DIR`, never acquired; an absent database is a
+**refusal that names both remedies**, never a silent skip and never a download; the build date travels into the
+result, because "grype found 0" is only as current as the database behind it; and the one opt-in is
+`FIRMLAB_RESEARCH` — no flag of its own, because a database download sends nothing about the firmware, exactly
+like the KEV catalogue that lane already pulls. **When you add a tool, check what it does on startup.**
+
 ### Findings ledger
 
 `syncFindings(imageId, source, drafts)` deletes and re-inserts only that `source`'s rows, so re-running a

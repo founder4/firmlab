@@ -400,6 +400,17 @@ async function sbomRun(c: RunCtx): Promise<StepOutcome> {
       remedy: 'install-tool',
       note: 'syft/grype not installed',
     };
+  // "0 CVEs" and "the CVE question was never asked" used to render identically here. Since the lane stopped
+  // downloading grype's database behind the operator's back, the second is the commoner of the two, and a scan
+  // summary that reports it as a count is the same conflation the coverage banner exists to prevent.
+  if (!r.grypeAvailable)
+    return {
+      summary: `${r.packageCount} packages · CVE matching not attempted`,
+      findingCount: drafts.length,
+      degraded: true,
+      remedy: 'install-tool',
+      ...(r.grypeReason ? { note: r.grypeReason } : {}),
+    };
   return {
     summary: `${r.packageCount} packages · ${r.vulnerabilities.length} CVEs (Crit ${r.counts.Critical}, High ${r.counts.High})`,
     findingCount: drafts.length,
