@@ -58,6 +58,21 @@ export interface SbomResult {
    */
   grypeReason?: string;
   /**
+   * The same thing `grypeReason` says, as a value a caller can switch on.
+   *
+   * `grypeAvailable: false` covers three situations that need three different responses — grype is not installed,
+   * grype is installed and has no vulnerability database, grype ran and threw — and only the third is worth asking
+   * again. W9 sent all three to `remedy: 'install-tool'`, so a coverage campaign never retried a broken execution
+   * and reported it as a deployment to go and fix. The sentence in `grypeReason` already distinguished them, but
+   * `opacidad-remedy.ts` refuses to derive a remedy by parsing English prose — reword the sentence and the campaign
+   * inherits the defect — so the discriminant has to be a field.
+   *
+   * OPTIONAL FOREVER, like every other field added here: a result stored by an older build carries no outcome, and
+   * absent means "not recorded", never "grype ran". Absent on the `available: false` paths too, where syft decided
+   * the job before grype was ever reached.
+   */
+  grypeOutcome?: GrypeOutcome;
+  /**
    * What the CVE list was matched against. A vulnerability count is only as current as the database behind it,
    * and an empty list from an old one is not a clean bill of health — same discipline as `coverage.ts`. Optional
    * forever: a result stored before this field existed recorded no database identity, which is not the same as
@@ -65,6 +80,17 @@ export interface SbomResult {
    */
   grypeDb?: { schemaVersion: string | null; built: string | null; from: string | null; ageDays: number | null };
 }
+
+/** What became of the CVE half of this lane. See `SbomResult.grypeOutcome`. */
+export type GrypeOutcome =
+  /** grype ran to completion against a database on disk; `vulnerabilities` is its answer about this firmware. */
+  | 'matched'
+  /** grype is not on PATH in this deployment. */
+  | 'tool_absent'
+  /** grype is installed and has no vulnerability database, and this lane never downloads one on its own. */
+  | 'db_absent'
+  /** grype was invoked and the invocation failed. The same question against the same bytes may settle it. */
+  | 'run_failed';
 
 const PKG_CAP = 500;
 const VULN_CAP = 1000;
@@ -158,11 +184,13 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
   // `sbom-db.ts` for the measurement that made that rule necessary.
   const toolPresent = await isToolAvailable('grype');
   let grypeAvailable = false;
+  let grypeOutcome: GrypeOutcome = 'matched';
   let grypeReason: string | undefined;
   let grypeDb: SbomResult['grypeDb'];
   let vulnerabilities: SbomVuln[] = [];
   let counts = emptyCounts();
   if (!toolPresent) {
+    grypeOutcome = 'tool_absent';
     grypeReason = 'CVE matching was not attempted: grype is not installed on this deployment.';
     handle.log('grype not available — returning SBOM without CVE matching.');
   } else {
@@ -170,6 +198,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
     const status = await readGrypeDbStatus(env);
     const decision = decideGrype(status, { updateAllowed: dbUpdateAllowed(), dbDir });
     if (!decision.run) {
+      grypeOutcome = 'db_absent';
       grypeReason = decision.reason;
       handle.log(decision.reason);
     } else {
@@ -218,6 +247,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         grypeAvailable = false;
+        grypeOutcome = 'run_failed';
         grypeReason = `CVE matching was attempted and failed (the SBOM below is unaffected): ${message}`;
         handle.log(`grype failed (SBOM still returned): ${message}`);
       }
@@ -232,6 +262,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
     vulnerabilityTotal,
     packages,
     grypeAvailable,
+    grypeOutcome,
     ...(grypeReason ? { grypeReason } : {}),
     ...(grypeDb ? { grypeDb } : {}),
     vulnerabilities,

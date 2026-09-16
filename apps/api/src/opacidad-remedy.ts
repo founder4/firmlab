@@ -23,6 +23,7 @@
 import type { CredMatchState } from './providers/credmatch.js';
 import type { ExtractedDeviceTreeScan, RawImageDeviceTreeScan } from './providers/devicetree.js';
 import type { ProbeVerdict } from './providers/dynprobe.js';
+import type { GrypeOutcome } from './providers/sbom.js';
 import type { SymReachBlockedBy } from './providers/symreach.js';
 import type { YaraScanState } from './providers/yarascan.js';
 
@@ -277,4 +278,30 @@ export function remedyForNoRootfs(input: {
   if (input.blobs?.some((blob) => blob.short || blob.idTableInZeroFill)) return 'reacquire-input';
   if (input.diagnosed && input.volumes > 0 && input.unopenedBlobs === 0) return 'settled';
   return undefined;
+}
+
+/**
+ * The SBOM lane's CVE half. Three of the four outcomes are `grypeAvailable: false` and W9 sent all three to
+ * `install-tool` — including the one where grype IS installed, DOES have a vulnerability database, and the
+ * invocation threw. That one is a harness failure, not a deployment gap: the same question against the same bytes
+ * may settle it, and a coverage campaign that never queues it reports a broken run as an operator's chore.
+ *
+ * The remedy is read off `grypeOutcome` rather than off `grypeReason`, which says the same thing in English. Both
+ * sentences are precise today; deriving the remedy from either is how this module inherits a defect the next time
+ * one is reworded, which is the rule stated at the top of the file.
+ */
+export function remedyForGrypeOutcome(outcome: GrypeOutcome | undefined): DegradedRemedy | undefined {
+  switch (outcome) {
+    case 'run_failed':
+      return 'retry';
+    case 'tool_absent':
+    case 'db_absent':
+      // Both are this deployment's: a binary that is not on PATH, or a database that was never provisioned. The
+      // result's own reason names both ways to supply the second; neither is fixed by asking the same scan again.
+      return 'install-tool';
+    case 'matched':
+      return undefined; // grype answered — the step is not degraded at all
+    default:
+      return undefined; // a result stored before the discriminant existed: unknown, not assumed
+  }
 }

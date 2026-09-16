@@ -7,6 +7,7 @@ import {
   remedyForCredMatch,
   remedyForDeviceTree,
   remedyForFwHunt,
+  remedyForGrypeOutcome,
   remedyForKmod,
   remedyForNoRootfs,
   remedyForProbeVerdict,
@@ -275,5 +276,28 @@ describe('extraction that recovered no rootfs', () => {
     // that cannot fix it.
     expect(remedyForNoRootfs({ isDecoy: false, diagnosed: true, volumes: 1, unopenedBlobs: 1 })).toBeUndefined();
     expect(remedyForNoRootfs({ isDecoy: false, diagnosed: false, volumes: 0, unopenedBlobs: 0 })).toBeUndefined();
+  });
+});
+
+describe("the SBOM lane's CVE half", () => {
+  it('queues a grype that ran and threw for a retry', () => {
+    expect(remedyForGrypeOutcome('run_failed')).toBe('retry');
+  });
+
+  it('keeps a missing binary and an unprovisioned database on the deployment', () => {
+    expect(remedyForGrypeOutcome('tool_absent')).toBe('install-tool');
+    expect(remedyForGrypeOutcome('db_absent')).toBe('install-tool');
+  });
+
+  it('declares nothing for a grype that answered, or for a result stored before the discriminant existed', () => {
+    expect(remedyForGrypeOutcome('matched')).toBeUndefined();
+    expect(remedyForGrypeOutcome(undefined)).toBeUndefined();
+  });
+
+  it('separates the executable retry from the deployment chore the three used to share', () => {
+    // The defect: all three `grypeAvailable:false` cases were `install-tool`, so a campaign never re-ran a broken
+    // execution and reported it as something an operator had to go and fix.
+    expect(isExecutableRemedy(remedyForGrypeOutcome('run_failed'))).toBe(true);
+    expect(remedyForGrypeOutcome('run_failed')).not.toBe(remedyForGrypeOutcome('db_absent'));
   });
 });

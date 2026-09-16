@@ -74,6 +74,7 @@ import {
   remedyForCredMatch,
   remedyForDeviceTree,
   remedyForFwHunt,
+  remedyForGrypeOutcome,
   remedyForKmod,
   remedyForNoRootfs,
   remedyForProbeVerdict,
@@ -403,14 +404,20 @@ async function sbomRun(c: RunCtx): Promise<StepOutcome> {
   // "0 CVEs" and "the CVE question was never asked" used to render identically here. Since the lane stopped
   // downloading grype's database behind the operator's back, the second is the commoner of the two, and a scan
   // summary that reports it as a count is the same conflation the coverage banner exists to prevent.
-  if (!r.grypeAvailable)
+  //
+  // The three ways of not asking it are not one degradation either. A missing binary and an unprovisioned database
+  // are the deployment's; a grype that ran and threw is a harness failure this campaign can settle by asking again,
+  // and it was being reported as an operator's chore because all three shared `remedy: 'install-tool'`.
+  if (!r.grypeAvailable) {
+    const remedy = remedyForGrypeOutcome(r.grypeOutcome);
     return {
-      summary: `${r.packageCount} packages · CVE matching not attempted`,
+      summary: `${r.packageCount} packages · CVE matching ${r.grypeOutcome === 'run_failed' ? 'failed' : 'not attempted'}`,
       findingCount: drafts.length,
       degraded: true,
-      remedy: 'install-tool',
+      ...(remedy ? { remedy } : {}),
       ...(r.grypeReason ? { note: r.grypeReason } : {}),
     };
+  }
   return {
     summary: `${r.packageCount} packages · ${r.vulnerabilities.length} CVEs (Crit ${r.counts.Critical}, High ${r.counts.High})`,
     findingCount: drafts.length,
