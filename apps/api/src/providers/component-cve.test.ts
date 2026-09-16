@@ -7,6 +7,7 @@ import {
   buildComponentFindings,
   compareVersion,
   componentDirPriority,
+  curatedCveVerdict,
   describeComponentScan,
   extractComponentVersion,
   matchCves,
@@ -127,6 +128,8 @@ describe('the ranges are the advisories, not the era around them', () => {
   it('does not carry CVE-2016-2148, whose NVD range has no lower bound to stand on', () => {
     const rule = ruleFor('busybox');
     expect(rule.cves.map((c) => c.id)).not.toContain('CVE-2016-2148');
+    // …and the refusal is recorded as data, because grype matches it from a manifest on the same images.
+    expect(rule.rejected?.map((r) => r.id)).toContain('CVE-2016-2148');
   });
 
   it('claims the dropbear format-string RCE for the shipped 2012.55 and not for a patched build', () => {
@@ -288,5 +291,50 @@ describe('describeComponentScan', () => {
     expect(s).toContain('8000 entries');
     // The claim the reader must not make from a partial walk.
     expect(s).toContain('indistinguishable here from one that is not present');
+  });
+});
+
+/**
+ * The reconciliation between the two lanes. Every case here is the shape of a real grype row: the package name
+ * and version come from a manifest, which is a different measurement from the binary string this table reads.
+ */
+describe('curatedCveVerdict — what this table says about a row the other lane matched', () => {
+  it('names the refusal for the CVE this table evaluated and left out', () => {
+    // The backlog case verbatim: grype accepts CVE-2016-2148 for BusyBox 1.18.4 from an opkg manifest.
+    const v = curatedCveVerdict('busybox', '1.18.4', 'CVE-2016-2148');
+    expect(v?.kind).toBe('rejected');
+    expect(v?.note).toContain('refuses to claim it');
+    expect(v?.note).toContain('no analyst');
+  });
+
+  it('refuses the same CVE at every version, because the refusal is about the advisory, not the build', () => {
+    for (const version of ['1.01', '1.18.4', '1.36.1', 'not-a-version']) {
+      expect(curatedCveVerdict('busybox', version, 'CVE-2016-2148')?.kind).toBe('rejected');
+    }
+  });
+
+  it('corroborates without upgrading when the curated range covers the manifest version', () => {
+    const v = curatedCveVerdict('busybox', '1.18.4', 'CVE-2011-2716');
+    expect(v?.kind).toBe('claimed');
+    expect(v?.note).toContain('static_confirmed');
+  });
+
+  it('disputes a row whose version falls below this table own floor', () => {
+    // dnsmasq 1.10 is the floored case: NVD's open-below range matches it, the curated rule starts at 2.0.
+    const v = curatedCveVerdict('dnsmasq', '1.10', 'CVE-2017-14491');
+    expect(v?.kind).toBe('outside_curated_range');
+    expect(v?.note).toContain('2.0–2.77');
+  });
+
+  it('says nothing rather than guessing when the manifest version carries a package revision', () => {
+    // `1.18.4-1` is an opkg/dpkg revision, not a version this table can compare. Silence, not "out of range".
+    const v = curatedCveVerdict('busybox', '1.18.4-1', 'CVE-2011-2716');
+    expect(v?.kind).toBe('version_not_comparable');
+    expect(v?.note).toContain('neither corroborates nor disputes');
+  });
+
+  it('has no opinion on an unmapped component or an unknown CVE', () => {
+    expect(curatedCveVerdict('lighttpd', '1.4.35', 'CVE-2015-3200')).toBeNull();
+    expect(curatedCveVerdict('busybox', '1.18.4', 'CVE-2021-42374')).toBeNull();
   });
 });

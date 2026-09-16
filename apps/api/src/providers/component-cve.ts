@@ -80,6 +80,17 @@ export function versionInRange(v: string, low: string, high: string): boolean {
   return compareVersion(pv, pl) >= 0 && compareVersion(pv, ph) <= 0;
 }
 
+/**
+ * A CVE this table looked at for a component and deliberately does NOT claim, with the reason it refuses.
+ *
+ * Data rather than prose because `sbom`/grype matches some of them from a package manifest on the SAME image:
+ * the ledger then has to say the two lanes disagree and why, which a comment cannot do. See `curatedCveVerdict`.
+ */
+export interface RejectedCve {
+  id: string;
+  reason: string;
+}
+
 export interface CveRule {
   id: string;
   title: string;
@@ -105,6 +116,8 @@ export interface ComponentRule {
   marker?: string;
   bareVersionRe?: RegExp;
   cves: CveRule[];
+  /** CVEs evaluated for this component and refused, each with its reason. See `RejectedCve`. */
+  rejected?: readonly RejectedCve[];
 }
 
 /**
@@ -167,7 +180,8 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
         // reachable primitive rather than a paper finding.
         //
         // This entry is here and CVE-2016-2148 — a CRITICAL udhcpc heap overflow, "before 1.25.0", which would
-        // also match both builds — is NOT, and the difference is the whole discipline of this table. NVD backs
+        // also match both builds — is in `rejected` below, and the difference is the whole discipline of this
+        // table. NVD backs
         // CVE-2011-2716 with 90 individually enumerated CPEs, `busybox:1.01` and `busybox:1.7.2` among them: an
         // analyst asserted these exact versions. CVE-2016-2148 carries zero enumerated CPEs and one range with no
         // lower bound — the same shape refused two rules down for dnsmasq 1.10, and refusing it there while
@@ -178,6 +192,14 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
         severity: 'medium',
         low: '1.0.0',
         high: '1.19.4',
+      },
+    ],
+    rejected: [
+      {
+        id: 'CVE-2016-2148',
+        reason:
+          'NVD backs it with a single range open below ("before 1.25.0") and zero enumerated CPEs, so no analyst ' +
+          'asserted any specific version and the range matches a 2005 build as readily as a 2016 one.',
       },
     ],
   },
@@ -247,6 +269,80 @@ export function extractComponentVersion(strings: string, rule: ComponentRule): s
 /** Pure: the CVEs from a rule whose affected range covers `version`. */
 export function matchCves(rule: ComponentRule, version: string): CveRule[] {
   return rule.cves.filter((c) => versionInRange(version, c.low, c.high));
+}
+
+/**
+ * ─── Which CVE standard applies when both lanes run, and what the other lane is then allowed to say ───
+ *
+ * Two lanes claim CVEs on the same image and they do NOT apply the same standard. This table matches a version
+ * read out of a bundled binary against a hand-verified range: bounded at BOTH ends, and only where NVD enumerates
+ * CPEs for the versions in hand. `sbom`/grype matches a package manifest against the vulnerability databases as
+ * they are modelled, open-below CPE ranges included. Neither is wrong, and they mostly do not even overlap — a
+ * bundled binary has no manifest entry, which is why this provider exists. What WAS wrong is that which standard
+ * an image got was an accident of which provider happened to run: grype accepts CVE-2016-2148 for BusyBox 1.18.4
+ * from a manifest while the rule three screens up refuses it, and nothing in the ledger said so.
+ *
+ * The decision, and it is a decision about what a row SAYS, never about which rows exist:
+ *
+ *  1. **Both lanes always run and neither suppresses the other.** Deleting the grype rows this table cannot
+ *     corroborate would turn a stricter standard into a smaller finding count — the "empty means clean" lie in a
+ *     new place. The claim changes; the count does not.
+ *  2. **Only this lane reaches `static_confirmed`.** A grype row stays `needs_runtime_reproduction` on the
+ *     `external_advisory` channel even when this table claims the same CVE: what grype measured is a manifest
+ *     entry, not the version string in the shipped binary. Corroboration is not a transfer of evidence, and the
+ *     reverse never happens either — grype cannot raise a curated row.
+ *  3. **Where this table has an opinion about a grype row, the row carries it**, as one of three different
+ *     sentences: the CVE was evaluated and REJECTED (`rejected`, an open NVD range with no enumerated CPE), the
+ *     version falls outside this table's own floored range, or this table claims it too.
+ *  4. **Silence is not agreement.** An unmapped component, or a manifest version this table cannot parse
+ *     (`1.18.4-1` — a distro package revision), returns NO verdict rather than a false "outside the range".
+ *
+ * Components are matched by exact name: grype's `busybox` is this table's `busybox`. An alias table would have to
+ * be measured against real manifests, and inventing one (`libopenssl` → `openssl`) is the guess this codebase
+ * refuses everywhere else. Unmatched means no verdict, which reads as no opinion — see rule 4.
+ */
+export type CuratedVerdictKind = 'claimed' | 'rejected' | 'outside_curated_range' | 'version_not_comparable';
+
+export interface CuratedVerdict {
+  kind: CuratedVerdictKind;
+  /** The sentence the corroborated or disputed row prints. */
+  note: string;
+}
+
+/**
+ * Pure: what the curated table has to say about one CVE another lane matched to `component` `version`, or null
+ * when it has nothing to say. Never suppresses and never upgrades — it only supplies the sentence.
+ */
+export function curatedCveVerdict(component: string, version: string, cveId: string): CuratedVerdict | null {
+  const rule = COMPONENT_RULES.find((r) => r.component === component);
+  if (!rule) return null;
+  // Deliberately version-independent: the refusal is about how NVD models the CVE, not about this build.
+  const refused = rule.rejected?.find((r) => r.id === cveId);
+  if (refused) {
+    return {
+      kind: 'rejected',
+      note: `The curated table evaluated ${cveId} for ${component} and refuses to claim it: ${refused.reason} This row stands on grype's broader standard alone.`,
+    };
+  }
+  const curated = rule.cves.find((c) => c.id === cveId);
+  if (!curated) return null;
+  const range = `${curated.low}–${curated.high}`;
+  if (!parseVersion(version)) {
+    return {
+      kind: 'version_not_comparable',
+      note: `The curated table carries ${cveId} for ${component} ${range} but cannot compare the manifest version "${version}", so it neither corroborates nor disputes this row.`,
+    };
+  }
+  if (versionInRange(version, curated.low, curated.high)) {
+    return {
+      kind: 'claimed',
+      note: `The curated table claims ${cveId} for ${component} ${range} as well; its own row is static_confirmed from the version string in the binary, which is evidence this manifest match does not carry.`,
+    };
+  }
+  return {
+    kind: 'outside_curated_range',
+    note: `${component} ${version} falls outside the curated range ${range} for ${cveId}, which is floored at the series the advisory is about where the database range matched here is open below.`,
+  };
 }
 
 /**

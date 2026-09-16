@@ -55,6 +55,38 @@ describe('normalizeSbom', () => {
   it('returns nothing when the SBOM is unavailable', () => {
     expect(normalizeSbom({ ...base, available: false })).toEqual([]);
   });
+
+  /**
+   * Which CVE standard applied used to be an accident of which provider ran. The row now carries the curated
+   * table's verdict — without changing the rung, which follows what THIS lane measured (a manifest entry).
+   */
+  const withVuln = (id: string, packageName: string, packageVersion: string): SbomResult => ({
+    ...base,
+    vulnerabilities: [{ id, severity: 'Critical', packageName, packageVersion, fixedIn: null }],
+  });
+
+  it('stamps the curated refusal on a grype row the curated table will not claim', () => {
+    const out = normalizeSbom(withVuln('CVE-2016-2148', 'busybox', '1.18.4'));
+    expect(out).toHaveLength(1); // never suppressed: a stricter standard is not a smaller count
+    expect((out[0]?.evidence as { curatedVerdict?: string }).curatedVerdict).toBe('rejected');
+    expect(out[0]?.rationale).toContain('refuses to claim it');
+    expect(out[0]?.proofState).toBe('needs_runtime_reproduction');
+  });
+
+  it('corroborates without upgrading the rung when the curated table claims the same CVE', () => {
+    const out = normalizeSbom(withVuln('CVE-2011-2716', 'busybox', '1.18.4'));
+    expect((out[0]?.evidence as { curatedVerdict?: string }).curatedVerdict).toBe('claimed');
+    expect(out[0]?.proofState).toBe('needs_runtime_reproduction');
+    expect(out[0]?.evidenceChannel).toBe('external_advisory');
+  });
+
+  it('leaves a row the curated table has no opinion on exactly as it was', () => {
+    const out = normalizeSbom(withVuln('CVE-2021-1', 'lighttpd', '1.4.35'));
+    expect(out[0]?.evidence).not.toHaveProperty('curatedVerdict');
+    expect(out[0]?.rationale).toBe(
+      'Vulnerable component present in the rootfs; reachability and exploitability not yet proven.',
+    );
+  });
 });
 
 /**

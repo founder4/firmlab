@@ -117,8 +117,18 @@ Two rules follow, and most of the codebase's shape exists to enforce them:
 hand-verified range. Ranges come from the NVD CVE API queried against the version in hand, never from recall, and
 where NVD's CPE range is open below the rule sets its own floor — an unbounded-below range is a CPE modelling
 artifact, not evidence that a decade-older codebase contains the bug. A CVE NVD backs only with an open range and
-no enumerated CPE is left out (see the rejected CVE-2016-2148 comment). `sbom`/grype applies a broader standard
-on the same images; both are labelled by source.
+no enumerated CPE is left out — recorded in the rule's `rejected` list rather than only in a comment, because
+grype matches some of them from a manifest on the very same image.
+
+**Which standard applies when both lanes run.** `sbom`/grype matches package manifests against the databases as
+they are modelled (open-below CPE ranges included); the curated table matches bundled binaries against ranges
+bounded at both ends. Both always run, and **neither suppresses the other** — a stricter standard must never show
+up as a smaller finding count. Only the curated lane reaches `static_confirmed`: a grype row stays
+`needs_runtime_reproduction` on the `external_advisory` channel even when the curated table claims the same CVE,
+because a manifest entry is not the version string in the shipped binary, and grype never raises a curated row
+either. Where the curated table has an opinion about a grype row, `curatedCveVerdict` puts it **on** that row
+(`claimed` · `rejected` · `outside_curated_range`), and silence — an unmapped component, or a manifest version
+like `1.18.4-1` the table cannot compare — is recorded as no verdict rather than as a dispute.
 
 ### Findings ledger
 

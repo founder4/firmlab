@@ -9,9 +9,11 @@
  *                            entropy heuristic is `needs_runtime_reproduction` (see the essay below)
  *   - binary hardening    → `static_confirmed`  (an NX/canary/PIC flag is a fact about the binary)
  *   - SBOM CVEs           → `needs_runtime_reproduction`  (a vulnerable component is present, but reachability
- *                            and on-device exploitability are unproven — never overstated)
+ *                            and on-device exploitability are unproven — never overstated), annotated with the
+ *                            curated table's verdict where it has one (see `curatedCveVerdict`)
  */
 import type { EvidenceChannel, Finding, FindingSeverity, ProofState, StringHit } from '@firmlab/core';
+import { curatedCveVerdict } from './providers/component-cve.js';
 import type { DecompileResult } from './providers/decompile.js';
 import type { GitleaksFinding, GitleaksResult } from './providers/gitleaks.js';
 import type { SbomResult, Severity } from './providers/sbom.js';
@@ -77,20 +79,38 @@ const SBOM_SEVERITY: Record<Severity, FindingSeverity> = {
   Unknown: 'info',
 };
 
-/** CVEs matched against the rootfs SBOM (syft + grype). Present ≠ reachable, hence needs_runtime_reproduction. */
+/**
+ * CVEs matched against the rootfs SBOM (syft + grype). Present ≠ reachable, hence needs_runtime_reproduction.
+ *
+ * The rung is the same whatever the curated table thinks, because the rung follows what THIS lane measured: a
+ * package manifest entry, on the `external_advisory` channel. What the curated verdict changes is the sentence
+ * and a stamped `curatedVerdict`, so a reader can tell "grype and the curated table agree" from "grype matched a
+ * CVE the curated table evaluated and refuses" — the choice that used to be an accident of which provider ran.
+ * `curatedCveVerdict` returns null when it has no opinion, and then nothing is added: silence is not agreement.
+ */
 export function normalizeSbom(result: SbomResult): FindingDraft[] {
   if (!result.available) return [];
-  return result.vulnerabilities.map((v) => ({
-    kind: 'cve',
-    title: `${v.id} — ${v.packageName} ${v.packageVersion}`,
-    severity: SBOM_SEVERITY[v.severity] ?? 'info',
-    proofState: 'needs_runtime_reproduction' as ProofState,
-    // A published database says this version is affected. Nothing here was measured on THIS image beyond the
-    // package's presence — which is exactly the distinction the channel exists to make visible.
-    evidenceChannel: 'external_advisory' as EvidenceChannel,
-    rationale: 'Vulnerable component present in the rootfs; reachability and exploitability not yet proven.',
-    evidence: { id: v.id, packageName: v.packageName, packageVersion: v.packageVersion, fixedIn: v.fixedIn },
-  }));
+  const base = 'Vulnerable component present in the rootfs; reachability and exploitability not yet proven.';
+  return result.vulnerabilities.map((v) => {
+    const verdict = curatedCveVerdict(v.packageName, v.packageVersion, v.id);
+    return {
+      kind: 'cve',
+      title: `${v.id} — ${v.packageName} ${v.packageVersion}`,
+      severity: SBOM_SEVERITY[v.severity] ?? 'info',
+      proofState: 'needs_runtime_reproduction' as ProofState,
+      // A published database says this version is affected. Nothing here was measured on THIS image beyond the
+      // package's presence — which is exactly the distinction the channel exists to make visible.
+      evidenceChannel: 'external_advisory' as EvidenceChannel,
+      rationale: verdict ? `${base} ${verdict.note}` : base,
+      evidence: {
+        id: v.id,
+        packageName: v.packageName,
+        packageVersion: v.packageVersion,
+        fixedIn: v.fixedIn,
+        ...(verdict ? { curatedVerdict: verdict.kind } : {}),
+      },
+    };
+  });
 }
 
 /**
