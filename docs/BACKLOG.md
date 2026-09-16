@@ -128,6 +128,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `cveIds` la entrada del cruce es el conjunto vacío y la salida también. Queda pendiente decidir si además se
   cruza contra los CVE que aporta el carril SBOM — la base de grype ya trae un proveedor `kev` embebido y sería
   un cruce local, sin red — y, mientras no se haga, que la superficie diga que la pregunta no se hizo.
+- [ ] Distinguir en W9 un grype que falló al correr de un grype que no puede correr. `sbomRun` (`opacidad.ts`)
+  manda los tres casos de `grypeAvailable:false` al mismo `remedy: 'install-tool'`, y el tercero —grype corrió y
+  lanzó— es un `retry`: una campaña de cobertura no lo reintenta y lo reporta como despliegue a arreglar. El
+  `note` sí lleva la frase exacta, pero `opacidad-remedy.ts` prohíbe expresamente derivar el remedy parseando la
+  nota en inglés, así que el arreglo es un campo discriminante en `SbomResult` (opcional para siempre, como
+  `grypeReason`), no una heurística sobre el texto. Verificable: un job `sbom` con grype presente y base presente
+  cuya ejecución falle debe dejar `remedy: 'retry'` en el paso.
 - [ ] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de
   descargarla sola (ver `providers/sbom-db.ts`), un contenedor recreado no tiene base y el resultado declara la
   negativa en vez de correlacionar. Decidir entre las dos opciones, ninguna gratis: hornearla en
@@ -214,9 +221,19 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   expandía desde un `<div>`, así que el control que revela el resto del rootfs era inalcanzable por teclado (ahora
   `<button>` con `aria-expanded`, puesto sólo donde hay algo que expandir); y el botón de borrar preset se
   anunciaba como "✕" en todas las filas. La suite web queda en 49 ficheros y 596 casos.)*
-- [ ] Cubrir los visuales dibujados a mano, que siguen sin test: `SignalCanvas.tsx` (280 líneas),
-  `SbomGraph.tsx` (230), `EntropyChart.tsx` (174), `StructureMap.tsx` (125). `FilesystemTree` ya no está en esta
-  lista: `4f8ab72` le dio 4 casos al convertir su fila en un control accesible.
+- [x] Cubrir los visuales dibujados a mano, que seguían sin test: `SignalCanvas.tsx` (280 líneas),
+  `SbomGraph.tsx` (230), `EntropyChart.tsx` (174), `StructureMap.tsx` (125). `FilesystemTree` ya no estaba en esta
+  lista: `4f8ab72` le dio 4 casos al convertir su fila en un control accesible. *(Hecho en `697b197`: 21 casos en
+  `visuals.states.test.tsx` sobre los estados que un fixture no alcanza, y tres de los cuatro mentían por omisión
+  —cada uno un recuento impreso sin aquello de lo que se contó—. `SignalCanvas` tenía su recuento de marcas DENTRO
+  de la guarda de la leyenda de categorías, así que la imagen con menos que leer era justo la que no lo veía, y ese
+  recuento contaba sólo lo dibujado: la mayoría de hallazgos de un rootfs real no llevan offset, de modo que
+  `signal.offTape` dice cuántos tiró la regla. `SbomGraph` indexaba los CVE por nombre de paquete contra un listado
+  que el proveedor recorta a 500, así que un Critical podía caer fuera del grafo sin llegar a nodo, tooltip ni
+  recuento — `sbom.offGraph` lo nombra en la leyenda—, y el «0 de 412 afectados» sin motor era una medición que no
+  ocurrió. Verificado revirtiendo ambos componentes con los tests puestos: 8 de los 21 fallan, uno por afirmación.
+  `31981dc` corrigió después la redacción de esa última: `c2b0c9f` hizo que `grypeAvailable:false` dejara de
+  significar «grype no está instalado», y la leyenda declara ya el resultado y no la causa, que es del banner.)*
 
 ## De la revisión de galert — análisis y adquisición (2026-09-14)
 
