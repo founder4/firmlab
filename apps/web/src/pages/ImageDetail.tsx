@@ -983,12 +983,16 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
 
   // Load any previously computed diff when the target changes.
   useEffect(() => {
+    let alive = true;
     setResult(null);
-    if (!against) return;
+    if (!against) return () => undefined;
     api
       .diffResult(imageId, against)
-      .then(setResult)
-      .catch(() => setResult(null));
+      .then((next) => alive && setResult(next))
+      .catch(() => alive && setResult(null));
+    return () => {
+      alive = false;
+    };
   }, [imageId, against]);
 
   const run = useCallback(async () => {

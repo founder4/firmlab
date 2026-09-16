@@ -152,6 +152,87 @@ describe('FileBrowser', () => {
     expect(screen.getByText(/the file’s name played no part/)).toBeTruthy();
   });
 
+  it('requests and renders a hexadecimal view of the same byte window', async () => {
+    mockApi.files.mockResolvedValue(listing());
+    mockApi.readFile.mockResolvedValueOnce(fileRead({ path: 'busybox', text: 'ELF bytes' })).mockResolvedValueOnce(
+      fileRead({
+        path: 'busybox',
+        view: 'hex',
+        hexdump: '00000000  7f 45 4c 46  |.ELF|',
+        viewReason: 'Rendered as a hexdump because it was asked for. Text: no NUL bytes.',
+      }),
+    );
+    render(<FileBrowser imageId="img1" />);
+
+    fireEvent.click(await screen.findByText('busybox'));
+    expect(await screen.findByText('ELF bytes')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hex' }));
+
+    expect(await screen.findByText(/7f 45 4c 46/)).toBeInTheDocument();
+    expect(mockApi.readFile).toHaveBeenLastCalledWith('img1', 'busybox', { offset: 0, view: 'hex' });
+    expect(screen.getByText(/because it was asked for/)).toBeInTheDocument();
+  });
+
+  it('removes the previous file bytes while a newly selected file is loading', async () => {
+    const l = listing();
+    mockApi.files.mockResolvedValue({
+      ...l,
+      listing: {
+        ...(l.listing as NonNullable<FilesListing['listing']>),
+        entries: [
+          {
+            name: 'first.conf',
+            path: 'first.conf',
+            type: 'file',
+            size: 12,
+            mode: 0o644,
+            modeString: '-rw-r--r--',
+          },
+          {
+            name: 'second.conf',
+            path: 'second.conf',
+            type: 'file',
+            size: 13,
+            mode: 0o644,
+            modeString: '-rw-r--r--',
+          },
+        ],
+      },
+    });
+    let finishSecond: ((value: FilesRead) => void) | undefined;
+    const second = new Promise<FilesRead>((resolve) => {
+      finishSecond = resolve;
+    });
+    mockApi.readFile
+      .mockResolvedValueOnce(fileRead({ path: 'first.conf', text: 'FIRST FILE BYTES' }))
+      .mockReturnValueOnce(second);
+    render(<FileBrowser imageId="img1" />);
+
+    fireEvent.click(await screen.findByText('first.conf'));
+    expect(await screen.findByText('FIRST FILE BYTES')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('second.conf'));
+    expect(screen.queryByText('FIRST FILE BYTES')).toBeNull();
+
+    finishSecond?.(fileRead({ path: 'second.conf', text: 'SECOND FILE BYTES' }));
+    expect(await screen.findByText('SECOND FILE BYTES')).toBeInTheDocument();
+  });
+
+  it('clears a refusal once the next file reads cleanly', async () => {
+    mockApi.files.mockResolvedValue(listing());
+    mockApi.readFile
+      .mockRejectedValueOnce(new Error('symlink-escapes-extraction: passwd points at /dev/null, outside the carve'))
+      .mockResolvedValueOnce(fileRead({ path: 'busybox', text: 'ELF bytes' }));
+    render(<FileBrowser imageId="img1" />);
+
+    fireEvent.click(await screen.findByText('passwd'));
+    expect(await screen.findByText(/symlink-escapes-extraction/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('busybox'));
+    expect(await screen.findByText('ELF bytes')).toBeInTheDocument();
+    // A refusal that outlives the file it refused reads as a refusal of the file now on screen.
+    expect(screen.queryByText(/symlink-escapes-extraction/)).toBeNull();
+  });
+
   it('never lets a window read as the whole file', async () => {
     mockApi.files.mockResolvedValue(listing());
     mockApi.readFile.mockResolvedValue(

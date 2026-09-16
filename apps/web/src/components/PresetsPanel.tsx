@@ -158,7 +158,14 @@ export function PresetsPanel({ imageId }: { imageId: string }): JSX.Element {
               <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => run(p)}>
                 {t.common.run}
               </button>
-              <button className="btn btn-sm" title={t.panels.presets.remove} onClick={() => remove(p.id)}>
+              {/* The glyph is not a name. Without the label the control reads as "✕" — every preset's delete
+                  button identical, and none of them saying what it deletes. */}
+              <button
+                className="btn btn-sm"
+                aria-label={t.panels.presets.remove}
+                title={t.panels.presets.remove}
+                onClick={() => remove(p.id)}
+              >
                 ✕
               </button>
             </div>

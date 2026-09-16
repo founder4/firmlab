@@ -1,6 +1,11 @@
 /**
  * Collapsible extracted-rootfs tree. Directories expand on click; setuid/setgid binaries and symlinks are
  * badged inline because they are the audit-relevant nodes. Backed by the FsNode tree the extractor produces.
+ *
+ * The row is a `<button>`, not a clickable `<div>`: it is the control that reveals the rest of the rootfs, so it has
+ * to be reachable by keyboard and to state whether what it hides is currently shown. `aria-expanded` is set only
+ * where there IS something to expand — a leaf or an empty directory carrying `aria-expanded="false"` would announce
+ * collapsed content that does not exist.
  */
 import { useState } from 'react';
 import type { FsNode } from '../api';
@@ -23,15 +28,22 @@ function TreeNode({ node, depth }: { node: FsNode; depth: number }): JSX.Element
 
   return (
     <div>
-      <div
+      <button
+        type="button"
         onClick={() => hasChildren && setOpen((o) => !o)}
+        aria-expanded={hasChildren ? open : undefined}
         style={{
           display: 'flex',
+          width: '100%',
           alignItems: 'center',
           gap: 8,
           padding: '3px 6px',
           paddingLeft: 6 + depth * 16,
+          border: 0,
           borderRadius: 6,
+          background: 'transparent',
+          font: 'inherit',
+          textAlign: 'left',
           cursor: hasChildren ? 'pointer' : 'default',
         }}
         className="tree-row"
@@ -48,7 +60,7 @@ function TreeNode({ node, depth }: { node: FsNode; depth: number }): JSX.Element
             {fmtBytes(node.size)}
           </span>
         )}
-      </div>
+      </button>
       {open && hasChildren && (
         <div>
           {node.children?.map((c) => (

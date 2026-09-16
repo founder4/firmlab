@@ -83,9 +83,15 @@ export function FileBrowser({ imageId }: { imageId: string }): JSX.Element {
     (path: string, at: number, hex: boolean) => {
       setSelected(path);
       setOffset(at);
+      // A newly selected path owns a new read. Leaving the previous payload mounted while this request is pending
+      // shows bytes from file A under a selection on file B, which is worse than an honest loading state.
+      setRead(null);
       api
         .readFile(imageId, path, { offset: at, view: hex ? 'hex' : 'text' })
-        .then(setRead)
+        .then((next) => {
+          setRead(next);
+          setError(null);
+        })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
     },
     [imageId],

@@ -19,7 +19,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { type Finding, type ImageSummary, api } from '../api';
+import { type Finding, type FirmwareDiffResult, type ImageSummary, api } from '../api';
 import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import { ImageDetail } from './ImageDetail';
@@ -285,6 +285,93 @@ describe('ImageDetail findings workflow', () => {
     if (!ledger || !report) throw new Error('findings ledger and report disclosure must both render');
     expect(ledger.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect((report as HTMLDetailsElement).open).toBe(false);
+  });
+});
+
+const diffResult = (against: string, filename: string): FirmwareDiffResult => ({
+  a: { id: 'img1', filename: image.filename },
+  b: { id: against, filename },
+  identity: [{ field: 'version', a: '1.0', b: '2.0' }],
+  packages: {
+    hasData: true,
+    added: [{ name: 'openssl', version: '3.0.0' }],
+    removed: [],
+    changed: [{ name: 'busybox', a: '1.31', b: '1.36' }],
+    addedTotal: 7,
+    removedTotal: 3,
+    changedTotal: 5,
+  },
+  cves: {
+    hasData: true,
+    addedIds: ['CVE-2026-0001'],
+    removedIds: [],
+    addedBySeverity: { Critical: 1, High: 0, Medium: 0, Low: 0, Negligible: 0, Unknown: 0 },
+    addedTotal: 12,
+    removedTotal: 4,
+  },
+  files: {
+    hasData: true,
+    added: ['etc/new.conf'],
+    removed: [],
+    changed: ['bin/busybox'],
+    counts: { added: 9, removed: 2, changed: 6 },
+  },
+});
+
+describe('ImageDetail diff workflow', () => {
+  beforeEach(() => {
+    mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
+  });
+
+  it('states that a second image is required instead of rendering an empty comparison', async () => {
+    mockApi.listImages.mockResolvedValue([image]);
+    renderSection('diff');
+
+    expect(await screen.findByText(/Upload a second image/)).toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).toBeNull();
+  });
+
+  it('loads the selected comparison and uses provider totals rather than capped array lengths', async () => {
+    const baseline = { ...image, id: 'img2', filename: 'router-fw-2.bin' };
+    mockApi.listImages.mockResolvedValue([image, baseline]);
+    mockApi.diffResult.mockResolvedValue(diffResult(baseline.id, baseline.filename));
+    renderSection('diff');
+
+    fireEvent.change(await screen.findByRole('combobox'), { target: { value: baseline.id } });
+    expect((await screen.findAllByRole('columnheader', { name: 'router-fw-2.bin' })).length).toBeGreaterThan(0);
+    expect(mockApi.diffResult).toHaveBeenCalledWith('img1', 'img2');
+
+    const statValues = Array.from(document.querySelectorAll('.stat-value')).map((node) => node.textContent);
+    expect(statValues).toEqual(expect.arrayContaining(['7', '3', '5', '9', '2', '6']));
+    expect(screen.getByText(/Showing 1 of 12/)).toBeInTheDocument();
+  });
+
+  it('does not let a slow response for an old baseline replace the current comparison', async () => {
+    const older = { ...image, id: 'img2', filename: 'older.bin' };
+    const newer = { ...image, id: 'img3', filename: 'newer.bin' };
+    mockApi.listImages.mockResolvedValue([image, older, newer]);
+    let resolveOlder: ((value: FirmwareDiffResult) => void) | undefined;
+    let resolveNewer: ((value: FirmwareDiffResult) => void) | undefined;
+    mockApi.diffResult.mockImplementation(
+      (_id, against) =>
+        new Promise((resolve) => {
+          if (against === older.id) resolveOlder = resolve;
+          else resolveNewer = resolve;
+        }),
+    );
+    renderSection('diff');
+
+    const select = await screen.findByRole('combobox');
+    fireEvent.change(select, { target: { value: older.id } });
+    await waitFor(() => expect(mockApi.diffResult).toHaveBeenCalledWith('img1', older.id));
+    fireEvent.change(select, { target: { value: newer.id } });
+    await waitFor(() => expect(mockApi.diffResult).toHaveBeenCalledWith('img1', newer.id));
+
+    resolveNewer?.(diffResult(newer.id, newer.filename));
+    expect((await screen.findAllByRole('columnheader', { name: newer.filename })).length).toBeGreaterThan(0);
+    resolveOlder?.(diffResult(older.id, older.filename));
+    await waitFor(() => expect(screen.queryAllByRole('columnheader', { name: older.filename })).toHaveLength(0));
+    expect(screen.getAllByRole('columnheader', { name: newer.filename }).length).toBeGreaterThan(0);
   });
 });
 
