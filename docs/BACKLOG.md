@@ -128,13 +128,26 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `cveIds` la entrada del cruce es el conjunto vacío y la salida también. Queda pendiente decidir si además se
   cruza contra los CVE que aporta el carril SBOM — la base de grype ya trae un proveedor `kev` embebido y sería
   un cruce local, sin red — y, mientras no se haga, que la superficie diga que la pregunta no se hizo.
-- [ ] Distinguir en W9 un grype que falló al correr de un grype que no puede correr. `sbomRun` (`opacidad.ts`)
-  manda los tres casos de `grypeAvailable:false` al mismo `remedy: 'install-tool'`, y el tercero —grype corrió y
-  lanzó— es un `retry`: una campaña de cobertura no lo reintenta y lo reporta como despliegue a arreglar. El
-  `note` sí lleva la frase exacta, pero `opacidad-remedy.ts` prohíbe expresamente derivar el remedy parseando la
+- [x] Distinguir en W9 un grype que falló al correr de un grype que no puede correr. `sbomRun` (`opacidad.ts`)
+  mandaba los tres casos de `grypeAvailable:false` al mismo `remedy: 'install-tool'`, y el tercero —grype corrió y
+  lanzó— es un `retry`: una campaña de cobertura no lo reintentaba y lo reportaba como despliegue a arreglar. El
+  `note` sí llevaba la frase exacta, pero `opacidad-remedy.ts` prohíbe expresamente derivar el remedy parseando la
   nota en inglés, así que el arreglo es un campo discriminante en `SbomResult` (opcional para siempre, como
-  `grypeReason`), no una heurística sobre el texto. Verificable: un job `sbom` con grype presente y base presente
-  cuya ejecución falle debe dejar `remedy: 'retry'` en el paso.
+  `grypeReason`), no una heurística sobre el texto. *(Hecho en `68ea988`: `SbomResult.grypeOutcome` con cuatro
+  valores —`matched` · `tool_absent` · `db_absent` · `run_failed`— y `remedyForGrypeOutcome` mapeándolos en el
+  módulo puro. `sbom-grype-outcome.test.ts` no afirma sobre un resultado escrito a mano sino que corre el `runSbom`
+  real con `node:child_process` mockeado, porque el caso que importa es aquel en que TODO está presente: binario en
+  PATH, base válida en disco —el test comprueba que se llamó a `grype db status` y que devolvió `valid:true`— y la
+  ejecución fallando igual. Revertir sólo la rama `run_failed` con los tests puestos falla una afirmación exacta:
+  `expected 'install-tool' to be 'retry'`. Las otras dos conservan `install-tool`, y la de base ausente sigue
+  lanzando únicamente `grype db status`: la negativa no se convierte en descarga.)*
+- [ ] El mismo defecto un escalón más arriba, encontrado al arreglar el anterior y no implementado por no ampliar
+  el alcance: un **syft que corre y lanza** llega a `sbomRun` como `available:false` igual que un syft ausente, y el
+  paso emite `remedy: 'install-tool'` con la nota literal `'syft/grype not installed'` — falsa cuando syft está
+  instalado y la invocación falló. `runSbom` ya distingue los dos casos en el `reason` que compone
+  (`'syft not installed'` frente a `` `syft failed: ${message}` ``), así que el arreglo es el mismo de `68ea988`
+  aplicado a la otra mitad del carril y la nota debería salir de `r.reason` en vez de estar escrita a mano.
+  Verificable: un job `sbom` con syft presente cuya ejecución falle debe dejar `remedy: 'retry'` en el paso.
 - [ ] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de
   descargarla sola (ver `providers/sbom-db.ts`), un contenedor recreado no tiene base y el resultado declara la
   negativa en vez de correlacionar. Decidir entre las dos opciones, ninguna gratis: hornearla en
