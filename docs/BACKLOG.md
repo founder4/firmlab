@@ -62,9 +62,20 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Corpus y presentación de resultados
 
-- [ ] Desambiguar el nombre "corpus" en CLI/UI (tres cosas sin relación: `apps/api/src/corpus.ts`,
+- [x] Desambiguar el nombre "corpus" en CLI/UI (tres cosas sin relación: `apps/api/src/corpus.ts`,
   `ops/corpus/validation-samples.lock.json`, `ops/yara/corpus.lock.json`) — ya documentado en
-  `ARCHITECTURE.md` § "The three corpora", falta homogeneizar el naming visible.
+  `ARCHITECTURE.md` § "The three corpora", falta homogeneizar el naming visible. *(Hecho en `c23d4a3`: el
+  vocabulario lo fija `ARCHITECTURE.md` y el corpus persistente es el *cross-image corpus* en toda cadena visible.
+  Los nombres `corpus:*` NO se renombran —están en `docs/` y en automatización— sino que ganan alias cualificados
+  que corren el comando idéntico (`validation-corpus:matrix`/`:campaign`, `cross-image-corpus:reindex`/
+  `:refresh-credentials`), más el `yara-corpus:sync` que nunca tuvo; cada `--help` abre nombrando su propio corpus
+  y descartando los otros dos, y `sync-yara-corpus.sh` ganó el `--help` con el que antes erraba. La página Corpus
+  tiene el `page-head` que le faltaba; sidebar, tarjeta de Overview y panel de referencias cruzadas quedan
+  cualificados en los dos catálogos. `scripts/corpus-naming.test.mjs` (3 casos, en `pnpm test`) comprueba que
+  ningún alias derive del nombre que aliasa y lanza los comandos REALES para leer su `--help`, porque lo que un
+  módulo exporta y lo que `--help` imprime son dos afirmaciones distintas. Corregido donde se lee, no donde se
+  almacena: los comentarios de módulo de `corpus.ts`/`secret-hash.ts`/`pem-scan.ts` siguen diciendo "persistent
+  corpus" y ninguno es una cadena visible.)*
 - [x] Puntuar vectores CVSS v4.0 en `osv.ts` (`cvssV3BaseScore` solo hace v3.0/v3.1; v4.0 necesita la tabla
   MacroVector). 4 de 121 avisos del corpus cacheado quedan sin graduar — se conservan sin recortar, pero no se
   ordenan bien. *(Hecho: `providers/cvss-v4.ts` implementa el procedimiento MacroVector con las tres tablas de
@@ -76,8 +87,20 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 - [ ] Re-ejecutar SBOM en las imágenes ya desplegadas: los resultados guardados son anteriores a
   `totalMatching`/`cveIds`/`upstream`, así que sus tablas siguen mostrando el denominador de la lista vieja y el
   cruce contra KEV sigue vacío.
-- [ ] Añadir un test de propiedad o regla de lint que detecte `.slice(N)` sobre la misma expresión de la que
+- [x] Añadir un test de propiedad o regla de lint que detecte `.slice(N)` sobre la misma expresión de la que
   luego se deriva un recuento — el patrón que ya pagaron `extractStrings`, `scanSignatures` y `sbom.ts`.
+  *(Hecho en `a6e95d2`: `scripts/check-slice-denominator.mjs`, en `pnpm biome` y suelto como
+  `pnpm check:slice-denominator`. La propiedad que exige: si una colección se trunca por un cap y el valor
+  truncado se cuenta, alguna colección de la que deriva tiene que contarse también en el mismo ámbito. Lleva un
+  checker del compilador de TypeScript y no un grep porque 142 de los 296 slices acotados del workspace no son
+  colecciones —sobre todo strings, donde `.length` es un desplazamiento y no una población— y `text.slice(at, at +
+  320)` y `rows.slice(0, cap)` son la misma sintaxis con distinta pregunta; dos filtros más se calibraron contra
+  sitios reales que un borrador anterior marcaba (un único argumento no negativo es el RESTO, no un cap, como en
+  `nvd.ts`/`boot-cmdline.ts`, y los identificadores se siguen hasta su declaración, de modo que
+  `candidates.length` cubre `rank(candidates).slice(…)`). Sobre este árbol: 337 fuentes, 296 slices acotados, 154
+  sobre colecciones, 62 de ellos contados, 0 infracciones. `check-slice-denominator.test.mjs` lleva 14 casos e
+  incluye el camino de éxito —el corte que nadie cuenta, el corte inline sin nombre— y el fichero que el
+  compilador no puede abrir, que se reporta en vez de contarse como limpio.)*
 - [x] Exponer `credmatch` en la web: único route sin ninguna referencia en `apps/web/src` pese a 1.337 líneas y
   ✓ en cuatro muestras de la matriz. *(Hecho en `79caece`: `components/CredMatchPanel.tsx` (295 líneas) con
   `CredMatchPanel.test.tsx` (214), la sección registrada en `image-sections.ts`/`section-index.ts`/
@@ -128,9 +151,23 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   dominio puro (`opacidad-plan.ts`, `boot-cmdline.ts`, `nvd.ts`, `opacidad-leads.ts`, `findings-normalize.ts`…)
   viviendo en la capa de aplicación solo porque no puede importar `store.js` (65 módulos acoplados, 24 fuera de
   `routes/`). Decidir si core recupera ese dominio o si se documenta como workaround deliberado.
-- [ ] Cubrir con test los componentes web sin cobertura: `DeepAnalysisDetails.tsx` (569 líneas),
-  `KernelPosture.tsx` (218), `BinVulnPanel.tsx` (200), `PresetsPanel.tsx` (182); después los visuales dibujados
-  a mano (`SignalCanvas`, `SbomGraph`, `EntropyChart`, `StructureMap`, `FilesystemTree`).
+- [x] Cubrir con test los cuatro componentes web sin cobertura: `DeepAnalysisDetails.tsx` (569 líneas),
+  `KernelPosture.tsx`, `BinVulnPanel.tsx`, `PresetsPanel.tsx`. *(Hecho en `4f8ab72`: 10 casos para
+  `DeepAnalysisDetails` —tenía 4 de sus 10 proveedores—, 7 para `KernelPosture`, 8 para `BinVulnPanel` y 8 para
+  `PresetsPanel`, que no tenían fichero de test ninguno. Sus decisiones ya estaban cubiertas —`kernel-posture.ts`
+  se prueba sin DOM— pero nada mostraba que los paneles las CABLEEN: que cuatro estados vacíos lleguen a cuatro
+  frases distintas y no a una tabla vacía, que un fetch fallido se lea como «no ha corrido» y no como un kernel
+  limpio, que `dispatchPreset` mande cada modo a su endpoint con sus argumentos, y que un resultado persistido por
+  un build anterior renderice una raya y no un cero. Cuatro defectos de producción salieron de ahí, cada uno
+  conservado sólo porque un test falla sin él: `FileBrowser` dejaba montados los bytes del fichero anterior
+  mientras la siguiente lectura estaba en vuelo, y un rechazo sobrevivía al fichero que rechazaba; `DiffPanel` no
+  tenía guarda de obsolescencia y con dos selecciones en vuelo ganaba la que resolviera última; `FilesystemTree`
+  expandía desde un `<div>`, así que el control que revela el resto del rootfs era inalcanzable por teclado (ahora
+  `<button>` con `aria-expanded`, puesto sólo donde hay algo que expandir); y el botón de borrar preset se
+  anunciaba como "✕" en todas las filas. La suite web queda en 49 ficheros y 596 casos.)*
+- [ ] Cubrir los visuales dibujados a mano, que siguen sin test: `SignalCanvas.tsx` (280 líneas),
+  `SbomGraph.tsx` (230), `EntropyChart.tsx` (174), `StructureMap.tsx` (125). `FilesystemTree` ya no está en esta
+  lista: `4f8ab72` le dio 4 casos al convertir su fila en un control accesible.
 
 ## De la revisión de galert — análisis y adquisición (2026-09-14)
 
