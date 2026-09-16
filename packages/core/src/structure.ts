@@ -290,6 +290,10 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
 
   let firmwareClass: FirmwareClass = 'unknown';
   let classRationale: string | undefined;
+  // How the class was decided, tracked alongside WHAT it is. A format header that a structural check confirmed
+  // and a count of marker strings are both usable, but they are not the same claim, and until now they rendered
+  // identically. The default is the honest one: nothing identified this.
+  let classEvidence: NonNullable<ImageIdentity['classEvidence']> = 'unknown';
   let arch: Architecture;
   let endianness: Endianness;
   // Whether the resolved class is a genuine filesystem-bearing image (so the detected fs list is meaningful).
@@ -301,18 +305,25 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
 
   if (ids.has('esp-parttable')) {
     firmwareClass = 'esp-soc';
+    // The partition-table magic is anchored at 0x8000 and the arch comes from a chip_id field in the image
+    // header — the format's own bytes, both of them.
+    classEvidence = 'exact-signature';
     ({ arch, endianness } = espArch(buf));
     classRationale =
       'ESP SoC flash dump (partition table @ 0x8000). Not a Linux image — the rootfs pipeline does not apply; ' +
       'analyze the partition table, app images and the NVS key/value store (worker W6).';
   } else if (picobin) {
     firmwareClass = 'baremetal';
+    classEvidence = 'exact-signature'; // PICOBIN block parsed, CPU read from its IMAGE_TYPE item.
     arch = picobin.cpu === 'riscv' ? 'riscv' : picobin.cpu === 'arm' ? 'arm' : 'unknown';
     endianness = arch === 'unknown' ? 'unknown' : 'little';
     const cpuLabel = picobin.cpu === 'riscv' ? 'RISC-V' : picobin.cpu === 'arm' ? 'Arm Cortex-M' : 'an undeclared CPU';
     const chipLabel = picobin.chip ? `${picobin.chip.toUpperCase()} ` : '';
     classRationale = `Bare-metal ${chipLabel}image (PICOBIN, ${cpuLabel}). No filesystem; disassembly must target the declared ISA — reading RISC-V as Arm (or vice-versa) yields garbage (worker W7).`;
   } else if (rp2040) {
+    // The RP2040 half is an exact signature (the boot2 CRC32 was recomputed and agreed); the QMK half that
+    // splits rtos from baremetal is marker strings. When the markers are what decided the class, say heuristic.
+    classEvidence = qmkMarkers.length > 0 ? 'heuristic' : 'exact-signature';
     firmwareClass = qmkMarkers.length > 0 ? 'rtos' : 'baremetal';
     arch = 'arm';
     endianness = 'little';
@@ -321,10 +332,14 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
       : 'Bare-metal RP2040 Cortex-M0+ flash image (valid boot2 CRC32 and XIP vector table; no RTOS family marker). No Linux filesystem; analyze as a standalone MCU image (worker W7).';
   } else if (ids.has('uefi-fv')) {
     firmwareClass = 'uefi-bios';
+    // `_FVH` survives only when its structural check passed (zero vector clean, header/volume lengths coherent),
+    // so reaching here means the volume header itself was read, not just four ASCII bytes.
+    classEvidence = 'exact-signature';
     ({ arch, endianness } = inferArch(buf, hits));
     classRationale = 'UEFI/BIOS platform firmware (firmware volumes) — analyzed offline by chipsec, not emulated.';
   } else if (isFitUbi(hits)) {
     firmwareClass = 'openwrt-fit-ubi';
+    classEvidence = 'exact-signature'; // Two format magics in the order the container requires.
     ({ arch, endianness } = inferArch(buf, hits));
     filesystemClass = true;
     classRationale =
@@ -332,12 +347,14 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
       'only appears after the FIT→UBI→volume→SquashFS carve (worker W1).';
   } else if (strongFs.length > 0) {
     firmwareClass = 'embedded-linux';
+    classEvidence = 'exact-signature'; // A filesystem superblock magic, several of them offset-anchored.
     filesystemClass = true;
     ({ arch, endianness } = inferArch(buf, hits));
   } else if (ecos.match) {
     // An eCos monolith (no Linux rootfs) — often repacked in a uImage whose ih_os still says Linux. Classify as
     // rtos so the Linux rootfs pipeline (which would return 0 files) is not run; W7 does the static RTOS lens.
     firmwareClass = 'rtos';
+    classEvidence = 'heuristic'; // Marker strings in a bounded prefix — corroboration, not a header.
     ({ arch, endianness } = inferArch(buf, hits));
     // eCos on these MediaTek/Ralink SoCs (MT7628 etc.) is little-endian MIPS; refine the uImage's endian-less
     // `mips` to `mipsel` so downstream disassembly targets the right byte order.
@@ -348,21 +365,30 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
     classRationale =
       'eCos RTOS monolith (RedBoot/cyg_* kernel markers present, no Linux filesystem) — NOT embedded Linux even ' +
       'if the uImage OS byte says so. The rootfs pipeline does not apply; analyze it as a standalone RTOS blob (worker W7).';
-  } else if (ids.has('uimage') || ids.has('trx') || ids.has('android-boot')) {
+  } else if (ids.has('uimage') || ids.has('trx') || ids.has('trx-v2') || ids.has('android-boot')) {
     firmwareClass = 'embedded-linux';
+    // The container header is exact, but it is not what is being claimed here: `embedded-linux` asserts a Linux
+    // payload, and a uImage/TRX header says nothing about what it wraps — the eCos monolith repacked in a uImage
+    // whose ih_os byte says Linux is precisely this branch being wrong. Inference, so: heuristic.
+    classEvidence = 'heuristic';
     filesystemClass = true;
     ecosAmbiguousFallback = true;
     ({ arch, endianness } = inferArch(buf, hits));
   } else if (entropy?.likelyEncrypted) {
     firmwareClass = 'encrypted';
+    classEvidence = 'heuristic'; // Whole-image entropy. No header said so — nothing could, by construction.
     ({ arch, endianness } = inferArch(buf, hits));
     classRationale = `Whole-image high entropy (mean ${entropy.mean.toFixed(2)} bits/byte) with no recognizable container header — the image is likely encrypted and cannot be extracted without the key (worker W8).`;
   } else if (jffs2Nodes >= 4) {
     firmwareClass = 'embedded-linux';
+    // Four corroborated 2-byte magics. A real threshold over real evidence, but a threshold all the same.
+    classEvidence = 'heuristic';
     filesystemClass = true;
     ({ arch, endianness } = inferArch(buf, hits));
   } else if (ids.has('arm-zimage') || ids.has('elf')) {
     firmwareClass = 'rtos';
+    // An ELF or a zImage in the blob does not make the blob an RTOS image; it is the least-bad remaining class.
+    classEvidence = 'heuristic';
     ecosAmbiguousFallback = true;
     ({ arch, endianness } = inferArch(buf, hits));
   } else {
@@ -395,6 +421,7 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
     arch,
     endianness,
     filesystems: [...new Set(filesystems)],
+    classEvidence,
     ...(bootloader ? { bootloader } : {}),
     ...(classRationale ? { classRationale } : {}),
   };

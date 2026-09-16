@@ -78,8 +78,29 @@ export interface EntropyRegion {
   meanEntropy: number;
 }
 
-/** Confidence that a signature match is a true structural boundary, not a coincidental byte pattern. */
+/**
+ * The rule author's PRIOR: how likely this magic is to be a true structural boundary rather than a byte
+ * coincidence, before anything at the match site has been read. It is a property of the rule, not of the hit.
+ * `SignatureTier` is the other axis — what the bytes at THIS offset actually sustained.
+ */
 export type SignatureConfidence = 'high' | 'medium' | 'low';
+
+/**
+ * What the evidence at one match offset sustained — the confidence rubric, ordered and scored.
+ *
+ * - `magic` (25): the magic bytes matched and nothing else was checked. A lead, never an identification.
+ * - `structural` (60): the magic is specific enough on its own (a rule its author marked `high`), or it is
+ *   anchored to a fixed offset that a coincidence cannot reach.
+ * - `consistent` (85): header fields adjacent to the magic were read and are mutually coherent — sizes fit the
+ *   buffer, reserved fields are zero, a declared sub-structure is where the format says it must be.
+ * - `verified` (99): a checksum, CRC or cross-reference computed over the payload agreed. Reserved for rules
+ *   that genuinely recompute something; no rule reaches it by declaration.
+ *
+ * The fourth outcome is not a tier: a rule whose structural check FAILS is rejected and never becomes a hit.
+ * That rejection path is the point of the rubric — `providers`-style "magic + decode, no rejection" is what
+ * produced hundreds of hits per image where a rejecting scanner finds a handful.
+ */
+export type SignatureTier = 'magic' | 'structural' | 'consistent' | 'verified';
 
 /** A recognized magic-byte signature at an offset in the image. */
 export interface SignatureHit {
@@ -91,6 +112,17 @@ export interface SignatureHit {
   /** Category used to color/group the structural map. */
   category: SignatureCategory;
   confidence: SignatureConfidence;
+  /**
+   * Rubric tier this match reached. OPTIONAL FOREVER: hits are persisted as JSON on the image row and re-read
+   * for as long as the image exists, so a hit stored by an older build carries no tier and a reader that
+   * requires one would throw on it (the `nvd.uncheckedIdentities` incident). Absent means "scanned before the
+   * rubric existed", which is not the same claim as `magic`.
+   */
+  tier?: SignatureTier;
+  /** Numeric score for `tier` (25/60/85/99), for ranking without re-deriving the ladder. Optional forever. */
+  score?: number;
+  /** What the structural check actually read, when the rule ran one. Optional forever. */
+  rationale?: string;
   /** Optional fields decoded from the header (size, version, compression, arch…). */
   meta?: Record<string, string | number>;
 }
@@ -351,4 +383,18 @@ export interface ImageIdentity {
    * honest-degradation banner so "0 findings" is never confused with "clean" (docs/AUTONOMOUS-WORKERS.md §4).
    */
   classRationale?: string;
+  /**
+   * HOW the class was decided, kept separate from the class itself:
+   *
+   * - `exact-signature` — a format magic that a structural check confirmed (ESP partition table, PICOBIN,
+   *   a validated RP2040 boot2 CRC32, a UEFI firmware volume header, a FIT→UBI pair, a strong filesystem magic).
+   * - `heuristic` — corroborated inference rather than a format header: marker strings, whole-image entropy,
+   *   a count of weak 2-byte magics, or a container header that does not itself prove what it wraps.
+   * - `unknown` — nothing identified it; the class is a fallback, not a finding.
+   *
+   * This exists so "we read the format's own header" and "we counted strings that usually mean this" never
+   * render as the same verdict. OPTIONAL FOREVER — identities persisted before this field existed have none,
+   * and absent means "not recorded", never `unknown`.
+   */
+  classEvidence?: 'exact-signature' | 'heuristic' | 'unknown';
 }
