@@ -115,9 +115,27 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   disjuntos, ninguno tapa al otro — y `extractSeverity` de `nvd.ts` antepone `cvssMetricV40` dejando intactos los
   peldaños de abajo. Un vector truncado sigue sin graduar en vez de completarse a ojo. `cvss-v4.test.ts` lleva 15
   casos cuyos valores esperados los produjo la implementación de referencia de FIRST, no este código.)*
-- [ ] Re-ejecutar SBOM en las imágenes ya desplegadas: los resultados guardados son anteriores a
-  `totalMatching`/`cveIds`/`upstream`, así que sus tablas siguen mostrando el denominador de la lista vieja y el
-  cruce contra KEV sigue vacío.
+- [ ] Re-ejecutar SBOM en las imágenes ya desplegadas: sus resultados guardados son anteriores a
+  `packageTotal`/`vulnerabilityTotal`, así que las fichas siguen mostrando el denominador de la lista recortada
+  (500 = `PKG_CAP`) como si fuera el total. Verificable sin correr nada: en el `resultJson` del último job `sbom`
+  de cada imagen, `packageTotal` ausente ⇒ la ficha miente. Solo depende del carril SBOM, que es local.
+- [ ] Re-ejecutar el carril **research** en las imágenes ya desplegadas: sus resultados OSV/NVD son anteriores a
+  `totalMatching`/`cveIds`/`upstream`, y esos tres campos los escribe `providers/osv.ts` / `providers/nvd.ts`, no
+  `providers/sbom.ts`. Re-ejecutar SBOM no los rellena: es otro carril, con otro job y detrás de
+  `FIRMLAB_RESEARCH`. Iba junto al punto anterior en una sola entrada y eso los hacía parecer un solo arreglo.
+- [ ] El cruce contra KEV vacío **no** es «ningún CVE explotado en la naturaleza»: `research/run.ts` alimenta
+  `fetchAndMatchKev` con `collectCveIds(osv, nvd)`, de modo que sin una ejecución de research posterior a
+  `cveIds` la entrada del cruce es el conjunto vacío y la salida también. Queda pendiente decidir si además se
+  cruza contra los CVE que aporta el carril SBOM — la base de grype ya trae un proveedor `kev` embebido y sería
+  un cruce local, sin red — y, mientras no se haga, que la superficie diga que la pregunta no se hizo.
+- [ ] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de
+  descargarla sola (ver `providers/sbom-db.ts`), un contenedor recreado no tiene base y el resultado declara la
+  negativa en vez de correlacionar. Decidir entre las dos opciones, ninguna gratis: hornearla en
+  `Dockerfile.tools` (capa de ~2,2 GB en la imagen base, reproducible, caduca con la imagen) o un paso de
+  provisión documentado contra el volumen de datos (`GRYPE_DB_CACHE_DIR=$FIRMLAB_DATA_DIR/grype-db grype db
+  update`, una vez, sobrevive al redespliegue). Verificable: `grype db status` dentro del contenedor. Falta
+  además que Capacidades distinga «grype presente» de «grype con base»: hoy sondea el binario y dice sólo lo
+  primero, así que la página promete una pregunta que el carril va a rechazar.
 - [x] Añadir un test de propiedad o regla de lint que detecte `.slice(N)` sobre la misma expresión de la que
   luego se deriva un recuento — el patrón que ya pagaron `extractStrings`, `scanSignatures` y `sbom.ts`.
   *(Hecho en `a6e95d2`: `scripts/check-slice-denominator.mjs`, en `pnpm biome` y suelto como
