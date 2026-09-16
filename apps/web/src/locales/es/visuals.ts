@@ -41,6 +41,7 @@ export const visuals: Messages['visuals'] = {
     ariaLabel: 'Cinta de señal del firmware',
     title: 'Cinta de señal del firmware',
     marksPinned: (n: number) => `▲ ${n} hallazgo${n === 1 ? '' : 's'} anclado${n === 1 ? '' : 's'} a su desplazamiento`,
+    offTape: (n: number) => `${n} más sin desplazamiento, que no se dibuja${n === 1 ? '' : 'n'} en la cinta`,
     caveat: [
       'La línea discontinua está en 7.2 bits/byte: por encima, los bytes son casi aleatorios, que es a lo que se',
       'parecen el empaquetado, la compresión, el cifrado — y un JPEG —, así que es una pista que contrastar con la',
@@ -58,6 +59,10 @@ export const visuals: Messages['visuals'] = {
     legendNoCve: 'sin CVE',
     affected: (vulnerable: number, total: number) =>
       `${vulnerable} de ${total} componentes afectados · el tamaño del nodo = número de CVE`,
+    notQueried: (total: number) =>
+      `${total} componentes inventariados · sin motor de CVE: esto no es un recuento de cero`,
+    offGraph: (cves: number, pkgs: number) =>
+      `${cves} CVE ${cves === 1 ? 'casa' : 'casan'} con ${pkgs} componente${pkgs === 1 ? '' : 's'} que no está${pkgs === 1 ? '' : 'n'} en este listado — fuera del grafo`,
     caveat: [
       'Un componente con el que no ha casado nada se pinta en gris, y eso no es lo mismo que un componente seguro.',
       'La coincidencia vale lo que valgan la versión que el SBOM identificó y los datos de vulnerabilidades que',

@@ -8,7 +8,10 @@
  * **What grey means, and the reason it is written down.** A grey node is a component nothing MATCHED. That is not a
  * component that was checked and cleared: the match is worth exactly as much as the version the SBOM fingerprinted
  * and the vulnerability data this deployment had to query against it. Colour reads as a verdict — most of this ring
- * is grey on a typical rootfs — so the caveat under the legend is part of the picture, not a footnote to it.
+ * is grey on a typical rootfs — so the caveat under the legend is part of the picture, not a footnote to it. With no
+ * matcher in this deployment at all the ring is grey because nothing was ASKED, and the legend says that rather than
+ * reporting a count of zero; a match against a component outside the (capped) listing is named there too, because
+ * otherwise it would reach no node, no tooltip and no count.
  *
  * Package names, versions, ecosystem names, CVE ids and grype's severity words are DATA: they cross the API from
  * the tool that produced them and render verbatim in every language. Only the chrome around them is localised.
@@ -93,6 +96,14 @@ export function SbomGraph({ sbom }: { sbom: SbomResult }): JSX.Element {
   };
 
   const vulnCount = nodes.filter((n) => n.worst !== 'none').length;
+
+  // A match whose component is not in this listing. `packages` is capped at 500 by the provider and the two tools
+  // do not always agree on a name, so grype can report a CVE against something the ring never draws — and it then
+  // reaches neither a node, nor the tooltip, nor `vulnCount`. Dropped silently, a Critical disappears and the
+  // legend reports the smaller number as if it were the answer.
+  const named = new Set(nodes.map((n) => n.name));
+  const offGraph = (sbom.vulnerabilities ?? []).filter((v) => !named.has(v.packageName));
+  const offGraphPkgs = new Set(offGraph.map((v) => v.packageName)).size;
 
   return (
     <div>
@@ -216,9 +227,18 @@ export function SbomGraph({ sbom }: { sbom: SbomResult }): JSX.Element {
           <span className="legend-swatch" style={{ background: SEV_VAR.none, borderRadius: '50%' }} />
           {t.visuals.sbom.legendNoCve}
         </span>
+        {/* «0 of 42 affected» is a measurement. With no matcher in this deployment there was none, and a count of
+            zero is the one thing the ring must not be read as saying. */}
         <span className="legend-item" style={{ marginLeft: 'auto', color: 'var(--text-faint)' }}>
-          {t.visuals.sbom.affected(vulnCount, nodes.length)}
+          {sbom.grypeAvailable
+            ? t.visuals.sbom.affected(vulnCount, nodes.length)
+            : t.visuals.sbom.notQueried(nodes.length)}
         </span>
+        {offGraph.length > 0 && (
+          <span className="legend-item" style={{ color: 'var(--warn)' }}>
+            {t.visuals.sbom.offGraph(offGraph.length, offGraphPkgs)}
+          </span>
+        )}
       </div>
 
       {/* The legend gives grey a name; only this says what the name does not mean. */}

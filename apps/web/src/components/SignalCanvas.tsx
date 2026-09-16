@@ -9,7 +9,9 @@
  * from random, and packing, compression, encryption and an embedded JPEG all sit above it — so a peak is a lead to
  * check against the structure band under it, never a verdict. And a marker is drawn only where a finding recorded
  * an offset: a finding without one is not on the tape at all, so a clean-looking stretch is not a cleared one. Both
- * are stated under the tape rather than in this comment, because the reader is the one who needs them.
+ * are stated under the tape rather than in this comment, because the reader is the one who needs them — and since
+ * most findings on a real image (a CVE match, a leaked key) have no byte to sit on, the legend states how many were
+ * left off beside how many were drawn, so the drawn count is never read as the ledger.
  *
  * The scrub readout is notation — `0x…`, `H`, `bits` — and stays as produced in every language; the sentences, the
  * accessible name and the marker count are the only prose here.
@@ -100,6 +102,10 @@ export function SignalCanvas({ imageId, size, findings, onScrub }: Props): JSX.E
   const marks = findings
     .map((f) => ({ f, off: findingOffset(f) }))
     .filter((m): m is { f: Finding; off: number } => m.off !== null);
+  // The tape draws only what recorded an offset, and on a real image that is a handful out of dozens — a CVE match
+  // and a leaked key have no byte to sit on. The count of what it could NOT draw is what stops the drawn count from
+  // reading as the whole ledger.
+  const offTape = findings.length - marks.length;
 
   // What sits under the cursor.
   const hoverOffset = hoverX !== null ? (hoverX / w) * total : null;
@@ -251,8 +257,11 @@ export function SignalCanvas({ imageId, size, findings, onScrub }: Props): JSX.E
         )}
       </div>
 
-      {/* category legend */}
-      {cats.length > 0 && (
+      {/* Category legend, and the marker tally beside it. The tally used to live INSIDE the `cats.length > 0` guard,
+          so an image whose carve produced no categories drew its markers and then refused to count them — the count
+          vanished for exactly the image that has least else to read. The two are independent: markers come from the
+          findings prop, categories from the structure fetch. */}
+      {(cats.length > 0 || findings.length > 0) && (
         <div className="legend" style={{ marginTop: 10 }}>
           {cats.map((c) => (
             <span key={c} className="legend-item">
@@ -260,9 +269,14 @@ export function SignalCanvas({ imageId, size, findings, onScrub }: Props): JSX.E
               {c}
             </span>
           ))}
-          {marks.length > 0 && (
+          {findings.length > 0 && (
             <span className="legend-item" style={{ marginLeft: 'auto', color: 'var(--text-faint)' }}>
               {t.visuals.signal.marksPinned(marks.length)}
+            </span>
+          )}
+          {offTape > 0 && (
+            <span className="legend-item" style={{ color: 'var(--text-faint)' }}>
+              {t.visuals.signal.offTape(offTape)}
             </span>
           )}
         </div>

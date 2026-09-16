@@ -43,6 +43,13 @@ export const visuals = {
     title: 'Firmware signal tape',
     /** Gender and number both agree in Spanish, which is why this is a function and not a placeholder. */
     marksPinned: (n: number) => `▲ ${n} finding${n === 1 ? '' : 's'} pinned to offsets`,
+    /**
+     * The denominator the marker count needs. Most findings on a real image carry no byte offset — a CVE match, a
+     * leaked key in a file — so the tape draws a handful out of dozens, and `marksPinned` alone reads as the whole
+     * ledger. The caveat states the RULE; this states how many the rule dropped, which is the part that changes
+     * how the picture is read.
+     */
+    offTape: (n: number) => `${n} more carr${n === 1 ? 'ies' : 'y'} no offset and ${n === 1 ? 'is' : 'are'} not drawn`,
     caveat: [
       'The dashed line is 7.2 bits/byte: above it the bytes are near-random, which packing, compression, encryption',
       '— and a JPEG — all look like, so it is a lead to check against the structure band under it.',
@@ -59,6 +66,18 @@ export const visuals = {
     legendNoCve: 'no CVE',
     affected: (vulnerable: number, total: number) =>
       `${vulnerable} of ${total} components affected · node size = CVE count`,
+    /**
+     * What replaces `affected` when no matcher ran. «0 of 42 affected» is a measurement, and with grype absent
+     * there was none — the ring is grey because nothing was asked, not because nothing answered.
+     */
+    notQueried: (total: number) => `${total} components inventoried · no CVE matcher: this is not a count of zero`,
+    /**
+     * A CVE whose component is not in the listing. The package list is capped and a name can differ between the
+     * inventory and the matcher, so a match can land on nothing this ring draws — and it would then be missing
+     * from the node, the tooltip AND the affected count, with the picture saying nothing.
+     */
+    offGraph: (cves: number, pkgs: number) =>
+      `${cves} CVE${cves === 1 ? '' : 's'} match ${pkgs} component${pkgs === 1 ? '' : 's'} not in this listing — off the graph`,
     /** The mirror of the entropy caveat: an unmatched component is not a cleared one. */
     caveat: [
       'A component nothing matched is drawn grey, and that is not the same as a safe one.',
