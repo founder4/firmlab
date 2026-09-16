@@ -79,7 +79,7 @@ export const imageDetail = {
     /** The highest rung this deployment could reach for this image — a ceiling, not a result. */
     proofCeiling: 'Proof ceiling',
 
-    corpusTitle: (n: number) => `Corpus cross-references (${n})`,
+    corpusTitle: (n: number) => `Cross-image corpus references (${n})`,
     corpusSub: 'Things in this image the corpus has seen elsewhere — priors worth checking, not conclusions.',
     corpusCredentialFallback: 'credential',
     corpusCredential: (kind: string) => `${kind} — also in`,

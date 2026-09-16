@@ -9,7 +9,7 @@ import type { Messages } from '../en';
 export const overview: Messages['overview'] = {
   eyebrow: 'Espacio de trabajo',
   title: 'Panel',
-  desc: 'Todo tu corpus de firmware de un vistazo — flota, capacidad y exposición.',
+  desc: 'Todas tus imágenes de firmware de un vistazo — flota, capacidad y exposición.',
 
   stats: {
     images: 'Imágenes',
@@ -49,7 +49,7 @@ export const overview: Messages['overview'] = {
     agentsDesc: 'Lanza y vigila ejecuciones autónomas',
     capture: 'Proxy / Actualizaciones',
     captureDesc: 'Intercepta y analiza actualizaciones OTA',
-    corpus: 'Corpus',
-    corpusDesc: 'Recurrencias y reutilización entre imágenes',
+    corpus: 'Corpus entre imágenes',
+    corpusDesc: 'Recurrencias y reutilización entre todas las imágenes del banco',
   },
 };

@@ -1,5 +1,5 @@
 /**
- * Corpus reconciliation — the reindex path the recording side never had.
+ * Cross-image corpus reconciliation — the reindex path the recording side never had.
  *
  * Every corpus row until now was written at the instant a provider ran: the upload route classified secrets, the
  * SBOM route landed components, `extract` hashed binaries, `fsaudit`/`nvram`/`auxsecrets` stamped key material.

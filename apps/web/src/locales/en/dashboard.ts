@@ -1,5 +1,5 @@
 /**
- * dashboard — the Local analysis screen: the corpus listing and the upload surface. English source of truth.
+ * dashboard — the Local analysis screen: the image listing and the upload surface. English source of truth.
  *
  * The coverage wording is the load-bearing part and has to survive translation intact. A listing that shows only
  * filename, class and size renders an image nothing has ever analyzed and a fully-scanned one identically, so
@@ -11,13 +11,13 @@
 export const dashboard = {
   eyebrow: 'Workspace',
   title: 'Local analysis',
-  desc: 'Upload an image to analyze it locally, then read it as signal, deepen with tool-backed jobs, and compare across your corpus.',
+  desc: 'Upload an image to analyze it locally, then read it as signal, deepen with tool-backed jobs, and compare it against every other image on this bench.',
 
   coverage: {
     /** Never dressed as a neutral zero: nothing ran, which is a different thing from a clean result. */
     unexamined: 'unexamined',
     stages: (executed: number, applicable: number) => `${executed}/${applicable} stages`,
-    /** The corpus-scale reading of the same number — "0 findings" over an unscanned corpus is not a quiet one. */
+    /** The bench-wide reading of the same number — "0 findings" over an unscanned image is not a quiet one. */
     unexaminedCount: (n: number, total: number) => `${n} of ${total} unexamined`,
     unexaminedTitle: 'Run the autonomous scan on these to actually examine them',
   },

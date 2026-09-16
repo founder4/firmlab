@@ -5,8 +5,13 @@ import { useMessages } from '../i18n';
 import { toast } from '../toast';
 
 /**
- * The corpus — FirmLab's cross-image knowledge base. Everything here is a prior / cross-reference: it says
+ * The cross-image corpus — FirmLab's knowledge base. Everything here is a prior / cross-reference: it says
  * where things recur, never that something is vulnerable. The per-image findings remain the source of truth.
+ *
+ * The page carries a `page-head` for the same reason every other page does, and here it does a second job: three
+ * unrelated things in this repository are called "corpus" (see "The three corpora" in docs/ARCHITECTURE.md), and
+ * this was the only screen that named none of them — it opened straight into the stat tiles, leaving the sidebar
+ * entry as the only label, and that entry read just "Corpus".
  */
 export function Corpus(): JSX.Element {
   const [overview, setOverview] = useState<CorpusOverview | null>(null);
@@ -57,6 +62,12 @@ export function Corpus(): JSX.Element {
 
   return (
     <div>
+      <div className="page-head">
+        <div className="eyebrow">{t.corpus.eyebrow}</div>
+        <h1 className="page-title">{t.corpus.title}</h1>
+        <div className="page-desc">{t.corpus.desc}</div>
+      </div>
+
       <div className="grid grid-3" style={{ marginBottom: 18 }}>
         <Stat label={t.corpus.stats.images} value={String(overview.imageCount)} />
         <Stat

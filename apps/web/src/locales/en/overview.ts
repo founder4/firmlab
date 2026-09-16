@@ -8,7 +8,7 @@
 export const overview = {
   eyebrow: 'Workspace',
   title: 'Dashboard',
-  desc: 'Everything at a glance across your firmware corpus — fleet, capacity, and posture.',
+  desc: 'Everything at a glance across your firmware images — fleet, capacity, and posture.',
 
   stats: {
     images: 'Images',
@@ -49,7 +49,7 @@ export const overview = {
     agentsDesc: 'Launch & monitor autonomous runs',
     capture: 'Proxy / Updates',
     captureDesc: 'Intercept & analyze OTA updates',
-    corpus: 'Corpus',
-    corpusDesc: 'Cross-image priors & reuse',
+    corpus: 'Cross-image corpus',
+    corpusDesc: 'Priors & reuse across every image on this bench',
   },
 };

@@ -266,7 +266,7 @@ is created, and it flows into structure/secrets/SBOM/emulation like any other im
 id). The acquisition proof-state seeds context; from there the normal *analysis* proof-state machine takes over
 (`static_confirmed`, `confirmed_in_emulation`, …). Capturing and analyzing become one continuous motion.
 
-## 11. The learning loop — centralize & learn (the corpus)
+## 11. The learning loop — centralize & learn (the cross-image corpus)
 
 This is the part that makes FirmLab more than a capture tool, and it maps onto the corpus you already have.
 

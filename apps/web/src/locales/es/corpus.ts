@@ -1,14 +1,23 @@
 import type { Messages } from '../en';
 
 /**
- * corpus — Spanish. Tipado contra el catálogo inglés, así que una clave sin traducir no puede colarse.
+ * corpus — el corpus ENTRE IMÁGENES. Español, tipado contra el catálogo inglés, así que una clave sin traducir no
+ * puede colarse.
+ *
+ * La pantalla dice de qué corpus habla: en este repositorio se llaman «corpus» tres cosas sin relación — esta base
+ * de conocimiento, el corpus de validación (el conjunto bloqueado que mide `pnpm corpus:matrix`) y el corpus de
+ * reglas YARA (`pnpm yara-corpus:sync`). Véase «The three corpora» en `ARCHITECTURE.md`.
  *
  * Todo lo que dice esta pantalla es una PISTA: señala dónde se repite una credencial, una versión de componente o
  * una identidad, nunca que algo sea vulnerable. La redacción tiene que seguir diciendo «conviene comprobar» y no
  * deslizarse hacia un veredicto. El esquema de la clave de familia (`vendor:class:arch`) se deja tal cual.
  */
 export const corpus: Messages['corpus'] = {
-  loading: 'Cargando el corpus…',
+  eyebrow: 'Espacio de trabajo',
+  title: 'Corpus entre imágenes',
+  desc: 'Lo que se repite en todas las imágenes de este banco — una credencial compartida, una versión de componente, una familia de dispositivo. Pistas que contrastar con los hallazgos de cada imagen, nunca veredictos. No es el corpus de validación sobre el que se mide la cobertura, ni el corpus de reglas YARA que aplica el escáner.',
+
+  loading: 'Cargando el corpus entre imágenes…',
 
   stats: {
     images: 'Imágenes',

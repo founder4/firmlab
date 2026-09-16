@@ -150,7 +150,7 @@ export const settings = {
     /** Wraps the configured provider and model, which are identifiers and render verbatim. */
     agentSentTo: [
       'When you run the copilot or an agent session, the deterministic analysis context (findings, binary metadata,',
-      'corpus cross-refs) is sent to',
+      'cross-image corpus cross-refs) is sent to',
     ].join(' '),
     agentNoBytes: 'No raw firmware bytes are sent. Emulation follows the approval policy shown under AI & Agent.',
     agentOffLead: 'No external model is configured. Nothing is sent off-machine. Enable it with',

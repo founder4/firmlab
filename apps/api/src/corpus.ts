@@ -1,7 +1,7 @@
 /**
- * The PERSISTENT corpus — FirmLab's structural edge over a stateless scanner. Not the validation corpus (the
- * locked sample set the coverage matrix is measured over) and not the YARA rule corpus; see "The three corpora"
- * in docs/ARCHITECTURE.md. It accumulates cross-image
+ * The CROSS-IMAGE corpus (the persistent one) — FirmLab's structural edge over a stateless scanner. Not the
+ * validation corpus (the locked sample set the coverage matrix is measured over) and not the YARA rule corpus;
+ * see "The three corpora" in docs/ARCHITECTURE.md. It accumulates cross-image
  * *occurrences* (which artifact/credential/component appears in which image) so that analysing a new firmware
  * can be enriched with priors from every firmware seen before.
  *

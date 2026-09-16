@@ -479,7 +479,7 @@ export const es: Messages = {
       // El motor, nunca las reglas: FirmLab no publica firmas propias, así que la frase promete un escaneo y dice
       // de quién es el corpus que ejecutaría. Que la herramienta falte es una respuesta ausente, no un problema
       // ausente — y que el corpus falte es una tercera cosa distinta, que el proveedor declara aparte.
-      yara: 'Escaneo del rootfs por reglas en busca de implantes, webshells y puertas traseras conocidos, con un corpus que aportas tú',
+      yara: 'Escaneo del rootfs por reglas en busca de implantes, webshells y puertas traseras conocidos, con un corpus de reglas YARA que aportas tú',
       // La calculadora de hashes, y solo para los esquemas que esta compilación conserve: `openssl passwd` perdió
       // `-crypt` en la 3.0, así que la frase promete un cruce, nunca «recupera contraseñas».
       openssl:
@@ -565,12 +565,12 @@ export const es: Messages = {
       effect:
         'Añade `restrict=on` a la red del guest emulado, de modo que un firmware arrancado bajo emulación de sistema completo deja de alcanzar nada más allá del emulador. Los reenvíos host→guest siguen funcionando, así que el peldaño sigue llegando a sus propios servicios. El guest sigue viendo un gateway que responde, así que obtiene timeouts en lugar de «red no disponible» — un firmware se comporta más como de costumbre con esto que con el enlace caído.',
       egress:
-        'ENCENDIDO POR OMISIÓN — es el único interruptor de aquí que se APAGA para dejar salir algo, y apagarlo permite que UN FIRMWARE QUE ESTÁS ANALIZANDO ALCANCE INTERNET DESDE ESTA MÁQUINA. Medido sobre este corpus: un TP-Link WDR3600 arrancado alcanzó tres servidores NTP públicos cuando apagado era lo de serie. El valor por omisión se invirtió después de medir su coste: la misma imagen arrancada abierta y aislada registró los mismos 15 intentos externos y el mismo veredicto, así que ningún peldaño de análisis depende de la salida. En ambos casos se registra y se muestra lo que el firmware INTENTÓ alcanzar: bloquear el tráfico no oculta el intento.',
+        'ENCENDIDO POR OMISIÓN — es el único interruptor de aquí que se APAGA para dejar salir algo, y apagarlo permite que UN FIRMWARE QUE ESTÁS ANALIZANDO ALCANCE INTERNET DESDE ESTA MÁQUINA. Medido sobre el corpus de validación: un TP-Link WDR3600 arrancado alcanzó tres servidores NTP públicos cuando apagado era lo de serie. El valor por omisión se invirtió después de medir su coste: la misma imagen arrancada abierta y aislada registró los mismos 15 intentos externos y el mismo veredicto, así que ningún peldaño de análisis depende de la salida. En ambos casos se registra y se muestra lo que el firmware INTENTÓ alcanzar: bloquear el tráfico no oculta el intento.',
     },
     FIRMLAB_EMU_REPAIR: {
       label: 'Reparar el invitado en el arranque para que los servicios respondan',
       effect:
-        'Añade UNA línea al propio script de init del firmware en la imagen que se arranca, que espera ~20 s y ejecuta el `/etc/rc.d/iptables-stop` del propio fabricante — un script de desmontaje que los tres routers del corpus traen byte a byte idéntico y que nada en el arranque del fabricante llega a llamar. Antes lee el conjunto de reglas vivo con `iptables-save`, así que una ejecución puede informar de que el cortafuegos estaba vacío y que la reparación no cambió nada. No se escribe nada más en el invitado: ni un binario, ni un script, ni un busybox nuestro.',
+        'Añade UNA línea al propio script de init del firmware en la imagen que se arranca, que espera ~20 s y ejecuta el `/etc/rc.d/iptables-stop` del propio fabricante — un script de desmontaje que los tres routers del corpus de validación traen byte a byte idéntico y que nada en el arranque del fabricante llega a llamar. Antes lee el conjunto de reglas vivo con `iptables-save`, así que una ejecución puede informar de que el cortafuegos estaba vacío y que la reparación no cambió nada. No se escribe nada más en el invitado: ni un binario, ni un script, ni un busybox nuestro.',
       egress:
         'No sale nada de esta máquina. Lo que cambia es el ARTEFACTO: un servicio que responde en un arranque reparado puede estar respondiendo sólo porque se le desmontó el filtrado de paquetes, y eso es una afirmación distinta de responder tal como se envía. Todo hallazgo de ese arranque lleva esa frase en `interventions`, y el script de init se restaura a sus bytes originales en cuanto la imagen queda construida.',
     },

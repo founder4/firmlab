@@ -33,8 +33,8 @@ export const onboarding = {
   sidebar: {
     title: 'Navigate here',
     body: [
-      'The sidebar holds your workspace — the dashboard, the corpus and what this deployment can do — and, once a',
-      'firmware image is open, its analysis sections grouped by purpose.',
+      'The sidebar holds your workspace — the dashboard, the cross-image corpus and what this deployment can do —',
+      'and, once a firmware image is open, its analysis sections grouped by purpose.',
     ].join(' '),
   },
   health: {

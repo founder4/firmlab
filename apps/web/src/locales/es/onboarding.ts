@@ -36,8 +36,8 @@ export const onboarding: Messages['onboarding'] = {
   sidebar: {
     title: 'Navega desde aquí',
     body: [
-      'La barra lateral contiene tu espacio de trabajo — el panel, el corpus y lo que este despliegue puede hacer',
-      '— y, con una imagen de firmware abierta, sus secciones de análisis agrupadas por propósito.',
+      'La barra lateral contiene tu espacio de trabajo — el panel, el corpus entre imágenes y lo que este despliegue',
+      'puede hacer — y, con una imagen de firmware abierta, sus secciones de análisis agrupadas por propósito.',
     ].join(' '),
   },
   health: {

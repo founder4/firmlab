@@ -39,7 +39,7 @@ Library).
 
 **Looking at the UI.** A green web suite proves the components behave, not that a screen reads. The deployed
 container publishes no host port, so put a socat sidecar in front of it and drive the REAL build against the REAL
-corpus — no data copy, no second SQLite writer:
+bench — no data copy, no second SQLite writer:
 
 ```bash
 pnpm ui:up                                                   # → http://127.0.0.1:8899 (loopback, never 8799)

@@ -74,7 +74,7 @@ export const imageDetail: Messages['imageDetail'] = {
     preflight: 'Comprobación previa de ejecución',
     proofCeiling: 'Techo de prueba',
 
-    corpusTitle: (n: number) => `Referencias cruzadas del corpus (${n})`,
+    corpusTitle: (n: number) => `Referencias al corpus entre imágenes (${n})`,
     corpusSub:
       'Cosas de esta imagen que el corpus ha visto en otras — antecedentes que conviene revisar, no conclusiones.',
     corpusCredentialFallback: 'credencial',

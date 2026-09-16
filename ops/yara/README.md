@@ -1,4 +1,4 @@
-# Corpus YARA operativo de FirmLab
+# Corpus de reglas YARA operativo de FirmLab
 
 Este directorio define el corpus del **operador**; FirmLab sigue sin incorporar firmas en su imagen. El despliegue
 monta dos ficheros de solo lectura y los declara explícitamente en `FIRMLAB_YARA_RULES`:
@@ -35,7 +35,7 @@ experimento medido, no como actualización silenciosa del perfil de producción.
 ## Instalación y actualización
 
 ```bash
-scripts/sync-yara-corpus.sh /Users/agfil/homelab/firmlab/yara-rules
+scripts/sync-yara-corpus.sh /Users/agfil/homelab/firmlab/yara-rules   # pnpm yara-corpus:sync <ruta>
 ```
 
 El compose monta ese directorio en `/opt/firmlab-yara:ro` y configura exactamente:

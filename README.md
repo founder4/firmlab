@@ -5,8 +5,8 @@
 Upload a firmware image and FirmLab gives you an immediate, visual breakdown — a binwalk-style structure map,
 an entropy graph, inferred identity, extracted filesystem, secrets, an SBOM with known-CVE matches, and an
 arch-aware **emulation ladder**. On top of that deterministic base sits an optional, flag-gated agent that
-*reasons within* a fixed skeleton (never a blank agent loop), and a persistent corpus that learns across every
-image you feed it.
+*reasons within* a fixed skeleton (never a blank agent loop), and a **cross-image corpus** that learns across
+every image you feed it.
 
 <p>
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white">
@@ -22,8 +22,8 @@ image you feed it.
 </p>
 
 > **Status:** active, solo-built engineering project — Phases 0–6 shipped, more on the [roadmap](#-project-status--roadmap).
-> ~130k lines of TypeScript/TSX, 3,100+ tests, validated against real tools in-container and a locked regression
-> corpus of public/official firmware samples (`ops/corpus/validation-samples.lock.json`).
+> ~130k lines of TypeScript/TSX, 3,100+ tests, validated against real tools in-container and a locked **validation
+> corpus** of public/official firmware samples (`ops/corpus/validation-samples.lock.json`).
 > **Local-only by design:** the API binds to loopback and is never meant to face the internet.
 
 <p align="center">
@@ -78,7 +78,7 @@ on.
 | **Honesty is a state machine** | Every finding carries a `ProofState`; the preflight computes an *honest ceiling* per deployment, and code — not the model — clamps claims to it. |
 | **Emulation as a ranked ladder** | A planner turns identity + rootfs into arch-aware, runnable recipes; the runner only claims what it reproduced. |
 | **Autonomy with a skeleton** | The optional agent *chooses branches* on a fixed deterministic orchestrator, bounded by a governor (steps/tokens/USD/wall-time) and a human-approval gate. |
-| **Stateful — it learns** | A persistent cross-image **corpus** links shared artifacts, reused credentials and common components across firmware, and promotes repeat offenders to a watchlist. |
+| **Stateful — it learns** | A persistent **cross-image corpus** links shared artifacts, reused credentials and common components across firmware, and promotes repeat offenders to a watchlist. |
 | **Local-only DNA** | No network at all unless you opt in; the internet-touching *research* and *capture* tracks each live behind their own flag with an allowlist and an egress ledger that states exactly what leaves the machine. |
 | **Agent-native surface** | Every provider is also reachable over **MCP** (`apps/api/src/mcp/server.ts`), so an external agent inherits the proof-state/coverage discipline instead of having to reconstruct it. |
 
@@ -286,7 +286,7 @@ transport/data-model design.
 | **Emulation** | `qemu-user-static` · `qemu-system-*` · Renode (RTOS/MCU) |
 | **Security tooling** | binwalk · radare2 / Ghidra · syft / grype · gitleaks · AFL++ · OSV.dev |
 | **Agent/LLM** | Provider-agnostic (DeepSeek-first) · structured-output decision nodes · governor · bounded execution + approval |
-| **Quality** | Vitest (3,100+ tests) · Biome (lint/format) · Docker-based real-tool validation · locked corpus matrix |
+| **Quality** | Vitest (3,100+ tests) · Biome (lint/format) · Docker-based real-tool validation · locked validation-corpus matrix |
 
 ## Quick start
 
@@ -330,7 +330,7 @@ layered on later, always additive.
 | Phase | Theme | Status |
 |---|---|---|
 | **0** | Proof-states, findings ledger, binaries table, preflight, emulation-ladder providers | ✅ Shipped |
-| **1** | Persistent cross-image **corpus**, cross-refs, rule watchlist, corpus web views | ✅ Shipped |
+| **1** | Persistent **cross-image corpus**, cross-refs, rule watchlist, its web views | ✅ Shipped |
 | **2** | Read-only **copilot** (multi-provider LLM, proof-state discipline, dossier) | ✅ Shipped |
 | **3** | **Decision nodes** ①②, governor, auditable/resumable sessions, human-approval gate | ✅ Shipped |
 | **4** | **Zero-day** node ④, deterministic taint scaffold, bounded execution with approval, opt-in AFL++ | ✅ Shipped |

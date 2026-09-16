@@ -76,25 +76,42 @@ turns on its own kind of network access, and turning all three off leaves a dete
 
 ## The three "corpora" — one word, three unrelated things
 
-The name is overloaded in the code, the CLI and the docs, and the three have nothing to do with each other. Where
-the context does not make it obvious, use the qualified name:
+The name is overloaded in the code, the CLI and the docs, and the three have nothing to do with each other. These
+three qualified names are the ONLY ones that appear in a visible string — a sidebar label, a page title, a `--help`
+line, a doc heading. Bare "corpus" is allowed only inside a screen or a module that has already said which one:
 
 | Qualified name | What it is | Where it lives |
 |---|---|---|
-| **persistent corpus** (*corpus persistente*) | cross-image occurrences — which credential, component or artifact appears in which image — read back as PRIORS, never as conclusions | `apps/api/src/corpus.ts`, tables `*_occurrence` / `reachability_prior` in `firmlab.db` |
+| **cross-image corpus** (*corpus entre imágenes*) | the knowledge base: which credential, component or artifact appears in which image — read back as PRIORS, never as conclusions. Called the *persistent* corpus where the contrast is with a re-derived one | `apps/api/src/corpus.ts`, tables `*_occurrence` / `reachability_prior` in `firmlab.db` |
 | **validation corpus** (*corpus de validación*) | the locked set of firmware samples the coverage matrix and its gates are measured over | `ops/corpus/validation-samples.lock.json`, `scripts/corpus-matrix.mjs`, `scripts/corpus-campaign.mjs` |
 | **YARA rule corpus** (*corpus de reglas YARA*) | the pinned third-party + local rule set the scanner applies | `ops/yara/corpus.lock.json`, `scripts/sync-yara-corpus.sh` |
 
+And a fourth use that is NOT one of them: "your corpus" for the images on this bench. That one is just *images*,
+and saying "corpus" there manufactures a fourth meaning for free, so the visible strings say images.
+
 `pnpm corpus:matrix`, `corpus:campaign` and `corpus:reindex` are not one family: the first two are the validation
-corpus, the third rebuilds the persistent one. The CLI names are kept as they are — they are in muscle memory and
-in `docs/` — so the disambiguation lives here and in each module's own header.
+corpus, the third rebuilds the cross-image one. Those names stay — they are in muscle memory, in `docs/` and in
+whatever automation already calls them — so each gained a qualified **alias** that runs the identical command, and
+`pnpm run` now lists the family it belongs to next to it:
+
+| Historical (kept) | Qualified alias |
+|---|---|
+| `pnpm corpus:matrix` | `pnpm validation-corpus:matrix` |
+| `pnpm corpus:campaign` | `pnpm validation-corpus:campaign` |
+| `pnpm corpus:reindex` | `pnpm cross-image-corpus:reindex` |
+| `pnpm corpus:refresh-credentials` | `pnpm cross-image-corpus:refresh-credentials` |
+| (none — `bash scripts/sync-yara-corpus.sh`) | `pnpm yara-corpus:sync` |
+
+`scripts/corpus-naming.test.mjs` holds the aliases to the same command as the name they alias, so a future rename
+cannot silently break an automation, and asserts that every one of those scripts' `--help` names which corpus it
+is about.
 
 ## Data model
 
 The core tables in `firmlab.db` (SQLite, WAL): `images` (identity + analysis JSON, cached per upload), `jobs`
 (queued/running/done/error, streamed log, result JSON — one row per provider run), `findings` (the ledger every
 provider writes to via `syncFindings`, one `source` per provider so re-runs are idempotent), `binaries`
-(per-ELF inventory), `agent_sessions` (the agent's auditable/resumable transcripts), and the persistent-corpus
+(per-ELF inventory), `agent_sessions` (the agent's auditable/resumable transcripts), and the cross-image corpus
 tables (`*_occurrence`, `reachability_prior` — see "The three corpora" above). `store.ts` owns the schema and
 is the only module allowed to import `node:sqlite`.
 

@@ -3,6 +3,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
 import { setLocale } from '../i18n';
+import { en } from '../locales/en';
+import { es } from '../locales/es';
 import { mockedApi } from '../test-api-mock';
 import { Corpus } from './Corpus';
 
@@ -111,6 +113,44 @@ describe('Corpus', () => {
     expect(screen.getByText('default admin')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'router-v1.bin' })).toHaveAttribute('href', '/image/one');
     expect(screen.getByRole('link', { name: 'router-v2.bin' })).toHaveAttribute('href', '/image/two');
+  });
+
+  /**
+   * Three unrelated things in this repository are called "corpus" (see "The three corpora" in
+   * docs/ARCHITECTURE.md), and this screen was the only one naming none of them: it opened straight into the stat
+   * tiles, so the sidebar entry — which read just "Corpus" — was the whole label. What is asserted is both halves
+   * of the disambiguation, in both catalogues: the page says WHICH corpus this is, and says which two it is not.
+   */
+  it('names which of the three corpora it is, in both languages', async () => {
+    const spanish = render(
+      <MemoryRouter>
+        <Corpus />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole('heading', { level: 1, name: 'Corpus entre imágenes' })).toBeInTheDocument();
+    expect(screen.getByText(/no es el corpus de validación/i)).toBeInTheDocument();
+    expect(screen.getByText(/ni el corpus de reglas YARA/i)).toBeInTheDocument();
+    spanish.unmount();
+
+    setLocale('en');
+    render(
+      <MemoryRouter>
+        <Corpus />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole('heading', { level: 1, name: 'Cross-image corpus' })).toBeInTheDocument();
+    expect(screen.getByText(/not the validation corpus/i)).toBeInTheDocument();
+    expect(screen.getByText(/not the YARA rule corpus/i)).toBeInTheDocument();
+  });
+
+  /**
+   * The sidebar is where the ambiguity actually reached an operator: one entry, reading "Corpus", for one of three
+   * things. Asserted on the catalogues rather than through a full App render, because the claim is about the two
+   * strings, and `pnpm check` already guarantees the Spanish one exists.
+   */
+  it('qualifies the sidebar entry in both catalogues', () => {
+    expect(en.nav.corpus).toBe('Cross-image corpus');
+    expect(es.nav.corpus).toBe('Corpus entre imágenes');
   });
 
   it('promotes a reused credential through the operator-controlled label', async () => {

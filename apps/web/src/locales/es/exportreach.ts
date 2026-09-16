@@ -22,7 +22,7 @@ export const exportreach: Messages['exportreach'] = {
   cfgSeconds: (s: number) => `grafo en ${s}s`,
   blockedHeading: 'No se pudo analizar',
   blockedBody:
-    'El grafo de flujo de control volvió vacío, así que no se pudo hacer ninguna pregunta de alcanzabilidad. En este corpus eso significa que el objeto no lleva cabeceras de sección —la recuperación del CFG no encuentra nada sin ellas, con o sin un escaneo completo—. Es un límite de la herramienta, NO una afirmación de que el objeto esté libre de sumideros alcanzables, y no debe leerse como tal.',
+    'El grafo de flujo de control volvió vacío, así que no se pudo hacer ninguna pregunta de alcanzabilidad. En este banco eso significa que el objeto no lleva cabeceras de sección —la recuperación del CFG no encuentra nada sin ellas, con o sin un escaneo completo—. Es un límite de la herramienta, NO una afirmación de que el objeto esté libre de sumideros alcanzables, y no debe leerse como tal.',
   outcome: {
     reachable: 'alcanzable',
     not_reached: 'no alcanzado',

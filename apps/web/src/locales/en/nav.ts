@@ -4,7 +4,7 @@ export const nav = {
   localAnalysis: 'Local analysis',
   agents: 'Agents',
   proxyUpdates: 'Proxy / Updates',
-  corpus: 'Corpus',
+  corpus: 'Cross-image corpus',
   settings: 'Settings',
   capabilities: 'Capabilities',
   system: 'System',

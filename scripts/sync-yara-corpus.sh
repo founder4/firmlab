@@ -6,8 +6,28 @@ LOCK="$ROOT/ops/yara/corpus.lock.json"
 LOCAL_RULES="$ROOT/ops/yara/operator-firmware-policy.yar"
 DEST="${1:-}"
 
+# El uso nombra CUÁL de los tres corpus se sincroniza. Tres cosas sin relación se llaman «corpus» en este
+# repositorio y un operador que teclee esto a ciegas puede estar buscando cualquiera de las otras dos;
+# véase «The three corpora» en docs/ARCHITECTURE.md.
+usage() {
+  cat <<'USAGE'
+Sincroniza el CORPUS DE REGLAS YARA — el conjunto fijado en ops/yara/corpus.lock.json que aplica el escáner.
+No es el corpus de validación (pnpm corpus:matrix) ni el corpus entre imágenes (pnpm corpus:reindex);
+véase «The three corpora» en docs/ARCHITECTURE.md.
+
+uso: scripts/sync-yara-corpus.sh /ruta/absoluta/yara-rules   (pnpm yara-corpus:sync /ruta/absoluta)
+USAGE
+}
+
+case "$DEST" in
+  --help | -h)
+    usage
+    exit 0
+    ;;
+esac
+
 if [ -z "$DEST" ]; then
-  printf 'uso: scripts/sync-yara-corpus.sh /ruta/absoluta/yara-rules\n' >&2
+  usage >&2
   exit 2
 fi
 case "$DEST" in

@@ -1,5 +1,11 @@
 /**
- * corpus — the cross-image knowledge base. English source of truth.
+ * corpus — the CROSS-IMAGE corpus, FirmLab's knowledge base. English source of truth.
+ *
+ * The screen names which corpus it is, because three unrelated things in this repository are called one: this
+ * knowledge base, the validation corpus (the locked sample set `pnpm corpus:matrix` measures) and the YARA rule
+ * corpus (`pnpm yara-corpus:sync`). A sidebar entry reading just "Corpus" left the operator to guess, and the
+ * page said nothing at all — it opened straight into three stat tiles. See "The three corpora" in
+ * docs/ARCHITECTURE.md; the title and the lead below are where that distinction reaches a reader.
  *
  * Everything this screen says is a PRIOR: it reports where a credential, a component version or an identity recurs
  * across images, and never that any of them is vulnerable. The per-image findings stay the source of truth, so the
@@ -8,7 +14,11 @@
  * Component names, versions, family keys and hashes are values the corpus stored; they render verbatim.
  */
 export const corpus = {
-  loading: 'Loading corpus…',
+  eyebrow: 'Workspace',
+  title: 'Cross-image corpus',
+  desc: 'What recurs across every image on this bench — a shared credential, a component version, a device family. Priors to check against the per-image findings, never verdicts. Not the validation corpus that the coverage matrix is measured over, and not the YARA rule corpus the scanner applies.',
+
+  loading: 'Loading the cross-image corpus…',
 
   stats: {
     images: 'Images',

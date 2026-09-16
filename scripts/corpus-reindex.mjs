@@ -1,5 +1,6 @@
 /**
- * Reconcile the persistent corpus against every image already on the bench.
+ * Reconcile the CROSS-IMAGE corpus against every image already on the bench. Not the validation corpus and not
+ * the YARA rule corpus; see "The three corpora" in docs/ARCHITECTURE.md.
  *
  * A thin client over `POST /api/corpus/reindex`. It deliberately holds no logic of its own: the reconciliation
  * reads SQLite and must run where SQLite is, which for the homelab deployment is inside a container that publishes
@@ -16,7 +17,12 @@ const DEFAULT_BASE = 'http://127.0.0.1:8899';
 
 function usage() {
   return [
-    'Usage: node scripts/corpus-reindex.mjs [options]',
+    'Reconcile the CROSS-IMAGE CORPUS (the persistent knowledge base: which credential, component or',
+    'artifact recurs in which image) against every image on the bench. Not the validation corpus',
+    '(pnpm corpus:matrix) and not the YARA rule corpus (pnpm yara-corpus:sync);',
+    'see "The three corpora" in docs/ARCHITECTURE.md.',
+    '',
+    'Usage: node scripts/corpus-reindex.mjs [options]   (pnpm corpus:reindex · pnpm cross-image-corpus:reindex)',
     '  --base URL             FirmLab UI/API origin (default http://127.0.0.1:8899, or $FIRMLAB_UI)',
     '  --lang en|es           Language for the verdict (default es)',
     '  --format text|json     Output format (default text)',
@@ -56,7 +62,7 @@ function mb(bytes) {
  * source that ran clean, and that is the one thing the reindex exists to keep apart.
  */
 export function renderReport(report) {
-  const lines = [`Corpus reindex — ${report.imageCount} image(s)`, ''];
+  const lines = [`Cross-image corpus reindex — ${report.imageCount} image(s)`, ''];
   const width = Math.max(...report.sources.map((s) => s.source.length));
   lines.push(`${'source'.padEnd(width)}   inserted / offered   images with input`);
   for (const s of report.sources) {

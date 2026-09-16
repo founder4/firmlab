@@ -41,7 +41,13 @@ export function parseArgs(argv, env = process.env) {
 
 function usage() {
   return [
+    'Re-run the three redaction-safe credential providers so the CROSS-IMAGE CORPUS has an identity to',
+    'index; reindexing it stays a separate step (pnpm corpus:reindex). Not the validation corpus',
+    '(pnpm corpus:matrix) and not the YARA rule corpus (pnpm yara-corpus:sync);',
+    'see "The three corpora" in docs/ARCHITECTURE.md.',
+    '',
     'Usage: node scripts/credential-corpus-refresh.mjs [options]',
+    '       (pnpm corpus:refresh-credentials · pnpm cross-image-corpus:refresh-credentials)',
     '  --base URL             FirmLab origin (default FIRMLAB_UI or http://127.0.0.1:8899)',
     '  --poll-ms N            Job polling interval (default 1000)',
     '  --job-timeout-ms N     Maximum wait for one provider job (default 600000)',

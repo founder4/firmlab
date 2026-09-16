@@ -33,7 +33,7 @@ export const exportreach = {
   cfgSeconds: (s: number) => `graph in ${s}s`,
   blockedHeading: 'Could not analyse',
   blockedBody:
-    'The control-flow graph came back empty, so no reachability question could be asked. On this corpus that means the object carries no section headers — CFG recovery finds nothing without them, with or without a complete scan. This is a boundary of the tool, NOT a statement that the object is free of reachable sinks, and it must not be read as one.',
+    'The control-flow graph came back empty, so no reachability question could be asked. On this bench that means the object carries no section headers — CFG recovery finds nothing without them, with or without a complete scan. This is a boundary of the tool, NOT a statement that the object is free of reachable sinks, and it must not be read as one.',
   outcome: {
     reachable: 'reachable',
     not_reached: 'not reached',

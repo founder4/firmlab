@@ -1,5 +1,5 @@
 /**
- * Live coverage matrix over the VALIDATION corpus — the locked sample set, not the persistent cross-image corpus
+ * Live coverage matrix over the VALIDATION corpus — the locked sample set, not the cross-image corpus
  * (`apps/api/src/corpus.ts`) and not the YARA rule corpus. See "The three corpora" in docs/ARCHITECTURE.md.
  *
  * The workbench already knows which stages apply to every firmware class and what the latest autonomous run did
@@ -213,7 +213,7 @@ function stageCell(stage) {
 /** Stable Markdown: stage rows, sample columns, grouped by the firmware class that defines applicability. */
 export function renderMarkdown(matrix, generatedAt = new Date().toISOString()) {
   const lines = [
-    '# FirmLab — matriz de validación del corpus',
+    '# FirmLab — matriz de cobertura del corpus de validación',
     '',
     `Generada: ${generatedAt}`,
     '',
@@ -355,7 +355,11 @@ export function parseArgs(argv) {
 
 function usage() {
   return [
-    'Usage: node scripts/corpus-matrix.mjs [options]',
+    'Coverage matrix over the VALIDATION CORPUS — the locked sample set in',
+    'ops/corpus/validation-samples.lock.json. Not the cross-image corpus (pnpm corpus:reindex)',
+    'and not the YARA rule corpus (pnpm yara-corpus:sync); see "The three corpora" in docs/ARCHITECTURE.md.',
+    '',
+    'Usage: node scripts/corpus-matrix.mjs [options]   (pnpm corpus:matrix · pnpm validation-corpus:matrix)',
     '  --base URL                  FirmLab UI/API origin (default http://127.0.0.1:8899)',
     '  --format markdown|json      Output format',
     '  --out FILE                  Write output to a file instead of stdout',
@@ -424,7 +428,7 @@ async function main() {
     ...(args.failOnRegression ? evaluateRegressions(matrix.comparison) : []),
   ];
   if (failures.length > 0) {
-    process.stderr.write(`Corpus validation failed:\n- ${failures.join('\n- ')}\n`);
+    process.stderr.write(`Validation corpus gate failed:\n- ${failures.join('\n- ')}\n`);
     process.exitCode = 2;
   }
 }

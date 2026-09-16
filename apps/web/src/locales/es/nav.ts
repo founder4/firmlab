@@ -6,7 +6,7 @@ export const nav: Messages['nav'] = {
   localAnalysis: 'Análisis local',
   agents: 'Agentes',
   proxyUpdates: 'Proxy / Actualizaciones',
-  corpus: 'Corpus',
+  corpus: 'Corpus entre imágenes',
   settings: 'Ajustes',
   capabilities: 'Capacidades',
   system: 'Sistema',

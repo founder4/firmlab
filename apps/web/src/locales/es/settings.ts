@@ -124,7 +124,7 @@ export const settings: Messages['settings'] = {
     },
     agentSentTo: [
       'Cuando ejecutas el copiloto o una sesión del agente, el contexto determinista del análisis (hallazgos,',
-      'metadatos de binarios, referencias cruzadas del corpus) se envía a',
+      'metadatos de binarios, referencias cruzadas del corpus entre imágenes) se envía a',
     ].join(' '),
     agentNoBytes:
       'No se envía ningún byte del firmware en crudo. La emulación sigue la política indicada en IA y agente.',

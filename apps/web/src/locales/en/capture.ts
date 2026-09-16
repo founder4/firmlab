@@ -112,7 +112,7 @@ export const capture = {
 
   learning: {
     title: 'OTA learning',
-    sub: 'What the corpus has learned across captured versions — a per-family OTA timeline, how each vendor ships, and which CDN serves whom. Capture the same device twice to unlock a cross-version diff.',
+    sub: 'What the cross-image corpus has learned across captured versions — a per-family OTA timeline, how each vendor ships, and which CDN serves whom. Capture the same device twice to unlock a cross-version diff.',
     emptyTitle: 'No captured versions yet',
     emptyBody: 'Ingest a capture (above) — its provenance seeds the OTA timeline here.',
     priors: 'Vendor priors:',

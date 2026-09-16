@@ -1,4 +1,4 @@
-# FirmLab — matriz de validación del corpus
+# FirmLab — matriz de cobertura del corpus de validación
 
 Generada: 2026-09-12T17:55:48.607Z
 

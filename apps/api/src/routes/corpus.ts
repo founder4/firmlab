@@ -1,5 +1,5 @@
 /**
- * Corpus routes — cross-image priors and the corpus overview. Everything here is a *reference* into other
+ * Cross-image corpus routes — its priors and its overview. Everything here is a *reference* into other
  * images (occurrences), never a new asserted finding: the corpus enriches, it does not conclude.
  */
 import type { FastifyInstance } from 'fastify';

@@ -112,7 +112,7 @@ export const capture: Messages['capture'] = {
 
   learning: {
     title: 'Aprendizaje de OTA',
-    sub: 'Lo que el corpus ha aprendido entre versiones capturadas — una línea temporal de OTA por familia, cómo distribuye cada fabricante y qué CDN sirve a quién. Captura el mismo dispositivo dos veces para desbloquear una comparativa entre versiones.',
+    sub: 'Lo que el corpus entre imágenes ha aprendido entre versiones capturadas — una línea temporal de OTA por familia, cómo distribuye cada fabricante y qué CDN sirve a quién. Captura el mismo dispositivo dos veces para desbloquear una comparativa entre versiones.',
     emptyTitle: 'Todavía no hay versiones capturadas',
     emptyBody: 'Ingesta una captura (arriba) — su procedencia siembra aquí la línea temporal de OTA.',
     priors: 'Antecedentes por fabricante:',

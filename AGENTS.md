@@ -19,7 +19,7 @@ FirmLab is a local-first firmware analysis workbench. Preserve these invariants:
 ## Working agreement
 
 - Stay inside the assigned target and ownership boundary. Do not edit files owned by another active worker.
-- Do not deploy, mutate the persistent corpus/database, fetch firmware, or enable outbound research unless the
+- Do not deploy, mutate the cross-image corpus/database, fetch firmware, or enable outbound research unless the
   task explicitly authorizes it.
 - Preserve unrelated and pre-existing worktree changes. Never use destructive Git cleanup commands.
 - Put decision/parsing logic in pure exported functions with tests; keep routes and store bindings thin.

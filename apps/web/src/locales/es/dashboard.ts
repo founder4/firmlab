@@ -10,7 +10,7 @@ import type { Messages } from '../en';
 export const dashboard: Messages['dashboard'] = {
   eyebrow: 'Espacio de trabajo',
   title: 'Análisis local',
-  desc: 'Sube una imagen para analizarla en local, léela como señal, profundiza con trabajos apoyados en herramientas y compárala con el resto de tu corpus.',
+  desc: 'Sube una imagen para analizarla en local, léela como señal, profundiza con trabajos apoyados en herramientas y compárala con el resto de imágenes del banco.',
 
   coverage: {
     unexamined: 'sin examinar',

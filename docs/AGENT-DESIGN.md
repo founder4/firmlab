@@ -146,7 +146,7 @@ a "RCE en el dispositivo". Todo downgrade queda registrado con su rationale.
 
 ---
 
-## 6. El corpus persistente: el diferenciador estructural
+## 6. El corpus entre imágenes (persistente): el diferenciador estructural
 
 Galert es stateless. FirmLab acumula conocimiento del dominio. El modelo pasa de por-imagen a un grafo
 cross-imagen que **referencia**, nunca concluye.
@@ -215,7 +215,7 @@ introducir riesgo de agente. Las Fases 2–4 añaden la autonomía consciente so
 - **Preflight de capacidades** determinista (`runtime_capabilities`).
 - **Esquema de proof-states** como ciudadano de primera clase en el modelo de datos.
 
-### Fase 1 — Corpus persistente (sin agente)
+### Fase 1 — Corpus entre imágenes (sin agente)
 - Las 5 tablas cross-imagen + índices.
 - **Nivel 0** de aprendizaje: matching determinista (huellas, credenciales seen-in, component_obs, diff
   cross-versión).

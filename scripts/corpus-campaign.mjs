@@ -1,6 +1,7 @@
 /**
  * Coverage campaign over the VALIDATION corpus — which of its uncovered cells are worth scheduling, and which are
- * not debt at all. (Three unrelated things are called "corpus" here; see docs/ARCHITECTURE.md.)
+ * not debt at all. Not the cross-image corpus and not the YARA rule corpus; see "The three corpora" in
+ * docs/ARCHITECTURE.md.
  *
  * `corpus-matrix.mjs` measures the corpus; it does not prioritise it. Measured on the deployed workbench the
  * difference matters more than the total: of 411 applicable stage cells, 85 are `degraded`, and they are five
@@ -409,7 +410,11 @@ export function parseArgs(argv, env = process.env) {
 
 function usage() {
   return [
-    'Usage: node scripts/corpus-campaign.mjs [options]',
+    'Coverage campaign over the VALIDATION CORPUS — which of its uncovered cells are worth',
+    'scheduling. Not the cross-image corpus (pnpm corpus:reindex) and not the YARA rule corpus',
+    '(pnpm yara-corpus:sync); see "The three corpora" in docs/ARCHITECTURE.md.',
+    '',
+    'Usage: node scripts/corpus-campaign.mjs [options]   (pnpm corpus:campaign · pnpm validation-corpus:campaign)',
     '  --base URL             FirmLab origin (default FIRMLAB_UI or http://127.0.0.1:8899)',
     '  --matrix FILE          Plan against a saved --format json matrix instead of the live workbench',
     '  --format markdown|json Output format (default markdown)',
