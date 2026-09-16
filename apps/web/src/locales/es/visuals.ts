@@ -60,7 +60,7 @@ export const visuals: Messages['visuals'] = {
     affected: (vulnerable: number, total: number) =>
       `${vulnerable} de ${total} componentes afectados · el tamaño del nodo = número de CVE`,
     notQueried: (total: number) =>
-      `${total} componentes inventariados · sin motor de CVE: esto no es un recuento de cero`,
+      `${total} componentes inventariados · no se consultó ningún CVE: esto no es un recuento de cero`,
     offGraph: (cves: number, pkgs: number) =>
       `${cves} CVE ${cves === 1 ? 'casa' : 'casan'} con ${pkgs} componente${pkgs === 1 ? '' : 's'} que no está${pkgs === 1 ? '' : 'n'} en este listado — fuera del grafo`,
     caveat: [

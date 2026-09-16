@@ -344,13 +344,13 @@ describe('SbomGraph — the components a CVE can miss, and the matcher that neve
     expect(screen.getByText('1 of 2 components affected · node size = CVE count')).toBeTruthy();
   });
 
-  it('refuses to report "0 of 2 affected" when this deployment has no CVE matcher', () => {
+  it('refuses to report "0 of 2 affected" when no CVE query ran', () => {
     // Absence of the tool is not absence of a problem. A grey ring under a count of zero is the exact shape of the
     // claim the workbench exists to refuse, and the count is a measurement that never happened.
     render(<SbomGraph sbom={sbomOf({ grypeAvailable: false })} />);
 
     expect(screen.queryByText(/components affected/)).toBeNull();
-    expect(screen.getByText('2 components inventoried · no CVE matcher: this is not a count of zero')).toBeTruthy();
+    expect(screen.getByText('2 components inventoried · no CVE query ran: this is not a count of zero')).toBeTruthy();
   });
 
   it('translates that refusal rather than falling back to the affected count', () => {
@@ -358,9 +358,25 @@ describe('SbomGraph — the components a CVE can miss, and the matcher that neve
     render(<SbomGraph sbom={sbomOf({ grypeAvailable: false })} />);
 
     expect(
-      screen.getByText('2 componentes inventariados · sin motor de CVE: esto no es un recuento de cero'),
+      screen.getByText('2 componentes inventariados · no se consultó ningún CVE: esto no es un recuento de cero'),
     ).toBeTruthy();
     expect(screen.queryByText(/componentes afectados/)).toBeNull();
+  });
+
+  it('does not attribute the missing query to a missing tool, which the banner above contradicts', () => {
+    // `grypeAvailable:false` stopped meaning "grype is not installed" when the SBOM lane stopped downloading its
+    // vulnerability database on its own: the commonest case is now an installed grype with no database, and the
+    // panel banner says exactly that from `grypeReason`. A legend asserting the matcher is absent would be the
+    // device-tree conflation again — two elements on one screen answering the same question differently.
+    const sbom = sbomOf({
+      grypeAvailable: false,
+      grypeReason:
+        'CVE matching was not attempted: grype is installed but has no vulnerability database at /data/grype-db.',
+    });
+    render(<SbomGraph sbom={sbom} />);
+
+    expect(screen.getByText(/no CVE query ran/)).toBeTruthy();
+    expect(screen.queryByText(/no CVE matcher/)).toBeNull();
   });
 
   it('bounds the tooltip CVE list and says by how much, rather than ending at six', () => {

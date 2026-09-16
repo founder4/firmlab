@@ -67,10 +67,16 @@ export const visuals = {
     affected: (vulnerable: number, total: number) =>
       `${vulnerable} of ${total} components affected · node size = CVE count`,
     /**
-     * What replaces `affected` when no matcher ran. «0 of 42 affected» is a measurement, and with grype absent
-     * there was none — the ring is grey because nothing was asked, not because nothing answered.
+     * What replaces `affected` when no CVE query ran. «0 of 42 affected» is a measurement and there was none —
+     * the ring is grey because nothing was asked, not because nothing answered.
+     *
+     * It states the OUTCOME and not the cause, deliberately. `grypeAvailable:false` covers three situations —
+     * grype absent, grype installed with no vulnerability database, grype ran and failed — and since the SBOM
+     * lane stopped downloading a database on its own the second is the commonest. Saying «no CVE matcher» here
+     * would contradict the banner directly above, which names the grype that IS installed: the same conflation
+     * that had three panels reporting "no device tree has been read" beside a banner saying one had.
      */
-    notQueried: (total: number) => `${total} components inventoried · no CVE matcher: this is not a count of zero`,
+    notQueried: (total: number) => `${total} components inventoried · no CVE query ran: this is not a count of zero`,
     /**
      * A CVE whose component is not in the listing. The package list is capped and a name can differ between the
      * inventory and the matcher, so a match can land on nothing this ring draws — and it would then be missing
