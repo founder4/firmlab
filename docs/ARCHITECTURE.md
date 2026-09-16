@@ -15,7 +15,7 @@
 ┌───────────────┴────────────────────────────────────────────────────┐
 │ apps/api  (Fastify + node:sqlite)                                  │
 │   routes/    46 thin HTTP modules → startJob + syncFindings        │
-│   providers/ 85 modules — the actual work, runtime-detected tools  │
+│   providers/ 86 modules — the actual work, runtime-detected tools  │
 │     extract · sbom · gitleaks · diff · ghidra · emulate · renode · │
 │     chipsec · fwhunt · fuzz · isolate · taint · trigger ·          │
 │     preflight · report · keys · provenance · osv · kernelposture…  │

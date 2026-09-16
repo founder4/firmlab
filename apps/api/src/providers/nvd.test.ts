@@ -254,7 +254,7 @@ describe('parseNvdResponse', () => {
     ],
   };
 
-  it('extracts id, english summary, severity/score (preferring CVSS v3.1) and references', () => {
+  it('extracts id, english summary, severity/score (preferring CVSS v3.1 over v2) and references', () => {
     const adv = parseNvdResponse(json);
     expect(adv).toHaveLength(1);
     expect(adv[0]?.id).toBe('CVE-2018-15599');
@@ -262,6 +262,48 @@ describe('parseNvdResponse', () => {
     expect(adv[0]?.severity).toBe('HIGH');
     expect(adv[0]?.score).toBe(7.5);
     expect(adv[0]?.references).toEqual(['https://nvd.nist.gov/vuln/detail/CVE-2018-15599']);
+  });
+
+  /**
+   * NVD attaches v4.0 to a small and growing minority of records, so the fixture above — v3.1 and v2, no v4 — is
+   * the shape the overwhelming majority of responses still have, and it has to keep scoring 7.5. These two cover
+   * the other side: a record that DOES carry v4.0 is read from it, newest first, as NVD itself presents it.
+   */
+  it('prefers CVSS v4.0 when NVD published one', () => {
+    const adv = parseNvdResponse({
+      vulnerabilities: [
+        {
+          cve: {
+            id: 'CVE-2024-1',
+            metrics: {
+              cvssMetricV40: [{ cvssData: { baseScore: 9.3, baseSeverity: 'CRITICAL' } }],
+              cvssMetricV31: [{ cvssData: { baseScore: 7.5, baseSeverity: 'HIGH' } }],
+              cvssMetricV2: [{ baseSeverity: 'MEDIUM', cvssData: { baseScore: 5.0 } }],
+            },
+          },
+        },
+      ],
+    });
+    expect(adv[0]?.severity).toBe('CRITICAL');
+    expect(adv[0]?.score).toBe(9.3);
+  });
+
+  it('falls through a v4.0 entry that carries no cvssData, rather than reporting the CVE as ungraded', () => {
+    const adv = parseNvdResponse({
+      vulnerabilities: [
+        {
+          cve: {
+            id: 'CVE-2024-2',
+            metrics: {
+              cvssMetricV40: [{}],
+              cvssMetricV31: [{ cvssData: { baseScore: 7.5, baseSeverity: 'HIGH' } }],
+            },
+          },
+        },
+      ],
+    });
+    expect(adv[0]?.severity).toBe('HIGH');
+    expect(adv[0]?.score).toBe(7.5);
   });
 
   it('falls back to CVSS v2 severity when v3 is absent', () => {

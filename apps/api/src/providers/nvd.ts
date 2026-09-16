@@ -256,11 +256,26 @@ export interface NvdAdvisory {
   references: string[];
 }
 
-/** Pure: pull the highest-priority CVSS severity/score NVD attached (v3.1 → v3.0 → v2), tolerating gaps. */
+/**
+ * Pure: pull the highest-priority CVSS severity/score NVD attached (v4.0 → v3.1 → v3.0 → v2), tolerating gaps.
+ *
+ * Newest first, which is NVD's own presentation order and the only one that does not throw away the grading a CNA
+ * took the trouble to publish. The chain matters more than the head of it: NVD carries `cvssMetricV40` on a small
+ * and growing minority of records, so the overwhelmingly common case is a response with no v4 metric at all, and
+ * that case must behave exactly as it did before — which is why each rung is read independently rather than
+ * folded into one expression. NVD scores its own vectors, so nothing here recomputes one; `cvss-v4.ts` exists for
+ * the feeds that publish a vector and no score.
+ *
+ * The two scales are not interchangeable and this returns no version label, so a caller ranking a mixed list is
+ * comparing measurements taken with different instruments. That is the same compromise `osvSeverityScore` makes,
+ * and for the same reason: an ungraded advisory ranks worse than an imperfectly graded one.
+ */
 function extractSeverity(metrics: NvdCveMetrics | undefined): { severity: string | null; score: number | null } {
+  const v40 = metrics?.cvssMetricV40?.[0]?.cvssData;
   const v31 = metrics?.cvssMetricV31?.[0]?.cvssData;
   const v30 = metrics?.cvssMetricV30?.[0]?.cvssData;
   const v2 = metrics?.cvssMetricV2?.[0];
+  if (v40) return { severity: v40.baseSeverity ?? null, score: v40.baseScore ?? null };
   if (v31) return { severity: v31.baseSeverity ?? null, score: v31.baseScore ?? null };
   if (v30) return { severity: v30.baseSeverity ?? null, score: v30.baseScore ?? null };
   if (v2) return { severity: v2.baseSeverity ?? null, score: v2.cvssData?.baseScore ?? null };
@@ -272,6 +287,7 @@ interface NvdCvssData {
   baseSeverity?: string;
 }
 interface NvdCveMetrics {
+  cvssMetricV40?: { cvssData?: NvdCvssData }[];
   cvssMetricV31?: { cvssData?: NvdCvssData }[];
   cvssMetricV30?: { cvssData?: NvdCvssData }[];
   cvssMetricV2?: { baseSeverity?: string; cvssData?: NvdCvssData }[];

@@ -32,6 +32,7 @@ import {
   summarizeFreshness,
 } from '../research/cache.js';
 import { type ResearchConfig, allowlistedFetch } from '../research/config.js';
+import { cvssV4Score } from './cvss-v4.js';
 
 export const OSV_ENDPOINT = 'https://api.osv.dev/v1/query';
 
@@ -142,8 +143,9 @@ function roundUp1(value: number): number {
 }
 
 /**
- * Pure: the CVSS v3.0/v3.1 base score a vector string states, or null for anything else — a v4.0 vector (whose
- * score needs a lookup table this module does not carry), a v2 vector, a malformed one.
+ * Pure: the CVSS v3.0/v3.1 base score a vector string states, or null for anything else — a v4.0 vector (scored
+ * by `cvssV4Score` in `cvss-v4.ts`, whose procedure shares no arithmetic with this one), a v2 vector, a
+ * malformed one.
  *
  * This is arithmetic on what the vector says, not an estimate of it: the equations are the specification's, so
  * the number is the one NVD would print for the same string. Deriving it is what makes the listing rankable at
@@ -181,14 +183,20 @@ export function cvssV3BaseScore(vector: string): number | null {
  * them, because a bound that dropped an advisory for being unreadable would be deciding the question it failed to
  * answer.
  *
- * Three shapes reach here, in the order they are tried: a CVSS v3 vector (what Debian and Alpine actually
- * publish), a bare numeric base score (what a few feeds put in the same field), and a named level (GHSA-backed
- * ecosystems), placed on the axis at the floor of its band.
+ * Four shapes reach here, in the order they are tried: a CVSS v3 vector (what Debian and Alpine actually
+ * publish), a CVSS v4.0 vector (what newer GHSA and distro records are starting to publish, and what this
+ * deployment's cached corpus held four ungradable advisories of), a bare numeric base score (what a few feeds put
+ * in the same field), and a named level (GHSA-backed ecosystems), placed on the axis at the floor of its band.
+ *
+ * v3 and v4 are tried in that order only because the version prefixes are disjoint — a string is at most one of
+ * them, so neither can shadow the other, and the order carries no preference. The two scales are not the same
+ * measurement and the specification says as much; placing both on one axis is what ranking a mixed listing costs,
+ * and it is still better than leaving a graded advisory unranked.
  */
 export function osvSeverityScore(severity: string | null): number | null {
   const s = severity?.trim();
   if (!s) return null;
-  const vector = cvssV3BaseScore(s);
+  const vector = cvssV3BaseScore(s) ?? cvssV4Score(s);
   if (vector !== null) return vector;
   const named = NAMED_SEVERITY_FLOOR[s.toLowerCase()];
   if (named !== undefined) return named;
@@ -252,10 +260,11 @@ export function parseOsvAnswer(json: unknown): OsvAnswer {
   // Selection, then order — two different rules, and conflating them is what the cap used to get wrong.
   //
   // Graded advisories compete on their score, most severe first, stable within a score so re-asking the same
-  // question does not reshuffle the table. Advisories OSV did not grade in a form this module reads (a CVSS v4.0
-  // vector, no severity at all) do NOT compete: they are kept ahead of the graded ones the cap would cut, because
-  // dropping an advisory for being unreadable is the bound answering a question it could not read. They are shown
-  // last all the same — the reader's first badges should be the severities that are known.
+  // question does not reshuffle the table. Advisories OSV did not grade in a form this module reads (no severity
+  // at all, a CVSS v2 vector, a scheme newer than v4.0) do NOT compete: they are kept ahead of the graded ones
+  // the cap would cut, because dropping an advisory for being unreadable is the bound answering a question it
+  // could not read. They are shown last all the same — the reader's first badges should be the severities that
+  // are known.
   const scored = all.map((a, i) => ({ a, i, score: osvSeverityScore(a.severity) }));
   const graded = scored
     .filter((x): x is typeof x & { score: number } => x.score !== null)

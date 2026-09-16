@@ -89,7 +89,8 @@ describe('cvssV3BaseScore', () => {
   });
 
   it('is null for what it cannot read — a v4.0 vector, a v2 vector, a missing or unknown metric', () => {
-    expect(cvssV3BaseScore('CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H')).toBeNull();
+    // v4.0 is scored, but not here: it is a different procedure (`cvssV4Score`), not a different set of weights.
+    expect(cvssV3BaseScore('CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N')).toBeNull();
     expect(cvssV3BaseScore('AV:N/AC:L/Au:N/C:P/I:P/A:P')).toBeNull();
     expect(cvssV3BaseScore('CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H')).toBeNull();
     expect(cvssV3BaseScore('CVSS:3.1/AV:N/AC:L/PR:N/UI:N/C:H/I:H/A:H')).toBeNull();
@@ -119,11 +120,21 @@ describe('osvSeverityScore', () => {
     );
   });
 
+  it('grades a CVSS v4.0 vector, which OSV publishes for the newer advisories', () => {
+    expect(osvSeverityScore('CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N')).toBe(9.3);
+    expect(osvSeverityScore(' CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N ')).toBe(8.5);
+  });
+
   it('refuses to grade what it cannot read, rather than calling it zero', () => {
     expect(osvSeverityScore(null)).toBeNull();
     expect(osvSeverityScore('')).toBeNull();
     expect(osvSeverityScore('   ')).toBeNull();
+    // A v4.0 vector truncated to its base impacts is not a v4.0 vector, and guessing the missing SC/SI/SA would
+    // be inventing the part of the answer that was not published.
     expect(osvSeverityScore('CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H')).toBeNull();
+    // A v2 vector, and a version newer than anything implemented here.
+    expect(osvSeverityScore('AV:N/AC:L/Au:N/C:P/I:P/A:P')).toBeNull();
+    expect(osvSeverityScore('CVSS:5.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N')).toBeNull();
     expect(osvSeverityScore('11')).toBeNull();
   });
 });
@@ -212,9 +223,10 @@ describe('parseOsvAnswer', () => {
 
   /**
    * The rule the real corpus forced. Measured over the answers this deployment has cached: 117 of 121 graded
-   * advisories state severity ONLY as a CVSS v3 vector and 4 only as a v4.0 one, which this module does not
-   * score. Cutting the unscoreable ones in favour of a graded LOW would be the bound deciding a question it could
-   * not read.
+   * advisories state severity ONLY as a CVSS v3 vector and 4 only as a v4.0 one. The v4.0 four are now scored and
+   * compete on their number like any other; what the rule protects is whatever the NEXT unreadable shape turns
+   * out to be, because cutting it in favour of a graded LOW would be the bound deciding a question it could not
+   * read.
    */
   it('never cuts an advisory it could not grade in favour of one it graded low', () => {
     const vulns = [
@@ -222,14 +234,33 @@ describe('parseOsvAnswer', () => {
         id: `OSV-LOW-${i}`,
         severity: [{ type: 'CVSS_V3', score: 'CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:N/I:N/A:L' }],
       })),
-      { id: 'OSV-V4', severity: [{ type: 'CVSS_V4', score: 'CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H' }] },
+      { id: 'OSV-V2', severity: [{ type: 'CVSS_V2', score: 'AV:N/AC:L/Au:N/C:P/I:P/A:P' }] },
       { id: 'OSV-UNGRADED' },
     ];
     const { advisories } = parseOsvAnswer({ vulns });
     expect(advisories).toHaveLength(OSV_ADVISORY_CAP);
     const ids = advisories.map((a) => a.id);
     // Kept — and shown last, so the reader's first badges stay the severities that are known.
-    expect(ids.slice(-2)).toEqual(['OSV-V4', 'OSV-UNGRADED']);
+    expect(ids.slice(-2)).toEqual(['OSV-V2', 'OSV-UNGRADED']);
+  });
+
+  /**
+   * A v4.0 advisory used to be unrankable, so it sat with the ungraded ones at the end of the listing no matter
+   * how severe it was — a 9.3 shown below a 5.4. It now ranks on its score, against v3-graded neighbours.
+   */
+  it('ranks a v4.0-graded advisory against v3-graded ones by the score each states', () => {
+    const { advisories } = parseOsvAnswer({
+      vulns: [
+        { id: 'v3-medium', severity: [{ type: 'CVSS_V3', score: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N' }] },
+        {
+          id: 'v4-critical',
+          severity: [{ type: 'CVSS_V4', score: 'CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N' }],
+        },
+        { id: 'v3-high', severity: [{ type: 'CVSS_V3', score: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N' }] },
+        { id: 'ungraded' },
+      ],
+    });
+    expect(advisories.map((a) => a.id)).toEqual(['v4-critical', 'v3-high', 'v3-medium', 'ungraded']);
   });
 
   it('orders a real mix of vectors by the score they state', () => {
