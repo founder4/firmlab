@@ -79,7 +79,29 @@ export interface SbomResult {
    * having matched against none.
    */
   grypeDb?: { schemaVersion: string | null; built: string | null; from: string | null; ageDays: number | null };
+  /**
+   * What became of syft — the SBOM half — as a value a caller can switch on, the twin of `grypeOutcome`.
+   *
+   * `available: false` covers a syft that is not installed AND a syft that ran and threw, and W9 sent both to
+   * `remedy: 'install-tool'` with the hand-written note `'syft/grype not installed'` — false when syft IS installed
+   * and the invocation failed, which the same scan may settle by asking again. `reason` already distinguished the
+   * two (`'syft not installed'` vs `` `syft failed: ${message}` ``), but `opacidad-remedy.ts` refuses to derive a
+   * remedy by parsing prose, so the discriminant is a field.
+   *
+   * OPTIONAL FOREVER: a result stored by an older build carries none, and absent means "not recorded" — W9 then
+   * keeps the conservative `install-tool` it always used, never inferring a retryable failure it has no record of.
+   */
+  syftOutcome?: SyftOutcome;
 }
+
+/** What became of the SBOM half of this lane. See `SbomResult.syftOutcome`. */
+export type SyftOutcome =
+  /** syft ran to completion; `packages` is its catalogue of this rootfs. */
+  | 'ran'
+  /** syft is not on PATH in this deployment. */
+  | 'tool_absent'
+  /** syft was invoked and the invocation failed. The same question against the same bytes may settle it. */
+  | 'run_failed';
 
 /** What became of the CVE half of this lane. See `SbomResult.grypeOutcome`. */
 export type GrypeOutcome =
@@ -120,7 +142,7 @@ export function rankVulnerabilities(vulns: SbomVuln[]): { sorted: SbomVuln[]; co
   return { sorted, counts };
 }
 
-function unavailable(target: string, reason: string): SbomResult {
+function unavailable(target: string, reason: string, syftOutcome: SyftOutcome): SbomResult {
   return {
     available: false,
     reason,
@@ -130,6 +152,7 @@ function unavailable(target: string, reason: string): SbomResult {
     grypeAvailable: false,
     vulnerabilities: [],
     counts: emptyCounts(),
+    syftOutcome,
   };
 }
 
@@ -147,7 +170,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
   const env = anchoreEnv();
   if (!(await isToolAvailable('syft'))) {
     handle.log('syft not available on PATH — build the firmware Docker image to enable SBOM/CVE scanning.');
-    return unavailable(rootfsPath, 'syft not installed');
+    return unavailable(rootfsPath, 'syft not installed', 'tool_absent');
   }
 
   // === syft: software bill of materials ===
@@ -173,7 +196,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     handle.log(`syft failed: ${message}`);
-    return unavailable(rootfsPath, `syft failed: ${message}`);
+    return unavailable(rootfsPath, `syft failed: ${message}`, 'run_failed');
   }
 
   // === grype: N-day CVE matching (optional, and offline) ===
@@ -261,6 +284,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
     packageTotal,
     vulnerabilityTotal,
     packages,
+    syftOutcome: 'ran',
     grypeAvailable,
     grypeOutcome,
     ...(grypeReason ? { grypeReason } : {}),

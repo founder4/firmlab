@@ -78,6 +78,7 @@ import {
   remedyForKmod,
   remedyForNoRootfs,
   remedyForProbeVerdict,
+  remedyForSyftOutcome,
   remedyForWebTaint,
   remedyForYaraScan,
 } from './opacidad-remedy.js';
@@ -393,14 +394,26 @@ async function sbomRun(c: RunCtx): Promise<StepOutcome> {
   const r = await runSbom(c.imageId, c.rootfsPath as string, c.handle);
   const drafts = normalizeSbom(r);
   syncFindings(c.imageId, 'sbom', drafts);
-  if (!r.available)
+  // `available:false` is syft's call, and it too has two shapes that were rendered as one: syft absent (the
+  // deployment's `install-tool`) and syft ran-and-threw (a `retry`). The note now comes from `r.reason`, which
+  // already distinguishes them, instead of the hand-written `'syft/grype not installed'` that was false whenever
+  // syft was installed and the run failed. Same fix as the grype half, on the other end of the lane.
+  if (!r.available) {
+    const remedy = remedyForSyftOutcome(r.syftOutcome);
+    const outcome =
+      r.syftOutcome === 'run_failed'
+        ? 'syft failed'
+        : r.syftOutcome === 'tool_absent'
+          ? 'syft not installed'
+          : 'syft outcome not recorded';
     return {
-      summary: 'SBOM unavailable',
+      summary: `SBOM unavailable (${outcome})`,
       findingCount: 0,
       degraded: true,
-      remedy: 'install-tool',
-      note: 'syft/grype not installed',
+      ...(remedy ? { remedy } : {}),
+      note: r.reason ?? 'Syft outcome was not recorded.',
     };
+  }
   // "0 CVEs" and "the CVE question was never asked" used to render identically here. Since the lane stopped
   // downloading grype's database behind the operator's back, the second is the commoner of the two, and a scan
   // summary that reports it as a count is the same conflation the coverage banner exists to prevent.

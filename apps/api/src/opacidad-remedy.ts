@@ -23,7 +23,7 @@
 import type { CredMatchState } from './providers/credmatch.js';
 import type { ExtractedDeviceTreeScan, RawImageDeviceTreeScan } from './providers/devicetree.js';
 import type { ProbeVerdict } from './providers/dynprobe.js';
-import type { GrypeOutcome } from './providers/sbom.js';
+import type { GrypeOutcome, SyftOutcome } from './providers/sbom.js';
 import type { SymReachBlockedBy } from './providers/symreach.js';
 import type { YaraScanState } from './providers/yarascan.js';
 
@@ -278,6 +278,22 @@ export function remedyForNoRootfs(input: {
   if (input.blobs?.some((blob) => blob.short || blob.idTableInZeroFill)) return 'reacquire-input';
   if (input.diagnosed && input.volumes > 0 && input.unopenedBlobs === 0) return 'settled';
   return undefined;
+}
+
+/**
+ * The SBOM half's twin of `remedyForGrypeOutcome`. A syft that ran and threw is a `retry`, an absent syft is the
+ * deployment's `install-tool`, and an unrecorded outcome stays unknown. Persisted results predate this discriminant,
+ * so absence must never be promoted to a deployment diagnosis.
+ */
+export function remedyForSyftOutcome(outcome: SyftOutcome | undefined): DegradedRemedy | undefined {
+  switch (outcome) {
+    case 'run_failed':
+      return 'retry';
+    case 'tool_absent':
+      return 'install-tool';
+    default:
+      return undefined;
+  }
 }
 
 /**
