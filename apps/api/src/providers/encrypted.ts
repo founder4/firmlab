@@ -18,6 +18,11 @@ function u32be(b: Uint8Array, o: number): number {
   return (((b[o] ?? 0) << 24) | ((b[o + 1] ?? 0) << 16) | ((b[o + 2] ?? 0) << 8) | (b[o + 3] ?? 0)) >>> 0;
 }
 
+/** Read a little-endian 32-bit word at `o`. */
+function u32le(b: Uint8Array, o: number): number {
+  return ((b[o] ?? 0) | ((b[o + 1] ?? 0) << 8) | ((b[o + 2] ?? 0) << 16) | ((b[o + 3] ?? 0) << 24)) >>> 0;
+}
+
 // === Header framing ===
 
 export interface OtaHeader {
@@ -29,6 +34,12 @@ export interface OtaHeader {
   ivBlock: { offset: number; bytes: string } | null;
   /** Where the high-entropy ciphertext body begins. */
   cipherBodyOffset: number;
+  /**
+   * The recognized container format, when the header is one we name. `ENC1` is a per-partition container with a
+   * plaintext length and IV. The format names a bootloader investigation path; it does not prove where its key
+   * comes from.
+   */
+  container?: 'ENC1';
 }
 
 /** Scan a bounded prefix for printable ASCII runs of ≥ `min` chars. */
@@ -56,6 +67,22 @@ function printableRuns(buf: Uint8Array, start: number, end: number, min = 5): st
  */
 export function parseOtaHeader(buf: Uint8Array, fileSize: number): OtaHeader {
   const scanEnd = Math.min(buf.length, 0x400);
+
+  // ENC1 container: magic + orig_len (u32-LE) + iv[16] at offset 8, ciphertext at 32. The ciphertext must hold the
+  // complete plaintext plus at most one AES padding block; magic and an arbitrary small integer are not enough.
+  if (buf.length >= 32 && buf[0] === 0x45 && buf[1] === 0x4e && buf[2] === 0x43 && buf[3] === 0x31) {
+    const origLen = u32le(buf, 4);
+    const cipherLength = fileSize - 32;
+    if (origLen > 0 && cipherLength === Math.ceil(origLen / 16) * 16) {
+      return {
+        lengthField: origLen,
+        plaintextTags: [],
+        ivBlock: { offset: 8, bytes: Buffer.from(buf.subarray(8, 24)).toString('hex') },
+        cipherBodyOffset: 32,
+        container: 'ENC1',
+      };
+    }
+  }
 
   const len0 = u32be(buf, 0);
   const lengthField = len0 > 0 && fileSize - len0 >= 0 && fileSize - len0 <= 256 ? len0 : null;
@@ -210,22 +237,48 @@ export function analyzeEncrypted(buf: Uint8Array, fileSize: number): EncryptedAn
     rationale: `${entropyScope} has entropy ${verdict.bodyEntropy.toFixed(4)} bits/byte; a 16-byte framed IV implies a 128-bit block cipher (AES). Mode CBC-vs-CTR is not statically separable without the key. The entropy ${sample.complete ? 'covers the complete body' : 'characterizes only the stated sample'}, not a decryption.`,
   });
 
-  findings.push({
-    kind: 'encrypted-unrecoverable',
-    title: 'Firmware body is encrypted — unrecoverable without the key (honest verdict, not an empty result)',
-    severity: 'high',
-    proofState: 'blocked_by_security',
-    evidence: {
-      keyRecoveryPaths: [
-        'Extract the OTA/decrypt key from the device bootloader or a companion app/binary that performs the update',
-        'Known-plaintext / crib attack if a plaintext region and its matching ciphertext are both available',
-        'Vendor key disclosure, or intercept a decrypted image on-device (Phase-6 capture)',
-      ],
-    },
-    rationale:
-      'Encryption is a valid control that blocks static extraction — the correct outcome is a diagnosis plus the ' +
-      'key-recovery path, not a silent "0 findings" that reads as "clean".',
-  });
+  if (header.container === 'ENC1') {
+    // The format gives the operator a sharper recovery path, but these bytes contain no paired loader evidence.
+    // Keep the security block until uboot.ts independently finds a plausible derivation recipe in loader bytes.
+    findings.push({
+      kind: 'encrypted-unrecoverable',
+      title: 'Encrypted ENC1 partition — blocked until the key or a paired-loader derivation is demonstrated',
+      severity: 'high',
+      proofState: 'blocked_by_security',
+      evidence: {
+        container: 'ENC1',
+        ivOffset: header.ivBlock ? `0x${header.ivBlock.offset.toString(16)}` : null,
+        ivHex: header.ivBlock?.bytes ?? null,
+        keyRecoveryPaths: [
+          'Pair this partition with its bootloader and inspect it for a key-derivation routine; only loader bytes ' +
+            'can prove whether static key recovery is available. This ENC1 header already carries the IV.',
+          'Known-plaintext / crib attack if a plaintext region and its matching ciphertext are both available',
+          'Vendor key disclosure, or intercept a decrypted image on-device (Phase-6 capture)',
+        ],
+      },
+      rationale:
+        'The bytes prove an ENC1 container with its IV, but not the provenance or derivability of its key. Static ' +
+        'extraction remains blocked_by_security until a paired loader independently supplies a reproducible ' +
+        'derivation recipe; the container magic alone never upgrades that state.',
+    });
+  } else {
+    findings.push({
+      kind: 'encrypted-unrecoverable',
+      title: 'Firmware body is encrypted — unrecoverable without the key (honest verdict, not an empty result)',
+      severity: 'high',
+      proofState: 'blocked_by_security',
+      evidence: {
+        keyRecoveryPaths: [
+          'Extract the OTA/decrypt key from the device bootloader or a companion app/binary that performs the update',
+          'Known-plaintext / crib attack if a plaintext region and its matching ciphertext are both available',
+          'Vendor key disclosure, or intercept a decrypted image on-device (Phase-6 capture)',
+        ],
+      },
+      rationale:
+        'Encryption is a valid control that blocks static extraction — the correct outcome is a diagnosis plus the ' +
+        'key-recovery path, not a silent "0 findings" that reads as "clean".',
+    });
+  }
 
   if (header.plaintextTags.length) {
     findings.push({

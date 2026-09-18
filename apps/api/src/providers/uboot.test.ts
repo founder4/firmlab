@@ -2,7 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { auditBootEnv, findEnvBlock, parseUbootEnv, readBootScript, runUbootAnalysis } from './uboot.js';
+import {
+  auditBootEnv,
+  auditLoaderDerivedKey,
+  findEnvBlock,
+  parseUbootEnv,
+  readBootScript,
+  runUbootAnalysis,
+} from './uboot.js';
 
 /**
  * The Tenda camera's environment, copied verbatim out of the deployed corpus
@@ -323,5 +330,88 @@ describe('runUbootAnalysis', () => {
     expect(res.bootScript?.variants[0]?.via).toEqual(['bootcmd', 'boot_normal']);
     expect(res.bootScript?.variants[0]?.value).toBe('${base} ${mem}');
     expect(res.reason).toContain('re-sets bootargs');
+  });
+});
+
+/**
+ * A loader image mirroring the NexoCam NX-820 U-Boot partition: the decrypt/derive recipe in the rodata strings,
+ * followed by a genuine `ENC1` container header (magic + a sane `orig_len` + IV), so the audit sees both the recipe
+ * and a real encrypted partition to unlock. `origLen` = 700527 (0x000ab06f), the real kernel partition's length.
+ */
+function nx820LoaderImage(): Uint8Array {
+  const rodata = Buffer.from(
+    `${[
+      'nx_decrypt: bad magic at 0x%lx (not an ENC1 partition)',
+      'decrypt an ENC1 firmware partition in place',
+      '    - derive the factory AES-128 key and decrypt the ENC1',
+      'sha256',
+      'NX820-boot',
+      'Tarlogic-HW-2026',
+    ].join('\0')}\0`,
+    'ascii',
+  );
+  const origLen = 0xab06f;
+  const cipherLength = Math.ceil(origLen / 16) * 16;
+  const container = Buffer.alloc(32 + cipherLength);
+  container.write('ENC1', 0, 'ascii');
+  container.writeUInt32LE(origLen, 4);
+  let state = 0x8202026;
+  for (let i = 32; i < container.length; i++) {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    container[i] = state & 0xff;
+  }
+  return Buffer.concat([rodata, container]);
+}
+
+describe('auditLoaderDerivedKey', () => {
+  it('flags a loader that derives its own flash key, as a lead', () => {
+    const findings = auditLoaderDerivedKey(nx820LoaderImage(), {
+      bootcmd: 'sf read 0x81000000 0x100000 0x400000; nx_decrypt kernel 0x81000000; nx_decrypt rootfs; bootm',
+    });
+    expect(findings).toHaveLength(1);
+    const f = findings[0];
+    expect(f?.kind).toBe('bootloader-derived-flash-key');
+    expect(f?.severity).toBe('high');
+    expect(f?.proofState).toBe('needs_runtime_reproduction'); // a lead, not blocked_by_security
+    const ev = f?.evidence as {
+      primitive: string;
+      candidateConstants: { value: string }[];
+      encryptedEvidence: string[];
+    };
+    expect(ev.candidateConstants.map((c) => c.value)).toContain('Tarlogic-HW-2026');
+    expect(ev.candidateConstants.map((c) => c.value)).toContain('NX820-boot');
+    expect(ev.encryptedEvidence.join(' ')).toContain('entropy-backed ENC1');
+    // The finding must not carry a derived key — only the recipe's verbatim constants.
+    expect(JSON.stringify(f)).not.toContain('2210be562c902f9d89049062ddcd8244');
+  });
+
+  it('stays silent on a benign bootloader (no recipe)', () => {
+    const benign = Buffer.from('bootcmd=bootm 0x8000\0console=ttyS0,115200\0ipaddr=192.168.1.1\0', 'ascii');
+    expect(auditLoaderDerivedKey(benign, { bootcmd: 'bootm 0x8000' })).toEqual([]);
+  });
+
+  it('does not fire when the recipe is present but the image carries no encrypted partitions', () => {
+    // The recipe strings are there, but the only `ENC1` is rodata text (no valid container header) and no bootcmd
+    // invokes a decrypt step — so there is nothing to recover and the lead has no target.
+    const recipeOnly = Buffer.from(
+      'derive the AES-128 key and decrypt the ENC1 partition\0sha256\0NX820-boot\0Tarlogic-HW-2026\0',
+      'ascii',
+    );
+    expect(auditLoaderDerivedKey(recipeOnly, { bootcmd: 'bootm 0x8000' })).toEqual([]);
+  });
+
+  it('rejects an ENC1 token in rodata even when following ASCII decodes to a plausible length', () => {
+    const rodata = Buffer.from('derive flash key\0sha256\0Vendor-Seed\0not an ENC1\0sf\0boot\0', 'ascii');
+    expect(auditLoaderDerivedKey(rodata, { bootcmd: 'bootm 0x8000' })).toEqual([]);
+  });
+
+  it('accepts an entropy-backed ENC1 container without relying on a decrypt env variable', () => {
+    const findings = auditLoaderDerivedKey(nx820LoaderImage(), { bootcmd: 'bootm 0x8000' });
+    expect(findings).toHaveLength(1);
+    const evidence = findings[0]?.evidence as { encryptedEvidence: string[]; recipeScan: { complete: boolean } };
+    expect(evidence.encryptedEvidence.join(' ')).toContain('entropy-backed ENC1');
+    expect(evidence.recipeScan.complete).toBe(true);
   });
 });

@@ -12,6 +12,7 @@ export * from './jffs2.js';
 export * from './signatures.js';
 export * from './structure.js';
 export * from './strings.js';
+export * from './crypto-loader.js';
 export * from './binwalk.js';
 export * from './filesystem.js';
 export * from './mcu.js';

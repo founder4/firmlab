@@ -13,6 +13,7 @@
  * lead that only a real boot confirms.
  */
 import fs from 'node:fs';
+import { detectLoaderDerivedKeyInBytes, windowEntropy } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
 import { auditKernelCommandLine, truncate } from './boot-cmdline.js';
 
@@ -571,6 +572,112 @@ export function auditBootEnv(vars: Record<string, string>, script?: BootScriptRe
   return drafts;
 }
 
+/**
+ * Bounded scan for real per-partition `ENC1` encrypted-container headers. The magic (`ENC1`) is followed by an
+ * `orig_len` u32-LE plaintext length; a genuine container's is a sane partition size, while the same four bytes
+ * inside help text ("decrypt the ENC1 partition") are followed by ASCII that reads as an absurd length. Validating
+ * `orig_len` is what separates a container from a string, so a loader's own rodata mention of ENC1 is not counted.
+ */
+function findEnc1Offsets(
+  buf: Uint8Array,
+  limit: number,
+  cap = 8,
+): { offsets: number[]; total: number; dropped: number } {
+  const offsets: number[] = [];
+  let total = 0;
+  const end = Math.min(buf.length, limit);
+  for (let i = 0; i + 32 <= end; i++) {
+    if (buf[i] === 0x45 && buf[i + 1] === 0x4e && buf[i + 2] === 0x43 && buf[i + 3] === 0x31) {
+      const origLen =
+        ((buf[i + 4] ?? 0) | ((buf[i + 5] ?? 0) << 8) | ((buf[i + 6] ?? 0) << 16) | ((buf[i + 7] ?? 0) << 24)) >>> 0;
+      const cipherLength = Math.ceil(origLen / 16) * 16;
+      const bodyStart = i + 32;
+      const bodyEnd = bodyStart + cipherLength;
+      if (origLen < 0x400 || origLen > 0x4000000 || bodyEnd > end) continue;
+      const sampleEnd = Math.min(bodyEnd, bodyStart + 4096);
+      if (sampleEnd - bodyStart < 512 || windowEntropy(buf, bodyStart, sampleEnd) <= 7.5) continue;
+      total++;
+      if (offsets.length < cap) offsets.push(i);
+    }
+  }
+  return { offsets, total, dropped: total - offsets.length };
+}
+
+/** Boot-flow vars whose value invokes a partition-decrypt command (`nx_decrypt kernel`, `… _decrypt rootfs`). */
+function decryptInvocations(vars: Record<string, string>): Array<{ var: string; value: string }> {
+  const invocations: Array<{ var: string; value: string }> = [];
+  for (const key of ['preboot', 'bootcmd']) {
+    const value = vars[key];
+    if (value && /\b[a-z0-9_]*decrypt\b/i.test(value)) invocations.push({ var: key, value });
+  }
+  return invocations;
+}
+
+/**
+ * The loader-derived-key audit: does this bootloader carry the recipe to decrypt its own flash partitions? When
+ * the loader's strings hold a key-derivation routine (a decrypt anchor + a crypto primitive, via `@firmlab/core`'s
+ * `detectLoaderDerivedKey`) AND the image shows encrypted partitions (an `ENC1` container, or a bootcmd that
+ * invokes a decrypt step), the AES-encrypted kernel/rootfs are recoverable by reproducing that derivation
+ * statically — a lead, not a `blocked_by_security` wall. Pure: it reads the recipe out of the bytes and never
+ * derives a key; the constants it lists are candidate seed/salt material. Returns [] when the recipe is absent.
+ */
+export function auditLoaderDerivedKey(buf: Uint8Array, vars: Record<string, string>): FindingDraft[] {
+  const scanLimit = Math.min(buf.length, 4 * 1024 * 1024);
+  const recipe = detectLoaderDerivedKeyInBytes(buf.subarray(0, scanLimit));
+  if (!recipe) return [];
+
+  const enc1 = findEnc1Offsets(buf, scanLimit);
+  const invocations = decryptInvocations(vars);
+  // The recipe alone is a loader that CAN derive a key; the finding needs this image to actually carry encrypted
+  // partitions to unlock — otherwise there is nothing to recover and the lead has no target.
+  if (enc1.total === 0 && invocations.length === 0) return [];
+
+  const encryptedEvidence: string[] = [];
+  if (enc1.total > 0) {
+    encryptedEvidence.push(
+      `${enc1.offsets.length} of ${enc1.total} entropy-backed ENC1 container header${enc1.total === 1 ? '' : 's'} shown at ${enc1.offsets.map((o) => `0x${o.toString(16)}`).join(', ')}${enc1.dropped ? `; ${enc1.dropped} omitted by the display cap` : ''}`,
+    );
+  }
+  for (const invocation of invocations) {
+    encryptedEvidence.push(`\`${invocation.var}\` invokes a partition-decrypt step: ${truncate(invocation.value)}`);
+  }
+
+  const anchorTotal = recipe.anchors.length;
+  const anchors = recipe.anchors
+    .slice(0, 6)
+    .map((anchor) => ({ value: truncate(anchor.value), offset: `0x${anchor.offset.toString(16)}` }));
+  const anchorDropped = anchorTotal - anchors.length;
+  const candidateTotal = recipe.candidateTotal;
+  const candidateConstants = recipe.candidateConstants
+    .slice(0, 12)
+    .map((candidate) => ({ value: candidate.value, offset: `0x${candidate.offset.toString(16)}` }));
+  const candidateDropped = candidateTotal - candidateConstants.length;
+  const confidenceText =
+    recipe.confidence === 'high' ? 'candidate constants are present' : 'candidate constants were not identified';
+
+  return [
+    {
+      kind: 'bootloader-derived-flash-key',
+      title: `Possible loader-derived flash key: nearby recipe indicators found (${recipe.primitive}; ${confidenceText})`,
+      severity: 'high',
+      proofState: 'needs_runtime_reproduction',
+      evidence: {
+        primitive: recipe.primitive,
+        confidence: recipe.confidence,
+        anchors,
+        anchorTotal,
+        anchorDropped,
+        candidateConstants,
+        candidateTotal,
+        candidateDropped,
+        recipeScan: { bytesRead: scanLimit, totalBytes: buf.length, complete: scanLimit === buf.length },
+        encryptedEvidence,
+      },
+      rationale: `Nearby loader strings contain a decrypt/key-derivation anchor and ${recipe.primitive}, while independent bytes or boot-flow variables indicate encrypted partitions. This makes static key recovery a lead, not a result: reverse the exact data flow to confirm which constants feed which primitive and whether its output is the flash key. The listed constants are only candidate seed/salt material read verbatim from the bytes; this finding neither derives nor claims a key.`,
+    },
+  ];
+}
+
 const READ_CAP = 32 * 1024 * 1024;
 const VAR_CAP = 60;
 
@@ -662,7 +769,7 @@ export function runUbootAnalysis(imagePath: string): UbootResult {
     found: true,
     varCount,
     vars: capVars(vars, VAR_CAP),
-    findings: auditBootEnv(vars, script),
+    findings: [...auditBootEnv(vars, script), ...auditLoaderDerivedKey(read.buf, vars)],
     varsComplete,
     bootScript: script,
     scan,

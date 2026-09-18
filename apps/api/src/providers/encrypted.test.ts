@@ -147,3 +147,51 @@ describe('runEncryptedAnalysis', () => {
     expect(res.reason).toContain('over the complete 32472-byte body');
   });
 });
+
+/** A synthetic ENC1 per-partition container: magic + orig_len (u32-LE) + IV[16] @ 8 + high-entropy ciphertext @ 32. */
+function buildEnc1Partition(size = 0x8000): Buffer {
+  const buf = Buffer.alloc(size);
+  buf.write('ENC1', 0, 'ascii');
+  buf.writeUInt32LE(size - 32, 4);
+  for (let i = 8; i < 24; i++) buf[i] = (i * 7) & 0xff;
+  fillEntropy(buf, 32, size, 0xbeef);
+  return buf;
+}
+
+describe('parseOtaHeader — ENC1 container', () => {
+  it('recognizes the ENC1 per-partition container (magic + orig_len + IV @ 8, body @ 32)', () => {
+    const h = parseOtaHeader(buildEnc1Partition(), 0x8000);
+    expect(h.container).toBe('ENC1');
+    expect(h.ivBlock?.offset).toBe(8);
+    expect(h.cipherBodyOffset).toBe(32);
+    expect(h.lengthField).toBe(0x8000 - 32);
+  });
+
+  it('does not mistake the four bytes "ENC1" in text for a container (absurd orig_len)', () => {
+    const text = Buffer.from('nx_decrypt: not an ENC1 partition here', 'ascii');
+    expect(parseOtaHeader(text, text.length).container).toBeUndefined();
+  });
+
+  it('rejects a truncated or length-incoherent ENC1 header', () => {
+    const short = Buffer.alloc(24);
+    short.write('ENC1', 0, 'ascii');
+    short.writeUInt32LE(1, 4);
+    expect(parseOtaHeader(short, 40).container).toBeUndefined();
+
+    const impossible = Buffer.alloc(40);
+    impossible.write('ENC1', 0, 'ascii');
+    impossible.writeUInt32LE(1, 4);
+    expect(parseOtaHeader(impossible, impossible.length).container).toBeUndefined();
+  });
+});
+
+describe('analyzeEncrypted — ENC1 names a loader path without inventing loader evidence', () => {
+  const a = analyzeEncrypted(buildEnc1Partition(), 0x8000);
+  it('keeps the security block until a paired loader proves a derivation', () => {
+    const v = a.findings.find((f) => f.kind === 'encrypted-unrecoverable');
+    expect(v?.proofState).toBe('blocked_by_security');
+    expect((v?.evidence as { container: string }).container).toBe('ENC1');
+    expect(v?.title).toMatch(/paired-loader/i);
+    expect(v?.rationale).toContain('magic alone never upgrades');
+  });
+});
