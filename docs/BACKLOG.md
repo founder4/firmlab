@@ -142,13 +142,30 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   ejecución fallando igual. Revertir sólo la rama `run_failed` con los tests puestos falla una afirmación exacta:
   `expected 'install-tool' to be 'retry'`. Las otras dos conservan `install-tool`, y la de base ausente sigue
   lanzando únicamente `grype db status`: la negativa no se convierte en descarga.)*
-- [ ] El mismo defecto un escalón más arriba, encontrado al arreglar el anterior y no implementado por no ampliar
+- [x] El mismo defecto un escalón más arriba, encontrado al arreglar el anterior y no implementado por no ampliar
   el alcance: un **syft que corre y lanza** llega a `sbomRun` como `available:false` igual que un syft ausente, y el
   paso emite `remedy: 'install-tool'` con la nota literal `'syft/grype not installed'` — falsa cuando syft está
   instalado y la invocación falló. `runSbom` ya distingue los dos casos en el `reason` que compone
   (`'syft not installed'` frente a `` `syft failed: ${message}` ``), así que el arreglo es el mismo de `68ea988`
   aplicado a la otra mitad del carril y la nota debería salir de `r.reason` en vez de estar escrita a mano.
   Verificable: un job `sbom` con syft presente cuya ejecución falle debe dejar `remedy: 'retry'` en el paso.
+  *(Hecho: `SbomResult.syftOutcome` con tres valores —`ran` · `tool_absent` · `run_failed`— fijado en `unavailable()`
+  en cada rama de `runSbom` y `ran` en el retorno `available:true`; `remedyForSyftOutcome` (`opacidad-remedy.ts`, el
+  gemelo puro de `remedyForGrypeOutcome`) mapea `run_failed → retry`, `tool_absent → install-tool` y un resultado
+  anterior sin discriminante a `undefined`: desconocido, nunca convertido en diagnóstico de despliegue. La rama
+  `!r.available` de `sbomRun` saca ya la nota de `r.reason` y el remedy del campo, no de la prosa —la regla de
+  `opacidad-remedy.ts` intacta—. `sbom-syft-outcome.test.ts` (4 casos) conduce el `runSbom` real con
+  `node:child_process` mockeado: el que importa es syft EN PATH cuya invocación lanza, que deja `run_failed` /
+  `retry` y no vuelve a gastar en grype; más syft ausente (`tool_absent` / `install-tool`, sin spawn), syft que corre
+  (`ran`) y el mapeo puro incluido el `undefined`.)*
+- [ ] Completar la cobertura del lead de clave derivada del loader sin ensanchar sus afirmaciones: hoy
+  `auditLoaderDerivedKey` corre sólo después de localizar y parsear un entorno U-Boot, examina un prefijo de 4 MiB
+  que declara en la evidencia y reconoce ENC1 con longitud, cuerpo completo y entropía; mover la auditoría antes de
+  esa precondición para que un loader sin entorno legible pueda producir el lead y persistir la cobertura también
+  cuando el resultado sea vacío. Centralizar además el predicado ENC1 que hoy comparten conceptualmente
+  `encrypted.ts` y `uboot.ts`, y puntuar candidatos seed/salt más allá de la forma deliberadamente estrecha
+  guion+mayúsculas (minúsculas/base64 necesitan corpus antes de abrir la heurística). Verificable: loader con receta
+  + ENC1 real y sin bloque de entorno produce un lead acotado; el mismo magic en rodata no lo hace.
 - [ ] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de
   descargarla sola (ver `providers/sbom-db.ts`), un contenedor recreado no tiene base y el resultado declara la
   negativa en vez de correlacionar. Decidir entre las dos opciones, ninguna gratis: hornearla en
