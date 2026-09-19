@@ -120,6 +120,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `packageTotal`/`vulnerabilityTotal`, así que las fichas siguen mostrando el denominador de la lista recortada
   (500 = `PKG_CAP`) como si fuera el total. Verificable sin correr nada: en el `resultJson` del último job `sbom`
   de cada imagen, `packageTotal` ausente ⇒ la ficha miente. Solo depende del carril SBOM, que es local.
+  Medido el 2026-09-19 sobre el contenedor desplegado: 8 de 9 jobs `sbom` sin `packageTotal`, y la única refrescada
+  (`81154df7`) declara `packageTotal=2019` frente al cap de 500 que las otras muestran como total — el denominador
+  engaña por 4×. **Esta re-ejecución tiene una dependencia de orden que no es obvia y que se paga una sola vez:**
+  los 8 resultados viejos corrieron CON grype disponible, y `syncFindings` borra y reinserta las filas de su
+  `source`, así que re-ejecutar sin base de grype en el despliegue sustituye correlación existente por una
+  negativa. Aprovisionar la base va primero, siempre; comprobar `grype db status` dentro del contenedor antes de
+  lanzar la campaña, no después.
 - [ ] Re-ejecutar el carril **research** en las imágenes ya desplegadas: sus resultados OSV/NVD son anteriores a
   `totalMatching`/`cveIds`/`upstream`, y esos tres campos los escribe `providers/osv.ts` / `providers/nvd.ts`, no
   `providers/sbom.ts`. Re-ejecutar SBOM no los rellena: es otro carril, con otro job y detrás de
@@ -166,14 +173,33 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `encrypted.ts` y `uboot.ts`, y puntuar candidatos seed/salt más allá de la forma deliberadamente estrecha
   guion+mayúsculas (minúsculas/base64 necesitan corpus antes de abrir la heurística). Verificable: loader con receta
   + ENC1 real y sin bloque de entorno produce un lead acotado; el mismo magic en rodata no lo hace.
-- [ ] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de
+- [x] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de
   descargarla sola (ver `providers/sbom-db.ts`), un contenedor recreado no tiene base y el resultado declara la
-  negativa en vez de correlacionar. Decidir entre las dos opciones, ninguna gratis: hornearla en
-  `Dockerfile.tools` (capa de ~2,2 GB en la imagen base, reproducible, caduca con la imagen) o un paso de
-  provisión documentado contra el volumen de datos (`GRYPE_DB_CACHE_DIR=$FIRMLAB_DATA_DIR/grype-db grype db
-  update`, una vez, sobrevive al redespliegue). Verificable: `grype db status` dentro del contenedor. Falta
-  además que Capacidades distinga «grype presente» de «grype con base»: hoy sondea el binario y dice sólo lo
-  primero, así que la página promete una pregunta que el carril va a rechazar.
+  negativa en vez de correlacionar. *(Hecho: **horneada** en `Dockerfile.tools` — `ENV GRYPE_DB_CACHE_DIR=/opt/grype-db`
+  y un `grype db update` en la capa base, de modo que un contenedor recreado nunca se queda sin base y ningún paso
+  de operador se interpone entre un deploy y un carril que funciona. La otra opción sigue soportada y sin código
+  nuevo: `grypeDbDir()` lee `GRYPE_DB_CACHE_DIR` y cae a `FIRMLAB_DATA_DIR/grype-db`. El coste se declara donde se
+  paga —la base es exactamente tan vieja como la imagen— y lo que lo hace sostenible es que la fecha viaja hasta
+  el lector: regla 4 de `sbom-db.ts`, `GrypeDatasetFact.stale` y la frase de la fila de Capacidades.
+  **El primer borrador del bloque PASABA sin hornear nada**: sin `GRYPE_DB_CACHE_DIR` en el entorno, `grype db
+  update` escribe en `~/.cache/grype`, `grype db status` responde `Status: valid` sobre ESA copia y la receta sale
+  con 0 habiendo dejado `/opt/grype-db` vacío — medido el 2026-09-19 contra `firmlab-tools:latest`, con
+  `du -sh` imprimiendo `0` al lado de un parte de salud limpio. De ahí el `find … -size +100M` que afirma que la
+  base está en el directorio al que la imagen va a apuntar de verdad; los dos caminos del guard están ejercitados,
+  el de rechazo y el de aceptación.)*
+- [x] Que Capacidades distinga «grype presente» de «grype con base»: sondeaba el binario y decía sólo lo primero,
+  así que la página prometía una pregunta que el carril iba a rechazar. Medido en vivo el 2026-09-19 sobre el
+  contenedor desplegado: `/api/tools` devolvía 28 de 28 herramientas disponibles, grype entre ellas, mientras
+  `grype db status` decía `database does not exist`. *(Hecho: `ToolDataset` en `tools.ts` es un SEGUNDO eje, no un
+  valor peor de `available` — plegarlo en `available:false` habría afirmado que el despliegue no tiene grype, que
+  es justo lo que `CLAUDE.md` prohíbe, y habría mandado a `blocked_by_platform` a todo proveedor que consulta
+  `isToolAvailable`. El hecho es puro y neutro de idioma (`grypeDatasetFact` en `sbom-db.ts`, espejo del split
+  `ProbeResult`→`ToolStatus`), la frase se compone por petición en el idioma del lector, y **no entra en la caché
+  de sondeo**: un binario no aparece en el PATH mientras el servidor corre, pero una base sí, y un `ready:false`
+  cacheado seguiría negándola hasta reiniciar la API. La página gana un cuarto estado con su propio recuento,
+  contado aparte de `available` y nunca restado de él. `dataset` ausente significa que esa herramienta no necesita
+  base, NUNCA que la suya esté bien. 8 casos nuevos; los 2 que importan de `Capabilities.test.tsx` fallan al
+  revertir el componente, y el tercero es control negativo y pasa en ambos sentidos.)*
 - [x] Añadir un test de propiedad o regla de lint que detecte `.slice(N)` sobre la misma expresión de la que
   luego se deriva un recuento — el patrón que ya pagaron `extractStrings`, `scanSignatures` y `sbom.ts`.
   *(Hecho en `a6e95d2`: `scripts/check-slice-denominator.mjs`, en `pnpm biome` y suelto como

@@ -59,6 +59,14 @@ export interface ToolStatus {
   outcome?: 'missing' | 'timeout' | 'error';
   /** The API's sentence for `outcome`, already in this page's language. Absent for the same reasons. */
   outcomeReason?: string;
+  /**
+   * The DATA this tool answers from, for the tools that need one — grype and its vulnerability database today.
+   * A tool can be `available: true` and still be unable to answer, which is a second axis and not a worse value
+   * of the first. OPTIONAL FOREVER, and absent means this tool needs no dataset, NEVER that its dataset is fine:
+   * an API build older than this field answers without it, and a page that read absence as readiness would make
+   * exactly the overstatement the field was added to remove.
+   */
+  dataset?: { ready: boolean; detail: string };
 }
 
 export interface EmulationRecipe {
@@ -1900,7 +1908,7 @@ export const api = {
   secrets: (id: string) => get<{ secrets: StringHit[] }>(`/api/images/${id}/secrets`).then((r) => r.secrets),
   /** `unlocks` is composed per tool by the API, so the Capabilities page asks for it in the language it renders. */
   tools: (locale?: Locale) =>
-    get<{ tools: ToolStatus[]; groups: Record<string, { available: number; total: number }> }>(
+    get<{ tools: ToolStatus[]; groups: Record<string, { available: number; total: number; notReady?: number }> }>(
       `/api/tools${lang(locale)}`,
     ),
   storage: () => get<{ usage: StorageUsage }>('/api/storage').then((r) => r.usage),

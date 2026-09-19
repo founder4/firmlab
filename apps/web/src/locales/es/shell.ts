@@ -54,6 +54,11 @@ export const shell: Messages['shell'] = {
       n === 1
         ? '1 de las filas de abajo está instalada y no respondió a su sondeo. Eso no es una capacidad que le falte a este despliegue.'
         : `${n} de las filas de abajo están instaladas y no respondieron a su sondeo. Ésas no son capacidades que le falten a este despliegue.`,
+    datasetLabel: 'sin base de datos',
+    notReady: (n: number) =>
+      n === 1
+        ? '1 de las filas de abajo está instalada pero no tiene base de datos desde la que responder, así que la pregunta que anuncia se rechazará en vez de hacerse.'
+        : `${n} de las filas de abajo están instaladas pero no tienen base de datos desde la que responder, así que las preguntas que anuncian se rechazarán en vez de hacerse.`,
 
     group: {
       extract: 'Extracción',

@@ -16,6 +16,7 @@ import {
   dbAgeDays,
   dbUpdateAllowed,
   decideGrype,
+  grypeDatasetFact,
   grypeDbDir,
   parseGrypeDbStatus,
 } from './sbom-db.js';
@@ -174,5 +175,57 @@ describe('decideGrype', () => {
       const d = decideGrype(fresh, { updateAllowed, dbDir: DB_DIR, now: NOW });
       expect(d.run).toBe(true);
     }
+  });
+});
+
+/**
+ * The capabilities table's half of the policy: a tool that RUNS and still cannot answer.
+ *
+ * The defect these pin was live on the deployed container on 2026-09-19 — `/api/tools` reporting 28 of 28
+ * available with grype among them, while `grype db status` said `database does not exist`. The page offered
+ * "CVE matching (N-day)" for a lane that was going to refuse it.
+ */
+describe('grypeDatasetFact', () => {
+  it('reports a provisioned database as ready, with the date its silence inherits', () => {
+    const built = '2026-09-15T00:00:00Z';
+    const f = grypeDatasetFact(present(built), DB_DIR, NOW);
+    expect(f.ready).toBe(true);
+    expect(f.stale).toBe(false);
+    expect(f.built).toBe(built);
+    expect(f.ageDays).toBe(dbAgeDays(built, NOW));
+    expect(f.error).toBeNull();
+  });
+
+  it('reports an absent database as not ready, carrying grype’s own words for why', () => {
+    const f = grypeDatasetFact(absent, DB_DIR, NOW);
+    expect(f.ready).toBe(false);
+    expect(f.dbDir).toBe(DB_DIR);
+    // Grype's error text, not this module's assertion about what it must have been.
+    expect(f.error).toContain('database does not exist');
+    expect(f.built).toBeNull();
+    expect(f.ageDays).toBeNull();
+  });
+
+  it('marks an old database stale without making it unready — it matches, it is just dated', () => {
+    const built = new Date(NOW.getTime() - (STALE_DB_DAYS + 5) * 86_400_000).toISOString();
+    const f = grypeDatasetFact(present(built), DB_DIR, NOW);
+    expect(f.ready).toBe(true);
+    expect(f.stale).toBe(true);
+  });
+
+  it('does not let a permitted future download count as a database in hand', () => {
+    // `decideGrype` says run — the research lane may fetch one at job time. That is a future event, and the
+    // capabilities page must not report it as data this deployment has. The two answers deliberately disagree.
+    expect(decideGrype(absent, { updateAllowed: true, dbDir: DB_DIR, now: NOW }).run).toBe(true);
+    expect(grypeDatasetFact(absent, DB_DIR, NOW).ready).toBe(false);
+  });
+
+  it('states no date rather than guessing one when grype recorded none', () => {
+    const undated: GrypeDbStatus = { ...present('2026-09-15T00:00:00Z'), built: null };
+    const f = grypeDatasetFact(undated, DB_DIR, NOW);
+    expect(f.ready).toBe(true);
+    expect(f.ageDays).toBeNull();
+    // An unrecorded date must not silently become a fresh one.
+    expect(f.stale).toBe(false);
   });
 });

@@ -88,6 +88,18 @@ export const shell = {
       n === 1
         ? '1 of the rows below is installed and did not answer its probe. That is not a capability this deployment lacks.'
         : `${n} of the rows below are installed and did not answer their probe. Those are not capabilities this deployment lacks.`,
+    /**
+     * A FOURTH state, and the page's most misleading row before it existed: the binary is here, it answered its
+     * probe, and it still cannot do the thing this table advertises, because the data it answers from is not
+     * provisioned. grype without a vulnerability database is the case — it reports a version happily and then
+     * refuses every CVE question. The short label goes in the cell; the API supplies the sentence, because only
+     * the deployment knows where it looked and what it found there.
+     */
+    datasetLabel: 'no dataset',
+    notReady: (n: number) =>
+      n === 1
+        ? '1 of the rows below is installed but has no dataset to answer from, so the question it advertises will be refused rather than asked.'
+        : `${n} of the rows below are installed but have no dataset to answer from, so the questions they advertise will be refused rather than asked.`,
 
     /** The tool groups. The group ids (`extract`, `analyze`…) cross the API and are never translated. */
     group: {

@@ -449,6 +449,16 @@ export const es: Messages = {
       error:
         'el sondeo se ejecutó y falló. El binario que se nombra aquí está en el PATH — pero cuando el sondeo es un import de Python (angr, fwhunt) ese binario es el INTÉRPRETE, así que esto cubre también que el paquete no esté instalado en él. Léelo como «se hizo la pregunta y fue rechazada», nunca como una respuesta sobre el firmware.',
     },
+    dataset: {
+      grypeReady: (p: { built: string | null; ageDays: number | null; stale: boolean; schema: string | null }) =>
+        p.built === null
+          ? `Hay base de vulnerabilidades (esquema ${p.schema ?? '?'}) pero no registra fecha de compilación, así que no se puede afirmar cómo de actual es la lista de CVE.`
+          : p.stale
+            ? `Base de vulnerabilidades compilada el ${p.built} — ${p.ageDays} días de antigüedad. Correlaciona, pero un CVE publicado desde entonces no puede aparecer: un resultado vacío es tan actual como esta fecha.`
+            : `Base de vulnerabilidades compilada el ${p.built} (${p.ageDays} día(s) de antigüedad), esquema ${p.schema ?? '?'}. La correlación de CVE se ejecuta sin red contra ella.`,
+      grypeAbsent: (p: { dbDir: string; error: string | null }) =>
+        `Instalada, pero sin base de vulnerabilidades en ${p.dbDir}${p.error ? ` (grype: ${p.error})` : ''}, así que la correlación de CVE se RECHAZARÁ en vez de intentarse — el inventario de paquetes sigue funcionando. El carril SBOM no descarga ninguna por su cuenta: aprovisiónala con \`GRYPE_DB_CACHE_DIR=${p.dbDir} grype db update\`, o enciende el carril de investigación para que un job la descargue.`,
+    },
     unlocks: {
       binwalk: 'Extracción por firmas con reconocimiento de formato',
       unsquashfs: 'Extracción de SquashFS',

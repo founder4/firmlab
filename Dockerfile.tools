@@ -273,3 +273,42 @@ RUN bash -c 'cd / && apt-get update && apt-get install -y --no-install-recommend
     && echo "FwHunt rules: $(find /opt/fwhunt-rules/rules -name \"*.yml\" | wc -l)" \
     && rm -rf /var/lib/apt/lists/*' \
     || echo "fwhunt-scan optional install failed — UEFI implant scanning degrades honestly"
+
+# === grype's vulnerability database, BAKED INTO THE IMAGE ===
+#
+# grype is a matcher with no data of its own: `grype version` succeeds on a box that cannot match a single CVE,
+# which is precisely the row the Capabilities table used to report as a working capability (see `ToolDataset` in
+# `apps/api/src/tools.ts`). Since `providers/sbom-db.ts` stopped letting the lane download one on its own — the
+# 2.2 GB fetch measured arriving with every flag off on 2026-09-16 — a recreated container had no database at all
+# and the SBOM lane correctly, and uselessly, refused every CVE question.
+#
+# It is baked here rather than provisioned against the data volume because that is the choice this repository
+# deploys: the database ships WITH the image, so a container recreated from it is never without one and no
+# operator step stands between a deploy and a working lane. Both options stay supported — `grypeDbDir()` reads
+# `GRYPE_DB_CACHE_DIR` first and falls back to `FIRMLAB_DATA_DIR/grype-db` — and the cost of this one is stated
+# where it is paid: **the database is exactly as old as the image**. Nothing here refreshes it, so a long-lived
+# deployment matches against a dated catalogue. That is survivable only because the date travels all the way to
+# the reader (rule 4 in `sbom-db.ts`, `GrypeDatasetFact.stale`, and the sentence on the Capabilities row), which
+# is what keeps "grype found 0" from being read as "there is nothing to find". Rebuild to refresh.
+#
+# `GRYPE_DB_VALIDATE_AGE=false` is set on every invocation by `OFFLINE_ANCHORE_ENV`, so an aged baked database is
+# USED and reported as old rather than refused into silence — which matters more here than anywhere, since a
+# baked database starts ageing the moment the image is built.
+#
+# Fault-tolerant like every other optional block: a failed download must not abort the build. It leaves the image
+# with `GRYPE_DB_CACHE_DIR` pointing at an empty directory, which is the honest state the lane already handles —
+# it refuses and names both remedies, rather than pretending the firmware is clean.
+ENV GRYPE_DB_CACHE_DIR=/opt/grype-db
+#
+# The `find` is not decoration, and it is here because the first draft of this block PASSED without it. Run
+# without `GRYPE_DB_CACHE_DIR` in the environment, `grype db update` writes to `~/.cache/grype`, `grype db status`
+# then reports `Status: valid` about that copy, and the recipe exits 0 having baked nothing into the image —
+# `du -sh /opt/grype-db` printed `0` beside a clean bill of health. Measured on 2026-09-19 against
+# firmlab-tools:latest. So the success path asserts the database is in the directory this image will actually
+# point the app at, at a size only a real one reaches; `grype db status` alone answers about the wrong file.
+RUN bash -c 'set -o pipefail; mkdir -p /opt/grype-db \
+    && GRYPE_DB_AUTO_UPDATE=true GRYPE_CHECK_FOR_APP_UPDATE=false grype db update \
+    && GRYPE_DB_VALIDATE_AGE=false GRYPE_CHECK_FOR_APP_UPDATE=false grype db status \
+    && test -n "$(find /opt/grype-db -name vulnerability.db -size +100M)" \
+    && echo "grype DB baked: $(du -sh /opt/grype-db | cut -f1) at $(find /opt/grype-db -name vulnerability.db)"' \
+    || echo "grype DB bake failed — the SBOM lane will refuse CVE matching and name both remedies (honest, not silent)"
