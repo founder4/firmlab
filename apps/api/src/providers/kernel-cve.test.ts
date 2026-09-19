@@ -4,12 +4,15 @@ import type { DecodedKallsyms } from './kallsyms.js';
 import {
   KERNEL_CVE_RULES,
   type KernelConfigEvidence,
+  type KernelCveSelection,
+  type KernelOptionAssessment,
   assessKernelCves,
   inferKernelOption,
   kernelCveFindings,
   kernelVersionAffected,
   normalizeKernelCves,
   selectKernelCveCandidate,
+  subsystemGate,
 } from './kernel-cve.js';
 import type { KernelPostureResult } from './kernelposture.js';
 import type { NvdComponentResult } from './nvd.js';
@@ -210,5 +213,125 @@ describe('kernelCveFindings under a device context', () => {
   it('emits the same number of rows with and without a context', () => {
     expect(kernelCveFindings('5.10', dirtyPipe, noBoundary)).toHaveLength(dirtyPipe.length);
     expect(kernelCveFindings('5.10', dirtyPipe)).toHaveLength(dirtyPipe.length);
+  });
+});
+
+/**
+ * Subsystem gating of the BROAD NVD candidate list — the 2 037-row problem, not the curated table.
+ *
+ * The dangerous direction here is pruning too much: every row this removes from an operator's attention is a
+ * row they will not look at again. So the cases below spend most of their weight on the inputs that must NOT
+ * prune — an undetermined option, a subsystem merely mentioned in passing, an image with no evidence at all.
+ */
+describe('subsystemGate', () => {
+  const opt = (
+    option: string,
+    state: 'on' | 'off' | 'unknown',
+    evidence: string | null = 'kernel-config:not-enabled',
+  ) => ({
+    option,
+    state,
+    evidence,
+  });
+  const CNA = 'In the Linux kernel, the following vulnerability has been resolved:';
+
+  it('reads the subsystem out of the commit-subject prefix the Linux CNA quotes', () => {
+    const g = subsystemGate(`${CNA}  drm/amdgpu: fix use-after-free bug`, [opt('CONFIG_DRM', 'off')]);
+    expect(g?.option).toBe('CONFIG_DRM');
+    expect(g?.state).toBe('off');
+    expect(g?.marker).toBe('drm/');
+  });
+
+  it('matches the multi-word gadget prefix rather than stopping at a bare usb', () => {
+    const g = subsystemGate(`${CNA} usb: gadget: f_fs: Clear ffs_eventfd in ffs_data_clear`, [
+      opt('CONFIG_USB_GADGET', 'off'),
+    ]);
+    expect(g?.option).toBe('CONFIG_USB_GADGET');
+  });
+
+  it('does NOT gate on a subsystem merely mentioned inside the text', () => {
+    // The inference is that the flaw IS in that subsystem, and only the leading commit-subject prefix supports
+    // it. A scheduler bug whose description happens to say "drm" must not be dismissed on a GPU-less image.
+    // The marker appears VERBATIM in the body — `drm/amdgpu` — and still must not gate, because the flaw is in
+    // the scheduler. A `includes` test passes the previous wording of this case and fails this one, which is
+    // why the wording changed: the first version proved nothing.
+    const g = subsystemGate(`${CNA} sched/fair: fix a race in the drm/amdgpu client wakeup path`, [
+      opt('CONFIG_DRM', 'off'),
+    ]);
+    expect(g).toBeNull();
+  });
+
+  it('says nothing for the majority of advisories, which carry no recognised prefix', () => {
+    expect(subsystemGate(`${CNA} mm: fix a page-cache race`, [opt('CONFIG_DRM', 'off')])).toBeNull();
+    expect(subsystemGate(null, [opt('CONFIG_DRM', 'off')])).toBeNull();
+    expect(subsystemGate('', [opt('CONFIG_DRM', 'off')])).toBeNull();
+  });
+
+  it('returns unknown — never off — when the option was not resolved', () => {
+    const g = subsystemGate(`${CNA} ALSA: usb-audio: fix a leak`, [opt('CONFIG_SOUND', 'unknown', null)]);
+    expect(g?.state).toBe('unknown');
+  });
+
+  it('returns null when the image assessed no options at all', () => {
+    // An image with no config, no kallsyms and no module list prunes nothing. That is the whole safety property.
+    expect(subsystemGate(`${CNA} drm/i915: fix a leak`, [])).toBeNull();
+  });
+});
+
+describe('normalizeKernelCves gates the candidate rows it was handed', () => {
+  const selection = (options: KernelOptionAssessment[]): KernelCveSelection => ({
+    candidate: { name: 'linux-kernel', version: '5.4' },
+    detectedVersion: '5.4.213',
+    queryVersion: '5.4',
+    versionSource: 'kernel-banner',
+    reason: 'test',
+    configOptions: options,
+  });
+  const answer = (summary: string): NvdComponentResult =>
+    ({
+      name: 'linux-kernel',
+      version: '5.4',
+      matchedBy: 'cpe',
+      totalMatching: 1,
+      freshness: null,
+      advisories: [{ id: 'CVE-2024-26656', severity: 'MEDIUM', score: 5.5, summary, references: [] }],
+    }) as unknown as NvdComponentResult;
+  const CNA = 'In the Linux kernel, the following vulnerability has been resolved:';
+
+  it('dismisses a GPU advisory on an image whose config says DRM is not built', () => {
+    const rows = normalizeKernelCves(
+      selection([{ option: 'CONFIG_DRM', state: 'off', evidence: 'kernel-config:not-enabled' }]),
+      answer(`${CNA} drm/amdgpu: fix use-after-free bug`),
+    );
+    expect(rows).toHaveLength(1); // the row STAYS — the count never changes
+    expect(rows[0]?.proofState).toBe('false_positive');
+    expect(rows[0]?.rationale).toContain('the code it is in is not here');
+    expect((rows[0]?.evidence as Record<string, unknown>).subsystemState).toBe('off');
+  });
+
+  it('keeps it a lead when the option could not be determined, and says so', () => {
+    const rows = normalizeKernelCves(
+      selection([{ option: 'CONFIG_DRM', state: 'unknown', evidence: null }]),
+      answer(`${CNA} drm/amdgpu: fix use-after-free bug`),
+    );
+    expect(rows[0]?.proofState).toBe('needs_runtime_reproduction');
+    expect(rows[0]?.rationale).toContain('undetermined is not absent');
+  });
+
+  it('removes the "maybe the subsystem is absent" escape when the subsystem IS built', () => {
+    const rows = normalizeKernelCves(
+      selection([{ option: 'CONFIG_DRM', state: 'on', evidence: 'module:drm.ko' }]),
+      answer(`${CNA} drm/amdgpu: fix use-after-free bug`),
+    );
+    expect(rows[0]?.proofState).toBe('needs_runtime_reproduction');
+    expect(rows[0]?.rationale).toContain('does not apply to this row');
+    expect(rows[0]?.rationale).not.toContain('may be absent or disabled');
+  });
+
+  it('leaves an ungated advisory exactly as it was, escape clause included', () => {
+    const rows = normalizeKernelCves(selection([]), answer(`${CNA} mm: fix a page-cache race`));
+    expect(rows[0]?.proofState).toBe('needs_runtime_reproduction');
+    expect(rows[0]?.rationale).toContain('may be absent or disabled');
+    expect((rows[0]?.evidence as Record<string, unknown>).subsystem).toBeUndefined();
   });
 });
