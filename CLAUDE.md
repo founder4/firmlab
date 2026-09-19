@@ -114,11 +114,27 @@ Two rules follow, and most of the codebase's shape exists to enforce them:
    directory layout. See `selectFindings` in `binvuln.ts`.
 
 **Claiming a CVE.** The curated table in `component-cve.ts` matches a fingerprinted version against a
-hand-verified range. Ranges come from the NVD CVE API queried against the version in hand, never from recall, and
-where NVD's CPE range is open below the rule sets its own floor — an unbounded-below range is a CPE modelling
-artifact, not evidence that a decade-older codebase contains the bug. A CVE NVD backs only with an open range and
-no enumerated CPE is left out — recorded in the rule's `rejected` list rather than only in a comment, because
-grype matches some of them from a manifest on the very same image.
+hand-verified range. Ranges come from the NVD CVE API queried against the version in hand, **never from recall** —
+and checking is not a formality: the nine BusyBox awk entries look like one advisory with one range and have five
+different lower bounds, so copying the first across the family would have claimed four CVEs NVD does not place
+there. Every rule declares what NVD backs it with, in `nvdBacking`:
+
+- `bounded` — both ends given. The rule copies them; `highExclusive` carries an exclusive upper bound rather
+  than guessing it into an inclusive one, because "the last release before 8.4.0" is release history nobody here
+  verified.
+- `enumerated` — NVD lists the affected builds individually. The strongest backing there is; no floor is inferred.
+- `open-below` — only an upper bound, which "affects" every release back to the project's first. An unbounded
+  range is a CPE modelling artifact, not evidence that a decade-older codebase contains the bug, so **the rule
+  sets its own floor and must justify it in `floorRationale`** — a required field a test enforces, and one whose
+  sentence travels onto the finding.
+
+**An open-below CVE with no defensible floor is refused**, into the rule's `rejected` list rather than a comment,
+because grype matches some of them from a manifest on the very same image and the ledger has to say the two lanes
+disagree and why. `CVE-2016-2148` is the worked example: "before 1.25.0" spans one continuous 1.x line with no
+series boundary to floor at. This paragraph previously said the table claims a CVE *only* where NVD enumerates
+CPEs; that was measurably false — four of the five original entries have zero enumerated CPEs — and applying it
+would have deleted `CVE-2016-7406`, which correctly matches the Dropbear 2012.55 in the corpus. **A rule that
+costs a true positive to satisfy a sentence is the sentence being wrong.**
 
 **Which standard applies when both lanes run.** `sbom`/grype matches package manifests against the databases as
 they are modelled (open-below CPE ranges included); the curated table matches bundled binaries against ranges

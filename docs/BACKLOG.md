@@ -385,21 +385,21 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   éste no, y es el único cuyo contenido cambia cuando se edita una TABLA en vez de un binario del despliegue.
   Añadir la ruta y registrarla en `index.ts` es el patrón ya establecido en `docs/ARCHITECTURE.md`.
 
-- [ ] **Revisar `CVE-2017-14491` en `component-cve.ts`.** Al añadir DNSpooq salió que la prosa de la política
-  («solo donde NVD enumera CPEs para las versiones en mano») describía UNA de las cinco reglas originales:
-  medido el 2026-09-19, cuatro de ellas —pppd, OpenSSL, Dropbear y dnsmasq— tienen **cero CPEs enumerados** y se
-  reclaman sobre su rango. La prosa se corrigió para describir lo que la tabla hace de verdad (rango abierto →
-  suelo propio defendible; sin suelo defendible → `rejected`), y no se aplicó retroactivamente porque habría
-  borrado cuatro n-days verificados por una frase. Queda una decisión de política real: `CVE-2017-14491` se
-  reclama sobre exactamente la forma (abierto por abajo, cero CPEs) por la que `CVE-2016-2148` se rechaza, y lo
-  único que los separa es que el corte 1.x/2.x de dnsmasq da un suelo y la línea 1.x de BusyBox no. Decidir si
-  eso basta, y escribirlo.
-- [ ] **(b') Fuentes de taint específicas de firmware.** Enriquecer el scaffold de taint (ver "cross-binary
-  dataflow" arriba) con las SOURCES canónicas de vendor, que rara vez son un `recv` crudo: getters HTTP/CGI
-  (`websGetVar`/`webGetVar`/`GetValue`/`get_cgi`/`httpGetEnv`) y NVRAM/env (`nvram_get`/`nvram_safe_get`/
-  `acosNvramConfig_get`/`getenv` — valores que el operador puede fijar por la UI y un daemon consume sin
-  sanear), + el atajo de command-template `%s` (`rabin2 -z | grep '%s'` → `axt` al builder). Alimenta
-  `taint.ts`/`webtaint.ts`. Ref: galert `firmware-binary.txt` / `firmware-zeroday.txt`.
+- [x] **Decidido: `CVE-2017-14491` se mantiene, y el criterio pasa a ser dato exigible.** La prosa decía que la
+  tabla reclama un CVE «solo donde NVD enumera CPEs para las versiones en mano», lo que hacía parecer esa
+  entrada una violación: se reclama sobre la misma forma —rango abierto, cero CPEs enumerados— por la que
+  `CVE-2016-2148` se rechaza. *(Resuelto contando, no discutiendo: de las 26 reglas, 11 son `bounded`, 6
+  `enumerated` y **nueve** abiertas por abajo, así que la lectura estricta descalifica las nueve —`CVE-2016-7406`
+  incluida—. Ésa casa con el Dropbear 2012.55 del corpus y produce hoy un hallazgo correcto en dos imágenes: la
+  lectura estricta **cuesta un verdadero positivo** por cumplir una frase, luego la frase era lo que estaba mal
+  (y nunca fue la regla — cuatro de las cinco entradas originales tienen cero CPEs enumerados). Lo que de verdad
+  separa un rango abierto reclamable de `CVE-2016-2148` es si el suelo se puede DEFENDER desde lo que el aviso
+  trata, y eso se afirmaba en comentarios en vez de registrarse. Ahora es `nvdBacking` + `floorRationale` en la
+  propia regla, con un test que **rechaza** una entrada abierta por abajo que no justifique su suelo —verificado
+  quitándole la justificación a `CVE-2017-14491`: falla nombrándola— y la justificación viaja hasta el hallazgo,
+  de modo que el lector ve que el límite inferior es de esta tabla y por qué sin abrir el código. `CLAUDE.md`
+  § «Claiming a CVE» reescrito para decir lo que la tabla hace. `CVE-2016-2148` sigue rechazada porque para ella
+  no se puede escribir ningún suelo: «before 1.25.0» abarca una línea 1.x continua sin frontera de serie dentro.)*
 
 ## Scheduler de leads sobre el ledger (opacidad)
 
