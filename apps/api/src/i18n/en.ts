@@ -462,6 +462,20 @@ export const en = {
       error:
         'the probe ran and failed. The binary named here is on PATH — but where the probe is a Python import (angr, fwhunt) that binary is the INTERPRETER, so this also covers the package not being installed in it. Read the row as “the question was asked and refused”, never as an answer about the firmware.',
     },
+    /**
+     * A tool that runs and still cannot answer, because the DATA it answers from is not there. The directory and
+     * grype's own error text are identifiers and pass through; the sentence around them is this catalogue's.
+     */
+    dataset: {
+      grypeReady: (p: { built: string | null; ageDays: number | null; stale: boolean; schema: string | null }) =>
+        p.built === null
+          ? `A vulnerability database is present (schema ${p.schema ?? '?'}) but records no build date, so how current the CVE list is cannot be stated.`
+          : p.stale
+            ? `Vulnerability database built ${p.built} — ${p.ageDays} days old. It matches, but a CVE published since then cannot appear: an empty result is only as current as this date.`
+            : `Vulnerability database built ${p.built} (${p.ageDays} day(s) old), schema ${p.schema ?? '?'}. CVE matching runs offline against it.`,
+      grypeAbsent: (p: { dbDir: string; error: string | null }) =>
+        `Installed, but with no vulnerability database at ${p.dbDir}${p.error ? ` (grype: ${p.error})` : ''}, so CVE matching will be REFUSED rather than attempted — the package inventory still works. The SBOM lane never downloads one on its own: provision it with \`GRYPE_DB_CACHE_DIR=${p.dbDir} grype db update\`, or turn the research lane on to let a job fetch it.`,
+    },
     /** Keyed by `ToolId`, so a new `ToolSpec` is a compile error in `es.ts` until it is translated. */
     unlocks: {
       binwalk: 'Format-aware signature carving',

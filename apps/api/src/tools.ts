@@ -240,6 +240,36 @@ export interface ToolStatus {
   outcome?: ProbeOutcome;
   /** The localised sentence for `outcome`. Absent for the same reasons. */
   outcomeReason?: string;
+  /**
+   * The tool's DATA dependency, for the tools that have one. Absent means this tool needs no dataset — never
+   * that its dataset is fine. Composed by the route, not by `probe`, for the reason `ToolDataset` gives.
+   */
+  dataset?: ToolDataset;
+}
+
+/**
+ * Whether a tool that RUNS can actually answer, which is a second axis and not a worse value of `available`.
+ *
+ * grype is the case this exists for: `grype version` succeeds on a box with no vulnerability database, so the
+ * probe reports `available: true` and the Capabilities table offers "CVE matching (N-day)" — a question the SBOM
+ * lane is then going to refuse, by the policy in `providers/sbom-db.ts`. Measured on the deployed container on
+ * 2026-09-19: 28 of 28 tools `available`, and `grype db status` reporting `database does not exist`.
+ *
+ * Folding this into `available: false` was the tempting fix and it is wrong twice over. It would claim the
+ * deployment lacks grype, when grype is right there and every other grype-shaped question (`db status`, `db
+ * import`) works; and it would send every provider gated on `isToolAvailable` to `blocked_by_platform`, which is
+ * the "absent tool = absent answer" reading applied to a tool that is present. A missing dataset is a missing
+ * ANSWER for one question, not a missing tool.
+ *
+ * It is deliberately NOT part of the probe cache. `detectTools` caches for the process lifetime because a binary
+ * does not appear on PATH while the server runs — but a database very much does, since provisioning one is a
+ * documented operator action, and a cached `ready: false` would keep denying it until someone restarted the API.
+ */
+export interface ToolDataset {
+  /** Is the data this tool needs actually on disk? Read from the tool, never inferred from the binary. */
+  ready: boolean;
+  /** Localised: what is there and how old, or what is missing and how to supply it. */
+  detail: string;
 }
 
 /**

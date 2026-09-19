@@ -114,6 +114,98 @@ describe('Capabilities', () => {
     expect(screen.queryByText(/está instalada y no respondió/)).not.toBeInTheDocument();
   });
 
+  it('does not let grype without a database read as a deployment that can match CVEs', async () => {
+    // The row this state exists for, measured live on 2026-09-19: grype answers `version`, so the probe says
+    // available — and `grype db status` says the database does not exist. Rendered as a plain available row, the
+    // page promises "CVE matching (N-day)" for a lane that is going to refuse it.
+    mockApi.tools.mockResolvedValue({
+      tools: [
+        {
+          id: 'syft',
+          bin: 'syft',
+          available: true,
+          version: 'syft 1.50.0',
+          unlocks: 'Generación del SBOM',
+          group: 'sbom',
+        },
+        {
+          id: 'grype',
+          bin: 'grype',
+          available: true,
+          version: 'grype 0.106.1',
+          unlocks: 'Correlación de CVE (N-day)',
+          group: 'sbom',
+          dataset: { ready: false, detail: 'Instalada, pero sin base de vulnerabilidades en /data/grype-db.' },
+        },
+      ],
+      groups: {},
+    });
+
+    render(<Capabilities />);
+
+    // The binary IS here, and the count must keep saying so — a dataset is not a tool.
+    expect(await screen.findByText('2 de 2 disponibles en este despliegue')).toBeInTheDocument();
+    // But the page says out loud that one of them cannot answer, and why.
+    expect(screen.getByText(/1 de las filas de abajo está instalada pero no tiene base de datos/)).toBeInTheDocument();
+    expect(screen.getByText('sin base de datos')).toBeInTheDocument();
+    expect(screen.getByText(/sin base de vulnerabilidades en \/data\/grype-db/)).toBeInTheDocument();
+    // The row that IS ready keeps its version and gains no warning of its own.
+    expect(screen.getByText('syft 1.50.0')).toBeInTheDocument();
+    // The version of the unready tool is displaced by the label, not shown as though nothing were wrong.
+    expect(screen.queryByText('grype 0.106.1')).not.toBeInTheDocument();
+  });
+
+  it('reports a provisioned dataset without warning about it — the success path', async () => {
+    // The branch nobody runs. A ready dataset must produce its sentence and NO warning line, or the page cries
+    // wolf on every healthy deployment and the warning stops meaning anything.
+    mockApi.tools.mockResolvedValue({
+      tools: [
+        {
+          id: 'grype',
+          bin: 'grype',
+          available: true,
+          version: 'grype 0.106.1',
+          unlocks: 'Correlación de CVE (N-day)',
+          group: 'sbom',
+          dataset: { ready: true, detail: 'Base de vulnerabilidades compilada el 2026-09-15 (4 día(s)).' },
+        },
+      ],
+      groups: {},
+    });
+
+    render(<Capabilities />);
+
+    expect(await screen.findByText('1 de 1 disponibles en este despliegue')).toBeInTheDocument();
+    expect(screen.getByText('grype 0.106.1')).toBeInTheDocument();
+    // The date travels to the reader: "grype found 0" is only as current as this.
+    expect(screen.getByText(/compilada el 2026-09-15/)).toBeInTheDocument();
+    expect(screen.queryByText(/no tiene base de datos/)).not.toBeInTheDocument();
+    expect(screen.queryByText('sin base de datos')).not.toBeInTheDocument();
+  });
+
+  it('reads a tool with no dataset field as needing none, never as one whose dataset is missing', async () => {
+    // `dataset` absent covers every tool that has no data dependency AND every response from an API build older
+    // than the field. Either way it must not raise the warning — that would flag 26 healthy rows.
+    mockApi.tools.mockResolvedValue({
+      tools: [
+        {
+          id: 'binwalk',
+          bin: 'binwalk',
+          available: true,
+          version: 'Binwalk v3',
+          unlocks: 'Extrae sistemas de ficheros.',
+          group: 'extract',
+        },
+      ],
+      groups: {},
+    });
+
+    render(<Capabilities />);
+    expect(await screen.findByText('1 de 1 disponibles en este despliegue')).toBeInTheDocument();
+    expect(screen.queryByText(/no tiene base de datos/)).not.toBeInTheDocument();
+    expect(screen.queryByText('sin base de datos')).not.toBeInTheDocument();
+  });
+
   it('renders a new backend group by its identifier instead of dropping it', async () => {
     mockApi.tools.mockResolvedValue({
       tools: [

@@ -18,10 +18,16 @@
  *  1. **No implicit egress.** Every syft/grype invocation carries `OFFLINE_ANCHORE_ENV` (in `tools.ts`, applied
  *     to the capability probes too), which turns off both the database auto-update and the self-update poll. That
  *     is the default, and it holds with every lane flag off.
- *  2. **The database is provisioned, not acquired.** It lives under `FIRMLAB_DATA_DIR` — the one directory a
- *     deployment persists — rather than in `~/.cache`, so a provisioned database survives a redeploy instead of
- *     being silently re-downloaded into a fresh container layer. `GRYPE_DB_UPDATE_URL` is pinned here so a stray
- *     `~/.grype.yaml` cannot redirect where a permitted download goes.
+ *  2. **The database is provisioned, not acquired.** It never lives in `~/.cache`, where a fresh container layer
+ *     silently loses it and grype silently re-downloads it. `grypeDbDir` reads `GRYPE_DB_CACHE_DIR` and falls back
+ *     to `FIRMLAB_DATA_DIR/grype-db`, which is the two ways a deployment may supply one, and both are deliberate:
+ *     **baked** into `Dockerfile.tools` at `/opt/grype-db` with `GRYPE_DB_CACHE_DIR` pointing at it, so the
+ *     database ships with the image and a recreated container is never without one; or **provisioned once**
+ *     against the data volume, which survives a redeploy and can be refreshed without a rebuild. The baked one is
+ *     what this repository deploys, and its cost is stated where it is paid: the database is then as old as the
+ *     image, so rule 4 below is the thing that keeps it honest rather than an afterthought.
+ *     `GRYPE_DB_UPDATE_URL` is pinned here so a stray `~/.grype.yaml` cannot redirect where a permitted download
+ *     goes.
  *  3. **An absent database is a refusal, never a silent skip and never a download.** `decideGrype` returns the
  *     sentence naming what is missing, where it is missing from, and both ways to supply it; the SBOM is still
  *     returned, with CVE matching declared as not attempted. That is the `available:false` discipline the rest of
@@ -187,4 +193,56 @@ export async function readGrypeDbStatus(env: NodeJS.ProcessEnv): Promise<GrypeDb
     if (parsed.error && !parsed.error.startsWith('grype db status printed')) return parsed;
     return { ...ABSENT, error: err instanceof Error ? (err.message.split('\n')[0] ?? err.message) : String(err) };
   }
+}
+
+/**
+ * What the Capabilities page needs to know about the grype database, language-neutral.
+ *
+ * **Why this exists.** `tools.ts` probes a BINARY: it runs `grype version`, gets an answer and reports
+ * `available: true`. That is a true statement about the wrong thing. grype without a database does not match a
+ * single CVE — it refuses, by `decideGrype` above — so a capabilities table built from the probe alone promises a
+ * question the lane is going to reject. Measured on the deployed container on 2026-09-19: 28 of 28 tools
+ * `available`, grype among them, and `grype db status` reporting `database does not exist`.
+ *
+ * A tool's data dependency is a SECOND axis, not a worse value of the first. Collapsing it into `available: false`
+ * would say "this deployment does not have grype", which is the claim `CLAUDE.md` forbids — absence of a tool is
+ * not absence of a problem, and here the tool is right there. So the probe keeps its answer and this rides beside
+ * it.
+ *
+ * Neutral on purpose, exactly like `ProbeResult` in `tools.ts`: the fields are what was read off disk, and the
+ * sentence is composed per-request in the reader's language. A cache holding prose answers the second request in
+ * the wrong one.
+ */
+export interface GrypeDatasetFact {
+  /** Is a database on disk that grype accepted? Read off `grype db status`, never inferred from the binary. */
+  ready: boolean;
+  /** Where it was looked for — an identifier, printed verbatim in every language. */
+  dbDir: string;
+  built: string | null;
+  /** Whole days old, or null when grype recorded no readable build date. */
+  ageDays: number | null;
+  /** Past `STALE_DB_DAYS`: the inventory is current, the CVE list is only as current as this. */
+  stale: boolean;
+  schemaVersion: string | null;
+  /** What grype said went wrong, when it said anything. */
+  error: string | null;
+}
+
+/**
+ * Pure: turn a `grype db status` reading into the fact the capabilities table reports. `ready` is the disk fact
+ * and nothing else — notably, the research lane being on does NOT make it true. That lane permits a download at
+ * job time, which is a future event; reporting it as a database in hand would be the same overstatement this
+ * whole module exists to remove, one flag further along.
+ */
+export function grypeDatasetFact(db: GrypeDbStatus, dbDir: string, now: Date = new Date()): GrypeDatasetFact {
+  const ageDays = dbAgeDays(db.built, now);
+  return {
+    ready: db.present,
+    dbDir,
+    built: db.built,
+    ageDays,
+    stale: ageDays !== null && ageDays >= STALE_DB_DAYS,
+    schemaVersion: db.schemaVersion,
+    error: db.error,
+  };
 }
