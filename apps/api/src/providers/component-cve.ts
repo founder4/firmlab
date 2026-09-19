@@ -91,6 +91,9 @@ export interface RejectedCve {
   reason: string;
 }
 
+/** The three shapes NVD's affected-version data comes in, and the only three this table knows how to read. */
+export type NvdBacking = 'bounded' | 'enumerated' | 'open-below';
+
 export interface CveRule {
   id: string;
   title: string;
@@ -107,6 +110,28 @@ export interface CveRule {
    * flag carries NVD's own bound instead.
    */
   highExclusive?: boolean;
+  /**
+   * What NVD actually backs this rule with. Required, so a new entry cannot be added without saying.
+   *
+   *  - `bounded`    — NVD gives both ends. Nothing to decide; the rule copies them.
+   *  - `enumerated` — NVD lists the affected versions individually. The strongest backing there is: an analyst
+   *                   asserted those builds, so nobody here is inferring a floor.
+   *  - `open-below` — NVD gives only an upper bound, which "affects" every release back to the project's first.
+   *                   The rule must then set its own floor AND justify it in `floorRationale`.
+   */
+  nvdBacking: NvdBacking;
+  /**
+   * Why this rule's `low` is a defensible floor. Required whenever `nvdBacking` is `open-below`, and enforced
+   * by `component-cve.test.ts` rather than left to reviewer memory.
+   *
+   * **This field is the policy**, and it is what settles the CVE-2016-2148 question. An open-below range is
+   * claimable exactly when a floor can be defended from the advisory's own subject matter, and refused when it
+   * cannot: "before 1.25.0" spans one continuous 1.x line with no series boundary inside it to floor at, so
+   * there is nothing to write here for it and it stays in `rejected`. Making the justification a required
+   * field rather than a comment means the next entry cannot skip the question, and a reader who disagrees can
+   * see exactly what is being claimed and argue with it.
+   */
+  floorRationale?: string;
   /**
    * A configuration this CVE additionally requires, stated when the version fact alone does not settle it.
    *
@@ -187,15 +212,23 @@ export interface ComponentRule {
  *    is the worked example: "before 1.25.0" spans the whole 1.x line, there is no series boundary inside it to
  *    floor at, and BusyBox 1.01 sits twenty years deep in it.
  *
+ ─── How the "only where NVD enumerates CPEs" question was settled (2026-09-19) ───
+ *
  * An earlier version of this paragraph said the table claims a CVE "only where NVD enumerates CPEs for the
- * versions in hand". That was never what the table did — measured on 2026-09-19, four of its five original
- * entries (pppd, OpenSSL, Dropbear, dnsmasq) have ZERO enumerated CPEs and were claimed on their range alone,
- * two of them open below and floored. The prose described the BusyBox rule's extra strength as though it were
- * the policy. It is corrected here rather than enforced retroactively, because enforcing it would delete four
- * verified n-days over a sentence, and the floor rule those four follow is the one the ledger can defend.
- * **`CVE-2017-14491` remains the one entry worth a second look**: it is claimed on exactly the shape
- * (open below, zero enumerated CPEs) that CVE-2016-2148 is refused for, and what separates them is only that
- * dnsmasq's 1.x/2.x split gives a floor while BusyBox's 1.x line does not.
+ * versions in hand", which made `CVE-2017-14491` look like a violation: it is claimed on the same shape —
+ * open below, zero enumerated CPEs — that `CVE-2016-2148` is refused for.
+ *
+ * Settled by measuring rather than arguing. Of the 26 rules, 11 are `bounded`, 6 are `enumerated` and NINE are
+ * open below, so the strict reading disqualifies all nine — `CVE-2016-7406` among them. That one matches the
+ * Dropbear 2012.55 in this corpus and produces a correct finding on two images today, so the strict reading
+ * costs a TRUE POSITIVE to satisfy a sentence. It was therefore never the rule: four of the five original
+ * entries have zero enumerated CPEs, and the prose had mistaken the BusyBox rule's extra strength for policy.
+ *
+ * What actually separates a claimed open-below range from CVE-2016-2148 is whether a floor can be DEFENDED
+ * from the advisory's own subject matter — and that was being asserted in comments instead of recorded. It is
+ * now `nvdBacking` plus `floorRationale` on the rule itself, a test refuses an open-below entry that does not
+ * justify its floor, and the justification travels onto the finding. The question stops being re-litigated
+ * because the answer is on every row.
  *
  * The cost of all of this is under-claiming on genuinely ancient builds; they still surface as inventory facts.
  */
@@ -210,6 +243,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     cves: [
       {
         id: 'CVE-2020-8597',
+        nvdBacking: 'bounded',
         title: 'pppd EAP dispatch stack buffer overflow — pre-auth remote RCE',
         severity: 'critical',
         low: '2.4.2',
@@ -224,6 +258,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     cves: [
       {
         id: 'CVE-2014-0160',
+        nvdBacking: 'bounded',
         title: 'OpenSSL TLS heartbeat out-of-bounds read (Heartbleed) — memory disclosure',
         severity: 'high',
         low: '1.0.1',
@@ -251,6 +286,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
         // inheriting it here would make the principle decorative. A 2005 BusyBox is probably vulnerable to it;
         // probably is not what `static_confirmed` means.
         id: 'CVE-2011-2716',
+        nvdBacking: 'enumerated',
         title: 'BusyBox udhcpc passes DHCP option values to the shell — command injection from a DHCP server',
         severity: 'medium',
         low: '1.0.0',
@@ -268,6 +304,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       // not answer, exactly as for every other entry in the table.
       {
         id: 'CVE-2021-42378',
+        nvdBacking: 'bounded',
         title: 'BusyBox awk use-after-free in getvar_i',
         severity: 'high',
         low: '1.16.0',
@@ -275,6 +312,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2021-42379',
+        nvdBacking: 'bounded',
         title: 'BusyBox awk use-after-free in next_input_file',
         severity: 'high',
         low: '1.18.0',
@@ -282,6 +320,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2021-42380',
+        nvdBacking: 'bounded',
         title: 'BusyBox awk use-after-free in clrvar',
         severity: 'high',
         low: '1.28.0',
@@ -289,6 +328,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2021-42381',
+        nvdBacking: 'bounded',
         title: 'BusyBox awk use-after-free in hash_init',
         severity: 'high',
         low: '1.21.0',
@@ -296,6 +336,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2021-42382',
+        nvdBacking: 'bounded',
         title: 'BusyBox awk use-after-free in getvar_s',
         severity: 'high',
         low: '1.26.0',
@@ -304,6 +345,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       // No range at all in NVD — a single enumerated CPE, `busybox:1.33.1`. Claimed at that version only.
       {
         id: 'CVE-2021-42383',
+        nvdBacking: 'enumerated',
         title: 'BusyBox awk use-after-free in evaluate',
         severity: 'high',
         low: '1.33.1',
@@ -311,6 +353,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2021-42384',
+        nvdBacking: 'bounded',
         title: 'BusyBox awk use-after-free in handle_special',
         severity: 'high',
         low: '1.18.0',
@@ -318,6 +361,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2021-42385',
+        nvdBacking: 'bounded',
         title: 'BusyBox awk use-after-free in evaluate',
         severity: 'high',
         low: '1.16.0',
@@ -325,6 +369,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2021-42386',
+        nvdBacking: 'bounded',
         title: 'BusyBox awk use-after-free in nvalloc',
         severity: 'high',
         low: '1.16.0',
@@ -334,6 +379,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       // here — kept because an exact-version CPE is the strongest shape this table accepts and it costs a line.
       {
         id: 'CVE-2022-30065',
+        nvdBacking: 'enumerated',
         title: 'BusyBox awk use-after-free in copyvar',
         severity: 'high',
         low: '1.35.0',
@@ -343,6 +389,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       // this corpus actually ships. CVSS 3.1 5.5 (AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H), availability only.
       {
         id: 'CVE-2023-42364',
+        nvdBacking: 'enumerated',
         title: 'BusyBox awk use-after-free in the evaluate function',
         severity: 'medium',
         low: '1.36.1',
@@ -350,6 +397,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2023-42365',
+        nvdBacking: 'enumerated',
         title: 'BusyBox awk use-after-free in the copyvar function',
         severity: 'medium',
         low: '1.36.1',
@@ -357,6 +405,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2023-42366',
+        nvdBacking: 'enumerated',
         title: 'BusyBox awk heap buffer overflow in next_token (awk.c:1159)',
         severity: 'medium',
         low: '1.36.1',
@@ -383,6 +432,12 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     cves: [
       {
         id: 'CVE-2016-7406',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, at `before 2016.74`, written in the year.release scheme',
+          'Dropbear adopted at 2011.54 — so the floor is the first release that scheme has. The older 0.5x',
+          'numbering is not what the bound addresses, and such a build is reported as a version, not this CVE.',
+        ].join(' '),
         title: 'Dropbear SSH server format-string vulnerability — remote arbitrary code execution',
         severity: 'high',
         // Floored at the year-versioned series NVD itself bounds CVE-2019-12953 with. The advisory ("before
@@ -404,6 +459,12 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     cves: [
       {
         id: 'CVE-2017-14491',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, in the 2.x numbering, and the advisory addresses the 2.x',
+          'codebase. 1.x is a distinct major series this rule does not claim to cover, so the floor is the start',
+          'of the series the advisory is about and a 1.x build is reported as a version, not this CVE.',
+        ].join(' '),
         title: 'dnsmasq heap buffer overflow in DNS reply parsing — remote code execution',
         severity: 'critical',
         // NVD's CPE match for this is open below and therefore "affects" a 2001 build of 1.10. It is about the
@@ -425,6 +486,12 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       // hash used when dnsmasq is built WITHOUT DNSSEC — so they stay at the version rung.
       {
         id: 'CVE-2020-25681',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, in the 2.x numbering, and the advisory addresses the 2.x',
+          'codebase. 1.x is a distinct major series this rule does not claim to cover, so the floor is the start',
+          'of the series the advisory is about and a 1.x build is reported as a version, not this CVE.',
+        ].join(' '),
         title: 'dnsmasq heap overflow sorting RRSets before DNSSEC validation (DNSpooq)',
         severity: 'high',
         low: '2.0',
@@ -434,6 +501,12 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2020-25682',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, in the 2.x numbering, and the advisory addresses the 2.x',
+          'codebase. 1.x is a distinct major series this rule does not claim to cover, so the floor is the start',
+          'of the series the advisory is about and a 1.x build is reported as a version, not this CVE.',
+        ].join(' '),
         title: 'dnsmasq buffer overflow extracting names before DNSSEC validation (DNSpooq)',
         severity: 'high',
         low: '2.0',
@@ -443,6 +516,12 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2020-25683',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, in the 2.x numbering, and the advisory addresses the 2.x',
+          'codebase. 1.x is a distinct major series this rule does not claim to cover, so the floor is the start',
+          'of the series the advisory is about and a 1.x build is reported as a version, not this CVE.',
+        ].join(' '),
         title: 'dnsmasq heap overflow in get_rdata with DNSSEC enabled (DNSpooq)',
         severity: 'medium',
         low: '2.0',
@@ -452,6 +531,12 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2020-25687',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, in the 2.x numbering, and the advisory addresses the 2.x',
+          'codebase. 1.x is a distinct major series this rule does not claim to cover, so the floor is the start',
+          'of the series the advisory is about and a 1.x build is reported as a version, not this CVE.',
+        ].join(' '),
         title: 'dnsmasq heap overflow in sort_rrset with DNSSEC enabled (DNSpooq)',
         severity: 'medium',
         low: '2.0',
@@ -461,6 +546,12 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2020-25684',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, in the 2.x numbering, and the advisory addresses the 2.x',
+          'codebase. 1.x is a distinct major series this rule does not claim to cover, so the floor is the start',
+          'of the series the advisory is about and a 1.x build is reported as a version, not this CVE.',
+        ].join(' '),
         title: 'dnsmasq accepts a reply without matching address/port to the pending query — cache poisoning (DNSpooq)',
         severity: 'low',
         low: '2.0',
@@ -469,6 +560,12 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2020-25685',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, in the 2.x numbering, and the advisory addresses the 2.x',
+          'codebase. 1.x is a distinct major series this rule does not claim to cover, so the floor is the start',
+          'of the series the advisory is about and a 1.x build is reported as a version, not this CVE.',
+        ].join(' '),
         title: 'dnsmasq matches a forwarded query by a weak CRC32 name hash — cache poisoning (DNSpooq)',
         severity: 'low',
         low: '2.0',
@@ -477,6 +574,12 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
       {
         id: 'CVE-2020-25686',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, in the 2.x numbering, and the advisory addresses the 2.x',
+          'codebase. 1.x is a distinct major series this rule does not claim to cover, so the floor is the start',
+          'of the series the advisory is about and a 1.x build is reported as a version, not this CVE.',
+        ].join(' '),
         title: 'dnsmasq forwards duplicate queries for the same name, multiplying birthday chances (DNSpooq)',
         severity: 'low',
         low: '2.0',
@@ -496,6 +599,7 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     cves: [
       {
         id: 'CVE-2023-38545',
+        nvdBacking: 'bounded',
         title: 'curl SOCKS5 proxy handshake heap buffer overflow when the hostname exceeds 255 bytes',
         severity: 'critical',
         // NVD bounds it 7.69.0 (incl) – 8.4.0 (excl) against `libcurl`: bounded at both ends, so no floor is
@@ -648,11 +752,18 @@ export function buildComponentFindings(hits: ComponentHit[]): FindingDraft[] {
           component: hit.component,
           version: hit.version,
           affected: range,
+          nvdBacking: cve.nvdBacking,
+          ...(cve.floorRationale ? { floorRationale: cve.floorRationale } : {}),
           path: hit.path,
           ...(cve.precondition ? { precondition: cve.precondition } : {}),
         },
         rationale: [
           `The bundled ${hit.component} binary reports version ${hit.version}, inside the published affected range ${range} for ${cve.id}.`,
+          cve.nvdBacking === 'enumerated'
+            ? 'NVD lists the affected versions individually, so an analyst asserted this build rather than a range catching it.'
+            : cve.nvdBacking === 'open-below'
+              ? `NVD bounds the advisory only from above, so the floor of ${cve.low} is this table's own: ${cve.floorRationale}`
+              : 'NVD bounds the advisory at both ends and this rule copies them.',
           cve.precondition
             ? `The version is a static fact; the vulnerability is NOT, because ${cve.precondition} — and nothing this provider reads can tell whether it does. That condition, not the version, is what a reproduction has to settle.`
             : 'Version + CVE range are both static facts; runtime reachability of the flaw is a separate confirmation step.',

@@ -446,3 +446,79 @@ describe('a CVE with a precondition this provider cannot check comes off the str
     expect(matchCves(rule, '2.83').filter((c) => c.id.startsWith('CVE-2020-'))).toEqual([]);
   });
 });
+
+/**
+ * The floor policy, as an invariant instead of a paragraph.
+ *
+ * Until 2026-09-19 the difference between a CVE this table claims and one it refuses lived in prose, and the
+ * prose contradicted itself: `CVE-2016-2148` is refused for an open-below range with no enumerated CPE, while
+ * `CVE-2017-14491` is claimed on exactly that. What settled it was counting — nine of the 26 rules are open
+ * below, so the strict reading would also delete `CVE-2016-7406`, which matches the Dropbear 2012.55 in this
+ * corpus and is correct. A rule that costs a true positive to satisfy a sentence is not the rule.
+ *
+ * So the real policy is "an open-below range needs a defensible floor", and these cases make it unskippable.
+ */
+describe('every curated rule declares what NVD backs it with', () => {
+  const allRules = COMPONENT_RULES.flatMap((r) => r.cves.map((c) => ({ component: r.component, cve: c })));
+
+  it('covers every rule, with no shape left unstated', () => {
+    expect(allRules.length).toBeGreaterThan(0);
+    for (const { component, cve } of allRules) {
+      expect(['bounded', 'enumerated', 'open-below'], `${component} ${cve.id}`).toContain(cve.nvdBacking);
+    }
+  });
+
+  it('REFUSES an open-below rule that does not justify its floor', () => {
+    // The invariant. A future entry cannot inherit an unbounded CPE range by saying nothing.
+    for (const { component, cve } of allRules) {
+      if (cve.nvdBacking !== 'open-below') continue;
+      const why = cve.floorRationale ?? '';
+      expect(why.length, `${component} ${cve.id} is open-below and must justify its floor`).toBeGreaterThan(80);
+      // The justification has to be about THIS rule's floor, not a generic sentence.
+      expect(why, `${component} ${cve.id}`).toMatch(/floor/i);
+    }
+  });
+
+  it('does not let a bounded or enumerated rule carry a floor justification it does not need', () => {
+    // A floor rationale on a rule NVD already bounds is a claim nobody is making; it would read as though the
+    // lower end were this table's invention when it is NVD's.
+    for (const { component, cve } of allRules) {
+      if (cve.nvdBacking === 'open-below') continue;
+      expect(cve.floorRationale, `${component} ${cve.id}`).toBeUndefined();
+    }
+  });
+
+  it('keeps the count of each shape where 2026-09-19 measured it', () => {
+    // Not a golden-file assertion for its own sake: the nine open-below rules are exactly the population the
+    // strict reading would have deleted, and if that number moves the policy decision deserves re-reading.
+    const shape = (s: string) => allRules.filter((r) => r.cve.nvdBacking === s).length;
+    expect(shape('open-below')).toBe(9);
+    expect(shape('bounded') + shape('enumerated') + shape('open-below')).toBe(allRules.length);
+  });
+
+  it('puts the floor justification on the finding, not only in the source', () => {
+    // Dropbear 2012.55 is the live case: a real corpus version matched by an open-below rule. The reader has
+    // to be able to see that the lower bound is this table's and why, without opening the table.
+    const drafts = buildComponentFindings([
+      { component: 'dropbear', version: '2012.55', path: 'usr/sbin/dropbearmulti' },
+    ]);
+    const row = drafts.find((d) => d.title.includes('CVE-2016-7406'));
+    expect(row?.rationale).toContain('bounds the advisory only from above');
+    expect(row?.rationale).toContain('2011.54');
+    expect((row?.evidence as Record<string, unknown>).nvdBacking).toBe('open-below');
+    expect((row?.evidence as Record<string, unknown>).floorRationale).toBeTruthy();
+  });
+
+  it('says on an enumerated row that an analyst asserted the build', () => {
+    const drafts = buildComponentFindings([{ component: 'busybox', version: '1.36.1', path: 'bin/busybox' }]);
+    const row = drafts.find((d) => d.title.includes('CVE-2023-42364'));
+    expect(row?.rationale).toContain('analyst asserted this build');
+    expect((row?.evidence as Record<string, unknown>).floorRationale).toBeUndefined();
+  });
+
+  it('leaves CVE-2016-2148 refused, because no floor can be written for it', () => {
+    const busybox = COMPONENT_RULES.find((r) => r.component === 'busybox');
+    expect(busybox?.cves.map((c) => c.id)).not.toContain('CVE-2016-2148');
+    expect(busybox?.rejected?.map((r) => r.id)).toContain('CVE-2016-2148');
+  });
+});
