@@ -377,6 +377,14 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   no es ausente. `selection.configOptions` transporta el veredicto que la corrida de postura ya calculó, para que
   el carril de research no vuelva a responder una pregunta ya hecha y puedan discrepar.)*
 
+- [ ] **La tabla curada de componentes no tiene ruta propia.** `runComponentCve` solo lo invoca `opacidad.ts`, de
+  modo que refrescar sus filas exige un scan autónomo completo: al validar las entradas nuevas el 2026-09-19,
+  re-ejecutar `compmap` no tocó ni una fila `component-cve` —es otro proveedor— y hubo que lanzar `opacidad`
+  sobre la Asus y esperar a que terminase. Medido: esa imagen pasó de **1 fila** (solo pppd) a **14** (7 DNSpooq
+  + 6 awk + pppd), así que el refresco importa. Todos los demás proveedores tienen `POST /images/:id/<kind>`;
+  éste no, y es el único cuyo contenido cambia cuando se edita una TABLA en vez de un binario del despliegue.
+  Añadir la ruta y registrarla en `index.ts` es el patrón ya establecido en `docs/ARCHITECTURE.md`.
+
 - [ ] **Revisar `CVE-2017-14491` en `component-cve.ts`.** Al añadir DNSpooq salió que la prosa de la política
   («solo donde NVD enumera CPEs para las versiones en mano») describía UNA de las cinco reglas originales:
   medido el 2026-09-19, cuatro de ellas —pppd, OpenSSL, Dropbear y dnsmasq— tienen **cero CPEs enumerados** y se
