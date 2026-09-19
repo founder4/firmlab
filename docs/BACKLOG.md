@@ -336,6 +336,17 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   34 casos nuevos; revertir cada regla con los tests puestos falla 4 y 1 respectivamente, en el módulo puro y en
   los dos puntos de cableado.)*
 
+  ***Un defecto de la primera versión, encontrado solo al correrla contra bytes reales** (`bc81da2` → arreglado
+  después): `impactFromVector` leía `AV:L` a secas como escalada. Un fallo local que NO requiere privilegio
+  (`PR:N` — la forma de todo bug de parser multimedia o de formato de fichero) no es una escalada: no hay
+  privilegio del que parta, así que «esta imagen no envía privilegio del que escalar» no dice nada sobre él.
+  Medido sobre la GL.iNet desplegada el 2026-09-19: de 29 filas SBOM despriorizadas, **12 lo estaban por ese
+  razonamiento inválido**, `CVE-2023-49501` (ffmpeg, `AV:L/PR:N/I:H`) entre ellas, bajada high→medium. Ahora
+  `LPE` exige `PR:L`/`PR:H` y esas filas son un impacto `local` propio sobre el que ninguna regla actúa. El
+  carril kernel nunca estuvo afectado: su `impact` es curado a mano y esas sí son escaladas reales. La suite
+  unitaria estaba verde con el defecto dentro, porque sus fixtures venían de la misma suposición que el código —
+  la trampa que `CLAUDE.md` ya nombra.)*
+
 - [ ] Pendiente del mismo ítem, separado porque es otra pieza: el **checklist de CVE embebidos de alto valor** de
   galert (BusyBox awk, Dropbear empty-auth, dnsmasq DNSpooq, curl SOCKS5, DirtyPipe) contra la tabla curada de
   `component-cve.ts`, y la poda por **subsistema de kernel no compilado** más allá de los 27 `CONFIG_*` que
