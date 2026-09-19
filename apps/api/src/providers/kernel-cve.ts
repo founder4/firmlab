@@ -210,7 +210,117 @@ export const KERNEL_OPTION_KNOWLEDGE: readonly OptionKnowledge[] = [
     strings: [],
     builtinOnly: true,
   },
+  // ─── The subsystems the NVD prefix query is NOISIEST about, and that embedded images least often ship ───
+  //
+  // These are here for `subsystemGate` below rather than for any curated rule: a broad Linux-kernel CNA query
+  // returns thousands of rows, a large share of them in GPU, sound and USB-gadget drivers that a router or an
+  // IP camera does not build. Each option is resolved by the SAME three-state `inferKernelOption` as the rest,
+  // so an absent symbol table still yields `unknown` and rules nothing out.
+  {
+    option: 'CONFIG_DRM',
+    symbols: ['drm_dev_register', 'drm_dev_alloc', 'drm_open', 'drm_ioctl'],
+    modules: ['drm', 'drm_kms_helper'],
+    strings: [],
+    builtinOnly: false,
+  },
+  {
+    option: 'CONFIG_FB',
+    symbols: ['register_framebuffer', 'unregister_framebuffer', 'fb_set_var'],
+    modules: ['fb', 'fbcon'],
+    strings: [],
+    builtinOnly: false,
+  },
+  {
+    option: 'CONFIG_SOUND',
+    symbols: ['snd_card_new', 'snd_pcm_new', 'snd_ctl_add'],
+    modules: ['snd', 'snd_pcm', 'soundcore'],
+    strings: [],
+    builtinOnly: false,
+  },
+  {
+    option: 'CONFIG_USB_GADGET',
+    symbols: ['usb_gadget_probe_driver', 'usb_add_gadget_udc', 'usb_ep_queue'],
+    modules: ['libcomposite', 'usb_f_fs', 'g_ether'],
+    strings: [],
+    builtinOnly: false,
+  },
+  {
+    option: 'CONFIG_INFINIBAND',
+    symbols: ['ib_register_device', 'ib_create_cq'],
+    modules: ['ib_core', 'ib_uverbs'],
+    strings: [],
+    builtinOnly: false,
+  },
+  {
+    option: 'CONFIG_KVM',
+    symbols: ['kvm_vcpu_ioctl', 'kvm_dev_ioctl_create_vm'],
+    modules: ['kvm'],
+    strings: [],
+    builtinOnly: false,
+  },
 ];
+
+/**
+ * Subsystem prefixes as the Linux CNA writes them, mapped to the option that has to be built for the flaw to
+ * exist on this device.
+ *
+ * The Linux kernel CNA quotes the fixing commit's subject verbatim, and kernel commit subjects carry a
+ * `subsystem: summary` prefix by long convention — `drm/amdgpu: fix use-after-free`, `usb: gadget: f_fs: ...`,
+ * `ALSA: usb-audio: ...`. That prefix is a much stronger signal than the word appearing anywhere in the text,
+ * which is why `subsystemGate` anchors on it and does not grep: an advisory that merely MENTIONS drm while
+ * fixing something in the scheduler must not be ruled out because this image has no GPU.
+ *
+ * Ordered longest-first so `usb: gadget:` is tested before a bare `usb:` would be, if one is ever added.
+ */
+const SUBSYSTEM_MARKERS: readonly { prefix: string; option: string }[] = [
+  { prefix: 'usb: gadget:', option: 'CONFIG_USB_GADGET' },
+  { prefix: 'usb: f_fs:', option: 'CONFIG_USB_GADGET' },
+  { prefix: 'drm/', option: 'CONFIG_DRM' },
+  { prefix: 'drm:', option: 'CONFIG_DRM' },
+  { prefix: 'fbdev:', option: 'CONFIG_FB' },
+  { prefix: 'fbcon:', option: 'CONFIG_FB' },
+  { prefix: 'video: fbdev:', option: 'CONFIG_FB' },
+  { prefix: 'ALSA:', option: 'CONFIG_SOUND' },
+  { prefix: 'ASoC:', option: 'CONFIG_SOUND' },
+  { prefix: 'sound:', option: 'CONFIG_SOUND' },
+  { prefix: 'Bluetooth:', option: 'CONFIG_BT' },
+  { prefix: 'RDMA/', option: 'CONFIG_INFINIBAND' },
+  { prefix: 'IB/', option: 'CONFIG_INFINIBAND' },
+  { prefix: 'KVM:', option: 'CONFIG_KVM' },
+  { prefix: 'KVM/', option: 'CONFIG_KVM' },
+];
+
+/** The boilerplate the Linux CNA puts in front of every advisory before the commit subject. */
+const CNA_PREAMBLE = /^\s*In the Linux kernel,?\s*the following vulnerability has been resolved:\s*/i;
+
+export interface SubsystemGate {
+  option: string;
+  state: KernelOptionState;
+  evidence: string | null;
+  /** The commit-subject prefix that identified the subsystem — quoted so the reader can check the inference. */
+  marker: string;
+}
+
+/**
+ * Pure: which kernel subsystem an advisory is about, and whether this image builds it.
+ *
+ * Returns null when the summary carries no recognised subsystem prefix, which is the majority of advisories and
+ * the correct answer for them: no gate, no pruning, the row stands. **The only outcome that removes anything is
+ * `off`**, and `inferKernelOption` reaches `off` only from an authoritative config or from complete kallsyms
+ * plus complete module coverage — so an image whose evidence is thin prunes nothing at all.
+ */
+export function subsystemGate(
+  summary: string | null | undefined,
+  options: readonly KernelOptionAssessment[],
+): SubsystemGate | null {
+  if (!summary) return null;
+  const body = summary.replace(CNA_PREAMBLE, '').trimStart();
+  const hit = SUBSYSTEM_MARKERS.find((m) => body.toLowerCase().startsWith(m.prefix.toLowerCase()));
+  if (!hit) return null;
+  const assessed = options.find((o) => o.option === hit.option);
+  if (!assessed) return null;
+  return { option: hit.option, state: assessed.state, evidence: assessed.evidence, marker: hit.prefix };
+}
 
 function normalizedModule(name: string): string {
   return name.replace(/\.ko$/, '').replaceAll('-', '_');
@@ -538,10 +648,20 @@ export interface KernelCveSelection {
   queryVersion: string | null;
   versionSource: KernelPostureResult['versionSource'];
   reason: string;
+  /**
+   * Every known option's three-state verdict for THIS image, carried through so `normalizeKernelCves` can gate
+   * a returned advisory on the subsystem it is about. The posture run already computed it; recomputing it in
+   * the research lane would be a second answer to a question already asked, and the two could disagree.
+   */
+  configOptions: readonly KernelOptionAssessment[];
 }
 
 export function selectKernelCveCandidate(posture: KernelPostureResult): KernelCveSelection {
-  const base = { detectedVersion: posture.version, versionSource: posture.versionSource };
+  const base = {
+    detectedVersion: posture.version,
+    versionSource: posture.versionSource,
+    configOptions: posture.configOptions ?? [],
+  };
   if (!posture.located || !posture.version) {
     return { ...base, candidate: null, queryVersion: null, reason: 'No kernel version was established.' };
   }
@@ -577,31 +697,51 @@ export function normalizeKernelCves(selection: KernelCveSelection, component: Nv
   const shown = component.advisories.length;
   const total = component.totalMatching;
   const prefix = total !== null && total > shown;
-  return component.advisories.map((advisory) => ({
-    kind: 'kernel-cve-candidate',
-    title: `${advisory.id} — Linux kernel ${selection.detectedVersion ?? component.version}`,
-    severity: advisorySeverity(advisory.severity),
-    proofState: 'needs_runtime_reproduction' as ProofState,
-    evidenceChannel: 'external_advisory' as EvidenceChannel,
-    evidence: {
-      id: advisory.id,
-      detectedVersion: selection.detectedVersion,
-      queryVersion: selection.queryVersion,
-      versionSource: selection.versionSource,
-      matchedBy: component.matchedBy,
-      cnaSourceIdentifier: LINUX_KERNEL_CNA_SOURCE,
-      score: advisory.score,
-      summary: advisory.summary,
-      references: advisory.references,
-      shown,
-      totalMatching: total,
-      truncated: prefix,
-      freshness: component.freshness,
-    },
-    rationale: `NVD places upstream Linux ${selection.queryVersion} inside this advisory's affected CPE range, and the query is restricted to the Linux kernel CNA. The firmware's version was read from ${selection.versionSource}. This is a candidate, not a confirmed device vulnerability: vendor backports may keep the same banner, the affected subsystem may be absent or disabled, and reachability has not been reproduced.${
-      prefix
-        ? ` NVD reports ${total} matching kernel advisories; this run retained the first ${shown}, so the rows are a prefix rather than the complete set.`
-        : ''
-    }`,
-  }));
+  return component.advisories.map((advisory) => {
+    // Which subsystem the advisory is about, and whether this image builds it. Null for most advisories, and
+    // `off` only where the posture run had authoritative evidence — see `subsystemGate`.
+    const gate = subsystemGate(advisory.summary, selection.configOptions);
+    const ruledOut = gate?.state === 'off';
+    return {
+      kind: 'kernel-cve-candidate',
+      title: `${advisory.id} — Linux kernel ${selection.detectedVersion ?? component.version}`,
+      severity: advisorySeverity(advisory.severity),
+      // `false_positive` is "checked and dismissed", and that is exactly what happened: the advisory names its
+      // subsystem and this image's own kernel config says the subsystem is not built. The row STAYS — the count
+      // does not change — it just stops being presented as a lead nobody can act on.
+      proofState: (ruledOut ? 'false_positive' : 'needs_runtime_reproduction') as ProofState,
+      evidenceChannel: 'external_advisory' as EvidenceChannel,
+      evidence: {
+        id: advisory.id,
+        ...(gate ? { subsystem: gate.option, subsystemState: gate.state, subsystemMarker: gate.marker } : {}),
+        detectedVersion: selection.detectedVersion,
+        queryVersion: selection.queryVersion,
+        versionSource: selection.versionSource,
+        matchedBy: component.matchedBy,
+        cnaSourceIdentifier: LINUX_KERNEL_CNA_SOURCE,
+        score: advisory.score,
+        summary: advisory.summary,
+        references: advisory.references,
+        shown,
+        totalMatching: total,
+        truncated: prefix,
+        freshness: component.freshness,
+      },
+      rationale: `NVD places upstream Linux ${selection.queryVersion} inside this advisory's affected CPE range, and the query is restricted to the Linux kernel CNA. The firmware's version was read from ${selection.versionSource}. This is a candidate, not a confirmed device vulnerability: vendor backports may keep the same banner${
+        gate ? '' : ', the affected subsystem may be absent or disabled'
+      }, and reachability has not been reproduced.${
+        ruledOut
+          ? ` Dismissed on this image: the advisory's commit subject begins "${gate?.marker}", which puts it in ${gate?.option}, and this kernel's own configuration says that option is not built (${gate?.evidence}). The flaw is real upstream; the code it is in is not here.`
+          : gate?.state === 'on'
+            ? ` The subsystem it is in (${gate.option}, from the "${gate.marker}" commit-subject prefix) IS built on this image (${gate.evidence}), so the usual "maybe the subsystem is absent" escape does not apply to this row.`
+            : gate
+              ? ` It is in ${gate.option} (from the "${gate.marker}" commit-subject prefix), and whether this kernel builds that option could not be determined — undetermined is not absent, so the row stands.`
+              : ''
+      }${
+        prefix
+          ? ` NVD reports ${total} matching kernel advisories; this run retained the first ${shown}, so the rows are a prefix rather than the complete set.`
+          : ''
+      }`,
+    };
+  });
 }

@@ -8,6 +8,7 @@ import {
   compareVersion,
   componentDirPriority,
   curatedCveVerdict,
+  cveCovers,
   describeComponentScan,
   extractComponentVersion,
   matchCves,
@@ -122,7 +123,9 @@ describe('the ranges are the advisories, not the era around them', () => {
     for (const v of ['1.7.2', '1.01']) {
       expect(matchCves(rule, v).map((c) => c.id)).toEqual(['CVE-2011-2716']);
     }
-    expect(matchCves(rule, '1.36.1')).toEqual([]);
+    // 1.36.1 is past this CVE's 1.19.4 upper bound. Scoped to the CVE because the awk entries added on
+    // 2026-09-19 DO match that version, and a bare `toEqual([])` here would have quietly asserted they must not.
+    expect(matchCves(rule, '1.36.1').map((c) => c.id)).not.toContain('CVE-2011-2716');
   });
 
   it('does not carry CVE-2016-2148, whose NVD range has no lower bound to stand on', () => {
@@ -146,8 +149,10 @@ describe('the ranges are the advisories, not the era around them', () => {
   it('refuses to claim a 2017 dnsmasq CVE against the 1.x build NVD would happily match', () => {
     const rule = ruleFor('dnsmasq');
     expect(matchCves(rule, '1.10')).toEqual([]);
-    expect(matchCves(rule, '2.55').map((c) => c.id)).toEqual(['CVE-2017-14491']);
-    expect(matchCves(rule, '2.78')).toEqual([]);
+    expect(matchCves(rule, '2.55').map((c) => c.id)).toContain('CVE-2017-14491');
+    // 2.78 is past this CVE's inclusive 2.77 bound. Scoped to the CVE for the same reason as the BusyBox case
+    // above: the DNSpooq entries added on 2026-09-19 are floored at the same 2.0 and DO cover 2.78.
+    expect(matchCves(rule, '2.78').map((c) => c.id)).not.toContain('CVE-2017-14491');
 
     const drafts = buildComponentFindings([{ component: 'dnsmasq', version: '1.10', path: 'usr/sbin/dnsmasq' }]);
     expect(drafts).toHaveLength(1);
@@ -336,5 +341,108 @@ describe('curatedCveVerdict — what this table says about a row the other lane 
   it('has no opinion on an unmapped component or an unknown CVE', () => {
     expect(curatedCveVerdict('lighttpd', '1.4.35', 'CVE-2015-3200')).toBeNull();
     expect(curatedCveVerdict('busybox', '1.18.4', 'CVE-2021-42374')).toBeNull();
+  });
+});
+
+/**
+ * The 2026-09-19 additions. Each range below was read one CVE at a time from the NVD API, and these cases exist
+ * because the shortcut was available and wrong: the nine BusyBox awk entries look like one advisory with one
+ * range and they have five different lower bounds.
+ */
+describe('the BusyBox awk family does not share one range', () => {
+  const busybox = COMPONENT_RULES.find((r) => r.component === 'busybox');
+  const ids = (version: string) => matchCves(busybox as NonNullable<typeof busybox>, version).map((c) => c.id);
+
+  it('applies each awk CVE only from its OWN lower bound', () => {
+    // 1.18.4 is the IMOU camera in this corpus. Above 1.16.0 and 1.18.0, below 1.21.0 / 1.26.0 / 1.28.0.
+    const at1184 = ids('1.18.4');
+    expect(at1184).toContain('CVE-2021-42378'); // 1.16.0
+    expect(at1184).toContain('CVE-2021-42379'); // 1.18.0
+    expect(at1184).toContain('CVE-2021-42384'); // 1.18.0
+    expect(at1184).not.toContain('CVE-2021-42381'); // 1.21.0
+    expect(at1184).not.toContain('CVE-2021-42382'); // 1.26.0
+    expect(at1184).not.toContain('CVE-2021-42380'); // 1.28.0
+  });
+
+  it('stops the 2021 family at its upper bound and starts the 2023 trio at theirs', () => {
+    // 1.36.1 is the GL.iNet BE3600: past 1.33.1, so no 2021 entry — and it is the exact enumerated CPE of the
+    // three 2023 ones.
+    const at1361 = ids('1.36.1');
+    expect(at1361.filter((id) => id.startsWith('CVE-2021-'))).toEqual([]);
+    expect(at1361).toEqual(expect.arrayContaining(['CVE-2023-42364', 'CVE-2023-42365', 'CVE-2023-42366']));
+    // Those three are pinned to that one version, not to a range around it.
+    expect(ids('1.36.0')).not.toContain('CVE-2023-42364');
+    expect(ids('1.37.0')).not.toContain('CVE-2023-42364');
+  });
+
+  it('leaves the ancient builds out of the awk family entirely', () => {
+    // BusyBox 1.01 (WR940N) and 1.7.2 (DVRF) are below every awk lower bound; they keep only the udhcpc entry.
+    for (const old of ['1.01', '1.7.2']) {
+      expect(ids(old).filter((id) => id.includes('4238') || id.includes('30065'))).toEqual([]);
+      expect(ids(old)).toContain('CVE-2011-2716');
+    }
+  });
+});
+
+describe('an exclusive upper bound is carried, not guessed into an inclusive one', () => {
+  const curl = COMPONENT_RULES.find((r) => r.component === 'curl');
+
+  it('treats NVD’s "< 8.4.0" as exclusive', () => {
+    expect(cveCovers('8.3.0', { low: '7.69.0', high: '8.4.0', highExclusive: true })).toBe(true);
+    expect(cveCovers('8.4.0', { low: '7.69.0', high: '8.4.0', highExclusive: true })).toBe(false);
+    // Without the flag the same bound would include 8.4.0 — the off-by-one the flag exists to prevent.
+    expect(cveCovers('8.4.0', { low: '7.69.0', high: '8.4.0' })).toBe(true);
+  });
+
+  it('does not claim the SOCKS5 overflow against the curl this corpus actually ships', () => {
+    // The GL.iNet BE3600 ships 8.6.0. A rule firing here would be calling a fixed version vulnerable.
+    expect(matchCves(curl as NonNullable<typeof curl>, '8.6.0')).toEqual([]);
+    expect(matchCves(curl as NonNullable<typeof curl>, '8.3.0').map((c) => c.id)).toEqual(['CVE-2023-38545']);
+  });
+
+  it('reads the version out of both real curl strings, which are different strings', () => {
+    const rule = curl as NonNullable<typeof curl>;
+    // Verbatim from /usr/bin/curl and /usr/lib/libcurl.so.4.8.0 on the BE3600 rootfs.
+    expect(extractComponentVersion('curl 8.6.0 (aarch64-openwrt-linux-gnu) %s', rule)).toBe('8.6.0');
+    expect(extractComponentVersion('libcurl/8.6.0 OpenSSL/3.0.13', rule)).toBe('8.6.0');
+  });
+});
+
+describe('a CVE with a precondition this provider cannot check comes off the strongest rung', () => {
+  const dnsmasq = COMPONENT_RULES.find((r) => r.component === 'dnsmasq');
+  const drafts = () => buildComponentFindings([{ component: 'dnsmasq', version: '2.78', path: 'usr/sbin/dnsmasq' }]);
+
+  it('keeps DNSSEC-gated DNSpooq entries at needs_runtime_reproduction and names the condition', () => {
+    const gated = drafts().find((d) => d.title.includes('CVE-2020-25681'));
+    expect(gated?.proofState).toBe('needs_runtime_reproduction');
+    expect((gated?.evidence as Record<string, unknown>).precondition).toContain('DNSSEC');
+    expect(gated?.rationale).toContain('the vulnerability is NOT');
+  });
+
+  it('leaves the ungated cache-poisoning entries at static_confirmed', () => {
+    const ungated = drafts().find((d) => d.title.includes('CVE-2020-25685'));
+    expect(ungated?.proofState).toBe('static_confirmed');
+    expect((ungated?.evidence as Record<string, unknown>).precondition).toBeUndefined();
+  });
+
+  it('floors DNSpooq at the 2.x series, so the 1.10 in this corpus is a version and not seven CVEs', () => {
+    const rule = dnsmasq as NonNullable<typeof dnsmasq>;
+    expect(matchCves(rule, '1.10')).toEqual([]);
+    // 2.78 is past CVE-2017-14491's inclusive 2.77 and inside all seven DNSpooq entries.
+    expect(
+      matchCves(rule, '2.78')
+        .map((c) => c.id)
+        .sort(),
+    ).toEqual([
+      'CVE-2020-25681',
+      'CVE-2020-25682',
+      'CVE-2020-25683',
+      'CVE-2020-25684',
+      'CVE-2020-25685',
+      'CVE-2020-25686',
+      'CVE-2020-25687',
+    ]);
+    // 2.83 is the exclusive bound: the release that FIXED it must not be reported as affected by it.
+    expect(matchCves(rule, '2.83').filter((c) => c.id.startsWith('CVE-2020-'))).toEqual([]);
   });
 });

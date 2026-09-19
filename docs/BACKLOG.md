@@ -347,12 +347,45 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   unitaria estaba verde con el defecto dentro, porque sus fixtures venían de la misma suposición que el código —
   la trampa que `CLAUDE.md` ya nombra.)*
 
-- [ ] Pendiente del mismo ítem, separado porque es otra pieza: el **checklist de CVE embebidos de alto valor** de
-  galert (BusyBox awk, Dropbear empty-auth, dnsmasq DNSpooq, curl SOCKS5, DirtyPipe) contra la tabla curada de
-  `component-cve.ts`, y la poda por **subsistema de kernel no compilado** más allá de los 27 `CONFIG_*` que
-  `KERNEL_OPTION_KNOWLEDGE` ya conoce (faltan sobre todo los gráficos —DRM/framebuffer— y USB-gadget, que es
-  donde vive el ruido de la consulta NVD por prefijo). El mecanismo de tres estados ya existe y es correcto; lo
-  que falta es tabla, no diseño.
+- [x] El **checklist de CVE embebidos de alto valor** de galert contra la tabla curada. *(Hecho el 2026-09-19,
+  cada rango consultado de uno en uno contra la API de NVD, ninguno de memoria. **BusyBox awk**: las nueve
+  entradas de 2021 parecen un aviso con un rango y no lo son — sus suelos son 1.16.0, 1.18.0, 1.21.0, 1.26.0 y
+  1.28.0, y `CVE-2021-42383` no tiene rango sino un CPE enumerado en 1.33.1. Copiar el primero habría reclamado
+  cuatro CVE contra la BusyBox 1.18.4 del corpus que NVD no pone ahí. Más `CVE-2022-30065` (CPE 1.35.0) y las
+  tres de 2023 con CPE enumerado en **1.36.1**, que es justo lo que envía la GL.iNet. **dnsmasq DNSpooq**: los
+  siete, suelo 2.0 como la regla de al lado y `highExclusive` llevando el `< 2.83` de NVD en vez de adivinar
+  cuál fue la última release; los cuatro que exigen DNSSEC llevan `precondition` y por eso quedan en
+  `needs_runtime_reproduction` y no en `static_confirmed` — la versión está confirmada, la vulnerabilidad no.
+  **curl SOCKS5** (`CVE-2023-38545`): componente nuevo, con los dos `versionRes` leídos de los binarios reales
+  del rootfs de la BE3600 (`curl 8.6.0 (aarch64-openwrt-linux-gnu) %s` en `/usr/bin/curl` y `libcurl/8.6.0` en
+  `libcurl.so.4.8.0` — cadenas distintas en ficheros distintos); el rango 7.69.0–<8.4.0 **no** cubre la 8.6.0 que
+  el corpus envía, y hay un test que lo fija contra esa versión exacta. **Dropbear empty-auth** no es un CVE:
+  `fsaudit.ts` ya lo audita como configuración (`auditServiceConfigs`, root+contraseña vacía). **DirtyPipe** ya
+  estaba en `KERNEL_CVE_RULES` desde antes.)*
+
+- [x] Poda por **subsistema de kernel** de la lista de candidatos NVD. *(Hecho: `subsystemGate` en
+  `kernel-cve.ts`. El valor no estaba en la tabla curada sino donde el ruido vive de verdad — la consulta por
+  prefijo que devuelve miles de filas, buena parte en drivers de GPU, sonido y USB-gadget que un router no
+  compila. La CNA de Linux cita el asunto del commit que arregla el fallo, y los asuntos del kernel llevan
+  prefijo `subsistema: resumen` por convención (`drm/amdgpu:`, `usb: gadget: f_fs:`, `ALSA:`), así que el gate
+  **ancla en el prefijo y no hace grep**: un fallo del scheduler cuya descripción mencione `drm/amdgpu` no se
+  descarta por no haber GPU. Seis `CONFIG_*` nuevos en `KERNEL_OPTION_KNOWLEDGE` (DRM, FB, SOUND, USB_GADGET,
+  INFINIBAND, KVM) resueltos por el `inferKernelOption` de tres estados que ya existía, de modo que **solo un
+  `off` con evidencia autoritativa descarta nada** y una imagen sin config ni kallsyms no poda ni una fila. Un
+  `off` deja la fila en `false_positive` —comprobado y descartado— sin cambiar el recuento; un `on` retira de la
+  frase la escapatoria «puede que el subsistema no esté»; un `unknown` la deja intacta diciendo que indeterminado
+  no es ausente. `selection.configOptions` transporta el veredicto que la corrida de postura ya calculó, para que
+  el carril de research no vuelva a responder una pregunta ya hecha y puedan discrepar.)*
+
+- [ ] **Revisar `CVE-2017-14491` en `component-cve.ts`.** Al añadir DNSpooq salió que la prosa de la política
+  («solo donde NVD enumera CPEs para las versiones en mano») describía UNA de las cinco reglas originales:
+  medido el 2026-09-19, cuatro de ellas —pppd, OpenSSL, Dropbear y dnsmasq— tienen **cero CPEs enumerados** y se
+  reclaman sobre su rango. La prosa se corrigió para describir lo que la tabla hace de verdad (rango abierto →
+  suelo propio defendible; sin suelo defendible → `rejected`), y no se aplicó retroactivamente porque habría
+  borrado cuatro n-days verificados por una frase. Queda una decisión de política real: `CVE-2017-14491` se
+  reclama sobre exactamente la forma (abierto por abajo, cero CPEs) por la que `CVE-2016-2148` se rechaza, y lo
+  único que los separa es que el corte 1.x/2.x de dnsmasq da un suelo y la línea 1.x de BusyBox no. Decidir si
+  eso basta, y escribirlo.
 - [ ] **(b') Fuentes de taint específicas de firmware.** Enriquecer el scaffold de taint (ver "cross-binary
   dataflow" arriba) con las SOURCES canónicas de vendor, que rara vez son un `recv` crudo: getters HTTP/CGI
   (`websGetVar`/`webGetVar`/`GetValue`/`get_cgi`/`httpGetEnv`) y NVRAM/env (`nvram_get`/`nvram_safe_get`/

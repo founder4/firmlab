@@ -95,9 +95,44 @@ export interface CveRule {
   id: string;
   title: string;
   severity: FindingSeverity;
-  /** Inclusive affected range [low, high] — deliberately explicit, never an open-ended "old-ish" guess. */
+  /** Affected range [low, high] — deliberately explicit, never an open-ended "old-ish" guess. */
   low: string;
   high: string;
+  /**
+   * `high` is EXCLUSIVE, because NVD bounded this CVE with `versionEndExcluding`.
+   *
+   * It exists so a faithful bound does not have to be guessed into an inclusive one. NVD says curl is affected
+   * "< 8.4.0"; writing that as `high: '8.3.0'` asserts that 8.3.0 was the last release of that series, which is
+   * a claim about release history nobody here verified — precisely the kind of recall this table refuses. The
+   * flag carries NVD's own bound instead.
+   */
+  highExclusive?: boolean;
+  /**
+   * A configuration this CVE additionally requires, stated when the version fact alone does not settle it.
+   *
+   * Four of the seven DNSpooq entries need DNSSEC compiled in and enabled, and nothing this provider reads can
+   * tell whether it is. A row carrying a precondition therefore does NOT reach `static_confirmed`: the version
+   * is confirmed, the vulnerability is not, and `buildComponentFindings` drops it to
+   * `needs_runtime_reproduction` with the condition named. Without this field the only options were to claim a
+   * conditional flaw at the bench's strongest rung or to drop a real n-day, and both are worse.
+   */
+  precondition?: string;
+}
+
+/**
+ * Pure: does this CVE rule's range cover `version`? Honours `highExclusive`.
+ *
+ * `matchCves` and `curatedCveVerdict` both go through here so a rule cannot mean one thing when this table
+ * claims it and another when it comments on a grype row — they disagreed about nothing today, and that is worth
+ * keeping true by construction rather than by coincidence.
+ */
+export function cveCovers(version: string, cve: Pick<CveRule, 'low' | 'high' | 'highExclusive'>): boolean {
+  if (!cve.highExclusive) return versionInRange(version, cve.low, cve.high);
+  const pv = parseVersion(version);
+  const pl = parseVersion(cve.low);
+  const ph = parseVersion(cve.high);
+  if (!pv || !pl || !ph) return false;
+  return compareVersion(pv, pl) >= 0 && compareVersion(pv, ph) < 0;
 }
 
 export interface ComponentRule {
@@ -129,12 +164,40 @@ export interface ComponentRule {
  * basename match is exact, so a rule naming only `dropbear` would have found nothing), and how the SSH banner
  * turned out to be the only place dropbear's version appears as literal text rather than through `%s`.
  *
- * Every range was read from the NVD CVE API (2026-07-27, `virtualMatchString` against the version this corpus
- * actually ships), never from recall. Where NVD's CPE range is open below — "dnsmasq before 2.78" matches a 2001
- * build of 1.10 as readily as a 2017 build of 2.77 — the rule sets its OWN floor at the series the advisory is
- * about. An unbounded-below range is a modelling artifact of CPE, not evidence that a decade-older codebase
- * contains the bug, and inheriting it would be the "this era is probably vulnerable" guess this table exists to
- * refuse. The cost is under-claiming on genuinely ancient builds; they still surface as inventory facts.
+ * Every range was read from the NVD CVE API against the version this corpus actually ships (2026-07-27, and
+ * again 2026-09-19 for the entries added then), never from recall. **Checking the ranges is not optional and it
+ * is not cheap-talk:** the nine BusyBox awk entries below look like one advisory with one range, and they are
+ * not — their lower bounds are 1.16.0, 1.18.0, 1.21.0, 1.26.0 and 1.28.0, and one of them (CVE-2021-42383) has
+ * no range at all, only an enumerated `1.33.1`. Copying the first range across the family would have claimed
+ * four CVEs against BusyBox 1.18.4 that NVD does not put there.
+ *
+ * ─── When a CVE may be claimed, as this table actually decides it ───
+ *
+ * The bound NVD gives is used as NVD gives it; `highExclusive` exists so an exclusive upper bound need not be
+ * guessed into an inclusive one. What needs a rule is the LOWER bound, because CPE ranges are routinely open
+ * below — "dnsmasq before 2.83" matches a 2001 build of 1.10 as readily as a 2020 build of 2.82.
+ *
+ *  - **Bounded at both ends** → claim it as given. The strongest and least interesting case.
+ *  - **One enumerated CPE at the exact version** → claim that version alone (`low === high`). This is the
+ *    strongest evidence of all: an analyst asserted that build, not a range someone might have widened.
+ *  - **Open below** → the rule sets its OWN floor, at the series the advisory is about, and the floor must be
+ *    defensible from the advisory's own subject matter. An unbounded-below range is a modelling artifact of
+ *    CPE, not evidence that a decade-older codebase contains the bug.
+ *  - **Open below with no defensible floor** → it is REFUSED into `rejected`, with the reason. CVE-2016-2148
+ *    is the worked example: "before 1.25.0" spans the whole 1.x line, there is no series boundary inside it to
+ *    floor at, and BusyBox 1.01 sits twenty years deep in it.
+ *
+ * An earlier version of this paragraph said the table claims a CVE "only where NVD enumerates CPEs for the
+ * versions in hand". That was never what the table did — measured on 2026-09-19, four of its five original
+ * entries (pppd, OpenSSL, Dropbear, dnsmasq) have ZERO enumerated CPEs and were claimed on their range alone,
+ * two of them open below and floored. The prose described the BusyBox rule's extra strength as though it were
+ * the policy. It is corrected here rather than enforced retroactively, because enforcing it would delete four
+ * verified n-days over a sentence, and the floor rule those four follow is the one the ledger can defend.
+ * **`CVE-2017-14491` remains the one entry worth a second look**: it is claimed on exactly the shape
+ * (open below, zero enumerated CPEs) that CVE-2016-2148 is refused for, and what separates them is only that
+ * dnsmasq's 1.x/2.x split gives a floor while BusyBox's 1.x line does not.
+ *
+ * The cost of all of this is under-claiming on genuinely ancient builds; they still surface as inventory facts.
  */
 export const COMPONENT_RULES: readonly ComponentRule[] = [
   {
@@ -193,6 +256,112 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
         low: '1.0.0',
         high: '1.19.4',
       },
+      // ─── The awk applet. Nine 2021 entries, and their lower bounds are NOT the same number ───
+      //
+      // Read one at a time from NVD on 2026-09-19. They share an upper bound (1.33.1, inclusive) and a CVSS
+      // vector (3.1 AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H, 7.2), which is exactly what makes assuming a shared
+      // LOWER bound tempting and wrong: 1.16.0, 1.18.0, 1.21.0, 1.26.0 and 1.28.0 all appear. Against the
+      // BusyBox 1.18.4 in this corpus that difference decides four of the nine.
+      //
+      // awk is not decoration on these devices — vendor rc scripts and CGI handlers parse with it constantly —
+      // but whether attacker-influenced text reaches an awk pattern is a reachability question this row does
+      // not answer, exactly as for every other entry in the table.
+      {
+        id: 'CVE-2021-42378',
+        title: 'BusyBox awk use-after-free in getvar_i',
+        severity: 'high',
+        low: '1.16.0',
+        high: '1.33.1',
+      },
+      {
+        id: 'CVE-2021-42379',
+        title: 'BusyBox awk use-after-free in next_input_file',
+        severity: 'high',
+        low: '1.18.0',
+        high: '1.33.1',
+      },
+      {
+        id: 'CVE-2021-42380',
+        title: 'BusyBox awk use-after-free in clrvar',
+        severity: 'high',
+        low: '1.28.0',
+        high: '1.33.1',
+      },
+      {
+        id: 'CVE-2021-42381',
+        title: 'BusyBox awk use-after-free in hash_init',
+        severity: 'high',
+        low: '1.21.0',
+        high: '1.33.1',
+      },
+      {
+        id: 'CVE-2021-42382',
+        title: 'BusyBox awk use-after-free in getvar_s',
+        severity: 'high',
+        low: '1.26.0',
+        high: '1.33.1',
+      },
+      // No range at all in NVD — a single enumerated CPE, `busybox:1.33.1`. Claimed at that version only.
+      {
+        id: 'CVE-2021-42383',
+        title: 'BusyBox awk use-after-free in evaluate',
+        severity: 'high',
+        low: '1.33.1',
+        high: '1.33.1',
+      },
+      {
+        id: 'CVE-2021-42384',
+        title: 'BusyBox awk use-after-free in handle_special',
+        severity: 'high',
+        low: '1.18.0',
+        high: '1.33.1',
+      },
+      {
+        id: 'CVE-2021-42385',
+        title: 'BusyBox awk use-after-free in evaluate',
+        severity: 'high',
+        low: '1.16.0',
+        high: '1.33.1',
+      },
+      {
+        id: 'CVE-2021-42386',
+        title: 'BusyBox awk use-after-free in nvalloc',
+        severity: 'high',
+        low: '1.16.0',
+        high: '1.33.1',
+      },
+      // Enumerated CPE `busybox:1.35.0`, no range. Nothing in this corpus is 1.35.x, so it matches nothing
+      // here — kept because an exact-version CPE is the strongest shape this table accepts and it costs a line.
+      {
+        id: 'CVE-2022-30065',
+        title: 'BusyBox awk use-after-free in copyvar',
+        severity: 'high',
+        low: '1.35.0',
+        high: '1.35.0',
+      },
+      // Three more, each with a single enumerated CPE at `busybox:1.36.1` — the version the GL.iNet BE3600 in
+      // this corpus actually ships. CVSS 3.1 5.5 (AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H), availability only.
+      {
+        id: 'CVE-2023-42364',
+        title: 'BusyBox awk use-after-free in the evaluate function',
+        severity: 'medium',
+        low: '1.36.1',
+        high: '1.36.1',
+      },
+      {
+        id: 'CVE-2023-42365',
+        title: 'BusyBox awk use-after-free in the copyvar function',
+        severity: 'medium',
+        low: '1.36.1',
+        high: '1.36.1',
+      },
+      {
+        id: 'CVE-2023-42366',
+        title: 'BusyBox awk heap buffer overflow in next_token (awk.c:1159)',
+        severity: 'medium',
+        low: '1.36.1',
+        high: '1.36.1',
+      },
     ],
     rejected: [
       {
@@ -242,6 +411,100 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
         low: '2.0',
         high: '2.77',
       },
+      // ─── DNSpooq (2021). Seven CVEs, all bounded by NVD as "< 2.83" with zero enumerated CPEs ───
+      //
+      // Same evidence shape as CVE-2017-14491 above and floored the same way, at the 2.x series the advisories
+      // are about, so the 1.10 in this corpus stays an inventory fact. The Asus router here ships 2.78, which
+      // is inside all seven. `highExclusive` carries NVD's own `< 2.83` rather than asserting which release
+      // was the last before it.
+      //
+      // FOUR OF THEM NEED DNSSEC, and this provider cannot see whether it is compiled in, let alone enabled.
+      // They carry a `precondition` and therefore land at `needs_runtime_reproduction` instead of
+      // `static_confirmed`: the version is confirmed, the vulnerability is conditional, and the row says which.
+      // The three cache-poisoning entries have no such gate — CVE-2020-25685 is specifically about the CRC32
+      // hash used when dnsmasq is built WITHOUT DNSSEC — so they stay at the version rung.
+      {
+        id: 'CVE-2020-25681',
+        title: 'dnsmasq heap overflow sorting RRSets before DNSSEC validation (DNSpooq)',
+        severity: 'high',
+        low: '2.0',
+        high: '2.83',
+        highExclusive: true,
+        precondition: 'dnsmasq must be built with DNSSEC support and have validation enabled',
+      },
+      {
+        id: 'CVE-2020-25682',
+        title: 'dnsmasq buffer overflow extracting names before DNSSEC validation (DNSpooq)',
+        severity: 'high',
+        low: '2.0',
+        high: '2.83',
+        highExclusive: true,
+        precondition: 'dnsmasq must be built with DNSSEC support and have validation enabled',
+      },
+      {
+        id: 'CVE-2020-25683',
+        title: 'dnsmasq heap overflow in get_rdata with DNSSEC enabled (DNSpooq)',
+        severity: 'medium',
+        low: '2.0',
+        high: '2.83',
+        highExclusive: true,
+        precondition: 'dnsmasq must be built with DNSSEC support and have validation enabled',
+      },
+      {
+        id: 'CVE-2020-25687',
+        title: 'dnsmasq heap overflow in sort_rrset with DNSSEC enabled (DNSpooq)',
+        severity: 'medium',
+        low: '2.0',
+        high: '2.83',
+        highExclusive: true,
+        precondition: 'dnsmasq must be built with DNSSEC support and have validation enabled',
+      },
+      {
+        id: 'CVE-2020-25684',
+        title: 'dnsmasq accepts a reply without matching address/port to the pending query — cache poisoning (DNSpooq)',
+        severity: 'low',
+        low: '2.0',
+        high: '2.83',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2020-25685',
+        title: 'dnsmasq matches a forwarded query by a weak CRC32 name hash — cache poisoning (DNSpooq)',
+        severity: 'low',
+        low: '2.0',
+        high: '2.83',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2020-25686',
+        title: 'dnsmasq forwards duplicate queries for the same name, multiplying birthday chances (DNSpooq)',
+        severity: 'low',
+        low: '2.0',
+        high: '2.83',
+        highExclusive: true,
+      },
+    ],
+  },
+  {
+    component: 'curl',
+    // Read off the GL.iNet BE3600 rootfs on 2026-09-19, both spellings, because they are different strings in
+    // different files: `/usr/bin/curl` carries `curl 8.6.0 (aarch64-openwrt-linux-gnu) %s` (the tool banner,
+    // with the platform triple before the format string) and `/usr/lib/libcurl.so.4.8.0` carries the
+    // `libcurl/8.6.0` User-Agent token. A pattern written for one finds nothing in the other.
+    binNames: ['curl', 'libcurl.so', 'libcurl.so.4'],
+    versionRes: [/\bcurl (\d+\.\d+\.\d+) \(/, /libcurl\/(\d+\.\d+\.\d+)/],
+    cves: [
+      {
+        id: 'CVE-2023-38545',
+        title: 'curl SOCKS5 proxy handshake heap buffer overflow when the hostname exceeds 255 bytes',
+        severity: 'critical',
+        // NVD bounds it 7.69.0 (incl) – 8.4.0 (excl) against `libcurl`: bounded at both ends, so no floor is
+        // invented. The 8.6.0 this corpus ships is OUTSIDE it and is reported as a version, not a CVE — which
+        // is the behaviour worth having, and `component-cve.test.ts` pins it against that exact version.
+        low: '7.69.0',
+        high: '8.4.0',
+        highExclusive: true,
+      },
     ],
   },
 ];
@@ -268,7 +531,7 @@ export function extractComponentVersion(strings: string, rule: ComponentRule): s
 
 /** Pure: the CVEs from a rule whose affected range covers `version`. */
 export function matchCves(rule: ComponentRule, version: string): CveRule[] {
-  return rule.cves.filter((c) => versionInRange(version, c.low, c.high));
+  return rule.cves.filter((c) => cveCovers(version, c));
 }
 
 /**
@@ -333,7 +596,7 @@ export function curatedCveVerdict(component: string, version: string, cveId: str
       note: `The curated table carries ${cveId} for ${component} ${range} but cannot compare the manifest version "${version}", so it neither corroborates nor disputes this row.`,
     };
   }
-  if (versionInRange(version, curated.low, curated.high)) {
+  if (cveCovers(version, curated)) {
     return {
       kind: 'claimed',
       note: `The curated table claims ${cveId} for ${component} ${range} as well; its own row is static_confirmed from the version string in the binary, which is evidence this manifest match does not carry.`,
@@ -370,19 +633,31 @@ export function buildComponentFindings(hits: ComponentHit[]): FindingDraft[] {
       continue;
     }
     for (const cve of cves) {
+      const range = cve.low === cve.high ? cve.low : `${cve.low}–${cve.high}${cve.highExclusive ? ' (exclusive)' : ''}`;
       drafts.push({
         kind: 'component-cve',
         title: `${cve.id} — ${hit.component} ${hit.version}: ${cve.title}`,
         severity: cve.severity,
-        proofState: 'static_confirmed',
+        // A precondition this provider cannot check means the version fact no longer settles the question, so
+        // the row comes off the strongest rung. `static_confirmed` is for a property that is literally in the
+        // bytes; "affected IF DNSSEC is enabled" is not, and claiming it there would be the over-statement the
+        // ladder exists to prevent.
+        proofState: cve.precondition ? 'needs_runtime_reproduction' : 'static_confirmed',
         evidence: {
           cve: cve.id,
           component: hit.component,
           version: hit.version,
-          affected: `${cve.low}–${cve.high}`,
+          affected: range,
           path: hit.path,
+          ...(cve.precondition ? { precondition: cve.precondition } : {}),
         },
-        rationale: `The bundled ${hit.component} binary reports version ${hit.version}, inside the published affected range ${cve.low}–${cve.high} for ${cve.id}. Version + CVE range are both static facts; runtime reachability of the flaw is a separate confirmation step. Found by binary fingerprinting — a manifest-only SBOM returns 0 CVEs here.`,
+        rationale: [
+          `The bundled ${hit.component} binary reports version ${hit.version}, inside the published affected range ${range} for ${cve.id}.`,
+          cve.precondition
+            ? `The version is a static fact; the vulnerability is NOT, because ${cve.precondition} — and nothing this provider reads can tell whether it does. That condition, not the version, is what a reproduction has to settle.`
+            : 'Version + CVE range are both static facts; runtime reachability of the flaw is a separate confirmation step.',
+          'Found by binary fingerprinting — a manifest-only SBOM returns 0 CVEs here.',
+        ].join(' '),
       });
     }
   }
