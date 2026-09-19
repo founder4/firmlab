@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { type DeviceContext, privilegeBoundaryFromPasswd, processSupervisionForClass } from './cve-device-triage.js';
 import type { DecodedKallsyms } from './kallsyms.js';
 import {
   KERNEL_CVE_RULES,
@@ -158,5 +159,56 @@ describe('external NVD kernel selection remains bounded and provisional', () => 
       evidenceChannel: 'external_advisory',
     });
     expect(finding?.evidence).toMatchObject({ totalMatching: 2037, truncated: true });
+  });
+});
+
+/**
+ * Device context on the kernel rows. `impactSeverity` mapped LPE→high on every image alike, which is the flat
+ * reading the triage replaces — and the confinement to `applicable` is the part worth pinning, because putting
+ * a confident severity on an `unknown` row would argue the opposite of what that row says.
+ */
+describe('kernelCveFindings under a device context', () => {
+  const noBoundary: DeviceContext = {
+    firmwareClass: 'embedded-linux',
+    privilegeBoundary: privilegeBoundaryFromPasswd('root:x:0:0::/root:/bin/ash\nnobody:x:99:99::/:/bin/false'),
+    processSupervision: processSupervisionForClass('embedded-linux'),
+  };
+  // Dirty Pipe: LPE, no subsystem gate, so it lands `applicable` on a 5.10 kernel with no evidence at all.
+  const dirtyPipe = assessKernelCves('5.10', evidence({}));
+  const row = (findings: ReturnType<typeof kernelCveFindings>, id: string) =>
+    findings.find((f) => f.title.startsWith(id));
+
+  it('lowers an applicable LPE where the image ships no privilege to escalate from', () => {
+    const withCtx = row(kernelCveFindings('5.10', dirtyPipe, noBoundary), 'CVE-2022-0847');
+    const without = row(kernelCveFindings('5.10', dirtyPipe), 'CVE-2022-0847');
+    expect(without?.severity).toBe('high');
+    expect(withCtx?.severity).toBe('medium');
+    const ev = withCtx?.evidence as Record<string, unknown>;
+    expect(ev.publishedSeverity).toBe('high');
+    expect(ev.deviceTriage).toBe('lpe-without-privilege-boundary');
+    // The gating sentence the row already carried is kept, not replaced.
+    expect(withCtx?.rationale).toContain('curated mainline range');
+    expect(withCtx?.rationale).toContain('no privilege to escalate from');
+  });
+
+  it('does not re-weight a row whose applicability could not be decided', () => {
+    // CVE-2021-22555 needs CONFIG_NETFILTER; with no evidence it is `unknown` → blocked_by_platform. Adjusting
+    // its severity would put a confident number on the one row whose whole message is that nobody could tell.
+    const assessments = assessKernelCves('4.4.282', evidence({}));
+    const unknown = assessments.find((a) => a.id === 'CVE-2021-22555');
+    expect(unknown?.state).toBe('unknown');
+    const withCtx = row(kernelCveFindings('4.4.282', assessments, noBoundary), 'CVE-2021-22555');
+    expect(withCtx?.proofState).toBe('blocked_by_platform');
+    expect((withCtx?.evidence as Record<string, unknown>).deviceTriage).toBeUndefined();
+  });
+
+  it('changes no row at all when no context is supplied', () => {
+    const plain = kernelCveFindings('5.10', dirtyPipe);
+    for (const f of plain) expect((f.evidence as Record<string, unknown>).deviceTriage).toBeUndefined();
+  });
+
+  it('emits the same number of rows with and without a context', () => {
+    expect(kernelCveFindings('5.10', dirtyPipe, noBoundary)).toHaveLength(dirtyPipe.length);
+    expect(kernelCveFindings('5.10', dirtyPipe)).toHaveLength(dirtyPipe.length);
   });
 });

@@ -17,6 +17,8 @@ import type {
   Finding,
   FindingProvenance,
   FindingSeverity,
+  FirmwareClass,
+  ImageIdentity,
   OperatorAssertion,
   OperatorAuthorKind,
 } from '@firmlab/core';
@@ -30,11 +32,13 @@ import {
   operatorSourceFor,
   withdrawAssertion,
 } from './operator-findings.js';
+import { type DeviceContext, readDeviceContext } from './providers/cve-device-triage.js';
 import {
   type FindingRow,
   type ImageNoteRow,
   deleteFindingsBySource,
   getFinding,
+  getImage,
   insertFindings,
   insertImageNote,
   listFindingsBySource,
@@ -49,6 +53,32 @@ export {
   normalizeBinaryHardening,
   credentialHashesFromFindings,
 } from './findings-normalize.js';
+
+/**
+ * The device context for one image, bound to the store — the one place that reads an image's classified
+ * identity and hands `cve-device-triage.ts` the two facts it needs.
+ *
+ * It lives here rather than in a route because three lanes now want it (sbom, kernel, and W9 through
+ * `opacidad.ts`) and they must all get the SAME answer for the same image: a triage that said different things
+ * to the autonomous scan and the manual run would be worse than no triage at all.
+ *
+ * Every failure is `unknown`, never a default. An image with no identity row, an `identityJson` that does not
+ * parse, an absent rootfs — each leaves the corresponding half undetermined, and an undetermined half produces
+ * no verdict. There is deliberately no fallback class: guessing `embedded-linux` for an image whose identity
+ * could not be read would put a device-shaped opinion on a device nobody identified.
+ */
+export function deviceContextFor(imageId: string, rootfsPath: string | null): DeviceContext {
+  let firmwareClass: FirmwareClass = 'unknown';
+  const row = getImage(imageId);
+  if (row?.identityJson) {
+    try {
+      firmwareClass = (JSON.parse(row.identityJson) as ImageIdentity).firmwareClass ?? 'unknown';
+    } catch {
+      // A stored identity that no longer parses is an unknown class, not a reason to fail the lane.
+    }
+  }
+  return readDeviceContext(rootfsPath, firmwareClass);
+}
 
 /**
  * Replace the finding set contributed by one `source` for an image and insert the freshly normalized drafts.

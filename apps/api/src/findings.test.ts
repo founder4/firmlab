@@ -8,6 +8,11 @@ import {
   normalizeSbom,
   normalizeSecrets,
 } from './findings-normalize.js';
+import {
+  type DeviceContext,
+  privilegeBoundaryFromPasswd,
+  processSupervisionForClass,
+} from './providers/cve-device-triage.js';
 import type { DecompileResult } from './providers/decompile.js';
 import type { GitleaksFinding, GitleaksResult } from './providers/gitleaks.js';
 import type { SbomResult } from './providers/sbom.js';
@@ -54,6 +59,75 @@ describe('normalizeSbom', () => {
 
   it('returns nothing when the SBOM is unavailable', () => {
     expect(normalizeSbom({ ...base, available: false })).toEqual([]);
+  });
+
+  /**
+   * Device-context triage, AS WIRED. `cve-device-triage.test.ts` proves the decision; these prove the row
+   * actually carries it — which is the half a green unit suite does not show, and the half that was wrong in
+   * four web panels this project has already paid for.
+   */
+  describe('device-context triage on the row', () => {
+    const routerCtx: DeviceContext = {
+      firmwareClass: 'embedded-linux',
+      privilegeBoundary: privilegeBoundaryFromPasswd('root:x:0:0::/root:/bin/ash\ndaemon:x:1:1::/var:/bin/false'),
+      processSupervision: processSupervisionForClass('embedded-linux'),
+    };
+    const LOCAL = 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H';
+    const lpe = (vector?: string): SbomResult => ({
+      ...base,
+      vulnerabilities: [
+        {
+          id: 'CVE-2022-0847',
+          severity: 'High',
+          packageName: 'linux',
+          packageVersion: '5.10',
+          fixedIn: null,
+          ...(vector ? { cvssVector: vector } : {}),
+        },
+      ],
+    });
+
+    it('lowers an LPE row and keeps the published severity ON the row', () => {
+      const out = normalizeSbom(lpe(LOCAL), routerCtx);
+      expect(out).toHaveLength(1);
+      expect(out[0]?.severity).toBe('medium');
+      const ev = out[0]?.evidence as Record<string, unknown>;
+      // The published severity is never lost — a reader who rejects the rule can put it back.
+      expect(ev.publishedSeverity).toBe('high');
+      expect(ev.deviceTriage).toBe('lpe-without-privilege-boundary');
+      expect(ev.deviceTriageKind).toBe('deprioritized');
+      expect(out[0]?.rationale).toContain('no privilege to escalate from');
+      // And the curated lane's own sentence is not displaced by it.
+      expect(out[0]?.rationale).toContain('reachability and exploitability not yet proven');
+    });
+
+    it('leaves the row untouched when no device context is supplied at all', () => {
+      const out = normalizeSbom(lpe(LOCAL));
+      expect(out[0]?.severity).toBe('high');
+      expect((out[0]?.evidence as Record<string, unknown>).deviceTriage).toBeUndefined();
+    });
+
+    it('leaves a row stored by a build older than `cvssVector` at its published severity', () => {
+      // The persisted-result rule, exercised: no vector on the row means `unknown` impact means no verdict.
+      const out = normalizeSbom(lpe(), routerCtx);
+      expect(out[0]?.severity).toBe('high');
+      expect((out[0]?.evidence as Record<string, unknown>).deviceTriage).toBeUndefined();
+    });
+
+    it('never changes the finding COUNT, whatever it decides', () => {
+      // The rule `CLAUDE.md` states for the two CVE lanes, applied to this third opinion: a stricter reading
+      // must never show up as fewer findings.
+      const many: SbomResult = {
+        ...base,
+        vulnerabilities: [
+          { id: 'A', severity: 'High', packageName: 'p', packageVersion: '1', fixedIn: null, cvssVector: LOCAL },
+          { id: 'B', severity: 'Low', packageName: 'p', packageVersion: '1', fixedIn: null, cvssVector: LOCAL },
+          { id: 'C', severity: 'Critical', packageName: 'p', packageVersion: '1', fixedIn: null },
+        ],
+      };
+      expect(normalizeSbom(many, routerCtx)).toHaveLength(3);
+      expect(normalizeSbom(many)).toHaveLength(3);
+    });
   });
 
   /**

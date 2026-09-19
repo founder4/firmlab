@@ -306,13 +306,42 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   detrás de `FIRMLAB_RESEARCH`/egress-ledger, adquiriendo SOLO el producto ya identificado y registrando
   procedencia (SHA-256, URL, versión confirmada por strings, no por nombre de fichero). Firmware bajado = dato
   no confiable, nunca se ejecuta. Ref: galert `firmware-acquire.txt`.
-- [ ] **(b) Triage de CVE por contexto de dispositivo.** Complementa el item de "profundizar correlación
-  kernel-CVE" de arriba con reglas de poda de falsos positivos: CVE de GUI/X11 = FP en un headless; subsistema
-  del kernel no compilado (Bluetooth/USB-gadget/FS exóticos) = FP; LPE local = severidad menor cuando todo ya
-  corre como root (común en embebido); DoS = mayor en RTOS (sin init que reinicie una tarea caída) que en Linux
-  (watchdog reinicia). Preservar SIEMPRE el score NVD base y anotar el ajuste con su rationale. Encaja en
-  `component-cve.ts`/`kernel-cve.ts`. Ref: galert `firmware-sbom.txt` (device-context triage + checklist de CVE
-  embebidos de alto valor: BusyBox awk, Dropbear empty-auth, dnsmasq DNSpooq, curl SOCKS5, DirtyPipe).
+- [x] **(b) Triage de CVE por contexto de dispositivo.** Un score CVSS es una afirmación sobre una clase de
+  despliegue, y el firmware embebido no es la clase para la que se puntuó. *(Hecho: `providers/cve-device-triage.ts`,
+  puro y sin store, con dos reglas que apuntan en direcciones opuestas: una **LPE baja** un escalón donde la imagen
+  no envía privilegio del que escalar —`/etc/passwd` con root y cuentas de servicio `nologin`, que es el router
+  SOHO típico—, y un **DoS sube** un escalón donde no hay nada que reinicie —`rtos`/`baremetal` no tienen modelo de
+  procesos, así que un fallo se lleva el dispositivo y no un demonio—. `impactFromVector` clasifica la forma del
+  fallo desde el vector CVSS v3.x/v4.0 (v4 renombra C/I/A a VC/VI/VA y se leen los dos juegos), y el orden de las
+  pruebas es deliberado: un fallo que da ejecución de código Y tumba la caja es RCE, no DoS — leer disponibilidad
+  primero habría archivado cada RCE como DoS y lo habría ESCALADO en RTOS.*
+
+  *Las cuatro negativas son el diseño, no un recorte: **(1)** nunca suprime una fila ni cambia un recuento —el
+  veredicto cabalga SOBRE el hallazgo igual que `curatedCveVerdict`, y hay un test que fija el recuento con y sin
+  contexto—; **(2)** la severidad publicada se conserva siempre, en `publishedSeverity` sobre la evidencia y en la
+  frase, de modo que un lector que rechace la regla puede deshacerla; **(3)** **solo evidencia POSITIVA puede
+  despriorizar** — un `/etc/passwd` ilegible es `unknown`, no un límite de privilegio ausente, y todo `unknown`
+  devuelve `null`: no existe camino de «no pudimos mirar» a «esto importa menos», que es la única inversión que
+  todo el banco existe para impedir. El escalado es la dirección segura y sí puede correr sobre una propiedad
+  estructural de la clase; **(4)** se mueve un escalón y nunca llega a `info`, porque una fila `info` se lee como
+  inventario y despriorizar hasta ahí habría sido suprimir por la puerta de atrás.*
+
+  *Cableado en los dos carriles bajo un único binder —`deviceContextFor` en `findings.ts`, para que el scan
+  autónomo y la ejecución manual no puedan darle respuestas distintas a la misma imagen—: filas de grype vía
+  `normalizeSbom` (con `SbomVuln.cvssVector` nuevo, **opcional para siempre**, y `preferredCvssVector` eligiendo
+  3.1 → 3.0 → 4.0 porque grype adjunta una entrada por fuente y quedarse con la primera haría que la elección
+  fuera un artefacto del orden del feed) y filas curadas de kernel vía `kernelCveFindings`, donde `impactSeverity`
+  mapeaba LPE→high en toda imagen por igual. En el kernel se limita a las filas `applicable`: una fila `unknown`
+  ya es `blocked_by_platform` y ponerle una severidad confiada argumentaría lo contrario de lo que esa fila dice.
+  34 casos nuevos; revertir cada regla con los tests puestos falla 4 y 1 respectivamente, en el módulo puro y en
+  los dos puntos de cableado.)*
+
+- [ ] Pendiente del mismo ítem, separado porque es otra pieza: el **checklist de CVE embebidos de alto valor** de
+  galert (BusyBox awk, Dropbear empty-auth, dnsmasq DNSpooq, curl SOCKS5, DirtyPipe) contra la tabla curada de
+  `component-cve.ts`, y la poda por **subsistema de kernel no compilado** más allá de los 27 `CONFIG_*` que
+  `KERNEL_OPTION_KNOWLEDGE` ya conoce (faltan sobre todo los gráficos —DRM/framebuffer— y USB-gadget, que es
+  donde vive el ruido de la consulta NVD por prefijo). El mecanismo de tres estados ya existe y es correcto; lo
+  que falta es tabla, no diseño.
 - [ ] **(b') Fuentes de taint específicas de firmware.** Enriquecer el scaffold de taint (ver "cross-binary
   dataflow" arriba) con las SOURCES canónicas de vendor, que rara vez son un `recv` crudo: getters HTTP/CGI
   (`websGetVar`/`webGetVar`/`GetValue`/`get_cgi`/`httpGetEnv`) y NVRAM/env (`nvram_get`/`nvram_safe_get`/

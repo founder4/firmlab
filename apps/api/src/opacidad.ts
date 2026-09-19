@@ -19,6 +19,7 @@ import type { Architecture, ImageIdentity } from '@firmlab/core';
 import { deviceFamilyKey, recordCredentialHashes, recordReachabilityPrior } from './corpus.js';
 import {
   credentialHashesFromFindings,
+  deviceContextFor,
   normalizeBinaryHardening,
   normalizeSbom,
   rowToFinding,
@@ -392,7 +393,7 @@ async function auxsecretsRun(c: RunCtx): Promise<StepOutcome> {
 
 async function sbomRun(c: RunCtx): Promise<StepOutcome> {
   const r = await runSbom(c.imageId, c.rootfsPath as string, c.handle);
-  const drafts = normalizeSbom(r);
+  const drafts = normalizeSbom(r, deviceContextFor(c.imageId, c.rootfsPath));
   syncFindings(c.imageId, 'sbom', drafts);
   // `available:false` is syft's call, and it too has two shapes that were rendered as one: syft absent (the
   // deployment's `install-tool`) and syft ran-and-threw (a `retry`). The note now comes from `r.reason`, which
@@ -471,7 +472,13 @@ async function servicemapRun(c: RunCtx): Promise<StepOutcome> {
  * answer, not a skip.
  */
 async function kernelRun(c: RunCtx): Promise<StepOutcome> {
-  const r = runKernelPosture(c.imagePath, c.rootfsPath, c.outputDir);
+  const r = runKernelPosture(
+    c.imagePath,
+    c.rootfsPath,
+    c.outputDir,
+    Date.now(),
+    deviceContextFor(c.imageId, c.rootfsPath),
+  );
   if (r.moduleSupport) c.kernelModuleSupport = r.moduleSupport;
   syncFindings(c.imageId, 'kernel', r.findings);
   if (!r.located) {

@@ -8,6 +8,7 @@
  */
 import type { EvidenceChannel, FindingSeverity, ProofState } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
+import { type DeviceContext, deviceContextTriage } from './cve-device-triage.js';
 import type { DecodedKallsyms } from './kallsyms.js';
 import type { KernelPostureResult } from './kernelposture.js';
 import { LINUX_KERNEL_CNA_SOURCE, type NvdCandidate, type NvdComponentResult } from './nvd.js';
@@ -473,31 +474,60 @@ function impactSeverity(impact: KernelCveRule['impact']): FindingSeverity {
   return 'medium';
 }
 
-export function kernelCveFindings(version: string, assessments: readonly KernelCveAssessment[]): FindingDraft[] {
-  return assessments.map((assessment) => ({
-    kind: 'kernel-cve',
-    title: `${assessment.id} (${assessment.impact}) — ${assessment.note}`,
-    severity: impactSeverity(assessment.impact),
-    proofState:
-      assessment.state === 'applicable'
-        ? 'needs_runtime_reproduction'
-        : assessment.state === 'ruled_out'
-          ? 'false_positive'
-          : 'blocked_by_platform',
-    evidence: {
-      kernel: version,
-      state: assessment.state,
-      reason: assessment.reason,
-      required: assessment.required,
-      mitigations: assessment.mitigations,
-    },
-    rationale:
-      assessment.state === 'applicable'
-        ? `Linux ${version} is inside the curated mainline range and its required subsystem evidence is present. This is a candidate only: vendor backports and runtime reachability were not established.`
-        : assessment.state === 'ruled_out'
-          ? `The version is in range, but a required condition was checked and dismissed: ${assessment.reason}.`
-          : `The version is in range, but applicability could not be decided: ${assessment.reason}. Unknown is not absence and is not a clean result.`,
-  }));
+/**
+ * `device` is optional and adjusts the severity of an APPLICABLE row only.
+ *
+ * The rule's `impact` is already the right axis for this — `LPE`/`RCE`/`DoS` are exactly what
+ * `cve-device-triage.ts` reads — so the kernel lane needs no vector: it has the classification first-hand. What
+ * it lacked was the device half, and `impactSeverity` mapping LPE→high on every image alike is the flat reading
+ * the triage exists to replace.
+ *
+ * It is confined to `applicable` deliberately. A `ruled_out` row is already `false_positive` and a `unknown` row
+ * is already `blocked_by_platform`; re-weighting either would be adjusting a severity nobody is going to act on,
+ * and on the `unknown` row it would be worse than useless — that row's whole message is that the question could
+ * not be answered, and a confident severity on it would argue the opposite.
+ */
+export function kernelCveFindings(
+  version: string,
+  assessments: readonly KernelCveAssessment[],
+  device?: DeviceContext,
+): FindingDraft[] {
+  return assessments.map((assessment) => {
+    const published = impactSeverity(assessment.impact);
+    const triage =
+      device && assessment.state === 'applicable' ? deviceContextTriage(assessment.impact, published, device) : null;
+    return {
+      kind: 'kernel-cve',
+      title: `${assessment.id} (${assessment.impact}) — ${assessment.note}`,
+      severity: triage ? triage.adjustedSeverity : published,
+      proofState:
+        assessment.state === 'applicable'
+          ? 'needs_runtime_reproduction'
+          : assessment.state === 'ruled_out'
+            ? 'false_positive'
+            : 'blocked_by_platform',
+      evidence: {
+        kernel: version,
+        state: assessment.state,
+        reason: assessment.reason,
+        required: assessment.required,
+        mitigations: assessment.mitigations,
+        ...(triage
+          ? { deviceTriage: triage.rule, deviceTriageKind: triage.kind, publishedSeverity: triage.baseSeverity }
+          : {}),
+      },
+      rationale: [
+        assessment.state === 'applicable'
+          ? `Linux ${version} is inside the curated mainline range and its required subsystem evidence is present. This is a candidate only: vendor backports and runtime reachability were not established.`
+          : assessment.state === 'ruled_out'
+            ? `The version is in range, but a required condition was checked and dismissed: ${assessment.reason}.`
+            : `The version is in range, but applicability could not be decided: ${assessment.reason}. Unknown is not absence and is not a clean result.`,
+        triage?.note,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    };
+  });
 }
 
 // External-NVD compatibility: the research lane already uses these helpers to form its bounded online query. The

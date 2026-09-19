@@ -62,6 +62,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import type { FindingSeverity } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
+import type { DeviceContext } from './cve-device-triage.js';
 import { type DecodedKallsyms, decodeKallsyms } from './kallsyms.js';
 import {
   KERNEL_OPTION_KNOWLEDGE,
@@ -1182,10 +1183,15 @@ export function moduleProvenanceFindings(mods: ModuleEvidence | null): FindingDr
   return drafts;
 }
 
-export function postureFindings(result: Omit<KernelPostureResult, 'findings'>): FindingDraft[] {
+/**
+ * `device` is optional and reaches exactly one place: the curated kernel-CVE rows, where it may move an
+ * APPLICABLE row's severity one step (see `kernelCveFindings`). Nothing else here is device-relative — a
+ * tainted module or an out-of-tree one is the same fact on every box — so it is not threaded any further.
+ */
+export function postureFindings(result: Omit<KernelPostureResult, 'findings'>, device?: DeviceContext): FindingDraft[] {
   const drafts: FindingDraft[] = [];
   drafts.push(...moduleProvenanceFindings(result.modules));
-  if (result.version) drafts.push(...kernelCveFindings(result.version, result.cves));
+  if (result.version) drafts.push(...kernelCveFindings(result.version, result.cves, device));
 
   if (!result.located) {
     drafts.push({
@@ -1621,6 +1627,7 @@ export function runKernelPosture(
   rootfsPath: string | null,
   outputDir: string | null,
   nowMs: number = Date.now(),
+  device?: DeviceContext,
 ): KernelPostureResult {
   const searched: string[] = [];
   const bounds: string[] = [];
@@ -1810,5 +1817,5 @@ export function runKernelPosture(
       : 'No Linux kernel was located. The posture questions were asked and could not be answered — a coverage gap, not a clean result.',
   };
 
-  return { ...shell, findings: postureFindings(shell) };
+  return { ...shell, findings: postureFindings(shell, device) };
 }

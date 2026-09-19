@@ -10,7 +10,7 @@
  * `lib/modules/<version>/` and the shipped module signatures are the strongest evidence a firmware offers.
  */
 import type { FastifyInstance } from 'fastify';
-import { syncFindings } from '../findings.js';
+import { deviceContextFor, syncFindings } from '../findings.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
 import { runKernelPosture } from '../providers/kernelposture.js';
@@ -31,7 +31,7 @@ export async function kernelRoutes(app: FastifyInstance): Promise<void> {
     if (!row) return reply.status(404).send({ error: 'Image not found' });
     const { rootfsPath, outputDir } = latestExtraction(id);
     const jobId = startJob(id, 'kernel', {}, async () => {
-      const result = runKernelPosture(row.path, rootfsPath, outputDir);
+      const result = runKernelPosture(row.path, rootfsPath, outputDir, Date.now(), deviceContextFor(id, rootfsPath));
       syncFindings(id, 'kernel', result.findings);
       return result;
     });
