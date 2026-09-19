@@ -10,10 +10,18 @@
  *   - binary hardening    → `static_confirmed`  (an NX/canary/PIC flag is a fact about the binary)
  *   - SBOM CVEs           → `needs_runtime_reproduction`  (a vulnerable component is present, but reachability
  *                            and on-device exploitability are unproven — never overstated), annotated with the
- *                            curated table's verdict where it has one (see `curatedCveVerdict`)
+ *                            curated table's verdict where it has one (see `curatedCveVerdict`) and with the
+ *                            device-context adjustment where the image supports one (see `cve-device-triage.ts`)
+ *
+ * **A severity on a row is "how much should I care HERE", and the published score is never lost to it.** Device
+ * triage may move a row one step — an LPE down where the image ships no privilege to escalate from, a DoS up
+ * where nothing would restart the device — and when it does, the published severity goes onto the evidence as
+ * `publishedSeverity` and the reason goes into the rationale. No row is ever removed, and no count changes:
+ * a stricter reading that showed up as fewer findings is the failure `CLAUDE.md` names for the two CVE lanes.
  */
 import type { EvidenceChannel, Finding, FindingSeverity, ProofState, StringHit } from '@firmlab/core';
 import { curatedCveVerdict } from './providers/component-cve.js';
+import { type DeviceContext, deviceContextTriage, impactFromVector } from './providers/cve-device-triage.js';
 import type { DecompileResult } from './providers/decompile.js';
 import type { GitleaksFinding, GitleaksResult } from './providers/gitleaks.js';
 import type { SbomResult, Severity } from './providers/sbom.js';
@@ -88,26 +96,43 @@ const SBOM_SEVERITY: Record<Severity, FindingSeverity> = {
  * CVE the curated table evaluated and refuses" — the choice that used to be an accident of which provider ran.
  * `curatedCveVerdict` returns null when it has no opinion, and then nothing is added: silence is not agreement.
  */
-export function normalizeSbom(result: SbomResult): FindingDraft[] {
+export function normalizeSbom(result: SbomResult, device?: DeviceContext): FindingDraft[] {
   if (!result.available) return [];
   const base = 'Vulnerable component present in the rootfs; reachability and exploitability not yet proven.';
   return result.vulnerabilities.map((v) => {
     const verdict = curatedCveVerdict(v.packageName, v.packageVersion, v.id);
+    const published = SBOM_SEVERITY[v.severity] ?? 'info';
+    // The device context is an OPTIONAL second opinion, and it can only speak when it was supplied AND the row
+    // carries a vector to read. Both absences are ordinary — a caller that has no rootfs, a result stored by a
+    // build older than `cvssVector` — and both leave the row at its published severity, untouched.
+    const triage = device ? deviceContextTriage(impactFromVector(v.cvssVector), published, device) : null;
     return {
       kind: 'cve',
       title: `${v.id} — ${v.packageName} ${v.packageVersion}`,
-      severity: SBOM_SEVERITY[v.severity] ?? 'info',
+      // The severity the ROW carries is the adjusted one, because that is the question "how much should I care
+      // about this, here" — and the published one is never lost: it is on the evidence and in the sentence.
+      severity: triage ? triage.adjustedSeverity : published,
       proofState: 'needs_runtime_reproduction' as ProofState,
       // A published database says this version is affected. Nothing here was measured on THIS image beyond the
       // package's presence — which is exactly the distinction the channel exists to make visible.
       evidenceChannel: 'external_advisory' as EvidenceChannel,
-      rationale: verdict ? `${base} ${verdict.note}` : base,
+      rationale: [base, verdict?.note, triage?.note].filter(Boolean).join(' '),
       evidence: {
         id: v.id,
         packageName: v.packageName,
         packageVersion: v.packageVersion,
         fixedIn: v.fixedIn,
+        ...(v.cvssVector ? { cvssVector: v.cvssVector } : {}),
         ...(verdict ? { curatedVerdict: verdict.kind } : {}),
+        ...(triage
+          ? {
+              deviceTriage: triage.rule,
+              deviceTriageKind: triage.kind,
+              // The published severity, kept on the row so the adjustment can be undone by a reader who
+              // disagrees with the rule — and so nothing here is the only copy of it.
+              publishedSeverity: triage.baseSeverity,
+            }
+          : {}),
       },
     };
   });

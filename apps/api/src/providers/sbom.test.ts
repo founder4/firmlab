@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { type SbomVuln, type Severity, emptyCounts, normalizeSeverity, rankVulnerabilities } from './sbom.js';
+import {
+  type SbomVuln,
+  type Severity,
+  emptyCounts,
+  normalizeSeverity,
+  preferredCvssVector,
+  rankVulnerabilities,
+} from './sbom.js';
 
 describe('normalizeSeverity', () => {
   it('maps known grype severities case-insensitively', () => {
@@ -91,5 +98,54 @@ describe('sbom — the cut is by severity, and the counts are of everything', ()
     const twice = rankVulnerabilities([...set].reverse()).sorted.map((v) => v.id);
     expect(once).toEqual(twice);
     expect(once).toEqual(['CVE-A', 'CVE-B', 'CVE-C']);
+  });
+});
+
+/**
+ * grype attaches one CVSS entry per scoring source, so the same CVE routinely arrives with several vectors at
+ * once. Taking the first would make the choice an artifact of feed order — and on a v2-first row it would hand
+ * triage a vector with no metric that separates a local escalation from a remote one.
+ */
+describe('preferredCvssVector', () => {
+  const V2 = 'AV:N/AC:L/Au:N/C:P/I:P/A:P';
+  const V30 = 'CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H';
+  const V31 = 'CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H';
+  const V40 = 'CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H';
+
+  it('prefers 3.1 over everything else, whatever order they arrive in', () => {
+    const entries = [
+      { version: '2.0', vector: V2 },
+      { version: '4.0', vector: V40 },
+      { version: '3.1', vector: V31 },
+      { version: '3.0', vector: V30 },
+    ];
+    expect(preferredCvssVector(entries)).toBe(V31);
+    expect(preferredCvssVector([...entries].reverse())).toBe(V31);
+  });
+
+  it('falls to 3.0, then 4.0, rather than dropping a usable vector', () => {
+    expect(
+      preferredCvssVector([
+        { version: '2.0', vector: V2 },
+        { version: '3.0', vector: V30 },
+      ]),
+    ).toBe(V30);
+    expect(
+      preferredCvssVector([
+        { version: '2.0', vector: V2 },
+        { version: '4.0', vector: V40 },
+      ]),
+    ).toBe(V40);
+  });
+
+  it('skips a v2-only row rather than passing a vector triage cannot read', () => {
+    expect(preferredCvssVector([{ version: '2.0', vector: V2 }])).toBeUndefined();
+  });
+
+  it('is undefined for the shapes grype actually omits', () => {
+    expect(preferredCvssVector(undefined)).toBeUndefined();
+    expect(preferredCvssVector([])).toBeUndefined();
+    expect(preferredCvssVector([{ version: '3.1' }])).toBeUndefined();
+    expect(preferredCvssVector([{ vector: V31 }])).toBeUndefined();
   });
 });

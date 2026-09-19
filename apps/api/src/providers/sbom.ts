@@ -27,6 +27,16 @@ export interface SbomVuln {
   packageName: string;
   packageVersion: string;
   fixedIn: string | null;
+  /**
+   * The CVSS vector grype carried for this match, when it carried one — the METRICS, not the score, because
+   * `providers/cve-device-triage.ts` needs to know whether the flaw is local, remote, or availability-only and
+   * the number cannot answer that. Preferred v3.1 → v3.0 → v4.0, see `preferredCvssVector`.
+   *
+   * OPTIONAL FOREVER: an `SbomResult` is persisted as JSON on the job row and re-read for as long as the image
+   * exists, so a result stored by an older build has no vector and never will. Absent means "not recorded",
+   * never "this CVE has no vector" — and triage reads absence as `unknown`, which produces no verdict.
+   */
+  cvssVector?: string;
 }
 
 export interface SbomResult {
@@ -162,8 +172,34 @@ interface SyftArtifact {
   type?: string;
 }
 interface GrypeMatch {
-  vulnerability?: { id?: string; severity?: string; fix?: { versions?: string[] } };
+  vulnerability?: {
+    id?: string;
+    severity?: string;
+    fix?: { versions?: string[] };
+    cvss?: { version?: string; vector?: string }[];
+  };
   artifact?: { name?: string; version?: string };
+}
+
+/**
+ * Pure: pick one CVSS vector out of the several grype may attach to a match.
+ *
+ * grype carries an entry per scoring source, so the same CVE routinely arrives with a v2, a v3.1 and a v4.0
+ * vector at once. Taking the first would make the choice an artifact of feed order, and v2 has no metric that
+ * distinguishes a local escalation from a remote one in the shape triage reads. The preference is explicit —
+ * 3.1, then 3.0, then 4.0 — and anything else is skipped rather than passed along to be mis-parsed. Undefined
+ * when there is nothing usable, which triage reads as `unknown` and leaves the row alone.
+ *
+ * 4.0 ranks last only because it is the least represented in the databases in hand today; `cvssMetrics` reads
+ * it fully, so a match carrying only a 4.0 vector is still triaged.
+ */
+export function preferredCvssVector(entries: { version?: string; vector?: string }[] | undefined): string | undefined {
+  if (!Array.isArray(entries)) return undefined;
+  for (const want of ['3.1', '3.0', '4.0']) {
+    const hit = entries.find((e) => typeof e.vector === 'string' && e.vector && e.version?.startsWith(want));
+    if (hit?.vector) return hit.vector;
+  }
+  return undefined;
 }
 
 export async function runSbom(_imageId: string, rootfsPath: string, handle: JobHandle): Promise<SbomResult> {
@@ -239,12 +275,14 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
         vulnerabilityTotal = matches.length;
         const mapped: SbomVuln[] = matches.map((m) => {
           const fixVersions = m.vulnerability?.fix?.versions;
+          const vector = preferredCvssVector(m.vulnerability?.cvss);
           return {
             id: String(m.vulnerability?.id ?? '?'),
             severity: normalizeSeverity(m.vulnerability?.severity),
             packageName: String(m.artifact?.name ?? '?'),
             packageVersion: String(m.artifact?.version ?? ''),
             fixedIn: Array.isArray(fixVersions) && fixVersions.length > 0 ? fixVersions.join(', ') : null,
+            ...(vector ? { cvssVector: vector } : {}),
           };
         });
         // Rank and count over EVERY match, then cut. The cap used to be applied to grype's raw array first, so it
