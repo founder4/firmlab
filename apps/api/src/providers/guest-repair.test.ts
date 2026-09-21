@@ -2,17 +2,26 @@ import { describe, expect, it } from 'vitest';
 import {
   FLUSHED,
   type GuestRepairInputs,
+  INITTAB_LINE_MAX,
   REPAIR_FLAG,
   RULES_BEGIN,
   RULES_END,
+  chooseRepairPlacement,
   describeRepairDisposition,
   describeRuleset,
+  findSysinitInsertion,
+  insertAfterShebang,
   planGuestRepair,
   readGuestRuleset,
 } from './guest-repair.js';
 
-const inputs = (o: Partial<Parameters<typeof planGuestRepair>[0]> = {}) => ({
+const RCS = '#!/bin/sh\nifconfig lo 127.0.0.1 up\n/usr/bin/httpd\n';
+const INITTAB = '# vendor\n::sysinit:/etc/rc.d/rcS\n::askfirst:-/bin/sh\n::ctrlaltdel:/sbin/reboot\n';
+
+const inputs = (o: Partial<GuestRepairInputs> = {}): GuestRepairInputs => ({
   initScript: 'etc/rc.d/rcS',
+  initScriptText: RCS,
+  inittab: INITTAB,
   hasIptablesStop: true,
   hasIptablesSave: true,
   hasPing: true,
@@ -42,9 +51,22 @@ describe('planGuestRepair', () => {
   });
 
   it('waits with ping, because this busybox has no sleep', () => {
-    // BusyBox 1.01 on the WR940N and the MR3220 ships no `sleep` applet at all, and `rcS` brings `lo` up a few
-    // lines earlier. Firing immediately would read an empty ruleset before httpd had installed one.
+    // BusyBox 1.01 on the WR940N and the MR3220 ships no `sleep` applet at all. Firing immediately would read an
+    // empty ruleset before httpd had installed one.
     expect(planGuestRepair(inputs()).line).toMatch(/ping -c \d+ 127\.0\.0\.1/);
+  });
+
+  /**
+   * The timer's precondition moved with the placement, and it would have failed silently. Appended at the END of
+   * `rcS` the wait could assume `lo` was already up; executed BEFORE `rcS` it cannot, and `ping` against a down
+   * loopback exits in milliseconds — so a bare `ping -c 20` would have elapsed the entire wait at t≈0, read an
+   * empty ruleset and flushed rules httpd had not installed yet. A measurement-shaped nothing.
+   */
+  it('retries the ping, because it now runs before the vendor brings `lo` up', () => {
+    const line = planGuestRepair(inputs()).line ?? '';
+    expect(line).toMatch(/until ping -c \d+ 127\.0\.0\.1/);
+    // …and it is bounded, so a guest whose `lo` never comes up stops forking instead of spinning for the whole boot.
+    expect(line).toMatch(/\|\| \[ \$n -ge \d+ \]/);
   });
 
   it('backgrounds itself so the vendor boot is not held up by the wait', () => {
@@ -60,11 +82,22 @@ describe('planGuestRepair', () => {
   });
 
   describe('refuses rather than improvises', () => {
-    it('does nothing when there is no init script, and says the guest booted as shipped', () => {
-      const p = planGuestRepair(inputs({ initScript: null }));
+    it('does nothing when there is no init layout at all, and says the guest booted as shipped', () => {
+      const p = planGuestRepair(inputs({ initScript: null, initScriptText: null, inittab: null }));
       expect(p.line).toBeNull();
+      expect(p.placement).toBeNull();
       expect(p.interventions).toEqual([]);
       expect(p.skipped[0]).toMatch(/boots exactly as shipped/);
+    });
+
+    it('refuses when the inittab is unreadable and there is no init script to fall back to', () => {
+      const p = planGuestRepair(inputs({ initScript: null, initScriptText: null, inittab: 'garbage\n' }));
+      expect(p.line).toBeNull();
+      expect(p.placement).toBeNull();
+      expect(p.interventions).toEqual([]);
+      // The refusal names what it could not read AND why appending anyway would have been worse than nothing.
+      expect(p.skipped[0]).toMatch(/not id:runlevels:action:process/);
+      expect(p.skipped[0]).toMatch(/no CPU executed/);
     });
 
     it('does NOT inject a flush of its own when the firmware ships none', () => {
@@ -130,12 +163,7 @@ describe('readGuestRuleset', () => {
  * `attempted` exists at all.
  */
 describe('describeRepairDisposition — "nobody asked" is not "asked and changed nothing"', () => {
-  const plannable: GuestRepairInputs = {
-    initScript: 'etc/rc.d/rcS',
-    hasIptablesStop: true,
-    hasIptablesSave: true,
-    hasPing: true,
-  };
+  const plannable: GuestRepairInputs = inputs();
 
   it('reports the flag being off as silence, and refuses to say the image was as shipped', () => {
     const d = describeRepairDisposition(false, null);
@@ -189,5 +217,130 @@ describe('describeRepairDisposition — "nobody asked" is not "asked and changed
     ]) {
       expect(d.note).toContain(REPAIR_FLAG);
     }
+  });
+});
+
+/**
+ * The defect this replaced: the repair was APPENDED to the end of `/etc/rc.d/rcS`, which is the one point of the
+ * boot that is never reached — the vendor's `rcS` ends by starting the daemons that keep the system up and does not
+ * return. So `interventions: [1]` was reported for a line no CPU ever executed, and nothing short of reading the
+ * guest's console could tell the two apart. These fixtures are about WHERE the line lands, because that is the
+ * entire difference between a repair and a note in a file.
+ */
+describe('where the repair lands', () => {
+  const VENDOR_SYSINIT = '::sysinit:/etc/rc.d/rcS';
+
+  it('takes the inittab route, as the FIRST sysinit entry — above the vendor’s own', () => {
+    const p = planGuestRepair(inputs());
+    expect(p.placement?.kind).toBe('inittab-sysinit');
+    expect(p.placement?.file).toBe('etc/inittab');
+    const content = p.placement?.content ?? '';
+    expect(content.indexOf(`::sysinit:${p.line}`)).toBeGreaterThanOrEqual(0);
+    // Ordering IS the fix: busybox init runs sysinit entries in file order and waits for each, so ours executes
+    // before rcS starts and stops depending on whether rcS ever returns.
+    expect(content.indexOf(`::sysinit:${p.line}`)).toBeLessThan(content.indexOf(VENDOR_SYSINIT));
+  });
+
+  it('adds exactly one line and leaves every other byte of the inittab alone', () => {
+    const content = planGuestRepair(inputs()).placement?.content ?? '';
+    const lines = content.split('\n');
+    const ours = lines.findIndex((l) => l.startsWith('::sysinit:('));
+    expect(ours).toBeGreaterThanOrEqual(0);
+    lines.splice(ours, 1);
+    // Byte-identical once our line is taken back out: the restore in rootfs-image puts the original buffer back,
+    // and this is the same promise made where the content is composed.
+    expect(lines.join('\n')).toBe(INITTAB);
+  });
+
+  it('leaves the vendor’s own init script untouched when it can use the inittab', () => {
+    const p = planGuestRepair(inputs());
+    expect(p.placement?.file).not.toBe('etc/rc.d/rcS');
+    expect(p.interventions[0]).toMatch(/No vendor script was edited/);
+    // Nothing was degraded, so nothing is reported as skipped.
+    expect(p.skipped).toEqual([]);
+  });
+
+  describe('degrades to the head of the init script, explicitly, and never to its end', () => {
+    const cases: Array<[string, string | null, RegExp]> = [
+      ['no inittab at all', null, /ships no \/etc\/inittab/],
+      ['an empty inittab', '   \n', /is empty/],
+      ['a line it cannot parse', '# c\nnot:enough\n::sysinit:/etc/rc.d/rcS\n', /not id:runlevels:action:process/],
+      ['no sysinit entry', '::askfirst:-/bin/sh\n::ctrlaltdel:/sbin/reboot\n', /declares no sysinit entry/],
+      ['a SysV-style id on the sysinit entry', 'si::sysinit:/etc/init.d/rcS\n', /attaches such an entry to \/dev\/si/],
+    ];
+
+    for (const [name, inittab, reason] of cases) {
+      it(`falls back on ${name}, and the reason travels onto the intervention`, () => {
+        const p = planGuestRepair(inputs({ inittab }));
+        expect(p.placement?.kind).toBe('init-script-head');
+        expect(p.placement?.file).toBe('etc/rc.d/rcS');
+        expect(p.interventions[0]).toMatch(reason);
+        // A degradation is a skip: the preferred placement was available in principle and was not used.
+        expect(p.skipped.join(' ')).toMatch(/The preferred placement/);
+        expect(p.skipped.join(' ')).toMatch(reason);
+      });
+    }
+
+    it('puts the line after the shebang and BEFORE the vendor body, never at the end', () => {
+      const content = planGuestRepair(inputs({ inittab: null })).placement?.content ?? '';
+      expect(content.startsWith('#!/bin/sh\n(')).toBe(true);
+      expect(content.indexOf('iptables-stop')).toBeLessThan(content.indexOf('/usr/bin/httpd'));
+      expect(content.endsWith(RCS.slice(RCS.indexOf('\n') + 1))).toBe(true);
+    });
+
+    it('refuses the inittab line busybox init would silently truncate into a different command', () => {
+      // busybox reads an inittab line into a fixed 256-byte buffer: over the limit it does not fail, it becomes an
+      // unterminated subshell handed to `/bin/sh -c`. The ceiling is checked before the entry is composed.
+      const long = `(${'x'.repeat(INITTAB_LINE_MAX)}) &`;
+      const chosen = chooseRepairPlacement(inputs(), long);
+      expect(chosen.placement?.kind).toBe('init-script-head');
+      expect(chosen.degraded).toMatch(new RegExp(`truncates an inittab line at ${INITTAB_LINE_MAX}`));
+    });
+
+    it('fits the real line inside that ceiling, which is the only reason the preferred route is available', () => {
+      const p = planGuestRepair(inputs());
+      expect(`::sysinit:${p.line}`.length).toBeLessThanOrEqual(INITTAB_LINE_MAX);
+    });
+  });
+});
+
+describe('findSysinitInsertion', () => {
+  it('finds the first sysinit entry, skipping comments and blank lines', () => {
+    const v = findSysinitInsertion('# a\n\n::respawn:/sbin/getty\n::sysinit:/etc/rc.d/rcS\n::sysinit:/etc/rc.d/rcS2\n');
+    expect(v).toEqual({ usable: true, index: 3 });
+  });
+
+  it('tolerates CRLF, which is a line ending rather than a malformed entry', () => {
+    expect(findSysinitInsertion('# a\r\n::sysinit:/etc/rc.d/rcS\r\n')).toEqual({ usable: true, index: 1 });
+  });
+
+  /** Three refusals with three different meanings — the same discipline as `stampVerdict`. */
+  it('separates "cannot read it" from "no such stage" from "not busybox’s convention"', () => {
+    expect(findSysinitInsertion('hello\n').usable).toBe(false);
+    expect(findSysinitInsertion('::respawn:/sbin/getty\n').usable).toBe(false);
+    expect(findSysinitInsertion('si::sysinit:/etc/init.d/rcS\n').usable).toBe(false);
+    // …and each says which one it is, in a sentence a reader can act on.
+    expect(findSysinitInsertion('hello\n')).toMatchObject({ reason: expect.stringContaining('line 1') });
+    expect(findSysinitInsertion('::respawn:/sbin/getty\n')).toMatchObject({
+      reason: expect.stringContaining('inventing a stage'),
+    });
+    expect(findSysinitInsertion('si::sysinit:/etc/init.d/rcS\n')).toMatchObject({
+      reason: expect.stringContaining('no evidence it ran'),
+    });
+  });
+});
+
+describe('insertAfterShebang', () => {
+  it('goes after the shebang, not before it', () => {
+    expect(insertAfterShebang('#!/bin/sh\nbody\n', 'X')).toBe('#!/bin/sh\nX\nbody\n');
+  });
+
+  it('goes at the top when there is no shebang, because there is nothing to preserve', () => {
+    expect(insertAfterShebang('body\n', 'X')).toBe('X\nbody\n');
+  });
+
+  it('still lands after a file that is nothing but a shebang', () => {
+    // `indexOf('\n') + 1` would be 0 here and would put the line ahead of `#!`, breaking the script.
+    expect(insertAfterShebang('#!/bin/sh', 'X')).toBe('#!/bin/sh\nX\n');
   });
 });

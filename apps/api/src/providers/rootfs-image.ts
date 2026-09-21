@@ -27,6 +27,7 @@ import {
   type GuestRepairInputs,
   REPAIR_FLAG,
   type RepairDisposition,
+  type RepairPlacement,
   describeRepairDisposition,
   planGuestRepair,
 } from './guest-repair.js';
@@ -98,8 +99,8 @@ export function imageIsCurrent(imageMtimeMs: number, rootfsMtimeMs: number): boo
 /**
  * Pure: may a cached image be reused for THIS boot?
  *
- * Freshness is necessary and was not sufficient, and the gap was silent in the worst direction. The repair appends a
- * line to the init script INSIDE the image, so an image built with the flag off is a different artefact from one
+ * Freshness is necessary and was not sufficient, and the gap was silent in the worst direction. The repair inserts a
+ * line into the init layout INSIDE the image, so an image built with the flag off is a different artefact from one
  * built with it on — and reuse compared only mtimes. Measured on the deployed build: with `FIRMLAB_EMU_REPAIR`
  * turned on, a real WR940N boot reused an unrepaired image and returned `repair: undefined`. The operator asked for
  * an intervention and silently did not get one, which is worse than an absent field: it is a result about an
@@ -111,7 +112,7 @@ export function imageIsCurrent(imageMtimeMs: number, rootfsMtimeMs: number): boo
 export function imageReusable(input: {
   imageMtimeMs: number;
   rootfsMtimeMs: number;
-  /** Whether the cached image was built with a repair line appended, read from the sidecar marker. */
+  /** Whether the cached image was built with a repair line inserted, read from the sidecar marker. */
   builtRepaired: boolean;
   /** Whether this boot wants one. */
   wantRepaired: boolean;
@@ -130,7 +131,7 @@ export function imageReusable(input: {
   return { reusable: true, reason: 'it is newer than the rootfs and was built with the same repair disposition' };
 }
 
-/** The sidecar that records whether an image carries an appended repair line. Its presence IS the fact. */
+/** The sidecar that records whether an image carries an inserted repair line. Its presence IS the fact. */
 function repairMarkerPath(imagePath: string): string {
   return `${imagePath}.repaired`;
 }
@@ -290,8 +291,22 @@ export function collectGuestRepairInputs(rootfsPath: string): GuestRepairInputs 
   } catch {
     hasPing = false;
   }
+  // latin1, never utf8: these are vendor files of unknown encoding, and latin1 is the one decoding that round-trips
+  // every byte — the placement is composed from this text and written back, so a lossy decode would rewrite the
+  // firmware rather than insert a line into it.
+  const text = (rel: string): string | null => {
+    if (!has(rel)) return null;
+    try {
+      return fs.readFileSync(path.join(rootfsPath, rel), 'latin1');
+    } catch {
+      return null;
+    }
+  };
+  const initScriptText = text('etc/rc.d/rcS');
   return {
-    initScript: has('etc/rc.d/rcS') ? 'etc/rc.d/rcS' : null,
+    initScript: initScriptText === null ? null : 'etc/rc.d/rcS',
+    initScriptText,
+    inittab: text('etc/inittab'),
     hasIptablesStop: has('etc/rc.d/iptables-stop'),
     hasIptablesSave: has('sbin/iptables-save'),
     hasPing,
@@ -299,40 +314,43 @@ export function collectGuestRepairInputs(rootfsPath: string): GuestRepairInputs 
 }
 
 /**
- * Append the repair line to the init script, for the length of the `mkfs` call only.
+ * Write the placement's bytes into the extraction, for the length of the `mkfs` call only.
  *
  * The original bytes are returned so `unstageGuestRepair` can put them back EXACTLY. This is the same discipline
  * `stageFirmadyneShim` had to learn the hard way: whatever is written into the extraction is read as the firmware by
- * every provider that walks it afterwards, and here what would be read is a vendor init script carrying a line this
+ * every provider that walks it afterwards, and here what would be read is a vendor file carrying a line this
  * workbench wrote. Restoring the bytes — rather than trying to strip the line back out — is the only version of this
- * that cannot drift.
+ * that cannot drift, and it is what lets the preferred placement edit `/etc/inittab` at all.
+ *
+ * It decides nothing: `planGuestRepair` already chose the file and composed its new contents.
  */
 export function stageGuestRepair(
   rootfsPath: string,
-  line: string,
-  initScript: string,
+  placement: RepairPlacement,
   log: (m: string) => void,
 ): { original: Buffer; path: string } | null {
-  const abs = path.join(rootfsPath, initScript);
+  const abs = path.join(rootfsPath, placement.file);
   try {
     const original = fs.readFileSync(abs);
-    fs.writeFileSync(abs, Buffer.concat([original, Buffer.from(`\n${line}\n`, 'utf8')]));
-    log(`Appended the boot-time repair to /${initScript} for the length of the mkfs call.`);
+    fs.writeFileSync(abs, Buffer.from(placement.content, 'latin1'));
+    log(`Staged the boot-time repair into /${placement.file} (${placement.kind}) for the length of the mkfs call.`);
     return { original, path: abs };
   } catch (err) {
-    log(`Could not append the boot-time repair to /${initScript}: ${(err as Error).message}. The image is as shipped.`);
+    log(
+      `Could not stage the boot-time repair into /${placement.file}: ${(err as Error).message}. The image is as shipped.`,
+    );
     return null;
   }
 }
 
-/** Put the init script's original bytes back. Best-effort and loud, for the same reason as `unstageFirmadyneShim`. */
+/** Put the staged file's original bytes back. Best-effort and loud, for the same reason as `unstageFirmadyneShim`. */
 export function unstageGuestRepair(staged: { original: Buffer; path: string } | null, log: (m: string) => void): void {
   if (!staged) return;
   try {
     fs.writeFileSync(staged.path, staged.original);
   } catch (err) {
     log(
-      `The repaired init script could NOT be restored (${(err as Error).message}). ${staged.path} now carries a line this workbench appended and is no longer the firmware — treat any later reading of it as an artefact of this boot.`,
+      `The staged file could NOT be restored (${(err as Error).message}). ${staged.path} now carries a line this workbench inserted and is no longer the firmware — treat any later reading of it as an artefact of this boot.`,
     );
   }
 }
@@ -442,10 +460,7 @@ export async function ensureRootfsImage(
 
   // Armed only by the operator, and decided above so the reuse check could see it.
   log(repair.note);
-  const stagedRepair =
-    repairPlan?.line && repairInputs?.initScript
-      ? stageGuestRepair(rootfsPath, repairPlan.line, repairInputs.initScript, log)
-      : null;
+  const stagedRepair = repairPlan?.placement ? stageGuestRepair(rootfsPath, repairPlan.placement, log) : null;
 
   try {
     // Sparse: the file reports its full size while occupying only what is written.
@@ -498,8 +513,8 @@ export async function ensureRootfsImage(
     };
   } finally {
     // The image now holds a copy; the extraction goes back to being the firmware. On BOTH paths, because a
-    // failed mkfs leaves the staged file behind just as surely as a successful one — and the init script is
-    // restored FIRST, since it is the vendor's own file rather than a directory of ours: leaving our line in it
+    // failed mkfs leaves the staged file behind just as surely as a successful one — and the vendor file is
+    // restored FIRST, since it is the firmware's own rather than a directory of ours: leaving our line in it
     // would make every later provider read a firmware that includes our edit.
     unstageGuestRepair(stagedRepair, log);
     unstageFirmadyneShim(rootfsPath, log);

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { planGuestRepair } from './guest-repair.js';
+import { type RepairPlacement, planGuestRepair } from './guest-repair.js';
 import {
   buildMkfsArgs,
   collectGuestRepairInputs,
@@ -141,16 +141,72 @@ describe('the boot-time repair is staged into the extraction and taken back out'
     return root;
   };
 
-  it('restores the init script BYTE FOR BYTE, not by stripping the line back out', () => {
-    const original = '#!/bin/sh\nmount -t proc none /proc\nexec /sbin/init\n';
-    const root = rootfs('restore', { 'etc/rc.d/rcS': original });
-    const abs = path.join(root, 'etc/rc.d/rcS');
+  const placement = (file: string, content: string): RepairPlacement => ({
+    kind: file === 'etc/inittab' ? 'inittab-sysinit' : 'init-script-head',
+    file,
+    content,
+    inserted: 'x',
+  });
 
-    const staged = stageGuestRepair(root, '(echo hi) &', 'etc/rc.d/rcS', () => {});
-    expect(fs.readFileSync(abs, 'utf8')).toContain('(echo hi) &');
+  it('restores the staged file BYTE FOR BYTE, not by stripping the line back out', () => {
+    const original = '::sysinit:/etc/rc.d/rcS\n::askfirst:-/bin/sh\n';
+    const root = rootfs('restore', { 'etc/inittab': original });
+    const abs = path.join(root, 'etc/inittab');
+
+    const staged = stageGuestRepair(root, placement('etc/inittab', `::sysinit:(echo hi) &\n${original}`), () => {});
+    expect(fs.readFileSync(abs, 'utf8')).toContain('::sysinit:(echo hi) &');
     unstageGuestRepair(staged, () => {});
-    // Byte-exact, which stripping could not guarantee for a script that already ended without a newline.
+    // Byte-exact, which stripping could not guarantee for a file that already ended without a newline.
     expect(fs.readFileSync(abs, 'utf8')).toBe(original);
+  });
+
+  /**
+   * The extraction is read as the firmware by every provider that walks it afterwards, so a rootfs that came out of
+   * a repaired boot has to be indistinguishable from one that never went into it — including the file the preferred
+   * placement edits, which is the vendor's `/etc/inittab` rather than a directory of ours.
+   */
+  it('leaves a byte of the vendor rootfs unchanged after a full stage/unstage round trip', () => {
+    const inittab = '# vendor\n::sysinit:/etc/rc.d/rcS\n';
+    const rcS = '#!/bin/sh\nifconfig lo 127.0.0.1 up\n';
+    const root = rootfs('roundtrip', { 'etc/inittab': inittab, 'etc/rc.d/rcS': rcS });
+    const plan = planGuestRepair({
+      initScript: 'etc/rc.d/rcS',
+      initScriptText: rcS,
+      inittab,
+      hasIptablesStop: true,
+      hasIptablesSave: true,
+      hasPing: true,
+    });
+    expect(plan.placement?.file).toBe('etc/inittab');
+
+    // biome-ignore lint/style/noNonNullAssertion: asserted on the line above.
+    const staged = stageGuestRepair(root, plan.placement!, () => {});
+    expect(fs.readFileSync(path.join(root, 'etc/inittab'), 'utf8')).toContain('iptables-stop');
+    // The fallback file is never touched on this route.
+    expect(fs.readFileSync(path.join(root, 'etc/rc.d/rcS'), 'utf8')).toBe(rcS);
+
+    unstageGuestRepair(staged, () => {});
+    expect(fs.readFileSync(path.join(root, 'etc/inittab'), 'utf8')).toBe(inittab);
+    expect(fs.readFileSync(path.join(root, 'etc/rc.d/rcS'), 'utf8')).toBe(rcS);
+  });
+
+  /**
+   * A vendor file of unknown encoding: the placement is composed from a decode of it and written back, so a decode
+   * that is not byte-transparent would REWRITE the firmware instead of inserting a line into it. latin1 is the one
+   * that round-trips, and this is the fixture that fails if someone reaches for utf8.
+   */
+  it('round-trips bytes that are not valid UTF-8', () => {
+    const raw = Buffer.from([0x23, 0x21, 0x2f, 0x73, 0x68, 0x0a, 0xff, 0xfe, 0x0a]);
+    const root = path.join(tmp, 'latin1');
+    fs.mkdirSync(path.join(root, 'etc'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'etc/inittab'), raw);
+    const text = fs.readFileSync(path.join(root, 'etc/inittab'), 'latin1');
+
+    const staged = stageGuestRepair(root, placement('etc/inittab', `::sysinit:x\n${text}`), () => {});
+    const after = fs.readFileSync(path.join(root, 'etc/inittab'));
+    expect(after.subarray(after.length - raw.length)).toEqual(raw);
+    unstageGuestRepair(staged, () => {});
+    expect(fs.readFileSync(path.join(root, 'etc/inittab'))).toEqual(raw);
   });
 
   it('is a no-op when nothing was staged, so the not-repaired path cannot corrupt anything', () => {
@@ -160,9 +216,9 @@ describe('the boot-time repair is staged into the extraction and taken back out'
     expect(fs.readFileSync(path.join(root, 'etc/rc.d/rcS'), 'utf8')).toBe(original);
   });
 
-  it('reports the failure and stages nothing when the init script cannot be read', () => {
+  it('reports the failure and stages nothing when the file cannot be read', () => {
     const logs: string[] = [];
-    const staged = stageGuestRepair(path.join(tmp, 'absent'), 'x', 'etc/rc.d/rcS', (m) => logs.push(m));
+    const staged = stageGuestRepair(path.join(tmp, 'absent'), placement('etc/inittab', 'x'), (m) => logs.push(m));
     expect(staged).toBeNull();
     expect(logs.join(' ')).toMatch(/The image is as shipped/);
   });
@@ -178,12 +234,15 @@ describe('collectGuestRepairInputs reads the rootfs, and reads it honestly', () 
     fs.mkdirSync(path.join(root, 'sbin'), { recursive: true });
     fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
     fs.writeFileSync(path.join(root, 'etc/rc.d/rcS'), '#!/bin/sh\n');
+    fs.writeFileSync(path.join(root, 'etc/inittab'), '::sysinit:/etc/rc.d/rcS\n');
     fs.writeFileSync(path.join(root, 'etc/rc.d/iptables-stop'), 'iptables -F\n');
     fs.writeFileSync(path.join(root, 'sbin/iptables-save'), 'x');
     fs.writeFileSync(path.join(root, 'bin/busybox'), 'junk\u0000ping\u0000sleep\u0000more');
 
     expect(collectGuestRepairInputs(root)).toEqual({
       initScript: 'etc/rc.d/rcS',
+      initScriptText: '#!/bin/sh\n',
+      inittab: '::sysinit:/etc/rc.d/rcS\n',
       hasIptablesStop: true,
       hasIptablesSave: true,
       hasPing: true,
@@ -202,6 +261,7 @@ describe('collectGuestRepairInputs reads the rootfs, and reads it honestly', () 
     fs.symlinkSync('/dev/null', path.join(root, 'etc/rc.d/iptables-stop'));
     const i = collectGuestRepairInputs(root);
     expect(i.initScript).toBe('etc/rc.d/rcS');
+    expect(i.inittab).toBeNull();
     expect(i.hasIptablesStop).toBe(false);
     // And the plan then declines, rather than appending a line that calls nothing.
     expect(planGuestRepair(i).line).toBeNull();
