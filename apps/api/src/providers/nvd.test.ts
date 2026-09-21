@@ -404,6 +404,13 @@ describe('parseNvdResponse', () => {
     expect(parseNvdResponse({})).toEqual([]);
     expect(parseNvdResponse('nope')).toEqual([]);
   });
+
+  it('does not silently apply the page cap before coverage can measure it', () => {
+    const oversized = {
+      vulnerabilities: Array.from({ length: NVD_PAGE_SIZE + 2 }, (_, i) => ({ cve: { id: `CVE-2026-${i}` } })),
+    };
+    expect(parseNvdResponse(oversized)).toHaveLength(NVD_PAGE_SIZE + 2);
+  });
 });
 
 describe('queryNvdBatch pagination', () => {
@@ -503,6 +510,32 @@ describe('queryNvdBatch pagination', () => {
     expect(result.truncated).toEqual([{ name: 'linux-kernel', version: '6.1', shown: 70, total: 120 }]);
     expect(result.completed).toBe(0);
     expect(result.incomplete).toBe(1);
+  });
+
+  it('measures and reports entries returned beyond the requested page bound', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        const requested = Number(url.searchParams.get('resultsPerPage'));
+        return new Response(JSON.stringify(payload(0, requested + 2, 60)), { status: 200 });
+      }),
+    );
+
+    const result = await queryNvdBatch([{ name: 'linux-kernel', version: '6.1' }], cfg, {
+      delayMs: 0,
+      cache: cacheOptions(),
+    });
+
+    expect(result.components[0]?.advisories).toHaveLength(50);
+    expect(result.pageCoverage?.[0]).toMatchObject({
+      totalMatching: 60,
+      complete: false,
+      truncated: true,
+      stopReason: 'oversized-page',
+      droppedByPageBounds: 2,
+    });
+    expect(result.truncated).toEqual([{ name: 'linux-kernel', version: '6.1', shown: 50, total: 60 }]);
   });
 
   it('enforces the production page ceiling even when the batch requests more pages and advisories', async () => {

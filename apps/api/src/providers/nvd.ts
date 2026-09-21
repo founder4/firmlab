@@ -231,6 +231,7 @@ export type NvdPaginationStopReason =
   | 'complete'
   | 'page-cap'
   | 'advisory-cap'
+  | 'oversized-page'
   | 'missing-total'
   | 'short-page'
   | 'empty-page'
@@ -400,7 +401,9 @@ export function parseNvdTotal(json: unknown): number | null {
 export function parseNvdResponse(json: unknown): NvdAdvisory[] {
   const vulns = (json as { vulnerabilities?: unknown[] })?.vulnerabilities;
   if (!Array.isArray(vulns)) return [];
-  return vulns.slice(0, NVD_PAGE_SIZE).map((raw) => {
+  // Parse the response NVD actually returned. The caller owns the request/page bound and must measure any cut;
+  // clipping here would erase the denominator before coverage can report it.
+  return vulns.map((raw) => {
     const cve = (raw as { cve?: unknown }).cve as
       | {
           id?: string;
@@ -465,6 +468,8 @@ export interface NvdPageCoverage {
   /** Null means the response omitted the denominator, so truncation cannot honestly be decided either way. */
   truncated: boolean | null;
   stopReason: NvdPaginationStopReason;
+  /** Optional forever: entries returned beyond the requested page bound and therefore not retained. */
+  droppedByPageBounds?: number;
 }
 
 interface NvdQueryControl {
@@ -501,6 +506,7 @@ export async function queryNvd(
   let decision = nextNvdPage(progress, bounds);
   let stopReason: NvdPaginationStopReason = 'request-failed';
   let complete = false;
+  let droppedByPageBounds = 0;
 
   while (decision.fetch) {
     const { startIndex, resultsPerPage } = decision;
@@ -536,12 +542,19 @@ export async function queryNvd(
 
     if (firstFreshness === null) firstFreshness = answer.freshness;
     completedOffsets.push(startIndex);
-    const page = parseNvdResponse(answer.payload).slice(0, resultsPerPage);
+    const parsedPage = parseNvdResponse(answer.payload);
+    const page = parsedPage.slice(0, resultsPerPage);
+    const pageDropped = parsedPage.length - page.length;
+    droppedByPageBounds += pageDropped;
     advisories.push(...page);
     const pageTotal = parseNvdTotal(answer.payload);
     if (totalMatching === null) totalMatching = pageTotal;
     else if (pageTotal !== totalMatching) {
       stopReason = 'total-changed';
+      break;
+    }
+    if (pageDropped > 0) {
+      stopReason = 'oversized-page';
       break;
     }
     progress = {
@@ -569,6 +582,7 @@ export async function queryNvd(
     complete,
     truncated,
     stopReason,
+    ...(droppedByPageBounds > 0 ? { droppedByPageBounds } : {}),
   };
   const strategy = buildNvdQuery(component.name, component.version).strategy;
   // Only a COMPLETE empty CPE answer can implicate alternate identities. Failure or unknown coverage is not zero.
