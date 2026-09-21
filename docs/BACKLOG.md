@@ -473,3 +473,31 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   número que suena seguro sin comprobar contra los bytes; (3) ironía Jevons (de la que toma nombre): abaratar el
   juicio 40-200× invita a correr el lane autónomo mucho más ampliamente, lo contrario de la contención deliberada
   del proyecto. Acción hoy: ninguna en código; reabrir cuando haya acceso estable y se pueda validar calibración.
+
+## Sidequest — RAG de referencia: separar por tipo de material, no un RAG general
+
+- [ ] Evaluado 2026-09-22, no programado: la pregunta era si introducir un RAG (manuales, ISAs, especificaciones,
+  técnicas, vulnerabilidades, walkthroughs). Veredicto: **no un RAG general cableado al pipeline** —pelearía con
+  el invariante y duplicaría `research/`—; la respuesta es distinta por tipo de material.
+  - **Vulnerabilidades/advisories → NO.** Ya existe la forma correcta: `research/` (OSV/NVD/KEV/security.txt tras
+    `FIRMLAB_RESEARCH`, con `egress.ts`/`cache.ts`) + `agent/intel.ts`, que produce un brief CITADO donde un
+    advisory es un LEAD, nunca un confirmado de la imagen. Un RAG generativo reintroduce el «from recall» que
+    `component-cve.ts` (`nvdBacking`/`floorRationale`) existe para prohibir — y la recuperación semántica mezcla
+    justo lo que no debe (las 9 entradas awk de BusyBox: un aviso aparente, cinco lower bounds distintos). Los
+    rangos quieren consulta versionada exacta, no top-k de chunks parecidos.
+  - **ISA / convenciones de llamada / syscalls / MMIO-periféricos / datasheets → útil, pero es TABLA
+    estructurada, no RAG.** Aquí hay hueco real: llena carencias ya nombradas en este backlog (fuente de
+    símbolos/memoria FreeRTOS, fuzzing MMIO µEmu/P2IM, callouts SMM UEFI). Pero «base MMIO de la UART / número de
+    syscall / offset de struct» quiere lookup EXACTO, determinista y testeable, no vecinos semánticos. El RAG solo
+    se justifica para la prosa larga (un manual describiendo un protocolo de arranque) y únicamente como CONTEXTO
+    de los nodos de juicio (`agent/nodes.ts`), ya acotados por el preflight.
+  - **Técnicas/walkthroughs → único RAG generativo que merece la pena, y SOLO en el lane mercenario.** La
+    metodología aquí es código (`specsForClass`, planes de `opacidad`, FSTM/ISTG). El sitio donde un RAG de
+    técnicas no contamina nada es el arm mercenario en cuarentena (`docs/MERCENARY-DESIGN.md`): su salida no
+    escribe proof-states en el ledger honesto y se reconcilia por los providers deterministas, así que una
+    alucinación no envenena el ledger.
+  - Innegociables si se hace: el RAG jamás decide `ProofState` ni rango de CVE (vive como lead
+    `needs_runtime_reproduction` en el canal `external_advisory`, como `intel.ts`); tras flag, off por defecto,
+    reusando el ledger de egreso de `research/`; y citar o callar. Acción de alto valor / bajo riesgo: (a) tabla
+    de referencia ISA/MMIO determinista para las carencias RTOS/UEFI, (b) opcional RAG de técnicas confinado al
+    mercenario. Ninguna es «un RAG» en el sentido que motivó la pregunta.
