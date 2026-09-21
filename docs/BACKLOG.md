@@ -501,3 +501,15 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
     reusando el ledger de egreso de `research/`; y citar o callar. Acción de alto valor / bajo riesgo: (a) tabla
     de referencia ISA/MMIO determinista para las carencias RTOS/UEFI, (b) opcional RAG de técnicas confinado al
     mercenario. Ninguna es «un RAG» en el sentido que motivó la pregunta.
+
+## Emulación dinámica — superar la frontera FSTM-7 / GAP-01 (trabajo a futuro)
+
+- [ ] Diseño y hoja de ruta en `docs/EMULATION-FUTURE.md`: síntesis de hardware para arrancar firmware SOHO con
+  red operativa en emulación pura, atacando las tres causas raíz medidas (bucles de sondeo MMIO, ausencia de
+  switch DSA, fragilidad de `LD_PRELOAD`/libnvram). Priorizable por fases: **Fase 1 — Universal Virtual DSA
+  Switch** (Capa II; depende de una detección de familia de switch RTL83xx/BCM53xx/QCA8337 que aún NO existe en
+  `signatures.ts`); **Fase 2 — integrar Fuzzware/µEmu como provider** para modelado MMIO (no motor TCG propio;
+  frontera ya nombrada en este backlog); **Fase 3 — snapshot/fork** (`savevm`/`loadvm`) enlazado a `webprobe.ts`
+  + AFL++. Techo de prueba honesto: `confirmed_in_emulation` de daemons de red (hoy `br-lan` nunca sube), NUNCA
+  `confirmed_full_system` ni «idéntico al físico» — el entorno sintético es permisivo por diseño (`types.ts`). La
+  Capa IV (Avatar2/JTAG) queda FUERA DE ALCANCE: rompe la premisa sin-hardware.
