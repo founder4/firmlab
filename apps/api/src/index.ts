@@ -21,6 +21,7 @@ import { captureRoutes } from './routes/capture.js';
 import { certsRoutes } from './routes/certs.js';
 import { chipsecRoutes } from './routes/chipsec.js';
 import { compmapRoutes } from './routes/compmap.js';
+import { componentCveRoutes } from './routes/component-cve.js';
 import { copilotRoutes } from './routes/copilot.js';
 import { corpusRoutes } from './routes/corpus.js';
 import { credmatchRoutes } from './routes/credmatch.js';
@@ -156,6 +157,7 @@ async function main(): Promise<void> {
       await api.register(certsRoutes);
       await api.register(rtosRoutes);
       await api.register(compmapRoutes);
+      await api.register(componentCveRoutes);
       await api.register(servicemapRoutes);
       await api.register(fccRoutes);
       await api.register(nvramRoutes);

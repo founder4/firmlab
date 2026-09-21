@@ -45,6 +45,7 @@ export type JobKind =
   | 'certs'
   | 'rtos'
   | 'compmap'
+  | 'component-cve'
   | 'services'
   | 'fcc'
   | 'opacidad'
