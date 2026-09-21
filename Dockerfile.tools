@@ -74,9 +74,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
     ; command -v chipsec_util >/dev/null && echo "chipsec OK" || echo "chipsec optional install failed — UEFI provider degrades honestly"
 
 # === Renode — RTOS / Cortex-M boot (providers/renode.ts) — VALIDATED (real Contiki on emulated STM32F4). ===
+# GitHub publishes distinct portable .NET bundles. Selecting the arm64 asset unconditionally leaves an amd64
+# image with a binary that exists on PATH but can only fail under qemu-aarch64, which the capability probe must
+# (and does) report as unavailable. Pin both official release digests and select only by Docker's target arch.
+ARG TARGETARCH
 ARG RENODE_VER=1.16.1
 RUN bash -c 'set -o pipefail; apt-get update && apt-get install -y --no-install-recommends libicu72 libssl3 ca-certificates && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL "https://github.com/renode/renode/releases/download/v${RENODE_VER}/renode-${RENODE_VER}.linux-arm64-portable-dotnet.tar.gz" -o /tmp/renode.tgz \
+    && case "${TARGETARCH}" in \
+         amd64) asset="renode-${RENODE_VER}.linux-portable-dotnet.tar.gz"; sha="00e113cdbd0f5354cf2f64bbe3f5a070d8958409542fca66e45ac97d982938c0" ;; \
+         arm64) asset="renode-${RENODE_VER}.linux-arm64-portable-dotnet.tar.gz"; sha="fff3a098c96ed0a4ffbdff3f028c9c5fde432db09587c7bd7c99406180f90007" ;; \
+         *) echo "unsupported Renode architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://github.com/renode/renode/releases/download/v${RENODE_VER}/${asset}" -o /tmp/renode.tgz \
+    && printf "%s  %s\n" "$sha" /tmp/renode.tgz | sha256sum -c - \
     && mkdir -p /opt/renode && tar xzf /tmp/renode.tgz -C /opt/renode --strip-components=1 && rm /tmp/renode.tgz \
     && ln -sf /opt/renode/renode /usr/local/bin/renode && renode --version | head -1' \
     || echo "Renode optional install failed — RTOS provider degrades honestly"

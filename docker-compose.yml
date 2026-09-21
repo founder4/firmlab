@@ -17,6 +17,7 @@ services:
       FIRMLAB_HOST: '0.0.0.0'
       FIRMLAB_PORT: '8799'
       FIRMLAB_DATA_DIR: '/data'
+      FIRMLAB_YARA_RULES: '/data/yara-rules/external/yara-forge-core.yar:/data/yara-rules/local/operator-firmware-policy.yar'
       FIRMLAB_LOOPBACK_PUBLISH: '1'
       FIRMLAB_MAX_UPLOAD: '524288000'
     volumes:
