@@ -318,8 +318,109 @@ export function subsystemGate(
   const hit = SUBSYSTEM_MARKERS.find((m) => body.toLowerCase().startsWith(m.prefix.toLowerCase()));
   if (!hit) return null;
   const assessed = options.find((o) => o.option === hit.option);
-  if (!assessed) return null;
-  return { option: hit.option, state: assessed.state, evidence: assessed.evidence, marker: hit.prefix };
+  // Older persisted posture results may not contain this assessment. The subsystem is still mapped, but its
+  // presence is unknown; reserve null for summaries with no recognized subsystem prefix.
+  return {
+    option: hit.option,
+    state: assessed?.state ?? 'unknown',
+    evidence: assessed?.evidence ?? null,
+    marker: hit.prefix,
+  };
+}
+
+export type KernelCveCandidateReason =
+  | 'subsystem_disabled'
+  | 'subsystem_enabled'
+  | 'subsystem_unknown'
+  | 'unmapped_subsystem';
+
+export interface KernelCveCandidateCensus {
+  /** The full NVD match count, independent of pagination and local subsystem filtering. */
+  denominator: number | null;
+  /** Number of advisories this run actually assessed. */
+  assessed: number;
+  /** Assessed advisories that remain provisional candidates. */
+  candidates: number;
+  /** Assessed advisories dismissed because their required subsystem is proven disabled. */
+  dismissed: number;
+  /** Matching NVD advisories not assessed because the answer was bounded, or unknown if no denominator exists. */
+  unassessed: number | null;
+  /** Null means pagination coverage could not be decided from this or a legacy result. */
+  complete: boolean | null;
+  truncated: boolean | null;
+  /** Reasons partition the assessed advisories; the values always sum to `assessed`. */
+  reasonCounts: Record<KernelCveCandidateReason, number>;
+}
+
+export interface KernelCveSelectedAdvisory {
+  advisory: NvdComponentResult['advisories'][number];
+  gate: SubsystemGate | null;
+  disposition: 'candidate' | 'dismissed';
+  reason: KernelCveCandidateReason;
+}
+
+export interface KernelCveAdvisorySelection {
+  advisories: KernelCveSelectedAdvisory[];
+  candidates: KernelCveSelectedAdvisory[];
+  dismissed: KernelCveSelectedAdvisory[];
+  census: KernelCveCandidateCensus;
+}
+
+/**
+ * Correlate the NVD answer with the subsystem prefix metadata. Only a proven-off required subsystem leaves the
+ * provisional candidate set; enabled, undetermined and unmapped advisories remain candidates. The NVD total stays
+ * the denominator, so filtering and pagination cannot make a partial answer look like the complete set.
+ */
+export function selectKernelCveAdvisories(
+  selection: KernelCveSelection,
+  component: NvdComponentResult,
+): KernelCveAdvisorySelection {
+  const reasonCounts: KernelCveCandidateCensus['reasonCounts'] = {
+    subsystem_disabled: 0,
+    subsystem_enabled: 0,
+    subsystem_unknown: 0,
+    unmapped_subsystem: 0,
+  };
+  const advisories = component.advisories.map((advisory): KernelCveSelectedAdvisory => {
+    const gate = subsystemGate(advisory.summary, selection.configOptions);
+    const reason: KernelCveCandidateReason = !gate
+      ? 'unmapped_subsystem'
+      : gate.state === 'off'
+        ? 'subsystem_disabled'
+        : gate.state === 'on'
+          ? 'subsystem_enabled'
+          : 'subsystem_unknown';
+    reasonCounts[reason] += 1;
+    return {
+      advisory,
+      gate,
+      disposition: reason === 'subsystem_disabled' ? 'dismissed' : 'candidate',
+      reason,
+    };
+  });
+  const assessed = advisories.length;
+  const candidates = advisories.filter((item) => item.disposition === 'candidate');
+  const dismissedAdvisories = advisories.filter((item) => item.disposition === 'dismissed');
+  const dismissed = dismissedAdvisories.length;
+  const denominator = component.totalMatching ?? component.pageCoverage?.totalMatching ?? null;
+  const complete = component.pageCoverage?.complete ?? (denominator === null ? null : assessed >= denominator);
+  const truncated = component.pageCoverage?.truncated ?? (denominator === null ? null : assessed < denominator);
+
+  return {
+    advisories,
+    candidates,
+    dismissed: dismissedAdvisories,
+    census: {
+      denominator,
+      assessed,
+      candidates: candidates.length,
+      dismissed,
+      unassessed: denominator === null ? null : Math.max(0, denominator - assessed),
+      complete,
+      truncated,
+      reasonCounts,
+    },
+  };
 }
 
 function normalizedModule(name: string): string {
@@ -694,21 +795,16 @@ function advisorySeverity(raw: string | null): FindingSeverity {
 
 export function normalizeKernelCves(selection: KernelCveSelection, component: NvdComponentResult): FindingDraft[] {
   if (!selection.candidate || component.name !== 'linux-kernel') return [];
-  const shown = component.advisories.length;
-  const total = component.totalMatching;
-  const prefix = total !== null && total > shown;
-  return component.advisories.map((advisory) => {
-    // Which subsystem the advisory is about, and whether this image builds it. Null for most advisories, and
-    // `off` only where the posture run had authoritative evidence — see `subsystemGate`.
-    const gate = subsystemGate(advisory.summary, selection.configOptions);
-    const ruledOut = gate?.state === 'off';
+  const selected = selectKernelCveAdvisories(selection, component);
+  const { census } = selected;
+  const prefix = census.truncated === true;
+  return selected.advisories.map(({ advisory, gate, disposition }) => {
+    const ruledOut = disposition === 'dismissed';
     return {
       kind: 'kernel-cve-candidate',
       title: `${advisory.id} — Linux kernel ${selection.detectedVersion ?? component.version}`,
       severity: advisorySeverity(advisory.severity),
-      // `false_positive` is "checked and dismissed", and that is exactly what happened: the advisory names its
-      // subsystem and this image's own kernel config says the subsystem is not built. The row STAYS — the count
-      // does not change — it just stops being presented as a lead nobody can act on.
+      // A dismissed row stays in the ledger so filtering cannot turn an empty candidate list into a clean claim.
       proofState: (ruledOut ? 'false_positive' : 'needs_runtime_reproduction') as ProofState,
       evidenceChannel: 'external_advisory' as EvidenceChannel,
       evidence: {
@@ -722,24 +818,27 @@ export function normalizeKernelCves(selection: KernelCveSelection, component: Nv
         score: advisory.score,
         summary: advisory.summary,
         references: advisory.references,
-        shown,
-        totalMatching: total,
-        truncated: prefix,
+        shown: census.assessed,
+        totalMatching: census.denominator,
+        truncated: census.truncated,
+        kernelCveCensus: census,
         freshness: component.freshness,
       },
-      rationale: `NVD places upstream Linux ${selection.queryVersion} inside this advisory's affected CPE range, and the query is restricted to the Linux kernel CNA. The firmware's version was read from ${selection.versionSource}. This is a candidate, not a confirmed device vulnerability: vendor backports may keep the same banner${
-        gate ? '' : ', the affected subsystem may be absent or disabled'
-      }, and reachability has not been reproduced.${
+      rationale: `NVD returned this match for upstream Linux ${selection.queryVersion}, and the query is restricted to the Linux kernel CNA. The firmware's version was read from ${selection.versionSource}. This advisory match does not establish the device's patch state: vendor backports and runtime reachability remain unverified.${
+        gate
+          ? ''
+          : ' The subsystem is unmapped from this advisory summary, so subsystem presence could not be assessed.'
+      }${
         ruledOut
-          ? ` Dismissed on this image: the advisory's commit subject begins "${gate?.marker}", which puts it in ${gate?.option}, and this kernel's own configuration says that option is not built (${gate?.evidence}). The flaw is real upstream; the code it is in is not here.`
+          ? ` Excluded from the provisional candidate set on this image: the advisory's commit subject begins "${gate?.marker}", which maps to ${gate?.option}, and the subsystem evidence says it is disabled (${gate?.evidence}). This does not assess vendor patch state.`
           : gate?.state === 'on'
-            ? ` The subsystem it is in (${gate.option}, from the "${gate.marker}" commit-subject prefix) IS built on this image (${gate.evidence}), so the usual "maybe the subsystem is absent" escape does not apply to this row.`
+            ? ` The subsystem it is in (${gate.option}, from the "${gate.marker}" commit-subject prefix) is enabled on this image (${gate.evidence}); the advisory remains provisional because patch state is unknown.`
             : gate
-              ? ` It is in ${gate.option} (from the "${gate.marker}" commit-subject prefix), and whether this kernel builds that option could not be determined — undetermined is not absent, so the row stands.`
+              ? ` It maps to ${gate.option} (from the "${gate.marker}" commit-subject prefix), but whether this kernel builds that option could not be determined — undetermined is not absent, so it remains a candidate.`
               : ''
       }${
         prefix
-          ? ` NVD reports ${total} matching kernel advisories; this run retained the first ${shown}, so the rows are a prefix rather than the complete set.`
+          ? ` NVD reports ${census.denominator} matching kernel advisories; this run assessed ${census.assessed}, so the advisory set remains incomplete.`
           : ''
       }`,
     };
