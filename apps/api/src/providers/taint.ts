@@ -10,8 +10,9 @@ import type { DecompileResult } from './decompile.js';
 export type SinkClass = 'command-exec' | 'buffer-overflow' | 'format-string' | 'path-traversal';
 export type SourceClass = 'network' | 'cgi-env' | 'nvram' | 'stdin';
 
-/** Imported symbols that are dangerous when they consume attacker-controlled data. */
-const SINKS: Record<string, SinkClass> = {
+/** Imported symbols that are dangerous when they consume attacker-controlled data. Exported for `cross-taint.ts`,
+ * which reuses this same vocabulary as a textual (not import-table) sink mention. */
+export const SINKS: Record<string, SinkClass> = {
   system: 'command-exec',
   popen: 'command-exec',
   execl: 'command-exec',

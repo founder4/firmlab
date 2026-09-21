@@ -63,6 +63,58 @@ export function daemonLeads(services: Service[], rootfsPath: string): Lead[] {
 }
 
 /**
+ * Its own small cap — a `cross-taint` channel is a lead about a KEY bridge, not (yet) a reachability question, so
+ * this schedules cheap follow-up work only: decompiling a consumer that mentioned a dangerous sink from a TEXTUAL
+ * scan (`providers/cross-taint.ts`'s `findSinkMentions`), so a later stage reads its real import table instead of
+ * a string mention. Deliberately small: this is the one piece of `opacidad` wiring the scaffold earns on its own
+ * evidence, not a promise that cross-taint channels feed the reachability queues below — that would need the
+ * channel's sink to be resolved against a real import first, which is exactly what this lead goes and gets.
+ */
+export const CROSS_TAINT_LEAD_CAP = 3;
+
+/**
+ * Leads from the cross-binary taint scaffold: for each `cross-binary-taint-channel-sink` finding whose consumer is
+ * a real ELF inside this rootfs, decompile it. A script consumer is skipped — there is no import table to read for
+ * something that isn't an ELF, and `symreach`/`binvuln` already refuse a non-ELF target for the same reason.
+ * Ordered by binary path so a re-run schedules the same probes; deduped so one consumer named by several channels
+ * (several keys bridging into the same file) only earns one decompile.
+ */
+export function crossTaintDecompileLeads(
+  drafts: FindingDraft[],
+  rootfsPath: string,
+  budget = CROSS_TAINT_LEAD_CAP,
+): Lead[] {
+  const leads: Lead[] = [];
+  if (budget <= 0) return leads;
+  const seen = new Set<string>();
+  const ordered = drafts
+    .filter((f) => f.kind === 'cross-binary-taint-channel-sink')
+    .slice()
+    .sort((a, b) => {
+      const at = (a.evidence as Record<string, unknown> | undefined)?.consumer as Record<string, unknown> | undefined;
+      const bt = (b.evidence as Record<string, unknown> | undefined)?.consumer as Record<string, unknown> | undefined;
+      return String(at?.path ?? '').localeCompare(String(bt?.path ?? ''));
+    });
+  for (const f of ordered) {
+    const ev = (f.evidence ?? {}) as Record<string, unknown>;
+    const consumer = (ev.consumer ?? {}) as Record<string, unknown>;
+    const target = typeof consumer.path === 'string' ? consumer.path : '';
+    const key = typeof ev.key === 'string' ? ev.key : '';
+    if (!target || seen.has(target)) continue;
+    const abs = resolveInsideRootfs(rootfsPath, target);
+    if (!abs || !isElfFile(abs)) continue; // a script has no import table to decompile
+    seen.add(target);
+    leads.push({
+      kind: 'decompile-binary',
+      target,
+      reason: `reads a cross-binary nvram/UCI key ('${key}') and its own bytes mention a dangerous sink — decompile for the real import table`,
+    });
+    if (leads.length >= budget) break;
+  }
+  return leads;
+}
+
+/**
  * How many candidates get the expensive treatment. Symbolic execution costs real wall-clock per binary, and a busy
  * rootfs yields dozens of candidates; asking about the first few keeps an autonomous scan bounded. The overflow is
  * NOT silently dropped — `runBinVuln`'s candidate count stays in the findings, so the unasked ones remain visible
