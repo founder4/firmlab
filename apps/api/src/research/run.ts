@@ -29,7 +29,7 @@ import {
 import type { JobHandle } from '../providers/jobs.js';
 import { normalizeKernelCves, selectKernelCveCandidate } from '../providers/kernel-cve.js';
 import { runKernelPosture } from '../providers/kernelposture.js';
-import { type KevResult, collectCveIds, fetchAndMatchKev } from '../providers/kev.js';
+import { type KevResult, collectCveIds, fetchAndMatchKev, kevLogLine } from '../providers/kev.js';
 import { type KeyMaterial, summarizeKeyMaterial } from '../providers/keys.js';
 import { type KmodResult, kmodAdvisoryCandidates } from '../providers/kmod.js';
 import { type NvdBatchResult, mergeNvdCandidates, queryNvdBatch } from '../providers/nvd.js';
@@ -324,11 +324,9 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   const moduleCveIds = latestKmodCveIds(imageId);
   const cveIds = [...new Set([...collectCveIds(osv.components, nvd.components), ...moduleCveIds])];
   const kev = await fetchAndMatchKev(cveIds, cfg);
-  handle.log(
-    kev.checked
-      ? `KEV: ${cveIds.length} discovered CVEs cross-referenced → ${kev.matches.length} known-exploited (catalog: ${kev.catalogSize}).`
-      : `KEV: not checked (${kev.reason}).`,
-  );
+  // No CVE input is an UNASKED question, not a failure of KEV and above all not zero known-exploited CVEs; the
+  // sentence that separates the three outcomes is pure and lives beside the provider.
+  handle.log(kevLogLine(kev, cveIds.length));
   if (moduleCveIds.length > 0) {
     handle.log(
       `KEV input includes ${moduleCveIds.length} module advisory candidate(s) tied to byte-level product/function identity: ${moduleCveIds.join(', ')}.`,

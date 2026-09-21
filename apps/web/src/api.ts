@@ -1012,7 +1012,20 @@ export interface ResearchResult {
     /** Components whose advisory list is a prefix of what NVD holds — one page is returned per question. */
     truncated?: { name: string; version: string; shown: number; total: number }[];
   };
-  kev: { checked: boolean; catalogSize: number; matches: KevMatch[]; reason?: string };
+  kev: {
+    checked: boolean;
+    catalogSize: number;
+    matches: KevMatch[];
+    reason?: string;
+    /**
+     * Why there is no verdict, machine-readable. `no-input` means nothing upstream produced a CVE id, so the
+     * catalog was never requested — the opposite of a count of zero. Optional: a result stored before this
+     * existed carries only `reason`, and the panel must still render it.
+     */
+    notCheckedCode?: 'no-input' | 'fetch-failed';
+    /** How many CVE ids went into the cross-reference. Absent on results stored before it was recorded. */
+    inputCveCount?: number;
+  };
   keyMaterial: { kind: string; redacted: string; effectivelyPublic: boolean; sharedInImages?: number }[];
   securityContacts: { domain: string; checked: boolean; found: boolean; reason?: string; contact: string[] }[];
   hashLookup: {

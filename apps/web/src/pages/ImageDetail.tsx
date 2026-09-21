@@ -1319,6 +1319,13 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
               >
                 {t.imageDetail.research.kevBadge(kev.matches.length)}
               </span>
+            ) : kev?.notCheckedCode === 'no-input' ? (
+              // Nothing upstream produced a CVE id, so the catalogue was never requested. Rendering that as
+              // "KEV 0 known-exploited" would state a fact the run never established, so it says the question
+              // was not asked instead — the count belongs only to a cross-reference that actually happened.
+              <span className="badge badge-medium" title={t.imageDetail.research.kevNotAskedTitle}>
+                {t.imageDetail.research.kevNotAsked}
+              </span>
             ) : (
               <span className="badge badge-medium" title={kev?.reason ?? t.imageDetail.research.kevNotCheckedTitle}>
                 {t.imageDetail.research.kevNotChecked}

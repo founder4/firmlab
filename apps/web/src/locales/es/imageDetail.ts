@@ -312,6 +312,9 @@ export const imageDetail: Messages['imageDetail'] = {
     },
     kevBadgeTitle: (catalogSize) =>
       `CISA Known Exploited Vulnerabilities — explotadas en la práctica. Se buscaron ${catalogSize} entradas.`,
+    kevNotAsked: 'KEV sin preguntar — no hay CVE que comprobar',
+    kevNotAskedTitle:
+      'Ni OSV ni NVD ni los candidatos de módulos produjeron ningún identificador CVE, así que el catálogo de vulnerabilidades explotadas conocidas nunca se descargó. Es una pregunta que no se hizo, no un recuento: NO significa cero CVE con explotación conocida.',
     kevNotChecked: 'KEV sin consultar',
     kevNotCheckedTitle:
       'El catálogo de vulnerabilidades explotadas conocidas no se consultó en esta ejecución, y el proveedor no registró el motivo. Nada aquí dice que estos CVE NO estén explotados — la pregunta no se hizo.',

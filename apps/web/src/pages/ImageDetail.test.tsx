@@ -980,3 +980,85 @@ describe('ImageDetail — the structure map says it is a bounded sample', () => 
     expect(screen.queryByText(/bounded sample/)).toBeNull();
   });
 });
+
+/**
+ * The KEV badge, and the one thing it must never say. `checked: false` covers two opposite facts — a catalogue
+ * that could not be downloaded, and an input set with no CVE in it at all, where the catalogue was deliberately
+ * never requested. Neither is a count, and rendering either as "KEV 0 known-exploited" would put a number on a
+ * question the run never asked. A result stored before the provider recorded WHICH of the two it was carries no
+ * discriminator, so it has to keep rendering the honest, unspecific sentence rather than crashing or guessing.
+ */
+describe('ImageDetail — KEV never reports a zero it did not measure', () => {
+  const research = (kev: Record<string, unknown>) => ({
+    enabled: true,
+    provenance: {
+      identity: { firmwareClass: 'embedded-linux', arch: 'mips', bootloader: null },
+      vendors: [],
+      models: [],
+      versions: [],
+      urls: [],
+      domains: [],
+      certCNs: [],
+      banners: [],
+    },
+    egress: { destinations: [], neverSent: [] },
+    osv: { queried: 3, skipped: 0, withAdvisories: 0, totalAdvisories: 0, components: [] },
+    nvd: { queried: 0, notQueried: 0, withAdvisories: 0, totalAdvisories: 0, components: [] },
+    kev,
+    keyMaterial: [],
+    securityContacts: [],
+    hashLookup: { enabled: false, reason: '', attempted: 0, resolved: 0, notQueried: 0, entries: [] },
+  });
+
+  const show = async (kev: Record<string, unknown>) => {
+    mockApi.researchStatus.mockResolvedValue({ enabled: true });
+    mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
+    mockApi.researchResult.mockResolvedValue(research(kev) as never);
+    const rendered = renderSection('dossier');
+    await screen.findByText(/OSV \d+ queried/);
+    return rendered;
+  };
+
+  it('says the question was not asked when no CVE reached the cross-reference', async () => {
+    await show({ checked: false, catalogSize: 0, matches: [], notCheckedCode: 'no-input', inputCveCount: 0 });
+    expect(screen.getByText(/KEV not asked/)).toBeInTheDocument();
+    expect(screen.queryByText(/known-exploited$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/KEV 0/)).not.toBeInTheDocument();
+  });
+
+  it('explains on hover that an unasked question is not zero known-exploited CVEs', async () => {
+    await show({ checked: false, catalogSize: 0, matches: [], notCheckedCode: 'no-input', inputCveCount: 0 });
+    expect(screen.getByText(/KEV not asked/).getAttribute('title')).toMatch(/does NOT mean zero known-exploited/);
+  });
+
+  it('keeps a failed download distinct, with the provider’s own reason on the badge', async () => {
+    await show({
+      checked: false,
+      catalogSize: 0,
+      matches: [],
+      reason: 'KEV feed HTTP 503',
+      notCheckedCode: 'fetch-failed',
+      inputCveCount: 4,
+    });
+    expect(screen.getByText('KEV not checked')).toBeInTheDocument();
+    expect(screen.getByText('KEV not checked').getAttribute('title')).toBe('KEV feed HTTP 503');
+    expect(screen.queryByText(/KEV 0/)).not.toBeInTheDocument();
+  });
+
+  // Written by a build that did not record which not-checked case it was: no discriminator, no reason. It still
+  // has to render, and it still must not turn into a count.
+  it('renders a result stored before the discriminator existed, claiming nothing extra', async () => {
+    await show({ checked: false, catalogSize: 0, matches: [] });
+    expect(screen.getByText('KEV not checked')).toBeInTheDocument();
+    expect(screen.getByText('KEV not checked').getAttribute('title')).toMatch(/the question was not asked/);
+    expect(screen.queryByText(/KEV not asked/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/KEV 0/)).not.toBeInTheDocument();
+  });
+
+  // The zero that IS a measurement: a catalogue was searched against a real input and matched nothing.
+  it('still reports a genuine zero when the catalogue was actually searched', async () => {
+    await show({ checked: true, catalogSize: 1300, matches: [], inputCveCount: 6 });
+    expect(screen.getByText('KEV 0 known-exploited')).toBeInTheDocument();
+    expect(screen.queryByText(/KEV not asked/)).not.toBeInTheDocument();
+  });
+});

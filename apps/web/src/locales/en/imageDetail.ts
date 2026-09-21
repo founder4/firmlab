@@ -366,6 +366,9 @@ export const imageDetail = {
     },
     kevBadgeTitle: (catalogSize: number) =>
       `CISA Known Exploited Vulnerabilities — exploited in the wild. ${catalogSize} entries were searched.`,
+    kevNotAsked: 'KEV not asked — no CVEs to check',
+    kevNotAskedTitle:
+      'No CVE identifier came out of OSV, NVD or the module candidates, so the Known Exploited Vulnerabilities catalogue was never downloaded. This is an unasked question, not a count: it does NOT mean zero known-exploited CVEs.',
     kevNotChecked: 'KEV not checked',
     kevNotCheckedTitle:
       'The Known Exploited Vulnerabilities catalogue was not consulted on this run, and the provider recorded no reason. Nothing here says these CVEs are NOT known-exploited — the question was not asked.',

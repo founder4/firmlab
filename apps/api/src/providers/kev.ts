@@ -12,6 +12,11 @@
  * image. It raises priority; it never confirms reachability (that stays per-image). The parser + cross-reference
  * are pure and unit-tested; only fetchKevCatalog touches the network.
  *
+ * Empty in, unknown out: with no upstream CVE identifiers there is nothing to cross-reference, so the catalog is
+ * not downloaded and the result says the question was not asked (`notCheckedCode: 'no-input'`). That is a
+ * different fact from a download that failed, and neither one is "zero known-exploited CVEs" — a KEV count only
+ * exists when a catalog was searched against a non-empty input set.
+ *
  * The catalog goes through the on-disk cache (research/cache.ts): it is a single multi-megabyte file that every
  * image in the corpus needs, so downloading it once a day instead of once a scan is the whole point. It is also
  * where staleness bites hardest — KEV grows by CVEs attackers started using THIS week, so a catalog served without
@@ -77,6 +82,20 @@ export function crossReferenceKev(cveIds: Iterable<string>, catalog: KevEntry[])
   return catalog.filter((e) => wanted.has(e.cveID));
 }
 
+/**
+ * Why there is no KEV verdict. Two outcomes that share `checked: false` and mean opposite things:
+ *
+ * - `no-input` — nothing upstream produced a CVE identifier, so the question was never put. The catalog is not
+ *   downloaded at all. This is NOT "zero known-exploited CVEs"; it is an unasked question, and a surface that
+ *   renders it as a count of 0 states a fact the run never established.
+ * - `fetch-failed` — there WERE CVEs to check and the catalog could not be obtained (blocked, HTTP error, empty
+ *   payload). The question was put and came back unanswered.
+ *
+ * Optional on the result forever: a research result is JSON persisted on the job row and re-read by later builds,
+ * so a result stored before this discriminator existed carries only the free-text `reason`.
+ */
+export type KevNotCheckedCode = 'no-input' | 'fetch-failed';
+
 export interface KevResult {
   /** Whether the catalog was fetched successfully (honest: a failed download → checked:false, no fabrication). */
   checked: boolean;
@@ -87,6 +106,29 @@ export interface KevResult {
   /** When the catalog behind this verdict was fetched from CISA, and whether it came off the wire or the disk. */
   freshness: Freshness | null;
   reason?: string;
+  /** Machine-readable counterpart of `reason`, so a caller never has to pattern-match prose. Optional forever. */
+  notCheckedCode?: KevNotCheckedCode;
+  /** How many CVE ids went into the cross-reference. 0 is the denominator behind `no-input`. Optional forever. */
+  inputCveCount?: number;
+}
+
+/** The sentence `no-input` travels with. Exported so the log, the test and the result all state the same thing. */
+export const KEV_NO_INPUT_REASON =
+  'no upstream CVE identifiers were discovered, so the KEV catalog was never requested — known-exploited status is unknown here, not zero';
+
+/**
+ * Pure: the single line the research log states about KEV. Three outcomes and three sentences, because the run has
+ * three different things to say — a cross-reference that ran reports a count, a catalog that could not be obtained
+ * reports a failure, and an empty input reports a question that was never put. It lives here rather than in
+ * `research/run.ts` so a test can reach it: that module imports the store, and this sentence is the only place the
+ * distinction becomes words an operator reads.
+ */
+export function kevLogLine(kev: KevResult, discoveredCveCount: number): string {
+  if (kev.checked) {
+    return `KEV: ${discoveredCveCount} discovered CVEs cross-referenced → ${kev.matches.length} known-exploited (catalog: ${kev.catalogSize}).`;
+  }
+  if (kev.notCheckedCode === 'no-input') return `KEV: not asked — ${kev.reason ?? KEV_NO_INPUT_REASON}.`;
+  return `KEV: not checked (${kev.reason}).`;
 }
 
 /**
@@ -102,7 +144,15 @@ export async function fetchAndMatchKev(
 ): Promise<KevResult> {
   const ids = [...cveIds];
   if (ids.length === 0) {
-    return { checked: false, catalogSize: 0, matches: [], freshness: null, reason: 'no CVEs discovered to check' };
+    return {
+      checked: false,
+      catalogSize: 0,
+      matches: [],
+      freshness: null,
+      reason: KEV_NO_INPUT_REASON,
+      notCheckedCode: 'no-input',
+      inputCveCount: 0,
+    };
   }
   try {
     const answer = await cachedFetch(
@@ -117,7 +167,15 @@ export async function fetchAndMatchKev(
       cache,
     );
     if (!answer.freshness) {
-      return { checked: false, catalogSize: 0, matches: [], freshness: null, reason: 'KEV feed returned no catalog' };
+      return {
+        checked: false,
+        catalogSize: 0,
+        matches: [],
+        freshness: null,
+        reason: 'KEV feed returned no catalog',
+        notCheckedCode: 'fetch-failed',
+        inputCveCount: ids.length,
+      };
     }
     const catalog = parseKevCatalog(answer.payload);
     return {
@@ -125,6 +183,7 @@ export async function fetchAndMatchKev(
       catalogSize: catalog.length,
       matches: crossReferenceKev(ids, catalog),
       freshness: answer.freshness,
+      inputCveCount: ids.length,
     };
   } catch (err) {
     return {
@@ -133,6 +192,8 @@ export async function fetchAndMatchKev(
       matches: [],
       freshness: null,
       reason: err instanceof Error ? err.message : String(err),
+      notCheckedCode: 'fetch-failed',
+      inputCveCount: ids.length,
     };
   }
 }
