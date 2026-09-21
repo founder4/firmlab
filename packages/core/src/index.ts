@@ -16,5 +16,6 @@ export * from './crypto-loader.js';
 export * from './binwalk.js';
 export * from './filesystem.js';
 export * from './mcu.js';
+export * from './rtos-tasks.js';
 export { analyzeBuffer } from './analyze.js';
 export type { StaticAnalysis } from './analyze.js';
