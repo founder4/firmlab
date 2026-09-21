@@ -449,3 +449,27 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   proof-states disciplinados en el ledger honesto — vive en un almacén en cuarentena, y las afirmaciones
   interesantes se devuelven a los providers deterministas para verificación (reconciliación arm C → arm A).
   Diseño completo y tests de aceptación: `docs/MERCENARY-DESIGN.md`.
+
+## Sidequest — Jev (System One Model) como provider de los nodos de juicio
+
+- [ ] Evaluado 2026-09-22, no programado: Jev (TypeSafe AI, acceso anticipado desde 2026-09-15) es un modelo que
+  no emite texto sino **valores tipados con probabilidad calibrada**, entrenado solo con datos sintéticos vía RLCD
+  (se optimiza la probabilidad contra el resultado, no contra la preferencia de un anotador), 40-200× más
+  barato/rápido que un LLM frontera. Su forma de salida es exactamente la de los dos nodos de decisión de
+  `agent/nodes.ts` (① Triage, ② Target selection), que hoy devuelven JSON estricto con enums
+  (`classConfidence`/`priority`/`rung`) arrancado de la prosa de un LLM. Encaje acotado, **sin arquitectura
+  nueva**: un provider más en `llm.ts` detrás del mismo `FIRMLAB_AGENT`, en el slot que ocupa DeepSeek. El premio
+  es doble — borra el peaje de parseo de prosa (`extractJsonObject`, tolerancia a fences, `completeJson` con su
+  «recovery attempt»/`fallbackUsed` y el fallo `No JSON object found`), y convierte `classConfidence: 'medium'`
+  (una palabra que el modelo elige) en una probabilidad **calibrada y umbralizable**, que es lo más alineado con
+  el ethos de honestidad del proyecto (proof states, banner de cobertura, «a bound is not an answer»). No toca el
+  invariante: el `ProofState` lo sigue decidiendo el código, y `resolvedClass` sigue ganando al clasificador
+  medido (`suggestedClass`/`classAgreement` ya guardan el desacuerdo). NUNCA en proof state, en `component-cve.ts`
+  (rangos de NVD, jamás de recall — y Jev es sintético puro) ni en el routing de `specsForClass`, ni en
+  `packages/core` (zero-dep). Bloqueadores para pasar de aquí: (1) es cerrado y en acceso anticipado — no se
+  auto-hospeda ni se pinnea, choca con «flags off = sin red, determinista», así que sería otro flag como DeepSeek,
+  no un default; (2) su calibración es contra SU distribución (sintética), no contra ground truth de firmware —
+  hay que **medirla sobre el corpus** (`docs/CORPUS-*`) antes de que esa confianza pueda gatear nada, o es otro
+  número que suena seguro sin comprobar contra los bytes; (3) ironía Jevons (de la que toma nombre): abaratar el
+  juicio 40-200× invita a correr el lane autónomo mucho más ampliamente, lo contrario de la contención deliberada
+  del proyecto. Acción hoy: ninguna en código; reabrir cuando haya acceso estable y se pueda validar calibración.
