@@ -1,11 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   COMPONENT_CPE,
   LINUX_KERNEL_CNA_SOURCE,
   NVD_ENDPOINT,
+  NVD_MAX_ADVISORIES,
+  NVD_MAX_PAGES,
   NVD_PAGE_SIZE,
   buildNvdQuery,
   describeNvdDrop,
+  nextNvdPage,
   nvdCacheKey,
   nvdCandidateTier,
   nvdCpeAlternates,
@@ -13,9 +19,19 @@ import {
   nvdVersion,
   parseNvdResponse,
   parseNvdTotal,
+  queryNvdBatch,
   rankNvdCandidates,
+  resolveNvdPaginationBounds,
   shouldPauseForRateLimit,
 } from './nvd.js';
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 describe('buildNvdQuery', () => {
   it('asks a mapped component by CPE version match, not by keyword', () => {
@@ -52,6 +68,14 @@ describe('buildNvdQuery', () => {
 
   it('URL-encodes the keyword safely', () => {
     expect(new URL(buildNvdQuery('lib c++', '1.0').url).searchParams.get('keywordSearch')).toBe('lib c++ 1.0');
+  });
+
+  it('puts later pages at the requested NVD startIndex without changing the first-page cache key', () => {
+    expect(new URL(buildNvdQuery('linux-kernel', '6.1').url).searchParams.get('startIndex')).toBeNull();
+    const page = new URL(buildNvdQuery('linux-kernel', '6.1', 25, 50).url);
+    expect(page.searchParams.get('startIndex')).toBe('50');
+    expect(page.searchParams.get('resultsPerPage')).toBe('25');
+    expect(nvdCacheKey('linux-kernel', '6.1', 50, 25)).toBe(page.toString());
   });
 });
 
@@ -180,6 +204,65 @@ describe('describeNvdDrop', () => {
     const real = describeNvdDrop([{ name: 'busybox', version: '1.01' }], 6);
     expect(real).toContain('the cap is genuinely too small');
     expect(real).toContain('1 cpe-versioned');
+  });
+});
+
+describe('nextNvdPage', () => {
+  it('starts at zero and advances by the advisory coverage already completed', () => {
+    const bounds = { pageSize: 50, maxPages: 4, maxAdvisories: 200 };
+    expect(
+      nextNvdPage(
+        { pagesCompleted: 0, advisoriesCollected: 0, lastPageCount: 0, lastPageRequested: 0, totalMatching: null },
+        bounds,
+      ),
+    ).toEqual({ fetch: true, startIndex: 0, resultsPerPage: 50 });
+    expect(
+      nextNvdPage(
+        { pagesCompleted: 1, advisoriesCollected: 50, lastPageCount: 50, lastPageRequested: 50, totalMatching: 70 },
+        bounds,
+      ),
+    ).toEqual({ fetch: true, startIndex: 50, resultsPerPage: 20 });
+    expect(
+      nextNvdPage(
+        { pagesCompleted: 2, advisoriesCollected: 70, lastPageCount: 20, lastPageRequested: 20, totalMatching: 70 },
+        bounds,
+      ),
+    ).toEqual({ fetch: false, complete: true, reason: 'complete' });
+  });
+
+  it('enforces both hard production ceilings even when callers request more', () => {
+    expect(resolveNvdPaginationBounds({ maxPages: 999, maxAdvisories: 999_999 })).toEqual({
+      pageSize: NVD_PAGE_SIZE,
+      maxPages: NVD_MAX_PAGES,
+      maxAdvisories: NVD_MAX_ADVISORIES,
+    });
+  });
+
+  it('never calls page/advisory-bounded or unknowable coverage complete', () => {
+    expect(
+      nextNvdPage(
+        { pagesCompleted: 2, advisoriesCollected: 100, lastPageCount: 50, lastPageRequested: 50, totalMatching: 120 },
+        { pageSize: 50, maxPages: 2, maxAdvisories: 200 },
+      ),
+    ).toEqual({ fetch: false, complete: false, reason: 'page-cap' });
+    expect(
+      nextNvdPage(
+        { pagesCompleted: 2, advisoriesCollected: 60, lastPageCount: 30, lastPageRequested: 30, totalMatching: 120 },
+        { pageSize: 30, maxPages: 4, maxAdvisories: 60 },
+      ),
+    ).toEqual({ fetch: false, complete: false, reason: 'advisory-cap' });
+    expect(
+      nextNvdPage(
+        { pagesCompleted: 1, advisoriesCollected: 50, lastPageCount: 50, lastPageRequested: 50, totalMatching: null },
+        { pageSize: 50, maxPages: 4, maxAdvisories: 200 },
+      ),
+    ).toEqual({ fetch: false, complete: false, reason: 'missing-total' });
+    expect(
+      nextNvdPage(
+        { pagesCompleted: 1, advisoriesCollected: 49, lastPageCount: 49, lastPageRequested: 50, totalMatching: 60 },
+        { pageSize: 50, maxPages: 4, maxAdvisories: 200 },
+      ),
+    ).toEqual({ fetch: false, complete: false, reason: 'short-page' });
   });
 });
 
@@ -320,5 +403,219 @@ describe('parseNvdResponse', () => {
     expect(adv[0]?.summary).toBe('');
     expect(parseNvdResponse({})).toEqual([]);
     expect(parseNvdResponse('nope')).toEqual([]);
+  });
+});
+
+describe('queryNvdBatch pagination', () => {
+  const cfg = {
+    allowlist: ['services.nvd.nist.gov'],
+    timeoutMs: 1_000,
+    hashLookup: false,
+  };
+
+  function cacheOptions() {
+    const dir = mkdtempSync(join(tmpdir(), 'firmlab-nvd-pages-'));
+    tempDirs.push(dir);
+    return { dir, now: 1_000, ttlMs: 60_000 };
+  }
+
+  function payload(start: number, count: number, totalResults: number) {
+    return {
+      totalResults,
+      vulnerabilities: Array.from({ length: count }, (_, i) => ({
+        cve: { id: `CVE-2026-${String(start + i).padStart(4, '0')}` },
+      })),
+    };
+  }
+
+  it('retrieves successive offsets, rate-limits network pages, and reuses every page from cache', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const requestTimes: number[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      requestTimes.push(Date.now());
+      const start = Number(new URL(String(input)).searchParams.get('startIndex') ?? 0);
+      const count = start === 0 ? 50 : 5;
+      return new Response(JSON.stringify(payload(start, count, 55)), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const cache = cacheOptions();
+
+    const firstPromise = queryNvdBatch([{ name: 'linux-kernel', version: '6.1' }], cfg, {
+      delayMs: 100,
+      cache,
+    });
+    await vi.runAllTimersAsync();
+    const first = await firstPromise;
+    expect(requestTimes).toEqual([1_000, 1_100]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(first.components[0]?.advisories).toHaveLength(55);
+    expect(first.components[0]?.pageCoverage).toMatchObject({
+      attemptedOffsets: [0, 50],
+      completedOffsets: [0, 50],
+      totalMatching: 55,
+      complete: true,
+      truncated: false,
+      stopReason: 'complete',
+    });
+    expect(first.cache).toMatchObject({ hits: 0, misses: 2 });
+
+    const cached = await queryNvdBatch([{ name: 'linux-kernel', version: '6.1' }], cfg, {
+      delayMs: 100,
+      cache,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(cached.cache).toMatchObject({ hits: 2, misses: 0 });
+    expect(cached.completed).toBe(1);
+    expect(cached.incomplete).toBe(0);
+  });
+
+  it('stops at the advisory bound and reports the retained prefix rather than calling it complete', async () => {
+    const urls: URL[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        urls.push(url);
+        const start = Number(url.searchParams.get('startIndex') ?? 0);
+        const count = Number(url.searchParams.get('resultsPerPage'));
+        return new Response(JSON.stringify(payload(start, count, 120)), { status: 200 });
+      }),
+    );
+
+    const result = await queryNvdBatch([{ name: 'linux-kernel', version: '6.1' }], cfg, {
+      delayMs: 0,
+      cache: cacheOptions(),
+      maxPages: 4,
+      maxAdvisories: 70,
+    });
+    expect(urls.map((url) => url.searchParams.get('startIndex'))).toEqual([null, '50']);
+    expect(urls.map((url) => url.searchParams.get('resultsPerPage'))).toEqual(['50', '20']);
+    expect(result.totalAdvisories).toBe(70);
+    expect(result.pageCoverage?.[0]).toMatchObject({
+      attemptedOffsets: [0, 50],
+      completedOffsets: [0, 50],
+      totalMatching: 120,
+      complete: false,
+      truncated: true,
+      stopReason: 'advisory-cap',
+    });
+    expect(result.truncated).toEqual([{ name: 'linux-kernel', version: '6.1', shown: 70, total: 120 }]);
+    expect(result.completed).toBe(0);
+    expect(result.incomplete).toBe(1);
+  });
+
+  it('enforces the production page ceiling even when the batch requests more pages and advisories', async () => {
+    const starts: (string | null)[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        const start = Number(url.searchParams.get('startIndex') ?? 0);
+        starts.push(url.searchParams.get('startIndex'));
+        return new Response(JSON.stringify(payload(start, 50, 300)), { status: 200 });
+      }),
+    );
+
+    const result = await queryNvdBatch([{ name: 'linux-kernel', version: '6.1' }], cfg, {
+      delayMs: 0,
+      cache: cacheOptions(),
+      maxPages: 999,
+      maxAdvisories: 999_999,
+    });
+
+    expect(starts).toEqual([null, '50', '100', '150']);
+    expect(result.components[0]?.advisories).toHaveLength(NVD_MAX_ADVISORIES);
+    expect(result.pageCoverage?.[0]).toMatchObject({
+      maxPages: NVD_MAX_PAGES,
+      maxAdvisories: NVD_MAX_ADVISORIES,
+      complete: false,
+      truncated: true,
+      stopReason: 'page-cap',
+    });
+    expect(result.incomplete).toBe(1);
+  });
+
+  it('keeps completed pages but marks a later-page failure as partial', async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls += 1;
+        return calls === 1
+          ? new Response(JSON.stringify(payload(0, 50, 60)), { status: 200 })
+          : new Response(null, { status: 503 });
+      }),
+    );
+
+    const result = await queryNvdBatch([{ name: 'linux-kernel', version: '6.1' }], cfg, {
+      delayMs: 0,
+      cache: cacheOptions(),
+    });
+    expect(result.components[0]?.advisories).toHaveLength(50);
+    expect(result.pageCoverage?.[0]).toMatchObject({
+      attemptedOffsets: [0, 50],
+      completedOffsets: [0],
+      totalMatching: 60,
+      complete: false,
+      truncated: true,
+      stopReason: 'request-failed',
+    });
+    expect(result.truncated).toEqual([{ name: 'linux-kernel', version: '6.1', shown: 50, total: 60 }]);
+  });
+
+  it('does not call pages with changing NVD totals a complete set', async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const start = Number(new URL(String(input)).searchParams.get('startIndex') ?? 0);
+        calls += 1;
+        return new Response(JSON.stringify(payload(start, start === 0 ? 50 : 5, calls === 1 ? 55 : 56)), {
+          status: 200,
+        });
+      }),
+    );
+
+    const result = await queryNvdBatch([{ name: 'linux-kernel', version: '6.1' }], cfg, {
+      delayMs: 0,
+      cache: cacheOptions(),
+    });
+
+    expect(result.components[0]?.advisories).toHaveLength(55);
+    expect(result.pageCoverage?.[0]).toMatchObject({
+      attemptedOffsets: [0, 50],
+      completedOffsets: [0, 50],
+      totalMatching: 55,
+      complete: false,
+      truncated: null,
+      stopReason: 'total-changed',
+    });
+    expect(result.completed).toBe(0);
+    expect(result.incomplete).toBe(1);
+  });
+
+  it('reports a first-page failure as unknown, not as an empty CPE answer', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 503 })),
+    );
+    const result = await queryNvdBatch([{ name: 'dropbear', version: '2012.55' }], cfg, {
+      delayMs: 0,
+      cache: cacheOptions(),
+    });
+    expect(result.components).toEqual([]);
+    expect(result.uncheckedIdentities).toEqual([]);
+    expect(result.truncated).toEqual([]);
+    expect(result.pageCoverage?.[0]).toMatchObject({
+      attemptedOffsets: [0],
+      completedOffsets: [],
+      totalMatching: null,
+      complete: false,
+      truncated: null,
+      stopReason: 'request-failed',
+    });
+    expect(result.completed).toBe(0);
+    expect(result.incomplete).toBe(1);
   });
 });

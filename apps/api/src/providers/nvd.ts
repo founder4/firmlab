@@ -204,10 +204,101 @@ export function rankNvdCandidates(candidates: NvdCandidate[]): NvdCandidate[] {
  */
 export const NVD_PAGE_SIZE = 50;
 
+/**
+ * Hard per-component retrieval bounds. Kernel CPEs can match thousands of CVEs, so pagination must have a ceiling
+ * just as the component queue does. Four pages closes the common 20/50-row first-page truncation without turning
+ * one component into an unbounded number of NVD requests; the coverage record below makes the remaining prefix
+ * explicit.
+ */
+export const NVD_MAX_PAGES = 4;
+export const NVD_MAX_ADVISORIES = 200;
+
+export interface NvdPaginationBounds {
+  pageSize: number;
+  maxPages: number;
+  maxAdvisories: number;
+}
+
+export interface NvdPaginationProgress {
+  pagesCompleted: number;
+  advisoriesCollected: number;
+  lastPageCount: number;
+  lastPageRequested: number;
+  totalMatching: number | null;
+}
+
+export type NvdPaginationStopReason =
+  | 'complete'
+  | 'page-cap'
+  | 'advisory-cap'
+  | 'missing-total'
+  | 'short-page'
+  | 'empty-page'
+  | 'total-changed'
+  | 'request-failed';
+
+export type NvdPageDecision =
+  | { fetch: true; startIndex: number; resultsPerPage: number }
+  | { fetch: false; complete: boolean; reason: Exclude<NvdPaginationStopReason, 'request-failed'> };
+
+/** Pure: normalize caller-supplied test/smaller bounds without ever permitting the production hard caps to grow. */
+export function resolveNvdPaginationBounds(
+  requested: { maxPages?: number; maxAdvisories?: number } = {},
+): NvdPaginationBounds {
+  const bounded = (value: number | undefined, hardCap: number): number => {
+    if (value === undefined || !Number.isFinite(value)) return hardCap;
+    return Math.max(1, Math.min(hardCap, Math.floor(value)));
+  };
+  return {
+    pageSize: NVD_PAGE_SIZE,
+    maxPages: bounded(requested.maxPages, NVD_MAX_PAGES),
+    maxAdvisories: bounded(requested.maxAdvisories, NVD_MAX_ADVISORIES),
+  };
+}
+
+/**
+ * Pure: decide whether another page may be requested and at which offset. A missing denominator, an empty page
+ * before the denominator is reached, or either hard cap stops retrieval as INCOMPLETE; only collecting the stated
+ * `totalMatching` count is complete.
+ */
+export function nextNvdPage(
+  progress: NvdPaginationProgress,
+  bounds: NvdPaginationBounds = resolveNvdPaginationBounds(),
+): NvdPageDecision {
+  if (progress.pagesCompleted === 0) {
+    return { fetch: true, startIndex: 0, resultsPerPage: Math.min(bounds.pageSize, bounds.maxAdvisories) };
+  }
+  if (progress.totalMatching === null) return { fetch: false, complete: false, reason: 'missing-total' };
+  if (progress.advisoriesCollected >= progress.totalMatching) {
+    return { fetch: false, complete: true, reason: 'complete' };
+  }
+  if (progress.lastPageCount < progress.lastPageRequested) {
+    return {
+      fetch: false,
+      complete: false,
+      reason: progress.lastPageCount === 0 ? 'empty-page' : 'short-page',
+    };
+  }
+  if (progress.pagesCompleted >= bounds.maxPages) return { fetch: false, complete: false, reason: 'page-cap' };
+  if (progress.advisoriesCollected >= bounds.maxAdvisories) {
+    return { fetch: false, complete: false, reason: 'advisory-cap' };
+  }
+  return {
+    fetch: true,
+    startIndex: progress.advisoriesCollected,
+    resultsPerPage: Math.min(
+      bounds.pageSize,
+      progress.totalMatching - progress.advisoriesCollected,
+      bounds.maxAdvisories - progress.advisoriesCollected,
+    ),
+  };
+}
+
 export function buildNvdQuery(
   name: string,
   version: string,
   resultsPerPage = NVD_PAGE_SIZE,
+  startIndex = 0,
 ): { url: string; strategy: NvdMatchStrategy } {
   const cpe = nvdCpeFor(name);
   const v = nvdVersion(version);
@@ -217,10 +308,12 @@ export function buildNvdQuery(
         virtualMatchString: `cpe:2.3:${nvdCpePart(name)}:${cpe}${v ? `:${v}` : ''}`,
         ...(normalizedName === 'linux-kernel' ? { sourceIdentifier: LINUX_KERNEL_CNA_SOURCE } : {}),
         resultsPerPage: String(resultsPerPage),
+        ...(startIndex > 0 ? { startIndex: String(startIndex) } : {}),
       })
     : new URLSearchParams({
         keywordSearch: v ? `${name} ${v}` : name,
         resultsPerPage: String(resultsPerPage),
+        ...(startIndex > 0 ? { startIndex: String(startIndex) } : {}),
       });
   return { url: `${NVD_ENDPOINT}?${params.toString()}`, strategy: cpe ? 'cpe' : 'keyword' };
 }
@@ -231,8 +324,8 @@ export function buildNvdQuery(
  * change to the query, `resultsPerPage` included, invalidates the entry rather than reusing the answer to a
  * different question.
  */
-export function nvdCacheKey(name: string, version: string): string {
-  return buildNvdQuery(name, version).url;
+export function nvdCacheKey(name: string, version: string, startIndex = 0, resultsPerPage = NVD_PAGE_SIZE): string {
+  return buildNvdQuery(name, version, resultsPerPage, startIndex).url;
 }
 
 /**
@@ -355,6 +448,29 @@ export interface NvdComponentResult {
    * visible or a truncated list reads as a complete one. Null when the response carried no count.
    */
   totalMatching: number | null;
+  /** Optional forever: older persisted results predate multi-page retrieval. */
+  pageCoverage?: NvdPageCoverage;
+  /** Optional forever: one freshness entry per attempted page, including null for a failed request. */
+  pageFreshness?: (Freshness | null)[];
+}
+
+export interface NvdPageCoverage {
+  attemptedOffsets: number[];
+  completedOffsets: number[];
+  pageSize: number;
+  maxPages: number;
+  maxAdvisories: number;
+  totalMatching: number | null;
+  complete: boolean;
+  /** Null means the response omitted the denominator, so truncation cannot honestly be decided either way. */
+  truncated: boolean | null;
+  stopReason: NvdPaginationStopReason;
+}
+
+interface NvdQueryControl {
+  maxPages?: number;
+  maxAdvisories?: number;
+  beforePage?: (willFetch: boolean) => Promise<void>;
 }
 
 /**
@@ -366,30 +482,107 @@ export async function queryNvd(
   component: { name: string; version: string },
   cfg: ResearchConfig,
   cache: CacheOptions = {},
+  control: NvdQueryControl = {},
 ): Promise<NvdComponentResult> {
-  const query = buildNvdQuery(component.name, component.version);
-  const answer = await cachedFetch(
-    NVD_CACHE_SOURCE,
-    nvdCacheKey(component.name, component.version),
-    async () => {
-      const headers: Record<string, string> = {};
-      if (cfg.nvdApiKey) headers.apiKey = cfg.nvdApiKey;
-      const res = await allowlistedFetch(query.url, cfg, { headers });
-      return res.ok ? await res.json() : null;
-    },
-    cache,
-  );
-  const advisories = answer.freshness ? parseNvdResponse(answer.payload) : [];
-  // Only an EMPTY cpe answer can be an artifact of which identity was asked; a populated one already answered.
-  const unchecked = query.strategy === 'cpe' && advisories.length === 0 ? nvdCpeAlternates(component.name) : [];
+  const bounds = resolveNvdPaginationBounds(control);
+  const advisories: NvdAdvisory[] = [];
+  const attemptedOffsets: number[] = [];
+  const completedOffsets: number[] = [];
+  const pageFreshness: (Freshness | null)[] = [];
+  let firstFreshness: Freshness | null = null;
+  let totalMatching: number | null = null;
+  let progress: NvdPaginationProgress = {
+    pagesCompleted: 0,
+    advisoriesCollected: 0,
+    lastPageCount: 0,
+    lastPageRequested: 0,
+    totalMatching: null,
+  };
+  let decision = nextNvdPage(progress, bounds);
+  let stopReason: NvdPaginationStopReason = 'request-failed';
+  let complete = false;
+
+  while (decision.fetch) {
+    const { startIndex, resultsPerPage } = decision;
+    const query = buildNvdQuery(component.name, component.version, resultsPerPage, startIndex);
+    const cacheKey = nvdCacheKey(component.name, component.version, startIndex, resultsPerPage);
+    const willFetch = readCache(NVD_CACHE_SOURCE, cacheKey, cache).status !== 'fresh';
+    await control.beforePage?.(willFetch);
+    attemptedOffsets.push(startIndex);
+
+    let answer: Awaited<ReturnType<typeof cachedFetch>>;
+    try {
+      answer = await cachedFetch(
+        NVD_CACHE_SOURCE,
+        cacheKey,
+        async () => {
+          const headers: Record<string, string> = {};
+          if (cfg.nvdApiKey) headers.apiKey = cfg.nvdApiKey;
+          const res = await allowlistedFetch(query.url, cfg, { headers });
+          return res.ok ? await res.json() : null;
+        },
+        cache,
+      );
+    } catch {
+      pageFreshness.push(null);
+      stopReason = 'request-failed';
+      break;
+    }
+    pageFreshness.push(answer.freshness);
+    if (!answer.freshness) {
+      stopReason = 'request-failed';
+      break;
+    }
+
+    if (firstFreshness === null) firstFreshness = answer.freshness;
+    completedOffsets.push(startIndex);
+    const page = parseNvdResponse(answer.payload).slice(0, resultsPerPage);
+    advisories.push(...page);
+    const pageTotal = parseNvdTotal(answer.payload);
+    if (totalMatching === null) totalMatching = pageTotal;
+    else if (pageTotal !== totalMatching) {
+      stopReason = 'total-changed';
+      break;
+    }
+    progress = {
+      pagesCompleted: completedOffsets.length,
+      advisoriesCollected: advisories.length,
+      lastPageCount: page.length,
+      lastPageRequested: resultsPerPage,
+      totalMatching,
+    };
+    decision = nextNvdPage(progress, bounds);
+    if (!decision.fetch) {
+      stopReason = decision.reason;
+      complete = decision.complete;
+    }
+  }
+
+  const truncated = totalMatching === null || stopReason === 'total-changed' ? null : advisories.length < totalMatching;
+  const pageCoverage: NvdPageCoverage = {
+    attemptedOffsets,
+    completedOffsets,
+    pageSize: bounds.pageSize,
+    maxPages: bounds.maxPages,
+    maxAdvisories: bounds.maxAdvisories,
+    totalMatching,
+    complete,
+    truncated,
+    stopReason,
+  };
+  const strategy = buildNvdQuery(component.name, component.version).strategy;
+  // Only a COMPLETE empty CPE answer can implicate alternate identities. Failure or unknown coverage is not zero.
+  const unchecked = strategy === 'cpe' && complete && advisories.length === 0 ? nvdCpeAlternates(component.name) : [];
   return {
     name: component.name,
     version: component.version,
     advisories,
-    freshness: answer.freshness,
-    matchedBy: query.strategy,
+    freshness: firstFreshness,
+    matchedBy: strategy,
     uncheckedIdentities: unchecked,
-    totalMatching: answer.freshness ? parseNvdTotal(answer.payload) : null,
+    totalMatching,
+    pageCoverage,
+    pageFreshness,
   };
 }
 
@@ -426,6 +619,12 @@ export interface NvdBatchResult {
   uncheckedIdentities: { name: string; version: string; identities: string[] }[];
   /** Components whose advisory list is a PREFIX of what NVD holds, with both numbers. Empty when nothing was cut. */
   truncated: { name: string; version: string; shown: number; total: number }[];
+  /** Optional forever: coverage includes empty and failed components that `components` intentionally omits. */
+  pageCoverage?: ({ name: string; version: string } & NvdPageCoverage)[];
+  /** Optional forever: attempts whose full reported match set was retrieved. */
+  completed?: number;
+  /** Optional forever: bounds, missing totals, or request failures prevented a complete component answer. */
+  incomplete?: number;
 }
 
 /**
@@ -472,7 +671,13 @@ export function mergeNvdCandidates(
 export async function queryNvdBatch(
   components: { name: string; version: string }[],
   cfg: ResearchConfig,
-  opts: { cap?: number; delayMs?: number; cache?: CacheOptions } = {},
+  opts: {
+    cap?: number;
+    delayMs?: number;
+    cache?: CacheOptions;
+    maxPages?: number;
+    maxAdvisories?: number;
+  } = {},
 ): Promise<NvdBatchResult> {
   const cap = opts.cap ?? (cfg.nvdApiKey ? 40 : 6);
   const delayMs = opts.delayMs ?? (cfg.nvdApiKey ? 0 : 6500);
@@ -495,24 +700,32 @@ export async function queryNvdBatch(
   const results: NvdComponentResult[] = [];
   const unchecked: { name: string; version: string; identities: string[] }[] = [];
   const truncated: { name: string; version: string; shown: number; total: number }[] = [];
+  const pageCoverage: ({ name: string; version: string } & NvdPageCoverage)[] = [];
   // Freshness is collected for every component, not only the ones with advisories: `components` keeps only the
   // latter, so this is the sole place the age of a clean answer survives.
   const freshness: (Freshness | null)[] = [];
   let queried = 0;
   let networkCalls = 0;
   let askedByCpe = 0;
+  let completed = 0;
   const toQuery = ranked.slice(0, cap);
   const dropped = ranked.slice(cap);
   for (const c of toQuery) {
-    // Peek before deciding to wait. `queryNvd` reads the cache again a moment later, which costs one small file
-    // read and keeps it self-contained; the alternative is a batch that sleeps through requests it never makes.
-    const willFetch = readCache(NVD_CACHE_SOURCE, nvdCacheKey(c.name, c.version), cache).status !== 'fresh';
-    if (shouldPauseForRateLimit(networkCalls, willFetch, delayMs)) await sleep(delayMs);
-    const r = await queryNvd(c, cfg, cache);
-    if (r.freshness?.origin === 'network') networkCalls += 1;
+    const r = await queryNvd(c, cfg, cache, {
+      ...(opts.maxPages === undefined ? {} : { maxPages: opts.maxPages }),
+      ...(opts.maxAdvisories === undefined ? {} : { maxAdvisories: opts.maxAdvisories }),
+      beforePage: async (willFetch) => {
+        if (shouldPauseForRateLimit(networkCalls, willFetch, delayMs)) await sleep(delayMs);
+        if (willFetch) networkCalls += 1;
+      },
+    });
     if (r.matchedBy === 'cpe') askedByCpe += 1;
     queried += 1;
-    freshness.push(r.freshness);
+    freshness.push(...(r.pageFreshness ?? [r.freshness]));
+    if (r.pageCoverage) {
+      pageCoverage.push({ name: r.name, version: r.version, ...r.pageCoverage });
+      if (r.pageCoverage.complete) completed += 1;
+    }
     if (r.advisories.length > 0) results.push(r);
     if (r.uncheckedIdentities.length > 0) {
       unchecked.push({ name: r.name, version: r.version, identities: r.uncheckedIdentities });
@@ -534,6 +747,9 @@ export async function queryNvdBatch(
     tiers,
     uncheckedIdentities: unchecked,
     truncated,
+    pageCoverage,
+    completed,
+    incomplete: queried - completed,
   };
 }
 
