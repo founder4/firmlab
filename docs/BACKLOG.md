@@ -131,11 +131,16 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `totalMatching`/`cveIds`/`upstream`, y esos tres campos los escribe `providers/osv.ts` / `providers/nvd.ts`, no
   `providers/sbom.ts`. Re-ejecutar SBOM no los rellena: es otro carril, con otro job y detrás de
   `FIRMLAB_RESEARCH`. Iba junto al punto anterior en una sola entrada y eso los hacía parecer un solo arreglo.
-- [ ] El cruce contra KEV vacío **no** es «ningún CVE explotado en la naturaleza»: `research/run.ts` alimenta
+- [x] El cruce contra KEV vacío **no** es «ningún CVE explotado en la naturaleza»: `research/run.ts` alimenta
   `fetchAndMatchKev` con `collectCveIds(osv, nvd)`, de modo que sin una ejecución de research posterior a
-  `cveIds` la entrada del cruce es el conjunto vacío y la salida también. Queda pendiente decidir si además se
-  cruza contra los CVE que aporta el carril SBOM — la base de grype ya trae un proveedor `kev` embebido y sería
-  un cruce local, sin red — y, mientras no se haga, que la superficie diga que la pregunta no se hizo.
+  `cveIds` la entrada del cruce es el conjunto vacío y la salida también. *(Hecho en `8b6e4e1`: el retorno vacío
+  lleva `notCheckedCode: 'no-input'` e `inputCveCount: 0`, ambos opcionales para siempre, no descarga el catálogo
+  y el log dice «not asked» en vez de imprimir un cero. Un fallo real de descarga queda separado como
+  `fetch-failed`; la web muestra los tres desenlaces —sin entrada, fallo y cero medido— con textos propios en
+  inglés y español, y conserva el fallback honesto para resultados persistidos por builds anteriores.)*
+- [ ] Decidir si el cruce KEV debe incorporar también los CVE del carril SBOM. La base de grype ya trae un
+  proveedor `kev` embebido, por lo que podría ser un cruce local sin red, pero sigue siendo una decisión de
+  política distinta de presentar honestamente una entrada vacía del carril research.
 - [x] Distinguir en W9 un grype que falló al correr de un grype que no puede correr. `sbomRun` (`opacidad.ts`)
   mandaba los tres casos de `grypeAvailable:false` al mismo `remedy: 'install-tool'`, y el tercero —grype corrió y
   lanzó— es un `retry`: una campaña de cobertura no lo reintentaba y lo reportaba como despliegue a arreglar. El
@@ -377,13 +382,17 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   no es ausente. `selection.configOptions` transporta el veredicto que la corrida de postura ya calculó, para que
   el carril de research no vuelva a responder una pregunta ya hecha y puedan discrepar.)*
 
-- [ ] **La tabla curada de componentes no tiene ruta propia.** `runComponentCve` solo lo invoca `opacidad.ts`, de
+- [x] **La tabla curada de componentes no tiene ruta propia.** `runComponentCve` solo lo invoca `opacidad.ts`, de
   modo que refrescar sus filas exige un scan autónomo completo: al validar las entradas nuevas el 2026-09-19,
   re-ejecutar `compmap` no tocó ni una fila `component-cve` —es otro proveedor— y hubo que lanzar `opacidad`
   sobre la Asus y esperar a que terminase. Medido: esa imagen pasó de **1 fila** (solo pppd) a **14** (7 DNSpooq
   + 6 awk + pppd), así que el refresco importa. Todos los demás proveedores tienen `POST /images/:id/<kind>`;
   éste no, y es el único cuyo contenido cambia cuando se edita una TABLA en vez de un binario del despliegue.
-  Añadir la ruta y registrarla en `index.ts` es el patrón ya establecido en `docs/ARCHITECTURE.md`.
+  Añadir la ruta y registrarla en `index.ts` es el patrón ya establecido en `docs/ARCHITECTURE.md`. *(Hecho en
+  `ca76f1a`: `POST /api/images/:id/component-cve` crea un job tipado propio, usa el último rootfs extraído, deja
+  que el provider declare honestamente la ausencia de rootfs y sincroniza únicamente el source estable
+  `component-cve`. Cuatro pruebas de ruta fijan el 404, la creación, el resultado y el reemplazo acotado de
+  findings.)*
 
 - [x] **Decidido: `CVE-2017-14491` se mantiene, y el criterio pasa a ser dato exigible.** La prosa decía que la
   tabla reclama un CVE «solo donde NVD enumera CPEs para las versiones en mano», lo que hacía parecer esa
