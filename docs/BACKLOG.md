@@ -11,31 +11,41 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Kernel, emulación, RTOS, UEFI
 
-- [ ] Profundizar la correlación kernel-CVE: el prefijo NVD puede tener miles de candidatos (2.037 para Linux
-  2.6.31); usar config/subsistema, diff de parches o VEX de proveedor para descartar, y paginar más allá de los
-  primeros 50 sin presentarlos como el conjunto completo.
-- [ ] Hacer que la reparación del guest alcance una ruta ejecutada: la intervención al final de `rcS` sigue
-  siendo inerte en el WR940N (`rcS` para en la línea 45 de 46, antes de llegar). Candidatos a investigar:
-  `/etc/inittab`, un `preInit` antes de `rcS`, o la línea de comandos del kernel. Desbloquea además emulación
-  interactiva/introspectable en vivo (`run_command_in_emulation`, enumeración de servicios).
-- [ ] Ampliar RTOS más allá del boot: fuzzing de periféricos/MMIO (µEmu/P2IM/Fuzzware) y enumeración de tareas
-  (`pxCurrentTCB`/listas de hilos). Renode hoy demuestra vida, no cobertura del HAL.
-- [ ] UEFI restante: LogoFAIL (bugs de parser de imagen), callouts SMM (`CommBuffer` sin validar, clase
-  efiXplorer), y postura de rango protegido SPI/BIOS-lock. Ya hay una BIOS real en el corpus y los 409 módulos
-  rankeados tienen disposición terminal — falta la técnica, no el dato.
-- [ ] Fuzzing avanzado: cmplog/compcov para resolver magic bytes, un libdesock preconstruido por arquitectura de
-  guest (para que el harness de red funcione sin `FIRMLAB_DESOCK`), y un lado de entrada para el fuzzer.
-  Fuzzing stateful/full-system (Fuzzware/µEmu) sigue siendo la frontera de investigación para RTOS.
-- [ ] Cross-binary dataflow: extender el scaffold de taint (hoy limitado a un binario) a través de binarios; W4
-  ya prueba la forma dentro de uno.
-- [ ] Librerías nunca preguntadas: filtrar `.so` de la cola de alcanzabilidad es correcto para la pregunta
+- [ ] Profundizar la correlación kernel-CVE. Ya hay paginación NVD acotada con denominadores/estados parciales y
+  el selector solo descarta un advisory cuando un subsistema mapeado está probado `off`; config ausente,
+  subsistema no mapeado y páginas no examinadas siguen explícitamente provisionales. Falta usar diff de parches o
+  VEX de proveedor para resolver backports sin inferirlos.
+- [ ] Hacer que la reparación del guest alcance una ruta ejecutada. El código ya inserta una primera entrada
+  `::sysinit:` estructuralmente segura en `/etc/inittab` y, si no puede, degrada al principio ejecutable de `rcS`,
+  con restauración byte-exacta y pruebas del orden. Falta el boot real del WR940N con evidencia de consola/red:
+  las pruebas de composición no autorizan a afirmar que el servicio quedó alcanzable en el dispositivo.
+- [ ] Ampliar RTOS más allá del boot. Ya existe un parser byte-only acotado para listas de tareas FreeRTOS cuando
+  se suministran símbolos/layout (`pxCurrentTCB` y lista circular), con ciclo, truncado y punteros fuera de rango
+  explícitos. Faltan el cableado API, una fuente real de símbolos/memoria y fuzzing de periféricos/MMIO
+  (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
+- [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
+  solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Siguen pendientes
+  LogoFAIL, callouts SMM (`CommBuffer`) y una captura PRx/BIOS-lock que pruebe la postura en ejecución.
+- [ ] Fuzzing avanzado. El planificador ya elige cmplog/compcov/plain según arquitectura, fija canal de entrada
+  archivo/stdin/socket, comprueba la arquitectura de `FIRMLAB_DESOCK` y declara cero ejecuciones/crashes con sus
+  límites. Faltan un libdesock preconstruido por arquitectura y evidencia de runs reales; fuzzing
+  stateful/full-system (Fuzzware/µEmu) sigue siendo la frontera RTOS.
+- [x] Cross-binary dataflow: el primer scaffold acotado enlaza escrituras y lecturas de la misma clave literal
+  UCI/NVRAM entre artefactos distintos y un sink del consumidor, separa namespaces y excluye autoenlaces. Es una
+  correlación `needs_runtime_reproduction`: no inventa orden temporal, control-flow ni ausencia de sanitización.
+- [x] Librerías nunca preguntadas: filtrar `.so` de la cola de alcanzabilidad es correcto para la pregunta
   actual, pero deja una librería vulnerable como candidato que nada resuelve nunca. Cargar el `.so` y arrancar
   simbólicamente desde una función exportada es un peldaño distinto, no una variante del actual.
 - [x] uClibc ya no distorsiona el sweep de reachability. Medido sobre los bytes del WDR3600: ambos ficheros son
   ELF32 MIPS big-endian ET_DYN con entry point no nulo; `libutil-0.9.30.so` tiene PT_INTERP y DT_SONAME, mientras
   `libmsglog.so` no tiene PT_INTERP. El predicado actual exige PT_INTERP y ausencia de DT_SONAME para ET_DYN, así
   que ambos dan `runnable=false` y ya no abren los 45 candidatos. La regresión fija las dos formas sin confundir
-  esta cola de programas con la pregunta separada de analizar funciones exportadas de una biblioteca.
+  esta cola de programas con la pregunta separada de analizar funciones exportadas de una biblioteca. Esa
+  pregunta separada ya tiene un escalón simbólico acotado desde exports (máximo 16), con intentados/completados y
+  resultados inconclusos explícitos; se validó con `libmagic.so.1` sin cambiar el modo de ejecutables.
+- [ ] Presentar el modo simbólico de librerías en los resúmenes UI/MCP: hoy el resultado persistido conserva la
+  cobertura en `library`, pero los consumidores antiguos miran `sinks` y pueden mostrar 0/0. Añadir además tests
+  directos de la clasificación `reachTargetKind` y de la rama library de opacidad.
 
 ## moria/mithril (nmatt0) — evaluado contra el corpus real, no adoptado
 
