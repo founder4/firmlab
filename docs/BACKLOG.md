@@ -437,7 +437,7 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   `source` de las filas (`symreach:<t>`, `symreach:<t>#cmdexec`, `dynprobe:<t>#<sink>`) salta la pregunta que un
   scan anterior ya hizo — que es lo que avanza el censo entre scans en vez de re-preguntar las tres más pequeñas —
   sin gastar presupuesto fresco, porque los caps siguen contando `c.planned`. Presupuestos por-fuente
-  (reachability/cmdexec/reproduction) y `MAX_DYNAMIC_STEPS` intactos; el conductor MCP/agente queda para su propio
+  (reachability/cmdexec/reproduction) y `OPACIDAD_DYNAMIC_STEP_CAP` intactos; el conductor MCP/agente queda para su propio
   apartado.
 
 ## Mercenario — agente 100% autónomo, opt-in (rompe determinismo/reproducibilidad)

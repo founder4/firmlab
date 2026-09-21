@@ -28,6 +28,7 @@ import {
   specKey,
   specsForClass,
 } from './opacidad-plan.js';
+import { OPACIDAD_DYNAMIC_STEP_CAP } from './opacidad.js';
 import { partitionByProvenance } from './operator-findings.js';
 import type { Service } from './providers/servicemap.js';
 import type { SinkHit } from './providers/webtaint.js';
@@ -111,6 +112,99 @@ describe('scheduleLeads', () => {
       'reproduce-crash': 1,
       'escalate-full-system': 1,
     });
+  });
+
+  const reach = (target: string): Lead => ({
+    kind: 'prove-reachability',
+    target,
+    sinks: ['strcpy'],
+    reason: `prove ${target}`,
+  });
+  const cmdexec = (target: string): Lead => ({
+    kind: 'prove-cmdexec-reachability',
+    target,
+    sinks: ['system'],
+    reason: `prove command execution in ${target}`,
+  });
+  const reproduce = (target: string, sink = 'strcpy'): Lead => ({
+    kind: 'reproduce-crash',
+    target,
+    sink,
+    addresses: ['0x1'],
+    reason: `reproduce ${target}:${sink}`,
+  });
+
+  function scheduleObservedShape(batches: Lead[][]): ScheduleState {
+    const state: ScheduleState = { planned: new Set(), dynamicCount: 0, capped: 0 };
+    for (const batch of batches) scheduleLeads(batch, state, OPACIDAD_DYNAMIC_STEP_CAP);
+    return state;
+  }
+
+  it('fits the MR3220 frontier and its bounded reproduction fan-out without arrival-order truncation', () => {
+    const batches = [
+      [
+        lead('usr/bin/httpd'),
+        reach('usr/bin/httpd'),
+        reach('sbin/apstart'),
+        reach('sbin/pktlogconf'),
+        cmdexec('usr/bin/httpd'),
+        cmdexec('usr/sbin/modem_scan'),
+        // A repeated service/candidate is one question, not one more unit of capacity.
+        reach('usr/bin/httpd'),
+      ],
+      [
+        reproduce('usr/bin/httpd'),
+        reproduce('sbin/pktlogconf'),
+        reproduce('usr/sbin/modem_scan', 'system'),
+        reproduce('usr/bin/httpd'),
+      ],
+    ];
+
+    const first = scheduleObservedShape(batches);
+    const second = scheduleObservedShape(batches);
+    expect(first.dynamicCount).toBe(9);
+    expect(first.capped).toBe(0);
+    expect(first.planned).toEqual(second.planned);
+  });
+
+  it('fits the BE3600 eight-step frontier plus the answer it surfaces, while full-system escalation stays unique', () => {
+    const escalation = (target: string): Lead => ({
+      kind: 'escalate-full-system',
+      target,
+      sink: 'system',
+      reason: `${target} needs the full system`,
+    });
+    const batches = [
+      [
+        lead('usr/sbin/dnsmasq'),
+        lead('usr/sbin/dropbear'),
+        lead('usr/sbin/uhttpd'),
+        reach('bin/dhcpdiscover'),
+        reach('usr/bin/dumpimage'),
+        reach('usr/bin/mkimage'),
+        cmdexec('usr/sbin/carrier-monitor'),
+        cmdexec('sbin/askfirst'),
+        lead('usr/sbin/uhttpd'),
+      ],
+      [reproduce('sbin/askfirst', 'system')],
+      [escalation('sbin/askfirst'), escalation('usr/sbin/carrier-monitor')],
+    ];
+
+    const state = scheduleObservedShape(batches);
+    expect(state.dynamicCount).toBe(10);
+    expect(state.capped).toBe(0);
+    expect([...state.planned].filter((key) => key === 'fullsystem')).toHaveLength(1);
+  });
+
+  it('still terminates at the declared cap and counts every unique overflow by kind', () => {
+    const state: ScheduleState = { planned: new Set(), dynamicCount: 0, capped: 0 };
+    const leads = Array.from({ length: OPACIDAD_DYNAMIC_STEP_CAP + 2 }, (_, i) => lead(`daemon-${i}`));
+    const added = scheduleLeads(leads, state, OPACIDAD_DYNAMIC_STEP_CAP);
+
+    expect(added).toHaveLength(OPACIDAD_DYNAMIC_STEP_CAP);
+    expect(state.dynamicCount).toBe(OPACIDAD_DYNAMIC_STEP_CAP);
+    expect(state.capped).toBe(2);
+    expect(state.cappedByKind).toEqual({ 'decompile-binary': 2 });
   });
 });
 

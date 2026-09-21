@@ -232,6 +232,19 @@ interface StepOutcome {
   leads?: Lead[];
 }
 
+/**
+ * Capacity for W9's dynamic worklist.
+ *
+ * Eight slots remain the bound for the first re-plan frontier (targeted decompiles plus the separately-bounded
+ * reachability questions). That frontier can legitimately produce one crash-reproduction step for every member
+ * of the reproduction budget, and all of those may converge on the one image-wide full-system escalation that
+ * `specKey` deduplicates. Reserving those downstream slots keeps an earlier frontier from starving the answer it
+ * surfaced while retaining a finite, auditable cap for the whole run.
+ */
+const FIRST_REPLAN_FRONTIER_CAP = 8;
+const FULL_SYSTEM_ESCALATION_CAP = 1;
+export const OPACIDAD_DYNAMIC_STEP_CAP = FIRST_REPLAN_FRONTIER_CAP + REPRODUCTION_LEAD_CAP + FULL_SYSTEM_ESCALATION_CAP;
+
 // === Per-provider executors (call the pure runner, then sync findings under the route's source) ===
 
 /** Did W0 claim this image carries a filesystem (a strong fs signature fired, or a Linux/FIT-UBI class)? */
@@ -1329,7 +1342,6 @@ export async function runOpacidad(
   // httpd serving a tainted handler, a native helper a tainted handler execs) that schedules a follow-up worker —
   // so the fixed plan becomes a dynamic worklist. Growth is deduped + capped so re-planning always terminates; a
   // lead past the cap is surfaced, not silently dropped.
-  const MAX_DYNAMIC_STEPS = 8;
   const agenda: PlanSpec[] = [...seed];
   const sched: ScheduleState = { planned: new Set(seed.map(specKey)), dynamicCount: 0, capped: 0 };
 
@@ -1401,7 +1413,7 @@ export async function runOpacidad(
       });
       handle.log(`✓ ${spec.worker}: ${out.summary}`);
       if (out.leads?.length) {
-        const added = scheduleLeads(out.leads, sched, MAX_DYNAMIC_STEPS);
+        const added = scheduleLeads(out.leads, sched, OPACIDAD_DYNAMIC_STEP_CAP);
         for (const ns of added) handle.log(`↳ re-plan: scheduled ${ns.worker} — ${ns.trigger}`);
         agenda.push(...added);
       }
@@ -1429,7 +1441,7 @@ export async function runOpacidad(
     steps.push({
       worker: 'W9 · Re-plan (cap reached)',
       status: 'degraded',
-      summary: `${sched.capped} further lead(s) not scheduled — dynamic step cap ${MAX_DYNAMIC_STEPS} reached${byKind ? ` (${byKind})` : ''}`,
+      summary: `${sched.capped} further lead(s) not scheduled — dynamic step cap ${OPACIDAD_DYNAMIC_STEP_CAP} reached${byKind ? ` (${byKind})` : ''}`,
       remedy: 'raise-bound',
       note: 'honest bound: raise the cap, or run the named rung by hand on the leads it did not reach',
     });
