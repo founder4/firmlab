@@ -2,14 +2,23 @@ import { describe, expect, it } from 'vitest';
 import type { BinAssessment } from './binvuln.js';
 import type { JobHandle } from './jobs.js';
 import {
+  type LibraryReach,
+  type LibrarySinkResult,
+  MAX_ENTRY_POINTS,
   MAX_SINKS,
+  buildLibraryFindings,
+  buildLibrarySpec,
   buildReachFindings,
   buildSpec,
+  classifyReachTarget,
   manualSource,
+  noEntryPoints,
   nothingToAsk,
+  parseLibraryReachOutput,
   parseReachOutput,
   pickSinks,
   runSymReach,
+  summariseLibraryReach,
   unavailable,
   validateSinkNames,
 } from './symreach.js';
@@ -300,5 +309,278 @@ describe('nothingToAsk — a binary with no unbounded-copy symbol is ANSWERED, n
   it('points at the sinks the binary DOES name, so the answer is not read as "uninteresting"', () => {
     const r = nothingToAsk('usr/sbin/tiny', assess({ cmdExec: ['system', 'popen'] }));
     expect(r.findings[0]?.rationale).toContain('system, popen');
+  });
+});
+
+/* ---------------------------------------------------------------------------------------------------------- *
+ * The library rung. Three things are pinned here: that a shared object is asked from its EXPORTS instead of from
+ * an entry point it does not have, that the weaker claim that produces is never dressed up as the stronger one,
+ * and that an executable comes out of every path unchanged.
+ * ---------------------------------------------------------------------------------------------------------- */
+
+/** Minimal ELF32 with a chosen e_type, program headers and dynamic tags — the shape `binvuln` is tested on too. */
+const elf = (type: number, phTypes: number[], dynTags: number[] = [], little = true): Uint8Array => {
+  const PH_OFF = 0x40;
+  const PH_ENT = 32;
+  const DYN_OFF = PH_OFF + PH_ENT * Math.max(1, phTypes.length);
+  const dynSize = (dynTags.length + 1) * 8;
+  const buf = Buffer.alloc(DYN_OFF + dynSize);
+  const u16 = little ? buf.writeUInt16LE.bind(buf) : buf.writeUInt16BE.bind(buf);
+  const u32 = little ? buf.writeUInt32LE.bind(buf) : buf.writeUInt32BE.bind(buf);
+  buf.set([0x7f, 0x45, 0x4c, 0x46, 1, little ? 1 : 2], 0);
+  u16(type, 0x10);
+  u32(PH_OFF, 0x1c);
+  u16(PH_ENT, 0x2a);
+  u16(phTypes.length, 0x2c);
+  phTypes.forEach((t, i) => {
+    const ph = PH_OFF + i * PH_ENT;
+    u32(t, ph);
+    if (t === 2) {
+      u32(DYN_OFF, ph + 0x04);
+      u32(dynSize, ph + 0x10);
+    }
+  });
+  dynTags.forEach((tag, i) => u32(tag, DYN_OFF + i * 8));
+  return buf;
+};
+
+const PT_LOAD = 1;
+const PT_DYNAMIC = 2;
+const PT_INTERP = 3;
+const DT_NEEDED = 1;
+const DT_SONAME = 14;
+
+describe('classifyReachTarget — which question this object can even be asked', () => {
+  it('leaves an executable on the entry-point rung', () => {
+    expect(classifyReachTarget(elf(2, [PT_LOAD]))).toBe('executable');
+  });
+
+  it('routes an ET_DYN with a SONAME to the library rung, interpreter or not', () => {
+    // The corpus shape that forced this: uClibc builds libc WITH an interpreter so it can print its banner.
+    expect(classifyReachTarget(elf(3, [PT_LOAD, PT_INTERP, PT_DYNAMIC], [DT_SONAME]))).toBe('library');
+    expect(classifyReachTarget(elf(3, [PT_LOAD, PT_DYNAMIC], [DT_NEEDED], false))).toBe('library');
+  });
+
+  it('leaves a PIE on the entry-point rung — ET_DYN, an interpreter, and no link-time name of its own', () => {
+    expect(classifyReachTarget(elf(3, [PT_LOAD, PT_INTERP, PT_DYNAMIC], [DT_NEEDED, 5]))).toBe('executable');
+  });
+
+  /**
+   * `isRunnableElf` answers `false` for a file it cannot PARSE, so deferring the whole decision to it would route
+   * every truncated executable into a rung that asks a library's question about it. e_type is read first for
+   * exactly this, and a `.ko` (ET_REL) stays where it was — the `exportreach` route owns that target.
+   */
+  it('never routes a non-ET_DYN object to the library rung, however broken its headers are', () => {
+    const truncated = elf(2, [PT_LOAD]);
+    truncated.set([0xff, 0xff], 0x2c); // e_phnum lies: nothing below the header can be parsed
+    expect(classifyReachTarget(truncated)).toBe('executable');
+    expect(classifyReachTarget(elf(1, [PT_LOAD]))).toBe('executable'); // ET_REL — a .ko
+  });
+
+  it('reports something that is not an ELF as such, rather than guessing a rung', () => {
+    expect(classifyReachTarget(Buffer.alloc(128, 0x41))).toBe('not-elf');
+    expect(classifyReachTarget(Buffer.alloc(8, 0x7f))).toBe('not-elf');
+  });
+});
+
+describe('buildLibrarySpec — the same prover, told where to start', () => {
+  it('asks the probe for the export-start mode and bounds how many exports it may start from', () => {
+    const spec = buildLibrarySpec('/rootfs/lib/libfoo.so', ['strcpy'], 120);
+    expect(spec.mode).toBe('library');
+    expect(spec.maxEntryPoints).toBe(MAX_ENTRY_POINTS);
+    expect(spec.budgetSeconds).toBe(120);
+    expect(spec.sinks).toEqual(['strcpy']);
+  });
+
+  it('leaves the executable spec exactly as it was — no mode, no export cap', () => {
+    const spec = buildSpec('/rootfs/usr/bin/httpd', ['strcpy'], 120);
+    expect(spec).not.toHaveProperty('mode');
+    expect(spec).not.toHaveProperty('maxEntryPoints');
+  });
+});
+
+describe('parseLibraryReachOutput', () => {
+  it('normalizes a run, keeping the export accounting beside each outcome', () => {
+    const parsed = parseLibraryReachOutput({
+      ok: true,
+      arch: 'MIPS32',
+      mode: 'library',
+      entryPointsTotal: 118,
+      entryPointsConsidered: 16,
+      maxEntryPoints: 16,
+      entryPointSource: 'dynsym-export',
+      entryPointsNamed: ['pwd_read', 'pwd_write'],
+      results: [
+        {
+          sink: 'strcpy',
+          outcome: 'reached',
+          addresses: ['0x400a10'],
+          reachedFrom: 'pwd_read',
+          entryPointsAttempted: 2,
+          entryPointsCompleted: 1,
+          steps: 61,
+          pruned: false,
+          errors: 0,
+          path: ['0x400900', '0x400a10'],
+        },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    expect(parsed.arch).toBe('MIPS32');
+    expect(parsed.library?.entryPointsTotal).toBe(118);
+    expect(parsed.library?.entryPointsConsidered).toBe(16);
+    expect(parsed.library?.entryPointSource).toBe('dynsym-export');
+    expect(parsed.library?.sinks[0]?.reachedFrom).toBe('pwd_read');
+    expect(parsed.library?.sinks[0]?.entryPointsAttempted).toBe(2);
+  });
+
+  it('treats an unrecognised outcome as inconclusive, never as a clean sink', () => {
+    const parsed = parseLibraryReachOutput({ ok: true, entryPointsTotal: 3, results: [{ sink: 'gets', outcome: '' }] });
+    expect(parsed.library?.sinks[0]?.outcome).toBe('not_reached_in_budget');
+    expect(parsed.library?.sinks[0]?.reason).toContain('inconclusive');
+  });
+
+  it('reads a missing export count as zero, which is the blocked path and not an answered one', () => {
+    const parsed = parseLibraryReachOutput({ ok: true, results: [] });
+    expect(parsed.library?.entryPointsTotal).toBe(0);
+  });
+
+  it('reports a probe failure rather than an empty success', () => {
+    expect(parseLibraryReachOutput({ ok: false, error: 'could not load the object' }).ok).toBe(false);
+    expect(parseLibraryReachOutput('not json').ok).toBe(false);
+  });
+});
+
+describe('buildLibraryFindings — a path from an export is a lead, not a proof of reachability from input', () => {
+  const sink = (over: Partial<LibrarySinkResult> = {}): LibrarySinkResult => ({
+    sink: 'strcpy',
+    outcome: 'reached',
+    addresses: ['0x400a10'],
+    entryPointsAttempted: 2,
+    entryPointsCompleted: 1,
+    steps: 61,
+    pruned: false,
+    errors: 0,
+    ...over,
+  });
+  const lib = (sinks: LibrarySinkResult[], over: Partial<LibraryReach> = {}): LibraryReach => ({
+    entryPointsTotal: 118,
+    entryPointsConsidered: 16,
+    maxEntryPoints: 16,
+    budgetSeconds: 90,
+    sinks,
+    ...over,
+  });
+
+  /**
+   * The line the whole rung turns on. An export's arguments are unconstrained, so a satisfiable path from one is
+   * strictly weaker than a path from program input — `static_confirmed` here would claim reachability nobody
+   * proved, and the `exportreach` lane's control-flow row would then look like the same fact twice.
+   */
+  it('files a reached sink as needs_runtime_reproduction and says why it is not confirmed', () => {
+    const drafts = buildLibraryFindings('lib/libfoo.so', lib([sink({ reachedFrom: 'pwd_read' })]));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.kind).toBe('library-sink-reachable');
+    expect(drafts[0]?.proofState).toBe('needs_runtime_reproduction');
+    expect(drafts[0]?.evidenceChannel).toBe('symbolic_execution');
+    expect(drafts[0]?.title).toContain('pwd_read');
+    expect(drafts[0]?.rationale).toMatch(/UNCONSTRAINED/);
+    expect(drafts[0]?.rationale).toMatch(/stronger than a control-flow route/);
+  });
+
+  it('ranks a command-exec sink above an unbounded copy, the axis that does move', () => {
+    const exec = buildLibraryFindings('lib/libfoo.so', lib([sink({ sink: 'system', reachedFrom: 'do_cmd' })]));
+    expect(exec[0]?.severity).toBe('high');
+    expect(buildLibraryFindings('lib/libfoo.so', lib([sink()]))[0]?.severity).toBe('medium');
+  });
+
+  it('never calls an unreached sink unreachable, and names both bounds it ran into', () => {
+    const drafts = buildLibraryFindings(
+      'lib/libfoo.so',
+      lib([
+        sink({ outcome: 'not_reached_in_budget', entryPointsAttempted: 4, entryPointsCompleted: 1, errors: 2 }),
+        sink({ sink: 'gets', outcome: 'skipped', entryPointsAttempted: 0, entryPointsCompleted: 0, reason: 'budget' }),
+      ]),
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.kind).toBe('library-sink-reachability-inconclusive');
+    expect(drafts[0]?.proofState).toBe('needs_runtime_reproduction');
+    expect(drafts[0]?.rationale).toMatch(/None of that is evidence the sinks are unreachable/);
+    // Attempted vs completed, and the exports never started from at all: the silence has to be readable.
+    const ev = drafts[0]?.evidence as Record<string, number>;
+    expect(ev.entryPointSearchesAttempted).toBe(4);
+    expect(ev.entryPointSearchesCompleted).toBe(1);
+    expect(ev.entryPointsNotConsidered).toBe(102);
+    expect(ev.toolErrors).toBe(2);
+    expect(drafts[0]?.rationale).toContain('102');
+  });
+
+  it('says nothing at all about a sink the object does not import', () => {
+    expect(buildLibraryFindings('lib/libfoo.so', lib([sink({ outcome: 'absent' })]))).toEqual([]);
+  });
+
+  it('mixes one reached lead with the note for the rest, in one run', () => {
+    const drafts = buildLibraryFindings(
+      'lib/libfoo.so',
+      lib([sink({ reachedFrom: 'pwd_read' }), sink({ sink: 'sprintf', outcome: 'not_reached_in_budget' })]),
+    );
+    expect(drafts.map((d) => d.kind)).toEqual(['library-sink-reachable', 'library-sink-reachability-inconclusive']);
+    // The rung never reaches the entry-point rung's proof state, whatever it found.
+    expect(drafts.some((d) => d.proofState === 'static_confirmed')).toBe(false);
+  });
+});
+
+describe('summariseLibraryReach — the export cap is a bound, so it is in the sentence', () => {
+  it('names the exports considered, the ones never started from, and what a miss does not mean', () => {
+    const text = summariseLibraryReach('lib/libc.so.0', {
+      entryPointsTotal: 1600,
+      entryPointsConsidered: 16,
+      maxEntryPoints: 16,
+      budgetSeconds: 90,
+      sinks: [
+        {
+          sink: 'strcpy',
+          outcome: 'not_reached_in_budget',
+          addresses: [],
+          entryPointsAttempted: 16,
+          entryPointsCompleted: 0,
+          steps: 400,
+          pruned: true,
+          errors: 0,
+        },
+      ],
+    });
+    expect(text).toContain('16 of its 1600');
+    expect(text).toContain('1584 were never started from');
+    expect(text).toMatch(/inconclusive rather than unreachable/);
+  });
+
+  it('says so plainly when every export was considered', () => {
+    const text = summariseLibraryReach('lib/libfoo.so', {
+      entryPointsTotal: 9,
+      entryPointsConsidered: 9,
+      maxEntryPoints: 16,
+      budgetSeconds: 90,
+      sinks: [],
+    });
+    expect(text).toContain('all 9 of its exported entry point(s)');
+  });
+});
+
+describe('noEntryPoints — nowhere to ask from is not a library with nothing in it', () => {
+  it('blocks rather than answering, and writes the row that keeps the silence visible', () => {
+    const r = noEntryPoints('lib/libstripped.so', {
+      entryPointsTotal: 0,
+      entryPointsConsidered: 0,
+      maxEntryPoints: MAX_ENTRY_POINTS,
+      budgetSeconds: 90,
+      sinks: [],
+    });
+    expect(r.available).toBe(false);
+    expect(r.blockedBy).toBe('platform');
+    expect(r.mode).toBe('library');
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0]?.proofState).toBe('blocked_by_platform');
+    expect(r.reason).toMatch(/not a library free of reachable sinks/);
   });
 });

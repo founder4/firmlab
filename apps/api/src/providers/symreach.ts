@@ -20,6 +20,13 @@
  *  - a question that could not be POSED — no rootfs, the binary is not in it, the sink policy kept none of the
  *    names asked about — is none of the above and writes NO row. See `SymReachBlockedBy`.
  *
+ * **Two rungs, one prover.** Everything above describes the EXECUTABLE rung and it is unchanged. A shared object
+ * (ET_DYN with a `DT_SONAME`) has no entry point to explore from, so it keeps the same bounded symbolic search and
+ * starts it at each EXPORTED function instead — see the library rung at the bottom of this file. What that proves
+ * is weaker, because an export's arguments are unconstrained, so its rows stay `needs_runtime_reproduction`, they
+ * never enter `sinks` (whose `reached` means the entry-point claim), and the `exportreach` lane's control-flow
+ * answer about the same object is left exactly where it is.
+ *
  * The spec builder, the result parser and the verdict mapper are PURE and unit-tested; the runner only shells out to
  * the bundled `scripts/angr-reach.py` under a hard timeout.
  */
@@ -31,8 +38,9 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { FindingDraft } from '../findings-normalize.js';
 import { angrPython, isToolAvailable } from '../tools.js';
-import { type BinAssessment, UNSAFE_COPY_FNS, assessBinaryFile } from './binvuln.js';
+import { type BinAssessment, UNSAFE_COPY_FNS, assessBinaryFile, isRunnableElf } from './binvuln.js';
 import { resolveInsideRootfs } from './decompile.js';
+import { sinkSeverity } from './exportreach.js';
 import type { JobHandle } from './jobs.js';
 
 const execFileAsync = promisify(execFile);
@@ -113,6 +121,13 @@ export interface SinkResult {
  */
 export type SymReachBlockedBy = 'platform' | 'harness' | 'request';
 
+/**
+ * Which question was actually asked. `executable` is the symbolic search from the entry point this module opens
+ * with; `library` is the control-flow question an object entered through its exports admits instead. They make
+ * different claims and nothing may merge them — see the library rung below.
+ */
+export type SymReachMode = 'executable' | 'library';
+
 export interface SymReachResult {
   available: boolean;
   reason: string;
@@ -121,6 +136,19 @@ export interface SymReachResult {
   binary: string;
   arch?: string;
   entry?: string;
+  /**
+   * Which RUNG answered. Absent on every result stored before the library rung existed, and absent is
+   * `executable` — a stored result is JSON written by an older build and a field added to one is optional forever.
+   */
+  mode?: SymReachMode;
+  /**
+   * Present only in library mode: the export-start search's own outcomes and bounds. They are deliberately NOT in
+   * `sinks`: a `reached` there is the entry-point claim that every reader — the panel badge, W9's summary, the
+   * reproduction queue — treats as `static_confirmed` reachability from program input, and a path from an export
+   * under unconstrained arguments is a weaker fact that must not be counted as one.
+   */
+  library?: LibraryReach;
+  /** ENTRY-POINT outcomes only, and empty in library mode. See `library`. */
   sinks: SinkResult[];
   findings: FindingDraft[];
   /** The sinks actually sent to the probe, and the ones the per-run cap left unasked (never silently dropped). */
@@ -432,6 +460,318 @@ export function nothingToAsk(binary: string, assessment: BinAssessment): SymReac
   };
 }
 
+/* ------------------------------------------------------------------------------------------------------------ *
+ * The LIBRARY rung — the same symbolic question, started where a shared object can actually be entered.
+ *
+ * Everything above explores from the ENTRY POINT. A `.so` has none: it is entered through an exported function,
+ * so the search was structurally unable to answer anything about one — and it ran anyway. Four
+ * `symreach:lib/lib*.so` rows in this project's own ledger had to be RETIRED for exactly that, each having spent
+ * a real angr budget to come back inconclusive about a question that was never posed.
+ *
+ * So a library target keeps the prover and changes the START STATE: `angr-reach.py` in `mode: 'library'` builds a
+ * `call_state` at each exported function and asks the same bounded question from there.
+ *
+ * **What a `reached` means here, and it is NOT what it means above.** The arguments of an exported function are
+ * unconstrained, so a path found from one proves the branch conditions along it can be satisfied by *some*
+ * argument values — not that any caller can produce them, and not that an outsider's input reaches it. That is
+ * strictly more than `exportreach`'s control-flow route (which checks no condition at all) and strictly less than
+ * an entry-point `reached`, so the rows say so and the proof state stays `needs_runtime_reproduction`. The
+ * `exportreach` lane is untouched and keeps writing its own rows under its own source: the two answer different
+ * questions about the same object and neither replaces the other.
+ *
+ * **What a silence means, on two axes rather than one.** This search is bounded by wall-clock, steps and states
+ * like the one above, AND by how many exports it starts from at all — a symbolic `call_state` at an export was
+ * measured on a real module at 5925 steps and 123 seconds without reaching a target 0x51c inside the very
+ * function being explored. So the result carries exports declared, exports considered, exports actually attempted
+ * per sink, and how many of those searches ended by running out of states rather than out of budget. An object
+ * that declares NO export is not a library with nothing reachable in it — there was nowhere to ask from, and that
+ * comes back blocked.
+ * ------------------------------------------------------------------------------------------------------------ */
+
+/** Which rung a target belongs on. `not-elf` is the caller's problem; the routes refuse it before reaching here. */
+export type ReachTargetKind = 'executable' | 'library' | 'not-elf';
+
+const ET_DYN = 3;
+
+/**
+ * Pure: read the ELF header and say which rung this object belongs on.
+ *
+ * The axis is ET_DYN + `DT_SONAME`, and that predicate already exists — `isRunnableElf` in `binvuln.ts` settled it
+ * after measuring that PT_INTERP alone does NOT separate a PIE from a library (uClibc builds `libc` with an
+ * interpreter so it can print its own banner, and 37 `.so` files across the corpus were classed runnable on that
+ * reasoning). This defers to it rather than growing a second copy of the dynamic-section walk that can drift.
+ *
+ * `e_type` is read here for one reason: `isRunnableElf` answers `false` for a file it cannot PARSE, and a
+ * truncated ET_EXEC must not fall into library mode on a failed parse. Only ET_DYN is routed. ET_REL (a `.ko`) is
+ * deliberately NOT: it stays on the executable path exactly as before, and the `exportreach` route owns it.
+ */
+export function classifyReachTarget(buf: Uint8Array): ReachTargetKind {
+  if (buf.length < 64) return 'not-elf';
+  if (!(buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46)) return 'not-elf';
+  if (buf[4] !== 1 && buf[4] !== 2) return 'not-elf';
+  if (buf[5] !== 1 && buf[5] !== 2) return 'not-elf';
+  const lo = buf[0x10] as number;
+  const hi = buf[0x11] as number;
+  const eType = buf[5] === 1 ? lo | (hi << 8) : hi | (lo << 8);
+  if (eType !== ET_DYN) return 'executable';
+  return isRunnableElf(buf) ? 'executable' : 'library';
+}
+
+/** The same 4 MB prefix bound `binvuln` reads binaries under — a dynamic section past it is not worth a full read. */
+const CLASSIFY_READ_CAP = 4 * 1024 * 1024;
+
+/** Classify a file on disk. Unreadable ⇒ `not-elf`, which leaves the existing executable path to report it. */
+export function reachTargetKind(abs: string): ReachTargetKind {
+  try {
+    const fd = fs.openSync(abs, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const buf = Buffer.allocUnsafe(Math.min(size, CLASSIFY_READ_CAP));
+      fs.readSync(fd, buf, 0, buf.length, 0);
+      return classifyReachTarget(buf);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return 'not-elf';
+  }
+}
+
+/**
+ * How many exported functions one run starts a search from.
+ *
+ * The second bound, and the one that does not exist on the executable rung: there is exactly one entry point, and
+ * there are ~1600 exports in a C library. Sixteen is deliberately small — a slice of wall-clock too thin to take a
+ * step proves nothing about the export it was spent on — and the count of exports NOT considered travels on every
+ * result so the cap is never mistaken for the whole set.
+ */
+export const MAX_ENTRY_POINTS = 16;
+
+/** One sink's outcome in library mode, plus the export accounting that makes its silence readable. */
+export interface LibrarySinkResult {
+  sink: string;
+  outcome: SinkOutcome;
+  addresses: string[];
+  /** Exports this sink's search actually started from — never more than `entryPointsConsidered`. */
+  entryPointsAttempted: number;
+  /** Of those, the searches that ran out of STATES rather than out of budget, and pruned nothing on the way. */
+  entryPointsCompleted: number;
+  /** The exported function the path was found from, when one was. */
+  reachedFrom?: string;
+  steps: number;
+  pruned: boolean;
+  errors: number;
+  reason?: string;
+  path?: string[];
+}
+
+/** What the library rung did. Optional on the result, forever — a stored result may predate this rung. */
+export interface LibraryReach {
+  /** Exported functions the object declares. ZERO means there was nowhere to ask FROM, not that nothing is reachable. */
+  entryPointsTotal: number;
+  /** How many of them this run could consider, after `maxEntryPoints`. */
+  entryPointsConsidered: number;
+  maxEntryPoints: number;
+  /** `dynsym-export`, or `global-symbol` where the object declares no dynamic exports at all. */
+  entryPointSource?: string;
+  entryPointsNamed?: string[];
+  sinks: LibrarySinkResult[];
+  budgetSeconds: number;
+}
+
+/** Pure: the JSON spec for a library run — the executable spec plus the start-state mode and its own bound. */
+export function buildLibrarySpec(
+  absBinary: string,
+  sinks: string[],
+  budgetSeconds = DEFAULT_BUDGET_SECONDS,
+): ReachSpec & { mode: 'library'; maxEntryPoints: number } {
+  return { ...buildSpec(absBinary, sinks, budgetSeconds), mode: 'library', maxEntryPoints: MAX_ENTRY_POINTS };
+}
+
+/**
+ * Pure: normalize the probe's library JSON. Same rule as `parseReachOutput` — an outcome that cannot be read is an
+ * inconclusive, never a sink that came back clean — plus one of its own: a missing export count reads as ZERO,
+ * which routes to the blocked path rather than to a library that answered with no exports.
+ */
+export function parseLibraryReachOutput(raw: unknown): {
+  ok: boolean;
+  error?: string;
+  arch?: string;
+  library?: Omit<LibraryReach, 'budgetSeconds'>;
+} {
+  if (!raw || typeof raw !== 'object') return { ok: false, error: 'probe produced no JSON object' };
+  const o = raw as Record<string, unknown>;
+  if (o.ok !== true) return { ok: false, error: str(o.error, 'probe reported failure') };
+
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const rows = Array.isArray(o.results) ? o.results : [];
+  const known: SinkOutcome[] = ['reached', 'not_reached_in_budget', 'absent', 'skipped'];
+  const sinks: LibrarySinkResult[] = rows.map((r) => {
+    const e = (r ?? {}) as Record<string, unknown>;
+    const outcome = str(e.outcome);
+    const result: LibrarySinkResult = {
+      sink: str(e.sink, '?'),
+      outcome: (known as string[]).includes(outcome) ? (outcome as SinkOutcome) : 'not_reached_in_budget',
+      addresses: Array.isArray(e.addresses) ? e.addresses.map((a) => str(a)) : [],
+      entryPointsAttempted: num(e.entryPointsAttempted),
+      entryPointsCompleted: num(e.entryPointsCompleted),
+      steps: num(e.steps),
+      pruned: e.pruned === true,
+      errors: num(e.errors),
+    };
+    if (!(known as string[]).includes(outcome)) {
+      result.reason = `unrecognised probe outcome '${outcome}' — treated as inconclusive`;
+    } else if (typeof e.reason === 'string') {
+      result.reason = e.reason;
+    }
+    if (typeof e.reachedFrom === 'string' && e.reachedFrom) result.reachedFrom = e.reachedFrom;
+    if (Array.isArray(e.path)) result.path = e.path.map((a) => str(a));
+    return result;
+  });
+
+  const entryPointsTotal = num(o.entryPointsTotal);
+  return {
+    ok: true,
+    ...(typeof o.arch === 'string' ? { arch: o.arch } : {}),
+    library: {
+      entryPointsTotal,
+      entryPointsConsidered: num(o.entryPointsConsidered),
+      maxEntryPoints: typeof o.maxEntryPoints === 'number' ? o.maxEntryPoints : MAX_ENTRY_POINTS,
+      ...(typeof o.entryPointSource === 'string' ? { entryPointSource: o.entryPointSource } : {}),
+      ...(Array.isArray(o.entryPointsNamed) ? { entryPointsNamed: o.entryPointsNamed.map((n) => str(n)) } : {}),
+      sinks,
+    },
+  };
+}
+
+/**
+ * Pure: the sentence stating what the library run covered. Both bounds are in it, with both counts, because the
+ * export cap is the one a reader cannot infer from anything else on the result.
+ */
+export function summariseLibraryReach(binary: string, lib: LibraryReach): string {
+  const reached = lib.sinks.filter((s) => s.outcome === 'reached');
+  const unconsidered = Math.max(0, lib.entryPointsTotal - lib.entryPointsConsidered);
+  const capNote = unconsidered
+    ? [
+        `${lib.entryPointsConsidered} of its ${lib.entryPointsTotal} exported entry point(s) were considered`,
+        `(per-run cap ${lib.maxEntryPoints}); the other ${unconsidered} were never started from, so nothing`,
+        'was asked about them.',
+      ].join(' ')
+    : `all ${lib.entryPointsTotal} of its exported entry point(s) were considered.`;
+  return [
+    `${binary} is a shared object: explored symbolically from its EXPORTS, not from an entry point it does not`,
+    `have. ${reached.length}/${lib.sinks.length} sink(s) reached — ${capNote}`,
+    'A path from an export holds under unconstrained arguments, which is weaker than reachability from program',
+    'input, and a sink not reached is inconclusive rather than unreachable.',
+  ].join(' ');
+}
+
+/**
+ * Pure: the ledger rows for a library run.
+ *
+ * A `reached` sink is a real, checkable upgrade over "this library imports strcpy" and it is deliberately NOT
+ * `static_confirmed`: what was proven is a satisfiable path from an exported function under arguments nothing
+ * constrains, and whether a caller on this device can produce them is exactly the unproven part. Every other
+ * outcome composes one aggregate note carrying the two bounds, so a library that was barely looked at cannot read
+ * like one that was cleared.
+ */
+export function buildLibraryFindings(binary: string, lib: LibraryReach): FindingDraft[] {
+  const drafts: FindingDraft[] = [];
+
+  for (const s of lib.sinks.filter((x) => x.outcome === 'reached')) {
+    drafts.push({
+      kind: 'library-sink-reachable',
+      title: `${s.sink} in ${binary} is reachable from the exported function ${s.reachedFrom ?? '(unnamed)'}`,
+      severity: sinkSeverity(s.sink),
+      // NOT static_confirmed. The path is real; the arguments that walk it were never shown to be producible.
+      proofState: 'needs_runtime_reproduction',
+      evidenceChannel: 'symbolic_execution',
+      evidence: {
+        binary,
+        sink: s.sink,
+        addresses: s.addresses,
+        reachedFrom: s.reachedFrom ?? null,
+        steps: s.steps,
+        entryPointsAttempted: s.entryPointsAttempted,
+        entryPointsTotal: lib.entryPointsTotal,
+        ...(s.path ? { pathTail: s.path } : {}),
+      },
+      rationale: [
+        `Symbolic execution started at the exported function ${s.reachedFrom ?? '(unnamed)'} and found a path to`,
+        `the ${s.sink} call site whose branch conditions are satisfiable together. This library has no entry point`,
+        'of its own, so an export is the strongest place to start from — and the claim is bounded there: the',
+        "export's arguments are UNCONSTRAINED, so nothing here shows that a caller on this device can supply the",
+        'values that walk this path. That is why this is a lead and not a confirmed reachability from input, and',
+        'it is strictly stronger than a control-flow route, which checks no condition at all.',
+      ].join(' '),
+    });
+  }
+
+  const unresolved = lib.sinks.filter((s) => s.outcome === 'not_reached_in_budget' || s.outcome === 'skipped');
+  if (unresolved.length > 0) {
+    const attempted = unresolved.reduce((n, s) => n + s.entryPointsAttempted, 0);
+    const completed = unresolved.reduce((n, s) => n + s.entryPointsCompleted, 0);
+    const toolErrors = unresolved.reduce((n, s) => n + s.errors, 0);
+    const pruned = unresolved.some((s) => s.pruned);
+    const unconsidered = Math.max(0, lib.entryPointsTotal - lib.entryPointsConsidered);
+    drafts.push({
+      kind: 'library-sink-reachability-inconclusive',
+      title: `Reachability of ${unresolved.length} sink(s) in ${binary} from its exports is unresolved`,
+      severity: 'info',
+      proofState: 'needs_runtime_reproduction',
+      evidenceChannel: 'symbolic_execution',
+      evidence: {
+        binary,
+        sinks: unresolved.map((s) => s.sink),
+        entryPointsTotal: lib.entryPointsTotal,
+        entryPointsConsidered: lib.entryPointsConsidered,
+        entryPointsNotConsidered: unconsidered,
+        entryPointSearchesAttempted: attempted,
+        entryPointSearchesCompleted: completed,
+        statesPruned: pruned,
+        toolErrors,
+        budgetSeconds: lib.budgetSeconds,
+        detail: unresolved.map((s) => `${s.sink} (${s.reason ?? 'budget spent'})`).join('; '),
+      },
+      rationale: [
+        `The bounded search started from ${attempted} export search(es) for these sinks and did not reach them.`,
+        `Only ${completed} of those searches ran out of states inside their bounds; the rest ran out of budget,`,
+        unconsidered ? `and ${unconsidered} of this object's exports were never started from at all.` : '',
+        pruned ? 'Active states were pruned to stay inside the memory bound, narrowing the search further.' : '',
+        toolErrors ? `${toolErrors} state(s) were lost to angr-internal errors — paths never explored.` : '',
+        'None of that is evidence the sinks are unreachable: from an export the argument space is unconstrained,',
+        'so the search fans out and rarely converges. The candidates keep their needs-reproduction state; a larger',
+        'budget, more exports, or the control-flow route the `exportreach` lane reports are the next rungs.',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    });
+  }
+
+  return drafts;
+}
+
+/**
+ * The library question asked of an object that declares no export to ask it from.
+ *
+ * `blocked_by_platform`, not an answer: a stripped object whose export table is gone and a library with no
+ * reachable sink look identical from here, and reporting the second would be a bound read as a result. Measured
+ * context for how common this is: 357 of the corpus's 791 `.so` files carry no section headers at all.
+ */
+export function noEntryPoints(binary: string, lib: LibraryReach): SymReachResult {
+  const reason = [
+    `${binary} is a shared object that declares NO exported function, so there was nowhere to start a symbolic`,
+    'search FROM. No sink was examined. This is a failure to pose the question here, not a library free of',
+    'reachable sinks.',
+  ].join(' ');
+  return {
+    ...unavailable(binary, reason, 'platform'),
+    mode: 'library',
+    library: lib,
+    budgetSeconds: lib.budgetSeconds,
+  };
+}
+
 /** Locate the bundled probe. The compiled provider runs from `apps/api/dist/providers/`, so scripts is two up. */
 function probeScript(): string {
   if (process.env.FIRMLAB_ANGR_SCRIPT) return path.resolve(process.env.FIRMLAB_ANGR_SCRIPT);
@@ -492,13 +832,24 @@ export async function runSymReach(
     );
   }
 
+  // WHERE the search starts is the only thing the target class changes. Everything above — derivation, the sink
+  // policy, the per-run cap — is the same question; everything below is the same prover under the same budget.
+  const mode: SymReachMode = reachTargetKind(abs) === 'library' ? 'library' : 'executable';
+
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-angr-'));
   const specPath = path.join(workDir, 'spec.json');
   const outPath = path.join(workDir, 'out.json');
 
   try {
-    fs.writeFileSync(specPath, JSON.stringify(buildSpec(abs, asked, budgetSeconds)));
-    handle.log(`angr: asking reachability of ${asked.join('/')} in ${binary} (budget ${budgetSeconds}s).`);
+    const spec =
+      mode === 'library' ? buildLibrarySpec(abs, asked, budgetSeconds) : buildSpec(abs, asked, budgetSeconds);
+    fs.writeFileSync(specPath, JSON.stringify(spec));
+    handle.log(
+      mode === 'library'
+        ? `angr: ${binary} is a shared object — asking reachability of ${asked.join('/')} from up to ` +
+            `${MAX_ENTRY_POINTS} exported function(s), since it has no entry point (budget ${budgetSeconds}s).`
+        : `angr: asking reachability of ${asked.join('/')} in ${binary} (budget ${budgetSeconds}s).`,
+    );
     try {
       // Hard kill a little past the probe's own budget — the probe self-limits, this is the backstop.
       await execFileAsync(angrPython(), [probeScript(), specPath, outPath], {
@@ -520,9 +871,9 @@ export async function runSymReach(
     }
 
     if (!fs.existsSync(outPath)) return unavailable(binary, 'angr probe produced no output', 'harness');
-    let parsed: ReturnType<typeof parseReachOutput>;
+    let raw: unknown;
     try {
-      parsed = parseReachOutput(JSON.parse(fs.readFileSync(outPath, 'utf8')));
+      raw = JSON.parse(fs.readFileSync(outPath, 'utf8'));
     } catch (err) {
       return unavailable(
         binary,
@@ -530,6 +881,33 @@ export async function runSymReach(
         'harness',
       );
     }
+
+    if (mode === 'library') {
+      const lib = parseLibraryReachOutput(raw);
+      if (!lib.ok || !lib.library) return unavailable(binary, lib.error ?? 'angr probe reported failure');
+      const library: LibraryReach = { ...lib.library, budgetSeconds };
+      const shared = {
+        binary,
+        ...(lib.arch ? { arch: lib.arch } : {}),
+        mode: 'library' as const,
+        library,
+        asked,
+        dropped,
+        derivedSinks,
+        budgetSeconds,
+      };
+      // Nowhere to start from is not a library with nothing in it — see `noEntryPoints`.
+      if (library.entryPointsTotal === 0) {
+        const blocked = { ...noEntryPoints(binary, library), ...shared };
+        handle.log(blocked.reason);
+        return blocked;
+      }
+      const reason = summariseLibraryReach(binary, library);
+      handle.log(reason);
+      return { ...shared, available: true, reason, sinks: [], findings: buildLibraryFindings(binary, library) };
+    }
+
+    const parsed = parseReachOutput(raw);
     if (!parsed.ok) return unavailable(binary, parsed.error ?? 'angr probe reported failure');
 
     const reached = parsed.sinks.filter((s) => s.outcome === 'reached').length;
@@ -545,6 +923,7 @@ export async function runSymReach(
       binary,
       ...(parsed.arch ? { arch: parsed.arch } : {}),
       ...(parsed.entry ? { entry: parsed.entry } : {}),
+      mode: 'executable',
       sinks: parsed.sinks,
       findings: buildReachFindings(binary, parsed.sinks),
       asked,

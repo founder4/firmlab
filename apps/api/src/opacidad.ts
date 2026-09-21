@@ -1043,6 +1043,21 @@ async function symreachRun(c: RunCtx, spec: PlanSpec): Promise<StepOutcome> {
       note: r.reason,
     };
   }
+  // A shared object was asked from its EXPORTS instead, and its outcomes deliberately do not live in `sinks` —
+  // counting them there would turn a path under unconstrained arguments into the entry-point claim. No
+  // reproduction lead is scheduled either: those key on `sink-reachable` rows, and qemu-user cannot run a `.so`.
+  if (r.mode === 'library' && r.library) {
+    const lib = r.library;
+    const hit = lib.sinks.filter((s) => s.outcome === 'reached');
+    const from = `${lib.entryPointsConsidered} of ${lib.entryPointsTotal} export(s)`;
+    return {
+      summary: hit.length
+        ? `reachability ${binary} (library): ${hit.map((s) => s.sink).join('/')} reachable from ${from}`
+        : `reachability ${binary} (library): no sink reached from ${from} (inconclusive, not clean)`,
+      findingCount: r.findings.length,
+      ...(hit.length === 0 ? { degraded: true, remedy: 'unbounded-search' as const, note: r.reason } : {}),
+    };
+  }
   const reached = r.sinks.filter((s) => s.outcome === 'reached');
   // A proven-reachable sink is the best possible candidate for actually running the thing. The budget is the same
   // one the sweep drew on for persisted-reachable sinks, and the suppression set drops a sink the ledger already
