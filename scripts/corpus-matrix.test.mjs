@@ -50,6 +50,47 @@ test('baseline matches bytes and worker across changed IDs, filenames and orderi
   assert.equal(evaluateRegressions(comparison).length, 1);
 });
 
+test('duplicate firmware bytes are matched one record at a time by stable record identity', () => {
+  const digest = 'd'.repeat(64);
+  const baseline = snapshot([
+    { ...sample('d', [stage('A', 'found', 2)], 'left'), filename: 'left-old.bin', uploadedAt: 1 },
+    { ...sample('d', [stage('A', 'ran-empty')], 'right'), filename: 'right-old.bin', uploadedAt: 2 },
+  ]);
+  const current = snapshot([
+    { ...sample('d', [stage('A', 'found', 3)], 'right'), filename: 'right-new.bin', uploadedAt: 2 },
+    { ...sample('d', [stage('A', 'degraded', 1)], 'left'), filename: 'left-new.bin', uploadedAt: 1 },
+  ]);
+
+  const comparison = compareMatrices(current, baseline);
+
+  assert.equal(comparison.comparedCells, 2);
+  assert.deepEqual(comparison.regressions, [
+    { sha256: digest, filename: 'left-new.bin', worker: 'A', before: 'found', after: 'degraded' },
+  ]);
+  assert.deepEqual(comparison.findingCountChanges, [
+    { sha256: digest, filename: 'left-new.bin', worker: 'A', before: 2, after: 1 },
+    { sha256: digest, filename: 'right-new.bin', worker: 'A', before: 0, after: 3 },
+  ]);
+});
+
+test('duplicate firmware bytes with changed IDs can be matched by a stable filename', () => {
+  const baseline = snapshot([
+    { ...sample('e', [stage('A', 'found')], 'old-left'), filename: 'left.bin' },
+    { ...sample('e', [stage('A', 'ran-empty')], 'old-right'), filename: 'right.bin' },
+  ]);
+  const current = snapshot([
+    { ...sample('e', [stage('A', 'found')], 'new-right'), filename: 'right.bin' },
+    { ...sample('e', [stage('A', 'degraded')], 'new-left'), filename: 'left.bin' },
+  ]);
+
+  const comparison = compareMatrices(current, baseline);
+
+  assert.equal(comparison.comparedCells, 2);
+  assert.deepEqual(comparison.regressions, [
+    { sha256: 'e'.repeat(64), filename: 'left.bin', worker: 'A', before: 'found', after: 'degraded' },
+  ]);
+});
+
 test('each executed state becoming unavailable or degraded is a regression', () => {
   for (const before of ['found', 'ran-empty']) {
     for (const after of ['degraded', 'no-input', 'not-run', 'not-built']) {
@@ -95,12 +136,15 @@ test('missing and new samples or stages are reported separately from execution r
 
 test('invalid or ambiguous baseline schemas fail explicitly, while additive metadata is compatible', () => {
   const valid = snapshot([sample('a', [stage('A', 'found')])]);
+  assert.throws(
+    () => compareMatrices(valid, snapshot([sample('a', []), sample('a', [])])),
+    /ambiguous duplicate sample SHA-256/,
+  );
   for (const invalid of [
     null,
     { ...valid, schemaVersion: 2 },
     {},
     snapshot([image('old', 'old.bin')]),
-    snapshot([sample('a', []), sample('a', [])]),
     snapshot([sample('a', [stage('A', 'future-status')])]),
     snapshot([sample('a', [stage('A', 'found'), stage('A', 'found')])]),
   ]) {

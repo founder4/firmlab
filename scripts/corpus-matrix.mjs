@@ -21,7 +21,62 @@ export const STATUS_META = {
 
 const STATUS_ORDER = Object.keys(STATUS_META);
 
-/** Compare immutable image bytes + stage identity, never transient IDs, labels or row order. */
+const SAMPLE_DISCRIMINATORS = [
+  ['id', (sample) => (typeof sample.id === 'string' && sample.id ? sample.id : null)],
+  ['uploadedAt', (sample) => (Number.isSafeInteger(sample.uploadedAt) ? sample.uploadedAt : null)],
+  ['filename', (sample) => (typeof sample.filename === 'string' && sample.filename ? sample.filename : null)],
+];
+
+function sortSamples(samples) {
+  return samples.toSorted((a, b) =>
+    JSON.stringify([a.id ?? null, a.uploadedAt ?? null, a.filename ?? null]).localeCompare(
+      JSON.stringify([b.id ?? null, b.uploadedAt ?? null, b.filename ?? null]),
+    ),
+  );
+}
+
+/** Match repeated bytes one record at a time without using mutable coverage results as identity. */
+export function matchDuplicateSamples(sha256, baseline, current) {
+  let before = [...baseline];
+  let after = [...current];
+  const pairs = [];
+
+  for (const [, discriminator] of SAMPLE_DISCRIMINATORS) {
+    const beforeByValue = Map.groupBy(before, discriminator);
+    const afterByValue = Map.groupBy(after, discriminator);
+    const matchedBefore = new Set();
+    const matchedAfter = new Set();
+    const sharedValues = [...beforeByValue.keys()]
+      .filter((value) => value !== null && afterByValue.has(value))
+      .sort((a, b) => String(a).localeCompare(String(b)));
+    for (const value of sharedValues) {
+      const oldMatches = beforeByValue.get(value);
+      const newMatches = afterByValue.get(value);
+      if (oldMatches.length !== 1 || newMatches.length !== 1) continue;
+      const oldSample = oldMatches[0];
+      const newSample = newMatches[0];
+      pairs.push([oldSample, newSample]);
+      matchedBefore.add(oldSample);
+      matchedAfter.add(newSample);
+    }
+    before = before.filter((sample) => !matchedBefore.has(sample));
+    after = after.filter((sample) => !matchedAfter.has(sample));
+  }
+
+  if (before.length === 1 && after.length === 1) {
+    pairs.push([before[0], after[0]]);
+    before = [];
+    after = [];
+  }
+  if (before.length > 0 && after.length > 0) {
+    throw new Error(
+      `ambiguous duplicate sample SHA-256 ${sha256}: ${before.length} baseline and ${after.length} current records remain after matching id, uploadedAt and filename`,
+    );
+  }
+  return { pairs, removed: sortSamples(before), added: sortSamples(after) };
+}
+
+/** Compare immutable image bytes + stage identity; transient metadata only disambiguates repeated bytes. */
 export function compareMatrices(current, baseline) {
   const index = (matrix, name) => {
     if (matrix?.schemaVersion !== 1 || !Array.isArray(matrix.samples)) {
@@ -33,7 +88,6 @@ export function compareMatrices(current, baseline) {
         throw new Error(`${name}: sample has missing or invalid SHA-256`);
       }
       const sha256 = sample.sha256.toLowerCase();
-      if (samples.has(sha256)) throw new Error(`${name}: duplicate sample SHA-256 ${sha256}`);
       if (!Array.isArray(sample.coverage?.stages)) throw new Error(`${name}: missing stages for ${sha256}`);
       const stages = new Map();
       for (const stage of sample.coverage.stages) {
@@ -43,7 +97,9 @@ export function compareMatrices(current, baseline) {
         if (stages.has(stage.worker)) throw new Error(`${name}: duplicate stage ${stage.worker} for ${sha256}`);
         stages.set(stage.worker, stage);
       }
-      samples.set(sha256, { filename: sample.filename, stages });
+      const matches = samples.get(sha256) ?? [];
+      matches.push({ id: sample.id, filename: sample.filename, uploadedAt: sample.uploadedAt, stages });
+      samples.set(sha256, matches);
     }
     return samples;
   };
@@ -60,44 +116,39 @@ export function compareMatrices(current, baseline) {
     regressions: [],
   };
   for (const sha256 of [...new Set([...before.keys(), ...after.keys()])].sort()) {
-    const oldSample = before.get(sha256);
-    const newSample = after.get(sha256);
-    if (!oldSample) {
-      result.addedSamples.push({ sha256, filename: newSample.filename });
-      continue;
-    }
-    if (!newSample) {
-      result.removedSamples.push({ sha256, filename: oldSample.filename });
-      continue;
-    }
-    for (const worker of [...new Set([...oldSample.stages.keys(), ...newSample.stages.keys()])].sort()) {
-      const previous = oldSample.stages.get(worker);
-      const next = newSample.stages.get(worker);
-      const cell = { sha256, filename: newSample.filename, worker };
-      if (!previous) {
-        result.addedStages.push(cell);
-        continue;
-      }
-      if (!next) {
-        result.removedStages.push(cell);
-        continue;
-      }
-      result.comparedCells++;
-      if (previous.status !== next.status) {
-        const change = { ...cell, before: previous.status, after: next.status };
-        result.statusChanges.push(change);
-        if (
-          ['found', 'ran-empty'].includes(previous.status) &&
-          ['degraded', 'no-input', 'not-run', 'not-built'].includes(next.status)
-        ) {
-          result.regressions.push(change);
+    const matched = matchDuplicateSamples(sha256, before.get(sha256) ?? [], after.get(sha256) ?? []);
+    for (const newSample of matched.added) result.addedSamples.push({ sha256, filename: newSample.filename });
+    for (const oldSample of matched.removed) result.removedSamples.push({ sha256, filename: oldSample.filename });
+    for (const [oldSample, newSample] of matched.pairs) {
+      for (const worker of [...new Set([...oldSample.stages.keys(), ...newSample.stages.keys()])].sort()) {
+        const previous = oldSample.stages.get(worker);
+        const next = newSample.stages.get(worker);
+        const cell = { sha256, filename: newSample.filename, worker };
+        if (!previous) {
+          result.addedStages.push(cell);
+          continue;
         }
-      }
-      const oldCount =
-        Number.isSafeInteger(previous.findingCount) && previous.findingCount >= 0 ? previous.findingCount : null;
-      const newCount = Number.isSafeInteger(next.findingCount) && next.findingCount >= 0 ? next.findingCount : null;
-      if (oldCount !== newCount) {
-        result.findingCountChanges.push({ ...cell, before: oldCount, after: newCount });
+        if (!next) {
+          result.removedStages.push(cell);
+          continue;
+        }
+        result.comparedCells++;
+        if (previous.status !== next.status) {
+          const change = { ...cell, before: previous.status, after: next.status };
+          result.statusChanges.push(change);
+          if (
+            ['found', 'ran-empty'].includes(previous.status) &&
+            ['degraded', 'no-input', 'not-run', 'not-built'].includes(next.status)
+          ) {
+            result.regressions.push(change);
+          }
+        }
+        const oldCount =
+          Number.isSafeInteger(previous.findingCount) && previous.findingCount >= 0 ? previous.findingCount : null;
+        const newCount = Number.isSafeInteger(next.findingCount) && next.findingCount >= 0 ? next.findingCount : null;
+        if (oldCount !== newCount) {
+          result.findingCountChanges.push({ ...cell, before: oldCount, after: newCount });
+        }
       }
     }
   }
