@@ -20,6 +20,12 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type { FindingSeverity, ProofState } from '@firmlab/core';
 import { type IsolationLevel, loadIsolationLimits, runIsolated } from './isolate.js';
+import {
+  SPI_DESCRIPTOR_PARSE_CAP_BYTES,
+  SPI_DESCRIPTOR_SCAN_CAP_BYTES,
+  type SpiDescriptorAnalysis,
+  analyzeSpiDescriptor,
+} from './spi-descriptor.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -84,6 +90,8 @@ export interface ChipsecResult {
    * results predate this measurement. A rejected oversized input records zero bytes decoded, never a prefix.
    */
   inputCoverage?: ChipsecInputCoverage;
+  /** Static descriptor region defaults and explicit parse bounds; optional forever for persisted older results. */
+  spiDescriptor?: SpiDescriptorAnalysis;
 }
 
 export interface ChipsecInputCoverage {
@@ -551,6 +559,37 @@ function blocked(reason: string): ChipsecResult {
   };
 }
 
+/** Read only enough source bytes for the bounded descriptor scan and its maximum region table. */
+function inspectSpiDescriptorImage(firmwarePath: string): SpiDescriptorAnalysis {
+  let imageBytes = 0;
+  let fd: number | null = null;
+  try {
+    imageBytes = fs.statSync(firmwarePath).size;
+    const bytesToRead = Math.min(imageBytes, SPI_DESCRIPTOR_SCAN_CAP_BYTES + SPI_DESCRIPTOR_PARSE_CAP_BYTES);
+    if (bytesToRead === 0) return analyzeSpiDescriptor(Buffer.alloc(0), { imageSizeBytes: imageBytes });
+    const buffer = Buffer.alloc(bytesToRead);
+    fd = fs.openSync(firmwarePath, 'r');
+    let bytesRead = 0;
+    while (bytesRead < bytesToRead) {
+      const count = fs.readSync(fd, buffer, bytesRead, bytesToRead - bytesRead, bytesRead);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    if (bytesRead !== bytesToRead) return analyzeSpiDescriptor(null, { imageSizeBytes: imageBytes });
+    return analyzeSpiDescriptor(buffer, { imageSizeBytes: imageBytes });
+  } catch {
+    return analyzeSpiDescriptor(null, { imageSizeBytes: imageBytes });
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Preserve the parser result; a close failure does not change the bytes already read.
+      }
+    }
+  }
+}
+
 /**
  * Decode + scan a UEFI/BIOS image with chipsec — offline and honest. Blocked when chipsec is absent or the image
  * has no parseable firmware volumes (not a UEFI image); a successful decode yields `static_confirmed` — a fact
@@ -562,8 +601,13 @@ export async function runChipsec(
 ): Promise<ChipsecResult> {
   const seconds = opts.seconds ?? 60;
   const env = opts.env ?? process.env;
+  const spiDescriptor = inspectSpiDescriptorImage(firmwarePath);
   if (!(await detectChipsec())) {
-    return blocked('chipsec not installed (opt-in UEFI-analysis layer).');
+    return {
+      ...blocked('chipsec not installed (opt-in UEFI-analysis layer).'),
+      spiDescriptor,
+      findings: spiDescriptor.findings,
+    };
   }
 
   // chipsec writes its parse next to the input file, so copy the image into a throwaway dir we own and clean up.
@@ -576,6 +620,8 @@ export async function runChipsec(
         ...blocked(input.reason as string),
         available: true,
         inputCoverage: input.coverage,
+        spiDescriptor,
+        findings: spiDescriptor.findings,
       };
     }
     // The size guard above has accepted the WHOLE image. Never hand CHIPSEC a prefix under the original name:
@@ -615,6 +661,8 @@ export async function runChipsec(
         command: res.command,
         isolation: res.isolation,
         inputCoverage: input.coverage,
+        spiDescriptor,
+        findings: spiDescriptor.findings,
       };
     }
 
@@ -636,10 +684,13 @@ export async function runChipsec(
         command: res.command,
         isolation: res.isolation,
         inputCoverage: input.coverage,
+        spiDescriptor,
+        findings: spiDescriptor.findings,
       };
     }
 
     const findings = [
+      ...spiDescriptor.findings,
       ...scanUefi(volumes, modules, loadUefiIocs(env)),
       ...(secureBoot ? secureBootFindings(secureBoot) : []),
     ];
@@ -659,6 +710,7 @@ export async function runChipsec(
       command: res.command,
       isolation: res.isolation,
       inputCoverage: input.coverage,
+      spiDescriptor,
     };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
