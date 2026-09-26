@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectLoaderDerivedKey, detectLoaderDerivedKeyInBytes } from '../src/crypto-loader.js';
+import { detectLoaderDerivedKey, detectLoaderDerivedKeyInBytes, parseEnc1Container } from '../src/crypto-loader.js';
 import { extractStrings } from '../src/strings.js';
 
 /** Build a buffer of NUL-separated strings, so extractStrings recovers each with a real offset. */
@@ -101,5 +101,50 @@ describe('detectLoaderDerivedKey', () => {
     expect(r).not.toBeNull();
     expect(r?.confidence).toBe('medium');
     expect(r?.candidateConstants.length).toBe(0);
+  });
+
+  it('scores only the existing narrow candidate shape and does not admit lowercase or base64 salts', () => {
+    const r = detectLoaderDerivedKey([
+      { value: 'derive flash key', offset: 0 },
+      { value: 'sha256', offset: 1 },
+      { value: 'Acme-Widget', offset: 2 },
+      { value: 'NX820-boot', offset: 20 },
+      { value: 'vendor-seed', offset: 3 },
+      { value: 'YWJjZGVmZ2hpamtsbW5vcA==', offset: 4 },
+    ]);
+    expect(r?.candidateConstants.map((candidate) => candidate.value)).toEqual(['NX820-boot', 'Acme-Widget']);
+    expect(r?.candidateConstants[0]).toMatchObject({
+      score: 4,
+      signals: ['mixed-case-hyphenated', 'seed-or-boot-role-token', 'numeric-identifier'],
+    });
+  });
+});
+
+describe('parseEnc1Container', () => {
+  it('returns the shared structure for a complete padded container embedded in a larger image', () => {
+    const offset = 17;
+    const plaintextLength = 1025;
+    const cipherLength = 1040;
+    const buf = Buffer.alloc(offset + 32 + cipherLength + 9);
+    buf.write('ENC1', offset, 'ascii');
+    buf.writeUInt32LE(plaintextLength, offset + 4);
+    expect(parseEnc1Container(buf, offset, buf.length - 9)).toEqual({
+      offset,
+      plaintextLength,
+      cipherLength,
+      ivOffset: offset + 8,
+      bodyOffset: offset + 32,
+      endOffset: offset + 32 + cipherLength,
+    });
+  });
+
+  it('rejects incidental magic and a body that is incomplete inside the stated bound', () => {
+    const text = Buffer.from('not an ENC1 partition in rodata', 'ascii');
+    expect(parseEnc1Container(text, text.indexOf('ENC1'))).toBeNull();
+
+    const truncated = Buffer.alloc(64);
+    truncated.write('ENC1', 0, 'ascii');
+    truncated.writeUInt32LE(1024, 4);
+    expect(parseEnc1Container(truncated, 0, truncated.length)).toBeNull();
   });
 });

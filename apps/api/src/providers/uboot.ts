@@ -5,15 +5,15 @@
  * `key=value` variables, and reason about the boot posture (root-shell boot args, an interruptible autoboot, a
  * network boot path, an exposed serial console) strictly from what the variables actually contain.
  *
- * Everything here is PURE + unit-tested (the env decoder, the block locator, the audit) except the thin runner,
- * which only reads a bounded prefix of the image and composes the pure parts. It is HONEST: no env block found
- * degrades to found:false with an explicit reason; it never fabricates a boot configuration, and every finding
- * quotes the offending variable. Proof states top out at `static_confirmed` (a fact about the stored env bytes,
- * never a device claim) — a boot-args root shell or a netboot path is `needs_runtime_reproduction` because it is a
- * lead that only a real boot confirms.
+ * Everything here is PURE + unit-tested (the env decoder, the block locator, the audits) except the thin runner,
+ * which only reads a bounded prefix of the image and composes the pure parts. The loader-key audit runs even when
+ * no environment can be read, and records that bounded coverage separately. It is HONEST: no env block found
+ * degrades to found:false with an explicit reason; it never fabricates a boot configuration. Proof states top out
+ * at `static_confirmed` (a fact about stored bytes, never a device claim) — boot-args and loader-key findings are
+ * `needs_runtime_reproduction` leads whose behavior or data flow still needs confirmation.
  */
 import fs from 'node:fs';
-import { detectLoaderDerivedKeyInBytes, windowEntropy } from '@firmlab/core';
+import { detectLoaderDerivedKeyInBytes, parseEnc1Container, windowEntropy } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
 import { auditKernelCommandLine, truncate } from './boot-cmdline.js';
 
@@ -59,6 +59,17 @@ export interface UbootResult {
    * found, so a reader who wants to know whether ANOTHER block could be sitting past the prefix needs this.
    */
   scan?: { bytesRead: number; totalBytes: number };
+  /**
+   * Whether the bounded loader-key audit ran, what it covered, and how many leads it produced. Optional forever:
+   * older persisted results have no field, which means coverage was not recorded rather than that the audit was
+   * empty.
+   */
+  loaderKeyAudit?: {
+    attempted: boolean;
+    completed: boolean;
+    leadsFound: number;
+    scan?: { bytesRead: number; totalBytes: number; complete: boolean };
+  };
 }
 
 // A key is a C-identifier-ish token; a value is any run of printable ASCII (spaces and '=' allowed). A chunk that
@@ -578,6 +589,8 @@ export function auditBootEnv(vars: Record<string, string>, script?: BootScriptRe
  * inside help text ("decrypt the ENC1 partition") are followed by ASCII that reads as an absurd length. Validating
  * `orig_len` is what separates a container from a string, so a loader's own rodata mention of ENC1 is not counted.
  */
+const LOADER_AUDIT_CAP = 4 * 1024 * 1024;
+
 function findEnc1Offsets(
   buf: Uint8Array,
   limit: number,
@@ -587,18 +600,14 @@ function findEnc1Offsets(
   let total = 0;
   const end = Math.min(buf.length, limit);
   for (let i = 0; i + 32 <= end; i++) {
-    if (buf[i] === 0x45 && buf[i + 1] === 0x4e && buf[i + 2] === 0x43 && buf[i + 3] === 0x31) {
-      const origLen =
-        ((buf[i + 4] ?? 0) | ((buf[i + 5] ?? 0) << 8) | ((buf[i + 6] ?? 0) << 16) | ((buf[i + 7] ?? 0) << 24)) >>> 0;
-      const cipherLength = Math.ceil(origLen / 16) * 16;
-      const bodyStart = i + 32;
-      const bodyEnd = bodyStart + cipherLength;
-      if (origLen < 0x400 || origLen > 0x4000000 || bodyEnd > end) continue;
-      const sampleEnd = Math.min(bodyEnd, bodyStart + 4096);
-      if (sampleEnd - bodyStart < 512 || windowEntropy(buf, bodyStart, sampleEnd) <= 7.5) continue;
-      total++;
-      if (offsets.length < cap) offsets.push(i);
+    const container = parseEnc1Container(buf, i, end);
+    if (!container || container.plaintextLength < 0x400 || container.plaintextLength > 0x4000000) continue;
+    const sampleEnd = Math.min(container.endOffset, container.bodyOffset + 4096);
+    if (sampleEnd - container.bodyOffset < 512 || windowEntropy(buf, container.bodyOffset, sampleEnd) <= 7.5) {
+      continue;
     }
+    total++;
+    if (offsets.length < cap) offsets.push(i);
   }
   return { offsets, total, dropped: total - offsets.length };
 }
@@ -621,8 +630,12 @@ function decryptInvocations(vars: Record<string, string>): Array<{ var: string; 
  * statically — a lead, not a `blocked_by_security` wall. Pure: it reads the recipe out of the bytes and never
  * derives a key; the constants it lists are candidate seed/salt material. Returns [] when the recipe is absent.
  */
-export function auditLoaderDerivedKey(buf: Uint8Array, vars: Record<string, string>): FindingDraft[] {
-  const scanLimit = Math.min(buf.length, 4 * 1024 * 1024);
+export function auditLoaderDerivedKey(
+  buf: Uint8Array,
+  vars: Record<string, string>,
+  totalBytes = buf.length,
+): FindingDraft[] {
+  const scanLimit = Math.min(buf.length, totalBytes, LOADER_AUDIT_CAP);
   const recipe = detectLoaderDerivedKeyInBytes(buf.subarray(0, scanLimit));
   if (!recipe) return [];
 
@@ -648,9 +661,12 @@ export function auditLoaderDerivedKey(buf: Uint8Array, vars: Record<string, stri
     .map((anchor) => ({ value: truncate(anchor.value), offset: `0x${anchor.offset.toString(16)}` }));
   const anchorDropped = anchorTotal - anchors.length;
   const candidateTotal = recipe.candidateTotal;
-  const candidateConstants = recipe.candidateConstants
-    .slice(0, 12)
-    .map((candidate) => ({ value: candidate.value, offset: `0x${candidate.offset.toString(16)}` }));
+  const candidateConstants = recipe.candidateConstants.slice(0, 12).map((candidate) => ({
+    value: candidate.value,
+    offset: `0x${candidate.offset.toString(16)}`,
+    score: candidate.score,
+    signals: candidate.signals,
+  }));
   const candidateDropped = candidateTotal - candidateConstants.length;
   const confidenceText =
     recipe.confidence === 'high' ? 'candidate constants are present' : 'candidate constants were not identified';
@@ -670,7 +686,7 @@ export function auditLoaderDerivedKey(buf: Uint8Array, vars: Record<string, stri
         candidateConstants,
         candidateTotal,
         candidateDropped,
-        recipeScan: { bytesRead: scanLimit, totalBytes: buf.length, complete: scanLimit === buf.length },
+        recipeScan: { bytesRead: scanLimit, totalBytes, complete: scanLimit >= totalBytes },
         encryptedEvidence,
       },
       rationale: `Nearby loader strings contain a decrypt/key-derivation anchor and ${recipe.primitive}, while independent bytes or boot-flow variables indicate encrypted partitions. This makes static key recovery a lead, not a result: reverse the exact data flow to confirm which constants feed which primitive and whether its output is the flash key. The listed constants are only candidate seed/salt material read verbatim from the bytes; this finding neither derives nor claims a key.`,
@@ -735,8 +751,22 @@ function capVars(vars: Record<string, string>, cap: number): Record<string, stri
   return out;
 }
 
-function notFound(reason: string, scan?: { bytesRead: number; totalBytes: number }): UbootResult {
-  return { available: true, found: false, varCount: 0, vars: {}, findings: [], reason, ...(scan ? { scan } : {}) };
+function notFound(
+  reason: string,
+  findings: FindingDraft[] = [],
+  scan?: { bytesRead: number; totalBytes: number },
+  loaderKeyAudit?: UbootResult['loaderKeyAudit'],
+): UbootResult {
+  return {
+    available: true,
+    found: false,
+    varCount: 0,
+    vars: {},
+    findings,
+    reason,
+    ...(scan ? { scan } : {}),
+    ...(loaderKeyAudit ? { loaderKeyAudit } : {}),
+  };
 }
 
 /**
@@ -749,13 +779,45 @@ export function runUbootAnalysis(imagePath: string): UbootResult {
   try {
     read = readBounded(imagePath, READ_CAP);
   } catch {
-    return notFound('The image could not be read.');
+    return notFound('The image could not be read.', [], undefined, {
+      attempted: false,
+      completed: false,
+      leadsFound: 0,
+    });
   }
   const scan = { bytesRead: read.bytesRead, totalBytes: read.totalBytes };
+  // This audit deliberately precedes the environment precondition: many loaders carry the recipe and encrypted
+  // partition but no readable variable store. Empty findings still persist as completed bounded coverage.
+  const loaderFindingsWithoutEnv = auditLoaderDerivedKey(read.buf, {}, read.totalBytes);
+  const loaderScan = {
+    bytesRead: Math.min(read.bytesRead, read.totalBytes, LOADER_AUDIT_CAP),
+    totalBytes: read.totalBytes,
+    complete: read.totalBytes <= LOADER_AUDIT_CAP,
+  };
+  const loaderCoverage = (leadsFound: number): NonNullable<UbootResult['loaderKeyAudit']> => ({
+    attempted: true,
+    completed: true,
+    leadsFound,
+    scan: loaderScan,
+  });
   const block = findEnvBlock(read.buf);
-  if (!block) return notFound(describeNoEnvBlock(scan), scan);
+  if (!block) {
+    return notFound(
+      describeNoEnvBlock(scan),
+      loaderFindingsWithoutEnv,
+      scan,
+      loaderCoverage(loaderFindingsWithoutEnv.length),
+    );
+  }
   const { vars, entryCount, malformedEntries } = parseUbootEnv(block);
-  if (entryCount === 0) return notFound(describeNoEnvBlock(scan), scan);
+  if (entryCount === 0) {
+    return notFound(
+      describeNoEnvBlock(scan),
+      loaderFindingsWithoutEnv,
+      scan,
+      loaderCoverage(loaderFindingsWithoutEnv.length),
+    );
+  }
   const varCount = Object.keys(vars).length;
   const script = readBootScript(vars);
   // Completeness is a claim about what we may infer from a variable's ABSENCE, so it is only made when both ways
@@ -764,15 +826,19 @@ export function runUbootAnalysis(imagePath: string): UbootResult {
   const assembledNote = script.variants.length
     ? ` A \`bootcmd\`/\`preboot\` script re-sets bootargs: ${script.reason}`
     : '';
+  // Re-compose with parsed boot-flow variables so a decrypt invocation remains valid independent evidence when a
+  // structurally complete ENC1 body is not present in the bounded prefix.
+  const loaderFindings = auditLoaderDerivedKey(read.buf, vars, read.totalBytes);
   return {
     available: true,
     found: true,
     varCount,
     vars: capVars(vars, VAR_CAP),
-    findings: [...auditBootEnv(vars, script), ...auditLoaderDerivedKey(read.buf, vars)],
+    findings: [...auditBootEnv(vars, script), ...loaderFindings],
     varsComplete,
     bootScript: script,
     scan,
+    loaderKeyAudit: loaderCoverage(loaderFindings.length),
     reason: `Parsed ${varCount} U-Boot environment variable${varCount === 1 ? '' : 's'} from the image. Static analysis of the stored env bytes — proves the boot configuration, not device behavior.${assembledNote}`,
   };
 }

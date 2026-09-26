@@ -10,17 +10,12 @@
  * control — encryption — stops it), not a silent empty (docs/AUTONOMOUS-WORKERS.md §3.1(3), §7.5, W8).
  */
 import fs from 'node:fs';
-import { windowEntropy } from '@firmlab/core';
+import { parseEnc1Container, windowEntropy } from '@firmlab/core';
 import type { FindingDraft } from '../findings.js';
 
 /** Read a big-endian 32-bit word at `o`. */
 function u32be(b: Uint8Array, o: number): number {
   return (((b[o] ?? 0) << 24) | ((b[o + 1] ?? 0) << 16) | ((b[o + 2] ?? 0) << 8) | (b[o + 3] ?? 0)) >>> 0;
-}
-
-/** Read a little-endian 32-bit word at `o`. */
-function u32le(b: Uint8Array, o: number): number {
-  return ((b[o] ?? 0) | ((b[o + 1] ?? 0) << 8) | ((b[o + 2] ?? 0) << 16) | ((b[o + 3] ?? 0) << 24)) >>> 0;
 }
 
 // === Header framing ===
@@ -70,18 +65,18 @@ export function parseOtaHeader(buf: Uint8Array, fileSize: number): OtaHeader {
 
   // ENC1 container: magic + orig_len (u32-LE) + iv[16] at offset 8, ciphertext at 32. The ciphertext must hold the
   // complete plaintext plus at most one AES padding block; magic and an arbitrary small integer are not enough.
-  if (buf.length >= 32 && buf[0] === 0x45 && buf[1] === 0x4e && buf[2] === 0x43 && buf[3] === 0x31) {
-    const origLen = u32le(buf, 4);
-    const cipherLength = fileSize - 32;
-    if (origLen > 0 && cipherLength === Math.ceil(origLen / 16) * 16) {
-      return {
-        lengthField: origLen,
-        plaintextTags: [],
-        ivBlock: { offset: 8, bytes: Buffer.from(buf.subarray(8, 24)).toString('hex') },
-        cipherBodyOffset: 32,
-        container: 'ENC1',
-      };
-    }
+  const enc1 = parseEnc1Container(buf, 0, fileSize);
+  if (enc1?.endOffset === fileSize) {
+    return {
+      lengthField: enc1.plaintextLength,
+      plaintextTags: [],
+      ivBlock: {
+        offset: enc1.ivOffset,
+        bytes: Buffer.from(buf.subarray(enc1.ivOffset, enc1.ivOffset + 16)).toString('hex'),
+      },
+      cipherBodyOffset: enc1.bodyOffset,
+      container: 'ENC1',
+    };
   }
 
   const len0 = u32be(buf, 0);

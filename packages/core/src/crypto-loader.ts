@@ -25,6 +25,22 @@ export interface LoaderStringHit {
   offset: number;
 }
 
+/** A structurally complete ENC1 container found inside a larger byte range. */
+export interface Enc1Container {
+  offset: number;
+  plaintextLength: number;
+  cipherLength: number;
+  ivOffset: number;
+  bodyOffset: number;
+  endOffset: number;
+}
+
+/** A candidate seed/salt string, ranked only within the deliberately narrow accepted shape. */
+export interface LoaderConstantCandidate extends LoaderStringHit {
+  score: number;
+  signals: string[];
+}
+
 /** The recipe found in a bootloader: an anchor + a crypto primitive + candidate seed/salt constants. */
 export interface LoaderKeyDerivation {
   /** Strings naming a key-derivation / partition-decrypt routine (symbol names, help text). */
@@ -37,7 +53,7 @@ export interface LoaderKeyDerivation {
    * Short identifier-like tokens near the recipe that are candidate seed/salt material. Verbatim input strings —
    * the caller derives the key; this module never does.
    */
-  candidateConstants: LoaderStringHit[];
+  candidateConstants: LoaderConstantCandidate[];
   /** Candidates before the display cap. */
   candidateTotal: number;
   /** Candidates omitted by the display cap. */
@@ -69,13 +85,67 @@ const CANDIDATE_CAP = 24;
  *
  * ponytail: hyphen + mixed-case is a deliberately tight shape. It can miss a seed that is a single lowercase token
  * or a base64 salt; when it does, the finding still fires on the anchor + primitive (medium confidence, no
- * constants) — the lead lands, only the bonus hint degrades. Widen with a scored rank if a corpus shows misses.
+ * constants) — the lead lands, only the bonus hint degrades. Do not widen this gate until corpus evidence shows
+ * which additional shapes separate real constants from ordinary loader vocabulary.
  */
 function looksLikeConstant(v: string): boolean {
   if (v.length < 6 || v.length > 40) return false;
   if (!/^[A-Za-z0-9_-]+$/.test(v)) return false;
   if (!v.includes('-')) return false;
   return /[a-z]/.test(v) && /[A-Z]/.test(v);
+}
+
+/**
+ * Rank a candidate without broadening which strings qualify. This does not add lowercase or base64 as accepted
+ * forms; it only orders the already accepted mixed-case, hyphenated shape and records the weak lexical signals
+ * behind that order.
+ */
+function scoreConstant(v: string): { score: number; signals: string[] } {
+  const signals = ['mixed-case-hyphenated'];
+  let score = 1;
+  if (/(?:^|[-_])(seed|salt|key|boot|factory)(?:$|[-_\d])/i.test(v)) {
+    score += 2;
+    signals.push('seed-or-boot-role-token');
+  }
+  if (/\d/.test(v)) {
+    score += 1;
+    signals.push('numeric-identifier');
+  }
+  return { score, signals };
+}
+
+/**
+ * Parse an ENC1 header at `offset` when its complete padded ciphertext fits before `availableEnd`.
+ *
+ * This is structure only: magic + non-zero little-endian plaintext length + the complete AES-block-padded body.
+ * It neither calls the body encrypted nor treats the container as a whole-file format; callers apply those stronger
+ * policies (entropy for a loader lead, exact file length for a standalone encrypted partition).
+ */
+export function parseEnc1Container(buf: Uint8Array, offset = 0, availableEnd = buf.length): Enc1Container | null {
+  const boundedEnd = Math.min(availableEnd, Number.MAX_SAFE_INTEGER);
+  if (offset < 0 || offset + 32 > buf.length || offset + 32 > boundedEnd) return null;
+  if (buf[offset] !== 0x45 || buf[offset + 1] !== 0x4e || buf[offset + 2] !== 0x43 || buf[offset + 3] !== 0x31) {
+    return null;
+  }
+  const plaintextLength =
+    ((buf[offset + 4] ?? 0) |
+      ((buf[offset + 5] ?? 0) << 8) |
+      ((buf[offset + 6] ?? 0) << 16) |
+      ((buf[offset + 7] ?? 0) << 24)) >>>
+    0;
+  if (plaintextLength === 0) return null;
+  const cipherLength = Math.ceil(plaintextLength / 16) * 16;
+  const bodyOffset = offset + 32;
+  const endOffset = bodyOffset + cipherLength;
+  if (!Number.isSafeInteger(endOffset) || endOffset > boundedEnd) return null;
+  return {
+    offset,
+    plaintextLength,
+    cipherLength,
+    ivOffset: offset + 8,
+    bodyOffset,
+    endOffset,
+  };
 }
 
 /** Least distance from `off` to any recipe offset — the rank key for candidate constants. */
@@ -146,7 +216,7 @@ export function detectLoaderDerivedKey(hits: StringHit[]): LoaderKeyDerivation |
 
   const recipeOffsets = [...anchors, ...primitiveHits].map((h) => h.offset);
   const seen = new Set<string>();
-  const ranked: { hit: LoaderStringHit; dist: number }[] = [];
+  const ranked: { hit: LoaderConstantCandidate; dist: number }[] = [];
   for (const h of hits) {
     if (!looksLikeConstant(h.value)) continue;
     if (ANCHOR_RE.test(h.value) || PRIMITIVE_RE.test(h.value)) continue; // the recipe words are not constants
@@ -154,10 +224,10 @@ export function detectLoaderDerivedKey(hits: StringHit[]): LoaderKeyDerivation |
     if (dist > PROXIMITY) continue;
     if (seen.has(h.value)) continue;
     seen.add(h.value);
-    ranked.push({ hit: { value: h.value, offset: h.offset }, dist });
+    ranked.push({ hit: { value: h.value, offset: h.offset, ...scoreConstant(h.value) }, dist });
   }
-  // Nearest to the recipe first, then bounded — the two constants that matter must not be truncated by offset order.
-  ranked.sort((a, b) => a.dist - b.dist);
+  // Score first, then distance: the cap retains the strongest-shaped hints without admitting any broader shape.
+  ranked.sort((a, b) => b.hit.score - a.hit.score || a.dist - b.dist || a.hit.offset - b.hit.offset);
   const candidateTotal = ranked.length;
   const candidateConstants = ranked.slice(0, CANDIDATE_CAP).map((r) => r.hit);
   const candidateDropped = candidateTotal - candidateConstants.length;

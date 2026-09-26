@@ -415,3 +415,59 @@ describe('auditLoaderDerivedKey', () => {
     expect(evidence.recipeScan.complete).toBe(true);
   });
 });
+
+describe('runUbootAnalysis — loader-key audit precedes the environment precondition', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-uboot-loader-test-'));
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('returns a bounded loader-derived-key lead even when no U-Boot environment is readable', () => {
+    const p = path.join(tmp, 'loader-without-env.bin');
+    fs.writeFileSync(p, nx820LoaderImage());
+    const res = runUbootAnalysis(p);
+    expect(res.found).toBe(false);
+    expect(res.findings.map((finding) => finding.kind)).toEqual(['bootloader-derived-flash-key']);
+    expect(res.loaderKeyAudit).toEqual({
+      attempted: true,
+      completed: true,
+      leadsFound: 1,
+      scan: {
+        bytesRead: nx820LoaderImage().length,
+        totalBytes: nx820LoaderImage().length,
+        complete: true,
+      },
+    });
+  });
+
+  it('persists completed empty coverage when incidental ENC1 rodata supplies no container', () => {
+    const p = path.join(tmp, 'incidental-enc1.bin');
+    fs.writeFileSync(
+      p,
+      Buffer.from('derive flash key\0sha256\0Vendor-Seed\0not an ENC1 partition\0sf\0boot\0', 'ascii'),
+    );
+    const res = runUbootAnalysis(p);
+    expect(res.found).toBe(false);
+    expect(res.findings).toEqual([]);
+    expect(res.loaderKeyAudit).toMatchObject({ attempted: true, completed: true, leadsFound: 0 });
+    expect(res.loaderKeyAudit?.scan?.complete).toBe(true);
+  });
+
+  it('discloses the four-MiB audit bound on both coverage and a produced lead', () => {
+    const p = path.join(tmp, 'bounded-loader.bin');
+    const image = Buffer.concat([nx820LoaderImage(), Buffer.alloc(4 * 1024 * 1024, 0xff)]);
+    fs.writeFileSync(p, image);
+    const res = runUbootAnalysis(p);
+    expect(res.loaderKeyAudit?.scan).toEqual({
+      bytesRead: 4 * 1024 * 1024,
+      totalBytes: image.length,
+      complete: false,
+    });
+    const evidence = res.findings[0]?.evidence as {
+      recipeScan: { bytesRead: number; totalBytes: number; complete: boolean };
+    };
+    expect(evidence.recipeScan).toEqual({
+      bytesRead: 4 * 1024 * 1024,
+      totalBytes: image.length,
+      complete: false,
+    });
+  });
+});
