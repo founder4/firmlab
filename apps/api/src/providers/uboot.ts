@@ -588,6 +588,8 @@ export function auditBootEnv(vars: Record<string, string>, script?: BootScriptRe
  * `orig_len` u32-LE plaintext length; a genuine container's is a sane partition size, while the same four bytes
  * inside help text ("decrypt the ENC1 partition") are followed by ASCII that reads as an absurd length. Validating
  * `orig_len` is what separates a container from a string, so a loader's own rodata mention of ENC1 is not counted.
+ * This remains target evidence only: container structure never substitutes for the derivation/decrypt anchor that
+ * `detectLoaderDerivedKey` requires independently alongside a crypto primitive.
  */
 const LOADER_AUDIT_CAP = 4 * 1024 * 1024;
 
@@ -636,6 +638,7 @@ export function auditLoaderDerivedKey(
   totalBytes = buf.length,
 ): FindingDraft[] {
   const scanLimit = Math.min(buf.length, totalBytes, LOADER_AUDIT_CAP);
+  // Recipe and target are separate gates: ENC1 structure below cannot manufacture the loader anchor here.
   const recipe = detectLoaderDerivedKeyInBytes(buf.subarray(0, scanLimit));
   if (!recipe) return [];
 

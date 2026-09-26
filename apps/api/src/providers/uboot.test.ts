@@ -339,8 +339,13 @@ describe('runUbootAnalysis', () => {
  * and a real encrypted partition to unlock. `origLen` = 700527 (0x000ab06f), the real kernel partition's length.
  */
 function nx820LoaderImage(): Uint8Array {
+  // These distant, generic U-Boot/UI-shaped tokens deliberately outrank `Tarlogic-HW-2026` lexically. Proximity
+  // must keep the real constant in the provider's narrower 12-candidate display cap.
+  const genericUi = Array.from({ length: 14 }, (_, i) => `U-Boot-Menu-${i}`).join('\0');
   const rodata = Buffer.from(
     `${[
+      genericUi,
+      'X'.repeat(8192),
       'nx_decrypt: bad magic at 0x%lx (not an ENC1 partition)',
       'decrypt an ENC1 firmware partition in place',
       '    - derive the factory AES-128 key and decrypt the ENC1',
@@ -449,6 +454,23 @@ describe('runUbootAnalysis — loader-key audit precedes the environment precond
     expect(res.findings).toEqual([]);
     expect(res.loaderKeyAudit).toMatchObject({ attempted: true, completed: true, leadsFound: 0 });
     expect(res.loaderKeyAudit?.scan?.complete).toBe(true);
+  });
+
+  it('persists completed empty coverage for sha256 beside a valid high-entropy ENC1 container', () => {
+    const p = path.join(tmp, 'non-loader-encrypted-blob.bin');
+    const image = nx820LoaderImage();
+    const containerOffset = Buffer.from(image).lastIndexOf('ENC1', 'ascii');
+    const nonLoader = Buffer.concat([Buffer.from('sha256\0', 'ascii'), image.subarray(containerOffset)]);
+    fs.writeFileSync(p, nonLoader);
+    const res = runUbootAnalysis(p);
+    expect(res.found).toBe(false);
+    expect(res.findings).toEqual([]);
+    expect(res.loaderKeyAudit).toMatchObject({ attempted: true, completed: true, leadsFound: 0 });
+    expect(res.loaderKeyAudit?.scan).toEqual({
+      bytesRead: nonLoader.length,
+      totalBytes: nonLoader.length,
+      complete: true,
+    });
   });
 
   it('discloses the four-MiB audit bound on both coverage and a produced lead', () => {

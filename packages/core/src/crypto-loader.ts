@@ -62,10 +62,10 @@ export interface LoaderKeyDerivation {
   confidence: 'high' | 'medium';
 }
 
-// A derivation/decrypt anchor: the loader naming what it does. `derive…key`, `flash_key`, `*_decrypt`, a decrypt
-// of a partition/firmware/image, or the per-partition container magic `ENC1` (also appears inside decrypt help).
-const ANCHOR_RE =
-  /derive.{0,8}key|flash.?key|_decrypt\b|decrypt.{0,24}(partition|firmware|image|kernel|rootfs)|\bENC1\b/i;
+// A derivation/decrypt anchor: the loader naming what it does. `derive…key`, `flash_key`, `*_decrypt`, or a decrypt
+// of a partition/firmware/image. `ENC1` is deliberately not an anchor: callers inspect that container structure as
+// independent encrypted-partition evidence, and magic beside an unrelated hash does not prove a loader recipe.
+const ANCHOR_RE = /derive.{0,8}key|flash.?key|_decrypt\b|decrypt.{0,24}(partition|firmware|image|kernel|rootfs)/i;
 
 // A crypto primitive whose presence in a loader that also decrypts a partition is the key-derivation tell.
 const PRIMITIVE_RE = /\b(sha-?512|sha-?256|sha-?1|md5|aes(?:-?128|-?256|-?192)?|hmac|pbkdf2|scrypt)\b/i;
@@ -226,8 +226,9 @@ export function detectLoaderDerivedKey(hits: StringHit[]): LoaderKeyDerivation |
     seen.add(h.value);
     ranked.push({ hit: { value: h.value, offset: h.offset, ...scoreConstant(h.value) }, dist });
   }
-  // Score first, then distance: the cap retains the strongest-shaped hints without admitting any broader shape.
-  ranked.sort((a, b) => b.hit.score - a.hit.score || a.dist - b.dist || a.hit.offset - b.hit.offset);
+  // Proximity is the evidence: lexical score only breaks ties. Otherwise distant generic U-Boot/UI vocabulary can
+  // evict a vendor constant beside the recipe before either this cap or a caller's narrower display cap.
+  ranked.sort((a, b) => a.dist - b.dist || b.hit.score - a.hit.score || a.hit.offset - b.hit.offset);
   const candidateTotal = ranked.length;
   const candidateConstants = ranked.slice(0, CANDIDATE_CAP).map((r) => r.hit);
   const candidateDropped = candidateTotal - candidateConstants.length;

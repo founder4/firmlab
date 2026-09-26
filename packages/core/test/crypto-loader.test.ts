@@ -63,6 +63,16 @@ describe('detectLoaderDerivedKey', () => {
     expect(detectLoaderDerivedKeyInBytes(primitiveOnly)).toBeNull();
   });
 
+  it('does not treat ENC1 structure beside an unrelated primitive as a loader recipe', () => {
+    expect(
+      detectLoaderDerivedKey([
+        { value: 'sha256', offset: 0 },
+        { value: 'ENC1', offset: 16 },
+        { value: 'Tarlogic-HW-2026', offset: 32 },
+      ]),
+    ).toBeNull();
+  });
+
   it('does not join an anchor to an unrelated primitive three MiB away', () => {
     expect(
       detectLoaderDerivedKey([
@@ -112,11 +122,27 @@ describe('detectLoaderDerivedKey', () => {
       { value: 'vendor-seed', offset: 3 },
       { value: 'YWJjZGVmZ2hpamtsbW5vcA==', offset: 4 },
     ]);
-    expect(r?.candidateConstants.map((candidate) => candidate.value)).toEqual(['NX820-boot', 'Acme-Widget']);
-    expect(r?.candidateConstants[0]).toMatchObject({
+    expect(r?.candidateConstants.map((candidate) => candidate.value)).toEqual(['Acme-Widget', 'NX820-boot']);
+    expect(r?.candidateConstants[1]).toMatchObject({
       score: 4,
       signals: ['mixed-case-hyphenated', 'seed-or-boot-role-token', 'numeric-identifier'],
     });
+  });
+
+  it('keeps nearby candidates ahead of distant generic tokens, using score only to break proximity ties', () => {
+    const generic = Array.from({ length: 24 }, (_, i) => ({
+      value: `U-Boot-Menu-${i}`,
+      offset: 0x4000 + i,
+    }));
+    const r = detectLoaderDerivedKey([
+      { value: 'derive flash key', offset: 0 },
+      { value: 'sha256', offset: 1 },
+      { value: 'Tarlogic-HW-2026', offset: 2 },
+      ...generic,
+    ]);
+    expect(r?.candidateConstants).toHaveLength(24);
+    expect(r?.candidateConstants[0]?.value).toBe('Tarlogic-HW-2026');
+    expect(r?.candidateConstants.map((candidate) => candidate.value)).not.toContain('U-Boot-Menu-23');
   });
 });
 
