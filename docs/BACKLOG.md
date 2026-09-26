@@ -272,14 +272,18 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `node:child_process` mockeado: el que importa es syft EN PATH cuya invocación lanza, que deja `run_failed` /
   `retry` y no vuelve a gastar en grype; más syft ausente (`tool_absent` / `install-tool`, sin spawn), syft que corre
   (`ran`) y el mapeo puro incluido el `undefined`.)*
-- [ ] Completar la cobertura del lead de clave derivada del loader sin ensanchar sus afirmaciones: hoy
-  `auditLoaderDerivedKey` corre sólo después de localizar y parsear un entorno U-Boot, examina un prefijo de 4 MiB
-  que declara en la evidencia y reconoce ENC1 con longitud, cuerpo completo y entropía; mover la auditoría antes de
-  esa precondición para que un loader sin entorno legible pueda producir el lead y persistir la cobertura también
-  cuando el resultado sea vacío. Centralizar además el predicado ENC1 que hoy comparten conceptualmente
-  `encrypted.ts` y `uboot.ts`, y puntuar candidatos seed/salt más allá de la forma deliberadamente estrecha
-  guion+mayúsculas (minúsculas/base64 necesitan corpus antes de abrir la heurística). Verificable: loader con receta
-  + ENC1 real y sin bloque de entorno produce un lead acotado; el mismo magic en rodata no lo hace.
+- [x] Completar la cobertura del lead de clave derivada del loader sin ensanchar sus afirmaciones. *(Hecho en
+  `532f873` y corregido tras revisión en `f3b414f`: la auditoría corre antes de la precondición de entorno U-Boot,
+  persiste `loaderKeyAudit` opcional incluso con cobertura completa vacía y declara el prefijo máximo de 4 MiB.
+  Core comparte el parser estructural ENC1 con `encrypted.ts`; el contenedor exige longitud, cuerpo completo y
+  entropía. La receta sigue siendo una señal independiente —ancla real de derivación/decrypt + primitiva—, por lo
+  que `sha256` junto a un ENC1 válido fuera de un loader ya no fabrica un lead. Los candidatos seed/salt se ordenan
+  primero por cercanía y luego por forma, conservando la constante próxima bajo el cap de 12. Minúsculas/base64
+  siguen cerradas hasta disponer de corpus.)*
+- [ ] Llevar `loaderKeyAudit` a la cobertura/opacidad y a la web: el resultado ya persiste intento, finalización,
+  límites y leads, pero todavía no participa en esos resúmenes y por tanto el usuario no ve esa cobertura vacía.
+- [ ] Evitar la segunda lectura/escaneo del prefijo de 4 MiB cuando el análisis U-Boot también encuentra entorno;
+  medir primero y conservar separados el resultado de entorno y la evidencia de la auditoría del loader.
 - [x] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de
   descargarla sola (ver `providers/sbom-db.ts`), un contenedor recreado no tiene base y el resultado declara la
   negativa en vez de correlacionar. *(Hecho: **horneada** en `Dockerfile.tools` — `ENV GRYPE_DB_CACHE_DIR=/opt/grype-db`
@@ -378,10 +382,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   —el marco estático del informe, o que `jobs` hubiera sido llamado— y después consultaba síncronamente el estado
   cargado. Ahora ambos esperan texto que sólo existe tras la carga; producción no cambia. 4/4 en paralelo con la
   suite de API como carga.)*
-- [ ] Revisar el reparto core/api: `packages/core` son ~2.500 líneas frente a ~91.000 de `apps/api`, con
-  dominio puro (`opacidad-plan.ts`, `boot-cmdline.ts`, `nvd.ts`, `opacidad-leads.ts`, `findings-normalize.ts`…)
-  viviendo en la capa de aplicación solo porque no puede importar `store.js` (65 módulos acoplados, 24 fuera de
-  `routes/`). Decidir si core recupera ese dominio o si se documenta como workaround deliberado.
+- [x] Revisar el reparto core/api: `packages/core` son ~2.500 líneas frente a ~91.000 de `apps/api`, con
+  dominio puro viviendo en la capa de aplicación. *(Auditado el 2026-09-26: siguen siendo 65 importadores de
+  `store.js`, pero el reparto correcto es 43 rutas + 22 módulos fuera de `routes/`, no 24. La decisión es que core
+  recupere por fases sólo el dominio byte-only y portable: primero el contrato compartido `FindingDraft`; después
+  `boot-cmdline.ts` completo y las porciones puras de `extract-diagnose.ts`/`component-cve.ts`; en API queda un
+  `nvd-domain` puro separado de su I/O/cache. `opacidad-plan.ts` y `opacidad-leads.ts` permanecen en API por sus
+  ejecutores, localización, filesystem y providers; los normalizadores específicos de proveedor también. La
+  justificación histórica de carga en tests ya no es absoluta porque `store.ts` usa `createRequire` y los tests lo
+  importan. Falta ejecutar esta migración como DAG con propietarios disjuntos y una integración final de exports.)*
 - [x] Cubrir con test los cuatro componentes web sin cobertura: `DeepAnalysisDetails.tsx` (569 líneas),
   `KernelPosture.tsx`, `BinVulnPanel.tsx`, `PresetsPanel.tsx`. *(Hecho en `4f8ab72`: 10 casos para
   `DeepAnalysisDetails` —tenía 4 de sus 10 proveedores—, 7 para `KernelPosture`, 8 para `BinVulnPanel` y 8 para
