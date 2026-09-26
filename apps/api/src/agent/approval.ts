@@ -18,6 +18,26 @@ export interface AgentApprovalState {
   environmentValue: boolean;
 }
 
+export type Phase4Action = 'confirm-trigger' | 'auto-run' | 'preapproved-run' | 'awaiting-approval' | 'done';
+
+/**
+ * Decide whether phase 4 may execute. Model output supplies candidates and a bounded plan, never either authority
+ * input: isolation comes from deterministic host inspection and pre-approval comes from Settings/environment.
+ */
+export function decidePhase4Action(input: {
+  hasCandidate: boolean;
+  hasTarget: boolean;
+  planLength: number;
+  isolation: 'none' | 'partial' | 'full';
+  preapproveAll: boolean;
+}): Phase4Action {
+  if (input.hasCandidate && input.hasTarget && input.isolation === 'full') return 'confirm-trigger';
+  if (input.planLength > 0 && input.isolation === 'full') return 'auto-run';
+  if (input.planLength > 0 && input.preapproveAll) return 'preapproved-run';
+  if (input.planLength > 0) return 'awaiting-approval';
+  return 'done';
+}
+
 const enabled = (value: string | undefined): boolean => /^(1|true|yes|on)$/i.test(value?.trim() ?? '');
 
 /** Resolve the effective policy while preserving where it came from for the Settings screen. */

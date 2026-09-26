@@ -9,10 +9,12 @@
  *
  * The context gatherer reads the store/corpus lazily; the prompt + parse helpers are pure and unit-tested.
  */
+import type { FindingDraft } from '../findings.js';
 import type { LlmConfig, LlmResult } from '../llm.js';
 import { completeJson, parseLlmOutput } from '../llm.js';
 import type { DecompileResult } from '../providers/decompile.js';
 import { type TaintScaffold, buildTaintScaffold } from '../providers/taint.js';
+import { UNTRUSTED_EVIDENCE_SYSTEM_RULE, serializeAgentPromptInput } from './trust.js';
 
 const REACHABILITY = ['likely', 'possible', 'unlikely'] as const;
 const SEVERITY = ['low', 'medium', 'high', 'critical'] as const;
@@ -69,6 +71,8 @@ export const ZERODAY_SYSTEM_PROMPT = `You are FirmLab's zero-day node — decisi
 binary has a reachable vulnerability, from a DETERMINISTIC taint scaffold you are given (the dangerous sinks it
 imports, the attacker-controlled sources, CGI/HTTP hints, and hardening). You never run anything; deterministic
 code will try your trigger under isolation afterwards.
+
+${UNTRUSTED_EVIDENCE_SYSTEM_RULE}
 
 Rules, non-negotiable:
 1. Only hypothesize a source→sink path when the scaffold actually contains BOTH a plausible source (or CGI hint)
@@ -129,13 +133,30 @@ export function parseZerodayDecision(text: string): ZerodayDecision {
 }
 
 export function buildZerodayUserPrompt(ctx: ZerodayContext): string {
+  const { goal, ...evidence } = ctx;
   return [
     'Assess this binary for a reachable vulnerability from its taint scaffold:',
     '',
-    '```json',
-    JSON.stringify(ctx, null, 2),
-    '```',
+    serializeAgentPromptInput(evidence, goal),
   ].join('\n');
+}
+
+/** Code, never the model, assigns the initial proof state of every zero-day hypothesis. */
+export function buildZerodayFindingDrafts(binary: string, candidates: readonly ZerodayCandidate[]): FindingDraft[] {
+  return candidates.map((candidate) => ({
+    kind: 'zeroday-candidate',
+    title: `${candidate.vulnClass} via ${candidate.sink} in ${binary} (${candidate.reachability})`,
+    severity: candidate.severity,
+    proofState: 'needs_runtime_reproduction',
+    evidence: {
+      binary,
+      sink: candidate.sink,
+      source: candidate.source,
+      trigger: candidate.trigger,
+      reachability: candidate.reachability,
+    },
+    rationale: candidate.rationale,
+  }));
 }
 
 interface RelatedFindingInput {

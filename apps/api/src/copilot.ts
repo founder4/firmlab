@@ -1,4 +1,5 @@
 import { compareFindings } from '@firmlab/core';
+import { UNTRUSTED_EVIDENCE_SYSTEM_RULE, serializeAgentPromptInput } from './agent/trust.js';
 import { corpusRefs } from './corpus.js';
 import { rowToFinding } from './findings.js';
 /**
@@ -22,7 +23,7 @@ const BINARY_CAP = 60;
 const ASSERTION_CAP = 40;
 
 /** The compact, structured view of an image the copilot reasons over. Deliberately bounded to control tokens. */
-interface CopilotContext {
+export interface CopilotContext {
   identity: unknown;
   coverage: Record<string, boolean>;
   findings: { kind: string; title: string; severity: string; proofState: string; source: string }[];
@@ -43,6 +44,8 @@ interface CopilotContext {
 export const COPILOT_SYSTEM_PROMPT = `You are FirmLab's firmware-analysis copilot. You interpret the results of a
 deterministic analysis pipeline. You do NOT run tools and you do NOT have any information beyond the JSON you are
 given.
+
+${UNTRUSTED_EVIDENCE_SYSTEM_RULE}
 
 Non-negotiable rules:
 1. Ground every statement in a provided finding or data point. Never invent findings, CVEs, credentials, or
@@ -139,9 +142,7 @@ export function buildCopilotUserPrompt(ctx: CopilotContext): string {
     'so a provider absent from `findings` may simply have ranked lower — never read it as a provider that found',
     'nothing. Coverage, not this array, is what says which stages ran.',
     '',
-    '```json',
-    JSON.stringify(ctx, null, 2),
-    '```',
+    serializeAgentPromptInput(ctx),
   ].join('\n');
 }
 

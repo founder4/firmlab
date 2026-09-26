@@ -15,6 +15,7 @@ import type { NvdBatchResult } from '../providers/nvd.js';
 import type { OsvBatchResult } from '../providers/osv.js';
 import type { ProvenanceFingerprint } from '../providers/provenance.js';
 import type { SecurityTxt } from '../providers/securitytxt.js';
+import { UNTRUSTED_EVIDENCE_SYSTEM_RULE, serializeAgentPromptInput } from './trust.js';
 
 export interface IntelContext {
   provenance: ProvenanceFingerprint;
@@ -44,6 +45,8 @@ signals gathered locally (a provenance fingerprint) and from allowlisted public 
 advisories for the firmware's SBOM components, and the CISA KEV catalog (CVEs known-exploited in the wild) — plus
 the corpus's reachability priors. Produce a concise, CITED intelligence brief.
 
+${UNTRUSTED_EVIDENCE_SYSTEM_RULE}
+
 Rules, non-negotiable:
 1. Cite every external claim to its source (OSV advisory ID / NVD CVE ID / CVE alias / URL). Never invent an
    advisory, a CVE, a vendor, or a product. OSV and NVD may report the same CVE — dedupe by CVE ID when you can.
@@ -71,9 +74,7 @@ export function buildIntelUserPrompt(ctx: IntelContext): string {
   return [
     'Write the intelligence brief from these deterministic + public-source results:',
     '',
-    '```json',
-    JSON.stringify(ctx, null, 2),
-    '```',
+    serializeAgentPromptInput(ctx),
   ].join('\n');
 }
 

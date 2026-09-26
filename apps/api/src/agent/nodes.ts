@@ -13,6 +13,7 @@ import type { FirmwareClass, SignatureHit, StaticAnalysis } from '@firmlab/core'
 import type { LlmConfig, LlmResult } from '../llm.js';
 import { completeJson, parseLlmOutput } from '../llm.js';
 import type { RuntimeCapabilities, RuntimeStrategy } from '../providers/preflight.js';
+import { UNTRUSTED_EVIDENCE_SYSTEM_RULE, serializeAgentPromptInput } from './trust.js';
 // `store` and `corpus` are imported lazily inside the gather* functions so the pure prompt/parse helpers in this
 // module unit-test without loading node:sqlite (the same convention as providers/diff.ts and preflight.ts).
 
@@ -178,6 +179,8 @@ export const TRIAGE_SYSTEM_PROMPT = `You are FirmLab's triage node — decision 
 skeleton. Everything mechanical (extraction, emulation, proof capture) is done by deterministic code; your job is
 ONLY to choose a branch and justify it from the evidence you are given. You never invent facts.
 
+${UNTRUSTED_EVIDENCE_SYSTEM_RULE}
+
 Given the static-analysis summary of one firmware image, decide:
 - resolvedClass: your best read of the firmware class (confirm or refine the inferred one) and classConfidence.
 - shouldExtract: is filesystem extraction warranted? (An image that is likely encrypted as a whole, or has no
@@ -302,12 +305,11 @@ function findingSubject(evidenceJson: string | null): string | null {
 }
 
 export function buildTriageUserPrompt(ctx: TriageContext): string {
+  const { goal, ...evidence } = ctx;
   return [
     'Triage this firmware image from its deterministic static analysis:',
     '',
-    '```json',
-    JSON.stringify(ctx, null, 2),
-    '```',
+    serializeAgentPromptInput(evidence, goal),
   ].join('\n');
 }
 
@@ -422,6 +424,8 @@ export const TARGET_SELECTION_SYSTEM_PROMPT = `You are FirmLab's target-selectio
 deterministic firmware-analysis skeleton. You choose WHICH binaries deserve deeper analysis and WHICH emulation
 rung to attempt for each. You do not run anything; a human approves emulation and deterministic code executes it.
 
+${UNTRUSTED_EVIDENCE_SYSTEM_RULE}
+
 You are given a bounded binaries table, its binaryInventory total/selection rule, the findings summary, corpus
 cross-refs, and — critically — the
 deterministic runtime preflight (\`capabilities\`). The preflight's \`maxRung\` is a HARD ceiling: never propose a
@@ -507,13 +511,12 @@ export async function gatherTargetSelectionContext(
 }
 
 export function buildTargetSelectionUserPrompt(ctx: TargetSelectionContext): string {
+  const { goal, ...evidence } = ctx;
   return [
     'Select analysis/emulation targets for this image. The binaries array is a ranked prefix; use binaryInventory',
     'for its total and selection rule. Respect capabilities.maxRung as a hard ceiling:',
     '',
-    '```json',
-    JSON.stringify(ctx, null, 2),
-    '```',
+    serializeAgentPromptInput(evidence, goal),
   ].join('\n');
 }
 

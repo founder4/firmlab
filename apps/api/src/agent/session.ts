@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import type { Architecture } from '@firmlab/core';
 import { runCopilot } from '../copilot.js';
 import { deviceFamilyKey, recordReachabilityPrior } from '../corpus.js';
-import { type FindingDraft, syncFindings } from '../findings.js';
+import { syncFindings } from '../findings.js';
 import { LlmOutputError, loadLlmConfig } from '../llm.js';
 import type { LlmConfig, LlmResult } from '../llm.js';
 import { type DecompileResult, resolveInsideRootfs, runDecompile } from '../providers/decompile.js';
@@ -44,7 +44,7 @@ import {
   updateFindingProofState,
   updateSession,
 } from '../store.js';
-import { approvedTargets } from './approval.js';
+import { approvedTargets, decidePhase4Action } from './approval.js';
 import { Governor, ZERO_CONSUMED, estimateUsd, loadGovernorBudget } from './governor.js';
 import {
   type EmulationRung,
@@ -54,7 +54,7 @@ import {
   runTargetSelectionNode,
   runTriageNode,
 } from './nodes.js';
-import { type ZerodayCandidate, gatherZerodayContext, runZerodayNode } from './zeroday.js';
+import { type ZerodayCandidate, buildZerodayFindingDrafts, gatherZerodayContext, runZerodayNode } from './zeroday.js';
 
 /** Poll a fire-and-forget job to a terminal state. Jobs are in-process, so a short poll is enough. */
 async function waitForJob(
@@ -410,7 +410,7 @@ async function runPhase4(
         z.result.outputTokens ?? 0,
         z.result,
       );
-      recordZerodayFindings(imageId, target, z.decision.candidates);
+      syncFindings(imageId, `zeroday:${target}`, buildZerodayFindingDrafts(target, z.decision.candidates));
       topCandidate = z.decision.candidates[0];
     } else {
       recordStep(
@@ -429,12 +429,19 @@ async function runPhase4(
   }
 
   const isolation = await detectIsolation();
+  const phase4Action = decidePhase4Action({
+    hasCandidate: Boolean(topCandidate),
+    hasTarget: Boolean(target),
+    planLength: plan.length,
+    isolation,
+    preapproveAll,
+  });
   // Best path: drive node ④'s top candidate's TRIGGER into the sink under isolation and confirm it (debt #3).
-  if (topCandidate && target && isolation === 'full') {
+  if (phase4Action === 'confirm-trigger' && topCandidate && target) {
     await confirmTrigger(session, gov, caps, target, topCandidate);
-  } else if (plan.length > 0 && isolation === 'full') {
+  } else if (phase4Action === 'auto-run') {
     await autoRunIsolated(session, gov, caps, plan[0] as TargetSelectionDecision['emulationPlan'][number]);
-  } else if (plan.length > 0 && preapproveAll) {
+  } else if (phase4Action === 'preapproved-run') {
     const approved = approvedTargets(plan, { all: true });
     recordStep(
       session.id,
@@ -452,7 +459,7 @@ async function runPhase4(
     if (!current) throw new Error('Session disappeared before pre-authorised emulation');
     await runApprovedPlan(current, approved, true);
     return;
-  } else if (plan.length > 0) {
+  } else if (phase4Action === 'awaiting-approval') {
     recordStep(
       session.id,
       'isolation',
@@ -568,19 +575,6 @@ async function ensureDecompile(imageId: string, binary: string): Promise<Decompi
   const jobId = startJob(imageId, 'decompile', { by: 'agent', binary }, (h) => runDecompile(rootfs, binary, h));
   const job = await waitForJob(jobId);
   return (job.result as DecompileResult | null) ?? null;
-}
-
-/** Persist node ④'s candidates as findings — every one a hypothesis to test, never a proven bug. */
-function recordZerodayFindings(imageId: string, binary: string, candidates: ZerodayCandidate[]): void {
-  const drafts: FindingDraft[] = candidates.map((c) => ({
-    kind: 'zeroday-candidate',
-    title: `${c.vulnClass} via ${c.sink} in ${binary} (${c.reachability})`,
-    severity: c.severity,
-    proofState: 'needs_runtime_reproduction',
-    evidence: { binary, sink: c.sink, source: c.source, trigger: c.trigger, reachability: c.reachability },
-    rationale: c.rationale,
-  }));
-  syncFindings(imageId, `zeroday:${binary}`, drafts);
 }
 
 /**
