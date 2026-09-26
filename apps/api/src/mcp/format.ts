@@ -127,6 +127,28 @@ export interface McpCoverage {
   stages: { worker: string; reason: string; status: string; detail?: string; findingCount?: number }[];
 }
 
+/** Why a reachability question did not produce a result. Optional forever for persisted rows from older builds. */
+export type ReachabilityBlockedBy = 'platform' | 'harness' | 'request';
+
+const BLOCKED_BY_MEANING: Record<ReachabilityBlockedBy, string> = {
+  platform:
+    'The deployment lacks a required capability or tool. Installing or configuring the prover may unlock the question; this is not a result about the firmware.',
+  harness:
+    'The required tooling was present, but the analysis attempt failed. Fix or retry the harness; this is not a negative result about the firmware.',
+  request:
+    'The requested target or question was invalid or unavailable. Correct the request; this is not a platform limitation and not a result about the firmware.',
+};
+
+function blockedByFields(blockedBy: string | undefined): Record<string, string> {
+  if (!blockedBy) return {};
+  return {
+    blockedBy,
+    blockedByMeaning:
+      BLOCKED_BY_MEANING[blockedBy as ReachabilityBlockedBy] ??
+      'Unrecognised blocking cause. Treat this as an unresolved failure, never as a negative result.',
+  };
+}
+
 /**
  * Server-level instructions, sent at initialize. This is the model's briefing on how to read the bench: what the
  * proof-state ladder licenses, and the two inferences that are always wrong here. Kept short enough to survive
@@ -536,6 +558,7 @@ export function scanPayload(input: {
 export function reachabilityPayload(result: {
   available: boolean;
   reason: string;
+  blockedBy?: string;
   binary: string;
   arch?: string;
   entry?: string;
@@ -553,6 +576,7 @@ export function reachabilityPayload(result: {
   return {
     available: result.available,
     binary: result.binary,
+    ...blockedByFields(result.blockedBy),
     ...(result.arch ? { arch: result.arch } : {}),
     ...(result.entry ? { entry: result.entry } : {}),
     ...(result.asked ? { sinksAsked: result.asked } : {}),
@@ -575,6 +599,7 @@ export function reachabilityPayload(result: {
 export function exportReachabilityPayload(result: {
   available: boolean;
   reason: string;
+  blockedBy?: string;
   binary?: string;
   arch?: string;
   entryPoints?: number;
@@ -594,6 +619,7 @@ export function exportReachabilityPayload(result: {
   };
   return {
     available: result.available,
+    ...blockedByFields(result.blockedBy),
     ...(result.binary ? { binary: result.binary } : {}),
     ...(result.arch ? { arch: result.arch } : {}),
     ...(result.entryPoints !== undefined ? { entryPoints: result.entryPoints } : {}),

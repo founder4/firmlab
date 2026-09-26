@@ -29,7 +29,7 @@ import { pathToFileURL } from 'node:url';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { type FirmLabApiClient, clientFromEnv } from './client.js';
+import { type FirmLabApiClient, type JobView, clientFromEnv } from './client.js';
 import {
   HONESTY_INSTRUCTIONS,
   type McpCoverage,
@@ -83,7 +83,12 @@ async function coverageOf(fl: FirmLabApiClient, imageId: string): Promise<McpCov
 }
 
 /** A job that finished, errored, or ran out of the tool's budget — rendered so each reads as what it is. */
-function jobPayload(job: { status: string; error: string | null; log: string; result: unknown; id: string }): unknown {
+export type McpJobPayload =
+  | { ok: false; jobId: string; error: string; log: string }
+  | { ok: false; stillRunning: true; jobId: string; status: string; note: string; log: string }
+  | { ok: true; jobId: string; result: unknown };
+
+export function jobPayload(job: Pick<JobView, 'status' | 'error' | 'log' | 'result' | 'id'>): McpJobPayload {
   if (job.status === 'error') {
     return { ok: false, jobId: job.id, error: job.error ?? 'job failed', log: job.log.slice(-4000) };
   }
@@ -524,22 +529,29 @@ export function buildServer(fl: FirmLabApiClient): McpServer {
         'set one, and the request is refused if you try. Read it back and you will see it in a separate array ' +
         'labelled as yours — it is a record of your claim, never evidence for it, so do not cite it as support ' +
         'for the same conclusion. Do not mirror a measured finding into an assertion: that adds no knowledge.',
-      inputSchema: {
-        imageId: z.string(),
-        assertedBy: z.string().describe('Who is asserting — name yourself, e.g. "claude/triage-session"'),
-        title: z.string().describe('The claim, in one line'),
-        claim: z
-          .enum(['asserted_unverified', 'asserted_from_device', 'asserted_from_external_evidence', 'disputes_finding'])
-          .describe(
-            'asserted_unverified = you believe it, nothing here measured it · asserted_from_device = observed on ' +
-              'physical hardware (FirmLab cannot measure this at all) · asserted_from_external_evidence = a vendor ' +
-              'advisory or third-party source says so · disputes_finding = a code-decided finding is wrong',
-          ),
-        rationale: z.string().describe('On what basis. Required — a claim with no stated basis cannot be evaluated'),
-        severity: z.enum(['critical', 'high', 'medium', 'low', 'info']).optional().describe('Defaults to info'),
-        references: z.array(z.string()).optional().describe('URLs, advisory ids, ticket ids'),
-        disputesFindingId: z.string().optional().describe('Required for claim=disputes_finding: the finding id'),
-      },
+      inputSchema: z
+        .object({
+          imageId: z.string(),
+          assertedBy: z.string().describe('Who is asserting — name yourself, e.g. "claude/triage-session"'),
+          title: z.string().describe('The claim, in one line'),
+          claim: z
+            .enum([
+              'asserted_unverified',
+              'asserted_from_device',
+              'asserted_from_external_evidence',
+              'disputes_finding',
+            ])
+            .describe(
+              'asserted_unverified = you believe it, nothing here measured it · asserted_from_device = observed on ' +
+                'physical hardware (FirmLab cannot measure this at all) · asserted_from_external_evidence = a vendor ' +
+                'advisory or third-party source says so · disputes_finding = a code-decided finding is wrong',
+            ),
+          rationale: z.string().describe('On what basis. Required — a claim with no stated basis cannot be evaluated'),
+          severity: z.enum(['critical', 'high', 'medium', 'low', 'info']).optional().describe('Defaults to info'),
+          references: z.array(z.string()).optional().describe('URLs, advisory ids, ticket ids'),
+          disputesFindingId: z.string().optional().describe('Required for claim=disputes_finding: the finding id'),
+        })
+        .strict(),
     },
     async ({ imageId, ...body }) => {
       try {

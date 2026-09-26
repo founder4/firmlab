@@ -3,7 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import cassette from './__fixtures__/harmless-traversal.v1.json';
 import type { FirmLabApiClient, JobView } from './client.js';
-import { buildServer } from './server.js';
+import { buildServer, jobPayload } from './server.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -20,6 +20,7 @@ type McpCall =
 
 class ReplayFirmLabClient implements FirmLabApiClient {
   readonly calls: { operation: ApiInteraction['operation']; arguments: unknown[] }[] = [];
+  readonly posts: { path: string; body: unknown }[] = [];
   private cursor = 0;
 
   constructor(private readonly interactions: readonly ApiInteraction[]) {}
@@ -58,7 +59,8 @@ class ReplayFirmLabClient implements FirmLabApiClient {
     return this.replay<string>('getText', [path]);
   }
 
-  async post<T>(_path: string, _body?: unknown): Promise<T> {
+  async post<T>(path: string, body?: unknown): Promise<T> {
+    this.posts.push({ path, body });
     throw new Error('The harmless traversal must not POST to the FirmLab API');
   }
 
@@ -163,5 +165,40 @@ describe('FirmLab MCP client-visible contract', () => {
     api.assertExhausted();
     expect(api.calls).toEqual(interactions.map(({ operation, arguments: args }) => ({ operation, arguments: args })));
     expect({ cassetteVersion: cassette.version, transcript }).toMatchSnapshot('harmless traversal v1');
+  });
+
+  it('rejects a caller-supplied proofState before the assertion reaches the API', async () => {
+    const response = await client.callTool({
+      name: 'firmlab_record_assertion',
+      arguments: {
+        imageId: 'image-1',
+        assertedBy: 'agent/test',
+        title: 'Caller tries to choose proof',
+        claim: 'asserted_unverified',
+        rationale: 'Regression input',
+        proofState: 'static_confirmed',
+      },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(api.posts).toEqual([]);
+    expect(JSON.stringify(response.content)).toContain('proofState');
+  });
+});
+
+describe('jobPayload', () => {
+  it.each(['queued', 'running'] as const)('keeps a %s job explicitly unfinished with its partial log', (status) => {
+    const log = `${'x'.repeat(4100)}partial tail`;
+    const payload = jobPayload({ id: 'job-1', status, error: null, log, result: null });
+
+    expect(payload).toEqual({
+      ok: false,
+      stillRunning: true,
+      jobId: 'job-1',
+      status,
+      note: expect.stringMatching(/has NOT failed.*has NOT finished.*firmlab_job_status/),
+      log: log.slice(-4000),
+    });
+    expect(payload).not.toHaveProperty('result');
   });
 });

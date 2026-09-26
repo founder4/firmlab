@@ -495,6 +495,7 @@ a confident complete-sounding one built on unexamined stages is the failure this
       "description": "Put a claim of your own into the ledger, attributed to you and marked as an assertion rather than an analysis result. Use it for a conclusion you reached that no provider can express, or an observation from outside this workbench. It carries NO proof state and counts towards NO coverage stage; you cannot set one, and the request is refused if you try. Read it back and you will see it in a separate array labelled as yours — it is a record of your claim, never evidence for it, so do not cite it as support for the same conclusion. Do not mirror a measured finding into an assertion: that adds no knowledge.",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
         "properties": {
           "assertedBy": {
             "description": "Who is asserting — name yourself, e.g. "claude/triage-session"",

@@ -162,6 +162,29 @@ describe('reachabilityPayload — an absent result must not read as a negative o
     const p = reachabilityPayload({ available: true, reason: 'r', binary: 'b', sinks: [{ sink: 'x', outcome: '??' }] });
     expect((p.sinks as { meaning: string }[])[0]?.meaning).toContain('treat as no result');
   });
+
+  it.each([
+    ['platform', 'lacks a required capability or tool'],
+    ['harness', 'analysis attempt failed'],
+    ['request', 'requested target or question was invalid'],
+  ])('preserves a %s block and explains the corresponding next step', (blockedBy, meaning) => {
+    const p = reachabilityPayload({
+      available: false,
+      reason: 'not answered',
+      blockedBy,
+      binary: 'bin/x',
+      sinks: [],
+    });
+    expect(p.blockedBy).toBe(blockedBy);
+    expect(p.blockedByMeaning).toContain(meaning);
+    expect(p.blockedByMeaning).toContain('not a');
+  });
+
+  it('keeps an older persisted result with no discriminator valid', () => {
+    const p = reachabilityPayload({ available: false, reason: 'old row', binary: 'bin/x', sinks: [] });
+    expect(p).not.toHaveProperty('blockedBy');
+    expect(p).not.toHaveProperty('blockedByMeaning');
+  });
 });
 
 describe('exportReachabilityPayload — the CFG outcomes carry meaning too', () => {
@@ -192,6 +215,25 @@ describe('exportReachabilityPayload — the CFG outcomes carry meaning too', () 
   it('degrades an unrecognised outcome to no-result rather than dropping it', () => {
     const p = exportReachabilityPayload({ available: true, reason: 'r', sinks: [{ sink: 'x', outcome: '??' }] });
     expect((p.sinks as { meaning: string }[])[0]?.meaning).toContain('treat as no result');
+  });
+
+  it('preserves the blocking cause on the export-reachability surface too', () => {
+    const p = exportReachabilityPayload({
+      available: false,
+      reason: 'the CFG harness broke',
+      blockedBy: 'harness',
+      binary: 'lib/x.so',
+      sinks: [],
+    });
+    expect(p.blockedBy).toBe('harness');
+    expect(p.blockedByMeaning).toContain('analysis attempt failed');
+    expect(p.blockedByMeaning).toContain('retry');
+  });
+
+  it('does not invent a blocking cause for an older persisted export result', () => {
+    const p = exportReachabilityPayload({ available: false, reason: 'old row', sinks: [] });
+    expect(p).not.toHaveProperty('blockedBy');
+    expect(p).not.toHaveProperty('blockedByMeaning');
   });
 });
 
