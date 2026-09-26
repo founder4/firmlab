@@ -102,7 +102,42 @@ export interface SbomResult {
    * keeps the conservative `install-tool` it always used, never inferring a retryable failure it has no record of.
    */
   syftOutcome?: SyftOutcome;
+  /**
+   * CISA KEV membership as grype's OWN database annotated it — offline, no catalogue download. See `grypeKev`.
+   *
+   * OPTIONAL FOREVER, and absent whenever grype did not match (`grypeOutcome !== 'matched'`): no matches were
+   * made, so there was nothing to annotate — absent is "not asked", never "none known-exploited".
+   */
+  grypeKev?: GrypeKev;
 }
+
+/** One CVE grype's database lists in KEV, with every grype match (GHSA, distro, CVE id) that carried it. */
+export interface GrypeKevMatch {
+  cve: string;
+  vulnerabilityIds: string[];
+  packages: string[];
+  dateAdded: string;
+  knownRansomware: string;
+}
+
+/**
+ * What grype's embedded KEV provider says about THIS run's matches. Deliberately a separate thing from the
+ * research lane's `KevResult` (`providers/kev.ts`): that one cross-references OSV + NVD ids against a catalogue
+ * downloaded from CISA; this one is whatever snapshot of KEV was baked into the provisioned grype database, dated by
+ * the database's own `descriptor.db.providers.kev.captured`. Neither feeds the other.
+ *
+ * - `annotated` — the database carried a KEV snapshot, so a match WITHOUT `knownExploited` is measured: it is not in
+ *   that snapshot as of `captured`. An empty `matches` is a zero measured over grype's matches, not over the image.
+ * - `no-kev-provider` — the output names no `kev` provider (a pre-v6 database, or a build without it). grype omits
+ *   `knownExploited` when empty, so there an absent annotation is indistinguishable from "not recorded", and the
+ *   state says unknown rather than zero.
+ */
+export type GrypeKev =
+  | { state: 'annotated'; captured: string; matches: GrypeKevMatch[] }
+  | { state: 'no-kev-provider'; reason: string };
+
+export const GRYPE_NO_KEV_PROVIDER_REASON =
+  "grype's database lists no kev provider, so its matches carry no KEV annotation — known-exploited status is unknown here, not zero";
 
 /** What became of the SBOM half of this lane. See `SbomResult.syftOutcome`. */
 export type SyftOutcome =
@@ -177,6 +212,7 @@ interface GrypeMatch {
     severity?: string;
     fix?: { versions?: string[] };
     cvss?: { version?: string; vector?: string }[];
+    knownExploited?: { cve?: string; dateAdded?: string; knownRansomwareCampaignUse?: string }[];
   };
   artifact?: { name?: string; version?: string };
 }
@@ -200,6 +236,41 @@ export function preferredCvssVector(entries: { version?: string; vector?: string
     if (hit?.vector) return hit.vector;
   }
   return undefined;
+}
+
+/**
+ * Pure: read grype's KEV annotation out of its JSON output — the whole output, before `VULN_CAP` cuts the listing,
+ * so a known-exploited CVE on a low-severity row is not lost to the bound. Keyed by the annotation's `cve`, never
+ * the match id: grype attaches KEV to a `GHSA-…` row too (measured on grype 0.119 / schema v6.1.9: log4j-core 2.14.1
+ * reports CVE-2021-44228 under GHSA-jfh8-c2jp-5v3q), so matching on `id` would drop it.
+ */
+export function grypeKevAnnotation(output: unknown): GrypeKev {
+  const o = output as {
+    matches?: GrypeMatch[];
+    descriptor?: { db?: { providers?: Record<string, { captured?: string }> } };
+  } | null;
+  const captured = o?.descriptor?.db?.providers?.kev?.captured;
+  if (!captured) return { state: 'no-kev-provider', reason: GRYPE_NO_KEV_PROVIDER_REASON };
+  const byCve = new Map<string, GrypeKevMatch>();
+  for (const m of Array.isArray(o?.matches) ? o.matches : []) {
+    for (const k of m.vulnerability?.knownExploited ?? []) {
+      const cve = String(k.cve ?? '').toUpperCase();
+      if (!/^CVE-\d{4}-\d+$/.test(cve)) continue;
+      const row = byCve.get(cve) ?? {
+        cve,
+        vulnerabilityIds: [],
+        packages: [],
+        dateAdded: String(k.dateAdded ?? ''),
+        knownRansomware: String(k.knownRansomwareCampaignUse ?? 'unknown'),
+      };
+      const id = String(m.vulnerability?.id ?? '?');
+      const pkg = `${m.artifact?.name ?? '?'}@${m.artifact?.version ?? ''}`;
+      if (!row.vulnerabilityIds.includes(id)) row.vulnerabilityIds.push(id);
+      if (!row.packages.includes(pkg)) row.packages.push(pkg);
+      byCve.set(cve, row);
+    }
+  }
+  return { state: 'annotated', captured, matches: [...byCve.values()].sort((a, b) => a.cve.localeCompare(b.cve)) };
 }
 
 export async function runSbom(_imageId: string, rootfsPath: string, handle: JobHandle): Promise<SbomResult> {
@@ -246,6 +317,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
   let grypeOutcome: GrypeOutcome = 'matched';
   let grypeReason: string | undefined;
   let grypeDb: SbomResult['grypeDb'];
+  let grypeKev: GrypeKev | undefined;
   let vulnerabilities: SbomVuln[] = [];
   let counts = emptyCounts();
   if (!toolPresent) {
@@ -272,6 +344,12 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
         });
         const parsed = JSON.parse(stdout) as { matches?: GrypeMatch[] };
         const matches = Array.isArray(parsed.matches) ? parsed.matches : [];
+        grypeKev = grypeKevAnnotation(parsed);
+        handle.log(
+          grypeKev.state === 'annotated'
+            ? `grype KEV (snapshot ${grypeKev.captured}): ${grypeKev.matches.length} known-exploited CVE(s) among ${matches.length} match(es).`
+            : `grype KEV: not annotated — ${grypeKev.reason}.`,
+        );
         vulnerabilityTotal = matches.length;
         const mapped: SbomVuln[] = matches.map((m) => {
           const fixVersions = m.vulnerability?.fix?.versions;
@@ -309,6 +387,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
         const message = err instanceof Error ? err.message : String(err);
         grypeAvailable = false;
         grypeOutcome = 'run_failed';
+        grypeKev = undefined;
         grypeReason = `CVE matching was attempted and failed (the SBOM below is unaffected): ${message}`;
         handle.log(`grype failed (SBOM still returned): ${message}`);
       }
@@ -327,6 +406,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
     grypeOutcome,
     ...(grypeReason ? { grypeReason } : {}),
     ...(grypeDb ? { grypeDb } : {}),
+    ...(grypeKev ? { grypeKev } : {}),
     vulnerabilities,
     counts,
   };

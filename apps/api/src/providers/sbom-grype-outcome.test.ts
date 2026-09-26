@@ -75,6 +75,8 @@ describe('grype present, database present, execution throws', () => {
     expect(remedyForGrypeOutcome(r.grypeOutcome)).toBe('retry');
     // The SBOM is unaffected — the whole point of catching the failure rather than failing the job.
     expect(r.packages.map((p) => p.name)).toEqual(['busybox']);
+    // No matches were made, so there is no KEV state at all — not asked, not zero.
+    expect(r.grypeKev).toBeUndefined();
   });
 });
 
@@ -131,5 +133,34 @@ describe('grype answered', () => {
     expect(r.grypeOutcome).toBe('matched');
     expect(remedyForGrypeOutcome(r.grypeOutcome)).toBeUndefined();
     expect(r.vulnerabilities.map((v) => v.id)).toEqual(['CVE-2021-42374']);
+    // No `descriptor.db.providers.kev` in this output: the KEV state is unknown, not a zero.
+    expect(r.grypeKev?.state).toBe('no-kev-provider');
+  });
+
+  it('carries grype’s offline KEV annotation onto the result, dated by the database’s kev snapshot', async () => {
+    toolAvailable.mockResolvedValue(true);
+    withGrype((args) =>
+      args[0] === 'db'
+        ? DB_PRESENT
+        : JSON.stringify({
+            descriptor: { db: { providers: { kev: { captured: '2026-09-26T00:33:03Z' } } } },
+            matches: [
+              {
+                vulnerability: {
+                  id: 'GHSA-jfh8-c2jp-5v3q',
+                  severity: 'Critical',
+                  knownExploited: [{ cve: 'CVE-2021-44228', dateAdded: '2021-12-10' }],
+                },
+                artifact: { name: 'log4j-core', version: '2.14.1' },
+              },
+            ],
+          }),
+    );
+
+    const { runSbom } = await import('./sbom.js');
+    const r = await runSbom('img', '/rootfs', handle);
+
+    expect(r.grypeKev).toMatchObject({ state: 'annotated', captured: '2026-09-26T00:33:03Z' });
+    expect(r.grypeKev?.state === 'annotated' && r.grypeKev.matches.map((m) => m.cve)).toEqual(['CVE-2021-44228']);
   });
 });

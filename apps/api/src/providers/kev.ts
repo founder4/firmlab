@@ -17,6 +17,12 @@
  * different fact from a download that failed, and neither one is "zero known-exploited CVEs" — a KEV count only
  * exists when a catalog was searched against a non-empty input set.
  *
+ * The input is OSV + NVD only, by decision (2026-09-26), and the SBOM lane's CVEs are NOT folded in. grype's
+ * database embeds its own KEV snapshot and annotates each match offline (`grypeKevAnnotation` in `sbom.ts`, on
+ * `SbomResult.grypeKev`), so the SBOM lane already answers the question without a download. Merging its ids here
+ * would make this result depend on whether and when another lane ran, against a catalogue of a different date,
+ * and the operator could no longer tell which snapshot said "known-exploited". Two answers, each with its own date.
+ *
  * The catalog goes through the on-disk cache (research/cache.ts): it is a single multi-megabyte file that every
  * image in the corpus needs, so downloading it once a day instead of once a scan is the whole point. It is also
  * where staleness bites hardest — KEV grows by CVEs attackers started using THIS week, so a catalog served without

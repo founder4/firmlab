@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GRYPE_NO_KEV_PROVIDER_REASON,
   type SbomVuln,
   type Severity,
   emptyCounts,
+  grypeKevAnnotation,
   normalizeSeverity,
   preferredCvssVector,
   rankVulnerabilities,
@@ -147,5 +149,63 @@ describe('preferredCvssVector', () => {
     expect(preferredCvssVector([])).toBeUndefined();
     expect(preferredCvssVector([{ version: '3.1' }])).toBeUndefined();
     expect(preferredCvssVector([{ vector: V31 }])).toBeUndefined();
+  });
+});
+
+describe('grypeKevAnnotation', () => {
+  // Shape measured on grype 0.119.0 / schema v6.1.9 (2026-09-26): KEV rides on a GHSA row, keyed by its own `cve`.
+  const LOG4J = {
+    cve: 'CVE-2021-44228',
+    dateAdded: '2021-12-10',
+    knownRansomwareCampaignUse: 'known',
+  };
+  const descriptor = { db: { providers: { kev: { captured: '2026-09-26T00:33:03Z' }, nvd: { captured: 'x' } } } };
+  const match = (id: string, name: string, knownExploited?: (typeof LOG4J)[]) => ({
+    vulnerability: { id, ...(knownExploited ? { knownExploited } : {}) },
+    artifact: { name, version: '2.14.1' },
+  });
+
+  it('reports the KEV CVE carried on a GHSA row, keyed by the cve and deduped across rows', () => {
+    const r = grypeKevAnnotation({
+      descriptor,
+      matches: [
+        match('GHSA-jfh8-c2jp-5v3q', 'log4j-core', [LOG4J]),
+        match('CVE-2021-44228', 'log4j-core', [LOG4J]),
+        match('GHSA-p6xc-xr62-6r2g', 'log4j-core'),
+      ],
+    });
+    expect(r).toEqual({
+      state: 'annotated',
+      captured: '2026-09-26T00:33:03Z',
+      matches: [
+        {
+          cve: 'CVE-2021-44228',
+          vulnerabilityIds: ['GHSA-jfh8-c2jp-5v3q', 'CVE-2021-44228'],
+          packages: ['log4j-core@2.14.1'],
+          dateAdded: '2021-12-10',
+          knownRansomware: 'known',
+        },
+      ],
+    });
+  });
+
+  it('is a measured zero, dated, when the database carried KEV and no match was in it', () => {
+    expect(grypeKevAnnotation({ descriptor, matches: [match('GHSA-p6xc-xr62-6r2g', 'log4j-core')] })).toEqual({
+      state: 'annotated',
+      captured: '2026-09-26T00:33:03Z',
+      matches: [],
+    });
+  });
+
+  it('is unknown, never zero, when the database names no kev provider — even if a row claims KEV', () => {
+    const noKev = { db: { providers: { nvd: { captured: 'x' } } } };
+    for (const out of [{ matches: [] }, { descriptor: noKev, matches: [match('X', 'p', [LOG4J])] }, null, 'junk']) {
+      expect(grypeKevAnnotation(out)).toEqual({ state: 'no-kev-provider', reason: GRYPE_NO_KEV_PROVIDER_REASON });
+    }
+  });
+
+  it('drops an annotation whose cve is not a CVE id', () => {
+    const r = grypeKevAnnotation({ descriptor, matches: [match('GHSA-x', 'p', [{ ...LOG4J, cve: 'n/a' }])] });
+    expect(r).toEqual({ state: 'annotated', captured: '2026-09-26T00:33:03Z', matches: [] });
   });
 });

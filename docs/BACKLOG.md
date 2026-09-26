@@ -230,9 +230,19 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   y el log dice «not asked» en vez de imprimir un cero. Un fallo real de descarga queda separado como
   `fetch-failed`; la web muestra los tres desenlaces —sin entrada, fallo y cero medido— con textos propios en
   inglés y español, y conserva el fallback honesto para resultados persistidos por builds anteriores.)*
-- [ ] Decidir si el cruce KEV debe incorporar también los CVE del carril SBOM. La base de grype ya trae un
+- [x] Decidir si el cruce KEV debe incorporar también los CVE del carril SBOM. La base de grype ya trae un
   proveedor `kev` embebido, por lo que podría ser un cruce local sin red, pero sigue siendo una decisión de
-  política distinta de presentar honestamente una entrada vacía del carril research.
+  política distinta de presentar honestamente una entrada vacía del carril research. *(Decidido: **no** se mezclan.
+  El cruce research sigue alimentándose sólo de OSV + NVD; el carril SBOM lleva su propia respuesta, offline, en
+  `SbomResult.grypeKev` (opcional para siempre) vía `grypeKevAnnotation` en `sbom.ts`. Evidencia medida sólo en
+  lectura en el contenedor desplegado el 2026-09-26: grype 0.119.0, esquema v6.1.9, tabla
+  `known_exploited_vulnerability_handles` con 1 726 filas y proveedor `kev` capturado 2026-09-26T00:33:03Z; la salida
+  JSON pone `vulnerability.knownExploited[].cve` en cada match —también en filas `GHSA-…`, así que se indexa por ese
+  `cve` y no por el id— y **omite** el campo cuando está vacío, de modo que la ausencia sólo es un cero medido si
+  `descriptor.db.providers.kev.captured` existe. Tres estados: sin campo (grype no emparejó: no se preguntó),
+  `no-kev-provider` (desconocido, nunca cero) y `annotated` con la fecha del snapshot. Mezclar los ids en el cruce
+  research haría depender su resultado de si y cuándo corrió otro carril, contra un catálogo de otra fecha. Pendiente:
+  normalizar `grypeKev` a findings y mostrarlo en la web.)*
 - [x] Distinguir en W9 un grype que falló al correr de un grype que no puede correr. `sbomRun` (`opacidad.ts`)
   mandaba los tres casos de `grypeAvailable:false` al mismo `remedy: 'install-tool'`, y el tercero —grype corrió y
   lanzó— es un `retry`: una campaña de cobertura no lo reintentaba y lo reportaba como despliegue a arreglar. El
