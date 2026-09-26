@@ -147,6 +147,79 @@ function ascii(bytes: string): number[] {
  * `len` is the total length including the header, and the first partition offset must sit inside it. Both are
  * declared by the format, which is what makes this `consistent` rather than a guess.
  */
+/**
+ * CRC-32 (IEEE 802.3, the zlib polynomial) as its raw register — no final inversion — so both conventions firmware
+ * uses are one call: U-Boot stores `~crc32Raw(…)` (plain zlib `crc32`), Broadcom TRX stores the register itself.
+ * Written here rather than imported because core has no runtime dependencies and also runs in the browser.
+ */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32Raw(buf: Uint8Array, start: number, end: number): number {
+  let c = 0xffffffff;
+  for (let i = start; i < end; i++) c = (CRC_TABLE[(c ^ (buf[i] as number)) & 0xff] as number) ^ (c >>> 8);
+  return c >>> 0;
+}
+const crc32 = (buf: Uint8Array, start: number, end: number): number => ~crc32Raw(buf, start, end) >>> 0;
+
+/**
+ * The `verified` rung and the soft constraint below it, for the two formats that carry a checksum over their own
+ * bytes. Both conventions were measured on real images before being written here, not recalled: the uImage header
+ * CRC matched on all 18 headers across 9 corpus images, and the TRX register matched on DVRF_v03.
+ *
+ * A checksum that does NOT match penalizes and never rejects. The payload CRC is the case that forced it: on the
+ * corpus it disagrees on 6 of those 18 uImages, all with an intact header CRC (AliExpress repeater, IMOU camera) — a header
+ * whose own 32-bit check holds is not a coincidence, and a payload that differs from what the header declares is a
+ * modified or re-packed image, which is worth seeing rather than dropping.
+ */
+function uimageVerify(buf: Uint8Array, off: number): SignatureVerdict {
+  if (off + 64 > buf.length) return at('magic', 'header runs past the end of this buffer; no field could be checked');
+  // A copy, never `slice`: on a Node Buffer `slice` is a view, and zeroing the CRC field would edit the image.
+  const header = Uint8Array.from(buf.subarray(off, off + 64));
+  header.fill(0, 4, 8);
+  const hcrc = u32be(buf, off + 4);
+  if (crc32(header, 0, 64) !== hcrc) {
+    return at(
+      'magic',
+      `header CRC 0x${hcrc.toString(16)} does not match the 64 header bytes — suspicious, not rejected`,
+    );
+  }
+  // Only a header that checked itself pays for a pass over the payload, so a coincidental magic costs nothing.
+  const size = u32be(buf, off + 12);
+  if (off + 64 + size > buf.length) {
+    return at(
+      'consistent',
+      `header CRC matches; the ${size}-byte payload runs past this buffer, so its CRC is unchecked`,
+    );
+  }
+  const dcrc = u32be(buf, off + 24);
+  if (crc32(buf, off + 64, off + 64 + size) !== dcrc) {
+    return at(
+      'consistent',
+      `header CRC matches, but the ${size}-byte payload does not match its declared CRC — modified or re-packed`,
+    );
+  }
+  return at('verified', `header CRC and the ${size}-byte payload CRC both recompute to the declared values`);
+}
+
+/** TRX (HDR0): the structural check, then the stored register over flag_version…len when the image fits. */
+function trxCrcVerify(buf: Uint8Array, off: number): SignatureVerdict {
+  const base = trxVerify(buf, off);
+  if (base.tier !== 'consistent') return base;
+  const len = u32le(buf, off + 4);
+  const stored = u32le(buf, off + 8);
+  if (crc32Raw(buf, off + 12, off + len) === stored) {
+    return at('verified', `declared length ${len} fits and the CRC over it recomputes to 0x${stored.toString(16)}`);
+  }
+  return at('structural', `declared length ${len} fits, but the CRC over it does not match — suspicious, not rejected`);
+}
+
 function trxVerify(buf: Uint8Array, off: number): SignatureVerdict {
   const len = u32le(buf, off + 4);
   if (len < 28) return no(`declared length ${len} is smaller than the 28-byte TRX header`);
@@ -322,6 +395,8 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
       osCode: buf[off + 28] ?? 0,
       archCode: buf[off + 29] ?? 0,
     }),
+
+    verify: uimageVerify,
   },
   {
     id: 'trx',
@@ -330,7 +405,7 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     confidence: 'high',
     magic: ascii('HDR0'),
     decode: (buf, off) => ({ totalSize: u32le(buf, off + 4) }),
-    verify: trxVerify,
+    verify: trxCrcVerify,
   },
   {
     id: 'dtb',
@@ -738,6 +813,7 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     confidence: 'high',
     magic: ascii('HDR1'),
     decode: (buf, off) => ({ totalSize: u32le(buf, off + 4) }),
+    // HDR1 keeps the structural check alone: no real HDR1 image was available to measure its checksum against.
     verify: trxVerify,
   },
   {

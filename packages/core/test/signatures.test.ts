@@ -1,3 +1,4 @@
+import zlib from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { computeEntropyProfile } from '../src/entropy.js';
 import { SIGNATURE_RULES, scanSignatures, scanSignaturesDetailed } from '../src/signatures.js';
@@ -444,8 +445,9 @@ describe('signature confidence rubric', () => {
     },
     { id: 'uefi-fv', tier: 'consistent', pos: uefiVolume(0), neg: uefiVolume(0x41) },
     {
+      // The CRC field is left zero, so the image fits but its checksum does not: penalized, not rejected.
       id: 'trx',
-      tier: 'consistent',
+      tier: 'structural',
       pos: img(0x2000, [0, [...[...'HDR0'].map((c) => c.charCodeAt(0)), ...u32leBytes(0x1000)]], [16, u32leBytes(28)]),
       neg: img(0x2000, [0, [...[...'HDR0'].map((c) => c.charCodeAt(0)), ...u32leBytes(4)]]),
     },
@@ -595,7 +597,10 @@ describe('signature confidence rubric', () => {
   });
 
   it('covers every rejecting rule — this table is the denominator, not a sample', () => {
-    const rejecting = SIGNATURE_RULES.filter((r) => r.verify).map((r) => r.id);
+    // `uimage` checks and never rejects — its CRC mismatches penalize (see the checksum-verified tier suite), so it
+    // is named here rather than given a negative case it could not honestly have.
+    const softOnly = new Set(['uimage']);
+    const rejecting = SIGNATURE_RULES.filter((r) => r.verify && !softOnly.has(r.id)).map((r) => r.id);
     const covered = new Set(CASES.filter((c) => c.neg).map((c) => c.id));
     expect([...rejecting].sort()).toEqual([...covered].sort());
   });
@@ -658,6 +663,59 @@ describe('signature confidence rubric', () => {
  * is an exact signature for a uImage and an inference about its payload, which is why the eCos monolith repacked
  * in one is `heuristic` here and not `exact-signature`.
  */
+/**
+ * The `verified` rung. The expected CRCs come from `node:zlib`, not from core's own table, so these tests would
+ * catch a wrong polynomial or the wrong one of the two conventions (U-Boot inverts the register, TRX does not).
+ */
+describe('checksum-verified tier — uImage and TRX recompute their own CRCs', () => {
+  const crc = (b: Uint8Array): number => zlib.crc32(b) >>> 0;
+
+  function uimage(payload: Uint8Array, opts: { badHeader?: boolean; badData?: boolean; truncate?: number } = {}) {
+    const h = Buffer.alloc(64);
+    h.writeUInt32BE(0x27051956, 0);
+    h.writeUInt32BE(payload.length, 12);
+    h.writeUInt32BE(opts.badData ? 0xdeadbeef : crc(payload), 24);
+    h.writeUInt32BE(opts.badHeader ? 0x12345678 : crc(h), 4);
+    const whole = Buffer.concat([h, payload]);
+    return whole.subarray(0, whole.length - (opts.truncate ?? 0));
+  }
+  const payload = new TextEncoder().encode('Linux kernel payload bytes, repeated. '.repeat(40));
+  const tierOf = (buf: Uint8Array, id: string) => scanSignatures(buf).find((h) => h.id === id)?.tier;
+
+  it('reaches verified only when both uImage CRCs recompute', () => {
+    expect(tierOf(uimage(payload), 'uimage')).toBe('verified');
+  });
+
+  it('keeps a self-checking header whose payload differs, as consistent — the measured corpus case', () => {
+    const hit = scanSignatures(uimage(payload, { badData: true })).find((h) => h.id === 'uimage');
+    expect(hit?.tier).toBe('consistent');
+    expect(hit?.rationale).toMatch(/modified or re-packed/);
+    expect(tierOf(uimage(payload, { truncate: 10 }), 'uimage')).toBe('consistent');
+  });
+
+  it('penalizes a header CRC mismatch to magic without rejecting the hit', () => {
+    const scan = scanSignaturesDetailed(uimage(payload, { badHeader: true }));
+    expect(scan.hits.find((h) => h.id === 'uimage')?.tier).toBe('magic');
+    expect(scan.rejectedByRule.uimage).toBeUndefined();
+  });
+
+  function trx(opts: { badCrc?: boolean } = {}) {
+    const buf = Buffer.alloc(0x400, 0x5a);
+    buf.write('HDR0', 0, 'latin1');
+    buf.writeUInt32LE(0x400, 4);
+    buf.writeUInt32LE(0, 12);
+    buf.writeUInt32LE(28, 16);
+    // TRX stores the raw register: zlib's value with its final inversion undone.
+    buf.writeUInt32LE(opts.badCrc ? 1 : ~crc(buf.subarray(12, 0x400)) >>> 0, 8);
+    return buf;
+  }
+
+  it('reaches verified on a TRX whose stored register recomputes, and only structural when it does not', () => {
+    expect(tierOf(trx(), 'trx')).toBe('verified');
+    expect(tierOf(trx({ badCrc: true }), 'trx')).toBe('structural');
+  });
+});
+
 describe('inferIdentity — exact signature vs heuristic vs unknown', () => {
   it('calls a filesystem superblock an exact signature', () => {
     const buf = planted(16384, 8192, ascii('hsqs'));
