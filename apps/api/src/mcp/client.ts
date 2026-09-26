@@ -20,6 +20,18 @@ export interface JobView {
   error: string | null;
 }
 
+const AUTHOR_KIND_HEADER = 'x-firmlab-author-kind';
+
+/** Stamp agent authorship after removing every case-insensitive spelling that Fetch would otherwise combine. */
+export function agentRequestHeaders(headers: Record<string, string>): Record<string, string> {
+  const stamped: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() !== AUTHOR_KIND_HEADER) stamped[name] = value;
+  }
+  stamped[AUTHOR_KIND_HEADER] = 'agent';
+  return stamped;
+}
+
 /**
  * The API surface consumed by the MCP façade.
  *
@@ -158,5 +170,5 @@ export function clientFromEnv(): FirmLabClient {
   // Everything arriving through this client is an agent acting, so authorship is stamped by the transport rather
   // than asked of the model. Set last so it wins over FIRMLAB_MCP_HEADERS: an agent's row must never be able to
   // be attributed to a human, whether by a model choosing a field or by an operator mis-setting an env var.
-  return new FirmLabClient(base, { ...headers, 'x-firmlab-author-kind': 'agent' });
+  return new FirmLabClient(base, agentRequestHeaders(headers));
 }
