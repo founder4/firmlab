@@ -208,7 +208,15 @@ RUN_ID="$(docker inspect "$CONTAINER" --format '{{.Image}}')"
 RUNNING_REV="$(running_revision)"
 [ "$RUNNING_REV" = "$REVISION" ] || die "sello desplegado ($RUNNING_REV) != repo ($REVISION)"
 
-SERVED_BUILD="$(docker exec "$CONTAINER" sh -c 'curl -fsS http://127.0.0.1:8799/health' 2>/dev/null | grep -o '"build":"[^"]*"' | cut -d'"' -f4 || true)"
+# Poll, never ask once: with no HEALTHCHECK in the image the wait above exits on its first pass (status `none`), so
+# a single request here landed before the server was listening and warned `/health build ()` on EVERY deploy —
+# a verification that could never confirm the build it exists to confirm.
+SERVED_BUILD=""
+for _ in $(seq 1 30); do
+  SERVED_BUILD="$(docker exec "$CONTAINER" sh -c 'curl -fsS http://127.0.0.1:8799/health' 2>/dev/null | grep -o '"build":"[^"]*"' | cut -d'"' -f4 || true)"
+  [ -n "$SERVED_BUILD" ] && break
+  sleep 1
+done
 [ "$SERVED_BUILD" = "$REVISION" ] || warn "/health build ($SERVED_BUILD) != $REVISION (el sello del label sí coincide)"
 
 say "OK — $CONTAINER healthy, corriendo $REVISION (/health build: ${SERVED_BUILD:-?})"
