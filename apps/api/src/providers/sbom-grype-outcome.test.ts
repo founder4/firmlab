@@ -164,3 +164,72 @@ describe('grype answered', () => {
     expect(r.grypeKev?.state === 'annotated' && r.grypeKev.matches.map((m) => m.cve)).toEqual(['CVE-2021-44228']);
   });
 });
+
+/**
+ * A grype that exits 0 without its document. Defaulting a missing `matches` to `[]` turned that into a measured
+ * zero — and, with a kev provider in the descriptor, into an annotated KEV zero — for a run that measured nothing.
+ */
+describe('grype output without a top-level matches array', () => {
+  const KEV_DESCRIPTOR = { db: { providers: { kev: { captured: '2026-09-26T00:33:03Z' } } } };
+
+  it.each([
+    ['missing', { descriptor: KEV_DESCRIPTOR }],
+    ['an object', { descriptor: KEV_DESCRIPTOR, matches: {} }],
+    ['null', { descriptor: KEV_DESCRIPTOR, matches: null }],
+    ['a whole document of null', null],
+  ])('is run_failed with no KEV state when matches is %s', async (_label, out) => {
+    toolAvailable.mockResolvedValue(true);
+    withGrype((args) => (args[0] === 'db' ? DB_PRESENT : JSON.stringify(out)));
+
+    const { runSbom } = await import('./sbom.js');
+    const r = await runSbom('img', '/rootfs', handle);
+
+    expect(r.grypeOutcome).toBe('run_failed');
+    expect(r.grypeAvailable).toBe(false);
+    expect(r.grypeKev).toBeUndefined();
+    expect(r.grypeDb).toBeUndefined();
+    expect(r.vulnerabilityTotal).toBe(0);
+    expect(r.grypeReason).toContain('no top-level matches array');
+    expect(r.packages.map((p) => p.name)).toEqual(['busybox']);
+  });
+
+  it('keeps an empty matches array from a kev-bearing database as an annotated, measured zero', async () => {
+    toolAvailable.mockResolvedValue(true);
+    withGrype((args) => (args[0] === 'db' ? DB_PRESENT : JSON.stringify({ descriptor: KEV_DESCRIPTOR, matches: [] })));
+
+    const { runSbom } = await import('./sbom.js');
+    const r = await runSbom('img', '/rootfs', handle);
+
+    expect(r.grypeOutcome).toBe('matched');
+    expect(r.vulnerabilityTotal).toBe(0);
+    expect(r.grypeKev).toEqual({ state: 'annotated', captured: '2026-09-26T00:33:03Z', matches: [] });
+  });
+
+  it('keeps a KEV annotation on a row the VULN_CAP listing cuts, because annotation reads every match', async () => {
+    toolAvailable.mockResolvedValue(true);
+    const critical = Array.from({ length: 1000 }, (_, i) => ({
+      vulnerability: { id: `CVE-2099-${10000 + i}`, severity: 'Critical' },
+      artifact: { name: 'pkg', version: '1' },
+    }));
+    // Low severity ranks it below 1 000 criticals: it is the row the cap drops from the listing.
+    const tail = {
+      vulnerability: {
+        id: 'CVE-2021-44228',
+        severity: 'Low',
+        knownExploited: [{ cve: 'CVE-2021-44228', dateAdded: '2021-12-10' }],
+      },
+      artifact: { name: 'log4j-core', version: '2.14.1' },
+    };
+    withGrype((args) =>
+      args[0] === 'db' ? DB_PRESENT : JSON.stringify({ descriptor: KEV_DESCRIPTOR, matches: [...critical, tail] }),
+    );
+
+    const { runSbom } = await import('./sbom.js');
+    const r = await runSbom('img', '/rootfs', handle);
+
+    expect(r.vulnerabilityTotal).toBe(1001);
+    expect(r.vulnerabilities).toHaveLength(1000);
+    expect(r.vulnerabilities.map((v) => v.id)).not.toContain('CVE-2021-44228');
+    expect(r.grypeKev?.state === 'annotated' && r.grypeKev.matches.map((m) => m.cve)).toEqual(['CVE-2021-44228']);
+  });
+});

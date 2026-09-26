@@ -342,8 +342,11 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
           maxBuffer: 64 * 1024 * 1024,
           env,
         });
-        const parsed = JSON.parse(stdout) as { matches?: GrypeMatch[] };
-        const matches = Array.isArray(parsed.matches) ? parsed.matches : [];
+        const parsed = JSON.parse(stdout) as { matches?: unknown } | null;
+        // No top-level `matches` array means grype did not produce its document, not that it matched nothing: a
+        // defaulted `[]` here would be a measured zero — and an annotated KEV zero — that nobody measured.
+        if (!Array.isArray(parsed?.matches)) throw new Error('grype output has no top-level matches array');
+        const matches = parsed.matches as GrypeMatch[];
         grypeKev = grypeKevAnnotation(parsed);
         handle.log(
           grypeKev.state === 'annotated'
