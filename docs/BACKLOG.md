@@ -165,7 +165,17 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 - [ ] Portar la tabla CPE de banners binarios de moria (17 componentes: openssl, busybox, dropbear, dnsmasq,
   curl, zlib, lighttpd, wget, wpa_supplicant, hostapd, mosquitto, glibc, musl, mbedtls, gnutls, openvpn, lua,
   u-boot) a `compmap`/`component-cve.ts`, frente a los 5 actuales. Habilitaría un mirror NVD dirigido (solo esos
-  productos, ~700 KB) para CVE offline con `FIRMLAB_RESEARCH=0`.
+  productos, ~700 KB) para CVE offline con `FIRMLAB_RESEARCH=0`. *(Parcial, 2026-09-26: añadidos los seis que aparecen con
+  versión legible en binarios REALES de las muestras locales —hostapd, wpa_supplicant, uClibc-ng, GnuTLS, Lua y
+  avahi—, cada patrón leído del binario. CVE sólo donde NVD, consultado contra esa versión exacta, da un rango
+  defendible: OpenSSL gana CVE-2020-1967, -2022-0778, -2023-0286 y -2024-6119 (un rango por serie, sufijos de dos
+  letras `1.0.2zd` ya comparables) y uClibc-ng CVE-2021-43523 y -2022-30295 con suelo en su primera versión.
+  Rechazados con motivo: CVE-2022-23303/23304 en hostapd y wpa_supplicant (abiertos por abajo, sin versión
+  verificada en la que entró ese código) y CVE-2021-26720 en avahi (script del paquete Debian, no upstream).
+  Medido sobre los rootfs: Tenda pasa de 0 a 5 CVE. Sin muestra real con versión legible quedan zlib, lighttpd,
+  wget, mosquitto, glibc, musl, mbedtls, openvpn y u-boot; uClibc 0.9.30 (TP-Link) no lleva cadena de versión y
+  no se lee del nombre de fichero. Pendiente: KRACK, que NVD enumera incluyendo 0.5.9 pero exige representar
+  una lista enumerada y precondiciones por rol AP/cliente.)*
 - [ ] **NO adoptar** el pase de secretos de mithril: sobre la Tenda-Camera, 12 de 18 hallazgos son falsos
   positivos (tablas de etiquetas TLS de hostapd/wpa_supplicant leídas como claves PEM). `pem-scan.ts` ya exige
   que el cuerpo decodifique. Lo único aprovechable es su tier `validated` (recomputar un checksum embebido).

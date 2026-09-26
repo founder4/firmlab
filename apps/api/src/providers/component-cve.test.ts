@@ -488,11 +488,12 @@ describe('every curated rule declares what NVD backs it with', () => {
     }
   });
 
-  it('keeps the count of each shape where 2026-09-19 measured it', () => {
-    // Not a golden-file assertion for its own sake: the nine open-below rules are exactly the population the
-    // strict reading would have deleted, and if that number moves the policy decision deserves re-reading.
+  it('keeps the count of each shape where 2026-09-26 measured it', () => {
+    // Not a golden-file assertion for its own sake: the open-below rules are exactly the population the strict
+    // reading would have deleted, and if that number moves the policy decision deserves re-reading. Nine on
+    // 2026-09-19; eleven since the two uClibc-ng entries, floored at the first version of the product NVD bounds.
     const shape = (s: string) => allRules.filter((r) => r.cve.nvdBacking === s).length;
-    expect(shape('open-below')).toBe(9);
+    expect(shape('open-below')).toBe(11);
     expect(shape('bounded') + shape('enumerated') + shape('open-below')).toBe(allRules.length);
   });
 
@@ -520,5 +521,67 @@ describe('every curated rule declares what NVD backs it with', () => {
     const busybox = COMPONENT_RULES.find((r) => r.component === 'busybox');
     expect(busybox?.cves.map((c) => c.id)).not.toContain('CVE-2016-2148');
     expect(busybox?.rejected?.map((r) => r.id)).toContain('CVE-2016-2148');
+  });
+});
+
+/**
+ * The 2026-09-26 additions. Every string below was read off a real binary in the corpus, and every range was
+ * queried from the NVD CVE API against the version that binary carries — the tests pin both halves.
+ */
+describe('corpus-read components and per-series OpenSSL ranges', () => {
+  const rule = (c: string) => {
+    const r = COMPONENT_RULES.find((x) => x.component === c);
+    if (!r) throw new Error(`no rule for ${c}`);
+    return r;
+  };
+
+  it('orders OpenSSL two-letter suffixes the way the releases came', () => {
+    const pv = (v: string) => {
+      const parsed = parseVersion(v);
+      if (!parsed) throw new Error(`unparseable ${v}`);
+      return parsed;
+    };
+    const cmp = (a: string, b: string) => compareVersion(pv(a), pv(b));
+    expect(cmp('1.0.2p', '1.0.2zd')).toBe(-1);
+    expect(cmp('1.0.2z', '1.0.2za')).toBe(-1);
+    expect(cmp('1.0.2zg', '1.0.2zd')).toBe(1);
+  });
+
+  it('reads each new component from the exact string its real binary carries', () => {
+    expect(extractComponentVersion('hostapd v0.5.9', rule('hostapd'))).toBe('0.5.9');
+    expect(extractComponentVersion('   -v   show hostapd version\nhostapd v2.9', rule('hostapd'))).toBe('2.9');
+    expect(extractComponentVersion('wpa_supplicant v0.5.9', rule('wpa_supplicant'))).toBe('0.5.9');
+    expect(extractComponentVersion('uClibc-ng release release version 1.0.31.', rule('uclibc-ng'))).toBe('1.0.31');
+    expect(rule('uclibc-ng').binNameRe?.test('libuClibc-1.0.31.so')).toBe(true);
+    expect(rule('uclibc-ng').binNameRe?.test('ld-uClibc-1.0.31.so')).toBe(false);
+    expect(extractComponentVersion('Enabled GnuTLS 3.8.3 logging...', rule('gnutls'))).toBe('3.8.3');
+    expect(extractComponentVersion('"$Lua: Lua 5.1.5 Copyright (C) 1994-2012 Lua.org', rule('lua'))).toBe('5.1.5');
+    // avahi: only the standalone string counts — the `%s 0.8` format strings beside it must not.
+    expect(extractComponentVersion('STATUS=%s 0.8 starting up.\navahi 0.8\n', rule('avahi'))).toBe('0.8');
+    expect(extractComponentVersion('Joining avahi 0.8 mDNS group', rule('avahi'))).toBeNull();
+  });
+
+  it('matches the corpus OpenSSL builds against the right series, once per CVE', () => {
+    const ids = (v: string) =>
+      matchCves(rule('openssl'), v)
+        .map((c) => c.id)
+        .sort();
+    expect(ids('1.1.1d')).toEqual(['CVE-2020-1967', 'CVE-2022-0778', 'CVE-2023-0286']);
+    expect(ids('1.0.2p')).toEqual(['CVE-2022-0778', 'CVE-2023-0286']);
+    expect(ids('3.0.13')).toEqual(['CVE-2024-6119']);
+    expect(ids('1.0.2zd')).toEqual(['CVE-2023-0286']); // the exclusive end NVD gives, as given
+  });
+
+  it('judges a grype row against every series the curated table carries for that CVE', () => {
+    expect(curatedCveVerdict('openssl', '3.0.1', 'CVE-2022-0778')?.kind).toBe('claimed');
+    expect(curatedCveVerdict('openssl', '1.1.1n', 'CVE-2022-0778')?.kind).toBe('outside_curated_range');
+    expect(curatedCveVerdict('hostapd', '2.9', 'CVE-2022-23303')?.kind).toBe('rejected');
+    expect(curatedCveVerdict('avahi', '0.8', 'CVE-2021-26720')?.kind).toBe('rejected');
+  });
+
+  it('floors uClibc-ng at its own first version and claims nothing for the older uClibc line', () => {
+    expect(matchCves(rule('uclibc-ng'), '1.0.31').map((c) => c.id)).toEqual(['CVE-2021-43523', 'CVE-2022-30295']);
+    expect(matchCves(rule('uclibc-ng'), '1.0.39').map((c) => c.id)).toEqual(['CVE-2022-30295']);
+    expect(matchCves(rule('uclibc-ng'), '0.9.30')).toEqual([]);
   });
 });

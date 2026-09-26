@@ -21,7 +21,10 @@ import path from 'node:path';
 import type { FindingSeverity } from '@firmlab/core';
 import type { FindingDraft } from '../findings-normalize.js';
 
-/** A dotted version, optionally with a single trailing letter (OpenSSL-style `1.0.1f`). */
+/**
+ * A dotted version, optionally with a trailing letter suffix: OpenSSL's `1.0.1f`, and its two-letter `1.0.2zd` once a
+ * series outlived the alphabet — a real NVD bound, which a one-letter parser could not compare at all.
+ */
 export interface ParsedVersion {
   nums: number[];
   /**
@@ -35,7 +38,7 @@ export interface ParsedVersion {
 
 /** Pure: parse `1.0.1f` / `2.4.3` into comparable parts. Returns null when it is not a dotted version. */
 export function parseVersion(raw: string): ParsedVersion | null {
-  const m = raw.match(/^(\d+(?:\.\d+)*)([a-z])?$/);
+  const m = raw.match(/^(\d+(?:\.\d+)*)([a-z]{1,2})?$/);
   if (!m) return null;
   const fields = (m[1] as string).split('.');
   return { nums: fields.map((n) => Number.parseInt(n, 10)), fields, letter: m[2] ?? '', raw };
@@ -67,6 +70,7 @@ export function compareVersion(a: ParsedVersion, b: ParsedVersion): number {
     const pb = isPadded(b.fields[i] ?? '');
     if (pa !== pb) return pa ? -1 : 1;
   }
+  // Lexicographic, which is OpenSSL's order: `y` < `z` < `za` < `zd` (a prefix sorts first).
   if (a.letter === b.letter) return 0;
   return a.letter < b.letter ? -1 : 1;
 }
@@ -164,6 +168,8 @@ export interface ComponentRule {
   component: string;
   /** Binary basenames that carry this component. */
   binNames: string[];
+  /** For a library whose file name carries its own version (`libuClibc-1.0.31.so`), which no fixed name can list. */
+  binNameRe?: RegExp;
   /** Ordered version-extraction patterns (first match wins); capture group 1 is the version. */
   versionRes: RegExp[];
   /**
@@ -263,6 +269,111 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
         severity: 'high',
         low: '1.0.1',
         high: '1.0.1f',
+      },
+      // Added 2026-09-26 from the NVD CVE API queried against the three builds this corpus ships — 1.0.2p and 1.1.1d
+      // (Tenda camera) and 3.0.13 (GL.iNet BE3600). NVD bounds each advisory once PER SERIES, so each series is its
+      // own rule under the same id; every range below is copied as NVD states it, exclusive ends included.
+      {
+        id: 'CVE-2020-1967',
+        nvdBacking: 'bounded',
+        title: 'OpenSSL SSL_check_chain NULL pointer dereference during a TLS 1.3 handshake — remote denial of service',
+        severity: 'high',
+        low: '1.1.1d',
+        high: '1.1.1f',
+      },
+      {
+        id: 'CVE-2022-0778',
+        nvdBacking: 'bounded',
+        title: 'OpenSSL BN_mod_sqrt infinite loop on a crafted certificate — remote denial of service',
+        severity: 'high',
+        low: '1.0.2',
+        high: '1.0.2zd',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2022-0778',
+        nvdBacking: 'bounded',
+        title: 'OpenSSL BN_mod_sqrt infinite loop on a crafted certificate — remote denial of service',
+        severity: 'high',
+        low: '1.1.0',
+        high: '1.1.1n',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2022-0778',
+        nvdBacking: 'bounded',
+        title: 'OpenSSL BN_mod_sqrt infinite loop on a crafted certificate — remote denial of service',
+        severity: 'high',
+        low: '3.0.0',
+        high: '3.0.2',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2023-0286',
+        nvdBacking: 'bounded',
+        title: 'OpenSSL X.400 address type confusion in GENERAL_NAME comparison — memory read or denial of service',
+        severity: 'high',
+        low: '1.0.2',
+        high: '1.0.2zg',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2023-0286',
+        nvdBacking: 'bounded',
+        title: 'OpenSSL X.400 address type confusion in GENERAL_NAME comparison — memory read or denial of service',
+        severity: 'high',
+        low: '1.1.1',
+        high: '1.1.1t',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2023-0286',
+        nvdBacking: 'bounded',
+        title: 'OpenSSL X.400 address type confusion in GENERAL_NAME comparison — memory read or denial of service',
+        severity: 'high',
+        low: '3.0.0',
+        high: '3.0.8',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2024-6119',
+        nvdBacking: 'bounded',
+        title:
+          'OpenSSL certificate name-check type confusion on othername subject alternative names — denial of service',
+        severity: 'high',
+        low: '3.0.0',
+        high: '3.0.15',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2024-6119',
+        nvdBacking: 'bounded',
+        title:
+          'OpenSSL certificate name-check type confusion on othername subject alternative names — denial of service',
+        severity: 'high',
+        low: '3.1.0',
+        high: '3.1.7',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2024-6119',
+        nvdBacking: 'bounded',
+        title:
+          'OpenSSL certificate name-check type confusion on othername subject alternative names — denial of service',
+        severity: 'high',
+        low: '3.2.0',
+        high: '3.2.3',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2024-6119',
+        nvdBacking: 'bounded',
+        title:
+          'OpenSSL certificate name-check type confusion on othername subject alternative names — denial of service',
+        severity: 'high',
+        low: '3.3.0',
+        high: '3.3.2',
+        highExclusive: true,
       },
     ],
   },
@@ -611,6 +722,119 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       },
     ],
   },
+  {
+    component: 'hostapd',
+    // Read off real binaries on 2026-09-26: `hostapd v0.5.9` (all three TP-Link images) and `hostapd v2.9` (IMOU).
+    binNames: ['hostapd'],
+    versionRes: [/\bhostapd v(\d+\.\d+(?:\.\d+)?)\b/],
+    cves: [],
+    rejected: [
+      {
+        id: 'CVE-2022-23303',
+        reason:
+          'NVD backs it with a single range open below ("before 2.10") and no enumerated CPEs. The advisory is about the ' +
+          'SAE implementation, and no release at which that code entered hostapd was verified here to floor at.',
+      },
+      {
+        id: 'CVE-2022-23304',
+        reason:
+          'NVD backs it with a single range open below ("before 2.10") and no enumerated CPEs. The advisory is about the ' +
+          'EAP-pwd implementation, and no release at which that code entered hostapd was verified here to floor at.',
+      },
+    ],
+  },
+  {
+    component: 'wpa_supplicant',
+    // `wpa_supplicant v0.5.9` on the three TP-Link images, read the same day. The same two advisories are refused for
+    // the same reason, so a grype row on either lane reads the same.
+    binNames: ['wpa_supplicant'],
+    versionRes: [/\bwpa_supplicant v(\d+\.\d+(?:\.\d+)?)\b/],
+    cves: [],
+    rejected: [
+      {
+        id: 'CVE-2022-23303',
+        reason:
+          'NVD backs it with a single range open below ("before 2.10") and no enumerated CPEs, and no release at which ' +
+          'the SAE code entered wpa_supplicant was verified here to floor at.',
+      },
+      {
+        id: 'CVE-2022-23304',
+        reason:
+          'NVD backs it with a single range open below ("before 2.10") and no enumerated CPEs, and no release at which ' +
+          'the EAP-pwd code entered wpa_supplicant was verified here to floor at.',
+      },
+    ],
+  },
+  {
+    component: 'uclibc-ng',
+    // The file name carries the version (`libuClibc-1.0.31.so` on IMOU and Tenda), and so does the banner inside it:
+    // `uClibc-ng release release version 1.0.31.` — the doubled word is in the real binary. The banner is what is
+    // read; the name only selects the file. The older uClibc 0.9.30 on the TP-Link images carries no such string and
+    // is left unversioned rather than read off its file name.
+    binNames: [],
+    binNameRe: /^libuClibc-\d+\.\d+\.\d+\.so$/,
+    versionRes: [/uClibc-ng release (?:release )?version (\d+\.\d+\.\d+)/],
+    cves: [
+      {
+        id: 'CVE-2021-43523',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, against the `uclibc-ng_project:uclibc-ng` product, whose own',
+          'numbering starts at 1.0.0. The older uClibc 0.9.x line is a separate CPE product this rule does not claim,',
+          'so the floor is the first version the bounded product has and nothing below it is inferred.',
+        ].join(' '),
+        title: 'uClibc-ng resolver mishandles special characters in DNS-returned domain names',
+        severity: 'critical',
+        low: '1.0.0',
+        high: '1.0.39',
+        highExclusive: true,
+      },
+      {
+        id: 'CVE-2022-30295',
+        nvdBacking: 'open-below',
+        floorRationale: [
+          'NVD bounds this advisory only from above, against the `uclibc-ng_project:uclibc-ng` product, whose own',
+          'numbering starts at 1.0.0. The older uClibc 0.9.x line is a separate CPE product this rule does not claim,',
+          'so the floor is the first version the bounded product has and nothing below it is inferred.',
+        ].join(' '),
+        title: 'uClibc-ng resolver uses predictable DNS transaction IDs — cache poisoning',
+        severity: 'medium',
+        low: '1.0.0',
+        high: '1.0.40',
+      },
+    ],
+  },
+  {
+    component: 'gnutls',
+    // `Enabled GnuTLS 3.8.3 logging...` in the GL.iNet `libgnutls.so.30.37.1`. Inventory only: the one NVD match for
+    // 3.8.3 on 2026-09-26 was not an entry this table exists for.
+    binNames: ['libgnutls.so'],
+    versionRes: [/Enabled GnuTLS (\d+\.\d+\.\d+) logging/],
+    cves: [],
+  },
+  {
+    component: 'lua',
+    // The RCS-style `$Lua: Lua 5.1.5 Copyright …$` ident in the GL.iNet `liblua.so.5.1.5`. Inventory only.
+    binNames: ['liblua.so'],
+    versionRes: [/\$Lua: Lua (\d+\.\d+\.\d+)/],
+    cves: [],
+  },
+  {
+    component: 'avahi',
+    // `avahi 0.8` is its own string in the GL.iNet `avahi-daemon` (every other mention is `%s 0.8`), so the pattern is
+    // anchored to the whole line rather than to any number after the word.
+    binNames: ['avahi-daemon'],
+    versionRes: [/^avahi (\d+\.\d+(?:\.\d+)?)$/m],
+    cves: [],
+    rejected: [
+      {
+        id: 'CVE-2021-26720',
+        reason:
+          'NVD\'s range ("through 0.8-4") is the Debian package revision, and the flaw is in Debian\'s own ' +
+          'avahi-daemon-check-dns.sh hook — not upstream avahi, and not a file a non-Debian firmware ships.',
+      },
+    ],
+  },
 ];
 
 export interface ComponentHit {
@@ -635,7 +859,10 @@ export function extractComponentVersion(strings: string, rule: ComponentRule): s
 
 /** Pure: the CVEs from a rule whose affected range covers `version`. */
 export function matchCves(rule: ComponentRule, version: string): CveRule[] {
-  return rule.cves.filter((c) => cveCovers(version, c));
+  // One CVE may carry one rule per release series (OpenSSL's 1.0.2 / 1.1.1 / 3.0 ranges); a version sits in at most
+  // one of them, but the id is still reported once whatever the table's shape.
+  const seen = new Set<string>();
+  return rule.cves.filter((c) => cveCovers(version, c) && !seen.has(c.id) && seen.add(c.id));
 }
 
 /**
@@ -691,16 +918,18 @@ export function curatedCveVerdict(component: string, version: string, cveId: str
       note: `The curated table evaluated ${cveId} for ${component} and refuses to claim it: ${refused.reason} This row stands on grype's broader standard alone.`,
     };
   }
-  const curated = rule.cves.find((c) => c.id === cveId);
-  if (!curated) return null;
-  const range = `${curated.low}–${curated.high}`;
+  // Every range the table carries for this id, not the first: OpenSSL advisories are bounded once per series, and
+  // judging a 3.0 build against the 1.0.2 range alone would call a claimed row "outside the curated range".
+  const ranges = rule.cves.filter((c) => c.id === cveId);
+  if (ranges.length === 0) return null;
+  const range = ranges.map((c) => `${c.low}–${c.highExclusive ? '<' : ''}${c.high}`).join(', ');
   if (!parseVersion(version)) {
     return {
       kind: 'version_not_comparable',
       note: `The curated table carries ${cveId} for ${component} ${range} but cannot compare the manifest version "${version}", so it neither corroborates nor disputes this row.`,
     };
   }
-  if (cveCovers(version, curated)) {
+  if (ranges.some((c) => cveCovers(version, c))) {
     return {
       kind: 'claimed',
       note: `The curated table claims ${cveId} for ${component} ${range} as well; its own row is static_confirmed from the version string in the binary, which is evidence this manifest match does not carry.`,
@@ -866,7 +1095,9 @@ function readBounded(abs: string): Uint8Array {
 
 /** Does a basename match a rule binary (exact, or a versioned `.so.N` shared-object variant)? */
 function matchesBinName(base: string): ComponentRule | undefined {
-  return COMPONENT_RULES.find((r) => r.binNames.some((n) => base === n || (n.endsWith('.so') && base.startsWith(n))));
+  return COMPONENT_RULES.find(
+    (r) => r.binNames.some((n) => base === n || (n.endsWith('.so') && base.startsWith(n))) || r.binNameRe?.test(base),
+  );
 }
 
 /**
