@@ -20,7 +20,24 @@ export interface JobView {
   error: string | null;
 }
 
-export class FirmLabClient {
+/**
+ * The API surface consumed by the MCP façade.
+ *
+ * Keeping this as an interface is deliberate: contract tests connect the real MCP server to a deterministic
+ * replay client without opening a socket, while production still uses the HTTP implementation below.
+ */
+export interface FirmLabApiClient {
+  get<T>(path: string): Promise<T>;
+  getWithStatus<T>(path: string): Promise<{ ok: boolean; status: number; body: T }>;
+  post<T>(path: string, body?: unknown): Promise<T>;
+  getOrNull<T>(path: string): Promise<T | null>;
+  runJob(startPath: string, body: unknown, timeoutMs: number, pollMs?: number): Promise<JobView>;
+  job(jobId: string): Promise<JobView>;
+  getText(path: string): Promise<string>;
+  upload(filename: string, bytes: Buffer): Promise<{ id: string; filename: string }>;
+}
+
+export class FirmLabClient implements FirmLabApiClient {
   constructor(
     private readonly base: string,
     private readonly headers: Record<string, string> = {},

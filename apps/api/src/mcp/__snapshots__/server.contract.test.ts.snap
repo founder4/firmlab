@@ -1,0 +1,1361 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`FirmLab MCP client-visible contract > matches the reviewed v1 tools, resources, templates, and prompts snapshot > client-visible contract v1 1`] = `
+{
+  "capabilities": {
+    "prompts": {
+      "listChanged": true,
+    },
+    "resources": {
+      "listChanged": true,
+    },
+    "tools": {
+      "listChanged": true,
+    },
+  },
+  "instructions": "FirmLab is a firmware analysis workbench. You are driving it; it does the analysis and you interpret it.
+
+Every finding carries a PROOF STATE, and it bounds what you may claim:
+  static_confirmed          — the code fact is present in the bytes. Claim the fact, not its exploitability.
+  confirmed_in_emulation    — reproduced against a booted image. Proves the sandbox, not the physical device.
+  confirmed_full_system     — reproduced under full-system emulation.
+  needs_runtime_reproduction— a LEAD. A precondition was observed, nothing was proven. Never report as a bug.
+  blocked_by_platform       — the question was asked and this deployment could not answer it. NOT a negative.
+  blocked_by_security       — a control (encryption, secure boot) stopped the analysis. NOT a negative.
+  false_positive            — checked and dismissed.
+
+Two inferences are always wrong here, and both are easy to make:
+  1. An empty findings list does NOT mean the firmware is clean. It means the stages that ran found nothing —
+     and stages that never ran found nothing by definition. Every findings result carries a coverage verdict;
+     read it before you characterise the result, and quote its limits when you report.
+  2. A tool being absent, or a bounded search expiring, is not evidence of absence. Symbolic reachability that
+     does not reach a sink has proven nothing about that sink.
+
+A filename is not its contents. firmlab_read_file opens the file a finding cites, and the one entry this
+project's backlog had to WITHDRAW was written from a filename without opening it — \`private_key.pem\`, which
+holds a PUBLIC key. If you are about to characterise a file, read it first.
+
+OPERATOR ASSERTIONS are the one kind of row FirmLab did not compute. A person — or you — asserted them. They
+carry no proof state (their provenance field reads \`operator_assertion\`), they count towards NO analysis stage,
+and they are returned in their own array, never mixed into findings. Three rules bind you here:
+  - Never cite an assertion as though the workbench measured it. Cite the author: "X asserts …".
+  - An assertion YOU recorded is a restatement of your own claim, never evidence for it. Reading your own note
+    back out of the ledger and reporting it as corroboration is circular; the payload labels which rows you may
+    have written, and you must not use them to support the claim they contain.
+  - Record one only for something you actually concluded or observed, with the basis stated. Do not mirror a
+    measured finding into an assertion — that inflates the ledger and adds no knowledge.
+
+The ledger keeps its own history, and two fields carry it:
+  - \`amendmentHistory\` on an assertion holds the claims it SUPERSEDED. They are retired: the live claim is the
+    one in the row’s own fields. Quote a superseded claim only as what the author previously stated.
+  - \`disputedByOperator\` on a MEASURED finding means a named author says that finding is wrong. It is testimony
+    about a measurement, not a measurement: the proof state stays exactly as code decided it, the row stands,
+    and you report both — never silently drop the finding, and never downgrade it because someone objected.
+
+When you report, say what was examined and what was not. An honest partial answer is the deliverable here;
+a confident complete-sounding one built on unexamined stages is the failure this workbench exists to prevent.",
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": undefined,
+          "name": "imageId",
+          "required": true,
+        },
+      ],
+      "description": "Analyze one image end to end and report what was examined AND what was not.",
+      "name": "triage_image",
+      "title": "Triage a firmware image honestly",
+    },
+    {
+      "arguments": [
+        {
+          "description": undefined,
+          "name": "imageId",
+          "required": true,
+        },
+      ],
+      "description": "Turn the binary sweep’s candidates into reachability questions instead of leaving a maybe-list.",
+      "name": "hunt_memory_safety",
+      "title": "Hunt memory-safety bugs and settle the leads",
+    },
+    {
+      "arguments": [
+        {
+          "description": undefined,
+          "name": "olderImageId",
+          "required": true,
+        },
+        {
+          "description": undefined,
+          "name": "newerImageId",
+          "required": true,
+        },
+      ],
+      "description": "Read what changed between two images of the same device — the n-day framing.",
+      "name": "compare_versions",
+      "title": "Compare two firmware versions",
+    },
+  ],
+  "resourceTemplates": [
+    {
+      "description": "FirmLab's own written report for an image — the findings with their evidence and proof states.",
+      "mimeType": "text/markdown",
+      "name": "report",
+      "title": "Analysis report (Markdown)",
+      "uriTemplate": "firmlab://images/{imageId}/report",
+    },
+    {
+      "description": "A disclosure draft built from the ledger. A DRAFT: it must be reviewed against the proof states before anything is sent to a vendor, and it deliberately contains no exploit.",
+      "mimeType": "text/markdown",
+      "name": "disclosure",
+      "title": "Coordinated-disclosure draft (Markdown)",
+      "uriTemplate": "firmlab://images/{imageId}/disclosure",
+    },
+  ],
+  "resources": [
+    {
+      "description": "The proof-state ladder and the inferences that are always wrong here. Read before reporting.",
+      "mimeType": "text/plain",
+      "name": "proof-states",
+      "title": "How to read a FirmLab result",
+      "uri": "firmlab://guide/proof-states",
+    },
+  ],
+  "server": {
+    "name": "firmlab",
+    "version": "0.1.0",
+  },
+  "snapshotVersion": 1,
+  "tools": [
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "Every firmware image on the bench, with the device class and architecture FirmLab inferred for it. Start here: the class decides which analysis stages even apply to an image.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {},
+        "type": "object",
+      },
+      "name": "firmlab_list_images",
+      "title": "List firmware images",
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "The stages this image's device class routes to, which of them actually ran, and one sentence stating what its finding count does and does not cover. Call this BEFORE characterising any result as clean, negative, or complete — it is the only thing that distinguishes "analyzed and nothing found" from "never analyzed", which are identical in a findings list and opposite as conclusions.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageId": {
+            "description": "Image id from firmlab_list_images",
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_coverage",
+      "title": "What has actually been examined",
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "Every finding recorded for an image, each carrying the PROOF STATE that bounds what it licenses you to claim. The result leads with a coverage verdict and the list of stages that produced no result — read those first. An empty list here is not a clean bill of health for the firmware.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageId": {
+            "description": "Image id",
+            "type": "string",
+          },
+          "minSeverity": {
+            "description": "Only findings at or above this severity",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info",
+            ],
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_findings",
+      "title": "The findings ledger (with its coverage caveat)",
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "Every ELF recovered from the image, with architecture and hardening flags (NX / stack canary / PIC) and notable imports. Needs a prior extraction. Use it to pick a target for firmlab_symbolic_reachability.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageId": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_list_binaries",
+      "title": "ELF inventory of the extracted rootfs",
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "Browse what extraction actually wrote to disk. The path is relative to the EXTRACTION ROOT, not to the rootfs, because several images carve into volumes without ever producing a rootfs and rooting here at the rootfs would show them an empty tree. Omit \`path\` for the top level. The result leads with the extraction verdict: an empty listing is not an empty filesystem, and the verdict says which of the several reasons applies. Symlinks are listed but never followed, and ones pointing out of the extraction are named separately — that a firmware ships \`etc/passwd -> /dev/null\` is a fact worth reporting, but its contents belong to the host and cannot be read.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageId": {
+            "type": "string",
+          },
+          "path": {
+            "description": "Extraction-root-relative directory, e.g. squashfs-root/etc",
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_list_files",
+      "title": "List a directory of the extracted filesystem",
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "Answer "which file says this" across the whole extraction — the direction the browser cannot go. THE COVERAGE IS THE ANSWER, not the hit list: every file the search declined to open (too large, unreadable, past the read budget) is a hole, and a term present only in those would not appear. The result carries a verdict sentence stating exactly that, and it says plainly when NOTHING was skipped — which is the only case where an empty result is a real negative. Binaries ARE searched, because a firmware's most interesting strings live inside them; a hit there carries a byte offset and no line number, since a line number in a binary is a fiction. Quote the verdict when you report.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "deep": {
+            "description": "Also open files above the per-file cap. Slower, and the only way to get a COMPLETE search on an image that holds large blobs",
+            "type": "boolean",
+          },
+          "imageId": {
+            "type": "string",
+          },
+          "query": {
+            "description": "Literal term by default — it is escaped, so \`a.out\` will not match \`about\`",
+            "type": "string",
+          },
+          "regex": {
+            "description": "Treat the query as a regular expression instead",
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "imageId",
+          "query",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_search_files",
+      "title": "Search the extraction for a term",
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "Open a file from the extraction and see its bytes. Text-vs-binary is decided FROM THE BYTES, never from the extension — a binary comes back as a hexdump whatever you ask for, and the result says which rule chose. The read is BOUNDED: the result always states the full size, the window served and how many bytes were not read, on each side. A window is not the file. Use it to CHECK evidence a finding cites rather than to infer content from a filename.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageId": {
+            "type": "string",
+          },
+          "limit": {
+            "description": "Bytes to read (default 65536, ceiling 1048576)",
+            "minimum": 1,
+            "type": "number",
+          },
+          "offset": {
+            "description": "First byte to read (default 0)",
+            "minimum": 0,
+            "type": "number",
+          },
+          "path": {
+            "description": "Extraction-root-relative file, e.g. squashfs-root/etc/shadow",
+            "type": "string",
+          },
+          "view": {
+            "description": "Preference only; binary bytes are always hexdumped",
+            "enum": [
+              "text",
+              "hex",
+            ],
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+          "path",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_read_file",
+      "title": "Read a bounded slice of an extracted file",
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "Which external tools are installed here, grouped by what they unlock. A question whose tool is absent cannot be answered by this deployment — that is a missing capability, never a negative result. Check here before concluding that an analysis "found nothing".",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {},
+        "type": "object",
+      },
+      "name": "firmlab_capabilities",
+      "title": "What this deployment can actually do",
+    },
+    {
+      "annotations": undefined,
+      "description": "Carve the image and extract its root filesystem (recursive FIT→UBI→SquashFS when needed). Most analysis stages need this first. Degrades honestly: an image whose payload cannot be recovered says so, and a hollow/decoy image is reported as such rather than as an empty result.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageId": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_extract",
+      "title": "Recover the filesystem",
+    },
+    {
+      "annotations": undefined,
+      "description": "Run a single analysis provider against an image. Use when you want a specific question answered rather than the whole chain. Stages needing a filesystem require firmlab_extract first. Note that individually run stages do NOT count towards firmlab_coverage, which measures the autonomous scan.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageId": {
+            "type": "string",
+          },
+          "worker": {
+            "description": "fsaudit = credentials/secrets audit · credmatch = compare stored hashes with strings shipped in the rootfs · yarascan = configured YARA corpus with coverage · sbom = packages→CVEs · certs = embedded X.509 · compmap = ELF dependency graph · servicemap = boot-time network daemons · uboot = boot posture · rtos = bare-metal/RTOS · chipsec = UEFI Secure Boot/NVRAM · fcc = FCC-ID recon",
+            "enum": [
+              "fsaudit",
+              "credmatch",
+              "yarascan",
+              "sbom",
+              "certs",
+              "compmap",
+              "servicemap",
+              "uboot",
+              "rtos",
+              "chipsec",
+              "fcc",
+            ],
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+          "worker",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_run_worker",
+      "title": "Run one analysis stage",
+    },
+    {
+      "annotations": undefined,
+      "description": "Plan and run the whole analysis chain for this image's device class, re-planning as workers surface leads, then compose an attack-path narrative. Minutes of real work. The result names the workers that did NOT complete and the honest gaps before it gives you the narrative — those bound everything the narrative says.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageId": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_autonomous_scan",
+      "title": "Run the full class-routed worker chain",
+    },
+    {
+      "annotations": undefined,
+      "description": "One checkable question per sink: is that call site reachable from the binary's entry point under symbolic argv/stdin? A reached sink is a REACHABILITY claim — it does not establish an overflow or exploitability. A sink not reached inside the budget proves NOTHING about that sink. Leave sinks empty to derive them from the binary's own unbounded-copy imports, or name any symbols you care about (e.g. system, memcpy). Needs a prior extraction.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "binary": {
+            "description": "Rootfs-relative path, e.g. usr/sbin/httpd",
+            "type": "string",
+          },
+          "budgetSeconds": {
+            "description": "Search budget per run (default 90)",
+            "maximum": 600,
+            "minimum": 15,
+            "type": "number",
+          },
+          "imageId": {
+            "type": "string",
+          },
+          "sinks": {
+            "description": "Function symbols; omit to derive from the binary",
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "imageId",
+          "binary",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_symbolic_reachability",
+      "title": "Ask angr whether a call site is reachable",
+    },
+    {
+      "annotations": undefined,
+      "description": "The reachability question appropriate for a shared library or kernel module, which has no program entry point for firmlab_symbolic_reachability. Recovers a bounded control-flow graph and asks whether an exported/global function has a path to each sink. A reachable path is STATIC CONTROL-FLOW REACHABILITY: it does not establish feasibility, attacker control, a vulnerability, or exploitability. Needs extraction.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "binary": {
+            "description": "Rootfs-relative .so/.ko path",
+            "type": "string",
+          },
+          "budgetSeconds": {
+            "description": "Bounded graph/sink budget (default 240)",
+            "maximum": 600,
+            "minimum": 15,
+            "type": "number",
+          },
+          "imageId": {
+            "type": "string",
+          },
+          "sinks": {
+            "description": "Function symbols; omit for class-specific defaults",
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "imageId",
+          "binary",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_export_reachability",
+      "title": "Ask whether an exported function can reach a sink",
+    },
+    {
+      "annotations": undefined,
+      "description": "Ingest a firmware file so it can be analyzed. The path must be readable by the FirmLab SERVER, not by you — when the server runs inside the container and your file is on the host, copy it in first (\`docker cp <file> firmlab:/tmp/\`) and pass the container path. Analysis of identity/class happens at intake; everything else is a separate call.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "path": {
+            "description": "Absolute path to the firmware file, as the FirmLab server sees it",
+            "type": "string",
+          },
+        },
+        "required": [
+          "path",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_add_image",
+      "title": "Put a firmware image on the bench",
+    },
+    {
+      "annotations": undefined,
+      "description": "Put a claim of your own into the ledger, attributed to you and marked as an assertion rather than an analysis result. Use it for a conclusion you reached that no provider can express, or an observation from outside this workbench. It carries NO proof state and counts towards NO coverage stage; you cannot set one, and the request is refused if you try. Read it back and you will see it in a separate array labelled as yours — it is a record of your claim, never evidence for it, so do not cite it as support for the same conclusion. Do not mirror a measured finding into an assertion: that adds no knowledge.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "assertedBy": {
+            "description": "Who is asserting — name yourself, e.g. "claude/triage-session"",
+            "type": "string",
+          },
+          "claim": {
+            "description": "asserted_unverified = you believe it, nothing here measured it · asserted_from_device = observed on physical hardware (FirmLab cannot measure this at all) · asserted_from_external_evidence = a vendor advisory or third-party source says so · disputes_finding = a code-decided finding is wrong",
+            "enum": [
+              "asserted_unverified",
+              "asserted_from_device",
+              "asserted_from_external_evidence",
+              "disputes_finding",
+            ],
+            "type": "string",
+          },
+          "disputesFindingId": {
+            "description": "Required for claim=disputes_finding: the finding id",
+            "type": "string",
+          },
+          "imageId": {
+            "type": "string",
+          },
+          "rationale": {
+            "description": "On what basis. Required — a claim with no stated basis cannot be evaluated",
+            "type": "string",
+          },
+          "references": {
+            "description": "URLs, advisory ids, ticket ids",
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "severity": {
+            "description": "Defaults to info",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info",
+            ],
+            "type": "string",
+          },
+          "title": {
+            "description": "The claim, in one line",
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+          "assertedBy",
+          "title",
+          "claim",
+          "rationale",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_record_assertion",
+      "title": "Record something you concluded (NOT a measurement)",
+    },
+    {
+      "annotations": undefined,
+      "description": "Withdraw an operator assertion, with the reason. The row is NOT deleted — it stays in the ledger marked as retracted, with who retracted it and why, and stops counting anywhere. Use this the moment you find that something you recorded was wrong: "this was wrong, and here is why" is a more useful row than a gap where the claim used to be. Code-decided findings cannot be withdrawn this way; to disagree with one, record an assertion with claim=disputes_finding instead.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "findingId": {
+            "description": "The assertion id returned by firmlab_record_assertion",
+            "type": "string",
+          },
+          "imageId": {
+            "type": "string",
+          },
+          "reason": {
+            "description": "Why it no longer stands. Required",
+            "type": "string",
+          },
+          "withdrawnBy": {
+            "description": "Who is retracting it — name yourself. The NAME is yours to state; the author KIND is stamped by the transport, so this retraction is recorded as made by an agent whatever name you give.",
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+          "findingId",
+          "withdrawnBy",
+          "reason",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_withdraw_assertion",
+      "title": "Retract an assertion you no longer stand behind",
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "The free-text scratchpad for an image: reasoning that is not yet a claim. Notes are NOT findings — they are never counted, never reported, and carry no evidentiary weight at all. Read them at the start of a session to pick up where the last one left off.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "imageId": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_notes",
+      "title": "Read the working notes on an image",
+    },
+    {
+      "annotations": undefined,
+      "description": "Write reasoning to the image scratchpad — a hypothesis, a thread to pull next, why you ruled something out. Deliberately weaker than an assertion: nothing reads notes as evidence, so this is the right place for thinking you are not ready to stand behind. Promote it with firmlab_record_assertion when you are.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "author": {
+            "description": "Name yourself",
+            "type": "string",
+          },
+          "body": {
+            "description": "The note",
+            "type": "string",
+          },
+          "imageId": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "imageId",
+          "author",
+          "body",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_add_note",
+      "title": "Leave a working note (not a claim)",
+    },
+    {
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "Status, log and result of a job started by another tool. A job that is still running has neither succeeded nor failed — do not conclude anything from it until it is done.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "jobId": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "jobId",
+        ],
+        "type": "object",
+      },
+      "name": "firmlab_job_status",
+      "title": "Poll a job that outlived its tool call",
+    },
+  ],
+}
+`;
+
+exports[`FirmLab MCP client-visible contract > replays a deterministic traversal of every harmless client call > harmless traversal v1 1`] = `
+{
+  "cassetteVersion": 1,
+  "transcript": [
+    {
+      "request": {
+        "arguments": {},
+        "kind": "tool",
+        "name": "firmlab_list_images",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "count": 1,
+  "images": [
+    {
+      "id": "image-fixture",
+      "filename": "router.bin",
+      "size": 4096,
+      "status": "ready",
+      "firmwareClass": "embedded-linux",
+      "arch": "mipsel"
+    }
+  ]
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "count": 1,
+          "images": [
+            {
+              "arch": "mipsel",
+              "filename": "router.bin",
+              "firmwareClass": "embedded-linux",
+              "id": "image-fixture",
+              "size": 4096,
+              "status": "ready",
+            },
+          ],
+        },
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "imageId": "image-fixture",
+        },
+        "kind": "tool",
+        "name": "firmlab_coverage",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "headline": "PARTIAL COVERAGE — 3 of 4 applicable stages ran. Any conclusion must be scoped to the stages that ran.",
+  "firmwareClass": "embedded-linux",
+  "classRationale": "A Linux root filesystem was identified.",
+  "stagesExecuted": 3,
+  "stagesApplicable": 4,
+  "measuredFindingCount": 2,
+  "operatorAssertions": 0,
+  "stages": [
+    {
+      "worker": "W1 · Extraction",
+      "reason": "rootfs recovered",
+      "status": "found",
+      "findingCount": 0
+    },
+    {
+      "worker": "W5 · Binary-vuln",
+      "reason": "provider completed",
+      "status": "found",
+      "findingCount": 2
+    },
+    {
+      "worker": "W8 · Dynamic",
+      "reason": "tool unavailable",
+      "status": "degraded"
+    }
+  ]
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "classRationale": "A Linux root filesystem was identified.",
+          "firmwareClass": "embedded-linux",
+          "headline": "PARTIAL COVERAGE — 3 of 4 applicable stages ran. Any conclusion must be scoped to the stages that ran.",
+          "measuredFindingCount": 2,
+          "operatorAssertions": 0,
+          "stages": [
+            {
+              "findingCount": 0,
+              "reason": "rootfs recovered",
+              "status": "found",
+              "worker": "W1 · Extraction",
+            },
+            {
+              "findingCount": 2,
+              "reason": "provider completed",
+              "status": "found",
+              "worker": "W5 · Binary-vuln",
+            },
+            {
+              "reason": "tool unavailable",
+              "status": "degraded",
+              "worker": "W8 · Dynamic",
+            },
+          ],
+          "stagesApplicable": 4,
+          "stagesExecuted": 3,
+        },
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "imageId": "image-fixture",
+          "minSeverity": "low",
+        },
+        "kind": "tool",
+        "name": "firmlab_findings",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "coverageVerdict": "PARTIAL COVERAGE — 3 of 4 applicable stages ran. Any conclusion must be scoped to the stages that ran.",
+  "notCovered": [],
+  "proofStateCounts": {
+    "needs_runtime_reproduction": 1,
+    "static_confirmed": 1
+  },
+  "findingCount": 2,
+  "findings": [
+    {
+      "id": "finding-lead",
+      "kind": "binary-pwnable-candidate",
+      "title": "Unbounded copy candidate",
+      "severity": "medium",
+      "proofState": "needs_runtime_reproduction",
+      "source": "binvuln",
+      "evidenceChannel": "static_bytes"
+    },
+    {
+      "id": "finding-fact",
+      "kind": "embedded-private-key",
+      "title": "Private key bytes are present",
+      "severity": "high",
+      "proofState": "static_confirmed",
+      "source": "fsaudit",
+      "evidenceChannel": "static_bytes"
+    }
+  ],
+  "operatorAssertionCount": 0
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "coverageVerdict": "PARTIAL COVERAGE — 3 of 4 applicable stages ran. Any conclusion must be scoped to the stages that ran.",
+          "findingCount": 2,
+          "findings": [
+            {
+              "evidenceChannel": "static_bytes",
+              "id": "finding-lead",
+              "kind": "binary-pwnable-candidate",
+              "proofState": "needs_runtime_reproduction",
+              "severity": "medium",
+              "source": "binvuln",
+              "title": "Unbounded copy candidate",
+            },
+            {
+              "evidenceChannel": "static_bytes",
+              "id": "finding-fact",
+              "kind": "embedded-private-key",
+              "proofState": "static_confirmed",
+              "severity": "high",
+              "source": "fsaudit",
+              "title": "Private key bytes are present",
+            },
+          ],
+          "notCovered": [],
+          "operatorAssertionCount": 0,
+          "proofStateCounts": {
+            "needs_runtime_reproduction": 1,
+            "static_confirmed": 1,
+          },
+        },
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "imageId": "image-fixture",
+        },
+        "kind": "tool",
+        "name": "firmlab_list_binaries",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "count": 1,
+  "binaries": [
+    {
+      "path": "usr/sbin/httpd",
+      "arch": "mipsel",
+      "nx": true,
+      "canary": false,
+      "pic": false
+    }
+  ]
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "binaries": [
+            {
+              "arch": "mipsel",
+              "canary": false,
+              "nx": true,
+              "path": "usr/sbin/httpd",
+              "pic": false,
+            },
+          ],
+          "count": 1,
+          "note": undefined,
+        },
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "imageId": "image-fixture",
+          "path": "rootfs/etc",
+        },
+        "kind": "tool",
+        "name": "firmlab_list_files",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "extractionVerdict": "A root filesystem was recovered and is browsable.",
+  "state": "rootfs",
+  "path": "rootfs/etc",
+  "entryCount": 1,
+  "shown": 1,
+  "counts": {
+    "files": 1,
+    "directories": 0,
+    "symlinks": 0
+  },
+  "symlinksLeavingTheExtraction": [],
+  "entries": [
+    {
+      "name": "config",
+      "path": "rootfs/etc/config",
+      "type": "file",
+      "size": 28,
+      "modeString": "-rw-r--r--"
+    }
+  ]
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "counts": {
+            "directories": 0,
+            "files": 1,
+            "symlinks": 0,
+          },
+          "entries": [
+            {
+              "modeString": "-rw-r--r--",
+              "name": "config",
+              "path": "rootfs/etc/config",
+              "size": 28,
+              "type": "file",
+            },
+          ],
+          "entryCount": 1,
+          "extractionVerdict": "A root filesystem was recovered and is browsable.",
+          "path": "rootfs/etc",
+          "shown": 1,
+          "state": "rootfs",
+          "symlinksLeavingTheExtraction": [],
+        },
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "deep": true,
+          "imageId": "image-fixture",
+          "query": "admin=1",
+          "regex": true,
+        },
+        "kind": "tool",
+        "name": "firmlab_search_files",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "searchVerdict": "Complete for the one extracted file; nothing was skipped.",
+  "isCompleteSearch": true,
+  "extractionVerdict": "A root filesystem was recovered and is browsable.",
+  "query": "admin=1",
+  "matchCount": 1,
+  "filesExamined": 1,
+  "hits": [
+    {
+      "path": "rootfs/etc/config",
+      "line": 2,
+      "excerpt": "admin=1",
+      "binary": false
+    }
+  ]
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "extractionVerdict": "A root filesystem was recovered and is browsable.",
+          "filesExamined": 1,
+          "hits": [
+            {
+              "binary": false,
+              "excerpt": "admin=1",
+              "line": 2,
+              "path": "rootfs/etc/config",
+            },
+          ],
+          "isCompleteSearch": true,
+          "matchCount": 1,
+          "query": "admin=1",
+          "searchVerdict": "Complete for the one extracted file; nothing was skipped.",
+        },
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "imageId": "image-fixture",
+          "limit": 16,
+          "offset": 4,
+          "path": "rootfs/etc/config",
+          "view": "text",
+        },
+        "kind": "tool",
+        "name": "firmlab_read_file",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "readVerdict": "PARTIAL READ — 16 of 28 bytes (4 skipped before, 8 unread after). This is a WINDOW, not the file: do not characterise what you have not read.",
+  "claim": "This is a bounded 16-byte window, not the whole file.",
+  "extractionVerdict": "A root filesystem was recovered and is browsable.",
+  "path": "rootfs/etc/config",
+  "size": 28,
+  "offset": 4,
+  "bytesRead": 16,
+  "truncation": "requested byte window",
+  "classification": "text",
+  "classificationReason": "valid UTF-8 without binary control bytes",
+  "view": "text",
+  "viewReason": "caller requested text and the bytes were classified as text",
+  "text": "name=router\\\\nadmin"
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "bytesRead": 16,
+          "claim": "This is a bounded 16-byte window, not the whole file.",
+          "classification": "text",
+          "classificationReason": "valid UTF-8 without binary control bytes",
+          "extractionVerdict": "A root filesystem was recovered and is browsable.",
+          "offset": 4,
+          "path": "rootfs/etc/config",
+          "readVerdict": "PARTIAL READ — 16 of 28 bytes (4 skipped before, 8 unread after). This is a WINDOW, not the file: do not characterise what you have not read.",
+          "size": 28,
+          "text": "name=router\\nadmin",
+          "truncation": "requested byte window",
+          "view": "text",
+          "viewReason": "caller requested text and the bytes were classified as text",
+        },
+      },
+    },
+    {
+      "request": {
+        "arguments": {},
+        "kind": "tool",
+        "name": "firmlab_capabilities",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "groups": {
+    "extraction": {
+      "available": true
+    },
+    "symbolic": {
+      "available": false,
+      "reason": "angr is not installed"
+    }
+  },
+  "absent": [
+    {
+      "name": "angr",
+      "group": "symbolic",
+      "why": "not installed"
+    }
+  ],
+  "present": [
+    "binwalk"
+  ]
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "absent": [
+            {
+              "group": "symbolic",
+              "name": "angr",
+              "why": "not installed",
+            },
+          ],
+          "groups": {
+            "extraction": {
+              "available": true,
+            },
+            "symbolic": {
+              "available": false,
+              "reason": "angr is not installed",
+            },
+          },
+          "present": [
+            "binwalk",
+          ],
+        },
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "imageId": "image-fixture",
+        },
+        "kind": "tool",
+        "name": "firmlab_notes",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "notFindings": "Notes are scratchpad entries, not evidence or findings.",
+  "count": 1,
+  "notes": [
+    {
+      "id": "note-1",
+      "author": "analyst",
+      "body": "Inspect the web service next."
+    }
+  ]
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "count": 1,
+          "notFindings": "Notes are scratchpad entries, not evidence or findings.",
+          "notes": [
+            {
+              "author": "analyst",
+              "body": "Inspect the web service next.",
+              "id": "note-1",
+            },
+          ],
+        },
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "jobId": "job-fixture",
+        },
+        "kind": "tool",
+        "name": "firmlab_job_status",
+      },
+      "response": {
+        "content": [
+          {
+            "text": "{
+  "ok": false,
+  "stillRunning": true,
+  "jobId": "job-fixture",
+  "status": "running",
+  "note": "The job is still running — this tool waited as long as it is allowed to. It has NOT failed and it has NOT finished; poll it with firmlab_job_status before drawing any conclusion.",
+  "log": "carving filesystem"
+}",
+            "type": "text",
+          },
+        ],
+        "structuredContent": {
+          "jobId": "job-fixture",
+          "log": "carving filesystem",
+          "note": "The job is still running — this tool waited as long as it is allowed to. It has NOT failed and it has NOT finished; poll it with firmlab_job_status before drawing any conclusion.",
+          "ok": false,
+          "status": "running",
+          "stillRunning": true,
+        },
+      },
+    },
+    {
+      "request": {
+        "kind": "resource",
+        "uri": "firmlab://guide/proof-states",
+      },
+      "response": {
+        "contents": [
+          {
+            "mimeType": "text/plain",
+            "text": "FirmLab is a firmware analysis workbench. You are driving it; it does the analysis and you interpret it.
+
+Every finding carries a PROOF STATE, and it bounds what you may claim:
+  static_confirmed          — the code fact is present in the bytes. Claim the fact, not its exploitability.
+  confirmed_in_emulation    — reproduced against a booted image. Proves the sandbox, not the physical device.
+  confirmed_full_system     — reproduced under full-system emulation.
+  needs_runtime_reproduction— a LEAD. A precondition was observed, nothing was proven. Never report as a bug.
+  blocked_by_platform       — the question was asked and this deployment could not answer it. NOT a negative.
+  blocked_by_security       — a control (encryption, secure boot) stopped the analysis. NOT a negative.
+  false_positive            — checked and dismissed.
+
+Two inferences are always wrong here, and both are easy to make:
+  1. An empty findings list does NOT mean the firmware is clean. It means the stages that ran found nothing —
+     and stages that never ran found nothing by definition. Every findings result carries a coverage verdict;
+     read it before you characterise the result, and quote its limits when you report.
+  2. A tool being absent, or a bounded search expiring, is not evidence of absence. Symbolic reachability that
+     does not reach a sink has proven nothing about that sink.
+
+A filename is not its contents. firmlab_read_file opens the file a finding cites, and the one entry this
+project's backlog had to WITHDRAW was written from a filename without opening it — \`private_key.pem\`, which
+holds a PUBLIC key. If you are about to characterise a file, read it first.
+
+OPERATOR ASSERTIONS are the one kind of row FirmLab did not compute. A person — or you — asserted them. They
+carry no proof state (their provenance field reads \`operator_assertion\`), they count towards NO analysis stage,
+and they are returned in their own array, never mixed into findings. Three rules bind you here:
+  - Never cite an assertion as though the workbench measured it. Cite the author: "X asserts …".
+  - An assertion YOU recorded is a restatement of your own claim, never evidence for it. Reading your own note
+    back out of the ledger and reporting it as corroboration is circular; the payload labels which rows you may
+    have written, and you must not use them to support the claim they contain.
+  - Record one only for something you actually concluded or observed, with the basis stated. Do not mirror a
+    measured finding into an assertion — that inflates the ledger and adds no knowledge.
+
+The ledger keeps its own history, and two fields carry it:
+  - \`amendmentHistory\` on an assertion holds the claims it SUPERSEDED. They are retired: the live claim is the
+    one in the row’s own fields. Quote a superseded claim only as what the author previously stated.
+  - \`disputedByOperator\` on a MEASURED finding means a named author says that finding is wrong. It is testimony
+    about a measurement, not a measurement: the proof state stays exactly as code decided it, the row stands,
+    and you report both — never silently drop the finding, and never downgrade it because someone objected.
+
+When you report, say what was examined and what was not. An honest partial answer is the deliverable here;
+a confident complete-sounding one built on unexamined stages is the failure this workbench exists to prevent.",
+            "uri": "firmlab://guide/proof-states",
+          },
+        ],
+      },
+    },
+    {
+      "request": {
+        "kind": "resource",
+        "uri": "firmlab://images/image-fixture/report",
+      },
+      "response": {
+        "contents": [
+          {
+            "mimeType": "text/markdown",
+            "text": "# FirmLab report\\n\\nCoverage is partial; one applicable stage did not complete.",
+            "uri": "firmlab://images/image-fixture/report",
+          },
+        ],
+      },
+    },
+    {
+      "request": {
+        "kind": "resource",
+        "uri": "firmlab://images/image-fixture/disclosure",
+      },
+      "response": {
+        "contents": [
+          {
+            "mimeType": "text/markdown",
+            "text": "# Draft disclosure\\n\\nReview every proof state before use.",
+            "uri": "firmlab://images/image-fixture/disclosure",
+          },
+        ],
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "imageId": "image-fixture",
+        },
+        "kind": "prompt",
+        "name": "triage_image",
+      },
+      "response": {
+        "messages": [
+          {
+            "content": {
+              "text": "Triage FirmLab image image-fixture.
+
+1. Read firmlab_coverage FIRST, so you know which stages this image's class even routes to.
+2. Run firmlab_extract, then firmlab_autonomous_scan.
+3. Read firmlab_findings and group by proof state, not by severity — a critical CVE at
+   needs_runtime_reproduction is a lead, and a static_confirmed medium is a fact.
+4. Report in two parts: what was established, and what was NOT examined (name the stages, and the
+   workers that degraded and why). If a stage could not run, say what would unlock it.
+
+Do not describe the image as clean or secure. The strongest honest claim available is "the stages
+that ran found nothing", and it is only worth writing next to the list of stages that did not run.",
+              "type": "text",
+            },
+            "role": "user",
+          },
+        ],
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "imageId": "image-fixture",
+        },
+        "kind": "prompt",
+        "name": "hunt_memory_safety",
+      },
+      "response": {
+        "messages": [
+          {
+            "content": {
+              "text": "Hunt memory-safety issues in FirmLab image image-fixture.
+
+The binary sweep flags a precondition (unbounded copy + no canary), which is a lead, not a bug.
+Your job is to settle the promising ones rather than hand back the list:
+
+1. firmlab_extract, then firmlab_list_binaries. Prefer network-facing daemons and setuid binaries —
+   reachability of a sink in a binary nothing untrusted talks to is a much weaker result.
+2. For each chosen target, firmlab_symbolic_reachability. Omit sinks to derive them from the
+   binary, or name the ones you actually care about (system, memcpy, a vendor doSystem…).
+3. Report per sink. "reached" = the call site is on a live path from the entry point, with the input
+   that walks it — that is REACHABILITY, not an overflow and not exploitability. "not reached" is
+   NOT a negative result: the search is bounded, so say the question is unresolved and why.",
+              "type": "text",
+            },
+            "role": "user",
+          },
+        ],
+      },
+    },
+    {
+      "request": {
+        "arguments": {
+          "newerImageId": "image-fixture-new",
+          "olderImageId": "image-fixture",
+        },
+        "kind": "prompt",
+        "name": "compare_versions",
+      },
+      "response": {
+        "messages": [
+          {
+            "content": {
+              "text": "Compare FirmLab images image-fixture (older) and image-fixture-new (newer).
+
+1. firmlab_coverage on BOTH first. If the two were examined to different depths, a difference in
+   their findings may be a difference in coverage rather than in the firmware — say so if it is.
+2. Ensure both are scanned, then diff the findings: what was fixed, what persists, what is new.
+3. A finding that disappeared is only "fixed" if the stage that would have found it actually ran on
+   the newer image. Check that before claiming a fix.",
+              "type": "text",
+            },
+            "role": "user",
+          },
+        ],
+      },
+    },
+  ],
+}
+`;

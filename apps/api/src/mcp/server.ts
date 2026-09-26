@@ -25,10 +25,11 @@
  */
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { type FirmLabClient, clientFromEnv } from './client.js';
+import { type FirmLabApiClient, clientFromEnv } from './client.js';
 import {
   HONESTY_INSTRUCTIONS,
   type McpCoverage,
@@ -77,7 +78,7 @@ const WORKER_TIMEOUT_MS = 25 * 60 * 1000;
 const REACH_TIMEOUT_MS = 12 * 60 * 1000;
 
 /** Read an image's coverage, or null — every findings-shaped result is bound to it. */
-async function coverageOf(fl: FirmLabClient, imageId: string): Promise<McpCoverage | null> {
+async function coverageOf(fl: FirmLabApiClient, imageId: string): Promise<McpCoverage | null> {
   return fl.getOrNull<McpCoverage>(`/api/images/${imageId}/coverage`);
 }
 
@@ -99,7 +100,7 @@ function jobPayload(job: { status: string; error: string | null; log: string; re
   return { ok: true, jobId: job.id, result: job.result };
 }
 
-export function buildServer(fl: FirmLabClient): McpServer {
+export function buildServer(fl: FirmLabApiClient): McpServer {
   const server = new McpServer(
     { name: 'firmlab', version: '0.1.0' },
     { instructions: HONESTY_INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } },
@@ -811,8 +812,13 @@ async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-// stdout is the MCP transport — a stray log there corrupts the protocol stream, so diagnostics go to stderr only.
-main().catch((err) => {
-  process.stderr.write(`firmlab-mcp: fatal: ${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(1);
-});
+// Importing the real server is how the in-memory contract test constructs it. Only claim stdio when this module is
+// the process entry point; otherwise merely importing it would hijack the test runner's stdin/stdout.
+const entryPoint = process.argv[1];
+if (entryPoint && pathToFileURL(entryPoint).href === import.meta.url) {
+  // stdout is the MCP transport — a stray log there corrupts the protocol stream, so diagnostics go to stderr only.
+  main().catch((err) => {
+    process.stderr.write(`firmlab-mcp: fatal: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  });
+}

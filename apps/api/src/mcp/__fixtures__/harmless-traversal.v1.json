@@ -1,0 +1,273 @@
+{
+  "version": 1,
+  "mcpCalls": [
+    { "kind": "tool", "name": "firmlab_list_images", "arguments": {} },
+    { "kind": "tool", "name": "firmlab_coverage", "arguments": { "imageId": "image-fixture" } },
+    {
+      "kind": "tool",
+      "name": "firmlab_findings",
+      "arguments": { "imageId": "image-fixture", "minSeverity": "low" }
+    },
+    { "kind": "tool", "name": "firmlab_list_binaries", "arguments": { "imageId": "image-fixture" } },
+    {
+      "kind": "tool",
+      "name": "firmlab_list_files",
+      "arguments": { "imageId": "image-fixture", "path": "rootfs/etc" }
+    },
+    {
+      "kind": "tool",
+      "name": "firmlab_search_files",
+      "arguments": { "imageId": "image-fixture", "query": "admin=1", "regex": true, "deep": true }
+    },
+    {
+      "kind": "tool",
+      "name": "firmlab_read_file",
+      "arguments": {
+        "imageId": "image-fixture",
+        "path": "rootfs/etc/config",
+        "offset": 4,
+        "limit": 16,
+        "view": "text"
+      }
+    },
+    { "kind": "tool", "name": "firmlab_capabilities", "arguments": {} },
+    { "kind": "tool", "name": "firmlab_notes", "arguments": { "imageId": "image-fixture" } },
+    { "kind": "tool", "name": "firmlab_job_status", "arguments": { "jobId": "job-fixture" } },
+    { "kind": "resource", "uri": "firmlab://guide/proof-states" },
+    { "kind": "resource", "uri": "firmlab://images/image-fixture/report" },
+    { "kind": "resource", "uri": "firmlab://images/image-fixture/disclosure" },
+    { "kind": "prompt", "name": "triage_image", "arguments": { "imageId": "image-fixture" } },
+    { "kind": "prompt", "name": "hunt_memory_safety", "arguments": { "imageId": "image-fixture" } },
+    {
+      "kind": "prompt",
+      "name": "compare_versions",
+      "arguments": { "olderImageId": "image-fixture", "newerImageId": "image-fixture-new" }
+    }
+  ],
+  "apiInteractions": [
+    {
+      "operation": "get",
+      "arguments": ["/api/images"],
+      "result": {
+        "images": [
+          {
+            "id": "image-fixture",
+            "filename": "router.bin",
+            "size": 4096,
+            "status": "ready",
+            "identity": { "firmwareClass": "embedded-linux", "arch": "mipsel" }
+          }
+        ]
+      }
+    },
+    {
+      "operation": "getOrNull",
+      "arguments": ["/api/images/image-fixture/coverage"],
+      "result": {
+        "firmwareClass": "embedded-linux",
+        "classRationale": "A Linux root filesystem was identified.",
+        "applicable": 4,
+        "findingCount": 2,
+        "executed": 3,
+        "operatorAssertions": 0,
+        "verdict": "3 of 4 applicable stages ran.",
+        "ambiguous": false,
+        "stages": [
+          { "worker": "W1 · Extraction", "reason": "rootfs recovered", "status": "found", "findingCount": 0 },
+          { "worker": "W5 · Binary-vuln", "reason": "provider completed", "status": "found", "findingCount": 2 },
+          { "worker": "W8 · Dynamic", "reason": "tool unavailable", "status": "degraded" }
+        ]
+      }
+    },
+    {
+      "operation": "get",
+      "arguments": ["/api/images/image-fixture/findings"],
+      "result": {
+        "findings": [
+          {
+            "id": "finding-lead",
+            "kind": "binary-pwnable-candidate",
+            "title": "Unbounded copy candidate",
+            "severity": "medium",
+            "proofState": "needs_runtime_reproduction",
+            "source": "binvuln",
+            "evidenceChannel": "static_bytes"
+          },
+          {
+            "id": "finding-fact",
+            "kind": "embedded-private-key",
+            "title": "Private key bytes are present",
+            "severity": "high",
+            "proofState": "static_confirmed",
+            "source": "fsaudit",
+            "evidenceChannel": "static_bytes"
+          }
+        ]
+      }
+    },
+    {
+      "operation": "getOrNull",
+      "arguments": ["/api/images/image-fixture/coverage"],
+      "result": {
+        "firmwareClass": "embedded-linux",
+        "classRationale": "A Linux root filesystem was identified.",
+        "applicable": 4,
+        "findingCount": 2,
+        "executed": 3,
+        "operatorAssertions": 0,
+        "verdict": "3 of 4 applicable stages ran.",
+        "ambiguous": false,
+        "stages": [
+          { "worker": "W1 · Extraction", "reason": "rootfs recovered", "status": "found", "findingCount": 0 },
+          { "worker": "W5 · Binary-vuln", "reason": "provider completed", "status": "found", "findingCount": 2 },
+          { "worker": "W8 · Dynamic", "reason": "tool unavailable", "status": "degraded" }
+        ]
+      }
+    },
+    {
+      "operation": "get",
+      "arguments": ["/api/images/image-fixture/binaries"],
+      "result": {
+        "binaries": [{ "path": "usr/sbin/httpd", "arch": "mipsel", "nx": true, "canary": false, "pic": false }]
+      }
+    },
+    {
+      "operation": "getWithStatus",
+      "arguments": ["/api/images/image-fixture/files?path=rootfs%2Fetc"],
+      "result": {
+        "ok": true,
+        "status": 200,
+        "body": {
+          "extraction": {
+            "state": "rootfs",
+            "browsable": true,
+            "verdict": "A root filesystem was recovered and is browsable.",
+            "rootfsRel": "rootfs"
+          },
+          "listing": {
+            "path": "rootfs/etc",
+            "entries": [
+              {
+                "name": "config",
+                "path": "rootfs/etc/config",
+                "type": "file",
+                "size": 28,
+                "modeString": "-rw-r--r--"
+              }
+            ],
+            "totalEntries": 1,
+            "fileCount": 1,
+            "dirCount": 0,
+            "symlinkCount": 0,
+            "truncated": false
+          }
+        }
+      }
+    },
+    {
+      "operation": "getWithStatus",
+      "arguments": ["/api/images/image-fixture/files/search?q=admin%3D1&regex=1&deep=1"],
+      "result": {
+        "ok": true,
+        "status": 200,
+        "body": {
+          "extraction": {
+            "state": "rootfs",
+            "browsable": true,
+            "verdict": "A root filesystem was recovered and is browsable.",
+            "rootfsRel": "rootfs"
+          },
+          "result": {
+            "query": "admin=1",
+            "regex": true,
+            "hits": [{ "path": "rootfs/etc/config", "line": 2, "excerpt": "admin=1", "binary": false }],
+            "coverage": {
+              "filesExamined": 1,
+              "entriesWalked": 1,
+              "skipped": { "tooLarge": 0, "unreadable": 0, "budgetExhausted": 0 },
+              "walkTruncated": false,
+              "hitCapReached": false
+            },
+            "verdict": "Complete for the one extracted file; nothing was skipped."
+          }
+        }
+      }
+    },
+    {
+      "operation": "getWithStatus",
+      "arguments": ["/api/images/image-fixture/files/read?path=rootfs%2Fetc%2Fconfig&offset=4&limit=16&view=text"],
+      "result": {
+        "ok": true,
+        "status": 200,
+        "body": {
+          "extraction": {
+            "state": "rootfs",
+            "browsable": true,
+            "verdict": "A root filesystem was recovered and is browsable.",
+            "rootfsRel": "rootfs"
+          },
+          "read": {
+            "path": "rootfs/etc/config",
+            "size": 28,
+            "offset": 4,
+            "bytesRead": 16,
+            "truncated": true,
+            "unreadBefore": 4,
+            "unreadAfter": 8,
+            "truncationRule": "requested byte window",
+            "classification": { "kind": "text", "reason": "valid UTF-8 without binary control bytes" },
+            "view": "text",
+            "viewReason": "caller requested text and the bytes were classified as text",
+            "text": "name=router\\nadmin",
+            "adjustments": [],
+            "claim": "This is a bounded 16-byte window, not the whole file."
+          }
+        }
+      }
+    },
+    {
+      "operation": "get",
+      "arguments": ["/api/tools"],
+      "result": {
+        "tools": [
+          { "name": "binwalk", "available": true, "group": "extraction" },
+          { "name": "angr", "available": false, "reason": "not installed", "group": "symbolic" }
+        ],
+        "groups": {
+          "extraction": { "available": true },
+          "symbolic": { "available": false, "reason": "angr is not installed" }
+        }
+      }
+    },
+    {
+      "operation": "get",
+      "arguments": ["/api/images/image-fixture/notes"],
+      "result": {
+        "notes": [{ "id": "note-1", "author": "analyst", "body": "Inspect the web service next." }],
+        "notFindings": "Notes are scratchpad entries, not evidence or findings."
+      }
+    },
+    {
+      "operation": "job",
+      "arguments": ["job-fixture"],
+      "result": {
+        "id": "job-fixture",
+        "kind": "extract",
+        "status": "running",
+        "log": "carving filesystem",
+        "result": null,
+        "error": null
+      }
+    },
+    {
+      "operation": "getText",
+      "arguments": ["/api/images/image-fixture/report"],
+      "result": "# FirmLab report\\n\\nCoverage is partial; one applicable stage did not complete."
+    },
+    {
+      "operation": "getText",
+      "arguments": ["/api/images/image-fixture/disclosure-report"],
+      "result": "# Draft disclosure\\n\\nReview every proof state before use."
+    }
+  ]
+}
