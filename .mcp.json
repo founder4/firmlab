@@ -7,7 +7,7 @@
     },
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--isolated"],
+      "args": ["-y", "@playwright/mcp@0.0.82", "--browser", "chromium", "--isolated"],
       "env": {}
     }
   }
