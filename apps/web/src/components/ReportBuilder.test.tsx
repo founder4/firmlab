@@ -179,8 +179,11 @@ describe('ReportBuilder — Spanish translates the frame, never the record', () 
     mockApi.findings.mockResolvedValue([measured(), assertion()]);
     render(<ReportBuilder imageId="img1" image={image} analysis={null} />);
 
+    // Anchor on the loaded record, not on the static frame: the frame renders before the findings arrive, and the
+    // assertion sentences below do not — waiting on the frame made this test fail under load.
+    await screen.findByText('unbounded strcpy in sbin/httpd');
     // The honesty sentences, in Spanish. Losing any of these ships a document making a claim nobody measured.
-    expect(await screen.findByText(/Cada hallazgo lleva un estado de prueba explícito/i)).toBeInTheDocument();
+    expect(screen.getByText(/Cada hallazgo lleva un estado de prueba explícito/i)).toBeInTheDocument();
     expect(screen.getByText(/se declara como tal en lugar de darse por limpia/i)).toBeInTheDocument();
     expect(screen.getByText(/no cuenta ni para ese total ni para ninguna etapa/i)).toBeInTheDocument();
     expect(screen.getByText(/Afirmaciones del operador \(1\) — afirmadas, no medidas/i)).toBeInTheDocument();

@@ -83,9 +83,10 @@ describe('AnalysisActionsPanel', () => {
 
   it('puts an explicit no-run answer beside providers that have no stored execution', async () => {
     render(<AnalysisActionsPanel imageId="image-1" />);
-    await waitFor(() => expect(mockApi.jobs).toHaveBeenCalledWith('image-1'));
-
-    expect(screen.getByText('0 de 10 con respuesta guardada')).toBeTruthy();
+    // Wait for the LOADED state, not for the request: `jobs` having been called says nothing about its promise
+    // having settled, and under load the panel was still reading («Leyendo ejecuciones anteriores…») here.
+    expect(await screen.findByText('0 de 10 con respuesta guardada')).toBeTruthy();
+    expect(mockApi.jobs).toHaveBeenCalledWith('image-1');
     expect(screen.getAllByText('Sin ejecutar')).toHaveLength(10);
     expect(screen.getAllByText('Todavía no hay una respuesta guardada para esta pregunta.')).toHaveLength(10);
   });
