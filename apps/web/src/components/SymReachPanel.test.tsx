@@ -75,6 +75,42 @@ describe('SymReachPanel', () => {
     expect(screen.getByText(en.panels.symreach.errors(3), { exact: false })).toBeTruthy();
   });
 
+  it('renders a library run from its exports instead of as 0/0, and never as the entry-point claim', async () => {
+    const boundedSink = result().sinks[1];
+    mockApi.symreachResult.mockResolvedValue(
+      result({
+        binary: 'lib/libfoo.so',
+        mode: 'library',
+        sinks: [],
+        library: {
+          entryPointsTotal: 118,
+          entryPointsConsidered: 16,
+          maxEntryPoints: 16,
+          sinks: [
+            {
+              sink: 'sscanf',
+              outcome: 'reached',
+              addresses: ['0x4008a0'],
+              steps: 12,
+              pruned: false,
+              errors: 0,
+              reachedFrom: 'pwd_read',
+            },
+            boundedSink as SymReachResult['sinks'][number],
+          ],
+        },
+      }),
+    );
+    render(<SymReachPanel imageId="img1" binary="lib/libfoo.so" onBinary={() => {}} />);
+    await waitFor(() => expect(screen.getByText(en.panels.symreach.library.reached)).toBeTruthy());
+    expect(screen.getByText(en.panels.symreach.library.exports(16, 118), { exact: false })).toBeTruthy();
+    expect(screen.getByText(en.panels.symreach.reachableCount(1, 2), { exact: false })).toBeTruthy();
+    expect(screen.getByText(en.panels.symreach.library.from('pwd_read'), { exact: false })).toBeTruthy();
+    expect(screen.getByText(en.panels.symreach.library.note)).toBeTruthy();
+    expect(screen.queryByText(en.panels.symreach.outcome.reached)).toBeNull();
+    expect(screen.queryByText(en.panels.symreach.reachedNote)).toBeNull();
+  });
+
   it('reports an unanswerable probe as a missing capability, not as a result', async () => {
     mockApi.symreachResult.mockResolvedValue(
       result({ available: false, reason: 'angr not installed in this deployment', sinks: [] }),

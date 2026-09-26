@@ -116,6 +116,17 @@ export const panels = {
     unknownArch: 'unknown arch',
     entry: 'entry',
     reachableCount: (reached: number, total: number) => `${reached}/${total} reachable`,
+    /** The library rung: a shared object has no entry point, so it is asked from its exports instead. */
+    library: {
+      exports: (considered: number, total: number) => `library · asked from ${considered} of ${total} export(s)`,
+      reached: 'reachable from an export',
+      from: (fn: string) => `from ${fn}`,
+      note: [
+        'Asked from exported functions under unconstrained arguments, not from a program entry point. A reached sink',
+        'shows a feasible path inside the library; whether any real caller passes such arguments is a separate',
+        'question, so this is a weaker claim than entry-point reachability.',
+      ].join(' '),
+    },
     derivedSinks: 'sinks derived from imports',
     /** A bound is not an answer: it says what it dropped and by what rule. */
     dropped: (n: number) => `${n} sink(s) not asked (per-run cap)`,

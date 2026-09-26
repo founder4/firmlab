@@ -18,7 +18,7 @@
  * `needs_runtime_reproduction`, and a search that ran out of budget never demotes one to `false_positive`.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type SinkResult, type SymReachResult, api } from '../api';
+import { type LibraryReach, type SinkResult, type SymReachResult, api } from '../api';
 import { useMessages } from '../i18n';
 import { RunHistory } from './RunHistory';
 
@@ -93,7 +93,10 @@ export function SymReachPanel({
     }
   }, [imageId, binary, sinks, budget, t]);
 
-  const reached = result?.sinks.filter((s) => s.outcome === 'reached') ?? [];
+  // A library run keeps its outcomes out of `sinks` on purpose; reading only `sinks` showed it as 0/0.
+  const lib = result?.mode === 'library' ? result.library : undefined;
+  const rows: LibraryReach['sinks'] = lib ? lib.sinks : (result?.sinks ?? []);
+  const reached = rows.filter((s) => s.outcome === 'reached');
 
   return (
     <div className="panel">
@@ -176,8 +179,11 @@ export function SymReachPanel({
       {result?.available && (
         <div style={{ marginTop: 14 }}>
           <div className="hint mono" style={{ marginBottom: 8 }}>
-            {result.binary} · {result.arch ?? t.panels.symreach.unknownArch} · {t.panels.symreach.entry}{' '}
-            {result.entry ?? '—'} · {t.panels.symreach.reachableCount(reached.length, result.sinks.length)}
+            {result.binary} · {result.arch ?? t.panels.symreach.unknownArch} ·{' '}
+            {lib
+              ? t.panels.symreach.library.exports(lib.entryPointsConsidered, lib.entryPointsTotal)
+              : `${t.panels.symreach.entry} ${result.entry ?? '—'}`}{' '}
+            · {t.panels.symreach.reachableCount(reached.length, rows.length)}
             {result.derivedSinks ? ` · ${t.panels.symreach.derivedSinks}` : ''}
             {result.dropped?.length ? ` · ${t.panels.symreach.dropped(result.dropped.length)}` : ''}
           </div>
@@ -185,7 +191,7 @@ export function SymReachPanel({
           <div className="table-wrap">
             <table className="data">
               <tbody>
-                {result.sinks.map((s) => {
+                {rows.map((s) => {
                   const input = [s.argv1 ? `argv[1]="${s.argv1}"` : '', s.stdin ? `stdin="${s.stdin}"` : '']
                     .filter(Boolean)
                     .join(' · ');
@@ -193,7 +199,9 @@ export function SymReachPanel({
                     <tr key={s.sink}>
                       <td style={{ width: '1%', whiteSpace: 'nowrap' }}>
                         <span className={`badge ${OUTCOME_CLASS[s.outcome]} mono`}>
-                          {t.panels.symreach.outcome[s.outcome]}
+                          {lib && s.outcome === 'reached'
+                            ? t.panels.symreach.library.reached
+                            : t.panels.symreach.outcome[s.outcome]}
                         </span>
                       </td>
                       <td>
@@ -203,7 +211,11 @@ export function SymReachPanel({
                         </div>
                         {s.outcome === 'reached' ? (
                           <div className="hint">
-                            {input || t.panels.symreach.pathFound} · {t.panels.symreach.steps(s.steps)}
+                            {input ||
+                              (s.reachedFrom
+                                ? t.panels.symreach.library.from(s.reachedFrom)
+                                : t.panels.symreach.pathFound)}{' '}
+                            · {t.panels.symreach.steps(s.steps)}
                             {s.path?.length ? (
                               <div className="mono" style={{ fontSize: 11, opacity: 0.8 }}>
                                 {t.panels.symreach.pathTail} {s.path.join(' → ')}
@@ -228,7 +240,9 @@ export function SymReachPanel({
           {/* The proof states are printed as the codes they are, with the sentence that keeps them apart around
               them: a bounded search that reached nothing leaves every sink a lead, and demotes none of them. */}
           <p className="hint" style={{ marginTop: 10 }}>
-            {reached.length > 0 ? (
+            {lib ? (
+              t.panels.symreach.library.note
+            ) : reached.length > 0 ? (
               t.panels.symreach.reachedNote
             ) : (
               <>

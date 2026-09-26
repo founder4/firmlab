@@ -105,6 +105,18 @@ export const panels: Messages['panels'] = {
     unknownArch: 'arquitectura desconocida',
     entry: 'entrada',
     reachableCount: (reached: number, total: number) => `${reached}/${total} alcanzables`,
+    library: {
+      exports: (considered: number, total: number) =>
+        `biblioteca · preguntada desde ${considered} de ${total} export(s)`,
+      reached: 'alcanzable desde un export',
+      from: (fn: string) => `desde ${fn}`,
+      note: [
+        'Preguntada desde funciones exportadas con argumentos sin restringir, no desde un punto de entrada de',
+        'programa. Un sumidero alcanzado muestra un camino factible dentro de la biblioteca; si algún llamador real',
+        'pasa esos argumentos es otra pregunta, así que es una afirmación más débil que la alcanzabilidad desde la',
+        'entrada.',
+      ].join(' '),
+    },
     derivedSinks: 'sumideros derivados de los imports',
     dropped: (n: number) => `${n} sumidero(s) sin preguntar (tope por ejecución)`,
     pathFound: 'camino encontrado',

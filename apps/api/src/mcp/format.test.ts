@@ -185,6 +185,38 @@ describe('reachabilityPayload — an absent result must not read as a negative o
     expect(p).not.toHaveProperty('blockedBy');
     expect(p).not.toHaveProperty('blockedByMeaning');
   });
+
+  it('carries a library run instead of reducing it to zero sinks asked', () => {
+    const p = reachabilityPayload({
+      available: true,
+      reason: 'r',
+      binary: 'lib/libfoo.so',
+      sinks: [],
+      mode: 'library',
+      library: {
+        entryPointsTotal: 118,
+        entryPointsConsidered: 16,
+        maxEntryPoints: 16,
+        entryPointSource: 'dynsym-export',
+        sinks: [
+          { sink: 'strcpy', outcome: 'reached', reachedFrom: 'pwd_read' },
+          { sink: 'gets', outcome: 'not_reached_in_budget' },
+        ],
+      },
+    });
+    const lib = p.library as { note: string; entryPointsTotal: number; sinks: { meaning: string }[] };
+    expect(p.mode).toBe('library');
+    expect(lib.entryPointsTotal).toBe(118);
+    expect(lib.note).toContain('weaker claim');
+    expect(lib.sinks[0]?.meaning).toContain('unconstrained arguments');
+    expect(lib.sinks[1]?.meaning).toContain('NOT evidence');
+  });
+
+  it('adds nothing for an executable run or a result stored before the library rung', () => {
+    const p = reachabilityPayload({ available: true, reason: 'r', binary: 'bin/x', sinks: [] });
+    expect(p).not.toHaveProperty('mode');
+    expect(p).not.toHaveProperty('library');
+  });
 });
 
 describe('exportReachabilityPayload — the CFG outcomes carry meaning too', () => {

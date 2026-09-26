@@ -564,6 +564,15 @@ export function reachabilityPayload(result: {
   entry?: string;
   asked?: string[];
   sinks: { sink: string; outcome: string; reason?: string; argv1?: string; steps?: number; errors?: number }[];
+  /** Absent on results stored before the library rung existed, and absent is `executable`. */
+  mode?: string;
+  library?: {
+    entryPointsTotal: number;
+    entryPointsConsidered: number;
+    maxEntryPoints: number;
+    entryPointSource?: string;
+    sinks: { sink: string; outcome: string; reachedFrom?: string; entryPointsAttempted?: number; reason?: string }[];
+  };
 }): Record<string, unknown> {
   const meaning: Record<string, string> = {
     reached:
@@ -585,6 +594,27 @@ export function reachabilityPayload(result: {
       ...s,
       meaning: meaning[s.outcome] ?? 'Unrecognised outcome — treat as no result.',
     })),
+    // A shared object is asked from its EXPORTS, and those outcomes never live in `sinks`: without this block a
+    // library run reached the agent as zero sinks asked, a 0/0 that reads as a clean answer.
+    ...(result.mode === 'library' && result.library
+      ? {
+          mode: 'library',
+          library: {
+            note: 'Asked from exported functions under UNCONSTRAINED arguments, not from a program entry point. `sinks` above is empty by design; these outcomes are a weaker claim than entry-point reachability and must not be counted as one.',
+            entryPointsTotal: result.library.entryPointsTotal,
+            entryPointsConsidered: result.library.entryPointsConsidered,
+            maxEntryPoints: result.library.maxEntryPoints,
+            ...(result.library.entryPointSource ? { entryPointSource: result.library.entryPointSource } : {}),
+            sinks: result.library.sinks.map((s) => ({
+              ...s,
+              meaning:
+                s.outcome === 'reached'
+                  ? 'REACHABLE from an exported function with unconstrained arguments. It does not establish that any real caller passes such arguments, nor that the call overflows anything.'
+                  : (meaning[s.outcome] ?? 'Unrecognised outcome — treat as no result.'),
+            })),
+          },
+        }
+      : {}),
   };
 }
 

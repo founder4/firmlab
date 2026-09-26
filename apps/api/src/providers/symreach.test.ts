@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { BinAssessment } from './binvuln.js';
 import type { JobHandle } from './jobs.js';
@@ -17,6 +20,7 @@ import {
   parseLibraryReachOutput,
   parseReachOutput,
   pickSinks,
+  reachTargetKind,
   runSymReach,
   summariseLibraryReach,
   unavailable,
@@ -380,6 +384,22 @@ describe('classifyReachTarget — which question this object can even be asked',
   it('reports something that is not an ELF as such, rather than guessing a rung', () => {
     expect(classifyReachTarget(Buffer.alloc(128, 0x41))).toBe('not-elf');
     expect(classifyReachTarget(Buffer.alloc(8, 0x7f))).toBe('not-elf');
+  });
+});
+
+describe('reachTargetKind — the same decision, read off disk', () => {
+  it('classifies the file it reads, and an unreadable path as not-elf so the executable path reports it', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'symreach-kind-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'libfoo.so'), elf(3, [PT_LOAD, PT_DYNAMIC], [DT_SONAME]));
+      fs.writeFileSync(path.join(dir, 'httpd'), elf(2, [PT_LOAD]));
+      expect(reachTargetKind(path.join(dir, 'libfoo.so'))).toBe('library');
+      expect(reachTargetKind(path.join(dir, 'httpd'))).toBe('executable');
+      expect(reachTargetKind(path.join(dir, 'missing'))).toBe('not-elf');
+      expect(reachTargetKind(dir)).toBe('not-elf');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

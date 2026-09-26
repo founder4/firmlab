@@ -360,12 +360,28 @@ export interface SinkResult {
   path?: string[];
 }
 
+/**
+ * A shared object is asked from its EXPORTS under unconstrained arguments — a weaker claim than entry-point
+ * reachability, so its outcomes live here and never in `sinks`.
+ */
+export interface LibraryReach {
+  entryPointsTotal: number;
+  entryPointsConsidered: number;
+  maxEntryPoints: number;
+  entryPointSource?: string;
+  sinks: (SinkResult & { reachedFrom?: string; entryPointsAttempted?: number; entryPointsCompleted?: number })[];
+}
+
 export interface SymReachResult {
   available: boolean;
   reason: string;
   binary: string;
   arch?: string;
   entry?: string;
+  /** Absent on results stored before the library rung existed, and absent is `executable`. */
+  mode?: 'executable' | 'library';
+  library?: LibraryReach;
+  /** Entry-point outcomes only — empty in library mode. */
   sinks: SinkResult[];
   asked?: string[];
   dropped?: string[];
