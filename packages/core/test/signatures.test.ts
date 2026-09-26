@@ -1,7 +1,8 @@
+import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { computeEntropyProfile } from '../src/entropy.js';
-import { SIGNATURE_RULES, scanSignatures, scanSignaturesDetailed } from '../src/signatures.js';
+import { SIGNATURE_RULES, md5, scanSignatures, scanSignaturesDetailed } from '../src/signatures.js';
 import { buildStructureSegments, inferIdentity } from '../src/structure.js';
 
 /** Place `bytes` into a zero-filled buffer of `size` at `offset`. */
@@ -508,6 +509,19 @@ describe('signature confidence rubric', () => {
       neg: img(0x200, [0, ascii('GEOS')]),
     },
     {
+      // A fitting layout with a zero MD5 field: penalized to structural, not rejected. The rejection is a kernel
+      // that runs past the declared length.
+      id: 'tplink-v1',
+      tier: 'structural',
+      pos: img(0x400, [0, [1, 0, 0, 0, ...ascii('TP-LINK Technologies')]], [0x7c, u32beBytes(0x400)]),
+      neg: img(
+        0x400,
+        [0, [1, 0, 0, 0, ...ascii('TP-LINK Technologies')]],
+        [0x7c, u32beBytes(0x400)],
+        [0x80, [...u32beBytes(0x200), ...u32beBytes(0x300)]],
+      ),
+    },
+    {
       id: 'tplink-safeloader',
       tier: 'consistent',
       pos: new TextEncoder().encode('fwup-ptn 512 1024\r\n'),
@@ -667,7 +681,7 @@ describe('signature confidence rubric', () => {
  * The `verified` rung. The expected CRCs come from `node:zlib`, not from core's own table, so these tests would
  * catch a wrong polynomial or the wrong one of the two conventions (U-Boot inverts the register, TRX does not).
  */
-describe('checksum-verified tier — uImage and TRX recompute their own CRCs', () => {
+describe('checksum-verified tier — uImage, TRX and TP-Link v1 recompute their own checksums', () => {
   const crc = (b: Uint8Array): number => zlib.crc32(b) >>> 0;
 
   function uimage(payload: Uint8Array, opts: { badHeader?: boolean; badData?: boolean; truncate?: number } = {}) {
@@ -709,6 +723,37 @@ describe('checksum-verified tier — uImage and TRX recompute their own CRCs', (
     buf.writeUInt32LE(opts.badCrc ? 1 : ~crc(buf.subarray(12, 0x400)) >>> 0, 8);
     return buf;
   }
+
+  it('computes MD5 exactly as node:crypto does, across the padding boundaries', () => {
+    for (const n of [0, 1, 55, 56, 63, 64, 65, 1000]) {
+      const data = Uint8Array.from({ length: n }, (_, i) => (i * 31 + 7) & 0xff);
+      expect(Buffer.from(md5(data)).toString('hex')).toBe(crypto.createHash('md5').update(data).digest('hex'));
+    }
+  });
+
+  function tplink(salt: 'normal' | 'boot' | 'none') {
+    const buf = Buffer.alloc(0x800, 0x33);
+    buf.fill(0, 0, 0x200);
+    Buffer.from([1, 0, 0, 0]).copy(buf, 0);
+    buf.write('TP-LINK Technologies', 4, 'latin1');
+    buf.writeUInt32BE(0x800, 0x7c);
+    buf.writeUInt32BE(0x200, 0x80);
+    buf.writeUInt32BE(0x400, 0x84);
+    const salts = {
+      normal: 'dcd73aa5c39598fbddf9e7f40eae4738',
+      boot: '8cef335bd5c5cefaa79c28dab2e90f42',
+      none: '00000000000000000000000000000000',
+    };
+    Buffer.from(salts[salt], 'hex').copy(buf, 0x4c);
+    crypto.createHash('md5').update(buf).digest().copy(buf, 0x4c);
+    return buf;
+  }
+
+  it('reaches verified on a TP-Link v1 header signed under either measured salt, structural under neither', () => {
+    expect(tierOf(tplink('normal'), 'tplink-v1')).toBe('verified');
+    expect(tierOf(tplink('boot'), 'tplink-v1')).toBe('verified');
+    expect(tierOf(tplink('none'), 'tplink-v1')).toBe('structural');
+  });
 
   it('reaches verified on a TRX whose stored register recomputes, and only structural when it does not', () => {
     expect(tierOf(trx(), 'trx')).toBe('verified');

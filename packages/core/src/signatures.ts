@@ -208,6 +208,85 @@ function uimageVerify(buf: Uint8Array, off: number): SignatureVerdict {
   return at('verified', `header CRC and the ${size}-byte payload CRC both recompute to the declared values`);
 }
 
+/** MD5 (RFC 1321), for the one header format here that signs itself with it. Pure for the same reason as the CRC. */
+const MD5_K = Array.from({ length: 64 }, (_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 2 ** 32) >>> 0);
+const MD5_S = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+export function md5(data: Uint8Array): Uint8Array {
+  const padded = new Uint8Array((((data.length + 8) >>> 6) + 1) << 6);
+  padded.set(data);
+  padded[data.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(padded.length - 8, (data.length * 8) >>> 0, true);
+  view.setUint32(padded.length - 4, Math.floor((data.length * 8) / 2 ** 32), true);
+  let a0 = 0x67452301;
+  let b0 = 0xefcdab89;
+  let c0 = 0x98badcfe;
+  let d0 = 0x10325476;
+  for (let chunk = 0; chunk < padded.length; chunk += 64) {
+    let a = a0;
+    let b = b0;
+    let c = c0;
+    let d = d0;
+    for (let i = 0; i < 64; i++) {
+      const round = i >>> 4;
+      const f =
+        round === 0 ? (b & c) | (~b & d) : round === 1 ? (d & b) | (~d & c) : round === 2 ? b ^ c ^ d : c ^ (b | ~d);
+      const g = round === 0 ? i : round === 1 ? (5 * i + 1) % 16 : round === 2 ? (3 * i + 5) % 16 : (7 * i) % 16;
+      const sum = (a + f + (MD5_K[i] as number) + view.getUint32(chunk + g * 4, true)) | 0;
+      const shift = MD5_S[round * 4 + (i % 4)] as number;
+      a = d;
+      d = c;
+      c = b;
+      b = (b + ((sum << shift) | (sum >>> (32 - shift)))) | 0;
+    }
+    a0 = (a0 + a) | 0;
+    b0 = (b0 + b) | 0;
+    c0 = (c0 + c) | 0;
+    d0 = (d0 + d) | 0;
+  }
+  const out = new Uint8Array(16);
+  const outView = new DataView(out.buffer);
+  [a0, b0, c0, d0].forEach((w, i) => outView.setUint32(i * 4, w >>> 0, true));
+  return out;
+}
+
+/**
+ * The legacy TP-Link header (v1, 0x200 bytes, big-endian): hw_id @0x40, md5 @0x4c, fw_length @0x7c, kernel
+ * ofs/len @0x80, rootfs ofs/len @0x88. The MD5 covers `fw_length` bytes from the header with its own field replaced
+ * by one of two salts. Layout and both salts were measured on the corpus, not recalled: 6 of 7 real headers
+ * recompute — the outer header of a bootloader-bearing image under the `boot` salt, the inner one under `normal` —
+ * and the seventh (an MR3220-shaped image inside the Asus flash dump) does not, which is why a mismatch penalizes
+ * rather than rejects.
+ */
+const TPLINK_SALTS: ReadonlyArray<[string, number[]]> = [
+  ['normal', [0xdc, 0xd7, 0x3a, 0xa5, 0xc3, 0x95, 0x98, 0xfb, 0xdd, 0xf9, 0xe7, 0xf4, 0x0e, 0xae, 0x47, 0x38]],
+  ['boot', [0x8c, 0xef, 0x33, 0x5b, 0xd5, 0xc5, 0xce, 0xfa, 0xa7, 0x9c, 0x28, 0xda, 0xb2, 0xe9, 0x0f, 0x42]],
+];
+function tplinkV1Verify(buf: Uint8Array, off: number): SignatureVerdict {
+  if (off + 0x200 > buf.length) return no('the 0x200-byte header runs past the end of this buffer');
+  const len = u32be(buf, off + 0x7c);
+  if (len < 0x200 || len > 256 * 1024 * 1024) return no(`declared firmware length ${len} is implausible`);
+  for (const [name, at_] of [
+    ['kernel', 0x80],
+    ['rootfs', 0x88],
+  ] as const) {
+    const start = u32be(buf, off + at_);
+    const size = u32be(buf, off + at_ + 4);
+    if (start + size > len) return no(`${name} ${start}+${size} runs past the declared length ${len}`);
+  }
+  if (off + len > buf.length)
+    return at('structural', `layout fits its declared length ${len}, which runs past this buffer`);
+  const signed = Uint8Array.from(buf.subarray(off, off + len));
+  const stored = buf.subarray(off + 0x4c, off + 0x5c);
+  for (const [name, salt] of TPLINK_SALTS) {
+    signed.set(salt, 0x4c);
+    if (md5(signed).every((byte, i) => byte === stored[i])) {
+      return at('verified', `layout fits and the salted MD5 over ${len} bytes recomputes (${name} salt)`);
+    }
+  }
+  return at('structural', `layout fits ${len} bytes, but the MD5 matches neither salt — suspicious, not rejected`);
+}
+
 /** TRX (HDR0): the structural check, then the stored register over flag_version…len when the image fits. */
 function trxCrcVerify(buf: Uint8Array, off: number): SignatureVerdict {
   const base = trxVerify(buf, off);
@@ -824,6 +903,20 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     // Eight bytes with a repeating structure — specific enough to stand on its own, which is exactly what the
     // `structural` base tier means for a rule with no verify.
     magic: ascii('CFE1CFE1'),
+  },
+  {
+    id: 'tplink-v1',
+    description: 'TP-Link firmware header v1 (vendor field TP-LINK Technologies)',
+    category: 'container',
+    confidence: 'high',
+    magic: [0x01, 0x00, 0x00, 0x00, ...ascii('TP-LINK Technologies')],
+    decode: (buf, off) => ({
+      hwId: u32be(buf, off + 0x40).toString(16),
+      totalSize: u32be(buf, off + 0x7c),
+      kernelOffset: u32be(buf, off + 0x80),
+      rootfsOffset: u32be(buf, off + 0x88),
+    }),
+    verify: tplinkV1Verify,
   },
   {
     id: 'tplink-safeloader',
