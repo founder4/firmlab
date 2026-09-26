@@ -9,6 +9,61 @@ leerlo deja de usarse como backlog.
 `ROADMAP.md` es el historial de qué se envió y cuándo; `METHODOLOGY-GAPS.md` mapea la cobertura contra OWASP
 FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
+## Superficie agente y MCP
+
+- [x] **Contrato MCP verificable en CI.** `apps/api/src/mcp/server.ts` ya concentra herramientas, recursos y
+  prompts, y `mcp/format.test.ts` fija muchas cargas, pero aún no hay una prueba del contrato que un cliente ve.
+  Construir el servidor contra el cliente falso existente y guardar/revisar una instantánea versionada de nombres,
+  esquemas de entrada, anotaciones, recursos y prompts. Un cambio intencionado actualiza la instantánea; uno
+  accidental —en especial ampliar una herramienta, cambiar su semántica de sólo lectura o borrar un prompt— debe
+  fallar en CI. Añadir un recorrido record/replay de llamadas inocuas contra el API de prueba. Debe ser local y
+  determinista: MCP Observatory puede evaluarse como implementador de ese patrón, pero no se convierte en
+  dependencia ni fuente de veredicto. *(Hecho en `64d5b06`: el cliente real del SDK recorre por transporte en
+  memoria las 19 herramientas, un recurso, dos plantillas y tres prompts; la instantánea versionada fija nombres,
+  esquemas, anotaciones e instrucciones, y una cassette local reproduce las diez herramientas de sólo lectura sin
+  abrir sockets ni ejecutar proveedores. Importar el servidor ya no reclama stdio. La auditoría independiente
+  encontró además que una variante de capitalización de `x-firmlab-author-kind` podía combinar `human, agent` y
+  atribuir una fila del agente a una persona; `0fd7b74` elimina todas las variantes antes de estampar exactamente
+  `agent`, con regresión sobre la cabecera que llega a Fetch.)*
+- [x] **Conservar la causa de bloqueo en la superficie MCP.** `symreach`/`exportreach` distinguen `platform`,
+  `harness` y `request` mediante `blockedBy`, pero `mcp/format.ts` no lo transporta. Un agente que sólo consume MCP
+  vuelve a ver tres ausencias distintas como una sola; añadir el campo como opcional para resultados persistidos y
+  fijar el significado de cada valor en el payload. *(Hecho en `f982ba8`: ambos payloads conservan el discriminante
+  opcional y añaden su significado y remedio; los resultados persistidos anteriores siguen siendo válidos sin él.)*
+- [x] **Cubrir la respuesta MCP de jobs todavía activos.** `jobPayload` no es exportable y su rama `stillRunning`
+  no tiene prueba directa. Extraer la decisión pura o alcanzarla con el cliente replay, fijando que agotar el timeout
+  devuelve job id, estado y log parcial sin convertir una ejecución incompleta en error ni en resultado negativo.
+  *(Hecho en `f982ba8`: `jobPayload` es exportable y sus estados `queued` y `running` quedan fijados como inacabados,
+  con id, estado, cola final del log y la instrucción de continuar mediante `firmlab_job_status`.)*
+- [x] **Rechazar explícitamente `proofState` en `firmlab_record_assertion`.** La descripción dice que el campo se
+  rechaza, pero el esquema Zod actual puede eliminar una clave desconocida antes de que llegue a la ruta que sí la
+  rehúsa. Hacer estricto el input MCP y probar el error, sin permitir nunca que una afirmación de operador elija su
+  propio estado de prueba. *(Hecho en `f982ba8`: el contrato publica `additionalProperties: false`, la llamada
+  devuelve error nombrando `proofState` y la regresión demuestra que no se llega a emitir ningún POST al API.)*
+- [x] **Auditoría estática de la superficie agentic antes de publicar.** Evaluar un scanner que funcione local y
+  emita SARIF sobre `.mcp.json`, `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` y el servidor MCP; SkillSpector,
+  `mcp-scanner` y `skilltotal` son candidatos, no requisitos. Adoptar sólo reglas reproducibles y con revisión de
+  falsos positivos; prohibido enviar instrucciones, firmware o configuraciones a un servicio externo por defecto.
+  El resultado es una señal de revisión de supply chain, permisos, tool poisoning y drift, nunca una prueba de
+  aislamiento ni una puerta que degrade la operación local sin explicar por qué. *(Hecho con
+  `scripts/agent-surface-audit.mjs`: escáner propio, determinista y sin red, que emite SARIF 2.1.0 con 14 reglas
+  revisables —endpoints remotos, paquetes npx sin fijar, shells, secretos literales, Unicode oculto, invariantes de
+  AGENTS/CLAUDE/GEMINI, transporte sólo stdio, esquema estricto de aserciones, cabecera de autor y frontera de
+  evidencia no confiable—. Los errores bloquean `pnpm biome`; los avisos no. Si no puede leer un fichero propio sale
+  con 2, nunca limpio. Primer aviso real: `.mcp.json` lanza `@playwright/mcp@latest` sin versión fijada.)*
+- [x] **Corpus adversarial de contenido no confiable para el agente.** Los nodos de juicio reciben strings de
+  firmware, findings, metadatos de CVE/NVD, resultados de webprobe e inteligencia externa. Crear fixtures de
+  inyección directa e indirecta que intenten alterar objetivo, cobertura, presupuesto o aprobación. Las pruebas
+  deben demostrar que el texto queda como evidencia citada/no confiable y no puede: invocar una herramienta no
+  planificada, elevar un `ProofState`, ampliar egress, activar `preapproveAll` ni ejecutar emulación sin el flujo
+  humano existente. Inspirarse en AgentDojo/ASB para los casos, sin incorporar sus runtimes ni ejecutar ataques
+  contra servicios reales. *(Hecho en `473ccc4`: una cassette local versionada cubre inyección directa desde texto
+  de firmware e indirecta desde findings/webprobe y advisories; los cinco prompts separan el objetivo del operador
+  de un sobre `evidence` explícitamente no confiable y sin fences cerrables. Siete regresiones fijan que los parsers
+  no admiten tool calls, cobertura, presupuesto, egress, aprobación ni prueba elegida por el modelo; el preflight
+  conserva su techo, fase 4 queda en `awaiting-approval` sin autorización externa y todo candidato nace como
+  `needs_runtime_reproduction`. No se llama a modelos, servicios ni proveedores reales.)*
+
 ## Kernel, emulación, RTOS, UEFI
 
 - [ ] Profundizar la correlación kernel-CVE. Ya hay paginación NVD acotada con denominadores/estados parciales y
@@ -43,9 +98,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   esta cola de programas con la pregunta separada de analizar funciones exportadas de una biblioteca. Esa
   pregunta separada ya tiene un escalón simbólico acotado desde exports (máximo 16), con intentados/completados y
   resultados inconclusos explícitos; se validó con `libmagic.so.1` sin cambiar el modo de ejecutables.
-- [ ] Presentar el modo simbólico de librerías en los resúmenes UI/MCP: hoy el resultado persistido conserva la
+- [x] Presentar el modo simbólico de librerías en los resúmenes UI/MCP: hoy el resultado persistido conserva la
   cobertura en `library`, pero los consumidores antiguos miran `sinks` y pueden mostrar 0/0. Añadir además tests
-  directos de la clasificación `reachTargetKind` y de la rama library de opacidad.
+  directos de la clasificación `reachTargetKind` y de la rama library de opacidad. *(Hecho: `SymReachPanel` lee `library`
+  cuando `mode` es `library` —exports considerados/totales, «alcanzable desde un export», la función de origen y
+  una nota que lo declara más débil que la alcanzabilidad desde la entrada—; `reachabilityPayload` en MCP añade
+  `mode` y un bloque `library` con significado por sink; la rama de opacidad sale a `opacidad-symreach.ts` (pura)
+  con sus tests, y `reachTargetKind` tiene regresión sobre disco, incluido el caso ilegible.)*
 
 ## moria/mithril (nmatt0) — evaluado contra el corpus real, no adoptado
 
@@ -66,10 +125,17 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   más pesa: `_FVH` son cuatro bytes ASCII y enrutaba una imagen entera a `uefi-bios` sin leer nada más.
   `classEvidence` separa además CÓMO se decidió la clase —`exact-signature` / `heuristic` / `unknown`— para que
   leer la cabecera del formato y contar strings dejen de renderizarse igual.)*
-- [ ] Portar los `soft_constraints` de moria: restricciones que PENALIZAN sin rechazar, para el caso en que un
+- [x] Portar los `soft_constraints` de moria: restricciones que PENALIZAN sin rechazar, para el caso en que un
   campo es sospechoso pero no imposible. Nuestro `verify` es binario hoy —acepta a un nivel o rechaza— y por eso
   ningún chequeo llega a `verified` (99), que queda reservado a recomputar un checksum sobre el payload y hoy no
-  lo alcanza ninguna regla. La pieza que falta es el peldaño de arriba, no el de abajo.
+  lo alcanza ninguna regla. La pieza que falta es el peldaño de arriba, no el de abajo. *(Hecho para uImage y TRX
+  (HDR0): CRC-32 propio en core —sin dependencias y apto para navegador—, contrastado en test con `node:zlib`.
+  uImage llega a `verified` si cuadran el CRC de cabecera y el del payload; cabecera sí y payload no queda en
+  `consistent` («modificada o re-empaquetada»); cabecera que no cuadra baja a `magic`, sin rechazar. TRX guarda el
+  registro sin inversión final: cuadra → `verified`, no cuadra → `structural`. Medido el 2026-09-26 sobre las 15
+  muestras locales: 18 cabeceras uImage en 9 imágenes, las 18 con CRC de cabecera correcto, 12 `verified` y 6
+  `consistent` (AliExpress, IMOU); el TRX de DVRF_v03 `verified`; tiempo de escaneo igual a la línea base y buffer
+  intacto. HDR1 sigue sólo con el chequeo estructural: no había ninguna imagen HDR1 real para medir su checksum.)*
 - [ ] Completar los magics de contenedor de vendor: `e609854` añade 21 (SEAMA, WRGG, Netgear CHK y DNI, las tres
   variantes de Ubiquiti, TRX v2/HDR1, CFE, la tabla safeloader `fwup-ptn` de TP-Link, IMAGEWTY de Allwinner,
   RKFW/RKAF de Rockchip, IVT de i.MX, bFLT, vendor_boot y vbmeta y la tabla DTBO de Android, FMAP, CBFS, el
@@ -79,7 +145,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   hay que explicar.** Quedan fuera por eso, no por olvido: Realtek (`csys`/`cr6c`/`cs6c`), Sercomm, el header
   MTK y el header legacy de TP-Link —reconstruirlos de memoria es justo la clase de afirmación que la tabla CVE
   curada tiene prohibida—. Reautorarlos clean-room contra la fuente del formato (OpenWrt `mkfwimage`-style) es
-  lo que falta. Xiaomi ya está cubierto por HDR1 y no necesita regla propia: un magic identifica un FORMATO de
+  lo que falta. *(Header legacy de TP-Link hecho: `tplink-v1`, magic de 24 bytes versión + «TP-LINK
+  Technologies», rechazo si kernel/rootfs exceden la longitud declarada, y `verified` cuando el MD5 con sal
+  recomputa. Formato y las dos sales —`normal` y `boot`— medidos el 2026-09-26 sobre las muestras locales, no
+  recordados: 6 de 7 cabeceras reales verifican (exterior con bootloader → `boot`, interior → `normal`) y la de la
+  imagen MR3220 dentro del volcado Asus queda en `structural`, sin rechazo. Realtek, Sercomm y MTK siguen
+  pendientes: ninguna muestra local los contiene —los «MTK» del corpus son cadenas sueltas, no cabeceras—.)*
+  Xiaomi ya está cubierto por HDR1 y no necesita regla propia: un magic identifica un FORMATO de
   contenedor, no una marca, y las descripciones no atribuyen de más.
 - [x] Corroboración JFFS2 por tipo de nodo compartida entre escáner y clasificador. El predicado puro exportado
   `isJffs2Node` vive en core: el escáner rechaza el magic de dos bytes si el word siguiente no es un tipo de nodo
@@ -275,6 +347,17 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Deuda estructural y de proceso
 
+- [x] Estabilizar la espera inicial de `AnalysisActionsPanel.test.tsx`: durante la validación completa del contrato
+  MCP, el caso de estado vacío agotó una vez la espera mientras seguía mostrando «Leyendo ejecuciones anteriores…».
+  El fichero pasó después aislado (8/8) y la suite completa volvió a pasar (629/629), así que primero hay que
+  reproducir y medir la carrera antes de cambiar producción o ampliar timeouts a ciegas.
+- [x] `ReportBuilder.test.tsx` («translates the assertion partition…») falló una vez en `pnpm test` completo el
+  2026-09-26 sin encontrar «no cuenta ni para ese total…»; aislado pasó 3/3 y la suite web 629/629. Misma familia
+  que la espera de `AnalysisActionsPanel`: probablemente carga, no lógica. Reproducir antes de tocar nada.
+  *(Ambos resueltos el 2026-09-26, misma causa: el test esperaba algo que existe ANTES de que se resuelva la carga
+  —el marco estático del informe, o que `jobs` hubiera sido llamado— y después consultaba síncronamente el estado
+  cargado. Ahora ambos esperan texto que sólo existe tras la carga; producción no cambia. 4/4 en paralelo con la
+  suite de API como carga.)*
 - [ ] Revisar el reparto core/api: `packages/core` son ~2.500 líneas frente a ~91.000 de `apps/api`, con
   dominio puro (`opacidad-plan.ts`, `boot-cmdline.ts`, `nvd.ts`, `opacidad-leads.ts`, `findings-normalize.ts`…)
   viviendo en la capa de aplicación solo porque no puede importar `store.js` (65 módulos acoplados, 24 fuera de
