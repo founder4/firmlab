@@ -1909,6 +1909,23 @@ export interface CapturabilityPlan {
   unlockHint: string | null;
 }
 
+export interface BleDfuResult {
+  flowId: string;
+  size: number;
+  firmwareScore: number;
+  carved: boolean;
+}
+
+export interface ZigbeeOtaResult {
+  flowId: string;
+  size: number;
+  manufacturerCode: number;
+  imageType: number;
+  fileVersion: number;
+  firmwareScore: number;
+  carved: boolean;
+}
+
 export interface OtaVersion {
   imageId: string;
   filename: string;
@@ -2354,6 +2371,16 @@ export const api = {
     post<{ imageId: string; filename: string }>(`/api/capture/session/${sessionId}/ingest`, { flowId }),
   teardownCapture: (sessionId: string) =>
     post<{ session: CaptureSession | null }>(`/api/capture/session/${sessionId}/teardown`),
+  // Phase 6.4 BLE DFU capture reassembly.
+  createBleCaptureSession: (deviceId: string | null, acknowledged: boolean) =>
+    post<{ sessionId: string }>('/api/capture/ble/session', { ...(deviceId ? { deviceId } : {}), acknowledged }),
+  stageBleDfu: (sessionId: string, chunks: string[], name?: string) =>
+    post<BleDfuResult>('/api/capture/ble/dfu', { sessionId, chunks, ...(name ? { name } : {}) }),
+  // Phase 6.5 Zigbee OTA capture reassembly.
+  createZigbeeCaptureSession: (deviceId: string | null, acknowledged: boolean) =>
+    post<{ sessionId: string }>('/api/capture/zigbee/session', { ...(deviceId ? { deviceId } : {}), acknowledged }),
+  stageZigbeeOta: (sessionId: string, blocks: string[], name?: string) =>
+    post<ZigbeeOtaResult>('/api/capture/zigbee/ota', { sessionId, blocks, ...(name ? { name } : {}) }),
 
   async upload(file: File): Promise<ImageSummary> {
     const form = new FormData();

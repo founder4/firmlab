@@ -9,6 +9,7 @@ import {
   type LearningSurface,
   api,
 } from '../api';
+import { WirelessReassemblyPanel } from '../components/WirelessReassemblyPanel';
 import { type Messages, useLocale, useMessages } from '../i18n';
 
 function ceilingClass(c: string | null | undefined): string {
@@ -529,6 +530,8 @@ export function Capture(): JSX.Element {
           )}
         </div>
       )}
+
+      <WirelessReassemblyPanel captureEnabled={enabled} devices={devices} initialSessionId={capSession?.id} />
 
       <div className="panel">
         <div className="panel-title">{t.capture.learning.title}</div>

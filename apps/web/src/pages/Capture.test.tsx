@@ -319,3 +319,12 @@ describe('Capture — Phase 6.6 OTA learning', () => {
     expect(screen.getByRole('link', { name: /diff prev/i })).toBeInTheDocument();
   });
 });
+
+describe('Capture — wireless capture reassembly panel', () => {
+  it('renders the wireless reassembly panel and its protocol tabs', async () => {
+    render(<Capture />);
+    expect(await screen.findByText('Reconstruct firmware from wireless capture')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'BLE DFU' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Zigbee OTA' })).toBeInTheDocument();
+  });
+});
