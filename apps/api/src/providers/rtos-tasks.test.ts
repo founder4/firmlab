@@ -101,7 +101,9 @@ describe('runRtosTaskSnapshot', () => {
 
   it('reports a record cut by the snapshot edge as truncated with bytes attempted beyond those completed', () => {
     const r = run(body(snapshot({ length: 0x4a }), { readyLists: [{ priority: 3, address: LIST }] }));
-    expect(r.coverage).toBe('none');
+    // One task was corroborated before the cut and pxCurrentTCB was not supplied: partial, never none.
+    expect(r.coverage).toBe('partial');
+    expect(r.summary).toMatch(/1 walked node\(s\) did not yield a corroborated task record/);
     expect(r.readyLists[0]).toMatchObject({ coverage: 'truncated', attempted: 2, completed: 1 });
     expect(r.readyLists[0]).toMatchObject({ bytesAttempted: 48, bytesCompleted: 28 });
   });

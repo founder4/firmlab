@@ -19,7 +19,7 @@
 import { type FreeRtosLayout, parseFreeRtosCurrentTask, parseFreeRtosReadyList } from '@firmlab/core';
 import type { FreeRtosCoverage, FreeRtosCurrentTaskResult, FreeRtosTaskListResult, ProofState } from '@firmlab/core';
 
-/** Decoded snapshot cap. Fastify's default 1 MiB body limit bounds the base64 anyway; this states it in bytes. */
+/** Decoded snapshot cap, checked after decoding: the API's 8 MiB `bodyLimit` (index.ts) admits far more base64. */
 export const MAX_SNAPSHOT_BYTES = 512 * 1024;
 /** Mirrors core's per-list traversal cap (`MAX_LIST_ITEMS`), reported so a `cycle_capped` lane names its bound. */
 export const MAX_LIST_ITEMS = 256;
@@ -105,7 +105,12 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
   const addrLimit = pointerWidth === 4 ? 2 ** 32 : Number.MAX_SAFE_INTEGER;
   const isAddr = (v: unknown): v is number =>
     Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) < addrLimit;
-  if (!isAddr(base)) errors.push('memory.base must be declared as a non-negative integer address');
+  if (!isAddr(base))
+    errors.push(
+      pointerWidth === 8
+        ? 'memory.base must be a non-negative integer address below 2^53 (the JSON number precision this API reads)'
+        : 'memory.base must be declared as a non-negative integer address',
+    );
 
   let buf: Uint8Array = new Uint8Array(0);
   if (typeof bytesBase64 !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(bytesBase64) || bytesBase64.length % 4 !== 0) {
@@ -206,8 +211,14 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
 
   const coverages: FreeRtosCoverage[] = [currentTask.coverage, ...readyLists.map((l) => l.coverage)];
   const done = coverages.filter((c) => c === 'complete').length;
-  const coverage = done === coverages.length ? 'complete' : done === 0 ? 'none' : 'partial';
   const tasks = readyLists.reduce((n, l) => n + l.completed, 0);
+  // A lane that stopped early can still have corroborated tasks before it stopped; that is partial, not none.
+  const coverage = done === coverages.length ? 'complete' : done === 0 && tasks === 0 ? 'none' : 'partial';
+  const nodesAttempted = readyLists.reduce((n, l) => n + l.attempted, 0);
+  const discarded =
+    nodesAttempted > tasks
+      ? ` ${nodesAttempted - tasks} walked node(s) did not yield a corroborated task record and are not counted.`
+      : '';
   const incomplete = [
     ...(currentTask.coverage === 'complete' ? [] : [`pxCurrentTCB: ${currentTask.coverage}`]),
     ...readyLists
@@ -219,9 +230,9 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     'not read here, and the snapshot itself is operator-supplied, not proven against a running device.';
   const summary =
     coverage === 'complete'
-      ? `${tasks} ready task record(s) across ${readyLists.length} list(s), every lane walked to its sentinel. ${scope}`
+      ? `${tasks} ready task record(s) across ${readyLists.length} list(s), every lane walked to its sentinel.${discarded} ${scope}`
       : `${tasks} ready task record(s) found, but ${incomplete.join('; ')} — this is not a complete task set, and an ` +
-        `empty result here is not "no tasks". ${scope}`;
+        `empty result here is not "no tasks".${discarded} ${scope}`;
 
   const all = [currentTask, ...readyLists];
   return {
@@ -233,7 +244,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     currentTask,
     readyLists,
     totals: {
-      nodesAttempted: readyLists.reduce((n, l) => n + l.attempted, 0),
+      nodesAttempted,
       nodesCompleted: tasks,
       bytesAttempted: all.reduce((n, l) => n + (l.bytesAttempted ?? 0), 0),
       bytesCompleted: all.reduce((n, l) => n + (l.bytesCompleted ?? 0), 0),
