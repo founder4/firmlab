@@ -363,6 +363,19 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   se escribe a mano — un selector alimentado por `api.binaries` evitaría la ruta inexistente.
 - [ ] funcdiff: `textDiffs` (antes/después descompilado de las funciones cambiadas) no se muestra en el panel.
 
+- [ ] **Cancelar un job desde la UI.** Emulación (QEMU full-system, Renode), dynprobe y fuzzing pueden quedarse en un
+  bucle de arranque y la UI sólo sondea: no hay botón de abortar porque el backend no tiene cancelación
+  (`providers/jobs.ts` no expone ninguna). Requiere una ruta `POST /jobs/:id/cancel` que mate el árbol de procesos
+  del job (sin `pkill`: no está en el contenedor, ver trampa de `teardown()`), deje el job en un estado propio
+  —no `error`, que es un fallo del análisis— y libere los puertos. Detectado en la auditoría UX del 2026-09-27.
+- [ ] **Rutas de la API sin cliente web, de valor medio/bajo** (auditoría del 2026-09-27; las de valor alto —snapshot
+  RTOS, funcdiff, lanzar Ghidra, reensamblado BLE/Zigbee— ya tienen UI): relanzar `component-cve` y `auxsecrets`
+  sueltos (hoy sólo corren dentro del escaneo autónomo), `POST /images/:id/analysis` y `/analysis/reanalyze-all`
+  (re-clasificar tras cambiar el clasificador sin borrar y resubir), `POST /corpus/reindex`,
+  `DELETE /images/:id/findings` (retirar hallazgos de una fuente que ya no se planifica), los resultados guardados
+  de `chipsec`/`renode` y su estado, editar una nota (`PATCH …/notes/:noteId`) y leer el estado actual de
+  aprobación del agente en Ajustes. Decidir cuáles son sólo para scripts/MCP antes de construir UI.
+
 ## Deuda de política (decisiones a escribir, no bugs)
 
 - [x] Dos estándares de CVE conviven sin decisión escrita: grype (vía manifiesto syft) acepta CVE-2016-2148 para
