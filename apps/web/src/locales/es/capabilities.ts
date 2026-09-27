@@ -53,4 +53,15 @@ export const capabilities: typeof en = {
 
   needsBaseline:
     'El diff a nivel de función compara dos imágenes, y para ésta no se ha elegido ninguna base. Eso es una entrada que falta, no un resultado.',
+
+  ghidra: {
+    binaryLabel: 'Binario a descompilar (ruta dentro del rootfs extraído)',
+    binaryRequired: 'Ruta del binario: escribe una ruta dentro del rootfs extraído, por ejemplo usr/sbin/httpd.',
+    run: 'Descompilar con Ghidra',
+    notInstalled:
+      'Ghidra (analyzeHeadless) no está instalado en este despliegue, así que aquí no se le puede preguntar al descompilador. Es una herramienta que falta, no un resultado negativo.',
+    lastBinary: 'Último descompilado:',
+  },
+  funcdiffBaseline: 'Último diff contra la base',
+  funcdiffOpen: 'Abrir el diff de funciones en la sección Diff',
 };

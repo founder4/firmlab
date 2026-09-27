@@ -141,13 +141,19 @@ export function coverageNumbers(id: CapabilityId, result: CapabilityResultBase |
       // invent one. What it does carry is `sinkHits` — how many times the breakpoint was reached — which is the
       // closest thing to a measure of what the run examined.
       return { denominator: null, applied: num(r.sinkHits), lost: null, unit: 'sink hits' };
-    case 'funcdiff':
+    case 'funcdiff': {
+      // The denominator is the differing binary pairs (`analyzed + notAnalyzed`); byte-identical pairs need no
+      // comparison and are not part of it. This case used to read `r.binaries`, a field the server never sends, so
+      // the row could only ever print "0 binaries examined".
+      const analyzed = num(r.analyzed) ?? num((r.diffs as unknown[] | undefined)?.length);
+      const notAnalyzed = num(r.notAnalyzed);
       return {
-        denominator: null,
-        applied: num((r.binaries as unknown[] | undefined)?.length),
-        lost: null,
-        unit: 'binaries',
+        denominator: analyzed !== null && notAnalyzed !== null ? analyzed + notAnalyzed : null,
+        applied: analyzed,
+        lost: notAnalyzed,
+        unit: 'differing binaries',
       };
+    }
     default:
       return none;
   }

@@ -688,10 +688,50 @@ export interface FsAuditResultView {
   }[];
 }
 
+/** One changed/added/removed function in a binary diff. `delta` is newer minus older, present on `changed`. */
+export interface FuncDiffFunctionView {
+  name: string;
+  status: 'changed' | 'added' | 'removed';
+  delta?: { size: number; nbbs: number; cc: number; ninstrs: number };
+}
+
+/**
+ * One binary pair's function diff. `functions` is WITHHELD (empty) on a `recompiled` verdict by the provider, because
+ * a list that long localizes nothing — so an empty list there is not "no change".
+ */
+export interface FuncDiffBinaryView {
+  path: string;
+  verdict: 'identical' | 'patched' | 'recompiled' | 'incomparable';
+  matched?: number;
+  changed?: number;
+  added?: number;
+  removed?: number;
+  /** Functions whose fingerprint was ambiguous on one side, so pairing them would have been guesswork. */
+  unmatchable?: number;
+  functions?: FuncDiffFunctionView[];
+  reason?: string;
+}
+
+/**
+ * `providers/funcdiff-run.ts` `FuncDiffResult`, as far as this client reads it. The server field is `diffs`; an
+ * earlier version of this type declared `binaries`, which the server never sends. Optional beyond the shared
+ * contract, for the persisted-result reason above.
+ */
 export interface FuncDiffResultView {
   available: boolean;
   reason?: string;
-  binaries?: { path?: string; changed?: number; added?: number; removed?: number; unmatchable?: number }[];
+  older?: string;
+  newer?: string;
+  /** Binaries present at the same path in both rootfs. */
+  paired?: number;
+  /** Of those, byte-identical (skipped). */
+  identical?: number;
+  analyzed?: number;
+  /** Differing pairs NOT compared because the per-run cap was reached. */
+  notAnalyzed?: number;
+  /** A rootfs walk hit its budget, so `paired` is a floor. Absent means "not recorded", never "complete". */
+  walkTruncated?: boolean;
+  diffs?: FuncDiffBinaryView[];
   findings?: unknown[];
 }
 
@@ -2279,6 +2319,8 @@ export const api = {
     get<{ result: FuncDiffResultView | null }>(
       `/api/images/${id}/funcdiff?against=${encodeURIComponent(against)}`,
     ).then((r) => r.result),
+  /** `:id` is the NEWER build, `against` the older baseline. Both need an extracted rootfs (400 otherwise). */
+  runFuncdiff: (id: string, against: string) => post<{ jobId: string }>(`/api/images/${id}/funcdiff`, { against }),
   dynprobeResult: (id: string) =>
     get<{ result: DynProbeResultView | null }>(`/api/images/${id}/dynprobe`).then((r) => r.result),
   ghidra: (id: string, binary: string) => post<{ jobId: string }>(`/api/images/${id}/ghidra`, { binary }),

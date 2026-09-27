@@ -39,6 +39,7 @@ import { FileBrowser } from '../components/FileBrowser';
 import { FileSearch } from '../components/FileSearch';
 import { FilesystemTree } from '../components/FilesystemTree';
 import { FindingsLedger, PROOF_STATE_META } from '../components/FindingsLedger';
+import { FuncDiffPanel } from '../components/FuncDiffPanel';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { HardwareInterfaces } from '../components/HardwareInterfaces';
 import { KernelPosture } from '../components/KernelPosture';
@@ -1274,7 +1275,8 @@ function DiffPanel({ imageId }: { imageId: string }): JSX.Element {
           </div>
         </>
       )}
-      <RunHistory imageId={imageId} kinds={['diff']} label={t.imageDetail.diff.runLabel} />
+      {images.length > 0 && <FuncDiffPanel imageId={imageId} against={against} />}
+      <RunHistory imageId={imageId} kinds={['diff', 'funcdiff']} label={t.imageDetail.diff.runLabel} />
     </div>
   );
 }

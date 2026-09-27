@@ -11,7 +11,8 @@
  *
  * Every decision is in `capabilities.ts` and unit-tested without a DOM; this file renders and fetches.
  */
-import { type JSX, useEffect, useState } from 'react';
+import { type FormEvent, type JSX, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { type FwHuntResultView, type Job, api } from '../api';
 import {
   type CapabilityId,
@@ -122,10 +123,42 @@ function Coverage({ id, result }: { id: CapabilityId; result: CapabilityResultBa
   );
 }
 
+/**
+ * The latest function diff, found through the job list: its GET needs the baseline id, which only the job's params
+ * remember. No done funcdiff job is `null` — "has not run" — never an empty result.
+ */
+async function latestFuncdiff(imageId: string): Promise<CapabilityResultBase | null> {
+  const job = (await api.jobs(imageId)).find((j) => j.kind === 'funcdiff' && j.status === 'done');
+  const against = (job?.params as { against?: unknown } | null)?.against;
+  return typeof against === 'string' ? api.funcdiffResult(imageId, against) : null;
+}
+
+/**
+ * Whether this deployment has Ghidra. `null` when the tool list could not be read — then the run stays enabled and
+ * the provider answers `available: false` itself, because not knowing is not the same as knowing it is absent.
+ */
+async function ghidraInstalled(): Promise<boolean | null> {
+  const tool = (await api.tools()).tools.find((x) => x.id === 'analyzeHeadless');
+  return tool ? tool.available : null;
+}
+
 export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element {
   const t = useMessages();
   const [loaded, setLoaded] = useState<Loaded>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [ghidraTool, setGhidraTool] = useState<boolean | null>(null);
+  const [ghidraBinary, setGhidraBinary] = useState('');
+  const [ghidraError, setGhidraError] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    ghidraInstalled()
+      .then((v) => live && setGhidraTool(v))
+      .catch(() => live && setGhidraTool(null));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -153,6 +186,9 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
           .dynprobeResult(imageId)
           .then((r) => ['dynprobe', r] as const)
           .catch(() => ['dynprobe', null] as const),
+        latestFuncdiff(imageId)
+          .then((r) => ['funcdiff', r] as const)
+          .catch(() => ['funcdiff', null] as const),
       ]);
       if (live) setLoaded(Object.fromEntries(entries) as Loaded);
     };
@@ -175,6 +211,31 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
           setLoaded((current) => ({ ...current, fwhunt: result }));
         }
       } else if (id === 'nvram') await api.runNvram(imageId);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runGhidra = async (e: FormEvent): Promise<void> => {
+    e.preventDefault();
+    // The route resolves the path inside the rootfs and refuses an absolute one, so a pasted `/usr/sbin/httpd`
+    // is made relative rather than sent to be rejected.
+    const binary = ghidraBinary.trim().replace(/^\/+/, '');
+    if (!binary) {
+      setGhidraError(t.capabilities.ghidra.binaryRequired);
+      return;
+    }
+    setGhidraError('');
+    setBusy('ghidra');
+    try {
+      const { jobId } = await api.ghidra(imageId, binary);
+      const job = await waitForJob(jobId);
+      if (job.status === 'done') {
+        const result = await api.ghidraResult(imageId);
+        setLoaded((current) => ({ ...current, ghidra: result }));
+      } else setGhidraError(job.error ?? t.imageDetail.job.failed);
+    } catch (err) {
+      setGhidraError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
@@ -251,6 +312,61 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
                   {typeof (result as { controlOffset?: number | null } | null)?.controlOffset === 'number'
                     ? t.capabilities.controlOffset((result as unknown as { controlOffset: number }).controlOffset)
                     : t.capabilities.controlOffsetNone}
+                </span>
+              )}
+              {cap.id === 'ghidra' && (
+                <form onSubmit={(e) => void runGhidra(e)} style={{ display: 'grid', gap: 6, maxWidth: '72ch' }}>
+                  {state.kind === 'ran' && (
+                    <span className="hint">
+                      {t.capabilities.ghidra.lastBinary}{' '}
+                      <span className="mono">{(result as { binary?: string } | null)?.binary ?? '—'}</span>
+                    </span>
+                  )}
+                  <label htmlFor="ghidra-binary" className="hint">
+                    {t.capabilities.ghidra.binaryLabel}
+                  </label>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <input
+                      id="ghidra-binary"
+                      className="input mono"
+                      value={ghidraBinary}
+                      onChange={(e) => setGhidraBinary(e.target.value)}
+                      placeholder="usr/sbin/httpd"
+                      aria-invalid={ghidraError === t.capabilities.ghidra.binaryRequired}
+                      disabled={ghidraTool === false || busy === 'ghidra'}
+                      style={{ flex: '1 1 240px', minWidth: 0 }}
+                    />
+                    <button type="submit" className="btn" disabled={ghidraTool === false || busy === 'ghidra'}>
+                      {busy === 'ghidra' ? (
+                        <>
+                          <span className="spinner" /> {t.capabilities.running}
+                        </>
+                      ) : (
+                        t.capabilities.ghidra.run
+                      )}
+                    </button>
+                  </div>
+                  {ghidraTool === false && (
+                    <span className="hint" data-role="ghidra-missing">
+                      {t.capabilities.ghidra.notInstalled}
+                    </span>
+                  )}
+                  {ghidraError && (
+                    <span className="hint" role="alert">
+                      {ghidraError}
+                    </span>
+                  )}
+                </form>
+              )}
+              {cap.id === 'funcdiff' && (
+                <span className="hint" style={{ maxWidth: '72ch' }}>
+                  {state.kind !== 'not-run' && (result as { older?: string } | null)?.older && (
+                    <>
+                      {t.capabilities.funcdiffBaseline}{' '}
+                      <span className="mono">{(result as { older?: string }).older}</span>{' '}
+                    </>
+                  )}
+                  <Link to={`/image/${imageId}/diff`}>{t.capabilities.funcdiffOpen}</Link>
                 </span>
               )}
               {state.kind !== 'not-run' && state.reason && (

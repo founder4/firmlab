@@ -357,6 +357,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `CredMatchPanel.test.tsx` (214), la sección registrada en `image-sections.ts`/`section-index.ts`/
   `ImageDetail.tsx` y las cadenas es/en en `locales/*/credmatch.ts`. `1b10314` la hizo tolerante a resultados
   dispersos.)*
+- [x] Exponer `funcdiff` y lanzar `ghidra` desde la web. *(`FuncDiffPanel` en la sección Diff, contra la base del
+  selector; la fila de Ghidra en «Capacidades sin lector» lanza el job y se desactiva si `analyzeHeadless` falta.)*
+- [ ] Ghidra: el pseudocódigo de `functions[]` sigue sin lector (la fila sólo da cobertura), y la ruta del binario
+  se escribe a mano — un selector alimentado por `api.binaries` evitaría la ruta inexistente.
+- [ ] funcdiff: `textDiffs` (antes/después descompilado de las funciones cambiadas) no se muestra en el panel.
 
 ## Deuda de política (decisiones a escribir, no bugs)
 

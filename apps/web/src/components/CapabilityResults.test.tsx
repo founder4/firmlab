@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
 import { setLocale } from '../i18n';
@@ -12,6 +13,19 @@ vi.mock('../api', async (importOriginal) => {
 });
 
 const m = () => mockedApi(api);
+
+// The funcdiff row links to the Diff section, so the panel needs a router around it.
+const renderCaps = () =>
+  render(
+    <MemoryRouter>
+      <CapabilityResults imageId="abc" />
+    </MemoryRouter>,
+  );
+
+const tools = (available: boolean) => ({
+  tools: [{ id: 'analyzeHeadless', bin: 'analyzeHeadless', available, unlocks: '', group: 'analyze' }],
+  groups: {},
+});
 
 /** The row for one capability, found by its data attribute rather than by prose that a translation would move. */
 const row = (id: string): HTMLElement => {
@@ -27,11 +41,13 @@ beforeEach(() => {
   m().nvramResult.mockResolvedValue(null);
   m().ghidraResult.mockResolvedValue(null);
   m().dynprobeResult.mockResolvedValue(null);
+  m().jobs.mockResolvedValue([]);
+  m().tools.mockResolvedValue(tools(true));
 });
 
 describe('CapabilityResults — the three states reach the screen and do not share a sentence', () => {
   it('reports a stage nobody ran as not-run, and says it is about the workbench', async () => {
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('yarascan').dataset.state).toBe('not-run'));
     expect(row('yarascan').textContent).toMatch(/has not run/);
     expect(row('yarascan').textContent).toMatch(/statement about this workbench, not about the firmware/);
@@ -47,7 +63,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
       reason: 'yara is not installed in this deployment',
       findings: [],
     });
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('yarascan').dataset.state).toBe('unavailable'));
 
     const unavailable = row('yarascan').textContent ?? '';
@@ -70,7 +86,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
       rulesNotApplicable: 91,
       findings: [],
     });
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('fwhunt').dataset.state).toBe('ran'));
     const text = row('fwhunt').textContent ?? '';
     expect(text).toMatch(/0 findings/);
@@ -86,7 +102,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
       rulesNotApplicable: 91,
       findings: [],
     });
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('fwhunt').dataset.state).toBe('ran'));
     const text = row('fwhunt').textContent ?? '';
     expect(text).toMatch(/17 of 108 rules applied/);
@@ -132,7 +148,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
     m().runFwhunt.mockResolvedValue({ jobId: 'fw-job' });
     m().job.mockResolvedValue({ status: 'done' });
 
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     const button = await screen.findByRole('button', { name: /next FwHunt batch/i });
     expect(row('fwhunt').textContent).toContain('12/409 modules accumulated');
     fireEvent.click(button);
@@ -159,7 +175,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
       },
       findings: [],
     });
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('fwhunt').textContent).toContain('batch is incomplete'));
     expect(screen.getByRole('button', { name: /resume FwHunt batch/i })).toBeTruthy();
   });
@@ -181,7 +197,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
     m().runFwhunt.mockResolvedValue({ jobId: 'legacy-upgrade' });
     m().job.mockResolvedValue({ status: 'error' });
 
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     const button = await screen.findByRole('button', { name: /start resumable FwHunt campaign/i });
     fireEvent.click(button);
     await waitFor(() => expect(m().runFwhunt).toHaveBeenCalledWith('abc', undefined, true));
@@ -211,7 +227,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
     m().runFwhunt.mockResolvedValue({ jobId: 'campaign-restart' });
     m().job.mockResolvedValue({ status: 'error' });
 
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     const button = await screen.findByRole('button', { name: /rerun full FwHunt campaign/i });
     fireEvent.click(button);
     await waitFor(() => expect(m().runFwhunt).toHaveBeenCalledWith('abc', undefined, true));
@@ -219,7 +235,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
 
   it('says the denominator is unknown rather than printing a zero for it', async () => {
     m().nvramResult.mockResolvedValue({ available: true, reason: 'scanned', stores: [{}, {}], findings: [] });
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('nvram').dataset.state).toBe('ran'));
     const text = row('nvram').textContent ?? '';
     expect(text).toMatch(/2 stores examined/);
@@ -228,7 +244,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
   });
 
   it('names funcdiff’s missing BASELINE rather than reporting it as a stage nobody ran', async () => {
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('funcdiff').dataset.state).toBe('not-run'));
     // A third cause of nothing, and it is an input rather than an unrun stage.
     expect(row('funcdiff').textContent).toMatch(/no baseline has been chosen/);
@@ -237,13 +253,13 @@ describe('CapabilityResults — the three states reach the screen and do not sha
 
   it('reads a failed fetch as not-run, never as a clean result', async () => {
     m().ghidraResult.mockRejectedValue(new Error('boom'));
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('ghidra').dataset.state).toBe('not-run'));
     expect(row('ghidra').textContent).not.toMatch(/ran/i);
   });
 
   it('renders all five capabilities, so none of them is invisible again', async () => {
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(screen.getByTestId('capability-results')).toBeTruthy());
     for (const id of ['yarascan', 'fwhunt', 'nvram', 'ghidra', 'funcdiff', 'dynprobe']) {
       expect(row(id)).toBeTruthy();
@@ -263,7 +279,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
       sinkHits: 2,
       findings: [{}],
     });
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('dynprobe').dataset.state).toBe('ran'));
     expect(row('dynprobe').textContent).toMatch(/input controls the saved return address at offset 204/);
     expect(row('dynprobe').textContent).toMatch(/2 sink hits examined/);
@@ -271,7 +287,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
 
   it('refuses to read an unrecovered offset as zero', async () => {
     m().dynprobeResult.mockResolvedValue({ available: true, reason: 'ran_clean', controlOffset: null, findings: [] });
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('dynprobe').dataset.state).toBe('ran'));
     const text = row('dynprobe').textContent ?? '';
     expect(text).toMatch(/not the same as an offset of zero/);
@@ -281,10 +297,73 @@ describe('CapabilityResults — the three states reach the screen and do not sha
   it('says the same three things in Spanish', async () => {
     setLocale('es');
     m().yarascanResult.mockResolvedValue({ available: false, reason: 'yara no está instalado', findings: [] });
-    render(<CapabilityResults imageId="abc" />);
+    renderCaps();
     await waitFor(() => expect(row('yarascan').dataset.state).toBe('unavailable'));
     expect(row('yarascan').textContent).toMatch(/no pudo responder/);
     expect(row('yarascan').textContent).toMatch(/no es un resultado negativo/);
     expect(row('fwhunt').textContent).toMatch(/no ha corrido/);
+  });
+});
+
+describe('CapabilityResults — ghidra can be started, and funcdiff reflects its last run', () => {
+  it('refuses to submit without a binary and names the field', async () => {
+    renderCaps();
+    fireEvent.click(await screen.findByRole('button', { name: 'Decompile with Ghidra' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/^Binary path:/);
+    expect(m().ghidra).not.toHaveBeenCalled();
+  });
+
+  it('runs ghidra on a rootfs-relative path, polls the job and reloads the result', async () => {
+    m().ghidra.mockResolvedValue({ jobId: 'j1' });
+    m().job.mockResolvedValue({ id: 'j1', status: 'done', log: '', result: null, error: null });
+    renderCaps();
+    fireEvent.change(await screen.findByLabelText(/Binary to decompile/), { target: { value: '/usr/sbin/httpd' } });
+    m().ghidraResult.mockResolvedValue({
+      available: true,
+      binary: 'usr/sbin/httpd',
+      functionCount: 1,
+      functions: [{}],
+      eligibleCount: 9,
+      findings: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Decompile with Ghidra' }));
+    await waitFor(() => expect(row('ghidra').dataset.state).toBe('ran'));
+    expect(m().ghidra).toHaveBeenCalledWith('abc', 'usr/sbin/httpd');
+    expect(row('ghidra').textContent).toMatch(/1 of 9 functions applied/);
+  });
+
+  it('shows the job’s error instead of a result when the run fails', async () => {
+    m().ghidra.mockResolvedValue({ jobId: 'j1' });
+    m().job.mockResolvedValue({ id: 'j1', status: 'error', log: '', result: null, error: 'extraction missing' });
+    renderCaps();
+    fireEvent.change(await screen.findByLabelText(/Binary to decompile/), { target: { value: 'bin/busybox' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Decompile with Ghidra' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('extraction missing');
+  });
+
+  it('disables the run and says the tool is missing — not a negative — when Ghidra is absent', async () => {
+    m().tools.mockResolvedValue(tools(false));
+    renderCaps();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Decompile with Ghidra' })).toBeDisabled());
+    expect(row('ghidra').textContent).toMatch(/not installed in this deployment/);
+    expect(row('ghidra').textContent).toMatch(/not a negative result/);
+  });
+
+  it('reads the last funcdiff through the baseline its job remembers', async () => {
+    m().jobs.mockResolvedValue([{ id: 'j9', kind: 'funcdiff', status: 'done', params: { against: 'old1' } }]);
+    m().funcdiffResult.mockResolvedValue({
+      available: true,
+      older: 'fw-1.0.bin',
+      analyzed: 3,
+      notAnalyzed: 1,
+      diffs: [],
+      findings: [],
+    });
+    renderCaps();
+    await waitFor(() => expect(row('funcdiff').dataset.state).toBe('ran'));
+    expect(m().funcdiffResult).toHaveBeenCalledWith('abc', 'old1');
+    expect(row('funcdiff').textContent).toMatch(/fw-1\.0\.bin/);
+    expect(row('funcdiff').textContent).toMatch(/3 of 4 differing binaries applied/);
+    expect(screen.getByRole('link', { name: /Open the function diff/ }).getAttribute('href')).toBe('/image/abc/diff');
   });
 });

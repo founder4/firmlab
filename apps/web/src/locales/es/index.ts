@@ -17,6 +17,7 @@ import { egressSection } from './egressSection';
 import { exportreach } from './exportreach';
 import { files } from './files';
 import { findings } from './findings';
+import { funcdiff } from './funcdiff';
 import { hardware } from './hardware';
 import { imageDetail } from './imageDetail';
 import { kernelPosture } from './kernelPosture';
@@ -52,6 +53,7 @@ export const es: Messages = {
   compmap,
   report,
   capabilities,
+  funcdiff,
   capture,
   operator,
   hardware,

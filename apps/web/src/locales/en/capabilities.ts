@@ -61,4 +61,16 @@ export const capabilities = {
   /** funcdiff is the one that needs a second image, so its absence has a third cause worth naming. */
   needsBaseline:
     'Function-level diffing compares two images, and no baseline has been chosen for this one. That is a missing input, not a result.',
+
+  /** Ghidra is the one capability here that needs a target: one binary from the extracted rootfs. */
+  ghidra: {
+    binaryLabel: 'Binary to decompile (path inside the extracted rootfs)',
+    binaryRequired: 'Binary path: enter a path inside the extracted rootfs, for example usr/sbin/httpd.',
+    run: 'Decompile with Ghidra',
+    notInstalled:
+      'Ghidra (analyzeHeadless) is not installed in this deployment, so the decompiler cannot be asked here. That is a missing tool, not a negative result.',
+    lastBinary: 'Last decompiled:',
+  },
+  funcdiffBaseline: 'Last diffed against baseline',
+  funcdiffOpen: 'Open the function diff in the Diff section',
 };

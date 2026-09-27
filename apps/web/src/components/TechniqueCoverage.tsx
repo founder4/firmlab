@@ -124,8 +124,8 @@ const COVERAGE: CovGroup[] = [
     area: 'comparison',
     items: [
       { id: 'treeDiff', status: 'done', ref: 'providers/diff' },
-      // Built: `providers/funcdiff.ts` + `funcdiff-run.ts` + `routes/diff.ts`. It has no PANEL, which is a
-      // separate and recorded gap — but the technique is implemented and the route answers.
+      // Built: `providers/funcdiff.ts` + `funcdiff-run.ts` + `routes/diff.ts`, read and started from
+      // `FuncDiffPanel` in the image's Diff section.
       { id: 'functionDiff', status: 'done', note: 'functionDiff' },
       { id: 'kernelModuleCve', status: 'done', ref: 'providers/kernel-cve + providers/kmod' },
     ],

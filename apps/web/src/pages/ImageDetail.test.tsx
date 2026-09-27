@@ -551,6 +551,7 @@ const diffResult = (against: string, filename: string): FirmwareDiffResult => ({
 describe('ImageDetail diff workflow', () => {
   beforeEach(() => {
     mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
+    mockApi.funcdiffResult.mockResolvedValue(null);
   });
 
   it('states that a second image is required instead of rendering an empty comparison', async () => {

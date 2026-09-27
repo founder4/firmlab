@@ -92,6 +92,15 @@ describe('coverageNumbers — an absent denominator is not a zero', () => {
     expect(c.denominator).toBeNull();
   });
 
+  it('reads funcdiff’s coverage from the fields the server sends, with the capped pairs as lost', () => {
+    expect(coverageNumbers('funcdiff', ran({ analyzed: 20, notAnalyzed: 7, diffs: Array(20).fill({}) }))).toEqual({
+      denominator: 27,
+      applied: 20,
+      lost: 7,
+      unit: 'differing binaries',
+    });
+  });
+
   it('returns nulls rather than zeros for a capability that carries no denominator', () => {
     const c = coverageNumbers('nvram', ran({ stores: [{}, {}] }));
     expect(c.applied).toBe(2);
