@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { diagnoseNoRootfs, diagnoseSquashfs, parseLzmaHeader, parseSquashfsSuperblock } from './extract-diagnose.js';
+import { diagnoseNoRootfs } from './extract-diagnose.js';
 
 /** Build a SquashFS 4.0 little-endian superblock with chosen fields, padded to `size`. */
 function squashfs(opts: { inodes: number; comp: number; bytesUsed: number; idTable: number; size: number }): Buffer {
@@ -14,69 +14,6 @@ function squashfs(opts: { inodes: number; comp: number; bytesUsed: number; idTab
   buf.writeBigUInt64LE(BigInt(opts.idTable), 0x30);
   return buf;
 }
-
-describe('parseSquashfsSuperblock', () => {
-  it('reads the fields that explain why an extractor refused', () => {
-    const sb = parseSquashfsSuperblock(
-      squashfs({ inodes: 581, comp: 2, bytesUsed: 2536106, idTable: 2536098, size: 4096 }),
-    );
-    expect(sb?.inodes).toBe(581);
-    expect(sb?.compression).toBe('lzma');
-    expect(sb?.bytesUsed).toBe(2536106);
-    expect(sb?.idTableStart).toBe(2536098);
-  });
-
-  it('names an unknown compression id instead of pretending it knows', () => {
-    expect(
-      parseSquashfsSuperblock(squashfs({ inodes: 1, comp: 99, bytesUsed: 10, idTable: 1, size: 4096 }))?.compression,
-    ).toBe('unknown(99)');
-  });
-
-  it('returns null for bytes that are not a SquashFS', () => {
-    expect(parseSquashfsSuperblock(Buffer.alloc(4096, 0x41))).toBeNull();
-    expect(parseSquashfsSuperblock(Buffer.alloc(8))).toBeNull();
-  });
-});
-
-describe('diagnoseSquashfs — a truncated image and a missing tool look identical from the error message', () => {
-  /**
-   * The real Asus-Router blob, in miniature. Its superblock is coherent — 581 inodes, LZMA, bytes_used exactly
-   * the carved size — and the id table it points at lands in a run of trailing zeros. unsquashfs AND sasquatch
-   * both answer "File system corruption detected", which sends you hunting for a better extractor when the actual
-   * problem is that the bytes are not in the file.
-   */
-  it('calls out an id table that lands in trailing zero padding as a truncated image', () => {
-    const size = 4096;
-    const blob = squashfs({ inodes: 581, comp: 2, bytesUsed: size, idTable: size - 8, size });
-    const d = diagnoseSquashfs(blob);
-    expect(d?.idTableInZeroFill).toBe(true);
-    expect(d?.verdict).toContain('truncated');
-    expect(d?.verdict).toContain('not one'); // ...reads like a tool problem and is not one
-    expect(d?.verdict).toContain('Re-acquire');
-  });
-
-  it('calls out a volume that declares more bytes than were carved', () => {
-    const blob = squashfs({ inodes: 10, comp: 4, bytesUsed: 999_999, idTable: 128, size: 4096 });
-    const d = diagnoseSquashfs(blob);
-    expect(d?.short).toBe(true);
-    expect(d?.verdict).toContain('cut short');
-    expect(d?.verdict).toContain('not a missing extractor');
-  });
-
-  it('points at sasquatch when the volume is complete and merely LZMA', () => {
-    const size = 4096;
-    const blob = squashfs({ inodes: 42, comp: 2, bytesUsed: size, idTable: 128, size });
-    blob[128] = 0x01; // id table region carries data, so the tail-zero test must not fire
-    blob[size - 1] = 0x7f;
-    const d = diagnoseSquashfs(blob);
-    expect(d?.idTableInZeroFill).toBe(false);
-    expect(d?.verdict).toContain('sasquatch');
-  });
-
-  it('is null for a blob that is not a SquashFS at all', () => {
-    expect(diagnoseSquashfs(Buffer.alloc(4096, 0x41))).toBeNull();
-  });
-});
 
 describe('diagnoseNoRootfs — three empties that need three different next moves', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diagnose-'));
@@ -130,7 +67,7 @@ describe('diagnoseNoRootfs — three empties that need three different next move
   });
 });
 
-describe('parseLzmaHeader — a carved blob nobody opened is not an empty result', () => {
+describe('diagnoseNoRootfs — a carved blob nobody opened is not an empty result', () => {
   /** Raw LZMA "alone" header, verbatim shape from AliExpress-Repeater's carved kernel blob. */
   const lzma = (uncompressed: number, size = 64): Buffer => {
     const b = Buffer.alloc(size);
@@ -139,18 +76,6 @@ describe('parseLzmaHeader — a carved blob nobody opened is not an empty result
     b.writeBigUInt64LE(BigInt(uncompressed), 5);
     return b;
   };
-
-  it('reads the declared uncompressed size, which is what makes the blob worth reporting', () => {
-    expect(parseLzmaHeader(lzma(7660784))).toEqual({ dictSize: 33554432, uncompressedSize: 7660784 });
-  });
-
-  it('rejects bytes that are not a plausible stream rather than inventing a payload size', () => {
-    expect(parseLzmaHeader(Buffer.alloc(64, 0xff))).toBeNull(); // props byte out of range
-    const badDict = lzma(1000);
-    badDict.writeUInt32LE(12345, 1); // not a power of two
-    expect(parseLzmaHeader(badDict)).toBeNull();
-    expect(parseLzmaHeader(Buffer.alloc(4))).toBeNull();
-  });
 
   it('reports a carved LZMA blob as unexamined instead of calling the output empty', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'diagnose-lzma-'));

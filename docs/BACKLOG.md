@@ -402,10 +402,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   importan. P0 completado: `FindingDraft`, el contrato puro compartido por normalizadores, providers, rutas y
   ledger, ya pertenece a `@firmlab/core`; la API sólo lo consume y conserva todos sus campos opcionales.
   `boot-cmdline` también pertenece ya a core, con el parser, auditoría, tipos, cotas y pruebas en su superficie
-  pública y sólo bindings/imports en API. Las porciones puras de `component-cve` también están en core
+  pública y sólo bindings/imports en API. La porción byte-only de `extract-diagnose` está en core —parsers y
+  diagnóstico SquashFS/LZMA—, mientras API conserva sólo el adaptador de filesystem y recovery. Las porciones
+  puras de `component-cve` también están en core
   (`packages/core/src/component-cve.ts`: tabla curada, versiones, extracción, `matchCves`, `curatedCveVerdict`,
-  drafts y sus pruebas); en API queda sólo el recorrido acotado del rootfs. Queda la migración de
-  `extract-diagnose`, con integración final de exports.)*
+  drafts y sus pruebas); en API queda sólo el recorrido acotado del rootfs. La integración final de exports está
+  completada y `nvd-domain` queda como la siguiente fase independiente.)*
 - [x] Cubrir con test los cuatro componentes web sin cobertura: `DeepAnalysisDetails.tsx` (569 líneas),
   `KernelPosture.tsx`, `BinVulnPanel.tsx`, `PresetsPanel.tsx`. *(Hecho en `4f8ab72`: 10 casos para
   `DeepAnalysisDetails` —tenía 4 de sus 10 proveedores—, 7 para `KernelPosture`, 8 para `BinVulnPanel` y 8 para
