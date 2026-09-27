@@ -331,12 +331,13 @@ export function Capture(): JSX.Element {
         </label>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* A free-text field: `select` drew a dropdown arrow on it and promised a menu that does not exist. */}
           <input
-            className="select"
+            className="input mono"
             placeholder={status?.defaultSubnet ?? t.capture.discover.subnetPlaceholder}
             value={subnet}
             onChange={(e) => setSubnet(e.target.value)}
-            style={{ minWidth: 320, fontFamily: 'var(--mono)', fontSize: 12.5 }}
+            style={{ minWidth: 'min(320px, 100%)', fontSize: 12.5 }}
             aria-label={t.capture.discover.subnetLabel}
           />
           <button
