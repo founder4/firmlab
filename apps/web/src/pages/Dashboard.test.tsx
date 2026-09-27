@@ -90,6 +90,15 @@ describe('Dashboard localisation', () => {
     expect(screen.getByText('1 of 2 unexamined')).toBeInTheDocument();
   });
 
+  it('shows the findings individually-run stages recorded on an image no scan has examined', async () => {
+    // Measured on tenda.bin: 8 findings, one critical, from component-cve alone — and the column read "—".
+    mockApi.coverageAll.mockResolvedValue([{ ...unexamined, findingCount: 8 }]);
+    renderDashboard();
+    expect(await screen.findByText('router-v1.bin')).toBeInTheDocument();
+    expect(screen.getByText('8')).toBeInTheDocument();
+    expect(screen.getByText('unexamined')).toBeInTheDocument();
+  });
+
   it('translates the chrome but leaves the filename, the arch and the class id alone', async () => {
     setLocale('es');
     renderDashboard();

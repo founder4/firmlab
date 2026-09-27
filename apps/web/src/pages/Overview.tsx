@@ -150,7 +150,15 @@ export function Overview(): JSX.Element {
                         <span className="recent-image-result" title={cov?.verdict}>
                           {cov ? (
                             cov.executed === 0 ? (
-                              <span className="badge badge-medium">{t.overview.recent.unexamined}</span>
+                              <>
+                                {cov.findingCount > 0 ? (
+                                  <>
+                                    <strong className="num">{cov.findingCount}</strong>
+                                    <span>{t.overview.recent.findings(cov.findingCount)}</span>
+                                  </>
+                                ) : null}
+                                <span className="badge badge-medium">{t.overview.recent.unexamined}</span>
+                              </>
                             ) : (
                               <>
                                 <strong className="num">{cov.findingCount}</strong>

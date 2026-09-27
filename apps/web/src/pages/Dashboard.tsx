@@ -52,7 +52,9 @@ function CoverageCell({ c }: { c: CoverageSummary | undefined }): JSX.Element {
 
 function FindingsCell({ c }: { c: CoverageSummary | undefined }): JSX.Element {
   const t = useMessages();
-  if (!c || c.executed === 0) return <span className="hint">—</span>;
+  // Findings from individually-run stages are real even when no scan has run; the coverage cell beside this one
+  // already says "unexamined", so hiding the count as well would hide a measured critical behind a dash.
+  if (!c || (c.executed === 0 && c.findingCount === 0)) return <span className="hint">—</span>;
   return (
     <div className="findings-count" title={c.verdict}>
       <strong className="num">{c.findingCount}</strong>
