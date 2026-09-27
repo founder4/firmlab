@@ -253,6 +253,28 @@ describe('DeepAnalysisDetails', () => {
     expect(screen.queryByText(/No loader-derived key lead was found/)).not.toBeInTheDocument();
   });
 
+  it('reads a completed audit over zero bytes as unreadable input, not as an empty audit', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="uboot"
+        value={{
+          findings: [],
+          loaderKeyAudit: {
+            attempted: true,
+            completed: true,
+            leadsFound: 0,
+            scan: { bytesRead: 0, totalBytes: 0, complete: true },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/scan over 0 bytes: the input was empty or unreadable/)).toBeInTheDocument();
+    expect(screen.queryByText(/No loader-derived key lead was found/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Bytes examined')).not.toBeInTheDocument();
+  });
+
   it('keeps an incomplete audit from reading as a negative even with zero leads', () => {
     render(
       <DeepAnalysisDetails

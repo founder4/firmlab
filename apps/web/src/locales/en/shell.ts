@@ -222,6 +222,8 @@ export const shell = {
         'The stored loader-derived key audit is malformed or inconsistent, so whether it ran and over which bytes is unknown; no negative result is available.',
       loaderAuditNotAttempted:
         'The image could not be read, so the audit did not run; no negative result is available.',
+      loaderAuditNoBytes:
+        'The audit recorded a scan over 0 bytes: the input was empty or unreadable, so nothing was examined; no negative result is available.',
       loaderAuditIncomplete: 'The audit did not complete, so no negative result is available.',
       loaderAuditEmpty:
         'No loader-derived key lead was found within the recorded audit. This bounded static result is not proof that the firmware has no derived key.',

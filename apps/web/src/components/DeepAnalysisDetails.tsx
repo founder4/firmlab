@@ -104,6 +104,7 @@ type LoaderAudit =
   | { kind: 'absent' }
   | { kind: 'unknown' }
   | { kind: 'not-attempted' }
+  | { kind: 'no-bytes' }
   | { kind: 'incomplete'; leads: number }
   | { kind: 'completed'; leads: number; bytesRead: number; totalBytes: number; complete: boolean };
 
@@ -112,7 +113,8 @@ function count(value: unknown): number | null {
 }
 
 /** Mirrors `readLoaderKeyAudit` in the API: the stored JSON may come from any build, so only exact booleans and a
- * consistent byte bound are believed. Anything else is `unknown` — never ran, never empty. */
+ * consistent byte bound are believed. Anything else is `unknown` — never ran, never empty. A completed scan over zero
+ * bytes examined nothing and is `no-bytes`, not an empty audit. */
 function readLoaderAudit(value: unknown): LoaderAudit {
   if (value === undefined) return { kind: 'absent' };
   const audit = record(value);
@@ -127,6 +129,7 @@ function readLoaderAudit(value: unknown): LoaderAudit {
   const totalBytes = count(scan?.totalBytes);
   if (bytesRead === null || totalBytes === null || bytesRead > totalBytes) return { kind: 'unknown' };
   if (typeof scan?.complete !== 'boolean' || scan.complete !== (bytesRead === totalBytes)) return { kind: 'unknown' };
+  if (totalBytes === 0) return leads === 0 ? { kind: 'no-bytes' } : { kind: 'unknown' };
   return { kind: 'completed', leads, bytesRead, totalBytes, complete: scan.complete };
 }
 
@@ -140,10 +143,10 @@ function LoaderKeyAuditDetails({ result }: { result: RecordValue }): JSX.Element
       </DetailSection>
     );
   }
-  if (audit.kind === 'unknown') {
+  if (audit.kind === 'unknown' || audit.kind === 'no-bytes') {
     return (
       <DetailSection title={t.loaderKeyAudit}>
-        <p className="deep-data-empty">{t.loaderAuditUnknown}</p>
+        <p className="deep-data-empty">{audit.kind === 'unknown' ? t.loaderAuditUnknown : t.loaderAuditNoBytes}</p>
       </DetailSection>
     );
   }

@@ -9,7 +9,9 @@
  * The stored JSON is data written by some build, not a type we own, so it is read strictly: flags must be exact
  * booleans (`"false"` is truthy), counts finite non-negative integers, and the byte bound internally consistent
  * (`bytesRead <= totalBytes`, `complete` exactly when the two are equal). Anything else — a legacy combination, a
- * completed audit with no bound, a string where a number belongs — reads as `unknown`, never as ran or empty.
+ * completed audit with no bound, a string where a number belongs — reads as `unknown`, never as ran or empty. A
+ * consistent completed audit over zero bytes examined nothing, so it reads as `no-bytes`: the input was empty or
+ * unreadable, which is a not-attempted outcome, not a scoped negative.
  */
 import type { OpacidadStep } from '../opacidad-narrative.js';
 import type { DegradedRemedy } from '../opacidad-remedy.js';
@@ -43,6 +45,7 @@ export type LoaderKeyAuditState =
   | { kind: 'absent' }
   | { kind: 'unknown' }
   | { kind: 'not-attempted' }
+  | { kind: 'no-bytes' }
   | { kind: 'incomplete'; leadsFound: number }
   | { kind: 'completed'; leadsFound: number; bytesRead: number; totalBytes: number; complete: boolean };
 
@@ -76,6 +79,7 @@ export function readLoaderKeyAudit(value: unknown): LoaderKeyAuditState {
   const totalBytes = count(scan?.totalBytes);
   if (bytesRead === null || totalBytes === null || bytesRead > totalBytes) return { kind: 'unknown' };
   if (typeof scan?.complete !== 'boolean' || scan.complete !== (bytesRead === totalBytes)) return { kind: 'unknown' };
+  if (totalBytes === 0) return leadsFound === 0 ? { kind: 'no-bytes' } : { kind: 'unknown' };
   return { kind: 'completed', leadsFound, bytesRead, totalBytes, complete: scan.complete };
 }
 
@@ -92,6 +96,13 @@ function auditReading(audit: Exclude<LoaderKeyAuditState, { kind: 'absent' }>): 
       return {
         summary: 'loader-key audit not attempted',
         note: 'The image could not be read, so the loader-derived key audit did not run; no negative result is available.',
+        degraded: true,
+        remedy: 'reacquire-input',
+      };
+    case 'no-bytes':
+      return {
+        summary: 'loader-key audit examined 0 bytes',
+        note: 'The loader-derived key audit recorded a scan over 0 bytes: the input was empty or unreadable, so nothing was examined; no negative result is available.',
         degraded: true,
         remedy: 'reacquire-input',
       };

@@ -67,6 +67,22 @@ describe('U-Boot loader-key coverage outcome', () => {
     expect(step).toMatchObject({ status: 'degraded', remedy: 'reacquire-input' });
   });
 
+  it('reads a completed audit over zero bytes as unreadable input, never as a scoped negative', () => {
+    const audit = {
+      attempted: true,
+      completed: true,
+      leadsFound: 0,
+      scan: { bytesRead: 0, totalBytes: 0, complete: true },
+    };
+    expect(readLoaderKeyAudit(audit)).toEqual({ kind: 'no-bytes' });
+    const step = ubootCoverageStep({ findings: [], loaderKeyAudit: audit });
+    expect(step).toMatchObject({ status: 'degraded', remedy: 'reacquire-input' });
+    expect(step?.summary).toContain('examined 0 bytes');
+    expect(step?.summary).not.toContain('completed');
+    expect(step?.note).not.toContain('No loader-derived key lead was found');
+    expect(readLoaderKeyAudit({ ...audit, leadsFound: 1 })).toEqual({ kind: 'unknown' });
+  });
+
   it.each([
     ['truthy string flags', { attempted: 'true', completed: 'true', leadsFound: 0, scan: fullScan }],
     ['string "false" flags', { attempted: 'false', completed: 'false', leadsFound: 0 }],
