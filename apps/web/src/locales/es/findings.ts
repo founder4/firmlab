@@ -30,6 +30,8 @@ export const findings: Messages['findings'] = {
       'la anotación deja constancia del desacuerdo y no cambia nada de lo que decidió el código.',
     ].join(' '),
 
+  noMatch: 'Ningún hallazgo coincide con este filtro.',
+  clearFilters: 'Quitar filtros',
   empty: 'Aún no hay hallazgos. Ejecuta la extracción, el SBOM y los análisis profundos para poblar el registro.',
 
   cutRule: (shown: number, total: number, omitted: number) =>

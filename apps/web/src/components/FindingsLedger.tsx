@@ -860,7 +860,24 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
       {dangling.length > 0 ? <DanglingDisputeNote dangling={dangling} /> : null}
 
       {view.rows.length === 0 ? (
-        <div className="hint">{t.findings.empty}</div>
+        findings.length > 0 ? (
+          // The ledger is not empty; the filter is. Saying "no findings yet — run the scans" here would be false.
+          <div className="hint">
+            {t.findings.noMatch}{' '}
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => {
+                setFilter('all');
+                setQuery('');
+              }}
+            >
+              {t.findings.clearFilters}
+            </button>
+          </div>
+        ) : (
+          <div className="hint">{t.findings.empty}</div>
+        )
       ) : (
         <>
           {view.rule ? (

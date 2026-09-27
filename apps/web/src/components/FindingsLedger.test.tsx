@@ -289,6 +289,15 @@ describe('FindingsLedger — analyst controls', () => {
     expect(screen.getByText('1 medium: 1 lead')).toBeInTheDocument();
   });
 
+  it('says the FILTER is empty, not the ledger, and offers to clear it', () => {
+    render(<FindingsLedger findings={rows} />);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search findings' }), { target: { value: 'zzz' } });
+    expect(screen.getByText('No findings match this filter.')).toBeInTheDocument();
+    expect(screen.queryByText(/No findings yet/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(screen.getByText('Remote command execution')).toBeInTheDocument();
+  });
+
   it('searches evidence metadata as well as the visible title', () => {
     render(<FindingsLedger findings={rows} />);
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search findings' }), { target: { value: 'yarascan' } });

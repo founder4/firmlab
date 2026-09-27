@@ -27,6 +27,8 @@ export const findings = {
       'the annotation records the disagreement and changes nothing code decided.',
     ].join(' '),
 
+  noMatch: 'No findings match this filter.',
+  clearFilters: 'Clear filters',
   empty: 'No findings yet. Run extraction, SBOM and the deep scans to populate the ledger.',
 
   /** The cut states what it dropped and by what rule — never by the order the rows happened to be written. */
