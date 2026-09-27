@@ -201,3 +201,17 @@ describe('detectCaptureBackends — the locale changes the gloss and nothing els
     );
   });
 });
+
+describe('on-path-gateway reads the Settings toggle, not only the environment', () => {
+  it('counts a runtime override as a declaration', async () => {
+    const { setFlagOverrideProvider } = await import('../flags.js');
+    const { detectCaptureBackends } = await import('./backends.js');
+    setFlagOverrideProvider(() => ({ FIRMLAB_CAPTURE_GATEWAY: '1' }));
+    try {
+      const gw = detectCaptureBackends(true).find((b) => b.id === 'on-path-gateway');
+      expect(gw?.available).toBe(true);
+    } finally {
+      setFlagOverrideProvider(() => ({}));
+    }
+  });
+});

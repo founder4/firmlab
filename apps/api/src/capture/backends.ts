@@ -26,6 +26,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { effectiveEnv } from '../flags.js';
 import { type Locale, messages } from '../i18n/index.js';
 
 export type CaptureBackendId = 'network-proxy' | 'on-path-spoof' | 'on-path-gateway' | 'ble' | 'zigbee' | 'usb-serial';
@@ -365,7 +366,8 @@ const BACKENDS: readonly CaptureBackendSpec[] = [
     transports: [],
     capabilities: {},
     detect: () => {
-      const declared = process.env.FIRMLAB_CAPTURE_GATEWAY === '1';
+      // effectiveEnv(), not process.env: the Settings toggle for this declaration must take effect here too.
+      const declared = effectiveEnv().FIRMLAB_CAPTURE_GATEWAY === '1';
       return declared
         ? {
             available: true,

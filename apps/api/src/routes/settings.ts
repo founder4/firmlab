@@ -13,7 +13,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { resolveAgentApproval } from '../agent/approval.js';
-import { TOGGLEABLE_FLAGS, resolveFlags } from '../flags.js';
+import { TOGGLEABLE_FLAGS, effectiveEnv, resolveFlags } from '../flags.js';
 import { resolveLocale } from '../i18n/index.js';
 import { LLM_SETTING_KEYS, describeLlm, isLlmSettingKey, validateLlmSetting } from '../llm-settings.js';
 import {
@@ -82,9 +82,11 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
    * characters — enough to tell two keys apart, useless as a credential. A settings endpoint that echoed a key
    * back would turn one authenticated reader into an exfiltration path.
    */
+  // The lane state comes from effectiveEnv(), like `loadLlmConfig`: reading process.env here ignored the Settings
+  // toggle and reported the agent off while it was on.
   app.get('/settings/llm', async () => {
     const stamps = new Map(listLlmSettingTimes().map((s) => [s.key, s.updatedAt]));
-    const state = describeLlm(process.env, getLlmOverrides(), process.env.FIRMLAB_AGENT === '1');
+    const state = describeLlm(process.env, getLlmOverrides(), effectiveEnv().FIRMLAB_AGENT === '1');
     return { llm: state, updatedAt: Object.fromEntries(stamps) };
   });
 
@@ -101,7 +103,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     // The value is never echoed, not even the one just written — an endpoint that returns a key on write is the
     // same hole as one that returns it on read.
     app.log.info(`settings: ${key} set (${body.value.length} chars)`);
-    return { llm: describeLlm(process.env, getLlmOverrides(), process.env.FIRMLAB_AGENT === '1') };
+    return { llm: describeLlm(process.env, getLlmOverrides(), effectiveEnv().FIRMLAB_AGENT === '1') };
   });
 
   /** Drop one field so it follows the environment again — a distinct state from pinning the same value by hand. */
@@ -109,7 +111,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     const { key } = req.params as { key: string };
     if (!clearLlmSetting(key)) return reply.status(400).send({ error: `${key} is not a model setting` });
     app.log.info(`settings: ${key} cleared — following the environment again`);
-    return { llm: describeLlm(process.env, getLlmOverrides(), process.env.FIRMLAB_AGENT === '1') };
+    return { llm: describeLlm(process.env, getLlmOverrides(), effectiveEnv().FIRMLAB_AGENT === '1') };
   });
 
   /** Persistent pre-authorisation for future agent sessions. Manual approval remains the default. */
