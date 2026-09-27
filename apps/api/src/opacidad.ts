@@ -122,6 +122,7 @@ import { runSbom } from './providers/sbom.js';
 import { type Service, runServiceMap } from './providers/servicemap.js';
 import { runSymReach } from './providers/symreach.js';
 import { buildTaintScaffold } from './providers/taint.js';
+import { type UbootCoverageResult, ubootCoverageStep } from './providers/uboot-outcome.js';
 import { runUbootAnalysis } from './providers/uboot.js';
 import { runUpdatePath } from './providers/updatepath.js';
 import { type HandlerAnalysis, runWebTaint } from './providers/webtaint.js';
@@ -619,6 +620,19 @@ async function ubootRun(c: RunCtx): Promise<StepOutcome> {
   const assembledClause = script?.variants.length
     ? ` · ${script.variants.length} assembled cmdline variant(s) from ${script.roots.join('/')}`
     : '';
+  // `loaderKeyAudit` is optional forever and may be absent on both legacy persisted results and builds before the
+  // producer landed. When present, use the same pure mapper as the read-side coverage route so an empty audit is
+  // scoped to its byte bound and a truncated scan degrades instead of reading as a clean stage.
+  const audited = ubootCoverageStep(r as typeof r & UbootCoverageResult);
+  if (audited) {
+    return {
+      summary: audited.summary,
+      findingCount: audited.findingCount ?? r.findings.length,
+      ...(audited.status === 'degraded' ? { degraded: true } : {}),
+      ...(audited.status === 'degraded' && audited.remedy ? { remedy: audited.remedy } : {}),
+      ...(audited.note ? { note: audited.note } : {}),
+    };
+  }
   return {
     summary: `U-Boot / boot posture: ${r.findings.length} findings${assembledClause}`,
     findingCount: r.findings.length,

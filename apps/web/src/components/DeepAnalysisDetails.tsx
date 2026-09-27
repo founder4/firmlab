@@ -100,6 +100,55 @@ function Findings({ result }: { result: RecordValue }): JSX.Element | null {
   );
 }
 
+function LoaderKeyAuditDetails({ result }: { result: RecordValue }): JSX.Element {
+  const t = useMessages().shell.deep.details;
+  const audit = record(result.loaderKeyAudit);
+  if (!audit) {
+    return (
+      <DetailSection title={t.loaderKeyAudit}>
+        <p className="deep-data-empty">{t.loaderAuditLegacy}</p>
+      </DetailSection>
+    );
+  }
+
+  const scan = record(audit.scan);
+  const leads = number(audit.leadsFound);
+  const bytesRead = number(scan?.bytesRead);
+  const totalBytes = number(scan?.totalBytes);
+  const attempted = audit.attempted === true;
+  const completed = audit.completed === true;
+  const label = (value: unknown): string => (value === true ? t.yes : value === false ? t.no : t.unknown);
+  const byteCoverage =
+    bytesRead !== null && totalBytes !== null ? `${bytesRead.toLocaleString()} / ${totalBytes.toLocaleString()}` : '—';
+  const bounded =
+    completed && bytesRead !== null && totalBytes !== null && (scan?.complete !== true || bytesRead < totalBytes);
+
+  return (
+    <DetailSection title={t.loaderKeyAudit}>
+      <Metrics
+        items={[
+          { label: t.attempted, value: label(audit.attempted) },
+          { label: t.completed, value: label(audit.completed) },
+          { label: t.leads, value: formatNumber(audit.leadsFound) },
+          { label: t.bytesExamined, value: byteCoverage },
+        ]}
+      />
+      <p className="deep-data-empty">
+        {!attempted || !completed
+          ? t.loaderAuditIncomplete
+          : leads !== null && leads > 0
+            ? t.loaderAuditLead(leads)
+            : leads === 0
+              ? t.loaderAuditEmpty
+              : t.notRecorded}
+      </p>
+      {bounded && (
+        <p className="deep-data-empty">{t.loaderAuditBound(bytesRead.toLocaleString(), totalBytes.toLocaleString())}</p>
+      )}
+    </DetailSection>
+  );
+}
+
 function UbootDetails({ result }: { result: RecordValue }): JSX.Element {
   const t = useMessages().shell.deep.details;
   const vars = record(result.vars) ?? {};
@@ -138,6 +187,7 @@ function UbootDetails({ result }: { result: RecordValue }): JSX.Element {
           <p className="deep-data-empty">{t.noItems}</p>
         )}
       </DetailSection>
+      <LoaderKeyAuditDetails result={result} />
       {script && (
         <DetailSection title={t.bootScript}>
           <Metrics items={[{ label: t.roots, value: strings(script.roots).join(' · ') || t.noItems }]} />

@@ -18,6 +18,7 @@ import { type CoverageReport, buildCoverage } from '../providers/coverage.js';
 import { FWHUNT_WORKER, fwhuntCoverageStep } from '../providers/fwhunt-outcome.js';
 import { latestFwHuntResult } from '../providers/fwhunt.js';
 import { startJob } from '../providers/jobs.js';
+import { UBOOT_WORKER, latestUbootCoverageStep } from '../providers/uboot-outcome.js';
 import { type ImageRow, getImage, listFindings, listImages, listJobs } from '../store.js';
 
 export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
@@ -125,6 +126,14 @@ function coverageFor(row: ImageRow, locale: Locale = 'en'): CoverageReport {
     const stored = steps ?? [];
     const index = stored.findIndex((step) => step.worker === FWHUNT_WORKER);
     steps = index >= 0 ? stored.map((step, i) => (i === index ? fresh : step)) : [...stored, fresh];
+  }
+  // A dedicated U-Boot run can be newer than the last autonomous scan. Only a result that carries the optional
+  // audit replaces the W9 cell: a legacy result without it means "not recorded", never "ran empty".
+  const latestUboot = latestUbootCoverageStep(jobs);
+  if (latestUboot) {
+    const stored = steps ?? [];
+    const index = stored.findIndex((step) => step.worker === UBOOT_WORKER);
+    steps = index >= 0 ? stored.map((step, i) => (i === index ? latestUboot : step)) : [...stored, latestUboot];
   }
 
   // Split before counting. `findingCount` is the stage arithmetic's input, so an assertion reaching it would make

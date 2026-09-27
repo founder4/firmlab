@@ -212,6 +212,19 @@ export const shell = {
       variables: 'Variables',
       value: 'Value',
       bootScript: 'Boot script reading',
+      loaderKeyAudit: 'Loader-derived key audit',
+      attempted: 'Attempted',
+      completed: 'Completed',
+      leads: 'Leads recorded',
+      bytesExamined: 'Bytes examined',
+      loaderAuditLegacy: 'This run did not record loader-derived key coverage.',
+      loaderAuditIncomplete: 'The audit did not complete, so no negative result is available.',
+      loaderAuditEmpty:
+        'No loader-derived key lead was found within the recorded audit. This bounded static result is not proof that the firmware has no derived key.',
+      loaderAuditLead: (n: number): string =>
+        `${n} loader-derived key lead${n === 1 ? '' : 's'} recorded. A lead requires runtime reproduction; it is not a confirmed device property.`,
+      loaderAuditBound: (read: string, total: string): string =>
+        `Only ${read} of ${total} bytes were examined; bytes beyond that bound remain unexamined.`,
       roots: 'Entry variables',
       variants: 'Assembled kernel command lines',
       via: 'via',

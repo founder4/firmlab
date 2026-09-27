@@ -1576,6 +1576,13 @@ export interface UbootResult {
   vars?: Record<string, string>;
   findings?: unknown[];
   reason?: string;
+  /** Optional forever: absent on stored results that predate the loader-derived key audit. */
+  loaderKeyAudit?: {
+    attempted?: boolean;
+    completed?: boolean;
+    leadsFound?: number;
+    scan?: { bytesRead?: number; totalBytes?: number; complete?: boolean };
+  };
 }
 
 /**

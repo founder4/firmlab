@@ -150,6 +150,96 @@ describe('DeepAnalysisDetails', () => {
     expect(screen.getByText('conditional branch')).toBeInTheDocument();
   });
 
+  it('keeps an absent legacy loader-key audit explicitly unrecorded', () => {
+    render(
+      <DeepAnalysisDetails imageId="img1" kind="uboot" value={{ found: false, varCount: 0, vars: {}, findings: [] }} />,
+    );
+
+    expect(screen.getByText('Loader-derived key audit')).toBeInTheDocument();
+    expect(screen.getByText('This run did not record loader-derived key coverage.')).toBeInTheDocument();
+  });
+
+  it('scopes a completed empty loader-key audit instead of presenting zero leads as clean', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="uboot"
+        value={{
+          found: false,
+          varCount: 0,
+          vars: {},
+          findings: [],
+          loaderKeyAudit: {
+            attempted: true,
+            completed: true,
+            leadsFound: 0,
+            scan: { bytesRead: 4096, totalBytes: 4096, complete: true },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('4,096 / 4,096')).toBeInTheDocument();
+    expect(screen.getByText(/No loader-derived key lead was found within the recorded audit/)).toBeInTheDocument();
+    expect(screen.getByText(/not proof that the firmware has no derived key/)).toBeInTheDocument();
+  });
+
+  it('names the bytes left unexamined by a bounded loader-key audit', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="uboot"
+        value={{
+          found: false,
+          varCount: 0,
+          vars: {},
+          findings: [],
+          loaderKeyAudit: {
+            attempted: true,
+            completed: true,
+            leadsFound: 0,
+            scan: { bytesRead: 4096, totalBytes: 8192, complete: false },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('4,096 / 8,192')).toBeInTheDocument();
+    expect(screen.getByText(/Only 4,096 of 8,192 bytes were examined/)).toBeInTheDocument();
+    expect(screen.getByText(/remain unexamined/)).toBeInTheDocument();
+  });
+
+  it('renders a loader-key lead as a reproduction lead rather than a confirmed property', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="uboot"
+        value={{
+          found: false,
+          varCount: 0,
+          vars: {},
+          findings: [
+            {
+              kind: 'bootloader-derived-flash-key',
+              title: 'Loader recipe may derive a flash key',
+              proofState: 'needs_runtime_reproduction',
+            },
+          ],
+          loaderKeyAudit: {
+            attempted: true,
+            completed: true,
+            leadsFound: 1,
+            scan: { bytesRead: 4096, totalBytes: 4096, complete: true },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/1 loader-derived key lead recorded/)).toBeInTheDocument();
+    expect(screen.getByText(/requires runtime reproduction/)).toBeInTheDocument();
+    expect(screen.getByText('needs_runtime_reproduction')).toBeInTheDocument();
+  });
+
   it('counts a verify command as a signature check and leaves an unrecorded rollback state unknown', () => {
     render(
       <DeepAnalysisDetails

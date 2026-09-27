@@ -174,6 +174,19 @@ export const shell: Messages['shell'] = {
       variables: 'Variables encontradas',
       value: 'Valor',
       bootScript: 'Lectura del script de arranque',
+      loaderKeyAudit: 'Auditoría de clave derivada del loader',
+      attempted: 'Intentada',
+      completed: 'Completada',
+      leads: 'Indicios registrados',
+      bytesExamined: 'Bytes examinados',
+      loaderAuditLegacy: 'Esta ejecución no registró la cobertura de claves derivadas del loader.',
+      loaderAuditIncomplete: 'La auditoría no terminó, así que no hay un resultado negativo disponible.',
+      loaderAuditEmpty:
+        'No se encontró ningún indicio de clave derivada del loader dentro de la auditoría registrada. Este resultado estático acotado no demuestra que el firmware carezca de una clave derivada.',
+      loaderAuditLead: (n: number): string =>
+        `Se registr${n === 1 ? 'ó' : 'aron'} ${n} indicio${n === 1 ? '' : 's'} de clave derivada del loader. Un indicio requiere reproducción en ejecución; no es una propiedad confirmada del dispositivo.`,
+      loaderAuditBound: (read: string, total: string): string =>
+        `Sólo se examinaron ${read} de ${total} bytes; los bytes posteriores a ese límite siguen sin examinar.`,
       roots: 'Variables de entrada',
       variants: 'Líneas de órdenes del kernel construidas',
       via: 'mediante',
