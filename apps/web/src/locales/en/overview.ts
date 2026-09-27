@@ -41,15 +41,18 @@ export const overview = {
     empty: 'No images yet.',
   },
 
-  jump: {
-    title: 'Jump to',
-    analysis: 'Local analysis',
-    analysisDesc: 'Upload & read firmware as signal',
-    agents: 'Agents',
-    agentsDesc: 'Launch & monitor autonomous runs',
-    capture: 'Proxy / Updates',
-    captureDesc: 'Intercept & analyze OTA updates',
-    corpus: 'Cross-image corpus',
-    corpusDesc: 'Priors & reuse across every image on this bench',
+  next: {
+    title: 'Next steps',
+    none: 'Nothing is waiting. Upload another image to compare against this one.',
+    upload: 'Upload a firmware image',
+    uploadDesc: 'Nothing is on this bench yet. Analysis starts from an image.',
+    unscanned: (n: number) => (n === 1 ? '1 image has not been scanned' : `${n} images have not been scanned`),
+    unscannedDesc: 'Their findings, if any, come from stages run by hand. Run the autonomous scan to cover the rest.',
+    partial: (n: number) => (n === 1 ? '1 image was scanned partially' : `${n} images were scanned partially`),
+    partialDesc: 'Some applicable stages did not run, so an empty result there is not a clean one.',
+    tools: (n: number) => (n === 1 ? '1 tool is missing' : `${n} tools are missing`),
+    toolsDesc: 'The stages that need it will be blocked, not negative. See what this deployment can run.',
+    corpus: 'Compare across images',
+    corpusDesc: 'Every image has been scanned. Look for reused credentials and shared components.',
   },
 };

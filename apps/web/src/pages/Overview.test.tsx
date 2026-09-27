@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
 import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
-import { Overview } from './Overview';
+import { Overview, nextSteps } from './Overview';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
@@ -128,5 +128,31 @@ describe('Overview localisation', () => {
     setLocale('es');
     renderOverview();
     expect(await screen.findByText('sólo local')).toBeInTheDocument();
+  });
+});
+
+describe('nextSteps — what the bench asks for, derived rather than listed', () => {
+  const cov = (executed: number, applicable = 10) => ({ executed, applicable });
+
+  it('asks for an image when there is none, and nothing else', () => {
+    expect(nextSteps({ images: 0, coverage: [], toolsMissing: 3 }).map((s) => s.id)).toEqual(['upload']);
+  });
+
+  it('puts unscanned before partial before missing tools, with their counts', () => {
+    const steps = nextSteps({ images: 3, coverage: [cov(0), cov(0), cov(4)], toolsMissing: 1 });
+    expect(steps.map((s) => [s.id, s.count])).toEqual([
+      ['unscanned', 2],
+      ['partial', 1],
+      ['tools', 1],
+    ]);
+  });
+
+  it('offers the corpus comparison only once every image is fully scanned', () => {
+    expect(nextSteps({ images: 2, coverage: [cov(10), cov(3)], toolsMissing: 0 }).map((s) => s.id)).toEqual([
+      'partial',
+    ]);
+    expect(nextSteps({ images: 2, coverage: [cov(10), cov(10)], toolsMissing: 0 }).map((s) => s.id)).toEqual([
+      'corpus',
+    ]);
   });
 });

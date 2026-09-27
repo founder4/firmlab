@@ -41,15 +41,20 @@ export const overview: Messages['overview'] = {
     empty: 'Todavía no hay imágenes.',
   },
 
-  jump: {
-    title: 'Ir a',
-    analysis: 'Análisis local',
-    analysisDesc: 'Sube firmware y léelo como señal',
-    agents: 'Agentes',
-    agentsDesc: 'Lanza y vigila ejecuciones autónomas',
-    capture: 'Proxy / Actualizaciones',
-    captureDesc: 'Intercepta y analiza actualizaciones OTA',
-    corpus: 'Corpus entre imágenes',
-    corpusDesc: 'Recurrencias y reutilización entre todas las imágenes del banco',
+  next: {
+    title: 'Siguientes pasos',
+    none: 'No hay nada pendiente. Sube otra imagen para compararla con esta.',
+    upload: 'Sube una imagen de firmware',
+    uploadDesc: 'Todavía no hay nada en este banco. El análisis empieza por una imagen.',
+    unscanned: (n) => (n === 1 ? '1 imagen sin escanear' : `${n} imágenes sin escanear`),
+    unscannedDesc:
+      'Sus hallazgos, si los hay, salen de etapas lanzadas a mano. Lanza el escaneo autónomo para cubrir el resto.',
+    partial: (n) => (n === 1 ? '1 imagen escaneada a medias' : `${n} imágenes escaneadas a medias`),
+    partialDesc: 'Algunas etapas aplicables no se ejecutaron, así que un resultado vacío ahí no significa limpio.',
+    tools: (n) => (n === 1 ? 'Falta 1 herramienta' : `Faltan ${n} herramientas`),
+    toolsDesc:
+      'Las etapas que la necesitan quedarán bloqueadas, no negativas. Mira qué puede ejecutar este despliegue.',
+    corpus: 'Compara entre imágenes',
+    corpusDesc: 'Todas las imágenes están escaneadas. Busca credenciales reutilizadas y componentes compartidos.',
   },
 };

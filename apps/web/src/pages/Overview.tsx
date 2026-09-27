@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { type CoverageSummary, type ImageSummary, type ToolStatus, api, fmtBytes } from '../api';
-import { useLocale, useMessages } from '../i18n';
+import { type Messages, useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 
 /**
@@ -55,6 +55,11 @@ export function Overview(): JSX.Element {
   const analyzing = images.filter((i) => i.status === 'analyzing').length;
   const errored = images.filter((i) => i.status === 'error').length;
   const toolsUp = tools.filter((tool) => tool.available).length;
+  const steps = nextSteps({
+    images: images.length,
+    coverage: [...coverage.values()],
+    toolsMissing: tools.length - toolsUp,
+  });
   const posture = health?.exposedToNetwork
     ? health.trustedProxy
       ? t.overview.stats.postureProxied
@@ -207,32 +212,15 @@ export function Overview(): JSX.Element {
               </div>
 
               <div className="panel">
-                <div className="panel-title">{t.overview.jump.title}</div>
+                <div className="panel-title">{t.overview.next.title}</div>
                 <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
-                  <EntryLink
-                    to="/analyze"
-                    icon="overview"
-                    title={t.overview.jump.analysis}
-                    desc={t.overview.jump.analysisDesc}
-                  />
-                  <EntryLink
-                    to="/agents"
-                    icon="agent"
-                    title={t.overview.jump.agents}
-                    desc={t.overview.jump.agentsDesc}
-                  />
-                  <EntryLink
-                    to="/updates"
-                    icon="capture"
-                    title={t.overview.jump.capture}
-                    desc={t.overview.jump.captureDesc}
-                  />
-                  <EntryLink
-                    to="/corpus"
-                    icon="corpus"
-                    title={t.overview.jump.corpus}
-                    desc={t.overview.jump.corpusDesc}
-                  />
+                  {steps.length === 0 ? (
+                    <div className="hint">{t.overview.next.none}</div>
+                  ) : (
+                    steps.map((step) => (
+                      <EntryLink key={step.id} to={step.to} icon={step.icon} {...nextStepCopy(t, step)} />
+                    ))
+                  )}
                 </div>
               </div>
             </div>
@@ -262,7 +250,7 @@ function EntryLink({
   icon,
   title,
   desc,
-}: { to: string; icon: 'overview' | 'agent' | 'capture' | 'corpus'; title: string; desc: string }): JSX.Element {
+}: { to: string; icon: NextStep['icon']; title: string; desc: string }): JSX.Element {
   const Glyph = Icon[icon];
   return (
     <Link to={to} className="nav-item" style={{ border: '1px solid var(--border)', padding: '10px 12px', gap: 12 }}>
@@ -277,4 +265,51 @@ function EntryLink({
       </span>
     </Link>
   );
+}
+
+export interface NextStep {
+  id: 'upload' | 'unscanned' | 'partial' | 'tools' | 'corpus';
+  to: string;
+  icon: 'overview' | 'agent' | 'capabilities' | 'corpus';
+  count: number;
+}
+
+/**
+ * Pure: what the bench is asking for right now, most blocking first. Each step is derived from data this page
+ * already loaded, and appears only when it applies — a static list of destinations here only repeated the sidebar.
+ * "Compare across images" is offered only once every image is fully scanned, because a corpus comparison over
+ * unexamined images reads their silence as agreement.
+ */
+export function nextSteps(input: {
+  images: number;
+  coverage: readonly Pick<CoverageSummary, 'executed' | 'applicable'>[];
+  toolsMissing: number;
+}): NextStep[] {
+  if (input.images === 0) return [{ id: 'upload', to: '/analyze', icon: 'overview', count: 0 }];
+  const steps: NextStep[] = [];
+  const unscanned = input.coverage.filter((c) => c.executed === 0).length;
+  const partial = input.coverage.filter((c) => c.executed > 0 && c.executed < c.applicable).length;
+  if (unscanned > 0) steps.push({ id: 'unscanned', to: '/agents', icon: 'agent', count: unscanned });
+  if (partial > 0) steps.push({ id: 'partial', to: '/analyze', icon: 'overview', count: partial });
+  if (input.toolsMissing > 0)
+    steps.push({ id: 'tools', to: '/capabilities', icon: 'capabilities', count: input.toolsMissing });
+  if (unscanned === 0 && partial === 0 && input.images > 1)
+    steps.push({ id: 'corpus', to: '/corpus', icon: 'corpus', count: input.images });
+  return steps;
+}
+
+function nextStepCopy(t: Messages, step: NextStep): { title: string; desc: string } {
+  const n = t.overview.next;
+  switch (step.id) {
+    case 'upload':
+      return { title: n.upload, desc: n.uploadDesc };
+    case 'unscanned':
+      return { title: n.unscanned(step.count), desc: n.unscannedDesc };
+    case 'partial':
+      return { title: n.partial(step.count), desc: n.partialDesc };
+    case 'tools':
+      return { title: n.tools(step.count), desc: n.toolsDesc };
+    case 'corpus':
+      return { title: n.corpus, desc: n.corpusDesc };
+  }
 }

@@ -60,6 +60,7 @@ import { SymReachPanel } from '../components/SymReachPanel';
 import { TestBench } from '../components/TestBench';
 import { UpdatePathPanel } from '../components/UpdatePathPanel';
 import { type Messages, messages, useLocale, useMessages } from '../i18n';
+import { Icon } from '../icons';
 import { type ImageSectionId, SECTION_IDS } from '../image-sections';
 import { Markdown } from '../markdown';
 import { toast } from '../toast';
@@ -181,7 +182,7 @@ export function ImageDetail(): JSX.Element {
         {/* `download` carries no value on purpose: the server's content-disposition names the file with the locale
             suffix, so the two languages of one report do not overwrite each other. Hardcoding a name breaks that. */}
         <a className="btn btn-sm" href={`/api/images/${id}/report?lang=${locale}`} download>
-          <span aria-hidden="true">⭳</span> {t.imageDetail.header.report}
+          <Icon.download size={13} /> {t.imageDetail.header.report}
         </a>
         <a
           className="btn btn-sm"
@@ -189,7 +190,7 @@ export function ImageDetail(): JSX.Element {
           download
           title={t.imageDetail.header.disclosureTitle}
         >
-          <span aria-hidden="true">⭳</span> {t.imageDetail.header.disclosure}
+          <Icon.download size={13} /> {t.imageDetail.header.disclosure}
         </a>
       </div>
 
