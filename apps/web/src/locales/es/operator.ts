@@ -32,6 +32,7 @@ export const operator: Messages['operator'] = {
 
   form: {
     whoPlaceholder: 'quién lo afirma',
+    missing: (fields: string[]) => `Rellena antes de registrar: ${fields.join(', ')}.`,
     whoLabel: 'Quién lo afirma',
     claimPlaceholder: 'la afirmación, en una línea',
     claimLabel: 'La afirmación',

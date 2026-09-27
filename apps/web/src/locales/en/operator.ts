@@ -32,6 +32,7 @@ export const operator = {
 
   form: {
     whoPlaceholder: 'who is asserting this',
+    missing: (fields: string[]) => `Fill in before recording: ${fields.join(', ')}.`,
     whoLabel: 'Who is asserting this',
     claimPlaceholder: 'the claim, in one line',
     claimLabel: 'The claim',

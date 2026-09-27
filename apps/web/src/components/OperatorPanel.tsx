@@ -508,8 +508,16 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
     [imageId, load],
   );
 
-  const canAdd =
-    assertedBy.trim() && title.trim() && rationale.trim() && (claim !== 'disputes_finding' || disputes.trim());
+  // Which required fields are empty, by their visible label. The button stays enabled: a disabled button said
+  // "not yet" without saying why, so a click now names the missing fields instead.
+  const missing = [
+    ...(assertedBy.trim() ? [] : [t.operator.form.whoLabel]),
+    ...(title.trim() ? [] : [t.operator.form.claimLabel]),
+    ...(claim === 'disputes_finding' && !disputes.trim() ? [t.operator.form.disputesLabel] : []),
+    ...(rationale.trim() ? [] : [t.operator.form.rationaleLabel]),
+  ];
+  const [tried, setTried] = useState(false);
+  const invalid = (label: string): true | undefined => (tried && missing.includes(label) ? true : undefined);
 
   return (
     <>
@@ -527,6 +535,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
             className="input"
             placeholder={t.operator.form.whoPlaceholder}
             aria-label={t.operator.form.whoLabel}
+            aria-invalid={invalid(t.operator.form.whoLabel)}
             value={assertedBy}
             onChange={(e) => setAssertedBy(e.target.value)}
             style={{ flex: '1 1 160px', minWidth: 0 }}
@@ -535,6 +544,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
             className="input"
             placeholder={t.operator.form.claimPlaceholder}
             aria-label={t.operator.form.claimLabel}
+            aria-invalid={invalid(t.operator.form.claimLabel)}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             style={{ flex: '2 1 280px', minWidth: 0 }}
@@ -574,6 +584,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
             className="input mono"
             placeholder={t.operator.form.disputesPlaceholder}
             aria-label={t.operator.form.disputesLabel}
+            aria-invalid={invalid(t.operator.form.disputesLabel)}
             value={disputes}
             onChange={(e) => setDisputes(e.target.value)}
             style={{ marginTop: 8 }}
@@ -584,17 +595,31 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
           className="input"
           placeholder={t.operator.form.rationalePlaceholder}
           aria-label={t.operator.form.rationaleLabel}
+          aria-invalid={invalid(t.operator.form.rationaleLabel)}
           value={rationale}
           onChange={(e) => setRationale(e.target.value)}
           style={{ marginTop: 8, height: 72, padding: '8px 10px', resize: 'vertical' }}
         />
 
         <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
-          <button type="button" className="btn btn-primary" disabled={busy || !canAdd} onClick={add}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy}
+            onClick={() => {
+              setTried(true);
+              if (missing.length === 0) void add();
+            }}
+          >
             {busy ? t.operator.form.recording : t.operator.form.record}
           </button>
           {ledger ? <span className="hint">{t.operator.measuredCount(ledger.measuredFindingCount)}</span> : null}
         </div>
+        {tried && missing.length > 0 ? (
+          <div className="field-error" role="alert">
+            {t.operator.form.missing(missing)}
+          </div>
+        ) : null}
 
         {err ? (
           <div className="banner banner-warn" style={{ marginTop: 10 }}>

@@ -96,10 +96,15 @@ describe('OperatorPanel — the form cannot express a proof state', () => {
   });
 
   it('will not record without a stated basis', async () => {
+    mockApi.addAssertion.mockClear();
     mount();
     fireEvent.change(await screen.findByLabelText('Who is asserting this'), { target: { value: 'aaron' } });
     fireEvent.change(screen.getByLabelText('The claim'), { target: { value: 'something' } });
-    expect(screen.getByRole('button', { name: 'Record assertion' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Record assertion' }));
+    expect(mockApi.addAssertion).not.toHaveBeenCalled();
+    // The click names what is missing instead of a disabled button that says nothing.
+    expect(screen.getByRole('alert')).toHaveTextContent('Stated basis');
+    expect(screen.getByLabelText('Stated basis')).toHaveAttribute('aria-invalid', 'true');
   });
 
   it('surfaces the route’s refusal verbatim rather than a status code', async () => {
