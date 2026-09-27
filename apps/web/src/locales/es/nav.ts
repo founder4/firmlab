@@ -9,6 +9,7 @@ export const nav: Messages['nav'] = {
   corpus: 'Corpus entre imágenes',
   settings: 'Ajustes',
   capabilities: 'Capacidades',
+  skipToContent: 'Saltar al contenido',
   system: 'Sistema',
   firmware: 'Firmware',
   activeImage: 'Imagen activa',

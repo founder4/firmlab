@@ -105,6 +105,13 @@ describe('App shell', () => {
     expect(shell?.className).toContain('nav-open');
   });
 
+  it('offers a skip link to the main landmark before the navigation', async () => {
+    render(<App />);
+    await screen.findByText(/auth-gated/i);
+    expect(screen.getByRole('link', { name: 'Skip to content' })).toHaveAttribute('href', '#main-content');
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+  });
+
   describe('the analysis sections in the sidebar', () => {
     // Measured on the deployed build before this existed: nineteen sections, ZERO in the sidebar, eight in the
     // step timeline. The component-dependency graph and the SBOM/CVE graph had both been rendering correctly for

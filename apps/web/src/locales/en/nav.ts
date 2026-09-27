@@ -7,6 +7,7 @@ export const nav = {
   corpus: 'Cross-image corpus',
   settings: 'Settings',
   capabilities: 'Capabilities',
+  skipToContent: 'Skip to content',
   system: 'System',
   firmware: 'Firmware',
   activeImage: 'Active image',

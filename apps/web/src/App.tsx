@@ -474,6 +474,9 @@ function Shell(): JSX.Element {
         <Sidebar onNavigate={() => setNavOpen(false)} />
       </aside>
       <div className="main">
+        <a href="#main-content" className="skip-link">
+          {t.nav.skipToContent}
+        </a>
         <div className="topbar">
           <div className="topbar-left">
             <button
@@ -494,7 +497,7 @@ function Shell(): JSX.Element {
             <AppearanceControls />
           </div>
         </div>
-        <div className="content">
+        <main id="main-content" className="content" tabIndex={-1}>
           <Suspense
             fallback={
               <div className="empty" aria-busy="true">
@@ -518,7 +521,7 @@ function Shell(): JSX.Element {
               <Route path="/settings" element={<Settings />} />
             </Routes>
           </Suspense>
-        </div>
+        </main>
       </div>
     </div>
   );

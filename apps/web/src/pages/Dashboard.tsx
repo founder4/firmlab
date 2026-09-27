@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { type CoverageSummary, type ImageSummary, api, fmtBytes } from '../api';
 import { useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
@@ -100,14 +100,20 @@ function Confirm({
           {body}
         </p>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn-sm" onClick={onCancel}>
+          {/* A destructive dialog opens on Cancel, so a stray Enter cannot delete an image and its results. */}
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={onCancel}
+            ref={(el) => (danger ? el?.focus() : undefined)}
+          >
             {t.common.cancel}
           </button>
           <button
             type="button"
             className={`btn btn-sm ${danger ? 'btn-danger' : 'btn-primary'}`}
             onClick={onConfirm}
-            ref={(el) => el?.focus()}
+            ref={(el) => (danger ? undefined : el?.focus())}
           >
             {confirmLabel}
           </button>
@@ -499,7 +505,14 @@ export function Dashboard(): JSX.Element {
                         </td>
                         {/* Filename, class and arch are data the analysis produced — never translated. */}
                         <td className="firmware-primary">
-                          <div className="firmware-name mono">{img.filename}</div>
+                          {/* The row is clickable for the mouse; the link is what a keyboard or screen reader reaches. */}
+                          <Link
+                            to={`/image/${img.id}`}
+                            className="firmware-name mono row-anchor"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {img.filename}
+                          </Link>
                           <div className="firmware-meta">
                             <span className="badge">{img.identity?.firmwareClass ?? t.common.unknown}</span>
                             <span className="mono">{img.identity?.arch ?? '—'}</span>

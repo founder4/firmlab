@@ -41,7 +41,7 @@
   /* Text — near-white, a hair warm; all ≥4.5:1 on --bg-panel. */
   --text: #e9ebe4;
   --text-dim: #9aa09a;
-  --text-faint: #61666a;
+  --text-faint: #80858a; /* ≥4.5:1 on every dark surface, incl. --bg-elev */
 
   /* THE SIGNAL — electric lime. Does the work of the whole accent system. */
   --accent: #c9f23a;
@@ -127,7 +127,7 @@
 
   --text: #18202c;
   --text-dim: #546070;
-  --text-faint: #8b96a3;
+  --text-faint: #626d7b; /* ≥4.5:1 on --bg, --bg-inset and panels; still lighter than --text-dim */
 
   --accent: #1585ab;
   --accent-hover: #0f6d8f;
@@ -450,7 +450,7 @@ a:hover {
   display: block;
   padding: 4px 10px 4px 13px;
   margin-left: 8px;
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--border-soft);
   color: var(--text-dim);
   font-size: 0.78rem;
   line-height: 1.35;
@@ -736,7 +736,9 @@ a:hover {
 }
 .input:focus,
 .select:focus {
-  outline: none;
+  /* A real outline, not only the shadow: forced-colors mode drops box-shadow and would leave no focus at all. */
+  outline: 2px solid transparent;
+  outline-offset: 1px;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -3578,4 +3580,34 @@ span.run-dot.run-running {
   .recent-image {
     gap: 10px;
   }
+}
+
+/* Skip link: off-screen until a keyboard user tabs to it, then the first thing on the page. */
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: -48px;
+  z-index: 100;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--accent);
+}
+.skip-link:focus {
+  top: 12px;
+}
+/* The skip target takes focus programmatically; the landmark itself needs no ring. */
+main.content:focus {
+  outline: none;
+}
+/* A row's own link: reads as the row's title, not as a blue hyperlink, and underlines only on hover/focus. */
+.row-anchor {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+.row-anchor:hover,
+.row-anchor:focus-visible {
+  text-decoration: underline;
 }

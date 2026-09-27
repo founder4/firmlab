@@ -6,7 +6,7 @@
  * that showed `arm` as `brazo`, or translated a file the operator uploaded, would be inventing values the API never
  * returned. The same run asserts both, because either one alone passes with the other broken.
  */
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
@@ -97,6 +97,17 @@ describe('Dashboard localisation', () => {
     expect(await screen.findByText('router-v1.bin')).toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
     expect(screen.getByText('unexamined')).toBeInTheDocument();
+  });
+
+  it('opens the delete dialog on Cancel, so a stray Enter cannot delete an image', async () => {
+    renderDashboard();
+    fireEvent.click(await screen.findByLabelText('Delete router-v1.bin'));
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+  });
+
+  it('links each filename so the row is reachable without a pointer', async () => {
+    renderDashboard();
+    expect(await screen.findByRole('link', { name: 'router-v1.bin' })).toHaveAttribute('href', '/image/a');
   });
 
   it('translates the chrome but leaves the filename, the arch and the class id alone', async () => {

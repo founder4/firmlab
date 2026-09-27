@@ -406,9 +406,14 @@ export function Agents(): JSX.Element {
                         <span className="badge">
                           {r.type === 'scan' ? t.agents.runs.kindScan : t.agents.runs.kindAgent}
                         </span>
-                        <span className="mono" style={{ color: 'var(--text)' }}>
+                        <Link
+                          to={runPath(r)}
+                          className="mono row-anchor"
+                          style={{ color: 'var(--text)' }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {r.filename}
-                        </span>
+                        </Link>
                       </div>
                     </td>
                     <td>
