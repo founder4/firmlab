@@ -13,8 +13,14 @@
  * `needs_runtime_reproduction` leads whose behavior or data flow still needs confirmation.
  */
 import fs from 'node:fs';
-import { type FindingDraft, detectLoaderDerivedKeyInBytes, parseEnc1Container, windowEntropy } from '@firmlab/core';
-import { auditKernelCommandLine, truncate } from './boot-cmdline.js';
+import {
+  type FindingDraft,
+  auditKernelCommandLine,
+  detectLoaderDerivedKeyInBytes,
+  parseEnc1Container,
+  truncate,
+  windowEntropy,
+} from '@firmlab/core';
 
 /** The decoded U-Boot environment: the stored CRC, the `key=value` variables, and how many were parsed. */
 export interface ParsedEnv {

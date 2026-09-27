@@ -43,8 +43,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FindingDraft } from '@firmlab/core';
-import { auditKernelCommandLine, truncate } from './boot-cmdline.js';
+import { type FindingDraft, auditKernelCommandLine, truncate } from '@firmlab/core';
 import { detectFormat, parseFitConfigurations, parseFitImages, parseUbiVolumes } from './carve.js';
 import {
   type FdtNode,

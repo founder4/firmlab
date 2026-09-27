@@ -14,6 +14,7 @@ export * from './structure.js';
 export * from './strings.js';
 export * from './crypto-loader.js';
 export * from './binwalk.js';
+export * from './boot-cmdline.js';
 export * from './filesystem.js';
 export * from './mcu.js';
 export * from './rtos-tasks.js';

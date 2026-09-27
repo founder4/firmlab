@@ -400,8 +400,10 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   ejecutores, localización, filesystem y providers; los normalizadores específicos de proveedor también. La
   justificación histórica de carga en tests ya no es absoluta porque `store.ts` usa `createRequire` y los tests lo
   importan. P0 completado: `FindingDraft`, el contrato puro compartido por normalizadores, providers, rutas y
-  ledger, ya pertenece a `@firmlab/core`; la API sólo lo consume y conserva todos sus campos opcionales. Quedan
-  las migraciones de `boot-cmdline`, `extract-diagnose` y `component-cve`, con integración final de exports.)*
+  ledger, ya pertenece a `@firmlab/core`; la API sólo lo consume y conserva todos sus campos opcionales.
+  `boot-cmdline` también pertenece ya a core, con el parser, auditoría, tipos, cotas y pruebas en su superficie
+  pública y sólo bindings/imports en API. Quedan las migraciones de `extract-diagnose` y `component-cve`, con
+  integración final de exports.)*
 - [x] Cubrir con test los cuatro componentes web sin cobertura: `DeepAnalysisDetails.tsx` (569 líneas),
   `KernelPosture.tsx`, `BinVulnPanel.tsx`, `PresetsPanel.tsx`. *(Hecho en `4f8ab72`: 10 casos para
   `DeepAnalysisDetails` —tenía 4 de sus 10 proveedores—, 7 para `KernelPosture`, 8 para `BinVulnPanel` y 8 para

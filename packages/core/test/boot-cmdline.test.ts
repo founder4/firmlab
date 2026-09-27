@@ -8,7 +8,7 @@ import {
   diffCommandLines,
   expandCmdlineVariables,
   normalizeCommandLine,
-} from './boot-cmdline.js';
+} from '../src/boot-cmdline.js';
 
 /** The device-tree half, with exactly the provenance `devicetree.ts` hands the shared auditor. */
 function tree(value: string, origin = 'FIT /images/fdt-1'): CmdlineSource {

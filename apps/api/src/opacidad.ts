@@ -15,7 +15,13 @@
  * re-running opacidad re-syncs idempotently rather than duplicating.
  */
 import fs from 'node:fs';
-import type { Architecture, ImageIdentity } from '@firmlab/core';
+import {
+  type Architecture,
+  type CmdlineSource,
+  type ImageIdentity,
+  type UbootScriptCmdlines,
+  crossCheckBootCmdlines,
+} from '@firmlab/core';
 import { deviceFamilyKey, recordCredentialHashes, recordReachabilityPrior } from './corpus.js';
 import {
   credentialHashesFromFindings,
@@ -87,7 +93,6 @@ import { summarizeLibraryReach } from './opacidad-symreach.js';
 import { partitionByProvenance } from './operator-findings.js';
 import { runAuxSecrets } from './providers/auxsecrets.js';
 import { isElfFile, runBinVuln } from './providers/binvuln.js';
-import { type CmdlineSource, type UbootScriptCmdlines, crossCheckBootCmdlines } from './providers/boot-cmdline.js';
 import { runCertAnalysis } from './providers/certs.js';
 import { runChipsec } from './providers/chipsec.js';
 import { runComponentMap } from './providers/compmap.js';
