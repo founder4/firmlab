@@ -23,7 +23,7 @@
  * so a translation that lets `empty` read as "nothing is there" or `blocked` read as a clean result would undo the
  * surface. Target paths, sink names, addresses, architectures and the proof ceiling are identifiers and stay put.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type BinaryEntry, type EmulationMenu, type RunSummary, type SymReachResult, api } from '../api';
 import { UNMEASURED_HARDENING, hardeningCoverage, hardeningFlag, hardeningIsInformative } from '../hardening';
 import { type Messages, useMessages } from '../i18n';
@@ -108,6 +108,13 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState<{ target: string; text: string } | null>(null);
   const [detail, setDetail] = useState<{ run: RunSummary; result: unknown; log: string } | null>(null);
+  // The detail renders below every binary; without this a click on a run changed something off-screen.
+  const detailRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!detail) return;
+    detailRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    detailRef.current?.focus({ preventScroll: true });
+  }, [detail]);
   /** The job just launched from here, followed through the ledger so its state outlives this component. */
   const [active, setActive] = useState<{ jobId: string; target: string } | null>(null);
   /** Sink addresses harvested from finished reachability runs, so the probe can be offered pre-filled. */
@@ -446,7 +453,7 @@ export function TestBench({ imageId }: { imageId: string }): JSX.Element {
       })}
 
       {detail && (
-        <div className="panel">
+        <div className="panel" ref={detailRef} tabIndex={-1}>
           <div className="panel-head">
             <div>
               <div className="panel-title">
