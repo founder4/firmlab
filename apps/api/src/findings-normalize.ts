@@ -21,8 +21,14 @@
  * `publishedSeverity` and the reason goes into the rationale. No row is ever removed, and no count changes:
  * a stricter reading that showed up as fewer findings is the failure `CLAUDE.md` names for the two CVE lanes.
  */
-import type { EvidenceChannel, FindingDraft, FindingSeverity, ProofState, StringHit } from '@firmlab/core';
-import { curatedCveVerdict } from './providers/component-cve.js';
+import {
+  type EvidenceChannel,
+  type FindingDraft,
+  type FindingSeverity,
+  type ProofState,
+  type StringHit,
+  curatedCveVerdict,
+} from '@firmlab/core';
 import { type DeviceContext, deviceContextTriage, impactFromVector } from './providers/cve-device-triage.js';
 import type { DecompileResult } from './providers/decompile.js';
 import type { GitleaksFinding, GitleaksResult } from './providers/gitleaks.js';
