@@ -91,7 +91,8 @@ export const agents = {
       /** The governor's leash, consumed against its cap — a spend with no cap beside it states nothing. */
       leash: (used: number, max: number) => `${used} of ${max} LLM turns`,
       leashDetail: (usd: number, maxUsd: number, entries: number) =>
-        `$${usd.toFixed(4)} of $${maxUsd.toFixed(2)} spent · ${entries} transcript entries`,
+        // maxUsd 0 is the governor's "no cost cap", not a cap of zero.
+        `$${usd.toFixed(4)} ${maxUsd > 0 ? `of $${maxUsd.toFixed(2)} ` : '(no cost cap) '}spent · ${entries} transcript entries`,
     },
   },
 

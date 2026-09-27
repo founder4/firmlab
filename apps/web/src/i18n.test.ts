@@ -101,3 +101,12 @@ describe('catalogue integrity', () => {
     expect(es.proofState.meaning.blocked_by_security).toMatch(/NO es un resultado negativo/i);
   });
 });
+
+describe('agents leash detail', () => {
+  it('reads a zero cost cap as no cap, not as a cap of zero, in both languages', async () => {
+    const { catalogues } = await import('./locales');
+    expect(catalogues.en.agents.runs.agent.leashDetail(0.0123, 0, 3)).toContain('no cost cap');
+    expect(catalogues.es.agents.runs.agent.leashDetail(0.0123, 0, 3)).toContain('sin límite de coste');
+    expect(catalogues.en.agents.runs.agent.leashDetail(0.0123, 0.5, 3)).toContain('of $0.50');
+  });
+});

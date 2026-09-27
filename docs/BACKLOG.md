@@ -376,6 +376,10 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   de `chipsec`/`renode` y su estado, editar una nota (`PATCH …/notes/:noteId`) y leer el estado actual de
   aprobación del agente en Ajustes. Decidir cuáles son sólo para scripts/MCP antes de construir UI.
 
+- [ ] `FuzzPanel.test.tsx › refuses to run without a target binary` falló una vez con la suite web completa
+  (2026-09-28) y pasa 3/3 aislado: espera sobre algo que la carga retrasa. Anclarlo a un estado cargado, como ya se
+  hizo con los dos tests de `23e2917`.
+
 ## Deuda de política (decisiones a escribir, no bugs)
 
 - [x] Dos estándares de CVE conviven sin decisión escrita: grype (vía manifiesto syft) acepta CVE-2016-2148 para

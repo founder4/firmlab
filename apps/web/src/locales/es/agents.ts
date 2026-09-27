@@ -77,7 +77,7 @@ export const agents: Messages['agents'] = {
       stoppedAt: (node) => `se detuvo en ${node}`,
       leash: (used, max) => `${used} de ${max} turnos LLM`,
       leashDetail: (usd, maxUsd, entries) =>
-        `${usd.toFixed(4)} $ de ${maxUsd.toFixed(2)} $ gastados · ${entries === 1 ? '1 entrada' : `${entries} entradas`} de traza`,
+        `${usd.toFixed(4)} $ ${maxUsd > 0 ? `de ${maxUsd.toFixed(2)} $ ` : '(sin límite de coste) '}gastados · ${entries === 1 ? '1 entrada' : `${entries} entradas`} de traza`,
     },
   },
 
