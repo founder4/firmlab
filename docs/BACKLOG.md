@@ -289,8 +289,14 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   que `sha256` junto a un ENC1 válido fuera de un loader ya no fabrica un lead. Los candidatos seed/salt se ordenan
   primero por cercanía y luego por forma, conservando la constante próxima bajo el cap de 12. Minúsculas/base64
   siguen cerradas hasta disponer de corpus.)*
-- [ ] Llevar `loaderKeyAudit` a la cobertura/opacidad y a la web: el resultado ya persiste intento, finalización,
+- [x] Llevar `loaderKeyAudit` a la cobertura/opacidad y a la web: el resultado ya persiste intento, finalización,
   límites y leads, pero todavía no participa en esos resúmenes y por tanto el usuario no ve esa cobertura vacía.
+  *(Hecho: `providers/uboot-outcome.ts` es el único mapeo, compartido por el paso W9 y por la ruta de cobertura, que
+  sustituye la celda U-Boot por el job dedicado más reciente con el campo. La lectura es estricta —booleanos
+  exactos, contadores enteros no negativos, `bytesRead <= totalBytes` y `complete` sólo si son iguales—; cualquier
+  otra forma, incluido un «completada» sin cota de bytes, es `unknown`/degradada y nunca «corrió vacía». La web
+  aplica el mismo predicado. `listJobs` desempata `createdAt` por `rowid`, así que dos jobs en el mismo
+  milisegundo ya no eligen el «más reciente» por el orden en que SQLite devuelva las filas.)*
 - [ ] Evitar la segunda lectura/escaneo del prefijo de 4 MiB cuando el análisis U-Boot también encuentra entorno;
   medir primero y conservar separados el resultado de entorno y la evidencia de la auditoría del loader.
 - [x] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de

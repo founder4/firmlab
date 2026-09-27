@@ -620,9 +620,14 @@ export function getJob(id: string): JobRow | undefined {
   return getDb().prepare('SELECT * FROM jobs WHERE id = ?').get(id) as unknown as JobRow | undefined;
 }
 
+/**
+ * Newest first. `createdAt` is `Date.now()` and ties within a millisecond, so the rowid (insertion order — jobs is a
+ * rowid table and a reused rowid is still above every surviving row) breaks the tie; callers that `.find` the
+ * newest done job of a kind would otherwise get whichever row SQLite happened to return first.
+ */
 export function listJobs(imageId: string): JobRow[] {
   return getDb()
-    .prepare('SELECT * FROM jobs WHERE imageId = ? ORDER BY createdAt DESC')
+    .prepare('SELECT * FROM jobs WHERE imageId = ? ORDER BY createdAt DESC, rowid DESC')
     .all(imageId) as unknown as JobRow[];
 }
 

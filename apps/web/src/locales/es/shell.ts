@@ -180,6 +180,10 @@ export const shell: Messages['shell'] = {
       leads: 'Indicios registrados',
       bytesExamined: 'Bytes examinados',
       loaderAuditLegacy: 'Esta ejecución no registró la cobertura de claves derivadas del loader.',
+      loaderAuditUnknown:
+        'La auditoría de clave derivada del loader almacenada está malformada o es incoherente: se desconoce si corrió y sobre qué bytes, así que no hay un resultado negativo disponible.',
+      loaderAuditNotAttempted:
+        'No se pudo leer la imagen, así que la auditoría no corrió; no hay un resultado negativo disponible.',
       loaderAuditIncomplete: 'La auditoría no terminó, así que no hay un resultado negativo disponible.',
       loaderAuditEmpty:
         'No se encontró ningún indicio de clave derivada del loader dentro de la auditoría registrada. Este resultado estático acotado no demuestra que el firmware carezca de una clave derivada.',

@@ -96,3 +96,18 @@ describe('deleteSupersededJobSnapshots', () => {
     expect(store.getJob('other-kind')?.resultJson).toBe('{"ok":true}');
   });
 });
+
+describe('listJobs', () => {
+  it('breaks a tied createdAt by insertion order, not by id or scan order', () => {
+    // Inserted second but sorting first by id: only rowid can put `uboot-z` (the later run) ahead of `uboot-a`.
+    store.insertJob(row('uboot-a', 'done', { kind: 'uboot', resultJson: '{"run":1}', createdAt: 900 }));
+    store.insertJob(row('uboot-z', 'done', { kind: 'uboot', resultJson: '{"run":2}', createdAt: 900 }));
+    store.insertJob(row('uboot-m', 'done', { kind: 'uboot', resultJson: '{"run":3}', createdAt: 900 }));
+
+    const ids = store
+      .listJobs('image-1')
+      .filter((job) => job.kind === 'uboot')
+      .map((job) => job.id);
+    expect(ids).toEqual(['uboot-m', 'uboot-z', 'uboot-a']);
+  });
+});

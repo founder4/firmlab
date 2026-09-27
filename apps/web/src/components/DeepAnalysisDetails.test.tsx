@@ -240,6 +240,64 @@ describe('DeepAnalysisDetails', () => {
     expect(screen.getByText('needs_runtime_reproduction')).toBeInTheDocument();
   });
 
+  it('reads the unreadable-image audit as not attempted, with no zero-lead or byte claim', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="uboot"
+        value={{ findings: [], loaderKeyAudit: { attempted: false, completed: false, leadsFound: 0 } }}
+      />,
+    );
+
+    expect(screen.getByText(/The image could not be read, so the audit did not run/)).toBeInTheDocument();
+    expect(screen.queryByText(/No loader-derived key lead was found/)).not.toBeInTheDocument();
+  });
+
+  it('keeps an incomplete audit from reading as a negative even with zero leads', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="uboot"
+        value={{ findings: [], loaderKeyAudit: { attempted: true, completed: false, leadsFound: 0 } }}
+      />,
+    );
+
+    expect(screen.getByText('The audit did not complete, so no negative result is available.')).toBeInTheDocument();
+    expect(screen.queryByText(/No loader-derived key lead was found/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      'truthy string flags',
+      { attempted: 'true', completed: 'true', leadsFound: 0, scan: { bytesRead: 8, totalBytes: 8, complete: true } },
+    ],
+    ['completed with no byte bound', { attempted: true, completed: true, leadsFound: 0 }],
+    [
+      'string byte counts',
+      { attempted: true, completed: true, leadsFound: 0, scan: { bytesRead: '8', totalBytes: 8, complete: true } },
+    ],
+    [
+      'bytesRead beyond totalBytes',
+      { attempted: true, completed: true, leadsFound: 0, scan: { bytesRead: 16, totalBytes: 8, complete: false } },
+    ],
+    [
+      'complete with bytes missing',
+      { attempted: true, completed: true, leadsFound: 0, scan: { bytesRead: 4, totalBytes: 8, complete: true } },
+    ],
+    [
+      'string complete',
+      { attempted: true, completed: true, leadsFound: 0, scan: { bytesRead: 8, totalBytes: 8, complete: 'yes' } },
+    ],
+    ['completed without attempting', { attempted: false, completed: true, leadsFound: 0 }],
+    ['null', null],
+  ])('renders %s as unknown coverage, never as an empty audit', (_label, audit) => {
+    render(<DeepAnalysisDetails imageId="img1" kind="uboot" value={{ findings: [], loaderKeyAudit: audit }} />);
+
+    expect(screen.getByText(/malformed or inconsistent/)).toBeInTheDocument();
+    expect(screen.queryByText(/No loader-derived key lead was found/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Bytes examined')).not.toBeInTheDocument();
+  });
+
   it('counts a verify command as a signature check and leaves an unrecorded rollback state unknown', () => {
     render(
       <DeepAnalysisDetails

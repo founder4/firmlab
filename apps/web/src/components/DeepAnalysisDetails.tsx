@@ -100,50 +100,84 @@ function Findings({ result }: { result: RecordValue }): JSX.Element | null {
   );
 }
 
+type LoaderAudit =
+  | { kind: 'absent' }
+  | { kind: 'unknown' }
+  | { kind: 'not-attempted' }
+  | { kind: 'incomplete'; leads: number }
+  | { kind: 'completed'; leads: number; bytesRead: number; totalBytes: number; complete: boolean };
+
+function count(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** Mirrors `readLoaderKeyAudit` in the API: the stored JSON may come from any build, so only exact booleans and a
+ * consistent byte bound are believed. Anything else is `unknown` — never ran, never empty. */
+function readLoaderAudit(value: unknown): LoaderAudit {
+  if (value === undefined) return { kind: 'absent' };
+  const audit = record(value);
+  const leads = count(audit?.leadsFound);
+  if (!audit || typeof audit.attempted !== 'boolean' || typeof audit.completed !== 'boolean' || leads === null) {
+    return { kind: 'unknown' };
+  }
+  if (!audit.attempted) return !audit.completed && leads === 0 ? { kind: 'not-attempted' } : { kind: 'unknown' };
+  if (!audit.completed) return { kind: 'incomplete', leads };
+  const scan = record(audit.scan);
+  const bytesRead = count(scan?.bytesRead);
+  const totalBytes = count(scan?.totalBytes);
+  if (bytesRead === null || totalBytes === null || bytesRead > totalBytes) return { kind: 'unknown' };
+  if (typeof scan?.complete !== 'boolean' || scan.complete !== (bytesRead === totalBytes)) return { kind: 'unknown' };
+  return { kind: 'completed', leads, bytesRead, totalBytes, complete: scan.complete };
+}
+
 function LoaderKeyAuditDetails({ result }: { result: RecordValue }): JSX.Element {
   const t = useMessages().shell.deep.details;
-  const audit = record(result.loaderKeyAudit);
-  if (!audit) {
+  const audit = readLoaderAudit(result.loaderKeyAudit);
+  if (audit.kind === 'absent') {
     return (
       <DetailSection title={t.loaderKeyAudit}>
         <p className="deep-data-empty">{t.loaderAuditLegacy}</p>
       </DetailSection>
     );
   }
+  if (audit.kind === 'unknown') {
+    return (
+      <DetailSection title={t.loaderKeyAudit}>
+        <p className="deep-data-empty">{t.loaderAuditUnknown}</p>
+      </DetailSection>
+    );
+  }
 
-  const scan = record(audit.scan);
-  const leads = number(audit.leadsFound);
-  const bytesRead = number(scan?.bytesRead);
-  const totalBytes = number(scan?.totalBytes);
-  const attempted = audit.attempted === true;
-  const completed = audit.completed === true;
-  const label = (value: unknown): string => (value === true ? t.yes : value === false ? t.no : t.unknown);
-  const byteCoverage =
-    bytesRead !== null && totalBytes !== null ? `${bytesRead.toLocaleString()} / ${totalBytes.toLocaleString()}` : '—';
-  const bounded =
-    completed && bytesRead !== null && totalBytes !== null && (scan?.complete !== true || bytesRead < totalBytes);
-
+  const completed = audit.kind === 'completed' ? audit : null;
+  const yesNo = (value: boolean): string => (value ? t.yes : t.no);
   return (
     <DetailSection title={t.loaderKeyAudit}>
       <Metrics
         items={[
-          { label: t.attempted, value: label(audit.attempted) },
-          { label: t.completed, value: label(audit.completed) },
-          { label: t.leads, value: formatNumber(audit.leadsFound) },
-          { label: t.bytesExamined, value: byteCoverage },
+          { label: t.attempted, value: yesNo(audit.kind !== 'not-attempted') },
+          { label: t.completed, value: yesNo(completed !== null) },
+          { label: t.leads, value: audit.kind === 'not-attempted' ? '—' : audit.leads.toLocaleString() },
+          {
+            label: t.bytesExamined,
+            value: completed
+              ? `${completed.bytesRead.toLocaleString()} / ${completed.totalBytes.toLocaleString()}`
+              : '—',
+          },
         ]}
       />
       <p className="deep-data-empty">
-        {!attempted || !completed
-          ? t.loaderAuditIncomplete
-          : leads !== null && leads > 0
-            ? t.loaderAuditLead(leads)
-            : leads === 0
-              ? t.loaderAuditEmpty
-              : t.notRecorded}
+        {audit.kind === 'not-attempted'
+          ? t.loaderAuditNotAttempted
+          : !completed
+            ? t.loaderAuditIncomplete
+            : completed.leads > 0
+              ? t.loaderAuditLead(completed.leads)
+              : t.loaderAuditEmpty}
       </p>
-      {bounded && (
-        <p className="deep-data-empty">{t.loaderAuditBound(bytesRead.toLocaleString(), totalBytes.toLocaleString())}</p>
+      {completed && !completed.complete && (
+        <p className="deep-data-empty">
+          {t.loaderAuditBound(completed.bytesRead.toLocaleString(), completed.totalBytes.toLocaleString())}
+        </p>
       )}
     </DetailSection>
   );
