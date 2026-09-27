@@ -143,6 +143,13 @@ check_port_squatter() {
   fi
   [ -n "$listeners" ] || return 0
 
+  # A host-networked container (the capture lane) listens on host:$port ITSELF, so the listener is this
+  # deployment, not a squatter. A real zombie still cannot hide: the container would fail to bind and the health
+  # check below would not see the new build.
+  if [ "$(docker inspect "$CONTAINER" --format '{{.HostConfig.NetworkMode}}' 2>/dev/null || true)" = host ]; then
+    return 0
+  fi
+
   local foreign
   foreign="$(printf '%s\n' "$listeners" | grep -viE 'docker-proxy|com\.docker|vpnkit' || true)"
   if [ -n "$foreign" ]; then

@@ -56,9 +56,16 @@ case "${1:-up}" in
     if docker inspect "$NAME" >/dev/null 2>&1; then
       remove_owned_sidecar
     fi
-    docker run -d --rm --name "$NAME" --label "$OWNER_LABEL=1" --network "$net" \
-      -p "127.0.0.1:$PORT:8799" \
-      alpine/socat "TCP-LISTEN:8799,fork,reuseaddr" "TCP:$TARGET:8799" >/dev/null
+    if [ "$net" = host ]; then
+      # Host-networked (the capture lane needs the LAN): the API already listens on the host's loopback, so the
+      # sidecar only forwards loopback:$PORT to it — nothing is published and the bind stays 127.0.0.1.
+      docker run -d --rm --name "$NAME" --label "$OWNER_LABEL=1" --network host \
+        alpine/socat "TCP-LISTEN:$PORT,bind=127.0.0.1,fork,reuseaddr" "TCP:127.0.0.1:8799" >/dev/null
+    else
+      docker run -d --rm --name "$NAME" --label "$OWNER_LABEL=1" --network "$net" \
+        -p "127.0.0.1:$PORT:8799" \
+        alpine/socat "TCP-LISTEN:8799,fork,reuseaddr" "TCP:$TARGET:8799" >/dev/null
+    fi
     sleep 2
     curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null && echo "==> http://127.0.0.1:$PORT (contenedor $TARGET)"
     ;;
