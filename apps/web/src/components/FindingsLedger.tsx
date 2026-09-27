@@ -901,9 +901,10 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
               </thead>
               <tbody>
                 {grouped.groups.map((g) => {
+                  // An unfolded group is not always a singleton: two rows sharing a shape stay below the fold
+                  // threshold, and drawing only the lead silently dropped the second one.
                   if (!g.folded) {
-                    const f = g.lead;
-                    return (
+                    return g.members.map((f) => (
                       <LedgerRow
                         key={f.id}
                         f={f}
@@ -911,7 +912,7 @@ export function FindingsLedger({ findings }: { findings: readonly Finding[] }): 
                         open={openReasons.has(f.id)}
                         onToggleReason={toggleReason}
                       />
-                    );
+                    ));
                   }
                   const open = openGroups.has(g.key);
                   return (

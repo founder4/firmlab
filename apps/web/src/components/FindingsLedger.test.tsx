@@ -336,6 +336,20 @@ describe('FindingsLedger — analyst controls', () => {
  * both halves are asserted in Spanish, and so is the fact that the two identifiers the sentence is built around,
  * the assertion id and the proof-state CODE, came through untranslated.
  */
+describe('FindingsLedger — two rows sharing a shape', () => {
+  it('draws both when the pair is below the fold threshold, instead of only the lead', () => {
+    // Measured on tenda.bin: the same CVE against openssl 1.0.2p and 1.1.1d keyed to one shape, and the census said
+    // 8 while the table drew 6.
+    const rows = [
+      measured({ id: 'a', source: 'component-cve', title: 'CVE-2022-0778 — openssl 1.0.2p: BN_mod_sqrt loop' }),
+      measured({ id: 'b', source: 'component-cve', title: 'CVE-2022-0778 — openssl 1.1.1d: BN_mod_sqrt loop' }),
+    ];
+    render(<FindingsLedger findings={rows} />);
+    expect(screen.getByText('CVE-2022-0778 — openssl 1.0.2p: BN_mod_sqrt loop')).toBeInTheDocument();
+    expect(screen.getByText('CVE-2022-0778 — openssl 1.1.1d: BN_mod_sqrt loop')).toBeInTheDocument();
+  });
+});
+
 describe('FindingsLedger — the dispute annotation in Spanish', () => {
   it('records the contest AND that the state code decided still stands', () => {
     setLocale('es');
