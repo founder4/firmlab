@@ -48,6 +48,7 @@ import { OperatorPanel } from '../components/OperatorPanel';
 import { PresetsPanel } from '../components/PresetsPanel';
 import { RecoveredValuesPanel } from '../components/RecoveredValuesPanel';
 import { ReportBuilder } from '../components/ReportBuilder';
+import { RtosTaskSnapshotPanel } from '../components/RtosTaskSnapshotPanel';
 import { RunHistory } from '../components/RunHistory';
 import { SbomGraph } from '../components/SbomGraph';
 import { SignalCanvas } from '../components/SignalCanvas';
@@ -216,6 +217,8 @@ export function ImageDetail(): JSX.Element {
       {tab === 'bootloader' && (
         <>
           <AnalysisActionsPanel imageId={id} />
+          {/* Beside the RTOS provider it complements: that one reads the image, this one an operator RAM snapshot. */}
+          <RtosTaskSnapshotPanel imageId={id} firmwareClass={image.identity?.firmwareClass} />
           {/* The update-path provider is launched from the panel above and its result had nowhere to be read: the
               findings landed in the ledger, the updaters and the source chain that credited them did not. */}
           <UpdatePathPanel imageId={id} />

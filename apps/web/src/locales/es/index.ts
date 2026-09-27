@@ -28,6 +28,7 @@ import { overview } from './overview';
 import { panels } from './panels';
 import { proofState } from './proofState';
 import { report } from './report';
+import { rtosTasks } from './rtosTasks';
 import { sectionGroups } from './sectionGroups';
 import { sectionIndex, sections } from './sections';
 import { settings } from './settings';
@@ -74,4 +75,5 @@ export const es: Messages = {
   sectionGroups,
   egressSection,
   exportreach,
+  rtosTasks,
 };

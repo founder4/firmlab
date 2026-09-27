@@ -1306,6 +1306,45 @@ export type AnalysisKind =
   | 'devicetree';
 
 /**
+ * FreeRTOS RAM-snapshot walk (`POST/GET /images/:id/rtos/tasks`). The request mirrors the API contract exactly:
+ * layout is DECLARED, never defaulted. The result is persisted on a job row, so every field is optional forever.
+ */
+export interface RtosTaskSnapshotInput {
+  memory: { base: number; endian: 'little' | 'big'; pointerWidth: 4 | 8; bytesBase64: string };
+  symbols: { pxCurrentTCB?: number | null; readyLists?: { priority: number; address: number | null }[] };
+}
+
+export interface RtosTaskLane {
+  coverage?: 'complete' | 'cycle_capped' | 'truncated' | 'out_of_range' | 'missing_symbol';
+  attempted?: number;
+  completed?: number;
+  tasks?: { listItemAddress?: number; itemValue?: number; tcbAddress?: number }[];
+  evidence?: string[];
+  priority?: number | null;
+  listAddress?: number | null;
+  bytesAttempted?: number;
+  bytesCompleted?: number;
+}
+
+export interface RtosTaskSnapshotResult {
+  proofState?: ProofState;
+  coverage?: 'complete' | 'partial' | 'none';
+  summary?: string;
+  snapshot?: { base?: number; endian?: 'little' | 'big'; pointerWidth?: 4 | 8; bytesSupplied?: number };
+  limits?: { maxSnapshotBytes?: number; maxListItems?: number; maxReadyLists?: number };
+  currentTask?: {
+    coverage?: 'complete' | 'out_of_range' | 'truncated' | 'missing_symbol';
+    tcbAddress?: number | null;
+    evidence?: string[];
+    pxCurrentTcbAddress?: number | null;
+    bytesAttempted?: number;
+    bytesCompleted?: number;
+  };
+  readyLists?: RtosTaskLane[];
+  totals?: { nodesAttempted?: number; nodesCompleted?: number; bytesAttempted?: number; bytesCompleted?: number };
+}
+
+/**
  * Shapes of the three providers whose results this UI reads field by field rather than only counting findings.
  *
  * EVERY field is optional, without exception, and that is not defensive style — it is the rule this codebase paid
@@ -2026,6 +2065,29 @@ export const api = {
     get<{ result: { reason?: string; findings?: unknown[] } | null }>(`/api/images/${id}/${kind}`).then(
       (r) => r.result,
     ),
+  /**
+   * Walk an operator-supplied FreeRTOS RAM snapshot. A 400 resolves as `{ refused }` rather than throwing: the
+   * route names every bad field in `details`, and that list is the answer the form has to show.
+   */
+  runRtosTasks: async (
+    id: string,
+    input: RtosTaskSnapshotInput,
+  ): Promise<{ jobId: string } | { refused: { error: string; details: string[] } }> => {
+    const res = await fetch(`/api/images/${id}/rtos/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as { jobId?: string; error?: string; details?: unknown };
+    if (res.ok && typeof body.jobId === 'string') return { jobId: body.jobId };
+    if (res.status === 400) {
+      const details = Array.isArray(body.details) ? body.details.filter((d): d is string => typeof d === 'string') : [];
+      return { refused: { error: body.error ?? `${res.status} ${res.statusText}`, details } };
+    }
+    throw new Error(body.error ?? `${res.status} ${res.statusText}`);
+  },
+  rtosTasksResult: (id: string) =>
+    get<{ result: RtosTaskSnapshotResult | null }>(`/api/images/${id}/rtos/tasks`).then((r) => r.result),
   /**
    * The same GET, typed for the callers that read a provider's fields rather than only its finding count. Separate
    * from `analysisResult` so that one keeps its deliberately narrow shape — a caller that only counts findings

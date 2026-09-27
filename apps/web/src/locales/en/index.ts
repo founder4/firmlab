@@ -33,6 +33,7 @@ import { overview } from './overview';
 import { panels } from './panels';
 import { proofState } from './proofState';
 import { report } from './report';
+import { rtosTasks } from './rtosTasks';
 import { sectionGroups } from './sectionGroups';
 import { sectionIndex, sections } from './sections';
 import { settings } from './settings';
@@ -79,6 +80,7 @@ export const en = {
   sectionGroups,
   egressSection,
   exportreach,
+  rtosTasks,
 };
 
 export type Messages = typeof en;
