@@ -328,6 +328,7 @@ export function Sidebar({ onNavigate }: { onNavigate: () => void }): JSX.Element
 
       <div style={{ flex: 1, minHeight: 12 }} />
       <div className="nav-section">{t.nav.system}</div>
+      <NavRow to="/capabilities" icon="capabilities" label={t.nav.capabilities} onNavigate={onNavigate} />
       <NavRow to="/settings" icon="settings" label={t.nav.settings} onNavigate={onNavigate} />
       <PostureLine />
     </>

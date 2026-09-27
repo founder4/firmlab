@@ -142,6 +142,16 @@ describe('App shell', () => {
       expect(screen.queryByLabelText('Analysis sections for this firmware')).not.toBeInTheDocument();
     });
 
+    it('links the capabilities page, which the shell rebuild left reachable only by typing its URL', async () => {
+      render(
+        <MemoryRouter>
+          <Sidebar onNavigate={() => undefined} />
+        </MemoryRouter>,
+      );
+      await act(async () => undefined);
+      expect(screen.getByRole('link', { name: 'Capabilities' })).toHaveAttribute('href', '/capabilities');
+    });
+
     it('no longer points the reader at a control that reaches eight of nineteen', async () => {
       await withImage();
       expect(screen.queryByText(/timeline covers eight of the nineteen/i)).not.toBeInTheDocument();
