@@ -164,17 +164,20 @@ export interface PlanSpec {
  * stable, so API clients can render the routing without maintaining a second class list (or, worse, a second
  * copy of the routing). Every entry is still resolved through `specsForClass`; this list chooses rows, not gates.
  */
-export const CAPABILITY_PLAN_CLASSES: readonly FirmwareClass[] = [
-  'embedded-linux',
-  'openwrt-fit-ubi',
-  'uefi-bios',
-  'baremetal',
-  'rtos',
-  'esp-soc',
-  'bootloader',
-  'encrypted',
-  'unknown',
-];
+// A record keyed by the union, so a class added to core without a row here fails to compile instead of silently
+// dropping out of the matrix.
+const CAPABILITY_PLAN_ROWS: Record<FirmwareClass, true> = {
+  'embedded-linux': true,
+  'openwrt-fit-ubi': true,
+  'uefi-bios': true,
+  baremetal: true,
+  rtos: true,
+  'esp-soc': true,
+  bootloader: true,
+  encrypted: true,
+  unknown: true,
+};
+export const CAPABILITY_PLAN_CLASSES = Object.keys(CAPABILITY_PLAN_ROWS) as readonly FirmwareClass[];
 
 export interface PlannedCapability {
   worker: string;

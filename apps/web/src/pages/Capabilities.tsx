@@ -89,9 +89,10 @@ export function Capabilities(): JSX.Element {
             <div>{t.shell.capabilities.planLead}</div>
             <div style={{ marginTop: 6 }}>{t.shell.capabilities.planCaveat}</div>
             <div style={{ marginTop: 10 }}>
-              <span className="badge badge-ok">P+B</span> {t.shell.capabilities.planLegend.plannedBuilt}{' '}
+              <span className="badge badge-ok">{t.shell.capabilities.planGlyph.plannedBuilt}</span>{' '}
+              {t.shell.capabilities.planLegend.plannedBuilt}{' '}
               <span className="badge badge-warn" style={{ marginLeft: 10 }}>
-                P
+                {t.shell.capabilities.planGlyph.plannedNotBuilt}
               </span>{' '}
               {t.shell.capabilities.planLegend.plannedNotBuilt}{' '}
               <span className="badge" style={{ marginLeft: 10 }}>
@@ -135,7 +136,11 @@ export function Capabilities(): JSX.Element {
                           style={{ textAlign: 'center' }}
                         >
                           <span className={`badge ${stage?.built ? 'badge-ok' : stage ? 'badge-warn' : ''}`}>
-                            {stage?.built ? 'P+B' : stage ? 'P' : '—'}
+                            {stage?.built
+                              ? t.shell.capabilities.planGlyph.plannedBuilt
+                              : stage
+                                ? t.shell.capabilities.planGlyph.plannedNotBuilt
+                                : '—'}
                           </span>
                         </td>
                       );

@@ -105,7 +105,8 @@ export const shell = {
     planLead: 'This pre-run matrix comes from the same class route the autonomous scan uses.',
     planCaveat: [
       'Planned means the stage belongs to that route; built means its worker exists in this build. Neither means',
-      'the stage ran or its inputs and tools are available. Deployment availability is reported separately below.',
+      'the stage ran or its inputs and tools are available. These are the seed stages only: the scan can schedule',
+      'follow-up stages from leads it finds. Deployment availability is reported separately below.',
     ].join(' '),
     planCapability: 'Planned stage',
     planLegend: {
@@ -113,6 +114,7 @@ export const shell = {
       plannedNotBuilt: 'planned, worker not built',
       notPlanned: 'not planned for this class',
     },
+    planGlyph: { plannedBuilt: 'P+B', plannedNotBuilt: 'P' },
     classLabel: {
       'embedded-linux': 'Embedded Linux',
       'openwrt-fit-ubi': 'OpenWrt FIT/UBI',

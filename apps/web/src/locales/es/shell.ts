@@ -64,7 +64,8 @@ export const shell: Messages['shell'] = {
     planLead: 'Esta matriz previa a la ejecución sale de la misma ruta por clase que usa el análisis autónomo.',
     planCaveat: [
       'Planificada significa que la etapa pertenece a esa ruta; construida significa que su worker existe en esta',
-      'versión. Ninguna implica que se haya ejecutado ni que sus entradas y herramientas estén disponibles. La',
+      'versión. Ninguna implica que se haya ejecutado ni que sus entradas y herramientas estén disponibles. Son sólo',
+      'las etapas semilla: el análisis puede programar etapas de seguimiento a partir de los indicios que encuentre. La',
       'disponibilidad del despliegue se muestra aparte más abajo.',
     ].join(' '),
     planCapability: 'Etapa planificada',
@@ -73,6 +74,7 @@ export const shell: Messages['shell'] = {
       plannedNotBuilt: 'planificada, worker no construido',
       notPlanned: 'no planificada para esta clase',
     },
+    planGlyph: { plannedBuilt: 'P+C', plannedNotBuilt: 'P' },
     classLabel: {
       'embedded-linux': 'Linux embebido',
       'openwrt-fit-ubi': 'OpenWrt con FIT/UBI',
