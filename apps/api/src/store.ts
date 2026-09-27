@@ -44,6 +44,8 @@ export type JobKind =
   | 'fsaudit'
   | 'certs'
   | 'rtos'
+  // An operator-supplied FreeRTOS RAM snapshot walked by core's task-list parsers (providers/rtos-tasks.ts).
+  | 'rtos-tasks'
   | 'compmap'
   | 'component-cve'
   | 'services'

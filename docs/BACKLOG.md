@@ -76,8 +76,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   las pruebas de composición no autorizan a afirmar que el servicio quedó alcanzable en el dispositivo.
 - [ ] Ampliar RTOS más allá del boot. Ya existe un parser byte-only acotado para listas de tareas FreeRTOS cuando
   se suministran símbolos/layout (`pxCurrentTCB` y lista circular), con ciclo, truncado y punteros fuera de rango
-  explícitos. Faltan el cableado API, una fuente real de símbolos/memoria y fuzzing de periféricos/MMIO
-  (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
+  explícitos, y ya está cableado a la API: `POST /images/:id/rtos/tasks` acepta un snapshot de RAM que declara
+  base, endian y anchura de puntero (validado antes del parser; nada se infiere ni se toma por defecto) más las
+  direcciones de símbolos que aporta el operador, y persiste por carril cobertura, nodos y bytes
+  intentados/completados y los límites aplicados, como máximo `needs_runtime_reproduction` y sin sincronizar
+  findings. Faltan una fuente real de símbolos/memoria (ELF + volcado Renode/QEMU), las listas de tareas
+  retrasadas/suspendidas/bloqueadas, una vista web y fuzzing de periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode
+  sigue demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Siguen pendientes
   LogoFAIL, callouts SMM (`CommBuffer`) y una captura PRx/BIOS-lock que pruebe la postura en ejecución.
