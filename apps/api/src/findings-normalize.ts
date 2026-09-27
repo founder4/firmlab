@@ -102,15 +102,16 @@ export function normalizeSbom(result: SbomResult, device?: DeviceContext): Findi
   const captured = result.grypeKev?.state === 'annotated' ? result.grypeKev.captured : '';
   return result.vulnerabilities.map((v) => {
     const verdict = curatedCveVerdict(v.packageName, v.packageVersion, v.id);
-    const known = kev.get(v.id.toUpperCase());
+    const known = kev.get(v.id.toUpperCase()) ?? [];
     // KEV is metadata ON the row that carries the CVE, never a row of its own: the CVE is already a finding here,
     // and a second row for it would count one component twice. It moves neither the rung nor the severity — a
-    // catalogue entry says someone exploited this CVE somewhere, not that this image reaches it.
-    const kevNote = known
-      ? `grype's embedded KEV snapshot (captured ${captured}) lists ${known.cve} as exploited in the wild${
-          known.dateAdded ? ` (added ${known.dateAdded})` : ''
-        }: exploitation elsewhere, not reachability or exploitability on this image.`
-      : undefined;
+    // catalogue entry says someone exploited this CVE somewhere, not that this image reaches it. One GHSA/distro id
+    // can alias SEVERAL KEV CVEs, so every one of them is named, never the last one indexed.
+    const kevCves = known.map((k) => `${k.cve}${k.dateAdded ? ` (added ${k.dateAdded})` : ''}`).join(', ');
+    const kevNote =
+      known.length > 0
+        ? `grype's embedded KEV snapshot (captured ${captured}) lists ${kevCves} as exploited in the wild: exploitation elsewhere, not reachability or exploitability on this image.`
+        : undefined;
     const published = SBOM_SEVERITY[v.severity] ?? 'info';
     // The device context is an OPTIONAL second opinion, and it can only speak when it was supplied AND the row
     // carries a vector to read. Both absences are ordinary — a caller that has no rootfs, a result stored by a
@@ -134,14 +135,12 @@ export function normalizeSbom(result: SbomResult, device?: DeviceContext): Findi
         fixedIn: v.fixedIn,
         ...(v.cvssVector ? { cvssVector: v.cvssVector } : {}),
         ...(verdict ? { curatedVerdict: verdict.kind } : {}),
-        ...(known
+        ...(known.length > 0
           ? {
               knownExploited: {
                 source: 'grype-db',
                 captured,
-                cve: known.cve,
-                dateAdded: known.dateAdded,
-                knownRansomware: known.knownRansomware,
+                cves: known.map((k) => ({ cve: k.cve, dateAdded: k.dateAdded, knownRansomware: k.knownRansomware })),
               },
             }
           : {}),
@@ -165,13 +164,17 @@ export function normalizeSbom(result: SbomResult, device?: DeviceContext): Findi
  * a legacy result or a `no-kev-provider` database says nothing about any row, so no row claims anything either.
  * Keys are upper-cased; the annotation was computed over EVERY match before the listing cap, so a KEV CVE whose
  * rows fell past the cap is in the map and simply finds no row to sit on — the SBOM view names those.
+ *
+ * Each key holds a LIST: one `GHSA-…` or distro advisory can alias two KEV CVEs, and a single-valued map kept only
+ * whichever was indexed last, silently dropping the other from the row.
  */
-export function grypeKevByVulnerabilityId(result: Pick<SbomResult, 'grypeKev'>): Map<string, GrypeKevMatch> {
-  const out = new Map<string, GrypeKevMatch>();
+export function grypeKevByVulnerabilityId(result: Pick<SbomResult, 'grypeKev'>): Map<string, GrypeKevMatch[]> {
+  const out = new Map<string, GrypeKevMatch[]>();
   if (result.grypeKev?.state !== 'annotated') return out;
   for (const m of result.grypeKev.matches) {
-    out.set(m.cve.toUpperCase(), m);
-    for (const id of m.vulnerabilityIds) out.set(id.toUpperCase(), m);
+    for (const id of new Set([m.cve, ...m.vulnerabilityIds].map((x) => x.toUpperCase()))) {
+      out.set(id, [...(out.get(id) ?? []), m]);
+    }
   }
   return out;
 }

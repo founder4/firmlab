@@ -246,7 +246,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   existe —también sobre la fila `GHSA-…` cuyo `knownExploited.cve` la nombra— vía `grypeKevByVulnerabilityId`, sin
   filas nuevas ni cambio de proof state o severidad: KEV es explotación en otro lugar, no alcanzabilidad aquí. La
   vista SBOM muestra el insignia KEV por fila y los tres estados —no registrado, desconocido, cero medido sobre las
-  coincidencias de grype— y nombra los CVE KEV cuyas filas quedaron fuera del listado.)*
+  coincidencias de grype— y nombra los CVE KEV cuyas filas quedaron fuera del listado. Corregido en revisión: el
+  índice por id era de un solo valor, así que un `GHSA-…` que alias dos CVE KEV conservaba sólo el último indexado;
+  ahora cada id guarda la lista y `evidence.knownExploited.cves` los nombra todos, en una sola fila. La vista declara
+  también su propio corte de 300 filas por tabla (numerador = filas en pantalla, denominador = total real) aunque el
+  proveedor no haya recortado, y cada insignia KEV es un `<details>` nativo —teclado y táctil, nombre accesible con
+  CVE y fecha— en lugar de un `title` sólo al pasar el ratón.)*
 - [x] Distinguir en W9 un grype que falló al correr de un grype que no puede correr. `sbomRun` (`opacidad.ts`)
   mandaba los tres casos de `grypeAvailable:false` al mismo `remedy: 'install-tool'`, y el tercero —grype corrió y
   lanzó— es un `retry`: una campaña de cobertura no lo reintentaba y lo reportaba como despliegue a arreglar. El

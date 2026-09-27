@@ -783,20 +783,22 @@ const SEVERITY_BADGE: Record<Severity, string> = {
   Unknown: 'badge-info',
 };
 
-/** How many CVE rows the SBOM table renders — a third bound, below the provider's `VULN_CAP`. */
-const SBOM_CVE_ROWS = 300;
+/** How many rows each SBOM table renders — a third bound, below the provider's `VULN_CAP`/`PKG_CAP`. */
+const SBOM_TABLE_ROWS = 300;
 
 /**
  * grype's KEV snapshot, indexed by every id a row can carry: the CVE, and each GHSA/distro id whose
  * `knownExploited.cve` named it. Empty unless the result is `annotated` — a legacy result or a database without a
  * kev provider says nothing about any row. The API's `grypeKevByVulnerabilityId` is the same rule for the ledger.
+ * A list per id, because one advisory can alias two KEV CVEs and the row must name both.
  */
-function kevById(result: SbomResult): Map<string, GrypeKevMatch> {
-  const out = new Map<string, GrypeKevMatch>();
+function kevById(result: SbomResult): Map<string, GrypeKevMatch[]> {
+  const out = new Map<string, GrypeKevMatch[]>();
   if (result.grypeKev?.state !== 'annotated') return out;
   for (const m of result.grypeKev.matches) {
-    out.set(m.cve.toUpperCase(), m);
-    for (const id of m.vulnerabilityIds) out.set(id.toUpperCase(), m);
+    for (const id of new Set([m.cve, ...m.vulnerabilityIds].map((x) => x.toUpperCase()))) {
+      out.set(id, [...(out.get(id) ?? []), m]);
+    }
   }
   return out;
 }
@@ -813,7 +815,7 @@ function GrypeKevNote({ result }: { result: SbomResult }): JSX.Element {
   if (!kev) text = t.kevNotRecorded;
   else if (kev.state === 'no-kev-provider') text = t.kevNoProvider;
   else {
-    const shown = new Set(result.vulnerabilities.slice(0, SBOM_CVE_ROWS).map((v) => v.id.toUpperCase()));
+    const shown = new Set(result.vulnerabilities.slice(0, SBOM_TABLE_ROWS).map((v) => v.id.toUpperCase()));
     const unlisted = kev.matches
       .filter((m) => !m.vulnerabilityIds.some((id) => shown.has(id.toUpperCase())) && !shown.has(m.cve.toUpperCase()))
       .map((m) => m.cve);
@@ -861,7 +863,7 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
   }, [imageId]);
 
   if (!loaded) return <div className="empty">{t.common.loading}</div>;
-  const kev = result ? kevById(result) : new Map<string, GrypeKevMatch>();
+  const kev = result ? kevById(result) : new Map<string, GrypeKevMatch[]>();
 
   return (
     <div>
@@ -913,18 +915,19 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
           </div>
 
           {/* And where the listing is shorter than the total, say so and by what rule — the tables below are a
-              bounded view of a larger set, not the set. */}
-          {(result.packageTotal ?? 0) > result.packages.length ||
-          (result.vulnerabilityTotal ?? 0) > result.vulnerabilities.length ? (
-            <div className="hint" style={{ marginBottom: 14, maxWidth: '72ch' }}>
-              {t.imageDetail.sbom.listingBound(
-                result.packages.length,
-                result.packageTotal ?? result.packages.length,
-                result.vulnerabilities.length,
-                result.vulnerabilityTotal ?? result.vulnerabilities.length,
-              )}
-            </div>
-          ) : null}
+              bounded view of a larger set, not the set. Two cuts stack: the provider's cap on what it stored, and
+              this view's own `SBOM_TABLE_ROWS` on what it renders — the numerator is what is ON SCREEN. */}
+          {(() => {
+            const pkgShown = Math.min(result.packages.length, SBOM_TABLE_ROWS);
+            const pkgTotal = Math.max(result.packageTotal ?? 0, result.packages.length);
+            const vulnShown = Math.min(result.vulnerabilities.length, SBOM_TABLE_ROWS);
+            const vulnTotal = Math.max(result.vulnerabilityTotal ?? 0, result.vulnerabilities.length);
+            return pkgTotal > pkgShown || vulnTotal > vulnShown ? (
+              <div className="hint" data-testid="sbom-listing-bound" style={{ marginBottom: 14, maxWidth: '72ch' }}>
+                {t.imageDetail.sbom.listingBound(pkgShown, pkgTotal, vulnShown, vulnTotal)}
+              </div>
+            ) : null;
+          })()}
 
           {/* Absence of the matcher is not absence of CVEs — the banner has to say WHICH of the three happened:
               grype is not installed, grype is installed with no vulnerability database (the lane no longer
@@ -983,8 +986,8 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
                     </tr>
                   </thead>
                   <tbody>
-                    {result.vulnerabilities.slice(0, SBOM_CVE_ROWS).map((v, i) => {
-                      const known = kev.get(v.id.toUpperCase());
+                    {result.vulnerabilities.slice(0, SBOM_TABLE_ROWS).map((v, i) => {
+                      const known = kev.get(v.id.toUpperCase()) ?? [];
                       return (
                         <tr key={`${v.id}-${v.packageName}-${i}`}>
                           <td>
@@ -992,15 +995,20 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
                           </td>
                           <td className="mono">
                             {v.id}
-                            {known && (
-                              <span
-                                className="badge badge-crit"
-                                style={{ marginLeft: 6 }}
-                                title={t.imageDetail.sbom.kevBadgeTitle(known.cve, known.dateAdded)}
-                              >
-                                KEV
-                              </span>
-                            )}
+                            {/* One disclosure per KEV CVE the row carries: a native <details> is focusable, opens on
+                                Enter/Space or a tap, and its summary's name carries the CVE and date — a hover
+                                title reached neither the keyboard nor a touch screen. */}
+                            {known.map((k) => (
+                              <details key={k.cve} style={{ display: 'inline-block', marginLeft: 6 }}>
+                                <summary
+                                  className="badge badge-crit"
+                                  aria-label={t.imageDetail.sbom.kevBadgeTitle(k.cve, k.dateAdded)}
+                                >
+                                  KEV
+                                </summary>
+                                <span className="hint">{t.imageDetail.sbom.kevBadgeTitle(k.cve, k.dateAdded)}</span>
+                              </details>
+                            ))}
                           </td>
                           <td>{v.packageName}</td>
                           <td className="mono">{v.packageVersion}</td>
@@ -1027,7 +1035,7 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
                     </tr>
                   </thead>
                   <tbody>
-                    {result.packages.slice(0, 300).map((p, i) => (
+                    {result.packages.slice(0, SBOM_TABLE_ROWS).map((p, i) => (
                       <tr key={`${p.name}-${i}`}>
                         <td>{p.name}</td>
                         <td className="mono">{p.version}</td>

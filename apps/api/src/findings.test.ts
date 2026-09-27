@@ -99,14 +99,23 @@ describe('normalizeSbom', () => {
       },
     };
     const kevOf = (out: ReturnType<typeof normalizeSbom>) =>
-      out.map((d) => (d.evidence as { knownExploited?: { cve: string } }).knownExploited?.cve ?? null);
+      out.map(
+        (d) =>
+          (d.evidence as { knownExploited?: { cves: { cve: string }[] } }).knownExploited?.cves
+            .map((k) => k.cve)
+            .join(',') ?? null,
+      );
 
     it('annotates the CVE row and the GHSA row whose knownExploited.cve carries it, adding no row', () => {
       const out = normalizeSbom(kevResult);
       expect(out).toHaveLength(kevResult.vulnerabilities.length);
       expect(kevOf(out)).toEqual(['CVE-2021-44228', 'CVE-2021-44228', null]);
       expect(out[0]?.evidence).toMatchObject({
-        knownExploited: { source: 'grype-db', captured: '2026-09-26T00:33:03Z', knownRansomware: 'Known' },
+        knownExploited: {
+          source: 'grype-db',
+          captured: '2026-09-26T00:33:03Z',
+          cves: [{ cve: 'CVE-2021-44228', dateAdded: '2021-12-10', knownRansomware: 'Known' }],
+        },
       });
       expect(out[0]?.rationale).toMatch(/exploited in the wild.*not reachability/);
     });
@@ -138,6 +147,41 @@ describe('normalizeSbom', () => {
       const map = grypeKevByVulnerabilityId(kevResult);
       expect([...map.keys()].sort()).toEqual(['CVE-2020-9999', 'CVE-2021-44228', 'GHSA-JFH8-C2JP-5V3Q']);
       expect(grypeKevByVulnerabilityId({}).size).toBe(0);
+    });
+
+    it('keeps every KEV CVE when one advisory id aliases two, on one row', () => {
+      const ghsa = 'GHSA-7rjr-3q55-vv33';
+      const both: SbomResult = {
+        ...base,
+        vulnerabilities: [
+          { id: ghsa, severity: 'Critical', packageName: 'log4j-core', packageVersion: '2.15.0', fixedIn: null },
+        ],
+        vulnerabilityTotal: 1,
+        grypeKev: {
+          state: 'annotated',
+          captured: 'c',
+          matches: [
+            { cve: 'CVE-2021-44228', vulnerabilityIds: [ghsa], packages: ['log4j-core@2.15.0'], ...LOG4J },
+            {
+              cve: 'CVE-2021-45046',
+              vulnerabilityIds: [ghsa],
+              packages: ['log4j-core@2.15.0'],
+              dateAdded: '2023-05-01',
+              knownRansomware: 'Unknown',
+            },
+          ],
+        },
+      };
+      expect(
+        grypeKevByVulnerabilityId(both)
+          .get(ghsa.toUpperCase())
+          ?.map((m) => m.cve),
+      ).toEqual(['CVE-2021-44228', 'CVE-2021-45046']);
+      const out = normalizeSbom(both);
+      expect(out).toHaveLength(1);
+      expect(kevOf(out)).toEqual(['CVE-2021-44228,CVE-2021-45046']);
+      expect(out[0]?.rationale).toMatch(/CVE-2021-44228 \(added 2021-12-10\), CVE-2021-45046 \(added 2023-05-01\)/);
+      expect(out[0]?.proofState).toBe('needs_runtime_reproduction');
     });
   });
 

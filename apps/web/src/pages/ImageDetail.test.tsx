@@ -288,8 +288,108 @@ describe('ImageDetail SBOM — why no CVEs, and against what', () => {
       const badges = screen.getAllByText('KEV');
       expect(badges).toHaveLength(1);
       expect(badges[0]?.closest('td')?.textContent).toContain('GHSA-jfh8-c2jp-5v3q');
-      expect(badges[0]?.getAttribute('title')).toMatch(/CVE-2021-44228.*not proven reachable/);
+      expect(badges[0]?.getAttribute('aria-label')).toMatch(/CVE-2021-44228.*added 2021-12-10.*not proven reachable/);
       expect(screen.getAllByRole('row')).toHaveLength(2 + 2 + 2); // two table heads, two CVE rows, two packages
+    });
+
+    it('badges every KEV CVE one advisory aliases, on the one row, and names none as past the listing', async () => {
+      const ghsa = 'GHSA-7rjr-3q55-vv33';
+      mockApi.sbom.mockResolvedValue({
+        ...matched,
+        vulnerabilities: [vuln(ghsa, 'log4j-core')],
+        vulnerabilityTotal: 1,
+        counts: { ...base.counts, Critical: 1 },
+        grypeKev: {
+          state: 'annotated',
+          captured: '2026-09-26T00:33:03Z',
+          matches: [
+            { ...LOG4J, vulnerabilityIds: [ghsa] },
+            { ...LOG4J, cve: 'CVE-2021-45046', vulnerabilityIds: [ghsa], dateAdded: '2023-05-01' },
+          ],
+        },
+      });
+      renderSection('sbom');
+      expect((await screen.findByTestId('grype-kev')).textContent).not.toMatch(/past the listing bound/);
+      const badges = screen.getAllByText('KEV');
+      expect(badges.map((b) => b.getAttribute('aria-label')?.match(/CVE-\d+-\d+ .*added [\d-]+/)?.[0])).toEqual([
+        expect.stringMatching(/CVE-2021-44228.*2021-12-10/),
+        expect.stringMatching(/CVE-2021-45046.*2023-05-01/),
+      ]);
+      expect(screen.getAllByRole('row')).toHaveLength(2 + 1 + 2);
+    });
+
+    it('opens a KEV badge from the keyboard or a tap, not only on hover', async () => {
+      mockApi.sbom.mockResolvedValue({
+        ...matched,
+        vulnerabilities: [vuln('CVE-2021-44228', 'log4j-core')],
+        vulnerabilityTotal: 1,
+        counts: { ...base.counts, Critical: 1 },
+        grypeKev: { state: 'annotated', captured: '2026-09-26T00:33:03Z', matches: [LOG4J] },
+      });
+      renderSection('sbom');
+      const summary = await screen.findByLabelText(/CVE-2021-44228.*added 2021-12-10/);
+      expect(summary.tagName).toBe('SUMMARY'); // natively focusable, toggled by Enter/Space and by a tap
+      expect(summary.getAttribute('title')).toBeNull();
+      const details = summary.closest('details') as HTMLDetailsElement;
+      expect(details.open).toBe(false);
+      fireEvent.click(summary);
+      expect(details.open).toBe(true);
+      expect(details.textContent).toMatch(/CVE-2021-44228.*exploited in the wild, not proven reachable here/);
+    });
+  });
+
+  describe('listing bound', () => {
+    const many = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => `${prefix}-${i}`);
+
+    it("discloses the view's own 300-row cut when the provider stored every row", async () => {
+      const vulns = many(450, 'CVE-2020').map((id) => ({
+        id,
+        severity: 'Low' as const,
+        packageName: 'busybox',
+        packageVersion: '1.20',
+        fixedIn: null,
+      }));
+      const packages = many(320, 'pkg').map((name) => ({ name, version: '1', type: 'binary' }));
+      mockApi.sbom.mockResolvedValue({
+        ...base,
+        grypeAvailable: true,
+        packages,
+        packageCount: 320,
+        packageTotal: 320,
+        vulnerabilities: vulns,
+        vulnerabilityTotal: 450,
+      });
+      renderSection('sbom');
+      const bound = (await screen.findByTestId('sbom-listing-bound')).textContent;
+      expect(bound).toMatch(/Listing 300 of 320 packages/);
+      expect(bound).toMatch(/Listing 300 of 450 matches/);
+    });
+
+    it('takes the true total as the denominator when both cuts apply', async () => {
+      const vulns = many(500, 'CVE-2020').map((id) => ({
+        id,
+        severity: 'Low' as const,
+        packageName: 'busybox',
+        packageVersion: '1.20',
+        fixedIn: null,
+      }));
+      mockApi.sbom.mockResolvedValue({
+        ...base,
+        grypeAvailable: true,
+        vulnerabilities: vulns,
+        vulnerabilityTotal: 900,
+      });
+      renderSection('sbom');
+      const bound = (await screen.findByTestId('sbom-listing-bound')).textContent;
+      expect(bound).toMatch(/Listing 300 of 900 matches/);
+      expect(bound).not.toMatch(/packages/);
+    });
+
+    it('says nothing when every row is on screen', async () => {
+      mockApi.sbom.mockResolvedValue({ ...base, grypeAvailable: true });
+      renderSection('sbom');
+      await screen.findByTestId('grype-kev');
+      expect(screen.queryByTestId('sbom-listing-bound')).toBeNull();
     });
   });
 });
