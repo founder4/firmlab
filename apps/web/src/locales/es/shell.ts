@@ -281,6 +281,18 @@ export const shell: Messages['shell'] = {
       resetHandler: 'Manejador de reset',
       flashBase: 'Base de flash',
       ramBase: 'Base de RAM',
+      scannedOf: (read: number, total: number): string =>
+        `${read.toLocaleString('es')} de ${total.toLocaleString('es')} bytes`,
+      markerScan: 'Búsqueda de marcadores del kernel',
+      markerScanPartial:
+        'La búsqueda de marcadores no cubrió toda la imagen, así que «sin kernel RTOS» aquí significa ninguno en los bytes leídos.',
+      ecos: 'Versión de eCos',
+      flags: 'Indicadores',
+      certCount: 'Certificados analizados',
+      certSample: (shown: number, total: number): string => `Se muestra una muestra de ${shown} de ${total}.`,
+      rawScan: 'Lectura de la imagen en bruto',
+      fccTruncated:
+        'La imagen es mayor que el prefijo leído; un identificador FCC más allá no se vería, así que no encontrar ninguno no significa que no haya ninguno.',
       fccIds: 'Identificadores FCC',
       filing: 'Expediente FCC',
       mirror: 'Ficheros públicos',

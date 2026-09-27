@@ -402,6 +402,49 @@ describe('DeepAnalysisDetails', () => {
     expect(screen.getByText('yes')).toBeInTheDocument();
   });
 
+  it('states a partial RTOS marker scan and an eCos identification', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="rtos"
+        value={{
+          isCortexM: false,
+          ecos: { version: 'eCos 3.0', redboot: true, app: null },
+          flags: ['FLAG_A'],
+          coverage: { scannedBytes: 1024, fileBytes: 4096, complete: false },
+        }}
+      />,
+    );
+    expect(screen.getByText('eCos 3.0')).toBeInTheDocument();
+    expect(screen.getByText('1,024 of 4,096 bytes')).toBeInTheDocument();
+    expect(screen.getByText(/none in the bytes read/)).toBeInTheDocument();
+    expect(screen.getByText('FLAG_A')).toBeInTheDocument();
+  });
+
+  it('says a truncated FCC scan cannot read as no FCC ID', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="fcc"
+        value={{ links: [], scan: { bytesScanned: 16, totalBytes: 32, truncated: true } }}
+      />,
+    );
+    expect(screen.getByText('16 of 32 bytes')).toBeInTheDocument();
+    expect(screen.getByText(/none found is not none present/)).toBeInTheDocument();
+  });
+
+  it('names a capped certificate sample and the scan note', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="certs"
+        value={{ certCount: 40, certs: [], scan: { filesScanned: 1, filesConsidered: 1, note: 'Scanned 1 file.' } }}
+      />,
+    );
+    expect(screen.getByText('Scanned 1 file.')).toBeInTheDocument();
+    expect(screen.getByText('Showing a sample of 0 of 40.')).toBeInTheDocument();
+  });
+
   it('renders nothing for legacy non-object payloads instead of throwing', () => {
     const { container } = render(<DeepAnalysisDetails imageId="img1" kind="kernel" value={['legacy']} />);
     expect(container).toBeEmptyDOMElement();

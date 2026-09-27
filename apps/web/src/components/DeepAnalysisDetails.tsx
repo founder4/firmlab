@@ -390,10 +390,17 @@ function CoverageDetails({ result }: { result: RecordValue }): JSX.Element {
 function CertificateDetails({ result }: { result: RecordValue }): JSX.Element {
   const t = useMessages().shell.deep.details;
   const certs = records(result.certs);
+  const total = number(result.certCount);
+  const note = text(record(result.scan)?.note);
   return (
     <>
       <CoverageDetails result={result} />
+      {note && <p className="deep-data-copy">{note}</p>}
       <DetailSection title={t.certificates}>
+        {total !== null && <Metrics items={[{ label: t.certCount, value: total.toLocaleString() }]} />}
+        {total !== null && total > certs.length && (
+          <p className="deep-data-empty">{t.certSample(certs.length, total)}</p>
+        )}
         {certs.length > 0 ? (
           <div className="deep-data-cards">
             {certs.map((cert, index) => (
@@ -555,27 +562,58 @@ function RtosDetails({ result }: { result: RecordValue }): JSX.Element {
   const t = useMessages().shell.deep.details;
   const vector = record(result.vectorTable);
   const memory = record(result.memoryMap);
+  const coverage = record(result.coverage);
+  const ecos = record(result.ecos);
   return (
-    <DetailSection title={t.rtosSummary}>
-      <Metrics
-        items={[
-          { label: t.cortexM, value: result.isCortexM === true ? t.yes : t.no },
-          { label: t.rtosKernel, value: text(result.rtosKernel) ?? t.notRecorded },
-          { label: t.initialSp, value: formatHex(vector?.initialSP) },
-          { label: t.resetHandler, value: formatHex(vector?.resetHandler) },
-          { label: t.flashBase, value: formatHex(memory?.flashBase) },
-          { label: t.ramBase, value: formatHex(memory?.ramBase) },
-        ]}
-      />
-    </DetailSection>
+    <>
+      <DetailSection title={t.rtosSummary}>
+        <Metrics
+          items={[
+            { label: t.cortexM, value: result.isCortexM === true ? t.yes : t.no },
+            { label: t.rtosKernel, value: text(result.rtosKernel) ?? t.notRecorded },
+            { label: t.initialSp, value: formatHex(vector?.initialSP) },
+            { label: t.resetHandler, value: formatHex(vector?.resetHandler) },
+            { label: t.flashBase, value: formatHex(memory?.flashBase) },
+            { label: t.ramBase, value: formatHex(memory?.ramBase) },
+            ...(ecos
+              ? [{ label: t.ecos, value: text(ecos.version) ?? (ecos.redboot === true ? 'RedBoot' : '—') }]
+              : []),
+            // A result stored before coverage was recorded simply omits the row rather than claiming a bound.
+            ...(coverage
+              ? [
+                  {
+                    label: t.markerScan,
+                    value: t.scannedOf(number(coverage.scannedBytes) ?? 0, number(coverage.fileBytes) ?? 0),
+                  },
+                ]
+              : []),
+          ]}
+        />
+        {coverage && coverage.complete !== true && <p className="deep-data-empty">{t.markerScanPartial}</p>}
+      </DetailSection>
+      {strings(result.flags).length > 0 && (
+        <DetailSection title={t.flags}>
+          <StringList items={strings(result.flags)} empty={t.noItems} />
+        </DetailSection>
+      )}
+    </>
   );
 }
 
 function FccDetails({ result }: { result: RecordValue }): JSX.Element {
   const t = useMessages().shell.deep.details;
   const links = records(result.links);
+  const scan = record(result.scan);
   return (
     <DetailSection title={t.fccIds}>
+      {scan && (
+        <Metrics
+          items={[
+            { label: t.rawScan, value: t.scannedOf(number(scan.bytesScanned) ?? 0, number(scan.totalBytes) ?? 0) },
+          ]}
+        />
+      )}
+      {scan?.truncated === true && <p className="deep-data-empty">{t.fccTruncated}</p>}
       {links.length > 0 ? (
         <div className="deep-data-cards">
           {links.map((link, index) => {

@@ -318,6 +318,17 @@ export const shell = {
       resetHandler: 'Reset handler',
       flashBase: 'Flash base',
       ramBase: 'RAM base',
+      scannedOf: (read: number, total: number): string => `${read.toLocaleString()} of ${total.toLocaleString()} bytes`,
+      markerScan: 'Kernel-marker scan',
+      markerScanPartial:
+        'The marker scan did not cover the whole image, so "no RTOS kernel" here means none in the bytes read.',
+      ecos: 'eCos version',
+      flags: 'Flags',
+      certCount: 'Certificates parsed',
+      certSample: (shown: number, total: number): string => `Showing a sample of ${shown} of ${total}.`,
+      rawScan: 'Raw-image scan',
+      fccTruncated:
+        'The image is larger than the scanned prefix; an FCC ID beyond it would not be seen, so none found is not none present.',
       fccIds: 'FCC identifiers',
       filing: 'FCC filing',
       mirror: 'Public files',
