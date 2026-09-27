@@ -72,6 +72,8 @@ describe('catalogue integrity', () => {
       'Firmware',
       'Bootloader',
       'UID 0',
+      // The capability matrix's "planned" badge glyph.
+      'P',
     ]);
     const offenders: string[] = [];
     const walk = (a: unknown, b: unknown, path: string): void => {
