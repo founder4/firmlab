@@ -31,11 +31,11 @@ describe('loadLlmConfig', () => {
     expect(loadLlmConfig({ FIRMLAB_LLM_API_KEY: 'k' })).toBeNull();
   });
 
-  it('defaults to DeepSeek v4-flash when the flag + a key are set', () => {
+  it('defaults to DeepSeek flash when the flag + a key are set', () => {
     const cfg = loadLlmConfig({ FIRMLAB_AGENT: '1', DEEPSEEK_API_KEY: 'sk-1' });
     expect(cfg).toMatchObject({
       provider: 'deepseek',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       baseUrl: 'https://api.deepseek.com',
       thinking: 'enabled',
       reasoningEffort: 'high',

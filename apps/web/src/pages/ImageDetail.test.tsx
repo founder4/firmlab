@@ -644,10 +644,10 @@ describe('ImageDetail in Spanish', () => {
  */
 describe('ImageDetail — the prose the LLM lanes return', () => {
   it('renders the copilot interpretation as structure, not as its Markdown source', async () => {
-    mockApi.agentStatus.mockResolvedValue({ enabled: true, provider: 'deepseek', model: 'deepseek-v4-flash' });
+    mockApi.agentStatus.mockResolvedValue({ enabled: true, provider: 'deepseek', model: 'deepseek-flash' });
     mockApi.copilotResult.mockResolvedValue({
       text: '## Reading\n\nThe **root** account has `no password` — see [NVD](https://nvd.nist.gov/x).',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       provider: 'deepseek',
     });
     const { container } = renderSection('dossier');
@@ -687,7 +687,7 @@ describe('ImageDetail — the prose the LLM lanes return', () => {
       hashLookup: { enabled: false, reason: '', attempted: 0, resolved: 0, notQueried: 0, entries: [] },
       synthesis: {
         text: '### Priority\n\n- `CVE-2022-48174` — busybox [[OSV](#)] [[NVD](https://nvd.nist.gov/y)]',
-        model: 'deepseek-v4-flash',
+        model: 'deepseek-flash',
         provider: 'deepseek',
       },
     });

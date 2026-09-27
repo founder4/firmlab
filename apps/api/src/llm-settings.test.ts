@@ -95,14 +95,14 @@ describe('describeLlm — every field says who won', () => {
   });
 
   it('reports the provider default when neither set it', () => {
-    expect(state({}).model).toEqual({ value: 'deepseek-v4-flash', source: 'default' });
+    expect(state({}).model).toEqual({ value: 'deepseek-flash', source: 'default' });
     expect(state({}).baseUrl.source).toBe('default');
   });
 
   it('offers the per-provider default models, so choosing one can pre-fill it', () => {
     const s = state({});
     expect(s.providers).toEqual(LLM_PROVIDERS);
-    expect(s.defaultModels.deepseek).toBe('deepseek-v4-flash');
+    expect(s.defaultModels.deepseek).toBe('deepseek-flash');
     // openai's is empty ON PURPOSE, and that emptiness is what `reason` explains above.
     expect(s.defaultModels.openai).toBe('');
   });

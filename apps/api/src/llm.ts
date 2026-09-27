@@ -64,9 +64,13 @@ export class LlmOutputError extends Error {
   }
 }
 
-/** Per-provider defaults. DeepSeek is the default provider (v4-flash: general-purpose, 1M context). */
+/**
+ * Per-provider defaults. DeepSeek is the default provider. Its `/models` listed only `deepseek-flash` (V4.1-Flash,
+ * 1M context) and `deepseek-v4-pro` on 2026-09-28 — the former default `deepseek-v4-flash` had been retired, so a
+ * fresh deployment failed on its first call. A model id is provider data: check `/models` before changing it.
+ */
 export const PROVIDER_DEFAULTS: Record<LlmProvider, { baseUrl: string; model: string; keyEnv: string }> = {
-  deepseek: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash', keyEnv: 'DEEPSEEK_API_KEY' },
+  deepseek: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', keyEnv: 'DEEPSEEK_API_KEY' },
   openai: { baseUrl: 'https://api.openai.com/v1', model: '', keyEnv: 'OPENAI_API_KEY' },
   anthropic: { baseUrl: 'https://api.anthropic.com', model: 'claude-opus-4-8', keyEnv: 'ANTHROPIC_API_KEY' },
 };

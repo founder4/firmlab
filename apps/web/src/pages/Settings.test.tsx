@@ -55,13 +55,13 @@ const openTab = (label: string): void => {
 /** A configured provider. `apiKey` carries no key by construction — see the describe block at the end. */
 const llmState = (o: Record<string, unknown> = {}) => ({
   provider: { value: 'deepseek', source: 'default' as const },
-  model: { value: 'deepseek-v4-flash', source: 'default' as const },
+  model: { value: 'deepseek-flash', source: 'default' as const },
   baseUrl: { value: 'https://api.deepseek.com', source: 'default' as const },
   apiKey: { present: true, source: 'environment' as const, tail: 'cd12', envVar: 'DEEPSEEK_API_KEY' },
   ready: true,
   reason: '',
   providers: ['deepseek', 'openai', 'anthropic'],
-  defaultModels: { deepseek: 'deepseek-v4-flash', openai: '', anthropic: 'claude-opus-4-8' },
+  defaultModels: { deepseek: 'deepseek-flash', openai: '', anthropic: 'claude-opus-4-8' },
   ...o,
 });
 
