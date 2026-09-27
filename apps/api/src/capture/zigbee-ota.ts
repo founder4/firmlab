@@ -87,3 +87,27 @@ export function extractOtaImage(buf: Uint8Array): Uint8Array | null {
   }
   return null;
 }
+
+/**
+ * Pure: attempt to extract a partial tag-0x0000 upgrade-image if the element is truncated before length bytes.
+ * Returns null if the header is invalid, tag 0x0000 is not present, or no payload bytes have arrived yet.
+ */
+export function extractPartialOtaImage(buf: Uint8Array): Uint8Array | null {
+  const h = parseZigbeeOtaHeader(buf);
+  if (!h) return null;
+  let o = h.headerLength;
+  while (o + 6 <= buf.length) {
+    const tag = u16(buf, o);
+    const len = u32(buf, o + 2);
+    const dataStart = o + 6;
+    if (tag === 0x0000) {
+      if (dataStart < buf.length) {
+        return buf.subarray(dataStart, Math.min(buf.length, dataStart + len));
+      }
+      return null;
+    }
+    if (dataStart + len > buf.length) break;
+    o = dataStart + len;
+  }
+  return null;
+}

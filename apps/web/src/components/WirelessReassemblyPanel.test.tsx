@@ -66,6 +66,12 @@ beforeEach(() => {
     size: 6,
     firmwareScore: 85,
     carved: true,
+    completeness: {
+      status: 'complete',
+      receivedBytes: 6,
+      expectedBytes: 6,
+      reason: 'BLE DFU reassembly complete',
+    },
   });
   mockApi.stageZigbeeOta.mockResolvedValue({
     flowId: 'flow-zig-1',
@@ -75,6 +81,12 @@ beforeEach(() => {
     fileVersion: 3,
     firmwareScore: 90,
     carved: true,
+    completeness: {
+      status: 'complete',
+      receivedBytes: 66,
+      expectedBytes: 66,
+      reason: 'Zigbee OTA stream is complete',
+    },
   });
   mockApi.ingestCaptureFlow.mockResolvedValue({
     imageId: 'img-reassembled-1',
@@ -181,7 +193,13 @@ describe('WirelessReassemblyPanel', () => {
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(mockApi.stageBleDfu).toHaveBeenCalledWith('ble-sess-active', ['AQID', 'BAUG'], 'capture.bin');
+      expect(mockApi.stageBleDfu).toHaveBeenCalledWith(
+        'ble-sess-active',
+        ['AQID', 'BAUG'],
+        'capture.bin',
+        expect.any(String),
+        undefined,
+      );
     });
 
     await waitFor(() => {
@@ -197,12 +215,25 @@ describe('WirelessReassemblyPanel', () => {
     expect(link).toHaveAttribute('href', '/image/img-reassembled-1/overview');
   });
 
-  it('detects incomplete BLE DFU and does not claim success', async () => {
+  it('detects incomplete BLE DFU and does not claim success or auto-ingest', async () => {
+    mockApi.stageBleDfu.mockResolvedValueOnce({
+      flowId: 'flow-ble-inc',
+      size: 3,
+      firmwareScore: 40,
+      carved: false,
+      completeness: {
+        status: 'incomplete',
+        receivedBytes: 3,
+        expectedBytes: 20,
+        missingBytes: 17,
+        reason: 'Incomplete DFU stream: received 3 of declared 20 bytes (missing 17 bytes)',
+      },
+    });
+
     renderPanel({ initialSessionId: 'ble-sess-active' });
     const ack = screen.getByLabelText(/I acknowledge authorization/i);
     fireEvent.click(ack);
 
-    // Only 3 bytes provided
     const json = JSON.stringify({
       chunks: ['AQID'],
     });
@@ -210,7 +241,6 @@ describe('WirelessReassemblyPanel', () => {
     const fileInput = screen.getByLabelText('Capture file(s)');
     fireEvent.change(fileInput, { target: { files: [file] } });
 
-    // Declares 20 bytes expected
     const initBuf = Uint8Array.from([0xde, 0xad, 0x14, 0x00, 0x00, 0x00]);
     const initFile = new File([initBuf], 'init.dat');
     const initInput = screen.getByLabelText(/Nordic DFU init packet/i);
@@ -249,7 +279,12 @@ describe('WirelessReassemblyPanel', () => {
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(mockApi.stageZigbeeOta).toHaveBeenCalledWith('zig-sess-active', expect.any(Array), 'firmware.ota');
+      expect(mockApi.stageZigbeeOta).toHaveBeenCalledWith(
+        'zig-sess-active',
+        expect.any(Array),
+        'firmware.ota',
+        undefined,
+      );
     });
 
     await waitFor(() => {
@@ -262,7 +297,24 @@ describe('WirelessReassemblyPanel', () => {
     expect(screen.getByTestId('image-overview-link')).toHaveAttribute('href', '/image/img-reassembled-1/overview');
   });
 
-  it('detects truncated Zigbee OTA container and reports missing bytes', async () => {
+  it('detects truncated Zigbee OTA container and reports missing bytes without claiming success', async () => {
+    mockApi.stageZigbeeOta.mockResolvedValueOnce({
+      flowId: 'flow-zig-inc',
+      size: 4,
+      manufacturerCode: 0x1234,
+      imageType: 0x0001,
+      fileVersion: 3,
+      firmwareScore: 30,
+      carved: false,
+      completeness: {
+        status: 'incomplete',
+        receivedBytes: 50,
+        expectedBytes: 70,
+        missingBytes: 20,
+        reason: 'Truncated OTA file: received 50 of declared 70 bytes (missing 20 bytes)',
+      },
+    });
+
     renderPanel({ initialSessionId: 'zig-sess-active' });
     const zigTab = screen.getByRole('tab', { name: 'Zigbee OTA' });
     fireEvent.click(zigTab);
@@ -271,7 +323,6 @@ describe('WirelessReassemblyPanel', () => {
     fireEvent.click(ack);
 
     const rawOta = buildZigbeeOtaBuffer(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]));
-    // Truncate to 50 bytes (less than 56 header + data)
     const truncated = rawOta.subarray(0, 50);
     const otaFile = new File([truncated.buffer.slice(0, 50) as ArrayBuffer], 'truncated.ota');
     const fileInput = screen.getByLabelText('Capture file(s)');
@@ -286,7 +337,32 @@ describe('WirelessReassemblyPanel', () => {
 
     expect(await screen.findByTestId('incomplete-banner')).toBeInTheDocument();
     expect(screen.getByText('Incomplete capture')).toBeInTheDocument();
+    expect(screen.getAllByText(/Missing 20 bytes/i).length).toBeGreaterThan(0);
     expect(mockApi.ingestCaptureFlow).not.toHaveBeenCalled();
+  });
+
+  it('displays legacy banner when server does not supply completeness field', async () => {
+    mockApi.stageBleDfu.mockResolvedValueOnce({
+      flowId: 'flow-ble-legacy',
+      size: 10,
+      firmwareScore: 70,
+      carved: true,
+      // completeness omitted (older server)
+    });
+
+    renderPanel({ initialSessionId: 'ble-sess-active' });
+    const ack = screen.getByLabelText(/I acknowledge authorization/i);
+    fireEvent.click(ack);
+
+    const file = new File(['AQID'], 'capture.txt', { type: 'text/plain' });
+    const fileInput = screen.getByLabelText('Capture file(s)');
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    const submitBtn = screen.getByRole('button', { name: 'Reassemble BLE DFU' });
+    fireEvent.click(submitBtn);
+
+    expect(await screen.findByTestId('legacy-banner')).toBeInTheDocument();
+    expect(screen.getAllByText(/Completeness verdict not provided by server/i).length).toBeGreaterThan(0);
   });
 
   it('renders all UI elements in Spanish when locale is set to es', async () => {

@@ -17,7 +17,8 @@ import path from 'node:path';
 import { CAPTURE_DIR } from '../paths.js';
 import { type FlowMeta, scoreFirmwareFlow } from '../providers/flowscore.js';
 import { getCaptureSession, insertCaptureSession, upsertCaptureFlow } from '../store.js';
-import { extractOtaImage, parseZigbeeOtaHeader, reassembleOtaBlocks } from './zigbee-ota.js';
+import { type ReassemblyCompleteness, assessZigbeeCompleteness } from './reassembly-coverage.js';
+import { extractOtaImage, extractPartialOtaImage, parseZigbeeOtaHeader, reassembleOtaBlocks } from './zigbee-ota.js';
 
 /** Create a capture session for a Zigbee OTA. NOT dongle-gated — reassembling a provided capture needs no radio. */
 export function createZigbeeSession(deviceId: string | null): string {
@@ -47,20 +48,35 @@ export interface ZigbeeStageResult {
   fileVersion: number;
   firmwareScore: number;
   carved: boolean;
+  completeness: ReassemblyCompleteness;
 }
 
 /**
  * Reassemble captured OTA Image-Block payloads, unwrap the standard container to the firmware image, and stage it
- * as a carved `zigbee-ota` flow (ingestable by the normal path). Throws honestly when the stream isn't a valid
- * Zigbee OTA file (no 0x0BEEF11E header / no upgrade-image sub-element) — never a fabricated blob.
+ * as a `zigbee-ota` flow. Assesses completeness against declared totalImageSize in header and block sequence gaps:
+ * an incomplete stream is staged for analysis but NOT marked carved/ingestable as complete.
  */
-export function stageZigbeeOta(sessionId: string, name: string, blocks: Uint8Array[]): ZigbeeStageResult {
+export function stageZigbeeOta(
+  sessionId: string,
+  name: string,
+  blocks: Uint8Array[],
+  blockSeqs?: number[],
+): ZigbeeStageResult {
   if (!getCaptureSession(sessionId)) throw new Error('Unknown capture session');
   const file = reassembleOtaBlocks(blocks);
   const header = parseZigbeeOtaHeader(file);
   if (!header) throw new Error('Not a Zigbee OTA file — missing the 0x0BEEF11E OTA header');
-  const image = extractOtaImage(file);
+  const fullImage = extractOtaImage(file);
+  const image = fullImage ?? extractPartialOtaImage(file);
   if (!image || image.length === 0) throw new Error('OTA file carries no upgrade-image (tag 0x0000) sub-element');
+
+  const completeness = assessZigbeeCompleteness(
+    file.length,
+    header,
+    Boolean(fullImage && fullImage.length > 0),
+    blockSeqs,
+  );
+  const isComplete = completeness.status !== 'incomplete';
 
   const flowId = randomUUID().slice(0, 12);
   const label = header.headerString || name;
@@ -85,7 +101,7 @@ export function stageZigbeeOta(sessionId: string, name: string, blocks: Uint8Arr
     size: image.length,
     tlsPosture: null,
     firmwareScore: score.score,
-    carved: 1, // a valid unwrapped OTA image IS firmware — always ingestable
+    carved: isComplete ? 1 : 0,
     bodyPath,
     bodyBytes: image.length,
     bodyBytesInspected: image.length,
@@ -99,6 +115,7 @@ export function stageZigbeeOta(sessionId: string, name: string, blocks: Uint8Arr
     imageType: header.imageType,
     fileVersion: header.fileVersion,
     firmwareScore: score.score,
-    carved: true,
+    carved: isComplete,
+    completeness,
   };
 }

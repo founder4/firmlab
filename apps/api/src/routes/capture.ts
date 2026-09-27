@@ -184,13 +184,20 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
   app.post('/capture/ble/dfu', async (req, reply) => {
     const cfg = loadCaptureConfig();
     if (!cfg) return reply.status(400).send({ error: 'Capture disabled — set FIRMLAB_CAPTURE=1' });
-    const body = (req.body ?? {}) as { sessionId?: string; name?: string; chunks?: string[] };
+    const body = (req.body ?? {}) as {
+      sessionId?: string;
+      name?: string;
+      chunks?: string[];
+      initPacket?: string;
+      chunkSeqs?: number[];
+    };
     if (!body.sessionId || !Array.isArray(body.chunks) || body.chunks.length === 0) {
       return reply.status(400).send({ error: 'sessionId and a non-empty chunks[] (base64 DATA writes) are required' });
     }
     try {
       const chunks = body.chunks.map((c) => new Uint8Array(Buffer.from(c, 'base64')));
-      const result = stageBleDfu(body.sessionId, body.name ?? 'ble-dfu.bin', chunks);
+      const initPacket = body.initPacket ? new Uint8Array(Buffer.from(body.initPacket, 'base64')) : undefined;
+      const result = stageBleDfu(body.sessionId, body.name ?? 'ble-dfu.bin', chunks, initPacket, body.chunkSeqs);
       return reply.status(201).send(result);
     } catch (e) {
       return reply.status(400).send({ error: e instanceof Error ? e.message : String(e) });
@@ -213,7 +220,12 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
   app.post('/capture/zigbee/ota', async (req, reply) => {
     const cfg = loadCaptureConfig();
     if (!cfg) return reply.status(400).send({ error: 'Capture disabled — set FIRMLAB_CAPTURE=1' });
-    const body = (req.body ?? {}) as { sessionId?: string; name?: string; blocks?: string[] };
+    const body = (req.body ?? {}) as {
+      sessionId?: string;
+      name?: string;
+      blocks?: string[];
+      blockSeqs?: number[];
+    };
     if (!body.sessionId || !Array.isArray(body.blocks) || body.blocks.length === 0) {
       return reply
         .status(400)
@@ -221,7 +233,7 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
     }
     try {
       const blocks = body.blocks.map((b) => new Uint8Array(Buffer.from(b, 'base64')));
-      const result = stageZigbeeOta(body.sessionId, body.name ?? 'zigbee-ota.bin', blocks);
+      const result = stageZigbeeOta(body.sessionId, body.name ?? 'zigbee-ota.bin', blocks, body.blockSeqs);
       return reply.status(201).send(result);
     } catch (e) {
       return reply.status(400).send({ error: e instanceof Error ? e.message : String(e) });

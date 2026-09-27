@@ -1909,11 +1909,29 @@ export interface CapturabilityPlan {
   unlockHint: string | null;
 }
 
+export type CompletenessStatus = 'complete' | 'incomplete' | 'unknown';
+
+export interface MissingGaps {
+  sequences?: number[];
+  bytes?: number;
+}
+
+export interface ReassemblyCompleteness {
+  status: CompletenessStatus;
+  receivedBytes: number;
+  expectedBytes?: number;
+  missingBytes?: number;
+  missingSequences?: number[];
+  missing?: MissingGaps;
+  reason: string;
+}
+
 export interface BleDfuResult {
   flowId: string;
   size: number;
   firmwareScore: number;
   carved: boolean;
+  completeness?: ReassemblyCompleteness;
 }
 
 export interface ZigbeeOtaResult {
@@ -1924,6 +1942,7 @@ export interface ZigbeeOtaResult {
   fileVersion: number;
   firmwareScore: number;
   carved: boolean;
+  completeness?: ReassemblyCompleteness;
 }
 
 export interface OtaVersion {
@@ -2374,13 +2393,24 @@ export const api = {
   // Phase 6.4 BLE DFU capture reassembly.
   createBleCaptureSession: (deviceId: string | null, acknowledged: boolean) =>
     post<{ sessionId: string }>('/api/capture/ble/session', { ...(deviceId ? { deviceId } : {}), acknowledged }),
-  stageBleDfu: (sessionId: string, chunks: string[], name?: string) =>
-    post<BleDfuResult>('/api/capture/ble/dfu', { sessionId, chunks, ...(name ? { name } : {}) }),
+  stageBleDfu: (sessionId: string, chunks: string[], name?: string, initPacket?: string, chunkSeqs?: number[]) =>
+    post<BleDfuResult>('/api/capture/ble/dfu', {
+      sessionId,
+      chunks,
+      ...(name ? { name } : {}),
+      ...(initPacket ? { initPacket } : {}),
+      ...(chunkSeqs && chunkSeqs.length > 0 ? { chunkSeqs } : {}),
+    }),
   // Phase 6.5 Zigbee OTA capture reassembly.
   createZigbeeCaptureSession: (deviceId: string | null, acknowledged: boolean) =>
     post<{ sessionId: string }>('/api/capture/zigbee/session', { ...(deviceId ? { deviceId } : {}), acknowledged }),
-  stageZigbeeOta: (sessionId: string, blocks: string[], name?: string) =>
-    post<ZigbeeOtaResult>('/api/capture/zigbee/ota', { sessionId, blocks, ...(name ? { name } : {}) }),
+  stageZigbeeOta: (sessionId: string, blocks: string[], name?: string, blockSeqs?: number[]) =>
+    post<ZigbeeOtaResult>('/api/capture/zigbee/ota', {
+      sessionId,
+      blocks,
+      ...(name ? { name } : {}),
+      ...(blockSeqs && blockSeqs.length > 0 ? { blockSeqs } : {}),
+    }),
 
   async upload(file: File): Promise<ImageSummary> {
     const form = new FormData();

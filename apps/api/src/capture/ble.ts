@@ -38,18 +38,35 @@ export function createBleSession(deviceId: string | null): string {
   return id;
 }
 
+import { type ReassemblyCompleteness, assessBleCompleteness } from './reassembly-coverage.js';
+
+export interface BleStageResult {
+  flowId: string;
+  size: number;
+  firmwareScore: number;
+  carved: boolean;
+  completeness: ReassemblyCompleteness;
+}
+
 /**
- * Reassemble a captured DFU write stream into an image and stage it as a carved `ble-gatt` flow (ingestable by the
- * normal path). A DFU transfer is firmware by construction → always carved. Returns the flow id + score (info only).
+ * Reassemble a captured DFU write stream into an image and stage it as a `ble-gatt` flow.
+ * Assesses completeness against declared init packet size and missing chunk sequences:
+ * an incomplete stream is staged for analysis but NOT marked carved/ingestable as complete.
  */
 export function stageBleDfu(
   sessionId: string,
   name: string,
   chunks: Uint8Array[],
-): { flowId: string; size: number; firmwareScore: number; carved: boolean } {
+  initPacket?: Uint8Array | null,
+  chunkSeqs?: number[],
+): BleStageResult {
   if (!getCaptureSession(sessionId)) throw new Error('Unknown capture session');
   const blob = reassembleDfu(chunks);
   if (blob.length === 0) throw new Error('Empty DFU stream — nothing to reassemble');
+
+  const completeness = assessBleCompleteness(blob.length, initPacket, chunkSeqs);
+  const isComplete = completeness.status !== 'incomplete';
+
   const flowId = randomUUID().slice(0, 12);
   const meta: FlowMeta = {
     url: `ble-dfu://${name}`,
@@ -72,12 +89,12 @@ export function stageBleDfu(
     size: blob.length,
     tlsPosture: null,
     firmwareScore: score.score,
-    carved: 1, // a DFU image IS firmware — always ingestable
+    carved: isComplete ? 1 : 0,
     bodyPath,
     bodyBytes: blob.length,
     bodyBytesInspected: blob.length,
     bodyInspectionComplete: 1,
     createdAt: Date.now(),
   });
-  return { flowId, size: blob.length, firmwareScore: score.score, carved: true };
+  return { flowId, size: blob.length, firmwareScore: score.score, carved: isComplete, completeness };
 }

@@ -1,14 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { type CaptureDevice, api } from '../api';
-import {
-  type BleReassemblyInspection,
-  type ZigbeeReassemblyInspection,
-  inspectBleReassembly,
-  inspectZigbeeReassembly,
-  parseCapturePayload,
-  uint8ToBase64,
-} from '../capture-reassembly';
+import { type BleDfuResult, type CaptureDevice, type ReassemblyCompleteness, type ZigbeeOtaResult, api } from '../api';
+import { parseCapturePayload, uint8ToBase64 } from '../capture-reassembly';
 import { useMessages } from '../i18n';
 
 export interface WirelessReassemblyPanelProps {
@@ -23,9 +16,19 @@ interface ReassemblyResultState {
   tab: WirelessTab;
   flowId?: string | undefined;
   firmwareScore?: number | undefined;
+  carved?: boolean | undefined;
+  size?: number | undefined;
+  chunkCount?: number | undefined;
+  blockCount?: number | undefined;
+  completeness?: ReassemblyCompleteness | undefined;
+  zigbeeMeta?:
+    | {
+        manufacturerCode: number;
+        imageType: number;
+        fileVersion: number;
+      }
+    | undefined;
   imageId?: string | undefined;
-  bleInspection?: BleReassemblyInspection | undefined;
-  zigbeeInspection?: ZigbeeReassemblyInspection | undefined;
   error?: string | undefined;
 }
 
@@ -120,13 +123,11 @@ export function WirelessReassemblyPanel({
 
     setInFlight(true);
     try {
-      // 1. Read files and parse into chunks / blocks
-      const allChunksOrBlocks: Uint8Array[] = [];
+      // 1. Read files and decode into base64 items (transport only, no analysis)
       const allBase64: string[] = [];
-      const collectedMissingSeqs: number[] = [];
+      const allSeqs: number[] = [];
       let parsedName: string | undefined;
-      let parsedInitPacket: Uint8Array | undefined;
-      let parsedExpectedSize: number | undefined;
+      let initPacketB64: string | undefined;
 
       // Sort files naturally by name
       const files = [...selectedFiles].sort((a, b) =>
@@ -138,19 +139,14 @@ export function WirelessReassemblyPanel({
           const text = await file.text();
           const parsed = parseCapturePayload(text, file.name);
           if (parsed.error) throw new Error(parsed.error);
-          allChunksOrBlocks.push(...parsed.chunksOrBlocks);
           allBase64.push(...parsed.base64Items);
-          if (parsed.missingSeqs.length > 0) collectedMissingSeqs.push(...parsed.missingSeqs);
+          if (parsed.sequences) allSeqs.push(...parsed.sequences);
+          if (parsed.initPacketBase64 && !initPacketB64) initPacketB64 = parsed.initPacketBase64;
           if (parsed.name && !parsedName) parsedName = parsed.name;
-          if (parsed.initPacket && !parsedInitPacket) parsedInitPacket = parsed.initPacket;
-          if (parsed.expectedSize !== undefined && parsedExpectedSize === undefined) {
-            parsedExpectedSize = parsed.expectedSize;
-          }
         } else {
           // Binary chunk or container
           const buffer = await file.arrayBuffer();
           const u8 = new Uint8Array(buffer);
-          allChunksOrBlocks.push(u8);
           allBase64.push(uint8ToBase64(u8));
           if (!parsedName) parsedName = file.name;
         }
@@ -159,7 +155,7 @@ export function WirelessReassemblyPanel({
       // If separate init packet was uploaded for BLE
       if (tab === 'ble' && initPacketFile) {
         const initBuf = await initPacketFile.arrayBuffer();
-        parsedInitPacket = new Uint8Array(initBuf);
+        initPacketB64 = uint8ToBase64(new Uint8Array(initBuf));
       }
 
       if (allBase64.length === 0) {
@@ -168,57 +164,48 @@ export function WirelessReassemblyPanel({
 
       const finalName = filename.trim() || parsedName || (tab === 'ble' ? 'ble-dfu.bin' : 'zigbee-ota.bin');
 
-      // 2. Perform client-side inspection
-      let bleInspection: BleReassemblyInspection | undefined;
-      let zigbeeInspection: ZigbeeReassemblyInspection | undefined;
-      let isComplete = false;
-
+      // 2. Stage through the backend API route — the backend computes completeness
+      let stageRes: BleDfuResult | ZigbeeOtaResult;
+      const seqsParam = allSeqs.length > 0 ? allSeqs : undefined;
       if (tab === 'ble') {
-        bleInspection = inspectBleReassembly(
-          allChunksOrBlocks,
-          parsedInitPacket,
-          parsedExpectedSize,
-          collectedMissingSeqs,
-        );
-        isComplete = bleInspection.isComplete;
+        stageRes = await api.stageBleDfu(curSessionId, allBase64, finalName, initPacketB64, seqsParam);
       } else {
-        zigbeeInspection = inspectZigbeeReassembly(allChunksOrBlocks, collectedMissingSeqs);
-        isComplete = zigbeeInspection.isComplete;
+        stageRes = await api.stageZigbeeOta(curSessionId, allBase64, finalName, seqsParam);
       }
 
-      // 3. Stage the reassembly through the API route
-      let flowId: string | undefined;
-      let firmwareScore: number | undefined;
+      const completeness = stageRes.completeness;
+      // Complete if backend confirms completeness; if server is older (completeness omitted), fallback to carved
+      const isComplete = completeness ? completeness.status === 'complete' : stageRes.carved;
 
-      if (tab === 'ble') {
-        const stageRes = await api.stageBleDfu(curSessionId, allBase64, finalName);
-        flowId = stageRes.flowId;
-        firmwareScore = stageRes.firmwareScore;
-      } else {
-        const stageRes = await api.stageZigbeeOta(curSessionId, allBase64, finalName);
-        flowId = stageRes.flowId;
-        firmwareScore = stageRes.firmwareScore;
-      }
-
-      // 4. Ingest if complete and autoIngest requested
+      // 3. Ingest ONLY if complete and autoIngest requested
       let imageId: string | undefined;
-      if (isComplete && autoIngest && flowId) {
+      if (isComplete && autoIngest && stageRes.carved && stageRes.flowId) {
         try {
-          const ingestRes = await api.ingestCaptureFlow(curSessionId, flowId);
+          const ingestRes = await api.ingestCaptureFlow(curSessionId, stageRes.flowId);
           imageId = ingestRes.imageId;
         } catch (ingestErr) {
-          // Non-fatal for reassembly result, but captured
           setFormError(ingestErr instanceof Error ? ingestErr.message : String(ingestErr));
         }
       }
 
       setResult({
         tab,
-        flowId,
-        firmwareScore,
+        flowId: stageRes.flowId,
+        firmwareScore: stageRes.firmwareScore,
+        carved: stageRes.carved,
+        size: stageRes.size,
+        chunkCount: tab === 'ble' ? allBase64.length : undefined,
+        blockCount: tab === 'zigbee' ? allBase64.length : undefined,
+        completeness,
+        zigbeeMeta:
+          tab === 'zigbee' && 'manufacturerCode' in stageRes
+            ? {
+                manufacturerCode: stageRes.manufacturerCode,
+                imageType: stageRes.imageType,
+                fileVersion: stageRes.fileVersion,
+              }
+            : undefined,
         imageId,
-        bleInspection,
-        zigbeeInspection,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -249,8 +236,11 @@ export function WirelessReassemblyPanel({
     }
   }, [result?.flowId, sessionId]);
 
-  const currentInspection = tab === 'ble' ? result?.bleInspection : result?.zigbeeInspection;
-  const isComplete = currentInspection?.isComplete ?? false;
+  const completeness = result?.completeness;
+  const isComplete = completeness ? completeness.status === 'complete' : (result?.carved ?? false);
+  const isIncomplete = completeness ? completeness.status === 'incomplete' : !result?.carved && !result?.error;
+  const isUnknown = completeness ? completeness.status === 'unknown' : false;
+  const isLegacy = Boolean(result && !completeness && !result.error);
   const hasError = Boolean(result?.error);
 
   return (
@@ -260,18 +250,25 @@ export function WirelessReassemblyPanel({
         {t.capture.wireless.panelSub}
       </div>
 
+      {/* Flag FIRMLAB_CAPTURE disabled banner */}
       {!captureEnabled && (
-        <div className="banner banner-warn" style={{ marginTop: 12 }} data-testid="capture-disabled-banner">
+        <div
+          className="banner banner-warn"
+          role="alert"
+          style={{ marginTop: 12 }}
+          data-testid="capture-disabled-banner"
+        >
           {t.capture.wireless.disabledWarning}
         </div>
       )}
 
-      <div className="tabs" role="tablist" style={{ marginTop: 16 }}>
+      {/* Tabs: BLE DFU / Zigbee OTA */}
+      <div className="tabs" style={{ marginTop: 16, marginBottom: 16 }} role="tablist">
         <button
           type="button"
           role="tab"
           aria-selected={tab === 'ble'}
-          className={`tab ${tab === 'ble' ? 'active' : ''}`}
+          className={`tab-btn ${tab === 'ble' ? 'active' : ''}`}
           onClick={() => switchTab('ble')}
         >
           {t.capture.wireless.tabBle}
@@ -280,123 +277,131 @@ export function WirelessReassemblyPanel({
           type="button"
           role="tab"
           aria-selected={tab === 'zigbee'}
-          className={`tab ${tab === 'zigbee' ? 'active' : ''}`}
+          className={`tab-btn ${tab === 'zigbee' ? 'active' : ''}`}
           onClick={() => switchTab('zigbee')}
         >
           {t.capture.wireless.tabZigbee}
         </button>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Form area */}
+      <div style={{ display: 'grid', gap: 14, maxWidth: 640 }}>
         {/* Operator Acknowledgement */}
-        <label htmlFor="wireless-ack" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', maxWidth: 640 }}>
-          <input id="wireless-ack" type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-          <span className="hint">{t.capture.wireless.ack}</span>
+        <label
+          htmlFor="wireless-ack"
+          style={{
+            display: 'flex',
+            gap: 8,
+            alignItems: 'flex-start',
+            cursor: 'pointer',
+            padding: '8px 10px',
+            background: 'var(--panel-sub)',
+            borderRadius: 4,
+          }}
+        >
+          <input
+            id="wireless-ack"
+            type="checkbox"
+            checked={ack}
+            onChange={(e) => setAck(e.target.checked)}
+            style={{ marginTop: 3 }}
+            aria-label={t.capture.wireless.ack}
+          />
+          <span style={{ fontSize: 13, lineHeight: 1.4 }}>{t.capture.wireless.ack}</span>
         </label>
 
-        {/* Target Device & Session Creation */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-          <div>
-            <label htmlFor="wireless-target-device" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
-              {t.capture.wireless.targetDevice}
-            </label>
-            {devices.length > 0 ? (
-              <select
-                id="wireless-target-device"
-                className="select"
-                value={deviceId}
-                onChange={(e) => setDeviceId(e.target.value)}
-                style={{ width: '100%' }}
-                aria-label={t.capture.wireless.deviceIdLabel}
-              >
-                <option value="">{t.capture.wireless.deviceSelectPlaceholder}</option>
-                {devices.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.mac} {d.ouiVendor ? `(${d.ouiVendor})` : ''} {d.ip ? `· ${d.ip}` : ''}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                id="wireless-target-device"
-                className="select"
-                placeholder={t.capture.wireless.deviceSelectPlaceholder}
-                value={deviceId}
-                onChange={(e) => setDeviceId(e.target.value)}
-                style={{ width: '100%', fontFamily: 'var(--mono)', fontSize: 12 }}
-                aria-label={t.capture.wireless.deviceIdLabel}
-              />
-            )}
-          </div>
-
-          <div>
-            <label htmlFor="wireless-session-id" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
-              {t.capture.wireless.sessionIdLabel}
-            </label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                id="wireless-session-id"
-                className="select"
-                placeholder={t.capture.wireless.sessionIdPlaceholder}
-                value={sessionId}
-                onChange={(e) => setSessionId(e.target.value)}
-                style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: 12 }}
-                aria-label={t.capture.wireless.sessionIdLabel}
-              />
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                disabled={!captureEnabled || !ack || creatingSession}
-                onClick={handleCreateSession}
-              >
-                {creatingSession ? t.capture.wireless.creatingSession : t.capture.wireless.createSession}
-              </button>
-            </div>
-            {sessionSuccess && (
-              <div className="hint" style={{ marginTop: 4, color: 'var(--ok)' }}>
-                {t.capture.wireless.sessionCreated(sessionSuccess)}
-              </div>
-            )}
-          </div>
+        {/* Target device selector (optional) */}
+        <div>
+          <label htmlFor="wireless-device-select" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
+            {t.capture.wireless.targetDevice}
+          </label>
+          <select
+            id="wireless-device-select"
+            className="select"
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+            style={{ maxWidth: 420 }}
+            aria-label={t.capture.wireless.targetDevice}
+          >
+            <option value="">{t.capture.wireless.deviceSelectPlaceholder}</option>
+            {devices.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.id} — {d.ouiVendor || d.mac} {d.ip ? `(${d.ip})` : ''}
+              </option>
+            ))}
+          </select>
         </div>
 
-        {/* Filename and Files */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-          <div>
-            <label htmlFor="wireless-filename" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
-              {t.capture.wireless.filenameLabel}
-            </label>
+        {/* Session ID input & Create button */}
+        <div>
+          <label htmlFor="wireless-session-id" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
+            {t.capture.wireless.sessionIdLabel}
+          </label>
+          <div style={{ display: 'flex', gap: 8, maxWidth: 480 }}>
             <input
-              id="wireless-filename"
-              className="select"
-              placeholder={tab === 'ble' ? 'ble-dfu.bin' : 'zigbee-ota.bin'}
-              value={filename}
-              onChange={(e) => setFilename(e.target.value)}
-              style={{ width: '100%', fontFamily: 'var(--mono)', fontSize: 12 }}
-              aria-label={t.capture.wireless.filenameLabel}
+              id="wireless-session-id"
+              type="text"
+              className="select mono"
+              placeholder={t.capture.wireless.sessionIdPlaceholder}
+              value={sessionId}
+              onChange={(e) => setSessionId(e.target.value)}
+              style={{ flex: 1 }}
+              aria-label={t.capture.wireless.sessionIdLabel}
             />
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={!captureEnabled || !ack || creatingSession}
+              onClick={handleCreateSession}
+              aria-busy={creatingSession}
+            >
+              {creatingSession ? t.capture.wireless.creatingSession : t.capture.wireless.createSession}
+            </button>
           </div>
-
-          <div>
-            <label htmlFor="wireless-files" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
-              {t.capture.wireless.filesLabel}
-            </label>
-            <input
-              id="wireless-files"
-              type="file"
-              multiple
-              className="select"
-              style={{ width: '100%', fontSize: 12 }}
-              aria-label={t.capture.wireless.filesLabel}
-              onChange={(e) => {
-                if (e.target.files) {
-                  setSelectedFiles(Array.from(e.target.files));
-                }
-              }}
-            />
-            <div className="hint" style={{ marginTop: 4, fontSize: 11 }}>
-              {tab === 'ble' ? t.capture.wireless.filesHintBle : t.capture.wireless.filesHintZigbee}
+          {sessionSuccess && (
+            <div className="hint" style={{ marginTop: 4, color: 'var(--green)' }}>
+              {t.capture.wireless.sessionCreated(sessionSuccess)}
             </div>
+          )}
+        </div>
+
+        {/* Output firmware name */}
+        <div>
+          <label htmlFor="wireless-filename" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
+            {t.capture.wireless.filenameLabel}
+          </label>
+          <input
+            id="wireless-filename"
+            type="text"
+            className="select mono"
+            placeholder={tab === 'ble' ? 'ble-dfu.bin' : 'zigbee-ota.bin'}
+            value={filename}
+            onChange={(e) => setFilename(e.target.value)}
+            style={{ maxWidth: 420 }}
+            aria-label={t.capture.wireless.filenameLabel}
+          />
+        </div>
+
+        {/* Capture files upload */}
+        <div>
+          <label htmlFor="wireless-files" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
+            {t.capture.wireless.filesLabel}
+          </label>
+          <input
+            id="wireless-files"
+            type="file"
+            multiple
+            className="select"
+            style={{ maxWidth: 420, fontSize: 12 }}
+            aria-label={t.capture.wireless.filesLabel}
+            onChange={(e) => {
+              if (e.target.files) {
+                setSelectedFiles(Array.from(e.target.files));
+              }
+            }}
+          />
+          <div className="hint" style={{ marginTop: 4, fontSize: 11 }}>
+            {tab === 'ble' ? t.capture.wireless.filesHintBle : t.capture.wireless.filesHintZigbee}
           </div>
         </div>
 
@@ -481,16 +486,26 @@ export function WirelessReassemblyPanel({
               </span>
               <span>{result.error}</span>
             </div>
-          ) : !isComplete ? (
+          ) : isIncomplete ? (
             <div className="banner banner-warn" style={{ marginBottom: 12 }} data-testid="incomplete-banner">
               <span className="badge badge-high" style={{ marginRight: 8 }}>
                 {t.capture.wireless.statusIncomplete}
               </span>
-              <span>
-                {currentInspection?.details.length
-                  ? currentInspection.details.join(' · ')
-                  : t.capture.wireless.statusIncomplete}
+              <span>{completeness?.reason ?? t.capture.wireless.statusIncomplete}</span>
+            </div>
+          ) : isUnknown ? (
+            <div className="banner banner-warn" style={{ marginBottom: 12 }} data-testid="unknown-banner">
+              <span className="badge badge-high" style={{ marginRight: 8 }}>
+                {t.capture.wireless.statusUnknown}
               </span>
+              <span>{completeness?.reason ?? t.capture.wireless.statusUnknown}</span>
+            </div>
+          ) : isLegacy ? (
+            <div className="banner banner-info" style={{ marginBottom: 12 }} data-testid="legacy-banner">
+              <span className="badge badge-info" style={{ marginRight: 8 }}>
+                {t.capture.wireless.statusLegacy}
+              </span>
+              <span>{t.capture.wireless.statusLegacy}</span>
             </div>
           ) : (
             <div className="banner banner-info" style={{ marginBottom: 12 }} data-testid="complete-banner">
@@ -502,69 +517,57 @@ export function WirelessReassemblyPanel({
           )}
 
           {/* Inspection Metrics Table */}
-          {currentInspection && (
+          {!hasError && (
             <div className="table-wrap" style={{ marginBottom: 14 }}>
               <table className="data">
                 <tbody>
                   <tr>
                     <td style={{ width: 220 }}>{t.capture.wireless.reconstructedBytes}</td>
                     <td className="mono">
-                      <strong>{currentInspection.reconstructedBytes.toLocaleString()} bytes</strong>{' '}
+                      <strong>{(result.size ?? 0).toLocaleString()} bytes</strong>{' '}
                       <span className="hint">
-                        ({(currentInspection.reconstructedBytes / 1024).toFixed(1)} KB) ·{' '}
-                        {tab === 'ble' && result?.bleInspection
-                          ? t.capture.wireless.chunksCount(result.bleInspection.chunkCount)
-                          : tab === 'zigbee' && result?.zigbeeInspection
-                            ? t.capture.wireless.blocksCount(result.zigbeeInspection.blockCount)
+                        ({((result.size ?? 0) / 1024).toFixed(1)} KB) ·{' '}
+                        {tab === 'ble' && result.chunkCount !== undefined
+                          ? t.capture.wireless.chunksCount(result.chunkCount)
+                          : tab === 'zigbee' && result.blockCount !== undefined
+                            ? t.capture.wireless.blocksCount(result.blockCount)
                             : ''}
                       </span>
                     </td>
                   </tr>
 
-                  {tab === 'ble' &&
-                    result?.bleInspection?.expectedSize !== null &&
-                    result?.bleInspection?.expectedSize !== undefined && (
-                      <tr>
-                        <td>{t.capture.wireless.expectedBytes}</td>
-                        <td className="mono">
-                          {result.bleInspection.expectedSize.toLocaleString()} bytes{' '}
-                          <span className="hint">({(result.bleInspection.expectedSize / 1024).toFixed(1)} KB)</span>
-                        </td>
-                      </tr>
-                    )}
-
-                  {tab === 'zigbee' &&
-                    result?.zigbeeInspection?.expectedTotalBytes !== null &&
-                    result?.zigbeeInspection?.expectedTotalBytes !== undefined && (
-                      <tr>
-                        <td>{t.capture.wireless.expectedBytes}</td>
-                        <td className="mono">
-                          {result.zigbeeInspection.expectedTotalBytes.toLocaleString()} bytes{' '}
-                          <span className="hint">
-                            ({(result.zigbeeInspection.expectedTotalBytes / 1024).toFixed(1)} KB)
-                          </span>
-                        </td>
-                      </tr>
-                    )}
+                  <tr>
+                    <td>{t.capture.wireless.expectedBytes}</td>
+                    <td className="mono">
+                      {completeness?.expectedBytes !== null && completeness?.expectedBytes !== undefined ? (
+                        <>
+                          {completeness.expectedBytes.toLocaleString()} bytes{' '}
+                          <span className="hint">({(completeness.expectedBytes / 1024).toFixed(1)} KB)</span>
+                        </>
+                      ) : (
+                        <span className="hint">{t.capture.wireless.expectedUnknown}</span>
+                      )}
+                    </td>
+                  </tr>
 
                   <tr>
                     <td>{t.capture.wireless.missingGaps}</td>
                     <td>
-                      {currentInspection.missingBytes > 0 ? (
+                      {completeness?.missingBytes && completeness.missingBytes > 0 ? (
                         <span className="badge badge-high mono">
                           {t.capture.wireless.missingBytesCount(
-                            currentInspection.missingBytes,
-                            (tab === 'ble'
-                              ? result?.bleInspection?.expectedSize
-                              : result?.zigbeeInspection?.expectedTotalBytes) ?? currentInspection.reconstructedBytes,
+                            completeness.missingBytes,
+                            completeness.expectedBytes ?? result.size ?? 0,
                           )}
                         </span>
-                      ) : currentInspection.missingSeqs.length > 0 ? (
+                      ) : completeness?.missingSequences && completeness.missingSequences.length > 0 ? (
                         <span className="badge badge-high mono">
-                          {t.capture.wireless.missingChunksNamed(currentInspection.missingSeqs.join(', '))}
+                          {t.capture.wireless.missingChunksNamed(completeness.missingSequences.join(', '))}
                         </span>
-                      ) : (
+                      ) : isComplete ? (
                         <span className="badge badge-ok">{t.capture.wireless.noGaps}</span>
+                      ) : (
+                        <span className="hint">{completeness?.reason ?? t.capture.wireless.expectedUnknown}</span>
                       )}
                     </td>
                   </tr>
@@ -572,30 +575,17 @@ export function WirelessReassemblyPanel({
                   <tr>
                     <td>{t.capture.wireless.integrity}</td>
                     <td>
-                      {tab === 'zigbee' ? (
-                        (currentInspection as ZigbeeReassemblyInspection).header ? (
-                          <span className="badge badge-ok mono">
-                            {t.capture.wireless.integrityValidZigbee(
-                              `0x${(currentInspection as ZigbeeReassemblyInspection).header?.manufacturerCode.toString(16).padStart(4, '0')}`,
-                              `0x${(currentInspection as ZigbeeReassemblyInspection).header?.imageType.toString(16).padStart(4, '0')}`,
-                              `v${(currentInspection as ZigbeeReassemblyInspection).header?.fileVersion}`,
-                            )}
-                          </span>
-                        ) : (
-                          <span className="badge badge-high">{t.capture.wireless.integrityNone}</span>
-                        )
-                      ) : (currentInspection as BleReassemblyInspection).integrityValid ? (
+                      {tab === 'zigbee' && result.zigbeeMeta ? (
                         <span className="badge badge-ok mono">
-                          {t.capture.wireless.integrityValidBle(
-                            `${(currentInspection as BleReassemblyInspection).expectedSize?.toLocaleString()} bytes`,
+                          {t.capture.wireless.integrityValidZigbee(
+                            `0x${result.zigbeeMeta.manufacturerCode.toString(16).padStart(4, '0')}`,
+                            `0x${result.zigbeeMeta.imageType.toString(16).padStart(4, '0')}`,
+                            `v${result.zigbeeMeta.fileVersion}`,
                           )}
                         </span>
-                      ) : (currentInspection as BleReassemblyInspection).integrityChecked ? (
-                        <span className="badge badge-high mono">
-                          {t.capture.wireless.missingBytesCount(
-                            currentInspection.missingBytes,
-                            (currentInspection as BleReassemblyInspection).expectedSize ?? 0,
-                          )}
+                      ) : tab === 'ble' && isComplete && completeness?.expectedBytes ? (
+                        <span className="badge badge-ok mono">
+                          {t.capture.wireless.integrityValidBle(`${completeness.expectedBytes.toLocaleString()} bytes`)}
                         </span>
                       ) : (
                         <span className="hint">{t.capture.wireless.integrityNone}</span>
@@ -607,8 +597,8 @@ export function WirelessReassemblyPanel({
             </div>
           )}
 
-          {/* Workbench Ingest & Image Link */}
-          {result.flowId && isComplete && (
+          {/* Workbench Ingest & Image Link — ONLY if flow is staged and complete */}
+          {result.flowId && isComplete && result.carved && (
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 }}>
               {result.imageId ? (
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }} data-testid="ingested-link-container">
