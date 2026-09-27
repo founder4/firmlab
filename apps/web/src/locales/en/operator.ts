@@ -84,7 +84,9 @@ export const operator = {
   withdrawnBadge: 'withdrawn',
   withdrawnHeading: (n: number) => `Withdrawn (${n})`,
   withdrawnNote: 'Kept on purpose. "This was wrong, and here is why" is a more useful record than a gap.',
-  withdrawPrompt: 'Why does this claim no longer stand? (recorded with the retraction)',
+  withdrawTitle: 'Withdraw this assertion',
+  withdrawBody: 'The claim stays in the ledger as history, marked withdrawn, with the reason and who withdrew it.',
+  withdrawPrompt: 'Why does this claim no longer stand?',
   withdrawWho: 'Who is retracting it?',
 
   /** An honest blank: a revision written by an older build may carry no timestamp at all. */

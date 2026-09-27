@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { type CoverageSummary, type ImageSummary, api, fmtBytes } from '../api';
+import { Dialog } from '../components/Dialog';
 import { useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { toast } from '../toast';
@@ -59,66 +60,6 @@ function FindingsCell({ c }: { c: CoverageSummary | undefined }): JSX.Element {
     <div className="findings-count" title={c.verdict}>
       <strong className="num">{c.findingCount}</strong>
       <span>{t.dashboard.list.findingsLabel(c.findingCount)}</span>
-    </div>
-  );
-}
-
-/**
- * A small confirm dialog that escapes its container (replaces window.confirm).
- *
- * The action label is passed in rather than derived. It used to be `title.startsWith('Delete') ? 'Delete' :
- * 'Confirm'`, which reads the button off English prose — under any other language every dialog would have
- * silently offered "Confirm" for a destructive action.
- */
-function Confirm({
-  title,
-  body,
-  confirmLabel,
-  danger,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  body: string;
-  confirmLabel: string;
-  danger?: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}): JSX.Element {
-  const t = useMessages();
-  return (
-    <div
-      className="modal-scrim"
-      onClick={onCancel}
-      onKeyDown={(e) => e.key === 'Escape' && onCancel()}
-      role="presentation"
-    >
-      {/* biome-ignore lint/a11y/useSemanticElements: a portal-free modal; focus is placed on the confirm button and the scrim closes on click/Escape. */}
-      <div className="dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <div className="dialog-title">{title}</div>
-        <p className="hint" style={{ margin: '0 0 16px' }}>
-          {body}
-        </p>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          {/* A destructive dialog opens on Cancel, so a stray Enter cannot delete an image and its results. */}
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={onCancel}
-            ref={(el) => (danger ? el?.focus() : undefined)}
-          >
-            {t.common.cancel}
-          </button>
-          <button
-            type="button"
-            className={`btn btn-sm ${danger ? 'btn-danger' : 'btn-primary'}`}
-            onClick={onConfirm}
-            ref={(el) => (danger ? undefined : el?.focus())}
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -647,7 +588,7 @@ export function Dashboard(): JSX.Element {
       )}
 
       {confirm && (
-        <Confirm
+        <Dialog
           title={confirm.title}
           body={confirm.body}
           confirmLabel={confirm.confirmLabel}

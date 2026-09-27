@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { type CorpusOverview, type CorpusRule, api } from '../api';
+import { Dialog, type DialogField } from '../components/Dialog';
 import { useMessages } from '../i18n';
 import { toast } from '../toast';
 
@@ -33,12 +34,13 @@ export function Corpus(): JSX.Element {
 
   const ruleKeys = new Set(rules.filter((r) => r.type === 'known-credential').map((r) => r.key));
 
+  // One pending dialog at a time: promoting asks for a label, removing asks for confirmation.
+  const [dialog, setDialog] = useState<
+    { kind: 'promote'; hash: string; kind0: string | null } | { kind: 'remove'; rule: CorpusRule } | null
+  >(null);
+
   const promote = useCallback(
-    async (hash: string, kind: string | null) => {
-      // `kind` is the detector's own label for the secret — a stored measurement, offered as-is rather than
-      // re-worded, and only the fallback the operator sees when there is none is localised.
-      const label = window.prompt(t.corpus.reuse.promptLabel, kind ?? t.corpus.reuse.promptDefault);
-      if (!label) return;
+    async (hash: string, label: string) => {
       try {
         await api.promoteRule('known-credential', hash, label);
         toast.success(t.corpus.reuse.promoted);
@@ -105,7 +107,11 @@ export function Corpus(): JSX.Element {
                     <td>{c.watchlistLabel ? <span className="badge badge-high">{c.watchlistLabel}</span> : '—'}</td>
                     <td>
                       {!ruleKeys.has(c.hash) && (
-                        <button type="button" className="btn btn-sm" onClick={() => promote(c.hash, c.kind)}>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => setDialog({ kind: 'promote', hash: c.hash, kind0: c.kind })}
+                        >
                           {t.corpus.reuse.promote}
                         </button>
                       )}
@@ -216,7 +222,11 @@ export function Corpus(): JSX.Element {
                       {r.key.slice(0, 16)}…
                     </td>
                     <td>
-                      <button type="button" className="btn btn-sm" onClick={() => removeRule(r.id)}>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => setDialog({ kind: 'remove', rule: r })}
+                      >
                         {t.corpus.rules.remove}
                       </button>
                     </td>
@@ -227,6 +237,41 @@ export function Corpus(): JSX.Element {
           </div>
         </div>
       )}
+      {dialog?.kind === 'promote' ? (
+        <Dialog
+          title={t.corpus.reuse.promptTitle}
+          body={t.corpus.reuse.promptBody}
+          confirmLabel={t.corpus.reuse.promote}
+          fields={[
+            {
+              name: 'label',
+              label: t.corpus.reuse.promptLabel,
+              // `kind` is the detector's own label for the secret — offered as-is; only the fallback is localised.
+              initial: dialog.kind0 ?? t.corpus.reuse.promptDefault,
+            } satisfies DialogField,
+          ]}
+          onCancel={() => setDialog(null)}
+          onConfirm={({ label }) => {
+            const hash = dialog.hash;
+            setDialog(null);
+            void promote(hash, label ?? '');
+          }}
+        />
+      ) : null}
+      {dialog?.kind === 'remove' ? (
+        <Dialog
+          title={t.corpus.rules.removeTitle(dialog.rule.label)}
+          body={t.corpus.rules.removeBody}
+          confirmLabel={t.corpus.rules.removeConfirm}
+          danger
+          onCancel={() => setDialog(null)}
+          onConfirm={() => {
+            const id = dialog.rule.id;
+            setDialog(null);
+            void removeRule(id);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

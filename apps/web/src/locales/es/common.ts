@@ -4,6 +4,7 @@ import type { Messages } from '../en';
 export const common: Messages['common'] = {
   run: 'Ejecutar',
   cancel: 'Cancelar',
+  required: (field: string) => `Falta: ${field}`,
   close: 'Cerrar',
   save: 'Guardar',
   delete: 'Eliminar',

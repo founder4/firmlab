@@ -40,6 +40,7 @@ import {
   api,
 } from '../api';
 import { messages, useMessages } from '../i18n';
+import { Dialog } from './Dialog';
 
 /** The claim codes, in the order the form offers them. The label is a lookup, so the vocabulary lives in one place. */
 const CLAIMS: OperatorClaim[] = [
@@ -470,21 +471,18 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
     }
   }, [imageId, assertedBy, title, claim, rationale, severity, disputes, load]);
 
+  const [withdrawing, setWithdrawing] = useState<AssertedFinding | null>(null);
   const withdraw = useCallback(
-    async (f: AssertedFinding) => {
-      const reason = window.prompt(t.operator.withdrawPrompt);
-      if (!reason?.trim()) return;
-      const who = window.prompt(t.operator.withdrawWho, assertedBy || f.assertion?.assertedBy || '');
-      if (!who?.trim()) return;
+    async (f: AssertedFinding, reason: string, who: string) => {
       setErr(null);
       try {
-        await api.withdrawAssertion(imageId, f.id, { withdrawnBy: who.trim(), reason: reason.trim() });
+        await api.withdrawAssertion(imageId, f.id, { withdrawnBy: who, reason });
         load();
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
       }
     },
-    [imageId, assertedBy, load, t],
+    [imageId, load],
   );
 
   const addNote = useCallback(async () => {
@@ -607,7 +605,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
         {ledger && ledger.assertions.length > 0 ? (
           <AssertionTable
             rows={ledger.assertions}
-            onWithdraw={withdraw}
+            onWithdraw={setWithdrawing}
             amend={{
               openFor: amendOpen,
               imageId,
@@ -693,6 +691,27 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
           </div>
         )}
       </div>
+      {withdrawing ? (
+        <Dialog
+          title={t.operator.withdrawTitle}
+          body={t.operator.withdrawBody}
+          confirmLabel={t.operator.withdraw}
+          fields={[
+            { name: 'reason', label: t.operator.withdrawPrompt, multiline: true },
+            {
+              name: 'who',
+              label: t.operator.withdrawWho,
+              initial: assertedBy || withdrawing.assertion?.assertedBy || '',
+            },
+          ]}
+          onCancel={() => setWithdrawing(null)}
+          onConfirm={({ reason, who }) => {
+            const f = withdrawing;
+            setWithdrawing(null);
+            void withdraw(f, reason ?? '', who ?? '');
+          }}
+        />
+      ) : null}
     </>
   );
 }

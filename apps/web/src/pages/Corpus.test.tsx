@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
@@ -153,6 +153,34 @@ describe('Corpus', () => {
     expect(es.nav.corpus).toBe('Corpus entre imágenes');
   });
 
+  it('asks before removing a watchlist rule, and removes nothing on cancel', async () => {
+    mockApi.corpusOverview.mockResolvedValue({
+      imageCount: 1,
+      ruleCount: 1,
+      credentialReuse: [],
+      componentPrevalence: [],
+      deviceFamilies: [],
+    });
+    mockApi.corpusRules.mockResolvedValue([
+      { id: 'r1', type: 'known-credential', key: 'abcdef0123456789abcdef', label: 'default admin' },
+    ] as never);
+    mockApi.deleteRule.mockResolvedValue({} as never);
+    render(
+      <MemoryRouter>
+        <Corpus />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'quitar' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('button', { name: 'Cancelar' })).toHaveFocus();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    expect(mockApi.deleteRule).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'quitar' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Quitar' }));
+    await waitFor(() => expect(mockApi.deleteRule).toHaveBeenCalledWith('r1'));
+  });
+
   it('promotes a reused credential through the operator-controlled label', async () => {
     mockApi.corpusOverview.mockResolvedValue({
       imageCount: 2,
@@ -162,7 +190,6 @@ describe('Corpus', () => {
       deviceFamilies: [],
     });
     mockApi.promoteRule.mockResolvedValue({});
-    vi.spyOn(window, 'prompt').mockReturnValue('vendor default');
 
     render(
       <MemoryRouter>
@@ -170,6 +197,18 @@ describe('Corpus', () => {
       </MemoryRouter>,
     );
     fireEvent.click(await screen.findByRole('button', { name: /vigilancia/i }));
+
+    // The dialog offers the detector's own label, and refuses an empty one by naming the field.
+    const dialog = screen.getByRole('dialog');
+    const label = within(dialog).getByLabelText('Etiqueta');
+    expect(label).toHaveValue('password');
+    fireEvent.change(label, { target: { value: '  ' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /vigilancia/i }));
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Etiqueta');
+    expect(mockApi.promoteRule).not.toHaveBeenCalled();
+
+    fireEvent.change(label, { target: { value: 'vendor default' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /vigilancia/i }));
 
     await waitFor(() =>
       expect(mockApi.promoteRule).toHaveBeenCalledWith('known-credential', 'credential-hash', 'vendor default'),

@@ -3611,3 +3611,18 @@ main.content:focus {
 .row-anchor:focus-visible {
   text-decoration: underline;
 }
+/* Dialog form fields: the label names the field; the error names what is missing, beside it. */
+.field-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.dialog .input {
+  width: 100%;
+}
+.field-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--danger);
+}

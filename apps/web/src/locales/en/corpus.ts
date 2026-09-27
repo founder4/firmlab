@@ -35,8 +35,10 @@ export const corpus = {
     colImages: 'Images',
     colWatchlist: 'Watchlist',
     promote: '+ watchlist',
-    /** `window.prompt` label and the default it offers, so a hurried operator still stores a meaningful label. */
-    promptLabel: 'Label for this known-bad credential:',
+    /** The promote dialog's field and the default it offers, so a hurried operator still stores a meaningful label. */
+    promptTitle: 'Add to the watchlist',
+    promptBody: 'Future uploads that contain this secret will be flagged with this label.',
+    promptLabel: 'Label',
     promptDefault: 'known-bad credential',
     promoted: 'Promoted to the watchlist',
   },
@@ -72,5 +74,8 @@ export const corpus = {
     colLabel: 'Label',
     colKey: 'Key',
     remove: 'remove',
+    removeTitle: (label: string) => `Remove “${label}” from the watchlist?`,
+    removeBody: 'Future uploads will no longer be flagged for this secret. Findings already recorded stay.',
+    removeConfirm: 'Remove',
   },
 };

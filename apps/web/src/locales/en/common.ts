@@ -11,6 +11,7 @@
 export const common = {
   run: 'Run',
   cancel: 'Cancel',
+  required: (field: string) => `${field} is required.`,
   close: 'Close',
   save: 'Save',
   delete: 'Delete',

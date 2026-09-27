@@ -74,7 +74,10 @@ export const operator: Messages['operator'] = {
   withdrawnBadge: 'retirada',
   withdrawnHeading: (n: number) => `Retiradas (${n})`,
   withdrawnNote: 'Se conservan a propósito. «Esto estaba mal, y aquí está por qué» es mejor registro que un hueco.',
-  withdrawPrompt: '¿Por qué deja de sostenerse esta afirmación? (se registra junto a la retirada)',
+  withdrawTitle: 'Retirar esta afirmación',
+  withdrawBody:
+    'La afirmación se conserva en el registro como historia, marcada como retirada, con el motivo y quién la retiró.',
+  withdrawPrompt: '¿Por qué deja de sostenerse esta afirmación?',
   withdrawWho: '¿Quién la retira?',
 
   unrecordedDate: 'una fecha sin registrar',

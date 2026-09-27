@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AssertedFinding, type AssertionRevision, type OperatorLedger, api } from '../api';
 import { setLocale } from '../i18n';
@@ -486,5 +486,30 @@ describe('amending an assertion — the ledger gets a writer, and refuses a chan
     render(<OperatorPanel imageId="abc" />);
     await waitFor(() => expect(screen.queryByText(assertion.title)).toBeTruthy());
     expect(screen.queryByText('Amend')).toBeNull();
+  });
+});
+
+describe('OperatorPanel — withdrawing asks both questions in one dialog', () => {
+  it('names the missing reason instead of silently doing nothing, then records reason and author', async () => {
+    mockApi.withdrawAssertion.mockResolvedValue(undefined as never);
+    mount(ledger({ assertions: [asserted()] }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Withdraw' }));
+    const dialog = screen.getByRole('dialog');
+    const reason = within(dialog).getByLabelText('Why does this claim no longer stand?');
+    expect(reason).toHaveFocus();
+    expect(within(dialog).getByLabelText('Who is retracting it?')).toHaveValue('aaron');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Withdraw' }));
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Why does this claim no longer stand?');
+    expect(mockApi.withdrawAssertion).not.toHaveBeenCalled();
+
+    fireEvent.change(reason, { target: { value: 'Rev C removed telnet' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Withdraw' }));
+    await waitFor(() =>
+      expect(mockApi.withdrawAssertion).toHaveBeenCalledWith('img1', 'a1', {
+        withdrawnBy: 'aaron',
+        reason: 'Rev C removed telnet',
+      }),
+    );
   });
 });
