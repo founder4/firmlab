@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { StaticAnalysis } from '@firmlab/core';
+import { type StaticAnalysis, mergeNvdCandidates } from '@firmlab/core';
 import { type IntelContext, runIntelSynthesis } from '../agent/intel.js';
 import {
   CONFIRMED_PRIOR_STATES,
@@ -32,7 +32,7 @@ import { runKernelPosture } from '../providers/kernelposture.js';
 import { type KevResult, collectCveIds, fetchAndMatchKev, kevLogLine } from '../providers/kev.js';
 import { type KeyMaterial, summarizeKeyMaterial } from '../providers/keys.js';
 import { type KmodResult, kmodAdvisoryCandidates } from '../providers/kmod.js';
-import { type NvdBatchResult, mergeNvdCandidates, queryNvdBatch } from '../providers/nvd.js';
+import { type NvdBatchResult, queryNvdBatch } from '../providers/nvd.js';
 import { type OsvBatchResult, osvEcosystem, queryOsvBatch } from '../providers/osv.js';
 import { type ProvenanceFingerprint, buildProvenanceFingerprint } from '../providers/provenance.js';
 import type { SbomResult } from '../providers/sbom.js';

@@ -420,7 +420,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   puras de `component-cve` también están en core
   (`packages/core/src/component-cve.ts`: tabla curada, versiones, extracción, `matchCves`, `curatedCveVerdict`,
   drafts y sus pruebas); en API queda sólo el recorrido acotado del rootfs. La integración final de exports está
-  completada y `nvd-domain` queda como la siguiente fase independiente.)*
+  completada. `nvd-domain` también está en core (`packages/core/src/nvd-domain.ts`: tabla CPE curada, versiones,
+  tiers y ranking antes del cap, cotas y decisión de paginación, query/cache key, parser de respuesta, merge de
+  candidatos y descripción de lo descartado, con sus pruebas); en API (`providers/nvd.ts`) quedan sólo el fetch
+  allowlisted, la caché en disco, el bucle de batch y los tipos de resultado persistidos. Paridad verificada
+  objeto a objeto contra el build previo: 4.317 comparaciones, 0 diferencias.)*
 - [x] Cubrir con test los cuatro componentes web sin cobertura: `DeepAnalysisDetails.tsx` (569 líneas),
   `KernelPosture.tsx`, `BinVulnPanel.tsx`, `PresetsPanel.tsx`. *(Hecho en `4f8ab72`: 10 casos para
   `DeepAnalysisDetails` —tenía 4 de sus 10 proveedores—, 7 para `KernelPosture`, 8 para `BinVulnPanel` y 8 para

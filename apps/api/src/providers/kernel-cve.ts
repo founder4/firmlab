@@ -8,10 +8,11 @@
  */
 import type { EvidenceChannel, FindingSeverity, ProofState } from '@firmlab/core';
 import type { FindingDraft } from '@firmlab/core';
+import { LINUX_KERNEL_CNA_SOURCE, type NvdCandidate } from '@firmlab/core';
 import { type DeviceContext, deviceContextTriage } from './cve-device-triage.js';
 import type { DecodedKallsyms } from './kallsyms.js';
 import type { KernelPostureResult } from './kernelposture.js';
-import { LINUX_KERNEL_CNA_SOURCE, type NvdCandidate, type NvdComponentResult } from './nvd.js';
+import type { NvdComponentResult } from './nvd.js';
 
 export type KernelOptionState = 'on' | 'off' | 'unknown';
 export type KernelCveState = 'applicable' | 'ruled_out' | 'unknown';

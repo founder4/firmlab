@@ -22,3 +22,4 @@ export * from './mcu.js';
 export * from './rtos-tasks.js';
 export { analyzeBuffer } from './analyze.js';
 export type { StaticAnalysis } from './analyze.js';
+export * from './nvd-domain.js';
