@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import * as core from '@firmlab/core';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   auditBootEnv,
   auditLoaderDerivedKey,
@@ -10,6 +11,12 @@ import {
   readBootScript,
   runUbootAnalysis,
 } from './uboot.js';
+
+// Pass-through spy so a test can count how often the loader recipe scan walks the prefix; behaviour is unchanged.
+vi.mock('@firmlab/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@firmlab/core')>();
+  return { ...actual, detectLoaderDerivedKeyInBytes: vi.fn(actual.detectLoaderDerivedKeyInBytes) };
+});
 
 /**
  * The Tenda camera's environment, copied verbatim out of the deployed corpus
@@ -491,5 +498,37 @@ describe('runUbootAnalysis — loader-key audit precedes the environment precond
       totalBytes: image.length,
       complete: false,
     });
+  });
+
+  it('reads and scans the prefix once when an environment is found too, keeping both results separate', () => {
+    const p = path.join(tmp, 'loader-with-env.bin');
+    const env = Buffer.from('bootcmd=sf read 0x81000000; nx_decrypt kernel; bootm\0bootdelay=0\0\0', 'ascii');
+    const image = Buffer.concat([env, nx820LoaderImage()]);
+    fs.writeFileSync(p, image);
+    const detect = vi.mocked(core.detectLoaderDerivedKeyInBytes);
+    detect.mockClear();
+    const readSync = vi.spyOn(fs, 'readSync');
+    try {
+      const res = runUbootAnalysis(p);
+      expect(readSync).toHaveBeenCalledTimes(1);
+      expect(detect).toHaveBeenCalledTimes(1);
+      // Environment contract: parsed from the env block, not inferred from the loader audit.
+      expect(res.found).toBe(true);
+      expect(res.vars).toMatchObject({ bootdelay: '0' });
+      expect(res.scan).toEqual({ bytesRead: image.length, totalBytes: image.length });
+      // Loader contract: its own coverage and bounds, and the lead composed with the env's decrypt invocation.
+      expect(res.loaderKeyAudit).toEqual({
+        attempted: true,
+        completed: true,
+        leadsFound: 1,
+        scan: { bytesRead: image.length, totalBytes: image.length, complete: true },
+      });
+      const lead = res.findings.find((f) => f.kind === 'bootloader-derived-flash-key');
+      const evidence = lead?.evidence as { encryptedEvidence: string[] };
+      expect(evidence.encryptedEvidence.join(' ')).toContain('`bootcmd` invokes a partition-decrypt step');
+      expect(evidence.encryptedEvidence.join(' ')).toContain('entropy-backed ENC1');
+    } finally {
+      readSync.mockRestore();
+    }
   });
 });

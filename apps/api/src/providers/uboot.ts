@@ -642,12 +642,37 @@ export function auditLoaderDerivedKey(
   vars: Record<string, string>,
   totalBytes = buf.length,
 ): FindingDraft[] {
+  return composeLoaderKeyAudit(scanLoaderKeyPrefix(buf, totalBytes), vars);
+}
+
+/** What the byte-only half of the loader-key audit read out of the bounded prefix — independent of any env. */
+export interface LoaderKeyPrefixScan {
+  readonly recipe: ReturnType<typeof detectLoaderDerivedKeyInBytes>;
+  readonly enc1: { offsets: number[]; total: number; dropped: number };
+  readonly scan: { bytesRead: number; totalBytes: number; complete: boolean };
+}
+
+/**
+ * Pure: the expensive half of the audit — the recipe search and the ENC1 scan over at most LOADER_AUDIT_CAP bytes.
+ * It depends on the bytes alone, so the runner does it ONCE and composes the result with whatever variables the
+ * environment yields (or none); the env parse never feeds it and it never implies the env was found.
+ */
+export function scanLoaderKeyPrefix(buf: Uint8Array, totalBytes = buf.length): LoaderKeyPrefixScan {
   const scanLimit = Math.min(buf.length, totalBytes, LOADER_AUDIT_CAP);
   // Recipe and target are separate gates: ENC1 structure below cannot manufacture the loader anchor here.
   const recipe = detectLoaderDerivedKeyInBytes(buf.subarray(0, scanLimit));
-  if (!recipe) return [];
+  return Object.freeze({
+    recipe,
+    // No recipe → no lead whatever the target says, so the ENC1 walk is skipped as before.
+    enc1: recipe ? findEnc1Offsets(buf, scanLimit) : { offsets: [], total: 0, dropped: 0 },
+    scan: { bytesRead: scanLimit, totalBytes, complete: scanLimit >= totalBytes },
+  });
+}
 
-  const enc1 = findEnc1Offsets(buf, scanLimit);
+/** Pure: compose a prefix scan with boot-flow variables into the loader-derived-key lead, or [] without one. */
+export function composeLoaderKeyAudit(prefix: LoaderKeyPrefixScan, vars: Record<string, string>): FindingDraft[] {
+  const { recipe, enc1, scan } = prefix;
+  if (!recipe) return [];
   const invocations = decryptInvocations(vars);
   // The recipe alone is a loader that CAN derive a key; the finding needs this image to actually carry encrypted
   // partitions to unlock — otherwise there is nothing to recover and the lead has no target.
@@ -694,7 +719,7 @@ export function auditLoaderDerivedKey(
         candidateConstants,
         candidateTotal,
         candidateDropped,
-        recipeScan: { bytesRead: scanLimit, totalBytes, complete: scanLimit >= totalBytes },
+        recipeScan: { ...scan },
         encryptedEvidence,
       },
       rationale: `Nearby loader strings contain a decrypt/key-derivation anchor and ${recipe.primitive}, while independent bytes or boot-flow variables indicate encrypted partitions. This makes static key recovery a lead, not a result: reverse the exact data flow to confirm which constants feed which primitive and whether its output is the flash key. The listed constants are only candidate seed/salt material read verbatim from the bytes; this finding neither derives nor claims a key.`,
@@ -794,38 +819,24 @@ export function runUbootAnalysis(imagePath: string): UbootResult {
     });
   }
   const scan = { bytesRead: read.bytesRead, totalBytes: read.totalBytes };
-  // This audit deliberately precedes the environment precondition: many loaders carry the recipe and encrypted
-  // partition but no readable variable store. Empty findings still persist as completed bounded coverage.
-  const loaderFindingsWithoutEnv = auditLoaderDerivedKey(read.buf, {}, read.totalBytes);
-  const loaderScan = {
-    bytesRead: Math.min(read.bytesRead, read.totalBytes, LOADER_AUDIT_CAP),
-    totalBytes: read.totalBytes,
-    complete: read.totalBytes <= LOADER_AUDIT_CAP,
-  };
+  // The loader audit deliberately precedes the environment precondition: many loaders carry the recipe and
+  // encrypted partition but no readable variable store. Its byte scan runs ONCE over the same read; only the cheap
+  // composition differs between the no-env and env paths. Empty findings still persist as completed coverage.
+  const loaderPrefix = scanLoaderKeyPrefix(read.buf, read.totalBytes);
   const loaderCoverage = (leadsFound: number): NonNullable<UbootResult['loaderKeyAudit']> => ({
     attempted: true,
     completed: true,
     leadsFound,
-    scan: loaderScan,
+    scan: { ...loaderPrefix.scan },
   });
+  const withoutEnv = (): UbootResult => {
+    const loaderFindings = composeLoaderKeyAudit(loaderPrefix, {});
+    return notFound(describeNoEnvBlock(scan), loaderFindings, scan, loaderCoverage(loaderFindings.length));
+  };
   const block = findEnvBlock(read.buf);
-  if (!block) {
-    return notFound(
-      describeNoEnvBlock(scan),
-      loaderFindingsWithoutEnv,
-      scan,
-      loaderCoverage(loaderFindingsWithoutEnv.length),
-    );
-  }
+  if (!block) return withoutEnv();
   const { vars, entryCount, malformedEntries } = parseUbootEnv(block);
-  if (entryCount === 0) {
-    return notFound(
-      describeNoEnvBlock(scan),
-      loaderFindingsWithoutEnv,
-      scan,
-      loaderCoverage(loaderFindingsWithoutEnv.length),
-    );
-  }
+  if (entryCount === 0) return withoutEnv();
   const varCount = Object.keys(vars).length;
   const script = readBootScript(vars);
   // Completeness is a claim about what we may infer from a variable's ABSENCE, so it is only made when both ways
@@ -834,9 +845,9 @@ export function runUbootAnalysis(imagePath: string): UbootResult {
   const assembledNote = script.variants.length
     ? ` A \`bootcmd\`/\`preboot\` script re-sets bootargs: ${script.reason}`
     : '';
-  // Re-compose with parsed boot-flow variables so a decrypt invocation remains valid independent evidence when a
-  // structurally complete ENC1 body is not present in the bounded prefix.
-  const loaderFindings = auditLoaderDerivedKey(read.buf, vars, read.totalBytes);
+  // Compose the same prefix scan with parsed boot-flow variables so a decrypt invocation remains valid independent
+  // evidence when a structurally complete ENC1 body is not present in the bounded prefix.
+  const loaderFindings = composeLoaderKeyAudit(loaderPrefix, vars);
   return {
     available: true,
     found: true,

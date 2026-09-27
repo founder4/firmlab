@@ -297,8 +297,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   otra forma, incluido un «completada» sin cota de bytes, es `unknown`/degradada y nunca «corrió vacía». La web
   aplica el mismo predicado. `listJobs` desempata `createdAt` por `rowid`, así que dos jobs en el mismo
   milisegundo ya no eligen el «más reciente» por el orden en que SQLite devuelva las filas.)*
-- [ ] Evitar la segunda lectura/escaneo del prefijo de 4 MiB cuando el análisis U-Boot también encuentra entorno;
+- [x] Evitar la segunda lectura/escaneo del prefijo de 4 MiB cuando el análisis U-Boot también encuentra entorno;
   medir primero y conservar separados el resultado de entorno y la evidencia de la auditoría del loader.
+  *(Hecho: `scanLoaderKeyPrefix` recorre el prefijo una sola vez y `composeLoaderKeyAudit` lo combina con las
+  variables del entorno o sin ellas. Medición fijada por test: el código anterior invocaba dos veces la detección
+  y el recorrido ENC1 en el camino con entorno; el nuevo los invoca una vez. La lectura física ya era una y sigue
+  siéndolo.)*
+- [ ] Añadir casos directos de `loaderKeyAudit` para fichero mayor de 32 MiB y fallo de lectura. El caso de cero
+  bytes ya está cubierto en el lector persistido; las otras dos ramas conservan su semántica por equivalencia y
+  suite completa, pero aún no tienen una prueba focal que fije sus cotas/resultados.
 - [x] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de
   descargarla sola (ver `providers/sbom-db.ts`), un contenedor recreado no tiene base y el resultado declara la
   negativa en vez de correlacionar. *(Hecho: **horneada** en `Dockerfile.tools` — `ENV GRYPE_DB_CACHE_DIR=/opt/grype-db`
