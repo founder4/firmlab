@@ -2,6 +2,7 @@ import type { StringHit } from '@firmlab/core';
 import { describe, expect, it } from 'vitest';
 import {
   classifyGitleaksHit,
+  grypeKevByVulnerabilityId,
   isHeuristicGitleaksRule,
   normalizeBinaryHardening,
   normalizeGitleaks,
@@ -59,6 +60,85 @@ describe('normalizeSbom', () => {
 
   it('returns nothing when the SBOM is unavailable', () => {
     expect(normalizeSbom({ ...base, available: false })).toEqual([]);
+  });
+
+  /**
+   * grype's embedded KEV snapshot, as metadata on the row that already carries the CVE. Never a second row, never a
+   * rung, and never a claim where the result cannot make one: a legacy result and a `no-kev-provider` database
+   * are unknown, an `annotated` empty list is a measured zero, and neither of those three says anything on a row.
+   */
+  describe('grype KEV annotation', () => {
+    const LOG4J = { dateAdded: '2021-12-10', knownRansomware: 'Known' };
+    const kevResult: SbomResult = {
+      ...base,
+      vulnerabilities: [
+        {
+          id: 'GHSA-jfh8-c2jp-5v3q',
+          severity: 'Critical',
+          packageName: 'log4j-core',
+          packageVersion: '2.14.1',
+          fixedIn: null,
+        },
+        { id: 'CVE-2021-44228', severity: 'Critical', packageName: 'log4j', packageVersion: '2.14.1', fixedIn: null },
+        { id: 'CVE-2021-1', severity: 'Low', packageName: 'busybox', packageVersion: '1.20', fixedIn: null },
+      ],
+      vulnerabilityTotal: 4,
+      grypeKev: {
+        state: 'annotated',
+        captured: '2026-09-26T00:33:03Z',
+        matches: [
+          {
+            cve: 'CVE-2021-44228',
+            vulnerabilityIds: ['GHSA-jfh8-c2jp-5v3q', 'CVE-2021-44228'],
+            packages: ['log4j-core@2.14.1', 'log4j@2.14.1'],
+            ...LOG4J,
+          },
+          // Carried only by a match past the listing cap: in the map, on no row.
+          { cve: 'CVE-2020-9999', vulnerabilityIds: ['CVE-2020-9999'], packages: ['x@1'], ...LOG4J },
+        ],
+      },
+    };
+    const kevOf = (out: ReturnType<typeof normalizeSbom>) =>
+      out.map((d) => (d.evidence as { knownExploited?: { cve: string } }).knownExploited?.cve ?? null);
+
+    it('annotates the CVE row and the GHSA row whose knownExploited.cve carries it, adding no row', () => {
+      const out = normalizeSbom(kevResult);
+      expect(out).toHaveLength(kevResult.vulnerabilities.length);
+      expect(kevOf(out)).toEqual(['CVE-2021-44228', 'CVE-2021-44228', null]);
+      expect(out[0]?.evidence).toMatchObject({
+        knownExploited: { source: 'grype-db', captured: '2026-09-26T00:33:03Z', knownRansomware: 'Known' },
+      });
+      expect(out[0]?.rationale).toMatch(/exploited in the wild.*not reachability/);
+    });
+
+    it('moves neither the rung nor the severity', () => {
+      const { grypeKev: _, ...legacy } = kevResult;
+      const plain = normalizeSbom(legacy);
+      const out = normalizeSbom(kevResult);
+      expect(out.map((d) => [d.proofState, d.severity, d.evidenceChannel])).toEqual(
+        plain.map((d) => [d.proofState, d.severity, d.evidenceChannel]),
+      );
+      expect(out.every((d) => d.proofState === 'needs_runtime_reproduction')).toBe(true);
+    });
+
+    it('claims nothing on a legacy result, a no-kev-provider database or a measured zero', () => {
+      const { grypeKev: _, ...legacy } = kevResult;
+      expect(kevOf(normalizeSbom(legacy))).toEqual([null, null, null]);
+      expect(kevOf(normalizeSbom({ ...kevResult, grypeKev: { state: 'no-kev-provider', reason: 'r' } }))).toEqual([
+        null,
+        null,
+        null,
+      ]);
+      expect(
+        kevOf(normalizeSbom({ ...kevResult, grypeKev: { state: 'annotated', captured: 'c', matches: [] } })),
+      ).toEqual([null, null, null]);
+    });
+
+    it('indexes every carrier id, including a KEV CVE whose rows fell past the cap', () => {
+      const map = grypeKevByVulnerabilityId(kevResult);
+      expect([...map.keys()].sort()).toEqual(['CVE-2020-9999', 'CVE-2021-44228', 'GHSA-JFH8-C2JP-5V3Q']);
+      expect(grypeKevByVulnerabilityId({}).size).toBe(0);
+    });
   });
 
   /**

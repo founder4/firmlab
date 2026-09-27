@@ -238,6 +238,24 @@ export const imageDetail = {
         : `Matched against a vulnerability database built ${built}${
             ageDays === null ? '' : ` (${ageDays} day(s) ago)`
           }${schema ? `, schema ${schema}` : ''}. A CVE published since then cannot appear in this table.`,
+    /**
+     * grype's OWN KEV snapshot, separate from the research lane's catalogue cross-reference. Three states, never
+     * merged: not recorded, unknown, measured. A catalogue entry is exploitation elsewhere, not reachability here.
+     */
+    kevNotRecorded:
+      "Known-exploited (KEV) status was not recorded for this run — it predates grype's KEV annotation. Unknown, not zero; re-scan to ask.",
+    kevNoProvider: "grype's database carries no KEV snapshot, so known-exploited status is unknown here — not zero.",
+    kevAnnotated: (captured: string, kev: number, matches: number, unlisted: string[]) =>
+      [
+        kev === 0
+          ? `grype's KEV snapshot (captured ${captured}) lists none of its ${matches} match(es) as exploited in the wild — a zero over grype's matches, not over the image.`
+          : `grype's KEV snapshot (captured ${captured}) lists ${kev} CVE(s) among its ${matches} match(es) as exploited in the wild — exploitation elsewhere, not reachability on this image.`,
+        unlisted.length > 0 ? `Not among the rows below (past the listing bound): ${unlisted.join(', ')}.` : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    kevBadgeTitle: (cve: string, dateAdded: string) =>
+      `${cve} is in grype's KEV snapshot${dateAdded ? ` (added ${dateAdded})` : ''}: exploited in the wild, not proven reachable here.`,
     graphTitle: 'Component graph',
     graphSub:
       'The rootfs and its components, grouped by ecosystem around the ring and coloured by the worst CVE affecting each. Hover a node for its version and CVEs.',

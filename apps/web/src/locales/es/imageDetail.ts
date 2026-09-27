@@ -209,6 +209,23 @@ export const imageDetail: Messages['imageDetail'] = {
         : `Correlacionado contra una base de vulnerabilidades compilada el ${built}${
             ageDays === null ? '' : ` (hace ${ageDays} día(s))`
           }${schema ? `, esquema ${schema}` : ''}. Un CVE publicado después no puede aparecer en esta tabla.`,
+    kevNotRecorded:
+      'El estado de explotación conocida (KEV) no se registró en esta ejecución: es anterior a la anotación KEV de grype. Desconocido, no cero; vuelve a escanear para preguntarlo.',
+    kevNoProvider:
+      'La base de grype no trae instantánea KEV, así que el estado de explotación conocida es desconocido aquí, no cero.',
+    kevAnnotated: (captured: string, kev: number, matches: number, unlisted: string[]) =>
+      [
+        kev === 0
+          ? `La instantánea KEV de grype (capturada ${captured}) no marca como explotada en la naturaleza ninguna de sus ${matches} coincidencia(s): un cero sobre las coincidencias de grype, no sobre la imagen.`
+          : `La instantánea KEV de grype (capturada ${captured}) marca ${kev} CVE entre sus ${matches} coincidencia(s) como explotados en la naturaleza: explotación en otro lugar, no alcanzabilidad en esta imagen.`,
+        unlisted.length > 0
+          ? `No figuran en las filas de abajo (fuera del límite del listado): ${unlisted.join(', ')}.`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    kevBadgeTitle: (cve: string, dateAdded: string) =>
+      `${cve} está en la instantánea KEV de grype${dateAdded ? ` (añadido ${dateAdded})` : ''}: explotado en la naturaleza, no se ha probado alcanzable aquí.`,
     graphTitle: 'Grafo de componentes',
     graphSub:
       'El rootfs y sus componentes, agrupados por ecosistema alrededor del anillo y coloreados por el CVE más grave que afecta a cada uno. Pasa el cursor por un nodo para ver su versión y sus CVE.',

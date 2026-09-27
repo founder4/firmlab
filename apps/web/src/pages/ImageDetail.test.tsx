@@ -219,6 +219,79 @@ describe('ImageDetail SBOM — why no CVEs, and against what', () => {
     expect(await screen.findByText(/built 2026-09-16T06:30:57Z/)).toBeTruthy();
     expect(screen.getByText(/cannot appear in this table/)).toBeTruthy();
   });
+
+  describe("grype's KEV snapshot", () => {
+    const matched = { ...base, grypeAvailable: true };
+    const vuln = (id: string, packageName: string) => ({
+      id,
+      severity: 'Critical' as const,
+      packageName,
+      packageVersion: '2.14.1',
+      fixedIn: null,
+    });
+    const LOG4J = {
+      cve: 'CVE-2021-44228',
+      vulnerabilityIds: ['GHSA-jfh8-c2jp-5v3q'],
+      packages: ['log4j-core@2.14.1'],
+      dateAdded: '2021-12-10',
+      knownRansomware: 'Known',
+    };
+
+    it('reads a result stored before the annotation as not recorded, never as zero', async () => {
+      mockApi.sbom.mockResolvedValue(matched);
+      renderSection('sbom');
+      expect((await screen.findByTestId('grype-kev')).textContent).toMatch(/not recorded.*Unknown, not zero/);
+    });
+
+    it('reads a database without a kev provider as unknown', async () => {
+      mockApi.sbom.mockResolvedValue({ ...matched, grypeKev: { state: 'no-kev-provider', reason: 'r' } });
+      renderSection('sbom');
+      expect((await screen.findByTestId('grype-kev')).textContent).toMatch(/no KEV snapshot.*unknown/);
+    });
+
+    it('reads an annotated empty list as a measured zero over grype matches, dated', async () => {
+      mockApi.sbom.mockResolvedValue({
+        ...matched,
+        vulnerabilityTotal: 7,
+        grypeKev: { state: 'annotated', captured: '2026-09-26T00:33:03Z', matches: [] },
+      });
+      renderSection('sbom');
+      expect((await screen.findByTestId('grype-kev')).textContent).toMatch(
+        /captured 2026-09-26T00:33:03Z.*none of its 7 match\(es\).*not over the image/,
+      );
+    });
+
+    it('says nothing about KEV when grype never matched', async () => {
+      mockApi.sbom.mockResolvedValue({ ...base, grypeAvailable: false });
+      renderSection('sbom');
+      await screen.findByText(/grype not present/);
+      expect(screen.queryByTestId('grype-kev')).toBeNull();
+    });
+
+    it('badges the GHSA row that carries the CVE, adds no row, and names a KEV CVE past the listing', async () => {
+      mockApi.sbom.mockResolvedValue({
+        ...matched,
+        vulnerabilities: [vuln('GHSA-jfh8-c2jp-5v3q', 'log4j-core'), vuln('CVE-2021-1', 'busybox')],
+        vulnerabilityTotal: 1200,
+        counts: { ...base.counts, Critical: 2 },
+        grypeKev: {
+          state: 'annotated',
+          captured: '2026-09-26T00:33:03Z',
+          matches: [LOG4J, { ...LOG4J, cve: 'CVE-2020-9999', vulnerabilityIds: ['CVE-2020-9999'] }],
+        },
+      });
+      renderSection('sbom');
+      const note = await screen.findByTestId('grype-kev');
+      expect(note.textContent).toMatch(/lists 2 CVE\(s\) among its 1200 match\(es\)/);
+      expect(note.textContent).toMatch(/past the listing bound\): CVE-2020-9999\./);
+      expect(note.textContent).not.toMatch(/CVE-2021-44228\./);
+      const badges = screen.getAllByText('KEV');
+      expect(badges).toHaveLength(1);
+      expect(badges[0]?.closest('td')?.textContent).toContain('GHSA-jfh8-c2jp-5v3q');
+      expect(badges[0]?.getAttribute('title')).toMatch(/CVE-2021-44228.*not proven reachable/);
+      expect(screen.getAllByRole('row')).toHaveLength(2 + 2 + 2); // two table heads, two CVE rows, two packages
+    });
+  });
 });
 
 describe('ImageDetail agent session', () => {

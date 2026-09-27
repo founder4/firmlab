@@ -13,6 +13,7 @@ import {
   type FirmwareDiffResult,
   type FsNode,
   type FsSummary,
+  type GrypeKevMatch,
   type ImageSummary,
   type Job,
   type ResearchResult,
@@ -782,6 +783,54 @@ const SEVERITY_BADGE: Record<Severity, string> = {
   Unknown: 'badge-info',
 };
 
+/** How many CVE rows the SBOM table renders — a third bound, below the provider's `VULN_CAP`. */
+const SBOM_CVE_ROWS = 300;
+
+/**
+ * grype's KEV snapshot, indexed by every id a row can carry: the CVE, and each GHSA/distro id whose
+ * `knownExploited.cve` named it. Empty unless the result is `annotated` — a legacy result or a database without a
+ * kev provider says nothing about any row. The API's `grypeKevByVulnerabilityId` is the same rule for the ledger.
+ */
+function kevById(result: SbomResult): Map<string, GrypeKevMatch> {
+  const out = new Map<string, GrypeKevMatch>();
+  if (result.grypeKev?.state !== 'annotated') return out;
+  for (const m of result.grypeKev.matches) {
+    out.set(m.cve.toUpperCase(), m);
+    for (const id of m.vulnerabilityIds) out.set(id.toUpperCase(), m);
+  }
+  return out;
+}
+
+/**
+ * What grype's KEV snapshot says, in the three states that must not collapse into one: not recorded (absent), unknown
+ * (`no-kev-provider`), and measured (`annotated`, where an empty list is a zero over grype's matches only). A KEV CVE
+ * none of whose rows the table shows is NAMED, because the annotation was computed before any listing cap.
+ */
+function GrypeKevNote({ result }: { result: SbomResult }): JSX.Element {
+  const t = useMessages().imageDetail.sbom;
+  const kev = result.grypeKev;
+  let text: string;
+  if (!kev) text = t.kevNotRecorded;
+  else if (kev.state === 'no-kev-provider') text = t.kevNoProvider;
+  else {
+    const shown = new Set(result.vulnerabilities.slice(0, SBOM_CVE_ROWS).map((v) => v.id.toUpperCase()));
+    const unlisted = kev.matches
+      .filter((m) => !m.vulnerabilityIds.some((id) => shown.has(id.toUpperCase())) && !shown.has(m.cve.toUpperCase()))
+      .map((m) => m.cve);
+    text = t.kevAnnotated(
+      kev.captured,
+      kev.matches.length,
+      result.vulnerabilityTotal ?? result.vulnerabilities.length,
+      unlisted,
+    );
+  }
+  return (
+    <div className="hint" data-testid="grype-kev" style={{ marginBottom: 14, maxWidth: '72ch' }}>
+      {text}
+    </div>
+  );
+}
+
 function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
   const t = useMessages();
   const [result, setResult] = useState<SbomResult | null>(null);
@@ -812,6 +861,7 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
   }, [imageId]);
 
   if (!loaded) return <div className="empty">{t.common.loading}</div>;
+  const kev = result ? kevById(result) : new Map<string, GrypeKevMatch>();
 
   return (
     <div>
@@ -891,6 +941,10 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
             </div>
           )}
 
+          {/* KEV only has something to say where grype matched; with grype unavailable the banner above already
+              says no match was made, and "not asked" would repeat it. */}
+          {result.grypeAvailable && <GrypeKevNote result={result} />}
+
           {result.packages.length > 0 && (
             <div className="panel">
               <div className="panel-head" style={{ marginBottom: 4 }}>
@@ -929,17 +983,31 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
                     </tr>
                   </thead>
                   <tbody>
-                    {result.vulnerabilities.slice(0, 300).map((v, i) => (
-                      <tr key={`${v.id}-${v.packageName}-${i}`}>
-                        <td>
-                          <span className={`badge ${SEVERITY_BADGE[v.severity]}`}>{v.severity}</span>
-                        </td>
-                        <td className="mono">{v.id}</td>
-                        <td>{v.packageName}</td>
-                        <td className="mono">{v.packageVersion}</td>
-                        <td className="mono">{v.fixedIn ?? '—'}</td>
-                      </tr>
-                    ))}
+                    {result.vulnerabilities.slice(0, SBOM_CVE_ROWS).map((v, i) => {
+                      const known = kev.get(v.id.toUpperCase());
+                      return (
+                        <tr key={`${v.id}-${v.packageName}-${i}`}>
+                          <td>
+                            <span className={`badge ${SEVERITY_BADGE[v.severity]}`}>{v.severity}</span>
+                          </td>
+                          <td className="mono">
+                            {v.id}
+                            {known && (
+                              <span
+                                className="badge badge-crit"
+                                style={{ marginLeft: 6 }}
+                                title={t.imageDetail.sbom.kevBadgeTitle(known.cve, known.dateAdded)}
+                              >
+                                KEV
+                              </span>
+                            )}
+                          </td>
+                          <td>{v.packageName}</td>
+                          <td className="mono">{v.packageVersion}</td>
+                          <td className="mono">{v.fixedIn ?? '—'}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

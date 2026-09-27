@@ -241,8 +241,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `cve` y no por el id— y **omite** el campo cuando está vacío, de modo que la ausencia sólo es un cero medido si
   `descriptor.db.providers.kev.captured` existe. Tres estados: sin campo (grype no emparejó: no se preguntó),
   `no-kev-provider` (desconocido, nunca cero) y `annotated` con la fecha del snapshot. Mezclar los ids en el cruce
-  research haría depender su resultado de si y cuándo corrió otro carril, contra un catálogo de otra fecha. Pendiente:
-  normalizar `grypeKev` a findings y mostrarlo en la web.)*
+  research haría depender su resultado de si y cuándo corrió otro carril, contra un catálogo de otra fecha. Después,
+  `normalizeSbom` pone `evidence.knownExploited` (fuente `grype-db`, fecha del snapshot) **sobre** la fila CVE que ya
+  existe —también sobre la fila `GHSA-…` cuyo `knownExploited.cve` la nombra— vía `grypeKevByVulnerabilityId`, sin
+  filas nuevas ni cambio de proof state o severidad: KEV es explotación en otro lugar, no alcanzabilidad aquí. La
+  vista SBOM muestra el insignia KEV por fila y los tres estados —no registrado, desconocido, cero medido sobre las
+  coincidencias de grype— y nombra los CVE KEV cuyas filas quedaron fuera del listado.)*
 - [x] Distinguir en W9 un grype que falló al correr de un grype que no puede correr. `sbomRun` (`opacidad.ts`)
   mandaba los tres casos de `grypeAvailable:false` al mismo `remedy: 'install-tool'`, y el tercero —grype corrió y
   lanzó— es un `retry`: una campaña de cobertura no lo reintentaba y lo reportaba como despliegue a arreglar. El

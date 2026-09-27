@@ -315,9 +315,28 @@ export interface SbomResult {
    */
   grypeReason?: string;
   grypeDb?: { schemaVersion: string | null; built: string | null; from: string | null; ageDays: number | null };
+  /**
+   * CISA KEV membership as grype's OWN database annotated this run's matches — offline, and deliberately not the
+   * research lane's KEV cross-reference. Optional forever: absent is "not asked" (grype did not match, or the
+   * result predates the field), `no-kev-provider` is unknown, and only `annotated` with an empty list is a zero.
+   */
+  grypeKev?: GrypeKev;
   vulnerabilities: SbomVuln[];
   counts: Record<Severity, number>;
 }
+
+/** One CVE grype's KEV snapshot lists, with every match id (CVE, GHSA, distro) that carried it. */
+export interface GrypeKevMatch {
+  cve: string;
+  vulnerabilityIds: string[];
+  packages: string[];
+  dateAdded: string;
+  knownRansomware: string;
+}
+
+export type GrypeKev =
+  | { state: 'annotated'; captured: string; matches: GrypeKevMatch[] }
+  | { state: 'no-kev-provider'; reason: string };
 
 export interface DecompileResult {
   available: boolean;
