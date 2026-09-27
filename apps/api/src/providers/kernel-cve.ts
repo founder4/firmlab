@@ -7,7 +7,7 @@
  * complete module coverage, may turn absence into `off`; every other absence remains `unknown`.
  */
 import type { EvidenceChannel, FindingSeverity, ProofState } from '@firmlab/core';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { type DeviceContext, deviceContextTriage } from './cve-device-triage.js';
 import type { DecodedKallsyms } from './kallsyms.js';
 import type { KernelPostureResult } from './kernelposture.js';

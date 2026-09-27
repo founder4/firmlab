@@ -23,7 +23,7 @@
  *
  * Everything in this module is pure and unit-tested; the runner (funcdiff-run.ts) supplies the radare2 output.
  */
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** One function's structural fingerprint, as radare2's `aflj` reports it. */
 export interface FuncSig {

@@ -39,7 +39,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { type SymbolSource, extractSymbols, parseDynamicSymbols } from './binvuln.js';
 import { parseOtaHeader } from './encrypted.js';
 import { extractPems } from './pem-scan.js';

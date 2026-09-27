@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 

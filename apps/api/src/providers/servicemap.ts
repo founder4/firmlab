@@ -17,7 +17,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** A network service/daemon the rootfs is statically configured to run, and where that configuration lives. */
 export interface Service {

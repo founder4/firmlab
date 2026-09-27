@@ -43,7 +43,7 @@
  */
 import type { FindingSeverity, OperatorAssertion, OperatorAuthorKind, OperatorClaim, ProofState } from '@firmlab/core';
 import { OPERATOR_ASSERTION } from '@firmlab/core';
-import type { FindingDraft } from './findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** Sources reserved for hand-authored rows. Structurally immune to provider re-runs — see `syncFindings`. */
 export const OPERATOR_SOURCE_PREFIX = 'operator:';

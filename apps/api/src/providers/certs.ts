@@ -20,7 +20,7 @@
 import { X509Certificate } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import {
   DEFAULT_PEM_BUDGET,
   type PemBlock,

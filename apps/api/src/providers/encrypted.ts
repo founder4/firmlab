@@ -10,8 +10,7 @@
  * control — encryption — stops it), not a silent empty (docs/AUTONOMOUS-WORKERS.md §3.1(3), §7.5, W8).
  */
 import fs from 'node:fs';
-import { parseEnc1Container, windowEntropy } from '@firmlab/core';
-import type { FindingDraft } from '../findings.js';
+import { type FindingDraft, parseEnc1Container, windowEntropy } from '@firmlab/core';
 
 /** Read a big-endian 32-bit word at `o`. */
 function u32be(b: Uint8Array, o: number): number {

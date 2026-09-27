@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { type McuFingerprint, type ProofState, type StaticAnalysis, fingerprintMcu } from '@firmlab/core';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { type IsolationLevel, loadIsolationLimits, runIsolated } from './isolate.js';
 
 const execFileAsync = promisify(execFile);

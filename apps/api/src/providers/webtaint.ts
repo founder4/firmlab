@@ -14,7 +14,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FindingDraft } from '../findings.js';
+import type { FindingDraft } from '@firmlab/core';
 
 // === Handler parse (pure) ===
 

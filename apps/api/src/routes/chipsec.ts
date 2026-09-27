@@ -4,8 +4,9 @@
  * successful decode is `static_confirmed` — a fact about the image bytes, never a device claim — and its UEFI
  * findings (module inventory, IOC matches, embedded-application leads) are synced into the findings ledger.
  */
+import type { FindingDraft } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
-import { type FindingDraft, syncFindings } from '../findings.js';
+import { syncFindings } from '../findings.js';
 import { type ChipsecResult, detectChipsec, runChipsec } from '../providers/chipsec.js';
 import {
   DEFAULT_TIMEOUT_MS,

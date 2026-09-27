@@ -12,7 +12,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Architecture } from '@firmlab/core';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { isToolAvailable } from '../tools.js';
 import {
   DEFAULT_PATTERN_LEN,

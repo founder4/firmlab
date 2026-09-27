@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { type Finding, OPERATOR_ASSERTION } from '@firmlab/core';
+import type { FindingDraft } from '@firmlab/core';
 import { afterAll, describe, expect, it } from 'vitest';
-import type { FindingDraft } from './findings-normalize.js';
 import {
   type ProbeInterest,
   cmdexecLeads,

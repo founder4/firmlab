@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { isToolAvailable } from '../tools.js';
 import { type TextDiff, diffLines, renderUnified, summarizeTextDiff } from './funcdiff-text.js';
 import { type BinaryDiff, buildFuncDiffFindings, classifyDiff, matchFunctions, parseFunctions } from './funcdiff.js';

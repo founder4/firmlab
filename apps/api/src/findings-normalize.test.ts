@@ -1,5 +1,6 @@
+import type { FindingDraft } from '@firmlab/core';
 import { describe, expect, it } from 'vitest';
-import { type FindingDraft, credentialHashesFromFindings } from './findings-normalize.js';
+import { credentialHashesFromFindings } from './findings-normalize.js';
 
 /**
  * `credentialHashesFromFindings` is the one place a finding becomes a corpus credential occurrence, and the whole

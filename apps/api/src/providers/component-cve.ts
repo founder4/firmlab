@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { FindingSeverity } from '@firmlab/core';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /**
  * A dotted version, optionally with a trailing letter suffix: OpenSSL's `1.0.1f`, and its two-letter `1.0.2zd` once a

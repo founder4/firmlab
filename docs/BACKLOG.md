@@ -390,7 +390,9 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `nvd-domain` puro separado de su I/O/cache. `opacidad-plan.ts` y `opacidad-leads.ts` permanecen en API por sus
   ejecutores, localización, filesystem y providers; los normalizadores específicos de proveedor también. La
   justificación histórica de carga en tests ya no es absoluta porque `store.ts` usa `createRequire` y los tests lo
-  importan. Falta ejecutar esta migración como DAG con propietarios disjuntos y una integración final de exports.)*
+  importan. P0 completado: `FindingDraft`, el contrato puro compartido por normalizadores, providers, rutas y
+  ledger, ya pertenece a `@firmlab/core`; la API sólo lo consume y conserva todos sus campos opcionales. Quedan
+  las migraciones de `boot-cmdline`, `extract-diagnose` y `component-cve`, con integración final de exports.)*
 - [x] Cubrir con test los cuatro componentes web sin cobertura: `DeepAnalysisDetails.tsx` (569 líneas),
   `KernelPosture.tsx`, `BinVulnPanel.tsx`, `PresetsPanel.tsx`. *(Hecho en `4f8ab72`: 10 casos para
   `DeepAnalysisDetails` —tenía 4 de sus 10 proveedores—, 7 para `KernelPosture`, 8 para `BinVulnPanel` y 8 para

@@ -367,6 +367,15 @@ export interface Finding {
   createdAt: number;
 }
 
+/**
+ * A finding before the ledger assigns its persistence identity and source metadata.
+ *
+ * Providers and pure normalizers own only the claim they derived. The API ledger adds `id`, `imageId`, `source`
+ * and `createdAt` when it persists that claim, so those fields cannot accidentally become provider concerns.
+ * Optional finding fields remain optional here as well: persisted provider output may predate any of them.
+ */
+export type FindingDraft = Omit<Finding, 'id' | 'imageId' | 'source' | 'createdAt'>;
+
 /** Top-level identity of an analyzed image. */
 export interface ImageIdentity {
   firmwareClass: FirmwareClass;

@@ -6,8 +6,9 @@
  * The rootfs precondition goes through `providers/rootfs-gate.ts`, so "no extraction has run" and "extraction ran
  * and this image has no rootfs" arrive as the different answers they are.
  */
+import type { FindingDraft } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
-import { type FindingDraft, syncFindings } from '../findings.js';
+import { syncFindings } from '../findings.js';
 import { detectFuzzing, runFuzz } from '../providers/fuzz.js';
 import { startJob } from '../providers/jobs.js';
 import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';

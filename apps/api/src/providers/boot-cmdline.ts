@@ -87,7 +87,7 @@
  * into `/chosen/bootargs` before handing the tree over, so the environment usually wins — but nothing in these
  * bytes proves this board takes that path.
  */
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** Where a command line was read from, so the finding can say so without inventing a new finding code. */
 export interface CmdlineOrigin {

@@ -12,7 +12,7 @@
  * the bytes in the dump (docs/AUTONOMOUS-WORKERS.md §7.2, W6).
  */
 import fs from 'node:fs';
-import type { FindingDraft } from '../findings.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** ESP-IDF partition table lives at flash offset 0x8000; each entry is 32 bytes, magic 0xAA50 (bytes AA 50). */
 const PARTTABLE_OFFSET = 0x8000;

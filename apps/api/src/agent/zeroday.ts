@@ -9,7 +9,7 @@
  *
  * The context gatherer reads the store/corpus lazily; the prompt + parse helpers are pure and unit-tested.
  */
-import type { FindingDraft } from '../findings.js';
+import type { FindingDraft } from '@firmlab/core';
 import type { LlmConfig, LlmResult } from '../llm.js';
 import { completeJson, parseLlmOutput } from '../llm.js';
 import type { DecompileResult } from '../providers/decompile.js';

@@ -32,7 +32,7 @@
  *
  * Everything here is pure and unit-tested; the runner (dynprobe-run.ts) supplies gdb's output.
  */
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** How much input to feed by default. Long enough to overflow a typical stack buffer, short enough to stay sane. */
 export const DEFAULT_PATTERN_LEN = 400;

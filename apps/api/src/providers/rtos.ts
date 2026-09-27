@@ -14,7 +14,7 @@
  */
 import fs from 'node:fs';
 import { fingerprintMcu } from '@firmlab/core';
-import type { FindingDraft } from '../findings.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** Format a 32-bit address as zero-padded, 0x-prefixed hex (e.g. 0x08000000) for titles and evidence. */
 function hex(n: number): string {

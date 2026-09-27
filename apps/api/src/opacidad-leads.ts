@@ -11,7 +11,7 @@
  * `interestingBinaries` and the ordering note on `reachabilityLeads`.
  */
 import type { Finding } from '@firmlab/core';
-import type { FindingDraft } from './findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import type { Lead } from './opacidad-plan.js';
 import { isElfFile } from './providers/binvuln.js';
 import { resolveInsideRootfs } from './providers/decompile.js';

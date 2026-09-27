@@ -23,7 +23,7 @@
  * wrappers over `allowlistedFetch` (only the two hash-lookup hosts, and only when they are on the allowlist).
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { type ResearchConfig, allowlistedFetch, isAllowed } from '../research/config.js';
 
 // CrackStation is a manual-only reverse-lookup (no API, CAPTCHA-gated). We surface it for the operator to run on a

@@ -27,7 +27,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** The sentinel `unsquashfs` substitutes for a symlink it refuses to write. */
 export const NEUTER_TARGET = '/dev/null';

@@ -48,7 +48,7 @@
  */
 import fs from 'node:fs';
 import type { FindingSeverity, ProofState } from '@firmlab/core';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { hashSecret } from '../secret-hash.js';
 import { scanContentSecrets } from './fsaudit.js';
 

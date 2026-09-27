@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Architecture, ImageIdentity } from '@firmlab/core';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { type ToolId, detectTools } from '../tools.js';
 import { parseTargetStderr } from './dynprobe.js';
 import { libnvramHostPath } from './emulate-system.js';

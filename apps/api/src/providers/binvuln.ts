@@ -15,7 +15,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { NEUTER_TARGET } from './extract-neutered.js';
 
 /** Unbounded-copy libc functions — a call to one on attacker-influenced input is the classic stack-BOF primitive. */

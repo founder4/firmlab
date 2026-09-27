@@ -80,7 +80,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { FindingDraft } from '../findings.js';
+import type { FindingDraft } from '@firmlab/core';
 
 const execFileAsync = promisify(execFile);
 

@@ -12,7 +12,7 @@
  */
 import fs from 'node:fs';
 import type { FindingSeverity, ProofState, SignatureHit, StaticAnalysis, StringHit } from '@firmlab/core';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** An extracted FCC ID paired with its authoritative lookup links. */
 export interface FccLink {

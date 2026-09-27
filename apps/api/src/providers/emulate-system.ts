@@ -53,7 +53,7 @@ import path from 'node:path';
 import tls from 'node:tls';
 import { promisify } from 'node:util';
 import type { Architecture, ProofState } from '@firmlab/core';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { type LaneFlagName, decideFlag, effectiveEnv } from '../flags.js';
 import { detectTools } from '../tools.js';
 import { type BootDiagnosis, diagnoseUnreachable } from './boot-diagnose.js';

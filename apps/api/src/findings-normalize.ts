@@ -19,15 +19,12 @@
  * `publishedSeverity` and the reason goes into the rationale. No row is ever removed, and no count changes:
  * a stricter reading that showed up as fewer findings is the failure `CLAUDE.md` names for the two CVE lanes.
  */
-import type { EvidenceChannel, Finding, FindingSeverity, ProofState, StringHit } from '@firmlab/core';
+import type { EvidenceChannel, FindingDraft, FindingSeverity, ProofState, StringHit } from '@firmlab/core';
 import { curatedCveVerdict } from './providers/component-cve.js';
 import { type DeviceContext, deviceContextTriage, impactFromVector } from './providers/cve-device-triage.js';
 import type { DecompileResult } from './providers/decompile.js';
 import type { GitleaksFinding, GitleaksResult } from './providers/gitleaks.js';
 import type { SbomResult, Severity } from './providers/sbom.js';
-
-/** A finding as produced by a normalizer, before it is stamped with id/imageId/source/createdAt. */
-export type FindingDraft = Omit<Finding, 'id' | 'imageId' | 'source' | 'createdAt'>;
 
 /** Hardcoded credentials / keys / tokens found by the static string classifier over the raw image. */
 export function normalizeSecrets(secrets: StringHit[]): FindingDraft[] {

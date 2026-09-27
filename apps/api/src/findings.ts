@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   EvidenceChannel,
   Finding,
+  FindingDraft,
   FindingProvenance,
   FindingSeverity,
   FirmwareClass,
@@ -22,7 +23,6 @@ import type {
   OperatorAssertion,
   OperatorAuthorKind,
 } from '@firmlab/core';
-import type { FindingDraft } from './findings-normalize.js';
 import { type RetiredRowSummary, type ValidatedRetirement, retirementNote } from './findings-retire.js';
 import {
   type ValidatedAssertion,
@@ -46,7 +46,6 @@ import {
 } from './store.js';
 
 export {
-  type FindingDraft,
   normalizeSecrets,
   normalizeSbom,
   normalizeGitleaks,

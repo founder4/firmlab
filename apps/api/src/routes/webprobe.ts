@@ -4,8 +4,9 @@
  * attached to FirmLab's active emulator, its observations remain `needs_runtime_reproduction`; only the in-session
  * emulation caller can create `confirmed_in_emulation` evidence.
  */
+import type { FindingDraft } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
-import { type FindingDraft, syncFindings } from '../findings.js';
+import { syncFindings } from '../findings.js';
 import { startJob } from '../providers/jobs.js';
 import { isLocalTarget } from '../providers/webprobe-transport.js';
 import { runWebProbe } from '../providers/webprobe.js';

@@ -13,7 +13,7 @@
  *
  * Closes docs/AUTONOMOUS-WORKERS.md §9 gap #6.
  */
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 
 /** Zero fraction above this, with a claimed-but-unextractable filesystem, means the payload is hollow. */
 const ZERO_FRACTION_DECOY = 0.8;

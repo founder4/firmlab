@@ -61,7 +61,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import type { FindingSeverity } from '@firmlab/core';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import type { DeviceContext } from './cve-device-triage.js';
 import { type DecodedKallsyms, decodeKallsyms } from './kallsyms.js';
 import {

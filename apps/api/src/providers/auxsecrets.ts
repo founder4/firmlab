@@ -23,7 +23,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { FindingDraft } from '../findings-normalize.js';
+import type { FindingDraft } from '@firmlab/core';
 import { keyMaterialFindings, unclaimedKeyBlockFindings } from './fsaudit.js';
 import { DEFAULT_PEM_BUDGET, type PemScanCoverage, scanTreeForPem, summarizePemScan } from './pem-scan.js';
 
