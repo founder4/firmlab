@@ -69,6 +69,17 @@ export interface ToolStatus {
   dataset?: { ready: boolean; detail: string };
 }
 
+export interface CapabilityClassPlan {
+  classId: string;
+  stages: Array<{
+    worker: string;
+    reason: string;
+    needsRootfs: boolean;
+    built: boolean;
+    provider?: string;
+  }>;
+}
+
 export interface EmulationRecipe {
   id: string;
   mode: 'user-qemu' | 'chroot-qemu' | 'system-qemu' | 'renode' | 'uefi-chipsec';
@@ -1963,9 +1974,12 @@ export const api = {
   secrets: (id: string) => get<{ secrets: StringHit[] }>(`/api/images/${id}/secrets`).then((r) => r.secrets),
   /** `unlocks` is composed per tool by the API, so the Capabilities page asks for it in the language it renders. */
   tools: (locale?: Locale) =>
-    get<{ tools: ToolStatus[]; groups: Record<string, { available: number; total: number; notReady?: number }> }>(
-      `/api/tools${lang(locale)}`,
-    ),
+    get<{
+      tools: ToolStatus[];
+      groups: Record<string, { available: number; total: number; notReady?: number }>;
+      /** OPTIONAL FOREVER: older API builds expose the tool inventory without the class-routed pre-run plan. */
+      plans?: CapabilityClassPlan[];
+    }>(`/api/tools${lang(locale)}`),
   storage: () => get<{ usage: StorageUsage }>('/api/storage').then((r) => r.usage),
   emulation: (id: string) => get<EmulationMenu>(`/api/images/${id}/emulation`),
   emulate: (id: string, binary?: string) =>

@@ -26,7 +26,7 @@
  * `ToolSpec` shows up in this page for free (and makes an unglossed one a compile error there, not a blank cell).
  */
 import { Fragment, useEffect, useState } from 'react';
-import { type ToolStatus, api } from '../api';
+import { type CapabilityClassPlan, type ToolStatus, api } from '../api';
 import { TechniqueCoverage } from '../components/TechniqueCoverage';
 import { useLocale, useMessages } from '../i18n';
 
@@ -34,13 +34,18 @@ export function Capabilities(): JSX.Element {
   const t = useMessages();
   const locale = useLocale();
   const [tools, setTools] = useState<ToolStatus[]>([]);
+  const [plans, setPlans] = useState<CapabilityClassPlan[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let alive = true;
     api
       .tools(locale)
-      .then((r) => alive && setTools(r.tools))
+      .then((r) => {
+        if (!alive) return;
+        setTools(r.tools);
+        setPlans(r.plans ?? []);
+      })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
@@ -65,6 +70,10 @@ export function Capabilities(): JSX.Element {
   // A group the catalogue does not name falls back to its id — a new `ToolSpec` group must show up, not vanish.
   const groups = t.shell.capabilities.group;
   const groupLabel = (group: string): string => (group in groups ? groups[group as keyof typeof groups] : group);
+  const classLabels = t.shell.capabilities.classLabel;
+  const classLabel = (classId: string): string =>
+    classId in classLabels ? classLabels[classId as keyof typeof classLabels] : classId;
+  const plannedWorkers = Array.from(new Set(plans.flatMap((plan) => plan.stages.map((stage) => stage.worker))));
 
   return (
     <div>
@@ -72,6 +81,72 @@ export function Capabilities(): JSX.Element {
         {t.shell.capabilities.engineLead} <strong>{t.shell.capabilities.engineStrong}</strong>.{' '}
         {t.shell.capabilities.engineTail}
       </div>
+
+      {plans.length > 0 ? (
+        <div className="panel">
+          <div className="panel-title">{t.shell.capabilities.planTitle}</div>
+          <div className="panel-sub">
+            <div>{t.shell.capabilities.planLead}</div>
+            <div style={{ marginTop: 6 }}>{t.shell.capabilities.planCaveat}</div>
+            <div style={{ marginTop: 10 }}>
+              <span className="badge badge-ok">P+B</span> {t.shell.capabilities.planLegend.plannedBuilt}{' '}
+              <span className="badge badge-warn" style={{ marginLeft: 10 }}>
+                P
+              </span>{' '}
+              {t.shell.capabilities.planLegend.plannedNotBuilt}{' '}
+              <span className="badge" style={{ marginLeft: 10 }}>
+                —
+              </span>{' '}
+              {t.shell.capabilities.planLegend.notPlanned}
+            </div>
+          </div>
+
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data" style={{ minWidth: 1120 }}>
+              <thead>
+                <tr>
+                  <th style={{ minWidth: 250 }}>{t.shell.capabilities.planCapability}</th>
+                  {plans.map((plan) => (
+                    <th key={plan.classId} style={{ minWidth: 92 }}>
+                      <div>{classLabel(plan.classId)}</div>
+                      <div className="hint mono" style={{ fontWeight: 400 }}>
+                        {plan.classId}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {plannedWorkers.map((worker) => (
+                  <tr key={worker}>
+                    <td>{worker}</td>
+                    {plans.map((plan) => {
+                      const stage = plan.stages.find((candidate) => candidate.worker === worker);
+                      const state = stage
+                        ? stage.built
+                          ? t.shell.capabilities.planLegend.plannedBuilt
+                          : t.shell.capabilities.planLegend.plannedNotBuilt
+                        : t.shell.capabilities.planLegend.notPlanned;
+                      return (
+                        <td
+                          key={plan.classId}
+                          aria-label={`${classLabel(plan.classId)} · ${worker}: ${state}${stage ? `. ${stage.reason}` : ''}`}
+                          title={stage?.reason}
+                          style={{ textAlign: 'center' }}
+                        >
+                          <span className={`badge ${stage?.built ? 'badge-ok' : stage ? 'badge-warn' : ''}`}>
+                            {stage?.built ? 'P+B' : stage ? 'P' : '—'}
+                          </span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
 
       <div className="panel">
         <div className="panel-title">{t.shell.capabilities.title}</div>

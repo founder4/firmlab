@@ -60,6 +60,31 @@ export const shell: Messages['shell'] = {
         ? '1 de las filas de abajo está instalada pero no tiene base de datos desde la que responder, así que la pregunta que anuncia se rechazará en vez de hacerse.'
         : `${n} de las filas de abajo están instaladas pero no tienen base de datos desde la que responder, así que las preguntas que anuncian se rechazarán en vez de hacerse.`,
 
+    planTitle: 'Capacidades planificadas por clase de dispositivo',
+    planLead: 'Esta matriz previa a la ejecución sale de la misma ruta por clase que usa el análisis autónomo.',
+    planCaveat: [
+      'Planificada significa que la etapa pertenece a esa ruta; construida significa que su worker existe en esta',
+      'versión. Ninguna implica que se haya ejecutado ni que sus entradas y herramientas estén disponibles. La',
+      'disponibilidad del despliegue se muestra aparte más abajo.',
+    ].join(' '),
+    planCapability: 'Etapa planificada',
+    planLegend: {
+      plannedBuilt: 'planificada, worker construido',
+      plannedNotBuilt: 'planificada, worker no construido',
+      notPlanned: 'no planificada para esta clase',
+    },
+    classLabel: {
+      'embedded-linux': 'Linux embebido',
+      'openwrt-fit-ubi': 'OpenWrt con FIT/UBI',
+      'uefi-bios': 'Firmware UEFI/BIOS',
+      baremetal: 'Metal desnudo',
+      rtos: 'Sistema RTOS',
+      'esp-soc': 'SoC ESP',
+      bootloader: 'Gestor de arranque',
+      encrypted: 'Cifrado',
+      unknown: 'Desconocido',
+    },
+
     group: {
       extract: 'Extracción',
       analyze: 'Análisis de binarios',

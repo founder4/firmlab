@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { PLAN_REASON_IDS, planEntries, specsForClass } from './opacidad-plan.js';
+import {
+  CAPABILITY_PLAN_CLASSES,
+  PLAN_REASON_IDS,
+  capabilityPlans,
+  planEntries,
+  specsForClass,
+} from './opacidad-plan.js';
 
 describe('specsForClass — class-routed worker plan', () => {
   it('routes a Linux rootfs to the full provider chain, extraction first', () => {
@@ -109,6 +115,22 @@ describe('specsForClass — class-routed worker plan', () => {
   it('planEntries exposes worker + reason for the pre-run plan', () => {
     const plan = planEntries(specsForClass('uefi-bios'));
     expect(plan[0]).toEqual({ worker: expect.stringContaining('chipsec'), reason: expect.any(String) });
+  });
+
+  it('derives the capability matrix from the same class plans the executor uses', () => {
+    const plans = capabilityPlans();
+    expect(plans.map((plan) => plan.classId)).toEqual(CAPABILITY_PLAN_CLASSES);
+    for (const plan of plans) {
+      expect(plan.stages).toEqual(
+        specsForClass(plan.classId).map(({ worker, reason, needsRootfs, built, provider }) => ({
+          worker,
+          reason,
+          needsRootfs,
+          built,
+          ...(provider !== undefined ? { provider } : {}),
+        })),
+      );
+    }
   });
 });
 

@@ -101,6 +101,30 @@ export const shell = {
         ? '1 of the rows below is installed but has no dataset to answer from, so the question it advertises will be refused rather than asked.'
         : `${n} of the rows below are installed but have no dataset to answer from, so the questions they advertise will be refused rather than asked.`,
 
+    planTitle: 'Planned capabilities by device class',
+    planLead: 'This pre-run matrix comes from the same class route the autonomous scan uses.',
+    planCaveat: [
+      'Planned means the stage belongs to that route; built means its worker exists in this build. Neither means',
+      'the stage ran or its inputs and tools are available. Deployment availability is reported separately below.',
+    ].join(' '),
+    planCapability: 'Planned stage',
+    planLegend: {
+      plannedBuilt: 'planned, worker built',
+      plannedNotBuilt: 'planned, worker not built',
+      notPlanned: 'not planned for this class',
+    },
+    classLabel: {
+      'embedded-linux': 'Embedded Linux',
+      'openwrt-fit-ubi': 'OpenWrt FIT/UBI',
+      'uefi-bios': 'UEFI/BIOS',
+      baremetal: 'Bare metal',
+      rtos: 'RTOS',
+      'esp-soc': 'ESP SoC',
+      bootloader: 'Bootloader',
+      encrypted: 'Encrypted',
+      unknown: 'Unknown',
+    },
+
     /** The tool groups. The group ids (`extract`, `analyze`…) cross the API and are never translated. */
     group: {
       extract: 'Extraction',

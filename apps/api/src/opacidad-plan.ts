@@ -21,6 +21,7 @@
  * The i18n import is type-safe in both directions: `i18n/en.ts` imports `PlanReasonId` with `import type`, which
  * is erased, so there is no runtime cycle and this module stays store-free and unit-testable.
  */
+import type { FirmwareClass } from '@firmlab/core';
 import { type Locale, messages } from './i18n/index.js';
 import type { OpacidadPlanEntry } from './opacidad-narrative.js';
 
@@ -156,6 +157,36 @@ export interface PlanSpec {
   origin?: 'replan';
   /** The lead that caused this spec to be scheduled (shown in the trace). */
   trigger?: string;
+}
+
+/**
+ * The finite set of W0 classes shown by the pre-run capability matrix. The order is presentation-neutral but
+ * stable, so API clients can render the routing without maintaining a second class list (or, worse, a second
+ * copy of the routing). Every entry is still resolved through `specsForClass`; this list chooses rows, not gates.
+ */
+export const CAPABILITY_PLAN_CLASSES: readonly FirmwareClass[] = [
+  'embedded-linux',
+  'openwrt-fit-ubi',
+  'uefi-bios',
+  'baremetal',
+  'rtos',
+  'esp-soc',
+  'bootloader',
+  'encrypted',
+  'unknown',
+];
+
+export interface PlannedCapability {
+  worker: string;
+  reason: string;
+  needsRootfs: boolean;
+  built: boolean;
+  provider?: ProviderId;
+}
+
+export interface CapabilityClassPlan {
+  classId: FirmwareClass;
+  stages: PlannedCapability[];
 }
 
 /**
@@ -520,6 +551,26 @@ function dress(seed: SeedSpec, locale: Locale): PlanSpec {
  */
 export function specsForClass(cls: string, locale: Locale = 'en'): PlanSpec[] {
   return seedsForClass(cls).map((seed) => dress(seed, locale));
+}
+
+/**
+ * The read-only, pre-execution capability matrix exposed by `/tools`.
+ *
+ * Presence in `stages` means only that W9 plans the stage for this class. `built` says whether this build has its
+ * worker. Neither field claims that the stage ran, that its inputs exist, or that an optional external tool is
+ * available; `/tools.tools` reports deployment availability on its own axis.
+ */
+export function capabilityPlans(locale: Locale = 'en'): CapabilityClassPlan[] {
+  return CAPABILITY_PLAN_CLASSES.map((classId) => ({
+    classId,
+    stages: specsForClass(classId, locale).map((spec) => ({
+      worker: spec.worker,
+      reason: spec.reason,
+      needsRootfs: spec.needsRootfs,
+      built: spec.built,
+      ...(spec.provider !== undefined ? { provider: spec.provider } : {}),
+    })),
+  }));
 }
 
 /** Turn a plan into the pre-execution plan list shown to the operator. */

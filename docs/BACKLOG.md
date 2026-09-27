@@ -393,8 +393,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   FirmLab hoy solo hace la segunda pregunta.
 - [ ] Fuentes de vendor-PSIRT/CNA para el track de inteligencia externa: no hay una API única gratuita que las
   cubra todas (referenciado desde `docs/AGENT-DESIGN.md`).
-- [ ] Formalizar visibilidad de capacidades por clase de dispositivo en la UI — el gating ya existe en
-  `specsForClass`/`coverage.ts`, falta el acabado visual.
+- [x] Formalizar visibilidad de capacidades por clase de dispositivo en la UI — el gating ya existe en
+  `specsForClass`/`coverage.ts`, falta el acabado visual. *(Hecho: `/tools` expone el plan previo a ejecución de
+  cada clase directamente desde `specsForClass`, y Capacidades lo presenta como matriz separando «planificada»,
+  «worker construido» y «herramienta disponible». El plan no afirma ejecución ni disponibilidad, conserva los
+  motivos es/en y un cliente contra una API anterior simplemente omite la matriz.)*
 
 ## Deuda estructural y de proceso
 

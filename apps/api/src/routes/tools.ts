@@ -18,6 +18,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { type Locale, messages, resolveLocale } from '../i18n/index.js';
+import { capabilityPlans } from '../opacidad-plan.js';
 import { anchoreEnv, grypeDatasetFact, grypeDbDir, readGrypeDbStatus } from '../providers/sbom-db.js';
 import { type ToolDataset, type ToolStatus, detectTools } from '../tools.js';
 
@@ -69,6 +70,6 @@ export async function toolRoutes(app: FastifyInstance): Promise<void> {
       // one question its dataset backs, and a counter that hid it would reproduce the overstatement this fixes.
       if (t.available && t.dataset?.ready === false) g.notReady++;
     }
-    return { tools, groups };
+    return { tools, groups, plans: capabilityPlans(locale) };
   });
 }

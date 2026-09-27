@@ -225,4 +225,128 @@ describe('Capabilities', () => {
     expect(await screen.findByText('Análisis de binarios')).toBeInTheDocument();
     expect(screen.getByText('future-tool')).toBeInTheDocument();
   });
+
+  it.each([
+    {
+      locale: 'es' as const,
+      title: 'Capacidades planificadas por clase de dispositivo',
+      linux: 'Linux embebido',
+      uefi: 'Firmware UEFI/BIOS',
+      rtos: 'Sistema RTOS',
+      plannedBuilt: 'planificada, worker construido',
+      plannedNotBuilt: 'planificada, worker no construido',
+      notPlanned: 'no planificada para esta clase',
+      unavailable: 'no encontrada',
+      caveat: /Ninguna implica que se haya ejecutado/,
+      reasons: {
+        linux: 'genera el inventario de componentes antes de correlacionar CVE',
+        uefi: 'audita la postura UEFI fuera de línea',
+        fwhunt: 'busca implantes UEFI con el corpus de reglas',
+        rtos: 'analiza un firmware RTOS sin asumir un sistema de ficheros',
+      },
+    },
+    {
+      locale: 'en' as const,
+      title: 'Planned capabilities by device class',
+      linux: 'Embedded Linux',
+      uefi: 'UEFI/BIOS',
+      rtos: 'RTOS',
+      plannedBuilt: 'planned, worker built',
+      plannedNotBuilt: 'planned, worker not built',
+      notPlanned: 'not planned for this class',
+      unavailable: 'not found',
+      caveat: /Neither means the stage ran/,
+      reasons: {
+        linux: 'build the component inventory before matching CVEs',
+        uefi: 'audit UEFI posture offline',
+        fwhunt: 'scan UEFI implants with the rule corpus',
+        rtos: 'analyze RTOS firmware without assuming a filesystem',
+      },
+    },
+  ])('shows distinct class plans and separate built/available states in $locale', async (copy) => {
+    setLocale(copy.locale);
+    mockApi.tools.mockResolvedValue({
+      tools: [
+        {
+          id: 'chipsec',
+          bin: 'chipsec_util',
+          available: false,
+          unlocks: 'UEFI posture',
+          group: 'analyze',
+          outcome: 'missing',
+        },
+      ],
+      groups: {},
+      plans: [
+        {
+          classId: 'embedded-linux',
+          stages: [
+            {
+              worker: 'W2 · SBOM / CVE',
+              reason: copy.reasons.linux,
+              needsRootfs: true,
+              built: true,
+              provider: 'sbom',
+            },
+          ],
+        },
+        {
+          classId: 'uefi-bios',
+          stages: [
+            {
+              worker: 'UEFI · chipsec',
+              reason: copy.reasons.uefi,
+              needsRootfs: false,
+              built: true,
+              provider: 'chipsec',
+            },
+            {
+              worker: 'UEFI · FwHunt implant scan',
+              reason: copy.reasons.fwhunt,
+              needsRootfs: false,
+              built: false,
+            },
+          ],
+        },
+        {
+          classId: 'rtos',
+          stages: [
+            {
+              worker: 'W7 · Bare-metal / RTOS',
+              reason: copy.reasons.rtos,
+              needsRootfs: false,
+              built: true,
+              provider: 'rtos',
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<Capabilities />);
+
+    expect(await screen.findByText(copy.title)).toBeInTheDocument();
+    expect(screen.getByText(copy.linux)).toBeInTheDocument();
+    expect(screen.getByText(copy.caveat)).toBeInTheDocument();
+    expect(
+      screen.getByRole('cell', { name: new RegExp(`${copy.linux}.*W2 · SBOM / CVE.*${copy.plannedBuilt}`) }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('cell', {
+        name: new RegExp(`${copy.uefi}.*UEFI · FwHunt implant scan.*${copy.plannedNotBuilt}`),
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('cell', { name: new RegExp(`${copy.rtos}.*W7 · Bare-metal / RTOS.*${copy.plannedBuilt}`) }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('cell', { name: new RegExp(`${copy.uefi}.*W2 · SBOM / CVE.*${copy.notPlanned}`) }),
+    ).toBeInTheDocument();
+
+    // A worker can be built while its deployment tool is unavailable: these are deliberately separate answers.
+    expect(
+      screen.getByRole('cell', { name: new RegExp(`${copy.uefi}.*UEFI · chipsec.*${copy.plannedBuilt}`) }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(copy.unavailable)).toBeInTheDocument();
+  });
 });
