@@ -3630,3 +3630,18 @@ main.content:focus {
   font-size: 12px;
   color: var(--danger);
 }
+/* A button that reads as an inline link: a navigational action inside a table cell. */
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  /* Text colour carries the contrast; the accent is only the underline (#1585ab on white is under 4.5:1). */
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 2px;
+  word-break: break-all;
+}

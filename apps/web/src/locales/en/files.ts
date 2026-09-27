@@ -62,6 +62,7 @@ export const files = {
     title: 'Search the extraction',
     sub: 'Which file says this — a certificate CN, a hostname, a symbol, an NVRAM key. Binaries are searched too; their hits carry a byte offset rather than a line number.',
     termLabel: 'Search term',
+    openInBrowser: 'Open in the file browser at this match',
     // `regex` is the term of art in both languages and is written in the component.
     deep: 'deep (open large files)',
     complete: 'complete search',

@@ -55,6 +55,7 @@ export const files: Messages['files'] = {
     title: 'Buscar en la extracción',
     sub: 'Qué fichero dice esto — el CN de un certificado, un nombre de host, un símbolo, una clave NVRAM. Los binarios también se buscan; sus coincidencias llevan un desplazamiento en bytes en lugar de un número de línea.',
     termLabel: 'Término de búsqueda',
+    openInBrowser: 'Abrir en el explorador de ficheros en esta coincidencia',
     deep: 'profunda (abrir ficheros grandes)',
     complete: 'búsqueda completa',
     partial: 'búsqueda parcial',

@@ -91,3 +91,20 @@ describe('FileSearch', () => {
     expect(screen.getByText(':1')).toBeTruthy();
   });
 });
+
+describe('FileSearch — a hit opens where it was found', () => {
+  it('hands the path, offset and binary flag to the file browser', async () => {
+    mockApi.searchFiles.mockResolvedValue({
+      ...clean,
+      hits: [{ path: 'etc/shadow', offset: 16, excerpt: 'root:$1$', binary: false }],
+    } as FilesSearch);
+    const onOpen = vi.fn();
+    render(<FileSearch imageId="447719f7" onOpen={onOpen} />);
+    fireEvent.change(screen.getByLabelText('Search term'), { target: { value: 'root' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Search/i }));
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'etc/shadow' }));
+    expect(onOpen).toHaveBeenCalledWith({ path: 'etc/shadow', offset: 16, binary: false });
+  });
+});

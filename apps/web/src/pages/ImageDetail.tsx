@@ -35,7 +35,7 @@ import { CredMatchPanel } from '../components/CredMatchPanel';
 import { EgressSection } from '../components/EgressSection';
 import { EntropyChart } from '../components/EntropyChart';
 import { ExportReachPanel } from '../components/ExportReachPanel';
-import { FileBrowser } from '../components/FileBrowser';
+import { FileBrowser, type OpenRequest } from '../components/FileBrowser';
 import { FileSearch } from '../components/FileSearch';
 import { FilesystemTree } from '../components/FilesystemTree';
 import { FindingsLedger, PROOF_STATE_META } from '../components/FindingsLedger';
@@ -145,6 +145,7 @@ export function ImageDetail(): JSX.Element {
   const locale = useLocale();
   const [image, setImage] = useState<ImageSummary | null>(null);
   const [analysis, setAnalysis] = useState<StaticAnalysis | null>(null);
+  const [openRequest, setOpenRequest] = useState<OpenRequest | null>(null);
   const tab = resolveSection(section);
 
   useEffect(() => {
@@ -204,9 +205,20 @@ export function ImageDetail(): JSX.Element {
       {/* File browser: the surface that lets a finding's evidence be checked instead of trusted. */}
       {tab === 'files' && (
         <>
-          <FileBrowser imageId={id} />
-          {/* The other direction: the browser answers "what does this file say", this answers "which file says this". */}
-          <FileSearch imageId={id} />
+          <FileBrowser imageId={id} {...(openRequest ? { request: openRequest } : {})} />
+          {/* The other direction: the browser answers "what does this file say", this answers "which file says this".
+              A hit opens in the browser above, so the answer to one question is one click from the other. */}
+          <FileSearch
+            imageId={id}
+            onOpen={(hit) =>
+              setOpenRequest((prev) => ({
+                path: hit.path,
+                offset: hit.offset,
+                hex: hit.binary,
+                seq: (prev?.seq ?? 0) + 1,
+              }))
+            }
+          />
         </>
       )}
       {tab === 'secrets' && <RecoveredValuesPanel analysis={analysis} imageId={id} />}

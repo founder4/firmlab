@@ -54,7 +54,14 @@ function SearchCoverage({ coverage }: { coverage: FilesSearch['coverage'] }): JS
   );
 }
 
-export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
+export function FileSearch({
+  imageId,
+  onOpen,
+}: {
+  imageId: string;
+  /** Opens a hit in the file browser; without it the path is plain text. */
+  onOpen?: (hit: { path: string; offset: number; binary: boolean }) => void;
+}): JSX.Element {
   const t = useMessages();
   const [q, setQ] = useState('');
   const [regex, setRegex] = useState(false);
@@ -152,7 +159,20 @@ export function FileSearch({ imageId }: { imageId: string }): JSX.Element {
                   {hits.map((h) => (
                     <tr key={`${h.path}-${h.offset}`}>
                       <td className="mono">
-                        {h.path}
+                        {onOpen && h.path ? (
+                          <button
+                            type="button"
+                            className="link-button mono"
+                            title={t.files.search.openInBrowser}
+                            onClick={() =>
+                              onOpen({ path: h.path ?? '', offset: h.offset ?? 0, binary: Boolean(h.binary) })
+                            }
+                          >
+                            {h.path}
+                          </button>
+                        ) : (
+                          h.path
+                        )}
                         {h.binary && (
                           <span className="badge" style={{ marginLeft: 6 }}>
                             {t.files.search.binary}

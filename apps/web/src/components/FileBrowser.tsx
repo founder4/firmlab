@@ -25,7 +25,7 @@
  * actually did — they are the record, and they render as written. So do paths, mode strings, symlink targets, the
  * refusal rule ids and the `extract` crumb, which is a real directory name.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type DirEntryView,
   type ExtractionBrowseState,
@@ -51,7 +51,15 @@ function parentOf(p: string): string {
   return i < 0 ? '' : p.slice(0, i);
 }
 
-export function FileBrowser({ imageId }: { imageId: string }): JSX.Element {
+/** A request from outside (a search hit) to open one file at one offset. `seq` makes a repeat click re-open it. */
+export interface OpenRequest {
+  path: string;
+  offset: number;
+  hex: boolean;
+  seq: number;
+}
+
+export function FileBrowser({ imageId, request }: { imageId: string; request?: OpenRequest }): JSX.Element {
   const t = useMessages();
   const [dir, setDir] = useState('');
   const [listing, setListing] = useState<FilesListing | null>(null);
@@ -110,11 +118,22 @@ export function FileBrowser({ imageId }: { imageId: string }): JSX.Element {
     [open, preferHex],
   );
 
+  // A search hit opens its file here: the listing moves to the file's directory and the reader to the hit, and the
+  // panel scrolls into view — otherwise the click changes something off-screen and reads as doing nothing.
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!request) return;
+    const slash = request.path.lastIndexOf('/');
+    setDir(slash > 0 ? request.path.slice(0, slash) : '');
+    open(request.path, request.offset, request.hex);
+    root.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [request, open]);
+
   const extraction = listing?.extraction;
   const crumbs = dir ? dir.split('/') : [];
 
   return (
-    <div className="panel">
+    <div className="panel" ref={root}>
       <div className="panel-head">
         <div>
           <div className="panel-title">{t.files.browser.title}</div>
