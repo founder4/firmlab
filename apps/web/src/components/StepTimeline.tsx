@@ -112,7 +112,9 @@ export function StepTimeline({
         if (strategy === 'static-only' || strategy === 'unsupported-arch') return 'blocked';
         return anyRunning(EMU_KINDS) ? 'running' : anyDone(EMU_KINDS) ? 'done' : 'pending';
       case 'findings':
-        return findingCount && findingCount > 0 ? 'done' : 'pending';
+        // A ledger exists once any stage has finished, even when it is empty: "pending" there read as "not
+        // analyzed". The page it opens carries the coverage verdict, so "done" never claims the image is clean.
+        return (findingCount ?? 0) > 0 || jobs.some((j) => j.status === 'done') ? 'done' : 'pending';
       default:
         return 'pending';
     }

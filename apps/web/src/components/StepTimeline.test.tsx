@@ -113,3 +113,16 @@ describe('StepTimeline — the labels are the sections catalogue, not a copy of 
     expect(nav.querySelector('.steptl-step.blocked .steptl-meta')?.textContent).toBe('bloqueada');
   });
 });
+
+describe('StepTimeline — an empty ledger after a finished stage', () => {
+  it('reads the findings step as done, not pending, once a stage has finished with zero findings', async () => {
+    mockApi.jobs.mockResolvedValue([{ kind: 'extract', status: 'done' }] as never);
+    const nav = timeline();
+    const findingsLabel = catalogues.en.sections.findings;
+    await waitFor(() =>
+      expect([...nav.querySelectorAll('.steptl-step')].map((n) => n.getAttribute('title'))).toContain(
+        `${findingsLabel} — done`,
+      ),
+    );
+  });
+});
