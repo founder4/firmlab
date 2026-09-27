@@ -17,6 +17,14 @@ import { createZigbeeSession, stageZigbeeOta } from '../capture/zigbee.js';
 import { resolveLocale } from '../i18n/index.js';
 import { getCaptureSession, getDevice, getImage, listCaptureProvenance, listDevices } from '../store.js';
 
+/** Sequence numbers are operator input: non-negative integers, at most one per chunk/block, or the request is refused. */
+function badSequences(seqs: unknown, count: number, field: string): string | null {
+  if (seqs === undefined) return null;
+  if (!Array.isArray(seqs) || seqs.length > count || !seqs.every((n) => Number.isSafeInteger(n) && n >= 0))
+    return `${field} must be an array of at most ${count} non-negative integers (one per chunk/block)`;
+  return null;
+}
+
 export async function captureRoutes(app: FastifyInstance): Promise<void> {
   // Is the capture lane enabled? (parity with /agent/status, /research/status — never leaks secrets.)
   app.get('/capture/status', async () => {
@@ -194,6 +202,8 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
     if (!body.sessionId || !Array.isArray(body.chunks) || body.chunks.length === 0) {
       return reply.status(400).send({ error: 'sessionId and a non-empty chunks[] (base64 DATA writes) are required' });
     }
+    const seqErr = badSequences(body.chunkSeqs, body.chunks.length, 'chunkSeqs');
+    if (seqErr) return reply.status(400).send({ error: seqErr });
     try {
       const chunks = body.chunks.map((c) => new Uint8Array(Buffer.from(c, 'base64')));
       const initPacket = body.initPacket ? new Uint8Array(Buffer.from(body.initPacket, 'base64')) : undefined;
@@ -231,6 +241,8 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
         .status(400)
         .send({ error: 'sessionId and a non-empty blocks[] (base64 Image-Block data) are required' });
     }
+    const seqErr = badSequences(body.blockSeqs, body.blocks.length, 'blockSeqs');
+    if (seqErr) return reply.status(400).send({ error: seqErr });
     try {
       const blocks = body.blocks.map((b) => new Uint8Array(Buffer.from(b, 'base64')));
       const result = stageZigbeeOta(body.sessionId, body.name ?? 'zigbee-ota.bin', blocks, body.blockSeqs);

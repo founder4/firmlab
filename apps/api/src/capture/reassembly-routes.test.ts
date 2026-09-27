@@ -34,7 +34,8 @@ describe('Capture Wireless Reassembly Routes', () => {
   });
 
   afterAll(async () => {
-    process.env.FIRMLAB_CAPTURE = undefined;
+    // Assigning undefined stores the STRING 'undefined'; delete actually unsets it for the next test file.
+    Reflect.deleteProperty(process.env, 'FIRMLAB_CAPTURE');
     await app.close();
   });
 
@@ -79,7 +80,7 @@ describe('Capture Wireless Reassembly Routes', () => {
       expect(body.completeness.expectedBytes).toBe(8);
     });
 
-    it('stages an incomplete DFU stream with carved=false and reports missing bytes', async () => {
+    it('stages a DFU stream with a chunk-sequence gap as incomplete and carved=false', async () => {
       const sessRes = await app.inject({
         method: 'POST',
         url: '/capture/ble/session',
@@ -87,8 +88,7 @@ describe('Capture Wireless Reassembly Routes', () => {
       });
       const { sessionId } = sessRes.json<{ sessionId: string }>();
 
-      // Init packet declares 10 bytes, but only 4 bytes sent
-      const initB64 = Buffer.from([0x00, 0x00, 10, 0x00, 0x00, 0x00]).toString('base64');
+      // Chunks 0 and 2 arrived; 1 did not. A sequence gap is evidence of missing bytes (an init size is not).
       const chunk1 = Buffer.from([1, 2, 3, 4]).toString('base64');
 
       const res = await app.inject({
@@ -97,8 +97,8 @@ describe('Capture Wireless Reassembly Routes', () => {
         payload: {
           sessionId,
           name: 'ble-incomplete.bin',
-          chunks: [chunk1],
-          initPacket: initB64,
+          chunks: [chunk1, chunk1],
+          chunkSeqs: [0, 2],
         },
       });
 
@@ -107,14 +107,12 @@ describe('Capture Wireless Reassembly Routes', () => {
         flowId: string;
         size: number;
         carved: boolean;
-        completeness: { status: string; receivedBytes: number; expectedBytes: number; missingBytes: number };
+        completeness: { status: string; receivedBytes: number; missingSequences: number[] };
       }>();
-      expect(body.size).toBe(4);
+      expect(body.size).toBe(8);
       expect(body.carved).toBe(false); // Incomplete MUST NOT be marked carved
       expect(body.completeness.status).toBe('incomplete');
-      expect(body.completeness.receivedBytes).toBe(4);
-      expect(body.completeness.expectedBytes).toBe(10);
-      expect(body.completeness.missingBytes).toBe(6);
+      expect(body.completeness.missingSequences).toEqual([1]);
     });
 
     it('reports status unknown when no init packet is provided', async () => {
@@ -221,5 +219,20 @@ describe('Capture Wireless Reassembly Routes', () => {
       expect(body.completeness.expectedBytes).toBe(500);
       expect(body.completeness.missingBytes).toBe(500 - otaBuf.length);
     });
+  });
+
+  it('refuses sequence numbers that are not one non-negative integer per chunk, before staging anything', async () => {
+    const sessRes = await app.inject({ method: 'POST', url: '/capture/ble/session', payload: { acknowledged: true } });
+    const { sessionId } = sessRes.json<{ sessionId: string }>();
+    const chunk = Buffer.from([1, 2]).toString('base64');
+    for (const chunkSeqs of [[-1], [0.5], ['x'], [0, 1]]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/capture/ble/dfu',
+        payload: { sessionId, chunks: [chunk], chunkSeqs },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json<{ error: string }>().error).toContain('chunkSeqs');
+    }
   });
 });

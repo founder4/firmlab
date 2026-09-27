@@ -27,15 +27,20 @@ export interface ReassemblyCompleteness {
  * Pure: find missing sequence numbers in an ordered or unordered list of block/chunk indices.
  * Assumes a 0-indexed sequence. Bounded to at most 100 missing items to avoid unbounded memory/payloads.
  */
+/** The most missing sequence numbers listed; a longer gap list is cut here and the reason says so. */
+export const MISSING_SEQUENCE_CAP = 100;
+
 export function findMissingSequences(sequences: number[]): number[] {
   if (!sequences || sequences.length === 0) return [];
   const set = new Set(sequences);
-  const max = Math.max(...sequences);
+  // A loop, not Math.max(...sequences): spreading a large operator-supplied array overflows the call stack.
+  let max = -1;
+  for (const n of sequences) if (n > max) max = n;
   const missing: number[] = [];
   for (let i = 0; i <= max; i++) {
     if (!set.has(i)) {
       missing.push(i);
-      if (missing.length >= 100) break;
+      if (missing.length >= MISSING_SEQUENCE_CAP) break;
     }
   }
   return missing;
@@ -43,9 +48,12 @@ export function findMissingSequences(sequences: number[]): number[] {
 
 /**
  * Pure: assess reassembly completeness for a Nordic BLE DFU DATA stream.
- * Size is compared against the declared length in the init packet ONLY if the init packet
- * can be structurally parsed (e.g. legacy init packet uint32 trailer).
- * If the init packet is missing or unparseable, expected size is unknown — NEVER guessed.
+ *
+ * Only a gap in the chunk sequence is evidence that bytes are missing, so only it yields `incomplete`. The init
+ * packet's size is read by `parseDfuInitSize`, which is a best-effort trailer read (its own contract: "never a hard
+ * requirement") — it cannot tell a legacy init packet from a newer one. So it may CORROBORATE a stream (an exact
+ * byte match is `complete`), but a mismatch is `unknown` with both numbers stated, never `incomplete`: a heuristic
+ * that disagrees must not block ingestion of a stream that may be whole.
  */
 export function assessBleCompleteness(
   receivedBytes: number,
@@ -53,81 +61,40 @@ export function assessBleCompleteness(
   chunkSeqs?: number[],
 ): ReassemblyCompleteness {
   const missingSeqs = chunkSeqs && chunkSeqs.length > 0 ? findMissingSequences(chunkSeqs) : [];
-  const hasMissingSeqs = missingSeqs.length > 0;
+  const hint = initPacket && initPacket.length >= 4 ? parseDfuInitSize(initPacket) : null;
+  const hintNote =
+    hint === null ? '' : ` The init packet's best-effort size read gives ${hint} bytes; received ${receivedBytes}.`;
 
-  const expectedBytes = initPacket && initPacket.length >= 4 ? parseDfuInitSize(initPacket) : null;
-
-  if (expectedBytes !== null && expectedBytes !== undefined) {
-    if (receivedBytes < expectedBytes) {
-      const missingBytes = expectedBytes - receivedBytes;
-      const reason = hasMissingSeqs
-        ? `Incomplete DFU stream: received ${receivedBytes} of declared ${expectedBytes} bytes (missing ${missingBytes} bytes), missing ${missingSeqs.length} chunk sequence(s)`
-        : `Incomplete DFU stream: received ${receivedBytes} of declared ${expectedBytes} bytes (missing ${missingBytes} bytes)`;
-
-      const res: ReassemblyCompleteness = {
-        status: 'incomplete',
-        receivedBytes,
-        expectedBytes,
-        missingBytes,
-        reason,
-      };
-      const missing: MissingGaps = { bytes: missingBytes };
-      if (hasMissingSeqs) {
-        res.missingSequences = missingSeqs;
-        missing.sequences = missingSeqs;
-      }
-      res.missing = missing;
-      return res;
-    }
-
-    if (receivedBytes > expectedBytes) {
-      const res: ReassemblyCompleteness = {
-        status: 'incomplete',
-        receivedBytes,
-        expectedBytes,
-        reason: `DFU stream length (${receivedBytes} bytes) exceeds declared size in init packet (${expectedBytes} bytes)`,
-      };
-      if (hasMissingSeqs) {
-        res.missingSequences = missingSeqs;
-        res.missing = { sequences: missingSeqs };
-      }
-      return res;
-    }
-
-    if (hasMissingSeqs) {
-      return {
-        status: 'incomplete',
-        receivedBytes,
-        expectedBytes,
-        missingSequences: missingSeqs,
-        missing: { sequences: missingSeqs },
-        reason: `DFU stream has ${missingSeqs.length} missing chunk sequence(s)`,
-      };
-    }
-
-    return {
-      status: 'complete',
-      receivedBytes,
-      expectedBytes,
-      reason: `BLE DFU reassembly complete: received ${receivedBytes} bytes matching declared size in init packet`,
-    };
-  }
-
-  // Init packet not provided or could not be parsed structurally
-  if (hasMissingSeqs) {
+  if (missingSeqs.length > 0) {
+    const capped = missingSeqs.length >= MISSING_SEQUENCE_CAP ? ` (listing capped at ${MISSING_SEQUENCE_CAP})` : '';
     return {
       status: 'incomplete',
       receivedBytes,
+      ...(hint === null ? {} : { expectedBytes: hint }),
       missingSequences: missingSeqs,
       missing: { sequences: missingSeqs },
-      reason: `Incomplete DFU stream: missing ${missingSeqs.length} chunk sequence(s) (expected size unknown without valid init packet)`,
+      reason: `DFU stream is missing ${missingSeqs.length} chunk sequence(s)${capped}.${hintNote}`,
     };
   }
-
+  if (hint !== null && hint === receivedBytes) {
+    return {
+      status: 'complete',
+      receivedBytes,
+      expectedBytes: hint,
+      reason: `No chunk sequence is missing and the ${receivedBytes} bytes received match the size the init packet declares.`,
+    };
+  }
   return {
     status: 'unknown',
     receivedBytes,
-    reason: 'Expected size unknown — no init packet provided or format cannot be parsed structurally',
+    ...(hint === null ? {} : { expectedBytes: hint }),
+    reason:
+      (chunkSeqs && chunkSeqs.length > 0
+        ? 'No chunk sequence is missing, but'
+        : 'No chunk sequence numbers were supplied, and') +
+      (hint === null
+        ? ' no readable init packet declares the expected size, so completeness cannot be established.'
+        : ` the init packet's size is a best-effort read that does not match, so completeness cannot be established.${hintNote}`),
   };
 }
 

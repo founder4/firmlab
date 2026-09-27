@@ -37,20 +37,18 @@ describe('assessBleCompleteness', () => {
     expect(res.missingSequences).toBeUndefined();
   });
 
-  it('reports incomplete with missing bytes when received < declared size', () => {
+  // The init size is a best-effort trailer read; a mismatch cannot tell "bytes missing" from "not a legacy init
+  // packet", so it is stated, never promoted to `incomplete` (which would block ingestion of a whole stream).
+  it('reads a shorter stream than the init hint as unknown, with both numbers stated', () => {
     const res = assessBleCompleteness(60, init100);
-    expect(res.status).toBe('incomplete');
-    expect(res.receivedBytes).toBe(60);
+    expect(res.status).toBe('unknown');
     expect(res.expectedBytes).toBe(100);
-    expect(res.missingBytes).toBe(40);
-    expect(res.missing?.bytes).toBe(40);
-    expect(res.reason).toContain('missing 40 bytes');
+    expect(res.reason).toContain('best-effort');
+    expect(res.reason).toContain('received 60');
   });
 
-  it('reports incomplete when reassembled bytes exceed declared size', () => {
-    const res = assessBleCompleteness(120, init100);
-    expect(res.status).toBe('incomplete');
-    expect(res.reason).toContain('exceeds declared size');
+  it('reads a longer stream than the init hint as unknown too', () => {
+    expect(assessBleCompleteness(120, init100).status).toBe('unknown');
   });
 
   it('reports incomplete when chunk sequences have gaps even if init packet matches size', () => {
@@ -71,7 +69,7 @@ describe('assessBleCompleteness', () => {
     const res = assessBleCompleteness(50, null);
     expect(res.status).toBe('unknown');
     expect(res.expectedBytes).toBeUndefined();
-    expect(res.reason).toContain('Expected size unknown');
+    expect(res.reason).toContain('cannot be established');
   });
 
   it('reports unknown when init packet is too short to extract size structurally', () => {
@@ -132,5 +130,13 @@ describe('assessZigbeeCompleteness', () => {
     const res = assessZigbeeCompleteness(100, null, false);
     expect(res.status).toBe('unknown');
     expect(res.reason).toContain('Missing Zigbee OTA header');
+  });
+});
+
+describe('findMissingSequences — the cap is stated', () => {
+  it('stops listing at the cap and the BLE reason says the list was capped', () => {
+    const res = assessBleCompleteness(10, null, [0, 500]);
+    expect(res.missingSequences).toHaveLength(100);
+    expect(res.reason).toContain('capped at 100');
   });
 });
