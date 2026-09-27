@@ -303,9 +303,9 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   variables del entorno o sin ellas. Medición fijada por test: el código anterior invocaba dos veces la detección
   y el recorrido ENC1 en el camino con entorno; el nuevo los invoca una vez. La lectura física ya era una y sigue
   siéndolo.)*
-- [ ] Añadir casos directos de `loaderKeyAudit` para fichero mayor de 32 MiB y fallo de lectura. El caso de cero
-  bytes ya está cubierto en el lector persistido; las otras dos ramas conservan su semántica por equivalencia y
-  suite completa, pero aún no tienen una prueba focal que fije sus cotas/resultados.
+- [x] Añadir casos directos de `loaderKeyAudit` para fichero mayor de 32 MiB y fallo de lectura. *(Hecho: una
+  imagen dispersa de 32 MiB + 1 byte fija la lectura global en 32 MiB, la auditoría en 4 MiB y conserva el lead
+  acotado; una ruta inexistente fija `attempted: false`, `completed: false`, cero leads y ausencia de `scan`.)*
 - [x] Aprovisionar la base de vulnerabilidades de grype en el despliegue. Desde que el carril SBOM dejó de
   descargarla sola (ver `providers/sbom-db.ts`), un contenedor recreado no tiene base y el resultado declara la
   negativa en vez de correlacionar. *(Hecho: **horneada** en `Dockerfile.tools` — `ENV GRYPE_DB_CACHE_DIR=/opt/grype-db`

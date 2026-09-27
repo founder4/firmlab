@@ -500,6 +500,57 @@ describe('runUbootAnalysis — loader-key audit precedes the environment precond
     });
   });
 
+  it('keeps the loader audit explicit when the image exceeds the 32-MiB read bound', () => {
+    const p = path.join(tmp, 'larger-than-read-cap.bin');
+    const image = nx820LoaderImage();
+    const readCap = 32 * 1024 * 1024;
+    const totalBytes = readCap + 1;
+    const fd = fs.openSync(p, 'w');
+    try {
+      fs.writeSync(fd, image, 0, image.length, 0);
+      fs.ftruncateSync(fd, totalBytes);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    const res = runUbootAnalysis(p);
+    expect(res.found).toBe(false);
+    expect(res.scan).toEqual({ bytesRead: readCap, totalBytes });
+    expect(res.reason).toContain('No U-Boot environment in the first 32.0 MB');
+    expect(res.reason).toContain('not a statement that the image has no environment block');
+    expect(res.findings.map((finding) => finding.kind)).toEqual(['bootloader-derived-flash-key']);
+    expect(res.findings[0]?.proofState).toBe('needs_runtime_reproduction');
+    expect(res.loaderKeyAudit).toEqual({
+      attempted: true,
+      completed: true,
+      leadsFound: 1,
+      scan: {
+        bytesRead: 4 * 1024 * 1024,
+        totalBytes,
+        complete: false,
+      },
+    });
+  });
+
+  it('records an unreadable image as an audit that was not attempted', () => {
+    const p = path.join(tmp, 'missing-image.bin');
+    expect(fs.existsSync(p)).toBe(false);
+
+    expect(runUbootAnalysis(p)).toEqual({
+      available: true,
+      found: false,
+      varCount: 0,
+      vars: {},
+      findings: [],
+      reason: 'The image could not be read.',
+      loaderKeyAudit: {
+        attempted: false,
+        completed: false,
+        leadsFound: 0,
+      },
+    });
+  });
+
   it('reads and scans the prefix once when an environment is found too, keeping both results separate', () => {
     const p = path.join(tmp, 'loader-with-env.bin');
     const env = Buffer.from('bootcmd=sf read 0x81000000; nx_decrypt kernel; bootm\0bootdelay=0\0\0', 'ascii');
