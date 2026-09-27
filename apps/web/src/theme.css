@@ -532,6 +532,8 @@ a:hover {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  /* Take the free space so a section name only truncates when the bar is really out of room. */
+  flex: 1 1 auto;
 }
 .topbar-title {
   font-size: 0.9rem;

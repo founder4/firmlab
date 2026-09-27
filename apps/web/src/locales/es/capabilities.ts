@@ -6,14 +6,14 @@ import type { capabilities as en } from '../en/capabilities';
  * para los tres.
  */
 export const capabilities: typeof en = {
-  heading: 'Capacidades sin lector',
+  heading: 'Análisis especializados',
   intro:
-    'Cada uno de estos proveedores tiene ruta, sincroniza hallazgos bajo su propia fuente y hasta ahora no tenía dónde leerse en pantalla — así que una etapa que nunca corrió era invisible en vez de aparecer como no ejecutada. Abajo se declara el estado de cada una, y los tres estados no son intercambiables a propósito.',
+    'Cada análisis responde a una pregunta concreta. Cada fila dice si no se ha ejecutado, si no pudo ejecutarse aquí o si se ejecutó — y sólo uno que se ejecutó dice algo sobre el firmware.',
 
   states: {
     notRun: {
       label: 'no ha corrido',
-      body: 'Nada ha hecho esta pregunta sobre esta imagen, así que no hay nada que mostrar. Eso es una afirmación sobre este banco, no sobre el firmware — ejecútala y la respuesta, incluso vacía, lo dirá.',
+      body: 'Todavía no se ha preguntado, así que esto no dice nada del firmware. Ejecútalo para obtener una respuesta, aunque sea vacía.',
     },
     unavailable: {
       label: 'no pudo responder',

@@ -50,7 +50,7 @@ describe('CapabilityResults — the three states reach the screen and do not sha
     renderCaps();
     await waitFor(() => expect(row('yarascan').dataset.state).toBe('not-run'));
     expect(row('yarascan').textContent).toMatch(/has not run/);
-    expect(row('yarascan').textContent).toMatch(/statement about this workbench, not about the firmware/);
+    expect(row('yarascan').textContent).toMatch(/says nothing about the firmware/);
   });
 
   /**

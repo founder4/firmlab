@@ -7,7 +7,8 @@
 export const rtosTasks = {
   title: 'FreeRTOS task snapshot',
   sub: 'Walk the ready lists and pxCurrentTCB in a RAM snapshot you captured elsewhere (a debugger dump, a crash image). Nothing here reads the device or resolves symbols: you declare the base address, byte order and pointer width, and the addresses of the lists to walk.',
-  collapsedHint: 'This image is not classed as RTOS or bare-metal, so the snapshot walk is folded away.',
+  collapsedHint:
+    'Folded because this image is not classed as RTOS or bare-metal. Open it to walk a RAM snapshot anyway.',
 
   field: {
     file: 'RAM snapshot (raw bytes)',

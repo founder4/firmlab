@@ -268,7 +268,7 @@ export function WirelessReassemblyPanel({
           type="button"
           role="tab"
           aria-selected={tab === 'ble'}
-          className={`tab-btn ${tab === 'ble' ? 'active' : ''}`}
+          className={`tab ${tab === 'ble' ? 'active' : ''}`}
           onClick={() => switchTab('ble')}
         >
           {t.capture.wireless.tabBle}
@@ -277,15 +277,19 @@ export function WirelessReassemblyPanel({
           type="button"
           role="tab"
           aria-selected={tab === 'zigbee'}
-          className={`tab-btn ${tab === 'zigbee' ? 'active' : ''}`}
+          className={`tab ${tab === 'zigbee' ? 'active' : ''}`}
           onClick={() => switchTab('zigbee')}
         >
           {t.capture.wireless.tabZigbee}
         </button>
       </div>
 
-      {/* Form area */}
-      <div style={{ display: 'grid', gap: 14, maxWidth: 640 }}>
+      {/* Form area. With the capture lane off every request is refused, so the form is disabled as a whole
+          rather than inviting input that can only fail. */}
+      <fieldset
+        disabled={!captureEnabled}
+        style={{ display: 'grid', gap: 14, maxWidth: 640, border: 0, padding: 0, margin: 0, minWidth: 0 }}
+      >
         {/* Operator Acknowledgement */}
         <label
           htmlFor="wireless-ack"
@@ -341,7 +345,7 @@ export function WirelessReassemblyPanel({
             <input
               id="wireless-session-id"
               type="text"
-              className="select mono"
+              className="input mono"
               placeholder={t.capture.wireless.sessionIdPlaceholder}
               value={sessionId}
               onChange={(e) => setSessionId(e.target.value)}
@@ -350,7 +354,7 @@ export function WirelessReassemblyPanel({
             />
             <button
               type="button"
-              className="btn btn-secondary btn-sm"
+              className="btn btn-sm"
               disabled={!captureEnabled || !ack || creatingSession}
               onClick={handleCreateSession}
               aria-busy={creatingSession}
@@ -373,7 +377,7 @@ export function WirelessReassemblyPanel({
           <input
             id="wireless-filename"
             type="text"
-            className="select mono"
+            className="input mono"
             placeholder={tab === 'ble' ? 'ble-dfu.bin' : 'zigbee-ota.bin'}
             value={filename}
             onChange={(e) => setFilename(e.target.value)}
@@ -391,7 +395,7 @@ export function WirelessReassemblyPanel({
             id="wireless-files"
             type="file"
             multiple
-            className="select"
+            className="input"
             style={{ maxWidth: 420, fontSize: 12 }}
             aria-label={t.capture.wireless.filesLabel}
             onChange={(e) => {
@@ -415,7 +419,7 @@ export function WirelessReassemblyPanel({
               id="wireless-init-packet"
               type="file"
               accept=".dat,.bin"
-              className="select"
+              className="input"
               style={{ maxWidth: 420, fontSize: 12 }}
               aria-label={t.capture.wireless.initPacketLabel}
               onChange={(e) => {
@@ -466,7 +470,7 @@ export function WirelessReassemblyPanel({
                 : t.capture.wireless.submitZigbee}
           </button>
         </div>
-      </div>
+      </fieldset>
 
       {/* Results / Status Area */}
       {result && (

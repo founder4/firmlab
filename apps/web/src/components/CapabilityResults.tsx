@@ -242,9 +242,9 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
   };
 
   return (
-    <section data-testid="capability-results">
-      <h2>{t.capabilities.heading}</h2>
-      <p className="hint" style={{ maxWidth: '72ch' }}>
+    <section data-testid="capability-results" className="panel">
+      <h2 className="panel-title">{t.capabilities.heading}</h2>
+      <p className="panel-sub" style={{ maxWidth: '72ch' }}>
         {t.capabilities.intro}
       </p>
 
@@ -271,12 +271,22 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
                 </span>
                 {state.kind === 'ran' && <span className="hint">{t.capabilities.findings(state.findingCount)}</span>}
                 {state.kind === 'not-run' && (cap.id === 'yarascan' || cap.id === 'fwhunt' || cap.id === 'nvram') && (
-                  <button type="button" onClick={() => void run(cap.id)} disabled={busy === cap.id}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => void run(cap.id)}
+                    disabled={busy === cap.id}
+                  >
                     {busy === cap.id ? t.capabilities.running : t.capabilities.run}
                   </button>
                 )}
                 {cap.id === 'fwhunt' && state.kind === 'ran' && fwhuntBatch?.canContinue && (
-                  <button type="button" onClick={() => void run(cap.id)} disabled={busy === cap.id}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => void run(cap.id)}
+                    disabled={busy === cap.id}
+                  >
                     {busy === cap.id
                       ? t.capabilities.running
                       : fwhuntBatch.legacy

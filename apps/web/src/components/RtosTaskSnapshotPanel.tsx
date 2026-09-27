@@ -457,12 +457,14 @@ export function RtosTaskSnapshotPanel({
   }
   return (
     <details className="panel">
-      <summary className="panel-title" style={{ cursor: 'pointer' }}>
+      {/* `list-item` keeps the disclosure triangle, which `panel-title`'s block display removed: folded, the panel
+          read as a heading with nothing under it. The hint sits in the summary so it is visible while folded. */}
+      <summary className="panel-title" style={{ cursor: 'pointer', display: 'list-item' }}>
         {m.title}
+        <span className="hint" style={{ display: 'block', maxWidth: '72ch', fontWeight: 400, marginTop: 4 }}>
+          {m.collapsedHint}
+        </span>
       </summary>
-      <div className="hint" style={{ maxWidth: '72ch' }}>
-        {m.collapsedHint}
-      </div>
       {body}
     </details>
   );

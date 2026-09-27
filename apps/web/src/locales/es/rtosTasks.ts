@@ -5,7 +5,7 @@ export const rtosTasks: Messages['rtosTasks'] = {
   title: 'Instantánea de tareas FreeRTOS',
   sub: 'Recorre las listas de tareas listas y pxCurrentTCB en una instantánea de RAM capturada en otro sitio (un volcado del depurador, una imagen de fallo). Aquí no se lee el dispositivo ni se resuelven símbolos: declaras la dirección base, el orden de bytes y el ancho de puntero, y las direcciones de las listas que se recorren.',
   collapsedHint:
-    'Esta imagen no está clasificada como RTOS ni bare-metal, así que el recorrido de la instantánea queda plegado.',
+    'Plegado porque esta imagen no está clasificada como RTOS ni bare-metal. Ábrelo para recorrer una instantánea de RAM igualmente.',
 
   field: {
     file: 'Instantánea de RAM (bytes en bruto)',

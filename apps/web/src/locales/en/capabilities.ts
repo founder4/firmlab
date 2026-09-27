@@ -7,14 +7,14 @@
  * one paraphrase shared between them is how this project has previously shipped a bound reading as an answer.
  */
 export const capabilities = {
-  heading: 'Capabilities with no reader',
+  heading: 'Specialised scans',
   intro:
-    'Each of these providers has a route, syncs findings under its own source, and until now had nowhere on screen to be read — so a stage that never ran was invisible rather than reported as not-run. The state of each is stated below, and the three states are deliberately not interchangeable.',
+    'Each scan answers one narrow question. Each row says whether it has not run, could not run here, or ran — and only a scan that ran says anything about the firmware.',
 
   states: {
     notRun: {
       label: 'has not run',
-      body: 'Nothing has asked this question about this image, so there is nothing to show. That is a statement about this workbench, not about the firmware — run it and the answer, including an empty one, will say so.',
+      body: 'Not asked yet, so this says nothing about the firmware. Run it to get an answer — an empty one included.',
     },
     unavailable: {
       label: 'could not answer',
