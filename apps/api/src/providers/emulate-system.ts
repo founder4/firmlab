@@ -305,7 +305,10 @@ export function buildFullSystemArgs(
   // slirp has been moved onto the firmware's own subnet — there the forward has to name the address the firmware
   // gave itself, because slirp has no way to discover it.
   const guestAddr = plan?.guestAddress ?? '';
-  const fwd = forwards.map((f) => `hostfwd=tcp::${f.host}-${guestAddr}:${f.guest}`).join(',');
+  // The host side is bound to loopback EXPLICITLY. An empty hostaddr is slirp's INADDR_ANY, which inside a bridged
+  // container was harmless and on a host-networked one publishes the firmware's telnet/httpd to the LAN for the
+  // whole boot. Every reader of these forwards (`guestAnswers`, the live web probe) dials 127.0.0.1 anyway.
+  const fwd = forwards.map((f) => `hostfwd=tcp:127.0.0.1:${f.host}-${guestAddr}:${f.guest}`).join(',');
   const netdev = ['user', 'id=n0'];
   // `restrict=on` isolates the guest from the host and from everything past it, and — qemu's own words — "does not
   // affect any explicitly set forwarding rules", so the `hostfwd` below still reaches the guest's services and the
@@ -1644,7 +1647,7 @@ interface BootOutcome {
  * asynchronous, and a pass-two boot racing a still-dying pass-one qemu is how this rung ends up measuring the wrong
  * process. So the finally waits for the exit it asked for, bounded.
  */
-async function bootOnce(
+export async function bootOnce(
   qemu: string,
   args: string[],
   forwards: { host: number; guest: number; protocol: PortProtocol }[],
@@ -1697,6 +1700,11 @@ async function bootOnce(
   proc.on('exit', () => {
     exited = true;
   });
+  // Whether THIS qemu still owns its forwards. A qemu that could not bind one says so and exits, and whoever holds
+  // that port — another run's guest, an unrelated host service — would otherwise answer for it and be recorded as
+  // this firmware's service. So an answer only counts while the owning process is alive and has not reported a
+  // failed forward, checked after the answer arrives rather than only before the sweep.
+  const ownsForwards = (): boolean => !exited && !HOSTFWD_FAILED.test(stderr);
 
   const open: { host: number; guest: number }[] = [];
   const webProbes: BootOutcome['webProbes'] = [];
@@ -1718,9 +1726,16 @@ async function bootOnce(
   try {
     while (Date.now() < deadline && !exited) {
       await new Promise((r) => setTimeout(r, PROBE_INTERVAL_MS));
+      if (!ownsForwards()) break;
       for (const f of forwards) {
         if (open.some((o) => o.host === f.host)) continue;
         if (await guestAnswers(f.host, f.protocol)) {
+          if (!ownsForwards()) {
+            handle.log(
+              `  [${label}] host ${f.host} answered, but this qemu had already exited or lost its forward — the reply cannot be this guest's, so it is discarded.`,
+            );
+            break;
+          }
           open.push({ host: f.host, guest: f.guest });
           handle.log(
             `  [${label}] guest port ${f.guest} ANSWERED on host ${f.host} — a service inside the guest replied, not just qemu accepting.`,
@@ -1737,6 +1752,12 @@ async function bootOnce(
               timeoutMs: 1500,
               maxRequests: 40,
             });
+            if (!ownsForwards()) {
+              handle.log(
+                `  [${label}] qemu exited during the live web probe of ${target}; its responses cannot be attributed to this guest and are discarded.`,
+              );
+              break;
+            }
             webProbes.push({ target, host: f.host, guest: f.guest, protocol: f.protocol, result });
             handle.log(
               `  [${label}] live web probe: available=${result.available}, requests=${result.requests}, points=${result.points}, reproduced=${result.findings.length}.`,
@@ -1973,7 +1994,11 @@ export function passScore(o: { open: { host: number }[]; booted: boolean; panick
 export async function runFullSystem(
   arch: Architecture,
   rootfsImage: string,
-  hostPort: number,
+  /**
+   * Ignored, and kept only so existing callers (which pass 8080) compile unchanged. Forwards always take a fresh,
+   * whole-window allocation per pass — a caller-supplied port was only ever the unsafe fallback.
+   */
+  _hostPort: number,
   handle: JobHandle,
   /**
    * The extracted rootfs DIRECTORY, read for the ports the firmware declares. Optional so an existing caller that
@@ -2050,7 +2075,7 @@ export async function runFullSystem(
     forwards: BootOutcome['forwards'];
     capture: { file: string; emulatorAddresses: string[]; guestAddress: string | null } | null;
   }> => {
-    const basePort = await allocateHostPort(hostPort);
+    const basePort = await allocateHostPortWindow(planForwards(portMap, 0).length);
     const forwards = planForwards(portMap, basePort);
     handle.log(`Forwarding ${forwards.map((f) => `host ${f.host} → guest ${f.guest}/${f.protocol}`).join(', ')}.`);
     const capture = captureDir
@@ -2191,7 +2216,7 @@ export async function runFullSystem(
     let consolePass: SystemEmulationResult['console'] = { attempted: false, reason: consolePlan.reason };
     if (consolePlan.run && consoleInputs) {
       const steps = consoleScript(consoleInputs);
-      const basePort = await allocateHostPort(hostPort);
+      const basePort = await allocateHostPortWindow(planForwards(portMap, 0).length);
       const forwards = planForwards(portMap, basePort);
       handle.log(
         `Forwarding ${forwards.map((f) => `host ${f.host} → guest ${f.guest}/${f.protocol}`).join(', ')} for the console pass.`,
@@ -2348,17 +2373,54 @@ export function keepEnds(text: string, cap = CONSOLE_CAP): string {
   return `${text.slice(0, half)}\n… [FirmLab: ${dropped} bytes of console elided here] …\n${text.slice(-half)}`;
 }
 
-/** Ask the OS for a free host port to base the forwards on, so no two runs can share one. */
-async function allocateHostPort(preferred: number): Promise<number> {
+/** qemu's own words when a `hostfwd` cannot be bound — it exits right after, and the port belongs to someone else. */
+const HOSTFWD_FAILED = /could not set up host forwarding rule/i;
+
+/** Bind a loopback listener on `port` (0 = the OS picks), keep it in `held`, and return the port — or null if taken. */
+function holdLoopbackPort(port: number, held: net.Server[]): Promise<number | null> {
   return new Promise((resolve) => {
     const srv = net.createServer();
-    srv.on('error', () => resolve(preferred));
-    srv.listen(0, '127.0.0.1', () => {
+    srv.once('error', () => resolve(null));
+    srv.listen(port, '127.0.0.1', () => {
+      held.push(srv);
       const addr = srv.address();
-      const port = typeof addr === 'object' && addr ? addr.port : preferred;
-      srv.close(() => resolve(port));
+      resolve(typeof addr === 'object' && addr ? addr.port : null);
     });
   });
+}
+
+/**
+ * A base port whose WHOLE window `[base, base + width)` is free on loopback, since `planForwards` hands out
+ * `base + i` for every forward. Checking only the base — the previous version — left the other seven to whoever held
+ * them, and a qemu that loses one bind exits while the port still answers. Every port in the window is held at once
+ * while it is checked, then released for qemu (a race remains between release and qemu's bind; `bootOnce` refuses
+ * answers once qemu reports a failed forward or exits, which is what closes it). There is deliberately no fixed
+ * fallback: the old one was 8080, a port this host hands to unrelated services. Exhausting the attempts throws.
+ *
+ * `candidate` exists for the tests; in production every attempt asks the OS (`0`).
+ */
+export async function allocateHostPortWindow(
+  width: number,
+  opts: { attempts?: number; candidate?: () => number } = {},
+): Promise<number> {
+  if (!Number.isSafeInteger(width) || width < 1)
+    throw new Error(`Port window width must be a positive integer (got ${width}).`);
+  const attempts = opts.attempts ?? 32;
+  for (let i = 0; i < attempts; i++) {
+    const held: net.Server[] = [];
+    try {
+      const base = await holdLoopbackPort(opts.candidate?.() ?? 0, held);
+      if (base === null || base + width - 1 > 65_535) continue;
+      let whole = true;
+      for (let p = base + 1; p < base + width && whole; p++) whole = (await holdLoopbackPort(p, held)) !== null;
+      if (whole) return base;
+    } finally {
+      await Promise.all(held.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))));
+    }
+  }
+  throw new Error(
+    `No free window of ${width} contiguous loopback port(s) after ${attempts} attempts; refusing to fall back to a fixed port.`,
+  );
 }
 
 /**

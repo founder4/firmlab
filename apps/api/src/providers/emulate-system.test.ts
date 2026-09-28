@@ -1,8 +1,12 @@
+import http from 'node:http';
+import net from 'node:net';
 import { describe, expect, it } from 'vitest';
 import {
   FIRMADYNE_KERNEL_NAMES,
   type SystemEmulationResult,
   TEARDOWN_PATTERNS,
+  allocateHostPortWindow,
+  bootOnce,
   buildChrootServiceArgs,
   buildConsolePassArgs,
   buildFullSystemArgs,
@@ -44,8 +48,18 @@ describe('buildFullSystemArgs', () => {
     ]);
     expect(args).toContain('-kernel');
     expect(args).toContain('/opt/firmae/kernels/vmlinux.mipsel.4');
-    expect(args.join(' ')).toContain('hostfwd=tcp::8080-:80');
+    expect(args.join(' ')).toContain('hostfwd=tcp:127.0.0.1:8080-:80');
     expect(args.join(' ')).toContain('file=/data/rootfs.img,format=raw');
+  });
+
+  it('binds every forward to loopback, never to all interfaces', () => {
+    // An empty hostaddr is slirp's INADDR_ANY: on a host-networked deployment that publishes the guest to the LAN.
+    const args = buildFullSystemArgs('malta', '/k', '/r.img', [
+      { host: 41000, guest: 22 },
+      { host: 41001, guest: 80 },
+    ]).join(' ');
+    expect(args).not.toMatch(/hostfwd=tcp::/);
+    expect(args.match(/hostfwd=tcp:127\.0\.0\.1:/g)).toHaveLength(2);
   });
 
   it('forwards EVERY declared port, which one hostfwd could never do', () => {
@@ -56,9 +70,9 @@ describe('buildFullSystemArgs', () => {
       { host: 8081, guest: 80 },
       { host: 8082, guest: 443 },
     ]).join(' ');
-    expect(args).toContain('hostfwd=tcp::8080-:22');
-    expect(args).toContain('hostfwd=tcp::8081-:80');
-    expect(args).toContain('hostfwd=tcp::8082-:443');
+    expect(args).toContain('hostfwd=tcp:127.0.0.1:8080-:22');
+    expect(args).toContain('hostfwd=tcp:127.0.0.1:8081-:80');
+    expect(args).toContain('hostfwd=tcp:127.0.0.1:8082-:443');
   });
 
   it('still produces a valid netdev when there is nothing to forward', () => {
@@ -83,7 +97,7 @@ describe('buildFullSystemArgs', () => {
     // honesty fix that quietly destroys the measurement it was protecting.
     const args = buildFullSystemArgs('malta', '/k', '/r.img', [{ host: 8080, guest: 80 }], null, null, true).join(' ');
     expect(args).toContain('restrict=on');
-    expect(args).toContain('hostfwd=tcp::8080-:80');
+    expect(args).toContain('hostfwd=tcp:127.0.0.1:8080-:80');
   });
 
   it('keeps restrict inside the netdev when slirp has been moved onto the firmware’s subnet', () => {
@@ -504,7 +518,7 @@ describe('buildFullSystemArgs — pass two’s network, and pass one left untouc
   it('is byte-for-byte the old boot when no plan is given', () => {
     const args = buildFullSystemArgs('malta', '/k', '/r.img', [{ host: 8080, guest: 80 }]).join(' ');
     expect(args).toContain('-append console=ttyS0 root=/dev/sda rootfstype=ext2 rw -drive');
-    expect(args).toContain('user,id=n0,hostfwd=tcp::8080-:80');
+    expect(args).toContain('user,id=n0,hostfwd=tcp:127.0.0.1:8080-:80');
   });
 
   it('hands the kernel an ip= and aims the forward at the address it will get', () => {
@@ -515,7 +529,7 @@ describe('buildFullSystemArgs — pass two’s network, and pass one left untouc
       guestAddress: '10.0.2.15',
     }).join(' ');
     expect(args).toContain('ip=10.0.2.15::10.0.2.2:255.255.255.0::eth0:off');
-    expect(args).toContain('hostfwd=tcp::41000-10.0.2.15:80');
+    expect(args).toContain('hostfwd=tcp:127.0.0.1:41000-10.0.2.15:80');
   });
 
   it('moves slirp onto the firmware’s own subnet when the firmware named one', () => {
@@ -525,7 +539,7 @@ describe('buildFullSystemArgs — pass two’s network, and pass one left untouc
       slirpHost: '192.168.1.2',
       guestAddress: '192.168.1.1',
     }).join(' ');
-    expect(args).toContain('user,id=n0,net=192.168.1.0/24,host=192.168.1.2,hostfwd=tcp::41000-192.168.1.1:80');
+    expect(args).toContain('user,id=n0,net=192.168.1.0/24,host=192.168.1.2,hostfwd=tcp:127.0.0.1:41000-192.168.1.1:80');
     // No ip= — the guest configures itself and is right to; it is the emulator that moved.
     expect(args).not.toContain('ip=');
   });
@@ -570,7 +584,7 @@ describe('buildConsolePassArgs — pass three differs from pass two in the init 
 
   it('aims the forwards at the guest’s own address, exactly as pass two did', () => {
     const args = buildConsolePassArgs('malta', '/k', '/r.img', [{ host: 39301, guest: 80 }], plan, true).join(' ');
-    expect(args).toContain('hostfwd=tcp::39301-192.168.0.1:80');
+    expect(args).toContain('hostfwd=tcp:127.0.0.1:39301-192.168.0.1:80');
     expect(args).toContain('net=192.168.0.0/24,host=192.168.0.2');
     expect(args).toContain('init=/bin/sh');
   });
@@ -590,7 +604,7 @@ describe('buildConsolePassArgs — pass three differs from pass two in the init 
 
   it('falls back to qemu’s own network when pass one inferred none, rather than inventing an address', () => {
     const args = buildConsolePassArgs('malta', '/k', '/r.img', [{ host: 39301, guest: 80 }], null).join(' ');
-    expect(args).toContain('hostfwd=tcp::39301-:80');
+    expect(args).toContain('hostfwd=tcp:127.0.0.1:39301-:80');
     expect(args).toContain('init=/bin/sh');
   });
 });
@@ -1340,4 +1354,111 @@ describe('buildSystemEmulationFindings — live web probes remain attributable t
     });
     expect(drafts[2]?.evidence).toMatchObject({ pass: 3, guest: 80, requests: 7, leaked: '/etc/passwd' });
   });
+});
+
+/** Hold a loopback listener on `port` (0 = OS-chosen) and return it with its port. */
+async function listen(server: net.Server, port = 0): Promise<number> {
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve());
+  });
+  const addr = server.address();
+  if (typeof addr !== 'object' || !addr) throw new Error('no address');
+  return addr.port;
+}
+const closeServer = (s: net.Server) => new Promise<void>((resolve) => s.close(() => resolve()));
+
+describe('allocateHostPortWindow', () => {
+  it('skips a base whose window has a port taken past the base', async () => {
+    // Find a free window of 4, then squat its SECOND port: the old allocator checked only the base and accepted it.
+    const base = await allocateHostPortWindow(4);
+    const squatter = net.createServer();
+    await listen(squatter, base + 1);
+    try {
+      const candidates = [base, 0];
+      const got = await allocateHostPortWindow(4, { candidate: () => candidates.shift() ?? 0 });
+      expect(got).not.toBe(base);
+      expect(got + 3 < base + 1 || got > base + 1).toBe(true);
+    } finally {
+      await closeServer(squatter);
+    }
+  });
+
+  it('throws when no window is free instead of falling back to a fixed port', async () => {
+    const squatter = net.createServer();
+    const taken = await listen(squatter);
+    try {
+      await expect(allocateHostPortWindow(1, { attempts: 3, candidate: () => taken })).rejects.toThrow(
+        /refusing to fall back/,
+      );
+    } finally {
+      await closeServer(squatter);
+    }
+  });
+
+  it('refuses a window that would run past the last port', async () => {
+    await expect(allocateHostPortWindow(8, { attempts: 1, candidate: () => 65_530 })).rejects.toThrow();
+  });
+});
+
+describe('bootOnce forward ownership', () => {
+  const handle = { id: 't', log: () => undefined };
+  // A plain HTTP listener standing in for whatever else holds a forwarded port: another run's guest, a host service.
+  const withSquatter = async (run: (port: number) => Promise<void>) => {
+    const server = http.createServer((_req, res) => res.end('<html>not the firmware</html>'));
+    const port = await listen(server);
+    try {
+      await run(port);
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+    }
+  };
+
+  it('discards an answer that arrives after the owning qemu has exited', async () => {
+    await withSquatter(async (port) => {
+      // The "qemu" dies at once, as a real one does when it cannot bind a hostfwd.
+      const out = await bootOnce(
+        process.execPath,
+        ['-e', 'process.exit(1)'],
+        [{ host: port, guest: 80, protocol: 'http' }],
+        'exited',
+        handle,
+        null,
+      );
+      expect(out.open).toEqual([]);
+      expect(out.webProbes).toEqual([]);
+    });
+  }, 15_000);
+
+  it('discards an answer once qemu has reported a failed forward, even before it exits', async () => {
+    await withSquatter(async (port) => {
+      const script = `process.stderr.write("qemu: could not set up host forwarding rule 'tcp:127.0.0.1:${port}-:80'\\n"); setTimeout(() => {}, 4000);`;
+      const out = await bootOnce(
+        process.execPath,
+        ['-e', script],
+        [{ host: port, guest: 80, protocol: 'http' }],
+        'lost-forward',
+        handle,
+        null,
+      );
+      expect(out.open).toEqual([]);
+      expect(out.webProbes).toEqual([]);
+    });
+  }, 15_000);
+
+  it('still records an answer while the owning process is alive (control)', async () => {
+    await withSquatter(async (port) => {
+      const out = await bootOnce(
+        process.execPath,
+        ['-e', 'setTimeout(() => {}, 10000)'],
+        [{ host: port, guest: 80, protocol: 'http' }],
+        'alive',
+        handle,
+        null,
+      );
+      expect(out.open).toEqual([{ host: port, guest: 80 }]);
+      expect(out.webProbes).toHaveLength(1);
+    });
+  }, 20_000);
 });
