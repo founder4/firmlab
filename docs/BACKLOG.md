@@ -380,6 +380,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   (2026-09-28) y pasa 3/3 aislado: espera sobre algo que la carga retrasa. Anclarlo a un estado cargado, como ya se
   hizo con los dos tests de `23e2917`.
 
+- [ ] **Decir en la UI si el aislamiento del emulado incluye red.** `detectIsolation` devuelve `partial` tanto con
+  `unshare -rn` (sin red) como con sólo `prlimit` (con la red del host), y `/agent/config` y la UI sólo muestran
+  `partial`: dos contenciones muy distintas con la misma palabra. Exponer `netns: '-n' | '-rn' | null`. Y cargar un
+  perfil AppArmor propio (derivado de `docker-default` permitiendo el uid map) para no correr `unconfined`.
+
 ## Deuda de política (decisiones a escribir, no bugs)
 
 - [x] Dos estándares de CVE conviven sin decisión escrita: grype (vía manifiesto syft) acepta CVE-2016-2148 para

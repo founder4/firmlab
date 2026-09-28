@@ -181,6 +181,30 @@ Una base vieja **se usa**, no se rechaza (`GRYPE_DB_VALIDATE_AGE=false`: grype d
 más de cinco días), y su fecha de compilación viaja al resultado y a la tabla de la web. Cero CVE contra una base
 de hace ocho meses no es la misma afirmación que cero CVE contra la de hoy.
 
+## Red del host, captura y aislamiento del firmware emulado (2026-09-28)
+
+El despliegue de esta estación (`~/homelab/firmlab/docker-compose.yml`) corre con **`network_mode: host`** y
+`NET_ADMIN`/`NET_RAW`, porque el carril de captura (descubrimiento LAN, spoof ARP/DNS, proxy OTA) necesita ver el
+segmento de red; en una red bridge nunca lo ve. La API se fija a **`FIRMLAB_HOST=127.0.0.1`**: con red de host,
+`0.0.0.0` la expondría a la LAN y a Tailscale. Comprobado: por `192.168.1.175` y por la IP de Tailscale la conexión
+se rechaza; sólo responde loopback. `deploy.sh` y `ui-expose.sh` reconocen el modo host (el que escucha en `:8799`
+es el propio contenedor, y el sidecar de `:8899` reenvía a loopback).
+
+Eso vuelve crítico el aislamiento de lo que el agente ejecuta (`providers/isolate.ts`): el proceso corre como root
+con las capacidades de red del contenedor. El aislamiento de red es `unshare -rn` (un espacio de red vacío dentro de
+un espacio de usuario: sólo `lo`, sin capacidades fuera). Docker lo impide por defecto por dos vías, y ambas se
+resolvieron sin `CAP_SYS_ADMIN` —que haría del binario emulado un root con SYS_ADMIN—:
+
+- **seccomp**: `seccomp-firmlab.json` junto al compose es el perfil por defecto de Docker (`moby/profiles`) más una
+  única regla que permite `unshare`. Sin ella, `unshare` exige `CAP_SYS_ADMIN`.
+- **AppArmor**: `unconfined`. `docker-default` deniega escribir el mapa de UID; un perfil propio requiere cargarlo
+  como root en el host (`apparmor_parser`), pendiente.
+
+**Si falta cualquiera de las dos, `isolate.ts` cae a sólo `prlimit` y el binario emulado tiene la red de la
+máquina** — y la UI sigue diciendo `partial` en ambos casos. Verificación: `docker exec firmlab unshare -rn sh -c
+"ip -o link | wc -l"` debe imprimir `1`. Límites por ejecución subidos a 120 s de CPU, 2 GB de espacio de direcciones,
+256 MB por fichero y 180 s de reloj (`FIRMLAB_ISOLATE_*`): con 512 MB, `qemu-user` puede morir antes de arrancar.
+
 ## Limpieza
 
 Las builds sucesivas dejan imágenes dangling (cada rebuild desreferencia la anterior; en un día de iteración
