@@ -374,6 +374,7 @@ export function parseArgs(argv, env = process.env) {
     out: null,
     matrix: null,
     execute: false,
+    deterministic: false,
     limit: 0,
     pollMs: 5_000,
     jobTimeoutMs: 60 * 60 * 1_000,
@@ -396,6 +397,7 @@ export function parseArgs(argv, env = process.env) {
     else if (token === '--out') args.out = value(token, i++);
     else if (token === '--matrix') args.matrix = value(token, i++);
     else if (token === '--execute') args.execute = true;
+    else if (token === '--deterministic') args.deterministic = true;
     else if (token === '--limit') args.limit = positive(token, value(token, i++));
     else if (token === '--poll-ms') args.pollMs = positive(token, value(token, i++));
     else if (token === '--job-timeout-ms') args.jobTimeoutMs = positive(token, value(token, i++));
@@ -404,11 +406,12 @@ export function parseArgs(argv, env = process.env) {
   }
   if (!['markdown', 'json'].includes(args.format)) throw new Error('--format must be markdown or json');
   if (args.execute && args.matrix) throw new Error('--execute plans against the live workbench, not a saved matrix');
+  if (args.deterministic && !args.execute) throw new Error('--deterministic only applies to --execute');
   args.base = args.base.replace(/\/$/, '');
   return args;
 }
 
-function usage() {
+export function usage() {
   return [
     'Coverage campaign over the VALIDATION CORPUS — which of its uncovered cells are worth',
     'scheduling. Not the cross-image corpus (pnpm corpus:reindex) and not the YARA rule corpus',
@@ -420,6 +423,8 @@ function usage() {
     '  --format markdown|json Output format (default markdown)',
     '  --out FILE             Write the plan to a file instead of stdout',
     '  --execute              Run the queue, one autonomous scan at a time, in the printed order',
+    '  --deterministic        With --execute: request the deterministic narrative for every scan, even when the',
+    '                         workbench has an LLM configured (recorded on each job as narrativeMode)',
     '  --limit N              Execute at most N images (default: the whole queue)',
     '  --poll-ms N            Job polling interval (default 5000)',
     '  --job-timeout-ms N     Maximum wait for one scan (default 3600000)',
@@ -479,6 +484,15 @@ async function waitForJob(base, jobId, args, headers) {
  * its own concurrency (`FIRMLAB_MAX_CONCURRENT_JOBS`), and a campaign that queues 20 scans at once would hand the
  * scheduler an ordering it did not choose — the ranking would stop meaning anything the moment it mattered.
  */
+/**
+ * The body POSTed to `/api/images/:id/opacidad`. `auto` is spelt out as `{}` so a campaign without the flag sends
+ * exactly what it always sent. `--deterministic` asks for no LLM for that scan: a campaign compares cells across
+ * images and builds, and a narrative that depends on whether a model happened to be configured is noise in that.
+ */
+export function opacidadRequestBody(args) {
+  return args.deterministic ? { narrative: 'deterministic' } : {};
+}
+
 export async function executeCampaign(plan, args, env = process.env) {
   const headers = apiHeaders(env);
   const order = executionOrder(plan);
@@ -497,7 +511,7 @@ export async function executeCampaign(plan, args, env = process.env) {
       const { jobId } = await fetchJson(`${args.base}/api/images/${encodeURIComponent(sample.id)}/opacidad`, {
         method: 'POST',
         headers: { ...(headers ?? {}), 'content-type': 'application/json' },
-        body: '{}',
+        body: JSON.stringify(opacidadRequestBody(args)),
       });
       await waitForJob(args.base, jobId, args, headers);
       const elapsed = Date.now() - started;

@@ -37,7 +37,15 @@ prosa:
 pnpm corpus:campaign                      # imprime el plan (Markdown; --format json para automatizar)
 pnpm corpus:campaign --execute --limit 5  # ejecuta la cola, un escaneo autónomo cada vez, en el orden impreso
 pnpm corpus:campaign --matrix m.json      # planifica sobre una matriz guardada (no permite --execute)
+pnpm corpus:campaign --execute --deterministic  # igual, con narrativa determinista aunque haya un LLM configurado
 ```
+
+`--deterministic` (sólo con `--execute`) envía `{"narrative":"deterministic"}` a `POST /api/images/:id/opacidad`: ese
+escaneo no llama a ningún modelo aunque `FIRMLAB_AGENT` y las credenciales estén activos, y el job lo registra en sus
+parámetros (`narrativeMode: "deterministic"`) y en su log. Sin el flag el cuerpo sigue siendo `{}` —modo `auto`: el LLM
+configurado si lo hay, el determinista si no—. La ruta rechaza con 400 cualquier otro valor o campo, porque un flag mal
+escrito que acabara llamando al modelo es justo lo que el flag existe para impedir. Sólo cambia la redacción del
+informe: ni el plan, ni las etapas, ni los estados de prueba dependen del modo.
 
 Las ocho disposiciones y lo que significan para una campaña:
 

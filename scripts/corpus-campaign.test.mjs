@@ -5,10 +5,12 @@ import {
   classifySample,
   executeCampaign,
   executionOrder,
+  opacidadRequestBody,
   parseArgs,
   planCampaign,
   rankQueue,
   renderPlan,
+  usage,
 } from './corpus-campaign.mjs';
 
 const stage = (worker, status, extra = {}) => ({ worker, reason: `why ${worker}`, status, ...extra });
@@ -271,4 +273,46 @@ test('arguments', () => {
   assert.throws(() => parseArgs(['--format', 'xml'], {}), /markdown or json/);
   // Executing against a saved matrix would schedule work from a snapshot the workbench may have moved past.
   assert.throws(() => parseArgs(['--execute', '--matrix', 'm.json'], {}), /live workbench/);
+});
+
+test('--deterministic reaches the opacidad request body; without it the body is unchanged', async () => {
+  const { createServer } = await import('node:http');
+  const bodies = [];
+  const server = createServer((req, res) => {
+    if (req.method === 'POST') {
+      let raw = '';
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        bodies.push(JSON.parse(raw));
+        res.writeHead(202, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jobId: 'j1' }));
+      });
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ job: { status: 'done' } }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const plan = planCampaign(matrix([sample('one', 'rtos', [stage('W', 'not-run')])]));
+    const fast = { pollMs: 1, jobTimeoutMs: 5_000 };
+    await executeCampaign(plan, { ...parseArgs(['--base', base, '--execute'], {}), ...fast }, {});
+    await executeCampaign(plan, { ...parseArgs(['--base', base, '--execute', '--deterministic'], {}), ...fast }, {});
+    assert.deepEqual(bodies, [{}, { narrative: 'deterministic' }]);
+  } finally {
+    server.close();
+  }
+});
+
+test('--deterministic: parsing, pairing with --execute, and help', () => {
+  assert.equal(parseArgs([], {}).deterministic, false);
+  assert.equal(parseArgs(['--execute', '--deterministic'], {}).deterministic, true);
+  assert.deepEqual(opacidadRequestBody({ deterministic: false }), {});
+  assert.deepEqual(opacidadRequestBody({ deterministic: true }), { narrative: 'deterministic' });
+  // Without --execute nothing is POSTed, so the flag would be silently meaningless.
+  assert.throws(() => parseArgs(['--deterministic'], {}), /only applies to --execute/);
+  assert.match(usage(), /--deterministic/);
 });

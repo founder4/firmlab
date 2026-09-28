@@ -21,6 +21,25 @@ import { startJob } from '../providers/jobs.js';
 import { UBOOT_WORKER, latestUbootCoverageStep } from '../providers/uboot-outcome.js';
 import { type ImageRow, getImage, listFindings, listImages, listJobs } from '../store.js';
 
+export type OpacidadNarrativeMode = 'auto' | 'deterministic';
+
+/**
+ * The POST body. `narrative: 'auto'` (the default, and what an empty body means) keeps the historical behaviour: the
+ * configured LLM phrases the report when the agent lane is on, the deterministic composer otherwise.
+ * `'deterministic'` never calls a model. Anything else — an unknown value or an unknown key — is refused rather than
+ * read as auto, because a misspelt flag silently running the model is exactly what the flag exists to prevent.
+ */
+export function parseOpacidadRequest(body: unknown): { narrative: OpacidadNarrativeMode } | { error: string } {
+  if (body === undefined || body === null) return { narrative: 'auto' };
+  if (typeof body !== 'object' || Array.isArray(body)) return { error: 'Request body must be a JSON object.' };
+  const unknown = Object.keys(body).filter((key) => key !== 'narrative');
+  if (unknown.length > 0) return { error: `Unknown field(s): ${unknown.join(', ')}. Only "narrative" is accepted.` };
+  const narrative = (body as { narrative?: unknown }).narrative;
+  if (narrative === undefined) return { narrative: 'auto' };
+  if (narrative === 'auto' || narrative === 'deterministic') return { narrative };
+  return { error: 'narrative must be "auto" or "deterministic".' };
+}
+
 export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
   app.post('/images/:id/opacidad', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -31,9 +50,17 @@ export async function opacidadRoutes(app: FastifyInstance): Promise<void> {
         .status(400)
         .send({ error: 'No analysis yet — the image must be analyzed before an autonomous scan' });
     }
-    const cfg = loadLlmConfig();
-    const jobId = startJob(id, 'opacidad', { narrative: cfg ? cfg.provider : 'deterministic' }, async (handle) => {
+    const request = parseOpacidadRequest(req.body);
+    if ('error' in request) return reply.status(400).send({ error: request.error });
+    // `deterministic` withholds the model for THIS job only; the deployment's agent settings are untouched. It exists
+    // so a campaign measures the same thing on every image whether or not an LLM happens to be configured.
+    const cfg = request.narrative === 'deterministic' ? null : loadLlmConfig();
+    const params = { narrative: cfg ? cfg.provider : 'deterministic', narrativeMode: request.narrative };
+    const jobId = startJob(id, 'opacidad', params, async (handle) => {
       handle.log('Autonomous scan (opacidad) starting…');
+      if (request.narrative === 'deterministic') {
+        handle.log('Narrative mode: deterministic (requested explicitly) — no LLM is called for this scan.');
+      }
       const result = await runOpacidad(id, row.path, handle, cfg);
       handle.log(`Autonomous scan complete: ${result.steps.length} workers, ${result.findings.total} findings.`);
       return result;
