@@ -351,7 +351,7 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
       const { jobId } = await api.runAnalysis(imageId, 'compmap');
       const timer = window.setInterval(async () => {
         const j = await api.job(jobId);
-        if (j.status === 'done' || j.status === 'error') {
+        if (j.status === 'done' || j.status === 'error' || j.status === 'cancelled') {
           window.clearInterval(timer);
           setRunning(false);
           if (j.status === 'error') setError(j.error ?? t.compmap.jobFailed);

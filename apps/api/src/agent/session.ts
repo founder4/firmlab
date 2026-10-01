@@ -13,6 +13,8 @@ import type { Architecture } from '@firmlab/core';
 import { runCopilot } from '../copilot.js';
 import { deviceFamilyKey, recordReachabilityPrior } from '../corpus.js';
 import { syncFindings } from '../findings.js';
+
+import { JobCancelledError } from '../job-cancellation.js';
 import { LlmOutputError, loadLlmConfig } from '../llm.js';
 import type { LlmConfig, LlmResult } from '../llm.js';
 import { type DecompileResult, resolveInsideRootfs, runDecompile } from '../providers/decompile.js';
@@ -46,6 +48,7 @@ import {
 } from '../store.js';
 import { approvedTargets, decidePhase4Action } from './approval.js';
 import { Governor, ZERO_CONSUMED, estimateUsd, loadGovernorBudget } from './governor.js';
+import { agentJobFailureStatus, waitForAgentJob } from './job-wait.js';
 import {
   type EmulationRung,
   type TargetSelectionDecision,
@@ -61,15 +64,7 @@ async function waitForJob(
   jobId: string,
   timeoutMs = 15 * 60_000,
 ): Promise<{ status: string; result: unknown; error: string | null }> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const row = getJob(jobId);
-    if (row && (row.status === 'done' || row.status === 'error')) {
-      return { status: row.status, result: row.resultJson ? JSON.parse(row.resultJson) : null, error: row.error };
-    }
-    if (Date.now() > deadline) return { status: 'error', result: null, error: 'job timed out' };
-    await new Promise((r) => setTimeout(r, 250));
-  }
+  return waitForAgentJob(() => getJob(jobId), timeoutMs);
 }
 
 /** Append one transcript entry and return the row (seq is derived from what's already recorded). */
@@ -156,8 +151,8 @@ export function startAgentSession(
     consumed.elapsedMs = Math.max(consumed.elapsedMs, Date.now() - session.createdAt);
     recordStep(
       session.id,
-      'error',
-      'error',
+      err instanceof JobCancelledError ? 'cancellation' : 'error',
+      err instanceof JobCancelledError ? 'cancelled' : 'error',
       undefined,
       undefined,
       message,
@@ -166,7 +161,7 @@ export function startAgentSession(
       outputTokens,
       err instanceof LlmOutputError ? err.result : undefined,
     );
-    updateSession(session.id, 'error', JSON.stringify(consumed), message);
+    updateSession(session.id, agentJobFailureStatus(err), JSON.stringify(consumed), message);
   });
   return session;
 }
@@ -731,11 +726,11 @@ export async function approveEmulation(
     const done = await runApprovedPlan(session, chosen, approveAll);
     // Node ⑤ — close with a cited synthesis over the (now emulation-confirmed) findings.
     const cfg = loadLlmConfig();
-    if (cfg) await runClosingSynthesis(done, cfg);
+    if (cfg && done.status === 'done') await runClosingSynthesis(done, cfg);
     return getSession(sessionId) as AgentSessionRow;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    updateSession(sessionId, 'error', session.consumedJson, message);
+    updateSession(sessionId, agentJobFailureStatus(err), session.consumedJson, message);
     throw err;
   }
 }
@@ -750,6 +745,22 @@ async function runApprovedPlan(
     try {
       await runApprovedTarget(session, entry);
     } catch (err) {
+      if (err instanceof JobCancelledError) {
+        recordStep(
+          session.id,
+          'emulation',
+          'cancelled',
+          { binary: entry.binary, rung: entry.rung },
+          undefined,
+          err.message,
+          null,
+          0,
+          0,
+        );
+        const current = getSession(session.id) ?? session;
+        updateSession(session.id, 'halted', current.consumedJson, err.message);
+        return getSession(session.id) as AgentSessionRow;
+      }
       const message = err instanceof Error ? err.message : String(err);
       recordStep(
         session.id,

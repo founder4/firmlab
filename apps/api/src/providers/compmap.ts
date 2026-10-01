@@ -76,11 +76,12 @@
  * is dangling in every carve ever made and entirely correct on the device, which is why the rule keeps to names
  * that are shaped like a shared object or that some binary actually needs.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { FindingDraft } from '@firmlab/core';
+
+import { execFile } from '../job-process.js';
 
 const execFileAsync = promisify(execFile);
 

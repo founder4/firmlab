@@ -85,7 +85,7 @@ async function waitForJob(jobId: string, onLog: (log: string) => void, current: 
     const job = await api.job(jobId);
     if (!current()) return null;
     onLog(job.log);
-    if (job.status === 'done' || job.status === 'error') return job;
+    if (job.status === 'done' || job.status === 'error' || job.status === 'cancelled') return job;
     await new Promise((resolve) => window.setTimeout(resolve, 900));
   }
   return null;
@@ -151,7 +151,7 @@ export function FuncDiffPanel({ imageId, against }: { imageId: string; against: 
       const job = await waitForJob(jobId, setLog, current);
       if (!job || !current()) return;
       if (job.status === 'done') setResult(job.result as FuncDiffResultView);
-      else setError(job.error ?? t.imageDetail.job.failed);
+      else if (job.status === 'error') setError(job.error ?? t.imageDetail.job.failed);
     } catch (err) {
       if (current()) setError(err instanceof Error ? err.message : String(err));
     } finally {

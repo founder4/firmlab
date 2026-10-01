@@ -19,10 +19,11 @@
  * discarded it; `devicetree.ts` reads the same format for the tree itself. Two independent walks over a format
  * with a NUL-terminated string table and 4-byte token alignment is a defect waiting to happen, so there is one.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+
+import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import { FDT_MAGIC, be32, decodeFdtValue, readFdtHeader, walkFdt } from './fdt.js';
 

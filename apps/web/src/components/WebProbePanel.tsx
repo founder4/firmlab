@@ -54,11 +54,11 @@ export function WebProbePanel({ imageId }: { imageId: string }): JSX.Element {
         try {
           const j = await api.job(jobId);
           if (generation.current !== current) return;
-          if (j.status !== 'done' && j.status !== 'error') return;
+          if (j.status !== 'done' && j.status !== 'error' && j.status !== 'cancelled') return;
           if (poll.current) window.clearInterval(poll.current);
           setBusy(false);
           if (j.status === 'done') setResult(j.result as WebProbeResult);
-          else setError(j.error ?? t.panels.webprobe.probeFailed);
+          else if (j.status === 'error') setError(j.error ?? t.panels.webprobe.probeFailed);
         } catch (e) {
           if (generation.current !== current) return;
           if (poll.current) window.clearInterval(poll.current);

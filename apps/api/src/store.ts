@@ -61,7 +61,7 @@ export type JobKind =
   | 'yarascan'
   | 'credmatch'
   | 'updatepath';
-export type JobStatus = 'queued' | 'running' | 'done' | 'error';
+export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelling' | 'cancelled';
 
 export interface ImageRow {
   id: string;
@@ -600,6 +600,12 @@ export function deleteSupersededJobSnapshots(imageId: string, kind: JobKind, kee
  * under test.
  */
 export function reconcileInterruptedJobs(now = Date.now()): number {
+  const cancelled = getDb()
+    .prepare(
+      "UPDATE jobs SET status = 'cancelled', resultJson = NULL, error = 'Cancellation cleanup interrupted by API restart; process teardown is unverified', updatedAt = ?, log = log || ? WHERE status = 'cancelling'",
+    )
+    .run(now, 'RECOVERY: cancellation was requested before API restart; cleanup completion was interrupted.\n').changes;
+
   const runningError =
     'interrupted by API restart while running; the in-memory job cannot be resumed — retry to start a new job';
   const queuedError =
@@ -615,7 +621,7 @@ export function reconcileInterruptedJobs(now = Date.now()): number {
        WHERE status IN ('queued', 'running')`,
     )
     .run(now, runningError, queuedError, `RECOVERY: ${runningError}\n`, `RECOVERY: ${queuedError}\n`);
-  return Number(result.changes);
+  return Number(result.changes) + Number(cancelled);
 }
 
 export function getJob(id: string): JobRow | undefined {

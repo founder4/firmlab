@@ -41,10 +41,11 @@
  *     it sends material FROM the firmware to a third party, and a database download sends nothing at all: it is
  *     one-way, exactly like the KEV catalogue the research lane already pulls.
  */
-import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { effectiveEnv } from '../flags.js';
+
+import { execFile } from '../job-process.js';
 import { OFFLINE_ANCHORE_ENV } from '../tools.js';
 
 const execFileAsync = promisify(execFile);

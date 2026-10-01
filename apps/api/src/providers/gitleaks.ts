@@ -31,11 +31,12 @@
  * generic net over any remaining long opaque token — because a line that holds one credential may hold two, and
  * this field must not become the place the DB finally keeps a full one.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+
+import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 

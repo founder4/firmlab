@@ -7,12 +7,13 @@
  * whether those tools are present in this deployment — so the UI can show a real, actionable menu that
  * degrades gracefully instead of pretending capabilities it lacks.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Architecture, ImageIdentity } from '@firmlab/core';
 import type { FindingDraft } from '@firmlab/core';
+
+import { execFile } from '../job-process.js';
 import { type ToolId, detectTools } from '../tools.js';
 import { parseTargetStderr } from './dynprobe.js';
 import { libnvramHostPath } from './emulate-system.js';

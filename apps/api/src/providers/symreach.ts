@@ -30,13 +30,14 @@
  * The spec builder, the result parser and the verdict mapper are PURE and unit-tested; the runner only shells out to
  * the bundled `scripts/angr-reach.py` under a hard timeout.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { FindingDraft } from '@firmlab/core';
+
+import { execFile } from '../job-process.js';
 import { angrPython, isToolAvailable } from '../tools.js';
 import { type BinAssessment, UNSAFE_COPY_FNS, assessBinaryFile, isRunnableElf } from './binvuln.js';
 import { resolveInsideRootfs } from './decompile.js';

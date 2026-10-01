@@ -98,7 +98,7 @@ export function AnalysisActionsPanel({ imageId }: { imageId: string }): JSX.Elem
   const historyKey = useMemo(() => jobs.reduce((latest, job) => Math.max(latest, job.updatedAt), 0), [jobs]);
   const hasActiveJob = PROVIDERS.some((kind) => {
     const status = currentJobs.get(kind)?.status;
-    return starting[kind] || status === 'queued' || status === 'running';
+    return starting[kind] || status === 'queued' || status === 'running' || status === 'cancelling';
   });
 
   useEffect(() => {
@@ -130,7 +130,8 @@ export function AnalysisActionsPanel({ imageId }: { imageId: string }): JSX.Elem
     (count, kind) => {
       const job = currentJobs.get(kind);
       const summary = currentRuns.get(kind);
-      if (starting[kind] || job?.status === 'queued' || job?.status === 'running') count.running += 1;
+      if (starting[kind] || job?.status === 'queued' || job?.status === 'running' || job?.status === 'cancelling')
+        count.running += 1;
       else if (job?.status === 'error' || summary?.outcome === 'failed' || startErrors[kind]) count.failed += 1;
       else if (job || summary) count.ran += 1;
       else count.pending += 1;
@@ -171,7 +172,11 @@ export function AnalysisActionsPanel({ imageId }: { imageId: string }): JSX.Elem
                   ? (jobs.find((candidate) => candidate.id === summary.jobId) ?? currentJobs.get(kind))
                   : currentJobs.get(kind);
                 const facts = resultFacts(job);
-                const running = !!starting[kind] || job?.status === 'queued' || job?.status === 'running';
+                const running =
+                  !!starting[kind] ||
+                  job?.status === 'queued' ||
+                  job?.status === 'running' ||
+                  job?.status === 'cancelling';
                 const error =
                   startErrors[kind] ?? (job?.status === 'error' ? (job.error ?? t.shell.deep.failed) : null);
                 const outcome = running ? 'running' : error ? 'failed' : summary?.outcome;

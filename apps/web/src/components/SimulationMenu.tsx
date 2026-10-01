@@ -109,7 +109,7 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
     poll.current = window.setInterval(async () => {
       const j = await api.job(jobId);
       setJob(j);
-      if (j.status === 'done' || j.status === 'error') {
+      if (j.status === 'done' || j.status === 'error' || j.status === 'cancelled') {
         if (poll.current) window.clearInterval(poll.current);
         setBusy(false);
         after?.();

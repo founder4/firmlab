@@ -355,6 +355,10 @@ export const shell = {
    * order and where the noun goes.
    */
   runHistory: {
+    activeHeading: 'Active jobs',
+    cancel: 'Cancel',
+    cancelling: 'Cancelling…',
+    cancelled: 'cancelled',
     heading: (n: number, kind: string) => `${n} ${kind} run${n === 1 ? '' : 's'} on this image`,
     show: 'show history — the panel above shows only the most recent',
     hide: 'hide history — the panel above shows only the most recent',

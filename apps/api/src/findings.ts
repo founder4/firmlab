@@ -24,6 +24,7 @@ import type {
   OperatorAuthorKind,
 } from '@firmlab/core';
 import { type RetiredRowSummary, type ValidatedRetirement, retirementNote } from './findings-retire.js';
+import { jobCancellation } from './job-cancellation.js';
 import {
   type ValidatedAssertion,
   amendAssertion,
@@ -90,6 +91,8 @@ export function deviceContextFor(imageId: string, rootfsPath: string | null): De
  * holding both the assertion and a duplicate of it.
  */
 export function syncFindings(imageId: string, source: string, drafts: FindingDraft[]): void {
+  // A provider may catch a tool interruption and return partial drafts. Never replace prior evidence after cancel.
+  jobCancellation.getStore()?.check();
   if (isOperatorSource(source)) {
     throw new Error(
       `syncFindings refused source '${source}': the operator: namespace holds hand-authored assertions, which no provider may write, re-state or delete. Use recordOperatorFinding.`,

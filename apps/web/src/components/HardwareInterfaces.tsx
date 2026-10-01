@@ -159,7 +159,7 @@ export function HardwareInterfaces({ imageId }: { imageId: string }): JSX.Elemen
         const { jobId } = await api.runAnalysis(imageId, kind);
         const timer = window.setInterval(async () => {
           const j = await api.job(jobId);
-          if (j.status === 'done' || j.status === 'error') {
+          if (j.status === 'done' || j.status === 'error' || j.status === 'cancelled') {
             window.clearInterval(timer);
             setRunning(null);
             await refresh();

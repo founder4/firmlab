@@ -4,10 +4,11 @@
  * strings, and the analyzed function count. radare2 is optional — with it absent the job returns a clear
  * `available:false` result. The requested path is confined to the rootfs to prevent traversal.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+
+import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 

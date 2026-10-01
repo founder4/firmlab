@@ -163,3 +163,13 @@ describe('FuzzPanel — the honest negative survives translation', () => {
     expect(screen.queryByRole('button', { name: es.panels.fuzz.run })).not.toBeInTheDocument();
   });
 });
+
+it('stops polling a cancelled campaign and enables another run without inventing a zero-crash result', async () => {
+  mockApi.job.mockResolvedValue({ id: 'j1', status: 'cancelled', result: null, log: 'Cancelled' });
+  render(<FuzzPanel imageId="img1" />);
+  fireEvent.change(await screen.findByPlaceholderText('bin/busybox'), { target: { value: 'sbin/httpd' } });
+  fireEvent.click(screen.getByRole('button', { name: en.panels.fuzz.run }));
+  await waitFor(() => expect(mockApi.job).toHaveBeenCalledWith('j1'), { timeout: 2000 });
+  expect(await screen.findByRole('button', { name: en.panels.fuzz.run })).toBeEnabled();
+  expect(screen.queryByText(en.panels.fuzz.noCrash)).not.toBeInTheDocument();
+});

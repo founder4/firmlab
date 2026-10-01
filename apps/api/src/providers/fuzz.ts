@@ -35,12 +35,13 @@
  * The plan, the ELF classifier, the command/dictionary builders and the coverage sentence are pure and
  * unit-tested; the runner composes them.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { type Architecture, decodeElfArch } from '@firmlab/core';
+
+import { execFile } from '../job-process.js';
 import { resolveInsideRootfs } from './decompile.js';
 import { type IsolationLevel, detectIsolation, loadIsolationLimits, runIsolated } from './isolate.js';
 import type { JobHandle } from './jobs.js';

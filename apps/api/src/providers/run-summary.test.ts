@@ -475,3 +475,19 @@ describe('summarizeRun — the three emulation rungs share one job kind', () => 
     expect(s.headline).toContain('user-mode emulation, exit 0');
   });
 });
+
+it('cancelled runs report incomplete coverage rather than failure or an empty successful result', () => {
+  const summary = summarizeRun(job({ status: 'cancelled', updatedAt: 123 }));
+  expect(summary.status).toBe('cancelled');
+  expect(summary.finishedAt).toBe(123);
+  expect(summary.outcome).toBe('blocked');
+  expect(summary.headline).toContain('coverage incomplete');
+});
+
+it('keeps unverified cancellation teardown visible to the operator', () => {
+  const summary = summarizeRun(
+    job({ status: 'cancelled', error: 'Process cleanup failed; scheduler capacity retained' }),
+  );
+  expect(summary.headline).toContain('scheduler capacity retained');
+  expect(summary.outcome).toBe('blocked');
+});

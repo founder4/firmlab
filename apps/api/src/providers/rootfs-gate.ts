@@ -76,6 +76,7 @@ export type RootfsGateState =
   | 'ready'
   | 'extraction-not-run'
   | 'extraction-in-progress'
+  | 'extraction-cancelled'
   | 'extraction-failed'
   | 'extraction-result-missing'
   | 'extraction-found-no-rootfs';
@@ -96,7 +97,7 @@ export interface RootfsGateBlocked {
   /** The stage that was refused, by job kind. */
   stage: string;
   /** Status of the extract job the verdict was read from; null when there is no extract job at all. */
-  extractionJobStatus: 'queued' | 'running' | 'done' | 'error' | null;
+  extractionJobStatus: 'queued' | 'running' | 'done' | 'error' | 'cancelling' | 'cancelled' | null;
   /**
    * `noRootfsDiagnosis.verdict` off the stored `ExtractResult`, verbatim, when that run recorded one. Optional
    * forever: a stored result is data written by an OLDER build, and every extraction stored before
@@ -121,8 +122,15 @@ export interface RootfsGateReady {
 export type RootfsGate = RootfsGateReady | RootfsGateBlocked;
 
 /** Job statuses, narrowed from the row's free-form string. */
-function narrowStatus(status: string): 'queued' | 'running' | 'done' | 'error' | null {
-  return status === 'queued' || status === 'running' || status === 'done' || status === 'error' ? status : null;
+function narrowStatus(status: string): 'queued' | 'running' | 'done' | 'error' | 'cancelling' | 'cancelled' | null {
+  return status === 'queued' ||
+    status === 'running' ||
+    status === 'done' ||
+    status === 'error' ||
+    status === 'cancelling' ||
+    status === 'cancelled'
+    ? status
+    : null;
 }
 
 /** The rootfs path a stored extract result claims, or null — including when the result is unparseable. */
@@ -214,17 +222,34 @@ export function gateOnRootfs(stage: RootfsStage, jobs: readonly ExtractJobFacts[
 
   const status = narrowStatus(latest.status);
 
-  if (status === 'queued' || status === 'running') {
+  if (status === 'queued' || status === 'running' || status === 'cancelling') {
     return {
       ok: false,
       state: 'extraction-in-progress',
       status: 409,
       error: withNote(
-        `Extraction is still running for this image, so there is no completed carve for ${stage.needs} to read yet. Wait for that job to finish and run this stage again — extraction has neither failed nor been skipped.`,
+        status === 'cancelling'
+          ? 'Extraction cancellation was requested; cleanup is still in progress. Wait for teardown before retrying. No conclusion about the firmware was established.'
+          : `Extraction is still running for this image, so there is no completed carve for ${stage.needs} to read yet. Wait for that job to finish and run this stage again — extraction has neither failed nor been skipped.`,
         stage,
       ),
       stage: stage.stage,
       extractionJobStatus: status,
+      retryable: true,
+    };
+  }
+
+  if (status === 'cancelled') {
+    return {
+      ok: false,
+      state: 'extraction-cancelled',
+      status: 409,
+      error: withNote(
+        'Extraction was cancelled by the operator; coverage is incomplete and no conclusion about whether the firmware contains a rootfs was established. Re-run extraction to obtain a completed result.',
+        stage,
+      ),
+      stage: stage.stage,
+      extractionJobStatus: 'cancelled',
       retryable: true,
     };
   }

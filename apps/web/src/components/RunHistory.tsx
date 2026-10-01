@@ -30,7 +30,7 @@
  * A run's `kind` and `target` are identifiers: a job kind crosses the API into SQLite and a target is a path. They
  * render verbatim on every row, in every language.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { type RunSummary, api } from '../api';
 import { type Messages, useMessages } from '../i18n';
 
@@ -79,19 +79,40 @@ type RunHistoryProps = {
 );
 
 export function RunHistory({ imageId, kinds, runKind, label, refreshKey }: RunHistoryProps): JSX.Element | null {
+  const generation = useRef(0);
   const t = useMessages();
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
+  const [cancelling, setCancelling] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    api
-      .runs(imageId, { kind: kinds.join(',') })
-      .then((l) => setRuns(l.runs))
-      .catch(() => setRuns([]));
+    generation.current++;
+    setCancelling([]);
+    setError(null);
+    let disposed = false;
+    const load = () =>
+      api
+        .runs(imageId, { kind: kinds.join(',') })
+        .then((l) => {
+          if (!disposed) setRuns(l.runs);
+        })
+        .catch(() => {
+          if (!disposed) setRuns([]);
+        });
+    void load();
+    const timer = setInterval(load, 2000);
+    return () => {
+      generation.current++;
+      disposed = true;
+      clearInterval(timer);
+    };
   }, [imageId, kinds.join(','), refreshKey]);
 
   // Nothing to add while there is at most the one run the panel is already showing.
-  if (!runs || runs.length < 2) return null;
+  const active = runs?.some((r) => r.status === 'queued' || r.status === 'running' || r.status === 'cancelling');
+  const cancelled = runs?.some((r) => r.status === 'cancelled');
+  if (!runs || (runs.length < 2 && !active && !cancelled)) return null;
 
   // The prop union guarantees one of the two arrived; TypeScript cannot correlate them once destructured, so the
   // empty fallback is unreachable rather than a default.
@@ -99,11 +120,16 @@ export function RunHistory({ imageId, kinds, runKind, label, refreshKey }: RunHi
 
   return (
     <div className="run-history">
-      <button type="button" className="run-history-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span>{t.shell.runHistory.heading(runs.length, noun)}</span>
-        <span className="hint">{open ? t.shell.runHistory.hide : t.shell.runHistory.show}</span>
-      </button>
-      {open && (
+      {active || cancelled ? (
+        <div className="run-history-toggle">{t.shell.runHistory.heading(runs.length, noun)}</div>
+      ) : (
+        <button type="button" className="run-history-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <span>{t.shell.runHistory.heading(runs.length, noun)}</span>
+          <span className="hint">{open ? t.shell.runHistory.hide : t.shell.runHistory.show}</span>
+        </button>
+      )}
+      {error && <p role="alert">{error}</p>}
+      {(open || active || cancelled) && (
         <div className="run-list">
           {runs.map((r) => {
             const meta = t.shell.runHistory.outcome[r.outcome];
@@ -115,7 +141,39 @@ export function RunHistory({ imageId, kinds, runKind, label, refreshKey }: RunHi
                 <span className="run-headline">{r.headline}</span>
                 <span className="run-tail">
                   {r.bound && <span className="run-bound">{r.bound}</span>}
-                  <span className={`badge ${OUTCOME_CLASS[r.outcome]}`}>{meta.label}</span>
+                  <span className={`badge ${OUTCOME_CLASS[r.outcome]}`}>
+                    {r.status === 'cancelled'
+                      ? t.shell.runHistory.cancelled
+                      : r.status === 'cancelling'
+                        ? t.shell.runHistory.cancelling
+                        : meta.label}
+                  </span>
+                  {(r.status === 'queued' || r.status === 'running') && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={cancelling.includes(r.jobId)}
+                      onClick={async () => {
+                        const current = generation.current;
+                        setCancelling((ids) => [...ids, r.jobId]);
+                        setError(null);
+                        try {
+                          await api.cancelJob(r.jobId);
+                          if (current !== generation.current) return;
+                          const ledger = await api.runs(imageId, { kind: kinds.join(',') });
+                          if (current === generation.current) setRuns(ledger.runs);
+                        } catch (err) {
+                          if (current === generation.current)
+                            setError(err instanceof Error ? err.message : String(err));
+                        } finally {
+                          if (current === generation.current)
+                            setCancelling((ids) => ids.filter((id) => id !== r.jobId));
+                        }
+                      }}
+                    >
+                      {cancelling.includes(r.jobId) ? t.shell.runHistory.cancelling : t.shell.runHistory.cancel}
+                    </button>
+                  )}
                   <time dateTime={new Date(r.startedAt).toISOString()}>{ago(r.startedAt, t.shell.runHistory.ago)}</time>
                 </span>
               </div>

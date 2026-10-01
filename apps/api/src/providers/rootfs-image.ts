@@ -16,12 +16,13 @@
  * extraction, not on the firmware — which is exactly the distinction the boot classifier was taught to make, and
  * why the caveat travels with the result rather than living only here.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Architecture } from '@firmlab/core';
 import { decideFlag, effectiveEnv } from '../flags.js';
+
+import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import {
   type GuestRepairInputs,

@@ -39,6 +39,16 @@ describe('isolation capability detection', () => {
     expect(probe).toHaveBeenCalledTimes(3);
   });
 
+  it('keeps shared capability discovery independent of a cancelled job', async () => {
+    availableWhen(() => true);
+    const { JobCancellation, jobCancellation } = await import('../job-cancellation.js');
+    const owner = new JobCancellation();
+    owner.cancel();
+    const { detectIsolation } = await import('./isolate.js');
+    expect(await jobCancellation.run(owner, () => detectIsolation())).toBe('partial');
+    expect(await detectIsolation()).toBe('partial');
+  });
+
   it('does not treat a failed resource-limit probe as available', async () => {
     availableWhen(() => false);
     const { detectIsolation } = await import('./isolate.js');

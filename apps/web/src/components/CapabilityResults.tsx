@@ -92,7 +92,7 @@ async function waitForJob(jobId: string, current: () => boolean = () => true): P
   while (current()) {
     const job = await api.job(jobId);
     if (!current()) return null;
-    if (job.status === 'done' || job.status === 'error') return job;
+    if (job.status === 'done' || job.status === 'error' || job.status === 'cancelled') return job;
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
   }
   return null;
@@ -288,7 +288,7 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
       if (job.status === 'done') {
         const result = await api.ghidraResult(imageId);
         if (current()) setLoaded((loaded) => ({ ...loaded, ghidra: result }));
-      } else setGhidraError(job.error ?? t.imageDetail.job.failed);
+      } else if (job.status === 'error') setGhidraError(job.error ?? t.imageDetail.job.failed);
     } catch (err) {
       if (current()) setGhidraError(err instanceof Error ? err.message : String(err));
     } finally {

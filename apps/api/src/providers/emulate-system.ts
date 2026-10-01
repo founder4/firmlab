@@ -9,8 +9,8 @@
  *
  * Two invariants, always:
  *   1. Teardown is GUARANTEED (a stray qemu httpd is what stalls a whole run) — every boot kills its OWN qemu in a
- *      finally and waits for it to die, whatever happened, and the run then attempts a sweep for strays. The sweep
- *      is best-effort and says so: `pkill` is not installed in this deployment.
+ *      finally and waits for it to die, whatever happened. Job cancellation targets only the owned process groups,
+ *      so one run never kills another run’s emulator.
  *   2. Honesty — proof is capped by what actually ran: `confirmed_in_emulation` (rung-2, and rung-3 when something
  *      answered but no boot was ever printed) / `confirmed_full_system` (rung-3, boot printed AND a service
  *      answered); `blocked_by_platform` when the required assets/tools aren't present. qemu output is never
@@ -45,7 +45,7 @@
  * These rungs need the opt-in assets baked by Dockerfile.firmware (libnvram + firmadyne kernels). Without them
  * the runners return a blocked result rather than attempting a half-baked bring-up.
  */
-import { type ChildProcess, execFile, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -55,6 +55,7 @@ import { promisify } from 'node:util';
 import type { Architecture, ProofState } from '@firmlab/core';
 import type { FindingDraft } from '@firmlab/core';
 import { type LaneFlagName, decideFlag, effectiveEnv } from '../flags.js';
+import { execFile, spawn, terminateJobProcess } from '../job-process.js';
 import { detectTools } from '../tools.js';
 import { type BootDiagnosis, diagnoseUnreachable } from './boot-diagnose.js';
 import { type BootOutcome as ReproBoot, type ReproducibilityVerdict, reproducibility } from './boot-reproducibility.js';
@@ -1497,27 +1498,7 @@ async function toolAvailable(id: string): Promise<boolean> {
 
 /** Best-effort kill of any emulator left running — the invariant that keeps a hung qemu from stalling the run. */
 async function teardown(handle: JobHandle): Promise<void> {
-  // `pkill` exits non-zero when nothing matched, which is the normal case — and it exits non-zero when it does
-  // not EXIST, which is this deployment. Both landed in the same catch, and the log then said "emulators killed"
-  // regardless. The module's first stated invariant is that teardown is guaranteed; it never was here, and the
-  // message said otherwise. Strays then accumulated across runs holding their forwarded ports.
-  let swept = false;
-  for (const pat of TEARDOWN_PATTERNS) {
-    try {
-      await execFileAsync('pkill', ['-f', pat], { timeout: 5000 });
-      swept = true;
-    } catch (err) {
-      // Exit 1 = matched nothing (fine). ENOENT = pkill is absent, and the sweep did not happen at all.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') swept = true;
-    }
-  }
-  handle.log(
-    swept
-      ? 'Teardown complete (emulators killed).'
-      : 'Teardown: this run’s emulator was killed directly, but `pkill` is not installed here so no sweep for ' +
-          'strays from earlier runs was possible. Each run takes a FRESH host port, so a survivor cannot be ' +
-          'mistaken for this boot.',
-  );
+  handle.log('Teardown: owned emulator processes are cleaned up directly; no global process sweep.');
 }
 
 function blocked(strategy: SystemEmulationResult['strategy'], reason: string, command = ''): SystemEmulationResult {
@@ -1750,7 +1731,7 @@ async function bootOnce(
     if (driver) await driver;
     if (!exited) {
       try {
-        proc.kill('SIGKILL');
+        terminateJobProcess(proc);
       } catch {}
       await new Promise<void>((resolve) => {
         if (exited) return resolve();

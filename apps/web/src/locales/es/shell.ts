@@ -309,6 +309,10 @@ export const shell: Messages['shell'] = {
   },
 
   runHistory: {
+    activeHeading: 'Trabajos activos',
+    cancel: 'Cancelar',
+    cancelling: 'Cancelando…',
+    cancelled: 'cancelado',
     /**
      * La frase entera, construida aquí. El castellano concuerda en número («1 ejecución» / «2 ejecuciones») y pide
      * la preposición que el inglés no tiene, así que no puede salir de un hueco dentro de la gramática inglesa: eso

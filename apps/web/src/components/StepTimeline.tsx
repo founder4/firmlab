@@ -93,7 +93,9 @@ export function StepTimeline({
 
   const anyDone = (kinds: string[]): boolean => jobs.some((j) => kinds.includes(j.kind) && j.status === 'done');
   const anyRunning = (kinds: string[]): boolean =>
-    jobs.some((j) => kinds.includes(j.kind) && (j.status === 'running' || j.status === 'queued'));
+    jobs.some(
+      (j) => kinds.includes(j.kind) && (j.status === 'running' || j.status === 'queued' || j.status === 'cancelling'),
+    );
 
   const stateOf = (id: StepId): State => {
     switch (id) {

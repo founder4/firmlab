@@ -62,6 +62,9 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
           if (pollRef.current) window.clearInterval(pollRef.current);
           setResult(job.result as OpacidadResult);
           setRunning(false);
+        } else if (job.status === 'cancelled') {
+          if (pollRef.current) window.clearInterval(pollRef.current);
+          setRunning(false);
         } else if (job.status === 'error') {
           if (pollRef.current) window.clearInterval(pollRef.current);
           setErr(job.error ?? t.panels.opacidad.failed);

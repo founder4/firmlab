@@ -7,13 +7,14 @@
  * guest output. Without Renode, or with no platform match, it degrades HONESTLY to blocked_by_platform (naming the
  * detected MCU) — it never fakes an RTOS boot. The fingerprint, catalog scan, and selection are pure/unit-tested.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { type McuFingerprint, type ProofState, type StaticAnalysis, fingerprintMcu } from '@firmlab/core';
 import type { FindingDraft } from '@firmlab/core';
+
+import { execFile } from '../job-process.js';
 import { type IsolationLevel, loadIsolationLimits, runIsolated } from './isolate.js';
 
 const execFileAsync = promisify(execFile);

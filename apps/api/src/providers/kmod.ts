@@ -40,12 +40,13 @@
  * is no bounds check". The distinction is the entire reason this can report the NetUSB allocation and the
  * `run_init_sbus` check with the same mechanism, and be right about both.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { FindingSeverity } from '@firmlab/core';
 import type { FindingDraft } from '@firmlab/core';
+
+import { execFile } from '../job-process.js';
 import { isRelocatableObject } from './binvuln.js';
 import { readModinfoValues } from './kernelposture.js';
 

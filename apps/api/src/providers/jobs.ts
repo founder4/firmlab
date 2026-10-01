@@ -13,17 +13,36 @@
  * `finally` so a failed or throwing job frees capacity the same way a successful one does.
  */
 import { randomUUID } from 'node:crypto';
-import { type JobKind, appendJobLog, insertJob, updateJobStatus } from '../store.js';
+import { JobCancellation, cancellationDecision, jobCancellation } from '../job-cancellation.js';
+import { type JobKind, appendJobLog, getJob, insertJob, updateJobStatus } from '../store.js';
 import { type JobSlot, createJobScheduler, resolveConcurrencyCap } from './job-scheduler.js';
 
 export interface JobHandle {
   id: string;
   log: (line: string) => void;
+  signal?: AbortSignal;
 }
 
 export interface JobLifecycle<T> {
   /** Runs only after the successful result is durable. Cleanup failures are logged and never rewrite success. */
   afterPersist?: (handle: JobHandle, result: T) => void;
+}
+
+const activeJobs = new Map<string, { cancellation: JobCancellation; dequeue?: () => void }>();
+
+export function cancelJob(id: string): void {
+  const row = getJob(id);
+  if (!row || cancellationDecision(row.status) === 'unchanged') return;
+  const active = activeJobs.get(id);
+  if (!active) return;
+  const queued = row.status === 'queued';
+  active.cancellation.cancel();
+  active.dequeue?.();
+  appendJobLog(id, 'Cancellation requested; waiting for owned work and process cleanup.');
+  updateJobStatus(id, queued ? 'cancelled' : 'cancelling', null, null);
+  if (queued) {
+    activeJobs.delete(id);
+  }
 }
 
 const scheduler = createJobScheduler(resolveConcurrencyCap(process.env.FIRMLAB_MAX_CONCURRENT_JOBS, 2));
@@ -67,13 +86,21 @@ export function startJob<T>(
     throw err;
   }
 
-  const handle: JobHandle = { id, log: (line: string) => appendJobLog(id, line) };
+  const cancellation = new JobCancellation();
+  const active: { cancellation: JobCancellation; dequeue?: () => void } = { cancellation };
+  activeJobs.set(id, active);
+  const handle: JobHandle = {
+    id,
+    signal: cancellation.controller.signal,
+    log: (line: string) => appendJobLog(id, line),
+  };
 
   const run = (held: JobSlot): void => {
     // Fire-and-forget; the row carries all state the UI needs.
     void (async () => {
       try {
-        const result = await work(handle);
+        const result = await jobCancellation.run(cancellation, () => work(handle));
+        cancellation.check();
         updateJobStatus(id, 'done', JSON.stringify(result ?? null), null);
         try {
           lifecycle.afterPersist?.(handle, result);
@@ -83,19 +110,45 @@ export function startJob<T>(
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        appendJobLog(id, `ERROR: ${message}`);
-        updateJobStatus(id, 'error', null, message);
+        if (!cancellation.cancelled) {
+          appendJobLog(id, `ERROR: ${message}`);
+          updateJobStatus(id, 'error', null, message);
+        }
       } finally {
         // Releasing hands the slot straight to the next queued job, if there is one.
-        held.release();
+        let cleaned = false;
+        try {
+          await cancellation.cleanup();
+          cleaned = true;
+        } catch (err) {
+          // Capacity remains quarantined: releasing an unverified process tree could start work on its ports.
+          const message = err instanceof Error ? err.message : String(err);
+          appendJobLog(id, `WARNING: process cleanup failed; scheduler slot retained until API restart: ${message}`);
+          if (cancellation.cancelled)
+            updateJobStatus(
+              id,
+              'cancelled',
+              null,
+              `Process cleanup failed; scheduler capacity retained until API restart: ${message}`,
+            );
+        }
+        if (cleaned && cancellation.cancelled) {
+          appendJobLog(id, 'Cancelled; process cleanup complete.');
+          updateJobStatus(id, 'cancelled', null, null);
+        }
+        activeJobs.delete(id);
+        if (cleaned) held.release();
       }
-    })();
+    })().catch((err: unknown) => {
+      // Persistence failure must not become an unhandled rejection in the API process.
+      console.error(`Job ${id} lifecycle failed`, err);
+    });
   };
 
   if (slot) {
     run(slot);
   } else {
-    scheduler.enqueue((granted) => {
+    active.dequeue = scheduler.enqueue((granted) => {
       updateJobStatus(id, 'running', null, null);
       run(granted);
     });

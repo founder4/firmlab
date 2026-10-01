@@ -214,15 +214,33 @@ export function summarizeRun(job: RunInput): RunSummary {
     kind: job.kind,
     status: job.status,
     startedAt: job.createdAt,
-    finishedAt: job.status === 'done' || job.status === 'error' ? job.updatedAt : null,
+    finishedAt: job.status === 'done' || job.status === 'error' || job.status === 'cancelled' ? job.updatedAt : null,
     target:
       typeof params.binary === 'string' ? params.binary : typeof params.target === 'string' ? params.target : null,
     question: null as string | null,
     bound: runSecondsBound(params),
   };
 
-  if (job.status === 'running' || job.status === 'queued') {
-    return { ...base, outcome: 'running', headline: job.status === 'queued' ? 'Queued' : 'Running…' };
+  if (job.status === 'running' || job.status === 'queued' || job.status === 'cancelling') {
+    return {
+      ...base,
+      outcome: 'running',
+      headline:
+        job.status === 'cancelling'
+          ? 'Cancellation requested; cleanup pending…'
+          : job.status === 'queued'
+            ? 'Queued'
+            : 'Running…',
+    };
+  }
+  if (job.status === 'cancelled') {
+    return {
+      ...base,
+      outcome: 'blocked',
+      headline: job.error
+        ? `Cancelled — ${job.error}; coverage incomplete`
+        : 'Cancelled — coverage incomplete; no conclusion about the target',
+    };
   }
   if (job.status === 'error') {
     return { ...base, outcome: 'failed', headline: job.error?.slice(0, 200) || 'Failed with no message' };

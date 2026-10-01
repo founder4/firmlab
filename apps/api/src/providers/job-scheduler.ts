@@ -51,7 +51,7 @@ export interface JobScheduler {
   /** Take a slot if one is free, otherwise null. Never queues — the caller decides what "at capacity" means. */
   tryAdmit: () => JobSlot | null;
   /** Wait for a slot in FIFO order. `start` is called with a slot the moment one frees. */
-  enqueue: (start: QueuedStarter) => void;
+  enqueue: (start: QueuedStarter) => () => void;
 }
 
 /**
@@ -117,6 +117,10 @@ export function createJobScheduler(capacity: number): JobScheduler {
     },
     enqueue: (start: QueuedStarter) => {
       waiting.push(start);
+      return () => {
+        const index = waiting.indexOf(start);
+        if (index >= 0) waiting.splice(index, 1);
+      };
     },
   };
 }

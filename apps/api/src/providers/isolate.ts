@@ -12,11 +12,13 @@
  * characters can't inject a command, and it can drive the target with a trigger via stdin/env/argv while capturing
  * the exit signal (a crash) for the trigger harness. When the primitives aren't present the level degrades honestly.
  */
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { jobCancellation } from '../job-cancellation.js';
+import { spawn } from '../job-process.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -159,6 +161,11 @@ export async function runIsolated(
       let stderr = '';
       let timedOut = false;
       const killGroup = () => {
+        const owner = jobCancellation.getStore();
+        if (owner) {
+          owner.requestTermination(child);
+          return;
+        }
         if (!child.pid) return;
         try {
           if (grouped) process.kill(-child.pid, 'SIGKILL');

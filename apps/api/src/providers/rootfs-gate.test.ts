@@ -216,3 +216,24 @@ describe('rootfsGateBody', () => {
     expect(body.extractionJobStatus).toBeNull();
   });
 });
+
+it('keeps cancelled extraction distinct from a failed run or a measured absence, preserving prior rootfs', () => {
+  const cancelled = job({ status: 'cancelled' });
+  expect(gateOnRootfs(SBOM, [cancelled])).toMatchObject({
+    ok: false,
+    state: 'extraction-cancelled',
+    status: 409,
+    extractionJobStatus: 'cancelled',
+    error: expect.stringContaining('coverage is incomplete'),
+  });
+  expect(gateOnRootfs(SBOM, [job({ status: 'cancelling' })])).toMatchObject({
+    ok: false,
+    state: 'extraction-in-progress',
+    extractionJobStatus: 'cancelling',
+  });
+  expect(gateOnRootfs(SBOM, [cancelled, job({ status: 'done', resultJson: '{"rootfsPath":"/valid"}' })])).toEqual({
+    ok: true,
+    state: 'ready',
+    rootfsPath: '/valid',
+  });
+});

@@ -5,13 +5,14 @@
  * `available:false` result (the radare2 triage in decompile.ts already covers the light path). The requested
  * path is confined to the rootfs to prevent traversal.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { FindingDraft } from '@firmlab/core';
+
+import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 

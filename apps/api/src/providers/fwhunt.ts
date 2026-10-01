@@ -259,12 +259,18 @@ export interface FwHuntJobRecord {
 
 /** A running dedicated job owns the FwHunt findings namespace until it reaches a terminal state. */
 export function hasActiveFwHuntJob(jobs: ReadonlyArray<Pick<FwHuntJobRecord, 'kind' | 'status'>>): boolean {
-  return jobs.some((job) => job.kind === 'fwhunt' && (job.status === 'queued' || job.status === 'running'));
+  return jobs.some(
+    (job) =>
+      job.kind === 'fwhunt' && (job.status === 'queued' || job.status === 'running' || job.status === 'cancelling'),
+  );
 }
 
 /** An active autonomous UEFI scan may be inside its inline FwHunt stage and therefore owns the same namespace. */
 export function hasActiveOpacidadJob(jobs: ReadonlyArray<Pick<FwHuntJobRecord, 'kind' | 'status'>>): boolean {
-  return jobs.some((job) => job.kind === 'opacidad' && (job.status === 'queued' || job.status === 'running'));
+  return jobs.some(
+    (job) =>
+      job.kind === 'opacidad' && (job.status === 'queued' || job.status === 'running' || job.status === 'cancelling'),
+  );
 }
 
 /**

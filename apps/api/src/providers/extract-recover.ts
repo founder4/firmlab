@@ -16,10 +16,11 @@
  *    recognizable structure. The gain is that "unexamined" becomes "examined and not a filesystem", which is a
  *    different and honest statement, not that the images are rescued.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+
+import { execFile } from '../job-process.js';
 import type { JobHandle } from './jobs.js';
 
 const execFileAsync = promisify(execFile);

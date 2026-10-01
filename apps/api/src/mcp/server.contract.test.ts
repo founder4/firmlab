@@ -187,18 +187,43 @@ describe('FirmLab MCP client-visible contract', () => {
 });
 
 describe('jobPayload', () => {
-  it.each(['queued', 'running'] as const)('keeps a %s job explicitly unfinished with its partial log', (status) => {
-    const log = `${'x'.repeat(4100)}partial tail`;
-    const payload = jobPayload({ id: 'job-1', status, error: null, log, result: null });
+  it.each(['queued', 'running', 'cancelling'] as const)(
+    'keeps a %s job explicitly unfinished with its partial log',
+    (status) => {
+      const log = `${'x'.repeat(4100)}partial tail`;
+      const payload = jobPayload({ id: 'job-1', status, error: null, log, result: null });
 
-    expect(payload).toEqual({
-      ok: false,
-      stillRunning: true,
-      jobId: 'job-1',
-      status,
-      note: expect.stringMatching(/has NOT failed.*has NOT finished.*firmlab_job_status/),
-      log: log.slice(-4000),
-    });
-    expect(payload).not.toHaveProperty('result');
+      expect(payload).toEqual({
+        ok: false,
+        stillRunning: true,
+        jobId: 'job-1',
+        status,
+        note: expect.stringMatching(/has NOT failed.*has NOT finished.*firmlab_job_status/),
+        log: log.slice(-4000),
+      });
+      expect(payload).not.toHaveProperty('result');
+    },
+  );
+});
+
+it('reports operator cancellation as terminal and refuses to expose a partial result as proof', () => {
+  const payload = jobPayload({ id: 'j', status: 'cancelled', error: null, log: 'Cancelled', result: { ran: true } });
+  expect(payload).toMatchObject({
+    ok: false,
+    cancelled: true,
+    note: expect.stringContaining('coverage is incomplete'),
   });
+  expect(payload).not.toHaveProperty('stillRunning');
+  expect(payload).not.toHaveProperty('result');
+});
+
+it('preserves cleanup uncertainty in a terminal MCP cancellation response', () => {
+  const payload = jobPayload({
+    id: 'j',
+    status: 'cancelled',
+    error: 'process teardown is unverified',
+    log: '',
+    result: null,
+  });
+  expect(payload).toMatchObject({ cancelled: true, note: expect.stringContaining('process teardown is unverified') });
 });

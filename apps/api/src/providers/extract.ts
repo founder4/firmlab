@@ -4,7 +4,6 @@
  * With no extractor present it degrades to a clear "unavailable" result rather than failing — the static
  * analysis (structure/entropy/strings) already gives value without a real rootfs.
  */
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,6 +20,8 @@ import {
   summarizeFs,
 } from '@firmlab/core';
 import { recordArtifacts } from '../corpus.js';
+
+import { execFile } from '../job-process.js';
 import { EXTRACT_DIR } from '../paths.js';
 import { deleteUnregisteredBinaries, getImage, listBinaries, registerBinary, updateImageIdentity } from '../store.js';
 import { isToolAvailable } from '../tools.js';

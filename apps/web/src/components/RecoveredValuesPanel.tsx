@@ -39,7 +39,7 @@ function pollJob(jobId: string, onLog: (log: string) => void): Promise<Job> {
       try {
         const job = await api.job(jobId);
         onLog(job.log);
-        if (job.status === 'done' || job.status === 'error') {
+        if (job.status === 'done' || job.status === 'error' || job.status === 'cancelled') {
           window.clearInterval(timer);
           if (job.status === 'error') toast.error(job.error ?? messages().imageDetail.job.failed);
           resolve(job);

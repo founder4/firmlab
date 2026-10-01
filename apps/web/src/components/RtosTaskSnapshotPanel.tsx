@@ -191,11 +191,11 @@ export function RtosTaskSnapshotPanel({
       timer.current = window.setInterval(async () => {
         try {
           const j = await api.job(started.jobId);
-          if (j.status !== 'done' && j.status !== 'error') return;
+          if (j.status !== 'done' && j.status !== 'error' && j.status !== 'cancelled') return;
           if (timer.current) window.clearInterval(timer.current);
           setBusy(false);
           if (j.status === 'done') setResult(j.result as RtosTaskSnapshotResult);
-          else setRunError(j.error ?? m.runFailed);
+          else if (j.status === 'error') setRunError(j.error ?? m.runFailed);
         } catch (err) {
           if (timer.current) window.clearInterval(timer.current);
           setBusy(false);

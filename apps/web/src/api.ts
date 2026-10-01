@@ -780,7 +780,7 @@ export interface Job {
   id: string;
   imageId: string;
   kind: string;
-  status: 'queued' | 'running' | 'done' | 'error';
+  status: 'queued' | 'running' | 'done' | 'error' | 'cancelling' | 'cancelled';
   createdAt: number;
   updatedAt: number;
   params: unknown;
@@ -2230,6 +2230,7 @@ export const api = {
   coverageAll: (locale?: Locale) =>
     get<{ images: CoverageSummary[] }>(`/api/coverage${lang(locale)}`).then((r) => r.images),
   jobs: (id: string) => get<{ jobs: Job[] }>(`/api/images/${id}/jobs`).then((r) => r.jobs),
+  cancelJob: (jobId: string) => post<{ job: Job }>(`/api/jobs/${jobId}/cancel`, {}).then((r) => r.job),
   job: (jobId: string) => get<{ job: Job }>(`/api/jobs/${jobId}`).then((r) => r.job),
   sbom: (id: string) => get<{ result: SbomResult | null }>(`/api/images/${id}/sbom`).then((r) => r.result),
   runSbom: (id: string) => post<{ jobId: string }>(`/api/images/${id}/sbom`),

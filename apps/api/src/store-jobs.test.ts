@@ -50,9 +50,11 @@ describe('reconcileInterruptedJobs', () => {
     store.insertJob(row('queued', 'queued', { log: 'accepted\n' }));
     store.insertJob(row('running', 'running', { log: 'started\n', resultJson: '{"partial":true}' }));
     store.insertJob(row('done', 'done', { resultJson: '{"ok":true}', updatedAt: 200 }));
+    store.insertJob(row('cancelling', 'cancelling', { updatedAt: 150, resultJson: '{"partial":true}' }));
+    store.insertJob(row('cancelled', 'cancelled', { log: 'Cancelled\n', updatedAt: 250 }));
     store.insertJob(row('error', 'error', { error: 'provider failed', updatedAt: 300 }));
 
-    expect(store.reconcileInterruptedJobs(1_234)).toBe(2);
+    expect(store.reconcileInterruptedJobs(1_234)).toBe(3);
 
     const queued = store.getJob('queued');
     expect(queued).toMatchObject({ status: 'error', updatedAt: 1_234, resultJson: null });
@@ -72,6 +74,14 @@ describe('reconcileInterruptedJobs', () => {
       resultJson: '{"ok":true}',
       error: null,
     });
+    expect(store.getJob('cancelling')).toMatchObject({
+      status: 'cancelled',
+      updatedAt: 1_234,
+      resultJson: null,
+      error: expect.stringContaining('unverified'),
+    });
+    expect(store.getJob('cancelling')?.log).toContain('cleanup completion was interrupted');
+    expect(store.getJob('cancelled')).toMatchObject({ status: 'cancelled', updatedAt: 250, log: 'Cancelled\n' });
     expect(store.getJob('error')).toMatchObject({ status: 'error', updatedAt: 300, error: 'provider failed' });
 
     // The transition is terminal and safe to invoke more than once at startup.

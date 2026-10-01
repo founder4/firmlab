@@ -9,8 +9,9 @@
  * grype runs only against a database that is already on disk unless the research lane is explicitly on —
  * `providers/sbom-db.ts` holds the policy, the measurement that produced it and the refusal text.
  */
-import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+
+import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 import { anchoreEnv, dbAgeDays, dbUpdateAllowed, decideGrype, grypeDbDir, readGrypeDbStatus } from './sbom-db.js';

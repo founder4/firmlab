@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+import { jobCancellation } from './job-cancellation.js';
+import { spawn } from './job-process.js';
 
 export interface ExecProcessGroupOptions {
   timeout: number;
@@ -39,6 +40,11 @@ export function execFileProcessGroup(
     };
 
     const killGroup = () => {
+      const owner = jobCancellation.getStore();
+      if (owner) {
+        owner.requestTermination(child);
+        return;
+      }
       if (!child.pid) return;
       try {
         if (grouped) process.kill(-child.pid, 'SIGKILL');

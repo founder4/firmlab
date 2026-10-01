@@ -80,11 +80,11 @@ export function SymReachPanel({
       timer.current = window.setInterval(async () => {
         const j = await api.job(jobId);
         setLog(j.log);
-        if (j.status === 'done' || j.status === 'error') {
+        if (j.status === 'done' || j.status === 'error' || j.status === 'cancelled') {
           if (timer.current) window.clearInterval(timer.current);
           setBusy(false);
           if (j.status === 'done') setResult(j.result as SymReachResult);
-          else setError(j.error ?? t.panels.symreach.probeFailed);
+          else if (j.status === 'error') setError(j.error ?? t.panels.symreach.probeFailed);
         }
       }, 900);
     } catch (e) {

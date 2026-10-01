@@ -14,7 +14,7 @@
 export interface JobView {
   id: string;
   kind: string;
-  status: 'queued' | 'running' | 'done' | 'error';
+  status: 'queued' | 'running' | 'done' | 'error' | 'cancelling' | 'cancelled';
   log: string;
   result: unknown;
   error: string | null;
@@ -118,7 +118,7 @@ export class FirmLabClient implements FirmLabApiClient {
     const { jobId } = await this.post<{ jobId: string }>(startPath, body);
     const deadline = Date.now() + timeoutMs;
     let job = await this.job(jobId);
-    while (job.status !== 'done' && job.status !== 'error') {
+    while (job.status !== 'done' && job.status !== 'error' && job.status !== 'cancelled') {
       if (Date.now() >= deadline) return job;
       await new Promise((r) => setTimeout(r, pollMs));
       job = await this.job(jobId);

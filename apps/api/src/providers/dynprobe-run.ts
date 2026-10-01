@@ -6,13 +6,14 @@
  * attach gdb-multiarch with a generated batch script, collect its output, and make sure the emulator is dead
  * afterwards on every path — a stranded qemu holding a port would break the next run.
  */
-import { type ChildProcess, execFile, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Architecture } from '@firmlab/core';
 import type { FindingDraft } from '@firmlab/core';
+import { execFile, spawn, terminateJobProcess } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import {
   DEFAULT_PATTERN_LEN,
@@ -291,7 +292,7 @@ export async function runDynProbe(
   } finally {
     // Guaranteed teardown: a surviving qemu keeps the gdb port and would silently break the next probe.
     try {
-      qemu?.kill('SIGKILL');
+      if (qemu) terminateJobProcess(qemu);
     } catch {}
     fs.rmSync(workDir, { recursive: true, force: true });
   }

@@ -9,8 +9,9 @@
  * null; a weak signal → a low-confidence guess phrased as a question, never a claim. The parsers are pure and
  * unit-tested; the single side-effecting runner at the bottom shells out and never throws on a missing tool.
  */
-import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+
+import { execFile } from '../job-process.js';
 
 const execFileAsync = promisify(execFile);
 

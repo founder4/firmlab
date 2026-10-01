@@ -4,7 +4,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { runExtraction } from '../providers/extract.js';
-import { startJob } from '../providers/jobs.js';
+import { cancelJob, startJob } from '../providers/jobs.js';
 import { getImage, getJob, listJobs } from '../store.js';
 
 function jobView(row: ReturnType<typeof getJob>): unknown {
@@ -35,6 +35,13 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
   app.get('/images/:id/jobs', async (req) => {
     const { id } = req.params as { id: string };
     return { jobs: listJobs(id).map(jobView) };
+  });
+
+  app.post('/jobs/:jobId/cancel', async (req, reply) => {
+    const { jobId } = req.params as { jobId: string };
+    if (!getJob(jobId)) return reply.status(404).send({ error: 'Job not found' });
+    cancelJob(jobId);
+    return reply.status(202).send({ job: jobView(getJob(jobId)) });
   });
 
   app.get('/jobs/:jobId', async (req, reply) => {

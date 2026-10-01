@@ -13,12 +13,13 @@
  * inventory. The `.lst` parser, the IOC/security scan, and the type summary are PURE and unit-tested; the runner
  * only copies the image into a throwaway dir, invokes chipsec under isolation, and composes them.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { FindingSeverity, ProofState } from '@firmlab/core';
+
+import { execFile } from '../job-process.js';
 import { type IsolationLevel, loadIsolationLimits, runIsolated } from './isolate.js';
 import {
   SPI_DESCRIPTOR_PARSE_CAP_BYTES,

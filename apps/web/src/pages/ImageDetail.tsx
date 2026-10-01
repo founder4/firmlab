@@ -26,6 +26,7 @@ import {
   fmtBytes,
   fmtHex,
 } from '../api';
+import { ActiveJobs } from '../components/ActiveJobs';
 import { AnalysisActionsPanel } from '../components/AnalysisActionsPanel';
 import { BinVulnPanel } from '../components/BinVulnPanel';
 import { CapabilityResults } from '../components/CapabilityResults';
@@ -196,6 +197,7 @@ export function ImageDetail(): JSX.Element {
         </a>
       </div>
 
+      <ActiveJobs key={id} imageId={id} />
       <StepTimeline imageId={id} active={tab} ready={image.status === 'ready'} />
 
       {tab === 'dossier' && <DossierPanel image={image} analysis={analysis} />}
@@ -713,10 +715,11 @@ function FilesystemPanel({ imageId }: { imageId: string }): JSX.Element {
     const timer = window.setInterval(async () => {
       const j = await api.job(jobId);
       setLog(j.log);
-      if (j.status === 'done' || j.status === 'error') {
+      if (j.status === 'done' || j.status === 'error' || j.status === 'cancelled') {
         window.clearInterval(timer);
         loadLatest();
         if (j.status === 'error') setStatus('error');
+        if (j.status === 'cancelled') setStatus('none');
       }
     }, 800);
   }, [imageId, loadLatest]);
@@ -774,7 +777,7 @@ function pollJob(jobId: string, onLog: (log: string) => void): Promise<Job> {
       try {
         const j = await api.job(jobId);
         onLog(j.log);
-        if (j.status === 'done' || j.status === 'error') {
+        if (j.status === 'done' || j.status === 'error' || j.status === 'cancelled') {
           window.clearInterval(timer);
           // Outside React: `messages()` is the module-scope reader, so a toast fired from a timer is still localised.
           if (j.status === 'error') toast.error(j.error ?? messages().imageDetail.job.failed);

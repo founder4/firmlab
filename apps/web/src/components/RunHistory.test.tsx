@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { type RunSummary, api } from '../api';
+import { type Job, type RunSummary, api } from '../api';
 import { setLocale } from '../i18n';
 import { catalogues } from '../locales';
 import { mockedApi } from '../test-api-mock';
@@ -162,4 +162,54 @@ describe('RunHistory — the heading is one sentence, built by the language that
     expect(screen.getByText('uboot')).toBeTruthy();
     expect(screen.getByText('sbin/one')).toBeTruthy();
   });
+});
+
+describe('RunHistory cancellation', () => {
+  it('shows cancel for a single active run and refreshes to cancelled after the action', async () => {
+    mockApi.runs.mockResolvedValueOnce({ runs: [run({ status: 'running', outcome: 'running' })], byTarget: [] });
+    mockApi.runs.mockResolvedValue({
+      runs: [run({ status: 'cancelled', outcome: 'blocked', headline: 'Cancelled' }), run({ jobId: 'old' })],
+      byTarget: [],
+    });
+    mockApi.cancelJob.mockResolvedValue({} as never);
+    render(<RunHistory imageId="img" kinds={['fuzz']} label="fuzzing" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(mockApi.cancelJob).toHaveBeenCalledWith('j'));
+    fireEvent.click(await screen.findByText(/2 fuzzing runs/));
+    expect(await screen.findByText('cancelled')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
+  it('shows no cancellation action for completed jobs', async () => {
+    mockApi.runs.mockResolvedValue({
+      runs: [run({}), run({ jobId: 'old', status: 'error', outcome: 'failed' })],
+      byTarget: [],
+    });
+    render(<RunHistory imageId="img" kinds={['fuzz']} label="fuzzing" />);
+    fireEvent.click(await screen.findByText(/2 fuzzing runs/));
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+});
+
+it('does not apply an old-image cancellation response after switching images', async () => {
+  let finish: ((value: Job) => void) | undefined;
+  mockApi.cancelJob.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  mockApi.runs.mockImplementation(async (image) => ({
+    runs: [run({ jobId: image, status: 'running', outcome: 'running', headline: `history ${image}` })],
+    byTarget: [],
+  }));
+  const view = render(<RunHistory imageId="old" kinds={['fuzz']} label="fuzzing" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+  view.rerender(<RunHistory imageId="new" kinds={['fuzz']} label="fuzzing" />);
+  expect(await screen.findByText('history new')).toBeInTheDocument();
+  if (!finish) throw new Error('cancel request did not start');
+  finish({} as Job);
+  await waitFor(() => expect(screen.getByText('history new')).toBeInTheDocument());
+  expect(screen.queryByText('history old')).toBeNull();
+  expect(mockApi.runs.mock.calls.filter(([image]) => image === 'old')).toHaveLength(1);
 });

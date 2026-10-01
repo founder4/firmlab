@@ -11,12 +11,14 @@
  *    genuinely rewrote hundreds of binaries would run for hours. The cap stops that, and the number of pairs left
  *    unexamined is carried in the result — a truncated comparison must never read as a complete one.
  */
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { FindingDraft } from '@firmlab/core';
+import { jobCancellation } from '../job-cancellation.js';
+
+import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import { type TextDiff, diffLines, renderUnified, summarizeTextDiff } from './funcdiff-text.js';
 import { type BinaryDiff, buildFuncDiffFindings, classifyDiff, matchFunctions, parseFunctions } from './funcdiff.js';
@@ -175,7 +177,9 @@ let decompilerCmd: 'pdg' | 'pdc' | null = null;
 async function detectDecompiler(sample: string): Promise<'pdg' | 'pdc'> {
   if (decompilerCmd) return decompilerCmd;
   try {
-    const { stdout } = await execFileAsync('radare2', ['-q', '-2', '-c', 'pdg?', sample], { timeout: 20000 });
+    const { stdout } = await jobCancellation.exit(() =>
+      execFileAsync('radare2', ['-q', '-2', '-c', 'pdg?', sample], { timeout: 20000 }),
+    );
     decompilerCmd = /r2ghidra|need|install/i.test(stdout) ? 'pdc' : 'pdg';
   } catch {
     decompilerCmd = 'pdc';

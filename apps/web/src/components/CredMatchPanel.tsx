@@ -66,12 +66,12 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
         try {
           const j = await api.job(jobId);
           setLog(j.log);
-          if (j.status !== 'done' && j.status !== 'error') return;
+          if (j.status !== 'done' && j.status !== 'error' && j.status !== 'cancelled') return;
           if (timer.current) window.clearInterval(timer.current);
           setBusy(false);
           if (j.status === 'done') setResult(j.result as CredMatchResult);
           // The run started and the provider threw — a fault on this bench, not a statement about the firmware.
-          else setError({ kind: 'run', message: j.error ?? m.runFailed });
+          else if (j.status === 'error') setError({ kind: 'run', message: j.error ?? m.runFailed });
         } catch (e) {
           if (timer.current) window.clearInterval(timer.current);
           setBusy(false);

@@ -84,11 +84,21 @@ async function coverageOf(fl: FirmLabApiClient, imageId: string): Promise<McpCov
 
 /** A job that finished, errored, or ran out of the tool's budget — rendered so each reads as what it is. */
 export type McpJobPayload =
+  | { ok: false; cancelled: true; jobId: string; note: string; log: string }
   | { ok: false; jobId: string; error: string; log: string }
   | { ok: false; stillRunning: true; jobId: string; status: string; note: string; log: string }
   | { ok: true; jobId: string; result: unknown };
 
 export function jobPayload(job: Pick<JobView, 'status' | 'error' | 'log' | 'result' | 'id'>): McpJobPayload {
+  if (job.status === 'cancelled') {
+    return {
+      ok: false,
+      cancelled: true,
+      jobId: job.id,
+      note: `Cancelled by operator; coverage is incomplete and no conclusion about the target can be drawn.${job.error ? ` Cleanup warning: ${job.error}` : ''}`,
+      log: job.log.slice(-4000),
+    };
+  }
   if (job.status === 'error') {
     return { ok: false, jobId: job.id, error: job.error ?? 'job failed', log: job.log.slice(-4000) };
   }

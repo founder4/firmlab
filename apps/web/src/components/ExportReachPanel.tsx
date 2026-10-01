@@ -71,11 +71,11 @@ export function ExportReachPanel({ imageId }: { imageId: string }): JSX.Element 
       timer.current = window.setInterval(async () => {
         const j = await api.job(jobId);
         setLog(j.log);
-        if (j.status === 'done' || j.status === 'error') {
+        if (j.status === 'done' || j.status === 'error' || j.status === 'cancelled') {
           if (timer.current) window.clearInterval(timer.current);
           setBusy(false);
           if (j.status === 'done') setResult(j.result as ExportReachResult);
-          else setError(j.error ?? m.probeFailed);
+          else if (j.status === 'error') setError(j.error ?? m.probeFailed);
         }
       }, 900);
     } catch (e) {

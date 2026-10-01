@@ -35,13 +35,14 @@
  *     CFGFast recovers nothing from a section-less object even with `force_complete_scan` or explicit
  *     `function_starts`, so this is a tool boundary, reported as one.
  */
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { FindingSeverity } from '@firmlab/core';
 import type { FindingDraft } from '@firmlab/core';
+
+import { execFile } from '../job-process.js';
 
 const execFileAsync = promisify(execFile);
 
