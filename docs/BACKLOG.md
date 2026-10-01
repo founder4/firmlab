@@ -696,6 +696,13 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
     de referencia ISA/MMIO determinista para las carencias RTOS/UEFI, (b) opcional RAG de técnicas confinado al
     mercenario. Ninguna es «un RAG» en el sentido que motivó la pregunta.
 
+## Ajustes — observaciones de la campaña de operabilidad
+
+- [ ] Observado 2026-10-02: después de guardar modelo o base URL, el editor limpia el draft a `''` y
+  muestra el campo vacío hasta remontar, aunque el servidor conserva el valor. Revisar la distinción
+  entre draft ausente y vacío en `LLMSettings`, conservando el comportamiento write-only de API keys.
+  Fuente: `/tmp/firmlab-settings-report.md`, QA con API sintética; fuera del alcance del fix de layout.
+
 ## Emulación dinámica — superar la frontera FSTM-7 / GAP-01 (trabajo a futuro)
 
 - [ ] Diseño y hoja de ruta en `docs/EMULATION-FUTURE.md`: síntesis de hardware para arrancar firmware SOHO con

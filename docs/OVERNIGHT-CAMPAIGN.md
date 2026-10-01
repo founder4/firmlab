@@ -106,3 +106,14 @@ ceder propiedad. No dejar agentes reclamables sin decisión ni cerrar terminales
   (terminal_handle_stale) fallaron antes de ejecutar tarea y se liberaron según sus receipts. Se aceptó
   la carpeta propia de FirmLab en la pantalla de confianza de Claude y se reintentaron las mismas Tasks.
   No hay dos intentos activos para ninguna Task ni cambios de credenciales/configuración de cuotas.
+- 23:29Z: Antigravity emitió worker_done válido para la revisión inicial/WIP y prioridades, según la
+  aceptación acotada comunicada en `msg_ae4e06af5ddf`. Informe `/tmp/firmlab-review-report.md`;
+  revisión de commits finales y validación completa siguen pendientes. Dispatch retenido explícitamente
+  para el relevo de coordinador solicitado por el usuario; ya no tiene una tarea subordinada activa.
+- 23:29Z: Codex emitió worker_done válido, commit `d97e7e6` en `overnight-settings`, todavía SIN integrar.
+  Informe `/tmp/firmlab-settings-report.md`: 33 tests focalizados, check/build/Biome y Chromium sintético
+  EN/ES a390 y1440px. Overflow antes444px/después390px. Se liberó su terminal después del settlement.
+  Claude continúa en su Dispatch original; conservar ownership. No hay terminales reclamables pendientes.
+- Relevo preparado a Antigravity en main; contexto operativo completo en `docs/OVERNIGHT-HANDOFF.md`.
+  Últimas cuotas observadas a23:26Z: Claude sesión5%/semana5%; Codex sesión74%/semana38%; Antigravity sin
+  medición, pero ejecución real verificada. El relevo no equivale a terminar las ocho horas.
