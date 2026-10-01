@@ -707,10 +707,12 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
 
 ## Ajustes — observaciones de la campaña de operabilidad
 
-- [ ] Observado 2026-10-02: después de guardar modelo o base URL, el editor limpia el draft a `''` y
+- [x] Observado 2026-10-02: después de guardar modelo o base URL, el editor limpia el draft a `''` y
   muestra el campo vacío hasta remontar, aunque el servidor conserva el valor. Revisar la distinción
   entre draft ausente y vacío en `LLMSettings`, conservando el comportamiento write-only de API keys.
-  Fuente: `/tmp/firmlab-settings-report.md`, QA con API sintética; fuera del alcance del fix de layout.
+  *(Hecho en `7544f9d`: `delete next[key]` en `LlmProviderEditor` en lugar de asignar cadena vacía; las API keys
+  conservan su enmascaramiento y borrador write-only mientras model y baseUrl mantienen su valor visible; probado
+  en `Settings.test.tsx`.)*
 
 ## Emulación dinámica — superar la frontera FSTM-7 / GAP-01 (trabajo a futuro)
 

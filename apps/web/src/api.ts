@@ -931,6 +931,16 @@ export interface ImageNote {
   updatedAt: number;
 }
 
+/** Result of retiring one computed source via DELETE /images/:id/findings. */
+export interface RetireFindingsResult {
+  source: string;
+  dryRun: boolean;
+  removedCount: number;
+  removed: { kind: string; title: string; proofState: string }[];
+  summary: string;
+  note?: ImageNote;
+}
+
 /** Whether the flag-gated copilot is enabled, and which provider/model backs it (no secrets). */
 export interface AgentStatus {
   enabled: boolean;
@@ -1190,6 +1200,23 @@ export interface CorpusOverview {
   listing?: { cap: number; rule: string };
   sbomImageCount: number;
   deviceFamilies: { familyKey: string; images: ImageRef[] }[];
+}
+
+/** Report returned by POST /api/corpus/reindex. */
+export interface CorpusReindexReport {
+  imageCount: number;
+  sources: {
+    source: string;
+    imagesWithInput: number;
+    imagesWithoutInput: number;
+    rowsOffered: number;
+    rowsInserted: number;
+  }[];
+  boundedInputs: { imageId: string; filename: string; kind: string; covered: number; total: number }[];
+  unrecordedBounds: { kind: string; imageCount: number }[];
+  unstampedCredentials: { imageId: string; filename: string; rows: number }[];
+  notReconciled: { table: string; reason: string }[];
+  verdict: string;
 }
 
 /** A binary from the extracted rootfs (0/1/null columns preserved as returned by the API). */
@@ -2324,6 +2351,15 @@ export const api = {
   updateNote: (id: string, noteId: string, body: string) =>
     patch<{ note: ImageNote }>(`/api/images/${id}/notes/${noteId}`, { body }).then((r) => r.note),
   deleteNote: (id: string, noteId: string) => del<{ deleted: string }>(`/api/images/${id}/notes/${noteId}`),
+  retireFindings: async (id: string, body: { source: string; retiredBy: string; reason: string; dryRun?: boolean }) => {
+    const res = await fetch(`/api/images/${id}/findings`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return (await res.json()) as RetireFindingsResult;
+  },
   corpusRefs: (id: string) => get<{ refs: CorpusRefs }>(`/api/images/${id}/corpus-refs`).then((r) => r.refs),
   agentStatus: () => get<AgentStatus>('/api/agent/status'),
   runCopilot: (id: string) => post<{ jobId: string }>(`/api/images/${id}/copilot`),
@@ -2366,6 +2402,8 @@ export const api = {
   promoteRule: (type: string, key: string, label: string, note?: string) =>
     post<{ rule: CorpusRule }>('/api/corpus/rules', { type, key, label, note }).then((r) => r.rule),
   deleteRule: (id: string) => fetch(`/api/corpus/rules/${id}`, { method: 'DELETE' }).then(() => undefined),
+  reindexCorpus: (locale?: Locale) =>
+    post<{ report: CorpusReindexReport }>(`/api/corpus/reindex${lang(locale)}`).then((r) => r.report),
   ghidraResult: (id: string) => get<{ result: GhidraResult | null }>(`/api/images/${id}/ghidra`).then((r) => r.result),
   // The five capabilities that had routes and no reader. `null` from any of these means the stage has NOT run —
   // distinct from a result whose `available` is false, which means it ran and this deployment could not answer.
