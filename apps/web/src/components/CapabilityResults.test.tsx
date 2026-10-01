@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
@@ -423,5 +423,79 @@ describe('persisted Ghidra reader', () => {
     renderCaps();
     expect(await screen.findByText('return 1;')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText('Choose a discovered binary')).toBeDisabled());
+  });
+});
+
+describe('CapabilityResults — pending discovery and run ownership', () => {
+  it('keeps a pending binary list distinct from a successful empty list', async () => {
+    let finish!: (entries: Awaited<ReturnType<typeof api.binaries>>) => void;
+    m().binaries.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    renderCaps();
+    expect(await screen.findByText('Loading discovered binaries…')).toBeInTheDocument();
+    expect(screen.queryByText(/No discovered binaries/)).not.toBeInTheDocument();
+    await act(async () => finish([]));
+    expect(await screen.findByText(/No discovered binaries/)).toBeInTheDocument();
+    expect(screen.queryByText('Loading discovered binaries…')).not.toBeInTheDocument();
+  });
+
+  it('does not attach an old-image Ghidra completion to the newly selected image', async () => {
+    m().ghidraResult.mockClear();
+    m().job.mockClear();
+    let finish!: (job: Awaited<ReturnType<typeof api.job>>) => void;
+    m().ghidra.mockResolvedValue({ jobId: 'old-job' });
+    m().job.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const view = render(
+      <MemoryRouter>
+        <CapabilityResults imageId="old-image" />
+      </MemoryRouter>,
+    );
+    fireEvent.change(await screen.findByLabelText(/Binary to decompile/), { target: { value: 'bin/httpd' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Decompile with Ghidra' }));
+    await waitFor(() => expect(m().job).toHaveBeenCalledWith('old-job'));
+    const currentResult = {
+      available: true,
+      binary: 'bin/new',
+      functionCount: 1,
+      functions: [{ name: 'CURRENT_IMAGE', signature: '', pseudocode: 'current source' }],
+    };
+    m().ghidraResult.mockResolvedValue(currentResult);
+    view.rerender(
+      <MemoryRouter>
+        <CapabilityResults imageId="new-image" />
+      </MemoryRouter>,
+    );
+    await screen.findByText('current source');
+    m().ghidraResult.mockResolvedValue({
+      ...currentResult,
+      binary: 'bin/old',
+      functions: [{ name: 'STALE_IMAGE', signature: '', pseudocode: 'stale source' }],
+    });
+    await act(async () =>
+      finish({
+        id: 'old-job',
+        imageId: 'old-image',
+        kind: 'ghidra',
+        status: 'done',
+        createdAt: 1,
+        updatedAt: 2,
+        params: null,
+        log: '',
+        result: null,
+        error: null,
+      }),
+    );
+    expect(screen.getByText('current source')).toBeInTheDocument();
+    expect(screen.queryByText('stale source')).not.toBeInTheDocument();
+    expect(m().ghidraResult.mock.calls.map(([id]) => id)).toEqual(['old-image', 'new-image']);
   });
 });

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type FuncDiffResultView, api } from '../api';
 import { setLocale } from '../i18n';
@@ -203,4 +203,48 @@ it('shows a saved-result load failure instead of asserting that no diff ran', as
   render(<FuncDiffPanel imageId="new" against="old" />);
   expect((await screen.findByRole('alert')).textContent).toBe('saved diff could not be read');
   expect(screen.queryByText(/No function diff has been run/)).toBeNull();
+});
+
+describe('FuncDiffPanel — comparison ownership', () => {
+  it.each(['baseline', 'image'] as const)('ignores an active job after the %s changes', async (changed) => {
+    m().job.mockClear();
+    let finish!: (job: Awaited<ReturnType<typeof api.job>>) => void;
+    m().runFuncdiff.mockResolvedValue({ jobId: 'old-job' });
+    m().job.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const view = render(<FuncDiffPanel imageId="new-a" against="old-a" />);
+    await screen.findByText(/No function diff has been run/);
+    fireEvent.click(screen.getByRole('button', { name: 'Diff functions' }));
+    await waitFor(() => expect(m().job).toHaveBeenCalledWith('old-job'));
+    const currentResult = { ...patched, reason: 'Current comparison evidence' };
+    m().funcdiffResult.mockResolvedValue(currentResult);
+    view.rerender(
+      <FuncDiffPanel
+        imageId={changed === 'image' ? 'new-b' : 'new-a'}
+        against={changed === 'baseline' ? 'old-b' : 'old-a'}
+      />,
+    );
+    await screen.findByText('Current comparison evidence');
+    await act(async () =>
+      finish({
+        id: 'old-job',
+        imageId: 'new-a',
+        kind: 'funcdiff',
+        status: 'done',
+        createdAt: 1,
+        updatedAt: 2,
+        params: null,
+        log: 'Stale job log',
+        error: null,
+        result: { ...patched, reason: 'Stale comparison evidence' },
+      }),
+    );
+    expect(screen.queryByText('Stale comparison evidence')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stale job log')).not.toBeInTheDocument();
+    expect(screen.getByText('Current comparison evidence')).toBeInTheDocument();
+  });
 });

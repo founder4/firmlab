@@ -65,6 +65,7 @@ export const capabilities = {
   /** Ghidra is the one capability here that needs a target: one binary from the extracted rootfs. */
   ghidra: {
     selectBinary: 'Choose a discovered binary',
+    binaryLoading: 'Loading discovered binaries…',
     noBinaries: 'No discovered binaries. Run extraction and binary triage, or enter a rootfs path below.',
     binaryLoadFailed: 'The binary list could not be loaded. You can enter a rootfs path below.',
     functionsTitle: 'Saved Ghidra functions',

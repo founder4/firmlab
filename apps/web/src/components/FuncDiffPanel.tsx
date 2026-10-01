@@ -9,7 +9,7 @@
  * The baseline is the image chosen in the Diff section's picker, so this panel never offers a second picker that
  * could disagree with the one above it. This image is the NEWER build, as the route defines it.
  */
-import { type JSX, useEffect, useState } from 'react';
+import { type JSX, useEffect, useRef, useState } from 'react';
 import { type FuncDiffBinaryView, type FuncDiffResultView, type Job, api } from '../api';
 import { useMessages } from '../i18n';
 
@@ -80,13 +80,15 @@ function changedRows(diffs: FuncDiffBinaryView[]): Row[] {
   );
 }
 
-async function waitForJob(jobId: string, onLog: (log: string) => void): Promise<Job> {
-  for (;;) {
+async function waitForJob(jobId: string, onLog: (log: string) => void, current: () => boolean): Promise<Job | null> {
+  while (current()) {
     const job = await api.job(jobId);
+    if (!current()) return null;
     onLog(job.log);
     if (job.status === 'done' || job.status === 'error') return job;
     await new Promise((resolve) => window.setTimeout(resolve, 900));
   }
+  return null;
 }
 
 const sum = (diffs: FuncDiffBinaryView[], k: 'changed' | 'added' | 'removed' | 'unmatchable'): number =>
@@ -100,25 +102,35 @@ export function FuncDiffPanel({ imageId, against }: { imageId: string; against: 
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState('');
   const [error, setError] = useState('');
+  // A completion belongs to the exact image/baseline request that started it, including A → B → A switches.
+  const generation = useRef(0);
   // Default: smallest movement first, which is the provider's own order and the one worth reading.
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean } | null>(null);
 
   useEffect(() => {
     let alive = true;
+    const request = ++generation.current;
+    const current = () => alive && generation.current === request;
+    setRunning(false);
+    setLog('');
     setResult(null);
     setError('');
     setLoading(false);
-    if (!against) return () => undefined;
+    if (!against)
+      return () => {
+        generation.current++;
+      };
     setLoading(true);
     api
       .funcdiffResult(imageId, against)
-      .then((r) => alive && setResult(r))
+      .then((r) => current() && setResult(r))
       .catch((err: unknown) => {
-        if (alive) setError(err instanceof Error ? err.message : String(err));
+        if (current()) setError(err instanceof Error ? err.message : String(err));
       })
-      .finally(() => alive && setLoading(false));
+      .finally(() => current() && setLoading(false));
     return () => {
       alive = false;
+      generation.current++;
     };
   }, [imageId, against]);
 
@@ -127,18 +139,23 @@ export function FuncDiffPanel({ imageId, against }: { imageId: string; against: 
       setError(f.chooseBaseline);
       return;
     }
+    const request = ++generation.current;
+    const current = () => generation.current === request;
+    setLoading(false);
     setError('');
     setLog('');
     setRunning(true);
     try {
       const { jobId } = await api.runFuncdiff(imageId, against);
-      const job = await waitForJob(jobId, setLog);
+      if (!current()) return;
+      const job = await waitForJob(jobId, setLog, current);
+      if (!job || !current()) return;
       if (job.status === 'done') setResult(job.result as FuncDiffResultView);
       else setError(job.error ?? t.imageDetail.job.failed);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (current()) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setRunning(false);
+      if (current()) setRunning(false);
     }
   };
 

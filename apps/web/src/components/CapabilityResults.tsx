@@ -11,7 +11,7 @@
  *
  * Every decision is in `capabilities.ts` and unit-tested without a DOM; this file renders and fetches.
  */
-import { type FormEvent, type JSX, useEffect, useState } from 'react';
+import { type FormEvent, type JSX, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { type BinaryEntry, type FwHuntResultView, type GhidraResult, type Job, api } from '../api';
 import {
@@ -88,12 +88,14 @@ function fwhuntBatchState(result: CapabilityResultBase | null): {
   };
 }
 
-async function waitForJob(jobId: string): Promise<Job> {
-  for (;;) {
+async function waitForJob(jobId: string, current: () => boolean = () => true): Promise<Job | null> {
+  while (current()) {
     const job = await api.job(jobId);
+    if (!current()) return null;
     if (job.status === 'done' || job.status === 'error') return job;
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
   }
+  return null;
 }
 
 /** The number line for one row. An absent denominator says so instead of being printed as a zero. */
@@ -152,9 +154,16 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
   const [ghidraError, setGhidraError] = useState('');
   const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
   const [binaryLoadFailed, setBinaryLoadFailed] = useState(false);
+  const [binaryLoading, setBinaryLoading] = useState(true);
+  const context = useRef(0);
+  const ghidraRequest = useRef(0);
 
   useEffect(() => {
     let live = true;
+    context.current++;
+    ghidraRequest.current++;
+    setBusy(null);
+    setBinaryLoading(true);
     setBinaries([]);
     setGhidraBinary('');
     setBinaryLoadFailed(false);
@@ -164,11 +173,14 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
         if (live) setBinaries(entries);
       } catch {
         if (live) setBinaryLoadFailed(true);
+      } finally {
+        if (live) setBinaryLoading(false);
       }
     };
     void load();
     return () => {
       live = false;
+      context.current++;
     };
   }, [imageId]);
 
@@ -184,6 +196,7 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
 
   useEffect(() => {
     let live = true;
+    const savedRequest = ghidraRequest.current;
     // Each result is fetched independently; failure never reads as a clean result. The Ghidra reader also
     // exposes its load error so an unreadable saved decompilation does not silently disappear.
     setLoaded({});
@@ -206,7 +219,8 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
           .ghidraResult(imageId)
           .then((r) => ['ghidra', r] as const)
           .catch((err: unknown) => {
-            if (live) setGhidraError(err instanceof Error ? err.message : String(err));
+            if (live && savedRequest === ghidraRequest.current)
+              setGhidraError(err instanceof Error ? err.message : String(err));
             return ['ghidra', null] as const;
           }),
         api
@@ -217,7 +231,16 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
           .then((r) => ['funcdiff', r] as const)
           .catch(() => ['funcdiff', null] as const),
       ]);
-      if (live) setLoaded(Object.fromEntries(entries) as Loaded);
+      if (live)
+        setLoaded(
+          (current) =>
+            ({
+              ...current,
+              ...Object.fromEntries(
+                entries.filter(([id]) => id !== 'ghidra' || savedRequest === ghidraRequest.current),
+              ),
+            }) as Loaded,
+        );
     };
     void load();
     return () => {
@@ -233,7 +256,7 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
         const batch = fwhuntBatchState(loaded.fwhunt ?? null);
         const { jobId } = batch?.restart ? await api.runFwhunt(imageId, undefined, true) : await api.runFwhunt(imageId);
         const job = await waitForJob(jobId);
-        if (job.status === 'done') {
+        if (job?.status === 'done') {
           const result = await api.fwhuntResult(imageId);
           setLoaded((current) => ({ ...current, fwhunt: result }));
         }
@@ -252,19 +275,24 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
       setGhidraError(t.capabilities.ghidra.binaryRequired);
       return;
     }
+    const request = ++ghidraRequest.current;
+    const imageContext = context.current;
+    const current = () => context.current === imageContext && ghidraRequest.current === request;
     setGhidraError('');
     setBusy('ghidra');
     try {
       const { jobId } = await api.ghidra(imageId, binary);
-      const job = await waitForJob(jobId);
+      if (!current()) return;
+      const job = await waitForJob(jobId, current);
+      if (!job || !current()) return;
       if (job.status === 'done') {
         const result = await api.ghidraResult(imageId);
-        setLoaded((current) => ({ ...current, ghidra: result }));
+        if (current()) setLoaded((loaded) => ({ ...loaded, ghidra: result }));
       } else setGhidraError(job.error ?? t.imageDetail.job.failed);
     } catch (err) {
-      setGhidraError(err instanceof Error ? err.message : String(err));
+      if (current()) setGhidraError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      if (current()) setBusy(null);
     }
   };
 
@@ -376,7 +404,9 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
                       ))}
                     </select>
                   </label>
-                  {binaryLoadFailed ? (
+                  {binaryLoading ? (
+                    <span className="hint">{t.capabilities.ghidra.binaryLoading}</span>
+                  ) : binaryLoadFailed ? (
                     <span className="hint">{t.capabilities.ghidra.binaryLoadFailed}</span>
                   ) : (
                     binaries.length === 0 && <span className="hint">{t.capabilities.ghidra.noBinaries}</span>

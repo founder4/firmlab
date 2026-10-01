@@ -56,6 +56,7 @@ export const capabilities: typeof en = {
 
   ghidra: {
     selectBinary: 'Elegir un binario descubierto',
+    binaryLoading: 'Cargando binarios descubiertos…',
     noBinaries: 'No hay binarios descubiertos. Ejecuta extracción y triaje, o escribe una ruta del rootfs abajo.',
     binaryLoadFailed: 'No se pudo cargar la lista de binarios. Puedes escribir una ruta del rootfs abajo.',
     functionsTitle: 'Funciones de Ghidra guardadas',
