@@ -89,6 +89,20 @@ export class JobCancellation {
 }
 
 export const jobCancellation = new AsyncLocalStorage<JobCancellation>();
+
+/**
+ * Link a caller's abort signal to the owning job's cancellation, so a cancelled job aborts an in-flight HTTP
+ * request and its body read promptly instead of waiting out the caller's own timeout. The combined signal stays
+ * reactive to the job signal after this returns, so a body read that outlives the request (`fetch` → `res.json()`)
+ * is aborted too. Outside a job context — shared capability discovery runs there deliberately — `base` is returned
+ * unchanged, so one aborted job can never abort or poison a shared lookup.
+ */
+export function linkJobCancellation(base?: AbortSignal): AbortSignal | undefined {
+  const owner = jobCancellation.getStore();
+  if (!owner) return base;
+  if (!base) return owner.controller.signal;
+  return AbortSignal.any([base, owner.controller.signal]);
+}
 /** Terminal rows win; repeated requests for cancelled jobs are harmless. */
 export function cancellationDecision(status: string): 'cancel' | 'unchanged' {
   return status === 'queued' || status === 'running' ? 'cancel' : 'unchanged';

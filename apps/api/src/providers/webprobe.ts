@@ -15,6 +15,7 @@ import { constants as cryptoConstants, randomBytes } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import type { EvidenceChannel, FindingSeverity, ProofState } from '@firmlab/core';
+import { jobCancellation, linkJobCancellation } from '../job-cancellation.js';
 import { fetchLocalTarget, isLocalTarget } from './webprobe-transport.js';
 
 export interface WebFinding {
@@ -166,7 +167,9 @@ export function fetchFirmwareLoopback(
     return Promise.reject(new Error(`Firmware TLS relaxation is restricted to loopback, not ${url.hostname}.`));
   }
   if (!isLocalTarget(rawUrl)) return Promise.reject(new Error('Invalid firmware probe URL or credentials.'));
-  if (init.signal?.aborted) return Promise.reject(new Error('Firmware probe aborted.'));
+  // A cancelled owning job aborts this request alongside the caller's own signal; outside a job it is init.signal.
+  const signal = linkJobCancellation(init.signal);
+  if (signal?.aborted) return Promise.reject(new Error('Firmware probe aborted.'));
   if (url.hostname === 'localhost') url.hostname = '127.0.0.1';
   return new Promise((resolve, reject) => {
     const transport = url.protocol === 'https:' ? https : http;
@@ -218,9 +221,9 @@ export function fetchFirmwareLoopback(
     const abort = (): void => {
       request.destroy(new Error('Firmware probe aborted.'));
     };
-    init.signal?.addEventListener('abort', abort, { once: true });
+    signal?.addEventListener('abort', abort, { once: true });
     request.once('error', reject);
-    request.once('close', () => init.signal?.removeEventListener('abort', abort));
+    request.once('close', () => signal?.removeEventListener('abort', abort));
     if (init.body) request.write(init.body);
     request.end();
   });
@@ -254,14 +257,21 @@ export async function runWebProbe(
   let failedRequests = 0;
 
   const get = async (url: string): Promise<{ ok: boolean; status: number; body: string } | null> => {
+    const owner = jobCancellation.getStore();
+    // A cancelled owning job stops the probe here rather than letting it issue another request.
+    owner?.check();
     if (requests >= maxRequests) return null;
     requests++;
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
-      const res = await doFetch(url, { signal: ac.signal });
+      // The job's cancellation aborts this request and its body read promptly; without a job it is the per-request
+      // timeout alone, so non-job behaviour is unchanged.
+      const res = await doFetch(url, { signal: linkJobCancellation(ac.signal) ?? ac.signal });
       return { ok: res.ok, status: res.status, body: (await res.text()).slice(0, 200_000) };
     } catch (error) {
+      // An abort caused by cancellation is cancellation, not a transport failure to tally against this target.
+      owner?.check();
       failedRequests++;
       lastTransportError = error instanceof Error ? error.message : String(error);
       return null;

@@ -9,6 +9,7 @@
  * explicit before a run.
  */
 import { effectiveEnv } from '../flags.js';
+import { linkJobCancellation } from '../job-cancellation.js';
 
 export interface ResearchConfig {
   /** Hosts this deployment is permitted to reach for external intelligence. Nothing else is contacted. */
@@ -83,8 +84,13 @@ export async function allowlistedFetch(url: string, cfg: ResearchConfig, init?: 
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
+  // A cancelled job aborts this request — and its body read, since the link stays live after we return — promptly,
+  // rather than waiting out `timeoutMs`. Outside a job (shared capability discovery) the signal is the timeout
+  // controller alone, so one aborted job cannot abort or poison a shared lookup. The timeout, allowlist and error
+  // semantics are unchanged: an abort still surfaces as the same AbortError this call already threw on timeout.
+  const signal = linkJobCancellation(controller.signal) ?? controller.signal;
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetch(url, { ...init, signal });
   } finally {
     clearTimeout(timer);
   }
