@@ -117,3 +117,20 @@ ceder propiedad. No dejar agentes reclamables sin decisión ni cerrar terminales
 - Relevo preparado a Antigravity en main; contexto operativo completo en `docs/OVERNIGHT-HANDOFF.md`.
   Últimas cuotas observadas a23:26Z: Claude sesión5%/semana5%; Codex sesión74%/semana38%; Antigravity sin
   medición, pero ejecución real verificada. El relevo no equivale a terminar las ocho horas.
+- 23:32Z: Antigravity adopta la coordinación del Run `run_ed63045bd51e` desde su terminal
+  `term_3d93fd95-87f9-4df8-841b-a37e8b41611b` (`consumer_generation: 2`). Receipt en
+  `/tmp/firmlab-night-handoff-receipt.json`.
+- 23:31Z: Claude emite `worker_done` válido con commit `9b76862` en `overnight-http-abort`
+  (Task `task_4772cd612237`, Dispatch `ctx_502847e78ccc`). Delivery `delivery_65831cbd945f` procesado y acked.
+- Integración en main secuencial y limpia:
+  - Cherry-pick Codex `d97e7e6` como `e7f8f5e` (`fix(settings): keep agent controls readable on mobile`).
+  - Cherry-pick Claude `9b76862` como `5c664fb` (`feat(api): abort job-owned research and web-probe HTTP on cancellation`).
+- Validación completa de la tanda integrada:
+  - `@firmlab/core` construido primero.
+  - `pnpm check`: limpio en los 3 paquetes (core, api, web).
+  - `pnpm test`: 4.008 tests pasados (core 380, API 2.805, web 754, scripts 69), todos en verde.
+  - `pnpm build`: build de producción limpio (core dist, api dist, web vite dist).
+  - `pnpm biome`: 636 archivos verificados, 0 errores, 0 warnings.
+  - QA real Playwright: `apps/web/src/pages/Settings.qa.mjs` verificado contra build dist en 390px y 1440px
+    para EN y ES (0 desbordamientos, 0 errores, 0 peticiones inesperadas).
+- Se prepara la siguiente tanda de trabajo acotado del backlog.

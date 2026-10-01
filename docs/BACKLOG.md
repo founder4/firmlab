@@ -384,19 +384,26 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   de `chipsec`/`renode` y su estado, editar una nota (`PATCH …/notes/:noteId`) y leer el estado actual de
   aprobación del agente en Ajustes. Decidir cuáles son sólo para scripts/MCP antes de construir UI.
 
-- [ ] `FuzzPanel.test.tsx › refuses to run without a target binary` falló una vez con la suite web completa
-  (2026-09-28) y pasa 3/3 aislado: espera sobre algo que la carga retrasa. Anclarlo a un estado cargado, como ya se
-  hizo con los dos tests de `23e2917`.
-
+- [x] Cancelación de esperas HTTP dentro de un job: abortar peticiones y lecturas de cuerpo en curso cuando
+  el job se cancela, sin esperar los timeouts de 15s/6s ni emitir peticiones posteriores. `linkJobCancellation`
+  en `job-cancellation.ts` combina la señal del llamador/timeout con la del job mediante `AbortSignal.any`
+  (fuera de un job devuelve la base intacta para no alterar el descubrimiento compartido); cableado en
+  `allowlistedFetch` y en `runWebProbe`/`fetchFirmwareLoopback`. *(Hecho en `5c664fb`: 9 tests nuevos, cancelación
+  comprobada con socket real y lecturas parciales, suite API 2.805 passed, Biome limpio y sin envenenar caché.)*
+- [x] `FuzzPanel.test.tsx › refuses to run without a target binary` anclado a estado cargado. *(Hecho en
+  `e7f8f5e`: el test espera a `screen.findByText(en.panels.fuzz.runnable)` antes de hacer clic, asegurando
+  que la resolución de capacidades asíncronas no deje el botón deshabilitado por carrera.)*
 - [x] **Mostrar las restricciones de ejecución disponibles para el agente.** `/agent/config` conserva
   `partial` y añade `netns: '-n' | '-rn' | null` y `resourceLimits`; Ajustes y el panel de sesión separan red
   aislada, red del host y campo antiguo desconocido. *(Hecho el 2026-10-01; se limita explícitamente a
   capacidades del runner, sin atribuirlas a resultados guardados ni a todos los proveedores.)*
 - [ ] Cargar un perfil AppArmor propio (derivado de `docker-default` permitiendo el uid map) para no correr
   `unconfined`. Sigue siendo trabajo de despliegue, no parte de la presentación de capacidades.
-- [ ] Ajustes → AI & Agent tiene desbordamiento horizontal a 390 px en las filas existentes del editor/configuración.
-  Medido durante QA del 2026-10-01; el lector de Ghidra y funcdiff no desbordan. Revisar las filas de ancho fijo
-  y entradas del editor sin ampliar la tarea de lectores/aislamiento.
+- [x] Ajustes → AI & Agent tiene desbordamiento horizontal a 390 px en las filas existentes del editor/configuración.
+  *(Hecho en `e7f8f5e`: extracción de estilos de `Row` a clases CSS `settings-row` y `settings-row-label`,
+  `overflow-wrap: anywhere` para identificadores largos, botones segmentados con wrap y apilado en columna
+  a `<= 600px`. Validado con `apps/web/src/pages/Settings.qa.mjs` en Chromium sintético a 390px y 1440px en EN/ES
+  sin desbordamiento ni errores.)*
 
 ## Deuda de política (decisiones a escribir, no bugs)
 
