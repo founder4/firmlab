@@ -134,3 +134,19 @@ ceder propiedad. No dejar agentes reclamables sin decisión ni cerrar terminales
   - QA real Playwright: `apps/web/src/pages/Settings.qa.mjs` verificado contra build dist en 390px y 1440px
     para EN y ES (0 desbordamientos, 0 errores, 0 peticiones inesperadas).
 - Se prepara la siguiente tanda de trabajo acotado del backlog.
+- 23:38Z: Lanzada la segunda tanda de trabajo acotado con dos workers paralelos en worktrees disjuntos:
+  - Claude: Task `task_dd0b280aa7fe`, Dispatch `ctx_b282d2c5ecef`, terminal `term_094a6c28-bf1a-43aa-badb-79a476f01229`,
+    worktree `/Users/agfil/orca/workspaces/firmlab/overnight-http-abort`.
+    Ownership: `apps/web/src/components/SimulationMenu.tsx` y `SimulationMenu.test.tsx`.
+    Objetivo: Lector de resultados persistidos de chipsec y renode al montar `SimulationMenu` (vía `api.chipsecResult`
+    y `api.renodeResult`), mostrando módulos, hallazgos, variables NVRAM y arranque Renode guardados al volver a la vista
+    sin requerir re-ejecución, manteniendo la precedencia de ejecuciones activas.
+  - Codex: Task `task_b0aa6d8f58b3`, Dispatch `ctx_88968d2ca557`, terminal `term_83324981-01c3-4418-af19-378859b11933`,
+    worktree `/Users/agfil/orca/workspaces/firmlab/overnight-settings`.
+    Ownership: `apps/web/src/components/ComponentMap.tsx`, `ComponentMap.test.tsx`,
+    `apps/web/src/components/CredMatchPanel.tsx`, `CredMatchPanel.test.tsx`, `apps/web/src/pages/Settings.tsx`,
+    `Settings.test.tsx`, y bindings finos en `api.ts`/locales.
+    Objetivo: Botones de acción directa para relanzar `component-cve` y `auxsecrets` de forma desacoplada
+    sin correr el pipeline completo de Opacidad, y corrección en `Settings.tsx` del borrado de draft en model/baseUrl
+    para que campos no secretos no queden en blanco tras guardar (`delete draft[key]`).
+- Antigravity coordina el Run `run_ed63045bd51e` en main (`term_3d93fd95-87f9-4df8-841b-a37e8b41611b`).
