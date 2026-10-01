@@ -6,14 +6,14 @@
  * recorded as lost was not a rich rendering of each provider's payload; it was the fact that `rulesRun` against
  * `rulesInCorpus`, `rulesLost`, `capped` and `unmatchable` reached no screen at all, so a stage that never ran was
  * indistinguishable from one that ran and found nothing. A row that says which of the three it is, with the
- * denominator beside it, closes that. A deeper per-provider surface is a separate piece of work and is recorded as
- * such rather than half-built here.
+ * denominator beside it, closes that. Ghidra additionally exposes its saved, bounded function reconstruction and
+ * a discovered-binary picker without changing what the capability coverage claims.
  *
  * Every decision is in `capabilities.ts` and unit-tested without a DOM; this file renders and fetches.
  */
 import { type FormEvent, type JSX, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { type FwHuntResultView, type Job, api } from '../api';
+import { type BinaryEntry, type FwHuntResultView, type GhidraResult, type Job, api } from '../api';
 import {
   type CapabilityId,
   type CapabilityResultBase,
@@ -23,6 +23,7 @@ import {
   coverageNumbers,
 } from '../capabilities';
 import { useMessages } from '../i18n';
+import { GhidraFunctions } from './GhidraFunctions';
 
 const CAPABILITIES: ReadonlyArray<{ id: CapabilityId; label: string; unlocks: string }> = [
   { id: 'yarascan', label: 'yarascan', unlocks: 'rule-based rootfs scan for known implants, with a corpus you supply' },
@@ -149,6 +150,27 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
   const [ghidraTool, setGhidraTool] = useState<boolean | null>(null);
   const [ghidraBinary, setGhidraBinary] = useState('');
   const [ghidraError, setGhidraError] = useState('');
+  const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
+  const [binaryLoadFailed, setBinaryLoadFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setBinaries([]);
+    setGhidraBinary('');
+    setBinaryLoadFailed(false);
+    const load = async (): Promise<void> => {
+      try {
+        const entries = await api.binaries(imageId);
+        if (live) setBinaries(entries);
+      } catch {
+        if (live) setBinaryLoadFailed(true);
+      }
+    };
+    void load();
+    return () => {
+      live = false;
+    };
+  }, [imageId]);
 
   useEffect(() => {
     let live = true;
@@ -162,8 +184,10 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
 
   useEffect(() => {
     let live = true;
-    // Each is fetched independently and a rejection lands as `null` — which this screen reads as "has not run", the
-    // honest reading of "this client could not learn otherwise". It never reads as a clean result.
+    // Each result is fetched independently; failure never reads as a clean result. The Ghidra reader also
+    // exposes its load error so an unreadable saved decompilation does not silently disappear.
+    setLoaded({});
+    setGhidraError('');
     const load = async (): Promise<void> => {
       const entries = await Promise.all([
         api
@@ -181,7 +205,10 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
         api
           .ghidraResult(imageId)
           .then((r) => ['ghidra', r] as const)
-          .catch(() => ['ghidra', null] as const),
+          .catch((err: unknown) => {
+            if (live) setGhidraError(err instanceof Error ? err.message : String(err));
+            return ['ghidra', null] as const;
+          }),
         api
           .dynprobeResult(imageId)
           .then((r) => ['dynprobe', r] as const)
@@ -332,6 +359,28 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
                       <span className="mono">{(result as { binary?: string } | null)?.binary ?? '—'}</span>
                     </span>
                   )}
+                  <label>
+                    {t.capabilities.ghidra.selectBinary}
+                    <select
+                      className="input mono"
+                      value={binaries.some((b) => b.path === ghidraBinary) ? ghidraBinary : ''}
+                      disabled={ghidraTool === false || busy === 'ghidra'}
+                      onChange={(e) => setGhidraBinary(e.target.value)}
+                    >
+                      <option value="">—</option>
+                      {binaries.map((b) => (
+                        <option key={b.path} value={b.path}>
+                          {b.path}
+                          {b.arch ? ` (${b.arch})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {binaryLoadFailed ? (
+                    <span className="hint">{t.capabilities.ghidra.binaryLoadFailed}</span>
+                  ) : (
+                    binaries.length === 0 && <span className="hint">{t.capabilities.ghidra.noBinaries}</span>
+                  )}
                   <label htmlFor="ghidra-binary" className="hint">
                     {t.capabilities.ghidra.binaryLabel}
                   </label>
@@ -365,6 +414,12 @@ export function CapabilityResults({ imageId }: { imageId: string }): JSX.Element
                     <span className="hint" role="alert">
                       {ghidraError}
                     </span>
+                  )}
+                  {result && (
+                    <GhidraFunctions
+                      key={`${imageId}:${(result as GhidraResult).binary}`}
+                      result={result as GhidraResult}
+                    />
                   )}
                 </form>
               )}

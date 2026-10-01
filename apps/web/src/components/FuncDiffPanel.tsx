@@ -36,6 +36,25 @@ export function funcDiffOutcome(r: FuncDiffResultView): FuncDiffOutcome {
   return 'nothing-comparable';
 }
 
+/** Saved unified hunks contain excerpts only. Keep hunk coordinates on both sides, never invent full source. */
+export function decompiledExcerpts(unified: string): { before: string; after: string } {
+  const before: string[] = [];
+  const after: string[] = [];
+  let inHunk = false;
+  for (const line of unified.slice(0, 24000).split('\n')) {
+    if (line.startsWith('@@ ')) {
+      inHunk = true;
+      before.push(line);
+      after.push(line);
+    } else if (inHunk && line.startsWith(' ')) {
+      before.push(line.slice(1));
+      after.push(line.slice(1));
+    } else if (inHunk && line.startsWith('-')) before.push(line.slice(1));
+    else if (inHunk && line.startsWith('+')) after.push(line.slice(1));
+  }
+  return { before: before.join('\n'), after: after.join('\n') };
+}
+
 type SortKey = 'binary' | 'name' | 'ninstrs' | 'nbbs' | 'cc' | 'size';
 interface Row {
   binary: string;
@@ -88,12 +107,15 @@ export function FuncDiffPanel({ imageId, against }: { imageId: string; against: 
     let alive = true;
     setResult(null);
     setError('');
+    setLoading(false);
     if (!against) return () => undefined;
     setLoading(true);
     api
       .funcdiffResult(imageId, against)
       .then((r) => alive && setResult(r))
-      .catch(() => alive && setResult(null))
+      .catch((err: unknown) => {
+        if (alive) setError(err instanceof Error ? err.message : String(err));
+      })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
@@ -169,7 +191,7 @@ export function FuncDiffPanel({ imageId, against }: { imageId: string; against: 
         </pre>
       )}
       {against && loading && <div className="hint">{f.loading}</div>}
-      {against && !loading && !running && !result && <div className="hint">{f.none}</div>}
+      {against && !loading && !running && !result && !error && <div className="hint">{f.none}</div>}
 
       {result && outcome && (
         <div data-outcome={outcome} style={{ display: 'grid', gap: 10, marginTop: 14 }}>
@@ -225,6 +247,56 @@ export function FuncDiffPanel({ imageId, against }: { imageId: string; against: 
               <strong>{f.reasonLabel}</strong> {result.reason}
             </div>
           )}
+
+          <section className="code-reader" aria-label={f.textTitle}>
+            <h3 className="panel-title">{f.textTitle}</h3>
+            <p className="hint">{f.textSub}</p>
+            {result.textDiffs === undefined ? (
+              <p className="hint">{f.textMissing}</p>
+            ) : result.textDiffs.length === 0 ? (
+              <p className="hint">{f.textEmpty}</p>
+            ) : (
+              <>
+                {result.textDiffs.slice(0, 60).map((diff, i) => {
+                  const excerpts = decompiledExcerpts(diff.unified ?? '');
+                  return (
+                    <details key={`${i}:${diff.binary}:${diff.function}`}>
+                      <summary className="mono">
+                        {diff.binary} · {diff.function} · {diff.decompiler}
+                      </summary>
+                      <p className="hint">{diff.headline}</p>
+                      {diff.stats && (
+                        <p className="hint">
+                          +{diff.stats.added} / −{diff.stats.removed} · ={diff.stats.unchanged}
+                        </p>
+                      )}
+                      {diff.stats?.truncated && <p className="hint">{f.textTruncated}</p>}
+                      {excerpts.before || excerpts.after ? (
+                        <div className="reader-comparison">
+                          <div>
+                            <h4>{f.before}</h4>
+                            <pre className="reader-code mono">{excerpts.before}</pre>
+                          </div>
+                          <div>
+                            <h4>{f.after}</h4>
+                            <pre className="reader-code mono">{excerpts.after}</pre>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="hint">{f.noHunks}</p>
+                      )}
+                      <details>
+                        <summary>{f.unified}</summary>
+                        <pre className="reader-code mono">{(diff.unified ?? '').slice(0, 24000)}</pre>
+                      </details>
+                      {(diff.unified?.length ?? 0) > 24000 && <p className="hint">{f.textDisplayBound}</p>}
+                    </details>
+                  );
+                })}
+                {result.textDiffs.length > 60 && <p className="hint">{f.textDisplayBound}</p>}
+              </>
+            )}
+          </section>
 
           {rows.length > 0 && (
             <>

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type FuncDiffResultView, api } from '../api';
 import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
-import { FuncDiffPanel, funcDiffOutcome } from './FuncDiffPanel';
+import { FuncDiffPanel, decompiledExcerpts, funcDiffOutcome } from './FuncDiffPanel';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
@@ -151,4 +151,56 @@ describe('FuncDiffPanel', () => {
     await waitFor(() => expect(document.querySelector('[data-outcome="changes"]')).not.toBeNull());
     expect(m().runFuncdiff).toHaveBeenCalledWith('new', 'old');
   });
+});
+
+describe('saved decompiled comparisons', () => {
+  const unified =
+    '--- main (older)\n+++ main (newer)\n@@ -1 +1 @@\n int main() {\n-  unsafe();\n+  if (size < 8) safe();\n }';
+  it('extracts before and after hunks without treating diff headers as source', () => {
+    const excerpts = decompiledExcerpts(unified);
+    expect(excerpts.before).toContain('unsafe();');
+    expect(excerpts.before).not.toContain('if (size < 8) safe();');
+    expect(excerpts.after).toContain('if (size < 8) safe();');
+    expect(excerpts.after).not.toContain('unsafe();');
+    expect(excerpts.before).not.toContain('--- main');
+  });
+  it('renders restored before/after excerpts with decompiler and partial bounds as escaped text', async () => {
+    m().funcdiffResult.mockResolvedValue({
+      ...patched,
+      textDiffs: [
+        {
+          binary: 'bin/a',
+          function: 'main',
+          decompiler: 'pdg',
+          headline: 'partial comparison',
+          looksTargeted: true,
+          unified: `${unified}\n+<img src=x onerror=alert(1)>`,
+          stats: { added: 2, removed: 1, unchanged: 2, truncated: true },
+        },
+      ],
+    });
+    render(<FuncDiffPanel imageId="new" against="old" />);
+    const comparison = await screen.findByRole('region', { name: 'Decompiled comparison' });
+    fireEvent.click(within(comparison).getByText('bin/a · main · pdg'));
+    expect(within(comparison).getByText('Before (older baseline)')).toBeInTheDocument();
+    expect(within(comparison).getByText('After (newer image)')).toBeInTheDocument();
+    expect(within(comparison).getByText(/provider omitted further hunks/)).toBeInTheDocument();
+    expect(comparison.querySelector('img')).toBeNull();
+    expect(comparison.textContent).toContain('<img src=x onerror=alert(1)>');
+  });
+  it('distinguishes older missing comparisons from an explicitly empty list', async () => {
+    m().funcdiffResult.mockResolvedValue(patched);
+    const view = render(<FuncDiffPanel imageId="new" against="old" />);
+    expect(await screen.findByText(/older saved result did not record/)).toBeInTheDocument();
+    m().funcdiffResult.mockResolvedValue({ ...patched, textDiffs: [] });
+    view.rerender(<FuncDiffPanel imageId="new" against="other" />);
+    expect(await screen.findByText(/No decompiled comparisons were saved/)).toBeInTheDocument();
+  });
+});
+
+it('shows a saved-result load failure instead of asserting that no diff ran', async () => {
+  m().funcdiffResult.mockRejectedValue(new Error('saved diff could not be read'));
+  render(<FuncDiffPanel imageId="new" against="old" />);
+  expect((await screen.findByRole('alert')).textContent).toBe('saved diff could not be read');
+  expect(screen.queryByText(/No function diff has been run/)).toBeNull();
 });

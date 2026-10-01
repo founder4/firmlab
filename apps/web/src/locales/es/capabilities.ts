@@ -55,6 +55,18 @@ export const capabilities: typeof en = {
     'El diff a nivel de función compara dos imágenes, y para ésta no se ha elegido ninguna base. Eso es una entrada que falta, no un resultado.',
 
   ghidra: {
+    selectBinary: 'Elegir un binario descubierto',
+    noBinaries: 'No hay binarios descubiertos. Ejecuta extracción y triaje, o escribe una ruta del rootfs abajo.',
+    binaryLoadFailed: 'No se pudo cargar la lista de binarios. Puedes escribir una ruta del rootfs abajo.',
+    functionsTitle: 'Funciones de Ghidra guardadas',
+    selectFunction: 'Función a leer',
+    emptyFunctions: 'El resultado guardado no lista funciones. Esto no significa que el binario esté limpio.',
+    emptyCode: 'No se produjo pseudocódigo para esta función.',
+    reconstruction:
+      'Reconstrucción del descompilador, no código fuente del fabricante. El proveedor limita la lista y el texto; la cobertura anterior corresponde al binario guardado.',
+    textBound: 'Visualización limitada a 8.000 caracteres.',
+    listBound: 'Visualización limitada a las primeras 40 funciones guardadas.',
+
     binaryLabel: 'Binario a descompilar (ruta dentro del rootfs extraído)',
     binaryRequired: 'Ruta del binario: escribe una ruta dentro del rootfs extraído, por ejemplo usr/sbin/httpd.',
     run: 'Descompilar con Ghidra',

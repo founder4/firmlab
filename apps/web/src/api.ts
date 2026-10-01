@@ -732,6 +732,16 @@ export interface FuncDiffResultView {
   /** A rootfs walk hit its budget, so `paired` is a floor. Absent means "not recorded", never "complete". */
   walkTruncated?: boolean;
   diffs?: FuncDiffBinaryView[];
+  /** Optional forever: older saved runs did not record decompiled hunks. */
+  textDiffs?: {
+    binary: string;
+    function: string;
+    decompiler: 'pdg' | 'pdc';
+    headline: string;
+    looksTargeted: boolean;
+    unified: string;
+    stats?: { added: number; removed: number; unchanged: number; truncated: boolean };
+  }[];
   findings?: unknown[];
 }
 

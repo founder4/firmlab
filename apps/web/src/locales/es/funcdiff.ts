@@ -2,6 +2,18 @@ import type { funcdiff as en } from '../en/funcdiff';
 
 /** Espejo español de `en/funcdiff`. Una lista vacía puede significar tres cosas distintas y cada una tiene su frase. */
 export const funcdiff: typeof en = {
+  textTitle: 'Comparación descompilada',
+  textSub:
+    'Extractos antes/después de los bloques guardados, no funciones completas ni fuente del fabricante. Los cambios pueden incluir ruido del descompilador y no prueban una corrección de seguridad.',
+  textMissing: 'Este resultado antiguo no registró comparaciones descompiladas.',
+  textEmpty:
+    'No se guardaron comparaciones descompiladas. Solo se intenta para un conjunto limitado de funciones cambiadas; ambos lados deben descompilarse.',
+  before: 'Antes (base anterior)',
+  after: 'Después (imagen nueva)',
+  unified: 'Diff unificado guardado',
+  textTruncated: 'El proveedor omitió más bloques. Esta comparación es parcial.',
+  textDisplayBound: 'Visualización limitada a 60 comparaciones y 24.000 caracteres por diff.',
+  noHunks: 'No se guardaron bloques cambiados para esta comparación.',
   title: 'Diff de funciones contra una base',
   sub: 'Empareja los binarios con la misma ruta en ambos rootfs, toma la huella de cada función con radare2 e informa de qué cambió. Esta imagen es la compilación MÁS NUEVA; la elegida arriba es la base antigua. Ambas necesitan una extracción terminada.',
   run: 'Comparar funciones',

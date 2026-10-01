@@ -64,6 +64,18 @@ export const capabilities = {
 
   /** Ghidra is the one capability here that needs a target: one binary from the extracted rootfs. */
   ghidra: {
+    selectBinary: 'Choose a discovered binary',
+    noBinaries: 'No discovered binaries. Run extraction and binary triage, or enter a rootfs path below.',
+    binaryLoadFailed: 'The binary list could not be loaded. You can enter a rootfs path below.',
+    functionsTitle: 'Saved Ghidra functions',
+    selectFunction: 'Function to read',
+    emptyFunctions: 'The saved result lists no functions. This does not mean the binary is clean.',
+    emptyCode: 'No pseudocode was produced for this function.',
+    reconstruction:
+      'Decompiler reconstruction, not vendor source. The list and text are bounded by the provider; coverage above applies to the saved binary.',
+    textBound: 'Display limited to 8,000 characters.',
+    listBound: 'Display limited to the first 40 saved functions.',
+
     binaryLabel: 'Binary to decompile (path inside the extracted rootfs)',
     binaryRequired: 'Binary path: enter a path inside the extracted rootfs, for example usr/sbin/httpd.',
     run: 'Decompile with Ghidra',

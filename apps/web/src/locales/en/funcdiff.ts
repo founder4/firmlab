@@ -4,6 +4,18 @@
  * those three must never share a sentence.
  */
 export const funcdiff = {
+  textTitle: 'Decompiled comparison',
+  textSub:
+    'Before/after excerpts from saved diff hunks, not full functions or vendor source. Decompiled changes can include tool noise and do not prove a security fix.',
+  textMissing: 'This older saved result did not record decompiled comparisons.',
+  textEmpty:
+    'No decompiled comparisons were saved. Text is attempted only for a bounded set of changed functions; both sides must decompile.',
+  before: 'Before (older baseline)',
+  after: 'After (newer image)',
+  unified: 'Saved unified diff',
+  textTruncated: 'The provider omitted further hunks. This comparison is partial.',
+  textDisplayBound: 'Display limited to 60 comparisons and 24,000 characters per diff.',
+  noHunks: 'No changed hunks were saved for this comparison.',
   title: 'Function diff against a baseline',
   sub: 'Pairs binaries at the same path in both rootfs, fingerprints every function with radare2 and reports what changed. This image is the NEWER build; the image picked above is the older baseline. Both need a finished extraction.',
   run: 'Diff functions',

@@ -43,6 +43,7 @@ beforeEach(() => {
   m().dynprobeResult.mockResolvedValue(null);
   m().jobs.mockResolvedValue([]);
   m().tools.mockResolvedValue(tools(true));
+  m().binaries.mockResolvedValue([]);
 });
 
 describe('CapabilityResults — the three states reach the screen and do not share a sentence', () => {
@@ -365,5 +366,62 @@ describe('CapabilityResults — ghidra can be started, and funcdiff reflects its
     expect(row('funcdiff').textContent).toMatch(/fw-1\.0\.bin/);
     expect(row('funcdiff').textContent).toMatch(/3 of 4 differing binaries applied/);
     expect(screen.getByRole('link', { name: /Open the function diff/ }).getAttribute('href')).toBe('/image/abc/diff');
+  });
+});
+
+describe('persisted Ghidra reader', () => {
+  it('selects a discovered binary and launches it', async () => {
+    m().binaries.mockResolvedValue([
+      { path: 'bin/busybox', arch: 'mips' },
+      { path: 'usr/sbin/httpd', arch: 'arm' },
+    ]);
+    m().ghidra.mockResolvedValue({ jobId: 'j2' });
+    m().job.mockResolvedValue({ status: 'done', log: '', result: null });
+    renderCaps();
+    const selector = await screen.findByLabelText('Choose a discovered binary');
+    await screen.findByRole('option', { name: 'usr/sbin/httpd (arm)' });
+    fireEvent.change(selector, { target: { value: 'usr/sbin/httpd' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Decompile with Ghidra' }));
+    await waitFor(() => expect(m().ghidra).toHaveBeenCalledWith('abc', 'usr/sbin/httpd'));
+    expect(m().binaries).toHaveBeenCalledWith('abc');
+  });
+
+  it('restores saved functions and renders firmware as escaped text, retaining missing coverage', async () => {
+    m().ghidraResult.mockResolvedValue({
+      available: true,
+      binary: 'bin/busybox',
+      functionCount: 2,
+      functions: [
+        { name: 'main', signature: 'int main()', pseudocode: '<script>alert(1)</script>' },
+        { name: 'helper', signature: 'void helper()', pseudocode: '' },
+      ],
+    });
+    renderCaps();
+    const code = await screen.findByText('<script>alert(1)</script>');
+    expect(code.tagName).toBe('PRE');
+    expect(code.querySelector('script')).toBeNull();
+    expect(row('ghidra').textContent).toMatch(/no denominator/i);
+    fireEvent.change(screen.getByLabelText('Function to read'), { target: { value: '1' } });
+    expect(screen.getByText('No pseudocode was produced for this function.')).toBeInTheDocument();
+    expect(screen.queryByText('<script>alert(1)</script>')).toBeNull();
+  });
+
+  it('states that a successful empty listing does not mean clean', async () => {
+    m().ghidraResult.mockResolvedValue({ available: true, binary: 'bin/a', functionCount: 0, functions: [] });
+    renderCaps();
+    expect(await screen.findByText(/saved result lists no functions/)).toBeInTheDocument();
+  });
+
+  it('keeps a saved decompilation readable when the tool is now absent', async () => {
+    m().tools.mockResolvedValue(tools(false));
+    m().ghidraResult.mockResolvedValue({
+      available: true,
+      binary: 'bin/a',
+      functionCount: 1,
+      functions: [{ name: 'main', signature: '', pseudocode: 'return 1;' }],
+    });
+    renderCaps();
+    expect(await screen.findByText('return 1;')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Choose a discovered binary')).toBeDisabled());
   });
 });
