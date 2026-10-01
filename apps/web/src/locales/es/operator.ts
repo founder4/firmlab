@@ -115,5 +115,50 @@ export const operator: Messages['operator'] = {
     bodyLabel: 'Cuerpo de la nota',
     save: 'Guardar nota',
     empty: 'Aún no hay notas.',
+    edit: 'Editar',
+    editLabel: 'Editar el cuerpo de la nota',
+    saveEdit: 'Guardar cambios',
+    savingEdit: 'Guardando…',
+    cancelEdit: 'Cancelar',
+    emptyBody: 'Una nota no puede quedar vacía. Bórrala si ya no contiene nada.',
+    tooLong: (max: number, n: number) => `Una nota admite como máximo ${max} caracteres; esta tiene ${n}.`,
+  },
+
+  /**
+   * Retirar una fuente calculada. Hay que mantener separadas dos cosas: una fila CALCULADA puede quitarse porque
+   * volver a ejecutar su proveedor la restaura, y una afirmación del operador no se quita nunca. Y retirar no es
+   * responder: el hueco significa «ya nadie pregunta esto», jamás «la pregunta salió limpia».
+   */
+  retire: {
+    title: 'Retirar una fuente calculada',
+    sub:
+      'Quita todos los hallazgos que escribió una fuente de proveedor en esta imagen y deja una nota de trabajo que ' +
+      'dice qué se fue y por qué. Sólo se pueden retirar filas calculadas: volver a ejecutar el proveedor con esa ' +
+      'fuente las restaura. Esto no responde nada: la retirada no cubre ninguna etapa.',
+    open: 'Retirar fuente…',
+    close: 'Cerrar',
+    sourceLabel: 'Fuente de hallazgos',
+    sourcePlaceholder: 'p. ej. symreach:lib/libutil-0.9.30.so',
+    whoLabel: 'Retirado por',
+    whoPlaceholder: 'quién retira estas filas',
+    reasonLabel: 'Por qué deben irse estas filas',
+    reasonPlaceholder: 'obligatorio: la nota que queda en su lugar es lo único que explica el hueco',
+    dryRunLabel: 'Sólo vista previa: listar lo que se quitaría sin quitarlo',
+    preview: 'Previsualizar retirada',
+    submit: 'Retirar hallazgos',
+    working: 'Procesando…',
+    missing: (fields: string[]) => `Rellena antes de retirar: ${fields.join(', ')}.`,
+    reasonTooLong: (max: number, n: number) => `El motivo admite como máximo ${max} caracteres; este tiene ${n}.`,
+    whoTooLong: (max: number) => `El nombre admite como máximo ${max} caracteres.`,
+    operatorRefused: (source: string) =>
+      [
+        `'${source}' es una afirmación del operador escrita a mano, no un resultado calculado. Una afirmación no se`,
+        'quita nunca: retírala desde el registro de afirmaciones de arriba, para que la afirmación y el motivo por el',
+        'que era errónea sigan legibles.',
+      ].join(' '),
+    previewHeading: 'Vista previa: no se ha quitado nada',
+    doneHeading: 'Retirado: se registró una nota en lugar de estas filas',
+    removedCount: (n: number) => `${n} fila(s)`,
+    noteHeading: 'La nota que queda en el registro',
   },
 };

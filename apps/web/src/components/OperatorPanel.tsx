@@ -18,7 +18,13 @@
  *
  * Notes sit below, deliberately plainer and deliberately deleteable: they are reasoning, not claims, and the
  * asymmetry — a note can be thrown away, an assertion can only be retracted — is the visible form of the
- * difference between the two.
+ * difference between the two. For the same reason a note is edited in place with no history kept.
+ *
+ * Retiring a computed source is the ledger's one deletion path, and it sits in its own panel, closed by default and
+ * previewing by default, because it is the action on this page most likely to be misread. It refuses an `operator:`
+ * source before the request leaves — an assertion is withdrawn, never removed, and the refusal names that surface —
+ * and a real retirement shows the note the API left in place of the rows, since that note is the only thing that
+ * stops the gap reading as "the question was asked and came back clean".
  *
  * What translation may not touch: the claim CODES and the severity codes are the values that leave this form and
  * land in SQLite, so the `<option>` carries the code and only its explanation is localised; the attribution
@@ -37,6 +43,7 @@ import {
   type OperatorAssertion,
   type OperatorClaim,
   type OperatorLedger,
+  type RetireFindingsResult,
   api,
 } from '../api';
 import { messages, useMessages } from '../i18n';
@@ -59,6 +66,53 @@ const SEV_COLOR: Record<string, string> = {
   low: 'var(--text-dim)',
   info: 'var(--text-dim)',
 };
+
+/** The longest note body the edit form will send. */
+export const MAX_NOTE_EDIT = 4000;
+/** Mirrors the route's `MAX_RETIRE_REASON` / `MAX_RETIRE_AUTHOR`, so the refusal arrives before the request does. */
+export const MAX_RETIRE_REASON = 2000;
+export const MAX_RETIRE_AUTHOR = 80;
+/** The namespace of hand-authored rows. Mirrors `OPERATOR_SOURCE_PREFIX` in the API, which refuses it too. */
+const OPERATOR_SOURCE_PREFIX = 'operator:';
+
+export type NoteEditProblem = { kind: 'empty' } | { kind: 'tooLong'; length: number };
+
+/** Pure: why an edited note body cannot be sent, or null when it can. Measured trimmed, as it is sent. */
+export function noteEditProblem(body: string): NoteEditProblem | null {
+  const text = body.trim();
+  if (!text) return { kind: 'empty' };
+  if (text.length > MAX_NOTE_EDIT) return { kind: 'tooLong', length: text.length };
+  return null;
+}
+
+export type RetireField = 'source' | 'retiredBy' | 'reason';
+export type RetireProblem =
+  | { kind: 'operatorSource'; source: string }
+  | { kind: 'missing'; fields: RetireField[] }
+  | { kind: 'reasonTooLong'; length: number }
+  | { kind: 'whoTooLong' };
+
+/**
+ * Pure: why a retirement cannot be sent, or null when it can.
+ *
+ * An `operator:` source is refused first, ahead of any missing field: someone aiming at an assertion needs to learn
+ * they are on the wrong surface, not be asked for a reason they would then write for nothing.
+ */
+export function retireProblem(form: { source: string; retiredBy: string; reason: string }): RetireProblem | null {
+  const source = form.source.trim();
+  const retiredBy = form.retiredBy.trim();
+  const reason = form.reason.trim();
+  if (source.startsWith(OPERATOR_SOURCE_PREFIX)) return { kind: 'operatorSource', source };
+  const missing: RetireField[] = [
+    ...(source ? [] : ['source' as const]),
+    ...(retiredBy ? [] : ['retiredBy' as const]),
+    ...(reason ? [] : ['reason' as const]),
+  ];
+  if (missing.length > 0) return { kind: 'missing', fields: missing };
+  if (retiredBy.length > MAX_RETIRE_AUTHOR) return { kind: 'whoTooLong' };
+  if (reason.length > MAX_RETIRE_REASON) return { kind: 'reasonTooLong', length: reason.length };
+  return null;
+}
 
 /**
  * Never the proof-state badge. A separate component in a separate colour, reading "asserted", so the two kinds of
@@ -415,6 +469,209 @@ function AssertionTable({
   );
 }
 
+/**
+ * Retire one computed source. Closed by default and previewing by default: the first click a curious reader makes
+ * lists what would go, and removing anything takes unticking the preview and pressing a button that says so.
+ *
+ * The summary sentence and the note body come from the API, like the attribution sentence above — the route words
+ * a retirement once, and the UI shows that wording rather than restating it.
+ */
+function RetireSourcePanel({
+  imageId,
+  defaultWho,
+  onRetired,
+}: {
+  imageId: string;
+  /** Who the panel is being driven as, used to prefill the author when the form opens. */
+  defaultWho: string;
+  onRetired: () => void;
+}): JSX.Element {
+  const t = useMessages();
+  const [open, setOpen] = useState(false);
+  const [source, setSource] = useState('');
+  const [retiredBy, setRetiredBy] = useState('');
+  const [reason, setReason] = useState('');
+  const [dryRun, setDryRun] = useState(true);
+  const [tried, setTried] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<RetireFindingsResult | null>(null);
+
+  const problem = retireProblem({ source, retiredBy, reason });
+  const label: Record<RetireField, string> = {
+    source: t.operator.retire.sourceLabel,
+    retiredBy: t.operator.retire.whoLabel,
+    reason: t.operator.retire.reasonLabel,
+  };
+  const invalid = (f: RetireField): true | undefined =>
+    tried && problem?.kind === 'missing' && problem.fields.includes(f) ? true : undefined;
+
+  /** Any edit invalidates a result shown for the form as it was — a stale preview must not read as this one's. */
+  const edit =
+    <T,>(set: (v: T) => void) =>
+    (v: T): void => {
+      set(v);
+      setResult(null);
+      setErr(null);
+    };
+
+  const submit = async (): Promise<void> => {
+    setTried(true);
+    if (problem || busy) return;
+    setBusy(true);
+    setErr(null);
+    setResult(null);
+    try {
+      const r = await api.retireFindings(imageId, {
+        source: source.trim(),
+        retiredBy: retiredBy.trim(),
+        reason: reason.trim(),
+        dryRun,
+      });
+      setResult(r);
+      if (!r.dryRun) {
+        // Back to previewing, so the next retirement starts from the safe side again.
+        setReason('');
+        setDryRun(true);
+        setTried(false);
+        onRetired();
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const problemText = (p: RetireProblem): string => {
+    switch (p.kind) {
+      case 'operatorSource':
+        return t.operator.retire.operatorRefused(p.source);
+      case 'missing':
+        return t.operator.retire.missing(p.fields.map((f) => label[f]));
+      case 'whoTooLong':
+        return t.operator.retire.whoTooLong(MAX_RETIRE_AUTHOR);
+      case 'reasonTooLong':
+        return t.operator.retire.reasonTooLong(MAX_RETIRE_REASON, p.length);
+    }
+  };
+  // An operator source is refused as soon as it is typed; everything else waits for a submit attempt.
+  const shownProblem = problem && (tried || problem.kind === 'operatorSource') ? problem : null;
+
+  return (
+    <div className="panel" data-testid="retire-source">
+      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <div className="panel-title">{t.operator.retire.title}</div>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          aria-expanded={open}
+          onClick={() => {
+            if (!open && !retiredBy) setRetiredBy(defaultWho);
+            setOpen((v) => !v);
+          }}
+        >
+          {open ? t.operator.retire.close : t.operator.retire.open}
+        </button>
+      </div>
+      <div className="panel-sub" style={{ maxWidth: '72ch' }}>
+        {t.operator.retire.sub}
+      </div>
+
+      {open ? (
+        <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              className="input mono"
+              placeholder={t.operator.retire.sourcePlaceholder}
+              aria-label={t.operator.retire.sourceLabel}
+              aria-invalid={invalid('source') ?? (problem?.kind === 'operatorSource' ? true : undefined)}
+              value={source}
+              onChange={(e) => edit(setSource)(e.target.value)}
+              style={{ flex: '2 1 280px', minWidth: 0 }}
+            />
+            <input
+              className="input"
+              placeholder={t.operator.retire.whoPlaceholder}
+              aria-label={t.operator.retire.whoLabel}
+              aria-invalid={invalid('retiredBy')}
+              value={retiredBy}
+              onChange={(e) => edit(setRetiredBy)(e.target.value)}
+              style={{ flex: '1 1 160px', minWidth: 0 }}
+            />
+          </div>
+          <textarea
+            className="input"
+            placeholder={t.operator.retire.reasonPlaceholder}
+            aria-label={t.operator.retire.reasonLabel}
+            aria-invalid={invalid('reason')}
+            value={reason}
+            onChange={(e) => edit(setReason)(e.target.value)}
+            style={{ height: 72, padding: '8px 10px', resize: 'vertical' }}
+          />
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input type="checkbox" checked={dryRun} onChange={(e) => edit(setDryRun)(e.target.checked)} />
+            <span className="hint">{t.operator.retire.dryRunLabel}</span>
+          </label>
+          <div>
+            <button
+              type="button"
+              className={dryRun ? 'btn btn-sm' : 'btn btn-sm btn-danger'}
+              disabled={busy}
+              onClick={() => void submit()}
+            >
+              {busy ? t.operator.retire.working : dryRun ? t.operator.retire.preview : t.operator.retire.submit}
+            </button>
+          </div>
+          {shownProblem ? (
+            <div className="field-error" role="alert" style={{ maxWidth: '72ch' }}>
+              {problemText(shownProblem)}
+            </div>
+          ) : null}
+          {err ? <div className="banner banner-warn">{err}</div> : null}
+          {result ? (
+            <div
+              data-role={result.dryRun ? 'retire-preview' : 'retire-done'}
+              style={{
+                borderLeft: '2px solid var(--border-strong)',
+                background: 'var(--bg-inset)',
+                borderRadius: 'var(--r-sm)',
+                padding: '6px 10px',
+                maxWidth: '72ch',
+              }}
+            >
+              <div className="eyebrow">
+                {result.dryRun ? t.operator.retire.previewHeading : t.operator.retire.doneHeading} ·{' '}
+                {t.operator.retire.removedCount(result.removedCount)}
+              </div>
+              <div style={{ fontSize: 12.5, marginTop: 4 }}>{result.summary}</div>
+              {result.removed.length > 0 ? (
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18, maxHeight: 240, overflowY: 'auto', fontSize: 12 }}>
+                  {result.removed.map((r, i) => (
+                    <li key={`${r.kind}-${r.title}-${i}`}>
+                      <span className="mono">[{r.proofState}]</span> {r.kind} — {r.title}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {result.note ? (
+                <>
+                  <div className="eyebrow" style={{ marginTop: 8 }}>
+                    {t.operator.retire.noteHeading}
+                  </div>
+                  <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>
+                    {result.note.body}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
   const t = useMessages();
   const [ledger, setLedger] = useState<OperatorLedger | null>(null);
@@ -434,6 +691,9 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
 
   const [noteAuthor, setNoteAuthor] = useState('');
   const [noteBody, setNoteBody] = useState('');
+  /** The note being edited and its draft text. One at a time, like the amend form. */
+  const [noteEdit, setNoteEdit] = useState<{ id: string; body: string } | null>(null);
+  const [noteBusy, setNoteBusy] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -500,13 +760,37 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
     async (noteId: string) => {
       try {
         await api.deleteNote(imageId, noteId);
+        if (noteEdit?.id === noteId) setNoteEdit(null);
         load();
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
       }
     },
-    [imageId, load],
+    [imageId, load, noteEdit],
   );
+
+  const saveNoteEdit = useCallback(async () => {
+    if (!noteEdit || noteBusy || noteEditProblem(noteEdit.body)) return;
+    const body = noteEdit.body.trim();
+    if (body === notes.find((n) => n.id === noteEdit.id)?.body) {
+      setNoteEdit(null);
+      return;
+    }
+    setErr(null);
+    setNoteBusy(true);
+    try {
+      const updated = await api.updateNote(imageId, noteEdit.id, body);
+      setNotes((ns) => ns.map((n) => (n.id === updated.id ? updated : n)));
+      setNoteEdit(null);
+      load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNoteBusy(false);
+    }
+  }, [imageId, noteEdit, noteBusy, notes, load]);
+
+  const editProblem = noteEdit ? noteEditProblem(noteEdit.body) : null;
 
   // Which required fields are empty, by their visible label. The button stays enabled: a disabled button said
   // "not yet" without saying why, so a click now names the missing fields instead.
@@ -699,13 +983,68 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
                 {notes.map((n) => (
                   <tr key={n.id}>
                     <td style={{ fontSize: 12.5 }}>
-                      <div style={{ whiteSpace: 'pre-wrap' }}>{n.body}</div>
+                      {noteEdit?.id === n.id ? (
+                        <div style={{ display: 'grid', gap: 6 }}>
+                          <textarea
+                            className="input"
+                            aria-label={t.operator.notes.editLabel}
+                            aria-invalid={editProblem ? true : undefined}
+                            value={noteEdit.body}
+                            disabled={noteBusy}
+                            onChange={(e) => setNoteEdit({ id: n.id, body: e.target.value })}
+                            style={{ height: 72, padding: '8px 10px', resize: 'vertical' }}
+                          />
+                          {/* Save is disabled while the draft cannot be sent, so the reason sits right beside it. */}
+                          {editProblem ? (
+                            <div className="field-error" role="alert">
+                              {editProblem.kind === 'empty'
+                                ? t.operator.notes.emptyBody
+                                : t.operator.notes.tooLong(MAX_NOTE_EDIT, editProblem.length)}
+                            </div>
+                          ) : null}
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              disabled={noteBusy || !!editProblem}
+                              onClick={() => void saveNoteEdit()}
+                            >
+                              {noteBusy ? t.operator.notes.savingEdit : t.operator.notes.saveEdit}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost"
+                              disabled={noteBusy}
+                              onClick={() => setNoteEdit(null)}
+                            >
+                              {t.operator.notes.cancelEdit}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ whiteSpace: 'pre-wrap' }}>{n.body}</div>
+                      )}
                       <div className="hint">
                         {n.author} · {new Date(n.createdAt).toISOString().slice(0, 16).replace('T', ' ')}
                       </div>
                     </td>
-                    <td style={{ width: '1%' }}>
-                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => removeNote(n.id)}>
+                    <td style={{ width: '1%', whiteSpace: 'nowrap' }}>
+                      {noteEdit?.id === n.id ? null : (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          disabled={noteBusy}
+                          onClick={() => setNoteEdit({ id: n.id, body: n.body })}
+                        >
+                          {t.operator.notes.edit}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        disabled={noteBusy}
+                        onClick={() => removeNote(n.id)}
+                      >
                         {t.common.delete}
                       </button>
                     </td>
@@ -716,6 +1055,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
           </div>
         )}
       </div>
+      <RetireSourcePanel imageId={imageId} defaultWho={noteAuthor.trim() || assertedBy.trim()} onRetired={load} />
       {withdrawing ? (
         <Dialog
           title={t.operator.withdrawTitle}

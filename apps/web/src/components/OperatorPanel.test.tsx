@@ -1,9 +1,23 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { type AssertedFinding, type AssertionRevision, type OperatorLedger, api } from '../api';
+import {
+  type AssertedFinding,
+  type AssertionRevision,
+  type ImageNote,
+  type OperatorLedger,
+  type RetireFindingsResult,
+  api,
+} from '../api';
 import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
-import { OperatorPanel, revisionsOf } from './OperatorPanel';
+import {
+  MAX_NOTE_EDIT,
+  MAX_RETIRE_REASON,
+  OperatorPanel,
+  noteEditProblem,
+  retireProblem,
+  revisionsOf,
+} from './OperatorPanel';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
@@ -516,5 +530,281 @@ describe('OperatorPanel — withdrawing asks both questions in one dialog', () =
         reason: 'Rev C removed telnet',
       }),
     );
+  });
+});
+
+const note = (o: Partial<ImageNote> = {}): ImageNote => ({
+  id: 'n1',
+  imageId: 'img1',
+  author: 'aaron',
+  body: 'check the second partition',
+  createdAt: 1,
+  updatedAt: 1,
+  ...o,
+});
+
+describe('editing a working note — in place, because a note is reasoning and keeps no history', () => {
+  it('sends the trimmed body through api.updateNote and renders the refreshed list', async () => {
+    mockApi.operatorLedger.mockResolvedValue(ledger());
+    mockApi.notes.mockReset();
+    mockApi.notes
+      .mockResolvedValueOnce([note()])
+      .mockResolvedValue([note({ body: 'the second partition is jffs2', updatedAt: 2 })]);
+    mockApi.updateNote.mockResolvedValue(note({ body: 'the second partition is jffs2', updatedAt: 2 }));
+    render(<OperatorPanel imageId="img1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const box = screen.getByLabelText('Edit note body');
+    expect(box).toHaveValue('check the second partition');
+    fireEvent.change(box, { target: { value: '  the second partition is jffs2  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mockApi.updateNote).toHaveBeenCalledWith('img1', 'n1', 'the second partition is jffs2'));
+    expect(await screen.findByText('the second partition is jffs2')).toBeTruthy();
+    expect(screen.queryByText('check the second partition')).toBeNull();
+    expect(screen.queryByLabelText('Edit note body')).toBeNull();
+    // Saving re-reads the notes, so the list is the store's, not only the local patch.
+    expect(mockApi.notes.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('refuses an empty or over-long body, says which, and sends nothing', async () => {
+    mockApi.updateNote.mockClear();
+    mockApi.operatorLedger.mockResolvedValue(ledger());
+    mockApi.notes.mockReset();
+    mockApi.notes.mockResolvedValue([note()]);
+    render(<OperatorPanel imageId="img1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const box = screen.getByLabelText('Edit note body');
+    fireEvent.change(box, { target: { value: '   ' } });
+    expect(screen.getByRole('alert')).toHaveTextContent('A note cannot be empty');
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+
+    fireEvent.change(box, { target: { value: 'x'.repeat(MAX_NOTE_EDIT + 1) } });
+    expect(screen.getByRole('alert')).toHaveTextContent(`at most ${MAX_NOTE_EDIT} characters; this one has 4001`);
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+
+    fireEvent.change(box, { target: { value: 'x'.repeat(MAX_NOTE_EDIT) } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+    expect(mockApi.updateNote).not.toHaveBeenCalled();
+  });
+
+  it('disables the form while the save is in flight', async () => {
+    mockApi.operatorLedger.mockResolvedValue(ledger());
+    mockApi.notes.mockReset();
+    mockApi.notes.mockResolvedValue([note()]);
+    let resolve: (n: ImageNote) => void = () => undefined;
+    mockApi.updateNote.mockReturnValue(
+      new Promise<ImageNote>((r) => {
+        resolve = r;
+      }),
+    );
+    render(<OperatorPanel imageId="img1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Edit note body'), { target: { value: 'revised' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(screen.getByLabelText('Edit note body')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled();
+    resolve(note({ body: 'revised' }));
+    await waitFor(() => expect(screen.queryByLabelText('Edit note body')).toBeNull());
+  });
+
+  it('pure: measures the body trimmed, as it is sent', () => {
+    expect(noteEditProblem('  ')).toEqual({ kind: 'empty' });
+    expect(noteEditProblem(` ${'a'.repeat(MAX_NOTE_EDIT)} `)).toBeNull();
+    expect(noteEditProblem('a'.repeat(MAX_NOTE_EDIT + 1))).toEqual({ kind: 'tooLong', length: MAX_NOTE_EDIT + 1 });
+  });
+});
+
+describe('retiring a computed source — removed only because re-running restores it, and never silently', () => {
+  const removed = [
+    { kind: 'symbolic_reachability', title: 'system() reachable from argv', proofState: 'needs_runtime_reproduction' },
+  ];
+  const retirement = (o: Partial<RetireFindingsResult> = {}): RetireFindingsResult => ({
+    source: 'symreach:lib/libutil-0.9.30.so',
+    dryRun: false,
+    removedCount: 1,
+    removed,
+    summary: 'Retired 1 finding(s) under `symreach:lib/libutil-0.9.30.so` (proof states: needs_runtime_reproduction).',
+    note: note({ id: 'n9', body: 'Retired 1 computed finding(s) under source `symreach:lib/libutil-0.9.30.so`.' }),
+    ...o,
+  });
+
+  async function openRetire(): Promise<HTMLElement> {
+    const panel = await screen.findByTestId('retire-source');
+    fireEvent.click(within(panel).getByRole('button', { name: 'Retire source…' }));
+    return panel;
+  }
+
+  function fill(panel: HTMLElement, v: { source?: string; who?: string; reason?: string }): void {
+    if (v.source !== undefined)
+      fireEvent.change(within(panel).getByLabelText('Findings source'), { target: { value: v.source } });
+    if (v.who !== undefined) fireEvent.change(within(panel).getByLabelText('Retired by'), { target: { value: v.who } });
+    if (v.reason !== undefined)
+      fireEvent.change(within(panel).getByLabelText('Why these rows should go'), { target: { value: v.reason } });
+  }
+
+  it('previews by default: lists what would go, removes nothing, and re-reads nothing', async () => {
+    mockApi.retireFindings.mockReset();
+    const { note: _none, ...preview } = retirement({
+      dryRun: true,
+      summary: 'Would retire 1 finding(s) under `symreach:lib/libutil-0.9.30.so`.',
+    });
+    mockApi.retireFindings.mockResolvedValue(preview);
+    mockApi.operatorLedger.mockReset();
+    mockApi.notes.mockReset();
+    mount();
+    const panel = await openRetire();
+    expect(within(panel).getByRole('checkbox')).toBeChecked();
+    fill(panel, { source: 'symreach:lib/libutil-0.9.30.so', who: 'aaron', reason: 'uClibc is not a program' });
+    const ledgerReads = mockApi.operatorLedger.mock.calls.length;
+    const noteReads = mockApi.notes.mock.calls.length;
+    fireEvent.click(within(panel).getByRole('button', { name: 'Preview retirement' }));
+
+    await waitFor(() =>
+      expect(mockApi.retireFindings).toHaveBeenCalledWith('img1', {
+        source: 'symreach:lib/libutil-0.9.30.so',
+        retiredBy: 'aaron',
+        reason: 'uClibc is not a program',
+        dryRun: true,
+      }),
+    );
+    expect(await within(panel).findByText(/Preview — nothing has been removed/)).toBeTruthy();
+    expect(within(panel).getByText(/Would retire 1 finding/)).toBeTruthy();
+    expect(within(panel).getByText(/system\(\) reachable from argv/)).toBeTruthy();
+    expect(within(panel).queryByText('The note left in the ledger')).toBeNull();
+    // Nothing changed, so nothing is re-read — and the form keeps its reason for the real run.
+    expect(mockApi.operatorLedger.mock.calls.length).toBe(ledgerReads);
+    expect(mockApi.notes.mock.calls.length).toBe(noteReads);
+    expect(within(panel).getByLabelText('Why these rows should go')).toHaveValue('uClibc is not a program');
+  });
+
+  it('retires for real only once the preview is unticked, then shows the note and refreshes ledger and notes', async () => {
+    mockApi.retireFindings.mockReset();
+    mockApi.retireFindings.mockResolvedValue(retirement());
+    mockApi.operatorLedger.mockReset();
+    mockApi.operatorLedger.mockResolvedValue(ledger());
+    mockApi.notes.mockReset();
+    mockApi.notes.mockResolvedValueOnce([]).mockResolvedValue([note({ id: 'n9', body: 'Retirement record' })]);
+    render(<OperatorPanel imageId="img1" />);
+    const panel = await openRetire();
+    fill(panel, { source: ' symreach:lib/libutil-0.9.30.so ', who: 'aaron', reason: 'uClibc is not a program' });
+    fireEvent.click(within(panel).getByRole('checkbox'));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Retire findings' }));
+
+    await waitFor(() =>
+      expect(mockApi.retireFindings).toHaveBeenCalledWith('img1', {
+        source: 'symreach:lib/libutil-0.9.30.so',
+        retiredBy: 'aaron',
+        reason: 'uClibc is not a program',
+        dryRun: false,
+      }),
+    );
+    expect(await within(panel).findByText(/Retired — a note was recorded/)).toBeTruthy();
+    expect(within(panel).getByText('The note left in the ledger')).toBeTruthy();
+    expect(within(panel).getByText(/Retired 1 computed finding\(s\) under source/)).toBeTruthy();
+    // The ledger and the notes are both re-read, and the note the route left appears in the notes list.
+    await waitFor(() => expect(mockApi.operatorLedger).toHaveBeenCalledTimes(2));
+    expect(mockApi.notes).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText('Retirement record')).toBeTruthy();
+    // Back to the safe side for the next one.
+    expect(within(panel).getByRole('checkbox')).toBeChecked();
+    expect(within(panel).getByLabelText('Why these rows should go')).toHaveValue('');
+  });
+
+  it('refuses an operator: source before any request, and names the surface that was meant', async () => {
+    mockApi.retireFindings.mockReset();
+    mount();
+    const panel = await openRetire();
+    fill(panel, { source: 'operator:aaron', who: 'aaron', reason: 'tidy up' });
+    expect(within(panel).getByRole('alert')).toHaveTextContent('is a hand-authored operator assertion');
+    expect(within(panel).getByRole('alert')).toHaveTextContent('withdraw it from the assertions ledger');
+    expect(within(panel).getByLabelText('Findings source')).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.click(within(panel).getByRole('checkbox'));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Retire findings' }));
+    expect(mockApi.retireFindings).not.toHaveBeenCalled();
+  });
+
+  it('names the missing fields, and refuses a reason over the route’s bound', async () => {
+    mockApi.retireFindings.mockReset();
+    mount();
+    const panel = await openRetire();
+    fireEvent.change(within(panel).getByLabelText('Retired by'), { target: { value: '' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Preview retirement' }));
+    expect(within(panel).getByRole('alert')).toHaveTextContent(
+      'Fill in before retiring: Findings source, Retired by, Why these rows should go.',
+    );
+    expect(within(panel).getByLabelText('Why these rows should go')).toHaveAttribute('aria-invalid', 'true');
+    fill(panel, { source: 'cve', who: 'aaron', reason: 'r'.repeat(MAX_RETIRE_REASON + 1) });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Preview retirement' }));
+    expect(within(panel).getByRole('alert')).toHaveTextContent(`at most ${MAX_RETIRE_REASON} characters`);
+    expect(mockApi.retireFindings).not.toHaveBeenCalled();
+  });
+
+  it('prefills the author from who the panel is being driven as', async () => {
+    mount();
+    fireEvent.change(await screen.findByLabelText('Note author'), { target: { value: 'maria' } });
+    const panel = await openRetire();
+    expect(within(panel).getByLabelText('Retired by')).toHaveValue('maria');
+  });
+
+  it('pure: an operator source is refused ahead of any missing field', () => {
+    expect(retireProblem({ source: 'operator:x', retiredBy: '', reason: '' })).toEqual({
+      kind: 'operatorSource',
+      source: 'operator:x',
+    });
+    expect(retireProblem({ source: ' crypto ', retiredBy: 'a', reason: 'b' })).toBeNull();
+    expect(retireProblem({ source: 'crypto', retiredBy: 'a'.repeat(81), reason: 'b' })).toEqual({ kind: 'whoTooLong' });
+  });
+});
+
+describe('note editing and retirement — Spanish', () => {
+  it('edits a note and previews a retirement in Spanish, and refuses an operator source in Spanish', async () => {
+    setLocale('es');
+    mockApi.operatorLedger.mockResolvedValue(ledger());
+    mockApi.notes.mockReset();
+    mockApi.notes.mockResolvedValue([note()]);
+    mockApi.updateNote.mockReset();
+    mockApi.updateNote.mockResolvedValue(note({ body: 'revisada' }));
+    mockApi.retireFindings.mockReset();
+    mockApi.retireFindings.mockResolvedValue({
+      source: 'crypto',
+      dryRun: true,
+      removedCount: 0,
+      removed: [],
+      summary: 'No findings carry the source `crypto` on this image, so nothing would be removed.',
+    });
+    render(<OperatorPanel imageId="img1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Editar' }));
+    fireEvent.change(screen.getByLabelText('Editar el cuerpo de la nota'), { target: { value: '' } });
+    expect(screen.getByRole('alert')).toHaveTextContent('Una nota no puede quedar vacía');
+    fireEvent.change(screen.getByLabelText('Editar el cuerpo de la nota'), { target: { value: 'revisada' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+    await waitFor(() => expect(mockApi.updateNote).toHaveBeenCalledWith('img1', 'n1', 'revisada'));
+
+    const panel = screen.getByTestId('retire-source');
+    expect(within(panel).getByText('Retirar una fuente calculada')).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Retirar fuente…' }));
+    fireEvent.change(within(panel).getByLabelText('Fuente de hallazgos'), { target: { value: 'operator:aaron' } });
+    expect(within(panel).getByRole('alert')).toHaveTextContent('Una afirmación no se quita nunca');
+
+    fireEvent.change(within(panel).getByLabelText('Fuente de hallazgos'), { target: { value: 'crypto' } });
+    fireEvent.change(within(panel).getByLabelText('Retirado por'), { target: { value: 'aaron' } });
+    fireEvent.change(within(panel).getByLabelText('Por qué deben irse estas filas'), { target: { value: 'ruido' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Previsualizar retirada' }));
+    await waitFor(() =>
+      expect(mockApi.retireFindings).toHaveBeenCalledWith('img1', {
+        source: 'crypto',
+        retiredBy: 'aaron',
+        reason: 'ruido',
+        dryRun: true,
+      }),
+    );
+    expect(await within(panel).findByText(/Vista previa: no se ha quitado nada/)).toBeTruthy();
+    expect(within(panel).getByText(/0 fila\(s\)/)).toBeTruthy();
   });
 });

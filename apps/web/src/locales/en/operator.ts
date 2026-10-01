@@ -127,5 +127,52 @@ export const operator = {
     bodyLabel: 'Note body',
     save: 'Save note',
     empty: 'No notes yet.',
+    /** Editing replaces the note's text in place — a note is reasoning, not a claim, so it keeps no history. */
+    edit: 'Edit',
+    editLabel: 'Edit note body',
+    saveEdit: 'Save changes',
+    savingEdit: 'Saving…',
+    cancelEdit: 'Cancel',
+    emptyBody: 'A note cannot be empty. Delete it instead if it no longer holds anything.',
+    tooLong: (max: number, n: number) => `A note holds at most ${max} characters; this one has ${n}.`,
+  },
+
+  /**
+   * Retiring a computed source — the ledger's only deletion path, and the one most likely to be misread. Every
+   * sentence here must keep two things apart: a COMPUTED row can be removed because re-running its provider restores
+   * it, and an operator assertion can never be removed at all. And a retirement is not an answer: the gap it leaves
+   * is "nobody asks this any more", never "the question came back clean".
+   */
+  retire: {
+    title: 'Retire a computed source',
+    sub:
+      'Removes every finding one provider source wrote on this image and leaves a working note naming what went and ' +
+      'why. Only computed rows can be retired — re-running the provider under that source restores them. Nothing ' +
+      'is answered by this: the removal covers no stage.',
+    open: 'Retire source…',
+    close: 'Close',
+    sourceLabel: 'Findings source',
+    sourcePlaceholder: 'e.g. symreach:lib/libutil-0.9.30.so',
+    whoLabel: 'Retired by',
+    whoPlaceholder: 'who is retiring these rows',
+    reasonLabel: 'Why these rows should go',
+    reasonPlaceholder: 'required — the note left in their place is the only thing that explains the gap',
+    dryRunLabel: 'Preview only — list what would be removed without removing it',
+    preview: 'Preview retirement',
+    submit: 'Retire findings',
+    working: 'Working…',
+    missing: (fields: string[]) => `Fill in before retiring: ${fields.join(', ')}.`,
+    reasonTooLong: (max: number, n: number) => `The reason holds at most ${max} characters; this one has ${n}.`,
+    whoTooLong: (max: number) => `The name holds at most ${max} characters.`,
+    /** The client-side refusal of an `operator:` source. Names the surface the caller actually wanted. */
+    operatorRefused: (source: string) =>
+      [
+        `'${source}' is a hand-authored operator assertion, not a computed result. An assertion is never removed —`,
+        'withdraw it from the assertions ledger above, so the claim and the reason it was wrong both stay readable.',
+      ].join(' '),
+    previewHeading: 'Preview — nothing has been removed',
+    doneHeading: 'Retired — a note was recorded in place of these rows',
+    removedCount: (n: number) => `${n} row(s)`,
+    noteHeading: 'The note left in the ledger',
   },
 };
