@@ -45,6 +45,9 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
   const [job, setJob] = useState<Job | null>(null);
   /** The last finished full-system run, so its egress survives a page reload. */
   const [stored, setStored] = useState<StoredEmulationResult | null>(null);
+  /** The last finished chipsec decode / Renode boot, so a UEFI or RTOS image does not reopen to an empty panel. */
+  const [storedChipsec, setStoredChipsec] = useState<ChipsecResult | null>(null);
+  const [storedRenode, setStoredRenode] = useState<RenodeResult | null>(null);
   const [binary, setBinary] = useState('');
   const [binaries, setBinaries] = useState<BinaryEntry[]>([]);
   const [busy, setBusy] = useState(false);
@@ -97,6 +100,49 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
       cancelled = true;
     };
   }, [imageId]);
+
+  /**
+   * The last finished chipsec decode and Renode boot, read on mount for the same reason as the egress above.
+   *
+   * Both providers persist their result on the job row and the API serves the newest finished one; without this
+   * read, an image whose decode found 130 modules and a Secure Boot posture reopened to a panel that showed
+   * nothing — which reads as "never analysed", a different and false claim. Asked only when the plan offers that
+   * rung, so a Linux image does not query a decode it was never routed to.
+   */
+  const offersChipsec = Boolean(menu?.recipes.some((r) => r.mode === 'uefi-chipsec'));
+  const offersRenode = Boolean(menu?.recipes.some((r) => r.mode === 'renode'));
+  useEffect(() => {
+    let cancelled = false;
+    setStoredChipsec(null);
+    if (offersChipsec)
+      api
+        .chipsecResult(imageId)
+        .then((r) => {
+          if (!cancelled) setStoredChipsec(r && 'moduleCount' in r ? r : null);
+        })
+        .catch(() => {
+          if (!cancelled) setStoredChipsec(null);
+        });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageId, offersChipsec]);
+  useEffect(() => {
+    let cancelled = false;
+    setStoredRenode(null);
+    if (offersRenode)
+      api
+        .renodeResult(imageId)
+        .then((r) => {
+          if (!cancelled) setStoredRenode(r && 'booted' in r ? r : null);
+        })
+        .catch(() => {
+          if (!cancelled) setStoredRenode(null);
+        });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageId, offersRenode]);
 
   useEffect(
     () => () => {
@@ -165,6 +211,11 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
   const egressShown = result?.egress || result?.unreachable ? result : stored;
   const isRenode = Boolean(result && 'booted' in result);
   const isChipsec = Boolean(result && 'moduleCount' in result);
+  // Same rule for the stored decode and boot: a live result of the same kind replaces it rather than sitting
+  // beside it, so the page never shows two verdicts for one question.
+  const chipsecShown = isChipsec ? null : storedChipsec;
+  const renodeShown = isRenode ? null : storedRenode;
+  const recipeTitle = (mode: EmulationRecipe['mode']) => menu.recipes.find((r) => r.mode === mode)?.title ?? mode;
 
   return (
     <div>
@@ -308,137 +359,8 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
               {job.log}
             </pre>
           )}
-          {isRenode && result && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span className={`badge ${result.booted ? 'badge-ok' : 'badge-medium'}`}>
-                  {result.booted ? t.simulation.booted : t.simulation.noUart}
-                </span>
-                <span className="badge">{result.proofState}</span>
-                {result.platform && (
-                  <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                    {result.platform.split('/').pop()}
-                  </span>
-                )}
-              </div>
-              <div className="hint" style={{ marginTop: 6 }}>
-                {result.reason}
-              </div>
-              {result.uartExcerpt && (
-                <pre
-                  className="mono"
-                  style={{
-                    fontSize: 11.5,
-                    whiteSpace: 'pre-wrap',
-                    background: 'var(--bg)',
-                    padding: 10,
-                    borderRadius: 6,
-                    marginTop: 8,
-                  }}
-                >
-                  {result.uartExcerpt}
-                </pre>
-              )}
-            </div>
-          )}
-          {isChipsec && result && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span className={`badge ${result.moduleCount ? 'badge-ok' : 'badge-medium'}`}>
-                  {result.moduleCount ? t.simulation.moduleCount(result.moduleCount) : t.simulation.noUefiVolume}
-                </span>
-                {Boolean(result.volumes) && (
-                  <span className="badge">{t.simulation.volumeCount(result.volumes ?? 0)}</span>
-                )}
-                <span className="badge">{result.proofState}</span>
-              </div>
-              <div className="hint" style={{ marginTop: 6 }}>
-                {result.reason}
-              </div>
-              {result.byType && Object.keys(result.byType).length > 0 && (
-                <div className="mono" style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>
-                  {Object.entries(result.byType)
-                    .sort((a, b) => b[1] - a[1])
-                    .map(([type, n]) => `${type}: ${n}`)
-                    .join('  ·  ')}
-                </div>
-              )}
-              {result.secureBoot && (
-                <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <span className="hint" style={{ fontSize: 11 }}>
-                    {t.simulation.secureBoot}
-                  </span>
-                  <span
-                    className={`badge ${result.secureBoot.secureBoot === 'enabled' ? 'badge-ok' : result.secureBoot.secureBoot === 'disabled' ? 'badge-high' : ''}`}
-                  >
-                    {result.secureBoot.secureBoot}
-                  </span>
-                  {result.secureBoot.setupMode !== 'unknown' && (
-                    <span className={`badge ${result.secureBoot.setupMode === 'setup' ? 'badge-high' : ''}`}>
-                      {t.simulation.setupMode(result.secureBoot.setupMode)}
-                    </span>
-                  )}
-                  {result.secureBoot.testKey && (
-                    <span className="badge badge-high">{t.simulation.testKey(result.secureBoot.testKey)}</span>
-                  )}
-                  <span className="hint mono" style={{ fontSize: 10.5 }}>
-                    {t.simulation.nvramVars(result.secureBoot.variableCount)}
-                  </span>
-                </div>
-              )}
-              {/* The provider's own sentence, beside the badge rather than buried in `reason` above: `unknown` is
-                  the state this decode could not read, and next to a badge that says nothing else it reads as a
-                  measurement. Composed by `interpretSecureBoot`, printed as written. */}
-              {result.secureBoot?.note && (
-                <div className="hint" style={{ marginTop: 4 }}>
-                  {result.secureBoot.note}
-                </div>
-              )}
-              {/* And when there is no posture at all. Three different situations reached this spot as the same
-                  blank space, which reads as "this image has no variable store" — the one thing none of them says. */}
-              {!result.secureBoot && result.nvramStoreNote && (
-                <div style={{ marginTop: 8 }}>
-                  <div className="hint" style={{ fontSize: 11 }}>
-                    {t.simulation.secureBoot}
-                  </div>
-                  <div className="hint" style={{ marginTop: 2 }}>
-                    {result.nvramStoreNote}
-                  </div>
-                </div>
-              )}
-              {result.findings && result.findings.length > 0 && (
-                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {result.findings.map((f) => (
-                    <div
-                      key={f.kind + f.title}
-                      style={{
-                        display: 'flex',
-                        gap: 8,
-                        alignItems: 'baseline',
-                        background: 'var(--bg)',
-                        border: '1px solid var(--border-soft)',
-                        borderRadius: 6,
-                        padding: '6px 10px',
-                      }}
-                    >
-                      <span
-                        className={`badge ${f.severity === 'critical' || f.severity === 'high' ? 'badge-high' : ''}`}
-                      >
-                        {f.severity}
-                      </span>
-                      <div>
-                        {/* The finding's own words, as the provider recorded them — never re-worded here. */}
-                        <div style={{ fontSize: 12.5 }}>{f.title}</div>
-                        <div className="hint" style={{ marginTop: 2 }}>
-                          {f.rationale}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          {isRenode && result && <RenodeResultView result={result} />}
+          {isChipsec && result && <ChipsecResultView result={result} />}
           {/* Above the raw console on purpose: this is the one part of a full-system run that says something
               about the FIRMWARE's intent rather than about the emulator, and it must not be buried under 4 KB
               of boot log. Rendered from the stored result, so an older run simply has none and shows nothing. */}
@@ -470,6 +392,26 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* The stored decode and boot, outside the job block for the same reason as the egress below: they are
+          properties of the image, read from the newest finished job row. Headed by the rung's own title and the
+          row's status, so it reads as the earlier run it is rather than as one in progress. */}
+      {chipsecShown && (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <div className="panel-title">
+            {recipeTitle('uefi-chipsec')} <span className="badge badge-ok">done</span>
+          </div>
+          <ChipsecResultView result={chipsecShown} />
+        </div>
+      )}
+      {renodeShown && (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <div className="panel-title">
+            {recipeTitle('renode')} <span className="badge badge-ok">done</span>
+          </div>
+          <RenodeResultView result={renodeShown} />
         </div>
       )}
 
@@ -508,6 +450,146 @@ export function SimulationMenu({ imageId }: { imageId: string }): JSX.Element {
       )}
 
       <WebProbePanel imageId={imageId} />
+    </div>
+  );
+}
+
+/**
+ * A Renode boot's verdict. Shared by the live job and the stored run, so the two cannot drift into saying the same
+ * thing differently. `Partial` on purpose: a stored result was written by whatever build ran it.
+ */
+function RenodeResultView({ result }: { result: Partial<RenodeResult> }): JSX.Element {
+  const t = useMessages();
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span className={`badge ${result.booted ? 'badge-ok' : 'badge-medium'}`}>
+          {result.booted ? t.simulation.booted : t.simulation.noUart}
+        </span>
+        <span className="badge">{result.proofState}</span>
+        {result.platform && (
+          <span className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+            {result.platform.split('/').pop()}
+          </span>
+        )}
+      </div>
+      <div className="hint" style={{ marginTop: 6 }}>
+        {result.reason}
+      </div>
+      {result.uartExcerpt && (
+        <pre
+          className="mono"
+          style={{
+            fontSize: 11.5,
+            whiteSpace: 'pre-wrap',
+            background: 'var(--bg)',
+            padding: 10,
+            borderRadius: 6,
+            marginTop: 8,
+          }}
+        >
+          {result.uartExcerpt}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** A chipsec decode: inventory, Secure Boot posture (or why there is none), and the provider's findings. */
+function ChipsecResultView({ result }: { result: Partial<ChipsecResult> }): JSX.Element {
+  const t = useMessages();
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span className={`badge ${result.moduleCount ? 'badge-ok' : 'badge-medium'}`}>
+          {result.moduleCount ? t.simulation.moduleCount(result.moduleCount) : t.simulation.noUefiVolume}
+        </span>
+        {Boolean(result.volumes) && <span className="badge">{t.simulation.volumeCount(result.volumes ?? 0)}</span>}
+        <span className="badge">{result.proofState}</span>
+      </div>
+      <div className="hint" style={{ marginTop: 6 }}>
+        {result.reason}
+      </div>
+      {result.byType && Object.keys(result.byType).length > 0 && (
+        <div className="mono" style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>
+          {Object.entries(result.byType)
+            .sort((a, b) => b[1] - a[1])
+            .map(([type, n]) => `${type}: ${n}`)
+            .join('  ·  ')}
+        </div>
+      )}
+      {result.secureBoot && (
+        <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span className="hint" style={{ fontSize: 11 }}>
+            {t.simulation.secureBoot}
+          </span>
+          <span
+            className={`badge ${result.secureBoot.secureBoot === 'enabled' ? 'badge-ok' : result.secureBoot.secureBoot === 'disabled' ? 'badge-high' : ''}`}
+          >
+            {result.secureBoot.secureBoot}
+          </span>
+          {result.secureBoot.setupMode !== 'unknown' && (
+            <span className={`badge ${result.secureBoot.setupMode === 'setup' ? 'badge-high' : ''}`}>
+              {t.simulation.setupMode(result.secureBoot.setupMode)}
+            </span>
+          )}
+          {result.secureBoot.testKey && (
+            <span className="badge badge-high">{t.simulation.testKey(result.secureBoot.testKey)}</span>
+          )}
+          <span className="hint mono" style={{ fontSize: 10.5 }}>
+            {t.simulation.nvramVars(result.secureBoot.variableCount)}
+          </span>
+        </div>
+      )}
+      {/* The provider's own sentence, beside the badge rather than buried in `reason` above: `unknown` is the state
+          this decode could not read, and next to a badge that says nothing else it reads as a measurement.
+          Composed by `interpretSecureBoot`, printed as written. */}
+      {result.secureBoot?.note && (
+        <div className="hint" style={{ marginTop: 4 }}>
+          {result.secureBoot.note}
+        </div>
+      )}
+      {/* And when there is no posture at all. Three different situations reached this spot as the same blank
+          space, which reads as "this image has no variable store" — the one thing none of them says. */}
+      {!result.secureBoot && result.nvramStoreNote && (
+        <div style={{ marginTop: 8 }}>
+          <div className="hint" style={{ fontSize: 11 }}>
+            {t.simulation.secureBoot}
+          </div>
+          <div className="hint" style={{ marginTop: 2 }}>
+            {result.nvramStoreNote}
+          </div>
+        </div>
+      )}
+      {result.findings && result.findings.length > 0 && (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {result.findings.map((f) => (
+            <div
+              key={f.kind + f.title}
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'baseline',
+                background: 'var(--bg)',
+                border: '1px solid var(--border-soft)',
+                borderRadius: 6,
+                padding: '6px 10px',
+              }}
+            >
+              <span className={`badge ${f.severity === 'critical' || f.severity === 'high' ? 'badge-high' : ''}`}>
+                {f.severity}
+              </span>
+              <div>
+                {/* The finding's own words, as the provider recorded them — never re-worded here. */}
+                <div style={{ fontSize: 12.5 }}>{f.title}</div>
+                <div className="hint" style={{ marginTop: 2 }}>
+                  {f.rationale}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

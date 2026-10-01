@@ -46,6 +46,9 @@ const menu = (o: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  // Call counts only — every implementation is re-stubbed below. Without this, `not.toHaveBeenCalled` would be
+  // answering for every earlier test in the file.
+  vi.clearAllMocks();
   mockApi.emulation.mockResolvedValue(menu());
   mockApi.job.mockResolvedValue({ id: 'j1', status: 'done', result: null, log: '' });
   mockApi.emulate.mockResolvedValue({ jobId: 'j1' });
@@ -55,6 +58,9 @@ beforeEach(() => {
   mockApi.extract.mockResolvedValue({ jobId: 'j1' });
   mockApi.binaries.mockResolvedValue([]);
   mockApi.webprobeResult.mockResolvedValue(null);
+  // No stored chipsec decode or Renode boot unless a test says otherwise.
+  mockApi.chipsecResult.mockResolvedValue(null);
+  mockApi.renodeResult.mockResolvedValue(null);
   // The menu drops a RunHistory under the rungs, which reads the run ledger — the second live fetch this file
   // was making, and the one the hand-written list still missed after `binaries` was fixed.
   mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
@@ -231,6 +237,163 @@ describe('SimulationMenu', () => {
     fireEvent.change(await screen.findByPlaceholderText('bin/busybox'), { target: { value: 'sbin/httpd' } });
     fireEvent.click(screen.getByRole('button', { name: 'Run proof' }));
     await waitFor(() => expect(mockApi.emulate).toHaveBeenCalledWith('img1', 'sbin/httpd'));
+  });
+});
+
+/**
+ * The stored chipsec decode and Renode boot.
+ *
+ * Both providers persist their result on the job row, and the panel used to render them only inside the block of a
+ * job launched from this tab — so a UEFI image whose decode found 130 modules reopened to nothing at all, which
+ * reads as "never analysed". Nothing in the first two tests launches anything.
+ */
+describe('SimulationMenu — the stored decode and boot', () => {
+  const uefi = () =>
+    menu({
+      identity: { firmwareClass: 'uefi-bios', arch: 'x86_64', endianness: 'little', filesystems: [] },
+      recipes: [recipe({ mode: 'uefi-chipsec', title: 'chipsec UEFI decode' })],
+    });
+  const rtos = () =>
+    menu({
+      identity: { firmwareClass: 'rtos-mcu', arch: 'arm', endianness: 'little', filesystems: [] },
+      recipes: [recipe({ mode: 'renode', title: 'Renode RTOS' })],
+    });
+  const decode = (o: Record<string, unknown> = {}) => ({
+    available: true,
+    ran: true,
+    reason: 'Decoded 2 firmware volumes and 130 EFI modules offline with chipsec.',
+    proofState: 'static_confirmed',
+    volumes: 2,
+    moduleCount: 130,
+    byType: { DXE_DRIVER: 109, PEIM: 13 },
+    modules: [],
+    secureBoot: {
+      variableCount: 7,
+      secureBoot: 'enabled',
+      setupMode: 'user',
+      customMode: 'disabled',
+      hasPK: true,
+      hasKEK: true,
+      hasDb: true,
+      hasDbx: true,
+      testKey: 'AMI Test PK',
+      variables: ['SecureBoot', 'SetupMode', 'PK', 'KEK', 'db', 'dbx', 'Boot0000'],
+      note: 'Read from the offline variable store.',
+    },
+    findings: [
+      {
+        kind: 'uefi-embedded-app',
+        title: '2 UEFI applications embedded in firmware',
+        severity: 'info',
+        proofState: 'needs_runtime_reproduction',
+        evidence: {},
+        rationale: 'A planted UEFI app is a bootkit vector — verify each is expected.',
+      },
+    ],
+    command: 'chipsec_util uefi decode image.fd',
+    ...o,
+  });
+  const boot = (o: Record<string, unknown> = {}) => ({
+    available: true,
+    ran: true,
+    booted: true,
+    reason: 'UART produced 212 bytes within 15 s.',
+    proofState: 'confirmed_in_emulation',
+    platform: 'platforms/cpus/stm32f4.repl',
+    uartExcerpt: 'FreeRTOS scheduler started',
+    command: 'renode --disable-xwt boot.resc',
+    ...o,
+  });
+
+  it('shows a stored chipsec decode — modules, findings and NVRAM posture — without a fresh run', async () => {
+    mockApi.emulation.mockResolvedValue(uefi());
+    mockApi.chipsecResult.mockResolvedValue(decode());
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('130 modules')).toBeInTheDocument();
+    expect(mockApi.chipsecResult).toHaveBeenCalledWith('img1');
+    expect(screen.getByText('2 FV')).toBeInTheDocument();
+    expect(screen.getByText(/DXE_DRIVER: 109/)).toBeInTheDocument();
+    expect(screen.getByText('2 UEFI applications embedded in firmware')).toBeInTheDocument();
+    // The NVRAM posture: state, mode, the test key, and how many variables it was read from.
+    expect(screen.getByText('Secure Boot:')).toBeInTheDocument();
+    expect(screen.getByText('enabled')).toBeInTheDocument();
+    expect(screen.getByText('user mode')).toBeInTheDocument();
+    expect(screen.getByText('test key: AMI Test PK')).toBeInTheDocument();
+    expect(screen.getByText('7 NVRAM var(s)')).toBeInTheDocument();
+    expect(screen.getByText('Read from the offline variable store.')).toBeInTheDocument();
+    expect(mockApi.runChipsec).not.toHaveBeenCalled();
+    expect(mockApi.job).not.toHaveBeenCalled();
+  });
+
+  it('shows a stored Renode boot — its verdict and UART — without a fresh run', async () => {
+    mockApi.emulation.mockResolvedValue(rtos());
+    mockApi.renodeResult.mockResolvedValue(boot());
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('booted')).toBeInTheDocument();
+    expect(mockApi.renodeResult).toHaveBeenCalledWith('img1');
+    expect(screen.getByText('confirmed_in_emulation')).toBeInTheDocument();
+    expect(screen.getByText('stm32f4.repl')).toBeInTheDocument();
+    expect(screen.getByText('UART produced 212 bytes within 15 s.')).toBeInTheDocument();
+    expect(screen.getByText('FreeRTOS scheduler started')).toBeInTheDocument();
+    expect(mockApi.runRenode).not.toHaveBeenCalled();
+    expect(mockApi.job).not.toHaveBeenCalled();
+  });
+
+  it('states a stored boot that produced no UART as exactly that', async () => {
+    mockApi.emulation.mockResolvedValue(rtos());
+    mockApi.renodeResult.mockResolvedValue(boot({ booted: false, uartExcerpt: '', reason: 'No UART bytes.' }));
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('no UART output')).toBeInTheDocument();
+    expect(screen.getByText('No UART bytes.')).toBeInTheDocument();
+  });
+
+  it('lets a live decode replace the stored one rather than sit beside it', async () => {
+    mockApi.emulation.mockResolvedValue(uefi());
+    mockApi.chipsecResult.mockResolvedValue(decode({ moduleCount: 4, findings: [], secureBoot: null }));
+    mockApi.job.mockResolvedValue({ id: 'j1', status: 'done', log: '', result: decode() });
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('4 modules')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Decode & scan' }));
+    expect(await screen.findByText('130 modules')).toBeInTheDocument();
+    expect(screen.queryByText('4 modules')).not.toBeInTheDocument();
+    expect(screen.getByText('Job j1')).toBeInTheDocument();
+  });
+
+  it('lets a live boot replace the stored one rather than sit beside it', async () => {
+    mockApi.emulation.mockResolvedValue(rtos());
+    mockApi.renodeResult.mockResolvedValue(boot({ booted: false, uartExcerpt: '', reason: 'Stored: no UART bytes.' }));
+    mockApi.job.mockResolvedValue({ id: 'j1', status: 'done', log: '', result: boot() });
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('Stored: no UART bytes.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Boot under Renode' }));
+    expect(await screen.findByText('FreeRTOS scheduler started')).toBeInTheDocument();
+    expect(screen.queryByText('Stored: no UART bytes.')).not.toBeInTheDocument();
+    expect(screen.queryByText('no UART output')).not.toBeInTheDocument();
+  });
+
+  it('renders a decode stored by an older build that lacks the newer fields', async () => {
+    // Optional forever: the persisted row predates byType, the posture and the findings list.
+    mockApi.emulation.mockResolvedValue(uefi());
+    mockApi.chipsecResult.mockResolvedValue({
+      available: true,
+      ran: true,
+      reason: 'Decoded 1 firmware volume offline with chipsec.',
+      proofState: 'static_confirmed',
+      volumes: 1,
+      moduleCount: 12,
+      modules: [],
+      command: 'chipsec_util uefi decode image.fd',
+    });
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('12 modules')).toBeInTheDocument();
+    expect(screen.queryByText('Secure Boot:')).not.toBeInTheDocument();
+  });
+
+  it('does not ask for a decode or a boot the plan never offered', async () => {
+    render(<SimulationMenu imageId="img1" />);
+    expect(await screen.findByText('User-mode QEMU')).toBeInTheDocument();
+    expect(mockApi.chipsecResult).not.toHaveBeenCalled();
+    expect(mockApi.renodeResult).not.toHaveBeenCalled();
   });
 });
 
