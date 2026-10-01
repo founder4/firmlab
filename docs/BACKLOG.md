@@ -359,15 +359,23 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   dispersos.)*
 - [x] Exponer `funcdiff` y lanzar `ghidra` desde la web. *(`FuncDiffPanel` en la sección Diff, contra la base del
   selector; la fila de Ghidra en «Capacidades sin lector» lanza el job y se desactiva si `analyzeHeadless` falta.)*
-- [ ] Ghidra: el pseudocódigo de `functions[]` sigue sin lector (la fila sólo da cobertura), y la ruta del binario
-  se escribe a mano — un selector alimentado por `api.binaries` evitaría la ruta inexistente.
-- [ ] funcdiff: `textDiffs` (antes/después descompilado de las funciones cambiadas) no se muestra en el panel.
+- [x] Ghidra: lector del pseudocódigo guardado y selector de binarios alimentado por `api.binaries`.
+  *(Hecho el 2026-10-01: `GhidraFunctions` en Specialised scans, texto escapado y límites visibles;
+  probado con 40 funciones guardadas de WR940N en desktop y 390×844, sin mutar el corpus.)*
+- [x] funcdiff: `textDiffs` muestra extractos antes/después y diff unificado con sus límites y decompilador.
+  *(Hecho el 2026-10-01; resultados antiguos sin campo siguen desconocidos. La revisión encontró y corrigió
+  resultados tardíos de otra base/imagen, con tests de promesas diferidas. QA desktop/móvil de funcdiff usa
+  fixture; no se repitió el proveedor ni se escribió en el corpus desplegado.)*
 
-- [ ] **Cancelar un job desde la UI.** Emulación (QEMU full-system, Renode), dynprobe y fuzzing pueden quedarse en un
-  bucle de arranque y la UI sólo sondea: no hay botón de abortar porque el backend no tiene cancelación
-  (`providers/jobs.ts` no expone ninguna). Requiere una ruta `POST /jobs/:id/cancel` que mate el árbol de procesos
-  del job (sin `pkill`: no está en el contenedor, ver trampa de `teardown()`), deje el job en un estado propio
-  —no `error`, que es un fallo del análisis— y libere los puertos. Detectado en la auditoría UX del 2026-09-27.
+- [x] **Cancelar un job desde la UI.** `POST /jobs/:jobId/cancel`, controles globales por imagen e historial,
+  estados persistidos `cancelling`/`cancelled`, retirada de la cola y terminación de grupos de procesos propios
+  sin `pkill`. La capacidad se libera tras comprobar procesos y sockets; una limpieza no verificada conserva
+  el slot y un error visible. Agente/MCP terminan sin interpretar resultados parciales; los hallazgos anteriores
+  se conservan. *(Hecho el 2026-10-01: pruebas de procesos hijos/nietos, 25 iteraciones Linux de sockets,
+  Chromium con API temporal y QEMU real pausado; evidencia en `OPERABILITY-VALIDATION.md`.)*
+- [ ] Ampliar la propiedad de ejecución más allá de grupos Unix locales si se necesita cancelar procesos que
+  cambien de sesión o recuperar árboles tras reiniciar la API. Hoy se declara la limpieza interrumpida como
+  no verificada; Windows rechaza la cancelación de árboles en ejecución y las esperas de red son cooperativas.
 - [ ] **Rutas de la API sin cliente web, de valor medio/bajo** (auditoría del 2026-09-27; las de valor alto —snapshot
   RTOS, funcdiff, lanzar Ghidra, reensamblado BLE/Zigbee— ya tienen UI): relanzar `component-cve` y `auxsecrets`
   sueltos (hoy sólo corren dentro del escaneo autónomo), `POST /images/:id/analysis` y `/analysis/reanalyze-all`
@@ -380,10 +388,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   (2026-09-28) y pasa 3/3 aislado: espera sobre algo que la carga retrasa. Anclarlo a un estado cargado, como ya se
   hizo con los dos tests de `23e2917`.
 
-- [ ] **Decir en la UI si el aislamiento del emulado incluye red.** `detectIsolation` devuelve `partial` tanto con
-  `unshare -rn` (sin red) como con sólo `prlimit` (con la red del host), y `/agent/config` y la UI sólo muestran
-  `partial`: dos contenciones muy distintas con la misma palabra. Exponer `netns: '-n' | '-rn' | null`. Y cargar un
-  perfil AppArmor propio (derivado de `docker-default` permitiendo el uid map) para no correr `unconfined`.
+- [x] **Mostrar las restricciones de ejecución disponibles para el agente.** `/agent/config` conserva
+  `partial` y añade `netns: '-n' | '-rn' | null` y `resourceLimits`; Ajustes y el panel de sesión separan red
+  aislada, red del host y campo antiguo desconocido. *(Hecho el 2026-10-01; se limita explícitamente a
+  capacidades del runner, sin atribuirlas a resultados guardados ni a todos los proveedores.)*
+- [ ] Cargar un perfil AppArmor propio (derivado de `docker-default` permitiendo el uid map) para no correr
+  `unconfined`. Sigue siendo trabajo de despliegue, no parte de la presentación de capacidades.
+- [ ] Ajustes → AI & Agent tiene desbordamiento horizontal a 390 px en las filas existentes del editor/configuración.
+  Medido durante QA del 2026-10-01; el lector de Ghidra y funcdiff no desbordan. Revisar las filas de ancho fijo
+  y entradas del editor sin ampliar la tarea de lectores/aislamiento.
 
 ## Deuda de política (decisiones a escribir, no bugs)
 

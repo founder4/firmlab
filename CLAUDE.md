@@ -85,7 +85,13 @@ Flow: upload → `analyzeImageBuffer` (core bundle, entropy window sized so samp
 + analysis persisted as JSON on the image row, so every view loads from cache and the raw bytes are re-read only
 for extraction/emulation. Anything slow runs as a **job** (`providers/jobs.ts`): a SQLite row moving
 queued → running → done/error with streamed log lines, bounded by `FIRMLAB_MAX_CONCURRENT_JOBS` (default 2), so
-results survive a restart and the UI polls instead of blocking.
+results survive a restart and the UI polls instead of blocking. `POST /jobs/:jobId/cancel` removes queued work
+or transitions running work through `cancelling` to `cancelled`. Cancellation is incomplete coverage, never a
+negative finding. Owned subprocesses run in private process groups; capacity is released only after group
+cleanup is verified. Failed cleanup retains the slot and a visible error. Ownership is process-local:
+restart recovery reports interrupted cleanup, without claiming the former process tree was verified dead.
+New provider subprocesses must use `job-process.ts` (or the owned process-group runner); shared capability
+discovery must stay outside an individual job's cancellation context so one aborted job cannot poison caches.
 
 ### The proof-state discipline — the project's central invariant
 
