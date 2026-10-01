@@ -30,6 +30,8 @@ export const files: Messages['files'] = {
   state: {
     'never-run': 'nunca extraído',
     'in-progress': 'extrayendo',
+    cancelling: 'cancelación pendiente de limpieza',
+    cancelled: 'extracción cancelada',
     failed: 'la extracción falló',
     'no-output': 'nada en disco',
     'volumes-only': 'sólo tallado — sin rootfs',

@@ -34,6 +34,8 @@ export const files = {
   state: {
     'never-run': 'never extracted',
     'in-progress': 'extracting',
+    cancelling: 'cancellation pending cleanup',
+    cancelled: 'extraction cancelled',
     failed: 'extraction failed',
     'no-output': 'nothing on disk',
     'volumes-only': 'carve only — no rootfs',

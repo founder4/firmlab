@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type FilesListing, type FilesRead, api } from '../api';
+import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import { FileBrowser } from './FileBrowser';
 
@@ -294,4 +295,33 @@ describe('FileBrowser', () => {
     render(<FileBrowser imageId="img1" />);
     await waitFor(() => expect(screen.getByText(/6497 entries are present and 2000 are shown/)).toBeTruthy());
   });
+});
+
+describe('FileBrowser — interrupted extraction', () => {
+  it.each(['cancelling', 'cancelled'] as const)(
+    'renders %s without presenting a negative extraction result',
+    async (state) => {
+      setLocale('en');
+      mockApi.files.mockResolvedValue(
+        listing({
+          extraction: {
+            state,
+            browsable: false,
+            verdict: 'Interrupted extraction; no completed result was established.',
+          },
+          listing: null,
+        }),
+      );
+      render(<FileBrowser imageId="img" />);
+      expect(
+        await screen.findByText('Interrupted extraction; no completed result was established.'),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          state === 'cancelled' ? 'Extraction · extraction cancelled' : 'Extraction · cancellation pending cleanup',
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Extraction · nothing on disk/)).not.toBeInTheDocument();
+    },
+  );
 });

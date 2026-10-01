@@ -40,6 +40,8 @@ import { useMessages } from '../i18n';
 const STATE_TONE: Record<ExtractionBrowseState, string> = {
   'never-run': 'banner-warn',
   'in-progress': 'banner-info',
+  cancelling: 'banner-info',
+  cancelled: 'banner-warn',
   failed: 'banner-warn',
   'no-output': 'banner-warn',
   'volumes-only': 'banner-info',

@@ -436,6 +436,30 @@ describe('describeExtraction — an empty tree has five causes and they are not 
     expect(describeExtraction({ jobStatus: 'running', outputDir: root }).browsable).toBe(false);
   });
 
+  it('does not treat an interrupted extraction as completed empty output', () => {
+    const pending = describeExtraction({ jobStatus: 'cancelling', outputDir: root });
+    expect(pending.state).toBe('cancelling');
+    expect(pending.browsable).toBe(false);
+    expect(pending.verdict).toMatch(/cleanup are still pending/);
+    const cancelled = describeExtraction({ jobStatus: 'cancelled', outputDir: root });
+    expect(cancelled.state).toBe('cancelled');
+    expect(cancelled.browsable).toBe(true);
+    expect(cancelled.verdict).toMatch(/interrupted carve/);
+    const withoutResult = describeExtraction({ jobStatus: 'cancelled' });
+    expect(withoutResult.browsable).toBe(false);
+    expect(withoutResult.verdict).toMatch(/not evidence that extraction produced nothing/);
+  });
+
+  it('does not browse a cancelled extraction when process cleanup is unresolved', () => {
+    const view = describeExtraction({
+      jobStatus: 'cancelled',
+      outputDir: root,
+      jobError: 'Process cleanup failed: EPERM',
+    });
+    expect(view.browsable).toBe(false);
+    expect(view.verdict).toMatch(/Cleanup is unresolved.*EPERM/);
+  });
+
   it('keeps a failed extraction browsable but labelled a partial carve', () => {
     const v = describeExtraction({ jobStatus: 'error', jobError: 'binwalk exited 1', outputDir: root });
     expect(v.state).toBe('failed');

@@ -52,7 +52,7 @@ function extractionOf(imageId: string): { root: string | null; view: ExtractionB
       result = null;
     }
   }
-  const status = job.status as 'queued' | 'running' | 'done' | 'error';
+  const status = job.status;
   const view = describeExtraction({
     jobStatus: status,
     jobError: job.error,

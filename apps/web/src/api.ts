@@ -1997,7 +1997,15 @@ export interface LearningSurface {
 // === The extraction browser (providers/fsbrowse.ts) ===
 
 /** Which of the several different "nothing to show" states an image's extraction is in. */
-export type ExtractionBrowseState = 'never-run' | 'in-progress' | 'failed' | 'no-output' | 'volumes-only' | 'rootfs';
+export type ExtractionBrowseState =
+  | 'never-run'
+  | 'in-progress'
+  | 'cancelling'
+  | 'cancelled'
+  | 'failed'
+  | 'no-output'
+  | 'volumes-only'
+  | 'rootfs';
 
 export interface ExtractionBrowseView {
   state: ExtractionBrowseState;

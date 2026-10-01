@@ -728,7 +728,7 @@ export function readFileSlice(
 /** The facts about an image's extraction the caller reads off the extract job (no store import here). */
 export interface ExtractionFacts {
   /** The extract job's status, or null when no extract job exists for this image. */
-  jobStatus: 'queued' | 'running' | 'done' | 'error' | null;
+  jobStatus: 'queued' | 'running' | 'cancelling' | 'cancelled' | 'done' | 'error' | null;
   jobError?: string | null;
   outputDir?: string | null;
   rootfsPath?: string | null;
@@ -737,7 +737,15 @@ export interface ExtractionFacts {
   noRootfsVerdict?: string | undefined;
 }
 
-export type ExtractionBrowseState = 'never-run' | 'in-progress' | 'failed' | 'no-output' | 'volumes-only' | 'rootfs';
+export type ExtractionBrowseState =
+  | 'never-run'
+  | 'in-progress'
+  | 'cancelling'
+  | 'cancelled'
+  | 'failed'
+  | 'no-output'
+  | 'volumes-only'
+  | 'rootfs';
 
 export interface ExtractionBrowseView {
   state: ExtractionBrowseState;
@@ -777,6 +785,21 @@ export function describeExtraction(facts: ExtractionFacts): ExtractionBrowseView
       browsable: false,
       verdict:
         'Extraction is still running. Whatever is on disk right now is a partial carve mid-write, so nothing here is a complete answer yet.',
+    };
+  }
+  if (jobStatus === 'cancelling') {
+    return {
+      state: 'cancelling',
+      browsable: false,
+      verdict:
+        'Extraction cancellation was requested. Owned work and process cleanup are still pending; any files on disk are incomplete and not a finished extraction result.',
+    };
+  }
+  if (jobStatus === 'cancelled') {
+    return {
+      state: 'cancelled',
+      browsable: !facts.jobError && Boolean(outputDir && dirHasEntries(outputDir)),
+      verdict: `Extraction was cancelled by the operator; no completed analysis result was established. Partial files may remain, so this is not evidence that extraction produced nothing.${facts.jobError ? ` Cleanup is unresolved: ${facts.jobError}` : ' Any files shown belong only to the interrupted carve.'}`,
     };
   }
   if (jobStatus === 'error') {
