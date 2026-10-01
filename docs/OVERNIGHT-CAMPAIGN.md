@@ -150,3 +150,23 @@ ceder propiedad. No dejar agentes reclamables sin decisión ni cerrar terminales
     sin correr el pipeline completo de Opacidad, y corrección en `Settings.tsx` del borrado de draft en model/baseUrl
     para que campos no secretos no queden en blanco tras guardar (`delete draft[key]`).
 - Antigravity coordina el Run `run_ed63045bd51e` en main (`term_3d93fd95-87f9-4df8-841b-a37e8b41611b`).
+
+### Ola 2 integrada y validada (2026-10-02 01:46 UTC+2)
+- Claude completó `task_dd0b280aa7fe` (`ctx_b282d2c5ecef`) con commit `04c7745`, integrado en main como `dbb39d4`:
+  - `SimulationMenu.tsx` lee `api.chipsecResult(imageId)` y `api.renodeResult(imageId)` al montar cuando el plan ofrece esas recetas.
+  - Vistas `ChipsecResultView` y `RenodeResultView` compartidas para corrida en vivo y resultado guardado; oculta el guardado cuando hay resultado activo de la misma clase.
+  - 7 tests unitarios nuevos en `SimulationMenu.test.tsx` (con verificación por mutación negativa) y retrocompatibilidad con esquemas viejos (`Partial<...>`).
+- Codex completó `task_b0aa6d8f58b3` (`ctx_88968d2ca557`) con commit `b6dd46a`, integrado en main como `7544f9d`:
+  - `ComponentMap.tsx`: botón para `POST /api/images/:id/component-cve` (`api.runComponentCve`), sondeo de job, visualización de `cveReason` y refresco acotado del libro mayor de hallazgos.
+  - `CredMatchPanel.tsx`: botón para `POST /api/images/:id/auxsecrets` (`api.runAuxSecrets`), temporizador de sondeo `auxTimer` independiente del flujo principal de credmatch, visualización de hallazgos y `auxReason`.
+  - `Settings.tsx`: corrección en `LlmProviderEditor` donde el guardado borraba la clave con `delete next[key]` en vez de asignar cadena vacía, evitando que los valores guardados de model y baseUrl se rendericen en blanco.
+  - Textos internacionalizados en `locales/{en,es}/compmap.ts` y `locales/{en,es}/credmatch.ts`.
+  - 59 tests enfocados en `ComponentMap.test.tsx`, `CredMatchPanel.test.tsx` y `Settings.test.tsx`.
+- Liberación de ambos terminales de trabajadores supervisados (`ctx_b282d2c5ecef` y `ctx_88968d2ca557`) con archivo de transcript preservado.
+- Validación completa de repositorio ejecutada con éxito:
+  - `pnpm --filter @firmlab/core build`: limpio.
+  - `pnpm check`: 3 de 3 paquetes TypeScript limpios.
+  - `pnpm test`: 4.018 tests pasados (core: 380, API: 2.805, web: 764, scripts: 69; 0 fallos).
+  - `pnpm build`: bundles de producción limpios (core, api, web).
+  - `pnpm biome`: 636 ficheros verificados, 0 errores, 0 avisos; scripts de pre-commit limpios (NUL, comentarios, mocks, denominadores y superficie agente).
+

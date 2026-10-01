@@ -377,12 +377,14 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   cambien de sesión o recuperar árboles tras reiniciar la API. Hoy se declara la limpieza interrumpida como
   no verificada; Windows rechaza la cancelación de árboles en ejecución y las esperas de red son cooperativas.
 - [ ] **Rutas de la API sin cliente web, de valor medio/bajo** (auditoría del 2026-09-27; las de valor alto —snapshot
-  RTOS, funcdiff, lanzar Ghidra, reensamblado BLE/Zigbee— ya tienen UI): relanzar `component-cve` y `auxsecrets`
-  sueltos (hoy sólo corren dentro del escaneo autónomo), `POST /images/:id/analysis` y `/analysis/reanalyze-all`
-  (re-clasificar tras cambiar el clasificador sin borrar y resubir), `POST /corpus/reindex`,
-  `DELETE /images/:id/findings` (retirar hallazgos de una fuente que ya no se planifica), los resultados guardados
-  de `chipsec`/`renode` y su estado, editar una nota (`PATCH …/notes/:noteId`) y leer el estado actual de
-  aprobación del agente en Ajustes. Decidir cuáles son sólo para scripts/MCP antes de construir UI.
+  RTOS, funcdiff, lanzar Ghidra, reensamblado BLE/Zigbee— ya tienen UI): `POST /images/:id/analysis` y
+  `/analysis/reanalyze-all` (re-clasificar tras cambiar el clasificador sin borrar y resubir), `POST /corpus/reindex`,
+  `DELETE /images/:id/findings` (retirar hallazgos de una fuente que ya no se planifica), editar una nota
+  (`PATCH …/notes/:noteId`) y leer el estado actual de aprobación del agente en Ajustes. Decidir cuáles son sólo para
+  scripts/MCP antes de construir UI. *(Lanzar `component-cve` y `auxsecrets` sueltos implementado en `7544f9d` con
+  botones dedicados, sondeo de job y refresco acotado del libro mayor de hallazgos; resultados persistidos de
+  `chipsec` y `renode` expuestos en `dbb39d4` en SimulationMenu con vistas compartidas y precedencia de ejecución en vivo;
+  borrador de modelo y baseUrl en Ajustes corregido en `7544f9d` para no blanquear valores guardados.)*
 
 - [x] Cancelación de esperas HTTP dentro de un job: abortar peticiones y lecturas de cuerpo en curso cuando
   el job se cancela, sin esperar los timeouts de 15s/6s ni emitir peticiones posteriores. `linkJobCancellation`
