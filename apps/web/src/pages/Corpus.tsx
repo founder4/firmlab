@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { type CorpusOverview, type CorpusRule, api } from '../api';
+import { type CorpusOverview, type CorpusReindexReport, type CorpusRule, api } from '../api';
 import { Dialog, type DialogField } from '../components/Dialog';
-import { useMessages } from '../i18n';
+import { useLocale, useMessages } from '../i18n';
 import { toast } from '../toast';
 
 /**
@@ -18,6 +18,7 @@ export function Corpus(): JSX.Element {
   const [overview, setOverview] = useState<CorpusOverview | null>(null);
   const [rules, setRules] = useState<CorpusRule[]>([]);
   const t = useMessages();
+  const locale = useLocale();
 
   const refresh = useCallback(() => {
     api
@@ -60,6 +61,23 @@ export function Corpus(): JSX.Element {
     [refresh],
   );
 
+  // The reconciliation is additive (INSERT OR IGNORE) and idempotent, so it needs no confirmation; what it needs is
+  // a report read in full, because "0 inserted" and "nothing to read" are different answers.
+  const [reindexing, setReindexing] = useState(false);
+  const [report, setReport] = useState<CorpusReindexReport | null>(null);
+
+  const reindex = useCallback(async () => {
+    setReindexing(true);
+    try {
+      setReport(await api.reindexCorpus(locale));
+      refresh();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setReindexing(false);
+    }
+  }, [locale, refresh]);
+
   if (!overview) return <div className="empty">{t.corpus.loading}</div>;
 
   return (
@@ -77,6 +95,25 @@ export function Corpus(): JSX.Element {
           value={String(overview.credentialReuseTotal ?? overview.credentialReuse.length)}
         />
         <Stat label={t.corpus.stats.watchlistRules} value={String(overview.ruleCount)} />
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <div className="panel-title">{t.corpus.reindex.title}</div>
+            <div className="panel-sub">{t.corpus.reindex.sub}</div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={reindexing}
+            aria-busy={reindexing}
+            onClick={() => void reindex()}
+          >
+            {reindexing ? t.corpus.reindex.running : t.corpus.reindex.run}
+          </button>
+        </div>
+        {report ? <ReindexReport report={report} /> : null}
       </div>
 
       <div className="panel">
@@ -272,6 +309,99 @@ export function Corpus(): JSX.Element {
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * What one reconciliation did. The verdict is the API's own sentence, already localised and already carrying the
+ * notes that apply to this run; the tables below it are the counts that sentence summarises, so an operator can
+ * see which source contributed and which never had an input to read. Source and kind identifiers render verbatim —
+ * they are the API's names for things, not prose.
+ */
+function ReindexReport({ report }: { report: CorpusReindexReport }): JSX.Element {
+  const t = useMessages().corpus.reindex;
+  const inserted = report.sources.reduce((n, s) => n + s.rowsInserted, 0);
+  return (
+    <div aria-live="polite" style={{ marginTop: 4 }}>
+      <p style={{ maxWidth: '72ch', margin: 0 }}>{report.verdict}</p>
+      <div className="hint" style={{ marginTop: 6 }}>
+        {t.totalInserted(inserted, report.imageCount)}
+      </div>
+
+      <div className="table-wrap" style={{ marginTop: 10 }}>
+        <table className="data">
+          <thead>
+            <tr>
+              <th>{t.colSource}</th>
+              <th>{t.colInserted}</th>
+              <th>{t.colOffered}</th>
+              <th>{t.colWithInput}</th>
+              <th>{t.colWithoutInput}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.sources.map((s) => (
+              <tr key={s.source}>
+                <td className="mono" style={{ fontSize: 12 }}>
+                  {s.source}
+                </td>
+                <td className="mono">{s.rowsInserted}</td>
+                <td className="mono">{s.rowsOffered}</td>
+                <td className="mono">{s.imagesWithInput}</td>
+                <td className="mono">{s.imagesWithoutInput}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="hint" style={{ marginTop: 6, maxWidth: '72ch' }}>
+        {t.withoutInputNote}
+      </div>
+
+      {report.boundedInputs.length > 0 && (
+        <ReportList title={t.boundedTitle}>
+          {report.boundedInputs.map((b) => (
+            <li key={`${b.imageId}:${b.kind}`}>{t.boundedRow(b.filename, b.kind, b.covered, b.total)}</li>
+          ))}
+        </ReportList>
+      )}
+      {report.unrecordedBounds.length > 0 && (
+        <ReportList title={t.unrecordedTitle}>
+          {report.unrecordedBounds.map((u) => (
+            <li key={u.kind}>{t.unrecordedRow(u.kind, u.imageCount)}</li>
+          ))}
+        </ReportList>
+      )}
+      {report.unstampedCredentials.length > 0 && (
+        <ReportList title={t.unstampedTitle}>
+          {report.unstampedCredentials.map((u) => (
+            <li key={u.imageId}>{t.unstampedRow(u.filename, u.rows)}</li>
+          ))}
+        </ReportList>
+      )}
+      {report.notReconciled.length > 0 && (
+        <ReportList title={t.notReconciledTitle} sub={t.notReconciledSub}>
+          {report.notReconciled.map((n) => (
+            <li key={n.table}>
+              <span className="mono" style={{ fontSize: 12 }}>
+                {n.table}
+              </span>{' '}
+              — {n.reason}
+            </li>
+          ))}
+        </ReportList>
+      )}
+    </div>
+  );
+}
+
+function ReportList({ title, sub, children }: { title: string; sub?: string; children: ReactNode }): JSX.Element {
+  return (
+    <div style={{ marginTop: 14, maxWidth: '72ch' }}>
+      <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{title}</div>
+      {sub ? <div className="panel-sub">{sub}</div> : null}
+      <ul style={{ margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.5 }}>{children}</ul>
     </div>
   );
 }

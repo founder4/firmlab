@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { api } from '../api';
+import { type CorpusReindexReport, api } from '../api';
 import { setLocale } from '../i18n';
 import { en } from '../locales/en';
 import { es } from '../locales/es';
@@ -214,5 +214,106 @@ describe('Corpus', () => {
       expect(mockApi.promoteRule).toHaveBeenCalledWith('known-credential', 'credential-hash', 'vendor default'),
     );
     expect(mockApi.corpusOverview).toHaveBeenCalledTimes(2);
+  });
+
+  describe('reindex', () => {
+    const report = (verdict: string, reason: string): CorpusReindexReport => ({
+      imageCount: 3,
+      sources: [
+        { source: 'static-secrets', imagesWithInput: 3, imagesWithoutInput: 0, rowsOffered: 9, rowsInserted: 4 },
+        { source: 'gitleaks', imagesWithInput: 1, imagesWithoutInput: 2, rowsOffered: 2, rowsInserted: 2 },
+        { source: 'credential-hashes', imagesWithInput: 2, imagesWithoutInput: 1, rowsOffered: 1, rowsInserted: 0 },
+        { source: 'components', imagesWithInput: 2, imagesWithoutInput: 1, rowsOffered: 40, rowsInserted: 11 },
+        { source: 'artifacts', imagesWithInput: 3, imagesWithoutInput: 0, rowsOffered: 7, rowsInserted: 0 },
+      ],
+      boundedInputs: [{ imageId: 'one', filename: 'router-v1.bin', kind: 'static-scan', covered: 64, total: 128 }],
+      unrecordedBounds: [{ kind: 'sbom-packages', imageCount: 2 }],
+      unstampedCredentials: [],
+      notReconciled: [
+        { table: 'reachability_prior', reason },
+        { table: 'corpus_rule', reason: 'curated' },
+      ],
+      verdict,
+    });
+
+    /** A promise the test settles by hand, so the in-flight state is observable rather than raced past. */
+    function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+      let resolve!: (v: T) => void;
+      const promise = new Promise<T>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    it.each([
+      ['en', 'Reindex cross-image corpus', 'Reindexing…', '17 row(s) inserted across 3 image(s).', 'Not reconciled'],
+      ['es', 'Reindexar corpus', 'Reindexando…', '17 fila(s) insertada(s) en 3 imagen(es).', 'Sin reconciliar'],
+    ] as const)(
+      'in %s: asks in the page locale, locks while busy, reports and refreshes',
+      async (locale, run, running, total, unreconciled) => {
+        setLocale(locale);
+        const pending = deferred<CorpusReindexReport>();
+        mockApi.reindexCorpus.mockReturnValue(pending.promise);
+        render(
+          <MemoryRouter>
+            <Corpus />
+          </MemoryRouter>,
+        );
+
+        fireEvent.click(await screen.findByRole('button', { name: run }));
+        expect(mockApi.reindexCorpus).toHaveBeenCalledWith(locale);
+
+        // In flight: the button is disabled and says so, and a second click cannot start a second run.
+        const busy = screen.getByRole('button', { name: running });
+        expect(busy).toBeDisabled();
+        fireEvent.click(busy);
+        expect(mockApi.reindexCorpus).toHaveBeenCalledTimes(1);
+        expect(mockApi.corpusOverview).toHaveBeenCalledTimes(1);
+
+        mockApi.corpusOverview.mockResolvedValue({
+          imageCount: 3,
+          ruleCount: 0,
+          credentialReuse: [],
+          credentialReuseTotal: 5,
+          componentPrevalence: [],
+          deviceFamilies: [],
+        });
+        pending.resolve(report(`verdict in ${locale}`, `prior reason in ${locale}`));
+
+        // The API's own localised sentence, the sum, each source's counts and what the reindex cannot restore.
+        expect(await screen.findByText(`verdict in ${locale}`)).toBeInTheDocument();
+        expect(screen.getByText(total)).toBeInTheDocument();
+        const components = screen.getByText('components').closest('tr');
+        expect(components).not.toBeNull();
+        expect(within(components as HTMLElement).getByText('11')).toBeInTheDocument();
+        expect(within(components as HTMLElement).getByText('40')).toBeInTheDocument();
+        expect(screen.getByText(unreconciled)).toBeInTheDocument();
+        expect(screen.getByText('reachability_prior')).toBeInTheDocument();
+        expect(screen.getByText(new RegExp(`prior reason in ${locale}`))).toBeInTheDocument();
+        expect(screen.getByText('corpus_rule')).toBeInTheDocument();
+        expect(screen.getByText(/router-v1\.bin — static-scan: 64/)).toBeInTheDocument();
+        expect(screen.getByText(/sbom-packages: 2/)).toBeInTheDocument();
+
+        // The overview and the rules are re-read, so the stat tiles carry the new counts.
+        await waitFor(() => expect(mockApi.corpusOverview).toHaveBeenCalledTimes(2));
+        expect(mockApi.corpusRules).toHaveBeenCalledTimes(2);
+        expect(await screen.findByText('5')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: run })).toBeEnabled();
+      },
+    );
+
+    it('re-enables the button and keeps the page when the reindex fails, without inventing a report', async () => {
+      setLocale('en');
+      mockApi.reindexCorpus.mockRejectedValue(new Error('boom'));
+      render(
+        <MemoryRouter>
+          <Corpus />
+        </MemoryRouter>,
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Reindex cross-image corpus' }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Reindex cross-image corpus' })).toBeEnabled());
+      expect(screen.queryByText('Not reconciled')).not.toBeInTheDocument();
+      expect(mockApi.corpusOverview).toHaveBeenCalledTimes(1);
+    });
   });
 });

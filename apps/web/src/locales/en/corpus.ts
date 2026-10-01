@@ -26,6 +26,38 @@ export const corpus = {
     watchlistRules: 'Watchlist rules',
   },
 
+  /**
+   * The operator's reconciliation action. The verdict sentence and each unreconciled table's reason come from the
+   * API already localised; what lives here is the frame around them. "Without input" must keep meaning "the
+   * provider never ran for that image", never "ran and found nothing" — the two read identically as a zero.
+   */
+  reindex: {
+    title: 'Reconcile the corpus',
+    sub: 'Rebuild the cross-image tables from the results already stored for every image. Additive and idempotent: rows already present are kept, nothing is deleted, and no provider is re-run.',
+    run: 'Reindex cross-image corpus',
+    running: 'Reindexing…',
+    totalInserted: (inserted: number, images: number) => `${inserted} row(s) inserted across ${images} image(s).`,
+    colSource: 'Source',
+    colInserted: 'Inserted',
+    colOffered: 'Offered',
+    colWithInput: 'Images with input',
+    colWithoutInput: 'Images without input',
+    withoutInputNote:
+      'An image without input never ran that provider, so it contributed nothing to read — not a result that found nothing. Offered rows that were not inserted were already in the corpus.',
+    boundedTitle: 'Bounded inputs',
+    boundedRow: (filename: string, kind: string, covered: number, total: number) =>
+      `${filename} — ${kind}: ${covered} of ${total} covered; its corpus rows inherit that bound.`,
+    unrecordedTitle: 'Bounds not recorded',
+    unrecordedRow: (kind: string, images: number) =>
+      `${kind}: ${images} image(s) stored before this input recorded its coverage — not known to be whole.`,
+    unstampedTitle: 'Credentials without a stored identity',
+    unstampedRow: (filename: string, rows: number) =>
+      `${filename}: ${rows} credential row(s) predate identity stamping and cannot join the reuse table until re-run.`,
+    notReconciledTitle: 'Not reconciled',
+    notReconciledSub:
+      'Tables this reindex structurally cannot restore. Their contents, or their emptiness, are not a measurement.',
+  },
+
   reuse: {
     title: 'Credential reuse',
     sub: 'Secrets that appear in more than one image — a prior worth checking, not a verdict. Promote a recurring one to the known-bad watchlist to auto-flag it on future uploads.',

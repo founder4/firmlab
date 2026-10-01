@@ -25,6 +25,33 @@ export const corpus: Messages['corpus'] = {
     watchlistRules: 'Reglas de vigilancia',
   },
 
+  reindex: {
+    title: 'Reconciliar el corpus',
+    sub: 'Reconstruye las tablas entre imágenes a partir de los resultados ya guardados de cada imagen. Aditivo e idempotente: conserva las filas existentes, no borra nada y no vuelve a ejecutar ningún proveedor.',
+    run: 'Reindexar corpus',
+    running: 'Reindexando…',
+    totalInserted: (inserted, images) => `${inserted} fila(s) insertada(s) en ${images} imagen(es).`,
+    colSource: 'Fuente',
+    colInserted: 'Insertadas',
+    colOffered: 'Ofrecidas',
+    colWithInput: 'Imágenes con entrada',
+    colWithoutInput: 'Imágenes sin entrada',
+    withoutInputNote:
+      'Una imagen sin entrada nunca ejecutó ese proveedor, así que no aportó nada que leer — no es un resultado que no encontró nada. Las filas ofrecidas y no insertadas ya estaban en el corpus.',
+    boundedTitle: 'Entradas acotadas',
+    boundedRow: (filename, kind, covered, total) =>
+      `${filename} — ${kind}: ${covered} de ${total} cubiertos; sus filas del corpus heredan ese límite.`,
+    unrecordedTitle: 'Límites no registrados',
+    unrecordedRow: (kind, images) =>
+      `${kind}: ${images} imagen(es) guardadas antes de que esta entrada registrara su cobertura — no consta que esté completa.`,
+    unstampedTitle: 'Credenciales sin identidad guardada',
+    unstampedRow: (filename, rows) =>
+      `${filename}: ${rows} fila(s) de credenciales anteriores al sellado de identidad; no entran en la tabla de reutilización hasta volver a ejecutarse.`,
+    notReconciledTitle: 'Sin reconciliar',
+    notReconciledSub:
+      'Tablas que este reindexado no puede restaurar por diseño. Su contenido, o que estén vacías, no es una medición.',
+  },
+
   reuse: {
     title: 'Reutilización de credenciales',
     sub: 'Secretos que aparecen en más de una imagen — una pista que conviene comprobar, no un veredicto. Promociona una recurrente a la lista de vigilancia para marcarla automáticamente en las próximas subidas.',
