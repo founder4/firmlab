@@ -1,0 +1,92 @@
+# Campaña de ocho horas — 2026-10-02
+
+## Mandato y ventana
+
+El usuario autoriza trabajar ocho horas en los pendientes prioritarios del proyecto y de `BACKLOG.md`,
+usando Claude, Codex y Antigravity como agentes de trabajo. Antes de agotar contexto o cuota, el coordinador
+debe lanzar Claude o Antigravity, entregarle el contexto importante y este mismo mandato, y cederle la
+coordinación. La cadena continúa dentro de la ventana mientras quede un servicio con capacidad disponible.
+
+- Inicio: 2026-10-01T23:12:49Z (2026-10-02 01:12:49 Europe/Madrid).
+- Fin: 2026-10-02T07:12:49Z (2026-10-02 09:12:49 Europe/Madrid).
+- Run de Orca: `run_ed63045bd51e`.
+- Coordinador inicial: `term_c60e1472-d872-4aa7-8316-d574fedc503e`.
+- CLI: `orca`, ruta `/usr/local/bin/orca`. Leer sus guías versionadas, no inventar comandos.
+
+No se debe extender la ventana por cambiar de coordinador ni declarar disponibilidad agotada por una
+medición ausente. Registrar cuota observada y hora; no leer ni copiar secretos. No consumir créditos de
+reinicio de cuota ni cambiar cuentas, credenciales, modelos o ajustes globales sin autorización explícita.
+
+## Restricciones y método
+
+Leer `AGENTS.md` y `CLAUDE.md`. Mantener estados de prueba asignados por código, cobertura y límites
+explícitos, ausencia de herramienta separada de resultado negativo, compatibilidad con resultados
+persistidos antiguos y dependencia `web -> api -> core`. Nuevos campos persistidos opcionales para siempre.
+
+La autorización de trabajo de backlog no implica despliegue, descarga de firmware, habilitación de
+research/egress ni mutación del corpus/base de datos desplegada. Mantener esas acciones fuera de la campaña.
+Sí se permiten fixtures y bases temporales, lecturas locales y contenedores desechables sin red ni volúmenes
+persistidos para validar herramientas. No ejecutar firmware desconocido incidentalmente. No publicar,
+enviar mensajes a terceros ni iniciar adquisiciones o trabajo de hardware. Las entradas «NO adoptar» y
+«evaluado, no programado» no son órdenes de implementar.
+
+Máximo recomendado: dos implementadores en worktrees separados y un revisor de sólo lectura. Dispatches
+autocontenidos: target, cambio, restricciones, ownership y aceptación observable. No editar archivos de otro
+worker activo. Integrar commits convencionales uno a uno, resolver solapes conscientemente y conservar
+trabajo preexistente. El coordinador mantiene BACKLOG y esta bitácora, salvo transferencia explícita.
+
+Iterar con tests focalizados. Construir core antes de consumidores. Para cada tanda integrada:
+`pnpm check`, `pnpm test`, `pnpm build`, `pnpm biome`; QA real cuando cruce herramientas o UI. No convertir
+una fixture en evidencia de proveedor real. Cerrar sólo los items cuya aceptación haya pasado.
+
+Usar Orca para agents/worktrees/mensajes. Procesar cada Delivery antes de ack; preguntas se responden por
+su id. Tras worker_done válido, reutilizar o liberar inmediatamente antes del ack. Nunca cerrar un worker
+activo o no verificable por ausencia. Un timeout es un checkpoint. Mantener al usuario informado sin pedir
+confirmaciones de decisiones rutinarias mientras duerme.
+
+## Estado recibido
+
+Base integrada: `55b5dff` en main, Git limpio. La sesión anterior implementó cancelación de jobs,
+presentación detallada de aislamiento y lectores Ghidra/funcdiff. Validación completa: 3.996 tests
+(core380/API2796/web751/scripts69), check/build/biome y QA de sockets, QEMU real pausado y navegador.
+Evidencia y límites: `docs/OPERABILITY-VALIDATION.md`.
+
+Antiguo Run `run_7c08e97a9feb`: ambos implementadores finalizaron y fueron liberados. El revisor dejó
+`/tmp/firmlab-cancellation-review.md` sin P1/P2 pendientes, pero su Dispatch `ctx_961de65975b2` no emitió
+worker_done antes de reiniciar Orca. Terminal `term_fc4af415-8929-4269-bcbe-4c6b094cb596` quedó user_owned;
+conservarla, no cerrar ni inventar settlement. No bloquear trabajo nuevo por esa contabilidad histórica.
+
+Cuotas iniciales observadas: Claude sesión0% usada/semanal5%; Codex sesión55%/semanal35%, reset05:31 local.
+Antigravity: medición no disponible; Gemini CLI OAuth deshabilitado. Intentar lanzamiento del agente
+configurado; no activar OAuth ni afirmar que el servicio está agotado por esa ausencia.
+
+## Prioridad inicial y siguiente trabajo
+
+1. Cancelación de esperas HTTP dentro de un job: propagar señal, respetar timeout/allowlist/egress y no
+   envenenar discovery compartido. Pruebas locales de abort y conservación de resultados/hallazgos.
+2. Ajustes móvil a390px y espera estable de FuzzPanel. QA desktop/móvil con API temporal; sin widenlisteners.
+3. Cliente web para reejecutar component-cve/auxsecrets y resultados guardados chipsec/renode: revisar primero
+   valor y ownership; no abrir operaciones masivas/reindex/borrado de findings sin una UX deliberada.
+4. Gaps alcanzables de RTOS/presentación/coverage y mejoras de proceso que se puedan probar sin firmware
+   nuevo, red o despliegue. Revisar qué ya existe antes de expandir un parser.
+
+AppArmor necesita despliegue; refresh SBOM/research necesita corpus/egress; boot real WR940N puede exigir
+ejecución de firmware y entorno. Mantenerlos pendientes con motivos. No inventar rangos CVE ni formatos
+vendor desde memoria para tachar backlog.
+
+## Relevo y cierre
+
+Actualizar esta bitácora en checkpoints: handles/Tasks/Dispatches, commits, ownership activo, tests, fallos,
+decisiones, next steps y cuotas. Preparar un informe local con prompts y receipts sin secretos. El relevo
+de coordinación se hace explícito, con un único propietario: receptor lee este documento, guías de Orca
+y Run, confirma recepción y adopta el Run mediante el comando documentado; el saliente deja de editar y
+despachar después de la aceptación. No simular el relevo con un worker subordinado aún activo.
+
+Al finalizar la ventana o al no quedar capacidad verificablemente utilizable, completar la tanda segura,
+dejar cambios revisables y validados, conservar work in progress, registrar bloqueos y devolver resumen
+en español con cambios, pruebas, pendientes y estado de Orca. No declarar objetivo completado sólo por
+ceder propiedad. No dejar agentes reclamables sin decisión ni cerrar terminales del usuario.
+
+## Bitácora
+
+- 23:13Z: creado Run, revisados backlog y cuotas. Se prepara primera tanda y comprobación de Antigravity.
