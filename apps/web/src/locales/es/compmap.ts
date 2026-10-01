@@ -151,6 +151,9 @@ export const compmap: Messages['compmap'] = {
   providerLabel: 'Proveedor:',
   build: 'Construir mapa de componentes',
   rebuild: 'Reconstruir mapa',
+  runCve: 'Comprobar CVE de versiones de componentes',
+  cveRunning: 'Comprobando versiones…',
+  cveFindings: (count: number) => `Hallazgos CVE de componentes · ${count}`,
   needsRootfs:
     'La extracción ya corrió y no recuperó ningún rootfs — el mapa se construye recorriendo uno, así que no hay nada que recorrer',
   jobFailed: 'El trabajo del mapa de componentes falló.',

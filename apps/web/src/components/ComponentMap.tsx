@@ -324,6 +324,9 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
   const [load, setLoad] = useState<Load>('loading');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cveFindings, setCveFindings] = useState<import('../api').Finding[]>([]);
+  const [cveReason, setCveReason] = useState<string | null>(null);
+  const [cveRunning, setCveRunning] = useState(false);
 
   const refresh = useCallback(async () => {
     // Both are reads of what has already run. The panel starts nothing on mount: a screen that silently launches a
@@ -365,6 +368,37 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
     }
   }, [imageId, refresh, t]);
 
+  const runCve = useCallback(async () => {
+    setCveRunning(true);
+    setError(null);
+    try {
+      const { jobId } = await api.runComponentCve(imageId);
+      const timer = window.setInterval(async () => {
+        try {
+          const job = await api.job(jobId);
+          if (!['done', 'error', 'cancelled'].includes(job.status)) return;
+          window.clearInterval(timer);
+          setCveRunning(false);
+          if (job.status === 'error') setError(job.error ?? t.compmap.jobFailed);
+          if (job.status === 'done') {
+            const result = job.result as { reason?: string } | null;
+            setCveReason(result?.reason ?? null);
+            // The result is from this provider only; fetch the ledger filtered by its source to include persisted rows.
+            const findings = await api.findings(imageId);
+            setCveFindings(findings.filter((finding) => finding.source === 'component-cve'));
+          }
+        } catch (e) {
+          window.clearInterval(timer);
+          setCveRunning(false);
+          setError(e instanceof Error ? e.message : t.compmap.jobFailed);
+        }
+      }, 700);
+    } catch (e) {
+      setCveRunning(false);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [imageId, t.compmap.jobFailed]);
+
   const graph = result?.graph;
   const state = compMapState(result, extraction);
   // `t` is a dependency because the view carries the rule SENTENCE: memoised on the graph alone, a locale switch
@@ -401,6 +435,31 @@ export function ComponentMap({ imageId }: { imageId: string }): JSX.Element {
   return (
     <div className="panel" style={{ marginTop: 16 }}>
       <div className="panel-title">{t.compmap.title}</div>
+      <button
+        type="button"
+        className="btn btn-secondary"
+        onClick={runCve}
+        disabled={cveRunning}
+        style={{ marginTop: 10 }}
+      >
+        {cveRunning ? (
+          <>
+            <span className="spinner" /> {t.compmap.cveRunning}
+          </>
+        ) : (
+          t.compmap.runCve
+        )}
+      </button>
+      {cveFindings.length > 0 && (
+        <p className="hint" aria-live="polite">
+          {t.compmap.cveFindings(cveFindings.length)}: {cveFindings.map((finding) => finding.title).join('; ')}
+        </p>
+      )}
+      {cveReason && (
+        <p className="hint" aria-live="polite">
+          {cveReason}
+        </p>
+      )}
       <div className="panel-sub">
         {t.compmap.sub.beforeNeeded} <span className="mono">DT_NEEDED</span> {t.compmap.sub.beforeLinker}{' '}
         <em>{t.compmap.sub.linker}</em> {t.compmap.sub.beforeRabin2} <span className="mono">rabin2</span>

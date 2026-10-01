@@ -334,6 +334,27 @@ describe('Settings — the AI provider is editable', () => {
     expect(screen.queryByText('synthetic-key-12345678')).not.toBeInTheDocument();
   });
 
+  it('clears saved model and base URL drafts so the returned values stay visible', async () => {
+    const state = llmState({
+      model: { value: 'saved-model', source: 'override' },
+      baseUrl: { value: 'https://saved.example/api', source: 'override' },
+    });
+    mockApi.setLlmSetting.mockResolvedValue(state);
+    renderSettings();
+    openTab('AI & Agent');
+    const model = await screen.findByRole('textbox', { name: 'Model' });
+    const modelRow = within(model.closest('.settings-row') as HTMLElement);
+    fireEvent.change(model, { target: { value: 'saved-model' } });
+    fireEvent.click(modelRow.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(model).toHaveValue('saved-model'));
+
+    const baseUrl = screen.getByRole('textbox', { name: 'Base URL' });
+    const urlRow = within(baseUrl.closest('.settings-row') as HTMLElement);
+    fireEvent.change(baseUrl, { target: { value: 'https://saved.example/api' } });
+    fireEvent.click(urlRow.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(baseUrl).toHaveValue('https://saved.example/api'));
+  });
+
   it('clears an override through its own field and renders the returned source', async () => {
     mockApi.llmSettings.mockResolvedValue({
       llm: llmState({ model: { value: 'custom-model', source: 'override' } }),

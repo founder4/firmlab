@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type CompGraph, type CompMapResult, type ExtractionBrowseView, type FilesListing, api } from '../api';
 import { setLocale } from '../i18n';
@@ -203,6 +203,50 @@ describe('middleTruncate', () => {
 });
 
 describe('ComponentMap', () => {
+  it('runs component CVE separately and refreshes only component-cve findings after polling', async () => {
+    mockApi.compmapResult.mockResolvedValue(result());
+    mockApi.runComponentCve.mockResolvedValue({ jobId: 'cve-job' });
+    mockApi.job.mockResolvedValue({
+      id: 'cve-job',
+      imageId: '447719f7',
+      kind: 'component-cve',
+      status: 'done',
+      createdAt: 0,
+      updatedAt: 0,
+      params: {},
+      log: '',
+      result: null,
+      error: null,
+    });
+    mockApi.findings.mockResolvedValue([
+      {
+        id: 'cve',
+        imageId: '447719f7',
+        source: 'component-cve',
+        kind: 'component-cve',
+        title: 'CVE-2024-1234',
+        severity: 'high',
+        proofState: 'static_confirmed',
+      },
+      {
+        id: 'other',
+        imageId: '447719f7',
+        source: 'gitleaks',
+        kind: 'secret',
+        title: 'Other source',
+        severity: 'medium',
+        proofState: 'static_confirmed',
+      },
+    ]);
+    render(<ComponentMap imageId="447719f7" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Check component versions for CVEs' }));
+    await waitFor(() => expect(screen.getByText(/CVE-2024-1234/)).toBeTruthy(), { timeout: 2500 });
+    expect(mockApi.runComponentCve).toHaveBeenCalledWith('447719f7');
+    expect(mockApi.findings).toHaveBeenCalledWith('447719f7');
+    expect(screen.queryByText(/Other source/)).toBeNull();
+    expect(mockApi.runAnalysis).not.toHaveBeenCalledWith('447719f7', 'opacidad');
+  });
+
   it('draws the graph — nodes, edges, and the two counts that legitimately disagree', async () => {
     mockApi.compmapResult.mockResolvedValue(result());
     const { container } = render(<ComponentMap imageId="447719f7" />);

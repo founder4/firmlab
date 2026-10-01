@@ -42,7 +42,11 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
   // A refused POST (the rootfs gate) and a job that started and then errored are DIFFERENT failures — one is a
   // prerequisite, the other a bench fault — and must not read as each other.
   const [error, setError] = useState<{ kind: 'prereq' | 'run'; message: string } | null>(null);
+  const [auxBusy, setAuxBusy] = useState(false);
+  const [auxFindings, setAuxFindings] = useState<string[]>([]);
+  const [auxReason, setAuxReason] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
+  const auxTimer = useRef<number | null>(null);
 
   useEffect(() => {
     api
@@ -53,6 +57,7 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
       .finally(() => setLoading(false));
     return () => {
       if (timer.current) window.clearInterval(timer.current);
+      if (auxTimer.current) window.clearInterval(auxTimer.current);
     };
   }, [imageId]);
 
@@ -85,6 +90,38 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
     }
   }, [imageId, m.runFailed]);
 
+  const runAuxSecrets = useCallback(async () => {
+    setAuxBusy(true);
+    setError(null);
+    try {
+      const { jobId } = await api.runAuxSecrets(imageId);
+      auxTimer.current = window.setInterval(async () => {
+        try {
+          const job = await api.job(jobId);
+          setLog(job.log);
+          if (!['done', 'error', 'cancelled'].includes(job.status)) return;
+          if (auxTimer.current) window.clearInterval(auxTimer.current);
+          setAuxBusy(false);
+          if (job.status === 'done') {
+            const result = job.result as { reason?: string } | null;
+            setAuxReason(result?.reason ?? null);
+            const findings = await api.findings(imageId);
+            setAuxFindings(
+              findings.filter((finding) => finding.source === 'auxsecrets').map((finding) => finding.title),
+            );
+          } else if (job.status === 'error') setError({ kind: 'run', message: job.error ?? m.runFailed });
+        } catch (e) {
+          if (auxTimer.current) window.clearInterval(auxTimer.current);
+          setAuxBusy(false);
+          setError({ kind: 'run', message: e instanceof Error ? e.message : m.runFailed });
+        }
+      }, 900);
+    } catch (e) {
+      setError({ kind: 'prereq', message: e instanceof Error ? e.message : String(e) });
+      setAuxBusy(false);
+    }
+  }, [imageId, m.runFailed]);
+
   if (loading) return <div className="skeleton" style={{ height: 160 }} />;
 
   const runButton = (
@@ -111,6 +148,32 @@ export function CredMatchPanel({ imageId }: { imageId: string }): JSX.Element {
       <div className="panel-sub" style={{ maxWidth: '72ch' }}>
         {m.sub}
       </div>
+
+      <button
+        type="button"
+        className="btn btn-secondary"
+        onClick={runAuxSecrets}
+        disabled={auxBusy}
+        style={{ marginTop: 12 }}
+      >
+        {auxBusy ? (
+          <>
+            <span className="spinner" /> {m.auxRunning}
+          </>
+        ) : (
+          m.runAuxSecrets
+        )}
+      </button>
+      {auxFindings.length > 0 && (
+        <p className="hint" aria-live="polite">
+          {m.auxFindings(auxFindings.length)}: {auxFindings.join('; ')}
+        </p>
+      )}
+      {auxReason && (
+        <p className="hint" aria-live="polite">
+          {auxReason}
+        </p>
+      )}
 
       {busy && log && (
         <pre className="mono" style={{ marginTop: 12, maxHeight: 160, overflow: 'auto', fontSize: 11.5 }}>

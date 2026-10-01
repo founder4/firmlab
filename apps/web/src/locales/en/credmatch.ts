@@ -20,6 +20,9 @@ export const credmatch = {
   sub: 'Cross-references the password hashes this image stores against the printable strings the same image ships — a join, not a crack. Firmware very often compiles the plaintext into a binary, a provisioning script or a config line, so the candidate set is the image’s own strings and one hash per candidate settles it. It finds a password only when the firmware ships it somewhere.',
   run: 'Run credential match',
   rerun: 'Re-run',
+  runAuxSecrets: 'Scan auxiliary partitions for secrets',
+  auxRunning: 'Scanning auxiliary partitions…',
+  auxFindings: (count: number) => `Auxiliary secret findings · ${count}`,
   running: 'Cross-referencing…',
   notRun:
     'No credential cross-reference has been run for this image, so its stored hashes have not been tested against its own strings. This is “has not run”, not a clean result.',

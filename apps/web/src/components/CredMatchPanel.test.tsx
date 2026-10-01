@@ -56,6 +56,50 @@ beforeEach(() => {
 });
 
 describe('CredMatchPanel', () => {
+  it('runs auxiliary secret scanning independently and displays only its refreshed findings', async () => {
+    mockApi.credmatchResult.mockResolvedValue(null);
+    mockApi.runAuxSecrets.mockResolvedValue({ jobId: 'aux-job' });
+    mockApi.job.mockResolvedValue({
+      id: 'aux-job',
+      imageId: 'img1',
+      kind: 'auxsecrets',
+      status: 'done',
+      createdAt: 0,
+      updatedAt: 0,
+      params: {},
+      log: '',
+      result: null,
+      error: null,
+    });
+    mockApi.findings.mockResolvedValue([
+      {
+        id: 'aux',
+        imageId: 'img1',
+        source: 'auxsecrets',
+        kind: 'secret',
+        title: 'Aux partition key',
+        severity: 'high',
+        proofState: 'static_confirmed',
+      },
+      {
+        id: 'cred',
+        imageId: 'img1',
+        source: 'credmatch',
+        kind: 'credential',
+        title: 'Credential finding',
+        severity: 'medium',
+        proofState: 'static_confirmed',
+      },
+    ]);
+    render(<CredMatchPanel imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan auxiliary partitions for secrets' }));
+    await waitFor(() => expect(screen.getByText(/Aux partition key/)).toBeTruthy(), { timeout: 2500 });
+    expect(mockApi.runAuxSecrets).toHaveBeenCalledWith('img1');
+    expect(mockApi.findings).toHaveBeenCalledWith('img1');
+    expect(screen.queryByText(/Credential finding/)).toBeNull();
+    expect(mockApi.runOpacidad).not.toHaveBeenCalled();
+  });
+
   it('reads no prior run as "has not run", never as a clean result', async () => {
     mockApi.credmatchResult.mockResolvedValue(null);
     render(<CredMatchPanel imageId="img1" />);

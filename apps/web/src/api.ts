@@ -2213,6 +2213,7 @@ export const api = {
   /** The stored rootfs dependency graph. `null` means nobody has built one — never "this rootfs links nothing". */
   compmapResult: (id: string) =>
     get<{ result: CompMapResult | null }>(`/api/images/${id}/compmap`).then((r) => r.result),
+  runComponentCve: (id: string) => post<{ jobId: string }>(`/api/images/${id}/component-cve`, {}),
   listPresets: (id: string) => get<{ presets: EmulationPreset[] }>(`/api/images/${id}/presets`).then((r) => r.presets),
   savePreset: (id: string, p: { name: string; mode: EmulationPreset['mode']; binary?: string; args?: string[] }) =>
     post<{ preset: EmulationPreset }>(`/api/images/${id}/presets`, p).then((r) => r.preset),
@@ -2267,6 +2268,11 @@ export const api = {
    * back 4xx and `post` throws its sentence — that sentence IS the prerequisite answer the panel renders.
    */
   runCredmatch: (id: string) => post<{ jobId: string }>(`/api/images/${id}/credmatch`, {}),
+  runAuxSecrets: (id: string) => post<{ jobId: string }>(`/api/images/${id}/auxsecrets`, {}),
+  auxSecretsResult: (id: string) =>
+    get<{ result: { findings?: Finding[]; reason?: string } | null }>(`/api/images/${id}/auxsecrets`).then(
+      (r) => r.result,
+    ),
   /** The most recent completed run, or null when none has finished — never-run must never read as clean. */
   credmatchResult: (id: string) =>
     get<{ result: CredMatchResult | null }>(`/api/images/${id}/credmatch`).then((r) => r.result),

@@ -86,7 +86,11 @@ function LlmProviderEditor(): JSX.Element {
       try {
         setLlm(await api.setLlmSetting(key, value));
         // The draft is dropped rather than kept: what is authoritative now is what the server just reported.
-        setDraft((d) => ({ ...d, [key]: '' }));
+        setDraft((d) => {
+          const next = { ...d };
+          delete next[key];
+          return next;
+        });
         toast.success(e.saved);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));

@@ -6,6 +6,9 @@ export const credmatch: Messages['credmatch'] = {
   sub: 'Cruza los hashes de contraseña que esta imagen almacena contra las cadenas imprimibles que la misma imagen incluye —un cruce, no un descifrado—. El firmware a menudo compila el texto plano en un binario, un script de aprovisionamiento o una línea de configuración, así que el conjunto de candidatos son las propias cadenas de la imagen y un hash por candidato lo resuelve. Sólo encuentra una contraseña cuando el firmware la lleva escrita en algún sitio.',
   run: 'Ejecutar cotejo de credenciales',
   rerun: 'Reejecutar',
+  runAuxSecrets: 'Buscar secretos en particiones auxiliares',
+  auxRunning: 'Analizando particiones auxiliares…',
+  auxFindings: (count: number) => `Hallazgos de secretos auxiliares · ${count}`,
   running: 'Cruzando…',
   notRun:
     'No se ha ejecutado ningún cotejo de credenciales para esta imagen, así que sus hashes almacenados no se han probado contra sus propias cadenas. Esto es «no se ha ejecutado», no un resultado limpio.',
