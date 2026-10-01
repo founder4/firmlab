@@ -90,3 +90,19 @@ ceder propiedad. No dejar agentes reclamables sin decisión ni cerrar terminales
 ## Bitácora
 
 - 23:13Z: creado Run, revisados backlog y cuotas. Se prepara primera tanda y comprobación de Antigravity.
+- 23:22Z: primera tanda activa, los tres proveedores con `turn_started` observado:
+  - Claude: Task `task_4772cd612237`, Dispatch `ctx_502847e78ccc`, terminal
+    `term_29b58d0f-9f49-4303-8841-955544648352`, worktree
+    `/Users/agfil/orca/workspaces/firmlab/overnight-http-abort`. Ownership: research/config, webprobe,
+    helper HTTP y tests. Default observado Claude Opus5.5/high/Pro, sin cambiar modelo.
+  - Codex: Task `task_ce68474a6dfa`, Dispatch `ctx_00efe2a6e162`, terminal
+    `term_afc0e076-0bb3-45cc-846c-3284706a3e89`, worktree
+    `/Users/agfil/orca/workspaces/firmlab/overnight-settings`. Ownership: Settings, CSS sólo Settings y
+    test FuzzPanel. Default observado GPT-6-Astra/high, sin cambiar modelo.
+  - Antigravity: Task `task_dfb18a5b8e7d`, Dispatch `ctx_dfcce1cbfde8`, terminal
+    `term_3d93fd95-87f9-4df8-841b-a37e8b41611b`, main, sólo lectura: revisión + siguiente prioridad.
+    La cuota no se puede medir, pero el lanzamiento y el inicio de turno sí están verificados.
+- Los primeros intentos Claude `ctx_000f05c54bf3` (trust-workspace) y Codex `ctx_6bcc16774fd1`
+  (terminal_handle_stale) fallaron antes de ejecutar tarea y se liberaron según sus receipts. Se aceptó
+  la carpeta propia de FirmLab en la pantalla de confianza de Claude y se reintentaron las mismas Tasks.
+  No hay dos intentos activos para ninguna Task ni cambios de credenciales/configuración de cuotas.
