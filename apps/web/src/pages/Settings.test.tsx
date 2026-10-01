@@ -14,7 +14,7 @@
  * The lane switches are deliberately NOT re-tested here: their prose is composed by the API and arrives in the
  * locale this page asked for, which `api.test.ts` pins at the request level.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
@@ -305,6 +305,56 @@ describe('Settings — no English residue in the converted tabs', () => {
  * off with nothing on screen to say so.
  */
 describe('Settings — the AI provider is editable', () => {
+  it('names each editable field for keyboard and assistive technology users', async () => {
+    renderSettings();
+    openTab('AI & Agent');
+    expect(await screen.findByRole('combobox', { name: 'Provider' })).toHaveValue('deepseek');
+    expect(screen.getByRole('textbox', { name: 'Model' })).toHaveValue('deepseek-flash');
+    expect(screen.getByRole('textbox', { name: 'Base URL' })).toHaveValue('https://api.deepseek.com');
+    expect(screen.getByLabelText('API key')).toHaveAttribute('type', 'password');
+  });
+
+  it('saves a replacement key, drops the draft, and shows only the returned tail and provenance', async () => {
+    mockApi.setLlmSetting.mockResolvedValue(
+      llmState({
+        apiKey: { present: true, source: 'override', tail: '5678', envVar: 'FIRMLAB_LLM_API_KEY' },
+      }),
+    );
+    renderSettings();
+    openTab('AI & Agent');
+    const key = await screen.findByLabelText('API key');
+    const row = within(key.closest('.settings-row') as HTMLElement);
+    fireEvent.change(key, { target: { value: 'synthetic-key-12345678' } });
+    fireEvent.click(row.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(key).toHaveValue(''));
+    expect(mockApi.setLlmSetting).toHaveBeenCalledWith('FIRMLAB_LLM_API_KEY', 'synthetic-key-12345678');
+    expect(row.getByText(/…5678/)).toBeInTheDocument();
+    expect(row.getByText('set here')).toBeInTheDocument();
+    expect(row.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.queryByText('synthetic-key-12345678')).not.toBeInTheDocument();
+  });
+
+  it('clears an override through its own field and renders the returned source', async () => {
+    mockApi.llmSettings.mockResolvedValue({
+      llm: llmState({ model: { value: 'custom-model', source: 'override' } }),
+      updatedAt: {},
+    });
+    mockApi.clearLlmSetting.mockResolvedValue(
+      llmState({
+        model: { value: 'environment-model', source: 'environment' },
+      }),
+    );
+    renderSettings();
+    openTab('AI & Agent');
+    const model = await screen.findByLabelText('Model');
+    const row = within(model.closest('.settings-row') as HTMLElement);
+    fireEvent.click(row.getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(model).toHaveValue('environment-model'));
+    expect(mockApi.clearLlmSetting).toHaveBeenCalledWith('FIRMLAB_LLM_MODEL');
+    expect(row.getByText('from the environment')).toBeInTheDocument();
+    expect(row.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument();
+  });
+
   it('offers exactly the providers the SERVER reports, never a hardcoded list', async () => {
     // The old prose offered `ollama`, which `llm.ts` has never supported. The list comes from the API now, so the
     // screen structurally cannot offer one the build would reject.

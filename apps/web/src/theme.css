@@ -586,6 +586,51 @@ a:hover {
   border-radius: var(--r-lg);
   padding: var(--panel-pad);
 }
+.settings-row {
+  display: flex;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-soft);
+  align-items: baseline;
+}
+.settings-row-label {
+  width: 190px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+/* Settings fields keep their provenance and actions readable even when identifiers have no break points. */
+.settings-agent .settings-row-value {
+  overflow-wrap: anywhere;
+}
+.settings-provenance {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.settings-agent .input {
+  min-width: 0;
+}
+.settings-agent .segmented {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.settings-agent .segmented > button {
+  height: auto;
+  min-height: 26px;
+}
+@media (max-width: 600px) {
+  .settings-agent .settings-row {
+    flex-direction: column;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .settings-agent .settings-row-label {
+    width: auto;
+  }
+}
 .panel + .panel {
   margin-top: 16px;
 }

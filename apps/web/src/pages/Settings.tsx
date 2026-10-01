@@ -26,17 +26,11 @@ const TAB_IDS: SettingsTab[] = ['appearance', 'analysis', 'tools', 'agent', 'pri
 /** A labeled row of read-only fact + value (the transparency panels are honest mirrors of real backend state). */
 function Row({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 12,
-        padding: '9px 0',
-        borderBottom: '1px solid var(--border-soft)',
-        alignItems: 'baseline',
-      }}
-    >
-      <div style={{ width: 190, flexShrink: 0, color: 'var(--text-dim)', fontSize: 13 }}>{label}</div>
-      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+    <div className="settings-row">
+      <div className="settings-row-label">{label}</div>
+      <div className="settings-row-value" style={{ flex: 1, minWidth: 0 }}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -126,7 +120,7 @@ function LlmProviderEditor(): JSX.Element {
 
   /** A field's provenance chip plus, for an override, the way back to the environment. */
   const Provenance = ({ source, settingKey }: { source: LlmSettings['provider']['source']; settingKey: string }) => (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+    <span className="settings-provenance">
       <span className="hint" style={{ fontSize: 11.5 }}>
         {sourceLabel(source)}
       </span>
@@ -165,6 +159,7 @@ function LlmProviderEditor(): JSX.Element {
 
       <Row label={e.provider}>
         <select
+          aria-label={e.provider}
           className="input"
           style={{ maxWidth: 220 }}
           value={llm.provider.value}
@@ -186,6 +181,7 @@ function LlmProviderEditor(): JSX.Element {
           <input
             className="input mono"
             style={{ maxWidth: 260 }}
+            aria-label={e.model}
             value={draft.FIRMLAB_LLM_MODEL ?? llm.model.value}
             placeholder={llm.defaultModels[llm.provider.value] || 'model-id'}
             onChange={(ev) => setDraft((d) => ({ ...d, FIRMLAB_LLM_MODEL: ev.target.value }))}
@@ -213,6 +209,7 @@ function LlmProviderEditor(): JSX.Element {
           <input
             className="input mono"
             type="password"
+            aria-label={e.apiKey}
             style={{ maxWidth: 260 }}
             autoComplete="off"
             placeholder={e.keyPlaceholder}
@@ -243,6 +240,7 @@ function LlmProviderEditor(): JSX.Element {
           <input
             className="input mono"
             style={{ maxWidth: 300 }}
+            aria-label={e.baseUrl}
             value={draft.FIRMLAB_LLM_BASE_URL ?? llm.baseUrl.value}
             onChange={(ev) => setDraft((d) => ({ ...d, FIRMLAB_LLM_BASE_URL: ev.target.value }))}
           />
@@ -624,7 +622,7 @@ export function Settings(): JSX.Element {
       )}
 
       {tab === 'agent' && (
-        <div className="panel" style={{ maxWidth: 720 }}>
+        <div className="panel settings-agent" style={{ maxWidth: 720 }}>
           <div className="panel-title">{t.settings.agent.title}</div>
           <div className="panel-sub">{t.settings.agent.sub}</div>
           <Row label={t.settings.agent.activeProvider}>

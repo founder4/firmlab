@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
 import { setLocale } from '../i18n';
@@ -57,8 +57,20 @@ describe('FuzzPanel — AFL++ honesty', () => {
   });
 
   it('refuses to run without a target binary', async () => {
+    let resolveStatus!: (status: { available: boolean }) => void;
+    mockApi.fuzzStatus.mockReturnValue(
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      }),
+    );
     render(<FuzzPanel imageId="img1" />);
-    fireEvent.click(await screen.findByRole('button', { name: en.panels.fuzz.run }));
+    // The run control exists while availability is still loading, but is disabled until the status resolves.
+    const run = screen.getByRole('button', { name: en.panels.fuzz.run });
+    expect(run).toBeDisabled();
+    await act(async () => resolveStatus({ available: true }));
+    await screen.findByText(en.panels.fuzz.runnable);
+    expect(run).toBeEnabled();
+    fireEvent.click(run);
     expect(await screen.findByText(en.panels.fuzz.needBinary)).toBeInTheDocument();
     expect(mockApi.runFuzz).not.toHaveBeenCalled();
   });
