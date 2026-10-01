@@ -208,6 +208,20 @@ export const settings = {
       saved: 'Saved',
       cleared: 'Cleared — this field follows the environment again',
     },
+    isolationPosture: {
+      title: 'Execution restrictions available to the agent',
+      scope:
+        'Host capabilities for isolated trigger and user-mode runs. Each provider may apply different limits; this is not evidence about a previous run.',
+      network: 'Network access',
+      isolated: 'Isolated from the host network',
+      hostNetwork: 'Host network available',
+      unknown: 'Not reported by this server',
+      resources: 'CPU and resource limits',
+      available: 'Available',
+      unavailable: 'Unavailable',
+      boundary:
+        'Filesystem, host processes and credentials are not isolated. Network and resource restrictions alone do not waive operator approval.',
+    },
     governorTitle: 'Agent governor',
     governorSub: [
       'The agent reasons within a deterministic skeleton and pauses for approval before emulation. These limits are',

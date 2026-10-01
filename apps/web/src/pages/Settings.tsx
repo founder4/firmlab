@@ -9,6 +9,7 @@ import {
   api,
   fmtBytes,
 } from '../api';
+import { IsolationPosture } from '../components/IsolationPosture';
 import { LOCALES, type Locale, intlTag, setLocale, useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { startTour } from '../onboarding';
@@ -639,6 +640,7 @@ export function Settings(): JSX.Element {
               listed `ollama`, which `llm.ts` has never supported. Editable now, and the provider list comes from
               the server so the screen cannot offer one this build would reject. */}
           <LlmProviderEditor />
+          <IsolationPosture phase4={agent?.phase4} />
 
           <div className="panel-title" style={{ marginTop: 22 }}>
             {t.settings.agent.governorTitle}

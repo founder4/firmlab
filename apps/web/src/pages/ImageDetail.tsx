@@ -42,6 +42,7 @@ import { FindingsLedger, PROOF_STATE_META } from '../components/FindingsLedger';
 import { FuncDiffPanel } from '../components/FuncDiffPanel';
 import { FuzzPanel } from '../components/FuzzPanel';
 import { HardwareInterfaces } from '../components/HardwareInterfaces';
+import { IsolationPosture } from '../components/IsolationPosture';
 import { KernelPosture } from '../components/KernelPosture';
 import { KmodPanel } from '../components/KmodPanel';
 import { OpacidadPanel } from '../components/OpacidadPanel';
@@ -2166,6 +2167,7 @@ export function AgentPanel({ imageId }: { imageId: string }): JSX.Element {
           </button>
         </div>
         <div className="panel-sub">{a.sub}</div>
+        <IsolationPosture phase4={config?.phase4} />
         {session && <BudgetGauge session={session} />}
         {session?.haltReason && (
           <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--sev-medium, #e6b45c)' }}>

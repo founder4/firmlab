@@ -966,6 +966,13 @@ export interface AgentConfig {
   };
   budget?: GovernorBudget;
   approval?: AgentApprovalState;
+  /** Optional for deployments predating the runtime posture contract. */
+  phase4?: {
+    isolation: 'full' | 'partial' | 'none';
+    netns?: '-n' | '-rn' | null;
+    resourceLimits?: boolean;
+    autoRun?: boolean;
+  };
 }
 
 export interface AgentApprovalState {

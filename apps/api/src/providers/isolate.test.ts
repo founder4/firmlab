@@ -3,7 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
-import { type IsolationLimits, buildIsolatedInvocation, loadIsolationLimits, runIsolated } from './isolate.js';
+import {
+  type IsolationLimits,
+  buildIsolatedInvocation,
+  isolationPosture,
+  loadIsolationLimits,
+  runIsolated,
+} from './isolate.js';
 
 const limits: IsolationLimits = {
   cpuSeconds: 30,
@@ -109,5 +115,15 @@ describe.skipIf(process.platform === 'win32')('runIsolated process cleanup', () 
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('isolationPosture', () => {
+  it('requires usable resource limits before advertising namespace wrapping', () => {
+    expect(isolationPosture(false, '-n')).toEqual({ level: 'none', netns: null, resourceLimits: false });
+  });
+
+  it('keeps both network and resource restrictions at the partial ceiling', () => {
+    expect(isolationPosture(true, '-rn')).toEqual({ level: 'partial', netns: '-rn', resourceLimits: true });
   });
 });

@@ -10,7 +10,7 @@ import { loadGovernorBudget } from '../agent/governor.js';
 import { approveEmulation, declineEmulation, startAgentSession } from '../agent/session.js';
 import { loadLlmConfig } from '../llm.js';
 import { detectFuzzing } from '../providers/fuzz.js';
-import { detectIsolation } from '../providers/isolate.js';
+import { detectIsolationPosture } from '../providers/isolate.js';
 import { getAgentPreapprovalOverride } from '../settings.js';
 import { type AgentSessionRow, type AgentStepRow, getImage, getSession, latestSession, listSteps } from '../store.js';
 
@@ -55,8 +55,14 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   // filesystem/process/credential containment required to waive the human gate.
   app.get('/agent/config', async () => {
     const cfg = loadLlmConfig();
-    if (!cfg) return { enabled: false };
-    const isolation = await detectIsolation();
+    const posture = await detectIsolationPosture();
+    const phase4 = {
+      isolation: posture.level,
+      netns: posture.netns,
+      resourceLimits: posture.resourceLimits,
+      autoRun: false,
+    };
+    if (!cfg) return { enabled: false, phase4 };
     const approval = resolveAgentApproval(process.env, getAgentPreapprovalOverride());
     return {
       enabled: true,
@@ -70,7 +76,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       },
       budget: loadGovernorBudget(),
       approval,
-      phase4: { isolation, fuzzing: await detectFuzzing(), autoRun: isolation === 'full' },
+      phase4: { ...phase4, fuzzing: await detectFuzzing() },
     };
   });
 

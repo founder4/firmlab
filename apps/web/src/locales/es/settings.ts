@@ -172,6 +172,20 @@ export const settings: Messages['settings'] = {
       saved: 'Guardado',
       cleared: 'Borrado — este campo vuelve a seguir al entorno',
     },
+    isolationPosture: {
+      title: 'Restricciones de ejecución disponibles para el agente',
+      scope:
+        'Capacidades del host para disparadores aislados y ejecuciones en modo usuario. Cada proveedor puede aplicar límites distintos; esto no prueba cómo se ejecutó una corrida anterior.',
+      network: 'Acceso a la red',
+      isolated: 'Aislado de la red del host',
+      hostNetwork: 'Red del host disponible',
+      unknown: 'Este servidor no lo declara',
+      resources: 'Límites de CPU y recursos',
+      available: 'Disponibles',
+      unavailable: 'No disponibles',
+      boundary:
+        'El sistema de archivos, los procesos del host y las credenciales no están aislados. Las restricciones de red y recursos por sí solas no eximen la aprobación del operador.',
+    },
     governorTitle: 'Gobernador del agente',
     governorSub: [
       'El agente razona dentro de un esqueleto determinista y se detiene a pedir aprobación antes de emular. Estos',

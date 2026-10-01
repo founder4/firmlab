@@ -23,6 +23,13 @@ const execFileAsync = promisify(execFile);
 /** 'full' remains a legacy result value; the current runtime never detects full containment. */
 export type IsolationLevel = 'full' | 'partial' | 'none';
 
+/** Capabilities measured for runIsolated; never a claim about a saved run or other provider. */
+export interface IsolationPosture {
+  level: IsolationLevel;
+  netns: '-n' | '-rn' | null;
+  resourceLimits: boolean;
+}
+
 export interface IsolationLimits {
   cpuSeconds: number;
   addressSpaceBytes: number;
@@ -85,7 +92,7 @@ export function buildIsolatedInvocation(
   return { file: argv[0] as string, args: argv.slice(1) };
 }
 
-let cachedLevel: IsolationLevel | null = null;
+let cachedPosture: Promise<IsolationPosture> | null = null;
 let cachedNetns: string[] = [];
 
 async function canRunClean(file: string, args: string[]): Promise<boolean> {
@@ -97,32 +104,32 @@ async function canRunClean(file: string, args: string[]): Promise<boolean> {
   }
 }
 
-/**
- * Detect the best isolation level this deployment can enforce, and remember which unshare flag creates a netns.
- *   full    = reserved for a future containment implementation; never reported here.
- *   partial = prlimit, optionally with a network namespace → approval or explicit preauthorization required.
- *   none    = neither (macOS dev, util-linux absent) → Phase-3 approval flow.
- */
+/** Pure: network namespaces restrict network access, but cannot provide full containment. */
+export function isolationPosture(resourceLimits: boolean, netns: '-n' | '-rn' | null): IsolationPosture {
+  if (!resourceLimits) return { level: 'none', netns: null, resourceLimits: false };
+  return { level: 'partial', netns, resourceLimits: true };
+}
+
+/** Probe once, including concurrent callers, and expose the same restrictions the runner will use. */
+export async function detectIsolationPosture(): Promise<IsolationPosture> {
+  cachedPosture ??= (async () => {
+    if (process.platform !== 'linux' || !(await canRunClean('prlimit', ['--cpu=1', '--', 'true']))) {
+      return isolationPosture(false, null);
+    }
+    const netns = (await canRunClean('unshare', ['-n', 'true']))
+      ? '-n'
+      : (await canRunClean('unshare', ['-rn', 'true']))
+        ? '-rn'
+        : null;
+    cachedNetns = netns ? [netns] : [];
+    return isolationPosture(true, netns);
+  })();
+  return { ...(await cachedPosture) };
+}
+
+/** Legacy level API remains stable; detailed posture distinguishes network from resource restrictions. */
 export async function detectIsolation(): Promise<IsolationLevel> {
-  if (cachedLevel) return cachedLevel;
-  if (process.platform !== 'linux') {
-    cachedLevel = 'none';
-    return cachedLevel;
-  }
-  if (!(await canRunClean('prlimit', ['--cpu=1', '--', 'true']))) {
-    cachedLevel = 'none';
-    return cachedLevel;
-  }
-  if (await canRunClean('unshare', ['-n', 'true'])) {
-    cachedNetns = ['-n'];
-    cachedLevel = 'partial';
-  } else if (await canRunClean('unshare', ['-rn', 'true'])) {
-    cachedNetns = ['-rn']; // rootless: map to root in a new userns, then a fresh netns — no CAP_SYS_ADMIN needed
-    cachedLevel = 'partial';
-  } else {
-    cachedLevel = 'partial';
-  }
-  return cachedLevel;
+  return (await detectIsolationPosture()).level;
 }
 
 /**

@@ -367,3 +367,18 @@ describe('Settings — the AI provider is editable', () => {
     expect(screen.getAllByText('provider default')).toHaveLength(2);
   });
 });
+
+describe('Settings — execution restrictions', () => {
+  it('shows host networking even with the agent disabled', async () => {
+    mockApi.agentConfig.mockResolvedValue({
+      enabled: false,
+      phase4: { isolation: 'partial', netns: null, resourceLimits: true },
+    });
+    renderSettings();
+    openTab('AI & Agent');
+    expect(await screen.findByText('Host network available')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Network and resource restrictions alone do not waive operator approval/),
+    ).toBeInTheDocument();
+  });
+});
