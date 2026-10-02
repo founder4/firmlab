@@ -82,3 +82,21 @@ ni permitir toma de control. 52 pruebas focalizadas pasan y la suite completa da
 actualizados; supervisor anterior detenido sin forzar y nuevo PID 38720, mismo plazo. La lectura
 real del Antigravity que falló ya devuelve `idle` con prompt vacío comprobado. La reactivación
 real controlada queda pendiente de su recibo y ejecución; no basta con instalar el arreglo.
+
+## Cierre: generación 6 y prueba controlada de reactivación (Claude)
+
+Claude `term_c960cc64` ejecutó un canario real (lectura, herramienta, escritura) a las 14:47 UTC y adoptó el
+mismo Run desde su propia terminal a las 14:55:20 UTC (`run-show`: generación 6). Con autorización explícita
+terminó una vez su turno a propósito con el compositor vacío: el supervisor PID 38720 observó `idle` a las
+14:55:53 y 14:56:23, envió una reactivación (`d0287bfa…`, 14:56:55) aceptada e iniciada, y el journal la
+liquidó como `confirmed` a partir de ejecución nueva, con `uncertainty: null` y `gaps: []`. Nadie más envió
+continuación. Esto prueba **un** ciclo idle → reactivación → confirmado en Claude. No prueba la
+reactivación automática de Antigravity (sólo su reconocimiento de pantalla renderizada), ni resistencia ante
+cuota real, ni continuidad de cuatro horas: la campaña sigue **fallida** por las dos interrupciones
+(~14 min y ~1 h 56 min).
+
+QA de la captura de RAM en navegador real contra la API sintética local (127.0.0.1:8911, datos sintéticos,
+reiniciada sobre el build actual porque la instancia anterior era previa a la ruta): la sección renderiza sin
+errores de consola ni peticiones fallidas; sin Renode en el host, el clic devuelve `blocked_by_platform` con el
+motivo. Límites que siguen en pie: no hay ELF FreeRTOS real en el corpus; la RAM capturada de Zephyr no prueba
+tareas; las etiquetas de familia de switch y el fabricante son sólo indicios; falta validar la red real del WR940N.
