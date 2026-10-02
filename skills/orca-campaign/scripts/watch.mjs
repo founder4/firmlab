@@ -142,7 +142,33 @@ export async function orcaCall(command, args) {
   }
 }
 
-export async function snapshotRun(call, options) {
+/**
+ * A native `working` row is only evidence while it is fresh. Claude's native state was observed stuck at `working`
+ * for 25 minutes after its turn ended (2026-10-02, updatedAt frozen at the last tool call), and a guard that skipped
+ * every other read while that row said `working` reported `unknown` forever. A stale row therefore earns a rendered
+ * read and a native idle wait — never a verdict on its own.
+ */
+export function staleWorking(activity, observedAt, now) {
+  if (activity !== 'working') return false;
+  const age = now - observedAt;
+  return !Number.isFinite(age) || age < 0 || age > FRESH_MS;
+}
+
+/**
+ * A turn in progress, read from the rendered frame. Claude keeps an EMPTY composer and its usual footer on screen
+ * while it works (captured 2026-10-02: `✳ Clauding… (1m 27s · ↓ 6.9k tokens · thought for 14s)` above `❯`), and
+ * prints no "esc to interrupt", so an empty prompt is not idleness. Its finished line (`✻ Worked for 20m 22s`) has
+ * no ellipsis and no running timer, and does not match.
+ */
+export function hasActiveTurn(tail) {
+  return tail.some(
+    (line) =>
+      /\besc to (?:interrupt|cancel|stop)\b/i.test(line) ||
+      /^\s*\S\s+\S[^()]*…\s*\((?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/.test(line),
+  );
+}
+
+export async function snapshotRun(call, options, clock = Date.now) {
   const { run, error } = await call(['orchestration', 'run-show', '--id', options.run]);
   if (error || !run?.coordinator_handle) return { error: error ?? 'no_owner' };
   const owner = run.coordinator_handle;
@@ -176,15 +202,20 @@ export async function snapshotRun(call, options) {
     ?.find((w) => w.worktreeId === show.terminal?.worktreeId)
     ?.agents?.find((a) => a.paneKey === paneKey);
   const activity = native?.interrupted ? 'interrupted' : (native?.state ?? projection?.stage?.activity);
+  const observedAt = native?.updatedAt ?? projection?.liveness?.observedAt;
+  // Read after the fleet call, as ownerState measures age: a row stamped during that call is not from the future.
+  const stale = staleWorking(activity, observedAt, clock());
+  // A fresh `working` row is trusted and nothing else is read; every other state, a stale `working` row included,
+  // must be confirmed from the rendered frame.
+  const inspect = activity !== 'working' || stale;
   // The default read is the accumulated stream: a TUI that repaints its composer
   // with cursor moves (Antigravity) never emits it at the end of that stream, so
   // a done owner looked unrecognized forever. `--screen` is the rendered frame.
   // A composer draft is reported in `draft` and EXCLUDED from tail, so a visible
   // empty prompt proves nothing while a draft is present. `screen-unavailable`
   // (stream fallback) or an absent source (older host) proves no frame at all.
-  const screen =
-    activity === 'working' ? {} : await call(['terminal', 'read', '--terminal', owner, '--screen', '--limit', '20']);
-  if (activity !== 'working' && (screen.error || !Array.isArray(screen.terminal?.tail))) {
+  const screen = inspect ? await call(['terminal', 'read', '--terminal', owner, '--screen', '--limit', '20']) : {};
+  if (inspect && (screen.error || !Array.isArray(screen.terminal?.tail))) {
     return { owner, generation: run.consumer_generation, error: 'screen_unreadable' };
   }
   const tail = screen.terminal?.tail ?? [];
@@ -197,8 +228,9 @@ export async function snapshotRun(call, options) {
   const capacityBlocked = rendered && hasCapacityBlock(tail);
   const menuBlocked = !capacityBlocked && hasBlockingMenu(tail);
   const emptyPrompt = rendered && !draft && visibleInputPrompt(tail);
+  const activeTurn = rendered && hasActiveTurn(tail);
   const wait =
-    activity === 'working' || activity === 'interrupted' || capacityBlocked
+    !inspect || activity === 'interrupted' || capacityBlocked || activeTurn
       ? {}
       : await call(['terminal', 'wait', '--terminal', owner, '--for', 'tui-idle', '--timeout-ms', '1000']);
   return {
@@ -208,20 +240,24 @@ export async function snapshotRun(call, options) {
     incarnation: show.terminal?.incarnationId,
     agent: show.terminal?.agentIdentity,
     activity,
+    staleWorking: stale,
+    activeTurn,
     stateStartedAt: native?.stateStartedAt,
     capacityBlocked,
     menuBlocked,
     screenSource: screen.terminal?.source,
-    inputEmpty: activity === 'working' ? undefined : capacityBlocked ? false : emptyPrompt,
+    inputEmpty: !inspect ? undefined : capacityBlocked ? false : emptyPrompt,
     error: capacityBlocked
       ? 'capacity_blocked'
-      : show.terminal?.connected && activity !== 'working' && draft
+      : show.terminal?.connected && inspect && draft
         ? 'composer_draft_present'
-        : show.terminal?.connected && activity !== 'working' && !rendered
+        : show.terminal?.connected && inspect && !rendered
           ? 'screen_not_rendered'
-          : show.terminal?.connected && activity !== 'working' && !emptyPrompt
+          : show.terminal?.connected && inspect && !emptyPrompt
             ? 'input_prompt_unrecognized'
-            : undefined,
+            : show.terminal?.connected && stale && activeTurn
+              ? 'stale_native_working_turn_visible'
+              : undefined,
     nativeIdleProven:
       !capacityBlocked && native?.state === 'done' && !native.interrupted && emptyPrompt && !menuBlocked,
     liveness:
@@ -230,14 +266,18 @@ export async function snapshotRun(call, options) {
         : native && show.terminal?.connected
           ? 'live'
           : projection?.liveness?.verdict,
-    observedAt: native?.updatedAt ?? projection?.liveness?.observedAt,
+    observedAt,
     liveStatus: native ? 'fresh' : projection?.evidence?.liveStatus,
+    // Positive agreement only: a rendered empty composer with no draft, menu, quota or turn in progress, AND a
+    // satisfied native idle wait. For a stale `working` row this is the only way to `idle`; absence never is.
     idleProven:
       !capacityBlocked &&
       rendered &&
       !draft &&
       activity !== 'interrupted' &&
       !menuBlocked &&
+      !activeTurn &&
+      (!stale || emptyPrompt) &&
       wait.wait?.satisfied === true,
     activeHandles: rows
       .filter((w) => !['completed', 'failed', 'stopped'].includes(w.dispatchStatus))
@@ -361,7 +401,9 @@ async function standbySnapshot(call, options, handle) {
 export async function superviseStep(state, options, dependencies) {
   const { call, persist, now: clock, context } = dependencies;
   const snapshot =
-    clock() >= options.until ? { owner: state.owner, generation: state.generation } : await snapshotRun(call, options);
+    clock() >= options.until
+      ? { owner: state.owner, generation: state.generation }
+      : await snapshotRun(call, options, clock);
   if (
     state.owner === snapshot.owner &&
     state.incarnation &&
@@ -501,7 +543,7 @@ export async function superviseStep(state, options, dependencies) {
         await persist(next);
         return next;
       }
-      const recheck = await snapshotRun(call, options);
+      const recheck = await snapshotRun(call, options, clock);
       const receiver = decision.kind === 'handoff' ? await standbySnapshot(call, options, target) : null;
       if (
         recheck.owner !== snapshot.owner ||

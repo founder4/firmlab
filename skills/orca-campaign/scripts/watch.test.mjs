@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const WATCH = fileURLToPath(new URL('./watch.mjs', import.meta.url));
 import test from 'node:test';
-import { decide, ownerState, parseArgs, runWatch, superviseStep } from './watch.mjs';
+import { decide, hasActiveTurn, ownerState, parseArgs, runWatch, staleWorking, superviseStep } from './watch.mjs';
 
 const NOW = 1_800_000_000_000;
 const options = { run: 'run_test', until: NOW + 600_000, intervalMs: 1000, idleMs: 1000, execute: true };
@@ -1012,4 +1012,124 @@ test('historical quota text in a stream fallback is uncertainty, not a current c
   }
   const rendered = screenHarness({ source: 'screen', tail: oldQuota });
   assert.equal((await superviseStep(waiting, options, rendered.deps)).reason, 'capacity_blocked');
+});
+
+// === Stale native `working` (2026-10-02 incident) =========================================================
+
+const RULE = '─'.repeat(40);
+/** CAPTURED 2026-10-02T17:38Z from a working Claude Code pane (prose lines trimmed): empty composer, live spinner. */
+const CLAUDE_WORKING_FRAME = [
+  '⏺ Capturing my rendered screen tail and native state while working',
+  '✳ Clauding… (1m 27s · ↓ 6.9k tokens · thought for 14s)',
+  '  ⎿ \u00a0Tip: Use /permissions to pre-approve and pre-deny bash, edit, and MCP tools',
+  RULE,
+  '❯',
+  RULE,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent',
+];
+/**
+ * RECONSTRUCTED from the root operator's 17:37Z description of the stuck pane (not a byte capture): final
+ * "Worked 20m22s" line, empty composer, bypass-permissions footer with one background shell.
+ */
+const CLAUDE_STALE_IDLE_FRAME = [
+  '⏺ Delivered four commits; arming the controlled idle test.',
+  '✻ Worked for 20m 22s',
+  RULE,
+  '❯',
+  RULE,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · 1 shell',
+];
+const STALE_AGE = 25 * 60_000;
+
+function staleHarness(tail, { age = STALE_AGE, satisfied = true, draft, source = 'screen', connected = true } = {}) {
+  const h = harness();
+  const base = h.deps.call;
+  const local = (args) => {
+    if (args[1] === 'worker-list') return { workers: [], page: { hasMore: false } };
+    if (args[1] === 'show')
+      return { terminal: { connected, worktreeId: 'wt', tabId: 't', leafId: 'l', incarnationId: 'inc_owner' } };
+    if (args[1] === 'read') return { terminal: { source, tail, ...(draft === undefined ? {} : { draft }) } };
+    if (args[1] === 'wait') return satisfied ? { wait: { satisfied: true } } : { error: 'timeout' };
+    if (args[1] === 'ps')
+      return {
+        worktrees: [
+          {
+            worktreeId: 'wt',
+            agents: [{ paneKey: 't:l', state: 'working', updatedAt: NOW - age, stateStartedAt: NOW - age - 60_000 }],
+          },
+        ],
+      };
+    return undefined;
+  };
+  h.deps.call = async (args) => {
+    const result = local(args);
+    if (result === undefined) return base(args); // base records its own commands
+    h.commands.push(args);
+    return result;
+  };
+  return h;
+}
+const sends = (h) => h.commands.filter((a) => a[1] === 'send').length;
+const ran = (h, verb) => h.commands.some((a) => a[1] === verb);
+
+test('staleWorking is only a working row older than the freshness bound, or one with no usable timestamp', () => {
+  assert.equal(staleWorking('working', NOW - 1000, NOW), false);
+  assert.equal(staleWorking('working', NOW - STALE_AGE, NOW), true);
+  assert.equal(staleWorking('working', undefined, NOW), true);
+  assert.equal(staleWorking('done', NOW - STALE_AGE, NOW), false);
+});
+
+test('hasActiveTurn reads a live spinner or esc hint, never a finished turn summary or prose', () => {
+  assert.equal(hasActiveTurn(CLAUDE_WORKING_FRAME), true);
+  assert.equal(hasActiveTurn(['• Working (5s • esc to interrupt)']), true);
+  assert.equal(hasActiveTurn(['✻ Thinking… (2m 3s · ↑ 1.2k tokens)']), true);
+  assert.equal(hasActiveTurn(CLAUDE_STALE_IDLE_FRAME), false);
+  assert.equal(hasActiveTurn(['The build took (12s) and finished.']), false);
+});
+
+test('stale native working plus a rendered idle frame AND a satisfied idle wait resumes', async () => {
+  const h = staleHarness(CLAUDE_STALE_IDLE_FRAME);
+  const state = await superviseStep(waiting, options, h.deps);
+  assert.equal(state.phase, 'pending');
+  assert.equal(sends(h), 1);
+  assert.equal(ran(h, 'read') && ran(h, 'wait'), true);
+});
+
+test('stale native working with the same idle frame but no satisfied wait stays unknown and sends nothing', async () => {
+  const h = staleHarness(CLAUDE_STALE_IDLE_FRAME, { satisfied: false });
+  const state = await superviseStep(waiting, options, h.deps);
+  assert.equal(state.phase, 'unknown');
+  assert.equal(sends(h), 0);
+});
+
+test('a stale working row over a visible spinner is a turn in progress: no wait, no resume', async () => {
+  const h = staleHarness(CLAUDE_WORKING_FRAME);
+  const state = await superviseStep(waiting, options, h.deps);
+  assert.equal(state.phase, 'unknown');
+  assert.equal(state.reason, 'stale_native_working_turn_visible');
+  assert.equal(ran(h, 'wait'), false);
+  assert.equal(sends(h), 0);
+});
+
+test('a stale working row never overrides a draft, menu, quota, stream fallback or unknown liveness', async () => {
+  const cases = [
+    [staleHarness(CLAUDE_STALE_IDLE_FRAME, { draft: 'half-typed' }), 'unknown'],
+    [staleHarness([...CLAUDE_STALE_IDLE_FRAME.slice(0, 2), '❯ 1. Yes, allow', '? for shortcuts']), 'unknown'],
+    [staleHarness(["You've hit your usage limit", '>']), 'blocked'],
+    [staleHarness(CLAUDE_STALE_IDLE_FRAME, { source: 'screen-unavailable' }), 'unknown'],
+    [staleHarness(CLAUDE_STALE_IDLE_FRAME, { connected: false }), 'unknown'],
+  ];
+  for (const [h, phase] of cases) {
+    assert.equal((await superviseStep(waiting, options, h.deps)).phase, phase);
+    assert.equal(sends(h), 0);
+  }
+});
+
+test('fresh native working with an empty composer stays working: no screen read, no wait, no send', async () => {
+  const h = staleHarness(CLAUDE_STALE_IDLE_FRAME, { age: 5_000 });
+  const state = await superviseStep(waiting, options, h.deps);
+  assert.equal(state.phase, 'working');
+  assert.equal(ran(h, 'read'), false);
+  assert.equal(ran(h, 'wait'), false);
+  assert.equal(sends(h), 0);
 });

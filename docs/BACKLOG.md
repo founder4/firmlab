@@ -781,6 +781,15 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
 
 ## Orca — continuidad desatendida (2026-10-02)
 
+- [x] El supervisor no reanudaba a un coordinador cuyo estado nativo `working` quedaba congelado (Claude,
+  17:12–17:37Z del 2026-10-02, recuperación manual): con `working` no se leía pantalla ni se esperaba `tui-idle`, y
+  la frescura daba `unknown` para siempre. Ahora un `working` caducado (>180 s o sin marca) exige lectura renderizada
+  y espera nativa, y sólo es `idle` si ambas coinciden (compositor vacío, sin borrador, selector, cuota ni turno
+  visible en curso). Claude muestra el compositor vacío mientras trabaja, así que el indicador de turno activo es
+  obligatorio. Ver `docs/ORCA-CAMPAIGN-RELIABILITY.md`.
+- [ ] Capturar en bytes un fotograma real de Claude inactivo con `working` nativo congelado para sustituir el
+  fixture reconstruido del test, y probar de punta a punta la reanudación real con el guardián corregido.
+
 - [x] Recuperar al coordinador que termina su turno sin espera: supervisor externo con plazo fijo,
   verificación de identidad/estado, journal, exclusión por Run y reactivación comprobada con Claude y
   Antigravity reales. Diagnóstico y receta en `docs/ORCA-CAMPAIGN-RELIABILITY.md`.

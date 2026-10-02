@@ -38,6 +38,30 @@ The original eight-hour window elapsed without eight hours of continuous work. S
 5. End at the original deadline or explicit cancellation. Report proven work, validation and gaps. Do not
    silently extend the window, claim unmeasured service exhaustion or count idle time as agent work.
 
+## Incident: 2 October 2026 — stale native `working`
+
+Run `run_ede578636b08`, Claude coordinator generation 3. At 17:12:28Z Claude ended its turn deliberately to prove
+an idle → guard → resume roundtrip. The guard (PID 1769) never resumed it. Orca's native row for the pane kept
+`state: working` with `updatedAt` frozen at 17:12:41Z, and `snapshotRun` skipped both the rendered read and the
+`tui-idle` wait whenever the row said `working`. `ownerState` then fell to the freshness check, which reports a
+row older than 180 s as `unknown` — forever, because nothing else was ever read. The rendered screen at the time
+showed the finished turn (`Worked 20m22s`), an empty composer and the footer, and a `tui-idle` wait was satisfied:
+the evidence existed and was never asked for. The root resumed Claude by hand at ~17:37Z. That is a manual
+recovery: the Claude idle-resume roundtrip on this Run was not proven by it, and 17:12–17:37 is a recorded gap.
+
+A contributing factor was Claude's own detached background inbox loop, which outlived the reasoning turn (the
+footer showed `1 shell`). Coordinators keep their `check --wait` calls in the foreground of a turn; a detached
+loop consumes nothing it should not, but it is not supervision either.
+
+The fix: a `working` row older than the freshness bound (or with no timestamp) is **stale** and earns the same
+rendered read and native idle wait as any other state. It becomes `idle` only on positive agreement — rendered
+frame, empty composer, no draft, no selector, no quota, no visible turn in progress, AND a satisfied wait. Absence
+of a spinner alone is not enough. A turn in progress matters here because Claude keeps an empty `❯` composer and
+its normal footer on screen WHILE it works (captured: `✳ Clauding… (1m 27s · ↓ 6.9k tokens · …)`, no "esc to
+interrupt"), so an empty prompt never proved idleness by itself. A fresh `working` row is still trusted outright and
+causes no read. Tests: `skills/orca-campaign/scripts/watch.test.mjs` (stale-working cases; the working frame is a
+real capture, the stale-idle frame is reconstructed from the operator's description and labelled as such).
+
 ## Supervisor
 
 `pnpm campaign:watch --help` exposes `scripts/orca-campaign-watch.mjs`. Its default is observation only.
