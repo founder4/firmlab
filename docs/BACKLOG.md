@@ -398,13 +398,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 - [ ] Ampliar la propiedad de ejecución más allá de grupos Unix locales si se necesita cancelar procesos que
   cambien de sesión o recuperar árboles tras reiniciar la API. Hoy se declara la limpieza interrumpida como
   no verificada; Windows rechaza la cancelación de árboles en ejecución y las esperas de red son cooperativas.
-- [ ] **Rutas de la API sin cliente web, de valor medio/bajo** (auditoría del 2026-09-27; las de valor alto —snapshot
+- [x] **Rutas de la API sin cliente web, de valor medio/bajo** (auditoría del 2026-09-27; las de valor alto —snapshot
   RTOS, funcdiff, lanzar Ghidra, reensamblado BLE/Zigbee— ya tienen UI): `POST /images/:id/analysis` y
   `/analysis/reanalyze-all` (re-clasificar tras cambiar el clasificador sin borrar y resubir), y leer el estado actual de
   aprobación del agente en Ajustes. Decidir cuáles son sólo para scripts/MCP antes de construir UI. *(Re-clasificación
   expuesta en la Ola 4: `api.reanalyzeCorpus` con confirmación e informe localizado en el corpus —recuentos de la ruta,
   sólo filas cambiadas o fallidas, clase conservada en un fallo— y `api.reanalyzeImage` como «Reclasificar imagen» junto a
-  la clase del dossier, que actualiza la identidad en sitio y relee el análisis; queda la aprobación del agente en Ajustes.
+  la clase del dossier, que actualiza la identidad en sitio y relee el análisis. La aprobación del agente ya se lee y edita en Ajustes —`api.agentApproval`, conmutador manual/todo con su alcance y aviso, en `7544f9d`/`e7f8f5e`—; comprobado el 2026-10-02, la entrada seguía abierta sólo por no actualizarse.
   Lanzar `component-cve` y
   `auxsecrets` sueltos implementado en `7544f9d` con botones dedicados, sondeo de job y refresco acotado del libro mayor de hallazgos;
   resultados persistidos de `chipsec` y `renode` expuestos en `dbb39d4` en SimulationMenu con vistas compartidas y precedencia de ejecución
@@ -787,6 +787,12 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   y espera nativa, y sólo es `idle` si ambas coinciden (compositor vacío, sin borrador, selector, cuota ni turno
   visible en curso). Claude muestra el compositor vacío mientras trabaja, así que el indicador de turno activo es
   obligatorio. Ver `docs/ORCA-CAMPAIGN-RELIABILITY.md`.
+- [x] Política de capacidad de campaña y lanzador de workers guardado (`policy.mjs`, `launch-worker.mjs`,
+  `orca-campaign-launch-worker`): bloqueos de proveedor/modelo, recuperación sólo con canario viable, motivo de relevo
+  obligatorio; el guardián registra la parada dura que ve en pantalla. Ver `docs/ORCA-CAMPAIGN-RELIABILITY.md`.
+- [ ] `worker-start --agent antigravity` no supera `agent_readiness` con Antigravity CLI 1.2.14 (`tui-idle` nunca se
+  satisface aunque el compositor renderizado esté vacío); se recurrió a `dispatch --inject`, que deja el carril sin
+  supervisión. Reportar a Orca o reconocer el compositor renderizado como preparado.
 - [ ] Capturar en bytes un fotograma real de Claude inactivo con `working` nativo congelado para sustituir el
   fixture reconstruido del test, y probar de punta a punta la reanudación real con el guardián corregido.
 

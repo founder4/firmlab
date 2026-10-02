@@ -7,7 +7,18 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const WATCH = fileURLToPath(new URL('./watch.mjs', import.meta.url));
 import test from 'node:test';
-import { decide, hasActiveTurn, ownerState, parseArgs, runWatch, staleWorking, superviseStep } from './watch.mjs';
+import {
+  PERSISTENT_UNKNOWN_MS,
+  decide,
+  hasActiveTurn,
+  ownerState,
+  parseArgs,
+  persistentUnknownDiagnostic,
+  recordCapacityBlockLocked,
+  runWatch,
+  staleWorking,
+  superviseStep,
+} from './watch.mjs';
 
 const NOW = 1_800_000_000_000;
 const options = { run: 'run_test', until: NOW + 600_000, intervalMs: 1000, idleMs: 1000, execute: true };
@@ -1132,4 +1143,216 @@ test('fresh native working with an empty composer stays working: no screen read,
   assert.equal(ran(h, 'read'), false);
   assert.equal(ran(h, 'wait'), false);
   assert.equal(sends(h), 0);
+});
+
+/** CAPTURED 2026-10-02T17:48Z from a working Antigravity CLI 1.2.14 pane: empty composer, spinner, esc-to-cancel. */
+const ANTIGRAVITY_WORKING_FRAME = [
+  '● Read(~/Proyectos/firmlab/skills/orca-campaign/scripts/watch.mjs) (ctrl+o to expand)',
+  '⣯  Reading file...',
+  RULE,
+  '>',
+  RULE,
+  'esc to cancel                                                                                    Gemini 3.8 Flash · high',
+];
+
+test('a captured Antigravity working frame is a turn in progress even over a stale row and a satisfied wait', async () => {
+  assert.equal(hasActiveTurn(ANTIGRAVITY_WORKING_FRAME), true);
+  const h = staleHarness(ANTIGRAVITY_WORKING_FRAME);
+  assert.equal((await superviseStep(waiting, options, h.deps)).phase, 'unknown');
+  assert.equal(sends(h), 0);
+  const fresh = staleHarness(ANTIGRAVITY_WORKING_FRAME, { age: 1_000 });
+  assert.equal((await superviseStep(waiting, options, fresh.deps)).phase, 'working');
+});
+
+test('persistent unknown becomes a durable diagnostic with reason, timestamps and recovery, never a prompt', async () => {
+  assert.equal(persistentUnknownDiagnostic({ from: NOW, reason: 'x' }, {}, NOW + PERSISTENT_UNKNOWN_MS - 1), null);
+  const h = staleHarness(CLAUDE_STALE_IDLE_FRAME, { satisfied: false });
+  let state = await superviseStep(waiting, options, h.deps);
+  assert.equal(state.phase, 'unknown');
+  assert.equal(state.diagnostic ?? null, null);
+  for (let i = 0; i < 12; i++) {
+    h.tick(30_000);
+    state = await superviseStep(state, options, h.deps);
+  }
+  assert.equal(state.phase, 'unknown');
+  assert.equal(state.diagnostic.kind, 'persistent_unknown');
+  assert.equal(state.diagnostic.reason, state.uncertainty.reason);
+  assert.equal(state.diagnostic.since, state.uncertainty.from);
+  assert.ok(state.diagnostic.durationMs >= PERSISTENT_UNKNOWN_MS);
+  assert.equal(state.diagnostic.evidence.staleNativeWorking, true);
+  assert.equal(state.diagnostic.evidence.nativeObservedAt, NOW - STALE_AGE);
+  assert.match(state.diagnostic.recovery.join(' '), /Never start a second guard/);
+  assert.equal(sends(h), 0);
+});
+
+test('a persistent-unknown diagnostic closes into bounded history once the owner is observed again', async () => {
+  const open = { ...waiting, checkedAt: NOW - 1000, diagnostic: { kind: 'persistent_unknown', reason: 'r', since: 1 } };
+  const h = staleHarness(CLAUDE_STALE_IDLE_FRAME, { age: 1_000 });
+  const state = await superviseStep(open, options, h.deps);
+  assert.equal(state.phase, 'working');
+  assert.equal(state.diagnostic, null);
+  assert.equal(state.diagnostics.at(-1).closedAt, NOW);
+});
+
+// === Capacity registry (campaign policy) =================================================================
+
+function quotaHarness(tail, source = 'screen') {
+  const h = nativeHarness(tail);
+  const base = h.deps.call;
+  h.deps.call = async (args) => {
+    if (args[1] === 'show')
+      return {
+        terminal: {
+          connected: true,
+          worktreeId: 'wt',
+          tabId: 't',
+          leafId: 'l',
+          incarnationId: 'inc_owner',
+          agentIdentity: 'claude',
+        },
+      };
+    if (args[1] === 'read') return { terminal: { source, tail } };
+    return base(args);
+  };
+  h.recorded = [];
+  h.deps.recordCapacityBlock = async (entry) => {
+    h.recorded.push(entry);
+    return { recorded: true, domain: entry.domain };
+  };
+  return h;
+}
+
+test('a rendered quota stop on the owner records one conservative provider-wide block and sends nothing', async () => {
+  const h = quotaHarness(["You've hit your usage limit", '>']);
+  const state = await superviseStep(waiting, options, h.deps);
+  assert.equal(state.phase, 'blocked');
+  assert.equal(h.recorded.length, 1);
+  assert.deepEqual(
+    { domain: h.recorded[0].domain, scope: h.recorded[0].scope, provider: h.recorded[0].provider },
+    { domain: 'provider:anthropic', scope: 'provider', provider: 'anthropic' },
+  );
+  assert.equal(h.recorded[0].observedAt, new Date(NOW).toISOString());
+  assert.equal(h.recorded[0].resetAt, null);
+  assert.equal(state.capacityRecord.recorded, true);
+  assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+});
+
+test('quota text in a stream fallback never records a block', async () => {
+  const h = quotaHarness(["You've hit your usage limit", '>'], 'screen-unavailable');
+  await superviseStep(waiting, options, h.deps);
+  assert.equal(h.recorded.length, 0);
+});
+
+test('the locked registry writer appends once, keeps concurrent entries, and fails closed', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'orca-policy-'));
+  const path = join(directory, 'policy.json');
+  const entry = {
+    domain: 'provider:anthropic',
+    scope: 'provider',
+    provider: 'anthropic',
+    model: null,
+    status: 'blocked',
+    reason: 'rendered_capacity_block',
+    evidence: 'fixture',
+    observedAt: '2026-10-02T18:00:00.000Z',
+    resetAt: null,
+  };
+  try {
+    assert.deepEqual(await recordCapacityBlockLocked(path, entry), { recorded: false, reason: 'policy_missing' });
+    const other = { ...entry, domain: 'provider:openai', provider: 'openai', evidence: 'written by a worker' };
+    await writeFile(path, JSON.stringify({ version: 1, currentProvider: 'anthropic', domains: [other], handoffs: [] }));
+    assert.equal((await recordCapacityBlockLocked(path, entry)).recorded, true);
+    assert.equal((await recordCapacityBlockLocked(path, entry)).reason, 'already_blocked');
+    const saved = JSON.parse(await readFile(path, 'utf8'));
+    assert.deepEqual(
+      saved.domains.map((d) => d.domain),
+      ['provider:openai', 'provider:anthropic'],
+    );
+    await mkdir(`${path}.lock`);
+    assert.equal((await recordCapacityBlockLocked(path, entry, { attempts: 0 })).reason, 'policy_lock_unavailable');
+    await rm(`${path}.lock`, { recursive: true });
+    await writeFile(path, '{not json');
+    assert.equal((await recordCapacityBlockLocked(path, entry)).reason, 'policy_invalid');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a successor on a provider the policy refuses is never chosen for handoff', async () => {
+  const h = harness();
+  h.deps.standbys = ['term_ready'];
+  h.deps.policy = {
+    version: 1,
+    currentProvider: 'anthropic',
+    domains: [
+      {
+        domain: 'provider:anthropic',
+        scope: 'provider',
+        provider: 'anthropic',
+        model: null,
+        status: 'blocked',
+        reason: 'rendered_capacity_block',
+        evidence: 'fixture',
+        observedAt: '2026-10-02T18:00:00.000Z',
+        resetAt: null,
+      },
+    ],
+    handoffs: [],
+  };
+  const base = h.deps.call;
+  h.deps.call = async (a) => {
+    if (a[1] === 'worker-list') return { workers: [], page: { hasMore: false } };
+    if (a[1] === 'show' && a.includes('term_owner'))
+      return { terminal: { connected: false, exitCause: { kind: 'operator_close' }, incarnationId: 'inc_owner' } };
+    if (a[1] === 'wait' && a.includes('term_ready')) return { wait: { satisfied: true } };
+    return base(a);
+  };
+  const state = await superviseStep({ ...waiting, incarnation: 'inc_owner' }, options, h.deps);
+  assert.equal(state.phase, 'blocked');
+  assert.equal(state.reason, 'no_proven_ready_standby');
+  assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+});
+
+test('a missing campaign policy fails execution closed with a named reason', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'orca-policy-missing-'));
+  const journal = join(directory, 'journal.json');
+  const context = join(directory, 'context.md');
+  const cli = join(directory, 'fake-orca');
+  try {
+    await writeFile(context, 'Authorized isolated fixture.');
+    await writeFile(
+      cli,
+      `#!/usr/bin/env node
+const a=process.argv.slice(2); let result={error:'unexpected'};
+if(a[1]==='run-show') result={run:{coordinator_handle:'term_owner',consumer_generation:1}};
+if(a[1]==='worker-list') result={workers:[],page:{hasMore:false}};
+if(a[1]==='show') result={terminal:{connected:true,worktreeId:'wt',tabId:'t',leafId:'l',incarnationId:'inc'}};
+if(a[1]==='ps') result={worktrees:[{worktreeId:'wt',agents:[{paneKey:'t:l',state:'working',updatedAt:Date.now()}]}]};
+console.log(JSON.stringify({ok:true,result}));
+`,
+    );
+    await chmod(cli, 0o700);
+    const state = await runWatch(
+      parseArgs([
+        '--run',
+        `run_policy_${process.pid}`,
+        '--until',
+        new Date(Date.now() + 60_000).toISOString(),
+        '--journal',
+        journal,
+        '--execute',
+        '--context',
+        context,
+        '--policy',
+        join(directory, 'absent.json'),
+        '--orca',
+        cli,
+        '--once',
+      ]),
+    );
+    assert.equal(state.phase, 'blocked');
+    assert.equal(state.reason, 'policy_missing');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

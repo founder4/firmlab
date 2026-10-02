@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Install one self-contained user skill and launcher; refuse unmanaged or locally edited destinations. */
+/** Install one self-contained user skill and its launchers; refuse unmanaged or locally edited destinations. */
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { chmod, lstat, mkdir, readFile, readdir, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises';
@@ -8,7 +8,17 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SOURCE = fileURLToPath(new URL('..', import.meta.url));
-const FILES = ['SKILL.md', 'agents/openai.yaml', 'scripts/watch.mjs', 'scripts/watch.test.mjs', 'scripts/install.mjs'];
+const FILES = [
+  'SKILL.md',
+  'agents/openai.yaml',
+  'scripts/watch.mjs',
+  'scripts/watch.test.mjs',
+  'scripts/policy.mjs',
+  'scripts/policy.test.mjs',
+  'scripts/launch-worker.mjs',
+  'scripts/launch-worker.test.mjs',
+  'scripts/install.mjs',
+];
 const MARKER = '.orca-campaign-install.json';
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -38,6 +48,9 @@ export async function install({ home = homedir(), codexHome = process.env.CODEX_
   const target = join(profile, '.agents', 'skills', 'orca-campaign');
   const launcher = join(profile, '.local', 'bin', 'orca-campaign-watch');
   const launchText = `#!/bin/sh\nexec node ${quote(join(target, 'scripts', 'watch.mjs'))} "$@"\n`;
+  // The guarded worker launcher is how a campaign's capacity policy is enforced; raw Orca is not intercepted.
+  const workerLauncher = join(profile, '.local', 'bin', 'orca-campaign-launch-worker');
+  const workerLaunchText = `#!/bin/sh\nexec node ${quote(join(target, 'scripts', 'launch-worker.mjs'))} "$@"\n`;
   const links = [
     join(codexHome ?? join(profile, '.codex'), 'skills', 'orca-campaign'),
     join(profile, '.claude', 'skills', 'orca-campaign'),
@@ -107,9 +120,12 @@ export async function install({ home = homedir(), codexHome = process.env.CODEX_
         throw new Error(`Locally modified skill file: ${name}`);
     }
   }
-  if (await exists(launcher)) {
-    if ((await lstat(launcher)).isSymbolicLink() || (await readFile(launcher, 'utf8')) !== launchText)
-      throw new Error(`Unmanaged launcher: ${launcher}`);
+  for (const [path, text] of [
+    [launcher, launchText],
+    [workerLauncher, workerLaunchText],
+  ]) {
+    if ((await exists(path)) && ((await lstat(path)).isSymbolicLink() || (await readFile(path, 'utf8')) !== text))
+      throw new Error(`Unmanaged launcher: ${path}`);
   }
   for (const link of links) {
     const entry = await exists(link);
@@ -140,8 +156,13 @@ export async function install({ home = homedir(), codexHome = process.env.CODEX_
       throw error;
     }
     await mkdir(dirname(launcher), { recursive: true });
-    await writeFile(launcher, launchText, { mode: 0o755 });
-    await chmod(launcher, 0o755);
+    for (const [path, text] of [
+      [launcher, launchText],
+      [workerLauncher, workerLaunchText],
+    ]) {
+      await writeFile(path, text, { mode: 0o755 });
+      await chmod(path, 0o755);
+    }
     for (const link of links) {
       await mkdir(dirname(link), { recursive: true });
       if (!(await exists(link))) await symlink(target, link, 'dir');
@@ -151,7 +172,14 @@ export async function install({ home = homedir(), codexHome = process.env.CODEX_
     for (const [link, destination, type] of pluginLinks)
       if (!(await exists(link))) await symlink(destination, link, type);
     if (moved) await rm(backup, { recursive: true });
-    return { skill: target, launcher, links, antigravityPlugin, sha256: manifest.files['scripts/watch.mjs'] };
+    return {
+      skill: target,
+      launcher,
+      workerLauncher,
+      links,
+      antigravityPlugin,
+      sha256: manifest.files['scripts/watch.mjs'],
+    };
   } finally {
     await rm(staging, { recursive: true, force: true });
   }

@@ -14,9 +14,44 @@ import { tmpdir, userInfo } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { loadPolicy, savePolicy } from './launch-worker.mjs';
+import { evaluateLaunch, providerOf, recordBlock } from './policy.mjs';
 
 const exec = promisify(execFile);
 const FRESH_MS = 180_000;
+/** Uncertainty older than this is no longer a blip: the journal carries a diagnostic an operator cannot miss. */
+export const PERSISTENT_UNKNOWN_MS = 300_000;
+const MAX_DIAGNOSTICS = 20;
+export const PERSISTENT_UNKNOWN_RECOVERY = [
+  'Read the owner terminal rendered screen (orca terminal read --terminal <owner> --screen) and its native state (orca worktree ps).',
+  'If the turn has positively finished (no spinner, empty composer, no draft, selector or quota line), resume it by hand and record the gap in the campaign context.',
+  'If a turn is visibly running, wait; if quota or a selector is shown, treat it as blocked and prepare a successor.',
+  'Never start a second guard, take ownership of a live Run, or send a prompt to a terminal whose state you have not read.',
+];
+
+/**
+ * Pure: the diagnostic for an uncertainty interval that has lasted at least `PERSISTENT_UNKNOWN_MS`, or null. It
+ * names the reason and the evidence timestamps so a long `unknown` can never be read as a watched, healthy owner.
+ */
+export function persistentUnknownDiagnostic(uncertainty, snapshot, now) {
+  if (!uncertainty || now - uncertainty.from < PERSISTENT_UNKNOWN_MS) return null;
+  return {
+    kind: 'persistent_unknown',
+    reason: uncertainty.reason,
+    since: uncertainty.from,
+    durationMs: now - uncertainty.from,
+    recordedAt: now,
+    evidence: {
+      nativeActivity: snapshot.activity ?? null,
+      nativeObservedAt: Number.isFinite(snapshot.observedAt) ? snapshot.observedAt : null,
+      staleNativeWorking: snapshot.staleWorking === true,
+      screenSource: snapshot.screenSource ?? null,
+      turnVisible: snapshot.activeTurn === true,
+      error: snapshot.error ?? null,
+    },
+    recovery: PERSISTENT_UNKNOWN_RECOVERY,
+  };
+}
 
 export function parseArgs(args, now = Date.now()) {
   const options = { execute: false, once: false, intervalMs: 30_000, idleMs: 60_000, maxResumes: 48, keepAwake: false };
@@ -27,6 +62,7 @@ export function parseArgs(args, now = Date.now()) {
     ['--context', 'context'],
     ['--orca', 'orca'],
     ['--standbys', 'standbys'],
+    ['--policy', 'policy'],
     ['--interval-ms', 'intervalMs'],
     ['--idle-ms', 'idleMs'],
     ['--max-resumes', 'maxResumes'],
@@ -65,6 +101,7 @@ export function parseArgs(args, now = Date.now()) {
   if (options.execute && !options.context) throw new Error('--execute requires a handoff context file');
   if (options.context) options.context = resolve(options.context);
   if (options.standbys) options.standbys = resolve(options.standbys);
+  if (options.policy) options.policy = resolve(options.policy);
   options.orca ??=
     process.env.ORCA_CLI_COMMAND ??
     (process.env.ORCA_DEV_REPO_ROOT ? 'orca-dev' : process.platform === 'linux' ? 'orca-ide' : 'orca');
@@ -358,6 +395,14 @@ Keep rolling check --wait calls outstanding while work remains; a status sentenc
 Do not finish a turn before deadline without a pending wait or an explicitly accepted full coordinator handoff.
 Before quota/context exhaustion prepare a ready Claude/Antigravity successor, current context, and ownership acknowledgment.
 Never claim continuous work from elapsed time, PTY connection, or a missing quota metric.
+Hand off only on observed capacity/context exhaustion or unavailability, recorded as the handoff reason; never as
+scheduled rotation. Use your own Orca workers for separable tasks with disjoint ownership.${
+    options.policy
+      ? `\nCampaign capacity policy: ${options.policy}. Start workers only through the installed guarded launcher
+(orca-campaign-launch-worker --policy ${options.policy} --agent <id> -- <worker-start args>); never launch on a
+provider or model it refuses. Unknown capacity is not exhaustion; an elapsed reset needs a viable canary.`
+      : ''
+  }
 Read the project AGENTS.md and its handbook before editing. Preserve the user mandate, project-specific constraints,
 ownership and validation gates in the context. Do not widen permissions, enable external actions, change provider
 settings or spend credits beyond the existing explicit authorization. At deadline finish the safe unit and report evidence.
@@ -412,6 +457,25 @@ export async function superviseStep(state, options, dependencies) {
   )
     snapshot.error = 'incarnation_changed';
   const now = clock();
+  // A hard quota stop leaves the owner unable to record its own exhaustion, so the guard records what it SAW: a
+  // rendered (never stream-fallback) capacity screen becomes a conservative provider-wide block in the registry.
+  let capacityRecord = null;
+  if (snapshot.capacityBlocked && dependencies.recordCapacityBlock) {
+    const provider = providerOf(snapshot.agent);
+    capacityRecord = provider
+      ? await dependencies.recordCapacityBlock({
+          domain: `provider:${provider}`,
+          scope: 'provider',
+          provider,
+          model: null,
+          status: 'blocked',
+          reason: 'rendered_capacity_block',
+          evidence: `guard observed a rendered usage/capacity-limit screen on owner ${snapshot.owner} (generation ${snapshot.generation})`,
+          observedAt: new Date(now).toISOString(),
+          resetAt: null,
+        })
+      : { recorded: false, reason: 'capacity_block_provider_unknown' };
+  }
   const observationGap = state.checkedAt && now - state.checkedAt > options.intervalMs * 3;
   const decision = decide(
     snapshot,
@@ -477,7 +541,15 @@ export async function superviseStep(state, options, dependencies) {
         : (state.consecutiveResumes ?? 0),
     gaps: gaps.slice(-100),
     uncertainty,
+    ...(capacityRecord ? { capacityRecord: { ...capacityRecord, at: now } } : {}),
   };
+  const diagnostic = persistentUnknownDiagnostic(uncertainty, snapshot, now);
+  // One open diagnostic, refreshed while the interval lasts; a closed one moves to a bounded history.
+  if (diagnostic) next.diagnostic = diagnostic;
+  else if (state.diagnostic) {
+    next.diagnostic = null;
+    next.diagnostics = [...(state.diagnostics ?? []), { ...state.diagnostic, closedAt: now }].slice(-MAX_DIAGNOSTICS);
+  }
   if (['confirmed', 'superseded', 'failed-exited'].includes(decision.kind)) {
     next.lastSubmission = { ...state.pending, settlement: decision.kind, observedAt: now };
     next.pending = null;
@@ -500,6 +572,9 @@ export async function superviseStep(state, options, dependencies) {
         if (handle === snapshot.owner || snapshot.activeHandles?.includes(handle)) continue;
         const show = await call(['terminal', 'show', '--terminal', handle]);
         if (!show.terminal?.connected || !['claude', 'antigravity'].includes(show.terminal.agentIdentity)) continue;
+        // A successor on a provider the campaign policy refuses would inherit the exhaustion it is replacing.
+        if (dependencies.policy && !evaluateLaunch(dependencies.policy, { agent: show.terminal.agentIdentity }).allowed)
+          continue;
         const runs = await listRuns(call);
         if (!runs || runs.some((r) => r.coordinator_handle === handle)) continue;
         let busy = false;
@@ -598,6 +673,36 @@ export async function superviseStep(state, options, dependencies) {
   return next;
 }
 
+/**
+ * Append one block to the shared registry under its lock, reloading first so a worker's or coordinator's
+ * concurrent write is never clobbered. Idempotent while the latest entry for the domain already blocks it.
+ */
+export async function recordCapacityBlockLocked(path, entry, { attempts = 50, delayMs = 100 } = {}) {
+  const lock = `${path}.lock`;
+  for (let i = 0; ; i++) {
+    try {
+      await mkdir(lock, { mode: 0o700 });
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST' || i >= attempts) return { recorded: false, reason: 'policy_lock_unavailable' };
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  try {
+    const loaded = await loadPolicy(path);
+    if (loaded.error) return { recorded: false, reason: loaded.error };
+    const latest = loaded.policy.domains.filter((d) => d.domain === entry.domain).at(-1);
+    if (latest && latest.status !== 'recovered')
+      return { recorded: false, reason: 'already_blocked', domain: entry.domain };
+    await savePolicy(path, recordBlock(loaded.policy, entry));
+    return { recorded: true, domain: entry.domain };
+  } catch {
+    return { recorded: false, reason: 'policy_write_failed' };
+  } finally {
+    await rm(lock, { recursive: true, force: true });
+  }
+}
+
 async function trustedContext(options) {
   const context = options.context ? await readFile(options.context, 'utf8') : '';
   if (Buffer.byteLength(context, 'utf8') > 80_000)
@@ -676,6 +781,12 @@ export async function runWatch(options) {
       } catch {
         invalid = 'context_invalid';
       }
+      let policy = null;
+      if (options.policy) {
+        const loaded = await loadPolicy(options.policy);
+        if (loaded.error) invalid = `policy_${loaded.error === 'policy_missing' ? 'missing' : 'invalid'}`;
+        else policy = loaded.policy;
+      }
       if (options.standbys) {
         try {
           standbys = JSON.parse(await readFile(options.standbys, 'utf8'));
@@ -708,6 +819,8 @@ export async function runWatch(options) {
           },
           context,
           standbys,
+          policy,
+          recordCapacityBlock: options.policy ? (entry) => recordCapacityBlockLocked(options.policy, entry) : null,
         },
       );
       console.log(
@@ -715,7 +828,7 @@ export async function runWatch(options) {
           at: new Date(state.checkedAt).toISOString(),
           owner: state.owner,
           phase: state.phase,
-          reason: state.reason,
+          reason: state.diagnostic ? `persistent_unknown:${state.diagnostic.reason}` : state.reason,
           pending: Boolean(state.pending),
         }),
       );
@@ -749,7 +862,7 @@ export async function runCli(args = process.argv.slice(2)) {
     const options = parseArgs(args);
     if (options.help)
       console.log(
-        'orca-campaign-watch --run RUN --until ISO --journal PATH [--once] [--execute --context PATH] [--standbys JSONFILE] [--keep-awake] [--max-resumes N] [--interval-ms N] [--idle-ms N] [--orca PATH]',
+        'orca-campaign-watch --run RUN --until ISO --journal PATH [--once] [--execute --context PATH] [--policy JSONFILE] [--standbys JSONFILE] [--keep-awake] [--max-resumes N] [--interval-ms N] [--idle-ms N] [--orca PATH]',
       );
     else await runWatch(options);
   } catch (error) {

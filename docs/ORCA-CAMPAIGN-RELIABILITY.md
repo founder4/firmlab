@@ -62,6 +62,28 @@ interrupt"), so an empty prompt never proved idleness by itself. A fresh `workin
 causes no read. Tests: `skills/orca-campaign/scripts/watch.test.mjs` (stale-working cases; the working frame is a
 real capture, the stale-idle frame is reconstructed from the operator's description and labelled as such).
 
+## Capacity policy, guarded worker launch and handoff reasons (2 October 2026)
+
+User steering at 17:42Z, mid-campaign: successor coordinators use their own Orca workers for separable tasks; no
+worker is launched on an exhausted model or service; a handoff happens only on observed capacity/context exhaustion
+or inability to continue, never as routine rotation. The gen 2 → 3 handoff of this Run was a `forced_test` of the
+continuity mechanism, not a quota event, so Antigravity is not blacklisted (its canary ran at 16:36Z).
+
+A prompt cannot enforce an exclusion, so it is code: `skills/orca-campaign/scripts/policy.mjs` (a durable JSON
+registry of provider/model blocks, recoveries and handoffs, with the rules in its header) and
+`scripts/launch-worker.mjs`, installed as `orca-campaign-launch-worker`, which evaluates the registry and makes no
+Orca call at all on a refusal. Both were written by an Antigravity worker dispatched from this Run (Task
+`task_7564070c61c2`, Dispatch `ctx_fb8d509cd070`, 27 tests) and integrated by the coordinator, who added the refusal
+of a launch naming no model while a model of its provider is blocked. The guard takes `--policy`: a missing or
+invalid registry blocks execution, a quota screen on the rendered owner frame is recorded as a provider-wide block
+(the owner of a hard stop cannot record its own exhaustion), and no standby on a refused provider is chosen.
+Enforcement covers launches through the wrapper; raw `orca orchestration worker-start` is not intercepted.
+
+Dispatching that worker exposed an Orca gap: `worker-start --agent antigravity` failed twice at `agent_readiness`
+(timeout) while the pane showed a ready, empty composer, because `terminal wait --for tui-idle` never satisfies for
+Antigravity CLI 1.2.14. The fallback was `task-create` plus `dispatch --inject` into the visibly ready terminal,
+which keeps the Task/Dispatch provenance and `worker_done`, but leaves the lane unsupervised by design.
+
 ## Supervisor
 
 `pnpm campaign:watch --help` exposes `scripts/orca-campaign-watch.mjs`. Its default is observation only.

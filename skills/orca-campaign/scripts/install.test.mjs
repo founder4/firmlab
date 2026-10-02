@@ -17,6 +17,15 @@ test('installed launcher and suite run outside the source repository; update is 
     const installed = await install({ home, codexHome: join(home, '.codex') });
     const help = await exec(installed.launcher, ['--help'], { cwd: other });
     assert.match(help.stdout, /--run RUN/);
+    const guarded = await exec(installed.workerLauncher, ['--help'], { cwd: other });
+    assert.match(guarded.stdout, /--policy <path>/);
+    for (const name of ['policy.test.mjs', 'launch-worker.test.mjs']) {
+      const run = await exec(process.execPath, ['--test', join(installed.skill, 'scripts', name)], {
+        cwd: other,
+        env: { ...process.env, NODE_TEST_CONTEXT: undefined },
+      });
+      assert.match(run.stdout, /fail 0/);
+    }
     const suite = await exec(process.execPath, ['--test', join(installed.skill, 'scripts', 'watch.test.mjs')], {
       cwd: other,
       env: { ...process.env, NODE_TEST_CONTEXT: undefined },

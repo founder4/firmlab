@@ -26,6 +26,7 @@ nohup orca-campaign-watch \
   --run run_ACTUAL --until 'ACTUAL_FUTURE_ISO_DEADLINE' \
   --journal /absolute/path/unique-campaign.json \
   --execute --context /absolute/path/current-context.md \
+  --policy /absolute/path/capacity-policy.json \
   > /absolute/path/unique-campaign.log 2>&1 < /dev/null &
 printf '%s\n' "$!" > /absolute/path/unique-campaign.pid
 ```
@@ -41,15 +42,44 @@ printf '%s\n' "$!" > /absolute/path/unique-campaign.pid
   `unknown`, the guard is observing, not supervising: keep the coordinator on rolling waits yourself.
   A connected terminal alone or a prose status does not establish execution. Do not promise continuous
   operation while startup is blocked or unproven. Keep rolling `check --wait --timeout-ms 30000` calls
-  outstanding while coordinating unfinished work, processing every Delivery before ack.
+  outstanding while coordinating unfinished work, processing every Delivery before ack. Keep those waits
+  in the foreground of your own turn: a detached polling loop that outlives the turn supervises nothing, and
+  on Claude it was seen keeping the native row at a stale `working` after the turn had ended.
 
 Folder projects do not require Git. If Orca registration is needed, use the current guide within the
 user-authorized project scope; otherwise ask for the missing authorization. Without separate worktrees,
 parallel writers need disjoint file ownership. Do not convert a local-folder task into a Git requirement.
 
+## Capacity policy and workers
+
+A campaign keeps one durable JSON registry of capacity blocks and handoffs (`--policy`, schema v1, handled by
+`scripts/policy.mjs`). Start every worker through the installed guarded launcher, which checks the registry
+before any Orca call and makes none when it refuses:
+
+```bash
+orca-campaign-launch-worker --policy /absolute/path/capacity-policy.json --agent antigravity \
+  -- --spec "<self-contained task>" --worktree current --json
+```
+
+- A provider-scope block refuses every model of that provider; a model-scope block refuses that model, and a
+  launch naming no model while any model of its provider is blocked. A fresh terminal, a different handle or an
+  explicit `--capacity-domain` never bypasses a block. Forwarded `--agent`, `--model` and `--terminal` are refused.
+- Unknown capacity (no entry) is not exhaustion. An elapsed `resetAt` never recovers by itself; only a
+  `recovered` entry carrying viable canary evidence lifts a block.
+- The guard records what a hard stop prevents the owner from recording: a quota screen on the RENDERED frame
+  becomes a conservative provider-wide block (locked, reloaded, atomic write). Quota text in a stream fallback,
+  `unknown` status or a stale `working` row records nothing. A missing or invalid registry blocks execution.
+- The wrapper is campaign enforcement only: raw `orca orchestration worker-start` is not intercepted.
+- Use workers for independent tasks with disjoint file ownership; the coordinator plans, integrates and runs
+  the gates. Do not manufacture workers when nothing is separable. Keep the provider's default model unless
+  the user names one.
+
 ## Handoff and stopping
 
-Prepare a ready Claude/Antigravity successor before context/quota exhaustion. Full handoff is a direct
+Hand off ONLY when the coordinator positively hits a capacity or context limit, or otherwise cannot continue;
+record that reason (`capacity_exhausted`, `context_exhausted`, `unavailable`) in the registry's `handoffs`, with
+the evidence. Ending a turn is not unavailability, and there is no scheduled rotation: `forced_test` is valid only
+with the user's explicit opt-in. Prepare a ready Claude/Antigravity successor before context/quota exhaustion. Full handoff is a direct
 instruction to carry out the already authorized work: include current context and unchanged deadline,
 have the receiver adopt the **same** Run from its own terminal, and verify owner plus increased generation
 before the sender relinquishes editing. Never forge a receiver's `--from`. Acceptance proves input only;
@@ -65,7 +95,12 @@ of the accumulated stream. Any `draft` the read reports other than absent or exa
 unexpected type included) is excluded from the rendered tail, so it blocks input as `composer_draft_present` however empty the prompt looks. Every interval the guard cannot
 classify (`input_prompt_unrecognized`, `screen_unreadable`, `screen_not_rendered` for a stream fallback or older host, a draft, a lost owner) is journaled in `gaps` as
 `{from, to, reason, phase: 'unknown'}`, from the last observation before it to the observation that ended it,
-with the open one also in `uncertainty`. That is uncertainty, not proven inactivity and not health. When a provider quota or
+with the open one also in `uncertainty`. That is uncertainty, not proven inactivity and not health. An interval
+that lasts five minutes also sets `diagnostic` (`persistent_unknown`, its reason, start, duration, the native and
+screen evidence timestamps and the manual recovery procedure), closed into the bounded `diagnostics` history when
+observation resumes. A native `working` row older than three minutes is stale: the guard then reads the rendered
+frame and runs the native idle wait like for any other state, and counts the owner idle only when both agree and no
+turn is visibly running. Claude keeps an empty composer on screen WHILE it works, so the spinner line decides. When a provider quota or
 session limit screen is captured on a rendered frame (quota text in a stream fallback is history, so it is
 `screen_not_rendered` uncertainty) (e.g. usage limit reached, limit resets, continuing automatically), the
 supervisor positively records an explicit `blocked` phase with `capacity_blocked` reason and durable bounded
