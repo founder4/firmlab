@@ -68,7 +68,7 @@ describe('SwitchFamilyPanel', () => {
     expect(await screen.findByText(summary)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: `${m.overall}: ${m.verdict['template-only']}` })).toBeInTheDocument();
     const candidates = within(screen.getByRole('region', { name: m.candidates }));
-    expect(candidates.getByText('family-template')).toBeInTheDocument();
+    expect(candidates.getByText(m.standingValue['family-template'])).toBeInTheDocument();
     expect(candidates.getByText(/Distinct tokens: RTL8366/)).toBeInTheDocument();
     expect(candidates.getByText(/Matches counted: 2/)).toBeInTheDocument();
     fireEvent.click(candidates.getByText('Retained evidence (1)'));
@@ -112,6 +112,31 @@ describe('SwitchFamilyPanel', () => {
     expect(within(screen.getByRole('region', { name: m.vendors })).getByText(/Broadcom.*7/)).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: m.candidates })).queryByText(/Broadcom/)).not.toBeInTheDocument();
     expect(screen.getByText(m.noCandidates)).toBeInTheDocument();
+  });
+
+  it('states a scan that read no bytes as not established, and hides a zero grid for an errored lane', async () => {
+    mockApi.switchFamilyResult.mockResolvedValue({
+      raw: { status: 'error', reason: 'Raw lane could not read the image: ENOENT.' },
+      rootfs: {
+        status: 'error',
+        reason: 'Rootfs lane could not run: Rootfs is not a regular directory',
+        coverage: { filesExamined: 0, filesDiscovered: 0, bytesScanned: 0 },
+      },
+      overall: { verdict: 'not-scanned', summary: 'No bytes were scanned in any lane.' },
+    });
+    render(<SwitchFamilyPanel imageId="img" />);
+    expect(await screen.findByText(new RegExp(m.verdict['not-scanned']))).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(m.verdict['none-observed']))).toBeNull();
+    expect(screen.queryByText(m.filesExamined)).toBeNull();
+    expect(screen.getByText('Rootfs lane could not run: Rootfs is not a regular directory')).toBeInTheDocument();
+  });
+
+  it('translates the evidence standing instead of printing its code', async () => {
+    setLocale('es');
+    mockApi.switchFamilyResult.mockResolvedValue(saved);
+    render(<SwitchFamilyPanel imageId="img" />);
+    expect(await screen.findByText(es.switchFamily.standingValue['family-template'])).toBeInTheDocument();
+    expect(screen.queryByText('family-template')).toBeNull();
   });
 
   it('renders an older result without inventing zero counts or a negative verdict', async () => {

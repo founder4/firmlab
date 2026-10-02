@@ -789,6 +789,18 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   en usart2) con el SVD rechazado y nombrado en el resultado. Qué cambia el SVD en el comportamiento de periféricos
   no se ha medido. El sondeo de capacidades `renode --version` no carga plataforma y sigue sin el entorno offline.
 
+## Revisiones independientes de la campaña (2026-10-02)
+
+- [ ] switch-family (revisión `review-switchfamily.md`, hallazgo 5): el resultado persistido y la carga MCP crecen
+  ~1,7 KB por fichero del rootfs aunque no haya evidencias (≈2,6 MB en MCP para 1.024 ficheros). Guardar el resultado
+  completo sólo de ficheros con candidatos, menciones, truncado o borde sin resolver, y `deferred` una vez arriba.
+  Diferido: cambia la forma de un resultado persistido.
+- [ ] VEX de proveedor (revisión `review-vex.md`): riesgos 5 (CSAF `first_affected`/`last_affected`/`first_fixed`
+  ignorados), 6 (`product_tree.branches`/`relationships` y OpenVEX 0.2.0 `identifiers`/`subcomponents` no leídos),
+  8 (los carriles sbom y research descartan la cobertura de descubrimiento), 9 (la regla por subcadena de directorio
+  puede agotar el cap de ficheros antes del documento real) y nits 11–15. Fallo conservador asumido: una fila grype de
+  ecosistema de lenguaje (pypi/npm) no casa con un purl tipado hasta que la fila lleve su ecosistema.
+
 ## Orca — continuidad desatendida (2026-10-02)
 
 - [x] El supervisor no reanudaba a un coordinador cuyo estado nativo `working` quedaba congelado (Claude,

@@ -1449,7 +1449,8 @@ export interface SwitchFamilyEvidence {
 }
 
 export interface SwitchFamilyRead {
-  verdict?: 'single-family-lead' | 'template-only' | 'ambiguous' | 'vendor-only' | 'none-observed';
+  /** `not-scanned`: no byte was read in any lane, so nothing was observed either way (newer builds only). */
+  verdict?: 'single-family-lead' | 'template-only' | 'ambiguous' | 'vendor-only' | 'none-observed' | 'not-scanned';
   summary?: string;
   candidates?: {
     family?: string;

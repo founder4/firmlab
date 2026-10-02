@@ -232,70 +232,73 @@ function SwitchFamilyView({ imageId }: { imageId: string }): JSX.Element {
                   <p style={prose}>{read?.reason ?? m.notRecorded}</p>
                   {read?.result?.verdict && <span>{m.verdict[read.result.verdict] ?? read.result.verdict}</span>}
                   {lane === 'raw' && result.raw?.file && <FileCoverage file={result.raw.file} />}
-                  {/* A lane that never ran has no coverage: zero counts would read as "examined, found nothing". */}
-                  {lane === 'rootfs' && read?.status !== 'not-run' && (
-                    <>
-                      <h4>{m.coverage}</h4>
-                      <Metrics
-                        rows={[
-                          [m.filesExamined, coverage?.filesExamined],
-                          [m.filesDiscovered, coverage?.filesDiscovered],
-                          [m.filesSkipped, coverage?.filesSkipped],
-                          [m.filesTruncated, coverage?.filesTruncated],
-                          [m.bytesScanned, coverage?.bytesScanned],
-                          [m.links, coverage?.symlinksSkipped],
-                          [m.special, coverage?.specialFilesSkipped],
-                          [m.entries, coverage?.entriesExamined],
-                        ]}
-                      />
-                      <p className="hint" style={prose}>
-                        {coverage?.inventoryComplete === true
-                          ? m.completeInventory
-                          : coverage?.inventoryComplete === false
-                            ? m.incompleteInventory
-                            : m.notRecorded}
-                      </p>
-                      <details>
-                        <summary>{m.limits}</summary>
-                        <p style={prose}>{coverage?.selection ?? m.notRecorded}</p>
+                  {/* A lane that never ran, or failed before examining a file, has no coverage: zero counts would read as
+                      "examined, found nothing". Its reason above is the whole account. */}
+                  {lane === 'rootfs' &&
+                    read?.status !== 'not-run' &&
+                    !(read?.status === 'error' && !coverage?.filesExamined) && (
+                      <>
+                        <h4>{m.coverage}</h4>
                         <Metrics
                           rows={[
-                            [m.maxFiles, limits?.maxFiles],
-                            [m.maxBytesPerFile, limits?.maxBytesPerFile],
-                            [m.maxTotalBytes, limits?.maxTotalBytes],
-                            [m.maxEntries, limits?.maxEntries],
+                            [m.filesExamined, coverage?.filesExamined],
+                            [m.filesDiscovered, coverage?.filesDiscovered],
+                            [m.filesSkipped, coverage?.filesSkipped],
+                            [m.filesTruncated, coverage?.filesTruncated],
+                            [m.bytesScanned, coverage?.bytesScanned],
+                            [m.links, coverage?.symlinksSkipped],
+                            [m.special, coverage?.specialFilesSkipped],
+                            [m.entries, coverage?.entriesExamined],
                           ]}
                         />
-                      </details>
-                      {!!result.rootfs?.files?.length && (
+                        <p className="hint" style={prose}>
+                          {coverage?.inventoryComplete === true
+                            ? m.completeInventory
+                            : coverage?.inventoryComplete === false
+                              ? m.incompleteInventory
+                              : m.notRecorded}
+                        </p>
                         <details>
-                          <summary>{m.fileCoverage}</summary>
-                          <div style={stack}>
-                            {result.rootfs.files.map((file, index) => (
-                              <details key={`${file.path}:${index}`}>
-                                <summary style={prose}>{file.path ?? m.notRecorded}</summary>
-                                <FileCoverage file={file} />
-                              </details>
-                            ))}
-                          </div>
+                          <summary>{m.limits}</summary>
+                          <p style={prose}>{coverage?.selection ?? m.notRecorded}</p>
+                          <Metrics
+                            rows={[
+                              [m.maxFiles, limits?.maxFiles],
+                              [m.maxBytesPerFile, limits?.maxBytesPerFile],
+                              [m.maxTotalBytes, limits?.maxTotalBytes],
+                              [m.maxEntries, limits?.maxEntries],
+                            ]}
+                          />
                         </details>
-                      )}
-                      {!!coverage?.errors?.length && (
-                        <details>
-                          <summary>
-                            {m.errors} ({coverage.errors.length})
-                          </summary>
-                          <ul style={prose}>
-                            {coverage.errors.map((failure, index) => (
-                              <li key={`${failure.path}:${index}`}>
-                                {failure.path ?? m.notRecorded}: {failure.reason ?? m.notRecorded}
-                              </li>
-                            ))}
-                          </ul>
-                        </details>
-                      )}
-                    </>
-                  )}
+                        {!!result.rootfs?.files?.length && (
+                          <details>
+                            <summary>{m.fileCoverage}</summary>
+                            <div style={stack}>
+                              {result.rootfs.files.map((file, index) => (
+                                <details key={`${file.path}:${index}`}>
+                                  <summary style={prose}>{file.path ?? m.notRecorded}</summary>
+                                  <FileCoverage file={file} />
+                                </details>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                        {!!coverage?.errors?.length && (
+                          <details>
+                            <summary>
+                              {m.errors} ({coverage.errors.length})
+                            </summary>
+                            <ul style={prose}>
+                              {coverage.errors.map((failure, index) => (
+                                <li key={`${failure.path}:${index}`}>
+                                  {failure.path ?? m.notRecorded}: {failure.reason ?? m.notRecorded}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                      </>
+                    )}
                 </section>
               );
             })}
@@ -314,7 +317,10 @@ function SwitchFamilyView({ imageId }: { imageId: string }): JSX.Element {
                 >
                   <h4>{candidate.family ?? m.notRecorded}</h4>
                   <div>
-                    {m.standing}: <code>{candidate.standing ?? m.notRecorded}</code>
+                    {m.standing}:{' '}
+                    <code>
+                      {candidate.standing ? (m.standingValue[candidate.standing] ?? candidate.standing) : m.notRecorded}
+                    </code>
                   </div>
                   <div style={prose}>
                     {m.tokens}: {(candidate.distinctTokens ?? []).join(', ') || m.notRecorded}

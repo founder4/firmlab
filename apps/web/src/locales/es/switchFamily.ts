@@ -27,7 +27,9 @@ export const switchFamily: Messages['switchFamily'] = {
     ambiguous: 'Ambiguo',
     'vendor-only': 'Solo nombres de fabricantes',
     'none-observed': 'Sin coincidencias en los bytes analizados',
+    'not-scanned': 'Sin establecer: no se analizó ningún byte',
   },
+  standingValue: { 'exact-literal': 'literal exacto', 'family-template': 'patrón de familia' },
   candidates: 'Familias candidatas',
   noCandidates:
     'No hay familias candidatas en los bytes analizados. Esto no demuestra que no haya un switch; consulta la cobertura de cada vía.',
