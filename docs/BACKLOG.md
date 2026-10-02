@@ -760,6 +760,14 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   `confirmed_full_system` ni «idéntico al físico» — el entorno sintético es permisivo por diseño (`types.ts`). La
   Capa IV (Avatar2/JTAG) queda FUERA DE ALCANCE: rompe la premisa sin-hardware.
 
+- [ ] Pre-aprovisionar localmente los 13 SVD que las plataformas de Renode piden por HTTPS (p. ej. bajo
+  `FIRMLAB_DATA_DIR`, reescribiendo `ApplySVD` en una copia de la plataforma). Desde 2026-10-02 Renode corre con
+  `OFFLINE_RENODE_ENV` (proxy a un puerto loopback que rechaza) porque el contenedor desplegado no puede crear netns y
+  cada arranque descargaba el SVD; validado en contenedor `--network none` con un listener en el puerto 9 que recibe
+  los `CONNECT dl.antmicro.com:443`, y el Zephyr STM32L072 del corpus sigue arrancando (`confirmed_in_emulation`, UART
+  en usart2) con el SVD rechazado y nombrado en el resultado. Qué cambia el SVD en el comportamiento de periféricos
+  no se ha medido. El sondeo de capacidades `renode --version` no carga plataforma y sigue sin el entorno offline.
+
 ## Orca — continuidad desatendida (2026-10-02)
 
 - [x] Recuperar al coordinador que termina su turno sin espera: supervisor externo con plazo fijo,

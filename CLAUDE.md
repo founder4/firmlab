@@ -162,7 +162,11 @@ too); the database is **provisioned** under `FIRMLAB_DATA_DIR`, never acquired; 
 **refusal that names both remedies**, never a silent skip and never a download; the build date travels into the
 result, because "grype found 0" is only as current as the database behind it; and the one opt-in is
 `FIRMLAB_RESEARCH` — no flag of its own, because a database download sends nothing about the firmware, exactly
-like the KEV catalogue that lane already pulls. **When you add a tool, check what it does on startup.**
+like the KEV catalogue that lane already pulls. **When you add a tool, check what it does on startup.** Renode is the second instance: 13 bundled platform
+descriptions `ApplySVD @https://dl.antmicro.com/…` on load, the deployed container cannot `unshare -n`, and HOME
+is per-run, so every boot was a download (measured 2026-10-02 with a loopback listener: `CONNECT
+dl.antmicro.com:443`). `OFFLINE_RENODE_ENV` in `providers/renode.ts` aims every proxy variable .NET honours at a
+refusing loopback port and the result names what was refused.
 
 ### Findings ledger
 

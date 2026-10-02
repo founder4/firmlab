@@ -4,11 +4,17 @@ import path from 'node:path';
 import { fingerprintMcu } from '@firmlab/core';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  OFFLINE_RENODE_ENV,
+  RENODE_REFUSING_PROXY,
   type RenodeResult,
   buildRenodeFindings,
+  buildRenodeInvocation,
   buildRenodeScript,
+  describeRefusedRemote,
   discoverUarts,
   listPlatformCatalog,
+  offlineRenodeEnv,
+  scanRemoteResources,
   selectPlatform,
 } from './renode.js';
 
@@ -206,5 +212,191 @@ describe('buildRenodeFindings', () => {
   it('bounds the UART excerpt so a chatty firmware cannot grow the row without limit', () => {
     const [d] = buildRenodeFindings({ ...base, uartExcerpt: 'A'.repeat(9000) });
     expect(String(d?.evidence?.uartExcerpt).length).toBe(4000);
+  });
+});
+
+// Renode fetches `ApplySVD @https://…` files on platform load, and the deployed container cannot drop its network
+// namespace — the env is the only thing between a boot and an unrequested download.
+describe('offlineRenodeEnv', () => {
+  const PROXY_VARS = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'];
+
+  it('aims every proxy variable, in both spellings, at the refusing loopback port', () => {
+    const env = offlineRenodeEnv({ PATH: '/usr/bin' });
+    for (const k of PROXY_VARS) expect(env[k]).toBe(RENODE_REFUSING_PROXY);
+    expect(Object.keys(OFFLINE_RENODE_ENV).sort()).toEqual([...PROXY_VARS].sort());
+    expect(RENODE_REFUSING_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  });
+
+  it('overrides an inherited proxy and removes the bypass list rather than trusting it', () => {
+    const env = offlineRenodeEnv({
+      HTTPS_PROXY: 'http://corp-proxy:3128',
+      https_proxy: 'http://corp-proxy:3128',
+      NO_PROXY: '*',
+      no_proxy: '.antmicro.com',
+    });
+    expect(env.HTTPS_PROXY).toBe(RENODE_REFUSING_PROXY);
+    expect(env.https_proxy).toBe(RENODE_REFUSING_PROXY);
+    expect('NO_PROXY' in env).toBe(false);
+    expect('no_proxy' in env).toBe(false);
+  });
+
+  it('keeps HOME unless a per-run home is given, and leaves the base env untouched', () => {
+    const base = { HOME: '/home/firmlab', PATH: '/usr/bin', NO_PROXY: '*' };
+    expect(offlineRenodeEnv(base).HOME).toBe('/home/firmlab');
+    expect(offlineRenodeEnv(base, '/tmp/run').HOME).toBe('/tmp/run');
+    expect(offlineRenodeEnv(base).PATH).toBe('/usr/bin');
+    expect(base.NO_PROXY).toBe('*');
+  });
+});
+
+describe('buildRenodeInvocation', () => {
+  it('runs the boot script under the offline env with HOME at the work dir', () => {
+    const inv = buildRenodeInvocation('/w/boot.resc', 15, '/w', { HOME: '/home/x', NO_PROXY: '*' });
+    expect(inv.argv[0]).toBe('renode');
+    expect(inv.argv.at(-1)).toBe('include @/w/boot.resc; sleep 15; quit');
+    for (const [k, v] of Object.entries(OFFLINE_RENODE_ENV)) expect(inv.options.env[k]).toBe(v);
+    expect('NO_PROXY' in inv.options.env).toBe(false);
+    expect(inv.options.env.HOME).toBe('/w');
+  });
+
+  it('keeps the bounds the .NET runtime needs (no --as, no --fsize) and scales cpu/wall with the run', () => {
+    const { limits } = buildRenodeInvocation('/w/boot.resc', 10, '/w', {}).options;
+    expect(limits.addressSpaceBytes).toBe(0);
+    expect(limits.fileSizeBytes).toBe(0);
+    expect(limits.cpuSeconds).toBe(100);
+    expect(limits.wallMs).toBe(55_000);
+  });
+});
+
+describe('scanRemoteResources', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'renode-remote-'));
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  const write = (rel: string, text: string): string => {
+    const p = path.join(root, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, text);
+    return p;
+  };
+  const SVD = 'https://dl.antmicro.com/projects/renode/svd/STM32L0x1.svd';
+
+  it('follows a nested include chain (root-relative and ./relative) to the remote SVD', () => {
+    // Mirrors stm32l072.repl → stm32l071.repl, whose init block applies a remote SVD.
+    write(
+      'platforms/cpus/stm32l071.repl',
+      `nvic: IRQControllers.NVIC @ sysbus 0xE000E000\n\nsysbus:\n    init:\n        ApplySVD @${SVD}\n`,
+    );
+    write('platforms/cpus/stm32l072.repl', 'using "platforms/cpus/stm32l071.repl"\n');
+    const board = write('platforms/boards/l072-board.repl', 'using "../cpus/stm32l072"\n');
+    const scan = scanRemoteResources(board, root);
+    expect(scan.remote).toEqual([SVD]);
+    expect(scan.filesScanned).toBe(3);
+    expect(scan.unscanned).toEqual([]);
+  });
+
+  it('reports no remote references for a self-contained chain (an empty list, nothing unscanned)', () => {
+    write('platforms/cpus/local.repl', 'uart0: UART.PL011 @ sysbus 0x4000C000\n');
+    const board = write('platforms/boards/local-board.repl', 'using "platforms/cpus/local.repl"\n');
+    expect(scanRemoteResources(board, root)).toEqual({ remote: [], filesScanned: 2, unscanned: [] });
+  });
+
+  it('ignores a commented-out ApplySVD, which Renode never fetches', () => {
+    const p = write(
+      'platforms/cpus/commented.repl',
+      '// ApplySVD @https://example.invalid/a.svd\n/* ApplySVD @https://example.invalid/b.svd */\n',
+    );
+    expect(scanRemoteResources(p, root).remote).toEqual([]);
+  });
+
+  it('stops at a cycle and still reports what each file references, once', () => {
+    write('platforms/cyc/a.repl', `using "./b.repl"\nsysbus:\n    init:\n        ApplySVD @${SVD}\n`);
+    write('platforms/cyc/b.repl', `using "./a.repl"\nsysbus:\n    init:\n        ApplySVD @${SVD}\n`);
+    const scan = scanRemoteResources(path.join(root, 'platforms/cyc/a.repl'), root);
+    expect(scan.remote).toEqual([SVD]);
+    expect(scan.filesScanned).toBe(2);
+  });
+
+  it('refuses an include that escapes the Renode root, and names it as unscanned', () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'renode-outside-'));
+    try {
+      fs.writeFileSync(
+        path.join(outside, 'evil.repl'),
+        'sysbus:\n    init:\n        ApplySVD @https://x.invalid/e.svd\n',
+      );
+      const rel = path.relative(path.join(root, 'platforms/esc'), path.join(outside, 'evil.repl'));
+      const p = write('platforms/esc/board.repl', `using "./${rel}"\nusing "${path.join(outside, 'evil.repl')}"\n`);
+      const scan = scanRemoteResources(p, root);
+      expect(scan.remote).toEqual([]); // never read
+      expect(scan.filesScanned).toBe(1);
+      expect(scan.unscanned).toHaveLength(1); // both spellings resolve to the same file, refused once
+      expect(scan.unscanned[0]).toContain('outside the Renode root');
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('does not read a starting platform outside the root either', () => {
+    const scan = scanRemoteResources('/etc/hosts', root);
+    expect(scan.filesScanned).toBe(0);
+    expect(scan.unscanned[0]).toContain('outside the Renode root');
+  });
+
+  it('names what a depth or file bound left unread instead of dropping it silently', () => {
+    write('platforms/deep/d0.repl', 'using "./d1.repl"\n');
+    write('platforms/deep/d1.repl', 'using "./d2.repl"\n');
+    write('platforms/deep/d2.repl', `ApplySVD @${SVD}\n`);
+    const deep = scanRemoteResources(path.join(root, 'platforms/deep/d0.repl'), root, { maxDepth: 1 });
+    expect(deep.remote).toEqual([]);
+    expect(deep.unscanned).toEqual([
+      `${path.join(root, 'platforms/deep/d2.repl')} (past the include depth bound of 1)`,
+    ]);
+    const few = scanRemoteResources(path.join(root, 'platforms/deep/d0.repl'), root, { maxFiles: 2 });
+    expect(few.filesScanned).toBe(2);
+    expect(few.unscanned[0]).toContain('past the file bound of 2');
+  });
+
+  it('reports an unreadable include, and a platform that is itself a URL as remote', () => {
+    const p = write('platforms/miss/board.repl', 'using "./gone.repl"\n');
+    expect(scanRemoteResources(p, root).unscanned[0]).toContain('(unreadable)');
+    expect(scanRemoteResources('https://x.invalid/p.repl', root).remote).toEqual(['https://x.invalid/p.repl']);
+  });
+});
+
+describe('describeRefusedRemote', () => {
+  it('says nothing when nothing was refused and the chain was read whole', () => {
+    expect(describeRefusedRemote({ remote: [], filesScanned: 2, unscanned: [] })).toBe('');
+  });
+
+  it('names the refused resource and that the run used the platform without it', () => {
+    const s = describeRefusedRemote({ remote: ['https://a.invalid/x.svd'], filesScanned: 2, unscanned: [] });
+    expect(s).toContain('refused rather than downloaded');
+    expect(s).toContain('https://a.invalid/x.svd');
+    expect(s).toContain('without it');
+  });
+
+  it('says the list may be incomplete when part of the chain went unread', () => {
+    const s = describeRefusedRemote({ remote: [], filesScanned: 1, unscanned: ['/x.repl (unreadable)'] });
+    expect(s).toContain('may be incomplete');
+  });
+});
+
+describe('buildRenodeFindings — refused remote resources', () => {
+  it('carries the refused list into the evidence when there is one, and omits it otherwise', () => {
+    const r: RenodeResult = {
+      available: true,
+      ran: true,
+      booted: true,
+      reason: 'ok',
+      proofState: 'confirmed_in_emulation',
+      platform: 'boards/x.repl',
+      uartExcerpt: 'Booting Zephyr OS',
+      command: 'renode',
+    };
+    expect(buildRenodeFindings(r)[0]?.evidence?.remoteResourcesRefused).toBeUndefined();
+    expect(
+      buildRenodeFindings({ ...r, remoteResourcesRefused: [] })[0]?.evidence?.remoteResourcesRefused,
+    ).toBeUndefined();
+    const [d] = buildRenodeFindings({ ...r, remoteResourcesRefused: ['https://a.invalid/x.svd'] });
+    expect(d?.evidence?.remoteResourcesRefused).toEqual(['https://a.invalid/x.svd']);
+    expect(d?.proofState).toBe('confirmed_in_emulation');
   });
 });

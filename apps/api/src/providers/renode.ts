@@ -6,6 +6,14 @@
  * family list — builds a headless script that boots the ELF and shows the UART, and decides success from real
  * guest output. Without Renode, or with no platform match, it degrades HONESTLY to blocked_by_platform (naming the
  * detected MCU) — it never fakes an RTOS boot. The fingerprint, catalog scan, and selection are pure/unit-tested.
+ *
+ * Every Renode invocation runs OFFLINE. Thirteen bundled platform descriptions pull a register description over
+ * HTTPS on load (`ApplySVD @https://dl.antmicro.com/…`), the deployed container cannot drop the network namespace
+ * that would otherwise contain it, and HOME is a fresh directory per run, so nothing caches — every boot was a
+ * download nobody asked for, with every flag off. `OFFLINE_RENODE_ENV` points every proxy variable .NET honours at a
+ * loopback port nothing listens on, so the request is refused locally and Renode carries on without the file. The
+ * platform's include chain is scanned for what it would have fetched, and the result names it: the run used the
+ * platform WITHOUT those resources, and it does not claim the boot would look the same with them.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,9 +23,41 @@ import { type McuFingerprint, type ProofState, type StaticAnalysis, fingerprintM
 import type { FindingDraft } from '@firmlab/core';
 
 import { execFile } from '../job-process.js';
-import { type IsolationLevel, loadIsolationLimits, runIsolated } from './isolate.js';
+import { type IsolationLevel, type IsolationLimits, loadIsolationLimits, runIsolated } from './isolate.js';
 
 const execFileAsync = promisify(execFile);
+
+/** A loopback port nothing listens on (discard, 9): a proxied request is refused at once, never forwarded. */
+export const RENODE_REFUSING_PROXY = 'http://127.0.0.1:9';
+
+/**
+ * The proxy variables .NET's default HttpClient reads, in both spellings, all aimed at the refusing port. The
+ * bypass list (NO_PROXY / no_proxy) is REMOVED by `offlineRenodeEnv`, not merely left alone: an inherited
+ * `NO_PROXY=*` or `.antmicro.com` would send the request straight past the proxy to the network.
+ */
+export const OFFLINE_RENODE_ENV: Readonly<Record<string, string>> = {
+  HTTP_PROXY: RENODE_REFUSING_PROXY,
+  HTTPS_PROXY: RENODE_REFUSING_PROXY,
+  ALL_PROXY: RENODE_REFUSING_PROXY,
+  http_proxy: RENODE_REFUSING_PROXY,
+  https_proxy: RENODE_REFUSING_PROXY,
+  all_proxy: RENODE_REFUSING_PROXY,
+};
+
+/** Variables that would exempt a host from the refusing proxy, and so must not survive into Renode's env. */
+export const RENODE_PROXY_BYPASS_VARS: readonly string[] = ['NO_PROXY', 'no_proxy'];
+
+/**
+ * Pure: the environment every Renode process gets — the caller's, with the offline proxies forced over it and the
+ * bypass list removed. `home`, when given, replaces HOME (the boot run uses a per-run directory); otherwise HOME
+ * is passed through untouched.
+ */
+export function offlineRenodeEnv(base: NodeJS.ProcessEnv, home?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...OFFLINE_RENODE_ENV };
+  for (const k of RENODE_PROXY_BYPASS_VARS) delete env[k];
+  if (home !== undefined) env.HOME = home;
+  return env;
+}
 
 /**
  * Build the MCU/vendor hints that drive platform selection, from an image's stored identity + analysis JSON. Kept
@@ -196,6 +236,119 @@ export function discoverUarts(replPath: string, renodeRoot: string, _seen = new 
   return [...names];
 }
 
+/** Bounds on the include-chain scan — they stop a runaway chain; a cycle stops at its first revisit regardless. */
+export const REMOTE_SCAN_MAX_DEPTH = 12;
+export const REMOTE_SCAN_MAX_FILES = 64;
+
+export interface RemoteResourceScan {
+  /** Every remote `@http(s)://` reference in the chain, deduplicated, in first-seen order. */
+  remote: string[];
+  /** How many platform files were actually read. */
+  filesScanned: number;
+  /**
+   * Includes that were NOT read, each with why — outside the Renode root, unreadable, or past a bound. Any entry
+   * here means `remote` may be incomplete: it lists what the scanned files reference, not what Renode would fetch.
+   */
+  unscanned: string[];
+}
+
+/** `/* … *\/` blocks and whole-line `//` comments removed — a commented-out `ApplySVD` is never fetched. */
+function stripReplComments(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((l) => !/^\s*\/\//.test(l))
+    .join('\n');
+}
+
+/** True when `p` is `root` or lies beneath it — the containment every read in the scan is held to. */
+function isWithin(root: string, p: string): boolean {
+  const rel = path.relative(root, p);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Pure (reads files, no network): what the selected platform would fetch over the network. Follows the same
+ * `using` include rule as `discoverUarts` — `./x` relative to the including file, anything else relative to the
+ * Renode root — and collects every `@http://` / `@https://` reference, which is how a .repl names a remote file
+ * (in practice `ApplySVD @https://…svd`). Every read, the starting platform included, must stay inside
+ * `renodeRoot`; an include that resolves outside it is refused and reported, never read. Cycles stop at the first
+ * revisit; depth and file count are bounded, and anything a bound or a refusal left unread is named in
+ * `unscanned` rather than silently dropped. A platform that is itself a URL is reported as remote.
+ */
+export function scanRemoteResources(
+  platformPath: string,
+  renodeRoot: string,
+  bounds: { maxDepth?: number; maxFiles?: number } = {},
+): RemoteResourceScan {
+  const maxDepth = bounds.maxDepth ?? REMOTE_SCAN_MAX_DEPTH;
+  const maxFiles = bounds.maxFiles ?? REMOTE_SCAN_MAX_FILES;
+  const root = path.resolve(renodeRoot);
+  const remote = new Set<string>();
+  const unscanned: string[] = [];
+  const seen = new Set<string>();
+  let filesScanned = 0;
+
+  if (/^https?:\/\//i.test(platformPath)) return { remote: [platformPath], filesScanned: 0, unscanned: [] };
+
+  const visit = (file: string, depth: number): void => {
+    const abs = path.resolve(file);
+    if (seen.has(abs)) return; // a cycle, or a diamond include already read
+    seen.add(abs);
+    if (!isWithin(root, abs)) {
+      unscanned.push(`${abs} (outside the Renode root)`);
+      return;
+    }
+    if (depth > maxDepth) {
+      unscanned.push(`${abs} (past the include depth bound of ${maxDepth})`);
+      return;
+    }
+    if (filesScanned >= maxFiles) {
+      unscanned.push(`${abs} (past the file bound of ${maxFiles})`);
+      return;
+    }
+    let text: string;
+    try {
+      text = stripReplComments(fs.readFileSync(abs, 'utf8'));
+    } catch {
+      unscanned.push(`${abs} (unreadable)`);
+      return;
+    }
+    filesScanned++;
+    for (const m of text.matchAll(/@(https?:\/\/[^\s"'`;]+)/gi)) if (m[1]) remote.add(m[1]);
+    for (const m of text.matchAll(/^[ \t]*using[ \t]+"([^"]+)"/gm)) {
+      const raw = m[1];
+      if (!raw) continue;
+      const inc = raw.endsWith('.repl') ? raw : `${raw}.repl`;
+      visit(inc.startsWith('.') ? path.resolve(path.dirname(abs), inc) : path.resolve(root, inc), depth + 1);
+    }
+  };
+  visit(platformPath, 0);
+  return { remote: [...remote], filesScanned, unscanned };
+}
+
+/**
+ * Pure: the one sentence the boot reason gains from the scan, or '' when there is nothing to say. Names what was
+ * refused and what that costs — for an `ApplySVD` file, register names in Renode's peripheral logging, not the
+ * peripherals themselves — and, when part of the chain went unread, says the list may be incomplete.
+ */
+export function describeRefusedRemote(scan: RemoteResourceScan): string {
+  const parts: string[] = [];
+  if (scan.remote.length > 0) {
+    const shown = scan.remote.slice(0, 3).join(', ');
+    const more = scan.remote.length > 3 ? ` and ${scan.remote.length - 3} more` : '';
+    parts.push(
+      `Renode ran offline, so ${scan.remote.length} remote resource${scan.remote.length === 1 ? '' : 's'} the platform references ${scan.remote.length === 1 ? 'was' : 'were'} refused rather than downloaded (${shown}${more}); the run used the platform without ${scan.remote.length === 1 ? 'it' : 'them'}, and what ${scan.remote.length === 1 ? 'it' : 'they'} would have changed was not measured.`,
+    );
+  }
+  if (scan.unscanned.length > 0) {
+    parts.push(
+      `${scan.unscanned.length} platform include${scan.unscanned.length === 1 ? ' was' : 's were'} not scanned for remote references (${scan.unscanned.slice(0, 2).join('; ')}${scan.unscanned.length > 2 ? '; …' : ''}), so that list may be incomplete; any such fetch was still refused offline.`,
+    );
+  }
+  return parts.join(' ');
+}
+
 /**
  * Pure: the headless Renode script — create a machine, load the platform + ELF, and tee every discovered UART to
  * a per-UART file backend (plus an on-console analyzer) so a real boot's output is captured no matter which UART
@@ -228,6 +381,11 @@ export interface RenodeResult {
   uartExcerpt: string;
   command: string;
   isolation?: IsolationLevel;
+  /**
+   * Remote `@http(s)://` resources the platform's include chain references, all refused because Renode runs
+   * offline. Optional forever: results stored before this field existed carry none, which is not "none refused".
+   */
+  remoteResourcesRefused?: string[];
 }
 
 /**
@@ -253,6 +411,9 @@ export function buildRenodeFindings(r: RenodeResult): FindingDraft[] {
     uartExcerpt: r.uartExcerpt.slice(0, 4000),
   };
   if (r.isolation) evidence.isolation = r.isolation;
+  if (r.remoteResourcesRefused && r.remoteResourcesRefused.length > 0) {
+    evidence.remoteResourcesRefused = r.remoteResourcesRefused;
+  }
 
   const kind = !r.ran ? 'renode-blocked' : r.booted ? 'renode-booted' : 'renode-boot-unconfirmed';
   const title = !r.ran
@@ -275,13 +436,48 @@ export function buildRenodeFindings(r: RenodeResult): FindingDraft[] {
   return [draft];
 }
 
+function withLeadingSpace(sentence: string): string {
+  return sentence ? ` ${sentence}` : '';
+}
+
 export async function detectRenode(): Promise<boolean> {
   try {
-    await execFileAsync('renode', ['--version'], { timeout: 8000 });
+    await execFileAsync('renode', ['--version'], { timeout: 8000, env: offlineRenodeEnv(process.env) });
     return true;
   } catch (err) {
     return (err as { code?: string }).code !== 'ENOENT';
   }
+}
+
+/**
+ * Pure: the isolated boot invocation — argv plus `runIsolated` options. Proven headless recipe: run the script, let
+ * it boot, wait the bound, then quit. Renode/.NET reserves a large virtual address space and opens many fds, so it
+ * gets generous caps (a tight --as makes the runtime abort). The env is always the offline one, HOME the per-run
+ * work directory.
+ */
+export function buildRenodeInvocation(
+  rescPath: string,
+  seconds: number,
+  work: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): { argv: string[]; options: { limits: IsolationLimits; env: NodeJS.ProcessEnv } } {
+  return {
+    argv: ['renode', '--disable-xwt', '--console', '--plain', '-e', `include @${rescPath}; sleep ${seconds}; quit`],
+    options: {
+      limits: {
+        ...loadIsolationLimits(baseEnv),
+        cpuSeconds: seconds * 4 + 60,
+        // No address-space or file-size caps: .NET's GC aborts under --as, and Renode's mmap'd emulation files
+        // trip --fsize (SIGXFSZ). The cpu + wall-clock + nofile caps still bound the run, and the netns where the
+          // host allows one; where it does not (the deployed container), the offline proxy env is what keeps it off the net.
+        addressSpaceBytes: 0,
+        fileSizeBytes: 0,
+        openFiles: 8192,
+        wallMs: (seconds + 45) * 1000,
+      },
+      env: offlineRenodeEnv(baseEnv, work),
+    },
+  };
 }
 
 /**
@@ -340,24 +536,9 @@ export async function runRenode(
     const script = buildRenodeScript(platform, firmwarePath, uarts, work);
     const rescPath = path.join(work, 'boot.resc');
     fs.writeFileSync(rescPath, script);
-    // Proven headless recipe: run the script, let it boot, wait the bound, then quit. Renode/.NET reserves a large
-    // virtual address space and opens many fds, so give it generous caps (a tight --as makes the runtime abort).
-    const res = await runIsolated(
-      ['renode', '--disable-xwt', '--console', '--plain', '-e', `include @${rescPath}; sleep ${seconds}; quit`],
-      {
-        limits: {
-          ...loadIsolationLimits(),
-          cpuSeconds: seconds * 4 + 60,
-          // No address-space or file-size caps: .NET's GC aborts under --as, and Renode's mmap'd emulation files
-          // trip --fsize (SIGXFSZ). The netns + cpu + wall-clock + nofile caps still bound the run.
-          addressSpaceBytes: 0,
-          fileSizeBytes: 0,
-          openFiles: 8192,
-          wallMs: (seconds + 45) * 1000,
-        },
-        env: { ...process.env, HOME: work },
-      },
-    );
+    const remoteScan = scanRemoteResources(platform, RENODE_ROOT);
+    const invocation = buildRenodeInvocation(rescPath, seconds, work);
+    const res = await runIsolated(invocation.argv, invocation.options);
 
     // "Booted" is decided from the UART file backends — the actual bytes the guest wrote — never from assumption.
     const captures = uarts
@@ -386,12 +567,15 @@ export async function runRenode(
           ? `Guest booted and produced UART output on ${captures.map((c) => c.uart).join(', ')}.`
           : res.timedOut
             ? 'Ran to the time bound with no UART output captured.'
-            : 'Renode session ended without UART output.'),
+            : 'Renode session ended without UART output.') +
+        // Only a process that ran can have been refused anything — a launch failure says nothing about the network.
+        withLeadingSpace(res.ran ? describeRefusedRemote(remoteScan) : ''),
       proofState: booted ? 'confirmed_in_emulation' : 'blocked_by_platform',
       platform,
       uartExcerpt: excerpt,
       command: res.command,
       isolation: res.isolation,
+      remoteResourcesRefused: remoteScan.remote,
     };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
