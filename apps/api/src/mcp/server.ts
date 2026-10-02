@@ -65,6 +65,7 @@ const WORKER_ROUTES = {
   servicemap: 'services',
   uboot: 'uboot',
   rtos: 'rtos',
+  switchfamily: 'switch-family',
   chipsec: 'chipsec',
   fcc: 'fcc',
 } as const;
@@ -415,7 +416,7 @@ export function buildServer(fl: FirmLabApiClient): McpServer {
         worker: z
           .enum(WORKERS)
           .describe(
-            'fsaudit = credentials/secrets audit · credmatch = compare stored hashes with strings shipped in the rootfs · yarascan = configured YARA corpus with coverage · sbom = packages→CVEs · certs = embedded X.509 · compmap = ELF dependency graph · servicemap = boot-time network daemons · uboot = boot posture · rtos = bare-metal/RTOS · chipsec = UEFI Secure Boot/NVRAM · fcc = FCC-ID recon',
+            'fsaudit = credentials/secrets audit · credmatch = compare stored hashes with strings shipped in the rootfs · yarascan = configured YARA corpus with coverage · sbom = packages→CVEs · certs = embedded X.509 · compmap = ELF dependency graph · servicemap = boot-time network daemons · uboot = boot posture · rtos = bare-metal/RTOS · switchfamily = static Ethernet-switch family LEADS (raw + extracted rootfs; no findings, never identifies live hardware) · chipsec = UEFI Secure Boot/NVRAM · fcc = FCC-ID recon',
           ),
       },
     },

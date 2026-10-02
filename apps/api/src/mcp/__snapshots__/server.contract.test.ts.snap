@@ -355,7 +355,7 @@ a confident complete-sounding one built on unexamined stages is the failure this
             "type": "string",
           },
           "worker": {
-            "description": "fsaudit = credentials/secrets audit · credmatch = compare stored hashes with strings shipped in the rootfs · yarascan = configured YARA corpus with coverage · sbom = packages→CVEs · certs = embedded X.509 · compmap = ELF dependency graph · servicemap = boot-time network daemons · uboot = boot posture · rtos = bare-metal/RTOS · chipsec = UEFI Secure Boot/NVRAM · fcc = FCC-ID recon",
+            "description": "fsaudit = credentials/secrets audit · credmatch = compare stored hashes with strings shipped in the rootfs · yarascan = configured YARA corpus with coverage · sbom = packages→CVEs · certs = embedded X.509 · compmap = ELF dependency graph · servicemap = boot-time network daemons · uboot = boot posture · rtos = bare-metal/RTOS · switchfamily = static Ethernet-switch family LEADS (raw + extracted rootfs; no findings, never identifies live hardware) · chipsec = UEFI Secure Boot/NVRAM · fcc = FCC-ID recon",
             "enum": [
               "fsaudit",
               "credmatch",
@@ -366,6 +366,7 @@ a confident complete-sounding one built on unexamined stages is the failure this
               "servicemap",
               "uboot",
               "rtos",
+              "switchfamily",
               "chipsec",
               "fcc",
             ],
