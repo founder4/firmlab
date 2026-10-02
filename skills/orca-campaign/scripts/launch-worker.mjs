@@ -12,6 +12,12 @@
  * - --terminal reuse across providers is rejected until verified lookup is supported.
  * - Explicit --capacity-domain is accounting metadata only and cannot bypass blocks.
  *
+ * Exit status never reads success into a launch that did not report one. A worker-start killed by a signal
+ * closes with code null, which `code ?? 0` used to turn into exit 0: a supervisor reading the status would
+ * believe a worker had started when the launch was cut off mid-flight. A signal exits 128 + its number (the
+ * shell convention, so `SIGTERM` reads 143), an unknown signal or a missing status exits 1, and a spawn error
+ * (no orca executable) exits 1 with the reason on stderr.
+ *
  * Enforcement limit:
  * This wrapper enforces capacity bounds at the invocation boundary. Direct, raw
  * invocations of `orca orchestration worker-start` outside this wrapper are not
@@ -21,8 +27,22 @@
 import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { readFile, rename, writeFile } from 'node:fs/promises';
+import { constants } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { evaluateLaunch, parsePolicy, serializePolicy } from './policy.mjs';
+
+/**
+ * Maps a child's close (code, signal) to this process's exit status. Only an integer code passes through;
+ * a signal is 128 + its number when known, and anything else is 1 — never 0.
+ */
+export function exitStatusFor(code, signal) {
+  if (Number.isInteger(code)) return code;
+  if (signal) {
+    const number = typeof signal === 'number' ? signal : constants.signals[signal];
+    return Number.isInteger(number) && number > 0 ? 128 + number : 1;
+  }
+  return 1;
+}
 
 /**
  * Loads and validates a campaign policy file.
@@ -194,7 +214,10 @@ export async function launchWorker(
   const argv = ['orchestration', 'worker-start', '--agent', agent, ...(model ? ['--model', model] : []), ...forward];
 
   const result = await run(argv);
-  const exitCode = typeof result === 'number' ? result : (result?.exitCode ?? result?.status ?? 0);
+  const exitCode =
+    typeof result === 'number'
+      ? exitStatusFor(result, null)
+      : exitStatusFor(result?.exitCode ?? result?.status ?? null, result?.signal ?? null);
   const stdout = typeof result === 'object' && result?.stdout != null ? result.stdout : '';
   const stderr = typeof result === 'object' && result?.stderr != null ? result.stderr : '';
 
@@ -238,23 +261,30 @@ export async function runCli(args = process.argv.slice(2)) {
     return new Promise((resolve, reject) => {
       const cp = spawn(options.orca, argv, { stdio: 'inherit' });
       cp.on('error', reject);
-      cp.on('close', (code) => {
-        resolve({ exitCode: code ?? 0 });
+      cp.on('close', (code, signal) => {
+        resolve({ exitCode: code, signal });
       });
     });
   };
 
-  const result = await launchWorker(
-    {
-      policyText,
-      agent: options.agent,
-      model: options.model,
-      capacityDomain: options.capacityDomain,
-      forward: options.forward,
-      now: Date.now(),
-    },
-    { run: runner },
-  );
+  let result;
+  try {
+    result = await launchWorker(
+      {
+        policyText,
+        agent: options.agent,
+        model: options.model,
+        capacityDomain: options.capacityDomain,
+        forward: options.forward,
+        now: Date.now(),
+      },
+      { run: runner },
+    );
+  } catch (error) {
+    console.error(`worker-start could not be run: ${error.message}`);
+    process.exitCode = 1;
+    return;
+  }
 
   if (!result.launched) {
     console.log(JSON.stringify({ launched: false, reason: result.reason, domain: result.domain }));

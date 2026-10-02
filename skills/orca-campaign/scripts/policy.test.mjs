@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  KNOWN_PROVIDERS,
   PolicyValidationError,
+  canonicalProvider,
   capacityDomain,
   createEmptyPolicy,
   evaluateLaunch,
@@ -179,6 +181,7 @@ test('recordHandoff: reason validation and forced_test opt-in requirement', () =
     generation: 1,
     reason: 'forced_test',
     explicitUserOptIn: true,
+    evidence: 'user asked in this session for a forced handoff test',
   });
   assert.equal(handoff.handoffs.length, 1);
   assert.equal(handoff.handoffs[0].reason, 'forced_test');
@@ -190,6 +193,7 @@ test('recordHandoff: reason validation and forced_test opt-in requirement', () =
     toHandle: 'term_2',
     generation: 2,
     reason: 'capacity_exhausted',
+    evidence: 'rendered usage-limit screen',
   });
   assert.equal(handoffExhausted.handoffs[0].reason, 'capacity_exhausted');
 });
@@ -296,7 +300,7 @@ test('evaluateLaunch: shared domain via --capacity-domain blocks both models nam
     domain: 'anthropic-tier-1',
     scope: 'model',
     provider: 'anthropic',
-    model: null,
+    model: 'claude-3-5-sonnet',
     status: 'blocked',
     reason: 'tier_quota_depleted',
     evidence: 'rate limit pool empty',
@@ -496,4 +500,256 @@ test('a launch naming no model is refused while any model of that provider is bl
   assert.equal(unnamed.reason, 'model_unspecified_with_model_block');
   assert.equal(evaluateLaunch(policy, { agent: 'claude', model: 'claude-sonnet-5-5' }).allowed, true);
   assert.equal(evaluateLaunch(policy, { agent: 'codex' }).allowed, true);
+});
+
+/** A raw registry with one domain entry, as a hand-edited or older file would hold it. */
+function registryWith(entry) {
+  return JSON.stringify({
+    version: 1,
+    currentProvider: null,
+    domains: [
+      {
+        status: 'blocked',
+        reason: 'usage_limit',
+        evidence: 'rendered usage-limit screen',
+        observedAt: ISO_NOW,
+        resetAt: null,
+        ...entry,
+      },
+    ],
+    handoffs: [],
+  });
+}
+
+test('canonicalProvider: trims and lowercases, then accepts only known providers', () => {
+  assert.deepEqual([...KNOWN_PROVIDERS], ['anthropic', 'openai', 'google']);
+  assert.equal(canonicalProvider('anthropic'), 'anthropic');
+  assert.equal(canonicalProvider(' Anthropic '), 'anthropic');
+  assert.equal(canonicalProvider('OPENAI'), 'openai');
+  assert.equal(canonicalProvider('anthropic-ai'), null);
+  assert.equal(canonicalProvider('claude'), null, 'an agent id is not a provider');
+  assert.equal(canonicalProvider(''), null);
+  assert.equal(canonicalProvider(null), null);
+  assert.equal(canonicalProvider(42), null);
+});
+
+test('a provider written with different case is canonicalised and still blocks every model', () => {
+  // Reproduction: provider "Anthropic" used to parse and then match nothing, allowing as no_recorded_block.
+  const policy = parsePolicy(registryWith({ domain: 'provider:anthropic', scope: 'provider', provider: 'Anthropic' }));
+  assert.equal(policy.domains[0].provider, 'anthropic');
+  const res = evaluateLaunch(policy, { agent: 'claude', model: 'x' }, NOW);
+  assert.equal(res.allowed, false);
+  assert.equal(res.reason, 'usage_limit');
+  assert.equal(evaluateLaunch(policy, { agent: 'claude' }, NOW).allowed, false);
+
+  const padded = parsePolicy(registryWith({ domain: 'provider:openai', scope: 'provider', provider: '  OpenAI ' }));
+  assert.equal(padded.domains[0].provider, 'openai');
+  assert.equal(evaluateLaunch(padded, { agent: 'codex', model: 'o3' }, NOW).allowed, false);
+});
+
+test('an unknown or non-string provider is refused, never accepted as an inert entry', () => {
+  for (const provider of ['anthropic-ai', 'claude', 'unknown', '', '   ', null, undefined, 7]) {
+    assert.throws(
+      () => parsePolicy(registryWith({ domain: 'shared-pool', scope: 'provider', provider })),
+      PolicyValidationError,
+      `provider ${JSON.stringify(provider)} must be refused`,
+    );
+  }
+});
+
+test('scope model requires a non-empty model string', () => {
+  for (const model of [null, undefined, '', '   ']) {
+    assert.throws(
+      () => parsePolicy(registryWith({ domain: 'shared-pool', scope: 'model', provider: 'anthropic', model })),
+      /scope 'model' requires a non-empty model/,
+      `model ${JSON.stringify(model)} must be refused`,
+    );
+  }
+  assert.throws(
+    () =>
+      parsePolicy(
+        registryWith({ domain: 'model:anthropic/x', scope: 'model', provider: 'anthropic', model: { id: 'x' } }),
+      ),
+    PolicyValidationError,
+  );
+  assert.throws(
+    () =>
+      recordBlock(createEmptyPolicy(), {
+        domain: 'p',
+        scope: 'model',
+        provider: 'anthropic',
+        reason: 'r',
+        evidence: 'e',
+      }),
+    PolicyValidationError,
+  );
+});
+
+test('a provider-scope entry naming a model is rejected, never silently narrowed', () => {
+  for (const model of ['claude-opus-5-5', '']) {
+    assert.throws(
+      () =>
+        parsePolicy(registryWith({ domain: 'provider:anthropic', scope: 'provider', provider: 'anthropic', model })),
+      /scope 'provider' must not name a model/,
+    );
+  }
+  assert.throws(
+    () =>
+      recordBlock(createEmptyPolicy(), {
+        domain: 'provider:anthropic',
+        scope: 'provider',
+        provider: 'anthropic',
+        model: 'claude-opus-5-5',
+        reason: 'r',
+        evidence: 'e',
+      }),
+    PolicyValidationError,
+  );
+  // null and absent are both "no model".
+  assert.equal(
+    parsePolicy(registryWith({ domain: 'provider:anthropic', scope: 'provider', provider: 'anthropic', model: null }))
+      .domains[0].model,
+    null,
+  );
+  assert.equal(
+    parsePolicy(registryWith({ domain: 'provider:anthropic', scope: 'provider', provider: 'anthropic' })).domains[0]
+      .model,
+    null,
+  );
+});
+
+test('a reserved-prefix domain must match the identity it implies', () => {
+  const mismatches = [
+    { domain: 'provider:anthropic', scope: 'model', provider: 'anthropic', model: 'x' },
+    { domain: 'provider:openai', scope: 'provider', provider: 'anthropic' },
+    { domain: 'provider:Anthropic', scope: 'provider', provider: 'anthropic' },
+    { domain: 'model:anthropic/x', scope: 'model', provider: 'anthropic', model: 'y' },
+    { domain: 'model:anthropic/x', scope: 'provider', provider: 'anthropic' },
+    { domain: 'Model:openai/o3', scope: 'model', provider: 'anthropic', model: 'o3' },
+  ];
+  for (const entry of mismatches) {
+    assert.throws(() => parsePolicy(registryWith(entry)), /reserved prefix/, JSON.stringify(entry));
+  }
+  const ok = parsePolicy(
+    registryWith({ domain: 'model:anthropic/x', scope: 'model', provider: 'Anthropic', model: ' x ' }),
+  );
+  assert.equal(ok.domains[0].provider, 'anthropic');
+  assert.equal(ok.domains[0].model, 'x');
+});
+
+test('explicit shared capacity domains keep arbitrary domain strings', () => {
+  const policy = parsePolicy(
+    registryWith({ domain: ' team-pool/tier 1 ', scope: 'model', provider: 'anthropic', model: 'claude-opus-5-5' }),
+  );
+  assert.equal(policy.domains[0].domain, 'team-pool/tier 1');
+  const viaPool = evaluateLaunch(
+    policy,
+    { agent: 'claude', model: 'claude-sonnet-5-5', capacityDomain: 'team-pool/tier 1' },
+    NOW,
+  );
+  assert.equal(viaPool.allowed, false);
+  assert.equal(viaPool.domain, 'team-pool/tier 1');
+
+  const providerPool = parsePolicy(registryWith({ domain: 'org-shared', scope: 'provider', provider: 'google' }));
+  assert.equal(evaluateLaunch(providerPool, { agent: 'antigravity' }, NOW).allowed, false);
+});
+
+test('recordBlock canonicalises the provider it records', () => {
+  const policy = recordBlock(createEmptyPolicy(), {
+    domain: 'provider:anthropic',
+    scope: 'provider',
+    provider: 'Anthropic',
+    reason: 'usage_limit',
+    evidence: 'screen',
+    observedAt: ISO_NOW,
+  });
+  assert.equal(policy.domains[0].provider, 'anthropic');
+  assert.equal(parsePolicy(serializePolicy(policy)).domains[0].provider, 'anthropic');
+  assert.equal(evaluateLaunch(policy, { agent: 'claude', model: 'x' }, NOW).allowed, false);
+});
+
+test('recordRecovery: a shared domain takes its identity from the prior entry, or is refused', () => {
+  assert.throws(
+    () => recordRecovery(createEmptyPolicy(), { domain: 'team-pool', recoveredBy: 'canary ok' }),
+    /needs a prior recorded entry/,
+  );
+  let policy = recordBlock(createEmptyPolicy(), {
+    domain: 'team-pool',
+    scope: 'model',
+    provider: 'anthropic',
+    model: 'claude-opus-5-5',
+    reason: 'pool_empty',
+    evidence: 'screen',
+    observedAt: ISO_NOW,
+  });
+  policy = recordRecovery(policy, { domain: 'team-pool', recoveredBy: 'canary ok', observedAt: ISO_NOW });
+  const recovery = policy.domains.at(-1);
+  assert.deepEqual([recovery.scope, recovery.provider, recovery.model], ['model', 'anthropic', 'claude-opus-5-5']);
+  assert.throws(
+    () => recordRecovery(createEmptyPolicy(), { domain: 'provider:Anthropic', recoveredBy: 'canary ok' }),
+    PolicyValidationError,
+  );
+});
+
+test('evaluateLaunch reads providers canonically even on a policy object that skipped parsePolicy', () => {
+  const raw = {
+    version: 1,
+    domains: [
+      {
+        domain: 'provider:anthropic',
+        scope: 'provider',
+        provider: 'Anthropic',
+        model: null,
+        status: 'blocked',
+        reason: 'usage_limit',
+        evidence: 'screen',
+        observedAt: ISO_NOW,
+      },
+    ],
+  };
+  assert.equal(evaluateLaunch(raw, { agent: 'claude', model: 'x' }, NOW).allowed, false);
+});
+
+test('recordHandoff: a new record requires non-empty evidence', () => {
+  const base = createEmptyPolicy();
+  const handoff = { fromHandle: 'term_1', toHandle: 'term_2', generation: 1, reason: 'context_exhausted' };
+  for (const evidence of [undefined, null, '', '   ', 12]) {
+    assert.throws(
+      () => recordHandoff(base, { ...handoff, evidence }),
+      /evidence must be a non-empty string/,
+      `evidence ${JSON.stringify(evidence)} must be refused`,
+    );
+  }
+  assert.throws(
+    () => recordHandoff(base, { ...handoff, reason: 'forced_test', explicitUserOptIn: true }),
+    /evidence/,
+    'forced_test needs the opt-in recorded as evidence too',
+  );
+  const recorded = recordHandoff(base, { ...handoff, evidence: '  context window at 98%  ' });
+  assert.equal(recorded.handoffs[0].evidence, 'context window at 98%');
+});
+
+test('serializePolicy and parsePolicy preserve handoff evidence', () => {
+  const policy = recordHandoff(createEmptyPolicy(), {
+    fromHandle: 'term_1',
+    toHandle: 'term_2',
+    generation: 3,
+    reason: 'capacity_exhausted',
+    at: ISO_NOW,
+    evidence: 'rendered usage-limit screen at 18:00',
+  });
+  const reparsed = parsePolicy(serializePolicy(policy));
+  assert.equal(reparsed.handoffs[0].evidence, 'rendered usage-limit screen at 18:00');
+  assert.deepEqual(parsePolicy(serializePolicy(reparsed)), reparsed);
+});
+
+test('parsePolicy accepts legacy handoffs without evidence but refuses malformed evidence', () => {
+  const legacy = { fromHandle: 'term_1', toHandle: 'term_2', generation: 1, reason: 'unavailable', at: ISO_NOW };
+  const text = (handoff) => JSON.stringify({ version: 1, domains: [], handoffs: [handoff] });
+  const parsed = parsePolicy(text(legacy));
+  assert.equal(parsed.handoffs.length, 1);
+  assert.equal('evidence' in parsed.handoffs[0], false, 'absent evidence is not invented');
+  for (const evidence of ['', '  ', null, 5]) {
+    assert.throws(() => parsePolicy(text({ ...legacy, evidence })), PolicyValidationError);
+  }
 });

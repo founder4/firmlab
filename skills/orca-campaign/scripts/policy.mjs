@@ -14,6 +14,22 @@
  * - Unknown capacity (no entry) is not exhaustion and is allowed (reason 'no_recorded_block').
  * - Fresh terminals and handles never bypass capacity decisions.
  * - Explicit --capacity-domain is accounting metadata only and cannot bypass provider/model blocks.
+ *
+ * Identities fail closed. Every rule above matches on an entry's provider, scope and model, so an identity the
+ * matcher cannot recognise is not a narrower block but NO block: a provider-scope entry written as "Anthropic"
+ * used to parse cleanly and then match nothing, allowing every Claude launch as 'no_recorded_block'. So a
+ * registry entry is canonicalised (provider trimmed and lowercased, then required to be a known provider) or
+ * refused outright, and a refused registry refuses every launch (`policy_invalid` in the launcher):
+ * - scope 'model' must name a non-empty model; scope 'provider' must name none. A provider-scope entry naming a
+ *   model is rejected rather than silently narrowed or widened, because nobody can tell which was meant.
+ * - A domain using a reserved prefix (`provider:` / `model:`) must equal the key its identity implies, so that
+ *   `provider:anthropic` can never be an entry the provider rule does not read. Any other domain string is an
+ *   explicit shared capacity domain and stays free-form.
+ *
+ * A handoff records the reason it happened, and new records must carry the evidence for it (the limit screen,
+ * the context exhaustion, the unavailability, or the user's opt-in for forced_test): a reason with nothing
+ * observed behind it is a rotation, which the campaign forbids. Entries written before that rule parse without
+ * it, because a stored registry is data an older build wrote.
  */
 
 export class PolicyValidationError extends Error {
@@ -26,6 +42,24 @@ export class PolicyValidationError extends Error {
 const VALID_SCOPES = new Set(['provider', 'model']);
 const VALID_STATUSES = new Set(['blocked', 'unavailable', 'recovered']);
 const VALID_HANDOFF_REASONS = new Set(['capacity_exhausted', 'context_exhausted', 'unavailable', 'forced_test']);
+const RESERVED_DOMAIN_PREFIX = /^(provider|model):/i;
+
+export const KNOWN_PROVIDERS = Object.freeze(['anthropic', 'openai', 'google']);
+
+/**
+ * Canonical provider identity: trimmed and lowercased, then required to be a known provider. Returns null for
+ * anything else, which every caller treats as invalid rather than as an unknown-but-harmless provider.
+ */
+export function canonicalProvider(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return KNOWN_PROVIDERS.includes(normalized) ? normalized : null;
+}
+
+/** The domain key an identity implies: `provider:<p>` or `model:<p>/<m>`. */
+export function identityDomain(scope, provider, model) {
+  return scope === 'model' ? `model:${provider}/${model}` : `provider:${provider}`;
+}
 
 /**
  * Maps known agent identifiers to their underlying capacity provider.
@@ -73,11 +107,29 @@ export function validateDomainEntry(entry, index) {
   if (!VALID_SCOPES.has(entry.scope)) {
     throw new PolicyValidationError(`${prefix}scope must be 'provider' or 'model'`);
   }
-  if (typeof entry.provider !== 'string' || !entry.provider.trim()) {
-    throw new PolicyValidationError(`${prefix}provider must be a non-empty string`);
+  const provider = canonicalProvider(entry.provider);
+  if (!provider) {
+    throw new PolicyValidationError(
+      `${prefix}provider must be one of ${KNOWN_PROVIDERS.map((p) => `'${p}'`).join(', ')} (after trim and lowercase), got ${JSON.stringify(entry.provider)}`,
+    );
   }
   if (entry.model !== null && entry.model !== undefined && typeof entry.model !== 'string') {
     throw new PolicyValidationError(`${prefix}model must be string, null, or undefined`);
+  }
+  const model = typeof entry.model === 'string' ? entry.model.trim() : null;
+  if (entry.scope === 'model' && !model) {
+    throw new PolicyValidationError(`${prefix}scope 'model' requires a non-empty model`);
+  }
+  if (entry.scope === 'provider' && entry.model !== null && entry.model !== undefined) {
+    throw new PolicyValidationError(
+      `${prefix}scope 'provider' must not name a model (got ${JSON.stringify(entry.model)}); record a model-scope entry instead`,
+    );
+  }
+  const domain = entry.domain.trim();
+  if (RESERVED_DOMAIN_PREFIX.test(domain) && domain !== identityDomain(entry.scope, provider, model)) {
+    throw new PolicyValidationError(
+      `${prefix}domain '${domain}' uses a reserved prefix but does not match its identity '${identityDomain(entry.scope, provider, model)}'`,
+    );
   }
   if (!VALID_STATUSES.has(entry.status)) {
     throw new PolicyValidationError(`${prefix}status must be 'blocked', 'unavailable', or 'recovered'`);
@@ -107,7 +159,27 @@ export function validateDomainEntry(entry, index) {
   }
 }
 
-export function validateHandoffEntry(entry, index) {
+/** The canonical form of an entry validateDomainEntry accepted. */
+function normalizeDomainEntry(d) {
+  return {
+    domain: d.domain.trim(),
+    scope: d.scope,
+    provider: canonicalProvider(d.provider),
+    model: d.scope === 'model' ? d.model.trim() : null,
+    status: d.status,
+    reason: d.reason,
+    evidence: d.evidence,
+    observedAt: d.observedAt,
+    resetAt: d.resetAt ?? null,
+    ...(d.recoveredBy ? { recoveredBy: d.recoveredBy } : {}),
+  };
+}
+
+/**
+ * `requireEvidence` is set for records being written now; a parsed registry may hold handoffs written before
+ * evidence was required, and those stay readable. Evidence that IS present must be a non-empty string either way.
+ */
+export function validateHandoffEntry(entry, index, { requireEvidence = false } = {}) {
   const prefix = index !== undefined ? `Handoff entry [${index}]: ` : 'Handoff entry: ';
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
     throw new PolicyValidationError(`${prefix}must be an object`);
@@ -134,6 +206,11 @@ export function validateHandoffEntry(entry, index) {
   }
   if (entry.explicitUserOptIn !== undefined && typeof entry.explicitUserOptIn !== 'boolean') {
     throw new PolicyValidationError(`${prefix}explicitUserOptIn must be a boolean`);
+  }
+  if (entry.evidence === undefined ? requireEvidence : typeof entry.evidence !== 'string' || !entry.evidence.trim()) {
+    throw new PolicyValidationError(
+      `${prefix}evidence must be a non-empty string naming what was observed (limit screen, context exhaustion, unavailability, or the user's opt-in for forced_test)`,
+    );
   }
 }
 
@@ -176,18 +253,7 @@ export function parsePolicy(text) {
   return {
     version: 1,
     currentProvider: parsed.currentProvider ?? null,
-    domains: parsed.domains.map((d) => ({
-      domain: d.domain,
-      scope: d.scope,
-      provider: d.provider,
-      model: d.model ?? null,
-      status: d.status,
-      reason: d.reason,
-      evidence: d.evidence,
-      observedAt: d.observedAt,
-      resetAt: d.resetAt ?? null,
-      ...(d.recoveredBy ? { recoveredBy: d.recoveredBy } : {}),
-    })),
+    domains: parsed.domains.map(normalizeDomainEntry),
     handoffs: handoffs.map((h) => ({
       fromHandle: h.fromHandle,
       toHandle: h.toHandle,
@@ -195,6 +261,7 @@ export function parsePolicy(text) {
       reason: h.reason,
       at: h.at,
       ...(h.explicitUserOptIn !== undefined ? { explicitUserOptIn: h.explicitUserOptIn } : {}),
+      ...(h.evidence !== undefined ? { evidence: h.evidence } : {}),
     })),
   };
 }
@@ -229,31 +296,21 @@ export function recordBlock(policy, entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
     throw new PolicyValidationError('Block entry must be an object');
   }
-  const domain = entry.domain?.trim();
-  const scope = entry.scope;
-  const provider = entry.provider?.trim();
-  const model = entry.model ? entry.model.trim() : null;
-  const status = entry.status ?? 'blocked';
-  const reason = entry.reason?.trim();
-  const evidence = entry.evidence?.trim();
-  const observedAt = entry.observedAt ?? new Date().toISOString();
-  const resetAt = entry.resetAt ?? null;
-
-  const normalized = {
-    domain,
-    scope,
-    provider,
-    model,
-    status,
-    reason,
-    evidence,
-    observedAt,
-    resetAt,
+  const candidate = {
+    domain: typeof entry.domain === 'string' ? entry.domain.trim() : entry.domain,
+    scope: entry.scope,
+    provider: entry.provider,
+    model: entry.model ?? null,
+    status: entry.status ?? 'blocked',
+    reason: typeof entry.reason === 'string' ? entry.reason.trim() : entry.reason,
+    evidence: typeof entry.evidence === 'string' ? entry.evidence.trim() : entry.evidence,
+    observedAt: entry.observedAt ?? new Date().toISOString(),
+    resetAt: entry.resetAt ?? null,
   };
-  validateDomainEntry(normalized);
+  validateDomainEntry(candidate);
   return {
     ...policy,
-    domains: [...(policy.domains ?? []), normalized],
+    domains: [...(policy.domains ?? []), normalizeDomainEntry(candidate)],
   };
 }
 
@@ -282,8 +339,11 @@ export function recordRecovery(policy, { domain, recoveredBy, observedAt, reason
       provider = parts[0];
       model = parts.slice(1).join('/');
     } else {
-      scope = 'provider';
-      provider = 'unknown';
+      // A shared domain's identity cannot be read from its name, and guessing one would record a recovery the
+      // provider and model rules then apply to the wrong thing.
+      throw new PolicyValidationError(
+        `Recovery for shared domain '${cleanDomain}' needs a prior recorded entry to take its identity from`,
+      );
     }
   }
 
@@ -302,11 +362,14 @@ export function recordRecovery(policy, { domain, recoveredBy, observedAt, reason
   validateDomainEntry(recoveryEntry);
   return {
     ...policy,
-    domains: [...(policy.domains ?? []), recoveryEntry],
+    domains: [...(policy.domains ?? []), normalizeDomainEntry(recoveryEntry)],
   };
 }
 
-export function recordHandoff(policy, { fromHandle, toHandle, generation, reason, at, explicitUserOptIn } = {}) {
+export function recordHandoff(
+  policy,
+  { fromHandle, toHandle, generation, reason, at, explicitUserOptIn, evidence } = {},
+) {
   const handoff = {
     fromHandle,
     toHandle,
@@ -314,8 +377,9 @@ export function recordHandoff(policy, { fromHandle, toHandle, generation, reason
     reason,
     at: at ?? new Date().toISOString(),
     ...(explicitUserOptIn !== undefined ? { explicitUserOptIn } : {}),
+    evidence: typeof evidence === 'string' ? evidence.trim() : evidence,
   };
-  validateHandoffEntry(handoff);
+  validateHandoffEntry(handoff, undefined, { requireEvidence: true });
   return {
     ...policy,
     handoffs: [...(policy.handoffs ?? []), handoff],
@@ -428,7 +492,7 @@ export function evaluateLaunch(policy, { agent, model, capacityDomain: explicitD
   // Provider-wide exclusion applies to all models of this provider.
   let matchedProviderEntry = null;
   for (const entry of latestByDomain.values()) {
-    if (entry.provider === provider && entry.scope === 'provider') {
+    if (canonicalProvider(entry.provider) === provider && entry.scope === 'provider') {
       const check = checkEntry(entry);
       if (check?.blocked) {
         return {
@@ -447,7 +511,7 @@ export function evaluateLaunch(policy, { agent, model, capacityDomain: explicitD
   // 2a. An unnamed model is the provider's default, which may be exactly the blocked model: refuse rather than guess.
   if (!(model && typeof model === 'string' && model.trim())) {
     for (const entry of latestByDomain.values()) {
-      if (entry.provider !== provider || entry.scope !== 'model') continue;
+      if (canonicalProvider(entry.provider) !== provider || entry.scope !== 'model') continue;
       const check = checkEntry(entry);
       if (check?.blocked) {
         return {
@@ -481,7 +545,7 @@ export function evaluateLaunch(policy, { agent, model, capacityDomain: explicitD
       }
     } else {
       for (const e of latestByDomain.values()) {
-        if (e.scope === 'model' && e.provider === provider && e.model === cleanModel) {
+        if (e.scope === 'model' && canonicalProvider(e.provider) === provider && e.model === cleanModel) {
           const check = checkEntry(e);
           if (check?.blocked) {
             return {

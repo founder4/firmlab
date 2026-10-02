@@ -64,6 +64,9 @@ orca-campaign-launch-worker --policy /absolute/path/capacity-policy.json --agent
 - A provider-scope block refuses every model of that provider; a model-scope block refuses that model, and a
   launch naming no model while any model of its provider is blocked. A fresh terminal, a different handle or an
   explicit `--capacity-domain` never bypasses a block. Forwarded `--agent`, `--model` and `--terminal` are refused.
+- The registry fails closed on malformed identities: a provider is trimmed and lowercased and must then be
+  `anthropic`, `openai` or `google`; a model-scope entry needs a model and a provider-scope entry names none; a
+  domain written `provider:…` or `model:…` must match the identity it implies. An invalid registry refuses every launch.
 - Unknown capacity (no entry) is not exhaustion. An elapsed `resetAt` never recovers by itself; only a
   `recovered` entry carrying viable canary evidence lifts a block.
 - The guard records what a hard stop prevents the owner from recording: a quota screen on the RENDERED frame
@@ -78,7 +81,7 @@ orca-campaign-launch-worker --policy /absolute/path/capacity-policy.json --agent
 
 Hand off ONLY when the coordinator positively hits a capacity or context limit, or otherwise cannot continue;
 record that reason (`capacity_exhausted`, `context_exhausted`, `unavailable`) in the registry's `handoffs`, with
-the evidence. Ending a turn is not unavailability, and there is no scheduled rotation: `forced_test` is valid only
+the evidence (`evidence` is required on every new handoff record and is preserved; older records without it parse). Ending a turn is not unavailability, and there is no scheduled rotation: `forced_test` is valid only
 with the user's explicit opt-in. Prepare a ready Claude/Antigravity successor before context/quota exhaustion. Full handoff is a direct
 instruction to carry out the already authorized work: include current context and unchanged deadline,
 have the receiver adopt the **same** Run from its own terminal, and verify owner plus increased generation

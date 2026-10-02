@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { launchWorker, loadPolicy, parseArgs, savePolicy } from './launch-worker.mjs';
+import { exitStatusFor, launchWorker, loadPolicy, parseArgs, savePolicy } from './launch-worker.mjs';
 import { createEmptyPolicy, recordBlock, serializePolicy } from './policy.mjs';
 
 const exec = promisify(execFile);
@@ -393,6 +393,175 @@ process.exit(0);
       '--worktree',
       'current',
     ]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/** A raw registry holding one domain entry, the way a hand-edited file would carry it. */
+function rawRegistry(entry) {
+  return JSON.stringify({
+    version: 1,
+    currentProvider: null,
+    domains: [
+      {
+        status: 'blocked',
+        reason: 'usage_limit',
+        evidence: 'rendered usage-limit screen',
+        observedAt: ISO_NOW,
+        resetAt: null,
+        ...entry,
+      },
+    ],
+    handoffs: [],
+  });
+}
+
+test('launchWorker: every malformed identity refuses the launch as policy_invalid with zero run calls', async () => {
+  const malformed = {
+    'unknown provider': { domain: 'shared-pool', scope: 'provider', provider: 'anthropic-ai' },
+    'agent id as provider': { domain: 'shared-pool', scope: 'provider', provider: 'claude' },
+    'missing provider': { domain: 'shared-pool', scope: 'provider' },
+    'model scope with null model': { domain: 'shared-pool', scope: 'model', provider: 'anthropic', model: null },
+    'model scope with blank model': { domain: 'shared-pool', scope: 'model', provider: 'anthropic', model: '  ' },
+    'provider scope naming a model': {
+      domain: 'provider:anthropic',
+      scope: 'provider',
+      provider: 'anthropic',
+      model: 'x',
+    },
+    'reserved domain contradicting identity': { domain: 'provider:openai', scope: 'provider', provider: 'anthropic' },
+  };
+  for (const [label, entry] of Object.entries(malformed)) {
+    let callCount = 0;
+    const fakeRun = async () => {
+      callCount++;
+      return { exitCode: 0 };
+    };
+    const res = await launchWorker(
+      { policyText: rawRegistry(entry), agent: 'claude', model: 'x', now: NOW },
+      { run: fakeRun },
+    );
+    assert.equal(res.launched, false, label);
+    assert.equal(res.reason, 'policy_invalid', label);
+    assert.equal(res.exitCode, 3, label);
+    assert.equal(callCount, 0, `${label}: run must not be called`);
+  }
+});
+
+test('launchWorker: a capitalised provider is canonicalised and refuses the launch, never allows it', async () => {
+  let callCount = 0;
+  const res = await launchWorker(
+    {
+      policyText: rawRegistry({ domain: 'provider:anthropic', scope: 'provider', provider: 'Anthropic' }),
+      agent: 'claude',
+      model: 'x',
+      now: NOW,
+    },
+    {
+      run: async () => {
+        callCount++;
+        return { exitCode: 0 };
+      },
+    },
+  );
+  assert.equal(res.launched, false);
+  assert.equal(res.reason, 'usage_limit');
+  assert.equal(res.domain, 'provider:anthropic');
+  assert.equal(callCount, 0);
+});
+
+test('launchWorker: a launch naming no model is refused while a model of that provider is blocked', async () => {
+  let callCount = 0;
+  const res = await launchWorker(
+    {
+      policyText: rawRegistry({
+        domain: 'model:anthropic/claude-opus-5-5',
+        scope: 'model',
+        provider: 'anthropic',
+        model: 'claude-opus-5-5',
+      }),
+      agent: 'claude',
+      now: NOW,
+    },
+    {
+      run: async () => {
+        callCount++;
+        return { exitCode: 0 };
+      },
+    },
+  );
+  assert.equal(res.launched, false);
+  assert.equal(res.reason, 'model_unspecified_with_model_block');
+  assert.equal(callCount, 0);
+});
+
+test('exitStatusFor: a code passes through; a signal is 128 + its number; nothing else is ever 0', () => {
+  assert.equal(exitStatusFor(0, null), 0);
+  assert.equal(exitStatusFor(2, null), 2);
+  assert.equal(exitStatusFor(null, 'SIGTERM'), 143);
+  assert.equal(exitStatusFor(null, 'SIGKILL'), 137);
+  assert.equal(exitStatusFor(null, 'SIGINT'), 130);
+  assert.equal(exitStatusFor(null, 9), 137);
+  assert.equal(exitStatusFor(null, 'SIGNOTREAL'), 1);
+  assert.equal(exitStatusFor(null, null), 1);
+  assert.equal(exitStatusFor(undefined, undefined), 1);
+  assert.equal(exitStatusFor(Number.NaN, null), 1);
+});
+
+test('launchWorker: a run terminated by a signal or reporting no status never exits 0', async () => {
+  const policyText = serializePolicy(createEmptyPolicy());
+  const statusOf = async (result) =>
+    (await launchWorker({ policyText, agent: 'claude', now: NOW }, { run: async () => result })).exitCode;
+  assert.equal(await statusOf({ exitCode: null, signal: 'SIGTERM' }), 143);
+  assert.equal(await statusOf({ exitCode: null, signal: 'SIGKILL' }), 137);
+  assert.equal(await statusOf({ exitCode: null, signal: null }), 1);
+  assert.equal(await statusOf({}), 1);
+  assert.equal(await statusOf(undefined), 1);
+  assert.equal(await statusOf({ exitCode: 0 }), 0);
+  assert.equal(await statusOf({ status: 4 }), 4);
+  assert.equal(await statusOf(5), 5);
+});
+
+test('CLI: an orca process killed by a signal exits 128 + the signal number', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'firmlab-cli-test-'));
+  try {
+    const policyPath = join(dir, 'policy.json');
+    await writeFile(policyPath, serializePolicy(createEmptyPolicy()));
+    const mockOrcaPath = join(dir, 'mock-orca.mjs');
+    await writeFile(mockOrcaPath, "#!/usr/bin/env node\nprocess.kill(process.pid, 'SIGTERM');\n");
+    await chmod(mockOrcaPath, 0o755);
+    try {
+      await exec(process.execPath, [SCRIPT_PATH, '--policy', policyPath, '--agent', 'claude', '--orca', mockOrcaPath]);
+      assert.fail('CLI must not exit 0 when worker-start was killed');
+    } catch (err) {
+      assert.equal(err.code, 143);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: an orca executable that cannot be spawned exits non-zero', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'firmlab-cli-test-'));
+  try {
+    const policyPath = join(dir, 'policy.json');
+    await writeFile(policyPath, serializePolicy(createEmptyPolicy()));
+    try {
+      await exec(process.execPath, [
+        SCRIPT_PATH,
+        '--policy',
+        policyPath,
+        '--agent',
+        'claude',
+        '--orca',
+        join(dir, 'no-such-orca'),
+      ]);
+      assert.fail('CLI must not exit 0 when worker-start could not be spawned');
+    } catch (err) {
+      assert.equal(err.code, 1);
+      assert.match(err.stderr, /worker-start could not be run/);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
