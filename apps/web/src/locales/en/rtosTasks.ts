@@ -31,6 +31,16 @@ export const rtosTasks = {
     address: 'List address',
     addList: 'Add ready list',
     removeList: (i: number) => `Remove ready list ${i}`,
+    stateLists: 'Other task state lists (optional)',
+    stateListsHint:
+      'Each is the address of a List_t, like a ready list. Leave a field empty to skip that list: the result then names it as not walked, never as empty.',
+    delayedList: 'Delayed list (the List_t pxDelayedTaskList points to)',
+    overflowDelayedList: 'Overflow delayed list (the List_t pxOverflowDelayedTaskList points to)',
+    suspendedList: 'Suspended list (xSuspendedTaskList)',
+    pendingReadyList: 'Pending-ready list (xPendingReadyList)',
+    terminatedList: 'Waiting-termination list (xTasksWaitingTermination)',
+    delayedHint:
+      'xDelayedTaskList1 and xDelayedTaskList2 swap roles every time the tick count wraps. Read the two pointers in the snapshot to know which is the current list and which the overflow list.',
   },
 
   error: {
@@ -47,6 +57,7 @@ export const rtosTasks = {
     priority: 'Enter a non-negative integer priority.',
     priorityRepeated: (p: number) => `Priority ${p} is already listed; each priority is walked once.`,
     tooManyLists: (max: number) => `At most ${max} ready lists.`,
+    addressRepeated: (address: string) => `${address} is already listed; each list is walked once.`,
     fixFields: 'Fix the highlighted fields before walking the snapshot.',
   },
 
@@ -77,7 +88,24 @@ export const rtosTasks = {
       nodes: 'Nodes (done / tried)',
       bytes: 'Bytes (read / tried)',
       tasks: 'Task TCBs',
+      state: 'State',
     },
+    stateLanes: 'State lists',
+    stateLane: (name: string, address: string) => `${name} @ ${address}`,
+    kind: {
+      ready: 'ready',
+      delayed: 'delayed',
+      delayed_overflow: 'delayed (overflow)',
+      suspended: 'suspended',
+      pending: 'pending ready',
+      terminated: 'waiting termination',
+    },
+    secondDelayed: 'the second delayed list',
+    wakeTick: (tcb: string, tick: number | string) => `${tcb} wakes at tick ${tick}`,
+    notWalked: (kinds: string) =>
+      `Not walked, because not supplied: ${kinds}. Tasks in those states are not in this result.`,
+    severalLists: (n: number, tcbs: string) =>
+      `${n} TCB(s) appear on more than one state list (${tcbs}). A consistent snapshot cannot produce that; it may be torn.`,
     currentLane: 'pxCurrentTCB',
     readyLane: (address: string) => `ready list @ ${address}`,
     noListSupplied: 'no ready list supplied',

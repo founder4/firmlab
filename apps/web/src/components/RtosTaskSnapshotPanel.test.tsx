@@ -9,7 +9,13 @@ import { api } from '../api';
 import { setLocale } from '../i18n';
 import { en } from '../locales/en';
 import { mockedApi } from '../test-api-mock';
-import { MAX_SNAPSHOT_BYTES, RtosTaskSnapshotPanel, buildSnapshotRequest, parseAddress } from './RtosTaskSnapshotPanel';
+import {
+  EMPTY_FORM,
+  MAX_SNAPSHOT_BYTES,
+  RtosTaskSnapshotPanel,
+  buildSnapshotRequest,
+  parseAddress,
+} from './RtosTaskSnapshotPanel';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
@@ -104,6 +110,85 @@ describe('RtosTaskSnapshotPanel', () => {
     expect(screen.getByText(m.result.limits(512, 256, 64))).toBeInTheDocument();
   });
 
+  it('sends the state lists the analyst filled, and only those', async () => {
+    mockApi.runRtosTasks.mockResolvedValue({ refused: { error: 'stop here', details: [] } });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    await screen.findByText(m.notRun);
+    await fill();
+    fireEvent.change(screen.getByLabelText(m.field.delayedList), { target: { value: '0x20000100' } });
+    fireEvent.change(screen.getByLabelText(m.field.suspendedList), { target: { value: '0x20000160' } });
+    fireEvent.click(screen.getByRole('button', { name: m.run }));
+    await screen.findByText('stop here');
+    const symbols = mockApi.runRtosTasks.mock.calls[0]?.[1]?.symbols;
+    expect(symbols).toEqual({
+      pxCurrentTCB: null,
+      readyLists: [],
+      delayedLists: [{ name: 'pxDelayedTaskList', address: 0x20000100 }],
+      suspendedList: 0x20000160,
+    });
+  });
+
+  it('renders delayed lanes with wake ticks, other lanes without, and names what was not walked', async () => {
+    mockApi.rtosTasksResult.mockResolvedValue({
+      proofState: 'needs_runtime_reproduction',
+      coverage: 'complete',
+      summary: '0 ready task record(s) (plus 2 delayed, 1 suspended)',
+      currentTask: { coverage: 'complete', tcbAddress: 0x20001000, pxCurrentTcbAddress: 0x20000080 },
+      readyLists: [],
+      delayedLists: [
+        {
+          kind: 'delayed',
+          name: 'pxDelayedTaskList',
+          listAddress: 0x20000100,
+          coverage: 'complete',
+          attempted: 2,
+          completed: 2,
+          itemValueMeaning: 'wake_tick',
+          tasks: [
+            { listItemAddress: 0x20000120, itemValue: 50, tcbAddress: 0x20003000 },
+            { listItemAddress: 0x20000140, itemValue: 90, tcbAddress: 0x20004000 },
+          ],
+          evidence: [],
+        },
+      ],
+      suspendedList: {
+        kind: 'suspended',
+        name: 'xSuspendedTaskList',
+        listAddress: 0x20000160,
+        coverage: 'truncated',
+        attempted: 1,
+        completed: 1,
+        itemValueMeaning: 'not_maintained',
+        tasks: [{ listItemAddress: 0x20000180, itemValue: 7, tcbAddress: 0x20005000 }],
+        evidence: ['list item at 0x20000190 runs past the end of the supplied buffer'],
+      },
+      unwalkedKinds: ['delayed', 'pending', 'terminated'],
+      tcbsOnSeveralLists: [0x20005000],
+    });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    const table = await screen.findByRole('table', { name: m.result.stateLanes });
+    expect(table).toHaveTextContent('pxDelayedTaskList @ 0x20000100');
+    expect(screen.getByText(m.result.wakeTick('0x20003000', 50))).toBeInTheDocument();
+    expect(screen.getByText(m.result.wakeTick('0x20004000', 90))).toBeInTheDocument();
+    // A suspended item's value is not a wake tick and is never shown as one.
+    expect(screen.queryByText(m.result.wakeTick('0x20005000', 7))).toBeNull();
+    expect(screen.getByText(m.result.kind.suspended)).toBeInTheDocument();
+    expect(screen.getByText('truncated')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        m.result.notWalked([m.result.secondDelayed, m.result.kind.pending, m.result.kind.terminated].join(', ')),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(m.result.severalLists(1, '0x20005000'))).toBeInTheDocument();
+  });
+
+  it('shows no state-list section for a result stored before those lanes existed', async () => {
+    mockApi.rtosTasksResult.mockResolvedValue({ coverage: 'complete', readyLists: [] });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    await screen.findByText(m.result.heading);
+    expect(screen.queryByRole('table', { name: m.result.stateLanes })).toBeNull();
+  });
+
   it('folds itself away on a Linux image', async () => {
     const { container } = render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="embedded-linux" />);
     await screen.findByText(m.notRun);
@@ -115,12 +200,11 @@ describe('RtosTaskSnapshotPanel', () => {
 
 describe('buildSnapshotRequest', () => {
   const base = {
+    ...EMPTY_FORM,
     bytes: new Uint8Array(4),
     base: '0',
     endian: 'big' as const,
     pointerWidth: '4' as const,
-    pxCurrentTCB: '',
-    readyLists: [],
   };
 
   it('reads 0x as hex and refuses a bare hex string instead of guessing', () => {
@@ -146,5 +230,39 @@ describe('buildSnapshotRequest', () => {
     expect(r.errors.file).toBe(m.error.fileTooLarge(MAX_SNAPSHOT_BYTES + 1, 512));
     expect(r.errors['readyLists.1.priority']).toBe(m.error.priorityRepeated(1));
     expect(r.errors['readyLists.1.address']).toBe(m.error.address(32));
+  });
+
+  it('builds delayed lanes with their pointer names and leaves empty state fields out of the request', () => {
+    const r = buildSnapshotRequest(
+      { ...base, delayedList: '0x100', overflowDelayedList: '0x200', terminatedList: '768' },
+      m,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.input.symbols).toEqual({
+      pxCurrentTCB: null,
+      readyLists: [],
+      delayedLists: [
+        { name: 'pxDelayedTaskList', address: 0x100 },
+        { name: 'pxOverflowDelayedTaskList', address: 0x200 },
+      ],
+      terminatedList: 768,
+    });
+  });
+
+  it('refuses a state list that repeats another lane address or is not an address', () => {
+    const r = buildSnapshotRequest(
+      {
+        ...base,
+        readyLists: [{ priority: '1', address: '0x10' }],
+        suspendedList: '0x10',
+        pendingReadyList: 'ff',
+      },
+      m,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors.suspendedList).toBe(m.error.addressRepeated('0x10'));
+    expect(r.errors.pendingReadyList).toBe(m.error.address(32));
   });
 });

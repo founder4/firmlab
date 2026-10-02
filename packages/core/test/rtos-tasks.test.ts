@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { parseFreeRtosCurrentTask, parseFreeRtosReadyList } from '../src/rtos-tasks.js';
+import {
+  FREERTOS_ITEM_VALUE_MEANING,
+  type FreeRtosListKind,
+  parseFreeRtosCurrentTask,
+  parseFreeRtosList,
+  parseFreeRtosNamedList,
+  parseFreeRtosReadyList,
+} from '../src/rtos-tasks.js';
 
 /**
  * Byte-level fixture builder for a FreeRTOS `List_t` + `ListItem_t` chain (default, no integrity-check bytes):
@@ -10,19 +17,19 @@ function memory(regionBase: number, size: number, le: boolean) {
   const buf = new Uint8Array(size);
   const dv = new DataView(buf.buffer);
   const w32 = (addr: number, val: number) => dv.setUint32(addr - regionBase, val >>> 0, le);
-  const writeListHeader = (listAddr: number, headNext: number) => {
-    w32(listAddr, 0); // uxNumberOfItems (unused by the parser)
+  const writeListHeader = (listAddr: number, headNext: number, count = 0) => {
+    w32(listAddr, count); // uxNumberOfItems (read only by the named-list walk, as an annotation)
     w32(listAddr + 4, 0); // pxIndex (unused by the parser)
     w32(listAddr + 8, 0); // xListEnd.itemValue
     w32(listAddr + 12, headNext); // xListEnd.pxNext
     w32(listAddr + 16, 0); // xListEnd.pxPrevious
   };
-  const writeItem = (addr: number, itemValue: number, next: number, owner: number) => {
+  const writeItem = (addr: number, itemValue: number, next: number, owner: number, container = 0) => {
     w32(addr, itemValue);
     w32(addr + 4, next);
     w32(addr + 8, 0); // pxPrevious (unused by the parser)
     w32(addr + 12, owner);
-    w32(addr + 16, 0); // pxContainer (unused by the parser)
+    w32(addr + 16, container); // pxContainer (checked only by the named-list walk)
   };
   return { buf, writeListHeader, writeItem };
 }
@@ -163,5 +170,200 @@ describe('parseFreeRtosCurrentTask', () => {
     const result = parseFreeRtosCurrentTask(buf, REGION_BASE, 0x9000_0000);
     expect(result.coverage).toBe('out_of_range');
     expect(result.tcbAddress).toBeNull();
+  });
+});
+
+describe('parseFreeRtosReadyList (unchanged by the named-list walk)', () => {
+  it('returns exactly its original five fields, even over a header and containers the named walk reads', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 7); // a header count that disagrees with the chain
+    writeItem(ITEM_A, 9, SENTINEL, 0x3000_0001, 0xdead_beef); // a container that does not point back
+
+    const result = parseFreeRtosReadyList(buf, REGION_BASE, LIST_ADDR);
+    expect(result).toEqual({
+      coverage: 'complete',
+      attempted: 1,
+      completed: 1,
+      tasks: [{ listItemAddress: ITEM_A, itemValue: 9, tcbAddress: 0x3000_0001 }],
+      evidence: [],
+    });
+    expect(parseFreeRtosReadyList(buf, REGION_BASE, null).evidence).toEqual(['no ready-list address supplied']);
+  });
+});
+
+describe('parseFreeRtosNamedList', () => {
+  const DELAYED = REGION_BASE + 0x100; // a second List_t, sentinel at +8
+  const DELAYED_SENTINEL = DELAYED + 8;
+
+  it('walks a delayed list and reads its item values as wake ticks, in ascending order', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(DELAYED, ITEM_A, 3);
+    writeItem(ITEM_A, 100, ITEM_B, 0x3000_0001, DELAYED);
+    writeItem(ITEM_B, 250, ITEM_C, 0x3000_0002, DELAYED);
+    writeItem(ITEM_C, 250, DELAYED_SENTINEL, 0x3000_0003, DELAYED); // equal wake ticks are still in order
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, {
+      kind: 'delayed',
+      name: 'xDelayedTaskList1',
+      address: DELAYED,
+    });
+    expect(r).toMatchObject({
+      kind: 'delayed',
+      name: 'xDelayedTaskList1',
+      listAddress: DELAYED,
+      coverage: 'complete',
+      attempted: 3,
+      completed: 3,
+      itemValueMeaning: 'wake_tick',
+      declaredItems: 3,
+      containerMismatches: 0,
+      orderViolations: 0,
+      evidence: [],
+    });
+    expect(r.tasks.map((t) => t.itemValue)).toEqual([100, 250, 250]);
+  });
+
+  it('flags wake ticks that decrease along a delayed chain without changing its coverage', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(DELAYED, ITEM_A, 2);
+    writeItem(ITEM_A, 500, ITEM_B, 0x3000_0001, DELAYED);
+    writeItem(ITEM_B, 20, DELAYED_SENTINEL, 0x3000_0002, DELAYED);
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'delayed_overflow', address: DELAYED });
+    expect(r.name).toBe('pxOverflowDelayedTaskList');
+    expect(r.coverage).toBe('complete');
+    expect(r.orderViolations).toBe(1);
+    expect(r.evidence.some((e) => e.includes('out of ascending order'))).toBe(true);
+  });
+
+  it('never reads order into a list whose item values the kernel does not maintain', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 2);
+    writeItem(ITEM_A, 500, ITEM_B, 0x3000_0001, LIST_ADDR);
+    writeItem(ITEM_B, 20, SENTINEL, 0x3000_0002, LIST_ADDR);
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'suspended', address: LIST_ADDR });
+    expect(r).toMatchObject({ name: 'xSuspendedTaskList', itemValueMeaning: 'not_maintained', orderViolations: 0 });
+    expect(r.evidence).toEqual([]);
+  });
+
+  it('reports a header count that disagrees with a complete chain as a possibly torn snapshot', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 4);
+    writeItem(ITEM_A, 0, SENTINEL, 0x3000_0001, LIST_ADDR);
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'terminated', address: LIST_ADDR });
+    expect(r.coverage).toBe('complete');
+    expect(r.declaredItems).toBe(4);
+    expect(r.evidence).toEqual([expect.stringContaining('uxNumberOfItems reads 4 but the chain holds 1')]);
+  });
+
+  it('counts nodes whose pxContainer does not point back, but keeps them as walked tasks', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 2);
+    writeItem(ITEM_A, 0, ITEM_B, 0x3000_0001, LIST_ADDR);
+    writeItem(ITEM_B, 0, SENTINEL, 0x3000_0002, DELAYED); // claims to belong to another list
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'pending', address: LIST_ADDR });
+    expect(r).toMatchObject({ coverage: 'complete', completed: 2, containerMismatches: 1 });
+    expect(r.itemValueMeaning).toBe('event_order');
+    expect(r.evidence).toEqual([expect.stringContaining(`0x${ITEM_B.toString(16)} has a pxContainer`)]);
+  });
+
+  it('reports missing_symbol per kind, naming the list, without claiming it is empty', () => {
+    const { buf } = memory(REGION_BASE, 0x200, true);
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'suspended', address: null });
+    expect(r).toMatchObject({ coverage: 'missing_symbol', attempted: 0, completed: 0, declaredItems: null });
+    expect(r.evidence).toEqual(['no address supplied for xSuspendedTaskList (suspended)']);
+  });
+
+  it('reports out_of_range and truncated for a sentinel the buffer does not hold', () => {
+    const size = 0x200;
+    const { buf } = memory(REGION_BASE, size, true);
+    const outside = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'delayed', address: 0x1000_0000 });
+    expect(outside).toMatchObject({ coverage: 'out_of_range', attempted: 0, declaredItems: null });
+    // The sentinel starts 4 bytes from the end: in the region, but its pxNext is cut off.
+    const edge = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'delayed', address: REGION_BASE + size - 12 });
+    expect(edge).toMatchObject({ coverage: 'truncated', attempted: 0 });
+  });
+
+  it('reports a chain that leaves the region mid-walk as out_of_range, keeping what it corroborated first', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(DELAYED, ITEM_A, 2);
+    writeItem(ITEM_A, 10, 0x9000_0000, 0x3000_0001, DELAYED);
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'delayed', address: DELAYED });
+    expect(r).toMatchObject({ coverage: 'out_of_range', attempted: 2, completed: 1 });
+    // A count mismatch is only meaningful against a complete chain; a partial walk does not report one.
+    expect(r.evidence.some((e) => e.includes('uxNumberOfItems'))).toBe(false);
+  });
+
+  it('caps a chain that never returns to its sentinel at the traversal bound', () => {
+    // 300 distinct nodes in a straight line: the cap fires before any revisit could.
+    const nodes = 300;
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x20 + nodes * 0x14 + 0x20, true);
+    const at = (i: number) => REGION_BASE + 0x20 + i * 0x14;
+    writeListHeader(LIST_ADDR, at(0));
+    for (let i = 0; i < nodes; i++) writeItem(at(i), i, at(i + 1), 0x3000_0000 + i, LIST_ADDR);
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'suspended', address: LIST_ADDR });
+    expect(r.coverage).toBe('cycle_capped');
+    expect(r.attempted).toBe(256);
+    expect(r.evidence.some((e) => e.includes('traversal cap of 256'))).toBe(true);
+  });
+
+  it('walks the same layout with 8-byte pointers, big-endian', () => {
+    const buf = new Uint8Array(0x200);
+    const dv = new DataView(buf.buffer);
+    const w64 = (addr: number, v: number) => dv.setBigUint64(addr - REGION_BASE, BigInt(v), false);
+    // List_t: uxNumberOfItems(8) + pxIndex(8) + xListEnd{itemValue(4) + pxNext(8) + pxPrevious(8)}
+    w64(LIST_ADDR, 1);
+    dv.setUint32(LIST_ADDR + 16 - REGION_BASE, 0, false);
+    w64(LIST_ADDR + 20, ITEM_C); // sentinel pxNext
+    // ListItem_t: itemValue(4) + pxNext(8) + pxPrevious(8) + pvOwner(8) + pxContainer(8)
+    dv.setUint32(ITEM_C - REGION_BASE, 77, false);
+    w64(ITEM_C + 4, LIST_ADDR + 16);
+    w64(ITEM_C + 20, 0x3000_00aa);
+    w64(ITEM_C + 28, LIST_ADDR);
+
+    const r = parseFreeRtosNamedList(
+      buf,
+      REGION_BASE,
+      { kind: 'delayed', address: LIST_ADDR },
+      { pointerWidth: 8, endian: 'big' },
+    );
+    expect(r).toMatchObject({ coverage: 'complete', completed: 1, declaredItems: 1, containerMismatches: 0 });
+    expect(r.tasks).toEqual([{ listItemAddress: ITEM_C, itemValue: 77, tcbAddress: 0x3000_00aa }]);
+  });
+
+  it('carries a ready list priority through, and a ready walk agrees with parseFreeRtosReadyList', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 1);
+    writeItem(ITEM_A, 3, SENTINEL, 0x3000_0001, LIST_ADDR);
+
+    const named = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'ready', address: LIST_ADDR, priority: 3 });
+    const ready = parseFreeRtosReadyList(buf, REGION_BASE, LIST_ADDR);
+    expect(named).toMatchObject({ ...ready, kind: 'ready', priority: 3, itemValueMeaning: 'not_maintained' });
+  });
+});
+
+describe('parseFreeRtosList', () => {
+  it('walks every kind independently: one failed list never stops or colours another', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 1);
+    writeItem(ITEM_A, 42, SENTINEL, 0x3000_0001, LIST_ADDR);
+
+    const kinds: FreeRtosListKind[] = ['ready', 'delayed', 'delayed_overflow', 'suspended', 'pending', 'terminated'];
+    const results = parseFreeRtosList(buf, REGION_BASE, [
+      { kind: 'delayed', address: LIST_ADDR },
+      { kind: 'suspended', address: null },
+      { kind: 'terminated', address: 0x9000_0000 },
+    ]);
+    expect(results.map((r) => [r.kind, r.coverage, r.completed])).toEqual([
+      ['delayed', 'complete', 1],
+      ['suspended', 'missing_symbol', 0],
+      ['terminated', 'out_of_range', 0],
+    ]);
+    expect(Object.keys(FREERTOS_ITEM_VALUE_MEANING).sort()).toEqual([...kinds].sort());
   });
 });

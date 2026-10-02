@@ -1425,8 +1425,19 @@ export type AnalysisKind =
  */
 export interface RtosTaskSnapshotInput {
   memory: { base: number; endian: 'little' | 'big'; pointerWidth: 4 | 8; bytesBase64: string };
-  symbols: { pxCurrentTCB?: number | null; readyLists?: { priority: number; address: number | null }[] };
+  symbols: {
+    pxCurrentTCB?: number | null;
+    readyLists?: { priority: number; address: number | null }[];
+    /** A name containing "overflow" makes the lane `delayed_overflow`; the API defaults to `xDelayedTaskList<n>`. */
+    delayedLists?: { name?: string; address: number | null }[];
+    /** Omitted → not walked; null → a `missing_symbol` lane. Same for the two below. */
+    suspendedList?: number | null;
+    pendingReadyList?: number | null;
+    terminatedList?: number | null;
+  };
 }
+
+export type RtosListKind = 'ready' | 'delayed' | 'delayed_overflow' | 'suspended' | 'pending' | 'terminated';
 
 export interface RtosTaskLane {
   coverage?: 'complete' | 'cycle_capped' | 'truncated' | 'out_of_range' | 'missing_symbol';
@@ -1440,12 +1451,22 @@ export interface RtosTaskLane {
   bytesCompleted?: number;
 }
 
+/** A delayed, suspended, pending-ready or waiting-termination lane. Only `wake_tick` values are wake ticks. */
+export interface RtosNamedListLane extends RtosTaskLane {
+  kind?: RtosListKind;
+  name?: string;
+  itemValueMeaning?: 'wake_tick' | 'event_order' | 'not_maintained';
+  declaredItems?: number | null;
+  containerMismatches?: number;
+  orderViolations?: number;
+}
+
 export interface RtosTaskSnapshotResult {
   proofState?: ProofState;
   coverage?: 'complete' | 'partial' | 'none';
   summary?: string;
   snapshot?: { base?: number; endian?: 'little' | 'big'; pointerWidth?: 4 | 8; bytesSupplied?: number };
-  limits?: { maxSnapshotBytes?: number; maxListItems?: number; maxReadyLists?: number };
+  limits?: { maxSnapshotBytes?: number; maxListItems?: number; maxReadyLists?: number; maxDelayedLists?: number };
   currentTask?: {
     coverage?: 'complete' | 'out_of_range' | 'truncated' | 'missing_symbol';
     tcbAddress?: number | null;
@@ -1456,6 +1477,12 @@ export interface RtosTaskSnapshotResult {
   };
   readyLists?: RtosTaskLane[];
   totals?: { nodesAttempted?: number; nodesCompleted?: number; bytesAttempted?: number; bytesCompleted?: number };
+  delayedLists?: RtosNamedListLane[];
+  suspendedList?: RtosNamedListLane;
+  pendingReadyList?: RtosNamedListLane;
+  terminatedList?: RtosNamedListLane;
+  unwalkedKinds?: RtosListKind[];
+  tcbsOnSeveralLists?: number[];
 }
 
 /**

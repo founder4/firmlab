@@ -29,6 +29,16 @@ export const rtosTasks: Messages['rtosTasks'] = {
     address: 'Dirección de la lista',
     addList: 'Añadir lista',
     removeList: (i) => `Quitar la lista ${i}`,
+    stateLists: 'Otras listas de estado de tareas (opcional)',
+    stateListsHint:
+      'Cada una es la dirección de un List_t, como una lista de tareas listas. Deja un campo vacío para omitir esa lista: el resultado la nombra entonces como no recorrida, nunca como vacía.',
+    delayedList: 'Lista de retardadas (el List_t al que apunta pxDelayedTaskList)',
+    overflowDelayedList: 'Lista de retardadas por desbordamiento (el List_t al que apunta pxOverflowDelayedTaskList)',
+    suspendedList: 'Lista de suspendidas (xSuspendedTaskList)',
+    pendingReadyList: 'Lista de pendientes de pasar a listas (xPendingReadyList)',
+    terminatedList: 'Lista de pendientes de terminar (xTasksWaitingTermination)',
+    delayedHint:
+      'xDelayedTaskList1 y xDelayedTaskList2 intercambian sus papeles cada vez que el contador de ticks da la vuelta. Lee los dos punteros en la instantánea para saber cuál es la lista actual y cuál la de desbordamiento.',
   },
 
   error: {
@@ -45,6 +55,7 @@ export const rtosTasks: Messages['rtosTasks'] = {
     priority: 'Introduce una prioridad entera no negativa.',
     priorityRepeated: (p) => `La prioridad ${p} ya está en la lista; cada prioridad se recorre una vez.`,
     tooManyLists: (max) => `Como máximo ${max} listas.`,
+    addressRepeated: (address) => `${address} ya está en la lista; cada lista se recorre una vez.`,
     fixFields: 'Corrige los campos marcados antes de recorrer la instantánea.',
   },
 
@@ -75,7 +86,24 @@ export const rtosTasks: Messages['rtosTasks'] = {
       nodes: 'Nodos (hechos / intentados)',
       bytes: 'Bytes (leídos / intentados)',
       tasks: 'TCB de tareas',
+      state: 'Estado',
     },
+    stateLanes: 'Listas de estado',
+    stateLane: (name, address) => `${name} en ${address}`,
+    kind: {
+      ready: 'lista',
+      delayed: 'retardada',
+      delayed_overflow: 'retardada (desbordamiento)',
+      suspended: 'suspendida',
+      pending: 'pendiente de pasar a lista',
+      terminated: 'pendiente de terminar',
+    },
+    secondDelayed: 'la segunda lista de retardadas',
+    wakeTick: (tcb, tick) => `${tcb} despierta en el tick ${tick}`,
+    notWalked: (kinds) =>
+      `No recorridas, porque no se aportaron: ${kinds}. Las tareas en esos estados no están en este resultado.`,
+    severalLists: (n, tcbs) =>
+      `${n} TCB aparecen en más de una lista de estado (${tcbs}). Una instantánea coherente no puede producir eso; puede estar desgarrada.`,
     currentLane: 'pxCurrentTCB (tarea en curso)',
     readyLane: (address) => `lista en ${address}`,
     noListSupplied: 'no se aportó ninguna lista',

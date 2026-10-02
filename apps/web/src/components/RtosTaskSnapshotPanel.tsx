@@ -10,10 +10,21 @@
  * image, and a `complete` lane only proves the supplied list chains back to its sentinel in the supplied bytes. The
  * provider's summary sentence (which already says what was NOT walked) is shown first, verbatim.
  *
+ * Beyond the ready lists, the analyst may name the other `tasks.c` state lists (delayed, overflow-delayed,
+ * suspended, pending-ready, waiting-termination). An empty field is left out of the request, and the API then
+ * reports that kind as NOT WALKED — the result names it, so tasks in that state are never silently absent. Wake
+ * ticks are shown only on delayed lanes, the one kind whose `xItemValue` the kernel sets to a wake tick.
+ *
  * Folded behind a disclosure on images not classed rtos/baremetal: still usable, never clutter on a Linux image.
  */
 import { type JSX, useEffect, useRef, useState } from 'react';
-import { type RtosTaskLane, type RtosTaskSnapshotInput, type RtosTaskSnapshotResult, api } from '../api';
+import {
+  type RtosNamedListLane,
+  type RtosTaskLane,
+  type RtosTaskSnapshotInput,
+  type RtosTaskSnapshotResult,
+  api,
+} from '../api';
 import { type Messages, useMessages } from '../i18n';
 import { ProofStateBadge } from './FindingsLedger';
 
@@ -30,7 +41,38 @@ export interface SnapshotForm {
   pointerWidth: '' | '4' | '8';
   pxCurrentTCB: string;
   readyLists: { priority: string; address: string }[];
+  /** The List_t `pxDelayedTaskList` points to at snapshot time. Empty → not walked. */
+  delayedList: string;
+  /** The List_t `pxOverflowDelayedTaskList` points to. Empty → not walked. */
+  overflowDelayedList: string;
+  suspendedList: string;
+  pendingReadyList: string;
+  terminatedList: string;
 }
+
+/** The single-address state-list fields, in `tasks.c` order. */
+export const STATE_LIST_FIELDS = [
+  'delayedList',
+  'overflowDelayedList',
+  'suspendedList',
+  'pendingReadyList',
+  'terminatedList',
+] as const;
+type StateListField = (typeof STATE_LIST_FIELDS)[number];
+
+export const EMPTY_FORM: SnapshotForm = {
+  bytes: null,
+  base: '',
+  endian: '',
+  pointerWidth: '',
+  pxCurrentTCB: '',
+  readyLists: [],
+  delayedList: '',
+  overflowDelayedList: '',
+  suspendedList: '',
+  pendingReadyList: '',
+  terminatedList: '',
+};
 
 /** Field key → message. `readyLists.<i>.priority` / `.address` name the row. */
 export type FormErrors = Record<string, string>;
@@ -87,6 +129,27 @@ export function buildSnapshotRequest(
     if (Number.isSafeInteger(priority) && address !== null) readyLists.push({ priority, address });
   });
 
+  // Every state list is optional; a filled one must be an address no other lane already walks (the API refuses a
+  // list walked twice, because its tasks would be counted twice).
+  const taken = new Set(readyLists.map((l) => l.address));
+  const state: Partial<Record<StateListField, number>> = {};
+  for (const key of STATE_LIST_FIELDS) {
+    if (!f[key].trim()) continue;
+    const address = addr(f[key]);
+    if (address === null) errors[key] = m.error.address(bits);
+    else if (taken.has(address)) errors[key] = m.error.addressRepeated(hex(address));
+    else {
+      taken.add(address);
+      state[key] = address;
+    }
+  }
+  const delayedLists = [
+    ...(state.delayedList !== undefined ? [{ name: 'pxDelayedTaskList', address: state.delayedList }] : []),
+    ...(state.overflowDelayedList !== undefined
+      ? [{ name: 'pxOverflowDelayedTaskList', address: state.overflowDelayedList }]
+      : []),
+  ];
+
   if (Object.keys(errors).length > 0 || !f.bytes || base === null) return { ok: false, errors };
   return {
     ok: true,
@@ -97,7 +160,14 @@ export function buildSnapshotRequest(
         pointerWidth: Number(f.pointerWidth) as 4 | 8,
         bytesBase64: toBase64(f.bytes),
       },
-      symbols: { pxCurrentTCB, readyLists },
+      symbols: {
+        pxCurrentTCB,
+        readyLists,
+        ...(delayedLists.length > 0 ? { delayedLists } : {}),
+        ...(state.suspendedList !== undefined ? { suspendedList: state.suspendedList } : {}),
+        ...(state.pendingReadyList !== undefined ? { pendingReadyList: state.pendingReadyList } : {}),
+        ...(state.terminatedList !== undefined ? { terminatedList: state.terminatedList } : {}),
+      },
     },
   };
 }
@@ -117,14 +187,7 @@ export function RtosTaskSnapshotPanel({
   firmwareClass,
 }: { imageId: string; firmwareClass?: string | undefined }): JSX.Element {
   const m = useMessages().rtosTasks;
-  const [form, setForm] = useState<SnapshotForm>({
-    bytes: null,
-    base: '',
-    endian: '',
-    pointerWidth: '',
-    pxCurrentTCB: '',
-    readyLists: [],
-  });
+  const [form, setForm] = useState<SnapshotForm>(EMPTY_FORM);
   const [errors, setErrors] = useState<FormErrors>({});
   const [result, setResult] = useState<RtosTaskSnapshotResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -385,6 +448,30 @@ export function RtosTaskSnapshotPanel({
           </div>
         </fieldset>
 
+        <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 8 }}>
+          <legend className="eyebrow">{m.field.stateLists}</legend>
+          <div className="hint">{m.field.stateListsHint}</div>
+          <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+            {STATE_LIST_FIELDS.map((key) => (
+              <div key={key}>
+                <label className="eyebrow" htmlFor={id(key)}>
+                  {m.field[key]}
+                </label>
+                <input
+                  id={id(key)}
+                  className="input mono"
+                  placeholder={m.field.address}
+                  value={form[key]}
+                  onChange={(e) => set(key, e.target.value)}
+                  {...fieldProps(key)}
+                />
+                {fieldError(key)}
+              </div>
+            ))}
+          </div>
+          <div className="hint">{m.field.delayedHint}</div>
+        </fieldset>
+
         {hasErrors && (
           <div className="banner banner-warn" role="alert">
             {m.error.fixFields}
@@ -544,12 +631,92 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
         </table>
       </div>
 
+      <StateLists result={result} m={m} />
+
       {limits && (
         <p className="hint" style={{ margin: '8px 0 0', maxWidth: '72ch' }}>
           {m.result.limits((limits.maxSnapshotBytes ?? 0) / 1024, limits.maxListItems ?? 0, limits.maxReadyLists ?? 0)}
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * The non-ready lanes. Rendered only for lanes the result carries: a stored result from before these lanes existed
+ * has none, and the "not walked" line then comes from `unwalkedKinds` when present — never inferred from absence.
+ */
+function StateLists({ result, m }: { result: RtosTaskSnapshotResult; m: M }): JSX.Element | null {
+  const lanes: RtosNamedListLane[] = [
+    ...(result.delayedLists ?? []),
+    ...(result.suspendedList ? [result.suspendedList] : []),
+    ...(result.pendingReadyList ? [result.pendingReadyList] : []),
+    ...(result.terminatedList ? [result.terminatedList] : []),
+  ];
+  const unwalked = result.unwalkedKinds ?? [];
+  const several = result.tcbsOnSeveralLists ?? [];
+  if (lanes.length === 0 && unwalked.length === 0 && several.length === 0) return null;
+  const pair = (done?: number, tried?: number) => `${done ?? '—'} / ${tried ?? '—'}`;
+  const oneDelayed = (result.delayedLists?.length ?? 0) === 1;
+  return (
+    <>
+      {several.length > 0 && (
+        <div className="banner banner-warn" role="alert" style={{ marginTop: 12, maxWidth: '72ch' }}>
+          {m.result.severalLists(several.length, several.map((t) => hex(t)).join(' '))}
+        </div>
+      )}
+      {lanes.length > 0 && (
+        <div className="table-wrap" style={{ marginTop: 12 }}>
+          <table className="data" aria-label={m.result.stateLanes}>
+            <thead>
+              <tr>
+                <th>{m.result.col.lane}</th>
+                <th>{m.result.col.state}</th>
+                <th>{m.result.col.coverage}</th>
+                <th>{m.result.col.nodes}</th>
+                <th>{m.result.col.bytes}</th>
+                <th>{m.result.col.tasks}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lanes.map((lane, i) => (
+                <tr key={`${lane.kind ?? 'list'}-${lane.listAddress ?? 'none'}-${i}`}>
+                  <td className="mono">{m.result.stateLane(lane.name ?? '?', hex(lane.listAddress))}</td>
+                  <td>{lane.kind ? m.result.kind[lane.kind] : m.result.notRecorded}</td>
+                  <LaneCoverage coverage={lane.coverage} evidence={lane.evidence} m={m} />
+                  <td className="mono">{pair(lane.completed, lane.attempted)}</td>
+                  <td className="mono">{pair(lane.bytesCompleted, lane.bytesAttempted)}</td>
+                  <td className="mono">
+                    {lane.tasks && lane.tasks.length > 0 ? (
+                      lane.itemValueMeaning === 'wake_tick' ? (
+                        <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none' }}>
+                          {lane.tasks.map((t, j) => (
+                            <li key={`${t.listItemAddress ?? j}`}>
+                              {m.result.wakeTick(hex(t.tcbAddress), t.itemValue ?? '—')}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        lane.tasks.map((t) => hex(t.tcbAddress)).join(' ')
+                      )
+                    ) : (
+                      m.result.noTasks
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {unwalked.length > 0 && (
+        <p className="hint" style={{ margin: '8px 0 0', maxWidth: '72ch' }}>
+          {m.result.notWalked(
+            unwalked.map((k) => (k === 'delayed' && oneDelayed ? m.result.secondDelayed : m.result.kind[k])).join(', '),
+          )}
+        </p>
+      )}
+    </>
   );
 }
 
