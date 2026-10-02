@@ -33,20 +33,59 @@ const cfg = (timeoutMs = 30_000): ResearchConfig => ({ allowlist: ['127.0.0.1'],
 describe('allowlistedFetch — job-owned cancellation', () => {
   it('aborts a stalled job-owned request promptly instead of waiting out timeoutMs', async () => {
     let requests = 0;
+    let received!: () => void;
+    const requestReceived = new Promise<void>((resolve) => {
+      received = resolve;
+    });
     const url = await serve(() => {
       requests++;
+      received();
       /* never responds */
     });
     const cancellation = new JobCancellation();
-    const started = Date.now();
     await jobCancellation.run(cancellation, async () => {
-      const inflight = allowlistedFetch(url, cfg(30_000));
-      setTimeout(() => cancellation.cancel(), 20);
-      await expect(inflight).rejects.toThrow();
+      // Observe rejection immediately, including when setup fails before cancellation.
+      const settled = allowlistedFetch(url, cfg(30_000)).then(
+        () => ({ status: 'fulfilled' as const }),
+        (error: unknown) => ({ status: 'rejected' as const, error }),
+      );
+      let setupTimer: ReturnType<typeof setTimeout> | undefined;
+      let abortTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          requestReceived,
+          settled.then((result) => {
+            throw new Error('Request settled before cancellation', {
+              cause: result.status === 'rejected' ? result.error : undefined,
+            });
+          }),
+          new Promise<never>((_resolve, reject) => {
+            setupTimer = setTimeout(() => reject(new Error('Server did not receive the request within 3s')), 3000);
+          }),
+        ]);
+        clearTimeout(setupTimer);
+
+        // Connection setup under load must not consume the cancellation latency budget.
+        const started = performance.now();
+        cancellation.cancel();
+        const result = await Promise.race([
+          settled,
+          new Promise<never>((_resolve, reject) => {
+            abortTimer = setTimeout(() => reject(new Error('Cancellation did not abort the request within 2s')), 2000);
+          }),
+        ]);
+        expect(performance.now() - started).toBeLessThan(2000);
+        expect(result.status).toBe('rejected');
+        if (result.status === 'rejected') expect(result.error).toMatchObject({ name: 'AbortError' });
+        expect(requests).toBe(1);
+      } finally {
+        clearTimeout(setupTimer);
+        clearTimeout(abortTimer);
+        cancellation.cancel();
+        // afterEach closes the real sockets even if cancellation itself regresses.
+      }
     });
-    expect(Date.now() - started).toBeLessThan(2000);
-    expect(requests).toBe(1);
-  });
+  }, 10_000);
 
   it('aborts a job-owned body read that stalls after the headers arrive', async () => {
     const url = await serve((_req, res) => {
