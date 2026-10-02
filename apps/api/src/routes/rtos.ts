@@ -12,10 +12,14 @@
  * `/rtos/elf-symbols` reads the FreeRTOS kernel addresses out of the image's own ELF symbol table (see
  * `providers/rtos-elf-symbols.ts`) so the snapshot form can be pre-filled. A link-time address is not runtime proof,
  * so it syncs no findings either; a raw or stripped image is reported as a reason, never as "no FreeRTOS".
+ *
+ * `/rtos/ram-capture` dumps a RAM snapshot from a bounded Renode emulation run (see `providers/renode-ram.ts`)
+ * to feed the task-list walker. It syncs no findings and never claims the scheduler ran or that tasks exist.
  */
 import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
 import { startJob } from '../providers/jobs.js';
+import { runRenodeRamCapture } from '../providers/renode-ram.js';
 import { runRtosElfSymbols } from '../providers/rtos-elf-symbols.js';
 import { runRtosTaskSnapshot, validateRtosTaskSnapshot } from '../providers/rtos-tasks.js';
 import { runRtosAnalysis } from '../providers/rtos.js';
@@ -75,6 +79,36 @@ export async function rtosRoutes(app: FastifyInstance): Promise<void> {
   app.get('/images/:id/rtos/elf-symbols', async (req) => {
     const { id } = req.params as { id: string };
     const done = listJobs(id).find((j) => j.kind === 'rtos-elf-symbols' && j.status === 'done' && j.resultJson);
+    return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
+  });
+
+  app.post('/images/:id/rtos/ram-capture', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const row = getImage(id);
+    if (!row) return reply.status(404).send({ error: 'Image not found' });
+    const body = (req.body ?? {}) as { seconds?: number; platform?: string };
+    if (body.seconds !== undefined) {
+      if (!Number.isInteger(body.seconds) || body.seconds < 1 || body.seconds > 30) {
+        return reply.status(400).send({ error: 'Invalid seconds: must be an integer between 1 and 30' });
+      }
+    }
+    const { seconds, platform } = body;
+    const jobId = startJob(id, 'rtos-ram-capture', { seconds, platform }, async (handle) => {
+      const result = await runRenodeRamCapture(row.path, {
+        platform,
+        seconds,
+        identityJson: row.identityJson,
+        analysisJson: row.analysisJson,
+      });
+      handle.log(result.reason);
+      return result;
+    });
+    return reply.status(202).send({ jobId });
+  });
+
+  app.get('/images/:id/rtos/ram-capture', async (req) => {
+    const { id } = req.params as { id: string };
+    const done = listJobs(id).find((j) => j.kind === 'rtos-ram-capture' && j.status === 'done' && j.resultJson);
     return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
   });
 }

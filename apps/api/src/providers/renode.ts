@@ -85,7 +85,7 @@ export function renodeHintsFrom(identityJson: string | null, analysisJson: strin
 export const RENODE_PLATFORMS_DIR = '/opt/renode/platforms';
 
 /** The Renode install root — `using "platforms/…"` includes in a .repl resolve against this. */
-const RENODE_ROOT = path.dirname(RENODE_PLATFORMS_DIR);
+export const RENODE_ROOT = path.dirname(RENODE_PLATFORMS_DIR);
 
 /**
  * Curated tie-breakers: a detected family → a substring of its preferred board .repl basename. When several
@@ -186,14 +186,14 @@ export function selectPlatform(fp: McuFingerprint, hints: string[], catalog: str
 }
 
 /** A short human label for the detected MCU, for the honest boot/block reason. */
-function describeMcu(fp: McuFingerprint): string {
+export function describeMcu(fp: McuFingerprint): string {
   const label = fp.part ?? fp.family ?? (fp.cortexM ? `${fp.arch} ${fp.cortexM}` : fp.arch);
   return label === 'unknown' ? 'unrecognized MCU' : label;
 }
 
-const FIRMWARE_READ_CAP = 16 * 1024 * 1024;
+export const FIRMWARE_READ_CAP = 16 * 1024 * 1024;
 /** Read a bounded prefix of the firmware for fingerprinting — MCU blobs are tiny; this caps a mis-routed image. */
-function readFirmwareBounded(p: string, cap = FIRMWARE_READ_CAP): Uint8Array {
+export function readFirmwareBounded(p: string, cap = FIRMWARE_READ_CAP): Uint8Array {
   const fd = fs.openSync(p, 'r');
   try {
     const len = Math.min(fs.fstatSync(fd).size, cap);
@@ -253,7 +253,7 @@ export interface RemoteResourceScan {
 }
 
 /** `/* … *\/` blocks and whole-line `//` comments removed — a commented-out `ApplySVD` is never fetched. */
-function stripReplComments(text: string): string {
+export function stripReplComments(text: string): string {
   return text
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .split('\n')
@@ -262,7 +262,7 @@ function stripReplComments(text: string): string {
 }
 
 /** True when `p` is `root` or lies beneath it — the containment every read in the scan is held to. */
-function isWithin(root: string, p: string): boolean {
+export function isWithin(root: string, p: string): boolean {
   const rel = path.relative(root, p);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
