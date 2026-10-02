@@ -62,6 +62,18 @@ interrupt"), so an empty prompt never proved idleness by itself. A fresh `workin
 causes no read. Tests: `skills/orca-campaign/scripts/watch.test.mjs` (stale-working cases; the working frame is a
 real capture, the stale-idle frame is reconstructed from the operator's description and labelled as such).
 
+**Acceptance (18:09–18:14Z, same Run).** The failed scenario was reproduced on purpose: Claude ended a turn with one
+background shell (a placeholder `sleep`, polling nothing). Its native row again stayed `working` after the turn
+(`stateStartedAt` 17:44:30Z, no `done`). The corrected guard (PID 76136) reported `working` until the row was more
+than 180 s stale, then `idle` at 18:12:44Z from the rendered empty composer plus a satisfied `tui-idle` wait, sent
+one resume at 18:13:45Z (request `520a0e0a-6a93-4512-a2de-61413157179d`, `turn_started`), and settled it
+`confirmed` at 18:14:21Z after Claude's fresh tool and write execution. Earlier the same afternoon the guard had
+reported `stale_native_working_turn_visible` while Claude really was working through long single tool calls — the
+spinner, not the native row, kept it from calling that idle. Three earlier attempts were void, each woken by an Orca
+message notification rather than the guard; the last by the coordinator's own message, because a message addressed
+to the root's terminal is delivered to `run:<Run>`, which is the coordinator's inbox too. Send no Run message before
+an idle test.
+
 ## Capacity policy, guarded worker launch and handoff reasons (2 October 2026)
 
 User steering at 17:42Z, mid-campaign: successor coordinators use their own Orca workers for separable tasks; no
