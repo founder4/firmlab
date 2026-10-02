@@ -31,6 +31,13 @@ export const rtosTasks = {
     address: 'List address',
     addList: 'Add ready list',
     removeList: (i: number) => `Remove ready list ${i}`,
+    readyArray: 'Or the whole ready-list array (pxReadyTasksLists)',
+    readyArrayHint:
+      "Instead of individual lists: the array address and the two numbers your build declares. Every priority is then walked. sizeof(List_t) is checked against the one layout the walk reads (20 bytes with 4-byte pointers, 40 with 8), never used blind. The symbol's st_size, in bytes, is an optional cross-check.",
+    arrayBase: 'pxReadyTasksLists address',
+    maxPriorities: 'configMAX_PRIORITIES',
+    listSize: 'sizeof(List_t)',
+    symbolSize: 'st_size (optional)',
     stateLists: 'Other task state lists (optional)',
     stateListsHint:
       'Each is the address of a List_t, like a ready list. Leave a field empty to skip that list: the result then names it as not walked, never as empty.',
@@ -58,6 +65,15 @@ export const rtosTasks = {
     priorityRepeated: (p: number) => `Priority ${p} is already listed; each priority is walked once.`,
     tooManyLists: (max: number) => `At most ${max} ready lists.`,
     addressRepeated: (address: string) => `${address} is already listed; each list is walked once.`,
+    arrayAndLists: 'Declare the ready-list array or individual ready lists, not both: each list is walked once.',
+    arrayBase: 'The array needs its address; take it from the pxReadyTasksLists symbol.',
+    maxPriorities: (max: number) => `Enter configMAX_PRIORITIES as a whole number from 1 to ${max}.`,
+    listSize: (expected: number) =>
+      `The walk reads a ${expected}-byte List_t with this pointer width. A build with list-integrity bytes or a wider tick type has a different layout, which this walk refuses rather than misreads.`,
+    listSizeNumber: 'Enter sizeof(List_t) as a positive whole number of bytes.',
+    symbolSize: 'Enter st_size as a whole number of bytes, or leave it empty.',
+    symbolSizeMismatch: (size: number, n: number, list: number) =>
+      `st_size is ${size} bytes but ${n} × ${list} is ${n * list}; one of the three numbers is wrong.`,
     fixFields: 'Fix the highlighted fields before walking the snapshot.',
   },
 
@@ -109,6 +125,12 @@ export const rtosTasks = {
     currentLane: 'pxCurrentTCB',
     readyLane: (address: string) => `ready list @ ${address}`,
     noListSupplied: 'no ready list supplied',
+    readyArray: (base: string, n: number, size: number, checked: boolean) =>
+      `Ready lists derived from pxReadyTasksLists @ ${base}: ${n} declared priorities × ${size} bytes. ${
+        checked
+          ? 'The symbol st_size agrees.'
+          : 'No st_size was supplied, so the priority count rests on the declaration alone.'
+      }`,
     noTasks: 'none',
     limits: (maxKiB: number, maxItems: number, maxLists: number) =>
       `Limits applied: snapshot ≤ ${maxKiB} KiB, ≤ ${maxItems} nodes walked per list, ≤ ${maxLists} ready lists.`,
@@ -159,7 +181,7 @@ export const rtosTasks = {
       'xDelayedTaskList1 and xDelayedTaskList2 are listed but never filled: which one is current, and which the overflow list, is read from the pointers in the RAM snapshot.',
     notCarried: 'Not carried into the form',
     readyManual:
-      'Ready lists stay manual: per-priority addresses need sizeof(List_t) and configMAX_PRIORITIES, which are not inferred from a symbol size.',
+      'Ready lists are not pre-filled: per-priority addresses need sizeof(List_t) and configMAX_PRIORITIES, which you declare in the ready-list array below; neither is inferred from a symbol size.',
   },
 
   ramCapture: {

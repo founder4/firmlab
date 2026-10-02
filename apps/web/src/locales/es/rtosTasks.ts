@@ -25,6 +25,13 @@ export const rtosTasks: Messages['rtosTasks'] = {
     pxCurrentTCB: 'Dirección de pxCurrentTCB (opcional)',
     readyLists: 'Listas de tareas listas (pxReadyTasksLists[prioridad])',
     readyListsHint: (max) => `Opcional, hasta ${max}. Cada prioridad una sola vez.`,
+    readyArray: 'O el array completo de listas de tareas listas (pxReadyTasksLists)',
+    readyArrayHint:
+      'En lugar de listas sueltas: la dirección del array y los dos números que declara tu compilación. Se recorre entonces cada prioridad. sizeof(List_t) se contrasta con el único formato que lee el recorrido (20 bytes con punteros de 4 bytes, 40 con 8); nunca se usa a ciegas. El st_size del símbolo, en bytes, es una comprobación opcional.',
+    arrayBase: 'Dirección de pxReadyTasksLists',
+    maxPriorities: 'configMAX_PRIORITIES',
+    listSize: 'sizeof(List_t)',
+    symbolSize: 'st_size (opcional)',
     priority: 'Prioridad',
     address: 'Dirección de la lista',
     addList: 'Añadir lista',
@@ -56,6 +63,15 @@ export const rtosTasks: Messages['rtosTasks'] = {
     priorityRepeated: (p) => `La prioridad ${p} ya está en la lista; cada prioridad se recorre una vez.`,
     tooManyLists: (max) => `Como máximo ${max} listas.`,
     addressRepeated: (address) => `${address} ya está en la lista; cada lista se recorre una vez.`,
+    arrayAndLists: 'Declara el array de listas o listas sueltas, no ambos: cada lista se recorre una vez.',
+    arrayBase: 'El array necesita su dirección; tómala del símbolo pxReadyTasksLists.',
+    maxPriorities: (max) => `Introduce configMAX_PRIORITIES como un entero de 1 a ${max}.`,
+    listSize: (expected) =>
+      `El recorrido lee un List_t de ${expected} bytes con este ancho de puntero. Una compilación con bytes de integridad de lista o un tipo de tick más ancho tiene otro formato, que este recorrido rechaza en vez de leerlo mal.`,
+    listSizeNumber: 'Introduce sizeof(List_t) como un número entero positivo de bytes.',
+    symbolSize: 'Introduce st_size como un número entero de bytes, o déjalo vacío.',
+    symbolSizeMismatch: (size, n, list) =>
+      `st_size es ${size} bytes pero ${n} × ${list} son ${n * list}; uno de los tres números es erróneo.`,
     fixFields: 'Corrige los campos marcados antes de recorrer la instantánea.',
   },
 
@@ -107,6 +123,12 @@ export const rtosTasks: Messages['rtosTasks'] = {
     currentLane: 'pxCurrentTCB (tarea en curso)',
     readyLane: (address) => `lista en ${address}`,
     noListSupplied: 'no se aportó ninguna lista',
+    readyArray: (base, n, size, checked) =>
+      `Listas de tareas listas derivadas de pxReadyTasksLists @ ${base}: ${n} prioridades declaradas × ${size} bytes. ${
+        checked
+          ? 'El st_size del símbolo concuerda.'
+          : 'No se aportó st_size, así que el número de prioridades descansa solo en la declaración.'
+      }`,
     noTasks: 'ninguna',
     limits: (maxKiB, maxItems, maxLists) =>
       `Límites aplicados: instantánea ≤ ${maxKiB} KiB, ≤ ${maxItems} nodos recorridos por lista, ≤ ${maxLists} listas.`,
@@ -158,7 +180,7 @@ export const rtosTasks: Messages['rtosTasks'] = {
       'xDelayedTaskList1 y xDelayedTaskList2 se muestran pero nunca se rellenan: cuál es la actual y cuál la de desbordamiento se lee en los punteros de la instantánea de RAM.',
     notCarried: 'No se trasladan al formulario',
     readyManual:
-      'Las listas de tareas listas siguen siendo manuales: las direcciones por prioridad necesitan sizeof(List_t) y configMAX_PRIORITIES, que no se deducen del tamaño de un símbolo.',
+      'Las listas de tareas listas no se rellenan: las direcciones por prioridad necesitan sizeof(List_t) y configMAX_PRIORITIES, que declaras en el array de listas más abajo; ninguno se deduce del tamaño de un símbolo.',
   },
 
   ramCapture: {

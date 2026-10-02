@@ -74,6 +74,9 @@ describe('catalogue integrity', () => {
       'UID 0',
       // The capability matrix's "planned" badge glyph.
       'P',
+      // C identifiers labelling the FreeRTOS ready-list array fields: the names a build declares them under.
+      'configMAX_PRIORITIES',
+      'sizeof(List_t)',
     ]);
     const offenders: string[] = [];
     const walk = (a: unknown, b: unknown, path: string): void => {

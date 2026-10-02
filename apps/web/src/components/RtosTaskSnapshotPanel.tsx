@@ -19,8 +19,13 @@
  * operator action, and only fields whose symbol resolved to exactly one absolute address are filled. A link-time
  * address is not runtime proof, and the RAM snapshot still comes from the analyst; every filled field stays editable.
  * A raw binary, a stripped ELF or a refused read is shown as the reason it is, never as "no FreeRTOS". The two
- * delayed lists are listed and never filled — which is current is a RAM fact — and the ready lists stay manual,
- * because per-priority addresses would need a `sizeof(List_t)` this panel refuses to infer from a symbol size.
+ * delayed lists are listed and never filled — which is current is a RAM fact — and the ready lists are not filled
+ * either, because per-priority addresses would need a `sizeof(List_t)` this panel refuses to infer from a symbol size.
+ *
+ * The ready lists can instead be declared as the whole `pxReadyTasksLists` array: its address, plus
+ * `configMAX_PRIORITIES` and `sizeof(List_t)` as the analyst's build declares them. The declared size is checked
+ * against the one layout the walk reads, client-side for an early message and again by the API, which is the
+ * authority; the array and individual rows are mutually exclusive, because each list is walked once.
  *
  * Folded behind a disclosure on images not classed rtos/baremetal: still usable, never clutter on a Linux image.
  */
@@ -41,6 +46,8 @@ import { ProofStateBadge } from './FindingsLedger';
 /** Mirrors `MAX_SNAPSHOT_BYTES` / `MAX_READY_LISTS` in `apps/api/src/providers/rtos-tasks.ts`. */
 export const MAX_SNAPSHOT_BYTES = 512 * 1024;
 export const MAX_READY_LISTS = 64;
+/** sizeof(List_t) in the one layout the walk reads — core's `listRecordSize` for each declarable pointer width. */
+export const LIST_RECORD_BYTES = { '4': 20, '8': 40 } as const;
 
 type M = Messages['rtosTasks'];
 
@@ -51,6 +58,8 @@ export interface SnapshotForm {
   pointerWidth: '' | '4' | '8';
   pxCurrentTCB: string;
   readyLists: { priority: string; address: string }[];
+  /** The `pxReadyTasksLists` array; all four empty → not declared. `symbolSize` alone stays optional. */
+  readyArray: { base: string; maxPriorities: string; listSize: string; symbolSize: string };
   /** The List_t `pxDelayedTaskList` points to at snapshot time. Empty → not walked. */
   delayedList: string;
   /** The List_t `pxOverflowDelayedTaskList` points to. Empty → not walked. */
@@ -77,6 +86,7 @@ export const EMPTY_FORM: SnapshotForm = {
   pointerWidth: '',
   pxCurrentTCB: '',
   readyLists: [],
+  readyArray: { base: '', maxPriorities: '', listSize: '', symbolSize: '' },
   delayedList: '',
   overflowDelayedList: '',
   suspendedList: '',
@@ -139,9 +149,37 @@ export function buildSnapshotRequest(
     if (Number.isSafeInteger(priority) && address !== null) readyLists.push({ priority, address });
   });
 
-  // Every state list is optional; a filled one must be an address no other lane already walks (the API refuses a
-  // list walked twice, because its tasks would be counted twice).
-  const taken = new Set(readyLists.map((l) => l.address));
+  // Every list is walked once: the API refuses an address named twice, because its tasks would be counted twice and
+  // the result would then blame the snapshot for the request's repeat.
+  const taken = new Set<number>();
+  readyLists.forEach((l, i) => {
+    if (taken.has(l.address)) errors[`readyLists.${i}.address`] = m.error.addressRepeated(hex(l.address));
+    taken.add(l.address);
+  });
+
+  const ra = f.readyArray;
+  const whole = (raw: string) => (/^\d+$/.test(raw.trim()) ? Number(raw.trim()) : Number.NaN);
+  let readyListArray: NonNullable<RtosTaskSnapshotInput['symbols']['readyListArray']> | undefined;
+  if ([ra.base, ra.maxPriorities, ra.listSize, ra.symbolSize].some((v) => v.trim())) {
+    if (f.readyLists.length > 0) errors.readyArray = m.error.arrayAndLists;
+    const arrayBase = ra.base.trim() ? addr(ra.base) : null;
+    if (arrayBase === null) errors['readyArray.base'] = ra.base.trim() ? m.error.address(bits) : m.error.arrayBase;
+    const n = whole(ra.maxPriorities);
+    if (!Number.isSafeInteger(n) || n < 1 || n > MAX_READY_LISTS)
+      errors['readyArray.maxPriorities'] = m.error.maxPriorities(MAX_READY_LISTS);
+    const size = whole(ra.listSize);
+    const expected = f.pointerWidth ? LIST_RECORD_BYTES[f.pointerWidth] : null;
+    if (!Number.isSafeInteger(size) || size < 1) errors['readyArray.listSize'] = m.error.listSizeNumber;
+    else if (expected !== null && size !== expected) errors['readyArray.listSize'] = m.error.listSize(expected);
+    const symbolSize = ra.symbolSize.trim() ? whole(ra.symbolSize) : null;
+    if (symbolSize !== null && !Number.isSafeInteger(symbolSize)) errors['readyArray.symbolSize'] = m.error.symbolSize;
+    else if (symbolSize !== null && Number.isSafeInteger(n) && Number.isSafeInteger(size) && symbolSize !== n * size)
+      errors['readyArray.symbolSize'] = m.error.symbolSizeMismatch(symbolSize, n, size);
+    if (arrayBase !== null && Number.isSafeInteger(n) && Number.isSafeInteger(size)) {
+      readyListArray = { base: arrayBase, maxPriorities: n, listSize: size, symbolSize };
+      for (let p = 0; p < Math.min(n, MAX_READY_LISTS); p++) taken.add(arrayBase + p * size);
+    }
+  }
   const state: Partial<Record<StateListField, number>> = {};
   for (const key of STATE_LIST_FIELDS) {
     if (!f[key].trim()) continue;
@@ -172,7 +210,7 @@ export function buildSnapshotRequest(
       },
       symbols: {
         pxCurrentTCB,
-        readyLists,
+        ...(readyListArray ? { readyListArray } : { readyLists }),
         ...(delayedLists.length > 0 ? { delayedLists } : {}),
         ...(state.suspendedList !== undefined ? { suspendedList: state.suspendedList } : {}),
         ...(state.pendingReadyList !== undefined ? { pendingReadyList: state.pendingReadyList } : {}),
@@ -219,6 +257,9 @@ export function applyElfPrefill(
   }
   return { form: next, filled };
 }
+
+/** The array's numbers in reading order: the two declared facts, then the optional cross-check. */
+const ARRAY_NUMBERS = ['maxPriorities', 'listSize', 'symbolSize'] as const;
 
 const hex = (n: number | null | undefined) => (typeof n === 'number' ? `0x${n.toString(16)}` : '—');
 const COVERAGE_CLASS = { complete: 'badge-ok', partial: 'badge-warn', none: 'badge' } as const;
@@ -626,6 +667,44 @@ export function RtosTaskSnapshotPanel({
         </fieldset>
 
         <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 8 }}>
+          <legend className="eyebrow">{m.field.readyArray}</legend>
+          <div className="hint">{m.field.readyArrayHint}</div>
+          <div>
+            <label className="eyebrow" htmlFor={id('array-base')}>
+              {m.field.arrayBase}
+            </label>
+            <input
+              id={id('array-base')}
+              className="input mono"
+              placeholder="0x20000100"
+              value={form.readyArray.base}
+              onChange={(e) => set('readyArray', { ...form.readyArray, base: e.target.value })}
+              {...fieldProps('readyArray.base')}
+            />
+            {fieldError('readyArray.base')}
+          </div>
+          <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+            {ARRAY_NUMBERS.map((key) => (
+              <div key={key}>
+                <label className="eyebrow" htmlFor={id(`array-${key}`)}>
+                  {m.field[key]}
+                </label>
+                <input
+                  id={id(`array-${key}`)}
+                  className="input mono"
+                  inputMode="numeric"
+                  value={form.readyArray[key]}
+                  onChange={(e) => set('readyArray', { ...form.readyArray, [key]: e.target.value })}
+                  {...fieldProps(`readyArray.${key}`)}
+                />
+                {fieldError(`readyArray.${key}`)}
+              </div>
+            ))}
+          </div>
+          {fieldError('readyArray')}
+        </fieldset>
+
+        <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 8 }}>
           <legend className="eyebrow">{m.field.stateLists}</legend>
           <div className="hint">{m.field.stateListsHint}</div>
           <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
@@ -739,6 +818,7 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
   const limits = result.limits;
   const cur = result.currentTask;
   const lanes = result.readyLists ?? [];
+  const array = result.readyListArray;
   const pair = (done?: number, tried?: number) => `${done ?? '—'} / ${tried ?? '—'}`;
   return (
     <section style={{ marginTop: 16 }} aria-label={m.result.heading}>
@@ -760,6 +840,16 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
       {snap && (
         <p className="hint mono" style={{ margin: '6px 0 0' }}>
           {m.result.snapshot(hex(snap.base), snap.endian ?? '?', snap.pointerWidth ?? 0, snap.bytesSupplied ?? 0)}
+        </p>
+      )}
+      {array && typeof array.base === 'number' && (
+        <p className="hint" style={{ margin: '6px 0 0', maxWidth: '72ch' }}>
+          {m.result.readyArray(
+            hex(array.base),
+            array.maxPriorities ?? 0,
+            array.listSize ?? 0,
+            array.sizeCrossCheck === 'agrees',
+          )}
         </p>
       )}
 

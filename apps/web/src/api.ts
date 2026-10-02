@@ -1505,6 +1505,11 @@ export interface RtosTaskSnapshotInput {
   symbols: {
     pxCurrentTCB?: number | null;
     readyLists?: { priority: number; address: number | null }[];
+    /**
+     * The whole `pxReadyTasksLists` array instead of `readyLists` (the API refuses both): the base and, as DECLARED
+     * for the build, `configMAX_PRIORITIES` and `sizeof(List_t)`; `symbolSize` is the symbol's `st_size`, if known.
+     */
+    readyListArray?: { base: number | null; maxPriorities: number; listSize: number; symbolSize?: number | null };
     /** A name containing "overflow" makes the lane `delayed_overflow`; the API defaults to `xDelayedTaskList<n>`. */
     delayedLists?: { name?: string; address: number | null }[];
     /** Omitted → not walked; null → a `missing_symbol` lane. Same for the two below. */
@@ -1526,6 +1531,10 @@ export interface RtosTaskLane {
   listAddress?: number | null;
   bytesAttempted?: number;
   bytesCompleted?: number;
+  /** `uxNumberOfItems` from the list header; on ready lanes only when they were derived from the array. */
+  declaredItems?: number | null;
+  /** Visited items whose `pxContainer` does not point back to this list (same condition as `declaredItems`). */
+  containerMismatches?: number;
 }
 
 /** A delayed, suspended, pending-ready or waiting-termination lane. Only `wake_tick` values are wake ticks. */
@@ -1533,8 +1542,6 @@ export interface RtosNamedListLane extends RtosTaskLane {
   kind?: RtosListKind;
   name?: string;
   itemValueMeaning?: 'wake_tick' | 'event_order' | 'not_maintained';
-  declaredItems?: number | null;
-  containerMismatches?: number;
   orderViolations?: number;
 }
 
@@ -1560,6 +1567,15 @@ export interface RtosTaskSnapshotResult {
   terminatedList?: RtosNamedListLane;
   unwalkedKinds?: RtosListKind[];
   tcbsOnSeveralLists?: number[];
+  /** Present only when the ready lists were declared as the `pxReadyTasksLists` array. */
+  readyListArray?: {
+    base?: number | null;
+    maxPriorities?: number;
+    listSize?: number;
+    stride?: number;
+    symbolSize?: number | null;
+    sizeCrossCheck?: 'agrees' | 'not_available';
+  };
 }
 
 /**

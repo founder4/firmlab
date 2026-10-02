@@ -227,6 +227,33 @@ describe('RtosTaskSnapshotPanel', () => {
     expect(screen.getByText(m.result.severalLists(1, '0x20005000'))).toBeInTheDocument();
   });
 
+  it('sends a declared ready-list array instead of individual ready lists', async () => {
+    mockApi.runRtosTasks.mockResolvedValue({ refused: { error: 'stop here', details: [] } });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    await screen.findByText(m.notRun);
+    await fill();
+    fireEvent.change(screen.getByLabelText(m.field.arrayBase), { target: { value: '0x20000100' } });
+    fireEvent.change(screen.getByLabelText(m.field.maxPriorities), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText(m.field.listSize), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: m.run }));
+    await screen.findByText('stop here');
+    expect(mockApi.runRtosTasks.mock.calls[0]?.[1]?.symbols).toEqual({
+      pxCurrentTCB: null,
+      readyListArray: { base: 0x20000100, maxPriorities: 5, listSize: 20, symbolSize: null },
+    });
+  });
+
+  it('states how a stored walk derived its ready lists, and whether st_size corroborated them', async () => {
+    mockApi.rtosTasksResult.mockResolvedValue({
+      coverage: 'complete',
+      summary: '0 ready task record(s) across 2 list(s)',
+      readyLists: [],
+      readyListArray: { base: 0x20000100, maxPriorities: 2, listSize: 20, stride: 20, sizeCrossCheck: 'agrees' },
+    });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    expect(await screen.findByText(m.result.readyArray('0x20000100', 2, 20, true))).toBeInTheDocument();
+  });
+
   it('shows no state-list section for a result stored before those lanes existed', async () => {
     mockApi.rtosTasksResult.mockResolvedValue({ coverage: 'complete', readyLists: [] });
     render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
@@ -566,6 +593,53 @@ describe('buildSnapshotRequest', () => {
       ],
       terminatedList: 768,
     });
+  });
+
+  const array = { base: '0x100', maxPriorities: '3', listSize: '20', symbolSize: '' };
+
+  it('builds the ready-list array and claims every derived address against the state lists', () => {
+    const ok = buildSnapshotRequest({ ...base, readyArray: { ...array, symbolSize: '60' } }, m);
+    expect(ok.ok && ok.input.symbols).toEqual({
+      pxCurrentTCB: null,
+      readyListArray: { base: 0x100, maxPriorities: 3, listSize: 20, symbolSize: 60 },
+    });
+    const clash = buildSnapshotRequest({ ...base, readyArray: array, suspendedList: '0x128' }, m);
+    expect(clash.ok === false && clash.errors.suspendedList).toBe(m.error.addressRepeated('0x128'));
+  });
+
+  it('refuses the array beside individual rows, a size the walk cannot read, and a disagreeing st_size', () => {
+    const r = buildSnapshotRequest(
+      {
+        ...base,
+        readyLists: [{ priority: '0', address: '0x10' }],
+        readyArray: { base: '', maxPriorities: '65', listSize: '24', symbolSize: '7' },
+      },
+      m,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors.readyArray).toBe(m.error.arrayAndLists);
+    expect(r.errors['readyArray.base']).toBe(m.error.arrayBase);
+    expect(r.errors['readyArray.maxPriorities']).toBe(m.error.maxPriorities(64));
+    expect(r.errors['readyArray.listSize']).toBe(m.error.listSize(20));
+    const mismatch = buildSnapshotRequest({ ...base, readyArray: { ...array, symbolSize: '64' } }, m);
+    expect(mismatch.ok === false && mismatch.errors['readyArray.symbolSize']).toBe(
+      m.error.symbolSizeMismatch(64, 3, 20),
+    );
+  });
+
+  it('refuses two ready lists at one address instead of letting the walk count it twice', () => {
+    const r = buildSnapshotRequest(
+      {
+        ...base,
+        readyLists: [
+          { priority: '0', address: '0x10' },
+          { priority: '1', address: '16' },
+        ],
+      },
+      m,
+    );
+    expect(r.ok === false && r.errors['readyLists.1.address']).toBe(m.error.addressRepeated('0x10'));
   });
 
   it('refuses a state list that repeats another lane address or is not an address', () => {
