@@ -22,47 +22,36 @@ acceptance checks are genuinely independent.
 ## Supervised run
 
 The coordinator creates one durable Run, creates the complete independent wave before waiting, and processes
-questions and settlements until every dispatch has an explicit outcome. In this Linux installation the safe
-external command is `orca-ide`; inside an Orca-managed terminal, use the executable Orca provides for that
-session.
+questions and settlements until every dispatch has an explicit outcome. Resolve the executable from
+`ORCA_CLI_COMMAND`, then `orca-dev` in a declared dev session, otherwise `orca-ide` on Linux outside Orca,
+or `orca` elsewhere. Load its version-matched `skills get orca-cli` and `skills get orchestration` guides.
+Do not copy a different host's launcher, readiness workaround, model flag, or version assumption.
 
-```bash
-orca-ide status --json
-orca-ide orchestration run-create --objective "<outcome for the user>" --json
+The sequence is `run-create`, then `worker-start --spec ... --agent codex|claude|antigravity` with explicit
+placement and ownership. Omit model/effort flags unless authorized. Require the startup receipt to be ready;
+accepted input alone does not prove a turn started. Recover failed startups using the current guide rather
+than injecting through an unready TUI.
 
-orca-ide orchestration worker-start \
-  --spec "<self-contained Codex task>" \
-  --worktree new-child --name "<short-name>" --agent codex --setup run --json
+Keep rolling `orchestration check --wait --timeout-ms 30000` calls outstanding while the Run has unsettled
+work; process the whole returned Delivery, answer questions and settle/release workers before acknowledging.
+Re-arm even after an empty timeout. A final status message ends a model turn and is not a supervision loop.
 
-orca-ide orchestration worker-start \
-  --spec "<self-contained Claude task>" \
-  --worktree new-child --name "<short-name>" --agent claude --setup run --json
+## Unattended continuity and full handoff
 
-# Antigravity 1.2.3 currently needs the low-level dispatch below; see the note after this block.
+Before promising an unattended campaign, follow [the continuity runbook](ORCA-CAMPAIGN-RELIABILITY.md).
+Launch and verify the independent OS supervisor before the outgoing coordinator stops. Its fixed deadline,
+Run identity and journal survive model-turn completion. Keep current handoff context on disk, including the
+original mandate, ownership, unsettled tasks, decisions, validation and capacity observations.
 
-orca-ide orchestration check --wait \
-  --types "worker_done,escalation,question" --timeout-ms 900000 --json
-```
+A full handoff requires the receiver to adopt the **same** Run from its own terminal, and an observable
+owner/generation change before the outgoing coordinator relinquishes work. Do not forge `--from` identities.
+The sender receipt proves acceptance only; a durable mailbox enqueue provides best-effort attention, not
+continuous execution. Prepare Claude/Antigravity successors before context or quota exhaustion; lack of a
+quota metric is unknown capacity. The supervisor does not switch models or answer account/permission menus.
 
-Orca 1.4.203 identifies Antigravity 1.2.3, but its supervised `worker-start` readiness probe does not yet
-recognize the Antigravity TUI reliably. Use one managed terminal plus a normal durable task/dispatch instead of
-retrying `worker-start`:
-
-```bash
-orca-ide orchestration task-create \
-  --task-title "<short Antigravity task>" --spec "<self-contained read-only review>" --json
-orca-ide terminal create --worktree active --title "<short-name>" --command "agy" --json
-orca-ide orchestration dispatch --task <task-id> --to <terminal-handle> --inject --dry-run --json
-orca-ide orchestration dispatch --task <task-id> --to <terminal-handle> --inject --json
-```
-
-Confirm with `terminal read` that the account and prompt are visible before the real injection. This dispatch is
-tracked but unsupervised, so the coordinator must inspect terminal liveness directly and close it after settlement.
-On this host, replace the generated preamble's bare `orca` commands with `orca-ide`; bare `orca` is the Linux
-screen reader, not the Orca CLI.
-
-Omit model and effort flags unless the user explicitly requested them. Orca should inherit each provider's
-configured defaults.
+The supervisor reactivates an observed idle coordinator; its fallback is limited to a positively exited owner
+and explicit, ready standby handles. Unknown liveness blocks mutations. At the deadline report actual executed
+work and gaps rather than crediting the whole elapsed window. Never restart an expired campaign silently.
 
 ## Task specification templates
 

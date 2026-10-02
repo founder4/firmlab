@@ -742,3 +742,17 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   + AFL++. Techo de prueba honesto: `confirmed_in_emulation` de daemons de red (hoy `br-lan` nunca sube), NUNCA
   `confirmed_full_system` ni «idéntico al físico» — el entorno sintético es permisivo por diseño (`types.ts`). La
   Capa IV (Avatar2/JTAG) queda FUERA DE ALCANCE: rompe la premisa sin-hardware.
+
+## Orca — continuidad desatendida (2026-10-02)
+
+- [x] Recuperar al coordinador que termina su turno sin espera: supervisor externo con plazo fijo,
+  verificación de identidad/estado, journal, exclusión por Run y reactivación comprobada con Claude y
+  Antigravity reales. Diagnóstico y receta en `docs/ORCA-CAMPAIGN-RELIABILITY.md`.
+- [ ] Ensayo de resistencia de ocho horas, con candidatos disponibles y presupuesto observados. La
+  transferencia por salida real del coordinador ya se comprobó (adopción del mismo Run, generación 1→2);
+  las pruebas breves actuales no demuestran esa duración ni el agotamiento de todos los servicios. Orca conserva wake/nudge best-effort y Antigravity no expone
+  `turn_started`; requerir evidencia nativa o reconocer incertidumbre.
+- [ ] Estabilizar `apps/api/src/research/config-cancellation.test.ts`: el test de petición bloqueada cancela
+  tras 20 ms y exige que el servidor haya recibido una petición; bajo carga puede cancelar antes del socket
+  (observado 2026-10-02 en `pnpm test`, requests=0). Sincronizar con la llegada real antes de cancelar, con
+  espera acotada y manteniendo la comprobación de aborto rápido. No atribuir esta carrera al supervisor.
