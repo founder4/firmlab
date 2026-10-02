@@ -27,6 +27,7 @@ nohup orca-campaign-watch \
   --journal /absolute/path/unique-campaign.json \
   --execute --context /absolute/path/current-context.md \
   --policy /absolute/path/capacity-policy.json \
+  --standbys /absolute/path/standbys.json --handoff-on-capacity-block \
   > /absolute/path/unique-campaign.log 2>&1 < /dev/null &
 printf '%s\n' "$!" > /absolute/path/unique-campaign.pid
 ```
@@ -34,6 +35,10 @@ printf '%s\n' "$!" > /absolute/path/unique-campaign.pid
   Replace these values with the real Run, deadline and files; inspect `--help` for limits/options.
   On macOS, optional `--keep-awake` holds a process-bound sleep assertion, without changing power settings.
   Use `--orca <resolved-cli>` when needed; never silently fall back to a different Orca build.
+- Before enabling quota failover, reserve fresh cross-provider terminal handles in `standbys.json` (a JSON array).
+  Prove actual read/tool/write execution and a subsequent rendered empty composer plus native idle evidence.
+  A terminal merely existing, or unknown capacity, does not establish a viable standby. An empty reserve list
+  blocks execution as `standbys_empty`; repair it and verify a fresh observation.
 - Verify the PID is alive and the journal has a successful first observation of the expected owner.
 - Before relying on the guard for a provider (Claude, Codex, Antigravity, or a new CLI version), prove one
   actual idle recovery round trip on that provider: the owner finishes a turn, the journal shows `idle` (not
@@ -108,12 +113,22 @@ session limit screen is captured on a rendered frame (quota text in a stream fal
 `screen_not_rendered` uncertainty) (e.g. usage limit reached, limit resets, continuing automatically), the
 supervisor positively records an explicit `blocked` phase with `capacity_blocked` reason and durable bounded
 gap timestamps in `gaps`, rather than reporting `unknown` with empty gaps. It never submits prompts into
-quota screens, composers, or menus, never equates quota to process death or exit, and never performs an automatic
-takeover of a live owner. Optional `--standbys` is a JSON array of explicitly reserved fresh terminal handles:
-automatic fallback requires a positively exited owner, a ready Claude/Antigravity receiver, and no other
-Run/active-worker ownership. Historical coordinator handles are conservatively excluded. It neither launches
-agents nor answers quota/permission selectors; unknown liveness does not justify takeover. Coordinate preemptive
-handoff yourself while viable.
+quota screens, composers, or menus, and never equates quota to process death or exit. Without
+`--handoff-on-capacity-block`, a live quota-blocked owner stays blocked. With that explicit opt-in (requires
+`--policy` and `--standbys`), the guard first persists the rendered provider block and verifies a ready,
+unblocked receiver on a DIFFERENT provider. It rechecks owner/generation/incarnation, quota and absence of
+operator draft, persists retirement intent, and closes exactly the blocked owner's terminal. Only a positive
+close receipt naming that handle with `ptyKilled: true` permits a handoff prompt; this cancels automatic
+provider retries and removes that terminal's resume record. Context/journal remain durable. No eligible receiver
+means no close. An ambiguous close receipt or an interruption after retirement stays blocked for explicit
+recovery (`quotaRetirement` witness); never replay a close or handoff blindly. The deadline is unchanged.
+`--standbys` is a JSON array of explicitly reserved fresh terminal handles. Ordinary fallback still requires a
+positively exited owner. Both paths require a ready Claude/Codex/Antigravity receiver and no other Run or
+active-worker ownership. Historical coordinator handles are conservatively excluded. Adoption of the SAME Run
+with an increased generation confirms the handoff; the successor records the reason/evidence and updates
+`currentProvider` while retaining all capacity blocks, then uses the guarded launcher for its own workers.
+The guard neither launches agents nor answers quota/permission selectors; unknown liveness does not justify
+takeover. Coordinate preemptive handoff yourself while viable.
 
 Each Run has a fixed OS-account lock at `~/.local/state/orca-campaign/locks/<Run>.lock`, independent
 of terminal TMPDIR/HOME. Every writer also holds the journal lock; known legacy temporary lock paths

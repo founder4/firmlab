@@ -72,6 +72,7 @@ export function parseArgs(args, now = Date.now()) {
     if (arg === '--execute') options.execute = true;
     else if (arg === '--once') options.once = true;
     else if (arg === '--keep-awake') options.keepAwake = true;
+    else if (arg === '--handoff-on-capacity-block') options.capacityHandoff = true;
     else if (arg === '--help') options.help = true;
     else if (values.has(arg)) {
       const value = args[++i];
@@ -102,6 +103,8 @@ export function parseArgs(args, now = Date.now()) {
   if (options.context) options.context = resolve(options.context);
   if (options.standbys) options.standbys = resolve(options.standbys);
   if (options.policy) options.policy = resolve(options.policy);
+  if (options.capacityHandoff && (!options.policy || !options.standbys))
+    throw new Error('--handoff-on-capacity-block requires --policy and --standbys');
   options.orca ??=
     process.env.ORCA_CLI_COMMAND ??
     (process.env.ORCA_DEV_REPO_ROOT ? 'orca-dev' : process.platform === 'linux' ? 'orca-ide' : 'orca');
@@ -129,7 +132,28 @@ export function decide(snapshot, state, options, now) {
   if (now >= options.until) return { kind: 'deadline', reason: 'window_elapsed_not_proof_of_work' };
   if (state.checkedAt && now < state.checkedAt) return { kind: 'unknown', reason: 'clock_moved_backwards' };
   const phase = ownerState(snapshot, now);
-  if (phase === 'blocked') return { kind: 'blocked', reason: snapshot.error ?? 'capacity_blocked' };
+  if (state.quotaRetirement && !state.pending) return { kind: 'blocked', reason: 'quota_retirement_requires_recovery' };
+  if (
+    phase === 'blocked' &&
+    state.pending?.kind === 'handoff' &&
+    snapshot.owner === state.pending.target &&
+    snapshot.generation > state.pending.generation
+  )
+    return { kind: 'confirmed', reason: 'ownership_ack_capacity_blocked' };
+  if (phase === 'blocked') {
+    if (
+      (!state.pending || (state.pending.kind === 'resume' && state.pending.target === snapshot.owner)) &&
+      options.capacityHandoff &&
+      snapshot.capacityBlocked &&
+      snapshot.screenSource === 'screen' &&
+      snapshot.connected === true &&
+      typeof snapshot.incarnation === 'string' &&
+      snapshot.incarnation.length > 0 &&
+      !snapshot.draftPresent
+    )
+      return { kind: 'handoff', reason: 'capacity_exhausted' };
+    return { kind: 'blocked', reason: snapshot.error ?? 'capacity_blocked' };
+  }
   if (state.pending) {
     const pending = state.pending;
     if (snapshot.generation > pending.generation && snapshot.owner !== pending.target) {
@@ -281,6 +305,7 @@ export async function snapshotRun(call, options, clock = Date.now) {
     activeTurn,
     stateStartedAt: native?.stateStartedAt,
     capacityBlocked,
+    draftPresent: draft,
     menuBlocked,
     screenSource: screen.terminal?.source,
     inputEmpty: !inspect ? undefined : capacityBlocked ? false : emptyPrompt,
@@ -375,10 +400,12 @@ export function visibleInputPrompt(tail) {
     );
 }
 
-export function resumePrompt(options, snapshot, context, kind) {
+export function resumePrompt(options, snapshot, context, kind, reason) {
   return `${
     kind === 'handoff'
-      ? 'Execute this authorized full coordinator handoff now. Previous owner positively exited.'
+      ? reason === 'capacity_exhausted'
+        ? 'Execute this authorized full coordinator handoff now. Reason: capacity_exhausted. The guard persisted the rendered quota block and positively retired the previous owner PTY before sending this prompt.'
+        : 'Execute this authorized full coordinator handoff now. Previous owner positively exited.'
       : 'CAMPAIGN CONTINUATION: execute the existing authorized campaign now; your previous turn ended before the deadline.'
   }
 These are current execution instructions, not a quoted plan. The campaign operator explicitly authorized
@@ -387,7 +414,7 @@ Run ${options.run}; current owner ${snapshot.owner}; generation ${snapshot.gener
 Deadline ${new Date(options.until).toISOString()}, unchanged by this prompt or further handoffs.
 ${
   kind === 'handoff'
-    ? 'Bind your own terminal to this SAME Run using documented run-use; verify ownership before editing.'
+    ? 'Bind your own terminal to this SAME Run using documented run-use; verify ownership before editing. Record the observed handoff reason/evidence and update currentProvider in the capacity policy without dropping existing blocks.'
     : 'Verify you still own this Run before editing. Do not create another coordinator or Run.'
 }
 Read actual pending Deliveries, process every settlement and question before ack, integrate one settled branch at a time.
@@ -490,7 +517,7 @@ export async function superviseStep(state, options, dependencies) {
   const gaps = [...(state.gaps ?? [])];
   if (gap) gaps.push(gap);
 
-  if (decision.kind === 'blocked' && decision.reason === 'capacity_blocked') {
+  if (snapshot.capacityBlocked || (decision.kind === 'blocked' && decision.reason === 'capacity_blocked')) {
     const lastGap = gaps.at(-1);
     if (lastGap && lastGap.reason === 'capacity_blocked' && state.phase === 'blocked') {
       lastGap.to = now;
@@ -553,6 +580,7 @@ export async function superviseStep(state, options, dependencies) {
   if (['confirmed', 'superseded', 'failed-exited'].includes(decision.kind)) {
     next.lastSubmission = { ...state.pending, settlement: decision.kind, observedAt: now };
     next.pending = null;
+    if (decision.kind === 'confirmed' || decision.kind === 'superseded') next.quotaRetirement = null;
     next.disarmed = false;
   }
   if (['working', 'unknown', 'blocked', 'confirmed', 'superseded', 'failed-exited'].includes(decision.kind))
@@ -564,6 +592,18 @@ export async function superviseStep(state, options, dependencies) {
         ? (state.idleSince ?? now)
         : now;
   if (options.execute && ['resume', 'handoff'].includes(decision.kind)) {
+    const quotaHandoff = decision.reason === 'capacity_exhausted';
+    if (
+      quotaHandoff &&
+      (!dependencies.policy ||
+        !capacityRecord ||
+        (!capacityRecord.recorded && capacityRecord.reason !== 'already_blocked'))
+    ) {
+      next.phase = 'blocked';
+      next.reason = 'quota_block_not_persisted';
+      await persist(next);
+      return next;
+    }
     let target = snapshot.owner;
     let targetIncarnation = snapshot.incarnation;
     if (decision.kind === 'handoff') {
@@ -571,7 +611,13 @@ export async function superviseStep(state, options, dependencies) {
       for (const handle of dependencies.standbys ?? []) {
         if (handle === snapshot.owner || snapshot.activeHandles?.includes(handle)) continue;
         const show = await call(['terminal', 'show', '--terminal', handle]);
-        if (!show.terminal?.connected || !['claude', 'antigravity'].includes(show.terminal.agentIdentity)) continue;
+        if (!show.terminal?.connected || !['claude', 'antigravity', 'codex'].includes(show.terminal.agentIdentity))
+          continue;
+        if (
+          quotaHandoff &&
+          (!providerOf(snapshot.agent) || providerOf(show.terminal.agentIdentity) === providerOf(snapshot.agent))
+        )
+          continue;
         // A successor on a provider the campaign policy refuses would inherit the exhaustion it is replacing.
         if (dependencies.policy && !evaluateLaunch(dependencies.policy, { agent: show.terminal.agentIdentity }).allowed)
           continue;
@@ -624,16 +670,64 @@ export async function superviseStep(state, options, dependencies) {
         recheck.owner !== snapshot.owner ||
         recheck.generation !== snapshot.generation ||
         recheck.incarnation !== snapshot.incarnation ||
+        (quotaHandoff && recheck.agent !== snapshot.agent) ||
         (receiver &&
           (ownerState(receiver, clock()) !== 'idle' ||
             !receiver.inputEmpty ||
             receiver.incarnation !== targetIncarnation)) ||
-        ownerState(recheck, clock()) !== (decision.kind === 'resume' ? 'idle' : 'exited') ||
+        (quotaHandoff
+          ? !(recheck.capacityBlocked && recheck.screenSource === 'screen' && !recheck.draftPresent)
+          : ownerState(recheck, clock()) !== (decision.kind === 'resume' ? 'idle' : 'exited')) ||
         clock() >= options.until
       ) {
         next.phase = 'deferred';
         next.reason = 'owner_or_state_changed';
       } else {
+        if (quotaHandoff) {
+          if (next.pending) {
+            next.lastSubmission = { ...next.pending, settlement: 'failed-capacity', observedAt: clock() };
+            next.pending = null;
+          }
+          // A quota owner is alive, not exited. Explicit authorization retires that exact process ONLY after a
+          // cross-provider successor is ready. Persist before closing: an ambiguous receipt must not cause a
+          // second close or an unsafe ownership transfer. Closing cancels provider automatic retries as well.
+          next.quotaRetirement = {
+            owner: snapshot.owner,
+            generation: snapshot.generation,
+            incarnation: snapshot.incarnation,
+            status: 'intent',
+            at: clock(),
+            successor: target,
+          };
+          next.phase = 'pending';
+          next.reason = 'quota_retirement_await_receipt';
+          await persist(next);
+          const retired = await call(['terminal', 'close', '--terminal', snapshot.owner]);
+          if (retired.close?.handle !== snapshot.owner || retired.close?.ptyKilled !== true) {
+            next.phase = 'blocked';
+            next.reason = 'quota_retirement_unproven';
+            await persist(next);
+            return next;
+          }
+          next.quotaRetirement.status = 'closed';
+          next.quotaRetirement.closedAt = clock();
+          await persist(next);
+          const ownership = await call(['orchestration', 'run-show', '--id', options.run]);
+          const ready = await standbySnapshot(call, options, target);
+          if (
+            ownership.run?.coordinator_handle !== snapshot.owner ||
+            ownership.run?.consumer_generation !== snapshot.generation ||
+            ownerState(ready, clock()) !== 'idle' ||
+            !ready.inputEmpty ||
+            ready.incarnation !== targetIncarnation ||
+            clock() >= options.until
+          ) {
+            next.phase = 'blocked';
+            next.reason = 'quota_retired_handoff_requires_recovery';
+            await persist(next);
+            return next;
+          }
+        }
         // Persist intent BEFORE mutation. On a lost receipt, never create a second prompt.
         next.pending = {
           kind: decision.kind,
@@ -646,7 +740,7 @@ export async function superviseStep(state, options, dependencies) {
         next.resumeCount = (state.resumeCount ?? 0) + 1;
         next.consecutiveResumes++;
         await persist(next);
-        const prompt = resumePrompt(options, snapshot, context, decision.kind);
+        const prompt = resumePrompt(options, snapshot, context, decision.kind, decision.reason);
         const receipt = await call([
           'terminal',
           'send',
@@ -792,6 +886,7 @@ export async function runWatch(options) {
           standbys = JSON.parse(await readFile(options.standbys, 'utf8'));
           if (!Array.isArray(standbys) || !standbys.every((s) => /^term_[\w-]+$/.test(s)))
             throw new Error('Invalid standbys');
+          if (options.capacityHandoff && standbys.length === 0) invalid = 'standbys_empty';
         } catch {
           invalid = 'standbys_invalid';
           standbys = [];
@@ -862,7 +957,7 @@ export async function runCli(args = process.argv.slice(2)) {
     const options = parseArgs(args);
     if (options.help)
       console.log(
-        'orca-campaign-watch --run RUN --until ISO --journal PATH [--once] [--execute --context PATH] [--policy JSONFILE] [--standbys JSONFILE] [--keep-awake] [--max-resumes N] [--interval-ms N] [--idle-ms N] [--orca PATH]',
+        'orca-campaign-watch --run RUN --until ISO --journal PATH [--once] [--execute --context PATH] [--policy JSONFILE] [--standbys JSONFILE] [--handoff-on-capacity-block] [--keep-awake] [--max-resumes N] [--interval-ms N] [--idle-ms N] [--orca PATH]',
       );
     else await runWatch(options);
   } catch (error) {

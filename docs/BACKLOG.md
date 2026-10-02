@@ -843,3 +843,10 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   sucesor y un dominio de capacidad distinto al agotar cuota; reconocer y registrar bloqueos de capacidad
   sin equipararlos a salida del proceso ni enviar entrada a un selector. La resistencia de cuatro horas
   sigue sin estar demostrada. Registro en `docs/FOUR-HOUR-CAMPAIGN.md`.
+
+
+- [ ] Recuperación automática tras recibo ambiguo de retiro por cuota o de un receptor que llega al límite
+  antes de adoptar el Run: el guardián conserva `quotaRetirement`/`pending` y bloquea sin duplicar cierres ni
+  prompts. Hace falta un protocolo de reconciliación con prueba nativa antes de automatizar esos casos.
+  El retiro por cuota con recibo positivo y sucesor preparado sí está implementado; no equivale a agotamiento
+  comprobado de todos los servicios ni al ensayo de resistencia de cuatro/ocho horas.

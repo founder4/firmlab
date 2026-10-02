@@ -1404,3 +1404,248 @@ test('the guard and the launcher agree on the latest entry even when entries wer
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+// Hard quota leaves a live coordinator. These fixtures reproduce the missed 2026-10-02 transition;
+// capacity is synthetic, but mutation ordering/identity/receipt/adoption contracts are exercised.
+function quotaHandoffHarness({ ready = true, closeProof = true, draft = false, sameProvider = false } = {}) {
+  const h = harness();
+  h.deps.policy = { version: 1, currentProvider: 'anthropic', domains: [], handoffs: [] };
+  h.deps.standbys = ['term_ready'];
+  h.deps.recordCapacityBlock = async () => ({ recorded: true, domain: 'provider:anthropic' });
+  let owner = 'term_owner';
+  let generation = 2;
+  let closed = false;
+  h.adopt = () => {
+    owner = 'term_ready';
+    generation = 3;
+  };
+  h.deps.call = async (a) => {
+    h.commands.push(a);
+    const target = a[a.indexOf('--terminal') + 1];
+    if (a[1] === 'run-show') return { run: { coordinator_handle: owner, consumer_generation: generation } };
+    if (a[1] === 'worker-list') return { workers: [], page: { hasMore: false } };
+    if (a[1] === 'run-list') return { runs: [], page: { hasMore: false } };
+    if (a[1] === 'ps') return { worktrees: [] };
+    if (a[1] === 'show')
+      return {
+        terminal: {
+          connected: target === 'term_ready' || !closed,
+          agentIdentity: target === 'term_owner' || sameProvider ? 'claude' : 'antigravity',
+          incarnationId: target === 'term_owner' ? 'inc_owner' : 'inc_ready',
+        },
+      };
+    if (a[1] === 'read')
+      return {
+        terminal: {
+          source: 'screen',
+          tail: target === 'term_owner' ? ["You've hit your usage limit", '>'] : ['>'],
+          ...(draft && target === 'term_owner' ? { draft: 'operator input' } : {}),
+        },
+      };
+    if (a[1] === 'wait') return { wait: { satisfied: ready } };
+    if (a[1] === 'close') {
+      assert.equal(target, 'term_owner');
+      assert.equal(h.saved.at(-1).quotaRetirement.status, 'intent');
+      closed = true;
+      return closeProof ? { close: { handle: target, ptyKilled: true } } : { error: 'transport_lost' };
+    }
+    if (a[1] === 'send') {
+      assert.equal(closed, true);
+      assert.equal(target, 'term_ready');
+      assert.equal(h.saved.at(-1).pending.kind, 'handoff');
+      return { send: { accepted: true, prompt: { requestId: 'req_quota', stages: ['input_accepted'] } } };
+    }
+    throw new Error(`Unexpected call ${a.join(' ')}`);
+  };
+  return h;
+}
+const quotaOptions = { ...options, policy: '/fixture/policy', capacityHandoff: true };
+
+test('quota failover is opt-in and requires configured registry plus dedicated reserves', () => {
+  const args = [
+    '--run',
+    'run_test',
+    '--until',
+    new Date(NOW + 600_000).toISOString(),
+    '--journal',
+    '/tmp/fixture',
+    '--handoff-on-capacity-block',
+  ];
+  assert.throws(() => parseArgs(args, NOW), /requires --policy and --standbys/);
+  assert.equal(
+    parseArgs([...args, '--policy', '/tmp/policy', '--standbys', '/tmp/standbys'], NOW).capacityHandoff,
+    true,
+  );
+});
+
+test('rendered hard quota retires only the exact owner, then hands off to another provider', async () => {
+  const h = quotaHandoffHarness();
+  const s = await superviseStep({}, quotaOptions, h.deps);
+  assert.equal(s.pending.kind, 'handoff');
+  assert.equal(s.pending.target, 'term_ready');
+  assert.equal(s.quotaRetirement.status, 'closed');
+  assert.equal(h.commands.filter((a) => a[1] === 'close').length, 1);
+  assert.equal(sends(h), 1);
+  assert.ok(h.commands.findIndex((a) => a[1] === 'close') < h.commands.findIndex((a) => a[1] === 'send'));
+  // Real execution alone never changes authority; the receiver must adopt the SAME Run.
+  h.adopt();
+  const confirmed = await superviseStep(s, quotaOptions, h.deps);
+  assert.equal(confirmed.phase, 'confirmed');
+  assert.equal(confirmed.pending, null);
+  assert.equal(confirmed.quotaRetirement, null);
+  assert.equal(sends(h), 1);
+});
+
+test('quota without opt-in never closes an owner or sends a handoff', async () => {
+  const h = quotaHandoffHarness();
+  const s = await superviseStep({}, options, h.deps);
+  assert.equal(s.phase, 'blocked');
+  assert.equal(ran(h, 'close'), false);
+  assert.equal(sends(h), 0);
+});
+
+test('no ready cross-provider reserve leaves the quota owner intact', async () => {
+  for (const settings of [{ ready: false }, { sameProvider: true }]) {
+    const h = quotaHandoffHarness(settings);
+    const s = await superviseStep({}, quotaOptions, h.deps);
+    assert.equal(s.reason, 'no_proven_ready_standby');
+    assert.equal(ran(h, 'close'), false);
+    assert.equal(sends(h), 0);
+  }
+});
+
+test('quota handoff requires a durable block and refuses operator drafts', async () => {
+  const missing = quotaHandoffHarness();
+  missing.deps.recordCapacityBlock = undefined;
+  assert.equal((await superviseStep({}, quotaOptions, missing.deps)).reason, 'quota_block_not_persisted');
+  assert.equal(ran(missing, 'close'), false);
+  const draft = quotaHandoffHarness({ draft: true });
+  assert.equal((await superviseStep({}, quotaOptions, draft.deps)).phase, 'blocked');
+  assert.equal(ran(draft, 'close'), false);
+});
+
+test('ambiguous quota retirement stays sticky across restart: no repeated close or send', async () => {
+  const h = quotaHandoffHarness({ closeProof: false });
+  const s = await superviseStep({}, quotaOptions, h.deps);
+  assert.equal(s.reason, 'quota_retirement_unproven');
+  await superviseStep(structuredClone(s), quotaOptions, h.deps);
+  assert.equal(h.commands.filter((a) => a[1] === 'close').length, 1);
+  assert.equal(sends(h), 0);
+});
+
+test('a pending resume that reaches hard quota can settle as failed capacity and transfer', async () => {
+  const h = quotaHandoffHarness();
+  const s = await superviseStep(
+    { pending: { kind: 'resume', target: 'term_owner', generation: 2, requestId: 'req_old' } },
+    quotaOptions,
+    h.deps,
+  );
+  assert.equal(s.pending.kind, 'handoff');
+  assert.equal(s.lastSubmission.requestId, 'req_quota');
+  assert.equal(sends(h), 1);
+});
+
+test('deadline during quota retirement never injects after the fixed deadline', async () => {
+  const h = quotaHandoffHarness();
+  const base = h.deps.call;
+  h.deps.call = async (a) => {
+    const r = await base(a);
+    if (a[1] === 'close') h.tick(600_000);
+    return r;
+  };
+  const s = await superviseStep({}, quotaOptions, h.deps);
+  assert.equal(s.reason, 'quota_retired_handoff_requires_recovery');
+  assert.equal(sends(h), 0);
+});
+
+test('quota retirement rechecks owner generation before closing', async () => {
+  const h = quotaHandoffHarness();
+  const base = h.deps.call;
+  let observations = 0;
+  h.deps.call = async (a) => {
+    const r = await base(a);
+    if (a[1] === 'run-show' && ++observations > 1) r.run.consumer_generation++;
+    return r;
+  };
+  assert.equal((await superviseStep({}, quotaOptions, h.deps)).reason, 'owner_or_state_changed');
+  assert.equal(ran(h, 'close'), false);
+  assert.equal(sends(h), 0);
+});
+
+test('stream history of quota cannot retire the live coordinator', async () => {
+  const h = quotaHandoffHarness();
+  const base = h.deps.call;
+  h.deps.call = async (a) => {
+    const r = await base(a);
+    if (a[1] === 'read') r.terminal.source = 'screen-unavailable';
+    return r;
+  };
+  assert.equal((await superviseStep({}, quotaOptions, h.deps)).phase, 'unknown');
+  assert.equal(ran(h, 'close'), false);
+  assert.equal(sends(h), 0);
+});
+
+test('blocked reserve and absent reserves never retire the quota owner', async () => {
+  for (const absent of [true, false]) {
+    const h = quotaHandoffHarness();
+    if (absent) h.deps.standbys = [];
+    else
+      h.deps.policy.domains = [
+        {
+          domain: 'provider:google',
+          scope: 'provider',
+          provider: 'google',
+          model: null,
+          status: 'blocked',
+          reason: 'quota',
+          evidence: 'synthetic',
+          observedAt: new Date(NOW).toISOString(),
+          resetAt: null,
+        },
+      ];
+    assert.equal((await superviseStep({}, quotaOptions, h.deps)).reason, 'no_proven_ready_standby');
+    assert.equal(ran(h, 'close'), false);
+  }
+});
+
+test('lost handoff receipt cannot repeat retirement or prompt after restart', async () => {
+  const h = quotaHandoffHarness();
+  const base = h.deps.call;
+  h.deps.call = async (a) => {
+    const r = await base(a);
+    return a[1] === 'send' ? { error: 'transport_lost' } : r;
+  };
+  const s = await superviseStep({}, quotaOptions, h.deps);
+  assert.equal(s.pending.requestId, null);
+  await superviseStep(structuredClone(s), quotaOptions, h.deps);
+  assert.equal(h.commands.filter((a) => a[1] === 'close').length, 1);
+  assert.equal(sends(h), 1);
+});
+
+test('a quota frame without a live process incarnation never authorizes retirement', async () => {
+  const h = quotaHandoffHarness();
+  const base = h.deps.call;
+  h.deps.call = async (a) => {
+    const r = await base(a);
+    if (a[1] === 'show') r.terminal.incarnationId = null;
+    return r;
+  };
+  assert.equal((await superviseStep({}, quotaOptions, h.deps)).phase, 'blocked');
+  assert.equal(ran(h, 'close'), false);
+});
+
+test('an adopted successor already on quota settles ownership so the next cycle can fail over again', () => {
+  const snapshot = {
+    ...idle,
+    owner: 'term_ready',
+    generation: 3,
+    agent: 'antigravity',
+    capacityBlocked: true,
+    screenSource: 'screen',
+    error: 'capacity_blocked',
+  };
+  const state = { pending: { kind: 'handoff', target: 'term_ready', generation: 2, sentAt: NOW - 10 } };
+  assert.equal(decide(snapshot, state, quotaOptions, NOW).kind, 'confirmed');
+  assert.equal(decide(snapshot, {}, quotaOptions, NOW).reason, 'capacity_exhausted');
+  assert.equal(decide({ ...snapshot, generation: 2 }, state, quotaOptions, NOW).kind, 'blocked');
+});

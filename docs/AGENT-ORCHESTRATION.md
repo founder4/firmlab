@@ -50,8 +50,11 @@ The sender receipt proves acceptance only; a durable mailbox enqueue provides be
 continuous execution. Prepare Claude/Antigravity successors before context or quota exhaustion; lack of a
 quota metric is unknown capacity. The supervisor does not switch models or answer account/permission menus.
 
-The supervisor reactivates an observed idle coordinator; its fallback is limited to a positively exited owner
-and explicit, ready standby handles. Unknown liveness blocks mutations. At the deadline report actual executed
+The supervisor reactivates an observed idle coordinator. Ordinary fallback requires a positively exited owner
+and explicit, ready standby handles. With `--handoff-on-capacity-block --policy <registry> --standbys <reserves>`,
+a rendered hard quota can instead retire the exact blocked PTY after persisting its provider block and proving a
+ready different-provider receiver. Positive closure precedes the prompt; same-Run adoption precedes confirmation.
+No receiver or ambiguous closure blocks the transition. Unknown liveness blocks mutations. At the deadline report actual executed
 work and gaps rather than crediting the whole elapsed window. Never restart an expired campaign silently.
 
 ## Task specification templates

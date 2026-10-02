@@ -233,3 +233,52 @@ socket-arrival race occurred on the first full attempt and the subsequent full r
 tracked separately. Skill frontmatter validated, and source/common/Antigravity cached SKILL.md, watcher
 and installer hashes matched. The independent forward-test reviewer settled successfully; Orca retained
 its terminal under user-takeover protection, so no forced close was performed.
+
+
+## Incident: 2 October 2026 — live hard-quota owner never transferred
+
+The four-hour retry Run `run_ede578636b08` stopped making progress after Claude generation 3 reached its
+usage limit. The guard recorded a rendered capacity block from 19:13:10.750Z through its immutable deadline
+20:35:13.003Z, about 82 minutes. Detection worked, but `decide()` only offered automatic handoff after positive
+process exit. Claude remained alive on its automatic-continue quota screen. The guard command also lacked
+`--standbys`: an existing Antigravity terminal was not a registered fresh fallback. Neither condition could
+produce a receiver adoption. This is a missed quota failover, not exhaustion of every service.
+
+The root misread the user's complaint as cancellation, interrupted Claude's automatic retry and stopped two
+read-only reviews. No repository edits were lost. After the user's correction, root manually adopted the same
+Run at 20:49:31Z (generation 4) for a bounded repair; this is manual recovery after the deadline, not four hours
+of continuous execution and not evidence of automatic quota failover.
+
+The persistent repair is opt-in `--handoff-on-capacity-block`, requiring both policy and reserved standby files.
+A current rendered hard quota is persisted as a provider-wide block. A ready, unblocked DIFFERENT-provider
+receiver is required before retiring the exact old terminal. Retirement intent is durable before the close;
+positive `ptyKilled` proof, unchanged authority and a second readiness check precede the prompt. The guard
+confirms the same-Run ownership/generation acknowledgment. Without a ready reserve the old process remains;
+ambiguous close/submission receipts never trigger duplicate mutations. Registry blocks also exclude workers
+from the exhausted provider. Antigravity supplied an independent read-only design review.
+
+Focused tests use synthetic quota screens and cover identity races, same-provider reserves, blocked or absent
+reserves, drafts, stream-history quota text, ambiguous closure/submission receipts and a deadline during closure.
+They prove state-machine behavior, not an actual provider's quota event. Real transport validation and any
+remaining limits are recorded separately. The expired four-hour campaign is not restarted or extended.
+
+
+**Transport acceptance (21:04–21:08Z).** Isolated test Run `run_639ed6451ec7`, with its own five-minute
+validation deadline and separate policy/context. A fresh Codex reserve performed actual read/tool/write execution
+and subsequently passed native `tui-idle` plus the rendered empty-composer check. A shell process created the
+isolated Run from its own terminal. The test driver injected ONLY the old owner's provider identity and rendered
+quota screen; this was not a real Claude quota event. All Orca transport, ownership and mutation calls were real.
+The guard durably saved retirement intent, positively closed `term_8dba077f-260c-4cf6-ab61-a6f2b204cd9a`
+(`ptyKilled: true`), sent one prompt to `term_d95a36cf-52b1-4631-b9ae-f81fcc49d5d1` (request
+`4f8f1cf0-570c-4ac1-8910-c1d416d0279a`, `turn_started`), and confirmed the receiver's own `run-use`:
+generation 1→2 at 21:07:10Z. No receiver impersonation, project edits or extension of the expired campaign occurred.
+Evidence lives in the local OS-account state directory `quota-transport-smoke-20261002` (driver, mutation receipts,
+journal and adoption artifact). This proves the real retirement/send/adoption path under a synthetic quota trigger;
+it does not prove real quota detection on this path, an unattended four/eight-hour duration or exhaustion of all services.
+
+
+Validation for this repair: `pnpm check`, `pnpm test`, `pnpm build`, `pnpm biome` passed. Tests: core 485,
+API 3006, web 863, Node 202 (4556 total). The canonical skill was installed with `pnpm campaign:install` and
+the local Antigravity plugin re-registered. Only the newly created validation terminals were closed after
+completion; the root project coordinator and prior campaign records remain. The original guard stopped at
+its deadline and was not restarted. Startup must explicitly configure the new flag and verified reserve file.
