@@ -667,4 +667,14 @@ describe('freeRtosSnapshotSymbols', () => {
     ]);
     expect(out.notCarried[0]?.reason).toMatch(/two numbers the operator declares; the array's raw st_size is 0xa0\./);
   });
+
+  it('carries an st_size of 0 as null, because ELF defines 0 as no or unknown size', () => {
+    const syms = FREERTOS_SYMS.map((s) => (s.name === 'pxReadyTasksLists' ? { ...s, size: 0 } : s));
+    const k = resolveFreeRtosKernelSymbols(
+      parsed(readElfSymbols(buildElf({ wide: false, little: true, machine: 40, symtabs: [syms] }).bytes)),
+    );
+    const out = freeRtosSnapshotSymbols(k);
+    expect(out.symbols.readyListArray).toEqual({ base: 0x20000100, symbolSize: null });
+    expect(out.notCarried[0]?.reason).toMatch(/st_size is 0x0, which ELF defines as no or unknown size/);
+  });
 });

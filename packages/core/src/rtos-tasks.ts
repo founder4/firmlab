@@ -422,7 +422,10 @@ export interface FreeRtosReadyListArraySpec {
   maxPriorities: number;
   /** `sizeof(List_t)` as declared for the build. Cross-checked against the layout the walk reads, never used blind. */
   listSize: number;
-  /** The array symbol's `st_size` when an ELF supplied it; null or omitted means not cross-checked. */
+  /**
+   * The array symbol's `st_size` when an ELF supplied it; null or omitted means not cross-checked, and so does 0,
+   * which the ELF specification defines as "no size or unknown size", not as an empty array.
+   */
   symbolSize?: number | null;
 }
 
@@ -439,9 +442,17 @@ export type FreeRtosReadyListArrayDerivation =
     }
   | {
       status: 'refused';
-      code: 'layout_mismatch' | 'size_mismatch' | 'invalid_count' | 'address_overflow';
+      code: 'layout_mismatch' | 'size_mismatch' | 'invalid_count' | 'invalid_size' | 'address_overflow';
       reason: string;
     };
+
+/**
+ * What an unchecked priority count risks, in one sentence. Exported so the API summary states the same limit the
+ * derivation's evidence does, word for word.
+ */
+export const FREERTOS_OVER_DECLARED_COUNT =
+  'an over-declared count reads whatever List_t follows the array (e.g. a delayed list) as a ready list, ' +
+  'and its items point back to that list, so the walk cannot flag it';
 
 /**
  * Turn a declared ready-list array into per-priority list addresses — or refuse, saying why.
@@ -457,6 +468,13 @@ export type FreeRtosReadyListArrayDerivation =
  * ready walk stays pointer-correct, and only `xItemValue` — not maintained on a ready list — is read at 4 bytes.
  * Conversely a build whose sentinel is a full `ListItem_t` (FreeRTOS's `configUSE_MINI_LIST_ITEM = 0`, recalled,
  * not verified here) is refused even though it could in principle be walked: an explicit false refusal, never a guess.
+ *
+ * What a later walk can and cannot catch. The stride is forced equal to the layout, so it cannot be wrong; a base
+ * that is NOT a whole number of `List_t` records off shows up as items whose `pxContainer` does not point back. A
+ * base off by whole records, or a priority count declared too high, does not: every derived address is then the
+ * start of a real `List_t` (tasks.c declares the delayed lists right after the array), its items point back to it,
+ * and the walk corroborates them perfectly. Only `st_size` checks the count, so without it the evidence says the
+ * count was not cross-checked and what an over-declared count reads.
  */
 export function deriveFreeRtosReadyLists(
   spec: FreeRtosReadyListArraySpec,
@@ -475,8 +493,15 @@ export function deriveFreeRtosReadyLists(
   if (!Number.isSafeInteger(listSize) || listSize < 1) {
     return {
       status: 'refused',
-      code: 'invalid_count',
+      code: 'invalid_size',
       reason: `sizeof(List_t) must be a positive whole number of bytes; ${listSize} was declared`,
+    };
+  }
+  if (symbolSize !== null && (!Number.isSafeInteger(symbolSize) || symbolSize < 0)) {
+    return {
+      status: 'refused',
+      code: 'invalid_size',
+      reason: `pxReadyTasksLists st_size ${symbolSize} is not a byte count; an ELF st_size is a non-negative integer`,
     };
   }
   const stride = listRecordSize(layout);
@@ -491,7 +516,9 @@ export function deriveFreeRtosReadyLists(
     };
   }
   const arrayBytes = n * listSize;
-  if (symbolSize !== null && symbolSize !== arrayBytes) {
+  // ELF: "a symbol has no size or an unknown size" when st_size is 0 — an absent fact, not a contradicting one.
+  const checkedSize = symbolSize === 0 ? null : symbolSize;
+  if (checkedSize !== null && checkedSize !== arrayBytes) {
     return {
       status: 'refused',
       code: 'size_mismatch',
@@ -503,12 +530,14 @@ export function deriveFreeRtosReadyLists(
   const evidence = [
     `sizeof(List_t) declared as ${listSize} bytes agrees with the ${stride}-byte layout the walk reads`,
   ];
+  if (symbolSize === 0) evidence.push('pxReadyTasksLists st_size is 0, which ELF defines as no or unknown size');
   evidence.push(
-    symbolSize === null
-      ? `pxReadyTasksLists st_size not available; the priority count rests on the declaration of ${n} alone (not cross-checked)`
-      : `pxReadyTasksLists st_size ${symbolSize} agrees with ${n} priorities × ${listSize} bytes`,
+    checkedSize === null
+      ? `pxReadyTasksLists st_size not available; the priority count rests on the declaration of ${n} alone ` +
+          `(not cross-checked) — ${FREERTOS_OVER_DECLARED_COUNT}`
+      : `pxReadyTasksLists st_size ${checkedSize} agrees with ${n} priorities × ${listSize} bytes`,
   );
-  const sizeCrossCheck = symbolSize === null ? 'not_available' : 'agrees';
+  const sizeCrossCheck = checkedSize === null ? 'not_available' : 'agrees';
 
   if (base === null) {
     evidence.push('pxReadyTasksLists was not resolved, so no per-priority address can be derived');
@@ -522,10 +551,11 @@ export function deriveFreeRtosReadyLists(
   }
   const limit = layout.pointerWidth === 4 ? 2 ** 32 : Number.MAX_SAFE_INTEGER;
   if (!Number.isSafeInteger(base) || base < 0 || base + arrayBytes > limit) {
+    const at = Number.isSafeInteger(base) && base >= 0 ? `0x${base.toString(16)}` : String(base);
     return {
       status: 'refused',
       code: 'address_overflow',
-      reason: `pxReadyTasksLists at ${base} plus ${arrayBytes} bytes does not fit the ${layout.pointerWidth * 8}-bit address space`,
+      reason: `pxReadyTasksLists at ${at} plus ${arrayBytes} bytes does not fit the ${layout.pointerWidth * 8}-bit address space`,
     };
   }
   const lists = Array.from(

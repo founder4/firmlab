@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FREERTOS_ITEM_VALUE_MEANING,
+  FREERTOS_OVER_DECLARED_COUNT,
   type FreeRtosListKind,
   deriveFreeRtosReadyLists,
   listItemRecordSize,
@@ -441,20 +442,43 @@ describe('deriveFreeRtosReadyLists', () => {
     const unchecked = deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize: 20 }, LE4);
     expect(unchecked).toMatchObject({ status: 'derived', sizeCrossCheck: 'not_available' });
     expect(unchecked.status === 'derived' && unchecked.evidence.join('\n')).toMatch(/not cross-checked/);
+    expect(unchecked.status === 'derived' && unchecked.evidence.join('\n')).toContain(FREERTOS_OVER_DECLARED_COUNT);
   });
 
-  it('refuses counts outside 1..64, a zero list size, and an array that overflows the address space', () => {
+  it('treats an st_size of 0 as unknown (ELF), never as a size that disagrees', () => {
+    const d = deriveFreeRtosReadyLists({ base: B, maxPriorities: 5, listSize: 20, symbolSize: 0 }, LE4);
+    expect(d).toMatchObject({ status: 'derived', sizeCrossCheck: 'not_available' });
+    if (d.status !== 'derived') return;
+    expect(d.lists).toHaveLength(5);
+    expect(d.evidence.join('\n')).toMatch(/st_size is 0, which ELF defines as no or unknown size/);
+    expect(d.evidence.join('\n')).toMatch(/not cross-checked/);
+  });
+
+  it('refuses a negative or fractional st_size as not a byte count, not as a three-way disagreement', () => {
+    for (const symbolSize of [-60, 59.5]) {
+      const d = deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize: 20, symbolSize }, LE4);
+      expect(d).toMatchObject({ status: 'refused', code: 'invalid_size' });
+      if (d.status === 'refused') {
+        expect(d.reason).toMatch(/not a byte count/);
+        expect(d.reason).not.toMatch(/one of the three facts/);
+      }
+    }
+  });
+
+  it('refuses counts outside 1..64, a non-positive list size, and an array that overflows the address space', () => {
     for (const maxPriorities of [0, 65, 1.5]) {
       expect(deriveFreeRtosReadyLists({ base: B, maxPriorities, listSize: 20 }, LE4)).toMatchObject({
         code: 'invalid_count',
       });
     }
-    expect(deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize: 0 }, LE4)).toMatchObject({
-      code: 'invalid_count',
-    });
-    expect(deriveFreeRtosReadyLists({ base: 0xffff_fff0, maxPriorities: 2, listSize: 20 }, LE4)).toMatchObject({
-      code: 'address_overflow',
-    });
+    for (const listSize of [0, -20, 20.5]) {
+      expect(deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize }, LE4)).toMatchObject({
+        code: 'invalid_size',
+      });
+    }
+    const overflow = deriveFreeRtosReadyLists({ base: 0xffff_fff0, maxPriorities: 2, listSize: 20 }, LE4);
+    expect(overflow).toMatchObject({ code: 'address_overflow' });
+    expect(overflow.status === 'refused' && overflow.reason).toMatch(/^pxReadyTasksLists at 0xfffffff0 plus 40 bytes/);
   });
 
   it('keeps an unresolved base as one unresolved list, which a walk reports as missing_symbol', () => {

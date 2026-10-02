@@ -334,7 +334,8 @@ describe('ready lists declared as the pxReadyTasksLists array', () => {
       [2, ARRAY + 40, 'complete', 0],
     ]);
     expect(r.readyLists[1]).toMatchObject({ declaredItems: 1, containerMismatches: 0 });
-    expect(r.readyListArray).toEqual({ ...array, stride: 20, symbolSize: null, sizeCrossCheck: 'not_available' });
+    expect(r.readyListArray).toMatchObject({ ...array, stride: 20, symbolSize: null, sizeCrossCheck: 'not_available' });
+    expect(r.readyListArray?.evidence?.join('\n')).toMatch(/not cross-checked/);
     expect(r.summary).toMatch(/^1 ready task record\(s\) across 3 list\(s\)/);
     expect(r.summary).toMatch(/all 3 declared priorities/);
     expect(r.summary).not.toMatch(/ready lists at priorities not supplied/);
@@ -343,7 +344,44 @@ describe('ready lists declared as the pxReadyTasksLists array', () => {
   it('names st_size in the summary when it corroborated the declaration', () => {
     const r = run(body(arraySnapshot(), { pxCurrentTCB: CUR, readyListArray: { ...array, symbolSize: 60 } }));
     expect(r.readyListArray?.sizeCrossCheck).toBe('agrees');
-    expect(r.summary).toMatch(/cross-checked against the walked layout and st_size/);
+    expect(r.summary).toMatch(/cross-checked against the walked layout and st_size\)/);
+    expect(r.summary).not.toMatch(/not cross-checked/);
+  });
+
+  it('says the count was not cross-checked when an over-declared array reads the adjacent delayed list', () => {
+    // The real array is two priorities; xDelayedTaskList1 follows it and holds one delayed TCB that points back to it.
+    const bytes = arraySnapshot();
+    const dv = new DataView(bytes.buffer);
+    const delayed = ARRAY + 40;
+    const delayedItem = BASE + 0x1a0;
+    dv.setUint32(delayed - BASE, 1, true);
+    dv.setUint32(delayed + 12 - BASE, delayedItem, true);
+    dv.setUint32(delayedItem - BASE + 4, delayed + 8, true);
+    dv.setUint32(delayedItem - BASE + 12, 0x2000_0380, true);
+    dv.setUint32(delayedItem - BASE + 16, delayed, true);
+    const r = run(body(bytes, { pxCurrentTCB: CUR, readyListArray: array }));
+    // Perfect corroboration — which is exactly why the summary has to say what was not checked.
+    expect(r.coverage).toBe('complete');
+    expect(r.readyLists[2]).toMatchObject({ coverage: 'complete', completed: 1, containerMismatches: 0 });
+    expect(r.summary).toContain('st_size not supplied — the priority count is not cross-checked');
+    expect(r.summary).toMatch(/over-declared count reads whatever List_t follows the array/);
+  });
+
+  it('treats st_size 0 as unknown rather than refusing it, and says so', () => {
+    const r = run(body(arraySnapshot(), { pxCurrentTCB: CUR, readyListArray: { ...array, symbolSize: 0 } }));
+    expect(r.coverage).toBe('complete');
+    expect(r.readyListArray).toMatchObject({ symbolSize: 0, sizeCrossCheck: 'not_available' });
+    expect(r.readyListArray?.evidence?.join('\n')).toMatch(/ELF defines as no or unknown size/);
+    expect(r.summary).toContain('st_size is 0 (no or unknown size) — the priority count is not cross-checked');
+  });
+
+  it('refuses a negative st_size as not a byte count, and states an overflowing base in hex', () => {
+    const negative = validateRtosTaskSnapshot(body(arraySnapshot(), { readyListArray: { ...array, symbolSize: -60 } }));
+    expect(negative.ok === false && negative.errors.join()).toMatch(/st_size -60 is not a byte count/);
+    const overflow = validateRtosTaskSnapshot(
+      body(arraySnapshot(), { readyListArray: { base: 0xffff_fff0, maxPriorities: 2, listSize: 20 } }),
+    );
+    expect(overflow.ok === false && overflow.errors.join()).toMatch(/pxReadyTasksLists at 0xfffffff0 plus 40 bytes/);
   });
 
   it('records an item that does not point back to its list without changing coverage', () => {

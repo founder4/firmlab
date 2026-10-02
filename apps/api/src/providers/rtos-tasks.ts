@@ -27,10 +27,17 @@
 The ready lists can instead be declared as the whole `pxReadyTasksLists[configMAX_PRIORITIES]` array: a base, the
 priority count and `sizeof(List_t)`, all as the operator declares them. Core's `deriveFreeRtosReadyLists` refuses a
 declared size the walker cannot honour (or an `st_size` that disagrees with count × size), and that refusal is a 400
-like any other malformed contract. Derived lanes are walked with `parseFreeRtosNamedList`, so a wrong base or stride
-shows up as items whose `pxContainer` does not point back — the corroboration a hand-entered address never had.
+like any other malformed contract. Derived lanes are walked with `parseFreeRtosNamedList`, so a base that is NOT a
+whole number of `List_t` records off shows up as items whose `pxContainer` does not point back — the corroboration a
+hand-entered address never had. It is narrower than it looks: the stride is forced equal to the layout, and a base off
+by whole records, or an over-declared `configMAX_PRIORITIES`, lands every derived address on a real `List_t` (tasks.c
+declares the delayed lists right after the array) whose items point back to it, so nothing mismatches. Only `st_size`
+checks the count; when it is not available the summary says the count was not cross-checked and what an over-declared
+count reads, and the derivation's evidence is persisted beside the array. That is a statement, not a downgrade: the
+lanes keep the coverage their walks earned.
  */
 import {
+  FREERTOS_OVER_DECLARED_COUNT,
   type FreeRtosLayout,
   deriveFreeRtosReadyLists,
   listItemRecordSize,
@@ -121,6 +128,8 @@ export interface ReadyListArrayInfo {
   stride: number;
   symbolSize: number | null;
   sizeCrossCheck: 'agrees' | 'not_available';
+  /** Core's derivation evidence (what was and was not cross-checked). Optional: older stored results lack it. */
+  evidence?: string[];
 }
 
 export interface ReadyListArray extends ReadyListArrayInfo {
@@ -288,7 +297,13 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
       if (d.status === 'refused') errors.push(`symbols.readyListArray: ${d.reason}`);
       else {
         for (const l of d.lists) claim(`symbols.readyListArray ${l.name}`, l.address);
-        readyListArray = { ...spec, stride: d.stride, sizeCrossCheck: d.sizeCrossCheck, lists: d.lists };
+        readyListArray = {
+          ...spec,
+          stride: d.stride,
+          sizeCrossCheck: d.sizeCrossCheck,
+          evidence: d.evidence,
+          lists: d.lists,
+        };
       }
     }
   }
@@ -511,10 +526,16 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
           .join(', ')} tasks live on lists not read here, `
       : '';
   const crossChecked = array?.sizeCrossCheck === 'agrees' ? ' and st_size' : '';
+  const sizeless = array?.symbolSize === 0 ? 'st_size is 0 (no or unknown size)' : 'st_size not supplied';
+  const countUnchecked =
+    array?.sizeCrossCheck === 'not_available'
+      ? `; ${sizeless} — the priority count is not cross-checked, and ${FREERTOS_OVER_DECLARED_COUNT}`
+      : '';
   const readyScope =
     array && array.base !== null
       ? `ready lists at all ${array.maxPriorities} declared priorities were attempted (configMAX_PRIORITIES as ` +
-        `declared by the operator; sizeof(List_t)=${array.listSize} cross-checked against the walked layout${crossChecked})`
+        `declared by the operator; sizeof(List_t)=${array.listSize} cross-checked against the walked layout` +
+        `${crossChecked}${countUnchecked})`
       : READY_SCOPE;
   const scope = `Only the supplied lists in the supplied bytes were walked; ${notRead}${readyScope}${SNAPSHOT_SCOPE}`;
   const summary =
@@ -558,6 +579,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
             stride: array.stride,
             symbolSize: array.symbolSize,
             sizeCrossCheck: array.sizeCrossCheck,
+            ...(array.evidence ? { evidence: array.evidence } : {}),
           },
         }
       : {}),

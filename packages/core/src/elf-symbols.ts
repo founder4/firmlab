@@ -868,7 +868,9 @@ export interface FreeRtosSnapshotSymbols {
   terminatedList: number | null;
   /**
    * `pxReadyTasksLists`' address and raw `st_size` (each null unless the symbol resolved) — never `maxPriorities` or
-   * `listSize`, which the operator declares. Optional: a pre-fill persisted by an older build does not carry it.
+   * `listSize`, which the operator declares. An `st_size` of 0 is carried as null: the ELF specification defines 0 as
+   * "no size or unknown size", and pre-filling it would present an absent fact as one contradicting the declaration.
+   * Optional: a pre-fill persisted by an older build does not carry it.
    */
   readyListArray?: { base: number | null; symbolSize: number | null };
 }
@@ -892,6 +894,9 @@ export function freeRtosSnapshotSymbols(res: FreeRtosKernelSymbolsResult): FreeR
   const pxReady = res.symbols.find((x) => x.name === 'pxReadyTasksLists');
   const readyResolved = pxReady?.status === 'resolved' ? pxReady.candidates[0] : undefined;
   const readySize = readyResolved?.sizeHex;
+  // ELF: st_size 0 means "no size or unknown size" — not a size to cross-check against.
+  const unknownSize = readyResolved?.size === 0;
+  const symbolSize = unknownSize ? null : (readyResolved?.size ?? null);
   return {
     symbols: {
       pxCurrentTCB: addr('pxCurrentTCB'),
@@ -902,12 +907,18 @@ export function freeRtosSnapshotSymbols(res: FreeRtosKernelSymbolsResult): FreeR
       suspendedList: addr('xSuspendedTaskList'),
       pendingReadyList: addr('xPendingReadyList'),
       terminatedList: addr('xTasksWaitingTermination'),
-      readyListArray: { base: addr('pxReadyTasksLists'), symbolSize: readyResolved?.size ?? null },
+      readyListArray: { base: addr('pxReadyTasksLists'), symbolSize },
     },
     notCarried: [
       {
         name: 'pxReadyTasksLists',
-        reason: `${READY_LISTS_REASON}${readySize === undefined ? '.' : `; the array's raw st_size is ${readySize}.`}`,
+        reason: `${READY_LISTS_REASON}${
+          readySize === undefined
+            ? '.'
+            : unknownSize
+              ? `; the array's st_size is ${readySize}, which ELF defines as no or unknown size, so it is not pre-filled.`
+              : `; the array's raw st_size is ${readySize}.`
+        }`,
       },
       {
         name: 'pxDelayedTaskList',
