@@ -503,9 +503,10 @@ function ChipsecResultView({ result }: { result: Partial<ChipsecResult> }): JSX.
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        {/* A decode that never ran (chipsec absent, input refused) counted nothing: "no UEFI volume" there would turn a
-            missing tool into a property of the image. */}
-        {result.ran === false ? (
+        {/* A decode that did not complete counted nothing: chipsec absent, input refused, the time bound or a crash
+            before the listing all come back `blocked_by_platform` (a completed decode is `static_confirmed`), and
+            "no UEFI volume" there would turn a missing or bounded tool into a property of the image. */}
+        {result.ran === false || result.proofState === 'blocked_by_platform' ? (
           <span className="badge">{t.simulation.notDecoded}</span>
         ) : (
           <span className={`badge ${result.moduleCount ? 'badge-ok' : 'badge-medium'}`}>
@@ -569,7 +570,9 @@ function ChipsecResultView({ result }: { result: Partial<ChipsecResult> }): JSX.
           </div>
         </div>
       )}
-      {result.spiDescriptor && <SpiDescriptorBlock spi={result.spiDescriptor} />}
+      {result.spiDescriptor && (
+        <SpiDescriptorBlock spi={result.spiDescriptor} flagged={new Set((result.findings ?? []).map((f) => f.kind))} />
+      )}
       {result.findings && result.findings.length > 0 && (
         <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {result.findings.map((f) => (
@@ -616,16 +619,22 @@ const hexAddr = (n: number | null | undefined) => (typeof n === 'number' ? `0x${
  * descriptor signature, a truncated map) must read as "not established", never as "no descriptor", and a
  * `layout-dependent` grant produces no finding, so this is the only place it is visible at all.
  */
-function SpiDescriptorBlock({ spi }: { spi: SpiDescriptorView }): JSX.Element {
+function SpiDescriptorBlock({ spi, flagged }: { spi: SpiDescriptorView; flagged: Set<string> }): JSX.Element {
   const t = useMessages();
   const host = spi.hostMasterAccess;
-  const grant = (label: string, verdict: SpiGrantVerdict | undefined) =>
+  // A grant is coloured as a problem only when the provider flagged it; a grant it declined to flag (an ME region the
+  // map leaves disabled, a layout-dependent declaration) is shown neutrally, with the provider's reason beneath.
+  const grant = (label: string, verdict: SpiGrantVerdict | undefined, findingKind: string) =>
     verdict && (
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
         <span className="hint" style={{ fontSize: 11 }}>
           {label}
         </span>
-        <span className={`badge ${GRANT_CLASS[verdict] ?? ''}`}>{t.simulation.spiGrant[verdict] ?? verdict}</span>
+        <span
+          className={`badge ${verdict === 'granted' && !flagged.has(findingKind) ? '' : (GRANT_CLASS[verdict] ?? '')}`}
+        >
+          {t.simulation.spiGrant[verdict] ?? verdict}
+        </span>
       </div>
     );
   return (
@@ -652,14 +661,14 @@ function SpiDescriptorBlock({ spi }: { spi: SpiDescriptorView }): JSX.Element {
             .join('  ·  ')}
         </div>
       )}
-      {grant(t.simulation.spiHostDescriptorWrite, host?.descriptorWrite)}
+      {grant(t.simulation.spiHostDescriptorWrite, host?.descriptorWrite, 'spi-descriptor-host-write')}
       {host?.reason && (
         <div className="hint" style={{ marginTop: 2 }}>
           {host.reason}
         </div>
       )}
-      {grant(t.simulation.spiHostMeWrite, host?.meWrite)}
-      {host?.meWriteReason && (
+      {grant(t.simulation.spiHostMeWrite, host?.meWrite, 'spi-descriptor-host-me-write')}
+      {host?.meWriteReason && host.meWriteReason !== host.reason && (
         <div className="hint" style={{ marginTop: 2 }}>
           {host.meWriteReason}
         </div>

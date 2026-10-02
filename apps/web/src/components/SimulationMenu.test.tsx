@@ -217,6 +217,53 @@ describe('SimulationMenu', () => {
     expect(screen.queryByText(en.simulation.noUefiVolume)).toBeNull();
   });
 
+  it('says a decode stopped by its time bound is not decoded, while a completed empty decode keeps its badge', async () => {
+    mockApi.emulation.mockResolvedValue(uefiMenu());
+    mockApi.job.mockResolvedValue(
+      chipsecResult({ ran: true, moduleCount: 0, proofState: 'blocked_by_platform', reason: 'hit the time bound' }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
+    expect(await screen.findByText(en.simulation.notDecoded)).toBeInTheDocument();
+    expect(screen.queryByText(en.simulation.noUefiVolume)).toBeNull();
+  });
+
+  it('colours an ME grant only when the provider flagged it, and prints a shared reason once', async () => {
+    mockApi.emulation.mockResolvedValue(uefiMenu());
+    const reason = 'FLMSTR1 0xffff0000 grants the host master descriptor write under every chipsec layout.';
+    mockApi.job.mockResolvedValue(
+      chipsecResult({
+        findings: [
+          {
+            kind: 'spi-descriptor-host-write',
+            title: 't',
+            severity: 'medium',
+            rationale: 'r',
+            proofState: 'static_confirmed',
+          },
+        ],
+        spiDescriptor: {
+          status: 'parsed',
+          regions: [],
+          hostMasterAccess: {
+            status: 'read',
+            reason,
+            descriptorWrite: 'granted',
+            meWrite: 'granted',
+            meWriteReason: reason,
+          },
+        },
+      }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
+    const yes = await screen.findAllByText(en.simulation.spiGrant.granted);
+    expect(yes).toHaveLength(2);
+    expect(yes[0]).toHaveClass('badge-high');
+    expect(yes[1]).not.toHaveClass('badge-high');
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+  });
+
   it('states an unestablished SPI descriptor in the provider’s words, never as an absent one', async () => {
     mockApi.emulation.mockResolvedValue(uefiMenu());
     mockApi.job.mockResolvedValue(
@@ -242,6 +289,16 @@ describe('SimulationMenu', () => {
     mockApi.emulation.mockResolvedValue(uefiMenu());
     mockApi.job.mockResolvedValue(
       chipsecResult({
+        // A granted descriptor write always arrives with its finding; the badge colour follows the finding.
+        findings: [
+          {
+            kind: 'spi-descriptor-host-write',
+            title: 'SPI descriptor grants the CPU/BIOS master write access to the flash descriptor region',
+            severity: 'medium',
+            rationale: 'static default',
+            proofState: 'static_confirmed',
+          },
+        ],
         spiDescriptor: {
           status: 'parsed',
           reason: 'Parsed 2 active flash regions from the static Intel descriptor map.',
