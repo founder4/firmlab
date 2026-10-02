@@ -1356,3 +1356,24 @@ console.log(JSON.stringify({ok:true,result}));
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+/**
+ * CAPTURED 2026-10-02T18:27Z from an idle Claude Code worker pane after its worker_done (prose trimmed): finished-turn
+ * line, empty composer, footer. Its native row read `done` at capture, so this is a real idle FRAME, not a frozen-row
+ * capture; it replaces nothing, it corroborates the reconstructed frame above.
+ */
+const CLAUDE_IDLE_FRAME_CAPTURED = [
+  '  - review-rtos.md',
+  '✻ Churned for 4m 44s · done 8:27 PM',
+  RULE,
+  '❯',
+  RULE,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent',
+];
+
+test('a captured idle Claude frame is no active turn, and over a stale row with a satisfied wait it resumes', async () => {
+  assert.equal(hasActiveTurn(CLAUDE_IDLE_FRAME_CAPTURED), false);
+  const h = staleHarness(CLAUDE_IDLE_FRAME_CAPTURED);
+  assert.equal((await superviseStep(waiting, options, h.deps)).phase, 'pending');
+  assert.equal(sends(h), 1);
+});
