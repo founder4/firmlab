@@ -48,6 +48,8 @@ export type JobKind =
   | 'rtos-tasks'
   // FreeRTOS kernel symbol addresses read from the image's own ELF symbol table (core elf-symbols.ts); no findings.
   | 'rtos-elf-symbols'
+  // A RAM region dumped from a bounded Renode run, to be walked as a task snapshot (providers/renode-ram.ts).
+  | 'rtos-ram-capture'
   // Static switch-family leads for EMULATION-FUTURE phase 1 over raw bytes and the extracted rootfs (no findings).
   | 'switch-family'
   | 'compmap'
