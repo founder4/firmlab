@@ -325,9 +325,24 @@ test('unreadable screen fails closed even if native idle wait succeeds', async (
   assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
 });
 
-test('quota, trust, edit, create and numbered selectors never receive Enter', async () => {
+test('quota and selectors never receive Enter; quota positively blocks with reason and gaps', async () => {
   for (const tail of [
     ["You've hit your usage limit", '>'],
+    ['Usage limit reached · limit resets 14:50', 'Continuing automatically'],
+    ['Session limit reached · please wait', 'Continuing automatically'],
+  ]) {
+    const h = nativeHarness(tail, 0);
+    const step = await superviseStep(waiting, options, h.deps);
+    assert.equal(step.phase, 'blocked');
+    assert.equal(step.reason, 'capacity_blocked');
+    assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+    assert.equal(
+      step.gaps.some((g) => g.reason === 'capacity_blocked'),
+      true,
+    );
+  }
+
+  for (const tail of [
     ['Do you trust the files in this folder?', '>'],
     ['Do you want to make this edit to x?', '>'],
     ['Do you want to create x?', '>'],
@@ -337,6 +352,91 @@ test('quota, trust, edit, create and numbered selectors never receive Enter', as
     assert.equal((await superviseStep(waiting, options, h.deps)).phase, 'unknown');
     assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
   }
+});
+
+test('captured Claude usage limit footer positively records capacity_blocked and durable gaps', async () => {
+  const tail = [
+    '❯',
+    '────────────────────────────────────────',
+    'Usage limit reached · limit resets 14:50 (Madrid)',
+    'Continuing automatically',
+  ];
+  const h = nativeHarness(tail, 0);
+  const step = await superviseStep(waiting, options, h.deps);
+  assert.equal(step.phase, 'blocked');
+  assert.equal(step.reason, 'capacity_blocked');
+  assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+  assert.deepEqual(step.gaps, [{ from: NOW, to: NOW, reason: 'capacity_blocked' }]);
+});
+
+test('normal text mention of limits in prose is not a capacity blockade and resumes', async () => {
+  const tail = [
+    'We should ensure that usage limit is not reached during the campaign.',
+    '────────────────',
+    '>',
+    '────────────────',
+    '? for shortcuts   Claude 3.7 Sonnet',
+  ];
+  const h = nativeHarness(tail, 0);
+  const step = await superviseStep(waiting, options, h.deps);
+  assert.equal(step.phase, 'pending');
+  assert.equal(h.commands.filter((a) => a[1] === 'send').length, 1);
+});
+
+test('transitions and recovery gap accounting for capacity_blocked', async () => {
+  const tail = ['Usage limit reached · limit resets 14:50', 'Continuing automatically'];
+  const h = nativeHarness(tail, 0);
+  // Step 1: Initial observation of capacity blockade from working state
+  const t0 = NOW;
+  const t1 = NOW + 1000;
+  h.tick(1000);
+  const step1 = await superviseStep(
+    { checkedAt: t0, phase: 'working', owner: 'term_owner', generation: 2 },
+    options,
+    h.deps,
+  );
+  assert.equal(step1.phase, 'blocked');
+  assert.equal(step1.reason, 'capacity_blocked');
+  assert.deepEqual(step1.gaps, [{ from: t0, to: t1, reason: 'capacity_blocked' }]);
+
+  // Step 2: Continued capacity blockade extends the existing gap bound
+  const t2 = NOW + 2000;
+  h.tick(1000);
+  const step2 = await superviseStep(step1, options, h.deps);
+  assert.equal(step2.phase, 'blocked');
+  assert.equal(step2.reason, 'capacity_blocked');
+  assert.deepEqual(step2.gaps, [{ from: t0, to: t2, reason: 'capacity_blocked' }]);
+
+  // Step 3: Recovery (e.g. owner resumed working) bounds the gap up to recovery time
+  const t3 = NOW + 3000;
+  h.tick(1000);
+  const prevCall = h.deps.call;
+  h.deps.call = async (args) => {
+    if (args[1] === 'ps')
+      return {
+        worktrees: [{ worktreeId: 'wt', agents: [{ paneKey: 't:l', state: 'working', updatedAt: t3 }] }],
+      };
+    return prevCall(args);
+  };
+  const step3 = await superviseStep(step2, options, h.deps);
+  assert.equal(step3.phase, 'working');
+  assert.deepEqual(step3.gaps, [{ from: t0, to: t3, reason: 'capacity_blocked' }]);
+});
+
+test('quota screen never equates to process death and never auto takeovers live owner', async () => {
+  const tail = ['Usage limit reached · limit resets 14:50', 'Continuing automatically'];
+  const h = nativeHarness(tail, 0);
+  h.deps.standbys = ['term_ready'];
+  const base = h.deps.call;
+  h.deps.call = async (args) => {
+    if (args[1] === 'wait' && args.includes('term_ready')) return { wait: { satisfied: true } };
+    return base(args);
+  };
+  const step = await superviseStep(waiting, options, h.deps);
+  assert.equal(step.phase, 'blocked');
+  assert.equal(step.reason, 'capacity_blocked');
+  assert.equal(step.pending, undefined);
+  assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
 });
 
 test('standby menu, other coordinator, paginated or active fleet is refused', async () => {

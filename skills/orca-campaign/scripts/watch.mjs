@@ -72,6 +72,7 @@ export function parseArgs(args, now = Date.now()) {
 }
 
 export function ownerState(snapshot, now) {
+  if (snapshot.capacityBlocked || snapshot.error === 'capacity_blocked') return 'blocked';
   if (snapshot.error || !snapshot.owner) return 'unknown';
   if (snapshot.liveness === 'exited') return 'exited';
   if (snapshot.menuBlocked || snapshot.inputEmpty === false) return 'unknown';
@@ -91,6 +92,7 @@ export function decide(snapshot, state, options, now) {
   if (now >= options.until) return { kind: 'deadline', reason: 'window_elapsed_not_proof_of_work' };
   if (state.checkedAt && now < state.checkedAt) return { kind: 'unknown', reason: 'clock_moved_backwards' };
   const phase = ownerState(snapshot, now);
+  if (phase === 'blocked') return { kind: 'blocked', reason: snapshot.error ?? 'capacity_blocked' };
   if (state.pending) {
     const pending = state.pending;
     if (snapshot.generation > pending.generation && snapshot.owner !== pending.target) {
@@ -179,9 +181,10 @@ export async function snapshotRun(call, options) {
     return { owner, generation: run.consumer_generation, error: 'screen_unreadable' };
   }
   const tail = screen.terminal?.tail ?? [];
-  const menuBlocked = hasBlockingMenu(tail);
+  const capacityBlocked = hasCapacityBlock(tail);
+  const menuBlocked = !capacityBlocked && hasBlockingMenu(tail);
   const wait =
-    activity === 'working' || activity === 'interrupted'
+    activity === 'working' || activity === 'interrupted' || capacityBlocked
       ? {}
       : await call(['terminal', 'wait', '--terminal', owner, '--for', 'tui-idle', '--timeout-ms', '1000']);
   return {
@@ -192,13 +195,16 @@ export async function snapshotRun(call, options) {
     agent: show.terminal?.agentIdentity,
     activity,
     stateStartedAt: native?.stateStartedAt,
+    capacityBlocked,
     menuBlocked,
-    inputEmpty: activity === 'working' ? undefined : visibleInputPrompt(tail),
-    error:
-      show.terminal?.connected && activity !== 'working' && !visibleInputPrompt(tail)
+    inputEmpty: activity === 'working' ? undefined : capacityBlocked ? false : visibleInputPrompt(tail),
+    error: capacityBlocked
+      ? 'capacity_blocked'
+      : show.terminal?.connected && activity !== 'working' && !visibleInputPrompt(tail)
         ? 'input_prompt_unrecognized'
         : undefined,
-    nativeIdleProven: native?.state === 'done' && !native.interrupted && visibleInputPrompt(tail) && !menuBlocked,
+    nativeIdleProven:
+      !capacityBlocked && native?.state === 'done' && !native.interrupted && visibleInputPrompt(tail) && !menuBlocked,
     liveness:
       show.terminal?.connected === false && typeof show.terminal.exitCause?.kind === 'string'
         ? 'exited'
@@ -207,7 +213,7 @@ export async function snapshotRun(call, options) {
           : projection?.liveness?.verdict,
     observedAt: native?.updatedAt ?? projection?.liveness?.observedAt,
     liveStatus: native ? 'fresh' : projection?.evidence?.liveStatus,
-    idleProven: activity !== 'interrupted' && !menuBlocked && wait.wait?.satisfied === true,
+    idleProven: !capacityBlocked && activity !== 'interrupted' && !menuBlocked && wait.wait?.satisfied === true,
     activeHandles: rows
       .filter((w) => !['completed', 'failed', 'stopped'].includes(w.dispatchStatus))
       .map((w) => w.agentTerminalHandle),
@@ -216,6 +222,19 @@ export async function snapshotRun(call, options) {
       .sort()
       .join('|'),
   };
+}
+
+export function hasCapacityBlock(tail) {
+  let region = tail;
+  if (visibleInputPrompt(tail)) {
+    const prompt = tail.findLastIndex(emptyComposer);
+    const border = tail.slice(0, prompt).findLastIndex((line) => /^[─━]+$/.test(line.trim()));
+    if (border >= 0) region = tail.slice(border + 1);
+  }
+  const text = region.join('\n');
+  return /usage limit reached|limit resets|continuing automatically|you['’]ve hit your usage limit|session limit reached|capacity limit reached/i.test(
+    text,
+  );
 }
 
 export function hasBlockingMenu(tail) {
@@ -228,7 +247,7 @@ export function hasBlockingMenu(tail) {
     if (border >= 0) region = tail.slice(border + 1);
   }
   return (
-    /you['’]ve hit your usage limit|switch to.{0,80}model|switch to gpt-|do you trust|trust this (?:folder|workspace)|allow (?:once|always)|approval required|permission required|do you want to/i.test(
+    /switch to.{0,80}model|switch to gpt-|do you trust|trust this (?:folder|workspace)|allow (?:once|always)|approval required|permission required|do you want to/i.test(
       region.join('\n'),
     ) || region.some((line) => /^\s*[❯›>]\s*\d+\.\s/.test(line))
   );
@@ -337,6 +356,23 @@ export async function superviseStep(state, options, dependencies) {
     state.checkedAt && now - state.checkedAt > options.intervalMs * 3
       ? { from: state.checkedAt, to: now, reason: 'unverified_observation_gap' }
       : null;
+  const gaps = [...(state.gaps ?? [])];
+  if (gap) gaps.push(gap);
+
+  if (decision.kind === 'blocked' && decision.reason === 'capacity_blocked') {
+    const lastGap = gaps.at(-1);
+    if (lastGap && lastGap.reason === 'capacity_blocked' && state.phase === 'blocked') {
+      lastGap.to = now;
+    } else {
+      gaps.push({ from: state.checkedAt ?? now, to: now, reason: 'capacity_blocked' });
+    }
+  } else if (state.phase === 'blocked' && state.reason === 'capacity_blocked') {
+    const lastGap = gaps.at(-1);
+    if (lastGap && lastGap.reason === 'capacity_blocked') {
+      lastGap.to = now;
+    }
+  }
+
   const next = {
     ...state,
     run: options.run,
@@ -353,14 +389,15 @@ export async function superviseStep(state, options, dependencies) {
       (snapshot.owner !== undefined && state.owner !== snapshot.owner)
         ? 0
         : (state.consecutiveResumes ?? 0),
-    gaps: [...(state.gaps ?? []), ...(gap ? [gap] : [])].slice(-100),
+    gaps: gaps.slice(-100),
   };
   if (['confirmed', 'superseded', 'failed-exited'].includes(decision.kind)) {
     next.lastSubmission = { ...state.pending, settlement: decision.kind, observedAt: now };
     next.pending = null;
     next.disarmed = false;
   }
-  if (['working', 'unknown', 'confirmed', 'superseded', 'failed-exited'].includes(decision.kind)) next.idleSince = null;
+  if (['working', 'unknown', 'blocked', 'confirmed', 'superseded', 'failed-exited'].includes(decision.kind))
+    next.idleSince = null;
   if (decision.kind === 'working') next.disarmed = false;
   if (decision.kind === 'idle')
     next.idleSince =

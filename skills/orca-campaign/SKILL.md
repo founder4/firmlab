@@ -47,13 +47,23 @@ parallel writers need disjoint file ownership. Do not convert a local-folder tas
 Prepare a ready Claude/Antigravity successor before context/quota exhaustion. Full handoff is a direct
 instruction to carry out the already authorized work: include current context and unchanged deadline,
 have the receiver adopt the **same** Run from its own terminal, and verify owner plus increased generation
-before the sender relinquishes editing. Never forge a receiver's `--from`. Acceptance proves input only.
+before the sender relinquishes editing. Never forge a receiver's `--from`. Acceptance proves input only;
+an actual working canary (read, tool, and write execution) is required to prove successor viability.
+Same-provider freshness does not provide fresh capacity when an account/session quota is hit; prefer a
+different provider or independent account capacity domain. Prepare a verified cross-provider fallback
+BEFORE limits are reached; native adoption proof remains mandatory. A capacity warning is not actual
+exhaustion; do not change accounts, models, permissions, or credits, and never automatically answer selectors.
 
-The guard resumes only a positively idle owner with a readable empty input prompt. Optional `--standbys`
-is a JSON array of explicitly reserved fresh terminal handles: automatic fallback requires a positively
-exited owner, a ready Claude/Antigravity receiver, and no other Run/active-worker ownership. Historical
-coordinator handles are conservatively excluded. It neither launches agents nor answers quota/permission
-selectors; unknown liveness does not justify takeover. Coordinate preemptive handoff yourself while viable.
+The guard resumes only a positively idle owner with a readable empty input prompt. When a provider quota or
+session limit screen is captured (e.g. usage limit reached, limit resets, continuing automatically), the
+supervisor positively records an explicit `blocked` phase with `capacity_blocked` reason and durable bounded
+gap timestamps in `gaps`, rather than reporting `unknown` with empty gaps. It never submits prompts into
+quota screens, composers, or menus, never equates quota to process death or exit, and never performs an automatic
+takeover of a live owner. Optional `--standbys` is a JSON array of explicitly reserved fresh terminal handles:
+automatic fallback requires a positively exited owner, a ready Claude/Antigravity receiver, and no other
+Run/active-worker ownership. Historical coordinator handles are conservatively excluded. It neither launches
+agents nor answers quota/permission selectors; unknown liveness does not justify takeover. Coordinate preemptive
+handoff yourself while viable.
 
 Each Run has a fixed OS-account lock at `~/.local/state/orca-campaign/locks/<Run>.lock`, independent
 of terminal TMPDIR/HOME. Every writer also holds the journal lock; known legacy temporary lock paths
