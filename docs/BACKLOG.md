@@ -784,3 +784,11 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   *(Hecho: el test espera la recepción real en el servidor de loopback con plazo de 3 s, rechaza que la petición
   se resuelva antes de cancelar y mide por separado que la cancelación aborte con `AbortError` en menos de 2 s;
   49 ejecuciones del fichero, 48 de ellas a concurrencia 8, sin fallo.)*
+
+- [ ] Observado en la campaña de cuatro horas (2026-10-02): el coordinador Claude agotó la cuota y su
+  reserva Claude compartía el mismo límite. El segundo traspaso no llegó a adoptar el Run; el supervisor
+  quedó en `unknown / input_prompt_unrecognized` durante el bloqueo, aunque su PID seguía vivo y `gaps`
+  estaba vacío. Recuperación manual del mismo Run a generación 3. Exigir una prueba de ejecución real del
+  sucesor y un dominio de capacidad distinto al agotar cuota; reconocer y registrar bloqueos de capacidad
+  sin equipararlos a salida del proceso ni enviar entrada a un selector. La resistencia de cuatro horas
+  sigue sin estar demostrada. Registro en `docs/FOUR-HOUR-CAMPAIGN.md`.
