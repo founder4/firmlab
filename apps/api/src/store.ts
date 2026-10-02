@@ -46,6 +46,10 @@ export type JobKind =
   | 'rtos'
   // An operator-supplied FreeRTOS RAM snapshot walked by core's task-list parsers (providers/rtos-tasks.ts).
   | 'rtos-tasks'
+  // FreeRTOS kernel symbol addresses read from the image's own ELF symbol table (core elf-symbols.ts); no findings.
+  | 'rtos-elf-symbols'
+  // Static switch-family leads for EMULATION-FUTURE phase 1 over raw bytes and the extracted rootfs (no findings).
+  | 'switch-family'
   | 'compmap'
   | 'component-cve'
   | 'services'

@@ -739,7 +739,14 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   Switch** (Capa II; depende de una detección de familia de switch RTL83xx/BCM53xx/QCA8337: ya existe un
   detector puro y acotado en `packages/core/src/switch-family.ts` que sólo da leads estáticos —`QCA8337` como literal
   exacto, RTL83xx/BCM53xx sólo a nivel de plantilla porque el repositorio no verifica qué miembros son switches;
-  compatible strings, nombres de driver/módulo y formato de etiquetado siguen diferidos sin fuente—); **Fase 2 — integrar Fuzzware/µEmu como provider** para modelado MMIO (no motor TCG propio;
+  compatible strings, nombres de driver/módulo y formato de etiquetado siguen diferidos sin fuente—; expuesto como job
+  bajo demanda `POST/GET /images/:id/switch-family` con carril de bytes crudos y carril de rootfs extraído
+  acotado —orden por ruta relativa, symlinks no seguidos, sin findings—. Validado 2026-10-02 contra el corpus en un
+  contenedor `--network none` con el volumen en sólo lectura: WDR3600, WR940N y MR3220 dan `vendor-only` (Atheros,
+  y Qualcomm en los dos últimos), DVRF da `template-only` (`BCM5397` en `usr/lib/libshared.so`, carril parcial por un
+  fichero >4 MiB truncado) y el carril crudo no ve nada en ninguno, como se esperaba con kernel y squashfs
+  comprimidos. Ningún resultado nombra una familia por sí solo: el siguiente paso real es una fuente primaria para
+  fijar miembros exactos RTL83xx/BCM53xx y compatibles de device-tree, no ampliar heurísticas); **Fase 2 — integrar Fuzzware/µEmu como provider** para modelado MMIO (no motor TCG propio;
   frontera ya nombrada en este backlog); **Fase 3 — snapshot/fork** (`savevm`/`loadvm`) enlazado a `webprobe.ts`
   + AFL++. Techo de prueba honesto: `confirmed_in_emulation` de daemons de red (hoy `br-lan` nunca sube), NUNCA
   `confirmed_full_system` ni «idéntico al físico» — el entorno sintético es permisivo por diseño (`types.ts`). La

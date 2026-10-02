@@ -53,6 +53,7 @@ import { sbomRoutes } from './routes/sbom.js';
 import { servicemapRoutes } from './routes/servicemap.js';
 import { settingsRoutes } from './routes/settings.js';
 import { storageRoutes } from './routes/storage.js';
+import { switchFamilyRoutes } from './routes/switch-family.js';
 import { symreachRoutes } from './routes/symreach.js';
 import { toolRoutes } from './routes/tools.js';
 import { ubootRoutes } from './routes/uboot.js';
@@ -156,6 +157,7 @@ async function main(): Promise<void> {
       await api.register(filesRoutes);
       await api.register(certsRoutes);
       await api.register(rtosRoutes);
+      await api.register(switchFamilyRoutes);
       await api.register(compmapRoutes);
       await api.register(componentCveRoutes);
       await api.register(servicemapRoutes);
