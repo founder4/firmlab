@@ -15,7 +15,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { loadPolicy, savePolicy } from './launch-worker.mjs';
-import { evaluateLaunch, providerOf, recordBlock } from './policy.mjs';
+import { evaluateLaunch, latestDomainEntry, providerOf, recordBlock } from './policy.mjs';
 
 const exec = promisify(execFile);
 const FRESH_MS = 180_000;
@@ -691,7 +691,7 @@ export async function recordCapacityBlockLocked(path, entry, { attempts = 50, de
   try {
     const loaded = await loadPolicy(path);
     if (loaded.error) return { recorded: false, reason: loaded.error };
-    const latest = loaded.policy.domains.filter((d) => d.domain === entry.domain).at(-1);
+    const latest = latestDomainEntry(loaded.policy, entry.domain);
     if (latest && latest.status !== 'recovered')
       return { recorded: false, reason: 'already_blocked', domain: entry.domain };
     await savePolicy(path, recordBlock(loaded.policy, entry));

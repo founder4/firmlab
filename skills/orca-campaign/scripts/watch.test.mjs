@@ -1377,3 +1377,30 @@ test('a captured idle Claude frame is no active turn, and over a stale row with 
   assert.equal((await superviseStep(waiting, options, h.deps)).phase, 'pending');
   assert.equal(sends(h), 1);
 });
+
+test('the guard and the launcher agree on the latest entry even when entries were appended out of order', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'orca-policy-order-'));
+  const path = join(directory, 'policy.json');
+  const base = { domain: 'provider:anthropic', scope: 'provider', provider: 'anthropic', model: null, resetAt: null };
+  const recovered = { ...base, status: 'recovered', reason: 'canary', evidence: 'canary ok', recoveredBy: 'canary ok' };
+  const block = { ...base, status: 'blocked', reason: 'rendered_capacity_block', evidence: 'fixture' };
+  try {
+    // A recovery observed at 18:10 was written BEFORE an older block observed at 18:00: the recovery is authoritative.
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        currentProvider: null,
+        handoffs: [],
+        domains: [
+          { ...recovered, observedAt: '2026-10-02T18:10:00.000Z' },
+          { ...block, observedAt: '2026-10-02T18:00:00.000Z' },
+        ],
+      }),
+    );
+    const fresh = { ...block, observedAt: '2026-10-02T18:20:00.000Z' };
+    assert.equal((await recordCapacityBlockLocked(path, fresh)).recorded, true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

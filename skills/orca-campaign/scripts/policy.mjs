@@ -417,6 +417,14 @@ function getLatestDomainEntries(domains) {
 }
 
 /**
+ * The authoritative entry for one domain under the same rule `evaluateLaunch` applies (latest `observedAt`, then
+ * array order), so every reader of the registry agrees on whether a domain is blocked.
+ */
+export function latestDomainEntry(policy, domain) {
+  return getLatestDomainEntries(policy?.domains ?? []).get(domain) ?? null;
+}
+
+/**
  * Evaluates whether launching a worker for the given agent and model is permitted under policy.
  *
  * Rules:
