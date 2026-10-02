@@ -97,9 +97,23 @@ function readUint(buf: Uint8Array, offset: number, width: 4 | 8, le: boolean): n
   return le ? second * 0x1_0000_0000 + first : first * 0x1_0000_0000 + second;
 }
 
-/** `xItemValue` + `pxNext` + `pxPrevious` + `pvOwner` + `pxContainer`, the full `ListItem_t` record. */
-function listItemRecordSize(layout: FreeRtosLayout): number {
-  return TICK_WIDTH + 4 * layout.pointerWidth;
+/**
+ * In standard C ABI on 64-bit platforms, an 8-byte pointer following a 4-byte TickType_t
+ * requires 4 bytes of padding for natural 8-byte alignment. On 32-bit platforms, 4-byte
+ * pointers are naturally aligned after a 4-byte TickType_t (0 padding).
+ */
+export function pointerAlignmentPadding(layout: FreeRtosLayout): number {
+  return layout.pointerWidth === 8 ? 4 : 0;
+}
+
+/** `xItemValue` + padding + `pxNext` + `pxPrevious` + `pvOwner` + `pxContainer`, the full `ListItem_t` record. */
+export function listItemRecordSize(layout: FreeRtosLayout): number {
+  return TICK_WIDTH + pointerAlignmentPadding(layout) + 4 * layout.pointerWidth;
+}
+
+/** Bytes of the `MiniListItem_t` sentinel the walk reads: `xItemValue` + padding + `pxNext`. */
+export function listSentinelHeadSize(layout: FreeRtosLayout): number {
+  return TICK_WIDTH + pointerAlignmentPadding(layout) + layout.pointerWidth;
 }
 
 /** What one walk saw beyond the base result: the header count, container back-pointers, and the item values in order. */
@@ -137,10 +151,12 @@ function walkList(
 
   const ptr = layout.pointerWidth;
   const le = layout.endian === 'little';
+  const pad = pointerAlignmentPadding(layout);
   const recordSize = listItemRecordSize(layout);
-  const nextOffset = TICK_WIDTH;
-  const ownerOffset = TICK_WIDTH + 2 * ptr;
-  const containerOffset = TICK_WIDTH + 3 * ptr;
+  const nextOffset = TICK_WIDTH + pad;
+  const ownerOffset = nextOffset + 2 * ptr;
+  const containerOffset = nextOffset + 3 * ptr;
+  const sentinelHeadSize = nextOffset + ptr;
   // List_t header (no integrity-check bytes): uxNumberOfItems (ptr-width) + pxIndex (ptr-width) precede xListEnd.
   const sentinelAddress = listAddress + 2 * ptr;
   const regionEnd = regionBase + buf.length;
@@ -152,7 +168,7 @@ function walkList(
   if (!inRegion(sentinelAddress)) {
     return empty('out_of_range', `list sentinel at 0x${sentinelAddress.toString(16)} falls outside the mapped region`);
   }
-  if (sentinelAddress - regionBase + TICK_WIDTH + ptr > buf.length) {
+  if (sentinelAddress - regionBase + sentinelHeadSize > buf.length) {
     return empty(
       'truncated',
       `list sentinel at 0x${sentinelAddress.toString(16)} runs past the end of the supplied buffer`,

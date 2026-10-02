@@ -26,6 +26,8 @@
  */
 import {
   type FreeRtosLayout,
+  listItemRecordSize,
+  listSentinelHeadSize,
   parseFreeRtosCurrentTask,
   parseFreeRtosNamedList,
   parseFreeRtosReadyList,
@@ -297,11 +299,11 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
 const sentinelFailed = (r: FreeRtosTaskListResult) =>
   r.attempted === 0 && (r.coverage === 'out_of_range' || r.coverage === 'truncated');
 
-function listBytes(r: FreeRtosTaskListResult, ptr: number): { bytesAttempted: number; bytesCompleted: number } {
+function listBytes(r: FreeRtosTaskListResult, layout: FreeRtosLayout): { bytesAttempted: number; bytesCompleted: number } {
   if (r.coverage === 'missing_symbol') return { bytesAttempted: 0, bytesCompleted: 0 };
-  const sentinel = TICK_WIDTH + ptr;
+  const sentinel = listSentinelHeadSize(layout);
   if (sentinelFailed(r)) return { bytesAttempted: sentinel, bytesCompleted: 0 };
-  const record = TICK_WIDTH + 4 * ptr;
+  const record = listItemRecordSize(layout);
   // The last visited node failed its bounds check on these two codes; every other visited node was read whole.
   const failedLast = r.coverage === 'out_of_range' || r.coverage === 'truncated' ? 1 : 0;
   return {
@@ -349,12 +351,12 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
         ]
       : s.readyLists.map((l) => {
           const r = parseFreeRtosReadyList(s.buf, s.base, l.address, s.layout);
-          return { priority: l.priority, listAddress: l.address, ...r, ...listBytes(r, ptr) };
+          return { priority: l.priority, listAddress: l.address, ...r, ...listBytes(r, s.layout) };
         });
 
   const walk = (list: FreeRtosNamedList): RtosNamedListLane => {
     const r = parseFreeRtosNamedList(s.buf, s.base, list, s.layout);
-    return { ...r, ...listBytes(r, ptr) };
+    return { ...r, ...listBytes(r, s.layout) };
   };
   const delayedLists = s.delayedLists?.map(walk);
   const suspendedList =

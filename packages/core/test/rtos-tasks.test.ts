@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   FREERTOS_ITEM_VALUE_MEANING,
   type FreeRtosListKind,
+  listItemRecordSize,
+  listSentinelHeadSize,
   parseFreeRtosCurrentTask,
   parseFreeRtosList,
   parseFreeRtosNamedList,
   parseFreeRtosReadyList,
+  pointerAlignmentPadding,
 } from '../src/rtos-tasks.js';
 
 /**
@@ -316,15 +319,18 @@ describe('parseFreeRtosNamedList', () => {
     const buf = new Uint8Array(0x200);
     const dv = new DataView(buf.buffer);
     const w64 = (addr: number, v: number) => dv.setBigUint64(addr - REGION_BASE, BigInt(v), false);
-    // List_t: uxNumberOfItems(8) + pxIndex(8) + xListEnd{itemValue(4) + pxNext(8) + pxPrevious(8)}
+    // List_t: uxNumberOfItems(8) + pxIndex(8) + xListEnd{itemValue(4) + pad(4) + pxNext(8) + pxPrevious(8)}
     w64(LIST_ADDR, 1);
+    w64(LIST_ADDR + 8, LIST_ADDR + 16);
     dv.setUint32(LIST_ADDR + 16 - REGION_BASE, 0, false);
-    w64(LIST_ADDR + 20, ITEM_C); // sentinel pxNext
-    // ListItem_t: itemValue(4) + pxNext(8) + pxPrevious(8) + pvOwner(8) + pxContainer(8)
+    w64(LIST_ADDR + 24, ITEM_C); // sentinel pxNext (after 4-byte pad)
+    w64(LIST_ADDR + 32, ITEM_C); // sentinel pxPrevious
+    // ListItem_t: itemValue(4) + pad(4) + pxNext(8) + pxPrevious(8) + pvOwner(8) + pxContainer(8)
     dv.setUint32(ITEM_C - REGION_BASE, 77, false);
-    w64(ITEM_C + 4, LIST_ADDR + 16);
-    w64(ITEM_C + 20, 0x3000_00aa);
-    w64(ITEM_C + 28, LIST_ADDR);
+    w64(ITEM_C + 8, LIST_ADDR + 16); // pxNext (after 4-byte pad)
+    w64(ITEM_C + 16, LIST_ADDR + 16);
+    w64(ITEM_C + 24, 0x3000_00aa); // pvOwner
+    w64(ITEM_C + 32, LIST_ADDR); // pxContainer
 
     const r = parseFreeRtosNamedList(
       buf,
@@ -334,6 +340,15 @@ describe('parseFreeRtosNamedList', () => {
     );
     expect(r).toMatchObject({ coverage: 'complete', completed: 1, declaredItems: 1, containerMismatches: 0 });
     expect(r.tasks).toEqual([{ listItemAddress: ITEM_C, itemValue: 77, tcbAddress: 0x3000_00aa }]);
+  });
+
+  it('computes record and sentinel sizes with standard natural alignment on 32-bit and 64-bit', () => {
+    expect(pointerAlignmentPadding({ pointerWidth: 4, endian: 'little' })).toBe(0);
+    expect(pointerAlignmentPadding({ pointerWidth: 8, endian: 'little' })).toBe(4);
+    expect(listItemRecordSize({ pointerWidth: 4, endian: 'little' })).toBe(20);
+    expect(listItemRecordSize({ pointerWidth: 8, endian: 'little' })).toBe(40);
+    expect(listSentinelHeadSize({ pointerWidth: 4, endian: 'little' })).toBe(8);
+    expect(listSentinelHeadSize({ pointerWidth: 8, endian: 'little' })).toBe(16);
   });
 
   it('carries a ready list priority through, and a ready walk agrees with parseFreeRtosReadyList', () => {
