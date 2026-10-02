@@ -11,6 +11,11 @@
  * they agree, and a disagreement is reported as `layout-dependent`, never resolved by picking one. A grant is a fact
  * of the shipped bytes (`static_confirmed`), not of the running device: the live FRAP register chipsec's
  * `spi_desc` module reads can differ (a descriptor-override strap, a reflashed descriptor), and stays unknown here.
+ *
+ * The same FLMSTR1 value answers a second question under the same two-layout rule: does the host master hold write
+ * access to the Intel ME region (chipsec `hal/spi.py` region index 2, so bit `1 << 2` in either layout)? A grant is
+ * only flagged when the region map actually enables the ME region; a write bit for a region the descriptor leaves
+ * disabled or never declares names no flash range, so it is recorded with its reason but is not a finding.
  */
 
 export const SPI_DESCRIPTOR_SCAN_CAP_BYTES = 1024 * 1024;
@@ -28,6 +33,9 @@ const REGION_NAMES = ['Flash Descriptor', 'BIOS', 'Intel ME', 'GbE', 'Platform D
 const FLASH_MAP1_OFFSET = 0x18;
 /** The descriptor region is region 0, so its bit is bit 0 of each access mask. */
 const DESCRIPTOR_REGION_BIT = 1;
+/** chipsec `hal/spi.py`: ME = 2. Its bit is `1 << 2` under both FLMSTR layouts. */
+const ME_REGION_INDEX = 2;
+const ME_REGION_BIT = 1 << ME_REGION_INDEX;
 
 /** FLMSTR1 access-field layouts, verbatim from chipsec's register definitions (see the module comment). */
 export const SPI_MASTER_LAYOUTS = [
@@ -61,6 +69,8 @@ export interface SpiMasterLayoutReading {
   writeMask: number;
   descriptorReadable: boolean;
   descriptorWritable: boolean;
+  /** Optional forever: results stored before the ME-write check lack it. */
+  meWritable?: boolean;
 }
 
 export interface SpiHostMasterAccess {
@@ -72,6 +82,10 @@ export interface SpiHostMasterAccess {
   layouts: SpiMasterLayoutReading[];
   /** `granted`/`denied` only when every layout agrees; never resolved by choosing a layout. */
   descriptorWrite: 'granted' | 'denied' | 'layout-dependent' | 'unknown';
+  /** The same agreement rule for the Intel ME region's write bit. Optional forever: older results predate it. */
+  meWrite?: 'granted' | 'denied' | 'layout-dependent' | 'unknown';
+  /** Why `meWrite` is what it is, and why a grant did or did not become a finding. Optional forever. */
+  meWriteReason?: string;
 }
 
 export interface SpiDescriptorFinding {
@@ -225,7 +239,9 @@ export function analyzeSpiDescriptor(
         'The listed extents overlap in the static descriptor map. This records the declared layout and is not by itself proof of a write-protection failure.',
     });
   }
-  const hostMasterAccess = readHostMasterAccess(view, bytes.byteLength, result.descriptorOffset, parseLimitBytes);
+  const masterAccess = readHostMasterAccess(view, bytes.byteLength, result.descriptorOffset, parseLimitBytes);
+  const meAssessment = assessHostMeWrite(masterAccess, result.regions);
+  const hostMasterAccess: SpiHostMasterAccess = { ...masterAccess, meWriteReason: meAssessment.reason };
   if (hostMasterAccess.descriptorWrite === 'granted') {
     findings.push({
       kind: 'spi-descriptor-host-write',
@@ -238,6 +254,20 @@ export function analyzeSpiDescriptor(
         'software running as the host master could rewrite the descriptor and with it every region permission. This ' +
         'is the static default; the running device FRAP register (which a descriptor-override strap can change) was ' +
         'not read.',
+    });
+  }
+  if (meAssessment.flag && meAssessment.meRegion) {
+    findings.push({
+      kind: 'spi-descriptor-host-me-write',
+      title: 'SPI descriptor grants the CPU/BIOS master write access to the Intel ME region',
+      severity: 'medium',
+      proofState: 'static_confirmed',
+      evidence: { hostMasterAccess, meRegion: meAssessment.meRegion },
+      rationale:
+        'FLMSTR1 in the shipped descriptor sets the Intel ME region write bit under every chipsec FLMSTR layout, and ' +
+        'the region map enables the ME region, so software running as the host master could write the ME firmware ' +
+        'region. This is the static default; the running device FRAP register was not read, and a descriptor-override ' +
+        'strap can change the runtime behavior.',
     });
   }
   if (gaps.length > 0) {
@@ -283,6 +313,8 @@ export function readHostMasterAccess(
     rawValue: null,
     layouts: [],
     descriptorWrite: 'unknown',
+    meWrite: 'unknown',
+    meWriteReason: reason,
   });
   const map1Offset = descriptorOffset + FLASH_MAP1_OFFSET;
   if (map1Offset + 4 > availableBytes || map1Offset + 4 - descriptorOffset > parseLimitBytes) {
@@ -312,6 +344,7 @@ export function readHostMasterAccess(
       writeMask,
       descriptorReadable: (readMask & DESCRIPTOR_REGION_BIT) !== 0,
       descriptorWritable: (writeMask & DESCRIPTOR_REGION_BIT) !== 0,
+      meWritable: (writeMask & ME_REGION_BIT) !== 0,
     };
   });
   const writable = layouts.map((l) => l.descriptorWritable);
@@ -324,7 +357,45 @@ export function readHostMasterAccess(
           .map((l) => l.layout)
           .join(', ')} only; the image does not name its PCH generation, so the grant is undetermined.`
       : `FLMSTR1 ${hex} ${descriptorWrite === 'granted' ? 'grants' : 'denies'} the host master descriptor write under every chipsec layout.`;
-  return { status: 'read', reason, flmstr1Offset, rawValue, layouts, descriptorWrite };
+  const meWritable = layouts.map((l) => l.meWritable === true);
+  const meWrite = meWritable.every(Boolean) ? 'granted' : meWritable.some(Boolean) ? 'layout-dependent' : 'denied';
+  const meWriteReason =
+    meWrite === 'layout-dependent'
+      ? `FLMSTR1 ${hex} grants Intel ME region write under ${layouts
+          .filter((l) => l.meWritable)
+          .map((l) => l.layout)
+          .join(', ')} only; the image does not name its PCH generation, so the grant is undetermined.`
+      : `FLMSTR1 ${hex} ${meWrite === 'granted' ? 'grants' : 'denies'} the host master Intel ME region write under every chipsec layout.`;
+  return { status: 'read', reason, flmstr1Offset, rawValue, layouts, descriptorWrite, meWrite, meWriteReason };
+}
+
+/**
+ * Pure: whether an agreed host-master ME write grant becomes a finding. It does only when the parsed region map
+ * enables the Intel ME region; a grant over a disabled or undeclared region is kept in `hostMasterAccess` and the
+ * returned reason says why it was not flagged. Anything short of an agreed grant is passed through unflagged.
+ */
+export function assessHostMeWrite(
+  access: SpiHostMasterAccess,
+  regions: SpiFlashRegion[],
+): { flag: boolean; reason: string; meRegion: SpiFlashRegion | null } {
+  const meRegion = regions.find((r) => r.index === ME_REGION_INDEX) ?? null;
+  const reason = access.meWriteReason ?? access.reason;
+  if (access.meWrite !== 'granted') return { flag: false, reason, meRegion };
+  if (!meRegion) {
+    return {
+      flag: false,
+      reason: `${reason} The region map declares no Intel ME region, so the grant covers no flash range and is not flagged.`,
+      meRegion,
+    };
+  }
+  if (!meRegion.enabled) {
+    return {
+      flag: false,
+      reason: `${reason} The region map leaves the Intel ME region disabled (base above limit), so the grant covers no flash range and is not flagged.`,
+      meRegion,
+    };
+  }
+  return { flag: true, reason, meRegion };
 }
 
 function parseCandidate(

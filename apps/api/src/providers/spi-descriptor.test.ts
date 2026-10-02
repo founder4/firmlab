@@ -114,9 +114,12 @@ describe('analyzeSpiDescriptor', () => {
   });
 });
 
-/** A one-region descriptor whose FLMAP1 points the master section at `masterBaseUnits * 16`, holding `flmstr1`. */
-function withMaster(flmstr1: number, { masterBaseUnits = 8, size = 0x10000 } = {}): Buffer {
-  const bytes = buildDescriptor([region(0, 0), region(1, 15)], { size });
+/** A descriptor whose FLMAP1 points the master section at `masterBaseUnits * 16`, holding `flmstr1`. */
+function withMaster(
+  flmstr1: number,
+  { masterBaseUnits = 8, size = 0x10000, regions = [region(0, 0), region(1, 15)] } = {},
+): Buffer {
+  const bytes = buildDescriptor(regions, { size });
   bytes.writeUInt32LE(masterBaseUnits, 0x18);
   // A pointer into the header is left unwritten: writing there would clobber the signature under test.
   if (masterBaseUnits * 16 >= 0x20 && masterBaseUnits * 16 + 4 <= size)
@@ -167,5 +170,65 @@ describe('analyzeSpiDescriptor — host master access', () => {
     expect(outOfBound.status).toBe('parsed');
     expect(outOfBound.hostMasterAccess?.reason).toMatch(/FLMSTR1 is truncated or exceeds the parse bound/);
     expect(outOfBound.findings.some((f) => f.kind === 'spi-descriptor-host-write')).toBe(false);
+  });
+});
+
+describe('analyzeSpiDescriptor — host master Intel ME write', () => {
+  // Descriptor, BIOS, and an enabled Intel ME region at [0x8000, 0x10000).
+  const withMe = [region(0, 0), region(1, 7), region(8, 15)];
+  // ME is region 2: write bit 24+2 under the 8-bit layout, 20+2 under the 12-bit one. Neither sets descriptor write.
+  const meGrantedBoth = (1 << 26) | (1 << 22);
+
+  it('flags an ME write grant when both layouts agree and the region map enables the ME region', () => {
+    const result = analyzeSpiDescriptor(withMaster(meGrantedBoth, { regions: withMe }));
+    expect(result.hostMasterAccess).toMatchObject({ meWrite: 'granted', descriptorWrite: 'denied' });
+    expect(result.hostMasterAccess?.layouts.map((l) => l.meWritable)).toEqual([true, true]);
+    const finding = result.findings.find((f) => f.kind === 'spi-descriptor-host-me-write');
+    expect(finding).toMatchObject({
+      title: 'SPI descriptor grants the CPU/BIOS master write access to the Intel ME region',
+      severity: 'medium',
+      proofState: 'static_confirmed',
+      evidence: { meRegion: { index: 2, name: 'Intel ME', enabled: true, startBytes: 0x8000 } },
+    });
+    expect(finding?.evidence.hostMasterAccess).toBe(result.hostMasterAccess);
+    expect(finding?.rationale).toMatch(/write the ME firmware region/);
+    expect(finding?.rationale).toMatch(/FRAP register was not read/);
+    expect(finding?.rationale).toMatch(/descriptor-override strap can change the runtime behavior/);
+    expect(result.findings.some((f) => f.kind === 'spi-descriptor-host-write')).toBe(false);
+  });
+
+  it('records a grant over a disabled ME region with its reason and no finding', () => {
+    const disabledMe = [region(0, 0), region(1, 7), region(9, 8)];
+    const result = analyzeSpiDescriptor(withMaster(meGrantedBoth, { regions: disabledMe }));
+    expect(result.hostMasterAccess?.meWrite).toBe('granted');
+    expect(result.hostMasterAccess?.meWriteReason).toMatch(/Intel ME region disabled .* not flagged/);
+    expect(result.findings.some((f) => f.kind === 'spi-descriptor-host-me-write')).toBe(false);
+  });
+
+  it('records a grant over an undeclared ME region with its reason and no finding', () => {
+    const result = analyzeSpiDescriptor(withMaster(meGrantedBoth));
+    expect(result.hostMasterAccess?.meWrite).toBe('granted');
+    expect(result.hostMasterAccess?.meWriteReason).toMatch(/declares no Intel ME region/);
+    expect(result.findings.some((f) => f.kind === 'spi-descriptor-host-me-write')).toBe(false);
+  });
+
+  it('refuses to pick a layout when the ME write bit is set under only one', () => {
+    // Bit 22 is the ME write bit in the 12-bit layout and a read bit (region 6) in the 8-bit one.
+    const result = analyzeSpiDescriptor(withMaster(1 << 22, { regions: withMe }));
+    expect(result.hostMasterAccess?.meWrite).toBe('layout-dependent');
+    expect(result.hostMasterAccess?.meWriteReason).toMatch(/under pch-12bit only; .* undetermined/);
+    expect(result.findings.some((f) => f.kind === 'spi-descriptor-host-me-write')).toBe(false);
+  });
+
+  it('records a denied ME write without a finding', () => {
+    const result = analyzeSpiDescriptor(withMaster((0x2 << 24) | (0x3 << 16), { regions: withMe }));
+    expect(result.hostMasterAccess?.meWrite).toBe('denied');
+    expect(result.findings.some((f) => f.kind === 'spi-descriptor-host-me-write')).toBe(false);
+  });
+
+  it('leaves the ME write unknown when master access is unknown', () => {
+    const result = analyzeSpiDescriptor(withMaster(meGrantedBoth, { masterBaseUnits: 0, regions: withMe }));
+    expect(result.hostMasterAccess).toMatchObject({ status: 'unknown', meWrite: 'unknown' });
+    expect(result.findings.some((f) => f.kind === 'spi-descriptor-host-me-write')).toBe(false);
   });
 });
