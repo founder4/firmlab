@@ -279,9 +279,7 @@ export async function runSwitchFamilyAnalysis(
       }
       rootfs.result = aggregateSwitchFamilies(rootfs.files);
       rootfs.status =
-        !coverage.inventoryComplete ||
-        coverage.filesSkipped > 0 ||
-        coverage.filesTruncated > 0
+        !coverage.inventoryComplete || coverage.filesSkipped > 0 || coverage.filesTruncated > 0
           ? 'partial'
           : 'completed';
       rootfs.reason = `Examined ${coverage.filesExamined} of ${coverage.filesDiscovered} discovered regular files; skipped ${coverage.filesSkipped}, truncated ${coverage.filesTruncated}, scanned ${coverage.bytesScanned} bytes. Inventory ${coverage.inventoryComplete ? 'complete' : 'incomplete; undiscovered counts unknown'}. Symlinks not followed: ${coverage.symlinksSkipped} (a firmware link's target is either a regular file inside the rootfs, inventoried on its own path, or not firmware content); special entries (device nodes, FIFOs, sockets: no stored bytes) skipped: ${coverage.specialFilesSkipped}. No decoding of still-compressed files is attempted.`;

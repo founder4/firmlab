@@ -761,3 +761,62 @@ describe('FindingsLedger — a run of rows saying one thing about many subjects'
     setLocale('en');
   });
 });
+
+describe('FindingsLedger — a vendor VEX statement is an assertion beside the rung, never the rung', () => {
+  const vexRow = (verdict: string) =>
+    measured({
+      id: 'cve1',
+      source: 'kernel-posture',
+      kind: 'kernel-cve',
+      title: 'CVE-2022-0847 (LPE) — Dirty Pipe',
+      proofState: 'needs_runtime_reproduction',
+      rationale: 'Candidate only.',
+      evidence: {
+        id: 'CVE-2022-0847',
+        vendorVex: {
+          verdict,
+          basis: 'vendor_assertion',
+          sourcePath: '/usr/share/vex/kernel.openvex.json',
+          statementIndex: 0,
+          rationale: "Vendor asserts fixed; this is the vendor's assertion, not a code fact.",
+        },
+      },
+    });
+  const m = en.findings.vendorVex;
+
+  it.each(Object.keys(en.findings.vendorVex.verdict))('shows a labelled chip for %s', (verdict) => {
+    render(<FindingsLedger findings={[vexRow(verdict)]} />);
+    const label = m.verdict[verdict as keyof typeof m.verdict];
+    const chip = screen.getByText(`${label} — ${m.suffix}`);
+    expect(chip).toHaveAttribute('title', expect.stringContaining('/usr/share/vex/kernel.openvex.json, statement #0'));
+  });
+
+  it('leaves the proof-state badge, severity and row count exactly as without the statement', () => {
+    const { container: withVex } = render(<FindingsLedger findings={[vexRow('vendor_states_fixed')]} />);
+    const plain = vexRow('vendor_states_fixed');
+    plain.evidence = { id: 'CVE-2022-0847' };
+    const { container: without } = render(<FindingsLedger findings={[plain]} />);
+    const badge = (c: HTMLElement) => c.querySelector('tbody td:last-child span.mono')?.textContent;
+    expect(badge(withVex)).toBe(badge(without));
+    expect(badge(withVex)).toBe(en.proofState.label.needs_runtime_reproduction);
+    expect(withVex.querySelectorAll('tbody tr')).toHaveLength(without.querySelectorAll('tbody tr').length);
+    expect(withVex.querySelector('.severity-pill')?.textContent).toBe(
+      without.querySelector('.severity-pill')?.textContent,
+    );
+    expect(without.querySelector('.vendor-vex-chip')).toBeNull();
+  });
+
+  it('expands to the rationale, the source and the sentence that nothing moved', () => {
+    render(<FindingsLedger findings={[vexRow('vendor_states_not_affected')]} />);
+    fireEvent.click(screen.getByRole('button', { name: en.findings.whyLabel }));
+    expect(screen.getByText(m.unchanged)).toBeInTheDocument();
+    expect(screen.getByText(m.heading)).toBeInTheDocument();
+  });
+
+  it('renders nothing for an evidence blob that carries no verdict string', () => {
+    const { container } = render(
+      <FindingsLedger findings={[measured({ evidence: { vendorVex: { basis: 'vendor_assertion' } } })]} />,
+    );
+    expect(container.querySelector('.vendor-vex-chip')).toBeNull();
+  });
+});

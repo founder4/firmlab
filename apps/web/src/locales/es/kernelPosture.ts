@@ -43,4 +43,27 @@ export const kernelPosture: Messages['kernelPosture'] = {
     searchedHeading: 'Se buscó en:',
     noQuestions: 'Se localizó un kernel y no se registró ninguna pregunta de postura contra él.',
   },
+
+  vendorVex: {
+    heading: 'Documentos VEX del fabricante',
+    counts: (found, examined, parsed, refused) =>
+      `${found} fichero${found === 1 ? '' : 's'} candidato${found === 1 ? '' : 's'} cumple${found === 1 ? '' : 'n'} la regla de búsqueda; ${examined} examinado${examined === 1 ? '' : 's'}, ${parsed} interpretado${parsed === 1 ? '' : 's'}, ${refused} rechazado${refused === 1 ? '' : 's'}.`,
+    noneMatched:
+      'Ningún documento VEX del fabricante cumple la regla de búsqueda. Eso no es prueba de nada: ni de que el kernel esté parcheado ni de que esté afectado.',
+    nothingRead:
+      'La búsqueda no leyó nada, así que no se buscó ninguna declaración del fabricante. Eso no es prueba de nada.',
+    parsedHeading: 'Interpretados:',
+    document: (path, format, statements) =>
+      `${path} — ${format}, ${statements} declaraci${statements === 1 ? 'ón' : 'ones'}`,
+    refusedHeading: 'Rechazados, y no usados:',
+    droppedFiles: (n, cap) =>
+      `${n} candidato${n === 1 ? '' : 's'} más allá del límite de ${cap} ficheros no se ${n === 1 ? 'leyó' : 'leyeron'}.`,
+    droppedBytes: (n) =>
+      `${n} candidato${n === 1 ? '' : 's'} no se ${n === 1 ? 'leyó' : 'leyeron'}: se alcanzó el límite total de bytes.`,
+    walkTruncated: (n) => `La búsqueda se detuvo en ${n} entradas; los ficheros posteriores no se vieron.`,
+    symlinks: (n) =>
+      `${n} enlace${n === 1 ? '' : 's'} simbólico${n === 1 ? '' : 's'} no se ${n === 1 ? 'siguió' : 'siguieron'}.`,
+    assertion:
+      'Una declaración que coincide aparece en su fila de CVE en el registro de hallazgos como declaración del fabricante. Nunca cambia un estado de prueba.',
+  },
 };

@@ -51,4 +51,29 @@ export const kernelPosture = {
     searchedHeading: 'Looked in:',
     noQuestions: 'A kernel was located and no posture question was recorded against it.',
   },
+
+  /**
+   * The vendor VEX search the posture run made in the rootfs. Shown only when the result carries it: an absent block
+   * means the search did not happen (an older result, or no rootfs), and the panel then says nothing at all.
+   */
+  vendorVex: {
+    heading: 'Vendor VEX documents',
+    counts: (found: number, examined: number, parsed: number, refused: number) =>
+      `${found} candidate file${found === 1 ? '' : 's'} matched the search rule; ${examined} examined, ${parsed} parsed, ${refused} refused.`,
+    noneMatched:
+      'No vendor VEX document matched the search rule. That is not evidence of anything: not that the kernel is patched, and not that it is affected.',
+    nothingRead: 'The search read nothing, so no vendor statement was looked for. That is not evidence of anything.',
+    parsedHeading: 'Parsed:',
+    document: (path: string, format: string, statements: number) =>
+      `${path} — ${format}, ${statements} statement${statements === 1 ? '' : 's'}`,
+    refusedHeading: 'Refused, and not used:',
+    droppedFiles: (n: number, cap: number) =>
+      `${n} candidate${n === 1 ? '' : 's'} beyond the ${cap}-file cap ${n === 1 ? 'was' : 'were'} not read.`,
+    droppedBytes: (n: number) =>
+      `${n} candidate${n === 1 ? '' : 's'} ${n === 1 ? 'was' : 'were'} not read: the total-byte cap was reached.`,
+    walkTruncated: (n: number) => `The search stopped at ${n} entries; files beyond them were never seen.`,
+    symlinks: (n: number) => `${n} symbolic link${n === 1 ? ' was' : 's were'} not followed.`,
+    assertion:
+      'A matched statement appears on its CVE row in the findings ledger as a vendor assertion. It never changes a proof state.',
+  },
 };

@@ -198,4 +198,26 @@ export const findings = {
     contests: (author: string) => `${author} contests`,
     quoted: (title: string) => `— “${title}”`,
   },
+
+  /**
+   * A vendor VEX statement shipped in the image, riding on a CVE row. Worded as an ASSERTION every time it appears:
+   * it is testimony the vendor wrote, and a reader must never take "vendor states fixed" for a measured fix.
+   */
+  vendorVex: {
+    verdict: {
+      vendor_states_fixed: 'Vendor states fixed',
+      vendor_states_not_affected: 'Vendor states not affected',
+      vendor_states_affected: 'Vendor states affected',
+      vendor_under_investigation: 'Vendor: under investigation',
+      conflicting: 'Vendor statements conflict',
+    },
+    unknownVerdict: (code: string) => `Vendor assertion: ${code}`,
+    suffix: 'assertion, not proof',
+    heading: 'Vendor assertion',
+    unchanged:
+      'A statement found in a vendor VEX document shipped in this image. It is not a measurement: the proof state and severity of this row are unchanged by it.',
+    source: (path: string, index: string) => `${path}, statement #${index}`,
+    justification: (j: string) => `Justification given: ${j}`,
+    inGroup: (n: number) => `${n} with a vendor assertion`,
+  },
 };

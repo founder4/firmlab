@@ -153,4 +153,22 @@ export const findings: Messages['findings'] = {
     contests: (author: string) => `${author} impugna`,
     quoted: (title: string) => `— “${title}”`,
   },
+
+  vendorVex: {
+    verdict: {
+      vendor_states_fixed: 'El fabricante declara corregido',
+      vendor_states_not_affected: 'El fabricante declara no afectado',
+      vendor_states_affected: 'El fabricante declara afectado',
+      vendor_under_investigation: 'Fabricante: en investigación',
+      conflicting: 'Declaraciones del fabricante en conflicto',
+    },
+    unknownVerdict: (code: string) => `Declaración del fabricante: ${code}`,
+    suffix: 'declaración, no prueba',
+    heading: 'Declaración del fabricante',
+    unchanged:
+      'Una afirmación encontrada en un documento VEX del fabricante incluido en esta imagen. No es una medición: no cambia el estado de prueba ni la severidad de esta fila.',
+    source: (path: string, index: string) => `${path}, declaración n.º ${index}`,
+    justification: (j: string) => `Justificación aportada: ${j}`,
+    inGroup: (n: number) => `${n} con declaración del fabricante`,
+  },
 };

@@ -180,3 +180,50 @@ describe('KernelPosture', () => {
     expect(await screen.findByText('CONFIG_MODULE_SIG_FORCE')).toBeInTheDocument();
   });
 });
+
+describe('KernelPosture — vendor VEX search', () => {
+  const k = () => import('../locales/en').then((m) => m.en.kernelPosture.vendorVex);
+
+  it('says nothing about VEX when the result carries no search block', async () => {
+    mockApi.kernelPosture.mockResolvedValue(located());
+    render(<KernelPosture imageId="img" />);
+    const v = await k();
+    await screen.findByText('2.6.31');
+    expect(screen.queryByText(v.heading)).toBeNull();
+    expect(screen.queryByText(v.noneMatched)).toBeNull();
+    expect(screen.queryByText(/VEX/)).toBeNull();
+  });
+
+  it('a search that matched nothing says so and says it is evidence of nothing', async () => {
+    mockApi.kernelPosture.mockResolvedValue(
+      located({ vendorVex: { candidatesFound: 0, entriesVisited: 120, documents: [], refusals: [] } }),
+    );
+    render(<KernelPosture imageId="img" />);
+    const v = await k();
+    expect(await screen.findByText(v.noneMatched)).toBeInTheDocument();
+    expect(v.noneMatched).toMatch(/not evidence of anything/);
+  });
+
+  it('lists parsed and refused documents with reasons and dropped counts', async () => {
+    mockApi.kernelPosture.mockResolvedValue(
+      located({
+        vendorVex: {
+          candidatesFound: 3,
+          examined: 2,
+          parsed: 1,
+          refused: 1,
+          droppedByFileCap: 1,
+          caps: { maxFiles: 2 },
+          documents: [{ path: '/usr/share/vex/k.openvex.json', format: 'openvex', statements: 2 }],
+          refusals: [{ path: '/etc/vex/x.json', reason: 'malformed_json', message: 'bad' }],
+        },
+      }),
+    );
+    render(<KernelPosture imageId="img" />);
+    const v = await k();
+    expect(await screen.findByText(v.counts(3, 2, 1, 1))).toBeInTheDocument();
+    expect(screen.getByText(v.document('/usr/share/vex/k.openvex.json', 'openvex', 2))).toBeInTheDocument();
+    expect(screen.getByText('malformed_json')).toBeInTheDocument();
+    expect(screen.getByText(v.droppedFiles(1, 2))).toBeInTheDocument();
+  });
+});

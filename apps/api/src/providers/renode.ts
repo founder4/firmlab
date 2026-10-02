@@ -469,7 +469,7 @@ export function buildRenodeInvocation(
         cpuSeconds: seconds * 4 + 60,
         // No address-space or file-size caps: .NET's GC aborts under --as, and Renode's mmap'd emulation files
         // trip --fsize (SIGXFSZ). The cpu + wall-clock + nofile caps still bound the run, and the netns where the
-          // host allows one; where it does not (the deployed container), the offline proxy env is what keeps it off the net.
+        // host allows one; where it does not (the deployed container), the offline proxy env is what keeps it off the net.
         addressSpaceBytes: 0,
         fileSizeBytes: 0,
         openFiles: 8192,

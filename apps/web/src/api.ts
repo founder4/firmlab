@@ -1798,6 +1798,55 @@ export interface KmodModule {
   }>;
 }
 
+/**
+ * A vendor VEX verdict riding on a CVE row as `evidence.vendorVex` (kernel-cve, kernel-cve-candidate, sbom). A claim
+ * the vendor shipped in the image, never a measurement: it changes no proof state, severity or row. Read off
+ * `Finding.evidence`, which is untyped JSON from a stored row, so every field is optional and checked before use.
+ */
+export type VendorVexVerdictKind =
+  | 'vendor_states_fixed'
+  | 'vendor_states_not_affected'
+  | 'vendor_states_affected'
+  | 'vendor_under_investigation'
+  | 'conflicting';
+
+export interface VendorVexRowVerdict {
+  verdict?: string;
+  basis?: string;
+  sourcePath?: string | null;
+  statementIndex?: number | null;
+  justification?: string | null;
+  sources?: {
+    sourcePath?: string | null;
+    statementIndex?: number | null;
+    status?: string;
+    justification?: string | null;
+  }[];
+  rationale?: string;
+}
+
+/**
+ * What the kernel-posture run searched for in the rootfs (`KernelPostureResult.vendorVex`). Absent on a result stored
+ * before the search existed or run without a rootfs: absent means NOT SEARCHED, never "no vendor statement".
+ */
+export interface VendorVexCoverage {
+  rule?: string;
+  candidatesFound?: number;
+  examined?: number;
+  parsed?: number;
+  refused?: number;
+  droppedByFileCap?: number;
+  droppedByByteCap?: number;
+  symlinksSkipped?: number;
+  entriesVisited?: number;
+  walkTruncated?: boolean;
+  bytesRead?: number;
+  caps?: { maxFiles?: number; maxTotalBytes?: number; maxDocumentBytes?: number; maxEntries?: number };
+  statement?: string;
+  documents?: { path?: string; format?: string; statements?: number }[];
+  refusals?: { path?: string; reason?: string; message?: string }[];
+}
+
 export interface KernelPostureResult {
   available?: boolean;
   located?: boolean;
@@ -1832,6 +1881,7 @@ export interface KernelPostureResult {
   searched?: string[];
   findings?: unknown[];
   reason?: string;
+  vendorVex?: VendorVexCoverage;
 }
 
 /**

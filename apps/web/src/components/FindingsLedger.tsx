@@ -33,7 +33,7 @@
 import { type FindingCategory, compareFindings, findingCategory, isEstablished, severityCensus } from '@firmlab/core';
 import { Fragment, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { Finding, FindingProvenance, OperatorAssertion } from '../api';
+import type { Finding, FindingProvenance, OperatorAssertion, VendorVexRowVerdict } from '../api';
 import { copyToClipboard } from '../clipboard';
 import { messages, useMessages } from '../i18n';
 import { toast } from '../toast';
@@ -503,6 +503,102 @@ function DanglingDisputeNote({ dangling }: { dangling: readonly Finding[] }): JS
   );
 }
 
+/**
+ * Pure: the vendor VEX verdict a row carries in `evidence.vendorVex`, or null.
+ *
+ * Read defensively because `evidence` is JSON from a stored row: anything without a string `verdict` is not a
+ * verdict and renders nothing, so a malformed blob can never put a vendor's name on a row that has no statement.
+ */
+export function findingVendorVex(f: Pick<Finding, 'evidence'>): VendorVexRowVerdict | null {
+  const v = f.evidence?.vendorVex;
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const verdict = (v as { verdict?: unknown }).verdict;
+  return typeof verdict === 'string' && verdict ? (v as VendorVexRowVerdict) : null;
+}
+
+/** A source line: `path, statement #n`, with whatever part the row did not record left out rather than invented. */
+function vexSource(path: string | null | undefined, index: number | null | undefined): string | null {
+  if (!path) return null;
+  return typeof index === 'number' ? messages().findings.vendorVex.source(path, String(index)) : path;
+}
+
+/**
+ * The vendor-assertion chip, under the proof-state badge and never in its place.
+ *
+ * Deliberately not styled like a rung: the ladder's colours (solid border) are code's verdicts and the dashed agent
+ * colour is an operator's. A vendor statement is neither, so it is dotted, dim, and on the inset surface — present
+ * enough to notice, and never the green or blue a reader has learned to read as "proven". The words say the rest:
+ * every chip ends "assertion, not proof", because a bare "Vendor states fixed" is exactly the shorthand that reads
+ * as a fix.
+ */
+function VendorVexChip({ vex }: { vex: VendorVexRowVerdict }): JSX.Element {
+  const t = useMessages();
+  const m = t.findings.vendorVex;
+  const code = vex.verdict ?? '';
+  const label = code in m.verdict ? m.verdict[code as keyof typeof m.verdict] : m.unknownVerdict(code);
+  const source = vexSource(vex.sourcePath, vex.statementIndex);
+  const detail = [vex.rationale, source].filter(Boolean).join(' — ');
+  return (
+    <div style={{ marginTop: 4 }}>
+      <span
+        className="vendor-vex-chip"
+        title={detail || undefined}
+        style={{
+          display: 'inline-block',
+          color: 'var(--text-dim)',
+          background: 'var(--bg-inset)',
+          border: '1px dotted var(--border-strong)',
+          borderRadius: 'var(--r-sm)',
+          padding: '1px 6px',
+          fontSize: 10.5,
+          lineHeight: 1.4,
+          maxWidth: '100%',
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {label} — {m.suffix}
+      </span>
+    </div>
+  );
+}
+
+/** The vendor statement in full, in the expanded detail: what it says, where it was found, and that it moved nothing. */
+function VendorVexNote({ vex }: { vex: VendorVexRowVerdict }): JSX.Element {
+  const t = useMessages();
+  const m = t.findings.vendorVex;
+  const sources = (vex.sources ?? [])
+    .map((s) => vexSource(s.sourcePath, s.statementIndex))
+    .filter((s): s is string => s !== null);
+  const fallback = vexSource(vex.sourcePath, vex.statementIndex);
+  const listed = sources.length > 0 ? sources : fallback ? [fallback] : [];
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        borderLeft: '3px dotted var(--border-strong)',
+        padding: '4px 10px',
+        maxWidth: '72ch',
+      }}
+    >
+      <span className="eyebrow">{m.heading}</span> {vex.rationale}
+      {vex.justification ? <div className="hint">{m.justification(vex.justification)}</div> : null}
+      {listed.length > 0 ? (
+        <ul
+          className="hint mono"
+          style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 11, overflowWrap: 'anywhere' }}
+        >
+          {listed.map((src) => (
+            <li key={src}>{src}</li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="hint" style={{ marginTop: 4 }}>
+        {m.unchanged}
+      </div>
+    </div>
+  );
+}
+
 interface EvidenceLeaf {
   path: string;
   value: string;
@@ -590,6 +686,7 @@ function LedgerRow({
   nested?: boolean;
 }): JSX.Element {
   const t = useMessages();
+  const vex = findingVendorVex(f);
   return (
     <Fragment>
       <tr className={nested ? 'ledger-nested' : undefined}>
@@ -656,6 +753,8 @@ function LedgerRow({
               {t.findings.interventionMark(f.interventions.length)}
             </div>
           ) : null}
+          {/* A vendor's statement, under the rung and never in its place: testimony about the row, not a rung. */}
+          {vex ? <VendorVexChip vex={vex} /> : null}
         </td>
       </tr>
       {open && (f.rationale || f.evidence) ? (
@@ -673,6 +772,7 @@ function LedgerRow({
                 {f.rationale}
               </div>
             ) : null}
+            {vex ? <VendorVexNote vex={vex} /> : null}
             {f.evidence ? <FindingEvidence evidence={f.evidence} imageId={f.imageId} /> : null}
           </td>
         </tr>
@@ -705,6 +805,9 @@ function GroupHeaderRow({
   const t = useMessages();
   const f = group.lead;
   const label = t.findings.group.toggle(group.members.length, open);
+  // Folding is unchanged by a vendor statement; the header only says how many of the folded rows carry one, so a
+  // statement is never hidden behind a collapsed group without a trace.
+  const withVex = group.members.filter((m) => findingVendorVex(m)).length;
   return (
     <tr className={`ledger-group-head${open ? ' is-open' : ''}`}>
       <td>
@@ -733,6 +836,7 @@ function GroupHeaderRow({
         <div className="finding-meta mono">
           <span>{f.source}</span>
           <span>{t.findings.group.subjects(group.members.length)}</span>
+          {withVex > 0 ? <span>{t.findings.vendorVex.inGroup(withVex)}</span> : null}
         </div>
       </td>
       <td>
