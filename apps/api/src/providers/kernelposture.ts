@@ -72,6 +72,12 @@ import {
   inferKernelOption,
   kernelCveFindings,
 } from './kernel-cve.js';
+import {
+  type VendorVexDiscovery,
+  type VendorVexDiscoveryCoverage,
+  type VendorVexDiscoveryRefusal,
+  discoverVendorVex,
+} from './vendor-vex-discover.js';
 
 /**
  * Named so the rule is greppable from outside this file: loose `CONFIG_*` tokens recovered from a kernel blob are
@@ -1091,6 +1097,15 @@ export interface KernelPostureResult {
   /** What a bound dropped, and by which rule. Empty when nothing was dropped. */
   bounds: string[];
   reason: string;
+  /**
+   * The vendor VEX documents searched for in the rootfs: what was examined, parsed, refused (with why) and dropped
+   * by a cap. OPTIONAL FOREVER — results stored before VEX discovery existed have none, and absent means "not
+   * searched", never "no vendor statement". A matched verdict rides on the kernel-CVE row as `evidence.vendorVex`.
+   */
+  vendorVex?: VendorVexDiscoveryCoverage & {
+    documents: { path: string; format: string; statements: number }[];
+    refusals: VendorVexDiscoveryRefusal[];
+  };
 }
 
 const UNDETERMINED_LABEL: Readonly<Record<UndeterminedReason, string>> = {
@@ -1188,10 +1203,14 @@ export function moduleProvenanceFindings(mods: ModuleEvidence | null): FindingDr
  * APPLICABLE row's severity one step (see `kernelCveFindings`). Nothing else here is device-relative — a
  * tainted module or an out-of-tree one is the same fact on every box — so it is not threaded any further.
  */
-export function postureFindings(result: Omit<KernelPostureResult, 'findings'>, device?: DeviceContext): FindingDraft[] {
+export function postureFindings(
+  result: Omit<KernelPostureResult, 'findings'>,
+  device?: DeviceContext,
+  vex?: Pick<VendorVexDiscovery, 'documents'> | null,
+): FindingDraft[] {
   const drafts: FindingDraft[] = [];
   drafts.push(...moduleProvenanceFindings(result.modules));
-  if (result.version) drafts.push(...kernelCveFindings(result.version, result.cves, device));
+  if (result.version) drafts.push(...kernelCveFindings(result.version, result.cves, device, vex));
 
   if (!result.located) {
     drafts.push({
@@ -1791,6 +1810,8 @@ export function runKernelPosture(
   const cveLeads = cves.filter((cve) => cve.state === 'applicable').length;
   const cveRuledOut = cves.filter((cve) => cve.state === 'ruled_out').length;
   const cveUnknown = cves.length - cveLeads - cveRuledOut;
+  // Vendor VEX shipped in the rootfs. Never throws; without a rootfs it is "not searched" and records nothing.
+  const vex = rootfs ? discoverVendorVex(rootfs) : null;
 
   const shell: Omit<KernelPostureResult, 'findings'> = {
     available: true,
@@ -1815,7 +1836,20 @@ export function runKernelPosture(
     reason: located
       ? `Linux ${version} (from ${versionSource}; ${configPath ? `kernel config at ${configPath}` : 'no kernel config shipped'}). ${answered} of ${answers.length} posture questions answered from the bytes; ${answers.length - answered} could not be determined and each says why. Curated CVE gating retained ${cveLeads} lead(s), ruled out ${cveRuledOut}, and left ${cveUnknown} undetermined. An undetermined question is not a passing one.`
       : 'No Linux kernel was located. The posture questions were asked and could not be answered — a coverage gap, not a clean result.',
+    ...(vex
+      ? {
+          vendorVex: {
+            ...vex.coverage,
+            documents: vex.documents.map((d) => ({
+              path: d.sourcePath,
+              format: d.format,
+              statements: d.statements.length,
+            })),
+            refusals: vex.refusals,
+          },
+        }
+      : {}),
   };
 
-  return { ...shell, findings: postureFindings(shell, device) };
+  return { ...shell, findings: postureFindings(shell, device, vex) };
 }

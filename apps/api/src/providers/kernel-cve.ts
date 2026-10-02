@@ -13,6 +13,7 @@ import { type DeviceContext, deviceContextTriage } from './cve-device-triage.js'
 import type { DecodedKallsyms } from './kallsyms.js';
 import type { KernelPostureResult } from './kernelposture.js';
 import type { NvdComponentResult } from './nvd.js';
+import { type VendorVexDiscovery, linuxKernelProductMatcher, vendorVexVerdictFor } from './vendor-vex-discover.js';
 
 export type KernelOptionState = 'on' | 'off' | 'unknown';
 export type KernelCveState = 'applicable' | 'ruled_out' | 'unknown';
@@ -680,6 +681,19 @@ export function assessKernelCves(version: string, evidence: KernelConfigEvidence
   });
 }
 
+/**
+ * Pure: the vendor VEX verdict for a Linux-kernel row, or null (attach nothing). Matched against the conservative
+ * `LINUX_KERNEL_VEX_PRODUCTS` at the detected version or its upstream token; it never touches the row's rung.
+ */
+function kernelVendorVex(
+  vex: Pick<VendorVexDiscovery, 'documents'> | null | undefined,
+  id: string,
+  versions: (string | null)[],
+) {
+  const upstream = versions.map((v) => (v ? (/^(\d+\.\d+(?:\.\d+)?)/.exec(v.trim())?.[1] ?? null) : null));
+  return vendorVexVerdictFor(vex, id, linuxKernelProductMatcher([...versions, ...upstream]), 'the Linux kernel');
+}
+
 function impactSeverity(impact: KernelCveRule['impact']): FindingSeverity {
   if (impact === 'RCE') return 'critical';
   if (impact === 'LPE') return 'high';
@@ -703,9 +717,12 @@ export function kernelCveFindings(
   version: string,
   assessments: readonly KernelCveAssessment[],
   device?: DeviceContext,
+  vex?: Pick<VendorVexDiscovery, 'documents'> | null,
 ): FindingDraft[] {
   return assessments.map((assessment) => {
     const published = impactSeverity(assessment.impact);
+    // Metadata on the row, like `curatedCveVerdict` on a grype row: it moves neither the rung nor the severity.
+    const vendor = kernelVendorVex(vex, assessment.id, [version]);
     const triage =
       device && assessment.state === 'applicable' ? deviceContextTriage(assessment.impact, published, device) : null;
     return {
@@ -727,6 +744,7 @@ export function kernelCveFindings(
         ...(triage
           ? { deviceTriage: triage.rule, deviceTriageKind: triage.kind, publishedSeverity: triage.baseSeverity }
           : {}),
+        ...(vendor ? { vendorVex: vendor } : {}),
       },
       rationale: [
         assessment.state === 'applicable'
@@ -735,6 +753,7 @@ export function kernelCveFindings(
             ? `The version is in range, but a required condition was checked and dismissed: ${assessment.reason}.`
             : `The version is in range, but applicability could not be decided: ${assessment.reason}. Unknown is not absence and is not a clean result.`,
         triage?.note,
+        vendor?.rationale,
       ]
         .filter(Boolean)
         .join(' '),
@@ -794,13 +813,18 @@ function advisorySeverity(raw: string | null): FindingSeverity {
     : 'info';
 }
 
-export function normalizeKernelCves(selection: KernelCveSelection, component: NvdComponentResult): FindingDraft[] {
+export function normalizeKernelCves(
+  selection: KernelCveSelection,
+  component: NvdComponentResult,
+  vex?: Pick<VendorVexDiscovery, 'documents'> | null,
+): FindingDraft[] {
   if (!selection.candidate || component.name !== 'linux-kernel') return [];
   const selected = selectKernelCveAdvisories(selection, component);
   const { census } = selected;
   const prefix = census.truncated === true;
   return selected.advisories.map(({ advisory, gate, disposition }) => {
     const ruledOut = disposition === 'dismissed';
+    const vendor = kernelVendorVex(vex, advisory.id, [selection.detectedVersion, selection.queryVersion]);
     return {
       kind: 'kernel-cve-candidate',
       title: `${advisory.id} — Linux kernel ${selection.detectedVersion ?? component.version}`,
@@ -824,6 +848,7 @@ export function normalizeKernelCves(selection: KernelCveSelection, component: Nv
         truncated: census.truncated,
         kernelCveCensus: census,
         freshness: component.freshness,
+        ...(vendor ? { vendorVex: vendor } : {}),
       },
       rationale: `NVD returned this match for upstream Linux ${selection.queryVersion}, and the query is restricted to the Linux kernel CNA. The firmware's version was read from ${selection.versionSource}. This advisory match does not establish the device's patch state: vendor backports and runtime reachability remain unverified.${
         gate
@@ -841,7 +866,7 @@ export function normalizeKernelCves(selection: KernelCveSelection, component: Nv
         prefix
           ? ` NVD reports ${census.denominator} matching kernel advisories; this run assessed ${census.assessed}, so the advisory set remains incomplete.`
           : ''
-      }`,
+      }${vendor ? ` ${vendor.rationale}` : ''}`,
     };
   });
 }

@@ -37,6 +37,7 @@ import { type OsvBatchResult, osvEcosystem, queryOsvBatch } from '../providers/o
 import { type ProvenanceFingerprint, buildProvenanceFingerprint } from '../providers/provenance.js';
 import type { SbomResult } from '../providers/sbom.js';
 import { type SecurityTxt, fetchSecurityTxt } from '../providers/securitytxt.js';
+import { discoverVendorVex } from '../providers/vendor-vex-discover.js';
 import { getImage, listJobs } from '../store.js';
 import { rootfsKeyWalkWasBounded, selectSecurityDomains } from './bounds.js';
 import { RESEARCH_DISABLED, loadResearchConfig } from './config.js';
@@ -288,7 +289,7 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   }
   const kernelAnswer = nvd.components.find((c) => c.name === 'linux-kernel');
   if (kernelAnswer) {
-    const drafts = normalizeKernelCves(kernelSelection, kernelAnswer);
+    const drafts = normalizeKernelCves(kernelSelection, kernelAnswer, discoverVendorVex(rootfsPath));
     syncFindings(imageId, 'kernel-cve', drafts);
     handle.log(
       `Kernel CVE: ${drafts.length} candidate row(s) persisted from ${kernelAnswer.totalMatching ?? drafts.length} Linux-kernel CNA match(es); vendor backports, build configuration and reachability remain unproven.`,

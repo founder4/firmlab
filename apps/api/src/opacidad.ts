@@ -125,6 +125,7 @@ import { buildTaintScaffold } from './providers/taint.js';
 import { type UbootCoverageResult, ubootCoverageStep } from './providers/uboot-outcome.js';
 import { runUbootAnalysis } from './providers/uboot.js';
 import { runUpdatePath } from './providers/updatepath.js';
+import { discoverVendorVex } from './providers/vendor-vex-discover.js';
 import { type HandlerAnalysis, runWebTaint } from './providers/webtaint.js';
 import { YARASCAN_SOURCE, runYaraScan } from './providers/yarascan.js';
 import { getImage, listBinaries, listFindings, listJobs } from './store.js';
@@ -413,7 +414,7 @@ async function auxsecretsRun(c: RunCtx): Promise<StepOutcome> {
 
 async function sbomRun(c: RunCtx): Promise<StepOutcome> {
   const r = await runSbom(c.imageId, c.rootfsPath as string, c.handle);
-  const drafts = normalizeSbom(r, deviceContextFor(c.imageId, c.rootfsPath));
+  const drafts = normalizeSbom(r, deviceContextFor(c.imageId, c.rootfsPath), discoverVendorVex(c.rootfsPath));
   syncFindings(c.imageId, 'sbom', drafts);
   // `available:false` is syft's call, and it too has two shapes that were rendered as one: syft absent (the
   // deployment's `install-tool`) and syft ran-and-threw (a `retry`). The note now comes from `r.reason`, which

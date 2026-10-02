@@ -33,6 +33,11 @@ import { type DeviceContext, deviceContextTriage, impactFromVector } from './pro
 import type { DecompileResult } from './providers/decompile.js';
 import type { GitleaksFinding, GitleaksResult } from './providers/gitleaks.js';
 import type { GrypeKevMatch, SbomResult, Severity } from './providers/sbom.js';
+import {
+  type VendorVexDiscovery,
+  packageProductMatcher,
+  vendorVexVerdictFor,
+} from './providers/vendor-vex-discover.js';
 
 /** Hardcoded credentials / keys / tokens found by the static string classifier over the raw image. */
 export function normalizeSecrets(secrets: StringHit[]): FindingDraft[] {
@@ -100,14 +105,28 @@ const SBOM_SEVERITY: Record<Severity, FindingSeverity> = {
  * and a stamped `curatedVerdict`, so a reader can tell "grype and the curated table agree" from "grype matched a
  * CVE the curated table evaluated and refuses" — the choice that used to be an accident of which provider ran.
  * `curatedCveVerdict` returns null when it has no opinion, and then nothing is added: silence is not agreement.
+ *
+ * `vex` (optional) carries the vendor VEX documents found in the rootfs. Their verdict rides on the row beside the
+ * curated one, as `vendorVex`, under the same contract: a vendor assertion moves neither the rung nor the severity,
+ * never removes a row, and attaches nothing when the vendor is silent on this CVE and package.
  */
-export function normalizeSbom(result: SbomResult, device?: DeviceContext): FindingDraft[] {
+export function normalizeSbom(
+  result: SbomResult,
+  device?: DeviceContext,
+  vex?: Pick<VendorVexDiscovery, 'documents'> | null,
+): FindingDraft[] {
   if (!result.available) return [];
   const base = 'Vulnerable component present in the rootfs; reachability and exploitability not yet proven.';
   const kev = grypeKevByVulnerabilityId(result);
   const captured = result.grypeKev?.state === 'annotated' ? result.grypeKev.captured : '';
   return result.vulnerabilities.map((v) => {
     const verdict = curatedCveVerdict(v.packageName, v.packageVersion, v.id);
+    const vendor = vendorVexVerdictFor(
+      vex,
+      v.id,
+      packageProductMatcher(v.packageName, v.packageVersion),
+      v.packageName,
+    );
     const known = kev.get(v.id.toUpperCase()) ?? [];
     // KEV is metadata ON the row that carries the CVE, never a row of its own: the CVE is already a finding here,
     // and a second row for it would count one component twice. It moves neither the rung nor the severity — a
@@ -133,7 +152,7 @@ export function normalizeSbom(result: SbomResult, device?: DeviceContext): Findi
       // A published database says this version is affected. Nothing here was measured on THIS image beyond the
       // package's presence — which is exactly the distinction the channel exists to make visible.
       evidenceChannel: 'external_advisory' as EvidenceChannel,
-      rationale: [base, verdict?.note, triage?.note, kevNote].filter(Boolean).join(' '),
+      rationale: [base, verdict?.note, triage?.note, kevNote, vendor?.rationale].filter(Boolean).join(' '),
       evidence: {
         id: v.id,
         packageName: v.packageName,
@@ -141,6 +160,7 @@ export function normalizeSbom(result: SbomResult, device?: DeviceContext): Findi
         fixedIn: v.fixedIn,
         ...(v.cvssVector ? { cvssVector: v.cvssVector } : {}),
         ...(verdict ? { curatedVerdict: verdict.kind } : {}),
+        ...(vendor ? { vendorVex: vendor } : {}),
         ...(known.length > 0
           ? {
               knownExploited: {

@@ -1,3 +1,4 @@
+import { type FindingDraft, parseVendorVex } from '@firmlab/core';
 import { describe, expect, it } from 'vitest';
 import { type DeviceContext, privilegeBoundaryFromPasswd, processSupervisionForClass } from './cve-device-triage.js';
 import type { DecodedKallsyms } from './kallsyms.js';
@@ -442,5 +443,134 @@ describe('normalizeKernelCves gates the candidate rows it was handed', () => {
     expect(rows[0]?.proofState).toBe('needs_runtime_reproduction');
     expect(rows[0]?.rationale).toContain('subsystem is unmapped');
     expect((rows[0]?.evidence as Record<string, unknown>).subsystem).toBeUndefined();
+  });
+});
+
+/** Parsed OpenVEX documents, one per call, for the vendor-verdict tests. */
+function vexDocs(...docs: { cve: string; products: string[]; status: string; justification?: string }[][]) {
+  return {
+    documents: docs.map((statements, i) => {
+      const parsed = parseVendorVex(
+        JSON.stringify({
+          '@context': 'https://openvex.dev/ns/v0.2.0',
+          '@id': `https://vendor.example/vex/${i}`,
+          author: 'Vendor PSIRT',
+          timestamp: '2026-01-01T00:00:00Z',
+          version: 1,
+          statements: statements.map((s) => ({
+            vulnerability: { name: s.cve },
+            products: s.products,
+            status: s.status,
+            ...(s.justification ? { justification: s.justification } : {}),
+          })),
+        }),
+        `/etc/vex/${i}.openvex.json`,
+      );
+      if (!parsed.ok) throw new Error(parsed.reason);
+      return parsed;
+    }),
+  };
+}
+
+/** The fields a vendor verdict must never move. */
+const rung = (rows: readonly FindingDraft[]) =>
+  rows.map((r) => ({ kind: r.kind, title: r.title, proofState: r.proofState, severity: r.severity }));
+
+/**
+ * Vendor VEX on kernel-CVE rows. The verdict is metadata ON the row — like `curatedCveVerdict` on a grype row — so
+ * the invariant worth pinning is everything it must NOT move: the row count, each row's proof state and severity,
+ * whichever way the vendor leans. Silence attaches nothing at all.
+ */
+describe('vendor VEX on kernel-CVE rows', () => {
+  const ids = (rows: readonly FindingDraft[]) => rows.map((r) => (r.evidence as { id?: string }).id ?? r.title);
+  const assessments = assessKernelCves('5.10', evidence({}));
+  const first = assessments[0];
+
+  it('never changes rows, proof states or severities, with fixed, not_affected or affected statements present', () => {
+    expect(first).toBeDefined();
+    const without = kernelCveFindings('5.10', assessments);
+    for (const status of ['fixed', 'not_affected', 'affected', 'under_investigation']) {
+      const vex = vexDocs(assessments.map((a) => ({ cve: a.id, products: ['linux-kernel'], status })));
+      const withVex = kernelCveFindings('5.10', assessments, undefined, vex);
+      expect(withVex).toHaveLength(without.length);
+      expect(rung(withVex)).toEqual(rung(without));
+      expect(withVex.every((r) => (r.evidence as { vendorVex?: unknown }).vendorVex !== undefined)).toBe(true);
+    }
+  });
+
+  it('attaches the verdict with source and statement, matching the curated CVE id exactly', () => {
+    const vex = vexDocs([
+      {
+        cve: first?.id ?? '',
+        products: ['cpe:2.3:o:linux:linux_kernel:5.10:*:*:*:*:*:*:*'],
+        status: 'not_affected',
+        justification: 'vulnerable_code_not_in_execute_path',
+      },
+    ]);
+    const rows = kernelCveFindings('5.10', assessments, undefined, vex);
+    const row = rows.find((r) => r.title.startsWith(`${first?.id} `));
+    expect((row?.evidence as { vendorVex?: unknown }).vendorVex).toMatchObject({
+      verdict: 'vendor_states_not_affected',
+      basis: 'vendor_assertion',
+      sourcePath: '/etc/vex/0.openvex.json',
+      statementIndex: 0,
+      justification: 'vulnerable_code_not_in_execute_path',
+    });
+    expect(row?.rationale).toMatch(/not a code fact/);
+    // Only that row carries a verdict; every other CVE is unmentioned and untouched.
+    expect(rows.filter((r) => (r.evidence as { vendorVex?: unknown }).vendorVex)).toHaveLength(1);
+  });
+
+  it('unmentioned, a non-kernel product, or "linux" alone attach nothing — the rows are identical', () => {
+    const without = kernelCveFindings('5.10', assessments);
+    for (const products of [['busybox'], ['linux'], ['pkg:deb/debian/linux@5.10']]) {
+      const vex = vexDocs(assessments.map((a) => ({ cve: a.id, products, status: 'fixed' })));
+      expect(kernelCveFindings('5.10', assessments, undefined, vex)).toEqual(without);
+    }
+    expect(kernelCveFindings('5.10', assessments, undefined, vexDocs([]))).toEqual(without);
+    expect(ids(kernelCveFindings('5.10', assessments, undefined, null))).toEqual(ids(without));
+  });
+
+  it('conflicting statements are attached as conflicting and still move nothing', () => {
+    const vex = vexDocs(
+      [{ cve: first?.id ?? '', products: ['linux-kernel'], status: 'fixed' }],
+      [{ cve: first?.id ?? '', products: ['linux_kernel'], status: 'affected' }],
+    );
+    const rows = kernelCveFindings('5.10', assessments, undefined, vex);
+    expect(rung(rows)).toEqual(rung(kernelCveFindings('5.10', assessments)));
+    const row = rows.find((r) => r.title.startsWith(`${first?.id} `));
+    expect((row?.evidence as { vendorVex?: { verdict?: string } }).vendorVex?.verdict).toBe('conflicting');
+  });
+
+  it('research-lane candidate rows carry it too, at the detected or upstream version, and keep their rung', () => {
+    const selection: KernelCveSelection = {
+      candidate: { name: 'linux-kernel', version: '5.4' },
+      detectedVersion: '5.4.55',
+      queryVersion: '5.4',
+      versionSource: 'kernel-banner',
+      reason: 'test',
+      configOptions: [],
+    };
+    const component = {
+      name: 'linux-kernel',
+      version: '5.4',
+      matchedBy: 'cpe',
+      totalMatching: 2,
+      freshness: null,
+      advisories: [
+        { id: 'CVE-2024-0001', severity: 'HIGH', score: 7, summary: 'x', references: [] },
+        { id: 'CVE-2024-0002', severity: 'LOW', score: 2, summary: 'y', references: [] },
+      ],
+    } as unknown as NvdComponentResult;
+    const without = normalizeKernelCves(selection, component);
+    const vex = vexDocs([
+      { cve: 'CVE-2024-0001', products: ['pkg:generic/linux-kernel@5.4.55'], status: 'fixed' },
+      { cve: 'CVE-2024-0002', products: ['pkg:generic/linux-kernel@4.19'], status: 'fixed' },
+    ]);
+    const rows = normalizeKernelCves(selection, component, vex);
+    expect(rung(rows)).toEqual(rung(without));
+    expect((rows[0]?.evidence as { vendorVex?: { verdict?: string } }).vendorVex?.verdict).toBe('vendor_states_fixed');
+    // A statement about another kernel version is not about this one: nothing attached, row identical.
+    expect(rows[1]).toEqual(without[1]);
   });
 });

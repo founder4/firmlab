@@ -5,6 +5,7 @@ import zlib from 'node:zlib';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   type KernelBlobFacts,
+  type KernelPostureResult,
   MODULE_SIG_TRAILER,
   type ModuleEvidence,
   type PostureEvidence,
@@ -831,5 +832,72 @@ describe('runKernelPosture', () => {
     expect(r.modules).toMatchObject({ moduleCount: 0, moduleInventoryComplete: false });
     expect(r.bounds.some((bound) => bound.includes('moduleCount=0 is a lower bound'))).toBe(true);
     expect(r.configOptions.find((o) => o.option === 'CONFIG_NF_TABLES')?.state).toBe('unknown');
+  });
+});
+
+/**
+ * Vendor VEX shipped in the rootfs, end to end through the posture flow. The coverage says what was examined and
+ * refused; the verdict rides on the curated kernel-CVE row; and nothing about the rows themselves moves.
+ */
+describe('runKernelPosture with vendor VEX in the rootfs', () => {
+  const build = (name: string, vex: Record<string, string>) => {
+    const at = path.join(tmp, name);
+    const rootfs = path.join(at, 'rootfs');
+    fs.mkdirSync(path.join(rootfs, 'lib/modules/5.10.0'), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootfs, 'lib/modules/5.10.0/act_gact.ko'),
+      Buffer.from('\u0000vermagic=5.10.0 SMP mod_unload armv7\u0000', 'latin1'),
+    );
+    for (const [rel, text] of Object.entries(vex)) {
+      fs.mkdirSync(path.dirname(path.join(rootfs, rel)), { recursive: true });
+      fs.writeFileSync(path.join(rootfs, rel), text);
+    }
+    const image = path.join(at, 'fw.bin');
+    fs.writeFileSync(image, Buffer.alloc(1024));
+    return runKernelPosture(image, rootfs, null, NOW);
+  };
+  const statement = (status: string) =>
+    JSON.stringify({
+      '@context': 'https://openvex.dev/ns/v0.2.0',
+      '@id': 'https://vendor.example/vex/kernel',
+      author: 'Vendor PSIRT',
+      timestamp: '2026-01-01T00:00:00Z',
+      version: 1,
+      statements: [{ vulnerability: { name: 'CVE-2022-0847' }, products: ['linux-kernel'], status }],
+    });
+  const rung = (r: KernelPostureResult) =>
+    r.findings.map((f) => ({ kind: f.kind, title: f.title, proofState: f.proofState, severity: f.severity }));
+
+  it('reports the documents examined and refused, and leaves every row and rung unchanged', () => {
+    const plain = build('vex-none', {});
+    expect(plain.located).toBe(true);
+    expect(plain.findings.some((f) => f.title.startsWith('CVE-2022-0847 '))).toBe(true);
+    expect(plain.vendorVex).toMatchObject({ candidatesFound: 0, parsed: 0 });
+    expect(plain.findings.some((f) => (f.evidence as { vendorVex?: unknown } | undefined)?.vendorVex)).toBe(false);
+
+    for (const status of ['fixed', 'not_affected']) {
+      const r = build(`vex-${status}`, {
+        'usr/share/vex/kernel.openvex.json': statement(status),
+        'etc/vex/broken.json': '{',
+      });
+      expect(r.vendorVex).toMatchObject({ candidatesFound: 2, examined: 2, parsed: 1, refused: 1 });
+      expect(r.vendorVex?.documents).toEqual([
+        { path: '/usr/share/vex/kernel.openvex.json', format: 'openvex', statements: 1 },
+      ]);
+      expect(r.vendorVex?.refusals).toEqual([
+        expect.objectContaining({ path: '/etc/vex/broken.json', reason: 'malformed_json' }),
+      ]);
+      expect(rung(r)).toEqual(rung(plain));
+      const row = r.findings.find((f) => f.title.startsWith('CVE-2022-0847 '));
+      expect((row?.evidence as { vendorVex?: { verdict?: string } }).vendorVex?.verdict).toBe(
+        status === 'fixed' ? 'vendor_states_fixed' : 'vendor_states_not_affected',
+      );
+    }
+  });
+
+  it('without a rootfs records nothing: not searched is not "no vendor statement"', () => {
+    const image = path.join(tmp, 'vex-no-rootfs.bin');
+    fs.writeFileSync(image, Buffer.alloc(1024));
+    expect(runKernelPosture(image, null, null, NOW).vendorVex).toBeUndefined();
   });
 });
