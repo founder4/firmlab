@@ -92,6 +92,14 @@ export const corpus: Messages['corpus'] = {
     promptLabel: 'Etiqueta',
     promptDefault: 'credencial conocida como insegura',
     promoted: 'Añadida a la lista de vigilancia',
+    searchLabel: 'Filtrar credenciales reutilizadas por hash, tipo o etiqueta de vigilancia',
+    searchPlaceholder: 'Filtrar por hash, tipo o etiqueta…',
+  },
+
+  search: {
+    clear: 'Limpiar',
+    matches: (n, listed) => `${n} de ${listed} fila(s) listada(s) coinciden.`,
+    noMatch: (query) => `Ninguna fila listada coincide con «${query}».`,
   },
 
   listNote: (shown: number, total: number, rule: string) => `Mostrando ${shown} de ${total}. ${rule}`,
@@ -107,11 +115,14 @@ export const corpus: Messages['corpus'] = {
     colVersion: 'Versión',
     colImages: 'Imágenes',
     colCves: 'CVE emparejados',
+    searchLabel: 'Filtrar componentes por nombre o versión',
+    searchPlaceholder: 'Filtrar por componente o versión…',
   },
 
   families: {
     title: 'Familias de dispositivo',
     sub: 'Las imágenes sólo comparten familia cuando consta el fabricante; un fabricante desconocido queda aislado por imagen. Una familia demostrada con varias versiones permite comparar versiones.',
+    empty: 'Aún no se han descubierto familias de dispositivos entre imágenes.',
   },
 
   rules: {

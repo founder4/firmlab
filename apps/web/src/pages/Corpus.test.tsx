@@ -6,7 +6,7 @@ import { setLocale } from '../i18n';
 import { en } from '../locales/en';
 import { es } from '../locales/es';
 import { mockedApi } from '../test-api-mock';
-import { Corpus, reclassifyStatus } from './Corpus';
+import { Corpus, filterComponentPrevalence, filterCredentialReuse, reclassifyStatus } from './Corpus';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
@@ -214,6 +214,151 @@ describe('Corpus', () => {
       expect(mockApi.promoteRule).toHaveBeenCalledWith('known-credential', 'credential-hash', 'vendor default'),
     );
     expect(mockApi.corpusOverview).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['en', 'No device families discovered across images yet.'],
+    ['es', 'Aún no se han descubierto familias de dispositivos entre imágenes.'],
+  ] as const)(
+    'in %s: says no family has been discovered instead of rendering an empty panel',
+    async (locale, empty) => {
+      setLocale(locale);
+      render(
+        <MemoryRouter>
+          <Corpus />
+        </MemoryRouter>,
+      );
+      expect(await screen.findByText(empty)).toBeInTheDocument();
+    },
+  );
+
+  it('drops the families empty note once a family exists', async () => {
+    setLocale('en');
+    mockApi.corpusOverview.mockResolvedValue({
+      imageCount: 2,
+      ruleCount: 0,
+      credentialReuse: [],
+      componentPrevalence: [],
+      deviceFamilies: [{ familyKey: 'acme/router', images: [{ id: 'one', filename: 'router-v1.bin' }] }],
+    });
+    render(
+      <MemoryRouter>
+        <Corpus />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole('link', { name: 'router-v1.bin' })).toBeInTheDocument();
+    expect(screen.queryByText('No device families discovered across images yet.')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The quick filters narrow the rows the API listed. A credential matches on its full hash — not the 16 characters
+   * the table shows — and on kind or watchlist label; a component on name or version. Case is ignored.
+   */
+  describe('quick filters', () => {
+    const reuse = [
+      { hash: 'aaaa1111bbbb2222cccc3333', kind: 'password', imageCount: 3, watchlistLabel: 'default admin' },
+      { hash: 'dddd4444eeee5555ffff6666', kind: 'private-key', imageCount: 2, watchlistLabel: null },
+    ];
+    const prevalence = [
+      { name: 'busybox', version: '1.18.4', cveCount: 3, imageCount: 4 },
+      { name: 'dropbear', version: '2012.55', cveCount: 1, imageCount: 2 },
+      { name: 'openssl', version: '1.0.1e', cveCount: 9, imageCount: 2 },
+    ];
+
+    it('matches credentials on the full hash, kind and label, and components on name and version', () => {
+      expect(filterCredentialReuse(reuse, '')).toHaveLength(2);
+      expect(filterCredentialReuse(reuse, 'ffff6666').map((r) => r.kind)).toEqual(['private-key']);
+      expect(filterCredentialReuse(reuse, 'PASSWORD').map((r) => r.kind)).toEqual(['password']);
+      expect(filterCredentialReuse(reuse, 'admin').map((r) => r.kind)).toEqual(['password']);
+      expect(filterCredentialReuse(reuse, 'nothing')).toEqual([]);
+      expect(filterComponentPrevalence(prevalence, 'Drop').map((r) => r.name)).toEqual(['dropbear']);
+      expect(filterComponentPrevalence(prevalence, '1.0.1').map((r) => r.name)).toEqual(['openssl']);
+      expect(filterComponentPrevalence(prevalence, '  ')).toHaveLength(3);
+    });
+
+    function renderTables(): void {
+      mockApi.corpusOverview.mockResolvedValue({
+        imageCount: 4,
+        ruleCount: 0,
+        credentialReuse: reuse,
+        componentPrevalence: prevalence,
+        deviceFamilies: [],
+      });
+      render(
+        <MemoryRouter>
+          <Corpus />
+        </MemoryRouter>,
+      );
+    }
+
+    it.each([
+      [
+        'en',
+        'Filter reused credentials by hash, kind or watchlist label',
+        '1 of 2 listed row(s) match.',
+        'No listed row matches “nope”.',
+        'Clear',
+      ],
+      [
+        'es',
+        'Filtrar credenciales reutilizadas por hash, tipo o etiqueta de vigilancia',
+        '1 de 2 fila(s) listada(s) coinciden.',
+        'Ninguna fila listada coincide con «nope».',
+        'Limpiar',
+      ],
+    ] as const)('in %s: filters credential reuse by hash and kind', async (locale, label, count, noMatch, clear) => {
+      setLocale(locale);
+      renderTables();
+      const search = await screen.findByRole('searchbox', { name: label });
+      expect(screen.getByText('password')).toBeInTheDocument();
+      expect(screen.getByText('private-key')).toBeInTheDocument();
+
+      // By a part of the hash past the 16 characters the table shows.
+      fireEvent.change(search, { target: { value: 'ffff6666' } });
+      expect(screen.queryByText('password')).not.toBeInTheDocument();
+      expect(screen.getByText('private-key')).toBeInTheDocument();
+      expect(screen.getByText(count)).toBeInTheDocument();
+
+      // By kind.
+      fireEvent.change(search, { target: { value: 'pass' } });
+      expect(screen.getByText('password')).toBeInTheDocument();
+      expect(screen.queryByText('private-key')).not.toBeInTheDocument();
+
+      fireEvent.change(search, { target: { value: 'nope' } });
+      expect(screen.getByText(noMatch)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: clear }));
+      expect(search).toHaveValue('');
+      expect(screen.getByText('password')).toBeInTheDocument();
+      expect(screen.getByText('private-key')).toBeInTheDocument();
+      expect(screen.queryByText(count)).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ['en', 'Filter components by name or version', '1 of 3 listed row(s) match.', 'No listed row matches “zlib”.'],
+      [
+        'es',
+        'Filtrar componentes por nombre o versión',
+        '1 de 3 fila(s) listada(s) coinciden.',
+        'Ninguna fila listada coincide con «zlib».',
+      ],
+    ] as const)('in %s: filters component prevalence by component name', async (locale, label, count, noMatch) => {
+      setLocale(locale);
+      renderTables();
+      const search = await screen.findByRole('searchbox', { name: label });
+
+      fireEvent.change(search, { target: { value: 'busy' } });
+      expect(screen.getByText('busybox')).toBeInTheDocument();
+      expect(screen.queryByText('dropbear')).not.toBeInTheDocument();
+      expect(screen.queryByText('openssl')).not.toBeInTheDocument();
+      expect(screen.getByText(count)).toBeInTheDocument();
+      // The credential table is untouched by the component filter.
+      expect(screen.getByText('private-key')).toBeInTheDocument();
+
+      fireEvent.change(search, { target: { value: 'zlib' } });
+      expect(screen.getByText(noMatch)).toBeInTheDocument();
+      expect(screen.queryByText('busybox')).not.toBeInTheDocument();
+    });
   });
 
   describe('reindex', () => {

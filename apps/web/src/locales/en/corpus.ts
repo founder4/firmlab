@@ -105,6 +105,19 @@ export const corpus = {
     promptLabel: 'Label',
     promptDefault: 'known-bad credential',
     promoted: 'Promoted to the watchlist',
+    searchLabel: 'Filter reused credentials by hash, kind or watchlist label',
+    searchPlaceholder: 'Filter by hash, kind or label…',
+  },
+
+  /**
+   * The quick filter over the two corpus tables. It narrows the rows the API LISTED, never the corpus behind them:
+   * when the API cut a table (see `listNote`), a row past the cut is not searched, so the count and the empty note
+   * both say "listed" — a filter that finds nothing in a prefix has not shown the corpus lacks it.
+   */
+  search: {
+    clear: 'Clear',
+    matches: (n: number, listed: number) => `${n} of ${listed} listed row(s) match.`,
+    noMatch: (query: string) => `No listed row matches “${query}”.`,
   },
 
   /**
@@ -125,11 +138,14 @@ export const corpus = {
     colVersion: 'Version',
     colImages: 'Images',
     colCves: 'CVEs',
+    searchLabel: 'Filter components by name or version',
+    searchPlaceholder: 'Filter by component or version…',
   },
 
   families: {
     title: 'Device families',
     sub: 'Images share a family only when vendor is evidenced; an unknown vendor stays scoped to one image. A proven family with several versions is the basis for cross-version diff.',
+    empty: 'No device families discovered across images yet.',
   },
 
   rules: {

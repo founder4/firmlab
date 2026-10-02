@@ -28,6 +28,28 @@ import { toast } from '../toast';
 const ACTION_HEAD = { flexWrap: 'wrap' } as const;
 const ACTION_HEAD_TEXT = { flex: '1 1 40ch', minWidth: 0 } as const;
 
+type ReuseRow = CorpusOverview['credentialReuse'][number];
+type PrevalenceRow = CorpusOverview['componentPrevalence'][number];
+
+/** Case-insensitive substring match over the fields given; an all-blank query matches every row. */
+function matchesQuery(query: string, fields: (string | null)[]): boolean {
+  const q = query.trim().toLowerCase();
+  if (q === '') return true;
+  return fields.some((f) => f?.toLowerCase().includes(q));
+}
+
+/**
+ * A reused credential matches on its FULL hash, not the 16 characters the table shows, so a hash pasted from a
+ * finding still finds its row; and on kind or watchlist label.
+ */
+export function filterCredentialReuse(rows: ReuseRow[], query: string): ReuseRow[] {
+  return rows.filter((c) => matchesQuery(query, [c.hash, c.kind, c.watchlistLabel]));
+}
+
+export function filterComponentPrevalence(rows: PrevalenceRow[], query: string): PrevalenceRow[] {
+  return rows.filter((c) => matchesQuery(query, [c.name, c.version]));
+}
+
 export function Corpus(): JSX.Element {
   const [overview, setOverview] = useState<CorpusOverview | null>(null);
   const [rules, setRules] = useState<CorpusRule[]>([]);
@@ -46,6 +68,9 @@ export function Corpus(): JSX.Element {
   }, []);
 
   useEffect(refresh, [refresh]);
+
+  const [reuseQuery, setReuseQuery] = useState('');
+  const [prevalenceQuery, setPrevalenceQuery] = useState('');
 
   const ruleKeys = new Set(rules.filter((r) => r.type === 'known-credential').map((r) => r.key));
 
@@ -114,6 +139,9 @@ export function Corpus(): JSX.Element {
 
   if (!overview) return <div className="empty">{t.corpus.loading}</div>;
 
+  const reuseRows = filterCredentialReuse(overview.credentialReuse, reuseQuery);
+  const prevalenceRows = filterComponentPrevalence(overview.componentPrevalence, prevalenceQuery);
+
   return (
     <div>
       <div className="page-head">
@@ -175,41 +203,57 @@ export function Corpus(): JSX.Element {
         {overview.credentialReuse.length === 0 ? (
           <div className="hint">{t.corpus.reuse.empty}</div>
         ) : (
-          <div className="table-wrap" style={{ marginTop: 10 }}>
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>{t.corpus.reuse.colKind}</th>
-                  <th>{t.corpus.reuse.colHash}</th>
-                  <th>{t.corpus.reuse.colImages}</th>
-                  <th>{t.corpus.reuse.colWatchlist}</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {overview.credentialReuse.map((c) => (
-                  <tr key={c.hash}>
-                    <td>{c.kind ?? '—'}</td>
-                    <td className="mono" style={{ fontSize: 11 }}>
-                      {c.hash.slice(0, 16)}…
-                    </td>
-                    <td className="mono">{c.imageCount}</td>
-                    <td>{c.watchlistLabel ? <span className="badge badge-high">{c.watchlistLabel}</span> : '—'}</td>
-                    <td>
-                      {!ruleKeys.has(c.hash) && (
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          onClick={() => setDialog({ kind: 'promote', hash: c.hash, kind0: c.kind })}
-                        >
-                          {t.corpus.reuse.promote}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div style={{ marginTop: 10 }}>
+            <TableSearch
+              label={t.corpus.reuse.searchLabel}
+              placeholder={t.corpus.reuse.searchPlaceholder}
+              query={reuseQuery}
+              onQuery={setReuseQuery}
+              matched={reuseRows.length}
+              listed={overview.credentialReuse.length}
+            />
+            {reuseRows.length === 0 ? (
+              <div className="hint" style={{ marginTop: 8 }}>
+                {t.corpus.search.noMatch(reuseQuery.trim())}
+              </div>
+            ) : (
+              <div className="table-wrap" style={{ marginTop: 10 }}>
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>{t.corpus.reuse.colKind}</th>
+                      <th>{t.corpus.reuse.colHash}</th>
+                      <th>{t.corpus.reuse.colImages}</th>
+                      <th>{t.corpus.reuse.colWatchlist}</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reuseRows.map((c) => (
+                      <tr key={c.hash}>
+                        <td>{c.kind ?? '—'}</td>
+                        <td className="mono" style={{ fontSize: 11 }}>
+                          {c.hash.slice(0, 16)}…
+                        </td>
+                        <td className="mono">{c.imageCount}</td>
+                        <td>{c.watchlistLabel ? <span className="badge badge-high">{c.watchlistLabel}</span> : '—'}</td>
+                        <td>
+                          {!ruleKeys.has(c.hash) && (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              onClick={() => setDialog({ kind: 'promote', hash: c.hash, kind0: c.kind })}
+                            >
+                              {t.corpus.reuse.promote}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             {overview.credentialReuseTotal !== undefined &&
               overview.credentialReuseTotal > overview.credentialReuse.length && (
                 <div className="hint" style={{ marginTop: 8 }}>
@@ -230,31 +274,47 @@ export function Corpus(): JSX.Element {
         {overview.componentPrevalence.length === 0 ? (
           <div className="hint">{t.corpus.prevalence.empty(overview.sbomImageCount, overview.imageCount)}</div>
         ) : (
-          <div className="table-wrap" style={{ marginTop: 10 }}>
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>{t.corpus.prevalence.colComponent}</th>
-                  <th>{t.corpus.prevalence.colVersion}</th>
-                  <th>{t.corpus.prevalence.colImages}</th>
-                  <th>{t.corpus.prevalence.colCves}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {overview.componentPrevalence.map((c) => (
-                  <tr key={`${c.name}@${c.version}`}>
-                    <td className="mono" style={{ fontSize: 12 }}>
-                      {c.name}
-                    </td>
-                    <td className="mono" style={{ fontSize: 12 }}>
-                      {c.version}
-                    </td>
-                    <td className="mono">{c.imageCount}</td>
-                    <td>{c.cveCount > 0 ? <span className="badge badge-high">{c.cveCount}</span> : '0'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div style={{ marginTop: 10 }}>
+            <TableSearch
+              label={t.corpus.prevalence.searchLabel}
+              placeholder={t.corpus.prevalence.searchPlaceholder}
+              query={prevalenceQuery}
+              onQuery={setPrevalenceQuery}
+              matched={prevalenceRows.length}
+              listed={overview.componentPrevalence.length}
+            />
+            {prevalenceRows.length === 0 ? (
+              <div className="hint" style={{ marginTop: 8 }}>
+                {t.corpus.search.noMatch(prevalenceQuery.trim())}
+              </div>
+            ) : (
+              <div className="table-wrap" style={{ marginTop: 10 }}>
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>{t.corpus.prevalence.colComponent}</th>
+                      <th>{t.corpus.prevalence.colVersion}</th>
+                      <th>{t.corpus.prevalence.colImages}</th>
+                      <th>{t.corpus.prevalence.colCves}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {prevalenceRows.map((c) => (
+                      <tr key={`${c.name}@${c.version}`}>
+                        <td className="mono" style={{ fontSize: 12 }}>
+                          {c.name}
+                        </td>
+                        <td className="mono" style={{ fontSize: 12 }}>
+                          {c.version}
+                        </td>
+                        <td className="mono">{c.imageCount}</td>
+                        <td>{c.cveCount > 0 ? <span className="badge badge-high">{c.cveCount}</span> : '0'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             {overview.componentPrevalenceTotal !== undefined &&
               overview.componentPrevalenceTotal > overview.componentPrevalence.length && (
                 <div className="hint" style={{ marginTop: 8 }}>
@@ -272,6 +332,7 @@ export function Corpus(): JSX.Element {
       <div className="panel">
         <div className="panel-title">{t.corpus.families.title}</div>
         <div className="panel-sub">{t.corpus.families.sub}</div>
+        {overview.deviceFamilies.length === 0 ? <div className="hint">{t.corpus.families.empty}</div> : null}
         {overview.deviceFamilies.map((fam) => (
           <div key={fam.familyKey} style={{ marginTop: 12 }}>
             <div className="mono" style={{ fontSize: 12.5, marginBottom: 4 }}>
@@ -565,6 +626,54 @@ function ClassTransition({
         </>
       )}
     </span>
+  );
+}
+
+/**
+ * The quick filter above a corpus table. It wraps rather than squeezes at 390px (the input takes the full line and
+ * the clear button and count drop under it), and the count is announced politely, because the rows it describes
+ * change silently under the keyboard. Nothing is counted while the query is blank: an unfiltered table needs no
+ * "N of N".
+ */
+function TableSearch({
+  label,
+  placeholder,
+  query,
+  onQuery,
+  matched,
+  listed,
+}: {
+  label: string;
+  placeholder: string;
+  query: string;
+  onQuery: (q: string) => void;
+  matched: number;
+  listed: number;
+}): JSX.Element {
+  const t = useMessages().corpus.search;
+  const active = query.trim() !== '';
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+      <label style={{ flex: '1 1 220px', maxWidth: 340, minWidth: 0 }}>
+        <span className="sr-only">{label}</span>
+        <input
+          className="input"
+          type="search"
+          style={{ width: '100%' }}
+          value={query}
+          placeholder={placeholder}
+          onChange={(e) => onQuery(e.target.value)}
+        />
+      </label>
+      {query !== '' ? (
+        <button type="button" className="btn btn-sm btn-ghost" onClick={() => onQuery('')}>
+          {t.clear}
+        </button>
+      ) : null}
+      <span className="hint mono" aria-live="polite">
+        {active ? t.matches(matched, listed) : ''}
+      </span>
+    </div>
   );
 }
 
