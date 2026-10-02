@@ -22,6 +22,7 @@ export * from './mcu.js';
 export * from './rtos-tasks.js';
 export * from './switch-family.js';
 export * from './elf-symbols.js';
+export * from './vendor-vex.js';
 export { analyzeBuffer } from './analyze.js';
 export type { StaticAnalysis } from './analyze.js';
 export * from './nvd-domain.js';
