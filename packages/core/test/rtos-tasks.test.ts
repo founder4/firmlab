@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FREERTOS_ITEM_VALUE_MEANING,
   type FreeRtosListKind,
+  deriveFreeRtosReadyLists,
   listItemRecordSize,
   listRecordSize,
   listSentinelHeadSize,
@@ -396,5 +397,70 @@ describe('parseFreeRtosList', () => {
       ['terminated', 'out_of_range', 0],
     ]);
     expect(Object.keys(FREERTOS_ITEM_VALUE_MEANING).sort()).toEqual([...kinds].sort());
+  });
+});
+
+describe('deriveFreeRtosReadyLists', () => {
+  const LE4 = { pointerWidth: 4, endian: 'little' } as const;
+  const BE8 = { pointerWidth: 8, endian: 'big' } as const;
+  const B = 0x2000_0000;
+
+  it('derives one ready list per declared priority at the walked layout stride', () => {
+    const d = deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize: 20 }, LE4);
+    expect(d.status).toBe('derived');
+    if (d.status !== 'derived') return;
+    expect(d.stride).toBe(20);
+    expect(d.lists).toEqual([
+      { kind: 'ready', name: 'pxReadyTasksLists[0]', address: B, priority: 0 },
+      { kind: 'ready', name: 'pxReadyTasksLists[1]', address: B + 20, priority: 1 },
+      { kind: 'ready', name: 'pxReadyTasksLists[2]', address: B + 40, priority: 2 },
+    ]);
+  });
+
+  it('strides 40 bytes on a 64-bit target', () => {
+    const d = deriveFreeRtosReadyLists({ base: 0x1000, maxPriorities: 2, listSize: 40 }, BE8);
+    expect(d.status === 'derived' && d.lists.map((l) => l.address)).toEqual([0x1000, 0x1028]);
+  });
+
+  it('refuses a declared sizeof(List_t) the walker cannot honour, naming both sizes', () => {
+    for (const listSize of [28, 24]) {
+      const d = deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize }, LE4);
+      expect(d).toMatchObject({ status: 'refused', code: 'layout_mismatch' });
+      if (d.status === 'refused') expect(d.reason).toMatch(new RegExp(`${listSize} bytes.*20-byte`));
+    }
+  });
+
+  it('cross-checks st_size against count × size and refuses a disagreement', () => {
+    const agrees = deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize: 20, symbolSize: 60 }, LE4);
+    expect(agrees).toMatchObject({ status: 'derived', sizeCrossCheck: 'agrees' });
+    expect(agrees.status === 'derived' && agrees.evidence.join('\n')).toMatch(/st_size 60 agrees/);
+    expect(deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize: 20, symbolSize: 64 }, LE4)).toMatchObject({
+      status: 'refused',
+      code: 'size_mismatch',
+    });
+    const unchecked = deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize: 20 }, LE4);
+    expect(unchecked).toMatchObject({ status: 'derived', sizeCrossCheck: 'not_available' });
+    expect(unchecked.status === 'derived' && unchecked.evidence.join('\n')).toMatch(/not cross-checked/);
+  });
+
+  it('refuses counts outside 1..64, a zero list size, and an array that overflows the address space', () => {
+    for (const maxPriorities of [0, 65, 1.5]) {
+      expect(deriveFreeRtosReadyLists({ base: B, maxPriorities, listSize: 20 }, LE4)).toMatchObject({
+        code: 'invalid_count',
+      });
+    }
+    expect(deriveFreeRtosReadyLists({ base: B, maxPriorities: 3, listSize: 0 }, LE4)).toMatchObject({
+      code: 'invalid_count',
+    });
+    expect(deriveFreeRtosReadyLists({ base: 0xffff_fff0, maxPriorities: 2, listSize: 20 }, LE4)).toMatchObject({
+      code: 'address_overflow',
+    });
+  });
+
+  it('keeps an unresolved base as one unresolved list, which a walk reports as missing_symbol', () => {
+    const d = deriveFreeRtosReadyLists({ base: null, maxPriorities: 3, listSize: 20 }, LE4);
+    expect(d.status === 'derived' && d.lists).toEqual([{ kind: 'ready', name: 'pxReadyTasksLists', address: null }]);
+    if (d.status !== 'derived' || !d.lists[0]) return;
+    expect(parseFreeRtosNamedList(new Uint8Array(4), B, d.lists[0]).coverage).toBe('missing_symbol');
   });
 });

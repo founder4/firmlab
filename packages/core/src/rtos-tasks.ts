@@ -411,6 +411,135 @@ export function parseFreeRtosList(
   return lists.map((l) => parseFreeRtosNamedList(buf, regionBase, l, layout));
 }
 
+/**
+ * The `pxReadyTasksLists[configMAX_PRIORITIES]` array as the operator DECLARES it. Neither number is inferred: a
+ * priority count read off `st_size` would assume the stride, and a stride read off `st_size` would assume the count.
+ */
+export interface FreeRtosReadyListArraySpec {
+  /** Address of `pxReadyTasksLists[0]` (the array symbol), or null when it was not resolved. */
+  base: number | null;
+  /** `configMAX_PRIORITIES` as declared for the build — never derived from the symbol's size. */
+  maxPriorities: number;
+  /** `sizeof(List_t)` as declared for the build. Cross-checked against the layout the walk reads, never used blind. */
+  listSize: number;
+  /** The array symbol's `st_size` when an ELF supplied it; null or omitted means not cross-checked. */
+  symbolSize?: number | null;
+}
+
+export type FreeRtosReadyListArrayDerivation =
+  | {
+      status: 'derived';
+      /** Bytes between adjacent `pxReadyTasksLists[]` entries — equal to `listRecordSize(layout)` by construction. */
+      stride: number;
+      /** Whether `st_size` corroborated `maxPriorities × listSize`, or was not available to check. */
+      sizeCrossCheck: 'agrees' | 'not_available';
+      /** One `ready` list per priority `0..maxPriorities-1`, or a single unresolved list when `base` is null. */
+      lists: FreeRtosNamedList[];
+      evidence: string[];
+    }
+  | {
+      status: 'refused';
+      code: 'layout_mismatch' | 'size_mismatch' | 'invalid_count' | 'address_overflow';
+      reason: string;
+    };
+
+/**
+ * Turn a declared ready-list array into per-priority list addresses — or refuse, saying why.
+ *
+ * The declared `sizeof(List_t)` is evidence, not a stride to walk at: the walk reads exactly one layout (no
+ * list-integrity bytes, a 4-byte `TickType_t`), so a declared size that differs from `listRecordSize(layout)` means
+ * every field past the header would be read at the wrong offset, and the derivation refuses rather than walking at
+ * the declared stride. An `st_size` that disagrees with `maxPriorities × listSize` means one of three facts is
+ * wrong, and nothing here can say which, so that refuses too.
+ *
+ * Size equality is necessary, not sufficient. On a 64-bit port a 64-bit `TickType_t` produces the same 40-byte
+ * `List_t` as the modelled 4-byte tick plus 4 bytes of padding; the pointers sit at the same offsets there, so the
+ * ready walk stays pointer-correct, and only `xItemValue` — not maintained on a ready list — is read at 4 bytes.
+ * Conversely a build whose sentinel is a full `ListItem_t` (FreeRTOS's `configUSE_MINI_LIST_ITEM = 0`, recalled,
+ * not verified here) is refused even though it could in principle be walked: an explicit false refusal, never a guess.
+ */
+export function deriveFreeRtosReadyLists(
+  spec: FreeRtosReadyListArraySpec,
+  layout: FreeRtosLayout,
+  maxLists = 64,
+): FreeRtosReadyListArrayDerivation {
+  const { base, maxPriorities: n, listSize } = spec;
+  const symbolSize = spec.symbolSize ?? null;
+  if (!Number.isSafeInteger(n) || n < 1 || n > maxLists) {
+    return {
+      status: 'refused',
+      code: 'invalid_count',
+      reason: `configMAX_PRIORITIES must be a whole number from 1 to ${maxLists}; ${n} was declared`,
+    };
+  }
+  if (!Number.isSafeInteger(listSize) || listSize < 1) {
+    return {
+      status: 'refused',
+      code: 'invalid_count',
+      reason: `sizeof(List_t) must be a positive whole number of bytes; ${listSize} was declared`,
+    };
+  }
+  const stride = listRecordSize(layout);
+  if (listSize !== stride) {
+    const tick = layout.pointerWidth === 4 ? ', 4-byte TickType_t' : '';
+    return {
+      status: 'refused',
+      code: 'layout_mismatch',
+      reason:
+        `the build's List_t is declared as ${listSize} bytes but the walker reads the ${stride}-byte default layout ` +
+        `(no list-integrity bytes${tick}); walking at a ${listSize}-byte stride would read fields at the wrong offsets`,
+    };
+  }
+  const arrayBytes = n * listSize;
+  if (symbolSize !== null && symbolSize !== arrayBytes) {
+    return {
+      status: 'refused',
+      code: 'size_mismatch',
+      reason:
+        `pxReadyTasksLists st_size is ${symbolSize} bytes but ${n} priorities × ${listSize} bytes is ` +
+        `${arrayBytes}; one of the three facts is wrong and none is preferred over the others`,
+    };
+  }
+  const evidence = [
+    `sizeof(List_t) declared as ${listSize} bytes agrees with the ${stride}-byte layout the walk reads`,
+  ];
+  evidence.push(
+    symbolSize === null
+      ? `pxReadyTasksLists st_size not available; the priority count rests on the declaration of ${n} alone (not cross-checked)`
+      : `pxReadyTasksLists st_size ${symbolSize} agrees with ${n} priorities × ${listSize} bytes`,
+  );
+  const sizeCrossCheck = symbolSize === null ? 'not_available' : 'agrees';
+
+  if (base === null) {
+    evidence.push('pxReadyTasksLists was not resolved, so no per-priority address can be derived');
+    return {
+      status: 'derived',
+      stride,
+      sizeCrossCheck,
+      lists: [{ kind: 'ready', name: 'pxReadyTasksLists', address: null }],
+      evidence,
+    };
+  }
+  const limit = layout.pointerWidth === 4 ? 2 ** 32 : Number.MAX_SAFE_INTEGER;
+  if (!Number.isSafeInteger(base) || base < 0 || base + arrayBytes > limit) {
+    return {
+      status: 'refused',
+      code: 'address_overflow',
+      reason: `pxReadyTasksLists at ${base} plus ${arrayBytes} bytes does not fit the ${layout.pointerWidth * 8}-bit address space`,
+    };
+  }
+  const lists = Array.from(
+    { length: n },
+    (_, p): FreeRtosNamedList => ({
+      kind: 'ready',
+      name: `pxReadyTasksLists[${p}]`,
+      address: base + p * stride,
+      priority: p,
+    }),
+  );
+  return { status: 'derived', stride, sizeCrossCheck, lists, evidence };
+}
+
 export interface FreeRtosCurrentTaskResult {
   coverage: 'complete' | 'out_of_range' | 'truncated' | 'missing_symbol';
   tcbAddress: number | null;

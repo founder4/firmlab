@@ -23,9 +23,16 @@
  * had), but the summary names every kind that was not read; a list mentioned with a null address is a
  * `missing_symbol` lane, because the operator asked and could not resolve it. A TCB found on two state lists at once
  * is something a consistent snapshot cannot produce, and the result says so rather than counting it twice quietly.
+
+The ready lists can instead be declared as the whole `pxReadyTasksLists[configMAX_PRIORITIES]` array: a base, the
+priority count and `sizeof(List_t)`, all as the operator declares them. Core's `deriveFreeRtosReadyLists` refuses a
+declared size the walker cannot honour (or an `st_size` that disagrees with count × size), and that refusal is a 400
+like any other malformed contract. Derived lanes are walked with `parseFreeRtosNamedList`, so a wrong base or stride
+shows up as items whose `pxContainer` does not point back — the corroboration a hand-entered address never had.
  */
 import {
   type FreeRtosLayout,
+  deriveFreeRtosReadyLists,
   listItemRecordSize,
   listSentinelHeadSize,
   parseFreeRtosCurrentTask,
@@ -72,6 +79,11 @@ export interface RtosTaskSnapshotInput {
     /** Resolved addresses of `pxReadyTasksLists[priority]` entries; omitted or empty → `missing_symbol`. */
     readyLists?: { priority: number; address: number | null }[];
     /**
+     * The whole `pxReadyTasksLists` array, instead of `readyLists` (never both): its base (null = unresolved), and
+     * `configMAX_PRIORITIES` and `sizeof(List_t)` as declared for the build, plus the symbol's `st_size` if known.
+     */
+    readyListArray?: { base: number | null; maxPriorities: number; listSize: number; symbolSize?: number | null };
+    /**
      * `xDelayedTaskList1`/`2`, up to two. A name containing "overflow" (e.g. `pxOverflowDelayedTaskList`) makes the
      * lane `delayed_overflow`: the two lists swap roles at every tick wrap, so only the operator, reading the two
      * pointers in the snapshot, can say which is which. Unnamed lists default to `xDelayedTaskList<n>`.
@@ -92,11 +104,27 @@ export interface ValidatedSnapshot {
   layout: FreeRtosLayout;
   pxCurrentTCB: number | null;
   readyLists: { priority: number; address: number | null }[];
+  /** Present when the ready lists were declared as an array; `readyLists` is then empty. */
+  readyListArray?: ReadyListArray;
   /** Each absent field means "not asked", which is different from a null address ("asked, not resolved"). */
   delayedLists?: FreeRtosNamedList[];
   suspendedList?: number | null;
   pendingReadyList?: number | null;
   terminatedList?: number | null;
+}
+
+/** The declared array as validated and derived — persisted on the result without its lists. */
+export interface ReadyListArrayInfo {
+  base: number | null;
+  maxPriorities: number;
+  listSize: number;
+  stride: number;
+  symbolSize: number | null;
+  sizeCrossCheck: 'agrees' | 'not_available';
+}
+
+export interface ReadyListArray extends ReadyListArrayInfo {
+  lists: FreeRtosNamedList[];
 }
 
 export type SnapshotValidation = { ok: true; snapshot: ValidatedSnapshot } | { ok: false; errors: string[] };
@@ -109,6 +137,10 @@ export interface RtosReadyListLane extends FreeRtosTaskListResult {
   bytesAttempted?: number;
   /** Of those, bytes that lay wholly inside the snapshot and were read. */
   bytesCompleted?: number;
+  /** Derived (array) lanes only: `uxNumberOfItems` from the header, null when it lay outside the snapshot. */
+  declaredItems?: number | null;
+  /** Derived (array) lanes only: visited items whose `pxContainer` does not point back to this list. */
+  containerMismatches?: number;
 }
 
 /** A non-ready state list (delayed, suspended, pending-ready, waiting-termination) as walked, plus its byte budget. */
@@ -152,6 +184,8 @@ export interface RtosTaskSnapshotResult {
    * `xEventListItem`, and a task on it legitimately still sits on its delayed or suspended list.
    */
   tcbsOnSeveralLists?: number[];
+  /** Present only when the ready lists were declared as the `pxReadyTasksLists` array. */
+  readyListArray?: ReadyListArrayInfo;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -193,6 +227,15 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
   const cur = symbols.pxCurrentTCB;
   if (cur !== undefined && cur !== null && !isAddr(cur)) errors.push('symbols.pxCurrentTCB must be an address or null');
 
+  // A list walked twice counts its tasks twice, and the result would then blame the snapshot for the request's repeat.
+  const seenAddresses = new Set<number>();
+  const claim = (field: string, address: number | null) => {
+    if (address === null) return;
+    if (seenAddresses.has(address))
+      errors.push(`${field} repeats list address 0x${address.toString(16)}; each list is walked once`);
+    seenAddresses.add(address);
+  };
+
   const readyLists: { priority: number; address: number | null }[] = [];
   const lists = symbols.readyLists;
   if (lists !== undefined) {
@@ -213,19 +256,42 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
           errors.push(`symbols.readyLists[${i}].address must be an address or null`);
           return;
         }
+        claim(`symbols.readyLists[${i}]`, l.address as number | null);
         readyLists.push({ priority, address: l.address as number | null });
       });
     }
   }
 
-  // A list walked twice counts its tasks twice; the ready lanes have always allowed it, the new lanes do not.
-  const seenAddresses = new Set<number>(readyLists.flatMap((l) => (l.address === null ? [] : [l.address])));
-  const claim = (field: string, address: number | null) => {
-    if (address === null) return;
-    if (seenAddresses.has(address))
-      errors.push(`${field} repeats list address 0x${address.toString(16)}; each list is walked once`);
-    seenAddresses.add(address);
-  };
+  let readyListArray: ReadyListArray | undefined;
+  const array = symbols.readyListArray;
+  if (array !== undefined) {
+    if (!isRecord(array)) errors.push('symbols.readyListArray must be an object with base, maxPriorities, listSize');
+    else if (Array.isArray(lists) && lists.length > 0)
+      errors.push(
+        'symbols.readyListArray and symbols.readyLists were both sent; declare the array or individual lists',
+      );
+    else if (array.base !== null && !isAddr(array.base))
+      errors.push('symbols.readyListArray.base must be an address or null');
+    else if (typeof array.maxPriorities !== 'number' || typeof array.listSize !== 'number')
+      errors.push('symbols.readyListArray must declare maxPriorities and listSize as numbers');
+    else if (array.symbolSize !== undefined && array.symbolSize !== null && typeof array.symbolSize !== 'number')
+      errors.push('symbols.readyListArray.symbolSize must be a number or null');
+    else if (pointerWidth === 4 || pointerWidth === 8) {
+      const spec = {
+        base: array.base as number | null,
+        maxPriorities: array.maxPriorities,
+        listSize: array.listSize,
+        symbolSize: (array.symbolSize as number | null | undefined) ?? null,
+      };
+      const layout: FreeRtosLayout = { pointerWidth, endian: endian === 'big' ? 'big' : 'little' };
+      const d = deriveFreeRtosReadyLists(spec, layout, MAX_READY_LISTS);
+      if (d.status === 'refused') errors.push(`symbols.readyListArray: ${d.reason}`);
+      else {
+        for (const l of d.lists) claim(`symbols.readyListArray ${l.name}`, l.address);
+        readyListArray = { ...spec, stride: d.stride, sizeCrossCheck: d.sizeCrossCheck, lists: d.lists };
+      }
+    }
+  }
 
   let delayedLists: FreeRtosNamedList[] | undefined;
   const delayed = symbols.delayedLists;
@@ -287,6 +353,7 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
       layout: { endian: endian as 'little' | 'big', pointerWidth: pointerWidth as 4 | 8 },
       pxCurrentTCB: (cur as number | null | undefined) ?? null,
       readyLists,
+      ...(readyListArray !== undefined ? { readyListArray } : {}),
       ...(delayedLists !== undefined ? { delayedLists } : {}),
       ...(suspendedList !== undefined ? { suspendedList } : {}),
       ...(pendingReadyList !== undefined ? { pendingReadyList } : {}),
@@ -316,9 +383,8 @@ function listBytes(
 }
 
 const TORN = 'which a consistent snapshot cannot produce — the snapshot may be torn.';
-const SCOPE_TAIL =
-  'ready lists at priorities not supplied were not read, and the snapshot itself is operator-supplied, not proven ' +
-  'against a running device.';
+const READY_SCOPE = 'ready lists at priorities not supplied were not read';
+const SNAPSHOT_SCOPE = ', and the snapshot itself is operator-supplied, not proven against a running device.';
 
 type StateKind = Exclude<FreeRtosListKind, 'ready'>;
 /** Plural-free labels for the summary, one per non-ready kind. */
@@ -341,8 +407,25 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     bytesCompleted: cur.coverage === 'complete' ? ptr : 0,
   };
 
-  const readyLists: RtosReadyListLane[] =
-    s.readyLists.length === 0
+  const array = s.readyListArray;
+  const readyLists: RtosReadyListLane[] = array
+    ? array.lists.map((l) => {
+        const r = parseFreeRtosNamedList(s.buf, s.base, l, s.layout);
+        const { coverage, attempted, completed, tasks, evidence, declaredItems, containerMismatches } = r;
+        return {
+          priority: l.priority ?? null,
+          listAddress: l.address,
+          coverage,
+          attempted,
+          completed,
+          tasks,
+          evidence,
+          ...listBytes(r, s.layout),
+          declaredItems,
+          containerMismatches,
+        };
+      })
+    : s.readyLists.length === 0
       ? [
           {
             priority: null,
@@ -408,7 +491,9 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     tcbsOnSeveralLists.length > 0
       ? ` ${tcbsOnSeveralLists.length} TCB(s) appear on more than one state list, ${TORN}`
       : '';
-  const inconsistent = named.filter((l) => l.containerMismatches > 0 || l.orderViolations > 0).length;
+  const inconsistent =
+    readyLists.filter((l) => (l.containerMismatches ?? 0) > 0).length +
+    named.filter((l) => l.containerMismatches > 0 || l.orderViolations > 0).length;
   const anomalies =
     inconsistent > 0 ? ` ${inconsistent} list(s) carry structural inconsistencies, recorded in their evidence.` : '';
 
@@ -416,7 +501,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     ...(currentTask.coverage === 'complete' ? [] : [`pxCurrentTCB: ${currentTask.coverage}`]),
     ...readyLists
       .filter((l) => l.coverage !== 'complete')
-      .map((l) => `ready list ${l.priority ?? '(none supplied)'}: ${l.coverage}`),
+      .map((l) => `ready list ${l.priority ?? (array ? 'array (base unresolved)' : '(none supplied)')}: ${l.coverage}`),
     ...named.filter((l) => l.coverage !== 'complete').map((l) => `${l.name}: ${l.coverage}`),
   ];
   const notRead =
@@ -425,7 +510,13 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
           .map((k) => (k === 'delayed' && delayedLists?.length ? 'delayed (second list)' : KIND_LABEL[k]))
           .join(', ')} tasks live on lists not read here, `
       : '';
-  const scope = `Only the supplied lists in the supplied bytes were walked; ${notRead}${SCOPE_TAIL}`;
+  const crossChecked = array?.sizeCrossCheck === 'agrees' ? ' and st_size' : '';
+  const readyScope =
+    array && array.base !== null
+      ? `ready lists at all ${array.maxPriorities} declared priorities were attempted (configMAX_PRIORITIES as ` +
+        `declared by the operator; sizeof(List_t)=${array.listSize} cross-checked against the walked layout${crossChecked})`
+      : READY_SCOPE;
+  const scope = `Only the supplied lists in the supplied bytes were walked; ${notRead}${readyScope}${SNAPSHOT_SCOPE}`;
   const summary =
     coverage === 'complete'
       ? `${counted} across ${lists.length} list(s), every lane walked to its sentinel.${discarded}${torn}${anomalies} ${scope}`
@@ -458,5 +549,17 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     ...(terminatedList ? { terminatedList } : {}),
     unwalkedKinds,
     ...(tcbsOnSeveralLists.length > 0 ? { tcbsOnSeveralLists } : {}),
+    ...(array
+      ? {
+          readyListArray: {
+            base: array.base,
+            maxPriorities: array.maxPriorities,
+            listSize: array.listSize,
+            stride: array.stride,
+            symbolSize: array.symbolSize,
+            sizeCrossCheck: array.sizeCrossCheck,
+          },
+        }
+      : {}),
   };
 }

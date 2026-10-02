@@ -296,3 +296,97 @@ describe('validateRtosTaskSnapshot — named lists', () => {
     expect('pendingReadyList' in v.snapshot).toBe(false);
   });
 });
+
+/**
+ * Three adjacent List_t records, as `pxReadyTasksLists[3]` lays them out at a 20-byte stride: priority 0 empty,
+ * priority 1 holding one owned item that points back to its list, priority 2 empty.
+ */
+const ARRAY = BASE + 0x100;
+const P1_ITEM = BASE + 0x180;
+
+function arraySnapshot(opts: { container?: number } = {}): Uint8Array {
+  const dv = new DataView(new ArrayBuffer(0x200));
+  new Uint8Array(dv.buffer).set(snapshot());
+  const list = (at: number, count: number, head: number) => {
+    dv.setUint32(at - BASE, count, true);
+    dv.setUint32(at + 8 - BASE, 0xffff_ffff, true);
+    dv.setUint32(at + 12 - BASE, head, true);
+  };
+  list(ARRAY, 0, ARRAY + 8);
+  list(ARRAY + 20, 1, P1_ITEM);
+  list(ARRAY + 40, 0, ARRAY + 48);
+  dv.setUint32(P1_ITEM - BASE + 4, ARRAY + 28, true);
+  dv.setUint32(P1_ITEM - BASE + 12, 0x2000_7000, true);
+  dv.setUint32(P1_ITEM - BASE + 16, opts.container ?? ARRAY + 20, true);
+  return new Uint8Array(dv.buffer);
+}
+
+describe('ready lists declared as the pxReadyTasksLists array', () => {
+  const array = { base: ARRAY, maxPriorities: 3, listSize: 20 };
+
+  it('walks every declared priority and says so instead of naming unsupplied priorities', () => {
+    const r = run(body(arraySnapshot(), { pxCurrentTCB: CUR, readyListArray: array }));
+    expect(r.coverage).toBe('complete');
+    expect(r.proofState).toBe('needs_runtime_reproduction');
+    expect(r.readyLists.map((l) => [l.priority, l.listAddress, l.coverage, l.completed])).toEqual([
+      [0, ARRAY, 'complete', 0],
+      [1, ARRAY + 20, 'complete', 1],
+      [2, ARRAY + 40, 'complete', 0],
+    ]);
+    expect(r.readyLists[1]).toMatchObject({ declaredItems: 1, containerMismatches: 0 });
+    expect(r.readyListArray).toEqual({ ...array, stride: 20, symbolSize: null, sizeCrossCheck: 'not_available' });
+    expect(r.summary).toMatch(/^1 ready task record\(s\) across 3 list\(s\)/);
+    expect(r.summary).toMatch(/all 3 declared priorities/);
+    expect(r.summary).not.toMatch(/ready lists at priorities not supplied/);
+  });
+
+  it('names st_size in the summary when it corroborated the declaration', () => {
+    const r = run(body(arraySnapshot(), { pxCurrentTCB: CUR, readyListArray: { ...array, symbolSize: 60 } }));
+    expect(r.readyListArray?.sizeCrossCheck).toBe('agrees');
+    expect(r.summary).toMatch(/cross-checked against the walked layout and st_size/);
+  });
+
+  it('records an item that does not point back to its list without changing coverage', () => {
+    const r = run(body(arraySnapshot({ container: ARRAY }), { pxCurrentTCB: CUR, readyListArray: array }));
+    expect(r.coverage).toBe('complete');
+    expect(r.readyLists[1]?.containerMismatches).toBe(1);
+    expect(r.readyLists[1]?.evidence.join('\n')).toMatch(/pxContainer that does not point back/);
+    expect(r.summary).toMatch(/1 list\(s\) carry structural inconsistencies/);
+  });
+
+  it('refuses a declared sizeof(List_t) the walker cannot honour, with the core reason and no walk', () => {
+    const v = validateRtosTaskSnapshot(body(arraySnapshot(), { readyListArray: { ...array, listSize: 24 } }));
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.errors.join('\n')).toMatch(/declared as 24 bytes but the walker reads the 20-byte default layout/);
+  });
+
+  it('refuses the array alongside individual ready lists, and keeps an unresolved base a missing_symbol lane', () => {
+    const both = validateRtosTaskSnapshot(
+      body(arraySnapshot(), { readyListArray: array, readyLists: [{ priority: 0, address: LIST }] }),
+    );
+    expect(both.ok === false && both.errors.join()).toMatch(/both sent/);
+    const r = run(body(arraySnapshot(), { pxCurrentTCB: CUR, readyListArray: { ...array, base: null } }));
+    expect(r.readyLists).toEqual([expect.objectContaining({ priority: null, coverage: 'missing_symbol' })]);
+    expect(r.coverage).not.toBe('complete');
+    expect(r.summary).toMatch(/ready list array \(base unresolved\): missing_symbol/);
+    expect(r.summary).toMatch(/ready lists at priorities not supplied were not read/);
+  });
+
+  it('refuses a derived address that another named list also claims', () => {
+    const v = validateRtosTaskSnapshot(body(arraySnapshot(), { readyListArray: array, suspendedList: ARRAY + 20 }));
+    expect(v.ok === false && v.errors.join()).toMatch(/repeats list address 0x20000114/);
+  });
+
+  it('refuses two manual ready lists at one address instead of blaming the snapshot for a double count', () => {
+    const v = validateRtosTaskSnapshot(
+      body(snapshot(), {
+        readyLists: [
+          { priority: 0, address: LIST },
+          { priority: 1, address: LIST },
+        ],
+      }),
+    );
+    expect(v.ok === false && v.errors.join()).toMatch(/readyLists\[1\] repeats list address 0x20000000/);
+  });
+});
