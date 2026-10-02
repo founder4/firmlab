@@ -30,7 +30,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { describeRetirement, validateRetirement } from '../findings-retire.js';
+import { MAX_NOTE, describeRetirement, validateRetirement } from '../findings-retire.js';
 import {
   amendOperatorFinding,
   loadOperatorFinding,
@@ -58,7 +58,6 @@ import {
   updateImageNote,
 } from '../store.js';
 
-const MAX_NOTE = 20000;
 const MAX_NOTE_AUTHOR = 80;
 
 export async function operatorRoutes(app: FastifyInstance): Promise<void> {

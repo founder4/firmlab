@@ -122,6 +122,7 @@ export const operator: Messages['operator'] = {
     cancelEdit: 'Cancelar',
     emptyBody: 'Una nota no puede quedar vacía. Bórrala si ya no contiene nada.',
     tooLong: (max: number, n: number) => `Una nota admite como máximo ${max} caracteres; esta tiene ${n}.`,
+    authorTooLong: (max: number) => `El autor admite como máximo ${max} caracteres.`,
   },
 
   /**
@@ -150,6 +151,7 @@ export const operator: Messages['operator'] = {
     missing: (fields: string[]) => `Rellena antes de retirar: ${fields.join(', ')}.`,
     reasonTooLong: (max: number, n: number) => `El motivo admite como máximo ${max} caracteres; este tiene ${n}.`,
     whoTooLong: (max: number) => `El nombre admite como máximo ${max} caracteres.`,
+    sourceTooLong: (max: number, n: number) => `La fuente admite como máximo ${max} caracteres; esta tiene ${n}.`,
     operatorRefused: (source: string) =>
       [
         `'${source}' es una afirmación del operador escrita a mano, no un resultado calculado. Una afirmación no se`,

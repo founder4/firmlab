@@ -67,22 +67,35 @@ const SEV_COLOR: Record<string, string> = {
   info: 'var(--text-dim)',
 };
 
-/** The longest note body the edit form will send. */
-export const MAX_NOTE_EDIT = 4000;
-/** Mirrors the route's `MAX_RETIRE_REASON` / `MAX_RETIRE_AUTHOR`, so the refusal arrives before the request does. */
+/**
+ * Mirror the API's `MAX_NOTE` / `MAX_NOTE_AUTHOR`, on creation and on edit alike. One bound for both, because a
+ * note the create form accepted — or a retirement note the API wrote, which it holds to the same bound — must stay
+ * one the edit form can save. A tighter edit cap made exactly those notes uneditable.
+ */
+export const MAX_NOTE = 20000;
+/** The edit bound, kept as a name for callers that ask for it; it is `MAX_NOTE`, never a tighter value. */
+export const MAX_NOTE_EDIT = MAX_NOTE;
+export const MAX_NOTE_AUTHOR = 80;
+/** Mirrors the route's `MAX_RETIRE_*` bounds, so the refusal arrives before the request does. */
 export const MAX_RETIRE_REASON = 2000;
 export const MAX_RETIRE_AUTHOR = 80;
+export const MAX_RETIRE_SOURCE = 1024;
 /** The namespace of hand-authored rows. Mirrors `OPERATOR_SOURCE_PREFIX` in the API, which refuses it too. */
 const OPERATOR_SOURCE_PREFIX = 'operator:';
 
-export type NoteEditProblem = { kind: 'empty' } | { kind: 'tooLong'; length: number };
+export type NoteBodyProblem = { kind: 'empty' } | { kind: 'tooLong'; length: number };
 
-/** Pure: why an edited note body cannot be sent, or null when it can. Measured trimmed, as it is sent. */
-export function noteEditProblem(body: string): NoteEditProblem | null {
+/** Pure: why a note body — new or edited — cannot be sent, or null when it can. Measured trimmed, as it is sent. */
+export function noteBodyProblem(body: string): NoteBodyProblem | null {
   const text = body.trim();
   if (!text) return { kind: 'empty' };
-  if (text.length > MAX_NOTE_EDIT) return { kind: 'tooLong', length: text.length };
+  if (text.length > MAX_NOTE) return { kind: 'tooLong', length: text.length };
   return null;
+}
+
+/** Pure: whether a note's author is longer than the API stores. Measured trimmed, as it is sent. */
+export function noteAuthorTooLong(author: string): boolean {
+  return author.trim().length > MAX_NOTE_AUTHOR;
 }
 
 export type RetireField = 'source' | 'retiredBy' | 'reason';
@@ -90,7 +103,8 @@ export type RetireProblem =
   | { kind: 'operatorSource'; source: string }
   | { kind: 'missing'; fields: RetireField[] }
   | { kind: 'reasonTooLong'; length: number }
-  | { kind: 'whoTooLong' };
+  | { kind: 'whoTooLong' }
+  | { kind: 'sourceTooLong'; length: number };
 
 /**
  * Pure: why a retirement cannot be sent, or null when it can.
@@ -109,6 +123,7 @@ export function retireProblem(form: { source: string; retiredBy: string; reason:
     ...(reason ? [] : ['reason' as const]),
   ];
   if (missing.length > 0) return { kind: 'missing', fields: missing };
+  if (source.length > MAX_RETIRE_SOURCE) return { kind: 'sourceTooLong', length: source.length };
   if (retiredBy.length > MAX_RETIRE_AUTHOR) return { kind: 'whoTooLong' };
   if (reason.length > MAX_RETIRE_REASON) return { kind: 'reasonTooLong', length: reason.length };
   return null;
@@ -553,6 +568,8 @@ function RetireSourcePanel({
         return t.operator.retire.whoTooLong(MAX_RETIRE_AUTHOR);
       case 'reasonTooLong':
         return t.operator.retire.reasonTooLong(MAX_RETIRE_REASON, p.length);
+      case 'sourceTooLong':
+        return t.operator.retire.sourceTooLong(MAX_RETIRE_SOURCE, p.length);
     }
   };
   // An operator source is refused as soon as it is typed; everything else waits for a submit attempt.
@@ -745,7 +762,15 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
     [imageId, load],
   );
 
+  // An empty draft is not a problem worth announcing — the button is simply not ready. A draft that is too long is,
+  // because the button would otherwise sit disabled with no reason given.
+  const newBodyProblem = noteBodyProblem(noteBody);
+  const newNoteTooLong = newBodyProblem?.kind === 'tooLong' ? newBodyProblem : null;
+  const newAuthorTooLong = noteAuthorTooLong(noteAuthor);
+  const canAddNote = !!noteAuthor.trim() && !newBodyProblem && !newAuthorTooLong;
+
   const addNote = useCallback(async () => {
+    if (!canAddNote) return;
     setErr(null);
     try {
       await api.addNote(imageId, { author: noteAuthor.trim(), body: noteBody.trim() });
@@ -754,7 +779,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
-  }, [imageId, noteAuthor, noteBody, load]);
+  }, [imageId, noteAuthor, noteBody, canAddNote, load]);
 
   const removeNote = useCallback(
     async (noteId: string) => {
@@ -770,7 +795,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
   );
 
   const saveNoteEdit = useCallback(async () => {
-    if (!noteEdit || noteBusy || noteEditProblem(noteEdit.body)) return;
+    if (!noteEdit || noteBusy || noteBodyProblem(noteEdit.body)) return;
     const body = noteEdit.body.trim();
     if (body === notes.find((n) => n.id === noteEdit.id)?.body) {
       setNoteEdit(null);
@@ -790,7 +815,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
     }
   }, [imageId, noteEdit, noteBusy, notes, load]);
 
-  const editProblem = noteEdit ? noteEditProblem(noteEdit.body) : null;
+  const editProblem = noteEdit ? noteBodyProblem(noteEdit.body) : null;
 
   // Which required fields are empty, by their visible label. The button stays enabled: a disabled button said
   // "not yet" without saying why, so a click now names the missing fields instead.
@@ -950,6 +975,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
             className="input"
             placeholder={t.operator.notes.authorPlaceholder}
             aria-label={t.operator.notes.authorLabel}
+            aria-invalid={newAuthorTooLong ? true : undefined}
             value={noteAuthor}
             onChange={(e) => setNoteAuthor(e.target.value)}
             style={{ flex: '0 1 160px', minWidth: 0 }}
@@ -958,19 +984,23 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
             className="input"
             placeholder={t.operator.notes.bodyPlaceholder}
             aria-label={t.operator.notes.bodyLabel}
+            aria-invalid={newNoteTooLong ? true : undefined}
             value={noteBody}
             onChange={(e) => setNoteBody(e.target.value)}
             style={{ flex: '1 1 320px', minWidth: 0, height: 56, padding: '8px 10px', resize: 'vertical' }}
           />
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={!noteAuthor.trim() || !noteBody.trim()}
-            onClick={addNote}
-          >
+          <button type="button" className="btn btn-sm" disabled={!canAddNote} onClick={addNote}>
             {t.operator.notes.save}
           </button>
         </div>
+        {newAuthorTooLong || newNoteTooLong ? (
+          <div className="field-error" role="alert" style={{ marginTop: 6 }}>
+            {[
+              ...(newAuthorTooLong ? [t.operator.notes.authorTooLong(MAX_NOTE_AUTHOR)] : []),
+              ...(newNoteTooLong ? [t.operator.notes.tooLong(MAX_NOTE, newNoteTooLong.length)] : []),
+            ].join(' ')}
+          </div>
+        ) : null}
 
         {notes.length === 0 ? (
           <div className="hint" style={{ marginTop: 12 }}>
@@ -999,7 +1029,7 @@ export function OperatorPanel({ imageId }: { imageId: string }): JSX.Element {
                             <div className="field-error" role="alert">
                               {editProblem.kind === 'empty'
                                 ? t.operator.notes.emptyBody
-                                : t.operator.notes.tooLong(MAX_NOTE_EDIT, editProblem.length)}
+                                : t.operator.notes.tooLong(MAX_NOTE, editProblem.length)}
                             </div>
                           ) : null}
                           <div style={{ display: 'flex', gap: 8 }}>

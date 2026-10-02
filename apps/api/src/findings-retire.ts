@@ -52,12 +52,26 @@ export interface RetiredRowSummary {
 
 export const MAX_RETIRE_REASON = 2000;
 export const MAX_RETIRE_AUTHOR = 80;
+/** Far above any source a provider writes (`binary:<path>`, `dynprobe:<path>#<sink>`); it exists to bound the note. */
+export const MAX_RETIRE_SOURCE = 1024;
+/**
+ * The longest note body the API stores, on creation and on edit. The retirement note is written past the route that
+ * enforces it, so it is bounded here instead: a note the API wrote must stay one the operator can edit, or the one
+ * record of a deletion is the one note nobody can correct.
+ */
+export const MAX_NOTE = 20000;
 /**
  * How many removed rows the note lists individually before it summarises. The COUNT is always exact; only the
  * enumeration is bounded, and the note says by what rule — a cap that truncates silently would make the note a
  * worse record than the rows it replaces.
  */
 export const MAX_LISTED_ROWS = 40;
+/**
+ * How long one enumerated row line may run before it is clipped. Finding titles carry no bound of their own, and
+ * forty unbounded lines could push the note past `MAX_NOTE`. The note says how many lines it clipped and by what
+ * rule; the full titles come back with the rows when the provider is re-run.
+ */
+export const MAX_LISTED_LINE = 300;
 
 /**
  * Pure: validate a retirement request.
@@ -79,6 +93,8 @@ export function validateRetirement(
       ok: false,
       error: 'source is required — name the findings source to retire, e.g. `symreach:lib/libutil-0.9.30.so`.',
     };
+  if (source.length > MAX_RETIRE_SOURCE)
+    return { ok: false, error: `source is longer than ${MAX_RETIRE_SOURCE} characters.` };
   if (isOperatorSource(source)) {
     return {
       ok: false,
@@ -111,18 +127,24 @@ export function validateRetirement(
  * different acts and the record has to make that legible at a glance.
  */
 export function retirementNote(v: ValidatedRetirement, rows: RetiredRowSummary[]): string {
-  const listed = rows.slice(0, MAX_LISTED_ROWS);
+  const listed = rows.slice(0, MAX_LISTED_ROWS).map((r) => `  - [${r.proofState}] ${r.kind} — ${r.title}`);
+  const clipped = listed.filter((l) => l.length > MAX_LISTED_LINE).length;
   const lines = [
     `Retired ${rows.length} computed finding(s) under source \`${v.source}\`.`,
     '',
     `Reason given by ${v.retiredBy}: ${v.reason}`,
     '',
     'What was removed:',
-    ...listed.map((r) => `  - [${r.proofState}] ${r.kind} — ${r.title}`),
+    ...listed.map((l) => (l.length > MAX_LISTED_LINE ? `${l.slice(0, MAX_LISTED_LINE - 1)}…` : l)),
   ];
   if (rows.length > listed.length) {
     lines.push(
       `  … ${rows.length - listed.length} further row(s) not listed individually (the note enumerates at most ${MAX_LISTED_ROWS}; the count above is exact).`,
+    );
+  }
+  if (clipped > 0) {
+    lines.push(
+      `  (${clipped} row line(s) clipped at ${MAX_LISTED_LINE} characters; re-running the provider restores the full titles with the rows.)`,
     );
   }
   lines.push(

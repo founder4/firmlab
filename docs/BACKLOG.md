@@ -386,10 +386,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   reporte localizado de corpus implementado en `4e04ddb`; edición de notas y retirada de fuentes calculadas con previsualización
   implementado en `7a06bc5` y `b2738d1`; verificación sintética Playwright de ambas oleadas en Chromium añadida en `a84bc71` vía
   `scripts/qa-wave2.mjs` y `scripts/qa-wave3.mjs` pasando al 100% en EN y ES en 390px y 1440px).*
-- [ ] **Cap de edición de notas vs MAX_NOTE del API.** La cota de edición de notas en cliente (`MAX_NOTE_EDIT = 4000`) es
-  más estricta que la cota de creación en el API (`MAX_NOTE = 20000`). Una nota generada automáticamente por retirada con
-  muchas filas retiradas puede exceder 4000 caracteres impidiendo su posterior edición manual. Evaluar si equiparar el cap
-  de cliente a 20000 o si las notas de auditoría de retirada deben considerarse registros inmutables.
+- [x] **Cap de edición de notas vs MAX_NOTE del API.** La cota de edición de notas en cliente (`MAX_NOTE_EDIT = 4000`) era
+  más estricta que la cota de creación en el API (`MAX_NOTE = 20000`), así que una nota de auditoría de retirada larga no
+  podía editarse. *(Resuelto: el cliente usa una única cota `MAX_NOTE = 20000` para crear y editar, y valida también en la
+  creación el cuerpo y el autor (`MAX_NOTE_AUTHOR = 80`) antes de enviar. Las notas de auditoría siguen siendo editables
+  —una nota es razonamiento, no una afirmación—, pero `retirementNote` se escribe sin pasar por la ruta que aplica
+  `MAX_NOTE`, y los títulos y la fuente no tenían cota; ahora la nota recorta cada línea enumerada a `MAX_LISTED_LINE = 300`
+  diciendo cuántas y por qué regla, y la fuente se acota a `MAX_RETIRE_SOURCE = 1024` (reflejado en el cliente), de modo
+  que un test fija que la nota cabe en `MAX_NOTE` en todas las cotas de entrada. Una nota ya almacenada por encima de la
+  cota abre el editor con el motivo, no con un botón muerto.)*
 
 - [x] Cancelación de esperas HTTP dentro de un job: abortar peticiones y lecturas de cuerpo en curso cuando
   el job se cancela, sin esperar los timeouts de 15s/6s ni emitir peticiones posteriores. `linkJobCancellation`

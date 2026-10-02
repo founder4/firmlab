@@ -135,6 +135,7 @@ export const operator = {
     cancelEdit: 'Cancel',
     emptyBody: 'A note cannot be empty. Delete it instead if it no longer holds anything.',
     tooLong: (max: number, n: number) => `A note holds at most ${max} characters; this one has ${n}.`,
+    authorTooLong: (max: number) => `The author holds at most ${max} characters.`,
   },
 
   /**
@@ -164,6 +165,7 @@ export const operator = {
     missing: (fields: string[]) => `Fill in before retiring: ${fields.join(', ')}.`,
     reasonTooLong: (max: number, n: number) => `The reason holds at most ${max} characters; this one has ${n}.`,
     whoTooLong: (max: number) => `The name holds at most ${max} characters.`,
+    sourceTooLong: (max: number, n: number) => `The source holds at most ${max} characters; this one has ${n}.`,
     /** The client-side refusal of an `operator:` source. Names the surface the caller actually wanted. */
     operatorRefused: (source: string) =>
       [

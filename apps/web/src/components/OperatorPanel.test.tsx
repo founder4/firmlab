@@ -11,10 +11,14 @@ import {
 import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import {
+  MAX_NOTE,
+  MAX_NOTE_AUTHOR,
   MAX_NOTE_EDIT,
   MAX_RETIRE_REASON,
+  MAX_RETIRE_SOURCE,
   OperatorPanel,
-  noteEditProblem,
+  noteAuthorTooLong,
+  noteBodyProblem,
   retireProblem,
   revisionsOf,
 } from './OperatorPanel';
@@ -580,11 +584,11 @@ describe('editing a working note — in place, because a note is reasoning and k
     expect(screen.getByRole('alert')).toHaveTextContent('A note cannot be empty');
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
 
-    fireEvent.change(box, { target: { value: 'x'.repeat(MAX_NOTE_EDIT + 1) } });
-    expect(screen.getByRole('alert')).toHaveTextContent(`at most ${MAX_NOTE_EDIT} characters; this one has 4001`);
+    fireEvent.change(box, { target: { value: 'x'.repeat(MAX_NOTE + 1) } });
+    expect(screen.getByRole('alert')).toHaveTextContent(`at most ${MAX_NOTE} characters; this one has ${MAX_NOTE + 1}`);
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
 
-    fireEvent.change(box, { target: { value: 'x'.repeat(MAX_NOTE_EDIT) } });
+    fireEvent.change(box, { target: { value: 'x'.repeat(MAX_NOTE) } });
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
     expect(mockApi.updateNote).not.toHaveBeenCalled();
@@ -612,10 +616,94 @@ describe('editing a working note — in place, because a note is reasoning and k
     await waitFor(() => expect(screen.queryByLabelText('Edit note body')).toBeNull());
   });
 
+  /**
+   * The edit cap is the API's own `MAX_NOTE`, so anything the create route accepted — or a retirement note the API
+   * wrote, which it holds to the same bound — can be saved back. The old 4000 cap made a long audit note uneditable.
+   */
+  it('accepts an edit to a note the API stored at its full length', async () => {
+    mockApi.operatorLedger.mockResolvedValue(ledger());
+    mockApi.notes.mockReset();
+    const audit = `Retired 47 computed finding(s) under source \`symreach:lib/x.so\`.\n${'  - row\n'.repeat(1500)}`;
+    expect(audit.length).toBeGreaterThan(4000);
+    mockApi.notes.mockResolvedValue([note({ body: audit })]);
+    mockApi.updateNote.mockResolvedValue(note({ body: `${audit.trim()} (checked)` }));
+    render(<OperatorPanel imageId="img1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const box = screen.getByLabelText('Edit note body');
+    fireEvent.change(box, { target: { value: `${audit} (checked)` } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mockApi.updateNote).toHaveBeenCalledWith('img1', 'n1', `${audit} (checked)`));
+  });
+
+  /** A note stored past the bound (by an older build) opens with the reason it cannot be saved, not a dead button. */
+  it('names the bound when a stored note is already over it', async () => {
+    mockApi.operatorLedger.mockResolvedValue(ledger());
+    mockApi.notes.mockReset();
+    mockApi.notes.mockResolvedValue([note({ body: 'x'.repeat(MAX_NOTE + 5) })]);
+    render(<OperatorPanel imageId="img1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(`at most ${MAX_NOTE} characters; this one has ${MAX_NOTE + 5}`);
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  });
+
   it('pure: measures the body trimmed, as it is sent', () => {
-    expect(noteEditProblem('  ')).toEqual({ kind: 'empty' });
-    expect(noteEditProblem(` ${'a'.repeat(MAX_NOTE_EDIT)} `)).toBeNull();
-    expect(noteEditProblem('a'.repeat(MAX_NOTE_EDIT + 1))).toEqual({ kind: 'tooLong', length: MAX_NOTE_EDIT + 1 });
+    expect(MAX_NOTE_EDIT).toBe(MAX_NOTE);
+    expect(noteBodyProblem('a'.repeat(5000))).toBeNull();
+    expect(noteBodyProblem('  ')).toEqual({ kind: 'empty' });
+    expect(noteBodyProblem(` ${'a'.repeat(MAX_NOTE)} `)).toBeNull();
+    expect(noteBodyProblem('a'.repeat(MAX_NOTE + 1))).toEqual({ kind: 'tooLong', length: MAX_NOTE + 1 });
+    expect(noteAuthorTooLong(` ${'a'.repeat(MAX_NOTE_AUTHOR)} `)).toBe(false);
+    expect(noteAuthorTooLong('a'.repeat(MAX_NOTE_AUTHOR + 1))).toBe(true);
+  });
+});
+
+describe('creating a working note — bounded exactly as the API bounds it', () => {
+  it('sends a note within the bounds, trimmed', async () => {
+    mockApi.operatorLedger.mockResolvedValue(ledger());
+    mockApi.notes.mockReset();
+    mockApi.notes.mockResolvedValue([]);
+    mockApi.addNote.mockClear();
+    render(<OperatorPanel imageId="img1" />);
+
+    fireEvent.change(await screen.findByLabelText('Note author'), { target: { value: ' aaron ' } });
+    fireEvent.change(screen.getByLabelText('Note body'), { target: { value: ` ${'y'.repeat(MAX_NOTE)} ` } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }));
+    await waitFor(() =>
+      expect(mockApi.addNote).toHaveBeenCalledWith('img1', { author: 'aaron', body: 'y'.repeat(MAX_NOTE) }),
+    );
+  });
+
+  it('refuses an over-long body or author before the request, and says which', async () => {
+    mockApi.operatorLedger.mockResolvedValue(ledger());
+    mockApi.notes.mockReset();
+    mockApi.notes.mockResolvedValue([]);
+    mockApi.addNote.mockClear();
+    render(<OperatorPanel imageId="img1" />);
+
+    const author = await screen.findByLabelText('Note author');
+    const body = screen.getByLabelText('Note body');
+    fireEvent.change(author, { target: { value: 'aaron' } });
+    // An empty draft is merely not ready; it is not announced as an error.
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save note' })).toBeDisabled();
+
+    fireEvent.change(body, { target: { value: 'z'.repeat(MAX_NOTE + 1) } });
+    expect(screen.getByRole('alert')).toHaveTextContent(`at most ${MAX_NOTE} characters; this one has ${MAX_NOTE + 1}`);
+    expect(body).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: 'Save note' })).toBeDisabled();
+
+    fireEvent.change(body, { target: { value: 'fine' } });
+    fireEvent.change(author, { target: { value: 'a'.repeat(MAX_NOTE_AUTHOR + 1) } });
+    expect(screen.getByRole('alert')).toHaveTextContent(`The author holds at most ${MAX_NOTE_AUTHOR} characters`);
+    expect(author).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: 'Save note' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }));
+    expect(mockApi.addNote).not.toHaveBeenCalled();
   });
 });
 
@@ -758,6 +846,11 @@ describe('retiring a computed source — removed only because re-running restore
     });
     expect(retireProblem({ source: ' crypto ', retiredBy: 'a', reason: 'b' })).toBeNull();
     expect(retireProblem({ source: 'crypto', retiredBy: 'a'.repeat(81), reason: 'b' })).toEqual({ kind: 'whoTooLong' });
+    expect(retireProblem({ source: 's'.repeat(MAX_RETIRE_SOURCE + 1), retiredBy: 'a', reason: 'b' })).toEqual({
+      kind: 'sourceTooLong',
+      length: MAX_RETIRE_SOURCE + 1,
+    });
+    expect(retireProblem({ source: 's'.repeat(MAX_RETIRE_SOURCE), retiredBy: 'a', reason: 'b' })).toBeNull();
   });
 });
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_LISTED_LINE,
   MAX_LISTED_ROWS,
+  MAX_NOTE,
+  MAX_RETIRE_AUTHOR,
+  MAX_RETIRE_REASON,
+  MAX_RETIRE_SOURCE,
   type RetiredRowSummary,
   describeRetirement,
   retirementNote,
@@ -54,6 +59,12 @@ describe('validateRetirement — a deletion with no author and no reason is just
   it('bounds the free text rather than storing whatever arrives', () => {
     expect(validateRetirement({ source: 'a', retiredBy: 'x'.repeat(200), reason: 'b' }).ok).toBe(false);
     expect(validateRetirement({ source: 'a', retiredBy: 'aaron', reason: 'b'.repeat(5000) }).ok).toBe(false);
+    expect(validateRetirement({ source: 's'.repeat(MAX_RETIRE_SOURCE + 1), retiredBy: 'aaron', reason: 'b' }).ok).toBe(
+      false,
+    );
+    expect(validateRetirement({ source: 's'.repeat(MAX_RETIRE_SOURCE), retiredBy: 'aaron', reason: 'b' }).ok).toBe(
+      true,
+    );
   });
 });
 
@@ -81,6 +92,32 @@ describe('retirementNote — what replaces the rows', () => {
     expect(note).toContain(`Retired ${MAX_LISTED_ROWS + 7} computed finding(s)`);
     expect(note).toContain('7 further row(s) not listed individually');
     expect(note).toContain('the count above is exact');
+  });
+
+  it('clips an over-long row line and says how many, by what rule', () => {
+    const note = retirementNote(req, [row({ title: 't'.repeat(MAX_LISTED_LINE * 2) }), row()]);
+    const lines = note.split('\n').filter((l) => l.startsWith('  - '));
+    expect(lines[0]).toHaveLength(MAX_LISTED_LINE);
+    expect(lines[0]?.endsWith('…')).toBe(true);
+    expect(lines[1]).not.toContain('…');
+    expect(note).toContain(`1 row line(s) clipped at ${MAX_LISTED_LINE} characters`);
+    expect(retirementNote(req, [row()])).not.toContain('clipped');
+  });
+
+  /**
+   * The note is inserted past the route that enforces `MAX_NOTE`, so nothing else holds it to that bound. A note the
+   * API wrote that the API then refuses to accept back would make the record of a deletion uneditable.
+   */
+  it('stays within MAX_NOTE at every input bound, so the audit note remains editable', () => {
+    const worst = {
+      source: 's'.repeat(MAX_RETIRE_SOURCE),
+      retiredBy: 'w'.repeat(MAX_RETIRE_AUTHOR),
+      reason: 'r'.repeat(MAX_RETIRE_REASON),
+    };
+    const rows = Array.from({ length: MAX_LISTED_ROWS * 3 }, () =>
+      row({ kind: 'k'.repeat(500), title: 't'.repeat(10_000), proofState: 'needs_runtime_reproduction' }),
+    );
+    expect(retirementNote(worst, rows).length).toBeLessThanOrEqual(MAX_NOTE);
   });
 });
 
