@@ -3,6 +3,7 @@ import {
   FREERTOS_ITEM_VALUE_MEANING,
   type FreeRtosListKind,
   listItemRecordSize,
+  listRecordSize,
   listSentinelHeadSize,
   parseFreeRtosCurrentTask,
   parseFreeRtosList,
@@ -349,6 +350,21 @@ describe('parseFreeRtosNamedList', () => {
     expect(listItemRecordSize({ pointerWidth: 8, endian: 'little' })).toBe(40);
     expect(listSentinelHeadSize({ pointerWidth: 4, endian: 'little' })).toBe(8);
     expect(listSentinelHeadSize({ pointerWidth: 8, endian: 'little' })).toBe(16);
+  });
+
+  it('strides adjacent List_t records by listRecordSize, the way pxReadyTasksLists[] lays them out', () => {
+    expect(listRecordSize({ pointerWidth: 4, endian: 'little' })).toBe(20);
+    expect(listRecordSize({ pointerWidth: 8, endian: 'little' })).toBe(40);
+    // Priority 1's list sits one record after priority 0's; walking it at that address must reach its own sentinel.
+    const stride = listRecordSize({ pointerWidth: 4, endian: 'little' });
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, LIST_ADDR + 8);
+    writeListHeader(LIST_ADDR + stride, ITEM_B, 1);
+    writeItem(ITEM_B, 0, LIST_ADDR + stride + 8, 0x3000_0042);
+    expect(parseFreeRtosReadyList(buf, REGION_BASE, LIST_ADDR)).toMatchObject({ coverage: 'complete', completed: 0 });
+    const second = parseFreeRtosReadyList(buf, REGION_BASE, LIST_ADDR + stride);
+    expect(second).toMatchObject({ coverage: 'complete', completed: 1 });
+    expect(second.tasks.map((t) => t.tcbAddress)).toEqual([0x3000_0042]);
   });
 
   it('carries a ready list priority through, and a ready walk agrees with parseFreeRtosReadyList', () => {

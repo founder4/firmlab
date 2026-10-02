@@ -116,6 +116,16 @@ export function listSentinelHeadSize(layout: FreeRtosLayout): number {
   return TICK_WIDTH + pointerAlignmentPadding(layout) + layout.pointerWidth;
 }
 
+/**
+ * sizeof(`List_t`) under the same evidenced layout the walk reads: `uxNumberOfItems` + `pxIndex` + the full
+ * `MiniListItem_t` sentinel (`xItemValue` + padding + `pxNext` + `pxPrevious`). It is the stride between
+ * `pxReadyTasksLists[priority]` entries ONLY for a build with that layout — no list-integrity bytes, a 4-byte
+ * `TickType_t` — and says nothing about how many priorities a build has.
+ */
+export function listRecordSize(layout: FreeRtosLayout): number {
+  return 2 * layout.pointerWidth + TICK_WIDTH + pointerAlignmentPadding(layout) + 2 * layout.pointerWidth;
+}
+
 /** What one walk saw beyond the base result: the header count, container back-pointers, and the item values in order. */
 interface ListWalk extends FreeRtosTaskListResult {
   /** `uxNumberOfItems` from the `List_t` header, or null when the header lies outside the buffer. */
