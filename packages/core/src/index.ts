@@ -20,6 +20,7 @@ export * from './extract-diagnose.js';
 export * from './filesystem.js';
 export * from './mcu.js';
 export * from './rtos-tasks.js';
+export * from './switch-family.js';
 export { analyzeBuffer } from './analyze.js';
 export type { StaticAnalysis } from './analyze.js';
 export * from './nvd-domain.js';

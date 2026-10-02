@@ -736,8 +736,10 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
 - [ ] Diseño y hoja de ruta en `docs/EMULATION-FUTURE.md`: síntesis de hardware para arrancar firmware SOHO con
   red operativa en emulación pura, atacando las tres causas raíz medidas (bucles de sondeo MMIO, ausencia de
   switch DSA, fragilidad de `LD_PRELOAD`/libnvram). Priorizable por fases: **Fase 1 — Universal Virtual DSA
-  Switch** (Capa II; depende de una detección de familia de switch RTL83xx/BCM53xx/QCA8337 que aún NO existe en
-  `signatures.ts`); **Fase 2 — integrar Fuzzware/µEmu como provider** para modelado MMIO (no motor TCG propio;
+  Switch** (Capa II; depende de una detección de familia de switch RTL83xx/BCM53xx/QCA8337: ya existe un
+  detector puro y acotado en `packages/core/src/switch-family.ts` que sólo da leads estáticos —`QCA8337` como literal
+  exacto, RTL83xx/BCM53xx sólo a nivel de plantilla porque el repositorio no verifica qué miembros son switches;
+  compatible strings, nombres de driver/módulo y formato de etiquetado siguen diferidos sin fuente—); **Fase 2 — integrar Fuzzware/µEmu como provider** para modelado MMIO (no motor TCG propio;
   frontera ya nombrada en este backlog); **Fase 3 — snapshot/fork** (`savevm`/`loadvm`) enlazado a `webprobe.ts`
   + AFL++. Techo de prueba honesto: `confirmed_in_emulation` de daemons de red (hoy `br-lan` nunca sube), NUNCA
   `confirmed_full_system` ni «idéntico al físico» — el entorno sintético es permisivo por diseño (`types.ts`). La
@@ -752,7 +754,10 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   transferencia por salida real del coordinador ya se comprobó (adopción del mismo Run, generación 1→2);
   las pruebas breves actuales no demuestran esa duración ni el agotamiento de todos los servicios. Orca conserva wake/nudge best-effort y Antigravity no expone
   `turn_started`; requerir evidencia nativa o reconocer incertidumbre.
-- [ ] Estabilizar `apps/api/src/research/config-cancellation.test.ts`: el test de petición bloqueada cancela
+- [x] Estabilizar `apps/api/src/research/config-cancellation.test.ts`: el test de petición bloqueada cancela
   tras 20 ms y exige que el servidor haya recibido una petición; bajo carga puede cancelar antes del socket
   (observado 2026-10-02 en `pnpm test`, requests=0). Sincronizar con la llegada real antes de cancelar, con
   espera acotada y manteniendo la comprobación de aborto rápido. No atribuir esta carrera al supervisor.
+  *(Hecho: el test espera la recepción real en el servidor de loopback con plazo de 3 s, rechaza que la petición
+  se resuelva antes de cancelar y mide por separado que la cancelación aborte con `AbortError` en menos de 2 s;
+  49 ejecuciones del fichero, 48 de ellas a concurrencia 8, sin fallo.)*
