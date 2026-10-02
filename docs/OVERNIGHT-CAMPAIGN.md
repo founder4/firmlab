@@ -193,4 +193,30 @@ ceder propiedad. No dejar agentes reclamables sin decisión ni cerrar terminales
   - Se marcó como completado el soporte de `reindexCorpus`, `retireFindings` y edición de notas.
   - Se registró como nuevo ítem diferido el cap de edición de notas (`MAX_NOTE_EDIT = 4000`) vs creación API (`MAX_NOTE = 20000`).
 
+### Ola 4 integrada y validada (2026-10-02 02:40 UTC+2)
+- Claude completó `task_f9ba29b10bae` (`ctx_4b388a15b8c2`) con commit `e52ab39`:
+  - `apps/web/src/components/OperatorPanel.tsx`: ecualizado el límite de edición de notas `MAX_NOTE_EDIT` con la cota de la API `MAX_NOTE = 20000`, unificada la validación `noteBodyProblem` en creación y edición, añadida validación estricta de longitud de autor `MAX_NOTE_AUTHOR = 80` con alertas accesibles y botón Deshabilitado antes de enviar petición.
+  - `apps/api/src/findings-retire.ts`: acotadas las líneas de detalle en `retirementNote` a `MAX_LISTED_LINE = 300` caracteres y la fuente a `MAX_RETIRE_SOURCE = 1024`, garantizando por construcción que las notas de auditoría generadas automáticamente no desbordan `MAX_NOTE = 20000`.
+  - `apps/api/src/findings-retire.test.ts`: test de regresión acotando el peor caso <= 20.000 caracteres.
+  - 42 tests enfocados en `OperatorPanel.test.tsx` pasando.
+- Claude completó `task_0d12c061ded9` (`ctx_ac434411048d`) con commit `a30c9f3`:
+  - `apps/web/src/api.ts`: clientes tipados para `api.reanalyzeCorpus` (`POST /analysis/reanalyze-all`) y `api.reanalyzeImage` (`POST /images/:id/analysis`).
+  - `apps/web/src/pages/Corpus.tsx`: acción confirmada con modal "Re-analyze all images" / "Reanalizar todas las imágenes", tarjeta de resultados con desglose (total, cambiadas, fallidas), insignias de transición `before → after` y cabecera con flex-wrap responsivo para evitar overflow a 390px.
+  - `apps/web/src/pages/ImageDetail.tsx`: acción "Re-classify image" / "Reclasificar imagen" junto al badge de clase del dossier, actualizando la identidad en el cliente y mostrando aviso de cambio.
+  - Localización completa en inglés y español en `locales/{en,es}/{corpus,imageDetail}.ts`.
+  - 18 tests en `Corpus.test.tsx` y 57 tests en `ImageDetail.test.tsx` pasando.
+- Verificación sintética Playwright en navegador Chromium (`scripts/qa-wave4.mjs`):
+  - Verifica en 4 variantes matriciales (`en-390`, `en-1440`, `es-390`, `es-1440`):
+    1. Corpus: diálogo de confirmación, petición `POST /analysis/reanalyze-all`, renderizado del reporte con conteos e insignias de transición, ancho responsivo sin desbordamiento horizontal (`scrollWidth <= width`).
+    2. ImageDetail: acción `POST /images/:id/analysis` y aviso localizado de cambio de clase.
+    3. OperatorPanel: edición de notas de 5.000 caracteres superando el límite anterior de 4.000 y guardado en memoria.
+  - Ejecución con salida limpia (código 0).
+- Validación completa de repositorio:
+  - `pnpm --filter @firmlab/core build`: limpio.
+  - `pnpm check`: 3 de 3 paquetes TypeScript limpios (0 errores).
+  - `pnpm test`: 4.048 tests pasados (core: 380, API: 2.807, web: 792, scripts: 69; 0 fallos).
+  - `pnpm build`: bundles de producción limpios (core, api, web).
+  - `pnpm biome`: 638 ficheros verificados, 0 errores, 0 avisos; scripts de pre-commit limpios.
+
+
 
