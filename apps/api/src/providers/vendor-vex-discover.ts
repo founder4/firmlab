@@ -16,6 +16,23 @@
  *    product strings accepted below. "linux" alone is not the Linux kernel; a substring is never a match.
  *  - **Disagreement is not resolved by order.** Statements (in one document or across several) that assert
  *    different things for the same CVE and product are `conflicting`, with every source listed.
+ *  - **A verdict is not presented as complete when it is not.** A document whose statement or product cap dropped
+ *    anything, whose statements carried a status that is not a VEX status, or whose product identity for this CVE
+ *    could not be read, is listed in the verdict's `omissions` and named in its rationale: the missing half of a
+ *    disagreement looks exactly like agreement.
+ *  - **No firmware-controlled string throws.** A purl with a malformed percent-escape (`busy%zzbox`) is an
+ *    unmatchable identity — it matches nothing, is counted in coverage with its reason, and every other statement
+ *    still resolves. A thrown URIError used to take down kernel posture and the sbom job with it.
+ *
+ * Product identity is matched on the fields that make it an identity, not on a bare name. A purl names an
+ * ecosystem (type) and a namespace; a CPE names a part and a vendor. The rows these verdicts ride on do not carry
+ * their ecosystem (a grype row is a name and a version), so a package row accepts only the identities that can
+ * mean the binary package a firmware rootfs ships: a `generic` purl with no namespace, or an OS-distribution
+ * package purl (`deb`, `rpm`, `apk`, `alpm`, `opkg`) of any distro namespace; and an application (`a`) CPE whose
+ * vendor:product is the measured NVD identity in `COMPONENT_CPE`, or whose vendor and product both equal the
+ * package name. `pkg:npm/busybox` is an npm package that shares a name; `cpe:2.3:h:acme:busybox` is hardware. A
+ * language-ecosystem row (pypi, npm, …) is therefore never matched by a typed purl until the row carries its
+ * ecosystem — a conservative miss, which attaches nothing, rather than a cross-ecosystem false attachment.
  *
  * Discovery is bounded and deterministic: the tree walk visits at most `maxEntries` entries and never follows a
  * symbolic link (a symlinked candidate is refused by name, because a link inside a vendor rootfs can point at the
@@ -25,7 +42,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  COMPONENT_CPE,
   DEFAULT_MAX_VEX_DOCUMENT_BYTES,
+  MAX_UNRECOGNISED_STATUS_EXAMPLES,
   type ProductMatcherPredicate,
   type VendorVexDocument,
   type VendorVexStatus,
@@ -90,8 +109,29 @@ export interface VendorVexDiscoveryCoverage {
   walkTruncated: boolean;
   bytesRead: number;
   caps: { maxFiles: number; maxTotalBytes: number; maxDocumentBytes: number; maxEntries: number };
+  /**
+   * Directories the walk could not list, so nothing under them was seen. Optional (an older build never counted
+   * them); absent means "not counted", never "none".
+   */
+  unreadableDirectories?: number;
+  /** The first `MAX_REPORTED_PATHS` of them, rootfs-relative, in walk order. */
+  unreadableDirectoryPaths?: string[];
+  /** Product identities in parsed documents that cannot be read (e.g. a malformed purl escape) and so match nothing. */
+  unmatchableIdentities?: number;
+  /** The first `MAX_REPORTED_PATHS` of them, with the document, statement and reason. */
+  unmatchableIdentityExamples?: VendorVexUnmatchableIdentity[];
   statement: string;
 }
+
+export interface VendorVexUnmatchableIdentity {
+  sourcePath: string;
+  statementIndex: number;
+  identity: string;
+  reason: string;
+}
+
+/** How many unreadable directories / unmatchable identities coverage lists by name; the counts are exact. */
+export const MAX_REPORTED_PATHS = 20;
 
 export interface VendorVexDiscovery {
   documents: VendorVexDocument[];
@@ -111,12 +151,19 @@ export const DEFAULT_VEX_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 export const DEFAULT_VEX_MAX_ENTRIES = 200_000;
 
 /** Walk `rootfs` without following links; returns rootfs-relative paths of regular files and of symlinks. */
-function walk(
-  rootfs: string,
-  maxEntries: number,
-): { files: string[]; symlinks: string[]; visited: number; truncated: boolean } {
+interface WalkResult {
+  files: string[];
+  symlinks: string[];
+  /** Directories `readdir` refused, rootfs-relative; nothing beneath them was seen. */
+  unreadable: string[];
+  visited: number;
+  truncated: boolean;
+}
+
+function walk(rootfs: string, maxEntries: number): WalkResult {
   const files: string[] = [];
   const symlinks: string[] = [];
+  const unreadable: string[] = [];
   let visited = 0;
   const stack: string[] = [''];
   while (stack.length > 0) {
@@ -125,12 +172,14 @@ function walk(
     try {
       entries = fs.readdirSync(path.join(rootfs, rel), { withFileTypes: true });
     } catch {
+      // An unlisted directory is a hole in the search, not an empty one: it is counted and named.
+      unreadable.push(rel || '/');
       continue;
     }
     // Sorted so a truncated walk stops at the same place on every run, independent of readdir order.
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const e of entries) {
-      if (visited >= maxEntries) return { files, symlinks, visited, truncated: true };
+      if (visited >= maxEntries) return { files, symlinks, unreadable, visited, truncated: true };
       visited++;
       const child = `${rel}/${e.name}`;
       if (e.isSymbolicLink()) symlinks.push(child);
@@ -138,7 +187,7 @@ function walk(
       else if (e.isFile()) files.push(child);
     }
   }
-  return { files, symlinks, visited, truncated: false };
+  return { files, symlinks, unreadable, visited, truncated: false };
 }
 
 /** A discovery that read nothing, with the reason — what a missing rootfs or an unexpected fault degrades to. */
@@ -252,7 +301,21 @@ function discoverIn(rootfs: string, caps: VendorVexDiscoveryCoverage['caps']): V
   if (tree.truncated) {
     parts.push(`The walk stopped at ${caps.maxEntries} entries; candidates beyond it were never seen.`);
   }
-  if (found === 0 && !tree.truncated) {
+  if (tree.unreadable.length > 0) {
+    const named = tree.unreadable.slice(0, MAX_REPORTED_PATHS).join(', ');
+    const more =
+      tree.unreadable.length > MAX_REPORTED_PATHS ? ` and ${tree.unreadable.length - MAX_REPORTED_PATHS} more` : '';
+    parts.push(
+      `${tree.unreadable.length} director(ies) could not be listed (${named}${more}); candidates under them were never seen.`,
+    );
+  }
+  const unmatchable = unmatchableIdentitiesIn(documents);
+  if (unmatchable.length > 0) {
+    parts.push(
+      `${unmatchable.length} product identit(ies) in parsed documents could not be read and match no row (first: ${unmatchable[0]?.identity} — ${unmatchable[0]?.reason}).`,
+    );
+  }
+  if (found === 0 && !tree.truncated && tree.unreadable.length === 0) {
     parts.push('No document is not a clean result: silence from a vendor attaches nothing to any row.');
   }
   parts.push('A vendor statement is an assertion, not a code fact, and never changes a proof state.');
@@ -273,6 +336,10 @@ function discoverIn(rootfs: string, caps: VendorVexDiscoveryCoverage['caps']): V
       walkTruncated: tree.truncated,
       bytesRead,
       caps,
+      unreadableDirectories: tree.unreadable.length,
+      unreadableDirectoryPaths: tree.unreadable.slice(0, MAX_REPORTED_PATHS),
+      unmatchableIdentities: unmatchable.length,
+      unmatchableIdentityExamples: unmatchable.slice(0, MAX_REPORTED_PATHS),
       statement: parts.join(' '),
     },
   };
@@ -283,7 +350,17 @@ function discoverIn(rootfs: string, caps: VendorVexDiscoveryCoverage['caps']): V
 type ProductId =
   | { kind: 'purl'; type: string; namespace: string; name: string; version: string | null }
   | { kind: 'cpe'; part: string; vendor: string; product: string; version: string | null }
-  | { kind: 'plain'; value: string };
+  | { kind: 'plain'; value: string }
+  | { kind: 'unmatchable'; reason: string };
+
+/** Percent-decode one purl component, or null when its escapes are malformed. Never throws. */
+function decodePurlComponent(raw: string): string | null {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+}
 
 function wildcard(v: string | null | undefined): boolean {
   return v === null || v === undefined || v === '' || v === '*' || v === '-';
@@ -298,11 +375,16 @@ function parseProductId(raw: string): ProductId {
     let version: string | null = null;
     const at = body.lastIndexOf('@');
     if (at >= 0) {
-      version = decodeURIComponent(body.slice(at + 1));
+      version = decodePurlComponent(body.slice(at + 1));
+      if (version === null) return { kind: 'unmatchable', reason: 'malformed percent-escape in the purl version' };
       body = body.slice(0, at);
     }
-    const segs = body.split('/').map((s) => decodeURIComponent(s));
-    return { kind: 'purl', type, namespace: segs.slice(0, -1).join('/'), name: segs.at(-1) ?? '', version };
+    const segs = body.split('/').map(decodePurlComponent);
+    if (segs.some((seg) => seg === null)) {
+      return { kind: 'unmatchable', reason: 'malformed percent-escape in the purl namespace or name' };
+    }
+    const decoded = segs as string[];
+    return { kind: 'purl', type, namespace: decoded.slice(0, -1).join('/'), name: decoded.at(-1) ?? '', version };
   }
   if (/^cpe:2\.3:/i.test(id)) {
     const f = id.split(':');
@@ -313,6 +395,26 @@ function parseProductId(raw: string): ProductId {
     return { kind: 'cpe', part: f[0] ?? '', vendor: f[1] ?? '', product: f[2] ?? '', version: f[3] ?? null };
   }
   return { kind: 'plain', value: id };
+}
+
+/** Pure: why a product identity can never match a row, or null when it is readable. Never throws. */
+export function productIdentityRefusal(raw: string): string | null {
+  const p = parseProductId(raw);
+  return p.kind === 'unmatchable' ? p.reason : null;
+}
+
+/** Pure: every unreadable product identity across the documents, in document then statement order. */
+export function unmatchableIdentitiesIn(documents: readonly VendorVexDocument[]): VendorVexUnmatchableIdentity[] {
+  const out: VendorVexUnmatchableIdentity[] = [];
+  for (const doc of documents) {
+    for (const st of doc.statements) {
+      for (const identity of st.products) {
+        const reason = productIdentityRefusal(identity);
+        if (reason) out.push({ sourcePath: doc.sourcePath, statementIndex: st.statementIndex, identity, reason });
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -340,6 +442,7 @@ export function linuxKernelProductMatcher(versions: readonly (string | null | un
   const versionOk = (v: string | null) => wildcard(v) || accepted.has(v as string);
   return (raw) => {
     const p = parseProductId(raw);
+    if (p.kind === 'unmatchable') return false;
     if (p.kind === 'plain') return ['linux-kernel', 'linux_kernel'].includes(p.value.toLowerCase());
     if (p.kind === 'purl') {
       return (
@@ -358,19 +461,35 @@ export function linuxKernelProductMatcher(versions: readonly (string | null | un
   };
 }
 
-export const PACKAGE_VEX_PRODUCTS =
-  'the exact package name as a plain identifier; a purl of any type whose final name segment equals the package ' +
-  'name exactly; or a CPE whose product field equals the package name (case-insensitive). A versioned purl or CPE ' +
-  "matches only when its version equals the row's package version.";
+/** purl types that name an OS-distribution binary package; the namespace is the distro, any of which is accepted. */
+const DISTRO_PURL_TYPES: ReadonlySet<string> = new Set(['deb', 'rpm', 'apk', 'alpm', 'opkg']);
 
-/** Pure: the matcher for a package row (grype). Exact name, never a substring. */
+export const PACKAGE_VEX_PRODUCTS =
+  'the exact package name as a plain identifier; a purl whose name equals the package name exactly and whose type ' +
+  'is "generic" with no namespace, or an OS-distribution package type (deb, rpm, apk, alpm, opkg) with any distro ' +
+  'namespace — a language-ecosystem purl (npm, pypi, …) is a different package that shares a name; or an ' +
+  'application ("a") CPE whose vendor:product is the measured NVD identity of the package (COMPONENT_CPE) or whose ' +
+  'vendor and product both equal the package name (case-insensitive). A versioned purl or CPE matches only when ' +
+  "its version equals the row's package version.";
+
+/** Pure: the matcher for a package row (grype). Exact identity — ecosystem, vendor and name — never a substring. */
 export function packageProductMatcher(name: string, version: string): ProductMatcherPredicate {
   const versionOk = (v: string | null) => wildcard(v) || v === version;
+  const lower = name.toLowerCase();
+  const cpeIdentities = new Set([`${lower}:${lower}`, ...(COMPONENT_CPE[lower] ?? [])]);
   return (raw) => {
     const p = parseProductId(raw);
+    if (p.kind === 'unmatchable') return false;
     if (p.kind === 'plain') return p.value === name;
-    if (p.kind === 'purl') return p.name === name && versionOk(p.version);
-    return p.product.toLowerCase() === name.toLowerCase() && versionOk(p.version);
+    if (p.kind === 'purl') {
+      const ecosystemOk = (p.type === 'generic' && p.namespace === '') || DISTRO_PURL_TYPES.has(p.type);
+      return ecosystemOk && p.name === name && versionOk(p.version);
+    }
+    return (
+      p.part.toLowerCase() === 'a' &&
+      cpeIdentities.has(`${p.vendor.toLowerCase()}:${p.product.toLowerCase()}`) &&
+      versionOk(p.version)
+    );
   };
 }
 
@@ -399,7 +518,67 @@ export interface VendorVexRowVerdict {
   justification: string | null;
   /** Every statement the verdict rests on, across all documents, in sorted-path then statement order. */
   sources: VendorVexRowSource[];
+  /**
+   * What may be missing from this verdict: statements a cap dropped, statements with a status that is not a VEX
+   * status, or product identities for this CVE that could not be read. OPTIONAL FOREVER; absent on a row from an
+   * older build means "not recorded", and on a row from this build means none was found.
+   */
+  omissions?: VendorVexRowOmission[];
   rationale: string;
+}
+
+export interface VendorVexRowOmission {
+  sourcePath: string;
+  reason: 'statement_cap' | 'product_cap' | 'unrecognised_status' | 'unmatchable_identity';
+  count: number;
+}
+
+const OMISSION_TEXT: Record<VendorVexRowOmission['reason'], string> = {
+  statement_cap: 'statement(s) dropped by the statement cap',
+  product_cap: 'product reference(s) dropped by the product cap',
+  unrecognised_status: 'statement(s) with a status that is not a VEX status',
+  unmatchable_identity: 'product identit(ies) for this CVE that could not be read',
+};
+
+/**
+ * Pure: what each document may be withholding from a verdict on `cveId`. A cap is document-wide — what it dropped is
+ * unknown, so it may concern any CVE. An unrecognised status is attributed to this CVE when an example names it, or
+ * when the examples were themselves bounded and so cannot rule it out.
+ */
+function omissionsFor(documents: readonly VendorVexDocument[], cveId: string): VendorVexRowOmission[] {
+  const cve = cveId.trim().toUpperCase();
+  const out: VendorVexRowOmission[] = [];
+  for (const doc of documents) {
+    const at = doc.sourcePath;
+    if (doc.droppedStatementsCount > 0) {
+      out.push({ sourcePath: at, reason: 'statement_cap', count: doc.droppedStatementsCount });
+    }
+    if (doc.droppedProductsCount > 0) {
+      out.push({ sourcePath: at, reason: 'product_cap', count: doc.droppedProductsCount });
+    }
+    const examples = doc.unrecognisedStatusExamples ?? [];
+    const named = examples.filter((e) => e.vulnerabilityId === cve).length;
+    const unlisted = (doc.unrecognisedStatusCount ?? 0) - examples.length;
+    if (named > 0 || (unlisted > 0 && examples.length >= MAX_UNRECOGNISED_STATUS_EXAMPLES)) {
+      out.push({ sourcePath: at, reason: 'unrecognised_status', count: named + Math.max(0, unlisted) });
+    }
+    const unreadable = doc.statements
+      .filter((st) => st.vulnerabilityId === cve)
+      .reduce((n, st) => n + st.products.filter((id) => productIdentityRefusal(id) !== null).length, 0);
+    if (unreadable > 0) out.push({ sourcePath: at, reason: 'unmatchable_identity', count: unreadable });
+  }
+  return out;
+}
+
+/** A matcher that cannot throw: a product a caller's predicate chokes on matches nothing, like an unreadable one. */
+function safeMatcher(matcher: ProductMatcherPredicate): ProductMatcherPredicate {
+  return (raw) => {
+    try {
+      return matcher(raw) === true;
+    } catch {
+      return false;
+    }
+  };
 }
 
 const STATUS_OF: Record<Exclude<VendorVexRowVerdictKind, 'conflicting'>, VendorVexStatus> = {
@@ -425,10 +604,11 @@ export function vendorVexVerdictFor(
   if (!discovery || discovery.documents.length === 0) return null;
   const sources: VendorVexRowSource[] = [];
   const kinds = new Set<VendorVexRowVerdictKind>();
+  const match = safeMatcher(matcher);
   for (const doc of discovery.documents) {
     // The explicit form: component name, then the matcher. A predicate rather than an array, because a versioned
     // purl or CPE must also agree with the row's version, which an exact-string list cannot express.
-    const v = resolveVendorVex(doc, cveId, componentName, matcher);
+    const v = resolveVendorVex(doc, cveId, componentName, match);
     if (v.verdict === 'unmentioned') continue;
     kinds.add(v.verdict);
     for (const s of v.matchedStatements ?? []) {
@@ -441,6 +621,11 @@ export function vendorVexVerdictFor(
     }
   }
   if (kinds.size === 0) return null;
+  const omissions = omissionsFor(discovery.documents, cveId);
+  const incomplete =
+    omissions.length > 0
+      ? ` Not a complete reading: ${omissions.map((o) => `${o.sourcePath} has ${o.count} ${OMISSION_TEXT[o.reason]}`).join('; ')}.`
+      : '';
   const statuses = new Set(sources.map((s) => s.status));
   const first = sources[0];
   if (kinds.has('conflicting') || statuses.size > 1 || kinds.size > 1) {
@@ -452,7 +637,8 @@ export function vendorVexVerdictFor(
       statementIndex: null,
       justification: null,
       sources,
-      rationale: `Vendor VEX statements disagree on ${cveId} for ${componentName} (${listed}); not resolved by order. ${ASSERTION}`,
+      ...(omissions.length > 0 ? { omissions } : {}),
+      rationale: `Vendor VEX statements disagree on ${cveId} for ${componentName} (${listed}); not resolved by order.${incomplete} ${ASSERTION}`,
     };
   }
   const verdict = [...kinds][0] as Exclude<VendorVexRowVerdictKind, 'conflicting'>;
@@ -464,6 +650,7 @@ export function vendorVexVerdictFor(
     statementIndex: first?.statementIndex ?? null,
     justification: first?.justification ?? null,
     sources,
-    rationale: `A vendor VEX document states ${STATUS_OF[verdict].replace('_', ' ')} for ${cveId} in ${componentName} (${where}${first?.justification ? `; justification: ${first.justification}` : ''}). ${ASSERTION}`,
+    ...(omissions.length > 0 ? { omissions } : {}),
+    rationale: `A vendor VEX document states ${STATUS_OF[verdict].replace('_', ' ')} for ${cveId} in ${componentName} (${where}${first?.justification ? `; justification: ${first.justification}` : ''}).${incomplete} ${ASSERTION}`,
   };
 }

@@ -20,7 +20,17 @@
  *   - Disagreeing statements are marked `conflicting`, never resolved by document order or precedence.
  *   - Resource limits are strictly enforced: oversized documents, statement caps, and product caps
  *     report exact counts dropped and the rule applied (document order). Malformed or non-VEX inputs
- *     return structured refusals without throwing.
+ *     return structured refusals without throwing. A cap that dropped anything is restated on every
+ *     verdict the document yields (`droppedByBounds`): a statement past the cap could be the half of a
+ *     disagreement that never arrived, so a clean single verdict from a truncated document is not
+ *     presented as a complete reading.
+ *   - A statement whose status is not one of the four VEX statuses is counted
+ *     (`unrecognisedStatusCount`, with bounded examples), never silently dropped: `known_affected`
+ *     written into an OpenVEX file is a statement the vendor made, and losing it can hide a conflict.
+ *   - A CSAF product keeps its identity together. When its `product_identification_helper` carries a
+ *     VERSIONED purl or CPE, only those versioned identities stand for it — never its bare `name` or
+ *     free-form `product_id`, which would let a statement scoped to busybox 1.30.1 attach to any
+ *     busybox. A product with no versioned identity keeps its id, name and unversioned helpers.
  */
 
 export const DEFAULT_MAX_VEX_DOCUMENT_BYTES = 4 * 1024 * 1024; // 4 MiB
@@ -60,6 +70,15 @@ export interface VendorVexLimits {
   readonly maxProducts?: number | undefined;
 }
 
+/** One statement dropped because its status is not a VEX status — kept as an example, bounded. */
+export interface VendorVexUnrecognisedStatus {
+  readonly vulnerabilityId: string;
+  readonly status: string;
+}
+
+/** How many examples of unrecognised statuses a document keeps; the count is always exact. */
+export const MAX_UNRECOGNISED_STATUS_EXAMPLES = 10;
+
 export interface VendorVexDocument {
   readonly ok: true;
   readonly format: VendorVexFormat;
@@ -70,6 +89,13 @@ export interface VendorVexDocument {
   readonly droppedStatementsCount: number;
   readonly droppedProductsCount: number;
   readonly ignoredNonCveCount: number;
+  /**
+   * Statements naming a CVE whose status is none of the four VEX statuses, so they were not kept. Optional because a
+   * document from an older build never counted them; absent means "not counted", never zero.
+   */
+  readonly unrecognisedStatusCount?: number | undefined;
+  /** The first `MAX_UNRECOGNISED_STATUS_EXAMPLES` of them, in document order. */
+  readonly unrecognisedStatusExamples?: readonly VendorVexUnrecognisedStatus[] | undefined;
   readonly boundsRule: string;
 }
 
@@ -100,6 +126,11 @@ export interface VendorVexVerdict {
   readonly actionStatement?: string | null | undefined;
   readonly conflictingStatements?: readonly VendorVexStatement[] | undefined;
   readonly matchedStatements?: readonly VendorVexStatement[] | undefined;
+  /**
+   * Present when the document's statement or product cap dropped anything: what was dropped may have named this CVE,
+   * so the verdict is not a complete reading of the document.
+   */
+  readonly droppedByBounds?: { readonly statements: number; readonly products: number } | undefined;
 }
 
 export type ProductMatcherPredicate = (productId: string) => boolean;
@@ -196,8 +227,35 @@ interface RawStatementCandidate {
   statusNotes?: string | undefined;
 }
 
-function buildCsafProductTreeMap(productTreeRaw: unknown): Map<string, string[]> {
-  const map = new Map<string, string[]>();
+function isWildcardVersion(v: string | undefined): boolean {
+  return v === undefined || v === '' || v === '*' || v === '-';
+}
+
+/**
+ * Whether a purl or CPE string names a concrete version. Reads the raw text only — nothing is percent-decoded here, so
+ * no firmware-controlled string can throw.
+ */
+function isVersionedIdentity(raw: string): boolean {
+  const id = raw.trim();
+  const purl = /^pkg:[^/]+\/([^?#]+)/i.exec(id);
+  if (purl) {
+    const body = purl[1] as string;
+    const at = body.lastIndexOf('@');
+    return at >= 0 && body.slice(at + 1).length > 0;
+  }
+  if (/^cpe:2\.3:/i.test(id)) return !isWildcardVersion(id.split(':')[5]);
+  if (/^cpe:\//i.test(id)) return !isWildcardVersion(id.slice(5).split(':')[3]);
+  return false;
+}
+
+/** The identity strings one CSAF product stands for, and whether its free-form product_id may stand for it too. */
+interface CsafProductIdentity {
+  identities: string[];
+  includeProductId: boolean;
+}
+
+function buildCsafProductTreeMap(productTreeRaw: unknown): Map<string, CsafProductIdentity> {
+  const map = new Map<string, CsafProductIdentity>();
   if (productTreeRaw === null || typeof productTreeRaw !== 'object') return map;
   const tree = productTreeRaw as Record<string, unknown>;
 
@@ -207,22 +265,29 @@ function buildCsafProductTreeMap(productTreeRaw: unknown): Map<string, string[]>
         const obj = item as Record<string, unknown>;
         const pid = typeof obj.product_id === 'string' ? obj.product_id.trim() : null;
         if (!pid) continue;
+        const helpers: string[] = [];
+        if (obj.product_identification_helper !== null && typeof obj.product_identification_helper === 'object') {
+          const helper = obj.product_identification_helper as Record<string, unknown>;
+          if (typeof helper.purl === 'string' && helper.purl.trim().length > 0) {
+            helpers.push(helper.purl.trim());
+          }
+          if (typeof helper.cpe === 'string' && helper.cpe.trim().length > 0) {
+            helpers.push(helper.cpe.trim());
+          }
+        }
+        // A versioned purl or CPE scopes the product: it alone stands for it, because the bare name or product_id
+        // would match every version of the same software.
+        const versioned = helpers.filter(isVersionedIdentity);
+        if (versioned.length > 0) {
+          map.set(pid, { identities: versioned, includeProductId: false });
+          continue;
+        }
         const aliases: string[] = [];
         if (typeof obj.name === 'string' && obj.name.trim().length > 0) {
           aliases.push(obj.name.trim());
         }
-        if (obj.product_identification_helper !== null && typeof obj.product_identification_helper === 'object') {
-          const helper = obj.product_identification_helper as Record<string, unknown>;
-          if (typeof helper.purl === 'string' && helper.purl.trim().length > 0) {
-            aliases.push(helper.purl.trim());
-          }
-          if (typeof helper.cpe === 'string' && helper.cpe.trim().length > 0) {
-            aliases.push(helper.cpe.trim());
-          }
-        }
-        if (aliases.length > 0) {
-          map.set(pid, aliases);
-        }
+        aliases.push(...helpers);
+        map.set(pid, { identities: aliases, includeProductId: true });
       }
     }
   }
@@ -360,6 +425,8 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
   }
 
   let ignoredNonCveCount = 0;
+  let unrecognisedStatusCount = 0;
+  const unrecognisedStatusExamples: VendorVexUnrecognisedStatus[] = [];
   const rawCandidates: RawStatementCandidate[] = [];
 
   if (isOpenVex) {
@@ -400,7 +467,14 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
       }
 
       const status = parseVexStatus(stmt.status);
-      if (!status) continue;
+      if (!status) {
+        unrecognisedStatusCount++;
+        if (unrecognisedStatusExamples.length < MAX_UNRECOGNISED_STATUS_EXAMPLES) {
+          const raw = typeof stmt.status === 'string' ? stmt.status : JSON.stringify(stmt.status ?? null);
+          unrecognisedStatusExamples.push({ vulnerabilityId: normalizedCve, status: raw.slice(0, 64) });
+        }
+        continue;
+      }
 
       const products = extractOpenVexProducts(stmt.products, stmt.subcomponents);
       const justification =
@@ -447,6 +521,8 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
       droppedStatementsCount,
       droppedProductsCount,
       ignoredNonCveCount,
+      unrecognisedStatusCount,
+      unrecognisedStatusExamples,
       boundsRule: VEX_BOUNDS_RULE,
     };
   }
@@ -536,21 +612,22 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
       const pidsRaw = productStatus[group.key];
       if (!Array.isArray(pidsRaw) || pidsRaw.length === 0) continue;
 
+      // `pidSet` is what flags, threats and remediations reference; `productSet` is what a matcher sees.
+      const pidSet = new Set<string>();
       const productSet = new Set<string>();
       for (const pidItem of pidsRaw) {
         if (typeof pidItem === 'string') {
           const pid = pidItem.trim();
           if (pid.length > 0) {
-            productSet.add(pid);
-            const aliases = productTreeMap.get(pid);
-            if (aliases) {
-              for (const alias of aliases) {
-                productSet.add(alias);
-              }
-            }
+            pidSet.add(pid);
+            const identity = productTreeMap.get(pid);
+            if (!identity || identity.includeProductId) productSet.add(pid);
+            for (const alias of identity?.identities ?? []) productSet.add(alias);
           }
         }
       }
+      const refersToGroup = (id: unknown) =>
+        typeof id === 'string' && (pidSet.has(id.trim()) || productSet.has(id.trim()));
 
       if (productSet.size === 0) continue;
       const products = Array.from(productSet);
@@ -563,10 +640,7 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
             const flag = flagItem as Record<string, unknown>;
             if (typeof flag.label === 'string' && flag.label.trim().length > 0) {
               const flagProducts = Array.isArray(flag.product_ids) ? flag.product_ids : null;
-              if (
-                !flagProducts ||
-                flagProducts.some((fp: unknown) => typeof fp === 'string' && productSet.has(fp.trim()))
-              ) {
+              if (!flagProducts || flagProducts.some(refersToGroup)) {
                 justification = flag.label.trim();
                 break;
               }
@@ -583,10 +657,7 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
             const threat = threatItem as Record<string, unknown>;
             if (typeof threat.details === 'string' && threat.details.trim().length > 0) {
               const threatProducts = Array.isArray(threat.product_ids) ? threat.product_ids : null;
-              if (
-                !threatProducts ||
-                threatProducts.some((tp: unknown) => typeof tp === 'string' && productSet.has(tp.trim()))
-              ) {
+              if (!threatProducts || threatProducts.some(refersToGroup)) {
                 impactStatement = threat.details.trim();
                 break;
               }
@@ -603,10 +674,7 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
             const rem = remItem as Record<string, unknown>;
             if (typeof rem.details === 'string' && rem.details.trim().length > 0) {
               const remProducts = Array.isArray(rem.product_ids) ? rem.product_ids : null;
-              if (
-                !remProducts ||
-                remProducts.some((rp: unknown) => typeof rp === 'string' && productSet.has(rp.trim()))
-              ) {
+              if (!remProducts || remProducts.some(refersToGroup)) {
                 actionStatement = rem.details.trim();
                 break;
               }
@@ -642,6 +710,9 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
     droppedStatementsCount,
     droppedProductsCount,
     ignoredNonCveCount,
+    // CSAF carries status as the product_status key, so nothing here is an unrecognised status string.
+    unrecognisedStatusCount,
+    unrecognisedStatusExamples,
     boundsRule: VEX_BOUNDS_RULE,
   };
 }
@@ -769,6 +840,13 @@ export function resolveVendorVex(
 
   const predicate = normalizeMatcher(matcher);
   const matchingStatements: VendorVexStatement[] = [];
+  const droppedByBounds =
+    document.droppedStatementsCount > 0 || document.droppedProductsCount > 0
+      ? { statements: document.droppedStatementsCount, products: document.droppedProductsCount }
+      : undefined;
+  const boundsSentence = droppedByBounds
+    ? ` The document's caps dropped ${droppedByBounds.statements} statement(s) and ${droppedByBounds.products} product reference(s) (${document.boundsRule}); what was dropped may concern ${normalizedTargetCve}, so this is not a complete reading of the document.`
+    : '';
 
   for (const stmt of document.statements) {
     if (stmt.vulnerabilityId !== normalizedTargetCve) {
@@ -790,7 +868,8 @@ export function resolveVendorVex(
       timestamp: document.timestamp,
       documentAuthor: document.author,
       documentTimestamp: document.timestamp,
-      rationale: `Vendor VEX document at ${document.sourcePath} makes no statement regarding ${normalizedTargetCve}${componentName ? ` for component ${componentName}` : ''}; silence in vendor documentation is not evidence of absence or cleanliness.`,
+      rationale: `Vendor VEX document at ${document.sourcePath} makes no statement regarding ${normalizedTargetCve}${componentName ? ` for component ${componentName}` : ''}; silence in vendor documentation is not evidence of absence or cleanliness.${boundsSentence}`,
+      ...(droppedByBounds ? { droppedByBounds } : {}),
     };
   }
 
@@ -811,7 +890,8 @@ export function resolveVendorVex(
       documentTimestamp: document.timestamp,
       conflictingStatements: matchingStatements,
       matchedStatements: matchingStatements,
-      rationale: `Vendor VEX document at ${document.sourcePath} contains conflicting statements for ${normalizedTargetCve} (${conflictSummary}); conflicting vendor claims cannot resolve exploitability and are not code facts.`,
+      rationale: `Vendor VEX document at ${document.sourcePath} contains conflicting statements for ${normalizedTargetCve} (${conflictSummary}); conflicting vendor claims cannot resolve exploitability and are not code facts.${boundsSentence}`,
+      ...(droppedByBounds ? { droppedByBounds } : {}),
     };
   }
 
@@ -863,7 +943,8 @@ export function resolveVendorVex(
     timestamp: document.timestamp,
     documentAuthor: document.author,
     documentTimestamp: document.timestamp,
-    rationale,
+    rationale: `${rationale}${boundsSentence}`,
+    ...(droppedByBounds ? { droppedByBounds } : {}),
     ...(primaryStatement.impactStatement ? { impactStatement: primaryStatement.impactStatement } : {}),
     ...(primaryStatement.actionStatement ? { actionStatement: primaryStatement.actionStatement } : {}),
     matchedStatements: matchingStatements,

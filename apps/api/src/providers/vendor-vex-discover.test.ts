@@ -8,6 +8,7 @@ import {
   isVexCandidatePath,
   linuxKernelProductMatcher,
   packageProductMatcher,
+  productIdentityRefusal,
   selectVexCandidates,
   vendorVexVerdictFor,
 } from './vendor-vex-discover.js';
@@ -250,5 +251,200 @@ describe('vendorVexVerdictFor', () => {
     const agree = vendorVexVerdictFor({ documents: [fixed, fixed2] }, 'CVE-2022-0847', kernel, 'k');
     expect(agree?.verdict).toBe('vendor_states_fixed');
     expect(agree?.sources.map((s) => s.sourcePath)).toEqual(['/a.vex.json', '/b.vex.json']);
+  });
+});
+
+/** A CSAF VEX document with one product and one vulnerability. */
+function csafVex(product: Record<string, unknown>, cve: string, productStatus: Record<string, string[]>): string {
+  return JSON.stringify({
+    document: { category: 'csaf_vex', publisher: { name: 'Vendor PSIRT' } },
+    product_tree: { full_product_names: [product] },
+    vulnerabilities: [{ cve, product_status: productStatus }],
+  });
+}
+
+describe('no firmware-controlled string throws at match time', () => {
+  it.each([
+    ['kernel', 'pkg:generic/linux-kernel@5.10%', 'CVE-2021-22555'],
+    ['package', 'pkg:generic/busy%zzbox', 'CVE-2022-48174'],
+  ])('a malformed purl escape (%s) is unmatchable, recorded, and other statements still resolve', (_, bad, cve) => {
+    const kernelRow = cve === 'CVE-2021-22555';
+    const good = kernelRow ? 'linux-kernel' : 'busybox';
+    const d = doc(
+      openvex([
+        { cve, products: [bad], status: 'affected' },
+        { cve, products: [good], status: 'fixed' },
+      ]),
+    );
+    const matcher = kernelRow ? linuxKernelProductMatcher(['5.10']) : packageProductMatcher('busybox', '1.36.1');
+    expect(() => matcher(bad)).not.toThrow();
+    expect(matcher(bad)).toBe(false);
+    expect(productIdentityRefusal(bad)).toMatch(/malformed percent-escape/);
+    const v = vendorVexVerdictFor({ documents: [d] }, cve, matcher, good);
+    expect(v?.verdict).toBe('vendor_states_fixed');
+    expect(v?.omissions).toEqual([{ sourcePath: '/etc/vex/a.openvex.json', reason: 'unmatchable_identity', count: 1 }]);
+    expect(v?.rationale).toMatch(/Not a complete reading: .*could not be read/);
+  });
+
+  it('a malformed escape alone attaches nothing, and discovery counts it with its reason', () => {
+    const root = rootfs({
+      'etc/vex/a.openvex.json': openvex([
+        { cve: 'CVE-2022-48174', products: ['pkg:generic/busy%zzbox'], status: 'fixed' },
+      ]),
+    });
+    const r = discoverVendorVex(root);
+    expect(r.coverage.unmatchableIdentities).toBe(1);
+    expect(r.coverage.unmatchableIdentityExamples).toEqual([
+      expect.objectContaining({
+        sourcePath: '/etc/vex/a.openvex.json',
+        statementIndex: 0,
+        identity: 'pkg:generic/busy%zzbox',
+      }),
+    ]);
+    expect(r.coverage.statement).toMatch(/1 product identit\(ies\) in parsed documents could not be read/);
+    expect(vendorVexVerdictFor(r, 'CVE-2022-48174', packageProductMatcher('busybox', '1.36.1'), 'busybox')).toBeNull();
+  });
+
+  it('a caller predicate that throws matches nothing instead of failing the row', () => {
+    const d = doc(openvex([{ cve: 'CVE-2022-48174', products: ['busybox'], status: 'fixed' }]));
+    const throwing = () => {
+      throw new Error('boom');
+    };
+    expect(vendorVexVerdictFor({ documents: [d] }, 'CVE-2022-48174', throwing, 'busybox')).toBeNull();
+  });
+});
+
+describe('CSAF version scope survives into the row verdict', () => {
+  const busybox130 = csafVex(
+    { product_id: 'P1', name: 'busybox', product_identification_helper: { purl: 'pkg:generic/busybox@1.30.1' } },
+    'CVE-2022-48174',
+    { fixed: ['P1'] },
+  );
+  const kernel44 = csafVex(
+    {
+      product_id: 'K',
+      name: 'linux-kernel',
+      product_identification_helper: { cpe: 'cpe:2.3:o:linux:linux_kernel:4.4.0:*:*:*:*:*:*:*' },
+    },
+    'CVE-2021-22555',
+    { known_not_affected: ['K'] },
+  );
+
+  it('a fixed statement scoped to busybox 1.30.1 does not attach to a busybox 1.36.1 row, and does to 1.30.1', () => {
+    const docs = { documents: [doc(busybox130, '/etc/csaf.json')] };
+    expect(
+      vendorVexVerdictFor(docs, 'CVE-2022-48174', packageProductMatcher('busybox', '1.36.1'), 'busybox'),
+    ).toBeNull();
+    expect(
+      vendorVexVerdictFor(docs, 'CVE-2022-48174', packageProductMatcher('busybox', '1.30.1'), 'busybox')?.verdict,
+    ).toBe('vendor_states_fixed');
+  });
+
+  it('a known_not_affected scoped to kernel 4.4.0 does not attach to 5.10.0, and does to 4.4.0', () => {
+    const docs = { documents: [doc(kernel44, '/etc/csaf.json')] };
+    expect(vendorVexVerdictFor(docs, 'CVE-2021-22555', linuxKernelProductMatcher(['5.10.0']), 'k')).toBeNull();
+    expect(vendorVexVerdictFor(docs, 'CVE-2021-22555', linuxKernelProductMatcher(['4.4.0']), 'k')?.verdict).toBe(
+      'vendor_states_not_affected',
+    );
+  });
+});
+
+describe('a row verdict says what may be missing from it', () => {
+  it('names a statement cap that dropped anything, so a clean single verdict is not read as complete', () => {
+    const text = openvex([
+      { cve: 'CVE-2022-48174', products: ['busybox'], status: 'not_affected' },
+      { cve: 'CVE-2021-0001', products: ['x'], status: 'fixed' },
+      { cve: 'CVE-2022-48174', products: ['busybox'], status: 'affected' },
+    ]);
+    const capped = parseVendorVex(text, '/etc/vex/a.openvex.json', { maxStatements: 2 });
+    if (!capped.ok) throw new Error('fixture refused');
+    const v = vendorVexVerdictFor(
+      { documents: [capped] },
+      'CVE-2022-48174',
+      packageProductMatcher('busybox', '1.36.1'),
+      'busybox',
+    );
+    expect(v?.verdict).toBe('vendor_states_not_affected');
+    expect(v?.omissions).toEqual([{ sourcePath: '/etc/vex/a.openvex.json', reason: 'statement_cap', count: 1 }]);
+    expect(v?.rationale).toMatch(/Not a complete reading: \/etc\/vex\/a\.openvex\.json has 1 statement\(s\) dropped/);
+
+    const whole = vendorVexVerdictFor(
+      { documents: [doc(text)] },
+      'CVE-2022-48174',
+      packageProductMatcher('busybox', '1.36.1'),
+      'busybox',
+    );
+    expect(whole?.verdict).toBe('conflicting');
+    expect(whole?.omissions).toBeUndefined();
+  });
+
+  it('names a statement on this CVE whose status is not a VEX status, and stays silent about other CVEs', () => {
+    const d = doc(
+      openvex([
+        { cve: 'CVE-2022-48174', products: ['busybox'], status: 'not_affected' },
+        { cve: 'CVE-2022-48174', products: ['busybox'], status: 'known_affected' },
+        { cve: 'CVE-2021-0001', products: ['busybox'], status: 'fixed' },
+      ]),
+    );
+    const m = packageProductMatcher('busybox', '1.36.1');
+    const v = vendorVexVerdictFor({ documents: [d] }, 'CVE-2022-48174', m, 'busybox');
+    expect(v?.verdict).toBe('vendor_states_not_affected');
+    expect(v?.omissions).toEqual([{ sourcePath: '/etc/vex/a.openvex.json', reason: 'unrecognised_status', count: 1 }]);
+    expect(v?.rationale).toMatch(/status that is not a VEX status/);
+    expect(vendorVexVerdictFor({ documents: [d] }, 'CVE-2021-0001', m, 'busybox')?.omissions).toBeUndefined();
+  });
+});
+
+describe('the package matcher respects ecosystem and vendor', () => {
+  const busybox = packageProductMatcher('busybox', '1.36.1');
+  it.each([
+    ['pkg:npm/busybox@1.36.1', false],
+    ['pkg:pypi/someone/busybox', false],
+    ['pkg:generic/acme/busybox@1.36.1', false],
+    ['cpe:2.3:h:acme:busybox:-:*:*:*:*:*:*:*', false],
+    ['cpe:2.3:a:acme:busybox:1.36.1:*:*:*:*:*:*:*', false],
+    ['cpe:2.3:o:busybox:busybox:1.36.1:*:*:*:*:*:*:*', false],
+    ['cpe:2.3:a:*:busybox:1.36.1:*:*:*:*:*:*:*', false],
+    ['pkg:generic/busybox@1.36.1', true],
+    ['pkg:deb/debian/busybox@1.36.1', true],
+    ['pkg:opkg/openwrt/busybox', true],
+    ['cpe:2.3:a:busybox:busybox:1.36.1:*:*:*:*:*:*:*', true],
+    ['cpe:/a:busybox:busybox:1.36.1', true],
+  ])('busybox 1.36.1 row: %s → %s', (id, expected) => {
+    expect(busybox(id)).toBe(expected);
+  });
+
+  it('accepts the measured NVD identity of a component whose vendor is not its name', () => {
+    const dropbear = packageProductMatcher('dropbear', '2020.81');
+    expect(dropbear('cpe:2.3:a:dropbear_ssh_project:dropbear_ssh:2020.81:*:*:*:*:*:*:*')).toBe(true);
+    expect(dropbear('cpe:2.3:a:acme:dropbear:2020.81:*:*:*:*:*:*:*')).toBe(false);
+  });
+});
+
+describe('discovery counts what it could not list', () => {
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  it.skipIf(isRoot)('an unreadable directory is counted and named in coverage, never skipped silently', () => {
+    const root = rootfs({
+      'etc/vex/a.openvex.json': openvex([{ cve: 'CVE-2022-0847', products: ['linux-kernel'], status: 'fixed' }]),
+      'opt/vendor/vex/z.openvex.json': openvex([
+        { cve: 'CVE-2022-0847', products: ['linux-kernel'], status: 'affected' },
+      ]),
+    });
+    const locked = path.join(root, 'opt/vendor');
+    fs.chmodSync(locked, 0o000);
+    try {
+      const r = discoverVendorVex(root);
+      expect(r.documents.map((d) => d.sourcePath)).toEqual(['/etc/vex/a.openvex.json']);
+      expect(r.coverage.unreadableDirectories).toBe(1);
+      expect(r.coverage.unreadableDirectoryPaths).toEqual(['/opt/vendor']);
+      expect(r.coverage.statement).toMatch(/1 director\(ies\) could not be listed \(\/opt\/vendor\)/);
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  });
+
+  it('a readable tree reports zero unreadable directories', () => {
+    const root = rootfs({ 'etc/vex/a.openvex.json': openvex([]) });
+    expect(discoverVendorVex(root).coverage).toMatchObject({ unreadableDirectories: 0, unreadableDirectoryPaths: [] });
   });
 });

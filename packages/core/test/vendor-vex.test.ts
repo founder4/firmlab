@@ -3,6 +3,7 @@ import {
   DEFAULT_MAX_VEX_DOCUMENT_BYTES,
   DEFAULT_MAX_VEX_PRODUCTS,
   DEFAULT_MAX_VEX_STATEMENTS,
+  MAX_UNRECOGNISED_STATUS_EXAMPLES,
   VEX_BOUNDS_RULE,
   isVendorVexDocument,
   parseVendorVex,
@@ -571,6 +572,121 @@ describe('vendor-vex parser and resolver', () => {
       // Must be marked vendor_states_not_affected, not static_confirmed or false_positive
       expect(verdict.verdict).toBe('vendor_states_not_affected');
       expect(verdict.rationale).toContain("this is the vendor's assertion, not a verified code fact");
+    });
+  });
+
+  describe('CSAF product identity is kept together (version scope)', () => {
+    const csaf = (products: unknown[], productStatus: Record<string, string[]>, flags?: unknown[]) =>
+      JSON.stringify({
+        document: { category: 'csaf_vex', publisher: { name: 'V' } },
+        product_tree: { full_product_names: products },
+        vulnerabilities: [{ cve: 'CVE-2022-48174', product_status: productStatus, ...(flags ? { flags } : {}) }],
+      });
+
+    it('a product with a versioned purl stands only for that purl, never its bare name or product_id', () => {
+      const parsed = parseVendorVex(
+        csaf(
+          [
+            {
+              product_id: 'busybox',
+              name: 'busybox',
+              product_identification_helper: { purl: 'pkg:generic/busybox@1.30.1' },
+            },
+          ],
+          { fixed: ['busybox'] },
+          [{ label: 'vulnerable_code_not_present', product_ids: ['busybox'] }],
+        ),
+        '/etc/csaf.json',
+      );
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(parsed.statements[0]?.products).toEqual(['pkg:generic/busybox@1.30.1']);
+      // Flags still reference the group by product_id even though the id no longer stands for the product.
+      expect(parsed.statements[0]?.justification).toBe('vulnerable_code_not_present');
+      expect(resolveVendorVex(parsed, 'CVE-2022-48174', 'busybox', ['busybox']).verdict).toBe('unmentioned');
+      expect(resolveVendorVex(parsed, 'CVE-2022-48174', 'busybox', ['pkg:generic/busybox@1.30.1']).verdict).toBe(
+        'vendor_states_fixed',
+      );
+    });
+
+    it('a kernel product with a versioned CPE stands only for that CPE', () => {
+      const cpe = 'cpe:2.3:o:linux:linux_kernel:4.4.0:*:*:*:*:*:*:*';
+      const parsed = parseVendorVex(
+        csaf([{ product_id: 'K', name: 'linux-kernel', product_identification_helper: { cpe } }], {
+          known_not_affected: ['K'],
+        }),
+        '/etc/csaf.json',
+      );
+      if (!parsed.ok) throw new Error('fixture refused');
+      expect(parsed.statements[0]?.products).toEqual([cpe]);
+    });
+
+    it('a product with only a name, or only unversioned helpers, keeps its id and name', () => {
+      const parsed = parseVendorVex(
+        csaf(
+          [
+            { product_id: 'P1', name: 'busybox' },
+            { product_id: 'P2', name: 'dropbear', product_identification_helper: { purl: 'pkg:generic/dropbear' } },
+          ],
+          { fixed: ['P1', 'P2'] },
+        ),
+        '/etc/csaf.json',
+      );
+      if (!parsed.ok) throw new Error('fixture refused');
+      expect(parsed.statements[0]?.products).toEqual(['P1', 'busybox', 'P2', 'dropbear', 'pkg:generic/dropbear']);
+    });
+  });
+
+  describe('a truncated or partly unreadable document says so', () => {
+    it('a verdict from a document whose statement cap dropped anything carries droppedByBounds', () => {
+      const doc = JSON.stringify({
+        '@context': 'https://openvex.dev/ns/v0.2.0',
+        statements: [
+          { vulnerability: 'CVE-2022-48174', products: ['busybox'], status: 'not_affected' },
+          { vulnerability: 'CVE-2021-0001', products: ['x'], status: 'fixed' },
+          { vulnerability: 'CVE-2022-48174', products: ['busybox'], status: 'affected' },
+        ],
+      });
+      const parsed = parseVendorVex(doc, '/etc/vex.json', { maxStatements: 2 });
+      if (!parsed.ok) throw new Error('fixture refused');
+      const verdict = resolveVendorVex(parsed, 'CVE-2022-48174', 'busybox');
+      // The conflicting half was dropped: the verdict is single, and must not read as complete.
+      expect(verdict.verdict).toBe('vendor_states_not_affected');
+      expect(verdict.droppedByBounds).toEqual({ statements: 1, products: 0 });
+      expect(verdict.rationale).toMatch(/not a complete reading of the document/);
+
+      const whole = parseVendorVex(doc, '/etc/vex.json');
+      if (!whole.ok) throw new Error('fixture refused');
+      const full = resolveVendorVex(whole, 'CVE-2022-48174', 'busybox');
+      expect(full.verdict).toBe('conflicting');
+      expect(full.droppedByBounds).toBeUndefined();
+    });
+
+    it('counts statements with an unrecognised status, with bounded examples, instead of dropping them silently', () => {
+      const statements = [
+        { vulnerability: 'CVE-2022-48174', products: ['busybox'], status: 'not_affected' },
+        { vulnerability: 'CVE-2022-48174', products: ['busybox'], status: 'known_affected' },
+        { vulnerability: 'CVE-2022-48174', products: ['busybox'], status: 'not affected' },
+        { vulnerability: 'CVE-2022-48174', products: ['busybox'] },
+        ...Array.from({ length: MAX_UNRECOGNISED_STATUS_EXAMPLES }, (_, i) => ({
+          vulnerability: `CVE-2020-${1000 + i}`,
+          products: ['x'],
+          status: 'bogus',
+        })),
+      ];
+      const parsed = parseVendorVex(
+        JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements }),
+        '/etc/vex.json',
+      );
+      if (!parsed.ok) throw new Error('fixture refused');
+      expect(parsed.statements).toHaveLength(1);
+      expect(parsed.unrecognisedStatusCount).toBe(3 + MAX_UNRECOGNISED_STATUS_EXAMPLES);
+      expect(parsed.unrecognisedStatusExamples).toHaveLength(MAX_UNRECOGNISED_STATUS_EXAMPLES);
+      expect(parsed.unrecognisedStatusExamples?.slice(0, 3)).toEqual([
+        { vulnerabilityId: 'CVE-2022-48174', status: 'known_affected' },
+        { vulnerabilityId: 'CVE-2022-48174', status: 'not affected' },
+        { vulnerabilityId: 'CVE-2022-48174', status: 'null' },
+      ]);
     });
   });
 });
