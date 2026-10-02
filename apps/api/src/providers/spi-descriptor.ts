@@ -2,6 +2,15 @@
  * Read the static Intel SPI flash descriptor map carried in an image. Descriptor FLREG entries describe the
  * image's region layout; they do not contain the live PRx or BIOS_CNTL register values needed to prove that the
  * running device protects flash writes. Missing, malformed, or truncated descriptor data therefore stays unknown.
+ *
+ * The master section is read for ONE question: does the descriptor grant the host CPU/BIOS master (`FLMSTR1`, always
+ * the first master record, so the master count never matters) write access to the descriptor region itself? The
+ * FLMSTR1 bit layout depends on the PCH generation, and the image does not name its PCH: chipsec's own register
+ * definitions carry two layouts (`cfg/8086/common.xml`: read 16..23, write 24..31; `pch_1xx.xml`, `pch_2xx.xml`,
+ * `pch_c620.xml`, `skl.xml`, `kbl.xml`: read 8..19, write 20..31). Both are evaluated; a verdict is given only when
+ * they agree, and a disagreement is reported as `layout-dependent`, never resolved by picking one. A grant is a fact
+ * of the shipped bytes (`static_confirmed`), not of the running device: the live FRAP register chipsec's
+ * `spi_desc` module reads can differ (a descriptor-override strap, a reflashed descriptor), and stays unknown here.
  */
 
 export const SPI_DESCRIPTOR_SCAN_CAP_BYTES = 1024 * 1024;
@@ -16,6 +25,15 @@ const REGION_COUNT_MASK = 0x7;
 const REGION_REGISTER_BYTES = 4;
 const REGION_ADDRESS_UNIT_BYTES = 0x1000;
 const REGION_NAMES = ['Flash Descriptor', 'BIOS', 'Intel ME', 'GbE', 'Platform Data'];
+const FLASH_MAP1_OFFSET = 0x18;
+/** The descriptor region is region 0, so its bit is bit 0 of each access mask. */
+const DESCRIPTOR_REGION_BIT = 1;
+
+/** FLMSTR1 access-field layouts, verbatim from chipsec's register definitions (see the module comment). */
+export const SPI_MASTER_LAYOUTS = [
+  { layout: 'ich-8bit', source: 'chipsec cfg/8086/common.xml', readShift: 16, writeShift: 24, width: 8 },
+  { layout: 'pch-12bit', source: 'chipsec cfg/8086/pch_1xx.xml', readShift: 8, writeShift: 20, width: 12 },
+] as const;
 
 export interface SpiFlashRegion {
   index: number;
@@ -35,10 +53,31 @@ export interface SpiRangeRelationship {
   endBytesExclusive: number;
 }
 
+/** What FLMSTR1 grants the host CPU/BIOS master under one chipsec layout. Masks are region-index bitmaps. */
+export interface SpiMasterLayoutReading {
+  layout: (typeof SPI_MASTER_LAYOUTS)[number]['layout'];
+  source: string;
+  readMask: number;
+  writeMask: number;
+  descriptorReadable: boolean;
+  descriptorWritable: boolean;
+}
+
+export interface SpiHostMasterAccess {
+  status: 'read' | 'unknown';
+  reason: string;
+  /** Image offset of FLMSTR1, or null when the master section could not be located. */
+  flmstr1Offset: number | null;
+  rawValue: number | null;
+  layouts: SpiMasterLayoutReading[];
+  /** `granted`/`denied` only when every layout agrees; never resolved by choosing a layout. */
+  descriptorWrite: 'granted' | 'denied' | 'layout-dependent' | 'unknown';
+}
+
 export interface SpiDescriptorFinding {
   kind: string;
   title: string;
-  severity: 'info';
+  severity: 'info' | 'medium';
   proofState: 'static_confirmed';
   evidence: Record<string, unknown>;
   rationale: string;
@@ -65,6 +104,8 @@ export interface SpiDescriptorAnalysis {
     reason: string;
   };
   findings: SpiDescriptorFinding[];
+  /** FLMSTR1 read for the host master's descriptor-write grant. Optional forever: older results predate it. */
+  hostMasterAccess?: SpiHostMasterAccess;
 }
 
 export interface SpiDescriptorOptions {
@@ -184,6 +225,21 @@ export function analyzeSpiDescriptor(
         'The listed extents overlap in the static descriptor map. This records the declared layout and is not by itself proof of a write-protection failure.',
     });
   }
+  const hostMasterAccess = readHostMasterAccess(view, bytes.byteLength, result.descriptorOffset, parseLimitBytes);
+  if (hostMasterAccess.descriptorWrite === 'granted') {
+    findings.push({
+      kind: 'spi-descriptor-host-write',
+      title: 'SPI descriptor grants the CPU/BIOS master write access to the flash descriptor region',
+      severity: 'medium',
+      proofState: 'static_confirmed',
+      evidence: { hostMasterAccess },
+      rationale:
+        'FLMSTR1 in the shipped descriptor sets the descriptor-region write bit under every chipsec FLMSTR layout, so ' +
+        'software running as the host master could rewrite the descriptor and with it every region permission. This ' +
+        'is the static default; the running device FRAP register (which a descriptor-override strap can change) was ' +
+        'not read.',
+    });
+  }
   if (gaps.length > 0) {
     findings.push({
       kind: 'spi-descriptor-gap',
@@ -206,7 +262,69 @@ export function analyzeSpiDescriptor(
     coverage,
     runtimeRegisterPosture: { state: 'unknown', reason: RUNTIME_REGISTER_REASON },
     findings,
+    hostMasterAccess,
   };
+}
+
+/**
+ * Pure: FLMSTR1 under every chipsec layout, and the descriptor-write verdict they agree on. Bounded by the same
+ * parse limit as the region map; a master section inside the descriptor header, absent, or out of bounds is unknown.
+ */
+export function readHostMasterAccess(
+  view: DataView,
+  availableBytes: number,
+  descriptorOffset: number,
+  parseLimitBytes: number,
+): SpiHostMasterAccess {
+  const unknown = (reason: string, flmstr1Offset: number | null = null): SpiHostMasterAccess => ({
+    status: 'unknown',
+    reason,
+    flmstr1Offset,
+    rawValue: null,
+    layouts: [],
+    descriptorWrite: 'unknown',
+  });
+  const map1Offset = descriptorOffset + FLASH_MAP1_OFFSET;
+  if (map1Offset + 4 > availableBytes || map1Offset + 4 - descriptorOffset > parseLimitBytes) {
+    return unknown('Descriptor FLMAP1 is truncated or exceeds the parse bound; master access is unknown.');
+  }
+  const masterBaseUnits = view.getUint32(map1Offset, true) & 0xff;
+  if (masterBaseUnits === 0) return unknown('Descriptor FLMAP1 declares no master section; master access is unknown.');
+  const flmstr1Offset = descriptorOffset + masterBaseUnits * 16;
+  if (flmstr1Offset < descriptorOffset + 0x20) {
+    return unknown('Descriptor FLMAP1 points the master section inside the descriptor header.', flmstr1Offset);
+  }
+  if (flmstr1Offset + 4 > availableBytes || flmstr1Offset + 4 - descriptorOffset > parseLimitBytes) {
+    return unknown(
+      'Descriptor FLMSTR1 is truncated or exceeds the parse bound; master access is unknown.',
+      flmstr1Offset,
+    );
+  }
+  const rawValue = view.getUint32(flmstr1Offset, true);
+  const layouts = SPI_MASTER_LAYOUTS.map(({ layout, source, readShift, writeShift, width }): SpiMasterLayoutReading => {
+    const mask = (1 << width) - 1;
+    const readMask = (rawValue >>> readShift) & mask;
+    const writeMask = (rawValue >>> writeShift) & mask;
+    return {
+      layout,
+      source,
+      readMask,
+      writeMask,
+      descriptorReadable: (readMask & DESCRIPTOR_REGION_BIT) !== 0,
+      descriptorWritable: (writeMask & DESCRIPTOR_REGION_BIT) !== 0,
+    };
+  });
+  const writable = layouts.map((l) => l.descriptorWritable);
+  const descriptorWrite = writable.every(Boolean) ? 'granted' : writable.some(Boolean) ? 'layout-dependent' : 'denied';
+  const hex = `0x${rawValue.toString(16).padStart(8, '0')}`;
+  const reason =
+    descriptorWrite === 'layout-dependent'
+      ? `FLMSTR1 ${hex} grants descriptor write under ${layouts
+          .filter((l) => l.descriptorWritable)
+          .map((l) => l.layout)
+          .join(', ')} only; the image does not name its PCH generation, so the grant is undetermined.`
+      : `FLMSTR1 ${hex} ${descriptorWrite === 'granted' ? 'grants' : 'denies'} the host master descriptor write under every chipsec layout.`;
+  return { status: 'read', reason, flmstr1Offset, rawValue, layouts, descriptorWrite };
 }
 
 function parseCandidate(
