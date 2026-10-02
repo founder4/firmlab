@@ -3,10 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   DEFERRED_SWITCH_MAPPINGS,
+  NEAR_MISS_EXAMPLES,
   SWITCH_EVIDENCE_RULES,
   SWITCH_VENDOR_NAMES,
   detectSwitchFamily,
   matchTokenAt,
+  nearMissAt,
 } from '../src/switch-family.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -170,7 +172,21 @@ describe('detectSwitchFamily', () => {
     expect(r.candidates).toEqual([]);
     expect(r.vendorMentions).toEqual([]);
     expect(r.summary).toMatch(/not evidence of no switch/);
+    // Only the tokens rejected by the closing boundary are near-misses; a left-boundary miss, a short digit run
+    // and the template placeholder are not family-shaped.
+    expect(r.nearMisses).toEqual({
+      count: 3,
+      examples: [
+        { ruleId: 'qca8337-literal', token: 'QCA83370', offset: 100 },
+        { ruleId: 'bcm53xx-template', token: 'BCM53115', offset: 300 },
+        { ruleId: 'rtl83xx-template', token: 'RTL8367RB', offset: 400 },
+      ],
+    });
+    expect(r.summary).toMatch(/3 family-shaped token\(s\) \(e\.g\. QCA83370, BCM53115, RTL8367RB\) were seen/);
+    expect(r.summary).toMatch(/deliberately not matched by the boundary rule/);
+    expect(r.coverage.statement).toMatch(/3 family-shaped token\(s\)/);
     expect(r.coverage.statement).toMatch(/Compressed or encrypted regions are not decoded/);
+    expect(r.coverage.statement).toMatch(/single-byte ASCII.*UTF-16.*not matched/);
     expect(r.coverage.rulesAttempted).toEqual([
       'qca8337-literal',
       'rtl83xx-template',
@@ -182,10 +198,42 @@ describe('detectSwitchFamily', () => {
     ]);
   });
 
-  it('empty input: nothing scanned, nothing claimed', () => {
+  it('empty input: nothing scanned is not-scanned, never none-observed', () => {
     const r = detectSwitchFamily(new Uint8Array(0));
-    expect(r.verdict).toBe('none-observed');
+    expect(r.verdict).toBe('not-scanned');
+    expect(r.summary).toMatch(/nothing was scanned/);
+    expect(r.summary).not.toMatch(/not evidence of no switch/);
     expect(r.coverage).toMatchObject({ bytesScanned: 0, bytesTotal: 0, completed: true, edgeUnresolved: 0 });
+  });
+
+  it('near-misses: real switch markings rejected by the boundary are counted and named, never matched', () => {
+    for (const marking of ['RTL8367RB', 'RTL8367S', 'rtl8366rb', 'RTL8370M', 'BCM53125', 'BCM5325E', 'qca8337n']) {
+      const r = detectSwitchFamily(bytesOf(` ${marking} `));
+      expect(r.verdict, marking).toBe('none-observed');
+      expect(r.candidates, marking).toEqual([]);
+      expect(r.nearMisses, marking).toEqual({ count: 1, examples: [expect.objectContaining({ token: marking })] });
+      expect(r.summary, marking).toMatch(new RegExp(`1 family-shaped token\\(s\\) \\(e\\.g\\. ${marking}\\)`));
+    }
+    // Driver names are a deferred mapping, not a family-shaped part number.
+    for (const name of ['qca8k', 'b53_mdio']) {
+      expect(detectSwitchFamily(bytesOf(` ${name} `)).nearMisses?.count, name).toBe(0);
+    }
+    // A clean hit and a near-miss side by side: the verdict comes from the hit alone.
+    const mixed = detectSwitchFamily(bytesOf(' QCA8337 RTL8367RB '));
+    expect(mixed.verdict).toBe('single-family-lead');
+    expect(mixed.candidates.map((c) => c.family)).toEqual(['qca8337']);
+    expect(mixed.nearMisses?.count).toBe(1);
+  });
+
+  it('near-misses: the count is exact, examples are distinct tokens and bounded, tokens are length-capped', () => {
+    const tokens = Array.from({ length: NEAR_MISS_EXAMPLES + 3 }, (_, k) => `RTL8367X${k}`);
+    const text = ` ${[...tokens, ...tokens, 'rtl8367x0'].join(' ')} `;
+    const r = detectSwitchFamily(bytesOf(text));
+    expect(r.nearMisses?.count).toBe(tokens.length * 2 + 1);
+    expect(r.nearMisses?.examples.map((e) => e.token)).toEqual(tokens.slice(0, NEAR_MISS_EXAMPLES));
+    expect(nearMissAt(bytesOf(` RTL8367${'A'.repeat(100)} `), 1, 'rtl83', 2)).toHaveLength(32);
+    expect(nearMissAt(bytesOf(' RTL8367 '), 1, 'rtl83', 2)).toBeNull();
+    expect(nearMissAt(bytesOf('XRTL8367RB'), 1, 'rtl83', 2)).toBeNull();
   });
 
   it('truncated by the scan cap: bytes past the cap are never read, and the coverage says how many', () => {
@@ -231,6 +279,21 @@ describe('detectSwitchFamily', () => {
     expect(r.coverage.recordsDropped).toEqual([{ ruleId: 'rtl83xx-template', dropped: 16 }]);
     expect(r.coverage.statement).toMatch(/capped at 4 per rule \(lowest offsets kept\)/);
     expect(r.coverage.statement).toMatch(/rtl83xx-template: 16/);
+  });
+
+  it('cap: dropped vendor offsets are reported in recordsDropped and the statement', () => {
+    const r = detectSwitchFamily(bytesOf(' Realtek '.repeat(20)), { maxHitsPerRule: 4 });
+    expect(r.vendorMentions).toEqual([{ vendor: 'Realtek', count: 20, offsets: [1, 10, 19, 28] }]);
+    expect(r.coverage.recordsDropped).toEqual([{ ruleId: 'vendor:Realtek', dropped: 16 }]);
+    expect(r.coverage.statement).toMatch(/vendor offsets were capped at 4 per rule/);
+    expect(r.coverage.statement).toMatch(/vendor:Realtek: 16/);
+  });
+
+  it('a UTF-16 literal is not matched, and the statement says the matcher is single-byte ASCII', () => {
+    const wide = new Uint8Array(Buffer.from(' QCA8337 ', 'utf16le'));
+    const r = detectSwitchFamily(wide);
+    expect(r.verdict).toBe('none-observed');
+    expect(r.coverage.statement).toMatch(/single-byte ASCII: a literal stored as UTF-16/);
   });
 
   it('counts distinct tokens over every match, not only the retained records', () => {

@@ -27,7 +27,17 @@
  * kernel or filesystem hides every literal from a raw byte scan, and a board may name its switch in no string at
  * all. The scan stops at `maxScanBytes` and says so; hit RECORDS are capped per rule (lowest offsets first, the stated
  * rule) while hit COUNTS stay exact, and the cap is per rule so a flood of one literal cannot crowd another family
- * out of the result. Pure: no I/O, no dependencies.
+ * out of the result. Vendor offsets are capped the same way and reported in the same `recordsDropped` list.
+ *
+ * **A rejected near-miss is counted, never matched.** The token boundary deliberately refuses letter-suffixed or
+ * longer part numbers (`RTL8367RB`, `BCM53125`, `QCA8337N`), because no repository source names them. Those are
+ * also the markings most often printed on real switches, so a `none-observed` that stayed silent about them would
+ * read as "the literal was absent". They are counted in `nearMisses` (with a few bounded examples) and named in the
+ * summary; they never create a candidate and never change a verdict.
+ *
+ * **Zero bytes scanned is not a negative.** An input with no bytes yields `not-scanned`, never `none-observed`: a
+ * verdict about what was in the bytes needs bytes. Matching is single-byte ASCII; a UTF-16 literal is not matched,
+ * and the coverage statement says so. Pure: no I/O, no dependencies.
  */
 
 /** The three switch families `docs/EMULATION-FUTURE.md` §1.2/§2.2 names as Phase 1's targets. */
@@ -167,7 +177,25 @@ export type SwitchFamilyVerdict =
   | 'template-only'
   | 'ambiguous'
   | 'vendor-only'
-  | 'none-observed';
+  | 'none-observed'
+  /** No byte was scanned, so nothing can be said about the bytes. Never a negative. */
+  | 'not-scanned';
+
+/** A family-shaped token the boundary rule rejected: prefix and digits, then more letters or digits. */
+export interface SwitchNearMissExample {
+  ruleId: string;
+  /** The whole alphanumeric token as it appears in the bytes, at most `NEAR_MISS_TOKEN_MAX` characters. */
+  token: string;
+  /** Offset of this token's first occurrence. */
+  offset: number;
+}
+
+export interface SwitchNearMisses {
+  /** Exact number of rejected family-shaped tokens in the scanned window. */
+  count: number;
+  /** First occurrence of each distinct (uppercased) token, lowest offsets first, at most `NEAR_MISS_EXAMPLES`. */
+  examples: SwitchNearMissExample[];
+}
 
 export interface SwitchFamilyCoverage {
   /** Every rule and vendor name the scan tried, so "not found" can be read against what was looked for. */
@@ -179,7 +207,10 @@ export interface SwitchFamilyCoverage {
   stoppedBy: 'end-of-input' | 'scan-cap' | 'input-truncated';
   maxScanBytes: number;
   maxHitsPerRule: number;
-  /** Matches whose records were dropped by the per-rule cap. Their counts are still in `hitCount`. */
+  /**
+   * Matches whose records were dropped by the per-rule cap. Their counts are still in `hitCount`. Vendor offsets
+   * dropped by the same cap appear as `vendor:<Name>`; their counts are still in `SwitchVendorMention.count`.
+   */
   recordsDropped: { ruleId: string; dropped: number }[];
   /** Offsets where a possible match was cut off by the end of a truncated input: neither confirmed nor ruled out. */
   edgeUnresolved: number;
@@ -191,6 +222,8 @@ export interface SwitchFamilyResult {
   /** Families with evidence, in a fixed family order — never in order of first appearance. */
   candidates: SwitchFamilyCandidate[];
   vendorMentions: SwitchVendorMention[];
+  /** Family-shaped tokens the boundary rule rejected. Never candidates. Absent on results stored by older builds. */
+  nearMisses?: SwitchNearMisses;
   deferred: readonly { what: string; reason: string }[];
   coverage: SwitchFamilyCoverage;
   /** One sentence a UI or a report can print as is: what the verdict means and what it never means. */
@@ -209,11 +242,19 @@ export interface SwitchFamilyOptions {
 export const DEFAULT_SWITCH_SCAN_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_SWITCH_HITS_PER_RULE = 16;
 const CONTEXT_RADIUS = 40;
+/** Distinct near-miss tokens kept as examples; the count stays exact. */
+export const NEAR_MISS_EXAMPLES = 8;
+/** A near-miss token is read to at most this many characters. */
+export const NEAR_MISS_TOKEN_MAX = 32;
 const FAMILY_ORDER: readonly SwitchFamily[] = ['rtl83xx', 'bcm53xx', 'qca8337'];
 
 const LITERAL_CAVEAT =
   'A literal is a static lead: it can belong to a dormant driver compiled in for other boards, and it never ' +
   'describes the hardware on a live device. Nothing here emulates a switch or shows that any network works.';
+
+const NOT_ABSENCE =
+  'That is not evidence of no switch: compressed data hides literals, a board may name its switch in no string, ' +
+  'and unscanned bytes were never read.';
 
 const VENDOR_ONLY =
   'Only vendor names are present. A vendor name is never switch-family evidence: these vendors make far more than ' +
@@ -262,6 +303,25 @@ export function matchTokenAt(
   return isAlnum(after) ? { kind: 'none' } : { kind: 'match', length: len };
 }
 
+/**
+ * Pure: is a rule's token rejected at `i` ONLY by its closing boundary — the prefix and the exact digit count are
+ * there, starting at a token boundary, and a letter or digit follows? Returns the whole token, or null.
+ */
+export function nearMissAt(bytes: Uint8Array, i: number, prefix: string, digits: number): string | null {
+  if (i > 0 && isAlnum(bytes[i - 1] as number)) return null;
+  const len = prefix.length + digits;
+  for (let k = 0; k < len; k++) {
+    const b = bytes[i + k];
+    if (b === undefined) return null;
+    if (k < prefix.length ? lower(b) !== prefix.charCodeAt(k) : !isDigit(b)) return null;
+  }
+  const after = bytes[i + len];
+  if (after === undefined || !isAlnum(after)) return null;
+  let end = i + len + 1;
+  while (end < bytes.length && end - i < NEAR_MISS_TOKEN_MAX && isAlnum(bytes[end] as number)) end++;
+  return ascii(bytes, i, end);
+}
+
 function contextAround(bytes: Uint8Array, offset: number, length: number): { context: string; contextOffset: number } {
   const printable = (b: number | undefined) => b !== undefined && b >= 0x20 && b <= 0x7e;
   let start = offset;
@@ -292,6 +352,8 @@ export function detectSwitchFamily(bytes: Uint8Array, options: SwitchFamilyOptio
     firstBytes.add(p.charCodeAt(0));
   }
   let edgeUnresolved = 0;
+  let nearMissCount = 0;
+  const nearMissExamples = new Map<string, SwitchNearMissExample>();
 
   // Matches must START inside the window; a token's tail and its closing boundary may be read past the cap.
   for (let i = 0; i < scanEnd; i++) {
@@ -300,6 +362,16 @@ export function detectSwitchFamily(bytes: Uint8Array, options: SwitchFamilyOptio
     for (const st of rules) {
       const m = matchTokenAt(bytes, i, st.rule.prefix, st.rule.digits, inputTruncated);
       if (m.kind === 'edge') edgeHere = true;
+      if (m.kind === 'none') {
+        const token = nearMissAt(bytes, i, st.rule.prefix, st.rule.digits);
+        if (token !== null) {
+          nearMissCount++;
+          const key = token.toUpperCase();
+          if (!nearMissExamples.has(key) && nearMissExamples.size < NEAR_MISS_EXAMPLES) {
+            nearMissExamples.set(key, { ruleId: st.rule.id, token, offset: i });
+          }
+        }
+      }
       if (m.kind !== 'match') continue;
       st.count++;
       const matchedText = ascii(bytes, i, i + m.length);
@@ -347,14 +419,21 @@ export function detectSwitchFamily(bytes: Uint8Array, options: SwitchFamilyOptio
   else if (candidates.length === 1)
     verdict = candidates[0]?.standing === 'exact-literal' ? 'single-family-lead' : 'template-only';
   else if (vendorMentions.length > 0) verdict = 'vendor-only';
+  else if (scanEnd === 0) verdict = 'not-scanned';
   else verdict = 'none-observed';
+  const nearMisses: SwitchNearMisses = { count: nearMissCount, examples: [...nearMissExamples.values()] };
 
   const stoppedBy: SwitchFamilyCoverage['stoppedBy'] =
     scanEnd < bytes.length ? 'scan-cap' : inputTruncated ? 'input-truncated' : 'end-of-input';
   const completed = stoppedBy === 'end-of-input';
-  const recordsDropped = rules
-    .filter((st) => st.count > st.hits.length)
-    .map((st) => ({ ruleId: st.rule.id, dropped: st.count - st.hits.length }));
+  const recordsDropped = [
+    ...rules
+      .filter((st) => st.count > st.hits.length)
+      .map((st) => ({ ruleId: st.rule.id, dropped: st.count - st.hits.length })),
+    ...vendors
+      .filter((v) => v.count > v.offsets.length)
+      .map((v) => ({ ruleId: `vendor:${v.vendor}`, dropped: v.count - v.offsets.length })),
+  ];
 
   const coverageParts = [`Scanned ${scanEnd} of ${bytes.length} supplied byte(s) for ${rules.length} switch rule(s).`];
   if (stoppedBy === 'scan-cap') {
@@ -369,12 +448,21 @@ export function detectSwitchFamily(bytes: Uint8Array, options: SwitchFamilyOptio
   }
   if (recordsDropped.length > 0) {
     coverageParts.push(
-      `Hit records were capped at ${maxHitsPerRule} per rule (lowest offsets kept); counts include the dropped ` +
-        `records (${recordsDropped.map((d) => `${d.ruleId}: ${d.dropped}`).join(', ')}).`,
+      `Hit records and vendor offsets were capped at ${maxHitsPerRule} per rule (lowest offsets kept); counts ` +
+        `include the dropped records (${recordsDropped.map((d) => `${d.ruleId}: ${d.dropped}`).join(', ')}).`,
+    );
+  }
+  if (nearMisses.count > 0) {
+    coverageParts.push(
+      nearMissSentence(
+        nearMisses.count,
+        nearMisses.examples.map((e) => e.token),
+      ),
     );
   }
   coverageParts.push(
     'Compressed or encrypted regions are not decoded, so any literal inside them is invisible to this scan.',
+    'Matching is single-byte ASCII: a literal stored as UTF-16 or another wide encoding is not matched.',
   );
 
   const coverage: SwitchFamilyCoverage = {
@@ -394,13 +482,34 @@ export function detectSwitchFamily(bytes: Uint8Array, options: SwitchFamilyOptio
     verdict,
     candidates,
     vendorMentions,
+    nearMisses,
     deferred: DEFERRED_SWITCH_MAPPINGS,
     coverage,
-    summary: summarize(verdict, candidates),
+    summary: summarize(verdict, candidates, nearMisses),
   };
 }
 
-function summarize(verdict: SwitchFamilyVerdict, candidates: readonly SwitchFamilyCandidate[]): string {
+/** Pure: the sentence naming rejected family-shaped tokens. Shared with the API aggregate so both say it alike. */
+export function nearMissSentence(count: number, tokens: readonly string[]): string {
+  const shown = tokens.length > 0 ? ` (e.g. ${tokens.join(', ')})` : '';
+  return [
+    `${count} family-shaped token(s)${shown} were seen and deliberately not matched by the boundary rule:`,
+    'letter-suffixed or longer part numbers are not in any repository source, so they are never candidates.',
+  ].join(' ');
+}
+
+function summarize(
+  verdict: SwitchFamilyVerdict,
+  candidates: readonly SwitchFamilyCandidate[],
+  nearMisses: SwitchNearMisses,
+): string {
+  const rejected =
+    nearMisses.count > 0
+      ? ` ${nearMissSentence(
+          nearMisses.count,
+          nearMisses.examples.map((e) => e.token),
+        )}`
+      : '';
   const named = candidates.map((c) => `${c.family} (${c.standing}: ${c.distinctTokens.join(', ')})`).join('; ');
   switch (verdict) {
     case 'single-family-lead':
@@ -416,12 +525,10 @@ function summarize(verdict: SwitchFamilyVerdict, candidates: readonly SwitchFami
         `the board uses; this is reported as ambiguous rather than resolved by count or order. ${LITERAL_CAVEAT}`
       );
     case 'vendor-only':
-      return `${VENDOR_ONLY} ${LITERAL_CAVEAT}`;
+      return `${VENDOR_ONLY}${rejected} ${LITERAL_CAVEAT}`;
     case 'none-observed':
-      return (
-        'No switch-family literal or vendor name was found in the scanned bytes. That is not evidence of no switch: ' +
-        'compressed data hides literals, a board may name its switch in no string, and unscanned bytes were never ' +
-        'read.'
-      );
+      return `No switch-family literal or vendor name was matched in the scanned bytes.${rejected} ${NOT_ABSENCE}`;
+    case 'not-scanned':
+      return 'The input held no bytes, so nothing was scanned. This is not a negative: no byte was examined.';
   }
 }

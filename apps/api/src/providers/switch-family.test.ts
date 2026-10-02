@@ -5,9 +5,12 @@ import { DEFAULT_SWITCH_SCAN_BYTES, detectSwitchFamily } from '@firmlab/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_SWITCH_ROOTFS_LIMITS,
+  SWITCH_SKIPPED_PATHS_RECORDED,
   type SwitchFileResult,
   aggregateSwitchFamilies,
+  orderSwitchRootfsFiles,
   runSwitchFamilyAnalysis,
+  switchPathRank,
 } from './switch-family.js';
 
 const source = (filePath: string, text: string, lane: SwitchFileResult['lane'] = 'rootfs'): SwitchFileResult => ({
@@ -54,7 +57,87 @@ describe('pure switch-family aggregation', () => {
     ]);
     expect(files).toEqual(before);
     expect(result.summary).toMatch(/never identify live hardware/);
-    expect(aggregateSwitchFamilies([]).summary).toMatch(/not evidence of no switch/);
+  });
+
+  it('calls an aggregate over zero scanned bytes not-scanned, never none-observed', () => {
+    const none = aggregateSwitchFamilies([], { notScannedBecause: 'raw lane error (gone)' });
+    expect(none.verdict).toBe('not-scanned');
+    expect(none.summary).toMatch(/^No bytes were scanned: no file was read; raw lane error \(gone\)\./);
+    expect(none.summary).toMatch(/not a negative result/);
+    expect(none.summary).not.toMatch(/observed/);
+    expect(none.inputs).toEqual({ files: 0, bytesScanned: 0, lanes: [] });
+    const empty = aggregateSwitchFamilies([source('empty', '')]);
+    expect(empty.verdict).toBe('not-scanned');
+    expect(empty.summary).toMatch(/the 1 file\(s\) read held no bytes/);
+    // One byte read is enough for a negative-shaped verdict, and it still disclaims absence.
+    expect(aggregateSwitchFamilies([source('a', 'x')]).verdict).toBe('none-observed');
+  });
+
+  it('keeps per-lane counts exact and labels the overall count as a sum that may overlap across lanes', () => {
+    const text = 'QCA8337 Realtek RTL8367RB';
+    const both = aggregateSwitchFamilies([source('fw.bin', text, 'raw'), source('lib/a.ko', text)]);
+    expect(both.candidates[0]).toMatchObject({ hitCount: 2, hitCountByLane: { raw: 1, rootfs: 1 } });
+    expect(both.vendorMentions[0]).toMatchObject({ vendor: 'Realtek', count: 2, countByLane: { raw: 1, rootfs: 1 } });
+    expect(both.nearMisses?.countByLane).toEqual({ raw: 1, rootfs: 1 });
+    expect(both.countBasis).toMatch(/may count one occurrence twice/);
+    expect(both.summary).toMatch(/Overall counts are per-lane sums and may count bytes both lanes saw twice/);
+    expect(both.inputs).toMatchObject({ files: 2, lanes: ['raw', 'rootfs'] });
+
+    const one = aggregateSwitchFamilies([source('a.ko', text), source('b.ko', text)]);
+    expect(one.candidates[0]).toMatchObject({ hitCount: 2, hitCountByLane: { rootfs: 2 } });
+    expect(one.countBasis).toMatch(/single lane; no lane overlap is possible/);
+    expect(one.summary).not.toMatch(/per-lane sums/);
+  });
+
+  it('carries rejected near-misses into a none-observed summary without creating a candidate', () => {
+    const result = aggregateSwitchFamilies([
+      source('fw.bin', ' RTL8367RB ', 'raw'),
+      source('lib/b53.ko', ' BCM53125 '),
+    ]);
+    expect(result.verdict).toBe('none-observed');
+    expect(result.candidates).toEqual([]);
+    expect(result.nearMisses).toMatchObject({
+      count: 2,
+      examples: [
+        { lane: 'raw', path: 'fw.bin', token: 'RTL8367RB' },
+        { lane: 'rootfs', path: 'lib/b53.ko', token: 'BCM53125' },
+      ],
+    });
+    expect(result.summary).toMatch(
+      /2 family-shaped token\(s\) \(e\.g\. RTL8367RB, BCM53125\) were seen and deliberately not/,
+    );
+    expect(result.summary).toMatch(/not evidence of no switch/);
+  });
+
+  it('tolerates per-file results stored before near-misses existed', () => {
+    const { nearMisses: _absent, ...stored } = source('a', ' RTL8367 ').result;
+    const old: SwitchFileResult = { lane: 'rootfs', path: 'a', fileBytes: 9, result: stored };
+    const result = aggregateSwitchFamilies([old]);
+    expect(result.verdict).toBe('template-only');
+    expect(result.nearMisses?.count).toBe(0);
+  });
+
+  it('ranks rootfs paths by where switch literals live, then by path', () => {
+    expect(switchPathRank('lib/modules/5.4/net/dsa/x.bin')).toBe(0);
+    expect(switchPathRank('usr/lib/modules/rtl8367.ko')).toBe(0);
+    expect(switchPathRank('anywhere/qca8k.ko')).toBe(0);
+    expect(switchPathRank('boot/vmlinux')).toBe(1);
+    expect(switchPathRank('boot/zImage-5.4')).toBe(1);
+    expect(switchPathRank('boot/board.dtb')).toBe(2);
+    expect(switchPathRank('usr/lib/libshared.so')).toBe(3);
+    expect(switchPathRank('opt/x/libfoo.so.1.2')).toBe(3);
+    expect(switchPathRank('usr/sbin/swconfig')).toBe(3);
+    expect(switchPathRank('lib64/ld.so.conf')).toBe(3);
+    expect(switchPathRank('etc/config/network')).toBe(4);
+    expect(switchPathRank('www/libjs/app.js')).toBe(3);
+    expect(switchPathRank('www/index.html')).toBe(4);
+    expect(orderSwitchRootfsFiles(['etc/b', 'bin/a', 'usr/lib/libshared.so', 'lib/z.ko', 'boot/a.dtb'])).toEqual([
+      'lib/z.ko',
+      'boot/a.dtb',
+      'bin/a',
+      'usr/lib/libshared.so',
+      'etc/b',
+    ]);
   });
 });
 
@@ -93,7 +176,8 @@ describe('bounded switch-family filesystem lanes', () => {
     expect(result.rootfs.status).toBe('completed');
     expect(result.rootfs.result?.verdict).toBe('ambiguous');
     expect(result.overall.verdict).toBe('ambiguous');
-    expect(result.rootfs.files.map((file) => file.path)).toEqual(['a', 'lib/z.ko']);
+    // A kernel module outranks an unranked file; aggregation still orders evidence by path.
+    expect(result.rootfs.files.map((file) => file.path)).toEqual(['lib/z.ko', 'a']);
     expect(
       result.rootfs.result?.candidates
         .flatMap((candidate) => candidate.evidence)
@@ -111,7 +195,7 @@ describe('bounded switch-family filesystem lanes', () => {
     expect(result.overall.verdict).toBe('ambiguous');
   });
 
-  it('selects by sorted relative path rather than creation order and reports a dropped file', async () => {
+  it('breaks rank ties by sorted relative path rather than creation order and reports a dropped file', async () => {
     await fs.writeFile(path.join(rootfs, 'z'), 'BCM5315');
     await fs.writeFile(path.join(rootfs, 'a'), 'QCA8337');
     const result = await runSwitchFamilyAnalysis(image, rootfs, { ...DEFAULT_SWITCH_ROOTFS_LIMITS, maxFiles: 1 });
@@ -123,7 +207,41 @@ describe('bounded switch-family filesystem lanes', () => {
     });
     expect(result.rootfs.files.map((file) => file.path)).toEqual(['a']);
     expect(result.rootfs.status).toBe('partial');
-    expect(result.rootfs.coverage.selection).toMatch(/ascending relative path/);
+    expect(result.rootfs.coverage.selection).toMatch(/ties go by ascending relative path/);
+    expect(result.rootfs.coverage.skippedPaths).toEqual(['z']);
+    expect(result.rootfs.reason).toMatch(/First skipped by the cap, in selection order: z\./);
+  });
+
+  it('keeps the likeliest files under the file cap instead of the first in the alphabet', async () => {
+    for (const [name, text] of [
+      ['bin/a', 'neutral'],
+      ['etc/b', 'neutral'],
+      ['usr/lib/libshared.so', 'BCM5397'],
+      ['lib/modules/5.4/rtl8367.ko', 'neutral'],
+      ['www/index.html', 'neutral'],
+    ] as const) {
+      await fs.mkdir(path.dirname(path.join(rootfs, name)), { recursive: true });
+      await fs.writeFile(path.join(rootfs, name), text);
+    }
+    const result = await runSwitchFamilyAnalysis(image, rootfs, { ...DEFAULT_SWITCH_ROOTFS_LIMITS, maxFiles: 3 });
+    expect(result.rootfs.files.map((file) => file.path)).toEqual([
+      'lib/modules/5.4/rtl8367.ko',
+      'bin/a',
+      'usr/lib/libshared.so',
+    ]);
+    expect(result.rootfs.result?.verdict).toBe('template-only');
+    expect(result.rootfs.coverage.skippedPaths).toEqual(['etc/b', 'www/index.html']);
+    expect(result.rootfs.coverage.selection).toMatch(/ranked by where switch literals live BEFORE any cap applies/);
+  });
+
+  it('records at most the stated number of skipped paths and says how many more there were', async () => {
+    const total = SWITCH_SKIPPED_PATHS_RECORDED + 3;
+    for (let k = 0; k < total; k++) await fs.writeFile(path.join(rootfs, `f${String(k).padStart(2, '0')}`), 'x');
+    const result = await runSwitchFamilyAnalysis(image, rootfs, { ...DEFAULT_SWITCH_ROOTFS_LIMITS, maxFiles: 1 });
+    expect(result.rootfs.coverage.filesSkipped).toBe(total - 1);
+    expect(result.rootfs.coverage.skippedPaths).toHaveLength(SWITCH_SKIPPED_PATHS_RECORDED);
+    expect(result.rootfs.coverage.skippedPaths?.[0]).toBe('f01');
+    expect(result.rootfs.reason).toMatch(/and 2 more\./);
   });
 
   it('enforces per-file and total byte caps and reports all truncated and skipped files', async () => {
@@ -179,7 +297,42 @@ describe('bounded switch-family filesystem lanes', () => {
     expect(result.raw).toMatchObject({ status: 'error', file: null, result: null });
     expect(result.rootfs).toMatchObject({ status: 'error', result: null });
     expect(result.rootfs.reason).toMatch(/could not run/);
+    expect(result.overall.verdict).toBe('not-scanned');
+    expect(result.overall.summary).toMatch(/^No bytes were scanned: no file was read; raw lane error \(Raw image not/);
+    expect(result.overall.summary).toMatch(/rootfs lane error \(Rootfs lane could not run/);
+    expect(result.overall.summary).not.toMatch(/observed/);
   });
+
+  it('calls an unreadable image with no rootfs not-scanned, naming both lanes', async () => {
+    const result = await runSwitchFamilyAnalysis(path.join(temporary, 'missing'));
+    expect(result.raw.status).toBe('error');
+    expect(result.rootfs.status).toBe('not-run');
+    expect(result.overall.verdict).toBe('not-scanned');
+    expect(result.overall.summary).toMatch(/raw lane error .*; rootfs lane not-run \(not run: no extracted rootfs\)/);
+  });
+
+  it('calls an empty rootfs not-scanned in its lane while the raw lane still decides overall', async () => {
+    const result = await runSwitchFamilyAnalysis(image, rootfs);
+    expect(result.rootfs.status).toBe('completed');
+    expect(result.rootfs.result?.verdict).toBe('not-scanned');
+    expect(result.rootfs.result?.summary).toMatch(/no file was read; rootfs lane completed \(0 of 0 discovered/);
+    expect(result.overall.verdict).toBe('none-observed');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'calls a rootfs whose every file failed to read not-scanned, never none-observed',
+    async () => {
+      await fs.writeFile(path.join(rootfs, 'locked'), 'QCA8337');
+      await fs.chmod(path.join(rootfs, 'locked'), 0o000);
+      const result = await runSwitchFamilyAnalysis(path.join(temporary, 'missing'), rootfs);
+      expect(result.rootfs.status).toBe('partial');
+      expect(result.rootfs.coverage).toMatchObject({ filesDiscovered: 1, filesExamined: 0, filesSkipped: 1 });
+      expect(result.rootfs.coverage.skippedPaths).toEqual([]);
+      expect(result.rootfs.result?.verdict).toBe('not-scanned');
+      expect(result.rootfs.result?.summary).toMatch(/0 of 1 discovered regular file\(s\) read/);
+      expect(result.overall.verdict).toBe('not-scanned');
+    },
+  );
 
   it('caps a sparse raw image at the core detector limit and preserves its actual disk size', async () => {
     await fs.writeFile(image, 'QCA8337 ');
