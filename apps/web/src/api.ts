@@ -1419,6 +1419,83 @@ export type AnalysisKind =
   | 'updatepath'
   | 'devicetree';
 
+/** Saved static leads: every result field is optional because older jobs may lack newer coverage/evidence. */
+export interface SwitchFamilyEvidence {
+  lane?: 'raw' | 'rootfs';
+  path?: string;
+  offset?: number;
+  context?: string;
+  matchedText?: string;
+  ruleId?: string;
+}
+
+export interface SwitchFamilyRead {
+  verdict?: 'single-family-lead' | 'template-only' | 'ambiguous' | 'vendor-only' | 'none-observed';
+  summary?: string;
+  candidates?: {
+    family?: string;
+    standing?: 'exact-literal' | 'family-template';
+    distinctTokens?: string[];
+    hitCount?: number;
+    evidence?: SwitchFamilyEvidence[];
+  }[];
+  vendorMentions?: {
+    vendor?: string;
+    count?: number;
+    sources?: { lane?: 'raw' | 'rootfs'; path?: string; offsets?: number[] }[];
+  }[];
+  deferred?: { what?: string; reason?: string }[];
+  coverage?: {
+    bytesTotal?: number;
+    bytesScanned?: number;
+    completed?: boolean;
+    stoppedBy?: string;
+    maxScanBytes?: number;
+    maxHitsPerRule?: number;
+    rulesAttempted?: string[];
+    recordsDropped?: { ruleId?: string; dropped?: number }[];
+    edgeUnresolved?: number;
+    statement?: string;
+  };
+}
+
+export interface SwitchFamilyFile {
+  lane?: 'raw' | 'rootfs';
+  path?: string;
+  fileBytes?: number;
+  result?: SwitchFamilyRead;
+}
+
+export interface SwitchFamilyAnalysis {
+  raw?: {
+    status?: 'completed' | 'partial' | 'error';
+    reason?: string;
+    file?: SwitchFamilyFile | null;
+    result?: SwitchFamilyRead | null;
+  };
+  rootfs?: {
+    status?: 'completed' | 'partial' | 'not-run' | 'error';
+    reason?: string;
+    result?: SwitchFamilyRead | null;
+    files?: SwitchFamilyFile[];
+    coverage?: {
+      limits?: { maxFiles?: number; maxBytesPerFile?: number; maxTotalBytes?: number; maxEntries?: number };
+      selection?: string;
+      inventoryComplete?: boolean;
+      entriesExamined?: number;
+      filesDiscovered?: number;
+      filesExamined?: number;
+      filesSkipped?: number;
+      filesTruncated?: number;
+      bytesScanned?: number;
+      symlinksSkipped?: number;
+      specialFilesSkipped?: number;
+      errors?: { path?: string; reason?: string }[];
+    };
+  };
+  overall?: SwitchFamilyRead;
+}
+
 /**
  * FreeRTOS RAM-snapshot walk (`POST/GET /images/:id/rtos/tasks`). The request mirrors the API contract exactly:
  * layout is DECLARED, never defaulted. The result is persisted on a job row, so every field is optional forever.
@@ -2347,6 +2424,10 @@ export const api = {
   },
   rtosTasksResult: (id: string) =>
     get<{ result: RtosTaskSnapshotResult | null }>(`/api/images/${id}/rtos/tasks`).then((r) => r.result),
+  /** Static switch-family leads only; no findings or hardware claims are produced. */
+  runSwitchFamily: (id: string) => post<{ jobId: string }>(`/api/images/${id}/switch-family`, {}),
+  switchFamilyResult: (id: string) =>
+    get<{ result: SwitchFamilyAnalysis | null }>(`/api/images/${id}/switch-family`).then((r) => r.result),
   /** Read the FreeRTOS kernel addresses from the image's own ELF symbol table (a job; nothing is synced). */
   runRtosElfSymbols: (id: string) => post<{ jobId: string }>(`/api/images/${id}/rtos/elf-symbols`, {}),
   rtosElfSymbolsResult: (id: string) =>

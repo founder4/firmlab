@@ -40,6 +40,7 @@ import { sectionIndex, sections } from './sections';
 import { settings } from './settings';
 import { shell } from './shell';
 import { simulation } from './simulation';
+import { switchFamily } from './switchFamily';
 import { techniques } from './techniques';
 import { testbench } from './testbench';
 import { updatepath } from './updatepath';
@@ -83,6 +84,7 @@ export const en = {
   egressSection,
   exportreach,
   rtosTasks,
+  switchFamily,
 };
 
 export type Messages = typeof en;

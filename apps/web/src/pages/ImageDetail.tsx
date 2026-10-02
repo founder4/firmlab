@@ -59,6 +59,7 @@ import { SignalCanvas } from '../components/SignalCanvas';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StepTimeline } from '../components/StepTimeline';
 import { StructureMap } from '../components/StructureMap';
+import { SwitchFamilyPanel } from '../components/SwitchFamilyPanel';
 import { SymReachPanel } from '../components/SymReachPanel';
 import { TestBench } from '../components/TestBench';
 import { UpdatePathPanel } from '../components/UpdatePathPanel';
@@ -245,7 +246,12 @@ export function ImageDetail(): JSX.Element {
           Sits beside recovered values because that is where an operator hunting credentials looks. */}
       {tab === 'credmatch' && <CredMatchPanel imageId={id} />}
       {/* What the firmware declares about the physical ways in. Reads stored results; connects to nothing. */}
-      {tab === 'hardware' && <HardwareInterfaces imageId={id} />}
+      {tab === 'hardware' && (
+        <>
+          <HardwareInterfaces imageId={id} />
+          <SwitchFamilyPanel imageId={id} />
+        </>
+      )}
       {/* Bootloader: the deep static config/boot providers (u-boot env, /etc audit, certs, services…). */}
       {tab === 'bootloader' && (
         <>
