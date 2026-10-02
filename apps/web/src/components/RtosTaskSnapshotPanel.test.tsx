@@ -3,9 +3,9 @@
  * instead of refusing, a walk shown as proof, a never-run panel reading as "no tasks", and an API refusal whose
  * field list was thrown away.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { type RtosElfSymbolsResult, api } from '../api';
+import { type RenodeRamCaptureResult, type RtosElfSymbolsResult, api } from '../api';
 import { setLocale } from '../i18n';
 import { en } from '../locales/en';
 import { mockedApi } from '../test-api-mock';
@@ -386,6 +386,88 @@ describe('RtosTaskSnapshotPanel — Renode RAM capture', () => {
     expect(
       screen.getByText('Firmware is not an ELF binary; raw binaries carry no section headers.'),
     ).toBeInTheDocument();
+  });
+
+  it('shows one refusal warning when a new capture reports Renode unavailable', async () => {
+    const reason = 'Renode not installed (opt-in layer).';
+    mockApi.runRenodeRamCapture.mockResolvedValue({ jobId: 'j-ram-unavailable' });
+    mockApi.job.mockResolvedValue({
+      status: 'done',
+      result: { available: false, captured: false, reason, proofState: 'blocked_by_platform' },
+    });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    await screen.findByText(rc.notRun);
+
+    fireEvent.click(screen.getByRole('button', { name: rc.capture }));
+
+    expect(await screen.findByText(rc.refused)).toBeInTheDocument();
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+    expect(screen.queryByText(rc.notAvailable)).toBeNull();
+    const section = screen.getByRole('region', { name: rc.heading });
+    expect(section.querySelectorAll('.banner-warn')).toHaveLength(1);
+    expect(screen.queryByText(rc.capturedHeading)).toBeNull();
+    expect(screen.queryByText(rc.loadedIntoForm)).toBeNull();
+    expect(screen.getByLabelText(m.field.base)).toHaveValue('');
+  });
+
+  it('preserves a stored refusal and independent warnings when a retry fails', async () => {
+    const reason = 'Renode not installed (opt-in layer).';
+    const error = '503 Service Unavailable';
+    mockApi.renodeRamCaptureResult.mockResolvedValue({
+      available: false,
+      captured: false,
+      reason,
+      remoteResourcesRefused: ['https://example.invalid/platform.svd'],
+    });
+    mockApi.runRenodeRamCapture.mockRejectedValue(new Error(error));
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    await screen.findByText(rc.refused);
+
+    fireEvent.click(screen.getByRole('button', { name: rc.recapture }));
+
+    expect(await screen.findByText(error)).toBeInTheDocument();
+    expect(screen.getByText(rc.failed)).toBeInTheDocument();
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+    expect(screen.getByText(rc.refused)).toBeInTheDocument();
+    expect(screen.getByText(rc.remoteRefused(1))).toBeInTheDocument();
+    expect(screen.queryByText(rc.notAvailable)).toBeNull();
+  });
+
+  it.each<RenodeRamCaptureResult>([
+    { available: false },
+    { available: false, captured: false },
+    { available: false, captured: false, reason: '' },
+    { available: false, reason: 'Stored result without capture status.' },
+  ])('keeps the unavailable fallback for an older result without a stated refusal: %j', async (capture) => {
+    mockApi.renodeRamCaptureResult.mockResolvedValue(capture);
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+
+    expect(await screen.findByText(rc.notAvailable)).toBeInTheDocument();
+    expect(screen.queryByText(rc.refused)).toBeNull();
+    expect(screen.queryByText(rc.capturedHeading)).toBeNull();
+    expect(screen.queryByRole('button', { name: rc.loadIntoForm })).toBeNull();
+  });
+
+  it('shows a stored refusal without newer availability or remote-resource fields', async () => {
+    const reason = 'No bundled platform matches this firmware.';
+    mockApi.renodeRamCaptureResult.mockResolvedValue({ captured: false, reason });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+
+    expect(await screen.findByText(rc.refused)).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.queryByText(rc.notAvailable)).toBeNull();
+  });
+
+  it('does not infer capture or availability status from an empty persisted result', async () => {
+    mockApi.renodeRamCaptureResult.mockResolvedValue({});
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    await screen.findByRole('button', { name: rc.recapture });
+
+    const section = within(screen.getByRole('region', { name: rc.heading }));
+    expect(section.queryByText(rc.refused)).toBeNull();
+    expect(section.queryByText(rc.notAvailable)).toBeNull();
+    expect(section.queryByText(rc.capturedHeading)).toBeNull();
+    expect(section.queryByRole('button', { name: rc.loadIntoForm })).toBeNull();
   });
 
   it('displays stored ram capture and allows reloading into form', async () => {

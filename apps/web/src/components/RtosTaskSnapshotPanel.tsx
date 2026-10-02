@@ -1083,6 +1083,11 @@ function ElfSymbols({
   );
 }
 
+/** A stated refusal replaces the generic unavailable warning; older results may carry neither field. */
+export function hasRamCaptureRefusal(capture: RenodeRamCaptureResult | null): boolean {
+  return capture?.captured === false && Boolean(capture.reason);
+}
+
 function RenodeRamCaptureView({
   capture,
   busy,
@@ -1106,6 +1111,7 @@ function RenodeRamCaptureView({
 }): JSX.Element {
   const cap = capture;
   const captured = Boolean(cap?.captured && cap?.bytesBase64 && cap?.region);
+  const refused = hasRamCaptureRefusal(cap);
   return (
     <section aria-label={m.heading} style={{ marginTop: 14, maxWidth: '72ch', display: 'grid', gap: 8 }}>
       <div className="eyebrow">{m.heading}</div>
@@ -1155,7 +1161,7 @@ function RenodeRamCaptureView({
         !busy && <div className="hint">{m.notRun}</div>
       ) : (
         <>
-          {cap.available === false && <div className="banner banner-warn">{m.notAvailable}</div>}
+          {cap.available === false && !refused && <div className="banner banner-warn">{m.notAvailable}</div>}
           {captured && cap.region && (
             <div className="banner banner-ok">
               <span className="eyebrow">{m.capturedHeading}</span>
@@ -1174,7 +1180,7 @@ function RenodeRamCaptureView({
               )}
             </div>
           )}
-          {cap.captured === false && cap.reason && (
+          {refused && (
             <div className="banner banner-warn">
               <span className="eyebrow">{m.refused}</span>
               <p style={{ margin: '4px 0 0' }}>{cap.reason}</p>
