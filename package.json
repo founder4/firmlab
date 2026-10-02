@@ -11,7 +11,7 @@
   "scripts": {
     "build": "pnpm -r run build",
     "check": "pnpm -r run check",
-    "test": "pnpm -r run test && node --test scripts/corpus-matrix.test.mjs scripts/corpus-campaign.test.mjs scripts/corpus-reindex.test.mjs scripts/corpus-naming.test.mjs scripts/credential-corpus-refresh.test.mjs scripts/fwhunt-campaign.test.mjs scripts/ui-expose.test.mjs scripts/reconcile-webprobe.test.mjs scripts/check-slice-denominator.test.mjs scripts/agent-surface-audit.test.mjs scripts/orca-campaign-watch.test.mjs",
+    "test": "pnpm -r run test && node --test scripts/corpus-matrix.test.mjs scripts/corpus-campaign.test.mjs scripts/corpus-reindex.test.mjs scripts/corpus-naming.test.mjs scripts/credential-corpus-refresh.test.mjs scripts/fwhunt-campaign.test.mjs scripts/ui-expose.test.mjs scripts/reconcile-webprobe.test.mjs scripts/check-slice-denominator.test.mjs scripts/agent-surface-audit.test.mjs scripts/orca-campaign-watch.test.mjs skills/orca-campaign/scripts/install.test.mjs",
     "dev:api": "pnpm --filter @firmlab/api run dev",
     "dev:web": "pnpm --filter @firmlab/web run dev",
     "biome": "bash scripts/check-nul.sh && bash scripts/check-comment-glob.sh && bash scripts/check-web-api-mock.sh && node scripts/check-slice-denominator.mjs && node scripts/agent-surface-audit.mjs --fail-on-error && biome check .",
@@ -40,7 +40,8 @@
     "test:corpus-campaign": "node --test scripts/corpus-campaign.test.mjs",
     "fwhunt:campaign": "node scripts/fwhunt-campaign.mjs",
     "campaign:watch": "node scripts/orca-campaign-watch.mjs",
-    "test:campaign-watch": "node --test scripts/orca-campaign-watch.test.mjs"
+    "test:campaign-watch": "node --test scripts/orca-campaign-watch.test.mjs",
+    "campaign:install": "node skills/orca-campaign/scripts/install.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

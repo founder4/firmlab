@@ -38,7 +38,8 @@ Re-arm even after an empty timeout. A final status message ends a model turn and
 
 ## Unattended continuity and full handoff
 
-Before promising an unattended campaign, follow [the continuity runbook](ORCA-CAMPAIGN-RELIABILITY.md).
+Before promising an unattended campaign, use the shared `orca-campaign` skill (installed with
+`pnpm campaign:install`) and follow [the continuity runbook](ORCA-CAMPAIGN-RELIABILITY.md).
 Launch and verify the independent OS supervisor before the outgoing coordinator stops. Its fixed deadline,
 Run identity and journal survive model-turn completion. Keep current handoff context on disk, including the
 original mandate, ownership, unsettled tasks, decisions, validation and capacity observations.

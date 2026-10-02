@@ -42,7 +42,8 @@ The original eight-hour window elapsed without eight hours of continuous work. S
 
 `pnpm campaign:watch --help` exposes `scripts/orca-campaign-watch.mjs`. Its default is observation only.
 `--execute` requires a non-empty trusted local context file. The journal is bound to the Run and fixed
-deadline; execution holds a per-Run OS lock even when two callers choose different journals.
+deadline; execution holds a fixed per-OS-account Run lock, independent of TMPDIR, plus a journal lock.
+The journal records the exact lock paths. Known legacy temporary lock locations are also held.
 
 Example for a **new, authorized** campaign (replace the placeholders; do not reuse an expired deadline):
 
@@ -95,7 +96,7 @@ ordinary resumes reference it, while a full fallback includes its current conten
 
 ## Verification
 
-The 37-test regression suite runs with `pnpm test:campaign-watch` and is included in `pnpm test`. It covers stale
+The guard regression suite runs with `pnpm test:campaign-watch` and is included in `pnpm test`. It covers stale
 Antigravity idle state, Claude footer and short turns, unreadable screens, permission/quota selectors,
 ownership races, observation gaps, lost receipts, cross-Run standbys, deadline, resume budget and a real
 OS-process lock collision across separate journals followed by successful lock reuse.
@@ -134,3 +135,43 @@ The first full test attempt hit the pre-existing 20 ms HTTP cancellation/socket-
 rerun and subsequent full run passed. That independent race is explicitly deferred in `docs/BACKLOG.md`.
 The first Claude auditor was retained by Orca's user-takeover protection; the final reviewer was released
 with its archive preserved. Test terminals created here were closed; existing user terminals were preserved.
+
+## Shared installation across projects
+
+The maintained package now lives in `skills/orca-campaign/`. FirmLab's existing script is a compatibility
+entry point to that same code. Install/update with `pnpm campaign:install`; the installer copies the package
+to `~/.agents/skills/orca-campaign`, adds Codex/Claude discovery links and installs
+`~/.local/bin/orca-campaign-watch`. The installed copy runs independently of this repository. It refuses
+unmanaged destinations, edited managed files and conflicting commands; repeat installation is supported.
+The stable lock lives under `~/.local/state/orca-campaign/locks/`; known legacy lock paths remain held.
+Old guards using arbitrary custom TMPDIR values must be stopped before upgrading.
+
+For Antigravity CLI, the installer prepares `~/.local/share/orca-campaign-antigravity`; validate and register
+it with `agy plugin validate <path>` and `agy plugin install <path>`. This local plugin contains one skill,
+with no hooks, agents, commands or MCP servers. It supplies discovery without changing models, accounts or
+permission settings. A fresh Antigravity session reported the skill PRESENTE after registration (AUSENTE
+before it). Orca's installed-skill inventory also reports Codex/Claude/common-agent discovery.
+
+Use `$orca-campaign` in new sessions, or provide the installed SKILL.md path explicitly in a current session.
+Each project must supply its own absolute project path, original user mandate, restrictions, validation and
+handoff context. The generic supervisor does not impose FirmLab's firmware/database rules on unrelated work
+or grant broader permissions. Each campaign still needs its own verified startup and fixed deadline.
+
+Portability checks installed into a temporary profile with spaces/apostrophes, ran the installed command
+and regression suite from another project directory, updated idempotently, and proved user edits and unrelated
+commands remain intact. The actual user launcher also observed a live Orca Run from the isolated sample project
+with no submitted prompt. No new unattended production campaign or always-running service was started.
+
+The independent cross-project forward test additionally exposed and drove fixes for differing TMPDIR
+lock namespaces, Codex/Claude mode footers, and malformed live context/standbys terminating the guard.
+Regression evidence now includes two subprocesses with different TMPDIR values sharing one OS-account
+Run lock, observer/executor journal exclusion, input repair while the same guard stays alive, and a
+persisted stopped state on cancellation. Deadlines require explicit offsets. Native plugin copies are
+re-registered after updates; installed common and native cached scripts must match the maintained source.
+
+Shared-package final validation: 40 guard regressions, 2 installer/portability tests, and the full
+`pnpm check`, `pnpm test` (4,125 tests), `pnpm build`, `pnpm biome` gates passed. The existing cancellation
+socket-arrival race occurred on the first full attempt and the subsequent full run passed; it remains
+tracked separately. Skill frontmatter validated, and source/common/Antigravity cached SKILL.md, watcher
+and installer hashes matched. The independent forward-test reviewer settled successfully; Orca retained
+its terminal under user-takeover protection, so no forced close was performed.

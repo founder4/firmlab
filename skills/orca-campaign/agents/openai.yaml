@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orca Campaign"
+  short_description: "Supervise unattended Orca campaigns and handoffs"
+  default_prompt: "Use $orca-campaign to supervise this authorized unattended project campaign."
