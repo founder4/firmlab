@@ -45,7 +45,7 @@ Tras el relevo formal y adopción de `run_fa2f177609e4` en generación 4 por Ant
    para reconocer bloqueos de cuota/sesión como fase `blocked` (motivo `capacity_blocked`) y registrar
    intervalos durables en `gaps`, sin intentos de auto-toma de control ni entradas ciegas. 44 tests unitarios
    verificados. Habilidad canónica reinstalada y nuevo supervisor iniciado (PID 94159) en fase `working`.
-3. **Validación completa de repositorios**: `pnpm check`, `pnpm test` (115 pruebas pasando), `pnpm build`
+3. **Validación completa de repositorios**: `pnpm check`, `pnpm test` (4.365 tests: core 467, API 2.945, web 838 y scripts 115), `pnpm build`
    (core, api, web) y `pnpm biome` (0 errores, 0 advertencias) verificados y limpios.
 
 ## Pendiente
@@ -53,3 +53,32 @@ Tras el relevo formal y adopción de `run_fa2f177609e4` en generación 4 por Ant
 - Mantener supervisión activa del buzón de orquestación y del plazo fijo `2026-10-02T15:07:39Z` (17:07:39 Madrid).
 - En el plazo de cierre, terminar la API sintética temporal (PID 92345), generar el informe final
   en `status.md` (en español) y consolidar el balance de la campaña.
+
+## Segunda interrupción y verificación independiente
+
+Antigravity terminó su turno a las 12:46:57 UTC (14:46:57 Madrid). Hasta la recuperación manual de root
+a las 14:43:03 UTC (generación 5), el supervisor vivo siguió devolviendo
+`unknown / input_prompt_unrecognized`, con `gaps: []`. No hubo coordinación continua comprobada en
+esas aproximadamente 1 h 56 min. La corrección de cuota no había resuelto la reactivación de Antigravity.
+
+Causa capturada: el supervisor usaba `terminal read` sin `--screen`. Ese modo devuelve salida acumulada,
+no el compositor renderizado. La misma terminal con `--screen` muestra el prompt vacío `>` y el footer
+Gemini, mientras la lectura anterior sólo contenía el resumen final. El arreglo está en curso con
+propiedad exclusiva de los archivos del supervisor y pruebas de fuente de pantalla/borrador/bloqueo.
+No se debe inferir un compositor vacío a partir de `done` o de líneas en blanco.
+
+Root repitió `pnpm check`, `pnpm test`, `pnpm build` y `pnpm biome` tras recuperar el Run: todos pasan,
+con 4.365 tests. La prueba de cuatro horas **ha fallado** por las interrupciones, aunque el proyecto
+haya avanzado y las correcciones posteriores pasen pruebas. Se conserva el cierre original a las
+15:07:39 UTC. El reloj transcurrido no equivale a trabajo continuo.
+
+### Corrección de la segunda interrupción
+
+El supervisor ahora pide `--screen` y exige una fuente renderizada; rechaza borradores no vacíos,
+incluso espacios y tipos inesperados, y no toma textos históricos de cuota como un bloqueo actual.
+Los intervalos de observación desconocida se registran con motivo y límites, sin simular inactividad
+ni permitir toma de control. 52 pruebas focalizadas pasan y la suite completa da 4.373 tests
+(core 467, API 2.945, web 838, scripts 123). Biome pasa. Instalación global y plugin Antigravity
+actualizados; supervisor anterior detenido sin forzar y nuevo PID 38720, mismo plazo. La lectura
+real del Antigravity que falló ya devuelve `idle` con prompt vacío comprobado. La reactivación
+real controlada queda pendiente de su recibo y ejecución; no basta con instalar el arreglo.

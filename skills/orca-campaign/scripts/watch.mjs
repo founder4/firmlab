@@ -176,13 +176,27 @@ export async function snapshotRun(call, options) {
     ?.find((w) => w.worktreeId === show.terminal?.worktreeId)
     ?.agents?.find((a) => a.paneKey === paneKey);
   const activity = native?.interrupted ? 'interrupted' : (native?.state ?? projection?.stage?.activity);
-  const screen = activity === 'working' ? {} : await call(['terminal', 'read', '--terminal', owner, '--limit', '20']);
+  // The default read is the accumulated stream: a TUI that repaints its composer
+  // with cursor moves (Antigravity) never emits it at the end of that stream, so
+  // a done owner looked unrecognized forever. `--screen` is the rendered frame.
+  // A composer draft is reported in `draft` and EXCLUDED from tail, so a visible
+  // empty prompt proves nothing while a draft is present. `screen-unavailable`
+  // (stream fallback) or an absent source (older host) proves no frame at all.
+  const screen =
+    activity === 'working' ? {} : await call(['terminal', 'read', '--terminal', owner, '--screen', '--limit', '20']);
   if (activity !== 'working' && (screen.error || !Array.isArray(screen.terminal?.tail))) {
     return { owner, generation: run.consumer_generation, error: 'screen_unreadable' };
   }
   const tail = screen.terminal?.tail ?? [];
-  const capacityBlocked = hasCapacityBlock(tail);
+  // Only an absent or exactly empty draft is no draft; whitespace or an unexpected
+  // type is text the operator may have typed, so it is present and unverifiable.
+  const rawDraft = screen.terminal?.draft;
+  const draft = rawDraft !== undefined && rawDraft !== null && rawDraft !== '';
+  const rendered = screen.terminal?.source === 'screen';
+  // A stream fallback replays history: an old quota line there is not a current block.
+  const capacityBlocked = rendered && hasCapacityBlock(tail);
   const menuBlocked = !capacityBlocked && hasBlockingMenu(tail);
+  const emptyPrompt = rendered && !draft && visibleInputPrompt(tail);
   const wait =
     activity === 'working' || activity === 'interrupted' || capacityBlocked
       ? {}
@@ -197,14 +211,19 @@ export async function snapshotRun(call, options) {
     stateStartedAt: native?.stateStartedAt,
     capacityBlocked,
     menuBlocked,
-    inputEmpty: activity === 'working' ? undefined : capacityBlocked ? false : visibleInputPrompt(tail),
+    screenSource: screen.terminal?.source,
+    inputEmpty: activity === 'working' ? undefined : capacityBlocked ? false : emptyPrompt,
     error: capacityBlocked
       ? 'capacity_blocked'
-      : show.terminal?.connected && activity !== 'working' && !visibleInputPrompt(tail)
-        ? 'input_prompt_unrecognized'
-        : undefined,
+      : show.terminal?.connected && activity !== 'working' && draft
+        ? 'composer_draft_present'
+        : show.terminal?.connected && activity !== 'working' && !rendered
+          ? 'screen_not_rendered'
+          : show.terminal?.connected && activity !== 'working' && !emptyPrompt
+            ? 'input_prompt_unrecognized'
+            : undefined,
     nativeIdleProven:
-      !capacityBlocked && native?.state === 'done' && !native.interrupted && visibleInputPrompt(tail) && !menuBlocked,
+      !capacityBlocked && native?.state === 'done' && !native.interrupted && emptyPrompt && !menuBlocked,
     liveness:
       show.terminal?.connected === false && typeof show.terminal.exitCause?.kind === 'string'
         ? 'exited'
@@ -213,7 +232,13 @@ export async function snapshotRun(call, options) {
           : projection?.liveness?.verdict,
     observedAt: native?.updatedAt ?? projection?.liveness?.observedAt,
     liveStatus: native ? 'fresh' : projection?.evidence?.liveStatus,
-    idleProven: !capacityBlocked && activity !== 'interrupted' && !menuBlocked && wait.wait?.satisfied === true,
+    idleProven:
+      !capacityBlocked &&
+      rendered &&
+      !draft &&
+      activity !== 'interrupted' &&
+      !menuBlocked &&
+      wait.wait?.satisfied === true,
     activeHandles: rows
       .filter((w) => !['completed', 'failed', 'stopped'].includes(w.dispatchStatus))
       .map((w) => w.agentTerminalHandle),
@@ -372,6 +397,25 @@ export async function superviseStep(state, options, dependencies) {
       lastGap.to = now;
     }
   }
+  // An unrecognized screen is uncertainty, never health and never idleness: the
+  // interval is journaled from the last observation before it to the observation
+  // that ended it, with the reason, so `gaps: []` cannot read as a watched owner.
+  const uncertain = decision.kind === 'unknown' || (decision.kind === 'pending' && Boolean(snapshot.error));
+  const uncertainReason = snapshot.error ?? decision.reason;
+  const open = state.uncertainty
+    ? gaps.findLastIndex(
+        (g) => g.phase === 'unknown' && g.from === state.uncertainty.from && g.reason === state.uncertainty.reason,
+      )
+    : -1;
+  if (open >= 0) gaps[open] = { ...gaps[open], to: now };
+  let uncertainty = null;
+  if (uncertain) {
+    if (open >= 0 && state.uncertainty.reason === uncertainReason) uncertainty = state.uncertainty;
+    else {
+      uncertainty = { from: state.checkedAt ?? now, reason: uncertainReason };
+      gaps.push({ ...uncertainty, to: now, phase: 'unknown' });
+    }
+  }
 
   const next = {
     ...state,
@@ -390,6 +434,7 @@ export async function superviseStep(state, options, dependencies) {
         ? 0
         : (state.consecutiveResumes ?? 0),
     gaps: gaps.slice(-100),
+    uncertainty,
   };
   if (['confirmed', 'superseded', 'failed-exited'].includes(decision.kind)) {
     next.lastSubmission = { ...state.pending, settlement: decision.kind, observedAt: now };

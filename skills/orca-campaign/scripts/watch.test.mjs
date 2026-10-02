@@ -52,7 +52,7 @@ function harness(extra = {}) {
           page: { hasMore: false },
         };
       if (args[1] === 'ps') return { worktrees: [] };
-      if (args[1] === 'read') return { terminal: { tail: ['>'] } };
+      if (args[1] === 'read') return { terminal: { source: 'screen', tail: ['>'] } };
       if (args[1] === 'run-list') return { runs: [], page: { hasMore: false } };
       if (args[1] === 'show')
         return { terminal: { connected: true, agentIdentity: 'claude', incarnationId: 'inc_owner' } };
@@ -282,7 +282,7 @@ function nativeHarness(tail = ['>'], age = 600_000) {
     if (args[1] === 'worker-list') return { workers: [], page: { hasMore: false } };
     if (args[1] === 'show')
       return { terminal: { connected: true, worktreeId: 'wt', tabId: 't', leafId: 'l', incarnationId: 'inc_owner' } };
-    if (args[1] === 'read') return { terminal: { tail } };
+    if (args[1] === 'read') return { terminal: { source: 'screen', tail } };
     if (args[1] === 'ps')
       return {
         worktrees: [
@@ -458,7 +458,7 @@ test('standby menu, other coordinator, paginated or active fleet is refused', as
       if (a[1] === 'worker-list' && a.includes('run_other'))
         return { workers: [{ agentTerminalHandle: 'term_ready', dispatchStatus: 'active' }], page: { hasMore: false } };
       if (a[1] === 'read' && a.includes('term_ready') && scenario === 'menu')
-        return { terminal: { tail: ['Do you trust the files in this folder?', '>'] } };
+        return { terminal: { source: 'screen', tail: ['Do you trust the files in this folder?', '>'] } };
       if (a[1] === 'wait') return { wait: { satisfied: true } };
       return base(a);
     };
@@ -827,3 +827,189 @@ console.log(JSON.stringify({ok:true,result}));
     }
   },
 );
+
+// Captured 2026-10-02 from a native-done Antigravity CLI 1.2.14 coordinator (prose shortened).
+// The stream read ends in its report; only the rendered screen shows the composer.
+const ANTIGRAVITY_STREAM = [
+  '  • Compromiso en git: 8900751 feat(rtos): wire renode ram capture into web ui and add route contract tests.',
+  '',
+  '  #### 4. Documentación y Backlog',
+  '  • Compromiso en git: 7d3698a docs(campaign): record renode ram capture and supervisor quota fixes in campaign and',
+  '  backlog.',
+];
+const ANTIGRAVITY_SCREEN = [
+  '      • context.md y status.md actualizados atómicamente.',
+  '  4. API Sintética Local:',
+  '      • PID 92345 continúa ejecutándose en 127.0.0.1:8911 para soporte de pruebas de interfaz; será detenida de forma',
+  '      verificada antes del cierre final de la campaña.',
+  '──────────────────────────────────────────────────────────────────────────────',
+  '>',
+  '──────────────────────────────────────────────────────────────────────────────',
+  '? for shortcuts                                          Gemini 3.8 Flash · high',
+];
+
+function screenHarness(terminal) {
+  const h = nativeHarness(ANTIGRAVITY_STREAM);
+  const base = h.deps.call;
+  h.deps.call = async (a) => {
+    if (a[1] !== 'read' || !a.includes('--screen')) return base(a);
+    h.commands.push(a);
+    return { terminal };
+  };
+  return h;
+}
+
+test('real Antigravity done owner: stream tail is unrecognized, the rendered screen proves an empty composer', async () => {
+  const legacy = nativeHarness(ANTIGRAVITY_STREAM);
+  const stuck = await superviseStep(waiting, options, legacy.deps);
+  assert.equal(stuck.phase, 'unknown');
+  assert.equal(stuck.reason, 'input_prompt_unrecognized');
+
+  const h = screenHarness({ source: 'screen', tail: ANTIGRAVITY_SCREEN });
+  const state = await superviseStep(waiting, options, h.deps);
+  assert.equal(state.phase, 'pending');
+  assert.equal(h.commands.filter((a) => a[1] === 'send').length, 1);
+  assert.equal(h.commands.find((a) => a[1] === 'read').includes('--screen'), true);
+});
+
+test('a reported composer draft blocks input even though the rendered prompt looks empty', async () => {
+  for (const draft of ['continue with the deploy', '  x  ']) {
+    const h = screenHarness({ source: 'screen', tail: ANTIGRAVITY_SCREEN, draft });
+    const base = h.deps.call;
+    h.deps.call = async (a) => (a[1] === 'wait' ? { wait: { satisfied: true } } : base(a));
+    const state = await superviseStep(waiting, options, h.deps);
+    assert.equal(state.phase, 'unknown');
+    assert.equal(state.reason, 'composer_draft_present');
+    assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+    assert.equal(JSON.stringify(state).includes(draft.trim()), false);
+  }
+  for (const draft of ['   ', '\n', { text: '' }, [], 0, false]) {
+    const h = screenHarness({ source: 'screen', tail: ANTIGRAVITY_SCREEN, draft });
+    const state = await superviseStep(waiting, options, h.deps);
+    assert.equal(state.phase, 'unknown', `draft ${JSON.stringify(draft)} is present, not verified empty`);
+    assert.equal(state.reason, 'composer_draft_present');
+    assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+  }
+  for (const draft of ['', null]) {
+    const h = screenHarness({ source: 'screen', tail: ANTIGRAVITY_SCREEN, draft });
+    assert.equal((await superviseStep(waiting, options, h.deps)).phase, 'pending');
+  }
+});
+
+test('done plus blank tail or an unrecognized screen is journaled uncertainty, never idle or gap-free', async () => {
+  for (const tail of [[], ['', '   '], ANTIGRAVITY_STREAM]) {
+    const h = nativeHarness(tail);
+    const state = await superviseStep({ ...waiting, checkedAt: NOW - 500 }, options, h.deps);
+    assert.equal(state.phase, 'unknown');
+    assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+    assert.deepEqual(state.gaps, [{ from: NOW - 500, reason: 'input_prompt_unrecognized', to: NOW, phase: 'unknown' }]);
+  }
+});
+
+test('uncertainty intervals extend, split on reason change, close on recovery and stay bounded', async () => {
+  const h = nativeHarness(ANTIGRAVITY_STREAM);
+  const t0 = NOW;
+  h.tick(1000);
+  const s1 = await superviseStep(
+    { checkedAt: t0, phase: 'working', owner: 'term_owner', generation: 2 },
+    options,
+    h.deps,
+  );
+  assert.deepEqual(s1.uncertainty, { from: t0, reason: 'input_prompt_unrecognized' });
+  h.tick(1000);
+  const s2 = await superviseStep(s1, options, h.deps);
+  assert.deepEqual(s2.gaps, [{ from: t0, reason: 'input_prompt_unrecognized', to: NOW + 2000, phase: 'unknown' }]);
+  assert.deepEqual(s1.gaps[0].to, NOW + 1000, 'the previous journal object is not mutated');
+
+  const base = h.deps.call;
+  h.deps.call = async (a) => (a[1] === 'read' ? { error: 'command_timeout' } : base(a));
+  h.tick(1000);
+  const s3 = await superviseStep(s2, options, h.deps);
+  assert.deepEqual(s3.gaps, [
+    { from: t0, reason: 'input_prompt_unrecognized', to: NOW + 3000, phase: 'unknown' },
+    { from: NOW + 2000, reason: 'screen_unreadable', to: NOW + 3000, phase: 'unknown' },
+  ]);
+
+  h.deps.call = async (a) =>
+    a[1] === 'read' && a.includes('--screen') ? { terminal: { source: 'screen', tail: ANTIGRAVITY_SCREEN } } : base(a);
+  h.tick(1000);
+  const s4 = await superviseStep(s3, options, h.deps);
+  assert.equal(s4.phase, 'idle');
+  assert.equal(s4.uncertainty, null);
+  assert.equal(s4.gaps.at(-1).to, NOW + 4000);
+  h.tick(1000);
+  const s5 = await superviseStep(s4, options, h.deps);
+  assert.deepEqual(s5.gaps, s4.gaps, 'a closed interval is not reopened by later healthy observations');
+
+  const many = Array.from({ length: 100 }, (_, i) => ({ from: i, to: i, reason: 'unverified_observation_gap' }));
+  h.deps.call = base;
+  h.tick(1000);
+  const s6 = await superviseStep({ ...s5, gaps: many }, options, h.deps);
+  assert.equal(s6.gaps.length, 100);
+  assert.equal(s6.gaps.at(-1).reason, 'input_prompt_unrecognized');
+});
+
+test('an unrecognized screen while a submission is pending keeps the receipt and records uncertainty', async () => {
+  const h = nativeHarness(ANTIGRAVITY_STREAM);
+  const pending = { target: 'term_owner', generation: 2, sentAt: NOW - 1000, requestId: 'req_9', accepted: true };
+  const state = await superviseStep({ ...waiting, checkedAt: NOW - 1000, pending }, options, h.deps);
+  assert.equal(state.phase, 'pending');
+  assert.deepEqual(state.pending, pending);
+  assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+  assert.equal(state.gaps.at(-1).reason, 'input_prompt_unrecognized');
+});
+
+test('a stream fallback or an older host without a source never proves an empty composer', async () => {
+  for (const terminal of [
+    { source: 'stream', tail: ['>'] },
+    { source: 'screen-unavailable', tail: ['>'] },
+    { tail: ['>'] },
+  ]) {
+    const h = screenHarness(terminal);
+    const base = h.deps.call;
+    h.deps.call = async (a) => (a[1] === 'wait' ? { wait: { satisfied: true } } : base(a));
+    const state = await superviseStep(waiting, options, h.deps);
+    assert.equal(state.phase, 'unknown');
+    assert.equal(state.reason, 'screen_not_rendered');
+    assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+    assert.equal(state.gaps.at(-1).reason, 'screen_not_rendered');
+  }
+});
+
+test('a rendered selector or quota screen still blocks the real Antigravity frame', async () => {
+  // A selector replaces the composer; text above an empty composer is assistant prose.
+  const menu = screenHarness({
+    source: 'screen',
+    tail: [...ANTIGRAVITY_SCREEN.slice(0, 5), 'Do you want to proceed?', '❯ 1. Yes', '  2. No'],
+  });
+  assert.equal((await superviseStep(waiting, options, menu.deps)).phase, 'unknown');
+  assert.equal(menu.commands.filter((a) => a[1] === 'send').length, 0);
+  const quota = screenHarness({
+    source: 'screen',
+    tail: [...ANTIGRAVITY_SCREEN.slice(0, -1), 'Usage limit reached · limit resets 14:50'],
+  });
+  assert.equal((await superviseStep(waiting, options, quota.deps)).reason, 'capacity_blocked');
+  assert.equal(quota.commands.filter((a) => a[1] === 'send').length, 0);
+});
+
+test('historical quota text in a stream fallback is uncertainty, not a current capacity block', async () => {
+  const oldQuota = ['Usage limit reached · limit resets 14:50', 'Continuing automatically', '>'];
+  for (const terminal of [
+    { source: 'screen-unavailable', tail: oldQuota },
+    { source: 'stream', tail: oldQuota },
+    { tail: oldQuota },
+  ]) {
+    const h = screenHarness(terminal);
+    const state = await superviseStep({ ...waiting, checkedAt: NOW - 500 }, options, h.deps);
+    assert.equal(state.phase, 'unknown');
+    assert.equal(state.reason, 'screen_not_rendered');
+    assert.equal(h.commands.filter((a) => a[1] === 'send').length, 0);
+    assert.equal(
+      state.gaps.some((g) => g.reason === 'capacity_blocked'),
+      false,
+    );
+    assert.deepEqual(state.gaps, [{ from: NOW - 500, reason: 'screen_not_rendered', to: NOW, phase: 'unknown' }]);
+  }
+  const rendered = screenHarness({ source: 'screen', tail: oldQuota });
+  assert.equal((await superviseStep(waiting, options, rendered.deps)).reason, 'capacity_blocked');
+});

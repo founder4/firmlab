@@ -34,6 +34,11 @@ printf '%s\n' "$!" > /absolute/path/unique-campaign.pid
   On macOS, optional `--keep-awake` holds a process-bound sleep assertion, without changing power settings.
   Use `--orca <resolved-cli>` when needed; never silently fall back to a different Orca build.
 - Verify the PID is alive and the journal has a successful first observation of the expected owner.
+- Before relying on the guard for a provider (Claude, Codex, Antigravity, or a new CLI version), prove one
+  actual idle recovery round trip on that provider: the owner finishes a turn, the journal shows `idle` (not
+  `unknown`) with `uncertainty: null`, a resume is submitted, and the journal settles it as `confirmed` from
+  fresh execution. Native `done`, a blank tail or a connected PTY is not that proof. If the journal stays
+  `unknown`, the guard is observing, not supervising: keep the coordinator on rolling waits yourself.
   A connected terminal alone or a prose status does not establish execution. Do not promise continuous
   operation while startup is blocked or unproven. Keep rolling `check --wait --timeout-ms 30000` calls
   outstanding while coordinating unfinished work, processing every Delivery before ack.
@@ -54,8 +59,15 @@ different provider or independent account capacity domain. Prepare a verified cr
 BEFORE limits are reached; native adoption proof remains mandatory. A capacity warning is not actual
 exhaustion; do not change accounts, models, permissions, or credits, and never automatically answer selectors.
 
-The guard resumes only a positively idle owner with a readable empty input prompt. When a provider quota or
-session limit screen is captured (e.g. usage limit reached, limit resets, continuing automatically), the
+The guard resumes only a positively idle owner with a readable empty input prompt, read from the rendered
+screen (`terminal read --screen`): a TUI that repaints its composer, like Antigravity, never emits it at the end
+of the accumulated stream. Any `draft` the read reports other than absent or exactly empty (whitespace or an
+unexpected type included) is excluded from the rendered tail, so it blocks input as `composer_draft_present` however empty the prompt looks. Every interval the guard cannot
+classify (`input_prompt_unrecognized`, `screen_unreadable`, `screen_not_rendered` for a stream fallback or older host, a draft, a lost owner) is journaled in `gaps` as
+`{from, to, reason, phase: 'unknown'}`, from the last observation before it to the observation that ended it,
+with the open one also in `uncertainty`. That is uncertainty, not proven inactivity and not health. When a provider quota or
+session limit screen is captured on a rendered frame (quota text in a stream fallback is history, so it is
+`screen_not_rendered` uncertainty) (e.g. usage limit reached, limit resets, continuing automatically), the
 supervisor positively records an explicit `blocked` phase with `capacity_blocked` reason and durable bounded
 gap timestamps in `gaps`, rather than reporting `unknown` with empty gaps. It never submits prompts into
 quota screens, composers, or menus, never equates quota to process death or exit, and never performs an automatic
@@ -71,7 +83,8 @@ remain held for compatibility. The journal records the exact `locks` paths. Stop
 arbitrary custom temporary directories before upgrading; unknown legacy paths cannot be enumerated safely.
 A lost submission stays pending rather than producing a duplicate prompt. Observe the original terminal
 and receipt before manual recovery; use the original Orca request ID for a transport replay, never a new send.
-Check `reason`, `pending`, `lastSubmission` and `gaps` in the journal; blocked is not service exhaustion.
+Check `reason`, `uncertainty`, `pending`, `lastSubmission` and `gaps` in the journal; blocked is not service
+exhaustion, and an `unknown` interval proves neither idleness nor work. `gaps` keeps the latest 100 entries.
 After SIGKILL, prove the lock's PID is gone and no guard still owns the Run before removing that exact lock.
 
 Cancellation signals only the verified guard PID; it does not kill user terminals or workers. At the fixed
