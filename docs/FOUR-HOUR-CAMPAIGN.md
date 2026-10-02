@@ -100,3 +100,6 @@ reiniciada sobre el build actual porque la instancia anterior era previa a la ru
 errores de consola ni peticiones fallidas; sin Renode en el host, el clic devuelve `blocked_by_platform` con el
 motivo. Límites que siguen en pie: no hay ELF FreeRTOS real en el corpus; la RAM capturada de Zephyr no prueba
 tareas; las etiquetas de familia de switch y el fabricante son sólo indicios; falta validar la red real del WR940N.
+
+Cierre a las 15:07:39 UTC: el supervisor salió solo con `phase: deadline` y `gaps: []` en la ventana de la generación 6;
+la API sintética se detuvo tras verificar su identidad. Esto no corrige retroactivamente las dos interrupciones.
