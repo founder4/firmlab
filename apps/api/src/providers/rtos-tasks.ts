@@ -299,7 +299,10 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
 const sentinelFailed = (r: FreeRtosTaskListResult) =>
   r.attempted === 0 && (r.coverage === 'out_of_range' || r.coverage === 'truncated');
 
-function listBytes(r: FreeRtosTaskListResult, layout: FreeRtosLayout): { bytesAttempted: number; bytesCompleted: number } {
+function listBytes(
+  r: FreeRtosTaskListResult,
+  layout: FreeRtosLayout,
+): { bytesAttempted: number; bytesCompleted: number } {
   if (r.coverage === 'missing_symbol') return { bytesAttempted: 0, bytesCompleted: 0 };
   const sentinel = listSentinelHeadSize(layout);
   if (sentinelFailed(r)) return { bytesAttempted: sentinel, bytesCompleted: 0 };

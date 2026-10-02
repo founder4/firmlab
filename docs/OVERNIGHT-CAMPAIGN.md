@@ -218,5 +218,38 @@ ceder propiedad. No dejar agentes reclamables sin decisión ni cerrar terminales
   - `pnpm build`: bundles de producción limpios (core, api, web).
   - `pnpm biome`: 638 ficheros verificados, 0 errores, 0 avisos; scripts de pre-commit limpios.
 
+### Ola 5 (revisada, corregida e integrada por el coordinador)
+
+- Claude completó `task_39009aa7c6d8` (`ctx_ba08fcd194be`) en worktree `overnight-http-abort` con commit `4c637be`:
+  - `packages/core/src/rtos-tasks.ts`: recorrido generalizado de listas con nombre de FreeRTOS (`parseFreeRtosNamedList`, `parseFreeRtosList`) para los 6 tipos de listas (`ready`, `delayed`, `delayed_overflow`, `suspended`, `pending`, `terminated`). Verificación de `uxNumberOfItems`, punteros inversos `pxContainer`, orden de ticks de despertar para listas delayed, compatibilidad hacia atrás para `parseFreeRtosReadyList` y `parseFreeRtosCurrentTask`.
+  - **Corrección de alineación ABI C de 64 bits (`ba17ca4`)**: El coordinador identificó la discrepancia de diseño reportada por el worker (empaquetado sin padding) y la corrigió formalmente según el estándar C natural. `pointerAlignmentPadding(layout)` inserta 4 bytes de relleno tras el campo de 4 bytes `TickType_t xItemValue` en arquitecturas de 64 bits para alinear naturalmente punteros a 8 bytes; `listItemRecordSize` (20 bytes en 32-bit, 40 en 64-bit) y `listSentinelHeadSize` (8 bytes en 32-bit, 16 en 64-bit). Fixture de 64 bits actualizada con evidencia autoritativa.
+  - `apps/api/src/providers/rtos-tasks.ts`: soporte para `delayedLists`, `suspendedList`, `pendingReadyList`, `terminatedList`, cálculo de bytes con tamaños reales de nodo/centinela, rechazo de direcciones de lista duplicadas, reporte de tipos no recorridos y detección de TCB en múltiples listas de estado.
+  - `apps/web/src/components/RtosTaskSnapshotPanel.tsx`: entradas de dirección para listas de estado, tabla de carriles de estado con inspección de ticks de despertar en listas delayed, localización completa EN/ES.
+  - 14 tests en `packages/core/test/rtos-tasks.test.ts`, 15 tests en `apps/api/src/rtos-tasks.test.ts`, 12 tests en `apps/web/src/components/RtosTaskSnapshotPanel.test.tsx` pasando.
+- Claude completó `task_001482f20be7` (`ctx_e5e1e3b5c19c`) en worktree `overnight-settings` con commit `859ccf4`:
+  - `apps/web/src/pages/Corpus.tsx`: aviso localizado de estado vacío cuando `deviceFamilies.length === 0`. Filtro rápido accesible (`TableSearch`) en Credential Reuse (filtra hash, tipo, etiqueta de watchlist) y Component Prevalence (filtra nombre, versión), con recuento de coincidencias, mensaje de sin coincidencias, botón Limpiar y flex-wrap responsivo para evitar overflow a 390px.
+  - Localización completa en `locales/{en,es}/corpus.ts`.
+  - 24 tests en `apps/web/src/pages/Corpus.test.tsx` pasando.
+- Verificación sintética Playwright en navegador Chromium (`scripts/qa-wave5.mjs`):
+  - Verifica en 4 variantes matriciales (`en-390`, `en-1440`, `es-390`, `es-1440`):
+    1. Corpus: estado vacío de familias de dispositivos, filtro rápido de reutilización de credenciales y prevalencia de componentes, verificación de `scrollWidth <= width` (390px y 1440px).
+    2. ImageDetail (sección bootloader): renderizado del panel FreeRTOS, carriles `delayed` con ticks de despertar (`tick 50`, `tick 90`), carril `suspended`, campos de entrada de direcciones de listas de estado, verificación de `scrollWidth <= width` (390px y 1440px).
+  - Ejecución con salida limpia (código 0).
+- Validación completa de repositorio:
+  - `pnpm --filter @firmlab/core build`: limpio.
+  - `pnpm check`: 3 de 3 paquetes TypeScript limpios (0 errores).
+  - `pnpm test`: suite completa pasada (core: 394, API: 2.807, web: 805, scripts: 69; 0 fallos).
+  - `pnpm build`: bundles de producción limpios (core, api, web).
+  - `pnpm biome`: 640 ficheros verificados, 0 errores, 0 avisos; scripts de pre-commit limpios.
+
+### Contabilidad de actividad, traspaso y cierre de ventana
+
+- **Ventana original de la campaña**: 2026-10-01T23:12:49Z a 2026-10-02T07:12:49Z (09:12:49 Madrid).
+- **Periodo observable de actividad inicial**: 2026-10-01T23:12:49Z a 2026-10-02T00:54:11Z (~1h41m).
+- **Intervalo no verificado**: Entre 00:54Z y 07:20Z no existen registros verificables de turnos activos ni salida observable de trabajadores (la mera conexión de terminales no constituye prueba de ejecución activa). No se reivindica actividad continua de 8 horas.
+- **Cierre y continuación**: Ante la reactivación del usuario a las ~07:20Z / 09:20 CEST autorizando la continuación ("sigue"), se procedió a revisar e integrar el trabajo completado de la Ola 5, resolver la brecha de alineación C de 64 bits, ejecutar QA en navegador y correr la validación repositorio-completo.
+- **Traspaso de coordinador**: No se ejecutó traspaso de la coordinación porque la capacidad de contexto/tokens de la instancia de coordinación (Antigravity `term_3d93fd95-87f9-4df8-841b-a37e8b41611b`, gen 2) se mantuvo en márgenes funcionales y estables. El mandato estipulaba el traspaso previo al agotamiento de contexto/cuota ("before context/token/quota exhaustion"); retener la coordinación permitió mantener la continuidad de integración y evitar churn innecesario en la flota.
+
+
 
 

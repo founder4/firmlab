@@ -80,9 +80,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   base, endian y anchura de puntero (validado antes del parser; nada se infiere ni se toma por defecto) más las
   direcciones de símbolos que aporta el operador, y persiste por carril cobertura, nodos y bytes
   intentados/completados y los límites aplicados, como máximo `needs_runtime_reproduction` y sin sincronizar
-  findings. Faltan una fuente real de símbolos/memoria (ELF + volcado Renode/QEMU), las listas de tareas
-  retrasadas/suspendidas/bloqueadas, una vista web y fuzzing de periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode
-  sigue demostrando vida, no cobertura del HAL.
+  findings. *(Actualizado en Ola 5: completado el recorrido tipado de listas con nombre —delayed, suspended,
+  pending ready, terminated— con orden de ticks de despertar y verificación de punteros de contenedor en `4c637be`,
+  corregida la alineación natural estándar de punteros ABI C de 64 bits en `ba17ca4`, e integrada la vista web
+  responsiva con entradas de dirección e inspección de ticks en `RtosTaskSnapshotPanel`).* Faltan una fuente real de
+  símbolos/memoria (ELF + volcado Renode/QEMU), colas de eventos/bloqueo y fuzzing de periféricos/MMIO
+  (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Siguen pendientes
   LogoFAIL, callouts SMM (`CommBuffer`) y una captura PRx/BIOS-lock que pruebe la postura en ejecución.
