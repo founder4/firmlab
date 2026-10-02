@@ -161,4 +161,25 @@ export const rtosTasks = {
     readyManual:
       'Ready lists stay manual: per-priority addresses need sizeof(List_t) and configMAX_PRIORITIES, which are not inferred from a symbol size.',
   },
+
+  ramCapture: {
+    heading: 'RAM snapshot from Renode emulation (optional)',
+    intro:
+      'Run the firmware under Renode for a bounded duration, pause emulation, and capture the peripheral SRAM to analyze task structures. The capture is a lead: it proves what the emulated SoC wrote, not that the scheduler ran or that tasks exist.',
+    capture: 'Emulate & capture RAM',
+    recapture: 'Capture RAM again',
+    capturing: 'Emulating and capturing RAM…',
+    loadIntoForm: 'Load into form',
+    loadedIntoForm: 'Captured RAM loaded into snapshot form.',
+    notRun: 'No Renode RAM snapshot has been captured for this image.',
+    failed: 'RAM capture failed.',
+    capturedHeading: 'Renode RAM captured',
+    capturedSummary: (name: string, base: string, bytes: number, sec: number) =>
+      `Captured ${bytes.toLocaleString()} bytes from peripheral '${name}' (${base}) after ${sec}s of emulation.`,
+    platform: (name: string) => `Platform: ${name}`,
+    refused: 'RAM capture refused:',
+    remoteRefused: (count: number) => `${count} remote resource request(s) refused (offline containment).`,
+    notAvailable: 'Renode is not available on this bench.',
+    secondsLabel: 'Emulation seconds',
+  },
 };

@@ -160,4 +160,25 @@ export const rtosTasks: Messages['rtosTasks'] = {
     readyManual:
       'Las listas de tareas listas siguen siendo manuales: las direcciones por prioridad necesitan sizeof(List_t) y configMAX_PRIORITIES, que no se deducen del tamaño de un símbolo.',
   },
+
+  ramCapture: {
+    heading: 'Instantánea de RAM desde emulación Renode (opcional)',
+    intro:
+      'Ejecuta el firmware bajo Renode durante un tiempo acotado, pausa la emulación y vuelca la SRAM periférica para analizar estructuras de tareas. La captura es un indicio: prueba lo que escribió el SoC emulado, no que el planificador haya arrancado o que existan tareas.',
+    capture: 'Emular y volcar RAM',
+    recapture: 'Volver a volcar RAM',
+    capturing: 'Emulando y volcando RAM…',
+    loadIntoForm: 'Cargar en el formulario',
+    loadedIntoForm: 'RAM capturada cargada en el formulario.',
+    notRun: 'No se ha capturado ninguna instantánea de RAM con Renode para esta imagen.',
+    failed: 'El volcado de RAM falló.',
+    capturedHeading: 'RAM capturada con Renode',
+    capturedSummary: (name: string, base: string, bytes: number, sec: number) =>
+      `Capturados ${bytes.toLocaleString()} bytes del periférico '${name}' (${base}) tras ${sec} s de emulación.`,
+    platform: (name: string) => `Plataforma: ${name}`,
+    refused: 'Volcado de RAM rechazado:',
+    remoteRefused: (count: number) => `${count} petición(es) de recursos remotos rechazada(s) (contención sin red).`,
+    notAvailable: 'Renode no está disponible en este banco.',
+    secondsLabel: 'Segundos de emulación',
+  },
 };

@@ -1637,6 +1637,32 @@ export interface RtosElfSymbolsResult {
 }
 
 /**
+ * RAM snapshot dumped from bounded Renode emulation (`POST/GET /images/:id/rtos/ram-capture`).
+ * Stored on a job row, so every field remains optional forever.
+ */
+export interface RenodeRamCaptureResult {
+  available?: boolean;
+  ran?: boolean;
+  captured?: boolean;
+  reason?: string;
+  proofState?: ProofState;
+  platform?: string | null;
+  region?: { name?: string; base?: number; size?: number } | null;
+  bytesBase64?: string | null;
+  bytes?: string | null;
+  bytesCaptured?: number;
+  seconds?: number;
+  secondsRun?: number;
+  layout?: {
+    endian?: 'little' | 'big';
+    pointerWidth?: 4 | 8;
+  };
+  remoteResourcesRefused?: string[];
+  command?: string;
+  isolation?: string;
+}
+
+/**
  * Shapes of the three providers whose results this UI reads field by field rather than only counting findings.
  *
  * EVERY field is optional, without exception, and that is not defensive style — it is the rule this codebase paid
@@ -2482,6 +2508,11 @@ export const api = {
   runRtosElfSymbols: (id: string) => post<{ jobId: string }>(`/api/images/${id}/rtos/elf-symbols`, {}),
   rtosElfSymbolsResult: (id: string) =>
     get<{ result: RtosElfSymbolsResult | null }>(`/api/images/${id}/rtos/elf-symbols`).then((r) => r.result),
+  /** Renode bounded RAM capture for RTOS snapshot walking (a job; nothing is synced). */
+  runRenodeRamCapture: (id: string, opts?: { seconds?: number; platform?: string }) =>
+    post<{ jobId: string }>(`/api/images/${id}/rtos/ram-capture`, opts ?? {}),
+  renodeRamCaptureResult: (id: string) =>
+    get<{ result: RenodeRamCaptureResult | null }>(`/api/images/${id}/rtos/ram-capture`).then((r) => r.result),
   /**
    * The same GET, typed for the callers that read a provider's fields rather than only its finding count. Separate
    * from `analysisResult` so that one keeps its deliberately narrow shape — a caller that only counts findings

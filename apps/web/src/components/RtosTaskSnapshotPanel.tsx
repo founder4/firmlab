@@ -26,6 +26,7 @@
  */
 import { type JSX, useEffect, useRef, useState } from 'react';
 import {
+  type RenodeRamCaptureResult,
   type RtosElfSymbolStatus,
   type RtosElfSymbolsResult,
   type RtosNamedListLane,
@@ -242,6 +243,12 @@ export function RtosTaskSnapshotPanel({
   const [elfError, setElfError] = useState<string | null>(null);
   const [elfFilled, setElfFilled] = useState<string[] | null>(null);
   const elfTimer = useRef<number | null>(null);
+  const [ramCapture, setRamCapture] = useState<RenodeRamCaptureResult | null>(null);
+  const [ramBusy, setRamBusy] = useState(false);
+  const [ramError, setRamError] = useState<string | null>(null);
+  const [ramLoaded, setRamLoaded] = useState(false);
+  const [ramSeconds, setRamSeconds] = useState(2);
+  const ramTimer = useRef<number | null>(null);
 
   useEffect(() => {
     api
@@ -255,11 +262,72 @@ export function RtosTaskSnapshotPanel({
       .rtosElfSymbolsResult(imageId)
       .then(setElf)
       .catch(() => setElf(null));
+    api
+      .renodeRamCaptureResult(imageId)
+      .then(setRamCapture)
+      .catch(() => setRamCapture(null));
     return () => {
       if (timer.current) window.clearInterval(timer.current);
       if (elfTimer.current) window.clearInterval(elfTimer.current);
+      if (ramTimer.current) window.clearInterval(ramTimer.current);
     };
   }, [imageId]);
+
+  const loadRamIntoForm = (cap: RenodeRamCaptureResult | null) => {
+    if (!cap?.captured || !cap.bytesBase64 || !cap.region) return;
+    try {
+      const bin = atob(cap.bytesBase64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      setForm((f) => ({
+        ...f,
+        bytes,
+        base: hex(cap.region?.base),
+        endian: cap.layout?.endian ?? f.endian,
+        pointerWidth: cap.layout?.pointerWidth ? (String(cap.layout.pointerWidth) as '4' | '8') : f.pointerWidth,
+      }));
+      setErrors((e) => {
+        const { file: _drop, base: _b, endian: _end, pointerWidth: _pw, ...rest } = e;
+        return rest;
+      });
+      setRamLoaded(true);
+    } catch {
+      setRamError(m.ramCapture.failed);
+    }
+  };
+
+  const captureRam = async () => {
+    setRamBusy(true);
+    setRamError(null);
+    setRamLoaded(false);
+    try {
+      const { jobId } = await api.runRenodeRamCapture(imageId, { seconds: ramSeconds });
+      ramTimer.current = window.setInterval(async () => {
+        try {
+          const j = await api.job(jobId);
+          if (j.status !== 'done' && j.status !== 'error' && j.status !== 'cancelled') return;
+          if (ramTimer.current) window.clearInterval(ramTimer.current);
+          setRamBusy(false);
+          if (j.status === 'done') {
+            const cap = j.result as RenodeRamCaptureResult;
+            setRamCapture(cap);
+            if (cap.captured) {
+              loadRamIntoForm(cap);
+            }
+          } else if (j.status === 'error') {
+            setRamError(j.error ?? m.ramCapture.failed);
+          }
+        } catch (err) {
+          if (ramTimer.current) window.clearInterval(ramTimer.current);
+          setRamBusy(false);
+          setRamError(err instanceof Error ? err.message : m.ramCapture.failed);
+        }
+      }, 900);
+    } catch (err) {
+      setRamBusy(false);
+      setRamError(err instanceof Error ? err.message : m.ramCapture.failed);
+    }
+  };
 
   const fillFromElf = (read: RtosElfSymbolsResult | null) => {
     const { filled } = applyElfPrefill(EMPTY_FORM, read);
@@ -385,6 +453,18 @@ export function RtosTaskSnapshotPanel({
         onRead={() => void readElf()}
         onFill={() => fillFromElf(elf)}
         m={m.elfSymbols}
+      />
+
+      <RenodeRamCaptureView
+        capture={ramCapture}
+        busy={ramBusy}
+        error={ramError}
+        loaded={ramLoaded}
+        seconds={ramSeconds}
+        onSecondsChange={setRamSeconds}
+        onCapture={() => void captureRam()}
+        onLoad={() => loadRamIntoForm(ramCapture)}
+        m={m.ramCapture}
       />
 
       <form onSubmit={submit} noValidate style={{ display: 'grid', gap: 12, marginTop: 14, maxWidth: '72ch' }}>
@@ -996,6 +1076,114 @@ function ElfSymbols({
                 ))}
               </ul>
             </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function RenodeRamCaptureView({
+  capture,
+  busy,
+  error,
+  loaded,
+  seconds,
+  onSecondsChange,
+  onCapture,
+  onLoad,
+  m,
+}: {
+  capture: RenodeRamCaptureResult | null;
+  busy: boolean;
+  error: string | null;
+  loaded: boolean;
+  seconds: number;
+  onSecondsChange: (sec: number) => void;
+  onCapture: () => void;
+  onLoad: () => void;
+  m: M['ramCapture'];
+}): JSX.Element {
+  const cap = capture;
+  const captured = Boolean(cap?.captured && cap?.bytesBase64 && cap?.region);
+  return (
+    <section aria-label={m.heading} style={{ marginTop: 14, maxWidth: '72ch', display: 'grid', gap: 8 }}>
+      <div className="eyebrow">{m.heading}</div>
+      <div className="hint">{m.intro}</div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={onCapture}>
+          {busy ? (
+            <>
+              <span className="spinner" /> {m.capturing}
+            </>
+          ) : cap ? (
+            m.recapture
+          ) : (
+            m.capture
+          )}
+        </button>
+        <label className="hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0 }}>
+          <span>{m.secondsLabel}:</span>
+          <input
+            type="number"
+            className="input input-sm mono"
+            style={{ width: 64 }}
+            min={1}
+            max={30}
+            value={seconds}
+            disabled={busy}
+            onChange={(e) => {
+              const val = Number.parseInt(e.target.value, 10);
+              if (Number.isInteger(val) && val >= 1 && val <= 30) onSecondsChange(val);
+            }}
+          />
+        </label>
+        {captured && !busy && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={onLoad}>
+            {m.loadIntoForm}
+          </button>
+        )}
+      </div>
+      {error && (
+        <div className="banner banner-warn">
+          <span className="eyebrow">{m.failed}</span>
+          <p style={{ margin: '4px 0 0' }}>{error}</p>
+        </div>
+      )}
+      {loaded && <output className="hint">{m.loadedIntoForm}</output>}
+      {!cap ? (
+        !busy && <div className="hint">{m.notRun}</div>
+      ) : (
+        <>
+          {cap.available === false && <div className="banner banner-warn">{m.notAvailable}</div>}
+          {captured && cap.region && (
+            <div className="banner banner-ok">
+              <span className="eyebrow">{m.capturedHeading}</span>
+              <p style={{ margin: '4px 0 0' }}>
+                {m.capturedSummary(
+                  cap.region.name ?? 'sram',
+                  hex(cap.region.base),
+                  cap.bytesCaptured ?? 0,
+                  cap.secondsRun ?? cap.seconds ?? 2,
+                )}
+              </p>
+              {cap.platform && (
+                <p className="hint mono" style={{ margin: '4px 0 0' }}>
+                  {m.platform(cap.platform)}
+                </p>
+              )}
+            </div>
+          )}
+          {cap.captured === false && cap.reason && (
+            <div className="banner banner-warn">
+              <span className="eyebrow">{m.refused}</span>
+              <p style={{ margin: '4px 0 0' }}>{cap.reason}</p>
+            </div>
+          )}
+          {cap.remoteResourcesRefused && cap.remoteResourcesRefused.length > 0 && (
+            <p className="hint mono" style={{ margin: 0 }}>
+              {m.remoteRefused(cap.remoteResourcesRefused.length)}
+            </p>
           )}
         </>
       )}

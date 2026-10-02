@@ -32,6 +32,7 @@ beforeEach(() => {
   setLocale('en');
   mockApi.rtosTasksResult.mockResolvedValue(null);
   mockApi.rtosElfSymbolsResult.mockResolvedValue(null);
+  mockApi.renodeRamCaptureResult.mockResolvedValue(null);
 });
 
 const e = m.elfSymbols;
@@ -316,6 +317,101 @@ describe('RtosTaskSnapshotPanel — ELF symbols', () => {
     expect(await screen.findByText('503 Service Unavailable')).toBeInTheDocument();
     expect(screen.getByText(e.failed)).toBeInTheDocument();
     expect(screen.getByLabelText(m.field.pxCurrentTCB)).toHaveValue('');
+  });
+});
+
+describe('RtosTaskSnapshotPanel — Renode RAM capture', () => {
+  const rc = m.ramCapture;
+
+  it('says not run initially and triggers capture with chosen seconds', async () => {
+    mockApi.runRenodeRamCapture.mockResolvedValue({ jobId: 'j-ram' });
+    mockApi.job.mockResolvedValue({
+      status: 'done',
+      result: {
+        available: true,
+        ran: true,
+        captured: true,
+        reason: 'Captured 20480 bytes from sram',
+        proofState: 'needs_runtime_reproduction',
+        platform: 'cpus/stm32l072.repl',
+        region: { name: 'sram', base: 0x20000000, size: 0x5000 },
+        bytesBase64: btoa('HELLO_RAM_WORLD'),
+        bytesCaptured: 15,
+        seconds: 2,
+        secondsRun: 2,
+        layout: { endian: 'little', pointerWidth: 4 },
+      },
+    });
+
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    expect(await screen.findByText(rc.notRun)).toBeInTheDocument();
+
+    const btn = screen.getByRole('button', { name: rc.capture });
+    fireEvent.click(btn);
+
+    expect(mockApi.runRenodeRamCapture).toHaveBeenCalledWith('img', { seconds: 2 });
+    expect(await screen.findByText(rc.capturedHeading)).toBeInTheDocument();
+    expect(screen.getByText(rc.loadedIntoForm)).toBeInTheDocument();
+
+    // Verify fields populated into the form
+    expect(screen.getByLabelText(m.field.base)).toHaveValue('0x20000000');
+    expect(screen.getByLabelText(m.field.endian)).toHaveValue('little');
+    expect(screen.getByLabelText(m.field.pointerWidth)).toHaveValue('4');
+  });
+
+  it('renders refusal reason when RAM capture is refused', async () => {
+    mockApi.runRenodeRamCapture.mockResolvedValue({ jobId: 'j-ram-refused' });
+    mockApi.job.mockResolvedValue({
+      status: 'done',
+      result: {
+        available: true,
+        ran: false,
+        captured: false,
+        reason: 'Firmware is not an ELF binary; raw binaries carry no section headers.',
+        proofState: 'needs_runtime_reproduction',
+        platform: null,
+        region: null,
+        bytesBase64: null,
+        bytesCaptured: 0,
+        seconds: 2,
+        secondsRun: 0,
+      },
+    });
+
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    await screen.findByText(rc.notRun);
+
+    fireEvent.click(screen.getByRole('button', { name: rc.capture }));
+    expect(await screen.findByText(rc.refused)).toBeInTheDocument();
+    expect(
+      screen.getByText('Firmware is not an ELF binary; raw binaries carry no section headers.'),
+    ).toBeInTheDocument();
+  });
+
+  it('displays stored ram capture and allows reloading into form', async () => {
+    mockApi.renodeRamCaptureResult.mockResolvedValue({
+      available: true,
+      ran: true,
+      captured: true,
+      reason: 'Captured 20480 bytes from sram',
+      proofState: 'needs_runtime_reproduction',
+      platform: 'cpus/stm32l072.repl',
+      region: { name: 'sram', base: 0x20000000, size: 0x5000 },
+      bytesBase64: btoa('STORED_RAM_BYTES'),
+      bytesCaptured: 16,
+      seconds: 2,
+      secondsRun: 2,
+      layout: { endian: 'little', pointerWidth: 4 },
+    });
+
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    expect(await screen.findByText(rc.capturedHeading)).toBeInTheDocument();
+
+    const loadBtn = screen.getByRole('button', { name: rc.loadIntoForm });
+    fireEvent.click(loadBtn);
+
+    expect(await screen.findByText(rc.loadedIntoForm)).toBeInTheDocument();
+    expect(screen.getByLabelText(m.field.base)).toHaveValue('0x20000000');
   });
 });
 
