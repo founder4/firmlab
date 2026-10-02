@@ -378,13 +378,18 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   no verificada; Windows rechaza la cancelación de árboles en ejecución y las esperas de red son cooperativas.
 - [ ] **Rutas de la API sin cliente web, de valor medio/bajo** (auditoría del 2026-09-27; las de valor alto —snapshot
   RTOS, funcdiff, lanzar Ghidra, reensamblado BLE/Zigbee— ya tienen UI): `POST /images/:id/analysis` y
-  `/analysis/reanalyze-all` (re-clasificar tras cambiar el clasificador sin borrar y resubir), `POST /corpus/reindex`,
-  `DELETE /images/:id/findings` (retirar hallazgos de una fuente que ya no se planifica), editar una nota
-  (`PATCH …/notes/:noteId`) y leer el estado actual de aprobación del agente en Ajustes. Decidir cuáles son sólo para
-  scripts/MCP antes de construir UI. *(Lanzar `component-cve` y `auxsecrets` sueltos implementado en `7544f9d` con
-  botones dedicados, sondeo de job y refresco acotado del libro mayor de hallazgos; resultados persistidos de
-  `chipsec` y `renode` expuestos en `dbb39d4` en SimulationMenu con vistas compartidas y precedencia de ejecución en vivo;
-  borrador de modelo y baseUrl en Ajustes corregido en `7544f9d` para no blanquear valores guardados.)*
+  `/analysis/reanalyze-all` (re-clasificar tras cambiar el clasificador sin borrar y resubir), y leer el estado actual de
+  aprobación del agente en Ajustes. Decidir cuáles son sólo para scripts/MCP antes de construir UI. *(Lanzar `component-cve` y
+  `auxsecrets` sueltos implementado en `7544f9d` con botones dedicados, sondeo de job y refresco acotado del libro mayor de hallazgos;
+  resultados persistidos de `chipsec` y `renode` expuestos en `dbb39d4` en SimulationMenu con vistas compartidas y precedencia de ejecución
+  en vivo; borrador de modelo y baseUrl en Ajustes corregido en `7544f9d` para no blanquear valores guardados; acción de reindexación y
+  reporte localizado de corpus implementado en `4e04ddb`; edición de notas y retirada de fuentes calculadas con previsualización
+  implementado en `7a06bc5` y `b2738d1`; verificación sintética Playwright de ambas oleadas en Chromium añadida en `a84bc71` vía
+  `scripts/qa-wave2.mjs` y `scripts/qa-wave3.mjs` pasando al 100% en EN y ES en 390px y 1440px).*
+- [ ] **Cap de edición de notas vs MAX_NOTE del API.** La cota de edición de notas en cliente (`MAX_NOTE_EDIT = 4000`) es
+  más estricta que la cota de creación en el API (`MAX_NOTE = 20000`). Una nota generada automáticamente por retirada con
+  muchas filas retiradas puede exceder 4000 caracteres impidiendo su posterior edición manual. Evaluar si equiparar el cap
+  de cliente a 20000 o si las notas de auditoría de retirada deben considerarse registros inmutables.
 
 - [x] Cancelación de esperas HTTP dentro de un job: abortar peticiones y lecturas de cuerpo en curso cuando
   el job se cancela, sin esperar los timeouts de 15s/6s ni emitir peticiones posteriores. `linkJobCancellation`

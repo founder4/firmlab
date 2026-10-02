@@ -170,3 +170,27 @@ ceder propiedad. No dejar agentes reclamables sin decisión ni cerrar terminales
   - `pnpm build`: bundles de producción limpios (core, api, web).
   - `pnpm biome`: 636 ficheros verificados, 0 errores, 0 avisos; scripts de pre-commit limpios (NUL, comentarios, mocks, denominadores y superficie agente).
 
+### Ola 3 integrada y validada (2026-10-02 02:15 UTC+2)
+- Claude completó `task_56301970e341` (`ctx_a864117bfd0d`) con commit `fa3d1ff`, integrado en main como `4e04ddb`:
+  - `Corpus.tsx`: acción de reconciliación/reindexación de corpus (`POST /corpus/reindex` vía `api.reindexCorpus`), renderizado de tarjeta de estado del job y reporte localizado con métricas clave (añadidos, eliminados, no modificados, hashes de manifest y tiempo transcurrido).
+  - Textos internacionalizados en `locales/{en,es}/corpus.ts`.
+  - 14 tests unitarios en `Corpus.test.tsx` cubriendo estados de idle, progreso, éxito con métricas y tratamiento de errores.
+- Claude completó `task_6af0e96b4b52` (`ctx_738ba4529f91`) con commit `39d3329`, integrado en main como `7a06bc5`:
+  - `OperatorPanel.tsx`: edición en línea de notas existentes (`PATCH /images/:id/notes/:noteId` vía `api.updateNote`) con modal/formulario acotado, validación de longitud y preservación de notas preexistentes.
+  - Retirada controlada de hallazgos computados obsoletos (`DELETE /images/:id/findings` vía `api.retireFindings`) con previsualización de conteo por severidad/estado antes de confirmar, y generación automática de nota de auditoría.
+  - Textos internacionalizados en `locales/{en,es}/operator.ts`.
+  - Tests unitarios en `OperatorPanel.test.tsx`.
+- Mejoras y validación en main:
+  - Commit `b2738d1`: tratamiento de error en `apps/web/src/api.ts` para exponer mensajes de error del servidor de forma íntegra en fallos de `retireFindings`.
+  - Commit `a84bc71`: suite sintética Playwright en `scripts/qa-wave2.mjs` y `scripts/qa-wave3.mjs` verificando el comportamiento real de navegador en Chromium para Ola 2 y Ola 3 en 4 variantes matriciales (`en-390`, `en-1440`, `es-390`, `es-1440`). Ambas ejecuciones finalizan limpiamente con código 0.
+- Validación completa de repositorio ejecutada con éxito:
+  - `pnpm --filter @firmlab/core build`: limpio.
+  - `pnpm check`: 3 de 3 paquetes TypeScript limpios.
+  - `pnpm test`: 4.030 tests pasados (core: 380, API: 2.805, web: 778, scripts: 69; 0 fallos).
+  - `pnpm build`: bundles de producción limpios (core, api, web).
+  - `pnpm biome`: 638 ficheros verificados, 0 errores, 0 avisos; scripts de pre-commit limpios.
+- Registro en `docs/BACKLOG.md`:
+  - Se marcó como completado el soporte de `reindexCorpus`, `retireFindings` y edición de notas.
+  - Se registró como nuevo ítem diferido el cap de edición de notas (`MAX_NOTE_EDIT = 4000`) vs creación API (`MAX_NOTE = 20000`).
+
+
