@@ -83,9 +83,17 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   findings. *(Actualizado en Ola 5: completado el recorrido tipado de listas con nombre —delayed, suspended,
   pending ready, terminated— con orden de ticks de despertar y verificación de punteros de contenedor en `4c637be`,
   corregida la alineación natural estándar de punteros ABI C de 64 bits en `ba17ca4`, e integrada la vista web
-  responsiva con entradas de dirección e inspección de ticks en `RtosTaskSnapshotPanel`).* Faltan una fuente real de
-  símbolos/memoria (ELF + volcado Renode/QEMU), colas de eventos/bloqueo y fuzzing de periféricos/MMIO
-  (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
+  responsiva con entradas de dirección e inspección de ticks en `RtosTaskSnapshotPanel`).* *(2026-10-02: fuente real de
+  SÍMBOLOS hecha — `packages/core/src/elf-symbols.ts` lee cada `SHT_SYMTAB` con locales (las listas de `tasks.c` son
+  `static`), marca duplicados como ambiguos y la variante SMP `pxCurrentTCBs` aparte; `POST/GET
+  /images/:id/rtos/elf-symbols` y el panel rellenan sólo símbolos resueltos a una única dirección absoluta. Validado
+  en sólo lectura contra el corpus: Zephyr-STM32L072 y Contiki-STM32F4 dan tabla leída con 0/11 nombres FreeRTOS, y
+  `dragon_reto_stripped.elf` da `no-static-symbol-table`, declarado como no-negativo; el corpus no tiene ningún ELF
+  FreeRTOS, así que el caso resuelto sólo está probado con ELF sintéticos.)* Faltan: un ELF FreeRTOS real, la fuente
+  real de MEMORIA (volcado Renode/QEMU), las listas ready por prioridad (exigen `sizeof(List_t)` y
+  `configMAX_PRIORITIES`; `listRecordSize` sólo da el stride bajo el layout que recorre el parser), colas de
+  eventos/bloqueo y fuzzing de periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura
+  del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Siguen pendientes
   LogoFAIL, callouts SMM (`CommBuffer`) y una captura PRx/BIOS-lock que pruebe la postura en ejecución.
