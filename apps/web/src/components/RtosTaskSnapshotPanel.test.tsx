@@ -254,6 +254,18 @@ describe('RtosTaskSnapshotPanel', () => {
     expect(await screen.findByText(m.result.readyArray('0x20000100', 2, 20, true))).toBeInTheDocument();
   });
 
+  it('labels the lane of an unresolved declared array as such, never as no list supplied', async () => {
+    mockApi.rtosTasksResult.mockResolvedValue({
+      coverage: 'partial',
+      summary: '0 ready task record(s) found, but ready list array (base unresolved): missing_symbol',
+      readyLists: [{ priority: null, listAddress: null, coverage: 'missing_symbol', evidence: [] }],
+      readyListArray: { base: null, maxPriorities: 3, listSize: 20, stride: 20, sizeCrossCheck: 'not_available' },
+    });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    expect(await screen.findByText(m.result.readyArrayUnresolved)).toBeInTheDocument();
+    expect(screen.queryByText(m.result.noListSupplied)).toBeNull();
+  });
+
   it('shows no state-list section for a result stored before those lanes existed', async () => {
     mockApi.rtosTasksResult.mockResolvedValue({ coverage: 'complete', readyLists: [] });
     render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
@@ -299,6 +311,31 @@ describe('RtosTaskSnapshotPanel — ELF symbols', () => {
     // Byte order and pointer width are shown, never filled: the snapshot layout stays the analyst's declaration.
     expect(screen.getByLabelText(m.field.endian)).toHaveValue('');
     expect(screen.getByLabelText(m.field.pointerWidth)).toHaveValue('');
+  });
+
+  it('clears the array-address error once an ELF fill supplies the address', async () => {
+    const read: RtosElfSymbolsResult = {
+      ...ELF_READ,
+      symbols: [
+        ...(ELF_READ.symbols ?? []),
+        { name: 'pxReadyTasksLists', status: 'resolved', candidates: [{ address: 0x20000100 }] },
+      ],
+      prefill: { ...ELF_READ.prefill, readyListArray: { base: 0x20000100, symbolSize: 0 } },
+    };
+    mockApi.runRtosElfSymbols.mockResolvedValue({ jobId: 'j1' });
+    mockApi.job.mockResolvedValue({ status: 'done', result: read });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    await screen.findByText(e.notRun);
+    await fill();
+    fireEvent.change(screen.getByLabelText(m.field.maxPriorities), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText(m.field.listSize), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: m.run }));
+    expect(await screen.findByText(m.error.arrayBase)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: e.read }));
+    await waitFor(() => expect(screen.getByLabelText(m.field.arrayBase)).toHaveValue('0x20000100'), { timeout: 3000 });
+    expect(screen.queryByText(m.error.arrayBase)).toBeNull();
+    // st_size 0 is the ELF's "unknown size": never pre-filled as a size to compare.
+    expect(screen.getByLabelText(m.field.symbolSize)).toHaveValue('');
   });
 
   it('shows a stored read without applying it until the analyst asks', async () => {
@@ -643,6 +680,21 @@ describe('buildSnapshotRequest', () => {
     expect(mismatch.ok === false && mismatch.errors['readyArray.symbolSize']).toBe(
       m.error.symbolSizeMismatch(64, 3, 20),
     );
+  });
+
+  it('refuses an array that overflows the address space as a field error, in hex', () => {
+    const r = buildSnapshotRequest({ ...base, readyArray: { ...array, base: '0xfffffff0', maxPriorities: '2' } }, m);
+    expect(r.ok === false && r.errors['readyArray.base']).toBe(m.error.arrayOverflow('0xfffffff0', 40, 32));
+  });
+
+  it('treats st_size 0 as unknown: sent as not available, never compared', () => {
+    const r = buildSnapshotRequest({ ...base, readyArray: { ...array, symbolSize: '0' } }, m);
+    expect(r.ok && r.input.symbols.readyListArray).toEqual({
+      base: 0x100,
+      maxPriorities: 3,
+      listSize: 20,
+      symbolSize: null,
+    });
   });
 
   it('refuses two ready lists at one address instead of letting the walk count it twice', () => {

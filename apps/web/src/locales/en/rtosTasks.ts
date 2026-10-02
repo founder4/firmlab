@@ -72,6 +72,8 @@ export const rtosTasks = {
       `The walk reads a ${expected}-byte List_t with this pointer width. A build with list-integrity bytes or a wider tick type has a different layout, which this walk refuses rather than misreads.`,
     listSizeNumber: 'Enter sizeof(List_t) as a positive whole number of bytes.',
     symbolSize: 'Enter st_size as a whole number of bytes, or leave it empty.',
+    arrayOverflow: (base: string, bytes: number, bits: number) =>
+      `An array at ${base} spanning ${bytes} bytes does not fit the ${bits}-bit address space.`,
     symbolSizeMismatch: (size: number, n: number, list: number) =>
       `st_size is ${size} bytes but ${n} × ${list} is ${n * list}; one of the three numbers is wrong.`,
     fixFields: 'Fix the highlighted fields before walking the snapshot.',
@@ -125,6 +127,7 @@ export const rtosTasks = {
     currentLane: 'pxCurrentTCB',
     readyLane: (address: string) => `ready list @ ${address}`,
     noListSupplied: 'no ready list supplied',
+    readyArrayUnresolved: 'ready-list array declared, address not resolved',
     readyArray: (base: string, n: number, size: number, checked: boolean) =>
       `Ready lists derived from pxReadyTasksLists @ ${base}: ${n} declared priorities × ${size} bytes. ${
         checked

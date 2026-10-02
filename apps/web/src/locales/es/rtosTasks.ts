@@ -70,6 +70,8 @@ export const rtosTasks: Messages['rtosTasks'] = {
       `El recorrido lee un List_t de ${expected} bytes con este ancho de puntero. Una compilación con bytes de integridad de lista o un tipo de tick más ancho tiene otro formato, que este recorrido rechaza en vez de leerlo mal.`,
     listSizeNumber: 'Introduce sizeof(List_t) como un número entero positivo de bytes.',
     symbolSize: 'Introduce st_size como un número entero de bytes, o déjalo vacío.',
+    arrayOverflow: (base, bytes, bits) =>
+      `Un array en ${base} que ocupa ${bytes} bytes no cabe en el espacio de direcciones de ${bits} bits.`,
     symbolSizeMismatch: (size, n, list) =>
       `st_size es ${size} bytes pero ${n} × ${list} son ${n * list}; uno de los tres números es erróneo.`,
     fixFields: 'Corrige los campos marcados antes de recorrer la instantánea.',
@@ -123,6 +125,7 @@ export const rtosTasks: Messages['rtosTasks'] = {
     currentLane: 'pxCurrentTCB (tarea en curso)',
     readyLane: (address) => `lista en ${address}`,
     noListSupplied: 'no se aportó ninguna lista',
+    readyArrayUnresolved: 'array de listas declarado, dirección sin resolver',
     readyArray: (base, n, size, checked) =>
       `Listas de tareas listas derivadas de pxReadyTasksLists @ ${base}: ${n} prioridades declaradas × ${size} bytes. ${
         checked

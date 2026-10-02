@@ -799,7 +799,9 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   satisface aunque el compositor renderizado esté vacío); se recurrió a `dispatch --inject`, que deja el carril sin
   supervisión. Reportar a Orca o reconocer el compositor renderizado como preparado.
 - [ ] Capturar en bytes un fotograma real de Claude inactivo con `working` nativo congelado para sustituir el
-  fixture reconstruido del test. *(La reanudación real de punta a punta con el guardián corregido ya está probada:
+  fixture reconstruido del test. *(2026-10-02 18:27Z: capturado en bytes un fotograma real de Claude inactivo —«✻ Churned for … · done»,
+  compositor vacío, pie— y añadido como fixture; su fila nativa estaba en `done`, así que sigue faltando un fotograma
+  capturado con la fila congelada en `working`.)* *(La reanudación real de punta a punta con el guardián corregido ya está probada:
   2026-10-02, 18:12–18:14Z, petición `520a0e0a…` confirmada; ver `docs/ORCA-CAMPAIGN-RELIABILITY.md`.)*
 
 - [x] Recuperar al coordinador que termina su turno sin espera: supervisor externo con plazo fijo,

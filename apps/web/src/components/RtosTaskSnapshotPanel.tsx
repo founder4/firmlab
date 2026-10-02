@@ -172,11 +172,15 @@ export function buildSnapshotRequest(
     const expected = f.pointerWidth ? LIST_RECORD_BYTES[f.pointerWidth] : null;
     if (!Number.isSafeInteger(size) || size < 1) errors['readyArray.listSize'] = m.error.listSizeNumber;
     else if (expected !== null && size !== expected) errors['readyArray.listSize'] = m.error.listSize(expected);
-    const symbolSize = ra.symbolSize.trim() ? whole(ra.symbolSize) : null;
+    // ELF st_size 0 means "no or unknown size" (ELF spec): not a size to cross-check against.
+    const rawSymbolSize = ra.symbolSize.trim() ? whole(ra.symbolSize) : null;
+    const symbolSize = rawSymbolSize === 0 ? null : rawSymbolSize;
     if (symbolSize !== null && !Number.isSafeInteger(symbolSize)) errors['readyArray.symbolSize'] = m.error.symbolSize;
     else if (symbolSize !== null && Number.isSafeInteger(n) && Number.isSafeInteger(size) && symbolSize !== n * size)
       errors['readyArray.symbolSize'] = m.error.symbolSizeMismatch(symbolSize, n, size);
-    if (arrayBase !== null && Number.isSafeInteger(n) && Number.isSafeInteger(size)) {
+    if (arrayBase !== null && Number.isSafeInteger(n) && Number.isSafeInteger(size) && arrayBase + n * size > limit)
+      errors['readyArray.base'] = m.error.arrayOverflow(hex(arrayBase), n * size, bits);
+    else if (arrayBase !== null && Number.isSafeInteger(n) && Number.isSafeInteger(size)) {
       readyListArray = { base: arrayBase, maxPriorities: n, listSize: size, symbolSize };
       for (let p = 0; p < Math.min(n, MAX_READY_LISTS); p++) taken.add(arrayBase + p * size);
     }
@@ -263,7 +267,8 @@ export function applyElfPrefill(
     next.readyArray = {
       ...form.readyArray,
       base: hex(array.base),
-      ...(typeof array.symbolSize === 'number' ? { symbolSize: String(array.symbolSize) } : {}),
+      // A pre-fill stored by an older build may carry st_size 0, which means unknown: leave the field empty.
+      ...(typeof array.symbolSize === 'number' && array.symbolSize > 0 ? { symbolSize: String(array.symbolSize) } : {}),
     };
     filled.push('pxReadyTasksLists');
   }
@@ -385,7 +390,9 @@ export function RtosTaskSnapshotPanel({
   const fillFromElf = (read: RtosElfSymbolsResult | null) => {
     const { filled } = applyElfPrefill(EMPTY_FORM, read);
     setForm((f) => applyElfPrefill(f, read).form);
-    setErrors((e) => Object.fromEntries(Object.entries(e).filter(([k]) => !filled.some((n) => fieldFor(n) === k))));
+    setErrors((e) =>
+      Object.fromEntries(Object.entries(e).filter(([k]) => !filled.some((n) => fieldsFor(n).includes(k)))),
+    );
     setElfFilled(filled);
   };
 
@@ -893,7 +900,11 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
             {lanes.map((lane: RtosTaskLane, i) => (
               <tr key={`${lane.priority ?? 'none'}-${i}`}>
                 <td className="mono">
-                  {lane.listAddress == null ? m.result.noListSupplied : m.result.readyLane(hex(lane.listAddress))}
+                  {lane.listAddress != null
+                    ? m.result.readyLane(hex(lane.listAddress))
+                    : array
+                      ? m.result.readyArrayUnresolved
+                      : m.result.noListSupplied}
                 </td>
                 <td className="mono">{lane.priority ?? '—'}</td>
                 <LaneCoverage coverage={lane.coverage} evidence={lane.evidence} m={m} />
@@ -1020,8 +1031,11 @@ function LaneCoverage({
 }
 
 /** The form field an ELF-filled symbol lands in, so its stale validation error can be cleared. */
-function fieldFor(symbol: string): string | undefined {
-  return ELF_PREFILL_FIELDS.find(([, , name]) => name === symbol)?.[0];
+/** Every form field (error key) an ELF fill of `symbol` writes, so a fill clears exactly the errors it answers. */
+function fieldsFor(symbol: string): string[] {
+  if (symbol === 'pxReadyTasksLists') return ['readyArray.base', 'readyArray.symbolSize'];
+  const field = ELF_PREFILL_FIELDS.find(([, , name]) => name === symbol)?.[0];
+  return field ? [field] : [];
 }
 
 const ELF_STATUS_CLASS: Record<RtosElfSymbolStatus, string> = {
