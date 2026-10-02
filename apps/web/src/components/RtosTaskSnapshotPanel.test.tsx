@@ -525,6 +525,23 @@ describe('RtosTaskSnapshotPanel — Renode RAM capture', () => {
 });
 
 describe('applyElfPrefill', () => {
+  it('fills the ready array address and st_size from a resolved symbol, never the two declared numbers', () => {
+    const { form, filled } = applyElfPrefill(
+      { ...EMPTY_FORM, readyArray: { base: '', maxPriorities: '7', listSize: '', symbolSize: '' } },
+      {
+        symbols: [{ name: 'pxReadyTasksLists', status: 'resolved', candidates: [{ address: 0x20000100 }] }],
+        prefill: { readyListArray: { base: 0x20000100, symbolSize: 0xa0 } },
+      },
+    );
+    expect(form.readyArray).toEqual({ base: '0x20000100', maxPriorities: '7', listSize: '', symbolSize: '160' });
+    expect(filled).toEqual(['pxReadyTasksLists']);
+    const ambiguous = applyElfPrefill(EMPTY_FORM, {
+      symbols: [{ name: 'pxReadyTasksLists', status: 'ambiguous', candidates: [] }],
+      prefill: { readyListArray: { base: 0x20000100, symbolSize: 0xa0 } },
+    });
+    expect(ambiguous.form.readyArray).toEqual(EMPTY_FORM.readyArray);
+  });
+
   it('fills a field only when its pre-fill address exists AND the symbol itself resolved', () => {
     const { form, filled } = applyElfPrefill(EMPTY_FORM, ELF_READ);
     expect(filled).toEqual(['pxCurrentTCB', 'xSuspendedTaskList']);

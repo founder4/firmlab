@@ -180,7 +180,7 @@ export const rtosTasks: Messages['rtosTasks'] = {
       'xDelayedTaskList1 y xDelayedTaskList2 se muestran pero nunca se rellenan: cuál es la actual y cuál la de desbordamiento se lee en los punteros de la instantánea de RAM.',
     notCarried: 'No se trasladan al formulario',
     readyManual:
-      'Las listas de tareas listas no se rellenan: las direcciones por prioridad necesitan sizeof(List_t) y configMAX_PRIORITIES, que declaras en el array de listas más abajo; ninguno se deduce del tamaño de un símbolo.',
+      'No se rellena ninguna lista de tareas listas por prioridad. Cuando pxReadyTasksLists se resuelve, solo se rellenan la dirección del array y su st_size; configMAX_PRIORITIES y sizeof(List_t) los declaras tú y nunca se deducen del tamaño de un símbolo.',
   },
 
   ramCapture: {

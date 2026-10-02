@@ -20,7 +20,9 @@
  *  - **No layout is inferred from a size.** `pxReadyTasksLists`' `st_size` is `configMAX_PRIORITIES × sizeof(List_t)`
  *    on the build that produced it, but `sizeof(List_t)` depends on `TickType_t` width and integrity-check bytes this
  *    module cannot see, so it reports the raw size and derives no stride, no priority count and no per-priority
- *    address. The snapshot's per-priority `readyLists` are deliberately NOT produced here.
+ *    address. The snapshot's per-priority `readyLists` are deliberately NOT produced here; the pre-fill carries only
+ *    the array's address and raw `st_size`, for the operator to pair with the two numbers they declare, and the
+ *    snapshot API then uses `st_size` as a cross-check of that declaration, never as its source.
  *  - **Duplicate names are not resolved by order.** Two `static` objects with one name in two units are two
  *    definitions; the result is `ambiguous` with every candidate, never the first one in table order.
  *  - **The SMP kernel is not the single-core kernel.** `pxCurrentTCBs` (an array, one per core) is reported as its
@@ -864,6 +866,11 @@ export interface FreeRtosSnapshotSymbols {
   suspendedList: number | null;
   pendingReadyList: number | null;
   terminatedList: number | null;
+  /**
+   * `pxReadyTasksLists`' address and raw `st_size` (each null unless the symbol resolved) — never `maxPriorities` or
+   * `listSize`, which the operator declares. Optional: a pre-fill persisted by an older build does not carry it.
+   */
+  readyListArray?: { base: number | null; symbolSize: number | null };
 }
 
 export interface FreeRtosSnapshotSymbolsResult {
@@ -873,7 +880,8 @@ export interface FreeRtosSnapshotSymbolsResult {
 }
 
 const READY_LISTS_REASON =
-  'Per-priority addresses need sizeof(List_t) and configMAX_PRIORITIES, which this module does not infer';
+  'Per-priority addresses need sizeof(List_t) and configMAX_PRIORITIES, which this module does not infer; only the ' +
+  "array's address and raw st_size are pre-filled, beside the two numbers the operator declares";
 
 /** Pure: the snapshot contract's fields, from resolved symbols only. Ambiguous or missing names become null. */
 export function freeRtosSnapshotSymbols(res: FreeRtosKernelSymbolsResult): FreeRtosSnapshotSymbolsResult {
@@ -882,7 +890,8 @@ export function freeRtosSnapshotSymbols(res: FreeRtosKernelSymbolsResult): FreeR
     return s?.status === 'resolved' ? (s.candidates[0]?.address ?? null) : null;
   };
   const pxReady = res.symbols.find((x) => x.name === 'pxReadyTasksLists');
-  const readySize = pxReady?.status === 'resolved' ? pxReady.candidates[0]?.sizeHex : undefined;
+  const readyResolved = pxReady?.status === 'resolved' ? pxReady.candidates[0] : undefined;
+  const readySize = readyResolved?.sizeHex;
   return {
     symbols: {
       pxCurrentTCB: addr('pxCurrentTCB'),
@@ -893,6 +902,7 @@ export function freeRtosSnapshotSymbols(res: FreeRtosKernelSymbolsResult): FreeR
       suspendedList: addr('xSuspendedTaskList'),
       pendingReadyList: addr('xPendingReadyList'),
       terminatedList: addr('xTasksWaitingTermination'),
+      readyListArray: { base: addr('pxReadyTasksLists'), symbolSize: readyResolved?.size ?? null },
     },
     notCarried: [
       {

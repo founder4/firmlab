@@ -1647,6 +1647,8 @@ export interface RtosElfSymbolsResult {
     suspendedList?: number | null;
     pendingReadyList?: number | null;
     terminatedList?: number | null;
+    /** `pxReadyTasksLists`' address and raw `st_size` only; the two declared numbers never come from the ELF. */
+    readyListArray?: { base?: number | null; symbolSize?: number | null };
   } | null;
   notCarried?: { name?: string; reason?: string }[];
   bounds?: { maxFileBytes?: number; maxSections?: number; maxSymbols?: number; maxProgramHeaders?: number };

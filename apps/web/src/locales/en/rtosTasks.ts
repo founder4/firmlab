@@ -181,7 +181,7 @@ export const rtosTasks = {
       'xDelayedTaskList1 and xDelayedTaskList2 are listed but never filled: which one is current, and which the overflow list, is read from the pointers in the RAM snapshot.',
     notCarried: 'Not carried into the form',
     readyManual:
-      'Ready lists are not pre-filled: per-priority addresses need sizeof(List_t) and configMAX_PRIORITIES, which you declare in the ready-list array below; neither is inferred from a symbol size.',
+      'No per-priority ready list is pre-filled. When pxReadyTasksLists resolves, only the array address and its st_size are; configMAX_PRIORITIES and sizeof(List_t) are yours to declare, never inferred from a symbol size.',
   },
 
   ramCapture: {

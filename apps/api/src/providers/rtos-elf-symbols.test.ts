@@ -95,6 +95,7 @@ describe('rtosElfSymbolsFromBytes', () => {
       suspendedList: 0x200001d0,
       pendingReadyList: null,
       terminatedList: 0x200001f8,
+      readyListArray: { base: 0x20000100, symbolSize: 0xa0 },
     });
     expect(r.symbols.find((s) => s.name === 'xPendingReadyList')?.status).toBe('absent');
     expect(r.symbols.find((s) => s.name === 'pxCurrentTCB')?.candidates[0]).toMatchObject({ binding: 'global' });

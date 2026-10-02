@@ -19,8 +19,9 @@
  * operator action, and only fields whose symbol resolved to exactly one absolute address are filled. A link-time
  * address is not runtime proof, and the RAM snapshot still comes from the analyst; every filled field stays editable.
  * A raw binary, a stripped ELF or a refused read is shown as the reason it is, never as "no FreeRTOS". The two
- * delayed lists are listed and never filled — which is current is a RAM fact — and the ready lists are not filled
- * either, because per-priority addresses would need a `sizeof(List_t)` this panel refuses to infer from a symbol size.
+ * delayed lists are listed and never filled — which is current is a RAM fact. No per-priority ready list is filled
+ * either, because that would need a `sizeof(List_t)` this panel refuses to infer from a symbol size; only the ready
+ * array's address and raw `st_size` are, and the analyst still declares the priority count and the list size.
  *
  * The ready lists can instead be declared as the whole `pxReadyTasksLists` array: its address, plus
  * `configMAX_PRIORITIES` and `sizeof(List_t)` as the analyst's build declares them. The declared size is checked
@@ -254,6 +255,17 @@ export function applyElfPrefill(
     if (typeof address !== 'number' || status !== 'resolved') continue;
     next[field] = hex(address);
     filled.push(symbol);
+  }
+  // The array's address and st_size only — configMAX_PRIORITIES and sizeof(List_t) stay what the analyst typed.
+  const array = prefill.readyListArray;
+  const readyStatus = elf?.symbols?.find((s) => s.name === 'pxReadyTasksLists')?.status;
+  if (typeof array?.base === 'number' && readyStatus === 'resolved') {
+    next.readyArray = {
+      ...form.readyArray,
+      base: hex(array.base),
+      ...(typeof array.symbolSize === 'number' ? { symbolSize: String(array.symbolSize) } : {}),
+    };
+    filled.push('pxReadyTasksLists');
   }
   return { form: next, filled };
 }

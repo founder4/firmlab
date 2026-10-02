@@ -656,6 +656,7 @@ describe('freeRtosSnapshotSymbols', () => {
       suspendedList: 0x200001d0,
       pendingReadyList: 0x200001e4,
       terminatedList: 0x200001f8,
+      readyListArray: { base: 0x20000100, symbolSize: 0xa0 },
     });
     expect(out.notCarried.map((n) => n.name)).toEqual([
       'pxReadyTasksLists',
@@ -664,6 +665,6 @@ describe('freeRtosSnapshotSymbols', () => {
       'uxTopReadyPriority',
       'pxCurrentTCBs',
     ]);
-    expect(out.notCarried[0]?.reason).toMatch(/does not infer; the array's raw st_size is 0xa0\./);
+    expect(out.notCarried[0]?.reason).toMatch(/two numbers the operator declares; the array's raw st_size is 0xa0\./);
   });
 });

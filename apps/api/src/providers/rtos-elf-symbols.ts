@@ -13,9 +13,10 @@
  *  - **A non-ELF or stripped image is not "no FreeRTOS".** Most MCU images in the corpus are raw `.bin` blobs that
  *    carry no symbol table at all, and a stripped ELF has none either. Both are stated as what they are: a reason the
  *    addresses must come from somewhere else, never a negative about the kernel.
- *  - **The ready lists stay manual.** Turning `pxReadyTasksLists`' `st_size` into per-priority addresses needs
+ *  - **No ready list is derived here.** Turning `pxReadyTasksLists`' `st_size` into per-priority addresses needs
  *    `sizeof(List_t)` and `configMAX_PRIORITIES`, and the first depends on a `TickType_t` width and integrity-check
- *    bytes the symbol table cannot show. Core reports the raw size; the reason travels in `notCarried`.
+ *    bytes the symbol table cannot show. The pre-fill carries the array's address and raw size only; the operator
+ *    declares the two numbers, and the snapshot walk checks the size against them. The reason travels in `notCarried`.
  *
  * The image is read whole or not at all: above `MAX_ELF_FILE_BYTES` the run is refused with the size, because a
  * section table at the end of a file a truncated read never reached would turn "not read" into "stripped".
