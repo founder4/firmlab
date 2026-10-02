@@ -6,7 +6,7 @@
  */
 export const rtosTasks = {
   title: 'FreeRTOS task snapshot',
-  sub: 'Walk the ready lists and pxCurrentTCB in a RAM snapshot you captured elsewhere (a debugger dump, a crash image). Nothing here reads the device or resolves symbols: you declare the base address, byte order and pointer width, and the addresses of the lists to walk.',
+  sub: "Walk the ready lists and pxCurrentTCB in a RAM snapshot you captured elsewhere (a debugger dump, a crash image). Nothing here reads the device: you declare the base address, byte order and pointer width, and the addresses of the lists to walk — which you can pre-fill from the image's own ELF symbol table when it has one.",
   collapsedHint:
     'Folded because this image is not classed as RTOS or bare-metal. Open it to walk a RAM snapshot anyway.',
 
@@ -113,5 +113,52 @@ export const rtosTasks = {
     limits: (maxKiB: number, maxItems: number, maxLists: number) =>
       `Limits applied: snapshot ≤ ${maxKiB} KiB, ≤ ${maxItems} nodes walked per list, ≤ ${maxLists} ready lists.`,
     notRecorded: 'not recorded',
+  },
+
+  elfSymbols: {
+    heading: "Addresses from this image's ELF (optional)",
+    intro:
+      "Read the kernel list addresses from the image's own static symbol table and pre-fill the fields below. They are link-time addresses, not runtime proof: you still supply the RAM snapshot, and every pre-filled field stays editable.",
+    read: 'Read ELF symbols',
+    reread: 'Read ELF symbols again',
+    reading: 'Reading symbols…',
+    fill: 'Fill the form from this read',
+    notRun: 'The ELF symbols of this image have not been read. Every address below can still be typed by hand.',
+    failed: 'The symbol read did not finish.',
+    filled: (names: string) => `Pre-filled from resolved symbols: ${names}. Check them before walking.`,
+    filledNone: 'Nothing was pre-filled: no list field resolved to exactly one address.',
+    verdict: {
+      'symbols-read': 'Static symbol table read.',
+      'no-section-headers':
+        'The ELF has no section header table, so no symbol table can be located. That is not evidence the image lacks FreeRTOS.',
+      'no-static-symbol-table':
+        'The ELF is stripped: it has no static symbol table. That is not evidence the image lacks FreeRTOS.',
+      'sections-not-examined':
+        'No static symbol table among the sections examined, but some sections were beyond the cap. Undecided, not absent.',
+      'static-symbol-table-unreadable':
+        'A static symbol table is present but could not be read. That is not evidence the image lacks FreeRTOS.',
+      refused:
+        'The image could not be read as an ELF. A raw binary carries no symbols, and that says nothing about FreeRTOS.',
+      'file-too-large': 'The image is above the read cap and was not read, rather than read in part.',
+      'file-unreadable': 'The image file could not be read on this bench.',
+    },
+    identity: (elfClass: string, endian: string, width: number, machine: string) =>
+      `The ELF declares ${elfClass}, ${endian}, ${width}-byte pointers, machine ${machine}. Declare the snapshot layout yourself below.`,
+    symbolsTable: 'FreeRTOS kernel symbols',
+    col: { name: 'Symbol', status: 'Status', address: 'Address', size: 'Size', binding: 'Binding' },
+    status: {
+      resolved: 'resolved',
+      ambiguous: 'ambiguous',
+      absent: 'absent',
+      'not-examined': 'not examined',
+      'undefined-only': 'undefined only',
+      unavailable: 'unavailable',
+    },
+    smp: 'SMP variant',
+    delayedNotFilled:
+      'xDelayedTaskList1 and xDelayedTaskList2 are listed but never filled: which one is current, and which the overflow list, is read from the pointers in the RAM snapshot.',
+    notCarried: 'Not carried into the form',
+    readyManual:
+      'Ready lists stay manual: per-priority addresses need sizeof(List_t) and configMAX_PRIORITIES, which are not inferred from a symbol size.',
   },
 };

@@ -8,10 +8,15 @@
  * `/rtos/tasks` walks an operator-supplied FreeRTOS RAM snapshot (see `providers/rtos-tasks.ts`). The contract is
  * validated before a job is created — a snapshot with an undeclared layout is refused, never defaulted — and the
  * result stays a `needs_runtime_reproduction` lead with per-lane coverage; it syncs no findings.
+ *
+ * `/rtos/elf-symbols` reads the FreeRTOS kernel addresses out of the image's own ELF symbol table (see
+ * `providers/rtos-elf-symbols.ts`) so the snapshot form can be pre-filled. A link-time address is not runtime proof,
+ * so it syncs no findings either; a raw or stripped image is reported as a reason, never as "no FreeRTOS".
  */
 import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
 import { startJob } from '../providers/jobs.js';
+import { runRtosElfSymbols } from '../providers/rtos-elf-symbols.js';
 import { runRtosTaskSnapshot, validateRtosTaskSnapshot } from '../providers/rtos-tasks.js';
 import { runRtosAnalysis } from '../providers/rtos.js';
 import { getImage, listJobs } from '../store.js';
@@ -52,6 +57,24 @@ export async function rtosRoutes(app: FastifyInstance): Promise<void> {
   app.get('/images/:id/rtos/tasks', async (req) => {
     const { id } = req.params as { id: string };
     const done = listJobs(id).find((j) => j.kind === 'rtos-tasks' && j.status === 'done' && j.resultJson);
+    return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
+  });
+
+  app.post('/images/:id/rtos/elf-symbols', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const row = getImage(id);
+    if (!row) return reply.status(404).send({ error: 'Image not found' });
+    const jobId = startJob(id, 'rtos-elf-symbols', {}, async (handle) => {
+      const result = runRtosElfSymbols(row.path);
+      handle.log(result.summary);
+      return result;
+    });
+    return reply.status(202).send({ jobId });
+  });
+
+  app.get('/images/:id/rtos/elf-symbols', async (req) => {
+    const { id } = req.params as { id: string };
+    const done = listJobs(id).find((j) => j.kind === 'rtos-elf-symbols' && j.status === 'done' && j.resultJson);
     return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
   });
 }

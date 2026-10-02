@@ -3,9 +3,9 @@
  * instead of refusing, a walk shown as proof, a never-run panel reading as "no tasks", and an API refusal whose
  * field list was thrown away.
  */
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { api } from '../api';
+import { type RtosElfSymbolsResult, api } from '../api';
 import { setLocale } from '../i18n';
 import { en } from '../locales/en';
 import { mockedApi } from '../test-api-mock';
@@ -13,6 +13,7 @@ import {
   EMPTY_FORM,
   MAX_SNAPSHOT_BYTES,
   RtosTaskSnapshotPanel,
+  applyElfPrefill,
   buildSnapshotRequest,
   parseAddress,
 } from './RtosTaskSnapshotPanel';
@@ -30,7 +31,50 @@ beforeEach(() => {
   vi.clearAllMocks();
   setLocale('en');
   mockApi.rtosTasksResult.mockResolvedValue(null);
+  mockApi.rtosElfSymbolsResult.mockResolvedValue(null);
 });
+
+const e = m.elfSymbols;
+
+/** A read where most lists resolved, one name is ambiguous and the delayed lists resolved but are never filled. */
+const ELF_READ: RtosElfSymbolsResult = {
+  verdict: 'symbols-read',
+  summary: '6 of 11 FreeRTOS kernel name(s) resolved from the static symbol table, 1 ambiguous.',
+  identity: { elfClass: 'elf32', endian: 'little', pointerWidth: 4, machine: 40, machineName: 'ARM' },
+  symbols: [
+    {
+      name: 'pxCurrentTCB',
+      status: 'resolved',
+      candidates: [{ address: 0x20000010, sizeHex: '0x4', binding: 'global' }],
+    },
+    {
+      name: 'xPendingReadyList',
+      status: 'ambiguous',
+      candidates: [
+        { address: 0x20000300, binding: 'local' },
+        { address: 0x20000400, binding: 'local' },
+      ],
+      note: '2 definitions at different values; none is chosen by table order.',
+    },
+    { name: 'xSuspendedTaskList', status: 'resolved', candidates: [{ address: 0x200001d0, binding: 'local' }] },
+    { name: 'xTasksWaitingTermination', status: 'absent', candidates: [] },
+    { name: 'xDelayedTaskList1', status: 'resolved', candidates: [{ address: 0x200001a0, binding: 'local' }] },
+    { name: 'pxCurrentTCBs', variant: 'smp', status: 'absent', candidates: [] },
+  ],
+  prefill: {
+    pxCurrentTCB: 0x20000010,
+    delayedLists: [{ name: 'xDelayedTaskList1', address: 0x200001a0 }],
+    suspendedList: 0x200001d0,
+    pendingReadyList: null,
+    terminatedList: null,
+  },
+  notCarried: [
+    {
+      name: 'pxReadyTasksLists',
+      reason: "Per-priority addresses need sizeof(List_t); the array's raw st_size is 0xa0.",
+    },
+  ],
+};
 
 const fill = async () => {
   const file = new File([new Uint8Array(64)], 'ram.bin');
@@ -195,6 +239,102 @@ describe('RtosTaskSnapshotPanel', () => {
     const details = container.querySelector('details');
     expect(details).not.toBeNull();
     expect(details?.open).toBe(false);
+  });
+});
+
+describe('RtosTaskSnapshotPanel — ELF symbols', () => {
+  it('reads the symbols on request and pre-fills only resolved fields, leaving the ambiguous one empty', async () => {
+    mockApi.runRtosElfSymbols.mockResolvedValue({ jobId: 'j1' });
+    mockApi.job.mockResolvedValue({ status: 'done', result: ELF_READ });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    expect(await screen.findByText(e.notRun)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(m.field.pendingReadyList), { target: { value: '0x99' } });
+    fireEvent.click(screen.getByRole('button', { name: e.read }));
+    expect(mockApi.runRtosElfSymbols).toHaveBeenCalledWith('img');
+    expect(await screen.findByText(e.filled('pxCurrentTCB, xSuspendedTaskList'), {}, { timeout: 3000 })).toBeVisible();
+    expect(screen.getByLabelText(m.field.pxCurrentTCB)).toHaveValue('0x20000010');
+    expect(screen.getByLabelText(m.field.suspendedList)).toHaveValue('0x200001d0');
+    // Ambiguous: the analyst's own value is untouched. Absent: still empty. Delayed lists: never filled.
+    expect(screen.getByLabelText(m.field.pendingReadyList)).toHaveValue('0x99');
+    expect(screen.getByLabelText(m.field.terminatedList)).toHaveValue('');
+    expect(screen.getByLabelText(m.field.delayedList)).toHaveValue('');
+    expect(screen.getByLabelText(m.field.overflowDelayedList)).toHaveValue('');
+    // Every name with its status, the ambiguous candidates side by side, and the reasons for what is not carried.
+    const table = screen.getByRole('table', { name: e.symbolsTable });
+    expect(table).toHaveTextContent('0x20000300 · 0x20000400');
+    expect(table).toHaveTextContent(e.status.ambiguous);
+    expect(table).toHaveTextContent(e.status.absent);
+    expect(table).toHaveTextContent(e.smp);
+    expect(screen.getByText(e.delayedNotFilled)).toBeInTheDocument();
+    expect(screen.getByText(e.readyManual)).toBeInTheDocument();
+    expect(screen.getByText(/raw st_size is 0xa0/)).toBeInTheDocument();
+    // Byte order and pointer width are shown, never filled: the snapshot layout stays the analyst's declaration.
+    expect(screen.getByLabelText(m.field.endian)).toHaveValue('');
+    expect(screen.getByLabelText(m.field.pointerWidth)).toHaveValue('');
+  });
+
+  it('shows a stored read without applying it until the analyst asks', async () => {
+    mockApi.rtosElfSymbolsResult.mockResolvedValue(ELF_READ);
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    expect(await screen.findByText(e.verdict['symbols-read'])).toBeInTheDocument();
+    expect(screen.getByLabelText(m.field.pxCurrentTCB)).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: e.fill }));
+    await waitFor(() => expect(screen.getByLabelText(m.field.pxCurrentTCB)).toHaveValue('0x20000010'));
+    expect(mockApi.runRtosElfSymbols).not.toHaveBeenCalled();
+  });
+
+  it('states a non-ELF image as a reason, never as "no FreeRTOS", and offers nothing to fill', async () => {
+    mockApi.rtosElfSymbolsResult.mockResolvedValue({
+      verdict: 'refused',
+      summary: 'The image is not an ELF file, so it carries no symbol table to read.',
+      refusal: { code: 'not-elf', detail: 'The input does not start with the ELF magic.' },
+      symbols: [{ name: 'pxCurrentTCB', status: 'unavailable', candidates: [] }],
+      prefill: null,
+      notCarried: [],
+    });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    expect(await screen.findByText(e.verdict.refused)).toBeInTheDocument();
+    expect(screen.getByText(/not-elf: The input does not start with the ELF magic/)).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: e.symbolsTable })).toBeNull();
+    expect(screen.queryByRole('button', { name: e.fill })).toBeNull();
+    expect(screen.queryByText(/no FreeRTOS\b(?! )/i)).toBeNull();
+    expect(screen.getByRole('button', { name: e.reread })).toBeEnabled();
+  });
+
+  it('states a stripped ELF as not evidence against FreeRTOS', async () => {
+    mockApi.rtosElfSymbolsResult.mockResolvedValue({ verdict: 'no-static-symbol-table', prefill: null });
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    expect(await screen.findByText(e.verdict['no-static-symbol-table'])).toBeInTheDocument();
+    expect(e.verdict['no-static-symbol-table']).toMatch(/not evidence the image lacks FreeRTOS/);
+  });
+
+  it('a failed read is a stated fault, and the form stays as it was', async () => {
+    mockApi.runRtosElfSymbols.mockRejectedValue(new Error('503 Service Unavailable'));
+    render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
+    await screen.findByText(e.notRun);
+    fireEvent.click(screen.getByRole('button', { name: e.read }));
+    expect(await screen.findByText('503 Service Unavailable')).toBeInTheDocument();
+    expect(screen.getByText(e.failed)).toBeInTheDocument();
+    expect(screen.getByLabelText(m.field.pxCurrentTCB)).toHaveValue('');
+  });
+});
+
+describe('applyElfPrefill', () => {
+  it('fills a field only when its pre-fill address exists AND the symbol itself resolved', () => {
+    const { form, filled } = applyElfPrefill(EMPTY_FORM, ELF_READ);
+    expect(filled).toEqual(['pxCurrentTCB', 'xSuspendedTaskList']);
+    expect(form).toMatchObject({ pxCurrentTCB: '0x20000010', suspendedList: '0x200001d0', pendingReadyList: '' });
+    // A pre-fill address whose symbol is not `resolved` is refused even if the API carried one.
+    const contradicted = applyElfPrefill(EMPTY_FORM, {
+      ...ELF_READ,
+      prefill: { ...ELF_READ.prefill, pendingReadyList: 0x20000300 },
+    });
+    expect(contradicted.form.pendingReadyList).toBe('');
+  });
+
+  it('changes nothing without a pre-fill', () => {
+    expect(applyElfPrefill(EMPTY_FORM, null)).toEqual({ form: EMPTY_FORM, filled: [] });
+    expect(applyElfPrefill(EMPTY_FORM, { verdict: 'refused', prefill: null }).filled).toEqual([]);
   });
 });
 

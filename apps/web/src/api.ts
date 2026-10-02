@@ -1486,6 +1486,80 @@ export interface RtosTaskSnapshotResult {
 }
 
 /**
+ * FreeRTOS kernel symbols read from the image's own ELF (`POST/GET /images/:id/rtos/elf-symbols`). Link-time
+ * addresses, never runtime proof; a raw or stripped image is a stated reason, never "no FreeRTOS". Persisted on a job
+ * row, so every field is optional forever.
+ */
+export type RtosElfSymbolStatus =
+  | 'resolved'
+  | 'ambiguous'
+  | 'absent'
+  | 'not-examined'
+  | 'undefined-only'
+  | 'unavailable';
+
+export type RtosElfSymbolsVerdict =
+  | 'symbols-read'
+  | 'no-section-headers'
+  | 'no-static-symbol-table'
+  | 'sections-not-examined'
+  | 'static-symbol-table-unreadable'
+  | 'refused'
+  | 'file-too-large'
+  | 'file-unreadable';
+
+export interface RtosElfSymbolCandidate {
+  /** Present only for an absolute (ET_EXEC) image whose value fits a number. */
+  address?: number | null;
+  valueHex?: string;
+  size?: number | null;
+  sizeHex?: string;
+  binding?: string;
+  type?: string;
+  sectionIndex?: number;
+  segments?: { index?: number; fileBacked?: boolean }[];
+  entries?: number;
+}
+
+export interface RtosElfSymbolResolution {
+  name?: string;
+  variant?: 'single-core' | 'smp';
+  status?: RtosElfSymbolStatus;
+  candidates?: RtosElfSymbolCandidate[];
+  note?: string;
+}
+
+export interface RtosElfSymbolsResult {
+  verdict?: RtosElfSymbolsVerdict;
+  summary?: string;
+  file?: { bytes?: number | null; maxBytes?: number; read?: boolean; error?: string };
+  refusal?: { code?: string; detail?: string };
+  identity?: {
+    elfClass?: 'elf32' | 'elf64';
+    pointerWidth?: 4 | 8;
+    endian?: 'little' | 'big';
+    machine?: number;
+    machineName?: string;
+    type?: number;
+    addressBasis?: 'absolute' | 'load-base-relative' | 'section-relative' | 'unknown';
+  };
+  coverage?: { statement?: string; symbolsDropped?: number; sectionsDropped?: number };
+  complete?: boolean;
+  smpVariantPresent?: boolean;
+  symbols?: RtosElfSymbolResolution[];
+  /** Snapshot-contract fields; a null is a name that did not resolve to exactly one absolute address. */
+  prefill?: {
+    pxCurrentTCB?: number | null;
+    delayedLists?: { name?: string; address?: number | null }[];
+    suspendedList?: number | null;
+    pendingReadyList?: number | null;
+    terminatedList?: number | null;
+  } | null;
+  notCarried?: { name?: string; reason?: string }[];
+  bounds?: { maxFileBytes?: number; maxSections?: number; maxSymbols?: number; maxProgramHeaders?: number };
+}
+
+/**
  * Shapes of the three providers whose results this UI reads field by field rather than only counting findings.
  *
  * EVERY field is optional, without exception, and that is not defensive style — it is the rule this codebase paid
@@ -2273,6 +2347,10 @@ export const api = {
   },
   rtosTasksResult: (id: string) =>
     get<{ result: RtosTaskSnapshotResult | null }>(`/api/images/${id}/rtos/tasks`).then((r) => r.result),
+  /** Read the FreeRTOS kernel addresses from the image's own ELF symbol table (a job; nothing is synced). */
+  runRtosElfSymbols: (id: string) => post<{ jobId: string }>(`/api/images/${id}/rtos/elf-symbols`, {}),
+  rtosElfSymbolsResult: (id: string) =>
+    get<{ result: RtosElfSymbolsResult | null }>(`/api/images/${id}/rtos/elf-symbols`).then((r) => r.result),
   /**
    * The same GET, typed for the callers that read a provider's fields rather than only its finding count. Separate
    * from `analysisResult` so that one keeps its deliberately narrow shape — a caller that only counts findings

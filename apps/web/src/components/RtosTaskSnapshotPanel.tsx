@@ -15,10 +15,19 @@
  * reports that kind as NOT WALKED — the result names it, so tasks in that state are never silently absent. Wake
  * ticks are shown only on delayed lanes, the one kind whose `xItemValue` the kernel sets to a wake tick.
  *
+ * The addresses can be read from the image's OWN ELF symbol table (`/rtos/elf-symbols`), but only on an explicit
+ * operator action, and only fields whose symbol resolved to exactly one absolute address are filled. A link-time
+ * address is not runtime proof, and the RAM snapshot still comes from the analyst; every filled field stays editable.
+ * A raw binary, a stripped ELF or a refused read is shown as the reason it is, never as "no FreeRTOS". The two
+ * delayed lists are listed and never filled — which is current is a RAM fact — and the ready lists stay manual,
+ * because per-priority addresses would need a `sizeof(List_t)` this panel refuses to infer from a symbol size.
+ *
  * Folded behind a disclosure on images not classed rtos/baremetal: still usable, never clutter on a Linux image.
  */
 import { type JSX, useEffect, useRef, useState } from 'react';
 import {
+  type RtosElfSymbolStatus,
+  type RtosElfSymbolsResult,
   type RtosNamedListLane,
   type RtosTaskLane,
   type RtosTaskSnapshotInput,
@@ -179,6 +188,37 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
+/** Form field ← the kernel symbol it is filled from. The delayed lists are deliberately absent (see the header). */
+const ELF_PREFILL_FIELDS = [
+  ['pxCurrentTCB', 'pxCurrentTCB', 'pxCurrentTCB'],
+  ['suspendedList', 'suspendedList', 'xSuspendedTaskList'],
+  ['pendingReadyList', 'pendingReadyList', 'xPendingReadyList'],
+  ['terminatedList', 'terminatedList', 'xTasksWaitingTermination'],
+] as const;
+
+/**
+ * Pure: the form with every field whose symbol RESOLVED filled in, and the symbol names filled. A field is filled
+ * only when the API's pre-fill carries an address AND the symbol's own status is `resolved` — an ambiguous, absent
+ * or unexamined name leaves the field exactly as the analyst left it.
+ */
+export function applyElfPrefill(
+  form: SnapshotForm,
+  elf: RtosElfSymbolsResult | null | undefined,
+): { form: SnapshotForm; filled: string[] } {
+  const prefill = elf?.prefill;
+  if (!prefill) return { form, filled: [] };
+  const next = { ...form };
+  const filled: string[] = [];
+  for (const [field, key, symbol] of ELF_PREFILL_FIELDS) {
+    const address = prefill[key];
+    const status = elf?.symbols?.find((s) => s.name === symbol)?.status;
+    if (typeof address !== 'number' || status !== 'resolved') continue;
+    next[field] = hex(address);
+    filled.push(symbol);
+  }
+  return { form: next, filled };
+}
+
 const hex = (n: number | null | undefined) => (typeof n === 'number' ? `0x${n.toString(16)}` : '—');
 const COVERAGE_CLASS = { complete: 'badge-ok', partial: 'badge-warn', none: 'badge' } as const;
 
@@ -197,6 +237,11 @@ export function RtosTaskSnapshotPanel({
   const timer = useRef<number | null>(null);
   const rowKey = useRef(0);
   const [rowKeys, setRowKeys] = useState<number[]>([]);
+  const [elf, setElf] = useState<RtosElfSymbolsResult | null>(null);
+  const [elfBusy, setElfBusy] = useState(false);
+  const [elfError, setElfError] = useState<string | null>(null);
+  const [elfFilled, setElfFilled] = useState<string[] | null>(null);
+  const elfTimer = useRef<number | null>(null);
 
   useEffect(() => {
     api
@@ -205,10 +250,52 @@ export function RtosTaskSnapshotPanel({
       // Unreadable reads as "not run", never as a snapshot with no tasks.
       .catch(() => setResult(null))
       .finally(() => setLoading(false));
+    // A stored read is SHOWN, never applied: filling the form is the analyst's explicit action.
+    api
+      .rtosElfSymbolsResult(imageId)
+      .then(setElf)
+      .catch(() => setElf(null));
     return () => {
       if (timer.current) window.clearInterval(timer.current);
+      if (elfTimer.current) window.clearInterval(elfTimer.current);
     };
   }, [imageId]);
+
+  const fillFromElf = (read: RtosElfSymbolsResult | null) => {
+    const { filled } = applyElfPrefill(EMPTY_FORM, read);
+    setForm((f) => applyElfPrefill(f, read).form);
+    setErrors((e) => Object.fromEntries(Object.entries(e).filter(([k]) => !filled.some((n) => fieldFor(n) === k))));
+    setElfFilled(filled);
+  };
+
+  const readElf = async () => {
+    setElfBusy(true);
+    setElfError(null);
+    setElfFilled(null);
+    try {
+      const { jobId } = await api.runRtosElfSymbols(imageId);
+      elfTimer.current = window.setInterval(async () => {
+        try {
+          const j = await api.job(jobId);
+          if (j.status !== 'done' && j.status !== 'error' && j.status !== 'cancelled') return;
+          if (elfTimer.current) window.clearInterval(elfTimer.current);
+          setElfBusy(false);
+          if (j.status === 'done') {
+            const read = j.result as RtosElfSymbolsResult;
+            setElf(read);
+            fillFromElf(read);
+          } else if (j.status === 'error') setElfError(j.error ?? m.elfSymbols.failed);
+        } catch (err) {
+          if (elfTimer.current) window.clearInterval(elfTimer.current);
+          setElfBusy(false);
+          setElfError(err instanceof Error ? err.message : m.elfSymbols.failed);
+        }
+      }, 900);
+    } catch (err) {
+      setElfBusy(false);
+      setElfError(err instanceof Error ? err.message : m.elfSymbols.failed);
+    }
+  };
 
   const set = <K extends keyof SnapshotForm>(key: K, value: SnapshotForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -289,6 +376,16 @@ export function RtosTaskSnapshotPanel({
       <div className="panel-sub" style={{ maxWidth: '72ch' }}>
         {m.sub}
       </div>
+
+      <ElfSymbols
+        elf={elf}
+        busy={elfBusy}
+        error={elfError}
+        filled={elfFilled}
+        onRead={() => void readElf()}
+        onFill={() => fillFromElf(elf)}
+        m={m.elfSymbols}
+      />
 
       <form onSubmit={submit} noValidate style={{ display: 'grid', gap: 12, marginTop: 14, maxWidth: '72ch' }}>
         <div>
@@ -737,5 +834,171 @@ function LaneCoverage({
         </div>
       )}
     </td>
+  );
+}
+
+/** The form field an ELF-filled symbol lands in, so its stale validation error can be cleared. */
+function fieldFor(symbol: string): string | undefined {
+  return ELF_PREFILL_FIELDS.find(([, , name]) => name === symbol)?.[0];
+}
+
+const ELF_STATUS_CLASS: Record<RtosElfSymbolStatus, string> = {
+  resolved: 'badge-ok',
+  ambiguous: 'badge-warn',
+  absent: '',
+  'not-examined': 'badge-warn',
+  'undefined-only': '',
+  unavailable: '',
+};
+
+/**
+ * The ELF symbol read: an explicit action, the verdict as a stated reason, and every kernel name with its status.
+ * A non-`symbols-read` verdict is a warning about where the addresses must come from, never a negative about the
+ * kernel; the per-symbol table is shown only when a static symbol table was actually read.
+ */
+function ElfSymbols({
+  elf,
+  busy,
+  error,
+  filled,
+  onRead,
+  onFill,
+  m,
+}: {
+  elf: RtosElfSymbolsResult | null;
+  busy: boolean;
+  error: string | null;
+  filled: string[] | null;
+  onRead: () => void;
+  onFill: () => void;
+  m: M['elfSymbols'];
+}): JSX.Element {
+  const verdict = elf?.verdict;
+  const read = verdict === 'symbols-read';
+  const id = elf?.identity;
+  const symbols = elf?.symbols ?? [];
+  return (
+    <section aria-label={m.heading} style={{ marginTop: 14, maxWidth: '72ch', display: 'grid', gap: 8 }}>
+      <div className="eyebrow">{m.heading}</div>
+      <div className="hint">{m.intro}</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={onRead}>
+          {busy ? (
+            <>
+              <span className="spinner" /> {m.reading}
+            </>
+          ) : elf ? (
+            m.reread
+          ) : (
+            m.read
+          )}
+        </button>
+        {elf?.prefill && !busy && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={onFill}>
+            {m.fill}
+          </button>
+        )}
+      </div>
+      {error && (
+        <div className="banner banner-warn">
+          <span className="eyebrow">{m.failed}</span>
+          <p style={{ margin: '4px 0 0' }}>{error}</p>
+        </div>
+      )}
+      {filled && <output className="hint">{filled.length > 0 ? m.filled(filled.join(', ')) : m.filledNone}</output>}
+      {!elf ? (
+        !busy && <div className="hint">{m.notRun}</div>
+      ) : (
+        <>
+          {verdict && (
+            <div className={read ? 'hint' : 'banner banner-warn'} style={read ? { fontWeight: 500 } : undefined}>
+              {m.verdict[verdict]}
+            </div>
+          )}
+          {elf.summary && <p style={{ margin: 0 }}>{elf.summary}</p>}
+          {elf.refusal?.detail && (
+            <p className="hint mono" style={{ margin: 0 }}>
+              {elf.refusal.code ? `${elf.refusal.code}: ` : ''}
+              {elf.refusal.detail}
+            </p>
+          )}
+          {id && (
+            <p className="hint" style={{ margin: 0 }}>
+              {m.identity(
+                id.elfClass ?? '?',
+                id.endian ?? '?',
+                id.pointerWidth ?? 0,
+                id.machineName ?? (id.machine === undefined ? '?' : String(id.machine)),
+              )}
+            </p>
+          )}
+          {read && symbols.length > 0 && (
+            <div className="table-wrap">
+              <table className="data" aria-label={m.symbolsTable}>
+                <thead>
+                  <tr>
+                    <th>{m.col.name}</th>
+                    <th>{m.col.status}</th>
+                    <th>{m.col.address}</th>
+                    <th>{m.col.size}</th>
+                    <th>{m.col.binding}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {symbols.map((s, i) => {
+                    const candidates = s.candidates ?? [];
+                    return (
+                      <tr key={s.name ?? i}>
+                        <td className="mono">
+                          {s.name ?? '?'}
+                          {s.variant === 'smp' && (
+                            <span className="badge" style={{ marginLeft: 6 }}>
+                              {m.smp}
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <span className={`badge ${s.status ? ELF_STATUS_CLASS[s.status] : ''}`}>
+                            {s.status ? m.status[s.status] : '—'}
+                          </span>
+                          {s.note && (
+                            <div className="hint" style={{ fontSize: 11, marginTop: 3 }}>
+                              {s.note}
+                            </div>
+                          )}
+                        </td>
+                        <td className="mono">
+                          {candidates.length > 0
+                            ? candidates
+                                .map((c) => (typeof c.address === 'number' ? hex(c.address) : (c.valueHex ?? '—')))
+                                .join(' · ')
+                            : '—'}
+                        </td>
+                        <td className="mono">{candidates.map((c) => c.sizeHex ?? '—').join(' · ') || '—'}</td>
+                        <td>{candidates.map((c) => c.binding ?? '—').join(' · ') || '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {read && <div className="hint">{m.delayedNotFilled}</div>}
+          <div className="hint">{m.readyManual}</div>
+          {(elf.notCarried?.length ?? 0) > 0 && (
+            <div>
+              <div className="eyebrow">{m.notCarried}</div>
+              <ul className="hint" style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {elf.notCarried?.map((n, i) => (
+                  <li key={n.name ?? i}>
+                    <span className="mono">{n.name ?? '?'}</span>: {n.reason ?? '—'}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
