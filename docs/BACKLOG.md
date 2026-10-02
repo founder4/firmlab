@@ -111,7 +111,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   acuerdo y sólo si el mapa habilita la región ME; y la vista de chipsec muestra el descriptor (estado o motivo,
   mapa de regiones, veredictos del maestro CPU/BIOS incluido `layout-dependent`) y dice «sin decodificar» cuando
   chipsec no corrió, en vez de «sin volumen UEFI». QA Chromium 1440 EN y 390 ES contra API local con imagen
-  sintética desechable, sin errores ni desbordamiento. Siguen pendientes
+  sintética desechable, sin errores ni desbordamiento. Revisión independiente (2026-10-02, `review-spi.md`): en las
+  definiciones de chipsec de la generación de 12 bits `FLMAP0` no tiene campo NR, así que NR+1 no es un recuento de
+  regiones allí; ya no se afirma «el mapa no declara región ME», se lee FLREG2 y la declaración ME queda
+  `layout-dependent`. `NM=0` (chipsec lo lee como «sin maestros») deja el acceso del maestro en `unknown`; el hallazgo
+  ME exige además la región habilitada con ambas anchuras de FLREG (13 y 15 bits); la cobertura incluye FLMSTR1. Si
+  NM es base cero o no sigue sin poder establecerse sin la hoja de datos. Siguen pendientes
   LogoFAIL, callouts SMM (`CommBuffer`) y una captura PRx/BIOS-lock que pruebe la postura en ejecución.
 - [ ] Fuzzing avanzado. El planificador ya elige cmplog/compcov/plain según arquitectura, fija canal de entrada
   archivo/stdin/socket, comprueba la arquitectura de `FIRMLAB_DESOCK` y declara cero ejecuciones/crashes con sus

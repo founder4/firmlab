@@ -4,7 +4,9 @@
  * running device protects flash writes. Missing, malformed, or truncated descriptor data therefore stays unknown.
  *
  * The master section is read for ONE question: does the descriptor grant the host CPU/BIOS master (`FLMSTR1`, always
- * the first master record, so the master count never matters) write access to the descriptor region itself? The
+ * the first master record) write access to the descriptor region itself? The master count matters once: chipsec
+ * iterates `range(NM)`, so NM = 0 reads as no master record at all, and whether NM is zero-based cannot be settled
+ * from the offline material — such a descriptor leaves master access unknown rather than reading FLMSTR1 anyway. The
  * FLMSTR1 bit layout depends on the PCH generation, and the image does not name its PCH: chipsec's own register
  * definitions carry two layouts (`cfg/8086/common.xml`: read 16..23, write 24..31; `pch_1xx.xml`, `pch_2xx.xml`,
  * `pch_c620.xml`, `skl.xml`, `kbl.xml`: read 8..19, write 20..31). Both are evaluated; a verdict is given only when
@@ -15,7 +17,14 @@
  * The same FLMSTR1 value answers a second question under the same two-layout rule: does the host master hold write
  * access to the Intel ME region (chipsec `hal/spi.py` region index 2, so bit `1 << 2` in either layout)? A grant is
  * only flagged when the region map actually enables the ME region; a write bit for a region the descriptor leaves
- * disabled or never declares names no flash range, so it is recorded with its reason but is not a finding.
+ * disabled names no flash range, so it is recorded with its reason but is not a finding.
+ *
+ * The region map itself has the same two-definition problem. `common.xml` gives FLMAP0 an NR field (bits 24..26,
+ * region count NR + 1) and 13-bit FLREG base/limit; the 12-bit-generation files above have NO NR field (chipsec then
+ * reads 12 regions) and 15-bit FLREG fields. The region list keeps the NR-based count, but a region beyond NR + 1 is
+ * not thereby undeclared: when the ME region falls outside it, FLREG2 is read anyway (inside the same bounds) and
+ * the ME declaration is reported as layout-dependent. Likewise the ME region must be enabled under both FLREG widths
+ * before a grant over it is flagged.
  */
 
 export const SPI_DESCRIPTOR_SCAN_CAP_BYTES = 1024 * 1024;
@@ -36,6 +45,17 @@ const DESCRIPTOR_REGION_BIT = 1;
 /** chipsec `hal/spi.py`: ME = 2. Its bit is `1 << 2` under both FLMSTR layouts. */
 const ME_REGION_INDEX = 2;
 const ME_REGION_BIT = 1 << ME_REGION_INDEX;
+/** FLREG RB/RL widths: 13 bits in chipsec `common.xml`, 15 bits in `pch_1xx.xml` and the other 12-bit-gen files. */
+const FLREG_WIDTHS = [
+  { width: 13, source: 'chipsec cfg/8086/common.xml' },
+  { width: 15, source: 'chipsec cfg/8086/pch_1xx.xml' },
+] as const;
+/** FLMAP1 NM (number of masters) starts at bit 8: 2 bits wide in `common.xml`, 3 bits in `pch_1xx.xml`. */
+const MASTER_COUNT_SHIFT = 8;
+const MASTER_COUNT_FIELDS = [
+  { width: 2, source: 'chipsec cfg/8086/common.xml' },
+  { width: 3, source: 'chipsec cfg/8086/pch_1xx.xml' },
+] as const;
 
 /** FLMSTR1 access-field layouts, verbatim from chipsec's register definitions (see the module comment). */
 export const SPI_MASTER_LAYOUTS = [
@@ -86,6 +106,30 @@ export interface SpiHostMasterAccess {
   meWrite?: 'granted' | 'denied' | 'layout-dependent' | 'unknown';
   /** Why `meWrite` is what it is, and why a grant did or did not become a finding. Optional forever. */
   meWriteReason?: string;
+  /**
+   * FLMAP1 NM under each chipsec definition, recorded whenever FLMAP1 points at a master section. Any 0 leaves
+   * master access unknown (chipsec reads no master record). Optional forever: older results predate it.
+   */
+  masterCount?: { source: string; width: number; value: number }[];
+}
+
+/**
+ * FLREG2 read when the ME region lies beyond the FLMAP0 NR count. Under `common.xml` NR makes the region undeclared;
+ * the 12-bit-generation definitions have no NR field and read FLREG2 with 15-bit fields, as recorded here.
+ */
+export interface SpiMeRegionBeyondNr {
+  /** NR + 1 under `common.xml`. */
+  regionCountUnderNr: number;
+  flreg2Offset: number;
+  status: 'read' | 'unread';
+  reason: string;
+  /** Null when FLREG2 lies outside the available bytes or the parse bound. */
+  rawValue: number | null;
+  /** The 15-bit reading the definitions without NR apply; chipsec also treats 0xFFFFFFFF as not used. */
+  source: string;
+  enabled: boolean | null;
+  startBytes: number | null;
+  endBytesExclusive: number | null;
 }
 
 export interface SpiDescriptorFinding {
@@ -120,6 +164,8 @@ export interface SpiDescriptorAnalysis {
   findings: SpiDescriptorFinding[];
   /** FLMSTR1 read for the host master's descriptor-write grant. Optional forever: older results predate it. */
   hostMasterAccess?: SpiHostMasterAccess;
+  /** Present when the ME region lies beyond the NR count. Optional forever: older results predate it. */
+  meRegionBeyondNr?: SpiMeRegionBeyondNr;
 }
 
 export interface SpiDescriptorOptions {
@@ -135,6 +181,8 @@ interface CandidateResult {
   descriptorOffset: number;
   parsedBytes: number;
   regions: SpiFlashRegion[];
+  /** Image offset of FLREG0; set when the map parsed. */
+  regionMapOffset?: number;
 }
 
 const RUNTIME_REGISTER_REASON =
@@ -208,14 +256,34 @@ export function analyzeSpiDescriptor(
   const active = result.regions.filter((region) => region.enabled);
   const overlaps = findOverlaps(active);
   const gaps = findGaps(active);
+  const masterAccess = readHostMasterAccess(view, bytes.byteLength, result.descriptorOffset, parseLimitBytes);
+  const meRegionBeyondNr =
+    result.regionMapOffset !== undefined && result.regions.length <= ME_REGION_INDEX
+      ? readMeRegionBeyondNr(
+          view,
+          bytes.byteLength,
+          result.descriptorOffset,
+          result.regionMapOffset,
+          result.regions.length,
+          parseLimitBytes,
+        )
+      : undefined;
+  const meAssessment = assessHostMeWrite(masterAccess, result.regions, meRegionBeyondNr);
+  const hostMasterAccess: SpiHostMasterAccess = { ...masterAccess, meWriteReason: meAssessment.reason };
+  // Every word read counts as parsed: the region map, FLMSTR1 when read, and FLREG2 when read beyond NR.
+  const parsedEndBytesExclusive = Math.max(
+    result.descriptorOffset + result.parsedBytes,
+    masterAccess.rawValue !== null && masterAccess.flmstr1Offset !== null ? masterAccess.flmstr1Offset + 4 : 0,
+    meRegionBeyondNr?.rawValue != null ? meRegionBeyondNr.flreg2Offset + REGION_REGISTER_BYTES : 0,
+  );
   const coverage = {
     imageBytes,
     scannedBytes,
     scanLimitBytes,
-    parsedBytes: result.parsedBytes,
+    parsedBytes: parsedEndBytesExclusive - result.descriptorOffset,
     parseLimitBytes,
     parsedStartBytes: result.descriptorOffset,
-    parsedEndBytesExclusive: result.descriptorOffset + result.parsedBytes,
+    parsedEndBytesExclusive,
   };
   const findings: SpiDescriptorFinding[] = [
     {
@@ -239,9 +307,6 @@ export function analyzeSpiDescriptor(
         'The listed extents overlap in the static descriptor map. This records the declared layout and is not by itself proof of a write-protection failure.',
     });
   }
-  const masterAccess = readHostMasterAccess(view, bytes.byteLength, result.descriptorOffset, parseLimitBytes);
-  const meAssessment = assessHostMeWrite(masterAccess, result.regions);
-  const hostMasterAccess: SpiHostMasterAccess = { ...masterAccess, meWriteReason: meAssessment.reason };
   if (hostMasterAccess.descriptorWrite === 'granted') {
     findings.push({
       kind: 'spi-descriptor-host-write',
@@ -293,6 +358,7 @@ export function analyzeSpiDescriptor(
     runtimeRegisterPosture: { state: 'unknown', reason: RUNTIME_REGISTER_REASON },
     findings,
     hostMasterAccess,
+    ...(meRegionBeyondNr ? { meRegionBeyondNr } : {}),
   };
 }
 
@@ -306,7 +372,11 @@ export function readHostMasterAccess(
   descriptorOffset: number,
   parseLimitBytes: number,
 ): SpiHostMasterAccess {
-  const unknown = (reason: string, flmstr1Offset: number | null = null): SpiHostMasterAccess => ({
+  const unknown = (
+    reason: string,
+    flmstr1Offset: number | null = null,
+    masterCount?: SpiHostMasterAccess['masterCount'],
+  ): SpiHostMasterAccess => ({
     status: 'unknown',
     reason,
     flmstr1Offset,
@@ -315,21 +385,39 @@ export function readHostMasterAccess(
     descriptorWrite: 'unknown',
     meWrite: 'unknown',
     meWriteReason: reason,
+    ...(masterCount ? { masterCount } : {}),
   });
   const map1Offset = descriptorOffset + FLASH_MAP1_OFFSET;
   if (map1Offset + 4 > availableBytes || map1Offset + 4 - descriptorOffset > parseLimitBytes) {
     return unknown('Descriptor FLMAP1 is truncated or exceeds the parse bound; master access is unknown.');
   }
-  const masterBaseUnits = view.getUint32(map1Offset, true) & 0xff;
+  const map1 = view.getUint32(map1Offset, true);
+  const masterBaseUnits = map1 & 0xff;
   if (masterBaseUnits === 0) return unknown('Descriptor FLMAP1 declares no master section; master access is unknown.');
   const flmstr1Offset = descriptorOffset + masterBaseUnits * 16;
   if (flmstr1Offset < descriptorOffset + 0x20) {
     return unknown('Descriptor FLMAP1 points the master section inside the descriptor header.', flmstr1Offset);
   }
+  const masterCount = MASTER_COUNT_FIELDS.map(({ width, source }) => ({
+    source,
+    width,
+    value: (map1 >>> MASTER_COUNT_SHIFT) & ((1 << width) - 1),
+  }));
+  if (masterCount.some((field) => field.value === 0)) {
+    const readings = masterCount
+      .map((f) => `${f.value} under ${f.source} (bits ${MASTER_COUNT_SHIFT}..${MASTER_COUNT_SHIFT + f.width - 1})`)
+      .join(' and ');
+    return unknown(
+      `Descriptor FLMAP1 NM reads ${readings}. chipsec iterates range(NM) and reads NM = 0 as no master records, and the offline material cannot establish whether NM is zero-based, so FLMSTR1 was not read and master access is unknown.`,
+      flmstr1Offset,
+      masterCount,
+    );
+  }
   if (flmstr1Offset + 4 > availableBytes || flmstr1Offset + 4 - descriptorOffset > parseLimitBytes) {
     return unknown(
       'Descriptor FLMSTR1 is truncated or exceeds the parse bound; master access is unknown.',
       flmstr1Offset,
+      masterCount,
     );
   }
   const rawValue = view.getUint32(flmstr1Offset, true);
@@ -366,36 +454,139 @@ export function readHostMasterAccess(
           .map((l) => l.layout)
           .join(', ')} only; the image does not name its PCH generation, so the grant is undetermined.`
       : `FLMSTR1 ${hex} ${meWrite === 'granted' ? 'grants' : 'denies'} the host master Intel ME region write under every chipsec layout.`;
-  return { status: 'read', reason, flmstr1Offset, rawValue, layouts, descriptorWrite, meWrite, meWriteReason };
+  return {
+    status: 'read',
+    reason,
+    flmstr1Offset,
+    rawValue,
+    layouts,
+    descriptorWrite,
+    meWrite,
+    meWriteReason,
+    masterCount,
+  };
 }
 
 /**
  * Pure: whether an agreed host-master ME write grant becomes a finding. It does only when the parsed region map
- * enables the Intel ME region; a grant over a disabled or undeclared region is kept in `hostMasterAccess` and the
- * returned reason says why it was not flagged. Anything short of an agreed grant is passed through unflagged.
+ * enables the Intel ME region under both chipsec FLREG widths. A grant over a region that is disabled, enabled under
+ * only one width, or outside the NR count (declared under one FLMAP0 definition and not the other) is kept in
+ * `hostMasterAccess`, and the returned reason says why it was not flagged. Anything short of an agreed grant is
+ * passed through unflagged.
  */
 export function assessHostMeWrite(
   access: SpiHostMasterAccess,
   regions: SpiFlashRegion[],
+  beyondNr?: SpiMeRegionBeyondNr,
 ): { flag: boolean; reason: string; meRegion: SpiFlashRegion | null } {
   const meRegion = regions.find((r) => r.index === ME_REGION_INDEX) ?? null;
   const reason = access.meWriteReason ?? access.reason;
   if (access.meWrite !== 'granted') return { flag: false, reason, meRegion };
   if (!meRegion) {
+    if (!beyondNr) {
+      return {
+        flag: false,
+        reason: `${reason} The Intel ME region lies beyond the FLMAP0 NR region count and FLREG2 was not read, so whether the descriptor declares it is unknown and the grant is not flagged.`,
+        meRegion,
+      };
+    }
+    const count = `${beyondNr.regionCountUnderNr} region${beyondNr.regionCountUnderNr === 1 ? '' : 's'}`;
+    const lead = `${reason} FLMAP0 NR covers ${count} under chipsec common.xml, which leaves the Intel ME region (index 2) outside it; the 12-bit-generation definitions (pch_1xx, pch_2xx, pch_c620, skl, kbl) have no NR field`;
+    if (beyondNr.status !== 'read') {
+      return {
+        flag: false,
+        reason: `${lead}, and ${beyondNr.reason} Whether the descriptor declares an ME region is unknown, so the grant is not flagged.`,
+        meRegion,
+      };
+    }
+    const reading =
+      beyondNr.enabled && beyondNr.startBytes !== null && beyondNr.endBytesExclusive !== null
+        ? `enabled at [${hexBytes(beyondNr.startBytes)}, ${hexBytes(beyondNr.endBytesExclusive)})`
+        : 'disabled';
     return {
       flag: false,
-      reason: `${reason} The region map declares no Intel ME region, so the grant covers no flash range and is not flagged.`,
+      reason: `${lead}, and FLREG2 at ${hexBytes(beyondNr.flreg2Offset)} reads ${reading} there. The Intel ME declaration is therefore layout-dependent, so the grant is not flagged.`,
       meRegion,
     };
   }
-  if (!meRegion.enabled) {
+  const widths = flregWidthReadings(meRegion.rawValue);
+  if (widths.every((w) => !w.enabled)) {
     return {
       flag: false,
       reason: `${reason} The region map leaves the Intel ME region disabled (base above limit), so the grant covers no flash range and is not flagged.`,
       meRegion,
     };
   }
+  if (!widths.every((w) => w.enabled)) {
+    const describe = (enabled: boolean) =>
+      widths
+        .filter((w) => w.enabled === enabled)
+        .map((w) => `${w.width}-bit (${w.source})`)
+        .join(', ');
+    return {
+      flag: false,
+      reason: `${reason} FLREG2 ${hexBytes(meRegion.rawValue, 8)} enables the Intel ME region under the ${describe(true)} FLREG width but not the ${describe(false)} one; the image does not name its PCH generation, so whether the grant covers a flash range is undetermined and it is not flagged.`,
+      meRegion,
+    };
+  }
   return { flag: true, reason, meRegion };
+}
+
+/**
+ * Pure: FLREG2 read for the ME region when it lies beyond the FLMAP0 NR count, inside the same parse bound and
+ * available bytes as the region map. An out-of-bounds FLREG2 is `unread`, never "undeclared".
+ */
+export function readMeRegionBeyondNr(
+  view: DataView,
+  availableBytes: number,
+  descriptorOffset: number,
+  regionMapOffset: number,
+  regionCountUnderNr: number,
+  parseLimitBytes: number,
+): SpiMeRegionBeyondNr {
+  const flreg2Offset = regionMapOffset + ME_REGION_INDEX * REGION_REGISTER_BYTES;
+  const source = FLREG_WIDTHS[1].source;
+  const base = { regionCountUnderNr, flreg2Offset, source };
+  if (
+    flreg2Offset + REGION_REGISTER_BYTES > availableBytes ||
+    flreg2Offset + REGION_REGISTER_BYTES - descriptorOffset > parseLimitBytes
+  ) {
+    return {
+      ...base,
+      status: 'unread',
+      reason: `FLREG2 at ${hexBytes(flreg2Offset)} lies beyond the available bytes or the parse bound and was not read.`,
+      rawValue: null,
+      enabled: null,
+      startBytes: null,
+      endBytesExclusive: null,
+    };
+  }
+  const rawValue = view.getUint32(flreg2Offset, true);
+  const reading = flregWidthReadings(rawValue).find((w) => w.width === FLREG_WIDTHS[1].width);
+  // chipsec marks 0xFFFFFFFF "(not used)" as well as base above limit.
+  const enabled = rawValue !== 0xffffffff && reading?.enabled === true;
+  return {
+    ...base,
+    status: 'read',
+    reason: `FLREG2 ${hexBytes(rawValue, 8)} read with the 15-bit fields of the definitions that have no NR field.`,
+    rawValue,
+    enabled,
+    startBytes: enabled && reading ? reading.baseUnits * REGION_ADDRESS_UNIT_BYTES : null,
+    endBytesExclusive: enabled && reading ? (reading.limitUnits + 1) * REGION_ADDRESS_UNIT_BYTES : null,
+  };
+}
+
+function flregWidthReadings(rawValue: number) {
+  return FLREG_WIDTHS.map(({ width, source }) => {
+    const mask = (1 << width) - 1;
+    const baseUnits = rawValue & mask;
+    const limitUnits = (rawValue >>> 16) & mask;
+    return { width, source, baseUnits, limitUnits, enabled: baseUnits <= limitUnits };
+  });
+}
+
+function hexBytes(value: number, pad = 0): string {
+  return `0x${value.toString(16).padStart(pad, '0')}`;
 }
 
 function parseCandidate(
@@ -488,6 +679,7 @@ function parseCandidate(
     descriptorOffset,
     parsedBytes: mapEnd - descriptorOffset,
     regions,
+    regionMapOffset,
   };
 }
 
