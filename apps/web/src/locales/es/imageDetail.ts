@@ -55,6 +55,16 @@ export const imageDetail: Messages['imageDetail'] = {
     statRecovered: 'Valores recuperados en bruto',
     statStrategy: 'Estrategia de ejecución',
 
+    reclassify: 'Reclasificar imagen',
+    reclassifying: 'Reclasificando…',
+    reclassifyTitle:
+      'Recalcula la clase de dispositivo a partir de los bytes guardados. No se vuelve a ejecutar ningún proveedor ni cambia ningún hallazgo.',
+    reclassifyChanged: (before, after) =>
+      `La clase cambió: ${before} → ${after}. El plan de escaneo y el aviso de cobertura se guían ahora por ${after}; las etapas ya ejecutadas se planificaron con ${before}, así que vuelve a escanear para cubrir lo que corresponde a la nueva clase.`,
+    reclassifyUnchanged: (cls) =>
+      `La clase no cambió: ${cls}. Una pasada nueva sobre los bytes guardados clasifica esta imagen igual.`,
+    reclassifyNone: 'ninguna guardada',
+
     copilotTitle: 'Análisis del copiloto',
     copilotModelTitle: 'LLM que respalda al copiloto',
     copilotAnalyzing: 'Analizando…',

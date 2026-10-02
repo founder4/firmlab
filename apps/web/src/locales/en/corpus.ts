@@ -58,6 +58,38 @@ export const corpus = {
       'Tables this reindex structurally cannot restore. Their contents, or their emptiness, are not a measurement.',
   },
 
+  /**
+   * Re-running the intake classifier. The payload is class identifiers and filenames, which render verbatim, and a
+   * failure's reason is the route's own message; what lives here is the frame. Two readings must stay impossible: a
+   * failed row's class is the class the image KEPT, not a result of this pass, and a changed class has not
+   * re-run anything — the stages already run were planned against the old class.
+   */
+  reclassify: {
+    title: 'Re-run the classifier',
+    sub: 'Recompute each image’s device class from its stored bytes. An image keeps the class it was given at upload, and both the autonomous scan plan and the coverage banner route off it — so a class that predates a classifier improvement plans and reports against the wrong device. No provider is re-run and no finding changes.',
+    run: 'Re-analyze all images',
+    running: 'Re-analyzing…',
+    confirmTitle: 'Re-classify every image?',
+    confirmBody:
+      'Each image’s stored identity and static analysis are replaced by a fresh pass over its bytes. A class that changes re-routes that image’s scan plan and coverage banner from now on; findings already recorded stay as they are. An image whose pass fails keeps its stored analysis.',
+    confirm: 'Re-analyze',
+    empty: 'There are no images on this bench, so nothing was re-analyzed.',
+    summary: (total: number, changed: number, unchanged: number, failed: number) =>
+      `${total} image(s) re-analyzed: ${changed} changed class, ${unchanged} unchanged, ${failed} failed.`,
+    changedNote:
+      'A changed class takes effect from the next scan. The stages already run were planned against the old class, so the coverage banner may now list stages that have not run for that image; re-run its scan to cover them.',
+    failedNote:
+      'A failed image kept its stored analysis: the class shown is the one it still plans against, not a result of this pass.',
+    colImage: 'Image',
+    colClass: 'Class',
+    colStatus: 'Status',
+    none: 'none stored',
+    status: {
+      changed: 'changed',
+      failed: 'failed — stored class kept',
+    },
+  },
+
   reuse: {
     title: 'Credential reuse',
     sub: 'Secrets that appear in more than one image — a prior worth checking, not a verdict. Promote a recurring one to the known-bad watchlist to auto-flag it on future uploads.',

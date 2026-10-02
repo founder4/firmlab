@@ -1,12 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { type CorpusReindexReport, api } from '../api';
+import { type CorpusReindexReport, type ReanalyzeAllReport, api } from '../api';
 import { setLocale } from '../i18n';
 import { en } from '../locales/en';
 import { es } from '../locales/es';
 import { mockedApi } from '../test-api-mock';
-import { Corpus } from './Corpus';
+import { Corpus, reclassifyStatus } from './Corpus';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
@@ -313,6 +313,167 @@ describe('Corpus', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Reindex cross-image corpus' }));
       await waitFor(() => expect(screen.getByRole('button', { name: 'Reindex cross-image corpus' })).toBeEnabled());
       expect(screen.queryByText('Not reconciled')).not.toBeInTheDocument();
+      expect(mockApi.corpusOverview).toHaveBeenCalledTimes(1);
+    });
+  });
+  /**
+   * Re-running the classifier rewrites every image's stored identity, so it asks first; and its report must keep two
+   * readings impossible — a failed image's class is the one it KEPT, and an unchanged image is not silently dropped
+   * from the arithmetic.
+   */
+  describe('reanalyze', () => {
+    const report: ReanalyzeAllReport = {
+      total: 4,
+      changed: 2,
+      failed: 1,
+      results: [
+        { id: 'a', filename: 'ecos.bin', before: 'embedded-linux', after: 'rtos' },
+        { id: 'b', filename: 'fresh.bin', before: null, after: 'esp-soc' },
+        { id: 'c', filename: 'stable.bin', before: 'uefi-bios', after: 'uefi-bios' },
+        {
+          id: 'd',
+          filename: 'gone.bin',
+          before: 'baremetal',
+          after: 'baremetal',
+          error: "ENOENT: no such file or directory, open '/data/images/d'",
+        },
+      ],
+    };
+
+    function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+      let resolve!: (v: T) => void;
+      const promise = new Promise<T>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    it('classifies a row from the row alone, failure first', () => {
+      expect(reclassifyStatus({ id: 'x', filename: 'x', before: 'rtos', after: 'rtos' })).toBe('unchanged');
+      expect(reclassifyStatus({ id: 'x', filename: 'x', before: 'rtos', after: 'esp-soc' })).toBe('changed');
+      expect(reclassifyStatus({ id: 'x', filename: 'x', before: null, after: 'rtos' })).toBe('changed');
+      expect(reclassifyStatus({ id: 'x', filename: 'x', before: 'rtos', after: 'rtos', error: 'boom' })).toBe('failed');
+    });
+
+    it('re-analyzes nothing when the confirmation is cancelled', async () => {
+      setLocale('en');
+      render(
+        <MemoryRouter>
+          <Corpus />
+        </MemoryRouter>,
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Re-analyze all images' }));
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText('Re-classify every image?')).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(mockApi.reanalyzeCorpus).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'en',
+        'Re-analyze all images',
+        'Re-analyzing…',
+        'Re-analyze',
+        '4 image(s) re-analyzed: 2 changed class, 1 unchanged, 1 failed.',
+        'changed',
+        'failed — stored class kept',
+        'none stored',
+      ],
+      [
+        'es',
+        'Reanalizar todas las imágenes',
+        'Reanalizando…',
+        'Reanalizar',
+        '4 imagen(es) reanalizada(s): 2 cambiaron de clase, 1 sin cambios, 1 fallaron.',
+        'cambió',
+        'falló — se conserva la clase guardada',
+        'ninguna guardada',
+      ],
+    ] as const)(
+      'in %s: confirms, locks while busy, lists changed and failed images and refreshes',
+      async (locale, run, running, confirm, summary, changed, failed, none) => {
+        setLocale(locale);
+        const pending = deferred<ReanalyzeAllReport>();
+        mockApi.reanalyzeCorpus.mockReturnValue(pending.promise);
+        render(
+          <MemoryRouter>
+            <Corpus />
+          </MemoryRouter>,
+        );
+
+        fireEvent.click(await screen.findByRole('button', { name: run }));
+        fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: confirm }));
+        expect(mockApi.reanalyzeCorpus).toHaveBeenCalledTimes(1);
+
+        const busy = screen.getByRole('button', { name: running });
+        expect(busy).toBeDisabled();
+        fireEvent.click(busy);
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(mockApi.corpusOverview).toHaveBeenCalledTimes(1);
+
+        pending.resolve(report);
+
+        expect(await screen.findByText(summary)).toBeInTheDocument();
+
+        // A changed image: before → after, linked back to the image whose plan it re-routes.
+        const ecos = screen.getByRole('link', { name: 'ecos.bin' });
+        expect(ecos).toHaveAttribute('href', '/image/a');
+        const ecosRow = ecos.closest('tr') as HTMLElement;
+        expect(within(ecosRow).getByText('embedded-linux')).toBeInTheDocument();
+        expect(within(ecosRow).getByText('rtos')).toBeInTheDocument();
+        expect(within(ecosRow).getByText(changed)).toBeInTheDocument();
+
+        // A first classification names the missing class instead of printing nothing.
+        const freshRow = screen.getByRole('link', { name: 'fresh.bin' }).closest('tr') as HTMLElement;
+        expect(within(freshRow).getByText(none)).toBeInTheDocument();
+        expect(within(freshRow).getByText('esp-soc')).toBeInTheDocument();
+
+        // A failure shows only the class it kept, with the route's own reason verbatim.
+        const goneRow = screen.getByRole('link', { name: 'gone.bin' }).closest('tr') as HTMLElement;
+        expect(within(goneRow).getAllByText('baremetal')).toHaveLength(1);
+        expect(within(goneRow).queryByText('→')).not.toBeInTheDocument();
+        expect(within(goneRow).getByText(failed)).toBeInTheDocument();
+        expect(within(goneRow).getByText(/ENOENT: no such file/)).toBeInTheDocument();
+
+        // An unchanged image is in the count, not the table.
+        expect(screen.queryByText('stable.bin')).not.toBeInTheDocument();
+
+        await waitFor(() => expect(mockApi.corpusOverview).toHaveBeenCalledTimes(2));
+        expect(mockApi.corpusRules).toHaveBeenCalledTimes(2);
+        expect(screen.getByRole('button', { name: run })).toBeEnabled();
+      },
+    );
+
+    it('says why the report is empty on an empty bench', async () => {
+      setLocale('en');
+      mockApi.reanalyzeCorpus.mockResolvedValue({ total: 0, changed: 0, failed: 0, results: [] });
+      render(
+        <MemoryRouter>
+          <Corpus />
+        </MemoryRouter>,
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Re-analyze all images' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Re-analyze' }));
+      expect(
+        await screen.findByText('There are no images on this bench, so nothing was re-analyzed.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    });
+
+    it('re-enables the button and invents no report when the request fails', async () => {
+      setLocale('en');
+      mockApi.reanalyzeCorpus.mockRejectedValue(new Error('500 Internal Server Error'));
+      render(
+        <MemoryRouter>
+          <Corpus />
+        </MemoryRouter>,
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Re-analyze all images' }));
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Re-analyze' }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Re-analyze all images' })).toBeEnabled());
+      expect(screen.queryByText(/image\(s\) re-analyzed/)).not.toBeInTheDocument();
       expect(mockApi.corpusOverview).toHaveBeenCalledTimes(1);
     });
   });

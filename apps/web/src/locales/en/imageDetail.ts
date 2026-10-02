@@ -59,6 +59,20 @@ export const imageDetail = {
     statRecovered: 'Raw recovered values',
     statStrategy: 'Runtime strategy',
 
+    /**
+     * Re-running the intake classifier on this one image. Class codes are identifiers and pass through untouched.
+     * A change re-routes what the scan PLANS from now on; it re-runs nothing, so the sentence has to say the stages
+     * already run were planned against the old class.
+     */
+    reclassify: 'Re-classify image',
+    reclassifying: 'Re-classifying…',
+    reclassifyTitle: 'Recompute the device class from the stored bytes. No provider is re-run and no finding changes.',
+    reclassifyChanged: (before: string, after: string) =>
+      `Class changed: ${before} → ${after}. The scan plan and the coverage banner now route off ${after}; the stages already run were planned against ${before}, so re-run the scan to cover what the new class routes to.`,
+    reclassifyUnchanged: (cls: string) =>
+      `Class unchanged: ${cls}. A fresh pass over the stored bytes classifies this image the same way.`,
+    reclassifyNone: 'none stored',
+
     copilotTitle: 'Copilot analysis',
     copilotModelTitle: 'LLM backing the copilot',
     copilotAnalyzing: 'Analyzing…',

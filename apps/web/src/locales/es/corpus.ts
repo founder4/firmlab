@@ -52,6 +52,32 @@ export const corpus: Messages['corpus'] = {
       'Tablas que este reindexado no puede restaurar por diseño. Su contenido, o que estén vacías, no es una medición.',
   },
 
+  reclassify: {
+    title: 'Volver a ejecutar el clasificador',
+    sub: 'Recalcula la clase de dispositivo de cada imagen a partir de sus bytes guardados. Una imagen conserva la clase que recibió al subirse, y tanto el plan del escaneo autónomo como el aviso de cobertura se guían por ella — así que una clase anterior a una mejora del clasificador planifica e informa sobre el dispositivo equivocado. No se vuelve a ejecutar ningún proveedor ni cambia ningún hallazgo.',
+    run: 'Reanalizar todas las imágenes',
+    running: 'Reanalizando…',
+    confirmTitle: '¿Reclasificar todas las imágenes?',
+    confirmBody:
+      'La identidad y el análisis estático guardados de cada imagen se sustituyen por una pasada nueva sobre sus bytes. Una clase que cambia redirige desde ahora el plan de escaneo y el aviso de cobertura de esa imagen; los hallazgos ya registrados se quedan como están. Una imagen cuya pasada falla conserva su análisis guardado.',
+    confirm: 'Reanalizar',
+    empty: 'No hay imágenes en este banco, así que no se reanalizó nada.',
+    summary: (total, changed, unchanged, failed) =>
+      `${total} imagen(es) reanalizada(s): ${changed} cambiaron de clase, ${unchanged} sin cambios, ${failed} fallaron.`,
+    changedNote:
+      'Una clase cambiada surte efecto en el próximo escaneo. Las etapas ya ejecutadas se planificaron con la clase anterior, así que el aviso de cobertura puede listar ahora etapas que no se han ejecutado para esa imagen; vuelve a escanearla para cubrirlas.',
+    failedNote:
+      'Una imagen que falló conservó su análisis guardado: la clase mostrada es la que sigue usando, no un resultado de esta pasada.',
+    colImage: 'Imagen',
+    colClass: 'Clase',
+    colStatus: 'Estado',
+    none: 'ninguna guardada',
+    status: {
+      changed: 'cambió',
+      failed: 'falló — se conserva la clase guardada',
+    },
+  },
+
   reuse: {
     title: 'Reutilización de credenciales',
     sub: 'Secretos que aparecen en más de una imagen — una pista que conviene comprobar, no un veredicto. Promociona una recurrente a la lista de vigilancia para marcarla automáticamente en las próximas subidas.',

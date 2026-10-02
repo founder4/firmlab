@@ -16,6 +16,7 @@ import {
   type GrypeKevMatch,
   type ImageSummary,
   type Job,
+  type ReanalyzeImageResult,
   type ResearchResult,
   type ResearchStatus,
   type RuntimeCapabilities,
@@ -161,6 +162,21 @@ export function ImageDetail(): JSX.Element {
       .catch(() => setAnalysis(null));
   }, [id]);
 
+  // The route rewrote the stored identity and the static analysis together, so both are taken up here: the identity
+  // from the response, the analysis by re-reading it. A failed re-read keeps the analysis on screen.
+  const onReclassified = useCallback(
+    (result: ReanalyzeImageResult) => {
+      setImage((prev) =>
+        prev && prev.id === result.id ? { ...prev, status: 'ready', identity: result.identity } : prev,
+      );
+      api
+        .analysis(id)
+        .then(setAnalysis)
+        .catch(() => undefined);
+    },
+    [id],
+  );
+
   if (!image) {
     return (
       <div style={{ display: 'grid', gap: 12 }}>
@@ -200,7 +216,7 @@ export function ImageDetail(): JSX.Element {
       <ActiveJobs key={id} imageId={id} />
       <StepTimeline imageId={id} active={tab} ready={image.status === 'ready'} />
 
-      {tab === 'dossier' && <DossierPanel image={image} analysis={analysis} />}
+      {tab === 'dossier' && <DossierPanel image={image} analysis={analysis} onReclassified={onReclassified} />}
       {tab === 'structure' && analysis && <StructurePanel analysis={analysis} />}
       {tab === 'entropy' && analysis && <EntropyPanel analysis={analysis} />}
       {/* Extraction owns the carved rootfs; recovered values have a dedicated cross-source inventory. */}
@@ -384,12 +400,65 @@ function CorpusRefRow({
   );
 }
 
+/**
+ * Re-run the intake classifier over this image's stored bytes (`POST /images/:id/analysis`). The class is written
+ * once, at upload, and both the scan plan and the coverage banner route off it — so an image ingested before a
+ * classifier improvement keeps planning against the old class until this runs. Nothing else is re-run, and the
+ * feedback says which of the two outcomes happened, because "unchanged" is an answer too and must not read as nothing.
+ */
+function ReclassifyImage({
+  imageId,
+  onReclassified,
+}: {
+  imageId: string;
+  onReclassified: (result: ReanalyzeImageResult) => void;
+}): JSX.Element {
+  const t = useMessages().imageDetail.dossier;
+  const [running, setRunning] = useState(false);
+  const [outcome, setOutcome] = useState<ReanalyzeImageResult | null>(null);
+
+  const run = useCallback(async () => {
+    setRunning(true);
+    try {
+      const result = await api.reanalyzeImage(imageId);
+      setOutcome(result);
+      onReclassified(result);
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setRunning(false);
+    }
+  }, [imageId, onReclassified]);
+
+  const before = outcome?.before ?? t.reclassifyNone;
+  const after = outcome?.after ?? t.reclassifyNone;
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+      <button
+        type="button"
+        className="btn btn-sm"
+        disabled={running}
+        aria-busy={running}
+        title={t.reclassifyTitle}
+        onClick={() => void run()}
+      >
+        {running ? t.reclassifying : t.reclassify}
+      </button>
+      <div className="hint" aria-live="polite" style={{ flex: 1, minWidth: 0, maxWidth: '72ch' }}>
+        {outcome ? (outcome.changed ? t.reclassifyChanged(before, after) : t.reclassifyUnchanged(after)) : null}
+      </div>
+    </div>
+  );
+}
+
 function DossierPanel({
   image,
   analysis,
+  onReclassified,
 }: {
   image: ImageSummary;
   analysis: StaticAnalysis | null;
+  onReclassified: (result: ReanalyzeImageResult) => void;
 }): JSX.Element {
   const id = image.id;
   const t = useMessages();
@@ -518,6 +587,7 @@ function DossierPanel({
             ))}
           </div>
         </div>
+        <ReclassifyImage key={id} imageId={id} onReclassified={onReclassified} />
         <SignalCanvas imageId={id} size={image.size} findings={findings} />
       </div>
 

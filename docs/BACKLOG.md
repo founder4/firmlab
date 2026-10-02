@@ -379,7 +379,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 - [ ] **Rutas de la API sin cliente web, de valor medio/bajo** (auditoría del 2026-09-27; las de valor alto —snapshot
   RTOS, funcdiff, lanzar Ghidra, reensamblado BLE/Zigbee— ya tienen UI): `POST /images/:id/analysis` y
   `/analysis/reanalyze-all` (re-clasificar tras cambiar el clasificador sin borrar y resubir), y leer el estado actual de
-  aprobación del agente en Ajustes. Decidir cuáles son sólo para scripts/MCP antes de construir UI. *(Lanzar `component-cve` y
+  aprobación del agente en Ajustes. Decidir cuáles son sólo para scripts/MCP antes de construir UI. *(Re-clasificación
+  expuesta en la Ola 4: `api.reanalyzeCorpus` con confirmación e informe localizado en el corpus —recuentos de la ruta,
+  sólo filas cambiadas o fallidas, clase conservada en un fallo— y `api.reanalyzeImage` como «Reclasificar imagen» junto a
+  la clase del dossier, que actualiza la identidad en sitio y relee el análisis; queda la aprobación del agente en Ajustes.
+  Lanzar `component-cve` y
   `auxsecrets` sueltos implementado en `7544f9d` con botones dedicados, sondeo de job y refresco acotado del libro mayor de hallazgos;
   resultados persistidos de `chipsec` y `renode` expuestos en `dbb39d4` en SimulationMenu con vistas compartidas y precedencia de ejecución
   en vivo; borrador de modelo y baseUrl en Ajustes corregido en `7544f9d` para no blanquear valores guardados; acción de reindexación y

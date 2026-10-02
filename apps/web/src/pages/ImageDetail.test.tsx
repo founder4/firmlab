@@ -19,7 +19,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { type Finding, type FirmwareDiffResult, type ImageSummary, api } from '../api';
+import {
+  type Finding,
+  type FirmwareDiffResult,
+  type ImageIdentity,
+  type ImageSummary,
+  type ReanalyzeImageResult,
+  api,
+} from '../api';
 import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import { ImageDetail } from './ImageDetail';
@@ -1234,5 +1241,98 @@ describe('ImageDetail — KEV never reports a zero it did not measure', () => {
     await show({ checked: true, catalogSize: 1300, matches: [], inputCveCount: 6 });
     expect(screen.getByText('KEV 0 known-exploited')).toBeInTheDocument();
     expect(screen.queryByText(/KEV not asked/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Re-classifying one image. The class is written once at upload and the scan plan routes off it, so the action has
+ * to (1) take the new identity up in place — the badge beside the signal tape is what an operator reads the class
+ * from — and (2) say which outcome happened, since "unchanged" is an answer too and must not read as nothing.
+ */
+describe('ImageDetail re-classification', () => {
+  // This file's setup re-stubs without clearing, so call counts are read relative to the moment they matter.
+  beforeEach(() => vi.clearAllMocks());
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+  const classBadge = (container: HTMLElement): string | null | undefined =>
+    container.querySelector('.panel-head .badge-accent')?.textContent;
+
+  it('locks while in flight, updates the class badge in place and says what changed', async () => {
+    const pending = deferred<ReanalyzeImageResult>();
+    mockApi.reanalyzeImage.mockReturnValue(pending.promise);
+    const { container } = renderSection('dossier');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-classify image' }));
+    expect(mockApi.reanalyzeImage).toHaveBeenCalledWith('img1');
+    const busy = screen.getByRole('button', { name: 'Re-classifying…' });
+    expect(busy).toBeDisabled();
+    fireEvent.click(busy);
+    expect(mockApi.reanalyzeImage).toHaveBeenCalledTimes(1);
+    expect(classBadge(container)).toBe('embedded-linux');
+    const analysisReads = mockApi.analysis.mock.calls.length;
+
+    pending.resolve({
+      id: 'img1',
+      before: 'embedded-linux',
+      after: 'rtos',
+      changed: true,
+      identity: { ...image.identity, firmwareClass: 'rtos' } as ImageIdentity,
+    });
+
+    expect(await screen.findByText(/^Class changed: embedded-linux → rtos\./)).toBeInTheDocument();
+    expect(screen.getByText(/re-run the scan/)).toBeInTheDocument();
+    await waitFor(() => expect(classBadge(container)).toBe('rtos'));
+    // The route rewrote the static analysis too, so it is re-read rather than left stale; no full reload.
+    await waitFor(() => expect(mockApi.analysis.mock.calls.length).toBe(analysisReads + 1));
+    expect(mockApi.getImage).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Re-classify image' })).toBeEnabled();
+  });
+
+  it('reports an unchanged class as an answer, in Spanish', async () => {
+    setLocale('es');
+    mockApi.reanalyzeImage.mockResolvedValue({
+      id: 'img1',
+      before: 'embedded-linux',
+      after: 'embedded-linux',
+      changed: false,
+      identity: image.identity as ImageIdentity,
+    });
+    const { container } = renderSection('dossier');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reclasificar imagen' }));
+    expect(await screen.findByText(/^La clase no cambió: embedded-linux\./)).toBeInTheDocument();
+    expect(screen.queryByText(/La clase cambió/)).not.toBeInTheDocument();
+    expect(classBadge(container)).toBe('embedded-linux');
+  });
+
+  it('names a first classification instead of printing a null class', async () => {
+    mockApi.reanalyzeImage.mockResolvedValue({
+      id: 'img1',
+      before: null,
+      after: 'esp-soc',
+      changed: true,
+      identity: { ...image.identity, firmwareClass: 'esp-soc' } as ImageIdentity,
+    });
+    renderSection('dossier');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-classify image' }));
+    expect(await screen.findByText(/^Class changed: none stored → esp-soc\./)).toBeInTheDocument();
+  });
+
+  it('keeps the stored class and re-enables the action when the re-analysis fails', async () => {
+    mockApi.reanalyzeImage.mockRejectedValue(new Error('Re-analysis failed: ENOENT'));
+    const { container } = renderSection('dossier');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-classify image' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Re-classify image' })).toBeEnabled());
+    expect(screen.queryByText(/^Class (changed|unchanged)/)).not.toBeInTheDocument();
+    expect(classBadge(container)).toBe('embedded-linux');
+    expect(mockApi.analysis).toHaveBeenCalledTimes(1);
   });
 });

@@ -1219,6 +1219,36 @@ export interface CorpusReindexReport {
   verdict: string;
 }
 
+/**
+ * One image's line in POST /api/analysis/reanalyze-all. `before`/`after` are firmware-class identifiers; `before` is
+ * null when the image never had a stored identity. On `error` the stored analysis was left alone, so `after` repeats
+ * `before` — it is the class the image still plans against, not a result of the failed run.
+ */
+export interface ReanalyzeRow {
+  id: string;
+  filename: string;
+  before: string | null;
+  after: string | null;
+  error?: string;
+}
+
+/** POST /api/analysis/reanalyze-all: the intake analysis recomputed from every image's stored bytes. */
+export interface ReanalyzeAllReport {
+  total: number;
+  changed: number;
+  failed: number;
+  results: ReanalyzeRow[];
+}
+
+/** POST /api/images/:id/analysis: one image's intake analysis recomputed from its stored bytes. */
+export interface ReanalyzeImageResult {
+  id: string;
+  before: string | null;
+  after: string | null;
+  changed: boolean;
+  identity: ImageIdentity;
+}
+
 /** A binary from the extracted rootfs (0/1/null columns preserved as returned by the API). */
 export interface BinaryEntry {
   imageId: string;
@@ -2407,6 +2437,13 @@ export const api = {
   deleteRule: (id: string) => fetch(`/api/corpus/rules/${id}`, { method: 'DELETE' }).then(() => undefined),
   reindexCorpus: (locale?: Locale) =>
     post<{ report: CorpusReindexReport }>(`/api/corpus/reindex${lang(locale)}`).then((r) => r.report),
+  /**
+   * Re-run the intake classifier over stored bytes. No locale: the payload is class identifiers and filenames, and
+   * the only prose — a failure's `error` — is the route's own message, rendered verbatim. Neither call re-runs a
+   * provider or touches findings; a changed class re-routes the scan plan and the coverage banner from then on.
+   */
+  reanalyzeImage: (id: string) => post<ReanalyzeImageResult>(`/api/images/${id}/analysis`, {}),
+  reanalyzeCorpus: () => post<ReanalyzeAllReport>('/api/analysis/reanalyze-all', {}),
   ghidraResult: (id: string) => get<{ result: GhidraResult | null }>(`/api/images/${id}/ghidra`).then((r) => r.result),
   // The five capabilities that had routes and no reader. `null` from any of these means the stage has NOT run —
   // distinct from a result whose `available` is false, which means it ran and this deployment could not answer.
