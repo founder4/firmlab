@@ -40,11 +40,22 @@ export const simulation: Messages['simulation'] = {
 
   moduleCount: (n: number) => `${n} módulo${n === 1 ? '' : 's'}`,
   noUefiVolume: 'sin volumen UEFI',
+  notDecoded: 'sin decodificar',
   volumeCount: (n: number) => `${n} FV`,
   secureBoot: 'Arranque seguro:',
   setupMode: (mode: string) => `modo ${mode}`,
   testKey: (key: string) => `clave de prueba: ${key}`,
   nvramVars: (n: number) => `${n} variable(s) NVRAM`,
+  spiDescriptor: 'Descriptor de flash SPI (estático, de la imagen):',
+  spiRegionDisabled: (name: string) => `${name}: deshabilitada`,
+  spiHostDescriptorWrite: 'El maestro CPU/BIOS puede escribir el descriptor:',
+  spiHostMeWrite: 'El maestro CPU/BIOS puede escribir la región Intel ME:',
+  spiGrant: {
+    granted: 'sí',
+    denied: 'no',
+    'layout-dependent': 'depende de la generación del PCH',
+    unknown: 'desconocido',
+  },
 
   unreachableTitle: 'Por qué no respondió nada',
 

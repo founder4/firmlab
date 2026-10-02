@@ -23,6 +23,8 @@ import {
   type EmulationRecipe,
   type Job,
   type RenodeResult,
+  type SpiDescriptorView,
+  type SpiGrantVerdict,
   api,
 } from '../api';
 import { useMessages } from '../i18n';
@@ -501,9 +503,15 @@ function ChipsecResultView({ result }: { result: Partial<ChipsecResult> }): JSX.
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span className={`badge ${result.moduleCount ? 'badge-ok' : 'badge-medium'}`}>
-          {result.moduleCount ? t.simulation.moduleCount(result.moduleCount) : t.simulation.noUefiVolume}
-        </span>
+        {/* A decode that never ran (chipsec absent, input refused) counted nothing: "no UEFI volume" there would turn a
+            missing tool into a property of the image. */}
+        {result.ran === false ? (
+          <span className="badge">{t.simulation.notDecoded}</span>
+        ) : (
+          <span className={`badge ${result.moduleCount ? 'badge-ok' : 'badge-medium'}`}>
+            {result.moduleCount ? t.simulation.moduleCount(result.moduleCount) : t.simulation.noUefiVolume}
+          </span>
+        )}
         {Boolean(result.volumes) && <span className="badge">{t.simulation.volumeCount(result.volumes ?? 0)}</span>}
         <span className="badge">{result.proofState}</span>
       </div>
@@ -561,6 +569,7 @@ function ChipsecResultView({ result }: { result: Partial<ChipsecResult> }): JSX.
           </div>
         </div>
       )}
+      {result.spiDescriptor && <SpiDescriptorBlock spi={result.spiDescriptor} />}
       {result.findings && result.findings.length > 0 && (
         <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {result.findings.map((f) => (
@@ -588,6 +597,76 @@ function ChipsecResultView({ result }: { result: Partial<ChipsecResult> }): JSX.
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const GRANT_CLASS: Record<SpiGrantVerdict, string> = {
+  granted: 'badge-high',
+  denied: 'badge-ok',
+  'layout-dependent': '',
+  unknown: '',
+};
+const hexAddr = (n: number | null | undefined) => (typeof n === 'number' ? `0x${n.toString(16)}` : '?');
+
+/**
+ * The static descriptor reading. Its sentences are the provider's, printed as written: an `unknown` state (no
+ * descriptor signature, a truncated map) must read as "not established", never as "no descriptor", and a
+ * `layout-dependent` grant produces no finding, so this is the only place it is visible at all.
+ */
+function SpiDescriptorBlock({ spi }: { spi: SpiDescriptorView }): JSX.Element {
+  const t = useMessages();
+  const host = spi.hostMasterAccess;
+  const grant = (label: string, verdict: SpiGrantVerdict | undefined) =>
+    verdict && (
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+        <span className="hint" style={{ fontSize: 11 }}>
+          {label}
+        </span>
+        <span className={`badge ${GRANT_CLASS[verdict] ?? ''}`}>{t.simulation.spiGrant[verdict] ?? verdict}</span>
+      </div>
+    );
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="hint" style={{ fontSize: 11 }}>
+        {t.simulation.spiDescriptor}
+      </div>
+      {spi.reason && (
+        <div className="hint" style={{ marginTop: 2 }}>
+          {spi.reason}
+        </div>
+      )}
+      {spi.status === 'parsed' && spi.regions && spi.regions.length > 0 && (
+        <div
+          className="mono"
+          style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4, overflowWrap: 'anywhere' }}
+        >
+          {spi.regions
+            .map((r) =>
+              r.enabled
+                ? `${r.name ?? '?'} ${hexAddr(r.startBytes)}–${hexAddr(r.endBytesExclusive)}`
+                : t.simulation.spiRegionDisabled(r.name ?? '?'),
+            )
+            .join('  ·  ')}
+        </div>
+      )}
+      {grant(t.simulation.spiHostDescriptorWrite, host?.descriptorWrite)}
+      {host?.reason && (
+        <div className="hint" style={{ marginTop: 2 }}>
+          {host.reason}
+        </div>
+      )}
+      {grant(t.simulation.spiHostMeWrite, host?.meWrite)}
+      {host?.meWriteReason && (
+        <div className="hint" style={{ marginTop: 2 }}>
+          {host.meWriteReason}
+        </div>
+      )}
+      {spi.runtimeRegisterPosture?.reason && (
+        <div className="hint" style={{ marginTop: 2 }}>
+          {spi.runtimeRegisterPosture.reason}
         </div>
       )}
     </div>

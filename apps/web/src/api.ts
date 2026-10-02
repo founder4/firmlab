@@ -174,6 +174,25 @@ export interface ChipsecResult {
   findings: UefiSecurityFinding[];
   command: string;
   isolation?: string;
+  /** Static Intel flash-descriptor reading (`providers/spi-descriptor.ts`). Optional forever, like every field in it. */
+  spiDescriptor?: SpiDescriptorView;
+}
+
+export type SpiGrantVerdict = 'granted' | 'denied' | 'layout-dependent' | 'unknown';
+
+/** What the shipped descriptor says; never the live FRAP/PRx registers, which `runtimeRegisterPosture` states unknown. */
+export interface SpiDescriptorView {
+  status?: 'parsed' | 'unknown';
+  reason?: string;
+  regions?: { name?: string; enabled?: boolean; startBytes?: number | null; endBytesExclusive?: number | null }[];
+  runtimeRegisterPosture?: { state?: string; reason?: string };
+  hostMasterAccess?: {
+    status?: 'read' | 'unknown';
+    reason?: string;
+    descriptorWrite?: SpiGrantVerdict;
+    meWrite?: SpiGrantVerdict;
+    meWriteReason?: string;
+  };
 }
 
 /**

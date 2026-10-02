@@ -40,11 +40,17 @@ export const simulation = {
 
   moduleCount: (n: number) => `${n} module${n === 1 ? '' : 's'}`,
   noUefiVolume: 'no UEFI volume',
+  notDecoded: 'not decoded',
   volumeCount: (n: number) => `${n} FV`,
   secureBoot: 'Secure Boot:',
   setupMode: (mode: string) => `${mode} mode`,
   testKey: (key: string) => `test key: ${key}`,
   nvramVars: (n: number) => `${n} NVRAM var(s)`,
+  spiDescriptor: 'SPI flash descriptor (static, from the image):',
+  spiRegionDisabled: (name: string) => `${name}: disabled`,
+  spiHostDescriptorWrite: 'CPU/BIOS master may write the descriptor:',
+  spiHostMeWrite: 'CPU/BIOS master may write the Intel ME region:',
+  spiGrant: { granted: 'yes', denied: 'no', 'layout-dependent': 'depends on the PCH generation', unknown: 'unknown' },
 
   /**
    * The verdict on an empty `open` list. It is a HEADING only: the sentence under it is composed by

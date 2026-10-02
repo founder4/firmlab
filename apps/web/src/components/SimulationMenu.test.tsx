@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
+import { en } from '../locales/en';
 import { mockedApi } from '../test-api-mock';
 import { SimulationMenu } from './SimulationMenu';
 
@@ -203,6 +204,71 @@ describe('SimulationMenu', () => {
     render(<SimulationMenu imageId="img1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
     expect(await screen.findByText(/NOT a platform with Secure Boot off/)).toBeInTheDocument();
+  });
+
+  it('says a decode that never ran is not decoded, never that the image has no UEFI volume', async () => {
+    mockApi.emulation.mockResolvedValue(uefiMenu());
+    mockApi.job.mockResolvedValue(
+      chipsecResult({ available: false, ran: false, moduleCount: 0, reason: 'chipsec not installed.' }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
+    expect(await screen.findByText(en.simulation.notDecoded)).toBeInTheDocument();
+    expect(screen.queryByText(en.simulation.noUefiVolume)).toBeNull();
+  });
+
+  it('states an unestablished SPI descriptor in the provider’s words, never as an absent one', async () => {
+    mockApi.emulation.mockResolvedValue(uefiMenu());
+    mockApi.job.mockResolvedValue(
+      chipsecResult({
+        spiDescriptor: {
+          status: 'unknown',
+          reason:
+            'No aligned Intel flash descriptor signature was found in the 1048576-byte scanned prefix; descriptor state is unknown.',
+          regions: [],
+          runtimeRegisterPosture: { state: 'unknown', reason: 'Live PRx and BIOS_CNTL values are unknown here.' },
+          hostMasterAccess: undefined,
+        },
+      }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
+    expect(await screen.findByText(/descriptor state is unknown/)).toBeInTheDocument();
+    expect(screen.getByText(en.simulation.spiDescriptor)).toBeInTheDocument();
+    expect(screen.queryByText(en.simulation.spiHostDescriptorWrite)).toBeNull();
+  });
+
+  it('shows the region map and both host-master verdicts, including one that depends on the PCH', async () => {
+    mockApi.emulation.mockResolvedValue(uefiMenu());
+    mockApi.job.mockResolvedValue(
+      chipsecResult({
+        spiDescriptor: {
+          status: 'parsed',
+          reason: 'Parsed 2 active flash regions from the static Intel descriptor map.',
+          regions: [
+            { name: 'Flash Descriptor', enabled: true, startBytes: 0, endBytesExclusive: 0x1000 },
+            { name: 'BIOS', enabled: true, startBytes: 0x1000, endBytesExclusive: 0x10000 },
+            { name: 'GbE', enabled: false, startBytes: null, endBytesExclusive: null },
+          ],
+          hostMasterAccess: {
+            status: 'read',
+            reason: 'FLMSTR1 0xffff0000 grants the host master descriptor write under every chipsec layout.',
+            descriptorWrite: 'granted',
+            meWrite: 'layout-dependent',
+            meWriteReason: 'FLMSTR1 0x00100000 grants Intel ME region write under pch-12bit only; undetermined.',
+          },
+        },
+      }),
+    );
+    render(<SimulationMenu imageId="img1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Decode & scan' }));
+    expect(
+      await screen.findByText(/Flash Descriptor 0x0–0x1000 +· +BIOS 0x1000–0x10000 +· +GbE: disabled/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(en.simulation.spiGrant.granted)).toHaveClass('badge-high');
+    expect(screen.getByText(en.simulation.spiGrant['layout-dependent'])).toBeInTheDocument();
+    expect(screen.getByText(/grants the host master descriptor write/)).toBeInTheDocument();
+    expect(screen.getByText(/Intel ME region write under pch-12bit only/)).toBeInTheDocument();
   });
 
   it('says WHY there is no posture instead of leaving the section blank', async () => {

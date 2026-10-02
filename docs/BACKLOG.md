@@ -106,7 +106,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   las dos disposiciones de chipsec (`common.xml` 8 bits en 16/24; `pch_1xx`+ 12 bits en 8/20) coinciden en conceder
   escritura a la región del descriptor; si discrepan queda `layout-dependent`, nunca se elige una. Contrastado sin
   red con `get_SPI_master()` y los campos de `pch_1xx.xml` de chipsec sobre bytes sintéticos; el corpus no tiene
-  ningún descriptor Intel real (OVMF es virtual) y el FRAP vivo sigue sin leerse. Siguen pendientes
+  ningún descriptor Intel real (OVMF es virtual) y el FRAP vivo sigue sin leerse. Desde 2026-10-02 también
+  `spi-descriptor-host-me-write` (región Intel ME, índice 2 según `hal/spi.py` de chipsec) con la misma regla de
+  acuerdo y sólo si el mapa habilita la región ME; y la vista de chipsec muestra el descriptor (estado o motivo,
+  mapa de regiones, veredictos del maestro CPU/BIOS incluido `layout-dependent`) y dice «sin decodificar» cuando
+  chipsec no corrió, en vez de «sin volumen UEFI». QA Chromium 1440 EN y 390 ES contra API local con imagen
+  sintética desechable, sin errores ni desbordamiento. Siguen pendientes
   LogoFAIL, callouts SMM (`CommBuffer`) y una captura PRx/BIOS-lock que pruebe la postura en ejecución.
 - [ ] Fuzzing avanzado. El planificador ya elige cmplog/compcov/plain según arquitectura, fija canal de entrada
   archivo/stdin/socket, comprueba la arquitectura de `FIRMLAB_DESOCK` y declara cero ejecuciones/crashes con sus
