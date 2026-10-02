@@ -30,9 +30,26 @@ con respuestas VEX interceptadas en el navegador: 16 casos (hallazgos/postura ke
 claro/oscuro), sin excepciones ni desbordamiento del documento. Capturas e informe en `qa-recovery/` del
 estado operativo. No se mutaron el corpus ni la base desplegada.
 
+## Avance en generación 4 (Antigravity)
+
+Tras el relevo formal y adopción de `run_fa2f177609e4` en generación 4 por Antigravity
+(`term_8496d58e-619b-40ca-a8f2-6903eac02384`):
+
+1. **Captura de RAM Renode**: Integrado el proveedor `apps/api/src/providers/renode-ram.ts`, rutas
+   Fastify `POST/GET /images/:id/rtos/ram-capture` y cableado web completo en `RtosTaskSnapshotPanel.tsx`
+   con soporte i18n (EN/ES) y carga directa del volcado en el formulario. Validado en ejecución real
+   en contenedor `--network none` sobre `/data/images/22c69f6e/Zephyr-STM32L072-Button.elf` volcando
+   20.480 bytes de `sram` [0x20000000, +0x5000] con peticiones remotas SVD rechazadas. Pruebas de contrato
+   de rutas añadidas en `rtos.test.ts` (18 tests pasando).
+2. **Corrección de observabilidad de cuota en el supervisor**: Reparado `skills/orca-campaign/scripts/watch.mjs`
+   para reconocer bloqueos de cuota/sesión como fase `blocked` (motivo `capacity_blocked`) y registrar
+   intervalos durables en `gaps`, sin intentos de auto-toma de control ni entradas ciegas. 44 tests unitarios
+   verificados. Habilidad canónica reinstalada y nuevo supervisor iniciado (PID 94159) en fase `working`.
+3. **Validación completa de repositorios**: `pnpm check`, `pnpm test` (115 pruebas pasando), `pnpm build`
+   (core, api, web) y `pnpm biome` (0 errores, 0 advertencias) verificados y limpios.
+
 ## Pendiente
 
-Captura RAM Renode: validar proveedor y ruta con memoria real en contenedor sin red. Corregir la
-observabilidad del bloqueo de cuota y verificar reserva de otro servicio con ejecución real antes de
-ceder autoridad. La prueba de duración **no está superada** y los gates anteriores no cubren cambios
-posteriores. El próximo coordinador actualizará contexto/estado y evidencia final al cerrar la ventana.
+- Mantener supervisión activa del buzón de orquestación y del plazo fijo `2026-10-02T15:07:39Z` (17:07:39 Madrid).
+- En el plazo de cierre, terminar la API sintética temporal (PID 92345), generar el informe final
+  en `status.md` (en español) y consolidar el balance de la campaña.
