@@ -501,9 +501,10 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Deuda estructural y de proceso
 
-- [ ] Orca `worktree new-child` toma como base `origin/main` local (2026-10-03: `679f267`, 81 commits detrás de
-  `main`), no el HEAD del coordinador; los hijos de la ola VEX tuvieron que avanzarse a mano. Verificar la base de
-  cada hijo antes de lanzar o fijar la base del repo con autorización; no hacer push para «arreglarlo».
+- [x] Orca `worktree new-child` toma como base `origin/main`, no el HEAD del coordinador (2026-10-03: `679f267`,
+  81 commits detrás; los hijos de la ola VEX se avanzaron a mano). Resuelto el 2026-10-04 subiendo `main` (87
+  commits, fast-forward). Regla que queda: antes de lanzar workers en hijos, `main` publicado o base del hijo
+  verificada con `git log -1` en cuanto se crea.
 
 - [ ] Reconciliar la documentación de despliegue con esta estación antes de la próxima entrega. Observado
   2026-10-03: `deploy.sh --check` y `/health` sitúan el contenedor en `679f267`, 81 commits detrás de
