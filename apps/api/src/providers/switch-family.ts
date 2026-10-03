@@ -37,7 +37,7 @@ export interface SwitchFileResult {
   /** Image basename for raw input; rootfs-relative path otherwise. Offsets are relative to this file. */
   path: string;
   fileBytes: number;
-  result: SwitchFamilyResult;
+  result: Omit<SwitchFamilyResult, 'deferred'> & { deferred?: SwitchFamilyResult['deferred'] };
 }
 
 type SwitchLane = SwitchFileResult['lane'];
@@ -69,7 +69,8 @@ export interface SwitchFamilyAggregate {
   inputs?: { files: number; bytesScanned: number; lanes: SwitchLane[] };
   /** How `hitCount` and vendor `count` were formed, and whether lanes may overlap. Optional: older builds. */
   countBasis?: string;
-  deferred: SwitchFamilyResult['deferred'];
+  /** Only overall persists this static catalogue; lane aggregates omit it. Older results may include it. */
+  deferred?: SwitchFamilyResult['deferred'];
   summary: string;
 }
 
@@ -278,6 +279,10 @@ export interface SwitchRootfsLane {
     errors: { path: string; reason: string }[];
     /** First cap-skipped paths in selection order, at most `SWITCH_SKIPPED_PATHS_RECORDED`. Optional: older builds. */
     skippedPaths?: string[];
+    /** Detailed results retained/omitted after scanning; omitted files were examined, never cap-skipped. Older builds omit these. */
+    fileResultsRetained?: number;
+    fileResultsOmitted?: number;
+    fileResultsSelection?: string;
   };
 }
 
@@ -290,6 +295,56 @@ export interface SwitchFamilyAnalysis {
   };
   rootfs: SwitchRootfsLane;
   overall: SwitchFamilyAggregate;
+}
+
+/** Pure: omit only a fully scanned file with positively empty evidence and no unresolved detector bound. */
+export function retainSwitchFileResult(file: SwitchFileResult): boolean {
+  const r = file.result;
+  return (
+    r.candidates.length > 0 ||
+    r.vendorMentions.length > 0 ||
+    r.nearMisses?.count !== 0 ||
+    !r.coverage.completed ||
+    r.coverage.edgeUnresolved > 0 ||
+    r.coverage.recordsDropped.length > 0
+  );
+}
+
+const FILE_RESULTS_SELECTION =
+  'Detailed rootfs results retain candidates, vendor mentions, near misses, incomplete scans, omitted detector records and unresolved boundaries. Fully scanned files with no such evidence or bounds are counted in lane coverage and aggregate inputs, but their per-file details are omitted. This is storage selection, not a scan limit.';
+
+/** Pure: aggregate first, then compact stored/MCP output; never infer coverage from the retained file list. */
+export function compactSwitchFamilyAnalysis(analysis: SwitchFamilyAnalysis): SwitchFamilyAnalysis {
+  const fileResult = (file: SwitchFileResult): SwitchFileResult => {
+    const { deferred: _deferred, ...result } = file.result;
+    return { ...file, result };
+  };
+  const laneResult = (result: SwitchFamilyAggregate | null): SwitchFamilyAggregate | null => {
+    if (!result) return null;
+    const { deferred: _deferred, ...rest } = result;
+    return rest;
+  };
+  const files = analysis.rootfs.files.filter(retainSwitchFileResult).map(fileResult);
+  return {
+    ...analysis,
+    raw: {
+      ...analysis.raw,
+      file: analysis.raw.file ? fileResult(analysis.raw.file) : null,
+      result: laneResult(analysis.raw.result),
+    },
+    rootfs: {
+      ...analysis.rootfs,
+      files,
+      result: laneResult(analysis.rootfs.result),
+      coverage: {
+        ...analysis.rootfs.coverage,
+        fileResultsRetained: files.length,
+        fileResultsOmitted:
+          (analysis.rootfs.coverage.fileResultsOmitted ?? 0) + analysis.rootfs.files.length - files.length,
+        fileResultsSelection: FILE_RESULTS_SELECTION,
+      },
+    },
+  };
 }
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -469,5 +524,5 @@ export async function runSwitchFamilyAnalysis(
   const overall = aggregateSwitchFamilies([...(raw.file ? [raw.file] : []), ...rootfs.files], {
     notScannedBecause: switchLaneStatuses(raw, rootfs),
   });
-  return { raw, rootfs, overall };
+  return compactSwitchFamilyAnalysis({ raw, rootfs, overall });
 }

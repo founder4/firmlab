@@ -1507,6 +1507,10 @@ export interface SwitchFamilyAnalysis {
       filesExamined?: number;
       filesSkipped?: number;
       filesTruncated?: number;
+      /** Per-file details retained/omitted after scanning, not files skipped by a scan cap. Absent on older jobs. */
+      fileResultsRetained?: number;
+      fileResultsOmitted?: number;
+      fileResultsSelection?: string;
       bytesScanned?: number;
       symlinksSkipped?: number;
       specialFilesSkipped?: number;

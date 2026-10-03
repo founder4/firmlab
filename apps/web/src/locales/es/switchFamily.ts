@@ -54,6 +54,8 @@ export const switchFamily: Messages['switchFamily'] = {
   filesExamined: 'Archivos examinados',
   filesDiscovered: 'Archivos regulares inventariados',
   filesSkipped: 'Archivos omitidos',
+  fileResultsRetained: 'Resultados detallados de fichero conservados',
+  fileResultsOmitted: 'Ficheros examinados completos sin resultado detallado',
   filesTruncated: 'Archivos truncados',
   bytesScanned: 'Bytes analizados',
   bytesTotal: 'Bytes del archivo',

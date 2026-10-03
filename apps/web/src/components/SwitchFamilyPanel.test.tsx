@@ -62,6 +62,29 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('SwitchFamilyPanel', () => {
+  it('distinguishes omitted per-file details from skipped scans and reads legacy results without inventing counts', async () => {
+    const selection = 'Fully scanned neutral files have no stored details; scanning coverage is unchanged.';
+    const compact: SwitchFamilyAnalysis = {
+      ...saved,
+      rootfs: {
+        ...saved.rootfs,
+        coverage: {
+          ...saved.rootfs?.coverage,
+          fileResultsRetained: 1,
+          fileResultsOmitted: 1023,
+          fileResultsSelection: selection,
+        },
+      },
+    };
+    mockApi.switchFamilyResult.mockResolvedValue(compact);
+    render(<SwitchFamilyPanel imageId="image-compact" />);
+    expect(await screen.findByText(m.fileResultsRetained)).toBeInTheDocument();
+    expect(screen.getByText(m.fileResultsRetained).nextElementSibling).toHaveTextContent('1');
+    expect(screen.getByText(m.fileResultsOmitted).nextElementSibling).toHaveTextContent('1023');
+    expect(screen.getByText(m.filesSkipped).nextElementSibling).toHaveTextContent('2');
+    expect(screen.getByText(selection)).toBeInTheDocument();
+  });
+
   it('shows the verbatim summary, template standing, tokens and file evidence without promoting them', async () => {
     mockApi.switchFamilyResult.mockResolvedValue(saved);
     render(<SwitchFamilyPanel imageId="image-1" />);
@@ -78,6 +101,7 @@ describe('SwitchFamilyPanel', () => {
     expect(screen.getByText('Driver-name mappings')).toBeInTheDocument();
     expect(screen.getByText(m.incompleteInventory)).toBeInTheDocument();
     expect(screen.getByText(m.links).nextElementSibling).toHaveTextContent('4');
+    expect(screen.queryByText(m.fileResultsOmitted)).not.toBeInTheDocument();
     expect(screen.getByText(m.filesSkipped).nextElementSibling).toHaveTextContent('2');
   });
 

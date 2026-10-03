@@ -50,6 +50,8 @@ export const switchFamily = {
   filesExamined: 'Files examined',
   filesDiscovered: 'Regular files discovered',
   filesSkipped: 'Files skipped',
+  fileResultsRetained: 'Detailed file results retained',
+  fileResultsOmitted: 'Fully scanned files without detailed results',
   filesTruncated: 'Files truncated',
   bytesScanned: 'Bytes scanned',
   bytesTotal: 'File bytes',

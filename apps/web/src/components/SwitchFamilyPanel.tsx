@@ -258,6 +258,19 @@ function SwitchFamilyView({ imageId }: { imageId: string }): JSX.Element {
                               ? m.incompleteInventory
                               : m.notRecorded}
                         </p>
+                        {coverage?.fileResultsSelection !== undefined && (
+                          <>
+                            <Metrics
+                              rows={[
+                                [m.fileResultsRetained, coverage.fileResultsRetained],
+                                [m.fileResultsOmitted, coverage.fileResultsOmitted],
+                              ]}
+                            />
+                            <p className="hint" style={prose}>
+                              {coverage.fileResultsSelection}
+                            </p>
+                          </>
+                        )}
                         <details>
                           <summary>{m.limits}</summary>
                           <p style={prose}>{coverage?.selection ?? m.notRecorded}</p>

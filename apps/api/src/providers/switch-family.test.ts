@@ -8,7 +8,9 @@ import {
   SWITCH_SKIPPED_PATHS_RECORDED,
   type SwitchFileResult,
   aggregateSwitchFamilies,
+  compactSwitchFamilyAnalysis,
   orderSwitchRootfsFiles,
+  retainSwitchFileResult,
   runSwitchFamilyAnalysis,
   switchPathRank,
 } from './switch-family.js';
@@ -156,6 +158,35 @@ describe('bounded switch-family filesystem lanes', () => {
     await fs.rm(temporary, { recursive: true, force: true });
   });
 
+  it('scans 1024 files but stores only detailed leads, with full coverage and one deferred catalogue', async () => {
+    const names = Array.from({ length: 1024 }, (_, k) => `f${String(k).padStart(4, '0')}`);
+    await Promise.all(
+      names.map((name, k) => fs.writeFile(path.join(rootfs, name), k === 1023 ? 'QCA8337' : 'neutral')),
+    );
+    const result = await runSwitchFamilyAnalysis(image, rootfs);
+    expect(result.rootfs.coverage).toMatchObject({
+      filesExamined: 1024,
+      filesDiscovered: 1024,
+      filesSkipped: 0,
+      fileResultsRetained: 1,
+      fileResultsOmitted: 1023,
+      bytesScanned: 1024 * 7,
+    });
+    expect(result.rootfs.files.map((file) => file.path)).toEqual(['f1023']);
+    expect(result.rootfs.result?.inputs?.files).toBe(1024);
+    expect(result.overall.inputs?.files).toBe(1025);
+    expect(result.overall.candidates[0]?.hitCount).toBe(1);
+    expect(result.overall.candidates[0]?.evidence[0]?.path).toBe('f1023');
+    expect(result.rootfs.status).toBe('completed');
+    expect(result.rootfs.coverage.fileResultsSelection).toMatch(/storage selection, not a scan limit/);
+    const payload = JSON.stringify(result);
+    expect(payload.match(/"deferred":/g)).toHaveLength(1);
+    expect(Buffer.byteLength(payload)).toBeLessThan(20_000);
+    expect(compactSwitchFamilyAnalysis(result)).toEqual(result);
+    const expanded = names.map((name, k) => source(name, k === 1023 ? 'QCA8337' : 'neutral'));
+    expect(Buffer.byteLength(JSON.stringify(expanded))).toBeGreaterThan(Buffer.byteLength(payload) * 50);
+  });
+
   it('runs raw-only and states no-rootfs as not run, without claiming a negative', async () => {
     await fs.writeFile(image, 'QCA8337');
     const result = await runSwitchFamilyAnalysis(image);
@@ -206,6 +237,7 @@ describe('bounded switch-family filesystem lanes', () => {
       filesTruncated: 0,
     });
     expect(result.rootfs.files.map((file) => file.path)).toEqual(['a']);
+    expect(result.rootfs.coverage).toMatchObject({ fileResultsRetained: 1, fileResultsOmitted: 0 });
     expect(result.rootfs.status).toBe('partial');
     expect(result.rootfs.coverage.selection).toMatch(/ties go by ascending relative path/);
     expect(result.rootfs.coverage.skippedPaths).toEqual(['z']);
@@ -224,11 +256,7 @@ describe('bounded switch-family filesystem lanes', () => {
       await fs.writeFile(path.join(rootfs, name), text);
     }
     const result = await runSwitchFamilyAnalysis(image, rootfs, { ...DEFAULT_SWITCH_ROOTFS_LIMITS, maxFiles: 3 });
-    expect(result.rootfs.files.map((file) => file.path)).toEqual([
-      'lib/modules/5.4/rtl8367.ko',
-      'bin/a',
-      'usr/lib/libshared.so',
-    ]);
+    expect(result.rootfs.files.map((file) => file.path)).toEqual(['usr/lib/libshared.so']);
     expect(result.rootfs.result?.verdict).toBe('template-only');
     expect(result.rootfs.coverage.skippedPaths).toEqual(['etc/b', 'www/index.html']);
     expect(result.rootfs.coverage.selection).toMatch(/ranked by where switch literals live BEFORE any cap applies/);
@@ -287,7 +315,8 @@ describe('bounded switch-family filesystem lanes', () => {
     const result = await runSwitchFamilyAnalysis(image, rootfs);
     expect(result.rootfs.coverage).toMatchObject({ filesExamined: 1, symlinksSkipped: 3 });
     expect(result.rootfs.result?.verdict).toBe('none-observed');
-    expect(result.rootfs.files.map((file) => file.path)).toEqual(['plain']);
+    expect(result.rootfs.files).toEqual([]);
+    expect(result.rootfs.coverage.fileResultsOmitted).toBe(1);
     // Unfollowed links hide no firmware bytes: an internal target is inventoried on its own path.
     expect(result.rootfs.status).toBe('completed');
   });
@@ -355,5 +384,26 @@ describe('bounded switch-family filesystem lanes', () => {
     await expect(
       runSwitchFamilyAnalysis(image, rootfs, { ...DEFAULT_SWITCH_ROOTFS_LIMITS, maxFiles: 0 }),
     ).rejects.toThrow(/maxFiles/);
+  });
+});
+
+describe('compact persisted switch-family details', () => {
+  it('retains evidence, near misses and unresolved bounds, but not fully scanned neutral bytes', () => {
+    expect(retainSwitchFileResult(source('neutral', 'ordinary bytes'))).toBe(false);
+    for (const text of ['QCA8337', 'Realtek', 'RTL8367RB'])
+      expect(retainSwitchFileResult(source('evidence', text))).toBe(true);
+    const truncated = source('prefix', 'neutral');
+    truncated.result.coverage.completed = false;
+    expect(retainSwitchFileResult(truncated)).toBe(true);
+    const unresolved = source('boundary', 'neutral');
+    unresolved.result.coverage.edgeUnresolved = 1;
+    expect(retainSwitchFileResult(unresolved)).toBe(true);
+    const dropped = source('cap', 'neutral');
+    dropped.result.coverage.recordsDropped = [{ ruleId: 'fixture', dropped: 1 }];
+    expect(retainSwitchFileResult(dropped)).toBe(true);
+    const legacy = source('legacy', 'neutral');
+    const { nearMisses: _nearMisses, ...legacyResult } = legacy.result;
+    legacy.result = legacyResult;
+    expect(retainSwitchFileResult(legacy)).toBe(true);
   });
 });
