@@ -791,15 +791,23 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
 
 ## Revisiones independientes de la campaña (2026-10-02)
 
-- [ ] switch-family (revisión `review-switchfamily.md`, hallazgo 5): el resultado persistido y la carga MCP crecen
-  ~1,7 KB por fichero del rootfs aunque no haya evidencias (≈2,6 MB en MCP para 1.024 ficheros). Guardar el resultado
-  completo sólo de ficheros con candidatos, menciones, truncado o borde sin resolver, y `deferred` una vez arriba.
-  Diferido: cambia la forma de un resultado persistido.
-- [ ] VEX de proveedor (revisión `review-vex.md`): riesgos 5 (CSAF `first_affected`/`last_affected`/`first_fixed`
-  ignorados), 6 (`product_tree.branches`/`relationships` y OpenVEX 0.2.0 `identifiers`/`subcomponents` no leídos),
-  8 (los carriles sbom y research descartan la cobertura de descubrimiento), 9 (la regla por subcadena de directorio
-  puede agotar el cap de ficheros antes del documento real) y nits 11–15. Fallo conservador asumido: una fila grype de
-  ecosistema de lenguaje (pypi/npm) no casa con un purl tipado hasta que la fila lleve su ecosistema.
+- [x] switch-family (revisión `review-switchfamily.md`, hallazgo 5): se omiten los detalles de ficheros
+  completamente examinados sin candidatos, menciones, near misses, registros descartados ni fronteras pendientes;
+  la cobertura y los agregados siguen contando todos los ficheros. `deferred` se persiste sólo en `overall`.
+  Campos opcionales de conservación/omisión y UI compatible con resultados antiguos. Caso real de filesystem
+  sintético con 1.024 ficheros: JSON de 8.300 bytes, un resultado detallado, 1.023 omitidos; QA Chromium EN 1440/ES
+  390 sin errores ni desbordamiento. Ver `docs/PROJECT-WORK-2026-10-03.md`.
+- [x] VEX riesgo 5: CSAF `first_affected`/`last_affected`/`first_fixed` ya cuentan como grupos con semántica
+  no soportada, con ejemplos acotados y omisiones visibles en cobertura/veredictos. No se infieren intervalos
+  ni se elevan a afirmaciones exactas. Se conservan conflictos, límites e identidades versionadas.
+- [x] VEX riesgo 9: los documentos nombrados `.openvex.json`, `.vex.json` o con `csaf` en el nombre
+  preceden a JSON admitidos sólo por el directorio, antes de los caps de ficheros y bytes; desempate por ruta en
+  orden code-unit. Regla de selección registrada en cobertura, con campo opcional para resultados antiguos.
+  Denominadores y rechazos por symlink permanecen explícitos. No recupera entradas fuera del cap del inventario.
+- [ ] VEX de proveedor restante (revisión `review-vex.md`): riesgo 6 (`product_tree.branches`/`relationships`
+  y OpenVEX 0.2.0 `identifiers`/`subcomponents` no leídos), 8 (los carriles sbom y research descartan la cobertura de
+  descubrimiento) y nits 11–15. Fallo conservador asumido: una fila grype de ecosistema de lenguaje (pypi/npm) no casa con un purl tipado
+  hasta que la fila lleve su ecosistema. Interpretar intervalos CSAF queda pendiente de un contrato verificado.
 
 ## Orca — continuidad desatendida (2026-10-02)
 
