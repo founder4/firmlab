@@ -1,12 +1,16 @@
 /** Exit verification for owned Unix process groups. A delivered signal is not proof that sockets are free. */
 import { readFileSync, readdirSync, readlinkSync } from 'node:fs';
 
+/**
+ * `pgrp` from `/proc/<pid>/stat`. Group 0 is real, not unreadable: kernel threads carry it, and on a Linux host (a CI
+ * VM, unlike a container's PID namespace) they are in `/proc`. Rejecting it made every teardown there throw.
+ */
 export function procGroupMember(stat: string): { group: number; live: boolean } | null {
   const end = stat.lastIndexOf(')');
   if (end < 0) return null;
   const fields = stat.slice(end + 2).split(' ');
   const group = Number(fields[2]);
-  if (!Number.isInteger(group) || group <= 0 || !fields[0]) return null;
+  if (!Number.isInteger(group) || group < 0 || !fields[0]) return null;
   return { group, live: fields[0] !== 'Z' && fields[0] !== 'X' };
 }
 
@@ -43,8 +47,18 @@ export function processGroupSockets(group: number): Set<string> {
   for (const name of readdirSync('/proc')) {
     if (!/^\d+$/.test(name)) continue;
     try {
-      if (procGroupMember(readFileSync(`/proc/${name}/stat`, 'utf8'))?.group !== group) continue;
-      for (const fd of readdirSync(`/proc/${name}/fd`)) {
+      const member = procGroupMember(readFileSync(`/proc/${name}/stat`, 'utf8'));
+      // A zombie has released its files, and Linux refuses its fd directory (EACCES) because it has no mm left.
+      if (member?.group !== group || !member.live) continue;
+      let fds: string[];
+      try {
+        fds = readdirSync(`/proc/${name}/fd`);
+      } catch (error) {
+        // The member may have exited between the two reads; only a still-live member's refusal is a real gap.
+        if ((error as NodeJS.ErrnoException).code !== 'EACCES' || !stillLiveMember(name, group)) continue;
+        throw error;
+      }
+      for (const fd of fds) {
         try {
           const socket = /^socket:\[(\d+)\]$/.exec(readlinkSync(`/proc/${name}/fd/${fd}`));
           if (socket?.[1]) sockets.add(socket[1]);
@@ -59,6 +73,15 @@ export function processGroupSockets(group: number): Set<string> {
     }
   }
   return sockets;
+}
+
+function stillLiveMember(pid: string, group: number): boolean {
+  try {
+    const member = procGroupMember(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    return member?.group === group && member.live;
+  } catch {
+    return false;
+  }
 }
 
 function ownedSocketsRemain(sockets: ReadonlySet<string>): boolean {
