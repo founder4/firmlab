@@ -37,6 +37,11 @@ import { type OsvBatchResult, osvEcosystem, queryOsvBatch } from '../providers/o
 import { type ProvenanceFingerprint, buildProvenanceFingerprint } from '../providers/provenance.js';
 import type { SbomResult } from '../providers/sbom.js';
 import { type SecurityTxt, fetchSecurityTxt } from '../providers/securitytxt.js';
+import {
+  type VendorVexSearchSummary,
+  summarizeVendorVexSearch,
+  vendorVexNotAttempted,
+} from '../providers/vendor-vex-coverage.js';
 import { discoverVendorVex } from '../providers/vendor-vex-discover.js';
 import { getImage, listJobs } from '../store.js';
 import { rootfsKeyWalkWasBounded, selectSecurityDomains } from './bounds.js';
@@ -44,6 +49,8 @@ import { RESEARCH_DISABLED, loadResearchConfig } from './config.js';
 import { type EgressLedger, buildEgressLedger } from './egress.js';
 
 export interface ResearchResult {
+  /** Optional forever: legacy results have no record of whether vendor-VEX correlation was attempted. */
+  vendorVex?: VendorVexSearchSummary;
   enabled: true;
   provenance: ProvenanceFingerprint;
   egress: EgressLedger;
@@ -288,8 +295,15 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     );
   }
   const kernelAnswer = nvd.components.find((c) => c.name === 'linux-kernel');
+  let vendorVex = vendorVexNotAttempted(
+    'No Linux-kernel NVD answer, so no vendor VEX correlation was attempted in this run.',
+  );
   if (kernelAnswer) {
-    const drafts = normalizeKernelCves(kernelSelection, kernelAnswer, discoverVendorVex(rootfsPath));
+    const discovery = rootfsPath ? discoverVendorVex(rootfsPath) : undefined;
+    vendorVex = discovery
+      ? summarizeVendorVexSearch(discovery)
+      : vendorVexNotAttempted('No extracted rootfs, so no vendor VEX correlation was attempted in this run.');
+    const drafts = normalizeKernelCves(kernelSelection, kernelAnswer, discovery);
     syncFindings(imageId, 'kernel-cve', drafts);
     handle.log(
       `Kernel CVE: ${drafts.length} candidate row(s) persisted from ${kernelAnswer.totalMatching ?? drafts.length} Linux-kernel CNA match(es); vendor backports, build configuration and reachability remain unproven.`,
@@ -412,6 +426,7 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     keyMaterial,
     securityContacts,
     hashLookup,
+    vendorVex,
     ...(synthesis ? { synthesis } : {}),
   };
 }

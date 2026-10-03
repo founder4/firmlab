@@ -10,11 +10,14 @@
  */
 import { type Finding, SEVERITY_RANK, type SeverityCount, findingRank, severityCensus } from '@firmlab/core';
 import type { DegradedRemedy } from './opacidad-remedy.js';
+import type { VendorVexSearchSummary } from './providers/vendor-vex-coverage.js';
 
 export type OpacidadStepStatus = 'ran' | 'degraded' | 'skipped' | 'not-built';
 
 /** One worker's outcome in the run — what it produced, or the honest reason it could not. */
 export interface OpacidadStep {
+  /** Optional forever: absent on legacy steps and executors that did not supply a search record. */
+  vendorVex?: VendorVexSearchSummary;
   worker: string;
   status: OpacidadStepStatus;
   summary: string;

@@ -15,6 +15,7 @@ import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
 import { anchoreEnv, dbAgeDays, dbUpdateAllowed, decideGrype, grypeDbDir, readGrypeDbStatus } from './sbom-db.js';
+import type { VendorVexSearchSummary } from './vendor-vex-coverage.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -41,6 +42,8 @@ export interface SbomVuln {
 }
 
 export interface SbomResult {
+  /** Optional forever: legacy results did not record the independent local vendor-VEX search. */
+  vendorVex?: VendorVexSearchSummary;
   available: boolean;
   reason?: string;
   target: string;

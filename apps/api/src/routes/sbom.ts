@@ -12,6 +12,7 @@ import { deviceContextFor, normalizeSbom, syncFindings } from '../findings.js';
 import { startJob } from '../providers/jobs.js';
 import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { type SbomResult, runSbom } from '../providers/sbom.js';
+import { summarizeVendorVexSearch } from '../providers/vendor-vex-coverage.js';
 import { discoverVendorVex } from '../providers/vendor-vex-discover.js';
 import { getImage, listJobs } from '../store.js';
 
@@ -33,7 +34,8 @@ export async function sbomRoutes(app: FastifyInstance): Promise<void> {
     const jobId = startJob(id, 'sbom', {}, (handle) =>
       runSbom(id, rootfsPath, handle).then((r) => {
         // The device context is read HERE, after the job ran, so it reflects the rootfs the scan actually used.
-        syncFindings(id, 'sbom', normalizeSbom(r, deviceContextFor(id, rootfsPath), discoverVendorVex(rootfsPath)));
+        const discovery = discoverVendorVex(rootfsPath);
+        syncFindings(id, 'sbom', normalizeSbom(r, deviceContextFor(id, rootfsPath), discovery));
         if (r.available) {
           // Cross-image component occurrences, each carrying how many CVEs grype matched to it.
           const cveCount = (name: string, version: string): number =>
@@ -43,7 +45,7 @@ export async function sbomRoutes(app: FastifyInstance): Promise<void> {
             r.packages.map((p) => ({ name: p.name, version: p.version, cveCount: cveCount(p.name, p.version) })),
           );
         }
-        return r;
+        return { ...r, vendorVex: summarizeVendorVexSearch(discovery) };
       }),
     );
     return reply.status(202).send({ jobId });
