@@ -4,6 +4,8 @@ import path from 'node:path';
 import { MAX_UNRECOGNISED_STATUS_EXAMPLES, type VendorVexDocument, parseVendorVex } from '@firmlab/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  VEX_SELECTION_RULE,
+  type VendorVexDiscoveryCoverage,
   discoverVendorVex,
   isVexCandidatePath,
   linuxKernelProductMatcher,
@@ -11,6 +13,7 @@ import {
   productIdentityRefusal,
   selectVexCandidates,
   vendorVexVerdictFor,
+  vexCandidateRank,
 } from './vendor-vex-discover.js';
 
 /** An OpenVEX document with the given statements. */
@@ -71,6 +74,37 @@ describe('isVexCandidatePath — the stated rule', () => {
     const r = selectVexCandidates(['/z/c.vex.json', '/a/b.vex.json', '/etc/x.json', '/m/a.vex.json'], 2);
     expect(r).toEqual({ selected: ['/a/b.vex.json', '/m/a.vex.json'], found: 3, dropped: 1 });
   });
+
+  it.each([
+    ['/z/kernel.OPENVEX.JSON', 0],
+    ['/z/kernel.VEX.JSON', 0],
+    ['/z/vendor_CSAF.json', 0],
+    ['/a/convex/config.json', 1],
+    ['/a/CSAF-cache/config.JSON', 1],
+    ['/a/vex/kernel.vex.json', 0],
+    ['/a/config.json', null],
+    ['/a/vex/kernel.vex.json.bak', null],
+  ])('ranks %s as %s without changing candidate acceptance', (relPath, rank) => {
+    expect(vexCandidateRank(relPath)).toBe(rank);
+    expect(isVexCandidatePath(relPath)).toBe(rank !== null);
+  });
+
+  it('selects by rank then original code-unit path order regardless of input order, without mutating it', () => {
+    const expected = [
+      '/z/A.vex.json',
+      '/z/Z.csaf.json',
+      '/z/a.openvex.json',
+      '/z/é.vex.json',
+      '/a/convex/A.json',
+      '/a/convex/a.json',
+    ];
+    for (const input of [expected, [...expected].reverse(), [...expected.slice(3), ...expected.slice(0, 3)]]) {
+      const paths = Object.freeze([...input, '/a/config.json']);
+      expect(selectVexCandidates(paths, 5)).toEqual({ selected: expected.slice(0, 5), found: 6, dropped: 1 });
+      expect(selectVexCandidates(paths, 10)).toEqual({ selected: expected, found: 6, dropped: 0 });
+      expect(selectVexCandidates(paths, 0)).toEqual({ selected: [], found: 6, dropped: 6 });
+    }
+  });
 });
 
 describe('discoverVendorVex', () => {
@@ -108,7 +142,7 @@ describe('discoverVendorVex', () => {
     expect(r.coverage.symlinksSkipped).toBe(2);
   });
 
-  it('caps files (sorted path order), total bytes and per-document bytes, counting every drop', () => {
+  it('caps files (rank then path order), total bytes and per-document bytes, counting every drop', () => {
     const text = openvex([{ cve: 'CVE-2022-0847', products: ['linux-kernel'], status: 'fixed' }]);
     const root = rootfs({
       'a/1.vex.json': text,
@@ -121,7 +155,7 @@ describe('discoverVendorVex', () => {
     expect(files.documents.map((d) => d.sourcePath)).toEqual(['/a/1.vex.json', '/a/2.vex.json']);
     expect(files.coverage.droppedByFileCap).toBe(3);
     expect(files.coverage.statement).toMatch(
-      /3 candidate\(s\) beyond the 2-file cap were not read \(sorted path order\)/,
+      /3 candidate\(s\) beyond the 2-file cap were not read \(rank then path order\)/,
     );
 
     const bytes = discoverVendorVex(root, { maxTotalBytes: text.length * 2 + 1, maxDocumentBytes: 1024 });
@@ -130,6 +164,93 @@ describe('discoverVendorVex', () => {
     expect(bytes.refusals).toEqual([
       expect.objectContaining({ path: '/b/huge.vex.json', reason: 'oversized_document' }),
     ]);
+  });
+
+  it.each(['z/vendor.openvex.json', 'z/vendor.vex.json', 'z/vendor_CSAF.json'])(
+    'selects a late named document (%s) before more than maxFiles directory-only candidates and the byte cap',
+    (namedPath) => {
+      const text = openvex([{ cve: 'CVE-2022-0847', products: ['linux-kernel'], status: 'fixed' }]);
+      const generic = Array.from({ length: 5 }, (_, i) => [`a/convex/config-${i}.json`, '{}']);
+      const entries = [...generic, [namedPath, text]];
+      for (const ordered of [entries, [...entries].reverse()]) {
+        const root = rootfs(Object.fromEntries(ordered));
+        const files = discoverVendorVex(root, { maxFiles: 3 });
+        expect(files.documents.map((d) => d.sourcePath)).toEqual([`/${namedPath}`]);
+        expect(files.refusals.map((r) => [r.path, r.reason])).toEqual([
+          ['/a/convex/config-0.json', 'non_vex_json'],
+          ['/a/convex/config-1.json', 'non_vex_json'],
+        ]);
+        expect(files.coverage).toMatchObject({
+          candidatesFound: 6,
+          examined: 3,
+          parsed: 1,
+          refused: 2,
+          droppedByFileCap: 3,
+          droppedByByteCap: 0,
+          bytesRead: Buffer.byteLength(text) + 4,
+          selectionRule: VEX_SELECTION_RULE,
+        });
+        expect(files.coverage.statement).toContain(`Selection rule: ${VEX_SELECTION_RULE}.`);
+
+        const bytes = discoverVendorVex(root, { maxTotalBytes: Buffer.byteLength(text) });
+        expect(bytes.documents.map((d) => d.sourcePath)).toEqual([`/${namedPath}`]);
+        expect(bytes.coverage).toMatchObject({
+          candidatesFound: 6,
+          examined: 6,
+          parsed: 1,
+          refused: 0,
+          droppedByFileCap: 0,
+          droppedByByteCap: 5,
+          bytesRead: Buffer.byteLength(text),
+        });
+        expect(bytes.refusals).toEqual([]);
+
+        const both = discoverVendorVex(root, { maxFiles: 3, maxTotalBytes: Buffer.byteLength(text) });
+        expect(both.documents.map((d) => d.sourcePath)).toEqual([`/${namedPath}`]);
+        expect(both.coverage).toMatchObject({
+          candidatesFound: 6,
+          examined: 3,
+          parsed: 1,
+          refused: 0,
+          droppedByFileCap: 3,
+          droppedByByteCap: 2,
+          bytesRead: Buffer.byteLength(text),
+        });
+      }
+    },
+  );
+
+  it('refuses a prioritized symlink without reading outside the rootfs or spending the byte budget', () => {
+    const text = openvex([{ cve: 'CVE-2022-0847', products: ['linux-kernel'], status: 'fixed' }]);
+    const outside = rootfs({ 'host.vex.json': text });
+    const root = rootfs({ 'a/convex/config.json': '{}', 'z/b.vex.json': text });
+    fs.symlinkSync(path.join(outside, 'host.vex.json'), path.join(root, 'z/a.vex.json'));
+    fs.symlinkSync(outside, path.join(root, 'a/csaf-linked'));
+    const result = discoverVendorVex(root, { maxFiles: 2, maxTotalBytes: Buffer.byteLength(text) });
+    expect(result.documents.map((d) => d.sourcePath)).toEqual(['/z/b.vex.json']);
+    expect(result.refusals).toEqual([
+      expect.objectContaining({ path: '/z/a.vex.json', reason: 'symlink_not_followed' }),
+    ]);
+    expect(result.coverage).toMatchObject({
+      candidatesFound: 3,
+      examined: 2,
+      parsed: 1,
+      refused: 1,
+      symlinksSkipped: 2,
+      droppedByFileCap: 1,
+      droppedByByteCap: 0,
+      bytesRead: Buffer.byteLength(text),
+    });
+  });
+
+  it('records the selection rule for empty discovery without requiring it on legacy coverage', () => {
+    const current = discoverVendorVex(null).coverage;
+    expect(current.selectionRule).toBe(VEX_SELECTION_RULE);
+    const { selectionRule: _rule, ...oldCoverage } = current;
+    const legacy: VendorVexDiscoveryCoverage = oldCoverage;
+    expect(legacy.selectionRule).toBeUndefined();
+    expect(legacy.candidatesFound).toBe(0);
+    expect(legacy.statement).toContain('not a clean result');
   });
 
   it('a walk cut by its entry cap says candidates beyond it were never seen', () => {

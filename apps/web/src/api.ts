@@ -1899,6 +1899,8 @@ export interface VendorVexRowVerdict {
  */
 export interface VendorVexCoverage {
   rule?: string;
+  /** Discovery ranking before file/byte caps. Not recorded by older builds. */
+  selectionRule?: string;
   candidatesFound?: number;
   examined?: number;
   parsed?: number;

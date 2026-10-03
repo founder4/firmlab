@@ -36,8 +36,9 @@
  *
  * Discovery is bounded and deterministic: the tree walk visits at most `maxEntries` entries and never follows a
  * symbolic link (a symlinked candidate is refused by name, because a link inside a vendor rootfs can point at the
- * host); candidates are sorted by path and the file cap drops by that order; a document above the per-document cap
- * is refused without being read, and the total-byte cap drops the rest — every drop is counted.
+ * host); candidates named as VEX/CSAF documents precede generic JSON admitted only by directory name, with
+ * code-unit path order within each rank, before file and total-byte caps. A document above the per-document cap
+ * is refused without being read; every drop is counted. Ranking cannot recover entries beyond the walk cap.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -59,21 +60,35 @@ export const VEX_CANDIDATE_RULE =
   'a .json file whose name ends in .openvex.json or .vex.json, or whose name contains "csaf", or that sits under ' +
   'a directory whose name contains "vex" or "csaf" (case-insensitive); symbolic links are never followed';
 
-/** Pure: whether a rootfs-relative path (`/`-separated) is a VEX candidate under `VEX_CANDIDATE_RULE`. */
-export function isVexCandidatePath(relPath: string): boolean {
+export const VEX_SELECTION_RULE =
+  'among discovered candidates, filenames ending in .openvex.json or .vex.json or containing "csaf" ' +
+  '(case-insensitive) rank before generic JSON admitted only by a directory name; ties use ascending original ' +
+  'path code-unit order, before the file and total-byte caps';
+
+/** Pure: filename evidence ranks first (0), directory-only evidence second (1), non-candidates are null. */
+export function vexCandidateRank(relPath: string): 0 | 1 | null {
   const segments = relPath.toLowerCase().split('/').filter(Boolean);
   const base = segments.at(-1);
-  if (!base?.endsWith('.json')) return false;
-  if (base.endsWith('.openvex.json') || base.endsWith('.vex.json') || base.includes('csaf')) return true;
-  return segments.slice(0, -1).some((d) => d.includes('vex') || d.includes('csaf'));
+  if (!base?.endsWith('.json')) return null;
+  if (base.endsWith('.openvex.json') || base.endsWith('.vex.json') || base.includes('csaf')) return 0;
+  return segments.slice(0, -1).some((d) => d.includes('vex') || d.includes('csaf')) ? 1 : null;
 }
 
-/** Pure: the candidates in sorted path order, capped, with what the cap dropped. */
+/** Pure: whether a rootfs-relative path (`/`-separated) is a VEX candidate under `VEX_CANDIDATE_RULE`. */
+export function isVexCandidatePath(relPath: string): boolean {
+  return vexCandidateRank(relPath) !== null;
+}
+
+/** Pure: candidates under `VEX_SELECTION_RULE`, capped, with exact counts; does not mutate input. */
 export function selectVexCandidates(
   relPaths: readonly string[],
   maxFiles: number,
 ): { selected: string[]; found: number; dropped: number } {
-  const all = relPaths.filter(isVexCandidatePath).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const all = relPaths
+    .map((relPath) => ({ relPath, rank: vexCandidateRank(relPath) }))
+    .filter((candidate): candidate is { relPath: string; rank: 0 | 1 } => candidate.rank !== null)
+    .sort((a, b) => a.rank - b.rank || (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0))
+    .map((candidate) => candidate.relPath);
   const selected = all.slice(0, maxFiles);
   return { selected, found: all.length, dropped: all.length - selected.length };
 }
@@ -95,6 +110,8 @@ export interface VendorVexDiscoveryRefusal {
 
 export interface VendorVexDiscoveryCoverage {
   rule: string;
+  /** Optional forever: older persisted discoveries did not record their selection order. */
+  selectionRule?: string;
   candidatesFound: number;
   /** Candidates opened or refused by name (selected under the file cap). */
   examined: number;
@@ -197,6 +214,7 @@ function emptyDiscovery(caps: VendorVexDiscoveryCoverage['caps'], reason: string
     refusals: [],
     coverage: {
       rule: VEX_CANDIDATE_RULE,
+      selectionRule: VEX_SELECTION_RULE,
       candidatesFound: 0,
       examined: 0,
       parsed: 0,
@@ -292,9 +310,10 @@ function discoverIn(rootfs: string, caps: VendorVexDiscoveryCoverage['caps']): V
 
   const parts = [
     `${found} VEX candidate file(s) under the rule (${VEX_CANDIDATE_RULE}); ${documents.length} parsed, ${refusals.length} refused.`,
+    `Selection rule: ${VEX_SELECTION_RULE}.`,
   ];
   if (dropped > 0)
-    parts.push(`${dropped} candidate(s) beyond the ${caps.maxFiles}-file cap were not read (sorted path order).`);
+    parts.push(`${dropped} candidate(s) beyond the ${caps.maxFiles}-file cap were not read (rank then path order).`);
   if (droppedByByteCap > 0) {
     parts.push(`${droppedByByteCap} candidate(s) were not read: the ${caps.maxTotalBytes}-byte total cap was reached.`);
   }
@@ -331,6 +350,7 @@ function discoverIn(rootfs: string, caps: VendorVexDiscoveryCoverage['caps']): V
     refusals,
     coverage: {
       rule: VEX_CANDIDATE_RULE,
+      selectionRule: VEX_SELECTION_RULE,
       candidatesFound: found,
       examined: selected.length,
       parsed: documents.length,
@@ -522,7 +542,7 @@ export interface VendorVexRowVerdict {
   sourcePath: string | null;
   statementIndex: number | null;
   justification: string | null;
-  /** Every statement the verdict rests on, across all documents, in sorted-path then statement order. */
+  /** Every statement the verdict rests on, in discovery selection order then statement order. */
   sources: VendorVexRowSource[];
   /**
    * What may be missing from this verdict: statements a cap dropped, statements with an unrecognised or unsupported
