@@ -1,0 +1,5 @@
+kernel_tag=V11.1.0
+kernel_commit=dbf70559b27d39c1fdb68dfb9a32140b6a6777a0
+toolchain=arm-none-eabi-gcc (15:12.2.rel1-1) 12.2.1 20221205
+toolchain_package=15:12.2.rel1-1
+elf_sha256=912231e23bd7672369ed85a6eebd7443a60161fe032f5b532bba80adcc45ff84
