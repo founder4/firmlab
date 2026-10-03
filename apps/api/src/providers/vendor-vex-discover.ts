@@ -45,6 +45,7 @@ import path from 'node:path';
 import {
   COMPONENT_CPE,
   DEFAULT_MAX_VEX_DOCUMENT_BYTES,
+  MAX_UNREAD_STRUCTURE_EXAMPLES,
   MAX_UNRECOGNISED_STATUS_EXAMPLES,
   type ProductMatcherPredicate,
   type VendorVexDocument,
@@ -555,7 +556,7 @@ export interface VendorVexRowVerdict {
 
 export interface VendorVexRowOmission {
   sourcePath: string;
-  reason: 'statement_cap' | 'product_cap' | 'unrecognised_status' | 'unmatchable_identity';
+  reason: 'statement_cap' | 'product_cap' | 'unrecognised_status' | 'unmatchable_identity' | 'unread_structure';
   count: number;
 }
 
@@ -564,6 +565,8 @@ const OMISSION_TEXT: Record<VendorVexRowOmission['reason'], string> = {
   product_cap: 'product reference(s) dropped by the product cap',
   unrecognised_status: 'statement(s) with an unrecognised or unsupported status (including CSAF boundary semantics)',
   unmatchable_identity: 'product identit(ies) for this CVE that could not be read',
+  unread_structure:
+    'product structure(s) for this CVE not interpreted (CSAF branches/relationships, OpenVEX identifiers or nested subcomponents)',
 };
 
 /**
@@ -587,6 +590,12 @@ function omissionsFor(documents: readonly VendorVexDocument[], cveId: string): V
     const unlisted = (doc.unrecognisedStatusCount ?? 0) - examples.length;
     if (named > 0 || (unlisted > 0 && examples.length >= MAX_UNRECOGNISED_STATUS_EXAMPLES)) {
       out.push({ sourcePath: at, reason: 'unrecognised_status', count: named + Math.max(0, unlisted) });
+    }
+    const unreadExamples = doc.unreadStructureExamples ?? [];
+    const unreadNamed = unreadExamples.filter((e) => e.vulnerabilityId === cve).length;
+    const unreadUnlisted = (doc.unreadStructureCount ?? 0) - unreadExamples.length;
+    if (unreadNamed > 0 || (unreadUnlisted > 0 && unreadExamples.length >= MAX_UNREAD_STRUCTURE_EXAMPLES)) {
+      out.push({ sourcePath: at, reason: 'unread_structure', count: unreadNamed + Math.max(0, unreadUnlisted) });
     }
     const unreadable = doc.statements
       .filter((st) => st.vulnerabilityId === cve)

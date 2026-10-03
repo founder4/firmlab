@@ -64,6 +64,8 @@ export const kernelPosture: Messages['kernelPosture'] = {
     droppedProducts: 'Referencias de producto omitidas por los límites del intérprete',
     ignoredNonCve: 'Entradas sin CVE ignoradas',
     unrecognisedStatus: 'Estados no reconocidos o no admitidos omitidos',
+    unreadStructures: 'Estructuras de producto no interpretadas (contadas, nunca casadas)',
+    unreadStructureRule: 'Regla de estructuras no leídas',
     otherCounter: (key) => `Contador registrado del intérprete (${key})`,
     documentBounds: 'Regla de límites del intérprete',
     author: 'Autor',

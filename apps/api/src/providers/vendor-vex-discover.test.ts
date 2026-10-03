@@ -516,6 +516,45 @@ describe('a row verdict says what may be missing from it', () => {
   });
 });
 
+describe('unread product structures stay visible on a verdict', () => {
+  const cve = 'CVE-2022-48174';
+  const csafText = JSON.stringify({
+    document: { category: 'csaf_vex', csaf_version: '2.0', publisher: { name: 'Vendor' }, tracking: { id: 'T' } },
+    product_tree: {
+      full_product_names: [{ product_id: 'BB', name: 'busybox' }],
+      branches: [
+        {
+          name: 'v',
+          product: { product_id: 'busybox', product_identification_helper: { purl: 'pkg:generic/busybox@1.30.1' } },
+        },
+      ],
+    },
+    vulnerabilities: [
+      { cve, product_status: { known_not_affected: ['BB'], known_affected: ['busybox'] } },
+      { cve: 'CVE-2021-0001', product_status: { fixed: ['BB'] } },
+    ],
+  });
+
+  it('a branch-only reference neither matches by raw id nor disappears from the verdict', () => {
+    const d = doc(csafText, '/etc/csaf-branches.json');
+    const m = packageProductMatcher('busybox', '1.36.1');
+    const v = vendorVexVerdictFor({ documents: [d] }, cve, m, 'busybox');
+    // Only the full_product_names statement matched; the branch-defined `busybox` id (a 1.30.1 helper) did not
+    // turn into a bare-name "affected" claim against 1.36.1.
+    expect(v?.verdict).toBe('vendor_states_not_affected');
+    expect(v?.omissions).toEqual([{ sourcePath: '/etc/csaf-branches.json', reason: 'unread_structure', count: 1 }]);
+    expect(v?.rationale).toMatch(/not interpreted/);
+    expect(vendorVexVerdictFor({ documents: [d] }, 'CVE-2021-0001', m, 'busybox')?.omissions).toBeUndefined();
+  });
+
+  it('a stored document from an older build without the counters yields no fabricated omission', () => {
+    const d = doc(csafText, '/etc/csaf-branches.json');
+    const { unreadStructureCount: _c, unreadStructureExamples: _e, unreadStructureRule: _r, ...legacy } = d;
+    const v = vendorVexVerdictFor({ documents: [legacy] }, cve, packageProductMatcher('busybox', '1.36.1'), 'busybox');
+    expect(v?.omissions).toBeUndefined();
+  });
+});
+
 describe('unsupported CSAF boundary semantics stay visible', () => {
   const cve = 'CVE-2022-48174';
   const product = {

@@ -822,8 +822,14 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   resultados antiguos («no registrado», nunca cero). UI compartida `VendorVexCoverage` en SBOM, research, W9 y
   kernel posture. Validación 2026-10-03 en `7c8c8ea`: gates completos verdes (4660 tests); QA Chromium EN/ES a
   1440/390 con datos sintéticos de componente, sin overflow ni errores. No ejercitado contra el corpus desplegado.
-- [ ] VEX de proveedor restante (revisión `review-vex.md`): riesgo 6 (`product_tree.branches`/`relationships`
-  y OpenVEX 0.2.0 `identifiers`/`subcomponents` no leídos) y nits 11–15 (el riesgo 8 se cerró arriba). Fallo conservador asumido: una fila grype de ecosistema de lenguaje (pypi/npm) no casa con un purl tipado
+- [x] VEX riesgo 6, variante acotada (2026-10-03): sin especificación CSAF/OpenVEX primaria fijada en local, las
+  estructuras no leídas se cuentan por CVE (`unreadStructureCount`/ejemplos/regla, opcionales) en vez de
+  interpretarse: product_id definido sólo en `branches`/`relationships` (nunca casa por su ID bruto, que perdía la
+  restricción de versión del helper), árbol truncado (profundidad 32 / 10 000 nodos), `identifiers` y
+  `subcomponents` anidados de OpenVEX. Los veredictos por fila lo nombran como omisión `unread_structure`; la
+  cobertura persistida y la UI lo muestran. Gates completos verdes (4675 tests). Pendiente: interpretar esas
+  estructuras cuando haya fuentes primarias y fixtures verificados.
+- [ ] VEX de proveedor restante (revisión `review-vex.md`): interpretación semántica del riesgo 6 (hoy contado como omisión, arriba) y nits 11–15 (el riesgo 8 se cerró arriba). Fallo conservador asumido: una fila grype de ecosistema de lenguaje (pypi/npm) no casa con un purl tipado
   hasta que la fila lleve su ecosistema. Interpretar intervalos CSAF queda pendiente de un contrato verificado.
   Revisión de código 2026-10-03: W9 persiste una selección propia de campos, por lo que ampliar solo `SbomResult`
   no resuelve el riesgo 8. En el riesgo 6, una referencia CSAF de branches no indexada cae al ID bruto y puede

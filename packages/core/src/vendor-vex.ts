@@ -81,6 +81,41 @@ export interface VendorVexUnrecognisedStatus {
 /** How many examples of unrecognised statuses a document keeps; the count is always exact. */
 export const MAX_UNRECOGNISED_STATUS_EXAMPLES = 10;
 
+/**
+ * A product structure the parser saw and deliberately did not interpret, for one CVE. No pinned primary CSAF/OpenVEX
+ * specification text backs a reading of these shapes here, so instead of guessing what they mean they are counted:
+ *
+ *  - `csaf_unindexed_product` — a product_status reference to a product_id defined only under
+ *    `product_tree.branches` or `product_tree.relationships`. It is NOT matched by its raw id: the definition it
+ *    points at may carry a versioned helper, and matching the bare id would drop that version restriction.
+ *  - `csaf_product_tree_truncated` — an unresolved reference while the bounded product-tree walk stopped early, so it
+ *    cannot be told whether the id was defined in the part not walked. Also not matched by its raw id.
+ *  - `openvex_product_identifiers` — a product object carrying `identifiers`; its `@id` is still read, the alternate
+ *    identifiers are not (an object with no `@id` contributes nothing).
+ *  - `openvex_nested_subcomponents` — subcomponents nested inside a product object; the statement-level
+ *    `subcomponents` list is read, these are not.
+ */
+export type VendorVexUnreadStructureKind =
+  | 'csaf_unindexed_product'
+  | 'csaf_product_tree_truncated'
+  | 'openvex_product_identifiers'
+  | 'openvex_nested_subcomponents';
+
+export interface VendorVexUnreadStructure {
+  readonly vulnerabilityId: string;
+  readonly kind: VendorVexUnreadStructureKind;
+  /** The product id/reference involved, truncated to 128 characters; empty when the product had none. */
+  readonly reference: string;
+}
+
+/** How many examples of unread structures a document keeps; the count is always exact. */
+export const MAX_UNREAD_STRUCTURE_EXAMPLES = 10;
+/** Bounds on the CSAF product-tree walk that only collects ids defined outside `full_product_names`. */
+export const MAX_CSAF_TREE_DEPTH = 32;
+export const MAX_CSAF_TREE_NODES = 10_000;
+
+export const VEX_UNREAD_STRUCTURE_RULE = `CSAF product ids defined only under product_tree.branches/relationships, and OpenVEX product identifiers and nested subcomponents, are counted per CVE rather than interpreted; a reference to such an id is never matched by its raw id. The product-tree walk stops at depth ${MAX_CSAF_TREE_DEPTH} or ${MAX_CSAF_TREE_NODES} nodes; past that, unresolved references are counted, not matched. First ${MAX_UNREAD_STRUCTURE_EXAMPLES} examples kept in document order.`;
+
 export interface VendorVexDocument {
   readonly ok: true;
   readonly format: VendorVexFormat;
@@ -99,6 +134,14 @@ export interface VendorVexDocument {
   readonly unrecognisedStatusCount?: number | undefined;
   /** The first `MAX_UNRECOGNISED_STATUS_EXAMPLES` of them, in document order. */
   readonly unrecognisedStatusExamples?: readonly VendorVexUnrecognisedStatus[] | undefined;
+  /**
+   * Product structures seen and not interpreted (see `VendorVexUnreadStructureKind`). Optional: a document from an
+   * older build never counted them; absent means "not counted", never zero.
+   */
+  readonly unreadStructureCount?: number | undefined;
+  /** The first `MAX_UNREAD_STRUCTURE_EXAMPLES` of them, in document order. */
+  readonly unreadStructureExamples?: readonly VendorVexUnreadStructure[] | undefined;
+  readonly unreadStructureRule?: string | undefined;
   readonly boundsRule: string;
 }
 
@@ -198,8 +241,17 @@ function parseVexStatus(status: unknown): VendorVexStatus | null {
   return null;
 }
 
-function extractOpenVexProducts(productsRaw: unknown, subcomponentsRaw: unknown): string[] {
+function isNonEmptyStructure(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  return value !== null && typeof value === 'object' && Object.keys(value).length > 0;
+}
+
+function extractOpenVexProducts(
+  productsRaw: unknown,
+  subcomponentsRaw: unknown,
+): { products: string[]; unread: { kind: VendorVexUnreadStructureKind; reference: string }[] } {
   const result: string[] = [];
+  const unread: { kind: VendorVexUnreadStructureKind; reference: string }[] = [];
   const collect = (arr: unknown) => {
     if (!Array.isArray(arr)) return;
     for (const item of arr) {
@@ -209,15 +261,61 @@ function extractOpenVexProducts(productsRaw: unknown, subcomponentsRaw: unknown)
       } else if (item !== null && typeof item === 'object') {
         const obj = item as Record<string, unknown>;
         const id = typeof obj['@id'] === 'string' ? obj['@id'] : typeof obj.id === 'string' ? obj.id : null;
+        const reference = id?.trim().slice(0, 128) ?? '';
         if (id && id.trim().length > 0) {
           result.push(id.trim());
+        }
+        if (isNonEmptyStructure(obj.identifiers)) unread.push({ kind: 'openvex_product_identifiers', reference });
+        if (Array.isArray(obj.subcomponents) && obj.subcomponents.length > 0) {
+          unread.push({ kind: 'openvex_nested_subcomponents', reference });
         }
       }
     }
   };
   collect(productsRaw);
   collect(subcomponentsRaw);
-  return result;
+  return { products: result, unread };
+}
+
+/**
+ * Product ids defined outside `full_product_names` — under `branches` (any depth) or as a relationship's
+ * `full_product_name` — which this parser does not interpret. Collected only so a reference to one is counted instead
+ * of being matched by its raw id. Iterative and bounded, so no document can recurse the parser off the stack.
+ */
+function collectUnindexedCsafProductIds(productTreeRaw: unknown): { ids: Set<string>; truncated: boolean } {
+  const ids = new Set<string>();
+  if (productTreeRaw === null || typeof productTreeRaw !== 'object') return { ids, truncated: false };
+  const tree = productTreeRaw as Record<string, unknown>;
+  const addFrom = (product: unknown) => {
+    if (product === null || typeof product !== 'object') return;
+    const pid = (product as Record<string, unknown>).product_id;
+    if (typeof pid === 'string' && pid.trim().length > 0) ids.add(pid.trim());
+  };
+  let nodes = 0;
+  let truncated = false;
+  const stack: { node: unknown; depth: number }[] = [];
+  if (Array.isArray(tree.branches)) for (const b of tree.branches) stack.push({ node: b, depth: 1 });
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop() as { node: unknown; depth: number };
+    if (++nodes > MAX_CSAF_TREE_NODES || depth > MAX_CSAF_TREE_DEPTH) {
+      truncated = true;
+      break;
+    }
+    if (node === null || typeof node !== 'object') continue;
+    const branch = node as Record<string, unknown>;
+    addFrom(branch.product);
+    if (Array.isArray(branch.branches)) for (const b of branch.branches) stack.push({ node: b, depth: depth + 1 });
+  }
+  if (Array.isArray(tree.relationships)) {
+    for (const rel of tree.relationships) {
+      if (++nodes > MAX_CSAF_TREE_NODES) {
+        truncated = true;
+        break;
+      }
+      if (rel !== null && typeof rel === 'object') addFrom((rel as Record<string, unknown>).full_product_name);
+    }
+  }
+  return { ids, truncated };
 }
 
 interface RawStatementCandidate {
@@ -430,6 +528,14 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
   let ignoredNonCveCount = 0;
   let unrecognisedStatusCount = 0;
   const unrecognisedStatusExamples: VendorVexUnrecognisedStatus[] = [];
+  let unreadStructureCount = 0;
+  const unreadStructureExamples: VendorVexUnreadStructure[] = [];
+  const noteUnread = (vulnerabilityId: string, kind: VendorVexUnreadStructureKind, reference: string) => {
+    unreadStructureCount++;
+    if (unreadStructureExamples.length < MAX_UNREAD_STRUCTURE_EXAMPLES) {
+      unreadStructureExamples.push({ vulnerabilityId, kind, reference: reference.slice(0, 128) });
+    }
+  };
   const rawCandidates: RawStatementCandidate[] = [];
 
   if (isOpenVex) {
@@ -479,7 +585,8 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
         continue;
       }
 
-      const products = extractOpenVexProducts(stmt.products, stmt.subcomponents);
+      const { products, unread } = extractOpenVexProducts(stmt.products, stmt.subcomponents);
+      for (const u of unread) noteUnread(normalizedCve, u.kind, u.reference);
       const justification =
         typeof stmt.justification === 'string' && stmt.justification.trim().length > 0
           ? stmt.justification.trim()
@@ -526,6 +633,9 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
       ignoredNonCveCount,
       unrecognisedStatusCount,
       unrecognisedStatusExamples,
+      unreadStructureCount,
+      unreadStructureExamples,
+      unreadStructureRule: VEX_UNREAD_STRUCTURE_RULE,
       boundsRule: VEX_BOUNDS_RULE,
     };
   }
@@ -554,6 +664,7 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
         : null;
 
   const productTreeMap = buildCsafProductTreeMap(root.product_tree);
+  const unindexed = collectUnindexedCsafProductIds(root.product_tree);
   const vulnerabilitiesArray = Array.isArray(root.vulnerabilities) ? root.vulnerabilities : [];
 
   for (const vulnItem of vulnerabilitiesArray) {
@@ -637,6 +748,16 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
           if (pid.length > 0) {
             pidSet.add(pid);
             const identity = productTreeMap.get(pid);
+            // A reference to a definition this parser does not read is counted, never matched by its raw id: that
+            // definition may carry a versioned helper the bare id would silently drop.
+            if (!identity && unindexed.ids.has(pid)) {
+              noteUnread(normalizedCve, 'csaf_unindexed_product', pid);
+              continue;
+            }
+            if (!identity && unindexed.truncated) {
+              noteUnread(normalizedCve, 'csaf_product_tree_truncated', pid);
+              continue;
+            }
             if (!identity || identity.includeProductId) productSet.add(pid);
             for (const alias of identity?.identities ?? []) productSet.add(alias);
           }
@@ -728,6 +849,9 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
     ignoredNonCveCount,
     unrecognisedStatusCount,
     unrecognisedStatusExamples,
+    unreadStructureCount,
+    unreadStructureExamples,
+    unreadStructureRule: VEX_UNREAD_STRUCTURE_RULE,
     boundsRule: VEX_BOUNDS_RULE,
   };
 }

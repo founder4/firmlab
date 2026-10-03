@@ -57,6 +57,7 @@ export function VendorVexCoverage({
     droppedProductsCount: k.droppedProducts,
     ignoredNonCveCount: k.ignoredNonCve,
     unrecognisedStatusCount: k.unrecognisedStatus,
+    unreadStructureCount: k.unreadStructures,
   };
   return (
     <section className="vendor-vex-coverage" aria-label={k.heading}>
@@ -152,6 +153,17 @@ export function VendorVexCoverage({
                     {text(example.vulnerabilityId) ?? '?'} — {text(example.status) ?? '?'}
                   </div>
                 ))}
+                {records(d.unreadStructureExamples).map((example, j) => (
+                  <div key={`unread-${text(example.vulnerabilityId)}-${j}`} className="mono">
+                    {text(example.vulnerabilityId) ?? '?'} — {text(example.kind) ?? '?'}
+                    {text(example.reference) ? ` — ${text(example.reference)}` : ''}
+                  </div>
+                ))}
+                {text(d.unreadStructureRule) && (
+                  <div>
+                    {k.unreadStructureRule}: {text(d.unreadStructureRule)}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

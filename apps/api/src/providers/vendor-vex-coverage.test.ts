@@ -56,6 +56,22 @@ describe('summarizeVendorVexSearch', () => {
     expect(JSON.parse(JSON.stringify(s))).toEqual(s);
   });
 
+  it('carries parser omission counters into the persisted summary without listing them here', () => {
+    const csaf = JSON.stringify({
+      document: { category: 'csaf_vex', csaf_version: '2.0', publisher: { name: 'V' }, tracking: { id: 'T' } },
+      product_tree: { branches: [{ name: 'v', product: { product_id: 'BB' } }] },
+      vulnerabilities: [{ cve: 'CVE-2023-0001', product_status: { fixed: ['BB'] } }],
+    });
+    const s = summarizeVendorVexSearch(discoverVendorVex(rootfs({ 'etc/vex/b.csaf.json': csaf })));
+    if (!s.attempted) throw new Error('expected attempted');
+    expect(s.documents[0]).toMatchObject({
+      statements: 0,
+      unreadStructureCount: 1,
+      unreadStructureExamples: [{ vulnerabilityId: 'CVE-2023-0001', kind: 'csaf_unindexed_product', reference: 'BB' }],
+    });
+    expect(typeof s.documents[0]?.unreadStructureRule).toBe('string');
+  });
+
   it('a positive non-attempt is distinct from an attempted empty search', () => {
     expect(vendorVexNotAttempted('no rootfs')).toEqual({ attempted: false, notAttemptedReason: 'no rootfs' });
   });

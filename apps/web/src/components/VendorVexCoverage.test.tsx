@@ -64,6 +64,33 @@ describe('VendorVexCoverage', () => {
     expect(screen.getByText(k.assertion)).toBeInTheDocument();
   });
 
+  it('shows unread product structures with their examples and rule', () => {
+    render(
+      <VendorVexCoverage
+        vex={{
+          ...empty,
+          documents: [
+            {
+              path: 'etc/csaf.json',
+              format: 'csaf_vex',
+              statements: 0,
+              unreadStructureCount: 2,
+              unreadStructureExamples: [
+                { vulnerabilityId: 'CVE-2026-0001', kind: 'csaf_unindexed_product', reference: 'BB-1301' },
+                { vulnerabilityId: 'CVE-2026-0002', kind: 'openvex_product_identifiers', reference: '' },
+              ],
+              unreadStructureRule: 'synthetic unread rule',
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByText(`${k.unreadStructures}: 2`)).toBeInTheDocument();
+    expect(screen.getByText('CVE-2026-0001 — csaf_unindexed_product — BB-1301')).toBeInTheDocument();
+    expect(screen.getByText('CVE-2026-0002 — openvex_product_identifiers')).toBeInTheDocument();
+    expect(screen.getByText(`${k.unreadStructureRule}: synthetic unread rule`)).toBeInTheDocument();
+  });
+
   it('keeps an attempted-empty search distinct from a clean finding result', () => {
     render(<VendorVexCoverage vex={empty} />);
     expect(screen.getByText(k.counts(0, 0, 0, 0))).toBeInTheDocument();

@@ -1947,6 +1947,9 @@ export interface VendorVexDocumentSummary {
   ignoredNonCveCount?: number;
   unrecognisedStatusCount?: number;
   unrecognisedStatusExamples?: { [key: string]: unknown; vulnerabilityId?: string; status?: string }[];
+  unreadStructureCount?: number;
+  unreadStructureExamples?: { [key: string]: unknown; vulnerabilityId?: string; kind?: string; reference?: string }[];
+  unreadStructureRule?: string;
   boundsRule?: string;
   author?: string | null;
   timestamp?: string | null;

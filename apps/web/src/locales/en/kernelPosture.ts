@@ -76,6 +76,8 @@ export const kernelPosture = {
     droppedProducts: 'Product references omitted by parser caps',
     ignoredNonCve: 'Non-CVE entries ignored',
     unrecognisedStatus: 'Unrecognised or unsupported statuses omitted',
+    unreadStructures: 'Product structures not interpreted (counted, never matched)',
+    unreadStructureRule: 'Unread-structure rule',
     otherCounter: (key: string) => `Recorded parser counter (${key})`,
     documentBounds: 'Parser bounds rule',
     author: 'Author',
