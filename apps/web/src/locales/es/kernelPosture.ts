@@ -45,6 +45,30 @@ export const kernelPosture: Messages['kernelPosture'] = {
   },
 
   vendorVex: {
+    unknown: 'sin registrar',
+    notRecorded: 'Este resultado no registró la cobertura de búsqueda VEX del fabricante.',
+    notAttempted: (reason) => `No se intentó buscar VEX del fabricante: ${reason}`,
+    reasonUnknown: 'motivo sin registrar',
+    noneMatchedFirmware:
+      'Ningún documento VEX del fabricante cumple la regla de búsqueda. Esto no establece si el firmware está afectado o parcheado.',
+    walk: (entries, bytes) => `Entradas visitadas: ${entries}; bytes leídos: ${bytes}.`,
+    rule: 'Regla de búsqueda',
+    selectionRule: 'Orden de selección',
+    caps: (files, bytes, document, entries) =>
+      `Límites de búsqueda — ficheros: ${files}; bytes totales: ${bytes}; bytes por documento: ${document}; entradas: ${entries}.`,
+    unreadable: (n) =>
+      `Directorios ilegibles: ${n}. Los ficheros bajo directorios ilegibles no se vieron; las rutas registradas aparecen a continuación.`,
+    unmatchable: (n) =>
+      `Identidades de producto no interpretables: ${n}. No coinciden con ningún hallazgo; los ejemplos registrados aparecen a continuación.`,
+    droppedStatements: 'Declaraciones omitidas por los límites del intérprete',
+    droppedProducts: 'Referencias de producto omitidas por los límites del intérprete',
+    ignoredNonCve: 'Entradas sin CVE ignoradas',
+    unrecognisedStatus: 'Estados no reconocidos o no admitidos omitidos',
+    otherCounter: (key) => `Contador registrado del intérprete (${key})`,
+    documentBounds: 'Regla de límites del intérprete',
+    author: 'Autor',
+    timestamp: 'Fecha del documento',
+
     heading: 'Documentos VEX del fabricante',
     counts: (found, examined, parsed, refused) =>
       `${found} fichero${found === 1 ? '' : 's'} candidato${found === 1 ? '' : 's'} cumple${found === 1 ? '' : 'n'} la regla de búsqueda; ${examined} examinado${examined === 1 ? '' : 's'}, ${parsed} interpretado${parsed === 1 ? '' : 's'}, ${refused} rechazado${refused === 1 ? '' : 's'}.`,

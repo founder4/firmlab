@@ -52,6 +52,51 @@ beforeEach(() => {
 });
 
 describe('OpacidadPanel — autonomous scan', () => {
+  it('shows SBOM VEX coverage when the scan has zero findings', async () => {
+    mockApi.opacidadResult.mockResolvedValue(
+      result({
+        steps: [
+          {
+            worker: 'W2 · SBOM / CVE',
+            status: 'ran',
+            summary: '0 CVEs',
+            findingCount: 0,
+            vendorVex: { attempted: true, candidatesFound: 0, examined: 0, parsed: 0, refused: 0, entriesVisited: 12 },
+          },
+        ],
+      }),
+    );
+    render(<OpacidadPanel imageId="img1" />);
+    expect(await screen.findByText(en.kernelPosture.vendorVex.heading)).toBeInTheDocument();
+    expect(screen.getByText(en.kernelPosture.vendorVex.counts(0, 0, 0, 0))).toBeInTheDocument();
+    expect(screen.getByText(en.panels.opacidad.noFindings)).toBeInTheDocument();
+  });
+
+  it('shows a skipped SBOM search reason independently of findings', async () => {
+    mockApi.opacidadResult.mockResolvedValue(
+      result({
+        steps: [
+          {
+            worker: 'W2 · SBOM / CVE',
+            status: 'skipped',
+            summary: 'No rootfs',
+            vendorVex: { attempted: false, notAttemptedReason: 'No rootfs' },
+          },
+        ],
+      }),
+    );
+    render(<OpacidadPanel imageId="img1" />);
+    expect(await screen.findByText(en.kernelPosture.vendorVex.notAttempted('No rootfs'))).toBeInTheDocument();
+  });
+
+  it('shows a quiet unrecorded line for a legacy SBOM step', async () => {
+    mockApi.opacidadResult.mockResolvedValue(
+      result({ steps: [{ worker: 'W2 · SBOM / CVE', status: 'ran', summary: '0 CVEs' }] }),
+    );
+    render(<OpacidadPanel imageId="img1" />);
+    expect(await screen.findByText(en.kernelPosture.vendorVex.notRecorded)).toBeInTheDocument();
+  });
+
   it('offers a run control when there is no prior scan', async () => {
     render(<OpacidadPanel imageId="img1" />);
     expect(await screen.findByRole('button', { name: en.panels.opacidad.run })).toBeInTheDocument();

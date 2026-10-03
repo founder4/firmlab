@@ -57,22 +57,46 @@ export const kernelPosture = {
    * means the search did not happen (an older result, or no rootfs), and the panel then says nothing at all.
    */
   vendorVex: {
+    unknown: 'not recorded',
+    notRecorded: 'Vendor VEX search coverage was not recorded by this result.',
+    notAttempted: (reason: string) => `Vendor VEX search was not attempted: ${reason}`,
+    reasonUnknown: 'reason not recorded',
+    noneMatchedFirmware:
+      'No vendor VEX document matched the search rule. This does not establish whether the firmware is affected or patched.',
+    walk: (entries: number | string, bytes: number | string) => `Entries visited: ${entries}; bytes read: ${bytes}.`,
+    rule: 'Search rule',
+    selectionRule: 'Selection order',
+    caps: (files: number | string, bytes: number | string, document: number | string, entries: number | string) =>
+      `Search caps — files: ${files}; total bytes: ${bytes}; bytes per document: ${document}; entries: ${entries}.`,
+    unreadable: (n: number | string) =>
+      `Unreadable directories: ${n}. Files beneath unreadable directories were not seen; recorded paths follow.`,
+    unmatchable: (n: number | string) =>
+      `Unmatchable product identities: ${n}. These identities match no finding; recorded examples follow.`,
+    droppedStatements: 'Statements omitted by parser caps',
+    droppedProducts: 'Product references omitted by parser caps',
+    ignoredNonCve: 'Non-CVE entries ignored',
+    unrecognisedStatus: 'Unrecognised or unsupported statuses omitted',
+    otherCounter: (key: string) => `Recorded parser counter (${key})`,
+    documentBounds: 'Parser bounds rule',
+    author: 'Author',
+    timestamp: 'Document timestamp',
+
     heading: 'Vendor VEX documents',
-    counts: (found: number, examined: number, parsed: number, refused: number) =>
+    counts: (found: number | string, examined: number | string, parsed: number | string, refused: number | string) =>
       `${found} candidate file${found === 1 ? '' : 's'} matched the search rule; ${examined} examined, ${parsed} parsed, ${refused} refused.`,
     noneMatched:
       'No vendor VEX document matched the search rule. That is not evidence of anything: not that the kernel is patched, and not that it is affected.',
     nothingRead: 'The search read nothing, so no vendor statement was looked for. That is not evidence of anything.',
     parsedHeading: 'Parsed:',
-    document: (path: string, format: string, statements: number) =>
+    document: (path: string, format: string, statements: number | string) =>
       `${path} — ${format}, ${statements} statement${statements === 1 ? '' : 's'}`,
     refusedHeading: 'Refused, and not used:',
-    droppedFiles: (n: number, cap: number) =>
+    droppedFiles: (n: number | string, cap: number | string) =>
       `${n} candidate${n === 1 ? '' : 's'} beyond the ${cap}-file cap ${n === 1 ? 'was' : 'were'} not read.`,
-    droppedBytes: (n: number) =>
+    droppedBytes: (n: number | string) =>
       `${n} candidate${n === 1 ? '' : 's'} ${n === 1 ? 'was' : 'were'} not read: the total-byte cap was reached.`,
-    walkTruncated: (n: number) => `The search stopped at ${n} entries; files beyond them were never seen.`,
-    symlinks: (n: number) => `${n} symbolic link${n === 1 ? ' was' : 's were'} not followed.`,
+    walkTruncated: (n: number | string) => `The search stopped at ${n} entries; files beyond them were never seen.`,
+    symlinks: (n: number | string) => `${n} symbolic link${n === 1 ? ' was' : 's were'} not followed.`,
     assertion:
       'A matched statement appears on its CVE row in the findings ledger as a vendor assertion. It never changes a proof state.',
   },

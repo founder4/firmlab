@@ -22,14 +22,14 @@
  * age arithmetic downstream is only as good as which one it read. The same goes for the per-answer `source`.
  *
  * **The vendor VEX search is shown only when the result recorded it.** An absent `vendorVex` block means the search
- * did not happen — a result stored before it existed, or a run with no rootfs — and the panel then says nothing about
- * VEX at all, because "no VEX found" would be a claim about a search nobody made. A search that matched nothing says
+ * was not recorded — an older result or a run with no rootfs — and the panel then says nothing about
+ * VEX at all, because "no VEX found" would claim a result the record does not establish. A search that matched nothing says
  * so, and says that this is evidence of nothing.
  *
  * Every decision is in `kernel-posture.ts` and unit-tested without a DOM; this file fetches and renders.
  */
 import { type JSX, useEffect, useState } from 'react';
-import { type KernelPostureResult, type PostureAnswer, type VendorVexCoverage, api } from '../api';
+import { type KernelPostureResult, type PostureAnswer, api } from '../api';
 import { useMessages } from '../i18n';
 import {
   type AnswerClass,
@@ -40,6 +40,7 @@ import {
   postureCensus,
   postureState,
 } from '../kernel-posture';
+import { VendorVexCoverage } from './VendorVexCoverage';
 
 const CLASS_COLOR: Record<AnswerClass, string> = {
   bad: 'var(--sev-high)',
@@ -223,81 +224,8 @@ export function KernelPosture({ imageId }: { imageId: string }): JSX.Element {
         </>
       )}
 
-      {result?.vendorVex ? <VendorVexSearch vex={result.vendorVex} /> : null}
+      {result?.vendorVex ? <VendorVexCoverage vex={{ ...result.vendorVex, attempted: true }} kernel /> : null}
     </div>
-  );
-}
-
-/**
- * What the posture run's vendor VEX search examined, parsed, refused and dropped. Three readings kept apart: the
- * search read nothing at all (a failed or empty walk), it read the tree and nothing matched the rule, or it found
- * candidates — and each of those is evidence of nothing about the kernel by itself.
- */
-function VendorVexSearch({ vex }: { vex: VendorVexCoverage }): JSX.Element {
-  const k = useMessages().kernelPosture.vendorVex;
-  const found = vex.candidatesFound ?? 0;
-  const documents = vex.documents ?? [];
-  const refusals = vex.refusals ?? [];
-  const dropped = [
-    (vex.droppedByFileCap ?? 0) > 0 ? k.droppedFiles(vex.droppedByFileCap ?? 0, vex.caps?.maxFiles ?? 0) : null,
-    (vex.droppedByByteCap ?? 0) > 0 ? k.droppedBytes(vex.droppedByByteCap ?? 0) : null,
-    vex.walkTruncated ? k.walkTruncated(vex.entriesVisited ?? 0) : null,
-    (vex.symlinksSkipped ?? 0) > 0 ? k.symlinks(vex.symlinksSkipped ?? 0) : null,
-  ].filter((line): line is string => line !== null);
-  return (
-    <section aria-label={k.heading} style={{ marginTop: 16, maxWidth: '72ch' }}>
-      <div className="eyebrow">{k.heading}</div>
-      {found === 0 ? (
-        <div className="hint" style={{ marginTop: 4 }}>
-          {(vex.entriesVisited ?? 0) > 0 ? k.noneMatched : k.nothingRead}
-          {/* The provider's own sentence says why, when the search could not read at all. */}
-          {(vex.entriesVisited ?? 0) === 0 && vex.statement ? (
-            <div style={{ marginTop: 4 }}>{vex.statement}</div>
-          ) : null}
-        </div>
-      ) : (
-        <>
-          <div style={{ fontSize: 12.5, marginTop: 4 }}>
-            {k.counts(found, vex.examined ?? 0, vex.parsed ?? 0, vex.refused ?? refusals.length)}
-          </div>
-          {documents.length > 0 && (
-            <div className="hint" style={{ marginTop: 6 }}>
-              {k.parsedHeading}
-              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-                {documents.map((d, i) => (
-                  <li key={d.path ?? i} className="mono" style={{ fontSize: 11.5, overflowWrap: 'anywhere' }}>
-                    {k.document(d.path ?? '?', d.format ?? '?', d.statements ?? 0)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {refusals.length > 0 && (
-            <div className="hint" style={{ marginTop: 6 }}>
-              {k.refusedHeading}
-              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-                {refusals.map((r, i) => (
-                  <li key={`${r.path ?? ''}-${i}`} style={{ fontSize: 11.5, overflowWrap: 'anywhere' }}>
-                    <span className="mono">{r.path ?? '?'}</span> — <span className="mono">{r.reason ?? '?'}</span>
-                    {r.message ? `: ${r.message}` : ''}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <div className="hint" style={{ marginTop: 6 }}>
-            {k.assertion}
-          </div>
-        </>
-      )}
-      {dropped.length > 0 && (
-        <ul className="hint" style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-          {dropped.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      )}
-    </section>
   );
 }
 

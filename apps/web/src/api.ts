@@ -329,6 +329,7 @@ export interface SbomVuln {
 }
 
 export interface SbomResult {
+  vendorVex?: VendorVexSearchSummary;
   available: boolean;
   reason?: string;
   target: string;
@@ -1087,6 +1088,7 @@ export interface KevMatch {
 }
 
 export interface ResearchResult {
+  vendorVex?: VendorVexSearchSummary;
   enabled: true;
   provenance: {
     identity: { firmwareClass: string; arch: string; bootloader: string | null };
@@ -1895,9 +1897,10 @@ export interface VendorVexRowVerdict {
 
 /**
  * What the kernel-posture run searched for in the rootfs (`KernelPostureResult.vendorVex`). Absent on a result stored
- * before the search existed or run without a rootfs: absent means NOT SEARCHED, never "no vendor statement".
+ * before the search existed or run without a rootfs: absence cannot establish whether a search ran.
  */
 export interface VendorVexCoverage {
+  [key: string]: unknown;
   rule?: string;
   /** Discovery ranking before file/byte caps. Not recorded by older builds. */
   selectionRule?: string;
@@ -1911,10 +1914,48 @@ export interface VendorVexCoverage {
   entriesVisited?: number;
   walkTruncated?: boolean;
   bytesRead?: number;
-  caps?: { maxFiles?: number; maxTotalBytes?: number; maxDocumentBytes?: number; maxEntries?: number };
+  caps?: {
+    [key: string]: unknown;
+    maxFiles?: number;
+    maxTotalBytes?: number;
+    maxDocumentBytes?: number;
+    maxEntries?: number;
+  };
   statement?: string;
-  documents?: { path?: string; format?: string; statements?: number }[];
-  refusals?: { path?: string; reason?: string; message?: string }[];
+  unreadableDirectories?: number;
+  unreadableDirectoryPaths?: string[];
+  unmatchableIdentities?: number;
+  unmatchableIdentityExamples?: {
+    [key: string]: unknown;
+    sourcePath?: string;
+    statementIndex?: number;
+    identity?: string;
+    reason?: string;
+  }[];
+  documents?: VendorVexDocumentSummary[];
+  refusals?: { [key: string]: unknown; path?: string; reason?: string; message?: string }[];
+}
+
+/** Persisted summaries are optional forever, including their nested fields and future omission counters. */
+export interface VendorVexDocumentSummary {
+  [key: string]: unknown;
+  path?: string;
+  format?: string;
+  statements?: number;
+  droppedStatementsCount?: number;
+  droppedProductsCount?: number;
+  ignoredNonCveCount?: number;
+  unrecognisedStatusCount?: number;
+  unrecognisedStatusExamples?: { [key: string]: unknown; vulnerabilityId?: string; status?: string }[];
+  boundsRule?: string;
+  author?: string | null;
+  timestamp?: string | null;
+}
+
+/** Absent attempted is unknown, never a zero or a positive record that the search did not run. */
+export interface VendorVexSearchSummary extends VendorVexCoverage {
+  attempted?: boolean;
+  notAttemptedReason?: string;
 }
 
 export interface KernelPostureResult {
@@ -2105,6 +2146,7 @@ export interface OpacidadResult {
     summary: string;
     note?: string;
     findingCount?: number;
+    vendorVex?: VendorVexSearchSummary;
     /** `replan` = W9 scheduled this worker dynamically in response to a lead (not a seed of the class DAG). */
     origin?: 'replan';
     trigger?: string;

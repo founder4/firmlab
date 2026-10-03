@@ -63,6 +63,7 @@ import { SwitchFamilyPanel } from '../components/SwitchFamilyPanel';
 import { SymReachPanel } from '../components/SymReachPanel';
 import { TestBench } from '../components/TestBench';
 import { UpdatePathPanel } from '../components/UpdatePathPanel';
+import { VendorVexCoverage } from '../components/VendorVexCoverage';
 import { type Messages, messages, useLocale, useMessages } from '../i18n';
 import { Icon } from '../icons';
 import { type ImageSectionId, SECTION_IDS } from '../image-sections';
@@ -978,6 +979,7 @@ function SbomPanel({ imageId }: { imageId: string }): JSX.Element {
             t.imageDetail.sbom.generate
           )}
         </button>
+        {result && <VendorVexCoverage vex={result.vendorVex} />}
         {result && !result.available && (
           <div className="banner banner-warn" style={{ marginTop: 14 }}>
             {result.reason ?? t.imageDetail.sbom.unavailable}
@@ -1430,6 +1432,7 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
           <span className="mono">FIRMLAB_RESEARCH=1</span>
           {t.imageDetail.research.offBodyAfter}
         </div>
+        {result && <VendorVexCoverage vex={result.vendorVex} />}
       </div>
     );
   }
@@ -1461,6 +1464,8 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
       </div>
       {/* What leaves the machine, and that an advisory is a lead — both have to survive translation intact. */}
       <div className="panel-sub">{t.imageDetail.research.sub}</div>
+
+      {result && <VendorVexCoverage vex={result.vendorVex} />}
 
       {result && osv && (
         <div style={{ marginTop: 4 }}>

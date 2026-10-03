@@ -3729,3 +3729,23 @@ main.content:focus {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Coverage prose stays readable; provider paths and rule tokens may be arbitrarily long. */
+.vendor-vex-coverage {
+  max-width: 72ch;
+  min-width: 0;
+  margin-top: 16px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12.5px;
+}
+.vendor-vex-coverage p {
+  margin: 6px 0;
+}
+.vendor-vex-coverage ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+.vendor-vex-coverage li + li {
+  margin-top: 6px;
+}

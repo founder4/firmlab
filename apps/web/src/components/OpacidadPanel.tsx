@@ -15,6 +15,7 @@ import { type OpacidadResult, api } from '../api';
 import { useMessages } from '../i18n';
 import { Markdown } from '../markdown';
 import { RunHistory } from './RunHistory';
+import { VendorVexCoverage } from './VendorVexCoverage';
 
 const STATUS_META: Record<OpacidadResult['steps'][number]['status'], { mark: string; cls: string }> = {
   ran: { mark: '✓', cls: 'badge-ok' },
@@ -131,27 +132,32 @@ export function OpacidadPanel({ imageId }: { imageId: string }): JSX.Element {
               {result.steps.map((s) => {
                 const meta = STATUS_META[s.status];
                 return (
-                  <div key={s.worker} style={{ ...rowStyle, ...(s.origin === 'replan' ? { marginLeft: 16 } : {}) }}>
-                    <span
-                      className={`badge ${meta.cls}`}
-                      style={{ minWidth: 22, textAlign: 'center' }}
-                      title={t.panels.opacidad.status[s.status]}
-                    >
-                      {s.origin === 'replan' ? '↳' : meta.mark}
-                    </span>
-                    <strong style={{ fontSize: 12.5 }}>{s.worker}</strong>
-                    {s.origin === 'replan' && (
-                      <span className="badge" style={{ fontSize: 10 }} title={s.trigger}>
-                        {t.panels.opacidad.replanned}
+                  <div key={s.worker}>
+                    <div style={{ ...rowStyle, ...(s.origin === 'replan' ? { marginLeft: 16 } : {}) }}>
+                      <span
+                        className={`badge ${meta.cls}`}
+                        style={{ minWidth: 22, textAlign: 'center' }}
+                        title={t.panels.opacidad.status[s.status]}
+                      >
+                        {s.origin === 'replan' ? '↳' : meta.mark}
                       </span>
-                    )}
-                    <span className="hint" style={{ flex: 1 }}>
-                      {s.summary}
-                      {s.note ? ` — ${s.note}` : ''}
-                    </span>
-                    {typeof s.findingCount === 'number' && s.findingCount > 0 && (
-                      <span className="badge mono">{s.findingCount}</span>
-                    )}
+                      <strong style={{ fontSize: 12.5 }}>{s.worker}</strong>
+                      {s.origin === 'replan' && (
+                        <span className="badge" style={{ fontSize: 10 }} title={s.trigger}>
+                          {t.panels.opacidad.replanned}
+                        </span>
+                      )}
+                      <span className="hint" style={{ flex: 1 }}>
+                        {s.summary}
+                        {s.note ? ` — ${s.note}` : ''}
+                      </span>
+                      {typeof s.findingCount === 'number' && s.findingCount > 0 && (
+                        <span className="badge mono">{s.findingCount}</span>
+                      )}
+                    </div>
+                    {(s.vendorVex !== undefined ||
+                      ((s.worker === 'W2 · SBOM / CVE' || s.worker === 'sbom') &&
+                        (s.status === 'ran' || s.status === 'degraded'))) && <VendorVexCoverage vex={s.vendorVex} />}
                   </div>
                 );
               })}

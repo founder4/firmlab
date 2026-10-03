@@ -198,6 +198,25 @@ describe('ImageDetail SBOM — why no CVEs, and against what', () => {
     counts: { Critical: 0, High: 0, Medium: 0, Low: 0, Negligible: 0, Unknown: 0 },
   };
 
+  it.each([true, false])('shows VEX coverage with zero vulnerabilities, SBOM available=%s', async (available) => {
+    mockApi.sbom.mockResolvedValue({
+      ...base,
+      available,
+      grypeAvailable: false,
+      vendorVex: { attempted: true, candidatesFound: 0, examined: 0, parsed: 0, refused: 0, entriesVisited: 12 },
+    });
+    renderSection('sbom');
+    expect(await screen.findByText('Vendor VEX documents')).toBeInTheDocument();
+    expect(screen.getByText(/0 candidate files matched the search rule/)).toBeInTheDocument();
+    expect(screen.getByText(/This does not establish whether the firmware/)).toBeInTheDocument();
+  });
+
+  it('shows unrecorded coverage for a legacy SBOM', async () => {
+    mockApi.sbom.mockResolvedValue({ ...base, grypeAvailable: false });
+    renderSection('sbom');
+    expect(await screen.findByText('Vendor VEX search coverage was not recorded by this result.')).toBeInTheDocument();
+  });
+
   it('prints the provider refusal instead of claiming grype is missing', async () => {
     mockApi.sbom.mockResolvedValue({
       ...base,
@@ -748,6 +767,23 @@ describe('ImageDetail — the password-hash lookup says what it refused to ask',
   beforeEach(() => {
     mockApi.researchStatus.mockResolvedValue({ enabled: true });
     mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
+  });
+
+  it.each([true, false])('shows saved VEX coverage with zero advisories, research enabled=%s', async (enabled) => {
+    mockApi.researchStatus.mockResolvedValue({ enabled });
+    mockApi.researchResult.mockResolvedValue({
+      ...research({ enabled: false, entries: [] }),
+      vendorVex: { attempted: true, candidatesFound: 0, examined: 0, parsed: 0, refused: 0, entriesVisited: 12 },
+    } as never);
+    renderSection('research');
+    expect(await screen.findByText('Vendor VEX documents')).toBeInTheDocument();
+    expect(screen.getByText(/0 candidate files matched the search rule/)).toBeInTheDocument();
+  });
+
+  it('shows unrecorded coverage for legacy research', async () => {
+    mockApi.researchResult.mockResolvedValue(research({ enabled: false, entries: [] }) as never);
+    renderSection('research');
+    expect(await screen.findByText('Vendor VEX search coverage was not recorded by this result.')).toBeInTheDocument();
   });
 
   it('does not let a hash that was NEVER SENT read like one that came back clean', async () => {
