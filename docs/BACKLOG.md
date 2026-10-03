@@ -496,6 +496,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Deuda estructural y de proceso
 
+- [ ] Reconciliar la documentación de despliegue con esta estación antes de la próxima entrega. Observado
+  2026-10-03: `deploy.sh --check` y `/health` sitúan el contenedor en `679f267`, 81 commits detrás de
+  `2eb659a`; Docker declara `proxy_net`, sin puertos publicados, y bind interno `0.0.0.0`. Coincide con el modo
+  homelab descrito al principio de `DEPLOYMENT.md`, pero su sección del 28 de septiembre afirma red de host y
+  loopback. Precisar el ámbito de esa evidencia histórica y verificar el contrato efectivo, sin cambiar red,
+  permisos ni despliegue para hacer coincidir el texto. Plan en `COORDINATION-PLAN-2026-10-03.md`.
+
 - [x] Estabilizar la espera inicial de `AnalysisActionsPanel.test.tsx`: durante la validación completa del contrato
   MCP, el caso de estado vacío agotó una vez la espera mientras seguía mostrando «Leyendo ejecuciones anteriores…».
   El fichero pasó después aislado (8/8) y la suite completa volvió a pasar (629/629), así que primero hay que
@@ -808,6 +815,10 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   y OpenVEX 0.2.0 `identifiers`/`subcomponents` no leídos), 8 (los carriles sbom y research descartan la cobertura de
   descubrimiento) y nits 11–15. Fallo conservador asumido: una fila grype de ecosistema de lenguaje (pypi/npm) no casa con un purl tipado
   hasta que la fila lleve su ecosistema. Interpretar intervalos CSAF queda pendiente de un contrato verificado.
+  Revisión de código 2026-10-03: W9 persiste una selección propia de campos, por lo que ampliar solo `SbomResult`
+  no resuelve el riesgo 8. En el riesgo 6, una referencia CSAF de branches no indexada cae al ID bruto y puede
+  perder la restricción de versión del helper omitido; exigir regresión del fallback antes de habilitar nuevas
+  coincidencias. Los subcomponents de statement ya se leen; faltan los anidados dentro del producto.
 
 ## Orca — continuidad desatendida (2026-10-02)
 
