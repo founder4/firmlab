@@ -496,6 +496,10 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Deuda estructural y de proceso
 
+- [ ] Orca `worktree new-child` toma como base `origin/main` local (2026-10-03: `679f267`, 81 commits detrás de
+  `main`), no el HEAD del coordinador; los hijos de la ola VEX tuvieron que avanzarse a mano. Verificar la base de
+  cada hijo antes de lanzar o fijar la base del repo con autorización; no hacer push para «arreglarlo».
+
 - [ ] Reconciliar la documentación de despliegue con esta estación antes de la próxima entrega. Observado
   2026-10-03: `deploy.sh --check` y `/health` sitúan el contenedor en `679f267`, 81 commits detrás de
   `2eb659a`; Docker declara `proxy_net`, sin puertos publicados, y bind interno `0.0.0.0`. Coincide con el modo
@@ -811,9 +815,15 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   preceden a JSON admitidos sólo por el directorio, antes de los caps de ficheros y bytes; desempate por ruta en
   orden code-unit. Regla de selección registrada en cobertura, con campo opcional para resultados antiguos.
   Denominadores y rechazos por symlink permanecen explícitos. No recupera entradas fuera del cap del inventario.
+- [x] VEX riesgo 8: SBOM manual (resultado y GET), el paso SBOM de W9 y research persisten
+  `vendorVex` (`providers/vendor-vex-coverage.ts`) con una única lectura reutilizada para normalizar, también sin
+  hallazgos ni CVE. Tres estados: búsqueda intentada (cobertura, documentos con sus contadores de omisión,
+  rechazos), no intentada con motivo (research sin respuesta NVD de kernel, o sin rootfs) y campo ausente en
+  resultados antiguos («no registrado», nunca cero). UI compartida `VendorVexCoverage` en SBOM, research, W9 y
+  kernel posture. Validación 2026-10-03 en `7c8c8ea`: gates completos verdes (4660 tests); QA Chromium EN/ES a
+  1440/390 con datos sintéticos de componente, sin overflow ni errores. No ejercitado contra el corpus desplegado.
 - [ ] VEX de proveedor restante (revisión `review-vex.md`): riesgo 6 (`product_tree.branches`/`relationships`
-  y OpenVEX 0.2.0 `identifiers`/`subcomponents` no leídos), 8 (los carriles sbom y research descartan la cobertura de
-  descubrimiento) y nits 11–15. Fallo conservador asumido: una fila grype de ecosistema de lenguaje (pypi/npm) no casa con un purl tipado
+  y OpenVEX 0.2.0 `identifiers`/`subcomponents` no leídos) y nits 11–15 (el riesgo 8 se cerró arriba). Fallo conservador asumido: una fila grype de ecosistema de lenguaje (pypi/npm) no casa con un purl tipado
   hasta que la fila lleve su ecosistema. Interpretar intervalos CSAF queda pendiente de un contrato verificado.
   Revisión de código 2026-10-03: W9 persiste una selección propia de campos, por lo que ampliar solo `SbomResult`
   no resuelve el riesgo 8. En el riesgo 6, una referencia CSAF de branches no indexada cae al ID bruto y puede
