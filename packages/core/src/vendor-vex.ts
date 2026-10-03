@@ -27,6 +27,8 @@
  *   - A statement whose status is not one of the four VEX statuses is counted
  *     (`unrecognisedStatusCount`, with bounded examples), never silently dropped: `known_affected`
  *     written into an OpenVEX file is a statement the vendor made, and losing it can hide a conflict.
+ *     CSAF first_affected/last_affected/first_fixed groups are counted there too: their boundary semantics are
+ *     unsupported, so they never become exact affected/fixed assertions or inferred version ranges.
  *   - A CSAF product keeps its identity together. When its `product_identification_helper` carries a
  *     VERSIONED purl or CPE, only those versioned identities stand for it — never its bare `name` or
  *     free-form `product_id`, which would let a statement scoped to busybox 1.30.1 attach to any
@@ -70,7 +72,7 @@ export interface VendorVexLimits {
   readonly maxProducts?: number | undefined;
 }
 
-/** One statement dropped because its status is not a VEX status — kept as an example, bounded. */
+/** One statement omitted because its status is unrecognised or unsupported — kept as an example, bounded. */
 export interface VendorVexUnrecognisedStatus {
   readonly vulnerabilityId: string;
   readonly status: string;
@@ -90,8 +92,9 @@ export interface VendorVexDocument {
   readonly droppedProductsCount: number;
   readonly ignoredNonCveCount: number;
   /**
-   * Statements naming a CVE whose status is none of the four VEX statuses, so they were not kept. Optional because a
-   * document from an older build never counted them; absent means "not counted", never zero.
+   * Statements naming a CVE whose status is unrecognised or unsupported, so they were not kept. Each nonempty CSAF
+   * boundary-status array counts as one group, independent of product count. Optional because a document from an
+   * older build never counted them; absent means "not counted", never zero.
    */
   readonly unrecognisedStatusCount?: number | undefined;
   /** The first `MAX_UNRECOGNISED_STATUS_EXAMPLES` of them, in document order. */
@@ -600,6 +603,19 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
 
     if (!productStatus) continue;
 
+    // Boundary groups describe endpoints, not exact affected/fixed assertions or a range we can infer. Count one
+    // omitted group per CVE/status (as for supported groups), even when statement/product caps retain nothing.
+    // Object.keys preserves their document order for bounded examples; never inspect or expand their products.
+    for (const status of Object.keys(productStatus)) {
+      if (status !== 'first_affected' && status !== 'last_affected' && status !== 'first_fixed') continue;
+      const products = productStatus[status];
+      if (!Array.isArray(products) || products.length === 0) continue;
+      unrecognisedStatusCount++;
+      if (unrecognisedStatusExamples.length < MAX_UNRECOGNISED_STATUS_EXAMPLES) {
+        unrecognisedStatusExamples.push({ vulnerabilityId: normalizedCve, status });
+      }
+    }
+
     // CSAF VEX profile product_status mappings
     const statusGroups: Array<{ key: string; status: VendorVexStatus }> = [
       { key: 'known_not_affected', status: 'not_affected' },
@@ -710,7 +726,6 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
     droppedStatementsCount,
     droppedProductsCount,
     ignoredNonCveCount,
-    // CSAF carries status as the product_status key, so nothing here is an unrecognised status string.
     unrecognisedStatusCount,
     unrecognisedStatusExamples,
     boundsRule: VEX_BOUNDS_RULE,

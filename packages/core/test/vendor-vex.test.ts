@@ -637,6 +637,89 @@ describe('vendor-vex parser and resolver', () => {
     });
   });
 
+  describe('CSAF boundary statuses remain omissions, never assertions', () => {
+    const cve = 'CVE-2022-48174';
+    const boundaryStatuses = ['first_affected', 'last_affected', 'first_fixed'];
+    const csaf = (vulnerabilities: unknown[]) =>
+      JSON.stringify({ document: { category: 'csaf_vex' }, vulnerabilities });
+
+    it.each(boundaryStatuses)('counts %s once per group without matching its products', (status) => {
+      const parsed = parseVendorVex(
+        csaf([{ cve: cve.toLowerCase(), product_status: { [status]: ['busybox', 'pkg:generic/busybox@1.30.1'] } }]),
+        '/csaf.json',
+      );
+      if (!parsed.ok) throw new Error('fixture refused');
+      expect(parsed.statements).toEqual([]);
+      expect(parsed.unrecognisedStatusCount).toBe(1);
+      expect(parsed.unrecognisedStatusExamples).toEqual([{ vulnerabilityId: cve, status }]);
+      expect(resolveVendorVex(parsed, cve, () => true).verdict).toBe('unmentioned');
+    });
+
+    it('counts every omitted group beyond the example and statement/product caps in document order', () => {
+      const vulnerabilities = Array.from({ length: 5 }, (_, i) => ({
+        cve: `CVE-2022-${1000 + i}`,
+        product_status: { last_affected: ['P', 'Q'], first_fixed: ['P'], first_affected: ['Q'], fixed: ['P'] },
+      }));
+      const parsed = parseVendorVex(csaf(vulnerabilities), '/csaf.json', { maxStatements: 0, maxProducts: 0 });
+      if (!parsed.ok) throw new Error('fixture refused');
+      expect(parsed.statements).toEqual([]);
+      expect(parsed.droppedStatementsCount).toBe(5);
+      expect(parsed.unrecognisedStatusCount).toBe(15);
+      expect(parsed.unrecognisedStatusExamples).toEqual(
+        vulnerabilities
+          .flatMap((v) =>
+            ['last_affected', 'first_fixed', 'first_affected'].map((status) => ({
+              vulnerabilityId: v.cve,
+              status,
+            })),
+          )
+          .slice(0, MAX_UNRECOGNISED_STATUS_EXAMPLES),
+      );
+    });
+
+    it('preserves supported conflicts alongside unsupported boundaries', () => {
+      const parsed = parseVendorVex(
+        csaf([
+          {
+            cve,
+            product_status: {
+              first_affected: ['busybox'],
+              last_affected: ['busybox'],
+              first_fixed: ['busybox'],
+              fixed: ['busybox'],
+              known_affected: ['busybox'],
+            },
+          },
+        ]),
+        '/csaf.json',
+      );
+      if (!parsed.ok) throw new Error('fixture refused');
+      expect(parsed.unrecognisedStatusCount).toBe(3);
+      const verdict = resolveVendorVex(parsed, cve, 'busybox');
+      expect(verdict.verdict).toBe('conflicting');
+      expect(verdict.matchedStatements?.map((s) => s.status)).toEqual(['fixed', 'affected']);
+    });
+
+    it.each([null, false, 42, 'P', {}, [], [null, {}, 42]])(
+      'handles malformed or empty boundary product lists without throwing (%j)',
+      (products) => {
+        const text = csaf([null, { cve, product_status: null }, { cve, product_status: { first_fixed: products } }]);
+        expect(() => parseVendorVex(text, '/csaf.json')).not.toThrow();
+        const parsed = parseVendorVex(text, '/csaf.json');
+        if (!parsed.ok) throw new Error('fixture refused');
+        expect(parsed.statements).toEqual([]);
+        expect(parsed.unrecognisedStatusCount).toBe(Array.isArray(products) && products.length > 0 ? 1 : 0);
+      },
+    );
+
+    it('resolves a legacy persisted document without optional omission fields', () => {
+      const parsed = parseVendorVex(csaf([{ cve, product_status: { fixed: ['busybox'] } }]), '/csaf.json');
+      if (!parsed.ok) throw new Error('fixture refused');
+      const { unrecognisedStatusCount: _count, unrecognisedStatusExamples: _examples, ...legacy } = parsed;
+      expect(resolveVendorVex(JSON.parse(JSON.stringify(legacy)), cve, 'busybox').verdict).toBe('vendor_states_fixed');
+    });
+  });
+
   describe('a truncated or partly unreadable document says so', () => {
     it('a verdict from a document whose statement cap dropped anything carries droppedByBounds', () => {
       const doc = JSON.stringify({

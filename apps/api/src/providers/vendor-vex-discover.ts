@@ -17,7 +17,7 @@
  *  - **Disagreement is not resolved by order.** Statements (in one document or across several) that assert
  *    different things for the same CVE and product are `conflicting`, with every source listed.
  *  - **A verdict is not presented as complete when it is not.** A document whose statement or product cap dropped
- *    anything, whose statements carried a status that is not a VEX status, or whose product identity for this CVE
+ *    anything, whose statements carried an unrecognised or unsupported status, or whose product identity for this CVE
  *    could not be read, is listed in the verdict's `omissions` and named in its rationale: the missing half of a
  *    disagreement looks exactly like agreement.
  *  - **No firmware-controlled string throws.** A purl with a malformed percent-escape (`busy%zzbox`) is an
@@ -310,6 +310,12 @@ function discoverIn(rootfs: string, caps: VendorVexDiscoveryCoverage['caps']): V
     );
   }
   const unmatchable = unmatchableIdentitiesIn(documents);
+  const unrecognisedStatuses = documents.reduce((count, doc) => count + (doc.unrecognisedStatusCount ?? 0), 0);
+  if (unrecognisedStatuses > 0) {
+    parts.push(
+      `${unrecognisedStatuses} statement(s) with an unrecognised or unsupported status were omitted; CSAF boundary statuses are not interpreted as exact assertions or version ranges.`,
+    );
+  }
   if (unmatchable.length > 0) {
     parts.push(
       `${unmatchable.length} product identit(ies) in parsed documents could not be read and match no row (first: ${unmatchable[0]?.identity} — ${unmatchable[0]?.reason}).`,
@@ -519,7 +525,7 @@ export interface VendorVexRowVerdict {
   /** Every statement the verdict rests on, across all documents, in sorted-path then statement order. */
   sources: VendorVexRowSource[];
   /**
-   * What may be missing from this verdict: statements a cap dropped, statements with a status that is not a VEX
+   * What may be missing from this verdict: statements a cap dropped, statements with an unrecognised or unsupported
    * status, or product identities for this CVE that could not be read. OPTIONAL FOREVER; absent on a row from an
    * older build means "not recorded", and on a row from this build means none was found.
    */
@@ -536,7 +542,7 @@ export interface VendorVexRowOmission {
 const OMISSION_TEXT: Record<VendorVexRowOmission['reason'], string> = {
   statement_cap: 'statement(s) dropped by the statement cap',
   product_cap: 'product reference(s) dropped by the product cap',
-  unrecognised_status: 'statement(s) with a status that is not a VEX status',
+  unrecognised_status: 'statement(s) with an unrecognised or unsupported status (including CSAF boundary semantics)',
   unmatchable_identity: 'product identit(ies) for this CVE that could not be read',
 };
 

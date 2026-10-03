@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { type VendorVexDocument, parseVendorVex } from '@firmlab/core';
+import { MAX_UNRECOGNISED_STATUS_EXAMPLES, type VendorVexDocument, parseVendorVex } from '@firmlab/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   discoverVendorVex,
@@ -390,8 +390,99 @@ describe('a row verdict says what may be missing from it', () => {
     const v = vendorVexVerdictFor({ documents: [d] }, 'CVE-2022-48174', m, 'busybox');
     expect(v?.verdict).toBe('vendor_states_not_affected');
     expect(v?.omissions).toEqual([{ sourcePath: '/etc/vex/a.openvex.json', reason: 'unrecognised_status', count: 1 }]);
-    expect(v?.rationale).toMatch(/status that is not a VEX status/);
+    expect(v?.rationale).toMatch(/unrecognised or unsupported status/);
     expect(vendorVexVerdictFor({ documents: [d] }, 'CVE-2021-0001', m, 'busybox')?.omissions).toBeUndefined();
+  });
+});
+
+describe('unsupported CSAF boundary semantics stay visible', () => {
+  const cve = 'CVE-2022-48174';
+  const product = {
+    product_id: 'P',
+    name: 'busybox',
+    product_identification_helper: { purl: 'pkg:generic/busybox@1.30.1' },
+  };
+  const matcher = packageProductMatcher('busybox', '1.30.1');
+  const boundaryStatuses = ['first_affected', 'last_affected', 'first_fixed'];
+
+  it.each(boundaryStatuses)('%s alone is discovered and counted but attaches no exact or range assertion', (status) => {
+    const discovery = discoverVendorVex(rootfs({ 'etc/csaf.json': csafVex(product, cve, { [status]: ['P'] }) }));
+    expect(discovery.coverage.parsed).toBe(1);
+    expect(discovery.documents[0]?.unrecognisedStatusCount).toBe(1);
+    expect(discovery.documents[0]?.unrecognisedStatusExamples).toEqual([{ vulnerabilityId: cve, status }]);
+    expect(discovery.coverage.statement).toContain('1 statement(s) with an unrecognised or unsupported status');
+    for (const version of ['1.29.0', '1.30.1', '1.36.1']) {
+      expect(vendorVexVerdictFor(discovery, cve, packageProductMatcher('busybox', version), 'busybox')).toBeNull();
+    }
+  });
+
+  it.each(boundaryStatuses)('%s travels to a supported row verdict as an omission, not a source', (status) => {
+    const d = doc(csafVex(product, cve, { [status]: ['P'], fixed: ['P'] }), '/csaf.json');
+    const v = vendorVexVerdictFor({ documents: [d] }, cve, matcher, 'busybox');
+    expect(v?.verdict).toBe('vendor_states_fixed');
+    expect(v?.sources.map((s) => s.status)).toEqual(['fixed']);
+    expect(v?.omissions).toEqual([{ sourcePath: '/csaf.json', reason: 'unrecognised_status', count: 1 }]);
+    expect(v?.rationale).toMatch(/Not a complete reading: .*unsupported status.*CSAF boundary semantics/);
+    expect(
+      vendorVexVerdictFor({ documents: [d] }, cve, packageProductMatcher('busybox', '1.36.1'), 'busybox'),
+    ).toBeNull();
+  });
+
+  it('keeps all three boundary omissions across documents without swallowing a real conflict', () => {
+    const discovery = discoverVendorVex(
+      rootfs({
+        'etc/csaf-boundary.json': csafVex(product, cve, {
+          first_fixed: ['P'],
+          first_affected: ['P'],
+          last_affected: ['P'],
+        }),
+        'etc/csaf-assertions.json': csafVex(product, cve, { fixed: ['P'], known_affected: ['P'] }),
+        'etc/broken.vex.json': '{',
+      }),
+    );
+    expect(discovery.coverage).toMatchObject({ parsed: 2, refused: 1 });
+    expect(discovery.coverage.statement).toContain('3 statement(s) with an unrecognised or unsupported status');
+    const v = vendorVexVerdictFor(discovery, cve, matcher, 'busybox');
+    expect(v?.verdict).toBe('conflicting');
+    expect(v?.sources.map((s) => s.status)).toEqual(['fixed', 'affected']);
+    expect(v?.omissions).toEqual([{ sourcePath: '/etc/csaf-boundary.json', reason: 'unrecognised_status', count: 3 }]);
+  });
+
+  it('keeps exact document counts with bounded examples and warns when this CVE falls beyond them', () => {
+    const boundaryDoc = doc(
+      JSON.stringify({
+        document: { category: 'csaf_vex' },
+        vulnerabilities: [
+          ...Array.from({ length: MAX_UNRECOGNISED_STATUS_EXAMPLES }, (_, i) => ({
+            cve: `CVE-2020-${1000 + i}`,
+            product_status: { first_fixed: ['P'] },
+          })),
+          { cve, product_status: { first_fixed: ['P'], first_affected: ['P'], last_affected: ['P'] } },
+        ],
+      }),
+      '/csaf-boundary.json',
+    );
+    expect(boundaryDoc.unrecognisedStatusCount).toBe(MAX_UNRECOGNISED_STATUS_EXAMPLES + 3);
+    expect(boundaryDoc.unrecognisedStatusExamples).toHaveLength(MAX_UNRECOGNISED_STATUS_EXAMPLES);
+    expect(boundaryDoc.unrecognisedStatusExamples?.some((e) => e.vulnerabilityId === cve)).toBe(false);
+    const fixed = doc(csafVex(product, cve, { fixed: ['P'] }));
+    const v = vendorVexVerdictFor({ documents: [boundaryDoc, fixed] }, cve, matcher, 'busybox');
+    expect(v?.verdict).toBe('vendor_states_fixed');
+    expect(v?.omissions).toEqual([{ sourcePath: '/csaf-boundary.json', reason: 'unrecognised_status', count: 3 }]);
+  });
+
+  it('does not attribute fully listed boundary omissions to another CVE, and accepts legacy documents', () => {
+    const boundaryDoc = doc(csafVex(product, 'CVE-2020-1234', { first_affected: ['P'] }));
+    const fixed = doc(csafVex(product, cve, { fixed: ['P'] }));
+    const { unrecognisedStatusCount: _count, unrecognisedStatusExamples: _examples, ...legacy } = fixed;
+    const v = vendorVexVerdictFor(
+      { documents: [boundaryDoc, JSON.parse(JSON.stringify(legacy))] },
+      cve,
+      matcher,
+      'busybox',
+    );
+    expect(v?.verdict).toBe('vendor_states_fixed');
+    expect(v?.omissions).toBeUndefined();
   });
 });
 
