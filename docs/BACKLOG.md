@@ -72,10 +72,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   hecho (`9688463`, `96e496a`, `b8f8c63`: veredicto sobre filas kernel-cve y grype, nunca cambia el estado de
   prueba). Falta usar diff de parches para resolver backports sin inferirlos, que exige fuentes del kernel del
   proveedor y no es acotable sin red.
-- [ ] Hacer que la reparación del guest alcance una ruta ejecutada. El código ya inserta una primera entrada
-  `::sysinit:` estructuralmente segura en `/etc/inittab` y, si no puede, degrada al principio ejecutable de `rcS`,
-  con restauración byte-exacta y pruebas del orden. Falta el boot real del WR940N con evidencia de consola/red:
-  las pruebas de composición no autorizan a afirmar que el servicio quedó alcanzable en el dispositivo.
+- [x] Hacer que la reparación del guest alcance una ruta ejecutada. *(Hecho en `294c841` y endurecido en
+  `619f618`.)* El boot real del WR940N en contenedor desechable y sin red probó primero que la entrada anterior no
+  se ejecutaba: `busybox init` anteponía `exec` y el `msh` 1.01 tampoco aceptaba la aritmética del contador. La
+  entrada corregida, de 244 bytes y compatible con ese shell, dejó HTTP/80 y HTTPS/443 alcanzables en la segunda
+  pasada (la variante sin reparación observó 156 SYN y ninguna respuesta). El hallazgo mantiene separados el
+  efecto de red y el readback: los marcadores propios se perdieron por el cierre de sesión de BusyBox, de modo que
+  `reportedRunning` sigue en falso y no se afirma que el teardown se ejecutara sólo porque respondieron puertos.
+  El tap de consola está acotado para toda entrada y sólo acepta marcadores como líneas completas. Evidencia y
+  límites (`n=1` por variante) en `docs/OPERABILITY-VALIDATION.md`.
 - [ ] Decidir si `isKernelLogLine` (`guest-repair.ts`) debe filtrar también trazas `firmadyne: …` sin marca de
   tiempo dentro del bloque del ruleset. Diferido, no probado: `WR940N_CONSOLE` (job 486be04e, en
   `emulate-system.test.ts`) se declara literal y trae `firmadyne: do_execve[…]` al principio de línea, pero la
