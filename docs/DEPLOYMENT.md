@@ -225,9 +225,9 @@ grype registraba una base de 2 204 512 256 bytes traída de `grype.anchore.io`. 
 apagados: sin red» era falsa.
 
 Desde `providers/sbom-db.ts` los dos binarios corren con la actualización automática y el sondeo de versión
-apagados, y grype sólo correlaciona contra una base **ya presente en disco**. Si no la hay, el trabajo devuelve
-el SBOM completo y declara por escrito que la correlación no se intentó, con las dos salidas. Nunca la descarga
-por su cuenta.
+apagados, y con el carril research apagado grype sólo correlaciona contra una base **ya presente en disco**. Si no
+la hay, el trabajo devuelve el SBOM completo y declara por escrito que la correlación no se intentó, con las dos
+salidas. Nunca la descarga por su cuenta.
 
 Aprovisionarla una vez (la descarga son varios GB; queda en el volumen y sobrevive al redespliegue):
 
@@ -236,10 +236,12 @@ docker exec firmlab sh -lc 'GRYPE_DB_CACHE_DIR=$FIRMLAB_DATA_DIR/grype-db grype 
 docker exec firmlab sh -lc 'GRYPE_DB_CACHE_DIR=$FIRMLAB_DATA_DIR/grype-db grype db status'   # verificación
 ```
 
-La alternativa es el carril research con `FIRMLAB_RESEARCH=1` **declarado** (Ajustes › Privacidad o el compose),
-que autoriza a grype a descargarla desde `grype.anchore.io` — el valor por omisión encendido todavía no basta para
-esto, ver la política de red. Es una descarga de un sentido —no sale nada del firmware, igual que el
-catálogo KEV—, y por eso no tiene flag propio: ese carril es el único que puede salir a internet.
+La alternativa es el carril research encendido, que autoriza a grype a descargarla desde `grype.anchore.io`. Basta
+el valor por omisión: sin nada declarado, el primer job de SBOM sin base aprovisionada la descarga y el log del job
+lo dice antes (ver la política de red); sólo `FIRMLAB_RESEARCH=0` o un `0` guardado en Ajustes lo impiden. Lo que
+exige research **declarado** es el hash lookup, no esta descarga. Es una descarga de un sentido —no sale nada del
+firmware, igual que el catálogo KEV—, y por eso no tiene flag propio: ese carril es el único que puede salir a
+internet.
 
 Una base vieja **se usa**, no se rechaza (`GRYPE_DB_VALIDATE_AGE=false`: grype descarta por defecto cualquiera de
 más de cinco días), y su fecha de compilación viaja al resultado y a la tabla de la web. Cero CVE contra una base
