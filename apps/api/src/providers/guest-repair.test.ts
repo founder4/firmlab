@@ -5,6 +5,7 @@ import {
   INITTAB_LINE_MAX,
   INIT_EXEC_GUARD,
   REPAIR_FLAG,
+  REPAIR_REPORT_MAX,
   RULES_BEGIN,
   RULES_END,
   chooseRepairPlacement,
@@ -262,11 +263,109 @@ describe('createRepairReportTap — the report survives the console cap', () => 
   });
 
   it('closes a truncated block and says so inside it, rather than losing the read', () => {
-    const tap = createRepairReportTap(64);
-    tap.push(`${RULES_BEGIN}\n${'-A INPUT -j DROP\n'.repeat(20)}${RULES_END}\n`);
+    const tap = createRepairReportTap(128);
+    tap.push(`${RULES_BEGIN}\n${'-A INPUT -j DROP\n'.repeat(20)}${RULES_END}\n${FLUSHED}\n`);
+    expect(tap.text().length).toBeLessThanOrEqual(128);
     const r = readGuestRuleset(tap.text());
-    expect(r.read).toBe(true);
-    expect(r.rules).toMatch(/ruleset truncated at 64 bytes/);
+    expect(r).toMatchObject({ ran: true, read: true, flushed: true });
+    // A prefix of the ruleset, then the note: the bound shortens the block, it does not punch holes in it.
+    expect(r.rules).toBe('-A INPUT -j DROP\n# FirmLab: ruleset truncated at 128 bytes');
+  });
+
+  /**
+   * `max` is a bound on `text()` for EVERY input. The first tap bounded only the lines between the markers, so each
+   * of these grew it without limit: a marker printed in a loop, and a console that never sends another newline.
+   */
+  describe('bounds text() under hostile input', () => {
+    const MAX = 256;
+
+    it('keeps one report however often the markers repeat', () => {
+      const tap = createRepairReportTap(MAX);
+      const report = `${RULES_BEGIN}\n-A INPUT -j DROP\n${RULES_END}\n${FLUSHED}\n`;
+      tap.push(report);
+      for (let i = 0; i < 10_000; i++) tap.push(`${RULES_END}\r\n${FLUSHED}\n${RULES_BEGIN}\n-A X\n`);
+      tap.push(`${RULES_END}\n`);
+      expect(tap.text()).toBe(report);
+      expect(readGuestRuleset(tap.text())).toEqual({ ran: true, rules: '-A INPUT -j DROP', read: true, flushed: true });
+    });
+
+    it('stays bounded under repeated end and flush markers with no block at all', () => {
+      const tap = createRepairReportTap(MAX);
+      for (let i = 0; i < 10_000; i++) tap.push(`${RULES_END}\n${FLUSHED}\n`);
+      tap.push(RULES_END);
+      expect(tap.text()).toBe(`${FLUSHED}\n`);
+      // A stray end marker is not a read; the reader ignores it on the raw console too.
+      expect(readGuestRuleset(tap.text())).toMatchObject({ ran: true, read: false, flushed: true });
+    });
+
+    it('does not buffer a newline-free line whole, and does not mistake it for a marker', () => {
+      const tap = createRepairReportTap(MAX);
+      for (let i = 0; i < 1000; i++) tap.push(FLUSHED.repeat(100));
+      expect(tap.text()).toBe('');
+      tap.push(`\n${RULES_BEGIN}\n-A INPUT -j DROP\n${RULES_END}\n`);
+      expect(readGuestRuleset(tap.text())).toMatchObject({
+        ran: true,
+        read: true,
+        flushed: false,
+        rules: '-A INPUT -j DROP',
+      });
+    });
+
+    it('truncates at an arbitrarily long rule line inside the block, and still closes it', () => {
+      const tap = createRepairReportTap(MAX);
+      tap.push(`${RULES_BEGIN}\n-A INPUT -j DROP\n`);
+      for (let i = 0; i < 1000; i++) tap.push('-A INPUT -m comment --comment x'.repeat(50));
+      tap.push(`\n-A AFTER -j ACCEPT\n${RULES_END}\n${FLUSHED}\n`);
+      expect(tap.text().length).toBeLessThanOrEqual(MAX);
+      const r = readGuestRuleset(tap.text());
+      expect(r).toMatchObject({ ran: true, read: true, flushed: true });
+      expect(r.rules).toBe(`-A INPUT -j DROP\n# FirmLab: ruleset truncated at ${MAX} bytes`);
+    });
+
+    it('drops an over-long kernel line inside the block without calling the ruleset truncated', () => {
+      const tap = createRepairReportTap(MAX);
+      tap.push(
+        `${RULES_BEGIN}\n[   21.5] firmadyne: do_execve[PID: 9]: argv: ${'x'.repeat(10 * MAX)}\n-A INPUT -j DROP\n`,
+      );
+      tap.push(`${RULES_END}\n`);
+      expect(readGuestRuleset(tap.text()).rules).toBe('-A INPUT -j DROP');
+    });
+
+    it('bounds an oversized ruleset, reserving room for both closing markers', () => {
+      const tap = createRepairReportTap(MAX);
+      tap.push(`${RULES_BEGIN}\n`);
+      for (let i = 0; i < 100_000; i++) tap.push(`-A INPUT -s 10.0.${i % 256}.0/24 -j DROP\n`);
+      expect(tap.text().length).toBeLessThanOrEqual(MAX);
+      // Killed before the end marker: the block was never closed, so it is not a read, however much was kept.
+      expect(readGuestRuleset(tap.text())).toMatchObject({ ran: true, read: false });
+      tap.push(`${RULES_END}\n${FLUSHED}`);
+      expect(tap.text().length).toBeLessThanOrEqual(MAX);
+      const r = readGuestRuleset(tap.text());
+      expect(r).toMatchObject({ ran: true, read: true, flushed: true });
+      expect(r.rules).toMatch(
+        /^-A INPUT -s 10\.0\.0\.0\/24 -j DROP\n[\s\S]*# FirmLab: ruleset truncated at 256 bytes$/,
+      );
+    });
+
+    it('holds the default bound too', () => {
+      const tap = createRepairReportTap();
+      tap.push(`${RULES_BEGIN}\n`);
+      for (let i = 0; i < 20_000; i++) tap.push(`-A INPUT -s 10.0.${i % 256}.0/24 -j DROP\n${FLUSHED}\n`);
+      tap.push(`${RULES_END}\n`);
+      expect(tap.text().length).toBeLessThanOrEqual(REPAIR_REPORT_MAX);
+      expect(readGuestRuleset(tap.text())).toMatchObject({ read: true, flushed: true });
+    });
+
+    it('refuses a bound too small to hold its own markers rather than reporting a line that never ran', () => {
+      expect(() => createRepairReportTap(64)).toThrow(RangeError);
+    });
+  });
+
+  it('keeps a split end marker that is still pending when the guest is killed', () => {
+    const tap = createRepairReportTap();
+    tap.push(`${RULES_BEGIN}\r\n-A INPUT -j DROP\r\nFIRMLAB_RU`);
+    tap.push('LES_END\r');
+    expect(readGuestRuleset(tap.text())).toEqual({ ran: true, rules: '-A INPUT -j DROP', read: true, flushed: false });
   });
 });
 

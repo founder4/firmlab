@@ -508,6 +508,9 @@ export function describeRuleset(r: GuestRuleset): string {
 /** How much of the repair's own report a tap keeps. iptables-save on these routers prints a few KB. */
 export const REPAIR_REPORT_MAX = 64 * 1024;
 
+/** The sentence a truncated block carries inside itself, where the reader keeps it. */
+const truncationNote = (max: number): string => `# FirmLab: ruleset truncated at ${max} bytes`;
+
 /**
  * Pure, stateful: keep the repair's report out of a console stream BEFORE the stream is capped.
  *
@@ -516,48 +519,76 @@ export const REPAIR_REPORT_MAX = 64 * 1024;
  * middle the cap drops, so reading the report from the capped console would turn a line that ran into one that
  * "never reported back". The tap sees every byte as it arrives and keeps only whole marker lines and what lies
  * between the read markers, bounded, so what it hands back is the report and nothing a kernel could have echoed.
+ *
+ * **`max` bounds `text()` for every input, not for the input the guest is supposed to send.** The first version
+ * bounded only the lines between the markers: a repeated `RULES_END` or `FLUSHED` was appended unconditionally, and
+ * a line with no newline grew the pending buffer without limit — so a guest that printed a marker in a loop, or a
+ * console that never sent another newline, grew the one buffer the cap exists to protect. The tap now keeps exactly
+ * what `readGuestRuleset` reads — the FIRST block (its first `RULES_BEGIN` and the first `RULES_END` after it) and
+ * whether `FLUSHED` appeared — so a repetition adds nothing it could have used. The block's skeleton (both markers,
+ * the truncation note, the flush marker) is reserved up front and only the rules compete for the rest, which is why
+ * a truncated block still closes. Truncation keeps a PREFIX of the ruleset: a line that does not fit ends the
+ * keeping, rather than leaving a hole that the lines after it would hide. A line too long to be kept or to be a
+ * marker is not buffered whole; only enough of its head to classify it is.
+ *
+ * What a bound can cost is a degradation, never an invention: a block the guest never closed stays unclosed and
+ * reads as `read: false`.
  */
 export function createRepairReportTap(max = REPAIR_REPORT_MAX): { push(chunk: string): void; text(): string } {
+  const skeleton = `${RULES_BEGIN}\n${truncationNote(max)}\n${RULES_END}\n${FLUSHED}\n`.length;
+  if (!Number.isSafeInteger(max) || max < skeleton) {
+    throw new RangeError(`a repair report tap needs at least ${skeleton} bytes to hold its own markers, got ${max}`);
+  }
+  const rulesMax = max - skeleton;
+  // Longer than any line that could be kept or matched; a pending line past it is only ever classified, not kept.
+  const lineMax = Math.max(rulesMax, RULES_BEGIN.length, RULES_END.length, FLUSHED.length) + 1;
   let partial = '';
-  let inside = false;
-  let kept = '';
+  let overlong = false;
+  let block: 'waiting' | 'inside' | 'closed' = 'waiting';
+  let rules = '';
   let truncated = false;
-  const keep = (line: string): void => {
-    if (kept.length + line.length + 1 > max) {
-      truncated = true;
-      return;
-    }
-    kept += `${line}\n`;
-  };
-  const take = (raw: string): void => {
+  let flushed = false;
+  const take = (raw: string, whole: boolean): void => {
     const line = raw.replace(/\r$/, '');
-    if (line === RULES_BEGIN) {
-      inside = true;
-      keep(line);
-    } else if (line === RULES_END) {
-      inside = false;
-      // The end marker always fits: a block truncated by the bound must still be closed, or the reader would report
-      // the ruleset as never read when it was read and only shortened. The truncation is stated inside the block,
-      // where the reader keeps it, rather than after it, where nothing would.
-      if (truncated) kept += `# FirmLab: ruleset truncated at ${max} bytes\n`;
-      kept += `${line}\n`;
-    } else if (line === FLUSHED) {
-      kept += `${line}\n`;
-    } else if (inside && !isKernelLogLine(line)) {
-      keep(line);
+    if (whole && line === FLUSHED) {
+      flushed = true;
+    } else if (block === 'waiting') {
+      if (whole && line === RULES_BEGIN) block = 'inside';
+    } else if (block === 'inside') {
+      if (whole && line === RULES_END) block = 'closed';
+      else if (truncated || isKernelLogLine(line)) return;
+      else if (!whole || rules.length + line.length + 1 > rulesMax) truncated = true;
+      else rules += `${line}\n`;
     }
   };
   return {
     push(chunk: string): void {
-      const parts = (partial + chunk).split('\n');
-      partial = parts.pop() ?? '';
-      for (const p of parts) take(p);
+      let at = 0;
+      for (;;) {
+        const nl = chunk.indexOf('\n', at);
+        if (!overlong) {
+          partial += chunk.slice(at, nl === -1 ? undefined : nl);
+          if (partial.length > lineMax) {
+            partial = partial.slice(0, lineMax);
+            overlong = true;
+          }
+        }
+        if (nl === -1) return;
+        take(partial, !overlong);
+        partial = '';
+        overlong = false;
+        at = nl + 1;
+      }
     },
     text(): string {
       // A marker still sitting in the partial buffer when the guest was killed is a marker the guest printed.
-      const tail = partial.replace(/\r$/, '');
-      const last = tail === RULES_END || tail === FLUSHED ? `${tail}\n` : '';
-      return `${kept}${last}`;
+      const tail = overlong ? '' : partial.replace(/\r$/, '');
+      const closed = block === 'closed' || (block === 'inside' && tail === RULES_END);
+      const head =
+        block === 'waiting'
+          ? ''
+          : `${RULES_BEGIN}\n${rules}${closed && truncated ? `${truncationNote(max)}\n` : ''}${closed ? `${RULES_END}\n` : ''}`;
+      return `${head}${flushed || tail === FLUSHED ? `${FLUSHED}\n` : ''}`;
     },
   };
 }

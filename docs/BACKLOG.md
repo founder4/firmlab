@@ -76,6 +76,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `::sysinit:` estructuralmente segura en `/etc/inittab` y, si no puede, degrada al principio ejecutable de `rcS`,
   con restauración byte-exacta y pruebas del orden. Falta el boot real del WR940N con evidencia de consola/red:
   las pruebas de composición no autorizan a afirmar que el servicio quedó alcanzable en el dispositivo.
+- [ ] Decidir si `isKernelLogLine` (`guest-repair.ts`) debe filtrar también trazas `firmadyne: …` sin marca de
+  tiempo dentro del bloque del ruleset. Diferido, no probado: `WR940N_CONSOLE` (job 486be04e, en
+  `emulate-system.test.ts`) se declara literal y trae `firmadyne: do_execve[…]` al principio de línea, pero la
+  consola literal del 2026-10-04 del mismo equipo las trae con `[ t.ttt]`. Si existe, iptables-save se ejecuta
+  entre los marcadores, así que un ruleset vacío se leería como no vacío ("0 rule(s)" en vez de "NO iptables
+  rules") — degrada la frase, no inventa reglas. Confirmar con la consola cruda guardada antes de tocarlo.
 - [ ] Ampliar RTOS más allá del boot. Ya existe un parser byte-only acotado para listas de tareas FreeRTOS cuando
   se suministran símbolos/layout (`pxCurrentTCB` y lista circular), con ciclo, truncado y punteros fuera de rango
   explícitos, y ya está cableado a la API: `POST /images/:id/rtos/tasks` acepta un snapshot de RAM que declara
