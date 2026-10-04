@@ -67,6 +67,16 @@ jq -s '
       unmodifiedOpenGuestPorts: [.result.open[]?.guest],
       passes: [.result.passes[]? | {pass, label, booted, panicked, timedOut, openGuestPorts: [.open[]?.guest]}],
       reproducibility: .result.reproducibility,
+      # The boot-time repair (FIRMLAB_EMU_REPAIR) as staged and as its own console markers report it. Staged is not
+      # executed: an inittab line that died on a syntax error once read as "ran" from the argv echo of the kernel.
+      repair: {
+        attempted: (.result.repair.attempted // false),
+        staged: ((.result.repair.interventions // []) | length > 0),
+        reportedRunning: .result.ruleset.ran,
+        rulesetRead: .result.ruleset.read,
+        flushed: .result.ruleset.flushed,
+        rulesBeforeFlush: (if .result.ruleset.read == true then ([(.result.ruleset.rules // "") | split("\n")[] | select(startswith("-A"))] | length) else null end)
+      },
       console: {
         attempted: (.result.console.attempted // false),
         shellAnswered: (.result.console.outcome.shellAnswered // false),
@@ -93,6 +103,7 @@ jq -s '
       oneBuild: (([.runs[].buildRev] | unique | length) == 1 and (.runs[0].buildRev != null)),
       stableHeadline: (([.runs[].proofState] | unique | length) == 1),
       noPanics: ([.runs[].passes[]?.panicked == false] | all),
+      stagedRepairReportedEveryRun: ([.runs[] | select(.repair.staged) | .repair.reportedRunning == true and .repair.rulesetRead == true] | all),
       consoleRecoveredEveryRun: ([.runs[] | (.console.attempted and .console.shellAnswered and .console.teardownRan and .console.policyBefore == "DROP" and .console.policyAfter == "ACCEPT" and (.console.openGuestPorts | index(80) != null))] | all),
       liveHttpAndHttpsProbedEveryRun: ([.runs[] |
         (any(.liveWebProbes[]?; .pass == 3 and .guest == 80 and .protocol == "http" and .available and .requests > 0 and (.interventions | length) > 0))

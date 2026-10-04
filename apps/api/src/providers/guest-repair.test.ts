@@ -3,10 +3,12 @@ import {
   FLUSHED,
   type GuestRepairInputs,
   INITTAB_LINE_MAX,
+  INIT_EXEC_GUARD,
   REPAIR_FLAG,
   RULES_BEGIN,
   RULES_END,
   chooseRepairPlacement,
+  createRepairReportTap,
   describeRepairDisposition,
   describeRuleset,
   findSysinitInsertion,
@@ -64,9 +66,37 @@ describe('planGuestRepair', () => {
    */
   it('retries the ping, because it now runs before the vendor brings `lo` up', () => {
     const line = planGuestRepair(inputs()).line ?? '';
-    expect(line).toMatch(/until ping -c \d+ 127\.0\.0\.1/);
-    // …and it is bounded, so a guest whose `lo` never comes up stops forking instead of spinning for the whole boot.
-    expect(line).toMatch(/\|\| \[ \$n -ge \d+ \]/);
+    // Bounded by nested loops over ten positional parameters — 100 tries — so a guest whose `lo` never comes up stops
+    // forking instead of spinning for the whole boot.
+    expect(line).toMatch(/set 0 1 2 3 4 5 6 7 8 9;for a do for b do ping -c \d+ 127\.0\.0\.1 [^;]*&&break 2;done;done/);
+  });
+
+  it('reads and flushes NOTHING when the timer runs out, rather than reading a ruleset at t≈0', () => {
+    const line = planGuestRepair(inputs()).line ?? '';
+    // `break 2` leaves the loops with status 0; exhausting them leaves ping's failure, and `|| exit` ends the subshell
+    // before the first marker. Measured on the WR940N's msh: the exhausted run printed nothing at all.
+    expect(line).toMatch(/done;done\|\|exit;echo FIRMLAB_RULES_BEGIN/);
+  });
+
+  /**
+   * The first inittab-first line was a syntax error on the real WR940N console and never ran. Each of these is a
+   * construct the guest's BusyBox 1.01 msh was measured rejecting; none of them may come back.
+   */
+  it('uses nothing the guest’s BusyBox 1.01 msh cannot parse', () => {
+    const line = planGuestRepair(inputs()).line ?? '';
+    expect(line).not.toContain('$((');
+    expect(line).not.toMatch(/\bexec\b/);
+    // A quoted `sh -c '…'` wrapper is useless here: msh's `exec` re-splits quoted arguments.
+    expect(line).not.toMatch(/sh -c/);
+  });
+
+  it('survives the `exec ` busybox init prepends to an inittab entry', () => {
+    const p = planGuestRepair(inputs());
+    const entry = (p.placement?.content ?? '').split('\n').find((l) => l.includes(FLUSHED)) ?? '';
+    // init runs `/bin/sh -c "exec <entry>"`. `exec (` is a syntax error in every shell — it is what the WR940N console
+    // printed — so the entry must open with a redirection-only command that makes that exec a no-op.
+    expect(entry.startsWith(`::sysinit:${INIT_EXEC_GUARD}(`)).toBe(true);
+    expect(`exec ${entry.slice('::sysinit:'.length)}`).toMatch(/^exec 2>&1;\(/);
   });
 
   it('backgrounds itself so the vendor boot is not held up by the wait', () => {
@@ -154,6 +184,90 @@ describe('readGuestRuleset', () => {
     const r = readGuestRuleset(console_('-P INPUT DROP\n-A INPUT -j X\n-A FORWARD -j Y'));
     expect(describeRuleset(r)).toMatch(/2 iptables rule\(s\)/);
   });
+
+  /**
+   * Verbatim shape of the real WR940N console (2026-10-04) for the first inittab-first line: firmadyne logs the
+   * execve WITH its argv, the argv contains every marker, and the line itself died on `syntax error`. The substring
+   * reader returned `ran: true`, rules "; iptables-save 2>&1; echo" and "0 rules, flush ran" — a fabricated
+   * measurement of a line that never executed.
+   */
+  it('does not mistake the kernel’s echo of the command for the command running', () => {
+    const argv =
+      '(n=0; until ping -c 20 127.0.0.1 >/dev/null 2>&1 || [ $n -ge 600 ]; do n=$((n+1)); done; echo FIRMLAB_RULES_BEGIN; iptables-save 2>&1; echo FIRMLAB_RULES_END; /etc/rc.d/iptables-stop >/dev/null 2>&1; echo FIRMLAB_FLUSHED) &';
+    const real = [
+      'init started:  BusyBox v1.01 (2026.05.28-02:39+0000) multi-call binary',
+      `[    0.776593] firmadyne: do_execve[PID: 50 (init)]: argv: /bin/sh -c exec ${argv}, envp: HOME=/ TERM=vt102`,
+      `[ANALYZE] [PID: 50 (init)]: /bin/sh -c exec ${argv}`,
+      '[    0.793759] firmadyne: vfs_ioctl[PID: 50 (sh)]: cmd:0x0 arg:0x540d',
+      'syntax error',
+      '[    0.795148] firmadyne: do_exit[PID: 50 (sh)]: code:65280',
+    ].join('\r\n');
+    const r = readGuestRuleset(real);
+    expect(r).toEqual({ ran: false, rules: '', read: false, flushed: false });
+    expect(describeRuleset(r)).toMatch(/no evidence it executed/);
+  });
+
+  it('reads markers on a serial console’s CRLF lines, and drops kernel lines interleaved into the block', () => {
+    const r = readGuestRuleset(
+      [
+        'boot',
+        RULES_BEGIN,
+        '*filter',
+        '[   21.5] firmadyne: do_execve[PID: 9]',
+        '-A INPUT -j DROP',
+        'COMMIT',
+        RULES_END,
+        FLUSHED,
+      ].join('\r\n'),
+    );
+    expect(r).toEqual({ ran: true, rules: '*filter\n-A INPUT -j DROP\nCOMMIT', read: true, flushed: true });
+  });
+
+  it('never calls a ruleset EMPTY when it was not read at all', () => {
+    // A flush with no read block — no iptables-save, or a console that lost the block — is not an empty filter.
+    const r = readGuestRuleset(`boot\n${FLUSHED}\n`);
+    expect(r).toMatchObject({ ran: true, read: false, flushed: true });
+    expect(describeRuleset(r)).toMatch(/never read back/);
+    expect(describeRuleset(r)).not.toMatch(/NO iptables rules/);
+  });
+});
+
+describe('createRepairReportTap — the report survives the console cap', () => {
+  it('reassembles markers split across chunks and keeps only the report', () => {
+    const tap = createRepairReportTap();
+    for (const c of [
+      'noise\r\nFIRMLAB_RU',
+      'LES_BEGIN\r\n-A INPUT -j DROP\r',
+      '\nFIRMLAB_RULES_END\r\nmore\r\nFIRMLAB_FLUSHED',
+    ]) {
+      tap.push(c);
+    }
+    expect(tap.text()).toBe(`${RULES_BEGIN}\n-A INPUT -j DROP\n${RULES_END}\n${FLUSHED}\n`);
+    expect(readGuestRuleset(tap.text())).toEqual({ ran: true, rules: '-A INPUT -j DROP', read: true, flushed: true });
+  });
+
+  it('ignores a marker that only appears inside a longer line', () => {
+    const tap = createRepairReportTap();
+    tap.push(`[ 0.7] firmadyne: do_execve argv: /bin/sh -c exec (echo ${RULES_BEGIN}; echo ${FLUSHED}) &\n`);
+    expect(tap.text()).toBe('');
+  });
+
+  it('keeps the report even when it lands in the middle the 256 KB cap elides', () => {
+    const tap = createRepairReportTap();
+    const filler = `${'[ 1.0] firmadyne: close[PID: 50 (sh)]: fd:3\n'.repeat(4000)}`;
+    tap.push(filler);
+    tap.push(`${RULES_BEGIN}\n-A INPUT -j DROP\n${RULES_END}\n${FLUSHED}\n`);
+    tap.push(filler);
+    expect(readGuestRuleset(tap.text())).toMatchObject({ ran: true, read: true, rules: '-A INPUT -j DROP' });
+  });
+
+  it('closes a truncated block and says so inside it, rather than losing the read', () => {
+    const tap = createRepairReportTap(64);
+    tap.push(`${RULES_BEGIN}\n${'-A INPUT -j DROP\n'.repeat(20)}${RULES_END}\n`);
+    const r = readGuestRuleset(tap.text());
+    expect(r.read).toBe(true);
+    expect(r.rules).toMatch(/ruleset truncated at 64 bytes/);
+  });
 });
 
 /**
@@ -235,16 +349,17 @@ describe('where the repair lands', () => {
     expect(p.placement?.kind).toBe('inittab-sysinit');
     expect(p.placement?.file).toBe('etc/inittab');
     const content = p.placement?.content ?? '';
-    expect(content.indexOf(`::sysinit:${p.line}`)).toBeGreaterThanOrEqual(0);
+    const entry = `::sysinit:${INIT_EXEC_GUARD}${p.line}`;
+    expect(content.indexOf(entry)).toBeGreaterThanOrEqual(0);
     // Ordering IS the fix: busybox init runs sysinit entries in file order and waits for each, so ours executes
     // before rcS starts and stops depending on whether rcS ever returns.
-    expect(content.indexOf(`::sysinit:${p.line}`)).toBeLessThan(content.indexOf(VENDOR_SYSINIT));
+    expect(content.indexOf(entry)).toBeLessThan(content.indexOf(VENDOR_SYSINIT));
   });
 
   it('adds exactly one line and leaves every other byte of the inittab alone', () => {
     const content = planGuestRepair(inputs()).placement?.content ?? '';
     const lines = content.split('\n');
-    const ours = lines.findIndex((l) => l.startsWith('::sysinit:('));
+    const ours = lines.findIndex((l) => l.startsWith(`::sysinit:${INIT_EXEC_GUARD}(`));
     expect(ours).toBeGreaterThanOrEqual(0);
     lines.splice(ours, 1);
     // Byte-identical once our line is taken back out: the restore in rootfs-image puts the original buffer back,
@@ -283,6 +398,7 @@ describe('where the repair lands', () => {
 
     it('puts the line after the shebang and BEFORE the vendor body, never at the end', () => {
       const content = planGuestRepair(inputs({ inittab: null })).placement?.content ?? '';
+      // No exec guard here: a script line is not handed to `exec`, and the line opens directly with its subshell.
       expect(content.startsWith('#!/bin/sh\n(')).toBe(true);
       expect(content.indexOf('iptables-stop')).toBeLessThan(content.indexOf('/usr/bin/httpd'));
       expect(content.endsWith(RCS.slice(RCS.indexOf('\n') + 1))).toBe(true);
@@ -299,7 +415,7 @@ describe('where the repair lands', () => {
 
     it('fits the real line inside that ceiling, which is the only reason the preferred route is available', () => {
       const p = planGuestRepair(inputs());
-      expect(`::sysinit:${p.line}`.length).toBeLessThanOrEqual(INITTAB_LINE_MAX);
+      expect(`::sysinit:${INIT_EXEC_GUARD}${p.line}`.length).toBeLessThanOrEqual(INITTAB_LINE_MAX);
     });
   });
 });

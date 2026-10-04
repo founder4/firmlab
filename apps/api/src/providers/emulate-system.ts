@@ -74,7 +74,7 @@ import {
   planConsolePass,
   readConsoleOutcome,
 } from './guest-console.js';
-import { type RepairDisposition, describeRuleset, readGuestRuleset } from './guest-repair.js';
+import { type RepairDisposition, createRepairReportTap, describeRuleset, readGuestRuleset } from './guest-repair.js';
 import type { JobHandle } from './jobs.js';
 import { readPortMap } from './portmap-run.js';
 import { type PortProtocol, planForwards } from './portmap.js';
@@ -180,7 +180,14 @@ export interface SystemEmulationResult {
    * an EMPTY ruleset with the markers present: the filter was empty while the SYNs were vanishing, which rules the
    * firewall out rather than confirming it.
    */
-  ruleset?: { ran: boolean; rules: string; flushed: boolean; note: string };
+  ruleset?: {
+    ran: boolean;
+    rules: string;
+    flushed: boolean;
+    note: string;
+    /** Whether the read markers bracketed a ruleset. Optional forever: older rows lack it, which is unknown. */
+    read?: boolean;
+  };
   /**
    * What THIS boot plus the image's prior boots support. Optional forever, and the reason it exists at all is that
    * three causal claims were drawn from single boots of this rung and all three were wrong: a verdict read without
@@ -1308,7 +1315,14 @@ export function buildSystemEmulationFindings(subject: string, r: SystemEmulation
       supportsCausalClaim: r.reproducibility.supportsCausalClaim,
     };
   }
-  if (r.repair) evidence.repair = { attempted: r.repair.attempted, interventions: r.repair.interventions };
+  if (r.repair) {
+    evidence.repair = {
+      attempted: r.repair.attempted,
+      interventions: r.repair.interventions,
+      // Staged is not executed. Present only when the read-back ran; absent means nobody looked, not "it ran".
+      ...(r.ruleset ? { reportedRunning: r.ruleset.ran } : {}),
+    };
+  }
   if (r.buildRev) evidence.buildRev = r.buildRev;
 
   const rationale: string[] = [r.reason];
@@ -1324,6 +1338,14 @@ export function buildSystemEmulationFindings(subject: string, r: SystemEmulation
     rationale.push(
       `The guest was modified before it was asked: ${interventions.length} intervention(s). What answered is the repaired firmware, not the firmware as shipped.`,
     );
+    // The image was edited either way; whether the edit ever EXECUTED is a separate fact, read from the line's own
+    // console markers. A line that never reported is a modified image with no repair behind it, and saying only
+    // "modified" would let a reader assume the teardown happened.
+    if (r.ruleset && !r.ruleset.ran) {
+      rationale.push(
+        'The inserted line never reported running on this boot, so nothing shows the repair executed: the image differs from the shipped one, but no teardown is evidenced.',
+      );
+    }
   }
 
   const kind = ((): string => {
@@ -1607,6 +1629,11 @@ interface BootOutcome {
   wire: WireObservation | null;
   /** The same capture, read for the opposite question: what the firmware tried to REACH. */
   egress: EgressObservation | null;
+  /**
+   * The boot-time repair's own console report, tapped from the UNCAPPED stream. `stdout` is head and tail of 256 KB,
+   * and a firmadyne WR940N boot overflows it at exactly the point the repair speaks.
+   */
+  repairReport: string;
 }
 
 /**
@@ -1649,6 +1676,8 @@ async function bootOnce(
   proc.stdin?.on('error', () => undefined);
   let stdout = '';
   let stderr = '';
+  // The guest's serial console is qemu's stdout (`-serial mon:stdio`); stderr is qemu's own, so only stdout is tapped.
+  const repairTap = createRepairReportTap();
   // Keep the HEAD as well as the tail. Capping with `slice(-CAP)` evicted the earliest output first — which is
   // exactly where a kernel prints the markers the boot verdict is read from. The real WR940N boot proved it: the
   // firmware came all the way up (its own init printing `OPEN ALL PHY ETH!!`, its HTTPS daemon loading a
@@ -1656,6 +1685,7 @@ async function bootOnce(
   // `Freeing unused kernel memory` out of the window.
   const cap = (chunk: Buffer, which: 'o' | 'e'): void => {
     const s = chunk.toString('utf8');
+    if (which === 'o') repairTap.push(s);
     if (which === 'o') stdout = keepEnds(stdout + s);
     else stderr = keepEnds(stderr + s);
   };
@@ -1761,6 +1791,7 @@ async function bootOnce(
     // A capture that could not be read is a null, never an invented empty observation.
     wire: capture ? readCapture(capture.file, capture.emulatorAddresses, handle) : null,
     egress: capture ? readEgress(capture.file, capture.emulatorAddresses, capture.guestAddress) : null,
+    repairReport: repairTap.text(),
   };
 }
 
@@ -2215,10 +2246,12 @@ export async function runFullSystem(
     // The repair reports on itself through the console, and it is allowed to say it was unnecessary — an empty
     // ruleset with the markers present means the filter was NOT what swallowed the packets. Read only when a repair
     // actually ran: without one there are no markers, and `ran: false` would then describe a line that never existed.
+    // Read from the tap, never from the capped console: the cap elides the middle of the boot, which is where the
+    // repair speaks, and turned a line that ran into one that "never reported back".
     const rulesetRead =
       repair && repair.interventions.length > 0
         ? (() => {
-            const r = readGuestRuleset(`${verdictPass.stdout}\n${verdictPass.stderr}`);
+            const r = readGuestRuleset(verdictPass.repairReport);
             const note = describeRuleset(r);
             handle.log(`Guest ruleset: ${note}`);
             return { ...r, note };

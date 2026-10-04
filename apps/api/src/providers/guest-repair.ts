@@ -49,6 +49,30 @@
  * makes a service reachable on the evidence of having been staged: the repair reports on itself through the
  * guest's console (`readGuestRuleset`), and a run whose markers never appear is read as a line that did not run.
  *
+ * **The line has to survive the shell that runs it, and the first one did not.** Booted on the real WR940N
+ * (2026-10-04), the inittab entry reached a CPU and died there: busybox init hands any entry containing shell
+ * metacharacters to `/bin/sh -c "exec <entry>"` — every busybox init and sysvinit does, not just 1.01 — and
+ * `exec (` is a syntax error in every shell. Behind that sat a second fault the first one hid: the guest's shell is
+ * BusyBox 1.01 **msh**, which has no `$((…))` arithmetic, so the retry counter was a syntax error too. And msh's
+ * `exec` builtin re-splits its quoted arguments, so the obvious wrapper (`/bin/sh -c '…'`) fails the same way. The
+ * entry therefore opens with a redirection-only command (`2>&1;`), which turns init's `exec` into a no-op that
+ * leaves the descriptors where they were, and the retry is bounded by nested `for` loops over positional
+ * parameters instead of arithmetic — both measured against the image's own msh, not assumed.
+ *
+ * **A marker is only evidence if the line could not have printed it by being SHOWN.** The same boot reported
+ * `ran: true` and "0 rules loaded, flush ran" for that dead line, because the firmadyne kernel logs every execve
+ * with its full argv — and the argv contains the marker strings. The reader now accepts a marker only as a whole
+ * console line, and a measurement fabricated from a command echo is exactly the kind this module exists to refuse.
+ *
+ * **Known and measured, not yet fixed: the report can be lost while the repair runs.** With the line corrected, the
+ * WR940N's forwarded 80/443 began to answer (they answer on no unrepaired boot) and still no marker reached the
+ * console. A diagnostic boot showed why: busybox init gives each entry its own session, the shell that backgrounds
+ * the subshell exits at once, and a session leader's exit hangs the console up for the whole session — so the
+ * subshell's inherited stdout is dead, while writes to a freshly opened `/dev/console` arrive. Re-opening the
+ * console inside the line was not validated end to end and is deliberately NOT shipped. Until it is, this boot
+ * reports `ran: false`: no evidence that the repair executed, which is true of the markers and is never upgraded
+ * from the ports answering.
+ *
  * **It reads before it writes.** The line prints the guest's live ruleset to the console BEFORE flushing anything,
  * because the whole point is to learn whether iptables is the thing eating the packets. If the rules come back
  * empty and the SYNs still vanish, the firewall was never the cause and the `br_MultiSsidVlan` lead is. A repair
@@ -123,7 +147,7 @@ export const FLUSHED = 'FIRMLAB_FLUSHED';
 const WAIT_PINGS = 20;
 
 /**
- * How many times the timer may find `lo` still down before it gives up waiting for it.
+ * The digits whose nested loop bounds how many times the timer may find `lo` still down: 10 × 10 = 100 tries.
  *
  * The bound exists because the placement moved. Appended at the END of `rcS`, the timer could assume `lo` was
  * already up — `rcS` brings it up early and the append ran after everything. Executed BEFORE `rcS`, it cannot:
@@ -131,8 +155,22 @@ const WAIT_PINGS = 20;
  * repair would read an empty ruleset at t≈0 and flush rules that had not been installed yet. Retrying until a
  * full ping run completes is the timer; the bound is so a guest whose `lo` never comes up stops forking instead
  * of spinning for the length of the boot it is supposed to be measuring.
+ *
+ * Nested loops over positional parameters rather than a counter, because msh has no arithmetic and the inittab
+ * line has no room for a 600-character literal. 100 is the measured margin, not a guess: on the real WR940N boot
+ * the vendor's `ifconfig lo` ran ~0.1 s (kernel time) after init started the repair. And exhausting the bound is
+ * NOT treated as having waited — the line exits without reading or flushing anything (`|| exit`), so a guest whose
+ * loopback never came up reports nothing rather than an empty ruleset read at t≈0.
  */
-const LO_TRIES = 600;
+const TIMER_DIGITS = '0 1 2 3 4 5 6 7 8 9';
+
+/**
+ * Prefixed to the inittab entry, and only there. busybox init runs a metacharacter-bearing entry as
+ * `/bin/sh -c "exec <entry>"`; a redirection-only first command makes that `exec 2>&1`, which replaces nothing and
+ * moves stderr onto the console it is already on. Without it the entry reads `exec (…`, a syntax error in every shell
+ * — measured on the WR940N's console as `syntax error`, with rcS then booting as though the line did not exist.
+ */
+export const INIT_EXEC_GUARD = '2>&1;';
 
 /**
  * busybox init reads each inittab line into a fixed 256-byte buffer and truncates silently. A line over the limit
@@ -203,7 +241,9 @@ export function chooseRepairPlacement(
   input: Pick<GuestRepairInputs, 'initScript' | 'initScriptText' | 'inittab'>,
   line: string,
 ): { placement: RepairPlacement | null; degraded: string | null } {
-  const entry = `::sysinit:${line}`;
+  // The guard is part of the ENTRY, not the line: the init-script fallback runs the line as an ordinary script line,
+  // where there is no `exec` to neutralise.
+  const entry = `::sysinit:${INIT_EXEC_GUARD}${line}`;
   const fallback = (degraded: string): { placement: RepairPlacement | null; degraded: string } => {
     if (input.initScript === null || input.initScriptText === null) return { placement: null, degraded };
     return {
@@ -237,7 +277,7 @@ export function chooseRepairPlacement(
 
 /** The half of the intervention sentence that is the same wherever the line landed. */
 const WHAT_IT_RUNS =
-  "It runs the firmware's OWN /etc/rc.d/iptables-stop about 20 s into the boot — the vendor's teardown script, " +
+  "It runs the firmware's OWN /etc/rc.d/iptables-stop about 20 s after the guest's loopback first answers — the vendor's teardown script, " +
   'which flushes filter and nat and sets every policy to ACCEPT, and which nothing in the vendor boot path ever ' +
   'calls. Any service that answered on this run may have answered only because its packet filtering had been ' +
   'torn down.';
@@ -278,11 +318,17 @@ export function planGuestRepair(input: GuestRepairInputs): GuestRepairPlan {
   }
 
   // The timer retries because the line now runs BEFORE the vendor's rcS brings `lo` up: a bare ping against a down
-  // loopback fails in milliseconds and would elapse the whole wait before httpd had installed a single rule.
-  const wait = `n=0; until ping -c ${WAIT_PINGS} 127.0.0.1 >/dev/null 2>&1 || [ $n -ge ${LO_TRIES} ]; do n=$((n+1)); done; `;
-  const read = input.hasIptablesSave ? `echo ${RULES_BEGIN}; iptables-save 2>&1; echo ${RULES_END}; ` : '';
+  // loopback fails in milliseconds and would elapse the whole wait before httpd had installed a single rule. Every
+  // construct here was run against the WR940N's own BusyBox 1.01 msh: no `$((…))`, `[ … -ge … ]` or `until`
+  // counter, because msh cannot parse the first. `break 2` leaves both loops with status 0; running out of tries
+  // leaves them with ping's failure, and `|| exit` then ends the subshell having read and flushed NOTHING.
+  // Written tight, because the whole entry must fit busybox init's 255-byte line (see INITTAB_LINE_MAX).
+  const wait = `set ${TIMER_DIGITS};for a do for b do ping -c ${WAIT_PINGS} 127.0.0.1 >/dev/null 2>&1&&break 2;done;done||exit;`;
+  // No `2>&1` on iptables-save: whichever stage runs this already has stderr where stdout is, and the bytes are
+  // needed for the timer.
+  const read = input.hasIptablesSave ? `echo ${RULES_BEGIN};iptables-save;echo ${RULES_END};` : '';
   // Backgrounded, so whichever stage runs it returns immediately and the vendor's own boot is not held up.
-  const line = `(${wait}${read}/etc/rc.d/iptables-stop >/dev/null 2>&1; echo ${FLUSHED}) &`;
+  const line = `(${wait}${read}/etc/rc.d/iptables-stop >/dev/null 2>&1;echo ${FLUSHED})&`;
 
   const { placement, degraded } = chooseRepairPlacement(input, line);
   if (!placement) {
@@ -293,8 +339,8 @@ export function planGuestRepair(input: GuestRepairInputs): GuestRepairPlan {
 
   const interventions = [
     placement.kind === 'inittab-sysinit'
-      ? `Inserted one line into /etc/inittab in the booted image as the FIRST sysinit entry, above the vendor's own, so busybox init executes it BEFORE /etc/rc.d/rcS and the repair does not depend on rcS ever returning. No vendor script was edited. ${WHAT_IT_RUNS}`
-      : `Inserted one line at the HEAD of /${placement.file} in the booted image, immediately after its shebang and ahead of the vendor's own body, so it is executed before that script stalls. The vendor's own init script was edited, rather than the one line beside it in /etc/inittab, because ${degraded}. ${WHAT_IT_RUNS}`,
+      ? `Inserted one line into /etc/inittab in the booted image as the FIRST sysinit entry, above the vendor's own, so busybox init reaches it BEFORE /etc/rc.d/rcS and the repair does not depend on rcS ever returning. No vendor script was edited. Whether it then executed is read back from its own console markers, never assumed from the edit. ${WHAT_IT_RUNS}`
+      : `Inserted one line at the HEAD of /${placement.file} in the booted image, immediately after its shebang and ahead of the vendor's own body, so it is reached before that script stalls. Whether it then executed is read back from its own console markers, never assumed from the edit. The vendor's own init script was edited, rather than the one line beside it in /etc/inittab, because ${degraded}. ${WHAT_IT_RUNS}`,
   ];
   if (placement.kind === 'init-script-head' && degraded) {
     skipped.push(
@@ -383,27 +429,58 @@ export function describeRepairDisposition(enabled: boolean, plan: GuestRepairPla
 
 /** One captured ruleset, read back off the guest's console. */
 export interface GuestRuleset {
-  /** True when the marker pair was found — i.e. the inserted line actually ran. */
+  /** True when any marker was printed as a line of its own — i.e. the inserted line actually ran. */
   ran: boolean;
-  /** The `iptables-save` output between the markers, verbatim. Empty string is a real answer: no rules. */
+  /**
+   * The `iptables-save` output between the markers, verbatim minus interleaved kernel log lines. Empty string is a
+   * real answer — no rules — but ONLY when `read` is true.
+   */
   rules: string;
+  /**
+   * True when both read markers were seen, in order. Optional because results stored before it existed lack it; a
+   * missing `read` on such a row is unknown, not true. Without it, a line that flushed but never read (no
+   * iptables-save, or a console that lost the block) would be described as an EMPTY ruleset, which is a
+   * measurement nobody made.
+   */
+  read?: boolean;
   /** True when the flush reported completing. */
   flushed: boolean;
 }
 
+/** A line the kernel printed rather than the repair: firmadyne's execve/syscall trace and its `[ANALYZE]` lines. */
+function isKernelLogLine(line: string): boolean {
+  return /^\[\s*\d+\.\d+\]/.test(line) || line.startsWith('[ANALYZE]');
+}
+
+/** Console lines, without the CR a serial console puts before every LF. */
+function consoleLines(text: string): string[] {
+  return text.split('\n').map((l) => l.replace(/\r$/, ''));
+}
+
 /**
  * Pure: read the repair's own report out of the boot console.
+ *
+ * A marker counts ONLY as a whole line. Searching for the substring is what made a dead line look alive: firmadyne's
+ * kernel logs every execve with its full argv, the argv of the repair contains every marker, and so a line that died
+ * on a syntax error was read back as `ran: true`, "0 rules", "flush ran". `echo` prints a marker as a line of its
+ * own; a command echo, a shell error quoting the command, or an argv dump never does.
  *
  * An empty ruleset with the markers present is the most informative outcome this can return, and it must not be
  * confused with the line never running: it means the guest's packet filter was EMPTY while the SYNs were being
  * swallowed, which rules the firewall out and points at the bridge module instead.
  */
 export function readGuestRuleset(consoleOutput: string): GuestRuleset {
-  const begin = consoleOutput.indexOf(RULES_BEGIN);
-  const end = consoleOutput.indexOf(RULES_END);
-  const flushed = consoleOutput.includes(FLUSHED);
-  if (begin === -1 || end === -1 || end < begin) return { ran: flushed, rules: '', flushed };
-  return { ran: true, rules: consoleOutput.slice(begin + RULES_BEGIN.length, end).trim(), flushed };
+  const lines = consoleLines(consoleOutput);
+  const begin = lines.indexOf(RULES_BEGIN);
+  const end = begin === -1 ? -1 : lines.indexOf(RULES_END, begin + 1);
+  const flushed = lines.includes(FLUSHED);
+  if (begin === -1 || end === -1) return { ran: flushed || begin !== -1, rules: '', read: false, flushed };
+  const rules = lines
+    .slice(begin + 1, end)
+    .filter((l) => !isKernelLogLine(l))
+    .join('\n')
+    .trim();
+  return { ran: true, rules, read: true, flushed };
 }
 
 /**
@@ -412,7 +489,10 @@ export function readGuestRuleset(consoleOutput: string): GuestRuleset {
  */
 export function describeRuleset(r: GuestRuleset): string {
   if (!r.ran) {
-    return 'The repair line never reported back, so the guest either did not reach it or did not get that far.';
+    return 'The repair line never reported back as a console line of its own, so there is no evidence it executed: the guest either did not reach it, could not run it, its loopback never came up for the timer, or its console output was lost (a session hang-up does this on busybox init).';
+  }
+  if (r.read === false) {
+    return `The repair line ran${r.flushed ? ' and reported its flush' : ''}, but the ruleset was never read back between its markers, so nothing is known about what the guest's packet filter held.`;
   }
   if (!r.rules) {
     return (
@@ -423,4 +503,61 @@ export function describeRuleset(r: GuestRuleset): string {
   }
   const rules = r.rules.split('\n').filter((l) => l.startsWith('-A')).length;
   return `The guest had ${rules} iptables rule(s) loaded before the flush${r.flushed ? ', which then ran' : ''}.`;
+}
+
+/** How much of the repair's own report a tap keeps. iptables-save on these routers prints a few KB. */
+export const REPAIR_REPORT_MAX = 64 * 1024;
+
+/**
+ * Pure, stateful: keep the repair's report out of a console stream BEFORE the stream is capped.
+ *
+ * The boot keeps 256 KB of console, head and tail, and a firmadyne boot of the WR940N prints more than that — the
+ * measured console was 262 KB and already elided. The repair speaks ~20 s into userspace, which is exactly the
+ * middle the cap drops, so reading the report from the capped console would turn a line that ran into one that
+ * "never reported back". The tap sees every byte as it arrives and keeps only whole marker lines and what lies
+ * between the read markers, bounded, so what it hands back is the report and nothing a kernel could have echoed.
+ */
+export function createRepairReportTap(max = REPAIR_REPORT_MAX): { push(chunk: string): void; text(): string } {
+  let partial = '';
+  let inside = false;
+  let kept = '';
+  let truncated = false;
+  const keep = (line: string): void => {
+    if (kept.length + line.length + 1 > max) {
+      truncated = true;
+      return;
+    }
+    kept += `${line}\n`;
+  };
+  const take = (raw: string): void => {
+    const line = raw.replace(/\r$/, '');
+    if (line === RULES_BEGIN) {
+      inside = true;
+      keep(line);
+    } else if (line === RULES_END) {
+      inside = false;
+      // The end marker always fits: a block truncated by the bound must still be closed, or the reader would report
+      // the ruleset as never read when it was read and only shortened. The truncation is stated inside the block,
+      // where the reader keeps it, rather than after it, where nothing would.
+      if (truncated) kept += `# FirmLab: ruleset truncated at ${max} bytes\n`;
+      kept += `${line}\n`;
+    } else if (line === FLUSHED) {
+      kept += `${line}\n`;
+    } else if (inside && !isKernelLogLine(line)) {
+      keep(line);
+    }
+  };
+  return {
+    push(chunk: string): void {
+      const parts = (partial + chunk).split('\n');
+      partial = parts.pop() ?? '';
+      for (const p of parts) take(p);
+    },
+    text(): string {
+      // A marker still sitting in the partial buffer when the guest was killed is a marker the guest printed.
+      const tail = partial.replace(/\r$/, '');
+      const last = tail === RULES_END || tail === FLUSHED ? `${tail}\n` : '';
+      return `${kept}${last}`;
+    },
+  };
 }

@@ -78,3 +78,45 @@ La revisión independiente del commit de cancelación no dejó hallazgos P1/P2 p
 API, 61 web y regresiones adicionales para sockets, límites de limpieza, cachés de capacidades, consumidores
 terminales y respuestas tardías al cambiar de imagen. Los dos implementadores finalizaron sus tareas de
 Orca y sus terminales fueron liberadas.
+
+## Reparación del invitado WR940N (inittab primero) — 2026-10-04
+
+Pregunta: ¿la reparación `FIRMLAB_EMU_REPAIR` (entrada `sysinit` antes de `rcS` que ejecuta el
+`/etc/rc.d/iptables-stop` del propio firmware) llega a ejecutarse en la imagen WR940N real (`c42ab6f2`,
+sha256 `42f5c291e2f8…`)? Entorno desechable: contenedor `firmlab-firmware:latest` (`7b6113e`) con `--network none`,
+volumen de datos montado `:ro`, copia del rootfs en `tmpfs`, `restrict=on` en QEMU. Sin despliegue, sin escritura
+en la base ni en el corpus, sin descarga y sin salida de red del invitado (0 destinos externos en ambas pasadas).
+
+```bash
+docker run --rm --network none -e FIRMLAB_EMU_REPAIR=1 -v firmlab_firmlab-data:/live:ro \
+  -v $S:/s:ro -v $S/out:/out [-v $PWD/apps/api/dist:/app/apps/api/dist:ro] \
+  --tmpfs /work:rw,exec,size=1g --entrypoint bash firmlab-firmware:latest /s/run.sh <tag>
+```
+
+`run.sh` copia el rootfs, llama a `runFullSystemFromRootfs('mips', …)` (el mismo punto de entrada del route) y
+lee con `debugfs` el `/etc/inittab` del ext2 arrancado.
+
+**Antes (código desplegado).** La línea llegó a la CPU y murió: firmadyne registró
+`/bin/sh -c exec (n=0; until …` y la consola imprimió `syntax error`. busybox init antepone `exec ` a toda entrada
+con metacaracteres y `exec (` es un error de sintaxis; además el shell del invitado es BusyBox 1.01 **msh**, sin
+`$((…))`, y su `exec` vuelve a partir argumentos entrecomillados (verificado con `qemu-mips-static` sobre el
+propio busybox). Peor: el resultado dijo `ruleset.ran: true`, «0 reglas, flush ejecutado», porque el lector
+buscaba subcadenas y firmadyne imprime el argv completo de cada execve, que contiene los marcadores. Medición
+fabricada. Pasada 2: 156 SYN, 0 respuestas.
+
+**Después (este cambio).** Entrada de 244 bytes `::sysinit:2>&1;(set 0 1 … 9;for a do for b do ping … &&break 2;
+done;done||exit;…)&`: sin error de sintaxis, el `ping` del propio busybox reintentó hasta que `rcS` levantó `lo`
+(~0,1 s de núcleo) y en la pasada 2 respondieron 80/http y 443/https (173 SYN, 82 aceptados, sondas web vivas con
+40 peticiones cada una). Veredicto `confirmed_full_system`, con la intervención en el hallazgo.
+
+**Limitación medida y no corregida.** Ningún marcador llegó a la consola: el resultado informa `ran: false` y el
+hallazgo dice que nada demuestra que la reparación se ejecutara, aunque los puertos respondieran. Un arranque de
+diagnóstico (imagen desechable) mostró la causa: init da a cada entrada su propia sesión, el `sh -c` sale enseguida
+y la salida del líder de sesión cuelga la consola para toda la sesión; lo escrito por el stdout heredado se pierde
+y lo escrito en un `/dev/console` reabierto llega. La reapertura no se validó de extremo a extremo y no se incluye.
+Además, la consola de un arranque firmadyne supera los 256 KB del límite (262 212 bytes), así que el informe se
+lee ahora de un *tap* sobre el flujo sin recortar y sólo como líneas completas.
+
+Una sola ejecución de cada variante (`n=1`): no es una afirmación de reproducibilidad. El script
+`scripts/verify-full-system-reliability.sh` registra ahora `repair.{staged,reportedRunning,rulesetRead,flushed,
+rulesBeforeFlush}` y el criterio `stagedRepairReportedEveryRun`, que hoy fallaría en la WR940N por esa limitación.

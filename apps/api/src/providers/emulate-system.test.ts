@@ -1090,6 +1090,35 @@ describe('buildSystemEmulationFindings — every outcome earns a row, and none o
     expect(draft?.evidence?.repair).toMatchObject({ attempted: true, interventions });
   });
 
+  /**
+   * Staged is not executed. The real WR940N boot (2026-10-04) carried an inittab line that died on `syntax error`,
+   * and the row still read only "modified" — a reader could assume the teardown happened.
+   */
+  it('says when the inserted line never reported running, and records that beside the interventions', () => {
+    const interventions = ['Inserted one line into /etc/inittab in the booted image as the FIRST sysinit entry.'];
+    const repair = { attempted: true, interventions, skipped: [], note: 'MODIFIED' };
+    const [silent] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      repair,
+      ruleset: { ran: false, rules: '', read: false, flushed: false, note: 'never reported back' },
+    });
+    expect(silent?.interventions).toEqual(interventions);
+    expect(silent?.rationale).toContain('never reported running on this boot');
+    expect(silent?.evidence?.repair).toMatchObject({ attempted: true, reportedRunning: false });
+
+    const [ran] = buildSystemEmulationFindings('rootfs', {
+      ...result(),
+      repair,
+      ruleset: { ran: true, rules: '', read: true, flushed: true, note: 'no rules' },
+    });
+    expect(ran?.rationale).not.toContain('never reported running');
+    expect(ran?.evidence?.repair).toMatchObject({ reportedRunning: true });
+
+    // No read-back at all (an older row, or no repair) is silence, never "it ran".
+    const [unread] = buildSystemEmulationFindings('rootfs', { ...result(), repair });
+    expect(unread?.evidence?.repair).not.toHaveProperty('reportedRunning');
+  });
+
   // Presence is the signal, so an examined-and-left-alone image must not carry an empty list that reads as one.
   it('sets no interventions field at all when the firmware was examined and left as shipped', () => {
     const [draft] = buildSystemEmulationFindings('rootfs', {
