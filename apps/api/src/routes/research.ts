@@ -1,8 +1,11 @@
 /**
  * External-intelligence routes (Phase 5) — the OSINT / published-vulnerability / disclosure track, gated by its
- * OWN flag (FIRMLAB_RESEARCH). With it unset every route reports disabled and nothing reaches the network — the
- * local-only default is preserved. GET /research/status exposes the host allowlist so the UI can show exactly
- * where data may go; the run is a job (network + LLM are slow).
+ * OWN flag (FIRMLAB_RESEARCH). The lane is on by default (operator decision, see `research/config.ts`); with it
+ * switched off — a stated `0` in the environment or in Settings — every route reports disabled and nothing reaches
+ * the network. Being on authorises a run; it never starts one: a run is still a POST per image. GET
+ * /research/status exposes the host allowlist so the UI can show exactly where data may go, and
+ * /settings/flags reports whether the default, the environment or a stored override decided it. The run is a job
+ * (network + LLM are slow).
  */
 import type { FastifyInstance } from 'fastify';
 import { startJob } from '../providers/jobs.js';

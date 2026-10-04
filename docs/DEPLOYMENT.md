@@ -7,11 +7,14 @@ FirmLab se despliega de dos formas distintas, y conviene no confundirlas.
 | | Fichero | Exposición |
 |---|---|---|
 | **Repo** | `docker-compose.yml` (en este repo) | `127.0.0.1:8799` — solo loopback, el diseño original |
-| **Homelab** | `~/homelab/firmlab/docker-compose.yml` | `firmlab.lab.founder4.com` vía Traefik |
+| **Homelab** | `~/homelab/firmlab/docker-compose.yml` | `firmlab.lab.founder4.com` vía Traefik; atajo `127.0.0.1:8899` (`firmlab-view`) |
 
 El del repo es el modo local-only descrito en el README. El del homelab expone el workbench **a propósito**,
 detrás de dos middlewares de Traefik: `tinyauth` (SSO Google, solo la cuenta whitelisteada) y
-`crowdsec-bouncer`. Sin puertos abiertos a internet: solo LAN/Tailscale.
+`crowdsec-bouncer`. Sin puertos abiertos a internet: solo LAN/Tailscale. El contenedor `firmlab` no publica
+ningún puerto en el host; el servicio `firmlab-view` (socat) publica `127.0.0.1:8899` y reenvía a `firmlab:8799`
+por `proxy_net` **saltándose el SSO** — sólo lo alcanza quien ya está en la máquina, y está declarado en ese
+compose para que el bypass quede escrito.
 
 > El contenedor sostiene el firmware que subas. **No quites los middlewares de auth** del router de Traefik.
 > Que el bind interno sea `0.0.0.0` es necesario para que Traefik lo alcance por `proxy_net`; la exposición
@@ -150,8 +153,58 @@ Los kernels firmadyne **no se llaman como nuestras arquitecturas**: `vmlinux.mip
 | `GRYPE_DB_CACHE_DIR` | Dónde vive la base de vulnerabilidades de grype. Por defecto `$FIRMLAB_DATA_DIR/grype-db` — bajo el volumen de datos, no en `~/.cache`, para que sobreviva a un redespliegue. Es la de grype, respetada tal cual si el operador la fija. |
 
 Nota: desde 2026-07-28 los flags de las lanes de red (`FIRMLAB_AGENT`, `FIRMLAB_RESEARCH`, `FIRMLAB_CAPTURE`…)
-se **persisten en la base de datos** desde Ajustes › Privacidad. Que la variable no esté en el entorno ya no
-significa que la lane esté apagada — consulta `/api/settings/flags` o `/api/research/status`.
+se **persisten en la base de datos** desde Ajustes › Privacidad. Que la variable no esté en el entorno no dice
+nada del estado de la lane — consulta `/api/settings/flags` (campo `source`) o `/api/research/status`. La
+precedencia y el valor por omisión de cada flag están en la sección siguiente.
+
+## Política de red (decisión del operador, 2026-10-04)
+
+**La investigación saliente de confianza está autorizada de forma habitual.** `FIRMLAB_RESEARCH` es la única lane
+saliente que está **encendida cuando nadie dice nada** (`defaultOn` en `apps/api/src/flags.ts`): un despliegue que
+no menciona la variable tiene el carril research activo. Hasta esta fecha la ausencia significaba apagado.
+
+Lo que **no** cambia, y es lo que hace defendible ese valor por omisión:
+
+- **Exposición**: la API escucha en loopback (compose del repo: `127.0.0.1:8799`) o detrás del router de Traefik
+  con SSO (homelab). Nada de esta decisión abre un listener.
+- **Destinos**: sólo la allowlist de `research/config.ts` (`api.osv.dev`, `services.nvd.nist.gov`, `www.cisa.gov`)
+  más lo que el operador añada en `FIRMLAB_RESEARCH_ALLOWLIST`.
+- **Qué sale**: nombres y versiones de componentes; nunca bytes del firmware, secretos ni claves. El ledger de
+  egress declara un techo antes de cada ejecución y la reconcilia después.
+- **Cuándo**: estar encendido autoriza una ejecución; no la lanza. Cada ejecución sigue siendo un `POST` por imagen.
+- **Lanes que envían más**: `FIRMLAB_HASH_LOOKUP` (manda hashes sacados del firmware a terceros) y
+  `FIRMLAB_CAPTURE` (adquisición activa en el cable) siguen siendo opt-in separados y atribuibles.
+- **Invitado emulado**: `FIRMLAB_EMU_ISOLATE` sigue encendido por omisión; un firmware emulado no recibe salida.
+
+**Precedencia, para todas las lanes**: ajuste guardado (Ajustes › Privacidad) › entorno › valor por omisión del
+catálogo. Cualquier valor declarado distinto de `1` es apagado. `/api/settings/flags` informa de cuál de los tres
+decidió (`source: override | environment | default`) y de lo que diría el entorno sin el ajuste
+(`environmentValue`). Para apagar research: `FIRMLAB_RESEARCH=0` en el compose, o el interruptor de Ajustes (que
+guarda un `0` y gana al entorno).
+
+**Estado efectivo del homelab**, leído el 2026-10-04 con `docker inspect firmlab` y `GET /api/settings/flags`
+(build `7b6113e`, sin cambiar nada):
+
+| Flag | Efectivo | Decidido por |
+|---|---|---|
+| `FIRMLAB_RESEARCH` | on | entorno (`1` en el compose) — el nuevo valor por omisión no cambia nada aquí |
+| `FIRMLAB_HASH_LOOKUP` | on | ajuste guardado el 2026-07-28 (allowlist efectiva de cinco hosts) |
+| `FIRMLAB_CAPTURE` · `FIRMLAB_CAPTURE_GATEWAY` | on | entorno |
+| `FIRMLAB_AGENT` | on | entorno |
+| `FIRMLAB_EMU_ISOLATE` | on | ajuste guardado `1` el 2026-09-29 (coincide con el valor por omisión) |
+| `FIRMLAB_EMU_CONSOLE` | **off** | ajuste guardado `0` el 2026-09-05, aunque el compose diga `1` |
+| `FIRMLAB_EMU_REPAIR` | off | valor por omisión |
+
+Hash lookup y captura están encendidos en este despliegue por decisión previa del operador, no por esta política;
+ésta no los activa ni los desactiva.
+
+**Migración para otros despliegues.** Ninguna fila guardada se reescribe. Un `0` guardado o un `FIRMLAB_RESEARCH=0`
+en el entorno siguen apagando el carril. Lo único que cambia de comportamiento es un despliegue **sin nada
+declarado**, que pasa de apagado a encendido; si se quiere seguir sin red, hay que declararlo
+(`FIRMLAB_RESEARCH=0`). Borrar un ajuste guardado de research ahora devuelve la lane a **encendido**, no a apagado.
+Pendiente fuera de este cambio: `dbUpdateAllowed` (`providers/sbom-db.ts`) todavía exige `FIRMLAB_RESEARCH=1`
+literal, así que la descarga de la base de grype sólo está autorizada donde la variable está declarada (el homelab
+lo está).
 
 ## El carril SBOM no toca la red
 
@@ -173,8 +226,9 @@ docker exec firmlab sh -lc 'GRYPE_DB_CACHE_DIR=$FIRMLAB_DATA_DIR/grype-db grype 
 docker exec firmlab sh -lc 'GRYPE_DB_CACHE_DIR=$FIRMLAB_DATA_DIR/grype-db grype db status'   # verificación
 ```
 
-La alternativa es encender el carril research (Ajustes › Privacidad o `FIRMLAB_RESEARCH=1`), que autoriza a grype
-a descargarla desde `grype.anchore.io`. Es una descarga de un sentido —no sale nada del firmware, igual que el
+La alternativa es el carril research con `FIRMLAB_RESEARCH=1` **declarado** (Ajustes › Privacidad o el compose),
+que autoriza a grype a descargarla desde `grype.anchore.io` — el valor por omisión encendido todavía no basta para
+esto, ver la política de red. Es una descarga de un sentido —no sale nada del firmware, igual que el
 catálogo KEV—, y por eso no tiene flag propio: ese carril es el único que puede salir a internet.
 
 Una base vieja **se usa**, no se rechaza (`GRYPE_DB_VALIDATE_AGE=false`: grype descarta por defecto cualquiera de
@@ -183,12 +237,32 @@ de hace ocho meses no es la misma afirmación que cero CVE contra la de hoy.
 
 ## Red del host, captura y aislamiento del firmware emulado (2026-09-28)
 
-El despliegue de esta estación (`~/homelab/firmlab/docker-compose.yml`) corre con **`network_mode: host`** y
+> **Esto NO es lo que corre hoy.** Revisado el 2026-10-04: `~/homelab/firmlab/docker-compose.yml` (modificado por
+> última vez el 2026-09-18) y el contenedor desplegado usan la red bridge **`proxy_net`**, sin `NET_ADMIN`/`NET_RAW`,
+> sin `security_opt` (no hay `seccomp-firmlab.json` junto al compose), con `FIRMLAB_HOST=0.0.0.0` detrás de
+> Traefik y sin puertos publicados en el host. Consecuencias medidas en ese contenedor:
+>
+> - `docker exec firmlab unshare -rn sh -c "ip -o link | wc -l"` devuelve `unshare failed: Operation not
+>   permitted`. `isolate.ts` cae a sólo `prlimit` y un binario que ejecute el agente tiene la red del contenedor,
+>   que sí sale a internet; por eso el aislamiento se declara `partial` y toda ejecución dinámica del agente
+>   sigue esperando aprobación humana.
+> - El aislamiento del invitado de emulación completa (`FIRMLAB_EMU_ISOLATE`, `restrict=on` de qemu) no depende
+>   de `unshare` y sigue vigente.
+> - La captura está encendida por entorno pero, en un bridge, no ve la LAN física; `FIRMLAB_CAPTURE_GATEWAY=1` es
+>   una afirmación falsa mientras no exista ese enrutado (el propio compose lo advierte).
+> - No hay ninguna variable `FIRMLAB_ISOLATE_*` en el entorno: rigen los valores por omisión de `isolate.ts`
+>   (30 s de CPU, 512 MB, 64 MB por fichero, 45 s de reloj), no los límites subidos que se citan abajo.
+>
+> Lo que sigue describe la configuración en modo host documentada el 2026-09-28 — el objetivo si se quiere que la
+> captura vea el segmento — y las dos condiciones sin las cuales el aislamiento queda parcial. Aplicarla es un
+> cambio de despliegue del operador, no algo que haga esta documentación.
+
+En modo host, el despliegue de esta estación correría con **`network_mode: host`** y
 `NET_ADMIN`/`NET_RAW`, porque el carril de captura (descubrimiento LAN, spoof ARP/DNS, proxy OTA) necesita ver el
 segmento de red; en una red bridge nunca lo ve. La API se fija a **`FIRMLAB_HOST=127.0.0.1`**: con red de host,
-`0.0.0.0` la expondría a la LAN y a Tailscale. Comprobado: por `192.168.1.175` y por la IP de Tailscale la conexión
-se rechaza; sólo responde loopback. `deploy.sh` y `ui-expose.sh` reconocen el modo host (el que escucha en `:8799`
-es el propio contenedor, y el sidecar de `:8899` reenvía a loopback).
+`0.0.0.0` la expondría a la LAN y a Tailscale. Comprobado entonces: por `192.168.1.175` y por la IP de Tailscale la
+conexión se rechazaba; sólo respondía loopback. `deploy.sh` y `ui-expose.sh` reconocen el modo host (el que
+escucha en `:8799` es el propio contenedor, y el sidecar de `:8899` reenvía a loopback).
 
 Eso vuelve crítico el aislamiento de lo que el agente ejecuta (`providers/isolate.ts`): el proceso corre como root
 con las capacidades de red del contenedor. El aislamiento de red es `unshare -rn` (un espacio de red vacío dentro de

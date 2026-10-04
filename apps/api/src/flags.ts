@@ -3,9 +3,10 @@
  * loaders without any of them importing the store.
  *
  * Until now every lane was decided by an environment variable read at process start, so changing one meant
- * editing a compose file and recreating the container. That is a defensible default for a tool whose whole
- * posture is "no network unless you asked", and it is also why the research lane sat unused for weeks. The
- * toggles move the decision to the operator's hands at runtime.
+ * editing a compose file and recreating the container. That was a defensible default for a tool whose posture
+ * was "no network unless you asked", and it is also why the research lane sat unused for weeks. The toggles move
+ * the decision to the operator's hands at runtime. (The research lane has since become on-by-default by operator
+ * decision — see `defaultOn` — so for it the toggle is now how an operator opts OUT.)
  *
  * Two things that shift, stated rather than glossed:
  *
@@ -52,13 +53,21 @@ export interface ToggleableFlag {
   /** Flipping this changes what the deployment does to things outside itself. */
   outward: boolean;
   /**
-   * The lane is ON when nobody has said otherwise. Absent (the normal case) means absence ⇒ off, which is what
-   * "with every flag off: no network" rests on.
+   * The lane is ON when nobody has said otherwise. Absent (the normal case) means absence ⇒ off.
    *
-   * Only a flag whose ON state is the CLOSED one may set this, and it exists because the alternative was a
-   * deployment whose emulated guest reached the internet with every lane switched off. Setting it makes the flag
-   * an opt-OUT among opt-ins, which is a real cost — it is paid here rather than in the product's headline claim,
-   * and `decideFlag` reports whether anyone stated a value so an operator is never shown a default as a choice.
+   * Two flags set it, for two different reasons, and both are pinned by name in `flags.test.ts` so a third cannot
+   * arrive by accident:
+   *
+   *  - `FIRMLAB_EMU_ISOLATE`, whose ON state is the CLOSED one: the alternative was a deployment whose emulated
+   *    guest reached the internet with every lane switched off.
+   *  - `FIRMLAB_RESEARCH`, by operator decision (2026-10-04): trusted outbound research is habitually authorised
+   *    on this workbench, so a deployment that never mentions the lane has it. What makes that safe is not the
+   *    flag but what stays fixed around it — the host allowlist, the egress ledger, derived data only (never
+   *    firmware bytes), and the lanes that send something MORE stay behind their own opt-ins.
+   *
+   * Setting it makes the flag an opt-OUT among opt-ins, which is a real cost, and `decideFlag` reports whether
+   * anyone stated a value so an operator is never shown a default as a choice. A stated value — environment or
+   * stored override, anything but `'1'` — always beats the default, so an explicit opt-out survives this.
    */
   defaultOn?: boolean;
 }
@@ -70,12 +79,20 @@ export interface ToggleableFlag {
  */
 export const TOGGLEABLE_FLAGS: readonly ToggleableFlag[] = [
   { name: 'FIRMLAB_AGENT', outward: true },
-  { name: 'FIRMLAB_RESEARCH', outward: true },
+  // Outward AND on by default — the operator's standing authorisation for trusted outbound research, not an
+  // inversion like EMU_ISOLATE below. "Trusted" is bounded by `research/config.ts`: allowlisted intel hosts only,
+  // component names/versions only, every run declared and reconciled by the egress ledger. An unstated value means
+  // the operator's standing decision; `FIRMLAB_RESEARCH=0` (environment) or a stored `0` (Settings) turns it off.
+  { name: 'FIRMLAB_RESEARCH', outward: true, defaultOn: true },
+  // Stays an opt-in even though its parent is now on by default: it sends password hashes recovered from the
+  // firmware to a third party, which is a different disclosure from a component name and was never authorised by
+  // the research decision.
   { name: 'FIRMLAB_HASH_LOOKUP', requires: 'FIRMLAB_RESEARCH', outward: true },
+  // Stays an opt-in: acquiring bytes off the wire is active network access, not a query about bytes already held.
   { name: 'FIRMLAB_CAPTURE', outward: true },
   { name: 'FIRMLAB_CAPTURE_GATEWAY', requires: 'FIRMLAB_CAPTURE', outward: false },
-  // The one flag here whose OFF state is the outward one, and the table must not hide that. It is also the only
-  // one that defaults ON, and the two facts are the same fact.
+  // The one flag here whose OFF state is the outward one, and the table must not hide that. It was the first flag
+  // to default ON, and for this flag the two facts are the same fact.
   //
   // It shipped defaulting OFF, on the argument that a flag named for the egress would have had to default ON to
   // preserve behaviour — an opt-OUT switch in a list of opt-ins, which is the shape an operator misreads. The cost

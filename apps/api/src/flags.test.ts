@@ -89,7 +89,7 @@ describe('resolveFlags is localised in its prose and identical in everything els
    * between an operator and a firmware that reaches the internet from their machine. Both languages have to say
    * that plainly, in the `egress` line, which is what a reader consults BEFORE flipping a switch.
    */
-  describe('FIRMLAB_EMU_ISOLATE — the inverted flag, and the only one that defaults ON', () => {
+  describe('FIRMLAB_EMU_ISOLATE — the inverted flag, and the first one that defaulted ON', () => {
     /**
      * This assertion was the exact inverse until 2026-07-30, and it passed: the suite pinned a default that made
      * *"with every flag off: no network"* false, because the fixture and the code were written from the same
@@ -100,16 +100,25 @@ describe('resolveFlags is localised in its prose and identical in everything els
       expect(f.enabled).toBe(true);
       expect(f.source).toBe('default');
       // Turning it ON sends nothing anywhere — it stops the guest sending — so it is not an outward switch. The
-      // outward act is turning it OFF, which is why it is the one flag that may default on.
+      // outward act is turning it OFF, which is why it was allowed to default on before any outward lane was.
       expect(f.outward).toBe(false);
     });
 
-    it('is the ONLY flag allowed to default on — every other lane stays absence ⇒ off', () => {
+    /**
+     * Pinned by name so a third default cannot arrive by accident. This listed EMU_ISOLATE alone until
+     * 2026-10-04, when the operator decided trusted outbound research is habitually authorised; the hash lookup
+     * and capture lanes were explicitly left out of that decision, and are asserted off below by name.
+     */
+    it('lets exactly EMU_ISOLATE and RESEARCH default on — every other lane stays absence ⇒ off', () => {
       const on = TOGGLEABLE_FLAGS.filter((f) => f.defaultOn === true).map((f) => f.name);
-      expect(on).toEqual(['FIRMLAB_EMU_ISOLATE']);
+      expect(on).toEqual(['FIRMLAB_RESEARCH', 'FIRMLAB_EMU_ISOLATE']);
       for (const f of resolveFlags(env({}), {})) {
-        if (f.name !== 'FIRMLAB_EMU_ISOLATE') expect(f.enabled).toBe(false);
+        expect(f.enabled).toBe(on.includes(f.name));
       }
+      const states = resolveFlags(env({}), {});
+      expect(find(states, 'FIRMLAB_HASH_LOOKUP').enabled).toBe(false);
+      expect(find(states, 'FIRMLAB_CAPTURE').enabled).toBe(false);
+      expect(find(states, 'FIRMLAB_CAPTURE_GATEWAY').enabled).toBe(false);
     });
 
     it('warns, in both languages, that turning it off lets the emulated firmware reach the internet', () => {
@@ -176,8 +185,28 @@ describe('resolveFlags is localised in its prose and identical in everything els
     });
 
     it('leaves a flag with no defaultOn off when unstated, and says nobody stated it', () => {
-      const d = decideFlag('FIRMLAB_RESEARCH', {});
-      expect(d).toEqual({ enabled: false, stated: false, statedValue: null, byDefault: false });
+      expect(decideFlag('FIRMLAB_CAPTURE', {})).toEqual({
+        enabled: false,
+        stated: false,
+        statedValue: null,
+        byDefault: false,
+      });
+      expect(decideFlag('FIRMLAB_HASH_LOOKUP', {}).enabled).toBe(false);
+    });
+
+    it('reports an unstated research lane as on by default, and an explicit 0 as a decision', () => {
+      expect(decideFlag('FIRMLAB_RESEARCH', {})).toEqual({
+        enabled: true,
+        stated: false,
+        statedValue: null,
+        byDefault: true,
+      });
+      expect(decideFlag('FIRMLAB_RESEARCH', { FIRMLAB_RESEARCH: '0' })).toEqual({
+        enabled: false,
+        stated: true,
+        statedValue: '0',
+        byDefault: false,
+      });
     });
   });
 
@@ -226,7 +255,8 @@ describe('resolveFlags — an override is not the environment, and the differenc
    * whole point — a control whose state and behaviour disagree is the gap this workbench exists to close.
    */
   it('marks a double opt-in inert when the lane it depends on is off', () => {
-    const states = resolveFlags(env({}), { FIRMLAB_HASH_LOOKUP: '1' });
+    // Research now defaults on, so its parent has to be switched off explicitly for the child to be inert.
+    const states = resolveFlags(env({ FIRMLAB_RESEARCH: '0' }), { FIRMLAB_HASH_LOOKUP: '1' });
     const hash = find(states, 'FIRMLAB_HASH_LOOKUP');
     expect(hash.enabled).toBe(true);
     expect(hash.inert).toBe(true);
@@ -240,6 +270,57 @@ describe('resolveFlags — an override is not the environment, and the differenc
 
   it('never calls a flag inert while it is off', () => {
     for (const s of resolveFlags(env({}), {})) expect(s.inert).toBe(false);
+  });
+});
+
+/**
+ * The research lane defaults ON by operator decision (2026-10-04). A deployment that already said something —
+ * in compose or as a stored override from Settings — has to keep meaning exactly what it said, and the panel has
+ * to keep showing who said it. Precedence: stored override, then environment, then the catalogue default.
+ */
+describe('FIRMLAB_RESEARCH — on by default, and every stated value still wins and is still visible', () => {
+  it('is on with nothing stated, reported as the default rather than as anyone’s choice', () => {
+    const s = find(resolveFlags(env({}), {}), 'FIRMLAB_RESEARCH');
+    expect(s.enabled).toBe(true);
+    expect(s.source).toBe('default');
+    expect(s.environmentValue).toBe(true);
+    // Still an outward lane: on-by-default changes who has to act, not what the switch does.
+    expect(s.outward).toBe(true);
+  });
+
+  it('honours an environment opt-out', () => {
+    const s = find(resolveFlags(env({ FIRMLAB_RESEARCH: '0' }), {}), 'FIRMLAB_RESEARCH');
+    expect(s.enabled).toBe(false);
+    expect(s.source).toBe('environment');
+    expect(s.environmentValue).toBe(false);
+  });
+
+  it('keeps a stored override of 0 in force, and says the environment alone would have it on', () => {
+    // The case an existing deployment can be in: an operator switched the lane off in Settings back when off was
+    // the default. The new default must not quietly reopen it.
+    const s = find(resolveFlags(env({}), { FIRMLAB_RESEARCH: '0' }), 'FIRMLAB_RESEARCH');
+    expect(s.enabled).toBe(false);
+    expect(s.source).toBe('override');
+    expect(s.environmentValue).toBe(true);
+  });
+
+  it('keeps a stored override of 1 reported as an override, even though it now matches the default', () => {
+    const s = find(resolveFlags(env({}), { FIRMLAB_RESEARCH: '1' }), 'FIRMLAB_RESEARCH');
+    expect(s.enabled).toBe(true);
+    expect(s.source).toBe('override');
+  });
+
+  it('lets a stored override beat the environment in both directions', () => {
+    const off = find(resolveFlags(env({ FIRMLAB_RESEARCH: '1' }), { FIRMLAB_RESEARCH: '0' }), 'FIRMLAB_RESEARCH');
+    expect([off.enabled, off.source]).toEqual([false, 'override']);
+    const on = find(resolveFlags(env({ FIRMLAB_RESEARCH: '0' }), { FIRMLAB_RESEARCH: '1' }), 'FIRMLAB_RESEARCH');
+    expect([on.enabled, on.source, on.environmentValue]).toEqual([true, 'override', false]);
+  });
+
+  it('does not carry hash lookup along with it: the child stays off and, once armed, is live', () => {
+    expect(find(resolveFlags(env({}), {}), 'FIRMLAB_HASH_LOOKUP').enabled).toBe(false);
+    const armed = find(resolveFlags(env({}), { FIRMLAB_HASH_LOOKUP: '1' }), 'FIRMLAB_HASH_LOOKUP');
+    expect([armed.enabled, armed.inert]).toEqual([true, false]);
   });
 });
 

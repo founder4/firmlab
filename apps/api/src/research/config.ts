@@ -1,14 +1,22 @@
 /**
- * External-intelligence track config (Phase 5). This is the ONE place FirmLab is allowed to touch the internet,
- * and it is gated by its OWN flag — `FIRMLAB_RESEARCH`, deliberately separate from `FIRMLAB_AGENT` — because it
- * changes the privacy posture fundamentally. With the flag unset, `loadResearchConfig()` returns null and nothing
- * here ever makes a network request; FirmLab stays local-only, exactly as before.
+ * External-intelligence track config (Phase 5). This is the ONE place FirmLab's analysis is allowed to touch the
+ * internet, and it is gated by its OWN flag — `FIRMLAB_RESEARCH`, deliberately separate from `FIRMLAB_AGENT` —
+ * because it changes the privacy posture.
  *
- * Every outbound request is checked against a host ALLOWLIST. Only derived data (component names/versions, vendor
- * strings, hashes) may leave — never raw firmware bytes; the egress ledger (research/egress.ts) makes that
- * explicit before a run.
+ * **On by default, by operator decision (2026-10-04).** Trusted outbound research is habitually authorised on this
+ * workbench, so an unset `FIRMLAB_RESEARCH` now means ON (`defaultOn` in `flags.ts`). It used to mean off, and the
+ * difference matters for anyone reading an old compose file: absence is no longer an opt-out. The opt-out is a
+ * STATED value — `FIRMLAB_RESEARCH=0` in the environment or a stored `0` from Settings › Privacy — and a stated
+ * value always beats the default, with a stored override beating the environment (see `resolveFlags`). With it
+ * off, `loadResearchConfig()` returns null and nothing here ever makes a network request.
+ *
+ * What the default does NOT change, and what makes it defensible: every outbound request is checked against a
+ * host ALLOWLIST; only derived data (component names/versions, vendor strings) leaves — never raw firmware bytes;
+ * the egress ledger (research/egress.ts) declares a ceiling before a run and reconciles it after; a run is still
+ * started per image, never implicitly; and the online hash lookup — which sends hashes recovered FROM the
+ * firmware — stays behind its own second opt-in, as does the capture lane.
  */
-import { effectiveEnv } from '../flags.js';
+import { decideFlag, effectiveEnv } from '../flags.js';
 import { linkJobCancellation } from '../job-cancellation.js';
 
 export interface ResearchConfig {
@@ -22,8 +30,8 @@ export interface ResearchConfig {
    * Whether the online password-hash lookup provider is armed. This is a SECOND, independent opt-in on top of
    * FIRMLAB_RESEARCH (env `FIRMLAB_HASH_LOOKUP`): sending a password hash to a third-party lookup DB is a bigger
    * privacy step than sending a component name+version, so it gets its own flag — matching the convention that a
-   * changed privacy posture gets a separate flag. Off by default even when the research track is on; when off, no
-   * hash ever leaves and the lookup hosts are not added to the allowlist.
+   * changed privacy posture gets a separate flag. Off by default even though the research track now defaults on;
+   * when off, no hash ever leaves and the lookup hosts are not added to the allowlist.
    */
   hashLookup: boolean;
 }
@@ -40,17 +48,19 @@ export const HASH_LOOKUP_HOSTS = ['www.nitrxgen.net', 'weakpass.com'];
  * What every caller says when the track is off. It lives here, beside the gate itself, because both the route and
  * the runner have to say it and they had already drifted apart into two different sentences. It names the lane as
  * the Settings toggle names it, so the message points at a switch the operator can actually find, and keeps the
- * env var for the deployment that has no UI.
+ * env var for the deployment that has no UI. Since the lane is on by default, off always means somebody stated a
+ * value, and the sentence says so rather than implying the operator forgot to opt in.
  */
 export const RESEARCH_DISABLED =
-  'External intelligence is off — turn it on in Settings › Privacy, or set FIRMLAB_RESEARCH=1';
+  'External intelligence was switched off (it is on by default) — turn it back on in Settings › Privacy, or ' +
+  'set FIRMLAB_RESEARCH=1 (any other stated value, such as 0, keeps it off)';
 
 /**
- * Resolve the research config, or null when the track is off. Gated by FIRMLAB_RESEARCH so the deterministic,
- * local-only workbench is the default and no external host is contacted unless the operator opts in.
+ * Resolve the research config, or null when the track is off. On unless a stated value says otherwise —
+ * `decideFlag` honours the catalogue's `defaultOn`, so this and the Settings panel cannot disagree about absence.
  */
 export function loadResearchConfig(env: NodeJS.ProcessEnv = effectiveEnv()): ResearchConfig | null {
-  if (env.FIRMLAB_RESEARCH !== '1') return null;
+  if (!decideFlag('FIRMLAB_RESEARCH', env).enabled) return null;
   const extra = (env.FIRMLAB_RESEARCH_ALLOWLIST ?? '')
     .split(',')
     .map((h) => h.trim())

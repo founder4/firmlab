@@ -24,7 +24,8 @@ every image you feed it.
 > **Status:** active, solo-built engineering project — Phases 0–6 shipped, more on the [roadmap](#-project-status--roadmap).
 > ~130k lines of TypeScript/TSX, 3,100+ tests, validated against real tools in-container and a locked **validation
 > corpus** of public/official firmware samples (`ops/corpus/validation-samples.lock.json`).
-> **Local-only by design:** the API binds to loopback and is never meant to face the internet.
+> **Local-only by design:** the API binds to loopback and is never meant to face the internet, and firmware bytes
+> never leave the machine. Outbound queries to allowlisted advisory sources (OSV, NVD, CISA KEV) are on by default.
 
 <p align="center">
   <img src=".github/assets/overview.png" width="100%" alt="FirmLab dossier — inferred identity, runtime-coverage, and a findings ledger where every finding carries an explicit proof-state">
@@ -79,7 +80,7 @@ on.
 | **Emulation as a ranked ladder** | A planner turns identity + rootfs into arch-aware, runnable recipes; the runner only claims what it reproduced. |
 | **Autonomy with a skeleton** | The optional agent *chooses branches* on a fixed deterministic orchestrator, bounded by a governor (steps/tokens/USD/wall-time) and a human-approval gate. |
 | **Stateful — it learns** | A persistent **cross-image corpus** links shared artifacts, reused credentials and common components across firmware, and promotes repeat offenders to a watchlist. |
-| **Local-only DNA** | No network at all unless you opt in; the internet-touching *research* and *capture* tracks each live behind their own flag with an allowlist and an egress ledger that states exactly what leaves the machine. |
+| **Local-only DNA** | The workbench is reachable from loopback only and never sends firmware bytes anywhere. The one outbound lane on by default is *research* — allowlisted advisory hosts, component names and versions only, an egress ledger stating exactly what leaves; it switches off with `FIRMLAB_RESEARCH=0`. Hash lookup and *capture* each stay behind their own opt-in. |
 | **Agent-native surface** | Every provider is also reachable over **MCP** (`apps/api/src/mcp/server.ts`), so an external agent inherits the proof-state/coverage discipline instead of having to reconstruct it. |
 
 ## Architecture
@@ -98,7 +99,7 @@ flowchart TB
         MCP["<b>MCP server</b> <i>(stdio)</i><br/>the same providers, over the Model Context Protocol —<br/>answers pre-shaped with proof-state + coverage"]
         P["<b>Providers (85)</b> — runtime-detected tools<br/>binwalk · radare2 / Ghidra · syft / grype · gitleaks<br/>QEMU · Renode · chipsec · AFL++ · angr · gdb-multiarch"]
         AG["<b>Agent</b> <i>(flag-gated)</i><br/>triage · target-selection · zero-day · synthesis<br/>governor · bounded execution + approval"]
-        RS["<b>Research</b> <i>(flag-gated)</i><br/>provenance · OSV.dev · security.txt · egress ledger"]
+        RS["<b>Research</b> <i>(on by default)</i><br/>provenance · OSV.dev · security.txt · egress ledger"]
         CP["<b>Capture</b> <i>(flag-gated)</i><br/>LAN discovery · mitmproxy OTA · BLE/Zigbee OTA<br/>own egress ledger"]
         ST[("SQLite (WAL)<br/>images · jobs · findings<br/>corpus · agent sessions")]
     end
@@ -119,8 +120,8 @@ flowchart TB
 unit-testable without Docker. Slow work (extraction, emulation, fuzzing) runs as **persisted SQLite jobs** with
 streamed logs, so the UI polls without blocking. Completed results survive a restart; queued or running work is
 marked as interrupted at the next startup and must be retried because its in-process executable cannot be
-rehydrated. The agent, research and capture layers are strictly *additive* — turn all three flags off and FirmLab
-is a deterministic, offline workbench.
+rehydrated. The agent, research and capture layers are strictly *additive* — switch all three off (research with
+`FIRMLAB_RESEARCH=0`, since it is on by default) and FirmLab is a deterministic, offline workbench.
 
 ## How an image flows through the system
 
@@ -252,16 +253,19 @@ flowchart TD
 > Every step runs inside the **governor's** hard budget; node ④ produces *candidates* bound to
 > `needs_runtime_reproduction` — only a real trigger run, decided by code, upgrades them.
 
-## External intelligence (opt-in)
+## External intelligence (on by default)
 
-FirmLab is local-only by default. The one internet-touching capability lives behind its **own** separate flag
-(`FIRMLAB_RESEARCH`, distinct from `FIRMLAB_AGENT`) so the deterministic, offline DNA is never compromised by
-accident. When enabled, it correlates the SBOM against **OSV.dev/NVD**, restricts Linux-kernel queries to the
+FirmLab's exposure is local-only; its one internet-touching analysis capability is **on by default** and lives
+behind its **own** separate flag (`FIRMLAB_RESEARCH`, distinct from `FIRMLAB_AGENT`), so it can be switched off —
+`FIRMLAB_RESEARCH=0` or Settings → Privacy — without touching anything else. Being on authorises a run; a run is
+still started per image. It correlates the SBOM against **OSV.dev/NVD**, restricts Linux-kernel queries to the
 kernel CNA, cross-references discovered CVEs against **CISA KEV**, fingerprints
 **provenance** (vendor/model/version) and discovers the vendor's disclosure contact via RFC 9116
 (`security.txt`) — but only for allowlisted domains. Every fetch passes an allowlist choke point and an **egress
 ledger** that states exactly what leaves the machine (names and versions — *never raw firmware bytes*). A
 published advisory for a present component is a *lead*, not a confirmed bug; reachability is decided per-image.
+Online password-hash lookup (`FIRMLAB_HASH_LOOKUP=1`) sends hashes recovered from the firmware to a third party and
+therefore stays a second, separate opt-in that the research default never implies.
 
 ## Capture — the on-the-wire lane (opt-in)
 
@@ -316,10 +320,12 @@ pnpm --filter @firmlab/api build && pnpm dev:api
 pnpm dev:web
 ```
 
-Optional layers are off unless you set their flag: `FIRMLAB_AGENT=1` (agent/copilot, needs an LLM key),
-`FIRMLAB_RESEARCH=1` (external intelligence) and `FIRMLAB_CAPTURE=1` (LAN/OTA/BLE/Zigbee capture — also needs
-`FIRMLAB_CAPTURE_AGENT_TOKEN` for the remote LAN agent). All three also persist from **Settings → Privacy**, so a
-flag can be on even when it isn't set in the environment. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the
+External intelligence is on by default (`FIRMLAB_RESEARCH=0` turns it off). The other optional layers are off
+unless you set their flag: `FIRMLAB_AGENT=1` (agent/copilot, needs an LLM key), `FIRMLAB_HASH_LOOKUP=1` (online
+password-hash lookup, on top of research) and `FIRMLAB_CAPTURE=1` (LAN/OTA/BLE/Zigbee capture — also needs
+`FIRMLAB_CAPTURE_AGENT_TOKEN` for the remote LAN agent). All of them also persist from **Settings → Privacy**, and a
+stored setting beats the environment, so a flag's state need not match the compose file — `/api/settings/flags`
+reports which source decided each one. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the
 homelab rollout and how to tell which commit is running.
 
 ## 🚧 Project status & roadmap

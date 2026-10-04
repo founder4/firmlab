@@ -162,12 +162,14 @@ too); the database is **provisioned** under `FIRMLAB_DATA_DIR`, never acquired; 
 **refusal that names both remedies**, never a silent skip and never a download; the build date travels into the
 result, because "grype found 0" is only as current as the database behind it; and the one opt-in is
 `FIRMLAB_RESEARCH` — no flag of its own, because a database download sends nothing about the firmware, exactly
-like the KEV catalogue that lane already pulls. **When you add a tool, check what it does on startup.**
-Renode is the second instance: 13 bundled platform descriptions `ApplySVD @https://dl.antmicro.com/…` on load,
-the deployed container cannot `unshare -n`, and HOME is per-run, so every boot was a download (measured
-2026-10-02 with a loopback listener: `CONNECT dl.antmicro.com:443`). `OFFLINE_RENODE_ENV` in
-`providers/renode.ts` aims every proxy variable .NET honours at a refusing loopback port, and the result names
-what was refused.
+like the KEV catalogue that lane already pulls. (Residual: `dbUpdateAllowed` still reads a literal
+`FIRMLAB_RESEARCH === '1'`, so with the research lane on *by default* — see below — grype stays offline until the
+variable is stated; moving it onto `decideFlag` is tracked separately.) **When you add a tool, check what it does
+on startup.** Renode is the second instance: 13 bundled platform descriptions
+`ApplySVD @https://dl.antmicro.com/…` on load, the deployed container cannot `unshare -n`, and HOME is per-run, so
+every boot was a download (measured 2026-10-02 with a loopback listener: `CONNECT dl.antmicro.com:443`).
+`OFFLINE_RENODE_ENV` in `providers/renode.ts` aims every proxy variable .NET honours at a refusing loopback port,
+and the result names what was refused.
 
 ### Findings ledger
 
@@ -188,17 +190,33 @@ is reported `not-built`, a stage lacking a rootfs is `skipped`.
 
 ### Optional layers, each behind its own flag
 
+**Network policy (operator decision, 2026-10-04).** Trusted outbound research is habitually authorised: the
+research lane is the only outward lane that is on when nothing is stated (`defaultOn` in `flags.ts`). The things
+that make that safe do not move — listeners stay loopback (or behind the homelab's auth-gated proxy),
+destinations are allowlisted, the egress ledger declares and reconciles every run, raw firmware never leaves, an
+untrusted emulated guest stays isolated (`FIRMLAB_EMU_ISOLATE`, also default-on), and hash lookup and active
+capture keep their own opt-ins. Precedence for every lane: **stored override (Settings) › environment › catalogue
+default**; anything stated other than `'1'` is off, and `/api/settings/flags` reports which of the three decided
+(`source`).
+
 - `FIRMLAB_AGENT=1` (+ an LLM key) — copilot and the agent skeleton (`agent/`): deterministic orchestrator, LLM
   only at the judgment nodes, `governor.ts` hard caps (steps/tokens/USD/wall-time), human-approval gate unless
   the blast radius is contained by `providers/isolate.ts`. `llm.ts` is raw `fetch`, no SDK; DeepSeek by default,
   OpenAI-compatible and Anthropic also supported.
-- `FIRMLAB_RESEARCH=1` — the only internet-touching analysis lane (`research/`): OSV/NVD/KEV, provenance,
-  security.txt, behind a domain allowlist and an egress ledger. Deliberately a *separate* flag from the agent.
+- `FIRMLAB_RESEARCH` — **on unless stated otherwise**; the only internet-touching analysis lane (`research/`):
+  OSV/NVD/KEV, provenance, security.txt, behind a domain allowlist and an egress ledger. Being on authorises a
+  run; a run is still started per image. `FIRMLAB_RESEARCH=0` (or the Settings toggle) opts out. Deliberately a
+  *separate* flag from the agent.
+- `FIRMLAB_HASH_LOOKUP=1` — a second opt-in under research: sends unsalted password hashes recovered from the
+  firmware to public reverse-lookup services. Never implied by the research default.
 - `FIRMLAB_CAPTURE=1` — the on-the-wire lane (`capture/`): LAN discovery, mitmproxy OTA interception, BLE/Zigbee.
 - `apps/api/src/mcp/server.ts` — the workbench exposed as an MCP server over stdio, so an agent can drive the
   providers and get answers already shaped with their proof state and coverage (`mcp/format.ts`).
 
-With every flag off: no network, no cost, deterministic behaviour.
+With every flag off: no network, no cost, deterministic behaviour — and for research "off" now means a stated
+`FIRMLAB_RESEARCH=0`, because it is the one outward lane on by default. With the defaults (research on, nothing
+else): the only outbound traffic is an operator-started research run to the allowlisted intelligence hosts,
+carrying component names and versions.
 
 ## Adding things
 
@@ -273,6 +291,8 @@ Everything persists under one data root (`FIRMLAB_DATA_DIR`, default `./data`): 
 `capture/`, `firmlab.db`. Local-only is enforced in three places — API defaults to `127.0.0.1`, the Vite dev
 server binds loopback, the repo compose publishes `127.0.0.1:8799:8799`. In Docker the in-container bind is
 `0.0.0.0` (required for publishing) and `FIRMLAB_LOOPBACK_PUBLISH=1` keeps the UI's local-only indicator honest.
+"Local-only" is about **exposure** (who can reach the workbench and what of the firmware leaves), not about
+outbound research, which is on by default — see the network policy above.
 
 Image chain is **inverted on purpose** — the multi-GB toolchain is the base, the app goes on top:
 

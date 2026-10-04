@@ -3,6 +3,13 @@
 # The API port is published ONLY to the host loopback (127.0.0.1), so the workbench and the firmware images it
 # holds are never reachable from the network. To use the full toolchain (extraction, decompilation, SBOM,
 # emulation), build the firmware image and set `image: firmlab-firmware` below.
+#
+# Outbound network (operator decision, 2026-10-04): the research lane is ON by default with nothing set here — it
+# queries the allowlisted advisory hosts (OSV, NVD, CISA KEV) with component names and versions only, never firmware
+# bytes, and only when a run is started. To keep this deployment fully offline, add `FIRMLAB_RESEARCH: '0'` below
+# (or switch it off in Settings › Privacy, which is stored in the data volume and beats this file). Online hash
+# lookup and the capture lane stay off unless you set FIRMLAB_HASH_LOOKUP / FIRMLAB_CAPTURE yourself; emulated
+# firmware stays cut off from the internet (FIRMLAB_EMU_ISOLATE defaults on).
 
 services:
   firmlab:

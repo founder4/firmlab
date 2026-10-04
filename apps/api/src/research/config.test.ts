@@ -1,10 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowed, loadResearchConfig } from './config.js';
+import { effectiveEnv, setFlagOverrideProvider } from '../flags.js';
+import { RESEARCH_DISABLED, isAllowed, loadResearchConfig } from './config.js';
 
-describe('loadResearchConfig — the local-only gate', () => {
-  it('returns null when FIRMLAB_RESEARCH is unset (no network path exists)', () => {
-    expect(loadResearchConfig({} as NodeJS.ProcessEnv)).toBeNull();
+describe('loadResearchConfig — the research gate', () => {
+  /**
+   * The inverse of what this test pinned until 2026-10-04, when the operator decided trusted outbound research is
+   * habitually authorised. Absence now means the operator's standing decision, so it means ON — and what keeps
+   * that bounded is asserted alongside it rather than assumed.
+   */
+  it('is ON when FIRMLAB_RESEARCH is unset, with only the default allowlist and no hash lookup', () => {
+    const c = loadResearchConfig({} as NodeJS.ProcessEnv);
+    expect(c).not.toBeNull();
+    expect(c?.allowlist).toEqual(['api.osv.dev', 'services.nvd.nist.gov', 'www.cisa.gov']);
+    expect(c?.hashLookup).toBe(false);
+  });
+
+  it('returns null for any stated value other than 1 (no network path exists)', () => {
     expect(loadResearchConfig({ FIRMLAB_RESEARCH: '0' } as unknown as NodeJS.ProcessEnv)).toBeNull();
+    // A typo is a stated value and reads as off — the opt-out must not depend on spelling it the one right way.
+    expect(loadResearchConfig({ FIRMLAB_RESEARCH: 'false' } as unknown as NodeJS.ProcessEnv)).toBeNull();
+    expect(loadResearchConfig({ FIRMLAB_RESEARCH: '' } as unknown as NodeJS.ProcessEnv)).toBeNull();
+  });
+
+  /**
+   * The merged environment is what the lane reads (`effectiveEnv`: process env with stored overrides on top), so
+   * these are the precedence rules as the gate sees them: a stored override beats the environment, and either one
+   * beats the default.
+   */
+  it('lets a stored override of 0 beat an environment of 1, and a stored 1 beat an environment of 0', () => {
+    setFlagOverrideProvider(() => ({ FIRMLAB_RESEARCH: '0' }));
+    expect(loadResearchConfig(effectiveEnv({ FIRMLAB_RESEARCH: '1' } as unknown as NodeJS.ProcessEnv))).toBeNull();
+    expect(loadResearchConfig(effectiveEnv({} as NodeJS.ProcessEnv))).toBeNull();
+    setFlagOverrideProvider(() => ({ FIRMLAB_RESEARCH: '1' }));
+    expect(loadResearchConfig(effectiveEnv({ FIRMLAB_RESEARCH: '0' } as unknown as NodeJS.ProcessEnv))).not.toBeNull();
+    setFlagOverrideProvider(() => ({}));
+  });
+
+  it('names the switch in its refusal and says the lane was switched off rather than never enabled', () => {
+    expect(RESEARCH_DISABLED).toContain('Settings › Privacy');
+    expect(RESEARCH_DISABLED).toContain('FIRMLAB_RESEARCH=1');
+    expect(RESEARCH_DISABLED).toMatch(/on by default/);
   });
 
   it('enables with the default allowlist (OSV + NVD + CISA KEV) when the flag is set', () => {
@@ -35,7 +70,15 @@ describe('loadResearchConfig — the local-only gate', () => {
   });
 
   it('does not arm hash lookup when the research track itself is off', () => {
-    expect(loadResearchConfig({ FIRMLAB_HASH_LOOKUP: '1' } as unknown as NodeJS.ProcessEnv)).toBeNull();
+    expect(
+      loadResearchConfig({ FIRMLAB_RESEARCH: '0', FIRMLAB_HASH_LOOKUP: '1' } as unknown as NodeJS.ProcessEnv),
+    ).toBeNull();
+  });
+
+  it('arms hash lookup on top of the default-on track only when FIRMLAB_HASH_LOOKUP itself is stated', () => {
+    // The research default is not an authorisation to send hashes: the second opt-in is still the only way in.
+    expect(loadResearchConfig({ FIRMLAB_HASH_LOOKUP: '1' } as unknown as NodeJS.ProcessEnv)?.hashLookup).toBe(true);
+    expect(loadResearchConfig({ FIRMLAB_HASH_LOOKUP: '0' } as unknown as NodeJS.ProcessEnv)?.hashLookup).toBe(false);
   });
 
   it('merges extra allowlist hosts without duplicating', () => {

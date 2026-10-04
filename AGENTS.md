@@ -14,13 +14,37 @@ FirmLab is a local-first firmware analysis workbench. Preserve these invariants:
 - A missing tool or unsupported platform is not a negative result. Degrade explicitly.
 - Persisted provider output may come from an older build. Newly added result fields remain optional forever.
 - Keep the dependency direction `web -> api -> core`; byte-only pure analysis belongs in `packages/core`.
-- Keep the default deployment local-only. Do not widen listeners, egress, or approval scope incidentally.
+- Keep the workbench's exposure local-only: listeners bind loopback (or sit behind the homelab's auth-gated
+  proxy), and firmware bytes, secrets and keys never leave the machine. Do not widen listeners, the research
+  allowlist, or approval scope incidentally.
+
+## Network authorization (operator decision, 2026-10-04)
+
+Outbound network use is habitually authorized, for FirmLab project work and for the product alike:
+
+- **Agents** may use the network proactively when it helps the task — authoritative documentation, vendor and
+  advisory feeds (NVD, OSV, KEV, vendor sites), dependency registries, and research. No per-task permission is
+  needed for that.
+- **The product's trusted research lane** (`FIRMLAB_RESEARCH`) is on by default. It reaches allowlisted
+  intelligence hosts only, sends derived data only (component names/versions), and every run is declared and
+  reconciled by the egress ledger. A stated `FIRMLAB_RESEARCH=0` or a stored Settings override turns it off, and
+  a stated value always beats the default.
+
+That standing permission does **not** cover, and must never be used to justify:
+
+- exposing a listener (binding beyond loopback, publishing a port, removing the homelab's auth middlewares);
+- transmitting raw firmware, extracted secrets, keys or credential material to any third party;
+- enabling `FIRMLAB_HASH_LOOKUP` (sends hashes recovered from the firmware) or `FIRMLAB_CAPTURE` (active
+  on-the-wire acquisition) — each stays a separate, attributable operator opt-in;
+- giving an untrusted emulated guest or agent-executed binary direct egress (`FIRMLAB_EMU_ISOLATE` stays on by
+  default; `providers/isolate.ts` network isolation is not to be loosened).
 
 ## Working agreement
 
 - Stay inside the assigned target and ownership boundary. Do not edit files owned by another active worker.
-- Do not deploy, mutate the cross-image corpus/database, fetch firmware, or enable outbound research unless the
-  task explicitly authorizes it.
+- Do not deploy, mutate the cross-image corpus/database, fetch firmware, or change stored lane overrides unless
+  the task explicitly authorizes it. Network access itself is authorized (see above); its boundaries are not
+  relaxed by it.
 - Preserve unrelated and pre-existing worktree changes. Never use destructive Git cleanup commands.
 - Put decision/parsing logic in pure exported functions with tests; keep routes and store bindings thin.
 - Build `@firmlab/core` before API or web work that consumes its `dist/` output.
