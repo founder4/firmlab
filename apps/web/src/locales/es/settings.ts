@@ -46,8 +46,10 @@ export const settings: Messages['settings'] = {
   lanes: {
     title: 'Carriles',
     sub: [
-      'Todo lo que puede salir de este proceso. Apagado es lo predeterminado, y el motor determinista no necesita',
-      'ninguno. Un cambio surte efecto en la siguiente ejecución — sin reiniciar.',
+      'Todo lo que puede salir de este proceso. Cada carril está apagado mientras no se indique lo contrario, salvo',
+      'la inteligencia externa, encendida por omisión, y el aislamiento del emulador, cuyo estado encendido es el',
+      'cerrado. El motor determinista no necesita ninguno. Un cambio surte efecto en la siguiente ejecución — sin',
+      'reiniciar.',
     ].join(' '),
     loading: 'Cargando carriles…',
     leavingNow: 'Sale de esta máquina: ',
@@ -57,6 +59,10 @@ export const settings: Messages['settings'] = {
       `El entorno del contenedor lo tiene ${environmentValue ? 'encendido' : 'apagado'}. Vuelve a seguirlo.`,
     inertLead: 'Encendido, pero sin hacer nada — ',
     inertTail: ' está apagado, y esto sólo actúa dentro de ese carril.',
+    heldLead: 'Encendido, pero en espera — ',
+    heldTail:
+      ' sólo está encendido por omisión. Esto envía material recuperado del firmware, así que también necesita ese carril encendido de forma explícita: un valor por omisión no es un segundo consentimiento.',
+    confirmParent: 'Encenderlo explícitamente',
   },
 
   panels: {
@@ -131,8 +137,9 @@ export const settings: Messages['settings'] = {
     agentOffLead: 'No hay ningún modelo externo configurado. No se envía nada fuera de la máquina. Actívalo con',
     agentOffTail: 'y una clave de API.',
     banner: [
-      'El motor (@firmlab/core) es determinista y no necesita red. Las herramientas externas y el copiloto opcional',
-      'son lo único que puede salir de este proceso.',
+      'El motor (@firmlab/core) es determinista y no necesita red. Las herramientas externas, el copiloto opcional y',
+      'los carriles de arriba son lo único que puede salir de este proceso. La inteligencia externa está encendida',
+      'por omisión: envía nombres y versiones de componentes a hosts de una lista permitida — nunca bytes del firmware.',
     ].join(' '),
   },
 

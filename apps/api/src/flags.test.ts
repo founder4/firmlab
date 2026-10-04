@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   TOGGLEABLE_FLAGS,
+  decideDependent,
   decideFlag,
   effectiveEnv,
   isToggleableFlag,
@@ -260,12 +261,14 @@ describe('resolveFlags — an override is not the environment, and the differenc
     const hash = find(states, 'FIRMLAB_HASH_LOOKUP');
     expect(hash.enabled).toBe(true);
     expect(hash.inert).toBe(true);
+    expect(hash.inertReason).toBe('parent_off');
     expect(hash.requires).toBe('FIRMLAB_RESEARCH');
   });
 
-  it('stops calling it inert once the parent lane is on', () => {
+  it('stops calling it inert once the parent lane is STATED on', () => {
     const states = resolveFlags(env({}), { FIRMLAB_HASH_LOOKUP: '1', FIRMLAB_RESEARCH: '1' });
     expect(find(states, 'FIRMLAB_HASH_LOOKUP').inert).toBe(false);
+    expect(find(states, 'FIRMLAB_HASH_LOOKUP').inertReason).toBeUndefined();
   });
 
   it('never calls a flag inert while it is off', () => {
@@ -317,10 +320,58 @@ describe('FIRMLAB_RESEARCH — on by default, and every stated value still wins 
     expect([on.enabled, on.source, on.environmentValue]).toEqual([true, 'override', false]);
   });
 
-  it('does not carry hash lookup along with it: the child stays off and, once armed, is live', () => {
+  it('does not carry hash lookup along with it: the child stays off, and armed beside a DEFAULT parent is held', () => {
     expect(find(resolveFlags(env({}), {}), 'FIRMLAB_HASH_LOOKUP').enabled).toBe(false);
-    const armed = find(resolveFlags(env({}), { FIRMLAB_HASH_LOOKUP: '1' }), 'FIRMLAB_HASH_LOOKUP');
-    expect([armed.enabled, armed.inert]).toEqual([true, false]);
+    // Armed, but its parent is on only because nobody said otherwise. A default is not the second consent.
+    const held = find(resolveFlags(env({}), { FIRMLAB_HASH_LOOKUP: '1' }), 'FIRMLAB_HASH_LOOKUP');
+    expect([held.enabled, held.inert, held.inertReason]).toEqual([true, true, 'parent_default']);
+    // The research lane itself still reads as on — the hold is the child's, never a reason to show the parent off.
+    expect(find(resolveFlags(env({}), { FIRMLAB_HASH_LOOKUP: '1' }), 'FIRMLAB_RESEARCH').enabled).toBe(true);
+  });
+});
+
+/**
+ * The migration the default flip must not perform. Before 2026-10-04 an unset `FIRMLAB_RESEARCH` meant OFF, so a
+ * deployment with `FIRMLAB_HASH_LOOKUP=1` (in compose, or as a stored Settings override) and research unstated was
+ * inert: no hash ever left. Flipping research to default-on must leave that deployment exactly as inert, because
+ * nobody consented to anything on the day the default changed — and say so, rather than show the lookup as live.
+ */
+describe('double consent survives the research default — a previously inert hash lookup stays inert', () => {
+  const states = [
+    ['the environment', env({ FIRMLAB_HASH_LOOKUP: '1' }), {}],
+    ['a stored Settings override', env({}), { FIRMLAB_HASH_LOOKUP: '1' }],
+  ] as const;
+
+  for (const [where, e, o] of states) {
+    it(`holds a hash lookup armed in ${where} beside an unstated research lane`, () => {
+      expect(decideDependent('FIRMLAB_HASH_LOOKUP', { ...e, ...o })).toEqual({ armed: false, held: 'parent_default' });
+      const hash = find(resolveFlags(e, { ...o }), 'FIRMLAB_HASH_LOOKUP');
+      expect([hash.inert, hash.inertReason]).toEqual([true, 'parent_default']);
+    });
+  }
+
+  it('arms it once research is stated 1, from either source, and never from the default', () => {
+    expect(decideDependent('FIRMLAB_HASH_LOOKUP', { FIRMLAB_HASH_LOOKUP: '1', FIRMLAB_RESEARCH: '1' }).armed).toBe(
+      true,
+    );
+    const viaOverride = find(
+      resolveFlags(env({ FIRMLAB_HASH_LOOKUP: '1' }), { FIRMLAB_RESEARCH: '1' }),
+      'FIRMLAB_HASH_LOOKUP',
+    );
+    expect(viaOverride.inert).toBe(false);
+  });
+
+  it('still reports a parent stated off as parent_off, and a child stated off as neither', () => {
+    expect(decideDependent('FIRMLAB_HASH_LOOKUP', { FIRMLAB_HASH_LOOKUP: '1', FIRMLAB_RESEARCH: '0' })).toEqual({
+      armed: false,
+      held: 'parent_off',
+    });
+    expect(decideDependent('FIRMLAB_HASH_LOOKUP', { FIRMLAB_HASH_LOOKUP: '0' })).toEqual({ armed: false, held: null });
+  });
+
+  it('is plain decideFlag for a flag with no parent, default-on included', () => {
+    expect(decideDependent('FIRMLAB_RESEARCH', {})).toEqual({ armed: true, held: null });
+    expect(decideDependent('FIRMLAB_CAPTURE', {})).toEqual({ armed: false, held: null });
   });
 });
 

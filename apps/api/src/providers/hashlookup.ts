@@ -8,7 +8,9 @@
  *
  * Non-negotiables, mirroring the rest of the research track:
  *  - Double opt-in. Runs only when BOTH FIRMLAB_RESEARCH=1 (network on) AND FIRMLAB_HASH_LOOKUP=1 (this hash
- *    egress specifically). With either unset, no hash leaves.
+ *    egress specifically), each STATED — in the environment or by a Settings override. The research lane is on
+ *    by default, and that default is not the first consent: with research unstated the lookup is held and says
+ *    so (`cfg.hashLookupHeld`). With either unstated, no hash leaves.
  *  - Only unsalted digests are ever sent. Salted crypt(3) hashes (md5crypt/sha256crypt/sha512crypt/bcrypt/
  *    yescrypt, DES, and salted LDAP `{SSHA}`) are NOT resolvable by these DBs, so they are never transmitted and
  *    a "miss" is never reported as strength.
@@ -298,6 +300,20 @@ export interface HashLookupResult {
   entries: HashLookupEntry[];
 }
 
+/** The lookup's own flag is unstated: one consent of two is missing, and it is this one. */
+export const HASH_LOOKUP_DISABLED =
+  'Online hash lookup disabled — set FIRMLAB_HASH_LOOKUP=1 (it sends unsalted password hashes off-box).';
+
+/**
+ * FIRMLAB_HASH_LOOKUP=1 is stated, but the research lane is on only by default. Stated apart from the line above,
+ * because telling an operator who DID set the hash flag to set it would send them looking for a mistake they did
+ * not make — the missing consent is the other one.
+ */
+export const HASH_LOOKUP_HELD =
+  'Online hash lookup held — FIRMLAB_HASH_LOOKUP=1 is set, but the research lane is on only by default, and the ' +
+  'default is not consent to send password hashes. State it: FIRMLAB_RESEARCH=1, or switch External intelligence ' +
+  'on explicitly in Settings › Privacy.';
+
 // A generous cap: a shadow file has a handful of accounts, but a bundle of admin-password hashes from configs
 // could be larger. Anything beyond this is reported as notQueried rather than silently dropped.
 const DEFAULT_CAP = 50;
@@ -315,7 +331,7 @@ export async function runHashLookup(
   if (!cfg.hashLookup) {
     return {
       enabled: false,
-      reason: 'Online hash lookup disabled — set FIRMLAB_HASH_LOOKUP=1 (it sends unsalted password hashes off-box).',
+      reason: cfg.hashLookupHeld ? HASH_LOOKUP_HELD : HASH_LOOKUP_DISABLED,
       attempted: 0,
       resolved: 0,
       notQueried: 0,

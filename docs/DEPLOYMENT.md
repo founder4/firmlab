@@ -173,7 +173,10 @@ Lo que **no** cambia, y es lo que hace defendible ese valor por omisión:
   egress declara un techo antes de cada ejecución y la reconcilia después.
 - **Cuándo**: estar encendido autoriza una ejecución; no la lanza. Cada ejecución sigue siendo un `POST` por imagen.
 - **Lanes que envían más**: `FIRMLAB_HASH_LOOKUP` (manda hashes sacados del firmware a terceros) y
-  `FIRMLAB_CAPTURE` (adquisición activa en el cable) siguen siendo opt-in separados y atribuibles.
+  `FIRMLAB_CAPTURE` (adquisición activa en el cable) siguen siendo opt-in separados y atribuibles. El hash lookup
+  además exige research **declarado** (`FIRMLAB_RESEARCH=1` en el entorno o un `1` guardado en Ajustes): el valor
+  por omisión no cuenta como el primer consentimiento, y con research sin declarar el lookup queda *en espera*
+  (`inertReason: 'parent_default'`).
 - **Invitado emulado**: `FIRMLAB_EMU_ISOLATE` sigue encendido por omisión; un firmware emulado no recibe salida.
 
 **Precedencia, para todas las lanes**: ajuste guardado (Ajustes › Privacidad) › entorno › valor por omisión del
@@ -202,9 +205,16 @@ Hash lookup y captura están encendidos en este despliegue por decisión previa 
 en el entorno siguen apagando el carril. Lo único que cambia de comportamiento es un despliegue **sin nada
 declarado**, que pasa de apagado a encendido; si se quiere seguir sin red, hay que declararlo
 (`FIRMLAB_RESEARCH=0`). Borrar un ajuste guardado de research ahora devuelve la lane a **encendido**, no a apagado.
-Pendiente fuera de este cambio: `dbUpdateAllowed` (`providers/sbom-db.ts`) todavía exige `FIRMLAB_RESEARCH=1`
-literal, así que la descarga de la base de grype sólo está autorizada donde la variable está declarada (el homelab
-lo está).
+Dos consecuencias más, cerradas en el commit siguiente:
+
+- `dbUpdateAllowed` (`providers/sbom-db.ts`) decide con el mismo `decideFlag` que `loadResearchConfig`. Un
+  despliegue sin nada declarado y sin base de grype aprovisionada **descarga** la base (varios GB, desde
+  `grype.anchore.io`) en su primer job de SBOM; el log del job lo dice antes, y lo evitan una base aprovisionada o
+  `FIRMLAB_RESEARCH=0`.
+- Un `FIRMLAB_HASH_LOOKUP=1` (entorno o ajuste guardado) junto a research **sin declarar** estaba inerte antes del
+  cambio y sigue inerte después: no sale ningún hash hasta que research se declare `1`. Ajustes lo muestra como
+  «en espera» con un botón que guarda ese `1`. En el homelab research está declarado en el compose, así que su hash
+  lookup sigue armado como antes.
 
 ## El carril SBOM no toca la red
 

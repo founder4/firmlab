@@ -282,9 +282,10 @@ export const imageDetail: Messages['imageDetail'] = {
   research: {
     offTitle: 'Inteligencia externa',
     offBadge: 'desactivada',
-    offBodyBefore: 'La única función que sale de esta máquina. Actívala con ',
+    offBodyBefore:
+      'Apagada en este despliegue — está encendida por omisión. Vuelve a encenderla en Ajustes › Privacidad, o con ',
     offBodyAfter:
-      ' para correlacionar el SBOM con avisos públicos (OSV) y redactar notas de divulgación responsable. Desactivada por defecto — FirmLab sigue siendo sólo local.',
+      ', para correlacionar el SBOM con avisos públicos (OSV, NVD, CISA KEV) y redactar notas de divulgación responsable. Sólo salen de esta máquina nombres y versiones de componentes, nunca bytes del firmware.',
 
     title: 'Inteligencia externa',
     sourceBadge: 'fuentes públicas',

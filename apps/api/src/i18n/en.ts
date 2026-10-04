@@ -473,8 +473,15 @@ export const en = {
           : p.stale
             ? `Vulnerability database built ${p.built} — ${p.ageDays} days old. It matches, but a CVE published since then cannot appear: an empty result is only as current as this date.`
             : `Vulnerability database built ${p.built} (${p.ageDays} day(s) old), schema ${p.schema ?? '?'}. CVE matching runs offline against it.`,
-      grypeAbsent: (p: { dbDir: string; error: string | null }) =>
-        `Installed, but with no vulnerability database at ${p.dbDir}${p.error ? ` (grype: ${p.error})` : ''}, so CVE matching will be REFUSED rather than attempted — the package inventory still works. The SBOM lane never downloads one on its own: provision it with \`GRYPE_DB_CACHE_DIR=${p.dbDir} grype db update\`, or turn the research lane on to let a job fetch it.`,
+      /**
+       * Two sentences, because the research lane decides which is true and it is on by default: with it on, the next
+       * SBOM job DOWNLOADS a database (several GB) rather than refusing, and an operator who would rather it did
+       * not needs to be told before, not after.
+       */
+      grypeAbsent: (p: { dbDir: string; error: string | null; updateAllowed: boolean }) =>
+        p.updateAllowed
+          ? `Installed, but with no vulnerability database at ${p.dbDir}${p.error ? ` (grype: ${p.error})` : ''}. The research lane is on, so the next SBOM job will download one from grype.anchore.io (several GB, nothing about the firmware is sent) before matching; until then none is in hand. To avoid the download, provision it with \`GRYPE_DB_CACHE_DIR=${p.dbDir} grype db update\`, or switch the research lane off.`
+          : `Installed, but with no vulnerability database at ${p.dbDir}${p.error ? ` (grype: ${p.error})` : ''}, so CVE matching will be REFUSED rather than attempted — the package inventory still works. The research lane, which is on by default, has been switched off here, and the SBOM lane downloads nothing without it: provision a database with \`GRYPE_DB_CACHE_DIR=${p.dbDir} grype db update\`, or turn the research lane back on to let a job fetch it.`,
     },
     /** Keyed by `ToolId`, so a new `ToolSpec` is a compile error in `es.ts` until it is translated. */
     unlocks: {

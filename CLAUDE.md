@@ -152,22 +152,23 @@ either. Where the curated table has an opinion about a grype row, `curatedCveVer
 (`claimed` · `rejected` · `outside_curated_range`), and silence — an unmapped component, or a manifest version
 like `1.18.4-1` the table cannot compare — is recorded as no verdict rather than as a dispute.
 
-**The SBOM lane makes no network request.** A tool you shell out to has its own idea of what it may do: `grype`
-defaults to `db.auto-update: true`, and both anchore binaries poll for a new release of themselves on every
-invocation. Measured on the deployed container on 2026-09-16 with every lane flag off, that meant a 2.2 GB
+**The SBOM lane makes no network request of its own.** A tool you shell out to has its own idea of what it may do:
+`grype` defaults to `db.auto-update: true`, and both anchore binaries poll for a new release of themselves on
+every invocation. Measured on the deployed container on 2026-09-16 with every lane flag off, that meant a 2.2 GB
 vulnerability database arriving from `grype.anchore.io` one minute after start — *"with every flag off: no
 network"* was false, and nothing in the product said so. The policy, in `providers/sbom-db.ts` and pinned by
 `sbom-db.test.ts`: syft and grype run under `OFFLINE_ANCHORE_ENV` (`tools.ts`, applied to the capability probes
-too); the database is **provisioned** under `FIRMLAB_DATA_DIR`, never acquired; an absent database is a
-**refusal that names both remedies**, never a silent skip and never a download; the build date travels into the
-result, because "grype found 0" is only as current as the database behind it; and the one opt-in is
-`FIRMLAB_RESEARCH` — no flag of its own, because a database download sends nothing about the firmware, exactly
-like the KEV catalogue that lane already pulls. (Residual: `dbUpdateAllowed` still reads a literal
-`FIRMLAB_RESEARCH === '1'`, so with the research lane on *by default* — see below — grype stays offline until the
-variable is stated; moving it onto `decideFlag` is tracked separately.) **When you add a tool, check what it does
-on startup.** Renode is the second instance: 13 bundled platform descriptions
-`ApplySVD @https://dl.antmicro.com/…` on load, the deployed container cannot `unshare -n`, and HOME is per-run, so
-every boot was a download (measured 2026-10-02 with a loopback listener: `CONNECT dl.antmicro.com:443`).
+too); the database is **provisioned** under `FIRMLAB_DATA_DIR`, never acquired behind the operator's back; an
+absent database with the research lane off is a **refusal that names both remedies**, never a silent skip and
+never a download; the build date travels into the result, because "grype found 0" is only as current as the
+database behind it; and the one opt-in is `FIRMLAB_RESEARCH` — no flag of its own, because a database download
+sends nothing about the firmware, exactly like the KEV catalogue that lane already pulls. `dbUpdateAllowed`
+decides through the same `decideFlag` as `loadResearchConfig`, so with the research lane on *by default* (see
+below) a deployment with no provisioned database and nothing stated downloads one on its first SBOM job — named in
+the job log first, prevented by a provisioned database or `FIRMLAB_RESEARCH=0`. **When you add a tool, check what
+it does on startup.** Renode is the second instance: 13 bundled platform descriptions `ApplySVD
+@https://dl.antmicro.com/…` on load, the deployed container cannot `unshare -n`, and HOME is per-run, so every
+boot was a download (measured 2026-10-02 with a loopback listener: `CONNECT dl.antmicro.com:443`).
 `OFFLINE_RENODE_ENV` in `providers/renode.ts` aims every proxy variable .NET honours at a refusing loopback port,
 and the result names what was refused.
 
@@ -208,7 +209,10 @@ default**; anything stated other than `'1'` is off, and `/api/settings/flags` re
   run; a run is still started per image. `FIRMLAB_RESEARCH=0` (or the Settings toggle) opts out. Deliberately a
   *separate* flag from the agent.
 - `FIRMLAB_HASH_LOOKUP=1` — a second opt-in under research: sends unsalted password hashes recovered from the
-  firmware to public reverse-lookup services. Never implied by the research default.
+  firmware to public reverse-lookup services. Never implied by the research default, and never *satisfied* by it
+  either: a double opt-in needs both consents stated, so it arms only beside a stated `FIRMLAB_RESEARCH=1`
+  (`decideDependent` in `flags.ts`). Beside an unstated research lane it is reported `inertReason: 'parent_default'`
+  — held, which is exactly the inert state it was in before research became default-on.
 - `FIRMLAB_CAPTURE=1` — the on-the-wire lane (`capture/`): LAN discovery, mitmproxy OTA interception, BLE/Zigbee.
 - `apps/api/src/mcp/server.ts` — the workbench exposed as an MCP server over stdio, so an agent can drive the
   providers and get answers already shaped with their proof state and coverage (`mcp/format.ts`).
@@ -216,7 +220,8 @@ default**; anything stated other than `'1'` is off, and `/api/settings/flags` re
 With every flag off: no network, no cost, deterministic behaviour — and for research "off" now means a stated
 `FIRMLAB_RESEARCH=0`, because it is the one outward lane on by default. With the defaults (research on, nothing
 else): the only outbound traffic is an operator-started research run to the allowlisted intelligence hosts,
-carrying component names and versions.
+carrying component names and versions, and — on a deployment with no provisioned grype database — that
+database's one-way download on the first SBOM job.
 
 ## Adding things
 

@@ -56,9 +56,15 @@ export const settings = {
    */
   lanes: {
     title: 'Lanes',
+    /**
+     * Not "off is the default" any more: external intelligence is on unless stated (operator decision, 2026-10-04)
+     * and emulator isolation is on because its ON state is the closed one. A header that called every lane off by
+     * default would contradict the first switch under it.
+     */
     sub: [
-      'Everything that can reach outside this process. Off is the default and the deterministic engine needs none',
-      'of them. A change takes effect on the next run — no restart.',
+      'Everything that can reach outside this process. Each lane is off until stated, except external intelligence,',
+      'which is on by default, and emulator isolation, whose on state is the closed one. The deterministic engine',
+      'needs none of them. A change takes effect on the next run — no restart.',
     ].join(' '),
     loading: 'Loading lanes…',
     /** The lane is on and outward-facing: this is happening, not hypothetical. */
@@ -70,6 +76,15 @@ export const settings = {
     /** Around the `<code>` naming the lane this one depends on. */
     inertLead: 'On, but doing nothing — ',
     inertTail: ' is off, and this only acts inside that lane.',
+    /**
+     * The other inert: the parent lane is on, but only because nobody said otherwise. A double opt-in is two
+     * consents, and a default is not one — so this stays held until the parent is stated on, and says which.
+     */
+    heldLead: 'On, but held — ',
+    heldTail:
+      ' is on only by default. This sends material recovered from the firmware, so it also needs that lane switched on explicitly: a default is not a second consent.',
+    /** The button that states the parent on. Pins the same value the default already gives — it records a choice. */
+    confirmParent: 'Switch it on explicitly',
   },
 
   /** The remaining tab bodies. Most of what these panels show is composed by the API and rendered as it arrives. */
@@ -155,9 +170,11 @@ export const settings = {
     agentNoBytes: 'No raw firmware bytes are sent. Emulation follows the approval policy shown under AI & Agent.',
     agentOffLead: 'No external model is configured. Nothing is sent off-machine. Enable it with',
     agentOffTail: 'and an API key.',
+    /** Names the research lane because it is on by default: a banner listing only opt-ins would understate it. */
     banner: [
-      'The engine (@firmlab/core) is deterministic and needs no network. External tools and the optional copilot',
-      'are the only things that can reach outside this process.',
+      'The engine (@firmlab/core) is deterministic and needs no network. External tools, the optional copilot and the',
+      'lanes above are the only things that can reach outside this process. External intelligence is on by default:',
+      'it sends component names and versions to allowlisted hosts — never firmware bytes.',
     ].join(' '),
   },
 

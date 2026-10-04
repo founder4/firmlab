@@ -2956,6 +2956,11 @@ export interface LaneFlag {
   source: 'override' | 'environment' | 'default';
   environmentValue: boolean;
   inert: boolean;
+  /**
+   * Which inert: the parent lane is off, or on only by default (a double opt-in needs it STATED on). Optional — an
+   * API older than this never sent it, and absent reads as the plain parent-off sentence.
+   */
+  inertReason?: 'parent_off' | 'parent_default';
   overriddenAt?: number;
 }
 

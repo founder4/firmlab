@@ -40,10 +40,18 @@
  *     switch and behind its prose. It gets no flag of its own — the reason `FIRMLAB_HASH_LOOKUP` has one is that
  *     it sends material FROM the firmware to a third party, and a database download sends nothing at all: it is
  *     one-way, exactly like the KEV catalogue the research lane already pulls.
+ *  6. **The gate reads the lane exactly as the lane reads itself.** Since 2026-10-04 the research lane is on unless
+ *     a value is stated (`defaultOn` in `flags.ts`), with a Settings override beating the environment.
+ *     `dbUpdateAllowed` decides through the same `decideFlag` as `loadResearchConfig`, so the SBOM lane cannot be
+ *     the one place that still reads absence as off — it once did, reading a literal `=== '1'`, and the result was
+ *     a Settings panel and a research run saying ON beside a grype refusal telling the operator to turn it on.
+ *     The consequence is stated rather than glossed: on a deployment with no provisioned database and nothing
+ *     stated, the first SBOM job now downloads one. Rule 1 still holds — that download is the research lane's,
+ *     named in the job log before it happens, and `FIRMLAB_RESEARCH=0` (or a provisioned database) prevents it.
  */
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { effectiveEnv } from '../flags.js';
+import { type FlagDecision, decideFlag, effectiveEnv } from '../flags.js';
 
 import { execFile } from '../job-process.js';
 import { OFFLINE_ANCHORE_ENV } from '../tools.js';
@@ -64,9 +72,18 @@ export function grypeDbDir(env: NodeJS.ProcessEnv = effectiveEnv()): string {
   return env.GRYPE_DB_CACHE_DIR || path.join(env.FIRMLAB_DATA_DIR || './data', 'grype-db');
 }
 
-/** Is the operator's network opt-in in force? The research lane, and nothing else, permits a database download. */
+/**
+ * The research lane's decision, read the way `loadResearchConfig` reads it: stored override › environment ›
+ * catalogue default, anything stated other than `'1'` off. Exported whole because the job log has to say whether
+ * the permission to download was somebody's choice or the default.
+ */
+export function researchLane(env: NodeJS.ProcessEnv = effectiveEnv()): FlagDecision {
+  return decideFlag('FIRMLAB_RESEARCH', env);
+}
+
+/** Is the research lane on? It, and nothing else, permits a database download. */
 export function dbUpdateAllowed(env: NodeJS.ProcessEnv = effectiveEnv()): boolean {
-  return env.FIRMLAB_RESEARCH === '1';
+  return researchLane(env).enabled;
 }
 
 /**
@@ -143,7 +160,13 @@ export type GrypeDecision =
  */
 export function decideGrype(
   db: GrypeDbStatus,
-  opts: { updateAllowed: boolean; dbDir: string; now?: Date },
+  opts: {
+    updateAllowed: boolean;
+    /** The permission comes from the catalogue default rather than a stated `1`. Only changes the wording. */
+    updateByDefault?: boolean;
+    dbDir: string;
+    now?: Date;
+  },
 ): GrypeDecision {
   if (db.present) {
     const ageDays = dbAgeDays(db.built, opts.now ?? new Date());
@@ -159,11 +182,16 @@ export function decideGrype(
     };
   }
   if (opts.updateAllowed) {
+    // Which of the two it is matters to the reader: a default is not a choice, and the way out of the download is
+    // different — state `0`, or provision a database.
+    const why = opts.updateByDefault
+      ? 'The research lane is ON by default (FIRMLAB_RESEARCH unstated; state FIRMLAB_RESEARCH=0 to prevent this)'
+      : 'The research lane is ON (FIRMLAB_RESEARCH=1)';
     return {
       run: true,
       note:
-        `No vulnerability database at ${opts.dbDir}. The research lane is ON (FIRMLAB_RESEARCH=1), so grype is ` +
-        `permitted to download one from ${GRYPE_DB_UPDATE_URL} (several GB). Nothing about this firmware is sent.`,
+        `No vulnerability database at ${opts.dbDir}. ${why}, so grype is permitted to download one from ` +
+        `${GRYPE_DB_UPDATE_URL} (several GB). Nothing about this firmware is sent.`,
     };
   }
   const why = db.error ? ` (grype: ${db.error})` : '';
@@ -171,10 +199,10 @@ export function decideGrype(
     run: false,
     reason: [
       `CVE matching was not attempted: grype is installed but has no vulnerability database at ${opts.dbDir}${why},`,
-      'and the SBOM lane never downloads one on its own. Provision it once with',
-      `\`GRYPE_DB_CACHE_DIR=${opts.dbDir} grype db update\`, or turn on the research lane (Settings › Privacy, or`,
-      `FIRMLAB_RESEARCH=1) to let this job fetch it from ${GRYPE_DB_UPDATE_URL}. The package inventory below is`,
-      'complete; it says nothing about vulnerabilities either way.',
+      'and the SBOM lane downloads one only under the research lane, which is on by default and has been switched',
+      `off here. Provision it once with \`GRYPE_DB_CACHE_DIR=${opts.dbDir} grype db update\`, or turn the research`,
+      `lane back on (Settings › Privacy, or FIRMLAB_RESEARCH=1) to let this job fetch it from ${GRYPE_DB_UPDATE_URL}.`,
+      'The package inventory below is complete; it says nothing about vulnerabilities either way.',
     ].join(' '),
   };
 }

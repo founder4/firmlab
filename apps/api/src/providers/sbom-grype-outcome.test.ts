@@ -93,20 +93,56 @@ describe('the two outcomes that are the deployment, not the run', () => {
     expect(child.mock.calls.map((c) => c[0])).toEqual(['syft']);
   });
 
+  // The research lane is on unless stated (2026-10-04), and it is what permits the download — so the refusal is
+  // only reachable with research stated off, which is what this case states.
   it('keeps a grype with no vulnerability database on install-tool, and does not download one', async () => {
+    vi.stubEnv('FIRMLAB_RESEARCH', '0');
     toolAvailable.mockResolvedValue(true);
     withGrype((args) =>
       args[0] === 'db' ? JSON.stringify({ valid: false, error: 'no database found' }) : new Error('never invoked'),
     );
 
-    const { runSbom } = await import('./sbom.js');
-    const r = await runSbom('img', '/rootfs', handle);
+    try {
+      const { runSbom } = await import('./sbom.js');
+      const r = await runSbom('img', '/rootfs', handle);
 
-    expect(r.grypeOutcome).toBe('db_absent');
-    expect(remedyForGrypeOutcome(r.grypeOutcome)).toBe('install-tool');
-    // grype was asked what database it has and then not run: no scan, and above all no fetch.
-    expect(child.mock.calls.filter((c) => c[0] === 'grype').map((c) => (c[1] as string[])[0])).toEqual(['db']);
-    expect(r.grypeReason).toContain('never downloads one on its own');
+      expect(r.grypeOutcome).toBe('db_absent');
+      expect(remedyForGrypeOutcome(r.grypeOutcome)).toBe('install-tool');
+      // grype was asked what database it has and then not run: no scan, and above all no fetch.
+      expect(child.mock.calls.filter((c) => c[0] === 'grype').map((c) => (c[1] as string[])[0])).toEqual(['db']);
+      expect(r.grypeReason).toContain('downloads one only under the research lane');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('lets grype fetch its database under the DEFAULT research lane, and says the permission was a default', async () => {
+    vi.stubEnv('FIRMLAB_RESEARCH', undefined);
+    toolAvailable.mockResolvedValue(true);
+    const logged: string[] = [];
+    const spy: JobHandle = { id: 'job', log: (line: string) => void logged.push(line) };
+    let scanEnv: NodeJS.ProcessEnv | undefined;
+    child.mockImplementation(
+      (file: string, args: string[], opts: { env?: NodeJS.ProcessEnv }, cb: ExecFileCallback) => {
+        if (file === 'syft') return cb(null, { stdout: SYFT_OK, stderr: '' });
+        if (args[0] === 'db')
+          return cb(null, { stdout: JSON.stringify({ valid: false, error: 'no database' }), stderr: '' });
+        scanEnv = opts.env;
+        return cb(null, { stdout: JSON.stringify({ matches: [] }), stderr: '' });
+      },
+    );
+
+    try {
+      const { runSbom } = await import('./sbom.js');
+      const r = await runSbom('img', '/rootfs', spy);
+
+      // The same lane the Settings panel and the research run report as on does not refuse here.
+      expect(r.grypeOutcome).not.toBe('db_absent');
+      expect(scanEnv?.GRYPE_DB_AUTO_UPDATE).toBe('true');
+      expect(logged.some((l) => l.includes('ON by default') && l.includes('FIRMLAB_RESEARCH=0'))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

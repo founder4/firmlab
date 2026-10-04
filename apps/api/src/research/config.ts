@@ -14,9 +14,11 @@
  * host ALLOWLIST; only derived data (component names/versions, vendor strings) leaves — never raw firmware bytes;
  * the egress ledger (research/egress.ts) declares a ceiling before a run and reconciles it after; a run is still
  * started per image, never implicitly; and the online hash lookup — which sends hashes recovered FROM the
- * firmware — stays behind its own second opt-in, as does the capture lane.
+ * firmware — stays behind its own second opt-in, as does the capture lane. That second opt-in needs the first one
+ * STATED: a `FIRMLAB_HASH_LOOKUP=1` beside an unstated research flag was inert before the default flipped and stays
+ * held after it, because the default is not anyone's consent to send password hashes.
  */
-import { decideFlag, effectiveEnv } from '../flags.js';
+import { decideDependent, decideFlag, effectiveEnv } from '../flags.js';
 import { linkJobCancellation } from '../job-cancellation.js';
 
 export interface ResearchConfig {
@@ -32,8 +34,17 @@ export interface ResearchConfig {
    * privacy step than sending a component name+version, so it gets its own flag — matching the convention that a
    * changed privacy posture gets a separate flag. Off by default even though the research track now defaults on;
    * when off, no hash ever leaves and the lookup hosts are not added to the allowlist.
+   *
+   * Armed only when BOTH consents are stated: `FIRMLAB_HASH_LOOKUP=1` and `FIRMLAB_RESEARCH=1` (environment or
+   * Settings). The research default is not the second consent — see `decideDependent` in `flags.ts`.
    */
   hashLookup: boolean;
+  /**
+   * Set when `FIRMLAB_HASH_LOOKUP=1` is stated but the research lane is on only by default, so the lookup is HELD
+   * rather than off. Carried so the run can say which of the two consents is missing instead of telling an
+   * operator who did set the hash flag to go and set it.
+   */
+  hashLookupHeld?: true;
 }
 
 // The published-vulnerability + exploited-in-the-wild sources FirmLab correlates against. Each is a free,
@@ -65,12 +76,14 @@ export function loadResearchConfig(env: NodeJS.ProcessEnv = effectiveEnv()): Res
     .split(',')
     .map((h) => h.trim())
     .filter(Boolean);
-  const hashLookup = env.FIRMLAB_HASH_LOOKUP === '1';
+  const hash = decideDependent('FIRMLAB_HASH_LOOKUP', env);
+  const hashLookup = hash.armed;
   return {
     allowlist: [...new Set([...DEFAULT_ALLOWLIST, ...(hashLookup ? HASH_LOOKUP_HOSTS : []), ...extra])],
     timeoutMs: Math.max(1000, Number(env.FIRMLAB_RESEARCH_TIMEOUT_MS ?? 15000)),
     ...(env.NVD_API_KEY ? { nvdApiKey: env.NVD_API_KEY } : {}),
     hashLookup,
+    ...(hash.held === 'parent_default' ? { hashLookupHeld: true as const } : {}),
   };
 }
 

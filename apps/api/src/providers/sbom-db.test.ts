@@ -8,6 +8,8 @@
  * JSON still on stdout.
  */
 import { describe, expect, it } from 'vitest';
+import { effectiveEnv, setFlagOverrideProvider } from '../flags.js';
+import { loadResearchConfig } from '../research/config.js';
 import {
   GRYPE_DB_UPDATE_URL,
   type GrypeDbStatus,
@@ -19,6 +21,7 @@ import {
   grypeDatasetFact,
   grypeDbDir,
   parseGrypeDbStatus,
+  researchLane,
 } from './sbom-db.js';
 
 const NOW = new Date('2026-09-16T12:00:00Z');
@@ -44,7 +47,8 @@ const absent: GrypeDbStatus = {
 
 describe('anchoreEnv — the environment both anchore tools run under', () => {
   it('turns off every network path grype and syft take on their own initiative', () => {
-    const env = anchoreEnv({ FIRMLAB_DATA_DIR: '/data' });
+    // With the research lane stated off — since 2026-10-04 an unstated one is on, and permits the refresh.
+    const env = anchoreEnv({ FIRMLAB_DATA_DIR: '/data', FIRMLAB_RESEARCH: '0' });
     // The database download that was measured happening with every lane off.
     expect(env.GRYPE_DB_AUTO_UPDATE).toBe('false');
     // …and the release poll both binaries make on every single invocation.
@@ -71,13 +75,45 @@ describe('anchoreEnv — the environment both anchore tools run under', () => {
     );
   });
 
-  it('permits the refresh only with the research lane on — the one flag that owns outbound traffic', () => {
-    expect(dbUpdateAllowed({})).toBe(false);
-    expect(anchoreEnv({}).GRYPE_DB_AUTO_UPDATE).toBe('false');
+  /**
+   * The gate reads the research lane exactly as `loadResearchConfig` does. It used to read a literal `=== '1'`, so
+   * once research became default-on an unstated deployment had a research lane that was ON and an SBOM lane that
+   * refused, telling the operator to turn on a lane that already was.
+   */
+  it('permits the refresh exactly when the research lane is on — default included, stated 0 excluded', () => {
+    expect(dbUpdateAllowed({})).toBe(true);
+    expect(anchoreEnv({}).GRYPE_DB_AUTO_UPDATE).toBe('true');
     expect(dbUpdateAllowed({ FIRMLAB_RESEARCH: '1' })).toBe(true);
-    expect(anchoreEnv({ FIRMLAB_RESEARCH: '1' }).GRYPE_DB_AUTO_UPDATE).toBe('true');
-    // Neither the agent nor the capture lane buys network for the SBOM lane.
-    expect(dbUpdateAllowed({ FIRMLAB_AGENT: '1', FIRMLAB_CAPTURE: '1' })).toBe(false);
+    // Any stated value other than 1 is off, as everywhere else.
+    for (const v of ['0', 'true', 'yes', '']) {
+      expect(dbUpdateAllowed({ FIRMLAB_RESEARCH: v })).toBe(false);
+      expect(anchoreEnv({ FIRMLAB_RESEARCH: v }).GRYPE_DB_AUTO_UPDATE).toBe('false');
+    }
+    // Neither the agent nor the capture lane buys network for the SBOM lane, nor overrides a stated research off.
+    expect(dbUpdateAllowed({ FIRMLAB_RESEARCH: '0', FIRMLAB_AGENT: '1', FIRMLAB_CAPTURE: '1' })).toBe(false);
+  });
+
+  it('agrees with loadResearchConfig on every environment, so the two lanes cannot disagree about one switch', () => {
+    for (const e of [{}, { FIRMLAB_RESEARCH: '1' }, { FIRMLAB_RESEARCH: '0' }, { FIRMLAB_RESEARCH: 'on' }]) {
+      expect(dbUpdateAllowed(e)).toBe(loadResearchConfig(e) !== null);
+    }
+  });
+
+  it('honours a stored Settings override over the environment, in both directions', () => {
+    try {
+      setFlagOverrideProvider(() => ({ FIRMLAB_RESEARCH: '0' }));
+      expect(dbUpdateAllowed(effectiveEnv({ FIRMLAB_RESEARCH: '1' }))).toBe(false);
+      expect(dbUpdateAllowed()).toBe(false);
+      setFlagOverrideProvider(() => ({ FIRMLAB_RESEARCH: '1' }));
+      expect(dbUpdateAllowed(effectiveEnv({ FIRMLAB_RESEARCH: '0' }))).toBe(true);
+    } finally {
+      setFlagOverrideProvider(() => ({}));
+    }
+  });
+
+  it('reports whether the permission was a default or a statement', () => {
+    expect(researchLane({}).byDefault).toBe(true);
+    expect(researchLane({ FIRMLAB_RESEARCH: '1' }).byDefault).toBe(false);
   });
 });
 
@@ -146,7 +182,7 @@ describe('decideGrype', () => {
     expect(d.note).toContain('cannot appear below');
   });
 
-  it('refuses instead of downloading when there is no database and no opt-in', () => {
+  it('refuses instead of downloading when there is no database and the research lane was switched off', () => {
     const d = decideGrype(absent, { updateAllowed: false, dbDir: DB_DIR, now: NOW });
     expect(d.run).toBe(false);
     if (d.run) throw new Error('unreachable');
@@ -154,6 +190,8 @@ describe('decideGrype', () => {
     expect(d.reason).toContain(DB_DIR);
     expect(d.reason).toContain('grype db update');
     expect(d.reason).toContain('FIRMLAB_RESEARCH=1');
+    // Refusal is only reachable with research stated off, and it says that rather than implying an opt-in.
+    expect(d.reason).toContain('on by default and has been switched off');
     expect(d.reason).toContain('database does not exist');
     // And it refuses to be read as a clean bill of health.
     expect(d.reason).toContain('says nothing about vulnerabilities');
@@ -167,6 +205,15 @@ describe('decideGrype', () => {
     expect(d.note).toContain('FIRMLAB_RESEARCH=1');
     // One-way: the ledger's distinction between "we send names" and "we download a catalogue".
     expect(d.note).toContain('Nothing about this firmware is sent');
+  });
+
+  it('says when the download rides on the default rather than a choice, and names the way out', () => {
+    const d = decideGrype(absent, { updateAllowed: true, updateByDefault: true, dbDir: DB_DIR, now: NOW });
+    expect(d.run).toBe(true);
+    if (!d.run) throw new Error('unreachable');
+    expect(d.note).toContain('ON by default');
+    expect(d.note).toContain('FIRMLAB_RESEARCH=0');
+    expect(d.note).not.toContain('(FIRMLAB_RESEARCH=1)');
   });
 
   it('does not treat a present database as stale-blocked, whatever the opt-in says', () => {

@@ -17,7 +17,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { api } from '../api';
+import { type LaneFlag, api } from '../api';
 import { setLocale } from '../i18n';
 import { mockedApi } from '../test-api-mock';
 import { Settings } from './Settings';
@@ -451,5 +451,61 @@ describe('Settings — execution restrictions', () => {
     expect(
       screen.getByText(/Network and resource restrictions alone do not waive operator approval/),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * The two inerts a double opt-in can be in. Since research became default-on (2026-10-04), a hash lookup armed
+ * beside an UNSTATED research lane is held rather than live — a default is not the second consent — and the row has
+ * to say which consent is missing and offer to record it, not repeat the parent-off sentence about a lane that the
+ * switch right above it shows as on.
+ */
+describe('Settings — a held double opt-in names the missing consent', () => {
+  const lane = (o: Partial<LaneFlag> & Pick<LaneFlag, 'name'>): LaneFlag => ({
+    label: o.name,
+    effect: 'effect',
+    egress: 'egress',
+    outward: true,
+    enabled: true,
+    source: 'default',
+    environmentValue: true,
+    inert: false,
+    ...o,
+  });
+
+  it('says HELD beside a default-on parent, and states the parent on when asked', async () => {
+    const research = lane({ name: 'FIRMLAB_RESEARCH', label: 'External intelligence' });
+    const hash = lane({
+      name: 'FIRMLAB_HASH_LOOKUP',
+      label: 'Online password-hash lookup',
+      requires: 'FIRMLAB_RESEARCH',
+      source: 'override',
+      environmentValue: false,
+      inert: true,
+      inertReason: 'parent_default',
+    });
+    mockApi.flags.mockResolvedValue({ flags: [research, hash], appliesImmediately: true });
+    mockApi.setFlag.mockResolvedValue([
+      { ...research, source: 'override' },
+      { ...hash, inert: false },
+    ]);
+    renderSettings();
+    openTab('Privacy');
+    expect(await screen.findByText(/is on only by default/)).toBeInTheDocument();
+    expect(screen.queryByText(/is off, and this only acts inside that lane/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Switch it on explicitly' }));
+    await waitFor(() => expect(mockApi.setFlag).toHaveBeenCalledWith('FIRMLAB_RESEARCH', true, 'en'));
+    await waitFor(() => expect(screen.queryByText(/is on only by default/)).not.toBeInTheDocument());
+  });
+
+  it('keeps the parent-off sentence, with no confirm button, when the parent is off — or the API predates the reason', async () => {
+    const research = lane({ name: 'FIRMLAB_RESEARCH', enabled: false, source: 'environment', environmentValue: false });
+    // No `inertReason`: an API older than the field. It must read as the plain parent-off case, never as held.
+    const hash = lane({ name: 'FIRMLAB_HASH_LOOKUP', requires: 'FIRMLAB_RESEARCH', inert: true });
+    mockApi.flags.mockResolvedValue({ flags: [research, hash], appliesImmediately: true });
+    renderSettings();
+    openTab('Privacy');
+    expect(await screen.findByText(/is off, and this only acts inside that lane/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Switch it on explicitly' })).not.toBeInTheDocument();
   });
 });

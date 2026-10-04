@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { ResearchConfig } from '../research/config.js';
 import {
   CRACKSTATION_URL,
+  HASH_LOOKUP_DISABLED,
+  HASH_LOOKUP_HELD,
   classifyHash,
   maskSecret,
   normalizeHashLookup,
@@ -121,6 +123,17 @@ describe('runHashLookup — gating and no-network paths', () => {
     expect(r.enabled).toBe(false);
     expect(r.attempted).toBe(0);
     expect(r.entries).toHaveLength(0);
+    expect(r.reason).toBe(HASH_LOOKUP_DISABLED);
+  });
+
+  it('says HELD, naming the missing research consent, when the hash flag is set beside a default-on track', async () => {
+    // The operator did set FIRMLAB_HASH_LOOKUP=1. Telling them to set it would point at a mistake they did not make.
+    const held: ResearchConfig = { ...cfg(false), hashLookupHeld: true };
+    const r = await runHashLookup([{ account: 'root', hash: md5('admin'), source: '/etc/shadow' }], held);
+    expect([r.enabled, r.attempted, r.entries.length]).toEqual([false, 0, 0]);
+    expect(r.reason).toBe(HASH_LOOKUP_HELD);
+    expect(r.reason).toContain('FIRMLAB_RESEARCH=1');
+    expect(r.reason).toContain('only by default');
   });
 
   it('classifies without querying when there are only salted/locked/empty hashes (attempted=0, no fetch)', async () => {

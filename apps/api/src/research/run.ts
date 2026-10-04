@@ -1,8 +1,9 @@
 /**
  * The external-intelligence run (Phase 5) — orchestrates the deterministic providers and the optional synthesis:
  * provenance fingerprint (local) → egress ledger (what will leave) → OSV correlation (allowlisted, names+versions
- * only) → cited intelligence brief (if the LLM layer is on). Refuses to run unless FIRMLAB_RESEARCH is set, so the
- * default posture stays local-only.
+ * only) → cited intelligence brief (if the LLM layer is on). Refuses to run when the research lane is off. The lane
+ * is on by default (operator decision, 2026-10-04 — see `research/config.ts`), so "off" means someone stated
+ * `FIRMLAB_RESEARCH=0` or switched it off in Settings; being on authorises a run, it never starts one.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -377,9 +378,10 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
     }`,
   );
 
-  // Source #5 — online password-hash lookup (opt-in on top of the track, FIRMLAB_HASH_LOOKUP). Sends only unsalted
-  // digests to public reverse-hash DBs, verifies any recovery locally, and never cracks. A verified recovery is a
-  // durable, critical finding; misses/salted-skips are reported but are not findings.
+  // Source #5 — online password-hash lookup (a second opt-in, FIRMLAB_HASH_LOOKUP, armed only beside a STATED
+  // FIRMLAB_RESEARCH=1 — the research default is not consent to send hashes). Sends only unsalted digests to public
+  // reverse-hash DBs, verifies any recovery locally, and never cracks. A verified recovery is a durable, critical
+  // finding; misses/salted-skips are reported but are not findings.
   if (cfg.hashLookup && hashCandidates.length > 0) {
     handle.log(`Hash lookup: ${unsaltedCount} unsalted hash(es) → nitrxgen/weakpass (salted hashes are not sent).`);
   }
@@ -389,6 +391,9 @@ export async function runResearch(imageId: string, handle: JobHandle): Promise<R
   // confirmed — turning the flag off would erase durable evidence rather than just stop producing new evidence.
   if (hashLookup.enabled) {
     syncFindings(imageId, 'hashlookup', normalizeHashLookup(hashLookup));
+    handle.log(hashLookup.reason);
+  } else if (cfg.hashLookupHeld) {
+    // The operator armed the hash flag; say in the log, not only in the result, which consent is still missing.
     handle.log(hashLookup.reason);
   }
 

@@ -318,9 +318,14 @@ export const imageDetail = {
   research: {
     offTitle: 'External intelligence',
     offBadge: 'off',
-    offBodyBefore: 'The only feature that leaves this machine. Enable with ',
+    /**
+     * Only reached when someone switched the lane off: it is on by default (2026-10-04), so this panel must not
+     * read as an opt-in nobody made yet. The env var renders between the two halves.
+     */
+    offBodyBefore:
+      'Switched off on this deployment — it is on by default. Turn it back on in Settings › Privacy, or with ',
     offBodyAfter:
-      ' to correlate the SBOM against public advisories (OSV) and draft responsible-disclosure notes. Off by default — FirmLab stays local-only.',
+      ', to correlate the SBOM against public advisories (OSV, NVD, CISA KEV) and draft responsible-disclosure notes. Only component names and versions leave this machine, never firmware bytes.',
 
     title: 'External intelligence',
     sourceBadge: 'public sources',

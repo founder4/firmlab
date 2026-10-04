@@ -75,10 +75,38 @@ describe('loadResearchConfig — the research gate', () => {
     ).toBeNull();
   });
 
-  it('arms hash lookup on top of the default-on track only when FIRMLAB_HASH_LOOKUP itself is stated', () => {
-    // The research default is not an authorisation to send hashes: the second opt-in is still the only way in.
-    expect(loadResearchConfig({ FIRMLAB_HASH_LOOKUP: '1' } as unknown as NodeJS.ProcessEnv)?.hashLookup).toBe(true);
-    expect(loadResearchConfig({ FIRMLAB_HASH_LOOKUP: '0' } as unknown as NodeJS.ProcessEnv)?.hashLookup).toBe(false);
+  it('holds hash lookup beside a DEFAULT-on track: the default is not the first consent', () => {
+    // Before the default flipped, this environment was inert (research unset = off). It must stay inert: the track
+    // runs, but no hash leaves and the lookup hosts stay off the allowlist until FIRMLAB_RESEARCH is stated.
+    const held = loadResearchConfig({ FIRMLAB_HASH_LOOKUP: '1' } as unknown as NodeJS.ProcessEnv);
+    expect(held).not.toBeNull();
+    expect(held?.hashLookup).toBe(false);
+    expect(held?.hashLookupHeld).toBe(true);
+    expect(held?.allowlist).not.toContain('www.nitrxgen.net');
+    expect(held?.allowlist).not.toContain('weakpass.com');
+    // Not held when the hash flag itself is unstated or off: there is nothing waiting for a second consent.
+    expect(
+      loadResearchConfig({ FIRMLAB_HASH_LOOKUP: '0' } as unknown as NodeJS.ProcessEnv)?.hashLookupHeld,
+    ).toBeUndefined();
+    expect(loadResearchConfig({} as unknown as NodeJS.ProcessEnv)?.hashLookupHeld).toBeUndefined();
+    // Stated research arms it, and the held marker goes.
+    const armed = loadResearchConfig({
+      FIRMLAB_HASH_LOOKUP: '1',
+      FIRMLAB_RESEARCH: '1',
+    } as unknown as NodeJS.ProcessEnv);
+    expect([armed?.hashLookup, armed?.hashLookupHeld]).toEqual([true, undefined]);
+  });
+
+  it('reads the second consent through the Settings override exactly as through the environment', () => {
+    // Settings › Privacy stores `1` for research: that IS a statement, even though it equals the default value.
+    setFlagOverrideProvider(() => ({ FIRMLAB_RESEARCH: '1' }));
+    try {
+      expect(loadResearchConfig(effectiveEnv({ FIRMLAB_HASH_LOOKUP: '1' } as NodeJS.ProcessEnv))?.hashLookup).toBe(
+        true,
+      );
+    } finally {
+      setFlagOverrideProvider(() => ({}));
+    }
   });
 
   it('merges extra allowlist hosts without duplicating', () => {

@@ -4,17 +4,19 @@
  * returns a clear `available:false` result rather than throwing, and with grype absent it still returns the
  * package inventory (grypeAvailable:false). Nothing here fails the static workbench — it only enriches it.
  *
- * **This lane makes no network request.** It used to: grype's own defaults downloaded a multi-gigabyte
+ * **This lane makes no network request of its own.** It used to: grype's own defaults downloaded a multi-gigabyte
  * vulnerability database on first run with every FirmLab flag off. Both tools now run under `anchoreEnv()`, and
- * grype runs only against a database that is already on disk unless the research lane is explicitly on —
- * `providers/sbom-db.ts` holds the policy, the measurement that produced it and the refusal text.
+ * grype runs only against a database that is already on disk unless the research lane is on — which, since
+ * 2026-10-04, it is unless a value is stated, so a missing database is then downloaded under that lane's authority
+ * and the job log says so first. `providers/sbom-db.ts` holds the policy, the measurement that produced it and the
+ * refusal text.
  */
 import { promisify } from 'node:util';
 
 import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
-import { anchoreEnv, dbAgeDays, dbUpdateAllowed, decideGrype, grypeDbDir, readGrypeDbStatus } from './sbom-db.js';
+import { anchoreEnv, dbAgeDays, decideGrype, grypeDbDir, readGrypeDbStatus, researchLane } from './sbom-db.js';
 import type { VendorVexSearchSummary } from './vendor-vex-coverage.js';
 
 const execFileAsync = promisify(execFile);
@@ -331,7 +333,12 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
   } else {
     const dbDir = grypeDbDir();
     const status = await readGrypeDbStatus(env);
-    const decision = decideGrype(status, { updateAllowed: dbUpdateAllowed(), dbDir });
+    const research = researchLane();
+    const decision = decideGrype(status, {
+      updateAllowed: research.enabled,
+      updateByDefault: research.byDefault,
+      dbDir,
+    });
     if (!decision.run) {
       grypeOutcome = 'db_absent';
       grypeReason = decision.reason;

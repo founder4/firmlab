@@ -271,11 +271,14 @@ function LaneToggle({
   busy,
   onToggle,
   onClear,
+  onConfirmParent,
 }: {
   flag: LaneFlag;
   busy: boolean;
   onToggle: (enabled: boolean) => void;
   onClear: () => void;
+  /** State the parent lane on — the second consent a double opt-in waits for when the parent is only defaulted on. */
+  onConfirmParent: () => void;
 }): JSX.Element {
   const t = useMessages();
   const on = flag.enabled;
@@ -360,12 +363,38 @@ function LaneToggle({
           {flag.egress}
         </div>
 
-        {flag.inert && (
+        {flag.inert && flag.inertReason === 'parent_default' ? (
+          // Held, not off: the parent is on by default and a default is not consent. The button states it — it
+          // changes no effective value of the parent, it records the choice the child is waiting for.
           <div className="hint" style={{ marginTop: 6, color: 'var(--warn)' }}>
-            {t.settings.lanes.inertLead}
+            {t.settings.lanes.heldLead}
             <span className="mono">{flag.requires}</span>
-            {t.settings.lanes.inertTail}
+            {t.settings.lanes.heldTail}{' '}
+            <button
+              type="button"
+              onClick={onConfirmParent}
+              disabled={busy}
+              style={{
+                fontSize: 11,
+                padding: '1px 7px',
+                borderRadius: 999,
+                border: '1px solid var(--border-soft)',
+                background: 'transparent',
+                color: 'var(--text)',
+                cursor: 'pointer',
+              }}
+            >
+              {t.settings.lanes.confirmParent}
+            </button>
           </div>
+        ) : (
+          flag.inert && (
+            <div className="hint" style={{ marginTop: 6, color: 'var(--warn)' }}>
+              {t.settings.lanes.inertLead}
+              <span className="mono">{flag.requires}</span>
+              {t.settings.lanes.inertTail}
+            </div>
+          )
         )}
       </div>
     </div>
@@ -595,6 +624,10 @@ export function Settings(): JSX.Element {
                 busy={busyFlag === f.name}
                 onToggle={(enabled) => applyFlag(f.name, () => api.setFlag(f.name, enabled, locale))}
                 onClear={() => applyFlag(f.name, () => api.clearFlag(f.name, locale))}
+                onConfirmParent={() => {
+                  const parent = f.requires;
+                  if (parent) applyFlag(parent, () => api.setFlag(parent, true, locale));
+                }}
               />
             ))}
           </div>

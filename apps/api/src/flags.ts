@@ -86,7 +86,7 @@ export const TOGGLEABLE_FLAGS: readonly ToggleableFlag[] = [
   { name: 'FIRMLAB_RESEARCH', outward: true, defaultOn: true },
   // Stays an opt-in even though its parent is now on by default: it sends password hashes recovered from the
   // firmware to a third party, which is a different disclosure from a component name and was never authorised by
-  // the research decision.
+  // the research decision. And it needs its parent STATED on, not merely defaulted on — see `decideDependent`.
   { name: 'FIRMLAB_HASH_LOOKUP', requires: 'FIRMLAB_RESEARCH', outward: true },
   // Stays an opt-in: acquiring bytes off the wire is active network access, not a query about bytes already held.
   { name: 'FIRMLAB_CAPTURE', outward: true },
@@ -184,6 +184,41 @@ export function decideFlag(name: LaneFlagName, env: NodeJS.ProcessEnv): FlagDeci
   return { enabled: raw === '1', stated: true, statedValue: raw, byDefault: false };
 }
 
+/**
+ * Why a switched-on dependent flag does nothing. `parent_off`: the lane it acts inside is off. `parent_default`:
+ * that lane is on only because nobody said otherwise, and a double opt-in needs two consents, not one consent and
+ * a default.
+ */
+export type InertReason = 'parent_off' | 'parent_default';
+
+/**
+ * Pure: is a flag that `requires` another actually in force against a merged environment?
+ *
+ * A double opt-in is two consents. When `FIRMLAB_RESEARCH` became default-on (2026-10-04), the naive reading —
+ * child on AND parent enabled — would have turned a `FIRMLAB_HASH_LOOKUP=1` that had sat INERT for months (its
+ * parent unset, so off) into a live hash egress on the next deploy, with nobody having decided anything that day.
+ * A deployment that armed the child and left the parent unstated had, under the old contract, consented to
+ * nothing being sent; the new default must not reinterpret that silence as the second consent. So the parent has
+ * to be stated `1` — in the environment or by a Settings override — and a default-on parent leaves the child held,
+ * reported as `parent_default` rather than collapsed into "off".
+ *
+ * For a flag with no `requires` this is just `decideFlag(...).enabled`. It is general rather than special-cased to
+ * hash lookup because the rule is about consent, not about one lane: a future dependent of any default-on parent
+ * inherits it.
+ */
+export function decideDependent(
+  name: LaneFlagName,
+  env: NodeJS.ProcessEnv,
+): { armed: boolean; held: InertReason | null } {
+  if (!decideFlag(name, env).enabled) return { armed: false, held: null };
+  const parentName = TOGGLEABLE_FLAGS.find((f) => f.name === name)?.requires;
+  if (!parentName) return { armed: true, held: null };
+  const parent = decideFlag(parentName, env);
+  if (!parent.enabled) return { armed: false, held: 'parent_off' };
+  if (parent.byDefault) return { armed: false, held: 'parent_default' };
+  return { armed: true, held: null };
+}
+
 /** Where a flag's effective value came from — an operator who set it in compose and sees it off deserves to know. */
 export type FlagSource = 'override' | 'environment' | 'default';
 
@@ -199,8 +234,10 @@ export interface FlagState {
   source: FlagSource;
   /** What the container's environment says, independent of any override. */
   environmentValue: boolean;
-  /** True when this flag is on but the flag it depends on is not — on paper, inert in practice. */
+  /** True when this flag is on but does nothing — its parent lane is off, or on only by default. */
   inert: boolean;
+  /** Present exactly when `inert` is: which of the two it is. Optional, because older readers never sent it. */
+  inertReason?: InertReason;
 }
 
 /**
@@ -228,17 +265,21 @@ export function resolveFlags(
     const raw = overrides[name] ?? env[name];
     return raw === undefined ? defaultOnOf(name) : raw === '1';
   };
+  // The same merge `effectiveEnv` performs, so `inert` here and the arming in the lane loaders are one decision.
+  const merged: NodeJS.ProcessEnv = { ...env, ...overrides };
   return TOGGLEABLE_FLAGS.map((f) => {
     const overridden = Object.hasOwn(overrides, f.name);
     const environmentValue = env[f.name] === undefined ? defaultOnOf(f.name) : env[f.name] === '1';
     const enabled = on(f.name);
+    const { held } = decideDependent(f.name, merged);
     return {
       ...f,
       ...text[f.name],
       enabled,
       source: overridden ? 'override' : env[f.name] !== undefined ? 'environment' : 'default',
       environmentValue,
-      inert: enabled && !!f.requires && !on(f.requires),
+      inert: held !== null,
+      ...(held !== null ? { inertReason: held } : {}),
     };
   });
 }

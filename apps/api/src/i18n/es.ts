@@ -456,8 +456,10 @@ export const es: Messages = {
           : p.stale
             ? `Base de vulnerabilidades compilada el ${p.built} — ${p.ageDays} días de antigüedad. Correlaciona, pero un CVE publicado desde entonces no puede aparecer: un resultado vacío es tan actual como esta fecha.`
             : `Base de vulnerabilidades compilada el ${p.built} (${p.ageDays} día(s) de antigüedad), esquema ${p.schema ?? '?'}. La correlación de CVE se ejecuta sin red contra ella.`,
-      grypeAbsent: (p: { dbDir: string; error: string | null }) =>
-        `Instalada, pero sin base de vulnerabilidades en ${p.dbDir}${p.error ? ` (grype: ${p.error})` : ''}, así que la correlación de CVE se RECHAZARÁ en vez de intentarse — el inventario de paquetes sigue funcionando. El carril SBOM no descarga ninguna por su cuenta: aprovisiónala con \`GRYPE_DB_CACHE_DIR=${p.dbDir} grype db update\`, o enciende el carril de investigación para que un job la descargue.`,
+      grypeAbsent: (p: { dbDir: string; error: string | null; updateAllowed: boolean }) =>
+        p.updateAllowed
+          ? `Instalada, pero sin base de vulnerabilidades en ${p.dbDir}${p.error ? ` (grype: ${p.error})` : ''}. El carril de investigación está encendido, así que el próximo job de SBOM descargará una desde grype.anchore.io (varios GB; no se envía nada del firmware) antes de correlacionar; hasta entonces no hay ninguna disponible. Para evitar la descarga, aprovisiónala con \`GRYPE_DB_CACHE_DIR=${p.dbDir} grype db update\`, o apaga el carril de investigación.`
+          : `Instalada, pero sin base de vulnerabilidades en ${p.dbDir}${p.error ? ` (grype: ${p.error})` : ''}, así que la correlación de CVE se RECHAZARÁ en vez de intentarse — el inventario de paquetes sigue funcionando. El carril de investigación, encendido por omisión, se ha apagado aquí, y sin él el carril SBOM no descarga nada: aprovisiona una base con \`GRYPE_DB_CACHE_DIR=${p.dbDir} grype db update\`, o vuelve a encender el carril de investigación para que un job la descargue.`,
     },
     unlocks: {
       binwalk: 'Extracción por firmas con reconocimiento de formato',

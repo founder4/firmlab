@@ -485,6 +485,26 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   sin riesgo por haber nacido con su par, afirmaría justo lo que nadie registró. Se renderiza igual en API, MCP,
   informe, divulgación y panel, y la procedencia del alta y de la enmienda no se toca.)*
 
+- [x] Research por omisión (`080ef0d`) dejó dos lanes leyendo «sin declarar» de forma distinta. *(Hecho en el
+  `fix(research)` siguiente a `080ef0d`.)* (1) `dbUpdateAllowed` (`providers/sbom-db.ts`) exigía un `'1'` literal:
+  Ajustes y la ejecución de research decían ON mientras grype rehusaba pidiendo encender un carril ya encendido.
+  Ahora decide con el mismo `decideFlag` que `loadResearchConfig` (override › entorno › catálogo), y la nota del job
+  distingue «ON por omisión» de «ON declarado». Consecuencia aceptada y escrita: sin base aprovisionada y sin nada
+  declarado, el primer job de SBOM **descarga** la base; la evitan una base aprovisionada o `FIRMLAB_RESEARCH=0`.
+  (2) Un `FIRMLAB_HASH_LOOKUP=1` junto a research sin declarar estaba inerte antes del cambio y se habría vuelto
+  egress de hashes en el siguiente despliegue sin que nadie decidiera nada. Decisión: un doble opt-in son dos
+  consentimientos **declarados**; el valor por omisión no es ninguno. `decideDependent` (`flags.ts`) lo arma sólo
+  con el padre declarado `1` y, si no, lo reporta `inertReason: 'parent_default'`; Ajustes lo muestra «en espera» con
+  un botón que guarda ese `1`, y el job de research escribe en el log qué consentimiento falta. El homelab tiene
+  research declarado en el compose, así que su hash lookup sigue armado.
+- [ ] Seguimientos del punto anterior, no hechos en ese cambio: (a) `GET /research/status` no expone el estado *en
+  espera* del hash lookup, así que el panel de research de una imagen sólo lo dice después de una ejecución (vía el
+  `reason` del bloque de hashes); exponer `hashLookupHeld` en el status y mostrarlo antes de lanzar. (b) Validar
+  en contenedor la rama «research por omisión + sin base de grype» (descarga real y nota del log) — no se hizo
+  porque el cambio no incluía despliegue. (c) El botón «Encenderlo explícitamente» guarda un override `1`, que
+  desde entonces gana a un `FIRMLAB_RESEARCH=0` posterior en el compose; es la precedencia de siempre, pero
+  conviene que la fila de research diga que su `1` guardado es el consentimiento del que depende el hash lookup.
+
 ## Ideas evaluadas, no programadas (de la revisión de wairz)
 
 - [ ] Puente UART host↔dispositivo físico: el único ítem ISTG-INT que no es trabajo de laboratorio puro, porque

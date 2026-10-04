@@ -19,7 +19,7 @@
 import type { FastifyInstance } from 'fastify';
 import { type Locale, messages, resolveLocale } from '../i18n/index.js';
 import { capabilityPlans } from '../opacidad-plan.js';
-import { anchoreEnv, grypeDatasetFact, grypeDbDir, readGrypeDbStatus } from '../providers/sbom-db.js';
+import { anchoreEnv, dbUpdateAllowed, grypeDatasetFact, grypeDbDir, readGrypeDbStatus } from '../providers/sbom-db.js';
 import { type ToolDataset, type ToolStatus, detectTools } from '../tools.js';
 
 /**
@@ -44,7 +44,11 @@ async function grypeDataset(locale: Locale): Promise<ToolDataset> {
           schema: fact.schemaVersion,
         }),
       }
-    : { ready: false, detail: text.grypeAbsent({ dbDir: fact.dbDir, error: fact.error }) };
+    : // `ready` stays the disk fact either way; the research lane only decides which future the sentence names.
+      {
+        ready: false,
+        detail: text.grypeAbsent({ dbDir: fact.dbDir, error: fact.error, updateAllowed: dbUpdateAllowed() }),
+      };
 }
 
 export async function toolRoutes(app: FastifyInstance): Promise<void> {

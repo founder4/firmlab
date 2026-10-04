@@ -24,8 +24,10 @@ every image you feed it.
 > **Status:** active, solo-built engineering project — Phases 0–6 shipped, more on the [roadmap](#-project-status--roadmap).
 > ~130k lines of TypeScript/TSX, 3,100+ tests, validated against real tools in-container and a locked **validation
 > corpus** of public/official firmware samples (`ops/corpus/validation-samples.lock.json`).
-> **Local-only by design:** the API binds to loopback and is never meant to face the internet, and firmware bytes
-> never leave the machine. Outbound queries to allowlisted advisory sources (OSV, NVD, CISA KEV) are on by default.
+> **Local-only by design:** never meant to face the internet. Run from source the API binds to loopback, and the
+> repo's compose publishes it on `127.0.0.1` only; the author's homelab deployment publishes no host port and is
+> reached solely through an auth-gated reverse proxy on the LAN. Firmware bytes never leave the machine; outbound
+> queries to allowlisted advisory sources (OSV, NVD, CISA KEV) are on by default.
 
 <p align="center">
   <img src=".github/assets/overview.png" width="100%" alt="FirmLab dossier — inferred identity, runtime-coverage, and a findings ledger where every finding carries an explicit proof-state">
@@ -80,7 +82,7 @@ on.
 | **Emulation as a ranked ladder** | A planner turns identity + rootfs into arch-aware, runnable recipes; the runner only claims what it reproduced. |
 | **Autonomy with a skeleton** | The optional agent *chooses branches* on a fixed deterministic orchestrator, bounded by a governor (steps/tokens/USD/wall-time) and a human-approval gate. |
 | **Stateful — it learns** | A persistent **cross-image corpus** links shared artifacts, reused credentials and common components across firmware, and promotes repeat offenders to a watchlist. |
-| **Local-only DNA** | The workbench is reachable from loopback only and never sends firmware bytes anywhere. The one outbound lane on by default is *research* — allowlisted advisory hosts, component names and versions only, an egress ledger stating exactly what leaves; it switches off with `FIRMLAB_RESEARCH=0`. Hash lookup and *capture* each stay behind their own opt-in. |
+| **Local-only DNA** | Never exposed to the internet — loopback as shipped (the repo compose publishes `127.0.0.1` only), or behind an auth-gated reverse proxy when deliberately deployed for a LAN — and it never sends firmware bytes anywhere. The one outbound lane on by default is *research* — allowlisted advisory hosts, component names and versions only, an egress ledger stating exactly what leaves; it switches off with `FIRMLAB_RESEARCH=0`. Hash lookup and *capture* each stay behind their own opt-in. |
 | **Agent-native surface** | Every provider is also reachable over **MCP** (`apps/api/src/mcp/server.ts`), so an external agent inherits the proof-state/coverage discipline instead of having to reconstruct it. |
 
 ## Architecture
@@ -265,7 +267,9 @@ kernel CNA, cross-references discovered CVEs against **CISA KEV**, fingerprints
 ledger** that states exactly what leaves the machine (names and versions — *never raw firmware bytes*). A
 published advisory for a present component is a *lead*, not a confirmed bug; reachability is decided per-image.
 Online password-hash lookup (`FIRMLAB_HASH_LOOKUP=1`) sends hashes recovered from the firmware to a third party and
-therefore stays a second, separate opt-in that the research default never implies.
+therefore stays a second, separate opt-in that the research default never implies — and never satisfies: it arms
+only beside an explicitly stated `FIRMLAB_RESEARCH=1` (environment or Settings), and is reported as *held*
+otherwise, so a hash-lookup flag that was inert before research became default-on stays inert.
 
 ## Capture — the on-the-wire lane (opt-in)
 
@@ -322,8 +326,8 @@ pnpm dev:web
 
 External intelligence is on by default (`FIRMLAB_RESEARCH=0` turns it off). The other optional layers are off
 unless you set their flag: `FIRMLAB_AGENT=1` (agent/copilot, needs an LLM key), `FIRMLAB_HASH_LOOKUP=1` (online
-password-hash lookup, on top of research) and `FIRMLAB_CAPTURE=1` (LAN/OTA/BLE/Zigbee capture — also needs
-`FIRMLAB_CAPTURE_AGENT_TOKEN` for the remote LAN agent). All of them also persist from **Settings → Privacy**, and a
+password-hash lookup; needs research stated on too, `FIRMLAB_RESEARCH=1`) and `FIRMLAB_CAPTURE=1`
+(LAN/OTA/BLE/Zigbee capture — also needs `FIRMLAB_CAPTURE_AGENT_TOKEN` for the remote LAN agent). All of them also persist from **Settings → Privacy**, and a
 stored setting beats the environment, so a flag's state need not match the compose file — `/api/settings/flags`
 reports which source decided each one. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the
 homelab rollout and how to tell which commit is running.
@@ -384,9 +388,11 @@ firmlab/
 
 FirmLab is a **defensive / research** tool. Analyze only firmware you own or are explicitly authorized to
 assess, and only capture traffic or devices you own or are explicitly authorized to intercept. It binds to
-loopback by design and is never meant to be exposed to the internet — don't change the publish binding. The
-zero-day and external-intelligence capabilities are opt-in, defensive-only (candidates and *drafted* disclosure
-reports — never auto-send, never auto-exploit), and gated behind explicit flags, same as capture.
+loopback by design and is never meant to be exposed to the internet — don't widen the repo compose's
+`127.0.0.1` publish binding, and if you serve it to a LAN, do it only behind an authenticating reverse proxy. The
+zero-day capabilities are opt-in; external intelligence is on by default but sends only component names and
+versions to allowlisted hosts. Both are defensive-only (candidates and *drafted* disclosure reports — never
+auto-send, never auto-exploit), and each sits behind its own flag, same as capture.
 
 ---
 
