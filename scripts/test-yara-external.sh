@@ -28,9 +28,13 @@ printf '%s%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-' 'ANTIVIRUS-TEST-FILE
 # A tiny text fixture for a public generic-webshell rule. It is never served or executed.
 printf '%s\n' "<?php system(\$_POST['a']); ?>" > "$tmp/webshell.inert.php"
 
-# An ELF-shaped but invalid, non-executable byte string carrying four published Mirai indicators. The leading
-# magic exercises the rule's type guard without creating a runnable ELF program.
-printf '\177ELF\n%s\n%s\n%s\n%s\n' 'SERVZUXO' '-loldongs' '/dev/null' '/bin/busybox' > "$tmp/mirai-shape.inert"
+# An ELF-shaped but invalid, non-executable byte string carrying four function names from the published Mirai source
+# (attack.c / resolv.c). The leading magic exercises the rule's type guard without creating a runnable ELF program.
+# It targets SIGNATURE_BASE_MAL_ARM_LNX_Mirai_Mar13_2022 because YARA Forge 20260927 dropped the previous control,
+# SIGNATURE_BASE_MAL_Mirai_Nov19_1; this rule's logic is identical in 20260816 and 20260927, so the control does not
+# depend on which of the two is deployed.
+printf '\177ELF\n%s\n%s\n%s\n%s\n' 'anti_gdb_entry' 'resolve_cnc_addr' 'attack_gre_eth' 'attack_udp_generic' \
+  > "$tmp/mirai-shape.inert"
 
 assert_match() {
   local rule="$1" file="$2" output
@@ -44,5 +48,5 @@ assert_match() {
 
 assert_match TRELLIX_ARC_Malw_Eicar "$tmp/eicar.inert"
 assert_match SEKOIA_Generic_Php_Webshell "$tmp/webshell.inert.php"
-assert_match SIGNATURE_BASE_MAL_Mirai_Nov19_1 "$tmp/mirai-shape.inert"
+assert_match SIGNATURE_BASE_MAL_ARM_LNX_Mirai_Mar13_2022 "$tmp/mirai-shape.inert"
 printf 'YARA external: 3 positivos inertes confirmados\n'

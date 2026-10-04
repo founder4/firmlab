@@ -3,10 +3,10 @@
 Este directorio define el corpus del **operador**; FirmLab sigue sin incorporar firmas en su imagen. El despliegue
 monta dos ficheros de solo lectura y los declara explícitamente en `FIRMLAB_YARA_RULES`:
 
-1. **YARA Forge Core 20260816** — 5.034 reglas comunitarias normalizadas, deduplicadas y filtradas por YARA Forge.
+1. **YARA Forge Core 20260927** — 5.110 reglas comunitarias normalizadas, deduplicadas y filtradas por YARA Forge.
 2. **FirmLab operator firmware policy 1.0.0** — 6 heurísticas defensivas para scripts de firmware Linux.
 
-Total fijado: **5.040 reglas en 2 ficheros**. El lock registra URL, versión, tamaños y SHA-256 tanto del ZIP como
+Total fijado: **5.116 reglas en 2 ficheros**. El lock registra URL, versión, tamaños y SHA-256 tanto del ZIP como
 del `.yar` extraído. `sync-yara-corpus.sh` no consulta `latest`, rechaza cualquier byte distinto y conserva el
 directorio anterior al actualizar.
 

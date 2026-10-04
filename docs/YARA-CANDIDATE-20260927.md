@@ -1,0 +1,144 @@
+# Evaluación YARA Forge Core 20260927
+
+- Corpus desplegado: `20260816` (5034 reglas)
+- Candidata: `20260927` (5110 reglas)
+- Archivo verificado: `sha256:16180800cc2f077638d2e13a33bd68609d0b6eedd1fbfdbae6d5d4a1c53f826f`
+- Reglas añadidas/eliminadas: 149 / 73
+- Rootfs A/B: 8
+- Matches actual/candidata: 0 / 0
+- Matches nuevos/perdidos: 0 / 0
+
+## Positivos inertes
+
+```text
+TRELLIX_ARC_Malw_Eicar	eicar.inert
+SEKOIA_Generic_Php_Webshell	webshell.inert.php
+SIGNATURE_BASE_MAL_ARM_LNX_Mirai_Mar13_2022	mirai-shape.inert
+YARA external: 3 positivos inertes confirmados
+```
+
+## Primeras reglas añadidas
+
+```text
+BLACKBERRY_Mal_Infostealer_MSI_EXE_Jupyter_Certificate
+BLACKBERRY_Mal_Infostealer_MSI_Jupyter_Embedded_Powershell
+CAPE_Defendnot
+CAPE_Worldwind
+COD3NYM_DOTNET_Singlefilehost_Bundled_App
+COD3NYM_SUSP_OBF_NET_Confuserex_Packer_Jan24
+COD3NYM_SUSP_OBF_NET_Reactor_Indicators_Jan24
+DITEKSHEN_INDICATOR_RMM_Atera
+DITEKSHEN_INDICATOR_RMM_Connectwise_Screenconnect
+DITEKSHEN_INDICATOR_RTF_Threadkit_Exploit_Builder_Document
+DITEKSHEN_INDICATOR_TOOL_Avbypass_Aviator
+DITEKSHEN_INDICATOR_TOOL_ENUM_Sharpshares
+DITEKSHEN_INDICATOR_TOOL_EXP_Eternalblue
+DITEKSHEN_INDICATOR_TOOL_LTM_Sharpexec
+DITEKSHEN_INDICATOR_TOOL_PWS_Mimikatz
+DITEKSHEN_MALWARE_Linux_Hiddenwasp
+DITEKSHEN_MALWARE_Osx_Genieo
+DITEKSHEN_MALWARE_Win_Actionrat
+DITEKSHEN_MALWARE_Win_Agnianestealer
+DITEKSHEN_MALWARE_Win_Arcrypt
+DITEKSHEN_MALWARE_Win_Arechclient2
+DITEKSHEN_MALWARE_Win_Arrowrat
+DITEKSHEN_MALWARE_Win_Babuk
+DITEKSHEN_MALWARE_Win_Blackcat
+DITEKSHEN_MALWARE_Win_Blackhunt
+DITEKSHEN_MALWARE_Win_Blitzgrabber
+DITEKSHEN_MALWARE_Win_Bluebot
+DITEKSHEN_MALWARE_Win_Bobik
+DITEKSHEN_MALWARE_Win_Browsergrabber
+DITEKSHEN_MALWARE_Win_Buterat
+DITEKSHEN_MALWARE_Win_Chebka
+DITEKSHEN_MALWARE_Win_Cicada3301
+DITEKSHEN_MALWARE_Win_Cratpluginkeylogger
+DITEKSHEN_MALWARE_Win_Cratpluginransomhansom
+DITEKSHEN_MALWARE_Win_Cratpluginscreencapture
+DITEKSHEN_MALWARE_Win_Darkeye
+DITEKSHEN_MALWARE_Win_Dlagent08
+DITEKSHEN_MALWARE_Win_Espioloader
+DITEKSHEN_MALWARE_Win_Flagpro
+DITEKSHEN_MALWARE_Win_Fpspy
+DITEKSHEN_MALWARE_Win_Garrantdecrypt
+DITEKSHEN_MALWARE_Win_Gelsevirine
+DITEKSHEN_MALWARE_Win_Hakunamatata_Builder
+DITEKSHEN_MALWARE_Win_Horuseyesrat
+DITEKSHEN_MALWARE_Win_Jesterstealer
+DITEKSHEN_MALWARE_Win_Karkoff
+DITEKSHEN_MALWARE_Win_Krakenstealer
+DITEKSHEN_MALWARE_Win_Ktlvdoor
+DITEKSHEN_MALWARE_Win_Lighthand
+DITEKSHEN_MALWARE_Win_Locked
+```
+
+## Primeras reglas eliminadas
+
+```text
+ARKBIRD_SOLG_TA505_Bin_21Nov_1
+ARKBIRD_SOLG_TA505_Bin_21Nov_2
+ARKBIRD_SOLG_TA505_Maldoc_21Nov_2
+CAPE_Agent_Tesla
+CAPE_Agenttesla
+CAPE_Agentteslav2
+CAPE_Agentteslav3
+CAPE_Agentteslav4
+CAPE_Agentteslav4Jit
+CAPE_Arkei
+CAPE_Atlas
+CAPE_Azer
+CAPE_Azorult
+CAPE_Badrabbit
+CAPE_Cerber
+CAPE_Codoso
+CAPE_Cryptoshield
+CAPE_Doppelpaymer
+CAPE_Dreambot
+CAPE_Dridexloader
+CAPE_Dridexv4
+CAPE_Fareit
+CAPE_Formbook
+CAPE_Gandcrab
+CAPE_Gootkit
+CAPE_Hancitor
+CAPE_Hermes
+CAPE_Jaff
+CAPE_Kovter
+CAPE_Kronos
+CAPE_Locky
+CAPE_Magniber
+CAPE_Megacortex
+CAPE_Mole
+CAPE_Nanolocker
+CAPE_Petrwrap
+CAPE_Petya
+CAPE_Qakbot4
+CAPE_Qakbot5
+CAPE_Ramnit
+CAPE_Rcsession
+CAPE_Rokrat
+CAPE_Ryuk
+CAPE_Scarab
+CAPE_Seduploader
+CAPE_Smokeloader
+CAPE_Tclient
+CAPE_Trickbot
+CAPE_Trickbot_Permadll_UEFI_Module
+CAPE_Tscookie
+```
+
+## Matches nuevos
+
+```text
+```
+
+## Matches perdidos
+
+```text
+```
+
+**Este informe no modifica `corpus.lock.json`, el compose ni el corpus desplegado.**
+
+## Decisión (2026-10-04)
+
+Promovida al lock. La única regla eliminada relevante para firmware Linux es `SIGNATURE_BASE_MAL_Mirai_Nov19_1`, que era el positivo inerte Mirai; el control pasa a `SIGNATURE_BASE_MAL_ARM_LNX_Mirai_Mar13_2022`, de lógica idéntica en 20260816 y 20260927, y la cobertura Mirai sigue con `MALPEDIA_Elf_Mirai_Auto` y `TRELLIX_ARC_Mirai_Casper_Variant`. Cero matches en ambos corpus sobre 8 rootfs no prueba ausencia de malware: solo que el cambio no altera lo que se ve en este corpus.
