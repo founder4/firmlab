@@ -20,6 +20,7 @@ import {
   decideGrype,
   grypeDatasetFact,
   grypeDbDir,
+  grypeScanEnv,
   parseGrypeDbStatus,
   researchLane,
 } from './sbom-db.js';
@@ -46,14 +47,17 @@ const absent: GrypeDbStatus = {
 };
 
 describe('anchoreEnv — the environment both anchore tools run under', () => {
-  it('turns off every network path grype and syft take on their own initiative', () => {
-    // With the research lane stated off — since 2026-10-04 an unstated one is on, and permits the refresh.
-    const env = anchoreEnv({ FIRMLAB_DATA_DIR: '/data', FIRMLAB_RESEARCH: '0' });
-    // The database download that was measured happening with every lane off.
-    expect(env.GRYPE_DB_AUTO_UPDATE).toBe('false');
-    // …and the release poll both binaries make on every single invocation.
-    expect(env.GRYPE_CHECK_FOR_APP_UPDATE).toBe('false');
-    expect(env.SYFT_CHECK_FOR_APP_UPDATE).toBe('false');
+  it('turns off every network path grype and syft take on their own initiative, whatever the research lane says', () => {
+    // Research stated off, stated on, and unstated (on by default since 2026-10-04): the base environment — the
+    // one syft, `grype db status` and the capability reading run under — is offline in all three.
+    for (const research of [{ FIRMLAB_RESEARCH: '0' }, { FIRMLAB_RESEARCH: '1' }, {}]) {
+      const env = anchoreEnv({ FIRMLAB_DATA_DIR: '/data', ...research });
+      // The database download that was measured happening with every lane off.
+      expect(env.GRYPE_DB_AUTO_UPDATE).toBe('false');
+      // …and the release poll both binaries make on every single invocation.
+      expect(env.GRYPE_CHECK_FOR_APP_UPDATE).toBe('false');
+      expect(env.SYFT_CHECK_FOR_APP_UPDATE).toBe('false');
+    }
   });
 
   it('does not let grype refuse a deliberately-pinned old database', () => {
@@ -80,14 +84,12 @@ describe('anchoreEnv — the environment both anchore tools run under', () => {
    * once research became default-on an unstated deployment had a research lane that was ON and an SBOM lane that
    * refused, telling the operator to turn on a lane that already was.
    */
-  it('permits the refresh exactly when the research lane is on — default included, stated 0 excluded', () => {
+  it('permits the download exactly when the research lane is on — default included, stated 0 excluded', () => {
     expect(dbUpdateAllowed({})).toBe(true);
-    expect(anchoreEnv({}).GRYPE_DB_AUTO_UPDATE).toBe('true');
     expect(dbUpdateAllowed({ FIRMLAB_RESEARCH: '1' })).toBe(true);
     // Any stated value other than 1 is off, as everywhere else.
     for (const v of ['0', 'true', 'yes', '']) {
       expect(dbUpdateAllowed({ FIRMLAB_RESEARCH: v })).toBe(false);
-      expect(anchoreEnv({ FIRMLAB_RESEARCH: v }).GRYPE_DB_AUTO_UPDATE).toBe('false');
     }
     // Neither the agent nor the capture lane buys network for the SBOM lane, nor overrides a stated research off.
     expect(dbUpdateAllowed({ FIRMLAB_RESEARCH: '0', FIRMLAB_AGENT: '1', FIRMLAB_CAPTURE: '1' })).toBe(false);
@@ -168,6 +170,7 @@ describe('decideGrype', () => {
     const d = decideGrype(present('2026-09-16T06:30:57Z'), { updateAllowed: false, dbDir: DB_DIR, now: NOW });
     expect(d.run).toBe(true);
     if (!d.run) throw new Error('unreachable');
+    expect(d.dbUpdate).toBe(false);
     expect(d.note).toContain('No network request is made');
     expect(d.note).toContain('2026-09-16T06:30:57Z');
     expect(d.note).toContain('v6.1.9');
@@ -201,6 +204,7 @@ describe('decideGrype', () => {
     const d = decideGrype(absent, { updateAllowed: true, dbDir: DB_DIR, now: NOW });
     expect(d.run).toBe(true);
     if (!d.run) throw new Error('unreachable');
+    expect(d.dbUpdate).toBe(true);
     expect(d.note).toContain(GRYPE_DB_UPDATE_URL);
     expect(d.note).toContain('FIRMLAB_RESEARCH=1');
     // One-way: the ledger's distinction between "we send names" and "we download a catalogue".
@@ -221,6 +225,62 @@ describe('decideGrype', () => {
     for (const updateAllowed of [false, true]) {
       const d = decideGrype(fresh, { updateAllowed, dbDir: DB_DIR, now: NOW });
       expect(d.run).toBe(true);
+    }
+  });
+
+  /**
+   * The research lane permits downloading an ABSENT database, nothing more. It used to put
+   * `GRYPE_DB_AUTO_UPDATE=true` on every anchore invocation whenever it was on, so a provisioned database was
+   * refreshed from the internet under a job log saying "No network request is made".
+   */
+  it('scans a present database offline with the research lane stated on or on by default — fresh or stale', () => {
+    const stale = new Date(NOW.getTime() - (STALE_DB_DAYS + 40) * 86_400_000).toISOString();
+    for (const db of [present('2026-09-15T00:00:00Z'), present(stale)]) {
+      for (const research of [{}, { FIRMLAB_RESEARCH: '1' }]) {
+        const lane = researchLane(research);
+        expect(lane.enabled).toBe(true);
+        const d = decideGrype(db, {
+          updateAllowed: lane.enabled,
+          updateByDefault: lane.byDefault,
+          dbDir: DB_DIR,
+          now: NOW,
+        });
+        if (!d.run) throw new Error('unreachable');
+        expect(d.dbUpdate).toBe(false);
+        expect(d.note).toContain('No network request is made');
+        expect(grypeScanEnv(anchoreEnv(research), d).GRYPE_DB_AUTO_UPDATE).toBe('false');
+      }
+    }
+  });
+
+  it('enables the fetch for the scan alone when the database is absent and the research lane is on', () => {
+    for (const research of [{}, { FIRMLAB_RESEARCH: '1' }]) {
+      const lane = researchLane(research);
+      const d = decideGrype(absent, {
+        updateAllowed: lane.enabled,
+        updateByDefault: lane.byDefault,
+        dbDir: DB_DIR,
+        now: NOW,
+      });
+      if (!d.run) throw new Error('unreachable');
+      const base = anchoreEnv(research);
+      // The scan may fetch…
+      expect(grypeScanEnv(base, d).GRYPE_DB_AUTO_UPDATE).toBe('true');
+      // …and the environment syft and the status probe run under does not.
+      expect(base.GRYPE_DB_AUTO_UPDATE).toBe('false');
+    }
+  });
+
+  it('refuses rather than fetching when the database is absent and the research lane is off — stored override too', () => {
+    for (const env of [{ FIRMLAB_RESEARCH: '0' }, { FIRMLAB_RESEARCH: 'yes' }]) {
+      expect(decideGrype(absent, { updateAllowed: dbUpdateAllowed(env), dbDir: DB_DIR, now: NOW }).run).toBe(false);
+    }
+    try {
+      setFlagOverrideProvider(() => ({ FIRMLAB_RESEARCH: '0' }));
+      const env = effectiveEnv({ FIRMLAB_RESEARCH: '1' });
+      expect(decideGrype(absent, { updateAllowed: dbUpdateAllowed(env), dbDir: DB_DIR, now: NOW }).run).toBe(false);
+    } finally {
+      setFlagOverrideProvider(() => ({}));
     }
   });
 });

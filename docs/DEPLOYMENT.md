@@ -243,6 +243,12 @@ exige research **declarado** es el hash lookup, no esta descarga. Es una descarg
 firmware, igual que el catálogo KEV—, y por eso no tiene flag propio: ese carril es el único que puede salir a
 internet.
 
+Research encendido autoriza descargar una base **ausente**, nada más. Con una base presente —fresca o vieja— el
+escaneo corre sin red aunque research esté encendido (por omisión o declarado): sólo el escaneo de grype, y sólo
+cuando no hay base, lleva `GRYPE_DB_AUTO_UPDATE=true`; `grype db status`, la tabla de capacidades y syft corren
+siempre sin red. Refrescar una base aprovisionada es reaprovisionarla con el comando de arriba, un acto del
+operador.
+
 Una base vieja **se usa**, no se rechaza (`GRYPE_DB_VALIDATE_AGE=false`: grype descarta por defecto cualquiera de
 más de cinco días), y su fecha de compilación viaja al resultado y a la tabla de la web. Cero CVE contra una base
 de hace ocho meses no es la misma afirmación que cero CVE contra la de hoy.

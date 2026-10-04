@@ -17,7 +17,10 @@
  *
  *  1. **No implicit egress.** Every syft/grype invocation carries `OFFLINE_ANCHORE_ENV` (in `tools.ts`, applied
  *     to the capability probes too), which turns off both the database auto-update and the self-update poll. That
- *     is the default, and it holds with every lane flag off.
+ *     holds with every lane flag off AND with the research lane on: `anchoreEnv` does not read the lane at all.
+ *     The single exception is the grype scan after `decideGrype` has found NO database and the lane permits a
+ *     fetch (`dbUpdate`, applied by `grypeScanEnv`). A present database — fresh or stale — is used as it is, never
+ *     refreshed behind the operator's back; refreshing it is re-provisioning, an operator act.
  *  2. **The database is provisioned, not acquired.** It never lives in `~/.cache`, where a fresh container layer
  *     silently loses it and grype silently re-downloads it. `grypeDbDir` reads `GRYPE_DB_CACHE_DIR` and falls back
  *     to `FIRMLAB_DATA_DIR/grype-db`, which is the two ways a deployment may supply one, and both are deliberate:
@@ -48,6 +51,9 @@
  *     The consequence is stated rather than glossed: on a deployment with no provisioned database and nothing
  *     stated, the first SBOM job now downloads one. Rule 1 still holds — that download is the research lane's,
  *     named in the job log before it happens, and `FIRMLAB_RESEARCH=0` (or a provisioned database) prevents it.
+ *     The lane permits only that: with a database present, the scan runs offline whatever the lane says (it once
+ *     carried `GRYPE_DB_AUTO_UPDATE=true` on every invocation whenever the lane was on, so a provisioned database
+ *     was refreshed from the internet under a job log saying "No network request is made").
  */
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -81,14 +87,17 @@ export function researchLane(env: NodeJS.ProcessEnv = effectiveEnv()): FlagDecis
   return decideFlag('FIRMLAB_RESEARCH', env);
 }
 
-/** Is the research lane on? It, and nothing else, permits a database download. */
+/** Is the research lane on? It, and nothing else, permits downloading an ABSENT database (see `decideGrype`). */
 export function dbUpdateAllowed(env: NodeJS.ProcessEnv = effectiveEnv()): boolean {
   return researchLane(env).enabled;
 }
 
 /**
- * The environment every syft/grype child process runs under: offline by default, pointed at the provisioned
- * database, and — only when the research lane is on — permitted to refresh it from the pinned URL.
+ * The environment every syft/grype child process runs under: offline, whatever the research lane says, and
+ * pointed at the provisioned database. The `db status` probe, the capability reading and syft all run under
+ * exactly this. The one invocation that may ever fetch is the grype scan, and only through `grypeScanEnv` once
+ * `decideGrype` has found no database — so the research lane being on never turns a present database into a
+ * refresh.
  */
 export function anchoreEnv(env: NodeJS.ProcessEnv = effectiveEnv()): NodeJS.ProcessEnv {
   return {
@@ -96,8 +105,16 @@ export function anchoreEnv(env: NodeJS.ProcessEnv = effectiveEnv()): NodeJS.Proc
     ...OFFLINE_ANCHORE_ENV,
     GRYPE_DB_CACHE_DIR: grypeDbDir(env),
     GRYPE_DB_UPDATE_URL,
-    ...(dbUpdateAllowed(env) ? { GRYPE_DB_AUTO_UPDATE: 'true' } : {}),
   };
+}
+
+/**
+ * The environment for the grype SCAN, given the decision that authorised it. Offline unless the decision says the
+ * database is absent and the research lane permits fetching it — the only case `dbUpdate` is true. A present
+ * database is used as it is, so the note that says "No network request is made" is true of the run it precedes.
+ */
+export function grypeScanEnv(base: NodeJS.ProcessEnv, decision: { dbUpdate: boolean }): NodeJS.ProcessEnv {
+  return decision.dbUpdate ? { ...base, GRYPE_DB_AUTO_UPDATE: 'true' } : { ...base, GRYPE_DB_AUTO_UPDATE: 'false' };
 }
 
 /** What `grype db status` reports about the database on disk. Every field optional: grype omits them when absent. */
@@ -148,8 +165,11 @@ export function dbAgeDays(built: string | null, now: Date = new Date()): number 
 }
 
 export type GrypeDecision =
-  /** Run grype. `note` is what the job log and the reader are told the matching was done against. */
-  | { run: true; note: string }
+  /**
+   * Run grype. `note` is what the job log and the reader are told the matching was done against. `dbUpdate` is
+   * whether the scan may fetch a database: true only when none is present and the research lane is on.
+   */
+  | { run: true; note: string; dbUpdate: boolean }
   /** Do not run grype, and do not download. `reason` names what is missing and both ways to supply it. */
   | { run: false; reason: string };
 
@@ -179,6 +199,9 @@ export function decideGrype(
     return {
       run: true,
       note: `Matching against the provisioned vulnerability database ${age}; schema ${db.schemaVersion ?? '?'}. No network request is made.`,
+      // Present means used as-is, research lane or not: refreshing a database the operator provisioned is not
+      // what the lane's "on" was ever asked to authorise, and the sentence above would then be false.
+      dbUpdate: false,
     };
   }
   if (opts.updateAllowed) {
@@ -192,6 +215,7 @@ export function decideGrype(
       note:
         `No vulnerability database at ${opts.dbDir}. ${why}, so grype is permitted to download one from ` +
         `${GRYPE_DB_UPDATE_URL} (several GB). Nothing about this firmware is sent.`,
+      dbUpdate: true,
     };
   }
   const why = db.error ? ` (grype: ${db.error})` : '';

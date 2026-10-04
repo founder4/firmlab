@@ -52,6 +52,33 @@ function withGrype(grype: (args: string[]) => string | Error): void {
   });
 }
 
+/**
+ * Wire syft, `grype db status` (answering `dbStatus`) and an empty grype scan, recording the environment each one
+ * was spawned with — the network policy lives in those variables, so that is what the assertions read.
+ */
+interface SpawnEnvs {
+  syft: NodeJS.ProcessEnv | undefined;
+  status: (NodeJS.ProcessEnv | undefined)[];
+  scan: NodeJS.ProcessEnv | undefined;
+}
+
+function recordEnvs(dbStatus: string): SpawnEnvs {
+  const envs: SpawnEnvs = { syft: undefined, status: [], scan: undefined };
+  child.mockImplementation((file: string, args: string[], opts: { env?: NodeJS.ProcessEnv }, cb: ExecFileCallback) => {
+    if (file === 'syft') {
+      envs.syft = opts.env;
+      return cb(null, { stdout: SYFT_OK, stderr: '' });
+    }
+    if (args[0] === 'db') {
+      envs.status.push(opts.env);
+      return cb(null, { stdout: dbStatus, stderr: '' });
+    }
+    envs.scan = opts.env;
+    return cb(null, { stdout: JSON.stringify({ matches: [] }), stderr: '' });
+  });
+  return envs;
+}
+
 beforeEach(() => {
   child.mockReset();
   toolAvailable.mockReset();
@@ -121,16 +148,7 @@ describe('the two outcomes that are the deployment, not the run', () => {
     toolAvailable.mockResolvedValue(true);
     const logged: string[] = [];
     const spy: JobHandle = { id: 'job', log: (line: string) => void logged.push(line) };
-    let scanEnv: NodeJS.ProcessEnv | undefined;
-    child.mockImplementation(
-      (file: string, args: string[], opts: { env?: NodeJS.ProcessEnv }, cb: ExecFileCallback) => {
-        if (file === 'syft') return cb(null, { stdout: SYFT_OK, stderr: '' });
-        if (args[0] === 'db')
-          return cb(null, { stdout: JSON.stringify({ valid: false, error: 'no database' }), stderr: '' });
-        scanEnv = opts.env;
-        return cb(null, { stdout: JSON.stringify({ matches: [] }), stderr: '' });
-      },
-    );
+    const envs = recordEnvs(JSON.stringify({ valid: false, error: 'no database' }));
 
     try {
       const { runSbom } = await import('./sbom.js');
@@ -138,8 +156,43 @@ describe('the two outcomes that are the deployment, not the run', () => {
 
       // The same lane the Settings panel and the research run report as on does not refuse here.
       expect(r.grypeOutcome).not.toBe('db_absent');
-      expect(scanEnv?.GRYPE_DB_AUTO_UPDATE).toBe('true');
+      // The scan alone may fetch; syft and every `db status` reading stay offline.
+      expect(envs.scan?.GRYPE_DB_AUTO_UPDATE).toBe('true');
+      expect(envs.syft?.GRYPE_DB_AUTO_UPDATE).toBe('false');
+      expect(envs.status.length).toBeGreaterThan(0);
+      for (const e of envs.status) expect(e?.GRYPE_DB_AUTO_UPDATE).toBe('false');
       expect(logged.some((l) => l.includes('ON by default') && l.includes('FIRMLAB_RESEARCH=0'))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+/**
+ * A present database is used as it is, research lane or not. The lane used to put `GRYPE_DB_AUTO_UPDATE=true` on
+ * every anchore invocation, so a provisioned database was refreshed under a log line saying no request is made.
+ */
+describe('a present database with the research lane on', () => {
+  it.each([
+    ['on by default', undefined],
+    ['stated on', '1'],
+  ])('scans offline with the lane %s, and the log says so truthfully', async (_label, research) => {
+    vi.stubEnv('FIRMLAB_RESEARCH', research);
+    toolAvailable.mockResolvedValue(true);
+    const logged: string[] = [];
+    const spy: JobHandle = { id: 'job', log: (line: string) => void logged.push(line) };
+    const envs = recordEnvs(DB_PRESENT);
+
+    try {
+      const { runSbom } = await import('./sbom.js');
+      const r = await runSbom('img', '/rootfs', spy);
+
+      expect(r.grypeOutcome).toBe('matched');
+      expect(envs.scan?.GRYPE_DB_AUTO_UPDATE).toBe('false');
+      expect(envs.syft?.GRYPE_DB_AUTO_UPDATE).toBe('false');
+      for (const e of envs.status) expect(e?.GRYPE_DB_AUTO_UPDATE).toBe('false');
+      expect(logged.some((l) => l.includes('No network request is made'))).toBe(true);
+      expect(logged.some((l) => l.includes('permitted to download'))).toBe(false);
     } finally {
       vi.unstubAllEnvs();
     }

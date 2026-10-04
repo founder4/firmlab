@@ -165,9 +165,11 @@ database behind it; and the one opt-in is `FIRMLAB_RESEARCH` — no flag of its 
 sends nothing about the firmware, exactly like the KEV catalogue that lane already pulls. `dbUpdateAllowed`
 decides through the same `decideFlag` as `loadResearchConfig`, so with the research lane on *by default* (see
 below) a deployment with no provisioned database and nothing stated downloads one on its first SBOM job — named in
-the job log first, prevented by a provisioned database or `FIRMLAB_RESEARCH=0`. **When you add a tool, check what
-it does on startup.** Renode is the second instance: 13 bundled platform descriptions `ApplySVD
-@https://dl.antmicro.com/…` on load, the deployed container cannot `unshare -n`, and HOME is per-run, so every
+the job log first, prevented by a provisioned database or `FIRMLAB_RESEARCH=0`. The lane permits fetching an
+*absent* database and nothing more: a present one, fresh or stale, is scanned offline whatever the lane says, and
+only that scan (`grypeScanEnv`) ever carries `GRYPE_DB_AUTO_UPDATE=true` — status and syft stay offline. **When
+you add a tool, check what it does on startup.** Renode is the second instance: 13 bundled platform descriptions
+`ApplySVD @https://dl.antmicro.com/…` on load, the deployed container cannot `unshare -n`, and HOME is per-run, so every
 boot was a download (measured 2026-10-02 with a loopback listener: `CONNECT dl.antmicro.com:443`).
 `OFFLINE_RENODE_ENV` in `providers/renode.ts` aims every proxy variable .NET honours at a refusing loopback port,
 and the result names what was refused.

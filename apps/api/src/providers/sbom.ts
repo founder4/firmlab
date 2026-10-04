@@ -5,10 +5,10 @@
  * package inventory (grypeAvailable:false). Nothing here fails the static workbench — it only enriches it.
  *
  * **This lane makes no network request of its own.** It used to: grype's own defaults downloaded a multi-gigabyte
- * vulnerability database on first run with every FirmLab flag off. Both tools now run under `anchoreEnv()`, and
- * grype runs only against a database that is already on disk unless the research lane is on — which, since
- * 2026-10-04, it is unless a value is stated, so a missing database is then downloaded under that lane's authority
- * and the job log says so first. `providers/sbom-db.ts` holds the policy, the measurement that produced it and the
+ * vulnerability database on first run with every FirmLab flag off. Both tools now run under `anchoreEnv()`, which is
+ * offline, and a database already on disk is used as it is whatever any flag says. Only a MISSING database is
+ * fetched, and only under the research lane — which, since 2026-10-04, is on unless a value is stated — by the
+ * grype scan alone, and the job log says so first. `providers/sbom-db.ts` holds the policy, the measurement that produced it and the
  * refusal text.
  */
 import { promisify } from 'node:util';
@@ -16,7 +16,15 @@ import { promisify } from 'node:util';
 import { execFile } from '../job-process.js';
 import { isToolAvailable } from '../tools.js';
 import type { JobHandle } from './jobs.js';
-import { anchoreEnv, dbAgeDays, decideGrype, grypeDbDir, readGrypeDbStatus, researchLane } from './sbom-db.js';
+import {
+  anchoreEnv,
+  dbAgeDays,
+  decideGrype,
+  grypeDbDir,
+  grypeScanEnv,
+  readGrypeDbStatus,
+  researchLane,
+} from './sbom-db.js';
 import type { VendorVexSearchSummary } from './vendor-vex-coverage.js';
 
 const execFileAsync = promisify(execFile);
@@ -316,7 +324,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
   //
   // Three outcomes, and the result has to distinguish them, because "no CVEs listed" is the rendering of all
   // three: grype is absent, grype is present with no database, or grype ran. Only the third says anything about
-  // this firmware. The database is never fetched here unless the operator turned the research lane on — see
+  // this firmware. The database is never fetched here unless it is absent AND the research lane is on — see
   // `sbom-db.ts` for the measurement that made that rule necessary.
   const toolPresent = await isToolAvailable('grype');
   let grypeAvailable = false;
@@ -351,7 +359,8 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
         const { stdout } = await execFileAsync('grype', [`dir:${rootfsPath}`, '-o', 'json'], {
           timeout: 10 * 60 * 1000,
           maxBuffer: 64 * 1024 * 1024,
-          env,
+          // Offline unless the decision found no database and the research lane permits fetching one.
+          env: grypeScanEnv(env, decision),
         });
         const parsed = JSON.parse(stdout) as { matches?: unknown } | null;
         // No top-level `matches` array means grype did not produce its document, not that it matched nothing: a
