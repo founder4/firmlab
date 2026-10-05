@@ -508,13 +508,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   con el padre declarado `1` y, si no, lo reporta `inertReason: 'parent_default'`; Ajustes lo muestra «en espera» con
   un botón que guarda ese `1`, y el job de research escribe en el log qué consentimiento falta. El homelab tiene
   research declarado en el compose, así que su hash lookup sigue armado.
-- [ ] Seguimientos del punto anterior, no hechos en ese cambio: (a) `GET /research/status` no expone el estado *en
-  espera* del hash lookup, así que el panel de research de una imagen sólo lo dice después de una ejecución (vía el
-  `reason` del bloque de hashes); exponer `hashLookupHeld` en el status y mostrarlo antes de lanzar. (b) Validar
-  en contenedor la rama «research por omisión + sin base de grype» (descarga real y nota del log) — no se hizo
-  porque el cambio no incluía despliegue. (c) El botón «Encenderlo explícitamente» guarda un override `1`, que
-  desde entonces gana a un `FIRMLAB_RESEARCH=0` posterior en el compose; es la precedencia de siempre, pero
-  conviene que la fila de research diga que su `1` guardado es el consentimiento del que depende el hash lookup.
+- [ ] Seguimientos del punto anterior:
+  - [x] (a) Exponer `hashLookupHeld` en `GET /research/status` y mostrar antes de lanzar si el hash lookup está *en
+    espera*. *(Hecho: el status proyecta la postura de autorización sin afirmar ejecución, y el panel pre-run
+    distingue los estados en espera y armado.)*
+  - [ ] (b) Validar en contenedor la rama «research por omisión + sin base de grype» (descarga real y nota del log)
+    — sigue abierto porque el cambio no incluía despliegue.
+  - [ ] (c) Aclarar que el botón «Encenderlo explícitamente» guarda un override `1`, que desde entonces gana a un
+    `FIRMLAB_RESEARCH=0` posterior en el compose; es la precedencia de siempre, pero sigue abierto que la fila de
+    research diga que su `1` guardado es el consentimiento del que depende el hash lookup.
 
 ## Ideas evaluadas, no programadas (de la revisión de wairz)
 

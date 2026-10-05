@@ -5,6 +5,14 @@ import { projectResearchStatus } from './status.js';
 const env = (values: Record<string, string>): NodeJS.ProcessEnv => values as NodeJS.ProcessEnv;
 
 describe('research status — pre-flight hash-lookup posture', () => {
+  it('reports default-on research without arming or holding an unstated hash lookup', () => {
+    expect(projectResearchStatus(loadResearchConfig(env({})))).toMatchObject({
+      enabled: true,
+      hashLookupArmed: false,
+      hashLookupHeld: false,
+    });
+  });
+
   it('reports both research and hash lookup disabled when research is explicitly off', () => {
     expect(projectResearchStatus(loadResearchConfig(env({ FIRMLAB_RESEARCH: '0', FIRMLAB_HASH_LOOKUP: '1' })))).toEqual(
       {

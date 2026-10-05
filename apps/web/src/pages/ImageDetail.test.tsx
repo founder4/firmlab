@@ -785,6 +785,22 @@ describe('ImageDetail — the password-hash lookup says what it refused to ask',
     expect(screen.queryByText('External intelligence off')).not.toBeInTheDocument();
   });
 
+  it('shows armed hash lookup as pre-flight authorization without claiming a lookup completed', async () => {
+    mockApi.researchStatus.mockResolvedValue({
+      enabled: true,
+      hashLookupArmed: true,
+      hashLookupHeld: false,
+    });
+    mockApi.researchResult.mockResolvedValue(null);
+    renderSection('research');
+
+    expect(await screen.findByText('hash lookup armed')).toBeInTheDocument();
+    expect(screen.getByText(/A research run may send eligible unsalted password hashes/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run research' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Re-run' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Password-hash lookup')).not.toBeInTheDocument();
+  });
+
   it('accepts a legacy enabled status without falsely claiming hash lookup is armed', async () => {
     mockApi.researchStatus.mockResolvedValue({ enabled: true });
     mockApi.researchResult.mockResolvedValue(null);
