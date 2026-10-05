@@ -83,6 +83,8 @@ export const settings = {
     heldLead: 'On, but held — ',
     heldTail:
       ' is on only by default. This sends material recovered from the firmware, so it also needs that lane switched on explicitly: a default is not a second consent.',
+    confirmParentEffect:
+      'Choosing this stores a research override value of 1 in this deployment. That stored override takes precedence over a later FIRMLAB_RESEARCH=0 value in the environment or Compose until you clear it; this explicit stored research consent is what arms online password-hash lookup.',
     /** The button that states the parent on. Pins the same value the default already gives — it records a choice. */
     confirmParent: 'Switch it on explicitly',
   },

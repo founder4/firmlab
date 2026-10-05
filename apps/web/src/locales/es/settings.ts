@@ -62,6 +62,8 @@ export const settings: Messages['settings'] = {
     heldLead: 'Encendido, pero en espera — ',
     heldTail:
       ' sólo está encendido por omisión. Esto envía material recuperado del firmware, así que también necesita ese carril encendido de forma explícita: un valor por omisión no es un segundo consentimiento.',
+    confirmParentEffect:
+      'Al elegirlo se almacena en este despliegue una anulación de investigación con valor 1. Esa anulación almacenada prevalece sobre un valor posterior FIRMLAB_RESEARCH=0 en el entorno o en Compose hasta que la borres; este consentimiento explícito y almacenado para la investigación es lo que arma la consulta en línea de hashes de contraseñas.',
     confirmParent: 'Encenderlo explícitamente',
   },
 

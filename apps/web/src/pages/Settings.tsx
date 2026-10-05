@@ -282,6 +282,7 @@ function LaneToggle({
 }): JSX.Element {
   const t = useMessages();
   const on = flag.enabled;
+  const heldExplanationId = `${flag.name}-held-explanation`;
   return (
     <div
       style={{
@@ -367,13 +368,16 @@ function LaneToggle({
           // Held, not off: the parent is on by default and a default is not consent. The button states it — it
           // changes no effective value of the parent, it records the choice the child is waiting for.
           <div className="hint" style={{ marginTop: 6, color: 'var(--warn)' }}>
-            {t.settings.lanes.heldLead}
-            <span className="mono">{flag.requires}</span>
-            {t.settings.lanes.heldTail}{' '}
+            <span id={heldExplanationId}>
+              {t.settings.lanes.heldLead}
+              <span className="mono">{flag.requires}</span>
+              {t.settings.lanes.heldTail} {t.settings.lanes.confirmParentEffect}
+            </span>{' '}
             <button
               type="button"
               onClick={onConfirmParent}
               disabled={busy}
+              aria-describedby={heldExplanationId}
               style={{
                 fontSize: 11,
                 padding: '1px 7px',

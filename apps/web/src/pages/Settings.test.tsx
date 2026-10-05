@@ -473,7 +473,7 @@ describe('Settings — a held double opt-in names the missing consent', () => {
     ...o,
   });
 
-  it('says HELD beside a default-on parent, and states the parent on when asked', async () => {
+  it('explains the stored override that arms hash lookup, and states the parent on when asked', async () => {
     const research = lane({ name: 'FIRMLAB_RESEARCH', label: 'External intelligence' });
     const hash = lane({
       name: 'FIRMLAB_HASH_LOOKUP',
@@ -492,10 +492,47 @@ describe('Settings — a held double opt-in names the missing consent', () => {
     renderSettings();
     openTab('Privacy');
     expect(await screen.findByText(/is on only by default/)).toBeInTheDocument();
+    expect(screen.getByText(/stores a research override value of 1/)).toHaveTextContent(
+      /stored override takes precedence over a later FIRMLAB_RESEARCH=0 value in the environment or Compose until you clear it/,
+    );
+    expect(
+      screen.getByText(/explicit stored research consent is what arms online password-hash lookup/),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/is off, and this only acts inside that lane/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Switch it on explicitly' }));
+    const confirm = screen.getByRole('button', { name: 'Switch it on explicitly' });
+    expect(confirm).toHaveAccessibleDescription(/stores a research override value of 1/);
+    fireEvent.click(confirm);
     await waitFor(() => expect(mockApi.setFlag).toHaveBeenCalledWith('FIRMLAB_RESEARCH', true, 'en'));
     await waitFor(() => expect(screen.queryByText(/is on only by default/)).not.toBeInTheDocument());
+    expect(screen.queryByText(/stores a research override value of 1/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Switch it on explicitly' })).not.toBeInTheDocument();
+  });
+
+  it('gives the same stored-override and precedence warning in Spanish', async () => {
+    const research = lane({ name: 'FIRMLAB_RESEARCH', label: 'Inteligencia externa' });
+    const hash = lane({
+      name: 'FIRMLAB_HASH_LOOKUP',
+      label: 'Consulta en línea de hashes de contraseñas',
+      requires: 'FIRMLAB_RESEARCH',
+      source: 'override',
+      environmentValue: false,
+      inert: true,
+      inertReason: 'parent_default',
+    });
+    mockApi.flags.mockResolvedValue({ flags: [research, hash], appliesImmediately: true });
+    setLocale('es');
+    renderSettings();
+    openTab('Privacidad');
+
+    expect(await screen.findByText(/anulación de investigación con valor 1/)).toHaveTextContent(
+      /anulación almacenada prevalece sobre un valor posterior FIRMLAB_RESEARCH=0 en el entorno o en Compose hasta que la borres/,
+    );
+    expect(
+      screen.getByText(/consentimiento explícito y almacenado.*es lo que arma la consulta en línea/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Encenderlo explícitamente' })).toHaveAccessibleDescription(
+      /anulación de investigación con valor 1/,
+    );
   });
 
   it('keeps the parent-off sentence, with no confirm button, when the parent is off — or the API predates the reason', async () => {
