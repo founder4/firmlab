@@ -514,9 +514,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
     distingue los estados en espera y armado.)*
   - [ ] (b) Validar en contenedor la rama «research por omisión + sin base de grype» (descarga real y nota del log)
     — sigue abierto porque el cambio no incluía despliegue.
-  - [ ] (c) Aclarar que el botón «Encenderlo explícitamente» guarda un override `1`, que desde entonces gana a un
+  - [x] (c) Aclarar que el botón «Encenderlo explícitamente» guarda un override `1`, que desde entonces gana a un
     `FIRMLAB_RESEARCH=0` posterior en el compose; es la precedencia de siempre, pero sigue abierto que la fila de
-    research diga que su `1` guardado es el consentimiento del que depende el hash lookup.
+    research diga que su `1` guardado es el consentimiento del que depende el hash lookup. *(Hecho: el estado en
+    espera lo explica en EN/ES antes de la acción, enlaza la explicación accesible al botón y conserva la
+    distinción entre armar la consulta y ejecutarla; las pruebas fijan el POST `research=true` y que la advertencia
+    desaparece cuando el consentimiento ya es explícito.)*
 
 ## Ideas evaluadas, no programadas (de la revisión de wairz)
 
