@@ -1465,6 +1465,23 @@ function ResearchPanel({ imageId }: { imageId: string }): JSX.Element | null {
       {/* What leaves the machine, and that an advisory is a lead — both have to survive translation intact. */}
       <div className="panel-sub">{t.imageDetail.research.sub}</div>
 
+      {status.hashLookupHeld && (
+        <div className="note" style={{ marginBottom: 12 }}>
+          <span className="badge badge-medium" style={{ marginRight: 8 }}>
+            {t.imageDetail.research.hashHeldBadge}
+          </span>
+          {t.imageDetail.research.hashHeld}
+        </div>
+      )}
+      {status.hashLookupArmed === true && (
+        <div className="note" style={{ marginBottom: 12 }}>
+          <span className="badge badge-high" style={{ marginRight: 8 }}>
+            {t.imageDetail.research.hashArmedBadge}
+          </span>
+          {t.imageDetail.research.hashArmed}
+        </div>
+      )}
+
       {result && <VendorVexCoverage vex={result.vendorVex} />}
 
       {result && osv && (

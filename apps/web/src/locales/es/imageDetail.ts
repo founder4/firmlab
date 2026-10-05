@@ -294,6 +294,12 @@ export const imageDetail: Messages['imageDetail'] = {
     rerun: 'Volver a ejecutar',
     run: 'Ejecutar la investigación',
     sub: 'Envía únicamente nombres y versiones de componentes a las bases de datos de vulnerabilidades (OSV, NVD); descarga el catálogo KEV de CISA para marcar localmente los CVE con explotación conocida. Nunca bytes del firmware, secretos ni claves. Un aviso publicado para un componente presente es una pista, no un fallo confirmado (la alcanzabilidad se decide imagen a imagen).',
+    hashHeldBadge: 'consulta de hashes retenida',
+    hashHeld:
+      'No se enviará ningún hash de contraseña: la consulta de hashes está activada, pero el consentimiento para investigar sólo procede del valor por omisión. Haz explícito el consentimiento para investigar en Ajustes › Privacidad antes de ejecutar la investigación para habilitarla.',
+    hashArmedBadge: 'consulta de hashes habilitada',
+    hashArmed:
+      'El consentimiento explícito para investigar y consultar hashes está activado. Una ejecución de investigación puede enviar hashes de contraseña sin sal aptos a los servicios de consulta indicados.',
 
     osvBadge: (n: number) => `OSV: ${n} consultados`,
     osvBadgeTitle: 'OSV: componentes del SBOM que pudieron mapearse a un ecosistema y se consultaron',

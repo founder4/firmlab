@@ -335,6 +335,12 @@ export const imageDetail = {
     run: 'Run research',
     /** Two claims, and both have to survive translation: what leaves, and that an advisory is a lead. */
     sub: 'Sends only component names + versions to the vuln databases (OSV, NVD); downloads the CISA KEV catalog to flag known-exploited CVEs locally. Never firmware bytes, secrets, or keys. A published advisory for a present component is a lead, not a confirmed bug (reachability is decided per-image).',
+    hashHeldBadge: 'hash lookup held',
+    hashHeld:
+      'No password hashes will be sent: hash lookup is opted in, but research consent is only the default. Make research consent explicit in Settings › Privacy before running research to arm it.',
+    hashArmedBadge: 'hash lookup armed',
+    hashArmed:
+      'Explicit research and hash-lookup consent are both on. A research run may send eligible unsalted password hashes to the listed lookup services.',
 
     osvBadge: (n: number) => `OSV ${n} queried`,
     osvBadgeTitle: 'OSV: ecosystem-mapped SBOM components queried',

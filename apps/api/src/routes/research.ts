@@ -11,14 +11,13 @@ import type { FastifyInstance } from 'fastify';
 import { startJob } from '../providers/jobs.js';
 import { RESEARCH_DISABLED, loadResearchConfig } from '../research/config.js';
 import { runResearch } from '../research/run.js';
+import { projectResearchStatus } from '../research/status.js';
 import { getImage, listJobs } from '../store.js';
 
 export async function researchRoutes(app: FastifyInstance): Promise<void> {
   // Whether external intelligence is enabled, and the exact hosts it may contact.
   app.get('/research/status', async () => {
-    const cfg = loadResearchConfig();
-    if (!cfg) return { enabled: false };
-    return { enabled: true, allowlist: cfg.allowlist };
+    return projectResearchStatus(loadResearchConfig());
   });
 
   app.post('/images/:id/research', async (req, reply) => {

@@ -1057,6 +1057,10 @@ export interface AgentStep {
 export interface ResearchStatus {
   enabled: boolean;
   allowlist?: string[];
+  /** Optional for compatibility with API builds predating hash-lookup pre-flight posture. */
+  hashLookupArmed?: boolean;
+  /** True when hash lookup was requested but awaits explicit research consent. */
+  hashLookupHeld?: boolean;
 }
 
 export interface OsvAdvisory {

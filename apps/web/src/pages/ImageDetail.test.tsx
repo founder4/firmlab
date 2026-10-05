@@ -769,6 +769,32 @@ describe('ImageDetail — the password-hash lookup says what it refused to ask',
     mockApi.runs.mockResolvedValue({ runs: [], byTarget: [] });
   });
 
+  it('shows held hash lookup before any research run without saying research is disabled', async () => {
+    mockApi.researchStatus.mockResolvedValue({
+      enabled: true,
+      hashLookupArmed: false,
+      hashLookupHeld: true,
+    });
+    mockApi.researchResult.mockResolvedValue(null);
+    renderSection('research');
+
+    expect(await screen.findByText('hash lookup held')).toBeInTheDocument();
+    expect(screen.getByText(/No password hashes will be sent/)).toBeInTheDocument();
+    expect(screen.getByText(/Settings › Privacy/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run research' })).toBeEnabled();
+    expect(screen.queryByText('External intelligence off')).not.toBeInTheDocument();
+  });
+
+  it('accepts a legacy enabled status without falsely claiming hash lookup is armed', async () => {
+    mockApi.researchStatus.mockResolvedValue({ enabled: true });
+    mockApi.researchResult.mockResolvedValue(null);
+    renderSection('research');
+
+    expect(await screen.findByRole('button', { name: 'Run research' })).toBeEnabled();
+    expect(screen.queryByText('hash lookup armed')).not.toBeInTheDocument();
+    expect(screen.queryByText('hash lookup held')).not.toBeInTheDocument();
+  });
+
   it.each([true, false])('shows saved VEX coverage with zero advisories, research enabled=%s', async (enabled) => {
     mockApi.researchStatus.mockResolvedValue({ enabled });
     mockApi.researchResult.mockResolvedValue({
