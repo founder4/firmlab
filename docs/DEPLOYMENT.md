@@ -4,21 +4,30 @@ FirmLab se despliega de dos formas distintas, y conviene no confundirlas.
 
 ## Los dos composes
 
+**Estado verificado el 2026-10-06.** Esta estación ejecuta el compose del homelab en la red bridge
+`proxy_net`; el compose del repo es la alternativa local. La verificación cubre configuración y metadatos
+Docker locales, no la alcanzabilidad externa ni la aplicación efectiva de los middlewares de Traefik.
+
 | | Fichero | Exposición |
 |---|---|---|
 | **Repo** | `docker-compose.yml` (en este repo) | `127.0.0.1:8799` — solo loopback, el diseño original |
-| **Homelab** | `~/homelab/firmlab/docker-compose.yml` | `firmlab.lab.founder4.com` vía Traefik; atajo `127.0.0.1:8899` (`firmlab-view`) |
+| **Homelab** | `~/homelab/firmlab/docker-compose.yml` | `firmlab.lab.founder4.com` configurado vía Traefik; atajo `127.0.0.1:8899` (`firmlab-view`) |
 
-El del repo es el modo local-only descrito en el README. El del homelab expone el workbench **a propósito**,
-detrás de dos middlewares de Traefik: `tinyauth` (SSO Google, solo la cuenta whitelisteada) y
-`crowdsec-bouncer`. Sin puertos abiertos a internet: solo LAN/Tailscale. El contenedor `firmlab` no publica
-ningún puerto en el host; el servicio `firmlab-view` (socat) publica `127.0.0.1:8899` y reenvía a `firmlab:8799`
-por `proxy_net` **saltándose el SSO** — sólo lo alcanza quien ya está en la máquina, y está declarado en ese
-compose para que el bypass quede escrito.
+El del repo conserva el modo local-only descrito en el README. El del homelab configura a propósito un router
+Traefik para `firmlab.lab.founder4.com` con los middlewares declarados `tinyauth@file` y
+`crowdsec-bouncer@file`; su alcance LAN/Tailscale y la autenticación efectiva dependen de la configuración
+externa de Traefik. El contenedor `firmlab` no publica ningún puerto en el host. El servicio `firmlab-view`
+(socat) publica `127.0.0.1:8899` y reenvía a `firmlab:8799` por `proxy_net`, saltándose esos middlewares; ese
+bypass queda limitado al loopback por la publicación Docker declarada.
+
+Los campos de exposición del compose y del contenedor activo coinciden, pero queda una brecha sin explicar:
+`docker compose config --hash firmlab` dio `3262ab…` y la etiqueta activa `com.docker.compose.config-hash`,
+`8ff2f9…`. La comparación campo a campo respalda la topología descrita, no la identidad completa de ambas
+configuraciones ni, por sí sola, un drift material.
 
 > El contenedor sostiene el firmware que subas. **No quites los middlewares de auth** del router de Traefik.
 > Que el bind interno sea `0.0.0.0` es necesario para que Traefik lo alcance por `proxy_net`; la exposición
-> real la controla el router, no el bind.
+> prevista debe controlarla el router y su configuración externa, no el bind.
 
 ## La cadena de imágenes (capas invertidas)
 
@@ -42,9 +51,10 @@ scripts/deploy.sh --check      # solo informa de desfase, no cambia nada
 scripts/deploy.sh --build-only # construye y etiqueta sin tocar el contenedor
 ```
 
-El script construye ambas imágenes **etiquetando `:latest` en el mismo paso**, despliega, y verifica tres
-cosas: que el healthcheck pase, que el contenedor corra exactamente la imagen recién construida, y que el
-sello de commit coincida con el repo. Si algo no cuadra, sale con error en vez de dejarte creer que fue bien.
+En un despliegue normal el script construye y etiqueta `firmlab-firmware:latest` sobre la base existente; sólo
+reconstruye `firmlab-tools:latest` con `--tools` o cuando falta. Después despliega y verifica el healthcheck, la
+identidad de la imagen ejecutada y el sello de commit. `--check` sólo informa del desfase y de posibles ocupantes
+del puerto, sin mutar nada.
 
 ## Reconciliar resultados WebProbe anteriores a v2
 
@@ -120,8 +130,10 @@ vivía en un worktree de git sin mergear, mientras `main` seguía en el commit i
 
 **Qué lo arregla.** El sello de commit en la imagen (`--label ...revision`) rompe la circularidad: la
 pregunta "¿qué versión corre?" pasa a tener respuesta directa desde el contenedor, sin inferirla de hashes de
-assets. Y como `deploy.sh` construye y etiqueta en un solo paso, `:latest` no puede quedarse atrás. El script
-además avisa si existe alguna rama por delante de `HEAD`, que es la señal que se pasó por alto.
+assets. Al construir, `deploy.sh` aplica `:latest` en el mismo paso y evita separar construcción y promoción
+dentro de esa ejecución; la comparación posterior con `HEAD` sigue detectando una imagen existente que no se
+ha vuelto a desplegar. El script además avisa si existe alguna rama por delante de `HEAD`, que es la señal que
+se pasó por alto.
 
 **Lección general.** Al verificar un despliegue, la cadena imagen→contenedor solo prueba consistencia interna.
 La pregunta que importa es si el *fuente* desplegado es el más reciente, y esa hay que hacerla explícitamente.
@@ -165,8 +177,8 @@ no menciona la variable tiene el carril research activo. Hasta esta fecha la aus
 
 Lo que **no** cambia, y es lo que hace defendible ese valor por omisión:
 
-- **Exposición**: la API escucha en loopback (compose del repo: `127.0.0.1:8799`) o detrás del router de Traefik
-  con SSO (homelab). Nada de esta decisión abre un listener.
+- **Exposición**: la API se publica en loopback (compose del repo: `127.0.0.1:8799`) o se configura detrás del
+  router de Traefik y sus middlewares de autenticación (homelab). Nada de esta decisión abre un listener.
 - **Destinos**: sólo la allowlist de `research/config.ts` (`api.osv.dev`, `services.nvd.nist.gov`, `www.cisa.gov`)
   más lo que el operador añada en `FIRMLAB_RESEARCH_ALLOWLIST`.
 - **Qué sale**: nombres y versiones de componentes; nunca bytes del firmware, secretos ni claves. El ledger de
@@ -185,8 +197,8 @@ decidió (`source: override | environment | default`) y de lo que diría el ento
 (`environmentValue`). Para apagar research: `FIRMLAB_RESEARCH=0` en el compose, o el interruptor de Ajustes (que
 guarda un `0` y gana al entorno).
 
-**Estado efectivo del homelab**, leído el 2026-10-04 con `docker inspect firmlab` y `GET /api/settings/flags`
-(build `7b6113e`, sin cambiar nada):
+**Instantánea histórica de flags del homelab**, leída el 2026-10-04 con `docker inspect firmlab` y
+`GET /api/settings/flags` (build `7b6113e`, sin cambiar nada; no representa por sí sola el estado actual):
 
 | Flag | Efectivo | Decidido por |
 |---|---|---|
@@ -216,7 +228,7 @@ Dos consecuencias más, cerradas en el commit siguiente:
   «en espera» con un botón que guarda ese `1`. En el homelab research está declarado en el compose, así que su hash
   lookup sigue armado como antes.
 
-## El carril SBOM no toca la red
+## Red del carril SBOM: sólo para aprovisionar una base ausente
 
 `grype` viene con `db.auto-update: true` y `syft` y `grype` consultan si hay una versión nueva **de sí mismos**
 en cada invocación. Medido el 2026-09-16 sobre el contenedor desplegado, con `FIRMLAB_RESEARCH`, `FIRMLAB_AGENT`
@@ -253,12 +265,14 @@ Una base vieja **se usa**, no se rechaza (`GRYPE_DB_VALIDATE_AGE=false`: grype d
 más de cinco días), y su fecha de compilación viaja al resultado y a la tabla de la web. Cero CVE contra una base
 de hace ocho meses no es la misma afirmación que cero CVE contra la de hoy.
 
-## Red del host, captura y aislamiento del firmware emulado (2026-09-28)
+## Evidencia histórica y propuesta no aplicada: red host, captura y aislamiento (2026-09-28)
 
-> **Esto NO es lo que corre hoy.** Revisado el 2026-10-04: `~/homelab/firmlab/docker-compose.yml` (modificado por
-> última vez el 2026-09-18) y el contenedor desplegado usan la red bridge **`proxy_net`**, sin `NET_ADMIN`/`NET_RAW`,
+> **Esto NO es lo que corre hoy.** Revalidado el 2026-10-06 (build desplegada `f0c074a`, dos commits detrás del
+> `HEAD` auditado `3615c1a`): `~/homelab/firmlab/docker-compose.yml` y el contenedor desplegado usan la red bridge
+> **`proxy_net`**,
+> sin `NET_ADMIN`/`NET_RAW`,
 > sin `security_opt` (no hay `seccomp-firmlab.json` junto al compose), con `FIRMLAB_HOST=0.0.0.0` detrás de
-> Traefik y sin puertos publicados en el host. Consecuencias medidas en ese contenedor:
+> Traefik y sin puertos publicados en el host. Consecuencias medidas el 2026-10-04 en ese contenedor:
 >
 > - `docker exec firmlab unshare -rn sh -c "ip -o link | wc -l"` devuelve `unshare failed: Operation not
 >   permitted`. `isolate.ts` cae a sólo `prlimit` y un binario que ejecute el agente tiene la red del contenedor,

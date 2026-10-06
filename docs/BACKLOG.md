@@ -82,11 +82,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   El tap de consola está acotado para toda entrada y sólo acepta marcadores como líneas completas. Evidencia y
   límites (`n=1` por variante) en `docs/OPERABILITY-VALIDATION.md`.
 - [ ] Decidir si `isKernelLogLine` (`guest-repair.ts`) debe filtrar también trazas `firmadyne: …` sin marca de
-  tiempo dentro del bloque del ruleset. Diferido, no probado: `WR940N_CONSOLE` (job 486be04e, en
-  `emulate-system.test.ts`) se declara literal y trae `firmadyne: do_execve[…]` al principio de línea, pero la
-  consola literal del 2026-10-04 del mismo equipo las trae con `[ t.ttt]`. Si existe, iptables-save se ejecuta
-  entre los marcadores, así que un ruleset vacío se leería como no vacío ("0 rule(s)" en vez de "NO iptables
-  rules") — degrada la frase, no inventa reglas. Confirmar con la consola cruda guardada antes de tocarlo.
+  tiempo dentro del bloque del ruleset. Sigue sin resolverse: los bytes crudos del job `486be04e` que originó
+  `WR940N_CONSOLE` no están en las bases, backups ni artefactos locales examinados. En los 18 resultados WR940N
+  retenidos hubo cero líneas `firmadyne:` desnudas y 34 518 con timestamp; las consolas crudas del 2026-10-04
+  también dieron cero desnudas, pero ningún artefacto conserva un bloque real completo entre marcadores. Es
+  evidencia negativa acotada, no prueba sobre el job ausente. La forma hipotética degradaría «NO iptables rules»
+  a «0 rule(s)» sin inventar reglas; no tocar el parser hasta recuperar un snapshot/export de ese job o preservar
+  los bytes literales en una futura emulación autorizada.
 - [ ] Ampliar RTOS más allá del boot. Ya existe un parser byte-only acotado para listas de tareas FreeRTOS cuando
   se suministran símbolos/layout (`pxCurrentTCB` y lista circular), con ciclo, truncado y punteros fuera de rango
   explícitos, y ya está cableado a la API: `POST /images/:id/rtos/tasks` acepta un snapshot de RAM que declara
@@ -508,12 +510,17 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   con el padre declarado `1` y, si no, lo reporta `inertReason: 'parent_default'`; Ajustes lo muestra «en espera» con
   un botón que guarda ese `1`, y el job de research escribe en el log qué consentimiento falta. El homelab tiene
   research declarado en el compose, así que su hash lookup sigue armado.
-- [ ] Seguimientos del punto anterior:
+- [x] Seguimientos del punto anterior:
   - [x] (a) Exponer `hashLookupHeld` en `GET /research/status` y mostrar antes de lanzar si el hash lookup está *en
     espera*. *(Hecho: el status proyecta la postura de autorización sin afirmar ejecución, y el panel pre-run
     distingue los estados en espera y armado.)*
-  - [ ] (b) Validar en contenedor la rama «research por omisión + sin base de grype» (descarga real y nota del log)
-    — sigue abierto porque el cambio no incluía despliegue.
+  - [x] (b) Validar en contenedor la rama «research por omisión + sin base de grype» (descarga real y nota del
+    log). *(Validado sobre `3615c1a`: con research sin declarar, sin override instalado y una base aislada ausente,
+    el provider escribió la nota antes de crear el proceso; una invocación de Grype con auto-update habilitado y
+    capacidad de red aprovisionó la base registrada de Anchore, v6.1.10 (build `2026-10-05T06:45:38Z`), y conservó
+    su identidad en el resultado. Una segunda ejecución la reutilizó con `--network none`. El cero observado se
+    limita al manifiesto dpkg sintético de un paquete y a esa base fechada. Sin captura de paquetes no se afirma
+    el número exacto de peticiones ni la exclusividad de destinos.)*
   - [x] (c) Aclarar que el botón «Encenderlo explícitamente» guarda un override `1`, que desde entonces gana a un
     `FIRMLAB_RESEARCH=0` posterior en el compose; es la precedencia de siempre, pero sigue abierto que la fila de
     research diga que su `1` guardado es el consentimiento del que depende el hash lookup. *(Hecho: el estado en
@@ -542,12 +549,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   commits, fast-forward). Regla que queda: antes de lanzar workers en hijos, `main` publicado o base del hijo
   verificada con `git log -1` en cuanto se crea.
 
-- [ ] Reconciliar la documentación de despliegue con esta estación antes de la próxima entrega. Observado
-  2026-10-03: `deploy.sh --check` y `/health` sitúan el contenedor en `679f267`, 81 commits detrás de
-  `2eb659a`; Docker declara `proxy_net`, sin puertos publicados, y bind interno `0.0.0.0`. Coincide con el modo
-  homelab descrito al principio de `DEPLOYMENT.md`, pero su sección del 28 de septiembre afirma red de host y
-  loopback. Precisar el ámbito de esa evidencia histórica y verificar el contrato efectivo, sin cambiar red,
-  permisos ni despliegue para hacer coincidir el texto. Plan en `COORDINATION-PLAN-2026-10-03.md`.
+- [x] Reconciliar la documentación de despliegue con esta estación. *(Auditado el 2026-10-06: el contrato
+  efectivo sigue siendo bridge `proxy_net`, bind interno `0.0.0.0`, ningún puerto publicado por `firmlab` y
+  sidecar loopback `127.0.0.1:8899`; la red host queda rotulada como evidencia histórica/propuesta no aplicada.
+  El contenedor y `firmlab-firmware:latest` coinciden en `f0c074a`, dos commits detrás del `HEAD` `3615c1a`; no se
+  cambió el despliegue. Persiste sin explicar la diferencia entre el config-hash calculado y la etiqueta activa.)*
 
 - [x] Estabilizar la espera inicial de `AnalysisActionsPanel.test.tsx`: durante la validación completa del contrato
   MCP, el caso de estado vacío agotó una vez la espera mientras seguía mostrando «Leyendo ejecuciones anteriores…».
