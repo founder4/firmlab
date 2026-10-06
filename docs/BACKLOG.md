@@ -235,7 +235,10 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   -13080 (handshakes base) y quedan como pista, con la funcionalidad que nombra NVD como precondición, -13079,
   -13081, -13084, -13086, -13087 y -13088. Pendiente: hostapd (NVD enumera 31 versiones para el AP: la misma
   lista sin 0.2.7 ni 0.3.8) y CVE-2017-13082 (FT), que exigen decidir por rol AP/cliente contra el aviso de w1.fi,
-  no contra la lista; ambos lo dicen en la fila de inventario (`unsettled`) para que «sin CVE» no se lea limpio.)*
+  no contra la lista; ambos lo dicen en la fila de inventario (`unsettled`) para que «sin CVE» no se lea limpio.
+  Medido con el core nuevo sobre bytes reales —copiados en lectura del contenedor, que no lleva este cambio—: el
+  `wpa_supplicant` del WR940N v6 3.20.1 (sha256 `5856864e…`) lee 0.5.9 y da 3 `static_confirmed` + 6 pistas; el
+  `hostapd` del WDR3600 v1 3.14.3 (`5f8f75d2…`) lee 0.5.9 y da la fila de inventario con la cuestión abierta.)*
 - [ ] **NO adoptar** el pase de secretos de mithril: sobre la Tenda-Camera, 12 de 18 hallazgos son falsos
   positivos (tablas de etiquetas TLS de hostapd/wpa_supplicant leídas como claves PEM). `pem-scan.ts` ya exige
   que el cuerpo decodifique. Lo único aprovechable es su tier `validated` (recomputar un checksum embebido).
