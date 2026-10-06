@@ -143,16 +143,41 @@ export interface CveRule {
    * conditional flaw at the bench's strongest rung or to drop a real n-day, and both are worse.
    */
   precondition?: string;
+  /**
+   * The exact builds NVD enumerates, when its list has GAPS a range would paper over. Matching is then by equality
+   * against this list, and `low`/`high` must be its first and last entries — kept for display and ordering only.
+   *
+   * KRACK is why it exists: NVD lists 33 individual wpa_supplicant builds from 0.2.4 to 2.6, and a range over the
+   * same ends would also claim releases NVD never named. An enumeration is an analyst asserting builds; a range
+   * inferred from it is this table asserting the ones in between, which is the recall the table refuses.
+   */
+  versions?: readonly string[];
+}
+
+/** Pure: how a rule's affected set reads in a sentence — the enumerated count, or the range NVD gives. */
+export function affectedText(cve: Pick<CveRule, 'low' | 'high' | 'highExclusive' | 'versions'>): string {
+  if (cve.versions) return `${cve.versions.length} enumerated builds (${cve.low} … ${cve.high})`;
+  return cve.low === cve.high ? cve.low : `${cve.low}–${cve.high}${cve.highExclusive ? ' (exclusive)' : ''}`;
 }
 
 /**
- * Pure: does this CVE rule's range cover `version`? Honours `highExclusive`.
+ * Pure: does this CVE rule's range cover `version`? Honours `highExclusive`, and an enumerated `versions` list.
  *
  * `matchCves` and `curatedCveVerdict` both go through here so a rule cannot mean one thing when this table
  * claims it and another when it comments on a grype row — they disagreed about nothing today, and that is worth
  * keeping true by construction rather than by coincidence.
  */
-export function cveCovers(version: string, cve: Pick<CveRule, 'low' | 'high' | 'highExclusive'>): boolean {
+export function cveCovers(version: string, cve: Pick<CveRule, 'low' | 'high' | 'highExclusive' | 'versions'>): boolean {
+  if (cve.versions) {
+    const pv = parseVersion(version);
+    return (
+      pv !== null &&
+      cve.versions.some((v) => {
+        const pl = parseVersion(v);
+        return pl !== null && compareVersion(pv, pl) === 0;
+      })
+    );
+  }
   if (!cve.highExclusive) return versionInRange(version, cve.low, cve.high);
   const pv = parseVersion(version);
   const pl = parseVersion(cve.low);
@@ -181,6 +206,62 @@ export interface ComponentRule {
   cves: CveRule[];
   /** CVEs evaluated for this component and refused, each with its reason. See `RejectedCve`. */
   rejected?: readonly RejectedCve[];
+}
+
+/**
+ * The 33 wpa_supplicant builds NVD enumerates for every one of the ten KRACK CVEs (CVE-2017-13077 … -13088), read
+ * from the NVD API on 2026-10-06 and identical across all ten. The gaps are NVD's, not this table's: 0.2.9, 0.3.0 …
+ * 0.3.6, 0.6.0 … 0.6.7, 0.7.0 … 0.7.2 and every 2.x point release are absent, so a range over the same ends would
+ * claim builds no analyst named. See `CveRule.versions`.
+ */
+const KRACK_WPA_SUPPLICANT_BUILDS: readonly string[] = [
+  '0.2.4',
+  '0.2.5',
+  '0.2.6',
+  '0.2.7',
+  '0.2.8',
+  '0.3.7',
+  '0.3.8',
+  '0.3.9',
+  '0.3.10',
+  '0.3.11',
+  '0.4.7',
+  '0.4.8',
+  '0.4.9',
+  '0.4.10',
+  '0.4.11',
+  '0.5.7',
+  '0.5.8',
+  '0.5.9',
+  '0.5.10',
+  '0.5.11',
+  '0.6.8',
+  '0.6.9',
+  '0.6.10',
+  '0.7.3',
+  '1.0',
+  '1.1',
+  '2.0',
+  '2.1',
+  '2.2',
+  '2.3',
+  '2.4',
+  '2.5',
+  '2.6',
+];
+
+/** One KRACK rule over the shared enumeration; only id, title, severity and any feature precondition differ. */
+function krack(id: string, title: string, severity: FindingSeverity, precondition?: string): CveRule {
+  return {
+    id,
+    title,
+    severity,
+    nvdBacking: 'enumerated',
+    low: '0.2.4',
+    high: '2.6',
+    versions: KRACK_WPA_SUPPLICANT_BUILDS,
+    ...(precondition ? { precondition } : {}),
+  };
 }
 
 /**
@@ -746,7 +827,62 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     // the same reason, so a grype row on either lane reads the same.
     binNames: ['wpa_supplicant'],
     versionRes: [/\bwpa_supplicant v(\d+\.\d+(?:\.\d+)?)\b/],
-    cves: [],
+    // KRACK, on the CLIENT only. NVD enumerates the same builds for hostapd too, but most of these handshakes are
+    // the supplicant's side, and which ones an access point is exposed to is a per-role question nothing here has
+    // checked against the advisory — so hostapd claims none of them rather than all of them.
+    // CVE-2017-13082 (Fast BSS Transition) is left out here for the same reason: whether its handshake is the
+    // client's or the access point's exposure is that same unchecked per-role question.
+    //
+    // The enumeration is not feature-aware: NVD lists 0.5.9 for the 802.11w, 802.11v, PeerKey and TDLS
+    // variants exactly as for the base handshakes, and nothing this provider reads says whether such a build has
+    // those features at all. Those six therefore carry the feature, in NVD's own words, as a precondition and land
+    // at `needs_runtime_reproduction`. The three whose descriptions name no feature are the four-way and group-key
+    // handshakes every WPA supplicant performs, and are claimed outright.
+    cves: [
+      krack(
+        'CVE-2017-13077',
+        'KRACK — pairwise key (PTK-TK) reinstallation in the four-way handshake: replay, decrypt or spoof frames',
+        'medium',
+      ),
+      krack('CVE-2017-13078', 'KRACK — group key (GTK) reinstallation in the four-way handshake', 'medium'),
+      krack('CVE-2017-13080', 'KRACK — group key (GTK) reinstallation in the group key handshake', 'medium'),
+      krack(
+        'CVE-2017-13079',
+        'KRACK — integrity group key (IGTK) reinstallation in the four-way handshake',
+        'medium',
+        'the build must support IEEE 802.11w (management frame protection)',
+      ),
+      krack(
+        'CVE-2017-13081',
+        'KRACK — integrity group key (IGTK) reinstallation in the group key handshake',
+        'medium',
+        'the build must support IEEE 802.11w (management frame protection)',
+      ),
+      krack(
+        'CVE-2017-13084',
+        'KRACK — station-to-station link key (STK) reinstallation in the PeerKey handshake',
+        'medium',
+        'the build must implement the PeerKey handshake',
+      ),
+      krack(
+        'CVE-2017-13086',
+        'KRACK — TDLS peer key (TPK) reinstallation in the TDLS handshake',
+        'medium',
+        'the build must implement Tunneled Direct-Link Setup (TDLS)',
+      ),
+      krack(
+        'CVE-2017-13087',
+        'KRACK — group key (GTK) reinstallation on a WNM Sleep Mode response',
+        'medium',
+        'the build must support IEEE 802.11v Wireless Network Management sleep mode',
+      ),
+      krack(
+        'CVE-2017-13088',
+        'KRACK — integrity group key (IGTK) reinstallation on a WNM Sleep Mode response',
+        'medium',
+        'the build must support IEEE 802.11v Wireless Network Management sleep mode',
+      ),
+    ],
     rejected: [
       {
         id: 'CVE-2022-23303',
@@ -919,7 +1055,9 @@ export function curatedCveVerdict(component: string, version: string, cveId: str
   // judging a 3.0 build against the 1.0.2 range alone would call a claimed row "outside the curated range".
   const ranges = rule.cves.filter((c) => c.id === cveId);
   if (ranges.length === 0) return null;
-  const range = ranges.map((c) => `${c.low}–${c.highExclusive ? '<' : ''}${c.high}`).join(', ');
+  const range = ranges
+    .map((c) => (c.versions ? affectedText(c) : `${c.low}–${c.highExclusive ? '<' : ''}${c.high}`))
+    .join(', ');
   if (!parseVersion(version)) {
     return {
       kind: 'version_not_comparable',
@@ -930,6 +1068,12 @@ export function curatedCveVerdict(component: string, version: string, cveId: str
     return {
       kind: 'claimed',
       note: `The curated table claims ${cveId} for ${component} ${range} as well; its own row is static_confirmed from the version string in the binary, which is evidence this manifest match does not carry.`,
+    };
+  }
+  if (ranges.every((c) => c.versions)) {
+    return {
+      kind: 'outside_curated_range',
+      note: `${component} ${version} is not among the ${range} NVD lists for ${cveId}; the curated table claims those builds only, not the releases between them.`,
     };
   }
   return {
@@ -963,7 +1107,7 @@ export function buildComponentFindings(hits: ComponentHit[]): FindingDraft[] {
       continue;
     }
     for (const cve of cves) {
-      const range = cve.low === cve.high ? cve.low : `${cve.low}–${cve.high}${cve.highExclusive ? ' (exclusive)' : ''}`;
+      const range = affectedText(cve);
       drafts.push({
         kind: 'component-cve',
         title: `${cve.id} — ${hit.component} ${hit.version}: ${cve.title}`,
@@ -984,7 +1128,9 @@ export function buildComponentFindings(hits: ComponentHit[]): FindingDraft[] {
           ...(cve.precondition ? { precondition: cve.precondition } : {}),
         },
         rationale: [
-          `The bundled ${hit.component} binary reports version ${hit.version}, inside the published affected range ${range} for ${cve.id}.`,
+          cve.versions
+            ? `The bundled ${hit.component} binary reports version ${hit.version}, one of the ${range} NVD lists for ${cve.id}.`
+            : `The bundled ${hit.component} binary reports version ${hit.version}, inside the published affected range ${range} for ${cve.id}.`,
           cve.nvdBacking === 'enumerated'
             ? 'NVD lists the affected versions individually, so an analyst asserted this build rather than a range catching it.'
             : cve.nvdBacking === 'open-below'

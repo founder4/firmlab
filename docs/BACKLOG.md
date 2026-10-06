@@ -229,8 +229,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   verificada en la que entró ese código) y CVE-2021-26720 en avahi (script del paquete Debian, no upstream).
   Medido sobre los rootfs: Tenda pasa de 0 a 5 CVE. Sin muestra real con versión legible quedan zlib, lighttpd,
   wget, mosquitto, glibc, musl, mbedtls, openvpn y u-boot; uClibc 0.9.30 (TP-Link) no lleva cadena de versión y
-  no se lee del nombre de fichero. Pendiente: KRACK, que NVD enumera incluyendo 0.5.9 pero exige representar
-  una lista enumerada y precondiciones por rol AP/cliente.)*
+  no se lee del nombre de fichero. KRACK, 2026-10-06: `CveRule.versions` representa la lista enumerada (se casa
+  por igualdad, nunca por el rango que la rodea). NVD da las mismas 33 compilaciones de wpa_supplicant —0.5.9
+  incluida— para los diez CVE, sin distinguir funcionalidad, así que en el cliente se afirman sólo -13077, -13078 y
+  -13080 (handshakes base) y quedan como pista, con la funcionalidad que nombra NVD como precondición, -13079,
+  -13081, -13084, -13086, -13087 y -13088. Pendiente: hostapd (NVD enumera las mismas versiones para el AP) y
+  CVE-2017-13082 (FT), que exigen decidir por rol AP/cliente contra el aviso de w1.fi, no contra la lista.)*
 - [ ] **NO adoptar** el pase de secretos de mithril: sobre la Tenda-Camera, 12 de 18 hallazgos son falsos
   positivos (tablas de etiquetas TLS de hostapd/wpa_supplicant leídas como claves PEM). `pem-scan.ts` ya exige
   que el cuerpo decodifique. Lo único aprovechable es su tier `validated` (recomputar un checksum embebido).

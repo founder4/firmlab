@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMPONENT_RULES,
+  affectedText,
   binaryStrings,
   buildComponentFindings,
   compareVersion,
@@ -516,5 +517,78 @@ describe('binary strings and binary names — the two byte/name inputs the runne
     expect(matchesBinName('libssl.so.1.1')?.component).toBe('openssl');
     expect(matchesBinName('libuClibc-1.0.31.so')?.component).toBe('uclibc-ng');
     expect(matchesBinName('pppd.bak')).toBeUndefined();
+  });
+});
+
+describe('an enumerated build list is matched as a list, never as the range around it', () => {
+  const wpa = ruleFor('wpa_supplicant');
+  const krack = wpa.cves.filter((c) => c.id.startsWith('CVE-2017-130'));
+
+  it('keeps every versions list sorted, de-duplicated and bounded by its own first and last entries', () => {
+    for (const r of COMPONENT_RULES) {
+      for (const c of r.cves) {
+        if (!c.versions) continue;
+        expect(c.nvdBacking, `${r.component} ${c.id}`).toBe('enumerated');
+        expect(c.low, `${r.component} ${c.id}`).toBe(c.versions[0]);
+        expect(c.high, `${r.component} ${c.id}`).toBe(c.versions[c.versions.length - 1]);
+        expect(c.highExclusive, `${r.component} ${c.id}`).toBeUndefined();
+        for (let i = 1; i < c.versions.length; i++) {
+          expect(compareVersion(pv(c.versions[i - 1] ?? ''), pv(c.versions[i] ?? '')), c.versions[i]).toBe(-1);
+        }
+      }
+    }
+  });
+
+  it('claims a listed build and refuses a gap that a range over the same ends would have caught', () => {
+    const rule = krack[0];
+    if (!rule) throw new Error('no KRACK rule');
+    expect(cveCovers('0.5.9', rule)).toBe(true);
+    expect(cveCovers('1.0', rule)).toBe(true);
+    // Inside 0.2.4–2.6, absent from NVD's list.
+    for (const gap of ['0.2.9', '0.3.0', '0.6.0', '0.7.0', '2.6.1']) expect(cveCovers(gap, rule), gap).toBe(false);
+    expect(versionInRange('0.6.0', rule.low, rule.high)).toBe(true);
+    expect(cveCovers('2.9', rule)).toBe(false);
+    expect(cveCovers('garbage', rule)).toBe(false);
+  });
+
+  it('claims the base handshakes on wpa_supplicant 0.5.9 and holds the feature-gated ones as leads', () => {
+    const drafts = buildComponentFindings([
+      { component: 'wpa_supplicant', version: '0.5.9', path: '/usr/sbin/wpa_supplicant' },
+    ]);
+    const byState = (s: string) =>
+      drafts.filter((d) => d.proofState === s).map((d) => (d.evidence as { cve: string }).cve);
+    expect(byState('static_confirmed').sort()).toEqual(['CVE-2017-13077', 'CVE-2017-13078', 'CVE-2017-13080']);
+    expect(byState('needs_runtime_reproduction').sort()).toEqual([
+      'CVE-2017-13079',
+      'CVE-2017-13081',
+      'CVE-2017-13084',
+      'CVE-2017-13086',
+      'CVE-2017-13087',
+      'CVE-2017-13088',
+    ]);
+    // The role question is not settled here, so the FT variant is not claimed on either side.
+    expect(drafts.some((d) => (d.evidence as { cve: string }).cve === 'CVE-2017-13082')).toBe(false);
+    const row = drafts.find((d) => (d.evidence as { cve: string }).cve === 'CVE-2017-13077');
+    expect((row?.evidence as { affected: string }).affected).toBe('33 enumerated builds (0.2.4 … 2.6)');
+    expect(row?.rationale).toContain('one of the 33 enumerated builds');
+  });
+
+  it('claims nothing for hostapd, whose role on these handshakes is unchecked, nor for an unlisted client', () => {
+    expect(matchCves(ruleFor('hostapd'), '0.5.9')).toEqual([]);
+    expect(matchCves(wpa, '2.9')).toEqual([]);
+  });
+
+  it('says a grype row on an unlisted build is outside the list, not below a floor', () => {
+    const v = curatedCveVerdict('wpa_supplicant', '0.6.0', 'CVE-2017-13077');
+    expect(v?.kind).toBe('outside_curated_range');
+    expect(v?.note).toContain('not among the 33 enumerated builds');
+    expect(v?.note).not.toMatch(/floor/);
+    expect(curatedCveVerdict('wpa_supplicant', '0.5.9', 'CVE-2017-13077')?.kind).toBe('claimed');
+  });
+
+  it('leaves the range wording of every non-enumerated rule exactly as it was', () => {
+    expect(affectedText({ low: '1.0.0', high: '1.19.4' })).toBe('1.0.0–1.19.4');
+    expect(affectedText({ low: '7.69.0', high: '8.4.0', highExclusive: true })).toBe('7.69.0–8.4.0 (exclusive)');
+    expect(affectedText({ low: '2.4.3', high: '2.4.3' })).toBe('2.4.3');
   });
 });
