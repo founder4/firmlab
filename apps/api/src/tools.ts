@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { type Locale, messages } from './i18n/index.js';
+import { offlineRenodeEnv } from './providers/renode-offline.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -88,7 +89,7 @@ export type ToolId =
   | 'openssl'
   | 'gdb-multiarch';
 
-interface ToolSpec {
+export interface ToolSpec {
   id: ToolId;
   /** Command probed on PATH. */
   bin: string;
@@ -102,6 +103,9 @@ interface ToolSpec {
   /** Override the probe timeout. Only for a tool that is genuinely slow to answer (importing angr pulls in z3,
    *  unicorn and pyvex — seconds, not milliseconds) and would otherwise be misreported as absent. */
   timeoutMs?: number;
+  /** Tool-specific environment for the probe, applied over the shared offline baseline. For a tool whose runs are
+   *  already held offline by its provider, so that the probe cannot be the one invocation that is not. */
+  probeEnv?: (base: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
 }
 
 /**
@@ -185,7 +189,7 @@ const TOOLS: readonly ToolSpec[] = [
     probe: ['-V'],
     group: 'emulate',
   },
-  { id: 'renode', bin: 'renode', probe: ['--version'], group: 'emulate' },
+  { id: 'renode', bin: 'renode', probe: ['--version'], group: 'emulate', probeEnv: offlineRenodeEnv },
   { id: 'chipsec', bin: 'chipsec_util', probe: ['--help'], group: 'analyze' },
   {
     id: 'angr',
@@ -314,6 +318,21 @@ export function classifyProbeFailure(err: unknown): ProbeOutcome {
   return 'error';
 }
 
+/**
+ * Pure: the environment a capability probe runs under — the caller's, with the anchore offline variables over it,
+ * then the tool's own `probeEnv`. The renode probe is the reason this exists: its boot runs were held offline while
+ * `renode --version` here still inherited the operator's proxies, including a `NO_PROXY` that the boot env removes.
+ */
+export function probeEnv(spec: Pick<ToolSpec, 'probeEnv'>, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...OFFLINE_ANCHORE_ENV };
+  return spec.probeEnv ? spec.probeEnv(env) : env;
+}
+
+/** The probe spec for one tool id, for tests that must reach the real table rather than a copy of it. */
+export function toolSpec(id: ToolId): Readonly<ToolSpec> | undefined {
+  return TOOLS.find((t) => t.id === id);
+}
+
 let cache: ProbeResult[] | null = null;
 
 async function probe(spec: ToolSpec): Promise<ProbeResult> {
@@ -330,7 +349,7 @@ async function probe(spec: ToolSpec): Promise<ProbeResult> {
   try {
     const { stdout, stderr } = await execFileAsync(spec.bin, spec.probe, {
       timeout: spec.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...OFFLINE_ANCHORE_ENV },
+      env: probeEnv(spec, process.env),
     });
     const out = `${stdout}${stderr}`.split('\n')[0]?.trim().slice(0, 120) ?? '';
     return { id: spec.id, bin: spec.bin, available: true, version: out, group: spec.group };

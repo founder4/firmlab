@@ -5,7 +5,8 @@
  * the contract, that script proves the shapes are the ones Node actually throws.
  */
 import { describe, expect, it } from 'vitest';
-import { classifyProbeFailure } from './tools.js';
+import { RENODE_REFUSING_PROXY } from './providers/renode-offline.js';
+import { OFFLINE_ANCHORE_ENV, TOOL_IDS, classifyProbeFailure, probeEnv, toolSpec } from './tools.js';
 
 describe('classifyProbeFailure', () => {
   // Three facts one `available: false` used to cover. Getting `timeout` wrong is the expensive one: it sends every
@@ -32,5 +33,38 @@ describe('classifyProbeFailure', () => {
     expect(classifyProbeFailure(new Error('something else'))).toBe('error');
     expect(classifyProbeFailure(null)).toBe('error');
     expect(classifyProbeFailure(undefined)).toBe('error');
+  });
+});
+
+describe('probeEnv', () => {
+  const base = { PATH: '/usr/bin', HTTPS_PROXY: 'http://corp:3128', NO_PROXY: '*', no_proxy: '.antmicro.com' };
+
+  // The boot runs were already offline; the probe was the one renode invocation that inherited the operator's
+  // proxies, bypass list included. Read through the real table, so dropping the hook from the spec fails here.
+  it('runs the renode probe under the same offline env as its boot runs', () => {
+    const spec = toolSpec('renode');
+    expect(spec?.probeEnv).toBeDefined();
+    const env = probeEnv(spec ?? {}, base);
+    expect(env.HTTPS_PROXY).toBe(RENODE_REFUSING_PROXY);
+    expect(env.https_proxy).toBe(RENODE_REFUSING_PROXY);
+    expect(env.NO_PROXY).toBeUndefined();
+    expect(env.no_proxy).toBeUndefined();
+    for (const [k, v] of Object.entries(OFFLINE_ANCHORE_ENV)) expect(env[k]).toBe(v);
+    expect(env.PATH).toBe('/usr/bin');
+  });
+
+  it('keeps every other probe on the shared anchore baseline, proxies untouched', () => {
+    for (const id of TOOL_IDS.filter((t) => t !== 'renode')) {
+      const env = probeEnv(toolSpec(id) ?? {}, base);
+      for (const [k, v] of Object.entries(OFFLINE_ANCHORE_ENV)) expect(env[k]).toBe(v);
+      expect(env.HTTPS_PROXY).toBe('http://corp:3128');
+      expect(env.NO_PROXY).toBe('*');
+    }
+  });
+
+  it('does not mutate the environment it is given', () => {
+    const copy = { ...base };
+    probeEnv(toolSpec('renode') ?? {}, copy);
+    expect(copy).toEqual(base);
   });
 });
