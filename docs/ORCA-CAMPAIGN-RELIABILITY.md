@@ -282,3 +282,24 @@ API 3006, web 863, Node 202 (4556 total). The canonical skill was installed with
 the local Antigravity plugin re-registered. Only the newly created validation terminals were closed after
 completion; the root project coordinator and prior campaign records remain. The original guard stopped at
 its deadline and was not restarted. Startup must explicitly configure the new flag and verified reserve file.
+
+## Real quota handoff: 6 October 2026
+
+Two-hour campaign `run_a97013ff68b2` (deadline 01:54:36Z), Codex coordinator `term_2a0c0382…`, one reserved Claude
+standby whose canary had written and read back `READY\n` and then shown native `tui-idle` with a rendered empty
+composer. Antigravity was rejected as a reserve because its rendered screen read "not signed in". At 00:14:55Z the
+guard read a real OpenAI usage-limit screen on the owner's rendered frame and recorded a provider-wide
+`provider:openai` block in the policy. It closed exactly that terminal (`quotaRetirement.status: closed`), then
+sent one handoff prompt to the standby. The receiver ran its own `run-use`: generation 1→2 at 00:15:32Z. It
+recorded `capacity_exhausted` with evidence in `handoffs` and set `currentProvider` to `anthropic` while keeping the
+block. The journal then settled the submission as `confirmed` with the new owner. This is the first real quota event
+taken through detection, retirement, send and adoption; the 2 October transport acceptance used a synthetic trigger.
+
+**Not covered: a worker that hits the same quota.** The Codex documentation worker of that Run committed its change
+and then stopped on the same usage-limit screen before `worker_done`. Its Dispatch stayed `dispatched`, liveness
+`live`, and the inbox stayed empty, because the guard watches only the coordinator. The new coordinator read the
+rendered screen, used that final turn without a `worker_done` as positive proof the agent had stopped, and closed the
+exact terminal with `worker-stop` (`ptyKilled: true`) without answering the provider's model selector. It recorded
+the Task as failed with that result, reviewed the commit itself and integrated it. One reserve was enough here
+because the reserve's provider was not the blocked one. With Codex blocked and Antigravity signed out, no further
+cross-provider successor existed for the rest of the Run, and the Claude workers shared the coordinator's own quota.

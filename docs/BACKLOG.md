@@ -932,6 +932,10 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   sucesor y un dominio de capacidad distinto al agotar cuota; reconocer y registrar bloqueos de capacidad
   sin equipararlos a salida del proceso ni enviar entrada a un selector. La resistencia de cuatro horas
   sigue sin estar demostrada. Registro en `docs/FOUR-HOUR-CAMPAIGN.md`.
+  *(2026-10-06: primer evento de cuota REAL llevado de punta a punta —detección en pantalla renderizada, bloqueo
+  de proveedor, cierre positivo, envío y adopción por `run-use` a generación 2 en un dominio distinto (Codex →
+  Claude)—; ver `docs/ORCA-CAMPAIGN-RELIABILITY.md`. Sigue abierto: la duración, y que un worker bloqueado por la
+  misma cuota antes de `worker_done` no lo vigila nadie más que el coordinador.)*
 
 
 - [ ] Recuperación automática tras recibo ambiguo de retiro por cuota o de un receptor que llega al límite
