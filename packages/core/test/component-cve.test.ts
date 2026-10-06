@@ -561,20 +561,31 @@ describe('an enumerated build list is matched as a list, never as the range arou
     expect(byState('needs_runtime_reproduction').sort()).toEqual([
       'CVE-2017-13079',
       'CVE-2017-13081',
-      'CVE-2017-13084',
       'CVE-2017-13086',
       'CVE-2017-13087',
       'CVE-2017-13088',
     ]);
-    // The role question is not settled here, so the FT variant is not claimed on either side.
-    expect(drafts.some((d) => (d.evidence as { cve: string }).cve === 'CVE-2017-13082')).toBe(false);
+    // The advisory puts FT on the access point and calls PeerKey not applicable, so neither is claimed here.
+    for (const id of ['CVE-2017-13082', 'CVE-2017-13084']) {
+      expect(
+        drafts.some((d) => (d.evidence as { cve: string }).cve === id),
+        id,
+      ).toBe(false);
+    }
     const row = drafts.find((d) => (d.evidence as { cve: string }).cve === 'CVE-2017-13077');
     expect((row?.evidence as { affected: string }).affected).toBe('33 enumerated builds (0.2.4 … 2.6)');
     expect(row?.rationale).toContain('one of the 33 enumerated builds');
   });
 
-  it('claims nothing for hostapd, whose role on these handshakes is unchecked, nor for an unlisted client', () => {
-    expect(matchCves(ruleFor('hostapd'), '0.5.9')).toEqual([]);
+  it('claims only the FT reinstallation on hostapd, from the vendor floor up, and only as a lead', () => {
+    const hostapd = ruleFor('hostapd');
+    // 0.5.9 is in NVD's hostapd list, but below the "v0.7.2 and newer" the advisory gives for FT.
+    expect(matchCves(hostapd, '0.5.9')).toEqual([]);
+    expect(matchCves(hostapd, '2.9')).toEqual([]);
+    expect(matchCves(hostapd, '2.6').map((c) => c.id)).toEqual(['CVE-2017-13082']);
+    const [row] = buildComponentFindings([{ component: 'hostapd', version: '2.6', path: '/usr/sbin/hostapd' }]);
+    expect(row?.proofState).toBe('needs_runtime_reproduction');
+    expect(row?.severity).toBe('high');
     expect(matchCves(wpa, '2.9')).toEqual([]);
   });
 
@@ -629,7 +640,7 @@ describe('an enumerated build list is matched as a list, never as the range arou
       '2.5',
       '2.6',
     ];
-    expect(krack).toHaveLength(9);
+    expect(krack).toHaveLength(8);
     for (const c of krack) {
       expect(c.versions, c.id).toEqual(nvd);
       expect(c.severity, c.id).toBe('medium');
@@ -644,12 +655,14 @@ describe('an enumerated build list is matched as a list, never as the range arou
     expect(curatedCveVerdict('wpa_supplicant', '0.5.9', 'CVE-2017-13077')?.note).toContain('is static_confirmed');
   });
 
-  it('says on the hostapd inventory row that KRACK was looked at and left undecided, not found absent', () => {
-    const [row] = buildComponentFindings([{ component: 'hostapd', version: '0.5.9', path: '/usr/sbin/hostapd' }]);
-    expect(row?.kind).toBe('component-version');
-    expect(row?.rationale).toContain('Not checked, so not a clean result');
-    expect(row?.rationale).toContain('31 hostapd builds');
-    const [plain] = buildComponentFindings([{ component: 'busybox', version: '9.9.9', path: '/bin/busybox' }]);
-    expect(plain?.rationale).not.toContain('Not checked');
+  it('refuses the role-mismatched KRACK rows with the advisory as the reason, so a grype row says why', () => {
+    for (const id of ['CVE-2017-13077', 'CVE-2017-13080', 'CVE-2017-13086']) {
+      const v = curatedCveVerdict('hostapd', '0.5.9', id);
+      expect(v?.kind, id).toBe('rejected');
+      expect(v?.note, id).toContain('station/supplicant side');
+    }
+    expect(curatedCveVerdict('wpa_supplicant', '0.5.9', 'CVE-2017-13082')?.note).toContain('access point');
+    expect(curatedCveVerdict('wpa_supplicant', '0.5.9', 'CVE-2017-13084')?.note).toContain('not applicable');
+    expect(curatedCveVerdict('hostapd', '0.5.9', 'CVE-2017-13082')?.kind).toBe('outside_curated_range');
   });
 });

@@ -206,11 +206,6 @@ export interface ComponentRule {
   cves: CveRule[];
   /** CVEs evaluated for this component and refused, each with its reason. See `RejectedCve`. */
   rejected?: readonly RejectedCve[];
-  /**
-   * CVEs this table has looked at for the component and neither claims nor refuses, with what is left to decide.
-   * Printed on the inventory row a build with no match gets, so "no curated CVE matched" is not read as "clean".
-   */
-  unsettled?: string;
 }
 
 /**
@@ -253,6 +248,19 @@ const KRACK_WPA_SUPPLICANT_BUILDS: readonly string[] = [
   '2.4',
   '2.5',
   '2.6',
+];
+
+/** The KRACK CVEs the vendor advisory assigns to the station/supplicant side — refused for hostapd. */
+const KRACK_STATION_CVES: readonly string[] = [
+  'CVE-2017-13077',
+  'CVE-2017-13078',
+  'CVE-2017-13079',
+  'CVE-2017-13080',
+  'CVE-2017-13081',
+  'CVE-2017-13084',
+  'CVE-2017-13086',
+  'CVE-2017-13087',
+  'CVE-2017-13088',
 ];
 
 /** One KRACK rule over the shared enumeration; only id, title, severity and any feature precondition differ. */
@@ -810,11 +818,30 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     // Read off real binaries on 2026-09-26: `hostapd v0.5.9` (all three TP-Link images) and `hostapd v2.9` (IMOU).
     binNames: ['hostapd'],
     versionRes: [/\bhostapd v(\d+\.\d+(?:\.\d+)?)\b/],
-    unsettled:
-      'NVD enumerates 31 hostapd builds for the ten KRACK CVEs (CVE-2017-13077 … -13088), and which of those handshakes an ' +
-      'access point is exposed to has not been decided against the advisory, so none is claimed or refused here.',
-    cves: [],
+    // KRACK on the access point. NVD enumerates 31 hostapd builds for all ten CVEs, but the vendor advisory (w1.fi
+    // 2017-1, read 2026-10-06) assigns them by role: the AP/Authenticator is exposed to CVE-2017-13082 (Fast BSS
+    // Transition) in "hostapd v0.7.2 and newer with FT enabled", and the rest are the station's. So 13082 is claimed on
+    // the NVD-listed builds at or above that floor, held as a lead because FT is a runtime setting, and the station
+    // CVEs are refused here rather than inherited from a list that does not distinguish roles.
+    cves: [
+      {
+        id: 'CVE-2017-13082',
+        title: 'KRACK — pairwise key reinstallation on a replayed Fast BSS Transition reassociation request',
+        severity: 'high',
+        nvdBacking: 'enumerated',
+        low: '0.7.3',
+        high: '2.6',
+        versions: ['0.7.3', '1.0', '1.1', '2.0', '2.1', '2.2', '2.3', '2.4', '2.5', '2.6'],
+        precondition: 'Fast BSS Transition (IEEE 802.11r) must be enabled in the runtime configuration',
+      },
+    ],
     rejected: [
+      ...KRACK_STATION_CVES.map((id) => ({
+        id,
+        reason:
+          'The vendor advisory (w1.fi 2017-1) places this reinstallation on the station/supplicant side; the access ' +
+          'point is exposed only to CVE-2017-13082. NVD enumerates hostapd builds for it without distinguishing roles.',
+      })),
       {
         id: 'CVE-2022-23303',
         reason:
@@ -835,21 +862,16 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     // the same reason, so a grype row on either lane reads the same.
     binNames: ['wpa_supplicant'],
     versionRes: [/\bwpa_supplicant v(\d+\.\d+(?:\.\d+)?)\b/],
-    unsettled:
-      'CVE-2017-13082 (KRACK, Fast BSS Transition) is neither claimed nor refused: whether its handshake is the ' +
-      "client's or the access point's exposure has not been decided against the advisory.",
-    // KRACK, on the CLIENT only. NVD enumerates hostapd builds for them too (31: the same list less 0.2.7 and 0.3.8),
-    // but most of these handshakes are the supplicant's side, and which ones an access point is exposed to is a
-    // per-role question nothing here has checked against the advisory — so hostapd claims none of them rather than
-    // all of them, and says so on its inventory row (`unsettled`).
-    // CVE-2017-13082 (Fast BSS Transition) is left out here for the same reason: whether its handshake is the
-    // client's or the access point's exposure is that same unchecked per-role question.
+    // KRACK on the station. The vendor advisory (w1.fi 2017-1) puts the GTK/IGTK reinstallation and TK configuration
+    // issues on "all wpa_supplicant versions", and NVD enumerates 33 builds for them. Two are refused: CVE-2017-13082
+    // is the access point's (see hostapd), and CVE-2017-13084 the advisory calls "not applicable" because the PeerKey
+    // implementation never installs the key into the driver.
     //
-    // The enumeration is not feature-aware: NVD lists 0.5.9 for the 802.11w, 802.11v, PeerKey and TDLS
-    // variants exactly as for the base handshakes, and nothing this provider reads says whether such a build has
-    // those features at all. Those six therefore carry the feature, in NVD's own words, as a precondition and land
-    // at `needs_runtime_reproduction`. The three whose descriptions name no feature are the four-way and group-key
-    // handshakes every WPA supplicant performs, and are claimed outright.
+    // The enumeration is not feature-aware: NVD lists 0.5.9 for the 802.11w, 802.11v and TDLS variants exactly as for
+    // the base handshakes, and nothing this provider reads says whether such a build has those features at all. Those
+    // five therefore carry the feature, in NVD's own words, as a precondition and land at `needs_runtime_reproduction`.
+    // The three whose descriptions name no feature are the four-way and group-key handshakes every WPA supplicant
+    // performs, and are claimed outright.
     cves: [
       krack(
         'CVE-2017-13077',
@@ -871,12 +893,6 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
         'the build must support IEEE 802.11w (management frame protection)',
       ),
       krack(
-        'CVE-2017-13084',
-        'KRACK — station-to-station link key (STK) reinstallation in the PeerKey handshake',
-        'medium',
-        'the build must implement the PeerKey handshake',
-      ),
-      krack(
         'CVE-2017-13086',
         'KRACK — TDLS peer key (TPK) reinstallation in the TDLS handshake',
         'medium',
@@ -896,6 +912,18 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       ),
     ],
     rejected: [
+      {
+        id: 'CVE-2017-13082',
+        reason:
+          'The vendor advisory (w1.fi 2017-1) makes this the access point/Authenticator issue in the FT protocol; a ' +
+          'station is not the side exposed. NVD enumerates wpa_supplicant builds for it without distinguishing roles.',
+      },
+      {
+        id: 'CVE-2017-13084',
+        reason:
+          'The vendor advisory (w1.fi 2017-1) calls it not applicable: the PeerKey implementation in wpa_supplicant ' +
+          'never installs the key into the driver, and the PeerKey handshake for 802.11e DLS is not known to be deployed.',
+      },
       {
         id: 'CVE-2022-23303',
         reason:
@@ -1120,7 +1148,6 @@ export function buildComponentFindings(hits: ComponentHit[]): FindingDraft[] {
         rationale: [
           'Component version fingerprinted from the binary strings (no package manifest, so a manifest-only SBOM',
           'misses it). No known CVE matched this version in the curated table.',
-          ...(rule?.unsettled ? [`Not checked, so not a clean result: ${rule.unsettled}`] : []),
         ].join(' '),
       });
       continue;

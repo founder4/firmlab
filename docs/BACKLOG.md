@@ -230,15 +230,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   Medido sobre los rootfs: Tenda pasa de 0 a 5 CVE. Sin muestra real con versión legible quedan zlib, lighttpd,
   wget, mosquitto, glibc, musl, mbedtls, openvpn y u-boot; uClibc 0.9.30 (TP-Link) no lleva cadena de versión y
   no se lee del nombre de fichero. KRACK, 2026-10-06: `CveRule.versions` representa la lista enumerada (se casa
-  por igualdad, nunca por el rango que la rodea). NVD da las mismas 33 compilaciones de wpa_supplicant —0.5.9
-  incluida— para los diez CVE, sin distinguir funcionalidad, así que en el cliente se afirman sólo -13077, -13078 y
-  -13080 (handshakes base) y quedan como pista, con la funcionalidad que nombra NVD como precondición, -13079,
-  -13081, -13084, -13086, -13087 y -13088. Pendiente: hostapd (NVD enumera 31 versiones para el AP: la misma
-  lista sin 0.2.7 ni 0.3.8) y CVE-2017-13082 (FT), que exigen decidir por rol AP/cliente contra el aviso de w1.fi,
-  no contra la lista; ambos lo dicen en la fila de inventario (`unsettled`) para que «sin CVE» no se lea limpio.
-  Medido con el core nuevo sobre bytes reales —copiados en lectura del contenedor, que no lleva este cambio—: el
-  `wpa_supplicant` del WR940N v6 3.20.1 (sha256 `5856864e…`) lee 0.5.9 y da 3 `static_confirmed` + 6 pistas; el
-  `hostapd` del WDR3600 v1 3.14.3 (`5f8f75d2…`) lee 0.5.9 y da la fila de inventario con la cuestión abierta.)*
+  por igualdad, nunca por el rango que la rodea). NVD da 33 compilaciones de wpa_supplicant y 31 de hostapd —0.5.9
+  incluida— para los diez CVE sin distinguir rol ni funcionalidad; el rol lo decide el aviso del proveedor (w1.fi
+  2017-1). Estación: se afirman -13077, -13078 y -13080 y quedan como pista, con la funcionalidad que nombra NVD
+  como precondición, -13079, -13081, -13086, -13087 y -13088; se rechazan -13082 (es del AP) y -13084 («not
+  applicable»: PeerKey no instala la clave). AP: sólo -13082, en las compilaciones listadas desde el suelo «v0.7.2
+  and newer» del aviso y como pista porque FT es configuración en ejecución; los de estación se rechazan con el
+  aviso como motivo. Medido con el core nuevo sobre bytes reales —copiados en lectura del contenedor, que no lleva
+  este cambio—: el `wpa_supplicant` del WR940N v6 3.20.1 (sha256 `5856864e…`) lee 0.5.9; el `hostapd` del WDR3600
+  v1 3.14.3 (`5f8f75d2…`) lee 0.5.9, por debajo del suelo de FT, y no casa nada.)*
 - [ ] **NO adoptar** el pase de secretos de mithril: sobre la Tenda-Camera, 12 de 18 hallazgos son falsos
   positivos (tablas de etiquetas TLS de hostapd/wpa_supplicant leídas como claves PEM). `pem-scan.ts` ya exige
   que el cuerpo decodifique. Lo único aprovechable es su tier `validated` (recomputar un checksum embebido).
