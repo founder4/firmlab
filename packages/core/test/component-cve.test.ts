@@ -665,4 +665,19 @@ describe('an enumerated build list is matched as a list, never as the range arou
     expect(curatedCveVerdict('wpa_supplicant', '0.5.9', 'CVE-2017-13084')?.note).toContain('not applicable');
     expect(curatedCveVerdict('hostapd', '0.5.9', 'CVE-2017-13082')?.kind).toBe('outside_curated_range');
   });
+
+  it('cuts the hostapd FT list at the vendor floor and says so, rather than saying NVD omits a build it lists', () => {
+    const [ft] = ruleFor('hostapd').cves;
+    expect(ft?.versions).toEqual(['0.7.3', '1.0', '1.1', '2.0', '2.1', '2.2', '2.3', '2.4', '2.5', '2.6']);
+    expect(cveCovers('0.6.10', ft ?? { low: '', high: '' })).toBe(false); // NVD lists it; below "v0.7.2 and newer"
+    const below = curatedCveVerdict('hostapd', '0.5.9', 'CVE-2017-13082');
+    expect(below?.kind).toBe('outside_curated_range');
+    expect(below?.note).toContain('below the curated floor of 0.7.3');
+    expect(below?.note).toContain('v0.7.2 and newer');
+    expect(below?.note).not.toContain('not among');
+    const [row] = buildComponentFindings([{ component: 'hostapd', version: '2.6', path: '/usr/sbin/hostapd' }]);
+    expect(row?.rationale).toContain("NVD's enumerated builds from 0.7.3 up, because the vendor advisory");
+    expect(row?.rationale).not.toContain('NVD lists for');
+    expect((row?.evidence as { vendorFloor?: string }).vendorFloor).toContain('w1.fi 2017-1');
+  });
 });

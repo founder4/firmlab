@@ -117,6 +117,8 @@ export interface CveRule {
    *  - `bounded`    — NVD gives both ends. Nothing to decide; the rule copies them.
    *  - `enumerated` — NVD lists the affected versions individually. The strongest backing there is: an analyst
    *                   asserted those builds, so nobody here is inferring a floor.
+   *                   A rule may still cut that list at a floor the vendor's own advisory gives, and
+   *                   `vendorFloor` then says which and why.
    *  - `open-below` — NVD gives only an upper bound, which "affects" every release back to the project's first.
    *                   The rule must then set its own floor AND justify it in `floorRationale`.
    */
@@ -144,7 +146,8 @@ export interface CveRule {
    */
   precondition?: string;
   /**
-   * The exact builds NVD enumerates, when its list has GAPS a range would paper over. Matching is then by equality
+   * The exact builds NVD enumerates (or that enumeration cut at `vendorFloor`), when the list has GAPS a range would
+   * paper over. Matching is then by equality
    * against this list, and `low`/`high` must be its first and last entries — kept for display and ordering only.
    *
    * KRACK is why it exists: NVD lists 33 individual wpa_supplicant builds from 0.2.4 to 2.6, and a range over the
@@ -152,6 +155,14 @@ export interface CveRule {
    * inferred from it is this table asserting the ones in between, which is the recall the table refuses.
    */
   versions?: readonly string[];
+  /**
+   * Why `versions` is NVD's enumeration cut at a floor the VENDOR gives, when it is. NVD's list for a CVE can span
+   * roles and releases the vendor's own advisory excludes (KRACK's FT issue: NVD lists 31 hostapd builds, the advisory
+   * says "v0.7.2 and newer"). The rule then claims the NVD-listed builds at or above that floor, and this sentence —
+   * quoting the advisory — travels onto the finding and onto a grype row below the floor, so neither says "NVD does
+   * not list it" about a build NVD does list.
+   */
+  vendorFloor?: string;
 }
 
 /** Pure: how a rule's affected set reads in a sentence — the enumerated count, or the range NVD gives. */
@@ -832,15 +843,18 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
         low: '0.7.3',
         high: '2.6',
         versions: ['0.7.3', '1.0', '1.1', '2.0', '2.1', '2.2', '2.3', '2.4', '2.5', '2.6'],
-        precondition: 'Fast BSS Transition (IEEE 802.11r) must be enabled in the runtime configuration',
+        vendorFloor:
+          'the vendor advisory (w1.fi 2017-1) gives "hostapd v0.7.2 and newer with FT enabled" for this AP-side issue, ' +
+          'and NVD lists hostapd builds back to 0.2.4 without distinguishing that.',
+        precondition: 'Fast BSS Transition (IEEE 802.11r) must be built in and enabled in the runtime configuration',
       },
     ],
     rejected: [
       ...KRACK_STATION_CVES.map((id) => ({
         id,
         reason:
-          'The vendor advisory (w1.fi 2017-1) places this reinstallation on the station/supplicant side; the access ' +
-          'point is exposed only to CVE-2017-13082. NVD enumerates hostapd builds for it without distinguishing roles.',
+          'The vendor advisory (w1.fi 2017-1) places this reinstallation on the station/supplicant side; of these ten ' +
+          "CVEs, only CVE-2017-13082 is the access point's. NVD enumerates hostapd builds for it without distinguishing roles.",
       })),
       {
         id: 'CVE-2022-23303',
@@ -915,8 +929,8 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
       {
         id: 'CVE-2017-13082',
         reason:
-          'The vendor advisory (w1.fi 2017-1) makes this the access point/Authenticator issue in the FT protocol; a ' +
-          'station is not the side exposed. NVD enumerates wpa_supplicant builds for it without distinguishing roles.',
+          'The vendor advisory (w1.fi 2017-1) assigns this to the access point/Authenticator in the FT protocol. NVD ' +
+          'enumerates wpa_supplicant builds for it without distinguishing roles.',
       },
       {
         id: 'CVE-2017-13084',
@@ -1115,6 +1129,17 @@ export function curatedCveVerdict(component: string, version: string, cveId: str
         : `The curated table claims ${cveId} for ${component} ${range} as well; its own row is static_confirmed from the version string in the binary, which is evidence this manifest match does not carry.`,
     };
   }
+  const floored = ranges.find((c) => c.vendorFloor);
+  if (floored?.vendorFloor && ranges.length === 1) {
+    const pv = parseVersion(version);
+    const pl = parseVersion(floored.low);
+    if (pv && pl && compareVersion(pv, pl) < 0) {
+      return {
+        kind: 'outside_curated_range',
+        note: `${component} ${version} is below the curated floor of ${floored.low} for ${cveId}, though NVD may list it: ${floored.vendorFloor}`,
+      };
+    }
+  }
   if (ranges.every((c) => c.versions)) {
     return {
       kind: 'outside_curated_range',
@@ -1145,10 +1170,9 @@ export function buildComponentFindings(hits: ComponentHit[]): FindingDraft[] {
         severity: 'info',
         proofState: 'static_confirmed',
         evidence: { component: hit.component, version: hit.version, path: hit.path },
-        rationale: [
-          'Component version fingerprinted from the binary strings (no package manifest, so a manifest-only SBOM',
+        rationale:
+          'Component version fingerprinted from the binary strings (no package manifest, so a manifest-only SBOM ' +
           'misses it). No known CVE matched this version in the curated table.',
-        ].join(' '),
       });
       continue;
     }
@@ -1170,13 +1194,16 @@ export function buildComponentFindings(hits: ComponentHit[]): FindingDraft[] {
           affected: range,
           nvdBacking: cve.nvdBacking,
           ...(cve.floorRationale ? { floorRationale: cve.floorRationale } : {}),
+          ...(cve.vendorFloor ? { vendorFloor: cve.vendorFloor } : {}),
           path: hit.path,
           ...(cve.precondition ? { precondition: cve.precondition } : {}),
         },
         rationale: [
-          cve.versions
-            ? `The bundled ${hit.component} binary reports version ${hit.version}, one of the ${range} NVD lists for ${cve.id}.`
-            : `The bundled ${hit.component} binary reports version ${hit.version}, inside the published affected range ${range} for ${cve.id}.`,
+          cve.vendorFloor
+            ? `The bundled ${hit.component} binary reports version ${hit.version}, one of the ${range} claimed for ${cve.id}: NVD's enumerated builds from ${cve.low} up, because ${cve.vendorFloor}`
+            : cve.versions
+              ? `The bundled ${hit.component} binary reports version ${hit.version}, one of the ${range} NVD lists for ${cve.id}.`
+              : `The bundled ${hit.component} binary reports version ${hit.version}, inside the published affected range ${range} for ${cve.id}.`,
           cve.nvdBacking === 'enumerated'
             ? 'NVD lists the affected versions individually, so an analyst asserted this build rather than a range catching it.'
             : cve.nvdBacking === 'open-below'
