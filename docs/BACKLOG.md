@@ -233,8 +233,9 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   por igualdad, nunca por el rango que la rodea). NVD da las mismas 33 compilaciones de wpa_supplicant —0.5.9
   incluida— para los diez CVE, sin distinguir funcionalidad, así que en el cliente se afirman sólo -13077, -13078 y
   -13080 (handshakes base) y quedan como pista, con la funcionalidad que nombra NVD como precondición, -13079,
-  -13081, -13084, -13086, -13087 y -13088. Pendiente: hostapd (NVD enumera las mismas versiones para el AP) y
-  CVE-2017-13082 (FT), que exigen decidir por rol AP/cliente contra el aviso de w1.fi, no contra la lista.)*
+  -13081, -13084, -13086, -13087 y -13088. Pendiente: hostapd (NVD enumera 31 versiones para el AP: la misma
+  lista sin 0.2.7 ni 0.3.8) y CVE-2017-13082 (FT), que exigen decidir por rol AP/cliente contra el aviso de w1.fi,
+  no contra la lista; ambos lo dicen en la fila de inventario (`unsettled`) para que «sin CVE» no se lea limpio.)*
 - [ ] **NO adoptar** el pase de secretos de mithril: sobre la Tenda-Camera, 12 de 18 hallazgos son falsos
   positivos (tablas de etiquetas TLS de hostapd/wpa_supplicant leídas como claves PEM). `pem-scan.ts` ya exige
   que el cuerpo decodifique. Lo único aprovechable es su tier `validated` (recomputar un checksum embebido).

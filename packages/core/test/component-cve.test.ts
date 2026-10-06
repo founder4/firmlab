@@ -591,4 +591,65 @@ describe('an enumerated build list is matched as a list, never as the range arou
     expect(affectedText({ low: '7.69.0', high: '8.4.0', highExclusive: true })).toBe('7.69.0–8.4.0 (exclusive)');
     expect(affectedText({ low: '2.4.3', high: '2.4.3' })).toBe('2.4.3');
   });
+
+  it('pins the list and the severities to what NVD returned on 2026-10-06', () => {
+    // From the saved NVD API responses: the same 33 builds for all ten CVEs, CVSS v3 MEDIUM for every claimed one.
+    const nvd = [
+      '0.2.4',
+      '0.2.5',
+      '0.2.6',
+      '0.2.7',
+      '0.2.8',
+      '0.3.7',
+      '0.3.8',
+      '0.3.9',
+      '0.3.10',
+      '0.3.11',
+      '0.4.7',
+      '0.4.8',
+      '0.4.9',
+      '0.4.10',
+      '0.4.11',
+      '0.5.7',
+      '0.5.8',
+      '0.5.9',
+      '0.5.10',
+      '0.5.11',
+      '0.6.8',
+      '0.6.9',
+      '0.6.10',
+      '0.7.3',
+      '1.0',
+      '1.1',
+      '2.0',
+      '2.1',
+      '2.2',
+      '2.3',
+      '2.4',
+      '2.5',
+      '2.6',
+    ];
+    expect(krack).toHaveLength(9);
+    for (const c of krack) {
+      expect(c.versions, c.id).toEqual(nvd);
+      expect(c.severity, c.id).toBe('medium');
+    }
+  });
+
+  it('does not call a held lead static_confirmed when it corroborates a grype row', () => {
+    const lead = curatedCveVerdict('wpa_supplicant', '0.5.9', 'CVE-2017-13079');
+    expect(lead?.kind).toBe('claimed');
+    expect(lead?.note).toContain('stays needs_runtime_reproduction because the build must support IEEE 802.11w');
+    expect(lead?.note).not.toContain('is static_confirmed');
+    expect(curatedCveVerdict('wpa_supplicant', '0.5.9', 'CVE-2017-13077')?.note).toContain('is static_confirmed');
+  });
+
+  it('says on the hostapd inventory row that KRACK was looked at and left undecided, not found absent', () => {
+    const [row] = buildComponentFindings([{ component: 'hostapd', version: '0.5.9', path: '/usr/sbin/hostapd' }]);
+    expect(row?.kind).toBe('component-version');
+    expect(row?.rationale).toContain('Not checked, so not a clean result');
+    expect(row?.rationale).toContain('31 hostapd builds');
+    const [plain] = buildComponentFindings([{ component: 'busybox', version: '9.9.9', path: '/bin/busybox' }]);
+    expect(plain?.rationale).not.toContain('Not checked');
+  });
 });

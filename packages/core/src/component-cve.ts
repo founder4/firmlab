@@ -206,6 +206,11 @@ export interface ComponentRule {
   cves: CveRule[];
   /** CVEs evaluated for this component and refused, each with its reason. See `RejectedCve`. */
   rejected?: readonly RejectedCve[];
+  /**
+   * CVEs this table has looked at for the component and neither claims nor refuses, with what is left to decide.
+   * Printed on the inventory row a build with no match gets, so "no curated CVE matched" is not read as "clean".
+   */
+  unsettled?: string;
 }
 
 /**
@@ -805,6 +810,9 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     // Read off real binaries on 2026-09-26: `hostapd v0.5.9` (all three TP-Link images) and `hostapd v2.9` (IMOU).
     binNames: ['hostapd'],
     versionRes: [/\bhostapd v(\d+\.\d+(?:\.\d+)?)\b/],
+    unsettled:
+      'NVD enumerates 31 hostapd builds for the ten KRACK CVEs (CVE-2017-13077 … -13088), and which of those handshakes an ' +
+      'access point is exposed to has not been decided against the advisory, so none is claimed or refused here.',
     cves: [],
     rejected: [
       {
@@ -827,9 +835,13 @@ export const COMPONENT_RULES: readonly ComponentRule[] = [
     // the same reason, so a grype row on either lane reads the same.
     binNames: ['wpa_supplicant'],
     versionRes: [/\bwpa_supplicant v(\d+\.\d+(?:\.\d+)?)\b/],
-    // KRACK, on the CLIENT only. NVD enumerates the same builds for hostapd too, but most of these handshakes are
-    // the supplicant's side, and which ones an access point is exposed to is a per-role question nothing here has
-    // checked against the advisory — so hostapd claims none of them rather than all of them.
+    unsettled:
+      'CVE-2017-13082 (KRACK, Fast BSS Transition) is neither claimed nor refused: whether its handshake is the ' +
+      "client's or the access point's exposure has not been decided against the advisory.",
+    // KRACK, on the CLIENT only. NVD enumerates hostapd builds for them too (31: the same list less 0.2.7 and 0.3.8),
+    // but most of these handshakes are the supplicant's side, and which ones an access point is exposed to is a
+    // per-role question nothing here has checked against the advisory — so hostapd claims none of them rather than
+    // all of them, and says so on its inventory row (`unsettled`).
     // CVE-2017-13082 (Fast BSS Transition) is left out here for the same reason: whether its handshake is the
     // client's or the access point's exposure is that same unchecked per-role question.
     //
@@ -1064,10 +1076,15 @@ export function curatedCveVerdict(component: string, version: string, cveId: str
       note: `The curated table carries ${cveId} for ${component} ${range} but cannot compare the manifest version "${version}", so it neither corroborates nor disputes this row.`,
     };
   }
-  if (ranges.some((c) => cveCovers(version, c))) {
+  const covering = ranges.filter((c) => cveCovers(version, c));
+  if (covering.length > 0) {
+    // A precondition holds the curated row at a lead, so saying it is static_confirmed would claim what it is not.
+    const held = covering.every((c) => c.precondition) ? covering[0]?.precondition : undefined;
     return {
       kind: 'claimed',
-      note: `The curated table claims ${cveId} for ${component} ${range} as well; its own row is static_confirmed from the version string in the binary, which is evidence this manifest match does not carry.`,
+      note: held
+        ? `The curated table claims ${cveId} for ${component} ${range} as well, from the version string in the binary; its own row stays needs_runtime_reproduction because ${held}.`
+        : `The curated table claims ${cveId} for ${component} ${range} as well; its own row is static_confirmed from the version string in the binary, which is evidence this manifest match does not carry.`,
     };
   }
   if (ranges.every((c) => c.versions)) {
@@ -1100,9 +1117,11 @@ export function buildComponentFindings(hits: ComponentHit[]): FindingDraft[] {
         severity: 'info',
         proofState: 'static_confirmed',
         evidence: { component: hit.component, version: hit.version, path: hit.path },
-        rationale:
-          'Component version fingerprinted from the binary strings (no package manifest, so a manifest-only SBOM ' +
+        rationale: [
+          'Component version fingerprinted from the binary strings (no package manifest, so a manifest-only SBOM',
           'misses it). No known CVE matched this version in the curated table.',
+          ...(rule?.unsettled ? [`Not checked, so not a clean result: ${rule.unsettled}`] : []),
+        ].join(' '),
       });
       continue;
     }
