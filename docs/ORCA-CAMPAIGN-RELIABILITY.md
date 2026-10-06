@@ -297,7 +297,8 @@ taken through detection, retirement, send and adoption; the 2 October transport 
 
 **Not covered: a worker that hits the same quota.** The Codex documentation worker of that Run committed its change
 and then stopped on the same usage-limit screen before `worker_done`. Its Dispatch stayed `dispatched`, liveness
-`live`, and the inbox stayed empty, because the guard watches only the coordinator. The new coordinator read the
+`live`, and the inbox stayed empty; the guard tracks worker state but screen-reads only the coordinator, so nothing
+flagged it. The new coordinator read the
 rendered screen, used that final turn without a `worker_done` as positive proof the agent had stopped, and closed the
 exact terminal with `worker-stop` (`ptyKilled: true`) without answering the provider's model selector. It recorded
 the Task as failed with that result, reviewed the commit itself and integrated it. One reserve was enough here

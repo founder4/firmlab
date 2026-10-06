@@ -129,10 +129,11 @@ there. Every rule declares what NVD backs it with, in `nvdBacking`:
   than guessing it into an inclusive one, because "the last release before 8.4.0" is release history nobody here
   verified.
 - `enumerated` — NVD lists the affected builds individually. The strongest backing there is; no floor is inferred.
-  When the list has gaps (KRACK: 33 wpa_supplicant builds with whole series missing), the rule carries it in
+  When the list has gaps (KRACK: 33 wpa_supplicant builds with runs of releases missing), the rule carries it in
   `versions` and matches by equality, because a range over the same ends claims builds nobody named. NVD's list
-  does not know roles or features: the vendor advisory decides those, a list cut at the vendor's floor says why in
-  `vendorFloor` (on the finding and on the grype row), and a feature the description names becomes a precondition.
+  does not know roles or features: the vendor advisory decides roles, a list cut at the vendor's floor says why in
+  `vendorFloor` (on the finding, and on a grype row below the floor), and a feature NVD's own description names
+  becomes a precondition.
 - `open-below` — only an upper bound, which "affects" every release back to the project's first. An unbounded
   range is a CPE modelling artifact, not evidence that a decade-older codebase contains the bug, so **the rule
   sets its own floor and must justify it in `floorRationale`** — a required field a test enforces, and one whose
