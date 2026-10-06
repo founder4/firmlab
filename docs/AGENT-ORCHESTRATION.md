@@ -57,6 +57,13 @@ ready different-provider receiver. Positive closure precedes the prompt; same-Ru
 No receiver or ambiguous closure blocks the transition. Unknown liveness blocks mutations. At the deadline report actual executed
 work and gaps rather than crediting the whole elapsed window. Never restart an expired campaign silently.
 
+The supervisor watches only the coordinator. A provider block is account-wide, so after adopting a Run on a
+capacity handoff, read the rendered screen (`terminal read --screen`) of every active worker on the blocked
+provider: such a worker stays `dispatched`/`live` with an empty inbox while it sits on the same usage-limit screen.
+A final turn that ended there without `worker_done` is the positive proof `worker-stop` needs. Do not answer the
+provider's model selector. Recover committed work from the worktree, review it as you would a settlement, and record
+the Task's outcome; the 2026-10-06 instance is in [the continuity runbook](ORCA-CAMPAIGN-RELIABILITY.md).
+
 ## Task specification templates
 
 ### Implementation
