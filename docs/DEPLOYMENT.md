@@ -269,8 +269,7 @@ de hace ocho meses no es la misma afirmación que cero CVE contra la de hoy.
 
 > **Esto NO es lo que corre hoy.** Revalidado el 2026-10-06 (build desplegada `f0c074a`, dos commits detrás del
 > `HEAD` auditado `3615c1a`): `~/homelab/firmlab/docker-compose.yml` y el contenedor desplegado usan la red bridge
-> **`proxy_net`**,
-> sin `NET_ADMIN`/`NET_RAW`,
+> **`proxy_net`**, sin `NET_ADMIN`/`NET_RAW`,
 > sin `security_opt` (no hay `seccomp-firmlab.json` junto al compose), con `FIRMLAB_HOST=0.0.0.0` detrás de
 > Traefik y sin puertos publicados en el host. Consecuencias medidas el 2026-10-04 en ese contenedor:
 >

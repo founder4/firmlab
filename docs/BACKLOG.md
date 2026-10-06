@@ -553,7 +553,8 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   efectivo sigue siendo bridge `proxy_net`, bind interno `0.0.0.0`, ningún puerto publicado por `firmlab` y
   sidecar loopback `127.0.0.1:8899`; la red host queda rotulada como evidencia histórica/propuesta no aplicada.
   El contenedor y `firmlab-firmware:latest` coinciden en `f0c074a`, dos commits detrás del `HEAD` `3615c1a`; no se
-  cambió el despliegue. Persiste sin explicar la diferencia entre el config-hash calculado y la etiqueta activa.)*
+  cambió el despliegue. Persiste sin explicar la diferencia entre el config-hash calculado y la etiqueta activa, y
+  no se verificó la alcanzabilidad externa ni la aplicación efectiva de los middlewares de Traefik.)*
 
 - [x] Estabilizar la espera inicial de `AnalysisActionsPanel.test.tsx`: durante la validación completa del contrato
   MCP, el caso de estado vacío agotó una vez la espera mientras seguía mostrando «Leyendo ejecuciones anteriores…».
