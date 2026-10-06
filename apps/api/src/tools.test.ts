@@ -43,7 +43,7 @@ describe('probeEnv', () => {
   // proxies, bypass list included. Read through the real table, so dropping the hook from the spec fails here.
   it('runs the renode probe under the same offline env as its boot runs', () => {
     const spec = toolSpec('renode');
-    expect(spec?.probeEnv).toBeDefined();
+    expect(spec?.offlineEnv).toBeDefined();
     const env = probeEnv(spec ?? {}, base);
     expect(env.HTTPS_PROXY).toBe(RENODE_REFUSING_PROXY);
     expect(env.https_proxy).toBe(RENODE_REFUSING_PROXY);

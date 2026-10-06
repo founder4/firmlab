@@ -848,10 +848,11 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   los `CONNECT dl.antmicro.com:443`, y el Zephyr STM32L072 del corpus sigue arrancando (`confirmed_in_emulation`, UART
   en usart2) con el SVD rechazado y nombrado en el resultado. Qué cambia el SVD en el comportamiento de periféricos
   no se ha medido. El sondeo de capacidades `renode --version` corre desde 2026-10-06 con el mismo entorno offline
-  (`probeEnv` en `tools.ts`, desde el módulo hoja `renode-offline.ts`). Medido ese día en `firmlab-firmware`
-  (`f0c074a`, Renode 1.16.1) con `--network none` y los proxies apuntando a un listener que registra: 0 conexiones,
-  también con `NO_PROXY=*` heredado, y la versión se sigue leyendo. Es coherencia, no el cierre de una fuga medida;
-  una conexión directa que ignore los proxies fallaría en silencio bajo `--network none` y no se contó.
+  (`probeEnv` en `tools.ts`, desde el módulo hoja `renode-offline.ts`); sin desplegar. Medido ese día a mano, no
+  por la ruta del sondeo: en `firmlab-firmware` (`f0c074a`, anterior al cambio; Renode 1.16.1) con `--network none`
+  y las seis variables de proxy apuntando a un listener que registra, `renode --version` imprimió
+  `Renode v1.16.1.17316` y el listener recibió 0 conexiones. Es coherencia, no el cierre de una fuga medida: una
+  conexión directa que ignore los proxies fallaría en silencio bajo `--network none` y no se contó.
 
 ## Revisiones independientes de la campaña (2026-10-02)
 

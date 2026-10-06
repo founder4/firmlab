@@ -105,7 +105,7 @@ export interface ToolSpec {
   timeoutMs?: number;
   /** Tool-specific environment for the probe, applied over the shared offline baseline. For a tool whose runs are
    *  already held offline by its provider, so that the probe cannot be the one invocation that is not. */
-  probeEnv?: (base: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+  offlineEnv?: (base: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
 }
 
 /**
@@ -189,7 +189,7 @@ const TOOLS: readonly ToolSpec[] = [
     probe: ['-V'],
     group: 'emulate',
   },
-  { id: 'renode', bin: 'renode', probe: ['--version'], group: 'emulate', probeEnv: offlineRenodeEnv },
+  { id: 'renode', bin: 'renode', probe: ['--version'], group: 'emulate', offlineEnv: offlineRenodeEnv },
   { id: 'chipsec', bin: 'chipsec_util', probe: ['--help'], group: 'analyze' },
   {
     id: 'angr',
@@ -320,12 +320,12 @@ export function classifyProbeFailure(err: unknown): ProbeOutcome {
 
 /**
  * Pure: the environment a capability probe runs under — the caller's, with the anchore offline variables over it,
- * then the tool's own `probeEnv`. The renode probe is the reason this exists: its boot runs were held offline while
+ * then the tool's own `offlineEnv`. The renode probe is the reason this exists: its boot runs were held offline while
  * `renode --version` here still inherited the operator's proxies, including a `NO_PROXY` that the boot env removes.
  */
-export function probeEnv(spec: Pick<ToolSpec, 'probeEnv'>, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function probeEnv(spec: Pick<ToolSpec, 'offlineEnv'>, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base, ...OFFLINE_ANCHORE_ENV };
-  return spec.probeEnv ? spec.probeEnv(env) : env;
+  return spec.offlineEnv ? spec.offlineEnv(env) : env;
 }
 
 /** The probe spec for one tool id, for tests that must reach the real table rather than a copy of it. */
