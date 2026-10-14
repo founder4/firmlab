@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
   "profile": "firmware-balanced",
-  "generatedAt": "2026-10-04",
+  "generatedAt": "2026-10-14",
   "minimumYaraVersion": "4.2.3",
   "external": {
     "name": "YARA Forge Core",
     "project": "https://github.com/YARAHQ/yara-forge",
-    "release": "20260927",
-    "releaseUrl": "https://github.com/YARAHQ/yara-forge/releases/tag/20260927",
-    "archiveUrl": "https://github.com/YARAHQ/yara-forge/releases/download/20260927/yara-forge-rules-core.zip",
-    "archiveSha256": "16180800cc2f077638d2e13a33bd68609d0b6eedd1fbfdbae6d5d4a1c53f826f",
-    "archiveBytes": 1736351,
+    "release": "20261011",
+    "releaseUrl": "https://github.com/YARAHQ/yara-forge/releases/tag/20261011",
+    "archiveUrl": "https://github.com/YARAHQ/yara-forge/releases/download/20261011/yara-forge-rules-core.zip",
+    "archiveSha256": "bf0cc68e60df44bee4e9906713160889e7c2142b14621394860a45e629035147",
+    "archiveBytes": 1748575,
     "archiveMember": "packages/core/yara-rules-core.yar",
-    "ruleFileSha256": "6fa45640f95ab41453d164956e188384dc323c730ea2440d55e77fb80baeb607",
-    "ruleFileBytes": 7827876,
-    "rulesDeclared": 5110,
+    "ruleFileSha256": "f871f61878b7d703423a7740f1f452898650d606d4547fe5a817365d2abb8c12",
+    "ruleFileBytes": 7889825,
+    "rulesDeclared": 5145,
     "selection": {
       "minimumQuality": 70,
       "minimumScore": 65,
@@ -31,6 +31,6 @@
   },
   "totals": {
     "ruleFiles": 2,
-    "rulesDeclared": 5116
+    "rulesDeclared": 5151
   }
 }
