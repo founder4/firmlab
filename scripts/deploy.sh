@@ -26,6 +26,7 @@
 #   CONTAINER      container name to verify   (default: firmlab)
 #   TOOLS_IMAGE    tools base image tag       (default: firmlab-tools:latest)
 #   FW_IMAGE       deploy image tag           (default: firmlab-firmware:latest)
+#   GRYPE_DB_REFRESH  explicit Grype DB cache key for --tools (default: current UTC timestamp)
 
 # `-E` is the load-bearing letter. `set -e` kills the script wherever a command returns non-zero and by default
 # does so SILENTLY — the anti-squatter guard died on an lsof that simply found nothing, and the only symptom was
@@ -36,6 +37,14 @@
 set -Eeuo pipefail
 
 trap 'status=$?; printf "\033[1;31m[x]\033[0m deploy.sh abortó en la línea %s (exit %s): %s\n" "$LINENO" "$status" "$BASH_COMMAND" >&2' ERR
+
+TOOLS_IID_FILE=""
+cleanup() {
+  if [ -n "$TOOLS_IID_FILE" ]; then
+    rm -f -- "$TOOLS_IID_FILE"
+  fi
+}
+trap cleanup EXIT
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${COMPOSE_FILE:-$HOME/homelab/firmlab/docker-compose.yml}"
@@ -62,6 +71,11 @@ done
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
+
+image_last_layer() {
+  docker image inspect "$1" --format '{{range .RootFS.Layers}}{{println .}}{{end}}' \
+    | awk 'NF { last = $0 } END { if (last != "") print last }'
+}
 
 cd "$REPO_ROOT"
 
@@ -173,16 +187,51 @@ if [ "$DIRTY" -eq 1 ] && [ "$ALLOW_DIRTY" -eq 0 ]; then
 fi
 
 # --- build: tagging is part of the build, never a separate step you can forget --------------------
-# The tools base is heavy; build it only when asked (--tools) or when it does not exist yet.
-if [ "$REBUILD_TOOLS" -eq 1 ] || ! docker image inspect "$TOOLS_IMAGE" >/dev/null 2>&1; then
+# The tools base is heavy; build it only when asked (--tools) or when it does not exist yet. An explicit --tools
+# means "refresh and prove the baked catalogue": its volatile cache key invalidates only Dockerfile.tools' final
+# Grype layer, and the network-disabled verification must pass before the firmware image can be built. The first
+# automatic build of a missing tools image keeps the optional-tool contract — a failed DB bake remains an honest
+# degraded image rather than making an otherwise useful first deployment impossible.
+if [ "$REBUILD_TOOLS" -eq 1 ]; then
+  GRYPE_DB_REFRESH="${GRYPE_DB_REFRESH:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+  CURRENT_TOOLS_LAYER=""
+  if docker image inspect "$TOOLS_IMAGE" >/dev/null 2>&1; then
+    CURRENT_TOOLS_LAYER="$(image_last_layer "$TOOLS_IMAGE")"
+    [ -n "$CURRENT_TOOLS_LAYER" ] || die "no se pudo identificar la última capa de $TOOLS_IMAGE"
+  fi
   say "construyendo $TOOLS_IMAGE (base pesada de tools)"
+  TOOLS_IID_FILE="$(mktemp "${TMPDIR:-/tmp}/firmlab-tools-iid.XXXXXX")"
+  docker build --iidfile "$TOOLS_IID_FILE" --build-arg "GRYPE_DB_REFRESH=$GRYPE_DB_REFRESH" -f Dockerfile.tools .
+  TOOLS_CANDIDATE="$(tr -d '\r\n' < "$TOOLS_IID_FILE")"
+  case "$TOOLS_CANDIDATE" in
+    sha256:*) ;;
+    *) die "docker build no dejó un ID de imagen válido en $TOOLS_IID_FILE" ;;
+  esac
+  say "verificando offline la base Grype candidata $TOOLS_CANDIDATE"
+  docker run --rm --network none \
+    -e GRYPE_DB_AUTO_UPDATE=false \
+    -e GRYPE_CHECK_FOR_APP_UPDATE=false \
+    -e GRYPE_DB_VALIDATE_AGE=false \
+    "$TOOLS_CANDIDATE" \
+    bash -c 'set -o pipefail; grype db status >/dev/null && test -n "$(find "$GRYPE_DB_CACHE_DIR" -name vulnerability.db -size +100M -print -quit)"'
+  CANDIDATE_TOOLS_LAYER="$(image_last_layer "$TOOLS_CANDIDATE")"
+  [ -n "$CANDIDATE_TOOLS_LAYER" ] || die "no se pudo identificar la última capa de $TOOLS_CANDIDATE"
+  if [ -n "$CURRENT_TOOLS_LAYER" ] && [ "$CANDIDATE_TOOLS_LAYER" = "$CURRENT_TOOLS_LAYER" ]; then
+    die "la capa final de Grype no cambió; se conserva $TOOLS_IMAGE sin promover la candidata"
+  fi
+  docker tag "$TOOLS_CANDIDATE" "$TOOLS_IMAGE"
+  rm -f -- "$TOOLS_IID_FILE"
+  TOOLS_IID_FILE=""
+elif ! docker image inspect "$TOOLS_IMAGE" >/dev/null 2>&1; then
+  say "construyendo $TOOLS_IMAGE (base pesada de tools; no existía)"
   docker build -f Dockerfile.tools -t "$TOOLS_IMAGE" .
 else
   say "reusando $TOOLS_IMAGE (usa --tools para reconstruirla)"
 fi
 
 say "construyendo $FW_IMAGE (app sobre la base de tools, rev $REVISION)"
-docker build --label "$REVISION_LABEL=$REVISION" --build-arg "GIT_SHA=$REVISION" -f Dockerfile.firmware -t "$FW_IMAGE" .
+docker build --label "$REVISION_LABEL=$REVISION" --build-arg "GIT_SHA=$REVISION" \
+  --build-arg "TOOLS_IMAGE=$TOOLS_IMAGE" -f Dockerfile.firmware -t "$FW_IMAGE" .
 
 BUILT_ID="$(docker image inspect "$FW_IMAGE" --format '{{.Id}}')"
 say "imagen      $BUILT_ID"

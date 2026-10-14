@@ -309,6 +309,9 @@ RUN bash -c 'cd / && apt-get update && apt-get install -y --no-install-recommend
 # with `GRYPE_DB_CACHE_DIR` pointing at an empty directory, which is the honest state the lane already handles —
 # it refuses and names both remedies, rather than pretending the firmware is clean.
 ENV GRYPE_DB_CACHE_DIR=/opt/grype-db
+# This argument belongs immediately beside the volatile database layer: `deploy.sh --tools` supplies a fresh
+# value (or the operator's explicit override) so Docker reuses every expensive tool layer above and rebuilds only
+# the catalogue. A missing tools image built by a normal deploy may keep the stable default and honest degradation.
 #
 # The `find` is not decoration, and it is here because the first draft of this block PASSED without it. Run
 # without `GRYPE_DB_CACHE_DIR` in the environment, `grype db update` writes to `~/.cache/grype`, `grype db status`
@@ -316,7 +319,9 @@ ENV GRYPE_DB_CACHE_DIR=/opt/grype-db
 # `du -sh /opt/grype-db` printed `0` beside a clean bill of health. Measured on 2026-09-19 against
 # firmlab-tools:latest. So the success path asserts the database is in the directory this image will actually
 # point the app at, at a size only a real one reaches; `grype db status` alone answers about the wrong file.
+ARG GRYPE_DB_REFRESH=initial
 RUN bash -c 'set -o pipefail; mkdir -p /opt/grype-db \
+    && printf "%s\n" "${GRYPE_DB_REFRESH}" > /opt/grype-db/.firmlab-refresh \
     && GRYPE_DB_AUTO_UPDATE=true GRYPE_CHECK_FOR_APP_UPDATE=false grype db update \
     && GRYPE_DB_VALIDATE_AGE=false GRYPE_CHECK_FOR_APP_UPDATE=false grype db status \
     && test -n "$(find /opt/grype-db -name vulnerability.db -size +100M)" \
