@@ -1,0 +1,37 @@
+[
+  {
+    "release": "v1.55.0",
+    "url": "https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_linux_arm64.tar.gz",
+    "sha256": "929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304",
+    "kind": "binary",
+    "target": "/usr/local/bin/syft"
+  },
+  {
+    "release": "v0.121.0",
+    "url": "https://github.com/anchore/grype/releases/download/v0.121.0/grype_0.121.0_linux_arm64.tar.gz",
+    "sha256": "86f570f75ca947ea3dd6486309232bcff6d78e44ba081ae75ab14eab72be3dae",
+    "kind": "binary",
+    "target": "/usr/local/bin/grype"
+  },
+  {
+    "release": "v8.30.1",
+    "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz",
+    "sha256": "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080",
+    "kind": "binary",
+    "target": "/usr/local/bin/gitleaks"
+  },
+  {
+    "release": "v1.17.0",
+    "url": "https://github.com/renode/renode/releases/download/v1.17.0/renode-1.17.0.linux-arm64-portable.tar.gz",
+    "sha256": "e9051578411441bfb47b77de0381cfba3badce03663367fab561472fd7807f1f",
+    "kind": "tar",
+    "target": "/opt/renode"
+  },
+  {
+    "release": "Ghidra_12.1.4_build",
+    "url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip",
+    "sha256": "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db",
+    "kind": "zip",
+    "target": "/opt/ghidra"
+  }
+]

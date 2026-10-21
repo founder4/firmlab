@@ -1,0 +1,18 @@
+# Security refresh over the retained toolchain: no optional tool build may fail
+# silently here. Build this base, then pass it as TOOLS_IMAGE to Dockerfile.firmware.
+# The existing Dockerfile.tools and deploy scripts have unrelated operator edits.
+ARG TOOLS_BASE=firmlab-tools:rollback-pre-29e2502
+FROM ${TOOLS_BASE}
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+RUN for env in /opt/angr-venv /opt/fw-py /opt/fwhunt-venv; do \
+      "$env/bin/pip" install --no-cache-dir --upgrade 'setuptools>=78.1.1' \
+        'certifi==2026.10.19' 'urllib3>=2.8.0' 'msgpack>=1.2.1' \
+      && "$env/bin/pip" check || exit 1; \
+    done
+COPY ops/security/assets-20261022.json /tmp/security-assets.json
+COPY scripts/refresh-security-assets.py /tmp/refresh-security-assets.py
+RUN python3 -m venv /tmp/security-installer \
+    && /tmp/security-installer/bin/pip install --no-cache-dir backports.tarfile==1.2.0 \
+    && /tmp/security-installer/bin/python /tmp/refresh-security-assets.py /tmp/security-assets.json \
+    && rm -rf /tmp/security-installer /tmp/security-assets.json /tmp/refresh-security-assets.py
