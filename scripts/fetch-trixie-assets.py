@@ -10,6 +10,7 @@ def patch_mitmproxy(text):
     replacements = {
         '"msgpack>=1.0.0,<=1.1.2"': '"msgpack==1.2.3"',
         '"cryptography>=42.0,<=48.1"': '"cryptography==50.0.2"',
+        '"tornado>=6.5.0,<=6.5.5"': '"tornado==6.5.9"',
     }
     for old, new in replacements.items():
         if text.count(old) != 1:

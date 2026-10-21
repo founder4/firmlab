@@ -350,8 +350,8 @@ su fuente oficial verificada, con SDK .NET 8.0.426/runtime 8.0.32, Newtonsoft.Js
 Ghidra 12.1.4 conserva los JAR corregidos y reconstruye decompile/sleigh para ARM64.
 Los ejecutables AFL++ se recompilan en Debian 13 contra libpython3.13 desde el mismo commit retenido
 `dbaf11913c1b2702dee5b4d3dcfffd52f1defe50`; sólo su motor QEMU, sin enlace a Python, se reutiliza.
-mitmproxy 12.2.3 se construye desde su tag oficial con los límites de msgpack/cryptography ajustados a
-1.2.3/50.0.2; `pip check`, HTTP/HTTPS real y lectura de flujos comprueban la compatibilidad.
+mitmproxy 12.2.3 se construye desde su tag oficial con los límites de msgpack/cryptography/Tornado ajustados a
+1.2.3/50.0.2/6.5.9; `pip check`, HTTP/HTTPS real y lectura de flujos comprueban la compatibilidad.
 
 Antes de retag/despliegue: ejecutar las validaciones del contrato, la integración, el fixture FreeRTOS
 y `scripts/security-runtime-smoke.py` en contenedores desechables `--network none`, sin volumen de
