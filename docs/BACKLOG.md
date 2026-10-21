@@ -951,3 +951,27 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   prompts. Hace falta un protocolo de reconciliación con prueba nativa antes de automatizar esos casos.
   El retiro por cuota con recibo positivo y sucesor preparado sí está implementado; no equivale a agotamiento
   comprobado de todos los servicios ni al ensayo de resistencia de cuatro/ocho horas.
+
+## 2026-10-22 — Residuales de seguridad del runtime homelab
+
+La intervención de seguridad actualiza dependencias de la app, bibliotecas Netty y
+Bouncy Castle de Ghidra, entornos Python y herramientas SBOM/secretos, con pruebas
+reales sobre firmware sintético. No declara la imagen libre de vulnerabilidades.
+
+- La base Debian 12 conserva avisos HIGH/CRITICAL sin FixedVersion publicada en
+  esa distribución. Migrar el toolchain a una base nueva requiere reconstruir y
+  verificar RE/emulación completos, no mezclar bibliotecas de otra distribución
+  sobre el contenedor activo. Capstone/glib/SQLite, Python de Debian y cabeceras
+  conservan su triage; las cabeceras no son el kernel ejecutado por el host.
+- El portable oficial Renode 1.17.0 sigue incluyendo .NET 8.0.16, Newtonsoft.Json
+  9.0.1 y System.Security.Cryptography.Pkcs 6.0.1 con avisos HIGH. El runtime
+  oficial .NET 8.0.32 existe; cerrar esa parte requiere republicar/verificar el
+  bundle Renode con sus dependencias. No se han intercambiado DLLs de un portable
+  a mano ni se ha ocultado su metadata para reducir el escaneo.
+- El trabajo previo en Dockerfile.tools y scripts/deploy*.mjs/sh se conserva
+  separado. El refresh se construye mediante Dockerfile.security y después
+  Dockerfile.firmware con TOOLS_IMAGE explícita. No usar --tools y asumir que
+  Dockerfile.tools incorpora automáticamente estas actualizaciones.
+
+Evidencia y procedimiento de rollback del entorno:
+/Users/agfil/homelab/documentacion/PARCHES-2026-10-22.md.
