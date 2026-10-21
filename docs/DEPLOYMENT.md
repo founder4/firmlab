@@ -327,3 +327,42 @@ identifícalas primero — las suyas llevan variables `FIRMLAB_*` en `.Config.En
 Ojo también con los volúmenes anónimos: un `docker run` suelto sin el volumen nombrado crea uno huérfano con
 su propia BD, que luego parece contener datos. El volumen bueno es el nombrado, `firmlab_firmlab-data`.
 Inspecciona el contenido antes de borrar ninguno — eso sí es irreversible.
+
+## Base Debian 13 del homelab (2026-10-22)
+
+La migración ARM64 usa una receta separada para conservar las modificaciones del operador en
+`Dockerfile.tools` y `scripts/deploy.sh`. Para reconstruir esta base, usar explícitamente:
+
+```bash
+docker build -f Dockerfile.renode-security -t homelab-candidate/renode:trixie-20261022 .
+docker build -f Dockerfile.trixie -t homelab-candidate/firmlab-tools:trixie-20261022 .
+docker build -f Dockerfile.firmware \
+  --build-arg TOOLS_IMAGE=homelab-candidate/firmlab-tools:trixie-20261022 \
+  --build-arg GIT_SHA="$(git rev-parse HEAD)" -t homelab-candidate/firmlab:trixie-20261022 .
+```
+
+`Dockerfile.trixie` requiere la imagen local retenida
+`homelab-rollback/firmlab-tools:20261022-pre-trixie` (SHA `ed3c29b52241…`), conservada en
+`/Users/agfil/homelab/backups/firmlab-pre-trixie-images-20261022.tgz.enc` y su copia offsite.
+Se reutilizan únicamente herramientas nativas/Go y datos públicos concretos, sin bibliotecas de Debian 12
+ni sus virtualenvs. El sistema y los entornos Python se instalan de nuevo. Renode 1.17.0 se compila desde
+su fuente oficial verificada, con SDK .NET 8.0.426/runtime 8.0.32, Newtonsoft.Json 13.0.4 y Pkcs 8.0.2.
+Ghidra 12.1.4 conserva los JAR corregidos y reconstruye decompile/sleigh para ARM64.
+mitmproxy 12.2.3 se construye desde su tag oficial con los límites de msgpack/cryptography ajustados a
+1.2.3/50.0.2; `pip check`, HTTP/HTTPS real y lectura de flujos comprueban la compatibilidad.
+
+Antes de retag/despliegue: ejecutar las validaciones del contrato, la integración, el fixture FreeRTOS
+y `scripts/security-runtime-smoke.py` en contenedores desechables `--network none`, sin volumen de
+producción. El fixture FreeRTOS debe montarse read-only en su ruta bajo `/app/apps/api/src/providers/__fixtures__`.
+Escanear la candidata por ID y verificar los 28 sondeos de herramientas. Las pruebas reales deben comprobar
+pseudocódigo no vacío: un `analyzeHeadless` que sólo importa un ELF no demuestra que funcione el decompilador.
+
+Hacer una copia consistente con `maintenance/backup-firmlab.sh` del repositorio homelab y verificar su
+restauración antes de recrear exclusivamente `firmlab` con `compose up -d --no-deps --no-build firmlab`.
+El rollback específico es `/Users/agfil/homelab/maintenance/rollback-firmlab-trixie.py` (`--plan` para revisar).
+Restaura las dos imágenes anteriores a Debian 13 y conserva los datos. Esta intervención no cambia esquema
+de BD ni permisos/carriles de red; MinIO permanece fuera de su alcance.
+
+El despliegue normal de código puede seguir usando `firmlab-tools:latest` una vez promovida esta base.
+`scripts/deploy.sh --tools` sigue seleccionando la receta original: para reconstruir herramientas Debian 13,
+usar los comandos explícitos anteriores hasta integrar los cambios pendientes del operador.

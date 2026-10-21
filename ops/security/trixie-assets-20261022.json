@@ -1,0 +1,14 @@
+{
+  "radare2_6.2.4_arm64.deb": {
+    "url": "https://github.com/radareorg/radare2/releases/download/6.2.4/radare2_6.2.4_arm64.deb",
+    "sha256": "bbf48ee7bd5d8282f65a297dcabd34c9961a500e62d6b036679caab187b32ef1"
+  },
+  "sasquatch_1.0_arm64.deb": {
+    "url": "https://github.com/onekey-sec/sasquatch/releases/download/sasquatch-v4.5.1-6/sasquatch_1.0_arm64.deb",
+    "sha256": "28e57a4ff545da32a65c3e061ff8a51e5ebaa5d170985c49f0b3eef08923476e"
+  },
+  "mitmproxy": {
+    "url": "https://codeload.github.com/mitmproxy/mitmproxy/tar.gz/refs/tags/v12.2.3",
+    "sha256": "39073f414cdb9a0bf438b875da0e79bb306bcb7d1331b580763886f509f78c1b"
+  }
+}

@@ -1,0 +1,75 @@
+# ARM64 deployment recipe. Keep Dockerfile.tools operator changes independent.
+# Renode is compiled from verified 1.17.0 source by Dockerfile.renode-security.
+ARG RETAINED_IMAGE=homelab-rollback/firmlab-tools:20261022-pre-trixie
+ARG RENODE_IMAGE=homelab-candidate/renode:trixie-20261022
+FROM ${RETAINED_IMAGE} AS retained
+FROM ${RENODE_IMAGE} AS renode
+FROM node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf
+RUN test "$(dpkg --print-architecture)" = arm64 \
+ && apt-get update && apt-get upgrade -y \
+ && apt-get install -y --no-install-recommends \
+ binwalk squashfs-tools cpio e2fsprogs qemu-user-static qemu-system-mips qemu-system-arm \
+ python3 python3-venv python3-dev build-essential nasm curl ca-certificates unzip \
+ yara nmap arp-scan iproute2 avahi-utils gdb-multiarch lzop bettercap \
+ openjdk-21-jdk-headless libicu76 libssl3t64 libglib2.0-0t64 \
+ flex bison zlib1g-dev procps file xz-utils \
+ && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules /opt/yarn* \
+ && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
+COPY ops/security/trixie-assets-20261022.json /tmp/trixie-assets.json
+COPY scripts/fetch-trixie-assets.py /tmp/fetch-trixie-assets.py
+RUN python3 /tmp/fetch-trixie-assets.py \
+ && apt-get update && apt-get install -y --no-install-recommends /tmp/*.deb \
+ && rm -rf /var/lib/apt/lists/* /tmp/*.deb /tmp/mitmproxy.tar.gz
+# Recreate every virtualenv on Python 3.13; no old interpreter/site-packages are copied.
+# angr 9.2 requires the bitstring 4.x API; unconstrained 5.x removed ConstBitStream.
+RUN python3 -m venv /opt/fw-py \
+ && /opt/fw-py/bin/pip install --no-cache-dir jefferson==0.4.8 ubi-reader==0.8.16 certifi==2026.10.19 urllib3==2.8.0 setuptools==84.2.1 \
+ && python3 -m venv /opt/angr-venv \
+ && /opt/angr-venv/bin/pip install --no-cache-dir angr[unicorn]==9.2.213 bitstring==4.3.1 certifi==2026.10.19 urllib3==2.8.0 setuptools==84.2.1 \
+ && python3 -m venv /opt/fwhunt-venv \
+ && /opt/fwhunt-venv/bin/pip install --no-cache-dir fwhunt-scan==2.3.8 certifi==2026.10.19 urllib3==2.8.0 setuptools==84.2.1 \
+ && python3 -m venv /opt/chipsec-venv \
+ && /opt/chipsec-venv/bin/pip install --no-cache-dir chipsec==1.13.16 setuptools==84.2.1 \
+ && python3 -m venv /opt/mitmproxy-venv \
+ && /opt/mitmproxy-venv/bin/pip install --no-cache-dir /tmp/mitmproxy-source/* certifi==2026.10.19 \
+ && for v in fw-py angr-venv fwhunt-venv chipsec-venv mitmproxy-venv; do /opt/$v/bin/pip check; /opt/$v/bin/pip freeze > /opt/$v/firmlab-lock.txt; /opt/$v/bin/pip uninstall -y pip; done \
+ && ln -s /opt/fw-py/bin/jefferson /usr/local/bin/jefferson \
+ && ln -s /opt/fw-py/bin/ubireader_extract_files /usr/local/bin/ubireader_extract_files \
+ && ln -s /opt/chipsec-venv/bin/chipsec_util /usr/local/bin/chipsec_util \
+ && ln -s /opt/chipsec-venv/bin/chipsec_main /usr/local/bin/chipsec_main \
+ && ln -s /opt/mitmproxy-venv/bin/mitmdump /usr/local/bin/mitmdump \
+ && rm -rf /tmp/mitmproxy-source
+# Already patched static Go tools and audited native tools/data, without Debian 12 libraries.
+COPY --from=retained /usr/local/bin/syft /usr/local/bin/grype /usr/local/bin/gitleaks /usr/local/bin/
+COPY --from=retained /usr/local/bin/afl-fuzz /usr/local/bin/afl-qemu-trace /usr/local/bin/afl-showmap /usr/local/bin/afl-tmin /usr/local/bin/
+COPY --from=retained /usr/local/bin/rizin /usr/local/bin/rz-* /usr/local/bin/
+COPY --from=retained /usr/local/lib/aarch64-linux-gnu/librz* /usr/local/lib/aarch64-linux-gnu/
+COPY --from=retained /usr/local/share/rizin /usr/local/share/rizin
+COPY --from=retained /opt/libnvram /opt/libnvram
+COPY --from=retained /opt/firmae/kernels /opt/firmae/kernels
+COPY --from=retained /opt/fwhunt-rules /opt/fwhunt-rules
+COPY --from=retained /opt/ghidra /opt/ghidra
+RUN set -eu; ldconfig \
+ && ln -s /usr/lib/jvm/java-21-openjdk-arm64 /opt/jdk \
+ && ln -s /opt/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless \
+ && D=/opt/ghidra/Ghidra/Features/Decompiler; C=$D/src/decompile/cpp; \
+ mkdir -p "$C"/com_dbg "$C"/com_opt "$C"/ghi_dbg "$C"/ghi_opt "$C"/sla_dbg "$C"/sla_opt "$C"/test_dbg \
+ && make -C "$C" -j4 ARCH_TYPE= OSDIR=linux_arm_64 ghidra_opt sleigh_opt \
+ && mkdir -p "$D"/os/linux_arm_64 \
+ && install -m755 "$C"/ghidra_opt "$D"/os/linux_arm_64/decompile \
+ && install -m755 "$C"/sleigh_opt "$D"/os/linux_arm_64/sleigh \
+ && rm -rf "$C"/com_dbg "$C"/com_opt "$C"/ghi_dbg "$C"/ghi_opt "$C"/sla_dbg "$C"/sla_opt "$C"/test_dbg "$C"/ghidra_opt "$C"/sleigh_opt
+COPY --from=renode /renode /opt/renode
+RUN ln -s /opt/renode/renode /usr/local/bin/renode \
+ && renode --version && mitmdump --version \
+ && /opt/angr-venv/bin/python3 -c 'import angr; print(angr.__version__)' \
+ && /opt/fwhunt-venv/bin/python3 -c 'import fwhunt_scan, rzpipe' \
+ && chipsec_util --help >/dev/null && rizin -v && radare2 -v
+ENV JAVA_HOME=/opt/jdk GHIDRA_INSTALL_DIR=/opt/ghidra \
+ FIRMLAB_ANGR_PYTHON=/opt/angr-venv/bin/python3 \
+ FIRMLAB_FWHUNT_PYTHON=/opt/fwhunt-venv/bin/python3 \
+ FIRMLAB_FWHUNT_RULES=/opt/fwhunt-rules/rules \
+ AFL_PATH=/usr/local/bin GRYPE_DB_CACHE_DIR=/opt/grype-db
+RUN apt-get purge -y --auto-remove build-essential python3-dev nasm flex bison zlib1g-dev g++ gcc make \
+ && rm -rf /root/.cache /tmp/trixie-assets.json /tmp/fetch-trixie-assets.py
+COPY --from=retained /opt/grype-db /opt/grype-db

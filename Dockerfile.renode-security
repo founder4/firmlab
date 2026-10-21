@@ -1,0 +1,19 @@
+# Rebuild the official 1.17 source, never swap DLLs into a published portable.
+FROM mcr.microsoft.com/dotnet/sdk:8.0.426-bookworm-slim@sha256:738f72aff955d5c5690e06b6fc8ecd1b90ead564099a257ac528ff720b8da85f AS build
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake autoconf automake libtool git python3 curl ca-certificates \
+    pkg-config libglib2.0-dev libgtk-3-dev libarchive-tools \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fL --retry 3 --connect-timeout 20 --max-time 600 \
+    https://github.com/renode/renode/releases/download/v1.17.0/renode_1.17.0_source.tar.xz -o /tmp/source.tar.xz \
+    && echo '65170aa79966044704ddef274568ed8b6e78b9f08edde578de33befee28a1eee  /tmp/source.tar.xz' | sha256sum -c - \
+    && tar -xf /tmp/source.tar.xz --strip-components=1 && rm /tmp/source.tar.xz
+COPY scripts/patch-renode-security.py /tmp/patch-renode-security.py
+RUN python3 /tmp/patch-renode-security.py /src \
+    && ./build.sh --skip-fetch --no-gui --host-arch aarch64 -t -B linux-arm64 \
+    && mkdir /renode && tar -xzf output/packages/*linux-arm64-portable-headless.tar.gz -C /renode --strip-components=1 \
+    && /renode/renode --version
+FROM scratch AS artifact
+COPY --from=build /renode /renode
