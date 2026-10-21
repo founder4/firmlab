@@ -14,13 +14,6 @@
     "target": "/usr/local/bin/grype"
   },
   {
-    "release": "v8.30.1",
-    "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz",
-    "sha256": "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080",
-    "kind": "binary",
-    "target": "/usr/local/bin/gitleaks"
-  },
-  {
     "release": "v1.17.0",
     "url": "https://github.com/renode/renode/releases/download/v1.17.0/renode-1.17.0.linux-arm64-portable.tar.gz",
     "sha256": "e9051578411441bfb47b77de0381cfba3badce03663367fab561472fd7807f1f",
@@ -33,5 +26,61 @@
     "sha256": "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db",
     "kind": "zip",
     "target": "/opt/ghidra"
+  },
+  {
+    "release": "netty-buffer-4.2.17.Final",
+    "url": "https://repo.maven.apache.org/maven2/io/netty/netty-buffer/4.2.17.Final/netty-buffer-4.2.17.Final.jar",
+    "sha256": "0d249178ec0204b35a6ad3e5ac8a6c2ecb3eb496c6cdae40b8eca4fa3cb6a0c7",
+    "kind": "jar",
+    "target": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-buffer-4.2.17.Final.jar",
+    "replaces": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-buffer-4.2.6.Final.jar"
+  },
+  {
+    "release": "netty-codec-base-4.2.17.Final",
+    "url": "https://repo.maven.apache.org/maven2/io/netty/netty-codec-base/4.2.17.Final/netty-codec-base-4.2.17.Final.jar",
+    "sha256": "3b92bc3b7d231fa6f4889b2b9281cae6b634428b8121fb1b9b5fccba1543d352",
+    "kind": "jar",
+    "target": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-codec-base-4.2.17.Final.jar",
+    "replaces": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-codec-base-4.2.6.Final.jar"
+  },
+  {
+    "release": "netty-common-4.2.17.Final",
+    "url": "https://repo.maven.apache.org/maven2/io/netty/netty-common/4.2.17.Final/netty-common-4.2.17.Final.jar",
+    "sha256": "502aae2a6680e9bca3558a3fa098f06dc4d87340b8b714e925a6d690871c092a",
+    "kind": "jar",
+    "target": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-common-4.2.17.Final.jar",
+    "replaces": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-common-4.2.6.Final.jar"
+  },
+  {
+    "release": "netty-handler-4.2.17.Final",
+    "url": "https://repo.maven.apache.org/maven2/io/netty/netty-handler/4.2.17.Final/netty-handler-4.2.17.Final.jar",
+    "sha256": "4df11c7520b556c5e2c84b939182699d48fcbb09e97a6bb5e1c0b6835227d126",
+    "kind": "jar",
+    "target": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-handler-4.2.17.Final.jar",
+    "replaces": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-handler-4.2.6.Final.jar"
+  },
+  {
+    "release": "netty-resolver-4.2.17.Final",
+    "url": "https://repo.maven.apache.org/maven2/io/netty/netty-resolver/4.2.17.Final/netty-resolver-4.2.17.Final.jar",
+    "sha256": "7a4b599b9c0c29a505d3b7311f142df883fb27d0f67495a7cbaf533b0e456623",
+    "kind": "jar",
+    "target": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-resolver-4.2.17.Final.jar",
+    "replaces": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-resolver-4.2.6.Final.jar"
+  },
+  {
+    "release": "netty-transport-4.2.17.Final",
+    "url": "https://repo.maven.apache.org/maven2/io/netty/netty-transport/4.2.17.Final/netty-transport-4.2.17.Final.jar",
+    "sha256": "d2409ce3a735cbab4188d0ea5d82abed823a6a07a8389f49af4a9e1243a562bc",
+    "kind": "jar",
+    "target": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-transport-4.2.17.Final.jar",
+    "replaces": "/opt/ghidra/Ghidra/Features/GhidraServer/data/yajsw-stable-13.18/lib/core/netty/netty-transport-4.2.6.Final.jar"
+  },
+  {
+    "release": "bcprov-jdk18on-1.85",
+    "url": "https://repo.maven.apache.org/maven2/org/bouncycastle/bcprov-jdk18on/1.85/bcprov-jdk18on-1.85.jar",
+    "sha256": "20af26bf6060bb8005cc2389916812c1e0e998dc48d2ced7131b89461b54cff7",
+    "kind": "jar",
+    "target": "/opt/ghidra/Ghidra/Framework/Generic/lib/bcprov-jdk18on-1.85.jar",
+    "replaces": "/opt/ghidra/Ghidra/Framework/Generic/lib/bcprov-jdk18on-1.84.jar"
   }
 ]

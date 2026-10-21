@@ -29,7 +29,8 @@ RUN pnpm --filter @firmlab/core run build \
   && pnpm --filter @firmlab/web run build
 # The runtime image only needs the compiled artifacts and API production graph. Reuse the packages already
 # fetched above so scanners and the final image do not inherit Vite/Vitest/TypeScript or their dev-only surface.
-RUN pnpm install --prod --offline --frozen-lockfile
+RUN rm -rf node_modules apps/api/node_modules apps/web/node_modules packages/core/node_modules \
+  && pnpm install --prod --offline --frozen-lockfile
 
 # === Stage 2: the app on the tools base ===
 FROM ${TOOLS_IMAGE} AS runtime

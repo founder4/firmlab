@@ -2,17 +2,30 @@
 # silently here. Build this base, then pass it as TOOLS_IMAGE to Dockerfile.firmware.
 # The existing Dockerfile.tools and deploy scripts have unrelated operator edits.
 ARG TOOLS_BASE=firmlab-tools:rollback-pre-29e2502
+FROM golang:1.27.3-bookworm AS gitleaks
+RUN git clone --depth 1 --branch v8.30.1 https://github.com/gitleaks/gitleaks /src
+WORKDIR /src
+RUN cp -a /src /tmp/gitleaks-build && cd /tmp/gitleaks-build \
+    && go get golang.org/x/crypto@v0.55.0 golang.org/x/text@v0.41.0 github.com/klauspost/compress@v1.18.7 \
+    && go test ./... \
+    && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X github.com/zricethezav/gitleaks/v8/version.Version=8.30.1-security20261022' -o /gitleaks .
 FROM ${TOOLS_BASE}
 RUN apt-get update && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN for env in /opt/angr-venv /opt/fw-py /opt/fwhunt-venv; do \
       "$env/bin/pip" install --no-cache-dir --upgrade 'setuptools>=78.1.1' \
         'certifi==2026.10.19' 'urllib3>=2.8.0' 'msgpack>=1.2.1' \
-      && "$env/bin/pip" check || exit 1; \
+      && "$env/bin/pip" check \
+      && "$env/bin/pip" uninstall -y pip || exit 1; \
     done
+# Installers and their bundled dependency trees are not used by the workbench.
+# Build stages retain their own package managers; runtime analysis keeps Node.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 COPY ops/security/assets-20261022.json /tmp/security-assets.json
 COPY scripts/refresh-security-assets.py /tmp/refresh-security-assets.py
 RUN python3 -m venv /tmp/security-installer \
     && /tmp/security-installer/bin/pip install --no-cache-dir backports.tarfile==1.2.0 \
     && /tmp/security-installer/bin/python /tmp/refresh-security-assets.py /tmp/security-assets.json \
     && rm -rf /tmp/security-installer /tmp/security-assets.json /tmp/refresh-security-assets.py
+COPY --from=gitleaks /gitleaks /usr/local/bin/gitleaks

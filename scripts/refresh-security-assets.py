@@ -38,6 +38,12 @@ def install(asset):
     if hashlib.sha256(data).hexdigest() != asset["sha256"]:
         raise ValueError("digest mismatch: " + asset["url"])
     target = Path(asset["target"])
+    if asset["kind"] == "jar":
+        target.write_bytes(data)
+        previous = Path(asset["replaces"])
+        if previous != target:
+            previous.unlink()
+        return
     with tempfile.TemporaryDirectory() as directory:
         stage = Path(directory)
         if asset["kind"] == "binary":
