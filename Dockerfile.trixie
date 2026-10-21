@@ -4,6 +4,13 @@ ARG RETAINED_IMAGE=homelab-rollback/firmlab-tools:20261022-pre-trixie
 ARG RENODE_IMAGE=homelab-candidate/renode:trixie-20261022
 FROM ${RETAINED_IMAGE} AS retained
 FROM ${RENODE_IMAGE} AS renode
+FROM node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf AS aflbuild
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3-dev curl ca-certificates zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -fL --retry 3 https://codeload.github.com/AFLplusplus/AFLplusplus/tar.gz/dbaf11913c1b2702dee5b4d3dcfffd52f1defe50 -o /tmp/afl.tar.gz \
+ && echo "d5f4f72c830526654bebbc637f6164a93c22d7309ce8ba73979abadc42ce5974  /tmp/afl.tar.gz" | sha256sum -c - \
+ && mkdir /afl && tar -xzf /tmp/afl.tar.gz -C /afl --strip-components=1 \
+ && make -C /afl -j4 source-only NO_NYX=1
 FROM node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf
 RUN test "$(dpkg --print-architecture)" = arm64 \
  && apt-get update && apt-get upgrade -y \
@@ -41,7 +48,8 @@ RUN python3 -m venv /opt/fw-py \
  && rm -rf /tmp/mitmproxy-source
 # Already patched static Go tools and audited native tools/data, without Debian 12 libraries.
 COPY --from=retained /usr/local/bin/syft /usr/local/bin/grype /usr/local/bin/gitleaks /usr/local/bin/
-COPY --from=retained /usr/local/bin/afl-fuzz /usr/local/bin/afl-qemu-trace /usr/local/bin/afl-showmap /usr/local/bin/afl-tmin /usr/local/bin/
+COPY --from=aflbuild /afl/afl-fuzz /afl/afl-showmap /afl/afl-tmin /usr/local/bin/
+COPY --from=retained /usr/local/bin/afl-qemu-trace /usr/local/bin/
 COPY --from=retained /usr/local/bin/rizin /usr/local/bin/rz-* /usr/local/bin/
 COPY --from=retained /usr/local/lib/aarch64-linux-gnu/librz* /usr/local/lib/aarch64-linux-gnu/
 COPY --from=retained /usr/local/share/rizin /usr/local/share/rizin
@@ -70,6 +78,7 @@ ENV JAVA_HOME=/opt/jdk GHIDRA_INSTALL_DIR=/opt/ghidra \
  FIRMLAB_FWHUNT_PYTHON=/opt/fwhunt-venv/bin/python3 \
  FIRMLAB_FWHUNT_RULES=/opt/fwhunt-rules/rules \
  AFL_PATH=/usr/local/bin GRYPE_DB_CACHE_DIR=/opt/grype-db
-RUN apt-get purge -y --auto-remove build-essential python3-dev nasm flex bison zlib1g-dev g++ gcc make \
+RUN apt-mark manual libpython3.13 \
+ && apt-get purge -y --auto-remove build-essential python3-dev nasm flex bison zlib1g-dev g++ gcc make \
  && rm -rf /root/.cache /tmp/trixie-assets.json /tmp/fetch-trixie-assets.py
 COPY --from=retained /opt/grype-db /opt/grype-db

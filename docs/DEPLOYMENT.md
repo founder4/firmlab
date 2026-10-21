@@ -348,6 +348,8 @@ Se reutilizan únicamente herramientas nativas/Go y datos públicos concretos, s
 ni sus virtualenvs. El sistema y los entornos Python se instalan de nuevo. Renode 1.17.0 se compila desde
 su fuente oficial verificada, con SDK .NET 8.0.426/runtime 8.0.32, Newtonsoft.Json 13.0.4 y Pkcs 8.0.2.
 Ghidra 12.1.4 conserva los JAR corregidos y reconstruye decompile/sleigh para ARM64.
+Los ejecutables AFL++ se recompilan en Debian 13 contra libpython3.13 desde el mismo commit retenido
+`dbaf11913c1b2702dee5b4d3dcfffd52f1defe50`; sólo su motor QEMU, sin enlace a Python, se reutiliza.
 mitmproxy 12.2.3 se construye desde su tag oficial con los límites de msgpack/cryptography ajustados a
 1.2.3/50.0.2; `pip check`, HTTP/HTTPS real y lectura de flujos comprueban la compatibilidad.
 
