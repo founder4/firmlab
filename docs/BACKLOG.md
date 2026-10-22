@@ -958,18 +958,21 @@ La intervención de seguridad actualiza dependencias de la app, bibliotecas Nett
 Bouncy Castle de Ghidra, entornos Python y herramientas SBOM/secretos, con pruebas
 reales sobre firmware sintético. No declara la imagen libre de vulnerabilidades.
 
-- La base Debian 12 conserva avisos HIGH/CRITICAL sin FixedVersion publicada en
-  esa distribución. Migrar el toolchain a una base nueva requiere reconstruir y
-  verificar RE/emulación completos, no mezclar bibliotecas de otra distribución
-  sobre el contenedor activo. Capstone/glib/SQLite, Python de Debian y cabeceras
-  conservan su triage; las cabeceras no son el kernel ejecutado por el host.
-- El portable oficial Renode 1.17.0 sigue incluyendo .NET 8.0.16, Newtonsoft.Json
-  9.0.1 y System.Security.Cryptography.Pkcs 6.0.1 con avisos HIGH. El runtime
-  oficial .NET 8.0.32 existe; cerrar esa parte requiere republicar/verificar el
-  bundle Renode con sus dependencias. No se han intercambiado DLLs de un portable
-  a mano ni se ha ocultado su metadata para reducir el escaneo.
+- Cerrada la migración a Debian 13.7 mediante Dockerfile.trixie: sistema limpio,
+  Python 3.13/virtualenvs nuevos, sin bibliotecas Debian 12. Recompilados AFL++
+  contra Python 3.13 y los nativos ARM64 de Ghidra (40 funciones con pseudocódigo
+  real; la prueba headless anterior no había probado el decompilador).
+- Cerrado el bundle Renode: 1.17.0 compilado desde fuente oficial verificada con
+  SDK .NET 8.0.426/runtime 8.0.32, Newtonsoft.Json 13.0.4 y Pkcs 8.0.2. El ensayo
+  sintético FreeRTOS recupera las tareas esperadas de la RAM emulada. Sin intercambio
+  manual de DLLs ni eliminación de metadata del escáner.
+- Despliegue b79edd5, imagen c03e9c7edc68: 120 HIGH / 0 CRITICAL frente a los
+  536 / 15 de la primera fase. Quedan 118 ocurrencias HIGH Debian 13 y 2 del módulo
+  github.com/docker/docker en Grype sin FixedVersion en la DB de Trivy usada. Seguir
+  el triage/actualizaciones de proveedor; no se declaran inocuas. El resultado
+  cuenta ocurrencias paquete/CVE, no vulnerabilidades únicas ni explotaciones.
 - El trabajo previo en Dockerfile.tools y scripts/deploy*.mjs/sh se conserva
-  separado. El refresh se construye mediante Dockerfile.security y después
+  separado. La base nueva se construye mediante Dockerfile.trixie y después
   Dockerfile.firmware con TOOLS_IMAGE explícita. No usar --tools y asumir que
   Dockerfile.tools incorpora automáticamente estas actualizaciones.
 
