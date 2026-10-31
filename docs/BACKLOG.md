@@ -13,8 +13,9 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 - [ ] Unificar la reconstrucción de herramientas con la base Debian 13 realmente desplegada. `deploy.sh --tools`
   aún usa `Dockerfile.tools` (Debian 12), mientras el homelab usa `Dockerfile.trixie`. Revisar primero los tres
-  ficheros con trabajo local del 2026-10-14 (`Dockerfile.tools`, `scripts/deploy.sh`,
+  ficheros con trabajo del 2026-10-14 (`Dockerfile.tools`, `scripts/deploy.sh`,
   `scripts/deploy-grype-refresh.test.mjs`): las pruebas con shim pasan, pero falta evidencia real de la candidata.
+  Respaldados en GitHub en `179e7bc`, rama `wip/tools-promotion-hardening-20261031`; no integrados en `main`.
   El review histórico `task_3209c8d09372` discrepaba del digest escogido y pedía inventario acotado y más amplio;
   el guard actual comprueba presencia de 13 comandos sin timeout propio, no los 28 sondeos de capacidad.
   Conservar estos cambios separados hasta resolver el contrato sobre Debian 13 y probarlo offline, sin promoción
@@ -23,10 +24,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   [del 26 de octubre](https://github.com/founder4/firmlab/actions/runs/40328671132) falla expresamente porque
   detecta una versión posterior; no demuestra un fallo del motor. Comparar reglas, controles positivos y
   diferencias sobre el corpus existente en sólo lectura; no aceptar una actualización automática del corpus.
-- [ ] Publicar los cambios locales de dependencias cuando se cierre su revisión y comprobar un CI nuevo.
-  El [CI del HEAD publicado](https://github.com/founder4/firmlab/actions/runs/39780084012) se detuvo en
-  `pnpm audit` por dos avisos de `@vitest/mocker`; la actualización local a 4.1.12 los elimina y la auditoría
-  del 2026-10-31 pasa de 27 avisos a cero. Eso no cambia el estado histórico del CI ni la imagen desplegada.
+- [x] Publicar las correcciones de dependencias y el contexto de coordinación: `4a7b2fa` y `d079c84` están en
+  `origin/main`. Auditoría de 27 avisos a cero; gates locales completos con 4.759 tests tras separar el WIP.
+  Los resultados remotos se consultan por SHA en el workflow CI; los fallos históricos se conservan.
+- [ ] Desplegar la actualización de la aplicación tras verificar su CI y preparar candidata/rollback.
+  El contenedor sigue en `b79edd5`: publicar las dependencias corregidas en GitHub no actualiza el servicio.
+  Mantener la base Debian 13 existente; esta tarea no requiere reconstruir herramientas con `--tools`.
 - [ ] Evaluar la partición del bundle web: el build del 2026-10-31 emite un aviso por el chunk principal
   de 539,58 kB (184,44 kB gzip). Medir carga antes de introducir nuevas particiones; no es un fallo de build.
 

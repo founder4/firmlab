@@ -3,6 +3,24 @@
 This is the operating playbook for supervised work by Codex, Claude, and Antigravity (Gemini models).
 Repository rules live in `AGENTS.md`; architecture and validation details live in `CLAUDE.md`.
 
+## GitHub synchronization — 2026-10-31
+
+The operator subsequently authorized synchronization with GitHub. Main now includes the security dependency
+update `4a7b2fa` and coordinator documentation `d079c84`, both pushed to `origin/main`. The three older
+tools/deploy changes are preserved in commit `179e7bc` on the published branch
+[`wip/tools-promotion-hardening-20261031`](https://github.com/founder4/firmlab/tree/wip/tools-promotion-hardening-20261031),
+pending Debian 13 integration and real-container validation; they are not merged into main.
+
+After separating that WIP, main passed `pnpm check`, `pnpm test` (4,759 tests: core 519, API 3,136, web 893,
+scripts 211), `pnpm build`, `pnpm biome` and `pnpm audit` (zero advisories). The earlier baseline below included
+three additional WIP script tests; do not compare its counts as a loss of product coverage. GitHub's
+[CI workflow](https://github.com/founder4/firmlab/actions/workflows/ci.yml?query=branch%3Amain) records remote
+results per commit; an older failed run is not the verdict for this update.
+
+No deployment or live-data refresh was performed. The running application remains on `b79edd5`, so the published
+dependency fixes still require a separately authorized application rollout. Next priorities are in `BACKLOG.md`.
+The baseline review below is historical evidence; this synchronization checkpoint supersedes its Git/WIP state.
+
 ## Coordinator baseline review — 2026-10-31
 
 Operator mandate: review the project, bring the working baseline up to date and prepare to resume development.
