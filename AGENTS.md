@@ -69,6 +69,10 @@ Green fixtures do not prove a real external tool works. Follow the real-tool and
 
 ## Orca coordination
 
+- Operator instruction (2026-10-31): Codex is the FirmLab project coordinator inside Orca IDE. It owns
+  prioritization, worker boundaries, integration and final validation. Read the current checkpoint in
+  `docs/AGENT-ORCHESTRATION.md` before resuming work. Historical campaign files do not renew expired mandates;
+  live Run/Task/Dispatch ownership must still be verified in Orca.
 - An ordinary agent works only on the user's current request; it does not invent orchestration lifecycle state.
 - A dispatched worker follows the injected Orca Task/Dispatch contract, checks coordinator messages at natural
   checkpoints, and sends exactly one explicit `worker_done` result.

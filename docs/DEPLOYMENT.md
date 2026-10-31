@@ -44,6 +44,11 @@ homelab consume `firmlab-firmware:latest`.
 
 ## Cómo desplegar
 
+**Atención (reconciliado 2026-10-31):** el homelab usa la base Debian 13 descrita en
+[Base Debian 13 del homelab](#base-debian-13-del-homelab-2026-10-22). `--tools` reconstruye todavía
+`Dockerfile.tools` (Debian 12), no esa base. Para actualizar sus herramientas hay que seguir la receta
+Debian 13 y sus comprobaciones; los cambios locales pendientes del script no resuelven esta divergencia.
+
 ```bash
 scripts/deploy.sh              # construye la app sobre la base de tools existente, despliega y verifica
 scripts/deploy.sh --tools      # ADEMÁS reconstruye la base de tools (cuando cambió una receta de tool; pesado)

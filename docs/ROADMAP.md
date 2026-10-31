@@ -34,7 +34,9 @@ hash de contenido, y el primer fixture de integración end-to-end (`apps/api/scr
 
 Carvado de la plataforma madre (Galert) hacia un dominio único: FirmLab determinista, local, visual y —de
 forma distintiva— con estado (un corpus persistente que aprende del dominio entre imágenes). Todo lo de esta
-fase está detrás de `FIRMLAB_AGENT`; con el flag apagado, FirmLab sigue siendo local-only y sin red. Fases 0–1
+fase está detrás de `FIRMLAB_AGENT`; con el flag apagado, FirmLab sigue siendo local-first. La investigación
+externa tiene su propio carril `FIRMLAB_RESEARCH`, activo por defecto desde 2026-10-04; apagar sólo el agente
+no la desactiva (véase `AGENTS.md`). Fases 0–1
 de este bloque no necesitan LLM en absoluto; el agente se apoya encima después.
 
 - **Fase 0** — proof-states + libro de hallazgos, tabla de binarios, preflight determinista, dossier, providers
