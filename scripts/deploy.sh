@@ -77,6 +77,54 @@ image_last_layer() {
     | awk 'NF { last = $0 } END { if (last != "") print last }'
 }
 
+# Optional recipes are deliberately allowed to degrade, but a rebuild must never silently remove a capability the
+# deployed tools image already had. Keep this list small and explicit: these are the analysis commands whose loss
+# would materially reduce the workbench proven by the current image. The comparison checks command presence only,
+# inside network-isolated containers; each provider remains responsible for its deeper runtime probe.
+CRITICAL_TOOL_CAPABILITIES=(
+  analyzeHeadless
+  binwalk
+  chipsec_util
+  gitleaks
+  grype
+  qemu-aarch64-static
+  qemu-system-mips
+  renode
+  rizin
+  sasquatch
+  syft
+  yara
+  afl-fuzz
+)
+
+image_critical_capabilities() {
+  docker run --rm --network none "$1" sh -c '
+    for capability do
+      if command -v "$capability" >/dev/null 2>&1; then
+        printf "%s\n" "$capability"
+      fi
+    done
+  ' sh "${CRITICAL_TOOL_CAPABILITIES[@]}"
+}
+
+verify_critical_capability_retention() {
+  local current_image="$1" candidate_image="$2" current_capabilities candidate_capabilities missing=""
+  current_capabilities="$(image_critical_capabilities "$current_image")" \
+    || die "no se pudieron comprobar offline las capacidades críticas de $current_image"
+  candidate_capabilities="$(image_critical_capabilities "$candidate_image")" \
+    || die "no se pudieron comprobar offline las capacidades críticas de $candidate_image"
+
+  while IFS= read -r capability; do
+    [ -n "$capability" ] || continue
+    if ! grep -Fqx -- "$capability" <<< "$candidate_capabilities"; then
+      missing="${missing}${missing:+, }${capability}"
+    fi
+  done <<< "$current_capabilities"
+
+  [ -z "$missing" ] \
+    || die "la candidata perdió capacidades críticas presentes en $current_image: $missing; no se promociona"
+}
+
 cd "$REPO_ROOT"
 
 # --- what we are about to ship -------------------------------------------------------------------
@@ -207,6 +255,10 @@ if [ "$REBUILD_TOOLS" -eq 1 ]; then
     sha256:*) ;;
     *) die "docker build no dejó un ID de imagen válido en $TOOLS_IID_FILE" ;;
   esac
+  if [ -n "$CURRENT_TOOLS_LAYER" ]; then
+    say "comparando offline las capacidades críticas de $TOOLS_IMAGE y $TOOLS_CANDIDATE"
+    verify_critical_capability_retention "$TOOLS_IMAGE" "$TOOLS_CANDIDATE"
+  fi
   say "verificando offline la base Grype candidata $TOOLS_CANDIDATE"
   docker run --rm --network none \
     -e GRYPE_DB_AUTO_UPDATE=false \

@@ -17,7 +17,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourceScript = path.join(root, 'scripts/deploy.sh');
 const fixtures = [];
 
-async function fixture({ toolsPresent = true, verificationExit = 0, currentLayer = 'sha256:old-layer' } = {}) {
+async function fixture({
+  toolsPresent = true,
+  verificationExit = 0,
+  currentLayer = 'sha256:old-layer',
+  currentCapabilities = '',
+  candidateCapabilities = '',
+} = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'firmlab-deploy-grype-'));
   fixtures.push(dir);
   const scriptsDir = path.join(dir, 'scripts');
@@ -61,6 +67,20 @@ if [ "$1" = build ]; then
   exit 0
 fi
 if [ "$1" = run ]; then
+  image=''
+  for argument in "$@"; do
+    case "$argument" in
+      "$TOOLS_IMAGE_TAG"|sha256:candidate) image="$argument" ;;
+    esac
+  done
+  if [ "$image" = "$TOOLS_IMAGE_TAG" ]; then
+    printf '%s' "$CURRENT_CAPABILITIES"
+    exit 0
+  fi
+  if [ "$image" = sha256:candidate ] && [[ "$*" == *"command -v"* ]]; then
+    printf '%s' "$CANDIDATE_CAPABILITIES"
+    exit 0
+  fi
   exit "$VERIFICATION_EXIT"
 fi
 exit 0
@@ -85,6 +105,8 @@ exit 0
     TOOLS_IMAGE_TAG: 'firmlab-tools:latest',
     CURRENT_LAYER: currentLayer,
     CANDIDATE_LAYER: 'sha256:new-layer',
+    CURRENT_CAPABILITIES: currentCapabilities,
+    CANDIDATE_CAPABILITIES: candidateCapabilities,
   };
   return {
     dir,
@@ -115,6 +137,25 @@ test('Dockerfile consumes the refresh argument in the baked Grype database layer
   assert.equal(dockerfile.indexOf('\nRUN ', databaseLayer + 1), -1, 'the Grype database must remain the final layer');
 });
 
+test('Dockerfile pins its frontend and Node base and retries both Ghidra downloads', async () => {
+  const dockerfile = await readFile(path.join(root, 'Dockerfile.tools'), 'utf8');
+  assert.match(
+    dockerfile,
+    /^# syntax=docker\/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e/m,
+  );
+  assert.match(
+    dockerfile,
+    /^FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392$/m,
+  );
+  const ghidraBlock = dockerfile.slice(
+    dockerfile.indexOf('ARG GHIDRA_URL='),
+    dockerfile.indexOf('# === Ghidra native'),
+  );
+  assert.equal((ghidraBlock.match(/--retry 4 --retry-all-errors/g) ?? []).length, 2);
+  assert.match(ghidraBlock, /adoptium[^\n]+[\s\S]*-o \/tmp\/jdk\.tar\.gz/);
+  assert.match(ghidraBlock, /"\$GHIDRA_URL" -o \/tmp\/ghidra\.zip/);
+});
+
 test('firmware Dockerfile accepts the same tools image selected by deploy', async () => {
   const dockerfile = await readFile(path.join(root, 'Dockerfile.firmware'), 'utf8');
   assert.match(dockerfile, /ARG TOOLS_IMAGE=firmlab-tools:latest/);
@@ -139,6 +180,51 @@ test('--tools passes an explicit refresh key and verifies offline before the fir
   assert.ok(firmwareBuild > promotion, commands.join('\n'));
   assert.match(commands[offlineCheck], /GRYPE_CHECK_FOR_APP_UPDATE=false/);
   assert.match(commands[offlineCheck], /GRYPE_DB_VALIDATE_AGE=false/);
+});
+
+test('--tools compares current and candidate critical capabilities offline before promotion', async () => {
+  const capabilities = 'analyzeHeadless\nbinwalk\ngrype\n';
+  const f = await fixture({ currentCapabilities: capabilities, candidateCapabilities: capabilities });
+  await run('bash', ['scripts/deploy.sh', '--tools', '--build-only'], { cwd: f.dir, env: f.env });
+  const commands = await f.log();
+  const currentCheck = commandIndex(commands, /run --rm --network none firmlab-tools:latest sh -c .*command -v/);
+  const candidateCheck = commandIndex(commands, /run --rm --network none sha256:candidate sh -c .*command -v/);
+  const promotion = commandIndex(commands, /tag sha256:candidate firmlab-tools:latest/);
+  assert.ok(currentCheck >= 0, commands.join('\n'));
+  assert.ok(candidateCheck > currentCheck, commands.join('\n'));
+  for (const capability of [
+    'analyzeHeadless',
+    'binwalk',
+    'chipsec_util',
+    'gitleaks',
+    'grype',
+    'qemu-aarch64-static',
+    'qemu-system-mips',
+    'renode',
+    'rizin',
+    'sasquatch',
+    'syft',
+    'yara',
+    'afl-fuzz',
+  ]) {
+    assert.match(commands[currentCheck], new RegExp(`(?:^| )${capability}(?: |$)`));
+  }
+  assert.ok(promotion > candidateCheck, commands.join('\n'));
+});
+
+test('a critical capability regression refuses promotion and preserves the current image', async () => {
+  const f = await fixture({
+    currentCapabilities: 'analyzeHeadless\nbinwalk\ngrype\n',
+    candidateCapabilities: 'binwalk\ngrype\n',
+  });
+  await assert.rejects(
+    run('bash', ['scripts/deploy.sh', '--tools', '--build-only'], { cwd: f.dir, env: f.env }),
+    (error) => error.code === 1 && /analyzeHeadless/.test(error.stderr),
+  );
+  const commands = await f.log();
+  assert.equal(commandIndex(commands, /GRYPE_DB_AUTO_UPDATE=false/), -1, commands.join('\n'));
+  assert.equal(commandIndex(commands, /tag sha256:candidate firmlab-tools:latest/), -1, commands.join('\n'));
+  assert.equal(commandIndex(commands, /build .*Dockerfile\.firmware/), -1, commands.join('\n'));
 });
 
 test('--tools generates a fresh refresh key when none is overridden', async () => {
