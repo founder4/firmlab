@@ -201,7 +201,7 @@ ENV FIRMLAB_ANGR_PYTHON=/opt/angr-venv/bin/python3
 RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends python3-venv \
     && python3 -m venv /opt/angr-venv \
     && /opt/angr-venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/angr-venv/bin/pip install --no-cache-dir angr bitstring==4.3.1 pycparser==2.22 \
+    && /opt/angr-venv/bin/pip install --no-cache-dir angr==9.2.194 bitstring==4.3.1 pycparser==2.22 \
     && /opt/angr-venv/bin/python3 -c "import angr; print(\"angr\", angr.__version__)" \
     && rm -rf /var/lib/apt/lists/*' \
     || echo "angr optional install failed — symbolic reachability degrades honestly"
@@ -290,7 +290,9 @@ RUN bash -c 'cd / && apt-get update && apt-get install -y --no-install-recommend
     && git -C /opt/fwhunt-rules log -1 --format="FwHunt rules @ %H (%ad)" --date=short \
     && /opt/fwhunt-venv/bin/python3 -c "import fwhunt_scan, rzpipe; print(\"fwhunt-scan ok\")" \
     && test -f /opt/fwhunt-venv/bin/fwhunt_scan_analyzer.py \
-    && echo "FwHunt rules: $(find /opt/fwhunt-rules/rules -name \"*.yml\" | wc -l)" \
+    && RULE_COUNT="$(find /opt/fwhunt-rules/rules -name \*.yml | wc -l)" \
+    && test "$RULE_COUNT" -gt 0 \
+    && echo "FwHunt rules: $RULE_COUNT" \
     && rm -rf /var/lib/apt/lists/*' \
     || echo "fwhunt-scan optional install failed — UEFI implant scanning degrades honestly"
 
