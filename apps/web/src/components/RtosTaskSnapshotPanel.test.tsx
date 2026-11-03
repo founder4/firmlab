@@ -128,6 +128,7 @@ describe('RtosTaskSnapshotPanel', () => {
       base: 0x20000000,
       endian: 'little',
       pointerWidth: 4,
+      tickWidth: 4,
       useMiniListItem: true,
       useListDataIntegrityCheckBytes: false,
     });
@@ -722,17 +723,22 @@ describe('buildSnapshotRequest', () => {
     expect(tooWide.ok === false && tooWide.errors.topReadyRepresentation).toBe(m.error.bitmapPriorities);
   });
 
-  it('checks sizeof(List_t) against all four declared FreeRTOS list layouts', () => {
+  it('checks sizeof(List_t) against the declared FreeRTOS list and TickType_t layouts', () => {
     const cases = [
-      { mini: true, integrity: false, size: 20 },
-      { mini: false, integrity: false, size: 28 },
-      { mini: true, integrity: true, size: 32 },
-      { mini: false, integrity: true, size: 44 },
-    ];
+      { tick: '4', mini: true, integrity: false, size: 20 },
+      { tick: '4', mini: false, integrity: false, size: 28 },
+      { tick: '4', mini: true, integrity: true, size: 32 },
+      { tick: '4', mini: false, integrity: true, size: 44 },
+      { tick: '2', mini: true, integrity: true, size: 28 },
+      { tick: '2', mini: false, integrity: true, size: 40 },
+      { tick: '8', mini: true, integrity: true, size: 48 },
+      { tick: '8', mini: false, integrity: true, size: 64 },
+    ] as const;
     for (const c of cases) {
       const r = buildSnapshotRequest(
         {
           ...base,
+          tickWidth: c.tick,
           useMiniListItem: c.mini,
           useListDataIntegrityCheckBytes: c.integrity,
           readyArray: { base: '0x100', maxPriorities: '1', listSize: String(c.size), symbolSize: '' },
@@ -742,6 +748,7 @@ describe('buildSnapshotRequest', () => {
       expect(r.ok, `${JSON.stringify(c)} should be accepted`).toBe(true);
       if (r.ok) {
         expect(r.input.memory).toMatchObject({
+          tickWidth: Number(c.tick),
           useMiniListItem: c.mini,
           useListDataIntegrityCheckBytes: c.integrity,
         });

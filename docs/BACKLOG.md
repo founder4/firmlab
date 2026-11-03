@@ -165,9 +165,14 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   con `sizeof(List_t)` 28/44/20/32. F4 hecho 2026-11-03: el ELF lleva la dirección resuelta de
   `uxTopReadyPriority` al formulario, que exige declarar prioridad genérica o bitmap optimizado; sólo un array ready
   completo autoriza la comparación, y la matriz Renode 4/4 corroboró el valor 1 sin cambiar cobertura ni prueba.)*
+  *(F5 hecho 2026-11-03: core/API/panel declaran `TickType_t` de 16/32/64 bits (omisión histórica=32), conservan
+  enteros de 64 bits exactos como decimal cuando exceden `Number.MAX_SAFE_INTEGER` y dimensionan offsets y marcadores
+  `0x5a` al ancho efectivo. La fixture ARM_CM3 V11.1.0 validó en Renode offline 8/8 layouts de 16/32 bits; ese port
+  oficial rechaza 64 bits, que queda cubierto por layout/walk byte-a-byte pero pendiente de una fixture runtime de
+  un port compatible.)*
   Faltan: un ELF
   FreeRTOS de fabricante (el corpus sólo tiene Zephyr y Contiki),
-  `TickType_t` 16/64, colas de eventos/bloqueo y fuzzing de
+  una fixture runtime compatible con `TickType_t` de 64 bits, colas de eventos/bloqueo y fuzzing de
   periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee

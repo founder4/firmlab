@@ -4,7 +4,8 @@ import { listRecordSize } from '@firmlab/core';
  *
  * The API refuses an undeclared layout on purpose — a silently-defaulted little-endian 32-bit read of a big-endian
  * dump yields plausible-looking garbage — so this form has NO default for byte order or pointer width: the analyst
- * picks both or the form will not submit. The API's caps are mirrored client-side so a bad field is named before
+ * picks both or the form will not submit. TickType_t width is also explicit (the initial 32-bit choice preserves the
+ * historical contract). The API's caps are mirrored client-side so a bad field is named before
  * a round trip, but the API stays the authority: its 400 `details` list is rendered verbatim when it refuses.
  *
  * The result is always `needs_runtime_reproduction`. The snapshot is operator-supplied input, not bytes of the
@@ -26,7 +27,8 @@ import { listRecordSize } from '@firmlab/core';
  *
  * The ready lists can instead be declared as the whole `pxReadyTasksLists` array: its address, plus
  * `configMAX_PRIORITIES` and `sizeof(List_t)` as the analyst's build declares them. The declared size is checked
- * against the layout derived from pointer width and the two declared FreeRTOS list options, client-side for an
+ * against the layout derived from pointer width, TickType_t width and the two declared FreeRTOS list options,
+ * client-side for an
  * early message and again by the API, which is the
  * authority; the array and individual rows are mutually exclusive, because each list is walked once.
  *
@@ -56,6 +58,7 @@ export interface SnapshotForm {
   base: string;
   endian: '' | 'little' | 'big';
   pointerWidth: '' | '4' | '8';
+  tickWidth: '2' | '4' | '8';
   useMiniListItem: boolean;
   useListDataIntegrityCheckBytes: boolean;
   pxCurrentTCB: string;
@@ -88,6 +91,7 @@ export const EMPTY_FORM: SnapshotForm = {
   base: '',
   endian: '',
   pointerWidth: '',
+  tickWidth: '4',
   useMiniListItem: true,
   useListDataIntegrityCheckBytes: false,
   pxCurrentTCB: '',
@@ -124,6 +128,7 @@ export function buildSnapshotRequest(
   else if (f.bytes.length > MAX_SNAPSHOT_BYTES) errors.file = m.error.fileTooLarge(f.bytes.length, maxKiB);
   if (!f.endian) errors.endian = m.error.endian;
   if (!f.pointerWidth) errors.pointerWidth = m.error.pointerWidth;
+  const tickWidth = Number(f.tickWidth) as 2 | 4 | 8;
 
   // Until the width is declared, bound by the narrower space; the API re-checks against the declared one.
   const bits = f.pointerWidth === '8' ? 53 : 32;
@@ -188,6 +193,7 @@ export function buildSnapshotRequest(
       ? listRecordSize({
           pointerWidth: Number(f.pointerWidth) as 4 | 8,
           endian: 'little',
+          tickWidth,
           useMiniListItem: f.useMiniListItem,
           useListDataIntegrityCheckBytes: f.useListDataIntegrityCheckBytes,
         })
@@ -235,6 +241,7 @@ export function buildSnapshotRequest(
         base,
         endian: f.endian as 'little' | 'big',
         pointerWidth: Number(f.pointerWidth) as 4 | 8,
+        tickWidth,
         useMiniListItem: f.useMiniListItem,
         useListDataIntegrityCheckBytes: f.useListDataIntegrityCheckBytes,
         bytesBase64: toBase64(f.bytes),
@@ -623,6 +630,22 @@ export function RtosTaskSnapshotPanel({
             </select>
             {fieldError('pointerWidth')}
           </div>
+          <div>
+            <label className="eyebrow" htmlFor={id('tickWidth')}>
+              {m.field.tickWidth}
+            </label>
+            <select
+              id={id('tickWidth')}
+              className="select"
+              value={form.tickWidth}
+              onChange={(e) => set('tickWidth', e.target.value as SnapshotForm['tickWidth'])}
+              {...fieldProps('tickWidth')}
+            >
+              <option value="2">{m.field.bits(16)}</option>
+              <option value="4">{m.field.bits(32)}</option>
+              <option value="8">{m.field.bits(64)}</option>
+            </select>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -948,7 +971,13 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
       </p>
       {snap && (
         <p className="hint mono" style={{ margin: '6px 0 0' }}>
-          {m.result.snapshot(hex(snap.base), snap.endian ?? '?', snap.pointerWidth ?? 0, snap.bytesSupplied ?? 0)}
+          {m.result.snapshot(
+            hex(snap.base),
+            snap.endian ?? '?',
+            snap.pointerWidth ?? 0,
+            snap.tickWidth ?? 4,
+            snap.bytesSupplied ?? 0,
+          )}
         </p>
       )}
       {array && typeof array.base === 'number' && (

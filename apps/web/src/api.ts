@@ -1535,6 +1535,7 @@ export interface RtosTaskSnapshotInput {
     base: number;
     endian: 'little' | 'big';
     pointerWidth: 4 | 8;
+    tickWidth?: 2 | 4 | 8;
     bytesBase64: string;
     useMiniListItem?: boolean;
     useListDataIntegrityCheckBytes?: boolean;
@@ -1563,7 +1564,7 @@ export interface RtosTaskLane {
   coverage?: 'complete' | 'cycle_capped' | 'truncated' | 'out_of_range' | 'missing_symbol';
   attempted?: number;
   completed?: number;
-  tasks?: { listItemAddress?: number; itemValue?: number; tcbAddress?: number }[];
+  tasks?: { listItemAddress?: number; itemValue?: number | string; tcbAddress?: number }[];
   evidence?: string[];
   /** Optional forever: stored jobs from older builds have no integrity-marker counters. */
   integrityChecks?: { enabled?: boolean; attempted?: number; completed?: number; mismatches?: number };
@@ -1593,6 +1594,7 @@ export interface RtosTaskSnapshotResult {
     base?: number;
     endian?: 'little' | 'big';
     pointerWidth?: 4 | 8;
+    tickWidth?: 2 | 4 | 8;
     bytesSupplied?: number;
     useMiniListItem?: boolean;
     useListDataIntegrityCheckBytes?: boolean;

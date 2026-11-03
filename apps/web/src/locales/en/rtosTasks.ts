@@ -23,10 +23,12 @@ export const rtosTasks = {
     pointerWidth: 'Pointer width',
     pointerChoose: 'Choose…',
     bytes: (n: number) => `${n} bytes`,
+    bits: (n: number) => `${n}-bit`,
+    tickWidth: 'TickType_t width',
     useMiniListItem: 'Use configUSE_MINI_LIST_ITEM',
     useListDataIntegrityCheckBytes: 'Use configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES',
     listOptionsHint:
-      'Defaults match FreeRTOS (mini list item on, integrity words off). Declare the build options; they are never inferred from RAM.',
+      'The initial value preserves the historical 32-bit tick layout; mini list item is on and integrity words are off. Declare the build options; they are never inferred from RAM.',
     layoutHint: 'Both must be declared: a wrong default reads plausible-looking garbage, so the API has none.',
     pxCurrentTCB: 'pxCurrentTCB address (optional)',
     uxTopReadyPriority: 'uxTopReadyPriority address (optional)',
@@ -44,7 +46,7 @@ export const rtosTasks = {
     removeList: (i: number) => `Remove ready list ${i}`,
     readyArray: 'Or the whole ready-list array (pxReadyTasksLists)',
     readyArrayHint:
-      "Instead of individual lists: the array address and the two numbers your build declares. Every priority is then walked. sizeof(List_t) is checked against the pointer width and the two declared FreeRTOS list options, never used blind. The symbol's st_size, in bytes, is an optional cross-check.",
+      "Instead of individual lists: the array address and the two numbers your build declares. Every priority is then walked. sizeof(List_t) is checked against pointer and TickType_t width plus the two declared FreeRTOS list options, never used blind. The symbol's st_size, in bytes, is an optional cross-check.",
     arrayBase: 'pxReadyTasksLists address',
     maxPriorities: 'configMAX_PRIORITIES',
     listSize: 'sizeof(List_t)',
@@ -82,7 +84,7 @@ export const rtosTasks = {
     arrayBase: 'The array needs its address; take it from the pxReadyTasksLists symbol.',
     maxPriorities: (max: number) => `Enter configMAX_PRIORITIES as a whole number from 1 to ${max}.`,
     listSize: (expected: number) =>
-      `The declared pointer width and FreeRTOS list options produce a ${expected}-byte List_t. A wider tick type is still unsupported and is refused rather than misread.`,
+      `The declared pointer/tick ABI and FreeRTOS list options produce a ${expected}-byte List_t.`,
     listSizeNumber: 'Enter sizeof(List_t) as a positive whole number of bytes.',
     symbolSize: 'Enter st_size as a whole number of bytes, or leave it empty.',
     arrayOverflow: (base: string, bytes: number, bits: number) =>
@@ -109,8 +111,8 @@ export const rtosTasks = {
     coverageValue: { complete: 'complete', partial: 'partial', none: 'none' },
     proofLead:
       'Always a lead: the snapshot is operator-supplied, not bytes of this image, and nothing proves it matches a running device.',
-    snapshot: (base: string, endian: string, width: number, bytes: number) =>
-      `Snapshot at ${base}, ${endian}, ${width}-byte pointers, ${bytes.toLocaleString()} bytes.`,
+    snapshot: (base: string, endian: string, width: number, tick: number, bytes: number) =>
+      `Snapshot at ${base}, ${endian}, ${width}-byte pointers, ${tick}-byte TickType_t, ${bytes.toLocaleString()} bytes.`,
     lanes: 'Lanes',
     col: {
       lane: 'Lane',

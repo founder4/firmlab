@@ -26,7 +26,10 @@ platform's remote SVD (`STM32F40x.svd.gz`) and ran without it. A deliberately wr
 by the snapshot contract. This is emulation of a synthetic build: it says nothing about a physical device, another
 FreeRTOS version/configuration, or any corpus image.
 
-`build.sh` also supports `MATRIX=1 OUTPUT_DIR=<temporary-directory>`. The matrix compiles all four combinations of
-`configUSE_MINI_LIST_ITEM` and `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES` without replacing the tracked fixture;
+`build.sh` also supports `MATRIX=1 OUTPUT_DIR=<temporary-directory>`. The matrix compiles all eight combinations of
+16/32-bit `TickType_t`, `configUSE_MINI_LIST_ITEM` and `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES` without replacing
+the tracked fixture;
 `apps/api/scripts/rtos-freertos-layout-matrix.sh` feeds each ELF to the product with the matching explicit layout and
 runs the full symbol → offline Renode capture → task-list walk check. Generated matrix ELF files are never committed.
+The pinned V11.1.0 ARM_CM3 port rejects 64-bit ticks; the product's 64-bit parser has byte/layout tests, but this
+fixture cannot provide runtime evidence for it.

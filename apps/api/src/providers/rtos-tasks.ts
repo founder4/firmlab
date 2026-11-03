@@ -3,7 +3,7 @@
  *
  * The operator hands in a RAM snapshot and the symbol addresses they resolved elsewhere; this module never acquires
  * memory, never resolves a symbol, and never guesses a layout. Every snapshot must DECLARE its base address, byte
- * order and pointer width — there is no default — because the parser's answer is only as true as those three
+ * order, pointer width and TickType_t width — because the parser's answer is only as true as those layout
  * facts, and a silently-defaulted little-endian 32-bit read of a big-endian dump yields plausible-looking garbage.
  * The declaration is validated in full before any byte reaches the parser; a malformed contract is a 400, not a
  * degraded result.
@@ -71,9 +71,6 @@ export const MAX_DELAYED_LISTS = 2;
 /** A list label is an audit-trail string, not free text: a C identifier with an optional index, kept short. */
 const LIST_NAME = /^[A-Za-z_][A-Za-z0-9_]*(\[\d+\])?$/;
 const MAX_LIST_NAME = 64;
-/** sizeof(TickType_t) — core's `TICK_WIDTH`. */
-const TICK_WIDTH = 4;
-
 /** The persisted request contract. Addresses are plain numbers (target address space, not buffer offsets). */
 export interface RtosTaskSnapshotInput {
   memory: {
@@ -81,6 +78,8 @@ export interface RtosTaskSnapshotInput {
     base: number;
     endian: 'little' | 'big';
     pointerWidth: 4 | 8;
+    /** sizeof(TickType_t); omitted by historical requests means 4. */
+    tickWidth?: 2 | 4 | 8;
     useMiniListItem?: boolean;
     useListDataIntegrityCheckBytes?: boolean;
     /** The raw RAM bytes, base64. */
@@ -188,6 +187,8 @@ export interface RtosTaskSnapshotResult {
     endian: 'little' | 'big';
     pointerWidth: 4 | 8;
     bytesSupplied: number;
+    /** Optional forever: historical persisted results used the implicit 4-byte TickType_t layout. */
+    tickWidth?: 2 | 4 | 8;
     useMiniListItem?: boolean;
     useListDataIntegrityCheckBytes?: boolean;
   };
@@ -234,10 +235,14 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
   if (!isRecord(symbols)) return { ok: false, errors: ['symbols must be an object'] };
 
   const { base, endian, pointerWidth, bytesBase64 } = memory;
+  const tickWidth = memory.tickWidth ?? 4;
   const useMiniListItem = memory.useMiniListItem ?? true;
   const useListDataIntegrityCheckBytes = memory.useListDataIntegrityCheckBytes ?? false;
   if (endian !== 'little' && endian !== 'big') errors.push("memory.endian must be declared as 'little' or 'big'");
   if (pointerWidth !== 4 && pointerWidth !== 8) errors.push('memory.pointerWidth must be declared as 4 or 8');
+  if (tickWidth !== 2 && tickWidth !== 4 && tickWidth !== 8)
+    errors.push('memory.tickWidth must be declared as 2, 4 or 8 when supplied');
+  const tickLayoutValid = tickWidth === 2 || tickWidth === 4 || tickWidth === 8;
   if (typeof useMiniListItem !== 'boolean') errors.push('memory.useMiniListItem must be boolean when supplied');
   if (typeof useListDataIntegrityCheckBytes !== 'boolean')
     errors.push('memory.useListDataIntegrityCheckBytes must be boolean when supplied');
@@ -315,7 +320,7 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
       errors.push('symbols.readyListArray must declare maxPriorities and listSize as numbers');
     else if (array.symbolSize !== undefined && array.symbolSize !== null && typeof array.symbolSize !== 'number')
       errors.push('symbols.readyListArray.symbolSize must be a number or null');
-    else if (pointerWidth === 4 || pointerWidth === 8) {
+    else if ((pointerWidth === 4 || pointerWidth === 8) && tickLayoutValid) {
       const spec = {
         base: array.base as number | null,
         maxPriorities: array.maxPriorities,
@@ -324,6 +329,7 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
       };
       const layout: FreeRtosLayout = {
         pointerWidth,
+        tickWidth: tickWidth as 2 | 4 | 8,
         endian: endian === 'big' ? 'big' : 'little',
         useMiniListItem: useMiniListItem === true,
         useListDataIntegrityCheckBytes: useListDataIntegrityCheckBytes === true,
@@ -422,6 +428,7 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
       layout: {
         endian: endian as 'little' | 'big',
         pointerWidth: pointerWidth as 4 | 8,
+        tickWidth: tickWidth as 2 | 4 | 8,
         useMiniListItem: useMiniListItem === true,
         useListDataIntegrityCheckBytes: useListDataIntegrityCheckBytes === true,
       },
@@ -602,7 +609,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     inconsistent > 0 ? ` ${inconsistent} list(s) carry structural inconsistencies, recorded in their evidence.` : '';
   const integrityAnomalies =
     integrityChecks.mismatches > 0
-      ? ` ${integrityChecks.mismatches} FreeRTOS integrity marker(s) disagreed with 0x5a5a5a5a; this may mean a wrong declared layout or a torn/corrupt snapshot, not a runtime finding.`
+      ? ` ${integrityChecks.mismatches} FreeRTOS integrity marker(s) disagreed with the declared-width 0x5a pattern; this may mean a wrong declared layout or a torn/corrupt snapshot, not a runtime finding.`
       : '';
   const topReadyAnomaly =
     topReadyPriority?.agrees === false
@@ -651,6 +658,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
       endian: s.layout.endian,
       pointerWidth: ptr,
       bytesSupplied: s.buf.length,
+      tickWidth: s.layout.tickWidth ?? 4,
       useMiniListItem: s.layout.useMiniListItem ?? true,
       useListDataIntegrityCheckBytes: s.layout.useListDataIntegrityCheckBytes ?? false,
     },

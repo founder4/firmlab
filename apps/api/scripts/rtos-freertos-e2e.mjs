@@ -40,11 +40,40 @@ const boolEnv = (name, fallback) => {
 };
 const USE_MINI_LIST_ITEM = boolEnv('USE_MINI_LIST_ITEM', true);
 const USE_LIST_DATA_INTEGRITY_CHECK_BYTES = boolEnv('USE_LIST_DATA_INTEGRITY_CHECK_BYTES', false);
+const TICK_WIDTH_BITS = Number(process.env.TICK_WIDTH ?? 32);
+if (![16, 32, 64].includes(TICK_WIDTH_BITS)) throw new Error('TICK_WIDTH must be 16, 32 or 64');
+const TICK_WIDTH = TICK_WIDTH_BITS / 8;
 // Declared by the build matrix for FreeRTOS V11.1.0 on its 32-bit ARM ABI. These values are fixture
-// corroboration only; the product receives the two configuration flags explicitly and derives its own offsets.
+// corroboration only; the product receives every layout setting explicitly and derives its own offsets.
 const MAX_PRIORITIES = 5;
-const LIST_SIZE = USE_LIST_DATA_INTEGRITY_CHECK_BYTES ? (USE_MINI_LIST_ITEM ? 32 : 44) : USE_MINI_LIST_ITEM ? 20 : 28;
-const LIST_ITEM_SIZE = USE_LIST_DATA_INTEGRITY_CHECK_BYTES ? 28 : 20;
+const LIST_SIZE = USE_LIST_DATA_INTEGRITY_CHECK_BYTES
+  ? TICK_WIDTH_BITS === 16
+    ? USE_MINI_LIST_ITEM
+      ? 28
+      : 40
+    : TICK_WIDTH_BITS === 32
+      ? USE_MINI_LIST_ITEM
+        ? 32
+        : 44
+      : USE_MINI_LIST_ITEM
+        ? 48
+        : 64
+  : TICK_WIDTH_BITS === 64
+    ? USE_MINI_LIST_ITEM
+      ? 24
+      : 32
+    : USE_MINI_LIST_ITEM
+      ? 20
+      : 28;
+const LIST_ITEM_SIZE = USE_LIST_DATA_INTEGRITY_CHECK_BYTES
+  ? TICK_WIDTH_BITS === 16
+    ? 24
+    : TICK_WIDTH_BITS === 32
+      ? 28
+      : 40
+  : TICK_WIDTH_BITS === 64
+    ? 24
+    : 20;
 const TCB_PRIORITY_OFFSET = 4 + 2 * LIST_ITEM_SIZE;
 const TCB_NAME_OFFSET = TCB_PRIORITY_OFFSET + 8;
 const EXPECTED = {
@@ -83,6 +112,7 @@ const body = {
     base: cap.region.base,
     endian: 'little',
     pointerWidth: 4,
+    tickWidth: TICK_WIDTH,
     useMiniListItem: USE_MINI_LIST_ITEM,
     useListDataIntegrityCheckBytes: USE_LIST_DATA_INTEGRITY_CHECK_BYTES,
     bytesBase64: cap.bytesBase64,
@@ -171,6 +201,7 @@ check(
     : 'no integrity markers were claimed when the FreeRTOS option was disabled',
 );
 check(r.proofState === 'needs_runtime_reproduction', 'proof state stays needs_runtime_reproduction');
+check(r.snapshot.tickWidth === TICK_WIDTH, `snapshot records ${TICK_WIDTH_BITS}-bit TickType_t`);
 
 function sortKeys(expected, actual) {
   // Compare as sets: order of tasks within a list is scheduling history, not a property of the fixture.
@@ -189,6 +220,7 @@ fs.writeFileSync(
       coverage: r.coverage,
       integrityChecks: integrity,
       layout: {
+        tickWidth: TICK_WIDTH,
         useMiniListItem: USE_MINI_LIST_ITEM,
         useListDataIntegrityCheckBytes: USE_LIST_DATA_INTEGRITY_CHECK_BYTES,
         listSize: LIST_SIZE,

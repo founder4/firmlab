@@ -96,6 +96,7 @@ describe('validateRtosTaskSnapshot', () => {
   it('defaults the historical list layout and validates explicit FreeRTOS list options', () => {
     const historical = validateRtosTaskSnapshot(body(snapshot(), SYMBOLS));
     expect(historical.ok && historical.snapshot.layout).toMatchObject({
+      tickWidth: 4,
       useMiniListItem: true,
       useListDataIntegrityCheckBytes: false,
     });
@@ -103,8 +104,10 @@ describe('validateRtosTaskSnapshot', () => {
     const explicit = body(snapshot(), { readyListArray: { base: LIST, maxPriorities: 1, listSize: 44 } });
     explicit.memory.useMiniListItem = false;
     explicit.memory.useListDataIntegrityCheckBytes = true;
+    explicit.memory.tickWidth = 4;
     const validated = validateRtosTaskSnapshot(explicit);
     expect(validated.ok && validated.snapshot.layout).toMatchObject({
+      tickWidth: 4,
       useMiniListItem: false,
       useListDataIntegrityCheckBytes: true,
     });
@@ -114,6 +117,30 @@ describe('validateRtosTaskSnapshot', () => {
       memory: { ...body(snapshot(), SYMBOLS).memory, useMiniListItem: 'yes' },
     });
     expect(invalid.ok === false && invalid.errors.join('\n')).toMatch(/useMiniListItem must be boolean/);
+
+    const invalidTick = validateRtosTaskSnapshot({
+      ...body(snapshot(), SYMBOLS),
+      memory: { ...body(snapshot(), SYMBOLS).memory, tickWidth: 3 },
+    });
+    expect(invalidTick.ok === false && invalidTick.errors.join('\n')).toMatch(
+      /tickWidth must be declared as 2, 4 or 8/,
+    );
+
+    const tick16 = validateRtosTaskSnapshot({
+      ...body(snapshot(), SYMBOLS),
+      memory: { ...body(snapshot(), SYMBOLS).memory, tickWidth: 2 },
+    });
+    expect(tick16.ok && tick16.snapshot.layout).toMatchObject({ tickWidth: 2 });
+    const tick64 = validateRtosTaskSnapshot({
+      ...body(snapshot(), SYMBOLS),
+      memory: { ...body(snapshot(), SYMBOLS).memory, tickWidth: 8 },
+    });
+    expect(tick64.ok && tick64.snapshot.layout).toMatchObject({ tickWidth: 8 });
+
+    const tick64Array = body(snapshot(), { readyListArray: { base: LIST, maxPriorities: 1, listSize: 48 } });
+    tick64Array.memory.tickWidth = 8;
+    tick64Array.memory.useListDataIntegrityCheckBytes = true;
+    expect(validateRtosTaskSnapshot(tick64Array).ok).toBe(true);
   });
 
   it('requires uxTopReadyPriority to declare priority or bitmap semantics and bounds the bitmap domain', () => {
@@ -140,7 +167,11 @@ describe('runRtosTaskSnapshot', () => {
     const r = run(body(snapshot(), SYMBOLS));
     expect(r.coverage).toBe('complete');
     expect(r.proofState).toBe('needs_runtime_reproduction');
-    expect(r.snapshot).toMatchObject({ useMiniListItem: true, useListDataIntegrityCheckBytes: false });
+    expect(r.snapshot).toMatchObject({
+      tickWidth: 4,
+      useMiniListItem: true,
+      useListDataIntegrityCheckBytes: false,
+    });
     expect(r.currentTask).toMatchObject({ coverage: 'complete', tcbAddress: 0x2000_1000 });
     expect(r.readyLists).toHaveLength(1);
     expect(r.readyLists[0]).toMatchObject({ priority: 3, coverage: 'complete', attempted: 2, completed: 2 });

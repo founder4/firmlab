@@ -11,7 +11,9 @@
 #define configMINIMAL_STACK_SIZE 128
 #define configMAX_TASK_NAME_LEN 16
 #define configTOTAL_HEAP_SIZE (24 * 1024)
+#ifndef configTICK_TYPE_WIDTH_IN_BITS
 #define configTICK_TYPE_WIDTH_IN_BITS TICK_TYPE_WIDTH_32_BITS
+#endif
 #define configIDLE_SHOULD_YIELD 1
 #define configUSE_MUTEXES 0
 #define configUSE_RECURSIVE_MUTEXES 0

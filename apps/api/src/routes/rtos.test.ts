@@ -92,6 +92,7 @@ describe('RTOS task snapshot route', () => {
         base: BASE,
         endian: 'little',
         pointerWidth: 4,
+        tickWidth: 4,
         useMiniListItem: true,
         useListDataIntegrityCheckBytes: false,
         bytes: 0x60,
