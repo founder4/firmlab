@@ -13,7 +13,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
 import { type Locale, setLocale } from '../i18n';
-import { catalogues } from '../locales';
+import { en as enCatalogue } from '../locales/en';
+import { es as esCatalogue } from '../locales/es';
 import { mockedApi } from '../test-api-mock';
 import { ANALYSIS_STEPS, StepTimeline } from './StepTimeline';
 
@@ -60,7 +61,8 @@ describe('StepTimeline — the labels are the sections catalogue, not a copy of 
     const nav = timeline();
     await waitFor(() => expect(mockApi.jobs).toHaveBeenCalled());
 
-    const expected = ANALYSIS_STEPS.map((id) => catalogues[locale].sections[id]);
+    const catalogue = { en: enCatalogue, es: esCatalogue }[locale];
+    const expected = ANALYSIS_STEPS.map((id) => catalogue.sections[id]);
     expect(labelsOf(nav)).toEqual(expected);
     // The list is the pipeline, in flow order — a step dropped from it would still satisfy the equality above.
     expect(ANALYSIS_STEPS).toEqual([
@@ -86,7 +88,7 @@ describe('StepTimeline — the labels are the sections catalogue, not a copy of 
       expect(labelsOf(nav)).not.toContain(stale);
     }
     // The strip's own accessible name is chrome too, and a screen reader announces it before any of the buttons.
-    expect(nav.getAttribute('aria-label')).toBe(catalogues.es.shell.timeline.label);
+    expect(nav.getAttribute('aria-label')).toBe(esCatalogue.shell.timeline.label);
   });
 
   it('states each node’s state in the tooltip, in the reader’s language', async () => {
@@ -118,7 +120,7 @@ describe('StepTimeline — an empty ledger after a finished stage', () => {
   it('reads the findings step as done, not pending, once a stage has finished with zero findings', async () => {
     mockApi.jobs.mockResolvedValue([{ kind: 'extract', status: 'done' }] as never);
     const nav = timeline();
-    const findingsLabel = catalogues.en.sections.findings;
+    const findingsLabel = enCatalogue.sections.findings;
     await waitFor(() =>
       expect([...nav.querySelectorAll('.steptl-step')].map((n) => n.getAttribute('title'))).toContain(
         `${findingsLabel} — done`,

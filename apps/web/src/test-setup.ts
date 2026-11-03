@@ -19,3 +19,8 @@ Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: t
 if (document.defaultView) {
   Object.defineProperty(document.defaultView, 'localStorage', { configurable: true, value: testStorage });
 }
+
+// Both catalogues up front (after the storage pin, which i18n reads on load), so a test's `setLocale` switches
+// synchronously, exactly as a switch to an already-loaded catalogue does in the app.
+const { loadLocale } = await import('./i18n');
+await Promise.all([loadLocale('en'), loadLocale('es')]);

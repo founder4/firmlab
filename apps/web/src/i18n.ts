@@ -18,9 +18,14 @@
  * **What is NOT translated, ever.** Proof states (`static_confirmed`, `blocked_by_platform`), finding kinds, source
  * strings and job kinds are IDENTIFIERS that cross the API and land in SQLite. Translating them would change data,
  * not presentation. They render verbatim; only their human-readable gloss is localised.
+ *
+ * **Why a catalogue is loaded, not imported.** Each language is its own chunk (see `locales/index.ts`). The active
+ * one is fetched before React mounts (`initLocale`), and `locale` only ever names a catalogue that is already here,
+ * so every read stays synchronous. A switch to a loaded language is instant; the first switch to the other one
+ * keeps the current language on screen until its chunk arrives, rather than painting a half-empty frame.
  */
 import { useSyncExternalStore } from 'react';
-import { type Messages, catalogues } from './locales';
+import { type Messages, catalogueLoaders } from './locales';
 
 export type { Messages };
 
@@ -34,7 +39,10 @@ export const LOCALES: { value: Locale; label: string }[] = [
 ];
 
 const listeners = new Set<() => void>();
+const loaded: Partial<Record<Locale, Messages>> = {};
 let locale: Locale = load();
+// The latest switch asked for. A slow load that resolves after a newer switch must not undo it.
+let requested: Locale = locale;
 
 function load(): Locale {
   try {
@@ -61,7 +69,14 @@ function emit(): void {
   for (const l of listeners) l();
 }
 
-export function setLocale(next: Locale): void {
+/** Fetch a catalogue once; later calls resolve from the cache. */
+export async function loadLocale(l: Locale): Promise<Messages> {
+  const t = loaded[l] ?? (await catalogueLoaders[l]());
+  loaded[l] = t;
+  return t;
+}
+
+function commit(next: Locale): void {
   locale = next;
   try {
     localStorage.setItem(LOCALE_KEY, next);
@@ -71,9 +86,28 @@ export function setLocale(next: Locale): void {
   emit();
 }
 
-/** Bootstrap: apply immediately, before React mounts, so the first paint is already in the right language. */
-export function initLocale(): void {
+/** Switch language. Synchronous when the catalogue is loaded; otherwise applies once it arrives. */
+export function setLocale(next: Locale): void {
+  requested = next;
+  if (loaded[next]) {
+    commit(next);
+    return;
+  }
+  void loadLocale(next).then(() => {
+    if (requested === next) commit(next);
+  });
+}
+
+/** Bootstrap: await before React mounts, so the first paint is already in the right language. */
+export async function initLocale(): Promise<void> {
   applyLocale();
+  await loadLocale(locale);
+}
+
+function catalogue(l: Locale): Messages {
+  const t = loaded[l];
+  if (!t) throw new Error(`locale '${l}' read before its catalogue loaded — await initLocale() first`);
+  return t;
 }
 
 const subscribe = (cb: () => void): (() => void) => {
@@ -95,12 +129,12 @@ export function useLocale(): Locale {
  * missing string at runtime.
  */
 export function useMessages(): Messages {
-  return catalogues[useLocale()];
+  return catalogue(useLocale());
 }
 
-/** The catalogue outside React (module scope, event handlers, non-component helpers). */
+/** The catalogue outside React (event handlers, non-component helpers — not module scope, which runs pre-load). */
 export function messages(): Messages {
-  return catalogues[locale];
+  return catalogue(locale);
 }
 
 /** The active locale outside React — for `toLocaleDateString` and friends. */

@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Job, type RunSummary, api } from '../api';
 import { setLocale } from '../i18n';
-import { catalogues } from '../locales';
+import { en as enCatalogue } from '../locales/en';
+import { es as esCatalogue } from '../locales/es';
 import { mockedApi } from '../test-api-mock';
 import { RunHistory, ago } from './RunHistory';
 
@@ -131,8 +132,8 @@ describe('RunHistory — the heading is one sentence, built by the language that
     // `2m ago` and `hace 2 min` are not the same string with a word swapped — the preposition leads in one and
     // trails in the other. One catalogue entry per unit is what lets both be written rather than derived.
     const now = 1_800_000_000_000;
-    const en = catalogues.en.shell.runHistory.ago;
-    const es = catalogues.es.shell.runHistory.ago;
+    const en = enCatalogue.shell.runHistory.ago;
+    const es = esCatalogue.shell.runHistory.ago;
     expect(ago(now - 30_000, en, now)).toBe('30s ago');
     expect(ago(now - 30_000, es, now)).toBe('hace 30 s');
     expect(ago(now - 7_200_000, en, now)).toBe('2h ago');
