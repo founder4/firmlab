@@ -268,6 +268,7 @@ function espArch(buf: Uint8Array): { arch: Architecture; endianness: Endianness 
  */
 export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: EntropyProfile | null): ImageIdentity {
   const ids = new Set(hits.map((h) => h.id));
+  const topLevelElf = hits.some((h) => h.id === 'elf' && h.offset === 0);
   const strongFs = STRONG_FS_IDS.filter((f) => ids.has(f));
   const jffs2Nodes = corroboratedJffs2Nodes(buf, hits);
   const picobin = parsePicobin(buf);
@@ -317,6 +318,15 @@ export function inferIdentity(buf: Uint8Array, hits: SignatureHit[], entropy?: E
     classRationale = qmkMarkers.length
       ? `QMK keyboard firmware on RP2040 Cortex-M0+ (valid boot2 CRC32, XIP vector table, markers: ${qmkMarkers.join(', ')}). No Linux filesystem; analyze as a monolithic RTOS image (worker W7).`
       : 'Bare-metal RP2040 Cortex-M0+ flash image (valid boot2 CRC32 and XIP vector table; no RTOS family marker). No Linux filesystem; analyze as a standalone MCU image (worker W7).';
+  } else if (topLevelElf) {
+    // A structurally valid ELF header at byte zero owns the file. Filesystem magics inside its sections/debug data
+    // are embedded byte sequences, not evidence that the executable itself is a Linux firmware/rootfs container.
+    firmwareClass = 'rtos';
+    classEvidence = 'heuristic'; // ELF is exact; assigning the executable to the RTOS/bare-metal lane is routing.
+    ({ arch, endianness } = inferArch(buf, hits));
+    classRationale =
+      'Top-level ELF executable. Embedded filesystem magics, if any, describe bytes inside the executable and do ' +
+      'not make it a rootfs image; route it to the RTOS/bare-metal executable lane (worker W7).';
   } else if (ids.has('uefi-fv')) {
     firmwareClass = 'uefi-bios';
     // `_FVH` survives only when its structural check passed (zero vector clean, header/volume lengths coherent),

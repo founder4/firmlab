@@ -148,6 +148,18 @@ describe('structure + identity', () => {
     expect(identity.arch).toBe('mipsel');
     expect(identity.endianness).toBe('little');
   });
+
+  it('keeps a top-level ELF out of the Linux rootfs lane when its contents resemble SquashFS', () => {
+    const buf = new Uint8Array(512);
+    buf.set([0x7f, 0x45, 0x4c, 0x46, 0x01, 0x01, 0x01], 0); // ELF32, LE, EV_CURRENT
+    buf[18] = 40; // EM_ARM
+    buf.set(ascii('hsqs'), 0x100); // incidental bytes inside the executable
+    const identity = inferIdentity(buf, scanSignatures(buf));
+    expect(identity.firmwareClass).toBe('rtos');
+    expect(identity.arch).toBe('arm');
+    expect(identity.filesystems).toEqual([]);
+    expect(identity.classRationale).toMatch(/Top-level ELF/);
+  });
 });
 
 describe('W0 device-class identity (entropy-gated, non-Linux classes)', () => {

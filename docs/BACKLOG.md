@@ -176,8 +176,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   routing normal: `riot` en bytes comprimidos GL.iNet y `mbed` dentro de `CONFIG_OF_EMBED` en Tenda. W0 y W7 exigen
   ahora marcadores RIOT/mbed específicos. El PICOBIN del Pico se identifica como RP2350 RISC-V, pero aún no existe
   un carril profundo dedicado.)*
-  Faltan: un ELF
-  FreeRTOS de fabricante (el volumen tiene un dump ESP32 FreeRTOS, no un ELF con símbolos),
+  *(ELF de fabricante resuelto, 2026-11-03: el target FreeRTOS oficial de ST
+  `STM32N6-GettingStarted-Audio` v2.3.0 se reprodujo con Arm GCC 13.3.1 y quedó local/ignorado por licencia. FirmLab
+  leyó 4315/4315 símbolos y resolvió 10/11 nombres, incluido el array ready de 56 × 20 bytes; sólo falta la variante
+  SMP. El hallazgo corrigió además la prioridad W0: un ELF estructural en offset cero vence a magias SquashFS
+  incidentales dentro de sus secciones. SLA0044 impide ejecutarlo en Renode; los símbolos son prueba de link, no
+  estado runtime.)*
+  Faltan: un snapshot RAM del ELF ST capturado en hardware STM32N6570-DK,
   una fixture runtime compatible con `TickType_t` de 64 bits, colas de eventos/bloqueo y fuzzing de
   periféricos/MMIO (µEmu/P2IM/Fuzzware), además de análisis profundo RP2350/RISC-V; Renode sigue demostrando vida,
   no cobertura del HAL.
