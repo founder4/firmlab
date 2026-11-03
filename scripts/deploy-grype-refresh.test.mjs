@@ -260,7 +260,10 @@ test('the Debian 12 recipe pins AFL++, angr and the dependency APIs angr consume
   assert.doesNotMatch(dockerfile, /git clone --depth 1 https:\/\/github\.com\/AFLplusplus\/AFLplusplus/);
   assert.match(dockerfile, /make -C \/afl -j4 afl-fuzz afl-showmap afl-tmin NO_NYX=1/);
   assert.doesNotMatch(dockerfile, /make -C \/afl source-only/);
-  assert.match(dockerfile, /pip install --no-cache-dir angr==9\.2\.194 bitstring==4\.3\.1 pycparser==2\.22/);
+  assert.match(
+    dockerfile,
+    /pip install --no-cache-dir 'angr\[unicorn\]==9\.2\.211' bitstring==4\.3\.1 pycparser==3\.0/,
+  );
   assert.match(dockerfile, /test "\$RULE_COUNT" -gt 0/);
 });
 
@@ -268,6 +271,7 @@ test('the Debian 13 recipe takes exactly the retained and Renode images from loc
   const dockerfile = await readFile(path.join(root, 'Dockerfile.trixie'), 'utf8');
   assert.match(dockerfile, new RegExp(`^ARG RETAINED_IMAGE=${RETAINED}$`, 'm'));
   assert.match(dockerfile, new RegExp(`^ARG RENODE_IMAGE=${RENODE}$`, 'm'));
+  assert.match(dockerfile, /angr\[unicorn\]==9\.2\.213 bitstring==4\.3\.1 pycparser==3\.0/);
   // Every other base is public and digest-pinned, so a remote resolution of it is content-addressed.
   for (const [, ref] of dockerfile.matchAll(/^FROM (\S+)/gm)) {
     assert.ok(/^\$\{[A-Z_]+\}$/.test(ref) || /@sha256:[0-9a-f]{64}$/.test(ref), ref);

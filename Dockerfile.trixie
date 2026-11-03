@@ -32,7 +32,7 @@ RUN python3 /tmp/fetch-trixie-assets.py \
 RUN python3 -m venv /opt/fw-py \
  && /opt/fw-py/bin/pip install --no-cache-dir jefferson==0.4.8 ubi-reader==0.8.16 certifi==2026.10.19 urllib3==2.8.0 setuptools==84.2.1 \
  && python3 -m venv /opt/angr-venv \
- && /opt/angr-venv/bin/pip install --no-cache-dir angr[unicorn]==9.2.213 bitstring==4.3.1 certifi==2026.10.19 urllib3==2.8.0 setuptools==84.2.1 \
+ && /opt/angr-venv/bin/pip install --no-cache-dir angr[unicorn]==9.2.213 bitstring==4.3.1 pycparser==3.0 certifi==2026.10.19 urllib3==2.8.0 setuptools==84.2.1 \
  && python3 -m venv /opt/fwhunt-venv \
  && /opt/fwhunt-venv/bin/pip install --no-cache-dir fwhunt-scan==2.3.8 certifi==2026.10.19 urllib3==2.8.0 setuptools==84.2.1 \
  && python3 -m venv /opt/chipsec-venv \
