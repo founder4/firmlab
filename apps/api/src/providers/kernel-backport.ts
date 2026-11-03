@@ -3,7 +3,7 @@
  * source-tree state. `artifactBinding` is deliberately fixed to `unverified`: no result here changes ProofState.
  */
 import { promisify } from 'node:util';
-import type { LinuxKernelCveRecord } from '@firmlab/core';
+import { type LinuxKernelCveRecord, parseLinuxKernelCveRecord } from '@firmlab/core';
 import { execFile, spawn, terminateJobProcess } from '../job-process.js';
 
 const execFileAsync = promisify(execFile);
@@ -36,6 +36,14 @@ export interface KernelBackportEvidence {
   reason: string;
 }
 
+export interface KernelBackportRequest {
+  repoPath: string;
+  record: LinuxKernelCveRecord;
+  limits: KernelBackportLimits;
+}
+
+export type KernelBackportRequestParse = { ok: true; value: KernelBackportRequest } | { ok: false; error: string };
+
 const defaults: KernelBackportLimits = { maxCommits: 256, timeoutMs: 30_000, maxPatchBytes: 2 * 1024 * 1024 };
 
 function boundedLimits(input: Partial<KernelBackportLimits>): KernelBackportLimits {
@@ -46,6 +54,41 @@ function boundedLimits(input: Partial<KernelBackportLimits>): KernelBackportLimi
       64 * 1024,
       Math.min(16 * 1024 * 1024, Math.floor(input.maxPatchBytes ?? defaults.maxPatchBytes)),
     ),
+  };
+}
+
+const object = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+
+/** Validate an operator-provisioned mirror request before a durable job is created. */
+export function parseKernelBackportRequest(input: unknown): KernelBackportRequestParse {
+  const body = object(input);
+  if (!body) return { ok: false, error: 'body must be an object' };
+  if (
+    typeof body.repoPath !== 'string' ||
+    !body.repoPath.startsWith('/') ||
+    body.repoPath.length > 4096 ||
+    body.repoPath.includes('\0')
+  ) {
+    return { ok: false, error: 'repoPath must be an absolute local path of at most 4096 characters' };
+  }
+  const parsedRecord = parseLinuxKernelCveRecord(body.record);
+  if (!parsedRecord.ok) return { ok: false, error: `record rejected: ${parsedRecord.reason}` };
+
+  const rawLimits = body.limits === undefined ? {} : object(body.limits);
+  if (!rawLimits) return { ok: false, error: 'limits must be an object when supplied' };
+  const requested: Partial<KernelBackportLimits> = {};
+  for (const key of ['maxCommits', 'timeoutMs', 'maxPatchBytes'] as const) {
+    const value = rawLimits[key];
+    if (value === undefined) continue;
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+      return { ok: false, error: `limits.${key} must be a positive safe integer` };
+    }
+    requested[key] = value;
+  }
+  return {
+    ok: true,
+    value: { repoPath: body.repoPath, record: parsedRecord.record, limits: boundedLimits(requested) },
   };
 }
 

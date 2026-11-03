@@ -64,6 +64,8 @@ export type JobKind =
   | 'nvram'
   | 'auxsecrets'
   | 'kernel'
+  // Read-only source-tree backport evidence for an operator-provisioned Linux mirror; never a firmware finding.
+  | 'kernel-backport'
   | 'yarascan'
   | 'credmatch'
   | 'updatepath';

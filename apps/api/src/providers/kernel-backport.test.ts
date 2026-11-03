@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LinuxKernelCveRecord } from '@firmlab/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compareKernelBackports } from './kernel-backport.js';
+import { compareKernelBackports, parseKernelBackportRequest } from './kernel-backport.js';
 
 const dirs: string[] = [];
 const git = (repo: string, ...args: string[]) =>
@@ -37,6 +37,28 @@ function record(fixes: string[]): LinuxKernelCveRecord {
     gitRanges: fixes.map((fixed) => ({ introduced: '0'.repeat(40), fixed })),
     openGitIntroductions: [],
     fixCommits: fixes,
+  };
+}
+
+function rawRecord(fix = 'b'.repeat(40)) {
+  return {
+    dataType: 'CVE_RECORD',
+    dataVersion: '5.1',
+    cveMetadata: { cveId: 'CVE-2026-43286', assignerShortName: 'Linux' },
+    containers: {
+      cna: {
+        providerMetadata: { shortName: 'Linux' },
+        affected: [
+          {
+            vendor: 'Linux',
+            product: 'Linux',
+            repo: 'https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git',
+            programFiles: ['driver.c'],
+            versions: [{ versionType: 'git', status: 'affected', version: 'a'.repeat(40), lessThan: fix }],
+          },
+        ],
+      },
+    },
   };
 }
 
@@ -107,5 +129,34 @@ describe('compareKernelBackports', () => {
       expect.objectContaining({ upstreamCommit: 'f'.repeat(40), method: 'source_commit_missing' }),
     ]);
     expect(result.coverage).toBe('none');
+  });
+});
+
+describe('parseKernelBackportRequest', () => {
+  it('parses a bounded request and records the effective limits', () => {
+    const parsed = parseKernelBackportRequest({
+      repoPath: '/srv/linux',
+      record: rawRecord(),
+      limits: { maxCommits: 9, timeoutMs: 2500, maxPatchBytes: 100_000 },
+    });
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: {
+        repoPath: '/srv/linux',
+        record: { cveId: 'CVE-2026-43286', fixCommits: ['b'.repeat(40)] },
+        limits: { maxCommits: 9, timeoutMs: 2500, maxPatchBytes: 100_000 },
+      },
+    });
+  });
+
+  it('refuses unsafe paths, malformed records and invalid limit types before a job exists', () => {
+    expect(parseKernelBackportRequest({ repoPath: '../linux', record: rawRecord() })).toMatchObject({ ok: false });
+    expect(parseKernelBackportRequest({ repoPath: '/srv/linux', record: {} })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('record rejected'),
+    });
+    expect(
+      parseKernelBackportRequest({ repoPath: '/srv/linux', record: rawRecord(), limits: { maxCommits: '9' } }),
+    ).toMatchObject({ ok: false, error: expect.stringContaining('limits.maxCommits') });
   });
 });

@@ -2,7 +2,8 @@
  * Kernel-posture routes — the security properties of the kernel the rest of the analysis runs on top of. POST starts
  * a job that locates the kernel (shipped config → module set → carved blob → raw image), answers the posture
  * questions in three states, and syncs its findings under the stable `kernel` source; GET returns the latest
- * completed result.
+ * completed result. The sibling backport route compares an operator-provisioned local source mirror with a
+ * strictly parsed Linux CNA record. Its durable result is source-tree evidence only and never syncs findings.
  *
  * Unlike the rootfs-bound stages, this route does NOT refuse a request when extraction has not run: the raw image
  * alone frequently carries a kernel banner, and a rootfs-less answer (version known, posture undetermined and
@@ -13,6 +14,7 @@ import type { FastifyInstance } from 'fastify';
 import { deviceContextFor, syncFindings } from '../findings.js';
 import type { ExtractResult } from '../providers/extract.js';
 import { startJob } from '../providers/jobs.js';
+import { compareKernelBackports, parseKernelBackportRequest } from '../providers/kernel-backport.js';
 import { runKernelPosture } from '../providers/kernelposture.js';
 import { getImage, listJobs } from '../store.js';
 
@@ -42,6 +44,25 @@ export async function kernelRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
     const done = listJobs(id).find((j) => j.kind === 'kernel' && j.status === 'done' && j.resultJson);
+    return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
+  });
+
+  app.post('/images/:id/kernel-backport', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
+    const parsed = parseKernelBackportRequest(req.body);
+    if (!parsed.ok) return reply.status(400).send({ error: parsed.error });
+    const { repoPath, record, limits } = parsed.value;
+    const jobId = startJob(id, 'kernel-backport', { repoPath, cveId: record.cveId, limits }, () =>
+      compareKernelBackports(repoPath, record, limits),
+    );
+    return reply.status(202).send({ jobId });
+  });
+
+  app.get('/images/:id/kernel-backport', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
+    const done = listJobs(id).find((job) => job.kind === 'kernel-backport' && job.status === 'done' && job.resultJson);
     return { result: done?.resultJson ? JSON.parse(done.resultJson) : null };
   });
 }
