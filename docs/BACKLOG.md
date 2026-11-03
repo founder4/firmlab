@@ -185,7 +185,8 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   estado runtime.)*
   Faltan: un snapshot RAM del ELF ST capturado en hardware STM32N6570-DK,
   una fixture runtime compatible con `TickType_t` de 64 bits, colas de eventos/bloqueo y fuzzing de
-  periféricos/MMIO (µEmu/P2IM/Fuzzware), además de desensamblado/CFG RISC-V desde el entrypoint RP2350 y un modelo
+  periféricos/MMIO (µEmu/P2IM/Fuzzware), además de ampliar el CFG RISC-V ya recuperado en el entrypoint RP2350
+  (37 instrucciones/10 bloques) hacia llamadas alcanzables sin confundir datos con funciones, y un modelo
   runtime/periférico adecuado; Renode sigue demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee

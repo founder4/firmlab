@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import { fingerprintMcu, parsePicobin } from '@firmlab/core';
 import type { FindingDraft } from '@firmlab/core';
+import { type PicobinRiscvDisassembly, runPicobinRiscvDisassembly } from './picobin-riscv.js';
 
 /** Format a 32-bit address as zero-padded, 0x-prefixed hex (e.g. 0x08000000) for titles and evidence. */
 function hex(n: number): string {
@@ -347,6 +348,8 @@ export interface RtosResult {
   coverage: RtosCoverage | null;
   findings: FindingDraft[];
   reason: string;
+  /** Optional forever: older persisted W7 results predate entrypoint disassembly. */
+  picobinDisassembly?: PicobinRiscvDisassembly;
 }
 
 const FIRMWARE_READ_CAP = 16 * 1024 * 1024;
@@ -389,6 +392,8 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
   }
 
   const a = analyzeRtos(read.buf, read.fileSize);
+  const picobinDisassembly = a.picobin ? runPicobinRiscvDisassembly(imagePath, a.picobin, read.fileSize) : null;
+  const findings = picobinDisassembly ? [...a.findings, ...picobinDisassembly.findings] : a.findings;
   const scanScope = a.coverage.complete
     ? `the complete ${a.coverage.fileBytes}-byte image`
     : `the first ${a.coverage.scannedBytes} of ${a.coverage.fileBytes} image bytes`;
@@ -398,7 +403,10 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
     const picobinNote = a.picobin
       ? ` PICOBIN declares ${a.picobin.chip?.toUpperCase() ?? 'an RP-series target'} ${a.picobin.cpuMode}; block loop ${a.picobin.loopComplete ? 'validated' : 'incomplete in available bytes'}.`
       : '';
-    const emptyNote = a.findings.length
+    const disassemblyNote = picobinDisassembly
+      ? ` Entrypoint disassembly ${picobinDisassembly.available ? 'completed' : `unavailable (${picobinDisassembly.reason})`}.`
+      : '';
+    const emptyNote = findings.length
       ? ''
       : ` No eCos/flag markers in ${scanScope} — static analysis found nothing to assert within that scope.`;
     return {
@@ -408,8 +416,9 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
       memoryMap: null,
       rtosKernel: a.rtosKernel,
       coverage: a.coverage,
-      findings: a.findings,
-      reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${picobinNote}${ecosNote}${flagNote}${emptyNote}`,
+      findings,
+      reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${picobinNote}${disassemblyNote}${ecosNote}${flagNote}${emptyNote}`,
+      ...(picobinDisassembly ? { picobinDisassembly } : {}),
     };
   }
 
@@ -425,7 +434,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
     memoryMap: a.memoryMap,
     rtosKernel: a.rtosKernel,
     coverage: a.coverage,
-    findings: a.findings,
+    findings,
     reason: `ARM Cortex-M vector table at offset 0.${mapNote}${kernelNote} Static analysis of the image bytes — proves layout, not device behavior.`,
   };
 }

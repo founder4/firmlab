@@ -248,6 +248,7 @@ describe('runRtosAnalysis', () => {
     expect(res.isCortexM).toBe(false);
     expect(res.findings.some((f) => f.kind === 'rtos-picobin')).toBe(true);
     expect(res.reason).toContain('PICOBIN declares RP2350 riscv; block loop validated.');
+    expect(res.reason).toMatch(/Entrypoint disassembly (completed|unavailable)/);
     expect(res.reason).not.toContain('static analysis found nothing to assert');
   });
 
