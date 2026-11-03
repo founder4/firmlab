@@ -99,7 +99,7 @@ RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git ni
     && curl -fsSL "https://codeload.github.com/AFLplusplus/AFLplusplus/tar.gz/${AFLPP_REF}" -o /tmp/afl.tar.gz \
     && echo "d5f4f72c830526654bebbc637f6164a93c22d7309ce8ba73979abadc42ce5974  /tmp/afl.tar.gz" | sha256sum -c - \
     && mkdir /afl && tar xzf /tmp/afl.tar.gz -C /afl --strip-components=1 && rm /tmp/afl.tar.gz \
-    && make -C /afl source-only NO_NYX=1 \
+    && make -C /afl -j4 afl-fuzz afl-showmap afl-tmin NO_NYX=1 \
     && (cd /afl/qemu_mode && CPU_TARGET=aarch64 ./build_qemu_support.sh) \
     && cp /afl/afl-fuzz /afl/afl-qemu-trace /afl/afl-showmap /afl/afl-tmin /usr/local/bin/ \
     && afl-fuzz --version && afl-qemu-trace --version | head -1' \
@@ -201,7 +201,7 @@ ENV FIRMLAB_ANGR_PYTHON=/opt/angr-venv/bin/python3
 RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends python3-venv \
     && python3 -m venv /opt/angr-venv \
     && /opt/angr-venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/angr-venv/bin/pip install --no-cache-dir angr bitstring==4.3.1 \
+    && /opt/angr-venv/bin/pip install --no-cache-dir angr bitstring==4.3.1 pycparser==2.22 \
     && /opt/angr-venv/bin/python3 -c "import angr; print(\"angr\", angr.__version__)" \
     && rm -rf /var/lib/apt/lists/*' \
     || echo "angr optional install failed — symbolic reachability degrades honestly"
