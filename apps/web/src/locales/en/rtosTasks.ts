@@ -29,6 +29,13 @@ export const rtosTasks = {
       'Defaults match FreeRTOS (mini list item on, integrity words off). Declare the build options; they are never inferred from RAM.',
     layoutHint: 'Both must be declared: a wrong default reads plausible-looking garbage, so the API has none.',
     pxCurrentTCB: 'pxCurrentTCB address (optional)',
+    uxTopReadyPriority: 'uxTopReadyPriority address (optional)',
+    topReadyRepresentation: 'uxTopReadyPriority representation',
+    topReadyChoose: 'Choose when an address is supplied…',
+    topReadyPriorityMode: 'priority (generic task selection)',
+    topReadyBitmapMode: 'bitmap (port-optimized task selection)',
+    topReadyHint:
+      'Declare the build mode; the same scalar has different meaning under configUSE_PORT_OPTIMISED_TASK_SELECTION and is never guessed from RAM.',
     readyLists: 'Ready lists (pxReadyTasksLists[priority])',
     readyListsHint: (max: number) => `Optional, up to ${max}. Each priority once.`,
     priority: 'Priority',
@@ -65,6 +72,8 @@ export const rtosTasks = {
     endian: 'Declare the byte order.',
     pointerWidth: 'Declare the pointer width.',
     address: (bits: number) => `Enter an address below 2^${bits} (decimal, or hex with 0x).`,
+    topReadyRepresentation: 'Choose the representation used by this FreeRTOS build.',
+    bitmapPriorities: 'The supported optimized bitmap domain is at most 32 priorities.',
     priority: 'Enter a non-negative integer priority.',
     priorityRepeated: (p: number) => `Priority ${p} is already listed; each priority is walked once.`,
     tooManyLists: (max: number) => `At most ${max} ready lists.`,
@@ -141,6 +150,16 @@ export const rtosTasks = {
           ? 'The symbol st_size agrees.'
           : 'No st_size was supplied, so the priority count rests on the declaration alone.'
       }`,
+    topReady: (
+      address: string,
+      representation: 'priority' | 'bitmap',
+      value: number | string,
+      expected: number | string,
+      agrees: boolean | null | undefined,
+    ) =>
+      `uxTopReadyPriority @ ${address}: ${representation} value ${value}; expected ${expected} from the complete array; ${
+        agrees === true ? 'agrees' : agrees === false ? 'disagrees' : 'not compared'
+      }.`,
     noTasks: 'none',
     limits: (maxKiB: number, maxItems: number, maxLists: number) =>
       `Limits applied: snapshot ≤ ${maxKiB} KiB, ≤ ${maxItems} nodes walked per list, ≤ ${maxLists} ready lists.`,

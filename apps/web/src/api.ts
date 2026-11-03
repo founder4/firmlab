@@ -1547,6 +1547,7 @@ export interface RtosTaskSnapshotInput {
      * for the build, `configMAX_PRIORITIES` and `sizeof(List_t)`; `symbolSize` is the symbol's `st_size`, if known.
      */
     readyListArray?: { base: number | null; maxPriorities: number; listSize: number; symbolSize?: number | null };
+    uxTopReadyPriority?: { address: number | null; representation: 'priority' | 'bitmap' };
     /** A name containing "overflow" makes the lane `delayed_overflow`; the API defaults to `xDelayedTaskList<n>`. */
     delayedLists?: { name?: string; address: number | null }[];
     /** Omitted → not walked; null → a `missing_symbol` lane. Same for the two below. */
@@ -1628,6 +1629,17 @@ export interface RtosTaskSnapshotResult {
     symbolSize?: number | null;
     sizeCrossCheck?: 'agrees' | 'not_available';
   };
+  topReadyPriority?: {
+    coverage?: 'complete' | 'out_of_range' | 'truncated' | 'missing_symbol';
+    address?: number | null;
+    representation?: 'priority' | 'bitmap';
+    value?: number | null;
+    expected?: number | null;
+    agrees?: boolean | null;
+    evidence?: string[];
+    bytesAttempted?: number;
+    bytesCompleted?: number;
+  };
 }
 
 /**
@@ -1695,6 +1707,7 @@ export interface RtosElfSymbolsResult {
   /** Snapshot-contract fields; a null is a name that did not resolve to exactly one absolute address. */
   prefill?: {
     pxCurrentTCB?: number | null;
+    uxTopReadyPriority?: number | null;
     delayedLists?: { name?: string; address?: number | null }[];
     suspendedList?: number | null;
     pendingReadyList?: number | null;

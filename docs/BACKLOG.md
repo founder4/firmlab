@@ -162,9 +162,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   discrepantes; una discrepancia sólo diagnostica layout declarado erróneo o snapshot desgarrado/corrupto, sin
   cambiar cobertura ni `needs_runtime_reproduction`, y los campos persistidos nuevos siguen opcionales. La matriz
   temporal V11.1.0 ya ejecuta las cuatro variantes en Renode offline y recupera exactamente las tareas esperadas
-  con `sizeof(List_t)` 28/44/20/32.)* Faltan: un ELF
+  con `sizeof(List_t)` 28/44/20/32. F4 hecho 2026-11-03: el ELF lleva la dirección resuelta de
+  `uxTopReadyPriority` al formulario, que exige declarar prioridad genérica o bitmap optimizado; sólo un array ready
+  completo autoriza la comparación, y la matriz Renode 4/4 corroboró el valor 1 sin cambiar cobertura ni prueba.)*
+  Faltan: un ELF
   FreeRTOS de fabricante (el corpus sólo tiene Zephyr y Contiki),
-  anotación por `uxTopReadyPriority` (F4), `TickType_t` 16/64, colas de eventos/bloqueo y fuzzing de
+  `TickType_t` 16/64, colas de eventos/bloqueo y fuzzing de
   periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee

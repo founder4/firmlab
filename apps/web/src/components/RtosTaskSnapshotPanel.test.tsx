@@ -49,6 +49,11 @@ const ELF_READ: RtosElfSymbolsResult = {
       candidates: [{ address: 0x20000010, sizeHex: '0x4', binding: 'global' }],
     },
     {
+      name: 'uxTopReadyPriority',
+      status: 'resolved',
+      candidates: [{ address: 0x20000020, sizeHex: '0x4', binding: 'local' }],
+    },
+    {
       name: 'xPendingReadyList',
       status: 'ambiguous',
       candidates: [
@@ -64,6 +69,7 @@ const ELF_READ: RtosElfSymbolsResult = {
   ],
   prefill: {
     pxCurrentTCB: 0x20000010,
+    uxTopReadyPriority: 0x20000020,
     delayedLists: [{ name: 'xDelayedTaskList1', address: 0x200001a0 }],
     suspendedList: 0x200001d0,
     pendingReadyList: null,
@@ -150,6 +156,15 @@ describe('RtosTaskSnapshotPanel', () => {
           evidence: [],
         },
       ],
+      topReadyPriority: {
+        coverage: 'complete',
+        address: 0x20000020,
+        representation: 'priority',
+        value: 0,
+        expected: 1,
+        agrees: false,
+        evidence: ['the declared mode may be wrong or the snapshot may be torn'],
+      },
     });
     render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
     expect(await screen.findByText(/2 ready task record/)).toBeInTheDocument();
@@ -160,6 +175,8 @@ describe('RtosTaskSnapshotPanel', () => {
     expect(screen.getByText('2 / 2')).toBeInTheDocument();
     expect(screen.getByText(m.result.col.integrity)).toBeInTheDocument();
     expect(screen.getByText(m.result.integrityValue('8 / 8', 1))).toBeInTheDocument();
+    expect(screen.getByText(m.result.topReady('0x20000020', 'priority', 0, 1, false))).toBeInTheDocument();
+    expect(screen.getByText('the declared mode may be wrong or the snapshot may be torn')).toBeInTheDocument();
     expect(screen.getByText('pxCurrentTCB address not supplied')).toBeInTheDocument();
     expect(screen.getByText(m.result.limits(512, 256, 64))).toBeInTheDocument();
   });
@@ -300,8 +317,12 @@ describe('RtosTaskSnapshotPanel — ELF symbols', () => {
     fireEvent.change(screen.getByLabelText(m.field.pendingReadyList), { target: { value: '0x99' } });
     fireEvent.click(screen.getByRole('button', { name: e.read }));
     expect(mockApi.runRtosElfSymbols).toHaveBeenCalledWith('img');
-    expect(await screen.findByText(e.filled('pxCurrentTCB, xSuspendedTaskList'), {}, { timeout: 3000 })).toBeVisible();
+    expect(
+      await screen.findByText(e.filled('pxCurrentTCB, uxTopReadyPriority, xSuspendedTaskList'), {}, { timeout: 3000 }),
+    ).toBeVisible();
     expect(screen.getByLabelText(m.field.pxCurrentTCB)).toHaveValue('0x20000010');
+    expect(screen.getByLabelText(m.field.uxTopReadyPriority)).toHaveValue('0x20000020');
+    expect(screen.getByLabelText(m.field.topReadyRepresentation)).toHaveValue('');
     expect(screen.getByLabelText(m.field.suspendedList)).toHaveValue('0x200001d0');
     // Ambiguous: the analyst's own value is untouched. Absent: still empty. Delayed lists: never filled.
     expect(screen.getByLabelText(m.field.pendingReadyList)).toHaveValue('0x99');
@@ -590,8 +611,14 @@ describe('applyElfPrefill', () => {
 
   it('fills a field only when its pre-fill address exists AND the symbol itself resolved', () => {
     const { form, filled } = applyElfPrefill(EMPTY_FORM, ELF_READ);
-    expect(filled).toEqual(['pxCurrentTCB', 'xSuspendedTaskList']);
-    expect(form).toMatchObject({ pxCurrentTCB: '0x20000010', suspendedList: '0x200001d0', pendingReadyList: '' });
+    expect(filled).toEqual(['pxCurrentTCB', 'uxTopReadyPriority', 'xSuspendedTaskList']);
+    expect(form).toMatchObject({
+      pxCurrentTCB: '0x20000010',
+      uxTopReadyPriority: '0x20000020',
+      topReadyRepresentation: '',
+      suspendedList: '0x200001d0',
+      pendingReadyList: '',
+    });
     // A pre-fill address whose symbol is not `resolved` is refused even if the API carried one.
     const contradicted = applyElfPrefill(EMPTY_FORM, {
       ...ELF_READ,
@@ -668,6 +695,31 @@ describe('buildSnapshotRequest', () => {
     });
     const clash = buildSnapshotRequest({ ...base, readyArray: array, suspendedList: '0x128' }, m);
     expect(clash.ok === false && clash.errors.suspendedList).toBe(m.error.addressRepeated('0x128'));
+  });
+
+  it('requires an explicit uxTopReadyPriority representation and bounds optimized bitmaps', () => {
+    const missingMode = buildSnapshotRequest({ ...base, uxTopReadyPriority: '0x80' }, m);
+    expect(missingMode.ok === false && missingMode.errors.topReadyRepresentation).toBe(m.error.topReadyRepresentation);
+    const ok = buildSnapshotRequest(
+      {
+        ...base,
+        uxTopReadyPriority: '0x80',
+        topReadyRepresentation: 'priority',
+        readyArray: array,
+      },
+      m,
+    );
+    expect(ok.ok && ok.input.symbols.uxTopReadyPriority).toEqual({ address: 0x80, representation: 'priority' });
+    const tooWide = buildSnapshotRequest(
+      {
+        ...base,
+        uxTopReadyPriority: '0x80',
+        topReadyRepresentation: 'bitmap',
+        readyArray: { ...array, maxPriorities: '33', symbolSize: '660' },
+      },
+      m,
+    );
+    expect(tooWide.ok === false && tooWide.errors.topReadyRepresentation).toBe(m.error.bitmapPriorities);
   });
 
   it('checks sizeof(List_t) against all four declared FreeRTOS list layouts', () => {

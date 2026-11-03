@@ -59,6 +59,8 @@ export interface SnapshotForm {
   useMiniListItem: boolean;
   useListDataIntegrityCheckBytes: boolean;
   pxCurrentTCB: string;
+  uxTopReadyPriority: string;
+  topReadyRepresentation: '' | 'priority' | 'bitmap';
   readyLists: { priority: string; address: string }[];
   /** The `pxReadyTasksLists` array; all four empty → not declared. `symbolSize` alone stays optional. */
   readyArray: { base: string; maxPriorities: string; listSize: string; symbolSize: string };
@@ -89,6 +91,8 @@ export const EMPTY_FORM: SnapshotForm = {
   useMiniListItem: true,
   useListDataIntegrityCheckBytes: false,
   pxCurrentTCB: '',
+  uxTopReadyPriority: '',
+  topReadyRepresentation: '',
   readyLists: [],
   readyArray: { base: '', maxPriorities: '', listSize: '', symbolSize: '' },
   delayedList: '',
@@ -137,6 +141,14 @@ export function buildSnapshotRequest(
   if (f.pxCurrentTCB.trim()) {
     pxCurrentTCB = addr(f.pxCurrentTCB);
     if (pxCurrentTCB === null) errors.pxCurrentTCB = m.error.address(bits);
+  }
+  let uxTopReadyPriority: NonNullable<RtosTaskSnapshotInput['symbols']['uxTopReadyPriority']> | undefined;
+  if (f.uxTopReadyPriority.trim() || f.topReadyRepresentation) {
+    const address = addr(f.uxTopReadyPriority);
+    if (address === null) errors.uxTopReadyPriority = m.error.address(bits);
+    if (!f.topReadyRepresentation) errors.topReadyRepresentation = m.error.topReadyRepresentation;
+    if (address !== null && f.topReadyRepresentation)
+      uxTopReadyPriority = { address, representation: f.topReadyRepresentation };
   }
 
   if (f.readyLists.length > MAX_READY_LISTS) errors.readyLists = m.error.tooManyLists(MAX_READY_LISTS);
@@ -194,6 +206,8 @@ export function buildSnapshotRequest(
       readyListArray = { base: arrayBase, maxPriorities: n, listSize: size, symbolSize };
       for (let p = 0; p < Math.min(n, MAX_READY_LISTS); p++) taken.add(arrayBase + p * size);
     }
+    if (f.topReadyRepresentation === 'bitmap' && Number.isSafeInteger(n) && n > 32)
+      errors.topReadyRepresentation = m.error.bitmapPriorities;
   }
   const state: Partial<Record<StateListField, number>> = {};
   for (const key of STATE_LIST_FIELDS) {
@@ -227,6 +241,7 @@ export function buildSnapshotRequest(
       },
       symbols: {
         pxCurrentTCB,
+        ...(uxTopReadyPriority ? { uxTopReadyPriority } : {}),
         ...(readyListArray ? { readyListArray } : { readyLists }),
         ...(delayedLists.length > 0 ? { delayedLists } : {}),
         ...(state.suspendedList !== undefined ? { suspendedList: state.suspendedList } : {}),
@@ -247,6 +262,7 @@ function toBase64(bytes: Uint8Array): string {
 /** Form field ← the kernel symbol it is filled from. The delayed lists are deliberately absent (see the header). */
 const ELF_PREFILL_FIELDS = [
   ['pxCurrentTCB', 'pxCurrentTCB', 'pxCurrentTCB'],
+  ['uxTopReadyPriority', 'uxTopReadyPriority', 'uxTopReadyPriority'],
   ['suspendedList', 'suspendedList', 'xSuspendedTaskList'],
   ['pendingReadyList', 'pendingReadyList', 'xPendingReadyList'],
   ['terminatedList', 'terminatedList', 'xTasksWaitingTermination'],
@@ -644,6 +660,40 @@ export function RtosTaskSnapshotPanel({
           {fieldError('pxCurrentTCB')}
         </div>
 
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+          <div>
+            <label className="eyebrow" htmlFor={id('uxTopReadyPriority')}>
+              {m.field.uxTopReadyPriority}
+            </label>
+            <input
+              id={id('uxTopReadyPriority')}
+              className="input mono"
+              value={form.uxTopReadyPriority}
+              onChange={(e) => set('uxTopReadyPriority', e.target.value)}
+              {...fieldProps('uxTopReadyPriority')}
+            />
+            {fieldError('uxTopReadyPriority')}
+          </div>
+          <div>
+            <label className="eyebrow" htmlFor={id('topReadyRepresentation')}>
+              {m.field.topReadyRepresentation}
+            </label>
+            <select
+              id={id('topReadyRepresentation')}
+              className="select"
+              value={form.topReadyRepresentation}
+              onChange={(e) => set('topReadyRepresentation', e.target.value as SnapshotForm['topReadyRepresentation'])}
+              {...fieldProps('topReadyRepresentation')}
+            >
+              <option value="">{m.field.topReadyChoose}</option>
+              <option value="priority">{m.field.topReadyPriorityMode}</option>
+              <option value="bitmap">{m.field.topReadyBitmapMode}</option>
+            </select>
+            {fieldError('topReadyRepresentation')}
+          </div>
+        </div>
+        <div className="hint">{m.field.topReadyHint}</div>
+
         <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 8 }}>
           <legend className="eyebrow">{m.field.readyLists}</legend>
           <div className="hint">{m.field.readyListsHint(MAX_READY_LISTS)}</div>
@@ -868,6 +918,7 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
   const cur = result.currentTask;
   const lanes = result.readyLists ?? [];
   const array = result.readyListArray;
+  const top = result.topReadyPriority;
   const pair = (done?: number, tried?: number) => `${done ?? '—'} / ${tried ?? '—'}`;
   const integrity = (lane: RtosTaskLane) =>
     lane.integrityChecks
@@ -909,6 +960,25 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
             array.sizeCrossCheck === 'agrees',
           )}
         </p>
+      )}
+      {top && (
+        <div
+          className={`banner ${top.agrees === false ? 'banner-warn' : ''}`}
+          style={{ marginTop: 8, maxWidth: '72ch' }}
+        >
+          {m.result.topReady(
+            hex(top.address),
+            top.representation ?? 'priority',
+            top.value ?? '—',
+            top.expected ?? '—',
+            top.agrees,
+          )}
+          {top.evidence && top.evidence.length > 0 && (
+            <div className="hint" style={{ marginTop: 4 }}>
+              {top.evidence.join(' ')}
+            </div>
+          )}
+        </div>
       )}
 
       <div className="table-wrap" style={{ marginTop: 12 }}>

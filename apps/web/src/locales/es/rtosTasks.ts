@@ -27,6 +27,13 @@ export const rtosTasks: Messages['rtosTasks'] = {
     layoutHint:
       'Hay que declarar ambos: un valor por defecto erróneo lee basura con apariencia plausible, así que la API no tiene ninguno.',
     pxCurrentTCB: 'Dirección de pxCurrentTCB (opcional)',
+    uxTopReadyPriority: 'Dirección de uxTopReadyPriority (opcional)',
+    topReadyRepresentation: 'Representación de uxTopReadyPriority',
+    topReadyChoose: 'Elige si aportas una dirección…',
+    topReadyPriorityMode: 'prioridad (selección genérica)',
+    topReadyBitmapMode: 'bitmap (selección optimizada por el port)',
+    topReadyHint:
+      'Declara el modo de la compilación; el mismo escalar cambia de significado con configUSE_PORT_OPTIMISED_TASK_SELECTION y nunca se adivina desde la RAM.',
     readyLists: 'Listas de tareas listas (pxReadyTasksLists[prioridad])',
     readyListsHint: (max) => `Opcional, hasta ${max}. Cada prioridad una sola vez.`,
     readyArray: 'O el array completo de listas de tareas listas (pxReadyTasksLists)',
@@ -63,6 +70,8 @@ export const rtosTasks: Messages['rtosTasks'] = {
     endian: 'Declara el orden de bytes.',
     pointerWidth: 'Declara el ancho de puntero.',
     address: (bits) => `Introduce una dirección menor que 2^${bits} (decimal, o hexadecimal con 0x).`,
+    topReadyRepresentation: 'Elige la representación usada por esta compilación FreeRTOS.',
+    bitmapPriorities: 'El dominio bitmap optimizado soportado admite como máximo 32 prioridades.',
     priority: 'Introduce una prioridad entera no negativa.',
     priorityRepeated: (p) => `La prioridad ${p} ya está en la lista; cada prioridad se recorre una vez.`,
     tooManyLists: (max) => `Como máximo ${max} listas.`,
@@ -139,6 +148,10 @@ export const rtosTasks: Messages['rtosTasks'] = {
           ? 'El st_size del símbolo concuerda.'
           : 'No se aportó st_size, así que el número de prioridades descansa solo en la declaración.'
       }`,
+    topReady: (address, representation, value, expected, agrees) =>
+      `uxTopReadyPriority en ${address}: valor ${value} como ${representation}; esperado ${expected} desde el array completo; ${
+        agrees === true ? 'concuerda' : agrees === false ? 'no concuerda' : 'sin comparar'
+      }.`,
     noTasks: 'ninguna',
     limits: (maxKiB, maxItems, maxLists) =>
       `Límites aplicados: instantánea ≤ ${maxKiB} KiB, ≤ ${maxItems} nodos recorridos por lista, ≤ ${maxLists} listas.`,
