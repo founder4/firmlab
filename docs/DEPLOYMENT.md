@@ -386,6 +386,11 @@ Con ella promovida, `scripts/deploy.sh --tools` elige `Dockerfile.trixie` y, ant
   candidata pierde uno que la actual respondía. Un sondeo ausente en ambas es degradación informada, no regresión.
 
 **El inventario no sustituye al smoke real.** Comprueba presencia y una respuesta acotada, lo mismo que el panel de
-capacidades: `analyzeHeadless` sólo se busca en el PATH, y el 2026-11-03 la imagen Debian 12 x86_64 de la estación
-lo daba por presente mientras `security-runtime-smoke.py` fallaba porque su JDK es aarch64 bajo qemu. Las
-validaciones del párrafo anterior siguen siendo obligatorias antes de desplegar.
+capacidades: `analyzeHeadless` sólo se busca en el PATH. La candidata Debian 12 x86_64 de `00c6ad1` respondió los
+28/28 sondeos, contó 108 reglas FwHunt y validó offline la base Grype v6. Después pasó
+`security-runtime-smoke.py`: Ghidra produjo pseudocódigo no vacío para 40 funciones ARM64, angr ejecutó un paso
+simbólico, AFL++/QEMU produjo cobertura y mitmproxy completó HTTP, HTTPS y la lectura del flujo guardado. También
+pasaron la integración completa y el fixture FreeRTOS (símbolos → captura RAM Renode → listas esperadas). Esta
+evidencia corrige los fallos reales descubiertos durante la prueba —JDK de arquitectura incorrecta, combinaciones
+incompatibles de angr/pycparser/bitstring, QEMU AFL fijado al ISA equivocado y contador FwHunt que devolvía cero—,
+pero no sustituye la misma validación sobre la candidata Debian 13 ARM64 antes de promoverla.

@@ -15,34 +15,19 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   integrado 2026-11-03:** `--tools` elige la receta por el `/etc/os-release` de la base actual (12 → `Dockerfile.tools`,
   13 → `Dockerfile.trixie`), rechaza una candidata más antigua y una etiqueta ausente junto a un contenedor Debian 13,
   exige `retained`/Renode en local con driver `docker` antes de `docker build`, hornea Grype en la última capa de
-  `Dockerfile.trixie` y compara offline los 28 sondeos de `tools.ts`, cada uno acotado por `timeout`. Lo cubren 24
-  tests con shim y mutaciones de cada guard; el inventario real de la base Debian 12 x86_64 local tarda 2,8 s
-  (27/28: `angr error exit=1`) y `timeout` real clasifica TERM, KILL, 127 y 126. Falta la evidencia que esta
+  `Dockerfile.trixie` y compara offline los 28 sondeos de `tools.ts`, cada uno acotado por `timeout`. Lo cubren 26
+  tests con shim y mutaciones de cada guard; la candidata Debian 12 x86_64 real de `00c6ad1` respondió 28/28,
+  conservó 108 reglas FwHunt y una base Grype v6 válida, y pasó sin red la integración, el fixture FreeRTOS y el
+  smoke funcional de Ghidra, angr, AFL++/QEMU y mitmproxy. La receta Debian 13 fija también `pycparser==3.0`, tras
+  demostrar que 3.12 rompe el import de angr. Falta la evidencia que esta
   estación no puede dar: no conserva las imágenes ARM64 `retained`/Renode, así que no se ha construido ninguna
   candidata Debian 13, ni descargado su base Grype, ni ejecutado sobre ella el inventario, la integración,
   FreeRTOS y `security-runtime-smoke.py`. Sin promoción ni despliegue implícitos. Del WIP `179e7bc` no se integra
   lo de `Dockerfile.tools` (digests fijados del frontend y de la base Node, reintentos de las descargas de Ghidra):
   no lo exige el contrato Debian 13; sigue en esa rama si se quiere para la receta Debian 12.
-- [ ] `Dockerfile.tools` descarga siempre el JDK `linux/aarch64` de Adoptium. En la base Debian 12 x86_64 de la
-  estación, `/opt/jdk/bin/java` es AArch64 (`e_machine` 0xb7): `analyzeHeadless` aparece como presente y el smoke
-  real falla en qemu-aarch64 sin `/lib/ld-linux-aarch64.so.1`. Elegir la arquitectura del JDK con
-  `dpkg --print-architecture`; hasta entonces Ghidra no funciona en esa receta fuera de ARM64.
-- [ ] Evaluar la siguiente versión YARA Forge antes de actualizar el lock `20261011`. El workflow de vigilancia
-  [del 26 de octubre](https://github.com/founder4/firmlab/actions/runs/40328671132) falla expresamente porque
-  detecta una versión posterior; no demuestra un fallo del motor. Comparar reglas, controles positivos y
-  diferencias sobre el corpus existente en sólo lectura; no aceptar una actualización automática del corpus.
-  **Evaluado 2026-11-03** (`docs/YARA-CANDIDATE-20261101.md`): 20261101/20261103 eliminan el control
-  `TRELLIX_ARC_Malw_Eicar`; falta elegir sustituto y el A/B sobre rootfs del homelab. Lock intacto.
-- [ ] `scripts/evaluate-yara-candidate.sh`: con la API caída informa «Rootfs A/B: 0 · 0/0» como si comparase
-  (`set -e` no cubre `for x in $(…)`); exigir >0 rootfs, verificar la baseline contra el lock en vez de leer
-  `~/homelab`/`/opt/firmlab-yara`, y comparar `logic_hash` además de nombres.
 - [x] Publicar las correcciones de dependencias y el contexto de coordinación: `4a7b2fa` y `d079c84` están en
   `origin/main`. Auditoría de 27 avisos a cero; gates locales completos con 4.759 tests tras separar el WIP.
   Los resultados remotos se consultan por SHA en el workflow CI; los fallos históricos se conservan.
-- [ ] Desplegar la actualización de la aplicación tras verificar su CI y preparar candidata/rollback.
-  En esta estación, `firmlab` está parado (`Exited (143)`) y `firmlab-firmware:latest` sigue en `8cb2e1c`;
-  `scripts/deploy.sh --check` confirma que no representa el `main` actual. No inferir de este estado el del homelab.
-  Mantener allí la base Debian 13 existente; esta tarea no requiere reconstruir herramientas con `--tools`.
 - [x] Evaluar la partición del bundle web: el build del 2026-10-31 emitía un aviso por el chunk principal
   de 539,58 kB (184,44 kB gzip). `a1e01ce` separa los catálogos por idioma y carga sólo el activo antes de montar
   React: entrada 218,25 kB (70,77 gzip) + 149,64 kB inglés (53,97 gzip) o 172,02 kB español (60,49 gzip).
