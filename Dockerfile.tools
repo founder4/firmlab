@@ -123,14 +123,21 @@ RUN bash -c 'mkdir -p /opt/firmae/kernels && cd /opt/firmae/kernels \
     || echo "firmadyne kernels optional download failed — full-system rung degrades honestly"
 
 # === Ghidra headless — deep decompilation (providers/ghidra.ts). Adds ~1.5 GB (JDK 21 + Ghidra). ===
-# Debian bookworm ships no JDK 21 (Ghidra 12.x needs it), so fetch a portable Temurin JDK 21 from the Adoptium
-# binary API, and pin a DIRECT Ghidra release URL (an api.github.com "releases/latest" call gets rate-limited).
+# Debian bookworm ships no JDK 21 (Ghidra 12.x needs it), so fetch the portable Temurin JDK 21 that matches the
+# image architecture from the Adoptium binary API. A hard-coded aarch64 JDK made analyzeHeadless exist on amd64
+# while every real invocation failed under qemu-aarch64. Keep the direct Ghidra release URL: an api.github.com
+# "releases/latest" call gets rate-limited.
 ARG GHIDRA_URL=https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.2_build/ghidra_12.1.2_PUBLIC_20260605.zip
 ENV JAVA_HOME=/opt/jdk
 ENV PATH=/opt/jdk/bin:$PATH
 ENV GHIDRA_INSTALL_DIR=/opt/ghidra
-RUN bash -c 'mkdir -p /opt/jdk \
-    && curl -fsSL "https://api.adoptium.net/v3/binary/latest/21/ga/linux/aarch64/jdk/hotspot/normal/eclipse?project=jdk" | tar xz -C /opt/jdk --strip-components=1 \
+RUN bash -c 'case "$(dpkg --print-architecture)" in \
+         amd64) jdk_arch=x64 ;; \
+         arm64) jdk_arch=aarch64 ;; \
+         *) echo "unsupported JDK architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+       esac \
+    && mkdir -p /opt/jdk \
+    && curl -fsSL "https://api.adoptium.net/v3/binary/latest/21/ga/linux/${jdk_arch}/jdk/hotspot/normal/eclipse?project=jdk" | tar xz -C /opt/jdk --strip-components=1 \
     && curl -fsSL "$GHIDRA_URL" -o /tmp/ghidra.zip && unzip -q /tmp/ghidra.zip -d /opt && rm /tmp/ghidra.zip \
     && mv /opt/ghidra_* /opt/ghidra && ln -sf /opt/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless \
     && /opt/jdk/bin/java -version' \

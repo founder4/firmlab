@@ -245,6 +245,14 @@ test('firmware Dockerfile accepts the same tools image selected by deploy', asyn
   assert.match(dockerfile, /FROM \$\{TOOLS_IMAGE\} AS runtime/);
 });
 
+test('the Debian 12 recipe selects a same-architecture JDK for Ghidra', async () => {
+  const dockerfile = await readFile(path.join(root, 'Dockerfile.tools'), 'utf8');
+  assert.match(dockerfile, /amd64\) jdk_arch=x64/);
+  assert.match(dockerfile, /arm64\) jdk_arch=aarch64/);
+  assert.match(dockerfile, /linux\/\$\{jdk_arch\}\/jdk\/hotspot/);
+  assert.doesNotMatch(dockerfile, /linux\/aarch64\/jdk\/hotspot/);
+});
+
 test('the Debian 13 recipe takes exactly the retained and Renode images from local build arguments', async () => {
   const dockerfile = await readFile(path.join(root, 'Dockerfile.trixie'), 'utf8');
   assert.match(dockerfile, new RegExp(`^ARG RETAINED_IMAGE=${RETAINED}$`, 'm'));
