@@ -28,6 +28,28 @@ function baremetalBlob(): Uint8Array {
   return Buffer.concat([head, Buffer.alloc(128), body]);
 }
 
+/** Realistic two-block RP2350/RISC-V PICOBIN loop without embedding any corpus payload or challenge secret. */
+function picobinBlob(): Uint8Array {
+  const buf = new Uint8Array(0x70);
+  const dv = new DataView(buf.buffer);
+  const first = 0x14;
+  const tail = 0x50;
+  dv.setUint32(first, 0xffff_ded3, true);
+  dv.setUint32(first + 4, 0x1101_0142, true);
+  dv.setUint32(first + 8, 0x0000_0344, true);
+  dv.setUint32(first + 12, 0x1000_0036, true);
+  dv.setUint32(first + 16, 0x2008_2000, true);
+  dv.setUint32(first + 20, 0x0000_04ff, true);
+  dv.setInt32(first + 24, tail - first, true);
+  dv.setUint32(first + 28, 0xab12_3579, true);
+  dv.setUint32(tail, 0xffff_ded3, true);
+  dv.setUint32(tail + 4, 0x0000_01fe, true);
+  dv.setUint32(tail + 8, 0x0000_01ff, true);
+  dv.setInt32(tail + 12, first - tail, true);
+  dv.setUint32(tail + 16, 0xab12_3579, true);
+  return buf;
+}
+
 describe('parseVectorTable', () => {
   it('reads the initial SP and reset handler from a valid Cortex-M table', () => {
     expect(parseVectorTable(baremetalBlob())).toEqual({ initialSP: INITIAL_SP, resetHandler: RESET_HANDLER });
@@ -130,6 +152,24 @@ describe('analyzeRtos', () => {
   it('produces no findings for a non-Cortex-M blob with no eCos/flag markers', () => {
     expect(analyzeRtos(Buffer.from([0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00])).findings).toHaveLength(0);
   });
+
+  it('surfaces a structurally validated RP2350/RISC-V PICOBIN declaration', () => {
+    const parsed = analyzeRtos(picobinBlob());
+    expect(parsed.isCortexM).toBe(false);
+    expect(parsed.picobin).toMatchObject({
+      chip: 'rp2350',
+      cpu: 'riscv',
+      cpuMode: 'riscv',
+      entryPoint: 0x1000_0036,
+      initialSP: 0x2008_2000,
+      blockOffsets: [0x14, 0x50],
+      loopComplete: true,
+    });
+    const finding = parsed.findings.find((f) => f.kind === 'rtos-picobin');
+    expect(finding?.proofState).toBe('static_confirmed');
+    expect(finding?.title).toContain('RP2350 PICOBIN executable declares RISC-V');
+    expect(finding?.title).toContain('2-block loop validated');
+  });
 });
 
 describe('detectEcos + extractFlags (non-Cortex-M RTOS / bare-metal lens)', () => {
@@ -199,6 +239,16 @@ describe('runRtosAnalysis', () => {
     expect(res.vectorTable).toBeNull();
     expect(res.reason).toContain('No ARM Cortex-M vector table at offset 0');
     expect(res.reason).toContain('complete 8-byte image');
+  });
+
+  it('reports PICOBIN metadata for a non-Cortex-M-at-offset-zero image instead of a silent empty', () => {
+    const p = path.join(tmp, 'rp2350-riscv.bin');
+    fs.writeFileSync(p, picobinBlob());
+    const res = runRtosAnalysis(p);
+    expect(res.isCortexM).toBe(false);
+    expect(res.findings.some((f) => f.kind === 'rtos-picobin')).toBe(true);
+    expect(res.reason).toContain('PICOBIN declares RP2350 riscv; block loop validated.');
+    expect(res.reason).not.toContain('static analysis found nothing to assert');
   });
 
   // Scanning a real 16 MiB buffer synchronously takes ~4s on its own, which already eats most of vitest's 5s

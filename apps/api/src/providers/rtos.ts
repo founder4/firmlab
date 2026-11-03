@@ -13,7 +13,7 @@
  * runner only reads a bounded prefix of the image and composes them.
  */
 import fs from 'node:fs';
-import { fingerprintMcu } from '@firmlab/core';
+import { fingerprintMcu, parsePicobin } from '@firmlab/core';
 import type { FindingDraft } from '@firmlab/core';
 
 /** Format a 32-bit address as zero-padded, 0x-prefixed hex (e.g. 0x08000000) for titles and evidence. */
@@ -176,6 +176,8 @@ export interface RtosAnalysis {
   rtosKernel: string | null;
   ecos: { version: string | null; redboot: boolean; app: string | null } | null;
   flags: string[];
+  /** Structurally validated PICOBIN image declaration, when this is an RP2350/RP2040 boot image. */
+  picobin: ReturnType<typeof parsePicobin>;
   coverage: RtosCoverage;
   findings: FindingDraft[];
 }
@@ -204,6 +206,7 @@ export function analyzeRtos(buf: Uint8Array, fileSize = buf.length): RtosAnalysi
   const memoryMap = vectorTable ? inferMemoryMap(vectorTable.initialSP, vectorTable.resetHandler) : null;
   const ecos = detectEcos(buf);
   const flags = extractFlags(buf);
+  const picobin = parsePicobin(buf);
   const findings: FindingDraft[] = [];
 
   if (vectorTable && memoryMap) {
@@ -276,6 +279,48 @@ export function analyzeRtos(buf: Uint8Array, fileSize = buf.length): RtosAnalysi
     });
   }
 
+  if (picobin) {
+    const cpuLabel =
+      picobin.cpuMode === 'riscv'
+        ? 'RISC-V'
+        : picobin.cpuMode === 'varmulet'
+          ? 'varmulet (Arm payload)'
+          : picobin.cpuMode === 'arm'
+            ? 'Arm'
+            : 'unknown CPU';
+    const chipLabel = picobin.chip?.toUpperCase() ?? 'unknown RP-series chip';
+    const entryLabel = picobin.entryPoint === null ? '' : `, entry ${hex(picobin.entryPoint)}`;
+    const loopLabel = picobin.loopComplete
+      ? `${picobin.blockOffsets.length}-block loop validated`
+      : 'linked block loop incomplete in available bytes';
+    findings.push({
+      kind: 'rtos-picobin',
+      title: `${chipLabel} PICOBIN ${picobin.isExecutable ? 'executable' : 'image'} declares ${cpuLabel}${entryLabel} (${loopLabel})`,
+      severity: 'info',
+      proofState: 'static_confirmed',
+      evidence: {
+        markerOffset: picobin.markerOffset,
+        imageTypeFlags: `0x${picobin.imageTypeFlags.toString(16).padStart(4, '0')}`,
+        cpu: picobin.cpu,
+        cpuMode: picobin.cpuMode,
+        chip: picobin.chip,
+        security: picobin.security,
+        tryBeforeYouBuy: picobin.tryBeforeYouBuy,
+        entryPoint: picobin.entryPoint === null ? null : hex(picobin.entryPoint),
+        initialSP: picobin.initialSP === null ? null : hex(picobin.initialSP),
+        initialSPLimit: picobin.initialSPLimit === null ? null : hex(picobin.initialSPLimit),
+        vectorTable: picobin.vectorTable === null ? null : hex(picobin.vectorTable),
+        rollingWindowDelta: picobin.rollingWindowDelta,
+        blockOffsets: picobin.blockOffsets,
+        loopComplete: picobin.loopComplete,
+      },
+      rationale:
+        'The PICOBIN IMAGE_TYPE and address items were decoded only after the block LAST size and end marker ' +
+        'validated; linked blocks were followed when available. This proves the target and addresses declared ' +
+        'by the firmware bytes, not that the image ran successfully or that it uses a particular RTOS.',
+    });
+  }
+
   // Plaintext CTF/flag tokens (bare-metal challenge firmware) — the headline when the flag is not obfuscated.
   for (const flag of flags) {
     findings.push({
@@ -290,7 +335,7 @@ export function analyzeRtos(buf: Uint8Array, fileSize = buf.length): RtosAnalysi
     });
   }
 
-  return { isCortexM, vectorTable, memoryMap, rtosKernel, ecos, flags, coverage, findings };
+  return { isCortexM, vectorTable, memoryMap, rtosKernel, ecos, flags, picobin, coverage, findings };
 }
 
 export interface RtosResult {
@@ -350,6 +395,9 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
   if (!a.isCortexM) {
     const ecosNote = a.ecos ? ` eCos monolith detected (${a.ecos.version ?? 'version unknown'}).` : '';
     const flagNote = a.flags.length ? ` ${a.flags.length} plaintext flag/credential token(s) recovered.` : '';
+    const picobinNote = a.picobin
+      ? ` PICOBIN declares ${a.picobin.chip?.toUpperCase() ?? 'an RP-series target'} ${a.picobin.cpuMode}; block loop ${a.picobin.loopComplete ? 'validated' : 'incomplete in available bytes'}.`
+      : '';
     const emptyNote = a.findings.length
       ? ''
       : ` No eCos/flag markers in ${scanScope} — static analysis found nothing to assert within that scope.`;
@@ -361,7 +409,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
       rtosKernel: a.rtosKernel,
       coverage: a.coverage,
       findings: a.findings,
-      reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${ecosNote}${flagNote}${emptyNote}`,
+      reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${picobinNote}${ecosNote}${flagNote}${emptyNote}`,
     };
   }
 

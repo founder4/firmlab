@@ -234,8 +234,12 @@ describe('W0 device-class identity (entropy-gated, non-Linux classes)', () => {
 
   it('classifies an RP2350 PICOBIN image as baremetal with the ISA read from IMAGE_TYPE (RISC-V)', () => {
     const buf = new Uint8Array(0x1000);
-    buf.set([0xd3, 0xde, 0xff, 0xff], 0x14); // start marker
-    buf.set([0x42, 0x01, 0x01, 0x11], 0x18); // IMAGE_TYPE: EXE | CPU_RISCV | CHIP_RP2350 (flags 0x1101 LE)
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(0x14, 0xffff_ded3, true); // start marker
+    dv.setUint32(0x18, 0x1101_0142, true); // IMAGE_TYPE: EXE | CPU_RISCV | CHIP_RP2350
+    dv.setUint32(0x1c, 0x0000_01ff, true); // LAST: one preceding item word
+    dv.setUint32(0x20, 0, true); // singleton block loop
+    dv.setUint32(0x24, 0xab12_3579, true); // end marker
     const id = inferIdentity(buf, scanSignatures(buf));
     expect(id.firmwareClass).toBe('baremetal');
     expect(id.arch).toBe('riscv'); // must NOT be Arm-by-name

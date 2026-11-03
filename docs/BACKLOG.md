@@ -174,8 +174,9 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   conservan eCos confirmado y el dump ESP32 confirma FreeRTOS, pero es flash crudo sin ELF ni snapshot RAM y por
   tanto no alimenta el walker de tareas. La pasada cruzada detectó y corrigió dos falsos positivos fuera del
   routing normal: `riot` en bytes comprimidos GL.iNet y `mbed` dentro de `CONFIG_OF_EMBED` en Tenda. W0 y W7 exigen
-  ahora marcadores RIOT/mbed específicos. El PICOBIN del Pico se identifica como RP2350 RISC-V, pero aún no existe
-  un carril profundo dedicado.)*
+  ahora marcadores RIOT/mbed específicos. El carril PICOBIN ya valida LAST/end-marker, sigue el bucle de bloques y
+  expone CPU, seguridad, entrypoint y SP; sobre la muestra real confirma RP2350 RISC-V, bucle de dos bloques,
+  entry `0x10000036` y SP `0x20082000`, sin convertir esa declaración estática en prueba de ejecución.)*
   *(ELF de fabricante resuelto, 2026-11-03: el target FreeRTOS oficial de ST
   `STM32N6-GettingStarted-Audio` v2.3.0 se reprodujo con Arm GCC 13.3.1 y quedó local/ignorado por licencia. FirmLab
   leyó 4315/4315 símbolos y resolvió 10/11 nombres, incluido el array ready de 56 × 20 bytes; sólo falta la variante
@@ -184,8 +185,8 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   estado runtime.)*
   Faltan: un snapshot RAM del ELF ST capturado en hardware STM32N6570-DK,
   una fixture runtime compatible con `TickType_t` de 64 bits, colas de eventos/bloqueo y fuzzing de
-  periféricos/MMIO (µEmu/P2IM/Fuzzware), además de análisis profundo RP2350/RISC-V; Renode sigue demostrando vida,
-  no cobertura del HAL.
+  periféricos/MMIO (µEmu/P2IM/Fuzzware), además de desensamblado/CFG RISC-V desde el entrypoint RP2350 y un modelo
+  runtime/periférico adecuado; Renode sigue demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee
   además `FLMSTR1` (maestro CPU/BIOS) y emite `spi-descriptor-host-write` (`static_confirmed`, medium) sólo cuando

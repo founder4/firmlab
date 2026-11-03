@@ -189,14 +189,15 @@ describe('fingerprintMcu — vendor/family string markers', () => {
 });
 
 describe('parsePicobin — RP2350 boot block ISA', () => {
-  /** A minimal PICOBIN block: start marker at `markerAt`, then a single-word IMAGE_TYPE item carrying `flags`. */
+  /** A complete singleton PICOBIN IMAGE_DEF block with IMAGE_TYPE, LAST, link-to-self and end marker. */
   function picobinBlock(flags: number, markerAt = 0x10): Uint8Array {
-    const buf = new Uint8Array(markerAt + 16);
-    buf.set([0xd3, 0xde, 0xff, 0xff], markerAt); // start marker (u32 LE 0xFFFFDED3)
-    buf[markerAt + 4] = 0x42; // IMAGE_TYPE item type
-    buf[markerAt + 5] = 0x01; // size = 1 word
-    buf[markerAt + 6] = flags & 0xff; // flags low
-    buf[markerAt + 7] = (flags >> 8) & 0xff; // flags high
+    const buf = new Uint8Array(markerAt + 20);
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(markerAt, 0xffff_ded3, true);
+    dv.setUint32(markerAt + 4, ((flags & 0xffff) << 16) | 0x0142, true);
+    dv.setUint32(markerAt + 8, 0x0000_01ff, true); // LAST: one preceding item word
+    dv.setUint32(markerAt + 12, 0, true); // relative link to this block (singleton loop)
+    dv.setUint32(markerAt + 16, 0xab12_3579, true);
     return buf;
   }
 
@@ -206,6 +207,9 @@ describe('parsePicobin — RP2350 boot block ISA', () => {
     expect(info?.cpu).toBe('riscv');
     expect(info?.chip).toBe('rp2350');
     expect(info?.isExecutable).toBe(true);
+    expect(info?.cpuMode).toBe('riscv');
+    expect(info?.blockOffsets).toEqual([0x10]);
+    expect(info?.loopComplete).toBe(true);
   });
 
   it('reads an Arm RP2350 image', () => {
@@ -213,7 +217,57 @@ describe('parsePicobin — RP2350 boot block ISA', () => {
   });
 
   it('maps a varmulet image to Arm (emulated Arm code on the RISC-V core)', () => {
-    expect(parsePicobin(picobinBlock(0x1201))?.cpu).toBe('arm'); // CPU_VARMULET(0x2) → the image is Arm code
+    const info = parsePicobin(picobinBlock(0x1201));
+    expect(info?.cpu).toBe('arm'); // CPU_VARMULET(0x2) → the image is Arm code
+    expect(info?.cpuMode).toBe('varmulet');
+  });
+
+  it('validates and follows the two-block loop shape used by real Pico SDK flash images', () => {
+    const buf = new Uint8Array(0x70);
+    const dv = new DataView(buf.buffer);
+    const first = 0x14;
+    const tail = 0x50;
+    dv.setUint32(first, 0xffff_ded3, true);
+    dv.setUint32(first + 4, 0x1101_0142, true); // IMAGE_TYPE: executable, RISC-V, RP2350
+    dv.setUint32(first + 8, 0x0000_0344, true); // ENTRY_POINT, three words
+    dv.setUint32(first + 12, 0x1000_0036, true);
+    dv.setUint32(first + 16, 0x2008_2000, true);
+    dv.setUint32(first + 20, 0x0000_04ff, true); // LAST: four preceding words
+    dv.setInt32(first + 24, tail - first, true);
+    dv.setUint32(first + 28, 0xab12_3579, true);
+    dv.setUint32(tail, 0xffff_ded3, true);
+    dv.setUint32(tail + 4, 0x0000_01fe, true); // one-word ignored item (16-bit size form)
+    dv.setUint32(tail + 8, 0x0000_01ff, true);
+    dv.setInt32(tail + 12, first - tail, true);
+    dv.setUint32(tail + 16, 0xab12_3579, true);
+
+    expect(parsePicobin(buf)).toMatchObject({
+      markerOffset: first,
+      entryPoint: 0x1000_0036,
+      initialSP: 0x2008_2000,
+      blockOffsets: [first, tail],
+      loopComplete: true,
+    });
+  });
+
+  it('rejects a marker plus IMAGE_TYPE when LAST/end-marker structure is missing', () => {
+    const truncated = new Uint8Array(0x20);
+    const dv = new DataView(truncated.buffer);
+    dv.setUint32(0x10, 0xffff_ded3, true);
+    dv.setUint32(0x14, 0x1101_0142, true);
+    expect(parsePicobin(truncated)).toBeNull();
+  });
+
+  it('rejects LAST when its declared preceding-word count is inconsistent', () => {
+    const malformed = picobinBlock(0x1101);
+    new DataView(malformed.buffer).setUint32(0x18, 0x0000_02ff, true);
+    expect(parsePicobin(malformed)).toBeNull();
+  });
+
+  it('keeps a valid image definition but reports an unresolved/truncated block loop honestly', () => {
+    const linkedOutside = picobinBlock(0x1101);
+    new DataView(linkedOutside.buffer).setUint32(0x1c, 0x100, true);
+    expect(parsePicobin(linkedOutside)).toMatchObject({ blockOffsets: [0x10], loopComplete: false });
   });
 
   it('returns null when there is no PICOBIN block', () => {

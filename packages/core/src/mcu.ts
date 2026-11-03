@@ -296,8 +296,19 @@ function normalizeCore(sub: string): string {
 
 /** The RP2350 PICOBIN block start marker (u32 0xFFFFDED3, stored little-endian → D3 DE FF FF). */
 const PICOBIN_START_MARKER = [0xd3, 0xde, 0xff, 0xff];
+/** PICOBIN block terminator (u32 0xAB123579). */
+const PICOBIN_END_MARKER = 0xab12_3579;
+/** Maximum complete block extent accepted by the RP2350 format. */
+const PICOBIN_MAX_BLOCK_SIZE = 0x280;
 /** PICOBIN item type that declares the image kind + CPU + chip (see the RP2350 datasheet §5.9.5). */
 const PICOBIN_IMAGE_TYPE_ITEM = 0x42;
+const PICOBIN_VECTOR_TABLE_ITEM = 0x03;
+const PICOBIN_ENTRY_POINT_ITEM = 0x44;
+const PICOBIN_ROLLING_WINDOW_DELTA_ITEM = 0x05;
+const PICOBIN_LAST_ITEM = 0xff;
+
+export type PicobinCpu = 'arm' | 'riscv' | 'varmulet' | 'unknown';
+export type PicobinSecurity = 'unspecified' | 'non-secure' | 'secure' | 'reserved';
 
 export interface PicobinInfo {
   /** Offset of the start marker in the buffer. */
@@ -308,6 +319,109 @@ export interface PicobinInfo {
   chip: 'rp2040' | 'rp2350' | null;
   /** Whether the block declares an executable image (vs a data/packaged image). */
   isExecutable: boolean;
+  /** Raw IMAGE_TYPE flags, retained so future flag definitions do not require reparsing the bytes. */
+  imageTypeFlags: number;
+  /** Exact CPU selector. `cpu` above maps varmulet to Arm because the payload itself is Arm code. */
+  cpuMode: PicobinCpu;
+  /** Security selector from IMAGE_TYPE. This describes the image declaration, not a runtime observation. */
+  security: PicobinSecurity;
+  /** Try-before-you-buy image flag from IMAGE_TYPE. */
+  tryBeforeYouBuy: boolean;
+  /** Entry point declared by an ENTRY_POINT item, when present. */
+  entryPoint: number | null;
+  /** Initial stack pointer declared by an ENTRY_POINT item, when present. */
+  initialSP: number | null;
+  /** Optional stack-limit word from the four-word ENTRY_POINT form. */
+  initialSPLimit: number | null;
+  /** Vector-table address declared by a VECTOR_TABLE item, when present. */
+  vectorTable: number | null;
+  /** Flash rolling-window delta, when declared. */
+  rollingWindowDelta: number | null;
+  /** Structurally valid blocks reached from the image definition by following relative links. */
+  blockOffsets: number[];
+  /** True only when every followed link was valid and the loop returned to the image-definition block. */
+  loopComplete: boolean;
+}
+
+interface ParsedPicobinBlock {
+  nextBlockOffset: number;
+  imageTypeFlags: number | null;
+  entryPoint: number | null;
+  initialSP: number | null;
+  initialSPLimit: number | null;
+  vectorTable: number | null;
+  rollingWindowDelta: number | null;
+}
+
+function isPicobinMarker(buf: Uint8Array, offset: number): boolean {
+  return (
+    buf[offset] === PICOBIN_START_MARKER[0] &&
+    buf[offset + 1] === PICOBIN_START_MARKER[1] &&
+    buf[offset + 2] === PICOBIN_START_MARKER[2] &&
+    buf[offset + 3] === PICOBIN_START_MARKER[3]
+  );
+}
+
+/** Decode and structurally validate one complete PICOBIN block, including LAST size and end marker. */
+function parsePicobinBlock(buf: Uint8Array, markerOffset: number): ParsedPicobinBlock | null {
+  if (markerOffset < 0 || markerOffset % 4 !== 0 || markerOffset + 16 > buf.length) return null;
+  if (!isPicobinMarker(buf, markerOffset)) return null;
+
+  const blockLimit = Math.min(buf.length, markerOffset + PICOBIN_MAX_BLOCK_SIZE);
+  let pos = markerOffset + 4;
+  let precedingWords = 0;
+  let imageTypeFlags: number | null = null;
+  let entryPoint: number | null = null;
+  let initialSP: number | null = null;
+  let initialSPLimit: number | null = null;
+  let vectorTable: number | null = null;
+  let rollingWindowDelta: number | null = null;
+
+  // The smallest item is one word, so this cap exceeds the largest structurally possible block.
+  for (let itemCount = 0; itemCount < PICOBIN_MAX_BLOCK_SIZE / 4 && pos + 4 <= blockLimit; itemCount++) {
+    const header = u32(buf, pos, true);
+    const itemType = header & 0xff;
+    // Item types with bit 7 set carry a 16-bit word count; the others carry an 8-bit word count.
+    const sizeWords = (itemType & 0x80) !== 0 ? (header >>> 8) & 0xffff : (header >>> 8) & 0xff;
+    if (sizeWords === 0) return null;
+
+    if (itemType === PICOBIN_LAST_ITEM) {
+      // LAST stores the number of item words before itself, excluding the start marker.
+      if (sizeWords !== precedingWords || pos + 12 > blockLimit) return null;
+      if (u32(buf, pos + 8, true) !== PICOBIN_END_MARKER) return null;
+      const relativeNext = u32(buf, pos + 4, true) | 0;
+      if (relativeNext % 4 !== 0) return null;
+      return {
+        nextBlockOffset: markerOffset + relativeNext,
+        imageTypeFlags,
+        entryPoint,
+        initialSP,
+        initialSPLimit,
+        vectorTable,
+        rollingWindowDelta,
+      };
+    }
+
+    const itemEnd = pos + sizeWords * 4;
+    if (itemEnd > blockLimit) return null;
+
+    // The boot ROM recognizes an IMAGE_DEF only when IMAGE_TYPE is the first item and exactly one word long.
+    if (precedingWords === 0 && itemType === PICOBIN_IMAGE_TYPE_ITEM && sizeWords === 1) {
+      imageTypeFlags = header >>> 16;
+    } else if (itemType === PICOBIN_ENTRY_POINT_ITEM && (sizeWords === 3 || sizeWords === 4)) {
+      entryPoint = u32(buf, pos + 4, true);
+      initialSP = u32(buf, pos + 8, true);
+      initialSPLimit = sizeWords === 4 ? u32(buf, pos + 12, true) : null;
+    } else if (itemType === PICOBIN_VECTOR_TABLE_ITEM && sizeWords === 2) {
+      vectorTable = u32(buf, pos + 4, true);
+    } else if (itemType === PICOBIN_ROLLING_WINDOW_DELTA_ITEM && sizeWords === 2) {
+      rollingWindowDelta = u32(buf, pos + 4, true);
+    }
+
+    precedingWords += sizeWords;
+    pos = itemEnd;
+  }
+  return null;
 }
 
 /**
@@ -316,51 +430,63 @@ export interface PicobinInfo {
  * only authoritative source of which one a given image targets is the IMAGE_TYPE item's CPU field. We walk the
  * block's TLV items to read it, so the classifier picks `riscv` vs `arm` from the bytes, never from a label.
  *
- * Returns null when no PICOBIN block is present. Pure; scans a bounded prefix (boot blocks live near the start).
+ * Returns null when no structurally valid PICOBIN image-definition block is present. Pure; scans a bounded,
+ * word-aligned prefix (the boot ROM also searches at word boundaries), then follows the declared block loop.
  */
 export function parsePicobin(buf: Uint8Array): PicobinInfo | null {
   const scanEnd = Math.min(buf.length - 4, 256 * 1024);
-  let markerOffset = -1;
-  for (let o = 0; o <= scanEnd; o++) {
-    if (
-      buf[o] === PICOBIN_START_MARKER[0] &&
-      buf[o + 1] === PICOBIN_START_MARKER[1] &&
-      buf[o + 2] === PICOBIN_START_MARKER[2] &&
-      buf[o + 3] === PICOBIN_START_MARKER[3]
-    ) {
-      markerOffset = o;
-      break;
-    }
-  }
-  if (markerOffset < 0) return null;
+  for (let markerOffset = 0; markerOffset <= scanEnd; markerOffset += 4) {
+    if (!isPicobinMarker(buf, markerOffset)) continue;
+    const first = parsePicobinBlock(buf, markerOffset);
+    if (!first || first.imageTypeFlags === null) continue;
 
-  // Walk the block's items (each item's byte 1 carries its size in 32-bit words) until IMAGE_TYPE or the end.
-  let cpu: McuArch = 'unknown';
-  let chip: PicobinInfo['chip'] = null;
-  let isExecutable = false;
-  let pos = markerOffset + 4;
-  for (let n = 0; n < 32 && pos + 4 <= buf.length; n++) {
-    const itemType = buf[pos] ?? 0;
-    if (itemType === 0) break;
-    if (itemType === PICOBIN_IMAGE_TYPE_ITEM) {
-      const flags = u16(buf, pos + 2, true);
-      isExecutable = (flags & 0x000f) === 0x1; // IMAGE_TYPE_EXE
-      cpu =
-        ((flags >> 8) & 0x7) === 0x1
-          ? 'riscv'
-          : ((flags >> 8) & 0x7) === 0x0
-            ? 'arm'
-            : ((flags >> 8) & 0x7) === 0x2
-              ? 'arm' // varmulet: emulated Arm code running on the RISC-V core → the image is Arm
-              : 'unknown';
-      chip = ((flags >> 12) & 0x7) === 0x1 ? 'rp2350' : ((flags >> 12) & 0x7) === 0x0 ? 'rp2040' : null;
-      break;
+    const blockOffsets = [markerOffset];
+    const visited = new Set(blockOffsets);
+    let nextOffset = first.nextBlockOffset;
+    let loopComplete = nextOffset === markerOffset;
+    for (let blockCount = 1; !loopComplete && blockCount < 64; blockCount++) {
+      if (nextOffset < 0 || nextOffset >= buf.length || visited.has(nextOffset)) break;
+      const linked = parsePicobinBlock(buf, nextOffset);
+      if (!linked) break;
+      visited.add(nextOffset);
+      blockOffsets.push(nextOffset);
+      nextOffset = linked.nextBlockOffset;
+      loopComplete = nextOffset === markerOffset;
     }
-    const sizeWords = buf[pos + 1] ?? 0;
-    if (sizeWords <= 0) break;
-    pos += sizeWords * 4;
+
+    const flags = first.imageTypeFlags;
+    const cpuIndex = (flags >> 8) & 0x7;
+    const cpuMode: PicobinCpu =
+      cpuIndex === 0 ? 'arm' : cpuIndex === 1 ? 'riscv' : cpuIndex === 2 ? 'varmulet' : 'unknown';
+    const securityIndex = (flags >> 4) & 0x3;
+    const security: PicobinSecurity =
+      securityIndex === 0
+        ? 'unspecified'
+        : securityIndex === 1
+          ? 'non-secure'
+          : securityIndex === 2
+            ? 'secure'
+            : 'reserved';
+    const chipIndex = (flags >> 12) & 0x7;
+    return {
+      markerOffset,
+      cpu: cpuMode === 'riscv' ? 'riscv' : cpuMode === 'arm' || cpuMode === 'varmulet' ? 'arm' : 'unknown',
+      chip: chipIndex === 1 ? 'rp2350' : chipIndex === 0 ? 'rp2040' : null,
+      isExecutable: (flags & 0x000f) === 0x1,
+      imageTypeFlags: flags,
+      cpuMode,
+      security,
+      tryBeforeYouBuy: (flags & 0x8000) !== 0,
+      entryPoint: first.entryPoint,
+      initialSP: first.initialSP,
+      initialSPLimit: first.initialSPLimit,
+      vectorTable: first.vectorTable,
+      rollingWindowDelta: first.rollingWindowDelta,
+      blockOffsets,
+      loopComplete,
+    };
   }
-  return { markerOffset, cpu, chip, isExecutable };
+  return null;
 }
 
 /** Build the fingerprint. `buf` should be the firmware bytes (the caller may cap very large buffers). */
