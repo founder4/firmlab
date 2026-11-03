@@ -9,7 +9,7 @@ leerlo deja de usarse como backlog.
 `ROADMAP.md` es el historial de qué se envió y cuándo; `METHODOLOGY-GAPS.md` mapea la cobertura contra OWASP
 FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
-## Prioridad de reanudación — 2026-10-31
+## Prioridad de reanudación — 2026-11-03
 
 - [ ] Unificar la reconstrucción de herramientas con la base Debian 13 realmente desplegada. `deploy.sh --tools`
   aún usa `Dockerfile.tools` (Debian 12), mientras el homelab usa `Dockerfile.trixie`. Revisar primero los tres
@@ -19,7 +19,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   El review histórico `task_3209c8d09372` discrepaba del digest escogido y pedía inventario acotado y más amplio;
   el guard actual comprueba presencia de 13 comandos sin timeout propio, no los 28 sondeos de capacidad.
   Conservar estos cambios separados hasta resolver el contrato sobre Debian 13 y probarlo offline, sin promoción
-  ni despliegue implícitos. Véase `docs/DEPLOYMENT.md`, sección de la base Debian 13.
+  ni despliegue implícitos. **Revisado 2026-11-03:** los tres digests base objetados son índices OCI multi-arquitectura,
+  pero esta estación no conserva las imágenes ARM64 `retained`/Renode que exige `Dockerfile.trixie`; además, el
+  `COPY --from=retained` final hace que el guard actual rechace la reconstrucción como «capa final sin cambio» y,
+  sin preflight local, BuildKit puede intentar resolver `homelab-rollback/*` en Docker Hub. El siguiente cambio debe
+  exigir ambas imágenes locales, refrescar Grype en la última capa y probar con timeout los 28 sondeos antes de
+  construir una candidata real. Véase `docs/DEPLOYMENT.md`, sección de la base Debian 13.
 - [ ] Evaluar la siguiente versión YARA Forge antes de actualizar el lock `20261011`. El workflow de vigilancia
   [del 26 de octubre](https://github.com/founder4/firmlab/actions/runs/40328671132) falla expresamente porque
   detecta una versión posterior; no demuestra un fallo del motor. Comparar reglas, controles positivos y
@@ -33,10 +38,14 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `origin/main`. Auditoría de 27 avisos a cero; gates locales completos con 4.759 tests tras separar el WIP.
   Los resultados remotos se consultan por SHA en el workflow CI; los fallos históricos se conservan.
 - [ ] Desplegar la actualización de la aplicación tras verificar su CI y preparar candidata/rollback.
-  El contenedor sigue en `b79edd5`: publicar las dependencias corregidas en GitHub no actualiza el servicio.
-  Mantener la base Debian 13 existente; esta tarea no requiere reconstruir herramientas con `--tools`.
-- [ ] Evaluar la partición del bundle web: el build del 2026-10-31 emite un aviso por el chunk principal
-  de 539,58 kB (184,44 kB gzip). Medir carga antes de introducir nuevas particiones; no es un fallo de build.
+  En esta estación, `firmlab` está parado (`Exited (143)`) y `firmlab-firmware:latest` sigue en `8cb2e1c`;
+  `scripts/deploy.sh --check` confirma que no representa el `main` actual. No inferir de este estado el del homelab.
+  Mantener allí la base Debian 13 existente; esta tarea no requiere reconstruir herramientas con `--tools`.
+- [x] Evaluar la partición del bundle web: el build del 2026-10-31 emitía un aviso por el chunk principal
+  de 539,58 kB (184,44 kB gzip). `a1e01ce` separa los catálogos por idioma y carga sólo el activo antes de montar
+  React: entrada 218,25 kB (70,77 gzip) + 149,64 kB inglés (53,97 gzip) o 172,02 kB español (60,49 gzip).
+  El primer paint evita entre 149,6 y 172,0 kB (53,2–59,7 kB gzip); ningún chunk supera 218,25 kB y los 893 tests
+  web, TypeScript y Biome pasan.
 
 ## Superficie agente y MCP
 
