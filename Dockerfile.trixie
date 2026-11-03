@@ -81,4 +81,15 @@ ENV JAVA_HOME=/opt/jdk GHIDRA_INSTALL_DIR=/opt/ghidra \
 RUN apt-mark manual libpython3.13 \
  && apt-get purge -y --auto-remove build-essential python3-dev nasm flex bison zlib1g-dev g++ gcc make \
  && rm -rf /root/.cache /tmp/trixie-assets.json /tmp/fetch-trixie-assets.py
-COPY --from=retained /opt/grype-db /opt/grype-db
+# Grype's database is baked as the FINAL layer, keyed by GRYPE_DB_REFRESH, exactly as in Dockerfile.tools: a copy
+# from `retained` froze the 2026-10-22 catalogue into an identical last layer, so `deploy.sh --tools` refused every
+# rebuild as unchanged. No `|| echo` here: this recipe never builds a first image, and a failed download must keep
+# the current base rather than promote one without a database. The `find` asserts the database landed where the app
+# reads it (see Dockerfile.tools for the 2026-09-19 bake that passed while writing to ~/.cache).
+ARG GRYPE_DB_REFRESH=initial
+RUN bash -c 'set -o pipefail; mkdir -p /opt/grype-db \
+ && printf "%s\n" "${GRYPE_DB_REFRESH}" > /opt/grype-db/.firmlab-refresh \
+ && GRYPE_DB_AUTO_UPDATE=true GRYPE_CHECK_FOR_APP_UPDATE=false grype db update \
+ && GRYPE_DB_VALIDATE_AGE=false GRYPE_CHECK_FOR_APP_UPDATE=false grype db status \
+ && test -n "$(find /opt/grype-db -name vulnerability.db -size +100M)" \
+ && echo "grype DB baked: $(du -sh /opt/grype-db | cut -f1) at $(find /opt/grype-db -name vulnerability.db)"'

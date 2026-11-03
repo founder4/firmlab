@@ -11,20 +11,22 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Prioridad de reanudación — 2026-11-03
 
-- [ ] Unificar la reconstrucción de herramientas con la base Debian 13 realmente desplegada. `deploy.sh --tools`
-  aún usa `Dockerfile.tools` (Debian 12), mientras el homelab usa `Dockerfile.trixie`. Revisar primero los tres
-  ficheros con trabajo del 2026-10-14 (`Dockerfile.tools`, `scripts/deploy.sh`,
-  `scripts/deploy-grype-refresh.test.mjs`): las pruebas con shim pasan, pero falta evidencia real de la candidata.
-  Respaldados en GitHub en `179e7bc`, rama `wip/tools-promotion-hardening-20261031`; no integrados en `main`.
-  El review histórico `task_3209c8d09372` discrepaba del digest escogido y pedía inventario acotado y más amplio;
-  el guard actual comprueba presencia de 13 comandos sin timeout propio, no los 28 sondeos de capacidad.
-  Conservar estos cambios separados hasta resolver el contrato sobre Debian 13 y probarlo offline, sin promoción
-  ni despliegue implícitos. **Revisado 2026-11-03:** los tres digests base objetados son índices OCI multi-arquitectura,
-  pero esta estación no conserva las imágenes ARM64 `retained`/Renode que exige `Dockerfile.trixie`; además, el
-  `COPY --from=retained` final hace que el guard actual rechace la reconstrucción como «capa final sin cambio» y,
-  sin preflight local, BuildKit puede intentar resolver `homelab-rollback/*` en Docker Hub. El siguiente cambio debe
-  exigir ambas imágenes locales, refrescar Grype en la última capa y probar con timeout los 28 sondeos antes de
-  construir una candidata real. Véase `docs/DEPLOYMENT.md`, sección de la base Debian 13.
+- [ ] Construir una candidata Debian 13 real con `deploy.sh --tools --build-only` en el homelab ARM64. **Contrato
+  integrado 2026-11-03:** `--tools` elige la receta por el `/etc/os-release` de la base actual (12 → `Dockerfile.tools`,
+  13 → `Dockerfile.trixie`), rechaza una candidata más antigua y una etiqueta ausente junto a un contenedor Debian 13,
+  exige `retained`/Renode en local con driver `docker` antes de `docker build`, hornea Grype en la última capa de
+  `Dockerfile.trixie` y compara offline los 28 sondeos de `tools.ts`, cada uno acotado por `timeout`. Lo cubren 24
+  tests con shim y mutaciones de cada guard; el inventario real de la base Debian 12 x86_64 local tarda 2,8 s
+  (27/28: `angr error exit=1`) y `timeout` real clasifica TERM, KILL, 127 y 126. Falta la evidencia que esta
+  estación no puede dar: no conserva las imágenes ARM64 `retained`/Renode, así que no se ha construido ninguna
+  candidata Debian 13, ni descargado su base Grype, ni ejecutado sobre ella el inventario, la integración,
+  FreeRTOS y `security-runtime-smoke.py`. Sin promoción ni despliegue implícitos. Del WIP `179e7bc` no se integra
+  lo de `Dockerfile.tools` (digests fijados del frontend y de la base Node, reintentos de las descargas de Ghidra):
+  no lo exige el contrato Debian 13; sigue en esa rama si se quiere para la receta Debian 12.
+- [ ] `Dockerfile.tools` descarga siempre el JDK `linux/aarch64` de Adoptium. En la base Debian 12 x86_64 de la
+  estación, `/opt/jdk/bin/java` es AArch64 (`e_machine` 0xb7): `analyzeHeadless` aparece como presente y el smoke
+  real falla en qemu-aarch64 sin `/lib/ld-linux-aarch64.so.1`. Elegir la arquitectura del JDK con
+  `dpkg --print-architecture`; hasta entonces Ghidra no funciona en esa receta fuera de ARM64.
 - [ ] Evaluar la siguiente versión YARA Forge antes de actualizar el lock `20261011`. El workflow de vigilancia
   [del 26 de octubre](https://github.com/founder4/firmlab/actions/runs/40328671132) falla expresamente porque
   detecta una versión posterior; no demuestra un fallo del motor. Comparar reglas, controles positivos y

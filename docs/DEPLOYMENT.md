@@ -44,10 +44,12 @@ homelab consume `firmlab-firmware:latest`.
 
 ## Cómo desplegar
 
-**Atención (reconciliado 2026-10-31):** el homelab usa la base Debian 13 descrita en
-[Base Debian 13 del homelab](#base-debian-13-del-homelab-2026-10-22). `--tools` reconstruye todavía
-`Dockerfile.tools` (Debian 12), no esa base. Para actualizar sus herramientas hay que seguir la receta
-Debian 13 y sus comprobaciones; los cambios locales pendientes del script no resuelven esta divergencia.
+**Receta de `--tools` (2026-11-03):** el script lee `/etc/os-release` de la `firmlab-tools:latest` existente y
+reconstruye con la receta de esa misma versión: Debian 12 → `Dockerfile.tools`, Debian 13 → `Dockerfile.trixie`
+(la base del homelab, descrita en [Base Debian 13 del homelab](#base-debian-13-del-homelab-2026-10-22)). Una
+versión desconocida, una candidata más antigua que la actual o una etiqueta ausente junto a un contenedor Debian 13
+se rechazan sin construir ni promover. La primera construcción sin imagen previa sigue siendo `Dockerfile.tools`
+con sus bloques opcionales degradables.
 
 ```bash
 scripts/deploy.sh              # construye la app sobre la base de tools existente, despliega y verifica
@@ -371,5 +373,19 @@ Restaura las dos imágenes anteriores a Debian 13 y conserva los datos. Esta int
 de BD ni permisos/carriles de red; MinIO permanece fuera de su alcance.
 
 El despliegue normal de código puede seguir usando `firmlab-tools:latest` una vez promovida esta base.
-`scripts/deploy.sh --tools` sigue seleccionando la receta original: para reconstruir herramientas Debian 13,
-usar los comandos explícitos anteriores hasta integrar los cambios pendientes del operador.
+Con ella promovida, `scripts/deploy.sh --tools` elige `Dockerfile.trixie` y, antes de etiquetar la candidata:
+
+- exige que `RETAINED_IMAGE` y `RENODE_IMAGE` (todo `FROM ${ARG}` de la receta) existan en el almacén local y que
+  el builder use el driver `docker`; si falta una, se detiene antes de `docker build`, porque BuildKit buscaría
+  esos nombres en Docker Hub, donde cualquiera puede publicarlos. Las bases públicas van fijadas por digest.
+- hornea la base Grype en la última capa con `GRYPE_DB_REFRESH` (antes se copiaba de `retained`, y esa capa
+  idéntica hacía que el guard «capa final sin cambio» rechazase toda reconstrucción);
+- inventaría offline (`--network none`) los 28 sondeos de `apps/api/src/tools.ts` en la imagen actual y en la
+  candidata, cada uno acotado por `timeout` con su presupuesto (4 s; angr 30 s; fwhunt 15 s; KILL 2 s después).
+  Cada sondeo informa `ok`, `present`, `missing`, `timeout` o `error exit=N`, y la promoción se rechaza si la
+  candidata pierde uno que la actual respondía. Un sondeo ausente en ambas es degradación informada, no regresión.
+
+**El inventario no sustituye al smoke real.** Comprueba presencia y una respuesta acotada, lo mismo que el panel de
+capacidades: `analyzeHeadless` sólo se busca en el PATH, y el 2026-11-03 la imagen Debian 12 x86_64 de la estación
+lo daba por presente mientras `security-runtime-smoke.py` fallaba porque su JDK es aarch64 bajo qemu. Las
+validaciones del párrafo anterior siguen siendo obligatorias antes de desplegar.
