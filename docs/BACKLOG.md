@@ -24,6 +24,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   [del 26 de octubre](https://github.com/founder4/firmlab/actions/runs/40328671132) falla expresamente porque
   detecta una versión posterior; no demuestra un fallo del motor. Comparar reglas, controles positivos y
   diferencias sobre el corpus existente en sólo lectura; no aceptar una actualización automática del corpus.
+  **Evaluado 2026-11-03** (`docs/YARA-CANDIDATE-20261101.md`): 20261101/20261103 eliminan el control
+  `TRELLIX_ARC_Malw_Eicar`; falta elegir sustituto y el A/B sobre rootfs del homelab. Lock intacto.
+- [ ] `scripts/evaluate-yara-candidate.sh`: con la API caída informa «Rootfs A/B: 0 · 0/0» como si comparase
+  (`set -e` no cubre `for x in $(…)`); exigir >0 rootfs, verificar la baseline contra el lock en vez de leer
+  `~/homelab`/`/opt/firmlab-yara`, y comparar `logic_hash` además de nombres.
 - [x] Publicar las correcciones de dependencias y el contexto de coordinación: `4a7b2fa` y `d079c84` están en
   `origin/main`. Auditoría de 27 avisos a cero; gates locales completos con 4.759 tests tras separar el WIP.
   Los resultados remotos se consultan por SHA en el workflow CI; los fallos históricos se conservan.
