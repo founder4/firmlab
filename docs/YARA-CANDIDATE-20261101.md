@@ -25,7 +25,7 @@ Por nombre y por `meta.logic_hash` (hash de strings+condición que emite YARA Fo
 - Relevantes para Linux/ELF: lógica cambiada en `AVASTTI_Manjusaka_Payload_Elf`; añadida
   `VOLEXITY_Webshell_Php_Icescorpion`. Ninguna regla Mirai/Gafgyt/IoT añadida ni eliminada.
 
-## Controles positivos — BLOQUEANTE
+## Controles positivos — BLOQUEANTE (resuelto: ver abajo)
 
 | Control | 20261011 | 20261101/20261103 |
 |---|---|---|
@@ -38,6 +38,13 @@ la selección de YARA Forge, no por un cambio de lógica. La única regla EICAR 
 `ELCEEF_EICAR_Encrypted_ZIP`, que no dispara sobre el EICAR plano. Por tanto `scripts/test-yara-external.sh`
 **fallará** con cualquiera de las dos candidatas hasta elegir y justificar un control EICAR sustituto (o retirar
 ese control con razón escrita). No se ha cambiado el script: elegir el control es una decisión de revisión.
+
+**Resuelto el 2026-11-03** (decisión del coordinador): el control pasa a `ELCEEF_EICAR_Encrypted_ZIP` (`56851056…`,
+lógica idéntica en 20261011, 20261101 y 20261103) sobre una cabecera local ZIP inerte de 30 bytes: flag de cifrado
+(bit 0), CRC-32 `0x6851cf3c` en +14 y tamaño 68 en +22, sin datos ni cadena EICAR. Con YARA 4.2.3 en un contenedor
+desechable `firmlab-tools` (`--network none`, sólo ficheros de prueba montados), `scripts/test-yara-external.sh`
+confirma los 3 positivos con las tres releases; sobre 20261011 esa cabecera dispara exactamente esa regla y ninguna
+otra. El script anterior falla con 20261103 en `TRELLIX_ARC_Malw_Eicar`, como se describe arriba.
 
 ## A/B sobre corpus real — NO EJECUTADO
 
@@ -54,6 +61,12 @@ cubre la sustitución en la lista de un `for` (reproducido: `for x in $(false)` 
 el informe dice «Rootfs A/B: 0 · matches 0/0 · nuevos/perdidos 0/0», indistinguible de una comparación limpia.
 Además toma la baseline de `~/homelab/...` y de `/opt/firmlab-yara` sin verificarla contra el lock, y sólo compara
 nombres (no ve las 37 reglas con lógica cambiada). Registrado en `docs/BACKLOG.md`.
+
+**Corregido el 2026-11-03.** Ahora una API caída, cero rootfs o una baseline distinta del lock salen con 3 y un informe
+«INCOMPLETO (`<motivo>`)»; la baseline es el zip del lock verificado, y el informe cuenta la lógica cambiada por
+`logic_hash`. Ejecutado con el lock real, descargas reales y `docker` simulado (sin escanear ningún rootfs): 20261011
+pasa la verificación (5145 reglas) y frente a 20261103 da 103 / 115 / 37, como la tabla de arriba; con la API caída
+sale 3 con `api_unreachable`. El A/B sobre rootfs del homelab sigue pendiente.
 
 ## Comandos
 

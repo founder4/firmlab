@@ -21,9 +21,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The standard EICAR test string is assembled from two pieces so antivirus products do not quarantine this source
-# tree. The resulting temporary file is inert test data, not an executable.
-printf '%s%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-' 'ANTIVIRUS-TEST-FILE!$H+H*' > "$tmp/eicar.inert"
+# YARA Forge 20261101 dropped TRELLIX_ARC_Malw_Eicar (plain EICAR) by selection, not logic. This targets
+# ELCEEF_EICAR_Encrypted_ZIP, whose logic is identical in 20261011 and 20261103: a bare 30-byte ZIP local header
+# (encrypted flag bit 0, CRC-32 0x6851cf3c at +14, uncompressed size 68 at +22) that DESCRIBES an encrypted EICAR
+# entry but carries no data, so not even the EICAR string is ever written.
+printf '\120\113\003\004\000\000\001\000\000\000\000\000\000\000\074\317\121\150\000\000\000\000\104\000\000\000\000\000\000\000' \
+  > "$tmp/eicar-encrypted-zip-header.inert"
 
 # A tiny text fixture for a public generic-webshell rule. It is never served or executed.
 printf '%s\n' "<?php system(\$_POST['a']); ?>" > "$tmp/webshell.inert.php"
@@ -46,7 +49,7 @@ assert_match() {
   printf '%s\t%s\n' "$rule" "$(basename "$file")"
 }
 
-assert_match TRELLIX_ARC_Malw_Eicar "$tmp/eicar.inert"
+assert_match ELCEEF_EICAR_Encrypted_ZIP "$tmp/eicar-encrypted-zip-header.inert"
 assert_match SEKOIA_Generic_Php_Webshell "$tmp/webshell.inert.php"
 assert_match SIGNATURE_BASE_MAL_ARM_LNX_Mirai_Mar13_2022 "$tmp/mirai-shape.inert"
 printf 'YARA external: 3 positivos inertes confirmados\n'

@@ -57,9 +57,14 @@ scripts/check-yara-release.sh --no-fail
 scripts/evaluate-yara-candidate.sh latest /tmp/yara-candidate-report.md
 ```
 
-El segundo comando verifica el digest publicado por GitHub, compila la candidata, exige tres positivos inertes,
-compara identificadores añadidos/eliminados y escanea los mismos rootfs con corpus actual y candidato. Solo genera
-un informe; promover una candidata sigue requiriendo editar el lock y ejecutar `sync-yara-corpus.sh` manualmente.
+El segundo comando descarga la baseline del propio lock y la verifica (zip y `.yar`: SHA-256, bytes y reglas; no
+lee `~/homelab` ni `/opt/firmlab-yara`), verifica el digest que GitHub publica para la candidata, la compila, exige
+tres positivos inertes, compara reglas añadidas/eliminadas y el `meta.logic_hash` de las comunes, y escanea los mismos
+rootfs con baseline y candidata. Sale con 0 y «Resultado: completo» sólo si comparó al menos un rootfs. Una comparación
+que no llegó a hacerse (API caída, cero rootfs, baseline distinta del lock, candidata que no compila o no dispara los
+positivos) sale con 3 y un informe «INCOMPLETO (`<motivo>`)», que nunca es una comparación limpia. Solo genera un
+informe; promover una candidata sigue requiriendo editar el lock y ejecutar `sync-yara-corpus.sh` manualmente.
+`node --test scripts/evaluate-yara-candidate.test.mjs` fija ambos resultados sin red, contenedor ni corpus.
 
 ## Validación obligatoria
 
@@ -70,8 +75,10 @@ yara -w -e /ruta/yara-forge-core.yar /dev/null
 ```
 
 Los fixtures exigen un match exacto para cada una de las seis heurísticas y cero matches en tres controles benignos.
-El corpus externo debe disparar además sobre tres objetos inertes generados en `/tmp`: EICAR, un fragmento PHP que
-activa una regla de webshell genérico y un fichero no ejecutable con forma ELF e indicadores Mirai publicados.
+El corpus externo debe disparar además sobre tres objetos inertes generados en `/tmp`: una cabecera local ZIP de 30
+bytes que describe una entrada EICAR cifrada sin contenerla (`ELCEEF_EICAR_Encrypted_ZIP`; sustituye al EICAR plano
+de `TRELLIX_ARC_Malw_Eicar`, que YARA Forge retiró en 20261101), un fragmento PHP que activa una regla de webshell
+genérico y un fichero no ejecutable con forma ELF e indicadores Mirai publicados.
 Además, la release se compila con el mismo YARA 4.2.3 del contenedor y se escanea contra varios rootfs reales. Los
 matches reales se triagean antes de decidir si una regla se mantiene, baja de severidad o se retira.
 
