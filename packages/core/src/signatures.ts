@@ -142,6 +142,68 @@ function ascii(bytes: string): number[] {
   return [...bytes].map((c) => c.charCodeAt(0));
 }
 
+export type SercommPrefixHeaderResult =
+  | { valid: false; reason: string }
+  | {
+      valid: true;
+      hardwareId: string;
+      hardwareRevision: string;
+      softwareVersion: number;
+      checksumValid: boolean;
+    };
+
+function nulPaddedAscii(buf: Uint8Array, from: number, to: number): string | null {
+  let nul = to;
+  for (let i = from; i < to; i++) {
+    const b = buf[i] as number;
+    if (b === 0) {
+      nul = i;
+      break;
+    }
+    if (b < 0x20 || b > 0x7e) return null;
+  }
+  if (nul === from) return null;
+  for (let i = nul; i < to; i++) if (buf[i] !== 0) return null;
+  const value = String.fromCharCode(...buf.subarray(from, nul));
+  return value.length > 0 ? value : null;
+}
+
+/**
+ * Parse the 512-byte prefix emitted by OpenWrt firmware-utils' `mksercommfw`.
+ * This identifies that exact Sercomm/Netgear container variant only; its 8-bit sum is format consistency, not
+ * authentication. The checksum covers the complete image because the generator chooses byte 511 after payload.
+ */
+export function parseSercommPrefixHeader(buf: Uint8Array): SercommPrefixHeaderResult {
+  if (buf.length < 512) return { valid: false, reason: 'image is shorter than the 512-byte prefix header' };
+  const magic = ascii('sErCoMm');
+  if (!magic.every((byte, i) => buf[i] === byte)) return { valid: false, reason: 'primary sErCoMm magic is absent' };
+  if (![0, 1, 0, 0].every((byte, i) => buf[7 + i] === byte)) {
+    return { valid: false, reason: 'header version is not 00 01 00 00' };
+  }
+  const hardwareId = nulPaddedAscii(buf, 11, 45);
+  if (hardwareId === null) return { valid: false, reason: 'hardware id is not printable NUL-padded ASCII' };
+  const hardwareRevision = nulPaddedAscii(buf, 45, 55);
+  if (hardwareRevision === null) {
+    return { valid: false, reason: 'hardware revision is not printable NUL-padded ASCII' };
+  }
+  for (let i = 59; i < 63; i++) if (buf[i] !== 0) return { valid: false, reason: 'reserved bytes 59..62 are nonzero' };
+  if (!magic.every((byte, i) => buf[63 + i] === byte)) {
+    return { valid: false, reason: 'secondary sErCoMm magic at offset 63 is absent' };
+  }
+  for (let i = 70; i < 511; i++) {
+    if (buf[i] !== 0) return { valid: false, reason: `reserved padding byte ${i} is nonzero` };
+  }
+  let sum = 0;
+  for (const byte of buf) sum = (sum + byte) & 0xff;
+  return {
+    valid: true,
+    hardwareId,
+    hardwareRevision,
+    softwareVersion: u32be(buf, 55),
+    checksumValid: sum === 0,
+  };
+}
+
 /**
  * TRX container check, shared by HDR0 (v1) and HDR1 (v2) — the same 28-byte header with a different magic.
  * `len` is the total length including the header, and the first partition offset must sit inside it. Both are
@@ -778,13 +840,38 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
   // Clean-room rules: each magic is paired with a check of fields the format itself declares, and every one of
   // them can REJECT. That constraint is why this pack is ~20 rules and not the ~130 the backlog sketches — a
   // magic we cannot check structurally is a rule that fires on coincidences we would then have to explain away,
-  // and several vendors' headers (Realtek, Sercomm, MediaTek) are not reconstructible with confidence from
+  // and several vendors' headers (Realtek and MediaTek) are not reconstructible with confidence from
   // first principles here, so they are left out rather than guessed at. See docs/BACKLOG.md.
   //
   // The descriptions also refuse to over-claim attribution. A magic identifies a CONTAINER FORMAT, not a brand:
   // SEAMA ships on several vendors' devices and HDR1 is a Broadcom TRX variant that Xiaomi among others reuses,
   // so both are named by format with the vendor as a "commonly" aside. Only where the magic is genuinely
   // vendor-private (fwup-ptn, the Netgear CHK magic) does the description name one.
+  {
+    id: 'sercomm-prefix',
+    description: 'Sercomm/Netgear sErCoMm firmware prefix header (mksercommfw)',
+    category: 'container',
+    confidence: 'high',
+    magic: ascii('sErCoMm'),
+    atOffset: 0,
+    decode: (buf) => {
+      const parsed = parseSercommPrefixHeader(buf);
+      if (!parsed.valid) return undefined;
+      return {
+        hardwareId: parsed.hardwareId,
+        hardwareRevision: parsed.hardwareRevision,
+        softwareVersion: parsed.softwareVersion,
+      };
+    },
+    verify: (buf) => {
+      const parsed = parseSercommPrefixHeader(buf);
+      if (!parsed.valid) return no(parsed.reason);
+      const identity = `${parsed.hardwareId} rev ${parsed.hardwareRevision}, software 0x${parsed.softwareVersion.toString(16)}`;
+      return parsed.checksumValid
+        ? at('verified', `${identity}; complete-image 8-bit sum recomputes to zero`)
+        : at('consistent', `${identity}; exact 512-byte header structure, but complete-image 8-bit sum is nonzero`);
+    },
+  },
   {
     id: 'seama',
     description: 'SEAMA firmware container (commonly D-Link)',

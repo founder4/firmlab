@@ -1531,7 +1531,14 @@ export interface SwitchFamilyAnalysis {
  * layout is DECLARED, never defaulted. The result is persisted on a job row, so every field is optional forever.
  */
 export interface RtosTaskSnapshotInput {
-  memory: { base: number; endian: 'little' | 'big'; pointerWidth: 4 | 8; bytesBase64: string };
+  memory: {
+    base: number;
+    endian: 'little' | 'big';
+    pointerWidth: 4 | 8;
+    bytesBase64: string;
+    useMiniListItem?: boolean;
+    useListDataIntegrityCheckBytes?: boolean;
+  };
   symbols: {
     pxCurrentTCB?: number | null;
     readyLists?: { priority: number; address: number | null }[];
@@ -1579,7 +1586,14 @@ export interface RtosTaskSnapshotResult {
   proofState?: ProofState;
   coverage?: 'complete' | 'partial' | 'none';
   summary?: string;
-  snapshot?: { base?: number; endian?: 'little' | 'big'; pointerWidth?: 4 | 8; bytesSupplied?: number };
+  snapshot?: {
+    base?: number;
+    endian?: 'little' | 'big';
+    pointerWidth?: 4 | 8;
+    bytesSupplied?: number;
+    useMiniListItem?: boolean;
+    useListDataIntegrityCheckBytes?: boolean;
+  };
   limits?: { maxSnapshotBytes?: number; maxListItems?: number; maxReadyLists?: number; maxDelayedLists?: number };
   currentTask?: {
     coverage?: 'complete' | 'out_of_range' | 'truncated' | 'missing_symbol';
@@ -2543,11 +2557,12 @@ export const api = {
   webprobeResult: (id: string) =>
     get<{ result: WebProbeResult | null }>(`/api/images/${id}/webprobe`).then((r) => r.result),
   fuzzStatus: () => get<{ available: boolean }>('/api/fuzz/status'),
-  runFuzz: (id: string, binary: string, seconds?: number, harness?: HarnessClass | 'auto') =>
+  runFuzz: (id: string, binary: string, seconds?: number, harness?: HarnessClass | 'auto', networkPort?: number) =>
     post<{ jobId: string }>(`/api/images/${id}/fuzz`, {
       binary,
       ...(seconds ? { seconds } : {}),
       ...(harness && harness !== 'auto' ? { harness } : {}),
+      ...(networkPort ? { networkPort } : {}),
     }),
   fuzzResult: (id: string) => get<{ result: FuzzResult | null }>(`/api/images/${id}/fuzz`).then((r) => r.result),
   extract: (id: string) => post<{ jobId: string }>(`/api/images/${id}/extract`),

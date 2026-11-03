@@ -184,6 +184,8 @@ export const panels = {
     needBinary: 'Enter a rootfs binary path to fuzz (e.g. bin/busybox).',
     harnessLabel: 'Harness',
     harnessTitle: 'How the fuzzed input reaches the target',
+    networkPort: 'TCP port',
+    networkPortTitle: 'Exact daemon port intercepted by libdesock; FirmLab never guesses it',
     run: 'Fuzz',
     stat: {
       binary: 'Binary',

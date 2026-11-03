@@ -2,7 +2,13 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { computeEntropyProfile } from '../src/entropy.js';
-import { SIGNATURE_RULES, md5, scanSignatures, scanSignaturesDetailed } from '../src/signatures.js';
+import {
+  SIGNATURE_RULES,
+  md5,
+  parseSercommPrefixHeader,
+  scanSignatures,
+  scanSignaturesDetailed,
+} from '../src/signatures.js';
 import { buildStructureSegments, inferIdentity } from '../src/structure.js';
 
 /** Place `bytes` into a zero-filled buffer of `size` at `offset`. */
@@ -395,6 +401,24 @@ describe('signature confidence rubric', () => {
     );
   }
 
+  /** Independent synthetic image matching OpenWrt firmware-utils' mksercommfw 512-byte prefix layout. */
+  function sercommPrefix(opts: { badSecondaryMagic?: boolean; badChecksum?: boolean } = {}): Uint8Array {
+    const buf = img(
+      0x300,
+      [0, ascii('sErCoMm')],
+      [7, [0, 1, 0, 0]],
+      [11, ascii('TEST-HW')],
+      [45, ascii('A1')],
+      [55, u32beBytes(0x01020304)],
+      [63, ascii(opts.badSecondaryMagic ? 'sErCoMX' : 'sErCoMm')],
+    );
+    let sum = 0;
+    for (const byte of buf) sum = (sum + byte) & 0xff;
+    buf[511] = -sum & 0xff;
+    if (opts.badChecksum) buf[0x280] = 1;
+    return buf;
+  }
+
   interface RubricCase {
     id: string;
     /** A fixture the rule must accept. */
@@ -454,6 +478,12 @@ describe('signature confidence rubric', () => {
     },
 
     // --- vendor / platform containers, each with a rejecting structural check ---
+    {
+      id: 'sercomm-prefix',
+      tier: 'verified',
+      pos: sercommPrefix(),
+      neg: sercommPrefix({ badSecondaryMagic: true }),
+    },
     {
       id: 'trx-v2',
       tier: 'consistent',
@@ -596,6 +626,55 @@ describe('signature confidence rubric', () => {
     expect(hit, `${id} did not fire on its positive fixture`).toBeDefined();
     expect(hit?.tier).toBe(tier);
     expect(hit?.score).toBe({ magic: 25, structural: 60, consistent: 85, verified: 99 }[tier]);
+  });
+
+  it('decodes the exact mksercommfw fields and downgrades a broken 8-bit sum without losing the container', () => {
+    const parsed = parseSercommPrefixHeader(sercommPrefix());
+    expect(parsed).toEqual({
+      valid: true,
+      hardwareId: 'TEST-HW',
+      hardwareRevision: 'A1',
+      softwareVersion: 0x01020304,
+      checksumValid: true,
+    });
+    const hit = scanSignatures(sercommPrefix({ badChecksum: true })).find(
+      (candidate) => candidate.id === 'sercomm-prefix',
+    );
+    expect(hit?.tier).toBe('consistent');
+    expect(hit?.rationale).toMatch(/complete-image 8-bit sum is nonzero/);
+    expect(hit?.meta).toMatchObject({
+      hardwareId: 'TEST-HW',
+      hardwareRevision: 'A1',
+      softwareVersion: 0x01020304,
+    });
+  });
+
+  it('rejects malformed Sercomm fields and never finds the anchored prefix when shifted', () => {
+    expect(parseSercommPrefixHeader(sercommPrefix().subarray(0, 511))).toMatchObject({ valid: false });
+    const badVersion = sercommPrefix();
+    badVersion[8] = 2;
+    expect(parseSercommPrefixHeader(badVersion)).toMatchObject({
+      valid: false,
+      reason: expect.stringMatching(/version/),
+    });
+    const nonPrintable = sercommPrefix();
+    nonPrintable[11] = 1;
+    expect(parseSercommPrefixHeader(nonPrintable)).toMatchObject({
+      valid: false,
+      reason: expect.stringMatching(/hardware id/),
+    });
+    const textAfterNul = sercommPrefix();
+    textAfterNul[30] = 0x41;
+    expect(parseSercommPrefixHeader(textAfterNul)).toMatchObject({ valid: false });
+    const badPadding = sercommPrefix();
+    badPadding[100] = 1;
+    expect(parseSercommPrefixHeader(badPadding)).toMatchObject({
+      valid: false,
+      reason: expect.stringMatching(/padding/),
+    });
+    const shifted = new Uint8Array(sercommPrefix().length + 1);
+    shifted.set(sercommPrefix(), 1);
+    expect(scanSignatures(shifted).some((hit) => hit.id === 'sercomm-prefix')).toBe(false);
   });
 
   it.each(CASES.filter((c) => c.neg))('rejects the $id negative fixture and counts the rejection', ({ id, neg }) => {

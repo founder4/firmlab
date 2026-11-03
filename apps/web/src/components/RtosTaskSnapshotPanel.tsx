@@ -1,3 +1,4 @@
+import { listRecordSize } from '@firmlab/core';
 /**
  * RtosTaskSnapshotPanel — the FreeRTOS RAM-snapshot walk (`/rtos/tasks`) on a screen.
  *
@@ -25,7 +26,8 @@
  *
  * The ready lists can instead be declared as the whole `pxReadyTasksLists` array: its address, plus
  * `configMAX_PRIORITIES` and `sizeof(List_t)` as the analyst's build declares them. The declared size is checked
- * against the one layout the walk reads, client-side for an early message and again by the API, which is the
+ * against the layout derived from pointer width and the two declared FreeRTOS list options, client-side for an
+ * early message and again by the API, which is the
  * authority; the array and individual rows are mutually exclusive, because each list is walked once.
  *
  * Folded behind a disclosure on images not classed rtos/baremetal: still usable, never clutter on a Linux image.
@@ -47,9 +49,6 @@ import { ProofStateBadge } from './FindingsLedger';
 /** Mirrors `MAX_SNAPSHOT_BYTES` / `MAX_READY_LISTS` in `apps/api/src/providers/rtos-tasks.ts`. */
 export const MAX_SNAPSHOT_BYTES = 512 * 1024;
 export const MAX_READY_LISTS = 64;
-/** sizeof(List_t) in the one layout the walk reads — core's `listRecordSize` for each declarable pointer width. */
-export const LIST_RECORD_BYTES = { '4': 20, '8': 40 } as const;
-
 type M = Messages['rtosTasks'];
 
 export interface SnapshotForm {
@@ -57,6 +56,8 @@ export interface SnapshotForm {
   base: string;
   endian: '' | 'little' | 'big';
   pointerWidth: '' | '4' | '8';
+  useMiniListItem: boolean;
+  useListDataIntegrityCheckBytes: boolean;
   pxCurrentTCB: string;
   readyLists: { priority: string; address: string }[];
   /** The `pxReadyTasksLists` array; all four empty → not declared. `symbolSize` alone stays optional. */
@@ -85,6 +86,8 @@ export const EMPTY_FORM: SnapshotForm = {
   base: '',
   endian: '',
   pointerWidth: '',
+  useMiniListItem: true,
+  useListDataIntegrityCheckBytes: false,
   pxCurrentTCB: '',
   readyLists: [],
   readyArray: { base: '', maxPriorities: '', listSize: '', symbolSize: '' },
@@ -169,7 +172,14 @@ export function buildSnapshotRequest(
     if (!Number.isSafeInteger(n) || n < 1 || n > MAX_READY_LISTS)
       errors['readyArray.maxPriorities'] = m.error.maxPriorities(MAX_READY_LISTS);
     const size = whole(ra.listSize);
-    const expected = f.pointerWidth ? LIST_RECORD_BYTES[f.pointerWidth] : null;
+    const expected = f.pointerWidth
+      ? listRecordSize({
+          pointerWidth: Number(f.pointerWidth) as 4 | 8,
+          endian: 'little',
+          useMiniListItem: f.useMiniListItem,
+          useListDataIntegrityCheckBytes: f.useListDataIntegrityCheckBytes,
+        })
+      : null;
     if (!Number.isSafeInteger(size) || size < 1) errors['readyArray.listSize'] = m.error.listSizeNumber;
     else if (expected !== null && size !== expected) errors['readyArray.listSize'] = m.error.listSize(expected);
     // ELF st_size 0 means "no or unknown size" (ELF spec): not a size to cross-check against.
@@ -211,6 +221,8 @@ export function buildSnapshotRequest(
         base,
         endian: f.endian as 'little' | 'big',
         pointerWidth: Number(f.pointerWidth) as 4 | 8,
+        useMiniListItem: f.useMiniListItem,
+        useListDataIntegrityCheckBytes: f.useListDataIntegrityCheckBytes,
         bytesBase64: toBase64(f.bytes),
       },
       symbols: {
@@ -596,8 +608,26 @@ export function RtosTaskSnapshotPanel({
             {fieldError('pointerWidth')}
           </div>
         </div>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={form.useMiniListItem}
+              onChange={(e) => set('useMiniListItem', e.target.checked)}
+            />
+            {m.field.useMiniListItem}
+          </label>
+          <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={form.useListDataIntegrityCheckBytes}
+              onChange={(e) => set('useListDataIntegrityCheckBytes', e.target.checked)}
+            />
+            {m.field.useListDataIntegrityCheckBytes}
+          </label>
+        </div>
         <div className="hint">
-          {m.field.addressHint} {m.field.layoutHint}
+          {m.field.addressHint} {m.field.layoutHint} {m.field.listOptionsHint}
         </div>
 
         <div>

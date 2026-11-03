@@ -1,8 +1,8 @@
 /**
  * Bounded, byte-only enumeration of FreeRTOS task records from a memory snapshot — no signature guessing.
  *
- * This is deliberately narrow: it walks ONE evidenced layout (FreeRTOS's `List_t` / `ListItem_t`, as declared in
- * `kernel/include/list.h` with the default `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES == 0` build), and only when
+ * This is deliberately narrow: it walks FreeRTOS's four evidenced `List_t` / `ListItem_t` combinations for
+ * `configUSE_MINI_LIST_ITEM` and `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES`, with a 32-bit `TickType_t`, and only when
  * the caller supplies the address of a real list (a `pxReadyTasksLists[priority]` entry, a delayed, suspended,
  * pending-ready or waiting-termination list — all the same `List_t` — or `pxCurrentTCB`) —
  * never by scanning a buffer for pointer-shaped bytes and guessing they form a task list. A pointer earns a task
@@ -27,6 +27,10 @@ export interface FreeRtosLayout {
   /** sizeof(void*) on the target. Bare-metal Cortex-M/RISC-V32 firmware — this module's evidenced domain — is 4. */
   pointerWidth: 4 | 8;
   endian: 'little' | 'big';
+  /** FreeRTOS defaults this to 1. Optional so stored requests from older builds retain their historical layout. */
+  useMiniListItem?: boolean;
+  /** FreeRTOS defaults this to 0. These bytes change offsets; they are not inferred from a snapshot. */
+  useListDataIntegrityCheckBytes?: boolean;
 }
 
 /** The common default: 32-bit pointers, little-endian (Cortex-M, RISC-V32 in their native mode). */
@@ -106,24 +110,87 @@ export function pointerAlignmentPadding(layout: FreeRtosLayout): number {
   return layout.pointerWidth === 8 ? 4 : 0;
 }
 
-/** `xItemValue` + padding + `pxNext` + `pxPrevious` + `pvOwner` + `pxContainer`, the full `ListItem_t` record. */
-export function listItemRecordSize(layout: FreeRtosLayout): number {
-  return TICK_WIDTH + pointerAlignmentPadding(layout) + 4 * layout.pointerWidth;
+export interface DerivedFreeRtosListLayout {
+  useMiniListItem: boolean;
+  useListDataIntegrityCheckBytes: boolean;
+  listItem: {
+    itemValueOffset: number;
+    nextOffset: number;
+    previousOffset: number;
+    ownerOffset: number;
+    containerOffset: number;
+    size: number;
+  };
+  sentinel: { itemValueOffset: number; nextOffset: number; previousOffset: number; size: number };
+  list: { numberOfItemsOffset: number; indexOffset: number; sentinelOffset: number; size: number };
 }
 
-/** Bytes of the `MiniListItem_t` sentinel the walk reads: `xItemValue` + padding + `pxNext`. */
+const align = (offset: number, width: number): number => Math.ceil(offset / width) * width;
+
+/** Pure ABI layout for the four supported FreeRTOS list configurations. TickType_t remains explicitly 32-bit. */
+export function deriveFreeRtosListLayout(layout: FreeRtosLayout): DerivedFreeRtosListLayout {
+  const ptr = layout.pointerWidth;
+  const integrity = layout.useListDataIntegrityCheckBytes ?? false;
+  const mini = layout.useMiniListItem ?? true;
+
+  const itemValueOffset = integrity ? TICK_WIDTH : 0;
+  const nextOffset = align(itemValueOffset + TICK_WIDTH, ptr);
+  const itemPreviousOffset = nextOffset + ptr;
+  const ownerOffset = itemPreviousOffset + ptr;
+  const containerOffset = ownerOffset + ptr;
+  const itemEnd = containerOffset + ptr + (integrity ? TICK_WIDTH : 0);
+  const itemSize = align(itemEnd, ptr);
+
+  const sentinelItemValueOffset = integrity ? TICK_WIDTH : 0;
+  const sentinelNextOffset = align(sentinelItemValueOffset + TICK_WIDTH, ptr);
+  const sentinelPreviousOffset = sentinelNextOffset + ptr;
+  const miniSentinelSize = align(sentinelPreviousOffset + ptr, ptr);
+  const sentinelSize = mini ? miniSentinelSize : itemSize;
+
+  const numberOfItemsOffset = align(integrity ? TICK_WIDTH : 0, ptr);
+  const indexOffset = numberOfItemsOffset + ptr;
+  const sentinelOffset = indexOffset + ptr;
+  const listEnd = sentinelOffset + sentinelSize + (integrity ? TICK_WIDTH : 0);
+
+  return {
+    useMiniListItem: mini,
+    useListDataIntegrityCheckBytes: integrity,
+    listItem: {
+      itemValueOffset,
+      nextOffset,
+      previousOffset: itemPreviousOffset,
+      ownerOffset,
+      containerOffset,
+      size: itemSize,
+    },
+    sentinel: {
+      itemValueOffset: sentinelItemValueOffset,
+      nextOffset: sentinelNextOffset,
+      previousOffset: sentinelPreviousOffset,
+      size: sentinelSize,
+    },
+    list: { numberOfItemsOffset, indexOffset, sentinelOffset, size: align(listEnd, ptr) },
+  };
+}
+
+/** `xItemValue` + pointers and optional integrity words, the full `ListItem_t` record. */
+export function listItemRecordSize(layout: FreeRtosLayout): number {
+  return deriveFreeRtosListLayout(layout).listItem.size;
+}
+
+/** Bytes of the sentinel head the walk reads, through `pxNext`. */
 export function listSentinelHeadSize(layout: FreeRtosLayout): number {
-  return TICK_WIDTH + pointerAlignmentPadding(layout) + layout.pointerWidth;
+  const d = deriveFreeRtosListLayout(layout).sentinel;
+  return d.nextOffset + layout.pointerWidth;
 }
 
 /**
- * sizeof(`List_t`) under the same evidenced layout the walk reads: `uxNumberOfItems` + `pxIndex` + the full
- * `MiniListItem_t` sentinel (`xItemValue` + padding + `pxNext` + `pxPrevious`). It is the stride between
- * `pxReadyTasksLists[priority]` entries ONLY for a build with that layout — no list-integrity bytes, a 4-byte
- * `TickType_t` — and says nothing about how many priorities a build has.
+ * sizeof(`List_t`) under the declared layout. It is the stride between `pxReadyTasksLists[priority]` entries only
+ * for a build with those two config options and the still-explicit 4-byte `TickType_t`; it says nothing about how
+ * many priorities a build has.
  */
 export function listRecordSize(layout: FreeRtosLayout): number {
-  return 2 * layout.pointerWidth + TICK_WIDTH + pointerAlignmentPadding(layout) + 2 * layout.pointerWidth;
+  return deriveFreeRtosListLayout(layout).list.size;
 }
 
 /** What one walk saw beyond the base result: the header count, container back-pointers, and the item values in order. */
@@ -161,14 +228,10 @@ function walkList(
 
   const ptr = layout.pointerWidth;
   const le = layout.endian === 'little';
-  const pad = pointerAlignmentPadding(layout);
-  const recordSize = listItemRecordSize(layout);
-  const nextOffset = TICK_WIDTH + pad;
-  const ownerOffset = nextOffset + 2 * ptr;
-  const containerOffset = nextOffset + 3 * ptr;
-  const sentinelHeadSize = nextOffset + ptr;
-  // List_t header (no integrity-check bytes): uxNumberOfItems (ptr-width) + pxIndex (ptr-width) precede xListEnd.
-  const sentinelAddress = listAddress + 2 * ptr;
+  const derived = deriveFreeRtosListLayout(layout);
+  const recordSize = derived.listItem.size;
+  const sentinelHeadSize = derived.sentinel.nextOffset + ptr;
+  const sentinelAddress = listAddress + derived.list.sentinelOffset;
   const regionEnd = regionBase + buf.length;
 
   const inRegion = (addr: number) => addr >= regionBase && addr < regionEnd;
@@ -186,9 +249,9 @@ function walkList(
   }
   // uxNumberOfItems is UBaseType_t, pointer-width on every port this layout models. Read only when it is in the
   // buffer: the header is an annotation, and its absence never changes how the chain itself is walked.
-  const declaredItems = inRegion(listAddress) ? readField(listAddress, 0) : null;
+  const declaredItems = inRegion(listAddress) ? readField(listAddress, derived.list.numberOfItemsOffset) : null;
 
-  let cur = readField(sentinelAddress, nextOffset);
+  let cur = readField(sentinelAddress, derived.sentinel.nextOffset);
   const visited = new Set<number>();
   const tasks: FreeRtosTaskRecord[] = [];
   const evidence: string[] = [];
@@ -219,15 +282,15 @@ function walkList(
       break;
     }
     visited.add(cur);
-    const itemValue = readUint(buf, cur - regionBase, TICK_WIDTH, le);
-    const ownerAddr = readField(cur, ownerOffset);
-    if (readField(cur, containerOffset) !== listAddress) containerMismatches.push(cur);
+    const itemValue = readUint(buf, cur - regionBase + derived.listItem.itemValueOffset, TICK_WIDTH, le);
+    const ownerAddr = readField(cur, derived.listItem.ownerOffset);
+    if (readField(cur, derived.listItem.containerOffset) !== listAddress) containerMismatches.push(cur);
     if (ownerAddr === 0) {
       evidence.push(`list item at 0x${cur.toString(16)} has a null owner — not corroborated as a task`);
     } else {
       tasks.push({ listItemAddress: cur, itemValue, tcbAddress: ownerAddr });
     }
-    cur = readField(cur, nextOffset);
+    cur = readField(cur, derived.listItem.nextOffset);
   }
 
   return {
@@ -457,8 +520,8 @@ export const FREERTOS_OVER_DECLARED_COUNT =
 /**
  * Turn a declared ready-list array into per-priority list addresses — or refuse, saying why.
  *
- * The declared `sizeof(List_t)` is evidence, not a stride to walk at: the walk reads exactly one layout (no
- * list-integrity bytes, a 4-byte `TickType_t`), so a declared size that differs from `listRecordSize(layout)` means
+ * The declared `sizeof(List_t)` is evidence, not a stride to walk at: the walk derives one of the four supported
+ * mini/integrity layouts with a 4-byte `TickType_t`, so a size that differs from `listRecordSize(layout)` means
  * every field past the header would be read at the wrong offset, and the derivation refuses rather than walking at
  * the declared stride. An `st_size` that disagrees with `maxPriorities × listSize` means one of three facts is
  * wrong, and nothing here can say which, so that refuses too.
@@ -466,8 +529,7 @@ export const FREERTOS_OVER_DECLARED_COUNT =
  * Size equality is necessary, not sufficient. On a 64-bit port a 64-bit `TickType_t` produces the same 40-byte
  * `List_t` as the modelled 4-byte tick plus 4 bytes of padding; the pointers sit at the same offsets there, so the
  * ready walk stays pointer-correct, and only `xItemValue` — not maintained on a ready list — is read at 4 bytes.
- * Conversely a build whose sentinel is a full `ListItem_t` (FreeRTOS's `configUSE_MINI_LIST_ITEM = 0`, recalled,
- * not verified here) is refused even though it could in principle be walked: an explicit false refusal, never a guess.
+ * `TickType_t` width remains declared by the implementation rather than inferred from equal record sizes.
  *
  * What a later walk can and cannot catch. The stride is forced equal to the layout, so it cannot be wrong; a base
  * that is NOT a whole number of `List_t` records off shows up as items whose `pxContainer` does not point back. A
@@ -506,13 +568,15 @@ export function deriveFreeRtosReadyLists(
   }
   const stride = listRecordSize(layout);
   if (listSize !== stride) {
-    const tick = layout.pointerWidth === 4 ? ', 4-byte TickType_t' : '';
+    const d = deriveFreeRtosListLayout(layout);
     return {
       status: 'refused',
       code: 'layout_mismatch',
       reason:
-        `the build's List_t is declared as ${listSize} bytes but the walker reads the ${stride}-byte default layout ` +
-        `(no list-integrity bytes${tick}); walking at a ${listSize}-byte stride would read fields at the wrong offsets`,
+        `the build's List_t is declared as ${listSize} bytes but the declared FreeRTOS options produce a ` +
+        `${stride}-byte layout (configUSE_MINI_LIST_ITEM=${d.useMiniListItem ? 1 : 0}, ` +
+        `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES=${d.useListDataIntegrityCheckBytes ? 1 : 0}, ` +
+        `TickType_t=4 bytes); walking at a ${listSize}-byte stride would read fields at the wrong offsets`,
     };
   }
   const arrayBytes = n * listSize;

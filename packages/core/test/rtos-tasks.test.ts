@@ -3,6 +3,7 @@ import {
   FREERTOS_ITEM_VALUE_MEANING,
   FREERTOS_OVER_DECLARED_COUNT,
   type FreeRtosListKind,
+  deriveFreeRtosListLayout,
   deriveFreeRtosReadyLists,
   listItemRecordSize,
   listRecordSize,
@@ -352,6 +353,61 @@ describe('parseFreeRtosNamedList', () => {
     expect(listItemRecordSize({ pointerWidth: 8, endian: 'little' })).toBe(40);
     expect(listSentinelHeadSize({ pointerWidth: 4, endian: 'little' })).toBe(8);
     expect(listSentinelHeadSize({ pointerWidth: 8, endian: 'little' })).toBe(16);
+  });
+
+  it('derives the four FreeRTOS list layouts on 32-bit and 64-bit targets', () => {
+    const expected = [
+      { pointerWidth: 4 as const, mini: true, integrity: false, item: 20, sentinel: 12, list: 20 },
+      { pointerWidth: 4 as const, mini: false, integrity: false, item: 20, sentinel: 20, list: 28 },
+      { pointerWidth: 4 as const, mini: true, integrity: true, item: 28, sentinel: 16, list: 32 },
+      { pointerWidth: 4 as const, mini: false, integrity: true, item: 28, sentinel: 28, list: 44 },
+      { pointerWidth: 8 as const, mini: true, integrity: false, item: 40, sentinel: 24, list: 40 },
+      { pointerWidth: 8 as const, mini: false, integrity: false, item: 40, sentinel: 40, list: 56 },
+      { pointerWidth: 8 as const, mini: true, integrity: true, item: 48, sentinel: 24, list: 56 },
+      { pointerWidth: 8 as const, mini: false, integrity: true, item: 48, sentinel: 48, list: 80 },
+    ];
+    for (const e of expected) {
+      const d = deriveFreeRtosListLayout({
+        pointerWidth: e.pointerWidth,
+        endian: 'little',
+        useMiniListItem: e.mini,
+        useListDataIntegrityCheckBytes: e.integrity,
+      });
+      expect([d.listItem.size, d.sentinel.size, d.list.size]).toEqual([e.item, e.sentinel, e.list]);
+    }
+  });
+
+  it('walks one byte-exact 32-bit list under every mini/integrity combination', () => {
+    for (const useMiniListItem of [true, false]) {
+      for (const useListDataIntegrityCheckBytes of [false, true]) {
+        const layout = {
+          pointerWidth: 4 as const,
+          endian: 'little' as const,
+          useMiniListItem,
+          useListDataIntegrityCheckBytes,
+        };
+        const d = deriveFreeRtosListLayout(layout);
+        const buf = new Uint8Array(0x200);
+        const dv = new DataView(buf.buffer);
+        const item = REGION_BASE + 0x100;
+        const sentinel = LIST_ADDR + d.list.sentinelOffset;
+        const write = (address: number, value: number) => dv.setUint32(address - REGION_BASE, value, true);
+        write(LIST_ADDR + d.list.numberOfItemsOffset, 1);
+        write(sentinel + d.sentinel.nextOffset, item);
+        write(item + d.listItem.itemValueOffset, 0x1234);
+        write(item + d.listItem.nextOffset, sentinel);
+        write(item + d.listItem.ownerOffset, 0x3000_0042);
+        write(item + d.listItem.containerOffset, LIST_ADDR);
+        expect(parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'delayed', address: LIST_ADDR }, layout)).toMatchObject(
+          {
+            coverage: 'complete',
+            declaredItems: 1,
+            containerMismatches: 0,
+            tasks: [{ listItemAddress: item, itemValue: 0x1234, tcbAddress: 0x3000_0042 }],
+          },
+        );
+      }
+    }
   });
 
   it('strides adjacent List_t records by listRecordSize, the way pxReadyTasksLists[] lays them out', () => {

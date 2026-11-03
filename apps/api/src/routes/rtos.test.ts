@@ -88,7 +88,14 @@ describe('RTOS task snapshot route', () => {
     expect(mocks.startJob).toHaveBeenCalledWith(
       'image-1',
       'rtos-tasks',
-      { base: BASE, endian: 'little', pointerWidth: 4, bytes: 0x60 },
+      {
+        base: BASE,
+        endian: 'little',
+        pointerWidth: 4,
+        useMiniListItem: true,
+        useListDataIntegrityCheckBytes: false,
+        bytes: 0x60,
+      },
       expect.any(Function),
     );
     const result = await runQueued();

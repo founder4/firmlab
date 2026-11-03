@@ -15,6 +15,7 @@ import {
   formatFuzzCommand,
   fuzzCoverageStatement,
   isNetworkDaemon,
+  normalizeNetworkPort,
   planFuzz,
   shellQuote,
 } from './fuzz.js';
@@ -49,7 +50,7 @@ function deployment(over: Partial<FuzzDeployment> = {}): FuzzDeployment {
 function plan(
   binary: string,
   head: Buffer | null,
-  opts: { harness?: HarnessClass | 'auto'; mode?: FuzzMode | 'auto'; seconds?: number } = {},
+  opts: { harness?: HarnessClass | 'auto'; mode?: FuzzMode | 'auto'; seconds?: number; networkPort?: number } = {},
   dep: FuzzDeployment = deployment(),
 ): FuzzPlan {
   return planFuzz({ binary, target: classifyTarget(binary, head), seconds: opts.seconds ?? 60, ...opts }, dep);
@@ -236,18 +237,34 @@ describe('planFuzz — the input channel', () => {
     expect(p.inputChannel).toMatch(/does not read stdin/);
   });
 
-  it('an arch-matched desock preload makes the socket the channel', () => {
+  it('an ABI-confirmed, arch-matched desock with an explicit port makes the socket the channel', () => {
     const p = plan(
       'usr/sbin/httpd',
       ARM_ELF,
-      {},
-      deployment({ desock: { path: '/opt/libdesock-arm.so', arch: 'arm' } }),
+      { networkPort: 8080 },
+      deployment({ desock: { path: '/opt/libdesock-arm.so', arch: 'arm', abiCompatible: true } }),
     );
     expect(p.harness).toBe('network');
     expect(p.harnessNote).toBeUndefined();
     expect(p.env.AFL_PRELOAD).toBe('/opt/libdesock-arm.so');
-    expect(p.env.QEMU_SET_ENV).toBe('LD_PRELOAD=/opt/libdesock-arm.so');
+    expect(p.env.DESOCK_PORT).toBe('8080');
+    expect(p.env.DESOCK_FORK).toBe('1');
+    expect(p.env.DESOCK_CLOSE_EXIT).toBe('1');
+    expect(p.env.QEMU_SET_ENV).toContain('DESOCK_PORT=8080');
+    expect(p.networkPort).toBe(8080);
     expect(p.inputChannel).toMatch(/accept\/recv/);
+  });
+
+  it('will not guess a daemon port or infer libc compatibility from matching ISA', () => {
+    const asset = { path: '/opt/libdesock-arm.so', arch: 'arm' as const, abiCompatible: false };
+    const noAbi = plan('usr/sbin/httpd', ARM_ELF, { networkPort: 80 }, deployment({ desock: asset }));
+    expect(noAbi.env.AFL_PRELOAD).toBeUndefined();
+    expect(noAbi.harnessNote).toMatch(/no proof that its libc\/loader ABI matches/);
+
+    const noPort = plan('usr/sbin/httpd', ARM_ELF, {}, deployment({ desock: { ...asset, abiCompatible: true } }));
+    expect(noPort.env.AFL_PRELOAD).toBeUndefined();
+    expect(noPort.harnessNote).toMatch(/will not guess/);
+    expect(noPort.inputChannel).toMatch(/SOCKET is not fuzzed/);
   });
 
   it('an arch-mismatched preload is not used, and the run says the socket was not fuzzed', () => {
@@ -255,7 +272,7 @@ describe('planFuzz — the input channel', () => {
       'usr/sbin/httpd',
       ARM_ELF,
       {},
-      deployment({ desock: { path: '/opt/libdesock-mipsel.so', arch: 'mipsel' } }),
+      deployment({ desock: { path: '/opt/libdesock-mipsel.so', arch: 'mipsel', abiCompatible: true } }),
     );
     expect(p.env.AFL_PRELOAD).toBeUndefined();
     expect(p.harnessNote).toMatch(/is mipsel and the target is arm/);
@@ -264,7 +281,12 @@ describe('planFuzz — the input channel', () => {
   });
 
   it('a preload whose arch could not be read is treated as unusable, not as a match', () => {
-    const p = plan('usr/sbin/httpd', ARM_ELF, {}, deployment({ desock: { path: '/opt/x.so', arch: 'unknown' } }));
+    const p = plan(
+      'usr/sbin/httpd',
+      ARM_ELF,
+      {},
+      deployment({ desock: { path: '/opt/x.so', arch: 'unknown', abiCompatible: true } }),
+    );
     expect(p.env.AFL_PRELOAD).toBeUndefined();
     expect(p.harnessNote).toMatch(/could not be read from its ELF header/);
   });
@@ -364,16 +386,42 @@ describe('detectDesockPreload', () => {
   afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
   it('reads the preload’s arch from its own ELF header', () => {
-    expect(detectDesockPreload({ FIRMLAB_DESOCK: armLib })).toEqual({ path: armLib, arch: 'arm' });
+    expect(detectDesockPreload({ FIRMLAB_DESOCK: armLib })).toEqual({
+      path: armLib,
+      arch: 'arm',
+      abiCompatible: false,
+    });
+    expect(detectDesockPreload({ FIRMLAB_DESOCK: armLib, FIRMLAB_DESOCK_ABI_COMPATIBLE: '1' })).toEqual({
+      path: armLib,
+      arch: 'arm',
+      abiCompatible: true,
+    });
   });
 
   it('reports an unreadable preload as arch unknown rather than as a match', () => {
-    expect(detectDesockPreload({ FIRMLAB_DESOCK: junk })).toEqual({ path: junk, arch: 'unknown' });
+    expect(detectDesockPreload({ FIRMLAB_DESOCK: junk })).toEqual({
+      path: junk,
+      arch: 'unknown',
+      abiCompatible: false,
+    });
   });
 
   it('returns null when unset or missing (→ honest degradation)', () => {
     expect(detectDesockPreload({})).toBeNull();
     expect(detectDesockPreload({ FIRMLAB_DESOCK: path.join(tmp, 'nope.so') })).toBeNull();
+  });
+});
+
+describe('normalizeNetworkPort', () => {
+  it('accepts only concrete integer ports', () => {
+    expect(normalizeNetworkPort(1)).toBe(1);
+    expect(normalizeNetworkPort('8080')).toBe(8080);
+    expect(normalizeNetworkPort(65_535)).toBe(65_535);
+    expect(normalizeNetworkPort(undefined)).toBeNull();
+    expect(normalizeNetworkPort(0)).toBeNull();
+    expect(normalizeNetworkPort(65_536)).toBeNull();
+    expect(normalizeNetworkPort(80.5)).toBeNull();
+    expect(normalizeNetworkPort('')).toBeNull();
   });
 });
 

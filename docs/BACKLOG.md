@@ -96,7 +96,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   subsistema no mapeado y páginas no examinadas siguen explícitamente provisionales. El VEX de proveedor ya está
   hecho (`9688463`, `96e496a`, `b8f8c63`: veredicto sobre filas kernel-cve y grype, nunca cambia el estado de
   prueba). Falta usar diff de parches para resolver backports sin inferirlos, que exige fuentes del kernel del
-  proveedor y no es acotable sin red.
+  proveedor y no es acotable sin red. *(Investigado 2026-11-03 contra fuentes primarias: el registro CVE 5.x de la
+  CNA Linux aporta rutas y commits introductores/fix; para CVE-2026-43286, tres fixes de ramas estables distintas
+  producen el mismo `git patch-id --stable`, por lo que un mirror local puede reconocer un backport aunque cambie
+  el hash. Esto sólo prueba que el árbol fuente contiene un diff equivalente: no vincula ese árbol al kernel del
+  firmware. MVP pendiente: parser CVE puro + comparación Git local acotada, persistiendo `backportEvidence` con
+  denominadores y `artifactBinding: unverified`, sin cambiar `ProofState`; resolverlo exige después un rebuild
+  reproducible que ligue fuente, configuración, toolchain y bytes extraídos.)*
 - [x] Hacer que la reparación del guest alcance una ruta ejecutada. *(Hecho en `294c841` y endurecido en
   `619f618`.)* El boot real del WR940N en contenedor desechable y sin red probó primero que la entrada anterior no
   se ejecutaba: `busybox init` anteponía `exec` y el `msh` 1.01 tampoco aceptaba la aritmética del contador. La
@@ -142,7 +148,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   encadena símbolos → captura RAM Renode (`stm32f4.repl`, offline) → recorrido sin direcciones a mano: las listas
   ready/delayed/suspended contienen exactamente las tareas creadas, a 1/3/7 s, y un `sizeof(List_t)` mal declarado
   se rechaza. Es emulación de un build sintético; no prueba un dispositivo, otras configuraciones ni el corpus.)*
-  Faltan: un ELF FreeRTOS de fabricante (el corpus sólo tiene Zephyr y Contiki), variantes de layout declaradas `configUSE_MINI_LIST_ITEM = 0`/bytes de integridad (F3) y anotación por `uxTopReadyPriority` (F4) — ambas exigen verificar la semántica contra el fuente de FreeRTOS, no de memoria, y no hay fuente local ni red en la campaña —, colas de eventos/bloqueo y fuzzing de periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
+  *(F3 hecho 2026-11-03 contra `FreeRTOS-Kernel` V11.1.0 y la rama oficial actual: una única función pura deriva
+  offsets y tamaños para `configUSE_MINI_LIST_ITEM` 0/1 y `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES` 0/1, con
+  `TickType_t` todavía explícitamente de 32 bits. Core, API y panel declaran/persisten ambas opciones; omitirlas
+  conserva los defaults históricos (mini=1, integridad=0), y `sizeof(List_t)` se confronta con el layout efectivo.
+  Fixtures byte-a-byte recorren las cuatro combinaciones de 32 bits y fijan la matriz de tamaños también en 64
+  bits. Los bytes 0x5a sólo seleccionan offsets: aún no se leen como prueba de integridad.)* Faltan: un ELF
+  FreeRTOS de fabricante (el corpus sólo tiene Zephyr y Contiki), validación Renode real de las cuatro variantes,
+  anotación por `uxTopReadyPriority` (F4), `TickType_t` 16/64, colas de eventos/bloqueo y fuzzing de
+  periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee
   además `FLMSTR1` (maestro CPU/BIOS) y emite `spi-descriptor-host-write` (`static_confirmed`, medium) sólo cuando
@@ -163,8 +177,14 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   LogoFAIL, callouts SMM (`CommBuffer`) y una captura PRx/BIOS-lock que pruebe la postura en ejecución.
 - [ ] Fuzzing avanzado. El planificador ya elige cmplog/compcov/plain según arquitectura, fija canal de entrada
   archivo/stdin/socket, comprueba la arquitectura de `FIRMLAB_DESOCK` y declara cero ejecuciones/crashes con sus
-  límites. Faltan un libdesock preconstruido por arquitectura y evidencia de runs reales; fuzzing
-  stateful/full-system (Fuzzware/µEmu) sigue siendo la frontera RTOS.
+  límites. *(Investigado e implementado 2026-11-03: el `utils/libaflppdesock` del AFL++ fijado en la imagen exige
+  `DESOCK_PORT`; compilado en contenedor offline quedó enlazado con glibc. Un servidor TCP C sintético recibió por
+  stdin mediante el preload con puerto 8080, mientras puerto ausente/erróneo agotó el tiempo y un runtime Python
+  cayó, evidencia de que ISA coincidente no demuestra ABI compatible. FirmLab ya no carga el preload ni afirma
+  canal socket sin puerto 1..65535 explícito y `FIRMLAB_DESOCK_ABI_COMPATIBLE=1`; propaga `DESOCK_PORT`, fork y
+  cierre al guest, y la UI pide el puerto sólo para el harness network.)* Faltan preloads preconstruidos y
+  comprobados para cada pareja arquitectura/libc, evidencia sobre un daemon real de firmware y fuzzing
+  stateful/full-system (Fuzzware/µEmu), que sigue siendo la frontera RTOS.
 - [x] Cross-binary dataflow: el primer scaffold acotado enlaza escrituras y lecturas de la misma clave literal
   UCI/NVRAM entre artefactos distintos y un sink del consumidor, separa namespaces y excluye autoenlaces. Es una
   correlación `needs_runtime_reproduction`: no inventa orden temporal, control-flow ni ausencia de sanitización.
@@ -222,15 +242,20 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   descriptor de flash de Intel y `$FPT`), no las ~130 del plan original. **El límite no es el esfuerzo: es que
   cada magic va emparejado con un chequeo de campos que el propio formato declara y con capacidad de rechazar, y
   un magic que no se puede comprobar estructuralmente es una regla que dispara sobre coincidencias que después
-  hay que explicar.** Quedan fuera por eso, no por olvido: Realtek (`csys`/`cr6c`/`cs6c`), Sercomm, el header
+  hay que explicar.** Quedan fuera por eso, no por olvido: Realtek (`csys`/`cr6c`/`cs6c`) y el header
   MTK y el header legacy de TP-Link —reconstruirlos de memoria es justo la clase de afirmación que la tabla CVE
   curada tiene prohibida—. Reautorarlos clean-room contra la fuente del formato (OpenWrt `mkfwimage`-style) es
   lo que falta. *(Header legacy de TP-Link hecho: `tplink-v1`, magic de 24 bytes versión + «TP-LINK
   Technologies», rechazo si kernel/rootfs exceden la longitud declarada, y `verified` cuando el MD5 con sal
   recomputa. Formato y las dos sales —`normal` y `boot`— medidos el 2026-09-26 sobre las muestras locales, no
   recordados: 6 de 7 cabeceras reales verifican (exterior con bootloader → `boot`, interior → `normal`) y la de la
-  imagen MR3220 dentro del volcado Asus queda en `structural`, sin rechazo. Realtek, Sercomm y MTK siguen
-  pendientes: ninguna muestra local los contiene —los «MTK» del corpus son cadenas sueltas, no cabeceras—.)*
+  imagen MR3220 dentro del volcado Asus queda en `structural`, sin rechazo. Sercomm prefijo hecho 2026-11-03
+  clean-room contra el `mksercommfw.c` oficial de OpenWrt: `sErCoMm` doble, versión, campos ASCII NUL-padded,
+  reservados y padding exactos; la suma de 8 bits sobre la imagen completa eleva a `verified`, un desacuerdo queda
+  `consistent` y una estructura rota se rechaza. El generador oficial compilado produjo el mismo layout sobre
+  payload sintético; no hay muestra real local, no cubre el footer ni variantes modernas y el checksum no es
+  autenticidad. Realtek y MTK siguen pendientes: ninguna muestra local los contiene —los «MTK» del corpus son
+  cadenas sueltas, no cabeceras—.)*
   Xiaomi ya está cubierto por HDR1 y no necesita regla propia: un magic identifica un FORMATO de
   contenedor, no una marca, y las descripciones no atribuyen de más.
 - [x] Corroboración JFFS2 por tipo de nodo compartida entre escáner y clasificador. El predicado puro exportado

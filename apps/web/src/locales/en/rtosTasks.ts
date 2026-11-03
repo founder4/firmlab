@@ -23,6 +23,10 @@ export const rtosTasks = {
     pointerWidth: 'Pointer width',
     pointerChoose: 'Choose…',
     bytes: (n: number) => `${n} bytes`,
+    useMiniListItem: 'Use configUSE_MINI_LIST_ITEM',
+    useListDataIntegrityCheckBytes: 'Use configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES',
+    listOptionsHint:
+      'Defaults match FreeRTOS (mini list item on, integrity words off). Declare the build options; they are never inferred from RAM.',
     layoutHint: 'Both must be declared: a wrong default reads plausible-looking garbage, so the API has none.',
     pxCurrentTCB: 'pxCurrentTCB address (optional)',
     readyLists: 'Ready lists (pxReadyTasksLists[priority])',
@@ -33,7 +37,7 @@ export const rtosTasks = {
     removeList: (i: number) => `Remove ready list ${i}`,
     readyArray: 'Or the whole ready-list array (pxReadyTasksLists)',
     readyArrayHint:
-      "Instead of individual lists: the array address and the two numbers your build declares. Every priority is then walked. sizeof(List_t) is checked against the one layout the walk reads (20 bytes with 4-byte pointers, 40 with 8), never used blind. The symbol's st_size, in bytes, is an optional cross-check.",
+      "Instead of individual lists: the array address and the two numbers your build declares. Every priority is then walked. sizeof(List_t) is checked against the pointer width and the two declared FreeRTOS list options, never used blind. The symbol's st_size, in bytes, is an optional cross-check.",
     arrayBase: 'pxReadyTasksLists address',
     maxPriorities: 'configMAX_PRIORITIES',
     listSize: 'sizeof(List_t)',
@@ -69,7 +73,7 @@ export const rtosTasks = {
     arrayBase: 'The array needs its address; take it from the pxReadyTasksLists symbol.',
     maxPriorities: (max: number) => `Enter configMAX_PRIORITIES as a whole number from 1 to ${max}.`,
     listSize: (expected: number) =>
-      `The walk reads a ${expected}-byte List_t with this pointer width. A build with list-integrity bytes or a wider tick type has a different layout, which this walk refuses rather than misreads.`,
+      `The declared pointer width and FreeRTOS list options produce a ${expected}-byte List_t. A wider tick type is still unsupported and is refused rather than misread.`,
     listSizeNumber: 'Enter sizeof(List_t) as a positive whole number of bytes.',
     symbolSize: 'Enter st_size as a whole number of bytes, or leave it empty.',
     arrayOverflow: (base: string, bytes: number, bits: number) =>

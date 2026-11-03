@@ -118,7 +118,13 @@ describe('RtosTaskSnapshotPanel', () => {
     expect(await screen.findByText('memory.base + snapshot length overflows the address space')).toBeInTheDocument();
     expect(screen.getByText(m.refusedHeading)).toBeInTheDocument();
     const input = mockApi.runRtosTasks.mock.calls[0]?.[1];
-    expect(input?.memory).toMatchObject({ base: 0x20000000, endian: 'little', pointerWidth: 4 });
+    expect(input?.memory).toMatchObject({
+      base: 0x20000000,
+      endian: 'little',
+      pointerWidth: 4,
+      useMiniListItem: true,
+      useListDataIntegrityCheckBytes: false,
+    });
     expect(input?.memory.bytesBase64).toBe(btoa(String.fromCharCode(...new Uint8Array(64))));
   });
 
@@ -659,6 +665,33 @@ describe('buildSnapshotRequest', () => {
     });
     const clash = buildSnapshotRequest({ ...base, readyArray: array, suspendedList: '0x128' }, m);
     expect(clash.ok === false && clash.errors.suspendedList).toBe(m.error.addressRepeated('0x128'));
+  });
+
+  it('checks sizeof(List_t) against all four declared FreeRTOS list layouts', () => {
+    const cases = [
+      { mini: true, integrity: false, size: 20 },
+      { mini: false, integrity: false, size: 28 },
+      { mini: true, integrity: true, size: 32 },
+      { mini: false, integrity: true, size: 44 },
+    ];
+    for (const c of cases) {
+      const r = buildSnapshotRequest(
+        {
+          ...base,
+          useMiniListItem: c.mini,
+          useListDataIntegrityCheckBytes: c.integrity,
+          readyArray: { base: '0x100', maxPriorities: '1', listSize: String(c.size), symbolSize: '' },
+        },
+        m,
+      );
+      expect(r.ok, `${JSON.stringify(c)} should be accepted`).toBe(true);
+      if (r.ok) {
+        expect(r.input.memory).toMatchObject({
+          useMiniListItem: c.mini,
+          useListDataIntegrityCheckBytes: c.integrity,
+        });
+      }
+    }
   });
 
   it('refuses the array beside individual rows, a size the walk cannot read, and a disagreeing st_size', () => {

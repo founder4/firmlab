@@ -161,6 +161,8 @@ export const panels: Messages['panels'] = {
     needBinary: 'Escribe la ruta de un binario del rootfs al que fuzzear (p. ej. bin/busybox).',
     harnessLabel: 'Vía de entrada',
     harnessTitle: 'Cómo llega al objetivo la entrada generada',
+    networkPort: 'Puerto TCP',
+    networkPortTitle: 'Puerto exacto del daemon que intercepta libdesock; FirmLab nunca lo adivina',
     run: 'Ejecutar fuzzing',
     stat: {
       binary: 'Binario',

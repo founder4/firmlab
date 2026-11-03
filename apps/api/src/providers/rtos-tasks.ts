@@ -77,6 +77,8 @@ export interface RtosTaskSnapshotInput {
     base: number;
     endian: 'little' | 'big';
     pointerWidth: 4 | 8;
+    useMiniListItem?: boolean;
+    useListDataIntegrityCheckBytes?: boolean;
     /** The raw RAM bytes, base64. */
     bytesBase64: string;
   };
@@ -174,7 +176,14 @@ export interface RtosTaskSnapshotResult {
   /** `complete` only when every lane is; `none` when no lane is. */
   coverage: 'complete' | 'partial' | 'none';
   summary: string;
-  snapshot: { base: number; endian: 'little' | 'big'; pointerWidth: 4 | 8; bytesSupplied: number };
+  snapshot: {
+    base: number;
+    endian: 'little' | 'big';
+    pointerWidth: 4 | 8;
+    bytesSupplied: number;
+    useMiniListItem?: boolean;
+    useListDataIntegrityCheckBytes?: boolean;
+  };
   limits: { maxSnapshotBytes: number; maxListItems: number; maxReadyLists: number; maxDelayedLists?: number };
   currentTask: RtosCurrentTaskLane;
   readyLists: RtosReadyListLane[];
@@ -209,8 +218,13 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
   if (!isRecord(symbols)) return { ok: false, errors: ['symbols must be an object'] };
 
   const { base, endian, pointerWidth, bytesBase64 } = memory;
+  const useMiniListItem = memory.useMiniListItem ?? true;
+  const useListDataIntegrityCheckBytes = memory.useListDataIntegrityCheckBytes ?? false;
   if (endian !== 'little' && endian !== 'big') errors.push("memory.endian must be declared as 'little' or 'big'");
   if (pointerWidth !== 4 && pointerWidth !== 8) errors.push('memory.pointerWidth must be declared as 4 or 8');
+  if (typeof useMiniListItem !== 'boolean') errors.push('memory.useMiniListItem must be boolean when supplied');
+  if (typeof useListDataIntegrityCheckBytes !== 'boolean')
+    errors.push('memory.useListDataIntegrityCheckBytes must be boolean when supplied');
   const addrLimit = pointerWidth === 4 ? 2 ** 32 : Number.MAX_SAFE_INTEGER;
   const isAddr = (v: unknown): v is number =>
     Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) < addrLimit;
@@ -292,7 +306,12 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
         listSize: array.listSize,
         symbolSize: (array.symbolSize as number | null | undefined) ?? null,
       };
-      const layout: FreeRtosLayout = { pointerWidth, endian: endian === 'big' ? 'big' : 'little' };
+      const layout: FreeRtosLayout = {
+        pointerWidth,
+        endian: endian === 'big' ? 'big' : 'little',
+        useMiniListItem: useMiniListItem === true,
+        useListDataIntegrityCheckBytes: useListDataIntegrityCheckBytes === true,
+      };
       const d = deriveFreeRtosReadyLists(spec, layout, MAX_READY_LISTS);
       if (d.status === 'refused') errors.push(`symbols.readyListArray: ${d.reason}`);
       else {
@@ -365,7 +384,12 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
     snapshot: {
       buf,
       base: base as number,
-      layout: { endian: endian as 'little' | 'big', pointerWidth: pointerWidth as 4 | 8 },
+      layout: {
+        endian: endian as 'little' | 'big',
+        pointerWidth: pointerWidth as 4 | 8,
+        useMiniListItem: useMiniListItem === true,
+        useListDataIntegrityCheckBytes: useListDataIntegrityCheckBytes === true,
+      },
       pxCurrentTCB: (cur as number | null | undefined) ?? null,
       readyLists,
       ...(readyListArray !== undefined ? { readyListArray } : {}),
@@ -549,7 +573,14 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     proofState: 'needs_runtime_reproduction',
     coverage,
     summary,
-    snapshot: { base: s.base, endian: s.layout.endian, pointerWidth: ptr, bytesSupplied: s.buf.length },
+    snapshot: {
+      base: s.base,
+      endian: s.layout.endian,
+      pointerWidth: ptr,
+      bytesSupplied: s.buf.length,
+      useMiniListItem: s.layout.useMiniListItem ?? true,
+      useListDataIntegrityCheckBytes: s.layout.useListDataIntegrityCheckBytes ?? false,
+    },
     limits: {
       maxSnapshotBytes: MAX_SNAPSHOT_BYTES,
       maxListItems: MAX_LIST_ITEMS,

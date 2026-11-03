@@ -72,6 +72,29 @@ describe('validateRtosTaskSnapshot', () => {
       validateRtosTaskSnapshot({ memory: { ...mem, bytesBase64: 'AAAAAA==' }, symbols: { pxCurrentTCB: -4 } }).ok,
     ).toBe(false);
   });
+
+  it('defaults the historical list layout and validates explicit FreeRTOS list options', () => {
+    const historical = validateRtosTaskSnapshot(body(snapshot(), SYMBOLS));
+    expect(historical.ok && historical.snapshot.layout).toMatchObject({
+      useMiniListItem: true,
+      useListDataIntegrityCheckBytes: false,
+    });
+
+    const explicit = body(snapshot(), { readyListArray: { base: LIST, maxPriorities: 1, listSize: 44 } });
+    explicit.memory.useMiniListItem = false;
+    explicit.memory.useListDataIntegrityCheckBytes = true;
+    const validated = validateRtosTaskSnapshot(explicit);
+    expect(validated.ok && validated.snapshot.layout).toMatchObject({
+      useMiniListItem: false,
+      useListDataIntegrityCheckBytes: true,
+    });
+
+    const invalid = validateRtosTaskSnapshot({
+      ...body(snapshot(), SYMBOLS),
+      memory: { ...body(snapshot(), SYMBOLS).memory, useMiniListItem: 'yes' },
+    });
+    expect(invalid.ok === false && invalid.errors.join('\n')).toMatch(/useMiniListItem must be boolean/);
+  });
 });
 
 describe('runRtosTaskSnapshot', () => {
@@ -79,6 +102,7 @@ describe('runRtosTaskSnapshot', () => {
     const r = run(body(snapshot(), SYMBOLS));
     expect(r.coverage).toBe('complete');
     expect(r.proofState).toBe('needs_runtime_reproduction');
+    expect(r.snapshot).toMatchObject({ useMiniListItem: true, useListDataIntegrityCheckBytes: false });
     expect(r.currentTask).toMatchObject({ coverage: 'complete', tcbAddress: 0x2000_1000 });
     expect(r.readyLists).toHaveLength(1);
     expect(r.readyLists[0]).toMatchObject({ priority: 3, coverage: 'complete', attempted: 2, completed: 2 });
@@ -396,7 +420,7 @@ describe('ready lists declared as the pxReadyTasksLists array', () => {
     const v = validateRtosTaskSnapshot(body(arraySnapshot(), { readyListArray: { ...array, listSize: 24 } }));
     expect(v.ok).toBe(false);
     if (v.ok) return;
-    expect(v.errors.join('\n')).toMatch(/declared as 24 bytes but the walker reads the 20-byte default layout/);
+    expect(v.errors.join('\n')).toMatch(/declared as 24 bytes.*produce a 20-byte layout/);
   });
 
   it('refuses the array alongside individual ready lists, and keeps an unresolved base a missing_symbol lane', () => {

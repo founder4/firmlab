@@ -79,7 +79,7 @@ describe('FuzzPanel — AFL++ honesty', () => {
     render(<FuzzPanel imageId="img1" />);
     fireEvent.change(await screen.findByPlaceholderText('bin/busybox'), { target: { value: 'sbin/httpd' } });
     fireEvent.click(screen.getByRole('button', { name: en.panels.fuzz.run }));
-    await waitFor(() => expect(mockApi.runFuzz).toHaveBeenCalledWith('img1', 'sbin/httpd', 60, 'auto'));
+    await waitFor(() => expect(mockApi.runFuzz).toHaveBeenCalledWith('img1', 'sbin/httpd', 60, 'auto', undefined));
   });
 
   it('lets you pick the network (desock) harness for a daemon', async () => {
@@ -87,8 +87,11 @@ describe('FuzzPanel — AFL++ honesty', () => {
     fireEvent.change(await screen.findByPlaceholderText('bin/busybox'), { target: { value: 'sbin/httpd' } });
     // The harness CLASS stays `network` in every language — it is the value the API dispatches on.
     fireEvent.change(screen.getByLabelText(en.panels.fuzz.harnessLabel), { target: { value: 'network' } });
+    const port = screen.getByLabelText(en.panels.fuzz.networkPort);
+    expect(port).toHaveValue(80);
+    fireEvent.change(port, { target: { value: '8080' } });
     fireEvent.click(screen.getByRole('button', { name: en.panels.fuzz.run }));
-    await waitFor(() => expect(mockApi.runFuzz).toHaveBeenCalledWith('img1', 'sbin/httpd', 60, 'network'));
+    await waitFor(() => expect(mockApi.runFuzz).toHaveBeenCalledWith('img1', 'sbin/httpd', 60, 'network', 8080));
   });
 
   it('surfaces a reproduced crash as a recorded fuzz-crash finding', async () => {

@@ -23,6 +23,7 @@ export function FuzzPanel({
   const [binary, setBinary] = useState('');
   const [seconds, setSeconds] = useState(60);
   const [harness, setHarness] = useState<HarnessClass | 'auto'>('auto');
+  const [networkPort, setNetworkPort] = useState(80);
   const [job, setJob] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +57,13 @@ export function FuzzPanel({
     setError(null);
     setJob(null);
     try {
-      const { jobId } = await api.runFuzz(imageId, target, seconds, harness);
+      const { jobId } = await api.runFuzz(
+        imageId,
+        target,
+        seconds,
+        harness,
+        harness === 'network' ? networkPort : undefined,
+      );
       poll.current = window.setInterval(async () => {
         const j = await api.job(jobId);
         setJob(j);
@@ -70,7 +77,7 @@ export function FuzzPanel({
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
-  }, [imageId, binary, suggestedBinary, seconds, harness, t]);
+  }, [imageId, binary, suggestedBinary, seconds, harness, networkPort, t]);
 
   const result = (job?.result as FuzzResult | undefined) ?? prior;
 
@@ -152,6 +159,30 @@ export function FuzzPanel({
             <option value="stdin">stdin</option>
             <option value="network">network (desock)</option>
           </select>
+          {harness === 'network' && (
+            <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {t.panels.fuzz.networkPort}
+              <input
+                type="number"
+                min={1}
+                max={65_535}
+                aria-label={t.panels.fuzz.networkPort}
+                title={t.panels.fuzz.networkPortTitle}
+                value={networkPort}
+                onChange={(e) => setNetworkPort(Math.min(65_535, Math.max(1, Number(e.target.value) || 80)))}
+                className="mono"
+                style={{
+                  width: 76,
+                  background: 'var(--bg)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  color: 'var(--text)',
+                  padding: '6px 8px',
+                  fontSize: 12,
+                }}
+              />
+            </label>
+          )}
           <button className="btn btn-primary btn-sm" disabled={busy || available === null} onClick={run}>
             {busy ? <span className="spinner" /> : t.panels.fuzz.run}
           </button>

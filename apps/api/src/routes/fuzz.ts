@@ -9,7 +9,7 @@
 import type { FindingDraft } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
 import { syncFindings } from '../findings.js';
-import { detectFuzzing, runFuzz } from '../providers/fuzz.js';
+import { detectFuzzing, normalizeNetworkPort, runFuzz } from '../providers/fuzz.js';
 import { startJob } from '../providers/jobs.js';
 import { type RootfsStage, gateOnRootfs, rootfsGateBody } from '../providers/rootfs-gate.js';
 import { getImage, listJobs } from '../store.js';
@@ -25,7 +25,7 @@ export async function fuzzRoutes(app: FastifyInstance): Promise<void> {
     const gate = gateOnRootfs(STAGE, listJobs(id));
     if (!gate.ok) return reply.status(gate.status).send(rootfsGateBody(gate));
     const rootfs = gate.rootfsPath;
-    const body = (req.body ?? {}) as { binary?: string; seconds?: number; harness?: string };
+    const body = (req.body ?? {}) as { binary?: string; seconds?: number; harness?: string; networkPort?: unknown };
     if (!body.binary) return reply.status(400).send({ error: 'No target binary specified' });
     const seconds = Math.min(600, Math.max(10, Number(body.seconds ?? 60)));
     const binary = body.binary;
@@ -33,8 +33,12 @@ export async function fuzzRoutes(app: FastifyInstance): Promise<void> {
     const harness = (HARNESSES as readonly string[]).includes(body.harness ?? '')
       ? (body.harness as (typeof HARNESSES)[number])
       : 'auto';
-    const jobId = startJob(id, 'fuzz', { binary, seconds, harness }, async (h) => {
-      const result = await runFuzz(rootfs, binary, h, { seconds, harness });
+    const networkPort = normalizeNetworkPort(body.networkPort);
+    if (body.networkPort !== undefined && networkPort === null)
+      return reply.status(400).send({ error: 'networkPort must be an integer from 1 to 65535' });
+    const request = { binary, seconds, harness, ...(networkPort ? { networkPort } : {}) };
+    const jobId = startJob(id, 'fuzz', request, async (h) => {
+      const result = await runFuzz(rootfs, binary, h, { seconds, harness, ...(networkPort ? { networkPort } : {}) });
       // A reproduced crash is real dynamic evidence — record it as a confirmed finding tied to the binary.
       if (result.crashes > 0) {
         const draft: FindingDraft = {

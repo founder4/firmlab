@@ -109,6 +109,13 @@ export function chooseHarness(binaryPath: string): HarnessClass {
   return isNetworkDaemon(binaryPath) ? 'network' : 'file';
 }
 
+/** Pure: accept only a concrete TCP/UDP port; zero, fractions and guessed defaults are not evidence. */
+export function normalizeNetworkPort(value: unknown): number | null {
+  const port =
+    typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+  return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : null;
+}
+
 /** Comparison instrumentation for AFL++'s qemu mode. `plain` is qemu mode with edge coverage only. */
 export type FuzzMode = 'plain' | 'compcov' | 'cmplog';
 
@@ -170,6 +177,8 @@ export interface DesockAsset {
   path: string;
   /** Read from the `.so`'s own ELF header; `unknown` when it could not be read (treated as unusable). */
   arch: Architecture;
+  /** Operator assertion: the preload was built for the target rootfs libc/loader ABI, not merely its ISA. */
+  abiCompatible: boolean;
 }
 
 /** What this deployment can actually run, measured — never inferred from the fact that afl-fuzz exists. */
@@ -187,6 +196,8 @@ export interface FuzzPlanInput {
   seconds: number;
   harness?: HarnessClass | 'auto';
   mode?: FuzzMode | 'auto';
+  /** TCP port intercepted by a network preload. Never guessed from the daemon name. */
+  networkPort?: number;
 }
 
 export interface FuzzPlan {
@@ -198,6 +209,8 @@ export interface FuzzPlan {
   harness: HarnessClass;
   /** Set when the harness could not be delivered as intended (e.g. a network daemon without a usable desock). */
   harnessNote?: string;
+  /** Port actually handed to the network preload. Absent means no socket channel was established. */
+  networkPort?: number;
   /** The concrete input channel: how one testcase reaches the target, in one sentence. */
   inputChannel: string;
   mode: FuzzMode;
@@ -312,19 +325,29 @@ export function planFuzz(input: FuzzPlanInput, deployment: FuzzDeployment): Fuzz
   }
 
   let harnessNote: string | undefined;
+  let networkPort: number | undefined;
   let inputChannel = HARNESS_CHANNEL[harness];
   if (harness === 'network') {
     const desock = deployment.desock;
+    const requestedPort = normalizeNetworkPort(input.networkPort);
     if (!desock)
       harnessNote = `No desock preload. FirmLab ships none — there is no prebuilt multi-arch libdesock to fall back on — so one built for ${arch} has to be pointed at by FIRMLAB_DESOCK. Without it the daemon is fed raw stdin: a socket-only daemon reads nothing, and the run then says nothing about its protocol parser.`;
     else if (desock.arch === 'unknown')
       harnessNote = `The desock preload ${desock.path} exists but its architecture could not be read from its ELF header, so it cannot be shown to match this ${arch} target. A wrong-arch preload is dropped by the guest loader without a word and the daemon runs unpreloaded, which looks exactly like a successful network fuzz — so it is treated as absent and the daemon is fed raw stdin.`;
     else if (desock.arch !== arch)
       harnessNote = `The desock preload ${desock.path} is ${desock.arch} and the target is ${arch}. The guest loader drops a wrong-arch preload silently, so using it would produce a run that claims to fuzz a socket while fuzzing nothing; the daemon is fed raw stdin instead, and a ${arch} libdesock in FIRMLAB_DESOCK is what fixes this.`;
+    else if (!desock.abiCompatible)
+      harnessNote = `The desock preload ${desock.path} matches the ${arch} ISA, but FirmLab has no proof that its libc/loader ABI matches this rootfs. Set FIRMLAB_DESOCK_ABI_COMPATIBLE=1 only after checking that build against the guest ABI; until then it is not loaded and the socket is not claimed as fuzzed.`;
+    else if (requestedPort === null)
+      harnessNote = `The ${arch} desock preload is usable only with an explicit daemon port. No valid networkPort (1-65535) was supplied, and FirmLab will not guess one from the binary name, so the preload is not loaded and the socket is not claimed as fuzzed.`;
     else {
+      networkPort = requestedPort;
       env.AFL_PRELOAD = desock.path;
-      env.QEMU_SET_ENV = `LD_PRELOAD=${desock.path}`; // qemu-user passes this into the guest
-      inputChannel = `One testcase per exec on stdin, redirected into the daemon's accept/recv by the ${arch} desock preload ${desock.path} (AFL_PRELOAD + QEMU_SET_ENV=LD_PRELOAD).`;
+      env.DESOCK_PORT = String(requestedPort);
+      env.DESOCK_FORK = '1';
+      env.DESOCK_CLOSE_EXIT = '1';
+      env.QEMU_SET_ENV = `LD_PRELOAD=${desock.path},DESOCK_PORT=${requestedPort},DESOCK_FORK=1,DESOCK_CLOSE_EXIT=1`;
+      inputChannel = `One testcase per exec on stdin, redirected from TCP port ${requestedPort} into the daemon's accept/recv by the ${arch} desock preload ${desock.path}.`;
     }
     if (harnessNote)
       inputChannel = `One testcase per exec on the daemon's raw stdin; its SOCKET is not fuzzed (no usable desock preload).`;
@@ -336,6 +359,7 @@ export function planFuzz(input: FuzzPlanInput, deployment: FuzzDeployment): Fuzz
     arch,
     harness,
     ...(harnessNote ? { harnessNote } : {}),
+    ...(networkPort ? { networkPort } : {}),
     inputChannel,
     mode,
     modeNote,
@@ -503,15 +527,17 @@ function readHead(file: string): Buffer | null {
  * socket syscalls to stdin/stdout so AFL can fuzz "the network". Opt-in and arch-specific: `FIRMLAB_DESOCK`
  * points at a `.so` built for the GUEST arch, and nothing here ships one for any arch. The arch comes from the
  * `.so`'s own ELF header rather than from the operator's word, because a mismatched preload is dropped by the
- * guest loader in silence: the daemon then runs unpreloaded and the run still looks like a network fuzz.
+ * guest loader in silence. Matching ISA is still insufficient for musl/uClibc/glibc compatibility, so the operator
+ * must separately assert that they checked the preload against the guest ABI.
  */
 export function detectDesockPreload(env: NodeJS.ProcessEnv = process.env): DesockAsset | null {
   const p = env.FIRMLAB_DESOCK;
   if (!p) return null;
+  const abiCompatible = env.FIRMLAB_DESOCK_ABI_COMPATIBLE === '1';
   const head = readHead(p);
-  if (!head) return safeExists(p) ? { path: p, arch: 'unknown' } : null;
+  if (!head) return safeExists(p) ? { path: p, arch: 'unknown', abiCompatible } : null;
   const kind = classifyTarget('libdesock.bin', head); // path deliberately neutral: we want the header's verdict
-  return { path: p, arch: kind.kind === 'elf' ? kind.arch : 'unknown' };
+  return { path: p, arch: kind.kind === 'elf' ? kind.arch : 'unknown', abiCompatible };
 }
 
 function safeExists(p: string): boolean {
@@ -568,7 +594,7 @@ export async function runFuzz(
   rootfsPath: string,
   binary: string,
   handle: JobHandle,
-  opts: { seconds?: number; harness?: HarnessClass | 'auto'; mode?: FuzzMode | 'auto' } = {},
+  opts: { seconds?: number; harness?: HarnessClass | 'auto'; mode?: FuzzMode | 'auto'; networkPort?: number } = {},
 ): Promise<FuzzResult> {
   const seconds = opts.seconds ?? 60;
   if (!(await detectFuzzing())) {
@@ -585,6 +611,7 @@ export async function runFuzz(
       seconds,
       ...(opts.harness ? { harness: opts.harness } : {}),
       ...(opts.mode ? { mode: opts.mode } : {}),
+      ...(opts.networkPort ? { networkPort: opts.networkPort } : {}),
     },
     { hostArch: hostArch(), traceArches: await detectTraceArches(), desock: detectDesockPreload() },
   );

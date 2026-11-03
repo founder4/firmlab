@@ -20,6 +20,10 @@ export const rtosTasks: Messages['rtosTasks'] = {
     pointerWidth: 'Ancho de puntero',
     pointerChoose: 'Elige…',
     bytes: (n) => `${n} bytes`,
+    useMiniListItem: 'Usar configUSE_MINI_LIST_ITEM',
+    useListDataIntegrityCheckBytes: 'Usar configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES',
+    listOptionsHint:
+      'Los valores iniciales son los de FreeRTOS (mini list item activo, palabras de integridad inactivas). Declara las opciones de la compilación; nunca se infieren de la RAM.',
     layoutHint:
       'Hay que declarar ambos: un valor por defecto erróneo lee basura con apariencia plausible, así que la API no tiene ninguno.',
     pxCurrentTCB: 'Dirección de pxCurrentTCB (opcional)',
@@ -27,7 +31,7 @@ export const rtosTasks: Messages['rtosTasks'] = {
     readyListsHint: (max) => `Opcional, hasta ${max}. Cada prioridad una sola vez.`,
     readyArray: 'O el array completo de listas de tareas listas (pxReadyTasksLists)',
     readyArrayHint:
-      'En lugar de listas sueltas: la dirección del array y los dos números que declara tu compilación. Se recorre entonces cada prioridad. sizeof(List_t) se contrasta con el único formato que lee el recorrido (20 bytes con punteros de 4 bytes, 40 con 8); nunca se usa a ciegas. El st_size del símbolo, en bytes, es una comprobación opcional.',
+      'En lugar de listas sueltas: la dirección del array y los dos números que declara tu compilación. Se recorre entonces cada prioridad. sizeof(List_t) se contrasta con el ancho de puntero y las dos opciones declaradas de las listas FreeRTOS; nunca se usa a ciegas. El st_size del símbolo, en bytes, es una comprobación opcional.',
     arrayBase: 'Dirección de pxReadyTasksLists',
     maxPriorities: 'configMAX_PRIORITIES',
     listSize: 'sizeof(List_t)',
@@ -67,7 +71,7 @@ export const rtosTasks: Messages['rtosTasks'] = {
     arrayBase: 'El array necesita su dirección; tómala del símbolo pxReadyTasksLists.',
     maxPriorities: (max) => `Introduce configMAX_PRIORITIES como un entero de 1 a ${max}.`,
     listSize: (expected) =>
-      `El recorrido lee un List_t de ${expected} bytes con este ancho de puntero. Una compilación con bytes de integridad de lista o un tipo de tick más ancho tiene otro formato, que este recorrido rechaza en vez de leerlo mal.`,
+      `El ancho de puntero y las opciones declaradas de las listas FreeRTOS producen un List_t de ${expected} bytes. Un tipo de tick más ancho sigue sin estar soportado y se rechaza en vez de leerlo mal.`,
     listSizeNumber: 'Introduce sizeof(List_t) como un número entero positivo de bytes.',
     symbolSize: 'Introduce st_size como un número entero de bytes, o déjalo vacío.',
     arrayOverflow: (base, bytes, bits) =>
