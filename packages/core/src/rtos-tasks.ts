@@ -2,7 +2,8 @@
  * Bounded, byte-only enumeration of FreeRTOS task records from a memory snapshot — no signature guessing.
  *
  * This is deliberately narrow: it walks FreeRTOS's four evidenced `List_t` / `ListItem_t` combinations for
- * `configUSE_MINI_LIST_ITEM` and `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES`, with a 32-bit `TickType_t`, and only when
+ * `configUSE_MINI_LIST_ITEM` and `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES`, with an explicitly declared 16-, 32-
+ * or 64-bit `TickType_t`, and only when
  * the caller supplies the address of a real list (a `pxReadyTasksLists[priority]` entry, a delayed, suspended,
  * pending-ready or waiting-termination list — all the same `List_t` — or `pxCurrentTCB`) —
  * never by scanning a buffer for pointer-shaped bytes and guessing they form a task list. A pointer earns a task
@@ -16,19 +17,22 @@
  * Every other coverage value (a missing symbol, a pointer outside the supplied memory region, a record truncated
  * by the buffer's edge, or a cycle that never returned to the sentinel) means the question was asked and the
  * traversal could not answer it, which is not the same as "no tasks".
- * When the integrity-byte option is declared, its `0x5a5a5a5a` words are read with separate attempted/completed/
- * mismatch counters. They diagnose the declared layout or snapshot consistency; they never alter walk coverage.
+ * When the integrity-byte option is declared, its width-matched `0x5a...` words are read with separate attempted/
+ * completed/mismatch counters. They diagnose the declared layout or snapshot consistency; they never alter walk
+ * coverage.
  *
  * Pure: no I/O, no tool dependency, no address translation — the caller resolves symbol addresses and hands in a
  * `buf`/`regionBase` pair (a contiguous memory dump and the address its first byte corresponds to). Wiring this to
  * a live Renode/QEMU memory read, and to symbol resolution from an ELF, is deliberately out of scope here.
  */
 
-/** Pointer width and byte order of the target the memory snapshot was taken from. */
+/** Pointer, tick width and byte order of the target the memory snapshot was taken from. */
 export interface FreeRtosLayout {
   /** sizeof(void*) on the target. Bare-metal Cortex-M/RISC-V32 firmware — this module's evidenced domain — is 4. */
   pointerWidth: 4 | 8;
   endian: 'little' | 'big';
+  /** sizeof(TickType_t). Optional so requests stored before 16/64-bit support retain the historical 4-byte layout. */
+  tickWidth?: 2 | 4 | 8;
   /** FreeRTOS defaults this to 1. Optional so stored requests from older builds retain their historical layout. */
   useMiniListItem?: boolean;
   /** FreeRTOS defaults this to 0. These bytes change offsets; they are not inferred from a snapshot. */
@@ -38,12 +42,7 @@ export interface FreeRtosLayout {
 /** The common default: 32-bit pointers, little-endian (Cortex-M, RISC-V32 in their native mode). */
 export const DEFAULT_FREERTOS_LAYOUT: FreeRtosLayout = { pointerWidth: 4, endian: 'little' };
 
-/**
- * sizeof(TickType_t), the `xItemValue` field width. FreeRTOS defaults `configTICK_TYPE_WIDTH_IN_BITS` to 32 even
- * on 64-bit ports, so this is not derived from `pointerWidth` — conflating the two would silently misalign every
- * field after it on a 64-bit target.
- */
-const TICK_WIDTH = 4;
+const DEFAULT_TICK_WIDTH = 4;
 
 /**
  * Defensive cap on nodes visited per list. Any one FreeRTOS task list — ready, delayed, suspended, pending or
@@ -71,8 +70,9 @@ export interface FreeRtosTaskRecord {
   /**
    * The item's `xItemValue`. Its meaning depends on the list (see `FreeRtosItemValueMeaning`): a delayed list's wake
    * tick, but on a ready list — filled by `listINSERT_END`, which never sets it — whatever value was last written.
+   * Values through `Number.MAX_SAFE_INTEGER` are numbers; larger 64-bit ticks are exact unsigned decimal strings.
    */
-  itemValue: number;
+  itemValue: number | string;
   /** `pvOwner` — the address of the owning `TCB_t`. This is the field that corroborates the node as a task. */
   tcbAddress: number;
 }
@@ -83,9 +83,9 @@ export interface FreeRtosIntegrityChecks {
   enabled: boolean;
   /** Declared marker fields reached by the walk, including fields outside or cut by the supplied region. */
   attempted: number;
-  /** Attempted marker fields whose complete four bytes were available and read. */
+  /** Attempted marker fields whose complete declared TickType_t bytes were available and read. */
   completed: number;
-  /** Completed reads whose value was not `0x5a5a5a5a`. Never changes coverage or proof state. */
+  /** Completed reads whose value was not the width-matched repeated `0x5a` word. Never changes coverage or proof. */
   mismatches: number;
 }
 
@@ -117,16 +117,31 @@ function readUint(buf: Uint8Array, offset: number, width: 4 | 8, le: boolean): n
   return le ? second * 0x1_0000_0000 + first : first * 0x1_0000_0000 + second;
 }
 
+function readTick(buf: Uint8Array, offset: number, width: 2 | 4 | 8, le: boolean): bigint {
+  let value = 0n;
+  for (let i = 0; i < width; i++) {
+    const byte = BigInt(buf[offset + (le ? width - 1 - i : i)] ?? 0);
+    value = (value << 8n) | byte;
+  }
+  return value;
+}
+
+const publicTick = (value: bigint): number | string =>
+  value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString(10);
+
+const tickMarker = (width: 2 | 4 | 8): bigint => BigInt(`0x${'5a'.repeat(width)}`);
+
 /**
- * In standard C ABI on 64-bit platforms, an 8-byte pointer following a 4-byte TickType_t
- * requires 4 bytes of padding for natural 8-byte alignment. On 32-bit platforms, 4-byte
- * pointers are naturally aligned after a 4-byte TickType_t (0 padding).
+ * Natural padding before a pointer that follows `TickType_t`. Tick width is independently declared: a 64-bit tick
+ * followed by a 32-bit pointer needs no padding, while a 16-bit tick followed by either pointer width does.
  */
 export function pointerAlignmentPadding(layout: FreeRtosLayout): number {
-  return layout.pointerWidth === 8 ? 4 : 0;
+  const tick = resolveTickWidth(layout);
+  return align(tick, layout.pointerWidth) - tick;
 }
 
 export interface DerivedFreeRtosListLayout {
+  tickWidth: 2 | 4 | 8;
   useMiniListItem: boolean;
   useListDataIntegrityCheckBytes: boolean;
   listItem: {
@@ -143,32 +158,47 @@ export interface DerivedFreeRtosListLayout {
 
 const align = (offset: number, width: number): number => Math.ceil(offset / width) * width;
 
-/** Pure ABI layout for the four supported FreeRTOS list configurations. TickType_t remains explicitly 32-bit. */
+function resolveTickWidth(layout: FreeRtosLayout): 2 | 4 | 8 {
+  const width = layout.tickWidth ?? DEFAULT_TICK_WIDTH;
+  if (width !== 2 && width !== 4 && width !== 8) {
+    throw new RangeError(`tickWidth must be 2, 4 or 8 bytes; received ${String(width)}`);
+  }
+  return width;
+}
+
+/** Pure natural-ABI layout for the supported FreeRTOS list configurations and declared TickType_t width. */
 export function deriveFreeRtosListLayout(layout: FreeRtosLayout): DerivedFreeRtosListLayout {
   const ptr = layout.pointerWidth;
+  const tick = resolveTickWidth(layout);
+  const structAlignment = Math.max(ptr, tick);
   const integrity = layout.useListDataIntegrityCheckBytes ?? false;
   const mini = layout.useMiniListItem ?? true;
 
-  const itemValueOffset = integrity ? TICK_WIDTH : 0;
-  const nextOffset = align(itemValueOffset + TICK_WIDTH, ptr);
+  const itemValueOffset = integrity ? tick : 0;
+  const nextOffset = align(itemValueOffset + tick, ptr);
   const itemPreviousOffset = nextOffset + ptr;
   const ownerOffset = itemPreviousOffset + ptr;
   const containerOffset = ownerOffset + ptr;
-  const itemEnd = containerOffset + ptr + (integrity ? TICK_WIDTH : 0);
-  const itemSize = align(itemEnd, ptr);
+  const itemDataEnd = containerOffset + ptr;
+  const itemTrailingIntegrityOffset = align(itemDataEnd, tick);
+  const itemEnd = integrity ? itemTrailingIntegrityOffset + tick : itemDataEnd;
+  const itemSize = align(itemEnd, structAlignment);
 
-  const sentinelItemValueOffset = integrity ? TICK_WIDTH : 0;
-  const sentinelNextOffset = align(sentinelItemValueOffset + TICK_WIDTH, ptr);
+  const sentinelItemValueOffset = integrity ? tick : 0;
+  const sentinelNextOffset = align(sentinelItemValueOffset + tick, ptr);
   const sentinelPreviousOffset = sentinelNextOffset + ptr;
-  const miniSentinelSize = align(sentinelPreviousOffset + ptr, ptr);
+  const miniSentinelSize = align(sentinelPreviousOffset + ptr, structAlignment);
   const sentinelSize = mini ? miniSentinelSize : itemSize;
 
-  const numberOfItemsOffset = align(integrity ? TICK_WIDTH : 0, ptr);
+  const numberOfItemsOffset = align(integrity ? tick : 0, ptr);
   const indexOffset = numberOfItemsOffset + ptr;
-  const sentinelOffset = indexOffset + ptr;
-  const listEnd = sentinelOffset + sentinelSize + (integrity ? TICK_WIDTH : 0);
+  const sentinelOffset = align(indexOffset + ptr, structAlignment);
+  const sentinelEnd = sentinelOffset + sentinelSize;
+  const listTrailingIntegrityOffset = align(sentinelEnd, tick);
+  const listEnd = integrity ? listTrailingIntegrityOffset + tick : sentinelEnd;
 
   return {
+    tickWidth: tick,
     useMiniListItem: mini,
     useListDataIntegrityCheckBytes: integrity,
     listItem: {
@@ -185,7 +215,7 @@ export function deriveFreeRtosListLayout(layout: FreeRtosLayout): DerivedFreeRto
       previousOffset: sentinelPreviousOffset,
       size: sentinelSize,
     },
-    list: { numberOfItemsOffset, indexOffset, sentinelOffset, size: align(listEnd, ptr) },
+    list: { numberOfItemsOffset, indexOffset, sentinelOffset, size: align(listEnd, structAlignment) },
   };
 }
 
@@ -202,7 +232,7 @@ export function listSentinelHeadSize(layout: FreeRtosLayout): number {
 
 /**
  * sizeof(`List_t`) under the declared layout. It is the stride between `pxReadyTasksLists[priority]` entries only
- * for a build with those two config options and the still-explicit 4-byte `TickType_t`; it says nothing about how
+ * for a build with those config options and the declared `TickType_t`; it says nothing about how
  * many priorities a build has.
  */
 export function listRecordSize(layout: FreeRtosLayout): number {
@@ -216,8 +246,8 @@ interface ListWalk extends FreeRtosTaskListResult {
   declaredItems: number | null;
   /** Visited, in-bounds nodes whose `pxContainer` does not point back at this list. */
   containerMismatches: number[];
-  /** `itemValue` of every corroborated task, in chain order. */
-  values: number[];
+  /** Exact `itemValue` of every corroborated task, in chain order. */
+  values: bigint[];
 }
 
 /**
@@ -254,6 +284,7 @@ function walkList(
   const ptr = layout.pointerWidth;
   const le = layout.endian === 'little';
   const derived = deriveFreeRtosListLayout(layout);
+  const tick = derived.tickWidth;
   const recordSize = derived.listItem.size;
   const sentinelHeadSize = derived.sentinel.nextOffset + ptr;
   const sentinelAddress = listAddress + derived.list.sentinelOffset;
@@ -265,21 +296,27 @@ function walkList(
     if (!integrityChecks.enabled) return;
     integrityChecks.attempted++;
     const offset = address - regionBase;
-    if (offset < 0 || offset + TICK_WIDTH > buf.length) return;
+    if (offset < 0 || offset + tick > buf.length) return;
     integrityChecks.completed++;
-    const actual = readUint(buf, offset, TICK_WIDTH, le);
-    if (actual === 0x5a5a_5a5a) return;
+    const actual = readTick(buf, offset, tick, le);
+    const expected = tickMarker(tick);
+    if (actual === expected) return;
     integrityChecks.mismatches++;
+    const hexWidth = tick * 2;
     evidence.push(
-      `${field} integrity marker at 0x${address.toString(16)} reads 0x${actual.toString(16).padStart(8, '0')}, not 0x5a5a5a5a — the declared layout may be wrong or the snapshot may be torn/corrupt`,
+      `${field} integrity marker at 0x${address.toString(16)} reads 0x${actual.toString(16).padStart(hexWidth, '0')}, ` +
+        `not 0x${expected.toString(16).padStart(hexWidth, '0')} — the declared layout may be wrong or the snapshot may be torn/corrupt`,
     );
   };
 
   checkIntegrity(listAddress, 'List_t leading');
-  checkIntegrity(listAddress + derived.list.sentinelOffset + derived.sentinel.size, 'List_t trailing');
+  checkIntegrity(listAddress + align(derived.list.sentinelOffset + derived.sentinel.size, tick), 'List_t trailing');
   checkIntegrity(sentinelAddress, 'list sentinel leading');
   if (!derived.useMiniListItem)
-    checkIntegrity(sentinelAddress + derived.listItem.containerOffset + ptr, 'full ListItem_t sentinel trailing');
+    checkIntegrity(
+      sentinelAddress + align(derived.listItem.containerOffset + ptr, tick),
+      'full ListItem_t sentinel trailing',
+    );
 
   // xListEnd is a MiniListItem_t (itemValue + pxNext + pxPrevious, no owner) — its pxNext is the chain head.
   if (!inRegion(sentinelAddress)) {
@@ -315,7 +352,7 @@ function walkList(
     }
     attempted++;
     checkIntegrity(cur, 'ListItem_t leading');
-    checkIntegrity(cur + derived.listItem.containerOffset + ptr, 'ListItem_t trailing');
+    checkIntegrity(cur + align(derived.listItem.containerOffset + ptr, tick), 'ListItem_t trailing');
     if (!inRegion(cur)) {
       coverage = 'out_of_range';
       evidence.push(`list item pointer 0x${cur.toString(16)} falls outside the mapped region`);
@@ -327,13 +364,13 @@ function walkList(
       break;
     }
     visited.add(cur);
-    const itemValue = readUint(buf, cur - regionBase + derived.listItem.itemValueOffset, TICK_WIDTH, le);
+    const exactItemValue = readTick(buf, cur - regionBase + derived.listItem.itemValueOffset, tick, le);
     const ownerAddr = readField(cur, derived.listItem.ownerOffset);
     if (readField(cur, derived.listItem.containerOffset) !== listAddress) containerMismatches.push(cur);
     if (ownerAddr === 0) {
       evidence.push(`list item at 0x${cur.toString(16)} has a null owner — not corroborated as a task`);
     } else {
-      tasks.push({ listItemAddress: cur, itemValue, tcbAddress: ownerAddr });
+      tasks.push({ listItemAddress: cur, itemValue: publicTick(exactItemValue), tcbAddress: ownerAddr });
     }
     cur = readField(cur, derived.listItem.nextOffset);
   }
@@ -347,7 +384,7 @@ function walkList(
     integrityChecks,
     declaredItems,
     containerMismatches,
-    values: tasks.map((t) => t.itemValue),
+    values: tasks.map((t) => BigInt(t.itemValue)),
   };
 }
 
@@ -485,7 +522,7 @@ export function parseFreeRtosNamedList(
   }
   let orderViolations = 0;
   if (meaning === 'wake_tick') {
-    for (let i = 1; i < w.values.length; i++) if ((w.values[i] ?? 0) < (w.values[i - 1] ?? 0)) orderViolations++;
+    for (let i = 1; i < w.values.length; i++) if ((w.values[i] ?? 0n) < (w.values[i - 1] ?? 0n)) orderViolations++;
     const why = 'vListInsert keeps a delayed list sorted, so the snapshot may be torn or this is not a delayed list';
     if (orderViolations > 0) evidence.push(`${orderViolations} wake tick(s) out of ascending order — ${why}`);
   }
@@ -568,15 +605,13 @@ export const FREERTOS_OVER_DECLARED_COUNT =
  * Turn a declared ready-list array into per-priority list addresses — or refuse, saying why.
  *
  * The declared `sizeof(List_t)` is evidence, not a stride to walk at: the walk derives one of the four supported
- * mini/integrity layouts with a 4-byte `TickType_t`, so a size that differs from `listRecordSize(layout)` means
+ * mini/integrity/tick-width layout, so a size that differs from `listRecordSize(layout)` means
  * every field past the header would be read at the wrong offset, and the derivation refuses rather than walking at
  * the declared stride. An `st_size` that disagrees with `maxPriorities × listSize` means one of three facts is
  * wrong, and nothing here can say which, so that refuses too.
  *
- * Size equality is necessary, not sufficient. On a 64-bit port a 64-bit `TickType_t` produces the same 40-byte
- * `List_t` as the modelled 4-byte tick plus 4 bytes of padding; the pointers sit at the same offsets there, so the
- * ready walk stays pointer-correct, and only `xItemValue` — not maintained on a ready list — is read at 4 bytes.
- * `TickType_t` width remains declared by the implementation rather than inferred from equal record sizes.
+ * Size equality is necessary, not sufficient: different ABI options can produce the same record size. Tick width
+ * therefore remains an explicit declaration rather than something inferred from `sizeof(List_t)`.
  *
  * What a later walk can and cannot catch. The stride is forced equal to the layout, so it cannot be wrong; a base
  * that is NOT a whole number of `List_t` records off shows up as items whose `pxContainer` does not point back. A
@@ -619,11 +654,7 @@ export function deriveFreeRtosReadyLists(
     return {
       status: 'refused',
       code: 'layout_mismatch',
-      reason:
-        `the build's List_t is declared as ${listSize} bytes but the declared FreeRTOS options produce a ` +
-        `${stride}-byte layout (configUSE_MINI_LIST_ITEM=${d.useMiniListItem ? 1 : 0}, ` +
-        `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES=${d.useListDataIntegrityCheckBytes ? 1 : 0}, ` +
-        `TickType_t=4 bytes); walking at a ${listSize}-byte stride would read fields at the wrong offsets`,
+      reason: `the build's List_t is declared as ${listSize} bytes but the declared FreeRTOS options produce a ${stride}-byte layout (configUSE_MINI_LIST_ITEM=${d.useMiniListItem ? 1 : 0}, configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES=${d.useListDataIntegrityCheckBytes ? 1 : 0}, TickType_t=${d.tickWidth} bytes); walking at a ${listSize}-byte stride would read fields at the wrong offsets`,
     };
   }
   const arrayBytes = n * listSize;

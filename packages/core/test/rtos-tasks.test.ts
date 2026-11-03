@@ -441,31 +441,259 @@ describe('parseFreeRtosNamedList', () => {
   it('computes record and sentinel sizes with standard natural alignment on 32-bit and 64-bit', () => {
     expect(pointerAlignmentPadding({ pointerWidth: 4, endian: 'little' })).toBe(0);
     expect(pointerAlignmentPadding({ pointerWidth: 8, endian: 'little' })).toBe(4);
+    expect(pointerAlignmentPadding({ pointerWidth: 4, endian: 'little', tickWidth: 2 })).toBe(2);
+    expect(pointerAlignmentPadding({ pointerWidth: 4, endian: 'little', tickWidth: 8 })).toBe(0);
     expect(listItemRecordSize({ pointerWidth: 4, endian: 'little' })).toBe(20);
     expect(listItemRecordSize({ pointerWidth: 8, endian: 'little' })).toBe(40);
     expect(listSentinelHeadSize({ pointerWidth: 4, endian: 'little' })).toBe(8);
     expect(listSentinelHeadSize({ pointerWidth: 8, endian: 'little' })).toBe(16);
   });
 
-  it('derives the four FreeRTOS list layouts on 32-bit and 64-bit targets', () => {
+  it('derives the mini/integrity layouts for 16-, 32- and 64-bit ticks with natural alignment', () => {
     const expected = [
-      { pointerWidth: 4 as const, mini: true, integrity: false, item: 20, sentinel: 12, list: 20 },
-      { pointerWidth: 4 as const, mini: false, integrity: false, item: 20, sentinel: 20, list: 28 },
-      { pointerWidth: 4 as const, mini: true, integrity: true, item: 28, sentinel: 16, list: 32 },
-      { pointerWidth: 4 as const, mini: false, integrity: true, item: 28, sentinel: 28, list: 44 },
-      { pointerWidth: 8 as const, mini: true, integrity: false, item: 40, sentinel: 24, list: 40 },
-      { pointerWidth: 8 as const, mini: false, integrity: false, item: 40, sentinel: 40, list: 56 },
-      { pointerWidth: 8 as const, mini: true, integrity: true, item: 48, sentinel: 24, list: 56 },
-      { pointerWidth: 8 as const, mini: false, integrity: true, item: 48, sentinel: 48, list: 80 },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 2 as const,
+        mini: true,
+        integrity: false,
+        item: 20,
+        sentinel: 12,
+        list: 20,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 2 as const,
+        mini: false,
+        integrity: false,
+        item: 20,
+        sentinel: 20,
+        list: 28,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 2 as const,
+        mini: true,
+        integrity: true,
+        item: 24,
+        sentinel: 12,
+        list: 28,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 2 as const,
+        mini: false,
+        integrity: true,
+        item: 24,
+        sentinel: 24,
+        list: 40,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 4 as const,
+        mini: true,
+        integrity: false,
+        item: 20,
+        sentinel: 12,
+        list: 20,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 4 as const,
+        mini: false,
+        integrity: false,
+        item: 20,
+        sentinel: 20,
+        list: 28,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 4 as const,
+        mini: true,
+        integrity: true,
+        item: 28,
+        sentinel: 16,
+        list: 32,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 4 as const,
+        mini: false,
+        integrity: true,
+        item: 28,
+        sentinel: 28,
+        list: 44,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 8 as const,
+        mini: true,
+        integrity: false,
+        item: 24,
+        sentinel: 16,
+        list: 24,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 8 as const,
+        mini: false,
+        integrity: false,
+        item: 24,
+        sentinel: 24,
+        list: 32,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 8 as const,
+        mini: true,
+        integrity: true,
+        item: 40,
+        sentinel: 24,
+        list: 48,
+      },
+      {
+        pointerWidth: 4 as const,
+        tickWidth: 8 as const,
+        mini: false,
+        integrity: true,
+        item: 40,
+        sentinel: 40,
+        list: 64,
+      },
+      {
+        pointerWidth: 8 as const,
+        tickWidth: 2 as const,
+        mini: true,
+        integrity: false,
+        item: 40,
+        sentinel: 24,
+        list: 40,
+      },
+      {
+        pointerWidth: 8 as const,
+        tickWidth: 2 as const,
+        mini: true,
+        integrity: true,
+        item: 48,
+        sentinel: 24,
+        list: 56,
+      },
+      {
+        pointerWidth: 8 as const,
+        tickWidth: 4 as const,
+        mini: false,
+        integrity: true,
+        item: 48,
+        sentinel: 48,
+        list: 80,
+      },
+      {
+        pointerWidth: 8 as const,
+        tickWidth: 8 as const,
+        mini: true,
+        integrity: false,
+        item: 40,
+        sentinel: 24,
+        list: 40,
+      },
+      {
+        pointerWidth: 8 as const,
+        tickWidth: 8 as const,
+        mini: true,
+        integrity: true,
+        item: 56,
+        sentinel: 32,
+        list: 64,
+      },
+      {
+        pointerWidth: 8 as const,
+        tickWidth: 8 as const,
+        mini: false,
+        integrity: true,
+        item: 56,
+        sentinel: 56,
+        list: 88,
+      },
     ];
     for (const e of expected) {
       const d = deriveFreeRtosListLayout({
         pointerWidth: e.pointerWidth,
         endian: 'little',
+        tickWidth: e.tickWidth,
         useMiniListItem: e.mini,
         useListDataIntegrityCheckBytes: e.integrity,
       });
+      expect(d.tickWidth).toBe(e.tickWidth);
       expect([d.listItem.size, d.sentinel.size, d.list.size]).toEqual([e.item, e.sentinel, e.list]);
+    }
+  });
+
+  it('walks 16-, 32- and 64-bit tick values exactly in both byte orders', () => {
+    const values = new Map<2 | 4 | 8, bigint>([
+      [2, 0x1234n],
+      [4, 0x1234_5678n],
+      [8, 0xfedc_ba98_7654_3210n],
+    ]);
+    const align = (offset: number, width: number) => Math.ceil(offset / width) * width;
+    for (const tickWidth of [2, 4, 8] as const) {
+      for (const endian of ['little', 'big'] as const) {
+        const little = endian === 'little';
+        const layout = {
+          pointerWidth: 4 as const,
+          tickWidth,
+          endian,
+          useMiniListItem: true,
+          useListDataIntegrityCheckBytes: true,
+        };
+        const d = deriveFreeRtosListLayout(layout);
+        const buf = new Uint8Array(0x200);
+        const dv = new DataView(buf.buffer);
+        const item = REGION_BASE + 0x100;
+        const sentinel = LIST_ADDR + d.list.sentinelOffset;
+        const marker = BigInt(`0x${'5a'.repeat(tickWidth)}`);
+        const tick = (address: number, value: bigint) => {
+          const offset = address - REGION_BASE;
+          if (tickWidth === 2) dv.setUint16(offset, Number(value), little);
+          else if (tickWidth === 4) dv.setUint32(offset, Number(value), little);
+          else dv.setBigUint64(offset, value, little);
+        };
+        const ptr = (address: number, value: number) => dv.setUint32(address - REGION_BASE, value, little);
+
+        for (const address of [
+          LIST_ADDR,
+          LIST_ADDR + align(d.list.sentinelOffset + d.sentinel.size, tickWidth),
+          sentinel,
+          item,
+          item + align(d.listItem.containerOffset + layout.pointerWidth, tickWidth),
+        ])
+          tick(address, marker);
+        ptr(LIST_ADDR + d.list.numberOfItemsOffset, 1);
+        ptr(sentinel + d.sentinel.nextOffset, item);
+        tick(item + d.listItem.itemValueOffset, values.get(tickWidth) ?? 0n);
+        ptr(item + d.listItem.nextOffset, sentinel);
+        ptr(item + d.listItem.ownerOffset, 0x3000_0042);
+        ptr(item + d.listItem.containerOffset, LIST_ADDR);
+
+        const result = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'delayed', address: LIST_ADDR }, layout);
+        expect(result).toMatchObject({
+          coverage: 'complete',
+          declaredItems: 1,
+          integrityChecks: { enabled: true, attempted: 5, completed: 5, mismatches: 0 },
+        });
+        expect(result.tasks[0]?.itemValue).toBe(
+          tickWidth === 8 ? '18364758544493064720' : Number(values.get(tickWidth)),
+        );
+
+        const itemTrailing = item + align(d.listItem.containerOffset + layout.pointerWidth, tickWidth);
+        tick(itemTrailing, 1n);
+        const mismatch = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'delayed', address: LIST_ADDR }, layout);
+        expect(mismatch).toMatchObject({
+          coverage: 'complete',
+          integrityChecks: { enabled: true, attempted: 5, completed: 5, mismatches: 1 },
+        });
+        expect(mismatch.evidence.join('\n')).toContain(
+          `reads 0x${'1'.padStart(tickWidth * 2, '0')}, not 0x${'5a'.repeat(tickWidth)}`,
+        );
+      }
     }
   });
 
