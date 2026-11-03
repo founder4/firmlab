@@ -1,6 +1,8 @@
 # Evaluación YARA Forge Core 20261101 (y 20261103) frente al lock 20261011
 
-Evaluado el 2026-11-03 desde la estación Kali (no el homelab). **Lock intacto: la evidencia no autoriza promover.**
+Evaluado y promovido el 2026-11-03 desde la estación Kali que ejecuta el despliegue local. La evaluación se hizo
+en una copia restaurada del volumen de producción, publicada sólo en `127.0.0.1:8898`; producción no fue el corpus
+de prueba. **El lock apunta a 20261103 tras completar controles y A/B.**
 
 ## Versiones y digests (verificados localmente con `sha256sum`)
 
@@ -46,13 +48,18 @@ desechable `firmlab-tools` (`--network none`, sólo ficheros de prueba montados)
 confirma los 3 positivos con las tres releases; sobre 20261011 esa cabecera dispara exactamente esa regla y ninguna
 otra. El script anterior falla con 20261103 en `TRELLIX_ARC_Malw_Eicar`, como se describe arriba.
 
-## A/B sobre corpus real — NO EJECUTADO
+## A/B sobre corpus real — COMPLETO
 
-El A/B obligatorio (README) se hace en el homelab (`/Users/agfil/homelab`, contenedor `firmlab`, API `:8899`), que
-no es esta máquina: aquí no hay contenedor en marcha ni `~/homelab`. Existe un corpus local en el volumen
-`firmlab_firmlab-data` (9 extracciones, 436 MB, sin modificar desde 2026-09-28) y la imagen
-`firmlab-firmware:latest` (rev `8cb2e1c`, YARA 4.2.3), pero no se ha escaneado por falta de tiempo; no es un
-resultado negativo.
+`scripts/evaluate-yara-candidate.sh 20261103` terminó con «Resultado: completo» contra la copia aislada: baseline
+20261011 verificada contra el lock, 15 imágenes enumeradas, 1 rootfs registrado por un `yarascan` completado y
+0/0 matches (nuevos/perdidos: 0/0). El control suplementario directo amplió la comparación a los 9 rootfs que ya
+existían en la copia (8 imágenes: TP-Link, DVRF, BeanView, Tenda, Asus e IMOU): 0 matches con cada corpus en cada
+raíz. Eso prueba igualdad de matches para los bytes y raíces cubiertos; no prueba que el firmware esté limpio ni
+que las 7 imágenes sin rootfs estén cubiertas.
+
+La candidata compiló con YARA 4.2.3 y pasó 3/3 positivos inertes. El delta de reglas quedó en 103 añadidas, 115
+eliminadas y 37 con lógica cambiada, sin reglas comunes carentes de `logic_hash`. Con esa evidencia se promovió
+20261103 y se sincronizó el directorio operativo de forma atómica; no se ejecutaron análisis nuevos en producción.
 
 ## Defecto del evaluador encontrado (sin corregir)
 
@@ -66,7 +73,7 @@ nombres (no ve las 37 reglas con lógica cambiada). Registrado en `docs/BACKLOG.
 «INCOMPLETO (`<motivo>`)»; la baseline es el zip del lock verificado, y el informe cuenta la lógica cambiada por
 `logic_hash`. Ejecutado con el lock real, descargas reales y `docker` simulado (sin escanear ningún rootfs): 20261011
 pasa la verificación (5145 reglas) y frente a 20261103 da 103 / 115 / 37, como la tabla de arriba; con la API caída
-sale 3 con `api_unreachable`. El A/B sobre rootfs del homelab sigue pendiente.
+sale 3 con `api_unreachable`. El A/B real descrito arriba cerró después este pendiente.
 
 ## Comandos
 
