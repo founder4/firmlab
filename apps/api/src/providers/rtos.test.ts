@@ -77,6 +77,14 @@ describe('detectRtosKernel', () => {
   it('finds Zephyr from a k_thread marker', () => {
     expect(detectRtosKernel(Buffer.from('...k_thread_create...', 'latin1'))).toBe('Zephyr');
   });
+  it('finds RIOT and mbed only from runtime-specific markers', () => {
+    expect(detectRtosKernel(Buffer.from('...RIOT_VERSION=2026.10...', 'latin1'))).toBe('RIOT');
+    expect(detectRtosKernel(Buffer.from('...mbed_error_status...', 'latin1'))).toBe('mbed');
+  });
+  it('does not promote incidental Linux/U-Boot substrings to RTOS findings', () => {
+    expect(detectRtosKernel(Buffer.from('...random /riot bytes...', 'latin1'))).toBeNull();
+    expect(detectRtosKernel(Buffer.from('...CONFIG_OF_EMBED...', 'latin1'))).toBeNull();
+  });
   it('returns null when no kernel strings are present', () => {
     expect(detectRtosKernel(Buffer.from([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]))).toBeNull();
   });

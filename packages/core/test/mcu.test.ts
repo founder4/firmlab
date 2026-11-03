@@ -165,6 +165,13 @@ describe('fingerprintMcu — vendor/family string markers', () => {
     expect(fp.arch).toBe('arm'); // inferred from the named core when no ELF/marker arch
   });
 
+  it('requires RIOT and mbed runtime-specific banners', () => {
+    expect(fingerprintMcu(ascii('RIOT_VERSION=2026.10')).rtos).toBe('riot');
+    expect(fingerprintMcu(ascii('mbed_error_status')).rtos).toBe('mbed');
+    expect(fingerprintMcu(ascii('random /riot bytes')).rtos).toBeNull();
+    expect(fingerprintMcu(ascii('CONFIG_OF_EMBED')).rtos).toBeNull();
+  });
+
   it('stays honest on an unrecognized MCU (no family → selector will block)', () => {
     const fp = fingerprintMcu(ascii('some proprietary blob with no known markers'));
     expect(fp.family).toBeNull();

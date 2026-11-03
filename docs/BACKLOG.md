@@ -170,10 +170,17 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `0x5a` al ancho efectivo. La fixture ARM_CM3 V11.1.0 validó en Renode offline 8/8 layouts de 16/32 bits; ese port
   oficial rechaza 64 bits, que queda cubierto por layout/walk byte-a-byte pero pendiente de una fixture runtime de
   un port compatible.)*
+  *(Validación con las 15 muestras del equipo, 2026-11-03: análisis estático 15/15 sin excepciones; los dos Xiaomi
+  conservan eCos confirmado y el dump ESP32 confirma FreeRTOS, pero es flash crudo sin ELF ni snapshot RAM y por
+  tanto no alimenta el walker de tareas. La pasada cruzada detectó y corrigió dos falsos positivos fuera del
+  routing normal: `riot` en bytes comprimidos GL.iNet y `mbed` dentro de `CONFIG_OF_EMBED` en Tenda. W0 y W7 exigen
+  ahora marcadores RIOT/mbed específicos. El PICOBIN del Pico se identifica como RP2350 RISC-V, pero aún no existe
+  un carril profundo dedicado.)*
   Faltan: un ELF
-  FreeRTOS de fabricante (el corpus sólo tiene Zephyr y Contiki),
+  FreeRTOS de fabricante (el volumen tiene un dump ESP32 FreeRTOS, no un ELF con símbolos),
   una fixture runtime compatible con `TickType_t` de 64 bits, colas de eventos/bloqueo y fuzzing de
-  periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
+  periféricos/MMIO (µEmu/P2IM/Fuzzware), además de análisis profundo RP2350/RISC-V; Renode sigue demostrando vida,
+  no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee
   además `FLMSTR1` (maestro CPU/BIOS) y emite `spi-descriptor-host-write` (`static_confirmed`, medium) sólo cuando

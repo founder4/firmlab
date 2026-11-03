@@ -277,8 +277,10 @@ const RTOS_RULES: { re: RegExp; name: string }[] = [
   { re: /contiki-?ng|contiki/, name: 'contiki' },
   { re: /zephyr/, name: 'zephyr' },
   { re: /freertos/, name: 'freertos' },
-  { re: /\briot\b|riot-os/, name: 'riot' },
-  { re: /mbed[ -]?os|mbed/, name: 'mbed' },
+  // Do not treat generic words as runtime banners. Real Linux samples have matched `riot` in compressed bytes
+  // and the `mbed` substring in U-Boot's CONFIG_OF_EMBED text.
+  { re: /riot(?:[- ]os|_version)/, name: 'riot' },
+  { re: /mbed(?:[- ]os|_error|_assert)/, name: 'mbed' },
   { re: /nuttx/, name: 'nuttx' },
   { re: /mynewt/, name: 'mynewt' },
   { re: /threadx|azure rtos/, name: 'threadx' },

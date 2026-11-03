@@ -93,8 +93,10 @@ const KERNEL_MARKERS: { name: string; markers: string[] }[] = [
   { name: 'Zephyr', markers: ['zephyr', 'k_thread'] },
   { name: 'ThreadX', markers: ['threadx', '_tx_thread'] },
   { name: 'Contiki', markers: ['contiki-ng', 'contiki'] },
-  { name: 'RIOT', markers: ['riot-os', 'riot'] },
-  { name: 'mbed', markers: ['mbed-os', 'mbed'] },
+  // Bare `riot` and `mbed` are too weak for a proof claim: real Linux samples contain `riot` in compressed
+  // bytes and `CONFIG_OF_EMBED` in U-Boot text. Keep markers that are specific to the RTOS/runtime instead.
+  { name: 'RIOT', markers: ['riot-os', 'riot os', 'riot_version'] },
+  { name: 'mbed', markers: ['mbed-os', 'mbed os', 'mbed_error', 'mbed_assert'] },
   { name: 'ChibiOS', markers: ['chibios'] },
   { name: 'NuttX', markers: ['nuttx'] },
 ];
