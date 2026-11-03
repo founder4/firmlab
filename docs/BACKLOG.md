@@ -100,9 +100,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   CNA Linux aporta rutas y commits introductores/fix; para CVE-2026-43286, tres fixes de ramas estables distintas
   producen el mismo `git patch-id --stable`, por lo que un mirror local puede reconocer un backport aunque cambie
   el hash. Esto sólo prueba que el árbol fuente contiene un diff equivalente: no vincula ese árbol al kernel del
-  firmware. MVP pendiente: parser CVE puro + comparación Git local acotada, persistiendo `backportEvidence` con
-  denominadores y `artifactBinding: unverified`, sin cambiar `ProofState`; resolverlo exige después un rebuild
-  reproducible que ligue fuente, configuración, toolchain y bytes extraídos.)*
+  firmware. MVP de librería hecho 2026-11-03: parser CVE 5.x puro y comparación Git local acotada cubren ancestro
+  exacto, `patch-id` equivalente, mismatch, árbol sucio/no-Git y objetos ausentes; el registro oficial
+  CVE-2026-43286 fija además la mezcla de rangos cerrados e introducciones abiertas. Toda salida conserva
+  `artifactBinding: unverified` y no cambia `ProofState`. Falta cablearlo a una ruta/job y persistir el campo
+  opcional `backportEvidence`; resolver el estado del firmware exige después un rebuild reproducible que ligue
+  fuente, configuración, toolchain y bytes extraídos.)*
 - [x] Hacer que la reparación del guest alcance una ruta ejecutada. *(Hecho en `294c841` y endurecido en
   `619f618`.)* El boot real del WR940N en contenedor desechable y sin red probó primero que la entrada anterior no
   se ejecutaba: `busybox init` anteponía `exec` y el `msh` 1.01 tampoco aceptaba la aritmética del contador. La
@@ -153,8 +156,10 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `TickType_t` todavía explícitamente de 32 bits. Core, API y panel declaran/persisten ambas opciones; omitirlas
   conserva los defaults históricos (mini=1, integridad=0), y `sizeof(List_t)` se confronta con el layout efectivo.
   Fixtures byte-a-byte recorren las cuatro combinaciones de 32 bits y fijan la matriz de tamaños también en 64
-  bits. Los bytes 0x5a sólo seleccionan offsets: aún no se leen como prueba de integridad.)* Faltan: un ELF
-  FreeRTOS de fabricante (el corpus sólo tiene Zephyr y Contiki), validación Renode real de las cuatro variantes,
+  bits. Los bytes 0x5a sólo seleccionan offsets: aún no se leen como prueba de integridad. La matriz temporal
+  V11.1.0 ya ejecuta las cuatro variantes en Renode offline y recupera exactamente las tareas esperadas con
+  `sizeof(List_t)` 28/44/20/32, manteniendo `needs_runtime_reproduction`.)* Faltan: un ELF
+  FreeRTOS de fabricante (el corpus sólo tiene Zephyr y Contiki),
   anotación por `uxTopReadyPriority` (F4), `TickType_t` 16/64, colas de eventos/bloqueo y fuzzing de
   periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,

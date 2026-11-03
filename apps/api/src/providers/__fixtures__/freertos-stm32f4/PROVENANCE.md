@@ -25,3 +25,8 @@ Validated 2026-10-03 in `firmlab-firmware` (`--network none`) at 1, 3 and 7 s: a
 platform's remote SVD (`STM32F40x.svd.gz`) and ran without it. A deliberately wrong `sizeof(List_t)` (24) is refused
 by the snapshot contract. This is emulation of a synthetic build: it says nothing about a physical device, another
 FreeRTOS version/configuration, or any corpus image.
+
+`build.sh` also supports `MATRIX=1 OUTPUT_DIR=<temporary-directory>`. The matrix compiles all four combinations of
+`configUSE_MINI_LIST_ITEM` and `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES` without replacing the tracked fixture;
+`apps/api/scripts/rtos-freertos-layout-matrix.sh` feeds each ELF to the product with the matching explicit layout and
+runs the full symbol → offline Renode capture → task-list walk check. Generated matrix ELF files are never committed.

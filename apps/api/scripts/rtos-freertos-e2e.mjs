@@ -26,14 +26,27 @@ const { runRtosElfSymbols } = await import(path.join(api, 'dist/providers/rtos-e
 const { runRenodeRamCapture } = await import(path.join(api, 'dist/providers/renode-ram.js'));
 const { runRtosTaskSnapshot, validateRtosTaskSnapshot } = await import(path.join(api, 'dist/providers/rtos-tasks.js'));
 
-const ELF = path.join(api, 'src/providers/__fixtures__/freertos-stm32f4/freertos-stm32f4.elf');
+const ELF = process.env.FREERTOS_ELF
+  ? path.resolve(process.env.FREERTOS_ELF)
+  : path.join(api, 'src/providers/__fixtures__/freertos-stm32f4/freertos-stm32f4.elf');
 const PLATFORM = process.env.RENODE_PLATFORM ?? '/opt/renode/platforms/cpus/stm32f4.repl';
 const SECONDS = Number(process.env.CAPTURE_SECONDS ?? 3);
-// Declared for this build (FreeRTOSConfig.h, 32-bit List_t with mini list items, no integrity-check bytes).
+const boolEnv = (name, fallback) => {
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+  if (value === '0') return false;
+  if (value === '1') return true;
+  throw new Error(`${name} must be 0 or 1`);
+};
+const USE_MINI_LIST_ITEM = boolEnv('USE_MINI_LIST_ITEM', true);
+const USE_LIST_DATA_INTEGRITY_CHECK_BYTES = boolEnv('USE_LIST_DATA_INTEGRITY_CHECK_BYTES', false);
+// Declared by the build matrix for FreeRTOS V11.1.0 on its 32-bit ARM ABI. These values are fixture
+// corroboration only; the product receives the two configuration flags explicitly and derives its own offsets.
 const MAX_PRIORITIES = 5;
-const LIST_SIZE = 20;
-const TCB_PRIORITY_OFFSET = 44;
-const TCB_NAME_OFFSET = 52;
+const LIST_SIZE = USE_LIST_DATA_INTEGRITY_CHECK_BYTES ? (USE_MINI_LIST_ITEM ? 32 : 44) : USE_MINI_LIST_ITEM ? 20 : 28;
+const LIST_ITEM_SIZE = USE_LIST_DATA_INTEGRITY_CHECK_BYTES ? 28 : 20;
+const TCB_PRIORITY_OFFSET = 4 + 2 * LIST_ITEM_SIZE;
+const TCB_NAME_OFFSET = TCB_PRIORITY_OFFSET + 8;
 const EXPECTED = {
   ready: { SpinA: 1, SpinB: 1, IDLE: 0 },
   delayed: { Sleeper: 2 },
@@ -52,7 +65,7 @@ check(sym.prefill !== null, 'ELF symbols produced a snapshot pre-fill');
 const prefill = sym.prefill ?? {};
 check(
   prefill.readyListArray?.symbolSize === MAX_PRIORITIES * LIST_SIZE,
-  'pxReadyTasksLists st_size = 5 × sizeof(List_t)',
+  `pxReadyTasksLists st_size = 5 × sizeof(List_t=${LIST_SIZE})`,
 );
 
 const cap = await runRenodeRamCapture(ELF, { platform: PLATFORM, seconds: SECONDS });
@@ -66,7 +79,14 @@ if (!cap.captured || !cap.region || !cap.bytesBase64) {
 }
 
 const body = {
-  memory: { base: cap.region.base, endian: 'little', pointerWidth: 4, bytesBase64: cap.bytesBase64 },
+  memory: {
+    base: cap.region.base,
+    endian: 'little',
+    pointerWidth: 4,
+    useMiniListItem: USE_MINI_LIST_ITEM,
+    useListDataIntegrityCheckBytes: USE_LIST_DATA_INTEGRITY_CHECK_BYTES,
+    bytesBase64: cap.bytesBase64,
+  },
   symbols: {
     pxCurrentTCB: prefill.pxCurrentTCB,
     readyListArray: {
@@ -143,5 +163,20 @@ function sortKeys(expected, actual) {
 }
 
 console.log(failures.length === 0 ? 'RESULT: PASS' : `RESULT: FAIL (${failures.length})`);
-fs.writeFileSync(process.env.E2E_OUT ?? '/dev/null', JSON.stringify({ failures, coverage: r.coverage }, null, 1));
+fs.writeFileSync(
+  process.env.E2E_OUT ?? '/dev/null',
+  JSON.stringify(
+    {
+      failures,
+      coverage: r.coverage,
+      layout: {
+        useMiniListItem: USE_MINI_LIST_ITEM,
+        useListDataIntegrityCheckBytes: USE_LIST_DATA_INTEGRITY_CHECK_BYTES,
+        listSize: LIST_SIZE,
+      },
+    },
+    null,
+    1,
+  ),
+);
 process.exit(failures.length === 0 ? 0 : 1);

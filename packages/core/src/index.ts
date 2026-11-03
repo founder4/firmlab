@@ -26,3 +26,4 @@ export * from './vendor-vex.js';
 export { analyzeBuffer } from './analyze.js';
 export type { StaticAnalysis } from './analyze.js';
 export * from './nvd-domain.js';
+export * from './kernel-cve-record.js';
