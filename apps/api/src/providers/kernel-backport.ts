@@ -3,11 +3,12 @@
  * source-tree state. `artifactBinding` is deliberately fixed to `unverified`: no result here changes ProofState.
  */
 import { promisify } from 'node:util';
-import { type LinuxKernelCveRecord, parseLinuxKernelCveRecord } from '@firmlab/core';
+import { type Finding, type LinuxKernelCveRecord, parseLinuxKernelCveRecord } from '@firmlab/core';
 import { execFile, spawn, terminateJobProcess } from '../job-process.js';
 
 const execFileAsync = promisify(execFile);
 const SHA1 = /^[0-9a-f]{40}$/;
+export const MAX_KERNEL_BACKPORT_ATTACHMENTS = 128;
 
 export interface KernelBackportLimits {
   maxCommits: number;
@@ -24,6 +25,8 @@ export interface KernelBackportMatch {
 }
 
 export interface KernelBackportEvidence {
+  /** Optional forever: persisted results written before route integration do not carry the candidate identity. */
+  cveId?: string;
   artifactBinding: 'unverified';
   repoPath: string;
   repoHead: string | null;
@@ -90,6 +93,39 @@ export function parseKernelBackportRequest(input: unknown): KernelBackportReques
     ok: true,
     value: { repoPath: body.repoPath, record: parsedRecord.record, limits: boundedLimits(requested) },
   };
+}
+
+/** Rehydrate only the minimum shape that can be safely attached to a finding. Older results remain unattached. */
+export function parseKernelBackportEvidence(input: unknown): KernelBackportEvidence | null {
+  const value = object(input);
+  if (
+    !value ||
+    typeof value.cveId !== 'string' ||
+    !/^CVE-\d{4}-\d{4,}$/.test(value.cveId) ||
+    value.artifactBinding !== 'unverified' ||
+    !Array.isArray(value.matches)
+  )
+    return null;
+  return value as unknown as KernelBackportEvidence;
+}
+
+/** Add source-tree context to matching kernel-CVE rows without changing severity, proof state or stored ownership. */
+export function attachKernelBackportEvidence(findings: readonly Finding[], rawEvidence: unknown): Finding[] {
+  const candidates = Array.isArray(rawEvidence) ? rawEvidence : [rawEvidence];
+  const byCve = new Map<string, KernelBackportEvidence>();
+  for (const candidate of candidates.slice(0, MAX_KERNEL_BACKPORT_ATTACHMENTS)) {
+    const evidence = parseKernelBackportEvidence(candidate);
+    if (evidence?.cveId && !byCve.has(evidence.cveId)) byCve.set(evidence.cveId, evidence);
+  }
+  if (byCve.size === 0) return [...findings];
+  return findings.map((finding) => {
+    if (finding.kind !== 'kernel-cve' && finding.kind !== 'kernel-cve-candidate') return finding;
+    const evidenceId = typeof finding.evidence?.id === 'string' ? finding.evidence.id : null;
+    const titleId = /^CVE-\d{4}-\d{4,}/.exec(finding.title)?.[0] ?? null;
+    const backportEvidence = byCve.get(evidenceId ?? titleId ?? '');
+    if (!backportEvidence) return finding;
+    return { ...finding, evidence: { ...finding.evidence, backportEvidence } };
+  });
 }
 
 const safeEnv = () => ({
@@ -167,6 +203,7 @@ export async function compareKernelBackports(
     return String(result.stdout).trim();
   };
   const base = {
+    cveId: record.cveId,
     artifactBinding: 'unverified' as const,
     repoPath,
     filesExamined: record.programFiles.slice(0, 128),

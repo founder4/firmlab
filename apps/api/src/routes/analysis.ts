@@ -8,7 +8,8 @@ import type { ImageIdentity, StaticAnalysis } from '@firmlab/core';
 import type { FastifyInstance } from 'fastify';
 import { analyzeImageBuffer } from '../analysis.js';
 import { rowToFinding } from '../findings.js';
-import { getImage, listFindings, listImages, updateImageAnalysis } from '../store.js';
+import { MAX_KERNEL_BACKPORT_ATTACHMENTS, attachKernelBackportEvidence } from '../providers/kernel-backport.js';
+import { getImage, listFindings, listImages, listJobs, updateImageAnalysis } from '../store.js';
 
 function loadAnalysis(id: string): StaticAnalysis | null {
   const row = getImage(id);
@@ -116,6 +117,17 @@ export async function analysisRoutes(app: FastifyInstance): Promise<void> {
   app.get('/images/:id/findings', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!getImage(id)) return reply.status(404).send({ error: 'Image not found' });
-    return { findings: listFindings(id).map(rowToFinding) };
+    const findings = listFindings(id).map(rowToFinding);
+    const evidence: unknown[] = [];
+    for (const job of listJobs(id)) {
+      if (evidence.length >= MAX_KERNEL_BACKPORT_ATTACHMENTS) break;
+      if (job.kind !== 'kernel-backport' || job.status !== 'done' || !job.resultJson) continue;
+      try {
+        evidence.push(JSON.parse(job.resultJson));
+      } catch {
+        // Persisted output may predate the current shape or be corrupt. Omit enrichment; never drop the findings.
+      }
+    }
+    return { findings: attachKernelBackportEvidence(findings, evidence) };
   });
 }

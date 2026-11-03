@@ -2,9 +2,14 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { LinuxKernelCveRecord } from '@firmlab/core';
+import type { Finding, LinuxKernelCveRecord } from '@firmlab/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compareKernelBackports, parseKernelBackportRequest } from './kernel-backport.js';
+import {
+  attachKernelBackportEvidence,
+  compareKernelBackports,
+  parseKernelBackportEvidence,
+  parseKernelBackportRequest,
+} from './kernel-backport.js';
 
 const dirs: string[] = [];
 const git = (repo: string, ...args: string[]) =>
@@ -158,5 +163,50 @@ describe('parseKernelBackportRequest', () => {
     expect(
       parseKernelBackportRequest({ repoPath: '/srv/linux', record: rawRecord(), limits: { maxCommits: '9' } }),
     ).toMatchObject({ ok: false, error: expect.stringContaining('limits.maxCommits') });
+  });
+});
+
+describe('attachKernelBackportEvidence', () => {
+  const baseFinding = {
+    id: 'finding-1',
+    imageId: 'image-1',
+    source: 'kernel',
+    kind: 'kernel-cve',
+    title: 'CVE-2026-43286 (availability) — candidate',
+    severity: 'high',
+    proofState: 'needs_runtime_reproduction',
+    createdAt: 1,
+  } satisfies Finding;
+  const evidence = {
+    cveId: 'CVE-2026-43286',
+    artifactBinding: 'unverified',
+    repoPath: '/srv/linux',
+    repoHead: 'a'.repeat(40),
+    shallow: false,
+    filesExamined: ['mm/hugetlb.c'],
+    commitsExamined: 1,
+    matches: [],
+    coverage: 'complete',
+    limits: { maxCommits: 1, timeoutMs: 1000, maxPatchBytes: 65_536 },
+    reason: 'source evidence only',
+  } as const;
+
+  it('attaches the latest bounded evidence independently by CVE and preserves proof states', () => {
+    const unrelated = { ...baseFinding, id: 'finding-2', title: 'CVE-2026-49999 (availability) — candidate' };
+    const otherEvidence = { ...evidence, cveId: 'CVE-2026-49999', repoHead: 'c'.repeat(40) };
+    const [matched, other] = attachKernelBackportEvidence([baseFinding, unrelated], [evidence, otherEvidence]);
+    expect(matched).toMatchObject({
+      proofState: 'needs_runtime_reproduction',
+      evidence: { backportEvidence: { cveId: 'CVE-2026-43286', artifactBinding: 'unverified' } },
+    });
+    expect(other).toMatchObject({
+      proofState: 'needs_runtime_reproduction',
+      evidence: { backportEvidence: { cveId: 'CVE-2026-49999', repoHead: 'c'.repeat(40) } },
+    });
+  });
+
+  it('leaves findings readable when persisted evidence is old or malformed', () => {
+    expect(parseKernelBackportEvidence({ artifactBinding: 'unverified', matches: [] })).toBeNull();
+    expect(attachKernelBackportEvidence([baseFinding], { cveId: 'bad', matches: [] })).toEqual([baseFinding]);
   });
 });

@@ -105,8 +105,10 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   CVE-2026-43286 fija además la mezcla de rangos cerrados e introducciones abiertas. Toda salida conserva
   `artifactBinding: unverified` y no cambia `ProofState`. La ruta `POST/GET /images/:id/kernel-backport` ya valida
   el mirror y registro antes de crear un job, persiste sólo parámetros acotados y devuelve la evidencia durable sin
-  sincronizar findings. Falta adjuntar opcionalmente `backportEvidence` a las filas kernel-CVE; resolver el estado
-  del firmware exige después un rebuild reproducible que ligue fuente, configuración, toolchain y bytes extraídos.)*
+  sincronizar findings. El ledger adjunta al leer hasta 128 resultados, el último por CVE, como
+  `evidence.backportEvidence`; resultados antiguos sin `cveId` permanecen legibles y sin ese campo opcional, y la
+  unión no toca severidad ni `ProofState`. Resolver el estado del firmware exige después un rebuild reproducible
+  que ligue fuente, configuración, toolchain y bytes extraídos.)*
 - [x] Hacer que la reparación del guest alcance una ruta ejecutada. *(Hecho en `294c841` y endurecido en
   `619f618`.)* El boot real del WR940N en contenedor desechable y sin red probó primero que la entrada anterior no
   se ejecutaba: `busybox init` anteponía `exec` y el `msh` 1.01 tampoco aceptaba la aritmética del contador. La
