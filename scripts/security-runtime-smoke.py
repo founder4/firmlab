@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import sys
 
 
 def run(*args, **kwargs):
@@ -70,7 +71,8 @@ def proxy_roundtrip(work):
             process.wait(timeout=10)
             plain.shutdown()
             tls.shutdown()
-    run('/opt/mitmproxy-venv/bin/python3', '-c',
+    mitmproxy_python = Path('/opt/mitmproxy-venv/bin/python3')
+    run(str(mitmproxy_python if mitmproxy_python.exists() else Path(sys.executable)), '-c',
         'from mitmproxy.io import FlowReader; import sys; '
         'flows=list(FlowReader(open(sys.argv[1],"rb")).stream()); '
         'assert len(flows)==2; assert all(f.response.status_code==200 for f in flows); '

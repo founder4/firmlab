@@ -94,8 +94,11 @@ RUN bash -c 'set -o pipefail; apt-get update && apt-get install -y --no-install-
 # === AFL++ — coverage-guided fuzzing (providers/fuzz.ts, qemu mode). Heavy source build (compiles QEMU). ===
 # Placed BEFORE the download-based tools so a Ghidra/kernel tweak never invalidates this slow layer's cache.
 # CPU_TARGET=aarch64 → fuzzes aarch64 guests here; rebuild with a different CPU_TARGET for arm/mips firmware.
+ARG AFLPP_REF=dbaf11913c1b2702dee5b4d3dcfffd52f1defe50
 RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev python3 flex bison make gcc g++ && rm -rf /var/lib/apt/lists/* \
-    && git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /afl \
+    && curl -fsSL "https://codeload.github.com/AFLplusplus/AFLplusplus/tar.gz/${AFLPP_REF}" -o /tmp/afl.tar.gz \
+    && echo "d5f4f72c830526654bebbc637f6164a93c22d7309ce8ba73979abadc42ce5974  /tmp/afl.tar.gz" | sha256sum -c - \
+    && mkdir /afl && tar xzf /tmp/afl.tar.gz -C /afl --strip-components=1 && rm /tmp/afl.tar.gz \
     && make -C /afl source-only NO_NYX=1 \
     && (cd /afl/qemu_mode && CPU_TARGET=aarch64 ./build_qemu_support.sh) \
     && cp /afl/afl-fuzz /afl/afl-qemu-trace /afl/afl-showmap /afl/afl-tmin /usr/local/bin/ \
@@ -198,7 +201,7 @@ ENV FIRMLAB_ANGR_PYTHON=/opt/angr-venv/bin/python3
 RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends python3-venv \
     && python3 -m venv /opt/angr-venv \
     && /opt/angr-venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/angr-venv/bin/pip install --no-cache-dir angr \
+    && /opt/angr-venv/bin/pip install --no-cache-dir angr bitstring==4.3.1 \
     && /opt/angr-venv/bin/python3 -c "import angr; print(\"angr\", angr.__version__)" \
     && rm -rf /var/lib/apt/lists/*' \
     || echo "angr optional install failed — symbolic reachability degrades honestly"

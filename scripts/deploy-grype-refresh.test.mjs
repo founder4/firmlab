@@ -253,6 +253,14 @@ test('the Debian 12 recipe selects a same-architecture JDK for Ghidra', async ()
   assert.doesNotMatch(dockerfile, /linux\/aarch64\/jdk\/hotspot/);
 });
 
+test('the Debian 12 recipe pins AFL++ source and the angr bitstring API it consumes', async () => {
+  const dockerfile = await readFile(path.join(root, 'Dockerfile.tools'), 'utf8');
+  assert.match(dockerfile, /ARG AFLPP_REF=dbaf11913c1b2702dee5b4d3dcfffd52f1defe50/);
+  assert.match(dockerfile, /d5f4f72c830526654bebbc637f6164a93c22d7309ce8ba73979abadc42ce5974/);
+  assert.doesNotMatch(dockerfile, /git clone --depth 1 https:\/\/github\.com\/AFLplusplus\/AFLplusplus/);
+  assert.match(dockerfile, /pip install --no-cache-dir angr bitstring==4\.3\.1/);
+});
+
 test('the Debian 13 recipe takes exactly the retained and Renode images from local build arguments', async () => {
   const dockerfile = await readFile(path.join(root, 'Dockerfile.trixie'), 'utf8');
   assert.match(dockerfile, new RegExp(`^ARG RETAINED_IMAGE=${RETAINED}$`, 'm'));
