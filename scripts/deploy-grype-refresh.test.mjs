@@ -260,6 +260,9 @@ test('the Debian 12 recipe pins AFL++, angr and the dependency APIs angr consume
   assert.doesNotMatch(dockerfile, /git clone --depth 1 https:\/\/github\.com\/AFLplusplus\/AFLplusplus/);
   assert.match(dockerfile, /make -C \/afl -j4 afl-fuzz afl-showmap afl-tmin NO_NYX=1/);
   assert.doesNotMatch(dockerfile, /make -C \/afl source-only/);
+  assert.match(dockerfile, /amd64\) qemu_target=x86_64/);
+  assert.match(dockerfile, /arm64\) qemu_target=aarch64/);
+  assert.match(dockerfile, /CPU_TARGET="\$qemu_target"/);
   assert.match(
     dockerfile,
     /pip install --no-cache-dir 'angr\[unicorn\]==9\.2\.211' bitstring==4\.3\.1 pycparser==3\.0/,

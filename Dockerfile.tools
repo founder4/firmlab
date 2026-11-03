@@ -93,14 +93,16 @@ RUN bash -c 'set -o pipefail; apt-get update && apt-get install -y --no-install-
 
 # === AFL++ — coverage-guided fuzzing (providers/fuzz.ts, qemu mode). Heavy source build (compiles QEMU). ===
 # Placed BEFORE the download-based tools so a Ghidra/kernel tweak never invalidates this slow layer's cache.
-# CPU_TARGET=aarch64 → fuzzes aarch64 guests here; rebuild with a different CPU_TARGET for arm/mips firmware.
+# Match the QEMU user target to the image architecture so the runtime smoke exercises a real binary. Other
+# firmware architectures still degrade explicitly: one afl-qemu-trace build cannot execute every guest ISA.
 ARG AFLPP_REF=dbaf11913c1b2702dee5b4d3dcfffd52f1defe50
 RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev python3 flex bison make gcc g++ && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL "https://codeload.github.com/AFLplusplus/AFLplusplus/tar.gz/${AFLPP_REF}" -o /tmp/afl.tar.gz \
     && echo "d5f4f72c830526654bebbc637f6164a93c22d7309ce8ba73979abadc42ce5974  /tmp/afl.tar.gz" | sha256sum -c - \
     && mkdir /afl && tar xzf /tmp/afl.tar.gz -C /afl --strip-components=1 && rm /tmp/afl.tar.gz \
     && make -C /afl -j4 afl-fuzz afl-showmap afl-tmin NO_NYX=1 \
-    && (cd /afl/qemu_mode && CPU_TARGET=aarch64 ./build_qemu_support.sh) \
+    && case "${TARGETARCH}" in amd64) qemu_target=x86_64 ;; arm64) qemu_target=aarch64 ;; *) exit 1 ;; esac \
+    && (cd /afl/qemu_mode && CPU_TARGET="$qemu_target" ./build_qemu_support.sh) \
     && cp /afl/afl-fuzz /afl/afl-qemu-trace /afl/afl-showmap /afl/afl-tmin /usr/local/bin/ \
     && afl-fuzz --version && afl-qemu-trace --version | head -1' \
     || echo "AFL++ optional build failed — fuzzing provider degrades honestly"
