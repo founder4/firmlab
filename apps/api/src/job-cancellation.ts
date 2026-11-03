@@ -17,6 +17,7 @@ export class JobCancellation {
   private readonly sockets = new WeakMap<ChildProcess, Set<string>>();
   private readonly children = new Set<ChildProcess>();
   private readonly pending = new Set<Promise<void>>();
+  constructor(private readonly snapshotSockets: (group: number) => Set<string> = processGroupSockets) {}
   get cancelled(): boolean {
     return this.controller.signal.aborted;
   }
@@ -53,7 +54,16 @@ export class JobCancellation {
   terminate(child: ChildProcess): void {
     if (!child.pid || this.killed.has(child)) return;
     try {
-      if (!this.sockets.has(child)) this.sockets.set(child, processGroupSockets(child.pid));
+      if (!this.sockets.has(child)) {
+        try {
+          this.sockets.set(child, this.snapshotSockets(child.pid));
+        } catch (error) {
+          // Restricted /proc mounts can deny fd enumeration. Group-exit verification still applies, and the
+          // permission gap must never prevent signalling the owned process or replace its provider error.
+          if ((error as NodeJS.ErrnoException).code !== 'EACCES') throw error;
+          this.sockets.set(child, new Set());
+        }
+      }
       if (process.platform === 'win32') child.kill('SIGKILL');
       else process.kill(-child.pid, 'SIGKILL');
       this.killed.add(child);

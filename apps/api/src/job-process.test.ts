@@ -5,8 +5,7 @@ import { JobCancellation, jobCancellation } from './job-cancellation.js';
 import { execFile } from './job-process.js';
 
 const exec = promisify(execFile);
-const owned = async <T>(work: () => Promise<T>) => {
-  const owner = new JobCancellation();
+const owned = async <T>(work: () => Promise<T>, owner = new JobCancellation()) => {
   try {
     return await jobCancellation.run(owner, work);
   } finally {
@@ -39,6 +38,15 @@ describe('owned execFile compatibility', () => {
     ).rejects.toMatchObject({ code: 'ETIMEDOUT', killed: true });
     await expect(
       owned(() => exec(process.execPath, ['-e', 'process.stdout.write("123456789")'], { maxBuffer: 4 })),
+    ).rejects.toMatchObject({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', stdout: '1234' });
+  });
+
+  it('preserves the provider error when a restricted procfs prevents socket discovery', async () => {
+    const denied = new JobCancellation(() => {
+      throw Object.assign(new Error('permission denied, scandir /proc/123/fd'), { code: 'EACCES' });
+    });
+    await expect(
+      owned(() => exec(process.execPath, ['-e', 'process.stdout.write("123456789")'], { maxBuffer: 4 }), denied),
     ).rejects.toMatchObject({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', stdout: '1234' });
   });
 });
@@ -79,7 +87,8 @@ it.skipIf(process.platform === 'win32')(
         const promise = jobCancellation.run(owner, () =>
           isolated
             ? runIsolated([process.execPath, '-e', 'setInterval(() => {}, 1000)'], {
-                limits: { ...loadIsolationLimits(), wallMs: 100 },
+                // Managed runtimes reserve large virtual/file mappings at startup; this test targets the wall timer.
+                limits: { ...loadIsolationLimits(), addressSpaceBytes: 0, fileSizeBytes: 0, wallMs: 100 },
               })
             : execFileProcessGroup(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
                 timeout: 100,
