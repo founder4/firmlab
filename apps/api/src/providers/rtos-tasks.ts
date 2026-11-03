@@ -14,7 +14,8 @@
  * pinned at `needs_runtime_reproduction`: the snapshot is operator-supplied input, not bytes of the image. An
  * empty task list is never reported as "no tasks" unless every lane walked to completion, and even then the
  * summary names what was not walked. Every lane reports nodes and bytes attempted vs. completed, plus the bounds
- * that applied, so a partial answer states where it stopped.
+ * that applied, so a partial answer states where it stopped. Declared FreeRTOS integrity words have their own
+ * attempted/completed/mismatch counters: disagreement is a layout/snapshot diagnostic, never a proof-state change.
  *
  * Beyond the ready lists, the operator may name the other `tasks.c` state lists — the two delayed lists, the
  * suspended list, the pending-ready list and the waiting-termination list. They are the same `List_t`, walked by
@@ -188,7 +189,14 @@ export interface RtosTaskSnapshotResult {
   currentTask: RtosCurrentTaskLane;
   readyLists: RtosReadyListLane[];
   /** Totals cover EVERY lane walked — ready and named alike. */
-  totals: { nodesAttempted: number; nodesCompleted: number; bytesAttempted: number; bytesCompleted: number };
+  totals: {
+    nodesAttempted: number;
+    nodesCompleted: number;
+    bytesAttempted: number;
+    bytesCompleted: number;
+    /** Optional forever: older persisted results predate integrity-marker reads. */
+    integrityChecks?: { attempted: number; completed: number; mismatches: number };
+  };
   /** Present only when the request named delayed lists. */
   delayedLists?: RtosNamedListLane[];
   suspendedList?: RtosNamedListLane;
@@ -450,7 +458,8 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
   const readyLists: RtosReadyListLane[] = array
     ? array.lists.map((l) => {
         const r = parseFreeRtosNamedList(s.buf, s.base, l, s.layout);
-        const { coverage, attempted, completed, tasks, evidence, declaredItems, containerMismatches } = r;
+        const { coverage, attempted, completed, tasks, evidence, integrityChecks, declaredItems, containerMismatches } =
+          r;
         return {
           priority: l.priority ?? null,
           listAddress: l.address,
@@ -459,6 +468,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
           completed,
           tasks,
           evidence,
+          ...(integrityChecks ? { integrityChecks } : {}),
           ...listBytes(r, s.layout),
           declaredItems,
           containerMismatches,
@@ -502,6 +512,14 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
   // A lane that stopped early can still have corroborated tasks before it stopped; that is partial, not none.
   const coverage = done === coverages.length ? 'complete' : done === 0 && tasks === 0 ? 'none' : 'partial';
   const nodesAttempted = lists.reduce((n, l) => n + l.attempted, 0);
+  const integrityChecks = lists.reduce(
+    (total, l) => ({
+      attempted: total.attempted + (l.integrityChecks?.attempted ?? 0),
+      completed: total.completed + (l.integrityChecks?.completed ?? 0),
+      mismatches: total.mismatches + (l.integrityChecks?.mismatches ?? 0),
+    }),
+    { attempted: 0, completed: 0, mismatches: 0 },
+  );
   const discarded =
     nodesAttempted > tasks
       ? ` ${nodesAttempted - tasks} walked node(s) did not yield a corroborated task record and are not counted.`
@@ -530,11 +548,18 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     tcbsOnSeveralLists.length > 0
       ? ` ${tcbsOnSeveralLists.length} TCB(s) appear on more than one state list, ${TORN}`
       : '';
-  const inconsistent =
-    readyLists.filter((l) => (l.containerMismatches ?? 0) > 0).length +
-    named.filter((l) => l.containerMismatches > 0 || l.orderViolations > 0).length;
+  const inconsistent = [...readyLists, ...named].filter(
+    (l) =>
+      (l.containerMismatches ?? 0) > 0 ||
+      ('orderViolations' in l && l.orderViolations > 0) ||
+      (l.integrityChecks?.mismatches ?? 0) > 0,
+  ).length;
   const anomalies =
     inconsistent > 0 ? ` ${inconsistent} list(s) carry structural inconsistencies, recorded in their evidence.` : '';
+  const integrityAnomalies =
+    integrityChecks.mismatches > 0
+      ? ` ${integrityChecks.mismatches} FreeRTOS integrity marker(s) disagreed with 0x5a5a5a5a; this may mean a wrong declared layout or a torn/corrupt snapshot, not a runtime finding.`
+      : '';
 
   const incomplete = [
     ...(currentTask.coverage === 'complete' ? [] : [`pxCurrentTCB: ${currentTask.coverage}`]),
@@ -564,9 +589,9 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
   const scope = `Only the supplied lists in the supplied bytes were walked; ${notRead}${readyScope}${SNAPSHOT_SCOPE}`;
   const summary =
     coverage === 'complete'
-      ? `${counted} across ${lists.length} list(s), every lane walked to its sentinel.${discarded}${torn}${anomalies} ${scope}`
+      ? `${counted} across ${lists.length} list(s), every lane walked to its sentinel.${discarded}${torn}${anomalies}${integrityAnomalies} ${scope}`
       : `${counted} found, but ${incomplete.join('; ')} — this is not a complete task set, and an ` +
-        `empty result here is not "no tasks".${discarded}${torn}${anomalies} ${scope}`;
+        `empty result here is not "no tasks".${discarded}${torn}${anomalies}${integrityAnomalies} ${scope}`;
 
   const all = [currentTask, ...readyLists, ...named];
   return {
@@ -594,6 +619,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
       nodesCompleted: tasks,
       bytesAttempted: all.reduce((n, l) => n + (l.bytesAttempted ?? 0), 0),
       bytesCompleted: all.reduce((n, l) => n + (l.bytesCompleted ?? 0), 0),
+      integrityChecks,
     },
     ...(delayedLists ? { delayedLists } : {}),
     ...(suspendedList ? { suspendedList } : {}),

@@ -25,6 +25,26 @@ function snapshot(opts: { bNext?: number; length?: number } = {}): Uint8Array {
   return new Uint8Array(dv.buffer).slice(0, opts.length ?? 0x100);
 }
 
+/** One mini-list layout with `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES=1`. */
+function integritySnapshot(badItemTrailing = false): Uint8Array {
+  const dv = new DataView(new ArrayBuffer(0x100));
+  const item = BASE + 0x40;
+  const sentinel = LIST + 12;
+  const marker = 0x5a5a_5a5a;
+  dv.setUint32(0, marker, true); // List_t leading
+  dv.setUint32(4, 1, true); // uxNumberOfItems
+  dv.setUint32(12, marker, true); // MiniListItem_t leading
+  dv.setUint32(20, item, true); // sentinel pxNext
+  dv.setUint32(28, marker, true); // List_t trailing
+  dv.setUint32(item - BASE, marker, true); // ListItem_t leading
+  dv.setUint32(item - BASE + 4, 7, true);
+  dv.setUint32(item - BASE + 8, sentinel, true);
+  dv.setUint32(item - BASE + 16, 0x2000_7000, true);
+  dv.setUint32(item - BASE + 20, LIST, true);
+  dv.setUint32(item - BASE + 24, badItemTrailing ? 0x1111_1111 : marker, true);
+  return new Uint8Array(dv.buffer);
+}
+
 function body(bytes: Uint8Array, symbols: RtosTaskSnapshotInput['symbols']): RtosTaskSnapshotInput {
   return {
     memory: { base: BASE, endian: 'little', pointerWidth: 4, bytesBase64: Buffer.from(bytes).toString('base64') },
@@ -108,7 +128,13 @@ describe('runRtosTaskSnapshot', () => {
     expect(r.readyLists[0]).toMatchObject({ priority: 3, coverage: 'complete', attempted: 2, completed: 2 });
     expect(r.readyLists[0]?.tasks.map((t) => t.tcbAddress)).toEqual([0x2000_1000, 0x2000_2000]);
     // sentinel (4 + 4) + two 20-byte records + one pointer for pxCurrentTCB
-    expect(r.totals).toEqual({ nodesAttempted: 2, nodesCompleted: 2, bytesAttempted: 52, bytesCompleted: 52 });
+    expect(r.totals).toEqual({
+      nodesAttempted: 2,
+      nodesCompleted: 2,
+      bytesAttempted: 52,
+      bytesCompleted: 52,
+      integrityChecks: { attempted: 0, completed: 0, mismatches: 0 },
+    });
     expect(r.limits.maxListItems).toBe(256);
     expect(r.summary).toMatch(/not read here/);
   });
@@ -118,7 +144,13 @@ describe('runRtosTaskSnapshot', () => {
     expect(r.coverage).toBe('none');
     expect(r.currentTask.coverage).toBe('missing_symbol');
     expect(r.readyLists).toEqual([expect.objectContaining({ priority: null, coverage: 'missing_symbol' })]);
-    expect(r.totals).toEqual({ nodesAttempted: 0, nodesCompleted: 0, bytesAttempted: 0, bytesCompleted: 0 });
+    expect(r.totals).toEqual({
+      nodesAttempted: 0,
+      nodesCompleted: 0,
+      bytesAttempted: 0,
+      bytesCompleted: 0,
+      integrityChecks: { attempted: 0, completed: 0, mismatches: 0 },
+    });
     expect(r.summary).toMatch(/not a complete task set/);
     expect(r.summary).toMatch(/not "no tasks"/);
   });
@@ -143,6 +175,23 @@ describe('runRtosTaskSnapshot', () => {
   it('reports an out-of-range pxCurrentTCB symbol without reading it', () => {
     const r = run(body(snapshot(), { pxCurrentTCB: 0x9000_0000 }));
     expect(r.currentTask).toMatchObject({ coverage: 'out_of_range', tcbAddress: null, bytesCompleted: 0 });
+  });
+
+  it('aggregates declared FreeRTOS integrity markers without upgrading the snapshot proof state', () => {
+    const input = body(integritySnapshot(true), { readyLists: [{ priority: 0, address: LIST }] });
+    input.memory.useMiniListItem = true;
+    input.memory.useListDataIntegrityCheckBytes = true;
+    const r = run(input);
+
+    expect(r.coverage).toBe('partial'); // pxCurrentTCB was not supplied; the ready-list walk itself is complete.
+    expect(r.proofState).toBe('needs_runtime_reproduction');
+    expect(r.readyLists[0]).toMatchObject({
+      coverage: 'complete',
+      integrityChecks: { enabled: true, attempted: 5, completed: 5, mismatches: 1 },
+    });
+    expect(r.totals.integrityChecks).toEqual({ attempted: 5, completed: 5, mismatches: 1 });
+    expect(r.summary).toMatch(/integrity marker.*wrong declared layout or a torn\/corrupt snapshot/);
+    expect(r.summary).toMatch(/not a runtime finding/);
   });
 });
 
@@ -212,7 +261,13 @@ describe('named state lists', () => {
     expect(r.pendingReadyList).toMatchObject({ kind: 'pending', coverage: 'complete', attempted: 0, completed: 0 });
     expect(r.terminatedList).toBeUndefined();
     // ready 2 + delayed 2 + suspended 1 nodes; bytes: ready 48 + delayed 48 + suspended 28 + pending 8 + pxCurrentTCB 4
-    expect(r.totals).toEqual({ nodesAttempted: 5, nodesCompleted: 5, bytesAttempted: 136, bytesCompleted: 136 });
+    expect(r.totals).toEqual({
+      nodesAttempted: 5,
+      nodesCompleted: 5,
+      bytesAttempted: 136,
+      bytesCompleted: 136,
+      integrityChecks: { attempted: 0, completed: 0, mismatches: 0 },
+    });
     expect(r.unwalkedKinds).toEqual(['delayed', 'terminated']);
     expect(r.summary).toMatch(/^2 ready task record\(s\) \(plus 2 delayed, 1 suspended, 0 pending-ready\) across 4/);
     expect(r.summary).toMatch(/delayed \(second list\), waiting-termination tasks live on lists not read here/);

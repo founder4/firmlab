@@ -152,6 +152,15 @@ check(
 const cur = r.currentTask.tcbAddress ? tcb(r.currentTask.tcbAddress).name : null;
 check(cur === 'SpinA' || cur === 'SpinB', `pxCurrentTCB is one of the priority-1 spinners (got ${cur})`);
 check((r.tcbsOnSeveralLists ?? []).length === 0, 'no TCB appears on two state lists');
+const integrity = r.totals.integrityChecks ?? { attempted: 0, completed: 0, mismatches: 0 };
+check(
+  USE_LIST_DATA_INTEGRITY_CHECK_BYTES
+    ? integrity.attempted > 0 && integrity.completed === integrity.attempted && integrity.mismatches === 0
+    : integrity.attempted === 0 && integrity.completed === 0 && integrity.mismatches === 0,
+  USE_LIST_DATA_INTEGRITY_CHECK_BYTES
+    ? `all ${integrity.attempted} declared 0x5a integrity markers were read and agreed`
+    : 'no integrity markers were claimed when the FreeRTOS option was disabled',
+);
 check(r.proofState === 'needs_runtime_reproduction', 'proof state stays needs_runtime_reproduction');
 
 function sortKeys(expected, actual) {
@@ -169,6 +178,7 @@ fs.writeFileSync(
     {
       failures,
       coverage: r.coverage,
+      integrityChecks: integrity,
       layout: {
         useMiniListItem: USE_MINI_LIST_ITEM,
         useListDataIntegrityCheckBytes: USE_LIST_DATA_INTEGRITY_CHECK_BYTES,

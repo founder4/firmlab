@@ -107,6 +107,7 @@ export const rtosTasks: Messages['rtosTasks'] = {
       coverage: 'Cobertura',
       nodes: 'Nodos (hechos / intentados)',
       bytes: 'Bytes (leídos / intentados)',
+      integrity: 'Marcadores 0x5a',
       tasks: 'TCB de tareas',
       state: 'Estado',
     },
@@ -122,6 +123,8 @@ export const rtosTasks: Messages['rtosTasks'] = {
     },
     secondDelayed: 'la segunda lista de retardadas',
     wakeTick: (tcb, tick) => `${tcb} despierta en el tick ${tick}`,
+    integrityValue: (reads, mismatches) => `${reads}; ${mismatches} discrepancia(s)`,
+    integrityDisabled: 'desactivados',
     notWalked: (kinds) =>
       `No recorridas, porque no se aportaron: ${kinds}. Las tareas en esos estados no están en este resultado.`,
     severalLists: (n, tcbs) =>

@@ -100,7 +100,13 @@ describe('RTOS task snapshot route', () => {
     );
     const result = await runQueued();
     expect(result).toMatchObject({ coverage: 'complete', proofState: 'needs_runtime_reproduction' });
-    expect(result.totals).toEqual({ nodesAttempted: 1, nodesCompleted: 1, bytesAttempted: 32, bytesCompleted: 32 });
+    expect(result.totals).toEqual({
+      nodesAttempted: 1,
+      nodesCompleted: 1,
+      bytesAttempted: 32,
+      bytesCompleted: 32,
+      integrityChecks: { attempted: 0, completed: 0, mismatches: 0 },
+    });
     expect(mocks.syncFindings).not.toHaveBeenCalled();
   });
 

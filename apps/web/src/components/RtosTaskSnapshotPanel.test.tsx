@@ -145,6 +145,7 @@ describe('RtosTaskSnapshotPanel', () => {
           completed: 2,
           bytesAttempted: 48,
           bytesCompleted: 48,
+          integrityChecks: { enabled: true, attempted: 8, completed: 8, mismatches: 1 },
           tasks: [{ tcbAddress: 0x20000100 }, { tcbAddress: 0x20000200 }],
           evidence: [],
         },
@@ -157,6 +158,8 @@ describe('RtosTaskSnapshotPanel', () => {
     expect(screen.getByText(m.result.proofLead)).toBeInTheDocument();
     expect(screen.getByText('0x20000100 0x20000200')).toBeInTheDocument();
     expect(screen.getByText('2 / 2')).toBeInTheDocument();
+    expect(screen.getByText(m.result.col.integrity)).toBeInTheDocument();
+    expect(screen.getByText(m.result.integrityValue('8 / 8', 1))).toBeInTheDocument();
     expect(screen.getByText('pxCurrentTCB address not supplied')).toBeInTheDocument();
     expect(screen.getByText(m.result.limits(512, 256, 64))).toBeInTheDocument();
   });

@@ -109,6 +109,7 @@ export const rtosTasks = {
       coverage: 'Coverage',
       nodes: 'Nodes (done / tried)',
       bytes: 'Bytes (read / tried)',
+      integrity: '0x5a markers',
       tasks: 'Task TCBs',
       state: 'State',
     },
@@ -124,6 +125,8 @@ export const rtosTasks = {
     },
     secondDelayed: 'the second delayed list',
     wakeTick: (tcb: string, tick: number | string) => `${tcb} wakes at tick ${tick}`,
+    integrityValue: (reads: string, mismatches: number) => `${reads}; ${mismatches} mismatch(es)`,
+    integrityDisabled: 'disabled',
     notWalked: (kinds: string) =>
       `Not walked, because not supplied: ${kinds}. Tasks in those states are not in this result.`,
     severalLists: (n: number, tcbs: string) =>

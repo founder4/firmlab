@@ -1564,6 +1564,8 @@ export interface RtosTaskLane {
   completed?: number;
   tasks?: { listItemAddress?: number; itemValue?: number; tcbAddress?: number }[];
   evidence?: string[];
+  /** Optional forever: stored jobs from older builds have no integrity-marker counters. */
+  integrityChecks?: { enabled?: boolean; attempted?: number; completed?: number; mismatches?: number };
   priority?: number | null;
   listAddress?: number | null;
   bytesAttempted?: number;
@@ -1604,7 +1606,13 @@ export interface RtosTaskSnapshotResult {
     bytesCompleted?: number;
   };
   readyLists?: RtosTaskLane[];
-  totals?: { nodesAttempted?: number; nodesCompleted?: number; bytesAttempted?: number; bytesCompleted?: number };
+  totals?: {
+    nodesAttempted?: number;
+    nodesCompleted?: number;
+    bytesAttempted?: number;
+    bytesCompleted?: number;
+    integrityChecks?: { attempted?: number; completed?: number; mismatches?: number };
+  };
   delayedLists?: RtosNamedListLane[];
   suspendedList?: RtosNamedListLane;
   pendingReadyList?: RtosNamedListLane;

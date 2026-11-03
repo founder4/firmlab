@@ -869,6 +869,15 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
   const lanes = result.readyLists ?? [];
   const array = result.readyListArray;
   const pair = (done?: number, tried?: number) => `${done ?? '—'} / ${tried ?? '—'}`;
+  const integrity = (lane: RtosTaskLane) =>
+    lane.integrityChecks
+      ? lane.integrityChecks.enabled
+        ? m.result.integrityValue(
+            pair(lane.integrityChecks.completed, lane.integrityChecks.attempted),
+            lane.integrityChecks.mismatches ?? 0,
+          )
+        : m.result.integrityDisabled
+      : m.result.notRecorded;
   return (
     <section style={{ marginTop: 16 }} aria-label={m.result.heading}>
       <div className="eyebrow">{m.result.heading}</div>
@@ -911,6 +920,7 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
               <th>{m.result.col.coverage}</th>
               <th>{m.result.col.nodes}</th>
               <th>{m.result.col.bytes}</th>
+              <th>{m.result.col.integrity}</th>
               <th>{m.result.col.tasks}</th>
             </tr>
           </thead>
@@ -924,6 +934,7 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
                 <LaneCoverage coverage={cur.coverage} evidence={cur.evidence} m={m} />
                 <td>—</td>
                 <td className="mono">{pair(cur.bytesCompleted, cur.bytesAttempted)}</td>
+                <td>—</td>
                 <td className="mono">{typeof cur.tcbAddress === 'number' ? hex(cur.tcbAddress) : m.result.noTasks}</td>
               </tr>
             )}
@@ -940,6 +951,7 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
                 <LaneCoverage coverage={lane.coverage} evidence={lane.evidence} m={m} />
                 <td className="mono">{pair(lane.completed, lane.attempted)}</td>
                 <td className="mono">{pair(lane.bytesCompleted, lane.bytesAttempted)}</td>
+                <td className="mono">{integrity(lane)}</td>
                 <td className="mono">
                   {lane.tasks && lane.tasks.length > 0
                     ? lane.tasks.map((t) => hex(t.tcbAddress)).join(' ')
@@ -977,6 +989,15 @@ function StateLists({ result, m }: { result: RtosTaskSnapshotResult; m: M }): JS
   const several = result.tcbsOnSeveralLists ?? [];
   if (lanes.length === 0 && unwalked.length === 0 && several.length === 0) return null;
   const pair = (done?: number, tried?: number) => `${done ?? '—'} / ${tried ?? '—'}`;
+  const integrity = (lane: RtosNamedListLane) =>
+    lane.integrityChecks
+      ? lane.integrityChecks.enabled
+        ? m.result.integrityValue(
+            pair(lane.integrityChecks.completed, lane.integrityChecks.attempted),
+            lane.integrityChecks.mismatches ?? 0,
+          )
+        : m.result.integrityDisabled
+      : m.result.notRecorded;
   const oneDelayed = (result.delayedLists?.length ?? 0) === 1;
   return (
     <>
@@ -995,6 +1016,7 @@ function StateLists({ result, m }: { result: RtosTaskSnapshotResult; m: M }): JS
                 <th>{m.result.col.coverage}</th>
                 <th>{m.result.col.nodes}</th>
                 <th>{m.result.col.bytes}</th>
+                <th>{m.result.col.integrity}</th>
                 <th>{m.result.col.tasks}</th>
               </tr>
             </thead>
@@ -1006,6 +1028,7 @@ function StateLists({ result, m }: { result: RtosTaskSnapshotResult; m: M }): JS
                   <LaneCoverage coverage={lane.coverage} evidence={lane.evidence} m={m} />
                   <td className="mono">{pair(lane.completed, lane.attempted)}</td>
                   <td className="mono">{pair(lane.bytesCompleted, lane.bytesAttempted)}</td>
+                  <td className="mono">{integrity(lane)}</td>
                   <td className="mono">
                     {lane.tasks && lane.tasks.length > 0 ? (
                       lane.itemValueMeaning === 'wake_tick' ? (

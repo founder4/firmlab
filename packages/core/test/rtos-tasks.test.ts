@@ -193,6 +193,7 @@ describe('parseFreeRtosReadyList (unchanged by the named-list walk)', () => {
       completed: 1,
       tasks: [{ listItemAddress: ITEM_A, itemValue: 9, tcbAddress: 0x3000_0001 }],
       evidence: [],
+      integrityChecks: { enabled: false, attempted: 0, completed: 0, mismatches: 0 },
     });
     expect(parseFreeRtosReadyList(buf, REGION_BASE, null).evidence).toEqual(['no ready-list address supplied']);
   });
@@ -392,6 +393,14 @@ describe('parseFreeRtosNamedList', () => {
         const item = REGION_BASE + 0x100;
         const sentinel = LIST_ADDR + d.list.sentinelOffset;
         const write = (address: number, value: number) => dv.setUint32(address - REGION_BASE, value, true);
+        if (useListDataIntegrityCheckBytes) {
+          write(LIST_ADDR, 0x5a5a_5a5a);
+          write(LIST_ADDR + d.list.sentinelOffset + d.sentinel.size, 0x5a5a_5a5a);
+          write(sentinel, 0x5a5a_5a5a);
+          if (!useMiniListItem) write(sentinel + d.listItem.containerOffset + layout.pointerWidth, 0x5a5a_5a5a);
+          write(item, 0x5a5a_5a5a);
+          write(item + d.listItem.containerOffset + layout.pointerWidth, 0x5a5a_5a5a);
+        }
         write(LIST_ADDR + d.list.numberOfItemsOffset, 1);
         write(sentinel + d.sentinel.nextOffset, item);
         write(item + d.listItem.itemValueOffset, 0x1234);
@@ -404,10 +413,65 @@ describe('parseFreeRtosNamedList', () => {
             declaredItems: 1,
             containerMismatches: 0,
             tasks: [{ listItemAddress: item, itemValue: 0x1234, tcbAddress: 0x3000_0042 }],
+            integrityChecks: {
+              enabled: useListDataIntegrityCheckBytes,
+              attempted: useListDataIntegrityCheckBytes ? (useMiniListItem ? 5 : 6) : 0,
+              completed: useListDataIntegrityCheckBytes ? (useMiniListItem ? 5 : 6) : 0,
+              mismatches: 0,
+            },
           },
         );
       }
     }
+  });
+
+  it('reports a bad integrity word as a bounded layout/snapshot diagnostic without changing coverage', () => {
+    const layout = {
+      pointerWidth: 4 as const,
+      endian: 'little' as const,
+      useMiniListItem: true,
+      useListDataIntegrityCheckBytes: true,
+    };
+    const d = deriveFreeRtosListLayout(layout);
+    const buf = new Uint8Array(0x200);
+    const dv = new DataView(buf.buffer);
+    const item = REGION_BASE + 0x100;
+    const sentinel = LIST_ADDR + d.list.sentinelOffset;
+    const write = (address: number, value: number) => dv.setUint32(address - REGION_BASE, value, true);
+    for (const address of [
+      LIST_ADDR,
+      LIST_ADDR + d.list.sentinelOffset + d.sentinel.size,
+      sentinel,
+      item,
+      item + d.listItem.containerOffset + layout.pointerWidth,
+    ])
+      write(address, 0x5a5a_5a5a);
+    write(LIST_ADDR + d.list.numberOfItemsOffset, 1);
+    write(sentinel + d.sentinel.nextOffset, item);
+    write(item + d.listItem.itemValueOffset, 1);
+    write(item + d.listItem.nextOffset, sentinel);
+    write(item + d.listItem.ownerOffset, 0x3000_0042);
+    write(item + d.listItem.containerOffset, LIST_ADDR);
+    write(item + d.listItem.containerOffset + layout.pointerWidth, 0x1111_1111);
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'ready', address: LIST_ADDR }, layout);
+    expect(r).toMatchObject({
+      coverage: 'complete',
+      completed: 1,
+      integrityChecks: { enabled: true, attempted: 5, completed: 5, mismatches: 1 },
+    });
+    expect(r.evidence.join('\n')).toMatch(/ListItem_t trailing integrity marker.*11111111.*layout may be wrong/);
+
+    const cut = parseFreeRtosNamedList(
+      buf.slice(0, item - REGION_BASE + 26),
+      REGION_BASE,
+      { kind: 'ready', address: LIST_ADDR },
+      layout,
+    );
+    expect(cut).toMatchObject({
+      coverage: 'truncated',
+      integrityChecks: { enabled: true, attempted: 5, completed: 4, mismatches: 0 },
+    });
   });
 
   it('strides adjacent List_t records by listRecordSize, the way pxReadyTasksLists[] lays them out', () => {

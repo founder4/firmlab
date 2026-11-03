@@ -158,10 +158,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   offsets y tamaños para `configUSE_MINI_LIST_ITEM` 0/1 y `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES` 0/1, con
   `TickType_t` todavía explícitamente de 32 bits. Core, API y panel declaran/persisten ambas opciones; omitirlas
   conserva los defaults históricos (mini=1, integridad=0), y `sizeof(List_t)` se confronta con el layout efectivo.
-  Fixtures byte-a-byte recorren las cuatro combinaciones de 32 bits y fijan la matriz de tamaños también en 64
-  bits. Los bytes 0x5a sólo seleccionan offsets: aún no se leen como prueba de integridad. La matriz temporal
-  V11.1.0 ya ejecuta las cuatro variantes en Renode offline y recupera exactamente las tareas esperadas con
-  `sizeof(List_t)` 28/44/20/32, manteniendo `needs_runtime_reproduction`.)* Faltan: un ELF
+  bits. Los marcadores `0x5a5a5a5a` ya se leen con contadores por lista y agregados de intentados/completados/
+  discrepantes; una discrepancia sólo diagnostica layout declarado erróneo o snapshot desgarrado/corrupto, sin
+  cambiar cobertura ni `needs_runtime_reproduction`, y los campos persistidos nuevos siguen opcionales. La matriz
+  temporal V11.1.0 ya ejecuta las cuatro variantes en Renode offline y recupera exactamente las tareas esperadas
+  con `sizeof(List_t)` 28/44/20/32.)* Faltan: un ELF
   FreeRTOS de fabricante (el corpus sólo tiene Zephyr y Contiki),
   anotación por `uxTopReadyPriority` (F4), `TickType_t` 16/64, colas de eventos/bloqueo y fuzzing de
   periféricos/MMIO (µEmu/P2IM/Fuzzware); Renode sigue demostrando vida, no cobertura del HAL.

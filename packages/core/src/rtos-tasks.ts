@@ -16,6 +16,8 @@
  * Every other coverage value (a missing symbol, a pointer outside the supplied memory region, a record truncated
  * by the buffer's edge, or a cycle that never returned to the sentinel) means the question was asked and the
  * traversal could not answer it, which is not the same as "no tasks".
+ * When the integrity-byte option is declared, its `0x5a5a5a5a` words are read with separate attempted/completed/
+ * mismatch counters. They diagnose the declared layout or snapshot consistency; they never alter walk coverage.
  *
  * Pure: no I/O, no tool dependency, no address translation — the caller resolves symbol addresses and hands in a
  * `buf`/`regionBase` pair (a contiguous memory dump and the address its first byte corresponds to). Wiring this to
@@ -75,6 +77,18 @@ export interface FreeRtosTaskRecord {
   tcbAddress: number;
 }
 
+/** Diagnostic reads of FreeRTOS's optional `0x5a` list-integrity words. */
+export interface FreeRtosIntegrityChecks {
+  /** Whether the caller declared `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES=1`. */
+  enabled: boolean;
+  /** Declared marker fields reached by the walk, including fields outside or cut by the supplied region. */
+  attempted: number;
+  /** Attempted marker fields whose complete four bytes were available and read. */
+  completed: number;
+  /** Completed reads whose value was not `0x5a5a5a5a`. Never changes coverage or proof state. */
+  mismatches: number;
+}
+
 export interface FreeRtosTaskListResult {
   coverage: FreeRtosCoverage;
   /** Every node the traversal visited and attempted to read, including ones that failed to corroborate or bound the walk. */
@@ -84,6 +98,8 @@ export interface FreeRtosTaskListResult {
   tasks: FreeRtosTaskRecord[];
   /** Human-readable audit trail: why the walk ended where it did. */
   evidence: string[];
+  /** Optional forever because API job results embedding this type may have been persisted by an older build. */
+  integrityChecks?: FreeRtosIntegrityChecks;
 }
 
 function u32(buf: Uint8Array, o: number, le: boolean): number {
@@ -195,6 +211,7 @@ export function listRecordSize(layout: FreeRtosLayout): number {
 
 /** What one walk saw beyond the base result: the header count, container back-pointers, and the item values in order. */
 interface ListWalk extends FreeRtosTaskListResult {
+  integrityChecks: FreeRtosIntegrityChecks;
   /** `uxNumberOfItems` from the `List_t` header, or null when the header lies outside the buffer. */
   declaredItems: number | null;
   /** Visited, in-bounds nodes whose `pxContainer` does not point back at this list. */
@@ -214,12 +231,20 @@ function walkList(
   layout: FreeRtosLayout,
   missingEvidence: string,
 ): ListWalk {
+  const integrityChecks: FreeRtosIntegrityChecks = {
+    enabled: layout.useListDataIntegrityCheckBytes ?? false,
+    attempted: 0,
+    completed: 0,
+    mismatches: 0,
+  };
+  const evidence: string[] = [];
   const empty = (coverage: FreeRtosCoverage, line: string): ListWalk => ({
     coverage,
     attempted: 0,
     completed: 0,
     tasks: [],
-    evidence: [line],
+    evidence: [...evidence, line],
+    integrityChecks,
     declaredItems: null,
     containerMismatches: [],
     values: [],
@@ -236,6 +261,25 @@ function walkList(
 
   const inRegion = (addr: number) => addr >= regionBase && addr < regionEnd;
   const readField = (addr: number, fieldOffset: number) => readUint(buf, addr - regionBase + fieldOffset, ptr, le);
+  const checkIntegrity = (address: number, field: string) => {
+    if (!integrityChecks.enabled) return;
+    integrityChecks.attempted++;
+    const offset = address - regionBase;
+    if (offset < 0 || offset + TICK_WIDTH > buf.length) return;
+    integrityChecks.completed++;
+    const actual = readUint(buf, offset, TICK_WIDTH, le);
+    if (actual === 0x5a5a_5a5a) return;
+    integrityChecks.mismatches++;
+    evidence.push(
+      `${field} integrity marker at 0x${address.toString(16)} reads 0x${actual.toString(16).padStart(8, '0')}, not 0x5a5a5a5a — the declared layout may be wrong or the snapshot may be torn/corrupt`,
+    );
+  };
+
+  checkIntegrity(listAddress, 'List_t leading');
+  checkIntegrity(listAddress + derived.list.sentinelOffset + derived.sentinel.size, 'List_t trailing');
+  checkIntegrity(sentinelAddress, 'list sentinel leading');
+  if (!derived.useMiniListItem)
+    checkIntegrity(sentinelAddress + derived.listItem.containerOffset + ptr, 'full ListItem_t sentinel trailing');
 
   // xListEnd is a MiniListItem_t (itemValue + pxNext + pxPrevious, no owner) — its pxNext is the chain head.
   if (!inRegion(sentinelAddress)) {
@@ -254,7 +298,6 @@ function walkList(
   let cur = readField(sentinelAddress, derived.sentinel.nextOffset);
   const visited = new Set<number>();
   const tasks: FreeRtosTaskRecord[] = [];
-  const evidence: string[] = [];
   const containerMismatches: number[] = [];
   let attempted = 0;
   let coverage: FreeRtosCoverage = 'complete';
@@ -271,6 +314,8 @@ function walkList(
       break;
     }
     attempted++;
+    checkIntegrity(cur, 'ListItem_t leading');
+    checkIntegrity(cur + derived.listItem.containerOffset + ptr, 'ListItem_t trailing');
     if (!inRegion(cur)) {
       coverage = 'out_of_range';
       evidence.push(`list item pointer 0x${cur.toString(16)} falls outside the mapped region`);
@@ -299,6 +344,7 @@ function walkList(
     completed: tasks.length,
     tasks,
     evidence,
+    integrityChecks,
     declaredItems,
     containerMismatches,
     values: tasks.map((t) => t.itemValue),
@@ -319,14 +365,14 @@ export function parseFreeRtosReadyList(
   listAddress: number | null,
   layout: FreeRtosLayout = DEFAULT_FREERTOS_LAYOUT,
 ): FreeRtosTaskListResult {
-  const { coverage, attempted, completed, tasks, evidence } = walkList(
+  const { coverage, attempted, completed, tasks, evidence, integrityChecks } = walkList(
     buf,
     regionBase,
     listAddress,
     layout,
     'no ready-list address supplied',
   );
-  return { coverage, attempted, completed, tasks, evidence };
+  return { coverage, attempted, completed, tasks, evidence, integrityChecks };
 }
 
 /**
@@ -454,6 +500,7 @@ export function parseFreeRtosNamedList(
     completed: w.completed,
     tasks: w.tasks,
     evidence,
+    integrityChecks: w.integrityChecks,
     itemValueMeaning: meaning,
     declaredItems: w.declaredItems,
     containerMismatches: w.containerMismatches.length,
