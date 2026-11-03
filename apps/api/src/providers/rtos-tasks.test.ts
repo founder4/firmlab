@@ -115,6 +115,24 @@ describe('validateRtosTaskSnapshot', () => {
     });
     expect(invalid.ok === false && invalid.errors.join('\n')).toMatch(/useMiniListItem must be boolean/);
   });
+
+  it('requires uxTopReadyPriority to declare priority or bitmap semantics and bounds the bitmap domain', () => {
+    const invalid = validateRtosTaskSnapshot(
+      body(snapshot(), {
+        readyLists: [{ priority: 0, address: LIST }],
+        uxTopReadyPriority: { address: CUR, representation: 'guess' as 'priority' },
+      }),
+    );
+    expect(invalid.ok === false && invalid.errors.join('\n')).toMatch(/representation must be 'priority' or 'bitmap'/);
+
+    const tooWide = validateRtosTaskSnapshot(
+      body(snapshot(), {
+        readyListArray: { base: LIST, maxPriorities: 33, listSize: 20 },
+        uxTopReadyPriority: { address: CUR, representation: 'bitmap' },
+      }),
+    );
+    expect(tooWide.ok === false && tooWide.errors.join('\n')).toMatch(/supported only with at most 32/);
+  });
 });
 
 describe('runRtosTaskSnapshot', () => {
@@ -382,6 +400,7 @@ describe('validateRtosTaskSnapshot — named lists', () => {
  */
 const ARRAY = BASE + 0x100;
 const P1_ITEM = BASE + 0x180;
+const TOP_READY = BASE + 0x1e0;
 
 function arraySnapshot(opts: { container?: number } = {}): Uint8Array {
   const dv = new DataView(new ArrayBuffer(0x200));
@@ -418,6 +437,44 @@ describe('ready lists declared as the pxReadyTasksLists array', () => {
     expect(r.summary).toMatch(/^1 ready task record\(s\) across 3 list\(s\)/);
     expect(r.summary).toMatch(/all 3 declared priorities/);
     expect(r.summary).not.toMatch(/ready lists at priorities not supplied/);
+  });
+
+  it('reconciles an explicitly represented uxTopReadyPriority scalar with the complete array', () => {
+    const bytes = arraySnapshot();
+    new DataView(bytes.buffer).setUint32(TOP_READY - BASE, 1, true);
+    const r = run(
+      body(bytes, {
+        pxCurrentTCB: CUR,
+        readyListArray: array,
+        uxTopReadyPriority: { address: TOP_READY, representation: 'priority' },
+      }),
+    );
+    expect(r.topReadyPriority).toMatchObject({
+      coverage: 'complete',
+      address: TOP_READY,
+      representation: 'priority',
+      value: 1,
+      expected: 1,
+      agrees: true,
+      bytesAttempted: 4,
+      bytesCompleted: 4,
+    });
+    expect(r.proofState).toBe('needs_runtime_reproduction');
+  });
+
+  it('keeps a uxTopReadyPriority disagreement as an annotation, not a coverage or proof-state change', () => {
+    const bytes = arraySnapshot();
+    new DataView(bytes.buffer).setUint32(TOP_READY - BASE, 0, true);
+    const r = run(
+      body(bytes, {
+        pxCurrentTCB: CUR,
+        readyListArray: array,
+        uxTopReadyPriority: { address: TOP_READY, representation: 'priority' },
+      }),
+    );
+    expect(r).toMatchObject({ coverage: 'complete', proofState: 'needs_runtime_reproduction' });
+    expect(r.topReadyPriority).toMatchObject({ coverage: 'complete', value: 0, expected: 1, agrees: false });
+    expect(r.summary).toMatch(/uxTopReadyPriority disagreed/);
   });
 
   it('names st_size in the summary when it corroborated the declaration', () => {

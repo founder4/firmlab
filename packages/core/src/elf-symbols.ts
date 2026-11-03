@@ -862,6 +862,8 @@ function candidate(group: readonly ElfSymbol[], basis: ElfAddressBasis, segments
  */
 export interface FreeRtosSnapshotSymbols {
   pxCurrentTCB: number | null;
+  /** Address only; whether the scalar is a priority or bitmap remains a build declaration by the operator. */
+  uxTopReadyPriority?: number | null;
   delayedLists: { name: 'xDelayedTaskList1' | 'xDelayedTaskList2'; address: number | null }[];
   suspendedList: number | null;
   pendingReadyList: number | null;
@@ -900,6 +902,7 @@ export function freeRtosSnapshotSymbols(res: FreeRtosKernelSymbolsResult): FreeR
   return {
     symbols: {
       pxCurrentTCB: addr('pxCurrentTCB'),
+      uxTopReadyPriority: addr('uxTopReadyPriority'),
       delayedLists: [
         { name: 'xDelayedTaskList1', address: addr('xDelayedTaskList1') },
         { name: 'xDelayedTaskList2', address: addr('xDelayedTaskList2') },
@@ -928,7 +931,6 @@ export function freeRtosSnapshotSymbols(res: FreeRtosKernelSymbolsResult): FreeR
         name: 'pxOverflowDelayedTaskList',
         reason: 'A pointer variable, not a list; which delayed list it points at is a RAM fact.',
       },
-      { name: 'uxTopReadyPriority', reason: 'A scalar in RAM, not a list; the snapshot contract has no field for it.' },
       {
         name: 'pxCurrentTCBs',
         reason: 'The SMP per-core array; the snapshot contract reads one pxCurrentTCB and has no SMP lane.',

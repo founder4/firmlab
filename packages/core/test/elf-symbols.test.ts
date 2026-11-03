@@ -649,6 +649,7 @@ describe('freeRtosSnapshotSymbols', () => {
     const out = freeRtosSnapshotSymbols(k);
     expect(out.symbols).toEqual({
       pxCurrentTCB: 0x20000010,
+      uxTopReadyPriority: 0x2000020c,
       delayedLists: [
         { name: 'xDelayedTaskList1', address: 0x200001a0 },
         { name: 'xDelayedTaskList2', address: 0x200001b4 },
@@ -662,7 +663,6 @@ describe('freeRtosSnapshotSymbols', () => {
       'pxReadyTasksLists',
       'pxDelayedTaskList',
       'pxOverflowDelayedTaskList',
-      'uxTopReadyPriority',
       'pxCurrentTCBs',
     ]);
     expect(out.notCarried[0]?.reason).toMatch(/two numbers the operator declares; the array's raw st_size is 0xa0\./);

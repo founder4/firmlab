@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_FREERTOS_LAYOUT,
   FREERTOS_ITEM_VALUE_MEANING,
   FREERTOS_OVER_DECLARED_COUNT,
   type FreeRtosListKind,
@@ -12,6 +13,7 @@ import {
   parseFreeRtosList,
   parseFreeRtosNamedList,
   parseFreeRtosReadyList,
+  parseFreeRtosTopReadyPriority,
   pointerAlignmentPadding,
 } from '../src/rtos-tasks.js';
 
@@ -177,6 +179,95 @@ describe('parseFreeRtosCurrentTask', () => {
     const result = parseFreeRtosCurrentTask(buf, REGION_BASE, 0x9000_0000);
     expect(result.coverage).toBe('out_of_range');
     expect(result.tcbAddress).toBeNull();
+  });
+});
+
+describe('parseFreeRtosTopReadyPriority', () => {
+  const address = REGION_BASE + 0x180;
+  const lanes = [
+    { priority: 0, coverage: 'complete' as const, attempted: 1 },
+    { priority: 1, coverage: 'complete' as const, attempted: 2 },
+    { priority: 2, coverage: 'complete' as const, attempted: 0 },
+    { priority: 3, coverage: 'complete' as const, attempted: 1 },
+  ];
+
+  it('compares the declared generic-priority representation with the highest non-empty ready list', () => {
+    const { buf } = memory(REGION_BASE, 0x200, true);
+    new DataView(buf.buffer).setUint32(address - REGION_BASE, 3, true);
+    expect(
+      parseFreeRtosTopReadyPriority(buf, REGION_BASE, address, DEFAULT_FREERTOS_LAYOUT, 'priority', lanes, true),
+    ).toMatchObject({ coverage: 'complete', value: 3, expected: 3, agrees: true });
+  });
+
+  it('compares the explicitly declared optimized representation as a bitmap', () => {
+    const { buf } = memory(REGION_BASE, 0x200, true);
+    new DataView(buf.buffer).setUint32(address - REGION_BASE, 0b1011, true);
+    expect(
+      parseFreeRtosTopReadyPriority(buf, REGION_BASE, address, DEFAULT_FREERTOS_LAYOUT, 'bitmap', lanes, true),
+    ).toMatchObject({ coverage: 'complete', value: 0b1011, expected: 0b1011, agrees: true });
+  });
+
+  it('records a disagreement without changing scalar-read coverage', () => {
+    const { buf } = memory(REGION_BASE, 0x200, true);
+    new DataView(buf.buffer).setUint32(address - REGION_BASE, 1, true);
+    const r = parseFreeRtosTopReadyPriority(
+      buf,
+      REGION_BASE,
+      address,
+      DEFAULT_FREERTOS_LAYOUT,
+      'priority',
+      lanes,
+      true,
+    );
+    expect(r).toMatchObject({ coverage: 'complete', value: 1, expected: 3, agrees: false });
+    expect(r.evidence.join('\n')).toMatch(/declared mode may be wrong or the snapshot may be torn/);
+  });
+
+  it('reads but refuses to compare incomplete or manually selected ready-list coverage', () => {
+    const { buf } = memory(REGION_BASE, 0x200, true);
+    new DataView(buf.buffer).setUint32(address - REGION_BASE, 3, true);
+    const manual = parseFreeRtosTopReadyPriority(
+      buf,
+      REGION_BASE,
+      address,
+      DEFAULT_FREERTOS_LAYOUT,
+      'priority',
+      lanes,
+      false,
+    );
+    expect(manual).toMatchObject({ coverage: 'complete', value: 3, expected: null, agrees: null });
+    const partial = parseFreeRtosTopReadyPriority(
+      buf,
+      REGION_BASE,
+      address,
+      DEFAULT_FREERTOS_LAYOUT,
+      'priority',
+      [{ ...lanes[0], coverage: 'truncated' }],
+      true,
+    );
+    expect(partial).toMatchObject({ coverage: 'complete', expected: null, agrees: null });
+  });
+
+  it('reports missing, out-of-range and truncated scalar reads explicitly', () => {
+    const { buf } = memory(REGION_BASE, 0x20, true);
+    expect(
+      parseFreeRtosTopReadyPriority(buf, REGION_BASE, null, DEFAULT_FREERTOS_LAYOUT, 'priority', [], false).coverage,
+    ).toBe('missing_symbol');
+    expect(
+      parseFreeRtosTopReadyPriority(buf, REGION_BASE, REGION_BASE - 4, DEFAULT_FREERTOS_LAYOUT, 'priority', [], false)
+        .coverage,
+    ).toBe('out_of_range');
+    expect(
+      parseFreeRtosTopReadyPriority(
+        buf,
+        REGION_BASE,
+        REGION_BASE + buf.length - 2,
+        DEFAULT_FREERTOS_LAYOUT,
+        'priority',
+        [],
+        false,
+      ).coverage,
+    ).toBe('truncated');
   });
 });
 

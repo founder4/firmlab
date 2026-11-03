@@ -95,6 +95,11 @@ const body = {
       listSize: LIST_SIZE,
       symbolSize: prefill.readyListArray?.symbolSize ?? null,
     },
+    uxTopReadyPriority: {
+      address: prefill.uxTopReadyPriority ?? null,
+      // The fixture pins configUSE_PORT_OPTIMISED_TASK_SELECTION=0 in FreeRTOSConfig.h.
+      representation: 'priority',
+    },
     delayedLists: prefill.delayedLists,
     suspendedList: prefill.suspendedList,
     pendingReadyList: prefill.pendingReadyList,
@@ -152,6 +157,10 @@ check(
 const cur = r.currentTask.tcbAddress ? tcb(r.currentTask.tcbAddress).name : null;
 check(cur === 'SpinA' || cur === 'SpinB', `pxCurrentTCB is one of the priority-1 spinners (got ${cur})`);
 check((r.tcbsOnSeveralLists ?? []).length === 0, 'no TCB appears on two state lists');
+check(
+  r.topReadyPriority?.coverage === 'complete' && r.topReadyPriority.agrees === true,
+  `uxTopReadyPriority agrees with the complete ready-list array (${r.topReadyPriority?.value ?? 'not read'})`,
+);
 const integrity = r.totals.integrityChecks ?? { attempted: 0, completed: 0, mismatches: 0 };
 check(
   USE_LIST_DATA_INTEGRITY_CHECK_BYTES

@@ -46,6 +46,7 @@ import {
   parseFreeRtosCurrentTask,
   parseFreeRtosNamedList,
   parseFreeRtosReadyList,
+  parseFreeRtosTopReadyPriority,
 } from '@firmlab/core';
 import type {
   FreeRtosCoverage,
@@ -54,6 +55,8 @@ import type {
   FreeRtosNamedList,
   FreeRtosNamedListResult,
   FreeRtosTaskListResult,
+  FreeRtosTopReadyPriorityResult,
+  FreeRtosTopReadyRepresentation,
   ProofState,
 } from '@firmlab/core';
 
@@ -93,6 +96,8 @@ export interface RtosTaskSnapshotInput {
      * `configMAX_PRIORITIES` and `sizeof(List_t)` as declared for the build, plus the symbol's `st_size` if known.
      */
     readyListArray?: { base: number | null; maxPriorities: number; listSize: number; symbolSize?: number | null };
+    /** Scalar address plus the build-declared meaning selected by `configUSE_PORT_OPTIMISED_TASK_SELECTION`. */
+    uxTopReadyPriority?: { address: number | null; representation: FreeRtosTopReadyRepresentation };
     /**
      * `xDelayedTaskList1`/`2`, up to two. A name containing "overflow" (e.g. `pxOverflowDelayedTaskList`) makes the
      * lane `delayed_overflow`: the two lists swap roles at every tick wrap, so only the operator, reading the two
@@ -116,6 +121,7 @@ export interface ValidatedSnapshot {
   readyLists: { priority: number; address: number | null }[];
   /** Present when the ready lists were declared as an array; `readyLists` is then empty. */
   readyListArray?: ReadyListArray;
+  topReadyPriority?: { address: number | null; representation: FreeRtosTopReadyRepresentation };
   /** Each absent field means "not asked", which is different from a null address ("asked, not resolved"). */
   delayedLists?: FreeRtosNamedList[];
   suspendedList?: number | null;
@@ -212,6 +218,8 @@ export interface RtosTaskSnapshotResult {
   tcbsOnSeveralLists?: number[];
   /** Present only when the ready lists were declared as the `pxReadyTasksLists` array. */
   readyListArray?: ReadyListArrayInfo;
+  /** Optional forever: older persisted jobs predate the scalar/list reconciliation. */
+  topReadyPriority?: FreeRtosTopReadyPriorityResult & { bytesAttempted?: number; bytesCompleted?: number };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -335,6 +343,25 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
     }
   }
 
+  let topReadyPriority: ValidatedSnapshot['topReadyPriority'];
+  const top = symbols.uxTopReadyPriority;
+  if (top !== undefined) {
+    if (!isRecord(top)) {
+      errors.push('symbols.uxTopReadyPriority must declare address and representation');
+    } else if (top.address !== null && !isAddr(top.address)) {
+      errors.push('symbols.uxTopReadyPriority.address must be an address or null');
+    } else if (top.representation !== 'priority' && top.representation !== 'bitmap') {
+      errors.push("symbols.uxTopReadyPriority.representation must be 'priority' or 'bitmap'");
+    } else if (top.representation === 'bitmap' && readyListArray && readyListArray.maxPriorities > 32) {
+      errors.push('bitmap uxTopReadyPriority is supported only with at most 32 declared priorities');
+    } else {
+      topReadyPriority = {
+        address: top.address as number | null,
+        representation: top.representation,
+      };
+    }
+  }
+
   let delayedLists: FreeRtosNamedList[] | undefined;
   const delayed = symbols.delayedLists;
   if (delayed !== undefined) {
@@ -401,6 +428,7 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
       pxCurrentTCB: (cur as number | null | undefined) ?? null,
       readyLists,
       ...(readyListArray !== undefined ? { readyListArray } : {}),
+      ...(topReadyPriority !== undefined ? { topReadyPriority } : {}),
       ...(delayedLists !== undefined ? { delayedLists } : {}),
       ...(suspendedList !== undefined ? { suspendedList } : {}),
       ...(pendingReadyList !== undefined ? { pendingReadyList } : {}),
@@ -504,6 +532,22 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     (l): l is RtosNamedListLane => l !== undefined,
   );
   const lists: FreeRtosTaskListResult[] = [...readyLists, ...named];
+  const topReadyPriority = s.topReadyPriority
+    ? {
+        ...parseFreeRtosTopReadyPriority(
+          s.buf,
+          s.base,
+          s.topReadyPriority.address,
+          s.layout,
+          s.topReadyPriority.representation,
+          readyLists,
+          array !== undefined && array.base !== null && readyLists.length === array.maxPriorities,
+        ),
+        bytesAttempted: s.topReadyPriority.address === null ? 0 : ptr,
+        bytesCompleted: 0,
+      }
+    : undefined;
+  if (topReadyPriority?.coverage === 'complete') topReadyPriority.bytesCompleted = ptr;
 
   const coverages: FreeRtosCoverage[] = [currentTask.coverage, ...lists.map((l) => l.coverage)];
   const done = coverages.filter((c) => c === 'complete').length;
@@ -560,6 +604,10 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     integrityChecks.mismatches > 0
       ? ` ${integrityChecks.mismatches} FreeRTOS integrity marker(s) disagreed with 0x5a5a5a5a; this may mean a wrong declared layout or a torn/corrupt snapshot, not a runtime finding.`
       : '';
+  const topReadyAnomaly =
+    topReadyPriority?.agrees === false
+      ? ' uxTopReadyPriority disagreed with the complete ready-list array; its declared representation or the snapshot may be wrong.'
+      : '';
 
   const incomplete = [
     ...(currentTask.coverage === 'complete' ? [] : [`pxCurrentTCB: ${currentTask.coverage}`]),
@@ -589,11 +637,11 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
   const scope = `Only the supplied lists in the supplied bytes were walked; ${notRead}${readyScope}${SNAPSHOT_SCOPE}`;
   const summary =
     coverage === 'complete'
-      ? `${counted} across ${lists.length} list(s), every lane walked to its sentinel.${discarded}${torn}${anomalies}${integrityAnomalies} ${scope}`
+      ? `${counted} across ${lists.length} list(s), every lane walked to its sentinel.${discarded}${torn}${anomalies}${integrityAnomalies}${topReadyAnomaly} ${scope}`
       : `${counted} found, but ${incomplete.join('; ')} — this is not a complete task set, and an ` +
-        `empty result here is not "no tasks".${discarded}${torn}${anomalies}${integrityAnomalies} ${scope}`;
+        `empty result here is not "no tasks".${discarded}${torn}${anomalies}${integrityAnomalies}${topReadyAnomaly} ${scope}`;
 
-  const all = [currentTask, ...readyLists, ...named];
+  const all = [currentTask, ...readyLists, ...named, ...(topReadyPriority ? [topReadyPriority] : [])];
   return {
     proofState: 'needs_runtime_reproduction',
     coverage,
@@ -626,6 +674,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     ...(pendingReadyList ? { pendingReadyList } : {}),
     ...(terminatedList ? { terminatedList } : {}),
     unwalkedKinds,
+    ...(topReadyPriority ? { topReadyPriority } : {}),
     ...(tcbsOnSeveralLists.length > 0 ? { tcbsOnSeveralLists } : {}),
     ...(array
       ? {

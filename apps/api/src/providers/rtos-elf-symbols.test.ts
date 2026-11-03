@@ -88,6 +88,7 @@ describe('rtosElfSymbolsFromBytes', () => {
     expect(r.complete).toBe(true);
     expect(r.prefill).toEqual({
       pxCurrentTCB: 0x20000010,
+      uxTopReadyPriority: null,
       delayedLists: [
         { name: 'xDelayedTaskList1', address: 0x200001a0 },
         { name: 'xDelayedTaskList2', address: 0x200001b4 },

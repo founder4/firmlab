@@ -687,6 +687,95 @@ export interface FreeRtosCurrentTaskResult {
   evidence: string[];
 }
 
+export type FreeRtosTopReadyRepresentation = 'priority' | 'bitmap';
+
+export interface FreeRtosReadyLaneObservation {
+  priority: number | null;
+  coverage: FreeRtosCoverage;
+  /** Chain nodes, including a node whose owner was null. This decides whether the ready list itself was empty. */
+  attempted: number;
+}
+
+export interface FreeRtosTopReadyPriorityResult {
+  coverage: 'complete' | 'out_of_range' | 'truncated' | 'missing_symbol';
+  address: number | null;
+  representation: FreeRtosTopReadyRepresentation;
+  value: number | null;
+  /** Derived only from a complete, fully declared ready-list array; null means no comparison was licensed. */
+  expected: number | null;
+  agrees: boolean | null;
+  evidence: string[];
+}
+
+/**
+ * Read and reconcile FreeRTOS's `uxTopReadyPriority` scalar. In generic task selection it is a priority; ports
+ * using optimized selection commonly turn the same storage into a ready-priority bitmap. The caller declares
+ * which representation its build uses — this function never guesses it from the value.
+ */
+export function parseFreeRtosTopReadyPriority(
+  buf: Uint8Array,
+  regionBase: number,
+  address: number | null,
+  layout: FreeRtosLayout,
+  representation: FreeRtosTopReadyRepresentation,
+  readyLists: readonly FreeRtosReadyLaneObservation[],
+  allPrioritiesDeclared: boolean,
+): FreeRtosTopReadyPriorityResult {
+  const base = { address, representation, value: null, expected: null, agrees: null } as const;
+  if (address === null)
+    return { ...base, coverage: 'missing_symbol', evidence: ['uxTopReadyPriority address not supplied'] };
+  const offset = address - regionBase;
+  if (offset < 0 || offset >= buf.length)
+    return {
+      ...base,
+      coverage: 'out_of_range',
+      evidence: [`uxTopReadyPriority address 0x${address.toString(16)} falls outside the mapped region`],
+    };
+  if (offset + layout.pointerWidth > buf.length)
+    return {
+      ...base,
+      coverage: 'truncated',
+      evidence: [`uxTopReadyPriority read at 0x${address.toString(16)} runs past the supplied buffer`],
+    };
+
+  const value = readUint(buf, offset, layout.pointerWidth, layout.endian === 'little');
+  const observed = { ...base, coverage: 'complete' as const, value };
+  if (!allPrioritiesDeclared || readyLists.some((l) => l.priority === null || l.coverage !== 'complete')) {
+    return {
+      ...observed,
+      evidence: [
+        'uxTopReadyPriority was read but not compared: every priority in a fully resolved ready-list array must complete',
+      ],
+    };
+  }
+
+  const nonEmpty = readyLists.filter((l) => l.attempted > 0).map((l) => l.priority as number);
+  if (nonEmpty.length === 0) {
+    return {
+      ...observed,
+      evidence: [
+        'uxTopReadyPriority was read but no declared ready list was non-empty, so no expected value was claimed',
+      ],
+    };
+  }
+  const expected =
+    representation === 'priority'
+      ? Math.max(...nonEmpty)
+      : nonEmpty.reduce((bits, priority) => bits + 2 ** priority, 0);
+  const agrees = value === expected;
+  const meaning = representation === 'priority' ? 'highest non-empty ready priority' : 'ready-priority bitmap';
+  return {
+    ...observed,
+    expected,
+    agrees,
+    evidence: [
+      agrees
+        ? `uxTopReadyPriority ${representation} value ${value} agrees with the ${meaning} derived from the complete array`
+        : `uxTopReadyPriority ${representation} value ${value} does not equal ${expected}, the ${meaning} derived from the complete array — the declared mode may be wrong or the snapshot may be torn`,
+    ],
+  };
+}
+
 /**
  * Read the single `TCB_t *pxCurrentTCB` global, given its resolved address. The cheapest possible corroborated
  * task fact (one pointer, no traversal) — useful when a symbol table gives `pxCurrentTCB` but not a ready list.
