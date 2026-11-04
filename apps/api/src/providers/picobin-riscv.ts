@@ -8,10 +8,10 @@
  */
 import { execFileSync } from 'node:child_process';
 import {
-  parseRiscvStartupCopyTable,
   type FindingDraft,
   type PicobinInfo,
   type RiscvStartupCopyTable,
+  parseRiscvStartupCopyTable,
 } from '@firmlab/core';
 
 const XIP_BASE = 0x1000_0000;
