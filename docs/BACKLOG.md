@@ -181,7 +181,9 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   copia flash→SRAM del CRT0 de Pico SDK: en la muestra real recupera cuatro regiones y sigue los destinos SRAM
   (`0x2000c82c`, `0x200029a0`, `0x2000c7b6`) hasta el límite deliberado de 8 funciones y 24 aristas, sin objetivos
   resueltos fuera del mapa y conservando dos llamadas indirectas/no resueltas. Es cobertura estática truncada, no
-  prueba de ejecución.)*
+  prueba de ejecución. Las muestras oficiales `hello_universal` y `nuke_universal` v2.3.1-0 validaron además
+  bucles con varias `IMAGE_DEF`, selección RISC-V, rolling XIP y `LOAD_MAP` relativo negativo; ambos grafos
+  conservaron 0 objetivos resueltos fuera del mapa y se truncaron explícitamente al fallar el siguiente decode.)*
   *(ELF de fabricante resuelto, 2026-11-03: el target FreeRTOS oficial de ST
   `STM32N6-GettingStarted-Audio` v2.3.0 se reprodujo con Arm GCC 13.3.1 y quedó local/ignorado por licencia. FirmLab
   leyó 4315/4315 símbolos y resolvió 10/11 nombres, incluido el array ready de 56 × 20 bytes; sólo falta la variante
