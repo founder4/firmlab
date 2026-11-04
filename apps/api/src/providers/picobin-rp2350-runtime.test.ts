@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  RP2350_RISCV_ISA,
   RP2350_REQUIRED_MODELS,
+  RP2350_RISCV_ISA,
   buildRp2350RuntimePlan,
   classifyRp2350MmioAccess,
   supportsRp2350Isa,
