@@ -463,6 +463,15 @@ describe('DeepAnalysisDetails', () => {
             },
             reason: 'Decoded a bounded RISC-V call graph from the declared entrypoint.',
           },
+          picobinRuntimePlan: {
+            status: 'blocked',
+            proofState: 'blocked_by_platform',
+            minimumRenodeVersion: '1.17.0',
+            network: 'isolated',
+            unknownMmio: 'stop-and-report',
+            missingModels: ['resets', 'xosc'],
+            reason: 'Runtime plan is blocked by missing local platform inputs.',
+          },
         }}
       />,
     );
@@ -474,6 +483,9 @@ describe('DeepAnalysisDetails', () => {
     expect(screen.getByText(/not a whole-image call graph/)).toBeInTheDocument();
     expect(screen.getByText(/0x100001cc · unsupported-instruction · bytes b316a028b347f520/)).toBeInTheDocument();
     expect(screen.getByText('Exact Zba/Zbs decoder-view substitutions')).toBeInTheDocument();
+    expect(screen.getByText('RP2350 local runtime plan')).toBeInTheDocument();
+    expect(screen.getByText('blocked_by_platform')).toBeInTheDocument();
+    expect(screen.getByText('resets, xosc')).toBeInTheDocument();
   });
 
   it('keeps legacy PICOBIN results explicitly unrecorded instead of inventing zero coverage', () => {

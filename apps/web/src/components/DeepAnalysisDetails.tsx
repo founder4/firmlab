@@ -629,6 +629,27 @@ function PicobinDisassemblyDetails({ value }: { value: unknown }): JSX.Element |
   );
 }
 
+function PicobinRuntimePlanDetails({ value }: { value: unknown }): JSX.Element | null {
+  const t = useMessages().shell.deep.details;
+  const plan = record(value);
+  if (!plan) return null;
+  return (
+    <DetailSection title={t.picobinRuntimePlan}>
+      <Metrics
+        items={[
+          { label: t.runtimeStatus, value: text(plan.status) ?? t.notRecorded },
+          { label: t.runtimeProofState, value: text(plan.proofState) ?? t.notRecorded },
+          { label: t.minimumRenodeVersion, value: text(plan.minimumRenodeVersion) ?? t.notRecorded },
+          { label: t.networkPolicy, value: text(plan.network) ?? t.notRecorded },
+          { label: t.unknownMmioPolicy, value: text(plan.unknownMmio) ?? t.notRecorded },
+          { label: t.missingPeripheralModels, value: strings(plan.missingModels).join(', ') || t.noItems },
+        ]}
+      />
+      {text(plan.reason) && <p className="deep-data-copy">{text(plan.reason)}</p>}
+    </DetailSection>
+  );
+}
+
 function RtosDetails({ result }: { result: RecordValue }): JSX.Element {
   const t = useMessages().shell.deep.details;
   const vector = record(result.vectorTable);
@@ -668,6 +689,7 @@ function RtosDetails({ result }: { result: RecordValue }): JSX.Element {
         </DetailSection>
       )}
       <PicobinDisassemblyDetails value={result.picobinDisassembly} />
+      <PicobinRuntimePlanDetails value={result.picobinRuntimePlan} />
     </>
   );
 }

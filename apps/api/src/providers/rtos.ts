@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import { fingerprintMcu, parsePicobinImages } from '@firmlab/core';
 import type { FindingDraft, PicobinInfo } from '@firmlab/core';
 import { type PicobinRiscvDisassembly, runPicobinRiscvDisassembly } from './picobin-riscv.js';
+import { type Rp2350RuntimePlan, buildRp2350RuntimePlan } from './picobin-rp2350-runtime.js';
 
 /** Format a 32-bit address as zero-padded, 0x-prefixed hex (e.g. 0x08000000) for titles and evidence. */
 function hex(n: number): string {
@@ -356,6 +357,8 @@ export interface RtosResult {
   picobinDisassembly?: PicobinRiscvDisassembly;
   /** Optional forever: older persisted W7 results retained only the first IMAGE_DEF. */
   picobinImages?: PicobinInfo[];
+  /** Optional forever: planning metadata was added after static PICOBIN graph recovery. This does not claim a boot. */
+  picobinRuntimePlan?: Rp2350RuntimePlan;
 }
 
 const FIRMWARE_READ_CAP = 16 * 1024 * 1024;
@@ -418,6 +421,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
   const picobinDisassembly = disassemblyTarget
     ? runPicobinRiscvDisassembly(imagePath, disassemblyTarget, read.fileSize, undefined, read.buf)
     : null;
+  const picobinRuntimePlan = disassemblyTarget ? buildRp2350RuntimePlan(disassemblyTarget, read.fileSize) : null;
   const findings = picobinDisassembly ? [...a.findings, ...picobinDisassembly.findings] : a.findings;
   const scanScope = a.coverage.complete
     ? `the complete ${a.coverage.fileBytes}-byte image`
@@ -445,6 +449,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
       reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${picobinNote}${disassemblyNote}${ecosNote}${flagNote}${emptyNote}`,
       ...(a.picobinImages.length ? { picobinImages: a.picobinImages } : {}),
       ...(picobinDisassembly ? { picobinDisassembly } : {}),
+      ...(picobinRuntimePlan ? { picobinRuntimePlan } : {}),
     };
   }
 
