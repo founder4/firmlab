@@ -275,6 +275,10 @@ test('the Debian 13 recipe takes exactly the retained and Renode images from loc
   assert.match(dockerfile, new RegExp(`^ARG RETAINED_IMAGE=${RETAINED}$`, 'm'));
   assert.match(dockerfile, new RegExp(`^ARG RENODE_IMAGE=${RENODE}$`, 'm'));
   assert.match(dockerfile, /angr\[unicorn\]==9\.2\.213 bitstring==4\.3\.1 pycparser==3\.0/);
+  assert.match(
+    dockerfile,
+    /apt-get install -y --no-install-recommends[\s\S]*binutils-arm-none-eabi[\s\S]*rm -rf \/var\/lib\/apt\/lists\/\*/,
+  );
   // Every other base is public and digest-pinned, so a remote resolution of it is content-addressed.
   for (const [, ref] of dockerfile.matchAll(/^FROM (\S+)/gm)) {
     assert.ok(/^\$\{[A-Z_]+\}$/.test(ref) || /@sha256:[0-9a-f]{64}$/.test(ref), ref);
