@@ -558,6 +558,58 @@ function ComponentDetails({ imageId, result }: { imageId: string; result: Record
   );
 }
 
+function PicobinDisassemblyDetails({ value }: { value: unknown }): JSX.Element | null {
+  const t = useMessages().shell.deep.details;
+  const result = record(value);
+  if (!result) return null;
+  const functions = Array.isArray(result.reachableFunctions) ? records(result.reachableFunctions) : null;
+  const edges = Array.isArray(result.callEdges) ? records(result.callEdges) : null;
+  const copyTable = record(result.startupCopyTable);
+  const copyRegions = copyTable && Array.isArray(copyTable.regions) ? records(copyTable.regions) : null;
+  const attempted = typeof result.attempted === 'boolean' ? result.attempted : null;
+  const available = typeof result.available === 'boolean' ? result.available : null;
+  const copyAttempted = typeof result.startupCopyTableAttempted === 'boolean' ? result.startupCopyTableAttempted : null;
+  const yesNo = (value: boolean | null): string => (value === null ? t.notRecorded : value ? t.yes : t.no);
+  return (
+    <DetailSection title={t.picobinGraph}>
+      <Metrics
+        items={[
+          { label: t.attempted, value: yesNo(attempted) },
+          { label: t.available, value: yesNo(available) },
+          { label: t.scope, value: text(result.scope) ?? t.notRecorded },
+          { label: t.mapping, value: text(result.mappingKind) ?? t.notRecorded },
+          { label: t.entryPoint, value: formatHex(result.entryPoint) },
+          { label: t.reachableFunctions, value: functions ? functions.length.toLocaleString() : t.notRecorded },
+          { label: t.directCallEdges, value: edges ? edges.length.toLocaleString() : t.notRecorded },
+          { label: t.unresolvedCalls, value: formatNumber(result.unresolvedCallsitesTotal) },
+          { label: t.outOfMapCalls, value: formatNumber(result.outOfMapCallsitesTotal) },
+          { label: t.startupCopyAttempted, value: yesNo(copyAttempted) },
+          { label: t.startupCopyRegions, value: copyRegions ? copyRegions.length.toLocaleString() : t.notRecorded },
+        ]}
+      />
+      {text(result.reason) && <p className="deep-data-copy">{text(result.reason)}</p>}
+      {result.callGraphTruncated === true && <p className="deep-data-empty">{t.picobinGraphTruncated}</p>}
+      {copyAttempted === true && copyTable === null && <p className="deep-data-empty">{t.startupCopyNotRecovered}</p>}
+      {copyTable && copyRegions && copyRegions.length > 0 && (
+        <div className="deep-data-cards">
+          {copyRegions.map((region, index) => (
+            <div className="deep-data-card" key={`${number(region.runtimeAddress) ?? 'region'}-${index}`}>
+              <strong className="mono">
+                {t.startupCopyRegion(
+                  formatHex(region.sourceAddress),
+                  formatHex(region.sourceFileOffset),
+                  formatHex(region.runtimeAddress),
+                  formatNumber(region.size),
+                )}
+              </strong>
+            </div>
+          ))}
+        </div>
+      )}
+    </DetailSection>
+  );
+}
+
 function RtosDetails({ result }: { result: RecordValue }): JSX.Element {
   const t = useMessages().shell.deep.details;
   const vector = record(result.vectorTable);
@@ -596,6 +648,7 @@ function RtosDetails({ result }: { result: RecordValue }): JSX.Element {
           <StringList items={strings(result.flags)} empty={t.noItems} />
         </DetailSection>
       )}
+      <PicobinDisassemblyDetails value={result.picobinDisassembly} />
     </>
   );
 }

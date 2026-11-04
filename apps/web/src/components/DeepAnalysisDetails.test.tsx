@@ -421,6 +421,64 @@ describe('DeepAnalysisDetails', () => {
     expect(screen.getByText('FLAG_A')).toBeInTheDocument();
   });
 
+  it('shows bounded PICOBIN call-graph and CRT0 flash-to-SRAM evidence', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="rtos"
+        value={{
+          isCortexM: false,
+          picobinDisassembly: {
+            attempted: true,
+            available: true,
+            scope: 'reachable-call-graph',
+            mappingKind: 'direct-xip',
+            entryPoint: 0x10000036,
+            reachableFunctions: [{ address: 0x10000036 }, { address: 0x2000c82c }],
+            callEdges: [{ caller: 0x10000036, target: 0x2000c82c }],
+            unresolvedCallsitesTotal: 2,
+            outOfMapCallsitesTotal: 0,
+            callGraphTruncated: true,
+            startupCopyTableAttempted: true,
+            startupCopyTable: {
+              tableAddress: 0x100000b4,
+              regions: [
+                {
+                  sourceAddress: 0x10000114,
+                  sourceFileOffset: 0x114,
+                  runtimeAddress: 0x20000000,
+                  size: 0x2003c,
+                },
+              ],
+            },
+            reason: 'Decoded a bounded RISC-V call graph from the declared entrypoint.',
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('RISC-V PICOBIN entry graph')).toBeInTheDocument();
+    expect(screen.getByText('reachable-call-graph')).toBeInTheDocument();
+    expect(screen.getByText('0x10000036')).toBeInTheDocument();
+    expect(screen.getByText(/0x10000114 \(file 0x00000114\) → 0x20000000 · 131,132 bytes/)).toBeInTheDocument();
+    expect(screen.getByText(/not a whole-image call graph/)).toBeInTheDocument();
+  });
+
+  it('keeps legacy PICOBIN results explicitly unrecorded instead of inventing zero coverage', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="rtos"
+        value={{ isCortexM: false, picobinDisassembly: { attempted: true, available: false } }}
+      />,
+    );
+
+    const section = screen.getByText('RISC-V PICOBIN entry graph').closest('section');
+    expect(section).not.toBeNull();
+    expect(within(section as HTMLElement).getAllByText('Not recorded by this run.').length).toBeGreaterThan(0);
+    expect(within(section as HTMLElement).queryByText('0')).not.toBeInTheDocument();
+  });
+
   it('says a truncated FCC scan cannot read as no FCC ID', () => {
     render(
       <DeepAnalysisDetails
