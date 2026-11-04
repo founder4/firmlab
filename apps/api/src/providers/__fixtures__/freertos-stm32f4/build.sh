@@ -44,6 +44,7 @@ docker run --rm -v "$here:/fx:ro" -v "$OUTPUT_DIR:/out" -w /tmp \
     arm-none-eabi-gcc $common -c "$K/tasks.c" -o "$obj_dir/tasks.o"
     arm-none-eabi-gcc $common -c "$K/list.c" -o "$obj_dir/list.o"
     arm-none-eabi-gcc $common -c "$K/queue.c" -o "$obj_dir/queue.o"
+    arm-none-eabi-gcc $common -c "$K/event_groups.c" -o "$obj_dir/event_groups.o"
     arm-none-eabi-gcc $common -c "$K/portable/MemMang/heap_4.c" -o "$obj_dir/heap_4.o"
     # ARM_CM4F enables the FPU in xPortStartScheduler. Only port.c may contain softfp instructions before then;
     # compiling startup/kernel/application softfp caused Renode NOCP in vListInitialise before that enablement.

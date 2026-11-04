@@ -259,7 +259,9 @@ const S1 = BASE + 0x180;
 const E1 = BASE + 0x1e0;
 const P1 = BASE + 0x200;
 
-function wideSnapshot(opts: { d2Wake?: number; s1Owner?: number; pendingOwner?: number } = {}): Uint8Array {
+function wideSnapshot(
+  opts: { d2Wake?: number; s1Owner?: number; pendingOwner?: number; eventValue?: number } = {},
+): Uint8Array {
   const dv = new DataView(new ArrayBuffer(0x240));
   new Uint8Array(dv.buffer).set(snapshot());
   const list = (at: number, count: number, head: number) => {
@@ -281,7 +283,7 @@ function wideSnapshot(opts: { d2Wake?: number; s1Owner?: number; pendingOwner?: 
   list(PENDING, opts.pendingOwner === undefined ? 0 : 1, opts.pendingOwner === undefined ? PENDING + 8 : P1);
   if (opts.pendingOwner !== undefined) item(P1, 4, PENDING + 8, opts.pendingOwner, PENDING);
   list(EVENT, 1, E1);
-  item(E1, 4, EVENT + 8, opts.s1Owner ?? 0x2000_5000, EVENT);
+  item(E1, opts.eventValue ?? 4, EVENT + 8, opts.s1Owner ?? 0x2000_5000, EVENT);
   return new Uint8Array(dv.buffer);
 }
 
@@ -416,9 +418,51 @@ describe('named state lists', () => {
     expect(r.eventLists?.[0]?.tasks).toEqual([expect.objectContaining({ tcbAddress: 0x2000_5000, itemValue: 4 })]);
     expect(r.tcbsOnSeveralLists).toBeUndefined();
     expect(r.summary).toContain('1 queue/semaphore-wait');
-    expect(r.summary).toContain('only the 1 caller-named ordered queue/semaphore wait list(s) were walked');
-    expect(r.summary).toContain('EventGroup unordered lists were not interpreted');
+    expect(r.summary).toContain('only the 1 caller-named xEventListItem list(s) were walked');
+    expect(r.summary).toContain('1 ordered queue/semaphore, 0 unordered EventGroup');
     expect(r.limits.maxEventLists).toBe(64);
+  });
+
+  it('walks an unordered EventGroup list and decodes its TickType_t-relative control bits', () => {
+    const r = run(
+      body(wideSnapshot({ eventValue: 0x8500_0005 }), {
+        ...SYMBOLS,
+        suspendedList: SUSPENDED,
+        eventLists: [
+          {
+            name: 'fixtureEventGroup.xTasksWaitingForBits',
+            address: EVENT,
+            waitKind: 'event_group',
+            ordering: 'unordered',
+            ownerKind: 'tcb',
+          },
+        ],
+      }),
+    );
+    expect(r.eventLists?.[0]).toMatchObject({
+      kind: 'event_group',
+      name: 'fixtureEventGroup.xTasksWaitingForBits',
+      coverage: 'complete',
+      completed: 1,
+      itemValueMeaning: 'event_bits',
+      orderViolations: 0,
+    });
+    expect(r.eventLists?.[0]?.tasks).toEqual([
+      expect.objectContaining({
+        tcbAddress: 0x2000_5000,
+        itemValue: 0x8500_0005,
+        eventGroupWait: {
+          bits: 5,
+          clearOnExit: true,
+          unblockedDueToBitSet: false,
+          waitForAll: true,
+          itemValueInUse: true,
+        },
+      }),
+    ]);
+    expect(r.tcbsOnSeveralLists).toBeUndefined();
+    expect(r.summary).toContain('1 event-group-wait');
+    expect(r.summary).toContain('0 ordered queue/semaphore, 1 unordered EventGroup');
   });
 
   it('flags one xEventListItem owner on both a queue wait list and xPendingReadyList', () => {
@@ -478,7 +522,33 @@ describe('validateRtosTaskSnapshot — named lists', () => {
           { name: 'queue.wait', address: 1, waitKind: 'queue_receive', ordering: 'unordered', ownerKind: 'tcb' },
         ],
       }).join(),
-    ).toMatch(/ordering must be declared as 'priority'/);
+    ).toMatch(/queue\/semaphore waits require ordering 'priority'/);
+    expect(
+      errors({
+        eventLists: [
+          {
+            name: 'group.xTasksWaitingForBits',
+            address: 1,
+            waitKind: 'event_group',
+            ordering: 'priority',
+            ownerKind: 'tcb',
+          },
+        ],
+      }).join(),
+    ).toMatch(/EventGroup waits require ordering 'unordered'/);
+    expect(
+      errors({
+        eventLists: [
+          {
+            name: 'group.xTasksWaitingForBits',
+            address: 1,
+            waitKind: 'event_group',
+            ordering: 'unordered',
+            ownerKind: 'tcb',
+          },
+        ],
+      }),
+    ).toEqual([]);
     expect(
       errors({
         eventLists: [

@@ -1551,12 +1551,12 @@ export interface RtosTaskSnapshotInput {
     uxTopReadyPriority?: { address: number | null; representation: 'priority' | 'bitmap' };
     /** A name containing "overflow" makes the lane `delayed_overflow`; the API defaults to `xDelayedTaskList<n>`. */
     delayedLists?: { name?: string; address: number | null }[];
-    /** Caller-resolved ordered wait lists inside queues/semaphores. EventGroup unordered lists are excluded. */
+    /** Caller-resolved xEventListItem lists inside queues/semaphores or Event Groups. */
     eventLists?: {
       name: string;
       address: number | null;
-      waitKind: 'queue_receive' | 'queue_send';
-      ordering: 'priority';
+      waitKind: 'queue_receive' | 'queue_send' | 'event_group';
+      ordering: 'priority' | 'unordered';
       ownerKind: 'tcb';
     }[];
     /** Omitted → not walked; null → a `missing_symbol` lane. Same for the two below. */
@@ -1566,13 +1566,32 @@ export interface RtosTaskSnapshotInput {
   };
 }
 
-export type RtosListKind = 'ready' | 'delayed' | 'delayed_overflow' | 'suspended' | 'pending' | 'event' | 'terminated';
+export type RtosListKind =
+  | 'ready'
+  | 'delayed'
+  | 'delayed_overflow'
+  | 'suspended'
+  | 'pending'
+  | 'event'
+  | 'event_group'
+  | 'terminated';
 
 export interface RtosTaskLane {
   coverage?: 'complete' | 'cycle_capped' | 'truncated' | 'out_of_range' | 'missing_symbol';
   attempted?: number;
   completed?: number;
-  tasks?: { listItemAddress?: number; itemValue?: number | string; tcbAddress?: number }[];
+  tasks?: {
+    listItemAddress?: number;
+    itemValue?: number | string;
+    tcbAddress?: number;
+    eventGroupWait?: {
+      bits?: number | string;
+      waitForAll?: boolean;
+      clearOnExit?: boolean;
+      unblockedDueToBitSet?: boolean;
+      itemValueInUse?: boolean;
+    };
+  }[];
   evidence?: string[];
   /** Optional forever: stored jobs from older builds have no integrity-marker counters. */
   integrityChecks?: { enabled?: boolean; attempted?: number; completed?: number; mismatches?: number };
@@ -1586,14 +1605,14 @@ export interface RtosTaskLane {
   containerMismatches?: number;
 }
 
-/** A delayed/state/ordered-wait lane. Only `wake_tick` values are wake ticks. */
+/** A delayed/state/wait lane. Only `wake_tick` values are wake ticks. */
 export interface RtosNamedListLane extends RtosTaskLane {
   kind?: RtosListKind;
   name?: string;
-  itemValueMeaning?: 'wake_tick' | 'event_order' | 'not_maintained';
+  itemValueMeaning?: 'wake_tick' | 'event_order' | 'event_bits' | 'not_maintained';
   orderViolations?: number;
   valueViolations?: number;
-  waitKind?: 'queue_receive' | 'queue_send';
+  waitKind?: 'queue_receive' | 'queue_send' | 'event_group';
 }
 
 export interface RtosTaskSnapshotResult {

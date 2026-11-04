@@ -75,6 +75,19 @@ export interface FreeRtosTaskRecord {
   itemValue: number | string;
   /** `pvOwner` — the address of the owning `TCB_t`. This is the field that corroborates the node as a task. */
   tcbAddress: number;
+  /** Decoded only for an explicitly declared EventGroup wait list; absent on every other list kind. */
+  eventGroupWait?: FreeRtosEventGroupWait;
+}
+
+export interface FreeRtosEventGroupWait {
+  /** User event bits requested by the task, with FreeRTOS's top control byte removed. */
+  bits: number | string;
+  waitForAll: boolean;
+  clearOnExit: boolean;
+  /** Normally false while the item is still linked; retained as a torn/racing-snapshot diagnostic. */
+  unblockedDueToBitSet: boolean;
+  /** `taskEVENT_LIST_ITEM_VALUE_IN_USE`, the MSB set while Event Groups own xItemValue. */
+  itemValueInUse: boolean;
 }
 
 /** Diagnostic reads of FreeRTOS's optional `0x5a` list-integrity words. */
@@ -128,6 +141,20 @@ function readTick(buf: Uint8Array, offset: number, width: 2 | 4 | 8, le: boolean
 
 const publicTick = (value: bigint): number | string =>
   value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString(10);
+
+/** Decode Event Groups' width-relative top control byte without interpreting the unordered list as a priority list. */
+export function decodeFreeRtosEventGroupValue(value: bigint, tickWidth: 2 | 4 | 8): FreeRtosEventGroupWait {
+  const width = BigInt(tickWidth * 8);
+  const controlShift = width - 8n;
+  const controlMask = 0xffn << controlShift;
+  return {
+    bits: publicTick(value & ~controlMask),
+    clearOnExit: (value & (1n << controlShift)) !== 0n,
+    unblockedDueToBitSet: (value & (1n << (controlShift + 1n))) !== 0n,
+    waitForAll: (value & (1n << (controlShift + 2n))) !== 0n,
+    itemValueInUse: (value & (1n << (width - 1n))) !== 0n,
+  };
+}
 
 const tickMarker = (width: 2 | 4 | 8): bigint => BigInt(`0x${'5a'.repeat(width)}`);
 
@@ -428,8 +455,9 @@ export function parseFreeRtosReadyList(
  *   value is `configMAX_PRIORITIES - priority` unless an event group borrowed it.
  * - `event` — an ordered queue/semaphore wait list (for example `xTasksWaitingToReceive`). It also holds
  *   `xEventListItem`; the caller names the owning object and exact `List_t` address because there is no global
- *   registry of every queue in a FreeRTOS build. EventGroup wait lists are deliberately excluded: they use the
- *   unordered-list path and encode event bits in the item value, so `event_order` would be the wrong meaning.
+ *   registry of every queue in a FreeRTOS build.
+ * - `event_group` — an explicitly named EventGroup `xTasksWaitingForBits`. It uses `vListInsertEnd` (unordered)
+ *   and the item value carries requested event bits plus FreeRTOS's top-byte control flags.
  * - `terminated` — `xTasksWaitingTermination`: deleted tasks the idle task has not yet freed. `xItemValue` not set.
  */
 export type FreeRtosListKind =
@@ -439,6 +467,7 @@ export type FreeRtosListKind =
   | 'suspended'
   | 'pending'
   | 'event'
+  | 'event_group'
   | 'terminated';
 
 /** What `xItemValue` carries on a given list kind — so a value is only ever read as what the kernel put there. */
@@ -447,6 +476,8 @@ export type FreeRtosItemValueMeaning =
   | 'wake_tick'
   /** `configMAX_PRIORITIES - uxPriority` on an event list item (unless `taskEVENT_LIST_ITEM_VALUE_IN_USE`). */
   | 'event_order'
+  /** EventGroup requested bits and top-byte control flags; the list itself is unordered. */
+  | 'event_bits'
   /** The list is filled with `listINSERT_END`, which leaves `xItemValue` as whatever was last written. */
   | 'not_maintained';
 
@@ -457,6 +488,7 @@ export const FREERTOS_ITEM_VALUE_MEANING: Readonly<Record<FreeRtosListKind, Free
   suspended: 'not_maintained',
   pending: 'event_order',
   event: 'event_order',
+  event_group: 'event_bits',
   terminated: 'not_maintained',
 };
 
@@ -468,6 +500,7 @@ export const FREERTOS_LIST_DEFAULT_NAME: Readonly<Record<FreeRtosListKind, strin
   suspended: 'xSuspendedTaskList',
   pending: 'xPendingReadyList',
   event: 'eventList',
+  event_group: 'eventGroup.xTasksWaitingForBits',
   terminated: 'xTasksWaitingTermination',
 };
 
@@ -480,7 +513,7 @@ export interface FreeRtosNamedList {
   /** For `ready` only: the `pxReadyTasksLists` index, carried through untouched. */
   priority?: number;
   /** For ordered queue/semaphore waits only; keeps receive/send semantics out of the audit label. */
-  waitKind?: 'queue_receive' | 'queue_send';
+  waitKind?: 'queue_receive' | 'queue_send' | 'event_group';
 }
 
 export interface FreeRtosNamedListResult extends FreeRtosTaskListResult {
@@ -488,7 +521,7 @@ export interface FreeRtosNamedListResult extends FreeRtosTaskListResult {
   name: string;
   listAddress: number | null;
   priority?: number;
-  waitKind?: 'queue_receive' | 'queue_send';
+  waitKind?: 'queue_receive' | 'queue_send' | 'event_group';
   /** What each task's `itemValue` means on this kind of list. Only `wake_tick` is ever shown as a wake tick. */
   itemValueMeaning: FreeRtosItemValueMeaning;
   /**
@@ -559,6 +592,21 @@ export function parseFreeRtosNamedList(
         `${valueViolations} queue/semaphore priority key(s) are zero or carry the EventGroup-reserved high bit — the declared ordered-wait semantics may be wrong`,
       );
   }
+  if (list.kind === 'event_group') {
+    const decoded = w.values.map((value) => decodeFreeRtosEventGroupValue(value, layout.tickWidth ?? 4));
+    valueViolations = decoded.filter((value) => value.bits === 0 || !value.itemValueInUse).length;
+    if (valueViolations > 0)
+      evidence.push(
+        `${valueViolations} EventGroup wait value(s) request zero user bits or lack taskEVENT_LIST_ITEM_VALUE_IN_USE — the declared semantics may be wrong or the snapshot may be racing`,
+      );
+  }
+  const tasks =
+    list.kind === 'event_group'
+      ? w.tasks.map((task, index) => ({
+          ...task,
+          eventGroupWait: decodeFreeRtosEventGroupValue(w.values[index] ?? 0n, layout.tickWidth ?? 4),
+        }))
+      : w.tasks;
 
   return {
     kind: list.kind,
@@ -569,14 +617,14 @@ export function parseFreeRtosNamedList(
     coverage: w.coverage,
     attempted: w.attempted,
     completed: w.completed,
-    tasks: w.tasks,
+    tasks,
     evidence,
     integrityChecks: w.integrityChecks,
     itemValueMeaning: meaning,
     declaredItems: w.declaredItems,
     containerMismatches: w.containerMismatches.length,
     orderViolations,
-    ...(list.kind === 'event' ? { valueViolations } : {}),
+    ...(list.kind === 'event' || list.kind === 'event_group' ? { valueViolations } : {}),
   };
 }
 

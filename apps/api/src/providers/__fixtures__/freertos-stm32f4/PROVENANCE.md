@@ -7,10 +7,10 @@ checked against an expected answer: `apps/api/scripts/rtos-freertos-e2e.mjs`.
 | Item | Value |
 |---|---|
 | Kernel | FreeRTOS-Kernel tag `V11.1.0`, commit `dbf70559b27d39c1fdb68dfb9a32140b6a6777a0` (MIT), fetched by `build.sh` from `github.com/FreeRTOS/FreeRTOS-Kernel` |
-| Kernel files linked | `tasks.c`, `list.c`, `queue.c`, `portable/GCC/ARM_CM3/port.c` (16/32-bit) or `ARM_CM4F/port.c` (64-bit), `portable/MemMang/heap_4.c` — not vendored |
+| Kernel files linked | `tasks.c`, `list.c`, `queue.c`, `event_groups.c`, `portable/GCC/ARM_CM3/port.c` (16/32-bit) or `ARM_CM4F/port.c` (64-bit), `portable/MemMang/heap_4.c` — not vendored |
 | Toolchain | Debian bookworm `gcc-arm-none-eabi` `15:12.2.rel1-1` (arm-none-eabi-gcc 12.2.1 20221205), disposable container |
 | Flags | `-mcpu=cortex-m3 -mthumb -O1 -g -ffreestanding -nostdlib`, linked at flash `0x08000000`, RAM `0x20000000` |
-| Result | `freertos-stm32f4.elf`, sha256 `013802697caa5f78c999887abebd47f9e292ca4227b438f98d0222382d03ec60`, 95 304 bytes (symbols kept) |
+| Result | `freertos-stm32f4.elf`, sha256 `1dab3a289d49db6a84e1b52456396022d1607961e8fa717d88b830cc59a9d915`, 106 484 bytes (symbols kept) |
 | Built | 2026-11-04, by the FirmLab coordinator; `build-info.txt` is the build's own record |
 
 Network was used only to fetch the toolchain package and the pinned kernel tag. Rebuilding with a different
@@ -18,13 +18,16 @@ toolchain will change the hash; the e2e check, not the hash, is what establishes
 
 Expected state after the scheduler has run (any capture window of 1 s or more on Renode's `stm32f4.repl`):
 `pxReadyTasksLists[1]` = SpinA, SpinB (one of them `pxCurrentTCB`); `[0]` = IDLE; a delayed list = Sleeper (prio 2);
-`xSuspendedTaskList` = Parked (prio 3), QueueRx (prio 4) and QueueTx (prio 2). QueueRx's distinct `xEventListItem`
+`xSuspendedTaskList` = Parked (prio 3), QueueRx (prio 4), QueueTx (prio 2) and EventWait (prio 3). QueueRx's distinct `xEventListItem`
 is on an empty static queue's ordered `xTasksWaitingToReceive` with key 1; QueueTx's is on a separate full static
-queue's ordered `xTasksWaitingToSend` with key 3. `INCLUDE_vTaskDelete` is 0, so `xTasksWaitingTermination` is not
+queue's ordered `xTasksWaitingToSend` with key 3. EventWait's item is on an unordered Event Group
+`xTasksWaitingForBits` list and encodes bits 0+2, wait-all and clear-on-exit in the TickType_t-relative control byte.
+`INCLUDE_vTaskDelete` is 0, so `xTasksWaitingTermination` is not
 compiled in and the walk honestly reports `partial` coverage for that lane.
 
 Validated 2026-11-04 in `firmlab-firmware` (`--network none`) across the full 12-layout matrix: all checks pass,
-including both queue wait directions, their independently exported `List_t` addresses and their TCB event nodes.
+including both queue wait directions, the Event Group wait semantics, their independently exported `List_t`
+addresses and their TCB event nodes.
 Renode refused the platform's remote SVD (`STM32F40x.svd.gz`) and ran without it. A deliberately wrong
 `sizeof(List_t)` (24) is refused by the snapshot contract. This is emulation of a synthetic build: it says nothing
 about a physical device, another FreeRTOS version/configuration, or any corpus image.

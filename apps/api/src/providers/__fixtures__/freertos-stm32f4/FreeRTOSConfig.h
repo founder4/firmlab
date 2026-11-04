@@ -40,6 +40,14 @@ extern void fixture_trace_queue_create(void *queue, void *send_list, void *recei
         (void *)(queue), (void *)&((queue)->xTasksWaitingToSend), (void *)&((queue)->xTasksWaitingToReceive)); \
   } while (0)
 
+/* Fixture-only: event_groups.c expands this where EventGroup_t is complete, exporting its direct List_t address. */
+extern void fixture_trace_event_group_create(void *event_group, void *waiting_list);
+#define traceEVENT_GROUP_CREATE(event_group)                                                    \
+  do {                                                                                          \
+    fixture_trace_event_group_create(                                                           \
+        (void *)(event_group), (void *)&((event_group)->xTasksWaitingForBits));                 \
+  } while (0)
+
 #define INCLUDE_vTaskDelay 1
 #define INCLUDE_vTaskSuspend 1
 #define INCLUDE_vTaskDelete 0

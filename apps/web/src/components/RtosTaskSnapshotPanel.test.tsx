@@ -247,6 +247,31 @@ describe('RtosTaskSnapshotPanel', () => {
           tasks: [{ listItemAddress: 0x200001c0, itemValue: 1, tcbAddress: 0x20005000 }],
           evidence: [],
         },
+        {
+          kind: 'event_group',
+          waitKind: 'event_group',
+          name: 'fixtureEventGroup.xTasksWaitingForBits',
+          listAddress: 0x200001e0,
+          coverage: 'complete',
+          attempted: 1,
+          completed: 1,
+          itemValueMeaning: 'event_bits',
+          tasks: [
+            {
+              listItemAddress: 0x20000200,
+              itemValue: 0x85000005,
+              tcbAddress: 0x20006000,
+              eventGroupWait: {
+                bits: 5,
+                waitForAll: true,
+                clearOnExit: true,
+                unblockedDueToBitSet: false,
+                itemValueInUse: true,
+              },
+            },
+          ],
+          evidence: [],
+        },
       ],
       unwalkedKinds: ['delayed', 'pending', 'terminated'],
       tcbsOnSeveralLists: [0x20005000],
@@ -260,7 +285,9 @@ describe('RtosTaskSnapshotPanel', () => {
     // A suspended item's value is not a wake tick and is never shown as one.
     expect(screen.queryByText(m.result.wakeTick('0x20005000', 7))).toBeNull();
     expect(screen.getByText(m.result.eventOrder('0x20005000', 1))).toBeInTheDocument();
+    expect(screen.getByText(m.result.eventBits('0x20006000', 5, true, true))).toBeInTheDocument();
     expect(screen.getByText(`${m.result.kind.event} (${m.result.waitKind.queue_receive})`)).toBeInTheDocument();
+    expect(screen.getByText(m.result.kind.event_group)).toBeInTheDocument();
     expect(screen.getByText(m.result.kind.suspended)).toBeInTheDocument();
     expect(screen.getByText('truncated')).toBeInTheDocument();
     expect(
@@ -840,7 +867,7 @@ describe('buildSnapshotRequest', () => {
     expect(r.errors.pendingReadyList).toBe(m.error.address(32));
   });
 
-  it('builds only explicitly ordered TCB queue waits and rejects duplicate labels or addresses', () => {
+  it('builds queue and Event Group TCB waits with their declared ordering and rejects duplicate labels or addresses', () => {
     const ok = buildSnapshotRequest(
       {
         ...base,
@@ -855,6 +882,24 @@ describe('buildSnapshotRequest', () => {
         address: 0x100,
         waitKind: 'queue_receive',
         ordering: 'priority',
+        ownerKind: 'tcb',
+      },
+    ]);
+
+    const eventGroup = buildSnapshotRequest(
+      {
+        ...base,
+        eventLists: [{ name: 'fixtureEventGroup.xTasksWaitingForBits', address: '0x180', waitKind: 'event_group' }],
+        eventOwnersAreTcbs: true,
+      },
+      m,
+    );
+    expect(eventGroup.ok && eventGroup.input.symbols.eventLists).toEqual([
+      {
+        name: 'fixtureEventGroup.xTasksWaitingForBits',
+        address: 0x180,
+        waitKind: 'event_group',
+        ordering: 'unordered',
         ownerKind: 'tcb',
       },
     ]);

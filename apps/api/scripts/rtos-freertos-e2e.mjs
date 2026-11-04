@@ -82,7 +82,7 @@ const TCB_NAME_OFFSET = TCB_PRIORITY_OFFSET + 8;
 const EXPECTED = {
   ready: { SpinA: 1, SpinB: 1, IDLE: 0 },
   delayed: { Sleeper: 2 },
-  suspended: { Parked: 3, QueueRx: 4, QueueTx: 2 },
+  suspended: { Parked: 3, QueueRx: 4, QueueTx: 2, EventWait: 3 },
 };
 
 const failures = [];
@@ -140,6 +140,10 @@ const fixtureSymbols = elfSymbolAddresses(
   'fixture_tx_queue_storage',
   'fixture_tx_queue',
   'fixture_tx_task',
+  'fixture_waiting_event_bits_list',
+  'fixture_event_group_storage',
+  'fixture_event_group',
+  'fixture_event_task',
 );
 for (const name of [
   'fixture_waiting_receive_list',
@@ -150,6 +154,10 @@ for (const name of [
   'fixture_tx_queue_storage',
   'fixture_tx_queue',
   'fixture_tx_task',
+  'fixture_waiting_event_bits_list',
+  'fixture_event_group_storage',
+  'fixture_event_group',
+  'fixture_event_task',
 ])
   check(typeof fixtureSymbols[name] === 'number', `${name} is present in the fixture ELF`);
 
@@ -162,6 +170,9 @@ const receiveQueueAddress = pointerAt(fixtureSymbols.fixture_rx_queue);
 const sendQueueAddress = pointerAt(fixtureSymbols.fixture_tx_queue);
 const receiverTcb = pointerAt(fixtureSymbols.fixture_rx_task);
 const senderTcb = pointerAt(fixtureSymbols.fixture_tx_task);
+const eventBitsWaitListAddress = pointerAt(fixtureSymbols.fixture_waiting_event_bits_list);
+const eventGroupAddress = pointerAt(fixtureSymbols.fixture_event_group);
+const eventWaitTcb = pointerAt(fixtureSymbols.fixture_event_task);
 check(
   receiveQueueAddress === fixtureSymbols.fixture_rx_queue_storage,
   'static queue handle points to fixture_rx_queue_storage',
@@ -169,6 +180,10 @@ check(
 check(
   sendQueueAddress === fixtureSymbols.fixture_tx_queue_storage,
   'static queue handle points to fixture_tx_queue_storage',
+);
+check(
+  eventGroupAddress === fixtureSymbols.fixture_event_group_storage,
+  'static Event Group handle points to fixture_event_group_storage',
 );
 check(
   receiveWaitListAddress === fixtureSymbols.fixture_rx_queue_storage + 16 + LIST_SIZE,
@@ -218,6 +233,13 @@ const body = {
         ordering: 'priority',
         ownerKind: 'tcb',
       },
+      {
+        name: 'fixtureEventGroup.xTasksWaitingForBits',
+        address: eventBitsWaitListAddress,
+        waitKind: 'event_group',
+        ordering: 'unordered',
+        ownerKind: 'tcb',
+      },
     ],
     suspendedList: prefill.suspendedList,
     pendingReadyList: prefill.pendingReadyList,
@@ -256,8 +278,10 @@ const delayed = Object.assign({}, ...(r.delayedLists ?? []).map((l) => named(l.t
 const suspended = named(r.suspendedList?.tasks);
 const receiveWait = r.eventLists?.find((lane) => lane.waitKind === 'queue_receive');
 const sendWait = r.eventLists?.find((lane) => lane.waitKind === 'queue_send');
+const eventBitsWait = r.eventLists?.find((lane) => lane.waitKind === 'event_group');
 const waitingReceive = named(receiveWait?.tasks);
 const waitingSend = named(sendWait?.tasks);
+const waitingEventBits = named(eventBitsWait?.tasks);
 console.log(
   JSON.stringify({
     ready,
@@ -265,6 +289,7 @@ console.log(
     suspended,
     waitingReceive,
     waitingSend,
+    waitingEventBits,
     current: r.currentTask.tcbAddress && tcb(r.currentTask.tcbAddress),
   }),
 );
@@ -291,13 +316,11 @@ check(
   'queue send wait list holds exactly QueueTx at priority 2',
 );
 check(
-  receiveWait?.tasks?.[0]?.itemValue === 1,
-  'QueueRx xEventListItem priority key is configMAX_PRIORITIES - 4 = 1',
+  JSON.stringify(waitingEventBits) === JSON.stringify({ EventWait: 3 }),
+  'Event Group wait list holds exactly EventWait at priority 3',
 );
-check(
-  sendWait?.tasks?.[0]?.itemValue === 3,
-  'QueueTx xEventListItem priority key is configMAX_PRIORITIES - 2 = 3',
-);
+check(receiveWait?.tasks?.[0]?.itemValue === 1, 'QueueRx xEventListItem priority key is configMAX_PRIORITIES - 4 = 1');
+check(sendWait?.tasks?.[0]?.itemValue === 3, 'QueueTx xEventListItem priority key is configMAX_PRIORITIES - 2 = 3');
 check(
   receiveWait?.declaredItems === 1 && receiveWait?.containerMismatches === 0,
   'receive wait header and pxContainer corroborate one item',
@@ -305,6 +328,23 @@ check(
 check(
   sendWait?.declaredItems === 1 && sendWait?.containerMismatches === 0,
   'send wait header and pxContainer corroborate one item',
+);
+check(
+  eventBitsWait?.declaredItems === 1 && eventBitsWait?.containerMismatches === 0,
+  'Event Group wait header and pxContainer corroborate one item',
+);
+check(
+  eventBitsWait?.orderViolations === 0 && eventBitsWait?.itemValueMeaning === 'event_bits',
+  'Event Group wait list is treated as unordered event-bit semantics',
+);
+const decodedEventWait = eventBitsWait?.tasks?.[0]?.eventGroupWait;
+check(
+  decodedEventWait?.bits === 5 &&
+    decodedEventWait.waitForAll === true &&
+    decodedEventWait.clearOnExit === true &&
+    decodedEventWait.unblockedDueToBitSet === false &&
+    decodedEventWait.itemValueInUse === true,
+  'EventWait control byte decodes to bits 0+2, wait-all and clear-on-exit',
 );
 check(
   receiveWait?.tasks?.[0]?.listItemAddress === receiverTcb + TCB_EVENT_LIST_OFFSET,
@@ -315,12 +355,20 @@ check(
   `QueueTx wait node is its TCB.xEventListItem at +${TCB_EVENT_LIST_OFFSET}`,
 );
 check(
+  eventBitsWait?.tasks?.[0]?.listItemAddress === eventWaitTcb + TCB_EVENT_LIST_OFFSET,
+  `EventWait node is its TCB.xEventListItem at +${TCB_EVENT_LIST_OFFSET}`,
+);
+check(
   r.suspendedList?.tasks?.some((task) => task.tcbAddress === receiverTcb) === true,
   'QueueRx legitimately appears on both its state list and queue wait list',
 );
 check(
   r.suspendedList?.tasks?.some((task) => task.tcbAddress === senderTcb) === true,
   'QueueTx legitimately appears on both its state list and queue wait list',
+);
+check(
+  r.suspendedList?.tasks?.some((task) => task.tcbAddress === eventWaitTcb) === true,
+  'EventWait legitimately appears on both its state list and Event Group wait list',
 );
 const cur = r.currentTask.tcbAddress ? tcb(r.currentTask.tcbAddress).name : null;
 check(cur === 'SpinA' || cur === 'SpinB', `pxCurrentTCB is one of the priority-1 spinners (got ${cur})`);

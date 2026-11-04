@@ -4,6 +4,7 @@ import {
   FREERTOS_ITEM_VALUE_MEANING,
   FREERTOS_OVER_DECLARED_COUNT,
   type FreeRtosListKind,
+  decodeFreeRtosEventGroupValue,
   deriveFreeRtosListLayout,
   deriveFreeRtosReadyLists,
   listItemRecordSize,
@@ -402,6 +403,56 @@ describe('parseFreeRtosNamedList', () => {
     });
     expect(r.orderViolations).toBe(1);
     expect(r.evidence).toEqual([expect.stringContaining('unsupported unordered EventGroup list')]);
+  });
+
+  it('walks an unordered EventGroup wait list and decodes bits/control flags without priority ordering', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 2);
+    writeItem(ITEM_A, 0x8500_0005, ITEM_B, 0x3000_0042, LIST_ADDR);
+    writeItem(ITEM_B, 0x8100_0002, SENTINEL, 0x3000_0043, LIST_ADDR);
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, {
+      kind: 'event_group',
+      name: 'fixtureEventGroup.xTasksWaitingForBits',
+      address: LIST_ADDR,
+      waitKind: 'event_group',
+    });
+    expect(r).toMatchObject({
+      kind: 'event_group',
+      itemValueMeaning: 'event_bits',
+      orderViolations: 0,
+      valueViolations: 0,
+      tasks: [
+        {
+          itemValue: 0x8500_0005,
+          eventGroupWait: {
+            bits: 5,
+            waitForAll: true,
+            clearOnExit: true,
+            unblockedDueToBitSet: false,
+            itemValueInUse: true,
+          },
+        },
+        { itemValue: 0x8100_0002, eventGroupWait: { bits: 2, waitForAll: false, clearOnExit: true } },
+      ],
+    });
+    expect(r.evidence).toEqual([]);
+  });
+
+  it('decodes EventGroup control bits at 16/32/64-bit widths and flags invalid wait values', () => {
+    expect(decodeFreeRtosEventGroupValue(0x8505n, 2)).toMatchObject({ bits: 5, waitForAll: true });
+    expect(decodeFreeRtosEventGroupValue(0x8500_0005n, 4)).toMatchObject({ bits: 5, waitForAll: true });
+    expect(decodeFreeRtosEventGroupValue(0x8500_0000_0000_0005n, 8)).toMatchObject({
+      bits: 5,
+      waitForAll: true,
+    });
+
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 1);
+    writeItem(ITEM_A, 0, SENTINEL, 0x3000_0042, LIST_ADDR);
+    const invalid = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'event_group', address: LIST_ADDR });
+    expect(invalid.valueViolations).toBe(1);
+    expect(invalid.evidence.join('\n')).toContain('request zero user bits');
   });
 
   it('reports missing_symbol per kind, naming the list, without claiming it is empty', () => {
@@ -867,6 +918,7 @@ describe('parseFreeRtosList', () => {
       'suspended',
       'pending',
       'event',
+      'event_group',
       'terminated',
     ];
     const results = parseFreeRtosList(buf, REGION_BASE, [

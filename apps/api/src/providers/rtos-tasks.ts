@@ -68,7 +68,7 @@ export const MAX_LIST_ITEMS = 256;
 export const MAX_READY_LISTS = 64;
 /** `xDelayedTaskList1` and `xDelayedTaskList2`: `tasks.c` declares exactly two. */
 export const MAX_DELAYED_LISTS = 2;
-/** Operator-named ordered queue/semaphore wait lists; bounded independently from kernel-global state lists. */
+/** Operator-named xEventListItem lists; bounded independently from kernel-global state lists. */
 export const MAX_EVENT_LISTS = 64;
 /** A list label is an audit-trail string, not free text: a C identifier with an optional index, kept short. */
 const LIST_NAME = /^[A-Za-z_][A-Za-z0-9_]*(\[\d+\])?(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
@@ -105,13 +105,13 @@ export interface RtosTaskSnapshotInput {
      * pointers in the snapshot, can say which is which. Unnamed lists default to `xDelayedTaskList<n>`.
      */
     delayedLists?: { name?: string; address: number | null }[];
-    /** Caller-resolved ordered wait-list addresses inside queues/semaphores. EventGroup lists are not supported. */
+    /** Caller-resolved xEventListItem lists inside queues/semaphores or Event Groups. */
     eventLists?: {
       name: string;
       address: number | null;
-      waitKind: 'queue_receive' | 'queue_send';
-      /** Explicit operator declaration: rejects EventGroup/listINSERT_END semantics. */
-      ordering: 'priority';
+      waitKind: 'queue_receive' | 'queue_send' | 'event_group';
+      /** Queues use vListInsert; Event Groups use vListInsertEnd and are intentionally unordered. */
+      ordering: 'priority' | 'unordered';
       /** Explicit operator declaration: configUSE_CO_ROUTINES=0, so pvOwner is a TCB rather than a CRCB. */
       ownerKind: 'tcb';
     }[];
@@ -225,7 +225,7 @@ export interface RtosTaskSnapshotResult {
   };
   /** Present only when the request named delayed lists. */
   delayedLists?: RtosNamedListLane[];
-  /** Optional forever: older persisted jobs predate caller-named ordered queue/semaphore wait lists. */
+  /** Optional forever: older persisted jobs predate caller-named xEventListItem lists. */
   eventLists?: RtosNamedListLane[];
   suspendedList?: RtosNamedListLane;
   pendingReadyList?: RtosNamedListLane;
@@ -238,7 +238,7 @@ export interface RtosTaskSnapshotResult {
    * they hold `xEventListItem`, and a task on one legitimately still sits on its delayed or suspended state list.
    */
   tcbsOnSeveralLists?: number[];
-  /** TCBs whose one `xEventListItem` appears on multiple ordered wait/pending lists; necessarily inconsistent. */
+  /** TCBs whose one `xEventListItem` appears on multiple wait/pending lists; necessarily inconsistent. */
   tcbsOnSeveralEventLists?: number[];
   /** Present only when the ready lists were declared as the `pxReadyTasksLists` array. */
   readyListArray?: ReadyListArrayInfo;
@@ -450,17 +450,21 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
         }
         if (names.has(l.name)) errors.push(`symbols.eventLists[${i}] repeats name ${l.name}`);
         names.add(l.name);
-        if (l.ordering !== 'priority')
-          errors.push(
-            `symbols.eventLists[${i}].ordering must be declared as 'priority' (EventGroup lists are unsupported)`,
-          );
+        const waitKind = l.waitKind;
+        const queueWait = waitKind === 'queue_receive' || waitKind === 'queue_send';
+        const eventGroupWait = waitKind === 'event_group';
+        if (queueWait && l.ordering !== 'priority')
+          errors.push(`symbols.eventLists[${i}] queue/semaphore waits require ordering 'priority'`);
+        if (eventGroupWait && l.ordering !== 'unordered')
+          errors.push(`symbols.eventLists[${i}] EventGroup waits require ordering 'unordered'`);
         if (l.ownerKind !== 'tcb')
           errors.push(`symbols.eventLists[${i}].ownerKind must be declared as 'tcb' (configUSE_CO_ROUTINES=0)`);
-        if (l.waitKind !== 'queue_receive' && l.waitKind !== 'queue_send')
-          errors.push(`symbols.eventLists[${i}].waitKind must be 'queue_receive' or 'queue_send'`);
+        if (!queueWait && !eventGroupWait)
+          errors.push(`symbols.eventLists[${i}].waitKind must be 'queue_receive', 'queue_send' or 'event_group'`);
         if (
           (l.name.endsWith('.xTasksWaitingToReceive') && l.waitKind !== 'queue_receive') ||
-          (l.name.endsWith('.xTasksWaitingToSend') && l.waitKind !== 'queue_send')
+          (l.name.endsWith('.xTasksWaitingToSend') && l.waitKind !== 'queue_send') ||
+          (l.name.endsWith('.xTasksWaitingForBits') && l.waitKind !== 'event_group')
         )
           errors.push(`symbols.eventLists[${i}].waitKind disagrees with member name ${l.name}`);
         if (l.address !== null && !isAddr(l.address)) {
@@ -470,10 +474,12 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
         const address = l.address as number | null;
         claim(`symbols.eventLists[${i}]`, address);
         eventLists?.push({
-          kind: 'event',
+          kind: eventGroupWait ? 'event_group' : 'event',
           name: l.name,
           address,
-          ...(l.waitKind === 'queue_receive' || l.waitKind === 'queue_send' ? { waitKind: l.waitKind } : {}),
+          ...(waitKind === 'queue_receive' || waitKind === 'queue_send' || waitKind === 'event_group'
+            ? { waitKind }
+            : {}),
         });
       });
     }
@@ -551,6 +557,7 @@ const KIND_LABEL: Record<StateKind, string> = {
   suspended: 'suspended',
   pending: 'pending-ready',
   event: 'queue/semaphore-wait',
+  event_group: 'event-group-wait',
   terminated: 'waiting-termination',
 };
 
@@ -659,7 +666,9 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
 
   // Per-kind counts, in tasks.c order, for every non-ready kind the request named.
   const walkedKinds = new Set(named.map((l) => l.kind));
-  const perKind = (['delayed', 'delayed_overflow', 'suspended', 'pending', 'event', 'terminated'] as const)
+  const perKind = (
+    ['delayed', 'delayed_overflow', 'suspended', 'pending', 'event', 'event_group', 'terminated'] as const
+  )
     .filter((k) => walkedKinds.has(k))
     .map((k) => `${named.filter((l) => l.kind === k).reduce((n, l) => n + l.completed, 0)} ${KIND_LABEL[k]}`);
   const counted = `${readyTasks} ready task record(s)${perKind.length > 0 ? ` (plus ${perKind.join(', ')})` : ''}`;
@@ -673,7 +682,10 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
   ];
 
   const onList = new Map<number, number>();
-  for (const l of [...readyLists, ...named.filter((n) => n.kind !== 'pending' && n.kind !== 'event')])
+  for (const l of [
+    ...readyLists,
+    ...named.filter((n) => n.kind !== 'pending' && n.kind !== 'event' && n.kind !== 'event_group'),
+  ])
     for (const t of new Set(l.tasks.map((x) => x.tcbAddress))) onList.set(t, (onList.get(t) ?? 0) + 1);
   const tcbsOnSeveralLists = [...onList].filter(([, n]) => n > 1).map(([t]) => t);
   const onEventList = new Map<number, number>();
@@ -731,9 +743,12 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
         `declared by the operator; sizeof(List_t)=${array.listSize} cross-checked against the walked layout` +
         `${crossChecked}${countUnchecked})`
       : READY_SCOPE;
+  const queueEventLists = eventLists?.filter((l) => l.kind === 'event').length ?? 0;
+  const eventGroupLists = eventLists?.filter((l) => l.kind === 'event_group').length ?? 0;
   const eventScope = eventLists?.length
-    ? `; only the ${eventLists.length} caller-named ordered queue/semaphore wait list(s) were walked; EventGroup unordered lists were not interpreted`
-    : '; no ordered queue/semaphore wait lists were supplied or discovered; EventGroup unordered lists were not interpreted';
+    ? `; only the ${eventLists.length} caller-named xEventListItem list(s) were walked (` +
+      `${queueEventLists} ordered queue/semaphore, ${eventGroupLists} unordered EventGroup); no object registry discovery was attempted`
+    : '; no caller-named queue/semaphore or EventGroup wait lists were supplied or discovered';
   const scope = `Only the supplied lists in the supplied bytes were walked; ${notRead}${readyScope}${eventScope}${SNAPSHOT_SCOPE}`;
   const summary =
     coverage === 'complete'

@@ -68,8 +68,8 @@ export interface SnapshotForm {
   uxTopReadyPriority: string;
   topReadyRepresentation: '' | 'priority' | 'bitmap';
   readyLists: { priority: string; address: string }[];
-  /** Caller-named ordered Queue_t/SemaphoreData_t wait lists whose items are TCB.xEventListItem. */
-  eventLists: { name: string; address: string; waitKind: '' | 'queue_receive' | 'queue_send' }[];
+  /** Caller-named Queue_t/SemaphoreData_t or EventGroup wait lists whose items are TCB.xEventListItem. */
+  eventLists: { name: string; address: string; waitKind: '' | 'queue_receive' | 'queue_send' | 'event_group' }[];
   /** Explicit analyst declaration that configUSE_CO_ROUTINES=0 and every wait-list pvOwner is a TCB. */
   eventOwnersAreTcbs: boolean;
   /** The `pxReadyTasksLists` array; all four empty → not declared. `symbolSize` alone stays optional. */
@@ -251,7 +251,7 @@ export function buildSnapshotRequest(
     if (!eventNamePattern.test(name)) errors[`eventLists.${i}.name`] = m.error.eventName;
     else if (!nameValid) errors[`eventLists.${i}.name`] = m.error.eventNameRepeated(name);
     else eventNames.add(name);
-    if (lane.waitKind !== 'queue_receive' && lane.waitKind !== 'queue_send')
+    if (lane.waitKind !== 'queue_receive' && lane.waitKind !== 'queue_send' && lane.waitKind !== 'event_group')
       errors[`eventLists.${i}.waitKind`] = m.error.eventKind;
     const address = addr(lane.address);
     let addressValid = address !== null;
@@ -261,7 +261,13 @@ export function buildSnapshotRequest(
       addressValid = false;
     } else taken.add(address);
     if (nameValid && addressValid && address !== null && lane.waitKind)
-      eventLists.push({ name, address, waitKind: lane.waitKind, ordering: 'priority', ownerKind: 'tcb' });
+      eventLists.push({
+        name,
+        address,
+        waitKind: lane.waitKind,
+        ordering: lane.waitKind === 'event_group' ? 'unordered' : 'priority',
+        ownerKind: 'tcb',
+      });
   });
   if (f.eventLists.length > 0 && !f.eventOwnersAreTcbs) errors.eventOwnersAreTcbs = m.error.eventOwnersAreTcbs;
 
@@ -918,6 +924,7 @@ export function RtosTaskSnapshotPanel({
                   <option value="">{m.field.eventKindChoose}</option>
                   <option value="queue_receive">{m.field.queueReceive}</option>
                   <option value="queue_send">{m.field.queueSend}</option>
+                  <option value="event_group">{m.field.eventGroup}</option>
                 </select>
                 {fieldError(`eventLists.${i}.waitKind`)}
               </div>
@@ -1290,13 +1297,20 @@ function StateLists({ result, m }: { result: RtosTaskSnapshotResult; m: M }): JS
                   <td className="mono">{integrity(lane)}</td>
                   <td className="mono">
                     {lane.tasks && lane.tasks.length > 0 ? (
-                      lane.itemValueMeaning === 'wake_tick' || lane.kind === 'event' ? (
+                      lane.itemValueMeaning === 'wake_tick' || lane.kind === 'event' || lane.kind === 'event_group' ? (
                         <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none' }}>
                           {lane.tasks.map((t, j) => (
                             <li key={`${t.listItemAddress ?? j}`}>
                               {lane.itemValueMeaning === 'wake_tick'
                                 ? m.result.wakeTick(hex(t.tcbAddress), t.itemValue ?? '—')
-                                : m.result.eventOrder(hex(t.tcbAddress), t.itemValue ?? '—')}
+                                : lane.itemValueMeaning === 'event_bits'
+                                  ? m.result.eventBits(
+                                      hex(t.tcbAddress),
+                                      t.eventGroupWait?.bits ?? '—',
+                                      t.eventGroupWait?.waitForAll ?? false,
+                                      t.eventGroupWait?.clearOnExit ?? false,
+                                    )
+                                  : m.result.eventOrder(hex(t.tcbAddress), t.itemValue ?? '—')}
                             </li>
                           ))}
                         </ul>
