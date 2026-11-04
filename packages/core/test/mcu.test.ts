@@ -201,6 +201,32 @@ describe('parsePicobin — RP2350 boot block ISA', () => {
     return buf;
   }
 
+  function picobinLoadMapBlock(options: {
+    absolute?: boolean;
+    storageAddress: number;
+    runtimeAddress: number;
+    encodedSize: number;
+    entryPoint: number;
+  }): Uint8Array {
+    const markerAt = 0x10;
+    const buf = new Uint8Array(0x40);
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(markerAt, 0xffff_ded3, true);
+    dv.setUint32(markerAt + 4, 0x1101_0142, true);
+    const loadMapFlags = options.absolute ? 0x81 : 0x01; // Entry count plus the absolute flag in bit 31.
+    dv.setUint32(markerAt + 8, (loadMapFlags << 24) | 0x0406, true);
+    dv.setUint32(markerAt + 12, options.storageAddress, true);
+    dv.setUint32(markerAt + 16, options.runtimeAddress, true);
+    dv.setUint32(markerAt + 20, options.encodedSize, true);
+    dv.setUint32(markerAt + 24, 0x0000_0344, true);
+    dv.setUint32(markerAt + 28, options.entryPoint, true);
+    dv.setUint32(markerAt + 32, 0x2008_2000, true);
+    dv.setUint32(markerAt + 36, 0x0000_08ff, true);
+    dv.setUint32(markerAt + 40, 0, true);
+    dv.setUint32(markerAt + 44, 0xab12_3579, true);
+    return buf;
+  }
+
   it('reads a RISC-V RP2350 executable image (CPU field, not the chip name)', () => {
     const info = parsePicobin(picobinBlock(0x1101)); // EXE | CPU_RISCV(0x100) | CHIP_RP2350(0x1000)
     expect(info).not.toBeNull();
@@ -248,6 +274,58 @@ describe('parsePicobin — RP2350 boot block ISA', () => {
       blockOffsets: [first, tail],
       loopComplete: true,
     });
+  });
+
+  it('decodes a relative LOAD_MAP and retains the item-relative storage offset', () => {
+    const info = parsePicobin(
+      picobinLoadMapBlock({
+        storageAddress: 0x40,
+        runtimeAddress: 0x2000_0000,
+        encodedSize: 0x20,
+        entryPoint: 0x2000_0008,
+      }),
+    );
+    expect(info?.loadMap).toEqual({
+      itemOffset: 0x18,
+      relative: true,
+      entries: [{ storageAddress: 0x40, runtimeAddress: 0x2000_0000, size: 0x20 }],
+    });
+  });
+
+  it('normalizes an absolute LOAD_MAP end address to a byte length', () => {
+    const info = parsePicobin(
+      picobinLoadMapBlock({
+        absolute: true,
+        storageAddress: 0x1000_1000,
+        runtimeAddress: 0x2000_0000,
+        encodedSize: 0x2000_0040,
+        entryPoint: 0x2000_0008,
+      }),
+    );
+    expect(info?.loadMap).toEqual({
+      itemOffset: 0x18,
+      relative: false,
+      entries: [{ storageAddress: 0x1000_1000, runtimeAddress: 0x2000_0000, size: 0x40 }],
+    });
+  });
+
+  it('rejects LOAD_MAP item sizes and spans that disagree with the encoded entry count', () => {
+    const malformedSize = picobinLoadMapBlock({
+      storageAddress: 0x40,
+      runtimeAddress: 0x2000_0000,
+      encodedSize: 0x20,
+      entryPoint: 0x2000_0008,
+    });
+    new DataView(malformedSize.buffer).setUint32(0x18, 0x0100_0306, true);
+    expect(parsePicobin(malformedSize)).toBeNull();
+
+    const unaligned = picobinLoadMapBlock({
+      storageAddress: 0x42,
+      runtimeAddress: 0x2000_0000,
+      encodedSize: 0x20,
+      entryPoint: 0x2000_0008,
+    });
+    expect(parsePicobin(unaligned)).toBeNull();
   });
 
   it('rejects a marker plus IMAGE_TYPE when LAST/end-marker structure is missing', () => {

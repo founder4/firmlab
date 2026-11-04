@@ -305,10 +305,28 @@ const PICOBIN_IMAGE_TYPE_ITEM = 0x42;
 const PICOBIN_VECTOR_TABLE_ITEM = 0x03;
 const PICOBIN_ENTRY_POINT_ITEM = 0x44;
 const PICOBIN_ROLLING_WINDOW_DELTA_ITEM = 0x05;
+const PICOBIN_LOAD_MAP_ITEM = 0x06;
 const PICOBIN_LAST_ITEM = 0xff;
 
 export type PicobinCpu = 'arm' | 'riscv' | 'varmulet' | 'unknown';
 export type PicobinSecurity = 'unspecified' | 'non-secure' | 'secure' | 'reserved';
+
+export interface PicobinLoadMapEntry {
+  /** Raw storage address/relative offset. Zero denotes a zero-filled region rather than bytes in the image. */
+  storageAddress: number;
+  /** Runtime address at which this region is made visible. */
+  runtimeAddress: number;
+  /** Region length in bytes, normalized from either LOAD_MAP encoding. */
+  size: number;
+}
+
+export interface PicobinLoadMap {
+  /** Offset of the LOAD_MAP item header in the buffer; relative storage offsets are based here. */
+  itemOffset: number;
+  /** True when storageAddress is a signed offset from itemOffset rather than an absolute storage address. */
+  relative: boolean;
+  entries: PicobinLoadMapEntry[];
+}
 
 export interface PicobinInfo {
   /** Offset of the start marker in the buffer. */
@@ -337,6 +355,8 @@ export interface PicobinInfo {
   vectorTable: number | null;
   /** Flash rolling-window delta, when declared. */
   rollingWindowDelta: number | null;
+  /** Runtime-to-storage regions declared by a LOAD_MAP item, when present. */
+  loadMap?: PicobinLoadMap | null;
   /** Structurally valid blocks reached from the image definition by following relative links. */
   blockOffsets: number[];
   /** True only when every followed link was valid and the loop returned to the image-definition block. */
@@ -351,6 +371,7 @@ interface ParsedPicobinBlock {
   initialSPLimit: number | null;
   vectorTable: number | null;
   rollingWindowDelta: number | null;
+  loadMap: PicobinLoadMap | null;
 }
 
 function isPicobinMarker(buf: Uint8Array, offset: number): boolean {
@@ -376,6 +397,7 @@ function parsePicobinBlock(buf: Uint8Array, markerOffset: number): ParsedPicobin
   let initialSPLimit: number | null = null;
   let vectorTable: number | null = null;
   let rollingWindowDelta: number | null = null;
+  let loadMap: PicobinLoadMap | null = null;
 
   // The smallest item is one word, so this cap exceeds the largest structurally possible block.
   for (let itemCount = 0; itemCount < PICOBIN_MAX_BLOCK_SIZE / 4 && pos + 4 <= blockLimit; itemCount++) {
@@ -399,6 +421,7 @@ function parsePicobinBlock(buf: Uint8Array, markerOffset: number): ParsedPicobin
         initialSPLimit,
         vectorTable,
         rollingWindowDelta,
+        loadMap,
       };
     }
 
@@ -416,6 +439,29 @@ function parsePicobinBlock(buf: Uint8Array, markerOffset: number): ParsedPicobin
       vectorTable = u32(buf, pos + 4, true);
     } else if (itemType === PICOBIN_ROLLING_WINDOW_DELTA_ITEM && sizeWords === 2) {
       rollingWindowDelta = u32(buf, pos + 4, true);
+    } else if (itemType === PICOBIN_LOAD_MAP_ITEM) {
+      const entryCount = (header << 1) >>> 25;
+      if (sizeWords !== 1 + entryCount * 3) return null;
+      const relative = (header | 0) >= 0;
+      const entries: PicobinLoadMapEntry[] = [];
+      for (let entryIndex = 0; entryIndex < entryCount; entryIndex++) {
+        const entryOffset = pos + 4 + entryIndex * 12;
+        const storageAddress = u32(buf, entryOffset, true);
+        const runtimeAddress = u32(buf, entryOffset + 4, true);
+        const encodedSize = u32(buf, entryOffset + 8, true);
+        const size = relative ? encodedSize : encodedSize - runtimeAddress;
+        if (
+          (!relative && encodedSize < runtimeAddress) ||
+          storageAddress % 4 !== 0 ||
+          runtimeAddress % 4 !== 0 ||
+          size % 4 !== 0 ||
+          runtimeAddress + size > 0x1_0000_0000
+        ) {
+          return null;
+        }
+        entries.push({ storageAddress, runtimeAddress, size });
+      }
+      loadMap = { itemOffset: pos, relative, entries };
     }
 
     precedingWords += sizeWords;
@@ -482,6 +528,7 @@ export function parsePicobin(buf: Uint8Array): PicobinInfo | null {
       initialSPLimit: first.initialSPLimit,
       vectorTable: first.vectorTable,
       rollingWindowDelta: first.rollingWindowDelta,
+      loadMap: first.loadMap,
       blockOffsets,
       loopComplete,
     };

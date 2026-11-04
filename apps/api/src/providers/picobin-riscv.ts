@@ -1,19 +1,22 @@
 /**
  * Focused, tool-backed RISC-V entrypoint recovery for a structurally validated PICOBIN image.
  *
- * This deliberately analyzes one declared entry function. It does not run whole-file auto-analysis (which can
- * manufacture thousands of functions from data in a raw image), and it never upgrades static disassembly into a
- * runtime claim. The PICOBIN parser remains the authority for CPU, entrypoint and block structure; radare2 only
- * decodes the mapped bytes and recovers the entry function's local control-flow graph.
+ * This deliberately starts at the declared entry function and follows only bounded direct calls. It does not run
+ * whole-file auto-analysis (which can manufacture thousands of functions from data in a raw image), and it never
+ * upgrades static disassembly into a runtime claim. The PICOBIN parser remains the authority for CPU, entrypoint
+ * and mapping; radare2 only decodes explicitly selected, mapped functions.
  */
 import { execFileSync } from 'node:child_process';
 import type { FindingDraft, PicobinInfo } from '@firmlab/core';
 
 const XIP_BASE = 0x1000_0000;
-const XIP_END = 0x1200_0000;
+const XIP_END = 0x1100_0000;
 const SPLIT = '__FIRMLAB_PICOBIN_RISCV_SPLIT__';
 const BASIC_BLOCK_CAP = 128;
 const INSTRUCTION_CAP = 256;
+const REACHABLE_FUNCTION_CAP = 8;
+const CALL_DEPTH_CAP = 4;
+const CALL_EDGE_CAP = 32;
 
 export interface PicobinBasicBlock {
   address: number;
@@ -32,21 +35,57 @@ export interface PicobinInstruction {
   fail?: number;
 }
 
+export interface PicobinReachableFunction {
+  address: number;
+  depth: number;
+  basicBlocksTotal: number;
+  instructionsTotal: number;
+}
+
+export interface PicobinCallEdge {
+  caller: number;
+  callsite: number;
+  target: number;
+}
+
 export interface PicobinRiscvDisassembly {
   attempted: boolean;
   available: boolean;
   tool: 'radare2';
-  scope: 'entry-function-only';
+  /** Historical results used entry-function-only; persisted provider output may retain that value forever. */
+  scope: 'entry-function-only' | 'reachable-call-graph';
   reason: string;
   baseAddress: number | null;
   entryPoint: number | null;
   entryFileOffset: number | null;
+  mappingKind?: PicobinMappingKind | null;
+  mappedRuntimeStart?: number | null;
+  mappedRuntimeEnd?: number | null;
   basicBlocksTotal?: number;
   instructionsTotal?: number;
   basicBlocks: PicobinBasicBlock[];
   instructions: PicobinInstruction[];
+  reachableFunctions?: PicobinReachableFunction[];
+  callEdges?: PicobinCallEdge[];
+  unresolvedCallsitesTotal?: number;
+  outOfMapCallsitesTotal?: number;
+  callGraphTruncated?: boolean;
   findings: FindingDraft[];
 }
+
+export type PicobinMappingKind = 'direct-xip' | 'rolling-xip' | 'relative-load-map' | 'absolute-load-map';
+
+export interface PicobinFlashMapping {
+  baseAddress: number;
+  entryPoint: number;
+  entryFileOffset: number;
+  mappingKind: PicobinMappingKind;
+  mappedRuntimeStart: number;
+  mappedRuntimeEnd: number;
+}
+
+type PicobinMappingInput = Pick<PicobinInfo, 'entryPoint' | 'rollingWindowDelta'> &
+  Partial<Pick<PicobinInfo, 'loadMap'>>;
 
 interface R2Block {
   addr?: unknown;
@@ -67,6 +106,13 @@ interface R2Instruction {
 
 interface R2Function {
   ops?: unknown;
+}
+
+interface ParsedPicobinFunction {
+  basicBlocksTotal: number;
+  instructionsTotal: number;
+  basicBlocks: PicobinBasicBlock[];
+  instructions: PicobinInstruction[];
 }
 
 export type Radare2Executor = (args: string[]) => string;
@@ -113,29 +159,112 @@ function optionalAddress(value: unknown): number | undefined {
   return parsed === null || parsed < 0 ? undefined : parsed;
 }
 
-function inMappedImage(address: number, size: number, baseAddress: number, fileSize: number): boolean {
-  return address >= baseAddress && size > 0 && address + size <= baseAddress + fileSize;
+function inMappedImage(address: number, size: number, mapping: PicobinFlashMapping, fileSize: number): boolean {
+  const fileOffset = address - mapping.baseAddress;
+  return (
+    size > 0 &&
+    address >= mapping.mappedRuntimeStart &&
+    address + size <= mapping.mappedRuntimeEnd &&
+    fileOffset >= 0 &&
+    fileOffset + size <= fileSize
+  );
 }
 
-export function picobinFlashMapping(
-  picobin: Pick<PicobinInfo, 'entryPoint' | 'rollingWindowDelta'>,
+function resolvePicobinFlashMapping(
+  picobin: PicobinMappingInput,
   fileSize: number,
-): { baseAddress: number; entryPoint: number; entryFileOffset: number } | null {
+): { mapping: PicobinFlashMapping | null; reason: string } {
   const entryPoint = picobin.entryPoint;
-  // A rolling delta means the runtime and stored XIP windows differ. Until the load/roll relation is parsed, do
-  // not guess a file offset from the runtime entrypoint.
-  if (entryPoint === null || picobin.rollingWindowDelta !== null) return null;
-  if (entryPoint < XIP_BASE || entryPoint >= XIP_END) return null;
-  const entryFileOffset = entryPoint - XIP_BASE;
-  if (entryFileOffset < 0 || entryFileOffset >= fileSize) return null;
-  return { baseAddress: XIP_BASE, entryPoint, entryFileOffset };
+  if (entryPoint === null) return { mapping: null, reason: 'PICOBIN has no ENTRY_POINT item to decode' };
+  const rollingDelta = picobin.rollingWindowDelta === null ? 0 : picobin.rollingWindowDelta | 0;
+  if (picobin.rollingWindowDelta !== null && rollingDelta % 0x1000 !== 0) {
+    return { mapping: null, reason: 'PICOBIN rolling-window delta is not flash-sector aligned' };
+  }
+
+  if (picobin.loadMap) {
+    const matches = picobin.loadMap.entries.filter(
+      (entry) => entryPoint >= entry.runtimeAddress && entryPoint < entry.runtimeAddress + entry.size,
+    );
+    if (matches.length === 0) {
+      return { mapping: null, reason: 'PICOBIN entrypoint is not covered by its LOAD_MAP regions' };
+    }
+    if (matches.length > 1) {
+      return { mapping: null, reason: 'PICOBIN entrypoint is covered by overlapping LOAD_MAP regions' };
+    }
+    const entry = matches[0];
+    if (!entry || entry.storageAddress === 0) {
+      return { mapping: null, reason: 'PICOBIN entrypoint lies in a zero-filled LOAD_MAP region' };
+    }
+
+    let sourceFileOffset: number;
+    let mappingKind: PicobinMappingKind;
+    if (picobin.loadMap.relative) {
+      sourceFileOffset = picobin.loadMap.itemOffset + (entry.storageAddress | 0);
+      mappingKind = 'relative-load-map';
+    } else {
+      if (entry.storageAddress < XIP_BASE || entry.storageAddress >= XIP_END) {
+        return { mapping: null, reason: 'PICOBIN absolute LOAD_MAP source is outside flash-backed XIP storage' };
+      }
+      sourceFileOffset = entry.storageAddress - XIP_BASE + rollingDelta;
+      mappingKind = 'absolute-load-map';
+    }
+
+    const entryFileOffset = sourceFileOffset + (entryPoint - entry.runtimeAddress);
+    const baseAddress = entry.runtimeAddress - sourceFileOffset;
+    if (
+      !Number.isSafeInteger(sourceFileOffset) ||
+      !Number.isSafeInteger(baseAddress) ||
+      baseAddress < 0 ||
+      sourceFileOffset < 0 ||
+      sourceFileOffset + entry.size > fileSize ||
+      entryFileOffset < 0 ||
+      entryFileOffset >= fileSize
+    ) {
+      return { mapping: null, reason: `PICOBIN LOAD_MAP source lies beyond the ${fileSize}-byte image` };
+    }
+    return {
+      mapping: {
+        baseAddress,
+        entryPoint,
+        entryFileOffset,
+        mappingKind,
+        mappedRuntimeStart: entry.runtimeAddress,
+        mappedRuntimeEnd: entry.runtimeAddress + entry.size,
+      },
+      reason: '',
+    };
+  }
+
+  if (entryPoint < XIP_BASE || entryPoint >= XIP_END) {
+    return { mapping: null, reason: 'PICOBIN entrypoint is outside the RP2350 XIP window and no LOAD_MAP resolves it' };
+  }
+  const entryFileOffset = entryPoint - XIP_BASE + rollingDelta;
+  if (entryFileOffset < 0 || entryFileOffset >= fileSize) {
+    return { mapping: null, reason: `PICOBIN entrypoint maps beyond the ${fileSize}-byte image` };
+  }
+  const baseAddress = XIP_BASE - rollingDelta;
+  return {
+    mapping: {
+      baseAddress,
+      entryPoint,
+      entryFileOffset,
+      mappingKind: rollingDelta === 0 ? 'direct-xip' : 'rolling-xip',
+      mappedRuntimeStart: baseAddress,
+      mappedRuntimeEnd: baseAddress + fileSize,
+    },
+    reason: '',
+  };
+}
+
+export function picobinFlashMapping(picobin: PicobinMappingInput, fileSize: number): PicobinFlashMapping | null {
+  return resolvePicobinFlashMapping(picobin, fileSize).mapping;
 }
 
 export function parsePicobinRadare2Output(
   stdout: string,
-  mapping: { baseAddress: number; entryPoint: number; entryFileOffset: number },
+  mapping: PicobinFlashMapping,
   fileSize: number,
-): Pick<PicobinRiscvDisassembly, 'basicBlocksTotal' | 'instructionsTotal' | 'basicBlocks' | 'instructions'> | null {
+): ParsedPicobinFunction | null {
   const [blocksText, functionText] = stdout.split(SPLIT);
   if (blocksText === undefined || functionText === undefined) return null;
   const rawBlocks = parseArrayBlock<R2Block>(blocksText);
@@ -152,7 +281,7 @@ export function parsePicobinRadare2Output(
       size === null ||
       instructionCount === null ||
       instructionCount < 0 ||
-      !inMappedImage(address, size, mapping.baseAddress, fileSize)
+      !inMappedImage(address, size, mapping, fileSize)
     ) {
       return null;
     }
@@ -176,7 +305,7 @@ export function parsePicobinRadare2Output(
       size === null ||
       typeof raw.opcode !== 'string' ||
       typeof raw.type !== 'string' ||
-      !inMappedImage(address, size, mapping.baseAddress, fileSize)
+      !inMappedImage(address, size, mapping, fileSize)
     ) {
       return null;
     }
@@ -192,7 +321,11 @@ export function parsePicobinRadare2Output(
     });
   }
 
-  if (basicBlocks.length === 0 || instructions.length === 0 || instructions[0]?.address !== mapping.entryPoint) {
+  if (
+    basicBlocks.length === 0 ||
+    instructions.length === 0 ||
+    !instructions.some((instruction) => instruction.address === mapping.entryPoint)
+  ) {
     return null;
   }
   return {
@@ -203,15 +336,12 @@ export function parsePicobinRadare2Output(
   };
 }
 
-function unavailable(
-  mapping: { baseAddress: number; entryPoint: number; entryFileOffset: number },
-  reason: string,
-): PicobinRiscvDisassembly {
+function unavailable(mapping: PicobinFlashMapping, reason: string): PicobinRiscvDisassembly {
   return {
     attempted: true,
     available: false,
     tool: 'radare2',
-    scope: 'entry-function-only',
+    scope: 'reachable-call-graph',
     reason,
     ...mapping,
     basicBlocks: [],
@@ -220,92 +350,198 @@ function unavailable(
   };
 }
 
-function unmapped(
-  picobin: Pick<PicobinInfo, 'entryPoint' | 'rollingWindowDelta'>,
-  fileSize: number,
-): PicobinRiscvDisassembly {
-  const reason =
-    picobin.entryPoint === null
-      ? 'PICOBIN has no ENTRY_POINT item to decode'
-      : picobin.rollingWindowDelta !== null
-        ? 'PICOBIN uses a rolling XIP window whose runtime-to-file mapping is not yet resolved'
-        : picobin.entryPoint < XIP_BASE || picobin.entryPoint >= XIP_END
-          ? 'PICOBIN entrypoint is outside the directly mapped RP2350 XIP window'
-          : `PICOBIN entrypoint maps beyond the ${fileSize}-byte image`;
+function unmapped(picobin: PicobinMappingInput, reason: string): PicobinRiscvDisassembly {
   return {
     attempted: false,
     available: false,
     tool: 'radare2',
-    scope: 'entry-function-only',
+    scope: 'reachable-call-graph',
     reason,
     baseAddress: null,
     entryPoint: picobin.entryPoint,
     entryFileOffset: null,
+    mappingKind: null,
+    mappedRuntimeStart: null,
+    mappedRuntimeEnd: null,
     basicBlocks: [],
     instructions: [],
     findings: [],
   };
 }
 
+function radareFailureReason(err: unknown): string {
+  const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : '';
+  return code === 'ENOENT'
+    ? 'radare2 is not installed'
+    : `radare2 failed: ${err instanceof Error ? err.message : String(err)}`;
+}
+
+function functionMapping(mapping: PicobinFlashMapping, address: number): PicobinFlashMapping {
+  return { ...mapping, entryPoint: address, entryFileOffset: address - mapping.baseAddress };
+}
+
+function decodeFunction(
+  imagePath: string,
+  mapping: PicobinFlashMapping,
+  fileSize: number,
+  execute: Radare2Executor,
+): ParsedPicobinFunction | null {
+  const entryHex = `0x${mapping.entryPoint.toString(16)}`;
+  const baseHex = `0x${mapping.baseAddress.toString(16)}`;
+  const name = `firmlab_${mapping.entryPoint.toString(16)}`;
+  const script = `e anal.bb.maxsize=4096;s ${entryHex};af ${name};afbj @ ${entryHex};?e ${SPLIT};pdfj @ ${entryHex}`;
+  const stdout = execute(['-q', '-2', '-a', 'riscv', '-b', '32', '-m', baseHex, '-c', script, imagePath]);
+  return parsePicobinRadare2Output(stdout, mapping, fileSize);
+}
+
 export function runPicobinRiscvDisassembly(
   imagePath: string,
-  picobin: Pick<PicobinInfo, 'cpuMode' | 'isExecutable' | 'entryPoint' | 'rollingWindowDelta'>,
+  picobin: Pick<PicobinInfo, 'cpuMode' | 'isExecutable' | 'entryPoint' | 'rollingWindowDelta'> &
+    Partial<Pick<PicobinInfo, 'loadMap'>>,
   fileSize: number,
   execute: Radare2Executor = defaultRadare2Executor,
 ): PicobinRiscvDisassembly | null {
   if (picobin.cpuMode !== 'riscv' || !picobin.isExecutable) return null;
-  const mapping = picobinFlashMapping(picobin, fileSize);
-  if (!mapping) return unmapped(picobin, fileSize);
+  const resolved = resolvePicobinFlashMapping(picobin, fileSize);
+  const mapping = resolved.mapping;
+  if (!mapping) return unmapped(picobin, resolved.reason);
 
-  const entryHex = `0x${mapping.entryPoint.toString(16)}`;
   const baseHex = `0x${mapping.baseAddress.toString(16)}`;
-  const script = `s ${entryHex};af entry0;afbj @ ${entryHex};?e ${SPLIT};pdfj @ ${entryHex}`;
-  let stdout: string;
+  const entryHex = `0x${mapping.entryPoint.toString(16)}`;
+  let parsed: ParsedPicobinFunction | null;
   try {
-    stdout = execute(['-q', '-2', '-a', 'riscv', '-b', '32', '-m', baseHex, '-c', script, imagePath]);
+    parsed = decodeFunction(imagePath, mapping, fileSize, execute);
   } catch (err) {
-    const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : '';
-    const reason =
-      code === 'ENOENT'
-        ? 'radare2 is not installed'
-        : `radare2 failed: ${err instanceof Error ? err.message : String(err)}`;
-    return unavailable(mapping, reason);
+    return unavailable(mapping, radareFailureReason(err));
+  }
+  if (!parsed) return unavailable(mapping, 'radare2 output was missing, malformed or outside the mapped image');
+
+  const reachableFunctions: PicobinReachableFunction[] = [
+    {
+      address: mapping.entryPoint,
+      depth: 0,
+      basicBlocksTotal: parsed.basicBlocksTotal,
+      instructionsTotal: parsed.instructionsTotal,
+    },
+  ];
+  const callEdges: PicobinCallEdge[] = [];
+  const queued = new Set<number>([mapping.entryPoint]);
+  const queue: { address: number; depth: number }[] = [];
+  let unresolvedCallsitesTotal = 0;
+  let outOfMapCallsitesTotal = 0;
+  let callGraphTruncated =
+    parsed.basicBlocks.length !== parsed.basicBlocksTotal || parsed.instructions.length !== parsed.instructionsTotal;
+  let graphStopReason = '';
+
+  const enqueueCalls = (caller: number, depth: number, instructions: PicobinInstruction[]): void => {
+    for (const instruction of instructions) {
+      if (!instruction.type.includes('call')) continue;
+      if (instruction.jump === undefined) {
+        unresolvedCallsitesTotal++;
+        continue;
+      }
+      if (!inMappedImage(instruction.jump, 2, mapping, fileSize)) {
+        outOfMapCallsitesTotal++;
+        continue;
+      }
+      if (callEdges.length >= CALL_EDGE_CAP) {
+        callGraphTruncated = true;
+        continue;
+      }
+      callEdges.push({ caller, callsite: instruction.address, target: instruction.jump });
+      if (queued.has(instruction.jump)) continue;
+      if (depth >= CALL_DEPTH_CAP || queued.size >= REACHABLE_FUNCTION_CAP) {
+        callGraphTruncated = true;
+        continue;
+      }
+      queued.add(instruction.jump);
+      queue.push({ address: instruction.jump, depth: depth + 1 });
+    }
+  };
+
+  enqueueCalls(mapping.entryPoint, 0, parsed.instructions);
+  while (queue.length > 0 && reachableFunctions.length < REACHABLE_FUNCTION_CAP) {
+    const next = queue.shift();
+    if (!next) break;
+    const nextMapping = functionMapping(mapping, next.address);
+    let decoded: ParsedPicobinFunction | null;
+    try {
+      decoded = decodeFunction(imagePath, nextMapping, fileSize, execute);
+    } catch (err) {
+      callGraphTruncated = true;
+      graphStopReason = radareFailureReason(err);
+      break;
+    }
+    if (!decoded) {
+      callGraphTruncated = true;
+      graphStopReason = `radare2 could not decode the reachable target 0x${next.address.toString(16)}`;
+      break;
+    }
+    reachableFunctions.push({
+      address: next.address,
+      depth: next.depth,
+      basicBlocksTotal: decoded.basicBlocksTotal,
+      instructionsTotal: decoded.instructionsTotal,
+    });
+    if (
+      decoded.basicBlocks.length !== decoded.basicBlocksTotal ||
+      decoded.instructions.length !== decoded.instructionsTotal
+    ) {
+      callGraphTruncated = true;
+    }
+    enqueueCalls(next.address, next.depth, decoded.instructions);
   }
 
-  const parsed = parsePicobinRadare2Output(stdout, mapping, fileSize);
-  if (!parsed) return unavailable(mapping, 'radare2 output was missing, malformed or outside the mapped image');
-  const complete =
-    parsed.basicBlocks.length === parsed.basicBlocksTotal && parsed.instructions.length === parsed.instructionsTotal;
-  const reason = `Decoded the declared RISC-V entry function: ${parsed.instructionsTotal} instruction(s), ${parsed.basicBlocksTotal} basic block(s)${complete ? '' : ' (stored lists capped)'}.`;
+  const reason =
+    `Decoded a bounded RISC-V call graph from the declared entrypoint: ${reachableFunctions.length} function(s), ` +
+    `${callEdges.length} direct call edge(s), ${unresolvedCallsitesTotal} unresolved/indirect callsite(s)` +
+    `${callGraphTruncated ? `; coverage truncated${graphStopReason ? ` (${graphStopReason})` : ' by configured limits'}` : ''}.`;
   const finding: FindingDraft = {
     kind: 'rtos-picobin-entry-cfg',
-    title: `RISC-V PICOBIN entrypoint decoded: ${parsed.instructionsTotal} instructions across ${parsed.basicBlocksTotal} basic blocks`,
+    title: `RISC-V PICOBIN entry graph decoded: ${reachableFunctions.length} reachable function(s), ${callEdges.length} direct edge(s)`,
     severity: 'info',
     proofState: 'static_confirmed',
     evidence: {
       tool: 'radare2',
-      scope: 'entry-function-only',
+      scope: 'reachable-call-graph',
+      functionCap: REACHABLE_FUNCTION_CAP,
+      callDepthCap: CALL_DEPTH_CAP,
+      callEdgeCap: CALL_EDGE_CAP,
       baseAddress: baseHex,
       entryPoint: entryHex,
       entryFileOffset: mapping.entryFileOffset,
+      mappingKind: mapping.mappingKind,
+      mappedRuntimeStart: `0x${mapping.mappedRuntimeStart.toString(16)}`,
+      mappedRuntimeEnd: `0x${mapping.mappedRuntimeEnd.toString(16)}`,
       basicBlocksTotal: parsed.basicBlocksTotal,
       basicBlocksListed: parsed.basicBlocks.length,
       instructionsTotal: parsed.instructionsTotal,
       instructionsListed: parsed.instructions.length,
+      reachableFunctions: reachableFunctions.length,
+      directCallEdges: callEdges.length,
+      unresolvedCallsitesTotal,
+      outOfMapCallsitesTotal,
+      callGraphTruncated,
     },
     rationale:
       'radare2 decoded instructions and local control-flow blocks from the entrypoint declared by a structurally ' +
-      'validated PICOBIN image. This is bounded static decoder evidence for one function; it does not prove ' +
-      'execution, whole-image function coverage or peripheral behavior.',
+      'validated PICOBIN image, then followed only direct call targets under explicit function/depth/edge caps. ' +
+      'This is bounded static decoder evidence; it does not prove execution, resolve indirect calls, establish ' +
+      'whole-image function coverage or demonstrate peripheral behavior.',
   };
   return {
     attempted: true,
     available: true,
     tool: 'radare2',
-    scope: 'entry-function-only',
+    scope: 'reachable-call-graph',
     reason,
     ...mapping,
     ...parsed,
+    reachableFunctions,
+    callEdges,
+    unresolvedCallsitesTotal,
+    outOfMapCallsitesTotal,
+    callGraphTruncated,
     findings: [finding],
   };
 }
