@@ -13,8 +13,8 @@
  * runner only reads a bounded prefix of the image and composes them.
  */
 import fs from 'node:fs';
-import { fingerprintMcu, parsePicobin } from '@firmlab/core';
-import type { FindingDraft } from '@firmlab/core';
+import { fingerprintMcu, parsePicobinImages } from '@firmlab/core';
+import type { FindingDraft, PicobinInfo } from '@firmlab/core';
 import { type PicobinRiscvDisassembly, runPicobinRiscvDisassembly } from './picobin-riscv.js';
 
 /** Format a 32-bit address as zero-padded, 0x-prefixed hex (e.g. 0x08000000) for titles and evidence. */
@@ -177,8 +177,10 @@ export interface RtosAnalysis {
   rtosKernel: string | null;
   ecos: { version: string | null; redboot: boolean; app: string | null } | null;
   flags: string[];
-  /** Structurally validated PICOBIN image declaration, when this is an RP2350/RP2040 boot image. */
-  picobin: ReturnType<typeof parsePicobin>;
+  /** Primary declaration retained for compatibility with callers that predate universal PICOBIN images. */
+  picobin: PicobinInfo | null;
+  /** Every structurally validated definition, bounded by the core parser. */
+  picobinImages: PicobinInfo[];
   coverage: RtosCoverage;
   findings: FindingDraft[];
 }
@@ -207,7 +209,8 @@ export function analyzeRtos(buf: Uint8Array, fileSize = buf.length): RtosAnalysi
   const memoryMap = vectorTable ? inferMemoryMap(vectorTable.initialSP, vectorTable.resetHandler) : null;
   const ecos = detectEcos(buf);
   const flags = extractFlags(buf);
-  const picobin = parsePicobin(buf);
+  const picobinImages = parsePicobinImages(buf);
+  const picobin = picobinImages[0] ?? null;
   const findings: FindingDraft[] = [];
 
   if (vectorTable && memoryMap) {
@@ -280,40 +283,41 @@ export function analyzeRtos(buf: Uint8Array, fileSize = buf.length): RtosAnalysi
     });
   }
 
-  if (picobin) {
+  for (const declaredPicobin of picobinImages) {
     const cpuLabel =
-      picobin.cpuMode === 'riscv'
+      declaredPicobin.cpuMode === 'riscv'
         ? 'RISC-V'
-        : picobin.cpuMode === 'varmulet'
+        : declaredPicobin.cpuMode === 'varmulet'
           ? 'varmulet (Arm payload)'
-          : picobin.cpuMode === 'arm'
+          : declaredPicobin.cpuMode === 'arm'
             ? 'Arm'
             : 'unknown CPU';
-    const chipLabel = picobin.chip?.toUpperCase() ?? 'unknown RP-series chip';
-    const entryLabel = picobin.entryPoint === null ? '' : `, entry ${hex(picobin.entryPoint)}`;
-    const loopLabel = picobin.loopComplete
-      ? `${picobin.blockOffsets.length}-block loop validated`
+    const chipLabel = declaredPicobin.chip?.toUpperCase() ?? 'unknown RP-series chip';
+    const entryLabel = declaredPicobin.entryPoint === null ? '' : `, entry ${hex(declaredPicobin.entryPoint)}`;
+    const loopLabel = declaredPicobin.loopComplete
+      ? `${declaredPicobin.blockOffsets.length}-block loop validated`
       : 'linked block loop incomplete in available bytes';
     findings.push({
       kind: 'rtos-picobin',
-      title: `${chipLabel} PICOBIN ${picobin.isExecutable ? 'executable' : 'image'} declares ${cpuLabel}${entryLabel} (${loopLabel})`,
+      title: `${chipLabel} PICOBIN ${declaredPicobin.isExecutable ? 'executable' : 'image'} declares ${cpuLabel}${entryLabel} (${loopLabel})`,
       severity: 'info',
       proofState: 'static_confirmed',
       evidence: {
-        markerOffset: picobin.markerOffset,
-        imageTypeFlags: `0x${picobin.imageTypeFlags.toString(16).padStart(4, '0')}`,
-        cpu: picobin.cpu,
-        cpuMode: picobin.cpuMode,
-        chip: picobin.chip,
-        security: picobin.security,
-        tryBeforeYouBuy: picobin.tryBeforeYouBuy,
-        entryPoint: picobin.entryPoint === null ? null : hex(picobin.entryPoint),
-        initialSP: picobin.initialSP === null ? null : hex(picobin.initialSP),
-        initialSPLimit: picobin.initialSPLimit === null ? null : hex(picobin.initialSPLimit),
-        vectorTable: picobin.vectorTable === null ? null : hex(picobin.vectorTable),
-        rollingWindowDelta: picobin.rollingWindowDelta,
-        blockOffsets: picobin.blockOffsets,
-        loopComplete: picobin.loopComplete,
+        markerOffset: declaredPicobin.markerOffset,
+        imageTypeFlags: `0x${declaredPicobin.imageTypeFlags.toString(16).padStart(4, '0')}`,
+        cpu: declaredPicobin.cpu,
+        cpuMode: declaredPicobin.cpuMode,
+        chip: declaredPicobin.chip,
+        security: declaredPicobin.security,
+        tryBeforeYouBuy: declaredPicobin.tryBeforeYouBuy,
+        entryPoint: declaredPicobin.entryPoint === null ? null : hex(declaredPicobin.entryPoint),
+        initialSP: declaredPicobin.initialSP === null ? null : hex(declaredPicobin.initialSP),
+        initialSPLimit: declaredPicobin.initialSPLimit === null ? null : hex(declaredPicobin.initialSPLimit),
+        vectorTable: declaredPicobin.vectorTable === null ? null : hex(declaredPicobin.vectorTable),
+        rollingWindowDelta: declaredPicobin.rollingWindowDelta,
+        loadMap: declaredPicobin.loadMap,
+        blockOffsets: declaredPicobin.blockOffsets,
+        loopComplete: declaredPicobin.loopComplete,
       },
       rationale:
         'The PICOBIN IMAGE_TYPE and address items were decoded only after the block LAST size and end marker ' +
@@ -336,7 +340,7 @@ export function analyzeRtos(buf: Uint8Array, fileSize = buf.length): RtosAnalysi
     });
   }
 
-  return { isCortexM, vectorTable, memoryMap, rtosKernel, ecos, flags, picobin, coverage, findings };
+  return { isCortexM, vectorTable, memoryMap, rtosKernel, ecos, flags, picobin, picobinImages, coverage, findings };
 }
 
 export interface RtosResult {
@@ -350,9 +354,27 @@ export interface RtosResult {
   reason: string;
   /** Optional forever: older persisted W7 results predate entrypoint disassembly. */
   picobinDisassembly?: PicobinRiscvDisassembly;
+  /** Optional forever: older persisted W7 results retained only the first IMAGE_DEF. */
+  picobinImages?: PicobinInfo[];
 }
 
 const FIRMWARE_READ_CAP = 16 * 1024 * 1024;
+
+/** Select the executable RISC-V definition from a universal image without changing the legacy primary fallback. */
+export function selectPicobinDisassemblyTarget(
+  images: PicobinInfo[],
+  fallback: PicobinInfo | null,
+): PicobinInfo | null {
+  const candidates = images.filter(
+    (candidate) => candidate.cpuMode === 'riscv' && candidate.isExecutable && candidate.entryPoint !== null,
+  );
+  return (
+    candidates.find((candidate) => candidate.loadMap !== null) ??
+    candidates.find((candidate) => candidate.rollingWindowDelta !== null) ??
+    candidates[0] ??
+    fallback
+  );
+}
 
 /** Read a bounded prefix of the firmware — MCU blobs are tiny; this caps a mis-routed image. */
 function readFirmwareBounded(p: string, cap = FIRMWARE_READ_CAP): { buf: Uint8Array; fileSize: number } {
@@ -392,8 +414,9 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
   }
 
   const a = analyzeRtos(read.buf, read.fileSize);
-  const picobinDisassembly = a.picobin
-    ? runPicobinRiscvDisassembly(imagePath, a.picobin, read.fileSize, undefined, read.buf)
+  const disassemblyTarget = selectPicobinDisassemblyTarget(a.picobinImages, a.picobin);
+  const picobinDisassembly = disassemblyTarget
+    ? runPicobinRiscvDisassembly(imagePath, disassemblyTarget, read.fileSize, undefined, read.buf)
     : null;
   const findings = picobinDisassembly ? [...a.findings, ...picobinDisassembly.findings] : a.findings;
   const scanScope = a.coverage.complete
@@ -420,6 +443,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
       coverage: a.coverage,
       findings,
       reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${picobinNote}${disassemblyNote}${ecosNote}${flagNote}${emptyNote}`,
+      ...(a.picobinImages.length ? { picobinImages: a.picobinImages } : {}),
       ...(picobinDisassembly ? { picobinDisassembly } : {}),
     };
   }

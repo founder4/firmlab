@@ -307,6 +307,7 @@ const PICOBIN_ENTRY_POINT_ITEM = 0x44;
 const PICOBIN_ROLLING_WINDOW_DELTA_ITEM = 0x05;
 const PICOBIN_LOAD_MAP_ITEM = 0x06;
 const PICOBIN_LAST_ITEM = 0xff;
+const PICOBIN_IMAGE_CAP = 64;
 
 export type PicobinCpu = 'arm' | 'riscv' | 'varmulet' | 'unknown';
 export type PicobinSecurity = 'unspecified' | 'non-secure' | 'secure' | 'reserved';
@@ -388,6 +389,46 @@ interface ParsedPicobinBlock {
   vectorTable: number | null;
   rollingWindowDelta: number | null;
   loadMap: PicobinLoadMap | null;
+}
+
+function picobinInfo(
+  markerOffset: number,
+  block: ParsedPicobinBlock,
+  blockOffsets: number[],
+  loopComplete: boolean,
+): PicobinInfo {
+  const flags = block.imageTypeFlags ?? 0;
+  const cpuIndex = (flags >> 8) & 0x7;
+  const cpuMode: PicobinCpu =
+    cpuIndex === 0 ? 'arm' : cpuIndex === 1 ? 'riscv' : cpuIndex === 2 ? 'varmulet' : 'unknown';
+  const securityIndex = (flags >> 4) & 0x3;
+  const security: PicobinSecurity =
+    securityIndex === 0
+      ? 'unspecified'
+      : securityIndex === 1
+        ? 'non-secure'
+        : securityIndex === 2
+          ? 'secure'
+          : 'reserved';
+  const chipIndex = (flags >> 12) & 0x7;
+  return {
+    markerOffset,
+    cpu: cpuMode === 'riscv' ? 'riscv' : cpuMode === 'arm' || cpuMode === 'varmulet' ? 'arm' : 'unknown',
+    chip: chipIndex === 1 ? 'rp2350' : chipIndex === 0 ? 'rp2040' : null,
+    isExecutable: (flags & 0x000f) === 0x1,
+    imageTypeFlags: flags,
+    cpuMode,
+    security,
+    tryBeforeYouBuy: (flags & 0x8000) !== 0,
+    entryPoint: block.entryPoint,
+    initialSP: block.initialSP,
+    initialSPLimit: block.initialSPLimit,
+    vectorTable: block.vectorTable,
+    rollingWindowDelta: block.rollingWindowDelta,
+    loadMap: block.loadMap,
+    blockOffsets,
+    loopComplete,
+  };
 }
 
 function parseRiscvCopyTableCandidate(
@@ -548,7 +589,8 @@ function parsePicobinBlock(buf: Uint8Array, markerOffset: number): ParsedPicobin
       const entries: PicobinLoadMapEntry[] = [];
       for (let entryIndex = 0; entryIndex < entryCount; entryIndex++) {
         const entryOffset = pos + 4 + entryIndex * 12;
-        const storageAddress = u32(buf, entryOffset, true);
+        const rawStorageAddress = u32(buf, entryOffset, true);
+        const storageAddress = relative ? rawStorageAddress | 0 : rawStorageAddress;
         const runtimeAddress = u32(buf, entryOffset + 4, true);
         const encodedSize = u32(buf, entryOffset + 8, true);
         const size = relative ? encodedSize : encodedSize - runtimeAddress;
@@ -578,10 +620,12 @@ function parsePicobinBlock(buf: Uint8Array, markerOffset: number): ParsedPicobin
  * only authoritative source of which one a given image targets is the IMAGE_TYPE item's CPU field. We walk the
  * block's TLV items to read it, so the classifier picks `riscv` vs `arm` from the bytes, never from a label.
  *
- * Returns null when no structurally valid PICOBIN image-definition block is present. Pure; scans a bounded,
- * word-aligned prefix (the boot ROM also searches at word boundaries), then follows the declared block loop.
+ * Returns every structurally valid PICOBIN image-definition block, capped at 64; universal binaries intentionally
+ * carry several definitions for different CPUs. Pure; scans a bounded, word-aligned prefix (the boot ROM also
+ * searches at word boundaries), then follows each declaration's block loop. An empty array means none validated.
  */
-export function parsePicobin(buf: Uint8Array): PicobinInfo | null {
+export function parsePicobinImages(buf: Uint8Array): PicobinInfo[] {
+  const images: PicobinInfo[] = [];
   const scanEnd = Math.min(buf.length - 4, 256 * 1024);
   for (let markerOffset = 0; markerOffset <= scanEnd; markerOffset += 4) {
     if (!isPicobinMarker(buf, markerOffset)) continue;
@@ -601,41 +645,18 @@ export function parsePicobin(buf: Uint8Array): PicobinInfo | null {
       nextOffset = linked.nextBlockOffset;
       loopComplete = nextOffset === markerOffset;
     }
-
-    const flags = first.imageTypeFlags;
-    const cpuIndex = (flags >> 8) & 0x7;
-    const cpuMode: PicobinCpu =
-      cpuIndex === 0 ? 'arm' : cpuIndex === 1 ? 'riscv' : cpuIndex === 2 ? 'varmulet' : 'unknown';
-    const securityIndex = (flags >> 4) & 0x3;
-    const security: PicobinSecurity =
-      securityIndex === 0
-        ? 'unspecified'
-        : securityIndex === 1
-          ? 'non-secure'
-          : securityIndex === 2
-            ? 'secure'
-            : 'reserved';
-    const chipIndex = (flags >> 12) & 0x7;
-    return {
-      markerOffset,
-      cpu: cpuMode === 'riscv' ? 'riscv' : cpuMode === 'arm' || cpuMode === 'varmulet' ? 'arm' : 'unknown',
-      chip: chipIndex === 1 ? 'rp2350' : chipIndex === 0 ? 'rp2040' : null,
-      isExecutable: (flags & 0x000f) === 0x1,
-      imageTypeFlags: flags,
-      cpuMode,
-      security,
-      tryBeforeYouBuy: (flags & 0x8000) !== 0,
-      entryPoint: first.entryPoint,
-      initialSP: first.initialSP,
-      initialSPLimit: first.initialSPLimit,
-      vectorTable: first.vectorTable,
-      rollingWindowDelta: first.rollingWindowDelta,
-      loadMap: first.loadMap,
-      blockOffsets,
-      loopComplete,
-    };
+    images.push(picobinInfo(markerOffset, first, blockOffsets, loopComplete));
+    if (images.length >= PICOBIN_IMAGE_CAP) break;
   }
-  return null;
+  return images;
+}
+
+/**
+ * Backward-compatible primary PICOBIN reading. Universal binaries can carry several IMAGE_DEF blocks; callers
+ * that need to select an ISA or mapping should use `parsePicobinImages` instead.
+ */
+export function parsePicobin(buf: Uint8Array): PicobinInfo | null {
+  return parsePicobinImages(buf)[0] ?? null;
 }
 
 /** Build the fingerprint. `buf` should be the firmware bytes (the caller may cap very large buffers). */

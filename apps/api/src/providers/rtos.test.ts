@@ -11,6 +11,7 @@ import {
   parseVectorTable,
   recoverBaseAddress,
   runRtosAnalysis,
+  selectPicobinDisassemblyTarget,
 } from './rtos.js';
 
 /** Little-endian 4-byte encoding of a 32-bit word. */
@@ -47,6 +48,28 @@ function picobinBlob(): Uint8Array {
   dv.setUint32(tail + 8, 0x0000_01ff, true);
   dv.setInt32(tail + 12, first - tail, true);
   dv.setUint32(tail + 16, 0xab12_3579, true);
+  return buf;
+}
+
+/** Arm first, RISC-V second: the ordering used by official multi-platform universal binaries. */
+function universalPicobinBlob(): Uint8Array {
+  const buf = new Uint8Array(0x60);
+  const dv = new DataView(buf.buffer);
+  const arm = 0x10;
+  const riscv = 0x30;
+  dv.setUint32(arm, 0xffff_ded3, true);
+  dv.setUint32(arm + 4, 0x1001_0142, true);
+  dv.setUint32(arm + 8, 0x0000_01ff, true);
+  dv.setInt32(arm + 12, riscv - arm, true);
+  dv.setUint32(arm + 16, 0xab12_3579, true);
+  dv.setUint32(riscv, 0xffff_ded3, true);
+  dv.setUint32(riscv + 4, 0x1101_0142, true);
+  dv.setUint32(riscv + 8, 0x0000_0344, true);
+  dv.setUint32(riscv + 12, 0x1000_0040, true);
+  dv.setUint32(riscv + 16, 0x2008_2000, true);
+  dv.setUint32(riscv + 20, 0x0000_04ff, true);
+  dv.setInt32(riscv + 24, arm - riscv, true);
+  dv.setUint32(riscv + 28, 0xab12_3579, true);
   return buf;
 }
 
@@ -169,6 +192,17 @@ describe('analyzeRtos', () => {
     expect(finding?.proofState).toBe('static_confirmed');
     expect(finding?.title).toContain('RP2350 PICOBIN executable declares RISC-V');
     expect(finding?.title).toContain('2-block loop validated');
+  });
+
+  it('keeps every universal IMAGE_DEF and selects the executable RISC-V declaration', () => {
+    const parsed = analyzeRtos(universalPicobinBlob());
+    expect(parsed.picobin?.cpuMode).toBe('arm');
+    expect(parsed.picobinImages.map((image) => image.cpuMode)).toEqual(['arm', 'riscv']);
+    expect(parsed.findings.filter((finding) => finding.kind === 'rtos-picobin')).toHaveLength(2);
+    expect(selectPicobinDisassemblyTarget(parsed.picobinImages, parsed.picobin)).toMatchObject({
+      cpuMode: 'riscv',
+      entryPoint: 0x1000_0040,
+    });
   });
 });
 

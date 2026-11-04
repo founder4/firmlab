@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   fingerprintMcu,
   parsePicobin,
+  parsePicobinImages,
   parseRiscvStartupCopyTable,
   parseRp2040Flash,
   qmkFirmwareMarkers,
@@ -282,6 +283,29 @@ describe('parsePicobin — RP2350 boot block ISA', () => {
     });
   });
 
+  it('enumerates each IMAGE_DEF in a universal block loop while preserving the primary reading', () => {
+    const buf = new Uint8Array(0x50);
+    const dv = new DataView(buf.buffer);
+    const arm = 0x10;
+    const riscv = 0x30;
+    for (const [offset, flags, next] of [
+      [arm, 0x1001, riscv],
+      [riscv, 0x1101, arm],
+    ] as const) {
+      dv.setUint32(offset, 0xffff_ded3, true);
+      dv.setUint32(offset + 4, (flags << 16) | 0x0142, true);
+      dv.setUint32(offset + 8, 0x0000_01ff, true);
+      dv.setInt32(offset + 12, next - offset, true);
+      dv.setUint32(offset + 16, 0xab12_3579, true);
+    }
+
+    expect(parsePicobinImages(buf)).toMatchObject([
+      { markerOffset: arm, cpuMode: 'arm', blockOffsets: [arm, riscv], loopComplete: true },
+      { markerOffset: riscv, cpuMode: 'riscv', blockOffsets: [riscv, arm], loopComplete: true },
+    ]);
+    expect(parsePicobin(buf)?.markerOffset).toBe(arm);
+  });
+
   it('decodes a relative LOAD_MAP and retains the item-relative storage offset', () => {
     const info = parsePicobin(
       picobinLoadMapBlock({
@@ -296,6 +320,18 @@ describe('parsePicobin — RP2350 boot block ISA', () => {
       relative: true,
       entries: [{ storageAddress: 0x40, runtimeAddress: 0x2000_0000, size: 0x20 }],
     });
+  });
+
+  it('sign-extends a backwards relative LOAD_MAP storage offset', () => {
+    const info = parsePicobin(
+      picobinLoadMapBlock({
+        storageAddress: -0x20,
+        runtimeAddress: 0x2000_0000,
+        encodedSize: 0x20,
+        entryPoint: 0x2000_0008,
+      }),
+    );
+    expect(info?.loadMap?.entries[0]?.storageAddress).toBe(-0x20);
   });
 
   it('normalizes an absolute LOAD_MAP end address to a byte length', () => {
