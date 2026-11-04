@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parsePicobinRadare2Output,
   picobinFlashMapping,
+  picobinRuntimeMapping,
   resolveRiscvPcRelativeCalls,
   runPicobinRiscvDisassembly,
 } from './picobin-riscv.js';
@@ -122,6 +123,43 @@ describe('picobinFlashMapping', () => {
   });
 });
 
+describe('picobinRuntimeMapping', () => {
+  it('maps an address copied from flash into a startup-table runtime region', () => {
+    expect(
+      picobinRuntimeMapping(
+        0x2000_0008,
+        4,
+        mapping,
+        {
+          tableAddress: 0x1000_0060,
+          tableFileOffset: 0x60,
+          bytesExamined: 16,
+          regions: [
+            {
+              sourceAddress: 0x1000_0100,
+              sourceFileOffset: 0x100,
+              runtimeAddress: 0x2000_0000,
+              size: 0x20,
+            },
+          ],
+        },
+        FILE_SIZE,
+      ),
+    ).toEqual({
+      baseAddress: 0x1fff_ff00,
+      entryPoint: 0x2000_0008,
+      entryFileOffset: 0x108,
+      mappingKind: 'startup-copy',
+      mappedRuntimeStart: 0x2000_0000,
+      mappedRuntimeEnd: 0x2000_0020,
+    });
+  });
+
+  it('does not invent a mapping outside the declared copied regions', () => {
+    expect(picobinRuntimeMapping(0x2000_0008, 4, mapping, null, FILE_SIZE)).toBeNull();
+  });
+});
+
 describe('parsePicobinRadare2Output', () => {
   it('normalizes bounded entry-function blocks and instructions', () => {
     expect(parsePicobinRadare2Output(r2Output(), mapping, FILE_SIZE)).toEqual({
@@ -236,6 +274,55 @@ describe('runPicobinRiscvDisassembly', () => {
       ],
       callEdges: [{ caller: ENTRY, callsite: ENTRY, target }],
       unresolvedCallsitesTotal: 1,
+      callGraphTruncated: false,
+    });
+  });
+
+  it('recovers the CRT0 copy table and follows a flash-backed SRAM target', () => {
+    const entry = 0x1000_0020;
+    const target = 0x2000_0008;
+    const image = new Uint8Array(0x200);
+    const view = new DataView(image.buffer);
+    view.setUint32(0x20, 0x0000_0717, true); // auipc a4, 0
+    view.setUint32(0x24, 0x0407_0713, true); // addi a4, a4, 0x40 -> table at 0x60
+    view.setUint32(0x60, 0x1000_0100, true);
+    view.setUint32(0x64, 0x2000_0000, true);
+    view.setUint32(0x68, 0x2000_0020, true);
+    view.setUint32(0x6c, 0, true);
+
+    const scripts: string[] = [];
+    const result = runPicobinRiscvDisassembly(
+      '/firmware/pico.bin',
+      { ...picobin, entryPoint: entry },
+      image.byteLength,
+      (received) => {
+        const script = received[received.indexOf('-c') + 1] ?? '';
+        scripts.push(script);
+        return script.includes(`s 0x${target.toString(16)};`)
+          ? r2SingleFunction(target, [{ addr: target, size: 2, opcode: 'ret', type: 'ret' }])
+          : r2SingleFunction(entry, [
+              { addr: entry, size: 4, opcode: 'auipc a4, 0', type: 'lea' },
+              { addr: entry + 4, size: 4, opcode: 'addi a4, a4, 0x40', type: 'add' },
+              { addr: entry + 8, size: 4, opcode: `jal 0x${target.toString(16)}`, type: 'call', jump: target },
+            ]);
+      },
+      image,
+    );
+
+    expect(scripts).toHaveLength(2);
+    expect(result).toMatchObject({
+      available: true,
+      startupCopyTableAttempted: true,
+      startupCopyTable: {
+        tableAddress: 0x1000_0060,
+        regions: [{ sourceFileOffset: 0x100, runtimeAddress: 0x2000_0000, size: 0x20 }],
+      },
+      reachableFunctions: [
+        { address: entry, depth: 0 },
+        { address: target, depth: 1 },
+      ],
+      callEdges: [{ caller: entry, callsite: entry + 8, target }],
+      outOfMapCallsitesTotal: 0,
       callGraphTruncated: false,
     });
   });

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { fingerprintMcu, parsePicobin, parseRp2040Flash, qmkFirmwareMarkers } from '../src/mcu.js';
+import {
+  fingerprintMcu,
+  parsePicobin,
+  parseRiscvStartupCopyTable,
+  parseRp2040Flash,
+  qmkFirmwareMarkers,
+} from '../src/mcu.js';
 
 /** Minimal ELF32 builder: header + N PT_LOAD program headers, little-endian, plus optional trailing strings. */
 function elf32(machine: number, loads: { vaddr: number; paddr: number; filesz: number }[], trailer = ''): Uint8Array {
@@ -350,6 +356,40 @@ describe('parsePicobin — RP2350 boot block ISA', () => {
 
   it('returns null when there is no PICOBIN block', () => {
     expect(parsePicobin(new Uint8Array(64))).toBeNull();
+  });
+});
+
+describe('parseRiscvStartupCopyTable — bounded Pico SDK startup map', () => {
+  function startupImage(sourceAddress = 0x1000_0100): Uint8Array {
+    const buf = new Uint8Array(0x200);
+    const dv = new DataView(buf.buffer);
+    dv.setUint32(0x20, 0x0000_0717, true); // auipc a4, 0
+    dv.setUint32(0x24, 0x0407_0713, true); // addi a4, a4, 0x40 -> runtime/file offset 0x60
+    dv.setUint32(0x60, sourceAddress, true);
+    dv.setUint32(0x64, 0x2000_0000, true);
+    dv.setUint32(0x68, 0x2000_0020, true);
+    dv.setUint32(0x6c, 0, true);
+    return buf;
+  }
+
+  it('recovers a terminated source/runtime table referenced by AUIPC plus ADDI', () => {
+    expect(parseRiscvStartupCopyTable(startupImage(), 0x1000_0020, 0x20, 0x1000_0000)).toEqual({
+      tableAddress: 0x1000_0060,
+      tableFileOffset: 0x60,
+      bytesExamined: 16,
+      regions: [
+        {
+          sourceAddress: 0x1000_0100,
+          sourceFileOffset: 0x100,
+          runtimeAddress: 0x2000_0000,
+          size: 0x20,
+        },
+      ],
+    });
+  });
+
+  it('rejects a table whose declared source bytes are outside the image', () => {
+    expect(parseRiscvStartupCopyTable(startupImage(0x1000_01f0), 0x1000_0020, 0x20, 0x1000_0000)).toBeNull();
   });
 });
 

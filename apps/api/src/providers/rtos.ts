@@ -392,7 +392,9 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
   }
 
   const a = analyzeRtos(read.buf, read.fileSize);
-  const picobinDisassembly = a.picobin ? runPicobinRiscvDisassembly(imagePath, a.picobin, read.fileSize) : null;
+  const picobinDisassembly = a.picobin
+    ? runPicobinRiscvDisassembly(imagePath, a.picobin, read.fileSize, undefined, read.buf)
+    : null;
   const findings = picobinDisassembly ? [...a.findings, ...picobinDisassembly.findings] : a.findings;
   const scanScope = a.coverage.complete
     ? `the complete ${a.coverage.fileBytes}-byte image`

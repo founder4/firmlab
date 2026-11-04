@@ -328,6 +328,22 @@ export interface PicobinLoadMap {
   entries: PicobinLoadMapEntry[];
 }
 
+export interface RiscvStartupCopyRegion {
+  /** Runtime/XIP source address recorded by the startup table. */
+  sourceAddress: number;
+  /** Raw image offset corresponding to sourceAddress under the supplied linear mapping. */
+  sourceFileOffset: number;
+  runtimeAddress: number;
+  size: number;
+}
+
+export interface RiscvStartupCopyTable {
+  tableAddress: number;
+  tableFileOffset: number;
+  bytesExamined: number;
+  regions: RiscvStartupCopyRegion[];
+}
+
 export interface PicobinInfo {
   /** Offset of the start marker in the buffer. */
   markerOffset: number;
@@ -372,6 +388,92 @@ interface ParsedPicobinBlock {
   vectorTable: number | null;
   rollingWindowDelta: number | null;
   loadMap: PicobinLoadMap | null;
+}
+
+function parseRiscvCopyTableCandidate(
+  buf: Uint8Array,
+  tableAddress: number,
+  baseAddress: number,
+): RiscvStartupCopyTable | null {
+  const tableFileOffset = tableAddress - baseAddress;
+  if (!Number.isSafeInteger(tableFileOffset) || tableFileOffset < 0 || tableFileOffset % 4 !== 0) return null;
+  const regions: RiscvStartupCopyRegion[] = [];
+  let cursor = tableFileOffset;
+  for (let entryIndex = 0; entryIndex < 32 && cursor + 4 <= buf.length; entryIndex++) {
+    const sourceAddress = u32(buf, cursor, true);
+    if (sourceAddress === 0) {
+      if (regions.length === 0 || !regions.some((region) => region.size > 0)) return null;
+      return {
+        tableAddress,
+        tableFileOffset,
+        bytesExamined: cursor + 4 - tableFileOffset,
+        regions,
+      };
+    }
+    if (cursor + 12 > buf.length) return null;
+    const runtimeAddress = u32(buf, cursor + 4, true);
+    const runtimeEnd = u32(buf, cursor + 8, true);
+    if (sourceAddress % 4 !== 0 || runtimeAddress % 4 !== 0 || runtimeEnd % 4 !== 0 || runtimeEnd < runtimeAddress) {
+      return null;
+    }
+    const size = runtimeEnd - runtimeAddress;
+    const sourceFileOffset = sourceAddress - baseAddress;
+    if (!Number.isSafeInteger(sourceFileOffset) || sourceFileOffset < 0 || sourceFileOffset + size > buf.length) {
+      return null;
+    }
+    regions.push({ sourceAddress, sourceFileOffset, runtimeAddress, size });
+    cursor += 12;
+  }
+  return null;
+}
+
+/**
+ * Recover the bounded source/destination table used by Pico SDK RISC-V startup code. The table address must be
+ * materialized by an adjacent AUIPC/ADDI pair in the first 256 entrypoint bytes, and every declared source span
+ * must map back into the supplied image. Ambiguous or unterminated candidates are rejected.
+ */
+export function parseRiscvStartupCopyTable(
+  buf: Uint8Array,
+  entryPoint: number,
+  entryFileOffset: number,
+  baseAddress: number,
+): RiscvStartupCopyTable | null {
+  if (
+    !Number.isSafeInteger(entryPoint) ||
+    !Number.isSafeInteger(entryFileOffset) ||
+    !Number.isSafeInteger(baseAddress) ||
+    entryFileOffset < 0 ||
+    entryFileOffset >= buf.length
+  ) {
+    return null;
+  }
+  const candidates = new Map<number, RiscvStartupCopyTable>();
+  const scanEnd = Math.min(buf.length, entryFileOffset + 256);
+  let pos = entryFileOffset;
+  for (let instructionCount = 0; instructionCount < 96 && pos + 2 <= scanEnd; instructionCount++) {
+    const halfword = (buf[pos] ?? 0) | ((buf[pos + 1] ?? 0) << 8);
+    const instructionSize = (halfword & 0x3) === 0x3 ? 4 : 2;
+    if (instructionSize === 4 && pos + 8 <= scanEnd) {
+      const auipc = u32(buf, pos, true);
+      const addi = u32(buf, pos + 4, true);
+      const destination = (auipc >>> 7) & 0x1f;
+      if (
+        (auipc & 0x7f) === 0x17 &&
+        (addi & 0x7f) === 0x13 &&
+        ((addi >>> 12) & 0x7) === 0 &&
+        destination !== 0 &&
+        ((addi >>> 7) & 0x1f) === destination &&
+        ((addi >>> 15) & 0x1f) === destination
+      ) {
+        const pc = (entryPoint + (pos - entryFileOffset)) >>> 0;
+        const tableAddress = (pc + (auipc & 0xffff_f000) + (addi >> 20)) >>> 0;
+        const candidate = parseRiscvCopyTableCandidate(buf, tableAddress, baseAddress);
+        if (candidate) candidates.set(candidate.tableFileOffset, candidate);
+      }
+    }
+    pos += instructionSize;
+  }
+  return candidates.size === 1 ? (candidates.values().next().value ?? null) : null;
 }
 
 function isPicobinMarker(buf: Uint8Array, offset: number): boolean {

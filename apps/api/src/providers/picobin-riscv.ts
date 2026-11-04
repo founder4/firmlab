@@ -7,7 +7,12 @@
  * and mapping; radare2 only decodes explicitly selected, mapped functions.
  */
 import { execFileSync } from 'node:child_process';
-import type { FindingDraft, PicobinInfo } from '@firmlab/core';
+import {
+  parseRiscvStartupCopyTable,
+  type FindingDraft,
+  type PicobinInfo,
+  type RiscvStartupCopyTable,
+} from '@firmlab/core';
 
 const XIP_BASE = 0x1000_0000;
 const XIP_END = 0x1100_0000;
@@ -72,10 +77,17 @@ export interface PicobinRiscvDisassembly {
   unresolvedCallsitesTotal?: number;
   outOfMapCallsitesTotal?: number;
   callGraphTruncated?: boolean;
+  startupCopyTable?: RiscvStartupCopyTable | null;
+  startupCopyTableAttempted?: boolean;
   findings: FindingDraft[];
 }
 
-export type PicobinMappingKind = 'direct-xip' | 'rolling-xip' | 'relative-load-map' | 'absolute-load-map';
+export type PicobinMappingKind =
+  | 'direct-xip'
+  | 'rolling-xip'
+  | 'relative-load-map'
+  | 'absolute-load-map'
+  | 'startup-copy';
 
 export interface PicobinFlashMapping {
   baseAddress: number;
@@ -200,6 +212,35 @@ function inMappedImage(address: number, size: number, mapping: PicobinFlashMappi
     fileOffset >= 0 &&
     fileOffset + size <= fileSize
   );
+}
+
+export function picobinRuntimeMapping(
+  address: number,
+  size: number,
+  primary: PicobinFlashMapping,
+  startupCopyTable: RiscvStartupCopyTable | null,
+  fileSize: number,
+): PicobinFlashMapping | null {
+  if (inMappedImage(address, size, primary, fileSize)) return functionMapping(primary, address);
+  if (!startupCopyTable) return null;
+  const matches = startupCopyTable.regions.filter(
+    (region) =>
+      address >= region.runtimeAddress && address + size <= region.runtimeAddress + region.size && region.size > 0,
+  );
+  if (matches.length !== 1) return null;
+  const region = matches[0];
+  if (!region) return null;
+  const entryFileOffset = region.sourceFileOffset + (address - region.runtimeAddress);
+  const baseAddress = region.runtimeAddress - region.sourceFileOffset;
+  if (entryFileOffset < 0 || entryFileOffset + size > fileSize || baseAddress < 0) return null;
+  return {
+    baseAddress,
+    entryPoint: address,
+    entryFileOffset,
+    mappingKind: 'startup-copy',
+    mappedRuntimeStart: region.runtimeAddress,
+    mappedRuntimeEnd: region.runtimeAddress + region.size,
+  };
 }
 
 function resolvePicobinFlashMapping(
@@ -436,6 +477,7 @@ export function runPicobinRiscvDisassembly(
     Partial<Pick<PicobinInfo, 'loadMap'>>,
   fileSize: number,
   execute: Radare2Executor = defaultRadare2Executor,
+  imageBytes?: Uint8Array,
 ): PicobinRiscvDisassembly | null {
   if (picobin.cpuMode !== 'riscv' || !picobin.isExecutable) return null;
   const resolved = resolvePicobinFlashMapping(picobin, fileSize);
@@ -452,6 +494,10 @@ export function runPicobinRiscvDisassembly(
   }
   if (!parsed) return unavailable(mapping, 'radare2 output was missing, malformed or outside the mapped image');
 
+  const startupCopyTable = imageBytes
+    ? parseRiscvStartupCopyTable(imageBytes, mapping.entryPoint, mapping.entryFileOffset, mapping.baseAddress)
+    : null;
+
   const reachableFunctions: PicobinReachableFunction[] = [
     {
       address: mapping.entryPoint,
@@ -463,7 +509,7 @@ export function runPicobinRiscvDisassembly(
   const callEdges: PicobinCallEdge[] = [];
   const outOfMapCalls: PicobinCallEdge[] = [];
   const queued = new Set<number>([mapping.entryPoint]);
-  const queue: { address: number; depth: number }[] = [];
+  const queue: { address: number; depth: number; mapping: PicobinFlashMapping }[] = [];
   let unresolvedCallsitesTotal = 0;
   let outOfMapCallsitesTotal = 0;
   let callGraphTruncated =
@@ -477,7 +523,8 @@ export function runPicobinRiscvDisassembly(
         unresolvedCallsitesTotal++;
         continue;
       }
-      if (!inMappedImage(instruction.jump, 2, mapping, fileSize)) {
+      const targetMapping = picobinRuntimeMapping(instruction.jump, 2, mapping, startupCopyTable, fileSize);
+      if (!targetMapping) {
         outOfMapCallsitesTotal++;
         if (outOfMapCalls.length < CALL_EDGE_CAP) {
           outOfMapCalls.push({ caller, callsite: instruction.address, target: instruction.jump });
@@ -497,7 +544,7 @@ export function runPicobinRiscvDisassembly(
         continue;
       }
       queued.add(instruction.jump);
-      queue.push({ address: instruction.jump, depth: depth + 1 });
+      queue.push({ address: instruction.jump, depth: depth + 1, mapping: targetMapping });
     }
   };
 
@@ -505,7 +552,7 @@ export function runPicobinRiscvDisassembly(
   while (queue.length > 0 && reachableFunctions.length < REACHABLE_FUNCTION_CAP) {
     const next = queue.shift();
     if (!next) break;
-    const nextMapping = functionMapping(mapping, next.address);
+    const nextMapping = functionMapping(next.mapping, next.address);
     let decoded: ParsedPicobinFunction | null;
     try {
       decoded = decodeFunction(imagePath, nextMapping, fileSize, execute);
@@ -566,6 +613,7 @@ export function runPicobinRiscvDisassembly(
       unresolvedCallsitesTotal,
       outOfMapCallsitesTotal,
       callGraphTruncated,
+      startupCopyRegions: startupCopyTable?.regions.length ?? 0,
     },
     rationale:
       'radare2 decoded instructions and local control-flow blocks from the entrypoint declared by a structurally ' +
@@ -587,6 +635,8 @@ export function runPicobinRiscvDisassembly(
     unresolvedCallsitesTotal,
     outOfMapCallsitesTotal,
     callGraphTruncated,
+    startupCopyTable,
+    startupCopyTableAttempted: imageBytes !== undefined,
     findings: [finding],
   };
 }
