@@ -31,6 +31,7 @@ export interface PicobinInstruction {
   size: number;
   opcode: string;
   type: string;
+  bytes?: string;
   jump?: number;
   fail?: number;
 }
@@ -67,6 +68,7 @@ export interface PicobinRiscvDisassembly {
   instructions: PicobinInstruction[];
   reachableFunctions?: PicobinReachableFunction[];
   callEdges?: PicobinCallEdge[];
+  outOfMapCalls?: PicobinCallEdge[];
   unresolvedCallsitesTotal?: number;
   outOfMapCallsitesTotal?: number;
   callGraphTruncated?: boolean;
@@ -100,6 +102,7 @@ interface R2Instruction {
   size?: unknown;
   opcode?: unknown;
   type?: unknown;
+  bytes?: unknown;
   jump?: unknown;
   fail?: unknown;
 }
@@ -157,6 +160,35 @@ function parseObjectBlock<T>(text: string): T | null {
 function optionalAddress(value: unknown): number | undefined {
   const parsed = finiteInteger(value);
   return parsed === null || parsed < 0 ? undefined : parsed;
+}
+
+function littleEndianWord(bytes: string | undefined): number | null {
+  if (!bytes || !/^[0-9a-fA-F]{8}$/.test(bytes)) return null;
+  const octets = bytes.match(/../g)?.map((octet) => Number.parseInt(octet, 16));
+  if (!octets || octets.length !== 4) return null;
+  return ((octets[0] ?? 0) | ((octets[1] ?? 0) << 8) | ((octets[2] ?? 0) << 16) | ((octets[3] ?? 0) << 24)) >>> 0;
+}
+
+/** Resolve the linker-generated AUIPC/JALR direct-call pair when radare2 leaves it typed as an unknown call. */
+export function resolveRiscvPcRelativeCalls(instructions: PicobinInstruction[]): PicobinInstruction[] {
+  return instructions.map((instruction, index) => {
+    if (!instruction.type.includes('call') || instruction.jump !== undefined) return instruction;
+    const previous = instructions[index - 1];
+    if (!previous || previous.address + previous.size !== instruction.address) return instruction;
+    const auipc = littleEndianWord(previous.bytes);
+    const jalr = littleEndianWord(instruction.bytes);
+    if (auipc === null || jalr === null || (auipc & 0x7f) !== 0x17 || (jalr & 0x7f) !== 0x67) {
+      return instruction;
+    }
+    const auipcDestination = (auipc >>> 7) & 0x1f;
+    const jalrSource = (jalr >>> 15) & 0x1f;
+    const jalrFunction = (jalr >>> 12) & 0x7;
+    if (auipcDestination === 0 || auipcDestination !== jalrSource || jalrFunction !== 0) return instruction;
+    const pcRelativeBase = (previous.address + (auipc & 0xffff_f000)) >>> 0;
+    const jalrImmediate = jalr >> 20;
+    const jump = ((pcRelativeBase + jalrImmediate) & 0xffff_fffe) >>> 0;
+    return { ...instruction, jump };
+  });
 }
 
 function inMappedImage(address: number, size: number, mapping: PicobinFlashMapping, fileSize: number): boolean {
@@ -309,6 +341,8 @@ export function parsePicobinRadare2Output(
     ) {
       return null;
     }
+    const bytes =
+      typeof raw.bytes === 'string' && /^[0-9a-fA-F]+$/.test(raw.bytes) ? raw.bytes.toLowerCase() : undefined;
     const jump = optionalAddress(raw.jump);
     const fail = optionalAddress(raw.fail);
     instructions.push({
@@ -316,15 +350,17 @@ export function parsePicobinRadare2Output(
       size,
       opcode: raw.opcode,
       type: raw.type,
+      ...(bytes !== undefined ? { bytes } : {}),
       ...(jump !== undefined ? { jump } : {}),
       ...(fail !== undefined ? { fail } : {}),
     });
   }
 
+  const resolvedInstructions = resolveRiscvPcRelativeCalls(instructions);
   if (
     basicBlocks.length === 0 ||
-    instructions.length === 0 ||
-    !instructions.some((instruction) => instruction.address === mapping.entryPoint)
+    resolvedInstructions.length === 0 ||
+    !resolvedInstructions.some((instruction) => instruction.address === mapping.entryPoint)
   ) {
     return null;
   }
@@ -332,7 +368,7 @@ export function parsePicobinRadare2Output(
     basicBlocksTotal: rawBlocks.length,
     instructionsTotal: rawFunction.ops.length,
     basicBlocks,
-    instructions,
+    instructions: resolvedInstructions,
   };
 }
 
@@ -425,6 +461,7 @@ export function runPicobinRiscvDisassembly(
     },
   ];
   const callEdges: PicobinCallEdge[] = [];
+  const outOfMapCalls: PicobinCallEdge[] = [];
   const queued = new Set<number>([mapping.entryPoint]);
   const queue: { address: number; depth: number }[] = [];
   let unresolvedCallsitesTotal = 0;
@@ -442,6 +479,11 @@ export function runPicobinRiscvDisassembly(
       }
       if (!inMappedImage(instruction.jump, 2, mapping, fileSize)) {
         outOfMapCallsitesTotal++;
+        if (outOfMapCalls.length < CALL_EDGE_CAP) {
+          outOfMapCalls.push({ caller, callsite: instruction.address, target: instruction.jump });
+        } else {
+          callGraphTruncated = true;
+        }
         continue;
       }
       if (callEdges.length >= CALL_EDGE_CAP) {
@@ -494,7 +536,8 @@ export function runPicobinRiscvDisassembly(
 
   const reason =
     `Decoded a bounded RISC-V call graph from the declared entrypoint: ${reachableFunctions.length} function(s), ` +
-    `${callEdges.length} direct call edge(s), ${unresolvedCallsitesTotal} unresolved/indirect callsite(s)` +
+    `${callEdges.length} followed direct edge(s), ${outOfMapCallsitesTotal} resolved target(s) outside mapped bytes, ` +
+    `${unresolvedCallsitesTotal} unresolved/indirect callsite(s)` +
     `${callGraphTruncated ? `; coverage truncated${graphStopReason ? ` (${graphStopReason})` : ' by configured limits'}` : ''}.`;
   const finding: FindingDraft = {
     kind: 'rtos-picobin-entry-cfg',
@@ -519,6 +562,7 @@ export function runPicobinRiscvDisassembly(
       instructionsListed: parsed.instructions.length,
       reachableFunctions: reachableFunctions.length,
       directCallEdges: callEdges.length,
+      outOfMapCallsListed: outOfMapCalls.length,
       unresolvedCallsitesTotal,
       outOfMapCallsitesTotal,
       callGraphTruncated,
@@ -539,6 +583,7 @@ export function runPicobinRiscvDisassembly(
     ...parsed,
     reachableFunctions,
     callEdges,
+    outOfMapCalls,
     unresolvedCallsitesTotal,
     outOfMapCallsitesTotal,
     callGraphTruncated,

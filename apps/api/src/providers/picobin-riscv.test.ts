@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parsePicobinRadare2Output, picobinFlashMapping, runPicobinRiscvDisassembly } from './picobin-riscv.js';
+import {
+  parsePicobinRadare2Output,
+  picobinFlashMapping,
+  resolveRiscvPcRelativeCalls,
+  runPicobinRiscvDisassembly,
+} from './picobin-riscv.js';
 
 const ENTRY = 0x1000_0036;
 const FILE_SIZE = 0x1000;
@@ -143,6 +148,30 @@ describe('parsePicobinRadare2Output', () => {
   it('accepts a reachable call target that radare2 folds into a function beginning before the target', () => {
     const target = ENTRY + 8;
     expect(parsePicobinRadare2Output(r2Output(), { ...mapping, entryPoint: target }, FILE_SIZE)).not.toBeNull();
+  });
+});
+
+describe('resolveRiscvPcRelativeCalls', () => {
+  it('resolves adjacent AUIPC/JALR pairs from instruction bytes without guessing register state', () => {
+    const resolved = resolveRiscvPcRelativeCalls([
+      { address: 0x1000_008a, size: 4, opcode: 'auipc ra, 0x1000c', type: 'lea', bytes: '97c00010' },
+      { address: 0x1000_008e, size: 4, opcode: 'jalr 1954(ra)', type: 'ucall', bytes: 'e780207a' },
+      { address: 0x1000_0092, size: 4, opcode: 'auipc ra, 0x10003', type: 'lea', bytes: '97300010' },
+      { address: 0x1000_0096, size: 4, opcode: 'jalr -1778(ra)', type: 'ucall', bytes: 'e780e090' },
+      { address: 0x1000_009a, size: 4, opcode: 'auipc ra, 0x1000c', type: 'lea', bytes: '97c00010' },
+      { address: 0x1000_009e, size: 4, opcode: 'jalr 1820(ra)', type: 'ucall', bytes: 'e780c071' },
+    ]);
+    expect(
+      resolved.filter((instruction) => instruction.type === 'ucall').map((instruction) => instruction.jump),
+    ).toEqual([0x2000_c82c, 0x2000_29a0, 0x2000_c7b6]);
+  });
+
+  it('leaves a JALR unresolved when the producer is missing or writes a different register', () => {
+    const instructions = [
+      { address: ENTRY, size: 4, opcode: 'auipc t0, 1', type: 'lea', bytes: '97120000' },
+      { address: ENTRY + 4, size: 4, opcode: 'jalr 0(ra)', type: 'ucall', bytes: 'e7800000' },
+    ];
+    expect(resolveRiscvPcRelativeCalls(instructions)).toEqual(instructions);
   });
 });
 

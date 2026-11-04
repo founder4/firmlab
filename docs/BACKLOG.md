@@ -178,8 +178,9 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   expone CPU, seguridad, entrypoint y SP; sobre la muestra real confirma RP2350 RISC-V, bucle de dos bloques,
   entry `0x10000036` y SP `0x20082000`, sin convertir esa declaración estática en prueba de ejecución. Avance
   2026-11-04: decodifica `LOAD_MAP` relativo/absoluto y rolling XIP, y el CFG acotado de la muestra alcanza dos
-  funciones (43 instrucciones/13 bloques) mediante una arista directa; tres callsites indirectos permanecen
-  declarados como no resueltos.)*
+  funciones (43 instrucciones/13 bloques) mediante una arista directa. Tres pares `AUIPC`/`JALR` adicionales
+  resuelven destinos SRAM (`0x2000c82c`, `0x200029a0`, `0x2000c7b6`), pero no se siguen porque el binario crudo no
+  demuestra dónde están sus bytes fuente en flash.)*
   *(ELF de fabricante resuelto, 2026-11-03: el target FreeRTOS oficial de ST
   `STM32N6-GettingStarted-Audio` v2.3.0 se reprodujo con Arm GCC 13.3.1 y quedó local/ignorado por licencia. FirmLab
   leyó 4315/4315 símbolos y resolvió 10/11 nombres, incluido el array ready de 56 × 20 bytes; sólo falta la variante
@@ -188,8 +189,8 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   estado runtime.)*
   Faltan: un snapshot RAM del ELF ST capturado en hardware STM32N6570-DK,
   una fixture runtime compatible con `TickType_t` de 64 bits, colas de eventos/bloqueo y fuzzing de
-  periféricos/MMIO (µEmu/P2IM/Fuzzware), resolver de forma demostrable los tres callsites RISC-V indirectos y un
-  modelo runtime/periférico adecuado; Renode sigue demostrando vida, no cobertura del HAL.
+  periféricos/MMIO (µEmu/P2IM/Fuzzware), recuperar de forma demostrable el mapa de copia flash→SRAM de esos tres
+  destinos RISC-V y un modelo runtime/periférico adecuado; Renode sigue demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee
   además `FLMSTR1` (maestro CPU/BIOS) y emite `spi-descriptor-host-write` (`static_confirmed`, medium) sólo cuando
