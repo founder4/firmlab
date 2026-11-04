@@ -82,7 +82,7 @@ const TCB_NAME_OFFSET = TCB_PRIORITY_OFFSET + 8;
 const EXPECTED = {
   ready: { SpinA: 1, SpinB: 1, IDLE: 0 },
   delayed: { Sleeper: 2 },
-  suspended: { Parked: 3, QueueRx: 4 },
+  suspended: { Parked: 3, QueueRx: 4, QueueTx: 2 },
 };
 
 const failures = [];
@@ -133,26 +133,50 @@ if (!cap.captured || !cap.region || !cap.bytesBase64) {
 
 const fixtureSymbols = elfSymbolAddresses(
   'fixture_waiting_receive_list',
+  'fixture_waiting_send_list',
   'fixture_rx_queue_storage',
   'fixture_rx_queue',
   'fixture_rx_task',
+  'fixture_tx_queue_storage',
+  'fixture_tx_queue',
+  'fixture_tx_task',
 );
-for (const name of ['fixture_waiting_receive_list', 'fixture_rx_queue_storage', 'fixture_rx_queue', 'fixture_rx_task'])
+for (const name of [
+  'fixture_waiting_receive_list',
+  'fixture_waiting_send_list',
+  'fixture_rx_queue_storage',
+  'fixture_rx_queue',
+  'fixture_rx_task',
+  'fixture_tx_queue_storage',
+  'fixture_tx_queue',
+  'fixture_tx_task',
+])
   check(typeof fixtureSymbols[name] === 'number', `${name} is present in the fixture ELF`);
 
 const ram = Buffer.from(cap.bytesBase64, 'base64');
 const at = (addr) => addr - cap.region.base;
 const pointerAt = (addr) => ram.readUInt32LE(at(addr));
-const waitListAddress = pointerAt(fixtureSymbols.fixture_waiting_receive_list);
-const queueAddress = pointerAt(fixtureSymbols.fixture_rx_queue);
+const receiveWaitListAddress = pointerAt(fixtureSymbols.fixture_waiting_receive_list);
+const sendWaitListAddress = pointerAt(fixtureSymbols.fixture_waiting_send_list);
+const receiveQueueAddress = pointerAt(fixtureSymbols.fixture_rx_queue);
+const sendQueueAddress = pointerAt(fixtureSymbols.fixture_tx_queue);
 const receiverTcb = pointerAt(fixtureSymbols.fixture_rx_task);
+const senderTcb = pointerAt(fixtureSymbols.fixture_tx_task);
 check(
-  queueAddress === fixtureSymbols.fixture_rx_queue_storage,
+  receiveQueueAddress === fixtureSymbols.fixture_rx_queue_storage,
   'static queue handle points to fixture_rx_queue_storage',
 );
 check(
-  waitListAddress === fixtureSymbols.fixture_rx_queue_storage + 16 + LIST_SIZE,
-  `traceQUEUE_CREATE wait-list pointer matches Queue_t + 16 + sizeof(List_t=${LIST_SIZE})`,
+  sendQueueAddress === fixtureSymbols.fixture_tx_queue_storage,
+  'static queue handle points to fixture_tx_queue_storage',
+);
+check(
+  receiveWaitListAddress === fixtureSymbols.fixture_rx_queue_storage + 16 + LIST_SIZE,
+  `receive wait-list pointer matches Queue_t + 16 + sizeof(List_t=${LIST_SIZE})`,
+);
+check(
+  sendWaitListAddress === fixtureSymbols.fixture_tx_queue_storage + 16,
+  'send wait-list pointer matches Queue_t + 16',
 );
 
 const body = {
@@ -182,8 +206,15 @@ const body = {
     eventLists: [
       {
         name: 'fixtureRxQueue.xTasksWaitingToReceive',
-        address: waitListAddress,
+        address: receiveWaitListAddress,
         waitKind: 'queue_receive',
+        ordering: 'priority',
+        ownerKind: 'tcb',
+      },
+      {
+        name: 'fixtureTxQueue.xTasksWaitingToSend',
+        address: sendWaitListAddress,
+        waitKind: 'queue_send',
         ordering: 'priority',
         ownerKind: 'tcb',
       },
@@ -223,14 +254,17 @@ for (const lane of r.readyLists) {
 }
 const delayed = Object.assign({}, ...(r.delayedLists ?? []).map((l) => named(l.tasks)));
 const suspended = named(r.suspendedList?.tasks);
-const wait = r.eventLists?.[0];
-const waiting = named(wait?.tasks);
+const receiveWait = r.eventLists?.find((lane) => lane.waitKind === 'queue_receive');
+const sendWait = r.eventLists?.find((lane) => lane.waitKind === 'queue_send');
+const waitingReceive = named(receiveWait?.tasks);
+const waitingSend = named(sendWait?.tasks);
 console.log(
   JSON.stringify({
     ready,
     delayed,
     suspended,
-    waiting,
+    waitingReceive,
+    waitingSend,
     current: r.currentTask.tcbAddress && tcb(r.currentTask.tcbAddress),
   }),
 );
@@ -249,21 +283,44 @@ check(
   `suspended list holds exactly ${JSON.stringify(EXPECTED.suspended)}`,
 );
 check(
-  JSON.stringify(waiting) === JSON.stringify({ QueueRx: 4 }),
+  JSON.stringify(waitingReceive) === JSON.stringify({ QueueRx: 4 }),
   'queue receive wait list holds exactly QueueRx at priority 4',
 );
-check(wait?.tasks?.[0]?.itemValue === 1, 'QueueRx xEventListItem priority key is configMAX_PRIORITIES - 4 = 1');
 check(
-  wait?.declaredItems === 1 && wait?.containerMismatches === 0,
-  'queue wait header and pxContainer corroborate one item',
+  JSON.stringify(waitingSend) === JSON.stringify({ QueueTx: 2 }),
+  'queue send wait list holds exactly QueueTx at priority 2',
 );
 check(
-  wait?.tasks?.[0]?.listItemAddress === receiverTcb + TCB_EVENT_LIST_OFFSET,
+  receiveWait?.tasks?.[0]?.itemValue === 1,
+  'QueueRx xEventListItem priority key is configMAX_PRIORITIES - 4 = 1',
+);
+check(
+  sendWait?.tasks?.[0]?.itemValue === 3,
+  'QueueTx xEventListItem priority key is configMAX_PRIORITIES - 2 = 3',
+);
+check(
+  receiveWait?.declaredItems === 1 && receiveWait?.containerMismatches === 0,
+  'receive wait header and pxContainer corroborate one item',
+);
+check(
+  sendWait?.declaredItems === 1 && sendWait?.containerMismatches === 0,
+  'send wait header and pxContainer corroborate one item',
+);
+check(
+  receiveWait?.tasks?.[0]?.listItemAddress === receiverTcb + TCB_EVENT_LIST_OFFSET,
   `QueueRx wait node is its TCB.xEventListItem at +${TCB_EVENT_LIST_OFFSET}`,
+);
+check(
+  sendWait?.tasks?.[0]?.listItemAddress === senderTcb + TCB_EVENT_LIST_OFFSET,
+  `QueueTx wait node is its TCB.xEventListItem at +${TCB_EVENT_LIST_OFFSET}`,
 );
 check(
   r.suspendedList?.tasks?.some((task) => task.tcbAddress === receiverTcb) === true,
   'QueueRx legitimately appears on both its state list and queue wait list',
+);
+check(
+  r.suspendedList?.tasks?.some((task) => task.tcbAddress === senderTcb) === true,
+  'QueueTx legitimately appears on both its state list and queue wait list',
 );
 const cur = r.currentTask.tcbAddress ? tcb(r.currentTask.tcbAddress).name : null;
 check(cur === 'SpinA' || cur === 'SpinB', `pxCurrentTCB is one of the priority-1 spinners (got ${cur})`);

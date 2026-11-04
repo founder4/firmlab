@@ -32,11 +32,12 @@
 #define configKERNEL_PROVIDED_STATIC_MEMORY 0
 #define configNUMBER_OF_CORES 1
 
-/* Fixture-only: queue.c expands this where Queue_t is complete, exporting the direct List_t address for the E2E. */
-extern void * volatile fixture_waiting_receive_list;
-#define traceQUEUE_CREATE(queue) \
-  do {                            \
-    fixture_waiting_receive_list = (void *)&((queue)->xTasksWaitingToReceive); \
+/* Fixture-only: queue.c expands this where Queue_t is complete, exporting both direct List_t addresses for E2E. */
+extern void fixture_trace_queue_create(void *queue, void *send_list, void *receive_list);
+#define traceQUEUE_CREATE(queue)                                                                     \
+  do {                                                                                               \
+    fixture_trace_queue_create(                                                                      \
+        (void *)(queue), (void *)&((queue)->xTasksWaitingToSend), (void *)&((queue)->xTasksWaitingToReceive)); \
   } while (0)
 
 #define INCLUDE_vTaskDelay 1

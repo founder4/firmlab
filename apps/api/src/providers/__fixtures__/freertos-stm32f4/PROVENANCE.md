@@ -10,7 +10,7 @@ checked against an expected answer: `apps/api/scripts/rtos-freertos-e2e.mjs`.
 | Kernel files linked | `tasks.c`, `list.c`, `queue.c`, `portable/GCC/ARM_CM3/port.c` (16/32-bit) or `ARM_CM4F/port.c` (64-bit), `portable/MemMang/heap_4.c` — not vendored |
 | Toolchain | Debian bookworm `gcc-arm-none-eabi` `15:12.2.rel1-1` (arm-none-eabi-gcc 12.2.1 20221205), disposable container |
 | Flags | `-mcpu=cortex-m3 -mthumb -O1 -g -ffreestanding -nostdlib`, linked at flash `0x08000000`, RAM `0x20000000` |
-| Result | `freertos-stm32f4.elf`, sha256 `7809943a7d352d40646aea4fcbd34b81e03014f53605dcc1470f05d4bff591a4`, 94 044 bytes (symbols kept) |
+| Result | `freertos-stm32f4.elf`, sha256 `013802697caa5f78c999887abebd47f9e292ca4227b438f98d0222382d03ec60`, 95 304 bytes (symbols kept) |
 | Built | 2026-11-04, by the FirmLab coordinator; `build-info.txt` is the build's own record |
 
 Network was used only to fetch the toolchain package and the pinned kernel tag. Rebuilding with a different
@@ -18,14 +18,16 @@ toolchain will change the hash; the e2e check, not the hash, is what establishes
 
 Expected state after the scheduler has run (any capture window of 1 s or more on Renode's `stm32f4.repl`):
 `pxReadyTasksLists[1]` = SpinA, SpinB (one of them `pxCurrentTCB`); `[0]` = IDLE; a delayed list = Sleeper (prio 2);
-`xSuspendedTaskList` = Parked (prio 3) plus QueueRx (prio 4), while QueueRx's distinct `xEventListItem` is on the
-static queue's ordered `xTasksWaitingToReceive` with key 1. `INCLUDE_vTaskDelete` is 0, so `xTasksWaitingTermination` is not compiled in
-and the walk honestly reports `partial` coverage for that lane.
+`xSuspendedTaskList` = Parked (prio 3), QueueRx (prio 4) and QueueTx (prio 2). QueueRx's distinct `xEventListItem`
+is on an empty static queue's ordered `xTasksWaitingToReceive` with key 1; QueueTx's is on a separate full static
+queue's ordered `xTasksWaitingToSend` with key 3. `INCLUDE_vTaskDelete` is 0, so `xTasksWaitingTermination` is not
+compiled in and the walk honestly reports `partial` coverage for that lane.
 
-Validated 2026-10-03 in `firmlab-firmware` (`--network none`) at 1, 3 and 7 s: all checks pass; Renode refused the
-platform's remote SVD (`STM32F40x.svd.gz`) and ran without it. A deliberately wrong `sizeof(List_t)` (24) is refused
-by the snapshot contract. This is emulation of a synthetic build: it says nothing about a physical device, another
-FreeRTOS version/configuration, or any corpus image.
+Validated 2026-11-04 in `firmlab-firmware` (`--network none`) across the full 12-layout matrix: all checks pass,
+including both queue wait directions, their independently exported `List_t` addresses and their TCB event nodes.
+Renode refused the platform's remote SVD (`STM32F40x.svd.gz`) and ran without it. A deliberately wrong
+`sizeof(List_t)` (24) is refused by the snapshot contract. This is emulation of a synthetic build: it says nothing
+about a physical device, another FreeRTOS version/configuration, or any corpus image.
 
 `build.sh` also supports `MATRIX=1 OUTPUT_DIR=<temporary-directory>`. The matrix compiles all twelve combinations of
 16/32/64-bit `TickType_t`, `configUSE_MINI_LIST_ITEM` and `configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES` without replacing
