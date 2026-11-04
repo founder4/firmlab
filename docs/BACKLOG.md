@@ -183,16 +183,23 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   resueltos fuera del mapa y conservando dos llamadas indirectas/no resueltas. Es cobertura estática truncada, no
   prueba de ejecución. Las muestras oficiales `hello_universal` y `nuke_universal` v2.3.1-0 validaron además
   bucles con varias `IMAGE_DEF`, selección RISC-V, rolling XIP y `LOAD_MAP` relativo negativo; ambos grafos
-  conservaron 0 objetivos resueltos fuera del mapa y se truncaron explícitamente al fallar el siguiente decode.)*
+  conservaron 0 objetivos resueltos fuera del mapa. Desde 2026-11-04, un target que radare2 no decodifica queda
+  persistido con dirección/clasificación/bytes y no aborta otras ramas encoladas: `hello` queda en 7/16 y `nuke`
+  avanza de 5/8 a 7 funciones/11 aristas, ambos con un fallo Zbs acotado y cobertura explícitamente truncada.)*
   *(ELF de fabricante resuelto, 2026-11-03: el target FreeRTOS oficial de ST
   `STM32N6-GettingStarted-Audio` v2.3.0 se reprodujo con Arm GCC 13.3.1 y quedó local/ignorado por licencia. FirmLab
   leyó 4315/4315 símbolos y resolvió 10/11 nombres, incluido el array ready de 56 × 20 bytes; sólo falta la variante
   SMP. El hallazgo corrigió además la prioridad W0: un ELF estructural en offset cero vence a magias SquashFS
   incidentales dentro de sus secciones. SLA0044 impide ejecutarlo en Renode; los símbolos son prueba de link, no
   estado runtime.)*
-  Faltan: un snapshot RAM del ELF ST capturado en hardware STM32N6570-DK,
-  una fixture runtime compatible con `TickType_t` de 64 bits, colas de eventos/bloqueo y fuzzing de
-  periféricos/MMIO (µEmu/P2IM/Fuzzware) y un modelo runtime/periférico adecuado para RISC-V; Renode sigue
+  *(F6 hecho 2026-11-04: listas ordenadas de espera de colas/semáforos declaradas como receive/send, con
+  `xEventListItem` separado del nodo de estado, orden/bit reservado/clave cero comprobados, conflictos entre dos
+  listas de evento diferenciados de la pertenencia legítima state+wait y Event Groups fuera de alcance. La fixture
+  añade QueueRx y la matriz Renode pasa 12/12 layouts, incluidos Tick64 ARM_CM4F, mini/integridad on/off.)*
+  Faltan: un snapshot RAM del ELF ST capturado en hardware STM32N6570-DK (no hay placa/ST-LINK conectada y el
+  OpenOCD stock local no soporta STM32N6), fuzzing de
+  periféricos/MMIO (µEmu/P2IM/Fuzzware) y un modelo runtime/periférico adecuado para RISC-V con boot ROM local;
+  Renode sigue
   demostrando vida, no cobertura del HAL.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee
