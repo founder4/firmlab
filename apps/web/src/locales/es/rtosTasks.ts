@@ -59,6 +59,17 @@ export const rtosTasks: Messages['rtosTasks'] = {
     terminatedList: 'Lista de pendientes de terminar (xTasksWaitingTermination)',
     delayedHint:
       'xDelayedTaskList1 y xDelayedTaskList2 intercambian sus papeles cada vez que el contador de ticks da la vuelta. Lee los dos punteros en la instantánea para saber cuál es la lista actual y cuál la de desbordamiento.',
+    eventLists: 'Listas ordenadas de espera de colas/semáforos (opcional)',
+    eventListsHint: (max) =>
+      `Hasta ${max} direcciones de List_t resueltas por quien analiza, como Queue_t.xTasksWaitingToReceive. Se excluyen expresamente las listas de Event Groups porque sus valores codifican bits de eventos mediante una ruta no ordenada. Requiere configUSE_CO_ROUTINES=0 para que pvOwner sea un TCB.`,
+    eventName: 'Nombre objeto.miembro',
+    eventKind: 'Tipo de espera',
+    eventKindChoose: 'Elige…',
+    queueReceive: 'recibir / tomar',
+    queueSend: 'enviar',
+    eventOwnersAreTcbs: 'Confirmo configUSE_CO_ROUTINES=0; cada pvOwner es el TCB de una tarea.',
+    addEventList: 'Añadir lista de espera',
+    removeEventList: (i) => `Quitar la lista de espera ${i}`,
   },
 
   error: {
@@ -77,6 +88,11 @@ export const rtosTasks: Messages['rtosTasks'] = {
     priority: 'Introduce una prioridad entera no negativa.',
     priorityRepeated: (p) => `La prioridad ${p} ya está en la lista; cada prioridad se recorre una vez.`,
     tooManyLists: (max) => `Como máximo ${max} listas.`,
+    tooManyEventLists: (max) => `Como máximo ${max} listas ordenadas de espera de colas/semáforos.`,
+    eventName: 'Introduce un identificador C o una ruta objeto.miembro.',
+    eventNameRepeated: (name) => `${name} ya figura en la lista; cada lista de espera necesita una etiqueta única.`,
+    eventKind: 'Elige si es xTasksWaitingToReceive o xTasksWaitingToSend.',
+    eventOwnersAreTcbs: 'Confirma configUSE_CO_ROUTINES=0 antes de interpretar pvOwner como el TCB de una tarea.',
     addressRepeated: (address) => `${address} ya está en la lista; cada lista se recorre una vez.`,
     arrayAndLists: 'Declara el array de listas o listas sueltas, no ambos: cada lista se recorre una vez.',
     arrayBase: 'El array necesita su dirección; tómala del símbolo pxReadyTasksLists.',
@@ -130,16 +146,22 @@ export const rtosTasks: Messages['rtosTasks'] = {
       delayed_overflow: 'retardada (desbordamiento)',
       suspended: 'suspendida',
       pending: 'pendiente de pasar a lista',
+      event: 'espera de cola/semáforo',
       terminated: 'pendiente de terminar',
     },
+    waitKind: { queue_receive: 'recibir / tomar', queue_send: 'enviar' },
     secondDelayed: 'la segunda lista de retardadas',
     wakeTick: (tcb, tick) => `${tcb} despierta en el tick ${tick}`,
+    eventOrder: (tcb, value) =>
+      `${tcb} clave de prioridad ${value} (un valor menor implica mayor prioridad; no es un tick)`,
     integrityValue: (reads, mismatches) => `${reads}; ${mismatches} discrepancia(s)`,
     integrityDisabled: 'desactivados',
     notWalked: (kinds) =>
       `No recorridas, porque no se aportaron: ${kinds}. Las tareas en esos estados no están en este resultado.`,
     severalLists: (n, tcbs) =>
       `${n} TCB aparecen en más de una lista de estado (${tcbs}). Una instantánea coherente no puede producir eso; puede estar desgarrada.`,
+    severalEventLists: (n, tcbs) =>
+      `${n} TCB aparecen en más de una lista de xEventListItem (${tcbs}). Un xEventListItem no puede estar enlazado dos veces; la instantánea puede estar desgarrada.`,
     currentLane: 'pxCurrentTCB (tarea en curso)',
     readyLane: (address) => `lista en ${address}`,
     noListSupplied: 'no se aportó ninguna lista',
@@ -155,8 +177,8 @@ export const rtosTasks: Messages['rtosTasks'] = {
         agrees === true ? 'concuerda' : agrees === false ? 'no concuerda' : 'sin comparar'
       }.`,
     noTasks: 'ninguna',
-    limits: (maxKiB, maxItems, maxLists) =>
-      `Límites aplicados: instantánea ≤ ${maxKiB} KiB, ≤ ${maxItems} nodos recorridos por lista, ≤ ${maxLists} listas.`,
+    limits: (maxKiB, maxItems, maxLists, maxEventLists = 0) =>
+      `Límites aplicados: instantánea ≤ ${maxKiB} KiB, ≤ ${maxItems} nodos recorridos por lista, ≤ ${maxLists} listas de tareas listas, ≤ ${maxEventLists} listas ordenadas de espera.`,
     notRecorded: 'no registrado',
   },
 

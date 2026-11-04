@@ -369,6 +369,41 @@ describe('parseFreeRtosNamedList', () => {
     expect(r.evidence).toEqual([expect.stringContaining(`0x${ITEM_B.toString(16)} has a pxContainer`)]);
   });
 
+  it('walks a caller-named ordered queue wait list as xEventListItem ordering evidence', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 1);
+    writeItem(ITEM_A, 4, SENTINEL, 0x3000_0042, LIST_ADDR);
+
+    expect(
+      parseFreeRtosNamedList(buf, REGION_BASE, {
+        kind: 'event',
+        name: 'fixtureQueue.xTasksWaitingToReceive',
+        address: LIST_ADDR,
+      }),
+    ).toMatchObject({
+      kind: 'event',
+      name: 'fixtureQueue.xTasksWaitingToReceive',
+      coverage: 'complete',
+      itemValueMeaning: 'event_order',
+      tasks: [{ tcbAddress: 0x3000_0042, itemValue: 4 }],
+    });
+  });
+
+  it('records a descending value in an ordered queue wait list as structural evidence', () => {
+    const { buf, writeListHeader, writeItem } = memory(REGION_BASE, 0x200, true);
+    writeListHeader(LIST_ADDR, ITEM_A, 2);
+    writeItem(ITEM_A, 4, ITEM_B, 0x3000_0042, LIST_ADDR);
+    writeItem(ITEM_B, 2, SENTINEL, 0x3000_0043, LIST_ADDR);
+
+    const r = parseFreeRtosNamedList(buf, REGION_BASE, {
+      kind: 'event',
+      name: 'fixtureQueue.xTasksWaitingToReceive',
+      address: LIST_ADDR,
+    });
+    expect(r.orderViolations).toBe(1);
+    expect(r.evidence).toEqual([expect.stringContaining('unsupported unordered EventGroup list')]);
+  });
+
   it('reports missing_symbol per kind, naming the list, without claiming it is empty', () => {
     const { buf } = memory(REGION_BASE, 0x200, true);
     const r = parseFreeRtosNamedList(buf, REGION_BASE, { kind: 'suspended', address: null });
@@ -825,7 +860,15 @@ describe('parseFreeRtosList', () => {
     writeListHeader(LIST_ADDR, ITEM_A, 1);
     writeItem(ITEM_A, 42, SENTINEL, 0x3000_0001, LIST_ADDR);
 
-    const kinds: FreeRtosListKind[] = ['ready', 'delayed', 'delayed_overflow', 'suspended', 'pending', 'terminated'];
+    const kinds: FreeRtosListKind[] = [
+      'ready',
+      'delayed',
+      'delayed_overflow',
+      'suspended',
+      'pending',
+      'event',
+      'terminated',
+    ];
     const results = parseFreeRtosList(buf, REGION_BASE, [
       { kind: 'delayed', address: LIST_ADDR },
       { kind: 'suspended', address: null },

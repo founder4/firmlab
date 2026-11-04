@@ -1551,6 +1551,14 @@ export interface RtosTaskSnapshotInput {
     uxTopReadyPriority?: { address: number | null; representation: 'priority' | 'bitmap' };
     /** A name containing "overflow" makes the lane `delayed_overflow`; the API defaults to `xDelayedTaskList<n>`. */
     delayedLists?: { name?: string; address: number | null }[];
+    /** Caller-resolved ordered wait lists inside queues/semaphores. EventGroup unordered lists are excluded. */
+    eventLists?: {
+      name: string;
+      address: number | null;
+      waitKind: 'queue_receive' | 'queue_send';
+      ordering: 'priority';
+      ownerKind: 'tcb';
+    }[];
     /** Omitted → not walked; null → a `missing_symbol` lane. Same for the two below. */
     suspendedList?: number | null;
     pendingReadyList?: number | null;
@@ -1558,7 +1566,7 @@ export interface RtosTaskSnapshotInput {
   };
 }
 
-export type RtosListKind = 'ready' | 'delayed' | 'delayed_overflow' | 'suspended' | 'pending' | 'terminated';
+export type RtosListKind = 'ready' | 'delayed' | 'delayed_overflow' | 'suspended' | 'pending' | 'event' | 'terminated';
 
 export interface RtosTaskLane {
   coverage?: 'complete' | 'cycle_capped' | 'truncated' | 'out_of_range' | 'missing_symbol';
@@ -1578,12 +1586,14 @@ export interface RtosTaskLane {
   containerMismatches?: number;
 }
 
-/** A delayed, suspended, pending-ready or waiting-termination lane. Only `wake_tick` values are wake ticks. */
+/** A delayed/state/ordered-wait lane. Only `wake_tick` values are wake ticks. */
 export interface RtosNamedListLane extends RtosTaskLane {
   kind?: RtosListKind;
   name?: string;
   itemValueMeaning?: 'wake_tick' | 'event_order' | 'not_maintained';
   orderViolations?: number;
+  valueViolations?: number;
+  waitKind?: 'queue_receive' | 'queue_send';
 }
 
 export interface RtosTaskSnapshotResult {
@@ -1599,7 +1609,13 @@ export interface RtosTaskSnapshotResult {
     useMiniListItem?: boolean;
     useListDataIntegrityCheckBytes?: boolean;
   };
-  limits?: { maxSnapshotBytes?: number; maxListItems?: number; maxReadyLists?: number; maxDelayedLists?: number };
+  limits?: {
+    maxSnapshotBytes?: number;
+    maxListItems?: number;
+    maxReadyLists?: number;
+    maxDelayedLists?: number;
+    maxEventLists?: number;
+  };
   currentTask?: {
     coverage?: 'complete' | 'out_of_range' | 'truncated' | 'missing_symbol';
     tcbAddress?: number | null;
@@ -1617,11 +1633,13 @@ export interface RtosTaskSnapshotResult {
     integrityChecks?: { attempted?: number; completed?: number; mismatches?: number };
   };
   delayedLists?: RtosNamedListLane[];
+  eventLists?: RtosNamedListLane[];
   suspendedList?: RtosNamedListLane;
   pendingReadyList?: RtosNamedListLane;
   terminatedList?: RtosNamedListLane;
   unwalkedKinds?: RtosListKind[];
   tcbsOnSeveralLists?: number[];
+  tcbsOnSeveralEventLists?: number[];
   /** Present only when the ready lists were declared as the `pxReadyTasksLists` array. */
   readyListArray?: {
     base?: number | null;

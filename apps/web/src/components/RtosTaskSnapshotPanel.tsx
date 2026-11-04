@@ -13,9 +13,11 @@ import { listRecordSize } from '@firmlab/core';
  * provider's summary sentence (which already says what was NOT walked) is shown first, verbatim.
  *
  * Beyond the ready lists, the analyst may name the other `tasks.c` state lists (delayed, overflow-delayed,
- * suspended, pending-ready, waiting-termination). An empty field is left out of the request, and the API then
- * reports that kind as NOT WALKED — the result names it, so tasks in that state are never silently absent. Wake
- * ticks are shown only on delayed lanes, the one kind whose `xItemValue` the kernel sets to a wake tick.
+ * suspended, pending-ready, waiting-termination) and caller-named ordered queue/semaphore wait lists. An empty field
+ * is left out of the request, and the API then reports that kind as NOT WALKED — the result names it, so tasks in
+ * that state are never silently absent. Wake ticks are shown only on delayed lanes; event lanes expose their
+ * ordering value without relabelling it as time. EventGroup lists are explicitly outside this contract because
+ * FreeRTOS stores event bits in them through a different, unordered-list path.
  *
  * The addresses can be read from the image's OWN ELF symbol table (`/rtos/elf-symbols`), but only on an explicit
  * operator action, and only fields whose symbol resolved to exactly one absolute address are filled. A link-time
@@ -48,9 +50,10 @@ import {
 import { type Messages, useMessages } from '../i18n';
 import { ProofStateBadge } from './FindingsLedger';
 
-/** Mirrors `MAX_SNAPSHOT_BYTES` / `MAX_READY_LISTS` in `apps/api/src/providers/rtos-tasks.ts`. */
+/** Mirrors the provider bounds in `apps/api/src/providers/rtos-tasks.ts`. */
 export const MAX_SNAPSHOT_BYTES = 512 * 1024;
 export const MAX_READY_LISTS = 64;
+export const MAX_EVENT_LISTS = 64;
 type M = Messages['rtosTasks'];
 
 export interface SnapshotForm {
@@ -65,6 +68,10 @@ export interface SnapshotForm {
   uxTopReadyPriority: string;
   topReadyRepresentation: '' | 'priority' | 'bitmap';
   readyLists: { priority: string; address: string }[];
+  /** Caller-named ordered Queue_t/SemaphoreData_t wait lists whose items are TCB.xEventListItem. */
+  eventLists: { name: string; address: string; waitKind: '' | 'queue_receive' | 'queue_send' }[];
+  /** Explicit analyst declaration that configUSE_CO_ROUTINES=0 and every wait-list pvOwner is a TCB. */
+  eventOwnersAreTcbs: boolean;
   /** The `pxReadyTasksLists` array; all four empty → not declared. `symbolSize` alone stays optional. */
   readyArray: { base: string; maxPriorities: string; listSize: string; symbolSize: string };
   /** The List_t `pxDelayedTaskList` points to at snapshot time. Empty → not walked. */
@@ -98,6 +105,8 @@ export const EMPTY_FORM: SnapshotForm = {
   uxTopReadyPriority: '',
   topReadyRepresentation: '',
   readyLists: [],
+  eventLists: [],
+  eventOwnersAreTcbs: false,
   readyArray: { base: '', maxPriorities: '', listSize: '', symbolSize: '' },
   delayedList: '',
   overflowDelayedList: '',
@@ -232,6 +241,29 @@ export function buildSnapshotRequest(
       ? [{ name: 'pxOverflowDelayedTaskList', address: state.overflowDelayedList }]
       : []),
   ];
+  if (f.eventLists.length > MAX_EVENT_LISTS) errors.eventLists = m.error.tooManyEventLists(MAX_EVENT_LISTS);
+  const eventLists: NonNullable<RtosTaskSnapshotInput['symbols']['eventLists']> = [];
+  const eventNames = new Set<string>();
+  const eventNamePattern = /^[A-Za-z_][A-Za-z0-9_]*(\[\d+\])?(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
+  f.eventLists.forEach((lane, i) => {
+    const name = lane.name.trim();
+    const nameValid = eventNamePattern.test(name) && !eventNames.has(name);
+    if (!eventNamePattern.test(name)) errors[`eventLists.${i}.name`] = m.error.eventName;
+    else if (!nameValid) errors[`eventLists.${i}.name`] = m.error.eventNameRepeated(name);
+    else eventNames.add(name);
+    if (lane.waitKind !== 'queue_receive' && lane.waitKind !== 'queue_send')
+      errors[`eventLists.${i}.waitKind`] = m.error.eventKind;
+    const address = addr(lane.address);
+    let addressValid = address !== null;
+    if (address === null) errors[`eventLists.${i}.address`] = m.error.address(bits);
+    else if (taken.has(address)) {
+      errors[`eventLists.${i}.address`] = m.error.addressRepeated(hex(address));
+      addressValid = false;
+    } else taken.add(address);
+    if (nameValid && addressValid && address !== null && lane.waitKind)
+      eventLists.push({ name, address, waitKind: lane.waitKind, ordering: 'priority', ownerKind: 'tcb' });
+  });
+  if (f.eventLists.length > 0 && !f.eventOwnersAreTcbs) errors.eventOwnersAreTcbs = m.error.eventOwnersAreTcbs;
 
   if (Object.keys(errors).length > 0 || !f.bytes || base === null) return { ok: false, errors };
   return {
@@ -254,6 +286,7 @@ export function buildSnapshotRequest(
         ...(state.suspendedList !== undefined ? { suspendedList: state.suspendedList } : {}),
         ...(state.pendingReadyList !== undefined ? { pendingReadyList: state.pendingReadyList } : {}),
         ...(state.terminatedList !== undefined ? { terminatedList: state.terminatedList } : {}),
+        ...(eventLists.length > 0 ? { eventLists } : {}),
       },
     },
   };
@@ -331,6 +364,8 @@ export function RtosTaskSnapshotPanel({
   const timer = useRef<number | null>(null);
   const rowKey = useRef(0);
   const [rowKeys, setRowKeys] = useState<number[]>([]);
+  const eventRowKey = useRef(0);
+  const [eventRowKeys, setEventRowKeys] = useState<number[]>([]);
   const [elf, setElf] = useState<RtosElfSymbolsResult | null>(null);
   const [elfBusy, setElfBusy] = useState(false);
   const [elfError, setElfError] = useState<string | null>(null);
@@ -484,6 +519,15 @@ export function RtosTaskSnapshotPanel({
     set(
       'readyLists',
       form.readyLists.map((l, j) => (j === i ? { ...l, [key]: value } : l)),
+    );
+  const setEventList = <K extends keyof SnapshotForm['eventLists'][number]>(
+    i: number,
+    key: K,
+    value: SnapshotForm['eventLists'][number][K],
+  ) =>
+    set(
+      'eventLists',
+      form.eventLists.map((l, j) => (j === i ? { ...l, [key]: value } : l)),
     );
 
   const submit = async (e: React.FormEvent) => {
@@ -850,6 +894,104 @@ export function RtosTaskSnapshotPanel({
           <div className="hint">{m.field.delayedHint}</div>
         </fieldset>
 
+        <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 8 }}>
+          <legend className="eyebrow">{m.field.eventLists}</legend>
+          <div className="hint">{m.field.eventListsHint(MAX_EVENT_LISTS)}</div>
+          {form.eventLists.map((lane, i) => (
+            <div
+              key={eventRowKeys[i]}
+              style={{ display: 'grid', gap: 8, gridTemplateColumns: '160px 1fr 1fr auto', alignItems: 'start' }}
+            >
+              <div>
+                <label className="sr-only" htmlFor={id(`event-kind-${i}`)}>
+                  {`${m.field.eventKind} ${i + 1}`}
+                </label>
+                <select
+                  id={id(`event-kind-${i}`)}
+                  className="select"
+                  value={lane.waitKind}
+                  onChange={(e) =>
+                    setEventList(i, 'waitKind', e.target.value as SnapshotForm['eventLists'][number]['waitKind'])
+                  }
+                  {...fieldProps(`eventLists.${i}.waitKind`)}
+                >
+                  <option value="">{m.field.eventKindChoose}</option>
+                  <option value="queue_receive">{m.field.queueReceive}</option>
+                  <option value="queue_send">{m.field.queueSend}</option>
+                </select>
+                {fieldError(`eventLists.${i}.waitKind`)}
+              </div>
+              <div>
+                <label className="sr-only" htmlFor={id(`event-name-${i}`)}>
+                  {`${m.field.eventName} ${i + 1}`}
+                </label>
+                <input
+                  id={id(`event-name-${i}`)}
+                  className="input mono"
+                  placeholder="fixtureQueue.xTasksWaitingToReceive"
+                  value={lane.name}
+                  onChange={(e) => setEventList(i, 'name', e.target.value)}
+                  {...fieldProps(`eventLists.${i}.name`)}
+                />
+                {fieldError(`eventLists.${i}.name`)}
+              </div>
+              <div>
+                <label className="sr-only" htmlFor={id(`event-address-${i}`)}>
+                  {`${m.field.address} ${i + 1}`}
+                </label>
+                <input
+                  id={id(`event-address-${i}`)}
+                  className="input mono"
+                  placeholder={m.field.address}
+                  value={lane.address}
+                  onChange={(e) => setEventList(i, 'address', e.target.value)}
+                  {...fieldProps(`eventLists.${i}.address`)}
+                />
+                {fieldError(`eventLists.${i}.address`)}
+              </div>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                aria-label={m.field.removeEventList(i + 1)}
+                onClick={() => {
+                  setErrors({});
+                  set(
+                    'eventLists',
+                    form.eventLists.filter((_, j) => j !== i),
+                  );
+                  setEventRowKeys((keys) => keys.filter((_, j) => j !== i));
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          {fieldError('eventLists')}
+          <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={form.eventOwnersAreTcbs}
+              onChange={(e) => set('eventOwnersAreTcbs', e.target.checked)}
+              {...fieldProps('eventOwnersAreTcbs')}
+            />
+            {m.field.eventOwnersAreTcbs}
+          </label>
+          {fieldError('eventOwnersAreTcbs')}
+          <div>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={form.eventLists.length >= MAX_EVENT_LISTS}
+              onClick={() => {
+                set('eventLists', [...form.eventLists, { name: '', address: '', waitKind: '' }]);
+                setEventRowKeys((keys) => [...keys, eventRowKey.current++]);
+              }}
+            >
+              {m.field.addEventList}
+            </button>
+          </div>
+        </fieldset>
+
         {hasErrors && (
           <div className="banner banner-warn" role="alert">
             {m.error.fixFields}
@@ -1066,7 +1208,12 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
 
       {limits && (
         <p className="hint" style={{ margin: '8px 0 0', maxWidth: '72ch' }}>
-          {m.result.limits((limits.maxSnapshotBytes ?? 0) / 1024, limits.maxListItems ?? 0, limits.maxReadyLists ?? 0)}
+          {m.result.limits(
+            (limits.maxSnapshotBytes ?? 0) / 1024,
+            limits.maxListItems ?? 0,
+            limits.maxReadyLists ?? 0,
+            limits.maxEventLists ?? 0,
+          )}
         </p>
       )}
     </section>
@@ -1080,13 +1227,15 @@ function SnapshotResult({ result, m }: { result: RtosTaskSnapshotResult; m: M })
 function StateLists({ result, m }: { result: RtosTaskSnapshotResult; m: M }): JSX.Element | null {
   const lanes: RtosNamedListLane[] = [
     ...(result.delayedLists ?? []),
+    ...(result.eventLists ?? []),
     ...(result.suspendedList ? [result.suspendedList] : []),
     ...(result.pendingReadyList ? [result.pendingReadyList] : []),
     ...(result.terminatedList ? [result.terminatedList] : []),
   ];
   const unwalked = result.unwalkedKinds ?? [];
   const several = result.tcbsOnSeveralLists ?? [];
-  if (lanes.length === 0 && unwalked.length === 0 && several.length === 0) return null;
+  const severalEvents = result.tcbsOnSeveralEventLists ?? [];
+  if (lanes.length === 0 && unwalked.length === 0 && several.length === 0 && severalEvents.length === 0) return null;
   const pair = (done?: number, tried?: number) => `${done ?? '—'} / ${tried ?? '—'}`;
   const integrity = (lane: RtosNamedListLane) =>
     lane.integrityChecks
@@ -1103,6 +1252,11 @@ function StateLists({ result, m }: { result: RtosTaskSnapshotResult; m: M }): JS
       {several.length > 0 && (
         <div className="banner banner-warn" role="alert" style={{ marginTop: 12, maxWidth: '72ch' }}>
           {m.result.severalLists(several.length, several.map((t) => hex(t)).join(' '))}
+        </div>
+      )}
+      {severalEvents.length > 0 && (
+        <div className="banner banner-warn" role="alert" style={{ marginTop: 12, maxWidth: '72ch' }}>
+          {m.result.severalEventLists(severalEvents.length, severalEvents.map((t) => hex(t)).join(' '))}
         </div>
       )}
       {lanes.length > 0 && (
@@ -1123,18 +1277,26 @@ function StateLists({ result, m }: { result: RtosTaskSnapshotResult; m: M }): JS
               {lanes.map((lane, i) => (
                 <tr key={`${lane.kind ?? 'list'}-${lane.listAddress ?? 'none'}-${i}`}>
                   <td className="mono">{m.result.stateLane(lane.name ?? '?', hex(lane.listAddress))}</td>
-                  <td>{lane.kind ? m.result.kind[lane.kind] : m.result.notRecorded}</td>
+                  <td>
+                    {lane.kind
+                      ? lane.kind === 'event' && lane.waitKind
+                        ? `${m.result.kind.event} (${m.result.waitKind[lane.waitKind]})`
+                        : m.result.kind[lane.kind]
+                      : m.result.notRecorded}
+                  </td>
                   <LaneCoverage coverage={lane.coverage} evidence={lane.evidence} m={m} />
                   <td className="mono">{pair(lane.completed, lane.attempted)}</td>
                   <td className="mono">{pair(lane.bytesCompleted, lane.bytesAttempted)}</td>
                   <td className="mono">{integrity(lane)}</td>
                   <td className="mono">
                     {lane.tasks && lane.tasks.length > 0 ? (
-                      lane.itemValueMeaning === 'wake_tick' ? (
+                      lane.itemValueMeaning === 'wake_tick' || lane.kind === 'event' ? (
                         <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none' }}>
                           {lane.tasks.map((t, j) => (
                             <li key={`${t.listItemAddress ?? j}`}>
-                              {m.result.wakeTick(hex(t.tcbAddress), t.itemValue ?? '—')}
+                              {lane.itemValueMeaning === 'wake_tick'
+                                ? m.result.wakeTick(hex(t.tcbAddress), t.itemValue ?? '—')
+                                : m.result.eventOrder(hex(t.tcbAddress), t.itemValue ?? '—')}
                             </li>
                           ))}
                         </ul>

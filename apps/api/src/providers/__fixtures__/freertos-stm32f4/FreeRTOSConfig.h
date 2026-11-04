@@ -28,9 +28,16 @@
 #define configUSE_TIMERS 0
 #define configUSE_CO_ROUTINES 0
 #define configSUPPORT_DYNAMIC_ALLOCATION 1
-#define configSUPPORT_STATIC_ALLOCATION 0
+#define configSUPPORT_STATIC_ALLOCATION 1
 #define configKERNEL_PROVIDED_STATIC_MEMORY 0
 #define configNUMBER_OF_CORES 1
+
+/* Fixture-only: queue.c expands this where Queue_t is complete, exporting the direct List_t address for the E2E. */
+extern void * volatile fixture_waiting_receive_list;
+#define traceQUEUE_CREATE(queue) \
+  do {                            \
+    fixture_waiting_receive_list = (void *)&((queue)->xTasksWaitingToReceive); \
+  } while (0)
 
 #define INCLUDE_vTaskDelay 1
 #define INCLUDE_vTaskSuspend 1

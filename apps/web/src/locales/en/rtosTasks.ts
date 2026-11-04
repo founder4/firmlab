@@ -61,6 +61,17 @@ export const rtosTasks = {
     terminatedList: 'Waiting-termination list (xTasksWaitingTermination)',
     delayedHint:
       'xDelayedTaskList1 and xDelayedTaskList2 swap roles every time the tick count wraps. Read the two pointers in the snapshot to know which is the current list and which the overflow list.',
+    eventLists: 'Ordered queue/semaphore wait lists (optional)',
+    eventListsHint: (max: number) =>
+      `Up to ${max} caller-resolved List_t addresses such as Queue_t.xTasksWaitingToReceive. EventGroup wait lists are deliberately excluded because their item values encode event bits through an unordered-list path. Requires configUSE_CO_ROUTINES=0 so pvOwner is a TCB.`,
+    eventName: 'Object.member name',
+    eventKind: 'Wait kind',
+    eventKindChoose: 'Choose…',
+    queueReceive: 'receive / take',
+    queueSend: 'send',
+    eventOwnersAreTcbs: 'I confirm configUSE_CO_ROUTINES=0; every pvOwner is a task TCB.',
+    addEventList: 'Add wait list',
+    removeEventList: (i: number) => `Remove wait list ${i}`,
   },
 
   error: {
@@ -79,6 +90,11 @@ export const rtosTasks = {
     priority: 'Enter a non-negative integer priority.',
     priorityRepeated: (p: number) => `Priority ${p} is already listed; each priority is walked once.`,
     tooManyLists: (max: number) => `At most ${max} ready lists.`,
+    tooManyEventLists: (max: number) => `At most ${max} ordered queue/semaphore wait lists.`,
+    eventName: 'Enter a C identifier or one object.member path.',
+    eventNameRepeated: (name: string) => `${name} is already listed; each wait list needs one audit label.`,
+    eventKind: 'Choose whether this is xTasksWaitingToReceive or xTasksWaitingToSend.',
+    eventOwnersAreTcbs: 'Confirm configUSE_CO_ROUTINES=0 before interpreting pvOwner as a task TCB.',
     addressRepeated: (address: string) => `${address} is already listed; each list is walked once.`,
     arrayAndLists: 'Declare the ready-list array or individual ready lists, not both: each list is walked once.',
     arrayBase: 'The array needs its address; take it from the pxReadyTasksLists symbol.',
@@ -132,16 +148,22 @@ export const rtosTasks = {
       delayed_overflow: 'delayed (overflow)',
       suspended: 'suspended',
       pending: 'pending ready',
+      event: 'queue/semaphore wait',
       terminated: 'waiting termination',
     },
+    waitKind: { queue_receive: 'receive / take', queue_send: 'send' },
     secondDelayed: 'the second delayed list',
     wakeTick: (tcb: string, tick: number | string) => `${tcb} wakes at tick ${tick}`,
+    eventOrder: (tcb: string, value: number | string) =>
+      `${tcb} priority key ${value} (smaller means higher priority; this is not a tick)`,
     integrityValue: (reads: string, mismatches: number) => `${reads}; ${mismatches} mismatch(es)`,
     integrityDisabled: 'disabled',
     notWalked: (kinds: string) =>
       `Not walked, because not supplied: ${kinds}. Tasks in those states are not in this result.`,
     severalLists: (n: number, tcbs: string) =>
       `${n} TCB(s) appear on more than one state list (${tcbs}). A consistent snapshot cannot produce that; it may be torn.`,
+    severalEventLists: (n: number, tcbs: string) =>
+      `${n} TCB(s) appear on more than one xEventListItem list (${tcbs}). One xEventListItem cannot be linked twice; the snapshot may be torn.`,
     currentLane: 'pxCurrentTCB',
     readyLane: (address: string) => `ready list @ ${address}`,
     noListSupplied: 'no ready list supplied',
@@ -163,8 +185,8 @@ export const rtosTasks = {
         agrees === true ? 'agrees' : agrees === false ? 'disagrees' : 'not compared'
       }.`,
     noTasks: 'none',
-    limits: (maxKiB: number, maxItems: number, maxLists: number) =>
-      `Limits applied: snapshot ≤ ${maxKiB} KiB, ≤ ${maxItems} nodes walked per list, ≤ ${maxLists} ready lists.`,
+    limits: (maxKiB: number, maxItems: number, maxLists: number, maxEventLists = 0) =>
+      `Limits applied: snapshot ≤ ${maxKiB} KiB, ≤ ${maxItems} nodes walked per list, ≤ ${maxLists} ready lists, ≤ ${maxEventLists} ordered wait lists.`,
     notRecorded: 'not recorded',
   },
 

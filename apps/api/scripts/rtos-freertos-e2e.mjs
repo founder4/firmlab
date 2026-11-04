@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from 'node:child_process';
 /**
  * End-to-end check of the FreeRTOS lane against a fixture whose task set is KNOWN: ELF symbols → Renode RAM capture
  * → task-list walk, then a comparison with what `__fixtures__/freertos-stm32f4/main.c` creates.
@@ -74,18 +75,41 @@ const LIST_ITEM_SIZE = USE_LIST_DATA_INTEGRITY_CHECK_BYTES
   : TICK_WIDTH_BITS === 64
     ? 24
     : 20;
-const TCB_PRIORITY_OFFSET = 4 + 2 * LIST_ITEM_SIZE;
+const TCB_STATE_LIST_OFFSET = TICK_WIDTH_BITS === 64 ? 8 : 4;
+const TCB_EVENT_LIST_OFFSET = TCB_STATE_LIST_OFFSET + LIST_ITEM_SIZE;
+const TCB_PRIORITY_OFFSET = TCB_STATE_LIST_OFFSET + 2 * LIST_ITEM_SIZE;
 const TCB_NAME_OFFSET = TCB_PRIORITY_OFFSET + 8;
 const EXPECTED = {
   ready: { SpinA: 1, SpinB: 1, IDLE: 0 },
   delayed: { Sleeper: 2 },
-  suspended: { Parked: 3 },
+  suspended: { Parked: 3, QueueRx: 4 },
 };
 
 const failures = [];
 const check = (ok, what) => {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${what}`);
   if (!ok) failures.push(what);
+};
+
+const elfSymbolAddresses = (...wanted) => {
+  let output;
+  let lastError;
+  for (const tool of ['readelf', 'arm-none-eabi-readelf']) {
+    try {
+      output = execFileSync(tool, ['-sW', ELF], { encoding: 'utf8' });
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!output) throw lastError ?? new Error('no readelf implementation available');
+  const found = {};
+  for (const line of output.split('\n')) {
+    const fields = line.trim().split(/\s+/);
+    const name = fields[7];
+    if (wanted.includes(name) && /^[0-9a-f]+$/i.test(fields[1] ?? '')) found[name] = Number.parseInt(fields[1], 16);
+  }
+  return found;
 };
 
 const sym = runRtosElfSymbols(ELF);
@@ -106,6 +130,30 @@ if (!cap.captured || !cap.region || !cap.bytesBase64) {
   console.log(JSON.stringify({ ...cap, bytesBase64: undefined, bytes: undefined }, null, 1));
   process.exit(1);
 }
+
+const fixtureSymbols = elfSymbolAddresses(
+  'fixture_waiting_receive_list',
+  'fixture_rx_queue_storage',
+  'fixture_rx_queue',
+  'fixture_rx_task',
+);
+for (const name of ['fixture_waiting_receive_list', 'fixture_rx_queue_storage', 'fixture_rx_queue', 'fixture_rx_task'])
+  check(typeof fixtureSymbols[name] === 'number', `${name} is present in the fixture ELF`);
+
+const ram = Buffer.from(cap.bytesBase64, 'base64');
+const at = (addr) => addr - cap.region.base;
+const pointerAt = (addr) => ram.readUInt32LE(at(addr));
+const waitListAddress = pointerAt(fixtureSymbols.fixture_waiting_receive_list);
+const queueAddress = pointerAt(fixtureSymbols.fixture_rx_queue);
+const receiverTcb = pointerAt(fixtureSymbols.fixture_rx_task);
+check(
+  queueAddress === fixtureSymbols.fixture_rx_queue_storage,
+  'static queue handle points to fixture_rx_queue_storage',
+);
+check(
+  waitListAddress === fixtureSymbols.fixture_rx_queue_storage + 16 + LIST_SIZE,
+  `traceQUEUE_CREATE wait-list pointer matches Queue_t + 16 + sizeof(List_t=${LIST_SIZE})`,
+);
 
 const body = {
   memory: {
@@ -131,6 +179,15 @@ const body = {
       representation: 'priority',
     },
     delayedLists: prefill.delayedLists,
+    eventLists: [
+      {
+        name: 'fixtureRxQueue.xTasksWaitingToReceive',
+        address: waitListAddress,
+        waitKind: 'queue_receive',
+        ordering: 'priority',
+        ownerKind: 'tcb',
+      },
+    ],
     suspendedList: prefill.suspendedList,
     pendingReadyList: prefill.pendingReadyList,
     terminatedList: prefill.terminatedList,
@@ -142,8 +199,6 @@ if (!v.ok) process.exit(1);
 const r = runRtosTaskSnapshot(v.snapshot);
 console.log(`walk: coverage=${r.coverage} proofState=${r.proofState} — ${r.summary}`);
 
-const ram = Buffer.from(cap.bytesBase64, 'base64');
-const at = (addr) => addr - cap.region.base;
 const tcb = (addr) => {
   const o = at(addr);
   const name = ram.subarray(o + TCB_NAME_OFFSET, o + TCB_NAME_OFFSET + 16);
@@ -168,8 +223,16 @@ for (const lane of r.readyLists) {
 }
 const delayed = Object.assign({}, ...(r.delayedLists ?? []).map((l) => named(l.tasks)));
 const suspended = named(r.suspendedList?.tasks);
+const wait = r.eventLists?.[0];
+const waiting = named(wait?.tasks);
 console.log(
-  JSON.stringify({ ready, delayed, suspended, current: r.currentTask.tcbAddress && tcb(r.currentTask.tcbAddress) }),
+  JSON.stringify({
+    ready,
+    delayed,
+    suspended,
+    waiting,
+    current: r.currentTask.tcbAddress && tcb(r.currentTask.tcbAddress),
+  }),
 );
 
 check(
@@ -181,12 +244,31 @@ check(
   `delayed lists hold exactly ${JSON.stringify(EXPECTED.delayed)}`,
 );
 check(
-  JSON.stringify(suspended) === JSON.stringify(EXPECTED.suspended),
+  JSON.stringify(sortKeys(EXPECTED.suspended, suspended)) ===
+    JSON.stringify(sortKeys(EXPECTED.suspended, EXPECTED.suspended)),
   `suspended list holds exactly ${JSON.stringify(EXPECTED.suspended)}`,
+);
+check(
+  JSON.stringify(waiting) === JSON.stringify({ QueueRx: 4 }),
+  'queue receive wait list holds exactly QueueRx at priority 4',
+);
+check(wait?.tasks?.[0]?.itemValue === 1, 'QueueRx xEventListItem priority key is configMAX_PRIORITIES - 4 = 1');
+check(
+  wait?.declaredItems === 1 && wait?.containerMismatches === 0,
+  'queue wait header and pxContainer corroborate one item',
+);
+check(
+  wait?.tasks?.[0]?.listItemAddress === receiverTcb + TCB_EVENT_LIST_OFFSET,
+  `QueueRx wait node is its TCB.xEventListItem at +${TCB_EVENT_LIST_OFFSET}`,
+);
+check(
+  r.suspendedList?.tasks?.some((task) => task.tcbAddress === receiverTcb) === true,
+  'QueueRx legitimately appears on both its state list and queue wait list',
 );
 const cur = r.currentTask.tcbAddress ? tcb(r.currentTask.tcbAddress).name : null;
 check(cur === 'SpinA' || cur === 'SpinB', `pxCurrentTCB is one of the priority-1 spinners (got ${cur})`);
 check((r.tcbsOnSeveralLists ?? []).length === 0, 'no TCB appears on two state lists');
+check((r.tcbsOnSeveralEventLists ?? []).length === 0, 'no TCB appears on two xEventListItem lists');
 check(
   r.topReadyPriority?.coverage === 'complete' && r.topReadyPriority.agrees === true,
   `uxTopReadyPriority agrees with the complete ready-list array (${r.topReadyPriority?.value ?? 'not read'})`,

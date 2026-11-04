@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and exercises every 16/32-bit layout supported by this ARM_CM3 fixture. Build artifacts are temporary;
+# Builds and exercises every 16/32/64-bit layout supported by the ARM_CM3/ARM_CM4F fixture. Artifacts are temporary;
 # Renode is network-isolated and each invocation declares the exact FreeRTOS configuration flags.
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -9,7 +9,7 @@ trap 'rm -rf "$matrix_dir"' EXIT
 
 OUTPUT_DIR="$matrix_dir" MATRIX=1 "$fixture/build.sh"
 
-for tick_width in 16 32; do
+for tick_width in 16 32 64; do
   for mini in 0 1; do
     for integrity in 0 1; do
       name="freertos-stm32f4-tick${tick_width}-mini${mini}-integrity${integrity}"

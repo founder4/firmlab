@@ -426,9 +426,20 @@ export function parseFreeRtosReadyList(
  * - `pending` — `xPendingReadyList`: tasks readied while the scheduler was suspended. It holds each task's
  *   `xEventListItem`, not its `xStateListItem` (whose list is still the one the task is leaving), and that item's
  *   value is `configMAX_PRIORITIES - priority` unless an event group borrowed it.
+ * - `event` — an ordered queue/semaphore wait list (for example `xTasksWaitingToReceive`). It also holds
+ *   `xEventListItem`; the caller names the owning object and exact `List_t` address because there is no global
+ *   registry of every queue in a FreeRTOS build. EventGroup wait lists are deliberately excluded: they use the
+ *   unordered-list path and encode event bits in the item value, so `event_order` would be the wrong meaning.
  * - `terminated` — `xTasksWaitingTermination`: deleted tasks the idle task has not yet freed. `xItemValue` not set.
  */
-export type FreeRtosListKind = 'ready' | 'delayed' | 'delayed_overflow' | 'suspended' | 'pending' | 'terminated';
+export type FreeRtosListKind =
+  | 'ready'
+  | 'delayed'
+  | 'delayed_overflow'
+  | 'suspended'
+  | 'pending'
+  | 'event'
+  | 'terminated';
 
 /** What `xItemValue` carries on a given list kind — so a value is only ever read as what the kernel put there. */
 export type FreeRtosItemValueMeaning =
@@ -445,6 +456,7 @@ export const FREERTOS_ITEM_VALUE_MEANING: Readonly<Record<FreeRtosListKind, Free
   delayed_overflow: 'wake_tick',
   suspended: 'not_maintained',
   pending: 'event_order',
+  event: 'event_order',
   terminated: 'not_maintained',
 };
 
@@ -455,6 +467,7 @@ export const FREERTOS_LIST_DEFAULT_NAME: Readonly<Record<FreeRtosListKind, strin
   delayed_overflow: 'pxOverflowDelayedTaskList',
   suspended: 'xSuspendedTaskList',
   pending: 'xPendingReadyList',
+  event: 'eventList',
   terminated: 'xTasksWaitingTermination',
 };
 
@@ -466,6 +479,8 @@ export interface FreeRtosNamedList {
   address: number | null;
   /** For `ready` only: the `pxReadyTasksLists` index, carried through untouched. */
   priority?: number;
+  /** For ordered queue/semaphore waits only; keeps receive/send semantics out of the audit label. */
+  waitKind?: 'queue_receive' | 'queue_send';
 }
 
 export interface FreeRtosNamedListResult extends FreeRtosTaskListResult {
@@ -473,6 +488,7 @@ export interface FreeRtosNamedListResult extends FreeRtosTaskListResult {
   name: string;
   listAddress: number | null;
   priority?: number;
+  waitKind?: 'queue_receive' | 'queue_send';
   /** What each task's `itemValue` means on this kind of list. Only `wake_tick` is ever shown as a wake tick. */
   itemValueMeaning: FreeRtosItemValueMeaning;
   /**
@@ -487,11 +503,12 @@ export interface FreeRtosNamedListResult extends FreeRtosTaskListResult {
    */
   containerMismatches: number;
   /**
-   * For `wake_tick` lists: adjacent corroborated items whose wake ticks DEcrease along the chain. `vListInsert`
-   * keeps a delayed list sorted, so any count above zero is either a torn snapshot or a list that is not delayed.
-   * Always 0 for the other kinds, whose values carry no order.
+   * For delayed and ordered queue/semaphore lists: adjacent corroborated items whose values decrease. `vListInsert`
+   * keeps both ascending, so any count above zero is either a torn snapshot or the wrong declared list semantics.
    */
   orderViolations: number;
+  /** Ordered queue/semaphore values that are zero or carry the EventGroup-reserved high bit. */
+  valueViolations?: number;
 }
 
 /**
@@ -521,10 +538,26 @@ export function parseFreeRtosNamedList(
     evidence.push(`list item at 0x${at.toString(16)} has a pxContainer that does not point back to ${name}`);
   }
   let orderViolations = 0;
-  if (meaning === 'wake_tick') {
+  let valueViolations = 0;
+  if (meaning === 'wake_tick' || list.kind === 'event') {
     for (let i = 1; i < w.values.length; i++) if ((w.values[i] ?? 0n) < (w.values[i - 1] ?? 0n)) orderViolations++;
-    const why = 'vListInsert keeps a delayed list sorted, so the snapshot may be torn or this is not a delayed list';
-    if (orderViolations > 0) evidence.push(`${orderViolations} wake tick(s) out of ascending order — ${why}`);
+    if (orderViolations > 0) {
+      const why =
+        list.kind === 'event'
+          ? 'vListInsert keeps an ordered queue/semaphore wait list in ascending event-order value, so the snapshot may be torn or this is an unsupported unordered EventGroup list'
+          : 'vListInsert keeps a delayed list sorted, so the snapshot may be torn or this is not a delayed list';
+      evidence.push(
+        `${orderViolations} ${list.kind === 'event' ? 'event-order value(s)' : 'wake tick(s)'} out of ascending order — ${why}`,
+      );
+    }
+  }
+  if (list.kind === 'event') {
+    const highBit = 1n << BigInt((layout.tickWidth ?? 4) * 8 - 1);
+    valueViolations = w.values.filter((value) => value === 0n || (value & highBit) !== 0n).length;
+    if (valueViolations > 0)
+      evidence.push(
+        `${valueViolations} queue/semaphore priority key(s) are zero or carry the EventGroup-reserved high bit — the declared ordered-wait semantics may be wrong`,
+      );
   }
 
   return {
@@ -532,6 +565,7 @@ export function parseFreeRtosNamedList(
     name,
     listAddress: list.address,
     ...(list.priority !== undefined ? { priority: list.priority } : {}),
+    ...(list.waitKind !== undefined ? { waitKind: list.waitKind } : {}),
     coverage: w.coverage,
     attempted: w.attempted,
     completed: w.completed,
@@ -542,6 +576,7 @@ export function parseFreeRtosNamedList(
     declaredItems: w.declaredItems,
     containerMismatches: w.containerMismatches.length,
     orderViolations,
+    ...(list.kind === 'event' ? { valueViolations } : {}),
   };
 }
 

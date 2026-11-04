@@ -234,8 +234,23 @@ describe('RtosTaskSnapshotPanel', () => {
         tasks: [{ listItemAddress: 0x20000180, itemValue: 7, tcbAddress: 0x20005000 }],
         evidence: ['list item at 0x20000190 runs past the end of the supplied buffer'],
       },
+      eventLists: [
+        {
+          kind: 'event',
+          waitKind: 'queue_receive',
+          name: 'fixtureQueue.xTasksWaitingToReceive',
+          listAddress: 0x200001a0,
+          coverage: 'complete',
+          attempted: 1,
+          completed: 1,
+          itemValueMeaning: 'event_order',
+          tasks: [{ listItemAddress: 0x200001c0, itemValue: 1, tcbAddress: 0x20005000 }],
+          evidence: [],
+        },
+      ],
       unwalkedKinds: ['delayed', 'pending', 'terminated'],
       tcbsOnSeveralLists: [0x20005000],
+      tcbsOnSeveralEventLists: [0x20005000],
     });
     render(<RtosTaskSnapshotPanel imageId="img" firmwareClass="rtos" />);
     const table = await screen.findByRole('table', { name: m.result.stateLanes });
@@ -244,6 +259,8 @@ describe('RtosTaskSnapshotPanel', () => {
     expect(screen.getByText(m.result.wakeTick('0x20004000', 90))).toBeInTheDocument();
     // A suspended item's value is not a wake tick and is never shown as one.
     expect(screen.queryByText(m.result.wakeTick('0x20005000', 7))).toBeNull();
+    expect(screen.getByText(m.result.eventOrder('0x20005000', 1))).toBeInTheDocument();
+    expect(screen.getByText(`${m.result.kind.event} (${m.result.waitKind.queue_receive})`)).toBeInTheDocument();
     expect(screen.getByText(m.result.kind.suspended)).toBeInTheDocument();
     expect(screen.getByText('truncated')).toBeInTheDocument();
     expect(
@@ -252,6 +269,7 @@ describe('RtosTaskSnapshotPanel', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText(m.result.severalLists(1, '0x20005000'))).toBeInTheDocument();
+    expect(screen.getByText(m.result.severalEventLists(1, '0x20005000'))).toBeInTheDocument();
   });
 
   it('sends a declared ready-list array instead of individual ready lists', async () => {
@@ -820,5 +838,44 @@ describe('buildSnapshotRequest', () => {
     if (r.ok) return;
     expect(r.errors.suspendedList).toBe(m.error.addressRepeated('0x10'));
     expect(r.errors.pendingReadyList).toBe(m.error.address(32));
+  });
+
+  it('builds only explicitly ordered TCB queue waits and rejects duplicate labels or addresses', () => {
+    const ok = buildSnapshotRequest(
+      {
+        ...base,
+        eventLists: [{ name: 'fixtureQueue.xTasksWaitingToReceive', address: '0x100', waitKind: 'queue_receive' }],
+        eventOwnersAreTcbs: true,
+      },
+      m,
+    );
+    expect(ok.ok && ok.input.symbols.eventLists).toEqual([
+      {
+        name: 'fixtureQueue.xTasksWaitingToReceive',
+        address: 0x100,
+        waitKind: 'queue_receive',
+        ordering: 'priority',
+        ownerKind: 'tcb',
+      },
+    ]);
+
+    const bad = buildSnapshotRequest(
+      {
+        ...base,
+        readyLists: [{ priority: '0', address: '0x100' }],
+        eventOwnersAreTcbs: true,
+        eventLists: [
+          { name: 'bad;name', address: '0x200', waitKind: '' },
+          { name: 'queue.wait', address: '0x100', waitKind: 'queue_receive' },
+          { name: 'queue.wait', address: '0x300', waitKind: 'queue_send' },
+        ],
+      },
+      m,
+    );
+    expect(bad.ok).toBe(false);
+    if (bad.ok) return;
+    expect(bad.errors['eventLists.0.name']).toBe(m.error.eventName);
+    expect(bad.errors['eventLists.1.address']).toBe(m.error.addressRepeated('0x100'));
+    expect(bad.errors['eventLists.2.name']).toBe(m.error.eventNameRepeated('queue.wait'));
   });
 });

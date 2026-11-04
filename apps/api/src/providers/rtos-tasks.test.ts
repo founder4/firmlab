@@ -252,12 +252,15 @@ describe('runRtosTaskSnapshot', () => {
 const DELAYED = BASE + 0x100;
 const SUSPENDED = BASE + 0x160;
 const PENDING = BASE + 0x1a0;
+const EVENT = BASE + 0x1c0;
 const D1 = BASE + 0x120;
 const D2 = BASE + 0x140;
 const S1 = BASE + 0x180;
+const E1 = BASE + 0x1e0;
+const P1 = BASE + 0x200;
 
-function wideSnapshot(opts: { d2Wake?: number; s1Owner?: number } = {}): Uint8Array {
-  const dv = new DataView(new ArrayBuffer(0x200));
+function wideSnapshot(opts: { d2Wake?: number; s1Owner?: number; pendingOwner?: number } = {}): Uint8Array {
+  const dv = new DataView(new ArrayBuffer(0x240));
   new Uint8Array(dv.buffer).set(snapshot());
   const list = (at: number, count: number, head: number) => {
     dv.setUint32(at - BASE, count, true);
@@ -275,7 +278,10 @@ function wideSnapshot(opts: { d2Wake?: number; s1Owner?: number } = {}): Uint8Ar
   item(D2, opts.d2Wake ?? 90, DELAYED + 8, 0x2000_4000, DELAYED);
   list(SUSPENDED, 1, S1);
   item(S1, 0, SUSPENDED + 8, opts.s1Owner ?? 0x2000_5000, SUSPENDED);
-  list(PENDING, 0, PENDING + 8);
+  list(PENDING, opts.pendingOwner === undefined ? 0 : 1, opts.pendingOwner === undefined ? PENDING + 8 : P1);
+  if (opts.pendingOwner !== undefined) item(P1, 4, PENDING + 8, opts.pendingOwner, PENDING);
+  list(EVENT, 1, E1);
+  item(E1, 4, EVENT + 8, opts.s1Owner ?? 0x2000_5000, EVENT);
   return new Uint8Array(dv.buffer);
 }
 
@@ -381,6 +387,61 @@ describe('named state lists', () => {
     expect(r.summary).toMatch(/1 TCB\(s\) appear on more than one state list/);
     expect(r.summary).toMatch(/1 list\(s\) carry structural inconsistencies/);
   });
+
+  it('walks a caller-named queue event list without treating its state-list owner as a torn duplicate', () => {
+    const r = run(
+      body(wideSnapshot(), {
+        ...SYMBOLS,
+        suspendedList: SUSPENDED,
+        eventLists: [
+          {
+            name: 'fixtureQueue.xTasksWaitingToReceive',
+            address: EVENT,
+            waitKind: 'queue_receive',
+            ordering: 'priority',
+            ownerKind: 'tcb',
+          },
+        ],
+      }),
+    );
+    expect(r.eventLists).toEqual([
+      expect.objectContaining({
+        kind: 'event',
+        name: 'fixtureQueue.xTasksWaitingToReceive',
+        coverage: 'complete',
+        completed: 1,
+        itemValueMeaning: 'event_order',
+      }),
+    ]);
+    expect(r.eventLists?.[0]?.tasks).toEqual([expect.objectContaining({ tcbAddress: 0x2000_5000, itemValue: 4 })]);
+    expect(r.tcbsOnSeveralLists).toBeUndefined();
+    expect(r.summary).toContain('1 queue/semaphore-wait');
+    expect(r.summary).toContain('only the 1 caller-named ordered queue/semaphore wait list(s) were walked');
+    expect(r.summary).toContain('EventGroup unordered lists were not interpreted');
+    expect(r.limits.maxEventLists).toBe(64);
+  });
+
+  it('flags one xEventListItem owner on both a queue wait list and xPendingReadyList', () => {
+    const owner = 0x2000_5000;
+    const r = run(
+      body(wideSnapshot({ pendingOwner: owner }), {
+        ...SYMBOLS,
+        pendingReadyList: PENDING,
+        eventLists: [
+          {
+            name: 'fixtureQueue.xTasksWaitingToReceive',
+            address: EVENT,
+            waitKind: 'queue_receive',
+            ordering: 'priority',
+            ownerKind: 'tcb',
+          },
+        ],
+      }),
+    );
+    expect(r.tcbsOnSeveralEventLists).toEqual([owner]);
+    expect(r.tcbsOnSeveralLists).toBeUndefined();
+    expect(r.summary).toContain('1 TCB(s) appear on more than one xEventListItem list');
+  });
 });
 
 describe('validateRtosTaskSnapshot — named lists', () => {
@@ -397,6 +458,45 @@ describe('validateRtosTaskSnapshot — named lists', () => {
     expect(errors({ delayedLists: 'nope' }).join()).toMatch(/must be an array/);
     expect(errors({ suspendedList: 'x' }).join()).toMatch(/suspendedList must be an address or null/);
     expect(errors({ terminatedList: 2 ** 32 }).join()).toMatch(/terminatedList/);
+    expect(
+      errors({
+        eventLists: [
+          { name: 'queue;bad', address: 1, waitKind: 'queue_receive', ordering: 'priority', ownerKind: 'tcb' },
+        ],
+      }).join(),
+    ).toMatch(/object\.member path/);
+    expect(
+      errors({
+        eventLists: [
+          { name: 'queue.wait', address: -1, waitKind: 'queue_receive', ordering: 'priority', ownerKind: 'tcb' },
+        ],
+      }).join(),
+    ).toMatch(/eventLists\[0\]\.address/);
+    expect(
+      errors({
+        eventLists: [
+          { name: 'queue.wait', address: 1, waitKind: 'queue_receive', ordering: 'unordered', ownerKind: 'tcb' },
+        ],
+      }).join(),
+    ).toMatch(/ordering must be declared as 'priority'/);
+    expect(
+      errors({
+        eventLists: [
+          { name: 'queue.wait', address: 1, waitKind: 'queue_receive', ordering: 'priority', ownerKind: 'crcb' },
+        ],
+      }).join(),
+    ).toMatch(/ownerKind must be declared as 'tcb'/);
+    expect(
+      errors({
+        eventLists: Array.from({ length: 65 }, (_, i) => ({
+          name: `queue${i}`,
+          address: i,
+          waitKind: 'queue_receive',
+          ordering: 'priority',
+          ownerKind: 'tcb',
+        })),
+      }).join(),
+    ).toMatch(/cap is 64/);
   });
 
   it('refuses a list address walked twice, so no task is counted twice', () => {
@@ -406,6 +506,28 @@ describe('validateRtosTaskSnapshot — named lists', () => {
     expect(errors({ delayedLists: [{ address: DELAYED }], pendingReadyList: DELAYED }).join()).toMatch(
       /pendingReadyList repeats/,
     );
+    expect(
+      errors({
+        eventLists: [
+          {
+            name: 'queue.wait',
+            address: LIST,
+            waitKind: 'queue_receive',
+            ordering: 'priority',
+            ownerKind: 'tcb',
+          },
+        ],
+        suspendedList: LIST,
+      }).join(),
+    ).toMatch(/suspendedList repeats/);
+    expect(
+      errors({
+        eventLists: [
+          { name: 'queue.wait', address: 1, waitKind: 'queue_receive', ordering: 'priority', ownerKind: 'tcb' },
+          { name: 'queue.wait', address: 2, waitKind: 'queue_receive', ordering: 'priority', ownerKind: 'tcb' },
+        ],
+      }).join(),
+    ).toMatch(/repeats name queue\.wait/);
     expect(
       errors({
         delayedLists: [

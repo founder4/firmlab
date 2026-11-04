@@ -68,8 +68,10 @@ export const MAX_LIST_ITEMS = 256;
 export const MAX_READY_LISTS = 64;
 /** `xDelayedTaskList1` and `xDelayedTaskList2`: `tasks.c` declares exactly two. */
 export const MAX_DELAYED_LISTS = 2;
+/** Operator-named ordered queue/semaphore wait lists; bounded independently from kernel-global state lists. */
+export const MAX_EVENT_LISTS = 64;
 /** A list label is an audit-trail string, not free text: a C identifier with an optional index, kept short. */
-const LIST_NAME = /^[A-Za-z_][A-Za-z0-9_]*(\[\d+\])?$/;
+const LIST_NAME = /^[A-Za-z_][A-Za-z0-9_]*(\[\d+\])?(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
 const MAX_LIST_NAME = 64;
 /** The persisted request contract. Addresses are plain numbers (target address space, not buffer offsets). */
 export interface RtosTaskSnapshotInput {
@@ -103,6 +105,16 @@ export interface RtosTaskSnapshotInput {
      * pointers in the snapshot, can say which is which. Unnamed lists default to `xDelayedTaskList<n>`.
      */
     delayedLists?: { name?: string; address: number | null }[];
+    /** Caller-resolved ordered wait-list addresses inside queues/semaphores. EventGroup lists are not supported. */
+    eventLists?: {
+      name: string;
+      address: number | null;
+      waitKind: 'queue_receive' | 'queue_send';
+      /** Explicit operator declaration: rejects EventGroup/listINSERT_END semantics. */
+      ordering: 'priority';
+      /** Explicit operator declaration: configUSE_CO_ROUTINES=0, so pvOwner is a TCB rather than a CRCB. */
+      ownerKind: 'tcb';
+    }[];
     /** `xSuspendedTaskList`. Omitted → not walked; null → a `missing_symbol` lane. */
     suspendedList?: number | null;
     /** `xPendingReadyList`. Omitted → not walked; null → a `missing_symbol` lane. */
@@ -123,6 +135,7 @@ export interface ValidatedSnapshot {
   topReadyPriority?: { address: number | null; representation: FreeRtosTopReadyRepresentation };
   /** Each absent field means "not asked", which is different from a null address ("asked, not resolved"). */
   delayedLists?: FreeRtosNamedList[];
+  eventLists?: FreeRtosNamedList[];
   suspendedList?: number | null;
   pendingReadyList?: number | null;
   terminatedList?: number | null;
@@ -192,7 +205,13 @@ export interface RtosTaskSnapshotResult {
     useMiniListItem?: boolean;
     useListDataIntegrityCheckBytes?: boolean;
   };
-  limits: { maxSnapshotBytes: number; maxListItems: number; maxReadyLists: number; maxDelayedLists?: number };
+  limits: {
+    maxSnapshotBytes: number;
+    maxListItems: number;
+    maxReadyLists: number;
+    maxDelayedLists?: number;
+    maxEventLists?: number;
+  };
   currentTask: RtosCurrentTaskLane;
   readyLists: RtosReadyListLane[];
   /** Totals cover EVERY lane walked — ready and named alike. */
@@ -206,6 +225,8 @@ export interface RtosTaskSnapshotResult {
   };
   /** Present only when the request named delayed lists. */
   delayedLists?: RtosNamedListLane[];
+  /** Optional forever: older persisted jobs predate caller-named ordered queue/semaphore wait lists. */
+  eventLists?: RtosNamedListLane[];
   suspendedList?: RtosNamedListLane;
   pendingReadyList?: RtosNamedListLane;
   terminatedList?: RtosNamedListLane;
@@ -213,10 +234,12 @@ export interface RtosTaskSnapshotResult {
   unwalkedKinds?: FreeRtosListKind[];
   /**
    * TCBs found on more than one state list (ready, delayed, suspended, terminated). A task's `xStateListItem` is
-   * on one list at a time, so this is a torn or inconsistent snapshot. The pending-ready list is excluded: it holds
-   * `xEventListItem`, and a task on it legitimately still sits on its delayed or suspended list.
+   * on one list at a time, so this is a torn or inconsistent snapshot. Pending-ready and event lists are excluded:
+   * they hold `xEventListItem`, and a task on one legitimately still sits on its delayed or suspended state list.
    */
   tcbsOnSeveralLists?: number[];
+  /** TCBs whose one `xEventListItem` appears on multiple ordered wait/pending lists; necessarily inconsistent. */
+  tcbsOnSeveralEventLists?: number[];
   /** Present only when the ready lists were declared as the `pxReadyTasksLists` array. */
   readyListArray?: ReadyListArrayInfo;
   /** Optional forever: older persisted jobs predate the scalar/list reconciliation. */
@@ -405,6 +428,57 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
     }
   }
 
+  let eventLists: FreeRtosNamedList[] | undefined;
+  const events = symbols.eventLists;
+  if (events !== undefined) {
+    if (!Array.isArray(events)) errors.push('symbols.eventLists must be an array');
+    else if (events.length > MAX_EVENT_LISTS)
+      errors.push(`symbols.eventLists holds ${events.length}; the cap is ${MAX_EVENT_LISTS}`);
+    else {
+      eventLists = [];
+      const names = new Set<string>();
+      events.forEach((l, i) => {
+        if (!isRecord(l)) {
+          errors.push(`symbols.eventLists[${i}] must declare name and address`);
+          return;
+        }
+        if (typeof l.name !== 'string' || l.name.length > MAX_LIST_NAME || !LIST_NAME.test(l.name)) {
+          errors.push(
+            `symbols.eventLists[${i}].name must be a C identifier or object.member path of at most ${MAX_LIST_NAME} characters`,
+          );
+          return;
+        }
+        if (names.has(l.name)) errors.push(`symbols.eventLists[${i}] repeats name ${l.name}`);
+        names.add(l.name);
+        if (l.ordering !== 'priority')
+          errors.push(
+            `symbols.eventLists[${i}].ordering must be declared as 'priority' (EventGroup lists are unsupported)`,
+          );
+        if (l.ownerKind !== 'tcb')
+          errors.push(`symbols.eventLists[${i}].ownerKind must be declared as 'tcb' (configUSE_CO_ROUTINES=0)`);
+        if (l.waitKind !== 'queue_receive' && l.waitKind !== 'queue_send')
+          errors.push(`symbols.eventLists[${i}].waitKind must be 'queue_receive' or 'queue_send'`);
+        if (
+          (l.name.endsWith('.xTasksWaitingToReceive') && l.waitKind !== 'queue_receive') ||
+          (l.name.endsWith('.xTasksWaitingToSend') && l.waitKind !== 'queue_send')
+        )
+          errors.push(`symbols.eventLists[${i}].waitKind disagrees with member name ${l.name}`);
+        if (l.address !== null && !isAddr(l.address)) {
+          errors.push(`symbols.eventLists[${i}].address must be an address or null`);
+          return;
+        }
+        const address = l.address as number | null;
+        claim(`symbols.eventLists[${i}]`, address);
+        eventLists?.push({
+          kind: 'event',
+          name: l.name,
+          address,
+          ...(l.waitKind === 'queue_receive' || l.waitKind === 'queue_send' ? { waitKind: l.waitKind } : {}),
+        });
+      });
+    }
+  }
+
   const single = (field: 'suspendedList' | 'pendingReadyList' | 'terminatedList'): number | null | undefined => {
     const v = symbols[field];
     if (v === undefined || v === null) return v;
@@ -437,6 +511,7 @@ export function validateRtosTaskSnapshot(body: unknown): SnapshotValidation {
       ...(readyListArray !== undefined ? { readyListArray } : {}),
       ...(topReadyPriority !== undefined ? { topReadyPriority } : {}),
       ...(delayedLists !== undefined ? { delayedLists } : {}),
+      ...(eventLists !== undefined ? { eventLists } : {}),
       ...(suspendedList !== undefined ? { suspendedList } : {}),
       ...(pendingReadyList !== undefined ? { pendingReadyList } : {}),
       ...(terminatedList !== undefined ? { terminatedList } : {}),
@@ -475,6 +550,7 @@ const KIND_LABEL: Record<StateKind, string> = {
   delayed_overflow: 'overflow-delayed',
   suspended: 'suspended',
   pending: 'pending-ready',
+  event: 'queue/semaphore-wait',
   terminated: 'waiting-termination',
 };
 
@@ -529,15 +605,20 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
     return { ...r, ...listBytes(r, s.layout) };
   };
   const delayedLists = s.delayedLists?.map(walk);
+  const eventLists = s.eventLists?.map(walk);
   const suspendedList =
     s.suspendedList === undefined ? undefined : walk({ kind: 'suspended', address: s.suspendedList });
   const pendingReadyList =
     s.pendingReadyList === undefined ? undefined : walk({ kind: 'pending', address: s.pendingReadyList });
   const terminatedList =
     s.terminatedList === undefined ? undefined : walk({ kind: 'terminated', address: s.terminatedList });
-  const named = [...(delayedLists ?? []), suspendedList, pendingReadyList, terminatedList].filter(
-    (l): l is RtosNamedListLane => l !== undefined,
-  );
+  const named = [
+    ...(delayedLists ?? []),
+    ...(eventLists ?? []),
+    suspendedList,
+    pendingReadyList,
+    terminatedList,
+  ].filter((l): l is RtosNamedListLane => l !== undefined);
   const lists: FreeRtosTaskListResult[] = [...readyLists, ...named];
   const topReadyPriority = s.topReadyPriority
     ? {
@@ -578,7 +659,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
 
   // Per-kind counts, in tasks.c order, for every non-ready kind the request named.
   const walkedKinds = new Set(named.map((l) => l.kind));
-  const perKind = (['delayed', 'delayed_overflow', 'suspended', 'pending', 'terminated'] as const)
+  const perKind = (['delayed', 'delayed_overflow', 'suspended', 'pending', 'event', 'terminated'] as const)
     .filter((k) => walkedKinds.has(k))
     .map((k) => `${named.filter((l) => l.kind === k).reduce((n, l) => n + l.completed, 0)} ${KIND_LABEL[k]}`);
   const counted = `${readyTasks} ready task record(s)${perKind.length > 0 ? ` (plus ${perKind.join(', ')})` : ''}`;
@@ -592,17 +673,26 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
   ];
 
   const onList = new Map<number, number>();
-  for (const l of [...readyLists, ...named.filter((n) => n.kind !== 'pending')])
+  for (const l of [...readyLists, ...named.filter((n) => n.kind !== 'pending' && n.kind !== 'event')])
     for (const t of new Set(l.tasks.map((x) => x.tcbAddress))) onList.set(t, (onList.get(t) ?? 0) + 1);
   const tcbsOnSeveralLists = [...onList].filter(([, n]) => n > 1).map(([t]) => t);
+  const onEventList = new Map<number, number>();
+  for (const l of [...(eventLists ?? []), ...(pendingReadyList ? [pendingReadyList] : [])])
+    for (const t of new Set(l.tasks.map((x) => x.tcbAddress))) onEventList.set(t, (onEventList.get(t) ?? 0) + 1);
+  const tcbsOnSeveralEventLists = [...onEventList].filter(([, n]) => n > 1).map(([t]) => t);
   const torn =
     tcbsOnSeveralLists.length > 0
       ? ` ${tcbsOnSeveralLists.length} TCB(s) appear on more than one state list, ${TORN}`
+      : '';
+  const tornEvent =
+    tcbsOnSeveralEventLists.length > 0
+      ? ` ${tcbsOnSeveralEventLists.length} TCB(s) appear on more than one xEventListItem list, ${TORN}`
       : '';
   const inconsistent = [...readyLists, ...named].filter(
     (l) =>
       (l.containerMismatches ?? 0) > 0 ||
       ('orderViolations' in l && l.orderViolations > 0) ||
+      ('valueViolations' in l && (l.valueViolations ?? 0) > 0) ||
       (l.integrityChecks?.mismatches ?? 0) > 0,
   ).length;
   const anomalies =
@@ -641,12 +731,15 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
         `declared by the operator; sizeof(List_t)=${array.listSize} cross-checked against the walked layout` +
         `${crossChecked}${countUnchecked})`
       : READY_SCOPE;
-  const scope = `Only the supplied lists in the supplied bytes were walked; ${notRead}${readyScope}${SNAPSHOT_SCOPE}`;
+  const eventScope = eventLists?.length
+    ? `; only the ${eventLists.length} caller-named ordered queue/semaphore wait list(s) were walked; EventGroup unordered lists were not interpreted`
+    : '; no ordered queue/semaphore wait lists were supplied or discovered; EventGroup unordered lists were not interpreted';
+  const scope = `Only the supplied lists in the supplied bytes were walked; ${notRead}${readyScope}${eventScope}${SNAPSHOT_SCOPE}`;
   const summary =
     coverage === 'complete'
-      ? `${counted} across ${lists.length} list(s), every lane walked to its sentinel.${discarded}${torn}${anomalies}${integrityAnomalies}${topReadyAnomaly} ${scope}`
+      ? `${counted} across ${lists.length} list(s), every lane walked to its sentinel.${discarded}${torn}${tornEvent}${anomalies}${integrityAnomalies}${topReadyAnomaly} ${scope}`
       : `${counted} found, but ${incomplete.join('; ')} — this is not a complete task set, and an ` +
-        `empty result here is not "no tasks".${discarded}${torn}${anomalies}${integrityAnomalies}${topReadyAnomaly} ${scope}`;
+        `empty result here is not "no tasks".${discarded}${torn}${tornEvent}${anomalies}${integrityAnomalies}${topReadyAnomaly} ${scope}`;
 
   const all = [currentTask, ...readyLists, ...named, ...(topReadyPriority ? [topReadyPriority] : [])];
   return {
@@ -667,6 +760,7 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
       maxListItems: MAX_LIST_ITEMS,
       maxReadyLists: MAX_READY_LISTS,
       maxDelayedLists: MAX_DELAYED_LISTS,
+      maxEventLists: MAX_EVENT_LISTS,
     },
     currentTask,
     readyLists,
@@ -678,12 +772,14 @@ export function runRtosTaskSnapshot(s: ValidatedSnapshot): RtosTaskSnapshotResul
       integrityChecks,
     },
     ...(delayedLists ? { delayedLists } : {}),
+    ...(eventLists ? { eventLists } : {}),
     ...(suspendedList ? { suspendedList } : {}),
     ...(pendingReadyList ? { pendingReadyList } : {}),
     ...(terminatedList ? { terminatedList } : {}),
     unwalkedKinds,
     ...(topReadyPriority ? { topReadyPriority } : {}),
     ...(tcbsOnSeveralLists.length > 0 ? { tcbsOnSeveralLists } : {}),
+    ...(tcbsOnSeveralEventLists.length > 0 ? { tcbsOnSeveralEventLists } : {}),
     ...(array
       ? {
           readyListArray: {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuilds the default fixture or the eight supported 16/32-bit list-layout variants in a disposable container.
+# Rebuilds the default fixture or all supported 16/32/64-bit list-layout variants in a disposable container.
 # Network is used ONLY to fetch the pinned toolchain package and FreeRTOS-Kernel tag. Matrix outputs should point
 # OUTPUT_DIR at a temporary directory; only the historical default build writes into the fixture directory.
 set -euo pipefail
@@ -10,8 +10,8 @@ MATRIX="${MATRIX:-0}"
 USE_MINI_LIST_ITEM="${USE_MINI_LIST_ITEM:-1}"
 USE_LIST_DATA_INTEGRITY_CHECK_BYTES="${USE_LIST_DATA_INTEGRITY_CHECK_BYTES:-0}"
 TICK_WIDTH="${TICK_WIDTH:-32}"
-if [ "$TICK_WIDTH" != 16 ] && [ "$TICK_WIDTH" != 32 ]; then
-  echo "TICK_WIDTH must be 16 or 32: the pinned FreeRTOS V11.1.0 ARM_CM3 port rejects 64" >&2
+if [ "$TICK_WIDTH" != 16 ] && [ "$TICK_WIDTH" != 32 ] && [ "$TICK_WIDTH" != 64 ]; then
+  echo "TICK_WIDTH must be 16, 32 or 64" >&2
   exit 2
 fi
 mkdir -p "$OUTPUT_DIR"
@@ -27,11 +27,28 @@ docker run --rm -v "$here:/fx:ro" -v "$OUTPUT_DIR:/out" -w /tmp \
     mini="$2"
     integrity="$3"
     tick_width="$4"
-    arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -O1 -g -ffreestanding -fno-common -nostdlib -Wall \
-      -DconfigUSE_MINI_LIST_ITEM="$mini" -DconfigUSE_LIST_DATA_INTEGRITY_CHECK_BYTES="$integrity" \
-      -DconfigTICK_TYPE_WIDTH_IN_BITS="TICK_TYPE_WIDTH_${tick_width}_BITS" \
-      -I/fx -I"$K/include" -I"$K/portable/GCC/ARM_CM3" \
-      /fx/startup.c /fx/main.c "$K/tasks.c" "$K/list.c" "$K/queue.c" "$K/portable/GCC/ARM_CM3/port.c" "$K/portable/MemMang/heap_4.c" \
+    obj_dir="/tmp/obj-$name"
+    mkdir -p "$obj_dir"
+    if [ "$tick_width" = 64 ]; then
+      cpu=cortex-m4
+      port=ARM_CM4F
+      port_float_flags="-mfpu=fpv4-sp-d16 -mfloat-abi=softfp"
+    else
+      cpu=cortex-m3
+      port=ARM_CM3
+      port_float_flags=""
+    fi
+    common="-mcpu=$cpu -mthumb -O1 -g -ffreestanding -fno-common -nostdlib -Wall -DconfigUSE_MINI_LIST_ITEM=$mini -DconfigUSE_LIST_DATA_INTEGRITY_CHECK_BYTES=$integrity -DconfigTICK_TYPE_WIDTH_IN_BITS=TICK_TYPE_WIDTH_${tick_width}_BITS -I/fx -I$K/include -I$K/portable/GCC/$port"
+    arm-none-eabi-gcc $common -c /fx/startup.c -o "$obj_dir/startup.o"
+    arm-none-eabi-gcc $common -c /fx/main.c -o "$obj_dir/main.o"
+    arm-none-eabi-gcc $common -c "$K/tasks.c" -o "$obj_dir/tasks.o"
+    arm-none-eabi-gcc $common -c "$K/list.c" -o "$obj_dir/list.o"
+    arm-none-eabi-gcc $common -c "$K/queue.c" -o "$obj_dir/queue.o"
+    arm-none-eabi-gcc $common -c "$K/portable/MemMang/heap_4.c" -o "$obj_dir/heap_4.o"
+    # ARM_CM4F enables the FPU in xPortStartScheduler. Only port.c may contain softfp instructions before then;
+    # compiling startup/kernel/application softfp caused Renode NOCP in vListInitialise before that enablement.
+    arm-none-eabi-gcc $common $port_float_flags -c "$K/portable/GCC/$port/port.c" -o "$obj_dir/port.o"
+    arm-none-eabi-gcc -mcpu="$cpu" -mthumb -mfloat-abi=soft -nostdlib "$obj_dir"/*.o \
       -T /fx/link.ld -Wl,--gc-sections -lgcc -o "/out/$name.elf"
     info="/out/$name.build-info.txt"
     {
@@ -42,12 +59,15 @@ docker run --rm -v "$here:/fx:ro" -v "$OUTPUT_DIR:/out" -w /tmp \
       echo "configUSE_MINI_LIST_ITEM=$mini"
       echo "configUSE_LIST_DATA_INTEGRITY_CHECK_BYTES=$integrity"
       echo "configTICK_TYPE_WIDTH_IN_BITS=$tick_width"
+      echo "port=$port"
+      echo "application_float_abi=soft"
+      echo "port_float_abi=$([ "$tick_width" = 64 ] && echo softfp || echo soft)"
       echo "elf_sha256=$(sha256sum "/out/$name.elf" | cut -d" " -f1)"
     } > "$info"
     cat "$info"
   }
   if [ "$MATRIX" = 1 ]; then
-    for tick_width in 16 32; do
+    for tick_width in 16 32 64; do
       for mini in 0 1; do
         for integrity in 0 1; do
           build_variant "freertos-stm32f4-tick${tick_width}-mini${mini}-integrity${integrity}" "$mini" "$integrity" "$tick_width"
