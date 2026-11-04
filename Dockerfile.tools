@@ -96,7 +96,9 @@ RUN bash -c 'set -o pipefail; apt-get update && apt-get install -y --no-install-
 # Match the QEMU user target to the image architecture so the runtime smoke exercises a real binary. Other
 # firmware architectures still degrade explicitly: one afl-qemu-trace build cannot execute every guest ISA.
 ARG AFLPP_REF=dbaf11913c1b2702dee5b4d3dcfffd52f1defe50
-RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev python3 flex bison make gcc g++ && rm -rf /var/lib/apt/lists/* \
+RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev python3 flex bison make gcc g++ \
+       gcc-mipsel-linux-gnu gcc-mips-linux-gnu libc6-dev-mipsel-cross libc6-dev-mips-cross \
+    && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL "https://codeload.github.com/AFLplusplus/AFLplusplus/tar.gz/${AFLPP_REF}" -o /tmp/afl.tar.gz \
     && echo "d5f4f72c830526654bebbc637f6164a93c22d7309ce8ba73979abadc42ce5974  /tmp/afl.tar.gz" | sha256sum -c - \
     && mkdir /afl && tar xzf /tmp/afl.tar.gz -C /afl --strip-components=1 && rm /tmp/afl.tar.gz \
@@ -104,7 +106,15 @@ RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git ni
     && case "${TARGETARCH}" in amd64) qemu_target=x86_64 ;; arm64) qemu_target=aarch64 ;; *) exit 1 ;; esac \
     && (cd /afl/qemu_mode && CPU_TARGET="$qemu_target" ./build_qemu_support.sh) \
     && cp /afl/afl-fuzz /afl/afl-qemu-trace /afl/afl-showmap /afl/afl-tmin /usr/local/bin/ \
-    && afl-fuzz --version && afl-qemu-trace --version | head -1' \
+    && mv /afl/qemu_mode/qemuafl/build "/afl/qemu_mode/qemuafl/build-$qemu_target" \
+    && for guest in mips mipsel; do \
+         (cd /afl/qemu_mode && CPU_TARGET="$guest" ./build_qemu_support.sh) \
+         && cp /afl/afl-qemu-trace "/usr/local/bin/afl-qemu-trace-$guest" \
+         && mv /afl/qemu_mode/qemuafl/build "/afl/qemu_mode/qemuafl/build-$guest"; \
+       done \
+    && mv "/afl/qemu_mode/qemuafl/build-$qemu_target" /afl/qemu_mode/qemuafl/build \
+    && afl-fuzz --version && afl-qemu-trace --version | head -1 \
+    && afl-qemu-trace-mips --version | head -1 && afl-qemu-trace-mipsel --version | head -1' \
     || echo "AFL++ optional build failed — fuzzing provider degrades honestly"
 ENV AFL_PATH=/afl
 
@@ -120,6 +130,25 @@ RUN bash -c 'apt-get update && apt-get install -y --no-install-recommends git bu
     && make -C /tmp/libnvram CC=aarch64-linux-gnu-gcc && cp /tmp/libnvram/libnvram.so /opt/libnvram/libnvram-arm64.so \
     && rm -rf /tmp/libnvram /var/lib/apt/lists/*' \
     || echo "libnvram optional build failed — chroot-service rung degrades honestly"
+
+# === AFL++ desocket preload — MIPSel/uClibc, opt-in only. ===
+# Link with no glibc dependency and a tiny link-time libdl.so.0 stub: the runtime NEEDED entry loads the guest's
+# real uClibc libdl. The source fallback adds libc.so.0, and daemon() is neutralized so a target cannot detach from
+# AFL before accept(). Architecture matching is still insufficient proof: fuzz.ts requires the operator to set
+# FIRMLAB_DESOCK_ABI_COMPATIBLE=1 after checking the selected rootfs ABI, and never auto-loads this asset.
+RUN bash -c 'set -e; mkdir -p /opt/desock; \
+    cp /afl/utils/libaflppdesock/libaflppdesock.c /tmp/libaflppdesock-uclibc.c; \
+    sed -i "s/if (!(handle = dlopen(\"libc.so.6\", RTLD_NOW)))/if (!(handle = dlopen(\"libc.so.0\", RTLD_NOW)))/" /tmp/libaflppdesock-uclibc.c; \
+    printf "\nint daemon(int nochdir, int noclose) { (void)nochdir; (void)noclose; return 0; }\n" >> /tmp/libaflppdesock-uclibc.c; \
+    printf "void firmlab_libdl_marker(void) {}\n" > /tmp/libdl-stub.c; \
+    mipsel-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libdl.so.0 -o /tmp/libdl.so.0 /tmp/libdl-stub.c; \
+    mipsel-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,--no-as-needed -L/tmp \
+      -o /opt/desock/libaflppdesock-mipsel-uclibc.so /tmp/libaflppdesock-uclibc.c -l:libdl.so.0; \
+    readelf -h /opt/desock/libaflppdesock-mipsel-uclibc.so | grep -q "Machine:.*MIPS"; \
+    readelf -d /opt/desock/libaflppdesock-mipsel-uclibc.so | grep -q "Shared library: \[libdl.so.0\]"; \
+    ! readelf -d /opt/desock/libaflppdesock-mipsel-uclibc.so | grep -q "libc.so.6"; \
+    rm -f /tmp/libaflppdesock-uclibc.c /tmp/libdl-stub.c /tmp/libdl.so.0' \
+    || echo "MIPSel/uClibc desock optional build failed — network fuzzing degrades honestly"
 # Kernels live in GitHub RELEASES (the old raw-repo path 404s). Asset names: vmlinux.mipsel.4 / vmlinux.mipseb.4 /
 # zImage.armel / vmlinux.armel under FirmAE_kernel-v4.1 v1.0.
 RUN bash -c 'mkdir -p /opt/firmae/kernels && cd /opt/firmae/kernels \

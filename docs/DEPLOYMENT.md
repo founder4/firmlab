@@ -166,7 +166,9 @@ Los kernels firmadyne **no se llaman como nuestras arquitecturas**: `vmlinux.mip
 | `FIRMLAB_FWHUNT_MODULE_BATCH` | Índice cero-based del lote FwHunt para ejecuciones directas/autónomas (por defecto 0). La ruta HTTP acepta `{"moduleBatch": n}` y, si se omite, reanuda el lote incompleto o avanza al primero pendiente sin aumentar el cap ni el presupuesto temporal; `{"restart": true}` descarta la acumulación anterior y vuelve al lote cero. Sólo acumula lotes si coinciden los hashes del corpus y del ranking, el denominador y la geometría del lote. Un lote con módulos fallidos permanece incompleto y se reintenta. |
 | `FIRMLAB_RESEARCH_CACHE_TTL_HOURS` | Frescura de la caché de advisories (por defecto 24). Una entrada caduca se vuelve a consultar, nunca se sirve. |
 | `FIRMLAB_ANGR_PYTHON` · `FIRMLAB_FWHUNT_PYTHON` | Intérpretes de sus venv propios. angr y fwhunt-scan **no** pueden compartir cierre de dependencias con chipsec. |
-| `FIRMLAB_UEFI_IOC` · `FIRMLAB_DESOCK` | Feeds/preloads opcionales. Vacíos por defecto a propósito: nada fabricado. |
+| `FIRMLAB_UEFI_IOC` | Feed IOC opcional. Vacío por defecto a propósito. |
+| `FIRMLAB_DESOCK` | Ruta explícita al preload para el harness de red. La imagen incluye `/opt/desock/libaflppdesock-mipsel-uclibc.so`, pero FirmLab no lo selecciona automáticamente: el operador debe elegirlo para un rootfs MIPSel/uClibc comprobado. |
+| `FIRMLAB_DESOCK_ABI_COMPATIBLE` | Debe ser exactamente `1` para cargar `FIRMLAB_DESOCK`; afirma que el operador comprobó ISA, loader y libc del rootfs. Sin esa afirmación, el socket queda declarado como no fuzzed. |
 | `FIRMLAB_CAPTURE_AGENT_TOKEN` | Sin él, el canal del agente LAN está cerrado (401). |
 | `NVD_API_KEY` | Sube el tope de consultas NVD de 6 a 40 y elimina la espera de cortesía de 6,5 s. |
 | `GRYPE_DB_CACHE_DIR` | Dónde vive la base de vulnerabilidades de grype. Por defecto `$FIRMLAB_DATA_DIR/grype-db` — bajo el volumen de datos, no en `~/.cache`, para que sobreviva a un redespliegue. Es la de grype, respetada tal cual si el operador la fija. |

@@ -226,8 +226,18 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   stdin mediante el preload con puerto 8080, mientras puerto ausente/erróneo agotó el tiempo y un runtime Python
   cayó, evidencia de que ISA coincidente no demuestra ABI compatible. FirmLab ya no carga el preload ni afirma
   canal socket sin puerto 1..65535 explícito y `FIRMLAB_DESOCK_ABI_COMPATIBLE=1`; propaga `DESOCK_PORT`, fork y
-  cierre al guest, y la UI pide el puerto sólo para el harness network.)* Faltan preloads preconstruidos y
-  comprobados para cada pareja arquitectura/libc, evidencia sobre un daemon real de firmware y fuzzing
+  cierre al guest, y la UI pide el puerto sólo para el harness network. Avance real 2026-11-03: sobre el `httpd`
+  MIPSel/uClibc de DVRF, un preload sin dependencia glibc y con `libdl.so.0` interceptó bind/listen/accept/fdopen
+  para puerto 80 y consumió stdin; el control con puerto 81 agotó cinco segundos sin accept. La imagen de tools
+  construye ahora trazas AFL MIPS/MIPSel y empaqueta ese preload MIPSel/uClibc, siempre opt-in y con afirmación ABI
+  explícita. La imagen local `firmlab-tools:research` terminó de construirse el 2026-11-03
+  (`sha256:025a1416040e…`). Validación 2026-11-04, sin red y con `/data` en sólo lectura: los tres trazadores
+  respondieron para x86_64/MIPS/MIPSel; el preload era ELF32 MIPS little-endian, dependía de `libdl.so.0` y no de
+  `libc.so.6`; `apps/api/scripts/fuzz-dvrf-desock-e2e.sh` pasó con puerto 80 y el control 81 agotó el tiempo sin
+  `accept`. Una corrida AFL de 15 s sobre el mismo daemon completó 4.389 ejecuciones (292,52/s), amplió el corpus a
+  34 entradas y guardó 0 crashes. Ese cero sólo describe este presupuesto y estas semillas; no declara limpio el
+  daemon.)* Faltan parejas
+  arquitectura/libc adicionales, campañas más largas/reproducibles sobre daemons reales y fuzzing
   stateful/full-system (Fuzzware/µEmu), que sigue siendo la frontera RTOS.
 - [x] Cross-binary dataflow: el primer scaffold acotado enlaza escrituras y lecturas de la misma clave literal
   UCI/NVRAM entre artefactos distintos y un sink del consumidor, separa namespaces y excluye autoenlaces. Es una
