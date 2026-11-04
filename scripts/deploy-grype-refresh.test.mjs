@@ -279,6 +279,18 @@ test('the Debian 13 recipe takes exactly the retained and Renode images from loc
     dockerfile,
     /apt-get install -y --no-install-recommends[\s\S]*binutils-arm-none-eabi[\s\S]*rm -rf \/var\/lib\/apt\/lists\/\*/,
   );
+  assert.match(dockerfile, /gcc-mipsel-linux-gnu libc6-dev-mipsel-cross/);
+  assert.match(dockerfile, /for guest in mips mipsel; do[\s\S]*CPU_TARGET="\$guest"/);
+  assert.match(
+    dockerfile,
+    /COPY --from=aflbuild \/out\/afl-qemu-trace-mips \/out\/afl-qemu-trace-mipsel \/usr\/local\/bin\//,
+  );
+  assert.match(
+    dockerfile,
+    /COPY --from=aflbuild \/out\/libaflppdesock-mipsel-uclibc\.so \/opt\/desock\/libaflppdesock-mipsel-uclibc\.so/,
+  );
+  assert.match(dockerfile, /Shared library: \\\[libdl\.so\.0\\\]/);
+  assert.match(dockerfile, /grep -q 'libc\.so\.6'/);
   // Every other base is public and digest-pinned, so a remote resolution of it is content-addressed.
   for (const [, ref] of dockerfile.matchAll(/^FROM (\S+)/gm)) {
     assert.ok(/^\$\{[A-Z_]+\}$/.test(ref) || /@sha256:[0-9a-f]{64}$/.test(ref), ref);
