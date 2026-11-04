@@ -327,10 +327,13 @@ export const shell = {
       directCallEdges: 'Direct call edges',
       unresolvedCalls: 'Unresolved / indirect calls',
       outOfMapCalls: 'Resolved calls outside mapped bytes',
+      decodeFailures: 'Reachable targets not decoded',
       startupCopyAttempted: 'CRT0 copy-map recovery attempted',
       startupCopyRegions: 'Recovered flash→SRAM regions',
       picobinGraphTruncated:
-        'Coverage reached a configured function, depth or edge bound; this is not a whole-image call graph.',
+        'Coverage was truncated by a configured bound or a recorded decoder failure; this is not a whole-image call graph.',
+      picobinDecodeFailure: (address: string, classification: string, bytes: string): string =>
+        `${address} · ${classification} · bytes ${bytes}`,
       startupCopyNotRecovered:
         'CRT0 copy-map recovery ran but did not validate a unique bounded table; SRAM targets remain unmapped.',
       startupCopyRegion: (source: string, offset: string, runtime: string, size: string): string =>

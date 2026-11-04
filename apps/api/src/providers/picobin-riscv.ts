@@ -22,6 +22,7 @@ const INSTRUCTION_CAP = 256;
 const REACHABLE_FUNCTION_CAP = 8;
 const CALL_DEPTH_CAP = 4;
 const CALL_EDGE_CAP = 32;
+const DECODE_FAILURE_CAP = 16;
 
 export interface PicobinBasicBlock {
   address: number;
@@ -54,6 +55,15 @@ export interface PicobinCallEdge {
   target: number;
 }
 
+export interface PicobinDecodeFailure {
+  address: number;
+  fileOffset: number;
+  classification: 'unsupported-instruction' | 'tool-error';
+  reason: string;
+  /** At most the first eight mapped bytes, for bounded reproducibility. */
+  bytesHex?: string;
+}
+
 export interface PicobinRiscvDisassembly {
   attempted: boolean;
   available: boolean;
@@ -77,6 +87,8 @@ export interface PicobinRiscvDisassembly {
   unresolvedCallsitesTotal?: number;
   outOfMapCallsitesTotal?: number;
   callGraphTruncated?: boolean;
+  decodeFailuresTotal?: number;
+  decodeFailures?: PicobinDecodeFailure[];
   startupCopyTable?: RiscvStartupCopyTable | null;
   startupCopyTableAttempted?: boolean;
   findings: FindingDraft[];
@@ -515,6 +527,24 @@ export function runPicobinRiscvDisassembly(
   let callGraphTruncated =
     parsed.basicBlocks.length !== parsed.basicBlocksTotal || parsed.instructions.length !== parsed.instructionsTotal;
   let graphStopReason = '';
+  let decodeFailuresTotal = 0;
+  const decodeFailures: PicobinDecodeFailure[] = [];
+  const recordDecodeFailure = (
+    next: { address: number; mapping: PicobinFlashMapping },
+    classification: PicobinDecodeFailure['classification'],
+    reason: string,
+  ): void => {
+    decodeFailuresTotal++;
+    if (decodeFailures.length >= DECODE_FAILURE_CAP) return;
+    const bytes = imageBytes?.subarray(next.mapping.entryFileOffset, next.mapping.entryFileOffset + 8);
+    decodeFailures.push({
+      address: next.address,
+      fileOffset: next.mapping.entryFileOffset,
+      classification,
+      reason,
+      ...(bytes && bytes.length > 0 ? { bytesHex: Buffer.from(bytes).toString('hex') } : {}),
+    });
+  };
 
   const enqueueCalls = (caller: number, depth: number, instructions: PicobinInstruction[]): void => {
     for (const instruction of instructions) {
@@ -559,12 +589,14 @@ export function runPicobinRiscvDisassembly(
     } catch (err) {
       callGraphTruncated = true;
       graphStopReason = radareFailureReason(err);
-      break;
+      recordDecodeFailure(next, 'tool-error', graphStopReason);
+      continue;
     }
     if (!decoded) {
       callGraphTruncated = true;
       graphStopReason = `radare2 could not decode the reachable target 0x${next.address.toString(16)}`;
-      break;
+      recordDecodeFailure(next, 'unsupported-instruction', graphStopReason);
+      continue;
     }
     reachableFunctions.push({
       address: next.address,
@@ -584,7 +616,7 @@ export function runPicobinRiscvDisassembly(
   const reason =
     `Decoded a bounded RISC-V call graph from the declared entrypoint: ${reachableFunctions.length} function(s), ` +
     `${callEdges.length} followed direct edge(s), ${outOfMapCallsitesTotal} resolved target(s) outside mapped bytes, ` +
-    `${unresolvedCallsitesTotal} unresolved/indirect callsite(s)` +
+    `${unresolvedCallsitesTotal} unresolved/indirect callsite(s), ${decodeFailuresTotal} reachable target decode failure(s)` +
     `${callGraphTruncated ? `; coverage truncated${graphStopReason ? ` (${graphStopReason})` : ' by configured limits'}` : ''}.`;
   const finding: FindingDraft = {
     kind: 'rtos-picobin-entry-cfg',
@@ -613,6 +645,8 @@ export function runPicobinRiscvDisassembly(
       unresolvedCallsitesTotal,
       outOfMapCallsitesTotal,
       callGraphTruncated,
+      decodeFailuresTotal,
+      decodeFailuresListed: decodeFailures.length,
       startupCopyRegions: startupCopyTable?.regions.length ?? 0,
     },
     rationale:
@@ -635,6 +669,8 @@ export function runPicobinRiscvDisassembly(
     unresolvedCallsitesTotal,
     outOfMapCallsitesTotal,
     callGraphTruncated,
+    decodeFailuresTotal,
+    decodeFailures,
     startupCopyTable,
     startupCopyTableAttempted: imageBytes !== undefined,
     findings: [finding],

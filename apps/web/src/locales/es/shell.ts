@@ -290,10 +290,13 @@ export const shell: Messages['shell'] = {
       directCallEdges: 'Aristas de llamada directa',
       unresolvedCalls: 'Llamadas indirectas / sin resolver',
       outOfMapCalls: 'Llamadas resueltas fuera de los bytes mapeados',
+      decodeFailures: 'Destinos alcanzables no decodificados',
       startupCopyAttempted: 'Recuperación del mapa de copia CRT0 intentada',
       startupCopyRegions: 'Regiones flash→SRAM recuperadas',
       picobinGraphTruncated:
-        'La cobertura alcanzó un límite configurado de funciones, profundidad o aristas; no es un grafo de toda la imagen.',
+        'La cobertura quedó truncada por un límite configurado o un fallo de decodificador registrado; no es un grafo de toda la imagen.',
+      picobinDecodeFailure: (address: string, classification: string, bytes: string): string =>
+        `${address} · ${classification} · bytes ${bytes}`,
       startupCopyNotRecovered:
         'Se intentó recuperar el mapa de copia CRT0, pero no se validó una tabla acotada y única; los destinos SRAM siguen sin mapear.',
       startupCopyRegion: (source: string, offset: string, runtime: string, size: string): string =>

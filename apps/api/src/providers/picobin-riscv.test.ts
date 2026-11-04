@@ -278,6 +278,49 @@ describe('runPicobinRiscvDisassembly', () => {
     });
   });
 
+  it('records an undecodable reachable target and continues with independent queued branches', () => {
+    const bad = ENTRY + 0x100;
+    const good = ENTRY + 0x200;
+    const image = new Uint8Array(FILE_SIZE);
+    image.set([0xb3, 0x16, 0xa0, 0x28, 0xb3, 0x47, 0xf5, 0x20], bad - mapping.baseAddress);
+    const result = runPicobinRiscvDisassembly(
+      '/firmware/pico.bin',
+      picobin,
+      FILE_SIZE,
+      (received) => {
+        const script = received[received.indexOf('-c') + 1] ?? '';
+        if (script.includes(`s 0x${bad.toString(16)};`)) return '[]\n__FIRMLAB_PICOBIN_RISCV_SPLIT__\n{}';
+        if (script.includes(`s 0x${good.toString(16)};`))
+          return r2SingleFunction(good, [{ addr: good, size: 4, opcode: 'ret', type: 'ret' }]);
+        return r2SingleFunction(ENTRY, [
+          { addr: ENTRY, size: 4, opcode: `jal 0x${bad.toString(16)}`, type: 'call', jump: bad },
+          { addr: ENTRY + 4, size: 4, opcode: `jal 0x${good.toString(16)}`, type: 'call', jump: good },
+        ]);
+      },
+      image,
+    );
+
+    expect(result).toMatchObject({
+      reachableFunctions: [{ address: ENTRY }, { address: good }],
+      callEdges: [
+        { caller: ENTRY, callsite: ENTRY, target: bad },
+        { caller: ENTRY, callsite: ENTRY + 4, target: good },
+      ],
+      callGraphTruncated: true,
+      decodeFailuresTotal: 1,
+      decodeFailures: [
+        {
+          address: bad,
+          fileOffset: bad - mapping.baseAddress,
+          classification: 'unsupported-instruction',
+          bytesHex: 'b316a028b347f520',
+        },
+      ],
+    });
+    expect(result?.reason).toContain('1 reachable target decode failure(s)');
+    expect(result?.findings[0]?.evidence).toMatchObject({ decodeFailuresTotal: 1, decodeFailuresListed: 1 });
+  });
+
   it('recovers the CRT0 copy table and follows a flash-backed SRAM target', () => {
     const entry = 0x1000_0020;
     const target = 0x2000_0008;

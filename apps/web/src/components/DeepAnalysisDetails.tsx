@@ -564,6 +564,7 @@ function PicobinDisassemblyDetails({ value }: { value: unknown }): JSX.Element |
   if (!result) return null;
   const functions = Array.isArray(result.reachableFunctions) ? records(result.reachableFunctions) : null;
   const edges = Array.isArray(result.callEdges) ? records(result.callEdges) : null;
+  const decodeFailures = Array.isArray(result.decodeFailures) ? records(result.decodeFailures) : null;
   const copyTable = record(result.startupCopyTable);
   const copyRegions = copyTable && Array.isArray(copyTable.regions) ? records(copyTable.regions) : null;
   const attempted = typeof result.attempted === 'boolean' ? result.attempted : null;
@@ -583,12 +584,29 @@ function PicobinDisassemblyDetails({ value }: { value: unknown }): JSX.Element |
           { label: t.directCallEdges, value: edges ? edges.length.toLocaleString() : t.notRecorded },
           { label: t.unresolvedCalls, value: formatNumber(result.unresolvedCallsitesTotal) },
           { label: t.outOfMapCalls, value: formatNumber(result.outOfMapCallsitesTotal) },
+          { label: t.decodeFailures, value: formatNumber(result.decodeFailuresTotal) },
           { label: t.startupCopyAttempted, value: yesNo(copyAttempted) },
           { label: t.startupCopyRegions, value: copyRegions ? copyRegions.length.toLocaleString() : t.notRecorded },
         ]}
       />
       {text(result.reason) && <p className="deep-data-copy">{text(result.reason)}</p>}
       {result.callGraphTruncated === true && <p className="deep-data-empty">{t.picobinGraphTruncated}</p>}
+      {decodeFailures && decodeFailures.length > 0 && (
+        <div className="deep-data-cards">
+          {decodeFailures.map((failure, index) => (
+            <div className="deep-data-card" key={`${number(failure.address) ?? 'failure'}-${index}`}>
+              <strong className="mono">
+                {t.picobinDecodeFailure(
+                  formatHex(failure.address),
+                  text(failure.classification) ?? t.notRecorded,
+                  text(failure.bytesHex) ?? t.notRecorded,
+                )}
+              </strong>
+              {text(failure.reason) && <p className="deep-data-empty">{text(failure.reason)}</p>}
+            </div>
+          ))}
+        </div>
+      )}
       {copyAttempted === true && copyTable === null && <p className="deep-data-empty">{t.startupCopyNotRecovered}</p>}
       {copyTable && copyRegions && copyRegions.length > 0 && (
         <div className="deep-data-cards">

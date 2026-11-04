@@ -438,6 +438,15 @@ describe('DeepAnalysisDetails', () => {
             callEdges: [{ caller: 0x10000036, target: 0x2000c82c }],
             unresolvedCallsitesTotal: 2,
             outOfMapCallsitesTotal: 0,
+            decodeFailuresTotal: 1,
+            decodeFailures: [
+              {
+                address: 0x100001cc,
+                classification: 'unsupported-instruction',
+                bytesHex: 'b316a028b347f520',
+                reason: 'radare2 could not decode the reachable target 0x100001cc',
+              },
+            ],
             callGraphTruncated: true,
             startupCopyTableAttempted: true,
             startupCopyTable: {
@@ -462,6 +471,7 @@ describe('DeepAnalysisDetails', () => {
     expect(screen.getByText('0x10000036')).toBeInTheDocument();
     expect(screen.getByText(/0x10000114 \(file 0x00000114\) → 0x20000000 · 131,132 bytes/)).toBeInTheDocument();
     expect(screen.getByText(/not a whole-image call graph/)).toBeInTheDocument();
+    expect(screen.getByText(/0x100001cc · unsupported-instruction · bytes b316a028b347f520/)).toBeInTheDocument();
   });
 
   it('keeps legacy PICOBIN results explicitly unrecorded instead of inventing zero coverage', () => {
