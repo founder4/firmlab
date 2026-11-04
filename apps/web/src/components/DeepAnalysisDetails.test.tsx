@@ -439,6 +439,7 @@ describe('DeepAnalysisDetails', () => {
             unresolvedCallsitesTotal: 2,
             outOfMapCallsitesTotal: 0,
             decodeFailuresTotal: 1,
+            decoderSubstitutionsTotal: 3,
             decodeFailures: [
               {
                 address: 0x100001cc,
@@ -472,6 +473,7 @@ describe('DeepAnalysisDetails', () => {
     expect(screen.getByText(/0x10000114 \(file 0x00000114\) → 0x20000000 · 131,132 bytes/)).toBeInTheDocument();
     expect(screen.getByText(/not a whole-image call graph/)).toBeInTheDocument();
     expect(screen.getByText(/0x100001cc · unsupported-instruction · bytes b316a028b347f520/)).toBeInTheDocument();
+    expect(screen.getByText('Exact Zba/Zbs decoder-view substitutions')).toBeInTheDocument();
   });
 
   it('keeps legacy PICOBIN results explicitly unrecorded instead of inventing zero coverage', () => {

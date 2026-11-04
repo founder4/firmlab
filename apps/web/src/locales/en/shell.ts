@@ -328,6 +328,7 @@ export const shell = {
       unresolvedCalls: 'Unresolved / indirect calls',
       outOfMapCalls: 'Resolved calls outside mapped bytes',
       decodeFailures: 'Reachable targets not decoded',
+      decoderSubstitutions: 'Exact Zba/Zbs decoder-view substitutions',
       startupCopyAttempted: 'CRT0 copy-map recovery attempted',
       startupCopyRegions: 'Recovered flash→SRAM regions',
       picobinGraphTruncated:

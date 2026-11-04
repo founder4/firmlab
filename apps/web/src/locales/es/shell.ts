@@ -291,6 +291,7 @@ export const shell: Messages['shell'] = {
       unresolvedCalls: 'Llamadas indirectas / sin resolver',
       outOfMapCalls: 'Llamadas resueltas fuera de los bytes mapeados',
       decodeFailures: 'Destinos alcanzables no decodificados',
+      decoderSubstitutions: 'Sustituciones exactas Zba/Zbs para el decodificador',
       startupCopyAttempted: 'Recuperación del mapa de copia CRT0 intentada',
       startupCopyRegions: 'Regiones flash→SRAM recuperadas',
       picobinGraphTruncated:

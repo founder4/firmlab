@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   parsePicobinRadare2Output,
@@ -319,6 +320,52 @@ describe('runPicobinRiscvDisassembly', () => {
     });
     expect(result?.reason).toContain('1 reachable target decode failure(s)');
     expect(result?.findings[0]?.evidence).toMatchObject({ decodeFailuresTotal: 1, decodeFailuresListed: 1 });
+  });
+
+  it('recovers an exact BSET/SH2ADD target through a temporary decoder view and restores source bytes', () => {
+    const target = ENTRY + 0x100;
+    const image = new Uint8Array(FILE_SIZE);
+    image.set([0xb3, 0x16, 0xa0, 0x28, 0xb3, 0x47, 0xf5, 0x20], target - mapping.baseAddress);
+    let temporaryView = '';
+    const result = runPicobinRiscvDisassembly(
+      '/firmware/pico.bin',
+      picobin,
+      FILE_SIZE,
+      (received) => {
+        const script = received[received.indexOf('-c') + 1] ?? '';
+        const inputPath = received.at(-1) ?? '';
+        if (!script.includes(`s 0x${target.toString(16)};`) && inputPath === '/firmware/pico.bin') {
+          return r2SingleFunction(ENTRY, [
+            { addr: ENTRY, size: 4, opcode: `jal 0x${target.toString(16)}`, type: 'call', jump: target },
+          ]);
+        }
+        if (inputPath === '/firmware/pico.bin') return '[]\n__FIRMLAB_PICOBIN_RISCV_SPLIT__\n{}';
+        temporaryView = inputPath;
+        const patched = readFileSync(inputPath);
+        expect(Array.from(patched.subarray(target - mapping.baseAddress, target - mapping.baseAddress + 8))).toEqual([
+          0x13, 0x00, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00,
+        ]);
+        return r2SingleFunction(target + 8, [{ addr: target + 8, size: 4, opcode: 'ret', type: 'ret' }]);
+      },
+      image,
+    );
+
+    expect(temporaryView).toContain('firmlab-picobin-');
+    expect(result).toMatchObject({
+      reachableFunctions: [{ address: ENTRY }, { address: target }],
+      callGraphTruncated: false,
+      decodeFailuresTotal: 0,
+      decoderSubstitutionsTotal: 2,
+      decoderSubstitutions: [
+        { address: target, instruction: 'bset', originalBytesHex: 'b316a028' },
+        { address: target + 4, instruction: 'sh2add', originalBytesHex: 'b347f520' },
+      ],
+    });
+    expect(result?.reason).toContain('2 exact Zba/Zbs decoder-view substitution(s)');
+    expect(result?.findings[0]?.evidence).toMatchObject({
+      decoderSubstitutionsTotal: 2,
+      decoderSubstitutionsListed: 2,
+    });
   });
 
   it('recovers the CRT0 copy table and follows a flash-backed SRAM target', () => {

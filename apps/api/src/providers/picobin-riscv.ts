@@ -7,12 +7,20 @@
  * and mapping; radare2 only decodes explicitly selected, mapped functions.
  */
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import {
   type FindingDraft,
   type PicobinInfo,
   type RiscvStartupCopyTable,
   parseRiscvStartupCopyTable,
 } from '@firmlab/core';
+import {
+  type PicobinDecoderSubstitution,
+  buildPicobinRiscvDecoderView,
+  restoredPicobinOpcode,
+} from './picobin-riscv-decoder-view.js';
 
 const XIP_BASE = 0x1000_0000;
 const XIP_END = 0x1100_0000;
@@ -23,6 +31,7 @@ const REACHABLE_FUNCTION_CAP = 8;
 const CALL_DEPTH_CAP = 4;
 const CALL_EDGE_CAP = 32;
 const DECODE_FAILURE_CAP = 16;
+const DECODER_SUBSTITUTION_EVIDENCE_CAP = 64;
 
 export interface PicobinBasicBlock {
   address: number;
@@ -89,6 +98,9 @@ export interface PicobinRiscvDisassembly {
   callGraphTruncated?: boolean;
   decodeFailuresTotal?: number;
   decodeFailures?: PicobinDecodeFailure[];
+  /** Exact non-control-flow instructions replaced only in a temporary decoder view; optional for persisted data. */
+  decoderSubstitutionsTotal?: number;
+  decoderSubstitutions?: PicobinDecoderSubstitution[];
   startupCopyTable?: RiscvStartupCopyTable | null;
   startupCopyTableAttempted?: boolean;
   findings: FindingDraft[];
@@ -483,6 +495,88 @@ function decodeFunction(
   return parsePicobinRadare2Output(stdout, mapping, fileSize);
 }
 
+function decodeFunctionWithBitmanipView(
+  mapping: PicobinFlashMapping,
+  fileSize: number,
+  execute: Radare2Executor,
+  imageBytes: Uint8Array | undefined,
+): { parsed: ParsedPicobinFunction; substitutions: PicobinDecoderSubstitution[] } | null {
+  if (!imageBytes) return null;
+  const view = buildPicobinRiscvDecoderView(imageBytes, fileSize, mapping);
+  if (!view) return null;
+  const substitutionsByAddress = new Map(
+    view.substitutions.map((substitution) => [substitution.address, substitution]),
+  );
+  const leading: PicobinDecoderSubstitution[] = [];
+  let analysisAddress = mapping.entryPoint;
+  for (;;) {
+    const substitution = substitutionsByAddress.get(analysisAddress);
+    if (!substitution) break;
+    leading.push(substitution);
+    analysisAddress += 4;
+  }
+  if (leading.length === 0) return null;
+  const directory = mkdtempSync(path.join(tmpdir(), 'firmlab-picobin-'));
+  const imagePath = path.join(directory, 'decoder-view.bin');
+  try {
+    writeFileSync(imagePath, view.bytes, { mode: 0o600 });
+    const parsed = decodeFunction(
+      imagePath,
+      {
+        ...mapping,
+        entryPoint: analysisAddress,
+        entryFileOffset: mapping.entryFileOffset + (analysisAddress - mapping.entryPoint),
+      },
+      fileSize,
+      execute,
+    );
+    if (!parsed) return null;
+    const firstBlock = parsed.basicBlocks.findIndex((block) => block.address === analysisAddress);
+    if (firstBlock < 0) return null;
+    const basicBlocks = parsed.basicBlocks.map((block, index) =>
+      index === firstBlock
+        ? {
+            ...block,
+            address: mapping.entryPoint,
+            size: block.size + leading.length * 4,
+            instructionCount: block.instructionCount + leading.length,
+          }
+        : block,
+    );
+    const restored = parsed.instructions.map((instruction) => {
+      const substitution = substitutionsByAddress.get(instruction.address);
+      return substitution
+        ? {
+            ...instruction,
+            opcode: restoredPicobinOpcode(substitution),
+            type: 'bitmanip',
+            bytes: substitution.originalBytesHex,
+          }
+        : instruction;
+    });
+    return {
+      parsed: {
+        ...parsed,
+        instructionsTotal: parsed.instructionsTotal + leading.length,
+        basicBlocks,
+        instructions: [
+          ...leading.map((substitution) => ({
+            address: substitution.address,
+            size: 4,
+            opcode: restoredPicobinOpcode(substitution),
+            type: 'bitmanip',
+            bytes: substitution.originalBytesHex,
+          })),
+          ...restored,
+        ],
+      },
+      substitutions: view.substitutions,
+    };
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+}
+
 export function runPicobinRiscvDisassembly(
   imagePath: string,
   picobin: Pick<PicobinInfo, 'cpuMode' | 'isExecutable' | 'entryPoint' | 'rollingWindowDelta'> &
@@ -529,6 +623,7 @@ export function runPicobinRiscvDisassembly(
   let graphStopReason = '';
   let decodeFailuresTotal = 0;
   const decodeFailures: PicobinDecodeFailure[] = [];
+  const decoderSubstitutionsByOffset = new Map<number, PicobinDecoderSubstitution>();
   const recordDecodeFailure = (
     next: { address: number; mapping: PicobinFlashMapping },
     classification: PicobinDecodeFailure['classification'],
@@ -586,6 +681,15 @@ export function runPicobinRiscvDisassembly(
     let decoded: ParsedPicobinFunction | null;
     try {
       decoded = decodeFunction(imagePath, nextMapping, fileSize, execute);
+      if (!decoded) {
+        const recovered = decodeFunctionWithBitmanipView(nextMapping, fileSize, execute, imageBytes);
+        if (recovered) {
+          decoded = recovered.parsed;
+          for (const substitution of recovered.substitutions) {
+            decoderSubstitutionsByOffset.set(substitution.fileOffset, substitution);
+          }
+        }
+      }
     } catch (err) {
       callGraphTruncated = true;
       graphStopReason = radareFailureReason(err);
@@ -613,10 +717,17 @@ export function runPicobinRiscvDisassembly(
     enqueueCalls(next.address, next.depth, decoded.instructions);
   }
 
+  const decoderSubstitutions = Array.from(decoderSubstitutionsByOffset.values()).slice(
+    0,
+    DECODER_SUBSTITUTION_EVIDENCE_CAP,
+  );
+  const decoderSubstitutionsTotal = decoderSubstitutionsByOffset.size;
+
   const reason =
     `Decoded a bounded RISC-V call graph from the declared entrypoint: ${reachableFunctions.length} function(s), ` +
     `${callEdges.length} followed direct edge(s), ${outOfMapCallsitesTotal} resolved target(s) outside mapped bytes, ` +
-    `${unresolvedCallsitesTotal} unresolved/indirect callsite(s), ${decodeFailuresTotal} reachable target decode failure(s)` +
+    `${unresolvedCallsitesTotal} unresolved/indirect callsite(s), ${decodeFailuresTotal} reachable target decode failure(s), ` +
+    `${decoderSubstitutionsTotal} exact Zba/Zbs decoder-view substitution(s)` +
     `${callGraphTruncated ? `; coverage truncated${graphStopReason ? ` (${graphStopReason})` : ' by configured limits'}` : ''}.`;
   const finding: FindingDraft = {
     kind: 'rtos-picobin-entry-cfg',
@@ -647,13 +758,18 @@ export function runPicobinRiscvDisassembly(
       callGraphTruncated,
       decodeFailuresTotal,
       decodeFailuresListed: decodeFailures.length,
+      decoderSubstitutionsTotal,
+      decoderSubstitutionsListed: decoderSubstitutions.length,
       startupCopyRegions: startupCopyTable?.regions.length ?? 0,
     },
     rationale:
       'radare2 decoded instructions and local control-flow blocks from the entrypoint declared by a structurally ' +
       'validated PICOBIN image, then followed only direct call targets under explicit function/depth/edge caps. ' +
-      'This is bounded static decoder evidence; it does not prove execution, resolve indirect calls, establish ' +
-      'whole-image function coverage or demonstrate peripheral behavior.',
+      'Where the installed decoder rejected exact BSET/SH1ADD/SH2ADD/SH3ADD encodings, a bounded same-length NOP ' +
+      'view recovered ' +
+      'control-flow structure and the original bytes/mnemonics were restored in the result. This is bounded static ' +
+      'decoder evidence; it does not prove execution, instruction semantics, indirect calls, whole-image function ' +
+      'coverage or peripheral behavior.',
   };
   return {
     attempted: true,
@@ -671,6 +787,8 @@ export function runPicobinRiscvDisassembly(
     callGraphTruncated,
     decodeFailuresTotal,
     decodeFailures,
+    decoderSubstitutionsTotal,
+    decoderSubstitutions,
     startupCopyTable,
     startupCopyTableAttempted: imageBytes !== undefined,
     findings: [finding],

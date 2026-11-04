@@ -585,6 +585,7 @@ function PicobinDisassemblyDetails({ value }: { value: unknown }): JSX.Element |
           { label: t.unresolvedCalls, value: formatNumber(result.unresolvedCallsitesTotal) },
           { label: t.outOfMapCalls, value: formatNumber(result.outOfMapCallsitesTotal) },
           { label: t.decodeFailures, value: formatNumber(result.decodeFailuresTotal) },
+          { label: t.decoderSubstitutions, value: formatNumber(result.decoderSubstitutionsTotal) },
           { label: t.startupCopyAttempted, value: yesNo(copyAttempted) },
           { label: t.startupCopyRegions, value: copyRegions ? copyRegions.length.toLocaleString() : t.notRecorded },
         ]}
