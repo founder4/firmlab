@@ -28,6 +28,7 @@
  * and a `high` rule that fails its check is rejected at that offset without being demoted globally.
  */
 import { isJffs2Node } from './jffs2.js';
+import { parseMediaTekLkHeader } from './mediatek-image.js';
 import type { SignatureCategory, SignatureConfidence, SignatureHit, SignatureTier } from './types.js';
 
 /** Score for each rubric tier. Exported so a caller can rank hits without re-deriving the ladder. */
@@ -840,13 +841,39 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
   // Clean-room rules: each magic is paired with a check of fields the format itself declares, and every one of
   // them can REJECT. That constraint is why this pack is ~20 rules and not the ~130 the backlog sketches — a
   // magic we cannot check structurally is a rule that fires on coincidences we would then have to explain away,
-  // and several vendors' headers (Realtek and MediaTek) are not reconstructible with confidence from
-  // first principles here, so they are left out rather than guessed at. See docs/BACKLOG.md.
+  // and unsupported headers (including Realtek and MediaTek variants beyond the bounded LK subset) stay
+  // outside this registry until their fields can be established from primary sources. See docs/BACKLOG.md.
   //
   // The descriptions also refuse to over-claim attribution. A magic identifies a CONTAINER FORMAT, not a brand:
   // SEAMA ships on several vendors' devices and HDR1 is a Broadcom TRX variant that Xiaomi among others reuses,
   // so both are named by format with the vendor as a "commonly" aside. Only where the magic is genuinely
   // vendor-private (fwup-ptn, the Netgear CHK magic) does the description name one.
+  {
+    id: 'mediatek-lk',
+    description: 'MediaTek LK legacy image header (512-byte U-Boot subset)',
+    category: 'container',
+    confidence: 'high',
+    magic: [0x88, 0x16, 0x88, 0x58],
+    decode: (buf, off) => {
+      const parsed = parseMediaTekLkHeader(buf, off);
+      if (!parsed.valid) return undefined;
+      return {
+        size: parsed.totalSize,
+        payloadSize: parsed.payloadSize,
+        name: parsed.name,
+        loadAddr: parsed.loadAddress,
+        mode: parsed.mode,
+      };
+    },
+    verify: (buf, off) => {
+      const parsed = parseMediaTekLkHeader(buf, off);
+      if (!parsed.valid) return no(parsed.reason);
+      return at(
+        'consistent',
+        `512-byte LK header and ${parsed.payloadSize}-byte payload fit; no checksum, no authenticity or device/runtime proof`,
+      );
+    },
+  },
   {
     id: 'sercomm-prefix',
     description: 'Sercomm/Netgear sErCoMm firmware prefix header (mksercommfw)',

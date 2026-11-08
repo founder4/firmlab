@@ -446,6 +446,26 @@ describe('signature confidence rubric', () => {
   }
 
   const CASES: RubricCase[] = [
+    {
+      id: 'mediatek-lk',
+      tier: 'consistent',
+      pos: img(
+        513,
+        [0, new Array(512).fill(0xff)],
+        [0, [0x88, 0x16, 0x88, 0x58]],
+        [4, u32leBytes(1)],
+        [8, new Array(32).fill(0)],
+        [40, u32leBytes(1)],
+      ),
+      neg: img(
+        513,
+        [0, new Array(512).fill(0xff)],
+        [0, [0x88, 0x16, 0x88, 0x58]],
+        [4, u32leBytes(2)],
+        [8, new Array(32).fill(0)],
+        [40, u32leBytes(1)],
+      ),
+    },
     // --- existing rules that gained a structural check ---
     {
       id: 'elf',
@@ -943,5 +963,55 @@ describe('rubric behaviour on unstructured bytes', () => {
     expect(promoted.map((h) => `${h.id}@${h.offset}`)).toEqual([]);
     // And every surviving rule is a short, uncheckable magic — if a new rule starts surviving here, it needs one.
     for (const h of scan.hits) expect(h.rationale).toBeUndefined();
+  });
+});
+
+describe('MediaTek LK scanner bounds', () => {
+  function lk(): Uint8Array {
+    const bytes = new Uint8Array(513).fill(0xff);
+    bytes.set([0x88, 0x16, 0x88, 0x58, 1, 0, 0, 0]);
+    bytes.fill(0, 8, 44);
+    bytes[40] = 1;
+    return bytes;
+  }
+
+  it('keeps embedded LK hits past the listing cap and counts malformed candidates', () => {
+    const bytes = new Uint8Array(1200);
+    bytes.set(lk(), 13);
+    bytes.set([0x88, 0x16, 0x88, 0x58], 1000);
+    const scan = scanSignaturesDetailed(bytes, { maxHits: 0 });
+    expect(scan.hits.find((hit) => hit.id === 'mediatek-lk')).toMatchObject({
+      offset: 13,
+      tier: 'consistent',
+      category: 'container',
+      meta: { size: 513, payloadSize: 1, loadAddr: 1, mode: 0xffffffff, name: '' },
+    });
+    expect(scan.matched).toBe(2);
+    expect(scan.rejected).toBe(1);
+    expect(scan.rejectedByRule?.['mediatek-lk']).toBe(1);
+    expect(scan.distinctIds).toBe(1);
+    expect(scan.hits[0]?.rationale).toMatch(/no checksum.*no authenticity/i);
+  });
+
+  it('counts every incomplete LK candidate before the cap, without inventing a checksum tier', () => {
+    const complete = lk();
+    for (let length = 4; length < complete.length; length++) {
+      const scan = scanSignaturesDetailed(complete.subarray(0, length), { maxHits: 0 });
+      expect(
+        scan.hits.some((hit) => hit.id === 'mediatek-lk'),
+        `length ${length}`,
+      ).toBe(false);
+      expect(scan.matched).toBe(1);
+      expect(scan.rejectedByRule?.['mediatek-lk']).toBe(1);
+    }
+    complete[512] = 0;
+    expect(scanSignatures(complete).find((hit) => hit.id === 'mediatek-lk')?.tier).toBe('consistent');
+  });
+
+  it('does not treat incidental vendor strings, generic uImage or BootROM names as LK headers', () => {
+    const bytes = new Uint8Array(600);
+    bytes.set(Buffer.from('MediaTek MTK LK_PART_MAGIC SF_BOOT EMMC_BOOT SDMMC_BOOT BRLYT FILE_INFO'));
+    bytes.set([0x27, 0x05, 0x19, 0x56], 200);
+    expect(scanSignatures(bytes).some((hit) => hit.id === 'mediatek-lk')).toBe(false);
   });
 });
