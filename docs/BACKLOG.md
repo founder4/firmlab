@@ -1163,3 +1163,13 @@ Evidencia y procedimiento de rollback del entorno:
   pantalla necesitan aceptación en esas plataformas. La automatización no comprometió opciones ni en un
   `<select>` aislado visible/headless; foco/Tab, cambios programáticos y taps sintéticos se comprobaron por
   separado. No inferir de ellos una prueba del menú nativo (`STRUCTURE-INSPECTOR-QA-20261108.md`).
+
+- [ ] Acotar el coste total de comprobaciones de integridad del escáner. Se reprodujo con bytes sintéticos que
+  128 cabeceras uImage válidas en 512 KiB pedían 66.580.480 bytes de CRC de payload aunque `maxHits: 0` mostrase
+  una fila. El seguimiento acotado omite ahora ese CRC solamente para coincidencias uImage ya excluidas del
+  listado: mantiene todos los chequeos de cabecera y supervivencia, contadores, conjunto completo de tipos y
+  verificación íntegra de cada fila visible/nuevo ID. JSON antes/después idéntico y lecturas menores corroborados
+  en Node 22 offline; un ajuste conserva también el comportamiento previo de `maxHits: NaN`. Véase
+  `UIMAGE-UNLISTED-WORK-20261108.md`. No es un presupuesto global ni limita el listado sin tope; TRX CRC,
+  TP-Link MD5 y otros recorridos siguen pendientes de medición y de un contrato que preserve rechazo y cobertura.
+  No inferir ese ahorro de la duración de una única prueba ni omitir la validación que decide un rechazo.
