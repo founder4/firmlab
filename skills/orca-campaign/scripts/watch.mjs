@@ -115,7 +115,7 @@ export function ownerState(snapshot, now) {
   if (snapshot.capacityBlocked || snapshot.error === 'capacity_blocked') return 'blocked';
   if (snapshot.error || !snapshot.owner) return 'unknown';
   if (snapshot.liveness === 'exited') return 'exited';
-  if (snapshot.menuBlocked || snapshot.inputEmpty === false) return 'unknown';
+  if (snapshot.menuBlocked || snapshot.inputEmpty === false || snapshot.activeTurn === true) return 'unknown';
   if (snapshot.activity && !['done', 'working'].includes(snapshot.activity)) return 'unknown';
   if (snapshot.connected === true && snapshot.nativeIdleProven) return 'idle';
   // A queried, satisfied native wait is positive idle evidence even without a fleet row.
@@ -192,6 +192,8 @@ export async function orcaCall(command, args) {
     const { stdout } = await exec(command, [...args, '--json'], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
     const receipt = JSON.parse(stdout);
     if (!receipt.ok) return { error: receipt.error?.code ?? 'rpc_error' };
+    if (!receipt.result || typeof receipt.result !== 'object' || Array.isArray(receipt.result))
+      return { error: 'invalid_receipt' };
     return receipt.result;
   } catch (error) {
     // Never leak stderr, credentials, terminal content or provider capabilities to the journal.
@@ -230,8 +232,15 @@ export function hasActiveTurn(tail) {
 }
 
 export async function snapshotRun(call, options, clock = Date.now) {
-  const { run, error } = await call(['orchestration', 'run-show', '--id', options.run]);
+  const { run, error } = await call(['orchestration', 'run-show', '--id', options.run, '--full']);
   if (error || !run?.coordinator_handle) return { error: error ?? 'no_owner' };
+  if (
+    typeof run.coordinator_handle !== 'string' ||
+    !run.coordinator_handle.startsWith('term_') ||
+    !Number.isSafeInteger(run.consumer_generation) ||
+    run.consumer_generation < 0
+  )
+    return { error: 'invalid_run_identity' };
   const owner = run.coordinator_handle;
   const rows = [];
   let cursor;
@@ -240,13 +249,15 @@ export async function snapshotRun(call, options, clock = Date.now) {
     const page = await call([
       'orchestration',
       'worker-list',
+      '--full',
       '--run',
       options.run,
       '--include-remote',
       ...(cursor ? ['--cursor', cursor] : []),
     ]);
     if (page.error) return { owner, error: page.error };
-    rows.push(...(page.workers ?? []));
+    if (!completeWorkerPage(page)) return { owner, error: 'fleet_incomplete' };
+    rows.push(...page.workers);
     cursor = page.page?.hasMore ? page.page.nextCursor : undefined;
     if (rows.length > 1000 || cursors.size >= 100 || (page.page?.hasMore && (!cursor || cursors.has(cursor))))
       return { owner, error: 'fleet_page_bound' };
@@ -396,6 +407,7 @@ export function visibleInputPrompt(tail) {
         /^[─━]+$/.test(line) ||
         /^(?:⏵⏵|⏸) (?:bypass permissions|accept edits|plan mode) on(?:\s|$)/.test(line) ||
         /^\? for shortcuts(?:\s|$)/.test(line) ||
+        /^← for agents · \? for shortcuts$/.test(line) ||
         /^(?:gpt[-\w.]*|codex[-\w.]*|o\d+)[^·]*·[^·]+(?:·[^·]+)*$/i.test(line),
     );
 }
@@ -446,13 +458,49 @@ async function save(path, state) {
   await rename(temp, path);
 }
 
+// Concise CLI JSON omits ownership, projections and pagination. Request full records at each
+// orchestration read and refuse incomplete replies rather than treating omitted rows as an idle fleet.
+function completeWorkerPage(page) {
+  return (
+    Array.isArray(page.workers) &&
+    typeof page.page?.hasMore === 'boolean' &&
+    page.workers.every(
+      (worker) =>
+        typeof worker?.agentTerminalHandle === 'string' &&
+        worker.agentTerminalHandle.startsWith('term_') &&
+        typeof worker.dispatchStatus === 'string',
+    )
+  );
+}
+
 async function listRuns(call) {
   const rows = [];
   const seen = new Set();
   let cursor;
   do {
-    const page = await call(['orchestration', 'run-list', '--limit', '100', ...(cursor ? ['--cursor', cursor] : [])]);
-    if (page.error || !Array.isArray(page.runs)) return null;
+    const page = await call([
+      'orchestration',
+      'run-list',
+      '--full',
+      '--limit',
+      '100',
+      ...(cursor ? ['--cursor', cursor] : []),
+    ]);
+    if (
+      page.error ||
+      !Array.isArray(page.runs) ||
+      (!Object.hasOwn(page, 'nextCursor') && typeof page.page?.hasMore !== 'boolean') ||
+      page.runs.some(
+        (run) =>
+          typeof run?.id !== 'string' ||
+          !run.id.startsWith('run_') ||
+          !(
+            run.coordinator_handle === null ||
+            (typeof run.coordinator_handle === 'string' && run.coordinator_handle.startsWith('term_'))
+          ),
+      )
+    )
+      return null;
     rows.push(...page.runs);
     cursor = page.nextCursor ?? (page.page?.hasMore ? page.page.nextCursor : null);
     if (rows.length > 1000 || seen.size >= 100 || (page.page?.hasMore && !cursor) || (cursor && seen.has(cursor)))
@@ -628,6 +676,7 @@ export async function superviseStep(state, options, dependencies) {
           const workers = await call([
             'orchestration',
             'worker-list',
+            '--full',
             '--run',
             other.id ?? other.run_id,
             '--include-remote',
@@ -635,7 +684,7 @@ export async function superviseStep(state, options, dependencies) {
           if (
             workers.error ||
             workers.page?.hasMore ||
-            !Array.isArray(workers.workers) ||
+            !completeWorkerPage(workers) ||
             workers.workers.some(
               (w) => w.agentTerminalHandle === handle && !['completed', 'failed', 'stopped'].includes(w.dispatchStatus),
             )
@@ -712,7 +761,7 @@ export async function superviseStep(state, options, dependencies) {
           next.quotaRetirement.status = 'closed';
           next.quotaRetirement.closedAt = clock();
           await persist(next);
-          const ownership = await call(['orchestration', 'run-show', '--id', options.run]);
+          const ownership = await call(['orchestration', 'run-show', '--id', options.run, '--full']);
           const ready = await standbySnapshot(call, options, target);
           if (
             ownership.run?.coordinator_handle !== snapshot.owner ||

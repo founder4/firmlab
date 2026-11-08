@@ -304,3 +304,23 @@ exact terminal with `worker-stop` (`ptyKilled: true`) without answering the prov
 the Task as failed with that result, reviewed the commit itself and integrated it. One reserve was enough here
 because the reserve's provider was not the blocked one. With Codex blocked and Antigravity signed out, no further
 cross-provider successor existed for the rest of the Run, and the Claude workers shared the coordinator's own quota.
+
+
+## Startup compatibility: 8 November 2026
+
+The current CLI's concise `--json` projection omits the Run owner/generation and worker
+projection/pagination. The watcher previously read that projection as a full record, so a real
+native owner remained `unknown / no_owner` while the old 83 fixtures passed. All watcher
+`run-show`, `run-list` and `worker-list` reads now request their documented `--full` records,
+including the ownership recheck after quota retirement. Terminal commands receive no new flags.
+Missing identity or incomplete fleet records block recovery instead of implying an unused reserve.
+Subprocess regressions execute representative concise/full JSON envelopes and cover occupied
+coordinator/worker reserves, complete dedicated reserves, and incomplete successful replies.
+
+The native Codex composer also carries the exact footer `← for agents · ? for shortcuts`.
+Its anchored recognition preserves draft/menu exclusions. A rendered active-turn indicator now
+blocks idleness even when the native row still says `done`. The test records the captured native
+composer/footer excerpt separately from its synthetic idle/working variants; it does not claim
+that an excerpt proves a completed idle recovery. A read-only real CLI snapshot verified the
+expected campaign owner and generation. The independent supervisor must still prove its actual
+idle → resume → fresh execution round trip after installation; no second guard is started by this repair.

@@ -11,13 +11,16 @@ import {
   PERSISTENT_UNKNOWN_MS,
   decide,
   hasActiveTurn,
+  orcaCall,
   ownerState,
   parseArgs,
   persistentUnknownDiagnostic,
   recordCapacityBlockLocked,
   runWatch,
+  snapshotRun,
   staleWorking,
   superviseStep,
+  visibleInputPrompt,
 } from './watch.mjs';
 
 const NOW = 1_800_000_000_000;
@@ -460,9 +463,9 @@ test('standby menu, other coordinator, paginated or active fleet is refused', as
         return {
           runs:
             scenario === 'worker'
-              ? [{ id: 'run_other' }]
+              ? [{ id: 'run_other', coordinator_handle: null }]
               : scenario === 'coordinator'
-                ? [{ coordinator_handle: 'term_ready' }]
+                ? [{ id: 'run_other', coordinator_handle: 'term_ready' }]
                 : [],
           nextCursor: scenario === 'pagination' ? 'next' : null,
         };
@@ -1648,4 +1651,155 @@ test('an adopted successor already on quota settles ownership so the next cycle 
   assert.equal(decide(snapshot, state, quotaOptions, NOW).kind, 'confirmed');
   assert.equal(decide(snapshot, {}, quotaOptions, NOW).reason, 'capacity_exhausted');
   assert.equal(decide({ ...snapshot, generation: 2 }, state, quotaOptions, NOW).kind, 'blocked');
+});
+
+// Run through the real subprocess/JSON adapter: the old mock-only tests returned full records
+// even when the command requested concise output, hiding the current CLI's missing identity fields.
+async function cliEnvelopeFixture(t, full = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'orca-cli-envelope-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const cli = join(directory, 'orca');
+  const records = {
+    'run-show': { run: { coordinator_handle: 'term_owner', consumer_generation: 2 } },
+    'worker-list': { workers: [], page: { hasMore: false, nextCursor: null } },
+    'run-list': { runs: [], nextCursor: null },
+    ...full,
+  };
+  await writeFile(
+    cli,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const full = ${JSON.stringify(records)};
+const concise = {
+  'run-show': {runId: 'run_test', objective: 'fixture'},
+  'run-list': {runs: [{id: 'run_other', objective: 'fixture'}], nextCursor: null},
+  'worker-list': {workers: []},
+};
+console.log(JSON.stringify({ok: true, result: (args.includes('--full') ? full : concise)[args[1]]}));
+`,
+  );
+  await chmod(cli, 0o700);
+  return cli;
+}
+
+test('full CLI envelopes retain owner, generation and worker projection through the subprocess adapter', async (t) => {
+  const worker = {
+    agentTerminalHandle: 'term_owner',
+    dispatchStatus: 'completed',
+    projection: {
+      stage: { activity: 'done' },
+      liveness: { verdict: 'live', observedAt: NOW },
+      evidence: { liveStatus: 'fresh' },
+    },
+  };
+  const cli = await cliEnvelopeFixture(t, {
+    'worker-list': { workers: [worker], page: { hasMore: false, nextCursor: null } },
+  });
+  assert.deepEqual(await orcaCall(cli, ['orchestration', 'run-show', '--id', 'run_test']), {
+    runId: 'run_test',
+    objective: 'fixture',
+  });
+  const h = harness();
+  const base = h.deps.call;
+  h.deps.call = async (args) => {
+    if (args[0] === 'orchestration') {
+      assert.ok(args.includes('--full'));
+      return orcaCall(cli, args);
+    }
+    assert.equal(args.includes('--full'), false, 'terminal/worktree calls must not get unsupported flags');
+    return base(args);
+  };
+  const snapshot = await snapshotRun(h.deps.call, options, h.deps.now);
+  assert.equal(snapshot.owner, 'term_owner');
+  assert.equal(snapshot.generation, 2);
+  assert.equal(snapshot.activity, 'done');
+  assert.equal(snapshot.liveness, 'live');
+  assert.equal((await superviseStep(waiting, options, h.deps)).pending.kind, 'resume');
+});
+
+test('full Run and worker enumeration exclude occupied reserves before quota retirement', async (t) => {
+  for (const kind of ['coordinator', 'worker', 'dedicated']) {
+    const cli = await cliEnvelopeFixture(t, {
+      'run-list': {
+        runs: [{ id: 'run_other', coordinator_handle: kind === 'coordinator' ? 'term_ready' : 'term_other' }],
+        nextCursor: null,
+      },
+      'worker-list': {
+        workers: kind === 'worker' ? [{ agentTerminalHandle: 'term_ready', dispatchStatus: 'dispatched' }] : [],
+        page: { hasMore: false, nextCursor: null },
+      },
+    });
+    const h = quotaHandoffHarness();
+    const base = h.deps.call;
+    h.deps.call = (args) => (args[0] === 'orchestration' ? orcaCall(cli, args) : base(args));
+    const result = await superviseStep({}, quotaOptions, h.deps);
+    assert.equal(result.reason, kind === 'dedicated' ? 'submission_unproven' : 'no_proven_ready_standby');
+    assert.equal(
+      h.commands.some((args) => args[1] === 'close'),
+      kind === 'dedicated',
+    );
+    assert.equal(
+      h.commands.some((args) => args[1] === 'send'),
+      kind === 'dedicated',
+    );
+  }
+});
+
+test('concise or incomplete identity and fleet records fail closed even from a successful JSON envelope', async (t) => {
+  for (const [command, record] of [
+    ['run-show', null],
+    ['run-show', { runId: 'run_test', objective: 'fixture' }],
+    ['run-show', { run: { coordinator_handle: 'term_owner' } }],
+    ['worker-list', { workers: [] }],
+    ['worker-list', { page: { hasMore: false } }],
+    ['worker-list', { workers: [{ dispatchStatus: 'dispatched' }], page: { hasMore: false } }],
+    ['run-list', { runs: [{ id: 'run_other' }], nextCursor: null }],
+    ['run-list', { runs: [] }],
+  ]) {
+    const cli = await cliEnvelopeFixture(t, { [command]: record });
+    const h = quotaHandoffHarness();
+    const base = h.deps.call;
+    h.deps.call = (args) => (args[0] === 'orchestration' ? orcaCall(cli, args) : base(args));
+    const result = await superviseStep({}, quotaOptions, h.deps);
+    assert.ok(['unknown', 'blocked'].includes(result.phase));
+    assert.equal(
+      h.commands.some((args) => ['close', 'send'].includes(args[1])),
+      false,
+    );
+  }
+});
+
+// Exact composer/footer excerpt captured from the native Codex rendered screen on 2026-11-08.
+// The full capture was working; idle/working variants below deliberately share the same composer.
+const CODEX_NATIVE_FOOTER = [
+  '› Ask Codex to do anything',
+  '  GPT-6.1-Sol high · ~/Proyectos/firmlab · Adopt FirmLab campaign run',
+  '  ← for agents · ? for shortcuts',
+];
+
+test('native Codex arrow footer is anchored and never overrides a draft, menu or active turn', async () => {
+  assert.equal(visibleInputPrompt(CODEX_NATIVE_FOOTER), true);
+  assert.equal((await superviseStep(waiting, options, nativeHarness(CODEX_NATIVE_FOOTER).deps)).pending.kind, 'resume');
+  for (const footer of ['prefix ← for agents · ? for shortcuts', '← for agents · ? for shortcuts extra']) {
+    assert.equal(visibleInputPrompt([...CODEX_NATIVE_FOOTER.slice(0, -1), footer]), false);
+  }
+  for (const [tail, draft] of [
+    [['• Working (1m 44s • esc to interrupt)', ...CODEX_NATIVE_FOOTER], undefined],
+    [['Do you trust this folder?', ...CODEX_NATIVE_FOOTER], undefined],
+    [CODEX_NATIVE_FOOTER, 'operator draft'],
+    [[...CODEX_NATIVE_FOOTER, 'operator draft'], undefined],
+  ]) {
+    const h = nativeHarness(tail);
+    const base = h.deps.call;
+    h.deps.call = async (args) => {
+      if (args[1] === 'read') return { terminal: { source: 'screen', tail, ...(draft ? { draft } : {}) } };
+      return base(args);
+    };
+    const result = await superviseStep(waiting, options, h.deps);
+    assert.equal(result.phase, 'unknown');
+    assert.equal(
+      h.commands.some((args) => args[1] === 'send'),
+      false,
+    );
+  }
 });
