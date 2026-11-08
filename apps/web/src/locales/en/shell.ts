@@ -330,7 +330,7 @@ export const shell = {
       directCallEdges: 'Listed direct call edges',
       unresolvedCalls: 'Unresolved / indirect calls',
       outOfMapCalls: 'Resolved calls outside mapped bytes',
-      decodeFailures: 'Reachable targets not decoded',
+      decodeFailures: 'Decode failures / stopped continuations',
       functionsAttempted: 'Function targets attempted',
       functionsCompleted: 'Function decodes completed',
       decoderCoverageLimits: 'Decoder coverage and limits',

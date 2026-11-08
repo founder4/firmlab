@@ -293,7 +293,7 @@ export const shell: Messages['shell'] = {
       directCallEdges: 'Aristas directas mostradas',
       unresolvedCalls: 'Llamadas indirectas / sin resolver',
       outOfMapCalls: 'Llamadas resueltas fuera de los bytes mapeados',
-      decodeFailures: 'Destinos alcanzables no decodificados',
+      decodeFailures: 'Fallos de decodificación / continuaciones detenidas',
       functionsAttempted: 'Destinos de función intentados',
       functionsCompleted: 'Decodificaciones de función completadas',
       decoderCoverageLimits: 'Cobertura y límites del decodificador',

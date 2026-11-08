@@ -501,6 +501,7 @@ describe('DeepAnalysisDetails', () => {
             callEdges: [],
             functionsAttemptedTotal: 3,
             functionsCompletedTotal: 1,
+            decodeFailuresTotal: 2,
             decoderAttemptsTotal: 5,
             functionAttemptCap: 8,
             decoderAttemptCap: 16,
@@ -520,6 +521,7 @@ describe('DeepAnalysisDetails', () => {
     const metric = (label: string) => screen.getByText(label).closest('div') as HTMLElement;
     expect(within(metric('Function targets attempted')).getByText('3')).toBeInTheDocument();
     expect(within(metric('Function decodes completed')).getByText('1')).toBeInTheDocument();
+    expect(within(metric('Decode failures / stopped continuations')).getByText('2')).toBeInTheDocument();
     expect(screen.getByText('Decoder coverage and limits')).toBeInTheDocument();
     expect(screen.getByText(/does not prove execution or whole-image coverage/)).toBeInTheDocument();
     const table = screen.getByText('b316a028').closest('dl') as HTMLElement;
