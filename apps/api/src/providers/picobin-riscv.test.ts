@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parsePicobinRadare2Output,
   picobinDecodeStops,
+  picobinFailureBytes,
   picobinFlashMapping,
   picobinRuntimeMapping,
   resolveRiscvPcRelativeCalls,
@@ -63,7 +64,7 @@ describe('picobinFlashMapping', () => {
       entryPoint: ENTRY,
       entryFileOffset: 0x1036,
       mappingKind: 'rolling-xip',
-      mappedRuntimeStart: 0x0fff_f000,
+      mappedRuntimeStart: 0x1000_0000,
       mappedRuntimeEnd: 0x1000_1000,
     });
   });
@@ -168,6 +169,78 @@ describe('picobinRuntimeMapping', () => {
 
   it('does not invent a mapping outside the declared copied regions', () => {
     expect(picobinRuntimeMapping(0x2000_0008, 4, mapping, null, FILE_SIZE)).toBeNull();
+  });
+});
+
+describe('mapping bounds regressions', () => {
+  it('requires an aligned entry with two file-backed bytes', () => {
+    expect(picobinFlashMapping({ entryPoint: ENTRY + 1, rollingWindowDelta: null }, FILE_SIZE)).toBeNull();
+    expect(picobinFlashMapping({ entryPoint: ENTRY, rollingWindowDelta: null }, 0x37)).toBeNull();
+    expect(picobinFlashMapping({ entryPoint: ENTRY, rollingWindowDelta: null }, 0x38)).not.toBeNull();
+  });
+
+  it('intersects positive and negative rolling windows with XIP and the actual file', () => {
+    const positive = picobinFlashMapping({ entryPoint: ENTRY, rollingWindowDelta: 0x1000 }, 0x2000);
+    expect(positive).toMatchObject({ mappedRuntimeStart: 0x10000000, mappedRuntimeEnd: 0x10001000 });
+    const negative = picobinFlashMapping({ entryPoint: ENTRY + 0x1000, rollingWindowDelta: -0x1000 }, 0x2000);
+    expect(negative).toMatchObject({
+      entryFileOffset: 0x36,
+      mappedRuntimeStart: 0x10001000,
+      mappedRuntimeEnd: 0x10003000,
+    });
+    expect(picobinFlashMapping({ entryPoint: ENTRY + 0x1000, rollingWindowDelta: 0xfffff000 }, 0x2000)).toEqual(
+      negative,
+    );
+    if (!positive) throw new Error('expected positive rolling mapping');
+    expect(picobinRuntimeMapping(0x0ffffff0, 2, positive, null, 0x2000)).toBeNull();
+    expect(picobinFlashMapping({ entryPoint: 0x10fffffe, rollingWindowDelta: null }, 0x1001000)).toMatchObject({
+      mappedRuntimeEnd: 0x11000000,
+    });
+  });
+
+  it('rejects absolute storage extending beyond XIP and selected LOAD_MAP overlaps away from entry', () => {
+    const candidate = {
+      entryPoint: 0x20000000,
+      rollingWindowDelta: null,
+      loadMap: {
+        itemOffset: 0,
+        relative: false,
+        entries: [{ storageAddress: 0x10fffff0, runtimeAddress: 0x20000000, size: 0x20 }],
+      },
+    };
+    expect(picobinFlashMapping(candidate, 0x1000020)).toBeNull();
+    expect(
+      picobinFlashMapping(
+        {
+          ...candidate,
+          loadMap: {
+            ...candidate.loadMap,
+            entries: [{ storageAddress: 0x10000000, runtimeAddress: 0x20000000, size: 1 }],
+          },
+        },
+        FILE_SIZE,
+      ),
+    ).toBeNull();
+    candidate.loadMap.entries = [
+      { storageAddress: 0x10000000, runtimeAddress: 0x20000000, size: 0x40 },
+      { storageAddress: 0x10000080, runtimeAddress: 0x20000020, size: 0x40 },
+    ];
+    expect(picobinFlashMapping(candidate, FILE_SIZE)).toBeNull();
+  });
+
+  it('rejects a selected startup-copy region that overlaps later or leaves its source mapping', () => {
+    const region = { sourceAddress: 0x10000100, sourceFileOffset: 0x100, runtimeAddress: 0x20000000, size: 0x40 };
+    const table = {
+      tableAddress: 0x10000060,
+      tableFileOffset: 0x60,
+      bytesExamined: 28,
+      regions: [region, { ...region, sourceAddress: 0x10000200, sourceFileOffset: 0x200, runtimeAddress: 0x20000020 }],
+    };
+    expect(picobinRuntimeMapping(0x20000000, 2, mapping, table, FILE_SIZE)).toBeNull();
+    expect(picobinRuntimeMapping(0x20000001, 2, mapping, { ...table, regions: [region] }, FILE_SIZE)).toBeNull();
+    expect(
+      picobinRuntimeMapping(0x20000000, 2, mapping, { ...table, regions: [{ ...region, size: FILE_SIZE }] }, FILE_SIZE),
+    ).toBeNull();
   });
 });
 
@@ -327,7 +400,7 @@ describe('runPicobinRiscvDisassembly', () => {
         {
           address: bad,
           fileOffset: bad - mapping.baseAddress,
-          classification: 'unsupported-instruction',
+          classification: 'incomplete-decode',
           bytesHex: 'b316a028b347f520',
         },
       ],
@@ -477,6 +550,246 @@ describe('runPicobinRiscvDisassembly', () => {
         r2Output(),
       ),
     ).toBeNull();
+  });
+});
+
+describe('bounded graph scheduling and failure accounting', () => {
+  const entry = 0x10000000;
+  const picobin = { cpuMode: 'riscv' as const, isExecutable: true, entryPoint: entry, rollingWindowDelta: null };
+  const addressOf = (args: string[]): number =>
+    Number((args[args.indexOf('-c') + 1] ?? '').match(/;s (0x[0-9a-f]+);/)?.[1]);
+  const ret = (address: number) => ({ addr: address, size: 2, opcode: 'ret', type: 'ret' });
+  const calls = (targets: number[]) =>
+    r2SingleFunction(entry, [
+      ...targets.map((jump, index) => ({ addr: entry + index * 4, size: 4, opcode: 'jal', type: 'call', jump })),
+      ret(entry + targets.length * 4),
+    ]);
+
+  it('discovers distinct targets after repeated displayed edges and selects edges deterministically', () => {
+    const a = entry + 0x200;
+    const b = entry + 0x300;
+    const result = runPicobinRiscvDisassembly('/synthetic.bin', picobin, FILE_SIZE, (args) => {
+      const address = addressOf(args);
+      return address === entry ? calls([...Array<number>(32).fill(a), b]) : r2SingleFunction(address, [ret(address)]);
+    });
+    expect(result).toMatchObject({
+      reachableFunctions: [{ address: entry }, { address: a }, { address: b }],
+      callEdgesTotal: 33,
+      droppedCallEdgesTotal: 1,
+      callGraphTruncated: true,
+      functionsAttemptedTotal: 3,
+      functionsCompletedTotal: 3,
+      functionTargetsQueuedTotal: 3,
+    });
+    expect(result?.callEdges).toHaveLength(32);
+    expect(result?.graphStopReasons).toContain('call-edge-display-cap');
+    expect(result?.callEdgeSelection).toContain('caller');
+  });
+
+  it('retains a hard eight-target attempt cap even when every queued helper fails', () => {
+    let attempts = 0;
+    const targets = Array.from({ length: 12 }, (_, index) => entry + 0x200 + index * 2);
+    const result = runPicobinRiscvDisassembly('/synthetic.bin', picobin, FILE_SIZE, (args) => {
+      attempts++;
+      return addressOf(args) === entry ? calls(targets) : 'malformed';
+    });
+    expect(attempts).toBe(8);
+    expect(result).toMatchObject({
+      functionsAttemptedTotal: 8,
+      functionsCompletedTotal: 1,
+      functionTargetsQueuedTotal: 8,
+      functionsDecodedTotal: 1,
+      decodeFailuresTotal: 7,
+      droppedFunctionTargetsTotal: 5,
+    });
+    expect(result?.graphStopReasons).toEqual(expect.arrayContaining(['function-attempt-cap', 'unparsed-output']));
+    expect(result?.reason).toContain('by configured limits');
+    expect(result?.reason).toContain('coverage incomplete');
+    expect(result?.decodeFailures?.every((failure) => failure.classification === 'incomplete-decode')).toBe(true);
+  });
+
+  it('bounds subprocess attempts at sixteen with recovery attempted on every admitted target', () => {
+    const image = new Uint8Array(FILE_SIZE);
+    const targets = Array.from({ length: 12 }, (_, index) => entry + 0x200 + index * 0x40);
+    for (const address of [entry, ...targets]) image.set([0xb3, 0x16, 0xa0, 0x28], address - entry);
+    let attempts = 0;
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      FILE_SIZE,
+      (args) => {
+        attempts++;
+        if (args.at(-1) === '/synthetic.bin' || addressOf(args) !== entry) return 'malformed';
+        return r2SingleFunction(entry, [
+          { addr: entry, size: 4, opcode: 'mv zero, ra', type: 'mov' },
+          ...targets.map((jump, index) => ({
+            addr: entry + 4 + index * 4,
+            size: 4,
+            opcode: 'jal',
+            type: 'call',
+            jump,
+          })),
+          ret(entry + 4 + targets.length * 4),
+        ]);
+      },
+      image,
+    );
+    expect(attempts).toBe(16);
+    expect(result).toMatchObject({
+      functionAttemptCap: 8,
+      decoderAttemptCap: 16,
+      decoderAttemptsTotal: 16,
+      functionsAttemptedTotal: 8,
+      functionsDecodedTotal: 1,
+      functionsCompletedTotal: 1,
+      functionTargetsQueuedTotal: 8,
+      functionTargetsPendingTotal: 0,
+      decodeFailuresTotal: 7,
+      droppedFunctionTargetsTotal: 5,
+    });
+  });
+
+  it('selects target and edge subsets independently of decoder instruction arrival order', () => {
+    const targets = Array.from({ length: 40 }, (_, index) => entry + 0x200 + index * 2);
+    const ops = [
+      ...targets.map((jump, index) => ({ addr: entry + index * 4, size: 4, opcode: 'jal', type: 'call', jump })),
+      ret(entry + targets.length * 4),
+    ];
+    const run = (reverse: boolean) =>
+      runPicobinRiscvDisassembly('/synthetic.bin', picobin, FILE_SIZE, (args) => {
+        const address = addressOf(args);
+        return address === entry
+          ? r2SingleFunction(entry, reverse ? [...ops].reverse() : ops)
+          : r2SingleFunction(address, [ret(address)]);
+      });
+    const forward = run(false);
+    const backward = run(true);
+    expect(forward?.callEdges).toEqual(backward?.callEdges);
+    expect(forward?.reachableFunctions).toEqual(backward?.reachableFunctions);
+    expect(forward).toMatchObject({ callEdgesTotal: 40, droppedCallEdgesTotal: 8, droppedFunctionTargetsTotal: 33 });
+    expect(forward?.functionTargetSelection).toContain('ascending distinct targets');
+  });
+
+  it('keeps depth, instruction, and failure reasons together without calling partial decodes complete', () => {
+    const result = runPicobinRiscvDisassembly('/synthetic.bin', picobin, FILE_SIZE, (args) => {
+      const address = addressOf(args);
+      if (address === entry)
+        return r2SingleFunction(entry, [
+          { addr: entry, size: 4, opcode: 'jal', type: 'call', jump: entry + 0x500 },
+          ...Array.from({ length: 256 }, (_, index) => ({
+            addr: entry + 4 + index * 2,
+            size: 2,
+            opcode: 'ret',
+            type: 'ret',
+          })),
+        ]);
+      return r2SingleFunction(address, [{ addr: address, size: 2, opcode: 'addi a0, a0, 1', type: 'add' }]);
+    });
+    expect(result).toMatchObject({
+      functionsAttemptedTotal: 2,
+      functionsDecodedTotal: 2,
+      functionsCompletedTotal: 0,
+      decodeFailuresTotal: 1,
+    });
+    expect(result?.graphStopReasons).toEqual(expect.arrayContaining(['instruction-cap', 'incomplete-decode']));
+    expect(result?.reason).toContain('by configured limits');
+    expect(result?.reason).toContain('coverage incomplete');
+    const chain = runPicobinRiscvDisassembly('/synthetic.bin', picobin, FILE_SIZE, (args) => {
+      const address = addressOf(args);
+      return r2SingleFunction(address, [
+        { addr: address, size: 4, opcode: 'jal', type: 'call', jump: address + 0x40 },
+        ret(address + 4),
+      ]);
+    });
+    expect(chain).toMatchObject({
+      functionsAttemptedTotal: 5,
+      droppedFunctionTargetsTotal: 1,
+      graphStopReasons: ['call-depth-cap'],
+    });
+  });
+
+  it('never samples before the selected mapping or past a short supplied byte array', () => {
+    const selected = { ...mapping, mappedRuntimeStart: ENTRY, mappedRuntimeEnd: ENTRY + 8 };
+    expect(picobinFailureBytes(ENTRY - 2, selected, FILE_SIZE, new Uint8Array(FILE_SIZE))).toBeUndefined();
+    expect(picobinFailureBytes(ENTRY + 8, selected, FILE_SIZE, new Uint8Array(FILE_SIZE))).toBeUndefined();
+    expect(picobinFailureBytes(ENTRY, selected, FILE_SIZE, new Uint8Array(0x37).fill(0xbb))).toBe('bb');
+  });
+
+  it.each(['null', 'malformed', 'boundary', 'tool'])(
+    'does not claim unsupported instructions from %s failure and clamps samples',
+    (mode) => {
+      const target = entry + 0x3e;
+      const image = new Uint8Array(FILE_SIZE).fill(0xaa);
+      const result = runPicobinRiscvDisassembly(
+        '/synthetic.bin',
+        {
+          ...picobin,
+          loadMap: {
+            itemOffset: 0,
+            relative: false,
+            entries: [{ storageAddress: entry, runtimeAddress: entry, size: 0x40 }],
+          },
+        },
+        FILE_SIZE,
+        (args) => {
+          const address = addressOf(args);
+          if (address === entry) return calls([target]);
+          if (mode === 'tool') throw new Error('synthetic tool failure');
+          if (mode === 'boundary')
+            return r2SingleFunction(target, [{ addr: target, size: 4, opcode: 'ret', type: 'ret' }]);
+          return mode === 'null' ? '[]\n__FIRMLAB_PICOBIN_RISCV_SPLIT__\n{}' : 'bad output';
+        },
+        image,
+      );
+      expect(result?.decodeFailures?.[0]).toMatchObject({
+        address: target,
+        bytesHex: 'aaaa',
+        classification: mode === 'tool' ? 'tool-error' : 'incomplete-decode',
+      });
+      // The same sampler must respect the physical file end on a direct mapping.
+      const fileResult = runPicobinRiscvDisassembly(
+        '/synthetic.bin',
+        picobin,
+        0x40,
+        (args) => (addressOf(args) === entry ? calls([target]) : 'bad output'),
+        image,
+      );
+      expect(fileResult?.decodeFailures?.[0]?.bytesHex).toBe('aaaa');
+    },
+  );
+
+  it('passes the selected window to startup copy parsing for table, source and code bounds', () => {
+    const entryPoint = entry + 0x20;
+    const image = new Uint8Array(0x200);
+    const view = new DataView(image.buffer);
+    view.setUint32(0x20, 0x00000013, true); // nop
+    view.setUint32(0x24, 0x00000717, true); // auipc a4, 0
+    view.setUint32(0x28, 0x03c70713, true); // table at 0x60
+    view.setUint32(0x60, entry + 0x100, true);
+    view.setUint32(0x64, 0x20000000, true);
+    view.setUint32(0x68, 0x20000020, true);
+    for (const size of [4, 0x40, 0x80, 0x1e0]) {
+      const result = runPicobinRiscvDisassembly(
+        '/synthetic.bin',
+        {
+          ...picobin,
+          entryPoint,
+          loadMap: {
+            itemOffset: 0,
+            relative: false,
+            entries: [{ storageAddress: entryPoint, runtimeAddress: entryPoint, size }],
+          },
+        },
+        image.length,
+        () => r2SingleFunction(entryPoint, [ret(entryPoint)]),
+        image,
+      );
+      if (size === 0x1e0)
+        expect(result?.startupCopyTable).toMatchObject({
+          sourceBounds: { start: entryPoint, endExclusive: entry + 0x200 },
+        });
+      else expect(result?.startupCopyTable).toBeNull();
+    }
   });
 });
 
