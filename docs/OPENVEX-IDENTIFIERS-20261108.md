@@ -174,3 +174,30 @@ qualifiers. The coordinator owns backlog updates, integration and final campaign
 gates. No deployment, push, publication, firmware acquisition/execution, live
 corpus/database write, lane/settings/account/permission change, listener,
 isolation or host network change was performed.
+
+## Coordinator acceptance on real tool output
+
+After integration, the compiled parser and API normalizer were also run with real
+Syft `1.55.0-security20261022` and Grype `0.121.0-security20261022` in the existing
+local immutable image `sha256:758b44ca5e1487da3f34bd96ec1d84558354cc837f69da0fafb54e6c21f82b42`.
+The container used `--network none --read-only --tmpfs /tmp`, disabled update
+checks/database updates, and mounted only the built checkout and acceptance script
+read-only. Its writable fixture directory contained inert Debian 12 package
+metadata for `openssl 3.0.9-1`, architecture `arm64`; no firmware/package binary
+was fetched or executed.
+
+The 53 actual cached-database advisory rows passed through the real mapper, core
+OpenVEX parser, JSON round trip, exact package matcher and `normalizeSbom`.
+Synthetic direct identifier maps annotated all four statuses. Another version,
+architecture or distribution qualifier annotated none; the plain `openssl` ID
+did not bypass the versioned map. Malformed helpers and disagreeing same-scheme
+IDs retained 53 unread omissions, mixed readable/unreadable products kept those
+omissions, and readable status disagreement remained `conflicting`. A matching
+identifier nested under an unrelated parent never became an unconditional package
+assertion. Every case retained row count, severity, proof state and evidence
+channel. The assertion's truth and firmware applicability remain unproved.
+
+The script and final JSON/stderr are retained as `openvex-built-real*` in the
+campaign state directory. Integrated core/API focused suites passed 153/321 tests
+and the whole repository typecheck passed; final full campaign gates and the
+separate independent review remain coordinator responsibilities.
