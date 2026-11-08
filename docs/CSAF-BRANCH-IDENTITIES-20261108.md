@@ -143,3 +143,16 @@ path required no product change. The script, final JSON and initial diagnostics
 are retained as `csaf-branch-built-real*` in the campaign's
 external state directory. All four repository gates passed at integrated commit
 `744b3ae` (5,196 tests); later integrations require their own final gates.
+
+The persisted document summary was then rendered by the current production web
+build in Chromium: EN/ES, dark/light, and 320/390/1440 px (12 cases). A disposable
+loopback server supplied synthetic SBOM/search metadata around that summary; it
+performed no real search or database operation, and the browser made only GET
+requests. The source path, 53 unread references, bounded examples and effective
+tree limits remained visible without horizontal overflow or browser errors.
+Legacy output without `vendorVex` displayed the existing not-recorded state.
+Full mobile/desktop screenshots were inspected; use the full-page captures from
+scroll zero because fixed application chrome can overlap a component-only crop.
+Final evidence is `csaf-coverage-ui/`, its script and adjacent log in the campaign
+state directory. This validates rendering and transport, not the synthetic outer
+search counters, firmware coverage or physical mobile/screen-reader behavior.
