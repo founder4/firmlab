@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -79,6 +79,7 @@ const DOCKER_SHIM = [
   'printf "\\n" >> "$DOCKER_LOG"',
   'if [ "$1" = image ] && [ "$2" = inspect ]; then',
   '  if [ "$5" = "{{.Id}}" ]; then',
+  '    [ -f "$FIXTURE/ambiguous-alias" ] && [[ "$3" == firmlab-candidate-input/* ]] && exit 17',
   '    if [ "$3" = "$TOOLS_IMAGE_TAG" ] && [ "$SHIM_TOOLS_PRESENT" = 1 ]; then printf "%s\\n" "$BASELINE_ID"; exit 0; fi',
   '    if [ "$3" = "$CANDIDATE_TAG_REF" ] && [ -f "$FIXTURE/built" ]; then printf "%s\\n" "${SHIM_CANDIDATE_TAG_ID:-$CANDIDATE_ID}"; exit 0; fi',
   `    id=$(printf '%s\\n' "$LOCAL_IMAGE_IDS" | awk -F '\\t' -v ref="$3" '$1 == ref {print $2; exit}')`,
@@ -103,9 +104,16 @@ const DOCKER_SHIM = [
   '  exit 1',
   'fi',
   'if [ "$1" = buildx ] && [ "$2" = inspect ]; then printf "Name: default\\nDriver: %s\\n" "$BUILDX_DRIVER"; exit 0; fi',
-  'if [ "$1" = tag ]; then printf "%s\\t%s\\n" "$3" "$2" >> "$FIXTURE/aliases"; exit 0; fi',
+  'if [ "$1" = tag ]; then',
+  '  [ -f "$FIXTURE/report/inputs.tsv" ] && cp "$FIXTURE/report/inputs.tsv" "$FIXTURE/manifest-before-${3##*:}"',
+  '  [ "${SHIM_SECOND_TAG_FAIL:-0}" = 1 ] && [ -f "$FIXTURE/aliases" ] && exit 18',
+  '  printf "%s\\t%s\\n" "$3" "$2" >> "$FIXTURE/aliases"',
+  '  [ "${SHIM_ALIAS_RECEIPT_FAIL:-0}" = 1 ] && touch "$FIXTURE/ambiguous-alias"',
+  '  exit 0',
+  'fi',
   'if [ "$1" = build ]; then',
   '  touch "$FIXTURE/built"',
+  '  [ "${SHIM_RECIPE_MUTATION_AT:-}" = build ] && printf "FROM evil/unpinned:latest\\n" >> "$SHIM_RECIPE_PATH"',
   '  [ "${SHIM_SOURCE_MUTATION:-0}" = 1 ] && printf "changed\\n" >> Dockerfile.tools',
   '  [ "${SHIM_ALIAS_DRIFT:-0}" = 1 ] && sed -i.bak \'s/sha256:/broken:/g\' "$FIXTURE/aliases"',
   '  previous=""',
@@ -138,6 +146,7 @@ const DOCKER_SHIM = [
   '    exit "$VERIFICATION_EXIT"',
   '  fi',
   '  if [ "$entry" = bash ]; then',
+  '    [ "$which" = current ] && [ "${SHIM_RECIPE_MUTATION_AT:-}" = baseline ] && printf "# changed recipe bytes\\n" >> "$SHIM_RECIPE_PATH"',
   '    if [ "$which" = "${SHIM_INCOMPLETE:-none}" ]; then printf "binwalk ok\\n"; exit 0; fi',
   '    if [ "$which" = "${SHIM_UNKNOWN_STATUS:-none}" ]; then printf "%s\\n" "${after[3]}" | awk \'{print $1, "unknown"}\'; exit 0; fi',
   '    [ "$which" = candidate ] && [ "${SHIM_BASH_MISSING:-0}" = 1 ] && exit 127',
@@ -195,7 +204,10 @@ async function fixture({
   await stubTools(path.join(dir, 'stubs/current'), current, currentTimeout);
   await stubTools(path.join(dir, 'stubs/candidate'), candidate, candidateTimeout);
   // The stubs and logs are outside the repository the script inspects; only the copied sources are committed.
-  await writeFile(path.join(dir, '.gitignore'), 'bin/\nstubs/\n*.log\nreport*/\naliases*\nbuilt\n');
+  await writeFile(
+    path.join(dir, '.gitignore'),
+    'bin/\nstubs/\n*.log\nreport*/\naliases*\nbuilt\nmanifest-*\nambiguous-alias\ndata/\n',
+  );
 
   await run('git', ['init', '-q'], { cwd: dir });
   await run('git', ['config', 'user.email', 'tests@firmlab.invalid'], { cwd: dir });
@@ -230,9 +242,9 @@ async function fixture({
   return {
     env,
     deploy: (args, extraEnv = {}) =>
-      run('bash', ['scripts/deploy.sh', ...args], { cwd: dir, env: { ...env, ...extraEnv } }),
+      run('/bin/bash', ['scripts/deploy.sh', ...args], { cwd: dir, env: { ...env, ...extraEnv } }),
     candidate: (args, extraEnv = {}) =>
-      run('bash', ['scripts/tools-candidate.sh', '--report', path.join(dir, 'report'), ...args], {
+      run('/bin/bash', ['scripts/tools-candidate.sh', '--report', path.join(dir, 'report'), ...args], {
         cwd: dir,
         env: { ...env, ...extraEnv },
       }),
@@ -901,14 +913,256 @@ test('baseline and original ARG tags are each resolved once; probes use their re
 for (const from of ['private/unexpected:local', '${UNKNOWN:-private/fallback:local}']) {
   test(`unrecognised recipe base ${from} cannot trigger an implicit registry fetch`, async () => {
     const f = await fixture();
-    await writeFile(path.join(f.dir, 'Dockerfile.fixture'), `FROM ${from}\n`);
+    await writeFile(path.join(f.dir, 'Dockerfile.tools'), `FROM ${from}\n`);
     await assert.rejects(
-      f.candidate(['--tag', CANDIDATE_TAG, '--recipe', 'Dockerfile.fixture', '--allow-dirty']),
+      f.candidate(['--tag', CANDIDATE_TAG, '--recipe', 'Dockerfile.tools', '--allow-dirty']),
       (e) => e.code === 1 && /bases de forma verificable/.test(e.stderr),
     );
     assert.equal(commandIndex(await f.log(), /^build |^tag |^pull /), -1);
   });
 }
+
+// Provenance review regressions: tested red against 2046e15 before the implementation change.
+for (const kind of ['external', 'ignored', 'symlink']) {
+  for (const when of ['baseline', 'build']) {
+    test(`provenance refuses ${kind} recipe before mutations (${when} mutation hook)`, async () => {
+      const f = await fixture({ localImages: INPUTS });
+      const externalDir = await mkdtemp(path.join(tmpdir(), 'firmlab-external-recipe-'));
+      fixtures.push(externalDir);
+      const target = kind === 'ignored' ? path.join(f.dir, 'data/recipe') : path.join(externalDir, 'recipe');
+      await mkdir(path.dirname(target), { recursive: true });
+      await copyFile(path.join(f.dir, 'Dockerfile.trixie'), target);
+      let recipe = target;
+      if (kind === 'symlink') {
+        recipe = path.join(f.dir, 'Dockerfile.link');
+        await symlink(target, recipe);
+        await run('git', ['add', 'Dockerfile.link'], { cwd: f.dir });
+        await run('git', ['commit', '-qm', 'tracked recipe symlink'], { cwd: f.dir });
+      }
+      await assert.rejects(
+        f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS, '--recipe', recipe, '--allow-dirty'], {
+          SHIM_RECIPE_MUTATION_AT: when,
+          SHIM_RECIPE_PATH: target,
+        }),
+        (e) => e.code === 1 && /receta.*(regular|versionada|worktree)/.test(e.stderr),
+      );
+      assert.equal(commandIndex(await f.log(), /^tag |^build /), -1);
+    });
+  }
+}
+
+for (const when of ['baseline', 'build']) {
+  test(`provenance detects tracked recipe bytes changed during ${when}`, async () => {
+    const f = await fixture({ localImages: INPUTS });
+    await assert.rejects(
+      f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS], {
+        SHIM_RECIPE_MUTATION_AT: when,
+        SHIM_RECIPE_PATH: path.join(f.dir, 'Dockerfile.trixie'),
+      }),
+      (e) => e.code === (when === 'build' ? 4 : 1) && /receta|contenido fuente/.test(e.stderr),
+    );
+    if (when === 'baseline') assert.equal(commandIndex(await f.log(), /^tag |^build /), -1);
+    else assert.match(await f.report('verdict.txt'), /^rejected\n/);
+  });
+}
+
+test('provenance keeps absolute tracked recipes and modified tracked recipes under allow-dirty', async () => {
+  const f = await fixture({ localImages: INPUTS });
+  await writeFile(
+    path.join(f.dir, 'Dockerfile.trixie'),
+    `${await readFile(path.join(f.dir, 'Dockerfile.trixie'), 'utf8')}\n# local recipe\n`,
+  );
+  await assert.rejects(
+    f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]),
+    (e) => e.code === 1 && /sucio/.test(e.stderr),
+  );
+  await f.candidate([
+    '--tag',
+    CANDIDATE_TAG,
+    ...WITH_INPUTS,
+    '--recipe',
+    path.join(f.dir, 'Dockerfile.trixie'),
+    '--allow-dirty',
+    '--report',
+    path.join(f.dir, 'report-dirty'),
+  ]);
+  assert.match(
+    (await f.log()).find((c) => /^build /.test(c)),
+    /revision=[0-9a-f]{40}-dirty-[0-9a-f]{64}/,
+  );
+});
+
+for (const [name, env] of [
+  ['second tag failure', { SHIM_SECOND_TAG_FAIL: '1' }],
+  ['ambiguous alias receipt', { SHIM_ALIAS_RECEIPT_FAIL: '1' }],
+]) {
+  test(`provenance records alias intent before Docker mutation on ${name}`, async () => {
+    const f = await fixture({ localImages: INPUTS });
+    await assert.rejects(f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS], env), (e) => e.code === 1);
+    const aliases = (await readFile(path.join(f.dir, 'aliases'), 'utf8')).trim().split('\n');
+    const manifest = await f.report('inputs.tsv');
+    for (const row of aliases) {
+      const [ref, id] = row.split('\t');
+      const arg = ref.endsWith(':retained_image') ? 'RETAINED_IMAGE' : 'RENODE_IMAGE';
+      assert.ok(manifest.includes(`${arg}_build_ref_intent\t${ref}\t${id}\n`), manifest);
+      const before = await readFile(path.join(f.dir, `manifest-before-${ref.split(':').at(-1)}`), 'utf8');
+      assert.ok(before.includes(`${arg}_build_ref_intent\t${ref}\t${id}\n`), before);
+    }
+    if (name === 'second tag failure') {
+      const beforeSecond = await readFile(path.join(f.dir, 'manifest-before-renode_image'), 'utf8');
+      assert.match(
+        beforeSecond,
+        /^RETAINED_IMAGE_build_ref_actual\tfirmlab-candidate-input\/[^\t]+\tsha256:[0-9a-f]{64}$/m,
+      );
+      assert.ok(beforeSecond.includes('RENODE_IMAGE_build_ref_intent\t'), beforeSecond);
+      assert.ok(beforeSecond.includes(`\t${inputId(INPUTS[1])}\n`), beforeSecond);
+      assert.match(
+        manifest,
+        /^RETAINED_IMAGE_build_ref_actual\tfirmlab-candidate-input\/[^\t]+\tsha256:[0-9a-f]{64}$/m,
+      );
+      assert.match(manifest, /^RENODE_IMAGE_build_ref_status\t.*\ttag_failed$/m);
+    } else {
+      assert.match(manifest, /^RETAINED_IMAGE_build_ref_actual\tfirmlab-candidate-input\/[^\t]+\tunknown$/m);
+    }
+    assert.equal(commandIndex(await f.log(), /^build /), -1);
+  });
+}
+
+test('provenance refuses nonignored in-repo report paths before Docker mutations', async () => {
+  const f = await fixture({ localImages: INPUTS });
+  await assert.rejects(
+    f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS, '--report', path.join(f.dir, 'candidate-evidence')]),
+    (e) => e.code === 1 && /informe.*(ignorado|fuera)/.test(e.stderr),
+  );
+  assert.equal(commandIndex(await f.log(), /^tag |^build /), -1);
+});
+
+for (const [name, options, env, reason] of [
+  ['incomplete inventory', {}, { SHIM_INCOMPLETE: 'candidate' }, /inventario incompleto.*1 de 28 sondeos/],
+  ['unknown inventory status', {}, { SHIM_UNKNOWN_STATUS: 'candidate' }, /inventario con estados desconocidos/],
+  ['missing timeout', { candidateTimeout: false }, {}, /no tiene timeout/],
+  ['missing bash', {}, { SHIM_BASH_MISSING: '1' }, /no se pudo inventariar offline/],
+]) {
+  test(`provenance writes one final verdict with specific ${name} diagnostic`, async () => {
+    const f = await fixture({ localImages: INPUTS, ...options });
+    await assert.rejects(f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS], env), (e) => {
+      assert.equal(e.code, 4);
+      assert.equal(e.stderr.split('rechazada:').length - 1, 1, e.stderr);
+      return true;
+    });
+    assert.match(await f.report('verdict.txt'), reason);
+  });
+}
+
+for (const tag of [
+  'firmlab-candidate-input/tok:retained_image',
+  'firmlab-candidate-input:v1',
+  'firmlab-campaign/tools:',
+  ':v1',
+  'repo//name:v1',
+  'UpperRepo:v1',
+  'repo:bad tag',
+  'bad..host/repo:v1',
+  'repo:-bad',
+  'repo:.bad',
+  'docker.io/firmlab-campaign-test/retained-src:abc',
+  'index.docker.io/firmlab-campaign-test/retained-src:abc',
+  'registry-1.docker.io/firmlab-campaign-test/retained-src:abc',
+  RETAINED,
+]) {
+  test(`provenance tag guard refuses ${JSON.stringify(tag)} by name before any Docker query`, async () => {
+    const f = await fixture({ localImages: INPUTS });
+    await assert.rejects(f.candidate(['--tag', tag, ...WITH_INPUTS]), (e) => e.code === 1);
+    assert.deepEqual(await f.log(), []);
+  });
+}
+
+test('provenance raw recipe bytes require allow-dirty even when Git status hides an edit', async () => {
+  const f = await fixture({ localImages: INPUTS });
+  await run('git', ['update-index', '--assume-unchanged', 'Dockerfile.trixie'], { cwd: f.dir });
+  const recipe = path.join(f.dir, 'Dockerfile.trixie');
+  await writeFile(recipe, `${await readFile(recipe, 'utf8')}\n# hidden tracked edit\n`);
+  assert.equal((await run('git', ['status', '--porcelain'], { cwd: f.dir })).stdout, '');
+  await assert.rejects(
+    f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]),
+    (e) => e.code === 1 && /sucio/.test(e.stderr),
+  );
+  await f.candidate([
+    '--tag',
+    CANDIDATE_TAG,
+    ...WITH_INPUTS,
+    '--allow-dirty',
+    '--report',
+    path.join(f.dir, 'report-hidden'),
+  ]);
+  assert.match(
+    (await f.log()).find((c) => /^build /.test(c)),
+    /revision=[0-9a-f]{40}-dirty-[0-9a-f]{64}/,
+  );
+});
+
+test('provenance default recipe inputs participate in normalized name checks', async () => {
+  const f = await fixture();
+  const recipe = path.join(f.dir, 'Dockerfile.trixie');
+  await writeFile(recipe, (await readFile(recipe, 'utf8')).replace(RETAINED, 'org/input:v1'));
+  await assert.rejects(
+    f.candidate(['--tag', 'docker.io/org/input:v1', '--allow-dirty']),
+    (e) => e.code === 1 && /imágenes de entrada/.test(e.stderr),
+  );
+  assert.deepEqual(await f.log(), []);
+});
+
+test('provenance removes the token directory before a failed alias mutation', async () => {
+  const f = await fixture({ localImages: INPUTS });
+  const temporary = await mkdtemp(path.join(tmpdir(), 'firmlab-alias-tokens-'));
+  fixtures.push(temporary);
+  await assert.rejects(
+    f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS], { TMPDIR: temporary, SHIM_SECOND_TAG_FAIL: '1' }),
+    (e) => e.code === 1,
+  );
+  assert.deepEqual(await readdir(temporary), []);
+});
+
+test('provenance default report refuses a nonignored in-repo TMPDIR before Docker', async () => {
+  const f = await fixture({ localImages: INPUTS });
+  await assert.rejects(
+    run('/bin/bash', ['scripts/tools-candidate.sh', '--tag', CANDIDATE_TAG, ...WITH_INPUTS], {
+      cwd: f.dir,
+      env: { ...f.env, TMPDIR: f.dir },
+    }),
+    (e) => e.code === 1 && /informe/.test(e.stderr),
+  );
+  assert.deepEqual(await f.log(), []);
+});
+
+test('provenance supported tag spellings remain accepted by the pure name guard', async () => {
+  const source = await readFile(path.join(root, 'scripts/tools-candidate.sh'), 'utf8');
+  const guard = source.match(/^candidate_tag_refusal\(\) \{[\s\S]*?^\}/m)[0];
+  const refusal = async (...args) =>
+    (
+      await run('/bin/bash', [
+        '-c',
+        `. "$1"; shift\n${guard}\ncandidate_tag_refusal "$@"`,
+        'tag-guard',
+        path.join(root, 'scripts/tools-candidate-lib.sh'),
+        ...args,
+      ])
+    ).stdout.trim();
+  for (const tag of [
+    'org/tools:V1',
+    'localhost:5000/org/tools:v1',
+    'host.example:5000/tools:v1',
+    'org/tool__name:v1',
+    'org/tool---name:v1',
+  ]) {
+    assert.equal(await refusal(tag, 'firmlab-tools:latest'), '', tag);
+  }
+  for (const host of ['docker.io', 'index.docker.io', 'registry-1.docker.io']) {
+    assert.match(await refusal(`${host}/library/input:v1`, 'input:v1'), /imágenes de entrada/);
+    assert.match(await refusal('input:v1', `${host}/library/input:v1`), /imágenes de entrada/);
+    assert.match(await refusal(`${host}/firmlab-candidate-input/tok:v1`, 'other:v1'), /reservado/);
+  }
+});
 
 test.after(async () => {
   await Promise.all(fixtures.map((dir) => rm(dir, { recursive: true, force: true })));

@@ -6,6 +6,7 @@
 # and the script that only validates disagree about what "the candidate kept every tool" means.
 #
 # Sourced, never executed. The caller defines `die` and runs under `set -Eeuo pipefail`.
+# Inventory failures return nonzero with stderr diagnostics; callers own exit status and verdict publication.
 image_last_layer() {
   docker image inspect "$1" --format '{{range .RootFS.Layers}}{{println .}}{{end}}' \
     | awk 'NF { last = $0 } END { if (last != "") print last }'
@@ -126,12 +127,12 @@ image_capabilities() {
     -e GRYPE_DB_AUTO_UPDATE=false -e GRYPE_DB_VALIDATE_AGE=false \
     -e GRYPE_CHECK_FOR_APP_UPDATE=false -e SYFT_CHECK_FOR_APP_UPDATE=false \
     --entrypoint bash "$1" -c "$PROBE_SCRIPT" probe "$TOOL_PROBES")" \
-    || die "no se pudo inventariar offline las capacidades de $1"
+    || { echo "no se pudo inventariar offline las capacidades de $1" >&2; return 1; }
   # A probe loop that died half way must not read as "the rest are missing".
   [ "$(awk '{ print $1 }' <<< "$inventory")" = "$(awk '{ print $1 }' <<< "$TOOL_PROBES")" ] \
-    || die "inventario incompleto de $1: $(awk 'NF' <<< "$inventory" | wc -l | tr -d ' ') de $(awk 'NF' <<< "$TOOL_PROBES" | wc -l | tr -d ' ') sondeos"
+    || { echo "inventario incompleto de $1: $(awk 'NF' <<< "$inventory" | wc -l | tr -d ' ') de $(awk 'NF' <<< "$TOOL_PROBES" | wc -l | tr -d ' ') sondeos" >&2; return 1; }
   awk '$2 != "ok" && $2 != "present" && $2 != "missing" && $2 != "timeout" && $2 != "error" { bad=1 }
-       END { exit bad }' <<< "$inventory" || die "inventario con estados desconocidos de $1"
+       END { exit bad }' <<< "$inventory" || { echo "inventario con estados desconocidos de $1" >&2; return 1; }
   printf '%s\n' "$inventory"
 }
 
@@ -185,10 +186,51 @@ candidate_recipe_sources_known() {
   ' "$1"
 }
 
+# A candidate recipe must be a HEAD-tracked regular file inside this physical worktree. Canonicalize the
+# parent once so a symlinked parent cannot redirect Docker later; never dereference a recipe symlink.
+# Tracked local edits remain supported under --allow-dirty. New/external/ignored-untracked recipes need a commit.
+candidate_recipe_path() {
+  local requested="$1" parent relative mode
+  [ -f "$requested" ] && [ ! -L "$requested" ] || return 1
+  parent="$(cd "$(dirname "$requested")" && pwd -P)" || return 1
+  relative="$parent/$(basename "$requested")"
+  case "$relative" in "$REPO_ROOT"/*) relative="${relative#"$REPO_ROOT"/}" ;; *) return 1 ;; esac
+  case "$relative" in *$'\t'*|*$'\n'*) return 1 ;; esac
+  mode="$(git ls-tree HEAD -- ":(literal)$relative" | awk '{ print $1 }')" || return 1
+  case "$mode" in 100644|100755) ;; *) return 1 ;; esac
+  git ls-files --error-unmatch -- ":(literal)$relative" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$relative"
+}
+
+recipe_bytes_unchanged() {
+  [ ! -L "$RECIPE" ] && [ -f "$RECIPE" ] || return 1
+  [ "$(candidate_recipe_path "$RECIPE")" = "$RECIPE" ] || return 1
+  [ "$(git hash-object --no-filters -- "$RECIPE")" = "$RECIPE_HASH" ]
+}
+
+# Normalize only Docker Hub's supported host aliases and implicit library/latest spelling. Other registries
+# stay distinct. This name guard complements Docker's actual existing-ref inspection; it does not replace it.
+candidate_normalized_ref() {
+  local ref="$1" repo name
+  case "$ref" in docker.io/*) ref="${ref#docker.io/}" ;;
+    index.docker.io/*) ref="${ref#index.docker.io/}" ;;
+    registry-1.docker.io/*) ref="${ref#registry-1.docker.io/}" ;; esac
+  name="${ref##*/}"
+  case "$name" in *:*) ;; *) ref="$ref:latest" ;; esac
+  repo="${ref%:*}"
+  case "$repo" in library/*) ref="${ref#library/}" ;; esac
+  printf '%s\n' "$ref"
+}
+
 # Include tracked content/modes/deletions and untracked nonignored content/names/modes (also symlink targets).
-# Git's binary diff supplies the tracked portion. No source path is expanded through shell word splitting.
+# Git's binary diff supplies the tracked portion. Optional recipe bytes also bypass Git filters/status hints.
+# No source path is expanded through shell word splitting.
 source_fingerprint() {
   {
+    if [ -n "${1:-}" ]; then
+      printf 'recipe\0%s\0' "$1"
+      git hash-object --no-filters -- "$1" || return 1
+    fi
     git diff --binary --no-ext-diff --no-textconv HEAD -- || return 1
     git ls-files --others --exclude-standard -z | while IFS= read -r -d '' file; do
       printf 'untracked\0%s\0' "$file"

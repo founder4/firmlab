@@ -47,7 +47,7 @@ base (`renode --version`: ReleaseHeadless, .NET 8.0.32). Las capas apt/pip/AFL++
 | Ref | ID | Origen |
 |---|---|---|
 | `firmlab-campaign-20261108/tools:trixie-304e663` | `sha256:bc60ba22a951…` | `docker build` manual con las dos sustituciones, `GRYPE_DB_REFRESH=campaign-20261108-2026-11-08T03:02:29Z` |
-| `firmlab-campaign-20261108/tools:trixie-caf2355` | `sha256:210f116594f2…` | `scripts/tools-candidate.sh` (este commit), mismas entradas, `GRYPE_DB_REFRESH=campaign-20261108-script-run` |
+| `firmlab-campaign-20261108/tools:trixie-caf2355` | `sha256:210f116594f2…` | `scripts/tools-candidate.sh` (primera versión, `caf2355`), mismas entradas, `GRYPE_DB_REFRESH=campaign-20261108-script-run` |
 | `firmlab-campaign-20261108/firmware:trixie-304e663` | `sha256:758b44ca5e14…` | `Dockerfile.firmware` desde `git archive 304e663` con `TOOLS_IMAGE=…/tools:trixie-304e663` |
 
 Reproducibilidad: las dos candidatas tienen 27 capas y **sólo difieren en la última** (la base Grype). Las 21
@@ -56,7 +56,7 @@ explicado arriba. Las dos son Debian 13 (`VERSION_ID="13"`), `dpkg --print-archi
 
 Grype (offline: `GRYPE_DB_AUTO_UPDATE=false`, `--network none`): esquema v6.1.10, construida el
 2026-11-07T06:18:48Z, `Status: valid`, `vulnerability.db` de 3,2 GB en `/opt/grype-db/6/`. La capa final es
-distinta de la de la base (`871427ef…` → `13855c81…` / `210f…`). FwHunt: 108 reglas.
+distinta de la de la base (`871427ef…` → `13855c81…` / `f46c0621…`). FwHunt: 108 reglas.
 
 ## Inventario offline de 28 sondeos
 
@@ -91,7 +91,8 @@ scripts/tools-candidate.sh --tag firmlab-campaign-<fecha>/tools:<etiqueta> \
 ```
 
 - Antes de consultar a Docker rechaza estas etiquetas: compartidas (`firmlab-tools`, `firmlab-firmware`, `firmlab`,
-  `homelab-rollback/*`, `homelab-candidate/*`), implícitas o `:latest`, un digest, o la etiqueta de una entrada.
+  `homelab-rollback/*`, `homelab-candidate/*`, `firmlab-candidate-input/*`), implícitas o `:latest`, un digest,
+  o la etiqueta de una entrada.
   Tampoco sobrescribe una etiqueta que ya exista.
 - Rechaza una sustitución de un ARG que la receta no toma, una entrada ausente en el almacén local y un builder
   que no sea `docker`, para que BuildKit no resuelva esos nombres en un registro.
@@ -99,9 +100,12 @@ scripts/tools-candidate.sh --tag firmlab-campaign-<fecha>/tools:<etiqueta> \
   `inventory-baseline.txt`, `inventory-candidate.txt`, `grype-db-status.txt` y `verdict.txt`.
 - Sale con 0 si acepta, con 1 si se niega antes de construir o durante la construcción, y con 4 si rechaza una
   imagen ya construida. La etiqueta queda para inspeccionarla; es única por construcción.
-- Nunca ejecuta `docker tag`, compose, `exec`, `stop` ni montajes. Lo fijan 11 tests con shim en
-  `scripts/deploy-grype-refresh.test.mjs`, que también vuelve a ejecutar los 26 tests de `deploy.sh` con la
-  biblioteca extraída (37/37).
+- La primera versión no ejecutaba `docker tag`; sus 11 tests nuevos más los 26 de `deploy.sh` daban 37/37.
+  Ese recuento y ese comportamiento son históricos. Desde el endurecimiento posterior crea aliases privados
+  nuevos `firmlab-candidate-input/*` para las bases locales, registra sus identidades y no promociona ninguna
+  ref compartida. No ejecuta compose, `exec`, `stop` ni montajes. La validación actual y las restricciones de
+  receta/informe están en [el informe de procedencia](TOOLS-CANDIDATE-PROVENANCE-20261108.md); el
+  [informe de endurecimiento](TOOLS-CANDIDATE-HARDENING-20261108.md) conserva la evidencia real anterior.
 
 En el host real también se comprobaron tres negativas: `--tag firmlab-tools:latest` se rechaza antes de llamar a
 Docker; la etiqueta `trixie-caf2355` ya existente se rechaza; y sin sustituciones se detiene nombrando
