@@ -1769,9 +1769,10 @@ test('concise or incomplete identity and fleet records fail closed even from a s
   }
 });
 
-// Exact composer/footer excerpt captured from the native Codex rendered screen on 2026-11-08.
-// The full capture was working; idle/working variants below deliberately share the same composer.
+// Exact idle composer/footer excerpt captured before recovery on 2026-11-08; native tui-idle
+// independently satisfied. The working variant below changes only the active-turn indicator.
 const CODEX_NATIVE_FOOTER = [
+  '  Worked for 5m 30s • 03:57',
   '› Ask Codex to do anything',
   '  GPT-6.1-Sol high · ~/Proyectos/firmlab · Adopt FirmLab campaign run',
   '  ← for agents · ? for shortcuts',
@@ -1802,4 +1803,27 @@ test('native Codex arrow footer is anchored and never overrides a draft, menu or
       false,
     );
   }
+});
+
+test('full structured worker handles remain opaque identities without making the coordinator structured', async (t) => {
+  const structured = 'structworker_d9204a60-f3bf-4c56-b23c-6481024411c6';
+  const cli = await cliEnvelopeFixture(t, {
+    'worker-list': {
+      workers: [{ agentTerminalHandle: structured, dispatchStatus: 'dispatched' }],
+      page: { hasMore: false, nextCursor: null },
+    },
+    'run-list': { runs: [{ id: 'run_other', coordinator_handle: structured }], nextCursor: null },
+  });
+  const h = nativeHarness(CODEX_NATIVE_FOOTER);
+  const base = h.deps.call;
+  h.deps.call = (args) => (args[0] === 'orchestration' ? orcaCall(cli, args) : base(args));
+  const snapshot = await snapshotRun(h.deps.call, options, h.deps.now);
+  assert.equal(snapshot.owner, 'term_owner');
+  assert.deepEqual(snapshot.activeHandles, [structured]);
+  assert.equal(ownerState(snapshot, NOW), 'idle');
+
+  const quota = quotaHandoffHarness();
+  const quotaBase = quota.deps.call;
+  quota.deps.call = (args) => (args[0] === 'orchestration' ? orcaCall(cli, args) : quotaBase(args));
+  assert.equal((await superviseStep({}, quotaOptions, quota.deps)).pending.target, 'term_ready');
 });

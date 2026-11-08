@@ -324,3 +324,15 @@ composer/footer excerpt separately from its synthetic idle/working variants; it 
 that an excerpt proves a completed idle recovery. A read-only real CLI snapshot verified the
 expected campaign owner and generation. The independent supervisor must still prove its actual
 idle → resume → fresh execution round trip after installation; no second guard is started by this repair.
+
+
+The first real worker wave also exercised a shape absent from the empty-fleet startup:
+structured workers use opaque `structworker_…` handles in the full `agentTerminalHandle`
+field. Fleet enumeration and cross-Run reserve exclusion now accept nonempty exact opaque
+identities instead of requiring a terminal prefix. They still require the complete worker
+array, dispatch status and explicit pagination. This does not make a structured worker an
+observable native coordinator: the actual coordinator still needs terminal/native/screen
+evidence. A subprocess regression keeps the structured handle in `activeHandles`, covers
+a structured owner of another Run and verifies that current terminal ownership stays exact.
+The Codex footer regression now uses the actual idle excerpt captured before the successful
+8 November recovery, independently accompanied by a satisfied native idle wait.

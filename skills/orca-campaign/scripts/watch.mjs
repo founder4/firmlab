@@ -467,7 +467,8 @@ function completeWorkerPage(page) {
     page.workers.every(
       (worker) =>
         typeof worker?.agentTerminalHandle === 'string' &&
-        worker.agentTerminalHandle.startsWith('term_') &&
+        worker.agentTerminalHandle.length > 0 &&
+        worker.agentTerminalHandle.trim() === worker.agentTerminalHandle &&
         typeof worker.dispatchStatus === 'string',
     )
   );
@@ -496,7 +497,9 @@ async function listRuns(call) {
           !run.id.startsWith('run_') ||
           !(
             run.coordinator_handle === null ||
-            (typeof run.coordinator_handle === 'string' && run.coordinator_handle.startsWith('term_'))
+            (typeof run.coordinator_handle === 'string' &&
+              run.coordinator_handle.length > 0 &&
+              run.coordinator_handle.trim() === run.coordinator_handle)
           ),
       )
     )
