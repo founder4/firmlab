@@ -1,5 +1,13 @@
 # RP2350 decoder recovery — 2026-11-08
 
+This is the historical first recovery implementation and its validation. The
+[decoder evidence safety correction](RP2350-DECODER-EVIDENCE-SAFETY-20261108.md)
+supersedes the acceptance and completion rules below. In particular, width
+stepping alone cannot prove instruction starts after inline data, every listed
+replacement must be restored even beyond the displayed-block cap, and an unsafe
+recovered result must retain the original prefix and its calls. The original
+12 real-tool cases remain covered alongside the added inline-data regression.
+
 Scope: independently verify and repair review findings 1.2–1.4 from
 `review-rp2350.md`, based on clean editing worktree commit `6f35be5`.
 The existing instruction-width stepping and actual `bytesExamined` fix is retained.

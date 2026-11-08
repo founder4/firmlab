@@ -1,5 +1,12 @@
 # RP2350 decoder-view instruction boundaries
 
+Historical validation of the first width-stepping correction follows. The later
+[decoder evidence safety correction](RP2350-DECODER-EVIDENCE-SAFETY-20261108.md)
+supersedes its acceptance boundary: inline data can still put this linear scan
+out of phase. A scanned match is only a candidate; the complete recovered result
+must preserve source bytes, instruction widths and original control-flow evidence
+before it can replace the source decode.
+
 The bounded radare2 compatibility view previously checked every two-byte offset for exact
 32-bit Zba/Zbs opcodes. Halfword alignment does not establish an instruction start: a match
 could combine the upper half of a 32-bit instruction with the following 16-bit instruction.
