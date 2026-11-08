@@ -1,8 +1,10 @@
 /**
  * API-side wrapper around @firmlab/core static analysis. Picks an entropy window sized to the image so the
  * returned profile stays around a few thousand points regardless of image size (a 4 KB fixed window on a
- * 500 MB image would yield 128k points — too many to ship to a browser). Everything else is delegated to core.
+ * 500 MB image would yield 128k points — too many to ship to a browser). Injects vetted native SHA-256 for
+ * bounded local BootROM integrity; all decisions remain in core.
  */
+import { createHash } from 'node:crypto';
 import { type StaticAnalysis, analyzeBuffer } from '@firmlab/core';
 
 const TARGET_SAMPLES = 2048;
@@ -22,5 +24,8 @@ function nextPow2(n: number): number {
 
 export function analyzeImageBuffer(buf: Uint8Array): StaticAnalysis {
   const windowSize = chooseEntropyWindow(buf.length);
-  return analyzeBuffer(buf, { entropy: { windowSize } });
+  return analyzeBuffer(buf, {
+    entropy: { windowSize },
+    signatureDigests: { sha256: (bytes) => createHash('sha256').update(bytes).digest() },
+  });
 }

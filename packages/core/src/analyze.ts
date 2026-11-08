@@ -4,6 +4,11 @@
  * moment an image is uploaded — no external tool required — to populate every deterministic view.
  */
 import { type EntropyOptions, computeEntropyProfile } from './entropy.js';
+import {
+  type SignatureDigestCoverage,
+  type SignatureDigestOptions,
+  verifySignatureDigests,
+} from './signature-digests.js';
 import { type SignatureScan, scanSignaturesDetailed } from './signatures.js';
 import { type SecretScan, scanSecrets } from './strings.js';
 import { buildStructureSegments, inferIdentity } from './structure.js';
@@ -28,6 +33,8 @@ export interface StaticAnalysis {
    * rule, which is what the structure map draws from.
    */
   signatureScan?: SignatureScan;
+  /** Optional forever: absence on older persisted JSON means digest coverage was not recorded. */
+  signatureDigests?: SignatureDigestCoverage;
   /**
    * What the secret scan actually covered, and how much it had to leave out.
    *
@@ -43,6 +50,8 @@ export interface StaticAnalysis {
 
 export interface AnalyzeOptions {
   entropy?: EntropyOptions;
+  /** INTERNAL trusted code capability and lowerable budgets; never HTTP, Settings or model input. */
+  signatureDigests?: SignatureDigestOptions;
   /** Minimum length for secret-string extraction. Default 6. */
   secretMinLength?: number;
 }
@@ -50,7 +59,9 @@ export interface AnalyzeOptions {
 export function analyzeBuffer(buf: Uint8Array, options: AnalyzeOptions = {}): StaticAnalysis {
   const entropy = computeEntropyProfile(buf, options.entropy);
   const signatureScan = scanSignaturesDetailed(buf);
-  const signatures = signatureScan.hits;
+  const digests = verifySignatureDigests(buf, signatureScan.hits, options.signatureDigests);
+  const signatures = digests.hits;
+  signatureScan.hits = signatures;
   const structure = buildStructureSegments(buf.length, signatures, entropy);
   const identity = inferIdentity(buf, signatures, entropy);
   // The listing cap moves INTO the scan so the count survives it. `.slice(0, 500)` here threw away the one
@@ -65,5 +76,6 @@ export function analyzeBuffer(buf: Uint8Array, options: AnalyzeOptions = {}): St
     secrets: secretScan.secrets,
     secretScan,
     signatureScan,
+    signatureDigests: digests.coverage,
   };
 }
