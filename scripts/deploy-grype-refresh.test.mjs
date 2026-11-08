@@ -16,7 +16,6 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const sourceScript = path.join(root, 'scripts/deploy.sh');
 const RETAINED = 'homelab-rollback/firmlab-tools:20261022-pre-trixie';
 const RENODE = 'homelab-candidate/renode:trixie-20261022';
 const fixtures = [];
@@ -76,6 +75,11 @@ const DOCKER_SHIM = [
   'printf "%q " "$@" >> "$DOCKER_LOG"',
   'printf "\\n" >> "$DOCKER_LOG"',
   'if [ "$1" = image ] && [ "$2" = inspect ]; then',
+  // Only tools-candidate.sh asks for the ID of an input or baseline; every other ref keeps its answer below.
+  '  if [ "$5" = "{{.Id}}" ]; then',
+  '    [ "$3" = "$TOOLS_IMAGE_TAG" ] && [ "$SHIM_TOOLS_PRESENT" = 1 ] && { printf "sha256:id-%s\\n" "$3"; exit 0; }',
+  '    case $\'\\n\'"$LOCAL_IMAGES"$\'\\n\' in *$\'\\n\'"$3"$\'\\n\'*) printf "sha256:id-%s\\n" "$3"; exit 0 ;; esac',
+  '  fi',
   '  case "$3" in',
   '    "$TOOLS_IMAGE_TAG")',
   '      [ "$SHIM_TOOLS_PRESENT" = 1 ] || exit 1',
@@ -142,6 +146,7 @@ async function fixture({
   current = {},
   candidate = {},
   candidateTimeout = true,
+  candidateLayer = 'sha256:new-layer',
 } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'firmlab-deploy-grype-'));
   fixtures.push(dir);
@@ -149,8 +154,10 @@ async function fixture({
   const log = path.join(dir, 'docker.log');
   await mkdir(path.join(dir, 'scripts'));
   await mkdir(binDir);
-  await copyFile(sourceScript, path.join(dir, 'scripts/deploy.sh'));
-  await chmod(path.join(dir, 'scripts/deploy.sh'), 0o755);
+  for (const script of ['deploy.sh', 'tools-candidate.sh', 'tools-candidate-lib.sh']) {
+    await copyFile(path.join(root, 'scripts', script), path.join(dir, 'scripts', script));
+    await chmod(path.join(dir, 'scripts', script), 0o755);
+  }
   await copyFile(path.join(root, 'Dockerfile.trixie'), path.join(dir, 'Dockerfile.trixie'));
   await writeFile(path.join(dir, 'Dockerfile.tools'), 'FROM scratch\n');
   await writeFile(path.join(dir, 'Dockerfile.firmware'), 'FROM scratch\n');
@@ -179,7 +186,7 @@ async function fixture({
     VERIFICATION_EXIT: String(verificationExit),
     TOOLS_IMAGE_TAG: 'firmlab-tools:latest',
     CURRENT_LAYER: currentLayer,
-    CANDIDATE_LAYER: 'sha256:new-layer',
+    CANDIDATE_LAYER: candidateLayer,
     SHIM_CURRENT_DEBIAN: currentDebian,
     SHIM_CANDIDATE_DEBIAN: candidateDebian,
     LOCAL_IMAGES: localImages.join('\n'),
@@ -193,6 +200,13 @@ async function fixture({
     env,
     deploy: (args, extraEnv = {}) =>
       run('bash', ['scripts/deploy.sh', ...args], { cwd: dir, env: { ...env, ...extraEnv } }),
+    candidate: (args, extraEnv = {}) =>
+      run('bash', ['scripts/tools-candidate.sh', '--report', path.join(dir, 'report'), ...args], {
+        cwd: dir,
+        env: { ...env, ...extraEnv },
+      }),
+    report: (file) => readFile(path.join(dir, 'report', file), 'utf8'),
+    dir,
     log: () => lines('docker.log'),
     timeouts: (which) => lines(`timeout-${which}.log`),
   };
@@ -508,6 +522,157 @@ test('a missing tools tag beside a Debian 12 container keeps the first build', a
   await f.deploy(['--build-only']);
   assert.ok(commandIndex(await f.log(), /^build .*-t firmlab-tools:latest/) >= 0);
 });
+
+// --- scripts/tools-candidate.sh: the half of --tools that builds and validates but never promotes -------------------
+
+const INPUTS = ['firmlab-campaign-test/retained-src:abc', 'firmlab-campaign-test/renode-src:abc'];
+const CANDIDATE_TAG = 'firmlab-campaign-test/tools:trixie-t1';
+const WITH_INPUTS = ['--retained', INPUTS[0], '--renode', INPUTS[1]];
+
+/** Nothing a candidate run does may move a shared ref or reach a running service. */
+function assertCandidateOnly(commands) {
+  assert.equal(commandIndex(commands, /^tag /), -1, commands.join('\n'));
+  assert.equal(commandIndex(commands, /compose|^exec |^stop |^restart |^rm |^rmi |^push |Dockerfile\.firmware/), -1);
+  for (const command of commands.filter((c) => /^run /.test(c))) {
+    assert.match(command, /^run --rm --network none /, command);
+    // Docker's own options end at the image; what follows is the probe script, which says `command -v`.
+    assert.doesNotMatch(command.split(' --entrypoint ')[0], /(^| )(-v|--volume|--mount) /, command);
+  }
+  for (const command of commands.filter((c) => /^build /.test(c))) {
+    assert.match(command, new RegExp(` -t ${CANDIDATE_TAG.replace(/[.]/g, '\\.')} `), command);
+    assert.doesNotMatch(command, / -t (firmlab-tools|firmlab-firmware|firmlab):/, command);
+  }
+}
+
+test('a candidate is built under its own tag from explicit local inputs, inventoried, and never promoted', async () => {
+  const f = await fixture({ currentDebian: '13', localImages: INPUTS });
+  const { stdout, stderr } = await f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS], { GRYPE_DB_REFRESH: 'k1' });
+  const commands = await f.log();
+  assertCandidateOnly(commands);
+  const build = commands.find((c) => /^build /.test(c));
+  for (const part of [`RETAINED_IMAGE=${INPUTS[0]}`, `RENODE_IMAGE=${INPUTS[1]}`, 'GRYPE_DB_REFRESH=k1']) {
+    assert.ok(build.includes(`--build-arg ${part}`), build);
+  }
+  assert.match(build, /-f Dockerfile\.trixie \.\s*$/);
+  // The baseline is inventoried before the build, so a hung or broken baseline costs no build time.
+  assert.ok(
+    commandIndex(commands, /^run .*--entrypoint bash firmlab-tools:latest/) < commandIndex(commands, /^build /),
+  );
+  for (const which of ['current', 'candidate']) {
+    const executed = (await f.timeouts(which)).map((line) => line.split('\t'));
+    const expected = declared.filter((p) => !p.presenceOnly).map((p) => [p.budget, p.bin, ...p.probe]);
+    assert.deepEqual(executed, expected, `${which}: every executed probe mirrors tools.ts`);
+  }
+  assert.match(await f.report('verdict.txt'), /^accepted\n/);
+  const inputs = await f.report('inputs.tsv');
+  assert.match(inputs, new RegExp(`^RETAINED_IMAGE\t${INPUTS[0]}\tsha256:id-${INPUTS[0]}$`, 'm'));
+  assert.match(inputs, new RegExp(`^RENODE_IMAGE\t${INPUTS[1]}\tsha256:id-${INPUTS[1]}$`, 'm'));
+  assert.match(inputs, /^baseline\tfirmlab-tools:latest\tsha256:id-firmlab-tools:latest$/m);
+  assert.match(inputs, new RegExp(`^candidate\t${CANDIDATE_TAG}\tsha256:candidate$`, 'm'));
+  assert.equal((await f.report('inventory-candidate.txt')).trim().split('\n').length, declared.length);
+  assert.match(stdout, /aceptada sin promoción/);
+  assert.match(stderr, /no que cada herramienta funcione/);
+});
+
+test('without overrides a candidate needs the recipe defaults locally and passes no base override', async () => {
+  const f = await fixture({ currentDebian: '13', localImages: [RETAINED, RENODE] });
+  await f.candidate(['--tag', CANDIDATE_TAG]);
+  const build = (await f.log()).find((c) => /^build /.test(c));
+  assert.doesNotMatch(build, /RETAINED_IMAGE|RENODE_IMAGE/, build);
+
+  const missing = await fixture({ currentDebian: '13', localImages: [RETAINED] });
+  await assert.rejects(
+    missing.candidate(['--tag', CANDIDATE_TAG]),
+    (error) => error.code === 1 && error.stderr.includes(RENODE) && /registro/.test(error.stderr),
+  );
+  assert.equal(commandIndex(await missing.log(), /^build /), -1);
+});
+
+test('a candidate tag that names a shared, implicit or input ref is refused before Docker builds anything', async () => {
+  const f = await fixture({ currentDebian: '13', localImages: INPUTS });
+  for (const tag of [
+    'firmlab-tools:latest',
+    'firmlab-tools:trixie-candidate',
+    'docker.io/library/firmlab-firmware:next',
+    'firmlab:dev',
+    'homelab-rollback/firmlab-tools:20261108',
+    'homelab-candidate/renode:trixie-20261108',
+    'firmlab-campaign-test/tools',
+    'firmlab-campaign-test/tools:latest',
+    `firmlab-campaign-test/tools@sha256:${'0'.repeat(64)}`,
+    INPUTS[0],
+  ]) {
+    await assert.rejects(f.candidate(['--tag', tag, ...WITH_INPUTS]), (error) => error.code === 1, tag);
+  }
+  await assert.rejects(f.candidate(WITH_INPUTS), (error) => error.code === 1 && /--tag/.test(error.stderr));
+  assert.equal(commandIndex(await f.log(), /^build |^run /), -1);
+});
+
+test('an existing candidate tag is never overwritten', async () => {
+  const f = await fixture({ currentDebian: '13', localImages: [...INPUTS, CANDIDATE_TAG] });
+  await assert.rejects(
+    f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]),
+    (error) => error.code === 1 && /ya existe/.test(error.stderr),
+  );
+  assert.equal(commandIndex(await f.log(), /^build /), -1);
+});
+
+test('an override for a base the recipe does not take, or a missing override image, is refused', async () => {
+  const f = await fixture({ currentDebian: '13', localImages: INPUTS });
+  await assert.rejects(
+    f.candidate(['--tag', CANDIDATE_TAG, '--recipe', 'Dockerfile.tools', '--retained', INPUTS[0]]),
+    (error) => error.code === 1 && /no toma ninguna base de RETAINED_IMAGE/.test(error.stderr),
+  );
+  await assert.rejects(
+    f.candidate(['--tag', CANDIDATE_TAG, '--retained', INPUTS[0], '--renode', 'firmlab-campaign-test/absent:1']),
+    (error) => error.code === 1 && error.stderr.includes('firmlab-campaign-test/absent:1'),
+  );
+  assert.equal(commandIndex(await f.log(), /^build /), -1);
+});
+
+test('a builder that cannot see local images is refused for a candidate too', async () => {
+  const f = await fixture({ currentDebian: '13', localImages: INPUTS, buildxDriver: 'docker-container' });
+  await assert.rejects(
+    f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]),
+    (error) => error.code === 1 && /docker-container/.test(error.stderr),
+  );
+  assert.equal(commandIndex(await f.log(), /^build /), -1);
+});
+
+test('a dirty tree needs --allow-dirty and is then stamped as dirty', async () => {
+  const f = await fixture({ currentDebian: '13', localImages: INPUTS });
+  await writeFile(path.join(f.dir, 'untracked.txt'), 'x\n');
+  await assert.rejects(
+    f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]),
+    (error) => error.code === 1 && /sucio/.test(error.stderr),
+  );
+  assert.equal(commandIndex(await f.log(), /^build /), -1);
+  await f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS, '--allow-dirty']);
+  assert.match(
+    (await f.log()).find((c) => /^build /.test(c)),
+    /revision=[0-9a-f]{40}-dirty /,
+  );
+});
+
+for (const [name, options, reason] of [
+  ['lost a capability', { candidate: { yara: 'error', 'angr-python': 'slow' } }, /angr timeout 30s;yara error exit=1/],
+  ['failed the offline Grype check', { verificationExit: 1 }, /Grype no es válida offline/],
+  ['kept the baseline final layer', { currentLayer: 'sha256:same', candidateLayer: 'sha256:same' }, /capa final/],
+  ['is an older Debian', { candidateDebian: '12' }, /Debian 12 y firmlab-tools:latest es Debian 13/],
+]) {
+  test(`a built candidate that ${name} is rejected with exit 4 and a written verdict, never promoted`, async () => {
+    const f = await fixture({ currentDebian: '13', localImages: INPUTS, ...options });
+    await assert.rejects(f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]), (error) => {
+      assert.equal(error.code, 4, error.stderr);
+      assert.match(error.stderr, reason);
+      return true;
+    });
+    const verdict = await f.report('verdict.txt');
+    assert.match(verdict, /^rejected\n/);
+    assert.match(verdict, reason);
+    assertCandidateOnly(await f.log());
+  });
+}
 
 test.after(async () => {
   await Promise.all(fixtures.map((dir) => rm(dir, { recursive: true, force: true })));
