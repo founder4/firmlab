@@ -1,5 +1,5 @@
 # Rebuild the official 1.17 source, never swap DLLs into a published portable.
-FROM mcr.microsoft.com/dotnet/sdk:8.0.426-bookworm-slim@sha256:738f72aff955d5c5690e06b6fc8ecd1b90ead564099a257ac528ff720b8da85f AS build
+FROM mcr.microsoft.com/dotnet/sdk:8.0.427-bookworm-slim@sha256:6ba9644da07bb5b560a402acec9ca38711a0762969f1b61da261df5c9f6f85da AS build
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake autoconf automake libtool git python3 curl ca-certificates \

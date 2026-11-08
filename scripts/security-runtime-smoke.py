@@ -17,11 +17,18 @@ def run(*args, **kwargs):
 
 
 def proxy_roundtrip(work):
+    compressed = subprocess.check_output([
+        '/opt/mitmproxy-venv/bin/python3', '-c',
+        'import brotli; print(brotli.compress(b"firmlab-synthetic-proxy-ok").hex())',
+    ], text=True).strip()
+    compressed = bytes.fromhex(compressed)
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
+            if self.path == '/synthetic-br':
+                self.send_header('Content-Encoding', 'br')
             self.end_headers()
-            self.wfile.write(b'firmlab-synthetic-proxy-ok')
+            self.wfile.write(compressed if self.path == '/synthetic-br' else b'firmlab-synthetic-proxy-ok')
 
         def log_message(self, *_):
             pass
@@ -60,6 +67,10 @@ def proxy_roundtrip(work):
             client.request('GET', f'http://127.0.0.1:{plain.server_port}/synthetic')
             assert client.getresponse().read() == b'firmlab-synthetic-proxy-ok'
             client.close()
+            client = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+            client.request('GET', f'http://127.0.0.1:{plain.server_port}/synthetic-br')
+            assert client.getresponse().read() == compressed
+            client.close()
             context = ssl.create_default_context(cafile=str(config / 'mitmproxy-ca-cert.pem'))
             client = http.client.HTTPSConnection('127.0.0.1', port, context=context, timeout=10)
             client.set_tunnel('localhost', tls.server_port)
@@ -75,7 +86,8 @@ def proxy_roundtrip(work):
     run(str(mitmproxy_python if mitmproxy_python.exists() else Path(sys.executable)), '-c',
         'from mitmproxy.io import FlowReader; import sys; '
         'flows=list(FlowReader(open(sys.argv[1],"rb")).stream()); '
-        'assert len(flows)==2; assert all(f.response.status_code==200 for f in flows); '
+        'assert len(flows)==3; assert all(f.response.status_code==200 for f in flows); '
+        'assert all(f.response.get_content()==b"firmlab-synthetic-proxy-ok" for f in flows); '
         'import msgpack; assert msgpack.unpackb(msgpack.packb({"ok":True}))=={"ok":True}', str(work / 'flows'))
     print('PASS mitmproxy HTTP, HTTPS with trusted interception CA, saved flow roundtrip', flush=True)
 

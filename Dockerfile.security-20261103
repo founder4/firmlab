@@ -1,0 +1,51 @@
+# Patch the retained Debian 13 toolchain; do not rebuild Dockerfile.tools (Debian 12).
+ARG TOOLS_BASE=homelab-candidate/firmlab-tools:trixie-20261022
+FROM golang:1.27.3-bookworm AS syft
+RUN git clone --depth 1 --branch v1.55.0 https://github.com/anchore/syft /src
+WORKDIR /src
+RUN go get github.com/go-jose/go-jose/v4@v4.1.6 \
+ && go test github.com/go-jose/go-jose/v4 \
+ && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=1.55.0-security20261103' -o /syft ./cmd/syft
+FROM golang:1.27.3-bookworm AS grype
+RUN git clone --depth 1 --branch v0.121.0 https://github.com/anchore/grype /src
+WORKDIR /src
+RUN go get github.com/go-jose/go-jose/v4@v4.1.6 \
+ && go test github.com/go-jose/go-jose/v4 \
+ && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.121.0-security20261103' -o /grype ./cmd/grype
+FROM homelab-candidate/renode:20261103 AS renode
+FROM ${TOOLS_BASE}
+RUN test "$(. /etc/os-release; echo "$VERSION_CODENAME")" = trixie \
+ && apt-get update && apt-get upgrade -y \
+ && apt-get install -y --no-install-recommends python3-venv \
+ && rm -rf /var/lib/apt/lists/*
+COPY scripts/patch-python-security.py /tmp/patch-python-security.py
+COPY scripts/patch-mitmproxy-brotli.py /tmp/patch-mitmproxy-brotli.py
+RUN curl -fL --retry 3 --connect-timeout 20 --max-time 180 \
+      https://codeload.github.com/mitmproxy/mitmproxy/tar.gz/refs/tags/v12.2.3 -o /tmp/mitmproxy.tar.gz \
+ && echo '39073f414cdb9a0bf438b875da0e79bb306bcb7d1331b580763886f509f78c1b  /tmp/mitmproxy.tar.gz' | sha256sum -c - \
+ && mkdir /tmp/mitmproxy-source && tar -xzf /tmp/mitmproxy.tar.gz -C /tmp/mitmproxy-source --strip-components=1 \
+ && python3 /tmp/patch-mitmproxy-brotli.py /tmp/mitmproxy-source
+RUN python3 -m venv /tmp/security-installer \
+ && /tmp/security-installer/bin/python -m pip --python /opt/mitmproxy-venv/bin/python3 install --no-cache-dir --no-deps /tmp/mitmproxy-source \
+ && /tmp/security-installer/bin/python /tmp/patch-python-security.py \
+ && rm -rf /tmp/security-installer /tmp/patch-python-security.py /tmp/patch-mitmproxy-brotli.py /tmp/mitmproxy-source /tmp/mitmproxy.tar.gz
+RUN curl -fL --retry 3 --connect-timeout 15 --max-time 120 \
+      https://repo.maven.apache.org/maven2/com/google/guava/guava/33.7.2-jre/guava-33.7.2-jre.jar \
+      -o /opt/ghidra/Ghidra/Framework/Generic/lib/guava-33.7.2-jre.jar \
+ && echo 'b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c  /opt/ghidra/Ghidra/Framework/Generic/lib/guava-33.7.2-jre.jar' | sha256sum -c - \
+ && rm /opt/ghidra/Ghidra/Framework/Generic/lib/guava-32.1.3-jre.jar
+# A complete self-contained Renode rebuilt from its verified source and .NET 8.0.33.
+RUN rm -rf /opt/renode
+COPY --from=renode /renode /opt/renode
+COPY --from=syft /syft /usr/local/bin/syft
+COPY --from=grype /grype /usr/local/bin/grype
+RUN renode --version && syft version && grype version && mitmdump --version
+# OpenJDK's Debian workaround for CVE-2026-114820: rebuild the stale Java
+# truststore, then apply its conservative four-root removal policy. No TLS bypass.
+RUN rm -f /etc/ssl/certs/java/cacerts && update-ca-certificates --fresh \
+ && for alias in debian:emsign_root_ca_-_g1.pem debian:emsign_root_ca_-_g2.pem \
+      debian:emsign_ecc_root_ca_-_g3.pem debian:aaa_certificate_services.pem; do \
+      if keytool -list -cacerts -storepass changeit -alias "$alias" >/dev/null 2>&1; then \
+        keytool -delete -cacerts -storepass changeit -alias "$alias" || exit 1; \
+      fi; \
+    done
