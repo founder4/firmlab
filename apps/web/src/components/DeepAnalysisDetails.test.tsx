@@ -488,6 +488,76 @@ describe('DeepAnalysisDetails', () => {
     expect(screen.getByText('resets, xosc')).toBeInTheDocument();
   });
 
+  it('distinguishes attempted and completed decodes and retains original source evidence without runtime claims', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="rtos"
+        value={{
+          picobinDisassembly: {
+            attempted: true,
+            available: true,
+            reachableFunctions: [{ address: 0x10000000 }],
+            callEdges: [],
+            functionsAttemptedTotal: 3,
+            functionsCompletedTotal: 1,
+            decoderAttemptsTotal: 5,
+            functionAttemptCap: 8,
+            decoderAttemptCap: 16,
+            functionTargetsPendingTotal: 0,
+            droppedFunctionTargetsTotal: 2,
+            callEdgesTotal: 33,
+            droppedCallEdgesTotal: 1,
+            droppedOutOfMapCallEdgesTotal: 0,
+            decoderSubstitutions: [
+              { address: 0x10000000, originalBytesHex: 'b316a028', mnemonic: 'bset x13, x0, x10' },
+            ],
+            callGraphTruncated: true,
+          },
+        }}
+      />,
+    );
+    const metric = (label: string) => screen.getByText(label).closest('div') as HTMLElement;
+    expect(within(metric('Function targets attempted')).getByText('3')).toBeInTheDocument();
+    expect(within(metric('Function decodes completed')).getByText('1')).toBeInTheDocument();
+    expect(screen.getByText('Decoder coverage and limits')).toBeInTheDocument();
+    expect(screen.getByText(/does not prove execution or whole-image coverage/)).toBeInTheDocument();
+    const table = screen.getByText('b316a028').closest('dl') as HTMLElement;
+    expect(within(table).getByText('0x10000000')).toBeInTheDocument();
+    expect(within(table).getByText('b316a028')).toBeInTheDocument();
+    expect(within(table).getByText('bset x13, x0, x10')).toBeInTheDocument();
+    expect(screen.getByText(/static evidence, not execution/)).toBeInTheDocument();
+    const limits = screen.getByText('Decoder coverage and limits').closest('details') as HTMLElement;
+    expect(within(limits).getByText('Admitted targets still pending').nextElementSibling).toHaveTextContent('0');
+    expect(within(limits).getByText('Direct call edges observed').nextElementSibling).toHaveTextContent('33');
+  });
+
+  it('bounds displayed substitutions and leaves a legacy missing mnemonic explicitly unrecorded', () => {
+    render(
+      <DeepAnalysisDetails
+        imageId="img1"
+        kind="rtos"
+        value={{
+          picobinDisassembly: {
+            functionsAttemptedTotal: -1,
+            functionsCompletedTotal: 1.5,
+            decoderAttemptsTotal: 'five',
+            decoderSubstitutions: Array.from({ length: 20 }, (_, index) => ({
+              address: 0x10000000 + index * 4,
+              originalBytesHex: 'b316a028',
+            })),
+          },
+        }}
+      />,
+    );
+    const attempted = screen.getByText('Function targets attempted').closest('div') as HTMLElement;
+    expect(within(attempted).getByText('Not recorded by this run.')).toBeInTheDocument();
+    expect(screen.getAllByText('Original bytes', { exact: true })).toHaveLength(16);
+    expect(screen.getAllByText('Not recorded by this run.').length).toBeGreaterThan(16);
+    expect(screen.getByText(/16 of 20/)).toBeInTheDocument();
+    expect(screen.queryByText('0x10000040')).not.toBeInTheDocument();
+  });
+
   it('keeps legacy PICOBIN results explicitly unrecorded instead of inventing zero coverage', () => {
     render(
       <DeepAnalysisDetails

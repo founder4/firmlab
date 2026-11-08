@@ -2567,6 +2567,63 @@ span.run-dot.run-running {
   color: var(--text-faint);
   line-height: 1.45;
 }
+.picobin-source-evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  gap: 8px 12px;
+  margin: 0;
+  padding-block: 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.picobin-source-evidence dt {
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.picobin-source-evidence dd {
+  margin: 3px 0 0;
+  color: var(--text);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.deep-evidence-details {
+  margin-top: 9px;
+  min-width: 0;
+}
+.deep-evidence-details > summary {
+  min-height: 44px;
+  color: var(--text);
+  cursor: pointer;
+  padding-block: 7px;
+  line-height: 1.45;
+}
+.deep-evidence-note {
+  margin: 5px 0 8px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  max-width: 72ch;
+  overflow-wrap: anywhere;
+}
+.deep-evidence-accounting {
+  margin: 0;
+}
+.deep-evidence-accounting > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding-block: 5px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.deep-evidence-accounting dt {
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.deep-evidence-accounting dd {
+  margin: 0;
+  max-width: 20ch;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
 .deep-data-link {
   display: inline-flex;
   margin-top: 8px;

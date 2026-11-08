@@ -21,7 +21,7 @@ Focused validation: 44 MCU tests and core build passed, including negative/zero/
 deltas, bounded source/table/terminator/code, inconsistent and odd entry mappings,
 and overlapping destination ranges. All inputs are synthetic local byte arrays.
 
-Integration boundary: the API decoder worker owns `picobin-riscv.ts` concurrently.
-The coordinator must pass its validated primary mapping to this helper after that
-worker settles; this core change alone does not close the provider's mapping bounds.
+The API integration in `aa092c9` now passes its validated primary mapped window
+to this helper, clamps the input to the supplied file size, and records the selected
+bound. See `RP2350-MAPPING-BUDGETS-20261108.md` for provider checks and real-tool evidence.
 Secondary LOAD_MAP regions and broader instruction decoding remain separate work.

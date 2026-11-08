@@ -565,6 +565,18 @@ function PicobinDisassemblyDetails({ value }: { value: unknown }): JSX.Element |
   const functions = Array.isArray(result.reachableFunctions) ? records(result.reachableFunctions) : null;
   const edges = Array.isArray(result.callEdges) ? records(result.callEdges) : null;
   const decodeFailures = Array.isArray(result.decodeFailures) ? records(result.decodeFailures) : null;
+  const substitutions = Array.isArray(result.decoderSubstitutions) ? records(result.decoderSubstitutions) : null;
+  const shownSubstitutions = substitutions?.slice(0, 16) ?? [];
+  const recordedCount = (value: unknown): string => {
+    const n = count(value);
+    return n === null ? t.notRecorded : n.toLocaleString();
+  };
+  const hasAccounting = [
+    'functionsAttemptedTotal',
+    'functionsCompletedTotal',
+    'decoderAttemptsTotal',
+    'callEdgesTotal',
+  ].some((key) => Object.hasOwn(result, key));
   const copyTable = record(result.startupCopyTable);
   const copyRegions = copyTable && Array.isArray(copyTable.regions) ? records(copyTable.regions) : null;
   const attempted = typeof result.attempted === 'boolean' ? result.attempted : null;
@@ -582,6 +594,12 @@ function PicobinDisassemblyDetails({ value }: { value: unknown }): JSX.Element |
           { label: t.entryPoint, value: formatHex(result.entryPoint) },
           { label: t.reachableFunctions, value: functions ? functions.length.toLocaleString() : t.notRecorded },
           { label: t.directCallEdges, value: edges ? edges.length.toLocaleString() : t.notRecorded },
+          ...(hasAccounting
+            ? [
+                { label: t.functionsAttempted, value: recordedCount(result.functionsAttemptedTotal) },
+                { label: t.functionsCompleted, value: recordedCount(result.functionsCompletedTotal) },
+              ]
+            : []),
           { label: t.unresolvedCalls, value: formatNumber(result.unresolvedCallsitesTotal) },
           { label: t.outOfMapCalls, value: formatNumber(result.outOfMapCallsitesTotal) },
           { label: t.decodeFailures, value: formatNumber(result.decodeFailuresTotal) },
@@ -592,6 +610,58 @@ function PicobinDisassemblyDetails({ value }: { value: unknown }): JSX.Element |
       />
       {text(result.reason) && <p className="deep-data-copy">{text(result.reason)}</p>}
       {result.callGraphTruncated === true && <p className="deep-data-empty">{t.picobinGraphTruncated}</p>}
+      {hasAccounting && (
+        <details className="deep-evidence-details">
+          <summary>{t.decoderCoverageLimits}</summary>
+          <p className="deep-evidence-note">{t.decoderCompletionScope}</p>
+          <dl className="deep-evidence-accounting">
+            {[
+              [t.functionAttemptCap, result.functionAttemptCap],
+              [t.decoderAttempts, result.decoderAttemptsTotal],
+              [t.decoderAttemptCap, result.decoderAttemptCap],
+              [t.pendingFunctionTargets, result.functionTargetsPendingTotal],
+              [t.droppedFunctionTargets, result.droppedFunctionTargetsTotal],
+              [t.observedDirectEdges, result.callEdgesTotal],
+              [t.droppedDirectEdges, result.droppedCallEdgesTotal],
+              [t.droppedOutOfMapEdges, result.droppedOutOfMapCallEdgesTotal],
+            ].map(([label, value]) => (
+              <div key={String(label)}>
+                <dt>{String(label)}</dt>
+                <dd>{recordedCount(value)}</dd>
+              </div>
+            ))}
+          </dl>
+          {text(result.functionTargetSelection) && (
+            <p className="deep-evidence-note">{text(result.functionTargetSelection)}</p>
+          )}
+          {text(result.callEdgeSelection) && <p className="deep-evidence-note">{text(result.callEdgeSelection)}</p>}
+        </details>
+      )}
+      {substitutions && substitutions.length > 0 && (
+        <details className="deep-evidence-details">
+          <summary>{t.decoderSourceEvidence}</summary>
+          <p className="deep-evidence-note">{t.decoderViewCaution}</p>
+          {shownSubstitutions.map((item, index) => (
+            <dl className="picobin-source-evidence" key={`${number(item.address) ?? 'substitution'}-${index}`}>
+              <div>
+                <dt>{t.instructionAddress}</dt>
+                <dd className="mono">{formatHex(item.address)}</dd>
+              </div>
+              <div>
+                <dt>{t.originalBytes}</dt>
+                <dd className="mono">{text(item.originalBytesHex) ?? t.notRecorded}</dd>
+              </div>
+              <div>
+                <dt>{t.sourceMnemonic}</dt>
+                <dd className="mono">{text(item.mnemonic) ?? t.notRecorded}</dd>
+              </div>
+            </dl>
+          ))}
+          {substitutions.length > shownSubstitutions.length && (
+            <p className="deep-evidence-note">{t.countMore(shownSubstitutions.length, substitutions.length)}</p>
+          )}
+        </details>
+      )}
       {decodeFailures && decodeFailures.length > 0 && (
         <div className="deep-data-cards">
           {decodeFailures.map((failure, index) => (
