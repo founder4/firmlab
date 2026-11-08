@@ -336,3 +336,13 @@ evidence. A subprocess regression keeps the structured handle in `activeHandles`
 a structured owner of another Run and verifies that current terminal ownership stays exact.
 The Codex footer regression now uses the actual idle excerpt captured before the successful
 8 November recovery, independently accompanied by a satisfied native idle wait.
+
+### Historical Dispatch resources (2026-11-08)
+
+A full `worker-list` can return an explicitly settled historical Dispatch with
+`agentTerminalHandle: null`, `terminalState: null` and `resource: null` after its resource
+moves to a follow-up. The watcher accepts this only when the same Dispatch's full projection
+confirms the settled status, durable evidence and `resource: {state: "absent", reason:
+"not_materialized"}`. It still refuses missing identities on active work, omitted projections,
+conflicting Dispatch/status fields and ambiguous resource loss. This allows full fleet enumeration
+without treating an incomplete concise response as proof that no workers exist.

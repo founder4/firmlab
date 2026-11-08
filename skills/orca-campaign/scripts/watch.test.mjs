@@ -1827,3 +1827,77 @@ test('full structured worker handles remain opaque identities without making the
   quota.deps.call = (args) => (args[0] === 'orchestration' ? orcaCall(cli, args) : quotaBase(args));
   assert.equal((await superviseStep({}, quotaOptions, quota.deps)).pending.target, 'term_ready');
 });
+
+// Captured full worker-list shape after a completed Dispatch transferred its resource
+// to a follow-up. Null identity is not, by itself, evidence of absence.
+const historicalAbsentWorker = {
+  dispatchId: 'ctx_completed_origin',
+  dispatchStatus: 'completed',
+  agentTerminalHandle: null,
+  terminalState: null,
+  resource: null,
+  projection: {
+    dispatchId: 'ctx_completed_origin',
+    stage: { worker: 'succeeded', dispatch: 'completed', detail: 'settled', activity: 'unknown' },
+    outcome: 'succeeded',
+    liveness: { verdict: 'unverifiable', reason: 'missing_status' },
+    evidence: { durable: true, liveStatus: 'unavailable', lastObservedAt: null },
+    resource: { state: 'absent', reason: 'not_materialized' },
+  },
+};
+
+test('full settled absent resource permits fleet enumeration through the real CLI envelope', async (t) => {
+  const cli = await cliEnvelopeFixture(t, {
+    'worker-list': {
+      workers: [historicalAbsentWorker, { agentTerminalHandle: 'structworker_active', dispatchStatus: 'dispatched' }],
+      page: { hasMore: false, nextCursor: null },
+    },
+  });
+  const h = nativeHarness(CODEX_NATIVE_FOOTER);
+  const base = h.deps.call;
+  h.deps.call = (args) => (args[0] === 'orchestration' ? orcaCall(cli, args) : base(args));
+  const snapshot = await snapshotRun(h.deps.call, options, h.deps.now);
+  assert.equal(snapshot.error, undefined);
+  assert.deepEqual(snapshot.activeHandles, ['structworker_active']);
+  assert.equal(ownerState(snapshot, NOW), 'idle');
+});
+
+test('null worker identity remains fail-closed without consistent full settled absence evidence', async (t) => {
+  const variants = [
+    {
+      dispatchStatus: 'dispatched',
+      projection: { ...historicalAbsentWorker.projection, stage: { dispatch: 'dispatched' } },
+    },
+    { agentTerminalHandle: undefined },
+    { agentTerminalHandle: '' },
+    { agentTerminalHandle: ' ' },
+    { terminalState: undefined },
+    { terminalState: 'retained' },
+    { resource: undefined },
+    { resource: { ownershipState: 'owned' } },
+    { dispatchId: undefined },
+    { projection: undefined },
+    { projection: { ...historicalAbsentWorker.projection, dispatchId: 'ctx_other' } },
+    { projection: { ...historicalAbsentWorker.projection, stage: { dispatch: 'dispatched' } } },
+    { projection: { ...historicalAbsentWorker.projection, evidence: { durable: false } } },
+    { projection: { ...historicalAbsentWorker.projection, resource: { state: 'absent' } } },
+    { projection: { ...historicalAbsentWorker.projection, resource: { state: 'owned', reason: 'not_materialized' } } },
+  ];
+  for (const [index, patch] of variants.entries()) {
+    await t.test(String(index), async () => {
+      const h = nativeHarness(CODEX_NATIVE_FOOTER);
+      const base = h.deps.call;
+      h.deps.call = (args) =>
+        args[1] === 'worker-list'
+          ? Promise.resolve({ workers: [{ ...historicalAbsentWorker, ...patch }], page: { hasMore: false } })
+          : base(args);
+      const snapshot = await snapshotRun(h.deps.call, options, h.deps.now);
+      assert.equal(snapshot.error, 'fleet_incomplete');
+      assert.equal((await superviseStep({}, options, h.deps)).phase, 'unknown');
+      assert.equal(
+        h.commands.some((args) => ['send', 'close'].includes(args[1])),
+        false,
+      );
+    });
+  }
+});

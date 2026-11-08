@@ -464,13 +464,31 @@ function completeWorkerPage(page) {
   return (
     Array.isArray(page.workers) &&
     typeof page.page?.hasMore === 'boolean' &&
-    page.workers.every(
-      (worker) =>
-        typeof worker?.agentTerminalHandle === 'string' &&
+    page.workers.every((worker) => {
+      if (typeof worker?.dispatchStatus !== 'string') return false;
+      if (
+        typeof worker.agentTerminalHandle === 'string' &&
         worker.agentTerminalHandle.length > 0 &&
-        worker.agentTerminalHandle.trim() === worker.agentTerminalHandle &&
-        typeof worker.dispatchStatus === 'string',
-    )
+        worker.agentTerminalHandle.trim() === worker.agentTerminalHandle
+      )
+        return true;
+      // A full historical Dispatch may no longer own a resource after a follow-up.
+      // Only the explicit, consistent durable absence projection permits a null identity;
+      // missing fields, active work and unproven resource loss still block supervision.
+      return (
+        worker.agentTerminalHandle === null &&
+        worker.terminalState === null &&
+        worker.resource === null &&
+        typeof worker.dispatchId === 'string' &&
+        worker.dispatchId.length > 0 &&
+        ['completed', 'failed', 'stopped'].includes(worker.dispatchStatus) &&
+        worker.projection?.dispatchId === worker.dispatchId &&
+        worker.projection?.stage?.dispatch === worker.dispatchStatus &&
+        worker.projection?.evidence?.durable === true &&
+        worker.projection?.resource?.state === 'absent' &&
+        worker.projection?.resource?.reason === 'not_materialized'
+      );
+    })
   );
 }
 
