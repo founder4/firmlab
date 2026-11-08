@@ -374,7 +374,6 @@ function trxVerify(buf: Uint8Array, off: number): SignatureVerdict {
   return at('structural', `declared length ${len} is plausible, but runs past the end of this buffer`);
 }
 
-/** The signature registry. Ordering does not matter; overlaps are resolved by the caller. */
 /**
  * One rule per generic BootROM device name, because the scanner reports the MAGIC offset and the name is the
  * envelope's first field. The name is a declared boot-media setting of U-Boot's mtk_image producer, not the
@@ -410,6 +409,7 @@ function mediatekBromRule(id: string, deviceName: string): SignatureRule {
   };
 }
 
+/** The signature registry. Ordering does not matter; overlaps are resolved by the caller. */
 export const SIGNATURE_RULES: readonly SignatureRule[] = [
   // === Filesystems ===
   {

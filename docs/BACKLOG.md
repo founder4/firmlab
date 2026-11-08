@@ -215,7 +215,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   una cola omitida sin corroborar no completa una función. Véase `RP2350-DECODER-EVIDENCE-SAFETY-20261108.md`.
   Los mapas primarios y CRT0 quedan acotados, los solapes ambiguos se rehúsan, y se mantienen ocho destinos y
   dieciséis invocaciones máximas con intentados/completados y aristas omitidas explícitos. La UI muestra esas
-  medidas sin convertirlas en ejecución. Pendientes: regiones LOAD_MAP secundarias más allá del mapa primario,
+  medidas sin convertirlas en ejecución. El filtro posterior de candidatos excluye conflictos con spans y
+  límites originales conocidos antes del reintento, sin debilitar el aceptador global de bytes. La fixture S1
+  exacta conserva su ADDI y llamada a 0x10000018: ahora recupera BSET y completa la entrada, pero ese helper sigue
+  incompleto. Sólo la variante rotulada con RET en 0x18 completa ambos. Las exclusiones llevan contexto de
+  función y total real aunque la salida esté limitada a 64; bytes originales ausentes no se presentan como
+  corroboración independiente. Véase `RP2350-SOURCE-CANDIDATES-20261108.md`.
+  Pendientes: regiones LOAD_MAP secundarias más allá del mapa primario,
   distinción corroborada código/datos y semántica de instrucciones; no cerrar esos límites por fixtures verdes.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee
@@ -328,8 +334,20 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   nombre, dirección, modo y reservados se comprueban sin checksum ni atribución de dispositivo. Nueve variantes
   generadas por el `mkimage` upstream sobre payload inerte pasan, incluidos nombre truncado/UTF-8, tamaño cero,
   offset embebido y bytes posteriores; 129 tests focalizados y core completo (613) pasan. Véase
-  `MEDIATEK-HEADERS-20261108.md`. BootROM/BRLYT/GFH, NAND/SNAND, MT7621 y otras variantes LK siguen pendientes.
-  Ninguna muestra real local acredita esos formatos —los «MTK» del corpus son cadenas sueltas—.
+  `MEDIATEK-HEADERS-20261108.md`. El subconjunto BootROM genérico de U-Boot con NOR/eMMC/SD, offset cero,
+  device header + BRLYT + GFH, también está integrado: 0x900 bytes de cabecera y payload acotados, con campos y
+  reservados contrastados contra fuente primaria fijada y salidas reales de `mkimage` sobre bytes inertes.
+  La API aporta SHA-256 nativo local para un máximo de ocho hits listados y 64 MiB enviados por análisis; core
+  conserva las decisiones y el default sin capacidad queda sin verificar. Un match sólo verifica GFH/payload
+  contra el digest sin clave contiguo: primeros 0x600 bytes, campo digest y cola fuera de cobertura; nunca
+  autenticidad, dispositivo ni arranque. Intentados/completados, discrepancias, indisponibilidad y omisiones
+  persisten por separado en un campo opcional para siempre; resultados antiguos no se revalidan solos. Véanse
+  `MEDIATEK-BOOTROM-20261108.md` y `MEDIATEK-DIGEST-20261108.md`. La aceptación integrada sobre código compilado
+  pasa 20 casos soportados, ocho salidas rehusadas y tres salidas nuevas del generador en contenedor offline.
+  Pendientes: NAND/SNAND, MT7621, offset no cero, otras variantes LK/otros productores y discos SD/eMMC
+  particionados cuyo MBR ocupa bytes del device header que el productor deja a 0xff. Sobres anidados pueden
+  producir hits solapados; no se infiere una partición ni se elimina uno por ello. Ninguna muestra real local
+  acredita esos formatos —los «MTK» del corpus son cadenas sueltas—.
   Realtek sigue pendiente: investigación 2026-11-08, `mkcsysimg`/`csysimg.h` oficiales de OpenWrt en
   `86739f2b3ae9502368b89ef37fa6f31c42aad6f4` definen `CSYS` en mayúsculas y campos little-endian para el
   formato ADM/Edimax; no justifican reconocer las firmas Realtek `csys`/`cr6c`/`cs6c` en minúsculas. No se
@@ -1026,7 +1044,13 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   Fuentes OASIS fijadas y límites en `CSAF-BRANCH-IDENTITIES-20261108.md`; el código compilado preservó las 53
   filas de una salida real offline Syft/Grype sobre metadatos sintéticos, con estados, desacuerdos de identidad y
   omisiones explícitos. Es evidencia de parsing/transporte, no firmware ni verdad de la afirmación. Los
-  subcomponents de statement ya se leen, faltan los anidados dentro del producto. El fallo conservador de
+  subcomponents de statement ya se leen, faltan los anidados dentro del producto porque su identidad es
+  contextual al padre y no se puede aplanar sin vincularlo. Los identificadores directos OpenVEX PURL/CPE22/CPE23
+  concretos y versionados ya se leen como alias literales; mapas desconocidos/malformados o un ID helper en
+  conflicto se rehúsan con omisiones, sin inferir equivalencias. La aceptación compilada con las mismas 53 filas
+  Syft/Grype conserva estados, conteos y ProofState; véase `OPENVEX-IDENTIFIERS-20261108.md`. La cobertura CSAF
+  también pasó doce escenarios Chromium EN/ES, claro/oscuro y móvil/escritorio con metadatos exteriores simulados
+  (`CSAF-BRANCH-IDENTITIES-20261108.md`), sin pretender validar el corpus real. El fallo conservador de
   npm/PyPI se cerró el 2026-11-08: Grype conserva su PURL opcional y se exige identidad completa; Go/Composer
   conservan además su nombre cualificado. Siguen fuera las equivalencias entre CPE/PURL/nombre y las reglas de
   subconjunto de calificadores de distribución: no borrar `arch`/`distro` para adjuntar una afirmación más general.

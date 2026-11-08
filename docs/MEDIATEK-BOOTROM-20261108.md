@@ -1,5 +1,9 @@
 # MediaTek generic BootROM envelope subset — 2026-11-08
 
+Follow-up: [bounded local digest verification](MEDIATEK-DIGEST-20261108.md) now supplies native SHA-256 through
+the API intake wrapper. The standalone parser/scanner described here still do not verify it; default pure core
+without a trusted capability remains unverified. This document records the structural subset and its acceptance.
+
 This closes only the **generic NOR/SD/eMMC device + BRLYT + GFH** part of the deferred MediaTek container gap,
 for the U-Boot `mtk_image` producer with the default `hdroffset=0`. Rules `mediatek-brom-nor`,
 `mediatek-brom-emmc` and `mediatek-brom-sdmmc` identify an envelope matching that bounded producer contract.
@@ -184,3 +188,8 @@ Deferred (for the coordinator-owned `docs/BACKLOG.md`): nonzero `hdroffset` enve
 variant, NAND/SNAND device headers and their BRLYT/GFH, MT7621 SPL, non-U-Boot producers and GFH layouts,
 actual SHA-256 verification (needs a vetted digest available to core, or an API-side check), and all
 security/authentication, runtime and device attribution.
+
+The producer-output subset also deliberately refuses flashed/partitioned SD/eMMC disk images that replace
+erased device-header bytes with an MBR at 0x1be..0x1ff. It does not interpret partition tables. Nested supported
+envelopes can produce overlapping hits (outer envelope and inner payload envelope); scanner overlap resolution
+remains the caller's responsibility, and each listed hit consumes its own bounded digest work if eligible.
