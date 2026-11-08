@@ -145,6 +145,35 @@ describe('Grype artifact identity through parser and normalizer', () => {
     },
   );
 
+  it.each([
+    ['github.com/golang/protobuf', 'v1.5.2', 'pkg:golang/github.com/golang/protobuf@v1.5.2'],
+    ['github.com/cli/cli/v2', 'v2.63.0', 'pkg:golang/github.com/cli/cli/v2@v2.63.0'],
+    ['laravel/framework', 'v8.0.0', 'pkg:composer/laravel/framework@v8.0.0'],
+    ['Laravel/Framework', 'v8.0.0', 'pkg:composer/laravel/framework@v8.0.0'],
+  ])(
+    'retains qualified language artifact identity through the real parser boundary: %s',
+    async (name, version, purl) => {
+      scan({ name, version, purl });
+      const result = await runSbom('fixture', '/synthetic-rootfs', handle);
+      const [row] = normalizeSbom(result, undefined, vex(purl, 'fixed'));
+      expect(row?.evidence?.vendorVex).toMatchObject({ basis: 'vendor_assertion', verdict: 'vendor_states_fixed' });
+      expect(row).toMatchObject({
+        severity: 'high',
+        proofState: 'needs_runtime_reproduction',
+        evidenceChannel: 'external_advisory',
+      });
+      expect(result.counts.High).toBe(1);
+      for (const wrong of [
+        purl.replace('/framework', '/other'),
+        purl.replace('/protobuf', '/other'),
+        purl.replace('@', '@different-'),
+        purl.replace('pkg:golang/', 'pkg:composer/'),
+      ].filter((value) => value !== purl)) {
+        expect(normalizeSbom(result, undefined, vex(wrong, 'fixed'))).toEqual(normalizeSbom(result));
+      }
+    },
+  );
+
   it.each([undefined, ''])('keeps legacy behavior when Grype supplies no identity (%j)', async (purl) => {
     scan({ name: 'busybox', version: '1.20', ...(purl !== undefined ? { purl } : {}) });
     const result = await runSbom('fixture', '/synthetic-rootfs', handle);

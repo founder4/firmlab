@@ -46,7 +46,7 @@ export function parsePackageIdentity(raw: unknown): PackageIdentity | null {
   const segments = body.split('/').map(decode);
   if (segments.some((s) => !s || s.includes('/'))) return null;
   let name = segments.at(-1) as string;
-  const namespace = segments.slice(0, -1).join('/');
+  let namespace = segments.slice(0, -1).join('/');
   if (type === 'npm') {
     if (!/^[a-z0-9_~][a-z0-9._~-]*$/i.test(name)) return null;
     if (namespace && !/^@[a-z0-9_~][a-z0-9._~-]*$/i.test(namespace)) return null;
@@ -56,6 +56,12 @@ export function parsePackageIdentity(raw: unknown): PackageIdentity | null {
     const normalized = pypiName(name);
     if (!normalized) return null;
     name = normalized;
+  }
+  if (type === 'composer') {
+    // Composer identity is vendor/name, case-insensitive under its PURL definition.
+    if (!namespace || namespace.includes('/')) return null;
+    namespace = namespace.toLowerCase();
+    name = name.toLowerCase();
   }
   const qualifiers = new Map<string, string>();
   for (const pair of match[3]?.split('&') ?? []) {
@@ -82,9 +88,13 @@ export function parsePackageIdentity(raw: unknown): PackageIdentity | null {
 export function measuredPackageIdentity(name: string, version: string, purl: unknown): PackageIdentity | null {
   const identity = parsePackageIdentity(purl);
   if (!identity || !identity.version || identity.version === '*' || identity.version === '-') return null;
-  const artifactName = identity.type === 'pypi' ? pypiName(name) : name;
+  const artifactName =
+    identity.type === 'pypi' ? pypiName(name) : identity.type === 'composer' ? name.toLowerCase() : name;
+  // Syft keeps the full module path / Composer vendor/name in artifact.name, while
+  // the PURL splits its final segment into name. Do not infer this for other types.
+  const qualifiedArtifactName = ['npm', 'golang', 'composer'].includes(identity.type);
   const expectedName =
-    identity.type === 'npm' && identity.namespace ? `${identity.namespace}/${identity.name}` : identity.name;
+    qualifiedArtifactName && identity.namespace ? `${identity.namespace}/${identity.name}` : identity.name;
   return artifactName === expectedName && version === identity.version ? identity : null;
 }
 

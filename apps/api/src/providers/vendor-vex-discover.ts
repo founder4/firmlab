@@ -495,7 +495,8 @@ const DISTRO_PURL_TYPES: ReadonlySet<string> = new Set(['deb', 'rpm', 'apk', 'al
 export const PACKAGE_VEX_PRODUCTS =
   'When Grype recorded a package purl, only a versioned purl with the same ecosystem, namespace, name, version, ' +
   'qualifiers and subpath matches, after checking agreement with the artifact name/version; npm scopes are exact ' +
-  'and PyPI names use PyPA normalization. An invalid or conflicting measured identity matches nothing. ' +
+  'and PyPI names use PyPA normalization; Go module paths and Composer vendor/name remain qualified. ' +
+  'An invalid or conflicting measured identity matches nothing. ' +
   'Without recorded identity, the legacy rule applies: ' +
   'the exact package name as a plain identifier; a purl whose name equals the package name exactly and whose type ' +
   'is "generic" with no namespace, or an OS-distribution package type (deb, rpm, apk, alpm, opkg) with any distro ' +

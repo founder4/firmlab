@@ -861,3 +861,42 @@ describe('discovery counts what it could not list', () => {
     expect(discoverVendorVex(root).coverage).toMatchObject({ unreadableDirectories: 0, unreadableDirectoryPaths: [] });
   });
 });
+
+describe('qualified measured package naming and conservative identity boundaries', () => {
+  it('requires the complete Go module path and exact version, including a module major suffix', () => {
+    const purl = 'pkg:golang/github.com/cli/cli/v2@v2.63.0';
+    const matches = packageProductMatcher('github.com/cli/cli/v2', 'v2.63.0', purl);
+    expect(matches(purl)).toBe(true);
+    expect(matches('pkg:golang/github.com/cli/cli@v2.63.0')).toBe(false);
+    expect(matches('pkg:golang/github.com/other/cli/v2@v2.63.0')).toBe(false);
+    expect(matches('cli')).toBe(false);
+    expect(measuredPackageIdentity('v2', 'v2.63.0', purl)).toBeNull();
+  });
+
+  it('uses case-insensitive Composer vendor/name without flattening vendor or accepting an invalid namespace', () => {
+    const matches = packageProductMatcher('Laravel/Framework', 'v8.0.0', 'pkg:composer/laravel/framework@v8.0.0');
+    expect(matches('pkg:composer/LARAVEL/FRAMEWORK@v8.0.0')).toBe(true);
+    expect(matches('pkg:composer/other/framework@v8.0.0')).toBe(false);
+    expect(matches('pkg:composer/laravel/framework@8.0.0')).toBe(false);
+    expect(matches('framework')).toBe(false);
+    expect(measuredPackageIdentity('framework', 'v8.0.0', 'pkg:composer/laravel/framework@v8.0.0')).toBeNull();
+    expect(parsePackageIdentity('pkg:composer/framework@v8.0.0')).toBeNull();
+    expect(parsePackageIdentity('pkg:composer/extra/laravel/framework@v8.0.0')).toBeNull();
+  });
+
+  it('retains explicit distro qualifiers and generic identity rather than silently broadening new measured rows', () => {
+    const matches = packageProductMatcher(
+      'curl',
+      '8.14.1-2+deb13u7',
+      'pkg:deb/debian/curl@8.14.1-2%2Bdeb13u7?arch=arm64&distro=debian-13',
+    );
+    expect(matches('pkg:deb/debian/curl@8.14.1-2%2Bdeb13u7?distro=debian-13&arch=arm64')).toBe(true);
+    expect(matches('pkg:deb/debian/curl@8.14.1-2%2Bdeb13u7')).toBe(false);
+    expect(matches('pkg:deb/debian/curl@8.14.1-2%2Bdeb13u7?arch=amd64&distro=debian-13')).toBe(false);
+    expect(matches('curl')).toBe(false);
+    expect(
+      packageProductMatcher('busybox', '1.36.1', 'pkg:generic/busybox@1.36.1')('pkg:apk/alpine/busybox@1.36.1'),
+    ).toBe(false);
+    expect(packageProductMatcher('curl', '8.14.1-2+deb13u7')('curl')).toBe(true);
+  });
+});

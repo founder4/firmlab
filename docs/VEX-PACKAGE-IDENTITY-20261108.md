@@ -54,7 +54,7 @@ without the field retain the existing conservative name/version matching contrac
 
 This is deliberately not a full PURL conformance library: noncanonical redundant
 namespace/subpath slashes and empty qualifiers are refused rather than repaired,
-and ecosystem-specific artifact-name conversions beyond npm/PyPI are not inferred.
+and ecosystem-specific artifact-name conversions beyond the documented npm/PyPI/Go/Composer contracts are not inferred.
 This can miss an assertion; it does not authorize a cross-package attachment.
 Legacy name/CPE matching and discovery's legacy unreadable-identity accounting
 are unchanged. Each measured matcher carries a runtime-only refusal reader, so
@@ -133,3 +133,45 @@ Follow-up validation: `pnpm --filter @firmlab/api test sbom vendor-vex findings-
 passes 9 files / 264 tests; API typecheck/build and Biome pass. The offline
 subprocess/discovery/normalizer fixture also checks that malformed qualifier and
 subpath assertions contribute two omissions on the unchanged fixed row.
+
+
+## Independent review disposition and namespace follow-up
+
+The review reproduced an actual naming mismatch for Go modules and Composer:
+Syft artifact names contain the complete module path or vendor/name, whereas the
+PURL divides the final segment from its namespace. The matcher now joins these
+components for these two documented types, including Go module `/v2` suffixes.
+Composer vendor/name is case-insensitive and requires exactly one vendor segment;
+versions remain exact (`v8.0.0` is different from `8.0.0`). Go paths remain exact
+rather than introducing a new case folding assumption.
+
+Primary implementation sources are Syft v1.55.0's
+[Go package constructor](https://github.com/anchore/syft/blob/v1.55.0/syft/pkg/cataloger/golang/package.go)
+and [Composer package constructor](https://github.com/anchore/syft/blob/v1.55.0/syft/pkg/cataloger/php/package.go),
+plus the [Composer PURL definition](https://github.com/package-url/purl-spec/blob/main/types/composer-definition.json).
+
+The review also identified a compatibility difference for newly measured distro
+and generic PURLs. This is an explicit conservative decision: a new Debian row
+with `arch=arm64&distro=debian-13` requires the same qualifiers, and a measured
+generic BusyBox identity does not become an Alpine identity through its name.
+Qualifier-free, CPE or plain assertions can consequently attach to an older row
+without a recorded PURL but remain unattached to a newer, more specific row.
+This can miss vendor annotations; it never changes CVE count/severity/proof or
+claims the vendor cleared an unmatched package. Supporting qualifier subsets or
+explicit cross-identifier equivalence needs a separately justified contract.
+Raw unencoded `+` is still refused and counted in row omissions when relevant;
+properly percent-encoded `%2B` works. Full PURL conformance remains out of scope.
+
+Follow-up validation: nine focused SBOM/VEX/normalizer files, **271 tests**, and
+API build passed. An offline disposable container pinned to
+`sha256:758b44ca5e1487da3f34bd96ec1d84558354cc837f69da0fafb54e6c21f82b42`
+ran real Syft 1.55.0 on synthetic `go.mod` and `composer.lock` and fed the measured
+artifacts to the actual built mapper/matcher. The fixtures contain
+`github.com/golang/protobuf@v1.5.2` and `laravel/framework@v8.0.0`, with no fetched
+package code. The replay script also runs real Grype 0.121.0 against that SBOM;
+its actual advisory count and exact measured PURLs are retained in campaign
+`vex-namespace-built-real.json`. A separately labelled synthetic advisory envelope
+checks both ecosystems even if the installed advisory database has no match.
+All checks require exact identity and refuse a plain name or changed version.
+Only API/core build outputs are mounted read-only; temporary input and output
+stay inside the disposable network-none container. No live database/corpus is mounted.
