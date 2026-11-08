@@ -103,7 +103,7 @@ in-repo TMPDIR refusal and valid name spellings. Full Biome and Bash syntax chec
 The final full suite passed 106/106, including all 26 existing deploy tests. A strengthened pre-second-tag
 manifest assertion then passed its focused 2/2 rerun. Full `pnpm biome`, `/bin/bash -n` and `git diff --check`
 passed; the coordinator owns the repository-wide typecheck/test/build gate. The supported real-build rerun
-is recorded below when completed.
+is recorded below.
 
 Five real no-build invocations refused with exit 1: private input namespace, empty tag, empty repository,
 nonignored in-repo report, and external recipe. These calls introduced no image refs. Real Docker snapshots
@@ -122,3 +122,47 @@ Evidence root: `/Users/agfil/.local/state/orca-campaign/firmlab-20261108-034811/
 It contains original-source recipe/alias/verdict/tag reproductions, red/green suite logs, no-build refusals
 and before/after Docker snapshots. The coordinator owns integration and the repository-wide check/test/build
 gate. Promotion, deployment, dependency refresh and cleanup remain outside this task.
+
+## Clean-source real cached rerun and retained refs
+
+Built successfully from clean `62a2c7c88b93f16ea69710ede004f114c43d963a`, explicitly using the absolute path
+of the original tracked recipe:
+
+```bash
+GRYPE_DB_REFRESH=campaign-20261108-script-run /bin/bash scripts/tools-candidate.sh \
+  --tag firmlab-campaign-20261108/tools:provenance-62a2c7c \
+  --recipe /Users/agfil/orca/workspaces/firmlab/campaign-tools-provenance-20261108/Dockerfile.trixie \
+  --retained firmlab-campaign-20261108/retained-src:2d0aba372d9d \
+  --renode firmlab-campaign-20261108/renode-src:2d0aba372d9d \
+  --report /Users/agfil/.local/state/orca-campaign/firmlab-20261108-034811/tools-provenance/candidate-62a2c7c
+```
+
+Exit 0, `accepted`, approximately 11 seconds. Baseline and candidate each returned 27 `ok` and one
+`analyzeHeadless present` across the 28 bounded offline probes. Debian 13; offline Grype status was valid.
+The raw recipe blob is `ab290d87a3340d4f7e36e959a29c2783cdcbaa3a`, and the clean source fingerprint is
+`e11aed882642a7bca12159d3cfec76506a484ea1c8417b5afb82034a5d091798`.
+
+The refresh key deliberately reuses the prior cached Grype layer; this validates the changed recipe/path,
+mutation-manifest and acceptance path, not a new database download or dependency refresh. All 27 filesystem
+layers exactly match accepted `hardening-c6e4fbb` (`sha256:4d35e3ef…`). The sole difference within Docker
+inspect's `.Config` is `Labels.org.opencontainers.image.revision`, now `62a2c7c…`. The final layer remains
+`sha256:f46c06218786dd82d545f7bb035f58ccc7193c63e7144ba97c3a5f7320d86e9e`.
+No expensive functional smoke was repeated because the filesystem layers are identical.
+
+Only these three new refs were created by this task; all are retained, and no cleanup was executed:
+
+| New ref | Full image ID |
+|---|---|
+| `firmlab-campaign-20261108/tools:provenance-62a2c7c` | `sha256:df539ca29174f734100a209619fc1e58e5869c4ee9e4325b5bc71a15cbd4d311` |
+| `firmlab-candidate-input/firmlab-candidate-input.httwsynq-66617:retained_image` | `sha256:2d0aba372d9dfb32b9221df153622d9b70fbc7d278dcf876bf1c8f0d0a13e5f2` |
+| `firmlab-candidate-input/firmlab-candidate-input.httwsynq-66617:renode_image` | `sha256:5e73a0e69f7e6c9855b3f8a8af94212103631ae9d1b747cb5b6992d6f1d301ba` |
+
+Any later cleanup must target only these exact refs, never their shared image IDs or a global prune. The
+retained alias shares the live tools image ID. Before/after inspections confirmed `firmlab-tools:latest`
+(`sha256:2d0aba37…`), `firmlab-firmware:latest` (`sha256:76f8e015…`), the previous accepted candidate and the
+live container's identity/image/start time unchanged; its observed Docker health was `healthy`. This is
+local container evidence, not a new claim about external remote-access availability.
+
+`candidate-62a2c7c.log`, its complete report directory, `candidate-result.json`, `real-verification.json`,
+`new-image.json`, `retained-image-refs.tsv` and before/after snapshots persist in the external evidence root.
+The documentation-only follow-up does not alter the source script validated by this rerun.
