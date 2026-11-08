@@ -705,6 +705,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Deuda estructural y de proceso
 
+- [ ] Reconciliar la caché generada de Impeccable con el lint local: el hook escribe
+  `.impeccable/hook.cache.json` minificado; aunque está excluido de Git localmente, Biome lo escanea y falla
+  por formato. Observado repetidamente el 2026-11-08; formatearlo permite pasar el control, pero no resuelve
+  la siguiente regeneración. Acordar una exclusión exclusiva del artefacto generado o corregir su productor,
+  sin desactivar el detector ni ampliar la excepción semántica `side-tab` a otras reglas o archivos.
+
 - [ ] Reproducir el fallo puntual macOS/Node 26 de `job-process.test.ts` observado durante la validación del
   2026-11-08: el caso de `maxBuffer` recibió `kill EPERM` en vez del error de límite. Los seis casos del fichero
   pasan aislados; no se ha demostrado la causa ni un defecto del runtime Linux desplegado. Conservar el fallo

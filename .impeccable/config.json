@@ -1,0 +1,15 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": ["apps/web/src/theme.css"],
+        "createdAt": "2026-11-08T14:23:09.593Z",
+        "reason": "Coordinator: four existing 2px semantic provider-status indicators (proven, lead/running, blocked, failed), introduced in 2883218 before this release and driven by job outcomes in AnalysisActionsPanel.tsx with explicit text/badges; preserve intentional operational status cues, not decorative card accents."
+      }
+    ]
+  }
+}
