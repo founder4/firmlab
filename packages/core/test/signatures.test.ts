@@ -21,6 +21,70 @@ function ascii(s: string): number[] {
   return [...s].map((c) => c.charCodeAt(0));
 }
 
+/**
+ * Minimal U-Boot mtk_image default (hdroffset=0) generic envelope, laid out as mtk_image_set_gen_header at the
+ * pinned commit writes it. The digest field is left zero: the scanner does not verify it, and these tests pin that.
+ */
+function bromEnvelope(name: string, type: number, payloadSize = 1): Uint8Array {
+  const total = 0x900 + payloadSize + 32;
+  const out = new Uint8Array(total).fill(0xff);
+  const dv = new DataView(out.buffer);
+  out.set([...ascii(name), 0], 0);
+  dv.setUint32(12, 1, true);
+  dv.setUint32(16, 0x200, true);
+  out.set([...ascii('BRLYT'), 0, 0, 0], 0x200);
+  for (const [at, v] of [
+    [0x208, 1],
+    [0x20c, 0x600],
+    [0x210, total],
+    [0x214, 0x42424242],
+    [0x218, type],
+    [0x21c, 0x600],
+    [0x220, total],
+  ] as const)
+    dv.setUint32(at, v, true);
+  const g = 0x600;
+  out.fill(0, g, total);
+  const common = (at: number, size: number, gfhType: number, version: number) => {
+    dv.setUint32(g + at, (0x4d4d4d | (version << 24)) >>> 0, true);
+    dv.setUint16(g + at + 4, size, true);
+    dv.setUint16(g + at + 6, gfhType, true);
+  };
+  common(0, 56, 0, 1);
+  out.set(ascii('FILE_INFO'), g + 8);
+  dv.setUint32(g + 20, 1, true);
+  dv.setUint16(g + 24, 1, true);
+  out[g + 26] = 5;
+  out[g + 27] = 1;
+  for (const [at, v] of [
+    [28, 0x100],
+    [32, total - 0x600],
+    [36, total],
+    [40, 0x300],
+    [44, 32],
+    [48, 0x300],
+    [52, 1],
+  ] as const)
+    dv.setUint32(g + at, v, true);
+  common(56, 12, 1, 1);
+  dv.setUint32(g + 64, 1, true);
+  common(68, 100, 7, 3);
+  dv.setUint32(g + 76, 0x190, true);
+  dv.setUint32(g + 156, 5000, true);
+  common(168, 0x214, 3, 1);
+  common(700, 20, 2, 1);
+  dv.setUint32(g + 712, 0x10, true);
+  dv.setUint32(g + 716, 0x80, true);
+  common(720, 48, 8, 1);
+  dv.setUint32(g + 728, 3, true);
+  return out;
+}
+const BROM_RULES = [
+  ['mediatek-brom-nor', 'SF_BOOT', 0x10007],
+  ['mediatek-brom-emmc', 'EMMC_BOOT', 0x10005],
+  ['mediatek-brom-sdmmc', 'SDMMC_BOOT', 0x10008],
+] as const;
+
 describe('scanSignatures', () => {
   it('finds a SquashFS magic at its offset', () => {
     const buf = planted(8192, 4096, ascii('hsqs'));
@@ -465,6 +529,27 @@ describe('signature confidence rubric', () => {
         [8, new Array(32).fill(0)],
         [40, u32leBytes(1)],
       ),
+    },
+    {
+      id: 'mediatek-brom-nor',
+      tier: 'consistent',
+      pos: bromEnvelope('SF_BOOT', 0x10007),
+      // Same device name; BRLYT declares another media type, which the generator never pairs with this name.
+      neg: bromEnvelope('SF_BOOT', 0x10005),
+    },
+    {
+      id: 'mediatek-brom-emmc',
+      tier: 'consistent',
+      pos: bromEnvelope('EMMC_BOOT', 0x10005),
+      // Same device name; BRLYT declares another media type, which the generator never pairs with this name.
+      neg: bromEnvelope('EMMC_BOOT', 0x10008),
+    },
+    {
+      id: 'mediatek-brom-sdmmc',
+      tier: 'consistent',
+      pos: bromEnvelope('SDMMC_BOOT', 0x10008),
+      // Same device name; BRLYT declares another media type, which the generator never pairs with this name.
+      neg: bromEnvelope('SDMMC_BOOT', 0x10007),
     },
     // --- existing rules that gained a structural check ---
     {
@@ -1013,5 +1098,71 @@ describe('MediaTek LK scanner bounds', () => {
     bytes.set(Buffer.from('MediaTek MTK LK_PART_MAGIC SF_BOOT EMMC_BOOT SDMMC_BOOT BRLYT FILE_INFO'));
     bytes.set([0x27, 0x05, 0x19, 0x56], 200);
     expect(scanSignatures(bytes).some((hit) => hit.id === 'mediatek-lk')).toBe(false);
+  });
+});
+
+describe('MediaTek BootROM envelope scanner bounds', () => {
+  it.each(BROM_RULES)(
+    'keeps an embedded %s hit past the listing cap and counts malformed candidates',
+    (id, name, type) => {
+      const envelope = bromEnvelope(name, type);
+      const bytes = new Uint8Array(envelope.length + 600);
+      bytes.set(envelope, 13);
+      bytes.set([...ascii(name), 0], envelope.length + 100);
+      const scan = scanSignaturesDetailed(bytes, { maxHits: 0 });
+      expect(scan.hits.filter((hit) => hit.id.startsWith('mediatek-'))).toEqual([
+        expect.objectContaining({
+          id,
+          offset: 13,
+          tier: 'consistent',
+          category: 'container',
+          meta: expect.objectContaining({
+            size: envelope.length,
+            payloadSize: 1,
+            loadAddr: 0x400,
+            digest: 'not_verified',
+          }),
+          rationale: expect.stringMatching(/SHA-256 field.*not verified.*no integrity, authenticity/i),
+        }),
+      ]);
+      expect(scan.rejectedByRule?.[id]).toBe(1);
+      expect(scan.matched - (scan.rejected ?? 0)).toBe(scan.hits.length);
+    },
+  );
+
+  it('counts every incomplete envelope candidate before the cap, without inventing a verified tier', () => {
+    const complete = bromEnvelope('SF_BOOT', 0x10007);
+    for (let length = 8; length < complete.length; length++) {
+      const scan = scanSignaturesDetailed(complete.subarray(0, length), { maxHits: 0 });
+      expect(
+        scan.hits.some((hit) => hit.id === 'mediatek-brom-nor'),
+        `length ${length}`,
+      ).toBe(false);
+      expect(scan.rejectedByRule?.['mediatek-brom-nor']).toBe(1);
+    }
+    expect(scanSignatures(complete).find((hit) => hit.id === 'mediatek-brom-nor')?.tier).toBe('consistent');
+  });
+
+  it('identifies nothing else in a complete envelope, and LK and BootROM never stand in for each other', () => {
+    const envelope = bromEnvelope('EMMC_BOOT', 0x10005);
+    expect(scanSignatures(envelope).map((hit) => hit.id)).toEqual(['mediatek-brom-emmc']);
+    const lk = new Uint8Array(513).fill(0xff);
+    lk.set([0x88, 0x16, 0x88, 0x58, 1, 0, 0, 0]);
+    lk.fill(0, 8, 44);
+    lk[40] = 1;
+    expect(scanSignatures(lk).some((hit) => hit.id.startsWith('mediatek-brom-'))).toBe(false);
+  });
+
+  it('does not treat incidental vendor strings, generic uImage or bare names as a BootROM envelope', () => {
+    const bytes = new Uint8Array(0x1200);
+    bytes.set(ascii('MediaTek MTK SF_BOOT EMMC_BOOT SDMMC_BOOT BRLYT FILE_INFO MMM'));
+    bytes.set([...ascii('SF_BOOT'), 0, ...ascii('EMMC_BOOT'), 0, ...ascii('SDMMC_BOOT'), 0], 100);
+    bytes.set([0x27, 0x05, 0x19, 0x56], 200);
+    bytes.set([...ascii('BRLYT'), 0, 0, 0, 1, 0, 0, 0], 0x400);
+    const scan = scanSignaturesDetailed(bytes);
+    expect(scan.hits.some((hit) => hit.id.startsWith('mediatek-'))).toBe(false);
+    expect(scan.rejectedByRule?.['mediatek-brom-nor']).toBe(1);
+    expect(scan.rejectedByRule?.['mediatek-brom-emmc']).toBe(1);
+    expect(scan.rejectedByRule?.['mediatek-brom-sdmmc']).toBe(1);
   });
 });
