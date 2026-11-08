@@ -7,7 +7,8 @@
  */
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -19,6 +20,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RETAINED = 'homelab-rollback/firmlab-tools:20261022-pre-trixie';
 const RENODE = 'homelab-candidate/renode:trixie-20261022';
 const fixtures = [];
+const BASELINE_ID = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const inputId = (ref) => `sha256:${createHash('sha256').update(ref).digest('hex')}`;
 
 /** The capability table the API probes, read from tools.ts itself so the deploy guard cannot drift from it. */
 async function declaredProbes() {
@@ -75,18 +78,20 @@ const DOCKER_SHIM = [
   'printf "%q " "$@" >> "$DOCKER_LOG"',
   'printf "\\n" >> "$DOCKER_LOG"',
   'if [ "$1" = image ] && [ "$2" = inspect ]; then',
-  // Only tools-candidate.sh asks for the ID of an input or baseline; every other ref keeps its answer below.
   '  if [ "$5" = "{{.Id}}" ]; then',
-  '    [ "$3" = "$TOOLS_IMAGE_TAG" ] && [ "$SHIM_TOOLS_PRESENT" = 1 ] && { printf "sha256:id-%s\\n" "$3"; exit 0; }',
-  '    case $\'\\n\'"$LOCAL_IMAGES"$\'\\n\' in *$\'\\n\'"$3"$\'\\n\'*) printf "sha256:id-%s\\n" "$3"; exit 0 ;; esac',
+  '    if [ "$3" = "$TOOLS_IMAGE_TAG" ] && [ "$SHIM_TOOLS_PRESENT" = 1 ]; then printf "%s\\n" "$BASELINE_ID"; exit 0; fi',
+  '    if [ "$3" = "$CANDIDATE_TAG_REF" ] && [ -f "$FIXTURE/built" ]; then printf "%s\\n" "${SHIM_CANDIDATE_TAG_ID:-$CANDIDATE_ID}"; exit 0; fi',
+  `    id=$(printf '%s\\n' "$LOCAL_IMAGE_IDS" | awk -F '\\t' -v ref="$3" '$1 == ref {print $2; exit}')`,
+  `    [ -n "$id" ] || id=$(awk -F '\\t' -v ref="$3" '$1 == ref {print $2; exit}' "$FIXTURE/aliases" 2>/dev/null)`,
+  '    [ -n "$id" ] && { printf "%s\\n" "$id"; exit 0; }',
   '  fi',
   '  case "$3" in',
-  '    "$TOOLS_IMAGE_TAG")',
+  '    "$TOOLS_IMAGE_TAG"|"$BASELINE_ID")',
   '      [ "$SHIM_TOOLS_PRESENT" = 1 ] || exit 1',
   '      if [ "$4" = --format ]; then printf "%s\\n" "$CURRENT_LAYER"; fi',
   '      exit 0 ;;',
-  '    sha256:candidate)',
-  '      if [ "$4" = --format ]; then printf "%s\\n" "$CANDIDATE_LAYER"; fi',
+  '    sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc)',
+  '      if [ "$4" = --format ]; then printf "%s\\n" "$SHIM_CANDIDATE_LAYER"; fi',
   '      exit 0 ;;',
   '    firmlab-firmware:latest) printf "sha256:firmware\\n"; exit 0 ;;',
   '  esac',
@@ -98,10 +103,14 @@ const DOCKER_SHIM = [
   '  exit 1',
   'fi',
   'if [ "$1" = buildx ] && [ "$2" = inspect ]; then printf "Name: default\\nDriver: %s\\n" "$BUILDX_DRIVER"; exit 0; fi',
+  'if [ "$1" = tag ]; then printf "%s\\t%s\\n" "$3" "$2" >> "$FIXTURE/aliases"; exit 0; fi',
   'if [ "$1" = build ]; then',
+  '  touch "$FIXTURE/built"',
+  '  [ "${SHIM_SOURCE_MUTATION:-0}" = 1 ] && printf "changed\\n" >> Dockerfile.tools',
+  '  [ "${SHIM_ALIAS_DRIFT:-0}" = 1 ] && sed -i.bak \'s/sha256:/broken:/g\' "$FIXTURE/aliases"',
   '  previous=""',
   '  for argument in "$@"; do',
-  '    if [ "$previous" = --iidfile ]; then printf "sha256:candidate\\n" > "$argument"; fi',
+  '    if [ "$previous" = --iidfile ]; then [ "${SHIM_IID_MISSING:-0}" = 1 ] || printf "%s\\n" "${SHIM_IID:-$CANDIDATE_ID}" > "$argument"; fi',
   '    previous="$argument"',
   '  done',
   '  exit 0',
@@ -110,8 +119,8 @@ const DOCKER_SHIM = [
   '  args=("$@"); which=""; entry=""; after=()',
   '  for ((i = 1; i < ${#args[@]}; i++)); do',
   '    case "${args[i]}" in',
-  '      "$TOOLS_IMAGE_TAG") which=current ;;',
-  '      sha256:candidate) which=candidate ;;',
+  '      "$TOOLS_IMAGE_TAG"|"$BASELINE_ID") which=current ;;',
+  '      sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc) which=candidate ;;',
   '      "${SHIM_RUNNING_IMAGE:-<none>}") which=running ;;',
   '      *) continue ;;',
   '    esac',
@@ -119,11 +128,19 @@ const DOCKER_SHIM = [
   '  done',
   '  previous=""; for argument in "$@"; do [ "$previous" = --entrypoint ] && entry=$argument; previous=$argument; done',
   '  if [ "$entry" = cat ]; then',
+  '    [ "$which" = candidate ] && [ "${SHIM_OS_FAILURE:-0}" = 1 ] && exit 19',
   '    case "$which" in current) v=$SHIM_CURRENT_DEBIAN ;; candidate) v=$SHIM_CANDIDATE_DEBIAN ;; *) v=$SHIM_RUNNING_DEBIAN ;; esac',
   '    printf "PRETTY_NAME=\\"Debian\\"\\nID=debian\\nVERSION_ID=\\"%s\\"\\n" "$v"',
   '    exit 0',
   '  fi',
+  '  if [ "$entry" = timeout ]; then',
+  '    if [ "$SHIM_REAL_GRYPE_CHECK" = 1 ]; then exec /bin/bash "${after[@]:4}"; fi',
+  '    exit "$VERIFICATION_EXIT"',
+  '  fi',
   '  if [ "$entry" = bash ]; then',
+  '    if [ "$which" = "${SHIM_INCOMPLETE:-none}" ]; then printf "binwalk ok\\n"; exit 0; fi',
+  '    if [ "$which" = "${SHIM_UNKNOWN_STATUS:-none}" ]; then printf "%s\\n" "${after[3]}" | awk \'{print $1, "unknown"}\'; exit 0; fi',
+  '    [ "$which" = candidate ] && [ "${SHIM_BASH_MISSING:-0}" = 1 ] && exit 127',
   '    stubs="$FIXTURE/stubs/$which"',
   '    exec env -i PATH="$stubs" TIMEOUT_LOG="$FIXTURE/timeout-$which.log" \\',
   '      FIRMLAB_ANGR_PYTHON="$stubs/angr-python" FIRMLAB_FWHUNT_PYTHON="$stubs/fwhunt-python" /bin/bash "${after[@]}"',
@@ -137,7 +154,7 @@ const DOCKER_SHIM = [
 async function fixture({
   toolsPresent = true,
   verificationExit = 0,
-  currentLayer = 'sha256:old-layer',
+  currentLayer = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
   currentDebian = '12',
   candidateDebian = currentDebian,
   localImages = [],
@@ -146,7 +163,9 @@ async function fixture({
   current = {},
   candidate = {},
   candidateTimeout = true,
-  candidateLayer = 'sha256:new-layer',
+  currentTimeout = true,
+  grypeStatus = null,
+  candidateLayer = 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
 } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'firmlab-deploy-grype-'));
   fixtures.push(dir);
@@ -162,14 +181,21 @@ async function fixture({
   await writeFile(path.join(dir, 'Dockerfile.tools'), 'FROM scratch\n');
   await writeFile(path.join(dir, 'Dockerfile.firmware'), 'FROM scratch\n');
   await writeFile(path.join(binDir, 'docker'), DOCKER_SHIM, { mode: 0o755 });
+  await writeFile(path.join(binDir, 'grype'), '#!/bin/bash\ncat "$FIXTURE/grype-status.json"\n', { mode: 0o755 });
+  if (grypeStatus) {
+    const database = path.join(dir, 'vulnerability.db');
+    await writeFile(database, '');
+    await truncate(database, 101 * 1024 * 1024);
+    await writeFile(path.join(dir, 'grype-status.json'), JSON.stringify({ path: database, ...grypeStatus }));
+  }
   await writeFile(path.join(binDir, 'lsof'), '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });
   await writeFile(path.join(binDir, 'date'), "#!/usr/bin/env bash\nprintf '2026-10-14T12:34:56Z\\n'\n", {
     mode: 0o755,
   });
-  await stubTools(path.join(dir, 'stubs/current'), current, true);
+  await stubTools(path.join(dir, 'stubs/current'), current, currentTimeout);
   await stubTools(path.join(dir, 'stubs/candidate'), candidate, candidateTimeout);
   // The stubs and logs are outside the repository the script inspects; only the copied sources are committed.
-  await writeFile(path.join(dir, '.gitignore'), 'bin/\nstubs/\n*.log\n');
+  await writeFile(path.join(dir, '.gitignore'), 'bin/\nstubs/\n*.log\nreport*/\naliases*\nbuilt\n');
 
   await run('git', ['init', '-q'], { cwd: dir });
   await run('git', ['config', 'user.email', 'tests@firmlab.invalid'], { cwd: dir });
@@ -184,11 +210,16 @@ async function fixture({
     DOCKER_LOG: log,
     SHIM_TOOLS_PRESENT: toolsPresent ? '1' : '0',
     VERIFICATION_EXIT: String(verificationExit),
+    SHIM_REAL_GRYPE_CHECK: grypeStatus ? '1' : '0',
     TOOLS_IMAGE_TAG: 'firmlab-tools:latest',
     CURRENT_LAYER: currentLayer,
-    CANDIDATE_LAYER: candidateLayer,
+    SHIM_CANDIDATE_LAYER: candidateLayer,
     SHIM_CURRENT_DEBIAN: currentDebian,
     SHIM_CANDIDATE_DEBIAN: candidateDebian,
+    BASELINE_ID,
+    CANDIDATE_ID: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    CANDIDATE_TAG_REF: CANDIDATE_TAG,
+    LOCAL_IMAGE_IDS: localImages.map((ref) => `${ref}\t${inputId(ref)}`).join('\n'),
     LOCAL_IMAGES: localImages.join('\n'),
     BUILDX_DRIVER: buildxDriver,
     SHIM_RUNNING_IMAGE: running ? 'sha256:running' : '',
@@ -216,7 +247,8 @@ function commandIndex(commands, pattern) {
   return commands.findIndex((command) => pattern.test(command));
 }
 
-const TOOLS_PROMOTION = /^tag sha256:candidate firmlab-tools:latest/;
+const TOOLS_PROMOTION =
+  /^tag sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc firmlab-tools:latest/;
 const FIRMWARE_BUILD = /^build .*Dockerfile\.firmware/;
 const GRYPE_CHECK = /^run --rm --network none .*db\\ status/;
 
@@ -323,7 +355,7 @@ test('--tools on Debian 12 passes an explicit refresh key and verifies offline b
   assert.match(commands[toolsBuild], /--iidfile/);
   assert.doesNotMatch(commands[toolsBuild], /-t firmlab-tools:latest/);
   assert.ok(offlineCheck > toolsBuild, commands.join('\n'));
-  assert.match(commands[offlineCheck], /sha256:candidate/);
+  assert.match(commands[offlineCheck], /sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/);
   assert.ok(promotion > offlineCheck, commands.join('\n'));
   assert.ok(firmwareBuild > promotion, commands.join('\n'));
   assert.match(commands[offlineCheck], /GRYPE_CHECK_FOR_APP_UPDATE=false/);
@@ -464,14 +496,24 @@ test('a failed explicit offline verification blocks the firmware build', async (
 
 for (const currentDebian of ['12', '13']) {
   test(`an unchanged final layer is refused before promotion (Debian ${currentDebian})`, async () => {
-    const f = await fixture({ currentDebian, currentLayer: 'sha256:new-layer', localImages: [RETAINED, RENODE] });
+    const f = await fixture({
+      currentDebian,
+      currentLayer: 'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+      localImages: [RETAINED, RENODE],
+    });
     await assert.rejects(
       f.deploy(['--tools', '--build-only']),
       (error) => error.code === 1 && /capa final de Grype no cambió/.test(error.stderr),
     );
     const commands = await f.log();
     assert.ok(commandIndex(commands, /^image inspect firmlab-tools:latest --format/) >= 0, commands.join('\n'));
-    assert.ok(commandIndex(commands, /^image inspect sha256:candidate --format/) >= 0, commands.join('\n'));
+    assert.ok(
+      commandIndex(
+        commands,
+        /^image inspect sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc --format/,
+      ) >= 0,
+      commands.join('\n'),
+    );
     assertNothingPromoted(commands);
   });
 }
@@ -531,7 +573,9 @@ const WITH_INPUTS = ['--retained', INPUTS[0], '--renode', INPUTS[1]];
 
 /** Nothing a candidate run does may move a shared ref or reach a running service. */
 function assertCandidateOnly(commands) {
-  assert.equal(commandIndex(commands, /^tag /), -1, commands.join('\n'));
+  for (const command of commands.filter((c) => /^tag /.test(c))) {
+    assert.match(command, /^tag sha256:[0-9a-f]{64} firmlab-candidate-input\//, command);
+  }
   assert.equal(commandIndex(commands, /compose|^exec |^stop |^restart |^rm |^rmi |^push |Dockerfile\.firmware/), -1);
   for (const command of commands.filter((c) => /^run /.test(c))) {
     assert.match(command, /^run --rm --network none /, command);
@@ -550,14 +594,16 @@ test('a candidate is built under its own tag from explicit local inputs, invento
   const commands = await f.log();
   assertCandidateOnly(commands);
   const build = commands.find((c) => /^build /.test(c));
-  for (const part of [`RETAINED_IMAGE=${INPUTS[0]}`, `RENODE_IMAGE=${INPUTS[1]}`, 'GRYPE_DB_REFRESH=k1']) {
+  for (const part of [
+    'RETAINED_IMAGE=firmlab-candidate-input/',
+    'RENODE_IMAGE=firmlab-candidate-input/',
+    'GRYPE_DB_REFRESH=k1',
+  ]) {
     assert.ok(build.includes(`--build-arg ${part}`), build);
   }
   assert.match(build, /-f Dockerfile\.trixie \.\s*$/);
   // The baseline is inventoried before the build, so a hung or broken baseline costs no build time.
-  assert.ok(
-    commandIndex(commands, /^run .*--entrypoint bash firmlab-tools:latest/) < commandIndex(commands, /^build /),
-  );
+  assert.ok(commandIndex(commands, /^run .*--entrypoint bash sha256:b{64}/) < commandIndex(commands, /^build /));
   for (const which of ['current', 'candidate']) {
     const executed = (await f.timeouts(which)).map((line) => line.split('\t'));
     const expected = declared.filter((p) => !p.presenceOnly).map((p) => [p.budget, p.bin, ...p.probe]);
@@ -565,20 +611,27 @@ test('a candidate is built under its own tag from explicit local inputs, invento
   }
   assert.match(await f.report('verdict.txt'), /^accepted\n/);
   const inputs = await f.report('inputs.tsv');
-  assert.match(inputs, new RegExp(`^RETAINED_IMAGE\t${INPUTS[0]}\tsha256:id-${INPUTS[0]}$`, 'm'));
-  assert.match(inputs, new RegExp(`^RENODE_IMAGE\t${INPUTS[1]}\tsha256:id-${INPUTS[1]}$`, 'm'));
-  assert.match(inputs, /^baseline\tfirmlab-tools:latest\tsha256:id-firmlab-tools:latest$/m);
-  assert.match(inputs, new RegExp(`^candidate\t${CANDIDATE_TAG}\tsha256:candidate$`, 'm'));
+  assert.match(inputs, new RegExp(`^RETAINED_IMAGE\t${INPUTS[0]}\t${inputId(INPUTS[0])}$`, 'm'));
+  assert.match(inputs, new RegExp(`^RENODE_IMAGE\t${INPUTS[1]}\t${inputId(INPUTS[1])}$`, 'm'));
+  assert.match(inputs, /^baseline\tfirmlab-tools:latest\tsha256:b{64}$/m);
+  assert.match(
+    inputs,
+    new RegExp(
+      `^candidate\t${CANDIDATE_TAG}\tsha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc$`,
+      'm',
+    ),
+  );
   assert.equal((await f.report('inventory-candidate.txt')).trim().split('\n').length, declared.length);
   assert.match(stdout, /aceptada sin promoción/);
   assert.match(stderr, /no que cada herramienta funcione/);
 });
 
-test('without overrides a candidate needs the recipe defaults locally and passes no base override', async () => {
+test('without overrides a candidate freezes the recipe defaults locally', async () => {
   const f = await fixture({ currentDebian: '13', localImages: [RETAINED, RENODE] });
   await f.candidate(['--tag', CANDIDATE_TAG]);
   const build = (await f.log()).find((c) => /^build /.test(c));
-  assert.doesNotMatch(build, /RETAINED_IMAGE|RENODE_IMAGE/, build);
+  assert.match(build, /--build-arg RETAINED_IMAGE=firmlab-candidate-input\//);
+  assert.match(build, /--build-arg RENODE_IMAGE=firmlab-candidate-input\//);
 
   const missing = await fixture({ currentDebian: '13', localImages: [RETAINED] });
   await assert.rejects(
@@ -624,7 +677,16 @@ test('an override for a base the recipe does not take, or a missing override ima
     (error) => error.code === 1 && /no toma ninguna base de RETAINED_IMAGE/.test(error.stderr),
   );
   await assert.rejects(
-    f.candidate(['--tag', CANDIDATE_TAG, '--retained', INPUTS[0], '--renode', 'firmlab-campaign-test/absent:1']),
+    f.candidate([
+      '--tag',
+      CANDIDATE_TAG,
+      '--retained',
+      INPUTS[0],
+      '--renode',
+      'firmlab-campaign-test/absent:1',
+      '--report',
+      path.join(f.dir, 'report-missing'),
+    ]),
     (error) => error.code === 1 && error.stderr.includes('firmlab-campaign-test/absent:1'),
   );
   assert.equal(commandIndex(await f.log(), /^build /), -1);
@@ -647,17 +709,31 @@ test('a dirty tree needs --allow-dirty and is then stamped as dirty', async () =
     (error) => error.code === 1 && /sucio/.test(error.stderr),
   );
   assert.equal(commandIndex(await f.log(), /^build /), -1);
-  await f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS, '--allow-dirty']);
+  await f.candidate([
+    '--tag',
+    CANDIDATE_TAG,
+    ...WITH_INPUTS,
+    '--allow-dirty',
+    '--report',
+    path.join(f.dir, 'report-dirty'),
+  ]);
   assert.match(
     (await f.log()).find((c) => /^build /.test(c)),
-    /revision=[0-9a-f]{40}-dirty /,
+    /revision=[0-9a-f]{40}-dirty-[0-9a-f]{64} /,
   );
 });
 
 for (const [name, options, reason] of [
   ['lost a capability', { candidate: { yara: 'error', 'angr-python': 'slow' } }, /angr timeout 30s;yara error exit=1/],
   ['failed the offline Grype check', { verificationExit: 1 }, /Grype no es válida offline/],
-  ['kept the baseline final layer', { currentLayer: 'sha256:same', candidateLayer: 'sha256:same' }, /capa final/],
+  [
+    'kept the baseline final layer',
+    {
+      currentLayer: 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+      candidateLayer: 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+    },
+    /capa final/,
+  ],
   ['is an older Debian', { candidateDebian: '12' }, /Debian 12 y firmlab-tools:latest es Debian 13/],
 ]) {
   test(`a built candidate that ${name} is rejected with exit 4 and a written verdict, never promoted`, async () => {
@@ -671,6 +747,166 @@ for (const [name, options, reason] of [
     assert.match(verdict, /^rejected\n/);
     assert.match(verdict, reason);
     assertCandidateOnly(await f.log());
+  });
+}
+
+// Verified source defects: these assertions fail against the first-wave candidate script.
+for (const [name, options] of [
+  ['missing baseline', { toolsPresent: false }],
+  ['unknown baseline Debian', { currentDebian: 'unknown' }],
+  ['empty baseline layer', { currentLayer: '' }],
+]) {
+  test(`candidate refuses ${name} before building`, async () => {
+    const f = await fixture({ localImages: INPUTS, ...options });
+    await assert.rejects(f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]), (e) => e.code === 1);
+    assert.equal(commandIndex(await f.log(), /^build /), -1);
+  });
+}
+
+test('a candidate without timeout writes a rejected verdict and exits 4', async () => {
+  const f = await fixture({ localImages: INPUTS, candidateTimeout: false });
+  await assert.rejects(f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]), (e) => e.code === 4);
+  assert.match(await f.report('verdict.txt'), /^rejected\n/);
+});
+
+for (const host of ['index.docker.io', 'registry-1.docker.io']) {
+  test(`candidate refuses shared Docker Hub alias ${host}`, async () => {
+    const f = await fixture({ localImages: INPUTS });
+    await assert.rejects(f.candidate(['--tag', `${host}/library/firmlab-tools:next`, ...WITH_INPUTS]));
+    assert.equal(commandIndex(await f.log(), /^build /), -1);
+  });
+}
+
+test('a candidate refuses an unknown builder driver', async () => {
+  const f = await fixture({ localImages: INPUTS, buildxDriver: '' });
+  await assert.rejects(f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]));
+  assert.equal(commandIndex(await f.log(), /^build /), -1);
+});
+
+test('candidate refuses reuse of an existing report directory and preserves its verdict', async () => {
+  const f = await fixture({ localImages: INPUTS });
+  await mkdir(path.join(f.dir, 'report'));
+  await writeFile(path.join(f.dir, 'report/verdict.txt'), 'accepted\nold run\n');
+  await assert.rejects(f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]), (e) =>
+    /informe.*ya existe/.test(e.stderr),
+  );
+  assert.equal(await f.report('verdict.txt'), 'accepted\nold run\n');
+  assert.equal(commandIndex(await f.log(), /^build /), -1);
+});
+
+for (const [name, options, env] of [
+  ['without bash', {}, { SHIM_BASH_MISSING: '1' }],
+  ['with unreadable os-release', {}, { SHIM_OS_FAILURE: '1' }],
+  ['with unknown Debian', { candidateDebian: 'unknown' }, {}],
+  ['with incomplete inventory', {}, { SHIM_INCOMPLETE: 'candidate' }],
+  ['with unknown probe states', {}, { SHIM_UNKNOWN_STATUS: 'candidate' }],
+  ['with missing iidfile', {}, { SHIM_IID_MISSING: '1' }],
+  ['with malformed iidfile', {}, { SHIM_IID: 'sha256:fake' }],
+  ['with empty layer metadata', { candidateLayer: '' }, {}],
+  ['with malformed layer metadata', { candidateLayer: 'unknown' }, {}],
+  ['with changed source', {}, { SHIM_SOURCE_MUTATION: '1' }],
+  ['with changed input alias', {}, { SHIM_ALIAS_DRIFT: '1' }],
+  ['with changed candidate tag', {}, { SHIM_CANDIDATE_TAG_ID: BASELINE_ID }],
+]) {
+  test(`built candidate ${name} records rejection and exit 4`, async () => {
+    const f = await fixture({ localImages: INPUTS, ...options });
+    await assert.rejects(f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS], env), (e) => e.code === 4);
+    assert.match(await f.report('verdict.txt'), /^rejected\n/);
+    assert.equal(commandIndex(await f.log(), /^build /) >= 0, true);
+    assertCandidateOnly(await f.log());
+  });
+}
+
+for (const [name, options, env] of [
+  ['without timeout', { currentTimeout: false }, {}],
+  ['with incomplete inventory', {}, { SHIM_INCOMPLETE: 'current' }],
+  ['with unknown probe states', {}, { SHIM_UNKNOWN_STATUS: 'current' }],
+  ['with malformed layer metadata', { currentLayer: 'unknown' }, {}],
+  ['with unsupported Debian', { currentDebian: '14' }, {}],
+]) {
+  test(`baseline ${name} refuses before build`, async () => {
+    const f = await fixture({ localImages: INPUTS, ...options });
+    await assert.rejects(f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS], env), (e) => e.code === 1);
+    assert.equal(commandIndex(await f.log(), /^build /), -1);
+  });
+}
+
+test('source fingerprint distinguishes tracked and untracked content at the same HEAD', async () => {
+  const f = await fixture();
+  const fingerprint = async () =>
+    (
+      await run('/bin/bash', ['-c', '. scripts/tools-candidate-lib.sh; source_fingerprint'], { cwd: f.dir })
+    ).stdout.trim();
+  const clean = await fingerprint();
+  await writeFile(path.join(f.dir, 'new source.txt'), 'first');
+  const first = await fingerprint();
+  await writeFile(path.join(f.dir, 'new source.txt'), 'second');
+  const second = await fingerprint();
+  await writeFile(path.join(f.dir, 'Dockerfile.tools'), 'FROM scratch\nLABEL changed=true\n');
+  const tracked = await fingerprint();
+  assert.equal(new Set([clean, first, second, tracked]).size, 4);
+  assert.match(tracked, /^[0-9a-f]{64}$/);
+});
+
+for (const [name, fields, accepted] of [
+  ['valid', {}, true],
+  ['invalid', { valid: false }, false],
+  ['unknown schema', { schemaVersion: null }, false],
+  ['unknown build date', { built: '' }, false],
+  ['missing database', { path: '/nonexistent/fixture.db' }, false],
+]) {
+  test(`offline Grype JSON ${name} is parsed by the actual validation shell`, async () => {
+    const f = await fixture({
+      grypeStatus: { valid: true, schemaVersion: 'v6.1.10', built: '2026-11-07T06:18:48Z', ...fields },
+    });
+    const command = run(
+      '/bin/bash',
+      ['-c', '. scripts/tools-candidate-lib.sh; verify_candidate_grype "$CANDIDATE_ID"'],
+      { cwd: f.dir, env: f.env },
+    );
+    if (accepted) await command;
+    else await assert.rejects(command);
+    const check = (await f.log()).find((c) => /--entrypoint timeout/.test(c));
+    assert.match(check, /-k 2 30 bash -c /);
+    assert.match(check, /GRYPE_DB_AUTO_UPDATE=false/);
+  });
+}
+
+test('baseline and original ARG tags are each resolved once; probes use their recorded IDs', async () => {
+  const f = await fixture({ localImages: INPUTS });
+  await f.candidate(['--tag', CANDIDATE_TAG, ...WITH_INPUTS]);
+  const commands = await f.log();
+  for (const ref of ['firmlab-tools:latest', ...INPUTS]) {
+    assert.equal(commands.filter((c) => c.startsWith(`image inspect ${ref} --format `)).length, 1);
+    assert.equal(
+      commands.some((c) => c.startsWith('run ') && c.includes(` ${ref} `)),
+      false,
+    );
+  }
+  const build = commands.find((c) => c.startsWith('build '));
+  assert.match(build, /--builder default --pull=false/);
+  for (const ref of INPUTS) assert.equal(build.includes(ref), false);
+  const rows = (await f.report('inputs.tsv'))
+    .trim()
+    .split('\n')
+    .map((r) => r.split('\t'));
+  for (const arg of ['RETAINED_IMAGE', 'RENODE_IMAGE']) {
+    const original = rows.find((r) => r[0] === arg);
+    const frozen = rows.find((r) => r[0] === `${arg}_build_ref`);
+    assert.equal(original[2], frozen[2]);
+    assert.ok(build.includes(`${arg}=${frozen[1]}`));
+  }
+});
+
+for (const from of ['private/unexpected:local', '${UNKNOWN:-private/fallback:local}']) {
+  test(`unrecognised recipe base ${from} cannot trigger an implicit registry fetch`, async () => {
+    const f = await fixture();
+    await writeFile(path.join(f.dir, 'Dockerfile.fixture'), `FROM ${from}\n`);
+    await assert.rejects(
+      f.candidate(['--tag', CANDIDATE_TAG, '--recipe', 'Dockerfile.fixture', '--allow-dirty']),
+      (e) => e.code === 1 && /bases de forma verificable/.test(e.stderr),
+    );
+    assert.equal(commandIndex(await f.log(), /^build |^tag |^pull /), -1);
   });
 }
 

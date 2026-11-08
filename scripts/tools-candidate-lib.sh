@@ -130,6 +130,8 @@ image_capabilities() {
   # A probe loop that died half way must not read as "the rest are missing".
   [ "$(awk '{ print $1 }' <<< "$inventory")" = "$(awk '{ print $1 }' <<< "$TOOL_PROBES")" ] \
     || die "inventario incompleto de $1: $(awk 'NF' <<< "$inventory" | wc -l | tr -d ' ') de $(awk 'NF' <<< "$TOOL_PROBES" | wc -l | tr -d ' ') sondeos"
+  awk '$2 != "ok" && $2 != "present" && $2 != "missing" && $2 != "timeout" && $2 != "error" { bad=1 }
+       END { exit bad }' <<< "$inventory" || die "inventario con estados desconocidos de $1"
   printf '%s\n' "$inventory"
 }
 
@@ -137,4 +139,91 @@ image_capabilities() {
 capability_regressions() {
   awk 'NR == FNR { if ($2 == "ok" || $2 == "present") had[$1] = 1; next }
        ($1 in had) && $2 != "ok" && $2 != "present" { $1 = $1; print }' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+}
+
+# Candidate-only strict identity and builder checks. deploy.sh keeps its historical unknown-driver compatibility.
+valid_candidate_id() { [[ "$1" =~ ^sha256:[0-9a-f]{64}$ ]]; }
+candidate_image_id() {
+  local id
+  id="$(docker image inspect "$1" --format '{{.Id}}')" || return 1
+  valid_candidate_id "$id" || return 1
+  printf '%s\n' "$id"
+}
+candidate_last_layer() {
+  local layer
+  layer="$(image_last_layer "$1")" || return 1
+  valid_candidate_id "$layer" || return 1
+  printf '%s\n' "$layer"
+}
+candidate_docker_builder() {
+  local facts driver name
+  facts="$(docker buildx inspect 2>/dev/null)" || return 1
+  driver="$(awk '$1 == "Driver:" { print $2; exit }' <<< "$facts")"
+  name="$(awk '$1 == "Name:" { print $2; exit }' <<< "$facts")"
+  [ "$driver" = docker ] && [ -n "$name" ] || { echo "builder desconocido o driver no local: ${driver:-unknown}" >&2; return 1; }
+  printf '%s\n' "$name"
+}
+
+# Candidate recipes may use local ARG bases, earlier stages, scratch, or digest-pinned external bases.
+# An unrecognised FROM expression must not silently escape the local-input guard. This does not change deploy.
+candidate_recipe_sources_known() {
+  awk '
+    toupper($1) == "FROM" {
+      i = ($2 ~ /^--platform=/) ? 3 : 2
+      ref = $i
+      if (ref == "") { bad=1; next }
+      variable = ref ~ /^\$[A-Za-z_][A-Za-z0-9_]*$/ || ref ~ /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/
+      digest = ref; sub(/^.*@sha256:/, "", digest)
+      pinned = ref ~ /@sha256:/ && length(digest) == 64 && digest !~ /[^0-9a-f]/
+      if (!(variable || ref == "scratch" || (ref in stages) || pinned)) {
+        print "FROM no reconocido o sin digest: " ref > "/dev/stderr"; bad=1
+      }
+      if (toupper($(i+1)) == "AS") stages[$(i+2)]=1
+      count++
+    }
+    END { exit (bad || !count) }
+  ' "$1"
+}
+
+# Include tracked content/modes/deletions and untracked nonignored content/names/modes (also symlink targets).
+# Git's binary diff supplies the tracked portion. No source path is expanded through shell word splitting.
+source_fingerprint() {
+  {
+    git diff --binary --no-ext-diff --no-textconv HEAD -- || return 1
+    git ls-files --others --exclude-standard -z | while IFS= read -r -d '' file; do
+      printf 'untracked\0%s\0' "$file"
+      if [ -L "$file" ]; then
+        printf 'symlink\0'; readlink "$file" || return 1
+      elif [ -f "$file" ]; then
+        if [ -x "$file" ]; then printf '100755\0'; else printf '100644\0'; fi
+        git hash-object --no-filters -- "$file" || return 1
+      else
+        return 1
+      fi
+    done
+  } | shasum -a 256 | awk '{ print $1 }'
+}
+
+# A bounded offline status check. JSON fields must describe a known valid database, and the recorded file must
+# actually be present and substantial. Presence/status is not a vulnerability scan; the synthetic fixture is separate.
+verify_candidate_grype() {
+  local check
+  check="$(cat <<'GRYPE_CHECK'
+set -euo pipefail
+status=$(grype db status -o json)
+printf '%s\n' "$status"
+printf '%s' "$status" | python3 -c '
+import json, re, sys, os
+s = json.load(sys.stdin)
+assert s.get("valid") is True
+assert isinstance(s.get("schemaVersion"), str) and re.fullmatch(r"v?[0-9]+(?:\.[0-9]+)*", s["schemaVersion"])
+assert isinstance(s.get("built"), str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", s["built"])
+p = s.get("path")
+assert isinstance(p, str) and os.path.isfile(p) and os.path.getsize(p) > 100 * 1024 * 1024
+'
+GRYPE_CHECK
+)"
+  docker run --rm --network none \
+    -e GRYPE_DB_AUTO_UPDATE=false -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_VALIDATE_AGE=false \
+    --entrypoint timeout "$1" -k 2 30 bash -c "$check"
 }

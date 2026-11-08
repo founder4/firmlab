@@ -8,7 +8,8 @@
 # a Debian 13 candidate at all, and the only way to try one was a command that also promotes it. This script is
 # the half that does not promote: it builds one disposable tag, runs exactly the checks deploy.sh would run before
 # promoting (same library, same 28-probe table pinned to apps/api/src/tools.ts), and writes down what it was built
-# from and what it answered. It never runs `docker tag`, compose, or anything against a running container.
+# from and what it answered. It creates only fresh private input aliases, never promotes, and never touches
+# a running container.
 #
 # What a passing report proves, and what it does not. It proves the candidate is the Debian release it claims, kept
 # every capability the baseline answered under bounded offline probes, and carries a valid Grype database that is
@@ -26,15 +27,24 @@
 #   --recipe    Dockerfile (default: Dockerfile.trixie)
 #   --retained  local image for the recipe's RETAINED_IMAGE build ARG (default: the recipe's own default)
 #   --renode    local image for the recipe's RENODE_IMAGE build ARG    (default: the recipe's own default)
-#   --report    directory for inputs.tsv, inventory-*.txt and verdict.txt (default: a new mktemp directory)
+#   --report    new directory for inputs.tsv, inventory-*.txt and verdict.txt (default: mktemp; reuse is refused)
 #
 # Env: GRYPE_DB_REFRESH  explicit cache key for the recipe's final Grype layer (default: candidate-<UTC timestamp>)
 #
 # Exit status: 0 accepted, 1 refused before or during the build, 4 built but rejected (the tag is left for
 # inspection — it is unique by construction, so leaving it cannot shadow anything).
 set -Eeuo pipefail
+BUILT=0
 
-trap 'status=$?; printf "\033[1;31m[x]\033[0m tools-candidate.sh abortó en la línea %s (exit %s): %s\n" "$LINENO" "$status" "$BASH_COMMAND" >&2' ERR
+# Unexpected post-build failures have the same durable rejection contract as explicit validation failures.
+on_error() {
+  local status="$1" line="$2" command="$3"
+  if [ "$BUILT" -eq 1 ]; then
+    reject_candidate "falló la validación en línea $line (exit $status): $command"
+  fi
+  printf '[x] tools-candidate.sh abortó en línea %s (exit %s): %s\n' "$line" "$status" "$command" >&2
+}
+trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TAG=""
@@ -45,10 +55,10 @@ ALLOW_DIRTY=0
 # Overrides as `NAME=ref` lines: macOS still ships bash 3.2, which has no associative arrays.
 OVERRIDES=""
 
-usage() { sed -n '19,36p' "${BASH_SOURCE[0]}"; }
+usage() { sed -n '/^# Usage:/,/^# Exit status:/p' "${BASH_SOURCE[0]}"; }
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
+die()  { [ "$BUILT" -eq 0 ] || reject_candidate "$*"; printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -79,6 +89,8 @@ candidate_tag_refusal() {
   [ "${name##*:}" != latest ] || { echo "$tag usa :latest, que es la etiqueta que consumen los despliegues"; return 0; }
   repo="${tag%:*}"
   repo="${repo#docker.io/}"
+  repo="${repo#index.docker.io/}"
+  repo="${repo#registry-1.docker.io/}"
   repo="${repo#library/}"
   case "$repo" in
     firmlab-tools|firmlab-firmware|firmlab|homelab-rollback/*|homelab-candidate/*)
@@ -101,114 +113,148 @@ if docker image inspect "$TAG" >/dev/null 2>&1; then
   die "$TAG ya existe; una candidata nunca sobrescribe una etiqueta (elige otra)"
 fi
 
+# Each invocation owns a fresh report. An old accepted verdict must never describe a failed new attempt.
+if [ -z "$REPORT" ]; then
+  REPORT="$(mktemp -d "${TMPDIR:-/tmp}/firmlab-tools-candidate.XXXXXX")"
+else
+  [ ! -e "$REPORT" ] || die "el informe $REPORT ya existe; elige un directorio nuevo (no se reutiliza un veredicto)"
+  mkdir -p "$(dirname "$REPORT")"
+  mkdir "$REPORT"
+fi
+
+write_verdict() {
+  local state="$1"
+  shift
+  { printf '%s\n' "$state"; printf -- '- %s\n' "$@"; } > "$REPORT/verdict.tmp"
+  mv "$REPORT/verdict.tmp" "$REPORT/verdict.txt"
+}
+reject_candidate() {
+  write_verdict rejected "$@"
+  printf '[x] candidata %s rechazada: %s\n' "$TAG" "$*" >&2
+  say "informe en $REPORT"
+  exit 4
+}
+
 if [ -n "$(git status --porcelain --untracked-files=normal)" ] && [ "$ALLOW_DIRTY" -eq 0 ]; then
-  die "árbol sucio: la candidata debe salir de un commit; usa --allow-dirty para una prueba local (se sella -dirty)"
+  die "árbol sucio: usa --allow-dirty para sellar también el contenido local"
 fi
 REVISION="$(git rev-parse HEAD)"
-[ -z "$(git status --porcelain --untracked-files=normal)" ] || REVISION="${REVISION}-dirty"
+SOURCE_FINGERPRINT="$(source_fingerprint)"
+[ -z "$(git status --porcelain --untracked-files=normal)" ] || REVISION="${REVISION}-dirty-${SOURCE_FINGERPRINT}"
 
-# Resolve every `FROM ${ARG}` base: an override replaces the recipe default, and an override for an ARG the recipe
-# does not take is refused rather than silently ignored (a typo would otherwise build from the default name).
+# Resolve the baseline exactly once. Every fact and probe below uses that immutable image ID.
+BASELINE_ID="$(candidate_image_id "$BASELINE")" || die "no existe una referencia local válida para la base $BASELINE"
+BASELINE_DEBIAN="$(image_debian_major "$BASELINE_ID")" || die "no se pudo leer /etc/os-release de $BASELINE"
+case "$BASELINE_DEBIAN" in 12|13) ;; *) die "la base $BASELINE no declara una versión Debian compatible (12/13)" ;; esac
+BASELINE_LAYER="$(candidate_last_layer "$BASELINE_ID")" || die "no se pudo leer la capa final de $BASELINE"
+[ -n "$BASELINE_LAYER" ] || die "la base $BASELINE no tiene una capa final reconocible"
+say "inventariando offline la base $BASELINE_ID (Debian $BASELINE_DEBIAN)"
+BASELINE_INVENTORY="$(image_capabilities "$BASELINE_ID")" || die "inventario de referencia incompleto o inválido"
+printf '%s\n' "$BASELINE_INVENTORY" > "$REPORT/inventory-baseline.txt"
+
+# The raw sha256 ID is NOT a usable FROM on the tested BuildKit (it resolves docker.io/library/sha256).
+# Freeze each ARG behind a fresh private alias; validate the alias before and after the build. These names are
+# never reused or overwritten. Docker has no atomic create-if-absent tag API: this assumes a non-hostile daemon.
 BASES=""
 BUILD_ARGS=()
 while IFS='=' read -r arg default; do
   [ -n "$arg" ] || continue
   ref="$(override_for "$arg")"
-  [ -z "$ref" ] || BUILD_ARGS+=(--build-arg "$arg=$ref")
   ref="${ref:-$default}"
   [ -n "$ref" ] || die "$RECIPE toma una imagen base de $arg sin valor por defecto ni sustitución; no se construye"
-  docker image inspect "$ref" >/dev/null 2>&1 \
-    || die "falta la imagen local $ref ($arg); no se deja que BuildKit la busque en un registro"
-  BASES+="$arg=$ref"$'\n'
+  id="$(candidate_image_id "$ref")" \
+    || die "falta la imagen local válida $ref ($arg); no se deja que BuildKit la busque en un registro"
+  BASES+="$arg"$'\t'"$ref"$'\t'"$id"$'\n'
 done < <(recipe_base_args "$RECIPE")
 while IFS='=' read -r arg _; do
   [ -n "$arg" ] || continue
-  grep -q "^$arg=" <<< "$BASES" || die "$RECIPE no toma ninguna base de $arg; se rechaza la sustitución"
+  awk -F '\t' -v n="$arg" '$1 == n { found=1 } END { exit !found }' <<< "$BASES" \
+    || die "$RECIPE no toma ninguna base de $arg; se rechaza la sustitución"
 done <<< "$OVERRIDES"
-[ -z "$BASES" ] || require_docker_driver "$RECIPE"
-
-if [ -z "$REPORT" ]; then
-  REPORT="$(mktemp -d "${TMPDIR:-/tmp}/firmlab-tools-candidate.XXXXXX")"
-fi
-mkdir -p "$REPORT"
-image_id() { docker image inspect "$1" --format '{{.Id}}'; }
+candidate_recipe_sources_known "$RECIPE" || die "la receta no declara todas sus bases de forma verificable"
+# Unlike deploy's historical compatibility path, a candidate refuses unknown builders too.
+BUILDER="$(candidate_docker_builder)" || die "no se pudo verificar un builder local con driver docker"
+ALIAS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/firmlab-candidate-input.XXXXXXXX")"
+ALIAS_TOKEN="$(basename "$ALIAS_DIR" | tr '[:upper:]' '[:lower:]')-$$"
+ALIASES=""
+while IFS=$'\t' read -r arg ref id; do
+  [ -n "$arg" ] || continue
+  alias="firmlab-candidate-input/$ALIAS_TOKEN:$(printf '%s' "$arg" | tr '[:upper:]' '[:lower:]')"
+  docker image inspect "$alias" >/dev/null 2>&1 && die "el alias privado $alias ya existe; no se sobrescribe"
+  docker tag "$id" "$alias"
+  [ "$(candidate_image_id "$alias")" = "$id" ] || die "el alias $alias no conserva $id"
+  ALIASES+="$arg"$'\t'"$alias"$'\t'"$id"$'\n'
+  BUILD_ARGS+=(--build-arg "$arg=$alias")
+done <<< "$BASES"
+rmdir "$ALIAS_DIR"
 {
   printf 'role\tref\tid\n'
   printf 'revision\t%s\t-\n' "$REVISION"
+  printf 'source_fingerprint\tsha256\t%s\n' "$SOURCE_FINGERPRINT"
   printf 'recipe\t%s\t%s\n' "$RECIPE" "$(git hash-object "$RECIPE")"
-  while IFS='=' read -r arg ref; do
-    [ -z "$arg" ] || printf '%s\t%s\t%s\n' "$arg" "$ref" "$(image_id "$ref")"
-  done <<< "$BASES"
+  printf 'builder\t%s\tdocker\n' "$BUILDER"
+  printf 'baseline\t%s\t%s\n' "$BASELINE" "$BASELINE_ID"
+  printf '%s' "$BASES"
+  while IFS=$'\t' read -r arg alias id; do
+    [ -z "$arg" ] || printf '%s_build_ref\t%s\t%s\n' "$arg" "$alias" "$id"
+  done <<< "$ALIASES"
 } > "$REPORT/inputs.tsv"
 
-BASELINE_DEBIAN=""
-BASELINE_INVENTORY=""
-BASELINE_LAYER=""
-if docker image inspect "$BASELINE" >/dev/null 2>&1; then
-  printf 'baseline\t%s\t%s\n' "$BASELINE" "$(image_id "$BASELINE")" >> "$REPORT/inputs.tsv"
-  BASELINE_DEBIAN="$(image_debian_major "$BASELINE")" || die "no se pudo leer /etc/os-release de $BASELINE"
-  BASELINE_LAYER="$(image_last_layer "$BASELINE")"
-  say "inventariando offline la base $BASELINE (Debian ${BASELINE_DEBIAN:-desconocido})"
-  BASELINE_INVENTORY="$(image_capabilities "$BASELINE")" || exit 1
-  printf '%s\n' "$BASELINE_INVENTORY" > "$REPORT/inventory-baseline.txt"
-else
-  warn "no existe $BASELINE: sin inventario de referencia, la candidata sólo se describe, no se compara"
-  printf 'baseline\t%s\tabsent\n' "$BASELINE" >> "$REPORT/inputs.tsv"
-fi
-
+verify_aliases() {
+  local arg alias id actual
+  while IFS=$'\t' read -r arg alias id; do
+    [ -n "$arg" ] || continue
+    actual="$(candidate_image_id "$alias")" || return 1
+    [ "$actual" = "$id" ] || return 1
+  done <<< "$ALIASES"
+}
+verify_aliases || die "cambió una entrada privada antes de construir"
+[ "$(source_fingerprint)" = "$SOURCE_FINGERPRINT" ] || die "cambió el contenido fuente antes de construir"
 GRYPE_DB_REFRESH="${GRYPE_DB_REFRESH:-candidate-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
 IID_FILE="$REPORT/candidate.iid"
 say "construyendo la candidata $TAG con $RECIPE (no se promociona)"
-docker build --iidfile "$IID_FILE" -t "$TAG" \
+docker build --builder "$BUILDER" --pull=false --iidfile "$IID_FILE" -t "$TAG" \
   --label "org.opencontainers.image.revision=$REVISION" \
   --build-arg "GRYPE_DB_REFRESH=$GRYPE_DB_REFRESH" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} -f "$RECIPE" .
+BUILT=1
 CANDIDATE="$(tr -d '\r\n' < "$IID_FILE")"
-case "$CANDIDATE" in sha256:*) ;; *) die "docker build no dejó un ID de imagen válido en $IID_FILE" ;; esac
+valid_candidate_id "$CANDIDATE" || reject_candidate "docker build no dejó un ID de imagen válido en $IID_FILE"
 printf 'candidate\t%s\t%s\n' "$TAG" "$CANDIDATE" >> "$REPORT/inputs.tsv"
 printf 'grype_db_refresh\t%s\t-\n' "$GRYPE_DB_REFRESH" >> "$REPORT/inputs.tsv"
 
-# From here on every failure is a REJECTION of a built image, recorded in the verdict, not a refusal to build.
 REASONS=()
-CANDIDATE_DEBIAN="$(image_debian_major "$CANDIDATE")" || die "no se pudo leer /etc/os-release de $CANDIDATE"
-if [ -z "$CANDIDATE_DEBIAN" ]; then
+verify_aliases || REASONS+=("cambió una entrada privada durante la construcción; identidad no verificada")
+[ "$(source_fingerprint)" = "$SOURCE_FINGERPRINT" ] || REASONS+=("cambió el contenido fuente durante la construcción")
+[ "$(candidate_image_id "$TAG")" = "$CANDIDATE" ] || REASONS+=("la etiqueta candidata no conserva el ID construido")
+CANDIDATE_DEBIAN=""
+if ! CANDIDATE_DEBIAN="$(image_debian_major "$CANDIDATE")"; then
+  REASONS+=("no se pudo leer /etc/os-release de la candidata")
+elif [ "$CANDIDATE_DEBIAN" != 12 ] && [ "$CANDIDATE_DEBIAN" != 13 ]; then
   REASONS+=("la candidata no declara una versión Debian reconocible")
-elif [ -n "$BASELINE_DEBIAN" ] && [ "$CANDIDATE_DEBIAN" -lt "$BASELINE_DEBIAN" ]; then
+elif [ "$CANDIDATE_DEBIAN" -lt "$BASELINE_DEBIAN" ]; then
   REASONS+=("la candidata es Debian $CANDIDATE_DEBIAN y $BASELINE es Debian $BASELINE_DEBIAN")
 fi
 say "inventariando offline la candidata $CANDIDATE (Debian ${CANDIDATE_DEBIAN:-desconocido})"
-CANDIDATE_INVENTORY="$(image_capabilities "$CANDIDATE")" || exit 1
-printf '%s\n' "$CANDIDATE_INVENTORY" > "$REPORT/inventory-candidate.txt"
-printf '%s\n' "$CANDIDATE_INVENTORY" | sed 's/^/    /'
-if [ -n "$BASELINE_INVENTORY" ]; then
+if CANDIDATE_INVENTORY="$(image_capabilities "$CANDIDATE")"; then
+  printf '%s\n' "$CANDIDATE_INVENTORY" > "$REPORT/inventory-candidate.txt"
+  printf '%s\n' "$CANDIDATE_INVENTORY" | sed 's/^/    /'
   REGRESSIONS="$(capability_regressions "$BASELINE_INVENTORY" "$CANDIDATE_INVENTORY")"
   [ -z "$REGRESSIONS" ] || REASONS+=("perdió capacidades que $BASELINE sí tenía: $(printf '%s' "$REGRESSIONS" | tr '\n' ';')")
+else
+  REASONS+=("no se pudo inventariar la candidata: sondeos incompletos o no acotados (bash/timeout)")
 fi
 say "verificando offline la base Grype de la candidata"
-if ! docker run --rm --network none \
-  -e GRYPE_DB_AUTO_UPDATE=false -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_VALIDATE_AGE=false \
-  "$CANDIDATE" \
-  bash -c 'set -o pipefail; grype db status && test -n "$(find "$GRYPE_DB_CACHE_DIR" -name vulnerability.db -size +100M -print -quit)"' \
-  > "$REPORT/grype-db-status.txt" 2>&1; then
-  REASONS+=("la base Grype no es válida offline (grype-db-status.txt)")
-fi
-CANDIDATE_LAYER="$(image_last_layer "$CANDIDATE")"
-if [ -z "$CANDIDATE_LAYER" ]; then
+verify_candidate_grype "$CANDIDATE" > "$REPORT/grype-db-status.txt" 2>&1 \
+  || REASONS+=("la base Grype no es válida offline (grype-db-status.txt)")
+CANDIDATE_LAYER=""
+if ! CANDIDATE_LAYER="$(candidate_last_layer "$CANDIDATE")" || [ -z "$CANDIDATE_LAYER" ]; then
   REASONS+=("no se pudo identificar la última capa de la candidata")
-elif [ -n "$BASELINE_LAYER" ] && [ "$CANDIDATE_LAYER" = "$BASELINE_LAYER" ]; then
+elif [ "$CANDIDATE_LAYER" = "$BASELINE_LAYER" ]; then
   REASONS+=("la capa final de Grype es la misma que la de $BASELINE")
 fi
-
-if [ "${#REASONS[@]}" -gt 0 ]; then
-  { echo "rejected"; printf -- '- %s\n' "${REASONS[@]}"; } > "$REPORT/verdict.txt"
-  printf '\033[1;31m[x]\033[0m candidata %s rechazada:\n' "$TAG" >&2
-  printf '    %s\n' "${REASONS[@]}" >&2
-  say "informe en $REPORT"
-  exit 4
-fi
-{
-  echo "accepted"
-  echo "- Debian $CANDIDATE_DEBIAN, inventario sin regresiones, base Grype válida offline, capa final nueva"
-  echo "- falta el smoke real (integración, FreeRTOS, security-runtime-smoke.py) y la promoción es otra decisión"
-} > "$REPORT/verdict.txt"
+[ "${#REASONS[@]}" -eq 0 ] || reject_candidate "${REASONS[@]}"
+write_verdict accepted \
+  "Debian $CANDIDATE_DEBIAN, inventario sin regresiones, base Grype válida offline, capa final nueva respecto a $BASELINE_ID" \
+  "falta el smoke real (integración, FreeRTOS, security-runtime-smoke.py) y la promoción es otra decisión"
 warn "el inventario prueba presencia y respuesta acotada, no que cada herramienta funcione: ejecuta el smoke real"
 say "candidata $TAG ($CANDIDATE) aceptada sin promoción; informe en $REPORT"
