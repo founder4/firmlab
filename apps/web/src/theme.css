@@ -978,6 +978,48 @@ a:hover {
   background: var(--trust-agent);
 }
 
+.rtos-snapshot-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 14px;
+  max-width: 72ch;
+  overflow-wrap: anywhere;
+}
+.rtos-snapshot-form fieldset {
+  min-inline-size: 0;
+}
+.rtos-snapshot-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+}
+.rtos-snapshot-option > input {
+  flex-shrink: 0;
+}
+.rtos-snapshot-option > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Wait-list identities are long C member paths. Wrap complete fields before they become narrow
+   slivers; the form also appears inside narrow desktop columns, so this follows available width. */
+.rtos-wait-list-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+.rtos-wait-list-row > div {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.rtos-wait-list-row > .rtos-wait-list-name {
+  flex: 2 1 240px;
+}
+
 /* ============================================================================================================
  * TABLES
  * ========================================================================================================== */

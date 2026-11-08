@@ -13,11 +13,10 @@ import { listRecordSize } from '@firmlab/core';
  * provider's summary sentence (which already says what was NOT walked) is shown first, verbatim.
  *
  * Beyond the ready lists, the analyst may name the other `tasks.c` state lists (delayed, overflow-delayed,
- * suspended, pending-ready, waiting-termination) and caller-named ordered queue/semaphore wait lists. An empty field
- * is left out of the request, and the API then reports that kind as NOT WALKED — the result names it, so tasks in
- * that state are never silently absent. Wake ticks are shown only on delayed lanes; event lanes expose their
- * ordering value without relabelling it as time. EventGroup lists are explicitly outside this contract because
- * FreeRTOS stores event bits in them through a different, unordered-list path.
+ * suspended, pending-ready, waiting-termination), ordered queue/semaphore waits and unordered Event Group waits.
+ * An empty field is left out of the request, and the API reports that kind as NOT WALKED — the result names it,
+ * so tasks in that state are never silently absent. Wake ticks belong only to delayed lanes; ordered event lanes
+ * expose their priority key, while Event Groups expose their declared TickType_t-relative event/control bits.
  *
  * The addresses can be read from the image's OWN ELF symbol table (`/rtos/elf-symbols`), but only on an explicit
  * operator action, and only fields whose symbol resolved to exactly one absolute address are filled. A link-time
@@ -612,7 +611,7 @@ export function RtosTaskSnapshotPanel({
         m={m.ramCapture}
       />
 
-      <form onSubmit={submit} noValidate style={{ display: 'grid', gap: 12, marginTop: 14, maxWidth: '72ch' }}>
+      <form onSubmit={submit} noValidate className="rtos-snapshot-form">
         <div>
           <label className="eyebrow" htmlFor={id('file')}>
             {m.field.file}
@@ -698,21 +697,21 @@ export function RtosTaskSnapshotPanel({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label className="hint rtos-snapshot-option">
             <input
               type="checkbox"
               checked={form.useMiniListItem}
               onChange={(e) => set('useMiniListItem', e.target.checked)}
             />
-            {m.field.useMiniListItem}
+            <span>{m.field.useMiniListItem}</span>
           </label>
-          <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label className="hint rtos-snapshot-option">
             <input
               type="checkbox"
               checked={form.useListDataIntegrityCheckBytes}
               onChange={(e) => set('useListDataIntegrityCheckBytes', e.target.checked)}
             />
-            {m.field.useListDataIntegrityCheckBytes}
+            <span>{m.field.useListDataIntegrityCheckBytes}</span>
           </label>
         </div>
         <div className="hint">
@@ -904,10 +903,7 @@ export function RtosTaskSnapshotPanel({
           <legend className="eyebrow">{m.field.eventLists}</legend>
           <div className="hint">{m.field.eventListsHint(MAX_EVENT_LISTS)}</div>
           {form.eventLists.map((lane, i) => (
-            <div
-              key={eventRowKeys[i]}
-              style={{ display: 'grid', gap: 8, gridTemplateColumns: '160px 1fr 1fr auto', alignItems: 'start' }}
-            >
+            <div key={eventRowKeys[i]} className="rtos-wait-list-row">
               <div>
                 <label className="sr-only" htmlFor={id(`event-kind-${i}`)}>
                   {`${m.field.eventKind} ${i + 1}`}
@@ -928,7 +924,7 @@ export function RtosTaskSnapshotPanel({
                 </select>
                 {fieldError(`eventLists.${i}.waitKind`)}
               </div>
-              <div>
+              <div className="rtos-wait-list-name">
                 <label className="sr-only" htmlFor={id(`event-name-${i}`)}>
                   {`${m.field.eventName} ${i + 1}`}
                 </label>
@@ -974,14 +970,14 @@ export function RtosTaskSnapshotPanel({
             </div>
           ))}
           {fieldError('eventLists')}
-          <label className="hint" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label className="hint rtos-snapshot-option">
             <input
               type="checkbox"
               checked={form.eventOwnersAreTcbs}
               onChange={(e) => set('eventOwnersAreTcbs', e.target.checked)}
               {...fieldProps('eventOwnersAreTcbs')}
             />
-            {m.field.eventOwnersAreTcbs}
+            <span>{m.field.eventOwnersAreTcbs}</span>
           </label>
           {fieldError('eventOwnersAreTcbs')}
           <div>
