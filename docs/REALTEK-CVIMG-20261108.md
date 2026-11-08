@@ -89,9 +89,12 @@ The checksum's value is never read. **The checksum is present, not verified**; t
 
 Not supported, deliberately: `csys`/`csro` (selected only by the default branch, which the Makefile never
 compiles, and the same letters as unrelated `CSYS` usage), `cs6b`/`cr6b`, `r6cr`/`root`, `boot`, `w6c*`/`web*`,
-`allp`/`ALL1`/`ALL2`, `vmlinux`/`vmlinuxhdr` outputs, and `fix_chksum` outputs (which rewrite `len` to
-`file - 20` and leave the checksum at the old position, so it can be odd and the checksum mid-region). An odd
-`len` is rejected because the ordinary producer path cannot write one, not as an alignment guess.
+`allp`/`ALL1`/`ALL2` and `vmlinux`/`vmlinuxhdr` outputs. `fix_chksum` is not separately interpreted or validated:
+its history cannot be recovered from a header-only structural match. Compatible even-length outputs may match
+this ordinary layout, including outputs byte-identical to an ordinary image plus permitted trailing bytes.
+Its rewritten `len` can place the actual old checksum elsewhere; `checksumOffset` reports the ordinary-layout
+convention, not evidence of where every producer invocation wrote a checksum. An odd `len` is refused because
+the ordinary path cannot write one; no impossible provenance rejection or ban on trailing bytes is implied.
 
 ## Validation
 
@@ -156,3 +159,10 @@ row hashes exactly (see `coordinator-casefix/adjudication.json`). The coordinato
 acceptance then passes all 56 supported outputs and four distinct controls, reading those corrected files for
 the two collided names. It also checks embedded views, truncation and unchanged consistent tier after checksum
 mutation. This repairs durable evidence, not product behavior; the original matrix is not described as hash-clean.
+
+Independent review found and minimized that provenance ambiguity with the actual host tool: an empty ordinary
+`linux` image followed by `de ad c0 de` stays byte-identical after `fix_chksum` (SHA-256
+`eb8a0ec0dcafcd955a95b4f6e7041776c4f8f42d2315c3aa18ff7fc2062e7a8c`). The compatible header remains
+consistent/85 with checksum unverified. The parser behavior is unchanged; the correction narrows the source
+comment and documentation claim. Raw independent evidence is in the campaign state's
+`review-realtek-ui-evidence/generator/minimal-fix-result.json`.

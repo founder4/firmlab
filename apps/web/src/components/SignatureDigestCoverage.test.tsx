@@ -133,6 +133,60 @@ describe('persisted signature digest presentation decisions', () => {
   });
 });
 
+const contradictoryRecords = [
+  {
+    name: 'provided capability with unavailable result but no attempt',
+    patch: { attempted: 0, completed: 0, matched: 0, unavailable: 1, bytesSubmitted: 0, bytesCompleted: 0 },
+  },
+  {
+    name: 'completed digest without submitted or completed bytes',
+    patch: { attempted: 1, completed: 1, matched: 1, unavailable: 0, bytesSubmitted: 0, bytesCompleted: 0 },
+  },
+  {
+    name: 'planned candidate and byte skip without planned bytes',
+    patch: {
+      attempted: 0,
+      completed: 0,
+      matched: 0,
+      unavailable: 0,
+      skipped: 1,
+      skippedByteBudget: 1,
+      bytesPlanned: 0,
+      bytesSubmitted: 0,
+      bytesCompleted: 0,
+      maxBytes: 0,
+    },
+  },
+].map(({ name, patch }) => ({
+  name,
+  record: {
+    ...coverage,
+    listed: 1,
+    planned: 1,
+    invalidCandidates: 0,
+    mismatched: 0,
+    skipped: 0,
+    skippedExecutionBudget: 0,
+    skippedByteBudget: 0,
+    bytesPlanned: 1025,
+    maxExecutions: 8,
+    maxBytes: 67_108_864,
+    ...patch,
+  },
+}));
+
+describe('contradictory saved digest counters', () => {
+  it.each(contradictoryRecords)('warns without rewriting raw counts: $name', ({ record }) => {
+    const view = presentSignatureDigestCoverage(record);
+    expect(view.state).toBe('partial');
+    for (const key of DIGEST_COUNT_FIELDS) expect(view.counts[key]).toBe(record[key]);
+    render(<SignatureDigestCoverage coverage={record} />);
+    expect(screen.getByText(/This record is incomplete or inconsistent/)).toBeVisible();
+    expect(count('Attempts')).toHaveTextContent(new RegExp(`^${record.attempted}$`));
+    expect(count('Unavailable results')).toHaveTextContent(new RegExp(`^${record.unavailable}$`));
+  });
+});
+
 describe('recorded digest coverage interface', () => {
   it('labels attempts, completions, unavailable results and each budget independently', () => {
     render(<SignatureDigestCoverage coverage={coverage} />);

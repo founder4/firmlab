@@ -14,7 +14,9 @@
  *
  * Unsupported on purpose: `csys`/`csro` (the producer's default-config strings, which its Makefile never builds and
  * which collide with unrelated `CSYS`-family usage), `cs6b`/`cr6b`, the `root`/`boot`/`web`/`all` headers, the
- * `vmlinux`/`vmlinuxhdr` paths, and `fix_chksum` outputs, which rewrite `len` and leave the checksum mid-region.
+ * `vmlinux`/`vmlinuxhdr` paths. `fix_chksum` history is not separately interpreted: compatible even-length
+ * outputs can be indistinguishable from an ordinary envelope with trailing bytes. Checksum locations below
+ * describe the ordinary-layout convention, not where every possible producer invocation wrote a checksum.
  */
 
 /** sizeof(IMG_HEADER_T): signature[4] + three 32-bit words, `__attribute__((packed))` in apmib.h. */
@@ -53,7 +55,8 @@ export type RealtekCvimgHeaderResult =
       bodyLength: number;
       /**
        * Where the ordinary producer path writes its 16-bit checksum (last two declared bytes) and the region the
-       * consumer source sums. Located, never computed: `verified` is always false here.
+       * consumer source sums. Compatible alternate producer histories cannot be distinguished from these bytes;
+       * this is the ordinary-layout location, not proof of an actual checksum write. `verified` is always false.
        */
       checksum: { width: 2; offset: number; summedStart: number; summedEnd: number; verified: false };
     };

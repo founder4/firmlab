@@ -65,14 +65,14 @@ export function presentSignatureDigestCoverage(value: unknown): DigestCoveragePr
       n.completed === n.matched + n.mismatched &&
       n.skipped === n.skippedExecutionBudget + n.skippedByteBudget &&
       n.completed <= n.attempted &&
-      n.attempted <= n.completed + n.unavailable &&
+      (capability !== 'provided' || n.attempted === n.completed + n.unavailable) &&
       n.attempted <= n.maxExecutions &&
       n.bytesCompleted <= n.bytesSubmitted &&
       n.bytesSubmitted <= n.bytesPlanned &&
       n.bytesSubmitted <= n.maxBytes &&
-      (n.planned !== 0 || n.bytesPlanned === 0) &&
-      (n.attempted !== 0 || n.bytesSubmitted === 0) &&
-      (n.completed !== 0 || n.bytesCompleted === 0) &&
+      (n.planned === 0) === (n.bytesPlanned === 0) &&
+      (n.attempted === 0) === (n.bytesSubmitted === 0) &&
+      (n.completed === 0) === (n.bytesCompleted === 0) &&
       (capability !== 'unavailable' || (n.attempted === 0 && n.completed === 0 && n.skipped === 0));
   }
   return { counts, capability, note, state: allPresent && consistent ? 'recorded' : 'partial' };

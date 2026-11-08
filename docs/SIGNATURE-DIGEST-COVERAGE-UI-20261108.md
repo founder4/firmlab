@@ -102,3 +102,15 @@ in the new component; its four existing side-stripe warnings and one grid adviso
 CSS and were preserved. No design-system files were created or rewritten: this is an incumbent Operate-mode
 extension, using the existing tokens and typography. No deployment, push, DB/corpus mutation, lane change,
 firmware egress or host/network configuration change occurred.
+
+## Independent-review correction
+
+The subsequent fixed-checkout review found complete but impossible saved records that did not show the
+uncertainty warning: a provided capability with an unavailable result but no attempt, a completed digest with
+zero submitted/completed bytes, and planned work with zero planned bytes. Three new regressions failed against
+the prior presenter, then passed after requiring provided-capability attempt equality and matching zero/nonzero
+work/byte counts. Every raw valid count is still preserved; this changes only whether the existing warning appears.
+The coverage suite now passes 44 tests. The coordinator's fresh production Chromium run covers all three
+contradictions across EN/ES, dark/light and 320/390/1440 (36 cases, 864 GETs): all warnings present, no browser or
+HTTP errors/overflow. Evidence: campaign-state `digest-ui-review-fix-{red,green,build,browser}.log` and the adjacent
+browser script/results. The independent review remains a record of the pre-fix findings, not a blanket green claim.
