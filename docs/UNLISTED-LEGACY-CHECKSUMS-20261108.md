@@ -82,3 +82,25 @@ omitted candidate. Full row equality covers tier, score, rationale, metadata and
 **Deferred:** Sercomm checksum work, other formats, and checksum work for every listed/default-within-cap or
 unbounded hit. This is an omitted-row optimization for two existing formats, not a global work budget or a
 universal complexity claim. No live firmware, corpus, external tool behavior, deployed UI, or device was tested.
+
+## Coordinator integration and independent acceptance
+
+Integrated as `59c7c6d4c5dc22a54d30a8f1834d9b93d85911fc`. All four repository gates passed at 07:51:22 CET:
+`pnpm check`, `pnpm test` (5,548 passed, 14 external opt-ins skipped), `pnpm build`, `pnpm biome`.
+The coordinator verified all 378 writer input hashes and replayed the writer probe against its fresh integrated
+compiled core in actual Node 22 offline/read-only: all 432 comparisons and source-byte/work assertions passed.
+This replay reuses writer inputs/script and is distinct from the independent review.
+
+Independent read-only Task `task_881cb47151d8` / Dispatch `ctx_91a05938c27a`, fixed at the integrated commit,
+returned no reproducible findings within scope. Its own Git-extracted complete old/new cores and separate probe
+passed 3,408 whole-result/identity comparisons across 142 inert fixtures, eight caps and three confidence settings,
+90 direct verifier cases and 450 extra-argument comparisons in the actual pinned Node 22 image. Own 64 KiB,
+12-header work inputs reduced TRX indexed reads 639,403→188,887 and TP-Link copy-span requests 12→1
+(516,096→65,536 bytes). These are separate fixtures/metrics from the writer's 128 KiB inputs above.
+
+Report and evidence: `/Users/agfil/.local/state/orca-campaign/firmlab-20261108-034811/review-legacy-checksums.md`
+and `review-legacy-checksums-evidence/`. The coordinator read the full report, verified all 490 evidence-manifest,
+450 input-manifest and 50 Git-source-manifest entries (overlapping sets), and checked the source hashes directly
+against Git. Report SHA-256: `691f5cc8dc3d61eeb00cf90e9f1a4df79d8f49a31fcc2243b645307639aadff0`.
+Initial reviewer missing-document/HDR1-fixture failures are retained and explained; neither required a product fix.
+No deployment or broader checksum budget is accepted by this bounded review.
