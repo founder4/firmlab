@@ -1265,3 +1265,209 @@ describe('Realtek cvimg scanner bounds', () => {
     expect(scan.rejectedByRule?.['realtek-cvimg-cs6c']).toBeUndefined();
   });
 });
+
+/**
+ * A uImage match the scanner will not list must not pay for a CRC over its whole payload.
+ *
+ * The listing cap stops the scan ADDING rows, never looking, so every match still runs its rule's check — and the
+ * uImage check's last step is a CRC over the declared payload. N header-CRC-valid uImage headers that each declare
+ * "the rest of the buffer" therefore cost O(N × length) even when only one row is listed: the payload CRC only ever
+ * chooses between `consistent` and `verified`, a tier an unlisted match never shows. These tests count the bytes
+ * the scan actually indexes (a transparent proxy over the caller's buffer, no production hook), compare every
+ * capped result against an uncapped control, and never assert on time.
+ */
+describe('unlisted uImage matches skip the payload CRC, nothing else', () => {
+  const crc = (b: Uint8Array): number => zlib.crc32(b) >>> 0;
+  const uimageRule = SIGNATURE_RULES.find((r) => r.id === 'uimage');
+
+  /** Write a uImage header at `off` declaring `size` payload bytes; the payload must already be final. */
+  function writeUimage(buf: Buffer, off: number, size: number, opts: { badHeader?: boolean; badData?: boolean } = {}) {
+    buf.fill(0, off, Math.min(buf.length, off + 64));
+    buf.writeUInt32BE(0x27051956, off);
+    buf.writeUInt32BE(size, off + 12);
+    buf.writeUInt32BE(0x80008000, off + 16);
+    const end = Math.min(buf.length, off + 64 + size);
+    buf.writeUInt32BE(opts.badData ? 0xdeadbeef : crc(buf.subarray(off + 64, end)), off + 24);
+    buf.writeUInt32BE(opts.badHeader ? 0x12345678 : crc(buf.subarray(off, off + 64)), off + 4);
+  }
+
+  /**
+   * Synthetic, inert bytes: `count` headers, `stride` apart, each declaring the REST of the buffer as its payload.
+   * Written last-to-first so each header's payload (which contains every later header) is final when its CRC is
+   * taken — every header and payload CRC is legitimate unless `opts` breaks the first one.
+   */
+  function stacked(
+    length: number,
+    count: number,
+    stride: number,
+    first: { badHeader?: boolean; badData?: boolean } = {},
+  ) {
+    const buf = Buffer.alloc(length);
+    for (let i = 0; i < length; i++) buf[i] = (i * 131 + 17) & 0x7f;
+    for (let i = count - 1; i >= 0; i--) {
+      const off = i * stride;
+      writeUimage(buf, off, length - off - 64, i === 0 ? first : {});
+    }
+    return buf;
+  }
+
+  /** Counts indexed reads through the scanner; typed-array methods are bound to the real buffer. */
+  function counted(target: Uint8Array): { view: Uint8Array; reads: () => number } {
+    let reads = 0;
+    const view = new Proxy(target, {
+      get(t, prop) {
+        if (typeof prop === 'string') {
+          const c = prop.charCodeAt(0);
+          if (c >= 48 && c <= 57) {
+            reads++;
+            return t[Number(prop)];
+          }
+        }
+        const v = Reflect.get(t, prop, t);
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    });
+    return { view, reads: () => reads };
+  }
+
+  function scanCounted(buf: Uint8Array, maxHits: number) {
+    const { view, reads } = counted(buf);
+    const scan = scanSignaturesDetailed(view, { maxHits });
+    return { scan, reads: reads() };
+  }
+
+  const ALL = Number.MAX_SAFE_INTEGER;
+  /** Everything but the list must equal the uncapped scan, and every listed row must equal its uncapped twin. */
+  function expectSameAsUncapped(buf: Uint8Array, maxHits: number) {
+    const capped = scanSignaturesDetailed(buf, { maxHits });
+    const full = scanSignaturesDetailed(buf, { maxHits: ALL });
+    expect(capped.matched).toBe(full.matched);
+    expect(capped.rejected).toBe(full.rejected);
+    expect(capped.rejectedByRule).toEqual(full.rejectedByRule);
+    expect(capped.distinctIds).toBe(full.distinctIds);
+    expect(new Set(capped.hits.map((h) => h.id))).toEqual(new Set(full.hits.map((h) => h.id)));
+    for (const hit of capped.hits) {
+      expect(hit).toEqual(full.hits.find((h) => h.offset === hit.offset && h.id === hit.id));
+    }
+    return { capped, full };
+  }
+
+  it.each([
+    [16, 64 * 1024, 4096],
+    [64, 64 * 1024, 1024],
+    [128, 64 * 1024, 512],
+  ])('reads each byte a bounded number of times under maxHits 0 with %i stacked headers', (count, length, stride) => {
+    const buf = stacked(length, count, stride);
+    const capped = scanCounted(buf, 0);
+    const control = scanCounted(buf, ALL);
+    // The control lists every header, so it pays every payload CRC: about count × length / 2 reads.
+    expect(control.reads).toBeGreaterThan((count * length) / 4);
+    // Capped: one pass, the listed first header's payload, and header-sized work per unlisted match. Generous.
+    expect(capped.reads).toBeLessThan(6 * length);
+    expect(capped.scan.hits.filter((h) => h.id === 'uimage')).toEqual([
+      expect.objectContaining({ offset: 0, tier: 'verified', score: 99 }),
+    ]);
+    expect(control.scan.hits.filter((h) => h.id === 'uimage' && h.tier === 'verified')).toHaveLength(count);
+    expect(control.scan.rejectedByRule?.uimage).toBeUndefined();
+    expectSameAsUncapped(buf, 0);
+  });
+
+  it('leaves every listed row, counter and the id set unchanged at caps 0, 1, 16 and the default', () => {
+    const buf = stacked(32 * 1024, 64, 512);
+    for (const cap of [0, 1, 16, 5000]) expectSameAsUncapped(buf, cap);
+    // The default lists all 64, so it is the old behaviour by construction: every header is fully verified.
+    const listed = scanSignaturesDetailed(buf).hits.filter((h) => h.id === 'uimage');
+    expect(listed).toHaveLength(64);
+    expect(listed.every((h) => h.tier === 'verified' && /payload CRC both recompute/.test(h.rationale ?? ''))).toBe(
+      true,
+    );
+    expect(listed[0]?.meta).toEqual({ dataSize: 32 * 1024 - 64, loadAddr: '80008000', osCode: 0, archCode: 0 });
+  });
+
+  it('shows a payload mismatch or a header mismatch on the listed hit exactly as before', () => {
+    const badData = stacked(16 * 1024, 32, 512, { badData: true });
+    const { capped } = expectSameAsUncapped(badData, 0);
+    const first = capped.hits.find((h) => h.id === 'uimage');
+    expect(first).toMatchObject({ offset: 0, tier: 'consistent' });
+    expect(first?.rationale).toMatch(/modified or re-packed/);
+
+    const badHeader = stacked(16 * 1024, 32, 512, { badHeader: true });
+    expect(expectSameAsUncapped(badHeader, 0).capped.hits.find((h) => h.id === 'uimage')).toMatchObject({
+      offset: 0,
+      tier: 'magic',
+    });
+  });
+
+  it('counts a truncated header and an out-of-bounds payload without rejecting either, capped or not', () => {
+    const buf = stacked(8 * 1024, 8, 512);
+    const tail = Buffer.alloc(8 * 1024 + 100);
+    buf.copy(tail);
+    writeUimage(tail, 8 * 1024, 0x7fffffff); // declared payload runs far past the buffer
+    tail.writeUInt32BE(0x27051956, tail.length - 20); // header itself runs past the end
+    const { capped, full } = expectSameAsUncapped(tail, 0);
+    expect(full.hits.find((h) => h.offset === 8 * 1024)?.rationale).toMatch(/runs past this buffer/);
+    expect(full.hits.find((h) => h.offset === tail.length - 20)?.tier).toBe('magic');
+    expect(capped.rejectedByRule?.uimage).toBeUndefined();
+  });
+
+  it('fully verifies the first hit of a rule that appears only after the list is full', () => {
+    // Listed uImage first, then 40 unlisted ones, then a TRX nobody has seen: it is listed and checks its CRC.
+    const head = stacked(32 * 1024, 40, 512);
+    const trx = Buffer.alloc(0x400, 0x5a);
+    trx.write('HDR0', 0, 'latin1');
+    trx.writeUInt32LE(0x400, 4);
+    trx.writeUInt32LE(28, 16);
+    trx.writeUInt32LE(~crc(trx.subarray(12, 0x400)) >>> 0, 8);
+    const buf = Buffer.concat([head, trx]);
+    const { capped } = expectSameAsUncapped(buf, 0);
+    expect(capped.hits.find((h) => h.id === 'trx')).toMatchObject({ offset: 32 * 1024, tier: 'verified' });
+
+    // The reverse: other ids fill the list first, and the first uImage still pays for its whole payload.
+    const late = Buffer.alloc(64 * 1024);
+    for (let i = 0; i < 8; i++) late.write('hsqs', i * 64, 'latin1');
+    for (let i = 4096; i < late.length; i++) late[i] = (i * 7) & 0x7f;
+    writeUimage(late, 4096, late.length - 4096 - 64);
+    const { scan, reads } = scanCounted(late, 1);
+    expect(scan.hits.find((h) => h.id === 'uimage')).toMatchObject({ offset: 4096, tier: 'verified' });
+    expect(reads).toBeGreaterThan(late.length - 4096); // the scan pass plus the full payload CRC
+    expectSameAsUncapped(late, 1);
+  });
+
+  it('keeps the direct registry check whole, and the unlisted one agrees with it on every reject-or-survive', () => {
+    const verify = uimageRule?.verify;
+    const unlisted = uimageRule?.verifyUnlisted;
+    if (!verify || !unlisted) throw new Error('uimage rule lost its checks');
+    const good = stacked(4096, 1, 0);
+    expect(verify(good, 0)).toEqual({
+      tier: 'verified',
+      why: `header CRC and the ${4096 - 64}-byte payload CRC both recompute to the declared values`,
+    });
+    expect(unlisted(good, 0).tier).toBe('consistent');
+    expect(unlisted(good, 0).why).toMatch(/not computed for an unlisted match/);
+    const variants = [
+      good,
+      stacked(4096, 1, 0, { badData: true }),
+      stacked(4096, 1, 0, { badHeader: true }),
+      good.subarray(0, 4000),
+      good.subarray(0, 40),
+    ];
+    for (const buf of variants) {
+      const full = verify(buf, 0);
+      const cheap = unlisted(buf, 0);
+      expect(cheap.tier === 'rejected').toBe(full.tier === 'rejected');
+      // Header-level verdicts are identical; only the payload rung (consistent vs verified) is withheld.
+      if (/not computed/.test(cheap.why)) expect(['consistent', 'verified']).toContain(full.tier);
+      else expect(cheap).toEqual(full);
+    }
+    // uImage is the only rule with the hook; a new one needs its own agreement test like this one.
+    expect(SIGNATURE_RULES.filter((r) => r.verifyUnlisted).map((r) => r.id)).toEqual(['uimage']);
+  });
+
+  it('never mutates the caller buffer', () => {
+    const buf = stacked(16 * 1024, 32, 512);
+    const before = Buffer.from(buf);
+    scanSignaturesDetailed(buf, { maxHits: 0 });
+    scanSignaturesDetailed(buf);
+    expect(buf.equals(before)).toBe(true);
+  });
+});

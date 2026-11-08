@@ -76,6 +76,14 @@ interface SignatureRule {
    * A rule without one never rises above its derived base tier — it has not looked at anything but the magic.
    */
   verify?: (buf: Uint8Array, offset: number) => SignatureVerdict;
+  /**
+   * Optional cheaper form of `verify`, run by the scanner ONLY for a match it already knows it will not list (the
+   * listing cap is reached and this rule id is already listed). Its one obligation is the survival decision: it
+   * must return `rejected` exactly when `verify` would, because that verdict feeds `rejected`, `rejectedByRule`
+   * and the id set. Its non-rejected tier and rationale are never emitted — the hit is not listed — so it may skip
+   * work that only refines a tier, such as a checksum over a whole payload. A rule without one runs `verify`.
+   */
+  verifyUnlisted?: (buf: Uint8Array, offset: number) => SignatureVerdict;
 }
 
 /**
@@ -242,7 +250,7 @@ const crc32 = (buf: Uint8Array, start: number, end: number): number => ~crc32Raw
  * whose own 32-bit check holds is not a coincidence, and a payload that differs from what the header declares is a
  * modified or re-packed image, which is worth seeing rather than dropping.
  */
-function uimageVerify(buf: Uint8Array, off: number): SignatureVerdict {
+function uimageVerify(buf: Uint8Array, off: number, checkPayload = true): SignatureVerdict {
   if (off + 64 > buf.length) return at('magic', 'header runs past the end of this buffer; no field could be checked');
   // A copy, never `slice`: on a Node Buffer `slice` is a view, and zeroing the CRC field would edit the image.
   const header = Uint8Array.from(buf.subarray(off, off + 64));
@@ -261,6 +269,12 @@ function uimageVerify(buf: Uint8Array, off: number): SignatureVerdict {
       'consistent',
       `header CRC matches; the ${size}-byte payload runs past this buffer, so its CRC is unchecked`,
     );
+  }
+  // The payload CRC only decides between `consistent` and `verified`; it never rejects. A match the scanner will not
+  // list therefore stops here: every header decision above still ran, and only a tier nobody will see is skipped.
+  // Without this, N CRC-valid headers that each declare the rest of the buffer cost O(N × length) after the cap.
+  if (!checkPayload) {
+    return at('consistent', `header CRC matches; the ${size}-byte payload CRC was not computed for an unlisted match`);
   }
   const dcrc = u32be(buf, off + 24);
   if (crc32(buf, off + 64, off + 64 + size) !== dcrc) {
@@ -610,7 +624,8 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
       archCode: buf[off + 29] ?? 0,
     }),
 
-    verify: uimageVerify,
+    verify: (buf, off) => uimageVerify(buf, off),
+    verifyUnlisted: (buf, off) => uimageVerify(buf, off, false),
   },
   {
     id: 'trx',
@@ -1377,19 +1392,23 @@ export function scanSignaturesDetailed(buf: Uint8Array, options: ScanOptions = {
       if (rule.atOffset !== undefined && rule.atOffset !== off) continue;
       if (!matchesAt(buf, off, rule.magic)) continue;
       matched++;
+      // Past the bound only a rule nobody has seen yet may still be listed: the list stays short, the set stays
+      // whole. Offsets are visited in ascending order and entries are only appended, so `hits` remains sorted.
+      // Decided before the check (which mutates nothing), so a rule's first hit is always fully verified.
+      const listable = hits.length < maxHits || !seenIds.has(rule.id);
       // The rubric runs BEFORE the listing bound, and unconditionally. It has to: a rejection removes a rule
       // from the id set, and `inferIdentity` reads that set — so deciding it only for the matches that happen to
-      // fit under the cap would make a persisted identity depend on the cap again. It is also cheap next to
-      // `decode`, which still runs only for hits that are kept.
-      const verdict = rule.verify?.(buf, off);
+      // fit under the cap would make a persisted identity depend on the cap again. What an unlisted match does
+      // NOT need is the part of the check that only refines a tier it will never show; `verifyUnlisted` is that
+      // rule-declared subset, bound to reach the same reject-or-survive answer. `decode` runs only for kept hits.
+      const check = listable ? rule.verify : (rule.verifyUnlisted ?? rule.verify);
+      const verdict = check?.(buf, off);
       if (verdict?.tier === 'rejected') {
         rejected++;
         rejectedByRule[rule.id] = (rejectedByRule[rule.id] ?? 0) + 1;
         continue;
       }
-      // Past the bound only a rule nobody has seen yet may still be listed: the list stays short, the set stays
-      // whole. Offsets are visited in ascending order and entries are only appended, so `hits` remains sorted.
-      if (hits.length >= maxHits && seenIds.has(rule.id)) continue;
+      if (!listable) continue;
       seenIds.add(rule.id);
       const meta = rule.decode?.(buf, off);
       const tier = verdict ? (verdict.tier as SignatureTier) : baseTier(rule);
