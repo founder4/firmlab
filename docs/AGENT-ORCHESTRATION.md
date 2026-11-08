@@ -3,6 +3,12 @@
 This is the operating playbook for supervised work by Codex, Claude, and Antigravity (Gemini models).
 Repository rules live in `AGENTS.md`; architecture and validation details live in `CLAUDE.md`.
 
+## Authorized campaign checkpoint — 2026-11-08
+
+The active local campaign result, fixed deadline, validation, review status and preserved main are recorded in
+[CAMPAIGN-20261108.md](CAMPAIGN-20261108.md). Its five-hour authorization ends at 08:48:11 CET on 2026-11-08;
+this checkpoint never renews it. Use actual live Run ownership before any further coordination.
+
 ## GitHub synchronization — 2026-10-31
 
 The operator subsequently authorized synchronization with GitHub. Main now includes the security dependency
