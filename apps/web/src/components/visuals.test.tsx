@@ -139,7 +139,7 @@ describe('StructureMap — a band is a signature match, not a verdict', () => {
     setLocale('es');
     const { container } = render(<StructureMap segments={segments} size={SIZE} />);
 
-    expect(screen.getByText('Pasa el cursor por un segmento para inspeccionarlo.')).toBeTruthy();
+    expect(screen.getByText('Elige un segmento o apunta al mapa para consultar sus detalles.')).toBeTruthy();
     expect(screen.getByText(/El tramo entre dos coincidencias está sin reclamar, no vacío/i)).toBeTruthy();
 
     // Categories are identifiers the signature engine decided; the ruler is notation. Neither is translated.

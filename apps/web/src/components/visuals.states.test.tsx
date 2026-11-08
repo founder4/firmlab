@@ -178,7 +178,7 @@ describe('StructureMap — an empty carve, and what a band is a proportion OF', 
     const { container } = render(<StructureMap segments={[]} size={SIZE} />);
 
     expect(container.querySelectorAll('div[title]')).toHaveLength(0);
-    expect(screen.getByText('Hover a segment to inspect it.')).toBeTruthy();
+    expect(screen.getByText('No segment details are listed.')).toBeTruthy();
     expect(screen.getByText(/unclaimed, not empty/i)).toBeTruthy();
     // The ruler is the image, not the carve, so it still reads end to end with nothing on it.
     expect(screen.getByText('0x3000')).toBeTruthy();
@@ -216,10 +216,10 @@ describe('StructureMap — an empty carve, and what a band is a proportion OF', 
     // The decoded header fields are what the carve read out of the bytes, and they render as recorded.
     expect(screen.getByText('size=')).toBeTruthy();
     expect(screen.getByText('4096')).toBeTruthy();
-    expect(screen.queryByText('Hover a segment to inspect it.')).toBeNull();
+    expect(screen.queryByText('Choose a segment or point to the map to inspect its details.')).toBeNull();
 
     fireEvent.mouseLeave(header);
-    expect(screen.getByText('Hover a segment to inspect it.')).toBeTruthy();
+    expect(screen.getByText('Choose a segment or point to the map to inspect its details.')).toBeTruthy();
   });
 });
 

@@ -30,7 +30,11 @@ export const visuals = {
   },
 
   structure: {
-    hoverPrompt: 'Hover a segment to inspect it.',
+    hoverPrompt: 'Choose a segment or point to the map to inspect its details.',
+    inspectLabel: 'Inspect a segment',
+    chooseSegment: 'Choose a segment',
+    detailsLabel: 'Segment details',
+    emptyPrompt: 'No segment details are listed.',
     /** A carve is a claim a magic number makes about what follows it, and the gaps are unclaimed rather than empty. */
     caveat: [
       'Each band is a signature match at that offset — what a magic number claims starts there, not a verdict on',

@@ -3848,3 +3848,20 @@ main.content:focus {
 .vendor-vex-coverage li + li {
   margin-top: 6px;
 }
+
+.structure-inspector {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  min-width: 0;
+  max-width: 72ch;
+}
+.structure-inspector .select {
+  min-width: 0;
+  min-height: 44px;
+  font-size: 16px;
+}
+.structure-segment-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

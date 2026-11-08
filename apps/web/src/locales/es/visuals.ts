@@ -29,7 +29,11 @@ export const visuals: Messages['visuals'] = {
   },
 
   structure: {
-    hoverPrompt: 'Pasa el cursor por un segmento para inspeccionarlo.',
+    hoverPrompt: 'Elige un segmento o apunta al mapa para consultar sus detalles.',
+    inspectLabel: 'Inspeccionar un segmento',
+    chooseSegment: 'Elige un segmento',
+    detailsLabel: 'Detalles del segmento',
+    emptyPrompt: 'No hay detalles de segmentos listados.',
     caveat: [
       'Cada banda es una coincidencia de firma en ese desplazamiento — lo que un número mágico dice que empieza',
       'ahí, no un veredicto sobre lo que son los bytes. El tramo entre dos coincidencias está sin reclamar, no',

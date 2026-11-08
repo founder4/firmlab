@@ -1,16 +1,16 @@
 /**
  * Structure map — the "binwalk graphical view": a proportional horizontal ribbon of the image, each segment
- * colored by its signature category (filesystem, compression, bootloader, executable…). Hovering a segment
- * shows its offset range, label, and any decoded header fields. This is the at-a-glance layout of the image.
+ * colored by its signature category (filesystem, compression, bootloader, executable…). Selecting or hovering
+ * a segment shows its offset range, label and recorded header fields. The native selector works without hover.
  *
  * **What a band claims.** A segment is a signature match: a magic number saying what it believes starts at that
  * offset. It is not a verdict on what the bytes are, and the stretch between two matches is unclaimed rather than
  * empty — a ribbon drawn edge to edge invites the opposite reading, so the caveat under it is part of the picture.
  *
- * Only the two sentences are localised. Segment labels, categories, confidences and the decoded header fields are
+ * Controls and explanatory sentences are localised. Segment labels, categories, confidences and header fields are
  * what the carve recorded, and the `0x…` ruler and byte counts are notation; all of them render as produced.
  */
-import { useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { StructureSegment } from '../api';
 import { categoryColor, fmtBytes, fmtHex } from '../api';
 import { useMessages } from '../i18n';
@@ -22,12 +22,20 @@ interface Props {
 
 export function StructureMap({ segments, size }: Props): JSX.Element {
   const t = useMessages();
-  const [active, setActive] = useState<number | null>(null);
+  const id = useId();
+  const [hovered, setHovered] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const active = hovered ?? selected;
   const total = size || 1;
+  useEffect(() => {
+    setHovered(null);
+    setSelected(null);
+  }, [segments, size]);
 
   return (
     <div>
       <div
+        aria-hidden="true"
         style={{
           display: 'flex',
           width: '100%',
@@ -43,8 +51,8 @@ export function StructureMap({ segments, size }: Props): JSX.Element {
           return (
             <div
               key={i}
-              onMouseEnter={() => setActive(i)}
-              onMouseLeave={() => setActive((cur) => (cur === i ? null : cur))}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered((cur) => (cur === i ? null : cur))}
               title={`${seg.label} (${fmtHex(seg.start)}–${fmtHex(seg.end)})`}
               style={{
                 width: `${pct}%`,
@@ -67,14 +75,48 @@ export function StructureMap({ segments, size }: Props): JSX.Element {
         <span>{fmtHex(size)}</span>
       </div>
 
-      {/* Detail of the hovered / first segment */}
-      <div className="panel" style={{ marginTop: 14, marginBottom: 0, background: 'var(--bg-panel-2)' }}>
+      {segments.length > 0 && (
+        <div className="structure-inspector">
+          <label htmlFor={`${id}-segment`}>{t.visuals.structure.inspectLabel}</label>
+          <select
+            id={`${id}-segment`}
+            className="select"
+            value={selected === null ? '' : String(selected)}
+            aria-controls={`${id}-details`}
+            onFocus={() => setHovered(null)}
+            onChange={(event) => {
+              setHovered(null);
+              setSelected(event.target.value === '' ? null : Number(event.target.value));
+            }}
+          >
+            <option value="">{t.visuals.structure.chooseSegment}</option>
+            {segments.map((segment, index) => (
+              <option key={`${segment.start}-${index}`} value={index}>
+                {fmtHex(segment.start)}–{fmtHex(segment.end)} · {segment.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Hover previews the map; an explicit selection stays available after pointer or keyboard focus leaves. */}
+      <section
+        id={`${id}-details`}
+        aria-label={t.visuals.structure.detailsLabel}
+        className="panel structure-segment-details"
+        style={{ marginTop: 14, marginBottom: 0, background: 'var(--bg-panel-2)' }}
+      >
         {(() => {
           const seg = active !== null ? segments[active] : null;
-          if (!seg) return <span className="hint">{t.visuals.structure.hoverPrompt}</span>;
+          if (!seg)
+            return (
+              <span className="hint">
+                {segments.length > 0 ? t.visuals.structure.hoverPrompt : t.visuals.structure.emptyPrompt}
+              </span>
+            );
           return (
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginBottom: 6 }}>
                 <span
                   className="legend-swatch"
                   style={{ background: categoryColor(seg.category), width: 13, height: 13 }}
@@ -98,7 +140,7 @@ export function StructureMap({ segments, size }: Props): JSX.Element {
             </div>
           );
         })()}
-      </div>
+      </section>
 
       <Legend segments={segments} />
 
