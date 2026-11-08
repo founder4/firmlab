@@ -245,6 +245,21 @@ describe('parsePicobin — RP2350 boot block ISA', () => {
     expect(info?.loopComplete).toBe(true);
   });
 
+  it('reads rolling-window deltas as signed values while preserving positive and zero words', () => {
+    for (const delta of [-0x1000, 0, 0x1000, -0x8000_0000]) {
+      const image = new Uint8Array(0x40);
+      const view = new DataView(image.buffer);
+      view.setUint32(0x10, 0xffff_ded3, true);
+      view.setUint32(0x14, 0x1101_0142, true);
+      view.setUint32(0x18, 0x0000_0205, true);
+      view.setInt32(0x1c, delta, true);
+      view.setUint32(0x20, 0x0000_03ff, true);
+      view.setUint32(0x24, 0, true);
+      view.setUint32(0x28, 0xab12_3579, true);
+      expect(parsePicobin(image)?.rollingWindowDelta).toBe(delta);
+    }
+  });
+
   it('reads an Arm RP2350 image', () => {
     expect(parsePicobin(picobinBlock(0x1001))?.cpu).toBe('arm'); // CPU_ARM(0x0)
   });
@@ -422,6 +437,59 @@ describe('parseRiscvStartupCopyTable — bounded Pico SDK startup map', () => {
         },
       ],
     });
+  });
+
+  it('requires source spans, table and terminator to fit the selected runtime mapping', () => {
+    const mapping = { start: 0x1000_0020, endExclusive: 0x1000_0140 };
+    expect(parseRiscvStartupCopyTable(startupImage(), 0x1000_0020, 0x20, 0x1000_0000, mapping)?.sourceBounds).toEqual(
+      mapping,
+    );
+    expect(
+      parseRiscvStartupCopyTable(startupImage(), 0x1000_0020, 0x20, 0x1000_0000, {
+        ...mapping,
+        endExclusive: 0x1000_0110,
+      }),
+    ).toBeNull();
+    expect(
+      parseRiscvStartupCopyTable(startupImage(0x1000_0040), 0x1000_0020, 0x20, 0x1000_0000, {
+        ...mapping,
+        endExclusive: 0x1000_006c,
+      }),
+    ).toBeNull();
+    expect(
+      parseRiscvStartupCopyTable(startupImage(), 0x1000_0020, 0x20, 0x1000_0000, { ...mapping, start: 0x1000_0080 }),
+    ).toBeNull();
+  });
+
+  it('does not recover a valid table from an AUIPC/ADDI pair outside the selected code window', () => {
+    const image = new Uint8Array(0x200);
+    const view = new DataView(image.buffer);
+    for (let offset = 0x80; offset < 0x120; offset += 2) view.setUint16(offset, 0x0001, true);
+    view.setUint32(0x120, 0x0000_0717, true); // AUIPC at PC +0x120
+    view.setUint32(0x124, 0xf007_0713, true); // ADDI -0x100 -> table +0x20
+    view.setUint32(0x20, 0x1000_0040, true);
+    view.setUint32(0x24, 0x2000_0000, true);
+    view.setUint32(0x28, 0x2000_0020, true);
+    view.setUint32(0x2c, 0, true);
+    expect(parseRiscvStartupCopyTable(image, 0x1000_0080, 0x80, 0x1000_0000)).not.toBeNull();
+    expect(
+      parseRiscvStartupCopyTable(image, 0x1000_0080, 0x80, 0x1000_0000, {
+        start: 0x1000_0020,
+        endExclusive: 0x1000_0100,
+      }),
+    ).toBeNull();
+  });
+
+  it('refuses ambiguous overlapping runtime destinations and invalid affine mappings', () => {
+    const image = startupImage();
+    const view = new DataView(image.buffer);
+    view.setUint32(0x6c, 0x1000_0120, true);
+    view.setUint32(0x70, 0x2000_0010, true);
+    view.setUint32(0x74, 0x2000_0030, true);
+    view.setUint32(0x78, 0, true);
+    expect(parseRiscvStartupCopyTable(image, 0x1000_0020, 0x20, 0x1000_0000)).toBeNull();
+    expect(parseRiscvStartupCopyTable(startupImage(), 0x1000_0022, 0x20, 0x1000_0000)).toBeNull();
+    expect(parseRiscvStartupCopyTable(startupImage(), 0x1000_0021, 0x21, 0x1000_0000)).toBeNull();
   });
 
   it('rejects a table whose declared source bytes are outside the image', () => {

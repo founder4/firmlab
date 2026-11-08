@@ -338,11 +338,18 @@ export interface RiscvStartupCopyRegion {
   size: number;
 }
 
+export interface RiscvStartupCopyBounds {
+  start: number;
+  endExclusive: number;
+}
+
 export interface RiscvStartupCopyTable {
   tableAddress: number;
   tableFileOffset: number;
   bytesExamined: number;
   regions: RiscvStartupCopyRegion[];
+  /** Selected file-backed runtime window, when supplied by the caller. Optional forever on stored results. */
+  sourceBounds?: RiscvStartupCopyBounds;
 }
 
 export interface PicobinInfo {
@@ -370,7 +377,7 @@ export interface PicobinInfo {
   initialSPLimit: number | null;
   /** Vector-table address declared by a VECTOR_TABLE item, when present. */
   vectorTable: number | null;
-  /** Flash rolling-window delta, when declared. */
+  /** Signed 32-bit flash rolling-window delta, when declared. Older results may carry the raw unsigned word. */
   rollingWindowDelta: number | null;
   /** Runtime-to-storage regions declared by a LOAD_MAP item, when present. */
   loadMap?: PicobinLoadMap | null;
@@ -431,16 +438,40 @@ function picobinInfo(
   };
 }
 
+function inCopySourceMapping(
+  address: number,
+  size: number,
+  baseAddress: number,
+  bounds: RiscvStartupCopyBounds,
+  fileSize: number,
+): boolean {
+  const offset = address - baseAddress;
+  return (
+    Number.isSafeInteger(address) &&
+    Number.isSafeInteger(size) &&
+    size >= 0 &&
+    address >= bounds.start &&
+    address + size <= bounds.endExclusive &&
+    offset >= 0 &&
+    offset + size <= fileSize
+  );
+}
+
 function parseRiscvCopyTableCandidate(
   buf: Uint8Array,
   tableAddress: number,
   baseAddress: number,
+  bounds: RiscvStartupCopyBounds,
 ): RiscvStartupCopyTable | null {
   const tableFileOffset = tableAddress - baseAddress;
   if (!Number.isSafeInteger(tableFileOffset) || tableFileOffset < 0 || tableFileOffset % 4 !== 0) return null;
   const regions: RiscvStartupCopyRegion[] = [];
   let cursor = tableFileOffset;
-  for (let entryIndex = 0; entryIndex < 32 && cursor + 4 <= buf.length; entryIndex++) {
+  for (
+    let entryIndex = 0;
+    entryIndex < 32 && inCopySourceMapping(baseAddress + cursor, 4, baseAddress, bounds, buf.length);
+    entryIndex++
+  ) {
     const sourceAddress = u32(buf, cursor, true);
     if (sourceAddress === 0) {
       if (regions.length === 0 || !regions.some((region) => region.size > 0)) return null;
@@ -451,7 +482,7 @@ function parseRiscvCopyTableCandidate(
         regions,
       };
     }
-    if (cursor + 12 > buf.length) return null;
+    if (!inCopySourceMapping(baseAddress + cursor, 12, baseAddress, bounds, buf.length)) return null;
     const runtimeAddress = u32(buf, cursor + 4, true);
     const runtimeEnd = u32(buf, cursor + 8, true);
     if (sourceAddress % 4 !== 0 || runtimeAddress % 4 !== 0 || runtimeEnd % 4 !== 0 || runtimeEnd < runtimeAddress) {
@@ -459,9 +490,15 @@ function parseRiscvCopyTableCandidate(
     }
     const size = runtimeEnd - runtimeAddress;
     const sourceFileOffset = sourceAddress - baseAddress;
-    if (!Number.isSafeInteger(sourceFileOffset) || sourceFileOffset < 0 || sourceFileOffset + size > buf.length) {
+    if (!inCopySourceMapping(sourceAddress, size, baseAddress, bounds, buf.length)) return null;
+    if (
+      size > 0 &&
+      regions.some(
+        (region) =>
+          region.size > 0 && runtimeAddress < region.runtimeAddress + region.size && runtimeEnd > region.runtimeAddress,
+      )
+    )
       return null;
-    }
     regions.push({ sourceAddress, sourceFileOffset, runtimeAddress, size });
     cursor += 12;
   }
@@ -471,29 +508,42 @@ function parseRiscvCopyTableCandidate(
 /**
  * Recover the bounded source/destination table used by Pico SDK RISC-V startup code. The table address must be
  * materialized by an adjacent AUIPC/ADDI pair in the first 256 entrypoint bytes, and every declared source span
- * must map back into the supplied image. Ambiguous or unterminated candidates are rejected.
+ * must map back into the supplied image AND the caller's selected runtime window when supplied. Ambiguous,
+ * overlapping or unterminated candidates are rejected; a whole-file affine mapping is retained for older callers.
  */
 export function parseRiscvStartupCopyTable(
   buf: Uint8Array,
   entryPoint: number,
   entryFileOffset: number,
   baseAddress: number,
+  sourceBounds?: RiscvStartupCopyBounds,
 ): RiscvStartupCopyTable | null {
+  const bounds = sourceBounds ?? { start: baseAddress, endExclusive: baseAddress + buf.length };
   if (
     !Number.isSafeInteger(entryPoint) ||
     !Number.isSafeInteger(entryFileOffset) ||
     !Number.isSafeInteger(baseAddress) ||
-    entryFileOffset < 0 ||
-    entryFileOffset >= buf.length
+    baseAddress < 0 ||
+    !Number.isSafeInteger(bounds.start) ||
+    !Number.isSafeInteger(bounds.endExclusive) ||
+    bounds.start < baseAddress ||
+    bounds.start >= bounds.endExclusive ||
+    bounds.endExclusive > 0x1_0000_0000 ||
+    bounds.endExclusive - baseAddress > buf.length ||
+    entryPoint % 2 !== 0 ||
+    entryPoint - baseAddress !== entryFileOffset ||
+    !inCopySourceMapping(entryPoint, 2, baseAddress, bounds, buf.length)
   ) {
     return null;
   }
   const candidates = new Map<number, RiscvStartupCopyTable>();
-  const scanEnd = Math.min(buf.length, entryFileOffset + 256);
+  const scanEnd = Math.min(buf.length, entryFileOffset + 256, bounds.endExclusive - baseAddress);
   let pos = entryFileOffset;
   for (let instructionCount = 0; instructionCount < 96 && pos + 2 <= scanEnd; instructionCount++) {
     const halfword = (buf[pos] ?? 0) | ((buf[pos + 1] ?? 0) << 8);
+    if ((halfword & 0x1f) === 0x1f) break;
     const instructionSize = (halfword & 0x3) === 0x3 ? 4 : 2;
+    if (pos + instructionSize > scanEnd) break;
     if (instructionSize === 4 && pos + 8 <= scanEnd) {
       const auipc = u32(buf, pos, true);
       const addi = u32(buf, pos + 4, true);
@@ -508,8 +558,13 @@ export function parseRiscvStartupCopyTable(
       ) {
         const pc = (entryPoint + (pos - entryFileOffset)) >>> 0;
         const tableAddress = (pc + (auipc & 0xffff_f000) + (addi >> 20)) >>> 0;
-        const candidate = parseRiscvCopyTableCandidate(buf, tableAddress, baseAddress);
-        if (candidate) candidates.set(candidate.tableFileOffset, candidate);
+        const candidate = parseRiscvCopyTableCandidate(buf, tableAddress, baseAddress, bounds);
+        if (candidate) {
+          candidates.set(
+            candidate.tableFileOffset,
+            sourceBounds ? { ...candidate, sourceBounds: { ...bounds } } : candidate,
+          );
+        }
       }
     }
     pos += instructionSize;
@@ -581,7 +636,7 @@ function parsePicobinBlock(buf: Uint8Array, markerOffset: number): ParsedPicobin
     } else if (itemType === PICOBIN_VECTOR_TABLE_ITEM && sizeWords === 2) {
       vectorTable = u32(buf, pos + 4, true);
     } else if (itemType === PICOBIN_ROLLING_WINDOW_DELTA_ITEM && sizeWords === 2) {
-      rollingWindowDelta = u32(buf, pos + 4, true);
+      rollingWindowDelta = u32(buf, pos + 4, true) | 0;
     } else if (itemType === PICOBIN_LOAD_MAP_ITEM) {
       const entryCount = (header << 1) >>> 25;
       if (sizeWords !== 1 + entryCount * 3) return null;
