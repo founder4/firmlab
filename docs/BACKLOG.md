@@ -348,10 +348,17 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   particionados cuyo MBR ocupa bytes del device header que el productor deja a 0xff. Sobres anidados pueden
   producir hits solapados; no se infiere una partición ni se elimina uno por ello. Ninguna muestra real local
   acredita esos formatos —los «MTK» del corpus son cadenas sueltas—.
-  Realtek sigue pendiente: investigación 2026-11-08, `mkcsysimg`/`csysimg.h` oficiales de OpenWrt en
-  `86739f2b3ae9502368b89ef37fa6f31c42aad6f4` definen `CSYS` en mayúsculas y campos little-endian para el
-  formato ADM/Edimax; no justifican reconocer las firmas Realtek `csys`/`cr6c`/`cs6c` en minúsculas. No se
-  añadió una regla por semejanza de nombre ni se adquirió firmware.)*
+  Realtek ya tiene un subconjunto estructural `cvimg` `cs6c`/`cr6c`: cabecera de 16 bytes y región declarada
+  par de al menos dos bytes, campos big-endian, sin atribuir chip, dispositivo ni contenido kernel/rootfs. La
+  fuente atribuida al vendor procede de mirrors públicos no oficiales fijados; generador original compilado
+  con Zig portable y ejecutado únicamente en contenedor offline sobre payloads inertes. La aceptación integrada
+  pasa 56 salidas y cuatro controles distintos, con cero/uno/par/impar, direcciones cero/máximas y offsets embebidos.
+  El checksum solo se localiza, no se verifica: máximo `consistent`/85, sin integridad ni autenticidad. La longitud
+  del cuerpo incluye posible padding y no demuestra el tamaño original exacto del payload. Véase
+  `REALTEK-CVIMG-20261108.md`. Siguen pendientes `csys`/`csro`, otras configuraciones/productores y checksum
+  con presupuesto acotado; no añadir bucles sobre payload en el verificador de cada magic. La variante OpenWrt
+  `mkcsysimg`/`csysimg.h` en `86739f2b3ae9502368b89ef37fa6f31c42aad6f4` es `CSYS` ADM/Edimax y no prueba
+  ninguna de estas firmas por semejanza de nombre. No se adquirió ni ejecutó firmware.)*
   Xiaomi ya está cubierto por HDR1 y no necesita regla propia: un magic identifica un FORMATO de
   contenedor, no una marca, y las descripciones no atribuyen de más.
 - [x] Corroboración JFFS2 por tipo de nodo compartida entre escáner y clasificador. El predicado puro exportado
@@ -1142,3 +1149,17 @@ reales sobre firmware sintético. No declara la imagen libre de vulnerabilidades
 
 Evidencia y procedimiento de rollback del entorno:
 /Users/agfil/homelab/documentacion/PARCHES-2026-10-22.md.
+
+
+## Cobertura local de integridad — seguimiento 2026-11-08
+
+- [x] La vista Estructura muestra la cobertura SHA-256 opcional de los hits MediaTek BootROM listados: intentos y
+  cálculos completados, discrepancias, indisponibilidad y omisiones por presupuesto separados. Ausencia antigua
+  significa no registrado; registros parciales/incoherentes mantienen incertidumbre y no derivan ceros. El
+  alcance GFH/payload y la cabecera inicial 0x600 sin hash permanecen visibles con detalles cerrados. Validación
+  focalizada y Chromium sobre bytes inertes compilados en `SIGNATURE-DIGEST-COVERAGE-UI-20261108.md`; nunca
+  equivale a limpieza, autenticidad ni ejecución.
+- [ ] El menú nativo de selección por teclado en Chromium macOS, el picker de teléfono físico y lectores de
+  pantalla necesitan aceptación en esas plataformas. La automatización no comprometió opciones ni en un
+  `<select>` aislado visible/headless; foco/Tab, cambios programáticos y taps sintéticos se comprobaron por
+  separado. No inferir de ellos una prueba del menú nativo (`STRUCTURE-INSPECTOR-QA-20261108.md`).

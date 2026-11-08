@@ -149,3 +149,10 @@ Scripts, payloads, outputs, logs and hashes are in `/Users/agfil/orca/campaign-e
 (`worker-scripts/`, `worker-generator/`, `coordinator-generator/`, `MANIFEST.md`). Not established: big-endian
 build hosts, other configurations' signatures, `fix_chksum`/`vmlinux*` outputs, real firmware samples, and any
 device, runtime or authenticity property.
+
+Coordinator evidence correction: the original APFS collision is retained. A new offline run uses distinct
+`coordinator-casefix/control-lower-csys.bin` and `control-upper-csys.bin`; both reproduce their original recorded
+row hashes exactly (see `coordinator-casefix/adjudication.json`). The coordinator's compiled Node 22 parser/scanner
+acceptance then passes all 56 supported outputs and four distinct controls, reading those corrected files for
+the two collided names. It also checks embedded views, truncation and unchanged consistent tier after checksum
+mutation. This repairs durable evidence, not product behavior; the original matrix is not described as hash-clean.
