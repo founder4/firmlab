@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import { fingerprintMcu, parsePicobinImages } from '@firmlab/core';
 import type { FindingDraft, PicobinInfo } from '@firmlab/core';
-import { type PicobinRiscvDisassembly, runPicobinRiscvDisassembly } from './picobin-riscv.js';
+import { type PicobinRiscvDisassembly, picobinFlashMapping, runPicobinRiscvDisassembly } from './picobin-riscv.js';
 import { type Rp2350RuntimePlan, buildRp2350RuntimePlan } from './picobin-rp2350-runtime.js';
 
 /** Format a 32-bit address as zero-padded, 0x-prefixed hex (e.g. 0x08000000) for titles and evidence. */
@@ -367,10 +367,15 @@ const FIRMWARE_READ_CAP = 16 * 1024 * 1024;
 export function selectPicobinDisassemblyTarget(
   images: PicobinInfo[],
   fallback: PicobinInfo | null,
+  fileSize?: number,
 ): PicobinInfo | null {
-  const candidates = images.filter(
+  const declared = images.filter(
     (candidate) => candidate.cpuMode === 'riscv' && candidate.isExecutable && candidate.entryPoint !== null,
   );
+  // When the caller knows the file size, prefer declarations that actually resolve an entry.
+  // Keep a declared candidate when none maps, so the provider still reports the mapping refusal.
+  const usable = fileSize === undefined ? [] : declared.filter((candidate) => picobinFlashMapping(candidate, fileSize));
+  const candidates = usable.length > 0 ? usable : declared;
   return (
     candidates.find((candidate) => (candidate.loadMap?.entries.length ?? 0) > 0) ??
     candidates.find((candidate) => candidate.rollingWindowDelta != null) ??
@@ -417,7 +422,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
   }
 
   const a = analyzeRtos(read.buf, read.fileSize);
-  const disassemblyTarget = selectPicobinDisassemblyTarget(a.picobinImages, a.picobin);
+  const disassemblyTarget = selectPicobinDisassemblyTarget(a.picobinImages, a.picobin, read.fileSize);
   const picobinDisassembly = disassemblyTarget
     ? runPicobinRiscvDisassembly(imagePath, disassemblyTarget, read.fileSize, undefined, read.buf)
     : null;

@@ -233,6 +233,34 @@ describe('selectPicobinDisassemblyTarget', () => {
     expect(selectPicobinDisassemblyTarget([empty, mapped], parsed.picobin)).toBe(mapped);
   });
 
+  it('prefers a usable entry mapping over an earlier zero-fill or noncovering load map', () => {
+    const zeroFill: PicobinInfo = {
+      ...mapped,
+      loadMap: {
+        itemOffset: 0x30,
+        relative: false,
+        entries: [{ storageAddress: 0, runtimeAddress: 0x1000_0000, size: 0x60 }],
+      },
+    };
+    const missingEntry: PicobinInfo = {
+      ...mapped,
+      loadMap: {
+        itemOffset: 0x30,
+        relative: false,
+        entries: [{ storageAddress: 0x1000_0000, runtimeAddress: 0x2000_0000, size: 0x60 }],
+      },
+    };
+    expect(selectPicobinDisassemblyTarget([zeroFill, mapped], parsed.picobin, 0x60)).toBe(mapped);
+    expect(selectPicobinDisassemblyTarget([missingEntry, legacy], parsed.picobin, 0x60)).toBe(legacy);
+    expect(selectPicobinDisassemblyTarget([zeroFill, missingEntry], parsed.picobin, 0x60)).toBe(zeroFill);
+  });
+
+  it('requires enough file bytes for a candidate entry while keeping old callers compatible', () => {
+    const outOfFile: PicobinInfo = { ...mapped, entryPoint: 0x1000_0080 };
+    expect(selectPicobinDisassemblyTarget([outOfFile, legacy], parsed.picobin, 0x60)).toBe(legacy);
+    expect(selectPicobinDisassemblyTarget([outOfFile, legacy], parsed.picobin)).toBe(outOfFile);
+  });
+
   it('prefers an explicit rolling mapping, including zero, over an absent load map', () => {
     const rolling: PicobinInfo = { ...legacy, rollingWindowDelta: 0 };
     expect(selectPicobinDisassemblyTarget([legacy, rolling], parsed.picobin)).toBe(rolling);

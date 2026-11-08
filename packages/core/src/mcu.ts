@@ -464,7 +464,7 @@ function parseRiscvCopyTableCandidate(
   bounds: RiscvStartupCopyBounds,
 ): RiscvStartupCopyTable | null {
   const tableFileOffset = tableAddress - baseAddress;
-  if (!Number.isSafeInteger(tableFileOffset) || tableFileOffset < 0 || tableFileOffset % 4 !== 0) return null;
+  if (!Number.isSafeInteger(tableFileOffset) || tableFileOffset < 0 || tableAddress % 4 !== 0) return null;
   const regions: RiscvStartupCopyRegion[] = [];
   let cursor = tableFileOffset;
   for (
@@ -491,6 +491,9 @@ function parseRiscvCopyTableCandidate(
     const size = runtimeEnd - runtimeAddress;
     const sourceFileOffset = sourceAddress - baseAddress;
     if (!inCopySourceMapping(sourceAddress, size, baseAddress, bounds, buf.length)) return null;
+    // A self-overlapping destination cannot establish a separate copy-backed code region.
+    // Refuse pointer arrays in primary flash rather than poisoning all primary target mappings.
+    if (size > 0 && runtimeAddress < bounds.endExclusive && runtimeEnd > bounds.start) return null;
     if (
       size > 0 &&
       regions.some(

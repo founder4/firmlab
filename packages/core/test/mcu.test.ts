@@ -492,6 +492,40 @@ describe('parseRiscvStartupCopyTable — bounded Pico SDK startup map', () => {
     expect(parseRiscvStartupCopyTable(startupImage(), 0x1000_0021, 0x21, 0x1000_0000)).toBeNull();
   });
 
+  it('refuses copy destinations overlapping the primary source window without hiding a separate valid table', () => {
+    const image = startupImage();
+    const dv = new DataView(image.buffer);
+    dv.setUint32(0x64, 0x1000_0120, true);
+    dv.setUint32(0x68, 0x1000_0140, true);
+    expect(parseRiscvStartupCopyTable(image, 0x1000_0020, 0x20, 0x1000_0000)).toBeNull();
+    const mixed = startupImage();
+    const view = new DataView(mixed.buffer);
+    view.setUint32(0x28, 0x0000_0717, true);
+    view.setUint32(0x2c, 0x0587_0713, true); // second AUIPC/ADDI -> pointer array at +0x80
+    view.setUint32(0x80, 0x1000_0100, true);
+    view.setUint32(0x84, 0x1000_0120, true);
+    view.setUint32(0x88, 0x1000_0140, true);
+    view.setUint32(0x8c, 0, true);
+    expect(parseRiscvStartupCopyTable(mixed, 0x1000_0020, 0x20, 0x1000_0000)?.tableFileOffset).toBe(0x60);
+  });
+
+  it('checks runtime word alignment independently of the input file offset', () => {
+    expect(parseRiscvStartupCopyTable(startupImage(), 0x1000_0022, 0x20, 0x1000_0002)).toBeNull();
+    const image = startupImage();
+    image.fill(0, 0x60, 0x74);
+    const dv = new DataView(image.buffer);
+    dv.setUint32(0x24, 0x0427_0713, true); // runtime table +0x64, file offset +0x62
+    dv.setUint32(0x62, 0x1000_0100, true);
+    dv.setUint32(0x66, 0x2000_0000, true);
+    dv.setUint32(0x6a, 0x2000_0020, true);
+    dv.setUint32(0x6e, 0, true);
+    expect(parseRiscvStartupCopyTable(image, 0x1000_0022, 0x20, 0x1000_0002)).toMatchObject({
+      tableAddress: 0x1000_0064,
+      tableFileOffset: 0x62,
+      regions: [{ sourceAddress: 0x1000_0100, sourceFileOffset: 0xfe, runtimeAddress: 0x2000_0000, size: 0x20 }],
+    });
+  });
+
   it('rejects a table whose declared source bytes are outside the image', () => {
     expect(parseRiscvStartupCopyTable(startupImage(0x1000_01f0), 0x1000_0020, 0x20, 0x1000_0000)).toBeNull();
   });
