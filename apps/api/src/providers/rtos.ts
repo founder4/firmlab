@@ -372,8 +372,8 @@ export function selectPicobinDisassemblyTarget(
     (candidate) => candidate.cpuMode === 'riscv' && candidate.isExecutable && candidate.entryPoint !== null,
   );
   return (
-    candidates.find((candidate) => candidate.loadMap !== null) ??
-    candidates.find((candidate) => candidate.rollingWindowDelta !== null) ??
+    candidates.find((candidate) => (candidate.loadMap?.entries.length ?? 0) > 0) ??
+    candidates.find((candidate) => candidate.rollingWindowDelta != null) ??
     candidates[0] ??
     fallback
   );
@@ -423,18 +423,23 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
     : null;
   const picobinRuntimePlan = disassemblyTarget ? buildRp2350RuntimePlan(disassemblyTarget, read.fileSize) : null;
   const findings = picobinDisassembly ? [...a.findings, ...picobinDisassembly.findings] : a.findings;
+  const picobinEvidence = {
+    ...(a.picobinImages.length ? { picobinImages: a.picobinImages } : {}),
+    ...(picobinDisassembly ? { picobinDisassembly } : {}),
+    ...(picobinRuntimePlan ? { picobinRuntimePlan } : {}),
+  };
+  const picobinNote = a.picobin
+    ? ` PICOBIN declares ${a.picobin.chip?.toUpperCase() ?? 'an RP-series target'} ${a.picobin.cpuMode}; block loop ${a.picobin.loopComplete ? 'validated' : 'incomplete in available bytes'}.`
+    : '';
+  const disassemblyNote = picobinDisassembly
+    ? ` Entrypoint disassembly ${picobinDisassembly.available ? 'completed' : `unavailable (${picobinDisassembly.reason})`}.`
+    : '';
   const scanScope = a.coverage.complete
     ? `the complete ${a.coverage.fileBytes}-byte image`
     : `the first ${a.coverage.scannedBytes} of ${a.coverage.fileBytes} image bytes`;
   if (!a.isCortexM) {
     const ecosNote = a.ecos ? ` eCos monolith detected (${a.ecos.version ?? 'version unknown'}).` : '';
     const flagNote = a.flags.length ? ` ${a.flags.length} plaintext flag/credential token(s) recovered.` : '';
-    const picobinNote = a.picobin
-      ? ` PICOBIN declares ${a.picobin.chip?.toUpperCase() ?? 'an RP-series target'} ${a.picobin.cpuMode}; block loop ${a.picobin.loopComplete ? 'validated' : 'incomplete in available bytes'}.`
-      : '';
-    const disassemblyNote = picobinDisassembly
-      ? ` Entrypoint disassembly ${picobinDisassembly.available ? 'completed' : `unavailable (${picobinDisassembly.reason})`}.`
-      : '';
     const emptyNote = findings.length
       ? ''
       : ` No eCos/flag markers in ${scanScope} — static analysis found nothing to assert within that scope.`;
@@ -447,9 +452,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
       coverage: a.coverage,
       findings,
       reason: `No ARM Cortex-M vector table at offset 0 (not a raw Cortex-M image).${picobinNote}${disassemblyNote}${ecosNote}${flagNote}${emptyNote}`,
-      ...(a.picobinImages.length ? { picobinImages: a.picobinImages } : {}),
-      ...(picobinDisassembly ? { picobinDisassembly } : {}),
-      ...(picobinRuntimePlan ? { picobinRuntimePlan } : {}),
+      ...picobinEvidence,
     };
   }
 
@@ -466,6 +469,7 @@ export function runRtosAnalysis(imagePath: string): RtosResult {
     rtosKernel: a.rtosKernel,
     coverage: a.coverage,
     findings,
-    reason: `ARM Cortex-M vector table at offset 0.${mapNote}${kernelNote} Static analysis of the image bytes — proves layout, not device behavior.`,
+    reason: `ARM Cortex-M vector table at offset 0.${mapNote}${kernelNote}${picobinNote}${disassemblyNote} Static analysis of the image bytes — proves layout, not device behavior.`,
+    ...picobinEvidence,
   };
 }

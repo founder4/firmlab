@@ -60,6 +60,50 @@ describe('RP2350 runtime plan', () => {
     expect(buildRp2350RuntimePlan({ ...picobin, cpuMode: 'arm' }, 0x7000)).toBeNull();
   });
 
+  it.each(['bootRomPath', 'platformDescriptionPath'] as const)(
+    'blocks an absent, empty, or whitespace-only %s declaration',
+    (field) => {
+      for (const value of [undefined, '', ' \t\n ']) {
+        const plan = buildRp2350RuntimePlan(picobin, 0x7000, {
+          renodeVersion: '1.17.0',
+          bootRomPath: '/local/boot.rom',
+          platformDescriptionPath: '/local/platform.repl',
+          modeledPeripherals: [...RP2350_REQUIRED_MODELS],
+          [field]: value,
+        });
+        expect(plan).toMatchObject({ status: 'blocked', proofState: 'blocked_by_platform' });
+        expect(plan?.blockers).toHaveLength(1);
+      }
+    },
+  );
+
+  it.each([
+    ['uart', 0x4007_0000, 0x4007_8000],
+    ['uart', 0x4007_8000, 0x4008_0000],
+    ['timer', 0x400b_0000, 0x400b_8000],
+    ['timer', 0x400b_8000, 0x400c_0000],
+  ] as const)('contains the entire access within the %s instance at %i', (model, start, endExclusive) => {
+    for (const size of [1, 2, 4] as const) {
+      for (const operation of ['read', 'write'] as const) {
+        for (const address of [start, start + 0x10, endExclusive - size]) {
+          expect(classifyRp2350MmioAccess({ address, size, operation }, [model])).toMatchObject({
+            action: 'continue',
+            model,
+            range: { start, endExclusive },
+          });
+        }
+        if (size === 1) continue;
+        for (let crossingBytes = 1; crossingBytes < size; crossingBytes++) {
+          const decision = classifyRp2350MmioAccess({ address: endExclusive - crossingBytes, size, operation }, [
+            model,
+          ]);
+          expect(decision).toMatchObject({ action: 'stop', proofState: 'blocked_by_platform' });
+          expect(decision).not.toHaveProperty('value');
+        }
+      }
+    }
+  });
+
   it('continues only when the complete access is covered by a declared local model', () => {
     expect(classifyRp2350MmioAccess({ address: 0x4001_0010, size: 4, operation: 'read' }, ['clocks'])).toEqual({
       action: 'continue',

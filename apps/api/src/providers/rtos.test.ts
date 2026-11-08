@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { PicobinInfo } from '@firmlab/core';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  type RtosResult,
   analyzeRtos,
   detectEcos,
   detectRtosKernel,
@@ -65,11 +67,12 @@ function universalPicobinBlob(): Uint8Array {
   dv.setUint32(riscv, 0xffff_ded3, true);
   dv.setUint32(riscv + 4, 0x1101_0142, true);
   dv.setUint32(riscv + 8, 0x0000_0344, true);
-  dv.setUint32(riscv + 12, 0x1000_0040, true);
+  dv.setUint32(riscv + 12, 0x1000_0054, true);
   dv.setUint32(riscv + 16, 0x2008_2000, true);
   dv.setUint32(riscv + 20, 0x0000_04ff, true);
   dv.setInt32(riscv + 24, arm - riscv, true);
   dv.setUint32(riscv + 28, 0xab12_3579, true);
+  dv.setUint32(0x54, 0x0000_8067, true); // ret, outside both metadata blocks
   return buf;
 }
 
@@ -201,8 +204,39 @@ describe('analyzeRtos', () => {
     expect(parsed.findings.filter((finding) => finding.kind === 'rtos-picobin')).toHaveLength(2);
     expect(selectPicobinDisassemblyTarget(parsed.picobinImages, parsed.picobin)).toMatchObject({
       cpuMode: 'riscv',
-      entryPoint: 0x1000_0040,
+      entryPoint: 0x1000_0054,
     });
+  });
+});
+
+describe('selectPicobinDisassemblyTarget', () => {
+  const parsed = analyzeRtos(universalPicobinBlob());
+  const riscv = parsed.picobinImages.find((image) => image.cpuMode === 'riscv');
+  if (!riscv) throw new Error('synthetic RISC-V definition missing');
+  const { loadMap: _loadMap, ...legacy } = riscv;
+  const mapped: PicobinInfo = {
+    ...riscv,
+    loadMap: {
+      itemOffset: 0x30,
+      relative: false,
+      entries: [{ storageAddress: 0x1000_0000, runtimeAddress: 0x1000_0000, size: 0x60 }],
+    },
+  };
+
+  it('prefers a real load map over an earlier definition with an absent optional field', () => {
+    const old: PicobinInfo = legacy;
+    expect(selectPicobinDisassemblyTarget([old, mapped], parsed.picobin)).toBe(mapped);
+  });
+
+  it('does not treat an empty load map as mapping evidence', () => {
+    const empty: PicobinInfo = { ...legacy, loadMap: { itemOffset: 0x30, relative: false, entries: [] } };
+    expect(selectPicobinDisassemblyTarget([empty, mapped], parsed.picobin)).toBe(mapped);
+  });
+
+  it('prefers an explicit rolling mapping, including zero, over an absent load map', () => {
+    const rolling: PicobinInfo = { ...legacy, rollingWindowDelta: 0 };
+    expect(selectPicobinDisassemblyTarget([legacy, rolling], parsed.picobin)).toBe(rolling);
+    expect(selectPicobinDisassemblyTarget([], parsed.picobin)).toBe(parsed.picobin);
   });
 });
 
@@ -247,6 +281,47 @@ describe('detectEcos + extractFlags (non-Cortex-M RTOS / bare-metal lens)', () =
 describe('runRtosAnalysis', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-rtos-test-'));
   afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it.each([false, true])('retains universal PICOBIN evidence with Cortex-M vectors present: %s', (cortexM) => {
+    const bytes = universalPicobinBlob();
+    if (cortexM) bytes.set([...u32le(0x2008_2000), ...u32le(0x1000_0055)]);
+    const p = path.join(tmp, `universal-${cortexM}.bin`);
+    fs.writeFileSync(p, bytes);
+    const res = runRtosAnalysis(p);
+    expect(res.isCortexM).toBe(cortexM);
+    expect(res.picobinImages?.map((image) => image.cpuMode)).toEqual(['arm', 'riscv']);
+    expect(res.picobinDisassembly).toMatchObject({ tool: 'radare2', entryPoint: 0x1000_0054 });
+    expect(res.picobinRuntimePlan).toMatchObject({
+      target: 'rp2350-hazard3',
+      status: 'blocked',
+      proofState: 'blocked_by_platform',
+    });
+    expect(res.findings.filter((finding) => finding.kind === 'rtos-picobin')).toHaveLength(2);
+    expect(
+      res.findings.filter((finding) => finding.kind === 'rtos-picobin').map((finding) => finding.proofState),
+    ).toEqual(['static_confirmed', 'static_confirmed']);
+    expect(res.findings.some((finding) => finding.proofState.startsWith('confirmed_'))).toBe(false);
+    expect(res.reason).toContain('PICOBIN');
+    expect(res.reason).toMatch(/Entrypoint disassembly (completed|unavailable)/);
+    expect(res.coverage).toEqual({ scannedBytes: bytes.length, fileBytes: bytes.length, complete: true });
+    expect(res.vectorTable).toEqual(cortexM ? { initialSP: 0x2008_2000, resetHandler: 0x1000_0055 } : null);
+  });
+
+  it('keeps older persisted results valid with every optional PICOBIN field absent', () => {
+    const legacy: RtosResult = {
+      available: true,
+      isCortexM: false,
+      vectorTable: null,
+      memoryMap: null,
+      rtosKernel: null,
+      coverage: null,
+      findings: [],
+      reason: 'Historical static result',
+    };
+    expect(legacy.picobinImages).toBeUndefined();
+    expect(legacy.picobinDisassembly).toBeUndefined();
+    expect(legacy.picobinRuntimePlan).toBeUndefined();
+  });
 
   it('analyzes a raw Cortex-M blob on disk into static_confirmed findings', () => {
     const p = path.join(tmp, 'blob.bin');

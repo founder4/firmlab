@@ -12,17 +12,19 @@ export const RP2350_RISCV_ISA = 'rv32ima_zicsr_zifencei_zba_zbb_zbs_zbkb_zca_zcb
 export const RP2350_REQUIRED_MODELS = ['resets', 'xosc', 'clocks', 'timer', 'uart'] as const;
 
 /**
- * RP2350 APB slots are 0x8000 bytes. These ranges come from Raspberry Pi's RP2350 address map; adjacent timer and
- * UART instances share one required model name because the runtime capability is about model coverage, not a
- * particular SDK instance. Keeping the ranges here makes an MMIO decision pure and reviewable before an executor
- * is allowed to use it.
+ * RP2350 APB slots are 0x8000 bytes. Raspberry Pi pico-sdk 2.2.0, RP2350 regs/addressmap.h:
+ * https://github.com/raspberrypi/pico-sdk/blob/2.2.0/src/rp2350/hardware_regs/include/hardware/regs/addressmap.h
+ * Adjacent timer/UART instances share a required model name but keep separate ranges, so one complete access
+ * cannot cross an instance boundary. This is slot containment, not validation of individual register offsets.
  */
 export const RP2350_REQUIRED_MODEL_RANGES = [
   { model: 'clocks', start: 0x4001_0000, endExclusive: 0x4001_8000 },
   { model: 'resets', start: 0x4002_0000, endExclusive: 0x4002_8000 },
   { model: 'xosc', start: 0x4004_8000, endExclusive: 0x4005_0000 },
-  { model: 'uart', start: 0x4007_0000, endExclusive: 0x4008_0000 },
-  { model: 'timer', start: 0x400b_0000, endExclusive: 0x400c_0000 },
+  { model: 'uart', start: 0x4007_0000, endExclusive: 0x4007_8000 },
+  { model: 'uart', start: 0x4007_8000, endExclusive: 0x4008_0000 },
+  { model: 'timer', start: 0x400b_0000, endExclusive: 0x400b_8000 },
+  { model: 'timer', start: 0x400b_8000, endExclusive: 0x400c_0000 },
 ] as const;
 
 export interface Rp2350MmioAccess {
@@ -163,8 +165,10 @@ export function buildRp2350RuntimePlan(
   if (!supportsRp2350Isa(capabilities.renodeVersion)) {
     blockers.push(`Renode ${RP2350_RENODE_MINIMUM} or newer has not been verified for this run`);
   }
-  if (!capabilities.bootRomPath) blockers.push('operator-supplied RP2350 boot ROM is missing');
-  if (!capabilities.platformDescriptionPath) blockers.push('local RP2350 Renode platform description is missing');
+  if (!capabilities.bootRomPath?.trim()) blockers.push('operator-supplied RP2350 boot ROM is missing');
+  if (!capabilities.platformDescriptionPath?.trim()) {
+    blockers.push('local RP2350 Renode platform description is missing');
+  }
   if (missingModels.length > 0) blockers.push(`required peripheral models are missing: ${missingModels.join(', ')}`);
   const status = blockers.length === 0 ? 'ready' : 'blocked';
   return {
