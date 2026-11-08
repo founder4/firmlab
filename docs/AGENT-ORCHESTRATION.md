@@ -3,6 +3,26 @@
 This is the operating playbook for supervised work by Codex, Claude, and Antigravity (Gemini models).
 Repository rules live in `AGENTS.md`; architecture and validation details live in `CLAUDE.md`.
 
+## Local main integration — 2026-11-08
+
+The operator authorized local integration after the campaign closed. `main` advanced by fast-forward from
+`0187ea1` to the campaign HEAD `58bd2da`, including its 50 commits on top of the existing tracking baseline
+`ac4bdbe`. This checkpoint adds documentation only. The campaign's original deadline remains historical.
+
+All seven pre-existing local files remain uncommitted. Six retain identical bytes and permissions; the local
+Brotli smoke changes in `scripts/security-runtime-smoke.py` merged cleanly with the upstream Python fallback,
+and an independent three-way merge verifies the combined file. The original bytes, hashes, patch, retained
+stash identity and validation logs are under
+`/Users/agfil/.local/state/firmlab/integration-20261108-142209`; the prior main also remains on
+`backup/main-before-campaign-20261108-142209`.
+
+Fresh validation in the main checkout passed `pnpm check`, `pnpm test` (5,548 passed: core 813, API 3,446,
+web 950, scripts 339; 14 optional external tests skipped), `pnpm build` and `pnpm biome` at 14:27 CET.
+The campaign's real-tool and browser acceptance remains in its linked report; those exercises were not rerun
+by this integration. No push, deployment, live-data/lane changes or host/network intervention occurred.
+Publication and deployment remain separate operator decisions; a future candidate must identify its source
+explicitly and preserve the unrelated local changes above.
+
 ## Authorized campaign checkpoint — 2026-11-08
 
 The local campaign result, fixed deadline, validation, review acceptance and preserved main are recorded in
