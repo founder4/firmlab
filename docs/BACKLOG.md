@@ -1170,6 +1170,10 @@ Evidencia y procedimiento de rollback del entorno:
   listado: mantiene todos los chequeos de cabecera y supervivencia, contadores, conjunto completo de tipos y
   verificación íntegra de cada fila visible/nuevo ID. JSON antes/después idéntico y lecturas menores corroborados
   en Node 22 offline; un ajuste conserva también el comportamiento previo de `maxHits: NaN`. Véase
-  `UIMAGE-UNLISTED-WORK-20261108.md`. No es un presupuesto global ni limita el listado sin tope; TRX CRC,
-  TP-Link MD5 y otros recorridos siguen pendientes de medición y de un contrato que preserve rechazo y cobertura.
-  No inferir ese ahorro de la duración de una única prueba ni omitir la validación que decide un rechazo.
+  `UIMAGE-UNLISTED-WORK-20261108.md`. El seguimiento posterior de TRX HDR0 y TP-Link v1 conserva todos los
+  rechazos estructurales y omite sólo CRC o copia/MD5 para filas ya excluidas; las filas visibles y primeros IDs
+  siguen verificándose completas. Pruebas compiladas Node 22 antes/después conservan JSON, identidad y bytes,
+  con mediciones separadas de lecturas CRC y spans de copia solicitados (`UNLISTED-LEGACY-CHECKSUMS-20261108.md`).
+  No es un presupuesto global ni limita filas listadas o sin tope. Sercomm y otros recorridos siguen pendientes
+  de medición y de un contrato que preserve rechazo y cobertura. No inferir ese ahorro de la duración de una
+  única prueba ni omitir la validación que decide un rechazo.

@@ -1,7 +1,11 @@
 # Unlisted uImage matches skip the payload CRC — 2026-11-08
 
-Scope: one reproduced performance defect in `scanSignaturesDetailed` (`packages/core/src/signatures.ts`), and
-nothing wider. This is **not** a claim that checksum work in the scanner is bounded in general.
+Historical scope of the uImage unit: one reproduced performance defect in `scanSignaturesDetailed`
+(`packages/core/src/signatures.ts`), and nothing wider. This is **not** a claim that checksum work in the scanner is bounded in general.
+
+Follow-up: the later [TRX/TP-Link omitted-checksum unit](UNLISTED-LEGACY-CHECKSUMS-20261108.md) adds two more
+hooks under the same contract. Statements below about only uImage having a hook or other formats being deferred
+describe this unit's baseline; they do not claim a global scanner work budget.
 
 ## The defect
 
