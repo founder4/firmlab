@@ -1028,6 +1028,14 @@ a:hover {
   border-radius: var(--r-lg);
   border: 1px solid var(--border);
 }
+/* Keep complete capability tables inside their panel; named regions also admit keyboard scrolling. */
+.capability-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.capability-table-scroll > .data {
+  min-width: 640px;
+}
 .data,
 .data-table {
   width: 100%;

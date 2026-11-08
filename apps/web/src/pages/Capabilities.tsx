@@ -102,7 +102,7 @@ export function Capabilities(): JSX.Element {
             </div>
           </div>
 
-          <div style={{ overflowX: 'auto' }}>
+          <section className="capability-table-scroll" aria-label={t.shell.capabilities.planTitle}>
             <table className="data" style={{ minWidth: 1120 }}>
               <thead>
                 <tr>
@@ -149,7 +149,7 @@ export function Capabilities(): JSX.Element {
                 ))}
               </tbody>
             </table>
-          </div>
+          </section>
         </div>
       ) : null}
 
@@ -180,73 +180,78 @@ export function Capabilities(): JSX.Element {
             <div className="nav-section" style={{ margin: '0 0 8px' }}>
               {groupLabel(group)}
             </div>
-            <table className="data">
-              <tbody>
-                {list.map((tool) => {
-                  // Three marks, because there are three answers. A hollow ring is an absence; the half-filled one
-                  // is a tool that is HERE and did not answer, which must not read as the same row.
-                  const unanswered = !tool.available && tool.outcome !== undefined && tool.outcome !== 'missing';
-                  // The fourth answer. It shares the warning badge with `unanswered` because both mean "here, but
-                  // not answering"; what separates them is the sentence underneath, and they cannot co-occur —
-                  // this one requires `available`, that one requires its negation.
-                  const notReady = tool.available && tool.dataset?.ready === false;
-                  return (
-                    <Fragment key={tool.id}>
-                      <tr>
-                        <td style={{ width: 30 }}>
-                          <span
-                            className={`badge ${notReady ? 'badge-warn' : tool.available ? 'badge-ok' : unanswered ? 'badge-warn' : ''}`}
-                          >
-                            {notReady ? '◐' : tool.available ? '●' : unanswered ? '◐' : '○'}
-                          </span>
-                        </td>
-                        <td className="mono" style={{ width: 220 }}>
-                          {tool.bin}
-                        </td>
-                        <td>{tool.unlocks}</td>
-                        {/* A version string is an identifier and stays monospaced; every other answer in this
+            <section
+              className="capability-table-scroll"
+              aria-label={`${t.shell.capabilities.title} · ${groupLabel(group)}`}
+            >
+              <table className="data">
+                <tbody>
+                  {list.map((tool) => {
+                    // Three marks, because there are three answers. A hollow ring is an absence; the half-filled one
+                    // is a tool that is HERE and did not answer, which must not read as the same row.
+                    const unanswered = !tool.available && tool.outcome !== undefined && tool.outcome !== 'missing';
+                    // The fourth answer. It shares the warning badge with `unanswered` because both mean "here, but
+                    // not answering"; what separates them is the sentence underneath, and they cannot co-occur —
+                    // this one requires `available`, that one requires its negation.
+                    const notReady = tool.available && tool.dataset?.ready === false;
+                    return (
+                      <Fragment key={tool.id}>
+                        <tr>
+                          <td style={{ width: 30 }}>
+                            <span
+                              className={`badge ${notReady ? 'badge-warn' : tool.available ? 'badge-ok' : unanswered ? 'badge-warn' : ''}`}
+                            >
+                              {notReady ? '◐' : tool.available ? '●' : unanswered ? '◐' : '○'}
+                            </span>
+                          </td>
+                          <td className="mono" style={{ width: 220 }}>
+                            {tool.bin}
+                          </td>
+                          <td>{tool.unlocks}</td>
+                          {/* A version string is an identifier and stays monospaced; every other answer in this
                           cell is prose. An API build older than `outcome` sends nothing, and that row keeps the
                           flat wording. A tool with no dataset HAS a version, and it is not the useful fact about
                           the row, so the label displaces it — the version stays within reach of the sentence
                           spanning underneath. */}
-                        <td className={tool.available && !notReady ? 'hint mono' : 'hint'}>
-                          {notReady
-                            ? t.shell.capabilities.datasetLabel
-                            : tool.available
-                              ? tool.version
-                              : tool.outcome
-                                ? t.shell.capabilities.probeLabel[tool.outcome]
-                                : t.shell.capabilities.notFound}
-                        </td>
-                      </tr>
-                      {/* Its own row, spanning the table. In the last column this sentence set at five short lines
+                          <td className={tool.available && !notReady ? 'hint mono' : 'hint'}>
+                            {notReady
+                              ? t.shell.capabilities.datasetLabel
+                              : tool.available
+                                ? tool.version
+                                : tool.outcome
+                                  ? t.shell.capabilities.probeLabel[tool.outcome]
+                                  : t.shell.capabilities.notFound}
+                          </td>
+                        </tr>
+                        {/* Its own row, spanning the table. In the last column this sentence set at five short lines
                         against a 150px measure; spanning, it needs the opposite guard — `max-width` on a `td` is
                         ignored under `table-layout: auto`, and the first version of this row ran at 155 characters
                         a line, the exact defect this shell has already paid for once. The measure goes on a block
                         INSIDE the cell, and only looking at the rendered page showed either of the two. */}
-                      {unanswered && tool.outcomeReason ? (
-                        <tr>
-                          <td />
-                          <td className="hint" colSpan={3} style={{ paddingTop: 0 }}>
-                            <div style={{ maxWidth: '72ch' }}>{tool.outcomeReason}</div>
-                          </td>
-                        </tr>
-                      ) : null}
-                      {/* Same spanning row and the same 72ch guard, for the same reason: `max-width` on a `td`
+                        {unanswered && tool.outcomeReason ? (
+                          <tr>
+                            <td />
+                            <td className="hint" colSpan={3} style={{ paddingTop: 0 }}>
+                              <div style={{ maxWidth: '72ch' }}>{tool.outcomeReason}</div>
+                            </td>
+                          </tr>
+                        ) : null}
+                        {/* Same spanning row and the same 72ch guard, for the same reason: `max-width` on a `td`
                         is ignored under `table-layout: auto`, and this sentence is longer than that one. */}
-                      {tool.dataset ? (
-                        <tr>
-                          <td />
-                          <td className="hint" colSpan={3} style={{ paddingTop: 0 }}>
-                            <div style={{ maxWidth: '72ch' }}>{tool.dataset.detail}</div>
-                          </td>
-                        </tr>
-                      ) : null}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
+                        {tool.dataset ? (
+                          <tr>
+                            <td />
+                            <td className="hint" colSpan={3} style={{ paddingTop: 0 }}>
+                              <div style={{ maxWidth: '72ch' }}>{tool.dataset.detail}</div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </section>
           </div>
         ))}
       </div>

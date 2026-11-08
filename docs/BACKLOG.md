@@ -705,6 +705,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Deuda estructural y de proceso
 
+- [ ] Reproducir el fallo puntual macOS/Node 26 de `job-process.test.ts` observado durante la validación del
+  2026-11-08: el caso de `maxBuffer` recibió `kill EPERM` en vez del error de límite. Los seis casos del fichero
+  pasan aislados; no se ha demostrado la causa ni un defecto del runtime Linux desplegado. Conservar el fallo
+  y contrastar carga/plataforma antes de cambiar el runner. Una denegación real de terminación debe seguir
+  visible; no debilitar aislamiento ni declarar limpiado un grupo no verificado. Evidencia en
+  `release-20261108-142942/final-test.log` y `job-process-rerun.log` del estado local.
+
 - [x] Orca `worktree new-child` toma como base `origin/main`, no el HEAD del coordinador (2026-10-03: `679f267`,
   81 commits detrás; los hijos de la ola VEX se avanzaron a mano). Resuelto el 2026-10-04 subiendo `main` (87
   commits, fast-forward). Regla que queda: antes de lanzar workers en hijos, `main` publicado o base del hijo

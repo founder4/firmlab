@@ -206,27 +206,32 @@ export function TechniqueCoverage(): JSX.Element {
           <div className="nav-section" style={{ margin: '0 0 8px' }}>
             {t.techniques.areas[group.area]}
           </div>
-          <table className="data">
-            <tbody>
-              {group.items.map((item) => {
-                const meta = STATUS_META[item.status];
-                const note = 'ref' in item ? item.ref : t.techniques.notes[item.note];
-                return (
-                  <tr key={item.id} style={item.status === 'out-of-scope' ? { opacity: 0.62 } : undefined}>
-                    <td style={{ width: 92 }}>
-                      <span className={`badge ${meta.badge}`}>
-                        {meta.symbol} {t.techniques.status[item.status]}
-                      </span>
-                    </td>
-                    <td>{t.techniques.items[item.id].name}</td>
-                    <td className="hint mono" style={{ width: 190 }}>
-                      {note}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <section
+            className="capability-table-scroll"
+            aria-label={`${t.techniques.title} · ${t.techniques.areas[group.area]}`}
+          >
+            <table className="data">
+              <tbody>
+                {group.items.map((item) => {
+                  const meta = STATUS_META[item.status];
+                  const note = 'ref' in item ? item.ref : t.techniques.notes[item.note];
+                  return (
+                    <tr key={item.id} style={item.status === 'out-of-scope' ? { opacity: 0.62 } : undefined}>
+                      <td style={{ width: 92 }}>
+                        <span className={`badge ${meta.badge}`}>
+                          {meta.symbol} {t.techniques.status[item.status]}
+                        </span>
+                      </td>
+                      <td>{t.techniques.items[item.id].name}</td>
+                      <td className="hint mono" style={{ width: 190 }}>
+                        {note}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </section>
         </div>
       ))}
     </div>
