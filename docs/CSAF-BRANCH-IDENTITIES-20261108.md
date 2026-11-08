@@ -108,3 +108,37 @@ These are JSON/parser fixtures and mocked SBOM subprocess-output tests. No exter
 firmware tool, firmware acquisition/execution, deployment, live corpus/database,
 stored lane setting, listener, isolation or host network configuration was touched.
 Coordinator integration and repository-wide validation remain separate acceptance.
+
+## Coordinator offline tool-output acceptance
+
+The integrated built code was also exercised with real Syft
+`1.55.0-security20261022` and Grype `0.121.0-security20261022`, using the existing
+local image `sha256:758b44ca5e1487da3f34bd96ec1d84558354cc837f69da0fafb54e6c21f82b42`.
+The disposable container used `--network none --read-only --tmpfs /tmp`, with the
+built checkout and acceptance script mounted read-only. Update checks and Grype
+database updates were disabled. No package or firmware binary was acquired or run.
+
+Its temporary root contained only Debian 12 `os-release` and a synthetic dpkg
+status entry for `openssl 3.0.9-1`, architecture `arm64`. Syft measured
+`pkg:deb/debian/openssl@3.0.9-1?arch=arm64&distro=debian-12`; the local cached
+Grype database returned 53 advisory rows. Synthetic CSAF branch assertions about
+that exact measured identity passed through the actual built core parser,
+JSON persistence round trip, API matcher and `normalizeSbom`:
+
+- Each of the four supported status groups annotated all 53 rows as requested.
+- Different version, architecture or distribution qualifiers annotated no row.
+- Malformed duplicate qualifiers and duplicate product IDs annotated no row and
+  retained 53 unread-reference omissions each.
+- A mixture of readable and undefined references retained the matching assertion
+  plus explicit incomplete-reading omissions in every row and the persisted
+  document summary.
+- Every case preserved row count, severity, proof state and evidence channel.
+
+The assertions are synthetic; the tool/database output is real. This validates
+identity and evidence transport, not the truth of a vendor assertion, firmware
+presence, reachability or exploitability. An initial acceptance-script assertion
+used the wrong verdict enum spelling; correcting the fixture to the existing
+`vendor_states_*` names required no product change. The script, final JSON and
+initial diagnostic are retained as `csaf-branch-built-real*` in the campaign's
+external state directory. All four repository gates passed at integrated commit
+`744b3ae` (5,196 tests); later integrations require their own final gates.
