@@ -5,7 +5,7 @@ Repository rules live in `AGENTS.md`; architecture and validation details live i
 
 ## Authorized campaign checkpoint — 2026-11-08
 
-The active local campaign result, fixed deadline, validation, review status and preserved main are recorded in
+The local campaign result, fixed deadline, validation, review acceptance and preserved main are recorded in
 [CAMPAIGN-20261108.md](CAMPAIGN-20261108.md). Its five-hour authorization ends at 08:48:11 CET on 2026-11-08;
 this checkpoint never renews it. Use actual live Run ownership before any further coordination.
 
