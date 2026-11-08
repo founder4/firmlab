@@ -985,6 +985,7 @@ describe.skipIf(!process.env.FIRMLAB_TEST_RADARE2_IMAGE)('offline real radare2 d
         // separately corroborated BSET stop at 0x0a is recovered. Before that, the whole view was refused here.
         expect(result?.decoderCandidateExclusions).toEqual([
           {
+            functionAddress: entry,
             address: entry + 6,
             fileOffset: 6,
             instruction: 'bset',
@@ -1644,7 +1645,9 @@ describe('source-anchored decoder candidate selection', () => {
       decoderSubstitutionsTotal: 1,
       decoderSubstitutions: [{ address: entry + 10, candidateBasis: 'corroborated-boundary' }],
       decoderCandidateExclusionsTotal: 1,
-      decoderCandidateExclusions: [{ fileOffset: 6, reason: 'known-instruction-overlap', conflictAddress: entry + 4 }],
+      decoderCandidateExclusions: [
+        { functionAddress: entry, fileOffset: 6, reason: 'known-instruction-overlap', conflictAddress: entry + 4 },
+      ],
       functionsCompletedTotal: 1,
       callGraphTruncated: true,
     });

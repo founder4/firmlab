@@ -878,10 +878,10 @@ export function acceptPicobinDecoderRecovery(
 }
 
 /**
- * Source evidence for anchoring candidate selection: valid original instructions whose bytes agree with the
- * source, plus every boundary the unpatched decode reported (block edges, branch and call targets, stopped
- * continuations). Null when a valid original row contradicts the source bytes: the whole-result acceptor could
- * never preserve it, so no retry can help. Width agreement is checked by the selection itself.
+ * Source evidence for anchoring candidate selection: valid original instruction spans, plus every boundary
+ * the unpatched decode reported (block edges, branch/call targets and stopped continuations). Reported bytes
+ * must agree when present; absent bytes remain unrecorded, not a byte agreement claim. A contradiction returns
+ * null. The selection also checks source width, and whole-result acceptance still requires candidate bytes.
  */
 export function picobinDecoderSourceEvidence(
   original: ParsedPicobinFunction | null,
@@ -1099,7 +1099,8 @@ export function runPicobinRiscvDisassembly(
   // Keyed per function: the same bytes can conflict with one function's evidence and not another's.
   const candidateExclusions = new Map<string, PicobinDecoderCandidateExclusion>();
   const recordExclusions = (functionAddress: number, rows: PicobinDecoderCandidateExclusion[] | undefined): void => {
-    for (const row of rows ?? []) candidateExclusions.set(`${functionAddress}:${row.fileOffset}`, row);
+    for (const row of rows ?? [])
+      candidateExclusions.set(`${functionAddress}:${row.fileOffset}`, { ...row, functionAddress });
   };
   recordExclusions(mapping.entryPoint, entryExclusions);
   const recordDecodeFailure = (

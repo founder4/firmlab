@@ -43,7 +43,7 @@ export interface PicobinDecoderSubstitution {
 
 /** Evidence from the unpatched decode of the same function, in runtime addresses. */
 export interface PicobinDecoderSourceEvidence {
-  /** Valid instructions whose width and bytes the caller checked against the source. */
+  /** Valid reported instruction spans: source width is checked, and reported bytes agree when available. */
   knownInstructions: { address: number; size: number }[];
   /** Tool-reported instruction boundaries: block edges, branch/call targets and stopped continuations. */
   boundaries: number[];
@@ -51,6 +51,8 @@ export interface PicobinDecoderSourceEvidence {
 
 /** A legacy linear-scan proposal the evidence-anchored walk did not keep, and why. Optional evidence forever. */
 export interface PicobinDecoderCandidateExclusion {
+  /** Owning decode context when aggregated by the runner; optional forever, absent on a standalone view. */
+  functionAddress?: number;
   address: number;
   fileOffset: number;
   instruction: PicobinDecoderSubstitution['instruction'];

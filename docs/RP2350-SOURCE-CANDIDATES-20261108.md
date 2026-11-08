@@ -34,9 +34,10 @@ The real Finding 1A fixture (64 zero bytes; offset 0 `11a00300130533100128b316a0
 selection decision. Without evidence it is exactly the legacy walk, and the existing view tests pin that. With
 `PicobinDecoderSourceEvidence` from the unpatched decode of the same function:
 
-- **Known instructions** are authoritative. These are valid original rows whose bytes match the source
-  (`picobinDecoderSourceEvidence` in `picobin-riscv.ts`), and whose width matches the source length encoding
-  (checked by the selection). The walk steps over them and never proposes inside or across one.
+- **Known instruction spans** come from valid original tool rows. Reported bytes must match the source
+  (`picobinDecoderSourceEvidence` in `picobin-riscv.ts`) when present; missing bytes remain unrecorded, not
+  independently corroborated bytes. The selection checks source-encoded width. The walk steps over these
+  spans and never proposes inside or across one. Whole-result acceptance still requires actual candidate bytes.
 - **Boundaries** cover the declared/function entry, known instruction starts/ends, block starts/ends/jump/fail,
   instruction jump/fail (call targets included), and `missing-continuation` stops. A 32-bit parcel whose
   second halfword is a boundary is not proposed. The walk resynchronizes at that boundary instead.
@@ -63,6 +64,10 @@ New optional-forever fields: `PicobinDecoderSubstitution.candidateBasis`,
 keyed per function, because the same bytes can conflict with one function's evidence and not another's), and
 the optional `exclusions`/`stop` on an evidence-anchored `PicobinDecoderView`. No required field, persisted
 shape, reason sentence or finding-evidence key changed. One clause was added to the finding rationale.
+
+The coordinator follow-up adds optional `functionAddress` on aggregated exclusion rows: one source offset
+can have different evidence in different function decodes, so retaining only the per-function map key would
+lose that context in persisted JSON. Standalone view exclusions do not acquire an owning function implicitly.
 
 ## Result on the real fixture (pinned radare2, offline)
 
