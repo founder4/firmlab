@@ -156,4 +156,26 @@ describe('buildPicobinRiscvDecoderView', () => {
       expect(buildPicobinRiscvDecoderView(image, image.length, invalid)).toBeNull();
     }
   });
+
+  it('clamps a larger backing buffer to the declared file and refuses a short prefix', () => {
+    const image = Uint8Array.from([0xb3, 0x16, 0xa0, 0x28, 0xb3, 0x16, 0xa0, 0x28]);
+    const mapping = { entryPoint: 0x1000_0000, entryFileOffset: 0, mappedRuntimeEnd: 0x1000_0008 };
+    const view = buildPicobinRiscvDecoderView(image, 4, mapping);
+    expect(view?.bytes).toHaveLength(4);
+    expect(view?.bytesExamined).toBe(4);
+    expect(view?.substitutions).toHaveLength(1);
+    expect(buildPicobinRiscvDecoderView(image, 12, mapping)).toBeNull();
+  });
+
+  it('treats linear matches after inline data as provisional rather than proven instruction starts', () => {
+    const image = Uint8Array.from(Buffer.from('11a00300130533100128b316a0288280', 'hex'));
+    const view = buildPicobinRiscvDecoderView(image, image.length, {
+      entryPoint: 0x1000_0000,
+      entryFileOffset: 0,
+      mappedRuntimeEnd: 0x1000_0000 + image.length,
+    });
+    // Offset 6 straddles the actual ADDI and c.jal. The provider must reject the entire recovered decode.
+    expect(view?.substitutions.map((row) => row.fileOffset)).toEqual([6, 10]);
+    expect(Buffer.from(image).toString('hex')).toBe('11a00300130533100128b316a0288280');
+  });
 });

@@ -405,14 +405,14 @@ describe('runPicobinRiscvDisassembly', () => {
         },
       ],
     });
-    expect(result?.reason).toContain('1 reachable target decode failure(s)');
+    expect(result?.reason).toContain('1 decode failure(s)/stopped continuation(s)');
     expect(result?.findings[0]?.evidence).toMatchObject({ decodeFailuresTotal: 1, decodeFailuresListed: 1 });
   });
 
   it('recovers an exact BSET/SH2ADD target through a temporary decoder view and restores source bytes', () => {
     const target = ENTRY + 0x100;
     const image = new Uint8Array(FILE_SIZE);
-    image.set([0xb3, 0x16, 0xa0, 0x28, 0xb3, 0x47, 0xf5, 0x20], target - mapping.baseAddress);
+    image.set([0xb3, 0x16, 0xa0, 0x28, 0xb3, 0x47, 0xf5, 0x20, 0x67, 0x80, 0x00, 0x00], target - mapping.baseAddress);
     let temporaryView = '';
     const result = runPicobinRiscvDisassembly(
       '/firmware/pico.bin',
@@ -457,9 +457,7 @@ describe('runPicobinRiscvDisassembly', () => {
       ],
     });
     expect(result?.reason).toContain('2 exact Zba/Zbs decoder-view substitution(s)');
-    expect(result?.findings[0]?.rationale).toContain(
-      'control-flow structure; graph-scoped substitutions retain original bytes and source mnemonics',
-    );
+    expect(result?.findings[0]?.rationale).toContain('control-flow structure only after whole-result source agreement');
     expect(result?.findings[0]?.evidence).toMatchObject({
       decoderSubstitutionsTotal: 2,
       decoderSubstitutionsListed: 2,
@@ -612,6 +610,8 @@ describe('bounded graph scheduling and failure accounting', () => {
     const image = new Uint8Array(FILE_SIZE);
     const targets = Array.from({ length: 12 }, (_, index) => entry + 0x200 + index * 0x40);
     for (const address of [entry, ...targets]) image.set([0xb3, 0x16, 0xa0, 0x28], address - entry);
+    targets.forEach((_, index) => image.set([0xef, 0x00, 0x00, 0x00], 4 + index * 4));
+    image.set([0x67, 0x80, 0x00, 0x00], 4 + targets.length * 4);
     let attempts = 0;
     const result = runPicobinRiscvDisassembly(
       '/synthetic.bin',
@@ -621,15 +621,16 @@ describe('bounded graph scheduling and failure accounting', () => {
         attempts++;
         if (args.at(-1) === '/synthetic.bin' || addressOf(args) !== entry) return 'malformed';
         return r2SingleFunction(entry, [
-          { addr: entry, size: 4, opcode: 'mv zero, ra', type: 'mov' },
+          { addr: entry, size: 4, opcode: 'mv zero, ra', type: 'mov', bytes: '13800000' },
           ...targets.map((jump, index) => ({
             addr: entry + 4 + index * 4,
             size: 4,
             opcode: 'jal',
             type: 'call',
+            bytes: 'ef000000',
             jump,
           })),
-          ret(entry + 4 + targets.length * 4),
+          { ...ret(entry + 4 + targets.length * 4), size: 4, bytes: '67800000' },
         ]);
       },
       image,
@@ -830,7 +831,7 @@ describe('silent decoder truncation and recovery wiring', () => {
     expect(parsed).not.toBeNull();
     if (!parsed) return;
     expect(picobinDecodeStops(parsed, mapping)).toEqual([entry + 8]);
-    expect(picobinDecodeStops(parsed, { mappedRuntimeStart: entry, mappedRuntimeEnd: entry + 8 })).toEqual([]);
+    expect(picobinDecodeStops(parsed, { mappedRuntimeStart: entry, mappedRuntimeEnd: entry + 8 })).toEqual([entry + 8]);
   });
 
   it('recovers a non-null mid-block prefix at depth zero and reports only decoded replacements', () => {
@@ -951,10 +952,10 @@ describe.skipIf(!process.env.FIRMLAB_TEST_RADARE2_IMAGE)('offline real radare2 d
       { encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
     );
   };
-  const withImage = (hex: string, test: (image: Buffer, imagePath: string) => void): void => {
+  const withImage = (hex: string, test: (image: Buffer, imagePath: string) => void, size = 128): void => {
     const directory = mkdtempSync(path.join(tmpdir(), 'firmlab-r2-synthetic-'));
     try {
-      const image = Buffer.alloc(128);
+      const image = Buffer.alloc(size);
       Buffer.from(hex, 'hex').copy(image);
       const imagePath = path.join(directory, 'synthetic.bin');
       writeFileSync(imagePath, image, { mode: 0o600 });
@@ -964,6 +965,27 @@ describe.skipIf(!process.env.FIRMLAB_TEST_RADARE2_IMAGE)('offline real radare2 d
       rmSync(directory, { recursive: true, force: true });
     }
   };
+
+  it('preserves original instructions and the compressed call after jumping over inline data', () => {
+    withImage(
+      '11a00300130533100128b316a0288280',
+      (image, imagePath) => {
+        image.set(Buffer.from('8280', 'hex'), 0x28);
+        writeFileSync(imagePath, image);
+        const result = runPicobinRiscvDisassembly(imagePath, picobin, 64, execute, image);
+        expect(result?.instructions.find((op) => op.address === entry + 4)).toMatchObject({ bytes: '13053310' });
+        expect(result?.instructions.find((op) => op.address === entry + 8)).toMatchObject({
+          bytes: '0128',
+          jump: entry + 0x18,
+        });
+        expect(result?.callEdges).toContainEqual({ caller: entry, callsite: entry + 8, target: entry + 0x18 });
+        expect(result?.instructions.some((op) => ['13051380', '00001380'].includes(op.bytes ?? ''))).toBe(false);
+        expect(result?.functionsCompletedTotal).toBe(0); // entry stops at BSET; actual c.jal target is 0x18, not the RET at 0x28
+        expect(result?.callGraphTruncated).toBe(true);
+      },
+      64,
+    );
+  });
 
   for (const [instruction, hex] of [
     ['bset', 'b316a028'],
@@ -1141,5 +1163,367 @@ describe.skipIf(!process.env.FIRMLAB_TEST_RADARE2_IMAGE)('offline real radare2 d
         else expect(result?.available).toBe(false);
       });
     }
+  });
+});
+
+describe('decoder evidence safety regressions', () => {
+  const entry = 0x1000_0000;
+  const picobin = { cpuMode: 'riscv' as const, isExecutable: true, entryPoint: entry, rollingWindowDelta: null };
+  const localMapping = { ...mapping, entryPoint: entry, entryFileOffset: 0 };
+  const normal = { addr: entry, size: 4, opcode: 'addi sp, sp, -16', type: 'add', bytes: '130101ff' };
+  const replacement = { addr: entry + 4, size: 4, opcode: 'mv zero, ra', type: 'mov', bytes: '13800000' };
+  const ret = { addr: entry + 8, size: 4, opcode: 'ret', type: 'ret', bytes: '67800000' };
+
+  it.each(['jmp', 'cjmp', 'ujmp', 'ijmp', 'rjmp'])('never completes an unresolved %s continuation', (type) => {
+    const indirect = type.endsWith('jmp') && !['jmp', 'cjmp'].includes(type);
+    const jump = indirect ? {} : { jump: entry + 0x1000 };
+    const fail = type === 'cjmp' ? { fail: entry + 4 } : {};
+    const result = runPicobinRiscvDisassembly('/synthetic.bin', picobin, 4, () =>
+      r2Graph(
+        [{ addr: entry, size: 4, ninstr: 1, ...jump, ...fail }],
+        [{ addr: entry, size: 4, opcode: 'jump', type, ...jump, ...fail }],
+      ),
+    );
+    expect(result).toMatchObject({ functionsCompletedTotal: 0, callGraphTruncated: true });
+    expect(result?.graphStopReasons).toContain('incomplete-decode');
+    expect(result?.reason).toContain('stopped continuation(s)');
+  });
+
+  it.each([
+    { name: 'missing tail', ops: [normal] },
+    { name: 'internal gap', ops: [normal, { ...ret, addr: entry + 6, size: 2 }] },
+    { name: 'invalid op', ops: [normal, { ...replacement, type: 'ill', opcode: 'illegal' }] },
+    {
+      name: 'unknown op',
+      ops: [
+        { ...normal, type: 'unk' },
+        { ...ret, addr: entry + 4 },
+      ],
+    },
+    {
+      name: 'instruction count mismatch',
+      ops: [normal, { ...ret, addr: entry + 4, size: 2 }, { ...ret, addr: entry + 6, size: 2 }],
+    },
+    {
+      name: 'operation outside blocks',
+      ops: [
+        { ...ret, addr: entry, size: 8 },
+        { ...ret, addr: entry + 12 },
+      ],
+    },
+  ])('does not complete $name', ({ ops }) => {
+    const result = runPicobinRiscvDisassembly('/synthetic.bin', picobin, 32, () =>
+      r2Graph([{ addr: entry, size: 8, ninstr: 2 }], ops),
+    );
+    expect(result?.available).toBe(true);
+    expect(result).toMatchObject({ functionsCompletedTotal: 0, callGraphTruncated: true });
+    expect(result?.decodeFailuresTotal).toBeGreaterThan(0);
+  });
+
+  it('examines a fully listed stopped block even when another path has capped operations', () => {
+    const ops = [
+      normal,
+      ...Array.from({ length: 256 }, (_, i) => ({ addr: entry + 16 + i * 2, size: 2, opcode: 'ret', type: 'ret' })),
+    ];
+    const parsed = parsePicobinRadare2Output(
+      r2Graph(
+        [
+          { addr: entry, size: 4, ninstr: 1 },
+          { addr: entry + 16, size: 512, ninstr: 256 },
+        ],
+        ops,
+      ),
+      localMapping,
+      FILE_SIZE,
+    );
+    expect(parsed).not.toBeNull();
+    if (parsed) expect(picobinDecodeStops(parsed, localMapping)).toContain(entry + 4);
+  });
+
+  it('restores listed substitutions in block 129 despite the block display cap', () => {
+    const image = Buffer.from(`${'6f004000'.repeat(128)}b316a02867800000`, 'hex');
+    const blocks = Array.from({ length: 129 }, (_, i) => ({
+      addr: entry + i * 4,
+      size: i === 128 ? 8 : 4,
+      ninstr: i === 128 ? 2 : 1,
+      ...(i < 128 ? { jump: entry + (i + 1) * 4 } : {}),
+    }));
+    const ops = Array.from({ length: 128 }, (_, i) => ({
+      addr: entry + i * 4,
+      size: 4,
+      opcode: `j 0x${(entry + (i + 1) * 4).toString(16)}`,
+      type: 'jmp',
+      jump: entry + (i + 1) * 4,
+      bytes: '6f004000',
+    }));
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      (args) =>
+        args.at(-1) === '/synthetic.bin'
+          ? r2Graph(blocks.slice(0, 128), ops)
+          : r2Graph(blocks, [...ops, { ...replacement, addr: entry + 512 }, { ...ret, addr: entry + 516 }]),
+      image,
+    );
+    expect(result?.instructions[128]).toMatchObject({
+      bytes: 'b316a028',
+      type: 'bitmanip',
+      opcode: 'bset x13, x0, x10',
+    });
+    expect(result?.decoderSubstitutionsTotal).toBe(1);
+    expect(result?.graphStopReasons).toContain('basic-block-cap');
+    expect(result?.functionsCompletedTotal).toBe(0);
+  });
+
+  it.each([
+    'partial-overlap',
+    'source-mismatch',
+    'missing-bytes',
+    'block-boundary',
+    'width-mismatch',
+    'lost-call',
+    'no-progress',
+    'irrelevant',
+  ])('rejects %s recovery and retains the valid original call', (mode) => {
+    const image = Buffer.from('ef000001b316a02867800000b316a02867800000', 'hex');
+    const call = {
+      addr: entry,
+      size: 4,
+      opcode: 'jal 0x10000010',
+      type: 'call',
+      bytes: 'ef000001',
+      jump: entry + 16,
+    };
+    const original = r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [call]);
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      (args) => {
+        const script = args[args.indexOf('-c') + 1] ?? '';
+        if (script.includes('s 0x10000010;')) return r2SingleFunction(entry + 16, [{ ...ret, addr: entry + 16 }]);
+        if (args.at(-1) === '/synthetic.bin' || mode === 'no-progress') return original;
+        if (mode === 'irrelevant')
+          return r2Graph(
+            [
+              { addr: entry, size: 4, ninstr: 1 },
+              { addr: entry + 12, size: 8, ninstr: 2 },
+            ],
+            [call, { ...replacement, addr: entry + 12 }, { ...ret, addr: entry + 16 }],
+          );
+        return r2Graph(
+          [{ addr: entry, size: mode === 'block-boundary' ? 6 : mode === 'width-mismatch' ? 10 : 12, ninstr: 3 }],
+          [
+            mode === 'lost-call'
+              ? { ...call, type: 'mov', opcode: 'mv zero, ra', jump: undefined }
+              : mode === 'source-mismatch'
+                ? { ...call, bytes: '13000000' }
+                : call,
+            mode === 'partial-overlap'
+              ? { ...replacement, addr: entry + 6 }
+              : mode === 'missing-bytes'
+                ? { ...replacement, bytes: undefined }
+                : replacement,
+            mode === 'width-mismatch' ? { ...ret, size: 2, bytes: '6780' } : ret,
+          ],
+        );
+      },
+      image,
+    );
+    expect(result?.instructions).toEqual([
+      { address: entry, size: 4, opcode: call.opcode, type: 'call', bytes: call.bytes, jump: call.jump },
+    ]);
+    expect(result?.callEdges).toContainEqual({ caller: entry, callsite: entry, target: entry + 16 });
+    expect(result?.decoderSubstitutionsTotal).toBe(0);
+    expect(result?.callGraphTruncated).toBe(true);
+  });
+
+  it('does not retry a stop with no relevant substitution', () => {
+    const image = Buffer.from('130101ff130101ffb316a028', 'hex');
+    let attempts = 0;
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      () => {
+        attempts++;
+        return r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [normal]);
+      },
+      image,
+    );
+    expect(attempts).toBe(1);
+    expect(result?.functionsCompletedTotal).toBe(0);
+  });
+
+  it.each([12, 16, 64])('bounds supplied bytes of length %s against the declared file', (length) => {
+    const image = Buffer.alloc(length);
+    Buffer.from('130101ffb316a02867800000', 'hex').copy(image);
+    const fileSize = length === 12 ? 64 : 12;
+    let attempts = 0;
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      fileSize,
+      (args) => {
+        attempts++;
+        if (args.at(-1) === '/synthetic.bin') return r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [normal]);
+        expect(readFileSync(args.at(-1) ?? '')).toHaveLength(fileSize);
+        return r2Graph([{ addr: entry, size: 12, ninstr: 3 }], [normal, replacement, ret]);
+      },
+      image,
+    );
+    expect(result?.sourceBytesAvailable).toBe(Math.min(length, fileSize));
+    expect(result?.sourceBytesDeclared).toBe(fileSize);
+    if (length < fileSize) {
+      expect(attempts).toBe(1);
+      expect(result?.instructions).toHaveLength(1);
+      expect(result?.reason).toContain('source bytes available 12/64');
+      expect(result?.decoderRecoveryUnavailableReason).toContain('complete file bytes unavailable');
+      expect(result?.functionsCompletedTotal).toBe(0);
+    } else {
+      expect(attempts).toBe(2);
+      expect(result?.decoderSubstitutionsTotal).toBe(1);
+      expect(result?.instructions[1]?.bytes).toBe('b316a028');
+      expect(result?.functionsCompletedTotal).toBe(1);
+    }
+  });
+
+  it('retains the original prefix when the recovery subprocess fails', () => {
+    const image = Buffer.from('130101ffb316a02867800000', 'hex');
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      (args) => {
+        if (args.at(-1) === '/synthetic.bin') return r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [normal]);
+        throw new Error('synthetic retry failure');
+      },
+      image,
+    );
+    expect(result?.available).toBe(true);
+    expect(result?.instructions).toHaveLength(1);
+    expect(result?.graphStopReasons).toEqual(expect.arrayContaining(['tool-error', 'incomplete-decode']));
+    expect(result?.decodeFailures).toEqual(
+      expect.arrayContaining([expect.objectContaining({ classification: 'tool-error' })]),
+    );
+  });
+
+  it('keeps an unavailable entry explicit when only a short byte prefix was supplied', () => {
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      64,
+      () => 'malformed',
+      Buffer.from('b316a028', 'hex'),
+    );
+    expect(result).toMatchObject({
+      available: false,
+      sourceBytesAvailable: 4,
+      sourceBytesDeclared: 64,
+      functionsCompletedTotal: 0,
+    });
+    expect(result?.reason).toContain('source bytes available 4/64');
+  });
+
+  it('refuses recovery that drops original branch graph attribution', () => {
+    const image = Buffer.from('63140500b316a02867800000', 'hex');
+    const branch = {
+      addr: entry,
+      size: 4,
+      opcode: 'bnez a0, 0x10000008',
+      type: 'cjmp',
+      bytes: '63140500',
+      jump: entry + 8,
+      fail: entry + 4,
+    };
+    const originalBlocks = [
+      { addr: entry, size: 4, ninstr: 1, jump: entry + 8, fail: entry + 4 },
+      { addr: entry + 8, size: 4, ninstr: 1 },
+    ];
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      (args) =>
+        args.at(-1) === '/synthetic.bin'
+          ? r2Graph(originalBlocks, [branch, ret])
+          : r2Graph(
+              [
+                { addr: entry, size: 4, ninstr: 1, jump: entry + 8 },
+                { addr: entry + 4, size: 8, ninstr: 2 },
+              ],
+              [branch, replacement, ret],
+            ),
+      image,
+    );
+    expect(result?.instructions).toHaveLength(2);
+    expect(result?.basicBlocks[0]).toMatchObject({ jump: entry + 8, fail: entry + 4 });
+    expect(result?.decoderSubstitutionsTotal).toBe(0);
+    expect(result?.functionsCompletedTotal).toBe(0);
+  });
+
+  it('keeps an actual in-map stop and an out-of-map continuation alongside the operation cap', () => {
+    const ops = [
+      normal,
+      ...Array.from({ length: 256 }, (_, i) => ({ addr: entry + 16 + i * 2, size: 2, opcode: 'ret', type: 'ret' })),
+    ];
+    const result = runPicobinRiscvDisassembly('/synthetic.bin', picobin, FILE_SIZE, () =>
+      r2Graph(
+        [
+          { addr: entry, size: 4, ninstr: 1 },
+          { addr: entry + 16, size: 512, ninstr: 256, jump: entry + FILE_SIZE },
+        ],
+        ops,
+      ),
+    );
+    expect(result?.graphStopReasons).toEqual(
+      expect.arrayContaining(['instruction-cap', 'out-of-map-continuation', 'incomplete-decode']),
+    );
+    expect(result?.decodeFailures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ address: entry + 4 }),
+        expect.objectContaining({ address: entry + FILE_SIZE }),
+      ]),
+    );
+    expect(result?.functionsCompletedTotal).toBe(0);
+  });
+
+  it('distinguishes a decoded target omitted by the operation cap from a missing continuation', () => {
+    const target = entry + 514;
+    const ops = [
+      { addr: entry, size: 4, opcode: 'bnez', type: 'cjmp', jump: target, fail: entry + 4 },
+      ...Array.from({ length: 256 }, (_, i) => ({ addr: entry + 4 + i * 2, size: 2, opcode: 'ret', type: 'ret' })),
+    ];
+    const result = runPicobinRiscvDisassembly('/synthetic.bin', picobin, FILE_SIZE, () =>
+      r2Graph(
+        [
+          { addr: entry, size: 4, ninstr: 1, jump: target, fail: entry + 4 },
+          { addr: entry + 4, size: 512, ninstr: 256 },
+        ],
+        ops,
+      ),
+    );
+    expect(result?.instructions).toHaveLength(256);
+    expect(result?.instructionDisplayOmissions).toContain(target);
+    expect(result?.graphStopReasons).toEqual(['instruction-cap']);
+    expect(result?.decodeFailuresTotal).toBe(0);
+    expect(result?.functionsCompletedTotal).toBe(0);
+  });
+
+  it('uses corroborated block targets when the terminal operation omits its jump attribute', () => {
+    const result = runPicobinRiscvDisassembly('/synthetic.bin', picobin, 8, () =>
+      r2Graph(
+        [
+          { addr: entry, size: 4, ninstr: 1, jump: entry + 4 },
+          { addr: entry + 4, size: 4, ninstr: 1 },
+        ],
+        [
+          { addr: entry, size: 4, opcode: 'j 0x10000004', type: 'jmp' },
+          { ...ret, addr: entry + 4 },
+        ],
+      ),
+    );
+    expect(result).toMatchObject({ functionsCompletedTotal: 1, callGraphTruncated: false, decodeFailuresTotal: 0 });
   });
 });

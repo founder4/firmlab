@@ -18,6 +18,7 @@ import {
 } from '@firmlab/core';
 import {
   type PicobinDecoderSubstitution,
+  type PicobinDecoderView,
   buildPicobinRiscvDecoderView,
   restoredPicobinOpcode,
 } from './picobin-riscv-decoder-view.js';
@@ -92,6 +93,8 @@ export interface PicobinRiscvDisassembly {
   mappedRuntimeEnd?: number | null;
   basicBlocksTotal?: number;
   instructionsTotal?: number;
+  /** Bounded continuation addresses seen only in omitted tool rows; never listed instruction evidence. */
+  instructionDisplayOmissions?: number[];
   basicBlocks: PicobinBasicBlock[];
   instructions: PicobinInstruction[];
   reachableFunctions?: PicobinReachableFunction[];
@@ -123,6 +126,10 @@ export interface PicobinRiscvDisassembly {
   decoderSubstitutions?: PicobinDecoderSubstitution[];
   startupCopyTable?: RiscvStartupCopyTable | null;
   startupCopyTableAttempted?: boolean;
+  /** Actual supplied source prefix, bounded by declared file size; optional forever. */
+  sourceBytesAvailable?: number;
+  sourceBytesDeclared?: number;
+  decoderRecoveryUnavailableReason?: string;
   findings: FindingDraft[];
 }
 
@@ -134,6 +141,9 @@ export type PicobinGraphStopReason =
   | 'basic-block-cap'
   | 'instruction-cap'
   | 'incomplete-decode'
+  | 'out-of-map-continuation'
+  | 'unresolved-continuation'
+  | 'inconsistent-decode'
   | 'unparsed-output'
   | 'tool-error';
 
@@ -179,6 +189,7 @@ interface R2Function {
 }
 
 interface ParsedPicobinFunction {
+  instructionDisplayOmissions?: number[];
   basicBlocksTotal: number;
   instructionsTotal: number;
   basicBlocks: PicobinBasicBlock[];
@@ -533,6 +544,39 @@ export function parsePicobinRadare2Output(
     });
   }
 
+  // Retain only membership for bounded continuation queries, not extra decoded instructions. Without this,
+  // an existing target omitted by the op display cap is indistinguishable from an actual decoder stop.
+  const continuationQueries = new Set<number>();
+  if (rawFunction.ops.length > instructions.length) {
+    for (const block of basicBlocks) {
+      for (const address of [block.address, block.address + block.size, block.jump, block.fail]) {
+        if (address !== undefined) continuationQueries.add(address);
+      }
+    }
+    for (const instruction of instructions) {
+      for (const address of [instruction.address + instruction.size, instruction.jump, instruction.fail]) {
+        if (address !== undefined) continuationQueries.add(address);
+      }
+    }
+  }
+  const omittedContinuations = new Set<number>();
+  for (let index = instructions.length; continuationQueries.size > 0 && index < rawFunction.ops.length; index++) {
+    const raw: R2Instruction | null = rawFunction.ops[index];
+    if (!raw || typeof raw !== 'object') continue;
+    const address = finiteInteger(raw.addr);
+    const size = finiteInteger(raw.size);
+    if (
+      address === null ||
+      size === null ||
+      !continuationQueries.has(address) ||
+      !inMappedImage(address, size, mapping, fileSize) ||
+      typeof raw.type !== 'string' ||
+      typeof raw.opcode !== 'string'
+    )
+      continue;
+    if (!invalidPicobinInstruction({ address, size, type: raw.type, opcode: raw.opcode }))
+      omittedContinuations.add(address);
+  }
   const resolvedInstructions = resolveRiscvPcRelativeCalls(instructions);
   if (
     basicBlocks.length === 0 ||
@@ -542,6 +586,9 @@ export function parsePicobinRadare2Output(
     return null;
   }
   return {
+    ...(omittedContinuations.size > 0
+      ? { instructionDisplayOmissions: [...omittedContinuations].sort((a, b) => a - b) }
+      : {}),
     basicBlocksTotal: rawBlocks.length,
     instructionsTotal: rawFunction.ops.length,
     basicBlocks,
@@ -607,90 +654,218 @@ function decodeFunction(
   return parsePicobinRadare2Output(stdout, mapping, fileSize);
 }
 
-/**
- * A non-terminal block with no decoded fallthrough is a stopped decode, even when af/pdfj succeeded.
- * Do not infer completion from a nonempty prefix (radare2 silently drops unsupported instruction tails).
- * This is deliberately conservative for call-ending blocks: a missing return path is not proved noreturn.
- */
+function invalidPicobinInstruction(instruction: PicobinInstruction): boolean {
+  return (
+    ['invalid', 'ill', 'unk'].includes(instruction.type) || /^(invalid|illegal|unimp)(?:\s|$)/i.test(instruction.opcode)
+  );
+}
+
+/** A stopped static continuation is separate from an in-map, exact bitmanip recovery candidate. */
+export interface PicobinDecodeStop {
+  address: number;
+  kind: 'missing-continuation' | 'out-of-map-continuation' | 'unresolved-continuation' | 'inconsistent-decode';
+}
+
+/** Inspect each listed block independently: an operation display cap on one path cannot hide another stop. */
+export function picobinDecodeCoverage(
+  parsed: ParsedPicobinFunction,
+  mapping: Pick<PicobinFlashMapping, 'mappedRuntimeStart' | 'mappedRuntimeEnd'>,
+): PicobinDecodeStop[] {
+  const stops = new Map<string, PicobinDecodeStop>();
+  const add = (address: number, kind: PicobinDecodeStop['kind']): void => {
+    stops.set(`${address}:${kind}`, { address, kind });
+  };
+  const instructions = [...parsed.instructions].sort((a, b) => a.address - b.address);
+  const addresses = new Set(instructions.map((instruction) => instruction.address));
+  const capped = parsed.instructions.length !== parsed.instructionsTotal;
+  const omitted = new Set(capped ? parsed.instructionDisplayOmissions : []);
+  const continuation = (address: number): void => {
+    if (address < mapping.mappedRuntimeStart || address >= mapping.mappedRuntimeEnd) {
+      add(address, 'out-of-map-continuation');
+    } else if (!addresses.has(address) && !omitted.has(address)) add(address, 'missing-continuation');
+  };
+  for (const instruction of instructions) {
+    if (['jmp', 'cjmp', 'ujmp', 'rjmp', 'ijmp'].includes(instruction.type)) {
+      const terminalBlock = parsed.basicBlocks.find(
+        (block) =>
+          block.address <= instruction.address && block.address + block.size === instruction.address + instruction.size,
+      );
+      const jump = instruction.jump ?? terminalBlock?.jump;
+      const fail = instruction.fail ?? terminalBlock?.fail;
+      if (jump !== undefined) continuation(jump);
+      else add(instruction.address, 'unresolved-continuation');
+      if (fail !== undefined) continuation(fail);
+      if (instruction.type === 'cjmp' && fail === undefined) continuation(instruction.address + instruction.size);
+      if (
+        parsed.basicBlocks.some(
+          (block) =>
+            instruction.address >= block.address && instruction.address + instruction.size < block.address + block.size,
+        )
+      )
+        add(instruction.address, 'inconsistent-decode');
+    }
+    if (invalidPicobinInstruction(instruction)) add(instruction.address, 'missing-continuation');
+    if (
+      parsed.basicBlocks.length === parsed.basicBlocksTotal &&
+      !parsed.basicBlocks.some(
+        (block) =>
+          instruction.address >= block.address && instruction.address + instruction.size <= block.address + block.size,
+      )
+    )
+      add(instruction.address, 'inconsistent-decode');
+  }
+  for (const block of parsed.basicBlocks) {
+    for (const target of [block.jump, block.fail]) if (target !== undefined) continuation(target);
+    const end = block.address + block.size;
+    const members = instructions.filter(
+      (instruction) => instruction.address >= block.address && instruction.address < end,
+    );
+    let cursor = block.address;
+    let gap = false;
+    for (const instruction of members) {
+      if (instruction.address !== cursor || instruction.address + instruction.size > end) {
+        add(Math.min(cursor, instruction.address), 'inconsistent-decode');
+        gap = true;
+      }
+      cursor = instruction.address + instruction.size;
+    }
+    // A missing suffix may be only a display omission. Fully listed blocks still get all continuation checks.
+    const omittedSuffix =
+      capped && !gap && members.length < block.instructionCount && cursor < end && omitted.has(cursor);
+    if (cursor !== end && !omittedSuffix) add(cursor, 'inconsistent-decode');
+    if (members.length !== block.instructionCount && !omittedSuffix) add(cursor, 'inconsistent-decode');
+    const last = members.at(-1);
+    if (!last || last.address + last.size !== end) continue;
+    if (block.jump !== undefined && last.jump !== undefined && block.jump !== last.jump)
+      add(last.address, 'inconsistent-decode');
+    if (block.fail !== undefined && last.fail !== undefined && block.fail !== last.fail)
+      add(last.address, 'inconsistent-decode');
+    const jump = block.jump ?? last.jump;
+    const fail = block.fail ?? last.fail;
+    // A call's jump is a separately scheduled function, not an intra-function continuation.
+    if (block.jump !== undefined || (!last.type.includes('call') && jump !== undefined)) continuation(jump ?? end);
+    if (fail !== undefined) continuation(fail);
+    if (['ujmp', 'rjmp', 'ijmp', 'jmp', 'cjmp'].includes(last.type) && jump === undefined) {
+      add(last.address, 'unresolved-continuation');
+    }
+    if (last.type === 'cjmp' && fail === undefined) continuation(end);
+    if (block.jump !== undefined || fail !== undefined || (!last.type.includes('call') && jump !== undefined)) continue;
+    if (!['ret', 'jmp', 'ujmp', 'rjmp', 'ijmp', 'trap', 'swi'].includes(last.type)) continuation(end);
+  }
+  return [...stops.values()].sort((a, b) => a.address - b.address || a.kind.localeCompare(b.kind));
+}
+
+/** Compatibility helper: all observed incomplete locations, including unknown/out-of-map continuations. */
 export function picobinDecodeStops(
   parsed: ParsedPicobinFunction,
   mapping: Pick<PicobinFlashMapping, 'mappedRuntimeStart' | 'mappedRuntimeEnd'>,
 ): number[] {
-  const stops = new Set<number>();
-  const addresses = new Set(parsed.instructions.map((instruction) => instruction.address));
-  for (const instruction of parsed.instructions) {
-    if (instruction.type === 'invalid' || instruction.type === 'ill') stops.add(instruction.address);
-  }
-  // Missing listed instructions at the display cap are already accounted for as configured truncation.
-  if (parsed.instructions.length !== parsed.instructionsTotal) return [...stops];
-  for (const block of parsed.basicBlocks) {
-    const end = block.address + block.size;
-    const last = parsed.instructions.find((instruction) => instruction.address + instruction.size === end);
-    if (!last) continue;
-    for (const target of [block.jump, block.fail]) {
-      if (
-        target !== undefined &&
-        target >= mapping.mappedRuntimeStart &&
-        target < mapping.mappedRuntimeEnd &&
-        !addresses.has(target)
-      ) {
-        stops.add(target);
-      }
-    }
-    if (block.jump !== undefined || block.fail !== undefined || addresses.has(end)) continue;
-    if (!['ret', 'cret', 'jmp', 'ujmp', 'rjmp', 'ijmp', 'trap', 'swi'].includes(last.type)) stops.add(end);
-  }
-  return [...stops].sort((a, b) => a - b);
+  return [...new Set(picobinDecodeCoverage(parsed, mapping).map((stop) => stop.address))];
 }
 
-function decodeFunctionWithBitmanipView(
+/**
+ * Accept the whole view or refuse it. Every listed instruction must agree with the actual view bytes and
+ * source bytes, with only exact whole-instruction substitutions allowed. Displayed block containment is not
+ * required for restoring instructions beyond the block cap. Graph endpoints may never bisect a replacement.
+ * Valid original instructions (including call attribution) must survive unchanged; invalid rows may improve.
+ */
+export function acceptPicobinDecoderRecovery(
+  candidate: ParsedPicobinFunction,
+  original: ParsedPicobinFunction | null,
+  view: PicobinDecoderView,
+  source: Uint8Array,
   mapping: PicobinFlashMapping,
-  fileSize: number,
-  execute: Radare2Executor,
-  imageBytes: Uint8Array | undefined,
 ): { parsed: ParsedPicobinFunction; substitutions: PicobinDecoderSubstitution[] } | null {
-  if (!imageBytes) return null;
-  const view = buildPicobinRiscvDecoderView(imageBytes, fileSize, mapping);
-  if (!view) return null;
-  const directory = mkdtempSync(path.join(tmpdir(), 'firmlab-picobin-'));
-  const imagePath = path.join(directory, 'decoder-view.bin');
-  try {
-    writeFileSync(imagePath, view.bytes, { mode: 0o600 });
-    // Keep the original entry. Shifting past leading replacements duplicates blocks when a back-edge reaches it.
-    const parsed = decodeFunction(imagePath, mapping, fileSize, execute);
-    if (!parsed) return null;
-    const substitutions = view.substitutions
-      .filter(
-        (substitution) =>
-          parsed.instructions.some(
-            (instruction) => instruction.address === substitution.address && instruction.size === 4,
-          ) &&
-          parsed.basicBlocks.some(
-            (block) => substitution.address >= block.address && substitution.address + 4 <= block.address + block.size,
-          ),
+  const substitutions: PicobinDecoderSubstitution[] = [];
+  const ordered = [...candidate.instructions].sort((a, b) => a.address - b.address);
+  let previousEnd = -1;
+  for (const instruction of ordered) {
+    const offset = instruction.address - mapping.baseAddress;
+    if (offset < 0 || offset + instruction.size > source.length || instruction.address < previousEnd) return null;
+    const parcel = (source[offset] ?? 0) | ((source[offset + 1] ?? 0) << 8);
+    if (instruction.address % 2 !== 0 || (parcel & 0x1f) === 0x1f || instruction.size !== ((parcel & 3) === 3 ? 4 : 2))
+      return null;
+    previousEnd = instruction.address + instruction.size;
+    const overlaps = view.substitutions.filter((row) =>
+      spansOverlap(row.address, 4, instruction.address, instruction.size),
+    );
+    if (overlaps.some((row) => row.address !== instruction.address || instruction.size !== 4)) return null;
+    const expectedView = Buffer.from(view.bytes.subarray(offset, offset + instruction.size)).toString('hex');
+    if (instruction.bytes !== expectedView) return null;
+    const sourceHex = Buffer.from(source.subarray(offset, offset + instruction.size)).toString('hex');
+    const substitution = overlaps[0];
+    if (substitution) {
+      if (
+        substitution.fileOffset !== offset ||
+        substitution.originalBytesHex !== sourceHex ||
+        instruction.jump !== undefined ||
+        instruction.fail !== undefined
       )
-      .map((substitution) => ({ ...substitution, mnemonic: restoredPicobinOpcode(substitution) }));
-    const substitutionsByAddress = new Map(substitutions.map((substitution) => [substitution.address, substitution]));
-    return {
-      parsed: {
-        ...parsed,
-        instructions: parsed.instructions.map((instruction) => {
-          const substitution = substitutionsByAddress.get(instruction.address);
-          return substitution
-            ? {
-                ...instruction,
-                opcode: restoredPicobinOpcode(substitution),
-                type: 'bitmanip',
-                bytes: substitution.originalBytesHex,
-              }
-            : instruction;
-        }),
-      },
-      substitutions,
-    };
-  } finally {
-    rmSync(directory, { force: true, recursive: true });
+        return null;
+      substitutions.push({ ...substitution, mnemonic: restoredPicobinOpcode(substitution) });
+    } else if (expectedView !== sourceHex) return null;
   }
+  if (substitutions.length === 0) return null;
+  for (const block of candidate.basicBlocks) {
+    for (const boundary of [block.address, block.address + block.size, block.jump, block.fail]) {
+      if (
+        boundary !== undefined &&
+        (view.substitutions.some((row) => boundary > row.address && boundary < row.address + 4) ||
+          candidate.instructions.some((row) => boundary > row.address && boundary < row.address + row.size))
+      )
+        return null;
+    }
+  }
+  const byAddress = new Map(substitutions.map((row) => [row.address, row]));
+  const restored = candidate.instructions.map((instruction) => {
+    const substitution = byAddress.get(instruction.address);
+    return substitution
+      ? {
+          ...instruction,
+          opcode: restoredPicobinOpcode(substitution),
+          type: 'bitmanip',
+          bytes: substitution.originalBytesHex,
+        }
+      : instruction;
+  });
+  if (original) {
+    for (const block of original.basicBlocks) {
+      if (
+        (block.jump !== undefined || block.fail !== undefined) &&
+        !candidate.basicBlocks.some(
+          (next) =>
+            next.address + next.size === block.address + block.size &&
+            next.jump === block.jump &&
+            next.fail === block.fail,
+        )
+      )
+        return null;
+    }
+    for (const instruction of original.instructions) {
+      if (invalidPicobinInstruction(instruction)) continue;
+      const next = restored.find((row) => row.address === instruction.address);
+      if (
+        !next ||
+        next.size !== instruction.size ||
+        next.type !== instruction.type ||
+        next.opcode !== instruction.opcode ||
+        next.jump !== instruction.jump ||
+        next.fail !== instruction.fail ||
+        (instruction.bytes !== undefined && next.bytes !== instruction.bytes)
+      )
+        return null;
+    }
+    const stops = picobinDecodeCoverage(original, mapping).filter((stop) => stop.kind === 'missing-continuation');
+    if (!substitutions.some((row) => stops.some((stop) => stop.address === row.address))) return null;
+    // Replacing an invalid row is progress; retaining only the original prefix is not.
+    if (
+      !substitutions.some(
+        (row) => !original.instructions.some((op) => op.address === row.address && !invalidPicobinInstruction(op)),
+      )
+    )
+      return null;
+  } else if (!byAddress.has(mapping.entryPoint)) return null;
+  return { parsed: { ...candidate, instructions: restored }, substitutions };
 }
 
 function decodeWithRecovery(
@@ -699,10 +874,37 @@ function decodeWithRecovery(
   fileSize: number,
   execute: Radare2Executor,
   imageBytes: Uint8Array | undefined,
-): { parsed: ParsedPicobinFunction | null; substitutions: PicobinDecoderSubstitution[] } {
+): { parsed: ParsedPicobinFunction | null; substitutions: PicobinDecoderSubstitution[]; recoveryFailure?: string } {
   const parsed = decodeFunction(imagePath, mapping, fileSize, execute);
-  if (parsed && picobinDecodeStops(parsed, mapping).length === 0) return { parsed, substitutions: [] };
-  return decodeFunctionWithBitmanipView(mapping, fileSize, execute, imageBytes) ?? { parsed, substitutions: [] };
+  const unchanged = { parsed, substitutions: [] };
+  const stops = parsed
+    ? picobinDecodeCoverage(parsed, mapping)
+    : [{ address: mapping.entryPoint, kind: 'missing-continuation' }];
+  const eligible = stops.filter(
+    (stop) => stop.kind === 'missing-continuation' && inMappedImage(stop.address, 4, mapping, fileSize),
+  );
+  if (!imageBytes || eligible.length === 0) return unchanged;
+  const view = buildPicobinRiscvDecoderView(imageBytes, fileSize, mapping);
+  if (!view || !view.substitutions.some((row) => eligible.some((stop) => stop.address === row.address)))
+    return unchanged;
+  try {
+    const directory = mkdtempSync(path.join(tmpdir(), 'firmlab-picobin-'));
+    const viewPath = path.join(directory, 'decoder-view.bin');
+    try {
+      writeFileSync(viewPath, view.bytes, { mode: 0o600 });
+      const candidate = decodeFunction(viewPath, mapping, fileSize, execute);
+      if (!candidate) return unchanged;
+      return (
+        acceptPicobinDecoderRecovery(candidate, parsed, view, imageBytes.subarray(0, fileSize), mapping) ?? unchanged
+      );
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  } catch (err) {
+    // A failed compatibility retry or temporary-file operation must retain the source prefix and call edges.
+    if (!parsed) throw err;
+    return { ...unchanged, recoveryFailure: radareFailureReason(err) };
+  }
 }
 
 /** Sample only bytes proved file-backed by this selected mapping. A boundary stop has no instruction sample. */
@@ -731,6 +933,19 @@ export function runPicobinRiscvDisassembly(
   const mapping = resolved.mapping;
   if (!mapping) return unmapped(picobin, resolved.reason);
 
+  const sourceEvidence = imageBytes
+    ? {
+        sourceBytesAvailable: Math.min(imageBytes.length, fileSize),
+        sourceBytesDeclared: fileSize,
+        ...(imageBytes.length < fileSize
+          ? { decoderRecoveryUnavailableReason: 'complete file bytes unavailable' }
+          : {}),
+      }
+    : {};
+  const sourceAvailabilityReason =
+    imageBytes && imageBytes.length < fileSize
+      ? `; source bytes available ${imageBytes.length}/${fileSize}; decoder-view recovery unavailable without complete file bytes`
+      : '';
   const baseHex = `0x${mapping.baseAddress.toString(16)}`;
   const entryHex = `0x${mapping.entryPoint.toString(16)}`;
   let decoderAttemptsTotal = 0;
@@ -745,7 +960,8 @@ export function runPicobinRiscvDisassembly(
   ): PicobinRiscvDisassembly => {
     const bytesHex = picobinFailureBytes(mapping.entryPoint, mapping, fileSize, imageBytes);
     return {
-      ...unavailable(mapping, reason),
+      ...unavailable(mapping, reason + sourceAvailabilityReason),
+      ...sourceEvidence,
       callGraphTruncated: true,
       functionTargetsQueuedTotal: 1,
       functionsAttemptedTotal: 1,
@@ -770,10 +986,12 @@ export function runPicobinRiscvDisassembly(
   };
   let parsed: ParsedPicobinFunction | null;
   let entrySubstitutions: PicobinDecoderSubstitution[];
+  let entryRecoveryFailure: string | undefined;
   try {
     const decoded = decodeWithRecovery(imagePath, mapping, fileSize, boundedExecute, imageBytes);
     parsed = decoded.parsed;
     entrySubstitutions = decoded.substitutions;
+    entryRecoveryFailure = decoded.recoveryFailure;
   } catch (err) {
     return entryFailure('tool-error', radareFailureReason(err));
   }
@@ -870,22 +1088,27 @@ export function runPicobinRiscvDisassembly(
   };
 
   const recordFunctionCoverage = (decoded: ParsedPicobinFunction, currentMapping: PicobinFlashMapping): void => {
-    const stops = picobinDecodeStops(decoded, currentMapping);
+    const stops = picobinDecodeCoverage(decoded, currentMapping);
     const blocksCapped = decoded.basicBlocks.length !== decoded.basicBlocksTotal;
     const instructionsCapped = decoded.instructions.length !== decoded.instructionsTotal;
     if (blocksCapped) graphStopReasons.add('basic-block-cap');
     if (instructionsCapped) graphStopReasons.add('instruction-cap');
-    for (const address of stops) {
+    for (const { address, kind } of stops) {
+      if (kind !== 'missing-continuation') graphStopReasons.add(kind);
       graphStopReasons.add('incomplete-decode');
       recordDecodeFailure(
         { address, mapping: functionMapping(currentMapping, address) },
         'incomplete-decode',
-        `radare2 stopped without a decoded continuation at 0x${address.toString(16)}; coverage incomplete`,
+        `radare2 ${kind} at 0x${address.toString(16)}; coverage incomplete`,
         false,
       );
     }
     if (stops.length === 0 && !blocksCapped && !instructionsCapped) functionsCompletedTotal++;
   };
+  if (entryRecoveryFailure) {
+    graphStopReasons.add('tool-error');
+    recordDecodeFailure({ address: mapping.entryPoint, mapping }, 'tool-error', entryRecoveryFailure);
+  }
   recordFunctionCoverage(parsed, mapping);
   enqueueCalls(mapping.entryPoint, 0, parsed.instructions);
   while (
@@ -902,6 +1125,10 @@ export function runPicobinRiscvDisassembly(
     try {
       const recovered = decodeWithRecovery(imagePath, nextMapping, fileSize, boundedExecute, imageBytes);
       decoded = recovered.parsed;
+      if (recovered.recoveryFailure) {
+        graphStopReasons.add('tool-error');
+        recordDecodeFailure(next, 'tool-error', recovered.recoveryFailure);
+      }
       for (const substitution of recovered.substitutions) {
         decoderSubstitutionsByOffset.set(substitution.fileOffset, substitution);
       }
@@ -956,10 +1183,11 @@ export function runPicobinRiscvDisassembly(
     `${functionsAttemptedTotal} target(s) attempted, ${functionsCompletedTotal} decode(s) completed, ${queued.size} target(s) queued, ` +
     `${droppedFunctionTargets.size} distinct target(s) excluded by function/depth budgets, ` +
     `${outOfMapCallsitesTotal} resolved target(s) outside mapped bytes, ` +
-    `${unresolvedCallsitesTotal} unresolved/indirect callsite(s), ${decodeFailuresTotal} reachable target decode failure(s), ` +
+    `${unresolvedCallsitesTotal} unresolved/indirect callsite(s), ${decodeFailuresTotal} decode failure(s)/stopped continuation(s), ` +
     `${decoderSubstitutionsTotal} exact Zba/Zbs decoder-view substitution(s)` +
     `${callGraphTruncated ? `; coverage truncated${truncatedByLimits ? ' by configured limits' : ''} (${[...graphStopReasons].sort().join(', ')})` : ''}` +
-    `${decodeFailuresTotal > 0 ? '; coverage incomplete' : ''}.`;
+    `${decodeFailuresTotal > 0 ? '; coverage incomplete' : ''}` +
+    `${sourceAvailabilityReason}.`;
   const finding: FindingDraft = {
     kind: 'rtos-picobin-entry-cfg',
     title: `RISC-V PICOBIN entry graph decoded: ${reachableFunctions.length} reachable function(s), ${callEdges.length} direct edge(s)`,
@@ -1013,8 +1241,8 @@ export function runPicobinRiscvDisassembly(
       'validated PICOBIN image, then followed only direct call targets under explicit function/depth/attempt budgets and a separate edge display cap. ' +
       'Where the installed decoder rejected exact BSET/SH1ADD/SH2ADD/SH3ADD encodings, a bounded same-length ' +
       'discarded-destination MOV view recovered ' +
-      'control-flow structure; graph-scoped substitutions retain original bytes and source mnemonics, and entry ' +
-      'instructions are restored. This is bounded static ' +
+      'control-flow structure only after whole-result source agreement and preservation of valid original instructions; ' +
+      'exact substitutions retain original bytes and source mnemonics, including instructions beyond the block display cap. This is bounded static ' +
       'decoder evidence; it does not prove execution, instruction semantics, indirect calls, whole-image function ' +
       'coverage or peripheral behavior.',
   };
@@ -1053,6 +1281,7 @@ export function runPicobinRiscvDisassembly(
     decoderSubstitutions,
     startupCopyTable,
     startupCopyTableAttempted: imageBytes !== undefined,
+    ...sourceEvidence,
     findings: [finding],
   };
 }

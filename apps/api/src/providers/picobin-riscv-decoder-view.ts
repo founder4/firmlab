@@ -2,8 +2,8 @@
  * Build a bounded, same-length decoder view for exact ratified RV32 Zba/Zbs instructions that older
  * radare2 releases reject. The view is analysis-only: it replaces exact non-control-flow encodings with 32-bit
  * discarded-destination MOVs so the external decoder can recover block boundaries. Callers retain every original
- * byte and restore the mnemonic in reported instructions. It walks encoded instruction lengths from the declared entry, never
- * matches a word across adjacent instructions, and stops at unsupported longer encodings. The walk does not
+ * byte and validate the entire recovered result before restoring mnemonics. Its linear length walk can lose phase
+ * across inline data or jumps: scanned matches are only candidates, never evidence. It stops at unsupported longer encodings and does not
  * establish instruction semantics or distinguish embedded data from code. It never mutates the firmware image.
  */
 
@@ -70,7 +70,9 @@ export function buildPicobinRiscvDecoderView(
   mapping: PicobinDecoderViewMapping,
 ): PicobinDecoderView | null {
   if (
-    imageBytes.byteLength !== fileSize ||
+    !Number.isSafeInteger(fileSize) ||
+    fileSize <= 0 ||
+    imageBytes.byteLength < fileSize ||
     !Number.isSafeInteger(mapping.entryFileOffset) ||
     !Number.isSafeInteger(mapping.entryPoint) ||
     !Number.isSafeInteger(mapping.mappedRuntimeEnd) ||
@@ -90,7 +92,7 @@ export function buildPicobinRiscvDecoderView(
     mapping.entryFileOffset + DECODER_WINDOW_BYTES,
     mapping.entryFileOffset + runtimeBytes,
   );
-  const patched = Uint8Array.from(imageBytes);
+  const patched = Uint8Array.from(imageBytes.subarray(0, fileSize));
   const substitutions: PicobinDecoderSubstitution[] = [];
   let offset = mapping.entryFileOffset;
   // RISC-V base instruction-length encoding, ratified unprivileged ISA table 1:
