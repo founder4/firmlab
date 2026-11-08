@@ -29,6 +29,7 @@
  */
 import { isJffs2Node } from './jffs2.js';
 import { parseMediaTekBromHeader, parseMediaTekLkHeader } from './mediatek-image.js';
+import { parseRealtekCvimgHeader } from './realtek-image.js';
 import type { SignatureCategory, SignatureConfidence, SignatureHit, SignatureTier } from './types.js';
 
 /** Score for each rubric tier. Exported so a caller can rank hits without re-deriving the ladder. */
@@ -404,6 +405,42 @@ function mediatekBromRule(id: string, deviceName: string): SignatureRule {
       return at(
         'consistent',
         `0x900-byte device/BRLYT/GFH header and ${parsed.payloadSize}-byte payload fit; SHA-256 field present but not verified — no integrity, authenticity or device/runtime proof`,
+      );
+    },
+  };
+}
+
+/**
+ * One rule per supported legacy Realtek cvimg signature (`cs6c` from its `linux` option, `cr6c` from `linux-ro`).
+ * The signature names a producer option, not a chip or device; the declared addresses are data only, and the
+ * 16-bit checksum is located but never verified, so `consistent` is the ceiling. `csys`/`csro` stay unsupported.
+ */
+function realtekCvimgRule(signature: 'cs6c' | 'cr6c'): SignatureRule {
+  return {
+    id: `realtek-cvimg-${signature}`,
+    description: `Realtek cvimg 16-byte image header (${signature}; legacy SDK host-tool subset)`,
+    category: 'container',
+    confidence: 'high',
+    magic: ascii(signature),
+    decode: (buf, off) => {
+      const parsed = parseRealtekCvimgHeader(buf, off);
+      if (!parsed.valid) return undefined;
+      return {
+        size: parsed.totalSize,
+        declaredLength: parsed.declaredLength,
+        producerOption: parsed.producerOption,
+        startAddr: parsed.startAddress,
+        burnAddr: parsed.burnAddress,
+        checksumOffset: parsed.checksum.offset,
+        checksum: 'not_verified',
+      };
+    },
+    verify: (buf, off) => {
+      const parsed = parseRealtekCvimgHeader(buf, off);
+      if (!parsed.valid) return no(parsed.reason);
+      return at(
+        'consistent',
+        `16-byte cvimg header and ${parsed.declaredLength}-byte declared region fit; 16-bit checksum present but not verified — no integrity, authenticity or device/runtime proof`,
       );
     },
   };
@@ -876,8 +913,9 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
   // Clean-room rules: each magic is paired with a check of fields the format itself declares, and every one of
   // them can REJECT. That constraint is why this pack is ~20 rules and not the ~130 the backlog sketches — a
   // magic we cannot check structurally is a rule that fires on coincidences we would then have to explain away,
-  // and unsupported headers (including Realtek and MediaTek variants beyond the bounded LK and generic BootROM
-  // subsets) stay outside this registry until their fields can be established from primary sources. See docs/BACKLOG.md.
+  // and unsupported headers (Realtek beyond the bounded cvimg cs6c/cr6c subset, MediaTek beyond the bounded LK and
+  // generic BootROM subsets) stay outside this registry until their fields can be established from primary
+  // sources. See docs/BACKLOG.md.
   //
   // The descriptions also refuse to over-claim attribution. A magic identifies a CONTAINER FORMAT, not a brand:
   // SEAMA ships on several vendors' devices and HDR1 is a Broadcom TRX variant that Xiaomi among others reuses,
@@ -912,6 +950,8 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
   mediatekBromRule('mediatek-brom-nor', 'SF_BOOT'),
   mediatekBromRule('mediatek-brom-emmc', 'EMMC_BOOT'),
   mediatekBromRule('mediatek-brom-sdmmc', 'SDMMC_BOOT'),
+  realtekCvimgRule('cs6c'),
+  realtekCvimgRule('cr6c'),
   {
     id: 'sercomm-prefix',
     description: 'Sercomm/Netgear sErCoMm firmware prefix header (mksercommfw)',

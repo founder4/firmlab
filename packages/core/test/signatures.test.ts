@@ -85,6 +85,24 @@ const BROM_RULES = [
   ['mediatek-brom-sdmmc', 'SDMMC_BOOT', 0x10008],
 ] as const;
 
+/**
+ * Realtek cvimg linux/linux-ro image assembled from the documented field facts (big-endian words, len = payload +
+ * 2-byte checksum rounded to even). Not a generator output; the checksum bytes are arbitrary and must stay unverified.
+ */
+function cvimgImage(signature: string, payloadLength: number, startAddr = 0x80500000, burnAddr = 0x30000): Uint8Array {
+  const len = payloadLength + 2 + (payloadLength % 2);
+  const out = new Uint8Array(16 + len);
+  const dv = new DataView(out.buffer);
+  out.set(ascii(signature));
+  dv.setUint32(4, startAddr, false);
+  dv.setUint32(8, burnAddr, false);
+  dv.setUint32(12, len, false);
+  for (let i = 0; i < payloadLength; i++) out[16 + i] = 0x41 + i;
+  out[16 + len - 2] = 0x12;
+  out[16 + len - 1] = 0x34;
+  return out;
+}
+
 describe('scanSignatures', () => {
   it('finds a SquashFS magic at its offset', () => {
     const buf = planted(8192, 4096, ascii('hsqs'));
@@ -529,6 +547,24 @@ describe('signature confidence rubric', () => {
         [8, new Array(32).fill(0)],
         [40, u32leBytes(1)],
       ),
+    },
+    {
+      id: 'realtek-cvimg-cs6c',
+      tier: 'consistent',
+      pos: cvimgImage('cs6c', 5),
+      // Same signature; the declared region runs one byte past the buffer.
+      neg: cvimgImage('cs6c', 5).subarray(0, 23),
+    },
+    {
+      id: 'realtek-cvimg-cr6c',
+      tier: 'consistent',
+      pos: cvimgImage('cr6c', 4),
+      // Same signature; an odd declared length the producer never writes.
+      neg: (() => {
+        const bad = cvimgImage('cr6c', 4);
+        bad[15] = 5;
+        return bad;
+      })(),
     },
     {
       id: 'mediatek-brom-nor',
@@ -1164,5 +1200,68 @@ describe('MediaTek BootROM envelope scanner bounds', () => {
     expect(scan.rejectedByRule?.['mediatek-brom-nor']).toBe(1);
     expect(scan.rejectedByRule?.['mediatek-brom-emmc']).toBe(1);
     expect(scan.rejectedByRule?.['mediatek-brom-sdmmc']).toBe(1);
+  });
+});
+
+describe('Realtek cvimg scanner bounds', () => {
+  it('keeps embedded cs6c/cr6c hits past the listing cap, counts malformed candidates, never verifies', () => {
+    const first = cvimgImage('cs6c', 7);
+    const second = cvimgImage('cr6c', 0, 0, 0);
+    const bytes = new Uint8Array(400).fill(0xee);
+    bytes.set(first, 13);
+    bytes.set(second, 200);
+    bytes.set(ascii('cs6c'), 300); // trailing incidental signature: zeroed fields are rejected
+    bytes.fill(0, 304, 316);
+    const scan = scanSignaturesDetailed(bytes, { maxHits: 0 });
+    expect(scan.hits.filter((hit) => hit.id.startsWith('realtek-'))).toEqual([
+      expect.objectContaining({
+        id: 'realtek-cvimg-cs6c',
+        offset: 13,
+        tier: 'consistent',
+        score: 85,
+        category: 'container',
+        meta: {
+          size: 26,
+          declaredLength: 10,
+          producerOption: 'linux',
+          startAddr: 0x80500000,
+          burnAddr: 0x30000,
+          checksumOffset: 24,
+          checksum: 'not_verified',
+        },
+        rationale: expect.stringMatching(/checksum.*not verified.*no integrity, authenticity or device\/runtime/i),
+      }),
+      expect.objectContaining({ id: 'realtek-cvimg-cr6c', offset: 200, tier: 'consistent' }),
+    ]);
+    expect(scan.rejectedByRule?.['realtek-cvimg-cs6c']).toBe(1);
+    expect(scan.matched - (scan.rejected ?? 0)).toBe(scan.hits.length);
+  });
+
+  it('counts every truncation of a candidate before the cap, and a wrong checksum keeps the same tier', () => {
+    const complete = cvimgImage('cs6c', 6);
+    for (let length = 4; length < complete.length; length++) {
+      const scan = scanSignaturesDetailed(complete.subarray(0, length), { maxHits: 0 });
+      expect(
+        scan.hits.some((hit) => hit.id === 'realtek-cvimg-cs6c'),
+        `length ${length}`,
+      ).toBe(false);
+      expect(scan.rejectedByRule?.['realtek-cvimg-cs6c']).toBe(1);
+    }
+    const wrongSum = cvimgImage('cs6c', 6);
+    wrongSum[wrongSum.length - 1] ^= 0xff;
+    expect(scanSignatures(wrongSum).find((hit) => hit.id === 'realtek-cvimg-cs6c')?.tier).toBe('consistent');
+  });
+
+  it('does not match csys/csro/CSYS, other cvimg signatures, or incidental Realtek strings', () => {
+    const bytes = new Uint8Array(600);
+    bytes.set(ascii('Realtek RTL8196C cvimg cs6 cr6 CS6C CR6C Cs6c'));
+    let at = 100;
+    for (const sig of ['csys', 'csro', 'CSYS', 'cs6b', 'cr6b', 'r6cr', 'boot', 'allp']) {
+      bytes.set(cvimgImage(sig, 4), at);
+      at += 40;
+    }
+    const scan = scanSignaturesDetailed(bytes);
+    expect(scan.hits.some((hit) => hit.id.startsWith('realtek-'))).toBe(false);
+    expect(scan.rejectedByRule?.['realtek-cvimg-cs6c']).toBeUndefined();
   });
 });
