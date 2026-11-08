@@ -11,20 +11,16 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Prioridad de reanudación — 2026-11-03
 
-- [ ] Construir una candidata Debian 13 real con `deploy.sh --tools --build-only` en el homelab ARM64. **Contrato
-  integrado 2026-11-03:** `--tools` elige la receta por el `/etc/os-release` de la base actual (12 → `Dockerfile.tools`,
-  13 → `Dockerfile.trixie`), rechaza una candidata más antigua y una etiqueta ausente junto a un contenedor Debian 13,
-  exige `retained`/Renode en local con driver `docker` antes de `docker build`, hornea Grype en la última capa de
-  `Dockerfile.trixie` y compara offline los 28 sondeos de `tools.ts`, cada uno acotado por `timeout`. Lo cubren 26
-  tests con shim y mutaciones de cada guard; la candidata Debian 12 x86_64 real de `00c6ad1` respondió 28/28,
-  conservó 108 reglas FwHunt y una base Grype v6 válida, y pasó sin red la integración, el fixture FreeRTOS y el
-  smoke funcional de Ghidra, angr, AFL++/QEMU y mitmproxy. La receta Debian 13 fija también `pycparser==3.0`, tras
-  demostrar que 3.12 rompe el import de angr. Falta la evidencia que esta
-  estación no puede dar: no conserva las imágenes ARM64 `retained`/Renode, así que no se ha construido ninguna
-  candidata Debian 13, ni descargado su base Grype, ni ejecutado sobre ella el inventario, la integración,
-  FreeRTOS y `security-runtime-smoke.py`. Sin promoción ni despliegue implícitos. Del WIP `179e7bc` no se integra
-  lo de `Dockerfile.tools` (digests fijados del frontend y de la base Node, reintentos de las descargas de Ghidra):
-  no lo exige el contrato Debian 13; sigue en esa rama si se quiere para la receta Debian 12.
+- [x] Construir y validar una candidata ARM64 Debian 13 sin promoción. Hecho 2026-11-08: se comprobó que
+  `firmlab-tools:latest` ya era Debian 13; se construyeron referencias desechables con entradas locales explícitas,
+  28 sondeos offline sin regresiones, integración 12/12, FreeRTOS 50/50 y cuatro smokes funcionales de seguridad.
+  El validador nuevo `scripts/tools-candidate.sh` exige referencia, metadatos/inventarios completos y un builder
+  local conocido; publica rechazos tras construir, identifica árboles sucios y comprueba alias privados de entrada.
+  El reensayo endurecido pasó con las mismas 27 capas y sólo otra etiqueta de revisión: no es un rebuild fresco
+  de apt/pip/Renode ni otra descarga de la base Grype. Fuente, IDs, límites y guardas en
+  `TOOLS-CANDIDATE-20261108.md` y `TOOLS-CANDIDATE-HARDENING-20261108.md`. Promover/desplegar o refrescar
+  dependencias queda como decisión separada del operador; `deploy.sh --tools --build-only` promociona la base y
+  no es la receta para validar una candidata aislada.
 - [x] Publicar las correcciones de dependencias y el contexto de coordinación: `4a7b2fa` y `d079c84` están en
   `origin/main`. Auditoría de 27 avisos a cero; gates locales completos con 4.759 tests tras separar el WIP.
   Los resultados remotos se consultan por SHA en el workflow CI; los fallos históricos se conservan.
@@ -206,6 +202,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   BSET y se detiene ante instrucciones largas no soportadas, con prueba real de radare2 sobre bytes sintéticos.
   Ese recorrido lineal no distingue pools de datos ni demuestra semántica; una evolución debe conservar esa
   incertidumbre y no llamar instrucción ejecutada a una sustitución. Véase `RP2350-DECODER-BOUNDARIES-20261108.md`.
+  El seguimiento del 2026-11-08 recupera prefijos cortados en entrada y mitad de bloque, ancla el análisis en la
+  entrada original y sólo conserva sustituciones dentro del grafo decodificado, con bytes/mnemónicos originales.
+  Los mapas primarios y CRT0 quedan acotados, los solapes ambiguos se rehúsan, y se mantienen ocho destinos y
+  dieciséis invocaciones máximas con intentados/completados y aristas omitidas explícitos. La UI muestra esas
+  medidas sin convertirlas en ejecución. Pendientes: regiones LOAD_MAP secundarias más allá del mapa primario,
+  distinción corroborada código/datos y semántica de instrucciones; no cerrar esos límites por fixtures verdes.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee
   además `FLMSTR1` (maestro CPU/BIOS) y emite `spi-descriptor-host-write` (`static_confirmed`, medium) sólo cuando
@@ -314,7 +316,10 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `consistent` y una estructura rota se rechaza. El generador oficial compilado produjo el mismo layout sobre
   payload sintético; no hay muestra real local, no cubre el footer ni variantes modernas y el checksum no es
   autenticidad. Realtek y MTK siguen pendientes: ninguna muestra local los contiene —los «MTK» del corpus son
-  cadenas sueltas, no cabeceras—.)*
+  cadenas sueltas, no cabeceras—. Investigación 2026-11-08: `mkcsysimg`/`csysimg.h` oficiales de OpenWrt en
+  `86739f2b3ae9502368b89ef37fa6f31c42aad6f4` definen `CSYS` en mayúsculas y campos little-endian para el
+  formato ADM/Edimax; no justifican reconocer las firmas Realtek `csys`/`cr6c`/`cs6c` en minúsculas. No se
+  añadió una regla por semejanza de nombre ni se adquirió firmware.)*
   Xiaomi ya está cubierto por HDR1 y no necesita regla propia: un magic identifica un FORMATO de
   contenedor, no una marca, y las descripciones no atribuyen de más.
 - [x] Corroboración JFFS2 por tipo de nodo compartida entre escáner y clasificador. El predicado puro exportado
@@ -1000,12 +1005,16 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   `subcomponents` anidados de OpenVEX. Los veredictos por fila lo nombran como omisión `unread_structure`; la
   cobertura persistida y la UI lo muestran. Gates completos verdes (4675 tests). Pendiente: interpretar esas
   estructuras cuando haya fuentes primarias y fixtures verificados.
-- [ ] VEX de proveedor restante (revisión `review-vex.md`): interpretación semántica del riesgo 6 (hoy contado como omisión, arriba) y nits 11–15 (el riesgo 8 se cerró arriba). Fallo conservador asumido: una fila grype de ecosistema de lenguaje (pypi/npm) no casa con un purl tipado
-  hasta que la fila lleve su ecosistema. Interpretar intervalos CSAF queda pendiente de un contrato verificado.
-  Revisión de código 2026-10-03: W9 persiste una selección propia de campos, por lo que ampliar solo `SbomResult`
-  no resuelve el riesgo 8. En el riesgo 6, una referencia CSAF de branches no indexada cae al ID bruto y puede
-  perder la restricción de versión del helper omitido; exigir regresión del fallback antes de habilitar nuevas
-  coincidencias. Los subcomponents de statement ya se leen; faltan los anidados dentro del producto.
+- [ ] VEX de proveedor restante (revisión `review-vex.md`): interpretación semántica del riesgo 6 (hoy contado
+  como omisión, arriba), intervalos CSAF y nits 11–15 requieren un contrato primario y fixtures verificados. La
+  referencia CSAF de branches no indexada nunca debe caer al ID bruto perdiendo la restricción del helper; los
+  subcomponents de statement ya se leen, faltan los anidados dentro del producto. El fallo conservador de
+  npm/PyPI se cerró el 2026-11-08: Grype conserva su PURL opcional y se exige identidad completa; Go/Composer
+  conservan además su nombre cualificado. Siguen fuera las equivalencias entre CPE/PURL/nombre y las reglas de
+  subconjunto de calificadores de distribución: no borrar `arch`/`distro` para adjuntar una afirmación más general.
+  El lector conservador aún rehúsa `+` sin codificar y normalizaciones no implementadas, con omisiones por fila
+  cuando corresponde. No ampliar coincidencias sin preservar desacuerdos, versiones y ecosistemas; véase
+  `VEX-PACKAGE-IDENTITY-20261108.md`.
 
 ## Orca — continuidad desatendida (2026-10-02)
 
