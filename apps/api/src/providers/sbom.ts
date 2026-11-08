@@ -38,6 +38,12 @@ export interface SbomVuln {
   severity: Severity;
   packageName: string;
   packageVersion: string;
+  /**
+   * Grype's artifact.purl, not inferred from its name. OPTIONAL FOREVER: absent means not recorded (including
+   * an empty/missing upstream purl); null records an unusable non-string value and must not enable legacy matching.
+   * Keep malformed strings verbatim so validation fails closed instead of falling back to name-only matching.
+   */
+  packagePurl?: string | null;
   fixedIn: string | null;
   /**
    * The CVSS vector grype carried for this match, when it carried one — the METRICS, not the score, because
@@ -228,7 +234,23 @@ interface GrypeMatch {
     cvss?: { version?: string; vector?: string }[];
     knownExploited?: { cve?: string; dateAdded?: string; knownRansomwareCampaignUse?: string }[];
   };
-  artifact?: { name?: string; version?: string };
+  artifact?: { name?: string; version?: string; purl?: unknown };
+}
+
+/** Pure: map one Grype JSON match without upgrading its advisory evidence or losing its measured identity. */
+export function grypeMatchVulnerability(m: GrypeMatch): SbomVuln {
+  const fixVersions = m.vulnerability?.fix?.versions;
+  const vector = preferredCvssVector(m.vulnerability?.cvss);
+  const purl = m.artifact?.purl;
+  return {
+    id: String(m.vulnerability?.id ?? '?'),
+    severity: normalizeSeverity(m.vulnerability?.severity),
+    packageName: String(m.artifact?.name ?? '?'),
+    packageVersion: String(m.artifact?.version ?? ''),
+    ...(purl === undefined || purl === '' ? {} : { packagePurl: typeof purl === 'string' ? purl : null }),
+    fixedIn: Array.isArray(fixVersions) && fixVersions.length > 0 ? fixVersions.join(', ') : null,
+    ...(vector ? { cvssVector: vector } : {}),
+  };
 }
 
 /**
@@ -374,18 +396,7 @@ export async function runSbom(_imageId: string, rootfsPath: string, handle: JobH
             : `grype KEV: not annotated — ${grypeKev.reason}.`,
         );
         vulnerabilityTotal = matches.length;
-        const mapped: SbomVuln[] = matches.map((m) => {
-          const fixVersions = m.vulnerability?.fix?.versions;
-          const vector = preferredCvssVector(m.vulnerability?.cvss);
-          return {
-            id: String(m.vulnerability?.id ?? '?'),
-            severity: normalizeSeverity(m.vulnerability?.severity),
-            packageName: String(m.artifact?.name ?? '?'),
-            packageVersion: String(m.artifact?.version ?? ''),
-            fixedIn: Array.isArray(fixVersions) && fixVersions.length > 0 ? fixVersions.join(', ') : null,
-            ...(vector ? { cvssVector: vector } : {}),
-          };
-        });
+        const mapped = matches.map(grypeMatchVulnerability);
         // Rank and count over EVERY match, then cut. The cap used to be applied to grype's raw array first, so it
         // truncated by grype's own emission order — arrival order — and `counts` was a tally of the survivors
         // presented as a total. Severity now decides who survives, and the counts are the real ones either way.

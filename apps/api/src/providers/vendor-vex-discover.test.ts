@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { MAX_UNRECOGNISED_STATUS_EXAMPLES, type VendorVexDocument, parseVendorVex } from '@firmlab/core';
 import { afterEach, describe, expect, it } from 'vitest';
+import { measuredPackageIdentity, parsePackageIdentity } from './package-identity.js';
 import {
   VEX_SELECTION_RULE,
   type VendorVexDiscoveryCoverage,
@@ -304,6 +305,100 @@ describe('product matchers — exact, never a substring', () => {
     ['BusyBox', false],
   ])('package matcher: %s → %s', (id, expected) => {
     expect(busybox(id)).toBe(expected);
+  });
+});
+
+describe('measured package identities', () => {
+  it.each([
+    ['pkg:npm/busybox@1.20', 'pkg:npm/busybox@1.20', true],
+    ['pkg:npm/busybox@1.20', 'pkg:pypi/busybox@1.20', false],
+    ['pkg:npm/busybox@1.20', 'pkg:deb/debian/busybox@1.20', false],
+    ['pkg:npm/busybox@1.20', 'pkg:generic/busybox@1.20', false],
+    ['pkg:npm/busybox@1.20', 'busybox', false],
+    ['pkg:npm/busybox@1.20', 'cpe:2.3:a:busybox:busybox:1.20:*', false],
+    ['pkg:npm/busybox@1.20', 'pkg:npm/busybox@1.21', false],
+    ['pkg:npm/busybox@1.20', 'pkg:npm/busybox', false],
+    ['pkg:npm/busybox@1.20', 'pkg:npm/busybox@%2A', false],
+    ['pkg:npm/busybox@1.20', 'pkg:npm/BusyBox@1.20', false],
+    ['pkg:npm/busybox@1.20', 'pkg:npm/%40other/busybox@1.20', false],
+    ['pkg:npm/busybox@1.20', 'pkg:npm/busybox@1.20?arch=arm64', false],
+    ['pkg:npm/busybox@1.20', 'pkg:npm/busybox@1.20#lib', false],
+    ['pkg:npm/busybox@1.20?arch=arm64', 'pkg:npm/busybox@1.20?arch=amd64', false],
+    ['pkg:npm/busybox@1.20?arch=arm64', 'pkg:npm/busybox@1.20', false],
+    ['pkg:npm/busybox@1.20?a=one&b=two', 'pkg:npm/busybox@1.20?b=two&a=one', true],
+    ['pkg:npm/busybox@1.20#lib', 'pkg:npm/busybox@1.20#lib', true],
+    ['pkg:deb/debian/busybox@1.20', 'pkg:deb/alpine/busybox@1.20', false],
+  ])('%s against %s → %s', (measured, assertion, matches) => {
+    expect(packageProductMatcher('busybox', '1.20', measured)(assertion)).toBe(matches);
+  });
+
+  it('keeps scoped npm names and namespaces case-sensitive, including the leading @', () => {
+    const matcher = packageProductMatcher('@Acme/widget', '1.0.0', 'pkg:npm/%40Acme/widget@1.0.0');
+    expect(matcher('pkg:npm/%40Acme/widget@1.0.0')).toBe(true);
+    for (const other of [
+      'pkg:npm/%40acme/widget@1.0.0',
+      'pkg:npm/%40Else/widget@1.0.0',
+      'pkg:npm/widget@1.0.0',
+      'pkg:npm/Acme/widget@1.0.0',
+    ])
+      expect(matcher(other)).toBe(false);
+    expect(measuredPackageIdentity('widget', '1.0.0', 'pkg:npm/%40Acme/widget@1.0.0')).toBeNull();
+  });
+
+  it('compares PyPI distribution names using PyPA normalization without version-range inference', () => {
+    const matcher = packageProductMatcher('Friendly_._Bard', '1.0', 'pkg:pypi/friendly-bard@1.0');
+    expect(matcher('pkg:pypi/FRIENDLY__bard@1.0')).toBe(true);
+    expect(matcher('pkg:pypi/friendly-bard@1.0.0')).toBe(false);
+    expect(matcher('pkg:pypi/vendor/friendly-bard@1.0')).toBe(false);
+    expect(matcher('pkg:npm/friendly-bard@1.0')).toBe(false);
+    expect(matcher('friendly-bard')).toBe(false);
+  });
+
+  it.each([
+    '',
+    null,
+    42,
+    {},
+    'pkg:npm/busybox',
+    'pkg:npm/busybox@',
+    'pkg:npm/busybox@%2A',
+    'pkg:npm/other@1.20',
+    'pkg:npm/busybox@1.21',
+    'pkg:npm/busy%zzbox@1.20',
+  ])('never falls back to a bare name for invalid/conflicting measured identity %j', (identity) => {
+    const matcher = packageProductMatcher('busybox', '1.20', identity as string | null);
+    for (const assertion of ['busybox', 'pkg:generic/busybox@1.20', 'pkg:npm/busybox@1.20']) {
+      expect(() => matcher(assertion)).not.toThrow();
+      expect(matcher(assertion)).toBe(false);
+    }
+  });
+
+  it.each([
+    'pkg:npm/busybox@1.20%',
+    'pkg:npm/busybox@%C0%AF',
+    'pkg:npm/busy%2Fbox@1.20',
+    'pkg:npm//busybox@1.20',
+    'pkg:npm/busybox@1.20@tail',
+    'pkg:npm/@scope/busybox@1.20',
+    'pkg:npm/%40scope%2Fother/busybox@1.20',
+    'pkg:npm/busybox@1.20?x=%zz',
+    'pkg:npm/busybox@1.20?x=one&x=two',
+    'pkg:npm/busybox@1.20?x=',
+    'pkg:npm/busybox@1.20#..',
+    'pkg:npm/busybox@1.20#%2E%2E',
+    'pkg:npm/busybox@1.20#lib%2Ffile',
+    'pkg:npm/busybox@1.20#%zz',
+    'pkg:npm/busybox@1.20?x=a=b',
+    'pkg:npm/busybox@1.20?x=a?b',
+    'pkg:npm/busybox@1.20%00',
+    'pkg:npm/busybox@1.20 trailing',
+    'pkg:npm/busybox@1.20\n',
+    'pkg:123/busybox@1.20',
+    'pkg:pypi/-invalid@1.20',
+    'pkg:pypi/vendor/busybox@1.20',
+  ])('refuses malformed/unsupported boundaries without throwing: %j', (raw) => {
+    expect(parsePackageIdentity(raw)).toBeNull();
+    expect(packageProductMatcher('busybox', '1.20', 'pkg:npm/busybox@1.20')(raw)).toBe(false);
   });
 });
 

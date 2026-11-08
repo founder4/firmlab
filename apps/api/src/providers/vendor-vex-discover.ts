@@ -25,14 +25,14 @@
  *    still resolves. A thrown URIError used to take down kernel posture and the sbom job with it.
  *
  * Product identity is matched on the fields that make it an identity, not on a bare name. A purl names an
- * ecosystem (type) and a namespace; a CPE names a part and a vendor. The rows these verdicts ride on do not carry
- * their ecosystem (a grype row is a name and a version), so a package row accepts only the identities that can
+ * ecosystem (type) and a namespace; a CPE names a part and a vendor. A grype row with a recorded purl requires
+ * exact purl agreement, checked against its artifact name/version, with no name-only or CPE fallback. Legacy
+ * rows without a recorded purl accept only the identities that can
  * mean the binary package a firmware rootfs ships: a `generic` purl with no namespace, or an OS-distribution
  * package purl (`deb`, `rpm`, `apk`, `alpm`, `opkg`) of any distro namespace; and an application (`a`) CPE whose
  * vendor:product is the measured NVD identity in `COMPONENT_CPE`, or whose vendor and product both equal the
  * package name. `pkg:npm/busybox` is an npm package that shares a name; `cpe:2.3:h:acme:busybox` is hardware. A
- * language-ecosystem row (pypi, npm, …) is therefore never matched by a typed purl until the row carries its
- * ecosystem — a conservative miss, which attaches nothing, rather than a cross-ecosystem false attachment.
+ * language-ecosystem row (pypi, npm, …) without recorded identity therefore still has a conservative miss.
  *
  * Discovery is bounded and deterministic: the tree walk visits at most `maxEntries` entries and never follows a
  * symbolic link (a symlinked candidate is refused by name, because a link inside a vendor rootfs can point at the
@@ -54,6 +54,7 @@ import {
   parseVendorVex,
   resolveVendorVex,
 } from '@firmlab/core';
+import { measuredPackageIdentity, parsePackageIdentity, samePackageIdentity } from './package-identity.js';
 
 // === Candidate selection (pure) =========================================================================
 
@@ -492,6 +493,10 @@ export function linuxKernelProductMatcher(versions: readonly (string | null | un
 const DISTRO_PURL_TYPES: ReadonlySet<string> = new Set(['deb', 'rpm', 'apk', 'alpm', 'opkg']);
 
 export const PACKAGE_VEX_PRODUCTS =
+  'When Grype recorded a package purl, only a versioned purl with the same ecosystem, namespace, name, version, ' +
+  'qualifiers and subpath matches, after checking agreement with the artifact name/version; npm scopes are exact ' +
+  'and PyPI names use PyPA normalization. An invalid or conflicting measured identity matches nothing. ' +
+  'Without recorded identity, the legacy rule applies: ' +
   'the exact package name as a plain identifier; a purl whose name equals the package name exactly and whose type ' +
   'is "generic" with no namespace, or an OS-distribution package type (deb, rpm, apk, alpm, opkg) with any distro ' +
   'namespace — a language-ecosystem purl (npm, pypi, …) is a different package that shares a name; or an ' +
@@ -500,7 +505,18 @@ export const PACKAGE_VEX_PRODUCTS =
   "its version equals the row's package version.";
 
 /** Pure: the matcher for a package row (grype). Exact identity — ecosystem, vendor and name — never a substring. */
-export function packageProductMatcher(name: string, version: string): ProductMatcherPredicate {
+export function packageProductMatcher(
+  name: string,
+  version: string,
+  packagePurl?: string | null,
+): ProductMatcherPredicate {
+  if (packagePurl !== undefined) {
+    const measured = measuredPackageIdentity(name, version, packagePurl);
+    return (raw) => {
+      const assertion = parsePackageIdentity(raw);
+      return measured !== null && assertion !== null && samePackageIdentity(measured, assertion);
+    };
+  }
   const versionOk = (v: string | null) => wildcard(v) || v === version;
   const lower = name.toLowerCase();
   const cpeIdentities = new Set([`${lower}:${lower}`, ...(COMPONENT_CPE[lower] ?? [])]);

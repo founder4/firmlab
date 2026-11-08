@@ -124,7 +124,7 @@ export function normalizeSbom(
     const vendor = vendorVexVerdictFor(
       vex,
       v.id,
-      packageProductMatcher(v.packageName, v.packageVersion),
+      packageProductMatcher(v.packageName, v.packageVersion, v.packagePurl),
       v.packageName,
     );
     const known = kev.get(v.id.toUpperCase()) ?? [];
@@ -157,6 +157,7 @@ export function normalizeSbom(
         id: v.id,
         packageName: v.packageName,
         packageVersion: v.packageVersion,
+        ...(v.packagePurl !== undefined ? { packagePurl: v.packagePurl } : {}),
         fixedIn: v.fixedIn,
         ...(v.cvssVector ? { cvssVector: v.cvssVector } : {}),
         ...(verdict ? { curatedVerdict: verdict.kind } : {}),
