@@ -340,7 +340,7 @@ const TPLINK_SALTS: ReadonlyArray<[string, number[]]> = [
   ['normal', [0xdc, 0xd7, 0x3a, 0xa5, 0xc3, 0x95, 0x98, 0xfb, 0xdd, 0xf9, 0xe7, 0xf4, 0x0e, 0xae, 0x47, 0x38]],
   ['boot', [0x8c, 0xef, 0x33, 0x5b, 0xd5, 0xc5, 0xce, 0xfa, 0xa7, 0x9c, 0x28, 0xda, 0xb2, 0xe9, 0x0f, 0x42]],
 ];
-function tplinkV1Verify(buf: Uint8Array, off: number): SignatureVerdict {
+function tplinkV1Verify(buf: Uint8Array, off: number, checkMd5 = true): SignatureVerdict {
   if (off + 0x200 > buf.length) return no('the 0x200-byte header runs past the end of this buffer');
   const len = u32be(buf, off + 0x7c);
   if (len < 0x200 || len > 256 * 1024 * 1024) return no(`declared firmware length ${len} is implausible`);
@@ -354,6 +354,12 @@ function tplinkV1Verify(buf: Uint8Array, off: number): SignatureVerdict {
   }
   if (off + len > buf.length)
     return at('structural', `layout fits its declared length ${len}, which runs past this buffer`);
+  // The salted MD5 only decides between `structural` and `verified`; it never rejects. A match the scanner will not
+  // list stops here, after every layout decision above, so N headers declaring most of the buffer do not each pay a
+  // full-length copy and up to two MD5 passes (O(N × length)) for a tier nobody will see.
+  if (!checkMd5) {
+    return at('structural', `layout fits ${len} bytes; the salted MD5 was not computed for an unlisted match`);
+  }
   const signed = Uint8Array.from(buf.subarray(off, off + len));
   const stored = buf.subarray(off + 0x4c, off + 0x5c);
   for (const [name, salt] of TPLINK_SALTS) {
@@ -634,7 +640,10 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     confidence: 'high',
     magic: ascii('HDR0'),
     decode: (buf, off) => ({ totalSize: u32le(buf, off + 4) }),
-    verify: trxCrcVerify,
+    // Wrappers, so an extra argument from any caller can never select the cheap form by accident.
+    verify: (buf, off) => trxCrcVerify(buf, off),
+    // The CRC never rejects: every rejection comes from `trxVerify`, which the full check runs first unchanged.
+    verifyUnlisted: (buf, off) => trxVerify(buf, off),
   },
   {
     id: 'dtb',
@@ -1123,7 +1132,8 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
       kernelOffset: u32be(buf, off + 0x80),
       rootfsOffset: u32be(buf, off + 0x88),
     }),
-    verify: tplinkV1Verify,
+    verify: (buf, off) => tplinkV1Verify(buf, off),
+    verifyUnlisted: (buf, off) => tplinkV1Verify(buf, off, false),
   },
   {
     id: 'tplink-safeloader',

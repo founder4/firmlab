@@ -1459,8 +1459,8 @@ describe('unlisted uImage matches skip the payload CRC, nothing else', () => {
       if (/not computed/.test(cheap.why)) expect(['consistent', 'verified']).toContain(full.tier);
       else expect(cheap).toEqual(full);
     }
-    // uImage is the only rule with the hook; a new one needs its own agreement test like this one.
-    expect(SIGNATURE_RULES.filter((r) => r.verifyUnlisted).map((r) => r.id)).toEqual(['uimage']);
+    // Each rule with the hook needs its own agreement test like this one (TRX and TP-Link v1 have theirs below).
+    expect(SIGNATURE_RULES.filter((r) => r.verifyUnlisted).map((r) => r.id)).toEqual(['uimage', 'trx', 'tplink-v1']);
   });
 
   it('never mutates the caller buffer', () => {
@@ -1469,6 +1469,350 @@ describe('unlisted uImage matches skip the payload CRC, nothing else', () => {
     scanSignaturesDetailed(buf, { maxHits: 0 });
     scanSignaturesDetailed(buf);
     expect(buf.equals(before)).toBe(true);
+  });
+});
+
+/**
+ * TRX (HDR0) and TP-Link v1 matches the scanner will not list must not pay for their checksum either.
+ *
+ * Same omitted-row gap as the uImage unit above: the TRX CRC and the TP-Link salted MD5 only ever choose between a
+ * shown tier and a better one, so after the listing cap N headers that each declare the rest of the buffer cost
+ * O(N × length) for nothing anyone sees. The oracle here is the scan WITHOUT the two hooks (removed for one call,
+ * test-only), so "unchanged" is checked against the old behaviour itself, not against a fixture's expectation.
+ * Work is counted, never timed: indexed reads for the TRX CRC (a JS loop over the buffer), and requested
+ * `subarray` spans for TP-Link, whose copy and MD5 run over a native copy the read proxy cannot see.
+ */
+describe('unlisted TRX and TP-Link v1 matches skip the checksum, nothing else', () => {
+  const crc = (b: Uint8Array): number => zlib.crc32(b) >>> 0;
+  const HOOKED = ['trx', 'tplink-v1'] as const;
+  const ruleOf = (id: string) => {
+    const rule = SIGNATURE_RULES.find((r) => r.id === id);
+    if (!rule?.verify || !rule.verifyUnlisted) throw new Error(`${id} lost its checks`);
+    return { verify: rule.verify, unlisted: rule.verifyUnlisted };
+  };
+  const SALTS = { normal: 'dcd73aa5c39598fbddf9e7f40eae4738', boot: '8cef335bd5c5cefaa79c28dab2e90f42' } as const;
+
+  /** The scan as it was before this unit: the two hooks removed for one call, then put back. */
+  function withoutHooks<T>(fn: () => T): T {
+    const saved = HOOKED.map((id) => {
+      const rule = SIGNATURE_RULES.find((r) => r.id === id) as { verifyUnlisted?: unknown };
+      const hook = rule.verifyUnlisted;
+      rule.verifyUnlisted = undefined;
+      return [rule, hook] as const;
+    });
+    try {
+      return fn();
+    } finally {
+      for (const [rule, hook] of saved) rule.verifyUnlisted = hook;
+    }
+  }
+
+  const pattern = (length: number) => {
+    const buf = Buffer.alloc(length);
+    for (let i = 0; i < length; i++) buf[i] = (i * 131 + 17) & 0x7f;
+    return buf;
+  };
+
+  /** `count` TRX headers `stride` apart, each declaring the rest of the buffer; written last-to-first. */
+  function stackedTrx(
+    length: number,
+    count: number,
+    stride: number,
+    o: { badFirst?: boolean; rejectEvery?: number } = {},
+  ) {
+    const buf = pattern(length);
+    for (let i = count - 1; i >= 0; i--) {
+      const off = i * stride;
+      buf.fill(0, off, off + 28);
+      buf.write('HDR0', off, 'latin1');
+      const reject = o.rejectEvery !== undefined && i > 0 && i % o.rejectEvery === 0;
+      buf.writeUInt32LE(reject ? 4 : length - off, off + 4);
+      buf.writeUInt32LE(28, off + 16);
+      buf.writeUInt32LE(i === 0 && o.badFirst ? 1 : ~crc(buf.subarray(off + 12, length)) >>> 0, off + 8);
+    }
+    return buf;
+  }
+
+  /** `count` TP-Link v1 headers, each signing the rest of the buffer under alternating salts; last-to-first. */
+  function stackedTplink(
+    length: number,
+    count: number,
+    stride: number,
+    o: { first?: 'normal' | 'boot' | 'none'; rejectEvery?: number } = {},
+  ) {
+    const buf = pattern(length);
+    for (let i = count - 1; i >= 0; i--) {
+      const off = i * stride;
+      const len = length - off;
+      buf.fill(0, off, off + 0x200);
+      Buffer.from([1, 0, 0, 0]).copy(buf, off);
+      buf.write('TP-LINK Technologies', off + 4, 'latin1');
+      const reject = o.rejectEvery !== undefined && i > 0 && i % o.rejectEvery === 0;
+      buf.writeUInt32BE(len, off + 0x7c);
+      buf.writeUInt32BE(0x200, off + 0x80);
+      buf.writeUInt32BE(reject ? len : 0x100, off + 0x84); // a rejected one's kernel runs past its declared length
+      const salt = i === 0 ? (o.first ?? 'normal') : i % 2 ? 'boot' : 'normal';
+      Buffer.from(salt === 'none' ? '00'.repeat(16) : SALTS[salt], 'hex').copy(buf, off + 0x4c);
+      crypto
+        .createHash('md5')
+        .update(buf.subarray(off, length))
+        .digest()
+        .copy(buf, off + 0x4c);
+    }
+    return buf;
+  }
+
+  /** Test-only instrumentation: indexed reads, and the byte span of every `subarray` the scan requests. */
+  function counted(target: Uint8Array) {
+    let reads = 0;
+    let spans = 0;
+    const view = new Proxy(target, {
+      get(t, prop) {
+        if (typeof prop === 'string') {
+          const c = prop.charCodeAt(0);
+          if (c >= 48 && c <= 57) {
+            reads++;
+            return t[Number(prop)];
+          }
+        }
+        if (prop === 'subarray') {
+          return (a?: number, b?: number) => {
+            const sub = t.subarray(a, b);
+            spans += sub.length;
+            return sub;
+          };
+        }
+        const v = Reflect.get(t, prop, t);
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    });
+    return { view, work: () => ({ reads, spans }) };
+  }
+  const work = (buf: Uint8Array, maxHits: number) => {
+    const { view, work: w } = counted(buf);
+    const scan = scanSignaturesDetailed(view, { maxHits });
+    return { scan, ...w() };
+  };
+
+  it('reads each byte a bounded number of times for 32 stacked TRX headers under maxHits 0', () => {
+    const length = 128 * 1024;
+    const buf = stackedTrx(length, 32, 4096);
+    const capped = work(buf, 0);
+    const before = withoutHooks(() => work(buf, 0));
+    // RED baseline: before the hook the capped scan paid every CRC, about 32 × length / 2 reads.
+    expect(before.reads).toBeGreaterThan((32 * length) / 4);
+    expect(capped.reads).toBeLessThan(6 * length);
+    expect(capped.scan).toEqual(before.scan);
+    expect(capped.scan.hits.filter((h) => h.id === 'trx')).toEqual([
+      expect.objectContaining({ offset: 0, tier: 'verified' }),
+    ]);
+  });
+
+  it('requests a bounded copy span for 32 stacked TP-Link v1 headers under maxHits 0', () => {
+    const length = 128 * 1024;
+    const buf = stackedTplink(length, 32, 4096);
+    const capped = work(buf, 0);
+    const before = withoutHooks(() => work(buf, 0));
+    // RED baseline: before the hook every unlisted header copied its whole declared length for the salted MD5.
+    expect(before.spans).toBeGreaterThan((32 * length) / 4);
+    // Capped: the listed first header's full copy, plus 16-byte stored-digest views and small header views.
+    expect(capped.spans).toBeLessThan(3 * length);
+    expect(capped.scan).toEqual(before.scan);
+    expect(capped.scan.hits.filter((h) => h.id === 'tplink-v1')).toEqual([
+      expect.objectContaining({ offset: 0, tier: 'verified' }),
+    ]);
+  });
+
+  const fixtures: Array<[string, () => Uint8Array]> = [
+    ['valid TRX stack', () => stackedTrx(32 * 1024, 24, 1024)],
+    [
+      'TRX stack, bad first CRC, some rejected',
+      () => stackedTrx(32 * 1024, 24, 1024, { badFirst: true, rejectEvery: 3 }),
+    ],
+    ['valid TP-Link stack', () => stackedTplink(32 * 1024, 24, 1024)],
+    [
+      'TP-Link stack, unsalted first, some rejected',
+      () => stackedTplink(32 * 1024, 24, 1024, { first: 'none', rejectEvery: 3 }),
+    ],
+    ['TP-Link boot-salted first', () => stackedTplink(16 * 1024, 8, 1024, { first: 'boot' })],
+    [
+      'mixed TRX, TP-Link and uImage-free filler, truncated tails',
+      () => {
+        const head = Buffer.concat([
+          stackedTrx(16 * 1024, 12, 1024, { rejectEvery: 4 }),
+          stackedTplink(16 * 1024, 12, 1024, { rejectEvery: 5 }),
+        ]);
+        const tail = Buffer.alloc(0x300, 0x11);
+        tail.write('HDR0', 0x10, 'latin1'); // huge declared length: rejected by the base rule both ways
+        tail.writeUInt32LE(0x7fffffff, 0x14);
+        Buffer.from([1, 0, 0, 0, ...Buffer.from('TP-LINK Technologies', 'latin1')]).copy(tail, 0x200); // header past end
+        return Buffer.concat([head, tail]);
+      },
+    ],
+  ];
+  const CAPS: Array<number | undefined> = [undefined, 0, 1, 0.5, -1, Number.POSITIVE_INFINITY, Number.NaN, 5000];
+
+  it.each(fixtures)('equals the pre-hook scan as whole JSON at every cap and confidence filter: %s', (_name, make) => {
+    const buf = make();
+    const before = Buffer.from(buf);
+    for (const maxHits of CAPS) {
+      for (const highConfidenceOnly of [undefined, false, true]) {
+        const options = {
+          ...(maxHits === undefined ? {} : { maxHits }),
+          ...(highConfidenceOnly === undefined ? {} : { highConfidenceOnly }),
+        };
+        const now = scanSignaturesDetailed(buf, options);
+        const old = withoutHooks(() => scanSignaturesDetailed(buf, options));
+        expect(now).toEqual(old);
+        expect(JSON.stringify(now)).toBe(JSON.stringify(old));
+        expect(inferIdentity(buf, now.hits)).toEqual(inferIdentity(buf, old.hits));
+        const full = scanSignaturesDetailed(buf, { ...options, maxHits: Number.POSITIVE_INFINITY });
+        expect(now.matched).toBe(full.matched);
+        expect(now.rejected).toBe(full.rejected);
+        expect(now.rejectedByRule).toEqual(full.rejectedByRule);
+        expect(now.distinctIds).toBe(full.distinctIds);
+        expect(new Set(now.hits.map((h) => h.id))).toEqual(new Set(full.hits.map((h) => h.id)));
+        expect(now.hits.every((h) => !/not computed for an unlisted match/.test(h.rationale ?? ''))).toBe(true);
+      }
+    }
+    expect(Buffer.from(buf).equals(before)).toBe(true);
+  });
+
+  it('shows the checksum positive and mismatch on the listed row exactly as before', () => {
+    const trxBad = scanSignaturesDetailed(stackedTrx(16 * 1024, 16, 1024, { badFirst: true }), { maxHits: 0 });
+    expect(trxBad.hits.find((h) => h.id === 'trx')).toMatchObject({ offset: 0, tier: 'structural' });
+    expect(trxBad.hits.find((h) => h.id === 'trx')?.rationale).toMatch(/does not match — suspicious, not rejected/);
+    const tpNone = scanSignaturesDetailed(stackedTplink(16 * 1024, 16, 1024, { first: 'none' }), { maxHits: 0 });
+    expect(tpNone.hits.find((h) => h.id === 'tplink-v1')).toMatchObject({ offset: 0, tier: 'structural' });
+    expect(tpNone.hits.find((h) => h.id === 'tplink-v1')?.rationale).toMatch(/matches neither salt/);
+    const tpBoot = scanSignaturesDetailed(stackedTplink(16 * 1024, 16, 1024, { first: 'boot' }), { maxHits: 0 });
+    expect(tpBoot.hits.find((h) => h.id === 'tplink-v1')?.rationale).toMatch(/recomputes \(boot salt\)/);
+    // No unlisted-only rationale ever reaches a row, at any cap.
+    for (const scan of [trxBad, tpNone, tpBoot]) {
+      expect(scan.hits.some((h) => /not computed for an unlisted match/.test(h.rationale ?? ''))).toBe(false);
+    }
+  });
+
+  it('fully verifies the first hit of each rule when it appears only after the list is full', () => {
+    // 20 unlisted TRX headers fill the list's only slot, then the first TP-Link header: listed, MD5 computed.
+    const buf = Buffer.concat([stackedTrx(24 * 1024, 20, 1024), stackedTplink(8 * 1024, 4, 1024)]);
+    const { scan, spans } = work(buf, 1);
+    expect(scan.hits.find((h) => h.id === 'tplink-v1')).toMatchObject({ offset: 24 * 1024, tier: 'verified' });
+    expect(spans).toBeGreaterThanOrEqual(8 * 1024); // its full declared length was copied for the MD5
+    expect(scan).toEqual(withoutHooks(() => scanSignaturesDetailed(buf, { maxHits: 1 })));
+    // The reverse: TP-Link fills the list, and the first TRX still pays for its whole CRC.
+    const rev = Buffer.concat([stackedTplink(24 * 1024, 20, 1024), stackedTrx(32 * 1024, 4, 1024)]);
+    const r = work(rev, 1);
+    expect(r.scan.hits.find((h) => h.id === 'trx')).toMatchObject({ offset: 24 * 1024, tier: 'verified' });
+    expect(r.reads).toBeGreaterThan(rev.length + 32 * 1024 - 64); // the scan pass plus the full CRC
+    expect(r.scan).toEqual(withoutHooks(() => scanSignaturesDetailed(rev, { maxHits: 1 })));
+  });
+
+  it('keeps the direct registry checks whole, ignoring extra arguments, and agrees on every reject-or-survive', () => {
+    const trx = ruleOf('trx');
+    const tp = ruleOf('tplink-v1');
+    const goodTrx = stackedTrx(4096, 1, 0);
+    const goodTp = stackedTplink(4096, 1, 0);
+    expect(trx.verify(goodTrx, 0).tier).toBe('verified');
+    expect(tp.verify(goodTp, 0)).toEqual({
+      tier: 'verified',
+      why: 'layout fits and the salted MD5 over 4096 bytes recomputes (normal salt)',
+    });
+    // An accidental third argument must never select the cheap form.
+    const loose = (f: unknown) => f as (...args: unknown[]) => { tier: string };
+    expect(loose(trx.verify)(goodTrx, 0, false).tier).toBe('verified');
+    expect(loose(tp.verify)(goodTp, 0, false).tier).toBe('verified');
+    expect(loose(tp.unlisted)(goodTp, 0, true).tier).toBe('structural');
+    expect(tp.unlisted(goodTp, 0).why).toMatch(/not computed for an unlisted match/);
+
+    const trxVariant = (edit: (b: Buffer) => void, src = goodTrx) => {
+      const b = Buffer.from(src);
+      edit(b);
+      return b;
+    };
+    const trxCases = [
+      goodTrx,
+      stackedTrx(4096, 1, 0, { badFirst: true }),
+      goodTrx.subarray(0, 4000), // payload past the buffer
+      goodTrx.subarray(0, 20), // header itself truncated
+      trxVariant((b) => b.writeUInt32LE(0, 4)), // length 0
+      trxVariant((b) => b.writeUInt32LE(27, 4)),
+      trxVariant((b) => b.writeUInt32LE(0x7fffffff, 4)), // huge
+      trxVariant((b) => b.writeUInt32LE(256 * 1024 * 1024, 4)), // maximum plausible, unavailable bytes
+      trxVariant((b) => b.writeUInt32LE(256 * 1024 * 1024 + 1, 4)),
+      trxVariant((b) => b.writeUInt32LE(5000, 16)), // first partition outside the image
+      trxVariant((b) => b.writeUInt32LE(12, 16)),
+    ];
+    const tpVariant = (edit: (b: Buffer) => void) => {
+      const b = Buffer.from(goodTp);
+      edit(b);
+      return b;
+    };
+    const tpCases = [
+      goodTp,
+      stackedTplink(4096, 1, 0, { first: 'boot' }),
+      stackedTplink(4096, 1, 0, { first: 'none' }),
+      goodTp.subarray(0, 4000), // declared length past the buffer
+      goodTp.subarray(0, 0x1ff), // header itself truncated
+      tpVariant((b) => b.writeUInt32BE(0, 0x7c)), // length 0
+      tpVariant((b) => b.writeUInt32BE(0x1ff, 0x7c)),
+      tpVariant((b) => b.writeUInt32BE(0x7fffffff, 0x7c)), // huge
+      tpVariant((b) => b.writeUInt32BE(256 * 1024 * 1024, 0x7c)), // maximum plausible, unavailable bytes
+      tpVariant((b) => b.writeUInt32BE(256 * 1024 * 1024 + 1, 0x7c)),
+      tpVariant((b) => b.writeUInt32BE(4096, 0x84)), // kernel past the declared length
+      tpVariant((b) => {
+        b.writeUInt32BE(0xfff, 0x88);
+        b.writeUInt32BE(2, 0x8c);
+      }), // rootfs past the declared length
+    ];
+    for (const [rule, cases] of [
+      [trx, trxCases],
+      [tp, tpCases],
+    ] as const) {
+      for (const buf of cases) {
+        const full = rule.verify(buf, 0);
+        const cheap = rule.unlisted(buf, 0);
+        expect(cheap.tier === 'rejected').toBe(full.tier === 'rejected');
+        // Every pre-checksum verdict is identical; only the checksum rung is withheld.
+        if (/not computed/.test(cheap.why) || (rule === trx && cheap.tier === 'consistent')) {
+          expect(['structural', 'verified']).toContain(full.tier);
+        } else expect(cheap).toEqual(full);
+      }
+    }
+  });
+
+  it('still runs the full fallback verifier on every omitted match of a rule without a hook', () => {
+    const rule = SIGNATURE_RULES.find((r) => r.id === 'trx-v2');
+    if (!rule?.verify) throw new Error('trx-v2 lost its verifier');
+    expect(rule.verifyUnlisted).toBeUndefined();
+    const saved = rule.verify;
+    let calls = 0;
+    rule.verify = (buf, off) => {
+      calls++;
+      return saved(buf, off);
+    };
+    try {
+      const buf = Buffer.alloc(2048);
+      for (let i = 0; i < 16; i++) {
+        buf.write('HDR1', i * 64, 'latin1');
+        buf.writeUInt32LE(i % 2 ? 0 : 28, i * 64 + 4);
+      }
+      const scan = scanSignaturesDetailed(buf, { maxHits: 0 });
+      expect(calls).toBe(16);
+      expect(scan.rejectedByRule['trx-v2']).toBe(8);
+      expect(scan.hits.filter((h) => h.id === 'trx-v2')).toHaveLength(1);
+    } finally {
+      rule.verify = saved;
+    }
+  });
+
+  it('never mutates the caller buffer', () => {
+    for (const buf of [stackedTrx(16 * 1024, 16, 1024), stackedTplink(16 * 1024, 16, 1024)]) {
+      const before = Buffer.from(buf);
+      scanSignaturesDetailed(buf, { maxHits: 0 });
+      scanSignaturesDetailed(buf);
+      expect(buf.equals(before)).toBe(true);
+    }
   });
 });
 
