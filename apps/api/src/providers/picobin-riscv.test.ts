@@ -1,7 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   parsePicobinRadare2Output,
+  picobinDecodeStops,
   picobinFlashMapping,
   picobinRuntimeMapping,
   resolveRiscvPcRelativeCalls,
@@ -22,19 +26,25 @@ const mapping = {
 function r2Output(): string {
   return `${JSON.stringify([
     { addr: ENTRY, size: 8, ninstr: 2, jump: ENTRY + 12, fail: ENTRY + 8 },
-    { addr: ENTRY + 8, size: 4, ninstr: 1 },
+    { addr: ENTRY + 8, size: 4, ninstr: 1, jump: ENTRY + 12 },
+    { addr: ENTRY + 12, size: 4, ninstr: 1 },
   ])}\n__FIRMLAB_PICOBIN_RISCV_SPLIT__\n${JSON.stringify({
     name: 'entry0',
     ops: [
       { addr: ENTRY, size: 4, opcode: 'auipc gp, 0x1003c', type: 'lea' },
       { addr: ENTRY + 4, size: 4, opcode: 'addi gp, gp, 1755', type: 'add' },
       { addr: ENTRY + 8, size: 4, opcode: 'j 0x10000042', type: 'jmp', jump: ENTRY + 12 },
+      { addr: ENTRY + 12, size: 4, opcode: 'ret', type: 'ret' },
     ],
   })}`;
 }
 
+function r2Graph(blocks: object[], ops: object[]): string {
+  return `${JSON.stringify(blocks)}\n__FIRMLAB_PICOBIN_RISCV_SPLIT__\n${JSON.stringify({ ops })}`;
+}
+
 function r2SingleFunction(address: number, ops: object[]): string {
-  return `${JSON.stringify([{ addr: address, size: 8, ninstr: ops.length }])}\n__FIRMLAB_PICOBIN_RISCV_SPLIT__\n${JSON.stringify(
+  return `${JSON.stringify([{ addr: address, size: ops.reduce<number>((total, op) => total + (op as { size: number }).size, 0), ninstr: ops.length }])}\n__FIRMLAB_PICOBIN_RISCV_SPLIT__\n${JSON.stringify(
     {
       name: `fcn.${address.toString(16)}`,
       ops,
@@ -164,16 +174,18 @@ describe('picobinRuntimeMapping', () => {
 describe('parsePicobinRadare2Output', () => {
   it('normalizes bounded entry-function blocks and instructions', () => {
     expect(parsePicobinRadare2Output(r2Output(), mapping, FILE_SIZE)).toEqual({
-      basicBlocksTotal: 2,
-      instructionsTotal: 3,
+      basicBlocksTotal: 3,
+      instructionsTotal: 4,
       basicBlocks: [
         { address: ENTRY, size: 8, instructionCount: 2, jump: ENTRY + 12, fail: ENTRY + 8 },
-        { address: ENTRY + 8, size: 4, instructionCount: 1 },
+        { address: ENTRY + 8, size: 4, instructionCount: 1, jump: ENTRY + 12 },
+        { address: ENTRY + 12, size: 4, instructionCount: 1 },
       ],
       instructions: [
         { address: ENTRY, size: 4, opcode: 'auipc gp, 0x1003c', type: 'lea' },
         { address: ENTRY + 4, size: 4, opcode: 'addi gp, gp, 1755', type: 'add' },
         { address: ENTRY + 8, size: 4, opcode: 'j 0x10000042', type: 'jmp', jump: ENTRY + 12 },
+        { address: ENTRY + 12, size: 4, opcode: 'ret', type: 'ret' },
       ],
     });
   });
@@ -239,7 +251,7 @@ describe('runPicobinRiscvDisassembly', () => {
     expect(result).toMatchObject({
       available: true,
       scope: 'reachable-call-graph',
-      instructionsTotal: 3,
+      instructionsTotal: 4,
       reachableFunctions: [{ address: ENTRY, depth: 0 }],
       callEdges: [],
       callGraphTruncated: false,
@@ -255,13 +267,14 @@ describe('runPicobinRiscvDisassembly', () => {
       scripts.push(script);
       if (script.includes(`s 0x${target.toString(16)};`)) {
         return r2SingleFunction(target, [
-          { addr: target, size: 4, opcode: 'ret', type: 'ret' },
-          { addr: target + 4, size: 4, opcode: 'nop', type: 'nop' },
+          { addr: target, size: 4, opcode: 'nop', type: 'nop' },
+          { addr: target + 4, size: 4, opcode: 'ret', type: 'ret' },
         ]);
       }
       return r2SingleFunction(ENTRY, [
         { addr: ENTRY, size: 4, opcode: `jal 0x${target.toString(16)}`, type: 'call', jump: target },
         { addr: ENTRY + 4, size: 4, opcode: 'jalr t0', type: 'ucall' },
+        { addr: ENTRY + 8, size: 4, opcode: 'ret', type: 'ret' },
       ]);
     });
 
@@ -270,7 +283,7 @@ describe('runPicobinRiscvDisassembly', () => {
     expect(result).toMatchObject({
       available: true,
       reachableFunctions: [
-        { address: ENTRY, depth: 0, instructionsTotal: 2 },
+        { address: ENTRY, depth: 0, instructionsTotal: 3 },
         { address: target, depth: 1, instructionsTotal: 2 },
       ],
       callEdges: [{ caller: ENTRY, callsite: ENTRY, target }],
@@ -296,6 +309,7 @@ describe('runPicobinRiscvDisassembly', () => {
         return r2SingleFunction(ENTRY, [
           { addr: ENTRY, size: 4, opcode: `jal 0x${bad.toString(16)}`, type: 'call', jump: bad },
           { addr: ENTRY + 4, size: 4, opcode: `jal 0x${good.toString(16)}`, type: 'call', jump: good },
+          { addr: ENTRY + 8, size: 4, opcode: 'ret', type: 'ret' },
         ]);
       },
       image,
@@ -337,15 +351,23 @@ describe('runPicobinRiscvDisassembly', () => {
         if (!script.includes(`s 0x${target.toString(16)};`) && inputPath === '/firmware/pico.bin') {
           return r2SingleFunction(ENTRY, [
             { addr: ENTRY, size: 4, opcode: `jal 0x${target.toString(16)}`, type: 'call', jump: target },
+            { addr: ENTRY + 4, size: 4, opcode: 'ret', type: 'ret' },
           ]);
         }
         if (inputPath === '/firmware/pico.bin') return '[]\n__FIRMLAB_PICOBIN_RISCV_SPLIT__\n{}';
         temporaryView = inputPath;
         const patched = readFileSync(inputPath);
         expect(Array.from(patched.subarray(target - mapping.baseAddress, target - mapping.baseAddress + 8))).toEqual([
-          0x13, 0x00, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00,
+          0x13, 0x80, 0x00, 0x00, 0x13, 0x80, 0x00, 0x00,
         ]);
-        return r2SingleFunction(target + 8, [{ addr: target + 8, size: 4, opcode: 'ret', type: 'ret' }]);
+        return r2Graph(
+          [{ addr: target, size: 12, ninstr: 3 }],
+          [
+            { addr: target, size: 4, opcode: 'mv zero, ra', type: 'mov', bytes: '13800000' },
+            { addr: target + 4, size: 4, opcode: 'mv zero, ra', type: 'mov', bytes: '13800000' },
+            { addr: target + 8, size: 4, opcode: 'ret', type: 'ret', bytes: '67800000' },
+          ],
+        );
       },
       image,
     );
@@ -362,6 +384,9 @@ describe('runPicobinRiscvDisassembly', () => {
       ],
     });
     expect(result?.reason).toContain('2 exact Zba/Zbs decoder-view substitution(s)');
+    expect(result?.findings[0]?.rationale).toContain(
+      'control-flow structure; graph-scoped substitutions retain original bytes and source mnemonics',
+    );
     expect(result?.findings[0]?.evidence).toMatchObject({
       decoderSubstitutionsTotal: 2,
       decoderSubstitutionsListed: 2,
@@ -394,6 +419,7 @@ describe('runPicobinRiscvDisassembly', () => {
               { addr: entry, size: 4, opcode: 'auipc a4, 0', type: 'lea' },
               { addr: entry + 4, size: 4, opcode: 'addi a4, a4, 0x40', type: 'add' },
               { addr: entry + 8, size: 4, opcode: `jal 0x${target.toString(16)}`, type: 'call', jump: target },
+              { addr: entry + 12, size: 4, opcode: 'ret', type: 'ret' },
             ]);
       },
       image,
@@ -451,5 +477,356 @@ describe('runPicobinRiscvDisassembly', () => {
         r2Output(),
       ),
     ).toBeNull();
+  });
+});
+
+describe('silent decoder truncation and recovery wiring', () => {
+  const entry = 0x1000_0000;
+  const picobin = { cpuMode: 'riscv' as const, isExecutable: true, entryPoint: entry, rollingWindowDelta: null };
+  const normal = { addr: entry, size: 4, opcode: 'addi sp, sp, -16', type: 'add', bytes: '130101ff' };
+  const replacement = { addr: entry + 4, size: 4, opcode: 'mv zero, ra', type: 'mov', bytes: '13800000' };
+  const ret = { addr: entry + 8, size: 4, opcode: 'ret', type: 'ret', bytes: '67800000' };
+
+  it('recognizes a successful nonterminal prefix as incomplete at the actual parser boundary', () => {
+    // afbj/pdfj shape measured with radare2 6.2.4 on addi; bset; jal; ret.
+    const parsed = parsePicobinRadare2Output(
+      r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [normal]),
+      { ...mapping, entryPoint: entry, entryFileOffset: 0 },
+      FILE_SIZE,
+    );
+    expect(parsed).not.toBeNull();
+    if (!parsed) return;
+    expect(picobinDecodeStops(parsed, mapping)).toEqual([entry + 4]);
+  });
+
+  it('detects a missing conditional continuation without treating out-of-map targets as local evidence', () => {
+    const parsed = parsePicobinRadare2Output(
+      r2Graph(
+        [
+          { addr: entry, size: 4, ninstr: 1, jump: entry + 8, fail: entry + 4 },
+          { addr: entry + 4, size: 4, ninstr: 1 },
+        ],
+        [
+          { addr: entry, size: 4, opcode: 'bnez a0, 0x10000008', type: 'cjmp', jump: entry + 8, fail: entry + 4 },
+          { addr: entry + 4, size: 4, opcode: 'ret', type: 'ret' },
+        ],
+      ),
+      { ...mapping, entryPoint: entry, entryFileOffset: 0 },
+      FILE_SIZE,
+    );
+    expect(parsed).not.toBeNull();
+    if (!parsed) return;
+    expect(picobinDecodeStops(parsed, mapping)).toEqual([entry + 8]);
+    expect(picobinDecodeStops(parsed, { mappedRuntimeStart: entry, mappedRuntimeEnd: entry + 8 })).toEqual([]);
+  });
+
+  it('recovers a non-null mid-block prefix at depth zero and reports only decoded replacements', () => {
+    const image = Buffer.from('130101ffb316a02867800000b347f520', 'hex');
+    const paths: string[] = [];
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      (args) => {
+        const input = args.at(-1) ?? '';
+        paths.push(input);
+        if (input === '/synthetic.bin') return r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [normal]);
+        expect(readFileSync(input).toString('hex')).toBe('130101ff138000006780000013800000');
+        expect(args[args.indexOf('-c') + 1]).toContain('s 0x10000000;af ');
+        return r2Graph([{ addr: entry, size: 12, ninstr: 3 }], [normal, replacement, ret]);
+      },
+      image,
+    );
+    expect(paths).toHaveLength(2);
+    expect(result).toMatchObject({
+      available: true,
+      basicBlocksTotal: 1,
+      instructionsTotal: 3,
+      callGraphTruncated: false,
+      decodeFailuresTotal: 0,
+      decoderSubstitutionsTotal: 1,
+      decoderSubstitutions: [{ address: entry + 4, originalBytesHex: 'b316a028', mnemonic: 'bset x13, x0, x10' }],
+    });
+    expect(result?.instructions[1]).toMatchObject({ opcode: 'bset x13, x0, x10', bytes: 'b316a028', type: 'bitmanip' });
+    expect(result?.decoderSubstitutions?.some((row) => row.address === entry + 12)).toBe(false);
+    expect(() => readFileSync(paths[1] ?? '')).toThrow();
+  });
+
+  it('retains a decoded prefix with explicit incomplete coverage when recovery cannot decode its tail', () => {
+    const image = Buffer.from('130101ffb316a02aef00800167800000', 'hex');
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      () => r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [normal]),
+      image,
+    );
+    expect(result).toMatchObject({
+      available: true,
+      instructionsTotal: 1,
+      callGraphTruncated: true,
+      decodeFailuresTotal: 1,
+      decodeFailures: [{ address: entry + 4, classification: 'incomplete-decode' }],
+      decoderSubstitutionsTotal: 0,
+    });
+    expect(result?.reason).toContain('coverage incomplete');
+  });
+
+  it('describes a stopped mapping boundary without sampling adjacent unmapped bytes', () => {
+    const image = Buffer.from('130101ffb316a02867800000', 'hex');
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      {
+        ...picobin,
+        loadMap: {
+          itemOffset: 0,
+          relative: false,
+          entries: [{ storageAddress: entry, runtimeAddress: entry, size: 4 }],
+        },
+      },
+      image.length,
+      () => r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [normal]),
+      image,
+    );
+    expect(result).toMatchObject({ callGraphTruncated: true, decoderSubstitutionsTotal: 0, decodeFailuresTotal: 1 });
+    expect(result?.decodeFailures?.[0]).toMatchObject({ address: entry + 4, classification: 'incomplete-decode' });
+    expect(result?.decodeFailures?.[0]).not.toHaveProperty('bytesHex');
+  });
+
+  it('does not turn a still-truncated recovery into complete coverage', () => {
+    const image = Buffer.from('b316a028b316a02a67800000', 'hex');
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      (args) =>
+        args.at(-1) === '/synthetic.bin'
+          ? '[]\n__FIRMLAB_PICOBIN_RISCV_SPLIT__\n{}'
+          : r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [{ ...replacement, addr: entry }]),
+      image,
+    );
+    expect(result).toMatchObject({ callGraphTruncated: true, decodeFailuresTotal: 1, decoderSubstitutionsTotal: 1 });
+    expect(result?.instructions[0]).toMatchObject({ opcode: 'bset x13, x0, x10', bytes: 'b316a028' });
+  });
+});
+
+// Opt-in real-tool acceptance: each process gets only its synthetic input directory, no network or live data.
+// Pin the image ID in FIRMLAB_TEST_RADARE2_IMAGE; ordinary unit tests do not require Docker/radare2.
+describe.skipIf(!process.env.FIRMLAB_TEST_RADARE2_IMAGE)('offline real radare2 decoder recovery', () => {
+  const entry = 0x1000_0000;
+  const picobin = { cpuMode: 'riscv' as const, isExecutable: true, entryPoint: entry, rollingWindowDelta: null };
+  const execute = (args: string[]): string => {
+    const input = args.at(-1);
+    if (!input) throw new Error('missing synthetic file');
+    return execFileSync(
+      'docker',
+      [
+        'run',
+        '--rm',
+        '--network',
+        'none',
+        '--read-only',
+        '--tmpfs',
+        '/tmp',
+        '--mount',
+        `type=bind,source=${path.dirname(input)},target=${path.dirname(input)},readonly`,
+        '--entrypoint',
+        'radare2',
+        process.env.FIRMLAB_TEST_RADARE2_IMAGE ?? '',
+        ...args,
+      ],
+      { encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+  };
+  const withImage = (hex: string, test: (image: Buffer, imagePath: string) => void): void => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'firmlab-r2-synthetic-'));
+    try {
+      const image = Buffer.alloc(128);
+      Buffer.from(hex, 'hex').copy(image);
+      const imagePath = path.join(directory, 'synthetic.bin');
+      writeFileSync(imagePath, image, { mode: 0o600 });
+      test(image, imagePath);
+      expect(readFileSync(imagePath)).toEqual(image);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  };
+
+  for (const [instruction, hex] of [
+    ['bset', 'b316a028'],
+    ['sh1add', 'b327f520'],
+    ['sh2add', 'b347f520'],
+    ['sh3add', '3365c520'],
+  ]) {
+    for (const position of ['entry', 'mid-block']) {
+      it(`recovers ${instruction} at ${position}, follows the tail call and preserves exact evidence`, () => {
+        const prefix = position === 'entry' ? '' : '130101ff';
+        const call = position === 'entry' ? 'ef00c001' : 'ef008001'; // JAL ra, entry+0x20
+        withImage(`${prefix}${hex}${call}67800000`, (image, imagePath) => {
+          image.set(Buffer.from('67800000', 'hex'), 0x20);
+          // This extra bitmanip match is unreachable after helper RET and must not become graph evidence.
+          image.set(Buffer.from('b316a028', 'hex'), 0x24);
+          writeFileSync(imagePath, image);
+          const raw = execute([
+            '-q',
+            '-2',
+            '-a',
+            'riscv',
+            '-b',
+            '32',
+            '-m',
+            '0x10000000',
+            '-c',
+            'e anal.bb.maxsize=4096;s 0x10000000;af test;afbj;?e __FIRMLAB_PICOBIN_RISCV_SPLIT__;pdfj',
+            imagePath,
+          ]);
+          const parsed = parsePicobinRadare2Output(
+            raw,
+            { ...mapping, entryPoint: entry, entryFileOffset: 0 },
+            image.length,
+          );
+          if (position === 'entry') expect(parsed).toBeNull();
+          else expect(parsed).toMatchObject({ basicBlocksTotal: 1, instructionsTotal: 1 });
+          const result = runPicobinRiscvDisassembly(imagePath, picobin, image.length, execute, image);
+          expect(result).toMatchObject({
+            available: true,
+            basicBlocksTotal: 1,
+            instructionsTotal: position === 'entry' ? 3 : 4,
+            reachableFunctions: [{ address: entry }, { address: entry + 0x20, instructionsTotal: 1 }],
+            callEdges: [{ caller: entry, callsite: entry + prefix.length / 2 + 4, target: entry + 0x20 }],
+            callGraphTruncated: false,
+            decodeFailuresTotal: 0,
+            decoderSubstitutionsTotal: 1,
+            decoderSubstitutions: [
+              {
+                address: entry + prefix.length / 2,
+                instruction,
+                originalBytesHex: hex,
+                mnemonic: expect.stringContaining(`${instruction} `),
+              },
+            ],
+          });
+          expect(result?.instructions.find((row) => row.address === entry + prefix.length / 2)?.bytes).toBe(hex);
+          expect(result?.basicBlocks).toEqual([
+            { address: entry, size: position === 'entry' ? 12 : 16, instructionCount: position === 'entry' ? 3 : 4 },
+          ]);
+          expect(result?.instructions).toHaveLength(position === 'entry' ? 3 : 4);
+          expect(new Set(result?.instructions.map((row) => row.address)).size).toBe(result?.instructions.length);
+        });
+      });
+    }
+  }
+
+  it('recovers an omitted direct branch target or fallthrough block', () => {
+    for (const hex of [
+      '6314050067800000b316a02867800000',
+      '63140500b316a02867800000',
+      '6f00800067800000b316a02867800000',
+    ]) {
+      withImage(hex, (image, imagePath) => {
+        const result = runPicobinRiscvDisassembly(imagePath, picobin, image.length, execute, image);
+        expect(result).toMatchObject({
+          available: true,
+          callGraphTruncated: false,
+          decodeFailuresTotal: 0,
+          decoderSubstitutionsTotal: 1,
+        });
+        expect(result?.instructions.map((row) => row.address)).toContain(
+          entry + (hex.includes('67800000b316a028') ? 8 : 4),
+        );
+        expect(result?.decoderSubstitutions?.[0]?.mnemonic).toBe('bset x13, x0, x10');
+      });
+    }
+  });
+
+  it('keeps a reachable helper with a backward edge to its substituted entry unique', () => {
+    withImage('ef00000267800000', (image, imagePath) => {
+      image.set(Buffer.from('b316a028e31e05fe67800000', 'hex'), 0x20);
+      image.set(Buffer.from('b347f520', 'hex'), 0x2c);
+      writeFileSync(imagePath, image);
+      // Reproduce the former shifted NOP view: r2 already returns the back-edge entry.
+      const legacyView = Buffer.from(image);
+      legacyView.set(Buffer.from('13000000', 'hex'), 0x20);
+      const legacyPath = path.join(path.dirname(imagePath), 'legacy-nop-view.bin');
+      writeFileSync(legacyPath, legacyView, { mode: 0o600 });
+      const legacyRaw = execute([
+        '-q',
+        '-2',
+        '-a',
+        'riscv',
+        '-b',
+        '32',
+        '-m',
+        '0x10000000',
+        '-c',
+        'e anal.bb.maxsize=4096;s 0x10000024;af test;afbj;?e __FIRMLAB_PICOBIN_RISCV_SPLIT__;pdfj',
+        legacyPath,
+      ]);
+      const legacy = parsePicobinRadare2Output(
+        legacyRaw,
+        { ...mapping, entryPoint: entry + 0x24, entryFileOffset: 0x24 },
+        image.length,
+      );
+      expect(legacy?.basicBlocks.map((block) => block.address)).toContain(entry + 0x20);
+      expect(legacy?.instructions.map((instruction) => instruction.address)).toContain(entry + 0x20);
+      const result = runPicobinRiscvDisassembly(imagePath, picobin, image.length, execute, image);
+      expect(result).toMatchObject({
+        reachableFunctions: [
+          { address: entry, instructionsTotal: 2 },
+          { address: entry + 0x20, basicBlocksTotal: 2, instructionsTotal: 3 },
+        ],
+        callGraphTruncated: false,
+        decoderSubstitutionsTotal: 1,
+        decoderSubstitutions: [{ address: entry + 0x20, originalBytesHex: 'b316a028', mnemonic: 'bset x13, x0, x10' }],
+      });
+      // Also inspect the helper as the selected entry so exact returned graph rows are observable.
+      const helper = runPicobinRiscvDisassembly(
+        imagePath,
+        { ...picobin, entryPoint: entry + 0x20 },
+        image.length,
+        execute,
+        image,
+      );
+      expect(helper?.basicBlocks).toEqual([
+        { address: entry + 0x20, size: 8, instructionCount: 2, jump: entry + 0x20, fail: entry + 0x28 },
+        { address: entry + 0x28, size: 4, instructionCount: 1 },
+      ]);
+      expect(helper?.instructions.map((row) => row.address)).toEqual([entry + 0x20, entry + 0x24, entry + 0x28]);
+      expect(helper?.instructions[0]).toMatchObject({ bytes: 'b316a028', opcode: 'bset x13, x0, x10' });
+    });
+  });
+
+  it('keeps coverage incomplete when the replacement cap leaves a supported tail undecoded', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'firmlab-r2-synthetic-cap-'));
+    try {
+      const image = Buffer.from(`${'b316a028'.repeat(65)}67800000`, 'hex');
+      const imagePath = path.join(directory, 'synthetic.bin');
+      writeFileSync(imagePath, image, { mode: 0o600 });
+      const result = runPicobinRiscvDisassembly(imagePath, picobin, image.length, execute, image);
+      expect(result).toMatchObject({
+        available: true,
+        callGraphTruncated: true,
+        instructionsTotal: 64,
+        decoderSubstitutionsTotal: 64,
+        decodeFailuresTotal: 1,
+      });
+      expect(result?.decodeFailures?.[0]?.address).toBe(entry + 256);
+      expect(result?.reason).toContain('coverage incomplete');
+      expect(readFileSync(imagePath)).toEqual(image);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reports unsupported entry and discarded mid-block tails as incomplete', () => {
+    for (const prefix of ['', '130101ff']) {
+      withImage(`${prefix}b316a02aef00800167800000`, (image, imagePath) => {
+        const result = runPicobinRiscvDisassembly(imagePath, picobin, image.length, execute, image);
+        expect(result?.callGraphTruncated).toBe(true);
+        expect(result?.reason).toContain('coverage incomplete');
+        if (prefix) expect(result).toMatchObject({ available: true, instructionsTotal: 1, decodeFailuresTotal: 1 });
+        else expect(result?.available).toBe(false);
+      });
+    }
   });
 });

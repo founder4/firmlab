@@ -67,7 +67,7 @@ export interface PicobinCallEdge {
 export interface PicobinDecodeFailure {
   address: number;
   fileOffset: number;
-  classification: 'unsupported-instruction' | 'tool-error';
+  classification: 'unsupported-instruction' | 'tool-error' | 'incomplete-decode';
   reason: string;
   /** At most the first eight mapped bytes, for bounded reproducibility. */
   bytesHex?: string;
@@ -495,6 +495,42 @@ function decodeFunction(
   return parsePicobinRadare2Output(stdout, mapping, fileSize);
 }
 
+/**
+ * A non-terminal block with no decoded fallthrough is a stopped decode, even when af/pdfj succeeded.
+ * Do not infer completion from a nonempty prefix (radare2 silently drops unsupported instruction tails).
+ * This is deliberately conservative for call-ending blocks: a missing return path is not proved noreturn.
+ */
+export function picobinDecodeStops(
+  parsed: ParsedPicobinFunction,
+  mapping: Pick<PicobinFlashMapping, 'mappedRuntimeStart' | 'mappedRuntimeEnd'>,
+): number[] {
+  const stops = new Set<number>();
+  const addresses = new Set(parsed.instructions.map((instruction) => instruction.address));
+  for (const instruction of parsed.instructions) {
+    if (instruction.type === 'invalid' || instruction.type === 'ill') stops.add(instruction.address);
+  }
+  // Missing listed instructions at the display cap are already accounted for as configured truncation.
+  if (parsed.instructions.length !== parsed.instructionsTotal) return [...stops];
+  for (const block of parsed.basicBlocks) {
+    const end = block.address + block.size;
+    const last = parsed.instructions.find((instruction) => instruction.address + instruction.size === end);
+    if (!last) continue;
+    for (const target of [block.jump, block.fail]) {
+      if (
+        target !== undefined &&
+        target >= mapping.mappedRuntimeStart &&
+        target < mapping.mappedRuntimeEnd &&
+        !addresses.has(target)
+      ) {
+        stops.add(target);
+      }
+    }
+    if (block.jump !== undefined || block.fail !== undefined || addresses.has(end)) continue;
+    if (!['ret', 'cret', 'jmp', 'ujmp', 'rjmp', 'ijmp', 'trap', 'swi'].includes(last.type)) stops.add(end);
+  }
+  return [...stops].sort((a, b) => a - b);
+}
+
 function decodeFunctionWithBitmanipView(
   mapping: PicobinFlashMapping,
   fileSize: number,
@@ -504,77 +540,57 @@ function decodeFunctionWithBitmanipView(
   if (!imageBytes) return null;
   const view = buildPicobinRiscvDecoderView(imageBytes, fileSize, mapping);
   if (!view) return null;
-  const substitutionsByAddress = new Map(
-    view.substitutions.map((substitution) => [substitution.address, substitution]),
-  );
-  const leading: PicobinDecoderSubstitution[] = [];
-  let analysisAddress = mapping.entryPoint;
-  for (;;) {
-    const substitution = substitutionsByAddress.get(analysisAddress);
-    if (!substitution) break;
-    leading.push(substitution);
-    analysisAddress += 4;
-  }
-  if (leading.length === 0) return null;
   const directory = mkdtempSync(path.join(tmpdir(), 'firmlab-picobin-'));
   const imagePath = path.join(directory, 'decoder-view.bin');
   try {
     writeFileSync(imagePath, view.bytes, { mode: 0o600 });
-    const parsed = decodeFunction(
-      imagePath,
-      {
-        ...mapping,
-        entryPoint: analysisAddress,
-        entryFileOffset: mapping.entryFileOffset + (analysisAddress - mapping.entryPoint),
-      },
-      fileSize,
-      execute,
-    );
+    // Keep the original entry. Shifting past leading replacements duplicates blocks when a back-edge reaches it.
+    const parsed = decodeFunction(imagePath, mapping, fileSize, execute);
     if (!parsed) return null;
-    const firstBlock = parsed.basicBlocks.findIndex((block) => block.address === analysisAddress);
-    if (firstBlock < 0) return null;
-    const basicBlocks = parsed.basicBlocks.map((block, index) =>
-      index === firstBlock
-        ? {
-            ...block,
-            address: mapping.entryPoint,
-            size: block.size + leading.length * 4,
-            instructionCount: block.instructionCount + leading.length,
-          }
-        : block,
-    );
-    const restored = parsed.instructions.map((instruction) => {
-      const substitution = substitutionsByAddress.get(instruction.address);
-      return substitution
-        ? {
-            ...instruction,
-            opcode: restoredPicobinOpcode(substitution),
-            type: 'bitmanip',
-            bytes: substitution.originalBytesHex,
-          }
-        : instruction;
-    });
+    const substitutions = view.substitutions
+      .filter(
+        (substitution) =>
+          parsed.instructions.some(
+            (instruction) => instruction.address === substitution.address && instruction.size === 4,
+          ) &&
+          parsed.basicBlocks.some(
+            (block) => substitution.address >= block.address && substitution.address + 4 <= block.address + block.size,
+          ),
+      )
+      .map((substitution) => ({ ...substitution, mnemonic: restoredPicobinOpcode(substitution) }));
+    const substitutionsByAddress = new Map(substitutions.map((substitution) => [substitution.address, substitution]));
     return {
       parsed: {
         ...parsed,
-        instructionsTotal: parsed.instructionsTotal + leading.length,
-        basicBlocks,
-        instructions: [
-          ...leading.map((substitution) => ({
-            address: substitution.address,
-            size: 4,
-            opcode: restoredPicobinOpcode(substitution),
-            type: 'bitmanip',
-            bytes: substitution.originalBytesHex,
-          })),
-          ...restored,
-        ],
+        instructions: parsed.instructions.map((instruction) => {
+          const substitution = substitutionsByAddress.get(instruction.address);
+          return substitution
+            ? {
+                ...instruction,
+                opcode: restoredPicobinOpcode(substitution),
+                type: 'bitmanip',
+                bytes: substitution.originalBytesHex,
+              }
+            : instruction;
+        }),
       },
-      substitutions: view.substitutions,
+      substitutions,
     };
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
+}
+
+function decodeWithRecovery(
+  imagePath: string,
+  mapping: PicobinFlashMapping,
+  fileSize: number,
+  execute: Radare2Executor,
+  imageBytes: Uint8Array | undefined,
+): { parsed: ParsedPicobinFunction | null; substitutions: PicobinDecoderSubstitution[] } {
+  const parsed = decodeFunction(imagePath, mapping, fileSize, execute);
+  if (parsed && picobinDecodeStops(parsed, mapping).length === 0) return { parsed, substitutions: [] };
+  return decodeFunctionWithBitmanipView(mapping, fileSize, execute, imageBytes) ?? { parsed, substitutions: [] };
 }
 
 export function runPicobinRiscvDisassembly(
@@ -593,12 +609,22 @@ export function runPicobinRiscvDisassembly(
   const baseHex = `0x${mapping.baseAddress.toString(16)}`;
   const entryHex = `0x${mapping.entryPoint.toString(16)}`;
   let parsed: ParsedPicobinFunction | null;
+  let entrySubstitutions: PicobinDecoderSubstitution[];
   try {
-    parsed = decodeFunction(imagePath, mapping, fileSize, execute);
+    const decoded = decodeWithRecovery(imagePath, mapping, fileSize, execute, imageBytes);
+    parsed = decoded.parsed;
+    entrySubstitutions = decoded.substitutions;
   } catch (err) {
     return unavailable(mapping, radareFailureReason(err));
   }
-  if (!parsed) return unavailable(mapping, 'radare2 output was missing, malformed or outside the mapped image');
+  if (!parsed)
+    return {
+      ...unavailable(
+        mapping,
+        'radare2 output was missing, malformed, unsupported or outside the mapped image; coverage incomplete',
+      ),
+      callGraphTruncated: true,
+    };
 
   const startupCopyTable = imageBytes
     ? parseRiscvStartupCopyTable(imageBytes, mapping.entryPoint, mapping.entryFileOffset, mapping.baseAddress)
@@ -623,7 +649,9 @@ export function runPicobinRiscvDisassembly(
   let graphStopReason = '';
   let decodeFailuresTotal = 0;
   const decodeFailures: PicobinDecodeFailure[] = [];
-  const decoderSubstitutionsByOffset = new Map<number, PicobinDecoderSubstitution>();
+  const decoderSubstitutionsByOffset = new Map<number, PicobinDecoderSubstitution>(
+    entrySubstitutions.map((substitution) => [substitution.fileOffset, substitution]),
+  );
   const recordDecodeFailure = (
     next: { address: number; mapping: PicobinFlashMapping },
     classification: PicobinDecodeFailure['classification'],
@@ -631,7 +659,12 @@ export function runPicobinRiscvDisassembly(
   ): void => {
     decodeFailuresTotal++;
     if (decodeFailures.length >= DECODE_FAILURE_CAP) return;
-    const bytes = imageBytes?.subarray(next.mapping.entryFileOffset, next.mapping.entryFileOffset + 8);
+    // A stopped continuation can be the mapping boundary, a tool limit, or a noreturn call.
+    // Report its address/reason without attributing an instruction or sampling bytes beyond that boundary.
+    const bytes =
+      classification === 'incomplete-decode'
+        ? undefined
+        : imageBytes?.subarray(next.mapping.entryFileOffset, next.mapping.entryFileOffset + 8);
     decodeFailures.push({
       address: next.address,
       fileOffset: next.mapping.entryFileOffset,
@@ -673,6 +706,18 @@ export function runPicobinRiscvDisassembly(
     }
   };
 
+  const recordStoppedDecode = (decoded: ParsedPicobinFunction, currentMapping: PicobinFlashMapping): void => {
+    for (const address of picobinDecodeStops(decoded, currentMapping)) {
+      callGraphTruncated = true;
+      graphStopReason = `radare2 stopped without a decoded continuation at 0x${address.toString(16)}; coverage incomplete`;
+      recordDecodeFailure(
+        { address, mapping: functionMapping(currentMapping, address) },
+        'incomplete-decode',
+        graphStopReason,
+      );
+    }
+  };
+  recordStoppedDecode(parsed, mapping);
   enqueueCalls(mapping.entryPoint, 0, parsed.instructions);
   while (queue.length > 0 && reachableFunctions.length < REACHABLE_FUNCTION_CAP) {
     const next = queue.shift();
@@ -680,15 +725,10 @@ export function runPicobinRiscvDisassembly(
     const nextMapping = functionMapping(next.mapping, next.address);
     let decoded: ParsedPicobinFunction | null;
     try {
-      decoded = decodeFunction(imagePath, nextMapping, fileSize, execute);
-      if (!decoded) {
-        const recovered = decodeFunctionWithBitmanipView(nextMapping, fileSize, execute, imageBytes);
-        if (recovered) {
-          decoded = recovered.parsed;
-          for (const substitution of recovered.substitutions) {
-            decoderSubstitutionsByOffset.set(substitution.fileOffset, substitution);
-          }
-        }
+      const recovered = decodeWithRecovery(imagePath, nextMapping, fileSize, execute, imageBytes);
+      decoded = recovered.parsed;
+      for (const substitution of recovered.substitutions) {
+        decoderSubstitutionsByOffset.set(substitution.fileOffset, substitution);
       }
     } catch (err) {
       callGraphTruncated = true;
@@ -702,6 +742,7 @@ export function runPicobinRiscvDisassembly(
       recordDecodeFailure(next, 'unsupported-instruction', graphStopReason);
       continue;
     }
+    recordStoppedDecode(decoded, nextMapping);
     reachableFunctions.push({
       address: next.address,
       depth: next.depth,
@@ -765,9 +806,10 @@ export function runPicobinRiscvDisassembly(
     rationale:
       'radare2 decoded instructions and local control-flow blocks from the entrypoint declared by a structurally ' +
       'validated PICOBIN image, then followed only direct call targets under explicit function/depth/edge caps. ' +
-      'Where the installed decoder rejected exact BSET/SH1ADD/SH2ADD/SH3ADD encodings, a bounded same-length NOP ' +
-      'view recovered ' +
-      'control-flow structure and the original bytes/mnemonics were restored in the result. This is bounded static ' +
+      'Where the installed decoder rejected exact BSET/SH1ADD/SH2ADD/SH3ADD encodings, a bounded same-length ' +
+      'discarded-destination MOV view recovered ' +
+      'control-flow structure; graph-scoped substitutions retain original bytes and source mnemonics, and entry ' +
+      'instructions are restored. This is bounded static ' +
       'decoder evidence; it does not prove execution, instruction semantics, indirect calls, whole-image function ' +
       'coverage or peripheral behavior.',
   };

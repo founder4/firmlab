@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildPicobinRiscvDecoderView, restoredPicobinOpcode } from './picobin-riscv-decoder-view.js';
 
 describe('buildPicobinRiscvDecoderView', () => {
-  it('replaces only exact RV32 BSET and Zba shift-add encodings with same-length NOPs', () => {
+  it('replaces only exact RV32 BSET and Zba shift-add encodings with same-length discarded-destination MOVs', () => {
     const image = Uint8Array.from([
       0xb3,
       0x16,
@@ -29,7 +29,7 @@ describe('buildPicobinRiscvDecoderView', () => {
 
     expect(view).not.toBeNull();
     expect(Array.from(view?.bytes ?? [])).toEqual([
-      0x13, 0x00, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00,
+      0x13, 0x80, 0x00, 0x00, 0x13, 0x80, 0x00, 0x00, 0x13, 0x80, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00,
     ]);
     expect(view?.substitutions).toEqual([
       {

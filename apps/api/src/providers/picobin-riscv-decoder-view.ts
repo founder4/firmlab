@@ -1,8 +1,8 @@
 /**
  * Build a bounded, same-length decoder view for exact ratified RV32 Zba/Zbs instructions that older
  * radare2 releases reject. The view is analysis-only: it replaces exact non-control-flow encodings with 32-bit
- * NOPs so the external decoder can recover block boundaries, while callers retain every original byte and restore
- * the mnemonic in reported instructions. It walks encoded instruction lengths from the declared entry, never
+ * discarded-destination MOVs so the external decoder can recover block boundaries. Callers retain every original
+ * byte and restore the mnemonic in reported instructions. It walks encoded instruction lengths from the declared entry, never
  * matches a word across adjacent instructions, and stops at unsupported longer encodings. The walk does not
  * establish instruction semantics or distinguish embedded data from code. It never mutates the firmware image.
  */
@@ -10,7 +10,9 @@
 const DECODER_WINDOW_BYTES = 4096;
 const SUBSTITUTION_CAP = 64;
 const OPCODE_MASK = 0xfe00_707f;
-const RISCV_NOP = 0x0000_0013;
+// Unlike NOP, this instruction is accepted by radare2 as a function entry.
+// x0 discards the value; this view is never executed or used for data-flow claims.
+const RISCV_DECODER_ANCHOR = 0x0000_8013;
 
 const supported = [
   { instruction: 'bset' as const, match: 0x2800_1033 },
@@ -24,6 +26,8 @@ export interface PicobinDecoderSubstitution {
   fileOffset: number;
   instruction: 'bset' | 'sh1add' | 'sh2add' | 'sh3add';
   originalBytesHex: string;
+  /** Exact source mnemonic; optional forever for previously persisted evidence. */
+  mnemonic?: string;
 }
 
 export interface PicobinDecoderView {
@@ -108,7 +112,7 @@ export function buildPicobinRiscvDecoderView(
           instruction: definition.instruction,
           originalBytesHex: wordHex(imageBytes, offset),
         });
-        writeWord(patched, offset, RISCV_NOP);
+        writeWord(patched, offset, RISCV_DECODER_ANCHOR);
       }
     }
     offset += instructionBytes;
@@ -117,7 +121,7 @@ export function buildPicobinRiscvDecoderView(
   return { bytes: patched, substitutions, bytesExamined: offset - mapping.entryFileOffset };
 }
 
-/** Restore an exact source mnemonic without pretending to recover register values from radare2's NOP view. */
+/** Restore an exact source mnemonic without pretending to recover register values from radare2's replacement view. */
 export function restoredPicobinOpcode(substitution: PicobinDecoderSubstitution): string {
   const word = Number.parseInt(substitution.originalBytesHex.match(/../g)?.reverse().join('') ?? '', 16);
   const rd = (word >>> 7) & 0x1f;
