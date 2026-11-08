@@ -1471,3 +1471,13 @@ describe('unlisted uImage matches skip the payload CRC, nothing else', () => {
     expect(buf.equals(before)).toBe(true);
   });
 });
+
+describe('listing option compatibility', () => {
+  it('preserves the legacy NaN listing behavior instead of treating it as a reached cap', () => {
+    const bytes = new Uint8Array(192);
+    for (const offset of [0, 64, 128]) bytes.set([0x27, 0x05, 0x19, 0x56], offset);
+    const full = scanSignaturesDetailed(bytes, { maxHits: 5000 });
+    expect(full.hits.filter((hit) => hit.id === 'uimage')).toHaveLength(3);
+    expect(scanSignaturesDetailed(bytes, { maxHits: Number.NaN })).toEqual(full);
+  });
+});

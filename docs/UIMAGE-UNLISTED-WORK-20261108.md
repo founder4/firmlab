@@ -16,7 +16,7 @@ counted 64 matches, and spent ~157 ms (an invalid-header control costs ~19 ms).
 ## The change
 
 - `SignatureRule` gains an optional internal hook, `verifyUnlisted`. The scanner decides `listable`
-  (`hits.length < maxHits || !seenIds.has(rule.id)`) **before** the check — the same predicate that previously ran
+  (`!(hits.length >= maxHits && seenIds.has(rule.id))`) **before** the check — the same predicate that previously ran
   after it, with nothing in between that mutates either value — and runs `verifyUnlisted` only for a match it will
   not list, falling back to `verify` for every rule without the hook.
 - The hook's contract: return `rejected` exactly when `verify` would. Its non-rejected tier and rationale are
@@ -94,3 +94,9 @@ include one coincidental non-uImage magic in the filler, identical before and af
 
 Limits: synthetic bytes only; one buffer size; the uncapped scan is still O(N × length) by design, because every
 listed hit is fully verified — the fix bounds the work the cap exists to skip, not the work of listing.
+
+Coordinator compatibility follow-up: replacing the original exclusion with a less-than comparison changes
+legacy behavior for `maxHits: NaN` (the original scan lists all matches, while `length < NaN` is false). A new
+regression reproduced that difference (three uImage rows became one), then passed after retaining the literal
+negation of the original exclusion predicate. The output contract stays unchanged even for that option; no
+new option normalization or global checksum budget is introduced.

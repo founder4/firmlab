@@ -1395,7 +1395,7 @@ export function scanSignaturesDetailed(buf: Uint8Array, options: ScanOptions = {
       // Past the bound only a rule nobody has seen yet may still be listed: the list stays short, the set stays
       // whole. Offsets are visited in ascending order and entries are only appended, so `hits` remains sorted.
       // Decided before the check (which mutates nothing), so a rule's first hit is always fully verified.
-      const listable = hits.length < maxHits || !seenIds.has(rule.id);
+      const listable = !(hits.length >= maxHits && seenIds.has(rule.id));
       // The rubric runs BEFORE the listing bound, and unconditionally. It has to: a rejection removes a rule
       // from the id set, and `inferIdentity` reads that set — so deciding it only for the matches that happen to
       // fit under the cap would make a persisted identity depend on the cap again. What an unlisted match does
