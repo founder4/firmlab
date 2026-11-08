@@ -32,7 +32,7 @@ function scan(artifact: { name: string; version: string; purl?: unknown }) {
   });
 }
 
-function vex(product: string, status: string) {
+function vex(product: string, status: string, extra: { product: string; status: string }[] = []) {
   const parsed = parseVendorVex(
     JSON.stringify({
       '@context': 'https://openvex.dev/ns/v0.2.0',
@@ -40,7 +40,11 @@ function vex(product: string, status: string) {
       author: 'Vendor',
       timestamp: '2026-11-08T00:00:00Z',
       version: 1,
-      statements: [{ vulnerability: { name: cve }, products: [product], status }],
+      statements: [{ product, status }, ...extra].map(({ product, status }) => ({
+        vulnerability: { name: cve },
+        products: [product],
+        status,
+      })),
     }),
     '/etc/vendor.openvex.json',
   );
@@ -54,6 +58,33 @@ beforeEach(() => {
 });
 
 describe('Grype artifact identity through parser and normalizer', () => {
+  it.each(['pkg:npm/busybox@1.20?arch=%zz', 'pkg:npm/busybox@1.20#%zz'])(
+    'keeps the unread half of a possible disagreement explicit after normalization: %s',
+    async (unreadable) => {
+      const purl = 'pkg:npm/busybox@1.20';
+      scan({ name: 'busybox', version: '1.20', purl });
+      const result = await runSbom('fixture', '/synthetic-rootfs', handle);
+      const discovery = vex(purl, 'fixed', [{ product: unreadable, status: 'affected' }]);
+      const [row] = normalizeSbom(result, undefined, discovery);
+      expect(row).toMatchObject({
+        kind: 'cve',
+        severity: 'high',
+        proofState: 'needs_runtime_reproduction',
+        evidenceChannel: 'external_advisory',
+        evidence: {
+          vendorVex: {
+            verdict: 'vendor_states_fixed',
+            omissions: [{ sourcePath: '/etc/vendor.openvex.json', reason: 'unmatchable_identity', count: 1 }],
+          },
+        },
+      });
+      expect(row?.rationale).toContain('Not a complete reading');
+      expect(result.vulnerabilities).toHaveLength(1);
+      expect(result.counts.High).toBe(1);
+      expect(JSON.parse(JSON.stringify(row)).evidence.vendorVex.omissions).toHaveLength(1);
+    },
+  );
+
   it.each([
     ['unscoped npm', 'busybox', 'pkg:npm/busybox@1.20', 'pkg:npm/busybox@1.20', true],
     ['scoped npm', '@acme/busybox', 'pkg:npm/%40acme/busybox@1.20', 'pkg:npm/%40acme/busybox@1.20', true],

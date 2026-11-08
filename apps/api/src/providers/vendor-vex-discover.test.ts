@@ -7,6 +7,7 @@ import { measuredPackageIdentity, parsePackageIdentity } from './package-identit
 import {
   VEX_SELECTION_RULE,
   type VendorVexDiscoveryCoverage,
+  type VendorVexRowVerdict,
   discoverVendorVex,
   isVexCandidatePath,
   linuxKernelProductMatcher,
@@ -566,6 +567,72 @@ describe('CSAF version scope survives into the row verdict', () => {
 });
 
 describe('a row verdict says what may be missing from it', () => {
+  it.each([
+    'pkg:npm/busybox@1.36.1?arch=%zz',
+    'pkg:npm/busybox@1.36.1#%zz',
+    'pkg:npm/busybox@1.36.1#%2E%2E',
+    'pkg:npm/busy%zzbox@1.36.1?arch=%zz',
+  ])('names an unreadable measured-purl assertion that might hide disagreement: %s', (unreadable) => {
+    const cve = 'CVE-2022-48174';
+    const d = doc(
+      openvex([
+        { cve, products: ['pkg:npm/busybox@1.36.1'], status: 'fixed' },
+        { cve, products: [unreadable], status: 'affected' },
+      ]),
+    );
+    const matcher = packageProductMatcher('busybox', '1.36.1', 'pkg:npm/busybox@1.36.1');
+    const v = vendorVexVerdictFor({ documents: [d] }, cve, matcher, 'busybox');
+    expect(v?.verdict).toBe('vendor_states_fixed');
+    expect(v?.sources.map((s) => s.status)).toEqual(['fixed']);
+    expect(v?.omissions).toEqual([{ sourcePath: '/etc/vex/a.openvex.json', reason: 'unmatchable_identity', count: 1 }]);
+    expect(v?.rationale).toMatch(
+      /Not a complete reading: .*1 product identit\(ies\) for this CVE that could not be read/,
+    );
+  });
+
+  it('distinguishes unreadable measured identities from readable nonmatches and other CVEs', () => {
+    const cve = 'CVE-2022-48174';
+    const d = doc(
+      openvex([
+        { cve, products: ['pkg:npm/busybox@1.36.1'], status: 'fixed' },
+        { cve, products: ['pkg:pypi/busybox@1.36.1', 'pkg:npm/busybox@1.36.2'], status: 'affected' },
+        { cve: 'CVE-2021-0001', products: ['pkg:npm/busybox@1.36.1?arch=%zz'], status: 'affected' },
+      ]),
+    );
+    const v = vendorVexVerdictFor(
+      { documents: [d] },
+      cve,
+      packageProductMatcher('busybox', '1.36.1', 'pkg:npm/busybox@1.36.1'),
+      'busybox',
+    );
+    expect(v?.verdict).toBe('vendor_states_fixed');
+    expect(v?.omissions).toBeUndefined();
+    expect(v?.rationale).not.toContain('Not a complete reading');
+  });
+
+  it('keeps legacy plain/CPE/distro matching and optional persisted omission compatibility', () => {
+    const cve = 'CVE-2022-48174';
+    const d = doc(
+      openvex([
+        {
+          cve,
+          products: ['busybox', 'cpe:/a:busybox:busybox:1.36.1', 'pkg:apk/alpine/busybox@1.36.1'],
+          status: 'fixed',
+        },
+      ]),
+    );
+    const matcher = packageProductMatcher('busybox', '1.36.1');
+    expect(matcher.identityRefusal).toBeUndefined();
+    const v = vendorVexVerdictFor({ documents: [d] }, cve, matcher, 'busybox');
+    expect(v?.verdict).toBe('vendor_states_fixed');
+    if (!v) throw new Error('fixture must match');
+    // Existing persisted verdicts do not acquire a required field or runtime matcher metadata.
+    const { omissions: _omissions, ...oldVerdict } = v;
+    const legacy: VendorVexRowVerdict = oldVerdict;
+    expect(JSON.parse(JSON.stringify(legacy))).toEqual(v);
+    expect(legacy.omissions).toBeUndefined();
+  });
+
   it('names a statement cap that dropped anything, so a clean single verdict is not read as complete', () => {
     const text = openvex([
       { cve: 'CVE-2022-48174', products: ['busybox'], status: 'not_affected' },

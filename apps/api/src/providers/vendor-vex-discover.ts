@@ -504,18 +504,35 @@ export const PACKAGE_VEX_PRODUCTS =
   'vendor and product both equal the package name (case-insensitive). A versioned purl or CPE matches only when ' +
   "its version equals the row's package version.";
 
+/** Runtime-only reader metadata: omission accounting must use the same identity rules as the row matcher. */
+export type VendorVexProductMatcher = ProductMatcherPredicate & {
+  identityRefusal?: (raw: string) => string | null;
+};
+
+/** Pure: measured matching cannot read malformed qualifiers/subpaths that the legacy purl reader ignores. */
+export function measuredProductIdentityRefusal(raw: string): string | null {
+  return (
+    productIdentityRefusal(raw) ??
+    (/^pkg:/i.test(raw.trim()) && parsePackageIdentity(raw) === null
+      ? 'purl cannot be interpreted under the measured package identity rules'
+      : null)
+  );
+}
+
 /** Pure: the matcher for a package row (grype). Exact identity — ecosystem, vendor and name — never a substring. */
 export function packageProductMatcher(
   name: string,
   version: string,
   packagePurl?: string | null,
-): ProductMatcherPredicate {
+): VendorVexProductMatcher {
   if (packagePurl !== undefined) {
     const measured = measuredPackageIdentity(name, version, packagePurl);
-    return (raw) => {
+    const matcher: VendorVexProductMatcher = (raw) => {
       const assertion = parsePackageIdentity(raw);
       return measured !== null && assertion !== null && samePackageIdentity(measured, assertion);
     };
+    matcher.identityRefusal = measuredProductIdentityRefusal;
+    return matcher;
   }
   const versionOk = (v: string | null) => wildcard(v) || v === version;
   const lower = name.toLowerCase();
@@ -564,7 +581,8 @@ export interface VendorVexRowVerdict {
   /**
    * What may be missing from this verdict: statements a cap dropped, statements with an unrecognised or unsupported
    * status, or product identities for this CVE that could not be read. OPTIONAL FOREVER; absent on a row from an
-   * older build means "not recorded", and on a row from this build means none was found.
+   * older build means "not recorded", and on a row from this build means none was found. This includes identities
+   * unreadable under the particular row matcher's rules, even when the legacy discovery reader can read a prefix.
    */
   omissions?: VendorVexRowOmission[];
   rationale: string;
@@ -590,7 +608,11 @@ const OMISSION_TEXT: Record<VendorVexRowOmission['reason'], string> = {
  * unknown, so it may concern any CVE. An unrecognised status is attributed to this CVE when an example names it, or
  * when the examples were themselves bounded and so cannot rule it out.
  */
-function omissionsFor(documents: readonly VendorVexDocument[], cveId: string): VendorVexRowOmission[] {
+function omissionsFor(
+  documents: readonly VendorVexDocument[],
+  cveId: string,
+  identityRefusal: (raw: string) => string | null,
+): VendorVexRowOmission[] {
   const cve = cveId.trim().toUpperCase();
   const out: VendorVexRowOmission[] = [];
   for (const doc of documents) {
@@ -615,7 +637,7 @@ function omissionsFor(documents: readonly VendorVexDocument[], cveId: string): V
     }
     const unreadable = doc.statements
       .filter((st) => st.vulnerabilityId === cve)
-      .reduce((n, st) => n + st.products.filter((id) => productIdentityRefusal(id) !== null).length, 0);
+      .reduce((n, st) => n + st.products.filter((id) => identityRefusal(id) !== null).length, 0);
     if (unreadable > 0) out.push({ sourcePath: at, reason: 'unmatchable_identity', count: unreadable });
   }
   return out;
@@ -649,7 +671,7 @@ const ASSERTION =
 export function vendorVexVerdictFor(
   discovery: Pick<VendorVexDiscovery, 'documents'> | null | undefined,
   cveId: string,
-  matcher: ProductMatcherPredicate,
+  matcher: VendorVexProductMatcher,
   componentName: string,
 ): VendorVexRowVerdict | null {
   if (!discovery || discovery.documents.length === 0) return null;
@@ -672,7 +694,7 @@ export function vendorVexVerdictFor(
     }
   }
   if (kinds.size === 0) return null;
-  const omissions = omissionsFor(discovery.documents, cveId);
+  const omissions = omissionsFor(discovery.documents, cveId, matcher.identityRefusal ?? productIdentityRefusal);
   const incomplete =
     omissions.length > 0
       ? ` Not a complete reading: ${omissions.map((o) => `${o.sourcePath} has ${o.count} ${OMISSION_TEXT[o.reason]}`).join('; ')}.`

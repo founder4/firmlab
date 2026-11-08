@@ -57,8 +57,15 @@ namespace/subpath slashes and empty qualifiers are refused rather than repaired,
 and ecosystem-specific artifact-name conversions beyond npm/PyPI are not inferred.
 This can miss an assertion; it does not authorize a cross-package attachment.
 Legacy name/CPE matching and discovery's legacy unreadable-identity accounting
-are unchanged; the stricter measured matcher can refuse a malformed qualifier or
-subpath that the legacy coverage reader does not currently count as unreadable.
+are unchanged. Each measured matcher carries a runtime-only refusal reader, so
+row omission accounting uses the same parsing rules as matching: a same-CVE
+malformed qualifier/subpath is counted as `unmatchable_identity` and the verdict
+says `Not a complete reading`. It is never promoted to an affected assertion.
+Readable identities that name a different package/version are ordinary nonmatches,
+and unreadable identities for a different CVE do not affect this row. The existing
+persisted `omissions` field remains optional forever; no persisted field or reason
+was added. Discovery's aggregate counters still use their legacy reader, so they
+may count fewer unreadable identities than a particular measured row's verdict.
 
 VEX remains vendor assertion metadata. Neither a match nor a refusal changes the
 number of findings, their severity, proof state, evidence channel, or source.
@@ -109,3 +116,20 @@ with controlled CVE fixtures. It does not validate a real vendor advisory agains
 production firmware, refresh a stored result, or replace coordinator integration
 gates. Temporary evidence scripts were under `/tmp/firmlab-vex-20261108`; no
 container/database output was written into the repository or live corpus.
+
+## Review follow-up: unread half of a possible disagreement
+
+The original deferred row-accounting issue was reproduced as a correctness defect:
+one fixed `pkg:npm/busybox@1.36.1` plus same-CVE affected PURL ending in
+`?arch=%zz`, `#%zz`, or `#%2E%2E` returned `vendor_states_fixed` with no omission.
+The new focused tests failed on the absent `omissions` before the fix. The row
+now retains only the readable fixed assertion as its source and explicitly names
+the unread assertion as an omission; it does not claim complete agreement.
+Regression coverage also checks no double-counting when both readers reject an
+identity, CVE scoping, readable ecosystem/version nonmatches, and legacy verdicts
+persisted without `omissions`.
+
+Follow-up validation: `pnpm --filter @firmlab/api test sbom vendor-vex findings-normalize`
+passes 9 files / 264 tests; API typecheck/build and Biome pass. The offline
+subprocess/discovery/normalizer fixture also checks that malformed qualifier and
+subpath assertions contribute two omissions on the unchanged fixed row.
