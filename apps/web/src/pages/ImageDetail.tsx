@@ -56,6 +56,7 @@ import { RtosTaskSnapshotPanel } from '../components/RtosTaskSnapshotPanel';
 import { RunHistory } from '../components/RunHistory';
 import { SbomGraph } from '../components/SbomGraph';
 import { SignalCanvas } from '../components/SignalCanvas';
+import { SignatureDigestCoverage } from '../components/SignatureDigestCoverage';
 import { SimulationMenu } from '../components/SimulationMenu';
 import { StepTimeline } from '../components/StepTimeline';
 import { StructureMap } from '../components/StructureMap';
@@ -712,6 +713,7 @@ function StructurePanel({ analysis }: { analysis: StaticAnalysis }): JSX.Element
         </div>
       ) : null}
       <StructureMap segments={analysis.structure} size={analysis.size} />
+      <SignatureDigestCoverage coverage={analysis.signatureDigests} />
     </div>
   );
 }

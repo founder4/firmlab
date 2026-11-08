@@ -114,6 +114,52 @@ export const imageDetail = {
       `Drawn from ${listed} of ${matched} signature matches — the map is a bounded sample, not every match in the image. The device class and the filesystems above are unaffected: they read which signature TYPES are present, and the bound lists every type it matched however many times each occurs.`,
   },
 
+  signatureDigests: {
+    title: 'Recorded SHA-256 coverage',
+    scope:
+      'Local work for listed, supported MediaTek BootROM hits only. Listing caps may omit other matches; these counts do not cover all signatures or the firmware.',
+    unknown: 'Unknown',
+    state: {
+      'not-recorded':
+        'Digest coverage was not recorded in this saved analysis. No execution or zero count can be inferred.',
+      unknown: 'This digest coverage record is not understood. Execution and counts are unknown.',
+      partial:
+        'This record is incomplete or inconsistent. Valid counts are shown as recorded; missing or invalid values are unknown. Completion cannot be inferred.',
+    },
+    labels: {
+      listed: 'Listed supported hits',
+      planned: 'Planned valid candidates',
+      attempted: 'Attempts',
+      completed: 'Completed digests',
+      matched: 'Matches',
+      mismatched: 'Mismatches',
+      unavailable: 'Unavailable results',
+      invalidCandidates: 'Invalid candidates',
+      skipped: 'Budget skips',
+      skippedExecutionBudget: 'Execution-budget skips',
+      skippedByteBudget: 'Byte-budget skips',
+      bytesPlanned: 'Bytes planned',
+      bytesSubmitted: 'Bytes submitted',
+      bytesCompleted: 'Bytes completed',
+      maxExecutions: 'Applied execution limit',
+      maxBytes: 'Applied byte limit',
+    },
+    resultsMeaning: 'Unavailable results are not mismatches. Zero counts never mean clean.',
+    details: 'Budgets and recorded details',
+    capability: {
+      provided: 'SHA-256 capability was provided; this alone does not prove any digest completed.',
+      unavailable: 'SHA-256 capability was recorded as unavailable; this is not a mismatch.',
+      unknown: 'The recorded SHA-256 capability is unknown.',
+    },
+    budget:
+      'Hard ceilings: 8 executions and 64 MiB (67108864 bytes). The applied limits above may be lower. Counts and bytes are recorded values, not firmware coverage.',
+    submittedMeaning:
+      'Submitted bytes consume the byte budget even when a call throws or returns an invalid digest. Completed bytes count only valid digest results.',
+    providerNote: 'Provider note (verbatim)',
+    caveat:
+      'A match compares an unkeyed digest stored beside its GFH/payload. The first 0x600 device/BRLYT header bytes, digest field and trailing bytes are unhashed. It proves no authenticity, boot, runtime or device behavior and upgrades no proof state.',
+  },
+
   entropy: {
     title: 'Entropy profile',
     sub: 'Shannon entropy across the image — a high band is a lead to check, not a verdict on what it holds',

@@ -106,6 +106,53 @@ export const imageDetail: Messages['imageDetail'] = {
       `Dibujado a partir de ${listed} de ${matched} coincidencias de firma: el mapa es una muestra acotada, no todas las coincidencias de la imagen. La clase de dispositivo y los sistemas de ficheros de arriba no se ven afectados, porque leen qué TIPOS de firma están presentes y el límite lista todos los tipos que encontró, sea cual sea el número de veces que aparece cada uno.`,
   },
 
+  signatureDigests: {
+    title: 'Cobertura SHA-256 registrada',
+    scope:
+      'Trabajo local solo para coincidencias MediaTek BootROM compatibles y listadas. Los topes del listado pueden omitir otras coincidencias; estos recuentos no cubren todas las firmas ni el firmware.',
+    unknown: 'Desconocido',
+    state: {
+      'not-recorded':
+        'Este análisis guardado no registró la cobertura de resúmenes. No se puede inferir ninguna ejecución ni un recuento de cero.',
+      unknown:
+        'No se reconoce este registro de cobertura de resúmenes. Las ejecuciones y los recuentos son desconocidos.',
+      partial:
+        'Este registro está incompleto o es incoherente. Los recuentos válidos se muestran tal como se registraron; los valores ausentes o inválidos son desconocidos. No se puede inferir que el trabajo se completó.',
+    },
+    labels: {
+      listed: 'Coincidencias compatibles listadas',
+      planned: 'Candidatos válidos planificados',
+      attempted: 'Intentos',
+      completed: 'Resúmenes completados',
+      matched: 'Coincidentes',
+      mismatched: 'No coincidentes',
+      unavailable: 'Resultados no disponibles',
+      invalidCandidates: 'Candidatos inválidos',
+      skipped: 'Omitidos por presupuesto',
+      skippedExecutionBudget: 'Omitidos por tope de ejecuciones',
+      skippedByteBudget: 'Omitidos por tope de bytes',
+      bytesPlanned: 'Bytes planificados',
+      bytesSubmitted: 'Bytes enviados al cálculo',
+      bytesCompleted: 'Bytes completados',
+      maxExecutions: 'Límite de ejecuciones aplicado',
+      maxBytes: 'Límite de bytes aplicado',
+    },
+    resultsMeaning: 'Un resultado no disponible no es una discrepancia. Los ceros nunca significan que esté limpio.',
+    details: 'Presupuestos y detalles registrados',
+    capability: {
+      provided: 'Se proporcionó la capacidad SHA-256; eso por sí solo no prueba que se completara ningún resumen.',
+      unavailable: 'La capacidad SHA-256 se registró como no disponible; no es una discrepancia.',
+      unknown: 'La capacidad SHA-256 registrada es desconocida.',
+    },
+    budget:
+      'Topes máximos: 8 ejecuciones y 64 MiB (67108864 bytes). Los límites aplicados de arriba pueden ser menores. Los recuentos y bytes son valores registrados, no cobertura del firmware.',
+    submittedMeaning:
+      'Los bytes enviados al cálculo consumen presupuesto aunque la llamada lance una excepción o devuelva un resumen inválido. Los bytes completados solo cuentan resultados de resumen válidos.',
+    providerNote: 'Nota del proveedor (literal)',
+    caveat:
+      'Una coincidencia compara un resumen sin clave almacenado junto a su GFH/payload. Los primeros 0x600 bytes de cabecera de dispositivo/BRLYT, el campo del resumen y los bytes finales quedan sin resumir. No prueba autenticidad, arranque, ejecución ni comportamiento del dispositivo, ni eleva el estado de prueba.',
+  },
+
   entropy: {
     title: 'Perfil de entropía',
     sub: 'Entropía de Shannon a lo largo de la imagen — una banda alta es una pista que comprobar, no un veredicto sobre lo que contiene',
