@@ -17,10 +17,13 @@ import {
   parseRiscvStartupCopyTable,
 } from '@firmlab/core';
 import {
+  type PicobinDecoderCandidateExclusion,
+  type PicobinDecoderSourceEvidence,
   type PicobinDecoderSubstitution,
   type PicobinDecoderView,
   buildPicobinRiscvDecoderView,
   restoredPicobinOpcode,
+  selectPicobinDecoderCandidates,
 } from './picobin-riscv-decoder-view.js';
 
 const XIP_BASE = 0x1000_0000;
@@ -124,6 +127,12 @@ export interface PicobinRiscvDisassembly {
   /** Exact non-control-flow instructions replaced only in a temporary decoder view; optional for persisted data. */
   decoderSubstitutionsTotal?: number;
   decoderSubstitutions?: PicobinDecoderSubstitution[];
+  /**
+   * Linear-scan proposals withheld from the temporary view before any retry, optional forever. Proved conflicts
+   * with source decoder output are labelled separately from merely unanchored phase; neither is a code/data proof.
+   */
+  decoderCandidateExclusionsTotal?: number;
+  decoderCandidateExclusions?: PicobinDecoderCandidateExclusion[];
   startupCopyTable?: RiscvStartupCopyTable | null;
   startupCopyTableAttempted?: boolean;
   /** Actual supplied source prefix, bounded by declared file size; optional forever. */
@@ -868,13 +877,55 @@ export function acceptPicobinDecoderRecovery(
   return { parsed: { ...candidate, instructions: restored }, substitutions };
 }
 
+/**
+ * Source evidence for anchoring candidate selection: valid original instructions whose bytes agree with the
+ * source, plus every boundary the unpatched decode reported (block edges, branch and call targets, stopped
+ * continuations). Null when a valid original row contradicts the source bytes: the whole-result acceptor could
+ * never preserve it, so no retry can help. Width agreement is checked by the selection itself.
+ */
+export function picobinDecoderSourceEvidence(
+  original: ParsedPicobinFunction | null,
+  mapping: PicobinFlashMapping,
+  source: Uint8Array,
+): PicobinDecoderSourceEvidence | null {
+  if (!original) return { knownInstructions: [], boundaries: [mapping.entryPoint] };
+  const knownInstructions: PicobinDecoderSourceEvidence['knownInstructions'] = [];
+  const boundaries = new Set<number>([mapping.entryPoint]);
+  for (const instruction of original.instructions) {
+    for (const target of [instruction.jump, instruction.fail]) if (target !== undefined) boundaries.add(target);
+    if (invalidPicobinInstruction(instruction)) continue;
+    const offset = instruction.address - mapping.baseAddress;
+    if (
+      instruction.bytes !== undefined &&
+      (offset < 0 ||
+        instruction.bytes !== Buffer.from(source.subarray(offset, offset + instruction.size)).toString('hex'))
+    )
+      return null;
+    knownInstructions.push({ address: instruction.address, size: instruction.size });
+  }
+  for (const block of original.basicBlocks) {
+    for (const boundary of [block.address, block.address + block.size, block.jump, block.fail]) {
+      if (boundary !== undefined) boundaries.add(boundary);
+    }
+  }
+  for (const stop of picobinDecodeCoverage(original, mapping)) {
+    if (stop.kind === 'missing-continuation') boundaries.add(stop.address);
+  }
+  return { knownInstructions, boundaries: [...boundaries].sort((a, b) => a - b) };
+}
+
 function decodeWithRecovery(
   imagePath: string,
   mapping: PicobinFlashMapping,
   fileSize: number,
   execute: Radare2Executor,
   imageBytes: Uint8Array | undefined,
-): { parsed: ParsedPicobinFunction | null; substitutions: PicobinDecoderSubstitution[]; recoveryFailure?: string } {
+): {
+  parsed: ParsedPicobinFunction | null;
+  substitutions: PicobinDecoderSubstitution[];
+  exclusions?: PicobinDecoderCandidateExclusion[];
+  recoveryFailure?: string;
+} {
   const parsed = decodeFunction(imagePath, mapping, fileSize, execute);
   const unchanged = { parsed, substitutions: [] };
   const stops = parsed
@@ -884,26 +935,31 @@ function decodeWithRecovery(
     (stop) => stop.kind === 'missing-continuation' && inMappedImage(stop.address, 4, mapping, fileSize),
   );
   if (!imageBytes || eligible.length === 0) return unchanged;
-  const view = buildPicobinRiscvDecoderView(imageBytes, fileSize, mapping);
+  const evidence = picobinDecoderSourceEvidence(parsed, mapping, imageBytes.subarray(0, fileSize));
+  if (!evidence) return unchanged;
+  const selection = selectPicobinDecoderCandidates(imageBytes, fileSize, mapping, evidence);
+  const exclusions = selection?.exclusions ?? [];
+  const withheld = exclusions.length > 0 ? { ...unchanged, exclusions } : unchanged;
+  // Proved-conflicting proposals are withheld here, before any external retry.
+  const view = buildPicobinRiscvDecoderView(imageBytes, fileSize, mapping, evidence);
   if (!view || !view.substitutions.some((row) => eligible.some((stop) => stop.address === row.address)))
-    return unchanged;
+    return withheld;
   try {
     const directory = mkdtempSync(path.join(tmpdir(), 'firmlab-picobin-'));
     const viewPath = path.join(directory, 'decoder-view.bin');
     try {
       writeFileSync(viewPath, view.bytes, { mode: 0o600 });
       const candidate = decodeFunction(viewPath, mapping, fileSize, execute);
-      if (!candidate) return unchanged;
-      return (
-        acceptPicobinDecoderRecovery(candidate, parsed, view, imageBytes.subarray(0, fileSize), mapping) ?? unchanged
-      );
+      if (!candidate) return withheld;
+      const accepted = acceptPicobinDecoderRecovery(candidate, parsed, view, imageBytes.subarray(0, fileSize), mapping);
+      return accepted ? { ...accepted, ...(exclusions.length > 0 ? { exclusions } : {}) } : withheld;
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
   } catch (err) {
     // A failed compatibility retry or temporary-file operation must retain the source prefix and call edges.
     if (!parsed) throw err;
-    return { ...unchanged, recoveryFailure: radareFailureReason(err) };
+    return { ...withheld, recoveryFailure: radareFailureReason(err) };
   }
 }
 
@@ -986,11 +1042,13 @@ export function runPicobinRiscvDisassembly(
   };
   let parsed: ParsedPicobinFunction | null;
   let entrySubstitutions: PicobinDecoderSubstitution[];
+  let entryExclusions: PicobinDecoderCandidateExclusion[];
   let entryRecoveryFailure: string | undefined;
   try {
     const decoded = decodeWithRecovery(imagePath, mapping, fileSize, boundedExecute, imageBytes);
     parsed = decoded.parsed;
     entrySubstitutions = decoded.substitutions;
+    entryExclusions = decoded.exclusions ?? [];
     entryRecoveryFailure = decoded.recoveryFailure;
   } catch (err) {
     return entryFailure('tool-error', radareFailureReason(err));
@@ -1038,6 +1096,12 @@ export function runPicobinRiscvDisassembly(
   const decoderSubstitutionsByOffset = new Map<number, PicobinDecoderSubstitution>(
     entrySubstitutions.map((substitution) => [substitution.fileOffset, substitution]),
   );
+  // Keyed per function: the same bytes can conflict with one function's evidence and not another's.
+  const candidateExclusions = new Map<string, PicobinDecoderCandidateExclusion>();
+  const recordExclusions = (functionAddress: number, rows: PicobinDecoderCandidateExclusion[] | undefined): void => {
+    for (const row of rows ?? []) candidateExclusions.set(`${functionAddress}:${row.fileOffset}`, row);
+  };
+  recordExclusions(mapping.entryPoint, entryExclusions);
   const recordDecodeFailure = (
     next: { address: number; mapping: PicobinFlashMapping },
     classification: PicobinDecodeFailure['classification'],
@@ -1132,6 +1196,7 @@ export function runPicobinRiscvDisassembly(
       for (const substitution of recovered.substitutions) {
         decoderSubstitutionsByOffset.set(substitution.fileOffset, substitution);
       }
+      recordExclusions(next.address, recovered.exclusions);
     } catch (err) {
       graphStopReasons.add('tool-error');
       recordDecodeFailure(next, 'tool-error', radareFailureReason(err));
@@ -1176,6 +1241,13 @@ export function runPicobinRiscvDisassembly(
     DECODER_SUBSTITUTION_EVIDENCE_CAP,
   );
   const decoderSubstitutionsTotal = decoderSubstitutionsByOffset.size;
+  const candidateExclusionEvidence =
+    candidateExclusions.size > 0
+      ? {
+          decoderCandidateExclusionsTotal: candidateExclusions.size,
+          decoderCandidateExclusions: [...candidateExclusions.values()].slice(0, DECODER_SUBSTITUTION_EVIDENCE_CAP),
+        }
+      : {};
 
   const reason =
     `Decoded a bounded RISC-V call graph from the declared entrypoint: ${reachableFunctions.length} function(s), ` +
@@ -1240,7 +1312,8 @@ export function runPicobinRiscvDisassembly(
       'radare2 decoded instructions and local control-flow blocks from the entrypoint declared by a structurally ' +
       'validated PICOBIN image, then followed only direct call targets under explicit function/depth/attempt budgets and a separate edge display cap. ' +
       'Where the installed decoder rejected exact BSET/SH1ADD/SH2ADD/SH3ADD encodings, a bounded same-length ' +
-      'discarded-destination MOV view recovered ' +
+      'discarded-destination MOV view (linear candidates overlapping a valid original instruction or straddling a ' +
+      'reported boundary are withheld before any retry) recovered ' +
       'control-flow structure only after whole-result source agreement and preservation of valid original instructions; ' +
       'exact substitutions retain original bytes and source mnemonics, including instructions beyond the block display cap. This is bounded static ' +
       'decoder evidence; it does not prove execution, instruction semantics, indirect calls, whole-image function ' +
@@ -1279,6 +1352,7 @@ export function runPicobinRiscvDisassembly(
     decodeFailures,
     decoderSubstitutionsTotal,
     decoderSubstitutions,
+    ...candidateExclusionEvidence,
     startupCopyTable,
     startupCopyTableAttempted: imageBytes !== undefined,
     ...sourceEvidence,

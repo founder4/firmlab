@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parsePicobinRadare2Output,
   picobinDecodeStops,
+  picobinDecoderSourceEvidence,
   picobinFailureBytes,
   picobinFlashMapping,
   picobinRuntimeMapping,
@@ -980,8 +981,64 @@ describe.skipIf(!process.env.FIRMLAB_TEST_RADARE2_IMAGE)('offline real radare2 d
         });
         expect(result?.callEdges).toContainEqual({ caller: entry, callsite: entry + 8, target: entry + 0x18 });
         expect(result?.instructions.some((op) => ['13051380', '00001380'].includes(op.bytes ?? ''))).toBe(false);
-        expect(result?.functionsCompletedTotal).toBe(0); // entry stops at BSET; actual c.jal target is 0x18, not the RET at 0x28
+        // Source-anchored selection withholds offset 6 (it overlaps the decoded ADDI) before the retry, so the
+        // separately corroborated BSET stop at 0x0a is recovered. Before that, the whole view was refused here.
+        expect(result?.decoderCandidateExclusions).toEqual([
+          {
+            address: entry + 6,
+            fileOffset: 6,
+            instruction: 'bset',
+            originalBytesHex: '33100128',
+            reason: 'known-instruction-overlap',
+            conflictAddress: entry + 4,
+          },
+        ]);
+        expect(result?.decoderSubstitutions).toEqual([
+          {
+            address: entry + 10,
+            fileOffset: 10,
+            instruction: 'bset',
+            originalBytesHex: 'b316a028',
+            candidateBasis: 'corroborated-boundary',
+            mnemonic: 'bset x13, x0, x10',
+          },
+        ]);
+        expect(result?.instructions.map((op) => [op.address - entry, op.bytes])).toEqual([
+          [0, '11a0'],
+          [4, '13053310'],
+          [8, '0128'],
+          [10, 'b316a028'],
+          [14, '8280'],
+        ]);
+        // Only the entry function completes this static scope. The actual c.jal target is 0x18 (zero bytes, no
+        // RET), not the RET at 0x28: the helper stays a decode failure and the graph stays incomplete.
+        expect(result?.functionsCompletedTotal).toBe(1);
+        expect(result?.reachableFunctions?.map((row) => row.address)).toEqual([entry]);
+        expect(result?.decodeFailures?.map((row) => row.address)).toEqual([entry + 0x18]);
         expect(result?.callGraphTruncated).toBe(true);
+        expect(result?.reason).toContain('coverage incomplete');
+      },
+      64,
+    );
+  });
+
+  it('labelled synthetic variant: completes the helper only when 0x18 actually holds a RET', () => {
+    withImage(
+      '11a00300130533100128b316a0288280',
+      (image, imagePath) => {
+        image.set(Buffer.from('8280', 'hex'), 0x28);
+        image.set(Buffer.from('8280', 'hex'), 0x18); // synthetic addition, not part of the Finding 1A fixture
+        writeFileSync(imagePath, image);
+        const result = runPicobinRiscvDisassembly(imagePath, picobin, 64, execute, image);
+        expect(result).toMatchObject({
+          functionsCompletedTotal: 2,
+          callGraphTruncated: false,
+          decodeFailuresTotal: 0,
+          decoderSubstitutionsTotal: 1,
+          decoderCandidateExclusionsTotal: 1,
+        });
+        expect(result?.reachableFunctions?.map((row) => row.address)).toEqual([entry, entry + 0x18]);
+        expect(result?.instructions.find((op) => op.address === entry + 4)?.bytes).toBe('13053310');
       },
       64,
     );
@@ -1525,5 +1582,178 @@ describe('decoder evidence safety regressions', () => {
       ),
     );
     expect(result).toMatchObject({ functionsCompletedTotal: 1, callGraphTruncated: false, decodeFailuresTotal: 0 });
+  });
+});
+
+describe('source-anchored decoder candidate selection', () => {
+  const entry = 0x1000_0000;
+  const picobin = { cpuMode: 'riscv' as const, isExecutable: true, entryPoint: entry, rollingWindowDelta: null };
+  const localMapping = { ...mapping, entryPoint: entry, entryFileOffset: 0, mappedRuntimeEnd: entry + 64 };
+  // Rows exactly as the pinned radare2 reports the Finding 1A fixture and its offset-10-only view.
+  const cj = { addr: entry, size: 2, opcode: 'j 0x10000004', type: 'jmp', bytes: '11a0', jump: entry + 4 };
+  const addi = { addr: entry + 4, size: 4, opcode: 'addi a0, t1, 259', type: 'add', bytes: '13053310' };
+  const cjal = { addr: entry + 8, size: 2, opcode: 'jal 0x10000018', type: 'call', bytes: '0128', jump: entry + 0x18 };
+  const inlineData = (): Buffer => {
+    const image = Buffer.alloc(64);
+    Buffer.from('11a00300130533100128b316a0288280', 'hex').copy(image);
+    image.set(Buffer.from('8280', 'hex'), 0x28);
+    return image;
+  };
+  const originalRows = r2Graph(
+    [
+      { addr: entry, size: 2, ninstr: 1, jump: entry + 4 },
+      { addr: entry + 4, size: 6, ninstr: 2 },
+    ],
+    [cj, addi, cjal],
+  );
+
+  it('withholds the conflicting offset before the retry and recovers the corroborated BSET stop', () => {
+    const image = inlineData();
+    const views: Buffer[] = [];
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      (args) => {
+        const input = args.at(-1) ?? '';
+        if (args.at(-2)?.includes('s 0x10000018;')) return 'not json';
+        if (input === '/synthetic.bin') return originalRows;
+        const view = readFileSync(input);
+        views.push(view);
+        // The view must leave ADDI and the compressed call untouched and replace only the stop at 0x0a.
+        if (view.subarray(0, 10).toString('hex') !== image.subarray(0, 10).toString('hex')) return originalRows;
+        return r2Graph(
+          [
+            { addr: entry, size: 2, ninstr: 1, jump: entry + 4 },
+            { addr: entry + 4, size: 12, ninstr: 4 },
+          ],
+          [
+            cj,
+            addi,
+            cjal,
+            { addr: entry + 10, size: 4, opcode: 'mv zero, ra', type: 'mov', bytes: '13800000' },
+            { addr: entry + 14, size: 2, opcode: 'ret', type: 'ret', bytes: '8280' },
+          ],
+        );
+      },
+      image,
+    );
+    expect(views).toHaveLength(1);
+    expect(views[0]?.subarray(10, 14).toString('hex')).toBe('13800000');
+    expect(result).toMatchObject({
+      decoderSubstitutionsTotal: 1,
+      decoderSubstitutions: [{ address: entry + 10, candidateBasis: 'corroborated-boundary' }],
+      decoderCandidateExclusionsTotal: 1,
+      decoderCandidateExclusions: [{ fileOffset: 6, reason: 'known-instruction-overlap', conflictAddress: entry + 4 }],
+      functionsCompletedTotal: 1,
+      callGraphTruncated: true,
+    });
+    expect(result?.instructions.find((op) => op.address === entry + 8)).toMatchObject({
+      bytes: '0128',
+      jump: entry + 0x18,
+    });
+    expect(result?.callEdges).toEqual([{ caller: entry, callsite: entry + 8, target: entry + 0x18 }]);
+    expect(result?.decodeFailures?.map((row) => row.address)).toEqual([entry + 0x18]);
+  });
+
+  it('builds anchoring evidence only from source-consistent rows and reported boundaries', () => {
+    const image = inlineData();
+    const parsed = parsePicobinRadare2Output(originalRows, localMapping, image.length);
+    expect(parsed).not.toBeNull();
+    if (!parsed) return;
+    expect(picobinDecoderSourceEvidence(parsed, localMapping, image)).toEqual({
+      knownInstructions: [
+        { address: entry, size: 2 },
+        { address: entry + 4, size: 4 },
+        { address: entry + 8, size: 2 },
+      ],
+      boundaries: [entry, entry + 2, entry + 4, entry + 10, entry + 0x18],
+    });
+    expect(picobinDecoderSourceEvidence(null, localMapping, image)).toEqual({
+      knownInstructions: [],
+      boundaries: [entry],
+    });
+    const contradicted = Buffer.from(image);
+    contradicted.set([0x13, 0x06], 4); // the reported ADDI bytes no longer match the source
+    expect(picobinDecoderSourceEvidence(parsed, localMapping, contradicted)).toBeNull();
+  });
+
+  it('does not retry when the only stop candidate is bisected by a reported branch target', () => {
+    // beqz a0 -> 0x06 and fallthrough 0x04 claim instruction starts two bytes apart: the BSET-looking word at
+    // 0x04 cannot be substituted without corrupting the branch target. Both stay incomplete.
+    const image = Buffer.from('63030500b316a02867800000', 'hex');
+    let attempts = 0;
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      () => {
+        attempts++;
+        return r2Graph(
+          [{ addr: entry, size: 4, ninstr: 1, jump: entry + 6, fail: entry + 4 }],
+          [{ addr: entry, size: 4, opcode: 'beqz a0, 0x10000006', type: 'cjmp', bytes: '63030500' }],
+        );
+      },
+      image,
+    );
+    expect(attempts).toBe(1);
+    expect(result).toMatchObject({
+      decoderSubstitutionsTotal: 0,
+      decoderCandidateExclusions: [{ fileOffset: 4, reason: 'known-boundary-bisected', conflictAddress: entry + 6 }],
+      functionsCompletedTotal: 0,
+      callGraphTruncated: true,
+    });
+    expect(result?.instructions).toHaveLength(1);
+  });
+
+  it('does not retry when a valid original row contradicts the source instruction width', () => {
+    // Two C.NOP parcels reported as one four-byte instruction: no candidate view could preserve that row.
+    const image = Buffer.from('01000100b316a02867800000', 'hex');
+    let attempts = 0;
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      () => {
+        attempts++;
+        return r2Graph([{ addr: entry, size: 4, ninstr: 1 }], [{ ...addi, addr: entry, bytes: '01000100' }]);
+      },
+      image,
+    );
+    expect(attempts).toBe(1);
+    expect(result).toMatchObject({
+      decoderSubstitutionsTotal: 0,
+      functionsCompletedTotal: 0,
+      callGraphTruncated: true,
+    });
+    expect(result?.decoderCandidateExclusionsTotal).toBeUndefined();
+    expect(result?.instructions).toEqual([expect.objectContaining({ address: entry, bytes: '01000100' })]);
+  });
+
+  it('still recovers an entry BSET with no source decode, anchored only at the declared entry', () => {
+    const image = Buffer.from('b316a02867800000', 'hex');
+    const result = runPicobinRiscvDisassembly(
+      '/synthetic.bin',
+      picobin,
+      image.length,
+      (args) =>
+        args.at(-1) === '/synthetic.bin'
+          ? 'not json'
+          : r2Graph(
+              [{ addr: entry, size: 8, ninstr: 2 }],
+              [
+                { addr: entry, size: 4, opcode: 'mv zero, ra', type: 'mov', bytes: '13800000' },
+                { addr: entry + 4, size: 4, opcode: 'ret', type: 'ret', bytes: '67800000' },
+              ],
+            ),
+      image,
+    );
+    expect(result).toMatchObject({
+      decoderSubstitutions: [
+        { address: entry, candidateBasis: 'corroborated-boundary', mnemonic: 'bset x13, x0, x10' },
+      ],
+      functionsCompletedTotal: 1,
+    });
+    expect(result?.decoderCandidateExclusionsTotal).toBeUndefined();
   });
 });
