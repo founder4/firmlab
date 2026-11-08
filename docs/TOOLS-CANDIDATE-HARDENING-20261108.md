@@ -94,7 +94,9 @@ Canary logs are in the external evidence directory; no shared tag changed.
 
 Seven focused new shell-shim regressions failed against the original source: missing baseline, unknown
 baseline OS, empty baseline layer, absent timeout after build, both Docker Hub host aliases and unknown builder
-metadata. The first red run was 38 passed / 7 failed. Additional coverage exercises missing bash, failed OS
+metadata. The first red run was 38 passed / 7 failed. A second isolated copy of the exact original scripts,
+using the finalized fixture harness, failed all eight focused regressions, including report-directory reuse
+(`red-final-fixtures.log`); no original-source files were restored over the writing checkout. Additional coverage exercises missing bash, failed OS
 reads, incomplete/unknown inventory results, iidfile errors, layer metadata, source/input/tag drift, frozen ARG
 identities, distinct tracked/untracked dirty contents and actual JSON parsing through the validation shell.
 
@@ -104,3 +106,69 @@ its syntax checks and the actual shell suite pass. Clean-source real candidate r
 follow-up evidence section when executed. The coordinator owns the
 repository-wide typecheck/test/build integration gate. Expensive integration/FreeRTOS/security runtime smoke
 from the first wave is retained as historical bounded evidence and will not be repeated absent a material reason.
+
+## Clean-source real rerun
+
+Executed successfully from clean `c6e4fbb1b7e22d0fe5e625338cd5e685578df086`:
+
+```bash
+GRYPE_DB_REFRESH=campaign-20261108-script-run /bin/bash scripts/tools-candidate.sh \
+  --tag firmlab-campaign-20261108/tools:hardening-c6e4fbb \
+  --retained firmlab-campaign-20261108/retained-src:2d0aba372d9d \
+  --renode firmlab-campaign-20261108/renode-src:2d0aba372d9d \
+  --report /Users/agfil/.local/state/orca-campaign/firmlab-20261108-034811/tools-hardening/candidate-c6e4fbb
+```
+
+Exit 0 and `accepted`. Baseline and candidate each returned 27 `ok` and one `analyzeHeadless present` across
+28 bounded offline probes. Debian 13; Grype schema `v6.1.10`, built `2026-11-07T06:18:48Z`, `valid: true`.
+The candidate final layer is `sha256:f46c06218786dd82d545f7bb035f58ccc7193c63e7144ba97c3a5f7320d86e9e`,
+different from baseline `sha256:871427efcbb34cff773a9719657fcaf59511095da71f7d7a576be77b439c0de6`.
+
+The refresh key deliberately reuses the first-wave cache: this rerun proves the changed input-resolution and
+validation path, not a new database download or fresh apt/pip/dependency rebuild. All 27 filesystem layers
+match `firmlab-campaign-20261108/tools:trixie-caf2355` exactly; the sole image-config difference is the source
+revision label. Therefore there was no material reason to repeat its expensive integration/FreeRTOS/security
+runtime smoke. The new image ID differs because its revision metadata differs.
+
+The source delta fingerprint is SHA256(empty) for this clean checkout; the recorded HEAD identifies all
+committed sources. For a dirty checkout the combined HEAD plus delta fingerprint identifies changed tracked
+and nonignored untracked content. The fingerprint does not claim to be a full image/dependency digest.
+
+A separate disposable `--rm --network none` scan ran against the new candidate by immutable ID, with no host
+mounts and all Anchore auto/app updates disabled. A synthetic Debian 12 fixture supplied only `/etc/os-release`
+and one dpkg status entry: `openssl 3.0.9-1`, architecture `arm64`. Real Syft emitted exactly that package with
+`pkg:deb/debian/openssl@3.0.9-1?arch=arm64&distro=debian-12`; real Grype scanned its SBOM offline and returned
+53 advisory matches with the bundled valid database. Each tool had a 90-second TERM budget and 2-second KILL
+grace. These are matches on synthetic package metadata, not firmware findings, exploitability or device proof.
+An earlier npm-only fixture attempt emitted no matching Syft artifact and failed its assertion; it is retained
+as failed fixture evidence and supplies no npm coverage claim.
+
+Before/after shared state remained unchanged:
+
+| Shared state | Full immutable ID / observation |
+|---|---|
+| `firmlab-tools:latest` | `sha256:2d0aba372d9dfb32b9221df153622d9b70fbc7d278dcf876bf1c8f0d0a13e5f2` |
+| `firmlab-firmware:latest` | `sha256:76f8e015d2f06334a7c803f506dc0915406213cc021ef93e23132e9d8424ed0c` |
+| Live `firmlab` | same firmware ID, same start `2026-11-07T16:06:08.622560876Z`, healthy |
+
+## Retained artifacts and exact cleanup boundary
+
+Keep these new artifacts until coordinator review; no cleanup was executed:
+
+| New ref | Full image ID |
+|---|---|
+| `firmlab-campaign-20261108/tools:hardening-c6e4fbb` | `sha256:4d35e3ef0cc6d7101743098d8ae05e5d004448f24a55d3f9ce82616097702eac` |
+| `firmlab-candidate-input/firmlab-candidate-input.jv4ebljg-58871:retained_image` | `sha256:2d0aba372d9dfb32b9221df153622d9b70fbc7d278dcf876bf1c8f0d0a13e5f2` |
+| `firmlab-candidate-input/firmlab-candidate-input.jv4ebljg-58871:renode_image` | `sha256:5e73a0e69f7e6c9855b3f8a8af94212103631ae9d1b747cb5b6992d6f1d301ba` |
+| `firmlab-campaign-20261108/hardening-canary:local-20261108-0450` | `sha256:5e73a0e69f7e6c9855b3f8a8af94212103631ae9d1b747cb5b6992d6f1d301ba` |
+| Untagged tiny canary output | `sha256:f7bb362e61dadd24c71fd3b5df7751eff6595e660bf03b8dfd02de025368c3f6` |
+
+Later cleanup is limited to removing the four exact new refs above (without force) and the untagged canary
+output if still unreferenced. Removing the retained alias by ID would target a shared image: use its exact
+alias ref instead. Preserve first-wave retained/Renode/candidate refs and all shared tags; never global-prune.
+
+Evidence root: `/Users/agfil/.local/state/orca-campaign/firmlab-20261108-034811/tools-hardening/` contains
+`raw.log`, `alias.log`, red/green shell-suite logs, `biome.log`, the complete `candidate-c6e4fbb.log` and report
+directory, both synthetic fixture logs, `image-identities.json`, `config-differences.json` and
+`retained-image-refs.txt`. The coordinator still owns integration, the repository-wide check/test/build gate,
+and any future operator decision about promotion, dependency refresh or deferred legacy recipe pinning.
