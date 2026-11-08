@@ -2,7 +2,9 @@
  * Build a bounded, same-length decoder view for exact ratified RV32 Zba/Zbs instructions that older
  * radare2 releases reject. The view is analysis-only: it replaces exact non-control-flow encodings with 32-bit
  * NOPs so the external decoder can recover block boundaries, while callers retain every original byte and restore
- * the mnemonic in reported instructions. It never mutates the firmware image.
+ * the mnemonic in reported instructions. It walks encoded instruction lengths from the declared entry, never
+ * matches a word across adjacent instructions, and stops at unsupported longer encodings. The walk does not
+ * establish instruction semantics or distinguish embedded data from code. It never mutates the firmware image.
  */
 
 const DECODER_WINDOW_BYTES = 4096;
@@ -65,6 +67,13 @@ export function buildPicobinRiscvDecoderView(
 ): PicobinDecoderView | null {
   if (
     imageBytes.byteLength !== fileSize ||
+    !Number.isSafeInteger(mapping.entryFileOffset) ||
+    !Number.isSafeInteger(mapping.entryPoint) ||
+    !Number.isSafeInteger(mapping.mappedRuntimeEnd) ||
+    mapping.entryPoint < 0 ||
+    mapping.entryPoint > 0xffff_ffff ||
+    mapping.entryPoint % 2 !== 0 ||
+    mapping.mappedRuntimeEnd > 0x1_0000_0000 ||
     mapping.entryFileOffset < 0 ||
     mapping.entryFileOffset >= fileSize ||
     mapping.mappedRuntimeEnd <= mapping.entryPoint
@@ -80,21 +89,32 @@ export function buildPicobinRiscvDecoderView(
   const patched = Uint8Array.from(imageBytes);
   const substitutions: PicobinDecoderSubstitution[] = [];
   let offset = mapping.entryFileOffset;
-  for (; offset + 4 <= end && substitutions.length < SUBSTITUTION_CAP; offset += 2) {
-    const word = readWord(imageBytes, offset);
-    const definition = supported.find((candidate) => (word & OPCODE_MASK) >>> 0 === candidate.match);
-    if (!definition) continue;
-    substitutions.push({
-      address: mapping.entryPoint + (offset - mapping.entryFileOffset),
-      fileOffset: offset,
-      instruction: definition.instruction,
-      originalBytesHex: wordHex(imageBytes, offset),
-    });
-    writeWord(patched, offset, RISCV_NOP);
-    offset += 2;
+  // RISC-V base instruction-length encoding, ratified unprivileged ISA table 1:
+  // low bits != 11 mark a 16-bit parcel; bbb11 with bbb != 111 marks 32 bits.
+  // A longer/reserved prefix is outside this RV32 decoder view. Stop rather than
+  // interpreting its trailing parcels as independent instructions.
+  while (offset + 2 <= end && substitutions.length < SUBSTITUTION_CAP) {
+    const parcel = (imageBytes[offset] ?? 0) | ((imageBytes[offset + 1] ?? 0) << 8);
+    if ((parcel & 0x1f) === 0x1f) break;
+    const instructionBytes = (parcel & 0x3) === 0x3 ? 4 : 2;
+    if (offset + instructionBytes > end) break;
+    if (instructionBytes === 4) {
+      const word = readWord(imageBytes, offset);
+      const definition = supported.find((candidate) => (word & OPCODE_MASK) >>> 0 === candidate.match);
+      if (definition) {
+        substitutions.push({
+          address: mapping.entryPoint + (offset - mapping.entryFileOffset),
+          fileOffset: offset,
+          instruction: definition.instruction,
+          originalBytesHex: wordHex(imageBytes, offset),
+        });
+        writeWord(patched, offset, RISCV_NOP);
+      }
+    }
+    offset += instructionBytes;
   }
   if (substitutions.length === 0) return null;
-  return { bytes: patched, substitutions, bytesExamined: end - mapping.entryFileOffset };
+  return { bytes: patched, substitutions, bytesExamined: offset - mapping.entryFileOffset };
 }
 
 /** Restore an exact source mnemonic without pretending to recover register values from radare2's NOP view. */

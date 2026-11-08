@@ -201,6 +201,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   periféricos/MMIO (µEmu/P2IM/Fuzzware) y un modelo runtime/periférico adecuado para RISC-V con boot ROM local;
   Renode sigue
   demostrando vida, no cobertura del HAL.
+- [ ] Acotar la vista de compatibilidad de radare2 a regiones de código corroboradas. El arreglo del
+  2026-11-08 ya recorre longitudes RISC-V desde la entrada declarada, conserva un JAL cuyo parcel alto parecía
+  BSET y se detiene ante instrucciones largas no soportadas, con prueba real de radare2 sobre bytes sintéticos.
+  Ese recorrido lineal no distingue pools de datos ni demuestra semántica; una evolución debe conservar esa
+  incertidumbre y no llamar instrucción ejecutada a una sustitución. Véase `RP2350-DECODER-BOUNDARIES-20261108.md`.
 - [ ] UEFI restante. La imagen ya tiene un parser acotado del descriptor Intel SPI que registra regiones,
   solapes, huecos y bytes examinados sin confundir defaults estáticos con registros vivos. Desde 2026-10-02 lee
   además `FLMSTR1` (maestro CPU/BIOS) y emite `spi-descriptor-host-write` (`static_confirmed`, medium) sólo cuando
