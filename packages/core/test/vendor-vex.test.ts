@@ -500,6 +500,7 @@ describe('vendor-vex parser and resolver', () => {
           category: 'csaf_vex',
           csaf_version: '2.0',
         },
+        product_tree: { full_product_names: [{ product_id: 'prod-2', name: 'product 2' }] },
         vulnerabilities: [
           {
             cve: 'GHSA-9876-5432',
@@ -641,7 +642,11 @@ describe('vendor-vex parser and resolver', () => {
     const cve = 'CVE-2022-48174';
     const boundaryStatuses = ['first_affected', 'last_affected', 'first_fixed'];
     const csaf = (vulnerabilities: unknown[]) =>
-      JSON.stringify({ document: { category: 'csaf_vex' }, vulnerabilities });
+      JSON.stringify({
+        document: { category: 'csaf_vex' },
+        product_tree: { full_product_names: ['P', 'busybox'].map((id) => ({ product_id: id, name: id })) },
+        vulnerabilities,
+      });
 
     it.each(boundaryStatuses)('counts %s once per group without matching its products', (status) => {
       const parsed = parseVendorVex(

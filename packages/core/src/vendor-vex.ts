@@ -32,7 +32,8 @@
  *   - A CSAF product keeps its identity together. When its `product_identification_helper` carries a
  *     VERSIONED purl or CPE, only those versioned identities stand for it — never its bare `name` or
  *     free-form `product_id`, which would let a statement scoped to busybox 1.30.1 attach to any
- *     busybox. A product with no versioned identity keeps its id, name and unversioned helpers.
+ *     busybox. Only valid top-level products without a versioned identity retain legacy id/name aliases. Branch
+ *     products require a readable exact versioned helper. Unknown, ambiguous and truncated definitions stay unread.
  */
 
 export const DEFAULT_MAX_VEX_DOCUMENT_BYTES = 4 * 1024 * 1024; // 4 MiB
@@ -70,6 +71,9 @@ export interface VendorVexLimits {
   readonly maxDocumentBytes?: number | undefined;
   readonly maxStatements?: number | undefined;
   readonly maxProducts?: number | undefined;
+  /** Lower test/operator budgets only; values above the hard 32/10,000 ceilings cannot widen the walk. */
+  readonly maxCsafTreeDepth?: number | undefined;
+  readonly maxCsafTreeNodes?: number | undefined;
 }
 
 /** One statement omitted because its status is unrecognised or unsupported — kept as an example, bounded. */
@@ -82,20 +86,22 @@ export interface VendorVexUnrecognisedStatus {
 export const MAX_UNRECOGNISED_STATUS_EXAMPLES = 10;
 
 /**
- * A product structure the parser saw and deliberately did not interpret, for one CVE. No pinned primary CSAF/OpenVEX
- * specification text backs a reading of these shapes here, so instead of guessing what they mean they are counted:
+ * A product structure the parser deliberately did not interpret, counted per CVE/status/reference:
  *
- *  - `csaf_unindexed_product` — a product_status reference to a product_id defined only under
- *    `product_tree.branches` or `product_tree.relationships`. It is NOT matched by its raw id: the definition it
- *    points at may carry a versioned helper, and matching the bare id would drop that version restriction.
- *  - `csaf_product_tree_truncated` — an unresolved reference while the bounded product-tree walk stopped early, so it
- *    cannot be told whether the id was defined in the part not walked. Also not matched by its raw id.
- *  - `openvex_product_identifiers` — a product object carrying `identifiers`; its `@id` is still read, the alternate
- *    identifiers are not (an object with no `@id` contributes nothing).
- *  - `openvex_nested_subcomponents` — subcomponents nested inside a product object; the statement-level
- *    `subcomponents` list is read, these are not.
+ *  - `csaf_ambiguous_product` — an id defined more than once, including collisions across tree locations.
+ *  - `csaf_unread_product_identity` — a malformed top-level full product name/helper.
+ *  - `csaf_unknown_product` — a reference token with no product definition; never a raw identity fallback.
+ *  - `csaf_unindexed_product` — a branch without a readable full product name/versioned helper, or a relationship
+ *    product; relationship semantics remain unsupported. Retains the existing kind for unread branch products.
+ *  - `csaf_product_tree_truncated` — any reference when the walk stopped early; an unseen duplicate may invalidate
+ *    even an already-read definition, so all references are refused.
+ *  - `openvex_product_identifiers` / `openvex_nested_subcomponents` — alternate identifiers / subcomponents nested
+ *    inside an OpenVEX product object. Its own @id and statement-level subcomponents retain their existing reading.
  */
 export type VendorVexUnreadStructureKind =
+  | 'csaf_ambiguous_product'
+  | 'csaf_unread_product_identity'
+  | 'csaf_unknown_product'
   | 'csaf_unindexed_product'
   | 'csaf_product_tree_truncated'
   | 'openvex_product_identifiers'
@@ -110,11 +116,11 @@ export interface VendorVexUnreadStructure {
 
 /** How many examples of unread structures a document keeps; the count is always exact. */
 export const MAX_UNREAD_STRUCTURE_EXAMPLES = 10;
-/** Bounds on the CSAF product-tree walk that only collects ids defined outside `full_product_names`. */
+/** Bounds on the CSAF product-tree definition walk, including top-level names and relationships. */
 export const MAX_CSAF_TREE_DEPTH = 32;
 export const MAX_CSAF_TREE_NODES = 10_000;
 
-export const VEX_UNREAD_STRUCTURE_RULE = `CSAF product ids defined only under product_tree.branches/relationships, and OpenVEX product identifiers and nested subcomponents, are counted per CVE rather than interpreted; a reference to such an id is never matched by its raw id. The product-tree walk stops at depth ${MAX_CSAF_TREE_DEPTH} or ${MAX_CSAF_TREE_NODES} nodes; past that, unresolved references are counted, not matched. First ${MAX_UNREAD_STRUCTURE_EXAMPLES} examples kept in document order.`;
+export const VEX_UNREAD_STRUCTURE_RULE = `CSAF branch products require explicit full product names and readable versioned purl/CPE helpers. Unknown ids, duplicate definitions, unreadable helpers, relationships, and OpenVEX product identifiers and nested subcomponents are counted per CVE rather than interpreted; a reference to such an id is never matched by its raw id. The product-tree walk stops at depth ${MAX_CSAF_TREE_DEPTH} or ${MAX_CSAF_TREE_NODES} nodes; if truncated, every reference is counted, not matched, because unseen definitions may conflict. First ${MAX_UNREAD_STRUCTURE_EXAMPLES} examples kept in document order.`;
 
 export interface VendorVexDocument {
   readonly ok: true;
@@ -277,47 +283,6 @@ function extractOpenVexProducts(
   return { products: result, unread };
 }
 
-/**
- * Product ids defined outside `full_product_names` — under `branches` (any depth) or as a relationship's
- * `full_product_name` — which this parser does not interpret. Collected only so a reference to one is counted instead
- * of being matched by its raw id. Iterative and bounded, so no document can recurse the parser off the stack.
- */
-function collectUnindexedCsafProductIds(productTreeRaw: unknown): { ids: Set<string>; truncated: boolean } {
-  const ids = new Set<string>();
-  if (productTreeRaw === null || typeof productTreeRaw !== 'object') return { ids, truncated: false };
-  const tree = productTreeRaw as Record<string, unknown>;
-  const addFrom = (product: unknown) => {
-    if (product === null || typeof product !== 'object') return;
-    const pid = (product as Record<string, unknown>).product_id;
-    if (typeof pid === 'string' && pid.trim().length > 0) ids.add(pid.trim());
-  };
-  let nodes = 0;
-  let truncated = false;
-  const stack: { node: unknown; depth: number }[] = [];
-  if (Array.isArray(tree.branches)) for (const b of tree.branches) stack.push({ node: b, depth: 1 });
-  while (stack.length > 0) {
-    const { node, depth } = stack.pop() as { node: unknown; depth: number };
-    if (++nodes > MAX_CSAF_TREE_NODES || depth > MAX_CSAF_TREE_DEPTH) {
-      truncated = true;
-      break;
-    }
-    if (node === null || typeof node !== 'object') continue;
-    const branch = node as Record<string, unknown>;
-    addFrom(branch.product);
-    if (Array.isArray(branch.branches)) for (const b of branch.branches) stack.push({ node: b, depth: depth + 1 });
-  }
-  if (Array.isArray(tree.relationships)) {
-    for (const rel of tree.relationships) {
-      if (++nodes > MAX_CSAF_TREE_NODES) {
-        truncated = true;
-        break;
-      }
-      if (rel !== null && typeof rel === 'object') addFrom((rel as Record<string, unknown>).full_product_name);
-    }
-  }
-  return { ids, truncated };
-}
-
 interface RawStatementCandidate {
   vulnerabilityId: string;
   status: VendorVexStatus;
@@ -328,72 +293,174 @@ interface RawStatementCandidate {
   statusNotes?: string | undefined;
 }
 
-function isWildcardVersion(v: string | undefined): boolean {
-  return v === undefined || v === '' || v === '*' || v === '-';
-}
-
-/**
- * Whether a purl or CPE string names a concrete version. Reads the raw text only — nothing is percent-decoded here, so
- * no firmware-controlled string can throw.
- */
-function isVersionedIdentity(raw: string): boolean {
-  const id = raw.trim();
-  const purl = /^pkg:[^/]+\/([^?#]+)/i.exec(id);
-  if (purl) {
-    const body = purl[1] as string;
-    const at = body.lastIndexOf('@');
-    return at >= 0 && body.slice(at + 1).length > 0;
-  }
-  if (/^cpe:2\.3:/i.test(id)) return !isWildcardVersion(id.split(':')[5]);
-  if (/^cpe:\//i.test(id)) return !isWildcardVersion(id.slice(5).split(':')[3]);
-  return false;
-}
-
-/** The identity strings one CSAF product stands for, and whether its free-form product_id may stand for it too. */
+/** The identity strings one CSAF product stands for, or why its reference must remain unread. */
 interface CsafProductIdentity {
   identities: string[];
   includeProductId: boolean;
+  unread?: VendorVexUnreadStructureKind;
 }
 
-function buildCsafProductTreeMap(productTreeRaw: unknown): Map<string, CsafProductIdentity> {
-  const map = new Map<string, CsafProductIdentity>();
-  if (productTreeRaw === null || typeof productTreeRaw !== 'object') return map;
-  const tree = productTreeRaw as Record<string, unknown>;
-
-  if (Array.isArray(tree.full_product_names)) {
-    for (const item of tree.full_product_names) {
-      if (item !== null && typeof item === 'object') {
-        const obj = item as Record<string, unknown>;
-        const pid = typeof obj.product_id === 'string' ? obj.product_id.trim() : null;
-        if (!pid) continue;
-        const helpers: string[] = [];
-        if (obj.product_identification_helper !== null && typeof obj.product_identification_helper === 'object') {
-          const helper = obj.product_identification_helper as Record<string, unknown>;
-          if (typeof helper.purl === 'string' && helper.purl.trim().length > 0) {
-            helpers.push(helper.purl.trim());
-          }
-          if (typeof helper.cpe === 'string' && helper.cpe.trim().length > 0) {
-            helpers.push(helper.cpe.trim());
-          }
-        }
-        // A versioned purl or CPE scopes the product: it alone stands for it, because the bare name or product_id
-        // would match every version of the same software.
-        const versioned = helpers.filter(isVersionedIdentity);
-        if (versioned.length > 0) {
-          map.set(pid, { identities: versioned, includeProductId: false });
-          continue;
-        }
-        const aliases: string[] = [];
-        if (typeof obj.name === 'string' && obj.name.trim().length > 0) {
-          aliases.push(obj.name.trim());
-        }
-        aliases.push(...helpers);
-        map.set(pid, { identities: aliases, includeProductId: true });
+/**
+ * Conservative helper syntax reader, not an ecosystem matcher or a complete PURL/CPE conformance validator.
+ * Decode only to validate component boundaries and concrete versions; return the original helper to the caller's
+ * matcher. Unsupported escaping/CPE patterns are refused rather than repaired or turned into plain aliases.
+ */
+function csafHelperVersion(raw: string, kind: 'purl' | 'cpe'): { versioned: boolean } | null {
+  const concrete = (value: string) => value.length > 0 && !/[*?]/.test(value) && value !== '-';
+  const decode = (value: string): string | null => {
+    try {
+      const decoded = decodeURIComponent(value);
+      return [...decoded].some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127) ? null : decoded;
+    } catch {
+      return null;
+    }
+  };
+  if (kind === 'purl') {
+    const match = /^pkg:([a-z][a-z0-9.-]*)\/([^?#]+)(?:\?([^#]+))?(?:#(.+))?$/i.exec(raw);
+    if (!match || !/^[A-Za-z0-9._~%:/@?=&#-]+$/.test(raw)) return null;
+    let body = match[2] as string;
+    let version: string | null = null;
+    const at = body.indexOf('@');
+    if (at >= 0) {
+      if (body.indexOf('@', at + 1) >= 0) return null;
+      version = decode(body.slice(at + 1));
+      if (version === null || !concrete(version) || version.includes('/')) return null;
+      body = body.slice(0, at);
+    }
+    const components = body.split('/').map(decode);
+    if (components.some((part) => !part || /[/@]/.test(part.replace(/^@/, '')))) return null;
+    const keys = new Set<string>();
+    for (const pair of match[3]?.split('&') ?? []) {
+      const eq = pair.indexOf('=');
+      const key = pair.slice(0, eq);
+      const value = decode(pair.slice(eq + 1));
+      if (eq <= 0 || pair.indexOf('=', eq + 1) >= 0 || !/^[a-z][a-z0-9._-]*$/.test(key) || !value || keys.has(key)) {
+        return null;
       }
+      keys.add(key);
+    }
+    const subpath = match[4]?.split('/').map(decode) ?? [];
+    if (subpath.some((part) => !part || part === '.' || part === '..' || part.includes('/'))) return null;
+    return { versioned: version !== null };
+  }
+  if (raw.startsWith('cpe:2.3:')) {
+    const parts = raw.split(':');
+    // Escaped separators and wildcard patterns need a richer CPE reader than the row matcher currently has.
+    if (parts.length !== 13 || !/^[aho]$/.test(parts[2] ?? '')) return null;
+    if (parts.slice(3).some((part) => !/^(?:[A-Za-z0-9._~-]+|\*)$/.test(part))) return null;
+    if (!concrete(parts[3] ?? '') || !concrete(parts[4] ?? '')) return null;
+    const version = parts[5] as string;
+    return { versioned: concrete(version) };
+  }
+  if (/^cpe:\/[aho]:/.test(raw)) {
+    const parts = raw.slice(5).split(':');
+    if (parts.length < 3 || parts.length > 7 || parts.some((part) => !/^[A-Za-z0-9._~%-]*$/.test(part))) return null;
+    if (parts.some((part) => decode(part) === null)) return null;
+    if (!concrete(parts[1] ?? '') || !concrete(parts[2] ?? '')) return null;
+    // The legacy row matcher compares raw URI fields; percent-encoded identity fields cannot safely be read here.
+    if (parts.slice(1, 4).some((part) => part.includes('%'))) return null;
+    return { versioned: concrete(parts[3] ?? '') };
+  }
+  return null;
+}
+
+function csafProductIdentity(product: Record<string, unknown>, branch: boolean): CsafProductIdentity {
+  const unread = (): CsafProductIdentity => ({
+    identities: [],
+    includeProductId: false,
+    unread: branch ? 'csaf_unindexed_product' : 'csaf_unread_product_identity',
+  });
+  if (typeof product.name !== 'string' || product.name.trim().length === 0) return unread();
+  const helperRaw = product.product_identification_helper;
+  const helpers: { identity: string; versioned: boolean }[] = [];
+  if (helperRaw !== undefined) {
+    if (
+      helperRaw === null ||
+      typeof helperRaw !== 'object' ||
+      Array.isArray(helperRaw) ||
+      Object.keys(helperRaw).length === 0
+    )
+      return unread();
+    const helper = helperRaw as Record<string, unknown>;
+    for (const kind of ['purl', 'cpe'] as const) {
+      if (!(kind in helper)) continue;
+      const value = helper[kind];
+      if (typeof value !== 'string') return unread();
+      const identity = value.trim();
+      const parsed = csafHelperVersion(identity, kind);
+      if (!parsed) return unread();
+      helpers.push({ identity, versioned: parsed.versioned });
     }
   }
+  const versioned = helpers.filter((helper) => helper.versioned).map((helper) => helper.identity);
+  if (versioned.length > 0) return { identities: versioned, includeProductId: false };
+  if (branch) return unread();
+  // Preserve the established top-level unversioned identity contract for valid full_product_names.
+  return { identities: [product.name.trim(), ...helpers.map((helper) => helper.identity)], includeProductId: true };
+}
 
-  return map;
+/**
+ * CSAF 2.0 §§3.1.2–3.1.3 and 6.1.1–6.1.2: branch.product is a full_product_name, and ids must have one definition.
+ * Scan top-level names, then branches in depth-first document order, then relationship definitions (ids only).
+ * Array cursor frames keep auxiliary traversal memory bounded by depth, even for very wide trees. All tree entries
+ * consume the node budget. If any subtree is unseen, refuse every reference: an unseen duplicate could invalidate
+ * even an already-read product. Neither an unknown id nor a relationship is an identity alias.
+ */
+function buildCsafProductTreeMap(
+  productTreeRaw: unknown,
+  maxDepth: number,
+  maxNodes: number,
+): {
+  products: Map<string, CsafProductIdentity>;
+  truncated: boolean;
+} {
+  const products = new Map<string, CsafProductIdentity>();
+  if (productTreeRaw === null || typeof productTreeRaw !== 'object') return { products, truncated: false };
+  const tree = productTreeRaw as Record<string, unknown>;
+  type Kind = 'top' | 'branch' | 'relationship';
+  const stack: { items: unknown[]; index: number; depth: number; kind: Kind }[] = [];
+  for (const [key, kind] of [
+    ['relationships', 'relationship'],
+    ['branches', 'branch'],
+    ['full_product_names', 'top'],
+  ] as const) {
+    if (Array.isArray(tree[key])) stack.push({ items: tree[key], index: 0, depth: 1, kind });
+  }
+  const add = (raw: unknown, kind: Kind) => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return;
+    const product = raw as Record<string, unknown>;
+    const id = typeof product.product_id === 'string' ? product.product_id.trim() : '';
+    if (!id) return;
+    if (products.has(id)) {
+      products.set(id, { identities: [], includeProductId: false, unread: 'csaf_ambiguous_product' });
+    } else if (kind === 'relationship') {
+      products.set(id, { identities: [], includeProductId: false, unread: 'csaf_unindexed_product' });
+    } else {
+      products.set(id, csafProductIdentity(product, kind === 'branch'));
+    }
+  };
+  let nodes = 0;
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (!frame) break;
+    if (frame.index >= frame.items.length) {
+      stack.pop();
+      continue;
+    }
+    if (nodes >= maxNodes || frame.depth > maxDepth) return { products, truncated: true };
+    const item = frame.items[frame.index++];
+    nodes++;
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue;
+    const obj = item as Record<string, unknown>;
+    if (frame.kind === 'branch') {
+      add(obj.product, 'branch');
+      if (Array.isArray(obj.branches))
+        stack.push({ items: obj.branches, index: 0, depth: frame.depth + 1, kind: 'branch' });
+    } else {
+      add(frame.kind === 'top' ? obj : obj.full_product_name, frame.kind);
+    }
+  }
+  return { products, truncated: false };
 }
 
 function applyBounds(
@@ -663,8 +730,12 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
         ? trackingObj.initial_release_date.trim()
         : null;
 
-  const productTreeMap = buildCsafProductTreeMap(root.product_tree);
-  const unindexed = collectUnindexedCsafProductIds(root.product_tree);
+  // Configured tree budgets may tighten the hard ceilings, never raise or disable them.
+  const treeLimit = (value: number | undefined, ceiling: number) =>
+    value !== undefined && Number.isFinite(value) ? Math.max(0, Math.min(ceiling, Math.floor(value))) : ceiling;
+  const maxTreeDepth = treeLimit(limits?.maxCsafTreeDepth, MAX_CSAF_TREE_DEPTH);
+  const maxTreeNodes = treeLimit(limits?.maxCsafTreeNodes, MAX_CSAF_TREE_NODES);
+  const productTree = buildCsafProductTreeMap(root.product_tree, maxTreeDepth, maxTreeNodes);
   const vulnerabilitiesArray = Array.isArray(root.vulnerabilities) ? root.vulnerabilities : [];
 
   for (const vulnItem of vulnerabilitiesArray) {
@@ -746,19 +817,19 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
         if (typeof pidItem === 'string') {
           const pid = pidItem.trim();
           if (pid.length > 0) {
+            if (pidSet.has(pid)) continue;
             pidSet.add(pid);
-            const identity = productTreeMap.get(pid);
-            // A reference to a definition this parser does not read is counted, never matched by its raw id: that
-            // definition may carry a versioned helper the bare id would silently drop.
-            if (!identity && unindexed.ids.has(pid)) {
-              noteUnread(normalizedCve, 'csaf_unindexed_product', pid);
-              continue;
-            }
-            if (!identity && unindexed.truncated) {
+            const identity = productTree.products.get(pid);
+            // A cap may hide a duplicate of any id, including a top-level definition read before the cap.
+            if (productTree.truncated) {
               noteUnread(normalizedCve, 'csaf_product_tree_truncated', pid);
               continue;
             }
-            if (!identity || identity.includeProductId) productSet.add(pid);
+            if (!identity || identity.unread) {
+              noteUnread(normalizedCve, identity?.unread ?? 'csaf_unknown_product', pid);
+              continue;
+            }
+            if (identity.includeProductId) productSet.add(pid);
             for (const alias of identity?.identities ?? []) productSet.add(alias);
           }
         }
@@ -851,7 +922,7 @@ export function parseVendorVex(rawText: string, sourcePath: string, limits?: Ven
     unrecognisedStatusExamples,
     unreadStructureCount,
     unreadStructureExamples,
-    unreadStructureRule: VEX_UNREAD_STRUCTURE_RULE,
+    unreadStructureRule: `${VEX_UNREAD_STRUCTURE_RULE} Effective tree limits: depth ${maxTreeDepth}, ${maxTreeNodes} nodes.`,
     boundsRule: VEX_BOUNDS_RULE,
   };
 }

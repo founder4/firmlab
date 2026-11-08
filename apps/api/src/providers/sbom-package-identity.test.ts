@@ -205,3 +205,75 @@ describe('Grype artifact identity through parser and normalizer', () => {
     });
   });
 });
+
+it.each(['fixed', 'known_not_affected', 'known_affected', 'under_investigation'])(
+  'normalizes actual CSAF branch helpers plus unread assertions without changing rows/proof/severity: %s',
+  async (status) => {
+    const purl = 'pkg:npm/%40acme/busybox@1.20';
+    scan({ name: '@acme/busybox', version: '1.20', purl });
+    const result = await runSbom('fixture', '/synthetic-rootfs', handle);
+    const parsed = parseVendorVex(
+      JSON.stringify({
+        document: { category: 'csaf_vex', csaf_version: '2.0' },
+        product_tree: {
+          branches: [
+            {
+              category: 'vendor',
+              name: 'Acme',
+              branches: [
+                {
+                  category: 'product_version',
+                  name: '99.99',
+                  product: {
+                    product_id: 'P',
+                    name: '@acme/busybox 1.20',
+                    product_identification_helper: { purl },
+                  },
+                },
+                {
+                  category: 'product_version',
+                  name: '1.20',
+                  product: {
+                    product_id: '@acme/busybox',
+                    name: '@acme/busybox',
+                    product_identification_helper: { purl: 'pkg:npm/%40acme/busybox@1.20?arch=%zz' },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        vulnerabilities: [{ cve, product_status: { [status]: ['P', '@acme/busybox', '@acme/busybox'] } }],
+      }),
+      '/etc/csaf-branches.json',
+    );
+    if (!parsed.ok) throw new Error(parsed.reason);
+    const base = normalizeSbom(result);
+    const rows = normalizeSbom(JSON.parse(JSON.stringify(result)), undefined, {
+      documents: [JSON.parse(JSON.stringify(parsed))],
+    });
+    expect(rows).toHaveLength(base.length);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      severity: base[0]?.severity,
+      proofState: base[0]?.proofState,
+      evidenceChannel: base[0]?.evidenceChannel,
+      evidence: {
+        vendorVex: {
+          basis: 'vendor_assertion',
+          omissions: [{ sourcePath: '/etc/csaf-branches.json', reason: 'unread_structure', count: 1 }],
+        },
+      },
+    });
+    expect(rows[0]?.evidence?.vendorVex).toMatchObject({
+      verdict: {
+        fixed: 'vendor_states_fixed',
+        known_not_affected: 'vendor_states_not_affected',
+        known_affected: 'vendor_states_affected',
+        under_investigation: 'vendor_under_investigation',
+      }[status],
+    });
+    expect(rows[0]?.rationale).toContain('Not a complete reading');
+    expect(result.counts.High).toBe(1);
+  },
+);

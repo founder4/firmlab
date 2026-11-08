@@ -42,13 +42,11 @@ describe('CSAF product ids defined outside full_product_names', () => {
     ],
   };
 
-  it('counts a reference to a branch-only product and never matches it by its raw id', () => {
+  it('reads an exact branch helper without matching its raw id', () => {
     const doc = parsed(csaf(branchTree, { fixed: ['BB-1301'] }));
-    expect(doc.statements).toEqual([]);
-    expect(doc.unreadStructureCount).toBe(1);
-    expect(doc.unreadStructureExamples).toEqual([
-      { vulnerabilityId: 'CVE-2023-0001', kind: 'csaf_unindexed_product', reference: 'BB-1301' },
-    ]);
+    expect(doc.statements[0]?.products).toEqual(['pkg:generic/busybox@1.30.1']);
+    expect(doc.unreadStructureCount).toBe(0);
+    expect(doc.unreadStructureExamples).toEqual([]);
     expect(doc.unreadStructureRule).toMatch(/never matched by its raw id/);
   });
 
@@ -87,7 +85,7 @@ describe('CSAF product ids defined outside full_product_names', () => {
     });
   });
 
-  it('a full_product_names definition still wins over a duplicate id elsewhere', () => {
+  it('a duplicate id elsewhere invalidates a full_product_names definition', () => {
     const tree = {
       full_product_names: [
         { product_id: 'P', name: 'dropbear', product_identification_helper: { purl: 'pkg:generic/dropbear@2020.81' } },
@@ -95,14 +93,16 @@ describe('CSAF product ids defined outside full_product_names', () => {
       branches: [{ name: 'x', product: { product_id: 'P', name: 'dropbear other' } }],
     };
     const doc = parsed(csaf(tree, { fixed: ['P'] }));
-    expect(doc.statements[0]?.products).toEqual(['pkg:generic/dropbear@2020.81']);
-    expect(doc.unreadStructureCount).toBe(0);
+    expect(doc.statements).toEqual([]);
+    expect(doc.unreadStructureCount).toBe(1);
+    expect(doc.unreadStructureExamples?.[0]?.kind).toBe('csaf_ambiguous_product');
   });
 
-  it('keeps the existing raw-id fallback for an id defined nowhere', () => {
+  it('counts an undefined id rather than treating a reference token as a package identity', () => {
     const doc = parsed(csaf({ full_product_names: [] }, { fixed: ['pkg:generic/zlib@1.2.11'] }));
-    expect(doc.statements[0]?.products).toEqual(['pkg:generic/zlib@1.2.11']);
-    expect(doc.unreadStructureCount).toBe(0);
+    expect(doc.statements).toEqual([]);
+    expect(doc.unreadStructureCount).toBe(1);
+    expect(doc.unreadStructureExamples?.[0]?.kind).toBe('csaf_unknown_product');
   });
 
   it('bounds the walk: past the depth cap unresolved references are counted, not matched', () => {
@@ -125,8 +125,9 @@ describe('CSAF product ids defined outside full_product_names', () => {
       { relationships: [null, {}] },
     ]) {
       const doc = parsed(csaf(tree, { fixed: ['A'] }));
-      expect(doc.statements[0]?.products).toEqual(['A']);
-      expect(doc.unreadStructureCount).toBe(0);
+      expect(doc.statements).toEqual([]);
+      expect(doc.unreadStructureCount).toBe(1);
+      expect(doc.unreadStructureExamples?.[0]?.kind).toBe('csaf_unknown_product');
     }
   });
 

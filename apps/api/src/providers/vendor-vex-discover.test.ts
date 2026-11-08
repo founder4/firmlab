@@ -900,3 +900,116 @@ describe('qualified measured package naming and conservative identity boundaries
     expect(packageProductMatcher('curl', '8.14.1-2+deb13u7')('curl')).toBe(true);
   });
 });
+
+/** These fixtures pass through the real core parser, not a fabricated persisted VendorVexDocument. */
+describe('exact CSAF branch identities through row verdicts', () => {
+  const cve = 'CVE-2026-1234';
+  function branches(helper: unknown, extra: unknown[] = [], status: Record<string, string[]> = { fixed: ['P'] }) {
+    return doc(
+      JSON.stringify({
+        document: { category: 'csaf_vex', csaf_version: '2.0' },
+        product_tree: {
+          branches: [
+            {
+              category: 'vendor',
+              name: 'Vendor',
+              branches: [
+                {
+                  category: 'product_version',
+                  name: 'not an identity',
+                  product: {
+                    product_id: 'P',
+                    name: 'busybox 1.30.1',
+                    product_identification_helper: helper,
+                  },
+                },
+                ...extra,
+              ],
+            },
+          ],
+        },
+        vulnerabilities: [{ cve, product_status: status }],
+      }),
+      '/csaf-branches.json',
+    );
+  }
+
+  it.each([
+    ['pkg:generic/busybox@1.30.1', { purl: 'pkg:generic/busybox@1.30.1' }],
+    ['cpe:2.3:a:busybox:busybox:1.30.1:*:*:*:*:*:*:*', { cpe: 'cpe:2.3:a:busybox:busybox:1.30.1:*:*:*:*:*:*:*' }],
+  ])('matches the exact legacy package version through helper %s', (_label, helper) => {
+    const discovery = { documents: [branches(helper)] };
+    expect(vendorVexVerdictFor(discovery, cve, packageProductMatcher('busybox', '1.30.1'), 'busybox')?.verdict).toBe(
+      'vendor_states_fixed',
+    );
+    expect(vendorVexVerdictFor(discovery, cve, packageProductMatcher('busybox', '1.36.1'), 'busybox')).toBeNull();
+  });
+
+  it.each(['purl', 'cpe'] as const)('selects the right version among sibling branch products using %s', (kind) => {
+    const identity = (version: string) =>
+      kind === 'purl' ? `pkg:generic/busybox@${version}` : `cpe:2.3:a:busybox:busybox:${version}:*:*:*:*:*:*:*`;
+    const other = {
+      category: 'product_version',
+      name: 'busybox',
+      product: {
+        product_id: 'Q',
+        name: 'busybox 1.36.1',
+        product_identification_helper: { [kind]: identity('1.36.1') },
+      },
+    };
+    const discovery = {
+      documents: [branches({ [kind]: identity('1.30.1') }, [other], { fixed: ['P'], known_affected: ['Q'] })],
+    };
+    expect(vendorVexVerdictFor(discovery, cve, packageProductMatcher('busybox', '1.30.1'), 'busybox')?.verdict).toBe(
+      'vendor_states_fixed',
+    );
+    expect(vendorVexVerdictFor(discovery, cve, packageProductMatcher('busybox', '1.36.1'), 'busybox')?.verdict).toBe(
+      'vendor_states_affected',
+    );
+  });
+
+  it.each([
+    ['pkg:npm/%40acme/busybox@1.30.1', true],
+    ['pkg:npm/%40other/busybox@1.30.1', false],
+    ['pkg:npm/%40acme/busybox@1.36.1', false],
+    ['pkg:generic/busybox@1.30.1', false],
+    ['pkg:pypi/busybox@1.30.1', false],
+  ])('retains measured ecosystem/scope/version boundaries: %s', (purl, matches) => {
+    const v = vendorVexVerdictFor(
+      { documents: [branches({ purl })] },
+      cve,
+      packageProductMatcher('@acme/busybox', '1.30.1', 'pkg:npm/%40acme/busybox@1.30.1'),
+      '@acme/busybox',
+    );
+    expect(v?.verdict ?? null).toBe(matches ? 'vendor_states_fixed' : null);
+  });
+
+  it.each([{}, { purl: 'busybox' }, { purl: 'pkg:generic/busybox@%zz' }])(
+    'counts a mixed unread reference once per group without duplicating identity omissions: %j',
+    (helper) => {
+      const unread = {
+        category: 'product_version',
+        name: '1.30.1',
+        product: {
+          product_id: 'busybox',
+          name: 'busybox',
+          product_identification_helper: helper,
+        },
+      };
+      const d = branches({ purl: 'pkg:generic/busybox@1.30.1' }, [unread], {
+        fixed: ['P'],
+        known_affected: ['busybox', 'busybox'],
+      });
+      const v = vendorVexVerdictFor(
+        { documents: [JSON.parse(JSON.stringify(d))] },
+        cve,
+        packageProductMatcher('busybox', '1.30.1'),
+        'busybox',
+      );
+      expect(v?.verdict).toBe('vendor_states_fixed');
+      expect(v?.omissions).toEqual([{ sourcePath: '/csaf-branches.json', reason: 'unread_structure', count: 1 }]);
+      expect(v?.rationale).toContain('Not a complete reading');
+      expect(d.unreadStructureCount).toBe(1);
+    },
+  );
+});
