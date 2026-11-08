@@ -4,6 +4,7 @@ import path from 'node:path';
 import { MAX_UNRECOGNISED_STATUS_EXAMPLES, type VendorVexDocument, parseVendorVex } from '@firmlab/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { measuredPackageIdentity, parsePackageIdentity } from './package-identity.js';
+import { summarizeVendorVexSearch } from './vendor-vex-coverage.js';
 import {
   VEX_SELECTION_RULE,
   type VendorVexDiscoveryCoverage,
@@ -1012,4 +1013,161 @@ describe('exact CSAF branch identities through row verdicts', () => {
       expect(d.unreadStructureCount).toBe(1);
     },
   );
+});
+
+/** The direct product identifier map is parsed by core before it reaches the existing exact row matcher. */
+describe('OpenVEX direct identifier aliases through discovery and row verdicts', () => {
+  const cve = 'CVE-2026-1234';
+  const measured = 'pkg:deb/debian/openssl@3.0.9-1?arch=arm64&distro=debian-12';
+  const matcher = packageProductMatcher('openssl', '3.0.9-1', measured);
+  const assertion = (products: unknown, status = 'fixed', vulnerability = cve) => ({
+    vulnerability: { name: vulnerability },
+    products,
+    status,
+  });
+  const document = (statements: unknown[]) =>
+    JSON.stringify({
+      '@context': 'https://openvex.dev/ns/v0.2.0',
+      '@id': 'https://vendor.invalid/vex',
+      author: 'Vendor',
+      timestamp: '2026-01-01T00:00:00Z',
+      version: 1,
+      statements,
+    });
+
+  it.each([
+    ['fixed', 'vendor_states_fixed'],
+    ['not_affected', 'vendor_states_not_affected'],
+    ['affected', 'vendor_states_affected'],
+    ['under_investigation', 'vendor_under_investigation'],
+  ])('discovers and persists an identifiers-only product for %s', (status, verdict) => {
+    const discovery = discoverVendorVex(
+      rootfs({ 'etc/vex/aliases.openvex.json': document([assertion([{ identifiers: { purl: measured } }], status)]) }),
+    );
+    expect(discovery.coverage.parsed).toBe(1);
+    expect(discovery.documents[0]?.unreadStructureCount).toBe(0);
+    const roundtrip = JSON.parse(JSON.stringify(discovery));
+    const result = vendorVexVerdictFor(roundtrip, cve, matcher, 'openssl');
+    expect(result?.verdict).toBe(verdict);
+    expect(result?.omissions).toBeUndefined();
+    expect(result?.sources).toHaveLength(1);
+  });
+
+  it.each([
+    measured.replace('3.0.9-1', '3.0.8-1'),
+    measured.replace('debian/openssl', 'other/openssl'),
+    measured.replace('pkg:deb', 'pkg:apk'),
+    measured.replace('arm64', 'amd64'),
+    measured.replace('debian-12', 'debian-13'),
+    measured.replace('?arch=arm64&distro=debian-12', ''),
+    `${measured}#usr/lib`,
+  ])('does not relax the measured package identity to match %s', (purl) => {
+    const d = doc(document([assertion([{ identifiers: { purl } }])]));
+    expect(d.unreadStructureCount).toBe(0);
+    expect(d.statements[0]?.products).toEqual([purl]);
+    expect(vendorVexVerdictFor({ documents: [d] }, cve, matcher, 'openssl')).toBeNull();
+  });
+
+  it('retains scoped name case, qualifiers and subpath when the measured PURL supplies all of them', () => {
+    const exact = 'pkg:npm/%40Acme/Tool@1.2.3?arch=arm64#dist/bin';
+    const matches = packageProductMatcher('@Acme/Tool', '1.2.3', exact);
+    const d = (purl: string) => ({ documents: [doc(document([assertion([{ identifiers: { purl } }])]))] });
+    expect(vendorVexVerdictFor(d(exact), cve, matches, '@Acme/Tool')?.verdict).toBe('vendor_states_fixed');
+    for (const different of [
+      exact.replace('Acme', 'acme'),
+      exact.replace('Tool', 'tool'),
+      exact.replace('Acme', 'Other'),
+      exact.replace('1.2.3', '1.2.2'),
+      exact.replace('npm', 'generic'),
+      exact.replace('arm64', 'amd64'),
+      exact.replace('#dist/bin', ''),
+      exact.replace('#dist/bin', '#dist/lib'),
+    ])
+      expect(vendorVexVerdictFor(d(different), cve, matches, '@Acme/Tool')).toBeNull();
+  });
+
+  it('does not apply a nonversioned ID with a versioned helper to older legacy artifacts', () => {
+    const d = doc(document([assertion([{ '@id': 'busybox', identifiers: { purl: 'pkg:generic/busybox@1.36.1' } }])]));
+    expect(
+      vendorVexVerdictFor({ documents: [d] }, cve, packageProductMatcher('busybox', '1.30.1'), 'busybox'),
+    ).toBeNull();
+    expect(
+      vendorVexVerdictFor({ documents: [d] }, cve, packageProductMatcher('busybox', '1.36.1'), 'busybox')?.verdict,
+    ).toBe('vendor_states_fixed');
+  });
+
+  it.each([
+    { purl: measured, cpe23: 'broken' },
+    { purl: measured, unknown: 'openssl' },
+    { purl: measured, cpe22: 'cpe:/a:openssl:openssl' },
+    {},
+  ])('makes a mixed unread assertion visible without counting the same product twice: %j', (identifiers) => {
+    const discovery = discoverVendorVex(
+      rootfs({
+        'etc/vex/mixed.openvex.json': document([
+          assertion([{ identifiers: { purl: measured } }], 'not_affected'),
+          assertion([{ '@id': measured, identifiers }], 'affected'),
+        ]),
+      }),
+    );
+    const d = discovery.documents[0];
+    expect(d?.unreadStructureCount).toBe(1);
+    const summary = summarizeVendorVexSearch(discovery);
+    expect(summary.attempted && summary.documents[0]?.unreadStructureCount).toBe(1);
+    expect(JSON.parse(JSON.stringify(summary))).toEqual(summary);
+    const result = vendorVexVerdictFor(JSON.parse(JSON.stringify(discovery)), cve, matcher, 'openssl');
+    expect(result?.verdict).toBe('vendor_states_not_affected');
+    expect(result?.omissions).toEqual([
+      { sourcePath: '/etc/vex/mixed.openvex.json', reason: 'unread_structure', count: 1 },
+    ]);
+    expect(result?.rationale).toContain('Not a complete reading');
+    expect(result?.sources).toHaveLength(1);
+  });
+
+  it('keeps a real conflict across aliases while nested contextual assertions remain omissions', () => {
+    const d = doc(
+      document([
+        assertion(
+          [
+            {
+              identifiers: { purl: measured },
+              subcomponents: [{ '@id': 'busybox', identifiers: { purl: 'pkg:generic/busybox@1.30.1' } }],
+            },
+          ],
+          'fixed',
+        ),
+        assertion([{ '@id': 'component-reference', identifiers: { purl: measured } }], 'affected'),
+      ]),
+    );
+    const result = vendorVexVerdictFor({ documents: [d] }, cve, matcher, 'openssl');
+    expect(result?.verdict).toBe('conflicting');
+    expect(result?.sources.map((s) => s.status)).toEqual(['fixed', 'affected']);
+    expect(result?.omissions).toEqual([
+      { sourcePath: '/etc/vex/a.openvex.json', reason: 'unread_structure', count: 1 },
+    ]);
+    expect(
+      vendorVexVerdictFor({ documents: [d] }, cve, packageProductMatcher('busybox', '1.30.1'), 'busybox'),
+    ).toBeNull();
+  });
+
+  it.each([
+    ['cpe22', 'cpe:/a:busybox:busybox:1.30.1'],
+    ['cpe23', 'cpe:2.3:a:busybox:busybox:1.30.1:*:*:*:*:*:*:*'],
+  ])('passes the literal versioned %s to the existing CPE matcher without inventing PURL equivalence', (key, value) => {
+    const d = doc(document([assertion([{ identifiers: { [key]: value } }])]));
+    expect(
+      vendorVexVerdictFor({ documents: [d] }, cve, packageProductMatcher('busybox', '1.30.1'), 'busybox')?.verdict,
+    ).toBe('vendor_states_fixed');
+    expect(
+      vendorVexVerdictFor({ documents: [d] }, cve, packageProductMatcher('busybox', '1.36.1'), 'busybox'),
+    ).toBeNull();
+    expect(
+      vendorVexVerdictFor(
+        { documents: [d] },
+        cve,
+        packageProductMatcher('busybox', '1.30.1', 'pkg:generic/busybox@1.30.1'),
+        'busybox',
+      ),
+    ).toBeNull();
+  });
 });

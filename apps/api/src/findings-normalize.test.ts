@@ -152,3 +152,118 @@ describe('normalizeSbom with vendor VEX', () => {
     expect((rows[1]?.evidence as { vendorVex?: { verdict?: string } }).vendorVex?.verdict).toBe('conflicting');
   });
 });
+
+/** Exact tool-measured identity transported through actual core parsing and the unchanged API normalizer. */
+describe('normalizeSbom with direct OpenVEX identifier maps', () => {
+  const cve = 'CVE-2026-1234';
+  // This PURL was measured by real Syft in the preceding CSAF acceptance; these tests do not execute the tool.
+  const purl = 'pkg:deb/debian/openssl@3.0.9-1?arch=arm64&distro=debian-12';
+  const sbom = {
+    available: true,
+    target: '/synthetic-rootfs',
+    packageCount: 1,
+    packages: [],
+    grypeAvailable: true,
+    vulnerabilities: [
+      {
+        id: cve,
+        severity: 'High',
+        packageName: 'openssl',
+        packageVersion: '3.0.9-1',
+        packagePurl: purl,
+        fixedIn: null,
+      },
+    ],
+    counts: { Critical: 0, High: 1, Medium: 0, Low: 0, Negligible: 0, Unknown: 0 },
+  } as SbomResult;
+  const assertion = (products: unknown, status: string) => ({ vulnerability: { name: cve }, products, status });
+  const discovery = (statements: unknown[]) => {
+    const document = parseVendorVex(
+      JSON.stringify({
+        '@context': 'https://openvex.dev/ns/v0.2.0',
+        '@id': 'https://vendor.invalid/vex',
+        author: 'Vendor',
+        timestamp: '2026-01-01T00:00:00Z',
+        version: 1,
+        statements,
+      }),
+      '/etc/openvex.json',
+    );
+    if (!document.ok) throw new Error(document.reason);
+    return { documents: [JSON.parse(JSON.stringify(document)) as typeof document] };
+  };
+  const unchanged = (rows: readonly FindingDraft[]) => {
+    expect(rows).toHaveLength(1);
+    expect(rung(rows)).toEqual(rung(normalizeSbom(sbom)));
+    const { vendorVex: _v, ...evidence } = rows[0]?.evidence ?? {};
+    expect(evidence).toEqual(normalizeSbom(sbom)[0]?.evidence);
+  };
+
+  it.each([
+    ['fixed', 'vendor_states_fixed'],
+    ['not_affected', 'vendor_states_not_affected'],
+    ['affected', 'vendor_states_affected'],
+    ['under_investigation', 'vendor_under_investigation'],
+  ])('annotates %s without changing any finding or other evidence', (status, verdict) => {
+    const rows = normalizeSbom(sbom, undefined, discovery([assertion([{ identifiers: { purl } }], status)]));
+    unchanged(rows);
+    expect(rows[0]?.evidence?.vendorVex).toMatchObject({ verdict, basis: 'vendor_assertion' });
+  });
+
+  it.each([
+    purl.replace('3.0.9-1', '3.0.8-1'),
+    purl.replace('pkg:deb', 'pkg:apk'),
+    purl.replace('debian/openssl', 'other/openssl'),
+    purl.replace('arm64', 'amd64'),
+    purl.replace('debian-12', 'debian-13'),
+    purl.replace('?arch=arm64&distro=debian-12', ''),
+    `${purl}#usr/lib`,
+  ])('keeps the row untouched for a distinct identity: %s', (other) => {
+    expect(
+      normalizeSbom(sbom, undefined, discovery([assertion([{ identifiers: { purl: other } }], 'not_affected')])),
+    ).toEqual(normalizeSbom(sbom));
+  });
+
+  it('keeps conflict and unread evidence together after JSON persistence', () => {
+    const vex = discovery([
+      assertion([{ identifiers: { purl } }], 'not_affected'),
+      assertion([{ '@id': 'openssl', identifiers: { purl } }], 'affected'),
+      assertion([{ '@id': purl, identifiers: { purl, cpe23: ['unsupported'] } }], 'fixed'),
+    ]);
+    const rows = normalizeSbom(sbom, undefined, vex);
+    unchanged(rows);
+    expect(rows[0]?.evidence?.vendorVex).toMatchObject({
+      verdict: 'conflicting',
+      basis: 'vendor_assertion',
+      omissions: [{ sourcePath: '/etc/openvex.json', reason: 'unread_structure', count: 1 }],
+    });
+    expect(JSON.stringify(rows[0]?.evidence?.vendorVex)).toContain('Not a complete reading');
+  });
+
+  it('keeps a possible unread disagreement visible on a single supported verdict', () => {
+    const rows = normalizeSbom(
+      sbom,
+      undefined,
+      discovery([
+        assertion([{ identifiers: { purl } }], 'not_affected'),
+        assertion([{ '@id': purl, identifiers: { purl, unknown: purl } }], 'affected'),
+      ]),
+    );
+    unchanged(rows);
+    expect(rows[0]?.evidence?.vendorVex).toMatchObject({
+      verdict: 'vendor_states_not_affected',
+      omissions: [{ sourcePath: '/etc/openvex.json', reason: 'unread_structure', count: 1 }],
+    });
+  });
+
+  it('does not flatten a nested identifier map into a package assertion', () => {
+    const rows = normalizeSbom(
+      sbom,
+      undefined,
+      discovery([
+        assertion([{ '@id': 'pkg:generic/firmware@1.0', subcomponents: [{ identifiers: { purl } }] }], 'not_affected'),
+      ]),
+    );
+    expect(rows).toEqual(normalizeSbom(sbom));
+  });
+});

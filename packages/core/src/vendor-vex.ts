@@ -34,6 +34,9 @@
  *     free-form `product_id`, which would let a statement scoped to busybox 1.30.1 attach to any
  *     busybox. Only valid top-level products without a versioned identity retain legacy id/name aliases. Branch
  *     products require a readable exact versioned helper. Unknown, ambiguous and truncated definitions stay unread.
+ *   - Direct OpenVEX identifier maps provide only literal, concrete versioned aliases. A generic @id/id cannot
+ *     bypass that version scope. Unread or conflicting maps refuse the entire product identity, and nested
+ *     subcomponents remain omitted context rather than standalone package assertions.
  */
 
 export const DEFAULT_MAX_VEX_DOCUMENT_BYTES = 4 * 1024 * 1024; // 4 MiB
@@ -95,8 +98,10 @@ export const MAX_UNRECOGNISED_STATUS_EXAMPLES = 10;
  *    product; relationship semantics remain unsupported. Retains the existing kind for unread branch products.
  *  - `csaf_product_tree_truncated` — any reference when the walk stopped early; an unseen duplicate may invalidate
  *    even an already-read definition, so all references are refused.
- *  - `openvex_product_identifiers` / `openvex_nested_subcomponents` — alternate identifiers / subcomponents nested
- *    inside an OpenVEX product object. Its own @id and statement-level subcomponents retain their existing reading.
+ *  - `openvex_product_identifiers` — an unread direct product identity (malformed, unsupported, unversioned or
+ *    conflicting identifiers/ID), or legacy statement-level identifiers, counted once per product node/group.
+ *  - `openvex_nested_subcomponents` — contextual subcomponents inside a product, counted once per parent; never
+ *    flattened into standalone claims. Statement-level subcomponents retain their existing legacy reading.
  */
 export type VendorVexUnreadStructureKind =
   | 'csaf_ambiguous_product'
@@ -120,7 +125,7 @@ export const MAX_UNREAD_STRUCTURE_EXAMPLES = 10;
 export const MAX_CSAF_TREE_DEPTH = 32;
 export const MAX_CSAF_TREE_NODES = 10_000;
 
-export const VEX_UNREAD_STRUCTURE_RULE = `CSAF branch products require explicit full product names and readable versioned purl/CPE helpers. Unknown ids, duplicate definitions, unreadable helpers, relationships, and OpenVEX product identifiers and nested subcomponents are counted per CVE rather than interpreted; a reference to such an id is never matched by its raw id. The product-tree walk stops at depth ${MAX_CSAF_TREE_DEPTH} or ${MAX_CSAF_TREE_NODES} nodes; if truncated, every reference is counted, not matched, because unseen definitions may conflict. First ${MAX_UNREAD_STRUCTURE_EXAMPLES} examples kept in document order.`;
+export const VEX_UNREAD_STRUCTURE_RULE = `CSAF branch products require explicit full product names and readable versioned purl/CPE helpers. Unknown ids, duplicate definitions, unreadable helpers, relationships, unread OpenVEX product identities, and contextual nested subcomponents are counted per CVE rather than interpreted; a reference to such an id is never matched by its raw id. The product-tree walk stops at depth ${MAX_CSAF_TREE_DEPTH} or ${MAX_CSAF_TREE_NODES} nodes; if truncated, every reference is counted, not matched, because unseen definitions may conflict. Direct OpenVEX identifier maps require only readable concrete versioned purl/cpe22/cpe23 aliases, with no generic id fallback; unsupported or conflicting map entries refuse the entire identity. First ${MAX_UNREAD_STRUCTURE_EXAMPLES} examples kept in document order.`;
 
 export interface VendorVexDocument {
   readonly ok: true;
@@ -252,34 +257,124 @@ function isNonEmptyStructure(value: unknown): boolean {
   return value !== null && typeof value === 'object' && Object.keys(value).length > 0;
 }
 
+/**
+ * Read one direct OpenVEX v0.2.0 product (Component Fields / Appendix B), not a nested subcomponent.
+ * A map names literal aliases of this one component; no cross-scheme equivalence or version inference is needed.
+ * Every supplied map entry must be a readable concrete versioned helper. Refuse the entire identity on an
+ * unsupported entry: retaining a convenient subset could hide the other half of a disagreement.
+ * An opaque @id/id is only a reference when a map is supplied, never an unversioned matching fallback. An explicit
+ * helper-shaped ID must itself be readable/versioned and cannot disagree with the same scheme's map entry.
+ * Without a map, keep the established @id/id-only reading. No name, version, hash or external JSON-LD lookup.
+ */
+export function readOpenVexProductIdentity(product: unknown): {
+  products: string[];
+  unread: boolean;
+  reference: string;
+} {
+  const refused = (reference = '') => ({ products: [], unread: true, reference });
+  if (typeof product === 'string') {
+    const id = product.trim();
+    return id ? { products: [id], unread: false, reference: id.slice(0, 128) } : refused();
+  }
+  if (product === null || typeof product !== 'object' || Array.isArray(product)) return refused();
+  const obj = product as Record<string, unknown>;
+  const rawId = typeof obj['@id'] === 'string' ? obj['@id'] : typeof obj.id === 'string' ? obj.id : '';
+  const reference = rawId.trim().slice(0, 128);
+  if (!Object.hasOwn(obj, 'identifiers')) {
+    return rawId.trim() ? { products: [rawId.trim()], unread: false, reference } : refused(reference);
+  }
+
+  const map = obj.identifiers;
+  if (map === null || typeof map !== 'object' || Array.isArray(map) || Object.keys(map).length === 0) {
+    return refused(reference);
+  }
+  const identifiers = map as Record<string, unknown>;
+  const readable = (kind: string, value: unknown): value is string => {
+    if (typeof value !== 'string' || value !== value.trim()) return false;
+    switch (kind) {
+      case 'purl':
+        if (!value.startsWith('pkg:')) return false;
+        break;
+      case 'cpe22':
+        if (!value.startsWith('cpe:/')) return false;
+        break;
+      case 'cpe23':
+        if (!value.startsWith('cpe:2.3:')) return false;
+        break;
+      default:
+        return false;
+    }
+    return csafHelperVersion(value, kind === 'purl' ? 'purl' : 'cpe')?.versioned === true;
+  };
+  const products: string[] = [];
+  for (const [kind, value] of Object.entries(identifiers)) {
+    if (!readable(kind, value)) return refused(reference);
+    products.push(value);
+  }
+
+  if (Object.hasOwn(obj, '@id') && Object.hasOwn(obj, 'id') && obj['@id'] !== obj.id) return refused(reference);
+  for (const key of ['@id', 'id']) {
+    if (!Object.hasOwn(obj, key)) continue;
+    const id = obj[key];
+    if (typeof id !== 'string' || id.length === 0 || id !== id.trim()) return refused(reference);
+    const kind = id.startsWith('pkg:')
+      ? 'purl'
+      : id.startsWith('cpe:/')
+        ? 'cpe22'
+        : id.startsWith('cpe:2.3:')
+          ? 'cpe23'
+          : null;
+    if (kind) {
+      if (!readable(kind, id)) return refused(reference);
+      // Exact disagreement within a scheme is refused, even if a richer parser could normalize the two strings.
+      if (Object.hasOwn(identifiers, kind) && identifiers[kind] !== id) return refused(reference);
+      products.push(id);
+    } else if (/^(?:pkg|cpe):/i.test(id)) {
+      return refused(reference);
+    }
+  }
+  return { products: [...new Set(products)], unread: false, reference };
+}
+
 function extractOpenVexProducts(
   productsRaw: unknown,
   subcomponentsRaw: unknown,
 ): { products: string[]; unread: { kind: VendorVexUnreadStructureKind; reference: string }[] } {
   const result: string[] = [];
   const unread: { kind: VendorVexUnreadStructureKind; reference: string }[] = [];
-  const collect = (arr: unknown) => {
-    if (!Array.isArray(arr)) return;
-    for (const item of arr) {
+  if (Array.isArray(productsRaw) && productsRaw.length > 0) {
+    for (const product of productsRaw) {
+      const identity = readOpenVexProductIdentity(product);
+      result.push(...identity.products);
+      if (identity.unread) unread.push({ kind: 'openvex_product_identifiers', reference: identity.reference });
+      if (product !== null && typeof product === 'object' && !Array.isArray(product)) {
+        const nested = (product as Record<string, unknown>).subcomponents;
+        // Context belongs to this parent. Count the omitted group once; never walk or flatten its children.
+        if (nested !== undefined && !(Array.isArray(nested) && nested.length === 0)) {
+          unread.push({ kind: 'openvex_nested_subcomponents', reference: identity.reference });
+        }
+      }
+    }
+  } else if (productsRaw !== undefined || !Array.isArray(subcomponentsRaw) || subcomponentsRaw.length === 0) {
+    unread.push({ kind: 'openvex_product_identifiers', reference: '' });
+  }
+  // Preserve the legacy, nonstandard statement-level path; do not extend identifier-map support to it.
+  if (Array.isArray(subcomponentsRaw)) {
+    for (const item of subcomponentsRaw) {
       if (typeof item === 'string') {
-        const trimmed = item.trim();
-        if (trimmed.length > 0) result.push(trimmed);
+        if (item.trim()) result.push(item.trim());
       } else if (item !== null && typeof item === 'object') {
         const obj = item as Record<string, unknown>;
         const id = typeof obj['@id'] === 'string' ? obj['@id'] : typeof obj.id === 'string' ? obj.id : null;
         const reference = id?.trim().slice(0, 128) ?? '';
-        if (id && id.trim().length > 0) {
-          result.push(id.trim());
-        }
+        if (id?.trim()) result.push(id.trim());
         if (isNonEmptyStructure(obj.identifiers)) unread.push({ kind: 'openvex_product_identifiers', reference });
         if (Array.isArray(obj.subcomponents) && obj.subcomponents.length > 0) {
           unread.push({ kind: 'openvex_nested_subcomponents', reference });
         }
       }
     }
-  };
-  collect(productsRaw);
-  collect(subcomponentsRaw);
+  }
   return { products: result, unread };
 }
 

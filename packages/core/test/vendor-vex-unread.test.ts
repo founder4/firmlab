@@ -158,7 +158,7 @@ describe('OpenVEX product identifiers and nested subcomponents', () => {
       ],
     });
 
-  it('reads the @id, counts identifiers and nested subcomponents it does not interpret', () => {
+  it('refuses disagreeing same-scheme @id/identifiers and still counts contextual subcomponents', () => {
     const doc = parsed(
       openvex([
         {
@@ -168,26 +168,26 @@ describe('OpenVEX product identifiers and nested subcomponents', () => {
         },
       ]),
     );
-    expect(doc.statements[0]?.products).toEqual(['pkg:generic/gateway@2.0']);
+    expect(doc.statements[0]?.products).toEqual([]);
     expect(doc.unreadStructureExamples).toEqual([
       { vulnerabilityId: 'CVE-2024-0002', kind: 'openvex_product_identifiers', reference: 'pkg:generic/gateway@2.0' },
       { vulnerabilityId: 'CVE-2024-0002', kind: 'openvex_nested_subcomponents', reference: 'pkg:generic/gateway@2.0' },
     ]);
   });
 
-  it('an identifiers-only product contributes no match and is counted with an empty reference', () => {
+  it('reads a versioned identifiers-only product alongside the legacy plain product', () => {
     const doc = parsed(
       openvex([{ identifiers: { cpe23: 'cpe:2.3:a:busybox:busybox:1.30.1:*:*:*:*:*:*:*' } }, 'busybox']),
     );
-    expect(doc.statements[0]?.products).toEqual(['busybox']);
-    expect(doc.unreadStructureExamples).toEqual([
-      { vulnerabilityId: 'CVE-2024-0002', kind: 'openvex_product_identifiers', reference: '' },
-    ]);
+    expect(doc.statements[0]?.products).toEqual(['cpe:2.3:a:busybox:busybox:1.30.1:*:*:*:*:*:*:*', 'busybox']);
+    expect(doc.unreadStructureExamples).toEqual([]);
+    expect(doc.unreadStructureCount).toBe(0);
   });
 
-  it('statement-level subcomponents stay read, and empty structures count nothing', () => {
+  it('statement-level subcomponents stay read while an explicit empty identifier map stays unread', () => {
     const doc = parsed(openvex([{ '@id': 'a', identifiers: {}, subcomponents: [] }], [{ '@id': 'b' }]));
-    expect(doc.statements[0]?.products).toEqual(['a', 'b']);
-    expect(doc.unreadStructureCount).toBe(0);
+    expect(doc.statements[0]?.products).toEqual(['b']);
+    expect(doc.unreadStructureCount).toBe(1);
+    expect(doc.unreadStructureExamples?.[0]?.kind).toBe('openvex_product_identifiers');
   });
 });
