@@ -186,8 +186,9 @@ record; no persisted required field, identity/class mapping, API or web surface 
 
 Deferred (for the coordinator-owned `docs/BACKLOG.md`): nonzero `hdroffset` envelopes, the `-s` header-only
 variant, NAND/SNAND device headers and their BRLYT/GFH, MT7621 SPL, non-U-Boot producers and GFH layouts,
-actual SHA-256 verification (needs a vetted digest available to core, or an API-side check), and all
-security/authentication, runtime and device attribution.
+and all security/authentication, runtime and device attribution. Local SHA-256 verification was deferred by this
+structural task and is now implemented separately through an injected vetted API capability; see the follow-up
+link above. It does not relax the unsupported parser variants or authenticate the unkeyed digest.
 
 The producer-output subset also deliberately refuses flashed/partitioned SD/eMMC disk images that replace
 erased device-header bytes with an MBR at 0x1be..0x1ff. It does not interpret partition tables. Nested supported
