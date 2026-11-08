@@ -137,8 +137,9 @@ JSON persistence round trip, API matcher and `normalizeSbom`:
 The assertions are synthetic; the tool/database output is real. This validates
 identity and evidence transport, not the truth of a vendor assertion, firmware
 presence, reachability or exploitability. An initial acceptance-script assertion
-used the wrong verdict enum spelling; correcting the fixture to the existing
-`vendor_states_*` names required no product change. The script, final JSON and
-initial diagnostic are retained as `csaf-branch-built-real*` in the campaign's
+used the wrong verdict enum spelling; the fixture also needed the parser's actual
+string source-path argument. Correcting both and explicitly checking the persisted
+path required no product change. The script, final JSON and initial diagnostics
+are retained as `csaf-branch-built-real*` in the campaign's
 external state directory. All four repository gates passed at integrated commit
 `744b3ae` (5,196 tests); later integrations require their own final gates.

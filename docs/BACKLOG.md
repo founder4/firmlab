@@ -18,7 +18,12 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   local conocido; publica rechazos tras construir, identifica árboles sucios y comprueba alias privados de entrada.
   El reensayo endurecido pasó con las mismas 27 capas y sólo otra etiqueta de revisión: no es un rebuild fresco
   de apt/pip/Renode ni otra descarga de la base Grype. Fuente, IDs, límites y guardas en
-  `TOOLS-CANDIDATE-20261108.md` y `TOOLS-CANDIDATE-HARDENING-20261108.md`. Promover/desplegar o refrescar
+  `TOOLS-CANDIDATE-20261108.md`, `TOOLS-CANDIDATE-HARDENING-20261108.md` y
+  `TOOLS-CANDIDATE-PROVENANCE-20261108.md`. El último seguimiento rehúsa recetas externas/ignoradas/symlink,
+  sella los bytes de recetas versionadas modificadas, registra intención/resultado antes/después de cada alias y
+  conserva un único rechazo con diagnóstico. Pasan 106 tests, incluidos los 26 de deploy; la candidata nueva
+  conserva las mismas 27 capas. Las comprobaciones no son una transacción contra mutaciones transitorias ajenas.
+  Promover/desplegar o refrescar
   dependencias queda como decisión separada del operador; `deploy.sh --tools --build-only` promociona la base y
   no es la receta para validar una candidata aislada.
 - [x] Publicar las correcciones de dependencias y el contexto de coordinación: `4a7b2fa` y `d079c84` están en
@@ -203,7 +208,11 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   Ese recorrido lineal no distingue pools de datos ni demuestra semántica; una evolución debe conservar esa
   incertidumbre y no llamar instrucción ejecutada a una sustitución. Véase `RP2350-DECODER-BOUNDARIES-20261108.md`.
   El seguimiento del 2026-11-08 recupera prefijos cortados en entrada y mitad de bloque, ancla el análisis en la
-  entrada original y sólo conserva sustituciones dentro del grafo decodificado, con bytes/mnemónicos originales.
+  entrada original. El seguimiento de integridad valida todas las instrucciones listadas contra los bytes
+  fuente/vista y sus anchos, conserva instrucciones/aristas originales y restaura sustituciones incluso fuera
+  del listado de bloques recortado. Si una vista cruza una instrucción original o no aporta progreso pertinente,
+  conserva el prefijo original y declara la cobertura incompleta; una continuación desconocida, fuera de mapa o
+  una cola omitida sin corroborar no completa una función. Véase `RP2350-DECODER-EVIDENCE-SAFETY-20261108.md`.
   Los mapas primarios y CRT0 quedan acotados, los solapes ambiguos se rehúsan, y se mantienen ocho destinos y
   dieciséis invocaciones máximas con intentados/completados y aristas omitidas explícitos. La UI muestra esas
   medidas sin convertirlas en ejecución. Pendientes: regiones LOAD_MAP secundarias más allá del mapa primario,
@@ -315,8 +324,13 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   reservados y padding exactos; la suma de 8 bits sobre la imagen completa eleva a `verified`, un desacuerdo queda
   `consistent` y una estructura rota se rechaza. El generador oficial compilado produjo el mismo layout sobre
   payload sintético; no hay muestra real local, no cubre el footer ni variantes modernas y el checksum no es
-  autenticidad. Realtek y MTK siguen pendientes: ninguna muestra local los contiene —los «MTK» del corpus son
-  cadenas sueltas, no cabeceras—. Investigación 2026-11-08: `mkcsysimg`/`csysimg.h` oficiales de OpenWrt en
+  autenticidad. MTK tiene ahora un subconjunto LK de 512 bytes, derivado del U-Boot oficial fijado: longitud,
+  nombre, dirección, modo y reservados se comprueban sin checksum ni atribución de dispositivo. Nueve variantes
+  generadas por el `mkimage` upstream sobre payload inerte pasan, incluidos nombre truncado/UTF-8, tamaño cero,
+  offset embebido y bytes posteriores; 129 tests focalizados y core completo (613) pasan. Véase
+  `MEDIATEK-HEADERS-20261108.md`. BootROM/BRLYT/GFH, NAND/SNAND, MT7621 y otras variantes LK siguen pendientes.
+  Ninguna muestra real local acredita esos formatos —los «MTK» del corpus son cadenas sueltas—.
+  Realtek sigue pendiente: investigación 2026-11-08, `mkcsysimg`/`csysimg.h` oficiales de OpenWrt en
   `86739f2b3ae9502368b89ef37fa6f31c42aad6f4` definen `CSYS` en mayúsculas y campos little-endian para el
   formato ADM/Edimax; no justifican reconocer las firmas Realtek `csys`/`cr6c`/`cs6c` en minúsculas. No se
   añadió una regla por semejanza de nombre ni se adquirió firmware.)*
@@ -1005,9 +1019,13 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   `subcomponents` anidados de OpenVEX. Los veredictos por fila lo nombran como omisión `unread_structure`; la
   cobertura persistida y la UI lo muestran. Gates completos verdes (4675 tests). Pendiente: interpretar esas
   estructuras cuando haya fuentes primarias y fixtures verificados.
-- [ ] VEX de proveedor restante (revisión `review-vex.md`): interpretación semántica del riesgo 6 (hoy contado
-  como omisión, arriba), intervalos CSAF y nits 11–15 requieren un contrato primario y fixtures verificados. La
-  referencia CSAF de branches no indexada nunca debe caer al ID bruto perdiendo la restricción del helper; los
+- [ ] VEX de proveedor restante (revisión `review-vex.md`): relaciones CSAF, estructuras OpenVEX restantes,
+  intervalos CSAF y nits 11–15 requieren un contrato primario y fixtures verificados. El subconjunto CSAF branch
+  exacto está integrado (2026-11-08): helper PURL/CPE explícito versionado, ID único, sin inferencia de nombre o
+  versión ni fallback al ID bruto; duplicados y árboles truncados rehúsan las referencias con omisiones.
+  Fuentes OASIS fijadas y límites en `CSAF-BRANCH-IDENTITIES-20261108.md`; el código compilado preservó las 53
+  filas de una salida real offline Syft/Grype sobre metadatos sintéticos, con estados, desacuerdos de identidad y
+  omisiones explícitos. Es evidencia de parsing/transporte, no firmware ni verdad de la afirmación. Los
   subcomponents de statement ya se leen, faltan los anidados dentro del producto. El fallo conservador de
   npm/PyPI se cerró el 2026-11-08: Grype conserva su PURL opcional y se exige identidad completa; Go/Composer
   conservan además su nombre cualificado. Siguen fuera las equivalencias entre CPE/PURL/nombre y las reglas de
@@ -1027,9 +1045,11 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
 - [x] Política de capacidad de campaña y lanzador de workers guardado (`policy.mjs`, `launch-worker.mjs`,
   `orca-campaign-launch-worker`): bloqueos de proveedor/modelo, recuperación sólo con canario viable, motivo de relevo
   obligatorio; el guardián registra la parada dura que ve en pantalla. Ver `docs/ORCA-CAMPAIGN-RELIABILITY.md`.
-- [ ] `worker-start --agent antigravity` no supera `agent_readiness` con Antigravity CLI 1.2.14 (`tui-idle` nunca se
-  satisface aunque el compositor renderizado esté vacío); se recurrió a `dispatch --inject`, que deja el carril sin
-  supervisión. Reportar a Orca o reconocer el compositor renderizado como preparado.
+- [x] Revalidar `worker-start --agent antigravity` tras el fallo histórico de `agent_readiness` con CLI 1.2.14
+  (`tui-idle` no se satisfacía y se recurrió a `dispatch --inject`). En la campaña 2026-11-08, la CLI ya instalada
+  1.5.3 arrancó workers guardados con `ready` y turno observado, y la reserva ejecutó canario real seguido de
+  compositor renderizado vacío y espera nativa satisfecha. No se actualizó la CLI ni se probó reparada la 1.2.14;
+  la evidencia actual sustituye ese bloqueo de arranque, no el ensayo prolongado pendiente.
 - [ ] Capturar en bytes un fotograma real de Claude inactivo con `working` nativo congelado para sustituir el
   fixture reconstruido del test. *(2026-10-02 18:27Z: capturado en bytes un fotograma real de Claude inactivo —«✻ Churned for … · done»,
   compositor vacío, pie— y añadido como fixture; su fila nativa estaba en `done`, así que sigue faltando un fotograma
@@ -1041,8 +1061,10 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   Antigravity reales. Diagnóstico y receta en `docs/ORCA-CAMPAIGN-RELIABILITY.md`.
 - [ ] Ensayo de resistencia de ocho horas, con candidatos disponibles y presupuesto observados. La
   transferencia por salida real del coordinador ya se comprobó (adopción del mismo Run, generación 1→2);
-  las pruebas breves actuales no demuestran esa duración ni el agotamiento de todos los servicios. Orca conserva wake/nudge best-effort y Antigravity no expone
-  `turn_started`; requerir evidencia nativa o reconocer incertidumbre.
+  las pruebas breves actuales no demuestran esa duración ni el agotamiento de todos los servicios. Orca conserva
+  wake/nudge best-effort. Las versiones anteriores de Antigravity no exponían `turn_started`; la CLI actual sí
+  lo observó en el canario 2026-11-08, además de ejecución y reposo nativo. Conservar la incertidumbre donde falte
+  esa evidencia, sin convertir el recibo de envío en prueba de trabajo continuo.
 - [x] Estabilizar `apps/api/src/research/config-cancellation.test.ts`: el test de petición bloqueada cancela
   tras 20 ms y exige que el servidor haya recibido una petición; bajo carga puede cancelar antes del socket
   (observado 2026-10-02 en `pnpm test`, requests=0). Sincronizar con la llegada real antes de cancelar, con
