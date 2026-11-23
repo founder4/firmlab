@@ -21,7 +21,8 @@
  *    symbols, because truncated windows risk bisecting heap-allocated TCBs or state list items.
  *  - **Renode runs strictly OFFLINE.** Renode platforms that reference remote SVD files (`ApplySVD @https://...`)
  *    are contained by `OFFLINE_RENODE_ENV` aiming proxy traffic at a refusing loopback port. Refused remote references
- *    are reported in `remoteResourcesRefused`.
+ *    are reported in `remoteResourcesRefused`. An SVD the operator provisioned (`renode-svd.ts`) and that still
+ *    verifies is served from a per-run copy of the platform instead, recorded per URL in `svdResolution`.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -36,6 +37,7 @@ import {
 } from '@firmlab/core';
 
 import { type IsolationLevel, type IsolationLimits, loadIsolationLimits, runIsolated } from './isolate.js';
+import { type SvdResolution, describeSvdResolution, prepareSvdOverlay, withoutServedLocally } from './renode-svd.js';
 import {
   REMOTE_SCAN_MAX_DEPTH,
   REMOTE_SCAN_MAX_FILES,
@@ -423,6 +425,8 @@ export interface RenodeRamCaptureResult {
     pointerWidth: 4 | 8;
   };
   remoteResourcesRefused?: string[];
+  /** Per remote `ApplySVD` URL: served from the provisioned local copy or not, and why. Optional forever. */
+  svdResolution?: SvdResolution[];
   command?: string;
   isolation?: IsolationLevel;
 }
@@ -531,13 +535,21 @@ export async function runRenodeRamCapture(
     };
   }
 
-  const remoteScan = scanRemoteResources(platform, RENODE_ROOT);
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-renode-ram-'));
 
   try {
+    const overlay = prepareSvdOverlay(platform, RENODE_ROOT, work);
+    const remoteScan = withoutServedLocally(scanRemoteResources(platform, RENODE_ROOT), overlay.servedLocally);
     const dumpFile = path.join(work, 'ram.bin');
     const rescPath = path.join(work, 'capture.resc');
-    const script = buildRenodeRamCaptureScript(platform, firmwarePath, region.name, region.size, dumpFile, seconds);
+    const script = buildRenodeRamCaptureScript(
+      overlay.platformPath,
+      firmwarePath,
+      region.name,
+      region.size,
+      dumpFile,
+      seconds,
+    );
     fs.writeFileSync(rescPath, script);
 
     const invocation = buildRenodeRamInvocation(rescPath, seconds, work);
@@ -557,11 +569,14 @@ export async function runRenodeRamCapture(
     const base64 = dumpBuf && captured ? dumpBuf.toString('base64') : null;
     const bytesCaptured = dumpBuf ? dumpBuf.length : 0;
 
+    const offline =
+      withLeadingSpace(describeSvdResolution(overlay.resolutions)) +
+      withLeadingSpace(describeRefusedRemote(remoteScan));
     const reason = captured
-      ? `Captured ${bytesCaptured} bytes of RAM peripheral '${region.name}' [0x${region.base.toString(16)}, +0x${region.size.toString(16)}] selected via ${rule} after ${seconds}s emulation on ${path.basename(platform)}.${withLeadingSpace(describeRefusedRemote(remoteScan))}`
+      ? `Captured ${bytesCaptured} bytes of RAM peripheral '${region.name}' [0x${region.base.toString(16)}, +0x${region.size.toString(16)}] selected via ${rule} after ${seconds}s emulation on ${path.basename(platform)}.${offline}`
       : res.timedOut
         ? `Renode run timed out after ${seconds}s without producing RAM dump file.`
-        : `Renode run ended without producing RAM dump (${res.stderr.slice(-200) || res.stdout.slice(-200) || 'no output'}).${withLeadingSpace(describeRefusedRemote(remoteScan))}`;
+        : `Renode run ended without producing RAM dump (${res.stderr.slice(-200) || res.stdout.slice(-200) || 'no output'}).${offline}`;
 
     return {
       available: true,
@@ -579,6 +594,7 @@ export async function runRenodeRamCapture(
       command: res.command,
       isolation: res.isolation,
       remoteResourcesRefused: remoteScan.remote,
+      svdResolution: overlay.resolutions,
       ...(layout ? { layout } : {}),
     };
   } finally {

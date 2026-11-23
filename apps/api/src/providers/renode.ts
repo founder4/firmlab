@@ -14,6 +14,11 @@
  * loopback port nothing listens on, so the request is refused locally and Renode carries on without the file. The
  * platform's include chain is scanned for what it would have fetched, and the result names it: the run used the
  * platform WITHOUT those resources, and it does not claim the boot would look the same with them.
+ *
+ * The one way an SVD reaches a run is provisioning, done ahead of time by an operator
+ * (`scripts/renode-svd-provision.mjs` → `$FIRMLAB_DATA_DIR/renode-svd/`). When the manifest has an entry for a URL
+ * and the stored file still hashes to it, `renode-svd.ts` loads a rewritten COPY of the platform that applies the
+ * local file instead; anything else keeps the behaviour above. `svdResolution` records which it was, per URL.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -25,6 +30,7 @@ import type { FindingDraft } from '@firmlab/core';
 import { execFile } from '../job-process.js';
 import { type IsolationLevel, type IsolationLimits, loadIsolationLimits, runIsolated } from './isolate.js';
 import { offlineRenodeEnv } from './renode-offline.js';
+import { type SvdResolution, describeSvdResolution, prepareSvdOverlay, withoutServedLocally } from './renode-svd.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -362,6 +368,11 @@ export interface RenodeResult {
    * offline. Optional forever: results stored before this field existed carry none, which is not "none refused".
    */
   remoteResourcesRefused?: string[];
+  /**
+   * Per remote `ApplySVD` URL in the chain: whether the provisioned local copy was used (`local`) or not, and why.
+   * Optional forever: a result stored before provisioning existed carries none, which is not "none provisioned".
+   */
+  svdResolution?: SvdResolution[];
 }
 
 /**
@@ -390,6 +401,7 @@ export function buildRenodeFindings(r: RenodeResult): FindingDraft[] {
   if (r.remoteResourcesRefused && r.remoteResourcesRefused.length > 0) {
     evidence.remoteResourcesRefused = r.remoteResourcesRefused;
   }
+  if (r.svdResolution && r.svdResolution.length > 0) evidence.svdResolution = r.svdResolution;
 
   const kind = !r.ran ? 'renode-blocked' : r.booted ? 'renode-booted' : 'renode-boot-unconfirmed';
   const title = !r.ran
@@ -509,10 +521,12 @@ export async function runRenode(
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'firmlab-renode-'));
   try {
     const uarts = discoverUarts(platform, RENODE_ROOT);
-    const script = buildRenodeScript(platform, firmwarePath, uarts, work);
+    // A verified provisioned SVD replaces its remote reference in a per-run copy; the bundled platform is untouched.
+    const overlay = prepareSvdOverlay(platform, RENODE_ROOT, work);
+    const script = buildRenodeScript(overlay.platformPath, firmwarePath, uarts, work);
     const rescPath = path.join(work, 'boot.resc');
     fs.writeFileSync(rescPath, script);
-    const remoteScan = scanRemoteResources(platform, RENODE_ROOT);
+    const remoteScan = withoutServedLocally(scanRemoteResources(platform, RENODE_ROOT), overlay.servedLocally);
     const invocation = buildRenodeInvocation(rescPath, seconds, work);
     const res = await runIsolated(invocation.argv, invocation.options);
 
@@ -545,6 +559,7 @@ export async function runRenode(
             ? 'Ran to the time bound with no UART output captured.'
             : 'Renode session ended without UART output.') +
         // Only a process that ran can have been refused anything — a launch failure says nothing about the network.
+        withLeadingSpace(res.ran ? describeSvdResolution(overlay.resolutions) : '') +
         withLeadingSpace(res.ran ? describeRefusedRemote(remoteScan) : ''),
       proofState: booted ? 'confirmed_in_emulation' : 'blocked_by_platform',
       platform,
@@ -552,6 +567,7 @@ export async function runRenode(
       command: res.command,
       isolation: res.isolation,
       remoteResourcesRefused: remoteScan.remote,
+      svdResolution: overlay.resolutions,
     };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
