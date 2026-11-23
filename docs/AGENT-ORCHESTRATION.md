@@ -3,6 +3,60 @@
 This is the operating playbook for supervised work by Codex, Claude, and Antigravity (Gemini models).
 Repository rules live in `AGENTS.md`; architecture and validation details live in `CLAUDE.md`.
 
+## Coordinator checkpoint — 2026-11-23
+
+The operator designated this Claude session, running inside Orca, as project coordinator for a bounded
+work order: (1) reconcile this checkpoint and the lint gate, (2) re-run the stored SBOM and research lanes on
+the deployed images, (3) the bounded code items below. AGENTS.md's standing Codex designation is not edited by
+this order; it governs this session's work only.
+
+Correction to the 2026-11-09 entry below, which is preserved as written: `c2923e6` and `da3d24f` are no
+longer unpublished — `origin/main` is at `da3d24f`, and the deployed container's `/health` reports build
+`da3d24f`, so repository, remote and deployment agree as of today. `pnpm biome` is green again: `biome.json`
+now ignores only the two files the Impeccable hook regenerates (`hook.cache.json`, `hook.pending.json`);
+Biome 1.9 honours `.gitignore` but not `.git/info/exclude`, where the hook lists them.
+
+## Coordinator review and session cleanup — 2026-11-09
+
+The operator designated this Codex chat as the current main coordinator and requested a project-state review
+and cleanup of old Orca sessions. The current chat is named **main · Coordinador FirmLab**; its Orca session
+is `codex_a9aa012a_4bf5_4ff9_9bdb_c6a76a434d4f`. No Run is bound to it. Historical campaign deadlines and
+authorization remain expired; this review does not start a new campaign.
+
+After fetching origin, the starting checkout was clean at `da3d24f`, two commits ahead of `origin/main`
+(`8795890`). The seven formerly uncommitted runtime-hardening files are now preserved in `c2923e6`;
+`da3d24f` records the narrow existing provider-status design exception. These two commits remain unpublished.
+This checkpoint supersedes the older working-tree and deployment snapshots below.
+
+Orca now lists only the main FirmLab workspace and this coordinator chat, with no child worktrees or project
+PTYs. The completed previous coordinator chat was closed. Across 21 historical FirmLab/legacy Runs, 141
+Dispatch records were inspected. Three exited retained workers were released through `worker-release`
+(`ctx_0f8964df1c7c`, `ctx_40c604f05ddf`, `ctx_35d4ccbed908`), each with `processAction: none`.
+Historical accounting retains 28 entries: unverifiable identities and user-owned resources were preserved;
+in particular, release of `ctx_961de65975b2` returned `retained / user_takeover`. These records are not proof
+of live processes or verified exit. Run history was not reset. The separate active Moovi project and the
+global floating shell were outside the cleanup boundary.
+
+Fresh validation on `da3d24f`: `pnpm check`, `pnpm test` (5,548 passed: core 813, API 3,446, web 950,
+scripts 339; 14 optional tests skipped) and `pnpm build` passed. The two Python Brotli patch tests passed;
+`pnpm audit` reported zero advisories. **`pnpm biome` failed** solely on the minified, ignored generated file
+`.impeccable/hook.cache.json`; its preceding invariant and agent-surface checks passed. This reproduces the
+existing backlog item and is not an all-green readiness verdict. The intermittent macOS job-process failure
+did not recur in this run; its cause remains unresolved. Logs and Orca inventories are retained locally at
+`/Users/agfil/.local/state/firmlab/coordinator-review-20261109-104215`.
+
+Read-only container inspection confirms `firmlab` is healthy and `/health` serves `8795890`, matching
+`origin/main`. It has no directly published host port; the existing trusted-proxy authentication labels remain
+present. External authentication and remote-client access were not retested. Real-tool and browser evidence
+remains in [RELEASE-VALIDATION-20261108.md](RELEASE-VALIDATION-20261108.md); those acceptance exercises were not
+rerun here. No push, deployment, corpus/database or stored-lane change, firmware acquisition or host/network
+intervention occurred.
+
+Recommended next bounded work: resolve the generated-cache lint conflict, then measure the remaining
+signature-checksum work and preserve its rejection/coverage contract. RP2350 code/data and decoder limits,
+vendor VEX identity coverage, and hardware-backed RTOS acceptance remain explicit backlog boundaries.
+Re-running stored SBOM/research results still requires an explicit live-data task.
+
 ## Local main integration — 2026-11-08
 
 The operator authorized local integration after the campaign closed. `main` advanced by fast-forward from

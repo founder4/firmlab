@@ -705,11 +705,15 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
 
 ## Deuda estructural y de proceso
 
-- [ ] Reconciliar la caché generada de Impeccable con el lint local: el hook escribe
+- [x] Reconciliar la caché generada de Impeccable con el lint local: el hook escribe
   `.impeccable/hook.cache.json` minificado; aunque está excluido de Git localmente, Biome lo escanea y falla
   por formato. Observado repetidamente el 2026-11-08; formatearlo permite pasar el control, pero no resuelve
   la siguiente regeneración. Acordar una exclusión exclusiva del artefacto generado o corregir su productor,
-  sin desactivar el detector ni ampliar la excepción semántica `side-tab` a otras reglas o archivos.
+  sin desactivar el detector ni ampliar la excepción semántica `side-tab` a otras reglas o archivos. *(Hecho
+  2026-11-23: Biome 1.9 respeta `.gitignore` pero no `.git/info/exclude`, que es donde el hook se excluye, así que
+  `biome.json` ignora por ruta exacta sólo los dos artefactos que el hook regenera, `hook.cache.json` y
+  `hook.pending.json`. `.impeccable/config.json` —versionado y con la excepción `side-tab`— sigue analizado, y el
+  detector de Impeccable no cambia.)*
 
 - [ ] Reproducir el fallo puntual macOS/Node 26 de `job-process.test.ts` observado durante la validación del
   2026-11-08: el caso de `maxBuffer` recibió `kill EPERM` en vez del error de límite. Los seis casos del fichero
