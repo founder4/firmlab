@@ -7,6 +7,7 @@ import {
   spawn as nativeSpawn,
 } from 'node:child_process';
 import { promisify } from 'node:util';
+import { groupSignalRefusal } from './group-signal-refusal.js';
 import { jobCancellation } from './job-cancellation.js';
 
 export const spawn: typeof nativeSpawn = ((file: string, args: string[], options: SpawnOptions = {}) => {
@@ -33,13 +34,20 @@ Object.defineProperty(execFile, promisify.custom, {
       const output: Record<'stdout' | 'stderr', Buffer[]> = { stdout: [], stderr: [] };
       const sizes = { stdout: 0, stderr: 0 };
       let failure: Error | null = null;
+      // A refusal replaces the provider's own error only when it is a denial. On macOS an exited, unreaped leader
+      // refuses the group SIGKILL with EPERM, and the OS state read at the refusal proves which case occurred.
+      // Group-exit verification on close still decides cleanup, so discharging the refusal releases no capacity.
+      const refused = (error: unknown) => {
+        if (child.pid && groupSignalRefusal(error, child.pid) === 'exited_unreaped') return;
+        failure = error as Error;
+      };
       const kill = () => {
         const owner = jobCancellation.getStore();
         if (owner) {
           try {
             owner.terminate(child);
           } catch (error) {
-            failure = error as Error;
+            refused(error);
           }
           return;
         }
@@ -47,7 +55,7 @@ Object.defineProperty(execFile, promisify.custom, {
         try {
           process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL');
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') failure = error as Error;
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') refused(error);
         }
       };
       const timer = options.timeout
