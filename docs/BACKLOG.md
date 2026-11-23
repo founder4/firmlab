@@ -1066,7 +1066,11 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   3.840 líneas `CONNECT`. No medido qué cambia el SVD en un arranque real ni conexiones directas que ignoren el
   proxy. Aprovisionar el despliegue es un paso de operador: `RENODE-SVD-PROVISIONING-20261123.md`. Desplegado
   (`70a07cb`) y aprovisionado el 2026-11-23 con autorización del operador: 14 SVD en `/data/renode-svd`, sha256
-  idénticos a los del documento; ninguna ejecución Renode del despliegue los ha usado todavía.)*
+  idénticos a los del documento. Primera ejecución en el despliegue (job `52f1b3f6`, Zephyr STM32L072, 15 s):
+  `stm32l072.repl`, UART en usart2 con el banner de Zephyr 2.6.0, `confirmed_in_emulation`; `svdResolution` da
+  `STM32L0x1.svd` como `local` con sha256 esperado = observado y `remoteResourcesRefused` vacío. Esta ejecución no
+  contó conexiones con un listener: el «nada pedido» es lo que declara la superposición, medido sólo en la
+  validación `--network none`. Sigue sin compararse el comportamiento de periféricos con y sin SVD.)*
 - [ ] El escaneo de recursos remotos de Renode sobrecuenta SVD de bloques `sysbus: init:` redefinidos: un fichero que
   redefine ese bloque reemplaza el del fichero que incluye, así que `stm32f412` y el SVD F40x dentro de `stm32f429`
   constan como referenciados (y ahora como `local`) aunque nunca se aplican ni se piden. Ya ocurría en

@@ -40,7 +40,9 @@ Follow-up, operator-authorized the same day: `main` pushed (`da3d24f..70a07cb`);
 `--tools`, reusing `firmlab-tools:latest`) rolled out image `e332e7a59e74` with 0 active jobs, and `/health` serves
 `70a07cb`. Only the application container was recreated; Tailscale, Traefik, host network and the host itself were
 not touched. The 14 Renode SVDs were then provisioned into the deployed data root (`/data/renode-svd`, 14 of 14
-sha256 equal to those in `RENODE-SVD-PROVISIONING-20261123.md`). No Renode run has used them on the deployment yet.
+sha256 equal to those in `RENODE-SVD-PROVISIONING-20261123.md`). One bounded, operator-authorized Renode run then
+used them (job `52f1b3f6`, Zephyr STM32L072, 15 s): booted on usart2, `confirmed_in_emulation`, the SVD served
+`local` with matching sha256 and nothing refused. Connections were not counted on the deployment.
 Logs: `~/.local/state/firmlab/deploy-20261123/`.
 
 ## Coordinator review and session cleanup — 2026-11-09
