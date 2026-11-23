@@ -1181,7 +1181,7 @@ Evidencia y procedimiento de rollback del entorno:
   `<select>` aislado visible/headless; foco/Tab, cambios programáticos y taps sintéticos se comprobaron por
   separado. No inferir de ellos una prueba del menú nativo (`STRUCTURE-INSPECTOR-QA-20261108.md`).
 
-- [ ] Acotar el coste total de comprobaciones de integridad del escáner. Se reprodujo con bytes sintéticos que
+- [x] Acotar el coste total de comprobaciones de integridad del escáner. Se reprodujo con bytes sintéticos que
   128 cabeceras uImage válidas en 512 KiB pedían 66.580.480 bytes de CRC de payload aunque `maxHits: 0` mostrase
   una fila. El seguimiento acotado omite ahora ese CRC solamente para coincidencias uImage ya excluidas del
   listado: mantiene todos los chequeos de cabecera y supervivencia, contadores, conjunto completo de tipos y
@@ -1193,4 +1193,16 @@ Evidencia y procedimiento de rollback del entorno:
   con mediciones separadas de lecturas CRC y spans de copia solicitados (`UNLISTED-LEGACY-CHECKSUMS-20261108.md`).
   No es un presupuesto global ni limita filas listadas o sin tope. Sercomm y otros recorridos siguen pendientes
   de medición y de un contrato que preserve rechazo y cobertura. No inferir ese ahorro de la duración de una
-  única prueba ni omitir la validación que decide un rechazo.
+  única prueba ni omitir la validación que decide un rechazo. *(Cerrado 2026-11-23 sin cambiar el
+  comportamiento: Sercomm suma la imagen completa, pero `atOffset: 0` admite como mucho una coincidencia por
+  escaneo, siempre la primera de su regla y por tanto siempre listada, así que una forma barata nunca podría
+  ejecutarse; su coste es fijo, 2 × longitud por escaneo, sea cual sea el tope. Ninguna otra regla hace trabajo
+  proporcional al payload: todas leen ventanas fijas (≤ 0x900 B salvo RKFW). Pruebas por regla, 240 comparaciones
+  JSON/identidad antes/después idénticas, medición por contadores y no por tiempo:
+  `SIGNATURE-CHECKSUM-BOUNDS-20261123.md`.)*
+- [ ] Quitar la amplificación de RKFW con magias densas. Su búsqueda de `RKAF` en 16 KiB por coincidencia es la
+  propia decisión de rechazo y no se puede omitir, pero con un `RKFW` cada 4 bytes y ningún `RKAF` cuesta 50,4M /
+  151M / 353M lecturas para 16 / 32 / 64 KiB (~6K lecturas por byte; 7–19 s con 256 KiB–1 MiB frente a ~10 ms de
+  control). Precalcular una vez por escaneo las posiciones de `RKAF` y responder cada ventana por búsqueda
+  binaria conserva todos los veredictos; exigir JSON antes/después idéntico y la prueba de barrido por regla de
+  `signatures.test.ts` (`SIGNATURE-CHECKSUM-BOUNDS-20261123.md`).
