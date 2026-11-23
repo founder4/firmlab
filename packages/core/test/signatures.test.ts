@@ -1825,3 +1825,236 @@ describe('listing option compatibility', () => {
     expect(scanSignaturesDetailed(bytes, { maxHits: Number.NaN })).toEqual(full);
   });
 });
+
+/**
+ * The remaining integrity walks, after uImage/TRX/TP-Link gained `verifyUnlisted`: Sercomm's complete-image 8-bit
+ * sum, and every other rule's check. Instrumentation is test-only — indexed reads, iterator-yielded bytes (the
+ * Sercomm sum is a `for…of`, which a read-counting proxy cannot see), requested `subarray` spans, and the byte length
+ * of every `DataView` window (the MediaTek and Realtek parsers read natively through one). Nothing asserts on time.
+ */
+describe('remaining integrity walks: no unlisted match pays payload-sized work', () => {
+  const CAPS = [undefined, 0, 1, 0.5, -1, Number.POSITIVE_INFINITY, Number.NaN, 5000] as const;
+  const ALL = Number.MAX_SAFE_INTEGER;
+
+  function filler(length: number): Uint8Array {
+    const b = new Uint8Array(length);
+    for (let i = 0; i < length; i++) b[i] = (i * 131 + 17) & 0x7f;
+    return b;
+  }
+
+  function work(target: Uint8Array, maxHits?: number) {
+    const w = { reads: 0, iter: 0, spans: 0, windows: 0 };
+    const view = new Proxy(target, {
+      get(t, prop) {
+        if (typeof prop === 'string') {
+          const c = prop.charCodeAt(0);
+          if (c >= 48 && c <= 57) {
+            w.reads++;
+            return t[Number(prop)];
+          }
+        }
+        if (prop === Symbol.iterator) {
+          return function* () {
+            for (const b of t) {
+              w.iter++;
+              yield b;
+            }
+          };
+        }
+        if (prop === 'subarray') {
+          return (a?: number, b?: number) => {
+            const sub = t.subarray(a, b);
+            w.spans += sub.length;
+            return sub;
+          };
+        }
+        const v = Reflect.get(t, prop, t);
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    });
+    const RealDataView = globalThis.DataView;
+    globalThis.DataView = class extends RealDataView {
+      constructor(buffer: ArrayBufferLike, byteOffset?: number, byteLength?: number) {
+        super(buffer, byteOffset, byteLength);
+        w.windows += this.byteLength;
+      }
+    } as DataViewConstructor;
+    try {
+      const scan = scanSignaturesDetailed(view, maxHits === undefined ? {} : { maxHits });
+      return { scan, ...w, total: w.reads + w.iter + w.spans + w.windows };
+    } finally {
+      globalThis.DataView = RealDataView;
+    }
+  }
+
+  /** Everything but the list equals the uncapped scan, and every listed row equals its uncapped twin. */
+  function expectSameAsUncapped(buf: Uint8Array, maxHits: number | undefined) {
+    const capped = scanSignaturesDetailed(buf, maxHits === undefined ? {} : { maxHits });
+    const full = scanSignaturesDetailed(buf, { maxHits: ALL });
+    expect(capped.matched).toBe(full.matched);
+    expect(capped.rejected).toBe(full.rejected);
+    expect(capped.rejectedByRule).toEqual(full.rejectedByRule);
+    expect(capped.distinctIds).toBe(full.distinctIds);
+    expect(new Set(capped.hits.map((h) => h.id))).toEqual(new Set(full.hits.map((h) => h.id)));
+    for (const hit of capped.hits) {
+      expect(full.hits.find((h) => h.offset === hit.offset && h.id === hit.id)).toEqual(hit);
+    }
+    return capped;
+  }
+
+  /**
+   * A mksercommfw-shaped 512-byte prefix at offset 0 (independent of the parser), followed by `others` raw uImage
+   * magics so that every cap is reached long before the scan ends. Byte 511 zeroes the complete-image sum last.
+   */
+  function sercommImage(length: number, others: number, o: { badSum?: boolean; badHeader?: boolean } = {}) {
+    const b = filler(length);
+    b.fill(0, 0, 512);
+    b.set(ascii('sErCoMm'), 0);
+    b.set([0, 1, 0, 0], 7);
+    b.set(ascii('TEST-HW'), 11);
+    b.set(ascii('A1'), 45);
+    b.set([1, 2, 3, 4], 55);
+    b.set(ascii(o.badHeader ? 'sErCoMX' : 'sErCoMm'), 63);
+    for (let i = 0; i < others; i++) b.set([0x27, 0x05, 0x19, 0x56], 1024 + i * 64);
+    let sum = 0;
+    for (const x of b) sum = (sum + x) & 0xff;
+    b[511] = -sum & 0xff;
+    if (o.badSum) b[length - 1] = (b[length - 1] as number) ^ 1;
+    return b;
+  }
+
+  it('anchors Sercomm at offset 0, so its single match is always its first and always listed', () => {
+    expect(SIGNATURE_RULES.find((r) => r.id === 'sercomm-prefix')?.atOffset).toBe(0);
+    for (const length of [16 * 1024, 64 * 1024]) {
+      for (const others of [0, 64]) {
+        const buf = sercommImage(length, others);
+        const reference = work(buf, ALL);
+        for (const cap of CAPS) {
+          const measured = work(buf, cap);
+          const sercomm = measured.scan.hits.filter((h) => h.id === 'sercomm-prefix');
+          expect(sercomm, `cap ${cap}`).toEqual([
+            expect.objectContaining({
+              offset: 0,
+              tier: 'verified',
+              meta: expect.objectContaining({ hardwareId: 'TEST-HW' }),
+            }),
+          ]);
+          expect(measured.scan.matched).toBe(1 + others);
+          expectSameAsUncapped(buf, cap);
+          // The sum is a fixed walk per scan — the same whatever the cap and however many other matches follow.
+          expect(measured.iter).toBe(reference.iter);
+          expect(measured.iter).toBeLessThanOrEqual(2 * length);
+        }
+      }
+    }
+  });
+
+  it('keeps a nonzero Sercomm sum listed as consistent, and a broken header rejected, under every cap', () => {
+    const length = 16 * 1024;
+    const badSum = sercommImage(length, 32, { badSum: true });
+    const badHeader = sercommImage(length, 32, { badHeader: true });
+    for (const cap of CAPS) {
+      const listed = expectSameAsUncapped(badSum, cap).hits.find((h) => h.id === 'sercomm-prefix');
+      expect(listed, `cap ${cap}`).toMatchObject({ offset: 0, tier: 'consistent' });
+      expect(listed?.rationale).toMatch(/8-bit sum is nonzero/);
+      const rejected = work(badHeader, cap);
+      expect(rejected.scan.hits.some((h) => h.id === 'sercomm-prefix')).toBe(false);
+      expect(rejected.scan.rejectedByRule?.['sercomm-prefix']).toBe(1);
+      expectSameAsUncapped(badHeader, cap);
+      // A header that fails its structure never reaches the complete-image sum.
+      expect(rejected.iter).toBe(0);
+    }
+  });
+
+  it('preserves the legacy maxHits NaN listing on a Sercomm image', () => {
+    const buf = sercommImage(16 * 1024, 16);
+    const full = scanSignaturesDetailed(buf, { maxHits: 5000 });
+    expect(full.hits.filter((h) => h.id === 'uimage')).toHaveLength(16);
+    expect(scanSignaturesDetailed(buf, { maxHits: Number.NaN })).toEqual(full);
+  });
+
+  it('spends the same work per raw-magic match on every rule whatever the buffer length', () => {
+    // Up to four copies inside the first 64 KiB; each check's window (RKFW's 16 KiB is the widest) fits in both
+    // lengths, so a check whose work followed the declared payload or the buffer end would differ between them.
+    const lengths = [80 * 1024, 160 * 1024];
+    const baselines = lengths.map((l) => work(filler(l), 0).total);
+    for (const rule of SIGNATURE_RULES) {
+      const positions = rule.atOffset !== undefined ? [rule.atOffset] : [0, 1, 2, 3].map((i) => i * 16 * 1024);
+      const perMatch = lengths.map((length, i) => {
+        const buf = filler(length);
+        for (const p of positions) buf.set(rule.magic, p);
+        return (work(buf, 0).total - (baselines[i] as number)) / positions.length;
+      });
+      expect(perMatch[1], rule.id).toBe(perMatch[0]);
+      expect(perMatch[0], rule.id).toBeLessThanOrEqual(0x4000 + 0x1000);
+    }
+  }, 60_000);
+
+  /** Valid headers `stride` apart, each declaring the rest of the buffer, for the parsers that accept them. */
+  const STACKS: ReadonlyArray<[string, number, (buf: Uint8Array, off: number) => void]> = [
+    [
+      'mediatek-lk',
+      512,
+      (buf, off) => {
+        const header = new Uint8Array(512).fill(0xff);
+        const dv = new DataView(header.buffer);
+        dv.setUint32(0, 0x58881688, true);
+        dv.setUint32(4, buf.length - off - 512, true);
+        header.fill(0, 8, 44);
+        header[40] = 1;
+        buf.set(header, off);
+      },
+    ],
+    [
+      'mediatek-brom-nor',
+      0x900,
+      (buf, off) => buf.set(bromEnvelope('SF_BOOT', 0x10007, buf.length - off - 0x900 - 32).subarray(0, 0x900), off),
+    ],
+    [
+      'realtek-cvimg-cs6c',
+      16,
+      (buf, off) => {
+        const dv = new DataView(buf.buffer, buf.byteOffset + off, 16);
+        buf.set(ascii('cs6c'), off);
+        dv.setUint32(4, 0x80500000, false);
+        dv.setUint32(8, 0x30000, false);
+        dv.setUint32(12, (buf.length - off - 16) & ~1, false);
+      },
+    ],
+  ];
+
+  it.each(STACKS)(
+    'reads a constant header, never the declared payload, for stacked valid %s headers',
+    (id, header, write) => {
+      const lengths = [64 * 1024, 256 * 1024];
+      const count = 8;
+      const totals = lengths.map((length) => {
+        const buf = filler(length);
+        for (let i = count - 1; i >= 0; i--) write(buf, i * 0x1000);
+        const capped = work(buf, 0);
+        const uncapped = work(buf, ALL);
+        expect(capped.scan.hits.filter((h) => h.id === id)).toEqual([
+          expect.objectContaining({ offset: 0, tier: 'consistent' }),
+        ]);
+        expect(uncapped.scan.hits.filter((h) => h.id === id)).toHaveLength(count);
+        expect(capped.scan.rejectedByRule?.[id]).toBeUndefined();
+        expectSameAsUncapped(buf, 0);
+        return {
+          capped: capped.total - work(filler(length), 0).total,
+          uncapped: uncapped.total - work(filler(length), ALL).total,
+        };
+      });
+      // Neither the omitted rows nor the listed ones grow with the payload every header declares. Not exact equality:
+      // the declared-length field itself differs between the two buffers, and its bytes are scanned as candidate magic
+      // starts like any other. A walk over the declared payload would differ by ~192 KiB per header, not by 64 bytes.
+      for (const key of ['capped', 'uncapped'] as const) {
+        expect(Math.abs((totals[1]?.[key] as number) - (totals[0]?.[key] as number)), key).toBeLessThanOrEqual(
+          64 * count,
+        );
+      }
+      // Per header: its parse window, a decode for the one listed row, and the scanner's own candidate checks on the
+      // header bytes — all proportional to the fixed header, none to the declared payload.
+      expect((totals[1]?.capped as number) / count).toBeLessThanOrEqual(4 * header + 0x100);
+    },
+  );
+});

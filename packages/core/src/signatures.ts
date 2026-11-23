@@ -982,6 +982,10 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     category: 'container',
     confidence: 'high',
     magic: ascii('sErCoMm'),
+    // The complete-image 8-bit sum is the one payload-sized integrity walk with no `verifyUnlisted`, deliberately:
+    // `atOffset: 0` allows at most one match per scan, which is always this rule's first and therefore always
+    // listable, so the cheap form could never run. Its cost is a fixed walk per scan (verify, and decode again for
+    // the listed row), independent of the cap and of every other match — not the amplification the hook removes.
     atOffset: 0,
     decode: (buf) => {
       const parsed = parseSercommPrefixHeader(buf);
@@ -1165,7 +1169,8 @@ export const SIGNATURE_RULES: readonly SignatureRule[] = [
     confidence: 'high',
     magic: ascii('RKFW'),
     // An RKFW wrapper always carries the RKAF update payload behind its (small) header. Requiring the
-    // cross-reference is what makes four common ASCII letters a container identification.
+    // cross-reference is what makes four common ASCII letters a container identification. The window search IS the
+    // rejection decision, so it has no cheaper unlisted form: skipping it would change which matches survive.
     verify: (buf, off) =>
       containsAt(buf, ascii('RKAF'), off, off + 0x4000)
         ? at('consistent', 'the RKAF update payload it wraps is present within 16 KB')
