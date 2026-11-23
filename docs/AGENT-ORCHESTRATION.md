@@ -34,8 +34,14 @@ output):
   Provisioning the deployment remains an operator step.
 
 Full validation on the integrated `main`: `pnpm check`, `pnpm test` (core 820, API 3,473 + 14 skipped, web 950,
-scripts 349), `pnpm build` and `pnpm biome` all passed. Not pushed and not deployed: the container still serves
-`da3d24f`, so the Renode and job-process changes are not live.
+scripts 349), `pnpm build` and `pnpm biome` all passed.
+
+Follow-up, operator-authorized the same day: `main` pushed (`da3d24f..70a07cb`); `scripts/deploy.sh` (no
+`--tools`, reusing `firmlab-tools:latest`) rolled out image `e332e7a59e74` with 0 active jobs, and `/health` serves
+`70a07cb`. Only the application container was recreated; Tailscale, Traefik, host network and the host itself were
+not touched. The 14 Renode SVDs were then provisioned into the deployed data root (`/data/renode-svd`, 14 of 14
+sha256 equal to those in `RENODE-SVD-PROVISIONING-20261123.md`). No Renode run has used them on the deployment yet.
+Logs: `~/.local/state/firmlab/deploy-20261123/`.
 
 ## Coordinator review and session cleanup — 2026-11-09
 
