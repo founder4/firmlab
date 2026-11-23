@@ -715,12 +715,24 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `hook.pending.json`. `.impeccable/config.json` —versionado y con la excepción `side-tab`— sigue analizado, y el
   detector de Impeccable no cambia.)*
 
-- [ ] Reproducir el fallo puntual macOS/Node 26 de `job-process.test.ts` observado durante la validación del
+- [x] Reproducir el fallo puntual macOS/Node 26 de `job-process.test.ts` observado durante la validación del
   2026-11-08: el caso de `maxBuffer` recibió `kill EPERM` en vez del error de límite. Los seis casos del fichero
   pasan aislados; no se ha demostrado la causa ni un defecto del runtime Linux desplegado. Conservar el fallo
   y contrastar carga/plataforma antes de cambiar el runner. Una denegación real de terminación debe seguir
   visible; no debilitar aislamiento ni declarar limpiado un grupo no verificado. Evidencia en
   `release-20261108-142942/final-test.log` y `job-process-rerun.log` del estado local.
+  *(Causa probada 2026-11-23, `JOB-PROCESS-MACOS-EPERM-20261123.md`: en macOS `kill(-pgid)` devuelve EPERM
+  cuando el único miembro del grupo es un líder zombi aún no recogido; si el hijo escribe y sale en el mismo turno
+  del event loop, el kill por `maxBuffer` llega antes del reap y ese EPERM sustituía al error del proveedor. 0 de
+  110 ejecuciones naturales (también con carga); forzando retardo del event loop, 1/100 a 50 ms, 10/50 a 100 ms y
+  50/50 a 200 ms. Corregido en `group-signal-refusal.ts`: la negativa sólo se descarta si el `ps` leído en ese
+  instante muestra el grupo entero zombi con el líder presente; Linux/Windows no cambian y la liberación de
+  capacidad sigue esperando a la salida verificada del grupo.)*
+- [ ] Llevar la misma clasificación a `JobCancellation.requestTermination` (`job-cancellation.ts`, usado por
+  `exec-process-group.ts` e `isolate.ts`): forzada la ventana zombi 10 veces en macOS, `owner.cleanup()` rechazó
+  con `kill EPERM` las 10 aunque el grupo había salido de forma verificable, así que retiene el slot con un error
+  falso. `job-cancellation.ts` puede importar `group-signal-refusal.ts` sin ciclo; conservar visible toda negativa
+  real. No observado en el runtime Linux desplegado.
 
 - [x] Orca `worktree new-child` toma como base `origin/main`, no el HEAD del coordinador (2026-10-03: `679f267`,
   81 commits detrás; los hijos de la ola VEX se avanzaron a mano). Resuelto el 2026-10-04 subiendo `main` (87
