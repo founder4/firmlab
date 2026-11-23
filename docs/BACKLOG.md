@@ -1019,7 +1019,7 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   `confirmed_full_system` ni «idéntico al físico» — el entorno sintético es permisivo por diseño (`types.ts`). La
   Capa IV (Avatar2/JTAG) queda FUERA DE ALCANCE: rompe la premisa sin-hardware.
 
-- [ ] Pre-aprovisionar localmente los 13 SVD que las plataformas de Renode piden por HTTPS (p. ej. bajo
+- [x] Pre-aprovisionar localmente los 13 SVD que las plataformas de Renode piden por HTTPS (p. ej. bajo
   `FIRMLAB_DATA_DIR`, reescribiendo `ApplySVD` en una copia de la plataforma). Desde 2026-10-02 Renode corre con
   `OFFLINE_RENODE_ENV` (proxy a un puerto loopback que rechaza) porque el contenedor desplegado no puede crear netns y
   cada arranque descargaba el SVD; validado en contenedor `--network none` con un listener en el puerto 9 que recibe
@@ -1031,6 +1031,18 @@ aquí (funcdiff, webprobe, FwHunt, opacidad), así que la lista es corta a prop�
   y las seis variables de proxy apuntando a un listener que registra, `renode --version` imprimió
   `Renode v1.16.1.17316` y el listener recibió 0 conexiones. Es coherencia, no el cierre de una fuga medida: una
   conexión directa que ignore los proxies fallaría en silencio bajo `--network none` y no se contó.
+  *(Hecho 2026-11-23, sin desplegar: `scripts/renode-svd-provision.mjs` descarga explícitamente, sólo desde la
+  URL exacta de cada `ApplySVD`, los SVD a `$FIRMLAB_DATA_DIR/renode-svd/` con manifiesto sha256; en cada ejecución
+  `renode-svd.ts` carga una copia reescrita de la cadena de inclusión sólo si el fichero vuelve a hashear igual, y si
+  falta, no coincide o no es utilizable lo rehúsa como antes. `svdResolution?` lo registra por URL. Con Renode
+  1.17.0 son 14 URL en 15 ficheros y 24 plataformas que descargan al cargar, no 13. Validado en contenedor
+  `--network none` con listener en el puerto 9: aprovisionado, 24 SVD cargados y 0 `CONNECT`; sin aprovisionar,
+  3.840 líneas `CONNECT`. No medido qué cambia el SVD en un arranque real ni conexiones directas que ignoren el
+  proxy. Aprovisionar el despliegue es un paso de operador: `RENODE-SVD-PROVISIONING-20261123.md`.)*
+- [ ] El escaneo de recursos remotos de Renode sobrecuenta SVD de bloques `sysbus: init:` redefinidos: un fichero que
+  redefine ese bloque reemplaza el del fichero que incluye, así que `stm32f412` y el SVD F40x dentro de `stm32f429`
+  constan como referenciados (y ahora como `local`) aunque nunca se aplican ni se piden. Ya ocurría en
+  `scanRemoteResources`; resolverlo exige modelar el reemplazo de bloques, no sólo seguir `using`.
 
 ## Revisiones independientes de la campaña (2026-10-02)
 
