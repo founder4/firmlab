@@ -16,6 +16,27 @@ longer unpublished — `origin/main` is at `da3d24f`, and the deployed container
 now ignores only the two files the Impeccable hook regenerates (`hook.cache.json`, `hook.pending.json`);
 Biome 1.9 honours `.gitignore` but not `.git/info/exclude`, where the hook lists them.
 
+Stored lanes (operator-authorized for this order; settings untouched, hash lookup and LLM synthesis left as
+stored): the SBOM re-run had in fact been done on 2026-09-19 — all 8 SBOM images already carried `packageTotal`.
+All 8 were refreshed against the present grype database (built 2026-11-04), then research was re-run on all 18
+research images, sequentially, after the SBOM refresh. All 26 jobs finished `done`; 0 hashes were sent. Logs:
+`~/.local/state/firmlab/research-rerun-20261123/`.
+
+Bounded code work, done by three Claude subagents in isolated worktrees and integrated here by cherry-pick (their
+worktrees were based on `da3d24f`, not on the coordinator's HEAD — verify a child's base before trusting its gate
+output):
+- scanner integrity walks: no behaviour change needed; inventory and tests in
+  `SIGNATURE-CHECKSUM-BOUNDS-20261123.md`. New backlog item: RKFW dense-magic amplification.
+- macOS `job-process` EPERM flake: cause proven (zombie leader refuses group SIGKILL), fixed in
+  `group-signal-refusal.ts`; `JOB-PROCESS-MACOS-EPERM-20261123.md`. New backlog item: same refusal in
+  `job-cancellation.ts`.
+- Renode SVD provisioning: verified local copies replace the HTTPS fetch; `RENODE-SVD-PROVISIONING-20261123.md`.
+  Provisioning the deployment remains an operator step.
+
+Full validation on the integrated `main`: `pnpm check`, `pnpm test` (core 820, API 3,473 + 14 skipped, web 950,
+scripts 349), `pnpm build` and `pnpm biome` all passed. Not pushed and not deployed: the container still serves
+`da3d24f`, so the Renode and job-process changes are not live.
+
 ## Coordinator review and session cleanup — 2026-11-09
 
 The operator designated this Codex chat as the current main coordinator and requested a project-state review

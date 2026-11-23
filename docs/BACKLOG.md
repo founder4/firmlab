@@ -424,7 +424,7 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   disjuntos, ninguno tapa al otro — y `extractSeverity` de `nvd.ts` antepone `cvssMetricV40` dejando intactos los
   peldaños de abajo. Un vector truncado sigue sin graduar en vez de completarse a ojo. `cvss-v4.test.ts` lleva 15
   casos cuyos valores esperados los produjo la implementación de referencia de FIRST, no este código.)*
-- [ ] Re-ejecutar SBOM en las imágenes ya desplegadas: sus resultados guardados son anteriores a
+- [x] Re-ejecutar SBOM en las imágenes ya desplegadas: sus resultados guardados son anteriores a
   `packageTotal`/`vulnerabilityTotal`, así que las fichas siguen mostrando el denominador de la lista recortada
   (500 = `PKG_CAP`) como si fuera el total. Verificable sin correr nada: en el `resultJson` del último job `sbom`
   de cada imagen, `packageTotal` ausente ⇒ la ficha miente. Solo depende del carril SBOM, que es local.
@@ -435,10 +435,24 @@ FSTM/ISTG. Ninguno de los dos duplica esta lista.
   `source`, así que re-ejecutar sin base de grype en el despliegue sustituye correlación existente por una
   negativa. Aprovisionar la base va primero, siempre; comprobar `grype db status` dentro del contenedor antes de
   lanzar la campaña, no después.
-- [ ] Re-ejecutar el carril **research** en las imágenes ya desplegadas: sus resultados OSV/NVD son anteriores a
+  *(Hecho. Ya se había re-ejecutado el 2026-09-19 sin cerrar esta entrada: el inventario de solo lectura del
+  2026-11-23 encontró `packageTotal` en el último job `sbom` de las 8 imágenes que lo tienen —no 9; GL.iNet declara
+  2019 frente al cap de 500—. Ese día se refrescaron las 8 con la base de grype presente, construida el 2026-11-04
+  (19 días; `grype db status` la marca `invalid` por la edad máxima de 5 días, que el carril desactiva a propósito
+  y cuya fecha viaja en `grypeDb`). Las 8 terminaron `done` con `vendorVex`; GL.iNet pasa de 515 a 658 coincidencias
+  con la base nueva y sigue en 2019 paquetes. Ninguna se ejecutó sin base. Log en
+  `~/.local/state/firmlab/research-rerun-20261123/lanes.log`.)*
+- [x] Re-ejecutar el carril **research** en las imágenes ya desplegadas: sus resultados OSV/NVD son anteriores a
   `totalMatching`/`cveIds`/`upstream`, y esos tres campos los escribe `providers/osv.ts` / `providers/nvd.ts`, no
   `providers/sbom.ts`. Re-ejecutar SBOM no los rellena: es otro carril, con otro job y detrás de
   `FIRMLAB_RESEARCH`. Iba junto al punto anterior en una sola entrada y eso los hacía parecer un solo arreglo.
+  *(Hecho 2026-11-23 con autorización del operador y los ajustes guardados sin tocar: hash lookup por override
+  del 2026-07-28 y síntesis LLM. Las 18 imágenes con research tienen un job `done` de ese día, lanzado después del
+  refresco SBOM. En GL.iNet, 13 componentes OSV respondidos llevan `totalMatching`/`cveIds` (218 CVE); el cruce KEV,
+  con catálogo descargado ese día, recibe ahora 519 CVE de entrada y da 1 coincidencia (CVE-2026-111497, Brotli;
+  una pista de manifiesto, no un veredicto sobre el dispositivo). Las 10 imágenes sin componentes consultables
+  registran `notCheckedCode: 'no-input'`. El hash lookup intentó 0 hashes en las 18. Logs y verificación en
+  `~/.local/state/firmlab/research-rerun-20261123/`.)*
 - [x] El cruce contra KEV vacío **no** es «ningún CVE explotado en la naturaleza»: `research/run.ts` alimenta
   `fetchAndMatchKev` con `collectCveIds(osv, nvd)`, de modo que sin una ejecución de research posterior a
   `cveIds` la entrada del cruce es el conjunto vacío y la salida también. *(Hecho en `8b6e4e1`: el retorno vacío
